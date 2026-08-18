@@ -272,3 +272,12 @@ by inference from this document.
 `claims.verified`, `claims.deployed`, and `claims.release` flip only when the
 corresponding evidence exists and is named in the manifest. A convenience commit
 may not flip them to obtain a green result.
+
+## Addendum 2026-08-19: SBF lane and post-section-5 gates
+
+The gate inventory now includes the `clutch-sbf` cargo gates and two
+post-section-5 benchmark gates (`benchmarks.unittest`,
+`benchmarks.abi_audit`). Deliberately NOT a manifest gate: the SBF
+reproducible-ELF build and the local-validator differential — both are
+multi-minute, environment-heavy procedures whose evidence is recorded in
+`docs/implementation/SBF_BRINGUP.md`; the manifest attests neither.

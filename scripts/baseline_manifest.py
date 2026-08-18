@@ -234,6 +234,7 @@ CARGO_MANIFESTS = [
     ("solana_layout", "programs/solana-layout/Cargo.toml", True),
     ("solana_reference", "programs/solana-reference/Cargo.toml", True),
     ("vertical_model", "research/vertical-model/Cargo.toml", False),  # no doc gate in section 5
+    ("clutch_sbf", "programs/clutch-sbf/Cargo.toml", True),  # SBF lane (post-section-5; see note)
 ]
 
 TEST_RESULT_PATTERNS = [r"^test result: "]
@@ -358,6 +359,25 @@ def build_gates() -> list[dict[str, Any]]:
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [r"^check passed: "],
                 "note": "cost model is a hypothesis (MODEL); no measured CU evidence",
+            },
+            {
+                "id": "benchmarks.unittest",
+                "section": "post-5",
+                "command": "python3 -m unittest discover -s benchmarks/tests",
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [r"^Ran \d+ tests", r"^OK$", r"^FAILED"],
+                "note": "benchmark harness tests incl. the landed-ABI arm",
+            },
+            {
+                "id": "benchmarks.abi_audit",
+                "section": "post-5",
+                "command": "python3 benchmarks/cost_lab.py abi-audit",
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [r"drift", r"no drift", r"^abi-audit"],
+                "note": (
+                    "re-derives account widths from programs/solana-layout source; "
+                    "refuses on ABI drift"
+                ),
             },
             {
                 "id": "benchmarks.golden_checksums",
