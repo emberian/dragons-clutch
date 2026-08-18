@@ -1,0 +1,19 @@
+market.create outcomes=2 payouts=2 principal=0
+market.maturity buckets=3
+liveness.book reserved=9
+kernel.split owner=0 quantity=8
+kernel.split owner=1 quantity=4
+kernel.materialize owner=0 outcome=1 quantity=2
+kernel.dematerialize owner=0 outcome=1 quantity=1
+relation.clear digest=0xcf6aa3dc330079100cfdda647aadea26 volume=3 fee=1 liveness_paid=2 slices=1 residual=UniqueSliceReceipts phase=ActiveOnly rounding_pot=100
+cash.fund owner=0 amount=90
+relation.settle target=slice:0 buy_index=0 buy_id=1 sell_index=1 sell_id=2 seller=1 buyer=0 outcome=1 quantity=3 consideration=90
+accumulator.accept bucket=0 low=20 high=20
+accumulator.accept bucket=1 low=30 high=30
+accumulator.accept bucket=2 low=70 high=70
+accumulator.seal end_bucket=3
+kernel.merge owner=1 quantity=1
+kernel.resolve payout_index=1
+kernel.redeem_internal owner=0 outcome=1 quantity=3 payout=3
+kernel.redeem_external owner=0 outcome=1 quantity=1 payout=1
+liveness.return amount=7
