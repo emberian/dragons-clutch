@@ -569,15 +569,17 @@ class FeeAllocation:
 
 def allocate_fee(
     fee: int,
-    maker_num: int = 60,
-    executor_num: int = 15,
-    denominator: int = 100,
-    executor_cap: Optional[int] = None,
+    maker_num: int,
+    executor_num: int,
+    denominator: int,
+    executor_cap: Optional[int],
 ) -> FeeAllocation:
     """Allocate a collected pot; rebates floor and treasury takes the remainder.
 
     ``executor_cap`` is the per-batch executor cap of POLICY_ANALYSIS section
-    2.3; ``None`` means uncapped, which is the pre-existing behaviour.
+    2.3; ``None`` means uncapped.  Every share is a required argument: the
+    60/15/25 split is an unpromoted experimental arm, so no default may select
+    it here (P0-5).
     """
 
     _require_nonnegative(fee, "fee")
@@ -595,8 +597,23 @@ def allocate_fee(
     return FeeAllocation(maker, executor, treasury)
 
 
-def wash_cycle_loss(fee: int, network_cost: int = 0) -> int:
-    allocation = allocate_fee(fee)
+def wash_cycle_loss(
+    fee: int,
+    maker_num: int,
+    executor_num: int,
+    denominator: int,
+    executor_cap: Optional[int],
+    network_cost: int = 0,
+) -> int:
+    """Pot minus what the allocation returns; the split is named by the caller."""
+
+    allocation = allocate_fee(
+        fee,
+        maker_num=maker_num,
+        executor_num=executor_num,
+        denominator=denominator,
+        executor_cap=executor_cap,
+    )
     _require_nonnegative(network_cost, "network cost")
     return fee - allocation.maker - allocation.executor + network_cost
 
@@ -984,11 +1001,15 @@ class WeightedBook:
     def open(
         cls,
         payouts: IntegerPayoutSet,
-        policy: PayoutPolicy = PayoutPolicy.KERNEL_BASELINE,
+        policy: PayoutPolicy,
         collateral: int = 0,
         wallets: int = 1,
     ) -> "WeightedBook":
-        """Admission: kernel shape rules first, then the policy-arm gate."""
+        """Admission: kernel shape rules first, then the policy-arm gate.
+
+        ``policy`` is required: no payout candidate is promoted, so no default
+        may pick one (P0-5).
+        """
 
         payouts.validate()
         if policy is PayoutPolicy.ONE_HOT and not payouts.is_one_hot():
@@ -1748,9 +1769,9 @@ def run_fee_schedule(
     price_scale: int,
     kappa_num: int,
     kappa_den: int,
-    domain: CarryDomain = CarryDomain.INTENT,
-    close_policy: CarryClose = CarryClose.TERMINAL_CEIL,
-    side_arm: FeeSideArm = FeeSideArm.PER_INTENT_BOTH_SIDES,
+    domain: CarryDomain,
+    close_policy: CarryClose,
+    side_arm: FeeSideArm,
 ) -> FeeRunResult:
     """Settle fills with explicit payer debits; every atom has a named payer.
 
@@ -1758,7 +1779,9 @@ def run_fee_schedule(
     (section 2.3).  The fee pot is only ever credited by a leg that debited a
     payer, so ``fee_pot`` is never incremented from thin air and the Hoard is
     never touched.  Every open domain instance is closed at the end of the
-    schedule under ``close_policy``.
+    schedule under ``close_policy``.  The carry domain, close policy, and side
+    arm are required arguments: all three families are unpromoted arms, so no
+    default may select one (P0-5).
     """
 
     denominator = fee_denominator(kappa_den, price_scale)
@@ -1845,7 +1868,7 @@ def carry_domain_totals(
     price_scale: int,
     kappa_num: int,
     kappa_den: int,
-    side_arm: FeeSideArm = FeeSideArm.PER_INTENT_BOTH_SIDES,
+    side_arm: FeeSideArm,
 ) -> dict[str, dict[str, int]]:
     """Fee pot for every (carry domain x close policy) cell of section 2.2."""
 
@@ -1872,18 +1895,20 @@ def sybil_wash_result(
     price_scale: int,
     kappa_num: int,
     kappa_den: int,
-    domain: CarryDomain = CarryDomain.INTENT,
-    close_policy: CarryClose = CarryClose.TERMINAL_CEIL,
-    side_arm: FeeSideArm = FeeSideArm.PER_INTENT_BOTH_SIDES,
-    maker_num: int = 60,
-    executor_num: int = 15,
-    executor_cap: Optional[int] = None,
+    domain: CarryDomain,
+    close_policy: CarryClose,
+    side_arm: FeeSideArm,
+    maker_num: int,
+    executor_num: int,
+    denominator: int,
+    executor_cap: Optional[int],
     network_cost: int = 0,
 ) -> dict[str, int]:
     """Self-wash accounting for one cell of the section 2.5 matrix.
 
     A Sybil that controls taker, maker, and executor pays the whole pot and
-    recovers at most the maker plus executor allocations.
+    recovers at most the maker plus executor allocations.  Every fee-policy
+    selector is a required argument (P0-5).
     """
 
     result = run_fee_schedule(
@@ -1899,6 +1924,7 @@ def sybil_wash_result(
         result.fee_pot,
         maker_num=maker_num,
         executor_num=executor_num,
+        denominator=denominator,
         executor_cap=executor_cap,
     )
     recovered = allocation.maker + allocation.executor
@@ -1913,7 +1939,7 @@ def sybil_wash_result(
 
 def enumerate_weighted_traces(
     payouts: IntegerPayoutSet,
-    policy: PayoutPolicy = PayoutPolicy.KERNEL_BASELINE,
+    policy: PayoutPolicy,
     depth: int = 5,
     quantities: Sequence[int] = (1,),
     collateral_cap: int = 3,

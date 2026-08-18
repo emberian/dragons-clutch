@@ -979,6 +979,8 @@ def exp_fee_d1(
             KAPPA_DEN,
             domain=CarryDomain.INTENT,
             close_policy=CarryClose.TERMINAL_CEIL,
+            # PROPOSED variant, explicitly named (P0-5)
+            side_arm=FeeSideArm.PER_INTENT_BOTH_SIDES,
         )
         for instances in range(1, 5):
             for schedule in _positive_compositions(total, instances):
@@ -999,6 +1001,8 @@ def exp_fee_d1(
                     KAPPA_DEN,
                     domain=CarryDomain.INTENT,
                     close_policy=CarryClose.TERMINAL_CEIL,
+                    # PROPOSED variant, explicitly named (P0-5)
+                    side_arm=FeeSideArm.PER_INTENT_BOTH_SIDES,
                 )
                 if split.fee_pot < whole.fee_pot:
                     witnesses.append(
@@ -1048,6 +1052,8 @@ def exp_fee_d2(
     for count in range(1, epochs + 1):
         fills = _dust_fills(count, 2, price, epochs=count)
         volume = sum(fill.quantity for fill in fills)
+        # PROPOSED variant, explicitly named (P0-5): the side arm is held
+        # fixed across the three close-policy arms compared here.
         dropped = run_fee_schedule(
             fills,
             price_scale,
@@ -1055,6 +1061,7 @@ def exp_fee_d2(
             KAPPA_DEN,
             domain=CarryDomain.EPOCH,
             close_policy=CarryClose.DROPPED,
+            side_arm=FeeSideArm.PER_INTENT_BOTH_SIDES,
         )
         terminal = run_fee_schedule(
             fills,
@@ -1063,6 +1070,7 @@ def exp_fee_d2(
             KAPPA_DEN,
             domain=CarryDomain.EPOCH,
             close_policy=CarryClose.TERMINAL_CEIL,
+            side_arm=FeeSideArm.PER_INTENT_BOTH_SIDES,
         )
         intent_terminal = run_fee_schedule(
             fills,
@@ -1071,6 +1079,7 @@ def exp_fee_d2(
             KAPPA_DEN,
             domain=CarryDomain.INTENT,
             close_policy=CarryClose.TERMINAL_CEIL,
+            side_arm=FeeSideArm.PER_INTENT_BOTH_SIDES,
         )
         rows.append(
             {
@@ -1223,11 +1232,15 @@ def exp_fee_p2(price_scale: int = 20, max_quantity: int = 20) -> ExperimentResul
     def measure(quantity: int, price: int) -> dict[str, object]:
         nonlocal identical_cells, differing_cells
         fills = (Fill(quantity=quantity, price=price),)
+        # PROPOSED variant, explicitly named (P0-5): domain and close policy
+        # are held fixed so the two arms differ only in the side arm.
         both = run_fee_schedule(
             fills,
             price_scale,
             KAPPA_NUM,
             KAPPA_DEN,
+            domain=CarryDomain.INTENT,
+            close_policy=CarryClose.TERMINAL_CEIL,
             side_arm=FeeSideArm.PER_INTENT_BOTH_SIDES,
         )
         once = run_fee_schedule(
@@ -1235,6 +1248,8 @@ def exp_fee_p2(price_scale: int = 20, max_quantity: int = 20) -> ExperimentResul
             price_scale,
             KAPPA_NUM,
             KAPPA_DEN,
+            domain=CarryDomain.INTENT,
+            close_policy=CarryClose.TERMINAL_CEIL,
             side_arm=FeeSideArm.CHARGE_ONCE_SPLIT,
         )
         consideration = exact_consideration(quantity, price, price_scale)
@@ -1272,15 +1287,33 @@ def exp_fee_p2(price_scale: int = 20, max_quantity: int = 20) -> ExperimentResul
                 if consideration
                 else "undefined"
             ),
+            # PROPOSED variant, explicitly named (P0-5)
             "wash_loss_both_sides": sybil_wash_result(
-                fills, price_scale, KAPPA_NUM, KAPPA_DEN
+                fills,
+                price_scale,
+                KAPPA_NUM,
+                KAPPA_DEN,
+                domain=CarryDomain.INTENT,
+                close_policy=CarryClose.TERMINAL_CEIL,
+                side_arm=FeeSideArm.PER_INTENT_BOTH_SIDES,
+                maker_num=60,
+                executor_num=15,
+                denominator=100,
+                executor_cap=None,
             )["net_wash"],
+            # PROPOSED variant, explicitly named (P0-5)
             "wash_loss_charge_once": sybil_wash_result(
                 fills,
                 price_scale,
                 KAPPA_NUM,
                 KAPPA_DEN,
+                domain=CarryDomain.INTENT,
+                close_policy=CarryClose.TERMINAL_CEIL,
                 side_arm=FeeSideArm.CHARGE_ONCE_SPLIT,
+                maker_num=60,
+                executor_num=15,
+                denominator=100,
+                executor_cap=None,
             )["net_wash"],
         }
 
@@ -1556,6 +1589,10 @@ def exp_fee_w1(price_scale: int = 100, price: int = 50, max_fills: int = 24) -> 
                             domain=domain,
                             close_policy=close_policy,
                             side_arm=side_arm,
+                            # PROPOSED variant, explicitly named (P0-5)
+                            maker_num=60,
+                            executor_num=15,
+                            denominator=100,
                             executor_cap=executor_cap,
                         )
                         if result["net_wash"] > 0:
@@ -1620,7 +1657,14 @@ def exp_fee_a1(max_pot: int = 10_000) -> ExperimentResult:
     for pot in range(0, max_pot + 1):
         for cap in (0, 1, pot // 10, None):
             checked += 1
-            allocation = allocate_fee(pot, executor_cap=cap)
+            # PROPOSED variant, explicitly named (P0-5)
+            allocation = allocate_fee(
+                pot,
+                maker_num=60,
+                executor_num=15,
+                denominator=100,
+                executor_cap=cap,
+            )
             if allocation.total != pot:
                 witnesses.append(f"allocation lost an atom at pot={pot} cap={cap}")
             if cap is not None and allocation.executor > cap:

@@ -246,11 +246,37 @@ class FeeProperties(unittest.TestCase):
 
     def test_allocations_conserve_and_wash_has_treasury_floor(self) -> None:
         for fee in range(0, 10_001):
-            allocation = allocate_fee(fee)
+            # PROPOSED variant, explicitly named (P0-5)
+            allocation = allocate_fee(
+                fee,
+                maker_num=60,
+                executor_num=15,
+                denominator=100,
+                executor_cap=None,
+            )
             self.assertEqual(allocation.total, fee)
             self.assertGreaterEqual(allocation.treasury * 100, fee * 25)
-            self.assertEqual(wash_cycle_loss(fee), allocation.treasury)
-            self.assertGreaterEqual(wash_cycle_loss(fee, 7), allocation.treasury + 7)
+            self.assertEqual(
+                wash_cycle_loss(
+                    fee,
+                    maker_num=60,
+                    executor_num=15,
+                    denominator=100,
+                    executor_cap=None,
+                ),
+                allocation.treasury,
+            )
+            self.assertGreaterEqual(
+                wash_cycle_loss(
+                    fee,
+                    maker_num=60,
+                    executor_num=15,
+                    denominator=100,
+                    executor_cap=None,
+                    network_cost=7,
+                ),
+                allocation.treasury + 7,
+            )
 
 
 class PriceAndRevenueProperties(unittest.TestCase):

@@ -1282,7 +1282,14 @@ def replay_fee_vector(vector: Mapping[str, object]) -> dict[str, object]:
             close_policy=CarryClose(vector["carry_close"]),
             side_arm=FeeSideArm(vector["fee_side_arm"]),
         )
-        allocation = allocate_fee(result.fee_pot)
+        # PROPOSED variant, explicitly named (P0-5)
+        allocation = allocate_fee(
+            result.fee_pot,
+            maker_num=60,
+            executor_num=15,
+            denominator=100,
+            executor_cap=None,
+        )
         return {
             "allocation": {
                 "executor": allocation.executor,
@@ -1316,7 +1323,14 @@ def replay_fee_vector(vector: Mapping[str, object]) -> dict[str, object]:
             int(vector["kappa_den"]), int(vector["price_scale"])
         )
         paid, carry = divmod(numerator, denominator)
-        allocation = allocate_fee(paid + (1 if carry else 0))
+        # PROPOSED variant, explicitly named (P0-5)
+        allocation = allocate_fee(
+            paid + (1 if carry else 0),
+            maker_num=60,
+            executor_num=15,
+            denominator=100,
+            executor_cap=None,
+        )
         return {
             "allocation": {
                 "executor": allocation.executor,
@@ -1334,7 +1348,14 @@ def replay_fee_vector(vector: Mapping[str, object]) -> dict[str, object]:
     if kind == "allocation_point":
         rows = []
         for cap in (None, 100, 0):
-            allocation = allocate_fee(int(vector["pot"]), executor_cap=cap)
+            # PROPOSED variant, explicitly named (P0-5)
+            allocation = allocate_fee(
+                int(vector["pot"]),
+                maker_num=60,
+                executor_num=15,
+                denominator=100,
+                executor_cap=cap,
+            )
             rows.append(
                 {
                     "cap": cap,

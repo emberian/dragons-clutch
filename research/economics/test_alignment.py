@@ -87,7 +87,12 @@ class AdmittedMarketSet(unittest.TestCase):
         self.assertEqual(caught.exception.error_class, "invalid_payout_weights")
 
     def test_weighted_mirror_is_integer_only(self) -> None:
-        book = WeightedBook.open(payout_set(2, [[1, 1]], 2)).split(0, 4).resolve(0)
+        # PROPOSED variant, explicitly named (P0-5)
+        book = (
+            WeightedBook.open(payout_set(2, [[1, 1]], 2), PayoutPolicy.KERNEL_BASELINE)
+            .split(0, 4)
+            .resolve(0)
+        )
         book, payout = book.redeem_internal(0, 0, 2)
         self.assertIsInstance(payout, int)
         self.assertIsInstance(book.collateral, int)
@@ -138,7 +143,10 @@ class PayoutCandidateArms(unittest.TestCase):
             WeightedBook.open(trap, PayoutPolicy.LOTS).split(0, 1)
         self.assertEqual(caught.exception.error_class, "lot_violation")
 
-        baseline = WeightedBook.open(trap).split(0, 1).resolve(0)
+        # PROPOSED variant, explicitly named (P0-5)
+        baseline = (
+            WeightedBook.open(trap, PayoutPolicy.KERNEL_BASELINE).split(0, 1).resolve(0)
+        )
         with self.assertRaises(KernelRefusal) as caught:
             baseline.redeem_internal(0, 0, 1)
         self.assertEqual(caught.exception.error_class, "remainder_required")

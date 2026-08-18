@@ -50,7 +50,16 @@ class PayerDebitAccounting(unittest.TestCase):
     """Section 2.3: fee legs debit a named payer, never the Hoard."""
 
     def test_single_fill_legs_have_the_documented_shape(self) -> None:
-        result = run_fee_schedule([Fill(2000, 50)], SCALE, KAPPA_NUM, KAPPA_DEN)
+        # PROPOSED variant, explicitly named (P0-5)
+        result = run_fee_schedule(
+            [Fill(2000, 50)],
+            SCALE,
+            KAPPA_NUM,
+            KAPPA_DEN,
+            domain=CarryDomain.INTENT,
+            close_policy=CarryClose.TERMINAL_CEIL,
+            side_arm=FeeSideArm.PER_INTENT_BOTH_SIDES,
+        )
         consideration = exact_consideration(2000, 50, SCALE)
         self.assertEqual(consideration, 1_000)
         self.assertEqual(result.buyer_debit_total, consideration + 2)
@@ -76,8 +85,15 @@ class PayerDebitAccounting(unittest.TestCase):
         for price in range(0, limit_price + 1):
             if (2000 * price) % SCALE:
                 continue
+            # PROPOSED variant, explicitly named (P0-5)
             result = run_fee_schedule(
-                [Fill(2000, price)], SCALE, KAPPA_NUM, KAPPA_DEN
+                [Fill(2000, price)],
+                SCALE,
+                KAPPA_NUM,
+                KAPPA_DEN,
+                domain=CarryDomain.INTENT,
+                close_policy=CarryClose.TERMINAL_CEIL,
+                side_arm=FeeSideArm.PER_INTENT_BOTH_SIDES,
             )
             self.assertLessEqual(dict(result.intent_cash)["buy-1"], reservation)
 
@@ -149,6 +165,8 @@ class CarryDomainPolicy(unittest.TestCase):
                 KAPPA_DEN,
                 domain=domain,
                 close_policy=CarryClose.TERMINAL_CEIL,
+                # PROPOSED variant, explicitly named (P0-5)
+                side_arm=FeeSideArm.PER_INTENT_BOTH_SIDES,
             )
             pots[domain.value] = result.fee_pot
         self.assertEqual(pots["intent"], 4)
@@ -222,8 +240,13 @@ class AllocationAndWash(unittest.TestCase):
     """Sections 2.3 and 2.5: allocation with an executor cap, and self-wash sign."""
 
     def test_executor_cap_moves_atoms_to_treasury_without_losing_any(self) -> None:
-        uncapped = allocate_fee(1_000)
-        capped = allocate_fee(1_000, executor_cap=100)
+        # PROPOSED variant, explicitly named (P0-5)
+        uncapped = allocate_fee(
+            1_000, maker_num=60, executor_num=15, denominator=100, executor_cap=None
+        )
+        capped = allocate_fee(
+            1_000, maker_num=60, executor_num=15, denominator=100, executor_cap=100
+        )
         self.assertEqual(uncapped.total, 1_000)
         self.assertEqual(capped.total, 1_000)
         self.assertEqual(capped.executor, 100)
@@ -232,8 +255,19 @@ class AllocationAndWash(unittest.TestCase):
     def test_wash_is_strictly_negative_under_terminal_ceil(self) -> None:
         fills = [Fill(2, 50, buyer_intent=f"buy-{i}", seller_intent=f"sell-{i}") for i in range(4)]
         for side_arm in FeeSideArm:
+            # PROPOSED variant, explicitly named (P0-5)
             result = sybil_wash_result(
-                fills, SCALE, KAPPA_NUM, KAPPA_DEN, side_arm=side_arm
+                fills,
+                SCALE,
+                KAPPA_NUM,
+                KAPPA_DEN,
+                domain=CarryDomain.INTENT,
+                close_policy=CarryClose.TERMINAL_CEIL,
+                side_arm=side_arm,
+                maker_num=60,
+                executor_num=15,
+                denominator=100,
+                executor_cap=None,
             )
             self.assertLess(result["net_wash"], 0)
             self.assertLessEqual(result["recovered"] * 100, result["fee_pot"] * 75)

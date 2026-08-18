@@ -113,7 +113,10 @@ def fee_curve() -> list[dict[str, object]]:
         fee, carry = fee_with_carry(base, PRICE_SCALE, KAPPA_NUM, KAPPA_DEN)
         consideration = QUANTITY * price // PRICE_SCALE
         effective_bps = Fraction(fee * 10_000, consideration) if consideration else Fraction(0)
-        allocation = allocate_fee(fee)
+        # PROPOSED variant, explicitly named (P0-5)
+        allocation = allocate_fee(
+            fee, maker_num=60, executor_num=15, denominator=100, executor_cap=None
+        )
         rows.append(
             {
                 "price": fraction_text(Fraction(price, PRICE_SCALE)),
@@ -265,15 +268,31 @@ def fee_policy_arms() -> dict[str, object]:
                     "fee_pot": result.fee_pot,
                     "terminal_charges": result.terminal_charges,
                     "payer_identity_holds": result.conserves,
+                    # PROPOSED variant, explicitly named (P0-5)
                     "wash_net": sybil_wash_result(
-                        fills, 100, KAPPA_NUM, KAPPA_DEN, side_arm=side_arm
+                        fills,
+                        100,
+                        KAPPA_NUM,
+                        KAPPA_DEN,
+                        domain=CarryDomain.INTENT,
+                        close_policy=CarryClose.TERMINAL_CEIL,
+                        side_arm=side_arm,
+                        maker_num=60,
+                        executor_num=15,
+                        denominator=100,
+                        executor_cap=None,
                     )["net_wash"],
                 }
             )
     return {
         "note": "MODEL arms; kappa, the 60/15/25 split, and the carry domain stay unpromoted",
         "carry_domain_pot_table_four_dust_fills": carry_domain_totals(
-            dust, 100, KAPPA_NUM, KAPPA_DEN
+            # PROPOSED variant, explicitly named (P0-5)
+            dust,
+            100,
+            KAPPA_NUM,
+            KAPPA_DEN,
+            side_arm=FeeSideArm.PER_INTENT_BOTH_SIDES,
         ),
         "payer_debit_side_arms": side_arm_rows,
         "width_proposal": exp_fee_g2().data["rows"],

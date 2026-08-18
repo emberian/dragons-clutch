@@ -252,8 +252,8 @@ Carry policy is now two orthogonal choices: the domain (`position` / `intent` /
 `epoch`) and the close policy (`terminal_ceil` / `dropped_carry`).
 `fee_fragmentation_result` keeps its three original arms and adds
 `terminal_ceil_total`, `dropped_carry_total` and `exact_ceil_total`.
-`allocate_fee` gained the per-batch `executor_cap`; the uncapped default is
-unchanged. `dispersion_numerator` is now wired into the debit path as the fee
+`allocate_fee` gained the per-batch `executor_cap`; all allocation selectors
+are now required arguments named explicitly at every call site (P0-5). `dispersion_numerator` is now wired into the debit path as the fee
 base of record instead of existing beside it.
 
 ### Executed matrix rows
