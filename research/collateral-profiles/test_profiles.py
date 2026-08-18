@@ -4,30 +4,44 @@ from __future__ import annotations
 import json
 import unittest
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 
 from model import (
     ACCOUNT_EXTENSIONS,
+    DIGEST_BYTES,
     DREGG_MINT,
     DREGG_MINT_TEXT,
     EXTENSION_REFUSAL_REASON,
     LEGACY_TOKEN_PROGRAM,
     MINT_EXTENSIONS,
+    PARENT_PROFILE_BYTES,
+    PARENT_PROFILE_DOMAIN,
+    PARENT_PROFILE_MAGIC,
+    PARENT_PROFILE_RESERVED_BYTES,
+    PARENT_PROFILE_SCHEMA_VERSION,
+    PROFILE_DOMAIN,
     PROFILE_RESERVED_BYTES,
+    PROFILE_SCHEMA_VERSION,
     PROTOCOL_ACCOUNT_EXTENSION_CEILING,
+    SUBFIELD_COLLATERAL_POLICY,
+    U64_MAX,
     CurrencyRef,
     ExtensionType,
     MintSnapshot,
     ModelError,
+    ProfileIdentity,
     RealmCollateralProfile,
     RefusalCode,
     TOKEN_2022_PROGRAM,
     TokenAccountSnapshot,
+    compose_profile_identity,
     decode_base58_pubkey,
     dregg_dogfood_profile,
     extension_mask,
     validate_hoard_account,
     validate_mint,
+    verify_profile_identity,
 )
 
 
@@ -349,6 +363,201 @@ class CheckedVectorTests(unittest.TestCase):
         )
         self.assertFalse(MINT_EXTENSIONS & ACCOUNT_EXTENSIONS)
         self.assertEqual(set(EXTENSION_REFUSAL_REASON), set(ExtensionType))
+
+
+IDENTITY_BUILDERS = {
+    "generic-token-2022": lambda: token_2022_profile(),
+    "dregg-dogfood": lambda: dregg_dogfood_profile(
+        decimals=6, max_supply_atoms=10**15
+    ),
+    "legacy-sol-fee": lambda: legacy_sol_fee_profile(),
+}
+
+
+def legacy_sol_fee_profile() -> RealmCollateralProfile:
+    collateral = CurrencyRef.spl(LEGACY_TOKEN_PROGRAM, bytes.fromhex("ab" * 32), 9)
+    return RealmCollateralProfile(
+        collateral=collateral,
+        fee_currency=CurrencyRef.native_sol(),
+        liveness_currency=CurrencyRef.native_sol(),
+        max_supply_atoms=U64_MAX,
+        allowed_account_extensions=0,
+    )
+
+
+def identity_vectors() -> dict:
+    return json.loads((Path(__file__).parent / "identity_vectors.json").read_text())
+
+
+class ProfileIdentityTests(unittest.TestCase):
+    """The P1-G parent/child join: the collateral digest is a subfield, not the ID."""
+
+    def test_parent_bytes_round_trip_and_embed_the_child_digest(self) -> None:
+        profile = token_2022_profile()
+        identity = compose_profile_identity(profile)
+        raw = identity.canonical_bytes()
+        self.assertEqual(len(raw), PARENT_PROFILE_BYTES)
+        self.assertEqual(raw[:8], PARENT_PROFILE_MAGIC)
+        self.assertEqual(raw[8:10], PARENT_PROFILE_SCHEMA_VERSION.to_bytes(2, "little"))
+        self.assertEqual(raw[10:12], bytes(2))
+        self.assertEqual(
+            raw[12:14], SUBFIELD_COLLATERAL_POLICY.to_bytes(2, "little")
+        )
+        self.assertEqual(raw[14:16], PROFILE_SCHEMA_VERSION.to_bytes(2, "little"))
+        self.assertEqual(raw[16:48], profile.digest())
+        self.assertEqual(raw[48:], bytes(PARENT_PROFILE_RESERVED_BYTES))
+        self.assertEqual(ProfileIdentity.from_canonical_bytes(raw), identity)
+        self.assertEqual(
+            identity.digest(), sha256(PARENT_PROFILE_DOMAIN + raw).digest()
+        )
+        self.assertTrue(identity.binds(profile))
+
+    def test_the_collateral_digest_is_not_the_profile_id(self) -> None:
+        profile = token_2022_profile()
+        identity = compose_profile_identity(profile)
+        self.assertNotEqual(identity.digest(), profile.digest())
+        self.assertEqual(len(identity.digest()), DIGEST_BYTES)
+
+    def test_every_collateral_field_change_moves_the_parent_identity(self) -> None:
+        base = token_2022_profile()
+        base_identity = compose_profile_identity(base).digest()
+        variants = [
+            replace(base, max_supply_atoms=base.max_supply_atoms - 1),
+            replace(
+                base,
+                collateral=CurrencyRef.spl(
+                    TOKEN_2022_PROGRAM, base.collateral.mint, 7
+                ),
+                fee_currency=CurrencyRef.spl(
+                    TOKEN_2022_PROGRAM, base.collateral.mint, 7
+                ),
+            ),
+            replace(base, fee_currency=CurrencyRef.native_sol()),
+            replace(base, allowed_account_extensions=0),
+        ]
+        seen = {base_identity}
+        for variant in variants:
+            digest = compose_profile_identity(variant).digest()
+            self.assertNotIn(digest, seen)
+            seen.add(digest)
+
+    def test_malformed_parent_identities_are_refused(self) -> None:
+        digest = token_2022_profile().digest()
+        with self.assertRaises(ModelError):
+            ProfileIdentity(collateral_policy_digest=bytes(DIGEST_BYTES))
+        with self.assertRaises(ModelError):
+            ProfileIdentity(collateral_policy_digest=digest[:31])
+        with self.assertRaises(ModelError):
+            ProfileIdentity(collateral_policy_digest=digest, subfield_tag=2)
+        with self.assertRaises(ModelError):
+            ProfileIdentity(collateral_policy_digest=digest, subfield_schema_version=2)
+        with self.assertRaises(ModelError):
+            ProfileIdentity(collateral_policy_digest=digest, schema_version=2)
+        with self.assertRaises(ModelError):
+            ProfileIdentity(collateral_policy_digest=digest, flags=1)
+
+    def test_a_wellformed_parent_can_still_bind_the_wrong_policy(self) -> None:
+        generic = token_2022_profile()
+        other = dregg_dogfood_profile(decimals=6, max_supply_atoms=10**15)
+        foreign = compose_profile_identity(other)
+        # It decodes: well-formedness is not evidence of the right subfield.
+        self.assertEqual(
+            ProfileIdentity.from_canonical_bytes(foreign.canonical_bytes()), foreign
+        )
+        self.assertFalse(foreign.binds(generic))
+        with self.assertRaises(ModelError):
+            verify_profile_identity(generic, foreign.canonical_bytes())
+        self.assertEqual(
+            verify_profile_identity(other, foreign.canonical_bytes()), foreign
+        )
+
+
+class ProfileIdentityVectorTests(unittest.TestCase):
+    def test_positive_vectors_recompute_from_the_model(self) -> None:
+        vectors = identity_vectors()
+        self.assertEqual(vectors["schema"], "dragons-clutch/profile-identity-v1")
+        self.assertEqual(vectors["manifest"]["network_actions"], 0)
+        self.assertEqual(vectors["manifest"]["parent_bytes"], PARENT_PROFILE_BYTES)
+        self.assertEqual(vectors["manifest"]["child_bytes"], 266)
+        self.assertEqual(len(vectors["positive_vectors"]), len(IDENTITY_BUILDERS))
+        for vector in vectors["positive_vectors"]:
+            profile = IDENTITY_BUILDERS[vector["builder"]]()
+            identity = compose_profile_identity(profile)
+            self.assertEqual(
+                profile.canonical_bytes().hex(),
+                vector["collateral_profile_bytes"],
+                vector["name"],
+            )
+            self.assertEqual(profile.digest_hex(), vector["child_digest"], vector["name"])
+            self.assertEqual(
+                identity.canonical_bytes().hex(), vector["parent_bytes"], vector["name"]
+            )
+            self.assertEqual(
+                identity.digest_hex(), vector["parent_digest"], vector["name"]
+            )
+            embedded = bytes.fromhex(vector["parent_bytes"])[16:48]
+            self.assertEqual(embedded.hex(), vector["child_digest"], vector["name"])
+            self.assertNotEqual(vector["parent_digest"], vector["child_digest"])
+        names = [vector["parent_digest"] for vector in vectors["positive_vectors"]]
+        self.assertEqual(len(set(names)), len(names))
+
+    def test_decode_refusal_vectors_all_fail_closed(self) -> None:
+        vectors = identity_vectors()
+        self.assertTrue(vectors["decode_refusals"])
+        for vector in vectors["decode_refusals"]:
+            raw = bytes.fromhex(vector["parent_bytes"])
+            with self.assertRaises(ModelError, msg=vector["name"]):
+                ProfileIdentity.from_canonical_bytes(raw)
+            with self.assertRaises(ModelError, msg=vector["name"]):
+                verify_profile_identity(token_2022_profile(), raw)
+
+    def test_binding_refusal_vectors_decode_but_do_not_bind(self) -> None:
+        vectors = identity_vectors()
+        profile = token_2022_profile()
+        self.assertTrue(vectors["binding_refusals"])
+        for vector in vectors["binding_refusals"]:
+            raw = bytes.fromhex(vector["parent_bytes"])
+            identity = ProfileIdentity.from_canonical_bytes(raw)
+            self.assertFalse(identity.binds(profile), vector["name"])
+            with self.assertRaises(ModelError, msg=vector["name"]):
+                verify_profile_identity(profile, raw)
+            self.assertNotEqual(
+                identity.digest_hex(),
+                compose_profile_identity(profile).digest_hex(),
+                vector["name"],
+            )
+
+    def test_domain_separation_vectors_stay_distinct(self) -> None:
+        vectors = identity_vectors()
+        profile = token_2022_profile()
+        identity = compose_profile_identity(profile)
+        parent_raw = identity.canonical_bytes()
+        child_raw = profile.canonical_bytes()
+        recomputed = {
+            "child-domain-over-parent-bytes": sha256(
+                PROFILE_DOMAIN + parent_raw
+            ).hexdigest(),
+            "parent-domain-over-child-bytes": sha256(
+                PARENT_PROFILE_DOMAIN + child_raw
+            ).hexdigest(),
+            "undomained-parent-bytes": sha256(parent_raw).hexdigest(),
+            "parent-domain-with-separator-byte": sha256(
+                PARENT_PROFILE_DOMAIN + bytes(1) + parent_raw
+            ).hexdigest(),
+        }
+        self.assertEqual(
+            {vector["name"] for vector in vectors["domain_separation"]},
+            set(recomputed),
+        )
+        forbidden = {identity.digest_hex(), profile.digest_hex()}
+        seen = set()
+        for vector in vectors["domain_separation"]:
+            self.assertEqual(
+                recomputed[vector["name"]], vector["digest"], vector["name"]
+            )
+            self.assertNotIn(vector["digest"], forbidden, vector["name"])
+            self.assertNotIn(vector["digest"], seen, vector["name"])
+            seen.add(vector["digest"])
 
 
 if __name__ == "__main__":

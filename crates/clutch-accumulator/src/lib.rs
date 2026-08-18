@@ -35,6 +35,33 @@
 //! the required information. Equal summaries can represent streams with
 //! different threshold-crossing topology; see the law tests for a concrete
 //! witness.
+//!
+//! # Domain-bound window evidence
+//!
+//! A [`Summary`] is a statistic, not an authority. It answers for whatever
+//! bucket range it happens to cover, complete or gapped, which is correct for
+//! an accumulator and wrong for a settlement term. The window plane
+//! ([`WindowDomain`], [`WindowAccumulator`], [`WindowResult`]) is the typed
+//! join that fixes the composition hole recorded as §P1-D of
+//! `docs/implementation/ADVERSARIAL_REVIEW_V0.md`: a [`WindowResult`] exists
+//! only for an exact expected feed/grid/range/generation/maturity domain that
+//! reached its maturity bound, was sealed, and satisfied a registered
+//! [`CoveragePolicy`]. There is no constructor from a bare [`Summary`], so a
+//! function that names `&WindowResult` refuses a prefix, a gapped substitute,
+//! or another window at compile time or by explicit error.
+//!
+//! Nothing here authenticates anything. This crate has no source adapter, no
+//! hash primitive, and no clock. `WindowResult` is honest evidence about a
+//! fold, never evidence about a source.
+
+mod window;
+
+pub use window::{
+    CoveragePolicy, FeedIdentity, WindowAccumulator, WindowDomain, WindowError, WindowPhase,
+    WindowResult, COVERAGE_POLICY_BOUNDED_GAPS, COVERAGE_POLICY_COMPLETE_REQUIRED, IDENTITY_BYTES,
+    WINDOW_DOMAIN_BYTES, WINDOW_DOMAIN_MAGIC, WINDOW_DOMAIN_RESERVED_BYTES,
+    WINDOW_DOMAIN_SCHEMA_VERSION, WINDOW_DOMAIN_TAG,
+};
 
 /// Maximum number of buckets in one summary.
 pub const MAX_BUCKETS: u64 = 1_000_000;

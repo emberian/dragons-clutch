@@ -232,3 +232,57 @@ Required counterexamples include:
 
 E4 stops or narrows the feature family if associativity, width, retention, source
 authentication, or zero-future-volume capitalization does not close.
+
+## 12. Addendum 2026-08-18: the typed window evidence plane landed
+
+Status: MODEL. Implemented in `crates/clutch-accumulator`, tested offline,
+authenticating nothing.
+
+§6 of this plan sketched `immutable WindowResult(exact WindowId)` as a lifecycle
+stage. It is now a type rather than a box in a diagram, because
+`ADVERSARIAL_REVIEW_V0.md` §P1-D showed the gap was load-bearing: `Summary`
+statistics answer for whatever range they cover, so a caller could treat an
+accepted-only statistic as a full-window settlement term with nothing but a
+comment to stop them.
+
+What exists now:
+
+- `WindowDomain` — the exact expected feed identity, source/evaluator versions,
+  grid, `[start, end)` bucket range, maturity bound, repair generation, and
+  registered coverage policy. It has a 144-byte canonical preimage encoding and
+  publishes the domain-separation tag `dragons-clutch/window-domain/v1`, but
+  this crate still owns no hash primitive and computes no `WindowId`.
+- `CoveragePolicy` — a closed registry with private fields. V1 registers
+  `COMPLETE_REQUIRED` and `bounded_gaps(n)`; `n = 0` is refused because it would
+  be a second identifier for the first.
+- `WindowAccumulator` — folds already-adjacent page summaries into exactly one
+  domain and runs `Open -> Mature -> Sealed`. Maturity needs two separate facts:
+  every expected bucket represented, and a witnessed monotone feed cursor that
+  has reached the maturity bound. The excess of the maturity bound over the
+  window end is the frozen repair grace of §7.
+- `WindowResult` — the only domain-bound value, constructible only by sealing
+  such an accumulator and passing its coverage policy. `check_domain` refuses a
+  wrong window, generation, maturity bound, grid, feed, or coverage policy, and
+  names which field differed.
+
+This generalizes the vertical model's host semantics: that model's frozen
+`MATURITY_BUCKETS` constant and `sealed` flag become a per-window field of an
+immutable domain and a terminal transition, and its `NotMature` / `NotSealed` /
+`ObservationAfterSeal` / `AlreadySealed` refusals reappear with `WrongWindow`,
+`MismatchedGeneration`, `IncompleteDomain`, `NonContiguous`, `RangeOverflow`,
+`NonMonotoneCursor`, and `CoverageRefused` alongside them.
+
+Tests: 24 unit (10 pre-existing algebra, 14 window) plus 2 doctests, including a
+`compile_fail` witness that a bare `Summary` cannot be substituted for a
+`WindowResult`. Adversarial cases cover the truncated prefix, the gap-tolerant
+substitution attempt, the wrong window, the reopened result, the early seal, the
+non-monotone cursor, the overrunning page, and the closed policy registry.
+
+Still open from §10 and §11 of this plan: nothing is authenticated, no proof
+obligation is discharged, `FeedIdentity` bytes remain opaque, the archive-page
+retention proof does not exist, and the source-adapter admission dossier of §9
+has no entries. The terms-to-payout function that consumes a `WindowResult`, its
+partition/ambiguity/failure policy identifiers, and its refusal classes are
+specified in [the resolution evidence plan](implementation/RESOLUTION_EVIDENCE_PLAN.md)
+§2 and implemented nowhere. The reference adapter's `Resolve` and
+`RedeemInternal` refusals are unchanged.

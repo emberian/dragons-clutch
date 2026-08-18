@@ -185,3 +185,69 @@ construction and return checks, balance deltas, rent/close behavior, runtime
 upgrades, and proof that all required checks occur atomically. These offline
 tests do not establish any of those properties and do not authorize an RPC
 read, key access, signing, submission, deployment, or use of real collateral.
+
+## Addendum 2026-08-18: parent Realm Profile identity (P1-G join)
+
+Status: MODEL/PROPOSED. Python side implemented; on the Rust side the reserved
+field landed in the same wave and the derivation/binding has not.
+
+`ADVERSARIAL_REVIEW_V0.md` §P1-G recorded two unjoined profile-digest
+algorithms and asked for a decision. **Decided: the 266-byte collateral-policy
+digest is not the Realm's Profile ID. It is one domain-separated subfield inside
+a broader parent Profile.** The full rationale, layout table, cross-language
+expectations, and coordination notes for the `solana-layout` lane are in
+[the resolution evidence plan](RESOLUTION_EVIDENCE_PLAN.md) §3.
+
+Neither existing digest rule changed. The child rule is still
+`SHA-256("dragons-clutch/collateral-profile/v1" || 0x00 || 266 bytes)` and the
+two golden child digests above are byte-identical to before. The Rust
+`canonical_profile_hash` rule is still
+`SHA-256("dragons-clutch/profile/v1" || profile_bytes)`. What the decision
+freezes is *which bytes the parent rule consumes*: exactly 64, laid out as
+
+| Offset | Bytes | Field |
+| ---: | ---: | --- |
+| 0 | 8 | ASCII `DCPROF1` followed by one zero byte |
+| 8 | 2 | parent schema version, little-endian `u16` (`1`) |
+| 10 | 2 | parent flags, little-endian `u16` (zero in V1) |
+| 12 | 2 | subfield tag, little-endian `u16` (`1` = collateral policy) |
+| 14 | 2 | subfield schema version, little-endian `u16` |
+| 16 | 32 | the collateral-policy digest |
+| 48 | 16 | zero reserved bytes |
+
+The generic Token-2022 parent identity is
+`8180f42830d90ef060ec2e4d91c6c19145db9cd9e2dbfd759045770930831688` and the
+offline DREGG example is
+`31cd82668ac7846bbf6bf38d25107d0301bc468d40816bf9a565ac93766f93b3`. Both remain
+offline research values; the DREGG row is still built from assumed decimals and
+an assumed ceiling and is not a chain fact.
+
+What landed in `research/collateral-profiles`:
+
+- `ProfileIdentity` with 64-byte canonical encode/decode, the composition rule,
+  `binds()`, and `verify_profile_identity()`;
+- `identity_vectors.json`, a second checked corpus with a derivation manifest:
+  3 positive vectors, 9 decode refusals, 3 binding refusals, and 4
+  domain-separation confusions, all recomputed from `model.py` by the tests;
+- 9 new tests, for 28 total (the 19 existing tests are unchanged); and
+- `run_lab.py` now also prints both parent identities.
+
+The load-bearing negative is the binding refusal: a well-formed parent profile
+is not evidence of the right subfield. `ProfileIdentity.from_canonical_bytes`
+accepts a parent carrying another Realm's collateral digest without complaint;
+only recomputing the child digest from the actual policy and comparing rejects
+it. An adapter that merely decodes has checked nothing.
+
+On the Rust side, the concurrent `solana-layout` lane landed
+`ProfileAccount.collateral_policy_digest` at byte offset 66 (100-byte account,
+`account_version::PROFILE = 2`), zero until frozen and tied to
+`PROFILE_FLAG_POLICY_FROZEN`, and deliberately added no derivation function. The
+algorithm above is the one those 32 bytes are for. Still owed there: a 64-byte
+length requirement on `canonical_profile_hash`, the parent encoder/decoder, a
+checked binding rule that recomputes the child digest rather than merely
+decoding, and the cross-language golden tests. See
+[RESOLUTION_EVIDENCE_PLAN.md](RESOLUTION_EVIDENCE_PLAN.md) §3.4.
+
+Unchanged by this addendum: an admitted layout Profile still does not imply
+admission by the collateral model. That requires a future adapter to
+authenticate a real mint and Hoard token account, which no offline crate can do.

@@ -16,7 +16,9 @@ The model defines:
   ceiling, mint authority, freeze authority, and extension sets;
 - Hoard-account checks for state, owner authority, delegate, close authority,
   and account extensions;
-- a DREGG dogfood constructor using the same generic profile type; and
+- a DREGG dogfood constructor using the same generic profile type;
+- a 64-byte parent Realm Profile identity that carries the 266-byte collateral
+  digest as one domain-separated subfield (the P1-G join); and
 - golden encodings plus adversarial decision vectors.
 
 Run the complete deterministic suite from this directory:
@@ -32,6 +34,12 @@ Or from the repository root:
 python3 -m unittest discover -s research/collateral-profiles -p 'test_*.py'
 python3 research/collateral-profiles/run_lab.py
 ```
+
+Two checked JSON corpora sit beside the model. `vectors.json` holds the
+mint/account decision vectors. `identity_vectors.json` holds the parent/child
+digest vectors with a derivation manifest: positive goldens, decode refusals,
+binding refusals, and domain-separation confusions. Both are frozen
+expectations that the tests recompute from `model.py`; neither is an input.
 
 These programs have no RPC, wallet, key, signing, submission, deployment, CPI,
 or dependency-install path. The snapshots are typed test inputs, not Solana

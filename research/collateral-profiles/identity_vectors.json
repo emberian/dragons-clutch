@@ -1,0 +1,168 @@
+{
+  "schema": "dragons-clutch/profile-identity-v1",
+  "status": "MODEL/PROPOSED offline identity composition; nothing here is authenticated",
+  "manifest": {
+    "generated_by": "research/collateral-profiles/model.py",
+    "checked_by": "research/collateral-profiles/test_profiles.py ProfileIdentityVectorTests",
+    "regeneration": "every field is recomputed from model.py by the checking tests; this file is a frozen expectation, never an input to the model",
+    "network_actions": 0,
+    "child_domain_ascii": "dragons-clutch/collateral-profile/v1",
+    "child_domain_trailing_zero_byte": true,
+    "child_bytes": 266,
+    "child_rule": "SHA-256(child_domain_ascii || 0x00 || collateral_profile_bytes)",
+    "parent_domain_ascii": "dragons-clutch/profile/v1",
+    "parent_domain_trailing_zero_byte": false,
+    "parent_bytes": 64,
+    "parent_rule": "SHA-256(parent_domain_ascii || parent_profile_bytes)",
+    "composition": "parent_profile_bytes embeds the 32-byte child digest at offset 16 under subfield tag 1; the parent hash rule is the already-frozen Rust canonical_profile_hash and is unchanged by this decision",
+    "parent_layout": [
+      {
+        "offset": 0,
+        "bytes": 8,
+        "field": "magic, ASCII DCPROF1 followed by one zero byte"
+      },
+      {
+        "offset": 8,
+        "bytes": 2,
+        "field": "parent schema version, little-endian u16"
+      },
+      {
+        "offset": 10,
+        "bytes": 2,
+        "field": "parent flags, little-endian u16, zero in V1"
+      },
+      {
+        "offset": 12,
+        "bytes": 2,
+        "field": "subfield tag, little-endian u16, 1 is collateral policy"
+      },
+      {
+        "offset": 14,
+        "bytes": 2,
+        "field": "subfield schema version, little-endian u16"
+      },
+      {
+        "offset": 16,
+        "bytes": 32,
+        "field": "collateral-policy digest, the child digest"
+      },
+      {
+        "offset": 48,
+        "bytes": 16,
+        "field": "zero reserved bytes"
+      }
+    ]
+  },
+  "positive_vectors": [
+    {
+      "name": "generic-token-2022",
+      "builder": "generic-token-2022",
+      "collateral_profile_bytes": "4443434f4c50310001001f000106ddf6e1ee758fde18425dbce46ccddab61afc4d83b90d27febdf928d8a18bfccdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd060106ddf6e1ee758fde18425dbce46ccddab61afc4d83b90d27febdf928d8a18bfccdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000090080c6a47e8d0300000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000",
+      "child_digest": "aafb22527b09935db83362d09eebb7cd875a7714fc9e3c3764a9e57c207c5c32",
+      "parent_bytes": "444350524f4631000100000001000100aafb22527b09935db83362d09eebb7cd875a7714fc9e3c3764a9e57c207c5c3200000000000000000000000000000000",
+      "parent_digest": "8180f42830d90ef060ec2e4d91c6c19145db9cd9e2dbfd759045770930831688"
+    },
+    {
+      "name": "dregg-dogfood",
+      "builder": "dregg-dogfood",
+      "collateral_profile_bytes": "4443434f4c50310001001f000106ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a907e0c65663f8a2651cd249df49342c8dd5ff9d946f1b212f3dc484980af7980f060106ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a907e0c65663f8a2651cd249df49342c8dd5ff9d946f1b212f3dc484980af7980f060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000090080c6a47e8d0300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "child_digest": "ef63ccd0c5e1616c1570dd96a985ef9924f622d44c246f5aa88e1b9545f54343",
+      "parent_bytes": "444350524f4631000100000001000100ef63ccd0c5e1616c1570dd96a985ef9924f622d44c246f5aa88e1b9545f5434300000000000000000000000000000000",
+      "parent_digest": "31cd82668ac7846bbf6bf38d25107d0301bc468d40816bf9a565ac93766f93b3"
+    },
+    {
+      "name": "legacy-sol-fee",
+      "builder": "legacy-sol-fee",
+      "collateral_profile_bytes": "4443434f4c50310001001f000106ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a9abababababababababababababababababababababababababababababababab09000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009ffffffffffffffff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "child_digest": "e7c9503bb8a5fe6db1a40b8f94868e1c6a55826232d897e2883cd641d0bb21e3",
+      "parent_bytes": "444350524f4631000100000001000100e7c9503bb8a5fe6db1a40b8f94868e1c6a55826232d897e2883cd641d0bb21e300000000000000000000000000000000",
+      "parent_digest": "f2ea9b4747076c06c1adb6b5ce3bb5fbecdeacd2b7f03d6c131cc10b0ce85db6"
+    }
+  ],
+  "decode_refusals": [
+    {
+      "name": "wrong-magic",
+      "mutation": "byte 0 flipped",
+      "parent_bytes": "454350524f4631000100000001000100aafb22527b09935db83362d09eebb7cd875a7714fc9e3c3764a9e57c207c5c3200000000000000000000000000000000"
+    },
+    {
+      "name": "nonzero-reserved",
+      "mutation": "final reserved byte set to 1",
+      "parent_bytes": "444350524f4631000100000001000100aafb22527b09935db83362d09eebb7cd875a7714fc9e3c3764a9e57c207c5c3200000000000000000000000000000001"
+    },
+    {
+      "name": "swapped-flags-and-subfield-tag",
+      "mutation": "the u16 at offset 10 and the u16 at offset 12 exchanged",
+      "parent_bytes": "444350524f4631000100010000000100aafb22527b09935db83362d09eebb7cd875a7714fc9e3c3764a9e57c207c5c3200000000000000000000000000000000"
+    },
+    {
+      "name": "unknown-subfield-tag",
+      "mutation": "subfield tag set to 2",
+      "parent_bytes": "444350524f4631000100000002000100aafb22527b09935db83362d09eebb7cd875a7714fc9e3c3764a9e57c207c5c3200000000000000000000000000000000"
+    },
+    {
+      "name": "unsupported-parent-schema",
+      "mutation": "parent schema version set to 2",
+      "parent_bytes": "444350524f4631000200000001000100aafb22527b09935db83362d09eebb7cd875a7714fc9e3c3764a9e57c207c5c3200000000000000000000000000000000"
+    },
+    {
+      "name": "unsupported-subfield-schema",
+      "mutation": "subfield schema version set to 2",
+      "parent_bytes": "444350524f4631000100000001000200aafb22527b09935db83362d09eebb7cd875a7714fc9e3c3764a9e57c207c5c3200000000000000000000000000000000"
+    },
+    {
+      "name": "zero-child-digest",
+      "mutation": "child digest zeroed",
+      "parent_bytes": "444350524f4631000100000001000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "truncated",
+      "mutation": "last byte removed",
+      "parent_bytes": "444350524f4631000100000001000100aafb22527b09935db83362d09eebb7cd875a7714fc9e3c3764a9e57c207c5c32000000000000000000000000000000"
+    },
+    {
+      "name": "extended",
+      "mutation": "one zero byte appended",
+      "parent_bytes": "444350524f4631000100000001000100aafb22527b09935db83362d09eebb7cd875a7714fc9e3c3764a9e57c207c5c320000000000000000000000000000000000"
+    }
+  ],
+  "binding_refusals": [
+    {
+      "name": "child-digest-bit-flipped",
+      "mutation": "bit 0 of the child digest flipped",
+      "parent_bytes": "444350524f4631000100000001000100abfb22527b09935db83362d09eebb7cd875a7714fc9e3c3764a9e57c207c5c3200000000000000000000000000000000"
+    },
+    {
+      "name": "swapped-child-digest-halves",
+      "mutation": "the two 16-byte halves of the child digest exchanged",
+      "parent_bytes": "444350524f4631000100000001000100875a7714fc9e3c3764a9e57c207c5c32aafb22527b09935db83362d09eebb7cd00000000000000000000000000000000"
+    },
+    {
+      "name": "foreign-collateral-policy",
+      "mutation": "DREGG child digest embedded, then checked against the generic profile",
+      "parent_bytes": "444350524f4631000100000001000100ef63ccd0c5e1616c1570dd96a985ef9924f622d44c246f5aa88e1b9545f5434300000000000000000000000000000000"
+    }
+  ],
+  "domain_separation": [
+    {
+      "name": "child-domain-over-parent-bytes",
+      "rule": "SHA-256(child_domain || parent_bytes)",
+      "digest": "75d471c2945e737f0100c3a29b21f4d6e138f60b1c609a3580f8497c080feaa6"
+    },
+    {
+      "name": "parent-domain-over-child-bytes",
+      "rule": "SHA-256(parent_domain || collateral_profile_bytes)",
+      "digest": "34afe8672d0bdf856a51090df404ee9c8e0675847820382c4295b71c6e331a12"
+    },
+    {
+      "name": "undomained-parent-bytes",
+      "rule": "SHA-256(parent_bytes)",
+      "digest": "21756320957c8ed9da2951b286dfba5325b2fd03b8aad2eb5d8a4a31697d44b8"
+    },
+    {
+      "name": "parent-domain-with-separator-byte",
+      "rule": "SHA-256(parent_domain || 0x00 || parent_bytes)",
+      "digest": "a955ea401c5b89e31dd740794dfd9b252298e7728f184fc3d338e7aa98542387"
+    }
+  ]
+}

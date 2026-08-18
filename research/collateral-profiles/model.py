@@ -609,3 +609,161 @@ def dregg_dogfood_profile(
         max_supply_atoms=max_supply_atoms,
         allowed_account_extensions=0,
     )
+
+
+# ---------------------------------------------------------------------------
+# Parent Realm Profile identity (P1-G join)
+# ---------------------------------------------------------------------------
+#
+# Status: MODEL/PROPOSED (2026-08-18).  This section decides the parent/child
+# relation named in `docs/implementation/ADVERSARIAL_REVIEW_V0.md` P1-G, where
+# two unjoined digest algorithms existed:
+#
+#   child  (this lab):  SHA-256("dragons-clutch/collateral-profile/v1\0" || 266 bytes)
+#   parent (Rust layout): SHA-256("dragons-clutch/profile/v1" || profile_bytes)
+#
+# The decision is that the collateral-policy digest is NOT the Realm's Profile
+# ID.  It is one domain-separated subfield inside a broader parent Profile whose
+# canonical bytes are hashed by the already-frozen Rust rule.  The parent hash
+# function therefore does not change at all; what is frozen here is *which
+# bytes* it consumes.  Nothing below authenticates a mint, an account, or a
+# deployment: it is an offline identity composition only.
+
+PARENT_PROFILE_MAGIC = b"DCPROF1\0"
+PARENT_PROFILE_DOMAIN = b"dragons-clutch/profile/v1"
+PARENT_PROFILE_SCHEMA_VERSION = 1
+PARENT_PROFILE_FLAGS = 0
+PARENT_PROFILE_BYTES = 64
+PARENT_PROFILE_RESERVED_BYTES = 16
+DIGEST_BYTES = 32
+
+SUBFIELD_COLLATERAL_POLICY = 1
+KNOWN_SUBFIELD_TAGS = frozenset({SUBFIELD_COLLATERAL_POLICY})
+
+
+@dataclass(frozen=True)
+class ProfileIdentity:
+    """The parent Realm Profile identity that embeds one collateral subfield.
+
+    Exactly 64 canonical bytes:
+
+    ===== ===== =================================================
+    Off.  Bytes Field
+    ===== ===== =================================================
+    0     8     ASCII ``DCPROF1`` followed by one zero byte
+    8     2     parent schema version, little-endian ``u16``
+    10    2     parent flags, little-endian ``u16`` (zero in V1)
+    12    2     subfield tag, little-endian ``u16``
+    14    2     subfield schema version, little-endian ``u16``
+    16    32    collateral-policy digest (the child digest)
+    48    16    zero reserved bytes
+    ===== ===== =================================================
+
+    The identity is ``SHA-256(PARENT_PROFILE_DOMAIN || canonical_bytes())``.
+    """
+
+    collateral_policy_digest: bytes
+    subfield_tag: int = SUBFIELD_COLLATERAL_POLICY
+    subfield_schema_version: int = PROFILE_SCHEMA_VERSION
+    schema_version: int = PARENT_PROFILE_SCHEMA_VERSION
+    flags: int = PARENT_PROFILE_FLAGS
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.collateral_policy_digest, bytes)
+            or len(self.collateral_policy_digest) != DIGEST_BYTES
+        ):
+            raise ModelError("collateral-policy digest must be exactly 32 bytes")
+        if self.collateral_policy_digest == bytes(DIGEST_BYTES):
+            raise ModelError("collateral-policy digest cannot be zero")
+        if self.schema_version != PARENT_PROFILE_SCHEMA_VERSION:
+            raise ModelError("unsupported parent-profile schema")
+        if self.flags != PARENT_PROFILE_FLAGS:
+            raise ModelError("parent profile carries unknown flags")
+        if self.subfield_tag not in KNOWN_SUBFIELD_TAGS:
+            raise ModelError("unknown parent-profile subfield tag")
+        if self.subfield_schema_version != PROFILE_SCHEMA_VERSION:
+            raise ModelError("unsupported collateral-profile subfield schema")
+
+    @classmethod
+    def from_profile(cls, profile: RealmCollateralProfile) -> "ProfileIdentity":
+        """Compose the parent identity over one collateral profile."""
+
+        return cls(
+            collateral_policy_digest=profile.digest(),
+            subfield_schema_version=profile.schema_version,
+        )
+
+    def canonical_bytes(self) -> bytes:
+        return b"".join(
+            (
+                PARENT_PROFILE_MAGIC,
+                pack("<H", self.schema_version),
+                pack("<H", self.flags),
+                pack("<H", self.subfield_tag),
+                pack("<H", self.subfield_schema_version),
+                self.collateral_policy_digest,
+                bytes(PARENT_PROFILE_RESERVED_BYTES),
+            )
+        )
+
+    @classmethod
+    def from_canonical_bytes(cls, raw: bytes) -> "ProfileIdentity":
+        if len(raw) != PARENT_PROFILE_BYTES:
+            raise ModelError("parent profile must be exactly 64 bytes")
+        if raw[:8] != PARENT_PROFILE_MAGIC:
+            raise ModelError("invalid parent-profile magic")
+        if raw[-PARENT_PROFILE_RESERVED_BYTES:] != bytes(PARENT_PROFILE_RESERVED_BYTES):
+            raise ModelError("parent-profile reserved bytes must be zero")
+        schema_version, flags, subfield_tag, subfield_schema_version = unpack_from(
+            "<HHHH", raw, 8
+        )
+        identity = cls(
+            collateral_policy_digest=raw[16:48],
+            subfield_tag=subfield_tag,
+            subfield_schema_version=subfield_schema_version,
+            schema_version=schema_version,
+            flags=flags,
+        )
+        if identity.canonical_bytes() != raw:
+            raise ModelError("non-canonical parent-profile encoding")
+        return identity
+
+    def digest(self) -> bytes:
+        """The parent Profile ID, using the already-frozen Rust hash rule."""
+
+        return sha256(PARENT_PROFILE_DOMAIN + self.canonical_bytes()).digest()
+
+    def digest_hex(self) -> str:
+        return self.digest().hex()
+
+    def binds(self, profile: RealmCollateralProfile) -> bool:
+        """Whether this identity commits to exactly ``profile``."""
+
+        return (
+            self.subfield_tag == SUBFIELD_COLLATERAL_POLICY
+            and self.subfield_schema_version == profile.schema_version
+            and self.collateral_policy_digest == profile.digest()
+        )
+
+
+def compose_profile_identity(profile: RealmCollateralProfile) -> ProfileIdentity:
+    """Convenience alias for :meth:`ProfileIdentity.from_profile`."""
+
+    return ProfileIdentity.from_profile(profile)
+
+
+def verify_profile_identity(
+    profile: RealmCollateralProfile, parent_bytes: bytes
+) -> ProfileIdentity:
+    """Decode parent bytes and refuse unless they bind ``profile`` exactly.
+
+    This is the check an eventual adapter owes: decoding a well-formed parent
+    profile is not enough, because a well-formed parent can commit to somebody
+    else's collateral policy.
+    """
+
+    identity = ProfileIdentity.from_canonical_bytes(parent_bytes)
+    if not identity.binds(profile):
+        raise ModelError("parent profile does not bind this collateral policy")
+    return identity
