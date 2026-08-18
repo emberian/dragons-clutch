@@ -27,6 +27,15 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- Merge implemented at the semantic owner + program mirror; round-trip
+  byte identity; SBF_BRINGUP status now truthful (8 families host-diff,
+  Split-only SVM pending regen); pushed.
+- Collateral decoder: 13 goldens first-run, 22 refusal parity; honest
+  cap answer - needs the unified TermsAccount revision (cap + oblig 18
+  + distributional basis = ONE schema rev, queued for CONSOL/Fable).
+- Launched: ORDERS (streaming pages, frame-budget analysis for on-chain
+  relation verify), HARNESS-REGEN (all 8 families through the real bank).
+
 - observe_resolve landed: full evidence gate on-chain, FeedAdvance
   formats PROPOSED, SBF-frame lesson canonized (host green is not
   evidence); instruction set now Split/Mat/Demat/CreateMarket/Feed/
