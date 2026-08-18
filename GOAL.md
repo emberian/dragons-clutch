@@ -27,6 +27,13 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- Posting-path spec landed (policy/record shapes, admission relation,
+  value-gap finding, E1-E3 ladder); live-session ceiling corrected at
+  primary source: a real api.coinbase.com MPC-TLS session IS recorded
+  (183d82817, 2026-07-11) - only the model-provider run is absent. The
+  attested-exchange-price mechanism is a candidate authenticated feed
+  for Clutch observation (synergy with 24/7 positions). Pushed.
+
 - Wave 1-2 (pre-goal): proof tools pinned; coupled BatchRelationV1 + pairing
   (P1-B dead); kernel transfer_internal + complete-set redemption +
   transactionality; vertical model settles through the relation (1a/1b/1c);
