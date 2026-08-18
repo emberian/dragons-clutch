@@ -1,11 +1,17 @@
 # Token-2022 CPI integration plan
 
-Status: **partially implemented, 2026-08-18.** The first sentence of this
+Status: **implemented, 2026-08-18.** The first sentence of this
 document used to read "No program was changed"; that is no longer true, and
 §0 below says exactly what changed, what it is evidenced by, and what is still
-only a plan. The rest of the document is left as written, with the two places
+only a plan. The rest of the document is left as written, with the places
 where implementation contradicted it marked in place, so that the plan and its
 outcome can be read against each other.
+
+Two rows of §0.1 that used to read "not wired" and "not implemented" now read
+"landed": `CreateMarket` creates the outcome mints and the Hoard token account
+by CPI, and `Split`, `Merge` and `RedeemInternal` move real collateral. The
+consequence is that the token legs are **mandatory** — the optional planes and
+their `Absent` variants are deleted, and every emitter has to be regenerated.
 
 Nothing here is verified, audited, or a deployment authorization. A test that
 passes on an in-process bank is evidence about *this program on that bank*. It
@@ -21,36 +27,50 @@ is not a cluster, not an audit, and not a proof.
 | §3.2 six error appends, plus one | **landed** | `programs/clutch-sbf/program/src/error.rs` |
 | §3.1 outcome-mint role, decimals `0`, freeze `None` | **landed** as `token::MintPolicy::outcome` | `token::tests`, SVM `e1_*` |
 | §3.1 collateral-mint role from the Realm bitsets | **landed** as `token::MintPolicy::collateral` | `market_init::tests` |
-| §3.4 extension refusal **at market init** | **landed** (optional 15-account plane) | `market_init::tests`, host only |
-| §3.4 extension refusal **at every token instruction** | **landed** (optional 13-account plane) | `merge_materialize::tests`, SVM |
+| §3.4 extension refusal **at market init** | **landed**, mandatory | `market_init::tests`, SVM `create_market_founds…` |
+| §3.4 extension refusal **at every token instruction** | **landed**, mandatory, over both mint roles | `merge_materialize::tests`, SVM |
 | §3.2 `Materialize` → `MintTo` via `invoke_signed` | **landed** | SVM `e1_materialize` |
 | §3.2 `Dematerialize` → `Burn` via `invoke` | **landed** | SVM `e1_dematerialize` |
 | §3.3 steps 1-3, 5, 6 (validate, admit, snapshot, CPI, exact deltas) | **landed** | SVM + host |
-| §3.5 `HoardAccount.collateral_atoms` checked mirror | **not wired** — the collateral leg is not | — |
-| §3.2 `Split`/`Merge`/`RedeemInternal` collateral `TransferChecked` | **constructed, not wired** | `token::tests` |
-| §3.2 `CreateMarket` creating mints and the Hoard token account | **not implemented** | — |
+| §3.5 `HoardAccount.collateral_atoms` checked mirror | **landed**, checked pre-CPI and post-CPI | SVM `no_wallet_signature…`, `split_and_merge…` |
+| §3.2 `Split`/`Merge`/`RedeemInternal` collateral `TransferChecked` | **landed** | SVM `split_and_merge…`, `redeem_pays…`, host |
+| §3.2 `CreateMarket` creating mints and the Hoard token account | **landed** | SVM `create_market_founds…` |
+| §3.4 `ImmutableOwner` required rather than allowed on the Hoard | **landed** (open decision 4, taken) | `market_init::tests`, SVM |
+| §4 E5 post-CPI rollback | **landed** | SVM `a_cpi_that_fails_after_the_kernel_ran…` |
+| §3.6 account creation, rent exemption, `invoke_signed` seeds | **landed** — `SBF_BRINGUP.md` deferred checks 2, 4, 6 | SVM `create_market_founds…` |
 
-### 0.2 The optional-leg hole, stated once
+### 0.2 The optional-leg hole, closed
 
-`Materialize` and `Dematerialize` accept **ten** accounts (the shadow-only
-instruction that existed before this lane) or **thirteen** (the token leg).
-`CreateMarket` accepts **twelve** or **fifteen**. A caller may present the
-smaller plane and get the weaker instruction.
+It used to read: "`Materialize` and `Dematerialize` accept **ten** accounts
+(the shadow-only instruction that existed before this lane) or **thirteen**
+(the token leg). `CreateMarket` accepts **twelve** or **fifteen**. A caller may
+present the smaller plane and get the weaker instruction." The stated
+closing condition was "the hole closes when `CreateMarket` creates the mints:
+the counts become fixed and the `Absent` variants are deleted."
 
-This is transitional and it is scheduling, not design. **No instruction in this
-program creates an outcome mint or a Hoard token account**, because
-`CreateMarket` creates no account at all — the `system_instruction::create_account`
-CPI is deferred check 2 of [`SBF_BRINGUP.md`](SBF_BRINGUP.md) and is unwritten.
-A market founded by this program therefore has no mint for a mandatory leg to
-name, and making the leg mandatory would make `Materialize` unreachable rather
-than stronger. It also keeps `programs/clutch-sbf/harness`, frozen this wave,
-emitting valid transactions.
+`CreateMarket` creates the mints. The counts are fixed and the `Absent`
+variants are deleted:
 
-The hole closes when `CreateMarket` creates the mints: the counts become fixed
-and the `Absent` variants are deleted. The SVM scenario
-`the_ten_account_plane_moves_only_the_shadow` measures the hole rather than
-describing it — it shows the shadow-only plane producing exactly the divergence
-the token plane then refuses to build on.
+| instruction | accounts | leg |
+| --- | --- | --- |
+| `CreateMarket` | `19 + outcome_count` (21 at two outcomes) | creates every mint and the Hoard token account |
+| `Split`, `Merge` | **16** | collateral in / out |
+| `Materialize`, `Dematerialize` | **13** | outcome mint and holder account |
+| `Resolve` | **12**, unchanged | none |
+| `RedeemInternal` | **19** | collateral out |
+
+Any other count is `ClutchError::AccountCount`, and *which* count an
+instruction takes is a function of the intent rather than of the caller. The
+SVM scenario `the_ten_account_plane_moves_only_the_shadow`, which measured the
+hole, is replaced by `the_ten_account_plane_is_refused_and_moves_nothing` and
+`the_shadow_only_plane_is_gone`, which measure its closure the same way: the
+smaller plane refuses and the two truths are still equal because nothing moved.
+
+**This is an ABI break and every emitter has to be regenerated.**
+`programs/clutch-sbf/harness` is frozen this wave and still emits ten-account
+seam transactions and a twelve-account `CreateMarket`; every one of them is now
+refused `AccountCount` on chain. Its *host* leg — the fixture build and the
+offline reference adapter inside `build_fixture` — is untouched.
 
 ### 0.3 Where the implementation contradicted the plan
 
@@ -109,25 +129,51 @@ and not a sample of `find_program_address` iteration counts:
 
 | instruction | accounts | CU |
 | --- | --- | --- |
-| `Materialize` with the token leg | 13 | 95 122 |
-| `Dematerialize` with the token leg | 13 | 95 105 |
-| `Materialize`, shadow only | 10 | 84 178 |
+| `Materialize` with the outcome leg | 13 | 82 146 |
+| `Dematerialize` with the outcome leg | 13 | 82 124 |
+| `Split` with the collateral leg | 16 | 219 391 |
+| `Merge` with the collateral leg | 16 | 219 427 |
+| `RedeemInternal` with the collateral leg | 19 | 558 320 |
+| `CreateMarket`, founding two mints and the Hoard | 21 | 867 425 |
 
-The token leg costs about **10 900 CU**, against a 200 000 default. The probe's
-1 230 / 1 720 / 1 235 CU figures were bare instructions with no CPI frame; these
-include the program's whole validation, the closure obligations, the kernel
-step, the CPI, and account re-serialization. This is two outcomes, not the
-maximum outcome count, so obligation 10 stays open.
+The probe's 1 230 / 1 720 / 1 235 CU figures were bare instructions with no CPI
+frame; these include the program's whole validation, the closure obligations,
+the kernel step, the CPI, and account re-serialization. This is two outcomes,
+not the maximum outcome count, so obligation 10 stays open.
+
+**Three of these do not fit the 200 000-unit default and the reason is not the
+CPI.** The collateral leg binds the Realm's 266 policy bytes by *recomputed
+digest*, and `clutch-solana-layout` is a dependency-free crate carrying its own
+**software SHA-256** rather than calling the `sol_sha256` syscall. Two digests
+per collateral instruction is most of the difference between 82 146 and
+219 391; `RedeemInternal` additionally recomputes the multi-kilobyte terms
+digest, and `CreateMarket` recomputes it twice on top of seven CPIs. The SVM
+scenarios raise the ceiling with a `ComputeBudget` instruction, which measures
+the cost rather than hiding it. **Moving those digests onto `sol_sha256` behind
+a feature is an obligation on the layout crate**; it is not something this lane
+may do to a frozen codec, and until it happens `Split` and `Merge` need a
+raised ceiling on any cluster.
 
 ### 0.6 What is still not evidenced
 
-E5 (post-CPI rollback), E6 (a mint the extension refusal misses whose transfer
-is not the identity), E7 (the byte differential extended over token accounts),
-E8 at the maximum outcome count, and the market-initialization refusals **on a
-bank** — the last because a `CreateMarket` scenario needs a valid immutable
-terms artifact at genesis, which the frozen `harness/` builds and this wave did
-not reimplement. The collateral admission is covered on the host instead, over
-seven matrix rows plus the digest binding and the cap ceiling.
+E6 (a mint the extension refusal misses whose transfer is not the identity),
+E7 (the byte differential extended over token accounts), E8 at the maximum
+outcome count, and the market-initialization *refusals* on a bank — market
+initialization itself now has a bank scenario, because `svm-tests` builds the
+immutable terms artifact it needed (`clutch_svm_fixture::fixture_terms`), but
+only the accepting path and the re-initialization refusal are driven there.
+The collateral admission refusals are covered on the host instead, over seven
+matrix rows plus the digest binding, the cap ceiling, and the `ImmutableOwner`
+requirement.
+
+E5 **is** evidenced now, and it had to be: the kernel step and the ledger step
+write their accounts before the CPI (§0.3), so a `Split` the kernel admits and
+Token-2022 then refuses for insufficient funds has already written two program
+accounts when the CPI fails.
+`a_cpi_that_fails_after_the_kernel_ran_reverts_every_byte` drives exactly that
+and compares all nine program accounts and both token accounts byte for byte
+against the pre-transaction state, from a state a previous accepted `Split`
+produced rather than from genesis — so the comparison is not vacuous.
 
 ## 1. Resolution record
 
@@ -579,6 +625,17 @@ outcome mint, and the destination: twelve or thirteen depending on whether the
 collateral accounts are present. This is well inside the transaction account
 limit but it is not free, and obligation 10 wants it measured, not estimated.
 
+> **Landed, with two additions the estimate missed, see §0.2.** `Split` is
+> **sixteen**, not thirteen: the collateral leg also needs the Hoard's *signing
+> authority* (an `invoke_signed` must be handed the account whose seeds sign)
+> and the Realm's **266 collateral-policy bytes**. The second is the one worth
+> naming: the collateral mint's *identity* lives only in the Realm's frozen
+> policy, so without those bytes in the account list the asset a `Split` funds
+> a complete set with would be caller-supplied. `RedeemInternal` needs the
+> Profile too, for the same reason and because its plane had no Profile to bind
+> the policy against. The measured counts are in §0.2 and the measured units in
+> §0.5.
+
 **Frame size.** `SBF_BRINGUP.md`'s stack finding is the live constraint here.
 Two functions in `clutch-solana-reference` already overflow the 4 KiB SBF frame
 by passing whole states by value, and `clutch-sbf`'s processor only fits because
@@ -623,6 +680,17 @@ before its token leg is described as anything but a probe.
   `SBF_BRINGUP.md` deferred item 8 has been owed since before there was a CPI to
   fail after; a deliberate fault-injection instruction variant is the honest way
   to get it.
+
+  > **Landed, and no fault injection was needed.** Because the kernel step and
+  > the ledger step write before the CPI (§0.3), the *ordinary* failure is
+  > already the shape the obligation wants: a `Split` whose quantity the kernel
+  > admits and whose collateral the actor's token account cannot cover writes
+  > two program accounts and then fails inside `TransferChecked`.
+  > `a_cpi_that_fails_after_the_kernel_ran_reverts_every_byte` runs one accepted
+  > `Split` first, so the comparison is against a state this program produced,
+  > and then compares all nine program accounts and both token accounts byte
+  > for byte after the failure. A deliberate fault-injection variant would have
+  > been a second code path to trust; this is the one that ships.
 * **E6 — the exact-delta check is load-bearing.** Present a collateral mint that
   the extension refusal does *not* catch but whose transfer is not the identity,
   and require the delta check to refuse. If no such mint can be constructed
@@ -656,7 +724,20 @@ closed by anything here.
    unstable. That is acceptable for a test harness and would not be acceptable
    for anything that ships.
 3. **`HoardAccount.collateral_atoms`.** Checked mirror (proposed) or removal.
-4. **`ImmutableOwner` required rather than allowed** on the Hoard.
+   **Taken in the "checked mirror" direction**, and checked twice per
+   collateral instruction: over the pre-state, so a market whose two truths
+   already disagree refuses before anything moves, and after the CPI, which is
+   the load-bearing one. The cutover to removal is now a deletion rather than a
+   change of semantics, which is the whole point of checking it. Still open as
+   a *decision*: `SBF_BRINGUP.md`'s frozen layout is why the field survives.
+4. **`ImmutableOwner` required rather than allowed** on the Hoard. **Taken in
+   the "required" direction**, at the one place it can be taken: `CreateMarket`
+   creates the Hoard token account with the extension, and refuses a Realm
+   whose policy does not admit it (`ClutchError::TokenAccountNotAdmitted`)
+   rather than founding a Hoard whose owner authority could later be moved by
+   `SetAuthority(AccountOwner)`. `COLLATERAL_PROFILES.md` is unchanged and V1
+   still merely *allows* the extension; this adapter is stricter than the
+   matrix, which is a divergence and is named here as one.
 5. **Outcome-mint decimals `0`** and freeze authority `None`. Implemented as
    proposed and enforced by `token::MintPolicy::outcome`; still a proposal, and
    changing it is now a one-line change in one place plus new mint addresses.
@@ -704,15 +785,23 @@ collateral matrix refuses a `TransferFeeConfig` mint whose transfer demonstrably
 credits fewer atoms than were sent."
 
 Of what this document now also describes: "A Token-2022 adapter in which
-`Materialize` and `Dematerialize` perform a real `MintTo` and `Burn` by CPI —
-the mint signed for with a program-derived address — verify the exact post-CPI
-supply and balance deltas, and refuse unless the market-wide external term
-equals the mint's supply; with the collateral extension matrix enforced both at
-market initialization and again at every token instruction. Demonstrated by an
+`CreateMarket` creates one outcome mint per outcome and the Hoard's token
+account by CPI — `system_instruction::create_account` signed with each
+account's own program-derived seeds, then `InitializeMint2` /
+`InitializeImmutableOwner` / `InitializeAccount3`, then the same admission
+policy every later instruction applies, run over the bytes the token program
+just wrote; in which `Materialize` and `Dematerialize` perform a real `MintTo`
+and `Burn`, and `Split`, `Merge` and `RedeemInternal` a real `TransferChecked`
+— the outflows signed for with a program-derived address; in which every one of
+them verifies the exact post-CPI supply and balance deltas, requires the
+market-wide external term to equal the mint's supply, and requires
+`HoardAccount::collateral_atoms` to equal the Hoard token account's `amount`;
+with the collateral extension matrix enforced both at market initialization and
+again at every token instruction. The token legs are **mandatory**: each intent
+accepts exactly one account count and any other is refused. Demonstrated by an
 in-process Agave bank executing the real program ELF against the real
-Token-2022 program, over six scenarios, at about 95 000 compute units per
-instruction. The token leg is **optional in the account list** because nothing
-creates the mints yet; the collateral leg of `Split`, `Merge` and
-`RedeemInternal` is constructed but unwired; and post-CPI rollback is still
-asserted rather than demonstrated." It is not verified, not audited, not
-tested on a cluster, and not authorization to deploy anywhere.
+Token-2022 program, over fifteen scenarios — market founding, the full
+split/materialize/external-transfer/dematerialize/merge cycle, redemption,
+the wallet-outflow refusal, and post-CPI rollback compared byte for byte." It
+is not verified, not audited, not tested on a cluster, and not authorization to
+deploy anywhere.

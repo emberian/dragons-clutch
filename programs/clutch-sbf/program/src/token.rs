@@ -654,6 +654,36 @@ impl TokenAccountPolicy {
         }
     }
 
+    /// A user's own **collateral** account, from a frozen Realm policy.
+    ///
+    /// The mint is the policy's, not the caller's: this is what stops a
+    /// `Split` from funding complete sets with a token the Realm never
+    /// admitted.  The owner authority is the authenticated actor, and the
+    /// account is **not** required to be an associated token account —
+    /// `TOKEN2022_PLAN.md` §3.6, which argues that requiring one would refuse
+    /// legitimate accounts while adding no property the mint-and-owner check
+    /// does not already give.
+    ///
+    /// A delegate or a close authority is the user's own business and is not
+    /// refused, which is where this differs from [`TokenAccountPolicy::hoard`]:
+    /// the Realm's `FLAG_REQUIRE_ACCOUNT_*_NONE` flags exist to keep a second
+    /// exit out of the *Hoard*, and applying them to a wallet would refuse
+    /// accounts whose delegate can take nothing this instruction gives it.
+    /// The Realm's extension sets do apply, because an extension changes what
+    /// a transfer *means* and the exact-delta check would otherwise be the
+    /// only thing standing between the Hoard and a short credit.
+    pub fn collateral_holder(policy: &CollateralPolicy, owner: Pubkey) -> Self {
+        Self {
+            token_program: Pubkey::new_from_array(policy.collateral.token_program),
+            mint: Pubkey::new_from_array(policy.collateral.mint),
+            expected_owner_authority: owner,
+            require_delegate_none: false,
+            require_close_authority_none: false,
+            allowed_extensions: policy.allowed_account_extensions,
+            required_extensions: policy.required_account_extensions,
+        }
+    }
+
     /// The Hoard's own collateral account, from a frozen Realm policy.
     ///
     /// Strict where the holder policy is permissive: a delegate or a close
@@ -954,8 +984,9 @@ pub fn burn<'a>(
 
 /// `TransferChecked` with the actor's propagated signature: collateral *in*.
 ///
-/// Constructed and unit-tested here; no instruction family wires it yet. See
-/// the module status in `docs/implementation/TOKEN2022_PLAN.md`.
+/// Wired by [`crate::instructions::split`]'s `Split`: the actor's collateral
+/// token account debits and the Hoard's credits, and the signature the runtime
+/// already authenticated is the only authority the token program needs.
 #[inline(never)]
 pub fn transfer_checked<'a>(
     token_program: &AccountInfo<'a>,
@@ -993,7 +1024,9 @@ pub fn transfer_checked<'a>(
 /// token account whose owner authority is a program address refuses a
 /// user-signed transfer out with `TokenError::OwnerMismatch`.
 ///
-/// Constructed and unit-tested here; no instruction family wires it yet.
+/// Wired by `Merge` in [`crate::instructions::split`] and by
+/// `RedeemInternal` in [`crate::instructions::observe_resolve`]; both sign for
+/// [`crate::seeds::hoard_authority_pda`].
 ///
 /// Eight parameters, one over clippy's default: the four accounts a
 /// `TransferChecked` names, the token program that will be invoked, the two
@@ -1062,10 +1095,9 @@ pub fn transfer_checked_instruction(
 
 /// `InitializeMint2` for an outcome mint: decimals `0`, no freeze authority.
 ///
-/// Constructed and unit-tested here. The instruction family that would emit it
-/// is `CreateMarket`, which creates no account this wave — the
-/// `system_instruction::create_account` CPI it would need first is deferred
-/// check 2 of `docs/implementation/SBF_BRINGUP.md` and is not written.
+/// Emitted by `CreateMarket`, one per active outcome, after
+/// [`create_account_signed`] has placed an 82-byte Token-2022-owned account at
+/// [`crate::seeds::outcome_mint_pda`].
 pub fn initialize_outcome_mint_instruction(mint: &Pubkey, authority: &Pubkey) -> Instruction {
     let mut data = [0u8; 67];
     data[0] = ix::INITIALIZE_MINT2;
@@ -1107,6 +1139,211 @@ pub fn initialize_account3_instruction(
             AccountMeta::new_readonly(*mint, false),
         ],
     )
+}
+
+/* ------------------------------------------------------------------------ */
+/* Account creation                                                          */
+/* ------------------------------------------------------------------------ */
+
+/// The System program's address: thirty-two zero bytes.
+///
+/// Not re-typed from a base58 string.  `11111111111111111111111111111111` *is*
+/// the all-zero address, and writing it as a literal is the one spelling that
+/// cannot be mistyped.
+pub const SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0; 32]);
+
+/// The Rent sysvar's address, `SysvarRent111111111111111111111111111111111`.
+pub const RENT_SYSVAR_ID: Pubkey = Pubkey::new_from_array([
+    0x06, 0xa7, 0xd5, 0x17, 0x19, 0x2c, 0x5c, 0x51, 0x21, 0x8c, 0xc9, 0x4c, 0x3d, 0x4a, 0xf1, 0x7f,
+    0x58, 0xda, 0xee, 0x08, 0x9b, 0xa1, 0xfd, 0x44, 0xe3, 0xdb, 0xd9, 0x8a, 0x00, 0x00, 0x00, 0x00,
+]);
+
+/// `SystemInstruction::CreateAccount`, discriminant `0` of the bincode enum.
+const SYSTEM_CREATE_ACCOUNT: u32 = 0;
+
+/// Per-account storage the runtime charges rent for on top of the data.
+///
+/// `solana_rent::ACCOUNT_STORAGE_OVERHEAD`.  Named here rather than depended
+/// on: `solana-rent` is not in this program's graph and adding a crate to read
+/// one constant would be a worse trade than writing the constant down beside
+/// the check that uses it.
+const ACCOUNT_STORAGE_OVERHEAD: u64 = 128;
+
+/// Exact byte length of an extension-free Token-2022 mint.
+pub const MINT_ACCOUNT_LEN: usize = BASE_MINT_LEN;
+
+/// Exact byte length of a Token-2022 account carrying only `ImmutableOwner`.
+///
+/// `ExtensionType::try_calculate_account_len::<Account>(&[ImmutableOwner])`:
+/// the 165-byte base, the account-type byte at 165, and a four-byte TLV header
+/// with a zero-length value.  `ImmutableOwner` carries no value, which is why
+/// nothing follows the header.
+pub const IMMUTABLE_OWNER_ACCOUNT_LEN: usize = BASE_TOKEN_ACCOUNT_LEN + 1 + 4;
+
+/// The rent-exempt minimum for `space` bytes, read from the Rent sysvar.
+///
+/// The sysvar is presented as an account rather than fetched through
+/// `sol_get_sysvar`: the syscall is `unsafe` and this crate's first-party code
+/// is safe (see the crate docs), and an account whose address is compared
+/// against [`RENT_SYSVAR_ID`] is exactly as trustworthy — the runtime is the
+/// only writer of that address.
+#[inline(never)]
+pub fn rent_exempt_minimum(rent_account: &AccountInfo, space: usize) -> Result<u64, Refusal> {
+    if *rent_account.key != RENT_SYSVAR_ID {
+        return Err(Refusal::Adapter(ClutchError::WrongPda));
+    }
+    let data = rent_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    /* `Rent` is `{ lamports_per_byte_year: u64, exemption_threshold: f64,
+     * burn_percent: u8 }`, bincode-serialized: seventeen bytes, little-endian,
+     * no padding. */
+    if data.len() < 17 {
+        return Err(Refusal::Adapter(ClutchError::WrongDataLength));
+    }
+    let lamports_per_byte_year = read_u64(&data, 0);
+    /* `exemption_threshold` is an `f64` and the multiply below is the *only*
+     * floating-point arithmetic in this program.  It is here because
+     * `solana_rent::Rent::minimum_balance` is
+     * `((overhead + bytes) * lamports_per_byte_year) as f64 * threshold`, and
+     * an integer approximation would be a second rent rule: this host's bank
+     * serves `6960 / 1.0` where a cluster serves `3480 / 2.0`, so "the
+     * threshold is always two" is false on the first bank this ran against.
+     * Reimplementing the runtime's own expression is the only way the account
+     * this program creates is rent-exempt by the runtime's definition rather
+     * than by ours.  A threshold that is not a finite non-negative number is
+     * refused rather than saturated, because `as u64` would silently make it
+     * zero. */
+    let threshold = f64::from_bits(read_u64(&data, 8));
+    if !threshold.is_finite() || threshold < 0.0 {
+        return Err(Refusal::Adapter(ClutchError::NonCanonical));
+    }
+    let year = (space as u64)
+        .checked_add(ACCOUNT_STORAGE_OVERHEAD)
+        .and_then(|bytes| bytes.checked_mul(lamports_per_byte_year))
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    Ok((year as f64 * threshold) as u64)
+}
+
+/// `SystemInstruction::CreateAccount`, signed by the new account's own seeds.
+///
+/// Every account this program creates lives at a program-derived address, so
+/// the new account's required signature is always this program's and the call
+/// is always `invoke_signed`.  The payer's signature is the transaction's own
+/// and propagates.
+///
+/// A failure here is reported as [`ClutchError::AlreadyInitialized`], and the
+/// name is accurate for the reachable case: the caller of this function has
+/// already refused an account that is not empty, so what remains is the
+/// runtime's own "account already in use" — the same fault, observed one frame
+/// down.  A payer that cannot fund the account reports it too, which is a
+/// weaker diagnostic than it could be and is the cost of one `u32` per
+/// refusal.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub fn create_account_signed<'a>(
+    system_program: &AccountInfo<'a>,
+    payer: &AccountInfo<'a>,
+    new_account: &AccountInfo<'a>,
+    lamports: u64,
+    space: u64,
+    owner: &Pubkey,
+    signer_seeds: &[&[u8]],
+) -> Result<(), Refusal> {
+    let mut data = [0u8; 52];
+    data[0..4].copy_from_slice(&SYSTEM_CREATE_ACCOUNT.to_le_bytes());
+    data[4..12].copy_from_slice(&lamports.to_le_bytes());
+    data[12..20].copy_from_slice(&space.to_le_bytes());
+    data[20..52].copy_from_slice(&owner.to_bytes());
+    let instruction = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &data,
+        vec![
+            AccountMeta::new(*payer.key, true),
+            AccountMeta::new(*new_account.key, true),
+        ],
+    );
+    invoke_signed(
+        &instruction,
+        &[payer.clone(), new_account.clone(), system_program.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AlreadyInitialized))
+}
+
+/// `InitializeMint2` over an account this program just created.
+///
+/// No signature: `InitializeMint2` authenticates nothing, which is why the
+/// account's *creation* is the authenticated step and this is only the shape.
+/// The mint that results is re-admitted by [`MintPolicy::outcome`] afterwards,
+/// so a token program that wrote something else is caught by the policy rather
+/// than trusted here.
+#[inline(never)]
+pub fn initialize_outcome_mint<'a>(
+    token_program: &AccountInfo<'a>,
+    mint: &AccountInfo<'a>,
+    authority: &Pubkey,
+) -> Result<(), Refusal> {
+    invoke(
+        &initialize_outcome_mint_instruction(mint.key, authority),
+        &[mint.clone(), token_program.clone()],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MintNotAdmitted))
+}
+
+/// `InitializeImmutableOwner`, which must precede `InitializeAccount3`.
+#[inline(never)]
+pub fn initialize_immutable_owner<'a>(
+    token_program: &AccountInfo<'a>,
+    account: &AccountInfo<'a>,
+) -> Result<(), Refusal> {
+    invoke(
+        &initialize_immutable_owner_instruction(account.key),
+        &[account.clone(), token_program.clone()],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::TokenAccountNotAdmitted))
+}
+
+/// `InitializeAccount3` over an account this program just created.
+#[inline(never)]
+pub fn initialize_account3<'a>(
+    token_program: &AccountInfo<'a>,
+    account: &AccountInfo<'a>,
+    mint: &AccountInfo<'a>,
+    owner: &Pubkey,
+) -> Result<(), Refusal> {
+    invoke(
+        &initialize_account3_instruction(account.key, mint.key, owner),
+        &[account.clone(), mint.clone(), token_program.clone()],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::TokenAccountNotAdmitted))
+}
+
+/* ------------------------------------------------------------------------ */
+/* The collateral mirror                                                     */
+/* ------------------------------------------------------------------------ */
+
+/// Require `HoardAccount::collateral_atoms` to equal the Hoard token account's
+/// `amount`.
+///
+/// The checked-mirror half of `TOKEN2022_PLAN.md` open decision 3, §3.5.  The
+/// field is in a frozen layout and cannot be deleted by this lane, so instead
+/// of carrying two truths silently the two are required to agree — which makes
+/// the eventual cutover a *deletion* rather than a change of semantics, and
+/// which is the strongest available statement that the CPI did what the kernel
+/// thought it did.
+///
+/// Checked twice per collateral instruction and both times deliberately: once
+/// over the pre-state, so a market whose two truths already disagree refuses
+/// before anything moves, and once after the CPI, which is the load-bearing
+/// one — it composes the kernel's arithmetic with the token program's and
+/// requires the composition to be the identity.
+pub fn require_hoard_mirror(collateral_atoms: u64, token_amount: u64) -> Result<(), Refusal> {
+    if collateral_atoms == token_amount {
+        Ok(())
+    } else {
+        Err(Refusal::Adapter(ClutchError::HoardMirrorMismatch))
+    }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1204,6 +1441,16 @@ pub(crate) mod fixtures {
     /// authority, no freeze authority, no extensions.
     pub(crate) fn outcome_mint_bytes(authority: [u8; 32], supply: u64) -> Vec<u8> {
         mint_bytes(0, supply, Some(authority), None)
+    }
+
+    /// The `supply` field of mint bytes, for a test that asserts a move.
+    pub(crate) fn supply_of(mint: &[u8]) -> u64 {
+        super::read_u64(mint, 36)
+    }
+
+    /// The `amount` field of token-account bytes.
+    pub(crate) fn amount_of(account: &[u8]) -> u64 {
+        super::read_u64(account, 64)
     }
 
     /// A mint carrying exactly one extension discriminant.

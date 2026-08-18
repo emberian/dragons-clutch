@@ -53,18 +53,31 @@
 //! identity, the terms artifact, and the signer — but it does become the
 //! founding position owner.  Naming it is not fixing it.
 //!
-//! ## Account creation is out of scope this wave — the named deferred step
+//! ## What this instruction creates, and what it still does not
 //!
-//! **This instruction creates no account.**  All twelve accounts arrive
-//! already created, program-owned, rent-funded, correctly sized, and — for the
-//! eight it writes — **all-zero**.  That mirrors exactly how the bring-up
-//! harness loads its plane at genesis, and it is deferred checks 2, 4, and 6 of
-//! `docs/implementation/SBF_BRINGUP.md`: the `system_instruction::create_account`
-//! CPI, the rent-exemption computation, and the `invoke_signed` seed plumbing
-//! are unwritten and untested, and this lane does not pretend otherwise.  What
-//! *is* written is the half that has an oracle — the validated
-//! initialization-write — and the all-zero precondition is what makes the
-//! missing half detectable rather than assumed.
+//! **It creates the Token-2022 plane and nothing else.**  One outcome mint per
+//! active outcome and the Hoard's token account are brought into existence
+//! here, by `system_instruction::create_account` signed with their own seeds
+//! and then initialized through the token program — deferred checks 2, 4 and 6
+//! of `docs/implementation/SBF_BRINGUP.md`, which this lane writes: the
+//! creation CPI, the rent-exemption computation (from the Rent sysvar, which
+//! is now an account of this plane), and the `invoke_signed` seed plumbing.
+//!
+//! This is what closes the optional-leg hole of
+//! `docs/implementation/TOKEN2022_PLAN.md` §0.2.  Until a market could be
+//! founded *with* its mints, a mandatory token leg on `Materialize` would have
+//! named an account nothing could create; now every market founded here has
+//! one mint per outcome and one Hoard token account, so
+//! [`super::split`]'s legs are mandatory and its `Absent` variant is gone.
+//!
+//! **The twelve program-owned state accounts are still not created here.**
+//! They arrive already created, program-owned, rent-funded, correctly sized,
+//! and — for the eight this instruction writes — **all-zero**.  That mirrors
+//! how the bring-up harness loads its plane at genesis, and the all-zero
+//! precondition is what makes the missing half detectable rather than assumed.
+//! Creating them too is a larger change than this lane took: it needs a
+//! `create_account` per state account inside one frame, and the account-size
+//! table to go with it.
 //!
 //! ## Where the collateral cap comes from, and the field still unsourced
 //!
@@ -84,9 +97,10 @@
 //!   `check_market_cap`'s mint ceiling, but no account in this frozen
 //!   twelve-account plane carries those bytes, so the on-chain half of that
 //!   check is an obligation on whoever adds a policy-bytes account to the
-//!   schema.  This program keeps the freeze-discipline gate
-//!   (`require_frozen_collateral_policy`) and names the gap rather than
-//!   pretending the binding was checked.
+//!   schema.  **That account is now in the plane** ([`IX_POLICY`]), bound to
+//!   the Profile by recomputed digest, so `admit_collateral` discharges the
+//!   ceiling check on chain; the paragraph above is left as written because
+//!   the argument for why the account had to exist is the reason it does.
 //! - [`MarketAccount::created_slot`] is written **`0`**.  The honest value is
 //!   the `Clock` sysvar slot, and this crate has no clock plane: no sysvar
 //!   dependency, no sysvar account role, and adding either is a shared-file
@@ -177,7 +191,7 @@ use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use crate::token;
 use clutch_kernel::{
-    MarketState, PayoutSet, PayoutVector, Phase, MAX_OUTCOMES as KERNEL_MAX_OUTCOMES,
+    BasisMode, MarketState, PayoutSet, PayoutVector, Phase, MAX_OUTCOMES as KERNEL_MAX_OUTCOMES,
 };
 use clutch_solana_layout::{
     account_len, canonical_market_id, canonical_outcome_id, collateral, Hash32, HoardAccount,
@@ -195,10 +209,10 @@ use solana_pubkey::Pubkey;
 /* Account plane                                                             */
 /* ------------------------------------------------------------------------ */
 
-/// Exact number of accounts this instruction accepts.
+/// The state prefix of this instruction's account list, in list order.
 ///
-/// A fixed count is itself a check: a remaining-account shuffle cannot append
-/// an extra writable account for a later instruction to reuse.
+/// Twelve accounts, all of them this program's own.  The token plane follows
+/// and is **not** optional; the exact total is [`account_count`].
 pub const ACCOUNT_COUNT: usize = 12;
 
 /// Authenticated creator; pays, signs, and owns the founding position.
@@ -242,14 +256,17 @@ const STATE_ROLES: [StateRole; 11] = [
 ];
 
 /* --------------------------------------------------------------------- */
-/* The optional collateral-admission leg                                  */
+/* The token plane, mandatory                                             */
 /* --------------------------------------------------------------------- */
 
-/// Account count of a `CreateMarket` that carries collateral admission.
+/// Accounts this instruction takes before the one-per-outcome mints.
 ///
-/// Twelve, plus the Realm's 266 collateral-policy bytes, the token program, and
-/// the collateral mint itself.
-pub const ACCOUNT_COUNT_TOKEN: usize = 15;
+/// Twelve state accounts, then the Realm's 266 collateral-policy bytes, the
+/// token program, the collateral mint, the System program, the Rent sysvar,
+/// the Hoard's signing authority, and the Hoard token account.  The outcome
+/// mints follow, one per active outcome, so the exact count is
+/// [`account_count`] and not a constant.
+pub const ACCOUNT_COUNT_BASE: usize = 19;
 
 /// The Realm's 266-byte collateral policy (read-only).
 ///
@@ -267,43 +284,66 @@ pub const IX_POLICY: usize = 12;
 pub const IX_TOKEN_PROGRAM: usize = 13;
 /// The collateral mint the Realm's policy names (read-only).
 pub const IX_COLLATERAL_MINT: usize = 14;
+/// The System program, which creates every account this instruction founds.
+pub const IX_SYSTEM_PROGRAM: usize = 15;
+/// The Rent sysvar, read for the rent-exempt minimum of each new account.
+pub const IX_RENT: usize = 16;
+/// The Hoard's signing authority; holds no data and is never written.
+pub const IX_HOARD_AUTHORITY: usize = 17;
+/// The Hoard's Token-2022 collateral account, created here.
+pub const IX_HOARD_TOKEN: usize = 18;
+/// First outcome mint; one per active outcome follows, in index order.
+pub const IX_OUTCOME_MINT_BASE: usize = 19;
 
-/// Whether this `CreateMarket` was presented with collateral admission.
+/// The exact account count for a market with `outcome_count` outcomes.
 ///
-/// The same transitional optionality [`super::split::TokenLeg`] carries, for
-/// the same reason and with the same closing condition: this instruction
-/// creates no account, so a market founded here has no Hoard token account for
-/// the collateral to live in, and requiring the admission would refuse every
-/// market anyone can currently found.  A twelve-account `CreateMarket` is
-/// exactly the instruction that existed before this lane.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CollateralLeg {
-    /// Twelve accounts: no mint is inspected.
-    Absent,
-    /// Fifteen accounts: the Realm's policy is bound and the mint admitted.
-    Present,
+/// A fixed count is itself a check, and this one is fixed *given the intent*:
+/// the outcome count is a field of `Intent::CreateMarket`, and
+/// [`validate_initial_plane`] proves it equals the immutable terms artifact's,
+/// so a caller cannot inflate the list by lying about it and then have the
+/// market founded.
+pub const fn account_count(outcome_count: u8) -> usize {
+    ACCOUNT_COUNT_BASE + outcome_count as usize
 }
 
-/// Bind the Realm's collateral policy and admit the collateral mint.
+/// Bind the Realm's collateral policy, admit the collateral mint, and return
+/// the policy the Hoard's token account will be created and checked under.
 ///
 /// This is the **market-initialization** half of the two enforcement points
 /// `docs/implementation/TOKEN2022_PLAN.md` §3.4 requires; the other half is
 /// [`super::split::seam`], which re-runs the extension refusal at every token
 /// instruction because a mint address is not a stable description of a mint.
 ///
-/// Three things happen here that nothing else in this program could do:
+/// Four things happen here that nothing else in this program could do:
 ///
 /// 1. the 266 policy bytes are **bound** to the Profile by recomputed digest,
 ///    so the Realm's actual frozen policy — not a well-formed impostor — is
 ///    what decides;
 /// 2. the whole `COLLATERAL_PROFILES.md` matrix runs against the mint through
 ///    [`token::MintPolicy::collateral`], which reads the policy's four
-///    extension bitsets rather than re-stating the matrix; and
+///    extension bitsets rather than re-stating the matrix;
 /// 3. `collateral_cap` is checked against the policy's mint ceiling, which the
 ///    module docs above record as an obligation this program could not
-///    discharge. It can now.
+///    discharge. It can now; and
+/// 4. **`ImmutableOwner` is required of the Realm, not merely allowed.**  This
+///    lane takes open decision 4 of `TOKEN2022_PLAN.md` in the direction §3.4
+///    argues for, and takes it at the only place it can be taken: the Hoard's
+///    whole security story is that its owner authority is a program address,
+///    `SetAuthority(AccountOwner)` is the instruction that would break that,
+///    and `ImmutableOwner` is the extension that forbids it.  A Realm whose
+///    policy does not admit the extension cannot have a Hoard this program is
+///    willing to create, and says so as
+///    [`ClutchError::TokenAccountNotAdmitted`] before anything is written.
+///
+/// The returned policy is the *account* policy for the Hoard rather than the
+/// whole 266-byte value: the caller needs exactly that and an SBF frame is
+/// 4 KiB.
 #[inline(never)]
-fn admit_collateral(accounts: &[AccountInfo], collateral_cap: u64) -> Outcome<()> {
+fn admit_collateral(
+    accounts: &[AccountInfo],
+    collateral_cap: u64,
+    hoard_authority: Pubkey,
+) -> Outcome<token::TokenAccountPolicy> {
     let policy_account = &accounts[IX_POLICY];
     require(!policy_account.is_writable, ClutchError::UnexpectedWritable)?;
     require(!policy_account.executable, ClutchError::ExecutableAccount)?;
@@ -321,6 +361,10 @@ fn admit_collateral(accounts: &[AccountInfo], collateral_cap: u64) -> Outcome<()
      * Saying so here is more useful than discovering it at the first CPI. */
     token::require_drivable_collateral(&policy)?;
     policy.check_market_cap(collateral_cap)?;
+    require(
+        policy.allowed_account_extensions & collateral::EXTENSION_IMMUTABLE_OWNER != 0,
+        ClutchError::TokenAccountNotAdmitted,
+    )?;
 
     let token_program = &accounts[IX_TOKEN_PROGRAM];
     require(
@@ -333,7 +377,128 @@ fn admit_collateral(accounts: &[AccountInfo], collateral_cap: u64) -> Outcome<()
     require(!mint.is_writable, ClutchError::UnexpectedWritable)?;
     require(!mint.executable, ClutchError::ExecutableAccount)?;
     token::admit_mint(mint, &token::MintPolicy::collateral(&policy))?;
+    Ok(token::TokenAccountPolicy::hoard(&policy, hoard_authority))
+}
+
+/// Authenticate the two programs and the sysvar the founding CPIs need.
+#[inline(never)]
+fn validate_creation_roles(accounts: &[AccountInfo]) -> Outcome<()> {
+    let system = &accounts[IX_SYSTEM_PROGRAM];
+    require(
+        *system.key == token::SYSTEM_PROGRAM_ID && system.executable,
+        ClutchError::WrongProgramOwner,
+    )?;
+    require(!system.is_writable, ClutchError::UnexpectedWritable)?;
+    let rent = &accounts[IX_RENT];
+    require(*rent.key == token::RENT_SYSVAR_ID, ClutchError::WrongPda)?;
+    require(!rent.is_writable, ClutchError::UnexpectedWritable)?;
+    require(!rent.executable, ClutchError::ExecutableAccount)?;
     Ok(())
+}
+
+/// Refuse an account this instruction is about to create that already exists.
+///
+/// The token-plane half of the idempotence gate [`require_zeroed`] is for the
+/// state plane: a market founded twice would otherwise reach
+/// `system_instruction::create_account` and be refused one frame down with a
+/// worse diagnostic.  Zero lamports and zero data is what the runtime hands a
+/// program for an address nobody has created.
+fn require_uncreated(account: &AccountInfo) -> Outcome<()> {
+    require(account.is_writable, ClutchError::NotWritable)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(
+        account.data_is_empty() && **account.lamports.borrow() == 0,
+        ClutchError::AlreadyInitialized,
+    )
+}
+
+/// Create and initialize every Token-2022 account this market needs.
+///
+/// **This is the hole `TOKEN2022_PLAN.md` §0.2 named, closed.**  Until this
+/// function existed no instruction in this program created an outcome mint or
+/// a Hoard token account, so the token legs of `Materialize`, `Dematerialize`,
+/// `Split` and `Merge` had to be optional — a mandatory leg would have named
+/// accounts nothing could bring into existence.  A market founded here has all
+/// of them, so the legs are mandatory and the `Absent` variants are gone.
+///
+/// Per outcome, in order: `CreateAccount` for an 82-byte Token-2022-owned
+/// account at [`seeds::outcome_mint_pda`], `InitializeMint2` with decimals `0`,
+/// the Market PDA as mint authority and **no freeze authority**, and then —
+/// the step that makes the first two evidence rather than intention — the same
+/// [`token::MintPolicy::outcome`] admission every seam instruction will run,
+/// over the bytes the token program just wrote.
+///
+/// Then the Hoard: `CreateAccount`, `InitializeImmutableOwner`,
+/// `InitializeAccount3` owned by the Hoard *authority* PDA, and the Realm's own
+/// account policy over the result.  The two Hoard addresses stay distinct for
+/// the reason `seeds` gives — collapsing them makes the signing seeds and the
+/// account seeds the same bytes — and the founding mirror
+/// `HoardAccount::collateral_atoms == hoard_token.amount` therefore holds from
+/// birth at zero, which is the invariant every collateral transition then
+/// preserves.
+#[inline(never)]
+fn create_token_plane(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    market_bytes: &[u8; 32],
+    outcome_count: u8,
+    hoard_policy: &token::TokenAccountPolicy,
+) -> Outcome<()> {
+    let system = &accounts[IX_SYSTEM_PROGRAM];
+    let payer = &accounts[IX_CREATOR];
+    let token_program = &accounts[IX_TOKEN_PROGRAM];
+    let mint_rent = token::rent_exempt_minimum(&accounts[IX_RENT], token::MINT_ACCOUNT_LEN)?;
+    let authority = *accounts[IX_MARKET].key;
+
+    let mut outcome = 0_u8;
+    while outcome < outcome_count {
+        let mint = &accounts[IX_OUTCOME_MINT_BASE + usize::from(outcome)];
+        require_uncreated(mint)?;
+        let derived = seeds::outcome_mint_pda(program_id, market_bytes, outcome);
+        expect_pda(mint.key, derived, None)?;
+        let index = [outcome];
+        let bump = [derived.1];
+        token::create_account_signed(
+            system,
+            payer,
+            mint,
+            mint_rent,
+            token::MINT_ACCOUNT_LEN as u64,
+            &token::TOKEN_2022_PROGRAM_ID,
+            &[seeds::SEED_OUTCOME_MINT, market_bytes, &index, &bump],
+        )?;
+        token::initialize_outcome_mint(token_program, mint, &authority)?;
+        token::admit_mint(mint, &token::MintPolicy::outcome(*mint.key, authority))?;
+        outcome += 1;
+    }
+
+    let hoard_token = &accounts[IX_HOARD_TOKEN];
+    require_uncreated(hoard_token)?;
+    let derived = seeds::hoard_token_pda(program_id, market_bytes);
+    expect_pda(hoard_token.key, derived, None)?;
+    let bump = [derived.1];
+    let account_rent =
+        token::rent_exempt_minimum(&accounts[IX_RENT], token::IMMUTABLE_OWNER_ACCOUNT_LEN)?;
+    token::create_account_signed(
+        system,
+        payer,
+        hoard_token,
+        account_rent,
+        token::IMMUTABLE_OWNER_ACCOUNT_LEN as u64,
+        &token::TOKEN_2022_PROGRAM_ID,
+        &[seeds::SEED_HOARD_TOKEN, market_bytes, &bump],
+    )?;
+    token::initialize_immutable_owner(token_program, hoard_token)?;
+    token::initialize_account3(
+        token_program,
+        hoard_token,
+        &accounts[IX_COLLATERAL_MINT],
+        accounts[IX_HOARD_AUTHORITY].key,
+    )?;
+    let observation = token::admit_token_account(hoard_token, hoard_policy)?;
+    /* The founding market holds no collateral, so the mirror the collateral
+     * transitions preserve is established here at zero rather than assumed. */
+    token::require_hoard_mirror(0, observation.amount)
 }
 
 /// The eight roles this instruction initializes, which must arrive all-zero.
@@ -702,10 +867,22 @@ fn require_kernel_invariants(
         1 => Phase::Resolved,
         _ => return Err(ClutchError::NonCanonical.into()),
     };
+    /* `basis_mode` and `resolved_vector` are the resolution seam
+     * `clutch_kernel` grew for distributional claims.  This program rebuilds
+     * every `MarketState` from a stored `KernelAccount`, and that frozen
+     * layout carries no mode field -- so `FinitePreset` is not a choice made
+     * here, it is the only mode a decoded aggregate can name, and the kernel
+     * documents it as "byte-for-byte the semantics this kernel had before mode
+     * 1 existed".  A market whose terms select mode 1 needs a mode carrier in
+     * the layout before this line may say anything else; until then a
+     * derived-basis market is unrepresentable on chain rather than silently
+     * resolved as a preset one. */
     let market = MarketState {
         outcomes: outcome_count,
         phase,
         resolved_payout: kernel.resolved_payout,
+        basis_mode: BasisMode::FinitePreset,
+        resolved_vector: PayoutVector::ZERO,
         collateral,
         total_supply: kernel.total_supply,
         payouts: kernel.payouts,
@@ -1229,16 +1406,24 @@ pub fn validate_initial_plane(
 pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request) -> Outcome<()> {
     let intent = create_market_intent(request)?;
 
-    let leg = match accounts.len() {
-        ACCOUNT_COUNT => CollateralLeg::Absent,
-        ACCOUNT_COUNT_TOKEN => CollateralLeg::Present,
-        _ => return Err(ClutchError::AccountCount.into()),
-    };
+    /* The outcome count decides the account count, so it is bounded before it
+     * is used as one.  A market with no outcomes is not a market. */
+    require(
+        intent.outcome_count > 0 && usize::from(intent.outcome_count) <= MAX_OUTCOMES,
+        ClutchError::NonCanonical,
+    )?;
+    require(
+        accounts.len() == account_count(intent.outcome_count),
+        ClutchError::AccountCount,
+    )?;
 
     /* The authority model, in three lines: the creator signs, nothing else is
-     * privileged, and the creator's address is the founding position owner. */
+     * privileged, and the creator's address is the founding position owner.
+     * The creator is also the rent payer for every account founded below, so
+     * the runtime must have been told its lamports may fall. */
     let creator = &accounts[IX_CREATOR];
     require_signer(creator)?;
+    require(creator.is_writable, ClutchError::NotWritable)?;
 
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &STATE_ROLES)?;
@@ -1313,15 +1498,46 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         supply: supply_derived.1,
         resolution: resolution_derived.1,
     };
+
+    /* The token plane's own addresses and roles.  The Hoard *authority* is a
+     * signing address that holds nothing, so it is proved derived and proved
+     * empty and never written; the Hoard *token account* is created below. */
+    validate_creation_roles(accounts)?;
+    let hoard_authority = &accounts[IX_HOARD_AUTHORITY];
+    require(
+        !hoard_authority.is_writable,
+        ClutchError::UnexpectedWritable,
+    )?;
+    require(!hoard_authority.executable, ClutchError::ExecutableAccount)?;
+    require(
+        hoard_authority.data_is_empty(),
+        ClutchError::WrongDataLength,
+    )?;
+    expect_pda(
+        hoard_authority.key,
+        seeds::hoard_authority_pda(program_id, &market_bytes),
+        None,
+    )?;
+
     /* Collateral admission, before the first write.  The cap compared against
      * the policy ceiling is the *terms'* cap, which is the same value
      * `write_initial_plane` is about to put in `MarketAccount::collateral_cap`
      * and which `validate_initial_plane` then re-checks equal to it -- so a
      * market cannot be founded above its Realm's ceiling by writing one cap and
      * admitting another. */
-    if leg == CollateralLeg::Present {
-        admit_collateral(accounts, terms_collateral_cap)?;
-    }
+    let hoard_policy = admit_collateral(accounts, terms_collateral_cap, *hoard_authority.key)?;
+
+    /* Everything below this line writes -- and the first writes are not this
+     * program's own state but the mints and the Hoard token account, created
+     * and initialized by CPI and then re-admitted through the very policies
+     * every later instruction will apply to them. */
+    create_token_plane(
+        program_id,
+        accounts,
+        &market_bytes,
+        intent.outcome_count,
+        &hoard_policy,
+    )?;
 
     let identities = FoundingIdentities {
         market: market_id,
@@ -1329,7 +1545,6 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         hoard_authority: Hash32::from_bytes(accounts[IX_HOARD].key.to_bytes()),
     };
 
-    /* Everything below this line writes. */
     {
         let borrow = |index: usize| {
             accounts[index]
@@ -1526,7 +1741,11 @@ mod tests {
         }
 
         fn run(&self) -> Outcome<()> {
-            let mut cells: Vec<Cell> = (0..ACCOUNT_COUNT_TOKEN).map(|_| Cell::inert()).collect();
+            self.admit().map(|_| ())
+        }
+
+        fn admit(&self) -> Outcome<token::TokenAccountPolicy> {
+            let mut cells: Vec<Cell> = (0..account_count(2)).map(|_| Cell::inert()).collect();
             cells[IX_PROFILE].data = self.profile.clone();
             cells[IX_POLICY].data = self.policy.clone();
             if let Some(len) = self.policy_len_override {
@@ -1538,7 +1757,7 @@ mod tests {
             cells[IX_COLLATERAL_MINT].owner = self.mint_owner;
             cells[IX_COLLATERAL_MINT].data = self.mint_data.clone();
             let infos: Vec<AccountInfo<'_>> = cells.iter_mut().map(Cell::info).collect();
-            admit_collateral(&infos, self.cap)
+            admit_collateral(&infos, self.cap, Pubkey::new_from_array([0xa5; 32]))
         }
     }
 
@@ -1649,6 +1868,58 @@ mod tests {
         at_ceiling
             .run()
             .expect("a cap exactly at the ceiling is admitted");
+    }
+
+    #[test]
+    fn a_realm_that_does_not_admit_immutable_owner_gets_no_hoard() {
+        /* Open decision 4 of `TOKEN2022_PLAN.md`, taken.  The Hoard's whole
+         * security story is that its owner authority is a program address;
+         * `SetAuthority(AccountOwner)` is the instruction that would break
+         * that and `ImmutableOwner` is the extension that forbids it.  V1
+         * merely *allows* the extension, so a Realm can write a policy that
+         * does not admit it — and this program will not found a Hoard it
+         * cannot make immutable. */
+        let mut narrow = CollateralCase::admitted();
+        let mut policy = fixture_policy([0x6d; 32], 6);
+        policy.allowed_account_extensions = 0;
+        let parent = collateral::ParentProfile::from_policy(&policy).expect("the parent composes");
+        let profile = ProfileAccount {
+            profile: parent.identity().expect("the parent identity derives"),
+            realm: h(0x11),
+            collateral_policy_digest: policy.digest().expect("digest"),
+            version: 1,
+            flags: PROFILE_FLAG_POLICY_FROZEN,
+        };
+        let mut profile_bytes = vec![0_u8; account_len::PROFILE];
+        profile
+            .encode(&mut profile_bytes)
+            .expect("the narrowed profile encodes");
+        narrow.profile = profile_bytes;
+        narrow.policy = policy.canonical_bytes().expect("encodes").to_vec();
+        assert_eq!(
+            narrow.run(),
+            Err(ClutchError::TokenAccountNotAdmitted.into()),
+            "a Realm that forbids ImmutableOwner cannot have a Hoard here"
+        );
+    }
+
+    #[test]
+    fn the_admitted_case_yields_the_policy_the_hoard_is_created_under() {
+        /* The returned value is not decoration: it is what
+         * `create_token_plane` checks the account it just created against, so
+         * the mint the Hoard holds and the authority that owns it are the
+         * Realm's decision rather than this module's. */
+        let authority = Pubkey::new_from_array([0xa5; 32]);
+        let policy = CollateralCase::admitted()
+            .admit()
+            .expect("the fixture policy admits its own mint");
+        assert_eq!(policy.expected_owner_authority, authority);
+        assert_eq!(policy.mint, Pubkey::new_from_array([0x6d; 32]));
+        assert_eq!(
+            policy.allowed_extensions,
+            collateral::EXTENSION_IMMUTABLE_OWNER
+        );
+        assert!(policy.require_delegate_none && policy.require_close_authority_none);
     }
 
     #[test]

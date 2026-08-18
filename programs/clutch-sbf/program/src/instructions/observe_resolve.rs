@@ -12,6 +12,34 @@
 //! the checks, the hostile decoding of the two caller-supplied blobs, and the
 //! write-back.
 //!
+//! ## `RedeemInternal` now pays real collateral
+//!
+//! `Resolve` moves no value and its plane is unchanged at twelve accounts.
+//! `RedeemInternal` pays collateral *out* of the Hoard, so it takes
+//! [`REDEEM_ACCOUNT_COUNT`] — the twelve, plus the Profile, the token program,
+//! the Realm's 266 collateral-policy bytes, the collateral mint, the
+//! redeemer's own token account, the Hoard's signing authority, and the Hoard
+//! token account.  The outflow is a `TransferChecked` signed by
+//! [`crate::seeds::hoard_authority_pda`]: the probe established there is no
+//! other shape, because a token account owned by a program address refuses a
+//! wallet-signed transfer out.
+//!
+//! The admission decision over those accounts is
+//! [`crate::instructions::split::validate_collateral_leg`], called with this
+//! plane's own positions rather than copied — one decision procedure, two
+//! account lists.  After the CPI the exact deltas and the mirror
+//! `HoardAccount::collateral_atoms == hoard_token.amount` are required, which
+//! is the same step-6 discipline `TOKEN2022_PLAN.md` §3.3 gives every other
+//! token instruction.
+//!
+//! One deviation from that discipline is inherited and named: the transition
+//! writes its seven state accounts *before* the CPI, because
+//! `apply_evidence_transition` holds them as mutable borrows and a live
+//! borrow across `invoke` is a runtime failure.  On chain the deviation is
+//! invisible — SVM transaction semantics discard every byte on any later
+//! refusal — and `programs/clutch-sbf/svm-tests` demonstrates that rather than
+//! assuming it.
+//!
 //! ## The oracle
 //!
 //! `clutch_solana_reference::apply_with_evidence` is the whole gate offline.
@@ -205,12 +233,15 @@ use crate::accounts::{
 };
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
+use crate::token;
 use clutch_accumulator::{
     CoveragePolicy, FeedIdentity, Grid, Observation, Summary, WindowAccumulator, WindowDomain,
     WindowResult, IDENTITY_BYTES,
 };
 use clutch_kernel::PayoutSet;
-use clutch_kernel::{MarketState, Phase, Position, MAX_OUTCOMES as KERNEL_MAX_OUTCOMES};
+use clutch_kernel::{
+    BasisMode, MarketState, PayoutVector, Phase, Position, MAX_OUTCOMES as KERNEL_MAX_OUTCOMES,
+};
 use clutch_solana_layout::{
     account_len, CodecError, FeedAccount, Hash32, HoardAccount, Intent, MarketAccount,
     PayoutVectorBytes, PositionAccount, ResolutionAccount, SupplyLedgerAccount, TermsAccount,
@@ -224,6 +255,8 @@ use clutch_solana_reference::{
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
+
+use crate::instructions::split;
 
 /// The gate's result type: the reference adapter's own refusal vocabulary.
 type Gate<T> = core::result::Result<T, ReferenceError>;
@@ -324,7 +357,11 @@ pub const MAX_FEED_PAGE_LEN: usize =
 /* Account lists                                                             */
 /* ------------------------------------------------------------------------ */
 
-/// Exact number of accounts `Resolve` and `RedeemInternal` accept.
+/// Exact number of accounts `Resolve` accepts.
+///
+/// `Resolve` is token-free — `TOKEN2022_PLAN.md` §3.2's table gives it no CPI —
+/// so its plane is unchanged.  `RedeemInternal` pays collateral out and takes
+/// [`REDEEM_ACCOUNT_COUNT`].
 pub const EVIDENCE_ACCOUNT_COUNT: usize = 12;
 /// Exact number of accounts `FeedAdvance` accepts.
 pub const FEED_ADVANCE_ACCOUNT_COUNT: usize = 3;
@@ -353,6 +390,50 @@ pub const IX_RESOLUTION: usize = 9;
 pub const IX_FEED: usize = 10;
 /// Caller-supplied evidence buffer (read-only, hostile).
 pub const IX_BUFFER: usize = 11;
+
+/* --------------------------------------------------------------------- */
+/* `RedeemInternal`'s collateral leg, mandatory                            */
+/* --------------------------------------------------------------------- */
+
+/// Exact number of accounts `RedeemInternal` accepts.
+///
+/// The twelve evidence accounts, plus the Profile the 266 policy bytes are
+/// bound to, the token program, the policy, the collateral mint, the
+/// redeemer's own collateral account, the Hoard's signing authority, and the
+/// Hoard token account.
+///
+/// The Profile is in the list for the same reason it is in the seam plane's:
+/// the collateral mint's identity lives only in the Realm's frozen policy, and
+/// the only thing that binds those 266 bytes to *this* Realm is the Profile's
+/// digest.  The evidence plane never needed a Profile before because nothing
+/// in it named an asset.
+pub const REDEEM_ACCOUNT_COUNT: usize = 19;
+
+/// Profile identity account (read-only).
+pub const IX_PROFILE: usize = 12;
+/// The pinned Token-2022 program (read-only, executable).
+pub const IX_TOKEN_PROGRAM: usize = 13;
+/// The Realm's 266-byte collateral policy (read-only).
+pub const IX_POLICY: usize = 14;
+/// The collateral mint the Realm's policy names (read-only).
+pub const IX_COLLATERAL_MINT: usize = 15;
+/// The redeemer's own Token-2022 collateral account (writable).
+pub const IX_ACTOR_TOKEN: usize = 16;
+/// The Hoard's signing authority; holds no data and is never written.
+pub const IX_HOARD_AUTHORITY: usize = 17;
+/// The Hoard's Token-2022 collateral account (writable).
+pub const IX_HOARD_TOKEN: usize = 18;
+
+/// Where this plane puts the collateral accounts the seam plane also carries.
+const REDEEM_COLLATERAL_ROLES: split::CollateralRoles = split::CollateralRoles {
+    actor: IX_ACTOR,
+    profile: IX_PROFILE,
+    policy: IX_POLICY,
+    mint: IX_COLLATERAL_MINT,
+    actor_token: IX_ACTOR_TOKEN,
+    authority: IX_HOARD_AUTHORITY,
+    hoard_token: IX_HOARD_TOKEN,
+};
 
 /// Feed-head account in the `FeedAdvance` list.
 pub const IX_ADVANCE_FEED: usize = 1;
@@ -1122,6 +1203,15 @@ fn kernel_invariants(kernel_bytes: &[u8], outcome_count: u8, collateral: u64) ->
     pure_market(kernel_bytes, outcome_count, collateral).map(|_| ())
 }
 
+/// Decode the aggregate into a pure `MarketState`, in **its own frame**.
+///
+/// `#[inline(never)]` is load-bearing rather than decorative: a decoded
+/// `KernelAccount` and a `MarketState` are over a kilobyte each and this
+/// function holds both, so inlining it into `kernel_resolve` and
+/// `kernel_redeem` — which hold a third — overflows the 4 KiB SBF frame.
+/// `cargo-build-sbf`'s frame diagnostic is what says so, and it said so the
+/// day `MarketState` grew its `resolved_vector`.
+#[inline(never)]
 fn pure_market(kernel_bytes: &[u8], outcome_count: u8, collateral: u64) -> Gate<MarketState> {
     let kernel = KernelAccount::decode(kernel_bytes)?;
     if usize::from(outcome_count) > KERNEL_MAX_OUTCOMES || kernel.payouts.outcomes != outcome_count
@@ -1133,10 +1223,22 @@ fn pure_market(kernel_bytes: &[u8], outcome_count: u8, collateral: u64) -> Gate<
         1 => Phase::Resolved,
         _ => return Err(ReferenceError::NonCanonical),
     };
+    /* `basis_mode` and `resolved_vector` are the resolution seam
+     * `clutch_kernel` grew for distributional claims.  This program rebuilds
+     * every `MarketState` from a stored `KernelAccount`, and that frozen
+     * layout carries no mode field -- so `FinitePreset` is not a choice made
+     * here, it is the only mode a decoded aggregate can name, and the kernel
+     * documents it as "byte-for-byte the semantics this kernel had before mode
+     * 1 existed".  A market whose terms select mode 1 needs a mode carrier in
+     * the layout before this line may say anything else; until then a
+     * derived-basis market is unrepresentable on chain rather than silently
+     * resolved as a preset one. */
     let market = MarketState {
         outcomes: outcome_count,
         phase,
         resolved_payout: kernel.resolved_payout,
+        basis_mode: BasisMode::FinitePreset,
+        resolved_vector: PayoutVector::ZERO,
         collateral,
         total_supply: kernel.total_supply,
         payouts: kernel.payouts,
@@ -1724,7 +1826,15 @@ fn evidence_gated(
     sequence: u64,
     action: GateAction,
 ) -> Outcome<()> {
-    require_count(accounts, EVIDENCE_ACCOUNT_COUNT)?;
+    let redeems = matches!(action, GateAction::Redeem { .. });
+    require_count(
+        accounts,
+        if redeems {
+            REDEEM_ACCOUNT_COUNT
+        } else {
+            EVIDENCE_ACCOUNT_COUNT
+        },
+    )?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &EVIDENCE_STATE_ROLES)?;
     validate_open_roles(
@@ -1793,6 +1903,52 @@ fn evidence_gated(
      * caller-supplied witnessed cursor, so it must be *this market's* feed. */
     require(feed.feed == market.feed, ClutchError::MismatchedState)?;
 
+    /* Steps 1-3 of `TOKEN2022_PLAN.md` §3.3 for the redemption's collateral
+     * leg, before anything is written.  A resolve has no leg: it moves no
+     * value and takes the twelve-account plane unchanged.
+     *
+     * The snapshot carries a zero quantity because a redemption does not know
+     * what it pays until the kernel has run; the paid amount is supplied to
+     * the exact-delta check below instead. */
+    let leg = if redeems {
+        split::validate_token_program(&accounts[IX_TOKEN_PROGRAM])?;
+        require(
+            !accounts[IX_PROFILE].is_writable,
+            ClutchError::UnexpectedWritable,
+        )?;
+        validate_open_roles(
+            program_id,
+            accounts,
+            &[OpenRole {
+                index: IX_PROFILE,
+                len: account_len::PROFILE,
+            }],
+        )?;
+        let profile = accounts::read_profile(&accounts[IX_PROFILE].data.borrow())?;
+        expect_pda(
+            accounts[IX_PROFILE].key,
+            seeds::profile_pda(program_id, &realm_bytes, &profile.profile.bytes()),
+            None,
+        )?;
+        require(
+            profile.realm == market.realm && profile.profile == market.profile,
+            ClutchError::MismatchedState,
+        )?;
+        let collateral_atoms =
+            HoardAccount::decode(&accounts[IX_HOARD].data.borrow())?.collateral_atoms;
+        Some(split::validate_collateral_leg(
+            accounts,
+            &REDEEM_COLLATERAL_ROLES,
+            &market_bytes,
+            seeds::hoard_authority_pda(program_id, &market_bytes),
+            seeds::hoard_token_pda(program_id, &market_bytes),
+            collateral_atoms,
+            0,
+        )?)
+    } else {
+        None
+    };
+
     let actor = Actor {
         key: Hash32::from_bytes(accounts[IX_ACTOR].key.to_bytes()),
         signer: accounts[IX_ACTOR].is_signer,
@@ -1845,12 +2001,48 @@ fn evidence_gated(
         apply_evidence_transition(&mut state, &plane, &bumps, actor, sequence, action)?
     };
 
+    /* Every borrow the evidence plane held is released before the CPI: a live
+     * `RefCell` borrow across `invoke` is a runtime failure, not a lint. */
+    drop(terms_data);
+    drop(buffer);
+    drop(resolution_data);
+
     /* A redemption returns the record unchanged and never writes it; only a
      * resolve does, and only after `derive_payout` agreed with the request. */
     if matches!(action, GateAction::Resolve { .. }) {
-        drop(resolution_data);
         let mut record = borrow_mut!(accounts[IX_RESOLUTION])?;
         record.copy_from_slice(&output.resolution);
+    }
+
+    /* Steps 5-6 of §3.3, and the mirror.  The transfer runs even when the
+     * kernel paid zero — a losing claim redeems for nothing — because a branch
+     * that skipped it would also skip the mirror, and the one transition that
+     * must never quietly leave the two collateral truths disagreeing is the
+     * one that pays out. */
+    if let Some(leg) = leg {
+        let paid = output.redemption_payout;
+        let signer: [&[u8]; 3] = [
+            seeds::SEED_HOARD_AUTHORITY,
+            &leg.market,
+            &leg.authority_bump,
+        ];
+        token::transfer_checked_signed(
+            &accounts[IX_TOKEN_PROGRAM],
+            &accounts[IX_HOARD_TOKEN],
+            &accounts[IX_COLLATERAL_MINT],
+            &accounts[IX_ACTOR_TOKEN],
+            &accounts[IX_HOARD_AUTHORITY],
+            paid,
+            leg.decimals,
+            &signer,
+        )?;
+        let post_actor = token::token_amount(&accounts[IX_ACTOR_TOKEN])?;
+        let post_hoard = token::token_amount(&accounts[IX_HOARD_TOKEN])?;
+        token::require_exact_credit(leg.actor_amount, post_actor, paid)?;
+        token::require_exact_debit(leg.hoard_amount, post_hoard, paid)?;
+        let collateral_atoms =
+            HoardAccount::decode(&accounts[IX_HOARD].data.borrow())?.collateral_atoms;
+        token::require_hoard_mirror(collateral_atoms, post_hoard)?;
     }
     Ok(())
 }

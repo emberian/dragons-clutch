@@ -1,42 +1,78 @@
-== recorded run, 2026-08-18T12:33:49Z ==
+== recorded run, 2026-08-18T13:57:06Z ==
 
 toolchain:
 rustc 1.93.1 (01f6ddf75 2026-02-11)
 
 program ELF (cargo-build-sbf, from programs/clutch-sbf/program):
-d8a9267c75ac0d4e8021320f3009c09532fd0cfda5a70508bd6c8312b400975c  tests/fixtures/clutch_sbf.so
+414340edf435c2ef49c82155f4201bdff724c3d36f18a2f279609a026dbb44ce  tests/fixtures/clutch_sbf.so
 
 source tree:
-4a723b4daeb3cf3e32ffc2ab78e26a7dee425a01
+e994884b2d61c90ed13f132a0ed2c5332fccc34e
   (working tree carries this lane's uncommitted changes)
 
+== cargo-build-sbf frame diagnostics ==
+
+Every one of them is in a crate this program links but whose overflowing
+function the entrypoint never calls.  NONE is in clutch_sbf.
+
+  _ZN20clutch_solana_layout16OrderPageAccount14decode_on_grid
+  _ZN20clutch_solana_layout16OrderPageAccount6decode
+  _ZN23clutch_solana_reference11apply_inner
+  _ZN23clutch_solana_reference12DecodedState6decode
+  _ZN23clutch_solana_reference20redeem_from_evidence
+  _ZN23clutch_solana_reference20validate_market_init
+  _ZN23clutch_solana_reference21resolve_from_evidence
+  _ZN23clutch_solana_reference22validate_position_init
+
+  plus the "a function call overwrites values in the frame" lines against
+  clutch_solana_reference::resolve_from_evidence, the same function.
+
 == run ==
-
+== driving it ==
+   Compiling clutch-sbf v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/program)
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.70s
+     Running unittests src/lib.rs (target/debug/deps/clutch_svm_fixture-eceeb8dfe0192eae)
 running 0 tests
-
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
+     Running tests/collateral_leg.rs (target/debug/deps/collateral_leg-b81009e791d3cf64)
+running 9 tests
+test a_cpi_that_fails_after_the_kernel_ran_reverts_every_byte ... SVM E5 rollback: a token CPI failing after the kernel and ledger writes left all nine program accounts and both token accounts byte-identical
+ok
+test a_stranger_cannot_fund_a_split_from_an_account_they_do_not_own ... SVM collateral holder: a stranger's account refused with Custom(27) (0x001b)
+ok
+test create_market_founds_the_outcome_mints_and_the_hoard_token_account ... SVM create_market: 21 accounts, 2 outcome mints + hoard token, 867425 CU
+ok
+test founding_a_market_twice_refuses ... SVM create_market idempotence: second founding refused with Custom(64) (0x0040)
+ok
+test no_wallet_signature_can_take_collateral_out_of_the_hoard ... SVM hoard outflow: wallet withdrawal refused with Custom(4), and the out-of-band deposit refused with Custom(29) (0x001d)
+ok
+test redeem_pays_the_kernels_payout_in_real_collateral ... SVM redeem: 19 accounts, payout=6 atoms, 558320 CU
+SVM redeem (losing claim): payout=0 atoms, 558320 CU
+ok
+test split_and_merge_move_exactly_the_collateral_the_kernel_moved ... SVM collateral leg: split=219391 CU  merge=219427 CU
+ok
+test the_shadow_only_plane_is_gone ... SVM mandatory leg: the ten-account Split refused with Custom(1) (0x0001)
+ok
+test the_whole_cycle_survives_a_holder_who_is_not_the_actor ... SVM full cycle: split=219391 CU  materialize=101796 CU  dematerialize=101774 CU  merge=219427 CU  (3 outcome tokens left with a third party and the aggregate still reconciles)
+ok
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
      Running tests/token_leg.rs (target/debug/deps/token_leg-509db742ca589f1c)
-
 running 6 tests
 test a_supply_that_drifted_outside_the_program_is_refused ... SVM reconciliation: out-of-band burn refused with Custom(30) (0x001e)
 ok
 test an_extension_on_the_outcome_mint_is_refused_at_instruction_time ... SVM extension refusal: TransferFeeConfig refused with Custom(26) (0x001a)
 SVM extension refusal: MintCloseAuthority refused with Custom(26) (0x001a)
 ok
-test e1_dematerialize_burns_exactly_and_the_shadow_reconciles ... SVM e1_dematerialize: materialize=95122 CU  dematerialize=95105 CU
+test e1_dematerialize_burns_exactly_and_the_shadow_reconciles ... SVM e1_dematerialize: materialize=82146 CU  dematerialize=82124 CU
 ok
-test e1_materialize_mints_exactly_q_and_the_shadow_reconciles ... SVM e1_materialize: quantity=7 compute_units=95122
+test e1_materialize_mints_exactly_q_and_the_shadow_reconciles ... SVM e1_materialize: quantity=7 compute_units=82146
 ok
 test the_derived_hoard_authority_cannot_be_signed_for_by_a_wallet ... SVM hoard outflow: wallet-signed withdrawal from the derived hoard authority refused with Custom(4)
 ok
-test the_ten_account_plane_moves_only_the_shadow ... SVM ten-account plane: shadow-only materialize accepted at 84178 CU, and the token leg then refuses with Custom(30)
+test the_ten_account_plane_is_refused_and_moves_nothing ... SVM mandatory leg: the ten-account materialize refused with Custom(1) (0x0001); the thirteen-account one accepted at 82146 CU
 ok
-
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
-
-
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+   Doc-tests clutch_svm_fixture
 running 0 tests
-
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-

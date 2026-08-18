@@ -2,7 +2,8 @@
 //!
 //! All three are **implemented** here.
 //!
-//! All three share the ten-account seam plane of [`super::split`]: the account
+//! All three share the seam plane of [`super::split`] — its ten state accounts
+//! plus the mandatory thirteen-account outcome leg: the account
 //! list, the check order, the CLO-DELTA-V1 closure obligations, the kernel step,
 //! and the write-back are [`super::split::seam`], because the offline reference
 //! adapter routes all four seam intents through one `TransitionMetadata` /
@@ -27,7 +28,9 @@
 //! proposes collapsing the reference-only shadow into a single source of truth
 //! with a real token account; that decision is **queued, not taken**, so this
 //! lane moves balances through the shadow exactly as the reference adapter does
-//! and restructures nothing.
+//! and restructures nothing — and requires the market-wide term to equal the
+//! outcome mint's supply after every transition, which is what makes the
+//! eventual cutover a deletion rather than a change of semantics.
 //!
 //! ## `Merge` is the exact inverse of `Split`
 //!
@@ -88,8 +91,11 @@
 //! `clutch_solana_reference::apply` over identical fixture bytes and compares
 //! byte-identical post-state and refusal class.  The **SVM-side** differential
 //! for these instructions is a named follow-up wave: `harness/` is frozen this
-//! wave and still emits a nine-account `Split` transaction, so no emitted
-//! transaction exercises the ten-account seam plane yet.
+//! wave and still emits ten-account seam transactions, which the mandatory
+//! token legs now refuse outright, so no emitted transaction exercises this
+//! plane yet.  `programs/clutch-sbf/svm-tests` drives it instead, against the
+//! real ELF and the real Token-2022 program, without the differential's
+//! offline oracle.
 
 use crate::accounts::Outcome;
 use crate::instructions::split;
@@ -106,19 +112,24 @@ use solana_pubkey::Pubkey;
 /// every term it moves, and in the two decisions the module docs name.
 pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request) -> Outcome<()> {
     let op = split::seam_op(request)?;
-    split::seam(program_id, accounts, request.sequence, &op, |ids| {
-        split::derive_bindings(program_id, ids)
-    })
+    split::seam(
+        program_id,
+        accounts,
+        request.sequence,
+        &op,
+        |ids| split::derive_bindings(program_id, ids),
+        split::token_effects,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use crate::error::ClutchError;
+    use crate::instructions::split::tests::token_leg;
     use crate::instructions::split::tests::{
         edit_position, fixture, h, ids, key, layout_request, second_position, split_request, Case,
-        Class,
+        Class, CollateralLegCase, TokenLegCase,
     };
-    use crate::instructions::split::tests::{token_leg, TokenLegCase};
     use crate::instructions::split::{IX_ACTOR, IX_EXTERNAL, IX_MARKET, IX_POSITION, IX_REPLAY};
     use crate::token;
     use clutch_kernel::Error as KernelError;
@@ -374,6 +385,15 @@ mod tests {
         let mut case = funded();
         let leg = token_leg(&case, outcome, mint_supply, holder_amount);
         case.bindings.outcome_mint = Some((leg.mint, 11));
+        case.token = leg.clone();
+        (case, leg)
+    }
+
+    /// A funded case plus a well-formed collateral leg, so a test can break
+    /// exactly one thing about it.
+    fn collateral_case() -> (Case, CollateralLegCase) {
+        let case = funded();
+        let leg = case.collateral.clone();
         (case, leg)
     }
 
@@ -419,11 +439,10 @@ mod tests {
     fn refuses_after_the_kernel_ran(
         case: &Case,
         request: &[u8],
-        leg: &TokenLegCase,
         expected: ClutchError,
         label: &str,
     ) {
-        let (result, post) = case.program_with_token_leg(request, leg);
+        let (result, post) = case.program_with_real_cpi(request);
         assert_eq!(result, Err(expected.into()), "{label}");
         assert_eq!(post.hoard, case.state.hoard, "{label}: hoard untouched");
         assert_eq!(
@@ -443,31 +462,56 @@ mod tests {
     }
 
     #[test]
-    fn the_account_count_selects_the_plane_and_nothing_else_does() {
-        let (case, leg) = token_case(1, 0, 0);
-
-        /* Ten accounts is the plane that existed before this lane, and it is
-         * unchanged: the shadow moves and no token is touched. */
+    fn the_intent_selects_the_plane_and_the_caller_cannot() {
+        /* **The hole, closed.**  There is no plane in which a seam instruction
+         * moves the shadow and no token: each intent accepts exactly one
+         * account count, and that count is a function of the intent rather
+         * than of the caller.  A ten-account seam transaction -- the whole of
+         * this instruction before the token lane, and what `harness/` still
+         * emits -- is now `AccountCount`. */
+        let (case, _) = token_case(1, 0, 0);
         let request = materialize(&case, 1, 1, 7);
-        let mut ten = case.clone();
-        ten.advance(&request, "ten-account materialize still works");
-        let external = ExternalAccount::decode(&ten.state.external).expect("shadow decodes");
+
+        for (count, label) in [
+            (10_usize, "the shadow-only plane that used to be accepted"),
+            (11, "a partial outcome leg"),
+            (12, "a partial outcome leg"),
+            (14, "a suffix past the outcome leg"),
+            (16, "the collateral plane presented for an outcome intent"),
+        ] {
+            let (result, post) = case.program_truncated(&request, count);
+            assert_eq!(
+                result,
+                Err(ClutchError::AccountCount.into()),
+                "{label} ({count} accounts)"
+            );
+            assert_eq!(post, case.state, "{label}: nothing was written");
+        }
+        for (count, label) in [
+            (10_usize, "the shadow-only plane"),
+            (13, "the outcome plane presented for a collateral intent"),
+            (15, "a partial collateral leg"),
+            (17, "a suffix past the collateral leg"),
+        ] {
+            let (result, post) = case.program_truncated(&split_request(1, 1), count);
+            assert_eq!(
+                result,
+                Err(ClutchError::AccountCount.into()),
+                "{label} ({count} accounts)"
+            );
+            assert_eq!(post, case.state, "{label}: nothing was written");
+        }
+
+        /* And the plane the intent does name is accepted and moves the token. */
+        let mut moved = case.clone();
+        moved.advance(&request, "the thirteen-account materialize");
+        let external = ExternalAccount::decode(&moved.state.external).expect("shadow decodes");
         assert_eq!(external.balances[1], 7);
-
-        /* Eleven or twelve is neither plane.  A partial token leg is a caller
-         * error and not a plane this program will guess at. */
-        let (result, _) = case.program(&request);
-        assert!(result.is_ok(), "the ten-account plane is still accepted");
-
-        /* `Split` and `Merge` move collateral, whose leg is unwired, so a
-         * thirteen-account collateral intent is refused rather than having its
-         * suffix ignored. */
-        let (result, post) = case.program_with_token_leg(&merge(1, 1), &leg);
-        assert_eq!(result, Err(ClutchError::AccountCount.into()));
-        assert_eq!(post, case.state);
-        let (result, post) = case.program_with_token_leg(&split_request(1, 1), &leg);
-        assert_eq!(result, Err(ClutchError::AccountCount.into()));
-        assert_eq!(post, case.state);
+        assert_eq!(
+            crate::token::fixtures::supply_of(&moved.token.mint_data),
+            7,
+            "the outcome mint moved with the shadow, which is the whole point"
+        );
     }
 
     #[test]
@@ -480,26 +524,32 @@ mod tests {
          *
          * This is the one property of the CPI that can be established on the
          * host.  The CPI actually working is `programs/clutch-sbf/svm-tests`. */
-        let (case, leg) = token_case(1, 0, 0);
+        let (case, _) = token_case(1, 0, 0);
         refuses_after_the_kernel_ran(
             &case,
             &materialize(&case, 1, 1, 7),
-            &leg,
             ClutchError::TokenDeltaMismatch,
             "off-chain mint_to moves nothing",
         );
-        /* The same for a burn, and note the fixture's holder does hold enough:
-         * the refusal is about the delta, not about the balance. */
-        let (case, leg) = token_case(1, 7, 7);
-        let mut funded_shadow = case.clone();
-        funded_shadow.advance(&materialize(&case, 1, 1, 7), "materialize without the leg");
-        funded_shadow.bindings.outcome_mint = case.bindings.outcome_mint;
+        /* The same for a burn, from a holder that does hold enough: the
+         * refusal is about the delta, not about the balance. */
+        let (case, _) = token_case(1, 0, 0);
+        let mut moved = case.clone();
+        moved.advance(&materialize(&case, 1, 1, 7), "materialize with the leg");
         refuses_after_the_kernel_ran(
-            &funded_shadow,
-            &dematerialize(&funded_shadow, 2, 1, 3),
-            &leg,
+            &moved,
+            &dematerialize(&moved, 2, 1, 3),
             ClutchError::TokenDeltaMismatch,
             "off-chain burn moves nothing",
+        );
+        /* And the collateral leg, which the same no-op reaches through
+         * `TransferChecked` rather than `MintTo`. */
+        let (case, _) = collateral_case();
+        refuses_after_the_kernel_ran(
+            &case,
+            &merge(1, 4),
+            ClutchError::TokenDeltaMismatch,
+            "off-chain transfer_checked moves nothing",
         );
     }
 
@@ -770,6 +820,296 @@ mod tests {
             &hostile,
             ClutchError::TokenExtensionNotAllowed,
             "the kernel has not run yet when the mint is admitted",
+        );
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* The collateral leg                                                    */
+    /* -------------------------------------------------------------------- */
+
+    /// Refuse a collateral leg with exactly one adapter code, writing nothing.
+    fn collateral_refuses_with(
+        case: &Case,
+        request: &[u8],
+        leg: &CollateralLegCase,
+        expected: ClutchError,
+        label: &str,
+    ) {
+        let (result, post) = case.program_with_collateral_leg(request, leg);
+        assert_eq!(result, Err(expected.into()), "{label}");
+        assert_eq!(
+            post, case.state,
+            "{label}: a pre-CPI refusal writes nothing"
+        );
+    }
+
+    #[test]
+    fn collateral_moves_exactly_with_the_kernel_and_the_mirror_holds() {
+        /* **E2 on the host**: `Split` moves exactly `q` atoms from the actor's
+         * collateral account into the Hoard's, `Merge` reverses it, and
+         * `HoardAccount::collateral_atoms` equals the Hoard token account's
+         * `amount` at every step -- which the program itself enforces, so this
+         * asserts the numbers the enforcement admitted. */
+        let mut case = fixture();
+        let actor_before = token::fixtures::amount_of(&case.collateral.actor_token_data);
+        assert_eq!(
+            token::fixtures::amount_of(&case.collateral.hoard_token_data),
+            0
+        );
+
+        case.advance(&split_request(0, 20), "split 20 with real collateral");
+        let hoard = HoardAccount::decode(&case.state.hoard).expect("hoard decodes");
+        assert_eq!(hoard.collateral_atoms, 20);
+        assert_eq!(
+            token::fixtures::amount_of(&case.collateral.actor_token_data),
+            actor_before - 20,
+            "the actor paid exactly the complete sets"
+        );
+        assert_eq!(
+            token::fixtures::amount_of(&case.collateral.hoard_token_data),
+            hoard.collateral_atoms,
+            "the mirror, which the program refused to proceed without"
+        );
+
+        case.advance(&merge(1, 6), "merge 6 with real collateral out");
+        let hoard = HoardAccount::decode(&case.state.hoard).expect("hoard decodes");
+        assert_eq!(hoard.collateral_atoms, 14);
+        assert_eq!(
+            token::fixtures::amount_of(&case.collateral.actor_token_data),
+            actor_before - 14
+        );
+        assert_eq!(
+            token::fixtures::amount_of(&case.collateral.hoard_token_data),
+            hoard.collateral_atoms
+        );
+    }
+
+    #[test]
+    fn a_hoard_whose_two_truths_disagree_refuses_before_anything_moves() {
+        /* The mirror over the pre-state.  `HoardAccount::collateral_atoms` is
+         * a second truth about a balance the token program also tracks, and
+         * `TOKEN2022_PLAN.md` open decision 3 keeps it only on the condition
+         * that the two are checked equal.  A market whose Hoard token account
+         * was topped up out of band is exactly the state the equality names,
+         * and it refuses rather than letting the kernel run against a number
+         * the token program does not agree with. */
+        let (case, base) = collateral_case();
+        let mut drifted = base;
+        drifted.hoard_token_data = token::fixtures::account_bytes(
+            drifted.mint.to_bytes(),
+            drifted.authority.to_bytes(),
+            9,
+        );
+        collateral_refuses_with(
+            &case,
+            &split_request(1, 4),
+            &drifted,
+            ClutchError::HoardMirrorMismatch,
+            "the hoard token account holds atoms the ledger does not",
+        );
+    }
+
+    #[test]
+    fn the_collateral_mint_is_the_realms_and_never_the_callers() {
+        let (case, base) = collateral_case();
+
+        /* A perfectly well-formed mint the Realm's policy does not name.  The
+         * whole reason the 266 policy bytes are in the account list is that
+         * without them this account would decide what collateral *is*. */
+        let mut impostor = base.clone();
+        impostor.mint = key(0x5e);
+        impostor.mint_data = token::fixtures::mint_bytes(6, 5_000_000, None, None);
+        collateral_refuses_with(
+            &case,
+            &split_request(1, 4),
+            &impostor,
+            ClutchError::MintNotAdmitted,
+            "a mint the policy does not name",
+        );
+
+        // The right identity under the wrong program.
+        let mut wrong_program = base.clone();
+        wrong_program.mint_owner = key(0x77);
+        collateral_refuses_with(
+            &case,
+            &split_request(1, 4),
+            &wrong_program,
+            ClutchError::WrongTokenProgram,
+            "a collateral mint some other program owns",
+        );
+
+        // A live mint authority means the collateral supply is not fixed.
+        let mut open_supply = base;
+        open_supply.mint_data = token::fixtures::mint_bytes(6, 5_000_000, Some([0x9a; 32]), None);
+        collateral_refuses_with(
+            &case,
+            &split_request(1, 4),
+            &open_supply,
+            ClutchError::MintNotAdmitted,
+            "a collateral mint somebody can still mint",
+        );
+    }
+
+    #[test]
+    fn an_extension_on_the_collateral_mint_is_refused_at_the_instruction() {
+        /* §3.4's second enforcement point, over the mint that is *not* this
+         * program's own: a market whose collateral mint was admitted at
+         * initialization can be presented after a close-and-reinitialize with
+         * `TransferFeeConfig`, and the whole solvency story depends on that
+         * being refused here rather than only there. */
+        let (case, base) = collateral_case();
+        for (discriminant, label) in [
+            (1_u16, "TransferFeeConfig"),
+            (3, "MintCloseAuthority"),
+            (12, "PermanentDelegate"),
+            (14, "TransferHook"),
+            (29, "a discriminant from the future"),
+        ] {
+            let mut hostile = base.clone();
+            hostile.mint_data = token::fixtures::with_extension(
+                &token::fixtures::mint_bytes(6, 5_000_000, None, None),
+                82,
+                1,
+                discriminant,
+            );
+            collateral_refuses_with(
+                &case,
+                &split_request(1, 4),
+                &hostile,
+                ClutchError::TokenExtensionNotAllowed,
+                label,
+            );
+        }
+    }
+
+    #[test]
+    fn the_hoard_token_account_is_derived_and_its_authority_is_the_pda() {
+        let (case, base) = collateral_case();
+
+        // A Hoard-shaped account at an address the seed schema does not produce.
+        let mut elsewhere = base.clone();
+        elsewhere.hoard_token = key(0x5f);
+        collateral_refuses_with(
+            &case,
+            &split_request(1, 4),
+            &elsewhere,
+            ClutchError::WrongPda,
+            "a hoard token account at an underived address",
+        );
+
+        /* An account at the right address whose owner authority is a wallet.
+         * This is the one that would make the Hoard drainable by a signature,
+         * and it is the property the probe measured on chain. */
+        let mut wallet_owned = base.clone();
+        wallet_owned.hoard_token_data =
+            token::fixtures::account_bytes(wallet_owned.mint.to_bytes(), [0x8f; 32], 0);
+        collateral_refuses_with(
+            &case,
+            &split_request(1, 4),
+            &wallet_owned,
+            ClutchError::TokenAccountNotAdmitted,
+            "a hoard token account a wallet can sign for",
+        );
+
+        // A delegate on the Hoard is a second way collateral leaves.
+        let mut delegated = base;
+        let mut data = token::fixtures::account_bytes(
+            delegated.mint.to_bytes(),
+            delegated.authority.to_bytes(),
+            0,
+        );
+        data[72..76].copy_from_slice(&1_u32.to_le_bytes());
+        data[76..108].copy_from_slice(&[0x4c; 32]);
+        delegated.hoard_token_data = data;
+        collateral_refuses_with(
+            &case,
+            &split_request(1, 4),
+            &delegated,
+            ClutchError::TokenAccountNotAdmitted,
+            "a delegate on the hoard",
+        );
+    }
+
+    #[test]
+    fn a_stranger_cannot_fund_a_split_from_an_account_they_do_not_own() {
+        let (case, base) = collateral_case();
+        let mut stranger = base.clone();
+        stranger.actor_token_data =
+            token::fixtures::account_bytes(stranger.mint.to_bytes(), [0x8f; 32], 1_000);
+        collateral_refuses_with(
+            &case,
+            &split_request(1, 4),
+            &stranger,
+            ClutchError::TokenAccountNotAdmitted,
+            "somebody else's collateral account",
+        );
+
+        // And an account for another asset entirely.
+        let mut wrong_mint = base;
+        wrong_mint.actor_token_data =
+            token::fixtures::account_bytes([0x21; 32], case.keys[IX_ACTOR].to_bytes(), 1_000);
+        collateral_refuses_with(
+            &case,
+            &split_request(1, 4),
+            &wrong_mint,
+            ClutchError::TokenAccountNotAdmitted,
+            "a collateral account for another mint",
+        );
+    }
+
+    #[test]
+    fn a_policy_the_profile_is_not_frozen_to_cannot_name_the_collateral() {
+        /* The load-bearing binding.  The 266 policy bytes have no address and
+         * no PDA, so if the recomputed digest did not have to match the
+         * Profile's frozen one, a caller could supply a policy naming their own
+         * mint and buy complete sets with it. */
+        let (case, base) = collateral_case();
+        let mut forged = base;
+        let mut policy = crate::instructions::split::tests::fixture_policy();
+        policy.collateral = clutch_solana_layout::collateral::CurrencyRef::spl(
+            clutch_solana_layout::collateral::TOKEN_2022_PROGRAM,
+            [0x21; 32],
+            6,
+        );
+        forged.policy = policy
+            .canonical_bytes()
+            .expect("the forged policy encodes")
+            .to_vec();
+        let (result, post) = case.program_with_collateral_leg(&split_request(1, 4), &forged);
+        assert!(
+            matches!(result, Err(refusal) if refusal != ClutchError::AccountCount.into()),
+            "a policy the Profile is not frozen to must be refused"
+        );
+        assert_eq!(post, case.state, "a refused split writes nothing");
+    }
+
+    #[test]
+    fn a_collateral_leg_never_reaches_a_refused_transition() {
+        /* Ordering, as a property: every check the state plane already ran
+         * still runs first.  A stale sequence with a hostile collateral mint
+         * reports the replay fault, so a caller cannot use the token leg to
+         * change which refusal a request gets. */
+        let (case, base) = collateral_case();
+        let mut hostile = base;
+        hostile.mint_data = token::fixtures::with_extension(
+            &token::fixtures::mint_bytes(6, 5_000_000, None, None),
+            82,
+            1,
+            1,
+        );
+        collateral_refuses_with(
+            &case,
+            &split_request(9, 4),
+            &hostile,
+            ClutchError::Replay,
+            "a stale sequence outranks a hostile collateral mint",
+        );
+        collateral_refuses_with(
+            &case,
+            &split_request(1, 4),
+            &hostile,
+            ClutchError::TokenExtensionNotAllowed,
+            "and with a live sequence the mint is what refuses",
         );
     }
 

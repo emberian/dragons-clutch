@@ -24,15 +24,25 @@
 //! including the program's own validation, the closure obligations, the kernel
 //! step, the CPI frame, and account re-serialization — which is exactly what
 //! the probe's 1 230 / 1 720 / 1 235 CU bare-instruction figures were not.
+//!
+//! The outcome leg is **mandatory**: `Materialize` and `Dematerialize` accept
+//! thirteen accounts and nothing else. The ten-account shadow-only plane these
+//! scenarios used to measure a hole with is now a refusal, which is what
+//! `the_ten_account_plane_is_refused_and_moves_nothing` asserts. The
+//! collateral leg, market founding, and the redemption payout live in
+//! `collateral_leg.rs`.
 
 use {
     clutch_sbf::error::ClutchError,
-    clutch_sbf::instructions::split::{ACCOUNT_COUNT, ACCOUNT_COUNT_TOKEN, IX_EXTERNAL, IX_SUPPLY},
+    clutch_sbf::instructions::split::{
+        ACCOUNT_COUNT, ACCOUNT_COUNT_OUTCOME, IX_EXTERNAL, IX_SUPPLY,
+    },
     clutch_solana_layout::{Hash32, Intent, SupplyLedgerAccount},
     clutch_solana_reference::ExternalAccount,
     clutch_svm_fixture::{
-        build_plane, layout_request, mint_bytes_with_extension, outcome_mint_bytes, Plane,
-        BASE_TOKEN_ACCOUNT_LEN, EXTENDED_MINT_OVERHEAD, FUNDED_SETS, PROGRAM_ID, TOKEN_2022,
+        build_plane, layout_request, mint_bytes_with_extension, outcome_mint_bytes, Mode, Plane,
+        BASE_TOKEN_ACCOUNT_LEN, EXTENDED_MINT_OVERHEAD, FUNDED_SETS, MARKET_NONCE, PROGRAM_ID,
+        TOKEN_2022,
     },
     solana_account::Account,
     solana_address::Address,
@@ -87,7 +97,13 @@ impl Scenario {
             0x2d, 0x6b, 0x40, 0xcf, 0x83, 0x19, 0x75, 0xa2, 0x0e, 0xd4, 0x66, 0x37, 0xbb, 0x52,
             0x08, 0xe9, 0x71, 0xc3,
         ]);
-        let plane = build_plane(actor.pubkey());
+        /* A deterministic collateral mint, because the Realm's frozen policy
+         * names it and the Profile identity is the parent hash over that
+         * policy's digest -- so the mint's address is upstream of every PDA in
+         * the plane.  No scenario in this file moves collateral, but the plane
+         * cannot be built without knowing which asset it is denominated in. */
+        let collateral_mint = Address::new_from_array([0x6d; 32]);
+        let plane = build_plane(actor.pubkey(), collateral_mint, MARKET_NONCE, Mode::Funded);
         let mut test = ProgramTest::default();
         test.prefer_bpf(true);
         test.add_program("clutch_sbf", PROGRAM_ID, None);
@@ -279,7 +295,7 @@ impl Scenario {
     /// The seam instruction, with or without the optional token leg.
     fn seam_instruction(&self, request: Vec<u8>, with_token_leg: bool) -> Instruction {
         let addresses = self.plane.seam_addresses();
-        let mut metas = Vec::with_capacity(ACCOUNT_COUNT_TOKEN);
+        let mut metas = Vec::with_capacity(ACCOUNT_COUNT_OUTCOME);
         metas.push(AccountMeta::new(addresses[0], true));
         metas.push(AccountMeta::new_readonly(addresses[1], false));
         metas.push(AccountMeta::new_readonly(addresses[2], false));
@@ -294,7 +310,7 @@ impl Scenario {
         assert_eq!(
             metas.len(),
             if with_token_leg {
-                ACCOUNT_COUNT_TOKEN
+                ACCOUNT_COUNT_OUTCOME
             } else {
                 ACCOUNT_COUNT
             }
@@ -627,15 +643,20 @@ async fn the_derived_hoard_authority_cannot_be_signed_for_by_a_wallet() {
     );
 }
 
-/// **The transitional hole, measured rather than described.**
+/// **The transitional hole, closed.**
 ///
-/// A ten-account `Materialize` is accepted and moves only the shadow: the mint
-/// is untouched, and the market-wide ledger term now disagrees with the mint's
-/// supply. That disagreement is exactly what the thirteen-account plane refuses
-/// to create, and it is why the optionality closes the day `CreateMarket`
-/// creates the mints.
+/// A ten-account `Materialize` used to be accepted and to move only the
+/// shadow, leaving the market-wide ledger term disagreeing with the mint's
+/// supply — the divergence the thirteen-account plane then refused to build
+/// on. That optionality existed because nothing created the mints;
+/// `CreateMarket` now does, so the count is fixed and the smaller plane is
+/// `AccountCount`.
+///
+/// Its replacement measures the *closure* the same way the hole was measured:
+/// the shadow-only plane is refused, and after the refusal the two truths are
+/// still equal, because nothing moved.
 #[tokio::test]
-async fn the_ten_account_plane_moves_only_the_shadow() {
+async fn the_ten_account_plane_is_refused_and_moves_nothing() {
     let mut scenario = Scenario::start(MintShape::Proposed).await;
     let actor = scenario.actor.insecure_clone();
     let request = layout_request(
@@ -648,26 +669,34 @@ async fn the_ten_account_plane_moves_only_the_shadow() {
             quantity: 7,
         },
     );
-    let units = scenario
-        .send(&[scenario.seam_instruction(request, false)], &[&actor])
+    let code = scenario
+        .refusal_code(&[scenario.seam_instruction(request, false)], &[&actor])
         .await;
-
-    assert_eq!(scenario.mint_supply().await, 0, "no token was minted");
-    assert_eq!(scenario.external_supply().await, 7, "the shadow moved");
-    assert_ne!(
-        scenario.external_supply().await,
-        scenario.mint_supply().await,
-        "the two truths now disagree, which is the hole"
+    assert_eq!(
+        code,
+        ClutchError::AccountCount as u32,
+        "the shadow-only plane is not a plane any more"
     );
 
-    // And the next thirteen-account instruction refuses to build on it.
-    let code = scenario
-        .refusal_code(&[scenario.materialize(1, 1)], &[&actor])
-        .await;
-    assert_eq!(code, ClutchError::ShadowSupplyMismatch as u32);
+    assert_eq!(scenario.mint_supply().await, 0, "no token was minted");
+    assert_eq!(
+        scenario.external_supply().await,
+        0,
+        "the shadow did not move"
+    );
+    assert_eq!(
+        scenario.external_supply().await,
+        scenario.mint_supply().await,
+        "the two truths cannot be made to disagree by presenting a smaller plane"
+    );
 
+    // And the plane the intent does name still works from the same state.
+    let units = scenario
+        .send(&[scenario.materialize(0, 7)], &[&actor])
+        .await;
+    assert_eq!(scenario.mint_supply().await, 7);
     println!(
-        "SVM ten-account plane: shadow-only materialize accepted at {units} CU, \
-         and the token leg then refuses with Custom({code})"
+        "SVM mandatory leg: the ten-account materialize refused with Custom({code}) (0x0001); \
+         the thirteen-account one accepted at {units} CU"
     );
 }
