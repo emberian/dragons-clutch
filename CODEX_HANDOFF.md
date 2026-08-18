@@ -297,7 +297,10 @@ ELF, and static bundle to a clean immutable revision and a release manifest.
 
 1. **BLOCKER - no release manifest.** A local Git baseline now supports review
    diffs and source identity, but no remote, signed tag, release artifact, or
-   checked source/build manifest exists. Keep subsequent local work in coherent
+   checked source/build manifest exists. (Update 2026-08-19: a private remote
+   `emberian/dragons-clutch` exists and is pushed per explicit user direction,
+   and `scripts/baseline_manifest.py` generates a checked baseline manifest; a
+   signed tag, release artifact, and publication remain user-gated.) Keep subsequent local work in coherent
    commits. Pushing, tagging, publishing, or declaring a release requires
    explicit user direction; do not infer it from this handoff.
 2. **BLOCKER - formal-tool gap.** Verus and Rocq are unavailable. The existing
