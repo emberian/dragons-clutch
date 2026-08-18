@@ -30,3 +30,5 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
   econ lab 83 tests + fixtures; Draft 3→5 filings + audits + legal packet;
   umbrella gate green (108 Rust tests).
 - Repos created and pushed (this entry).
+- Draft 6 filings: 20 argued positions, audience ontology, 2/3 length; pushed.
+- Night drift review A-H pass; fixes committed both repos.
