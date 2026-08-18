@@ -27,6 +27,10 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- Inclusion/availability model (degg P1-3): MMR log, receipts,
+  equivocation verdicts, 125 tests; six build-time findings; pushed.
+- Cost lab v3 re-pin + source-derived identifier guard; pushed.
+
 - Token-2022 probe: deps RESOLVE, 6 scenarios green, extension matrix
   proven on real bytes; toolchain split finding (1.93 for program-test).
 - SBF foundation: module split, 18 seeds, Split differential PASS;
