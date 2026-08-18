@@ -18,6 +18,14 @@ names the exact writable accounts to compare and the oracle that produced the
 expectation; every refusing case names the numeric `ProgramError::Custom` code
 the program must return and the offline reference adapter's own refusal for the
 same situation.
+
+Two gates live here.  Without `--lifecycle` this runs the per-family plan:
+every implemented instruction family, its accepting transactions and its
+refusals, grouped by family.  With `--lifecycle` it runs the PROJECT.md
+section-10 walk instead -- one market taken end to end as ONE ordered gate,
+step by step, closing with the section-10 item-10 accounting identity read
+out of the bytes the bank returned.  See
+`docs/implementation/LIFECYCLE_WALK.md`.
 """
 
 from __future__ import annotations
@@ -141,15 +149,30 @@ def check_accept(
     case: dict,
     report: list[str],
     failures: list[str],
-) -> None:
+) -> dict:
+    """Run one accepting transaction and compare every writable account.
+
+    Returns the measurement the lifecycle walk tabulates -- compute units, the
+    transaction size, how many accounts the step actually wrote -- together
+    with the raw on-chain bytes the SVM returned, so a later step can read a
+    field out of them rather than out of an expectation file.
+    """
     entries = case["compare"]
     addresses = [entry["address"] for entry in entries]
     result = simulate(url, plan, case, addresses)
+    metrics = {
+        "units": None,
+        "per_instruction": [],
+        "bytes": case["bytes"],
+        "written": 0,
+        "verdict": "FAIL",
+        "observed": {},
+    }
     if result["err"] is not None:
         failures.append(f"{case['name']}: expected success, got err={result['err']}")
         for line in result.get("logs") or []:
             report.append(f"      log {line}")
-        return
+        return metrics
 
     per = per_instruction_units(result.get("logs"), program_id)
     program_units = sum(per)
@@ -162,16 +185,22 @@ def check_accept(
         f"bytes={case['bytes']} oracle={case['oracle']}"
     )
 
+    metrics["units"] = program_units
+    metrics["per_instruction"] = per
+
     returned = result.get("accounts") or []
     if len(returned) != len(entries):
         failures.append(
             f"{case['name']}: expected {len(entries)} accounts back, got {len(returned)}"
         )
-        return
+        return metrics
 
     identical = set(case.get("identical_to_pre") or [])
+    matched = 0
     for entry, account in zip(entries, returned):
-        observed = base64.b64decode(account["data"][0]).hex()
+        raw = base64.b64decode(account["data"][0])
+        metrics["observed"][entry["role"]] = raw
+        observed = raw.hex()
         expected = read_hex(plan, entry["expected"])
         pre = read_hex(plan, entry["pre"])
         role = entry["role"]
@@ -193,24 +222,231 @@ def check_accept(
             )
             continue
         state = "unchanged" if role in identical else "changed"
+        if role not in identical:
+            metrics["written"] += 1
+        matched += 1
         report.append(f"    differential {role:<22} MATCH ({state})")
+    if matched == len(entries):
+        metrics["verdict"] = "MATCH"
+    return metrics
 
 
-def check_refuse(url: str, plan: Path, case: dict, report: list[str], failures: list[str]) -> None:
+def check_refuse(
+    url: str, plan: Path, program_id: str, case: dict, report: list[str], failures: list[str]
+) -> dict:
     result = simulate(url, plan, case, [])
     expected = int(case["expect_code"])
     code = custom_error_code(result["err"])
+    pair = granted_and_consumed(result.get("logs"), program_id)
+    metrics = {
+        "units": pair[0] if pair else None,
+        "per_instruction": [],
+        "bytes": case["bytes"],
+        "written": 0,
+        "verdict": "FAIL",
+        "observed": {},
+    }
     if code == expected:
+        metrics["verdict"] = f"REFUSED Custom({case['expect_code_hex']})"
         report.append(
             f"  refuse {case['name']:<28} Custom({case['expect_code_hex']})  "
             f"offline reference: {case['reference']}"
         )
-        return
+        return metrics
     failures.append(
         f"{case['name']}: expected Custom({case['expect_code_hex']}), got err={result['err']}"
     )
     for line in result.get("logs") or []:
         report.append(f"      log {line}")
+    return metrics
+
+
+
+def evaluate_terms(terms: list[dict], observed: dict[str, int]) -> tuple[int, str]:
+    """Sum one side of an accounting identity from values read off the chain."""
+    total = 0
+    parts = []
+    for term in terms:
+        if "constant" in term:
+            total += int(term["value"])
+            parts.append(f"{term['constant']}={term['value']}")
+            continue
+        label = term["label"]
+        scale = int(term["scale"])
+        value = observed[label]
+        total += value * scale
+        parts.append(f"{scale}*{label}({value})" if scale != 1 else f"{label}({value})")
+    return total, " + ".join(parts)
+
+
+def check_terminal(
+    terminal: dict,
+    observed_bytes: dict[str, dict[str, bytes]],
+    report: list[str],
+    failures: list[str],
+) -> None:
+    """Close PROJECT.md section 10 item 10 over the bytes the SVM returned.
+
+    Every number below is read out of the account data the bank handed back
+    for the walk's last step, at an offset the harness located by probing the
+    frozen codec rather than by hard-coding it.  Nothing here consults an
+    expectation file: the byte differential already established that the
+    on-chain bytes and the oracle's bytes are the same bytes, and this is the
+    separate question of whether those bytes *close*.
+    """
+    case_name = terminal["case"]
+    accounts = observed_bytes.get(case_name)
+    if not accounts:
+        failures.append(f"terminal identity: no on-chain bytes for {case_name}")
+        return
+
+    observed: dict[str, int] = {}
+    report.append("")
+    report.append("  terminal state, read out of the on-chain bytes:")
+    for value in terminal["values"]:
+        data = accounts.get(value["role"])
+        if data is None:
+            failures.append(
+                f"terminal identity: {case_name} returned no {value['role']}"
+            )
+            return
+        offset, width = int(value["offset"]), int(value["width"])
+        if len(data) < offset + width:
+            failures.append(
+                f"terminal identity: {value['role']} is {len(data)} bytes, "
+                f"too short for {value['label']} at {offset}"
+            )
+            return
+        read = int.from_bytes(data[offset : offset + width], "little")
+        observed[value["label"]] = read
+        mark = "ok" if read == int(value["expected"]) else "MISMATCH"
+        if read != int(value["expected"]):
+            failures.append(
+                f"terminal identity: {value['label']} is {read} on chain, "
+                f"expected {value['expected']}"
+            )
+        report.append(
+            f"    {value['label']:<24} {read:<12} ({mark}, {value['role']} +{offset})"
+        )
+
+    report.append("")
+    report.append("  accounting identities:")
+    for identity in terminal["identities"]:
+        left, left_text = evaluate_terms(identity["left"], observed)
+        right, right_text = evaluate_terms(identity["right"], observed)
+        if left == right:
+            report.append(f"    CLOSED  {identity['equation']}")
+            report.append(f"              {left_text} = {left} = {right_text}")
+            continue
+        failures.append(
+            f"terminal identity `{identity['equation']}` does not close: "
+            f"{left_text} = {left} != {right} = {right_text}"
+        )
+
+
+def run_lifecycle(url: str, plan_dir: Path, plan: dict, only: str | None) -> int:
+    """Run the PROJECT.md section-10 walk as ONE gate.
+
+    The walk is one market taken end to end.  It is not ten independent
+    checks that happen to be printed together: any step that diverges, refuses
+    when it should accept, or accepts when it should refuse fails the walk as
+    a unit, and the terminal accounting identity is part of the same gate.
+    """
+    walk = plan["lifecycle"]
+    program_id = plan["program_id"]
+    cases = {case["name"]: case for case in walk["cases"]}
+    failures: list[str] = []
+    report: list[str] = []
+    rows: list[tuple] = []
+    observed_bytes: dict[str, dict[str, bytes]] = {}
+
+    for step in walk["steps"]:
+        if only and step["case"] != only:
+            continue
+        case = cases[step["case"]]
+        report.append("")
+        report.append(f"== step {step['ordinal']}: {step['title']} ==")
+        report.append(f"  section 10 item(s): {step['project_item']}")
+        report.append(f"  {step['narrative']}")
+        before = len(failures)
+        if case["kind"] == "accept":
+            metrics = check_accept(url, plan_dir, program_id, case, report, failures)
+        else:
+            metrics = check_refuse(url, plan_dir, program_id, case, report, failures)
+        observed_bytes[case["name"]] = metrics["observed"]
+        if len(failures) != before:
+            metrics["verdict"] = "DIVERGED"
+        rows.append(
+            (
+                step["ordinal"],
+                step["case"],
+                metrics["units"],
+                metrics["per_instruction"],
+                metrics["bytes"],
+                metrics["written"],
+                metrics["verdict"],
+            )
+        )
+
+    if not only:
+        check_terminal(walk["terminal"], observed_bytes, report, failures)
+
+    print("\n".join(report))
+
+    print("")
+    print("== the walk, step by step ==")
+    print(
+        f"  {'#':>2}  {'step':<28} {'CU':>10}  {'tx bytes':>8}  "
+        f"{'written':>7}  differential"
+    )
+    for ordinal, name, units, per, size, written, verdict in rows:
+        cu = "-" if units is None else f"{units}"
+        if len(per) > 1:
+            cu = f"{units} {per}"
+        print(f"  {ordinal:>2}  {name:<28} {cu:>10}  {size:>8}  {written:>7}  {verdict}")
+
+    print("")
+    print("== section 10 items this walk does not drive ==")
+    for skip in walk["skipped"]:
+        print(f"  item {skip['project_item']}: {skip['title']}")
+        for line in wrap(skip["reason"], 4):
+            print(line)
+
+    print("")
+    print("== what this walk is and is not ==")
+    for note in walk["notes"]:
+        for line in wrap(note, 2):
+            print(line)
+
+    if failures:
+        print("")
+        print("FAIL")
+        for failure in failures:
+            print(f"  {failure}")
+        print("")
+        print(
+            "The walk is one gate: a single diverging step fails the whole walk, "
+            "because a lifecycle that closes nine tenths of the way closes nothing."
+        )
+        return 1
+    print("")
+    print("PASS")
+    return 0
+
+
+def wrap(text: str, indent: int, width: int = 76) -> list[str]:
+    """Wrap one prose paragraph for the terminal, at a fixed indent."""
+    pad = " " * indent
+    lines: list[str] = []
+    current = pad
+    for word in text.split():
+        if len(current) + len(word) + 1 > width and current.strip():
+            lines.append(current)
+            current = pad
+        current += ("" if current == pad else " ") + word
+    if current.strip():
+        lines.append(current)
+    return lines
 
 
 def main() -> int:
@@ -218,9 +454,16 @@ def main() -> int:
     parser.add_argument("--url", default="http://127.0.0.1:18899")
     parser.add_argument("--plan", required=True, type=Path)
     parser.add_argument("--only", default=None, help="run one case by name")
+    parser.add_argument(
+        "--lifecycle",
+        action="store_true",
+        help="run the PROJECT.md section-10 walk as one gate instead of the per-family plan",
+    )
     args = parser.parse_args()
 
     plan = json.loads((args.plan / "plan.json").read_text())
+    if args.lifecycle:
+        return run_lifecycle(args.url, args.plan, plan, args.only)
     failures: list[str] = []
     report: list[str] = []
 
@@ -242,7 +485,9 @@ def main() -> int:
                     args.url, args.plan, plan["program_id"], case, report, failures
                 )
             else:
-                check_refuse(args.url, args.plan, case, report, failures)
+                check_refuse(
+                    args.url, args.plan, plan["program_id"], case, report, failures
+                )
 
     print("\n".join(report))
     accepts = sum(1 for case in plan["cases"] if case["kind"] == "accept")

@@ -30,6 +30,14 @@ ran, what failed, and what is deferred. Numbers below are from the run recorded
 in [Results](#results); re-running `programs/clutch-sbf/scripts/run_bringup.sh`
 reproduces them.
 
+**Per-family evidence is not the PROJECT.md section-10 walk.** Ten families
+that each pass in isolation say nothing about whether the eleventh state is
+reachable from the first. The same gate script now runs one market end to end
+as one ordered, all-or-nothing walk in the same validator session, closing with
+the section-10 item-10 accounting identity read out of the on-chain bytes; that
+walk, its measured table, and its honest skip list are in
+[`LIFECYCLE_WALK.md`](LIFECYCLE_WALK.md).
+
 ## What this lane converts
 
 Before this lane, `programs/solana-reference` was an *offline reference
@@ -767,6 +775,13 @@ nonzero — because `CreateMarket` refuses a Realm that has not frozen its
 collateral policy; that is a shape claim and this harness owns no 266-byte
 collateral policy to back it.
 
+**Superseded count.** The lifecycle walk added eight more market planes and
+three more observation-page buffers to the same genesis, so the current plan
+loads **122** accounts in one validator invocation. The 55 above is the count
+for the per-family plan alone and is kept because the rest of this section's
+numbers were recorded against it; the walk's own record is in
+[`LIFECYCLE_WALK.md`](LIFECYCLE_WALK.md).
+
 ### Differential against the oracle, per family
 
 Every accepting transaction's writable accounts are compared byte for byte. A
@@ -1102,8 +1117,9 @@ plan takes a few seconds to write.
 The gate needs `solana-test-validator`, `python3`, and `curl`. It binds
 `127.0.0.1:18899` and `127.0.0.1:19900` by default (`CLUTCH_RPC_PORT`,
 `CLUTCH_FAUCET_PORT` override) and contacts nothing else. It uses **one**
-validator session for all 26 transactions, including the falsifiability
-self-check. If a previous run was interrupted before its `trap` fired, an
+validator session for all 26 per-family transactions, the falsifiability
+self-check, the ten transactions of the
+[lifecycle walk](LIFECYCLE_WALK.md), and the walk's own two self-checks. If a previous run was interrupted before its `trap` fired, an
 orphaned validator will still hold the RPC port; `pkill -f solana-test-validator`
 before re-running.
 

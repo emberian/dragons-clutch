@@ -53,15 +53,15 @@ use clutch_sbf::instructions::observe_resolve::{
 };
 use clutch_sbf::seeds;
 use clutch_solana_layout::{
-    account_len, canonical_epoch_id, canonical_market_id, canonical_order_set_id,
-    canonical_outcome_id, canonical_profile_hash, canonical_realm_id, collateral, CandidateRecord,
-    EpochAccount, FeedAccount, FeedId, FinalPotAccount, Hash32, HoardAccount, Intent,
-    MarketAccount, OrderPageAccount, OrderRecord, OrderSlot, PayoutVectorBytes, PositionAccount,
-    PriceGridAccount, ProfileAccount, RealmAccount, ResolutionAccount, SettlementReceiptAccount,
-    SupplyLedgerAccount, TermsAccount, CANDIDATE_STATUS_SELECTED, EPOCH_PHASE_CLEARED,
-    MAX_GRID_TICKS, MAX_INTENT_BYTES, MAX_ORDERS_PER_PAGE, MAX_OUTCOMES, PAYOUT_INDEX_UNRESOLVED,
-    POT_PHASE_OPEN, PROFILE_FLAG_POLICY_FROZEN, PROFILE_PARENT_BYTES, RECEIPT_LEG_DIRECT,
-    RELATION_VERSION,
+    account_len, canonical_epoch_id, canonical_market_id, canonical_order_id,
+    canonical_order_set_id, canonical_outcome_id, canonical_profile_hash, canonical_realm_id,
+    collateral, CandidateRecord, EpochAccount, FeedAccount, FeedId, FinalPotAccount, Hash32,
+    HoardAccount, Intent, MarketAccount, OrderPageAccount, OrderRecord, OrderSlot,
+    PayoutVectorBytes, PositionAccount, PriceGridAccount, ProfileAccount, RealmAccount,
+    ResolutionAccount, SettlementReceiptAccount, SupplyLedgerAccount, TermsAccount,
+    CANDIDATE_STATUS_SELECTED, EPOCH_PHASE_CLEARED, MAX_GRID_TICKS, MAX_INTENT_BYTES,
+    MAX_ORDERS_PER_PAGE, MAX_OUTCOMES, PAYOUT_INDEX_UNRESOLVED, POT_PHASE_OPEN,
+    PROFILE_FLAG_POLICY_FROZEN, PROFILE_PARENT_BYTES, RECEIPT_LEG_DIRECT, RELATION_VERSION,
 };
 use clutch_solana_reference::{
     apply, apply_with_evidence, validate_market_init, AccountMetadata, ActorMetadata,
@@ -141,8 +141,6 @@ const EPOCH_INDEX: u64 = 0;
 const REMAINDER_SEED: u64 = 99;
 const BOOK_ID_FILL: u8 = 0x6b;
 const POLICY_ID_FILL: u8 = 0x70;
-const BUY_ORDER_ID_FILL: u8 = 0x11;
-const SELL_ORDER_ID_FILL: u8 = 0x22;
 const SLICE_QUANTITY: u64 = 3;
 const VIRTUAL_SPLIT: u64 = 5;
 
@@ -181,6 +179,15 @@ mod code {
     /// `ClutchError::AlreadyInitialized`: the account-plane re-initialization
     /// refusal, allocated with the market-init appends.
     pub const ALREADY_INITIALIZED: u32 = 0x0040;
+    /// `ClutchError::NotActive`.
+    ///
+    /// One of the two documented *refinements* in `split.rs`'s projection
+    /// table rather than a rename: the offline reference adapter reports the
+    /// generic `MismatchedState` for a lifecycle or close-state refusal, and
+    /// this program distinguishes it.  Neither implementation accepts a
+    /// request the other refuses, so the constant is written out here exactly
+    /// as every other adapter-vocabulary refusal in this plan is.
+    pub const NOT_ACTIVE: u32 = 0x0016;
 }
 
 const B58: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -1337,8 +1344,10 @@ fn build_batch(shared: &Shared, plane: &Plane) -> Batch {
         ],
     );
 
-    let buy_order_id = Hash32::from_bytes([BUY_ORDER_ID_FILL; 32]);
-    let sell_order_id = Hash32::from_bytes([SELL_ORDER_ID_FILL; 32]);
+    /* Order ids are positional under OrderPage v4: slot `j` of page `p` is
+     * rank `p * MAX_ORDERS_PER_PAGE + j + 1`, and nothing else decodes. */
+    let buy_order_id = canonical_order_id(1);
+    let sell_order_id = canonical_order_id(2);
     let mut orders = [OrderSlot::Empty; MAX_ORDERS_PER_PAGE];
     orders[0] = OrderSlot::Single(OrderRecord {
         owner: buyer,
@@ -1350,6 +1359,9 @@ fn build_batch(shared: &Shared, plane: &Plane) -> Batch {
         minimum_fill: 0,
         flags: 0,
         generation: GENERATION,
+        /* No expiry horizon: this plane is a frozen shape the layout codecs
+         * accept, not an economically live book. */
+        expiry_epoch: u64::MAX,
     });
     orders[1] = OrderSlot::Single(OrderRecord {
         owner: seller,
@@ -1361,6 +1373,9 @@ fn build_batch(shared: &Shared, plane: &Plane) -> Batch {
         minimum_fill: 0,
         flags: 0,
         generation: GENERATION,
+        /* No expiry horizon: this plane is a frozen shape the layout codecs
+         * accept, not an economically live book. */
+        expiry_epoch: u64::MAX,
     });
     let mut page_account = OrderPageAccount {
         market: market_id,
@@ -1374,6 +1389,7 @@ fn build_batch(shared: &Shared, plane: &Plane) -> Batch {
         page_count: 1,
         set_order_count: 2,
         order_count: 2,
+        tombstone_count: 0,
         frozen: 1,
         stored_bump: page.bump,
         orders,
@@ -1955,6 +1971,8 @@ struct Fixture {
     /// The eight founding account images `CreateMarket` must write.
     created: TransitionOutput,
     created_resolution: [u8; account_len::RESOLUTION],
+    /// The lifecycle walk: one market, one ordered narrative, one gate.
+    walk: Walk,
 }
 
 fn build_fixture() -> Fixture {
@@ -2075,6 +2093,8 @@ fn build_fixture() -> Fixture {
 
     let (created, created_resolution) = founding_plane(&shared, &create, NONCE_CREATE);
 
+    let walk = build_walk(&shared);
+
     Fixture {
         shared,
         seam,
@@ -2092,6 +2112,7 @@ fn build_fixture() -> Fixture {
         advanced_feed_bytes,
         created,
         created_resolution,
+        walk,
     }
 }
 
@@ -3008,6 +3029,1272 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
     cases
 }
 
+/* ------------------------------------------------------------------------ */
+/* The lifecycle walk                                                        */
+/* ------------------------------------------------------------------------ */
+
+/* One market, walked end to end, as ONE gate.
+ *
+ * PROJECT.md section 10 asks for one reproducible local walk rather than ten
+ * separately green instruction families.  This section is that walk: a single
+ * ordered narrative over one market, from `CreateMarket` to a drained terminal
+ * state whose accounting identity is asserted rather than eyeballed.
+ *
+ * ## Why the walk still needs several market planes
+ *
+ * `simulateTransaction` never commits, so one address can carry exactly one
+ * pre-state in one genesis.  A chained walk of N steps therefore needs N
+ * pre-states, and the only honest way to produce them is the one the rest of
+ * this plan already uses: run the **offline reference adapter forward** from
+ * the founding state and take step k's genesis to be the adapter's post-state
+ * after steps 1..k-1.  Each step's SVM post-state is then compared byte for
+ * byte against the adapter's post-state after step k, so the SVM and the
+ * adapter walk the same trajectory and any divergence at any step fails the
+ * whole walk.
+ *
+ * What differs between the planes is the market *identity* (one nonce per
+ * step, so the addresses differ); everything else is the previous step's
+ * reference post-state.  That is stated in `docs/implementation/
+ * LIFECYCLE_WALK.md` rather than hidden, because a reader is owed the
+ * difference between "the bank committed ten transactions in order" -- which
+ * this is not -- and "ten pre-states, each of which is the previous step's
+ * output, each executed by a real bank".
+ *
+ * The one place the bank itself sequences a chain is step 6, where three
+ * `FeedAdvance` instructions ride in one transaction and the third reads the
+ * second's writes.
+ */
+
+/// Market nonces of the walk, one per distinct pre-state.
+const NONCE_WALK_FOUND: u64 = 20;
+const NONCE_WALK_OPEN: u64 = 21;
+const NONCE_WALK_SPLIT: u64 = 22;
+const NONCE_WALK_MATERIALIZED: u64 = 23;
+const NONCE_WALK_DEMATERIALIZED: u64 = 24;
+const NONCE_WALK_MERGED: u64 = 25;
+const NONCE_WALK_RESOLVED: u64 = 26;
+const NONCE_WALK_REDEEMED: u64 = 27;
+
+/// The walk's founding generation.  `CreateMarket` writes generation zero, and
+/// the walk starts from exactly what `CreateMarket` wrote.
+const WALK_GENERATION: u64 = 0;
+
+/// Opening cash of the walk's position.
+///
+/// NAMED GAP, and the one field of the walk's opening state that no instruction
+/// produced: nothing in this instruction set moves collateral into a Position,
+/// so the walk credits its opening cash in the fixture.  Everything else in the
+/// opening state is `CreateMarket`'s own post-state, and the harness asserts
+/// exactly that (see `walk_opening_state_is_the_founding_state_plus_cash`).
+const WALK_CASH: u64 = 64;
+
+/// The walk's quantities.  Every terminal number is derived from these.
+const WALK_SPLIT: u64 = 20;
+const WALK_MATERIALIZE: u64 = 8;
+const WALK_DEMATERIALIZE: u64 = 5;
+const WALK_MERGE: u64 = 4;
+
+/// The outcome the sealed window selects, and the one it does not.
+///
+/// `WINNING_PAYOUT_INDEX` is payout one, whose vector is the unit vector on
+/// outcome one, so outcome one pays and outcome zero pays nothing.
+const WALK_OUTCOME_WIN: u8 = 1;
+const WALK_OUTCOME_LOSE: u8 = 0;
+
+/// Internal winning claims left to redeem after the walk's materializations
+/// and its pre-resolution merge.
+const fn walk_redeem_winning() -> u64 {
+    WALK_SPLIT - WALK_MATERIALIZE + WALK_DEMATERIALIZE - WALK_MERGE
+}
+
+/// Internal losing claims left to redeem, which pay zero.
+const fn walk_redeem_losing() -> u64 {
+    WALK_SPLIT - WALK_MERGE
+}
+
+/// Materialized winning claims the walk never brings back and never redeems.
+///
+/// There is no `RedeemExternal` instruction, so these stay outstanding, and the
+/// Hoard must end holding exactly enough collateral to pay them.  That is the
+/// section-10 item-10 identity this walk closes.
+const fn walk_unredeemed_external() -> u64 {
+    WALK_MATERIALIZE - WALK_DEMATERIALIZE
+}
+
+/// The three observation pages the walk folds into the shared feed.
+///
+/// Contiguous, and the last one lands the cursor exactly on the window's
+/// maturity bound, which is the fact `Resolve` reads and no caller may assert.
+const WALK_PAGE_BOUNDS: [(u64, u64); 3] = [
+    (START_BUCKET, START_BUCKET + 2),
+    (START_BUCKET + 2, END_BUCKET_EXCLUSIVE),
+    (END_BUCKET_EXCLUSIVE, START_BUCKET + MATURITY_HORIZON),
+];
+
+/// Recorded page-evidence digests, one per advance; recorded, never believed.
+const WALK_PAGE_EVIDENCE: [u8; 3] = [0x71, 0x72, 0x73];
+
+/// One step of the walk as it is reported.
+struct WalkStep {
+    ordinal: u32,
+    case: String,
+    title: String,
+    project_item: &'static str,
+    narrative: String,
+}
+
+/// One PROJECT.md section-10 item the walk cannot drive, and why.
+struct WalkSkip {
+    project_item: &'static str,
+    title: &'static str,
+    reason: String,
+}
+
+/// One scalar the terminal accounting identity reads out of on-chain bytes.
+struct TerminalValue {
+    label: &'static str,
+    role: String,
+    offset: usize,
+    width: usize,
+    expected: u64,
+}
+
+/// One term of one identity: either an observed scalar times a weight, or a
+/// constant the walk's own arithmetic fixes.
+enum TerminalTerm {
+    Observed { label: &'static str, scale: u64 },
+    Constant { name: &'static str, value: u64 },
+}
+
+/// One accounting identity the terminal state must close.
+struct TerminalIdentity {
+    name: &'static str,
+    equation: String,
+    left: Vec<TerminalTerm>,
+    right: Vec<TerminalTerm>,
+}
+
+/// The whole walk, as it is emitted into `plan.json`.
+struct Lifecycle {
+    steps: Vec<WalkStep>,
+    skips: Vec<WalkSkip>,
+    notes: Vec<String>,
+    cases: Vec<Case>,
+    terminal_case: String,
+    values: Vec<TerminalValue>,
+    identities: Vec<TerminalIdentity>,
+}
+
+/// Every plane and buffer the walk needs.
+struct Walk {
+    found: Plane,
+    open: Plane,
+    split: Plane,
+    materialized: Plane,
+    dematerialized: Plane,
+    merged: Plane,
+    resolved: Plane,
+    redeemed: Plane,
+    /// `CreateMarket`'s own post-state for the founding plane.
+    founded: TransitionOutput,
+    founded_resolution: [u8; account_len::RESOLUTION],
+    pages: Vec<Pda>,
+    page_bytes: Vec<Vec<u8>>,
+    /// The feed head after all three advances, folded by the accumulator.
+    advanced_feed_bytes: [u8; account_len::FEED],
+    /// The reference post-state after the last step of the walk.
+    terminal: TransitionOutput,
+}
+
+impl Walk {
+    fn planes(&self) -> [&Plane; 8] {
+        [
+            &self.found,
+            &self.open,
+            &self.split,
+            &self.materialized,
+            &self.dematerialized,
+            &self.merged,
+            &self.resolved,
+            &self.redeemed,
+        ]
+    }
+}
+
+/// The layout request the walk issues at `step`, on `plane`'s identity.
+///
+/// The replay sequence is the step index, because the walk starts from a
+/// founding state whose replay account is at sequence zero and every step
+/// consumes exactly one sequence.
+fn walk_layout_request(plane: &Plane, step: usize) -> Vec<u8> {
+    let market = plane.market_id;
+    let owner = plane.owner;
+    let sequence = step as u64;
+    match step {
+        0 => layout_request(
+            sequence,
+            Intent::Split {
+                market,
+                owner,
+                quantity: WALK_SPLIT,
+            },
+        ),
+        1 => layout_request(
+            sequence,
+            Intent::Materialize {
+                market,
+                owner,
+                destination: Hash32::from_bytes(plane.external.bytes),
+                outcome: WALK_OUTCOME_WIN,
+                quantity: WALK_MATERIALIZE,
+            },
+        ),
+        2 => layout_request(
+            sequence,
+            Intent::Dematerialize {
+                market,
+                owner,
+                source: Hash32::from_bytes(plane.external.bytes),
+                outcome: WALK_OUTCOME_WIN,
+                quantity: WALK_DEMATERIALIZE,
+            },
+        ),
+        3 => layout_request(
+            sequence,
+            Intent::Merge {
+                market,
+                owner,
+                quantity: WALK_MERGE,
+            },
+        ),
+        other => panic!("the walk has no layout step {other}"),
+    }
+}
+
+/// Run the offline reference adapter forward over the first `steps` steps.
+fn walk_forward(shared: &Shared, plane: &mut Plane, steps: usize) {
+    let actor = shared.actor.bytes;
+    let window = encode_window(shared.feed, &winning_records());
+    for step in 0..steps {
+        let output = match step {
+            0..=3 => {
+                let request = walk_layout_request(plane, step);
+                plane.layout(shared, &request, actor, true)
+            }
+            4 => plane.gate(
+                shared,
+                &resolve_request(4, WINNING_PAYOUT_INDEX),
+                &window,
+                true,
+                actor,
+                true,
+            ),
+            5 => plane.gate(
+                shared,
+                &redeem_request(5, WALK_OUTCOME_WIN, walk_redeem_winning()),
+                &[],
+                false,
+                actor,
+                true,
+            ),
+            other => panic!("the walk has no step {other}"),
+        }
+        .unwrap_or_else(|error| panic!("the walk's step {step} must apply: {error:?}"));
+        plane.advance(output);
+    }
+}
+
+/// Build one walk plane: `CreateMarket`'s post-state, funded, walked forward.
+fn walk_plane(shared: &Shared, label: &'static str, nonce: u64, steps: usize) -> Plane {
+    let mut plane = Plane::build(shared, label, nonce, WALK_GENERATION);
+    let (state, resolution) = founding_plane(shared, &plane, nonce);
+    plane.state = state;
+    plane.resolution_bytes = resolution;
+    credit_walk_cash(&mut plane);
+    walk_forward(shared, &mut plane, steps);
+    plane
+}
+
+/// Credit the walk's opening cash into a founding position.
+///
+/// This is the walk's single fixture-written field; see [`WALK_CASH`].
+fn credit_walk_cash(plane: &mut Plane) {
+    let mut position =
+        PositionAccount::decode(&plane.state.position).expect("the founding position must decode");
+    assert_eq!(
+        position.cash_atoms, 0,
+        "a founding position must open with no cash"
+    );
+    position.cash_atoms = WALK_CASH;
+    position
+        .encode(&mut plane.state.position)
+        .expect("the funded opening position must encode");
+}
+
+/// Fold the walk's observation pages onto the shared advance-feed head.
+fn fold_walk_pages(shared: &Shared) -> [u8; account_len::FEED] {
+    let mut feed =
+        FeedAccount::decode(&shared.advance_feed_bytes).expect("the advance feed head decodes");
+    for (index, (start, end)) in WALK_PAGE_BOUNDS.iter().enumerate() {
+        let grid = Grid::new(GRID_FAMILY, GRID_VERSION, BUCKET_SECONDS).expect("the fixture grid");
+        let mut summary = Summary::empty(grid);
+        for bucket in *start..*end {
+            summary = summary
+                .append(Observation::accepted(bucket, 40, 41))
+                .expect("the walk's page folds");
+        }
+        let cursor = summary
+            .end_bucket_exclusive()
+            .expect("a folded page has an end bucket");
+        assert_eq!(
+            feed.cursor, *start,
+            "the walk's pages must be contiguous with the head they advance"
+        );
+        feed.cursor = cursor;
+        feed.archive_pages += 1;
+        feed.summary = Hash32::from_bytes([WALK_PAGE_EVIDENCE[index]; 32]);
+    }
+    assert_eq!(
+        feed.cursor, FEED_CURSOR,
+        "the walk's three advances must land the cursor exactly on the window's maturity bound"
+    );
+    let mut bytes = [0; account_len::FEED];
+    feed.encode(&mut bytes).expect("the advanced feed head");
+    bytes
+}
+
+/// One `FeedAdvance` observation page of the walk.
+fn walk_page_bytes(shared: &Shared, index: usize) -> Vec<u8> {
+    let (start, end) = WALK_PAGE_BOUNDS[index];
+    let records: Vec<Record> = (start..end)
+        .map(|bucket| (OBSERVATION_ACCEPTED, bucket, 40, 41))
+        .collect();
+    encode_feed_page(
+        Hash32::from_bytes(shared.advance_feed.bytes()),
+        start,
+        end,
+        &records,
+    )
+}
+
+/// The transaction that carries all three of the walk's `FeedAdvance` steps.
+///
+/// One transaction, three instructions, one writable feed head: the **bank**
+/// sequences them, so the second page is read against the first page's writes
+/// and the third against the second's.  A chain the harness sequenced would
+/// prove nothing about ordering; this one does.
+fn walk_advance_transaction(shared: &Shared, walk: &Walk, actor: [u8; 32]) -> Vec<u8> {
+    let writable = [shared.advance_feed_head.bytes];
+    let mut readonly: Vec<[u8; 32]> = walk.pages.iter().map(|page| page.bytes).collect();
+    readonly.push(shared.program.bytes);
+    let message = Message::new(&[shared.payer.bytes], &[actor], &writable, &readonly);
+    let instructions: Vec<Instruction> = walk
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(index, page)| Instruction {
+            program_index: message.index(&shared.program.bytes),
+            accounts: message.indices(&[actor, shared.advance_feed_head.bytes, page.bytes]),
+            data: layout_request(
+                index as u64,
+                Intent::FeedAdvance {
+                    feed: shared.advance_feed,
+                    cursor: WALK_PAGE_BOUNDS[index].1,
+                    evidence: Hash32::from_bytes([WALK_PAGE_EVIDENCE[index]; 32]),
+                },
+            ),
+        })
+        .collect();
+    transaction(&message, &instructions)
+}
+
+fn build_walk(shared: &Shared) -> Walk {
+    let found = Plane::build(shared, "walk-found", NONCE_WALK_FOUND, WALK_GENERATION);
+    let (founded, founded_resolution) = founding_plane(shared, &found, NONCE_WALK_FOUND);
+
+    let open = walk_plane(shared, "walk-open", NONCE_WALK_OPEN, 0);
+    let split = walk_plane(shared, "walk-split", NONCE_WALK_SPLIT, 1);
+    let materialized = walk_plane(shared, "walk-materialized", NONCE_WALK_MATERIALIZED, 2);
+    let dematerialized = walk_plane(shared, "walk-dematerialized", NONCE_WALK_DEMATERIALIZED, 3);
+    let merged = walk_plane(shared, "walk-merged", NONCE_WALK_MERGED, 4);
+    let resolved = walk_plane(shared, "walk-resolved", NONCE_WALK_RESOLVED, 5);
+    let redeemed = walk_plane(shared, "walk-redeemed", NONCE_WALK_REDEEMED, 6);
+
+    /* The last step's post-state, from the same forward run.  It is the walk's
+     * terminal state and the thing the accounting identity is asserted over. */
+    let terminal = redeemed
+        .gate(
+            shared,
+            &redeem_request(6, WALK_OUTCOME_LOSE, walk_redeem_losing()),
+            &[],
+            false,
+            shared.actor.bytes,
+            true,
+        )
+        .expect("the walk's losing redemption must apply");
+    assert_eq!(
+        terminal.redemption_payout, 0,
+        "a losing claim must pay exactly zero"
+    );
+
+    let pages: Vec<Pda> = (0..WALK_PAGE_BOUNDS.len())
+        .map(|index| fixed_address(&format!("clutch/walk/page/{index}/v1")))
+        .collect();
+    let page_bytes: Vec<Vec<u8>> = (0..WALK_PAGE_BOUNDS.len())
+        .map(|index| walk_page_bytes(shared, index))
+        .collect();
+    let advanced_feed_bytes = fold_walk_pages(shared);
+
+    let walk = Walk {
+        found,
+        open,
+        split,
+        materialized,
+        dematerialized,
+        merged,
+        resolved,
+        redeemed,
+        founded,
+        founded_resolution,
+        pages,
+        page_bytes,
+        advanced_feed_bytes,
+        terminal,
+    };
+    assert_walk_chains(shared, &walk);
+    walk
+}
+
+/// Every claim the walk makes about its own construction, checked here.
+///
+/// A walk that quietly stopped being a chain -- a plane whose genesis is not
+/// the previous step's post-state, an opening state that is not what
+/// `CreateMarket` writes, a feed that does not reach maturity -- is a build
+/// failure rather than a green differential over a fiction.
+fn assert_walk_chains(shared: &Shared, walk: &Walk) {
+    /* The opening state is the founding state with exactly one field credited. */
+    let (mut founded, founded_resolution) = founding_plane(shared, &walk.open, NONCE_WALK_OPEN);
+    assert_eq!(
+        walk.open.resolution_bytes, founded_resolution,
+        "the walk opens on the resolution record CreateMarket writes"
+    );
+    for (role, _) in walk.open.state_roles() {
+        if role == "position" {
+            continue;
+        }
+        assert_eq!(
+            walk.open.state_slice(role),
+            output_slice(&founded, role),
+            "the walk's opening {role} must be exactly what CreateMarket writes"
+        );
+    }
+    let mut position =
+        PositionAccount::decode(&founded.position).expect("the founding position decodes");
+    position.cash_atoms = WALK_CASH;
+    position
+        .encode(&mut founded.position)
+        .expect("the funded position encodes");
+    assert_eq!(
+        walk.open.state_slice("position"),
+        founded.position.as_slice(),
+        "the walk's opening position differs from CreateMarket's only in its cash"
+    );
+
+    /* Each plane is the previous plane's step replayed on its own identity. */
+    let stages: [(&Plane, usize); 7] = [
+        (&walk.open, 0),
+        (&walk.split, 1),
+        (&walk.materialized, 2),
+        (&walk.dematerialized, 3),
+        (&walk.merged, 4),
+        (&walk.resolved, 5),
+        (&walk.redeemed, 6),
+    ];
+    for (plane, steps) in stages {
+        let replay = ReplayAccount::decode(&plane.state.replay).expect("a replay account decodes");
+        assert_eq!(
+            replay.sequence, steps as u64,
+            "{}'s genesis must sit at replay sequence {steps}",
+            plane.label
+        );
+    }
+
+    /* The kernel and the market agree about resolution from the resolve on. */
+    let resolved_kernel =
+        KernelAccount::decode(&walk.resolved.state.kernel).expect("the kernel decodes");
+    assert_eq!(
+        resolved_kernel.phase, 1,
+        "the walk resolves before it redeems"
+    );
+    assert_eq!(
+        resolved_kernel.resolved_payout, WINNING_PAYOUT_INDEX,
+        "the walk resolves onto the payout the sealed window selects"
+    );
+}
+
+/* ---- The terminal accounting identity --------------------------------- */
+
+/// The sole byte index at which two encodings of one account differ.
+fn sole_difference(base: &[u8], probe: &[u8], label: &str) -> usize {
+    assert_eq!(
+        base.len(),
+        probe.len(),
+        "{label}: the probe changed the length"
+    );
+    let mut found = None;
+    for (index, (left, right)) in base.iter().zip(probe.iter()).enumerate() {
+        if left != right {
+            assert!(
+                found.is_none(),
+                "{label}: the probe moved more than one byte"
+            );
+            found = Some(index);
+        }
+    }
+    found.unwrap_or_else(|| panic!("{label}: the probe moved no byte"))
+}
+
+/// Locate one little-endian `u64` field inside a frozen account encoding.
+///
+/// Nothing here hard-codes an offset.  The field is written twice -- once as
+/// `1` and once as `256` -- and the offset is where the encoding moved: at
+/// `offset` for the first and at `offset + 1` for the second, which is what
+/// little-endian means and what the assertion below refuses to assume.
+fn u64_field_offset<F>(encode: F, label: &str) -> usize
+where
+    F: Fn(u64) -> Vec<u8>,
+{
+    let zero = encode(0);
+    let low = sole_difference(&zero, &encode(1), label);
+    let high = sole_difference(&zero, &encode(256), label);
+    assert_eq!(
+        high,
+        low + 1,
+        "{label}: the field is not a little-endian u64 at {low}"
+    );
+    low
+}
+
+/// Build one terminal readout from an account whose codec is probed for the
+/// field's offset.
+fn terminal_value<F>(label: &'static str, role: String, expected: u64, encode: F) -> TerminalValue
+where
+    F: Fn(u64) -> Vec<u8>,
+{
+    TerminalValue {
+        label,
+        offset: u64_field_offset(&encode, label),
+        role,
+        width: 8,
+        expected,
+    }
+}
+
+fn observed(label: &'static str, scale: u64) -> TerminalTerm {
+    TerminalTerm::Observed { label, scale }
+}
+
+fn constant(name: &'static str, value: u64) -> TerminalTerm {
+    TerminalTerm::Constant { name, value }
+}
+
+/// Read the walk's terminal state out and state the identities it closes.
+///
+/// Every expected number below is *derived*: either from the walk's own
+/// quantities (`WALK_SPLIT` and friends), or by decoding the offline reference
+/// adapter's terminal post-state.  Nothing is transcribed from an observed run,
+/// and the two derivations are required to agree here, at build time, before a
+/// validator is ever started.
+fn walk_terminal(walk: &Walk) -> (Vec<TerminalValue>, Vec<TerminalIdentity>) {
+    let terminal = &walk.terminal;
+    let label = walk.redeemed.label;
+    let hoard = HoardAccount::decode(&terminal.hoard).expect("terminal hoard decodes");
+    let position = PositionAccount::decode(&terminal.position).expect("terminal position decodes");
+    let kernel = KernelAccount::decode(&terminal.kernel).expect("terminal kernel decodes");
+    let external = ExternalAccount::decode(&terminal.external).expect("terminal external decodes");
+    let supply =
+        SupplyLedgerAccount::decode(&terminal.supply).expect("terminal supply ledger decodes");
+
+    /* The walk's own arithmetic, independent of the adapter's answer. */
+    let expected_hoard = walk_unredeemed_external();
+    let expected_cash = WALK_CASH - WALK_SPLIT + WALK_MERGE + walk_redeem_winning();
+    let expected_external_win = walk_unredeemed_external();
+
+    assert_eq!(
+        hoard.collateral_atoms, expected_hoard,
+        "the terminal Hoard must hold exactly the unredeemed obligations"
+    );
+    assert_eq!(
+        position.cash_atoms, expected_cash,
+        "the terminal cash must be the walk's arithmetic"
+    );
+    assert_eq!(
+        position.internal, [0; MAX_OUTCOMES],
+        "every internal claim must be merged or redeemed away"
+    );
+    assert_eq!(
+        external.balances[usize::from(WALK_OUTCOME_WIN)],
+        expected_external_win,
+        "the materialized winning claims are the only thing left outstanding"
+    );
+    assert_eq!(
+        external.balances[usize::from(WALK_OUTCOME_LOSE)],
+        0,
+        "the walk materialized nothing on the losing outcome"
+    );
+    assert_eq!(
+        kernel.total_supply[usize::from(WALK_OUTCOME_LOSE)],
+        0,
+        "the losing outcome's supply must be fully redeemed away"
+    );
+    assert_eq!(
+        kernel.total_supply[usize::from(WALK_OUTCOME_WIN)],
+        expected_external_win,
+        "the winning outcome's remaining supply is exactly the external claims"
+    );
+    assert_eq!(
+        supply.internal_supply, [0; MAX_OUTCOMES],
+        "the internal term of the supply ledger must drain with the position"
+    );
+    assert_eq!(
+        supply.external_supply[usize::from(WALK_OUTCOME_WIN)],
+        expected_external_win,
+        "the external term of the supply ledger must carry the outstanding claims"
+    );
+
+    /* The resolved payout vector, read out of the terminal kernel rather than
+     * retyped: it is what turns a claim count into a collateral obligation. */
+    let resolved = usize::from(kernel.resolved_payout);
+    assert!(
+        resolved < usize::from(kernel.payouts.count),
+        "the terminal kernel resolved onto a payout index its own set does not hold"
+    );
+    let vector = kernel.payouts.vectors[resolved];
+    assert_eq!(
+        vector.denominator, 1,
+        "this walk's payout vector is integral; a fractional one would need a divisor here"
+    );
+
+    let hoard_role = format!("{label}.hoard");
+    let position_role = format!("{label}.position");
+    let kernel_role = format!("{label}.kernel");
+    let external_role = format!("{label}.external");
+    let supply_role = format!("{label}.supply");
+
+    let mut values = vec![
+        terminal_value(
+            "hoard_collateral",
+            hoard_role,
+            hoard.collateral_atoms,
+            |v| {
+                let mut probe = hoard;
+                probe.collateral_atoms = v;
+                let mut bytes = [0; account_len::HOARD];
+                probe.encode(&mut bytes).expect("hoard probe encodes");
+                bytes.to_vec()
+            },
+        ),
+        terminal_value(
+            "position_cash",
+            position_role.clone(),
+            position.cash_atoms,
+            |v| {
+                let mut probe = position;
+                probe.cash_atoms = v;
+                let mut bytes = [0; account_len::POSITION];
+                probe.encode(&mut bytes).expect("position probe encodes");
+                bytes.to_vec()
+            },
+        ),
+    ];
+    let outcomes = usize::from(OUTCOME_COUNT);
+    const INTERNAL: [&str; 2] = ["position_internal_0", "position_internal_1"];
+    const TOTAL: [&str; 2] = ["kernel_total_supply_0", "kernel_total_supply_1"];
+    const EXTERNAL: [&str; 2] = ["external_balance_0", "external_balance_1"];
+    const LEDGER_INTERNAL: [&str; 2] = ["ledger_internal_0", "ledger_internal_1"];
+    const LEDGER_EXTERNAL: [&str; 2] = ["ledger_external_0", "ledger_external_1"];
+    for index in 0..outcomes {
+        values.push(terminal_value(
+            INTERNAL[index],
+            position_role.clone(),
+            position.internal[index],
+            |v| {
+                let mut probe = position;
+                probe.internal[index] = v;
+                let mut bytes = [0; account_len::POSITION];
+                probe.encode(&mut bytes).expect("position probe encodes");
+                bytes.to_vec()
+            },
+        ));
+        values.push(terminal_value(
+            TOTAL[index],
+            kernel_role.clone(),
+            kernel.total_supply[index],
+            |v| {
+                let mut probe = kernel;
+                probe.total_supply[index] = v;
+                let mut bytes = [0; KERNEL_ACCOUNT_LEN];
+                probe.encode(&mut bytes).expect("kernel probe encodes");
+                bytes.to_vec()
+            },
+        ));
+        values.push(terminal_value(
+            EXTERNAL[index],
+            external_role.clone(),
+            external.balances[index],
+            |v| {
+                let mut probe = external;
+                probe.balances[index] = v;
+                let mut bytes = [0; EXTERNAL_ACCOUNT_LEN];
+                probe.encode(&mut bytes).expect("external probe encodes");
+                bytes.to_vec()
+            },
+        ));
+        values.push(terminal_value(
+            LEDGER_INTERNAL[index],
+            supply_role.clone(),
+            supply.internal_supply[index],
+            |v| {
+                let mut probe = supply;
+                probe.internal_supply[index] = v;
+                let mut bytes = [0; account_len::SUPPLY_LEDGER];
+                probe.encode(&mut bytes).expect("ledger probe encodes");
+                bytes.to_vec()
+            },
+        ));
+        values.push(terminal_value(
+            LEDGER_EXTERNAL[index],
+            supply_role.clone(),
+            supply.external_supply[index],
+            |v| {
+                let mut probe = supply;
+                probe.external_supply[index] = v;
+                let mut bytes = [0; account_len::SUPPLY_LEDGER];
+                probe.encode(&mut bytes).expect("ledger probe encodes");
+                bytes.to_vec()
+            },
+        ));
+    }
+
+    let mut identities = vec![
+        TerminalIdentity {
+            name: "collateral conservation",
+            equation: format!(
+                "opening_cash ({WALK_CASH}) == position_cash + hoard_collateral"
+            ),
+            left: vec![constant("opening_cash", WALK_CASH)],
+            right: vec![observed("position_cash", 1), observed("hoard_collateral", 1)],
+        },
+        TerminalIdentity {
+            name: "the Hoard covers exactly the unredeemed obligations",
+            equation: format!(
+                "hoard_collateral == sum_i payout_weight[{}][i] * kernel_total_supply_i (denominator 1)",
+                kernel.resolved_payout
+            ),
+            left: vec![observed("hoard_collateral", 1)],
+            right: (0..outcomes)
+                .map(|index| observed(TOTAL[index], vector.weights[index]))
+                .collect(),
+        },
+        TerminalIdentity {
+            name: "the internal ledger drains to zero",
+            equation: "0 == sum_i position_internal_i".to_string(),
+            left: vec![constant("zero", 0)],
+            right: (0..outcomes).map(|index| observed(INTERNAL[index], 1)).collect(),
+        },
+        TerminalIdentity {
+            name: "the kernel supply is exactly the outstanding external claims",
+            equation: "sum_i kernel_total_supply_i == sum_i external_balance_i".to_string(),
+            left: (0..outcomes).map(|index| observed(TOTAL[index], 1)).collect(),
+            right: (0..outcomes).map(|index| observed(EXTERNAL[index], 1)).collect(),
+        },
+    ];
+    for index in 0..outcomes {
+        identities.push(TerminalIdentity {
+            name: "the supply ledger closes over outcome",
+            equation: format!(
+                "kernel_total_supply_{index} == ledger_internal_{index} + ledger_external_{index}"
+            ),
+            left: vec![observed(TOTAL[index], 1)],
+            right: vec![
+                observed(LEDGER_INTERNAL[index], 1),
+                observed(LEDGER_EXTERNAL[index], 1),
+            ],
+        });
+    }
+
+    /* Every identity must already hold over the derived numbers.  A gate that
+     * only checks these on-chain would let a wrong expectation ship. */
+    for identity in &identities {
+        let sum = |terms: &Vec<TerminalTerm>| -> u128 {
+            terms
+                .iter()
+                .map(|term| match term {
+                    TerminalTerm::Observed { label, scale } => {
+                        let value = values
+                            .iter()
+                            .find(|entry| entry.label == *label)
+                            .unwrap_or_else(|| panic!("no terminal value named {label}"));
+                        u128::from(value.expected) * u128::from(*scale)
+                    }
+                    TerminalTerm::Constant { value, .. } => u128::from(*value),
+                })
+                .sum()
+        };
+        assert_eq!(
+            sum(&identity.left),
+            sum(&identity.right),
+            "the walk's terminal state does not close `{}`",
+            identity.equation
+        );
+    }
+
+    (values, identities)
+}
+
+/* ---- The walk's transactions ------------------------------------------ */
+
+fn walk_step(
+    ordinal: u32,
+    case: &str,
+    title: &str,
+    project_item: &'static str,
+    narrative: &str,
+) -> WalkStep {
+    WalkStep {
+        ordinal,
+        case: case.to_string(),
+        title: title.to_string(),
+        project_item,
+        narrative: narrative.to_string(),
+    }
+}
+
+fn build_lifecycle(f: &Fixture) -> Lifecycle {
+    let shared = &f.shared;
+    let walk = &f.walk;
+    let actor = shared.actor.bytes;
+    let mut cases = Vec::new();
+    let mut steps = Vec::new();
+
+    /* 1. CreateMarket, over eight all-zero canonically addressed accounts. */
+    let create = layout_request(0, create_intent(shared, NONCE_WALK_FOUND));
+    let mut create_compares: Vec<Compare> = walk
+        .found
+        .state_roles()
+        .iter()
+        .map(|(role, _)| compare_of(&walk.found, role, output_slice(&walk.founded, role)))
+        .collect();
+    create_compares.push(compare_of(
+        &walk.found,
+        "resolution",
+        &walk.founded_resolution,
+    ));
+    let mut case = Case::accept(
+        "walk-01-create-market",
+        "Lifecycle",
+        "layout re-encode + reference::validate_market_init",
+        "found the walk's market: the collateral cap, payout set, and feed all come from the immutable terms artifact and nothing else",
+        create_transaction(shared, &walk.found, actor, true, create),
+        1,
+        create_compares,
+    );
+    case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+    cases.push(case);
+    steps.push(walk_step(
+        1,
+        "walk-01-create-market",
+        "create the market",
+        "1",
+        "Eight all-zero accounts at their canonical addresses become one active market. The collateral cap, the outcome basis, the payout set, and the feed identity are read out of the frozen terms artifact; the instruction chooses none of them.",
+    ));
+
+    /* 2. Split. */
+    let split = walk_layout_request(&walk.open, 0);
+    let split_post = walk
+        .open
+        .layout(shared, &split, actor, true)
+        .expect("the walk splits");
+    let message = seam_message(shared, &walk.open, actor, true, None);
+    cases.push(Case::accept(
+        "walk-02-split",
+        "Lifecycle",
+        "reference::apply",
+        "split the funded position into complete sets",
+        transaction(
+            &message,
+            &[seam_instruction(
+                &message, shared, &walk.open, actor, None, split,
+            )],
+        ),
+        1,
+        state_compares(&walk.open, &split_post),
+    ));
+    steps.push(walk_step(
+        2,
+        "walk-02-split",
+        "split internally",
+        "4",
+        "One collateral debit credits one unit of every Egg. No mint CPI, no token account: the complete set lives in the position's internal balances and the Hoard's collateral rises by exactly the quantity split.",
+    ));
+
+    /* 3. Materialize. */
+    let materialize = walk_layout_request(&walk.split, 1);
+    let materialize_post = walk
+        .split
+        .layout(shared, &materialize, actor, true)
+        .expect("the walk materializes");
+    let message = seam_message(shared, &walk.split, actor, true, None);
+    cases.push(Case::accept(
+        "walk-03-materialize",
+        "Lifecycle",
+        "reference::apply",
+        "materialize part of the winning outcome into the external shadow",
+        transaction(
+            &message,
+            &[seam_instruction(
+                &message,
+                shared,
+                &walk.split,
+                actor,
+                None,
+                materialize,
+            )],
+        ),
+        1,
+        state_compares(&walk.split, &materialize_post),
+    ));
+    steps.push(walk_step(
+        3,
+        "walk-03-materialize",
+        "materialize one Egg",
+        "5",
+        "Part of one outcome leaves the internal ledger for the external shadow. `total_i` is preserved exactly: what the position loses internally the shadow gains, and the Hoard does not move.",
+    ));
+
+    /* 4. Dematerialize. */
+    let dematerialize = walk_layout_request(&walk.materialized, 2);
+    let dematerialize_post = walk
+        .materialized
+        .layout(shared, &dematerialize, actor, true)
+        .expect("the walk dematerializes");
+    let message = seam_message(shared, &walk.materialized, actor, true, None);
+    cases.push(Case::accept(
+        "walk-04-dematerialize",
+        "Lifecycle",
+        "reference::apply",
+        "bring part of the materialized outcome back to the internal ledger",
+        transaction(
+            &message,
+            &[seam_instruction(
+                &message,
+                shared,
+                &walk.materialized,
+                actor,
+                None,
+                dematerialize,
+            )],
+        ),
+        1,
+        state_compares(&walk.materialized, &dematerialize_post),
+    ));
+    steps.push(walk_step(
+        4,
+        "walk-04-dematerialize",
+        "dematerialize part of it",
+        "5",
+        "The reverse boundary crossing, for part of what was materialized. The remainder stays outstanding on the external side for the rest of the walk and is what the terminal Hoard has to cover.",
+    ));
+
+    /* 5. Merge, while the market is still active. */
+    let merge = walk_layout_request(&walk.dematerialized, 3);
+    let merge_post = walk
+        .dematerialized
+        .layout(shared, &merge, actor, true)
+        .expect("the walk merges");
+    let message = seam_message(shared, &walk.dematerialized, actor, true, None);
+    cases.push(Case::accept(
+        "walk-05-merge",
+        "Lifecycle",
+        "reference::apply",
+        "recombine complete sets into cash before resolution",
+        transaction(
+            &message,
+            &[seam_instruction(
+                &message,
+                shared,
+                &walk.dematerialized,
+                actor,
+                None,
+                merge,
+            )],
+        ),
+        1,
+        state_compares(&walk.dematerialized, &merge_post),
+    ));
+    steps.push(walk_step(
+        5,
+        "walk-05-merge",
+        "merge complete sets back",
+        "4",
+        "The promise of section 1 exercised: a complete set can always be recombined into its collateral **before** resolution. Cash rises and the Hoard falls by the same quantity. Step 8 records what happens to the same request after resolution.",
+    ));
+
+    /* 6. Three FeedAdvance instructions, sequenced by the bank. */
+    cases.push(Case::accept(
+        "walk-06-feed-advance",
+        "Lifecycle",
+        "accumulator fold + FeedAccount codec",
+        "three contiguous observation pages in one transaction; the bank sequences them and the cursor lands exactly on the window's maturity bound",
+        walk_advance_transaction(shared, walk, actor),
+        WALK_PAGE_BOUNDS.len(),
+        vec![Compare {
+            role: "walk.feed".to_string(),
+            address: shared.advance_feed_head.address.clone(),
+            expected: walk.advanced_feed_bytes.to_vec(),
+            pre: shared.advance_feed_bytes.to_vec(),
+        }],
+    ));
+    steps.push(walk_step(
+        6,
+        "walk-06-feed-advance",
+        "advance the shared feed three times",
+        "6, 7",
+        "Three observation pages fold into one feed head inside one transaction, so the bank -- not this harness -- sequences the chain and page three is read against page two's writes. The cursor moves 100 -> 102 -> 103 -> 104, and 104 is exactly the maturity bound the market's window needs before it can seal.",
+    ));
+
+    /* 7. Resolve. */
+    let window = encode_window(shared.feed, &winning_records());
+    let resolve = resolve_request(4, WINNING_PAYOUT_INDEX);
+    let resolve_post = walk
+        .merged
+        .gate(shared, &resolve, &window, true, actor, true)
+        .expect("the walk resolves");
+    let mut resolve_compares = state_compares(&walk.merged, &resolve_post);
+    resolve_compares.push(compare_of(
+        &walk.merged,
+        "resolution",
+        &resolve_post
+            .resolution
+            .expect("a resolve writes a resolution record"),
+    ));
+    let mut case = Case::accept(
+        "walk-07-resolve",
+        "Lifecycle",
+        "reference::apply_with_evidence",
+        "seal the window from the observation records and resolve onto the cell they select",
+        gate_transaction(
+            shared,
+            &walk.merged,
+            &f.resolve_buffer,
+            actor,
+            true,
+            true,
+            resolve.clone(),
+        ),
+        1,
+        resolve_compares,
+    );
+    case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+    cases.push(case);
+    steps.push(walk_step(
+        7,
+        "walk-07-resolve",
+        "seal the window and resolve",
+        "7, 9",
+        "No reporter chooses the cell. The buffer carries observation records; the gate folds them through the accumulator's Open -> Mature -> Sealed machine against the terms' own window domain, reads the matured cursor off the feed head, and the payout index the caller named must be the one the sealed window selects.",
+    ));
+
+    /* 8. Merge after resolution: refused, and that is the point. */
+    let late_merge = layout_request(
+        5,
+        Intent::Merge {
+            market: walk.resolved.market_id,
+            owner: walk.resolved.owner,
+            quantity: walk_redeem_winning(),
+        },
+    );
+    let late_refusal = walk
+        .resolved
+        .layout(shared, &late_merge, actor, true)
+        .expect_err("the oracle refuses a merge on a resolved market");
+    /* The two implementations refuse the same request and name it differently,
+     * and that difference is documented rather than papered over: this program
+     * refines the reference's generic `MismatchedState` into `NotActive`.  The
+     * assertion pins the reference half so a drift on either side is loud. */
+    assert_eq!(
+        shared_class_code(late_refusal),
+        0x300e,
+        "the offline reference must refuse a post-resolution merge as MismatchedState"
+    );
+    let message = seam_message(shared, &walk.resolved, actor, true, None);
+    cases.push(Case::refuse(
+        "walk-08-merge-after-resolve",
+        "Lifecycle",
+        "recombine a complete set after resolution: the boundary section 1 draws, driven",
+        transaction(
+            &message,
+            &[seam_instruction(
+                &message,
+                shared,
+                &walk.resolved,
+                actor,
+                None,
+                late_merge,
+            )],
+        ),
+        code::NOT_ACTIVE,
+        refusal_text(late_refusal),
+    ));
+    steps.push(walk_step(
+        8,
+        "walk-08-merge-after-resolve",
+        "merge after resolution is refused",
+        "4, 10",
+        "The same complete-set merge that step 5 accepted is refused once the market has resolved. This is the boundary the product model draws -- recombination is a pre-resolution right -- and after this point the only way out of a claim is redemption, which is what makes the terminal accounting a redemption identity rather than a merge identity.",
+    ));
+
+    /* 9. Redeem the winning internal claims. */
+    let redeem_win = redeem_request(5, WALK_OUTCOME_WIN, walk_redeem_winning());
+    let redeem_win_post = walk
+        .resolved
+        .gate(shared, &redeem_win, &[], false, actor, true)
+        .expect("the walk redeems its winning claims");
+    assert_eq!(
+        redeem_win_post.redemption_payout,
+        walk_redeem_winning(),
+        "the winning outcome pays one atom per claim"
+    );
+    let mut redeem_win_compares = state_compares(&walk.resolved, &redeem_win_post);
+    redeem_win_compares.push(compare_of(
+        &walk.resolved,
+        "resolution",
+        &redeem_win_post
+            .resolution
+            .expect("a redemption returns the record unchanged"),
+    ));
+    let mut case = Case::accept(
+        "walk-09-redeem-winning",
+        "Lifecycle",
+        "reference::apply_with_evidence",
+        "redeem every internal claim on the winning outcome; the resolution record is read-only and must come back unchanged",
+        gate_transaction(
+            shared,
+            &walk.resolved,
+            &f.redeem_buffer,
+            actor,
+            true,
+            false,
+            redeem_win,
+        ),
+        1,
+        redeem_win_compares,
+    );
+    case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+    cases.push(case);
+    steps.push(walk_step(
+        9,
+        "walk-09-redeem-winning",
+        "redeem the winning internal claims",
+        "9",
+        "The first payoff shape: the unit vector on the realized cell. Collateral leaves the Hoard for the position's cash, one atom per claim, and the resolution record the redemption reads is presented read-only so a redemption can never edit its own authority.",
+    ));
+
+    /* 10. Redeem the losing claims: they pay zero. */
+    let redeem_lose = redeem_request(6, WALK_OUTCOME_LOSE, walk_redeem_losing());
+    let mut redeem_lose_compares = state_compares(&walk.redeemed, &walk.terminal);
+    redeem_lose_compares.push(compare_of(
+        &walk.redeemed,
+        "resolution",
+        &walk
+            .terminal
+            .resolution
+            .expect("a redemption returns the record unchanged"),
+    ));
+    let mut case = Case::accept(
+        "walk-10-redeem-losing",
+        "Lifecycle",
+        "reference::apply_with_evidence",
+        "redeem every internal claim on the losing outcome; the claims burn and the payout is exactly zero",
+        gate_transaction(
+            shared,
+            &walk.redeemed,
+            &f.redeem_buffer,
+            actor,
+            true,
+            false,
+            redeem_lose,
+        ),
+        1,
+        redeem_lose_compares,
+    );
+    case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+    cases.push(case);
+    steps.push(walk_step(
+        10,
+        "walk-10-redeem-losing",
+        "redeem the losing claims for zero",
+        "9, 10",
+        "The second payoff shape: the zero vector on an unrealized cell. The claims are burned and the Hoard does not move by one atom, which is the half of the solvency promise that is easy to state and easy to get wrong. After this the walk's internal ledger is empty and the terminal identity can be read.",
+    ));
+
+    let (values, identities) = walk_terminal(walk);
+
+    let skips = vec![
+        WalkSkip {
+            project_item: "1 (in part)",
+            title: "initialize a Realm",
+            reason: "SKIPPED: there is no Realm, Profile, price-grid, or terms initialization instruction in this program. The walk drives `CreateMarket` and nothing else of item 1; the Realm-wide plane is loaded at genesis as frozen bytes the frozen codecs accept."
+                .to_string(),
+        },
+        WalkSkip {
+            project_item: "2",
+            title: "prepay all mandatory work",
+            reason: "SKIPPED: no endowment, prepayment, or deposit instruction exists, and nothing in this instruction set moves collateral into a Position. The walk credits its opening cash in the fixture, which is the one field of the opening state `CreateMarket` did not write."
+                .to_string(),
+        },
+        WalkSkip {
+            project_item: "3",
+            title: "compile and prove one exhaustive state partition",
+            reason: "NOTED, not driven: the immutable terms artifact **is** the compiled partition -- outcome count, payout vectors, payout map, knots, statistic, edge and ambiguity policies -- frozen into one digest the market binds and the resolve gate re-reads. There is no on-chain compiler instruction and none is claimed; the walk's step 1 consumes the artifact rather than producing it."
+                .to_string(),
+        },
+        WalkSkip {
+            project_item: "8",
+            title: "clear one coupled simplex batch with portfolio intents",
+            reason: "SKIPPED for two independent reasons: `PlaceOrder` has no SVM oracle -- the offline reference adapter models no order family, so there is no second implementation for a differential to disagree with -- and settlement awaits the streaming verifier on-chain. The batch-auction plane is loaded at genesis and no implemented instruction transacts against it."
+                .to_string(),
+        },
+        WalkSkip {
+            project_item: "11",
+            title: "reproduce in the Rocq model, the Verus-verified kernel, and the SBF harness",
+            reason: "OUT OF SCOPE for this walk per the standing deprioritization. This walk is the SBF-harness leg alone; it makes no claim about the other two legs and is not a triple reproduction."
+                .to_string(),
+        },
+    ];
+
+    let notes = vec![
+        "`simulateTransaction` never commits, so one address carries one pre-state per genesis. Each step of the walk therefore runs on its own market plane, whose genesis is the offline reference adapter's post-state after every earlier step. Only the market identity differs between planes; the state trajectory is one chain, and the harness asserts the chaining at build time."
+            .to_string(),
+        "Step 6 is the exception: three `FeedAdvance` instructions ride in one transaction against one writable feed head, so the bank sequences that chain itself."
+            .to_string(),
+        "The feed head step 6 advances and the feed head step 7 resolves against are two accounts of two feed identities, because the same address cannot hold both cursor 100 and cursor 104 in one genesis. The harness asserts that step 6's three advances land the cursor on exactly the value step 7's head carries, which is the only fact the resolve gate reads off a feed head."
+            .to_string(),
+        "No signature is verified anywhere in this walk: every transaction is simulated with `sigVerify: false`. The `is_signer` bits the program reads do come from the transaction message header, and that is the whole of what the authorization steps establish."
+            .to_string(),
+    ];
+
+    Lifecycle {
+        steps,
+        skips,
+        notes,
+        cases,
+        terminal_case: "walk-10-redeem-losing".to_string(),
+        values,
+        identities,
+    }
+}
+
 impl Plane {
     /// A shallow copy of one plane at a different state, for chained oracles.
     fn clone_state(source: &Plane, state: &TransitionOutput) -> Plane {
@@ -3065,78 +4352,108 @@ fn json_list(items: &[String]) -> String {
     format!("[{}]", items.join(", "))
 }
 
-fn main() {
-    let out_dir = PathBuf::from(
-        std::env::args()
-            .nth(1)
-            .expect("usage: clutch-sbf-harness <out-dir>"),
-    );
-    for sub in ["accounts", "expected", "tx"] {
-        fs::create_dir_all(out_dir.join(sub)).expect("create plan directory");
-    }
-
-    let f = build_fixture();
-    let shared = &f.shared;
-    let mut plan = Plan::default();
-
-    /* Realm-wide accounts. */
-    plan.account("realm", &shared.realm, &shared.realm_bytes);
-    plan.account("profile", &shared.profile, &shared.profile_bytes);
-    plan.account("grid", &shared.grid, &shared.grid_bytes);
-    plan.account("terms", &shared.terms, &shared.terms_bytes);
-    plan.account("feed", &shared.feed_head, &shared.feed_bytes);
-    plan.account(
-        "advance-feed",
-        &shared.advance_feed_head,
-        &shared.advance_feed_bytes,
-    );
-
-    /* Every market plane. */
-    for plane in [&f.seam, &f.held, &f.shadow, &f.redeem, &f.create] {
-        for (role, pda) in plane.state_roles() {
-            plan.account(
-                &format!("{}.{role}", plane.label),
-                pda,
-                plane.state_slice(role),
-            );
+/// Serialize the lifecycle walk into the plan.
+///
+/// The walk is emitted as its own block rather than mixed into `cases`, so the
+/// existing per-family bring-up gate runs exactly what it ran before and the
+/// walk is one separate, ordered, all-or-nothing gate.
+fn lifecycle_json(walk: &Lifecycle, cases: &[String]) -> String {
+    let steps: Vec<String> = walk
+        .steps
+        .iter()
+        .map(|step| {
+            format!(
+                "      {{\"ordinal\": {}, \"case\": {}, \"title\": {}, \"project_item\": {}, \"narrative\": {}}}",
+                step.ordinal,
+                json_string(&step.case),
+                json_string(&step.title),
+                json_string(step.project_item),
+                json_string(&step.narrative)
+            )
+        })
+        .collect();
+    let skips: Vec<String> = walk
+        .skips
+        .iter()
+        .map(|skip| {
+            format!(
+                "      {{\"project_item\": {}, \"title\": {}, \"reason\": {}}}",
+                json_string(skip.project_item),
+                json_string(skip.title),
+                json_string(&skip.reason)
+            )
+        })
+        .collect();
+    let notes: Vec<String> = walk
+        .notes
+        .iter()
+        .map(|note| format!("      {}", json_string(note)))
+        .collect();
+    let values: Vec<String> = walk
+        .values
+        .iter()
+        .map(|value| {
+            format!(
+                "        {{\"label\": {}, \"role\": {}, \"offset\": {}, \"width\": {}, \"expected\": {}}}",
+                json_string(value.label),
+                json_string(&value.role),
+                value.offset,
+                value.width,
+                value.expected
+            )
+        })
+        .collect();
+    let term = |term: &TerminalTerm| match term {
+        TerminalTerm::Observed { label, scale } => {
+            format!("{{\"label\": {}, \"scale\": {scale}}}", json_string(label))
         }
-        plan.account(
-            &format!("{}.resolution", plane.label),
-            &plane.resolution,
-            &plane.resolution_bytes,
-        );
-    }
+        TerminalTerm::Constant { name, value } => {
+            format!(
+                "{{\"constant\": {}, \"value\": {value}}}",
+                json_string(name)
+            )
+        }
+    };
+    let identities: Vec<String> = walk
+        .identities
+        .iter()
+        .map(|identity| {
+            format!(
+                "        {{\"name\": {}, \"equation\": {}, \"left\": [{}], \"right\": [{}]}}",
+                json_string(identity.name),
+                json_string(&identity.equation),
+                identity
+                    .left
+                    .iter()
+                    .map(term)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                identity
+                    .right
+                    .iter()
+                    .map(term)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+        .collect();
+    format!(
+        "{{\n    \"steps\": [\n{}\n    ],\n    \"skipped\": [\n{}\n    ],\n    \"notes\": [\n{}\n    ],\n    \"terminal\": {{\n      \"case\": {},\n      \"values\": [\n{}\n      ],\n      \"identities\": [\n{}\n      ]\n    }},\n    \"cases\": [\n{}\n    ]\n  }}",
+        steps.join(",\n"),
+        skips.join(",\n"),
+        notes.join(",\n"),
+        json_string(&walk.terminal_case),
+        values.join(",\n"),
+        identities.join(",\n"),
+        cases.join(",\n")
+    )
+}
 
-    /* The batch-auction plane, bound to the seam market. */
-    plan.account("epoch", &f.batch.epoch, &f.batch.epoch_bytes);
-    plan.account("page", &f.batch.page, &f.batch.page_bytes);
-    plan.account("candidate", &f.batch.candidate, &f.batch.candidate_bytes);
-    plan.account("pot", &f.batch.pot, &f.batch.pot_bytes);
-    plan.account("receipt", &f.batch.receipt, &f.batch.receipt_bytes);
-
-    /* Caller-supplied buffers, and the imposter replay account. */
-    plan.account("resolve-buffer", &f.resolve_buffer, &f.resolve_buffer_bytes);
-    plan.account("redeem-buffer", &f.redeem_buffer, &f.redeem_buffer_bytes);
-    plan.account("page-buffer", &f.page_buffer, &f.page_buffer_bytes);
-    plan.account("replay-imposter", &shared.imposter, &f.seam.state.replay);
-
-    plan.cases = build_cases(&f);
-
-    /* Files. */
-    let program_address = shared.program.address.clone();
-    let mut genesis_lines = String::new();
-    for account in &plan.genesis {
-        let file = format!("accounts/{}.json", account.role);
-        write(
-            &out_dir.join(&file),
-            &account_json(&account.address, &program_address, &account.data),
-        );
-        genesis_lines.push_str(&format!("{} {} {}\n", account.role, account.address, file));
-    }
-    write(&out_dir.join("genesis.txt"), &genesis_lines);
-
+/// Write every transaction and expectation of one case list, and return the
+/// JSON object each case emits into the plan.
+fn emit_cases(out_dir: &Path, cases: &[Case]) -> Vec<String> {
     let mut case_json = Vec::new();
-    for case in &plan.cases {
+    for case in cases {
         let tx_file = format!("tx/{}.b64", case.name);
         write(
             &out_dir.join(&tx_file),
@@ -3215,6 +4532,107 @@ fn main() {
         }
         case_json.push(format!("    {{{}}}", fields.join(", ")));
     }
+    case_json
+}
+
+fn main() {
+    let out_dir = PathBuf::from(
+        std::env::args()
+            .nth(1)
+            .expect("usage: clutch-sbf-harness <out-dir>"),
+    );
+    for sub in ["accounts", "expected", "tx"] {
+        fs::create_dir_all(out_dir.join(sub)).expect("create plan directory");
+    }
+
+    let f = build_fixture();
+    let shared = &f.shared;
+    let mut plan = Plan::default();
+
+    /* Realm-wide accounts. */
+    plan.account("realm", &shared.realm, &shared.realm_bytes);
+    plan.account("profile", &shared.profile, &shared.profile_bytes);
+    plan.account("grid", &shared.grid, &shared.grid_bytes);
+    plan.account("terms", &shared.terms, &shared.terms_bytes);
+    plan.account("feed", &shared.feed_head, &shared.feed_bytes);
+    plan.account(
+        "advance-feed",
+        &shared.advance_feed_head,
+        &shared.advance_feed_bytes,
+    );
+
+    /* Every market plane. */
+    for plane in [&f.seam, &f.held, &f.shadow, &f.redeem, &f.create] {
+        for (role, pda) in plane.state_roles() {
+            plan.account(
+                &format!("{}.{role}", plane.label),
+                pda,
+                plane.state_slice(role),
+            );
+        }
+        plan.account(
+            &format!("{}.resolution", plane.label),
+            &plane.resolution,
+            &plane.resolution_bytes,
+        );
+    }
+
+    /* The batch-auction plane, bound to the seam market. */
+    plan.account("epoch", &f.batch.epoch, &f.batch.epoch_bytes);
+    plan.account("page", &f.batch.page, &f.batch.page_bytes);
+    plan.account("candidate", &f.batch.candidate, &f.batch.candidate_bytes);
+    plan.account("pot", &f.batch.pot, &f.batch.pot_bytes);
+    plan.account("receipt", &f.batch.receipt, &f.batch.receipt_bytes);
+
+    /* Caller-supplied buffers, and the imposter replay account. */
+    plan.account("resolve-buffer", &f.resolve_buffer, &f.resolve_buffer_bytes);
+    plan.account("redeem-buffer", &f.redeem_buffer, &f.redeem_buffer_bytes);
+    plan.account("page-buffer", &f.page_buffer, &f.page_buffer_bytes);
+    plan.account("replay-imposter", &shared.imposter, &f.seam.state.replay);
+
+    /* Every plane of the lifecycle walk, plus its three observation pages.
+     * A walk plane's genesis is the offline reference adapter's post-state
+     * after every earlier step of the walk; none of it is hand-written. */
+    for plane in f.walk.planes() {
+        for (role, pda) in plane.state_roles() {
+            plan.account(
+                &format!("{}.{role}", plane.label),
+                pda,
+                plane.state_slice(role),
+            );
+        }
+        plan.account(
+            &format!("{}.resolution", plane.label),
+            &plane.resolution,
+            &plane.resolution_bytes,
+        );
+    }
+    for (index, page) in f.walk.pages.iter().enumerate() {
+        plan.account(
+            &format!("walk-page-{index}"),
+            page,
+            &f.walk.page_bytes[index],
+        );
+    }
+
+    plan.cases = build_cases(&f);
+    let lifecycle = build_lifecycle(&f);
+
+    /* Files. */
+    let program_address = shared.program.address.clone();
+    let mut genesis_lines = String::new();
+    for account in &plan.genesis {
+        let file = format!("accounts/{}.json", account.role);
+        write(
+            &out_dir.join(&file),
+            &account_json(&account.address, &program_address, &account.data),
+        );
+        genesis_lines.push_str(&format!("{} {} {}\n", account.role, account.address, file));
+    }
+    write(&out_dir.join("genesis.txt"), &genesis_lines);
+
+    let case_json = emit_cases(&out_dir, &plan.cases);
+    let walk_json = emit_cases(&out_dir, &lifecycle.cases);
 
     let genesis_json: Vec<String> = plan
         .genesis
@@ -3230,14 +4648,15 @@ fn main() {
         .collect();
 
     let plan_json = format!(
-        "{{\n  \"program_id\": {},\n  \"payer\": {},\n  \"actor\": {},\n  \"stranger\": {},\n  \"imposter\": {},\n  \"genesis\": [\n{}\n  ],\n  \"cases\": [\n{}\n  ]\n}}\n",
+        "{{\n  \"program_id\": {},\n  \"payer\": {},\n  \"actor\": {},\n  \"stranger\": {},\n  \"imposter\": {},\n  \"genesis\": [\n{}\n  ],\n  \"cases\": [\n{}\n  ],\n  \"lifecycle\": {}\n}}\n",
         json_string(&program_address),
         json_string(&shared.payer.address),
         json_string(&shared.actor.address),
         json_string(&shared.stranger.address),
         json_string(&shared.imposter.address),
         genesis_json.join(",\n"),
-        case_json.join(",\n")
+        case_json.join(",\n"),
+        lifecycle_json(&lifecycle, &walk_json)
     );
     write(&out_dir.join("plan.json"), &plan_json);
 
@@ -3271,6 +4690,23 @@ fn main() {
                 case.name, case.reference
             ),
         }
+    }
+
+    println!(
+        "lifecycle    {} steps, {} skipped section-10 items, {} terminal readouts, {} identities",
+        lifecycle.steps.len(),
+        lifecycle.skips.len(),
+        lifecycle.values.len(),
+        lifecycle.identities.len()
+    );
+    for step in &lifecycle.steps {
+        println!(
+            "  step {:>2}  {:<26} {}",
+            step.ordinal, step.case, step.title
+        );
+    }
+    for skip in &lifecycle.skips {
+        println!("  skip item {:<12} {}", skip.project_item, skip.title);
     }
 }
 
@@ -3386,7 +4822,8 @@ mod tests {
     #[test]
     fn every_transaction_fits_one_legacy_packet() {
         let f = build_fixture();
-        for case in build_cases(&f) {
+        let walk = build_lifecycle(&f);
+        for case in build_cases(&f).iter().chain(walk.cases.iter()) {
             assert!(
                 case.tx.len() <= 1232,
                 "{} is {} bytes",
@@ -3394,5 +4831,112 @@ mod tests {
                 case.tx.len()
             );
         }
+    }
+
+    #[test]
+    fn the_lifecycle_walk_is_one_ordered_chain() {
+        /* Building the walk runs the offline reference adapter forward over
+         * every step, asserts that each plane's genesis is the previous step's
+         * post-state at the right replay sequence, asserts that the opening
+         * state is `CreateMarket`'s own post-state plus exactly one credited
+         * field, asserts that the three feed advances land the cursor on the
+         * window's maturity bound, and asserts every terminal accounting
+         * identity over derived numbers.  A walk that stopped being a chain is
+         * a panic in here rather than a green differential over a fiction. */
+        let f = build_fixture();
+        let walk = build_lifecycle(&f);
+        assert_eq!(walk.steps.len(), 10, "the walk is ten steps");
+        for (index, step) in walk.steps.iter().enumerate() {
+            assert_eq!(step.ordinal as usize, index + 1, "the walk is ordered");
+            let case = walk
+                .cases
+                .iter()
+                .find(|case| case.name == step.case)
+                .unwrap_or_else(|| panic!("step {} names no case", step.ordinal));
+            assert!(
+                !step.narrative.is_empty() && !step.title.is_empty(),
+                "step {} records no narrative",
+                step.ordinal
+            );
+            assert!(
+                case.compare.is_some() || case.expect_code.is_some(),
+                "step {} is neither an accept nor a refusal",
+                step.ordinal
+            );
+        }
+        assert_eq!(
+            walk.cases.len(),
+            walk.steps.len(),
+            "every walk case belongs to exactly one step"
+        );
+        assert_eq!(
+            walk.cases
+                .iter()
+                .filter(|case| case.expect_code.is_some())
+                .count(),
+            1,
+            "the walk carries exactly one recorded refusal: the post-resolution merge"
+        );
+    }
+
+    #[test]
+    fn the_walk_records_every_section_ten_item_it_cannot_drive() {
+        let f = build_fixture();
+        let walk = build_lifecycle(&f);
+        for item in ["1 (in part)", "2", "3", "8", "11"] {
+            let skip = walk
+                .skips
+                .iter()
+                .find(|skip| skip.project_item == item)
+                .unwrap_or_else(|| panic!("PROJECT.md section 10 item {item} is silently absent"));
+            assert!(
+                skip.reason.len() > 40,
+                "item {item} is skipped without a reason"
+            );
+        }
+    }
+
+    #[test]
+    fn the_terminal_identity_is_read_out_of_the_walks_own_last_post_state() {
+        let f = build_fixture();
+        let walk = build_lifecycle(&f);
+        let terminal = walk
+            .cases
+            .iter()
+            .find(|case| case.name == walk.terminal_case)
+            .expect("the terminal case");
+        let compares = terminal.compare.as_ref().expect("an accepting case");
+        for value in &walk.values {
+            let compare = compares
+                .iter()
+                .find(|compare| compare.role == value.role)
+                .unwrap_or_else(|| {
+                    panic!("{} names a role the walk does not compare", value.label)
+                });
+            let window = &compare.expected[value.offset..value.offset + value.width];
+            let mut bytes = [0_u8; 8];
+            bytes.copy_from_slice(window);
+            assert_eq!(
+                u64::from_le_bytes(bytes),
+                value.expected,
+                "{} is not at the offset the probe found",
+                value.label
+            );
+        }
+    }
+
+    #[test]
+    fn the_walk_drains_every_internal_claim() {
+        /* The economic content of the walk, stated once, in one place: the
+         * position ends with nothing internal, the Hoard ends holding exactly
+         * the claims that were materialized and never brought back, and the
+         * cash it did not keep is that same number. */
+        let f = build_fixture();
+        let terminal = &f.walk.terminal;
+        let hoard = HoardAccount::decode(&terminal.hoard).expect("hoard");
+        let position = PositionAccount::decode(&terminal.position).expect("position");
+        assert_eq!(position.internal, [0; MAX_OUTCOMES]);
+        assert_eq!(hoard.collateral_atoms, walk_unredeemed_external());
+        assert_eq!(position.cash_atoms + hoard.collateral_atoms, WALK_CASH);
     }
 }

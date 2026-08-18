@@ -7,6 +7,11 @@
 # pre-state account loaded at genesis, and compares the SVM post-state against
 # the oracle post-state byte for byte, for every implemented instruction family.
 #
+# It then runs the PROJECT.md section-10 **lifecycle walk** in the same
+# validator session: one market taken end to end as one ordered gate, closing
+# with the section-10 item-10 accounting identity read out of the on-chain
+# bytes.  Both stages must pass for this script to exit zero.
+#
 # It touches no public network, signs nothing, and deploys nothing.  It is
 # bring-up evidence for an instruction set, not a deployment.
 #
@@ -159,6 +164,78 @@ MUTATE
     grep -m1 'on-chain bytes != oracle bytes' "$log/falsify.log" | sed 's/^/  /'
   fi
   mv "$victim.orig" "$victim"
+fi
+
+echo
+echo "== the PROJECT.md section 10 lifecycle walk (same validator session) =="
+# One market, walked end to end, as ONE gate.  The walk is not ten more
+# independent checks: any step that diverges, refuses where it should accept,
+# or accepts where it should refuse fails the whole walk, and the terminal
+# accounting identity is part of the same gate.
+walk_status=0
+python3 "$here/simulate.py" --url "$url" --plan "$plan" --lifecycle 2>&1 \
+  | tee "$log/lifecycle.log" || walk_status=$?
+if [ "$walk_status" -eq 0 ] && ! grep -q '^PASS$' "$log/lifecycle.log"; then
+  walk_status=1
+fi
+if [ "$walk_status" -ne 0 ]; then
+  status=1
+fi
+
+if [ "$walk_status" -eq 0 ]; then
+  echo
+  echo "== lifecycle falsifiability self-check (same validator session) =="
+  # The terminal identity is the one claim in this repository that reads a
+  # number off the chain and asserts an equation over it, so it gets its own
+  # falsification: first the readout (does the gate really compare the bytes
+  # the bank returned?), then the arithmetic (does the gate really evaluate
+  # the equation?).  Both mutations must turn the walk red.
+  cp "$plan/plan.json" "$plan/plan.json.orig"
+
+  python3 - "$plan/plan.json" <<'MUTATE'
+import json
+import sys
+
+path = sys.argv[1]
+plan = json.load(open(path))
+values = plan["lifecycle"]["terminal"]["values"]
+target = next(value for value in values if value["label"] == "hoard_collateral")
+target["expected"] += 1
+json.dump(plan, open(path, "w"))
+MUTATE
+  if python3 "$here/simulate.py" --url "$url" --plan "$plan" --lifecycle \
+      > "$log/lifecycle-falsify-readout.log" 2>&1; then
+    echo "FAIL: a mutated terminal readout still passed"
+    status=1
+  else
+    echo "the terminal Hoard expectation was moved by one atom; the walk went red:"
+    grep -m1 'terminal identity:' "$log/lifecycle-falsify-readout.log" | sed 's/^/  /'
+  fi
+  cp "$plan/plan.json.orig" "$plan/plan.json"
+
+  python3 - "$plan/plan.json" <<'MUTATE'
+import json
+import sys
+
+path = sys.argv[1]
+plan = json.load(open(path))
+for identity in plan["lifecycle"]["terminal"]["identities"]:
+    for term in identity["right"]:
+        if term.get("label") == "kernel_total_supply_1" and term.get("scale") == 1:
+            term["scale"] = 2
+            json.dump(plan, open(path, "w"))
+            sys.exit(0)
+raise SystemExit("no identity term to mutate")
+MUTATE
+  if python3 "$here/simulate.py" --url "$url" --plan "$plan" --lifecycle \
+      > "$log/lifecycle-falsify-identity.log" 2>&1; then
+    echo "FAIL: a mutated accounting identity still closed"
+    status=1
+  else
+    echo "one payout weight in one identity was doubled; the walk went red:"
+    grep -m1 'does not close' "$log/lifecycle-falsify-identity.log" | sed 's/^/  /'
+  fi
+  mv "$plan/plan.json.orig" "$plan/plan.json"
 fi
 
 echo "${hashes[0]}" > "$work/elf.sha256"
