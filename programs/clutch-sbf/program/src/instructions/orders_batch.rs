@@ -1,41 +1,94 @@
 //! `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SettlePage`.
 //!
-//! This module owns the batch-auction plane's account lists.  Exactly one of
-//! its three intents is implemented: [`Intent::PlaceOrder`] appends one
-//! single-Egg record to an open order page.  The other two refuse, each for a
-//! *measured or structural* reason written down below rather than for "not
-//! written yet", and neither reads an account.
+//! This module owns the batch-auction plane's account lists.  Two of its three
+//! intents are implemented: [`Intent::PlaceOrder`] appends one order — of
+//! either family — to an open order page, and [`Intent::CancelOrder`] retires
+//! one in place.  The third refuses for a *measured* reason written down below
+//! rather than for "not written yet", and it reads no account.
 //!
 //! | intent | this wave |
 //! | --- | --- |
-//! | `PlaceOrder` | **implemented** for the single-Egg family; the wire cannot express any other |
-//! | `CancelOrder` | **refused**: the frozen page format has no cancellation representation (§ *Cancellation*) |
+//! | `PlaceOrder` | **implemented**, both order families: the v2 wire carries an `OrderSlot` |
+//! | `CancelOrder` | **implemented**: the v4 page retires an order in place (§ *Cancellation*) |
 //! | `SettlePage` | **refused**: `clutch_batch::relation_v1::verify` is measured at a 39,104-byte SBF frame (§ *Settlement*) |
 //!
 //! Nothing here computes a clearing price, selects a candidate, or moves
 //! collateral.  A placement writes one order record into one page and updates
-//! that page's commitment; it is bookkeeping under a frozen codec, not an
-//! economic transition, and the collateral gap that implies is named in
-//! § *Named gaps*.
+//! that page's commitment; a cancellation replaces one record with a
+//! retirement and updates the same commitment.  Both are bookkeeping under a
+//! frozen codec, not economic transitions, and the collateral gap that implies
+//! is named in § *Named gaps*.
 //!
-//! ## The account list of `PlaceOrder`
+//! ## The write path belongs to `clutch-solana-layout`
 //!
-//! Four accounts, exact count, no remaining-account tail:
+//! At the previous page revision this module owned thirteen page-header byte
+//! offsets, nine record offsets, two `const` tripwires against the layout
+//! crate's widths, four writer helpers, and a post-write re-verification that
+//! decoded the whole page a second time and compared the resulting header
+//! field by field against an intended post-state.  It owned them because the
+//! layout crate published a streaming page *reader* and no streaming page
+//! *writer*, so an on-chain placement could not ask the owning crate to write
+//! its bytes; that was recorded here as debt, and the debt is paid.  v4
+//! publishes [`clutch_solana_layout::stream::init_page`], `append_slot`,
+//! `write_single_slot`, `write_tombstone`, `frozen_set_commitment`, and
+//! `seal_page`, and both tripwires fired on the revision that landed them,
+//! which is what they were for.
+//!
+//! **This module now owns no page offset at all.**  A transition is the layout
+//! crate's own verifier, this module's checks, and the layout crate's own
+//! writer:
+//!
+//! * the writer writes a header through the same `Writer` field sequence
+//!   `OrderPageAccount::encode` uses and a slot through the same `encode_slot`,
+//!   so the write side is not a second transcription of the layout that could
+//!   drift from the first;
+//! * it folds the page digest once, at the end, and that fold decodes every
+//!   slot as it goes, so a page left non-canonical in any slot comes out with
+//!   no digest rather than with a digest over junk;
+//! * it returns the post-state as a header, so "what did the page become" is an
+//!   answer rather than a second decode and a field-by-field comparison against
+//!   a guess.
+//!
+//! The post-write re-verification is therefore gone, and with it one whole page
+//! fold and two full slot-decode passes per placement (§ *Frames and compute*).
+//! What is *not* gone is the byte-for-byte differential:
+//! `place_order_writes_exactly_what_the_layout_encoder_would`,
+//! `place_order_writes_a_portfolio_record_the_same_way`, and
+//! `cancel_order_writes_exactly_what_the_layout_encoder_would` each compare the
+//! post-state against a page built and encoded by `OrderPageAccount::encode`,
+//! which is the golden reference.
+//!
+//! ## The account lists
+//!
+//! `PlaceOrder`: four accounts, exact count, no remaining-account tail.
 //!
 //! | index | account | role |
 //! | --- | --- | --- |
 //! | 0 | actor | signer; its key **is** the order's 32-byte `owner` |
-//! | 1 | epoch | read-only; owns the phase, the outcome width, and the grid identity |
-//! | 2 | price grid | read-only; owns the admitted limit prices |
+//! | 1 | epoch | read-only; owns the phase, the outcome width, the epoch index, and the grid identity |
+//! | 2 | price grid | read-only; owns the admitted limit prices and the frozen scale |
 //! | 3 | order page | writable; the page the record is appended to |
 //!
-//! The market, realm, and profile accounts are deliberately **absent**, for the
-//! same reason [`super::observe_resolve`] omits realm and profile: the epoch
-//! already names this market, this grid, and this outcome width, and
-//! [`clutch_solana_layout::EpochAccount::validate`] recomputes the epoch
-//! identity from `(market, epoch_index)`, so three more accounts and three more
-//! decodes would add transaction weight and no fact.  The uniformity cost is an
-//! ABI decision for whoever freezes the account schema, not this lane's.
+//! `CancelOrder`: three, and the grid is **absent**.  A retirement has no limit
+//! and no lots, so nothing in the transition consults a tick vector or a price
+//! scale, and a cancellation does not re-price the records already on the page
+//! — [`clutch_solana_layout::stream::verify_page`] is precisely the reader that
+//! says so, and it is the one this transition uses.
+//!
+//! | index | account | role |
+//! | --- | --- | --- |
+//! | 0 | actor | signer; its key must be the retired record's `owner` |
+//! | 1 | epoch | read-only; owns the phase and this market's identity |
+//! | 2 | order page | writable; the page whose slot the retired id names |
+//!
+//! The market, realm, and profile accounts are deliberately **absent** from
+//! both, for the same reason [`super::observe_resolve`] omits realm and
+//! profile: the epoch already names this market, this grid, and this outcome
+//! width, and [`clutch_solana_layout::EpochAccount::validate`] recomputes the
+//! epoch identity from `(market, epoch_index)`, so three more accounts and
+//! three more decodes would add transaction weight and no fact.  The uniformity
+//! cost is an ABI decision for whoever freezes the account schema, not this
+//! lane's.
 //!
 //! Every address is recomputed from [`crate::seeds`] out of the accounts' own
 //! decoded bytes; no caller-supplied expected key is accepted anywhere.
@@ -43,124 +96,127 @@
 //! ## The order of the checks
 //!
 //! There is no offline oracle for this family — `clutch_solana_reference::apply`
-//! refuses `PlaceOrder` with `Error::UnsupportedIntent` — so the order below is
+//! refuses both intents with `Error::UnsupportedIntent` — so the order below is
 //! this lane's, and the host tests at the bottom of this file pin it.  The
 //! oracles that do exist are the frozen codec's own adversarial fixtures, and
 //! every page refusal here is asserted to be *exactly* the verdict
 //! [`clutch_solana_layout::stream::verify_page`] gives on the same bytes.
 //!
+//! Both transitions share the account plane and then diverge only where the two
+//! writes differ.
+//!
 //! 1. account count, actor signature, role aliasing, program ownership, the
 //!    executable bit, declared writability, exact data lengths;
 //! 2. every address, against [`crate::seeds`].  The page's addressing fields
 //!    are read with [`clutch_solana_layout::stream::OrderPageHeader::decode`],
-//!    which reads the fixed 235-byte header and folds no digest, because an
+//!    which reads the fixed 236-byte header and folds no digest, because an
 //!    address comparison needs `epoch`, `page_index`, and `stored_bump` and
-//!    nothing else; the page's *verdict* is step 3;
+//!    nothing else; the page's *verdict* is step 3.
+//!
+//! `PlaceOrder`, from there:
+//!
 //! 3. the page, in full, through the streaming decoder **on the frozen grid**
 //!    ([`clutch_solana_layout::stream::verify_page_on_grid`]) — so a page whose
-//!    stored digest, order-id chain, slot padding, stored range, or existing
-//!    limits are not canonical is refused before anything is decided about the
-//!    new record;
+//!    stored digest, positional order ids, retirement count, slot padding,
+//!    stored range, or existing limits are not canonical is refused before
+//!    anything is decided about the new record;
 //! 4. the epoch is `EPOCH_PHASE_OPEN` and the page is unfrozen;
 //! 5. the page belongs to this epoch and this market, and the grid is the one
 //!    the epoch names, at the scale the epoch names;
 //! 6. the intent's own `market` and `epoch` name the same epoch;
 //! 7. replay: the request sequence equals the page's current `order_count`;
 //! 8. the actor is the record's owner;
-//! 9. the record is valid ([`clutch_solana_layout::OrderRecord::validate`]) and
-//!    its outcome is inside the *epoch's* width, which no page can bound;
-//! 10. the record's limit is an exact member of the frozen tick vector;
-//! 11. the page has a free slot, and the record's order id is strictly above
-//!     the page's last — or, on an empty page, above the predecessor page's
-//!     last;
-//! 12. write, then re-verify (below).
+//! 9. the record is valid, and it is inside the *epoch's* outcome width and
+//!    not already behind the *epoch's* index — two bounds no page can apply,
+//!    because a page bounds an outcome only by
+//!    [`clutch_solana_layout::MAX_OUTCOMES`] and cannot recover an epoch index
+//!    from the 32-byte epoch identity it stores.  Both are exactly the refusals
+//!    [`clutch_solana_layout::stream::epoch_binds_page_set`] gives a frozen set,
+//!    applied one record early;
+//! 10. the grid half: a single-Egg `limit` is an exact member of the frozen
+//!     tick vector, and a portfolio record's per-lot value and per-lot bound are
+//!     representable on the frozen price scale.  That split is not this
+//!     module's invention — it is the one `verify_page_on_grid` already applies
+//!     to every record stored on the page;
+//! 11. the order id is the one the page's own state fixes
+//!     ([`clutch_solana_layout::stream::OrderPageHeader::next_order_id`]), which
+//!     is also where a full page and a frozen page refuse;
+//! 12. write, through [`clutch_solana_layout::stream::append_slot`].
 //!
-//! ## Writing bytes this crate does not own — and the debt that is
+//! `CancelOrder`, from there:
 //!
-//! `clutch-solana-layout` publishes a streaming page **reader** and no
-//! streaming page **writer**.  `OrderPageAccount::encode` is a method on a
-//! whole decoded page — `size_of::<OrderPageAccount>()` is 4,080 bytes, over
-//! the frame maximum before the output buffer is counted — and `encode_slot`,
-//! `Writer`, and `put_header` are private, so there is no public per-slot or
-//! per-header encoder at all.  An on-chain placement therefore cannot ask the
-//! owning crate to write its bytes.  This is the write-side twin of the
-//! page-decode blocker the streaming lane closed on the read side, and it was
-//! not visible until an instruction tried to write a page.
+//! 3. the page, in full, through `stream::verify_page` — no grid;
+//! 4. the epoch is `EPOCH_PHASE_OPEN` and the page is unfrozen;
+//! 5. the page belongs to this epoch and this market;
+//! 6. the intent's own `market` and `epoch` name the same epoch;
+//! 7. replay: the retirement's generation **is** the request envelope's
+//!    sequence, and the intent's declared generation must equal it;
+//! 8. the actor is the owner the intent names;
+//! 9. the id names a populated slot **of this page**, by arithmetic
+//!    ([`clutch_solana_layout::stream::OrderPageHeader::slot_index_of`]);
+//! 10. write, through [`clutch_solana_layout::stream::write_tombstone`].
 //!
-//! This module therefore writes four regions of the page itself — one slot,
-//! `order_count`, the stored range, and `page_digest` — and pays for that with
-//! a per-execution proof rather than with confidence:
-//!
-//! * the byte offsets are a chain of `const`s whose end is `const`-asserted
-//!   equal to [`clutch_solana_layout::stream::ORDER_PAGE_HEADER_BYTES`],
-//!   [`clutch_solana_layout::ORDER_RECORD_BYTES`], and
-//!   [`clutch_solana_layout::ORDER_SLOT_BYTES`], so a layout that moves a field
-//!   without changing a width is the only drift a compile can miss;
-//! * the digest written is [`clutch_solana_layout::stream::streamed_page_digest`]
-//!   over the already-mutated bytes, so the digest is the layout crate's own
-//!   fold and never this module's arithmetic;
-//! * after the write, the page is verified **again** with
-//!   [`clutch_solana_layout::stream::verify_page`], its returned header is
-//!   compared field for field against the intended post-state, and the written
-//!   slot is decoded back through
-//!   [`clutch_solana_layout::stream::OrderSlotCursor`] and compared to the
-//!   intended record.  Any disagreement refuses, and a refusing instruction
-//!   discards every account write it made;
-//! * `place_order_writes_exactly_what_the_layout_encoder_would` compares the
-//!   post-state, byte for byte, against a page built and encoded by
-//!   `OrderPageAccount::encode`, which is the golden reference.
-//!
-//! That is fail-closed, and it is still debt.  **The fix belongs in
-//! `clutch-solana-layout`**: a `stream::write_single_slot(&mut [u8], index,
-//! &OrderRecord)` and a `stream::seal_page(&mut [u8], order_count, first, last)`
-//! beside the streaming readers, at which point this module's offset table and
-//! its post-write re-verification both delete.  Until then the offsets live in
-//! two crates, which is exactly the shape of mistake the layout crate exists to
-//! prevent.
+//! Steps 11 and 9 respectively are *optional*: the writers refuse the same
+//! mismatches themselves, and they refuse them before touching a byte, so a
+//! refused transition leaves the account unchanged whether or not this module
+//! pre-checks.  They are kept because they cost no fold and they preserve this
+//! module's stated property — every check runs, in this module's own error
+//! vocabulary, before any write is attempted.
 //!
 //! ## Cancellation
 //!
-//! **The frozen page format has no cancellation representation.**  This is a
-//! reading of the codec, not an implementation gap, and it is why
-//! `CancelOrder` refuses rather than guessing:
+//! At the previous page revision this refused, and the refusal was a reading of
+//! the codec rather than an implementation gap: the frozen page format had no
+//! way to say "this order is retired".  `OrderSlot` was `Empty | Single |
+//! Portfolio`, an `Empty` slot below `order_count` was a *missing* order rather
+//! than a cancelled one, and no record field or reserved flag bit could carry a
+//! status.  The one representation the bytes did admit was delete-and-compact,
+//! which is sound only on a single-page book, leaves a multi-page book
+//! unfreezable, and — decisively — *is* the cancellation semantics, which an
+//! instruction may not freeze on the layout's behalf.
 //!
-//! * there is no tombstone slot kind — [`clutch_solana_layout::OrderSlot`] is
-//!   `Empty | Single | Portfolio`, and `Empty` below `order_count` is refused as
-//!   a *missing* order (`CodecError::ZeroIdentity`), not as a cancelled one;
-//! * there is no status or generation field on a record, and no reserved flag
-//!   bit can carry one: `OrderRecord::validate` refuses `flags & !1 != 0`, so
-//!   bit 0 (all-or-none) is the only defined bit and every other is refused;
-//! * `clutch_batch::relation_v1` has no cancelled-order concept either — its
-//!   `NormalizedBookV1::cancelled` is `N-b` self-cross netting, and
-//!   `expiry_epoch` is not persisted by any record.
+//! v4 answers it. [`clutch_solana_layout::ORDER_KIND_TOMBSTONE`] is a fourth
+//! slot kind carrying a [`clutch_solana_layout::TombstoneRecord`], and the rule
+//! is **retire in place**: a cancellation replaces the record in its slot and
+//! keeps both the slot and the id, so `order_count`, `first_order_id`, and
+//! `last_order_id` do not move and no later order is renumbered.  That matters
+//! more at v4 than it would have before, because ids are now positional, so
+//! renumbering would silently rewrite identities that receipts, candidates, and
+//! clients already name.  Only `tombstone_count` and the page digest change.
 //!
-//! The one representation the bytes *do* admit is delete-and-compact: drop the
-//! slot, shift the tail down, decrement `order_count`, restate the stored
-//! range, re-fold the digest.  That is a canonical page afterwards, and it is
-//! still not implemented here, for three reasons that are not this module's to
-//! decide:
+//! What this instruction adds to the writer is the three facts the page cannot
+//! see: that the epoch is open, that the account list supplied *this* market's
+//! and *this* epoch's page, and that the actor signing is the owner named.
+//! Three further notes:
 //!
-//! 1. it is sound only when `page_count == 1`.  Removing the last record of a
-//!    non-final page changes that page's `last_order_id`, which is stored again
-//!    in the *next* page's `prev_page_last_order_id`; a single-page instruction
-//!    cannot repair the chain, and
-//!    [`clutch_solana_layout::stream::verify_page_set`] refuses the set
-//!    afterwards.
-//! 2. it makes a multi-page book unfreezable.  `validate_commitments` requires
-//!    every non-final page of a frozen set to hold exactly
-//!    [`clutch_solana_layout::MAX_ORDERS_PER_PAGE`] records, so a hole left in
-//!    page 0 can only be closed by a cross-page compaction that no instruction
-//!    in this program performs.
-//! 3. choosing removal over a tombstone *is* the cancellation semantics —
-//!    whether a cancelled order leaves a trace, whether its id is retired, and
-//!    what a candidate that referenced it sees.  Freezing that from inside an
-//!    instruction is precisely the drift the layering rule forbids.
-//!
-//! So the disposition is: **cancellation needs a layout decision**, and the
-//! smallest one that unblocks it is a fourth `OrderSlot` kind (a tombstone
-//! carrying the retired order id and its owner) plus a page rule that a
-//! tombstone occupies a slot below `order_count` and contributes to the
-//! order-id chain but not to the relation's book.
+//! * **Replay.**  A placement uses the page's `order_count` as its counter; a
+//!   cancellation does not move that count, so it needs a different one.  It
+//!   has two, and both are state rather than a caller's assertion: the slot
+//!   kind — `write_tombstone` refuses a slot that is not a *live* record, so a
+//!   replayed cancellation refuses with `CodecError::MismatchedBinding` — and
+//!   the generation rule, `generation > retired_generation`, which
+//!   `TombstoneRecord::validate` refuses with `CodecError::InvalidEnum`.  The
+//!   value bound as the retirement's generation is the **request envelope's
+//!   sequence**.  The intent carries a `generation` field as well and it is an
+//!   assertion, exactly as a placement's order id is: a wire that names one
+//!   generation while the envelope carries another refuses
+//!   [`ClutchError::Replay`] rather than retiring at a generation the caller
+//!   never stated.
+//! * **Which page.**  The target order id *is* the page and the slot.  A
+//!   canonical id decodes to a rank, `rank / MAX_ORDERS_PER_PAGE` is the page
+//!   that owns it, and `slot_index_of` recovers the slot index by subtraction;
+//!   nothing searches the slot array.  An account list that supplies the wrong
+//!   page refuses `CodecError::MismatchedBinding`, which is *this page's*
+//!   verdict about the id rather than a verdict about the id itself — it may be
+//!   a perfectly good id on another page, and this page is not the one to say
+//!   otherwise.
+//! * **What a retirement is not.**  It is not a refund, a release of reserved
+//!   collateral, or a withdrawal: this instruction binds no position and no
+//!   hoard, exactly as a placement binds none (§ *Named gaps*).  And a
+//!   retirement sits *inside* the page-set commitment — its bytes are slot
+//!   bytes, so they are in the page digest and therefore in the order-set fold
+//!   — so it cannot be added, undone, or moved after a freeze without changing
+//!   `order_set`.
 //!
 //! ## Settlement, and the frame budget of the relation — measured
 //!
@@ -211,120 +267,175 @@
 //! closed: an interface whose working set is one order (176 bytes), not one
 //! book (11 KB).  Nothing in this program can route around it, and no
 //! arrangement of `#[inline(never)]` frames helps, because the large values are
-//! single locals rather than a composition of small ones.  A second,
-//! independent blocker sits behind it and is *not* a frame question: the
-//! projection from the persisted page format to `BookV1` is undefined on-chain.
-//! `docs/implementation/SOLANA_LAYOUT.md` states `canonical_order_id` as "the
-//! record's rank in the verified page set, plus one" — which needs the whole
-//! frozen set at once — while the `u16` owner tag is "the adapter's owner-tag
-//! image" with nothing proving it a bijection into `EpochAccount.owner_count`,
-//! and `expiry_epoch` "is not persisted by any record".  Two of the three
-//! coordinates of every relation order therefore have no on-chain source.
+//! single locals rather than a composition of small ones.
 //!
-//! ## What the frozen wire cannot express
+//! A second, independent blocker sits behind it and is *not* a frame question:
+//! the projection from the persisted page format to `BookV1` is still undefined
+//! on-chain, though v4 narrowed it by exactly one coordinate.  `expiry_epoch`
+//! is now persisted by both order families, so that coordinate has a source at
+//! last.  The other two do not.  The relation's `canonical_order_id` is a
+//! record's **live** rank — its one-based position among live records in the
+//! canonical page-set walk, which *skips* retirements — so it is a fact about
+//! the whole frozen set rather than about any one page, and it is not the
+//! stored `order_id` on any set that has ever been cancelled from.  And the
+//! `u16` owner tag is still "the adapter's owner-tag image", with nothing in
+//! the layout crate proving it a bijection into `EpochAccount.owner_count`.
 //!
-//! [`Intent::PlaceOrder`] carries an [`clutch_solana_layout::OrderRecord`], not
-//! an [`clutch_solana_layout::OrderSlot`], and its encoded length is
-//! `2 + 32 + 32 + ORDER_RECORD_BYTES`.  **A portfolio placement is not
-//! expressible on the frozen intent wire at all** — a page can hold
-//! `OrderSlot::Portfolio` records and no intent can put one there.  This is not
-//! an unimplemented variant that could be added here; it is a wire gap, and it
-//! is pinned by `the_place_order_wire_cannot_carry_a_portfolio_record`.  The
-//! fix is an `Intent` revision (a portfolio placement tag carrying a
-//! `PortfolioRecord`), which is `clutch-solana-layout`'s to make.
+//! ## What the wire carries
+//!
+//! At intent v1, `Intent::PlaceOrder` carried a bare
+//! [`clutch_solana_layout::OrderRecord`], so **a portfolio placement was not
+//! expressible at all**: a page could hold `OrderSlot::Portfolio` records and
+//! no intent could put one there.  That was a wire gap rather than an
+//! unimplemented branch, and intent v2 closes it.  `PlaceOrder` now carries an
+//! [`clutch_solana_layout::OrderSlot`], encoded as its kind byte plus that
+//! kind's *exact* body — 174 bytes single-Egg, 302 portfolio — and
+//! `MAX_INTENT_BYTES` is the wider of the two exactly rather than a round
+//! number with slack in it.
+//!
+//! The portfolio placement path is **implemented** here rather than named as a
+//! gap, because its validation surface is the same shape as the single-Egg one
+//! check for check, not merely similar:
+//!
+//! | check | single-Egg | portfolio |
+//! | --- | --- | --- |
+//! | record codec | `OrderRecord::validate` | `PortfolioRecord::validate` |
+//! | the epoch's outcome width | `outcome < outcome_count` | `active_len <= outcome_count` |
+//! | the epoch's horizon | `expiry_epoch >= epoch_index` | `expiry_epoch >= epoch_index` |
+//! | the frozen grid | `limit` is an exact tick | per-lot value and bound are representable on the scale |
+//! | the writer | `stream::append_slot` | `stream::append_slot` |
+//!
+//! Each right-hand cell is the refusal the layout crate already applies to a
+//! *stored* portfolio record — the first two through `epoch_binds_page_set`,
+//! the third through `PortfolioRecord::validate_on_scale` inside
+//! `verify_page_on_grid` — so implementing the family adds no economic
+//! judgement this module is not entitled to make.  `ORDER_KIND_EMPTY` and
+//! `ORDER_KIND_TOMBSTONE` are recognized kinds that are not placements; the
+//! intent codec refuses both with `CodecError::InvalidEnum` before this module
+//! sees them, and this module refuses them again in its own `match`, because a
+//! stated refusal on an unreachable arm is cheaper than an assumption.
 //!
 //! ## Named gaps
 //!
-//! Each of these is a fact about what an accepted placement does *not* do.
+//! Each of these is a fact about what an accepted placement or cancellation
+//! does *not* do.
 //!
-//! * **No collateral is reserved.**  The relation's
+//! * **No collateral is reserved, and none is released.**  The relation's
 //!   `opening_reserved_cash_price_units` and `opening_reserved_egg` are
-//!   admission-time reservations, and this instruction binds no position, no
-//!   hoard, and no supply ledger.  An order placed by this program is unfunded.
-//!   Nothing downstream is misled today — no instruction freezes an epoch and
-//!   `SettlePage` refuses — but a reservation seam must land before either does.
-//! * **Nothing moves an epoch out of `EPOCH_PHASE_OPEN`.**  No intent in the
-//!   frozen wire freezes a page set, so a book placed by this program can never
-//!   be closed, and `page_count`, `set_order_count`, and `order_set` stay zero
-//!   forever.
-//! * **Order ids are caller-chosen.**  `clutch-solana-layout` publishes no
-//!   `canonical_order_id` derivation; the page's only rule is nonzero and
-//!   strictly increasing.  A single caller can therefore place one order with
-//!   an id of `0xff..ff` and no further order can ever be placed on that page
-//!   or on any later page of the set.  That is a griefing vector, it is
-//!   unpriced, and closing it is a layout decision (a derivation the page
-//!   enforces), not an adapter check.
-//! * **`generation` is written and never read.**  The layout documents it as
-//!   "replay protection for the placing instruction"; the replay counter this
-//!   instruction actually uses is the page's own `order_count`, which is state
-//!   rather than a caller assertion.  Nothing binds `generation` to a position
-//!   generation, because no position account is in the list.
-//! * **The page set's shape is unbound while open.**  `EpochAccount::validate`
-//!   forces `page_count == 0` on an open epoch, so nothing cross-checks one
-//!   page's `page_count` against another's, or against the epoch's, until the
-//!   set is frozen.  Page creation and page-set growth have no instruction at
-//!   all.
+//!   admission-time reservations, and neither instruction binds a position, a
+//!   hoard, or a supply ledger.  An order placed by this program is unfunded,
+//!   and retiring one frees nothing that was never held.  Nothing downstream is
+//!   misled today — no instruction freezes an epoch and `SettlePage` refuses —
+//!   but a reservation seam must land before either does.
+//! * **Nothing moves an epoch out of `EPOCH_PHASE_OPEN`, and nothing creates a
+//!   page.**  No intent in the wire freezes a page set or initializes a page,
+//!   so a book placed by this program can never be closed, `page_count`,
+//!   `set_order_count`, and `order_set` stay zero forever, and both
+//!   instructions here require a page some other process already wrote.
+//!   `stream::init_page`, `frozen_set_commitment`, and `seal_page` exist and
+//!   are called by nothing.
+//! * **`generation` is now read — by cancellation, and only there.**  The
+//!   layout documents it as replay protection for the placing instruction; a
+//!   placement's actual replay counter is still the page's own `order_count`,
+//!   which is state rather than a caller assertion, and the field it writes is
+//!   read exactly once, when a retirement must strictly follow it.  Nothing
+//!   binds either number to a position generation, because no position account
+//!   is in either list.
+//! * **Per-order expiry is a dead-on-arrival refusal and nothing more.**  A
+//!   page set belongs to one epoch and no mechanism carries an order from one
+//!   epoch's book into the next, so checking `expiry_epoch` against the epoch
+//!   index refuses an order that could never clear and implies no good-till-
+//!   cancelled behaviour.
+//! * **The page set's shape is unbound while open.**
+//!   `EpochAccount::validate` forces `page_count == 0` on an open epoch, so
+//!   nothing cross-checks one page's `page_count` against another's, or against
+//!   the epoch's, until the set is frozen.
 //! * **Distinct-owner admission is unchecked.**  `EpochAccount.owner_count`
 //!   bounds the relation's owner tags, and the identity-to-tag interning is
-//!   unspecified (above), so this instruction cannot tell whether one more
+//!   unspecified (above), so neither instruction can tell whether one more
 //!   distinct owner is admissible.
+//!
+//! One v3 gap is **closed** rather than carried: order ids were caller-chosen,
+//! and a single caller could place one order with an id of `0xff..ff` after
+//! which no further order could be placed on that page or on any later page of
+//! the set.  At v4 an id is `canonical_order_id(rank)` and a caller has none to
+//! choose, so the griefing vector is gone by construction rather than by a
+//! check — which is also why step 11 above is an equality against
+//! `next_order_id()` instead of an ordering against a predecessor.
 //!
 //! ## Frames and compute
 //!
 //! No function in this module holds a page, a book, or a candidate.  The
 //! largest values in flight are a decoded `PriceGridAccount` (a
-//! `[u64; MAX_GRID_TICKS]` tick vector) and two
-//! [`clutch_solana_layout::stream::OrderPageHeader`] values at 234 bytes each;
-//! the grid is loaded into a caller slot through an `#[inline(never)]`
-//! out-parameter rather than returned, for the reason
-//! [`super::observe_resolve`] records.  `cargo-build-sbf` reports no frame
-//! diagnostic for any `clutch_sbf` function, which is the only check there is.
+//! `[u64; MAX_GRID_TICKS]` tick vector), one
+//! [`clutch_solana_layout::OrderSlot`] — 236 bytes, a width the portfolio
+//! family's coefficient vector sets — and one
+//! [`clutch_solana_layout::stream::OrderPageHeader`]; the grid is loaded into a
+//! caller slot through an `#[inline(never)]` out-parameter rather than
+//! returned, for the reason [`super::observe_resolve`] records.
+//! `cargo-build-sbf` reports no frame diagnostic for any `clutch_sbf` function,
+//! which is the only check there is.
 //!
-//! Compute is **not** measured, and the structure says it is not small.  One
-//! accepted placement performs three folds of the page preimage through the
-//! layout crate's *software* SHA-256 — the pre-state verify, the post-write
-//! digest, and the post-write re-verify — over a 3,743-byte preimage each,
-//! which is 59 compression blocks per fold and 177 per placement, plus three
-//! `sol_try_find_program_address` calls, two `EpochAccount` decodes (each
-//! recomputing the canonical epoch identity), two `PriceGridAccount` decodes
-//! (each recomputing the grid digest over its 585-byte body) plus a third
-//! grid-digest recompute inside `verify_page_on_grid`, and seven walks of the
-//! slot array — the three digest folds above, the two record-semantics sweeps
-//! inside the two `verify_page` calls, the grid sweep, and the partial cursor
-//! walk that reads the written slot back.  The repeated decodes are the same shape
-//! [`super::observe_resolve`] records and have the same cause: each check must
-//! run in its own small frame and at its own point in the order, and the
-//! layout crate publishes no facts-only or `decode_unchecked` entry point.
+//! Compute is **not** measured.  What can be stated from the frozen widths is
+//! the fold structure, and at v4 it is *smaller* than it was, in spite of a
+//! wider page.  The page-digest preimage grew from 3,743 bytes to 3,872 — a
+//! 28-byte domain, market, epoch, `page_index`, `order_count`, the new
+//! `tombstone_count`, and sixteen 236-byte slots — so one fold is 61 SHA-256
+//! compression blocks rather than 59.  Against that, the post-write
+//! re-verification is gone: an accepted placement folds the page **twice**, the
+//! pre-state verify and the writer's closing fold, where it folded three times
+//! before.  So the documented figure moves from `3 x 59 = 177` blocks to
+//! `2 x 61 = 122`, and full slot-decode passes drop from five to three — the
+//! verify's structural fold, the verify's record-semantics sweep, and the
+//! writer's closing fold.  A cancellation costs the same two folds and the same
+//! three passes, plus one single-slot decode, and reads no grid at all.
+//! `the_documented_page_fold_follows_from_the_frozen_widths` is what keeps that
+//! arithmetic honest if the page grows again.
+//!
+//! The rest of the repeated work is unchanged in kind: three
+//! `sol_try_find_program_address` calls for a placement and two for a
+//! cancellation, two `EpochAccount` decodes (each recomputing the canonical
+//! epoch identity), and — for a placement only — two `PriceGridAccount` decodes
+//! plus a third grid-digest recompute inside `verify_page_on_grid`, and one
+//! partial grid sweep over the populated slots.  The repeated decodes are the
+//! same shape [`super::observe_resolve`] records and have the same cause: each
+//! check must run in its own small frame and at its own point in the order, and
+//! the layout crate publishes no facts-only or `decode_unchecked` entry point.
+//!
 //! The one measured comparison point in this repository is `Split` at 72,869
-//! compute units with eight address derivations and no page fold, so a
-//! placement is expected to need an explicit compute-budget request rather than
-//! to fit the 200,000-unit default.  **That expectation is an obligation to
-//! measure, not a measurement**; measuring it means a `PlaceOrder` fixture in
-//! the differential harness, which is that lane's file.
+//! compute units with eight address derivations and no page fold, so either of
+//! these is expected to need an explicit compute-budget request rather than to
+//! fit the 200,000-unit default.  **That expectation is an obligation to
+//! measure, not a measurement**, and the v3 figures it replaces were never
+//! measured either; measuring it means `PlaceOrder` and `CancelOrder` fixtures
+//! in the differential harness, which is that lane's file.
 //!
 //! ## Refusal codes
 //!
-//! `0x0060-0x006f` is reserved for this module and **this wave allocates none
-//! of it**, following [`super::observe_resolve`]'s precedent: every refusal
-//! raised here already has an owner.  A page that is not a page refuses with
-//! the frozen codec's own [`clutch_solana_layout::CodecError`]; a full page
-//! refuses `CodecError::InvalidCount`, which is literally what
-//! `OrderPageHeader::validate_head` would say about the resulting count; the
-//! account plane refuses with an existing [`crate::error::ClutchError`].  The
-//! proposed allocation, for whoever unfreezes `error.rs`:
+//! `0x0060-0x006f` is reserved for this module and **this wave still allocates
+//! none of it**, following [`super::observe_resolve`]'s precedent: every
+//! refusal raised here already has an owner.  A page that is not a page refuses
+//! with the frozen codec's own [`clutch_solana_layout::CodecError`]; a full
+//! page refuses `CodecError::InvalidCount`, which is literally what
+//! `OrderPageHeader::next_order_id` says about the count that would result; a
+//! replayed cancellation refuses `CodecError::MismatchedBinding`, which is what
+//! `write_tombstone` says about a slot that is not a live record; the account
+//! plane refuses with an existing [`crate::error::ClutchError`].
+//!
+//! The v3 proposal reserved `0x0060` for "order cancellation has no
+//! representation in the frozen page format".  That refusal no longer exists,
+//! so the code is **withdrawn** rather than allocated, and the proposal for
+//! whoever unfreezes `error.rs` is one line shorter than it was:
 //!
 //! | class | proposed code |
 //! | --- | --- |
-//! | order cancellation has no representation in the frozen page format | `0x0060` |
 //! | candidate verification does not fit an SBF frame | `0x0061` |
-//! | `0x0062-0x006f` | unallocated |
+//! | `0x0060` and `0x0062-0x006f` | unallocated |
 //!
-//! Until `error.rs` is unfrozen, `CancelOrder` and `SettlePage` both refuse
-//! [`crate::error::ClutchError::NotYetImplemented`] and are distinguishable
-//! only by this file — a lossy numeric projection of exactly the kind
-//! `reference_code` already has, and the reason each refusal's real cause is
-//! written out above rather than left to a code.  The portfolio wire gap needs
-//! no code at all: it is unreachable, not refusable.
+//! Until `error.rs` is unfrozen, `SettlePage` refuses
+//! [`crate::error::ClutchError::NotYetImplemented`] and this file is where its
+//! real cause is written out — a lossy numeric projection of exactly the kind
+//! `reference_code` already has.
 
 use crate::accounts::{
     self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
@@ -332,9 +443,8 @@ use crate::accounts::{
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use clutch_solana_layout::{
-    account_len, stream, CodecError, Hash32, Intent, OrderRecord, OrderSlot, PriceGridAccount,
-    EPOCH_PHASE_OPEN, MAX_GRID_TICKS, MAX_ORDERS_PER_PAGE, ORDER_KIND_SINGLE, ORDER_RECORD_BYTES,
-    ORDER_SLOT_BYTES,
+    account_len, stream, CodecError, Hash32, Intent, OrderSlot, PriceGridAccount, EPOCH_PHASE_OPEN,
+    MAX_GRID_TICKS,
 };
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
@@ -353,20 +463,28 @@ macro_rules! borrow_mut {
 }
 
 /* ------------------------------------------------------------------------ */
-/* Account list                                                              */
+/* Account lists                                                             */
 /* ------------------------------------------------------------------------ */
 
 /// Accounts in a `PlaceOrder` instruction, exactly.
 pub const PLACE_ORDER_ACCOUNT_COUNT: usize = 4;
 
-/// Authenticated actor; its key is the order's owner identity.
+/// Accounts in a `CancelOrder` instruction, exactly.
+///
+/// One fewer than a placement: a retirement has no limit and no lots, so the
+/// frozen price grid is not in the list at all.
+pub const CANCEL_ORDER_ACCOUNT_COUNT: usize = 3;
+
+/// Authenticated actor; its key is the order's owner identity.  Both lists.
 pub const IX_ACTOR: usize = 0;
-/// Epoch/book-domain account.
+/// Epoch/book-domain account.  Both lists.
 pub const IX_EPOCH: usize = 1;
-/// Frozen price-grid account.
+/// Frozen price-grid account.  `PlaceOrder` only.
 pub const IX_GRID: usize = 2;
-/// The order page the record is appended to.
+/// The order page the record is appended to.  `PlaceOrder`.
 pub const IX_PAGE: usize = 3;
+/// The order page the retirement is written into.  `CancelOrder`.
+pub const IX_CANCEL_PAGE: usize = 2;
 
 /// Program-owned roles of `PlaceOrder`, in account-index order.
 const PLACE_ORDER_STATE_ROLES: [StateRole; 3] = [
@@ -375,71 +493,11 @@ const PLACE_ORDER_STATE_ROLES: [StateRole; 3] = [
     StateRole::writable(IX_PAGE, account_len::ORDER_PAGE),
 ];
 
-/* ------------------------------------------------------------------------ */
-/* Page byte offsets — see the module docs on writing bytes this crate does   */
-/* not own.  Every offset is a chain from the previous field's width, and the */
-/* chain's end is const-asserted against the layout crate's own constant.     */
-/* ------------------------------------------------------------------------ */
-
-/// Bytes of the account discriminator and schema version, which are never
-/// rewritten: a placement can only ever touch a page that already decoded.
-const OFF_TAG_AND_VERSION: usize = 2;
-/// `market`.
-const OFF_MARKET: usize = OFF_TAG_AND_VERSION;
-/// `epoch`.
-const OFF_EPOCH: usize = OFF_MARKET + 32;
-/// `order_set`.
-const OFF_ORDER_SET: usize = OFF_EPOCH + 32;
-/// `page_digest`.
-const OFF_PAGE_DIGEST: usize = OFF_ORDER_SET + 32;
-/// `first_order_id`.
-const OFF_FIRST_ORDER_ID: usize = OFF_PAGE_DIGEST + 32;
-/// `last_order_id`.
-const OFF_LAST_ORDER_ID: usize = OFF_FIRST_ORDER_ID + 32;
-/// `prev_page_last_order_id`.
-const OFF_PREV_PAGE_LAST_ORDER_ID: usize = OFF_LAST_ORDER_ID + 32;
-/// `page_index`.
-const OFF_PAGE_INDEX: usize = OFF_PREV_PAGE_LAST_ORDER_ID + 32;
-/// `page_count`.
-const OFF_PAGE_COUNT: usize = OFF_PAGE_INDEX + 2;
-/// `set_order_count`.
-const OFF_SET_ORDER_COUNT: usize = OFF_PAGE_COUNT + 2;
-/// `order_count`.
-const OFF_ORDER_COUNT: usize = OFF_SET_ORDER_COUNT + 2;
-/// `frozen`.
-const OFF_FROZEN: usize = OFF_ORDER_COUNT + 1;
-/// `stored_bump`.
-const OFF_STORED_BUMP: usize = OFF_FROZEN + 1;
-
-/* The header chain closes exactly where the layout crate says the slot array
- * begins.  A field width that changed without a field moving is the only
- * drift this cannot see, and the byte-for-byte differential against
- * `OrderPageAccount::encode` is what covers that. */
-const _: () = assert!(OFF_STORED_BUMP + 1 == stream::ORDER_PAGE_HEADER_BYTES);
-
-/// Slot-relative offset of a single-Egg record's `owner`, after the kind byte.
-const SLOT_OFF_OWNER: usize = 1;
-/// Slot-relative offset of `order_id`.
-const SLOT_OFF_ORDER_ID: usize = SLOT_OFF_OWNER + 32;
-/// Slot-relative offset of `outcome`.
-const SLOT_OFF_OUTCOME: usize = SLOT_OFF_ORDER_ID + 32;
-/// Slot-relative offset of `side`.
-const SLOT_OFF_SIDE: usize = SLOT_OFF_OUTCOME + 1;
-/// Slot-relative offset of `quantity`.
-const SLOT_OFF_QUANTITY: usize = SLOT_OFF_SIDE + 1;
-/// Slot-relative offset of `limit`.
-const SLOT_OFF_LIMIT: usize = SLOT_OFF_QUANTITY + 8;
-/// Slot-relative offset of `minimum_fill`.
-const SLOT_OFF_MINIMUM_FILL: usize = SLOT_OFF_LIMIT + 8;
-/// Slot-relative offset of `flags`.
-const SLOT_OFF_FLAGS: usize = SLOT_OFF_MINIMUM_FILL + 8;
-/// Slot-relative offset of `generation`.
-const SLOT_OFF_GENERATION: usize = SLOT_OFF_FLAGS + 1;
-
-/* The record chain closes exactly at the record width the layout crate
- * publishes, and a record still fits inside one common-width slot. */
-const _: () = assert!(SLOT_OFF_GENERATION + 8 == 1 + ORDER_RECORD_BYTES);
-const _: () = assert!(ORDER_RECORD_BYTES < ORDER_SLOT_BYTES);
+/// Program-owned roles of `CancelOrder`, in account-index order.
+const CANCEL_ORDER_STATE_ROLES: [StateRole; 2] = [
+    StateRole::read_only(IX_EPOCH, account_len::EPOCH),
+    StateRole::writable(IX_CANCEL_PAGE, account_len::ORDER_PAGE),
+];
 
 /* ------------------------------------------------------------------------ */
 /* Frame-bounded readers                                                     */
@@ -470,106 +528,29 @@ fn load_grid(bytes: &[u8], out: &mut PriceGridAccount) -> Outcome<()> {
 /// Verify one order page on the frozen grid, streaming, and return its header.
 ///
 /// This is the whole pre-state page check: framing, slot structure, record
-/// semantics, the order-id chain, the padding rule, the stored range, the
-/// stored digest, and — because the grid is here — that every limit already on
-/// the page is an exact tick.  It never materializes a slot array.
+/// semantics, the positional order-id chain, the retirement count, the padding
+/// rule, the stored range, the stored digest, and — because the grid is here —
+/// that every limit already on the page is an exact tick and every stored
+/// portfolio record is representable on the frozen scale.  It never
+/// materializes a slot array.
 #[inline(never)]
 fn verify_page_on_grid(page: &[u8], grid: &PriceGridAccount) -> Outcome<stream::OrderPageHeader> {
     Ok(stream::verify_page_on_grid(page, grid)?)
 }
 
-/// Re-verify a page this module just wrote, streaming, and return its header.
+/// Verify one order page without a grid, streaming, and return its header.
+///
+/// Everything above except the two grid-dependent record checks.  A
+/// cancellation uses this: it neither reads nor writes a limit, a lot count, or
+/// a price, so requiring the grid account would be requiring a fact the
+/// transition does not use.
 #[inline(never)]
 fn verify_page(page: &[u8]) -> Outcome<stream::OrderPageHeader> {
     Ok(stream::verify_page(page)?)
 }
 
-/// Decode the slot at `index` of an already-verified page.
-#[inline(never)]
-fn read_slot(page: &[u8], index: usize) -> Outcome<OrderSlot> {
-    let mut cursor = stream::OrderSlotCursor::new(page)?;
-    let mut at = 0usize;
-    loop {
-        let slot = match cursor.next_slot() {
-            Some(step) => step?,
-            /* Unreachable: `index` is below `MAX_ORDERS_PER_PAGE` and the page
-             * has already been verified.  Stated, not assumed. */
-            None => return Err(CodecError::Truncated.into()),
-        };
-        if at == index {
-            return Ok(slot);
-        }
-        at += 1;
-    }
-}
-
 /* ------------------------------------------------------------------------ */
-/* Frame-bounded writers                                                     */
-/* ------------------------------------------------------------------------ */
-
-/// Overwrite one slot of a page with a single-Egg record.
-///
-/// The whole [`ORDER_SLOT_BYTES`] slot is zeroed first, so the canonical zero
-/// padding beyond the record body is written rather than inherited.
-fn write_single_slot(page: &mut [u8], index: usize, order: &OrderRecord) -> Outcome<()> {
-    require(
-        page.len() == account_len::ORDER_PAGE && index < MAX_ORDERS_PER_PAGE,
-        ClutchError::WrongDataLength,
-    )?;
-    let start = stream::ORDER_PAGE_HEADER_BYTES + (index * ORDER_SLOT_BYTES);
-    let slot = &mut page[start..start + ORDER_SLOT_BYTES];
-    slot.fill(0);
-    slot[0] = ORDER_KIND_SINGLE;
-    slot[SLOT_OFF_OWNER..SLOT_OFF_OWNER + 32].copy_from_slice(&order.owner.0);
-    slot[SLOT_OFF_ORDER_ID..SLOT_OFF_ORDER_ID + 32].copy_from_slice(&order.order_id.0);
-    slot[SLOT_OFF_OUTCOME] = order.outcome;
-    slot[SLOT_OFF_SIDE] = order.side;
-    slot[SLOT_OFF_QUANTITY..SLOT_OFF_QUANTITY + 8].copy_from_slice(&order.quantity.to_le_bytes());
-    slot[SLOT_OFF_LIMIT..SLOT_OFF_LIMIT + 8].copy_from_slice(&order.limit.to_le_bytes());
-    slot[SLOT_OFF_MINIMUM_FILL..SLOT_OFF_MINIMUM_FILL + 8]
-        .copy_from_slice(&order.minimum_fill.to_le_bytes());
-    slot[SLOT_OFF_FLAGS] = order.flags;
-    slot[SLOT_OFF_GENERATION..SLOT_OFF_GENERATION + 8]
-        .copy_from_slice(&order.generation.to_le_bytes());
-    Ok(())
-}
-
-/// Write the three header fields a placement moves.
-///
-/// `page_digest` is deliberately **not** written here: it is a fold over these
-/// very bytes, so it can only be written after them.
-fn write_stored_range(
-    page: &mut [u8],
-    order_count: u8,
-    first: Hash32,
-    last: Hash32,
-) -> Outcome<()> {
-    require(
-        page.len() == account_len::ORDER_PAGE,
-        ClutchError::WrongDataLength,
-    )?;
-    page[OFF_ORDER_COUNT] = order_count;
-    page[OFF_FIRST_ORDER_ID..OFF_FIRST_ORDER_ID + 32].copy_from_slice(&first.0);
-    page[OFF_LAST_ORDER_ID..OFF_LAST_ORDER_ID + 32].copy_from_slice(&last.0);
-    Ok(())
-}
-
-/// Fold the mutated page through the layout crate's own digest and store it.
-///
-/// The value written is [`stream::streamed_page_digest`] over the post-write
-/// bytes, so the digest is never this module's arithmetic.
-fn seal_page_digest(page: &mut [u8]) -> Outcome<()> {
-    require(
-        page.len() == account_len::ORDER_PAGE,
-        ClutchError::WrongDataLength,
-    )?;
-    let digest = stream::streamed_page_digest(page)?;
-    page[OFF_PAGE_DIGEST..OFF_PAGE_DIGEST + 32].copy_from_slice(&digest.0);
-    Ok(())
-}
-
-/* ------------------------------------------------------------------------ */
-/* Transition                                                                */
+/* Transitions                                                               */
 /* ------------------------------------------------------------------------ */
 
 /// Everything a placement needs that is not the page it writes.
@@ -587,21 +568,51 @@ struct Placement<'a> {
     intent_market: Hash32,
     /// The intent's declared epoch.
     intent_epoch: Hash32,
-    /// The record to append.
-    order: OrderRecord,
+    /// The slot to append: one order, of either family.
+    slot: OrderSlot,
 }
 
-/// Append one single-Egg record to an open page, or refuse.
+/// The `CancelOrder` intent's payload: what the wire says is being retired.
+#[derive(Clone, Copy, Debug)]
+struct Retirement {
+    /// The intent's declared market.
+    market: Hash32,
+    /// The intent's declared epoch.
+    epoch: Hash32,
+    /// The owner the retirement claims, which must be the record's own.
+    owner: Hash32,
+    /// The canonical rank being retired; it names the page and the slot.
+    order_id: Hash32,
+    /// The retirement's declared replay generation, an assertion about the
+    /// request envelope's sequence rather than a free choice.
+    generation: u64,
+}
+
+/// Everything a cancellation needs that is not the page it writes.
+#[derive(Clone, Copy, Debug)]
+struct Cancellation<'a> {
+    /// Epoch account bytes.
+    epoch: &'a [u8],
+    /// The authenticated actor's key, as a 32-byte identity.
+    actor: Hash32,
+    /// The request envelope's replay sequence, which **is** the retirement's
+    /// generation.
+    sequence: u64,
+    /// The wire's own account of the retirement.
+    intent: Retirement,
+}
+
+/// Append one order to an open page, or refuse.
 ///
-/// Every check runs before any byte is written; the only checks after the
-/// write are the post-write proofs described in the module docs, and an
-/// instruction that refuses discards its writes.
+/// Every check runs before any byte is written, and the writer holds that
+/// property too, so a refusal leaves the account unchanged.  The whole write is
+/// [`stream::append_slot`]: this module computes no offset and folds no digest.
 fn apply_place_order(page: &mut [u8], placement: &Placement<'_>) -> Outcome<()> {
     let epoch = accounts::read_epoch(placement.epoch)?;
     let mut grid = ZERO_GRID;
     load_grid(placement.grid, &mut grid)?;
 
-    // 3. The page, in full, on the frozen grid.
+    // 3. The whole pre-state, on the frozen grid.
     let header = verify_page_on_grid(page, &grid)?;
 
     // 4. Placements are admitted only while the book is open.
@@ -624,9 +635,11 @@ fn apply_place_order(page: &mut [u8], placement: &Placement<'_>) -> Outcome<()> 
         ClutchError::MismatchedState,
     )?;
 
-    /* 7. Replay.  The page's own populated-record count is the counter, so a
+    /* 7. Replay.  The page's own populated-slot count is the counter, so a
      * replayed transaction is refused by state rather than by a caller's
-     * assertion, exactly as `FeedAdvance` uses the feed's page counter. */
+     * assertion, exactly as `FeedAdvance` uses the feed's page counter.  A
+     * retirement does not move this count, which is why a cancellation needs a
+     * different counter entirely — see the module docs. */
     require(
         placement.sequence == header.order_count as u64,
         ClutchError::Replay,
@@ -634,74 +647,114 @@ fn apply_place_order(page: &mut [u8], placement: &Placement<'_>) -> Outcome<()> 
 
     // 8. The actor is the owner the record claims.
     require(
-        placement.actor == placement.order.owner,
+        placement.actor == placement.slot.owner(),
         ClutchError::UnauthorizedActor,
     )?;
 
-    // 9. The record, and the width only the epoch knows.
-    placement.order.validate()?;
-    /* The epoch owns this market's actual outcome width, which no page can
-     * bound below `MAX_OUTCOMES`; this is the same refusal
-     * `stream::epoch_binds_page_set` gives for a record the epoch's width does
-     * not admit, applied one record early. */
-    if placement.order.outcome >= epoch.outcome_count {
-        return Err(CodecError::MismatchedBinding.into());
+    /* 9 and 10.  The record codec, then the two bounds only the epoch knows —
+     * this market's actual outcome width, which no page can bound below
+     * `MAX_OUTCOMES`, and this epoch's index, which no page can recover from
+     * the 32-byte epoch identity it stores — then the grid half.  Both epoch
+     * bounds are the refusals `stream::epoch_binds_page_set` gives a frozen
+     * set, applied one record early; the grid half is the split
+     * `stream::verify_page_on_grid` applies to every record already stored. */
+    match &placement.slot {
+        OrderSlot::Single(order) => {
+            order.validate()?;
+            if order.outcome >= epoch.outcome_count || order.expiry_epoch < epoch.epoch_index {
+                return Err(CodecError::MismatchedBinding.into());
+            }
+            grid.tick_of(order.limit)?;
+        }
+        OrderSlot::Portfolio(order) => {
+            order.validate()?;
+            if order.active_len > epoch.outcome_count || order.expiry_epoch < epoch.epoch_index {
+                return Err(CodecError::MismatchedBinding.into());
+            }
+            /* A portfolio bound is a per-lot collateral in complete-set units,
+             * not a per-outcome price, so it has no tick to look up.  What the
+             * grid contributes is the frozen scale, on which the per-lot value
+             * and the per-lot bound must be representable at all. */
+            order.validate_on_scale(grid.price_scale)?;
+        }
+        /* Unreachable through the wire: `Intent::decode` refuses both kinds as
+         * placements.  Stated, not assumed. */
+        OrderSlot::Empty | OrderSlot::Tombstone(_) => {
+            return Err(CodecError::InvalidEnum.into());
+        }
     }
 
-    // 10. The limit is an exact member of the frozen tick vector.
-    grid.tick_of(placement.order.limit)?;
-
-    /* 11. There is a free slot, and the id extends the chain.  A page whose
-     * `order_count` is already `MAX_ORDERS_PER_PAGE` would become a page whose
-     * count is out of range, which is what `validate_head` calls
-     * `InvalidCount`; the refusal is the codec's, not a second vocabulary. */
-    let index = header.order_count as usize;
-    if index >= MAX_ORDERS_PER_PAGE {
-        return Err(CodecError::InvalidCount.into());
-    }
-    /* An empty page extends the *previous page's* last id; a populated one
-     * extends its own.  Both are the rule `validate_link` and the slot cursor
-     * already enforce over the stored bytes, applied one record early. */
-    let predecessor = if index == 0 {
-        header.prev_page_last_order_id
-    } else {
-        header.last_order_id
-    };
-    if placement.order.order_id.0 <= predecessor.0 {
-        return Err(CodecError::NonCanonicalIdentity.into());
-    }
-
-    // 12. Write.
-    let first = if index == 0 {
-        placement.order.order_id
-    } else {
-        header.first_order_id
-    };
-    let last = placement.order.order_id;
-    let count = index as u8 + 1;
-    write_single_slot(page, index, &placement.order)?;
-    write_stored_range(page, count, first, last)?;
-    seal_page_digest(page)?;
-
-    /* The post-write proof.  This module wrote bytes `clutch-solana-layout`
-     * owns, so the frozen codec is asked to accept them and the intended
-     * post-state is compared field for field, on every execution. */
-    let post = verify_page(page)?;
-    /* `verify_page` returning at all is already the proof that the stored
-     * digest equals the layout crate's own fold over the post-write bytes, so
-     * the digest is carried across here rather than folded a fourth time;
-     * every other field is compared against the intended post-state. */
-    let expected = stream::OrderPageHeader {
-        page_digest: post.page_digest,
-        first_order_id: first,
-        last_order_id: last,
-        order_count: count,
-        ..header
-    };
-    require(post == expected, ClutchError::MismatchedState)?;
+    /* 11. The id is not a choice; the page's own state fixes it, and this is
+     * also where a full page and a frozen page refuse.  `append_slot` refuses
+     * the same mismatch with `NonCanonicalIdentity`; the pre-check is kept so
+     * that every check runs in this module's vocabulary before any write. */
     require(
-        read_slot(page, index)? == OrderSlot::Single(placement.order),
+        placement.slot.order_id() == header.next_order_id()?,
         ClutchError::MismatchedState,
+    )?;
+
+    // 12. Slot bytes, header, and digest, in one call.
+    stream::append_slot(page, placement.slot)?;
+    Ok(())
+}
+
+/// Retire one order in place on an open page, or refuse.
+///
+/// The whole write is [`stream::write_tombstone`], which keeps the slot and the
+/// id, moves only `tombstone_count` and the page digest, and refuses a slot
+/// that is not a live record of this owner — which is what makes a replayed
+/// cancellation refuse on state rather than on a caller's assertion.
+fn apply_cancel_order(page: &mut [u8], cancellation: &Cancellation<'_>) -> Outcome<()> {
+    let epoch = accounts::read_epoch(cancellation.epoch)?;
+
+    /* 3. The whole pre-state.  No grid: a retirement carries no limit and no
+     * lots, and it does not re-price the records already on the page. */
+    let header = verify_page(page)?;
+
+    // 4. Cancellations are admitted only while the book is open.
+    require(epoch.phase == EPOCH_PHASE_OPEN, ClutchError::NotActive)?;
+    require(header.frozen == 0, ClutchError::NotActive)?;
+
+    // 5. The page is this epoch's and this market's.
+    require(
+        header.market == epoch.market && header.epoch == epoch.epoch,
+        ClutchError::MismatchedState,
+    )?;
+
+    // 6. The intent names the same epoch the accounts do.
+    require(
+        cancellation.intent.market == epoch.market && cancellation.intent.epoch == epoch.epoch,
+        ClutchError::MismatchedState,
+    )?;
+
+    /* 7. Replay.  The retirement's generation is the request envelope's
+     * sequence; the intent's own `generation` is an assertion about it, so a
+     * wire naming one generation while the envelope carries another retires
+     * nothing.  The refusals that make a *replay* fail are state: the slot kind
+     * and the strict generation order, both inside `write_tombstone`. */
+    require(
+        cancellation.intent.generation == cancellation.sequence,
+        ClutchError::Replay,
+    )?;
+
+    // 8. The actor is the owner the intent names.
+    require(
+        cancellation.actor == cancellation.intent.owner,
+        ClutchError::UnauthorizedActor,
+    )?;
+
+    /* 9. The id names a populated slot of *this* page, by arithmetic rather
+     * than by a search.  `write_tombstone` asks the same question again and
+     * refuses it identically; the pre-check is kept for the same reason the
+     * placement's is. */
+    header.slot_index_of(cancellation.intent.order_id)?;
+
+    // 10. Retire in place: slot bytes, `tombstone_count`, and the digest.
+    stream::write_tombstone(
+        page,
+        cancellation.intent.order_id,
+        cancellation.intent.owner,
+        cancellation.sequence,
     )?;
     Ok(())
 }
@@ -716,15 +769,31 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         Action::Layout(Intent::PlaceOrder {
             market,
             epoch,
-            order,
-        }) => place_order(program_id, accounts, request.sequence, market, epoch, order),
-        /* Refused for a reason, not for a schedule: see the module docs.
-         * Neither reads an account, because reading one would suggest that the
-         * account list it read is the right one, and neither list can be
-         * chosen before the representation and the frame budget are. */
-        Action::Layout(Intent::CancelOrder { .. }) | Action::Layout(Intent::SettlePage { .. }) => {
-            Err(ClutchError::NotYetImplemented.into())
-        }
+            slot,
+        }) => place_order(program_id, accounts, request.sequence, market, epoch, slot),
+        Action::Layout(Intent::CancelOrder {
+            market,
+            epoch,
+            owner,
+            order_id,
+            generation,
+        }) => cancel_order(
+            program_id,
+            accounts,
+            request.sequence,
+            &Retirement {
+                market,
+                epoch,
+                owner,
+                order_id,
+                generation,
+            },
+        ),
+        /* Refused for a measured reason, not for a schedule: see the module
+         * docs.  It reads no account, because reading one would suggest that
+         * the account list it read is the right one, and that list cannot be
+         * chosen before the frame budget is. */
+        Action::Layout(Intent::SettlePage { .. }) => Err(ClutchError::NotYetImplemented.into()),
         /* Every other action belongs to another family module; the router never
          * sends one here, and this arm exists so that adding one to the router
          * is a compile error rather than a silent success. */
@@ -739,7 +808,7 @@ fn place_order(
     sequence: u64,
     intent_market: Hash32,
     intent_epoch: Hash32,
-    order: OrderRecord,
+    slot: OrderSlot,
 ) -> Outcome<()> {
     require_count(accounts, PLACE_ORDER_ACCOUNT_COUNT)?;
     require_signer(&accounts[IX_ACTOR])?;
@@ -786,33 +855,81 @@ fn place_order(
         sequence,
         intent_market,
         intent_epoch,
-        order,
+        slot,
     };
     let mut page_data = borrow_mut!(accounts[IX_PAGE])?;
     apply_place_order(&mut page_data, &placement)
+}
+
+/// The `CancelOrder` account plane.
+///
+/// The same shape as [`place_order`] with the grid role removed: three
+/// accounts, two program-owned, two derived addresses.
+fn cancel_order(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent: &Retirement,
+) -> Outcome<()> {
+    require_count(accounts, CANCEL_ORDER_ACCOUNT_COUNT)?;
+    require_signer(&accounts[IX_ACTOR])?;
+    require_distinct(accounts)?;
+    accounts::validate_state_roles(program_id, accounts, &CANCEL_ORDER_STATE_ROLES)?;
+
+    let epoch = accounts::read_epoch(&accounts[IX_EPOCH].data.borrow())?;
+    let page_header = {
+        let data = accounts[IX_CANCEL_PAGE].data.borrow();
+        stream::OrderPageHeader::decode(&data)?
+    };
+    expect_pda(
+        accounts[IX_EPOCH].key,
+        seeds::epoch_pda(program_id, &epoch.market.bytes(), epoch.epoch_index),
+        Some(epoch.stored_bump),
+    )?;
+    expect_pda(
+        accounts[IX_CANCEL_PAGE].key,
+        seeds::page_pda(
+            program_id,
+            &page_header.epoch.bytes(),
+            page_header.page_index,
+        ),
+        Some(page_header.stored_bump),
+    )?;
+
+    let epoch_data = accounts[IX_EPOCH].data.borrow();
+    let cancellation = Cancellation {
+        epoch: &epoch_data,
+        actor: Hash32::from_bytes(accounts[IX_ACTOR].key.to_bytes()),
+        sequence,
+        intent: *intent,
+    };
+    let mut page_data = borrow_mut!(accounts[IX_CANCEL_PAGE])?;
+    apply_cancel_order(&mut page_data, &cancellation)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use clutch_solana_layout::{
-        canonical_epoch_id, EpochAccount, OrderPageAccount, EPOCH_PHASE_CLEARED,
-        EPOCH_PHASE_FROZEN, RELATION_VERSION,
+        canonical_epoch_id, canonical_order_id, EpochAccount, OrderPageAccount, OrderRecord,
+        PortfolioRecord, TombstoneRecord, EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN,
+        MAX_ORDERS_PER_PAGE, MAX_OUTCOMES, ORDER_KIND_SINGLE, ORDER_RECORD_BYTES, ORDER_SLOT_BYTES,
+        PORTFOLIO_RECORD_BYTES, RELATION_VERSION,
     };
 
     /// Length of the layout crate's private page-digest domain tag,
-    /// `b"dragons-clutch/order-page/v2"`.  It is not exported, so this is the
+    /// `b"dragons-clutch/order-page/v3"`.  It is not exported, so this is the
     /// one number below that a rename would not turn red.
     const ORDER_PAGE_DOMAIN_BYTES: usize = 28;
 
-    /* These tests drive the transition directly, on byte slices, exactly as
+    /* These tests drive the transitions directly, on byte slices, exactly as
      * `observe_resolve`'s do and for the same reason: off-chain program-address
      * derivation is not compiled into this crate (see `crate::seeds`), so no
-     * host test can reach `process`'s account plane.  What is covered here is
-     * every check from the page verdict onward, plus the byte-for-byte
-     * agreement of the write-back with the layout crate's own encoder.  The
-     * account plane is covered only by the SVM differential, which does not
-     * exercise this family yet. */
+     * host test can reach the account planes.  What is covered here is every
+     * check from the page verdict onward, plus the byte-for-byte agreement of
+     * both write-backs with the layout crate's own encoder.  The account plane
+     * is covered only by the SVM differential, which does not exercise this
+     * family yet. */
 
     fn h(value: u8) -> Hash32 {
         Hash32::from_bytes([value; 32])
@@ -837,7 +954,7 @@ mod tests {
         grid
     }
 
-    /// An open epoch on that grid, two outcomes wide.
+    /// An open epoch on that grid, two outcomes wide, at index 4.
     fn epoch_account(grid: &PriceGridAccount) -> EpochAccount {
         let market = h(1);
         EpochAccount {
@@ -864,32 +981,56 @@ mod tests {
         }
     }
 
-    /// One page of that epoch, with `records` already placed.
+    /// One page of that epoch, holding `slots` in its first slots.
+    ///
+    /// Three fields that were parameters before v4 are now derived, because the
+    /// format derives them: the stored range and `prev_page_last_order_id` are
+    /// functions of `page_index` and the slot count alone, and
+    /// `tombstone_count` is a fold over the slots themselves.  A fixture that
+    /// could disagree with them would be a fixture the codec refuses.
     fn page_account(
         epoch: &EpochAccount,
         page_index: u16,
         page_count: u16,
-        prev: Hash32,
-        records: &[OrderRecord],
+        slots: &[OrderSlot],
     ) -> OrderPageAccount {
+        let base = page_index as u64 * MAX_ORDERS_PER_PAGE as u64;
         let mut orders = [OrderSlot::Empty; MAX_ORDERS_PER_PAGE];
+        let mut tombstones = 0u8;
         let mut i = 0;
-        while i < records.len() {
-            orders[i] = OrderSlot::Single(records[i]);
+        while i < slots.len() {
+            orders[i] = slots[i];
+            if slots[i].is_tombstone() {
+                tombstones += 1;
+            }
             i += 1;
         }
+        let rank = |offset: u64| canonical_order_id(base + offset);
         let mut page = OrderPageAccount {
             market: epoch.market,
             epoch: epoch.epoch,
             order_set: Hash32::ZERO,
             page_digest: Hash32::ZERO,
-            first_order_id: records.first().map_or(Hash32::ZERO, |o| o.order_id),
-            last_order_id: records.last().map_or(Hash32::ZERO, |o| o.order_id),
-            prev_page_last_order_id: prev,
+            first_order_id: if slots.is_empty() {
+                Hash32::ZERO
+            } else {
+                rank(1)
+            },
+            last_order_id: if slots.is_empty() {
+                Hash32::ZERO
+            } else {
+                rank(slots.len() as u64)
+            },
+            prev_page_last_order_id: if page_index == 0 {
+                Hash32::ZERO
+            } else {
+                canonical_order_id(base)
+            },
             page_index,
             page_count,
             set_order_count: 0,
-            order_count: records.len() as u8,
+            order_count: slots.len() as u8,
+            tombstone_count: tombstones,
             frozen: 0,
             stored_bump: 5,
             orders,
@@ -904,10 +1045,15 @@ mod tests {
         bytes
     }
 
-    fn order(owner: u8, id: u8, limit: u64) -> OrderRecord {
+    /// One single-Egg record at the canonical rank `rank`.
+    ///
+    /// The rank is not decoration: at v4 an id is `canonical_order_id(rank)`
+    /// and the only rank a page admits is the one its own state fixes, so a
+    /// fixture that names any other rank is a fixture the placement refuses.
+    fn order(owner: u8, rank: u64, limit: u64) -> OrderRecord {
         OrderRecord {
             owner: h(owner),
-            order_id: h(id),
+            order_id: canonical_order_id(rank),
             outcome: 0,
             side: 0,
             quantity: 10,
@@ -915,10 +1061,56 @@ mod tests {
             minimum_fill: 0,
             flags: 0,
             generation: 1,
+            expiry_epoch: 9,
         }
     }
 
-    /// Every account byte string a placement reads but never writes.
+    /// One portfolio record at the canonical rank `rank`: three Eggs of outcome
+    /// 0 and one of outcome 1 per lot, five lots, on the epoch's two-outcome
+    /// width.
+    fn portfolio(owner: u8, rank: u64) -> PortfolioRecord {
+        let mut coefficients = [0u64; MAX_OUTCOMES];
+        coefficients[0] = 3;
+        coefficients[1] = 1;
+        PortfolioRecord {
+            owner: h(owner),
+            order_id: canonical_order_id(rank),
+            side: 0,
+            active_len: 2,
+            flags: 0,
+            coefficients,
+            lots: 5,
+            limit_collateral_per_lot: 9_000,
+            minimum_fill_lots: 2,
+            generation: 1,
+            expiry_epoch: 9,
+        }
+    }
+
+    /// The retirement of `order` at `generation`, as the writer would store it.
+    fn tombstone(order: &OrderRecord, generation: u64) -> TombstoneRecord {
+        TombstoneRecord {
+            order_id: order.order_id,
+            owner: order.owner,
+            retired_generation: order.generation,
+            generation,
+        }
+    }
+
+    /// Where the layout crate's own encoder put this page's `page_digest`.
+    ///
+    /// Found by value rather than declared as a byte offset: this module owns
+    /// no page offset any more, and a 32-byte SHA-256 image is its own
+    /// unambiguous anchor inside a page whose other header fields are an
+    /// identity, a zero, or a rank.
+    fn page_digest_at(page: &[u8]) -> usize {
+        let digest = stream::streamed_page_digest(page).expect("the page folds");
+        page.windows(32)
+            .position(|window| window == digest.0)
+            .expect("the encoder stored the digest it folds")
+    }
+
+    /// Every account byte string a transition reads but never writes.
     struct Domain {
         epoch: EpochAccount,
         epoch_bytes: [u8; account_len::EPOCH],
@@ -942,21 +1134,52 @@ mod tests {
     }
 
     impl Domain {
-        /// A well-formed placement of `order` at `sequence`, signed by its owner.
-        fn placement(&self, sequence: u64, order: OrderRecord) -> Placement<'_> {
+        /// A well-formed placement of `slot` at `sequence`, signed by its owner.
+        fn placement(&self, sequence: u64, slot: OrderSlot) -> Placement<'_> {
             Placement {
                 epoch: &self.epoch_bytes,
                 grid: &self.grid_bytes,
-                actor: order.owner,
+                actor: slot.owner(),
                 sequence,
                 intent_market: self.epoch.market,
                 intent_epoch: self.epoch.epoch,
-                order,
+                slot,
             }
         }
 
-        fn place(&self, page: &mut [u8], sequence: u64, order: OrderRecord) -> Outcome<()> {
-            apply_place_order(page, &self.placement(sequence, order))
+        fn place(&self, page: &mut [u8], sequence: u64, slot: OrderSlot) -> Outcome<()> {
+            apply_place_order(page, &self.placement(sequence, slot))
+        }
+
+        fn place_single(&self, page: &mut [u8], sequence: u64, order: OrderRecord) -> Outcome<()> {
+            self.place(page, sequence, OrderSlot::Single(order))
+        }
+
+        /// The retirement of rank `rank` by `owner`, at `generation`.
+        fn retirement(&self, owner: Hash32, rank: u64, generation: u64) -> Retirement {
+            Retirement {
+                market: self.epoch.market,
+                epoch: self.epoch.epoch,
+                owner,
+                order_id: canonical_order_id(rank),
+                generation,
+            }
+        }
+
+        /// A well-formed cancellation, signed by the owner it names, whose
+        /// declared generation is the envelope's sequence.
+        fn cancellation(&self, sequence: u64, intent: Retirement) -> Cancellation<'_> {
+            Cancellation {
+                epoch: &self.epoch_bytes,
+                actor: intent.owner,
+                sequence,
+                intent,
+            }
+        }
+
+        fn cancel(&self, page: &mut [u8], owner: Hash32, rank: u64, at: u64) -> Outcome<()> {
+            let intent = self.retirement(owner, rank, at);
+            apply_cancel_order(page, &self.cancellation(at, intent))
         }
     }
 
@@ -971,32 +1194,32 @@ mod tests {
     #[test]
     fn place_order_writes_exactly_what_the_layout_encoder_would() {
         let d = domain();
-        let first = order(0x20, 3, 5_000);
-        let second = order(0x21, 9, 2_500);
+        let first = order(0x20, 1, 5_000);
+        let second = order(0x21, 2, 2_500);
 
-        let mut page = encode_page(&page_account(&d.epoch, 0, 1, Hash32::ZERO, &[]));
-        assert_eq!(d.place(&mut page, 0, first), Ok(()));
+        let mut page = encode_page(&page_account(&d.epoch, 0, 1, &[]));
+        assert_eq!(d.place_single(&mut page, 0, first), Ok(()));
         assert_eq!(
             page,
-            encode_page(&page_account(&d.epoch, 0, 1, Hash32::ZERO, &[first])),
+            encode_page(&page_account(&d.epoch, 0, 1, &[OrderSlot::Single(first)])),
             "the post-state must be byte-identical to the layout crate's own encoding"
         );
 
-        assert_eq!(d.place(&mut page, 1, second), Ok(()));
+        assert_eq!(d.place_single(&mut page, 1, second), Ok(()));
         assert_eq!(
             page,
             encode_page(&page_account(
                 &d.epoch,
                 0,
                 1,
-                Hash32::ZERO,
-                &[first, second]
+                &[OrderSlot::Single(first), OrderSlot::Single(second)]
             ))
         );
 
         // And the buffered decoder — the golden reference — reads it back.
         let decoded = OrderPageAccount::decode(&page).expect("post-state decodes");
         assert_eq!(decoded.order_count, 2);
+        assert_eq!(decoded.tombstone_count, 0);
         assert_eq!(decoded.first_order_id, first.order_id);
         assert_eq!(decoded.last_order_id, second.order_id);
         assert_eq!(decoded.orders[0], OrderSlot::Single(first));
@@ -1005,23 +1228,370 @@ mod tests {
     }
 
     #[test]
+    fn place_order_writes_a_portfolio_record_the_same_way() {
+        /* The v1 wire could not carry a portfolio record at all.  It can now,
+         * and the placement path is the same one: the same writer, the same
+         * post-state, and a page that interleaves both families in one chain of
+         * positional ranks. */
+        let d = domain();
+        let single = order(0x20, 1, 5_000);
+        let basket = portfolio(0x21, 2);
+
+        let mut page = encode_page(&page_account(&d.epoch, 0, 1, &[]));
+        assert_eq!(d.place_single(&mut page, 0, single), Ok(()));
+        assert_eq!(
+            d.place(&mut page, 1, OrderSlot::Portfolio(basket)),
+            Ok(()),
+            "a portfolio placement is expressible and admitted"
+        );
+        assert_eq!(
+            page,
+            encode_page(&page_account(
+                &d.epoch,
+                0,
+                1,
+                &[OrderSlot::Single(single), OrderSlot::Portfolio(basket)]
+            )),
+            "the post-state must be byte-identical to the layout crate's own encoding"
+        );
+
+        let decoded = OrderPageAccount::decode(&page).expect("post-state decodes");
+        assert_eq!(decoded.orders[1], OrderSlot::Portfolio(basket));
+        assert_eq!(decoded.last_order_id, basket.order_id);
+
+        /* The refusals the portfolio family adds are the layout crate's own,
+         * applied one record early: the epoch's outcome width bounds
+         * `active_len`, and the frozen scale bounds the per-lot products. */
+        let mut wide = encode_page(&page_account(&d.epoch, 0, 1, &[]));
+        let too_wide = PortfolioRecord {
+            active_len: 3,
+            ..portfolio(0x21, 1)
+        };
+        assert_eq!(too_wide.validate(), Ok(()));
+        assert_eq!(
+            d.place(&mut wide, 0, OrderSlot::Portfolio(too_wide)),
+            Err(codec(CodecError::MismatchedBinding)),
+            "an active width above the epoch's outcome count is the epoch's refusal"
+        );
+
+        /* A per-lot demand and a lot count whose product the ledger holds,
+         * but whose product *times the frozen scale* it does not: the record
+         * is scale-free valid and could never be classified against any
+         * candidate, which is the split `validate_on_scale` exists for. */
+        let mut huge = [0u64; MAX_OUTCOMES];
+        huge[0] = u64::MAX;
+        let unrepresentable = PortfolioRecord {
+            coefficients: huge,
+            lots: 1 << 60,
+            minimum_fill_lots: 0,
+            ..portfolio(0x21, 1)
+        };
+        assert_eq!(unrepresentable.validate(), Ok(()));
+        assert_eq!(
+            d.place(&mut wide, 0, OrderSlot::Portfolio(unrepresentable)),
+            Err(codec(CodecError::ArithmeticOverflow)),
+            "a per-lot product the frozen scale cannot represent is the grid's refusal"
+        );
+        assert_eq!(
+            wide,
+            encode_page(&page_account(&d.epoch, 0, 1, &[])),
+            "a refusal writes nothing"
+        );
+    }
+
+    #[test]
+    fn cancel_order_writes_exactly_what_the_layout_encoder_would() {
+        let d = domain();
+        let first = order(0x20, 1, 5_000);
+        let second = order(0x21, 2, 2_500);
+        let placed = encode_page(&page_account(
+            &d.epoch,
+            0,
+            1,
+            &[OrderSlot::Single(first), OrderSlot::Single(second)],
+        ));
+
+        let mut page = placed;
+        assert_eq!(d.cancel(&mut page, first.owner, 1, 7), Ok(()));
+        assert_eq!(
+            page,
+            encode_page(&page_account(
+                &d.epoch,
+                0,
+                1,
+                &[
+                    OrderSlot::Tombstone(tombstone(&first, 7)),
+                    OrderSlot::Single(second)
+                ]
+            )),
+            "the retirement must be byte-identical to the layout crate's own encoding"
+        );
+
+        /* Retire in place: the slot and the id stay, so `order_count` and the
+         * stored range do not move and the later order is not renumbered. */
+        let decoded = OrderPageAccount::decode(&page).expect("post-state decodes");
+        assert_eq!(decoded.order_count, 2);
+        assert_eq!(decoded.tombstone_count, 1);
+        assert_eq!(decoded.first_order_id, first.order_id);
+        assert_eq!(decoded.last_order_id, second.order_id);
+        assert_eq!(decoded.orders[1], OrderSlot::Single(second));
+
+        // A page with a retirement on it still takes the next placement, at the
+        // rank its own state fixes — retirements do not free a rank.
+        let third = order(0x20, 3, 7_500);
+        assert_eq!(d.place_single(&mut page, 2, third), Ok(()));
+        assert_eq!(
+            page,
+            encode_page(&page_account(
+                &d.epoch,
+                0,
+                1,
+                &[
+                    OrderSlot::Tombstone(tombstone(&first, 7)),
+                    OrderSlot::Single(second),
+                    OrderSlot::Single(third)
+                ]
+            ))
+        );
+
+        // A portfolio record retires exactly the same way.
+        let basket = portfolio(0x22, 1);
+        let mut baskets = encode_page(&page_account(
+            &d.epoch,
+            0,
+            1,
+            &[OrderSlot::Portfolio(basket)],
+        ));
+        assert_eq!(d.cancel(&mut baskets, basket.owner, 1, 4), Ok(()));
+        assert_eq!(
+            baskets,
+            encode_page(&page_account(
+                &d.epoch,
+                0,
+                1,
+                &[OrderSlot::Tombstone(TombstoneRecord {
+                    order_id: basket.order_id,
+                    owner: basket.owner,
+                    retired_generation: basket.generation,
+                    generation: 4,
+                })]
+            ))
+        );
+    }
+
+    #[test]
+    fn cancel_order_refuses_a_replayed_retirement() {
+        let d = domain();
+        let placed = order(0x20, 1, 5_000);
+        let mut page = encode_page(&page_account(&d.epoch, 0, 1, &[OrderSlot::Single(placed)]));
+        assert_eq!(d.cancel(&mut page, placed.owner, 1, 7), Ok(()));
+        let retired = page;
+
+        /* The replay counter is state, in two parts.  The slot kind is the
+         * first: a retirement is not a live record, so it cannot be retired
+         * again — at the same generation, at a higher one, or by anyone. */
+        for at in [7u64, 8, u64::MAX] {
+            let mut page = retired;
+            assert_eq!(
+                d.cancel(&mut page, placed.owner, 1, at),
+                Err(codec(CodecError::MismatchedBinding)),
+                "a retired slot holds no live record to retire"
+            );
+            assert_eq!(page, retired, "a refusal writes nothing");
+        }
+
+        // Nor does a placement reclaim the rank: the slot is populated, so the
+        // page's own state fixes the next rank one higher.
+        let mut page = retired;
+        assert_eq!(
+            d.place_single(&mut page, 1, order(0x20, 1, 5_000)),
+            Err(adapter(ClutchError::MismatchedState))
+        );
+        assert_eq!(page, retired);
+    }
+
+    #[test]
+    fn cancel_order_refuses_a_stale_generation_a_foreign_owner_and_another_page() {
+        let d = domain();
+        /* A record whose own generation is 5, so a retirement must carry a
+         * strictly higher one. */
+        let placed = OrderRecord {
+            generation: 5,
+            ..order(0x20, 1, 5_000)
+        };
+        let clean = encode_page(&page_account(&d.epoch, 0, 1, &[OrderSlot::Single(placed)]));
+
+        // The retirement strictly follows the placement it retires.
+        for at in [0u64, 3, 5] {
+            let mut page = clean;
+            assert_eq!(
+                d.cancel(&mut page, placed.owner, 1, at),
+                Err(codec(CodecError::InvalidEnum)),
+                "a retirement at {at} does not follow generation 5"
+            );
+            assert_eq!(page, clean, "a refusal writes nothing");
+        }
+        let mut page = clean;
+        assert_eq!(d.cancel(&mut page, placed.owner, 1, 6), Ok(()));
+
+        // A signer who is not the record's owner retires nothing, whether the
+        // intent names its own owner or the record's.
+        let mut page = clean;
+        let intent = d.retirement(h(0x21), 1, 9);
+        assert_eq!(
+            apply_cancel_order(&mut page, &d.cancellation(9, intent)),
+            Err(codec(CodecError::MismatchedBinding)),
+            "the slot's own owner is the only owner that may retire it"
+        );
+        let mut impostor = d.cancellation(9, d.retirement(placed.owner, 1, 9));
+        impostor.actor = h(0x21);
+        assert_eq!(
+            apply_cancel_order(&mut page, &impostor),
+            Err(adapter(ClutchError::UnauthorizedActor))
+        );
+        assert_eq!(page, clean);
+
+        /* The id names the page and the slot by arithmetic.  A rank this page
+         * does not own, and a rank it owns but has not populated, are both
+         * refused as bindings of *this* page rather than as bad ids. */
+        for rank in [2u64, 16, 17, 64] {
+            let mut page = clean;
+            assert_eq!(
+                d.cancel(&mut page, placed.owner, rank, 9),
+                Err(codec(CodecError::MismatchedBinding)),
+                "rank {rank} is not a populated slot of page 0"
+            );
+        }
+        // And page 1's own slots are not reachable from page 0's account.
+        let tail_record = order(0x20, 17, 5_000);
+        let mut tail = encode_page(&page_account(
+            &d.epoch,
+            1,
+            2,
+            &[OrderSlot::Single(tail_record)],
+        ));
+        assert_eq!(
+            d.cancel(&mut tail, tail_record.owner, 1, 9),
+            Err(codec(CodecError::MismatchedBinding)),
+            "page one does not hold rank one"
+        );
+        assert_eq!(d.cancel(&mut tail, tail_record.owner, 17, 9), Ok(()));
+
+        // A non-rank identity is refused before any page is consulted.
+        let mut page = clean;
+        let mut junk = d.cancellation(9, d.retirement(placed.owner, 1, 9));
+        junk.intent.order_id = h(0x3e);
+        assert_eq!(
+            apply_cancel_order(&mut page, &junk),
+            Err(codec(CodecError::NonCanonicalIdentity))
+        );
+
+        // The declared generation is an assertion about the envelope sequence.
+        let mut disagreeing = d.cancellation(9, d.retirement(placed.owner, 1, 8));
+        disagreeing.actor = placed.owner;
+        assert_eq!(
+            apply_cancel_order(&mut page, &disagreeing),
+            Err(adapter(ClutchError::Replay))
+        );
+        assert_eq!(page, clean);
+    }
+
+    #[test]
+    fn cancel_order_refuses_a_closed_epoch_a_frozen_page_and_a_foreign_epoch() {
+        let grid = grid_account();
+        let placed = order(0x20, 1, 5_000);
+
+        for phase in [EPOCH_PHASE_FROZEN, EPOCH_PHASE_CLEARED] {
+            let base = epoch_account(&grid);
+            /* A non-open epoch carries the frozen-set commitments, so the
+             * fixture must be a whole frozen epoch rather than a phase byte. */
+            let closed = EpochAccount {
+                phase,
+                order_set: h(0x40),
+                first_order_id: canonical_order_id(1),
+                last_order_id: canonical_order_id(2),
+                page_count: 1,
+                order_count: 2,
+                ..base
+            };
+            let d = domain_with(closed, grid);
+            let mut page = encode_page(&page_account(&d.epoch, 0, 1, &[OrderSlot::Single(placed)]));
+            assert_eq!(
+                d.cancel(&mut page, placed.owner, 1, 7),
+                Err(adapter(ClutchError::NotActive))
+            );
+        }
+
+        // The page's own freeze flag is checked as well as the epoch's phase.
+        let d = domain();
+        let mut frozen = page_account(&d.epoch, 0, 1, &[OrderSlot::Single(placed)]);
+        frozen.frozen = 1;
+        frozen.set_order_count = 1;
+        frozen.order_set = h(0x40);
+        frozen.page_digest = frozen.recomputed_page_digest().expect("page digest");
+        let mut page = encode_page(&frozen);
+        assert_eq!(
+            d.cancel(&mut page, placed.owner, 1, 7),
+            Err(adapter(ClutchError::NotActive))
+        );
+
+        // A page of another epoch, internally valid, is still not this one.
+        let other_epoch = EpochAccount {
+            epoch: canonical_epoch_id(d.epoch.market, 5),
+            epoch_index: 5,
+            ..d.epoch
+        };
+        let mut foreign = encode_page(&page_account(
+            &other_epoch,
+            0,
+            1,
+            &[OrderSlot::Single(placed)],
+        ));
+        assert_eq!(
+            d.cancel(&mut foreign, placed.owner, 1, 7),
+            Err(adapter(ClutchError::MismatchedState))
+        );
+
+        // And an intent that names another market or another epoch.
+        let clean = encode_page(&page_account(&d.epoch, 0, 1, &[OrderSlot::Single(placed)]));
+        for (market, epoch) in [
+            (h(0x7e), d.epoch.epoch),
+            (d.epoch.market, canonical_epoch_id(d.epoch.market, 5)),
+        ] {
+            let mut page = clean;
+            let mut cancellation = d.cancellation(7, d.retirement(placed.owner, 1, 7));
+            cancellation.intent.market = market;
+            cancellation.intent.epoch = epoch;
+            assert_eq!(
+                apply_cancel_order(&mut page, &cancellation),
+                Err(adapter(ClutchError::MismatchedState))
+            );
+            assert_eq!(page, clean, "a refusal writes nothing");
+        }
+    }
+
+    #[test]
     fn place_order_fills_a_page_and_then_refuses_a_seventeenth_record() {
         let d = domain();
-        let mut page = encode_page(&page_account(&d.epoch, 0, 1, Hash32::ZERO, &[]));
+        let mut page = encode_page(&page_account(&d.epoch, 0, 1, &[]));
         let mut i = 0;
         while i < MAX_ORDERS_PER_PAGE {
-            let id = (i + 1) as u8;
-            assert_eq!(d.place(&mut page, i as u64, order(0x20, id, 5_000)), Ok(()));
+            let rank = i as u64 + 1;
+            assert_eq!(
+                d.place_single(&mut page, i as u64, order(0x20, rank, 5_000)),
+                Ok(())
+            );
             i += 1;
         }
         let full = page;
-        // A seventeenth record would be a page whose count is out of range,
-        // which is exactly what the page header calls `InvalidCount`.
+        /* A seventeenth record has no slot, which `next_order_id` reports as
+         * the count that would result: `InvalidCount`, the page header's own
+         * word for it. */
         assert_eq!(
-            d.place(
+            d.place_single(
                 &mut page,
                 MAX_ORDERS_PER_PAGE as u64,
-                order(0x20, 0xf0, 5_000)
+                order(0x20, MAX_ORDERS_PER_PAGE as u64 + 1, 5_000)
             ),
             Err(codec(CodecError::InvalidCount))
         );
@@ -1031,9 +1601,14 @@ mod tests {
     #[test]
     fn place_order_refuses_every_page_the_streaming_decoder_refuses() {
         let d = domain();
-        let existing = order(0x20, 3, 5_000);
-        let clean = encode_page(&page_account(&d.epoch, 0, 1, Hash32::ZERO, &[existing]));
-        let next = order(0x20, 9, 2_500);
+        let existing = order(0x20, 1, 5_000);
+        let clean = encode_page(&page_account(
+            &d.epoch,
+            0,
+            1,
+            &[OrderSlot::Single(existing)],
+        ));
+        let next = order(0x20, 2, 2_500);
 
         // Each case is a byte-level fixture the frozen codec's own adversarial
         // tests carry, and the refusal must be the codec's verdict verbatim.
@@ -1043,7 +1618,7 @@ mod tests {
         cases[1].0 = "wrong version";
         cases[1].1[1] = clean[1].wrapping_add(1);
         cases[2].0 = "unknown slot kind";
-        cases[2].1[stream::ORDER_PAGE_HEADER_BYTES] = 3;
+        cases[2].1[stream::ORDER_PAGE_HEADER_BYTES] = 4;
         cases[3].0 = "unknown kind in a padding slot";
         cases[3].1[stream::ORDER_PAGE_HEADER_BYTES + ORDER_SLOT_BYTES] = u8::MAX;
         cases[4].0 = "nonzero single-egg tail";
@@ -1056,18 +1631,38 @@ mod tests {
         cases[7].1[stream::ORDER_PAGE_HEADER_BYTES + ORDER_SLOT_BYTES] = ORDER_KIND_SINGLE;
         cases[8].0 = "nonzero final byte";
         cases[8].1[account_len::ORDER_PAGE - 1] = 1;
+        /* The two header corruptions locate their field by the value the
+         * encoder stored rather than by an offset this module would then own;
+         * `first_order_id` is the field the layout's header table puts
+         * immediately after `page_digest`, and the fixture asserts that before
+         * damaging it. */
+        let at_digest = page_digest_at(&clean);
+        let at_first_order_id = at_digest + 32;
+        assert_eq!(
+            &clean[at_first_order_id..at_first_order_id + 32],
+            &existing.order_id.0,
+            "first_order_id follows page_digest"
+        );
         cases[9].0 = "stale page digest";
-        cases[9].1[OFF_PAGE_DIGEST] ^= 1;
+        cases[9].1[at_digest] ^= 1;
         cases[10].0 = "stale stored range";
-        cases[10].1[OFF_LAST_ORDER_ID] ^= 1;
+        cases[10].1[at_first_order_id] ^= 1;
 
         for (name, bytes) in cases.iter() {
             let expected = stream::verify_page(bytes).expect_err(name);
             let mut page = *bytes;
             assert_eq!(
-                d.place(&mut page, 1, next),
+                d.place_single(&mut page, 1, next),
                 Err(codec(expected)),
                 "{name}: the placement must report the codec's own verdict"
+            );
+            assert_eq!(&page, bytes, "{name}: a refusal writes nothing");
+            // A cancellation reads the same page through the same decoder.
+            let mut page = *bytes;
+            assert_eq!(
+                d.cancel(&mut page, existing.owner, 1, 7),
+                Err(codec(expected)),
+                "{name}: the cancellation must report it too"
             );
             assert_eq!(&page, bytes, "{name}: a refusal writes nothing");
         }
@@ -1075,18 +1670,18 @@ mod tests {
         // Framing faults that change the buffer's length are the same story.
         let mut short = clean[..account_len::ORDER_PAGE - 1].to_vec();
         assert_eq!(
-            d.place(&mut short, 1, next),
+            d.place_single(&mut short, 1, next),
             Err(codec(CodecError::Truncated))
         );
         let mut long = clean.to_vec();
         long.push(0);
         assert_eq!(
-            d.place(&mut long, 1, next),
+            d.place_single(&mut long, 1, next),
             Err(codec(CodecError::TrailingBytes))
         );
         let mut zeros = [0u8; account_len::ORDER_PAGE];
         assert_eq!(
-            d.place(&mut zeros, 0, next),
+            d.place_single(&mut zeros, 0, next),
             Err(codec(
                 stream::verify_page(&[0; account_len::ORDER_PAGE]).expect_err("all zero")
             ))
@@ -1096,16 +1691,16 @@ mod tests {
     #[test]
     fn place_order_refuses_an_off_grid_limit_and_a_grid_the_epoch_does_not_name() {
         let d = domain();
-        let mut page = encode_page(&page_account(&d.epoch, 0, 1, Hash32::ZERO, &[]));
+        let mut page = encode_page(&page_account(&d.epoch, 0, 1, &[]));
 
         // A limit between two ticks has no tick, so it has no relation price.
         assert_eq!(
-            d.place(&mut page, 0, order(0x20, 3, 5_001)),
+            d.place_single(&mut page, 0, order(0x20, 1, 5_001)),
             Err(codec(CodecError::InvalidTick))
         );
         // Neither has one above the scale.
         assert_eq!(
-            d.place(&mut page, 0, order(0x20, 3, 20_000)),
+            d.place_single(&mut page, 0, order(0x20, 1, 20_000)),
             Err(codec(CodecError::InvalidTick))
         );
 
@@ -1115,7 +1710,7 @@ mod tests {
         other.grid = other.recomputed_grid_id().expect("grid identity");
         let mut other_bytes = [0; account_len::PRICE_GRID];
         other.encode(&mut other_bytes).expect("grid encodes");
-        let mut placement = d.placement(0, order(0x20, 3, 5_000));
+        let mut placement = d.placement(0, OrderSlot::Single(order(0x20, 1, 5_000)));
         placement.grid = &other_bytes;
         assert_eq!(
             apply_place_order(&mut page, &placement),
@@ -1136,11 +1731,10 @@ mod tests {
             &stale_domain.epoch,
             0,
             1,
-            Hash32::ZERO,
-            &[order(0x20, 3, 5_000)],
+            &[OrderSlot::Single(order(0x20, 1, 5_000))],
         ));
         assert_eq!(
-            stale_domain.place(&mut occupied, 1, order(0x20, 9, 2_500)),
+            stale_domain.place_single(&mut occupied, 1, order(0x20, 2, 2_500)),
             Err(codec(CodecError::InvalidTick))
         );
     }
@@ -1150,21 +1744,19 @@ mod tests {
         let grid = grid_account();
         for phase in [EPOCH_PHASE_FROZEN, EPOCH_PHASE_CLEARED] {
             let base = epoch_account(&grid);
-            /* A non-open epoch carries the frozen-set commitments, so the
-             * fixture must be a whole frozen epoch rather than a phase byte. */
             let closed = EpochAccount {
                 phase,
                 order_set: h(0x40),
-                first_order_id: h(3),
-                last_order_id: h(9),
+                first_order_id: canonical_order_id(1),
+                last_order_id: canonical_order_id(2),
                 page_count: 1,
                 order_count: 2,
                 ..base
             };
             let d = domain_with(closed, grid);
-            let mut page = encode_page(&page_account(&d.epoch, 0, 1, Hash32::ZERO, &[]));
+            let mut page = encode_page(&page_account(&d.epoch, 0, 1, &[]));
             assert_eq!(
-                d.place(&mut page, 0, order(0x20, 3, 5_000)),
+                d.place_single(&mut page, 0, order(0x20, 1, 5_000)),
                 Err(adapter(ClutchError::NotActive))
             );
         }
@@ -1172,60 +1764,87 @@ mod tests {
         // The page's own freeze flag is checked as well as the epoch's phase:
         // an open epoch and a frozen page still refuse.
         let d = domain();
-        let mut frozen = page_account(&d.epoch, 0, 1, Hash32::ZERO, &[order(0x20, 3, 5_000)]);
+        let mut frozen = page_account(&d.epoch, 0, 1, &[OrderSlot::Single(order(0x20, 1, 5_000))]);
         frozen.frozen = 1;
         frozen.set_order_count = 1;
         frozen.order_set = h(0x40);
         frozen.page_digest = frozen.recomputed_page_digest().expect("page digest");
         let mut page = encode_page(&frozen);
         assert_eq!(
-            d.place(&mut page, 1, order(0x20, 9, 2_500)),
+            d.place_single(&mut page, 1, order(0x20, 2, 2_500)),
             Err(adapter(ClutchError::NotActive))
         );
     }
 
     #[test]
-    fn place_order_refuses_an_order_id_that_does_not_extend_the_chain() {
+    fn place_order_refuses_a_rank_that_is_not_the_one_the_page_fixes() {
+        /* At v3 this was an ordering rule — an id had to be strictly above its
+         * predecessor — and a caller could burn a page by claiming a huge one.
+         * At v4 the page's own state fixes exactly one admissible rank, so the
+         * check is an equality and the griefing vector has nothing to grief. */
         let d = domain();
-        let existing = order(0x20, 9, 5_000);
-        let occupied = encode_page(&page_account(&d.epoch, 0, 1, Hash32::ZERO, &[existing]));
+        let existing = order(0x20, 1, 5_000);
+        let occupied = encode_page(&page_account(
+            &d.epoch,
+            0,
+            1,
+            &[OrderSlot::Single(existing)],
+        ));
 
-        for id in [9u8, 3, 0] {
+        // The page holds rank 1, so rank 2 is the only rank it will take.
+        for rank in [1u64, 3, 16, 17, 64] {
             let mut page = occupied;
-            let expected = if id == 0 {
-                // A zero identity is refused by the record codec first.
-                codec(CodecError::ZeroIdentity)
-            } else {
-                codec(CodecError::NonCanonicalIdentity)
-            };
-            assert_eq!(d.place(&mut page, 1, order(0x20, id, 2_500)), Err(expected));
-            assert_eq!(page, occupied);
+            assert_eq!(
+                d.place_single(&mut page, 1, order(0x20, rank, 2_500)),
+                Err(adapter(ClutchError::MismatchedState)),
+                "rank {rank} is not the rank this page's state fixes"
+            );
+            assert_eq!(page, occupied, "a refusal writes nothing");
         }
+        // Identities that are not ranks at all are the record codec's refusal.
+        for (id, expected) in [
+            (Hash32::ZERO, CodecError::ZeroIdentity),
+            (h(0xff), CodecError::NonCanonicalIdentity),
+            (canonical_order_id(65), CodecError::InvalidCount),
+        ] {
+            let mut page = occupied;
+            let record = OrderRecord {
+                order_id: id,
+                ..order(0x20, 2, 2_500)
+            };
+            assert_eq!(
+                d.place_single(&mut page, 1, record),
+                Err(codec(expected)),
+                "{id:?} is no rank"
+            );
+        }
+        let mut page = occupied;
+        assert_eq!(d.place_single(&mut page, 1, order(0x20, 2, 2_500)), Ok(()));
 
-        // On an empty page the chain is the *previous* page's last id, which is
-        // the rule `validate_link` states over stored bytes.
-        let mut tail = encode_page(&page_account(&d.epoch, 1, 2, h(9), &[]));
+        /* A later page's ranks are its index's, not its predecessor's fill: an
+         * empty page one takes rank 17 whatever page zero holds. */
+        let mut tail = encode_page(&page_account(&d.epoch, 1, 2, &[]));
         assert_eq!(
-            d.place(&mut tail, 0, order(0x20, 5, 5_000)),
-            Err(codec(CodecError::NonCanonicalIdentity))
+            d.place_single(&mut tail, 0, order(0x20, 1, 5_000)),
+            Err(adapter(ClutchError::MismatchedState))
         );
-        assert_eq!(d.place(&mut tail, 0, order(0x20, 20, 5_000)), Ok(()));
+        assert_eq!(d.place_single(&mut tail, 0, order(0x20, 17, 5_000)), Ok(()));
         assert_eq!(
             OrderPageAccount::decode(&tail)
                 .expect("post-state decodes")
                 .first_order_id,
-            h(20)
+            canonical_order_id(17)
         );
     }
 
     #[test]
     fn place_order_refuses_an_unauthenticated_owner_and_a_replayed_sequence() {
         let d = domain();
-        let clean = encode_page(&page_account(&d.epoch, 0, 1, Hash32::ZERO, &[]));
+        let clean = encode_page(&page_account(&d.epoch, 0, 1, &[]));
 
         // The signer is the owner, or there is no placement.
         let mut page = clean;
-        let mut placement = d.placement(0, order(0x20, 3, 5_000));
+        let mut placement = d.placement(0, OrderSlot::Single(order(0x20, 1, 5_000)));
         placement.actor = h(0x21);
         assert_eq!(
             apply_place_order(&mut page, &placement),
@@ -1233,20 +1852,20 @@ mod tests {
         );
         assert_eq!(page, clean);
 
-        // The page's own record count is the replay counter, so a sequence that
-        // is not the next free slot is refused in both directions.
+        // The page's own populated-slot count is the replay counter, so a
+        // sequence that is not the next free slot is refused in both directions.
         for sequence in [1u64, 7, u64::MAX] {
             let mut page = clean;
             assert_eq!(
-                d.place(&mut page, sequence, order(0x20, 3, 5_000)),
+                d.place_single(&mut page, sequence, order(0x20, 1, 5_000)),
                 Err(adapter(ClutchError::Replay))
             );
         }
         let mut page = clean;
-        assert_eq!(d.place(&mut page, 0, order(0x20, 3, 5_000)), Ok(()));
+        assert_eq!(d.place_single(&mut page, 0, order(0x20, 1, 5_000)), Ok(()));
         // Replaying the accepted request now names a stale slot.
         assert_eq!(
-            d.place(&mut page, 0, order(0x20, 5, 5_000)),
+            d.place_single(&mut page, 0, order(0x20, 2, 5_000)),
             Err(adapter(ClutchError::Replay))
         );
     }
@@ -1254,7 +1873,7 @@ mod tests {
     #[test]
     fn place_order_refuses_a_page_or_an_intent_that_names_another_epoch() {
         let d = domain();
-        let clean = encode_page(&page_account(&d.epoch, 0, 1, Hash32::ZERO, &[]));
+        let clean = encode_page(&page_account(&d.epoch, 0, 1, &[]));
 
         // A page of a different epoch, internally valid, is still not this one.
         let other_epoch = EpochAccount {
@@ -1262,9 +1881,9 @@ mod tests {
             epoch_index: 5,
             ..d.epoch
         };
-        let mut foreign = encode_page(&page_account(&other_epoch, 0, 1, Hash32::ZERO, &[]));
+        let mut foreign = encode_page(&page_account(&other_epoch, 0, 1, &[]));
         assert_eq!(
-            d.place(&mut foreign, 0, order(0x20, 3, 5_000)),
+            d.place_single(&mut foreign, 0, order(0x20, 1, 5_000)),
             Err(adapter(ClutchError::MismatchedState))
         );
 
@@ -1274,7 +1893,7 @@ mod tests {
             (d.epoch.market, canonical_epoch_id(d.epoch.market, 5)),
         ] {
             let mut page = clean;
-            let mut placement = d.placement(0, order(0x20, 3, 5_000));
+            let mut placement = d.placement(0, OrderSlot::Single(order(0x20, 1, 5_000)));
             placement.intent_market = market;
             placement.intent_epoch = epoch;
             assert_eq!(
@@ -1286,10 +1905,10 @@ mod tests {
     }
 
     #[test]
-    fn place_order_mirrors_the_record_codec_and_the_epochs_outcome_width() {
+    fn place_order_mirrors_the_record_codec_and_the_epochs_width_and_horizon() {
         let d = domain();
-        let clean = encode_page(&page_account(&d.epoch, 0, 1, Hash32::ZERO, &[]));
-        let base = order(0x20, 3, 5_000);
+        let clean = encode_page(&page_account(&d.epoch, 0, 1, &[]));
+        let base = order(0x20, 1, 5_000);
 
         let cases: [(&str, OrderRecord, CodecError); 7] = [
             (
@@ -1349,7 +1968,7 @@ mod tests {
             // The refusal is the record codec's own, not a second vocabulary.
             assert_eq!(record.validate(), Err(expected), "{name}");
             let mut page = clean;
-            let mut placement = d.placement(0, record);
+            let mut placement = d.placement(0, OrderSlot::Single(record));
             placement.actor = record.owner;
             assert_eq!(
                 apply_place_order(&mut page, &placement),
@@ -1359,166 +1978,181 @@ mod tests {
             assert_eq!(page, clean, "{name}: a refusal writes nothing");
         }
 
-        /* An outcome inside `MAX_OUTCOMES` but outside this market's width is a
-         * record no page can refuse and the epoch must: it is the same bound
-         * `stream::epoch_binds_page_set` applies to a frozen set. */
-        let wide = OrderRecord { outcome: 2, ..base };
-        assert_eq!(wide.validate(), Ok(()));
+        /* Two bounds a record can satisfy and the epoch still refuse: an
+         * outcome inside `MAX_OUTCOMES` but outside this market's width, and an
+         * expiry already behind this epoch's index.  Both are the refusals
+         * `stream::epoch_binds_page_set` gives a frozen set, and neither is a
+         * question a page can even ask — it bounds an outcome only by
+         * `MAX_OUTCOMES`, and it cannot invert its 32-byte epoch identity into
+         * an index. */
+        for (name, record) in [
+            (
+                "outcome outside the market's width",
+                OrderRecord { outcome: 2, ..base },
+            ),
+            (
+                "expiry already behind the epoch",
+                OrderRecord {
+                    expiry_epoch: 3,
+                    ..base
+                },
+            ),
+        ] {
+            assert_eq!(record.validate(), Ok(()), "{name}");
+            let mut page = clean;
+            assert_eq!(
+                d.place_single(&mut page, 0, record),
+                Err(codec(CodecError::MismatchedBinding)),
+                "{name}"
+            );
+            assert_eq!(page, clean, "{name}: a refusal writes nothing");
+        }
+        // The epoch's own index is admitted: the horizon is inclusive.
         let mut page = clean;
         assert_eq!(
-            d.place(&mut page, 0, wide),
-            Err(codec(CodecError::MismatchedBinding))
+            d.place_single(
+                &mut page,
+                0,
+                OrderRecord {
+                    expiry_epoch: d.epoch.epoch_index,
+                    ..base
+                }
+            ),
+            Ok(())
         );
-        assert_eq!(page, clean);
     }
 
     #[test]
-    fn the_page_offsets_this_module_writes_match_the_frozen_codec() {
+    fn the_place_order_wire_carries_both_order_families() {
+        /* `Intent::PlaceOrder` carries an `OrderSlot` at intent v2, so the
+         * portfolio family is expressible: 174 bytes single-Egg and 302
+         * portfolio, the kind byte plus that kind's exact body and none of the
+         * padding a page slot carries.  The v1 wire could carry only the
+         * narrower of the two, which is the gap this closes. */
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 4);
+        let single = Intent::PlaceOrder {
+            market,
+            epoch,
+            slot: OrderSlot::Single(order(0x20, 1, 5_000)),
+        };
+        let basket = Intent::PlaceOrder {
+            market,
+            epoch,
+            slot: OrderSlot::Portfolio(portfolio(0x20, 1)),
+        };
+        assert_eq!(single.encoded_len(), 2 + 32 + 32 + 1 + ORDER_RECORD_BYTES);
+        assert_eq!(
+            basket.encoded_len(),
+            2 + 32 + 32 + 1 + PORTFOLIO_RECORD_BYTES
+        );
+
+        for intent in [single, basket] {
+            let mut bytes = [0; clutch_solana_layout::MAX_INTENT_BYTES];
+            let len = intent.encode(&mut bytes).expect("intent encodes");
+            assert_eq!(len, intent.encoded_len());
+            assert_eq!(Intent::decode(&bytes[..len]), Ok(intent));
+        }
+
+        /* Padding and a retirement are recognized slot kinds that are not
+         * placements.  The intent codec refuses both, and so does this module's
+         * own transition, which is why the arm is stated rather than assumed. */
         let d = domain();
-        let record = OrderRecord {
-            owner: h(0x20),
-            order_id: h(0x33),
-            outcome: 1,
-            side: 1,
-            quantity: 0x0102_0304_0506_0708,
-            limit: 5_000,
-            minimum_fill: 0x0102_0304_0506_0708,
-            flags: 1,
-            generation: 0x1122_3344_5566_7788,
-        };
-        let page = page_account(&d.epoch, 1, 2, h(0x30), &[record]);
-        let bytes = encode_page(&page);
-
-        // Header offsets, read back out of the layout crate's own encoding.
-        let hash_at = |off: usize| Hash32::from_bytes(bytes[off..off + 32].try_into().unwrap());
-        let u16_at = |off: usize| u16::from_le_bytes(bytes[off..off + 2].try_into().unwrap());
-        assert_eq!(hash_at(OFF_MARKET), page.market);
-        assert_eq!(hash_at(OFF_EPOCH), page.epoch);
-        assert_eq!(hash_at(OFF_ORDER_SET), page.order_set);
-        assert_eq!(hash_at(OFF_PAGE_DIGEST), page.page_digest);
-        assert_eq!(hash_at(OFF_FIRST_ORDER_ID), page.first_order_id);
-        assert_eq!(hash_at(OFF_LAST_ORDER_ID), page.last_order_id);
-        assert_eq!(
-            hash_at(OFF_PREV_PAGE_LAST_ORDER_ID),
-            page.prev_page_last_order_id
-        );
-        assert_eq!(u16_at(OFF_PAGE_INDEX), page.page_index);
-        assert_eq!(u16_at(OFF_PAGE_COUNT), page.page_count);
-        assert_eq!(u16_at(OFF_SET_ORDER_COUNT), page.set_order_count);
-        assert_eq!(bytes[OFF_ORDER_COUNT], page.order_count);
-        assert_eq!(bytes[OFF_FROZEN], page.frozen);
-        assert_eq!(bytes[OFF_STORED_BUMP], page.stored_bump);
-
-        // Slot offsets, likewise.
-        let slot = &bytes
-            [stream::ORDER_PAGE_HEADER_BYTES..stream::ORDER_PAGE_HEADER_BYTES + ORDER_SLOT_BYTES];
-        let u64_at = |off: usize| u64::from_le_bytes(slot[off..off + 8].try_into().unwrap());
-        assert_eq!(slot[0], ORDER_KIND_SINGLE);
-        assert_eq!(&slot[SLOT_OFF_OWNER..SLOT_OFF_OWNER + 32], &record.owner.0);
-        assert_eq!(
-            &slot[SLOT_OFF_ORDER_ID..SLOT_OFF_ORDER_ID + 32],
-            &record.order_id.0
-        );
-        assert_eq!(slot[SLOT_OFF_OUTCOME], record.outcome);
-        assert_eq!(slot[SLOT_OFF_SIDE], record.side);
-        assert_eq!(u64_at(SLOT_OFF_QUANTITY), record.quantity);
-        assert_eq!(u64_at(SLOT_OFF_LIMIT), record.limit);
-        assert_eq!(u64_at(SLOT_OFF_MINIMUM_FILL), record.minimum_fill);
-        assert_eq!(slot[SLOT_OFF_FLAGS], record.flags);
-        assert_eq!(u64_at(SLOT_OFF_GENERATION), record.generation);
-        // Everything past the record body is canonical zero padding.
-        assert!(slot[1 + ORDER_RECORD_BYTES..].iter().all(|b| *b == 0));
-
-        // And this module's own writer reproduces that slot exactly.
-        let mut written = encode_page(&page_account(&d.epoch, 1, 2, h(0x30), &[]));
-        write_single_slot(&mut written, 0, &record).expect("slot writes");
-        assert_eq!(
-            &written[stream::ORDER_PAGE_HEADER_BYTES
-                ..stream::ORDER_PAGE_HEADER_BYTES + ORDER_SLOT_BYTES],
-            slot
-        );
+        let mut page = encode_page(&page_account(&d.epoch, 0, 1, &[]));
+        for slot in [
+            OrderSlot::Empty,
+            OrderSlot::Tombstone(tombstone(&order(0x20, 1, 5_000), 7)),
+        ] {
+            let mut placement = d.placement(0, slot);
+            placement.actor = slot.owner();
+            assert_eq!(
+                apply_place_order(&mut page, &placement),
+                Err(codec(CodecError::InvalidEnum))
+            );
+            let mut bytes = [0; clutch_solana_layout::MAX_INTENT_BYTES];
+            assert_eq!(
+                Intent::PlaceOrder {
+                    market,
+                    epoch,
+                    slot
+                }
+                .encode(&mut bytes),
+                Err(CodecError::InvalidEnum)
+            );
+        }
     }
 
     #[test]
-    fn the_place_order_wire_cannot_carry_a_portfolio_record() {
-        /* `Intent::PlaceOrder` carries an `OrderRecord`, and its encoded length
-         * says so: a portfolio record's body alone is wider than the whole
-         * intent.  There is no portfolio placement to implement here — the
-         * frozen wire has no way to express one, which is a layout finding and
-         * not an unimplemented branch. */
-        let intent = Intent::PlaceOrder {
-            market: h(1),
-            epoch: canonical_epoch_id(h(1), 4),
-            order: order(0x20, 3, 5_000),
-        };
-        assert_eq!(intent.encoded_len(), 2 + 32 + 32 + ORDER_RECORD_BYTES);
-        /* A slot is wider than a single-Egg record precisely because the
-         * portfolio family exists in the page and not on the wire. */
-        const _: () = assert!(ORDER_RECORD_BYTES < ORDER_SLOT_BYTES);
-
-        let mut bytes = [0; 2 + 32 + 32 + ORDER_RECORD_BYTES];
-        assert_eq!(intent.encode(&mut bytes), Ok(bytes.len()));
-        assert_eq!(Intent::decode(&bytes), Ok(intent));
-    }
-
-    #[test]
-    fn cancel_and_settle_refuse_before_any_account_is_touched() {
+    fn settle_refuses_before_any_account_is_touched_and_the_others_do_not() {
         let program_id = Pubkey::new_from_array([9; 32]);
         let market = h(1);
         let epoch = canonical_epoch_id(market, 4);
+
+        // `SettlePage` reads no account, so an empty list is enough to reach
+        // its refusal, and the refusal is not about the list.
+        let request = Request {
+            sequence: 0,
+            action: Action::Layout(Intent::SettlePage {
+                market,
+                epoch,
+                page_index: 0,
+            }),
+        };
+        assert_eq!(
+            process(&program_id, &[], &request),
+            Err(adapter(ClutchError::NotYetImplemented))
+        );
+
+        // The other two now reach the account plane, and say so.
         for action in [
+            Action::Layout(Intent::PlaceOrder {
+                market,
+                epoch,
+                slot: OrderSlot::Single(order(0x20, 1, 5_000)),
+            }),
             Action::Layout(Intent::CancelOrder {
                 market,
                 epoch,
                 owner: h(0x20),
-                order_id: h(3),
-            }),
-            Action::Layout(Intent::SettlePage {
-                market,
-                epoch,
-                page_index: 0,
+                order_id: canonical_order_id(1),
+                generation: 7,
             }),
         ] {
             let request = Request {
                 sequence: 0,
                 action,
             };
-            // An empty account list is enough: neither reads an account, so
-            // neither can reach the account plane's own refusals.
             assert_eq!(
                 process(&program_id, &[], &request),
-                Err(adapter(ClutchError::NotYetImplemented))
+                Err(adapter(ClutchError::AccountCount))
             );
         }
-
-        // `PlaceOrder` does reach it, and says so.
-        let request = Request {
-            sequence: 0,
-            action: Action::Layout(Intent::PlaceOrder {
-                market,
-                epoch,
-                order: order(0x20, 3, 5_000),
-            }),
-        };
-        assert_eq!(
-            process(&program_id, &[], &request),
-            Err(adapter(ClutchError::AccountCount))
-        );
     }
 
     #[test]
     fn the_documented_page_fold_follows_from_the_frozen_widths() {
         /* The module docs state a compute *structure* rather than a
          * measurement, and this test is what keeps that arithmetic honest if
-         * the page ever grows. */
-        let preimage =
-            ORDER_PAGE_DOMAIN_BYTES + 32 + 32 + 2 + 1 + (MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES);
-        assert_eq!(preimage, 3_743);
+         * the page ever grows again.  The v4 preimage gained `tombstone_count`
+         * and eight bytes per slot; the transition lost a whole fold. */
+        let preimage = ORDER_PAGE_DOMAIN_BYTES
+            + 32
+            + 32
+            + 2
+            + 1
+            + 1
+            + (MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES);
+        assert_eq!(preimage, 3_872);
         // SHA-256 pads with one `0x80` byte and an eight-byte length.
         let blocks = (preimage + 1 + 8).div_ceil(64);
-        assert_eq!(blocks, 59, "compression blocks per page fold");
-        assert_eq!(3 * blocks, 177, "compression blocks per accepted placement");
-        assert_eq!(account_len::ORDER_PAGE, 3_883);
-        assert_eq!(stream::ORDER_PAGE_HEADER_BYTES, 235);
+        assert_eq!(blocks, 61, "compression blocks per page fold");
+        assert_eq!(
+            2 * blocks,
+            122,
+            "compression blocks per accepted placement or retirement"
+        );
+        assert_eq!(account_len::ORDER_PAGE, 4_012);
+        assert_eq!(stream::ORDER_PAGE_HEADER_BYTES, 236);
+        assert_eq!(ORDER_SLOT_BYTES, 236);
     }
 }

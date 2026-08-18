@@ -480,6 +480,16 @@ pub struct Request {
 }
 
 /// Actions supported by the offline reference adapter.
+///
+/// The size spread between `Layout` and the two narrow variants is deliberate
+/// and cannot be closed here.  `Layout` carries the frozen
+/// [`clutch_solana_layout::Intent`], whose widest arm is a portfolio placement
+/// with a `[u64; MAX_OUTCOMES]` coefficient vector, and the only refactor
+/// `clippy::large_enum_variant` proposes is boxing — indirection this crate is
+/// forbidden to have.  It is `no_std`, `no_alloc`, and fixed-layout, and the
+/// lint itself notes that boxing would also cost the `Copy` every caller here
+/// relies on.  So the spread is stated rather than removed.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
     /// A frozen layout intent; only a strict subset can transition state.
@@ -4828,7 +4838,11 @@ mod tests {
                 market,
                 epoch: h(0x2e),
                 owner,
-                order_id: h(0x3e),
+                /* v4: an order id is a positional rank, not a caller-chosen
+                 * identity, so the fixture names one the codec admits; the
+                 * refusal under test is the plane's, not the id's. */
+                order_id: clutch_solana_layout::canonical_order_id(1),
+                generation: 2,
             },
             Intent::SettlePage {
                 market,

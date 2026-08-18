@@ -9,9 +9,9 @@ drives all reference-oracled families through a real bank byte-exactly.
 This is **bring-up evidence, not a finished program**. It is not complete,
 not audited, and not authorization to deploy anywhere. `Resolve` currently
 exceeds the per-transaction compute ceiling (measured; the terms facts API
-fix is in flight). `CancelOrder` and `SettlePage` are honest refusals with
-recorded findings (cancellation is unrepresentable in the frozen page format;
-the batch relation does not fit an SBF frame pending the streaming verifier).
+fix is in flight). `CancelOrder` is implemented via v4 tombstones; `SettlePage` is an honest
+refusal with a recorded finding (on-chain settlement awaits the streaming
+verifier's integration).
 A refusal reads no account, writes no byte, and reports no success.
 
 - `program/` — the SBF program. No semantic or economic logic: it authenticates

@@ -13,9 +13,16 @@
 //!
 //! ## What this is not
 //!
-//! It is not a complete program, is not audited, carries no token or CPI code,
-//! and is not a deployment authorization.  Four of the five instruction-family
-//! CancelOrder and SettlePage are honest refusals with recorded findings.
+//! It is not a complete program, is not audited, and is not a deployment
+//! authorization.  It now carries token and CPI code: [`token`] observes and
+//! admits Token-2022 mints and token accounts and builds the CPIs, and
+//! `Materialize`/`Dematerialize` drive a real `MintTo`/`Burn` **when the
+//! optional token leg is present in the account list**.  That optionality is a
+//! transitional hole named in [`instructions::split`] and in
+//! `docs/implementation/TOKEN2022_PLAN.md`, not a design.  Four of the five instruction-family
+//! SettlePage is an honest refusal with a recorded finding (the batch
+//! relation awaits the on-chain streaming verifier); CancelOrder is
+//! implemented via v4 tombstones.
 //! `Resolve` and `RedeemInternal` are evidence-gated exactly as in the
 //! offline reference adapter, and `CreateMarket` refuses because no authority
 //! model exists.  The PDA seed schema in [`seeds`] is a **proposal**, not a
@@ -39,6 +46,7 @@
 //! | [`accounts`] | hostile-metadata authentication, address comparison, and every account decoder |
 //! | [`dispatch`] | request decoding and routing to exactly one instruction family |
 //! | [`instructions`] | one module per instruction family; see each module's status |
+//! | [`token`] | Token-2022 observation, admission, and CPI construction |
 //!
 //! The per-lane ownership boundaries are tabulated in
 //! `docs/implementation/SBF_BRINGUP.md`.
@@ -54,6 +62,7 @@ pub mod dispatch;
 pub mod error;
 pub mod instructions;
 pub mod seeds;
+pub mod token;
 
 #[cfg(target_os = "solana")]
 mod bpf {

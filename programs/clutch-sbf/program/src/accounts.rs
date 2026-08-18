@@ -1204,6 +1204,7 @@ mod tests {
             page_count: 1,
             set_order_count: 0,
             order_count: 0,
+            tombstone_count: 0,
             frozen: 0,
             stored_bump: 5,
             orders: [OrderSlot::Empty; MAX_ORDERS_PER_PAGE],
