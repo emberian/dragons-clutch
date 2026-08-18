@@ -67,6 +67,17 @@ pub enum ClutchError {
     AccountBorrowFailed = 0x0015,
     /// The market lifecycle or position close-state forbids this transition.
     NotActive = 0x0016,
+    /// The instruction family exists in this program's dispatch but its
+    /// transition is not written yet.
+    ///
+    /// This is deliberately distinct from [`ClutchError::UnsupportedInstruction`],
+    /// which says "outside this program's scope", and from the two structural
+    /// fail-closed refusals [`ClutchError::AuthorizationUnavailable`] and
+    /// [`ClutchError::ResolutionEvidenceUnavailable`], which say "the missing
+    /// thing is a policy or an evidence chain, not code".  A caller that sees
+    /// this code is looking at an honest stub: no state was read, no state was
+    /// written, and nothing was faked.
+    NotYetImplemented = 0x0017,
 }
 
 impl From<ClutchError> for ProgramError {

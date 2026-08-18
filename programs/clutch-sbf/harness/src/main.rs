@@ -16,19 +16,24 @@
 //!
 //! Nothing here is evidence about mainnet, devnet, or any deployment.
 
+use clutch_accumulator::COVERAGE_POLICY_COMPLETE_REQUIRED;
 use clutch_kernel::{PayoutSet, PayoutVector, MAX_PAYOUTS};
+use clutch_sbf::seeds;
 use clutch_solana_layout::{
-    account_len, canonical_market_id, canonical_outcome_id, canonical_profile_hash,
-    canonical_realm_id, FeedId, Hash32, HoardAccount, Intent, MarketAccount, PositionAccount,
-    ProfileAccount, RealmAccount, SupplyLedgerAccount, MAX_INTENT_BYTES, MAX_OUTCOMES,
-    PROFILE_PARENT_BYTES,
+    account_len, canonical_epoch_id, canonical_market_id, canonical_order_set_id,
+    canonical_outcome_id, canonical_profile_hash, canonical_realm_id, CandidateRecord,
+    EpochAccount, FeedAccount, FeedId, FinalPotAccount, Hash32, HoardAccount, Intent,
+    MarketAccount, OrderPageAccount, OrderRecord, OrderSlot, PayoutVectorBytes, PositionAccount,
+    PriceGridAccount, ProfileAccount, RealmAccount, ResolutionAccount, SettlementReceiptAccount,
+    SupplyLedgerAccount, TermsAccount, CANDIDATE_STATUS_SELECTED, EPOCH_PHASE_CLEARED,
+    MAX_GRID_TICKS, MAX_INTENT_BYTES, MAX_ORDERS_PER_PAGE, MAX_OUTCOMES, PAYOUT_INDEX_UNRESOLVED,
+    POT_PHASE_OPEN, PROFILE_PARENT_BYTES, RECEIPT_LEG_DIRECT, RELATION_VERSION,
 };
 use clutch_solana_reference::{
     apply, AccountMetadata, ActorMetadata, ExpectedBindings, ExternalAccount, KernelAccount,
     ReplayAccount, StateBytes, TransitionMetadata, TransitionOutput, EXTERNAL_ACCOUNT_LEN,
-    KERNEL_ACCOUNT_LEN, REPLAY_ACCOUNT_LEN,
+    FAIL_UNIFORM_REFUND_01, GEN_EXACT_01, KERNEL_ACCOUNT_LEN, REPLAY_ACCOUNT_LEN,
 };
-use clutch_sbf::seeds;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -54,6 +59,30 @@ const SPLIT_QUANTITY: u64 = 5;
 const OUTCOME_COUNT: u8 = 2;
 /// Comfortably above the rent-exempt minimum for every account in the fixture.
 const ACCOUNT_LAMPORTS: u64 = 100_000_000;
+
+/* Wave-3 plane constants.  The window-policy numbers are exactly the offline
+ * reference adapter's own resolution fixture, so that a future resolution
+ * differential compares two adapters over one scenario rather than over two.
+ * The batch-auction numbers have no reference counterpart at all -- no adapter,
+ * offline or on-chain, implements that family yet -- so they are the smallest
+ * shape the frozen codecs accept. */
+const START_BUCKET: u64 = 100;
+const END_BUCKET_EXCLUSIVE: u64 = 103;
+const MATURITY_HORIZON: u64 = 4;
+const GRID_FAMILY: u32 = 7;
+const GRID_VERSION: u16 = 1;
+const BUCKET_SECONDS: u64 = 60;
+const PRICE_SCALE: u64 = 10_000;
+const EPOCH_INDEX: u64 = 0;
+const REMAINDER_SEED: u64 = 99;
+/// Opaque book identity inside the market; this lane names no book policy.
+const BOOK_ID_FILL: u8 = 0x6b;
+/// Opaque frozen-policy identity; this lane names no clearing policy.
+const POLICY_ID_FILL: u8 = 0x70;
+const BUY_ORDER_ID_FILL: u8 = 0x11;
+const SELL_ORDER_ID_FILL: u8 = 0x22;
+const SLICE_QUANTITY: u64 = 3;
+const VIRTUAL_SPLIT: u64 = 5;
 
 const B58: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -120,7 +149,9 @@ fn json_string_field(text: &str, key: &str) -> String {
         + needle.len();
     let rest = &text[start..];
     let open = rest.find('"').expect("string field opening quote");
-    let close = rest[open + 1..].find('"').expect("string field closing quote");
+    let close = rest[open + 1..]
+        .find('"')
+        .expect("string field closing quote");
     rest[open + 1..open + 1 + close].to_string()
 }
 
@@ -203,6 +234,427 @@ fn payout_set() -> PayoutSet {
     PayoutSet::new(2, OUTCOME_COUNT, vectors)
 }
 
+/// The wave-3 account plane.
+///
+/// These are the frozen-layout accounts the single implemented instruction does
+/// **not** touch: the immutable terms artifact and its price grid, the
+/// resolution record, the feed head, and the whole batch-auction family.  They
+/// are loaded at genesis so that a per-instruction lane has a real, bound,
+/// on-chain plane to write against instead of inventing one.
+///
+/// ## What this fixture claims, and what it does not
+///
+/// Every account here decodes through its frozen codec, and every *identity*
+/// binding the layout crate can decide is asserted in [`build_wave3`] and in
+/// [`build_fixture`]: terms to market, supply ledger to market, grid to terms,
+/// epoch to terms and grid, epoch to its frozen page set, candidate to epoch,
+/// pot to candidate, receipt to candidate, and resolution to terms.
+///
+/// No *economic* coherence is claimed and none should be read in.  Whether this
+/// candidate is the best valid submitted candidate for this book, whether the
+/// pot balances against the receipts, and whether the prices clear anything are
+/// questions for a batch relation that no adapter runs yet.  The fixture is a
+/// shape, bound at every seam a codec owns and at none that it does not.
+struct Wave3 {
+    grid: Pda,
+    terms: Pda,
+    resolution: Pda,
+    feed: Pda,
+    epoch: Pda,
+    page: Pda,
+    candidate: Pda,
+    pot: Pda,
+    receipt: Pda,
+    /// The immutable terms digest, which [`MarketAccount::terms`] must equal.
+    terms_digest: Hash32,
+    terms_account: TermsAccount,
+    grid_bytes: [u8; account_len::PRICE_GRID],
+    terms_bytes: [u8; account_len::TERMS],
+    resolution_bytes: [u8; account_len::RESOLUTION],
+    feed_bytes: [u8; account_len::FEED],
+    epoch_bytes: [u8; account_len::EPOCH],
+    page_bytes: [u8; account_len::ORDER_PAGE],
+    candidate_bytes: [u8; account_len::CANDIDATE],
+    pot_bytes: [u8; account_len::FINAL_POT],
+    receipt_bytes: [u8; account_len::SETTLEMENT_RECEIPT],
+}
+
+/// Build and bind the wave-3 plane, deriving every address from `seeds`.
+///
+/// Each content-addressed account is built with a zero stored bump, digested,
+/// used to derive its own address, and only then given the canonical bump: the
+/// bump is deliberately outside every digest, so a PDA derived from a digest can
+/// still carry the bump that derivation produced.
+fn build_wave3(
+    pid: &str,
+    realm_hash: Hash32,
+    profile_hash: Hash32,
+    market_id: Hash32,
+    feed: FeedId,
+    buyer: Hash32,
+    seller: Hash32,
+) -> Wave3 {
+    let realm_seed = realm_hash.bytes().to_vec();
+    let market_seed = market_id.bytes().to_vec();
+
+    // Frozen price grid: the exact tick domain every order limit lives on.
+    let mut ticks = [0; MAX_GRID_TICKS];
+    ticks[1] = 2_500;
+    ticks[2] = 5_000;
+    ticks[3] = 7_500;
+    ticks[4] = PRICE_SCALE;
+    let mut grid_account = PriceGridAccount {
+        grid: Hash32::ZERO,
+        realm: realm_hash,
+        price_scale: PRICE_SCALE,
+        tick_count: 5,
+        ticks,
+        stored_bump: 0,
+        flags: 0,
+    };
+    grid_account.grid = grid_account
+        .recomputed_grid_id()
+        .expect("the fixture grid body must digest");
+    let grid = derive(
+        pid,
+        &[
+            seeds::SEED_GRID.to_vec(),
+            realm_seed.clone(),
+            grid_account.grid.bytes().to_vec(),
+        ],
+    );
+    grid_account.stored_bump = grid.bump;
+
+    /* Immutable terms.  The window policy is exactly the offline reference
+     * adapter's resolution fixture, so a future resolution differential is a
+     * disagreement between two adapters rather than between two scenarios. */
+    let mut payouts = [PayoutVectorBytes::ZERO; MAX_PAYOUTS];
+    let mut left = [0; MAX_OUTCOMES];
+    left[0] = 1;
+    let mut right = [0; MAX_OUTCOMES];
+    right[1] = 1;
+    payouts[0] = PayoutVectorBytes {
+        denominator: 1,
+        weights: left,
+    };
+    payouts[1] = PayoutVectorBytes {
+        denominator: 1,
+        weights: right,
+    };
+    let mut terms_account = TermsAccount {
+        terms: Hash32::ZERO,
+        realm: realm_hash,
+        profile: profile_hash,
+        feed,
+        price_grid: grid_account.grid,
+        outcome_count: OUTCOME_COUNT,
+        payout_count: 2,
+        payouts,
+        grid_family_id: GRID_FAMILY,
+        grid_version: GRID_VERSION,
+        bucket_seconds: BUCKET_SECONDS,
+        expected_start_bucket: START_BUCKET,
+        expected_end_bucket_exclusive: END_BUCKET_EXCLUSIVE,
+        maturity_horizon_buckets: MATURITY_HORIZON,
+        coverage_policy_id: u32::from(COVERAGE_POLICY_COMPLETE_REQUIRED),
+        repair_policy_id: u32::from(GEN_EXACT_01),
+        failure_policy_id: u32::from(FAIL_UNIFORM_REFUND_01),
+        stored_bump: 0,
+        flags: 0,
+    };
+    terms_account.terms = terms_account
+        .recomputed_terms_digest()
+        .expect("the fixture terms body must digest");
+    let terms = derive(
+        pid,
+        &[
+            seeds::SEED_TERMS.to_vec(),
+            realm_seed.clone(),
+            terms_account.terms.bytes().to_vec(),
+        ],
+    );
+    terms_account.stored_bump = terms.bump;
+
+    /* Resolution record, unresolved.  An unresolved record is the honest
+     * genesis state: nothing has sealed a window, so no payout is selected. */
+    let resolution = derive(pid, &[seeds::SEED_RESOLUTION.to_vec(), market_seed.clone()]);
+    let resolution_account = ResolutionAccount {
+        market: market_id,
+        terms: terms_account.terms,
+        feed,
+        window: Hash32::ZERO,
+        feed_cursor: 0,
+        sealed_end_bucket_exclusive: 0,
+        repair_generation: 0,
+        resolved_slot: 0,
+        payout_index: PAYOUT_INDEX_UNRESOLVED,
+        stored_bump: resolution.bump,
+        flags: 0,
+    };
+
+    let feed_pda = derive(pid, &[seeds::SEED_FEED.to_vec(), feed.bytes().to_vec()]);
+    let feed_account = FeedAccount {
+        feed,
+        realm: realm_hash,
+        cursor: 0,
+        next_boundary: START_BUCKET,
+        archive_pages: 0,
+        /* Nonzero because the codec refuses a zero identity; this lane has no
+         * accumulator summary to commit to and makes no claim about one. */
+        summary: Hash32::from_bytes([0x5c; 32]),
+        stored_bump: feed_pda.bump,
+        flags: 0,
+    };
+
+    /* Batch-auction plane.  One epoch, one frozen page holding two orders, one
+     * selected candidate, its pot, and one unsettled receipt slice. */
+    let epoch_id = canonical_epoch_id(market_id, EPOCH_INDEX);
+    let epoch_seed = epoch_id.bytes().to_vec();
+    let epoch = derive(
+        pid,
+        &[
+            seeds::SEED_EPOCH.to_vec(),
+            market_seed.clone(),
+            EPOCH_INDEX.to_le_bytes().to_vec(),
+        ],
+    );
+    let page = derive(
+        pid,
+        &[
+            seeds::SEED_PAGE.to_vec(),
+            epoch_seed.clone(),
+            0_u16.to_le_bytes().to_vec(),
+        ],
+    );
+
+    let buy_order_id = Hash32::from_bytes([BUY_ORDER_ID_FILL; 32]);
+    let sell_order_id = Hash32::from_bytes([SELL_ORDER_ID_FILL; 32]);
+    let mut orders = [OrderSlot::Empty; MAX_ORDERS_PER_PAGE];
+    orders[0] = OrderSlot::Single(OrderRecord {
+        owner: buyer,
+        order_id: buy_order_id,
+        outcome: 0,
+        side: 0,
+        quantity: 10,
+        limit: 5_000,
+        minimum_fill: 0,
+        flags: 0,
+        generation: GENERATION,
+    });
+    orders[1] = OrderSlot::Single(OrderRecord {
+        owner: seller,
+        order_id: sell_order_id,
+        outcome: 0,
+        side: 1,
+        quantity: 10,
+        limit: 5_000,
+        minimum_fill: 0,
+        flags: 0,
+        generation: GENERATION,
+    });
+    let mut page_account = OrderPageAccount {
+        market: market_id,
+        epoch: epoch_id,
+        order_set: Hash32::ZERO,
+        page_digest: Hash32::ZERO,
+        first_order_id: buy_order_id,
+        last_order_id: sell_order_id,
+        prev_page_last_order_id: Hash32::ZERO,
+        page_index: 0,
+        page_count: 1,
+        set_order_count: 2,
+        order_count: 2,
+        frozen: 1,
+        stored_bump: page.bump,
+        orders,
+    };
+    page_account.page_digest = page_account
+        .recomputed_page_digest()
+        .expect("the fixture page must digest");
+    let order_set = canonical_order_set_id(
+        market_id,
+        epoch_id,
+        page_account.page_count,
+        page_account.set_order_count,
+        &[page_account.page_digest],
+    );
+    page_account.order_set = order_set;
+
+    let epoch_account = EpochAccount {
+        epoch: epoch_id,
+        market: market_id,
+        book: Hash32::from_bytes([BOOK_ID_FILL; 32]),
+        terms: terms_account.terms,
+        price_grid: grid_account.grid,
+        policy: Hash32::from_bytes([POLICY_ID_FILL; 32]),
+        order_set,
+        first_order_id: buy_order_id,
+        last_order_id: sell_order_id,
+        epoch_index: EPOCH_INDEX,
+        relation_version: RELATION_VERSION,
+        price_scale: PRICE_SCALE,
+        remainder_seed: REMAINDER_SEED,
+        owner_count: 2,
+        page_count: 1,
+        order_count: 2,
+        outcome_count: OUTCOME_COUNT,
+        phase: EPOCH_PHASE_CLEARED,
+        stored_bump: epoch.bump,
+        flags: 0,
+    };
+
+    let mut prices = [0; MAX_OUTCOMES];
+    prices[0] = 6_000;
+    prices[1] = PRICE_SCALE - prices[0];
+    let mut candidate_account = CandidateRecord {
+        candidate: Hash32::ZERO,
+        epoch: epoch_id,
+        market: market_id,
+        prices,
+        virtual_split: VIRTUAL_SPLIT,
+        virtual_merge: 0,
+        honored_aon_mask: 0,
+        weighted_direct_volume: 0,
+        limit_surplus_price_units: 0,
+        churn: VIRTUAL_SPLIT,
+        submitted_slot: 55,
+        distinct_owners: 2,
+        order_len: 2,
+        outcome_count: OUTCOME_COUNT,
+        status: CANDIDATE_STATUS_SELECTED,
+        stored_bump: 0,
+        flags: 0,
+    };
+    candidate_account.candidate = candidate_account
+        .recomputed_candidate_digest()
+        .expect("the fixture candidate body must digest");
+    let candidate = derive(
+        pid,
+        &[
+            seeds::SEED_CANDIDATE.to_vec(),
+            epoch_seed.clone(),
+            candidate_account.candidate.bytes().to_vec(),
+        ],
+    );
+    candidate_account.stored_bump = candidate.bump;
+
+    let pot = derive(pid, &[seeds::SEED_POT.to_vec(), epoch_seed.clone()]);
+    let mut pot_internal = [0; MAX_OUTCOMES];
+    pot_internal[0] = VIRTUAL_SPLIT;
+    pot_internal[1] = VIRTUAL_SPLIT;
+    let pot_account = FinalPotAccount {
+        epoch: epoch_id,
+        market: market_id,
+        candidate: candidate_account.candidate,
+        pot_internal,
+        pot_cash_price_units: 0,
+        rounding_pot_price_units: 0,
+        outcome_count: OUTCOME_COUNT,
+        phase: POT_PHASE_OPEN,
+        stored_bump: pot.bump,
+        flags: 0,
+    };
+
+    let receipt = derive(
+        pid,
+        &[
+            seeds::SEED_RECEIPT.to_vec(),
+            epoch_seed,
+            candidate_account.candidate.bytes().to_vec(),
+            0_u16.to_le_bytes().to_vec(),
+        ],
+    );
+    let receipt_account = SettlementReceiptAccount {
+        epoch: epoch_id,
+        market: market_id,
+        candidate: candidate_account.candidate,
+        buy_order_id,
+        sell_order_id,
+        consideration_price_units: u128::from(SLICE_QUANTITY) * u128::from(prices[0]),
+        quantity: SLICE_QUANTITY,
+        settled_quantity: 0,
+        price: prices[0],
+        sequence: 1,
+        slice_index: 0,
+        outcome: 0,
+        leg_kind: RECEIPT_LEG_DIRECT,
+        consumed_flags: 0,
+        stored_bump: receipt.bump,
+        flags: 0,
+    };
+
+    /* Every binding the frozen layout can decide, asserted here so that a
+     * fixture which drifted apart fails the harness instead of quietly
+     * shipping an incoherent genesis. */
+    grid_account
+        .binds_terms(&terms_account)
+        .expect("grid binds terms");
+    epoch_account
+        .binds_terms(&terms_account, &grid_account)
+        .expect("epoch binds terms and grid");
+    epoch_account
+        .binds_page_set(&[page_account])
+        .expect("epoch binds its frozen page set");
+    candidate_account
+        .binds_epoch(&epoch_account)
+        .expect("candidate binds the frozen epoch simplex");
+    pot_account
+        .binds_candidate(&candidate_account)
+        .expect("pot binds the selected candidate");
+    receipt_account
+        .binds_candidate(&candidate_account)
+        .expect("receipt binds the selected candidate");
+    resolution_account
+        .binds_terms(&terms_account)
+        .expect("resolution binds the immutable terms");
+
+    let mut grid_bytes = [0; account_len::PRICE_GRID];
+    let mut terms_bytes = [0; account_len::TERMS];
+    let mut resolution_bytes = [0; account_len::RESOLUTION];
+    let mut feed_bytes = [0; account_len::FEED];
+    let mut epoch_bytes = [0; account_len::EPOCH];
+    let mut page_bytes = [0; account_len::ORDER_PAGE];
+    let mut candidate_bytes = [0; account_len::CANDIDATE];
+    let mut pot_bytes = [0; account_len::FINAL_POT];
+    let mut receipt_bytes = [0; account_len::SETTLEMENT_RECEIPT];
+    grid_account.encode(&mut grid_bytes).expect("grid");
+    terms_account.encode(&mut terms_bytes).expect("terms");
+    resolution_account
+        .encode(&mut resolution_bytes)
+        .expect("resolution");
+    feed_account.encode(&mut feed_bytes).expect("feed");
+    epoch_account.encode(&mut epoch_bytes).expect("epoch");
+    page_account.encode(&mut page_bytes).expect("page");
+    candidate_account
+        .encode(&mut candidate_bytes)
+        .expect("candidate");
+    pot_account.encode(&mut pot_bytes).expect("pot");
+    receipt_account.encode(&mut receipt_bytes).expect("receipt");
+
+    Wave3 {
+        grid,
+        terms,
+        resolution,
+        feed: feed_pda,
+        epoch,
+        page,
+        candidate,
+        pot,
+        receipt,
+        terms_digest: terms_account.terms,
+        terms_account,
+        grid_bytes,
+        terms_bytes,
+        resolution_bytes,
+        feed_bytes,
+        epoch_bytes,
+        page_bytes,
+        candidate_bytes,
+        pot_bytes,
+        receipt_bytes,
+    }
+}
+
 /// Everything the fixture needs, in both byte and address form.
 struct Fixture {
     program: Pda,
@@ -219,6 +671,7 @@ struct Fixture {
     external: Pda,
     replay: Pda,
     supply: Pda,
+    wave3: Wave3,
     realm_bytes: [u8; account_len::REALM],
     profile_bytes: [u8; account_len::PROFILE],
     pre: TransitionOutput,
@@ -294,6 +747,22 @@ fn build_fixture() -> Fixture {
         ],
     );
 
+    /* The wave-3 plane is built before the Market account because the Market
+     * binds the immutable terms by digest: `MarketAccount::terms` is not a free
+     * field, it is the identity of the terms artifact loaded beside it.  The
+     * offline reference adapter's own fixture does the same thing, and a Market
+     * carrying an unbound terms digest could never resolve. */
+    let feed = FeedId::from_bytes([9; 32]);
+    let wave3 = build_wave3(
+        &pid,
+        realm_hash,
+        profile_hash,
+        market_id,
+        feed,
+        owner,
+        Hash32::from_bytes(stranger.bytes),
+    );
+
     let mut outcomes = [Hash32::ZERO; MAX_OUTCOMES];
     outcomes[0] = canonical_outcome_id(market_id, 0);
     outcomes[1] = canonical_outcome_id(market_id, 1);
@@ -301,13 +770,13 @@ fn build_fixture() -> Fixture {
         market: market_id,
         realm: realm_hash,
         profile: profile_hash,
-        terms: Hash32::from_bytes([8; 32]),
+        terms: wave3.terms_digest,
         outcome_count: OUTCOME_COUNT,
         lifecycle: 0,
         stored_bump: market.bump,
         hoard_bump: hoard.bump,
         outcomes,
-        feed: FeedId::from_bytes([9; 32]),
+        feed,
         collateral_cap: COLLATERAL_CAP,
         created_slot: 55,
         reserved: Hash32::ZERO,
@@ -382,6 +851,15 @@ fn build_fixture() -> Fixture {
         stored_bump: supply.bump,
         flags: 0,
     };
+
+    /* The two bindings that need the Market account itself. */
+    wave3
+        .terms_account
+        .binds_market(&market_account)
+        .expect("terms bind the market");
+    supply_account
+        .binds_market(&market_account)
+        .expect("supply ledger binds the market");
     let mut pre = TransitionOutput {
         market: [0; account_len::MARKET],
         hoard: [0; account_len::HOARD],
@@ -395,9 +873,13 @@ fn build_fixture() -> Fixture {
     };
     market_account.encode(&mut pre.market).expect("market");
     hoard_account.encode(&mut pre.hoard).expect("hoard");
-    position_account.encode(&mut pre.position).expect("position");
+    position_account
+        .encode(&mut pre.position)
+        .expect("position");
     kernel_account.encode(&mut pre.kernel).expect("kernel");
-    external_account.encode(&mut pre.external).expect("external");
+    external_account
+        .encode(&mut pre.external)
+        .expect("external");
     replay_account.encode(&mut pre.replay).expect("replay");
     supply_account.encode(&mut pre.supply).expect("supply");
     let mut realm_bytes = [0; account_len::REALM];
@@ -417,7 +899,15 @@ fn build_fixture() -> Fixture {
     );
 
     let metadata = transition_metadata(
-        &market, &hoard, &position, &kernel, &external, &replay, &supply, &program, actor.bytes,
+        &market,
+        &hoard,
+        &position,
+        &kernel,
+        &external,
+        &replay,
+        &supply,
+        &program,
+        actor.bytes,
         true,
     );
     let bindings = expected_bindings(
@@ -441,6 +931,7 @@ fn build_fixture() -> Fixture {
         external,
         replay,
         supply,
+        wave3,
         realm_bytes,
         profile_bytes,
         pre,
@@ -632,7 +1123,25 @@ fn main() {
         ("external", &f.external, &f.pre.external),
         ("replay", &f.replay, &f.pre.replay),
     ];
-    for (name, pda, data) in dumps {
+    /* The wave-3 plane.  No transaction in this plan touches any of these
+     * accounts: the one implemented instruction does not take them, and a
+     * differential over them would compare nothing.  They are loaded at genesis
+     * so that a per-instruction lane inherits a bound on-chain plane instead of
+     * inventing one, and so that the addresses in `manifest.txt` are already
+     * the canonical ones for the seed schema. */
+    let wave3_dumps: [(&str, &Pda, &[u8]); 10] = [
+        ("supply", &f.supply, &f.pre.supply),
+        ("grid", &f.wave3.grid, &f.wave3.grid_bytes),
+        ("terms", &f.wave3.terms, &f.wave3.terms_bytes),
+        ("resolution", &f.wave3.resolution, &f.wave3.resolution_bytes),
+        ("feed", &f.wave3.feed, &f.wave3.feed_bytes),
+        ("epoch", &f.wave3.epoch, &f.wave3.epoch_bytes),
+        ("page", &f.wave3.page, &f.wave3.page_bytes),
+        ("candidate", &f.wave3.candidate, &f.wave3.candidate_bytes),
+        ("pot", &f.wave3.pot, &f.wave3.pot_bytes),
+        ("receipt", &f.wave3.receipt, &f.wave3.receipt_bytes),
+    ];
+    for (name, pda, data) in dumps.iter().chain(wave3_dumps.iter()) {
         write(
             &out_dir.join(format!("accounts/{name}.json")),
             &account_json(&pda.address, &program_address, data),
@@ -676,6 +1185,21 @@ fn main() {
         );
     }
 
+    /* The supply ledger is written out but deliberately **not** compared.  The
+     * offline adapter updates it on every transition; the nine-account
+     * instruction set has no ledger account, so the SVM cannot.  Emitting both
+     * sides makes the size of that gap visible and gives the lane that adds the
+     * account its expectation already computed.  See deferred check 13 in
+     * `docs/implementation/SBF_BRINGUP.md`. */
+    write(
+        &out_dir.join("expected/supply.pre.hex"),
+        &format!("{}\n", hex_encode(&f.pre.supply)),
+    );
+    write(
+        &out_dir.join("expected/supply.hex"),
+        &format!("{}\n", hex_encode(&f.post.supply)),
+    );
+
     /* Message account order: writable signers, readonly signers, writable
      * non-signers, readonly non-signers.  The instruction's own account order
      * is the program's fixed role order and is independent of this. */
@@ -694,15 +1218,7 @@ fn main() {
     keys.push(f.realm.bytes);
     keys.push(f.profile.bytes);
     keys.push(f.program.bytes);
-    let accept = transaction(
-        &keys,
-        2,
-        1,
-        3,
-        10,
-        &[1, 8, 9, 2, 3, 4, 5, 6, 7],
-        &f.request,
-    );
+    let accept = transaction(&keys, 2, 1, 3, 10, &[1, 8, 9, 2, 3, 4, 5, 6, 7], &f.request);
     write(
         &out_dir.join("tx/accept.b64"),
         &format!("{}\n", b64_encode(&accept)),
@@ -774,7 +1290,13 @@ fn main() {
      * adapter, so the SBF refusal is compared with a refusal and not merely
      * asserted on its own. */
     let bindings = expected_bindings(
-        &f.program, &f.market, &f.hoard, &f.position, &f.kernel, &f.external, &f.replay,
+        &f.program,
+        &f.market,
+        &f.hoard,
+        &f.position,
+        &f.kernel,
+        &f.external,
+        &f.replay,
         &f.supply,
     );
     let unsigned_metadata = transition_metadata(
@@ -834,7 +1356,7 @@ fn main() {
     manifest.push_str(&format!("actor={}\n", f.actor.address));
     manifest.push_str(&format!("stranger={}\n", f.stranger.address));
     manifest.push_str(&format!("imposter={}\n", f.imposter.address));
-    for (name, pda, _) in dumps {
+    for (name, pda, _) in dumps.iter().chain(wave3_dumps.iter()) {
         manifest.push_str(&format!("account.{name}={}\n", pda.address));
         manifest.push_str(&format!("bump.{name}={}\n", pda.bump));
     }
@@ -852,7 +1374,7 @@ fn main() {
     println!("bring-up plan written to {}", out_dir.display());
     println!("program_id  {}", f.program.address);
     println!("actor       {}", f.actor.address);
-    for (name, pda, _) in dumps {
+    for (name, pda, _) in dumps.iter().chain(wave3_dumps.iter()) {
         println!("{name:<11} {} bump {}", pda.address, pda.bump);
     }
     for (name, text) in &reference_refusals {
@@ -889,6 +1411,33 @@ mod tests {
         assert_eq!(b64_encode(b"foob"), "Zm9vYg==");
         assert_eq!(b64_encode(b"fooba"), "Zm9vYmE=");
         assert_eq!(b64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn the_whole_fixture_builds_and_every_binding_holds() {
+        /* `build_fixture` asserts every cross-account binding the frozen layout
+         * can decide -- terms to market, supply ledger to market, grid to
+         * terms, epoch to terms and grid, epoch to its frozen page set,
+         * candidate to epoch, pot and receipt to candidate, resolution to terms
+         * -- and it runs the offline reference adapter over the `Split`
+         * request.  Building it here is what makes a fixture that drifted apart
+         * a test failure rather than a genesis nobody checked.
+         *
+         * It is deliberately not an assertion about the SVM: that is the
+         * differential in `scripts/simulate.py`. */
+        let f = build_fixture();
+        assert_ne!(f.pre.position, f.post.position, "Split must move position");
+        assert_ne!(f.pre.hoard, f.post.hoard, "Split must move collateral");
+        assert_eq!(f.pre.market, f.post.market, "Split must not touch Market");
+        assert_eq!(
+            f.pre.external, f.post.external,
+            "Split must not touch the external shadow"
+        );
+        assert!(
+            f.post.resolution.is_none(),
+            "a layout intent admits no resolution record"
+        );
+        assert_eq!(f.post.redemption_payout, 0, "Split pays nothing out");
     }
 
     #[test]

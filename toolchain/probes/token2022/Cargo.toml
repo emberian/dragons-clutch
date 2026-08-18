@@ -1,0 +1,50 @@
+# Token-2022 CPI feasibility probe.
+#
+# This is a PROBE, not a component of the protocol.  It carries no Dragon's
+# Clutch semantics, depends on no `clutch-*` crate, and is never linked into a
+# deployable artifact.  Its only job is to answer, against a real SVM, three
+# questions that `docs/implementation/SOLANA_REFERENCE_ADAPTER.md` obligations
+# 5-7 raise and that no offline model can answer:
+#
+#   * can a Token-2022 mint and token account be created and driven here at all;
+#   * does mint / burn / transfer conserve atoms the way obligation 6 assumes;
+#   * does the `COLLATERAL_PROFILES.md` extension matrix actually refuse a
+#     hostile mint when it is run against real Token-2022 account bytes.
+#
+# Deliberately a standalone workspace: nothing in `programs/` or `crates/` may
+# acquire an Agave runtime dependency because of this probe.
+[workspace]
+
+[package]
+name = "clutch-token2022-probe"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+
+# Exact pins.  Every version below is the one the recorded run resolved; see
+# `docs/implementation/TOKEN2022_PLAN.md` for the resolution record.
+[dependencies]
+# `curve25519` is what makes off-chain `find_program_address` available at all
+# on the host.  `SBF_BRINGUP.md` had to shell out to the `solana` CLI for PDA
+# derivation because this feature could not be resolved offline; with network
+# access it resolves, and the probe derives addresses in process.
+solana-address = { version = "=2.6.1", features = ["curve25519"] }
+solana-program-error = "=3.0.1"
+solana-program-option = "=3.1.0"
+solana-program-pack = "=3.1.0"
+spl-token-2022-interface = "=3.1.1"
+
+[dev-dependencies]
+solana-account = "=4.3.2"
+solana-instruction = "=3.4.1"
+solana-keypair = "=3.1.2"
+# The entire `solana-program-test` API sits behind `agave-unstable-api`; without
+# the feature the crate compiles to an empty root.  The name is Anza's stability
+# warning, and it is accurate: this harness is not a stable interface.
+solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-rent = "=4.3.0"
+solana-signer = "=3.0.1"
+solana-system-interface = { version = "=3.2.0", features = ["bincode"] }
+solana-transaction = "=4.1.6"
+solana-transaction-error = "=3.3.2"

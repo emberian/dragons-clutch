@@ -11,6 +11,11 @@ name = "clutch-sbf-harness"
 path = "src/main.rs"
 
 [dependencies]
+# Only for the registered coverage-policy identity the immutable terms fixture
+# commits to.  The accumulator is already in the graph through
+# `clutch-solana-reference`; naming it here keeps the constant coming from its
+# owner instead of being retyped as a literal.
+clutch-accumulator = { path = "../../../crates/clutch-accumulator" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-solana-layout = { path = "../../solana-layout" }
 clutch-solana-reference = { path = "../../solana-reference" }

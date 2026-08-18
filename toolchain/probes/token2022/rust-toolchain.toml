@@ -1,0 +1,8 @@
+# `SBF_BRINGUP.md` pins the host build toolchain at 1.89.0.  That toolchain
+# cannot build this probe: `solana-syscalls 4.2.1` uses
+# `MaybeUninit::write_copy_of_slice`, which is still unstable there and in
+# 1.92, and stabilizes in 1.93.  1.93.1 is the lowest installed toolchain that
+# compiles the Agave 4.2.1 runtime, so it is the pin here.  See
+# `docs/implementation/TOKEN2022_PLAN.md` for the verbatim failure.
+[toolchain]
+channel = "1.93.1"

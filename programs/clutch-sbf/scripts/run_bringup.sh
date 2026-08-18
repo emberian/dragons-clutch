@@ -75,7 +75,12 @@ validator_args=(
   --mint "$(value payer)"
   --bpf-program "$(value program_id)" "$elf"
 )
-for role in realm profile market hoard position kernel external replay; do
+# The nine-account instruction set, plus the wave-3 plane.  Nothing in this
+# plan sends a transaction against the wave-3 accounts -- the one implemented
+# instruction does not take them -- but they are loaded so that the genesis a
+# per-instruction lane starts from is the real, bound one.
+for role in realm profile market hoard position kernel external replay \
+            supply grid terms resolution feed epoch page candidate pot receipt; do
   validator_args+=(--account "$(value "account.$role")" "$plan/accounts/$role.json")
 done
 validator_args+=(--account "$(value imposter)" "$plan/accounts/replay-imposter.json")

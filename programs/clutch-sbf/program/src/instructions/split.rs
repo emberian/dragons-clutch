@@ -1,26 +1,27 @@
-//! Hostile-account validation and the single bring-up transition.
+//! `Intent::Split`: add a complete internal set at the Hoard/Position seam.
 //!
-//! This module contains no semantic or economic logic.  Balances, supplies,
-//! collateral and invariants belong to [`clutch_kernel`]; byte ownership
-//! belongs to [`clutch_solana_layout`] and to the reference-only codecs in
-//! [`clutch_solana_reference`].  What lives here is exactly the part that the
-//! offline reference adapter cannot have: authentication of runtime-supplied
-//! [`AccountInfo`] metadata, derivation of program addresses, and write-back
-//! into runtime account data.
+//! This module owns the only transition the program implements.  It contains no
+//! economic logic: the complete-set split itself is
+//! [`clutch_kernel::MarketState::split`], byte ownership is
+//! [`clutch_solana_layout`] and the reference-only codecs of
+//! [`clutch_solana_reference`], and metadata authentication is
+//! [`crate::accounts`].  What lives here is the account list, the order of the
+//! checks, and the write-back.
 //!
-//! Only `Split` is implemented.  Every other action refuses, and the refusals
-//! are deliberate rather than incidental.
+//! The checks and their order are unchanged from the single-instruction
+//! bring-up program, and `docs/implementation/SBF_BRINGUP.md` records the SVM
+//! differential that pins them.
 
+use crate::accounts::{
+    self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
+};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use clutch_kernel::{MarketState, Phase, Position, MAX_OUTCOMES as KERNEL_MAX_OUTCOMES};
-use clutch_solana_layout::{
-    account_len, Hash32, HoardAccount, Intent, MarketAccount, PositionAccount, ProfileAccount,
-    RealmAccount, MAX_OUTCOMES,
-};
+use clutch_solana_layout::{account_len, Hash32, HoardAccount, PositionAccount, MAX_OUTCOMES};
 use clutch_solana_reference::{
-    Action, ExternalAccount, KernelAccount, ReplayAccount, Request, EXTERNAL_ACCOUNT_LEN,
-    KERNEL_ACCOUNT_LEN, REPLAY_ACCOUNT_LEN,
+    ExternalAccount, KernelAccount, ReplayAccount, EXTERNAL_ACCOUNT_LEN, KERNEL_ACCOUNT_LEN,
+    REPLAY_ACCOUNT_LEN,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -50,100 +51,33 @@ pub const IX_EXTERNAL: usize = 7;
 /// Reference-only replay-sequence account.
 pub const IX_REPLAY: usize = 8;
 
-type Outcome<T> = core::result::Result<T, Refusal>;
+/// The program-owned state roles of this instruction, in account-list order.
+const STATE_ROLES: [StateRole; 8] = [
+    StateRole::read_only(IX_REALM, account_len::REALM),
+    StateRole::read_only(IX_PROFILE, account_len::PROFILE),
+    StateRole::writable(IX_MARKET, account_len::MARKET),
+    StateRole::writable(IX_HOARD, account_len::HOARD),
+    StateRole::writable(IX_POSITION, account_len::POSITION),
+    StateRole::writable(IX_KERNEL, KERNEL_ACCOUNT_LEN),
+    StateRole::writable(IX_EXTERNAL, EXTERNAL_ACCOUNT_LEN),
+    StateRole::writable(IX_REPLAY, REPLAY_ACCOUNT_LEN),
+];
 
-fn require(condition: bool, error: ClutchError) -> Outcome<()> {
-    if condition {
-        Ok(())
-    } else {
-        Err(error.into())
-    }
-}
-
-struct RealmFacts {
-    realm: Hash32,
-    profile: Hash32,
-    max_outcomes: u8,
-    profile_version: u8,
-    stored_bump: u8,
-}
-
-struct ProfileFacts {
-    profile: Hash32,
-    realm: Hash32,
-    version: u8,
-}
-
-struct MarketFacts {
-    market: Hash32,
-    realm: Hash32,
-    profile: Hash32,
-    outcome_count: u8,
-    lifecycle: u8,
-    stored_bump: u8,
-    hoard_bump: u8,
-    collateral_cap: u64,
-}
-
-struct KernelFacts {
-    market: Hash32,
-    phase: u8,
-    payout_outcomes: u8,
-    total_supply: [u64; MAX_OUTCOMES],
-}
-
-/* The three readers below are `inline(never)` on purpose.  The decoded
- * `MarketAccount` and `KernelAccount` values are large fixed-size structures,
- * and SBF gives each call frame a hard 4 KiB budget.  Keeping the large value
- * inside its own frame and returning only the small facts the transition needs
- * is what keeps the entrypoint frame inside that budget. */
-
-#[inline(never)]
-fn read_realm(data: &[u8]) -> Outcome<RealmFacts> {
-    let value = RealmAccount::decode(data)?;
-    Ok(RealmFacts {
-        realm: value.realm,
-        profile: value.profile,
-        max_outcomes: value.max_outcomes,
-        profile_version: value.profile_version,
-        stored_bump: value.stored_bump,
-    })
-}
-
-#[inline(never)]
-fn read_profile(data: &[u8]) -> Outcome<ProfileFacts> {
-    let value = ProfileAccount::decode(data)?;
-    Ok(ProfileFacts {
-        profile: value.profile,
-        realm: value.realm,
-        version: value.version,
-    })
-}
-
-#[inline(never)]
-fn read_market(data: &[u8]) -> Outcome<MarketFacts> {
-    let value = MarketAccount::decode(data)?;
-    Ok(MarketFacts {
-        market: value.market,
-        realm: value.realm,
-        profile: value.profile,
-        outcome_count: value.outcome_count,
-        lifecycle: value.lifecycle,
-        stored_bump: value.stored_bump,
-        hoard_bump: value.hoard_bump,
-        collateral_cap: value.collateral_cap,
-    })
-}
-
-#[inline(never)]
-fn read_kernel(data: &[u8]) -> Outcome<KernelFacts> {
-    let value = KernelAccount::decode(data)?;
-    Ok(KernelFacts {
-        market: value.market,
-        phase: value.phase,
-        payout_outcomes: value.payouts.outcomes,
-        total_supply: value.total_supply,
-    })
+/// One already-routed `Split` request.
+///
+/// [`crate::dispatch`] destructures the envelope so that this module never has
+/// to re-match an action it already knows, and so there is no unreachable
+/// fallback arm pretending another intent could arrive here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SplitRequest {
+    /// Exact replay sequence the request claims.
+    pub sequence: u64,
+    /// Market identity the intent binds.
+    pub market: Hash32,
+    /// Owner identity the intent binds.
+    pub owner: Hash32,
+    /// Complete sets to create.
+    pub quantity: u64,
 }
 
 /// Run the complete-set split on the pure kernel and re-encode the aggregate.
@@ -161,8 +95,7 @@ fn kernel_split(
     quantity: u64,
 ) -> Outcome<u64> {
     let mut account = KernelAccount::decode(kernel_data)?;
-    if usize::from(outcome_count) > KERNEL_MAX_OUTCOMES
-        || account.payouts.outcomes != outcome_count
+    if usize::from(outcome_count) > KERNEL_MAX_OUTCOMES || account.payouts.outcomes != outcome_count
     {
         return Err(ClutchError::MismatchedState.into());
     }
@@ -206,84 +139,31 @@ fn kernel_split(
     Ok(market.collateral)
 }
 
-fn expect_pda(
-    actual: &Pubkey,
-    derived: (Pubkey, u8),
-    stored_bump: Option<u8>,
-) -> Outcome<()> {
-    require(*actual == derived.0, ClutchError::WrongPda)?;
-    match stored_bump {
-        Some(bump) => require(bump == derived.1, ClutchError::WrongBump),
-        None => Ok(()),
-    }
-}
-
 /// Validate hostile accounts and apply exactly one `Split`.
 pub fn process(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
-    instruction_data: &[u8],
+    request: &SplitRequest,
 ) -> Outcome<()> {
-    require(accounts.len() == ACCOUNT_COUNT, ClutchError::AccountCount)?;
+    require_count(accounts, ACCOUNT_COUNT)?;
 
     let actor = &accounts[IX_ACTOR];
-    require(actor.is_signer, ClutchError::MissingSignature)?;
+    require_signer(actor)?;
 
     /* Role uniqueness.  A writable alias would let one logical debit or credit
      * land twice, which is obligation 3 of the reference adapter doc. */
-    let mut left = 0_usize;
-    while left < ACCOUNT_COUNT {
-        let mut right = left + 1;
-        while right < ACCOUNT_COUNT {
-            require(
-                accounts[left].key != accounts[right].key,
-                ClutchError::AccountAlias,
-            )?;
-            right += 1;
-        }
-        left += 1;
-    }
+    require_distinct(accounts)?;
 
-    /* Program ownership, executable bit, and declared mutability by role. */
-    let mut index = IX_REALM;
-    while index < ACCOUNT_COUNT {
-        let account = &accounts[index];
-        require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
-        require(!account.executable, ClutchError::ExecutableAccount)?;
-        if index >= IX_MARKET {
-            require(account.is_writable, ClutchError::NotWritable)?;
-        } else {
-            require(!account.is_writable, ClutchError::UnexpectedWritable)?;
-        }
-        index += 1;
-    }
+    /* Program ownership, executable bit, declared mutability by role, and exact
+     * data length per role. */
+    accounts::validate_state_roles(program_id, accounts, &STATE_ROLES)?;
 
-    /* Exact data lengths.  The codecs re-check length, discriminator and
-     * version, but checking here first means a wrong-length account never
-     * reaches a codec at all. */
-    let lengths = [
-        (IX_REALM, account_len::REALM),
-        (IX_PROFILE, account_len::PROFILE),
-        (IX_MARKET, account_len::MARKET),
-        (IX_HOARD, account_len::HOARD),
-        (IX_POSITION, account_len::POSITION),
-        (IX_KERNEL, KERNEL_ACCOUNT_LEN),
-        (IX_EXTERNAL, EXTERNAL_ACCOUNT_LEN),
-        (IX_REPLAY, REPLAY_ACCOUNT_LEN),
-    ];
-    for (role, expected) in lengths {
-        require(
-            accounts[role].data_len() == expected,
-            ClutchError::WrongDataLength,
-        )?;
-    }
-
-    let realm = read_realm(&accounts[IX_REALM].data.borrow())?;
-    let profile = read_profile(&accounts[IX_PROFILE].data.borrow())?;
-    let market = read_market(&accounts[IX_MARKET].data.borrow())?;
+    let realm = accounts::read_realm(&accounts[IX_REALM].data.borrow())?;
+    let profile = accounts::read_profile(&accounts[IX_PROFILE].data.borrow())?;
+    let market = accounts::read_market(&accounts[IX_MARKET].data.borrow())?;
     let mut hoard = HoardAccount::decode(&accounts[IX_HOARD].data.borrow())?;
     let mut position = PositionAccount::decode(&accounts[IX_POSITION].data.borrow())?;
-    let kernel = read_kernel(&accounts[IX_KERNEL].data.borrow())?;
+    let kernel = accounts::read_kernel(&accounts[IX_KERNEL].data.borrow())?;
     let external = ExternalAccount::decode(&accounts[IX_EXTERNAL].data.borrow())?;
     let mut replay = ReplayAccount::decode(&accounts[IX_REPLAY].data.borrow())?;
 
@@ -383,7 +263,27 @@ pub fn process(
         padding += 1;
     }
 
-    /* Closed single-position aggregate closure, before any write. */
+    /* Closed single-position aggregate closure, before any write.
+     *
+     * NAMED DIVERGENCE from the offline reference adapter.  Commit 9c43863
+     * replaced the reference's single-position equality with CLO-DELTA-V1
+     * (`docs/implementation/MULTI_POSITION_CLOSURE.md`): a per-triple *bound*
+     * against the market-wide supply ledger (C2), plus a delta write into that
+     * ledger (C3).  This instruction still carries the old equality, because
+     * porting it means taking a tenth account -- the supply ledger -- which is
+     * an account-list change, not a check swap.
+     *
+     * The divergence is fail-closed rather than fail-open: `internal + external
+     * == total_supply` is strictly stronger than C2's `<=`, so this program
+     * refuses states the reference now accepts and accepts nothing the
+     * reference refuses.  Concretely, it refuses every market holding a second
+     * position.  The bring-up fixture is single-position, so the differential is
+     * unaffected; a multi-position fixture would show the two adapters
+     * disagreeing, with this one refusing.
+     *
+     * The C1/C2/C3 primitives are already written and tested in
+     * `crate::accounts`; the port is listed as a follow-on in
+     * `docs/implementation/SBF_BRINGUP.md`. */
     let mut outcome = 0_usize;
     while outcome < count {
         let local = position.internal[outcome]
@@ -396,41 +296,25 @@ pub fn process(
         outcome += 1;
     }
 
-    let request = Request::decode(instruction_data)?;
     require(request.sequence == replay.sequence, ClutchError::Replay)?;
     let next_sequence = replay
         .sequence
         .checked_add(1)
         .ok_or(Refusal::Adapter(ClutchError::Replay))?;
 
-    let quantity = match request.action {
-        Action::Layout(Intent::Split {
-            market: intent_market,
-            owner: intent_owner,
-            quantity,
-        }) => {
-            require(
-                actor.key.to_bytes() == position.owner.bytes(),
-                ClutchError::UnauthorizedActor,
-            )?;
-            require(
-                intent_market == market.market && intent_owner == position.owner,
-                ClutchError::MismatchedState,
-            )?;
-            require(
-                market.lifecycle == 0 && position.close_state == 0,
-                ClutchError::NotActive,
-            )?;
-            quantity
-        }
-        Action::Layout(Intent::CreateMarket { .. }) => {
-            return Err(ClutchError::AuthorizationUnavailable.into())
-        }
-        Action::Resolve { .. } | Action::RedeemInternal { .. } => {
-            return Err(ClutchError::ResolutionEvidenceUnavailable.into())
-        }
-        Action::Layout(_) => return Err(ClutchError::UnsupportedInstruction.into()),
-    };
+    require(
+        actor.key.to_bytes() == position.owner.bytes(),
+        ClutchError::UnauthorizedActor,
+    )?;
+    require(
+        request.market == market.market && request.owner == position.owner,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        market.lifecycle == 0 && position.close_state == 0,
+        ClutchError::NotActive,
+    )?;
+    let quantity = request.quantity;
 
     /* Collateral cap and position cash are checked before the kernel runs, in
      * the same order as the offline reference adapter. */

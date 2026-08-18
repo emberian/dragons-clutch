@@ -1,0 +1,40 @@
+Dragon's Clutch Token-2022 probe -- recorded run
+date            : 2026-08-18T09:04:13Z
+host            : Darwin arm64 / Darwin 25.6.0
+toolchain       : rustup pin 1.93.1 (rust-toolchain.toml)
+                  rustc 1.93.1 (01f6ddf75 2026-02-11)
+network         : crates.io reachable; dependencies fetched, not vendored
+
+harness         : solana-program-test 4.2.1 (feature agave-unstable-api), in-process Agave bank
+token program   : spl_token_2022 v10.0.0, installed at genesis by solana-program-binaries 4.2.1
+  ELF path      : $CARGO_HOME/registry/src/index.crates.io-*/solana-program-binaries-4.2.1/src/programs/spl_token_2022-10.0.0.so
+  ELF sha256    : a794161408080f690dac00832f45b3c3e2b71f1339586667ad1f979cf91d5b68
+  ELF bytes     : 506896
+  program id    : TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb (bpf_loader_upgradeable)
+client library  : spl-token-2022-interface 3.1.1
+
+---- cargo test --locked -- --nocapture --test-threads=1 ----
+    Blocking waiting for file lock on package cache
+   Compiling clutch-token2022-probe v0.1.0 (/Users/ember/dev/dragons-clutch/toolchain/probes/token2022)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.62s
+     Running unittests src/lib.rs (target/debug/deps/clutch_token2022_probe-47dbda6c95f993de)
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/token2022_probe.rs (target/debug/deps/token2022_probe-f5969875b5c19511)
+running 6 tests
+test a_widened_profile_would_admit_the_fee_mint_and_lose_atoms ... PROBE widened_profile: admitted=[TransferFeeConfig] deposited=2000000 spendable=1980000 shortfall=20000
+ok
+test base_mint_is_admitted_as_collateral ... PROBE base_mint_is_admitted_as_collateral: MintObservation { decimals: 6, supply: 5000000, mint_authority: None, freeze_authority: None, extensions: [] }
+ok
+test mint_close_authority_mint_is_refused ... PROBE mint_close_authority: refusal=Refusal { code: ExtensionNotAllowed, extension: Some(MintCloseAuthority) }
+ok
+test outcome_mint_lifecycle_conserves_atoms ... PROBE outcome_mint_lifecycle: mint_to=1230 CU  transfer_checked=1720 CU  burn=1235 CU  (bare instruction, no CPI frame)
+ok
+test pda_owned_hoard_admits_immutable_owner_and_refuses_wallet_withdrawal ... PROBE pda_owned_hoard: admitted=TokenAccountObservation { mint: 6EGVnUrkN7FfaybVff2EfDjYuSJaNuJx5aQ5WmnyyBVu, owner: 7fnuQV5E69e5vFUbYntK7Sf8kWiK2wHPk1H5BDAZ1jNY, amount: 600000, frozen: false, delegate: None, close_authority: None, extensions: [ImmutableOwner] } wallet_withdrawal_refused_with=Custom(4)
+ok
+test transfer_fee_mint_is_refused_and_would_break_conservation ... PROBE transfer_fee: sent=1000000 credited=990000 withheld=10000 refusal=Refusal { code: ExtensionNotAllowed, extension: Some(TransferFeeConfig) } account_refusal=Refusal { code: ExtensionNotAllowed, extension: Some(TransferFeeAmount) }
+ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+   Doc-tests clutch_token2022_probe
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
