@@ -1,0 +1,10 @@
+name = "DragonsClutch"
+defaultTargets = ["DragonsClutch"]
+
+# No dependencies, deliberately.  See docs/implementation/LEAN_MODEL_PLAN.md
+# section "Toolchain pin": the model is built against the Lean 4 core library
+# alone so that its theorem closure is reproducible offline and its trusted
+# base is the Lean kernel plus nothing else.
+
+[[lean_lib]]
+name = "DragonsClutch"

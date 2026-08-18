@@ -97,6 +97,81 @@ A useful first Lean experiment is the finite `BatchRelationV1` conservation and
 deterministic-score model over tiny bounds. If it merely duplicates Rocq at high
 maintenance cost, retain the seam and do not make it a release blocker.
 
+### Addendum, 2026-08-18 — the seam is now the primary home of model theorems
+
+Status of this addendum: **MODEL for what it says is proved; PROPOSED for
+everything else.** Nothing in §6 above is amended, retracted, or rewritten; the
+paragraph above stands as the record of what was planned. This addendum records
+a decision that supersedes its posture, and the artifact that now exists.
+
+**The decision (the user's).** Properties of the semantic plane are proven of a
+**mathematical model in Lean**, independently of the Rust implementation. Two
+implementations of the semantic plane is the accepted cost. The correspondence
+between model and implementation is bounded **empirically, by the canonical
+semantic vectors both evaluate**, and is never claimed as proven. Lean is
+therefore no longer "optional for V1"; it is where semantic-plane theorems live.
+Verus is unchanged and remains the only tool that says anything about the Rust
+source. The Rocq shadow is unchanged and undecided (see the plan, §9.4).
+
+**The claim shape, which every statement about this work must use verbatim:**
+
+> Lean 4.33.0 checked theorem `T` about the model `M` in `lean/` at source
+> digest `d`, under hypotheses `H`. `M` is a hand-written mathematical model of
+> the kernel's semantic plane. Its correspondence to `crates/clutch-kernel` is
+> manual, unproved, and bounded only by the semantic vectors both evaluate. No
+> theorem in `M` is a statement about the Rust program, the compiled SBF ELF, or
+> any deployed program.
+
+**What exists as of this date.** `lean/` is a dependency-free Lake package
+(Lean 4.33.0, commit `d8b18978322de05a8f3dba51ef03cf5461676c17`, no Mathlib, no
+registry dependencies) that builds with zero errors and zero warnings and
+contains 86 theorems, none using `sorry`, project axioms, `native_decide`, or
+`unsafe`, and all closing over only Lean's three standard axioms (`propext`,
+`Classical.choice`, `Quot.sound`). It models the kernel state, the ten
+transitions, and the payout basis as a partition-of-unity hypothesis on a total
+weight map. Architecture, toolchain pin, findings, and the ranked next theorems
+are in
+[`implementation/LEAN_MODEL_PLAN.md`](implementation/LEAN_MODEL_PLAN.md).
+
+**Property rows this changes.** The §2 table is not edited here; these are the
+Lean-column dispositions the work supports, for a reviewer to apply:
+
+| ID | Lean column, as written | Supported by this work |
+|---|---|---|
+| `P-SOLV-01` | optional | **primary** — the maximum-liability bound, its exact-supremum form over the frozen simplex lattice, and per-transition preservation are proved of the model |
+| `P-PAY-01` | vector checker | **primary for the arithmetic-width half** — the liability numerator provably fits `u128`; the rounding-placement half stays with Verus and the vectors |
+| `P-SUP-01` | optional | **primary** — materialize/dematerialize are market-neutral and transfer is claim-conserving, proved |
+| `P-PART-01`, `P-PART-02` | optional reproduce | unchanged; not yet modelled (ranked next in the plan, §5.2) |
+| `P-BATCH-01`, `-02`, `-05` | finite relation | unchanged; the plan names the Mathlib decision these force (§3.1) |
+| all others | unchanged | unchanged |
+
+**One proposed new row.** The property that a **complete set redeems for exactly
+`q` at every admissible resolved value** — the unconditional exit from the
+fractional-payout trap — has no ID in §2. This work proves it of the model and
+proposes:
+
+| ID | Property | Verus executable | Rocq shadow | Lean seam | Host/SBF falsifier |
+|---|---|---|---|---|---|
+| `P-PAY-02` | a complete set redeems for exactly `q` at every admissible payout vector | required | optional | **primary (proved)** | fractional-weight corpus |
+
+Adding the row is a reviewer's edit, not this lane's.
+
+**Executor-column consequence for §7.** The `lean-checker` column of the
+cross-runtime differential gate stays `pending` today, and every vector still
+carries it (22 pending, 3 not-applicable). The plan's §7 designs the reader that
+fills it, including the rule that until the `Error -> taxonomy code` table is
+reviewed, a Lean run reports **refusal-only** rather than inventing codes — the
+same hazard as finding A.4.2 of `implementation/VECTOR_SPINE_PROPOSAL.md`. The
+model already evaluates two canonical kernel vectors at build time
+(`lean/DragonsClutch/Vectors.lean`, `#guard`), which is an existence proof for
+the column, not the column.
+
+**What this addendum does not claim.** No implementation is verified. No
+refinement exists. Vector agreement, when the column exists, will be agreement
+on the facts a vector names and nothing else. The Lean theorems bound the
+mathematics; the vectors bound the correspondence; nothing yet bounds the SBF
+build, the adapter, or the runtime.
+
 ## 7. Cross-runtime differential gate
 
 For every semantic vector:

@@ -1,0 +1,3 @@
+# Lake build output.  The model source, the toolchain pin, and the (empty)
+# dependency lock are tracked; nothing generated is.
+/.lake/
