@@ -41,9 +41,9 @@
 
 use crate::error::{ClutchError, Refusal};
 use clutch_solana_layout::{
-    CandidateRecord, EpochAccount, FeedAccount, FinalPotAccount, Hash32, MarketAccount,
-    OrderPageAccount, PriceGridAccount, ProfileAccount, RealmAccount, ResolutionAccount,
-    SettlementReceiptAccount, SupplyLedgerAccount, TermsAccount, MAX_OUTCOMES,
+    stream, CandidateRecord, EpochAccount, FeedAccount, FinalPotAccount, Hash32, MarketAccount,
+    PriceGridAccount, ProfileAccount, RealmAccount, ResolutionAccount, SettlementReceiptAccount,
+    SupplyLedgerAccount, TermsAccount, MAX_OUTCOMES,
 };
 use clutch_solana_reference::KernelAccount;
 use solana_account_info::AccountInfo;
@@ -766,41 +766,36 @@ pub fn read_epoch(data: &[u8]) -> Outcome<EpochFacts> {
     })
 }
 
-/// Decode an order-page account. **Host-only: this cannot run on SBF.**
+/// Decode an order-page account, streaming.  **This now runs on SBF.**
 ///
 /// The order page is the largest account in the protocol —
 /// `MAX_ORDERS_PER_PAGE` slots of `ORDER_SLOT_BYTES` each plus the page-set
-/// commitment — and it does not fit an SBF call frame.  This is measured, not
-/// assumed.  Compiling this function for `target_os = "solana"` makes the SBF
-/// backend report:
+/// commitment — and the *buffered* decoder does not fit an SBF call frame.
+/// That was measured, not assumed: `clutch_solana_layout::OrderPageAccount`'s
+/// own `decode` is reported at an estimated 8640-byte frame and
+/// `decode_on_grid` at 8320, because both build a whole page by value before
+/// returning it, and a wrapper around either was reported at 8192.  This
+/// function was therefore compiled off-chain only, and the whole
+/// batch-auction instruction family was blocked behind it.
 ///
-/// ```text
-/// Error: Function clutch_sbf::accounts::read_order_page overflows the maximum
-/// allowed frame space by accessing an offset 4096 bytes greater than the
-/// maximum of 4096. Estimated function frame size: 8192 bytes.
-/// ```
+/// It no longer is.  `clutch_solana_layout::stream::verify_page` returns
+/// **exactly** what `OrderPageAccount::decode` returns — the identical
+/// `CodecError`, or the same page's header fields — while never holding more
+/// than one `ORDER_SLOT_BYTES` slot: the header is read on its own, the slot
+/// array is swept once structurally while the page digest is folded, and it is
+/// walked again for record semantics and the order-id chain.  Every field of
+/// [`OrderPageFacts`] is a header field, so the mapping below is one-to-one
+/// and this reader loses nothing by never materializing the records.
 ///
-/// The cause is not this wrapper.  `clutch_solana_layout::OrderPageAccount`'s
-/// own `decode` is reported at an estimated 8640 bytes and `decode_on_grid` at
-/// 8320, because both build a whole page by value before returning it.  No
-/// arrangement of callers fixes that from here.
-///
-/// It is therefore compiled **off-chain only**, so that an instruction lane
-/// that reaches for it gets a compile error naming this problem rather than a
-/// frame overflow the loader will happily run.  That diagnostic is a warning,
-/// not a build failure: an SBF program that overflows its frame is undefined
-/// behaviour at execution time, so a refusal at compile time is the fail-closed
-/// choice.
-///
-/// The fix belongs in `clutch-solana-layout`, not here: a streaming
-/// header-and-commitment decoder that never materializes the slot array, in the
-/// same shape as that crate's own `recomputed_page_digest`, which already
-/// streams one `ORDER_SLOT_BYTES` scratch slot instead of buffering a page.
-/// Until that exists, no on-chain instruction can read an order page at all.
-#[cfg(not(target_os = "solana"))]
+/// The 16 records are still deliberately not carried out; a caller that needs
+/// them opens a `clutch_solana_layout::stream::OrderSlotCursor` over the same
+/// bytes, which costs one slot of stack per step.  A caller that needs only
+/// the addressing fields — `epoch`, `page_index`, `stored_bump` — should read
+/// `stream::OrderPageHeader::decode` instead, which reads the fixed 235-byte
+/// header and folds no digest at all.
 #[inline(never)]
 pub fn read_order_page(data: &[u8]) -> Outcome<OrderPageFacts> {
-    let value = OrderPageAccount::decode(data)?;
+    let value = stream::verify_page(data)?;
     Ok(OrderPageFacts {
         market: value.market,
         epoch: value.epoch,
@@ -878,8 +873,9 @@ pub fn read_receipt(data: &[u8]) -> Outcome<ReceiptFacts> {
 mod tests {
     use super::*;
     use clutch_solana_layout::{
-        account_len, canonical_epoch_id, CodecError, OrderSlot, PayoutVectorBytes, MAX_GRID_TICKS,
-        MAX_ORDERS_PER_PAGE, MAX_PAYOUTS, PAYOUT_INDEX_UNRESOLVED,
+        account_len, canonical_epoch_id, CodecError, OrderPageAccount, OrderSlot,
+        PayoutVectorBytes, MAX_GRID_TICKS, MAX_ORDERS_PER_PAGE, MAX_PAYOUTS,
+        PAYOUT_INDEX_UNRESOLVED,
     };
 
     /* These tests run on the host, where `seeds::find` is not compiled (see the
