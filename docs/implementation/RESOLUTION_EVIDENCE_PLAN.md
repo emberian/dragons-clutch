@@ -584,6 +584,163 @@ An admitted layout Profile still does not imply admission by the collateral
 model until an adapter authenticates a real mint and a real Hoard token account,
 which is outside every offline crate.
 
+### 3.5 Addendum 2026-08-18 (later wave): obligations 2, 3, and 4 discharged
+
+Status: implemented in `programs/solana-layout/src/collateral.rs` and gated
+(74 unit tests + 2 doc tests green, `clippy --all-targets -D warnings` clean,
+`rustdoc -D warnings` clean, `cargo fmt --check` clean; the downstream
+`clutch-solana-reference` and `clutch-sbf` workspaces still build). The
+algorithm, the domain strings, and the vectors of 3.1-3.3 are unchanged; this
+section only records the Rust side catching up.
+
+| 3.4 obligation | State |
+| --- | --- |
+| 1. exactly-64-byte input to `canonical_profile_hash` | landed earlier; unchanged |
+| 2. parent encoder/decoder | `collateral::ParentProfile` |
+| 3. checked binding that recomputes `D_col` | `collateral::verify_collateral_binding`, plus `verify_profile_identity` |
+| 4. cross-language golden tests | 3 positive vectors, 9 parent decode refusals, 3 binding refusals, 4 domain-separation confusions |
+
+The golden bytes and digests are transcribed as raw hex fixtures from
+`identity_vectors.json`, not recomputed in Rust. A Rust round trip would agree
+with itself even if the domain string or field order had drifted, which is
+precisely the divergence obligation 4 exists to catch. On the first run the
+Rust build reproduced all three child digests, all three 64-byte parent
+preimages, all three parent identities, and all four confusion digests exactly.
+
+**Decoding still authenticates nothing.** `CollateralPolicy::decode` accepts any
+well-formed policy and `ParentProfile::decode` accepts any well-formed parent,
+including a real parent belonging to another Realm. The Rust tests reproduce the
+load-bearing negative directly: the DREGG parent decodes, binds the DREGG policy,
+and is refused against the generic policy. Only `verify_collateral_binding`
+recomputes and compares.
+
+`verify_profile_identity` goes one step further and requires the account's stored
+Profile ID to be the parent hash over the same digest. That is sound *only*
+because the V1 parent preimage carries exactly one subfield, making the identity
+a total function of `D_col`. A future parent schema with a second subfield must
+move behind a new composition rather than relax this check; the subfield schema
+version living inside the preimage (3.2) is what makes that a version bump
+rather than a silent reinterpretation.
+
+#### Refusal parity with `model.py`
+
+Every refusal of `RealmCollateralProfile.from_canonical_bytes`,
+`CurrencyRef.__post_init__`, and `RealmCollateralProfile.__post_init__` is ported
+and has an adversarial Rust test. The taxonomy codes are the frozen ones from
+`VECTOR_SPINE_PROPOSAL.md` 2.3 via `CodecError::code`.
+
+| Python refusal | Rust refusal | Code |
+| --- | --- | ---: |
+| not exactly 266 bytes (short) | `Truncated` | 2011 |
+| not exactly 266 bytes (long) | `TrailingBytes` | 2012 |
+| invalid collateral-profile magic | `WrongTag` | 2030 |
+| reserved bytes must be zero | `NonCanonicalPadding` | 2022 |
+| unknown currency kind | `InvalidEnum` | 2021 |
+| native SOL must use zero program and mint | `NonCanonicalPadding` | 2022 |
+| native SOL decimals must be nine | `InvalidCount` | 2040 |
+| currency token program / mint cannot be zero | `ZeroIdentity` | 4009 |
+| unsupported token program | `InvalidEnum` | 2021 |
+| unsupported collateral-profile schema | `WrongVersion` | 2031 |
+| V1 collateral must be an SPL token | `InvalidEnum` | 2021 |
+| maximum supply must be a positive u64 | `ZeroValue` | 2046 |
+| profile contains unknown flags | `InvalidEnum` | 2021 |
+| Realm cannot weaken the V1 authority/state policy | `InvalidEnum` | 2021 |
+| V1 fee currency must be collateral or native SOL | `MismatchedBinding` | 4011 |
+| V1 liveness currency must be native SOL | `MismatchedBinding` | 4011 |
+| extension mask contains unknown bits | `InvalidEnum` | 2021 |
+| required extensions must also be allowed | `InvalidEnum` | 2021 |
+| Realm cannot expand the mint-extension ceiling | `InvalidEnum` | 2021 |
+| Realm cannot expand the account-extension ceiling | `InvalidEnum` | 2021 |
+| legacy SPL Token profile cannot declare extensions | `InvalidEnum` | 2021 |
+| non-canonical collateral-profile encoding | `NonCanonicalPadding` | 2022 |
+
+Three Python refusals have no Rust counterpart because the Rust types make them
+unrepresentable rather than unreachable: "currency reference must be 66 bytes"
+(fixed offsets in a fixed-length buffer), "extension mask must fit u64", and
+"currency decimals must fit u8".
+
+The Rust taxonomy is coarser than the Python messages, so several distinct policy
+faults share `InvalidEnum`. What is preserved exactly is the *verdict* and the
+*order*: on the decode path the three currency references are validated before
+any policy-level constraint, mirroring `from_canonical_bytes` constructing
+`CurrencyRef`s before `RealmCollateralProfile`, so a multi-fault input reports
+the same fault in both languages. `CollateralPolicy::validate` called directly on
+an in-memory value checks its own schema first; that path has no byte input and
+no Python counterpart.
+
+The nine parent decode refusals map: wrong magic to `WrongTag`, nonzero reserved
+to `NonCanonicalPadding`, swapped flags/tag to `InvalidEnum` (nonzero parent
+flags), unknown subfield tag to `WrongTag`, unsupported parent schema and
+unsupported subfield schema to `WrongVersion`, zero child digest to
+`ZeroIdentity`, truncated to `Truncated`, and extended to `TrailingBytes`.
+
+#### The `collateral_cap` finding: the policy has no cap field
+
+Commit `1d0c257` recorded that `CreateMarket` writes
+`MarketAccount.collateral_cap = 0` because nothing could decode the collateral
+policy, and that a market created today therefore cannot accept collateral. The
+decoder now exists, and the honest answer is that **it does not unblock the cap**.
+
+`MarketAccount.collateral_cap` is a per-market limit on Hoard atoms; both
+`clutch-solana-reference` and the SBF `split` refuse a split whose resulting
+collateral would exceed it. The 266-byte policy carries no per-market field.
+`max_supply_atoms` is a *Realm-wide admission constraint on the mint*, and
+`COLLATERAL_PROFILES.md` states in as many words that "the supply ceiling is not
+a solvency proof". Mapping it onto `collateral_cap` would grant every market in
+a Realm permission to absorb the entire admitted mint supply, which bounds
+nothing in aggregate and misstates what the field means. It would also be a
+worse failure mode than zero, because it looks like a risk limit.
+
+What the policy does supply is a sound necessary condition, since a market can
+never hold more atoms of a mint than that mint is admitted to have.
+`CollateralPolicy::market_cap_ceiling_atoms` and `check_market_cap` expose that
+and nothing more: a cap above the ceiling is refusable, a cap at or below it is
+merely not refuted, and a policy whose ceiling is `u64::MAX` refutes nothing.
+
+**The cap needs a terms field, not a policy field.** Neither the frozen
+`CreateMarket` intent (realm, profile, market nonce, outcome count, terms, feed)
+nor `TermsAccount` has anywhere for it to live. Closing this needs one of:
+
+1. a `collateral_cap` field in a new immutable terms schema, checked against
+   `check_market_cap` at creation — the option that keeps the cap immutable and
+   inside the digest the market already binds; or
+2. a new `CreateMarket` intent version carrying the cap, also checked against
+   the ceiling.
+
+Both are shared-file schema decisions outside this lane. Until one lands, zero
+remains the fail-closed value and the residue stands: a market created today
+exists and cannot accept collateral.
+
+#### Wiring note: `require_frozen_collateral_policy` in `clutch-solana-reference`
+
+`programs/solana-reference/src/lib.rs` was **owned by a concurrent
+merge-semantics lane during this wave** (a live working-tree diff adding the
+`Intent::Merge` arm), so this lane did not edit it. The reference side is
+unchanged and its comment correctly still says the binding check is unwritten
+*there*. What that lane, or the next one to own the file, should do:
+
+- `require_frozen_collateral_policy(&ProfileAccount)` today checks only
+  freeze discipline: the flag is set and the digest is nonzero. It cannot tell
+  whether the digest is the right one, and its own doc comment says so.
+- Take the 266 policy bytes as a **new evidence input** to
+  `validate_market_init` (its only callers are that file's own tests; the SBF
+  program re-composes rather than calls it, so the signature change is local),
+  and replace the body with
+  `clutch_solana_layout::collateral::verify_collateral_binding(policy_bytes, &profile)`,
+  mapping `CodecError` through the existing `Error::Layout`.
+- Keep `Error::CollateralPolicyNotFrozen` for the unfrozen case
+  (`CodecError::ZeroIdentity` from that function) so the taxonomy does not move.
+- The test fixture is already most of the way there: `fixture()` builds
+  `profile_hash` as `canonical_profile_hash(&parent_profile_bytes(h(0xc0)))`
+  with a local 64-byte parent builder. Replacing the placeholder `h(0xc0)` with
+  the generic Token-2022 golden policy's child digest, and carrying the 266
+  golden bytes in `Fixture`, makes every existing call site bind a real policy
+  and lets `verify_profile_identity` be used instead if that lane wants the
+  stronger check.
+- Adversarial tests owed there: a foreign well-formed policy refused, a
+  bit-flipped stored digest refused, and hostile policy bytes surfacing the
+  decoder's refusal rather than a generic mismatch.
+
 ---
 
 ## 4. Promotion gates before any refusal is relaxed

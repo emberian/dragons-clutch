@@ -11,6 +11,7 @@
 //! authenticate account metadata and then hand these checked values to the
 //! semantic kernel.
 
+pub mod collateral;
 pub mod stream;
 
 /// Highest account schema version this build understands.
@@ -41,8 +42,9 @@ pub const HASH_BYTES: usize = 32;
 /// Frozen by `docs/implementation/RESOLUTION_EVIDENCE_PLAN.md` §3.2: an eight
 /// byte magic, parent schema and flags, the collateral subfield tag and its
 /// schema, the 32-byte collateral-policy digest, and 16 zero reserved bytes.
-/// This crate owns only the length requirement of [`canonical_profile_hash`];
-/// the parent encoder/decoder is §3.4 obligation 2 and is unwritten here.
+/// [`canonical_profile_hash`] owns the length requirement; the parent
+/// encoder/decoder that produces these bytes is
+/// [`collateral::ParentProfile`].
 pub const PROFILE_PARENT_BYTES: usize = 64;
 /// Maximum number of outcomes in a market.
 pub const MAX_OUTCOMES: usize = 16;
@@ -303,7 +305,8 @@ pub fn canonical_realm_id(profile: ProfileHash, realm_nonce: u64) -> RealmHash {
 /// This function still computes an identity only. It does not decode the
 /// parent Profile, does not recompute the collateral-policy subfield digest of
 /// §3.2, and therefore proves nothing about which collateral policy a Profile
-/// commits to; that binding check is §3.4 obligation 3 and is unwritten.
+/// commits to. That binding check is [`collateral::verify_collateral_binding`],
+/// and hashing bytes is never a substitute for it.
 pub fn canonical_profile_hash(profile_bytes: &[u8]) -> Result<ProfileHash> {
     if profile_bytes.len() < PROFILE_PARENT_BYTES {
         return Err(CodecError::Truncated);
@@ -551,11 +554,17 @@ pub struct ProfileAccount {
     ///
     /// Zero until the policy is frozen, and nonzero exactly when
     /// [`PROFILE_FLAG_POLICY_FROZEN`] is set in [`ProfileAccount::flags`]; the
-    /// decoder refuses every other combination.  This crate owns **only** those
-    /// 32 bytes and that zero-until-frozen rule.  The digest *algorithm* —
-    /// domain string, preimage, and the Python/Rust cross-language equality —
-    /// is owned by the collateral-profile lane, so no derivation function for
-    /// it exists here and none may be added to this crate.
+    /// decoder refuses every other combination.  This account codec owns those
+    /// 32 bytes and that zero-until-frozen rule and nothing more: it cannot tell
+    /// whether the digest is the *right* one.
+    ///
+    /// The digest *algorithm* — domain string, preimage, and the Python/Rust
+    /// cross-language equality — is owned by
+    /// `research/collateral-profiles/model.py` and ported byte for byte in
+    /// [`collateral`].  Recompute it from an actual 266-byte policy with
+    /// [`collateral::verify_collateral_binding`] before treating a frozen
+    /// Profile as evidence of anything; a well-formed frozen Profile can commit
+    /// to another Realm's collateral policy.
     pub collateral_policy_digest: Hash32,
     /// Profile schema version.
     pub version: u8,

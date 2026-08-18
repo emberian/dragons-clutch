@@ -251,3 +251,69 @@ decoding, and the cross-language golden tests. See
 Unchanged by this addendum: an admitted layout Profile still does not imply
 admission by the collateral model. That requires a future adapter to
 authenticate a real mint and Hoard token account, which no offline crate can do.
+
+## Addendum 2026-08-18 (later wave): the Rust decoder and the binding rule landed
+
+Status: the Rust port is implemented and gated; the policy model it ports is
+unchanged. Nothing below is a chain fact, an authenticated mint, or a
+deployment claim.
+
+`programs/solana-layout/src/collateral.rs` is a byte-for-byte Rust port of the
+266-byte encoding above, of the child digest rule, and of the parent
+composition of the previous addendum. It is `no_std`, dependency-free, and
+reuses the crate's existing SHA-256 and reader/writer discipline. The three
+golden vectors of `research/collateral-profiles/identity_vectors.json` are
+transcribed into the Rust tests as raw hex fixtures with their frozen digests,
+deliberately **not** recomputed from Rust: a round trip through this crate's own
+encoder would agree with itself even if the domain string or the field order had
+drifted. Both child digests above and both parent identities are reproduced
+exactly, as is the third `legacy, SOL fee` vector.
+
+### What each API decides, and what it does not
+
+- `CollateralPolicy::decode` decides that bytes are a well-formed V1 policy.
+  It authenticates nothing and binds nothing.
+- `ParentProfile::decode` decides that bytes are a well-formed V1 parent
+  preimage. A well-formed parent can carry **another Realm's** child digest and
+  this function accepts it without complaint, exactly as the Python model does.
+- `verify_collateral_binding(policy_bytes, profile)` is the check that matters.
+  It refuses an unfrozen Profile, decodes the 266 policy bytes with every
+  refusal listed below, **recomputes** the child digest from those bytes, and
+  compares it against `ProfileAccount.collateral_policy_digest`.
+- `verify_profile_identity(policy_bytes, profile)` additionally recomputes the
+  parent identity and compares it against the account's stored Profile ID. This
+  is sound only because the V1 parent preimage carries exactly one subfield, so
+  the identity is a total function of the child digest; a future parent schema
+  with a second subfield must move behind a new composition rather than relax
+  this.
+
+The Rust tests carry the same three binding refusals the Python corpus does,
+including the one where a real DREGG parent is offered against the generic
+policy: it decodes, it binds its own policy, and it is refused here.
+
+### The collateral cap is not in this policy
+
+`MarketAccount.collateral_cap` is a per-market limit on Hoard atoms; both the
+reference adapter and the SBF program refuse a split that would cross it. This
+profile has no such field, and `max_supply_atoms` is not one in disguise. The
+document already says the supply ceiling is an asset-quality/admission
+constraint and not a solvency proof; using it as the per-market cap would grant
+every market in a Realm permission to absorb the entire admitted mint supply,
+which constrains nothing in aggregate.
+
+What the ceiling does give is a sound necessary condition, since a market can
+never hold more atoms of a mint than that mint is admitted to have.
+`CollateralPolicy::market_cap_ceiling_atoms` and `check_market_cap` expose
+exactly that and no more: a cap above the ceiling is refusable, a cap at or
+below it is merely not refuted. The cap *value* has no source in this policy, in
+the frozen `CreateMarket` intent, or in the immutable terms account. It needs a
+new terms field or a new intent version, and this lane did not invent one.
+
+### Unchanged
+
+Decoding a policy is still not admitting a mint. Everything in "Authority,
+supply, and account policy" above — the mint and Hoard token-account snapshot,
+hostile TLV parsing, duplicate/mislocated extension detection, owner and
+executable checks, program pinning, and PDA derivation — needs authenticated
+accounts, which no offline crate can supply. The Rust port decides policy bytes
+and identity composition only.
