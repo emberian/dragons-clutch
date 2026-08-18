@@ -27,6 +27,12 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- observe_resolve landed: full evidence gate on-chain, FeedAdvance
+  formats PROPOSED, SBF-frame lesson canonized (host green is not
+  evidence); instruction set now Split/Mat/Demat/CreateMarket/Feed/
+  Resolve/Redeem + Merge in flight; orders_batch unblocked pending its
+  lane. Pushed.
+
 - Manipulation-cost table: 1,080 rows exact, four surprises incl.
   refuting our own window-length line - the FILING was corrected by its
   own experiment before any human read it (perpetuals now 5pp); pushed.
