@@ -45,6 +45,8 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
 - GLASS: equality gates, CSP honesty, kernel-true terms (new digest); pushed.
 - S1: reproducible ELF, 6/6 byte-exact SVM differential vs offline adapter,
   72,869 CU Split; commit held until REF-INT lands (shared dep mid-edit).
+- MANIFEST: baseline-manifest emit/check tool landed, live-fire validated;
+  clean emit queued for wave end; pushed.
 - D1: independent FBA oracle, 300M-case differential, zero semantic
   divergences, vectors byte-identical; spec gap (refusal-class priority)
   found and pinned; pushed.
