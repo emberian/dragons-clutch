@@ -2,7 +2,7 @@
   "schema": "dragons-clutch/baseline-manifest/v1",
   "generator": {
     "path": "scripts/baseline_manifest.py",
-    "sha256": "d72108064ab33374652f022fe020a0274a193dd44644dc5b0bca16208ee19c4e",
+    "sha256": "60d320a296fa821b9a9bcbaf7e339779a61660e49be74307a2e2745e2d7b5122",
     "stdlib_only": true
   },
   "dirty": false,
@@ -14,9 +14,9 @@
     "reason": "the manifest is this tool's own output; its git status cannot gate its regeneration. Nothing else is excluded from the dirtiness decision."
   },
   "baseline": {
-    "commit": "1bad84da586d9e8d9fa6c8159150223a569fd298",
-    "tree_hash": "8c9440045ac29b25f5dd75d9ef8ce7a322f16c16",
-    "commit_subject": "Clean-tree ELF record: gates PASS at 5c88505",
+    "commit": "27ea3b355dde0fcd1b93248aac9e08b42f293b36",
+    "tree_hash": "f28518f61c0f6613b3852c64f0b78216953c2c1e",
+    "commit_subject": "Close the two structural P2s: manifest not-attested text, handoff SBF addendum",
     "remotes": [
       {
         "name": "origin",
@@ -43,7 +43,7 @@
       "no signature chain: no signed tag, no signed artifact, no key material, no transparency log entry",
       "no reproducible-build closure: only the narrow E0 rlib self-comparison inside toolchain/scripts/run_lab.sh is measured; no ELF, no toolchain bootstrap, no dependency-source rebuild",
       "no proof content: the Rocq gate typechecks Definitions (zero theorems) and the Verus gate fails on the pinned probe; both are recorded as-is",
-      "no SBF runtime evidence: no entrypoint, program-test lifecycle, Token-2022 CPI, CU/stack/heap measurement, or cross-runtime vector closure",
+      "SBF runtime evidence exists but is NOT attested by this manifest: the entrypoint, per-family SVM differentials, lifecycle walk, Token-2022 CPI scenarios, and CU measurements are recorded in docs/implementation/SBF_BRINGUP.md and LIFECYCLE_WALK.md and gated by programs/clutch-sbf/scripts/run_bringup.sh, which this manifest neither runs nor digests; cross-runtime vector closure remains open",
       "no SBOM, license closure, fixture provenance chain, or source offer",
       "no published provenance: the identities below are git object ids. A configured remote or a pushed branch is neither a signed tag nor a release artifact, and this manifest asserts nothing about either",
       "no security review and no regulatory closure (Gate L0 remains open)"
@@ -993,8 +993,8 @@
     ]
   },
   "run": {
-    "started_at_utc": "2026-08-18T12:40:22Z",
-    "finished_at_utc": "2026-08-18T12:41:15Z",
+    "started_at_utc": "2026-08-18T13:06:50Z",
+    "finished_at_utc": "2026-08-18T13:07:40Z",
     "gate_timeout_seconds": 1800,
     "note": "timestamps here are the only nondeterministic fields in this manifest; `check` ignores them"
   },
@@ -1056,7 +1056,7 @@
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
       "key_lines_sha256": "25ee802a51122367e98040a2b9d9b0dd30bc52de89411adbc386fb346f986046",
-      "output_bytes": 3273,
+      "output_bytes": 3475,
       "tail": []
     },
     "cargo_test.vertical_model": {
@@ -1135,7 +1135,7 @@
       "matches_expectation": true,
       "key_lines": [],
       "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 259,
+      "output_bytes": 72,
       "tail": []
     },
     "cargo_clippy.clutch_sbf": {
@@ -1144,7 +1144,7 @@
       "matches_expectation": true,
       "key_lines": [],
       "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 72,
+      "output_bytes": 266,
       "tail": []
     },
     "cargo_doc.clutch_kernel": {
@@ -1169,22 +1169,18 @@
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
-      "key_lines": [
-        " Documenting clutch-batch v0.1.0 (/Users/ember/dev/dragons-clutch/crates/clutch-batch)"
-      ],
-      "key_lines_sha256": "3cf0cddbebaae79ce0c5514a71478e21c837150188152223ac4b2b7480e079c7",
-      "output_bytes": 259,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 172,
       "tail": []
     },
     "cargo_doc.solana_layout": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
-      "key_lines": [
-        " Documenting clutch-solana-layout v0.1.0 (/Users/ember/dev/dragons-clutch/programs/solana-layout)"
-      ],
-      "key_lines_sha256": "00c25a7cdaf01422753cfe40d3081d4d3d4d6ab20e2d2ec7be3546225217679b",
-      "output_bytes": 281,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 183,
       "tail": []
     },
     "cargo_doc.solana_reference": {
@@ -1202,12 +1198,9 @@
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
-      "key_lines": [
-        " Documenting clutch-sbf v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/program)",
-        " Documenting clutch-sbf-harness v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/harness)"
-      ],
-      "key_lines_sha256": "191506f3338637069d3ea721e34ce770ee7a9ab187e3ca3c44dcb8e5936f7aeb",
-      "output_bytes": 381,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 187,
       "tail": []
     },
     "vertical_model.golden_basic_trace": {
@@ -1330,7 +1323,7 @@
         "ℹ todo 0"
       ],
       "key_lines_sha256": "f47a05a5ef85198ea3bff51976bc50998c1e287e0d96990203770b638657ec23",
-      "output_bytes": 1061,
+      "output_bytes": 1063,
       "tail": []
     },
     "toolchain.run_lab": {
@@ -1359,7 +1352,7 @@
       ],
       "key_lines_sha256": "eab01540da4fd3c974151ad65149c01238f4c98ba077d0715bdb4990ba1855e5",
       "volatile_lines": [
-        "host_rlib_sha256=866fa6ca1d52018109409e209bb7ed866356436bb3b4462cc0b9596a62027f07"
+        "host_rlib_sha256=72a4e747806670b587c854fe88bbe46372e332f39c613fab8b06da26b2ae5bf2"
       ],
       "output_bytes": 1451,
       "tail": []
