@@ -2,7 +2,7 @@
   "schema": "dragons-clutch/baseline-manifest/v1",
   "generator": {
     "path": "scripts/baseline_manifest.py",
-    "sha256": "f7d015d2691156b2d20848a0a6c58255886312eebe01227d9ae29995c4f7753a",
+    "sha256": "d72108064ab33374652f022fe020a0274a193dd44644dc5b0bca16208ee19c4e",
     "stdlib_only": true
   },
   "dirty": false,
@@ -11,14 +11,14 @@
       "MANIFEST.baseline.json"
     ],
     "observed": [
-      "?? MANIFEST.baseline.json"
+      " M MANIFEST.baseline.json"
     ],
     "reason": "the manifest is this tool's own output; its git status cannot gate its regeneration. Nothing else is excluded from the dirtiness decision."
   },
   "baseline": {
-    "commit": "de8a4de82b000feabc1eb2cf3203bd00e9549702",
-    "tree_hash": "875811cc34bc762a662381c2d91e2bae57ca6c4c",
-    "commit_subject": "Goal log: LANDSCAPE landed, Draft 7 queued",
+    "commit": "617a521c30ca961178fd2dd67a06414ade3f2503",
+    "tree_hash": "42084e0b85a2f7011fe594c8da7aad80d56118b9",
+    "commit_subject": "Manifest gains the SBF lane and post-section-5 benchmark gates (28 -> 33)",
     "remotes": [
       {
         "name": "origin",
@@ -143,6 +143,21 @@
       "note": "unit and integration tests; not a proof and not runtime evidence"
     },
     {
+      "id": "cargo_test.clutch_sbf",
+      "section": "5",
+      "command": "cargo test --manifest-path \"programs/clutch-sbf/Cargo.toml\" --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "unit and integration tests; not a proof and not runtime evidence"
+    },
+    {
       "id": "cargo_clippy.clutch_kernel",
       "section": "5",
       "command": "cargo clippy --manifest-path \"crates/clutch-kernel/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
@@ -239,6 +254,22 @@
       "note": "lint gate; no matched key lines is the clean state"
     },
     {
+      "id": "cargo_clippy.clutch_sbf",
+      "section": "5",
+      "command": "cargo clippy --manifest-path \"programs/clutch-sbf/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "lint gate; no matched key lines is the clean state"
+    },
+    {
       "id": "cargo_doc.clutch_kernel",
       "section": "5",
       "command": "cargo doc --manifest-path crates/clutch-kernel/Cargo.toml --offline --locked --no-deps",
@@ -310,6 +341,23 @@
       "id": "cargo_doc.solana_reference",
       "section": "5",
       "command": "cargo doc --manifest-path programs/solana-reference/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^\\s*Documenting ",
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build; asserts nothing about content"
+    },
+    {
+      "id": "cargo_doc.clutch_sbf",
+      "section": "5",
+      "command": "cargo doc --manifest-path programs/clutch-sbf/Cargo.toml --offline --locked --no-deps",
       "cwd": ".",
       "shell": "/bin/sh -c",
       "expected": {
@@ -424,6 +472,40 @@
         "^check passed: "
       ],
       "note": "cost model is a hypothesis (MODEL); no measured CU evidence"
+    },
+    {
+      "id": "benchmarks.unittest",
+      "section": "post-5",
+      "command": "python3 -m unittest discover -s benchmarks/tests",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^Ran \\d+ tests",
+        "^OK$",
+        "^FAILED"
+      ],
+      "note": "benchmark harness tests incl. the landed-ABI arm"
+    },
+    {
+      "id": "benchmarks.abi_audit",
+      "section": "post-5",
+      "command": "python3 benchmarks/cost_lab.py abi-audit",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "drift",
+        "no drift",
+        "^abi-audit"
+      ],
+      "note": "re-derives account widths from programs/solana-layout source; refuses on ABI drift"
     },
     {
       "id": "benchmarks.golden_checksums",
@@ -913,8 +995,8 @@
     ]
   },
   "run": {
-    "started_at_utc": "2026-08-18T08:18:05Z",
-    "finished_at_utc": "2026-08-18T08:18:13Z",
+    "started_at_utc": "2026-08-18T08:38:57Z",
+    "finished_at_utc": "2026-08-18T08:39:05Z",
     "gate_timeout_seconds": 1800,
     "note": "timestamps here are the only nondeterministic fields in this manifest; `check` ignores them"
   },
@@ -991,6 +1073,18 @@
       "output_bytes": 2062,
       "tail": []
     },
+    "cargo_test.clutch_sbf": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "48e3185799401debae1a3fb75b42861126382409fbc748d82e24aef5851734f4",
+      "output_bytes": 874,
+      "tail": []
+    },
     "cargo_clippy.clutch_kernel": {
       "exit_code": 0,
       "timed_out": false,
@@ -1045,6 +1139,15 @@
       "output_bytes": 72,
       "tail": []
     },
+    "cargo_clippy.clutch_sbf": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 72,
+      "tail": []
+    },
     "cargo_doc.clutch_kernel": {
       "exit_code": 0,
       "timed_out": false,
@@ -1076,22 +1179,27 @@
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
-      "key_lines": [
-        " Documenting clutch-solana-layout v0.1.0 (/Users/ember/dev/dragons-clutch/programs/solana-layout)"
-      ],
-      "key_lines_sha256": "00c25a7cdaf01422753cfe40d3081d4d3d4d6ab20e2d2ec7be3546225217679b",
-      "output_bytes": 281,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 183,
       "tail": []
     },
     "cargo_doc.solana_reference": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
-      "key_lines": [
-        " Documenting clutch-solana-reference v0.1.0 (/Users/ember/dev/dragons-clutch/programs/solana-reference)"
-      ],
-      "key_lines_sha256": "6f21a13dedde05f0dccefc51d01ecd565a9cbced80308cc3b0ffcf740dbf52e5",
-      "output_bytes": 293,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 189,
+      "tail": []
+    },
+    "cargo_doc.clutch_sbf": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 187,
       "tail": []
     },
     "vertical_model.golden_basic_trace": {
@@ -1164,6 +1272,29 @@
       "output_bytes": 57,
       "tail": []
     },
+    "benchmarks.unittest": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "Ran 28 tests",
+        "OK"
+      ],
+      "key_lines_sha256": "ffbc7a7f7ee577872f0e5b606f347403d10aa3c0b19ecaaaf0b3d78463c57f4e",
+      "output_bytes": 127,
+      "tail": []
+    },
+    "benchmarks.abi_audit": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "abi-audit passed: landed arm equals the codec on disk"
+      ],
+      "key_lines_sha256": "7dcc81e1dac6ba5f6565aea2755729a6b1da1f5d5b0b32743d785c3513930a1a",
+      "output_bytes": 319,
+      "tail": []
+    },
     "benchmarks.golden_checksums": {
       "exit_code": 0,
       "timed_out": false,
@@ -1191,7 +1322,7 @@
         "ℹ todo 0"
       ],
       "key_lines_sha256": "f47a05a5ef85198ea3bff51976bc50998c1e287e0d96990203770b638657ec23",
-      "output_bytes": 1066,
+      "output_bytes": 1065,
       "tail": []
     },
     "toolchain.run_lab": {
@@ -1220,7 +1351,7 @@
       ],
       "key_lines_sha256": "eab01540da4fd3c974151ad65149c01238f4c98ba077d0715bdb4990ba1855e5",
       "volatile_lines": [
-        "host_rlib_sha256=c5794b8c875315b7cf3da2bb2c9a7399e2b8c1b379906f50ab63e00e869b3bd6"
+        "host_rlib_sha256=75bc52f3cc5df0c3b4f4472e4fe27ab92829da3b8ec0c8ba3e792bf57a11c84c"
       ],
       "output_bytes": 1451,
       "tail": []
@@ -1256,8 +1387,8 @@
     }
   },
   "gate_summary": {
-    "total": 28,
-    "matching_expectation": 28,
+    "total": 33,
+    "matching_expectation": 33,
     "contradicting_expectation": []
   },
   "unavailable_or_failing_gates": [
