@@ -30,6 +30,11 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- BATCH-STREAM landed: streaming verifier at 1,280B frames (was 39KB),
+  ClearWork checkpoint with fold-digest tamper refusal, P-BATCH-03
+  tested across 210 resume points, 19,520-comparison equivalence at
+  zero divergence; projection spec written for LAYOUT-WRITE. Pushed.
+
 - Launched SHIELDED (degg P1-4): the composition test of relation-IR x
   inclusion-availability x frozen refusal order, with the honest core
   being exactly what stays executor-trusted.
