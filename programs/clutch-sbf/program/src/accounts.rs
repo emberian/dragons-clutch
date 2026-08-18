@@ -475,6 +475,8 @@ pub struct TermsFacts {
     pub outcome_count: u8,
     /// Active payout-vector count.
     pub payout_count: u8,
+    /// Per-market collateral cap the terms digest commits to.
+    pub collateral_cap: u64,
     /// Stored PDA bump.
     pub stored_bump: u8,
 }
@@ -700,7 +702,10 @@ pub fn read_supply(data: &[u8]) -> Outcome<SupplyFacts> {
 /// Decode an immutable-terms account.
 #[inline(never)]
 pub fn read_terms(data: &[u8]) -> Outcome<TermsFacts> {
-    let value = TermsAccount::decode(data)?;
+    /* The one FULL terms decode of a transaction: digest recomputation
+     * included.  The `_into` shape keeps this frame at one account copy. */
+    let mut value = TermsAccount::ZEROED;
+    TermsAccount::decode_into(data, &mut value)?;
     Ok(TermsFacts {
         terms: value.terms,
         realm: value.realm,
@@ -709,6 +714,7 @@ pub fn read_terms(data: &[u8]) -> Outcome<TermsFacts> {
         price_grid: value.price_grid,
         outcome_count: value.outcome_count,
         payout_count: value.payout_count,
+        collateral_cap: value.collateral_cap,
         stored_bump: value.stored_bump,
     })
 }
@@ -1109,6 +1115,11 @@ mod tests {
             denominator: 1,
             weights: second,
         };
+        let mut knots = [0u128; clutch_solana_layout::MAX_KNOTS];
+        knots[0] = 1;
+        let mut payout_map = [clutch_solana_layout::PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
+        payout_map[0] = 0;
+        payout_map[1] = 1;
         let mut value = TermsAccount {
             terms: Hash32::ZERO,
             realm: h(2),
@@ -1127,6 +1138,21 @@ mod tests {
             coverage_policy_id: 11,
             repair_policy_id: 12,
             failure_policy_id: 13,
+            statistic_id: 1,
+            ambiguity_policy_id: 1,
+            edge_policy_id: 1,
+            basis_degree: 0,
+            knot_count: 1,
+            uniform_log2_spacing: clutch_solana_layout::UNIFORM_SPACING_NONE,
+            failure_payout_index: 0,
+            coverage_policy_parameter: 0,
+            repair_generation: 0,
+            source_version: 1,
+            evaluator_version: 1,
+            source_adapter_id: h(5),
+            payout_map,
+            knots,
+            collateral_cap: 1_000,
             stored_bump: 9,
             flags: 0,
         };

@@ -66,24 +66,27 @@
 //! initialization-write — and the all-zero precondition is what makes the
 //! missing half detectable rather than assumed.
 //!
-//! ## Fields this instruction cannot honestly source
+//! ## Where the collateral cap comes from, and the field still unsourced
 //!
-//! Two immutable [`MarketAccount`] fields have **no** source in the frozen
-//! `CreateMarket` intent, in the Realm, in the Profile, or in the terms
-//! artifact.  Both are written zero and both are named here rather than
-//! invented:
-//!
-//! - [`MarketAccount::collateral_cap`] is written **`0`**.  The cap belongs to
-//!   the frozen collateral policy the Profile's digest commits to
-//!   (`docs/implementation/RESOLUTION_EVIDENCE_PLAN.md` §3.2), and no decoder
-//!   for that 266-byte policy exists in Rust (§3.4 obligation 3).  Zero is the
-//!   fail-closed choice and it is not a soft one: [`super::split`] refuses
-//!   every nonzero split against a zero cap with
-//!   [`ClutchError::CollateralCap`], so a market created today exists and
-//!   cannot accept collateral.  The alternative — `u64::MAX` — would be this
-//!   lane asserting an unlimited risk limit nobody chose.  Unblocking it needs
-//!   either the collateral-policy decoder or a cap field in a new intent
-//!   version; both are outside a per-instruction lane's authority.
+//! - [`MarketAccount::collateral_cap`] is written from
+//!   [`clutch_solana_layout::TermsAccount::collateral_cap`] — the immutable,
+//!   digest-committed terms field the v3 revision added for exactly this
+//!   (`RESOLUTION_EVIDENCE_PLAN.md` §3.5's finding: the cap needs a terms
+//!   field, not a policy field).  **Markets founded here are fundable**: the
+//!   terms codec refuses a zero cap, so "cap 0 refuses at market init" is
+//!   structural — a terms artifact with no cap decision cannot exist, and
+//!   the old residue ("a market created today exists and cannot accept
+//!   collateral") is closed.  [`validate_initial_plane`] re-checks that the
+//!   written cap equals the terms' cap, so a founding write cannot invent
+//!   one.  What this instruction still cannot check is the *ceiling*: the
+//!   offline reference's `validate_market_init` now takes the 266
+//!   collateral-policy bytes as an evidence input and refuses a cap above
+//!   `check_market_cap`'s mint ceiling, but no account in this frozen
+//!   twelve-account plane carries those bytes, so the on-chain half of that
+//!   check is an obligation on whoever adds a policy-bytes account to the
+//!   schema.  This program keeps the freeze-discipline gate
+//!   (`require_frozen_collateral_policy`) and names the gap rather than
+//!   pretending the binding was checked.
 //! - [`MarketAccount::created_slot`] is written **`0`**.  The honest value is
 //!   the `Clock` sysvar slot, and this crate has no clock plane: no sysvar
 //!   dependency, no sysvar account role, and adding either is a shared-file
@@ -116,40 +119,32 @@
 //! [`validate_initial_plane`] is a re-composition of
 //! `clutch_solana_reference::validate_market_init`, which cannot be called from
 //! a program: the SBF backend reports it as overflowing the 4 KiB call frame.
-//! Every check it performs is one of that function's, in that function's order,
-//! plus three named strengthenings:
+//! Every check it performs is one of that function's, in that function's
+//! order.  Two of what used to be this module's "named strengthenings" — the
+//! terms artifact binding the new market, and the kernel payout set equalling
+//! the terms payout set — are now the reference's own creation checks (the
+//! terms artifact became an input of `validate_market_init` when the cap flow
+//! landed), so they are parity rather than strengthenings.  One strengthening
+//! remains, and one reference check has no on-chain counterpart:
 //!
-//! | strengthening | why |
-//! | --- | --- |
-//! | the presented terms artifact must bind the new market | the reference takes no terms account at initialization, but this instruction must read one to source the payout set, so the binding it relies on is checked rather than assumed |
-//! | the kernel payout set must equal the terms payout set | `require_payout_set_binding` in the reference, hoisted from the resolution path to creation: a market whose kernel pays something its own terms digest does not commit to can never resolve |
-//! | the resolution record must be present, bound, and unresolved | the reference's `validate_market_init` has no resolution account; this instruction writes one, so it validates one |
-//!
-//! All three are fail-closed: they refuse states the reference would accept and
-//! accept nothing it refuses.
+//! | divergence | direction | why |
+//! | --- | --- | --- |
+//! | the resolution record must be present, bound, and unresolved | stricter here | the reference's `validate_market_init` has no resolution account; this instruction writes one, so it validates one |
+//! | the collateral policy is recomputed and bound, and the cap checked against its ceiling | reference only | the reference takes the 266 policy bytes as an evidence input; no account in this frozen plane carries them, so this program checks freeze discipline only — fail-closed but weaker, and named in the cap section above |
 //!
 //! ## Refusal codes
 //!
-//! `error.rs` is frozen this wave and [`crate::error::Refusal`] is a closed
-//! enum over four foreign error types, so **this lane cannot emit a new
-//! numeric code at all** — there is no variant that carries a raw `u32`.  The
-//! codes below are what the instruction emits today; the reserved-range column
-//! is the append this lane needs and has not made.
+//! `error.rs` is unfrozen this wave and carries the four appends this table
+//! used to reserve.  What this instruction emits:
 //!
-//! | check | emitted today | code | reserved append |
-//! | --- | --- | --- | --- |
-//! | a target account was not all-zero (re-initialization) | `Reference(NonEmptyInitialization)` | `0x3010` | `0x0040 AlreadyInitialized` |
-//! | the Profile's collateral policy is not frozen | `Reference(CollateralPolicyNotFrozen)` | `0x3fff` | `0x0041 CollateralPolicyNotFrozen` |
-//! | the kernel payout set is not the terms payout set | `Adapter(MismatchedState)` | `0x000b` | `0x0042 PayoutSetMismatch` |
-//! | the terms artifact does not bind this market | `Codec(MismatchedBinding)` | `0x100e` | `0x0043 TermsBindingMismatch` |
-//! | an initial value was nonzero | `Reference(NonEmptyInitialization)` | `0x3010` | — |
-//! | every other check | the [`ClutchError`] the check already has | `0x0001..=0x0017` | — |
-//!
-//! `0x3fff` is `error.rs`'s own documented catch-all for a reference refusal
-//! added after its table was written.  `CollateralPolicyNotFrozen` is the only
-//! refusal in this instruction that lands there, so it is unambiguous *within*
-//! `CreateMarket` and ambiguous everywhere else; that is exactly the debt the
-//! append above pays off.
+//! | check | emitted | code |
+//! | --- | --- | --- |
+//! | a target account was not all-zero (re-initialization) | [`ClutchError::AlreadyInitialized`] | `0x0040` |
+//! | the Profile's collateral policy is not frozen | [`ClutchError::CollateralPolicyNotFrozen`] | `0x0041` |
+//! | the kernel payout set is not the terms payout set | [`ClutchError::PayoutSetMismatch`] | `0x0042` |
+//! | the terms artifact does not bind this market, or the written cap is not the terms' cap | [`ClutchError::TermsBindingMismatch`] | `0x0043` |
+//! | an initial value was nonzero | `Reference(NonEmptyInitialization)` | `0x3010` |
+//! | every other check | the [`ClutchError`] the check already has | `0x0001..=0x0017` |
 //!
 //! ## Frame discipline
 //!
@@ -185,8 +180,8 @@ use clutch_kernel::{
     MarketState, PayoutSet, PayoutVector, Phase, MAX_OUTCOMES as KERNEL_MAX_OUTCOMES,
 };
 use clutch_solana_layout::{
-    account_len, canonical_market_id, canonical_outcome_id, CodecError, Hash32, HoardAccount,
-    Intent, MarketAccount, PositionAccount, ProfileAccount, ResolutionAccount, SupplyLedgerAccount,
+    account_len, canonical_market_id, canonical_outcome_id, Hash32, HoardAccount, Intent,
+    MarketAccount, PositionAccount, ProfileAccount, ResolutionAccount, SupplyLedgerAccount,
     TermsAccount, MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_INDEX_UNRESOLVED, PROFILE_FLAG_POLICY_FROZEN,
 };
 use clutch_solana_reference::{
@@ -378,17 +373,14 @@ fn require_reference(condition: bool, error: ReferenceError) -> Outcome<()> {
     }
 }
 
-/// Refuse with a frozen-layout binding class unless `condition` holds.
+/// Refuse with the terms-binding append unless `condition` holds.
 ///
-/// Used only where the layout crate's own `binds_market` would raise the same
-/// class for the same disagreement, so the code a caller sees does not depend
-/// on whether the comparison ran inside the codec or beside it.
+/// The layout crate's own `binds_market` raises `Codec(MismatchedBinding)`
+/// for the same disagreement; this instruction emits the allocated
+/// first-class code [`ClutchError::TermsBindingMismatch`] (`0x0043`) so a
+/// transaction log names the check, not the codec that happened to run it.
 fn require_binding(condition: bool) -> Outcome<()> {
-    if condition {
-        Ok(())
-    } else {
-        Err(Refusal::Codec(CodecError::MismatchedBinding))
-    }
+    require(condition, ClutchError::TermsBindingMismatch)
 }
 
 /* ------------------------------------------------------------------------ */
@@ -528,12 +520,20 @@ fn read_replay(data: &[u8]) -> Outcome<ReplayFacts> {
 /// Lift the immutable terms payout vectors into the kernel's payout set.
 ///
 /// The terms artifact is the only committed source of "what this market pays":
-/// [`MarketAccount::terms`] is the digest of the terms body, and that body
-/// contains the vectors.  The whole set is over a kilobyte, so this is the only
-/// place it is materialized and it never crosses into [`process`]'s frame.
+/// [`MarketAccount::terms`] is the digest of the vectors' body.  The whole set
+/// is over a kilobyte, so this is the only place it is materialized and it
+/// never crosses into [`process`]'s frame.
+///
+/// `decode_unchecked`: the terms bytes were already fully decoded — digest
+/// recomputation included — earlier in this same instruction (the address
+/// plane in [`process`], and `validate_market_wide`'s own full read before
+/// `require_payout_set_binding` runs), and the account is presented
+/// read-only, so re-paying the SHA-256 here would be a second copy of a fact
+/// this transaction already established.
 #[inline(never)]
 fn terms_payout_set(terms_data: &[u8]) -> Outcome<PayoutSet> {
-    let terms = TermsAccount::decode(terms_data)?;
+    let mut terms = TermsAccount::ZEROED;
+    TermsAccount::decode_unchecked_into(terms_data, &mut terms)?;
     let mut vectors = [PayoutVector::ZERO; MAX_PAYOUTS];
     let mut index = 0_usize;
     while index < usize::from(terms.payout_count) {
@@ -550,19 +550,29 @@ fn terms_payout_set(terms_data: &[u8]) -> Outcome<PayoutSet> {
     ))
 }
 
+/// The terms' digest-committed collateral cap, in its own frame.
+///
+/// Same `decode_unchecked` soundness argument as [`terms_payout_set`].
+#[inline(never)]
+fn terms_collateral_cap(terms_data: &[u8]) -> Outcome<u64> {
+    let mut terms = TermsAccount::ZEROED;
+    TermsAccount::decode_unchecked_into(terms_data, &mut terms)?;
+    Ok(terms.collateral_cap)
+}
+
 /// Compare an encoded kernel account's payout set against an expected set.
 #[inline(never)]
 fn require_kernel_payouts(kernel_data: &[u8], expected: &PayoutSet) -> Outcome<()> {
     let kernel = KernelAccount::decode(kernel_data)?;
     require(
         kernel.payouts.count == expected.count && kernel.payouts.outcomes == expected.outcomes,
-        ClutchError::MismatchedState,
+        ClutchError::PayoutSetMismatch,
     )?;
     let mut index = 0_usize;
     while index < MAX_PAYOUTS {
         require(
             kernel.payouts.vectors[index] == expected.vectors[index],
-            ClutchError::MismatchedState,
+            ClutchError::PayoutSetMismatch,
         )?;
         index += 1;
     }
@@ -652,7 +662,7 @@ pub fn require_zeroed(data: &[u8]) -> Outcome<()> {
     let mut index = 0_usize;
     while index < data.len() {
         if data[index] != 0 {
-            return Err(Refusal::Reference(ReferenceError::NonEmptyInitialization));
+            return Err(Refusal::Adapter(ClutchError::AlreadyInitialized));
         }
         index += 1;
     }
@@ -661,17 +671,18 @@ pub fn require_zeroed(data: &[u8]) -> Outcome<()> {
 
 /// Refuse a Realm whose Profile has not frozen its collateral policy.
 ///
-/// This is `require_frozen_collateral_policy` in the offline reference adapter,
-/// and it is a freeze-discipline check, not a binding check: a well-formed
+/// This is a freeze-discipline check, not a binding check: a well-formed
 /// frozen Profile can still commit to another Realm's collateral policy and
-/// nothing here would notice.  Recomputing the child digest from a decoded
-/// collateral policy is `RESOLUTION_EVIDENCE_PLAN.md` §3.4 obligation 3 and is
-/// unwritten in Rust.
+/// nothing here would notice.  The recompute-and-compare exists now —
+/// `collateral::verify_collateral_binding`, consumed by the offline
+/// reference's `validate_market_init` — but it needs the 266 policy bytes,
+/// which no account in this frozen twelve-account plane carries; see the cap
+/// section of the module docs.
 fn require_frozen_collateral_policy(profile: &ProfileInitFacts) -> Outcome<()> {
-    require_reference(
+    require(
         profile.flags & PROFILE_FLAG_POLICY_FROZEN != 0
             && profile.collateral_policy_digest != Hash32::ZERO,
-        ReferenceError::CollateralPolicyNotFrozen,
+        ClutchError::CollateralPolicyNotFrozen,
     )
 }
 
@@ -686,6 +697,7 @@ fn write_market(
     intent: &CreateMarketIntent,
     market: Hash32,
     bumps: &PlaneBumps,
+    collateral_cap: u64,
 ) -> Outcome<()> {
     let mut outcomes = [Hash32::ZERO; MAX_OUTCOMES];
     let mut index = 0_usize;
@@ -704,9 +716,9 @@ fn write_market(
         hoard_bump: bumps.hoard,
         outcomes,
         feed: intent.feed,
-        /* Both zero deliberately; see "Fields this instruction cannot honestly
-         * source" in the module docs. */
-        collateral_cap: 0,
+        /* The terms' digest-committed cap; `created_slot` stays the named
+         * zero placeholder.  See the cap section of the module docs. */
+        collateral_cap,
         created_slot: 0,
         reserved: Hash32::ZERO,
     };
@@ -859,7 +871,13 @@ pub fn write_initial_plane(
     bumps: &PlaneBumps,
 ) -> Outcome<()> {
     let market = identities.market;
-    write_market(plane.market, intent, market, bumps)?;
+    write_market(
+        plane.market,
+        intent,
+        market,
+        bumps,
+        terms_collateral_cap(terms_data)?,
+    )?;
     write_hoard(plane.hoard, identities, intent.realm, bumps.hoard)?;
     write_position(plane.position, market, identities.owner, bumps.position)?;
     write_kernel(plane.kernel, terms_data, market)?;
@@ -964,6 +982,11 @@ fn validate_market_wide(
             && terms.feed == market.feed
             && terms.outcome_count == market.outcome_count,
     )?;
+
+    /* The written cap must be the terms' digest-committed cap — the cap flow
+     * of RESOLUTION_EVIDENCE_PLAN §3.5.  The terms codec refuses a zero cap,
+     * so a founded market is never the unfundable cap-0 residue. */
+    require_binding(market.collateral_cap == terms.collateral_cap)?;
 
     /* NAMED STRENGTHENING: the resolution record is present, bound, and
      * unresolved.  A market founded beside a record that already selects a
@@ -1253,7 +1276,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
 mod tests {
     use super::*;
     use clutch_solana_layout::{
-        canonical_profile_hash, canonical_realm_id, PayoutVectorBytes, RealmAccount,
+        canonical_profile_hash, canonical_realm_id, CodecError, PayoutVectorBytes, RealmAccount,
         PROFILE_PARENT_BYTES,
     };
 
@@ -1268,6 +1291,8 @@ mod tests {
     const MARKET_NONCE: u64 = 9;
     const OUTCOME_COUNT: u8 = 2;
     const PAYOUT_COUNT: u8 = 2;
+    /// The terms' digest-committed collateral cap the founding write copies.
+    const FIXTURE_CAP: u64 = 5_000;
 
     fn h(value: u8) -> Hash32 {
         Hash32::from_bytes([value; 32])
@@ -1318,6 +1343,11 @@ mod tests {
             denominator: 1,
             weights: unit_vector(1),
         };
+        let mut knots = [0u128; clutch_solana_layout::MAX_KNOTS];
+        knots[0] = 1;
+        let mut payout_map = [clutch_solana_layout::PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
+        payout_map[0] = 0;
+        payout_map[1] = 1;
         let mut value = TermsAccount {
             terms: Hash32::ZERO,
             realm: realm_hash(),
@@ -1336,6 +1366,21 @@ mod tests {
             coverage_policy_id: 11,
             repair_policy_id: 12,
             failure_policy_id: 13,
+            statistic_id: 1,
+            ambiguity_policy_id: 1,
+            edge_policy_id: 1,
+            basis_degree: 0,
+            knot_count: 1,
+            uniform_log2_spacing: clutch_solana_layout::UNIFORM_SPACING_NONE,
+            failure_payout_index: 0,
+            coverage_policy_parameter: 0,
+            repair_generation: 0,
+            source_version: 1,
+            evaluator_version: 1,
+            source_adapter_id: h(9),
+            payout_map,
+            knots,
+            collateral_cap: FIXTURE_CAP,
             stored_bump: 8,
             flags: 0,
         };
@@ -1516,8 +1561,9 @@ mod tests {
             hoard_bump: bumps.hoard,
             outcomes,
             feed: terms_value.feed,
-            // Both zero by decision, not by omission; see the module docs.
-            collateral_cap: 0,
+            // The terms' digest-committed cap; the slot stays the named zero
+            // placeholder.  See the module docs.
+            collateral_cap: FIXTURE_CAP,
             created_slot: 0,
             reserved: Hash32::ZERO,
         };
@@ -1637,7 +1683,14 @@ mod tests {
         assert_eq!(resolution.payout_index, PAYOUT_INDEX_UNRESOLVED);
         let market = accounts::read_market(&founded.market).expect("decodes");
         assert_eq!(market.lifecycle, 0);
-        assert_eq!(market.collateral_cap, 0);
+        /* Fundable by construction: the cap is the terms' own, never zero. */
+        assert_eq!(market.collateral_cap, FIXTURE_CAP);
+        assert_eq!(
+            accounts::read_terms(&founded.terms)
+                .expect("decodes")
+                .collateral_cap,
+            FIXTURE_CAP
+        );
         let kernel = accounts::read_kernel(&founded.kernel).expect("decodes");
         assert_eq!(kernel.phase, 0);
         assert_eq!(kernel.total_supply, [0; MAX_OUTCOMES]);
@@ -1666,7 +1719,7 @@ mod tests {
         ] {
             assert_eq!(
                 require_zeroed(account),
-                Err(Refusal::Reference(ReferenceError::NonEmptyInitialization))
+                Err(Refusal::Adapter(ClutchError::AlreadyInitialized))
             );
         }
     }
@@ -1677,7 +1730,7 @@ mod tests {
         data[account_len::MARKET - 1] = 1;
         assert_eq!(
             require_zeroed(&data),
-            Err(Refusal::Reference(ReferenceError::NonEmptyInitialization))
+            Err(Refusal::Adapter(ClutchError::AlreadyInitialized))
         );
     }
 
@@ -2063,9 +2116,7 @@ mod tests {
         founded.profile = encoded(account_len::PROFILE, |out| unfrozen.encode(out));
         assert_eq!(
             founded.validate(),
-            Err(Refusal::Reference(
-                ReferenceError::CollateralPolicyNotFrozen
-            ))
+            Err(Refusal::Adapter(ClutchError::CollateralPolicyNotFrozen))
         );
     }
 
@@ -2188,7 +2239,10 @@ mod tests {
             |v: &mut KernelAccount| v.payouts =
                 PayoutSet::new(PAYOUT_COUNT, OUTCOME_COUNT, swapped)
         );
-        assert_eq!(founded.validate(), Err(ClutchError::MismatchedState.into()));
+        assert_eq!(
+            founded.validate(),
+            Err(ClutchError::PayoutSetMismatch.into())
+        );
     }
 
     #[test]
@@ -2198,7 +2252,7 @@ mod tests {
         founded.terms = encoded(account_len::TERMS, |out| other.encode(out));
         assert_eq!(
             founded.validate(),
-            Err(Refusal::Codec(CodecError::MismatchedBinding))
+            Err(Refusal::Adapter(ClutchError::TermsBindingMismatch))
         );
     }
 
@@ -2233,6 +2287,45 @@ mod tests {
             |v: &mut ResolutionAccount| v.terms = h(0x52)
         );
         assert_eq!(founded.validate(), Err(ClutchError::MismatchedState.into()));
+    }
+
+    #[test]
+    fn a_market_cap_that_is_not_the_terms_cap_refuses() {
+        /* The cap flow: the founding write copies the terms'
+         * digest-committed cap, and the re-validation refuses any other
+         * value — a writer cannot invent a risk limit.  The zero case is not
+         * writable at all: the terms codec refuses a zero cap, so the old
+         * "exists and cannot accept collateral" residue is unfoundable. */
+        let mut mismatched = founded();
+        rewrite!(
+            mismatched,
+            market,
+            MarketAccount,
+            account_len::MARKET,
+            |v: &mut MarketAccount| v.collateral_cap = FIXTURE_CAP + 1
+        );
+        assert_eq!(
+            mismatched.validate(),
+            Err(Refusal::Adapter(ClutchError::TermsBindingMismatch))
+        );
+
+        let mut zeroed = founded();
+        rewrite!(
+            zeroed,
+            market,
+            MarketAccount,
+            account_len::MARKET,
+            |v: &mut MarketAccount| v.collateral_cap = 0
+        );
+        assert_eq!(
+            zeroed.validate(),
+            Err(Refusal::Adapter(ClutchError::TermsBindingMismatch))
+        );
+
+        let mut undecided = terms_account(profile_hash());
+        undecided.collateral_cap = 0;
+        undecided.terms = undecided.recomputed_terms_digest().expect("digest");
+        assert_eq!(undecided.validate(), Err(CodecError::ZeroValue));
     }
 
     #[test]

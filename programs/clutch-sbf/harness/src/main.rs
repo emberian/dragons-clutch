@@ -54,7 +54,7 @@ use clutch_sbf::instructions::observe_resolve::{
 use clutch_sbf::seeds;
 use clutch_solana_layout::{
     account_len, canonical_epoch_id, canonical_market_id, canonical_order_set_id,
-    canonical_outcome_id, canonical_profile_hash, canonical_realm_id, CandidateRecord,
+    canonical_outcome_id, canonical_profile_hash, canonical_realm_id, collateral, CandidateRecord,
     EpochAccount, FeedAccount, FeedId, FinalPotAccount, Hash32, HoardAccount, Intent,
     MarketAccount, OrderPageAccount, OrderRecord, OrderSlot, PayoutVectorBytes, PositionAccount,
     PriceGridAccount, ProfileAccount, RealmAccount, ResolutionAccount, SettlementReceiptAccount,
@@ -84,14 +84,15 @@ use std::process::Command;
 /// arbitrary fixed pattern, since this lane derives an identity and makes no
 /// claim about which collateral policy the Profile commits to.
 const PROFILE_PREIMAGE_FILL: u8 = 0x5b;
-/// Opaque frozen collateral-policy digest.
+/// Mint identity of the fixture's collateral policy.
 ///
-/// The Profile is *frozen* in this fixture -- the flag is set and the digest is
-/// nonzero -- because `CreateMarket` refuses a Realm whose Profile has not
-/// frozen its collateral policy.  Freezing it here is a shape claim only: this
-/// harness owns no 266-byte collateral policy and does not claim this digest is
-/// the digest of one.
-const COLLATERAL_POLICY_FILL: u8 = 0xc7;
+/// The Profile is *frozen* in this fixture to the digest of a **real**,
+/// decodable 266-byte collateral policy (see `fixture_policy`): the offline
+/// reference's `validate_market_init` now recomputes the child digest from
+/// the policy bytes and compares, so an opaque digest fill would refuse.
+/// Still an offline fixture: the mint named here is a fixed pattern, not a
+/// chain fact.
+const COLLATERAL_MINT_FILL: u8 = 0x9d;
 const REALM_NONCE: u64 = 7;
 const GENERATION: u64 = 2;
 const CASH_ATOMS: u64 = 100;
@@ -173,12 +174,13 @@ mod code {
     pub const REFERENCE_UNAUTHORIZED_ACTOR: u32 = 0x300a;
     /// `Error::Replay` projected through `reference_code`.
     pub const REFERENCE_REPLAY: u32 = 0x3011;
-    /// `Error::NonEmptyInitialization` projected through `reference_code`.
-    pub const REFERENCE_NON_EMPTY_INIT: u32 = 0x3010;
-    /// The documented lossy catch-all for a gate refusal `reference_code`
-    /// predates.  See `observe_resolve`'s
-    /// `the_numeric_projection_of_the_gate_is_lossy`.
-    pub const LOSSY_GATE: u32 = 0x3fff;
+    /// `Error::PayoutIndexMismatch` projected through the allocated
+    /// `0x0050-0x005f` gate block (the lossy `0x3fff` collapse is gone; see
+    /// `observe_resolve`'s `the_numeric_projection_of_the_gate_is_allocated`).
+    pub const PAYOUT_INDEX_MISMATCH: u32 = 0x0057;
+    /// `ClutchError::AlreadyInitialized`: the account-plane re-initialization
+    /// refusal, allocated with the market-init appends.
+    pub const ALREADY_INITIALIZED: u32 = 0x0040;
 }
 
 const B58: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -646,8 +648,31 @@ struct Shared {
     profile_bytes: [u8; account_len::PROFILE],
     grid_bytes: [u8; account_len::PRICE_GRID],
     terms_bytes: [u8; account_len::TERMS],
+    policy_bytes: [u8; collateral::COLLATERAL_POLICY_BYTES],
     feed_bytes: [u8; account_len::FEED],
     advance_feed_bytes: [u8; account_len::FEED],
+}
+
+/// The Realm's frozen collateral policy: a real, decodable 266-byte policy
+/// whose recomputed child digest the fixture Profile freezes.
+fn fixture_policy() -> collateral::CollateralPolicy {
+    let backing = collateral::CurrencyRef::spl(
+        collateral::TOKEN_2022_PROGRAM,
+        [COLLATERAL_MINT_FILL; 32],
+        9,
+    );
+    collateral::CollateralPolicy {
+        schema_version: collateral::COLLATERAL_POLICY_SCHEMA,
+        flags: collateral::COLLATERAL_POLICY_STRICT_FLAGS,
+        collateral: backing,
+        fee: backing,
+        liveness: collateral::CurrencyRef::NATIVE_SOL,
+        max_supply_atoms: 1_000_000_000,
+        allowed_mint_extensions: 0,
+        required_mint_extensions: 0,
+        allowed_account_extensions: collateral::EXTENSION_IMMUTABLE_OWNER,
+        required_account_extensions: 0,
+    }
 }
 
 fn build_shared() -> Shared {
@@ -684,10 +709,14 @@ fn build_shared() -> Shared {
         stored_bump: realm.bump,
         flags: 0,
     };
+    let policy = fixture_policy();
+    let policy_bytes = policy
+        .canonical_bytes()
+        .expect("the fixture collateral policy must encode");
     let profile_account = ProfileAccount {
         profile: profile_hash,
         realm: realm_hash,
-        collateral_policy_digest: Hash32::from_bytes([COLLATERAL_POLICY_FILL; 32]),
+        collateral_policy_digest: policy.digest().expect("the fixture policy must digest"),
         version: 1,
         flags: PROFILE_FLAG_POLICY_FROZEN,
     };
@@ -723,6 +752,11 @@ fn build_shared() -> Shared {
     /* Immutable terms.  The window policy is exactly the offline reference
      * adapter's resolution fixture, so the resolution differential is a
      * disagreement between two adapters rather than between two scenarios. */
+    let mut knots = [0u128; clutch_solana_layout::MAX_KNOTS];
+    knots[0] = 1;
+    let mut payout_map = [clutch_solana_layout::PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
+    payout_map[0] = 0;
+    payout_map[1] = 1;
     let mut terms_account = TermsAccount {
         terms: Hash32::ZERO,
         realm: realm_hash,
@@ -741,6 +775,21 @@ fn build_shared() -> Shared {
         coverage_policy_id: u32::from(COVERAGE_POLICY_COMPLETE_REQUIRED),
         repair_policy_id: u32::from(GEN_EXACT_01),
         failure_policy_id: u32::from(FAIL_UNIFORM_REFUND_01),
+        statistic_id: 1,
+        ambiguity_policy_id: 1,
+        edge_policy_id: 1,
+        basis_degree: 0,
+        knot_count: 1,
+        uniform_log2_spacing: clutch_solana_layout::UNIFORM_SPACING_NONE,
+        failure_payout_index: 0,
+        coverage_policy_parameter: 0,
+        repair_generation: 0,
+        source_version: 1,
+        evaluator_version: 1,
+        source_adapter_id: feed,
+        payout_map,
+        knots,
+        collateral_cap: COLLATERAL_CAP,
         stored_bump: 0,
         flags: 0,
     };
@@ -833,6 +882,7 @@ fn build_shared() -> Shared {
         profile_bytes,
         grid_bytes,
         terms_bytes,
+        policy_bytes,
         feed_bytes,
         advance_feed_bytes,
     }
@@ -2072,7 +2122,7 @@ fn fold_feed_page(shared: &Shared, records: &[Record]) -> [u8; account_len::FEED
 /// This is an independent re-encode through the frozen `clutch_solana_layout`
 /// and reference-only codecs, from the intent and the immutable terms alone,
 /// following exactly the PROPOSED initial values `market_init.rs` documents:
-/// a zero collateral cap, a zero created slot, generation zero, the Hoard PDA
+/// the terms' collateral cap, a zero created slot, generation zero, the Hoard PDA
 /// as its own authority, the terms artifact's payout set, and an unresolved
 /// resolution record.  It is then required to satisfy the reference adapter's
 /// own `validate_market_init`, which is what makes it an oracle rather than a
@@ -2101,7 +2151,7 @@ fn founding_plane(
         hoard_bump: plane.hoard.bump,
         outcomes,
         feed: shared.feed,
-        collateral_cap: 0,
+        collateral_cap: COLLATERAL_CAP,
         created_slot: 0,
         reserved: Hash32::ZERO,
     };
@@ -2193,6 +2243,8 @@ fn founding_plane(
     validate_market_init(
         &shared.realm_bytes,
         &shared.profile_bytes,
+        &shared.policy_bytes,
+        &shared.terms_bytes,
         state_bytes(&state),
         &create_intent_bytes(shared, nonce),
         &plane.metadata(shared, shared.actor.bytes, true),
@@ -2727,7 +2779,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
     cases.push(Case::refuse(
         "resolve-wrong-payout",
         "Resolve",
-        "the request names payout zero while the sealed window selects payout one; the numeric projection is the documented lossy 0x3fff",
+        "the request names payout zero while the sealed window selects payout one",
         gate_transaction(
             shared,
             &f.held,
@@ -2737,7 +2789,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             true,
             wrong_payout.clone(),
         ),
-        code::LOSSY_GATE,
+        code::PAYOUT_INDEX_MISMATCH,
         refusal_text(
             f.held
                 .gate(shared, &wrong_payout, &window, true, actor, true)
@@ -2915,11 +2967,13 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         "CreateMarket",
         "re-found an existing market: every target account is at its canonical address and is not all-zero",
         create_transaction(shared, &f.seam, actor, true, recreate),
-        code::REFERENCE_NON_EMPTY_INIT,
+        code::ALREADY_INITIALIZED,
         refusal_text(
             validate_market_init(
                 &shared.realm_bytes,
                 &shared.profile_bytes,
+                &shared.policy_bytes,
+                &shared.terms_bytes,
                 state_bytes(&f.seam.state),
                 &create_intent_bytes(shared, NONCE_SEAM),
                 &f.seam.metadata(shared, actor, true),
@@ -2939,28 +2993,17 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         }
     }
 
-    /* MEASURED, on the pinned runtime: `Resolve` does not fit in a Solana
-     * transaction at all.  With `SetComputeUnitLimit` at the per-transaction
-     * ceiling the program consumes every unit granted and the runtime aborts
-     * it with `ProgramFailedToComplete`, so no post-state and no gate refusal
-     * past the signature check is observable on-chain today.
-     *
-     * The cause is named in `observe_resolve`'s own module docs: the resolve
-     * path decodes the immutable terms artifact five times and
-     * `TermsAccount::decode` recomputes a SHA-256 over the 1.2 KiB terms body
-     * on every call.  `RedeemInternal` decodes it four times and measures
-     * 1 356 878 units -- 97% of the same ceiling -- which is the corroborating
-     * measurement, not a guess.
-     *
-     * `resolve-unsigned` is *not* listed here: the gate checks the signature
-     * before the first terms decode, so that refusal is reached and observed.
-     * The fix is a facts or `decode_unchecked` API in `clutch-solana-layout`
-     * and belongs to that crate, not to this harness. */
-    for case in &mut cases {
-        if matches!(case.name.as_str(), "resolve" | "resolve-wrong-payout") {
-            case.exhausted = true;
-        }
-    }
+    /* `Resolve` used to be marked `exhausted` here, MEASURED: five full
+     * terms decodes -- one SHA-256 over the terms body each -- consumed every
+     * unit the 1 400 000-unit transaction ceiling grants and the runtime
+     * aborted it with `ProgramFailedToComplete`.  The decode-once rework
+     * landed with the TermsAccount v3 revision (`accounts::read_terms` pays
+     * the digest once in the account plane; every later gate read is
+     * `TermsAccount::decode_unchecked`), the exhaustion gate went red as it
+     * was designed to, and `resolve`/`resolve-wrong-payout` are ordinary
+     * driven cases again.  The re-measured numbers live in the
+     * SBF_BRINGUP.md resource envelope, re-recorded from `run_bringup.sh`'s
+     * differential log on every regeneration. */
 
     cases
 }

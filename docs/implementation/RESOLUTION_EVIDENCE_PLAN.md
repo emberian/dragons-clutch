@@ -798,3 +798,68 @@ What that evidence is: deterministic host-side unit tests of an offline
 prototype. What it is not: verification, a refinement relation, mutation or fuzz
 evidence, a cross-runtime vector manifest, SBF evidence, or any statement about
 a chain, a source, a mint, or real collateral.
+
+---
+
+## 6. Addendum 2026-08-18 (terms-revision wave): obligation 18 discharged, the cap flow closed
+
+Status: implemented and gated (layout 83 tests, reference 38, clutch-sbf 85 +
+7 harness, accumulator/kernel/vertical-model/batch/vector-spine untouched and
+green; clippy/rustdoc/fmt `-D warnings` clean throughout).
+
+**The unified `TermsAccount` revision landed as v3** (`account_version::TERMS
+= 3`; v2 and v1 bytes refuse `WrongVersion`), carrying every §2.1 field this
+plan specified plus the basis fields of
+[`DISTRIBUTIONAL_CLAIMS_DESIGN.md`](DISTRIBUTIONAL_CLAIMS_DESIGN.md) §6 **and
+the per-market `collateral_cap`** this document's §3.5 finding demanded — one
+revision, one version bump, exactly as §6 of the design argued. The account is
+1,656 bytes (352 appended); the digest domain moved to
+`dragons-clutch/terms/v2` because the preimage shape changed, and the digest
+covers the exact 1,620-byte body: everything after the `(tag, version)` header
+and the stored digest itself, up to but excluding `stored_bump`/`flags`.
+
+Consequences for this plan's own text:
+
+- **§2's "specification only" status is over.** `derive_payout` now decodes
+  the frozen statistic id, ambiguity policy id, edge policy id, boundary
+  table (the degree-0 knot prefix), payout map, coverage-policy parameter,
+  repair generation, source/evaluator versions, and source-adapter identity
+  from the digest-bound terms; every V1 pin recorded in the landed-terms
+  table is gone. The §2.6 worked example (`boundaries = [50]`) now runs
+  end-to-end through `apply_with_evidence` as a reference test, including the
+  `R-06` straddle. `BOUNDED_GAPS` coverage is expressible (the parameter is
+  stored; a zero bound still refuses).
+- **§3.5's wiring note is discharged.** `validate_market_init` takes the 266
+  collateral-policy bytes *and* the terms artifact as evidence inputs;
+  `require_frozen_collateral_policy` became `require_collateral_binding`,
+  whose body is `collateral::verify_collateral_binding` (recompute-and-
+  compare), with `Error::CollateralPolicyNotFrozen` kept for the unfrozen
+  case and every other fault surfacing as the decoder's own layout class.
+  The owed adversarial tests exist: a foreign well-formed policy, a
+  bit-flipped stored digest, and hostile policy bytes each refuse with their
+  own class. The reference fixture binds a real policy built through the
+  public `CollateralPolicy` API rather than a placeholder digest.
+- **The cap flow**: `MarketAccount.collateral_cap` is founded from
+  `TermsAccount.collateral_cap` (inside the digest), checked for equality at
+  initialization, and checked against `check_market_cap`'s mint ceiling from
+  the recomputed policy. **Cap 0 refuses at market init, structurally**: the
+  terms codec refuses a zero cap at decode, so a terms artifact with no cap
+  decision cannot exist and the `1d0c257` residue ("a market created today
+  exists and cannot accept collateral") is closed — markets found fundable.
+  "Unlimited" must be said as an explicit cap, and stays refutable by the
+  ceiling.
+- The on-chain `CreateMarket` writes the terms' cap and re-checks the
+  equality; it still cannot run the policy *binding* (no account in the
+  frozen twelve-account plane carries the 266 policy bytes), keeps the
+  freeze-discipline gate, and names the gap. Adding a policy-bytes account is
+  a schema decision outside this wave.
+- New refusal classes past `R-11`, registered in §2.5's numbering by the
+  derivation: `R-12 BasisMalformed`, `R-13 WeightDerivationOverflow`, `R-14
+  ValueOutOfRange`, `R-16 DerivedVectorUnrepresentable`, `R-17
+  WrongResolutionMode` (15 reserved for the unimplemented degrees' point-
+  evidence rule). Degree ≥ 1 derivation details are the design doc's
+  addendum, not this plan's.
+
+What this addendum does **not** change: nothing here authenticates evidence
+(§1.6 stands verbatim), promotion gates 1-3 of §4 are untouched, and the
+`WindowId` still has no hash owner.

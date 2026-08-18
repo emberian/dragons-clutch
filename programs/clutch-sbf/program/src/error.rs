@@ -10,9 +10,20 @@
 //! | range | meaning |
 //! | --- | --- |
 //! | `0x0001..=0x00ff` | account/runtime metadata and adapter checks |
+//! | `0x0040..=0x004f` | market-initialization appends ([`ClutchError::AlreadyInitialized`] .. [`ClutchError::TermsBindingMismatch`]) |
+//! | `0x0050..=0x005f` | the evidence gate's numeric projection (see below) |
 //! | `0x1000 + n` | [`clutch_solana_layout::CodecError`] variant `n` |
 //! | `0x2000 + n` | [`clutch_kernel::Error`] variant `n` |
 //! | `0x3000 + n` | [`clutch_solana_reference::Error`] variant `n` |
+//!
+//! The `0x0050-0x005f` block realizes the allocation `observe_resolve`'s
+//! module docs proposed while this file was frozen: the eleven evidence-gate
+//! classes that used to collapse onto the `0x3fff` catch-all each project to
+//! their own number. The sub-reasons inside `Window(_)` and `Resolution(_)`
+//! stay collapsed on-chain — they remain exactly distinguishable in the host
+//! differential, which compares typed values — because minting a numeric
+//! identifier per sub-reason would be a parallel truth, not a diagnostic.
+//! `0x005b-0x005f` stay unallocated.
 
 use clutch_kernel::Error as KernelError;
 use clutch_solana_layout::CodecError;
@@ -78,6 +89,25 @@ pub enum ClutchError {
     /// this code is looking at an honest stub: no state was read, no state was
     /// written, and nothing was faked.
     NotYetImplemented = 0x0017,
+    /// A target of an initialization write was not all-zero.
+    ///
+    /// The account-plane re-initialization refusal: a market that already
+    /// exists has nonzero bytes at its canonical address, so a second
+    /// `CreateMarket` refuses here before deriving anything.  Distinct from
+    /// the reference's `NonEmptyInitialization` (`0x3010`), which speaks for
+    /// a nonzero *initial value* inside otherwise-decodable state.
+    AlreadyInitialized = 0x0040,
+    /// The Realm Profile's collateral policy is not frozen.
+    ///
+    /// [`reference_code`] projects the reference vocabulary's own
+    /// `CollateralPolicyNotFrozen` onto this same number: one check, one
+    /// code, whichever plane raised it.
+    CollateralPolicyNotFrozen = 0x0041,
+    /// The kernel payout set is not the immutable terms' payout set.
+    PayoutSetMismatch = 0x0042,
+    /// The immutable terms artifact does not bind this market, or the
+    /// market's stored collateral cap is not the terms' digest-committed cap.
+    TermsBindingMismatch = 0x0043,
 }
 
 impl From<ClutchError> for ProgramError {
@@ -141,10 +171,15 @@ pub const fn kernel_code(error: KernelError) -> u32 {
     0x2000 + ordinal
 }
 
-/// Stable ordinal for a reference-only codec refusal.
+/// Stable ordinal for a reference-only refusal.
 ///
-/// Only the reference-only account and request codecs are reachable from this
-/// program; the reference transition function itself is never called here.
+/// The evidence-gate classes project onto the `0x0050-0x005f` block that
+/// `observe_resolve` reserved (see the module docs above): the class is the
+/// number, and the sub-reason a `Window(_)` or `Resolution(_)` carries stays
+/// a host-differential fact rather than a second on-chain identifier.
+/// `CollateralPolicyNotFrozen` projects onto the adapter append `0x0041`, so
+/// a transaction log names that check by one number whichever vocabulary
+/// raised it.
 #[allow(unreachable_patterns)]
 pub const fn reference_code(error: ReferenceError) -> u32 {
     match error {
@@ -170,6 +205,18 @@ pub const fn reference_code(error: ReferenceError) -> u32 {
         ReferenceError::Replay => 0x3011,
         ReferenceError::UnsupportedIntent => 0x3012,
         ReferenceError::CollateralCap => 0x3013,
+        ReferenceError::CollateralPolicyNotFrozen => ClutchError::CollateralPolicyNotFrozen as u32,
+        ReferenceError::Window(_) => 0x0050,
+        ReferenceError::Resolution(_) => 0x0051,
+        ReferenceError::TermsBindingMismatch => 0x0052,
+        ReferenceError::PayoutSetMismatch => 0x0053,
+        ReferenceError::ResolutionBindingMismatch => 0x0054,
+        ReferenceError::ResolutionAlreadyRecorded => 0x0055,
+        ReferenceError::ResolutionNotRecorded => 0x0056,
+        ReferenceError::PayoutIndexMismatch => 0x0057,
+        ReferenceError::ImmutableAccountWritable => 0x0058,
+        ReferenceError::UnexpectedEvidence => 0x0059,
+        ReferenceError::WindowIdentityUnavailable => 0x005a,
         // See the note in `codec_code`.
         _ => 0x3fff,
     }

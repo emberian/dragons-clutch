@@ -9,13 +9,15 @@ families except `Resolve` now executes inside a local Agave bank against
 regenerated fixtures, and every writable account it touches comes back
 byte-identical to the oracle's post-state.
 
-`Resolve` is the exception and it is a **measurement, not an omission**:
-on the pinned runtime it consumes the entire 1 400 000-unit
-per-transaction compute ceiling and is aborted, so it cannot be executed
-on-chain today at all. `RedeemInternal` executes but costs 1 356 878
-units — 97% of the same ceiling. Both numbers are recorded in
-[Results](#results) and the cause is one named defect in
-`clutch-solana-layout`.
+`Resolve` used to be the exception — on this runtime it consumed the
+entire 1 400 000-unit per-transaction compute ceiling and was aborted —
+until the named defect was fixed at its named owner: the terms-revision
+wave landed `TermsAccount::decode_unchecked`/`decode_into` in
+`clutch-solana-layout` and the gate now pays the terms digest SHA-256
+once per transaction. Re-measured on the same pinned runtime (with the
+larger 1 656-byte v3 terms account): `Resolve` executes at **536 123**
+program units and `RedeemInternal` at **408 294** — 38% and 29% of the
+ceiling. The numbers are recorded in [Results](#results).
 
 `PlaceOrder` landed on-chain after these fixtures were regenerated and
 has **no SVM leg**; cancellation and batch settlement remain honest
@@ -442,9 +444,9 @@ Relative to obligations 1-4 of `SOLANA_REFERENCE_ADAPTER.md`:
     refused by representation. It is now carried by the CLO-DELTA-V1 two-term
     ledger in both adapters, and the ledger is compared on-chain on every
     accepting transaction of every family (obligation 11, and item 13).
-11. **Partly closed.** The resource envelope is now eight compute measurements
-    across seven families plus one measured ceiling exhaustion, and every
-    transaction's serialized size is recorded; see
+11. **Partly closed.** The resource envelope is now nine compute measurements
+    across eight families — the former ceiling exhaustion is a measurement
+    again — and every transaction's serialized size is recorded; see
     [Resource envelope](#resource-envelope). Heap, worst-case outcome counts,
     worst-case page sizes, and any envelope over more than the two-outcome
     fixture remain unmeasured (obligation 10).
@@ -482,24 +484,21 @@ Relative to obligations 1-4 of `SOLANA_REFERENCE_ADAPTER.md`:
     [Stack findings](#stack-findings) — this blocks the whole
     `orders_batch` family and the fix belongs in `clutch-solana-layout`.
 
-15. **`Resolve` does not fit a Solana transaction.** MEASURED on the pinned
-    runtime: with `SetComputeUnitLimit` at the 1 400 000-unit per-transaction
-    ceiling, the program consumes every unit granted and the runtime aborts it
-    with `ProgramFailedToComplete`. No post-state and no gate refusal past the
-    signature check is observable on-chain. `RedeemInternal` executes at
-    1 356 878 units, 97% of the same ceiling.
-
-    The cause is named in `observe_resolve.rs`'s own module docs and is not a
-    surprise: the resolve path decodes the immutable terms artifact **five**
-    times and `TermsAccount::decode` recomputes a SHA-256 over the 1.2 KiB terms
-    body on every call; a redemption decodes it four times, which is the
-    corroborating measurement rather than a guess. The fix is a facts or
-    `decode_unchecked` API in `clutch-solana-layout` — the same crate that owns
-    deferred check 14 — and it is not correct to fix it by skipping a binding.
-
-    The gate asserts the exhaustion rather than skipping the case, so an
-    instruction that became cheap enough to finish turns the check red and this
-    section has to be re-measured instead of being left stale.
+15. **Closed: `Resolve` fits a Solana transaction again.** The exhaustion was
+    MEASURED here first — with `SetComputeUnitLimit` at the 1 400 000-unit
+    ceiling the program consumed every unit granted and was aborted, because
+    the resolve path decoded the immutable terms artifact **five** times and
+    `TermsAccount::decode` recomputed a SHA-256 over the terms body on every
+    call. The fix landed at the owner this item named: the
+    `decode_unchecked`/`decode_into` API in `clutch-solana-layout`, consumed
+    by `observe_resolve` so the digest is recomputed exactly once per
+    transaction (in the account plane's full `read_terms`) while every
+    structural check still runs at every gate step and no binding was
+    skipped. The exhaustion gate asserted the exhaustion, went red when the
+    instruction finished — exactly as designed — and this section was
+    re-measured rather than left stale: `Resolve` 536 123 program units,
+    `RedeemInternal` 408 294, `CreateMarket` 701 548, on the larger v3 terms
+    account (1 656 bytes). See [Resource envelope](#resource-envelope).
 
 16. **`PlaceOrder` has no SVM leg.** It landed on-chain in commit `5cb4ad1`,
     after these fixtures were regenerated, and the offline reference adapter has
@@ -874,53 +873,52 @@ Three things in that table are deliberate and are not defects:
   adapter-vocabulary code above is an explicit constant, because there the two
   implementations deliberately differ.
 
-**The KNOWN lossy `0x3fff` collapse.** `error::reference_code` predates the
-evidence plane and maps eleven distinct gate refusal classes onto one catch-all
-`0x3fff`. `resolve-wrong-payout` is such a case — the request names payout 0
-while the sealed window selects payout 1, which is `Error::PayoutIndexMismatch`
-— and the plan expects `0x3fff` and nothing finer. That is asserted as the
-documented collapse rather than dressed up as precision: on-chain those eleven
-classes are indistinguishable, and they stay exactly distinguishable only in the
-host differential, which compares typed values.
-`observe_resolve.rs`'s `the_numeric_projection_of_the_gate_is_lossy` pins the
-collapse and carries the proposed `0x0050-0x005f` allocation that would fix it;
-widening `reference_code` is an `error.rs` decision.
+**The lossy `0x3fff` collapse is CLOSED.** `error::reference_code` predated
+the evidence plane and mapped eleven distinct gate refusal classes onto one
+catch-all `0x3fff`; the terms-revision wave widened it with exactly the
+`0x0050-0x005f` allocation `observe_resolve.rs` proposed, so
+`resolve-wrong-payout` — the request names payout 0 while the sealed window
+selects payout 1 — now lands on `0x0057 PayoutIndexMismatch` and the plan
+expects that code and nothing coarser. The sub-reasons inside `Window(_)` and
+`Resolution(_)` stay one number per class on-chain, exactly distinguishable
+in the host differential, which compares typed values.
+`observe_resolve.rs`'s `the_numeric_projection_of_the_gate_is_allocated` pins
+the table.
 
-### `Resolve` does not fit a transaction — measured
+### `Resolve` fits a transaction again — re-measured
 
-This is the headline negative result of the regeneration.
+The headline negative result of the previous regeneration is closed, by the
+mechanism that regeneration prescribed. The record of the exhaustion stands:
+with `SetComputeUnitLimit` at 1 400 000 the program consumed every unit
+granted and was aborted with `ProgramFailedToComplete`, because the resolve
+path decoded the immutable terms artifact **five** times — address
+derivation, market binding, payout-set binding, record binding, payout
+derivation — and `TermsAccount::decode` recomputed a SHA-256 over the terms
+body on every call (`RedeemInternal`, at four decodes and 1 356 878 units,
+was the corroborating measurement).
+
+The fix landed where this section said it belonged — a `decode_unchecked` /
+`decode_into` API in `clutch-solana-layout`, not a skipped binding: the
+account plane's `read_terms` pays the one full decode (digest included), and
+every later gate read runs the full structural validation minus the digest
+recomputation, sound because the terms account is presented read-only within
+the transaction that already proved the digest over the same bytes. The
+exhaustion gate asserted the `consumed N of N` shape, went red the moment the
+instruction finished — exactly the trip-wire it was designed to be — and the
+re-measured run, on the *larger* v3 terms account (1 656 bytes, up from
+1 304), reads:
 
 ```text
 == Resolve ==
-  UNDRIVABLE resolve              consumed 1399850 of 1399850 granted and was aborted
-  refuse    resolve-unsigned      Custom(0x3009)  offline reference: MissingSignature
-  UNDRIVABLE resolve-wrong-payout consumed 1399850 of 1399850 granted and was aborted
+  accept resolve                      program_units=536123 tx_units=536273 limit=1400000
+  refuse resolve-unsigned             Custom(0x3009)  offline reference: MissingSignature
+  refuse resolve-wrong-payout         Custom(0x0057)  offline reference: PayoutIndexMismatch
 ```
 
-With `SetComputeUnitLimit` at 1 400 000 — the per-transaction ceiling, of which
-150 units are the budget instruction itself — the program consumes every unit
-granted and the runtime aborts it with `ProgramFailedToComplete`. There is
-therefore **no observable post-state and no observable gate refusal past the
-signature check** for `Resolve` on this runtime. The oracle's expectation is
-still written to `plan/expected/` on every run, so the comparison is ready for
-the day the instruction fits.
-
-`resolve-unsigned` *is* observed, because the gate checks the signature before
-the first terms decode.
-
-The cause is not mysterious and `observe_resolve.rs` predicted it in prose: the
-resolve path decodes the immutable terms artifact **five** times — address
-derivation, market binding, payout-set binding, record binding, payout
-derivation — and `TermsAccount::decode` recomputes a SHA-256 over the 1.2 KiB
-terms body on every call. `RedeemInternal` decodes it four times and measures
-1 356 878 units, which is the corroborating measurement. The fix is a facts or
-`decode_unchecked` API in `clutch-solana-layout`; skipping a binding to save the
-hash would not be correct.
-
-The gate **asserts** the exhaustion — the exact `consumed N of N` shape and the
-`ProgramFailedToComplete` class — rather than skipping the case. An instruction
-that becomes cheap enough to finish turns that check red, which is the signal to
-re-measure and rewrite this section rather than leave it stale.
+Every gate refusal is now observable on-chain, and `resolve-wrong-payout`
+lands on its allocated projection (`0x0057 PayoutIndexMismatch`, from the
+`0x0050-0x005f` block `error.rs` carries since the terms-revision wave)
+rather than the former `0x3fff` collapse.
 
 ### Resource envelope
 
@@ -936,17 +934,22 @@ instruction is not miscounted as a second measurement.
 | `materialize` | 79 320 | 40% | 683 | no |
 | `dematerialize` | 80 821 | 40% | 683 | no |
 | `roundtrip` | 155 800 (77 924 + 77 876) | 78% | 750 | no |
-| `create-market` | 988 153 | 494% | 822 | yes — 71% of the 1 400 000 ceiling |
-| `redeem` | 1 356 878 | 678% | 689 | yes — **97%** of the ceiling |
-| `resolve` | > 1 399 850 | — | 681 | **exceeds the ceiling; aborted** |
+| `create-market` | 701 548 | 351% | 822 | yes — 50% of the 1 400 000 ceiling |
+| `redeem` | 408 294 | 204% | 689 | yes — 29% of the ceiling |
+| `resolve` | 536 123 | 268% | 681 | yes — 38% of the ceiling |
 
-Read those last three rows as a resource finding, not a footnote. `Split` costs
-what it did before (72 869 → 73 273 → 77 924 across three recorded runs on
-changing dependencies); the evidence gate and the initializer cost one to two
-orders of magnitude more, and one of them does not fit at all. Address
-derivation dominates the cheap instructions — eight to nine
-`sol_try_find_program_address` syscalls each — and terms decoding dominates the
-expensive ones.
+Read those last three rows as a resource finding still, not a victory lap.
+`Split` costs what it did before (72 869 → 73 273 → 77 924 across three
+recorded runs on changing dependencies); the evidence gate and the
+initializer still cost an order of magnitude more — but they all fit now,
+with 2.6× headroom on the worst of them, where `resolve` previously did not
+fit at all (> 1 399 850, aborted) and `redeem` measured 1 356 878. The delta
+is the decode-once rework: one terms-digest SHA-256 per transaction instead
+of four or five, against a terms account that simultaneously *grew* 27%
+(1 304 → 1 656 bytes, the v3 revision). Address derivation dominates the
+cheap instructions — eight to nine `sol_try_find_program_address` syscalls
+each — and the remaining cost of the expensive ones is spread across the one
+digest, the per-step structural re-parses, and the market decodes.
 
 This is still one fixture with two outcomes and one page of three observations.
 It is not an envelope: worst-case outcome counts, worst-case payout sets, and

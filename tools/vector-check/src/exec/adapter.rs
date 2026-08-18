@@ -106,6 +106,17 @@ fn resolution_code(refusal: clutch_solana_reference::ResolutionRefusal) -> (u32,
         R::PayoutIndexOutOfRange => (2061, "PayoutIndexOutOfRange"),
         R::MarketNotActive => (3001, "MarketNotActive"),
         R::ArithmeticOverflow => (1001, "ArithmeticOverflow"),
+        /* TermsAccount v3 (derived-basis) classes.  No pinned vector reaches
+         * them yet, so the pinned TAXONOMY.json does not carry these rows;
+         * the codes below are the family-consistent proposals for the next
+         * spine revision, and VER-8 will refuse them (loudly, not silently)
+         * if a vector starts producing one before the taxonomy lane lands
+         * the rows. */
+        R::BasisMalformed => (2080, "BasisMalformed"),
+        R::WeightDerivationOverflow => (1006, "WeightDerivationOverflow"),
+        R::ValueOutOfRange => (6008, "ValueOutOfRange"),
+        R::DerivedVectorUnrepresentable => (9008, "DerivedVectorUnrepresentable"),
+        R::WrongResolutionMode => (9009, "WrongResolutionMode"),
     }
 }
 

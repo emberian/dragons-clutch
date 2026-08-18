@@ -936,3 +936,85 @@ economics_lab_distributional_arm_agrees_with_kernel    # §10.3 fixture family, 
 - No claim is made that 16 knots suffice for any particular market's hedging
   demand, that any `D` value is canonical, or that the §9 posture is decided.
   The estimates in §8 are estimates; the implementation wave measures.
+
+---
+
+## 15. Implementation addendum 2026-08-18 (terms-revision wave)
+
+Status of this section: IMPLEMENTED (offline, host-tested, SBF-built), against
+the PROPOSED design above. Where the implementation had to decide something
+the design left open — or where the design disagreed with itself — the
+decision is recorded here rather than silently absorbed.
+
+**Landed, as §6 specified with one addition.** `account_version::TERMS = 3`
+carries the full §6.1 field list **plus a `collateral_cap: u64`** (the
+`RESOLUTION_EVIDENCE_PLAN.md` §3.5 finding rode the same single revision, as
+its queue note asked): the appended block is 352 bytes rather than 344, the
+account is 1,656 bytes, the digest body 1,620, and the digest domain moved to
+`dragons-clutch/terms/v2` under the order-page precedent (preimage shape
+changed, domain moves). Cap zero refuses at decode — a terms artifact with no
+cap decision cannot exist. Deg-0 v3 semantics are behavior-identical to the
+v2-pinned ordinal derivation: the entire pre-existing reference and clutch-sbf
+test suites, including the exact byte-level lifecycle vectors, pass unmodified
+except for fixture field additions, which is the §12
+`deg0_v3_derivation_matches_v2_pinned_derivation` differential in
+landed-test form.
+
+**Degree 1 landed to the §5.1 seam shape; degrees 2-3 refuse.**
+`derive_payout_vector : (ResolutionTerms, WindowResult) -> Result<PayoutVectorBytes, R>`
+is pure, checked, allocation-free: edge policy (`EDGE-CLAMP-01` /
+`EDGE-REFUSE-02` — deg-0 markets must freeze CLAMP, whose §2.2 partition it is
+the identity on), pane location by shift under the uniform declaration or a
+≤ 15-comparison scan otherwise, the §2.3/§2.4 weight construction, the
+generalized `AMBIG-REFUSE-01` (`w(lo) = w(hi)`, justified by the §5.3
+monotonicity argument), and `validate_active` member-shape validation before
+return. TWAP at degree ≥ 1 refuses (`R-05`, the §2.6 deferral); degrees 2 and
+3 refuse at terms admission as unimplemented variants (`R-02`) — the honest
+consequence of §10.6's missing interval rule. New refusal classes: `R-12`
+`BasisMalformed`, `R-13` `WeightDerivationOverflow`, `R-14` `ValueOutOfRange`,
+`R-16`/`R-17` below; `R-15 NonPointEvidence` is reserved, unconstructible
+until a degree ≥ 2 lands. The §2.5 freeze-time bound is checked at both the
+layout codec and the derivation; the §12 falsifiers that apply at deg ≤ 1
+(exact-shift exactness over whole panes, partition-of-unity at every `x̂`,
+pane-boundary continuity, shift-path = scan-path, ambiguity refusal, edge
+clamp/refuse, TWAP deferral, uniform-flag lie, per-field terms refusals) are
+landed tests in the layout and reference crates.
+
+**One internal discrepancy in the design, resolved.** §2.3's general
+`WEIGHT-ROUND-01` ("floor all but the highest-index, subtract for the last")
+and its own deg-1 specialization (`w_right = ⌊D·u/g⌋`, `w_left = D − w_right`)
+subtract at opposite ends: for `D = 7, g = 8, u = 1` the general rule gives
+`(6, 1)` and the specialization `(7, 0)`. The specialization is what §2.4's
+exactness argument, §5.3's `φ`-monotonicity proof, and the §12 falsifier names
+(`w_right == u`) all use, so **the deg-1 specialization is the implemented
+rule**; a future deg ≥ 2 implementation must restate the general rule
+consistently before relying on it.
+
+**The kernel delta did not land — §4 is the one named residue.** The kernel
+crate was out of scope this wave, so `basis_mode`, `resolve_with_vector`, and
+`resolved_vector` do not exist. The implemented adapter-side representation is
+**preset membership**: `derive_payout` on a degree-1 market derives the
+validated vector and resolves by the index of the preset equal to it —
+whereupon the kernel's own resolve-by-index installs exactly the derived
+vector, redemption reads it back by index, and no second copy of any weight
+exists. A terms author whose reachable lattice fits `MAX_PAYOUTS` (two
+outcomes, `D ≤ 7`: all `D + 1` reachable vectors frozen as presets) gets full
+derived resolution end-to-end today, exercised as a landed reference test
+including exact fractional redemption (`14·5/7` and `14·2/7`). Every other
+derived vector refuses `R-16 DerivedVectorUnrepresentable` — fail-closed,
+never approximated — and `derive_payout_vector` on a categorical market
+refuses `R-17 WrongResolutionMode` (§4's one-seam-per-mode rule at the
+adapter). Consequences deferred with the kernel delta: §6.3's
+`ResolutionAccount.resolved_value` (unneeded while resolution is by member
+index), the §4 `Active`-phase `max_i T_i` requirement, and the §9 lot posture
+decision. The §10.1 PROJECT.md edit remains the coordinator's.
+
+**Cost, measured rather than §8-estimated.** The on-chain gate reached the v3
+terms only after a decode-once rework (`TermsAccount::decode_unchecked` /
+`*_into`, digest paid once per transaction in the account plane): with it,
+`Resolve` measures 536,123 program units on the pinned runtime — it
+previously did not fit the 1,400,000-unit transaction ceiling at all — and
+`RedeemInternal` 408,294 (was 1,356,878). The +352 terms bytes cost ~27% per
+SHA-256 recomputation, which is exactly why the recomputation count had to
+drop to one. Numbers and method: `SBF_BRINGUP.md`'s regenerated resource
+envelope.

@@ -74,7 +74,7 @@ All integers are little-endian. The first two bytes are `(tag, version)`.
 | Feed head | 7 | 124 | feed/realm, cursor/boundary/pages, summary digest, bump |
 | Dense order page | 8 | 3883 | market/epoch, 5 page-set commitments, page metadata, 16 × 228-byte tagged order slots |
 | Supply ledger | 9 | 333 | market/realm, generation, 16 internal + 16 external `u64` |
-| Immutable terms | 10 | 1304 | terms digest, realm/profile/feed/price-grid, 8 × payout vector, window policy, failure policy |
+| Immutable terms | 10 | 1656 | terms digest, realm/profile/feed/price-grid, 8 × payout vector, window policy, failure policy |
 | Epoch (book domain) | 11 | 328 | epoch/market/book/terms/grid/policy/order-set IDs, order range, shape, seed, phase |
 | Price grid | 12 | 589 | grid identity, realm, price scale, 64 `u64` ticks |
 | Candidate record | 13 | 305 | candidate digest, epoch/market, 16 prices, sigma/mu, AON mask, score, status |

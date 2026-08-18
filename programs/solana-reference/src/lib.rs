@@ -53,16 +53,17 @@ use clutch_kernel::{
     MAX_OUTCOMES as KERNEL_MAX_OUTCOMES, MAX_PAYOUTS,
 };
 use clutch_solana_layout::{
-    account_len, canonical_market_id, CodecError, Hash32, HoardAccount, Intent, MarketAccount,
-    PositionAccount, ProfileAccount, RealmAccount, ResolutionAccount, SupplyLedgerAccount,
-    TermsAccount, MAX_OUTCOMES, PROFILE_FLAG_POLICY_FROZEN,
+    account_len, canonical_market_id, collateral, CodecError, Hash32, HoardAccount, Intent,
+    MarketAccount, PositionAccount, ProfileAccount, RealmAccount, ResolutionAccount,
+    SupplyLedgerAccount, TermsAccount, MAX_OUTCOMES, PROFILE_FLAG_POLICY_FROZEN,
 };
 
 mod resolution;
 
 pub use clutch_accumulator::WindowError;
 pub use resolution::{
-    derive_payout, ResolutionRefusal, ResolutionTerms, AMBIG_COMPATIBLE_SET_02, AMBIG_REFUSE_01,
+    derive_payout, derive_payout_vector, ResolutionRefusal, ResolutionTerms,
+    AMBIG_COMPATIBLE_SET_02, AMBIG_REFUSE_01, EDGE_CLAMP_01, EDGE_REFUSE_02,
     FAIL_EXTENDED_WINDOW_02, FAIL_UNIFORM_REFUND_01, GEN_EXACT_01, GEN_FINAL_AT_MATURITY_02,
     MAX_BOUNDARIES, MAX_CELLS, PAYOUT_MAP_UNUSED, STAT_RELATIVE_TERMINAL_TWAP_05,
     STAT_SAMPLED_MAX_03, STAT_SAMPLED_MIN_02, STAT_TERMINAL_01, STAT_TWAP_04, V1_EVALUATOR_VERSION,
@@ -802,14 +803,29 @@ impl Request {
     }
 }
 
-/// Validate an already encoded initial market against a create intent and kernel payout set.
+/// Validate an already encoded initial market against a create intent, its
+/// immutable terms artifact, and the Realm's frozen collateral policy.
 ///
 /// This proves only local byte/identity coherence. It deliberately does not
 /// authorize creation; [`apply`] refuses `CreateMarket` until an SVM authority
 /// model exists.
+///
+/// `policy_bytes` are the Realm's 266 collateral-policy bytes, an **evidence
+/// input** per `RESOLUTION_EVIDENCE_PLAN.md` §3.5: the Profile's freeze
+/// discipline alone cannot tell whether the frozen digest is the *right*
+/// one, so the child digest is recomputed from these bytes and compared
+/// ([`collateral::verify_collateral_binding`]). `terms_bytes` are the
+/// immutable terms artifact the new market binds: the founding
+/// `collateral_cap` is the terms' own cap — nonzero by the terms codec, so a
+/// market with no cap decision cannot be founded — and it must not exceed
+/// the ceiling the bound collateral policy admits
+/// ([`collateral::CollateralPolicy::check_market_cap`]).
+#[allow(clippy::too_many_arguments)] // one argument per evidence artifact, deliberately unbundled
 pub fn validate_market_init(
     realm_bytes: &[u8],
     profile_bytes: &[u8],
+    policy_bytes: &[u8],
+    terms_bytes: &[u8],
     state: StateBytes<'_>,
     create_intent_bytes: &[u8],
     metadata: &TransitionMetadata,
@@ -818,6 +834,7 @@ pub fn validate_market_init(
     validate_metadata(metadata, bindings, false)?;
     let realm = RealmAccount::decode(realm_bytes)?;
     let profile = ProfileAccount::decode(profile_bytes)?;
+    let terms_account = TermsAccount::decode(terms_bytes)?;
     let decoded = DecodedState::decode(state)?;
     let DecodedState {
         market,
@@ -829,7 +846,7 @@ pub fn validate_market_init(
         supply,
     } = decoded;
     validate_links(&decoded, bindings)?;
-    require_frozen_collateral_policy(&profile)?;
+    let policy = require_collateral_binding(policy_bytes, &profile)?;
     let intent = Intent::decode(create_intent_bytes)?;
     let (intent_realm, intent_profile, nonce, outcomes, terms, feed) = match intent {
         Intent::CreateMarket {
@@ -874,6 +891,24 @@ pub fn validate_market_init(
     supply
         .binds_market(&market)
         .map_err(|_| Error::MismatchedState)?;
+    /* The presented terms artifact must be the one this market's digest
+     * binds; the artifact is self-certifying inside the codec, so digest
+     * equality plus these field comparisons is equality of the whole
+     * artifact. */
+    terms_account
+        .binds_market(&market)
+        .map_err(|_| Error::TermsBindingMismatch)?;
+    /* The cap flow: the founding market's immutable collateral cap is the
+     * terms' own — a digest-committed decision, never a writer's choice —
+     * and the bound collateral policy must not refute it.  The terms codec
+     * refuses a zero cap, so "cap 0 refuses at market init" is structural:
+     * an unfundable-forever market cannot be founded. */
+    if market.collateral_cap != terms_account.collateral_cap {
+        return Err(Error::TermsBindingMismatch);
+    }
+    policy
+        .check_market_cap(market.collateral_cap)
+        .map_err(|_| Error::CollateralCap)?;
     if hoard.collateral_atoms != 0
         || position.close_state != 0
         || position.internal.iter().any(|amount| *amount != 0)
@@ -889,6 +924,10 @@ pub fn validate_market_init(
     }
     let pure = kernel_market(&decoded)?;
     pure.check_invariants()?;
+    /* A market whose kernel pays something its own terms digest does not
+     * commit to can never resolve; the binding is checked at creation, not
+     * merely at resolution. */
+    require_payout_set_binding(&kernel, &terms_account)?;
     validate_padding(&decoded)?;
     validate_aggregate_closure(&decoded)?;
     Ok(())
@@ -946,27 +985,34 @@ pub fn validate_position_init(
     Ok(())
 }
 
-/// Refuse a Realm profile whose collateral policy digest is not frozen.
+/// Refuse unless the Realm profile is frozen to **exactly** this policy.
 ///
-/// `docs/implementation/RESOLUTION_EVIDENCE_PLAN.md` §3.4 records that the
-/// layout codec already refuses every combination except "frozen flag set
-/// exactly when the digest is nonzero". This adapter takes the further
-/// fail-closed step of refusing an *unfrozen* profile outright: a Realm that
-/// has not yet frozen which collateral policy it commits to must not mint
-/// liabilities, and an unfrozen profile is exactly that state.
+/// The §3.5 wiring of `docs/implementation/RESOLUTION_EVIDENCE_PLAN.md`:
+/// the 266 policy bytes arrive as an evidence input, and
+/// [`collateral::verify_collateral_binding`] recomputes the child digest
+/// `D_col` from them and compares it against the Profile's stored digest —
+/// decoding alone authenticates nothing, and a well-formed frozen Profile
+/// can commit to another Realm's collateral policy.
 ///
-/// This is a freeze-discipline check, not a binding check. Recomputing the
-/// child digest `D_col` from an actual decoded 266-byte collateral policy and
-/// comparing is §3.4 obligation 3, and it is unwritten in Rust: a well-formed
-/// frozen profile can still commit to another Realm's collateral policy and
-/// nothing here would notice.
-fn require_frozen_collateral_policy(profile: &ProfileAccount) -> Result<()> {
+/// The taxonomy does not move: an *unfrozen* Profile still refuses
+/// [`Error::CollateralPolicyNotFrozen`], checked here before the binding
+/// runs; every other refusal — a hostile policy blob, a foreign well-formed
+/// policy, a bit-flipped stored digest — surfaces as the decoder's or
+/// binding's own [`Error::Layout`] class.
+fn require_collateral_binding(
+    policy_bytes: &[u8],
+    profile: &ProfileAccount,
+) -> Result<collateral::CollateralPolicy> {
     if profile.flags & PROFILE_FLAG_POLICY_FROZEN == 0
         || profile.collateral_policy_digest == Hash32::ZERO
     {
         return Err(Error::CollateralPolicyNotFrozen);
     }
-    Ok(())
+    /* The unfrozen case was refused above, so the binding function's own
+     * unfrozen refusal (`ZeroIdentity`) is unreachable here and a remaining
+     * `ZeroIdentity` is the policy decoder's currency refusal — a hostile
+     * blob, not a freeze fault — surfaced as the layout class it is. */
+    collateral::verify_collateral_binding(policy_bytes, profile).map_err(Error::Layout)
 }
 
 /// The seven decoded state accounts of one reference transition.
@@ -1443,7 +1489,7 @@ fn resolve_from_evidence(
     }
     let derived = ResolutionTerms::from_market_terms(market, &terms)?;
     let window = fold_window_evidence(evidence.bytes.window, evidence.feed_cursor)?;
-    let payout_index = derive_payout(&derived, &window)?;
+    let payout_index = derive_payout(&derived, &terms.payouts, &window)?;
     if payout_index != requested_payout {
         return Err(Error::PayoutIndexMismatch);
     }
@@ -1859,7 +1905,8 @@ mod tests {
     };
     use clutch_solana_layout::{
         canonical_outcome_id, canonical_profile_hash, canonical_realm_id, FeedId,
-        PayoutVectorBytes, PAYOUT_INDEX_UNRESOLVED, PROFILE_PARENT_BYTES,
+        PayoutVectorBytes, MAX_KNOTS, PAYOUT_INDEX_UNRESOLVED, PROFILE_PARENT_BYTES,
+        UNIFORM_SPACING_NONE,
     };
 
     const RESOLVED_SLOT: u64 = 4_242;
@@ -1884,6 +1931,26 @@ mod tests {
         parent[14..16].copy_from_slice(&1_u16.to_le_bytes());
         parent[16..48].copy_from_slice(&child_digest.bytes());
         parent
+    }
+
+    /// The Realm's frozen collateral policy: a real, decodable 266-byte
+    /// policy whose recomputed child digest the fixture Profile freezes, so
+    /// every market-init call site binds an actual policy rather than a
+    /// placeholder digest (RESOLUTION_EVIDENCE_PLAN §3.5).
+    fn fixture_policy() -> collateral::CollateralPolicy {
+        let backing = collateral::CurrencyRef::spl(collateral::TOKEN_2022_PROGRAM, [0x9d; 32], 9);
+        collateral::CollateralPolicy {
+            schema_version: collateral::COLLATERAL_POLICY_SCHEMA,
+            flags: collateral::COLLATERAL_POLICY_STRICT_FLAGS,
+            collateral: backing,
+            fee: backing,
+            liveness: collateral::CurrencyRef::NATIVE_SOL,
+            max_supply_atoms: 1_000_000_000,
+            allowed_mint_extensions: 0,
+            required_mint_extensions: 0,
+            allowed_account_extensions: collateral::EXTENSION_IMMUTABLE_OWNER,
+            required_account_extensions: 0,
+        }
     }
 
     fn payout_set() -> PayoutSet {
@@ -1911,6 +1978,16 @@ mod tests {
             denominator: 1,
             weights: right,
         };
+        /* The degree-0 boundary table equivalent to V1's pinned ordinal
+         * partition for two outcomes: one interior boundary at 1, cells
+         * [0, 1) and [1, MAX], identity payout map.  The v3 source identity
+         * keeps the v2 "feed doubles as both" shape by storing the feed as
+         * the source-adapter id, so every window fixture is unchanged. */
+        let mut knots = [0u128; MAX_KNOTS];
+        knots[0] = 1;
+        let mut payout_map = [PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
+        payout_map[0] = 0;
+        payout_map[1] = 1;
         let mut terms = TermsAccount {
             terms: Hash32::ZERO,
             realm,
@@ -1929,6 +2006,21 @@ mod tests {
             coverage_policy_id: u32::from(COVERAGE_POLICY_COMPLETE_REQUIRED),
             repair_policy_id: u32::from(GEN_EXACT_01),
             failure_policy_id: u32::from(FAIL_UNIFORM_REFUND_01),
+            statistic_id: STAT_TERMINAL_01,
+            ambiguity_policy_id: AMBIG_REFUSE_01,
+            edge_policy_id: EDGE_CLAMP_01,
+            basis_degree: 0,
+            knot_count: 1,
+            uniform_log2_spacing: UNIFORM_SPACING_NONE,
+            failure_payout_index: 0,
+            coverage_policy_parameter: 0,
+            repair_generation: V1_EXACT_GENERATION,
+            source_version: V1_SOURCE_VERSION,
+            evaluator_version: V1_EVALUATOR_VERSION,
+            source_adapter_id: feed,
+            payout_map,
+            knots,
+            collateral_cap: 1_000,
             stored_bump: 8,
             flags: 0,
         };
@@ -2029,6 +2121,7 @@ mod tests {
         evidence_bindings: EvidenceBindings,
         realm: [u8; account_len::REALM],
         profile: [u8; account_len::PROFILE],
+        policy: [u8; collateral::COLLATERAL_POLICY_BYTES],
         terms: [u8; account_len::TERMS],
         terms_account: TermsAccount,
         resolution: [u8; account_len::RESOLUTION],
@@ -2042,8 +2135,11 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
-        let profile_hash =
-            canonical_profile_hash(&parent_profile_bytes(h(0xc0))).expect("exact parent preimage");
+        let policy = fixture_policy();
+        let policy_bytes = policy.canonical_bytes().expect("fixture policy encodes");
+        let policy_digest = policy.digest().expect("fixture policy digests");
+        let profile_hash = canonical_profile_hash(&parent_profile_bytes(policy_digest))
+            .expect("exact parent preimage");
         let realm_hash = canonical_realm_id(profile_hash, 7);
         let market_id = canonical_market_id(realm_hash, profile_hash, 9);
         let owner = h(31);
@@ -2221,7 +2317,7 @@ mod tests {
             realm: realm_hash,
             version: 2,
             flags: PROFILE_FLAG_POLICY_FROZEN,
-            collateral_policy_digest: h(0xc0),
+            collateral_policy_digest: policy_digest,
         };
         let mut realm_bytes = [0; account_len::REALM];
         let mut profile_bytes = [0; account_len::PROFILE];
@@ -2245,6 +2341,7 @@ mod tests {
             evidence_bindings,
             realm: realm_bytes,
             profile: profile_bytes,
+            policy: policy_bytes,
             terms: terms_bytes,
             terms_account,
             resolution: resolution_bytes,
@@ -2468,6 +2565,8 @@ mod tests {
             validate_market_init(
                 &f.realm,
                 &f.profile,
+                &f.policy,
+                &f.terms,
                 state_bytes(&f.state),
                 &f.create,
                 &f.metadata,
@@ -2500,6 +2599,8 @@ mod tests {
             validate_market_init(
                 &f.realm,
                 &f.profile,
+                &f.policy,
+                &f.terms,
                 state_bytes(&f.state),
                 &f.create,
                 &f.metadata,
@@ -2522,6 +2623,8 @@ mod tests {
             validate_market_init(
                 &f.realm,
                 &unfrozen,
+                &f.policy,
+                &f.terms,
                 state_bytes(&f.state),
                 &f.create,
                 &f.metadata,
@@ -4191,8 +4294,9 @@ mod tests {
             Err(ResolutionRefusal::TermsMalformed)
         );
 
-        // A bounded-gap coverage policy has no gap bound in the frozen terms,
-        // so it refuses rather than defaulting one.
+        // The v3 terms carry the coverage parameter, so a bounded-gap policy
+        // is expressible — but only with a real bound: the registry refuses
+        // a zero gap bound rather than defaulting one.
         let mut gapped = f.terms_account;
         gapped.coverage_policy_id = u32::from(COVERAGE_POLICY_BOUNDED_GAPS);
         gapped.terms = gapped.recomputed_terms_digest().unwrap();
@@ -4200,6 +4304,22 @@ mod tests {
         gapped_market.terms = gapped.terms;
         assert_eq!(
             ResolutionTerms::from_market_terms(&gapped_market, &gapped),
+            Err(ResolutionRefusal::TermsMalformed)
+        );
+        let mut bounded = gapped;
+        bounded.coverage_policy_parameter = 1;
+        bounded.terms = bounded.recomputed_terms_digest().unwrap();
+        let mut bounded_market = market;
+        bounded_market.terms = bounded.terms;
+        assert!(ResolutionTerms::from_market_terms(&bounded_market, &bounded).is_ok());
+        // ...and COMPLETE_REQUIRED still refuses a stray nonzero parameter.
+        let mut stray = f.terms_account;
+        stray.coverage_policy_parameter = 1;
+        stray.terms = stray.recomputed_terms_digest().unwrap();
+        let mut stray_market = market;
+        stray_market.terms = stray.terms;
+        assert_eq!(
+            ResolutionTerms::from_market_terms(&stray_market, &stray),
             Err(ResolutionRefusal::TermsMalformed)
         );
 
@@ -4227,7 +4347,9 @@ mod tests {
         assert_eq!(derived.ambiguity_policy, AMBIG_REFUSE_01);
         assert_eq!(derived.generation_policy, GEN_EXACT_01);
         assert_eq!(derived.cell_count, 2);
-        assert_eq!(derived.boundaries[0], 1);
+        assert_eq!(derived.basis_degree, 0);
+        assert_eq!(derived.knot_count, 1);
+        assert_eq!(derived.knots[0], 1);
         assert_eq!(derived.payout_map[0], 0);
         assert_eq!(derived.payout_map[1], 1);
         assert_eq!(derived.payout_map[2], PAYOUT_MAP_UNUSED);
@@ -4266,33 +4388,36 @@ mod tests {
         // live padding is refused before any statistic is read.
         let mut zero_first = derived;
         zero_first.cell_count = 3;
+        zero_first.knot_count = 2;
         zero_first.payout_map[2] = 1;
-        zero_first.boundaries[0] = 0;
-        zero_first.boundaries[1] = 2;
+        zero_first.knots[0] = 0;
+        zero_first.knots[1] = 2;
         assert_eq!(
             zero_first.validate(),
             Err(ResolutionRefusal::PartitionMalformed)
         );
         let mut flat = derived;
         flat.cell_count = 3;
+        flat.knot_count = 2;
         flat.payout_map[2] = 1;
-        flat.boundaries[0] = 5;
-        flat.boundaries[1] = 5;
+        flat.knots[0] = 5;
+        flat.knots[1] = 5;
         assert_eq!(flat.validate(), Err(ResolutionRefusal::PartitionMalformed));
         let mut over_max = derived;
-        over_max.boundaries[0] = MAX_VALUE + 1;
+        over_max.knots[0] = MAX_VALUE + 1;
         assert_eq!(
             over_max.validate(),
             Err(ResolutionRefusal::PartitionMalformed)
         );
         let mut live_padding = derived;
-        live_padding.boundaries[1] = 3;
+        live_padding.knots[1] = 3;
         assert_eq!(
             live_padding.validate(),
             Err(ResolutionRefusal::PartitionMalformed)
         );
         let mut single_cell = derived;
         single_cell.cell_count = 1;
+        single_cell.knot_count = 0;
         assert_eq!(
             single_cell.validate(),
             Err(ResolutionRefusal::PartitionMalformed)
@@ -4321,6 +4446,22 @@ mod tests {
         assert_eq!(ResolutionRefusal::PayoutIndexOutOfRange.class(), 9);
         assert_eq!(ResolutionRefusal::MarketNotActive.class(), 10);
         assert_eq!(ResolutionRefusal::ArithmeticOverflow.class(), 11);
+        assert_eq!(ResolutionRefusal::BasisMalformed.class(), 12);
+        assert_eq!(ResolutionRefusal::WeightDerivationOverflow.class(), 13);
+        assert_eq!(ResolutionRefusal::ValueOutOfRange.class(), 14);
+        // 15 is reserved for R-15 NonPointEvidence (degrees >= 2 only).
+        assert_eq!(ResolutionRefusal::DerivedVectorUnrepresentable.class(), 16);
+        assert_eq!(ResolutionRefusal::WrongResolutionMode.class(), 17);
+
+        // Degrees 2 and 3 refuse as unimplemented variants: no proven
+        // interval-ambiguity rule exists for smooth bases (design §10.6).
+        let mut smooth = derived;
+        smooth.basis_degree = 2;
+        assert_eq!(smooth.validate(), Err(ResolutionRefusal::TermsMalformed));
+        smooth.basis_degree = 3;
+        assert_eq!(smooth.validate(), Err(ResolutionRefusal::TermsMalformed));
+        smooth.basis_degree = 4;
+        assert_eq!(smooth.validate(), Err(ResolutionRefusal::BasisMalformed));
     }
 
     #[test]
@@ -4760,6 +4901,8 @@ mod tests {
             validate_market_init(
                 &f.realm,
                 &f.profile,
+                &f.policy,
+                &f.terms,
                 state_bytes(&init),
                 &f.create,
                 &f.metadata,
@@ -5038,6 +5181,550 @@ mod tests {
         assert_eq!(
             refuse(&bytes[..maturity_len]),
             Err(Error::Window(WindowError::InvalidMaturity))
+        );
+    }
+
+    /* --------------------------------------------------------------------
+     * TermsAccount v3: boundary tables, derived bases, and the cap flow.
+     * ------------------------------------------------------------------ */
+
+    /// Re-freeze a fixture around revised terms: recompute the digest, then
+    /// point the market, the kernel payout set, and the unresolved record at
+    /// it, exactly as a founding write would have.
+    fn refreeze_terms(f: &mut Fixture, mut terms: TermsAccount) {
+        terms.terms = terms.recomputed_terms_digest().unwrap();
+        let mut market = MarketAccount::decode(&f.state.market).unwrap();
+        market.terms = terms.terms;
+        market.collateral_cap = terms.collateral_cap;
+        market.encode(&mut f.state.market).unwrap();
+        let mut kernel = KernelAccount::decode(&f.state.kernel).unwrap();
+        let mut vectors = [PayoutVector::ZERO; MAX_PAYOUTS];
+        let mut index = 0usize;
+        while index < usize::from(terms.payout_count) {
+            vectors[index] = PayoutVector::new(
+                terms.payouts[index].denominator,
+                terms.payouts[index].weights,
+            );
+            index += 1;
+        }
+        kernel.payouts = PayoutSet::new(terms.payout_count, terms.outcome_count, vectors);
+        kernel.encode(&mut f.state.kernel).unwrap();
+        let mut record = ResolutionAccount::decode(&f.resolution).unwrap();
+        record.terms = terms.terms;
+        record.encode(&mut f.resolution).unwrap();
+        terms.encode(&mut f.terms).unwrap();
+        f.terms_account = terms;
+    }
+
+    /// One resolve attempt over a fixture state, with the last observed
+    /// bucket carrying the interval `[low, high]`.
+    fn resolve_terminal(
+        f: &Fixture,
+        state: &TransitionOutput,
+        sequence: u64,
+        payout: u8,
+        low: u128,
+        high: u128,
+    ) -> Result<TransitionOutput> {
+        let records = [
+            (OBSERVATION_ACCEPTED, 100, 0, 0),
+            (OBSERVATION_ACCEPTED, 101, 0, 0),
+            (OBSERVATION_ACCEPTED, 102, low, high),
+        ];
+        let (window, len) = encode_window(&f.window_spec(), &records);
+        apply_with_evidence(
+            &resolve_request(sequence, payout),
+            state_bytes(state),
+            &ResolutionEvidence {
+                bytes: EvidenceBytes {
+                    terms: &f.terms,
+                    resolution: &f.resolution,
+                    window: &window[..len],
+                },
+                metadata: f.evidence_metadata,
+                bindings: f.evidence_bindings,
+                feed_cursor: FEED_CURSOR,
+                resolved_slot: RESOLVED_SLOT,
+            },
+            &f.metadata,
+            &f.bindings,
+        )
+    }
+
+    /// The pure derived-vector seam over one terminal interval.
+    fn derived_vector_at(
+        f: &Fixture,
+        low: u128,
+        high: u128,
+    ) -> core::result::Result<PayoutVectorBytes, ResolutionRefusal> {
+        let market = MarketAccount::decode(&f.state.market).unwrap();
+        let derived = ResolutionTerms::from_market_terms(&market, &f.terms_account)?;
+        let records = [
+            (OBSERVATION_ACCEPTED, 100, 0, 0),
+            (OBSERVATION_ACCEPTED, 101, 0, 0),
+            (OBSERVATION_ACCEPTED, 102, low, high),
+        ];
+        let (window, len) = encode_window(&f.window_spec(), &records);
+        let window = fold_window_evidence(&window[..len], FEED_CURSOR).unwrap();
+        derive_payout_vector(&derived, &window)
+    }
+
+    /// The degree-1 hat-basis terms whose reachable weight lattice is exactly
+    /// the preset set: two outcomes, `D = 7`, anchors at 0 and 8, so the
+    /// eight reachable vectors `(7 − r, r)` are the eight frozen presets.
+    fn hat_terms_with_enumerated_lattice(f: &Fixture) -> TermsAccount {
+        let mut terms = f.terms_account;
+        let mut payouts = [PayoutVectorBytes::ZERO; MAX_PAYOUTS];
+        let mut r = 0usize;
+        while r < MAX_PAYOUTS {
+            let mut weights = [0u64; MAX_OUTCOMES];
+            weights[0] = 7 - r as u64;
+            weights[1] = r as u64;
+            payouts[r] = PayoutVectorBytes {
+                denominator: 7,
+                weights,
+            };
+            r += 1;
+        }
+        terms.payout_count = MAX_PAYOUTS as u8;
+        terms.payouts = payouts;
+        terms.basis_degree = 1;
+        terms.knot_count = 2;
+        terms.uniform_log2_spacing = 3;
+        terms.knots = [0; MAX_KNOTS];
+        terms.knots[1] = 8;
+        terms.payout_map = [PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
+        terms.failure_payout_index = 0;
+        terms
+    }
+
+    /// A degree-1 basis in the exact `B1-EXACT` variant `D = g = 2^3`, whose
+    /// lattice (nine vectors) cannot fit the preset set.
+    fn hat_terms_exact_d8(f: &Fixture) -> TermsAccount {
+        let mut terms = hat_terms_with_enumerated_lattice(f);
+        let mut payouts = [PayoutVectorBytes::ZERO; MAX_PAYOUTS];
+        let mut left = [0u64; MAX_OUTCOMES];
+        left[0] = 8;
+        let mut right = [0u64; MAX_OUTCOMES];
+        right[1] = 8;
+        payouts[0] = PayoutVectorBytes {
+            denominator: 8,
+            weights: left,
+        };
+        payouts[1] = PayoutVectorBytes {
+            denominator: 8,
+            weights: right,
+        };
+        terms.payout_count = 2;
+        terms.payouts = payouts;
+        terms
+    }
+
+    #[test]
+    fn threshold_boundary_market_resolves_end_to_end() {
+        /* Obligation 18 closes: the plan §2.6 worked example — a binary
+         * market with the frozen boundary table [50] — resolves through the
+         * full evidence gate, which the v2 terms could not express at all. */
+        let mut f = fixture();
+        let mut terms = f.terms_account;
+        terms.knots[0] = 50;
+        refreeze_terms(&mut f, terms);
+        let split = split_state(&f, 12);
+
+        // terminal = [47, 49] -> cell 0 -> payout 0.
+        let low_side = resolve_terminal(&f, &split, 1, 0, 47, 49).unwrap();
+        assert_eq!(
+            KernelAccount::decode(&low_side.kernel)
+                .unwrap()
+                .resolved_payout,
+            0
+        );
+        // terminal = [50, 50] -> the boundary itself lands in the closed
+        // upper cell -> payout 1.
+        let at_boundary = resolve_terminal(&f, &split, 1, 1, 50, 50).unwrap();
+        assert_eq!(
+            KernelAccount::decode(&at_boundary.kernel)
+                .unwrap()
+                .resolved_payout,
+            1
+        );
+        // terminal = [49, 51] straddles -> AMBIG-REFUSE-01.
+        assert_eq!(
+            resolve_terminal(&f, &split, 1, 0, 49, 51),
+            Err(Error::Resolution(ResolutionRefusal::AmbiguousInterval))
+        );
+        // And the request must ask for the derived cell's payout.
+        assert_eq!(
+            resolve_terminal(&f, &split, 1, 1, 47, 49),
+            Err(Error::PayoutIndexMismatch)
+        );
+    }
+
+    #[test]
+    fn degree_one_market_resolves_by_derived_member_vector_end_to_end() {
+        /* The derived hat-basis path, end to end: at x̂ = 3 in the pane
+         * [0, 8) with D = 7, the derive-last-and-subtract weights are
+         * (7 − ⌊7·3/8⌋, ⌊7·3/8⌋) = (5, 2) — preset index 2 — and the kernel
+         * resolves by that member's index, so redemption pays the derived
+         * fractions exactly. */
+        let mut f = fixture();
+        let terms = hat_terms_with_enumerated_lattice(&f);
+        refreeze_terms(&mut f, terms);
+        let split = split_state(&f, 14);
+
+        // The gate refuses every index except the derived member's.
+        assert_eq!(
+            resolve_terminal(&f, &split, 1, 0, 3, 3),
+            Err(Error::PayoutIndexMismatch)
+        );
+        let resolved = resolve_terminal(&f, &split, 1, 2, 3, 3).unwrap();
+        let kernel = KernelAccount::decode(&resolved.kernel).unwrap();
+        assert_eq!(kernel.resolved_payout, 2);
+        assert_eq!(kernel.payouts.vectors[2].denominator, 7);
+        assert_eq!(kernel.payouts.vectors[2].weights[0], 5);
+        assert_eq!(kernel.payouts.vectors[2].weights[1], 2);
+
+        // Redemption at the derived weights: 14 claims of outcome 0 pay
+        // exactly 14·5/7 = 10, of outcome 1 exactly 14·2/7 = 4; together the
+        // full split collateral, with position cash restored exactly.
+        let mut readonly = f.evidence_metadata;
+        readonly.resolution.writable = false;
+        let record = resolved.resolution.unwrap();
+        let redeem = |state: &TransitionOutput, sequence, outcome, quantity| {
+            apply_with_evidence(
+                &redeem_request(sequence, outcome, quantity),
+                state_bytes(state),
+                &ResolutionEvidence {
+                    bytes: EvidenceBytes {
+                        terms: &f.terms,
+                        resolution: &record,
+                        window: &[],
+                    },
+                    metadata: readonly,
+                    bindings: f.evidence_bindings,
+                    feed_cursor: FEED_CURSOR,
+                    resolved_slot: RESOLVED_SLOT,
+                },
+                &f.metadata,
+                &f.bindings,
+            )
+        };
+        let first = redeem(&resolved, 2, 0, 14).unwrap();
+        assert_eq!(first.redemption_payout, 10);
+        let second = redeem(&first, 3, 1, 14).unwrap();
+        assert_eq!(second.redemption_payout, 4);
+        assert_eq!(
+            HoardAccount::decode(&second.hoard)
+                .unwrap()
+                .collateral_atoms,
+            0
+        );
+        assert_eq!(
+            PositionAccount::decode(&second.position)
+                .unwrap()
+                .cash_atoms,
+            100
+        );
+    }
+
+    #[test]
+    fn degree_one_derived_vector_outside_presets_names_the_kernel_residue() {
+        /* The same derivation under D = 64 lands on (40, 24), which no
+         * preset carries: without the kernel's resolve_with_vector — the one
+         * named residue — the adapter refuses rather than approximates. */
+        let mut f = fixture();
+        let mut terms = hat_terms_exact_d8(&f);
+        let mut left = [0u64; MAX_OUTCOMES];
+        left[0] = 64;
+        let mut right = [0u64; MAX_OUTCOMES];
+        right[1] = 64;
+        terms.payouts[0] = PayoutVectorBytes {
+            denominator: 64,
+            weights: left,
+        };
+        terms.payouts[1] = PayoutVectorBytes {
+            denominator: 64,
+            weights: right,
+        };
+        refreeze_terms(&mut f, terms);
+        let split = split_state(&f, 14);
+        assert_eq!(
+            resolve_terminal(&f, &split, 1, 0, 3, 3),
+            Err(Error::Resolution(
+                ResolutionRefusal::DerivedVectorUnrepresentable
+            ))
+        );
+        /* The pure seam still derives the validated member-shaped vector —
+         * the refusal is the missing kernel transition, not the derivation. */
+        assert_eq!(derived_vector_at(&f, 3, 3).unwrap().weights[..2], [40, 24]);
+        /* At a knot the derived vector IS a preset, and the market resolves:
+         * the residue is exactly the non-member lattice, nothing else. */
+        let at_anchor = resolve_terminal(&f, &split, 1, 1, 8, 8).unwrap();
+        assert_eq!(
+            KernelAccount::decode(&at_anchor.kernel)
+                .unwrap()
+                .resolved_payout,
+            1
+        );
+    }
+
+    #[test]
+    fn degree_one_pow2_weights_are_exact_shifts_and_sum_to_d() {
+        /* B1-EXACT (design §2.4): with D = g = 2^3 the pane-local coordinate
+         * IS the weight — w_right == u for every u in the pane, the floor is
+         * the identity, and the partition of unity is exact at every x̂.
+         * Checked exhaustively over the whole pane, not sampled. */
+        let mut f = fixture();
+        let terms = hat_terms_exact_d8(&f);
+        refreeze_terms(&mut f, terms);
+        let mut value = 0u128;
+        while value <= 12 {
+            let vector = derived_vector_at(&f, value, value).unwrap();
+            let expected_right = if value >= 8 { 8 } else { value as u64 };
+            assert_eq!(vector.denominator, 8);
+            assert_eq!(vector.weights[1], expected_right, "at {value}");
+            assert_eq!(vector.weights[0], 8 - expected_right, "at {value}");
+            assert_eq!(
+                vector.weights.iter().sum::<u64>(),
+                8,
+                "partition of unity at {value}"
+            );
+            value += 1;
+        }
+
+        /* Pane-boundary continuity on a three-anchor grid: the u -> g limit
+         * of pane 0 meets pane 1's u = 0 exactly at the shared knot, and the
+         * shift path and the scan path derive identical vectors. */
+        let mut three = hat_terms_exact_d8(&f);
+        three.outcome_count = 3;
+        three.knot_count = 3;
+        three.knots[2] = 16;
+        let mut vectors = [PayoutVectorBytes::ZERO; MAX_PAYOUTS];
+        let mut index = 0usize;
+        while index < 3 {
+            let mut weights = [0u64; MAX_OUTCOMES];
+            weights[index] = 8;
+            vectors[index] = PayoutVectorBytes {
+                denominator: 8,
+                weights,
+            };
+            index += 1;
+        }
+        three.payout_count = 3;
+        three.payouts = vectors;
+        /* The fixture market and window stay two-outcome; this arm exercises
+         * only the pure derivation, so a bare market head carrying the digest
+         * is enough. */
+        three.terms = three.recomputed_terms_digest().unwrap();
+        let mut market = MarketAccount::decode(&f.state.market).unwrap();
+        market.terms = three.terms;
+        let derived = ResolutionTerms::from_market_terms(&market, &three).unwrap();
+        let mut scanned = derived;
+        scanned.uniform_log2_spacing = UNIFORM_SPACING_NONE;
+        let mut value = 0u128;
+        while value <= 16 {
+            let records = [
+                (OBSERVATION_ACCEPTED, 100, 0, 0),
+                (OBSERVATION_ACCEPTED, 101, 0, 0),
+                (OBSERVATION_ACCEPTED, 102, value, value),
+            ];
+            let (window, len) = encode_window(&f.window_spec(), &records);
+            let window = fold_window_evidence(&window[..len], FEED_CURSOR).unwrap();
+            let shifted = derive_payout_vector(&derived, &window).unwrap();
+            let walked = derive_payout_vector(&scanned, &window).unwrap();
+            assert_eq!(shifted, walked, "shift path == scan path at {value}");
+            assert_eq!(shifted.weights.iter().sum::<u64>(), 8);
+            if value == 8 {
+                /* The shared knot: full weight on the middle claim, exactly
+                 * the limit of pane 0 (u -> 8) and the start of pane 1. */
+                assert_eq!(shifted.weights[..3], [0, 8, 0]);
+            }
+            if value == 7 {
+                assert_eq!(shifted.weights[..3], [1, 7, 0]);
+            }
+            if value == 9 {
+                assert_eq!(shifted.weights[..3], [0, 7, 1]);
+            }
+            value += 1;
+        }
+    }
+
+    #[test]
+    fn degree_one_ambiguity_and_edge_policies_refuse_or_clamp() {
+        let mut f = fixture();
+        let terms = hat_terms_exact_d8(&f);
+        refreeze_terms(&mut f, terms);
+
+        /* The generalized AMBIG-REFUSE-01: endpoint weight vectors differ,
+         * so the interval refuses — and by φ-monotonicity, agreement would
+         * have implied constancy on the whole interval. */
+        assert_eq!(
+            derived_vector_at(&f, 1, 2),
+            Err(ResolutionRefusal::AmbiguousInterval)
+        );
+        /* EDGE-CLAMP-01: out-of-span values clamp to the extreme anchors, so
+         * an interval entirely above the span is *not* ambiguous. */
+        assert_eq!(derived_vector_at(&f, 9, 20).unwrap().weights[1], 8);
+        assert_eq!(derived_vector_at(&f, 0, 0).unwrap().weights[0], 8);
+
+        /* EDGE-REFUSE-02: the same interval refuses into the failure policy
+         * class instead of clamping. */
+        let mut refusing = f.terms_account;
+        refusing.edge_policy_id = EDGE_REFUSE_02;
+        refreeze_terms(&mut f, refusing);
+        assert_eq!(
+            derived_vector_at(&f, 9, 20),
+            Err(ResolutionRefusal::ValueOutOfRange)
+        );
+        assert_eq!(derived_vector_at(&f, 8, 8).unwrap().weights[1], 8);
+    }
+
+    #[test]
+    fn degree_gates_twap_and_the_vector_seam_refuses_the_wrong_mode() {
+        let f = fixture();
+        /* TWAP stays admissible for a degree-0 boundary table... */
+        let mut categorical = f.terms_account;
+        categorical.statistic_id = STAT_TWAP_04;
+        categorical.terms = categorical.recomputed_terms_digest().unwrap();
+        let mut market = MarketAccount::decode(&f.state.market).unwrap();
+        market.terms = categorical.terms;
+        assert!(ResolutionTerms::from_market_terms(&market, &categorical).is_ok());
+
+        /* ...and is deferred for degree >= 1 (design §2.6): the weight
+         * derivation's intermediate product has no proven u128 bound. */
+        let mut derived = hat_terms_exact_d8(&f);
+        derived.statistic_id = STAT_TWAP_04;
+        derived.terms = derived.recomputed_terms_digest().unwrap();
+        let mut market = MarketAccount::decode(&f.state.market).unwrap();
+        market.terms = derived.terms;
+        assert_eq!(
+            ResolutionTerms::from_market_terms(&market, &derived),
+            Err(ResolutionRefusal::StatisticUnsupported)
+        );
+
+        /* One resolution seam per mode: a categorical market has no derived
+         * vector. */
+        assert_eq!(
+            derived_vector_at(&f, 0, 0),
+            Err(ResolutionRefusal::WrongResolutionMode)
+        );
+    }
+
+    #[test]
+    fn market_init_cap_flow_binds_the_terms_cap_and_the_policy_ceiling() {
+        /* The founded market's cap is the terms' own: a market whose stored
+         * cap disagrees with its digest-bound terms refuses. */
+        let mut f = fixture();
+        clear_init_cash(&mut f.state);
+        let mut market = MarketAccount::decode(&f.state.market).unwrap();
+        assert_eq!(market.collateral_cap, 1_000);
+        assert_eq!(f.terms_account.collateral_cap, 1_000);
+        market.collateral_cap = 999;
+        market.encode(&mut f.state.market).unwrap();
+        assert_eq!(
+            validate_market_init(
+                &f.realm,
+                &f.profile,
+                &f.policy,
+                &f.terms,
+                state_bytes(&f.state),
+                &f.create,
+                &f.metadata,
+                &f.bindings,
+            ),
+            Err(Error::TermsBindingMismatch)
+        );
+
+        /* A cap the Realm's admitted mint could never back refuses against
+         * the recomputed policy's ceiling, even though the terms commit to
+         * it. */
+        let mut over = fixture();
+        clear_init_cash(&mut over.state);
+        let mut terms = over.terms_account;
+        terms.collateral_cap = 2_000_000_000;
+        refreeze_terms(&mut over, terms);
+        /* refreeze_terms updated the market's digest but the create intent
+         * still names the old one; rebuild it so the ceiling is the check
+         * that speaks. */
+        let create_intent = Intent::CreateMarket {
+            realm: MarketAccount::decode(&over.state.market).unwrap().realm,
+            profile: MarketAccount::decode(&over.state.market).unwrap().profile,
+            market_nonce: 9,
+            outcome_count: 2,
+            terms: over.terms_account.terms,
+            feed: over.terms_account.feed,
+        };
+        let mut create = [0; 139];
+        assert_eq!(create_intent.encode(&mut create), Ok(139));
+        assert_eq!(
+            validate_market_init(
+                &over.realm,
+                &over.profile,
+                &over.policy,
+                &over.terms,
+                state_bytes(&over.state),
+                &create,
+                &over.metadata,
+                &over.bindings,
+            ),
+            Err(Error::CollateralCap)
+        );
+    }
+
+    #[test]
+    fn collateral_policy_binding_refuses_foreign_flipped_and_hostile_bytes() {
+        let f = fixture();
+        let mut init = f.state.clone();
+        clear_init_cash(&mut init);
+        let check = |profile: &[u8], policy: &[u8]| {
+            validate_market_init(
+                &f.realm,
+                profile,
+                policy,
+                &f.terms,
+                state_bytes(&init),
+                &f.create,
+                &f.metadata,
+                &f.bindings,
+            )
+        };
+
+        /* A *foreign*, perfectly well-formed policy: it decodes, and only
+         * the recompute-and-compare refuses it. */
+        let mut foreign = fixture_policy();
+        foreign.collateral =
+            collateral::CurrencyRef::spl(collateral::TOKEN_2022_PROGRAM, [0xaa; 32], 9);
+        foreign.fee = foreign.collateral;
+        let foreign_bytes = foreign.canonical_bytes().unwrap();
+        assert_eq!(
+            check(&f.profile, &foreign_bytes),
+            Err(Error::Layout(CodecError::MismatchedBinding))
+        );
+
+        /* A bit-flipped stored digest: the Profile still decodes (frozen
+         * flag, nonzero digest), and the binding is what refuses. */
+        let mut flipped = ProfileAccount::decode(&f.profile).unwrap();
+        let mut digest = flipped.collateral_policy_digest.bytes();
+        digest[0] ^= 1;
+        flipped.collateral_policy_digest = Hash32::from_bytes(digest);
+        let mut flipped_bytes = [0; account_len::PROFILE];
+        flipped.encode(&mut flipped_bytes).unwrap();
+        assert_eq!(
+            check(&flipped_bytes, &f.policy),
+            Err(Error::Layout(CodecError::MismatchedBinding))
+        );
+
+        /* Hostile policy bytes surface the decoder's own refusal, never a
+         * generic mismatch. */
+        assert_eq!(
+            check(&f.profile, &f.policy[..100]),
+            Err(Error::Layout(CodecError::Truncated))
+        );
+        let mut wrong_magic = f.policy;
+        wrong_magic[0] ^= 0xff;
+        assert_eq!(
+            check(&f.profile, &wrong_magic),
+            Err(Error::Layout(CodecError::WrongTag))
         );
     }
 }

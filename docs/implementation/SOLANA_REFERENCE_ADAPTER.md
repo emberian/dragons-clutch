@@ -121,11 +121,16 @@ Everything the derivation reads must come from there or be canonical; nothing
 may be caller-supplied, because an unbound boundary table would let a caller
 choose the payout.
 
+> **Superseded 2026-08-18:** the `TermsAccount` v3 revision landed and every
+> pin in the table below became a stored, digest-committed field (see the
+> addendum at the end of this document). The table is retained as the record
+> of what V1 pinned and why.
+
 `RESOLUTION_EVIDENCE_PLAN.md` §2.1 proposed a separate 432-byte artifact
 digested into `MarketAccount.terms`. The landed `TermsAccount` took that digest
 slot with a different body, so §2.1's artifact cannot also be that digest. V1
-therefore **pins** the fields the frozen terms do not carry, and each pin is an
-obligation on a later `TermsAccount` revision rather than a default:
+therefore **pinned** the fields the frozen terms did not carry, and each pin
+was an obligation on a later `TermsAccount` revision rather than a default:
 
 | Field | V1 value | Consequence |
 | --- | --- | --- |
@@ -387,3 +392,55 @@ is added. The reference crate does not establish them.
 Until those obligations have checked artifacts, the correct description is
 “offline reference transition adapter with an evidence-gated, unauthenticated
 resolution path.”
+
+---
+
+## Addendum 2026-08-18: obligation 18 discharged, obligation 19 wired
+
+The unified `TermsAccount` v3 revision landed (design:
+`DISTRIBUTIONAL_CLAIMS_DESIGN.md` §6 and its implementation addendum; codec:
+`programs/solana-layout`, `account_version::TERMS = 3`, 1,656 bytes, digest
+domain `dragons-clutch/terms/v2`).
+
+**Obligation 18 is discharged.** The immutable terms now carry — inside the
+self-certifying digest — the statistic id, ambiguity policy id, edge policy
+id, coverage-policy parameter, repair generation, source/evaluator versions,
+source-adapter identity, the knot vector (whose degree-0 prefix is the
+boundary table), the payout map, and the basis degree.
+`ResolutionTerms::from_market_terms` decodes every one of them; no V1 pin
+remains. A threshold market resolves here, end-to-end through
+`apply_with_evidence`, with the plan §2.6 worked example landed as a test.
+`BOUNDED_GAPS` coverage is expressible (the gap bound is a stored field; a
+zero bound still refuses). Degree-1 (hat-basis) markets additionally resolve
+whenever the derived, validated weight vector is a member of the frozen
+preset set — the kernel still resolves by index, and the missing
+`resolve_with_vector` transition is the one named residue, refusing
+`R-16 DerivedVectorUnrepresentable` fail-closed for every non-member vector.
+Degrees 2-3 refuse as unimplemented variants.
+
+**Obligation 19 is wired on the reference side.** `validate_market_init`
+takes the 266 collateral-policy bytes and the terms artifact as evidence
+inputs: it recomputes the child digest via
+`collateral::verify_collateral_binding` (a foreign well-formed policy, a
+bit-flipped stored digest, and hostile policy bytes each refuse with their
+own class — the §3.4 adversarial battery exists), requires the founding
+`MarketAccount.collateral_cap` to equal the terms' digest-committed
+`collateral_cap` (nonzero by codec, so a market with no cap decision cannot
+be founded), and refuses a cap above `check_market_cap`'s mint ceiling.
+The on-chain `CreateMarket` writes the terms' cap and re-checks the equality,
+but still checks only freeze discipline against the Profile: no account in
+its frozen twelve-account plane carries the policy bytes, so the on-chain
+binding half of obligation 19 remains open and named there.
+
+The evidence-gate refusal taxonomy is unchanged in classes; its numeric
+projection in `clutch-sbf` is no longer lossy (the `0x0050-0x005f` block in
+`error.rs`). The compute-cost defect this crate's five-decode gate shape
+caused on-chain was closed by `TermsAccount::decode_unchecked`/`decode_into`
+in the layout crate; this adapter's own semantics did not change — resolve
+and redeem still bind terms, payout set, and record at the same points in the
+same order.
+
+What did **not** move: no refusal was relaxed; evidence is still
+unauthenticated (obligations 15-17 stand); resolution still consumes one
+sealed `WindowResult` through the same gate; and the kernel API residue above
+is the only derived-mode gap.

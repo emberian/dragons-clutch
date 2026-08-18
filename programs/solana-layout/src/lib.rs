@@ -91,6 +91,20 @@ pub const MAX_WINDOW_BUCKETS: u64 = 1_000_000;
 pub const MAX_PRICE_SCALE: u64 = u64::MAX / MAX_OUTCOMES as u64;
 /// Sentinel payout index meaning "this market has not resolved".
 pub const PAYOUT_INDEX_UNRESOLVED: u8 = u8::MAX;
+/// Largest number of knots a terms basis can freeze.
+///
+/// Bounds every degree of the B-spline basis family of
+/// `docs/implementation/DISTRIBUTIONAL_CLAIMS_DESIGN.md` §2.1: at degree 0 the
+/// knots are the interior cell boundaries (`K = n − 1`), at degree 1 they are
+/// the claim anchor sites (`K = n`), and `MAX_OUTCOMES = 16` keeps every case
+/// inside this width.
+pub const MAX_KNOTS: usize = 16;
+/// Largest admitted B-spline basis degree.
+pub const MAX_BASIS_DEGREE: u8 = 3;
+/// [`TermsAccount::uniform_log2_spacing`] sentinel: knots are not uniform.
+pub const UNIFORM_SPACING_NONE: u8 = 0xFF;
+/// [`TermsAccount::payout_map`] entry meaning "this cell index is not live".
+pub const PAYOUT_MAP_UNUSED: u8 = 0xFF;
 /// Exact encoded length of one [`OrderRecord`] body, without its slot kind byte.
 pub const ORDER_RECORD_BYTES: usize = 32 + 32 + 1 + 1 + 8 + 8 + 8 + 1 + 8;
 /// Exact encoded length of one [`PortfolioRecord`] body, without its kind byte.
@@ -345,11 +359,25 @@ pub fn canonical_epoch_id(market: MarketId, epoch_index: u64) -> EpochId {
 
 /// Derive the immutable terms digest from the exact terms body bytes.
 ///
-/// The body is everything an encoded [`TermsAccount`] holds after its own
-/// identity field, so the digest commits to the payout set, the window policy,
-/// and the failure policy together.  [`MarketAccount::terms`] stores this value.
+/// The preimage is the exact 1,620-byte terms **body**: every encoded
+/// [`TermsAccount`] byte after the two-byte `(tag, version)` header and the
+/// 32-byte stored `terms` digest itself, up to but excluding the trailing
+/// `stored_bump` and `flags` bytes.  The digest therefore commits to the
+/// payout set, the window policy, the failure policy, every v3 resolution
+/// field — statistic, ambiguity/edge policies, basis degree, knot count and
+/// vector, uniform-spacing declaration, failure payout index, coverage
+/// parameter, repair generation, source identity/versions, payout map — and
+/// the per-market `collateral_cap`, together.  The `stored_bump` and `flags`
+/// stay outside on purpose: they are address-derivation artifacts, and a PDA
+/// derived from the digest cannot also be an input to it.
+/// [`MarketAccount::terms`] stores this value.
+///
+/// The domain moved to `v2` with `account_version::TERMS = 3`, when the body
+/// grew its 352 resolution-basis and collateral-cap bytes: the preimage shape
+/// changed, so the old domain must not be reusable over the new bytes — the
+/// same rule that moved the order-page domain when its record shape changed.
 pub fn canonical_terms_digest(body_bytes: &[u8]) -> Hash32 {
-    digest(b"dragons-clutch/terms/v1", &[body_bytes])
+    digest(b"dragons-clutch/terms/v2", &[body_bytes])
 }
 
 /// Derive the frozen price-grid identity from its exact body bytes.
@@ -458,7 +486,16 @@ pub mod account_version {
     /// Supply ledger account.
     pub const SUPPLY_LEDGER: u8 = 2;
     /// Immutable terms account.
-    pub const TERMS: u8 = 2;
+    ///
+    /// Version 3 is the unified resolution-basis revision
+    /// (`docs/implementation/DISTRIBUTIONAL_CLAIMS_DESIGN.md` §6 plus the
+    /// per-market `collateral_cap` of the §3.5 finding in
+    /// `docs/implementation/RESOLUTION_EVIDENCE_PLAN.md`).  Version 2 lacked
+    /// every basis field — statistic, ambiguity/edge policies, degree, knots,
+    /// payout map, coverage parameter, repair generation, source identity and
+    /// versions — and the collateral cap; its bytes are refused, exactly as
+    /// the superseded prototype version 1's are.
+    pub const TERMS: u8 = 3;
     /// Epoch/book-domain account.
     pub const EPOCH: u8 = 2;
     /// Frozen price-grid account.
@@ -475,7 +512,9 @@ pub mod account_version {
 
 /// Account discriminator and exact fixed byte lengths.
 pub mod account_len {
-    use super::{MAX_GRID_TICKS, MAX_ORDERS_PER_PAGE, MAX_OUTCOMES, MAX_PAYOUTS, ORDER_SLOT_BYTES};
+    use super::{
+        MAX_GRID_TICKS, MAX_KNOTS, MAX_ORDERS_PER_PAGE, MAX_OUTCOMES, MAX_PAYOUTS, ORDER_SLOT_BYTES,
+    };
 
     /// Realm account bytes.
     pub const REALM: usize = 2 + 32 + 32 + 1 + 1 + 1 + 1;
@@ -495,6 +534,15 @@ pub mod account_len {
     /// Supply ledger account bytes.
     pub const SUPPLY_LEDGER: usize = 2 + 32 + 32 + 8 + 1 + (2 * MAX_OUTCOMES * 8) + 1 + 1;
     /// Immutable terms account bytes.
+    ///
+    /// The v3 body appends, after the v2 window-policy fields: statistic id
+    /// (2), ambiguity/edge policy ids (1 + 1), basis degree (1), knot count
+    /// (1), uniform-spacing declaration (1), failure payout index (1), one
+    /// reserved zero byte, coverage-policy parameter (8), repair generation
+    /// (8), source and evaluator versions (4 + 4), source-adapter identity
+    /// (32), the degree-0 payout map (16), the knot vector (16 × 16), the
+    /// per-market collateral cap (8), and seven reserved zero bytes — 352 new
+    /// bytes, taking the account from 1,304 to 1,656.
     pub const TERMS: usize = 2
         + (5 * 32)
         + 1
@@ -509,6 +557,23 @@ pub mod account_len {
         + 4
         + 4
         + 4
+        + 2
+        + 1
+        + 1
+        + 1
+        + 1
+        + 1
+        + 1
+        + 1
+        + 8
+        + 8
+        + 4
+        + 4
+        + 32
+        + MAX_OUTCOMES
+        + (MAX_KNOTS * 16)
+        + 8
+        + 7
         + 1
         + 1;
     /// Frozen price-grid account bytes.
@@ -2226,6 +2291,68 @@ pub struct TermsAccount {
     pub repair_policy_id: u32,
     /// Registered failure-policy identity; zero is refused.
     pub failure_policy_id: u32,
+    /// Registered statistic identity; zero is refused.
+    ///
+    /// The registry itself (which ids exist, and which are admissible per
+    /// degree) is owned by the resolution derivation in
+    /// `clutch-solana-reference`; this codec owns only "a statistic was
+    /// named".
+    pub statistic_id: u16,
+    /// Registered ambiguity-policy identity; zero is refused.
+    pub ambiguity_policy_id: u8,
+    /// Registered edge-policy identity; zero is refused.
+    pub edge_policy_id: u8,
+    /// B-spline basis degree, in `0..=MAX_BASIS_DEGREE`.
+    ///
+    /// Degree 0 is the boundary-table market: the knots are interior cell
+    /// boundaries and [`TermsAccount::payout_map`] is live.  Degree ≥ 1 is a
+    /// derived-basis market: the knots are claim anchors and the payout map
+    /// must be entirely [`PAYOUT_MAP_UNUSED`].
+    pub basis_degree: u8,
+    /// Active knot count `K`; per-degree count rule against `outcome_count`.
+    ///
+    /// `n = K + 1` at degree 0, `n = K` at degree 1, `n = K − 1 + d` at
+    /// degrees 2 and 3 (`DISTRIBUTIONAL_CLAIMS_DESIGN.md` §2.1).
+    pub knot_count: u8,
+    /// Uniform-spacing declaration: `s` when every active knot gap is `2^s`,
+    /// or [`UNIFORM_SPACING_NONE`].
+    ///
+    /// The knot array is always the single semantic owner; this field is a
+    /// validated promise checked against the array, never a second truth.
+    /// Degrees ≥ 2 require a uniform declaration.
+    pub uniform_log2_spacing: u8,
+    /// Preset index of the frozen failure-refund vector; `< payout_count`.
+    pub failure_payout_index: u8,
+    /// Registered coverage-policy parameter (bounded-gaps bound).
+    ///
+    /// The coverage registry in `clutch-accumulator` owns its meaning and its
+    /// per-policy domain; `COMPLETE_REQUIRED` requires zero.
+    pub coverage_policy_parameter: u64,
+    /// Repair generation pinned under `GEN-EXACT-01`.
+    pub repair_generation: u64,
+    /// Source-adapter version the window identity must carry; zero is refused.
+    pub source_version: u32,
+    /// Statistic-evaluator version the window identity must carry; zero is
+    /// refused.
+    pub evaluator_version: u32,
+    /// Source-adapter identity; replaces the v2 "feed doubles as both" pin.
+    pub source_adapter_id: Hash32,
+    /// Degree-0 cell-to-preset map; entries at `>= outcome_count` are
+    /// [`PAYOUT_MAP_UNUSED`], and every entry is unused for degree ≥ 1.
+    pub payout_map: [u8; MAX_OUTCOMES],
+    /// Knot vector: strictly increasing active prefix, zero padding.
+    pub knots: [u128; MAX_KNOTS],
+    /// Per-market collateral cap, in collateral atoms; zero is refused.
+    ///
+    /// This is the immutable cap `MarketAccount::collateral_cap` is founded
+    /// from and checked against — the terms field the collateral-cap finding
+    /// of `RESOLUTION_EVIDENCE_PLAN.md` §3.5 demanded.  **Zero refuses at
+    /// decode**, which makes "cap 0 refuses at market init" structural: a
+    /// terms artifact that made no cap decision cannot exist, so no market
+    /// can be founded unfundable-forever.  "Unlimited" must be said out loud
+    /// as an explicit large cap, and `collateral::check_market_cap` still
+    /// refutes any cap above the Realm's admitted mint ceiling.
+    pub collateral_cap: u64,
     /// Stored PDA bump; outside the digest.
     pub stored_bump: u8,
     /// Reserved flags; currently zero, and outside the digest.
@@ -2256,12 +2383,37 @@ impl TermsAccount {
         w.u32(self.coverage_policy_id)?;
         w.u32(self.repair_policy_id)?;
         w.u32(self.failure_policy_id)?;
+        w.u16(self.statistic_id)?;
+        w.u8(self.ambiguity_policy_id)?;
+        w.u8(self.edge_policy_id)?;
+        w.u8(self.basis_degree)?;
+        w.u8(self.knot_count)?;
+        w.u8(self.uniform_log2_spacing)?;
+        w.u8(self.failure_payout_index)?;
+        w.u8(0)?;
+        w.u64(self.coverage_policy_parameter)?;
+        w.u64(self.repair_generation)?;
+        w.u32(self.source_version)?;
+        w.u32(self.evaluator_version)?;
+        w.hash(self.source_adapter_id)?;
+        w.bytes(&self.payout_map)?;
+        let mut i = 0;
+        while i < MAX_KNOTS {
+            w.u128(self.knots[i])?;
+            i += 1;
+        }
+        w.u64(self.collateral_cap)?;
+        w.bytes(&[0; 7])?;
         if w.at != TERMS_BODY_BYTES {
             return Err(CodecError::OutputTooSmall);
         }
         Ok(())
     }
     /// Recompute the terms digest from the current field values.
+    ///
+    /// `#[inline(never)]` so the body buffer lives in exactly one frame on
+    /// the SBF target; see the frame notes in `clutch-sbf`'s modules.
+    #[inline(never)]
     pub fn recomputed_terms_digest(&self) -> Result<Hash32> {
         let mut body = [0; TERMS_BODY_BYTES];
         self.body(&mut body)?;
@@ -2275,6 +2427,14 @@ impl TermsAccount {
     }
     /// Validate the payout set, the window policy, and the self-certifying digest.
     pub fn validate(&self) -> Result<()> {
+        self.validate_prehashed()?;
+        if self.terms != self.recomputed_terms_digest()? {
+            return Err(CodecError::NonCanonicalIdentity);
+        }
+        Ok(())
+    }
+    /// Every [`TermsAccount::validate`] check except the digest recomputation.
+    fn validate_prehashed(&self) -> Result<()> {
         check_hash(self.realm)?;
         check_hash(self.profile)?;
         check_hash(self.feed)?;
@@ -2317,15 +2477,148 @@ impl TermsAccount {
         {
             return Err(CodecError::ZeroValue);
         }
-        if self.terms != self.recomputed_terms_digest()? {
-            return Err(CodecError::NonCanonicalIdentity);
+        /* The v3 resolution-basis fields.  This codec owns byte shape only:
+         * strictly increasing knots, per-degree count and payout-map liveness
+         * rules, a truthful uniform-spacing declaration, canonical padding,
+         * and the freeze-time arithmetic bound.  Which policy/statistic ids
+         * are registered — and that degrees 2 and 3 are unimplemented — is
+         * the resolution derivation's charter in `clutch-solana-reference`. */
+        if self.statistic_id == 0
+            || self.ambiguity_policy_id == 0
+            || self.edge_policy_id == 0
+            || self.source_version == 0
+            || self.evaluator_version == 0
+        {
+            return Err(CodecError::ZeroValue);
+        }
+        check_hash(self.source_adapter_id)?;
+        if self.basis_degree > MAX_BASIS_DEGREE {
+            return Err(CodecError::InvalidEnum);
+        }
+        let claims = self.outcome_count as usize;
+        let knots = self.knot_count as usize;
+        // §2.1 count rule: n = K + 1 (deg 0), n = K (deg 1), n = K − 1 + d.
+        let expected_knots = match self.basis_degree {
+            0 => claims - 1,
+            1 => claims,
+            degree => claims + 1 - degree as usize,
+        };
+        if knots != expected_knots || knots == 0 || knots > MAX_KNOTS {
+            return Err(CodecError::InvalidCount);
+        }
+        // Degree ≥ 1 evaluation needs at least one pane.
+        if self.basis_degree >= 1 && knots < 2 {
+            return Err(CodecError::InvalidCount);
+        }
+        // Strictly increasing active prefix; a degree-0 first boundary must be
+        // nonzero (an empty first cell would mint a liability that cannot
+        // pay); zero canonical padding beyond the prefix.
+        let mut largest_gap: u128 = 0;
+        let mut previous: u128 = 0;
+        let mut i = 0;
+        while i < MAX_KNOTS {
+            let knot = self.knots[i];
+            if i < knots {
+                if i == 0 {
+                    if self.basis_degree == 0 && knot == 0 {
+                        return Err(CodecError::ZeroValue);
+                    }
+                } else {
+                    if knot <= previous {
+                        return Err(CodecError::InvalidCount);
+                    }
+                    let gap = knot - previous;
+                    if gap > largest_gap {
+                        largest_gap = gap;
+                    }
+                }
+                previous = knot;
+            } else if knot != 0 {
+                return Err(CodecError::NonCanonicalPadding);
+            }
+            i += 1;
+        }
+        // The uniform declaration is a validated promise about the array,
+        // never a second truth; degrees ≥ 2 must declare uniform spacing.
+        if self.uniform_log2_spacing == UNIFORM_SPACING_NONE {
+            if self.basis_degree >= 2 {
+                return Err(CodecError::InvalidEnum);
+            }
+        } else {
+            if self.uniform_log2_spacing >= 128 {
+                return Err(CodecError::InvalidEnum);
+            }
+            let gap: u128 = 1 << self.uniform_log2_spacing;
+            let mut i = 1;
+            while i < knots {
+                if self.knots[i] - self.knots[i - 1] != gap {
+                    return Err(CodecError::InvalidEnum);
+                }
+                i += 1;
+            }
+        }
+        if self.failure_payout_index >= self.payout_count {
+            return Err(CodecError::InvalidCount);
+        }
+        // Payout-map liveness per degree: live and bounded for degree 0,
+        // entirely unused for derived-basis markets (they have no map).
+        let mut i = 0;
+        while i < MAX_OUTCOMES {
+            let entry = self.payout_map[i];
+            if self.basis_degree == 0 && i < claims {
+                if entry >= self.payout_count {
+                    return Err(CodecError::InvalidCount);
+                }
+            } else if entry != PAYOUT_MAP_UNUSED {
+                return Err(CodecError::NonCanonicalPadding);
+            }
+            i += 1;
+        }
+        if self.collateral_cap == 0 {
+            // The cap decision is mandatory: see the field's documentation.
+            return Err(CodecError::ZeroValue);
+        }
+        // Freeze-time arithmetic bound (DISTRIBUTIONAL_CLAIMS_DESIGN.md §2.5):
+        // every checked product the weight derivation can form must fit below
+        // 2^127, proved here once so the runtime refusal is defense in depth.
+        if self.basis_degree >= 1 {
+            let d = u128::from(denominator);
+            let operand = match self.basis_degree {
+                1 => largest_gap - 1,
+                degree => {
+                    // Uniform spacing is mandatory here, so the gap is 2^s.
+                    let h: u128 = 1 << self.uniform_log2_spacing;
+                    let h_squared = h.checked_mul(h).ok_or(CodecError::ArithmeticOverflow)?;
+                    if degree == 2 {
+                        h_squared
+                            .checked_mul(2)
+                            .ok_or(CodecError::ArithmeticOverflow)?
+                    } else {
+                        h_squared
+                            .checked_mul(h)
+                            .ok_or(CodecError::ArithmeticOverflow)?
+                            .checked_mul(6)
+                            .ok_or(CodecError::ArithmeticOverflow)?
+                    }
+                }
+            };
+            let product = d
+                .checked_mul(operand)
+                .ok_or(CodecError::ArithmeticOverflow)?;
+            if product >> 127 != 0 {
+                return Err(CodecError::ArithmeticOverflow);
+            }
         }
         Ok(())
     }
-    /// Check that a market's committed terms digest is exactly these terms.
-    pub fn binds_market(&self, market: &MarketAccount) -> Result<()> {
-        self.validate()?;
-        market.validate()?;
+    /// The binding comparisons of [`TermsAccount::binds_market`] alone.
+    ///
+    /// For a caller that has already run both accounts' full validation once
+    /// in the same atomic context (the terms artifact is presented read-only,
+    /// so its bytes cannot move within a transaction) and must not pay the
+    /// digest recomputation again.  The comparisons, and the refusal class,
+    /// are exactly [`TermsAccount::binds_market`]'s.
+    pub fn binds_market_fields(&self, market: &MarketAccount) -> Result<()> {
         if market.terms != self.terms
             || market.realm != self.realm
             || market.profile != self.profile
@@ -2335,6 +2628,12 @@ impl TermsAccount {
             return Err(CodecError::MismatchedBinding);
         }
         Ok(())
+    }
+    /// Check that a market's committed terms digest is exactly these terms.
+    pub fn binds_market(&self, market: &MarketAccount) -> Result<()> {
+        self.validate()?;
+        market.validate()?;
+        self.binds_market_fields(market)
     }
     /// Encode exactly [`account_len::TERMS`] bytes.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
@@ -2352,49 +2651,139 @@ impl TermsAccount {
         w.u8(self.flags)?;
         Ok(w.at)
     }
+    /// The all-zero placeholder every `*_into` decode overwrites completely.
+    ///
+    /// Not a valid account (`validate` refuses it); it exists so a decode can
+    /// initialize a caller slot without a second account-sized temporary.
+    pub const ZEROED: Self = Self {
+        terms: Hash32::ZERO,
+        realm: Hash32::ZERO,
+        profile: Hash32::ZERO,
+        feed: Hash32::ZERO,
+        price_grid: Hash32::ZERO,
+        outcome_count: 0,
+        payout_count: 0,
+        payouts: [PayoutVectorBytes::ZERO; MAX_PAYOUTS],
+        grid_family_id: 0,
+        grid_version: 0,
+        bucket_seconds: 0,
+        expected_start_bucket: 0,
+        expected_end_bucket_exclusive: 0,
+        maturity_horizon_buckets: 0,
+        coverage_policy_id: 0,
+        repair_policy_id: 0,
+        failure_policy_id: 0,
+        statistic_id: 0,
+        ambiguity_policy_id: 0,
+        edge_policy_id: 0,
+        basis_degree: 0,
+        knot_count: 0,
+        uniform_log2_spacing: 0,
+        failure_payout_index: 0,
+        coverage_policy_parameter: 0,
+        repair_generation: 0,
+        source_version: 0,
+        evaluator_version: 0,
+        source_adapter_id: Hash32::ZERO,
+        payout_map: [0; MAX_OUTCOMES],
+        knots: [0; MAX_KNOTS],
+        collateral_cap: 0,
+        stored_bump: 0,
+        flags: 0,
+    };
     /// Parse exactly [`account_len::TERMS`] bytes.
     pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut v = Self::ZEROED;
+        Self::decode_into(input, &mut v)?;
+        Ok(v)
+    }
+    /// [`TermsAccount::decode`] into a caller-owned slot.
+    ///
+    /// The account is over 1.6 KiB; on a 4 KiB-frame target a by-value decode
+    /// costs the caller two account-sized copies, and this entry point costs
+    /// none — the parse writes fields directly into `out`.  On error `out`
+    /// holds an unspecified partial parse and must not be read.
+    pub fn decode_into(input: &[u8], out: &mut Self) -> Result<()> {
+        Self::parse_into(input, out)?;
+        out.validate()
+    }
+    /// Parse exactly [`account_len::TERMS`] bytes **without recomputing the
+    /// self-certifying digest**.
+    ///
+    /// Every check of [`TermsAccount::decode`] runs except the SHA-256 over
+    /// the 1,620-byte body, which dominates the decode's cost.  Sound only
+    /// over bytes that already passed [`TermsAccount::decode`] once in the
+    /// same atomic context — for an on-chain gate, the same transaction, with
+    /// the terms account presented read-only so the runtime forbids its bytes
+    /// from moving between the two reads.  A caller that has not paid the
+    /// full decode once holds unproven bytes: the stored `terms` field is
+    /// then a claim, not an identity.
+    pub fn decode_unchecked(input: &[u8]) -> Result<Self> {
+        let mut v = Self::ZEROED;
+        Self::decode_unchecked_into(input, &mut v)?;
+        Ok(v)
+    }
+    /// [`TermsAccount::decode_unchecked`] into a caller-owned slot; the frame
+    /// and error contracts of [`TermsAccount::decode_into`] apply.
+    pub fn decode_unchecked_into(input: &[u8], out: &mut Self) -> Result<()> {
+        Self::parse_into(input, out)?;
+        out.validate_prehashed()
+    }
+    fn parse_into(input: &[u8], out: &mut Self) -> Result<()> {
         let mut r = Reader::new(input, TERMS_TAG, account_version::TERMS, account_len::TERMS)?;
-        let terms = r.hash()?;
-        let realm = r.hash()?;
-        let profile = r.hash()?;
-        let feed = r.hash()?;
-        let price_grid = r.hash()?;
-        let outcome_count = r.u8()?;
-        let payout_count = r.u8()?;
-        let mut payouts = [PayoutVectorBytes::ZERO; MAX_PAYOUTS];
+        out.terms = r.hash()?;
+        out.realm = r.hash()?;
+        out.profile = r.hash()?;
+        out.feed = r.hash()?;
+        out.price_grid = r.hash()?;
+        out.outcome_count = r.u8()?;
+        out.payout_count = r.u8()?;
         let mut i = 0;
         while i < MAX_PAYOUTS {
-            payouts[i] = PayoutVectorBytes {
+            out.payouts[i] = PayoutVectorBytes {
                 denominator: r.u64()?,
                 weights: r.amounts()?,
             };
             i += 1;
         }
-        let v = Self {
-            terms,
-            realm,
-            profile,
-            feed,
-            price_grid,
-            outcome_count,
-            payout_count,
-            payouts,
-            grid_family_id: r.u32()?,
-            grid_version: r.u16()?,
-            bucket_seconds: r.u64()?,
-            expected_start_bucket: r.u64()?,
-            expected_end_bucket_exclusive: r.u64()?,
-            maturity_horizon_buckets: r.u64()?,
-            coverage_policy_id: r.u32()?,
-            repair_policy_id: r.u32()?,
-            failure_policy_id: r.u32()?,
-            stored_bump: r.u8()?,
-            flags: r.u8()?,
-        };
-        r.done()?;
-        v.validate()?;
-        Ok(v)
+        out.grid_family_id = r.u32()?;
+        out.grid_version = r.u16()?;
+        out.bucket_seconds = r.u64()?;
+        out.expected_start_bucket = r.u64()?;
+        out.expected_end_bucket_exclusive = r.u64()?;
+        out.maturity_horizon_buckets = r.u64()?;
+        out.coverage_policy_id = r.u32()?;
+        out.repair_policy_id = r.u32()?;
+        out.failure_policy_id = r.u32()?;
+        out.statistic_id = r.u16()?;
+        out.ambiguity_policy_id = r.u8()?;
+        out.edge_policy_id = r.u8()?;
+        out.basis_degree = r.u8()?;
+        out.knot_count = r.u8()?;
+        out.uniform_log2_spacing = r.u8()?;
+        out.failure_payout_index = r.u8()?;
+        if r.u8()? != 0 {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        out.coverage_policy_parameter = r.u64()?;
+        out.repair_generation = r.u64()?;
+        out.source_version = r.u32()?;
+        out.evaluator_version = r.u32()?;
+        out.source_adapter_id = r.hash()?;
+        out.payout_map = r.bytes::<{ MAX_OUTCOMES }>()?;
+        let mut i = 0;
+        while i < MAX_KNOTS {
+            out.knots[i] = r.u128()?;
+            i += 1;
+        }
+        out.collateral_cap = r.u64()?;
+        let reserved = r.bytes::<7>()?;
+        if reserved != [0; 7] {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        out.stored_bump = r.u8()?;
+        out.flags = r.u8()?;
+        r.done()
     }
 }
 
@@ -3343,10 +3732,13 @@ impl ResolutionAccount {
         }
         Ok(())
     }
-    /// Check the resolution against the immutable terms it selects from.
-    pub fn binds_terms(&self, terms: &TermsAccount) -> Result<()> {
-        self.validate()?;
-        terms.validate()?;
+    /// The binding comparisons of [`ResolutionAccount::binds_terms`] alone.
+    ///
+    /// For a caller that has already fully validated both accounts once in
+    /// the same atomic context and must not pay the terms digest
+    /// recomputation again; the comparisons and the refusal classes are
+    /// exactly [`ResolutionAccount::binds_terms`]'s.
+    pub fn binds_terms_fields(&self, terms: &TermsAccount) -> Result<()> {
         if self.terms != terms.terms || self.feed != terms.feed {
             return Err(CodecError::MismatchedBinding);
         }
@@ -3354,12 +3746,22 @@ impl ResolutionAccount {
             if self.payout_index >= terms.payout_count {
                 return Err(CodecError::InvalidCount);
             }
-            // Resolution may not precede the frozen expected range's end.
             if self.sealed_end_bucket_exclusive < terms.expected_end_bucket_exclusive {
                 return Err(CodecError::MismatchedBinding);
             }
         }
         Ok(())
+    }
+    /// Check the resolution against the immutable terms it selects from.
+    ///
+    /// The comparisons — including the rule that a resolution may not precede
+    /// the frozen expected range's end — live in
+    /// [`ResolutionAccount::binds_terms_fields`], so the two entry points
+    /// cannot drift.
+    pub fn binds_terms(&self, terms: &TermsAccount) -> Result<()> {
+        self.validate()?;
+        terms.validate()?;
+        self.binds_terms_fields(terms)
     }
     /// Encode exactly [`account_len::RESOLUTION`] bytes.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
@@ -4000,6 +4402,22 @@ mod tests {
             denominator: 4,
             weights: third,
         };
+        /* A 16-cell degree-0 boundary table: 15 strictly increasing interior
+         * boundaries, deliberately non-uniform so the uniform declaration
+         * stays the 0xFF sentinel, and a live payout map folding the 16 cells
+         * onto the 3 payout vectors. */
+        let mut knots = [0u128; MAX_KNOTS];
+        let mut payout_map = [PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
+        let mut i = 0;
+        while i < MAX_OUTCOMES - 1 {
+            knots[i] = (10 * (i as u128 + 1)) + i as u128;
+            i += 1;
+        }
+        i = 0;
+        while i < MAX_OUTCOMES {
+            payout_map[i] = (i % 3) as u8;
+            i += 1;
+        }
         let mut t = TermsAccount {
             terms: Hash32::ZERO,
             realm: h(2),
@@ -4018,6 +4436,21 @@ mod tests {
             coverage_policy_id: 11,
             repair_policy_id: 12,
             failure_policy_id: 13,
+            statistic_id: 1,
+            ambiguity_policy_id: 1,
+            edge_policy_id: 1,
+            basis_degree: 0,
+            knot_count: (MAX_OUTCOMES - 1) as u8,
+            uniform_log2_spacing: UNIFORM_SPACING_NONE,
+            failure_payout_index: 2,
+            coverage_policy_parameter: 0,
+            repair_generation: 5,
+            source_version: 1,
+            evaluator_version: 1,
+            source_adapter_id: h(6),
+            payout_map,
+            knots,
+            collateral_cap: 1_000_000,
             stored_bump: 9,
             flags: 0,
         };
@@ -4300,7 +4733,7 @@ mod tests {
         assert_eq!(account_len::FEED, 124);
         assert_eq!(account_len::ORDER_PAGE, 3883);
         assert_eq!(account_len::SUPPLY_LEDGER, 333);
-        assert_eq!(account_len::TERMS, 1304);
+        assert_eq!(account_len::TERMS, 1656);
         assert_eq!(account_len::PRICE_GRID, 589);
         assert_eq!(account_len::EPOCH, 328);
         assert_eq!(account_len::CANDIDATE, 305);
@@ -4795,6 +5228,323 @@ mod tests {
         boundary.bucket_seconds = MAX_BUCKET_SECONDS;
         boundary.terms = boundary.recomputed_terms_digest().unwrap();
         assert_eq!(boundary.validate(), Ok(()));
+    }
+    /// A valid degree-1 (hat-basis) terms fixture: two outcomes anchored on
+    /// two knots with a power-of-two gap, no payout map, D from the set.
+    fn derived_terms() -> TermsAccount {
+        let mut payouts = [PayoutVectorBytes::ZERO; MAX_PAYOUTS];
+        let mut left = [0; MAX_OUTCOMES];
+        left[0] = 8;
+        let mut right = [0; MAX_OUTCOMES];
+        right[1] = 8;
+        payouts[0] = PayoutVectorBytes {
+            denominator: 8,
+            weights: left,
+        };
+        payouts[1] = PayoutVectorBytes {
+            denominator: 8,
+            weights: right,
+        };
+        let mut knots = [0u128; MAX_KNOTS];
+        knots[0] = 100;
+        knots[1] = 100 + (1 << 4);
+        let mut t = terms();
+        t.outcome_count = 2;
+        t.payout_count = 2;
+        t.payouts = payouts;
+        t.basis_degree = 1;
+        t.knot_count = 2;
+        t.uniform_log2_spacing = 4;
+        t.failure_payout_index = 0;
+        t.payout_map = [PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
+        t.knots = knots;
+        t.terms = t.recomputed_terms_digest().unwrap();
+        t
+    }
+    #[test]
+    fn terms_v2_bytes_and_wrong_versions_refuse() {
+        /* The crate's version discipline: exactly account_version::TERMS is
+         * admitted, so superseded v2 bytes (and the prototype v1's) refuse as
+         * WrongVersion before any field is read. */
+        let t = terms();
+        let mut bytes = [0; account_len::TERMS];
+        t.encode(&mut bytes).unwrap();
+        for version in [1, 2, account_version::TERMS + 1] {
+            let mut wrong = bytes;
+            wrong[1] = version;
+            assert_eq!(TermsAccount::decode(&wrong), Err(CodecError::WrongVersion));
+            assert_eq!(
+                TermsAccount::decode_unchecked(&wrong),
+                Err(CodecError::WrongVersion)
+            );
+        }
+        /* And a v2-length blob is refused by exact length, whatever it says. */
+        assert_eq!(
+            TermsAccount::decode(&bytes[..1304]),
+            Err(CodecError::Truncated)
+        );
+    }
+    #[test]
+    fn decode_unchecked_skips_exactly_the_digest_and_nothing_else() {
+        let t = terms();
+        let mut bytes = [0; account_len::TERMS];
+        t.encode(&mut bytes).unwrap();
+        assert_eq!(TermsAccount::decode_unchecked(&bytes), Ok(t));
+
+        /* A bit-flipped stored digest: the full decode refuses, the unchecked
+         * parse admits — which is exactly why it is sound only over bytes
+         * that already passed the full decode once in the same transaction. */
+        let mut flipped = bytes;
+        flipped[2] ^= 0x01;
+        assert_eq!(
+            TermsAccount::decode(&flipped),
+            Err(CodecError::NonCanonicalIdentity)
+        );
+        let lying = TermsAccount::decode_unchecked(&flipped).unwrap();
+        assert_ne!(lying.terms, t.terms);
+
+        /* Every non-digest fault still refuses through the unchecked path:
+         * one representative, patched at the byte level because encode()
+         * validates and will not produce hostile bytes. */
+        let mut degree_bytes = bytes;
+        degree_bytes[terms_field_offset_basis_degree()] = MAX_BASIS_DEGREE + 1;
+        assert_eq!(
+            TermsAccount::decode_unchecked(&degree_bytes),
+            Err(CodecError::InvalidEnum)
+        );
+    }
+    /// Byte offset of `basis_degree` inside an encoded terms account.
+    fn terms_field_offset_basis_degree() -> usize {
+        /* header(2) + terms(32) + realm/profile/feed/price_grid(4*32) +
+         * outcome_count(1) + payout_count(1) + payouts(8*136) + grid(4+2) +
+         * buckets(8*4) + policies(4*3) + statistic(2) + ambiguity(1) +
+         * edge(1) */
+        2 + 32
+            + (4 * 32)
+            + 1
+            + 1
+            + (MAX_PAYOUTS * (8 + MAX_OUTCOMES * 8))
+            + 4
+            + 2
+            + (8 * 4)
+            + (4 * 3)
+            + 2
+            + 1
+            + 1
+    }
+    #[test]
+    fn terms_refuse_malformed_basis_shapes() {
+        let base = terms();
+
+        /* Degree out of range. */
+        let mut degree = base;
+        degree.basis_degree = MAX_BASIS_DEGREE + 1;
+        degree.terms = degree.recomputed_terms_digest().unwrap();
+        assert_eq!(degree.validate(), Err(CodecError::InvalidEnum));
+
+        /* Count rule per degree: a degree-0 table needs exactly n − 1 knots,
+         * a degree-1 basis exactly n. */
+        let mut short = base;
+        short.knot_count -= 1;
+        short.knots[MAX_OUTCOMES - 2] = 0;
+        short.terms = short.recomputed_terms_digest().unwrap();
+        assert_eq!(short.validate(), Err(CodecError::InvalidCount));
+        let mut miscounted = derived_terms();
+        miscounted.knot_count = 3;
+        miscounted.knots[2] = miscounted.knots[1] + (1 << 4);
+        miscounted.terms = miscounted.recomputed_terms_digest().unwrap();
+        assert_eq!(miscounted.validate(), Err(CodecError::InvalidCount));
+
+        /* Non-monotone knots. */
+        let mut flat = base;
+        flat.knots[3] = flat.knots[2];
+        flat.terms = flat.recomputed_terms_digest().unwrap();
+        assert_eq!(flat.validate(), Err(CodecError::InvalidCount));
+        let mut reversed = base;
+        reversed.knots[3] = reversed.knots[2] - 1;
+        reversed.terms = reversed.recomputed_terms_digest().unwrap();
+        assert_eq!(reversed.validate(), Err(CodecError::InvalidCount));
+
+        /* A zero first boundary at degree 0 mints an empty first cell. */
+        let mut hollow = derived_terms();
+        hollow.knots[0] = 0;
+        hollow.knots[1] = 1 << 4;
+        hollow.terms = hollow.recomputed_terms_digest().unwrap();
+        /* ...but a zero first *anchor* at degree 1 is admitted: the domain
+         * starts at zero. */
+        assert_eq!(hollow.validate(), Ok(()));
+        let mut empty_cell = base;
+        let mut i = 0;
+        while i < usize::from(empty_cell.knot_count) {
+            empty_cell.knots[i] = i as u128;
+            i += 1;
+        }
+        empty_cell.terms = empty_cell.recomputed_terms_digest().unwrap();
+        assert_eq!(empty_cell.validate(), Err(CodecError::ZeroValue));
+
+        /* Live knot padding refuses. */
+        let mut padded = base;
+        padded.knots[MAX_KNOTS - 1] = u128::MAX;
+        padded.terms = padded.recomputed_terms_digest().unwrap();
+        assert_eq!(padded.validate(), Err(CodecError::NonCanonicalPadding));
+    }
+    #[test]
+    fn terms_refuse_a_lying_uniform_spacing_declaration() {
+        /* The fixture's gaps are 11 apart — not a power of two — so any
+         * numeric declaration is a lie the array refutes. */
+        let mut lying = terms();
+        lying.uniform_log2_spacing = 3;
+        lying.terms = lying.recomputed_terms_digest().unwrap();
+        assert_eq!(lying.validate(), Err(CodecError::InvalidEnum));
+
+        let mut overshift = derived_terms();
+        overshift.uniform_log2_spacing = 128;
+        overshift.terms = overshift.recomputed_terms_digest().unwrap();
+        assert_eq!(overshift.validate(), Err(CodecError::InvalidEnum));
+
+        /* The truthful declaration on a truly uniform grid is admitted, and
+         * the sentinel is admitted for degrees ≤ 1. */
+        assert_eq!(derived_terms().validate(), Ok(()));
+        let mut sentinel = derived_terms();
+        sentinel.uniform_log2_spacing = UNIFORM_SPACING_NONE;
+        sentinel.terms = sentinel.recomputed_terms_digest().unwrap();
+        assert_eq!(sentinel.validate(), Ok(()));
+    }
+    #[test]
+    fn terms_payout_map_liveness_is_per_degree() {
+        /* Degree 0: a live entry must stay inside the payout set... */
+        let mut out_of_set = terms();
+        out_of_set.payout_map[4] = out_of_set.payout_count;
+        out_of_set.terms = out_of_set.recomputed_terms_digest().unwrap();
+        assert_eq!(out_of_set.validate(), Err(CodecError::InvalidCount));
+        /* ...and entries beyond the active cells must be unused.  The
+         * fixture's 16 cells leave no padding, so shrink to expose some. */
+        let mut trailing = terms();
+        trailing.outcome_count = 4;
+        trailing.knot_count = 3;
+        let mut i = 3;
+        while i < MAX_KNOTS {
+            trailing.knots[i] = 0;
+            i += 1;
+        }
+        /* payout_map[4..] still live from the fixture. */
+        trailing.terms = trailing.recomputed_terms_digest().unwrap();
+        assert_eq!(trailing.validate(), Err(CodecError::NonCanonicalPadding));
+
+        /* Degree ≥ 1: derived mode has no map at all. */
+        let mut mapped = derived_terms();
+        mapped.payout_map[0] = 0;
+        mapped.terms = mapped.recomputed_terms_digest().unwrap();
+        assert_eq!(mapped.validate(), Err(CodecError::NonCanonicalPadding));
+    }
+    #[test]
+    fn terms_refuse_an_undecided_collateral_cap_and_unnamed_identities() {
+        /* Cap zero is not "unlimited" and not "decide later": it refuses at
+         * decode, which is what makes "cap 0 refuses at market init"
+         * structural — an unfundable-forever market cannot be founded because
+         * its terms cannot exist. */
+        let mut undecided = terms();
+        undecided.collateral_cap = 0;
+        undecided.terms = undecided.recomputed_terms_digest().unwrap();
+        assert_eq!(undecided.validate(), Err(CodecError::ZeroValue));
+
+        let mut unnamed = terms();
+        unnamed.statistic_id = 0;
+        unnamed.terms = unnamed.recomputed_terms_digest().unwrap();
+        assert_eq!(unnamed.validate(), Err(CodecError::ZeroValue));
+
+        let mut no_ambiguity = terms();
+        no_ambiguity.ambiguity_policy_id = 0;
+        no_ambiguity.terms = no_ambiguity.recomputed_terms_digest().unwrap();
+        assert_eq!(no_ambiguity.validate(), Err(CodecError::ZeroValue));
+
+        let mut no_edge = terms();
+        no_edge.edge_policy_id = 0;
+        no_edge.terms = no_edge.recomputed_terms_digest().unwrap();
+        assert_eq!(no_edge.validate(), Err(CodecError::ZeroValue));
+
+        let mut unversioned = terms();
+        unversioned.source_version = 0;
+        unversioned.terms = unversioned.recomputed_terms_digest().unwrap();
+        assert_eq!(unversioned.validate(), Err(CodecError::ZeroValue));
+
+        let mut anonymous = terms();
+        anonymous.source_adapter_id = Hash32::ZERO;
+        anonymous.terms = anonymous.recomputed_terms_digest().unwrap();
+        assert_eq!(anonymous.validate(), Err(CodecError::ZeroIdentity));
+
+        let mut refundless = terms();
+        refundless.failure_payout_index = refundless.payout_count;
+        refundless.terms = refundless.recomputed_terms_digest().unwrap();
+        assert_eq!(refundless.validate(), Err(CodecError::InvalidCount));
+    }
+    #[test]
+    fn terms_freeze_time_bound_refuses_an_unprovable_weight_derivation() {
+        /* D · (g_max − 1) must stay below 2^127 (design §2.5).  A gap wide
+         * enough to breach it with an 8-atom denominator refuses at decode,
+         * so the runtime overflow refusal is defense in depth. */
+        let mut wide = derived_terms();
+        wide.uniform_log2_spacing = 126;
+        wide.knots[0] = 0;
+        wide.knots[1] = 1 << 126;
+        wide.terms = wide.recomputed_terms_digest().unwrap();
+        assert_eq!(wide.validate(), Err(CodecError::ArithmeticOverflow));
+
+        /* Just inside the bound is admitted: D = 8 = 2^3, gap = 2^123. */
+        let mut inside = derived_terms();
+        inside.uniform_log2_spacing = 123;
+        inside.knots[0] = 0;
+        inside.knots[1] = 1 << 123;
+        inside.terms = inside.recomputed_terms_digest().unwrap();
+        assert_eq!(inside.validate(), Ok(()));
+    }
+    #[test]
+    fn terms_reserved_bytes_must_be_zero() {
+        let t = terms();
+        let mut bytes = [0; account_len::TERMS];
+        t.encode(&mut bytes).unwrap();
+        /* The mid reserved byte sits right after failure_payout_index. */
+        let mid = terms_field_offset_basis_degree() + 4;
+        assert_eq!(bytes[mid], 0);
+        let mut poked = bytes;
+        poked[mid] = 1;
+        assert_eq!(
+            TermsAccount::decode(&poked),
+            Err(CodecError::NonCanonicalPadding)
+        );
+        /* And the trailing seven, just before stored_bump and flags. */
+        let tail = account_len::TERMS - 2 - 7;
+        let mut tailed = bytes;
+        tailed[tail] = 1;
+        assert_eq!(
+            TermsAccount::decode(&tailed),
+            Err(CodecError::NonCanonicalPadding)
+        );
+    }
+    #[test]
+    fn every_new_terms_field_is_inside_the_digest() {
+        let t = terms();
+        let mut statistic = t;
+        statistic.statistic_id = 2;
+        assert_ne!(statistic.recomputed_terms_digest().unwrap(), t.terms);
+        let mut cap = t;
+        cap.collateral_cap = 999;
+        assert_ne!(cap.recomputed_terms_digest().unwrap(), t.terms);
+        let mut knot = t;
+        knot.knots[0] += 1;
+        assert_ne!(knot.recomputed_terms_digest().unwrap(), t.terms);
+        let mut map = t;
+        map.payout_map[0] = 1;
+        assert_ne!(map.recomputed_terms_digest().unwrap(), t.terms);
+        let mut adapter = t;
+        adapter.source_adapter_id = h(0x66);
+        assert_ne!(adapter.recomputed_terms_digest().unwrap(), t.terms);
+        let mut generation = t;
+        generation.repair_generation = 6;
+        assert_ne!(generation.recomputed_terms_digest().unwrap(), t.terms);
+        let mut parameter = t;
+        parameter.coverage_policy_parameter = 3;
+        assert_ne!(parameter.recomputed_terms_digest().unwrap(), t.terms);
     }
     #[test]
     fn price_grid_freezes_the_limit_to_tick_mapping() {

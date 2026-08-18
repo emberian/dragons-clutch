@@ -94,22 +94,13 @@
 //!
 //! ## Refusal codes
 //!
-//! `0x0050-0x005f` is reserved for this module.  **This wave allocates none of
-//! it**, on purpose: every refusal raised here already has an owner — an
-//! existing [`crate::error::ClutchError`] for the account plane, a
-//! [`clutch_solana_reference::Error`] for the gate, a
-//! [`clutch_accumulator::WindowError`] for the fold — and minting a second
-//! identifier for a refusal that already has one is a parallel truth, not a
-//! diagnostic.
+//! `0x0050-0x005f` is this module's block, and `error.rs` now carries the
+//! allocation this section used to only propose — the terms-revision wave
+//! unfroze it.  The principle held: no refusal gained a *second* identifier.
+//! What the block carries is the numeric **projection** of the gate's own
+//! classes, which used to collapse onto the `0x3fff` catch-all:
 //!
-//! What the range is actually needed for is the *numeric projection*.
-//! [`crate::error::reference_code`] was written before the evidence plane
-//! landed and collapses eight of the gate's classes onto the catch-all
-//! `0x3fff`.  They stay exactly distinguishable in the host differential, which
-//! compares typed values, and are indistinguishable in a transaction log until
-//! `error.rs` is unfrozen.  The proposed allocation, for whoever unfreezes it:
-//!
-//! | class | proposed code |
+//! | class | code |
 //! | --- | --- |
 //! | `Error::Window(_)` | `0x0050` |
 //! | `Error::Resolution(_)` | `0x0051` |
@@ -124,10 +115,11 @@
 //! | `Error::WindowIdentityUnavailable` | `0x005a` |
 //! | `0x005b-0x005f` | unallocated |
 //!
-//! Widening `reference_code` would be the better fix and is an `error.rs`
-//! decision, not this lane's.  `the_numeric_projection_of_the_gate_is_lossy`
-//! pins the collapse, so unfreezing `error.rs` turns that test red rather than
-//! leaving the table above quietly wrong.
+//! The sub-reasons a `Window(_)` or `Resolution(_)` carries stay one number
+//! per class: they remain exactly distinguishable in the host differential,
+//! which compares typed values, and a per-sub-reason identifier would be a
+//! parallel truth.  `the_numeric_projection_of_the_gate_is_allocated` pins
+//! the table, so a renumbering cannot pass silently.
 //!
 //! One consequence is visible from outside: the actor's signature is checked at
 //! the reference's point in the gate, not hoisted to the account plane the way
@@ -146,14 +138,15 @@
 //! on-chain, invisible to every host test.  The shapes below are what fixed it,
 //! and the build is re-run rather than reasoned about:
 //!
-//! - a decoded `TermsAccount` is 1304 bytes, a `KernelAccount` 1264, a
+//! - a decoded `TermsAccount` is 1656 bytes (v3), a `KernelAccount` 1264, a
 //!   `MarketState` 1240, a `MarketAccount` 728;
 //! - a *returned* `Result<TermsAccount, _>` costs the caller two such slots, so
 //!   the big accounts are **loaded into** a caller slot (`load_terms` and
 //!   friends) rather than returned;
-//! - `TermsAccount::validate` builds a 1.2 KiB body buffer to recompute its own
-//!   digest, so every call that triggers one — `binds_market`, `binds_terms` —
-//!   goes through an `#[inline(never)]` wrapper;
+//! - a full `TermsAccount::validate` builds a 1.6 KiB body buffer to recompute
+//!   its own digest, in its own `#[inline(never)]` frame since the v3
+//!   revision; the gate's own loads use `decode_unchecked` and never build
+//!   the buffer, and the binding checks compare fields without re-validating;
 //! - no function holds more than two of those values at once.
 //!
 //! Deleting an `#[inline(never)]` or an out-parameter here is not a style
@@ -178,14 +171,18 @@
 //!   seed exists for it.  Nothing is lost today — its bytes are hostile by
 //!   construction and no decision depends on its identity — but it cannot be
 //!   *created* on-chain until it has one.
-//! - [`clutch_solana_layout::TermsAccount::decode`] recomputes a SHA-256 over
-//!   the terms body on every call, and the resolve path decodes the terms five
-//!   times — address derivation, market binding, payout-set binding, record
-//!   binding, payout derivation — because each check must run in its own small
-//!   frame and at its own point in the order.  A redemption decodes it four
-//!   times.  The fix is a facts or `decode_unchecked` API in the layout crate;
-//!   it is not correct to fix it here by skipping a binding, and no compute
-//!   measurement exists to say how much it costs (obligation 10).
+//! - The terms artifact is still read in its own small frame at each gate
+//!   step — address derivation, market binding, payout-set binding, record
+//!   binding, payout derivation (plus the preset-vector load) — but the
+//!   SHA-256 over its body is paid **once per transaction**, in the account
+//!   plane's `accounts::read_terms`; every later read is
+//!   [`clutch_solana_layout::TermsAccount::decode_unchecked`], which runs
+//!   every structural check and skips only the digest recomputation, sound
+//!   because the account is presented read-only and the same transaction
+//!   already proved the digest over the same bytes.  The five-full-decode
+//!   shape this note used to describe is what put `Resolve` past the
+//!   1.4-million-unit transaction ceiling outright (SBF_BRINGUP.md,
+//!   measured); no binding was skipped to fix it.
 //! - The account list does **not** carry Realm and Profile, which
 //!   [`super::split`] does carry at indices 1 and 2.  Both edges that lane
 //!   checks against them are already implied here by
@@ -833,9 +830,11 @@ struct KernelStep {
 /* ------------------------------------------------------------------------ */
 
 /* Frame discipline, measured rather than assumed.  A decoded `TermsAccount` is
- * about 1.3 KiB, a `MarketAccount` about 0.75 KiB, a `KernelAccount` about
- * 1.25 KiB, and `TermsAccount::validate` builds a 1.2 KiB body buffer to
- * recompute its own digest.  Any two of those in one frame, plus an inlined
+ * about 1.6 KiB (v3), a `MarketAccount` about 0.75 KiB, a `KernelAccount`
+ * about 1.25 KiB, and a full `TermsAccount::validate` builds a 1.6 KiB body
+ * buffer to recompute its own digest (in its own `#[inline(never)]` frame
+ * since the v3 revision; the gate's own loads skip the recomputation
+ * entirely, see `load_terms`).  Any two of those in one frame, plus an inlined
  * decode temporary, overflows the SBF 4 KiB frame -- `cargo build-sbf`
  * reported exactly that for the first cut of the four functions below, with
  * estimates from 4288 to 6016 bytes.  The wrappers here exist so that each
@@ -884,6 +883,21 @@ const ZERO_TERMS: TermsAccount = TermsAccount {
     coverage_policy_id: 0,
     repair_policy_id: 0,
     failure_policy_id: 0,
+    statistic_id: 0,
+    ambiguity_policy_id: 0,
+    edge_policy_id: 0,
+    basis_degree: 0,
+    knot_count: 0,
+    uniform_log2_spacing: 0,
+    failure_payout_index: 0,
+    coverage_policy_parameter: 0,
+    repair_generation: 0,
+    source_version: 0,
+    evaluator_version: 0,
+    source_adapter_id: Hash32::ZERO,
+    payout_map: [0; MAX_OUTCOMES],
+    knots: [0; clutch_solana_layout::MAX_KNOTS],
+    collateral_cap: 0,
     stored_bump: 0,
     flags: 0,
 };
@@ -910,9 +924,18 @@ const ZERO_RESOLUTION: ResolutionAccount = ResolutionAccount {
     flags: 0,
 };
 
+/* `decode_unchecked`: every call site below runs after [`evidence_gated`]'s
+ * address plane already paid `accounts::read_terms` — a FULL decode of the
+ * same bytes, self-certifying digest included — and the terms account is
+ * presented read-only (step 7 refuses a writable presentation before any of
+ * these loads), so the runtime forbids the bytes from moving between the two
+ * reads.  Re-hashing 1.6 KiB per load is what put `Resolve` over the compute
+ * ceiling (SBF_BRINGUP.md, measured); every structural check still runs on
+ * every load, and the one digest recomputation still happens on every
+ * transaction, in the account plane. */
 #[inline(never)]
 fn load_terms(bytes: &[u8], out: &mut TermsAccount) -> Gate<()> {
-    *out = TermsAccount::decode(bytes)?;
+    TermsAccount::decode_unchecked_into(bytes, out)?;
     Ok(())
 }
 
@@ -934,17 +957,21 @@ fn load_resolution(bytes: &[u8], out: &mut ResolutionAccount) -> Gate<()> {
     Ok(())
 }
 
+/* The `_fields` variants run exactly the binding comparisons of
+ * `binds_market`/`binds_terms` without re-validating operands this gate has
+ * already decoded (and, for the terms, digest-checked) in this transaction;
+ * the refusal classes are identical. */
 #[inline(never)]
 fn require_terms_binds_market(terms: &TermsAccount, market: &MarketAccount) -> Gate<()> {
     terms
-        .binds_market(market)
+        .binds_market_fields(market)
         .map_err(|_| ReferenceError::TermsBindingMismatch)
 }
 
 #[inline(never)]
 fn require_record_binds_terms(record: &ResolutionAccount, terms: &TermsAccount) -> Gate<()> {
     record
-        .binds_terms(terms)
+        .binds_terms_fields(terms)
         .map_err(|_| ReferenceError::ResolutionBindingMismatch)
 }
 
@@ -1040,6 +1067,23 @@ fn derived_terms(market_bytes: &[u8], terms_bytes: &[u8]) -> Gate<ResolutionTerm
     resolution_terms_of(&market, &terms)
 }
 
+/// The frozen terms' payout vectors, loaded into a caller slot.
+///
+/// `derive_payout` consumes the digest-bound preset set alongside the derived
+/// terms (a degree >= 1 market's payout is the preset equal to the derived
+/// weight vector); the vectors are read from the same bytes every other gate
+/// step reads, in their own frame.
+#[inline(never)]
+fn load_terms_payouts(
+    terms_bytes: &[u8],
+    out: &mut [PayoutVectorBytes; clutch_kernel::MAX_PAYOUTS],
+) -> Gate<()> {
+    let mut terms = ZERO_TERMS;
+    load_terms(terms_bytes, &mut terms)?;
+    *out = terms.payouts;
+    Ok(())
+}
+
 /// Derive the payout the evidence selects, and refuse any other request.
 ///
 /// The three reference steps that must stay in this order and in one frame:
@@ -1055,8 +1099,10 @@ fn derive_from_evidence(
     requested_payout: u8,
 ) -> Gate<SealedFacts> {
     let derived = derived_terms(market_bytes, terms_bytes)?;
+    let mut payouts = [PayoutVectorBytes::ZERO; clutch_kernel::MAX_PAYOUTS];
+    load_terms_payouts(terms_bytes, &mut payouts)?;
     let window = fold_window_evidence(window_bytes, feed_cursor)?;
-    let payout_index = derive_payout(&derived, &window)?;
+    let payout_index = derive_payout(&derived, &payouts, &window)?;
     if payout_index != requested_payout {
         return Err(ReferenceError::PayoutIndexMismatch);
     }
@@ -1886,6 +1932,11 @@ mod tests {
             denominator: 1,
             weights: right,
         };
+        let mut knots = [0u128; clutch_solana_layout::MAX_KNOTS];
+        knots[0] = 1;
+        let mut payout_map = [clutch_solana_layout::PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
+        payout_map[0] = 0;
+        payout_map[1] = 1;
         let mut terms = TermsAccount {
             terms: Hash32::ZERO,
             realm,
@@ -1904,6 +1955,21 @@ mod tests {
             coverage_policy_id: u32::from(COVERAGE_POLICY_COMPLETE_REQUIRED),
             repair_policy_id: 1,
             failure_policy_id: 1,
+            statistic_id: 1,
+            ambiguity_policy_id: 1,
+            edge_policy_id: 1,
+            basis_degree: 0,
+            knot_count: 1,
+            uniform_log2_spacing: clutch_solana_layout::UNIFORM_SPACING_NONE,
+            failure_payout_index: 0,
+            coverage_policy_parameter: 0,
+            repair_generation: 0,
+            source_version: 1,
+            evaluator_version: 1,
+            source_adapter_id: feed,
+            payout_map,
+            knots,
+            collateral_cap: 1_000,
             stored_bump: 8,
             flags: 0,
         };
@@ -2477,29 +2543,49 @@ mod tests {
     }
 
     #[test]
-    fn the_numeric_projection_of_the_gate_is_lossy() {
-        /* Every refusal below is a *distinct* class in the differential above
-         * and the same opaque number in a transaction log, because
-         * `error::reference_code` predates the evidence plane.  This test is
-         * the pin on the named gap in the module docs: widening that table --
-         * the right fix, and an `error.rs` decision -- turns this red, which is
-         * the reminder to update the proposed `0x0050-0x005f` allocation. */
-        for class in [
-            ReferenceError::Window(WindowError::NotMature),
-            ReferenceError::Resolution(ResolutionRefusal::AmbiguousInterval),
-            ReferenceError::TermsBindingMismatch,
-            ReferenceError::PayoutSetMismatch,
-            ReferenceError::ResolutionBindingMismatch,
-            ReferenceError::ResolutionAlreadyRecorded,
-            ReferenceError::ResolutionNotRecorded,
-            ReferenceError::PayoutIndexMismatch,
-            ReferenceError::ImmutableAccountWritable,
-            ReferenceError::UnexpectedEvidence,
-            ReferenceError::WindowIdentityUnavailable,
+    fn the_numeric_projection_of_the_gate_is_allocated() {
+        /* This test used to pin the opposite fact: every class below
+         * collapsed onto `error.rs`'s `0x3fff` catch-all, and the collapse
+         * was asserted so that widening the table would turn it red.  It did,
+         * and `error.rs` now carries the exact `0x0050-0x005f` allocation the
+         * module docs proposed; this pin now holds the allocation itself, so
+         * a renumbering cannot pass silently.  The sub-reasons inside
+         * `Window(_)` and `Resolution(_)` stay one number each on purpose:
+         * they remain exactly distinguishable in the host differential, which
+         * compares typed values. */
+        for (class, code) in [
+            (ReferenceError::Window(WindowError::NotMature), 0x0050),
+            (
+                ReferenceError::Resolution(ResolutionRefusal::AmbiguousInterval),
+                0x0051,
+            ),
+            (ReferenceError::TermsBindingMismatch, 0x0052),
+            (ReferenceError::PayoutSetMismatch, 0x0053),
+            (ReferenceError::ResolutionBindingMismatch, 0x0054),
+            (ReferenceError::ResolutionAlreadyRecorded, 0x0055),
+            (ReferenceError::ResolutionNotRecorded, 0x0056),
+            (ReferenceError::PayoutIndexMismatch, 0x0057),
+            (ReferenceError::ImmutableAccountWritable, 0x0058),
+            (ReferenceError::UnexpectedEvidence, 0x0059),
+            (ReferenceError::WindowIdentityUnavailable, 0x005a),
         ] {
-            assert_eq!(Refusal::Reference(class).code(), 0x3fff);
+            assert_eq!(Refusal::Reference(class).code(), code);
         }
-        /* The classes this module shares with the account plane do project. */
+        /* One number per sub-reason would be a parallel truth: every window
+         * reason projects onto the class code. */
+        assert_eq!(
+            Refusal::Reference(ReferenceError::Window(WindowError::CoverageRefused)).code(),
+            0x0050
+        );
+        assert_eq!(
+            Refusal::Reference(ReferenceError::Resolution(
+                ResolutionRefusal::DerivedVectorUnrepresentable
+            ))
+            .code(),
+            0x0051
+        );
+        /* The classes this module shares with the account plane still project
+         * onto their own vocabularies' numbers. */
         assert_eq!(
             Refusal::Reference(ReferenceError::MissingSignature).code(),
             0x3009
@@ -2507,6 +2593,16 @@ mod tests {
         assert_eq!(
             Refusal::Adapter(ClutchError::MissingSignature).code(),
             0x0002
+        );
+        /* And the market-initialization appends: the freeze check is one
+         * number whichever vocabulary raised it. */
+        assert_eq!(
+            Refusal::Reference(ReferenceError::CollateralPolicyNotFrozen).code(),
+            0x0041
+        );
+        assert_eq!(
+            Refusal::Adapter(ClutchError::CollateralPolicyNotFrozen).code(),
+            0x0041
         );
     }
 

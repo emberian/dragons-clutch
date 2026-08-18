@@ -470,18 +470,22 @@ impl CollateralPolicy {
     /// mint than that mint is admitted to have — so a cap above this value is
     /// refusable, while a cap at or below it is merely *not refuted*.
     ///
-    /// The per-market cap value itself has no source in this policy, in the
-    /// frozen `CreateMarket` intent, or in [`crate::TermsAccount`].  It needs a
-    /// new immutable terms field or a new intent version; this function
-    /// deliberately does not invent one.
+    /// The per-market cap value itself is sourced from
+    /// [`crate::TermsAccount::collateral_cap`] — the immutable terms field the
+    /// v3 revision added, inside the terms digest — and checked against this
+    /// ceiling at market initialization.  This function still deliberately
+    /// invents nothing: it only refutes caps the mint could never back.
     pub const fn market_cap_ceiling_atoms(&self) -> u64 {
         self.max_supply_atoms
     }
 
     /// Refuse a per-market collateral cap this policy could never back.
     ///
-    /// A zero cap is admitted: it is the fail-closed "accepts no collateral"
-    /// state a market is created in today, not a policy violation.
+    /// A zero cap passes here — it exceeds no ceiling — but it can no longer
+    /// reach this check from frozen terms: the cap now lives in
+    /// [`crate::TermsAccount::collateral_cap`], whose codec refuses zero, so
+    /// "cap 0 refuses at market init" is structural rather than a policy
+    /// judgement this function would have to make.
     pub const fn check_market_cap(&self, cap: u64) -> Result<()> {
         if cap > self.market_cap_ceiling_atoms() {
             Err(CodecError::InvalidCount)
