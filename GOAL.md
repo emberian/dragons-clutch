@@ -29,6 +29,9 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- VERDICTS reconciled (ladder with per-rung status; V9/V10 added);
+  C-1 refund path closed with conservation demonstrated; pushed.
+
 - SHIELDED (degg P1-4) landed: composition of all three packets by path
   dependency; executor freedom MEASURED (377/1,125 admissible alt
   publications - the proof rung justified by experiment); 51 tests,
