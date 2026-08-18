@@ -135,7 +135,7 @@ class LandedAbiTests(unittest.TestCase):
             "hoard": 108,
             "position": 220,
             "feed_head": 124,
-            "order_page": 1819,
+            "order_page": 3883,
             "supply_ledger": 333,
             "terms": 1304,
             "price_grid": 589,
@@ -167,6 +167,19 @@ class LandedAbiTests(unittest.TestCase):
                 "re-pin constants.json and regenerate the goldens",
             )
 
+    def test_pinned_identifiers_are_rederived_from_the_codec_on_disk(self) -> None:
+        source = self.landed_source()
+        if source is None:
+            self.skipTest("landed codec source is not present in this checkout")
+        derived = cost_lab.derive_pinned_identifiers_from_source(source)
+        self.assertEqual(set(derived), set(cost_lab.RUST_IDENTIFIER_VALUES))
+        for name, pinned in cost_lab.RUST_IDENTIFIER_VALUES.items():
+            self.assertEqual(
+                derived[name],
+                pinned,
+                f"{name}: the codec moved and the cost lab substitution table is stale",
+            )
+
     def test_abi_audit_reports_no_drift(self) -> None:
         if self.landed_source() is None:
             self.skipTest("landed codec source is not present in this checkout")
@@ -178,6 +191,9 @@ class LandedAbiTests(unittest.TestCase):
         self.assertEqual(
             cost_lab.evaluate_rust_arithmetic("MAX_ORDERS_PER_PAGE * ORDER_RECORD_BYTES"), 1584
         )
+        self.assertEqual(
+            cost_lab.evaluate_rust_arithmetic("MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES"), 3648
+        )
         for hostile in ("__import__('os')", "1 - 1", "open(1)", "MAX_UNKNOWN"):
             with self.assertRaises(cost_lab.ModelError):
                 cost_lab.evaluate_rust_arithmetic(hostile)
@@ -185,12 +201,19 @@ class LandedAbiTests(unittest.TestCase):
     def test_order_page_geometry_is_forced(self) -> None:
         bounds = self.landed["bounds"]
         self.assertEqual(bounds["order_record_bytes"], 99)
+        self.assertEqual(bounds["portfolio_record_bytes"], 227)
+        self.assertEqual(bounds["order_slot_bytes"], 228)
         self.assertEqual(bounds["max_orders_per_page"], 16)
         self.assertEqual(bounds["max_order_pages"], 4)
         self.assertEqual(bounds["max_epoch_orders"], 64)
         self.assertEqual(bounds["relation_max_orders"], 64)
+        self.assertEqual(bounds["max_portfolio_orders"], 8)
+        # One slot is a kind byte plus the widest admitted body, and the page is a dense
+        # array of those slots: both families share one page, one chain, one fold.
+        self.assertEqual(bounds["order_slot_bytes"], 1 + bounds["portfolio_record_bytes"])
+        self.assertGreater(bounds["portfolio_record_bytes"], bounds["order_record_bytes"])
         self.assertEqual(
-            bounds["order_page_header_bytes"] + 16 * bounds["order_record_bytes"],
+            bounds["order_page_header_bytes"] + 16 * bounds["order_slot_bytes"],
             self.landed["accounts"]["order_page"]["bytes"],
         )
         for order_count, pages in ((1, 1), (16, 1), (17, 2), (32, 2), (48, 3), (64, 4)):
@@ -199,15 +222,15 @@ class LandedAbiTests(unittest.TestCase):
 
     def test_one_instance_inventory_totals(self) -> None:
         row = cost_lab.find_row(self.rows, "landed-account-inventory-one-instance")
-        self.assertEqual(row["outputs"]["data_bytes"], 6_670)
-        self.assertEqual(row["outputs"]["rent_principal_lamports"], 59_786_400)
+        self.assertEqual(row["outputs"]["data_bytes"], 8_734)
+        self.assertEqual(row["outputs"]["rent_principal_lamports"], 74_151_840)
         self.assertEqual(row["outputs"]["rent_overhead_component_lamports"], 13_363_200)
         self.assertEqual(row["outputs"]["largest_account"], "order_page")
         self.assertEqual(row["outputs"]["smallest_account"], "realm")
 
     def test_landed_rent_examples(self) -> None:
         self.assertEqual(cost_lab.rent_minimum(220, self.constants), 2_422_080)
-        self.assertEqual(cost_lab.rent_minimum(1_819, self.constants), 13_551_120)
+        self.assertEqual(cost_lab.rent_minimum(3_883, self.constants), 27_916_560)
         self.assertEqual(cost_lab.rent_minimum(333, self.constants), 3_208_560)
 
     def test_epoch_book_refuses_more_than_max_epoch_orders(self) -> None:
@@ -218,12 +241,12 @@ class LandedAbiTests(unittest.TestCase):
         full = cost_lab.find_row(self.rows, "landed-epoch-book-m64")
         self.assertTrue(full["admission"]["v1_admitted"])
         self.assertEqual(full["outputs"]["page_count"], 4)
-        self.assertEqual(full["outputs"]["padding_record_bytes"], 0)
-        self.assertEqual(full["outputs"]["rent_principal_lamports"], 4 * 13_551_120)
+        self.assertEqual(full["outputs"]["padding_slot_bytes"], 0)
+        self.assertEqual(full["outputs"]["rent_principal_lamports"], 4 * 27_916_560)
         partial = cost_lab.find_row(self.rows, "landed-epoch-book-m17")
         self.assertEqual(partial["outputs"]["page_count"], 2)
         self.assertEqual(partial["outputs"]["final_page_order_count"], 1)
-        self.assertEqual(partial["outputs"]["padding_record_bytes"], 15 * 99)
+        self.assertEqual(partial["outputs"]["padding_slot_bytes"], 15 * 228)
 
     def test_landed_intent_payload_widths(self) -> None:
         expected = {
@@ -258,7 +281,7 @@ class LandedAbiTests(unittest.TestCase):
             self.assertEqual(
                 row["outputs"]["order_authentications_lower_bound"], order_count
             )
-            self.assertEqual(row["outputs"]["portfolio_orders_persistable_in_landed_pages"], 0)
+            self.assertEqual(row["outputs"]["portfolio_orders_persistable_in_landed_pages"], 8)
             self.assertEqual(
                 row["outputs"]["portfolio_orders_admitted_by_relation_upper_bound"], 8
             )
@@ -281,12 +304,13 @@ class LandedAbiTests(unittest.TestCase):
             "diff-position-account": (192, 220, 28),
             "diff-supply-ledger-account": (320, 333, 13),
             "diff-single-egg-order-record": (80, 99, 19),
-            "diff-order-page-account": (8192, 1819, -6373),
+            "diff-order-page-account": (8192, 3883, -4309),
             "diff-order-page-header": (128, 235, 107),
             "diff-order-page-record-capacity": (100, 16, -84),
             "diff-epoch-book-order-capacity": (512, 64, -448),
             "diff-claim-instruction-internal-split": (11, 74, 63),
             "diff-claim-instruction-materialize-one": (11, 107, 96),
+            "diff-portfolio-order-record": (208, 227, 19),
         }
         for scenario_id, (hypothesis, landed, delta) in expected.items():
             output = cost_lab.find_row(self.rows, scenario_id)["outputs"]
@@ -294,7 +318,7 @@ class LandedAbiTests(unittest.TestCase):
             self.assertEqual(output["landed_value"], landed, scenario_id)
             self.assertEqual(output["delta"], delta, scenario_id)
             self.assertTrue(output["change"].strip(), scenario_id)
-        for scenario_id in ("diff-portfolio-order-record", "diff-accumulator-full-summary"):
+        for scenario_id in ("diff-accumulator-full-summary",):
             output = cost_lab.find_row(self.rows, scenario_id)["outputs"]
             self.assertIsNone(output["landed_value"], scenario_id)
             self.assertIsNone(output["delta"], scenario_id)

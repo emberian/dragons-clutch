@@ -101,10 +101,10 @@
     "source": {
       "owner": "programs/solana-layout",
       "codec_path": "programs/solana-layout/src/lib.rs",
-      "commit": "efb0ed597a23454440f7ab069cd96f48ff7c26a1",
-      "commit_short": "efb0ed5",
-      "commit_subject": "Close P1-C: persisted-state account family, cross-page closure, frozen grid",
-      "codec_blob_sha256_at_commit": "e0b036b032eaab344546bb7ce6b4634625c94ee7ad8dde167ff899448a877354",
+      "commit": "da2fbf77c47345c76b5fab9115b5d57fb01d51b4",
+      "commit_short": "da2fbf7",
+      "commit_subject": "Portfolio orders gain a persisted page encoding (P1 seam closed)",
+      "codec_blob_sha256_at_commit": "d0228c5a6355918f62908cfbd2eac76aeb16d398016151f6b3ee0360fbedd357",
       "relation_path": "crates/clutch-batch/src/lib.rs",
       "relation_blob_sha256_at_commit": "dac79ada3f8799bb516a4571974925b4f303382592c23fb5541498ec222ada45",
       "relation_v1_path": "crates/clutch-batch/src/relation_v1.rs",
@@ -112,8 +112,9 @@
       "note": "One codec owner. Every width below is that file's own account_len/encoded_len expression restated term by term, so the harness re-derives each total instead of quoting it. Digests are the blobs at the pinned commit, not a mutable working tree."
     },
     "bounds": {
-      "layout_version": 2,
+      "layout_version": 3,
       "layout_version_v1": 1,
+      "layout_version_v2": 2,
       "intent_version": 1,
       "hash_bytes": 32,
       "minimum_outcomes": 2,
@@ -125,6 +126,11 @@
       "max_epoch_orders": 64,
       "order_record_bytes": 99,
       "order_record_field_terms": [32, 32, 1, 1, 8, 8, 8, 1, 8],
+      "portfolio_record_bytes": 227,
+      "portfolio_record_field_terms": [32, 32, 1, 1, 1, 128, 8, 8, 8, 8],
+      "order_slot_bytes": 228,
+      "order_slot_field_terms": [1, 227],
+      "max_portfolio_orders": 8,
       "order_page_header_bytes": 235,
       "max_intent_bytes": 256,
       "relation_version": 1,
@@ -185,11 +191,11 @@
       },
       "order_page": {
         "rust_const": "account_len::ORDER_PAGE",
-        "bytes": 1819,
+        "bytes": 3883,
         "discriminator_tag": 8,
-        "schema_version": 2,
-        "field_terms": [2, 224, 2, 2, 2, 1, 1, 1, 1584],
-        "formula": "2 + (7 * 32) + 2 + 2 + 2 + 1 + 1 + 1 + (MAX_ORDERS_PER_PAGE * ORDER_RECORD_BYTES)"
+        "schema_version": 3,
+        "field_terms": [2, 224, 2, 2, 2, 1, 1, 1, 3648],
+        "formula": "2 + (7 * 32) + 2 + 2 + 2 + 1 + 1 + 1 + (MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES)"
       },
       "supply_ledger": {
         "rust_const": "account_len::SUPPLY_LEDGER",
@@ -375,7 +381,8 @@
     "notes": [
       "Every width in this arm is read from the landed codec; the lab proposes none of them.",
       "A landed width is still not a measured cost. No Dragon SBF program exists, so this arm carries no CU, heap, stack, account-copy, or landing figure either.",
-      "The landed OrderRecord carries one outcome index and no coefficient vector, so a portfolio order that relation_v1 admits has no persisted page encoding today.",
+      "Both admitted order families share one ORDER_SLOT_BYTES-wide tagged slot, so the page holds either family without a second account, a second order-id chain, or a second fold.",
+      "A single-Egg slot pays for the wider family: 99 bytes of body under a kind byte and 128 bytes of required-zero padding. Those 129 bytes per slot are the whole of the page growth from 1819 to 3883; the padding is required to be zero and is not spare capacity.",
       "check_count refuses outcome_count below 2 and above 16, so n=24 is a codec refusal in this arm on top of the unchanged V1 policy refusal."
     ]
   }

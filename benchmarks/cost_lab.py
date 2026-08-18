@@ -121,13 +121,23 @@ def verify_landed_arm(constants: dict[str, Any]) -> None:
         raise ModelError("landed intent family does not match the pinned inventory")
     if sum(bounds["order_record_field_terms"]) != bounds["order_record_bytes"]:
         raise ModelError("landed order record width does not equal its field terms")
+    if sum(bounds["portfolio_record_field_terms"]) != bounds["portfolio_record_bytes"]:
+        raise ModelError("landed portfolio record width does not equal its field terms")
+    if sum(bounds["order_slot_field_terms"]) != bounds["order_slot_bytes"]:
+        raise ModelError("landed order slot width does not equal its field terms")
+    if bounds["order_slot_bytes"] != 1 + bounds["portfolio_record_bytes"]:
+        raise ModelError("landed order slot is not a kind byte plus the widest record body")
+    if bounds["portfolio_record_bytes"] <= bounds["order_record_bytes"]:
+        raise ModelError("landed slot width is not set by the portfolio record")
+    if bounds["max_portfolio_orders"] != bounds["relation_max_portfolio_orders"]:
+        raise ModelError("landed page-set and relation portfolio caps disagree")
     page = landed["accounts"]["order_page"]["bytes"]
     derived_page = (
         bounds["order_page_header_bytes"]
-        + bounds["max_orders_per_page"] * bounds["order_record_bytes"]
+        + bounds["max_orders_per_page"] * bounds["order_slot_bytes"]
     )
     if derived_page != page:
-        raise ModelError("landed order page is not its header plus a dense record array")
+        raise ModelError("landed order page is not its header plus a dense slot array")
     if bounds["max_epoch_orders"] != bounds["max_orders_per_page"] * bounds["max_order_pages"]:
         raise ModelError("landed epoch book capacity is not the page geometry")
     if bounds["max_epoch_orders"] != bounds["relation_max_orders"]:
@@ -837,7 +847,7 @@ LANDED_ACCOUNT_ROLES = {
     "hoard": "Market collateral custody seam.",
     "position": "Owner internal balances over the fixed 16-outcome vector.",
     "feed_head": "Feed cursor and evidence digest; not a fold summary.",
-    "order_page": "Dense 16-record order page with cross-page closure fields.",
+    "order_page": "Dense 16-slot order page carrying either admitted order family, with cross-page closure fields.",
     "supply_ledger": "Per-outcome internal and external supply totals.",
     "terms": "Immutable payout terms over at most 8 payout vectors.",
     "price_grid": "Frozen strictly increasing 64-tick price grid.",
@@ -944,6 +954,7 @@ def landed_epoch_book_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
     landed = constants[ARM_LANDED]
     bounds = landed["bounds"]
     per_page = bounds["max_orders_per_page"]
+    slot_bytes = bounds["order_slot_bytes"]
     record_bytes = bounds["order_record_bytes"]
     page_bytes = landed_account_bytes(constants, "order_page")
     epoch_bytes = landed_account_bytes(constants, "epoch")
@@ -962,9 +973,11 @@ def landed_epoch_book_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
                 "page_count": pages,
                 "dense_pages": pages - 1,
                 "final_page_order_count": final_page_orders,
-                "stored_record_bytes": order_count * record_bytes,
-                "allocated_record_bytes": pages * per_page * record_bytes,
-                "padding_record_bytes": (pages * per_page - order_count) * record_bytes,
+                "occupied_slot_bytes": order_count * slot_bytes,
+                "allocated_slot_bytes": pages * per_page * slot_bytes,
+                "padding_slot_bytes": (pages * per_page - order_count) * slot_bytes,
+                "single_egg_intra_slot_padding_bytes_if_all_single": order_count
+                * (slot_bytes - 1 - record_bytes),
                 "page_header_bytes_total": pages * bounds["order_page_header_bytes"],
                 "page_account_data_bytes_total": pages * page_bytes,
                 "page_rent_principal_lamports_per_page": page_rent,
@@ -983,9 +996,10 @@ def landed_epoch_book_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
                 "page_count": None,
                 "dense_pages": None,
                 "final_page_order_count": None,
-                "stored_record_bytes": None,
-                "allocated_record_bytes": None,
-                "padding_record_bytes": None,
+                "occupied_slot_bytes": None,
+                "allocated_slot_bytes": None,
+                "padding_slot_bytes": None,
+                "single_egg_intra_slot_padding_bytes_if_all_single": None,
                 "page_header_bytes_total": None,
                 "page_account_data_bytes_total": None,
                 "page_rent_principal_lamports_per_page": page_rent,
@@ -1008,7 +1022,9 @@ def landed_epoch_book_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
                     "orders_per_page": per_page,
                     "max_order_pages": bounds["max_order_pages"],
                     "order_page_bytes": page_bytes,
+                    "order_slot_bytes": slot_bytes,
                     "order_record_bytes": record_bytes,
+                    "portfolio_record_bytes": bounds["portfolio_record_bytes"],
                 },
                 "outputs": outputs,
                 "evidence": {
@@ -1020,8 +1036,9 @@ def landed_epoch_book_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
                 },
                 "admission": landed_admission(constants, order_count=order_count),
                 "caveats": [
-                    "The landed page rule is not a packing choice: every non-final page of a frozen set must hold exactly 16 records, so the page count is forced by the order count.",
-                    "Padding record bytes are paid rent for canonically zeroed slots, not spare capacity for later orders in a frozen set.",
+                    "The landed page rule is not a packing choice: every non-final page of a frozen set must hold exactly 16 slots, so the page count is forced by the order count.",
+                    "Padding slot bytes are paid rent for canonically zeroed slots, not spare capacity for later orders in a frozen set.",
+                    "A slot is one fixed width for both admitted families, so an all-single-Egg book also pays the intra-slot padding column; the harness does not model a family mix per order.",
                     "Whether one transaction may lock the whole page set is an account-topology question the landed ABI does not answer.",
                 ],
             }
@@ -1138,7 +1155,9 @@ def landed_relation_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
                         "portfolio_orders_admitted_by_relation_upper_bound": bounds[
                             "relation_max_portfolio_orders"
                         ],
-                        "portfolio_orders_persistable_in_landed_pages": 0,
+                        "portfolio_orders_persistable_in_landed_pages": min(
+                            order_count, bounds["max_portfolio_orders"]
+                        ),
                         "order_page_data_bytes_total": pages * page_bytes,
                         "rent_principal_lamports": pages * page_rent,
                         "frozen_epoch_companion_bytes": companion_bytes,
@@ -1157,7 +1176,7 @@ def landed_relation_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
                     "admission": landed_admission(constants, outcomes=outcomes),
                     "caveats": [
                         "No wire row is emitted here: the landed ABI has no candidate-verification instruction, and this arm refuses to invent one.",
-                        "relation_v1 admits up to 8 portfolio orders, but the landed OrderRecord stores one outcome index and no coefficient vector, so those orders have no persisted page encoding.",
+                        "The page carries both admitted families in one tagged slot array, so a relation book of portfolio orders is persistable up to the shared MAX_PORTFOLIO_ORDERS cap; a set above that cap is a codec refusal, not an expensive case.",
                         "Work counters are semantic steps, not compute units.",
                         "MAX_ORDERS=64 caps one frozen book, not a market's order flow; more orders means more epochs, not a bigger book.",
                     ],
@@ -1216,9 +1235,9 @@ def differential_entries(constants: dict[str, Any]) -> list[dict[str, Any]]:
             "hypothesis": bounds["portfolio_order_fixed_bytes"]
             + bounds["portfolio_coefficient_bytes_per_outcome"] * bounds["max_v1_outcomes"],
             "hypothesis_source": "portfolio_order_fixed_bytes + 8 * max_v1_outcomes at n=16",
-            "landed": None,
-            "landed_source": "absent",
-            "change": "relation_v1 admits up to 8 portfolio orders with a 16-slot coefficient vector, but the landed OrderRecord holds a single outcome index, so no persisted encoding for a portfolio order exists in the landed page today.",
+            "landed": landed_bounds_value["portfolio_record_bytes"],
+            "landed_source": "PORTFOLIO_RECORD_BYTES",
+            "change": "The portfolio order gained a persisted page encoding: the same 128-byte 16-slot coefficient vector plus dual 32-byte identities, side, active length, flags, lots, per-lot collateral bound, minimum fill and a replay generation, so the landed body is 227 bytes against the 208-byte sketch. It rides a 228-byte tagged slot shared with the single-Egg family.",
         },
         {
             "object": "order_page_account",
@@ -1228,7 +1247,7 @@ def differential_entries(constants: dict[str, Any]) -> list[dict[str, Any]]:
             "hypothesis_source": "8 KiB page hypothesis",
             "landed": landed["accounts"]["order_page"]["bytes"],
             "landed_source": "account_len::ORDER_PAGE",
-            "change": "The landed page is a fixed 16-record array with cross-page closure fields, not a variable byte budget, so page size stopped being a tunable parameter.",
+            "change": "The landed page is a fixed 16-slot array with cross-page closure fields, not a variable byte budget, so page size stopped being a tunable parameter. The slot is wide enough for either admitted family, which is why it is 3883 bytes rather than the 1819 of the single-family v2 page.",
         },
         {
             "object": "order_page_header",
@@ -1237,7 +1256,7 @@ def differential_entries(constants: dict[str, Any]) -> list[dict[str, Any]]:
             "hypothesis": bounds["page_header_bytes"],
             "hypothesis_source": "page_header_bytes",
             "landed": landed_bounds_value["order_page_header_bytes"],
-            "landed_source": "account_len::ORDER_PAGE minus the record array",
+            "landed_source": "account_len::ORDER_PAGE minus the slot array",
             "change": "The landed header carries seven 32-byte identities (market, epoch, order set, page digest, first, last and previous-page-last order ids) that the hypothesis never budgeted for.",
         },
         {
@@ -1248,7 +1267,7 @@ def differential_entries(constants: dict[str, Any]) -> list[dict[str, Any]]:
             "hypothesis_source": "(8192 - 128) // 80",
             "landed": landed_bounds_value["max_orders_per_page"],
             "landed_source": "MAX_ORDERS_PER_PAGE",
-            "change": "A landed page holds 16 records, not about a hundred, so any per-page cost is amortized over six times fewer orders.",
+            "change": "A landed page holds 16 slots, not about a hundred records, so any per-page cost is amortized over six times fewer orders.",
         },
         {
             "object": "epoch_book_order_capacity",
@@ -1424,8 +1443,9 @@ def validate_landed_rows(rows: list[dict[str, Any]], constants: dict[str, Any]) 
         if row["family"] == "landed_batch_relation":
             if row["outputs"]["order_authentications_lower_bound"] != row["inputs"]["order_count"]:
                 raise ModelError("landed relation must authenticate every frozen order")
-            if row["outputs"]["portfolio_orders_persistable_in_landed_pages"] != 0:
-                raise ModelError("landed page cannot persist a portfolio order")
+            persistable = min(row["inputs"]["order_count"], bounds["max_portfolio_orders"])
+            if row["outputs"]["portfolio_orders_persistable_in_landed_pages"] != persistable:
+                raise ModelError("landed page set and relation portfolio capacity disagree")
         if row["family"] == "landed_epoch_book" and row["outputs"]["landed_codec_representable"]:
             pages = row["outputs"]["page_count"]
             per_page = bounds["max_orders_per_page"]
@@ -1759,7 +1779,7 @@ def summary_bytes(constants: dict[str, Any], rows: list[dict[str, Any]]) -> byte
             "",
             "## Landed epoch book",
             "",
-            "| orders | representable | pages | padding record bytes | page rent principal (lamports) | SettlePage instructions |",
+            "| orders | representable | pages | padding slot bytes | page rent principal (lamports) | SettlePage instructions |",
             "|---:|---|---:|---:|---:|---:|",
         ]
     )
@@ -1768,7 +1788,7 @@ def summary_bytes(constants: dict[str, Any], rows: list[dict[str, Any]]) -> byte
         output = row["outputs"]
         if output["landed_codec_representable"]:
             lines.append(
-                f"| {order_count} | yes | {output['page_count']} | {output['padding_record_bytes']} |"
+                f"| {order_count} | yes | {output['page_count']} | {output['padding_slot_bytes']} |"
                 f" {output['rent_principal_lamports']} | {output['settle_page_instructions_lower_bound']} |"
             )
         else:
@@ -1848,9 +1868,9 @@ def summary_bytes(constants: dict[str, Any], rows: list[dict[str, Any]]) -> byte
             "- Rent values are refundable principal under the pinned package default, not fees and not a cluster quote.",
             "- No total-CU number appears because no Dragon SBF program exists to measure. The only CU field is the pinned runtime CPI invocation charge component.",
             "- Batch verification remains Omega(orders) without a separately verified succinct proof; page layout changes rent and transaction partitioning, not that information bound.",
-            "- The landed page is not a tunable byte budget: 16 records per page is forced, so the 4/8/10 KiB page trade in the hypothesis arm no longer describes the current layout.",
+            "- The landed page is not a tunable byte budget: 16 slots per page is forced, so the 4/8/10 KiB page trade in the hypothesis arm no longer describes the current layout.",
             "- One frozen landed book holds 64 orders, so the 128- and 512-order hypothesis rows describe several epochs rather than one relation instance.",
-            "- The landed OrderRecord has no coefficient vector, so portfolio orders that `relation_v1` admits cannot be persisted by the landed page today.",
+            "- Portfolio orders now have a persisted page encoding: one 228-byte tagged slot holds either family, so the seam `relation_v1` opened against the page is closed. The price is a common slot width, which is the whole of the page growth from 1819 to 3883 bytes.",
             "- No landed candidate-verification instruction exists, so the landed arm reports relation work and rent without any wire byte count for that step.",
             "",
         ]
@@ -1905,6 +1925,8 @@ RUST_IDENTIFIER_VALUES = {
     "MAX_ORDERS_PER_PAGE": 16,
     "MAX_ORDER_PAGES": 4,
     "ORDER_RECORD_BYTES": 99,
+    "PORTFOLIO_RECORD_BYTES": 227,
+    "ORDER_SLOT_BYTES": 228,
     "HASH_BYTES": 32,
 }
 
@@ -1954,6 +1976,27 @@ def derive_account_lengths_from_source(source: str) -> dict[str, int]:
     return derived
 
 
+def derive_pinned_identifiers_from_source(source: str) -> dict[str, int]:
+    """Re-derive every pinned Rust identifier from its own top-level declaration.
+
+    `RUST_IDENTIFIER_VALUES` is the substitution table every `account_len` expression is
+    evaluated against, so a stale pin there would move every derived width in lockstep and the
+    account-level comparison would not notice. Reading each name back from the crate's own
+    `pub const` line closes that: an identifier is only ever trusted after the codec restates it.
+    """
+
+    derived: dict[str, int] = {}
+    for line in source.splitlines():
+        if not line.startswith("pub const "):
+            continue
+        name, _, remainder = line[len("pub const ") :].partition(":")
+        if name.strip() not in RUST_IDENTIFIER_VALUES:
+            continue
+        expression, _, _rest = remainder.partition("=")[2].partition(";")
+        derived[name.strip()] = evaluate_rust_arithmetic(expression)
+    return derived
+
+
 def abi_audit(constants: dict[str, Any]) -> tuple[list[str], list[str]]:
     """Compare the pinned landed arm against the codec on disk. Not part of golden closure."""
 
@@ -1971,8 +2014,16 @@ def abi_audit(constants: dict[str, Any]) -> tuple[list[str], list[str]]:
             "working-tree codec digest differs from the pinned blob "
             f"({digest}); widths are re-derived below"
         )
-    derived = derive_account_lengths_from_source(source)
     drift: list[str] = []
+    identifiers = derive_pinned_identifiers_from_source(source)
+    for name, pinned in sorted(RUST_IDENTIFIER_VALUES.items()):
+        if name not in identifiers:
+            drift.append(f"{name} is gone from the codec and the cost lab still pins it")
+        elif identifiers[name] != pinned:
+            drift.append(
+                f"{name}: codec says {identifiers[name]}, cost lab pins {pinned}"
+            )
+    derived = derive_account_lengths_from_source(source)
     for name in LANDED_ACCOUNT_ORDER:
         account = landed["accounts"][name]
         rust_name = account["rust_const"].split("::", 1)[1]
@@ -1988,7 +2039,10 @@ def abi_audit(constants: dict[str, Any]) -> tuple[list[str], list[str]]:
     }
     for name in sorted(extra):
         drift.append(f"account_len::{name} exists in the codec and is absent from the cost lab")
-    notes.append(f"re-derived {len(derived)} account_len constants from the codec source")
+    notes.append(
+        f"re-derived {len(identifiers)} pinned identifiers and {len(derived)} account_len "
+        "constants from the codec source"
+    )
     return notes, drift
 
 

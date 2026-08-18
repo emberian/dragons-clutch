@@ -3,7 +3,8 @@
 Status: offline deterministic harness implemented and validated on 2026-08-18  
 Landed-ABI arm added 2026-08-18 (adversarial review P1-F)  
 Source-constant snapshot: 2026-08-17  
-Landed-ABI snapshot: `programs/solana-layout` at commit `efb0ed5`  
+Landed-ABI snapshot: `programs/solana-layout` at commit `da2fbf7` (OrderPage v3)  
+Landed-ABI arm re-pinned 2026-08-18: OrderPage v3, 228-byte tagged order slots, 3,883-byte page  
 Owned path: `benchmarks/`
 
 ## Outcome
@@ -144,13 +145,16 @@ name; nothing in it was edited, replaced, or quietly re-pointed.
 
 ### Where the landed arm comes from
 
-`programs/solana-layout/src/lib.rs` is the single codec owner, pinned at commit `efb0ed5`
-(blob SHA-256 `e0b036b0...`), with the relation bounds from `crates/clutch-batch`. Rather than
+`programs/solana-layout/src/lib.rs` is the single codec owner, pinned at commit `da2fbf7`
+(blob SHA-256 `d0228c5a...`), with the relation bounds from `crates/clutch-batch`. Rather than
 quoting totals, `benchmarks/constants.json` stores each width as the codec's own field terms and
 formula, and `cost_lab.py` refuses to run unless every pinned total equals the sum of its terms.
-`python3 benchmarks/cost_lab.py abi-audit` goes further: it re-derives all fifteen `account_len`
-constants from the Rust source on disk and refuses when the arm has gone stale, so a later ABI
-change turns the cost lab red instead of silently ageing it.
+`python3 benchmarks/cost_lab.py abi-audit` goes further: it re-derives the nine pinned size
+identifiers and all fifteen `account_len` constants from the Rust source on disk and refuses when
+the arm has gone stale, so a later ABI change turns the cost lab red instead of silently ageing
+it. It did exactly that when OrderPage v3 landed: the audit exited 2 on the unknown
+`ORDER_SLOT_BYTES` token rather than publishing the old page width, and this addendum records the
+re-pin that followed.
 
 ### Landed account inventory
 
@@ -162,7 +166,7 @@ change turns the cost lab red instead of silently ageing it.
 | Hoard | `account_len::HOARD` | 108 | 1,642,560 |
 | Position | `account_len::POSITION` | 220 | 2,422,080 |
 | FeedHead | `account_len::FEED` | 124 | 1,753,920 |
-| OrderPage | `account_len::ORDER_PAGE` | 1,819 | 13,551,120 |
+| OrderPage | `account_len::ORDER_PAGE` | 3,883 | 27,916,560 |
 | SupplyLedger | `account_len::SUPPLY_LEDGER` | 333 | 3,208,560 |
 | Terms | `account_len::TERMS` | 1,304 | 9,966,720 |
 | PriceGrid | `account_len::PRICE_GRID` | 589 | 4,990,320 |
@@ -171,7 +175,7 @@ change turns the cost lab red instead of silently ageing it.
 | FinalPot | `account_len::FINAL_POT` | 262 | 2,714,400 |
 | SettlementReceipt | `account_len::SETTLEMENT_RECEIPT` | 217 | 2,401,200 |
 | Resolution | `account_len::RESOLUTION` | 165 | 2,039,280 |
-| **one instance of each (15)** | | **6,670** | **59,786,400 lamports** |
+| **one instance of each (15)** | | **8,734** | **74,151,840 lamports** |
 
 Of that principal, 13,363,200 lamports is the per-account 128-byte storage overhead, so the
 account count is a first-class capital term and not a rounding detail. A one-instance inventory is
@@ -179,13 +183,17 @@ an accounting unit, not a deployment plan: a live market holds many Positions, p
 
 ### The order page stopped being a parameter
 
-The landed page is a 235-byte header plus a dense array of sixteen 99-byte records, so
-`235 + 16 * 99 = 1,819` bytes exactly, and a frozen non-final page must hold exactly sixteen
-records. Page count is therefore forced by order count rather than chosen: 1 order still costs a
-whole page (1,485 bytes of paid zero padding), 17 orders cost two, and `MAX_ORDER_PAGES = 4` with
+The landed page is a 235-byte header plus a dense array of sixteen 228-byte order slots, so
+`235 + 16 * 228 = 3,883` bytes exactly, and a frozen non-final page must hold exactly sixteen
+slots. One slot is a kind byte plus the widest admitted body — 227 bytes of `PortfolioRecord`,
+against 99 for the single-Egg `OrderRecord` — with required-zero padding out to the common width,
+so both order families share one page, one order-id chain and one fold at the cost of a page that
+grew from 1,819 to 3,883 bytes. That growth is the price of the shared slot, not slack. Page count
+is therefore forced by order count rather than chosen: 1 order still costs a whole page (3,420
+bytes of paid zero padding), 17 orders cost two, and `MAX_ORDER_PAGES = 4` with
 `MAX_ORDERS_PER_PAGE = 16` caps one frozen book at `MAX_EPOCH_ORDERS = 64`, which is exactly
 `clutch_batch::MAX_ORDERS`. A 65-order book is a codec refusal, not an expensive case. A full
-four-page book is 54,204,480 lamports of page rent principal, and the frozen epoch state around it
+four-page book is 111,666,240 lamports of page rent principal, and the frozen epoch state around it
 (Epoch, PriceGrid, CandidateRecord) adds 1,222 bytes and 11,177,760 lamports.
 
 The hypothesis arm's 4/8/10 KiB page trade-off is consequently a statement about a design that no
@@ -199,20 +207,21 @@ current layout.
 | Position account | bytes | 192 | 220 | +28 | Same 128-byte 16-outcome balance vector; the landed header is 92 bytes (market, owner, generation, cash and reserved cash, bump, close state) rather than 64. |
 | SupplyLedger account | bytes | 320 | 333 | +13 | Same two u64 totals per outcome; the landed header is 77 bytes rather than 64. |
 | single-Egg order record | bytes | 80 | 99 | +19 | The landed record carries dual 32-byte identities plus a replay generation the sketch had no room for. |
-| portfolio order record | bytes | 208 | absent | - | `relation_v1` admits up to 8 portfolio orders with a 16-slot coefficient vector, but the landed `OrderRecord` stores one outcome index, so no persisted page encoding exists. |
-| order page account | bytes | 8,192 | 1,819 | -6,373 | A fixed 16-record array with cross-page closure fields replaced a variable byte budget. |
+| portfolio order record | bytes | 208 | 227 | +19 | `PortfolioRecord` persists the 16-slot coefficient vector the sketch had, plus dual identities, lots, per-lot collateral bound, minimum fill and a replay generation. |
+| order page account | bytes | 8,192 | 3,883 | -4,309 | A fixed 16-slot array with cross-page closure fields replaced a variable byte budget; the slot is sized for the wider family. |
 | order page header | bytes | 128 | 235 | +107 | Seven 32-byte identities (market, epoch, order set, page digest, first, last, previous-page-last) were never budgeted. |
-| records per page | records | 100 | 16 | -84 | Any per-page cost now amortizes over six times fewer orders. |
+| records per page | records | 100 | 16 | -84 | A page now holds 16 slots rather than about a hundred records, so any per-page cost amortizes over six times fewer orders. |
 | orders per book | orders | 512 | 64 | -448 | The 128- and 512-order rows describe several epochs, never one relation instance. |
 | internal-split instruction | bytes | 11 | 74 | +63 | `Intent::Split` names market and owner by 32-byte identity. |
 | materialize-one instruction | bytes | 11 | 107 | +96 | `Intent::Materialize` adds a 32-byte destination and an outcome index. |
 | accumulator full summary | bytes | 272 | absent | - | No summary account exists in the landed family; FeedHead is a 124-byte cursor, not a fold. |
 | landed-only accounts | bytes | absent | 4,298 | - | Twelve landed accounts had no counterpart in the hypothesis arm, so most of the landed rent inventory was previously unmodeled. |
 
-Two of these are structural rather than numeric. The persisted page cannot represent a portfolio
-order that the landed relation admits, which is a seam between `clutch-batch` and
-`programs/solana-layout` rather than a cost result. And the accumulator family remains entirely
-hypothetical, so its summary widths inherit no landed support at all.
+One of these is structural rather than numeric: the accumulator family remains entirely
+hypothetical, so its summary widths inherit no landed support at all. The other structural gap
+recorded here on 2026-08-18 — the persisted page could not represent a portfolio order that the
+landed relation admits — was closed the same day by OrderPage v3, and the portfolio row above now
+carries a landed width instead of `absent`.
 
 ### Landed intent payloads
 
@@ -335,14 +344,16 @@ Validated with Python 3.14.6 on Apple arm64 macOS:
 - every batch row authenticates exactly its input order count;
 - short-vector boundary encodings and non-splitting page packing have adversarial tests;
 - every landed width equals the sum of the codec field terms it was transcribed from, and
-  `abi-audit` re-derives all fifteen `account_len` constants from the Rust source with no drift;
-- the landed order page is exactly its header plus sixteen records, a 65-order book is refused,
-  and no landed relation row exceeds `MAX_ORDERS = 64`;
+  `abi-audit` re-derives the nine pinned size identifiers and all fifteen `account_len` constants
+  from the Rust source with no drift;
+- the landed order page is exactly its header plus sixteen 228-byte slots and one slot is exactly
+  a kind byte plus the widest admitted record body, a 65-order book is refused, and no landed
+  relation row exceeds `MAX_ORDERS = 64`;
 - `n = 24` is refused in the landed arm by the codec's own `check_count` bound as well as by V1
   policy;
 - no landed or differential row carries a compute-unit field;
 - golden JSON/CSV/Markdown and checksums reproduce byte-for-byte; and
-- 28/28 unit tests pass (the original 12 plus 16 covering the landed and differential arms).
+- 29/29 unit tests pass (the original 12 plus 17 covering the landed and differential arms).
 
 No RPC, validator, wallet, key, purchase, deployment, root manifest, or external state was used or
 changed.

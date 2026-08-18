@@ -279,7 +279,10 @@ supersede their stale status prose (the promotion-gate annotation hedges
 GOAL.md's done-log maps to real commits with matching content in both repos,
 "pushed" is true against origin, and the one unbacked entry is finding P3-6.
 Manifest vs handoff §5 is finding P2-2. Cost-lab annotations (261-row update,
-1,819-byte page note with commit ref) are accurate. degg's night commits are
+1,819-byte page note with commit ref) are accurate. (2026-08-19: the page is
+now 3,883 bytes — sixteen 228-byte tag-discriminated order slots, OrderPage v3,
+commit da2fbf7 — and the cost lab was re-pinned to it; the note above is
+accurate as of the commit it cites.) degg's night commits are
 consistent with the consolidated ledger — six load-bearing Draft 6 claims
 spot-checked against V-17/V-38/N-1..5/V-37/V-33 all hold verbatim, forbidden
 phrases appear only negated — except the stale hash rows (finding P3-8,
