@@ -54,6 +54,10 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
 - LANDSCAPE: 11 filed comments surveyed; IAC docket empty of technical
   statements; P-D5 crowded, P-R6 preempted; our formal-methods ground is
   a corpus-wide zero. Draft 7 rebalance queued behind TYPESET.
+- TYPESET: STIX Two Text, ten diseases fixed, content byte-preserved; pushed.
+- Clean-tree baseline manifest: 28/28 gates, 37 digests; pushed.
+- In flight: Draft 7 rebalance, open-matters map, attestation-artifact
+  survey, closing drift review.
 - D1: independent FBA oracle, 300M-case differential, zero semantic
   divergences, vectors byte-identical; spec gap (refusal-class priority)
   found and pinned; pushed.
