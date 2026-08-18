@@ -5,6 +5,17 @@ arithmetic boundary in `crates/clutch-batch`. It is not a proof, and the Rust
 crate does not claim formal verification. No `assume`, `admit`, axiom, or
 `external_body` is used to make a claim appear closed.
 
+Verus is installed and pinned (see
+[`toolchain/PINNED_PROOF_TOOLS.md`](../../toolchain/PINNED_PROOF_TOOLS.md)).
+Run directly against the pinned binary, `batch.rs` **fails** to compile:
+`cannot find macro 'verus' in this scope`, because the file has no
+`use vstd::prelude::*;`. It has never compiled and no proof log exists.
+
+`batch.rs` additionally contains four `proof fn`s whose entire postcondition
+is `ensures true`. These are vacuous placeholders, self-labelled `TODO`, and
+would prove nothing even if the file compiled — they must never be counted in
+any theorem or assumption inventory for this repository.
+
 The first obligations are:
 
 1. `allocate_conserves`: largest-remainder allocation sums to the target and

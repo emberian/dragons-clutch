@@ -4,7 +4,10 @@ Status: offline engineering plan. Checkboxes are work state, not authorization.
 
 ## 0. Current boundary
 
-- [x] Repository contains only pre-implementation specifications.
+- [x] Repository contains offline prototype implementations (kernel,
+  accumulator, batch, layout, reference adapter, labs) plus specifications; no
+  deployable program, workspace, or release exists. See CODEX_HANDOFF.md
+  section 4.
 - [x] AGPL-3.0-or-later is the first-party license.
 - [x] Gate L0 blocks public-network deployment, real funds, solicitation, and
   author-affiliated operation.

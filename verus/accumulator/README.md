@@ -14,10 +14,13 @@ cargo check --manifest-path crates/clutch-accumulator/Cargo.toml --lib
 
 The shadow records the bounded well-formedness relation and the algebraic
 obligations to discharge under the repository's pinned Verus toolchain. It is
-not called “formally verified” in this scaffold: Verus is not installed in the
-current checkout, and no proof log or toolchain digest exists yet. In
-particular, this directory contains no `assume`, `admit`, axiom, external-body,
-or proof-only executable branch.
+not called "formally verified" in this scaffold: Verus is installed and pinned
+(see
+[`toolchain/PINNED_PROOF_TOOLS.md`](../../toolchain/PINNED_PROOF_TOOLS.md)),
+and run directly against `accumulator.rs`, it **fails** with 4x `E0308`
+(`int`-typed sums returned from `u64`/`u128` spec fns) at lines 71, 75, 79, and
+83. No proof log records a pass. In particular, this directory contains no
+`assume`, `admit`, axiom, external-body, or proof-only executable branch.
 
 ## Closed claims
 

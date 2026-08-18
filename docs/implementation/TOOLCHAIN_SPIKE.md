@@ -54,7 +54,7 @@ Observed on 2026-08-17, `aarch64-apple-darwin`:
 | SBF platform tools | `v1.53` | reported by installed SBF toolchain |
 | SBF embedded Rust | `rustc 1.89.0` | reported by installed SBF builder |
 | Z3 | `4.16.0` | installed; not invoked by this no-proof probe |
-| Verus | **UNAVAILABLE** | no `verus` or `vargo` binary found |
+| Verus | `release/0.2026.08.15.7d4628a` | installed and pinned 2026-08-18; see addendum below |
 
 The machine-readable snapshot is [`toolchain/versions.env`](../../toolchain/versions.env).
 The snapshot is not a substitute for a future lock containing an exact Verus
@@ -156,10 +156,39 @@ of the following occurs:
 | SBF common-subset compile | PASS | continue |
 | SBF rebuild reproducibility | PASS | continue |
 | prohibited-source scan | PASS | continue |
-| Verus version/proof | BLOCKED: binary absent | no E1 promotion |
+| Verus version/proof | installed and pinned; probe fails under Verus (see addendum) | no E1 promotion |
 | adapter/ELF/program-test | NOT RUN | no claim |
 | resource and mutation matrix | NOT RUN | no claim |
 
 The correct present-tense result is **GO for further offline probe work; NO-GO
 for declaring the E1 toolchain gate closed or creating the protocol workspace**.
 No engineering result here closes Gate L0 or authorizes a public-network act.
+
+## 2026-08-18 update: proof tools pinned and installed
+
+Verus `release/0.2026.08.15.7d4628a` and Rocq 9.2.0 are now installed and
+pinned, with exact commits, artifact digests, and install method recorded in
+[`toolchain/PINNED_PROOF_TOOLS.md`](../../toolchain/PINNED_PROOF_TOOLS.md).
+This changes tool availability only; it does not close any gate above.
+
+`toolchain/scripts/run_verus.sh` now enforces the probe source digest and the
+pinned Verus version/frontend, and no longer refuses on "not installed." Run
+against the pinned probe, it **fails**: Verus rejects
+`toolchain/probes/no_std_core/src/lib.rs` because the file does not
+`use vstd::prelude::*;`, and adding that import would change the pinned
+single-source digest recorded above. This is a recorded failure, not a green
+gate; `verus=UNAVAILABLE` in the 2026-08-17 run above becomes "installed but
+failing," not "passing."
+
+`rocq/check.sh` now exits 0 with `status=PASS`, but this is definition
+typechecking only: `rocq/ClutchKernel.v` contains zero theorems, its six
+properties are unproved `Prop` definitions, and the resolve obligation's
+same-state conjunct is machine-checked vacuous (unsatisfiable hypothesis). No
+verification claim follows from this PASS.
+
+The three Verus shadow files under `verus/` were run directly against the
+pinned binary for the first time and all three fail to compile: see
+`toolchain/PINNED_PROOF_TOOLS.md` and the per-directory READMEs under
+`verus/kernel`, `verus/accumulator`, and `verus/batch` for the exact errors.
+
+E1 promotion remains **NO-GO**.
