@@ -282,7 +282,10 @@ even caller-supplied, internally coherent bytes forged into resolved lifecycle,
 phase, and payout state cannot redeem. The 10 tests plus strict Clippy, rustdoc,
 and fmt gates pass.
 
-**Remaining promotion gate:** resolution and redemption may be reintroduced only
+**Remaining promotion gate** *(2026-08-19: this gate has been satisfied in the
+offline adapter - resolution/redemption are now evidence-gated via
+apply_with_evidence; the evidence-absent path still refuses; authenticated
+sources remain a future SVM obligation)*: resolution and redemption may be reintroduced only
 through typed evidence binding maturity, an immutable sealed WindowResult,
 feed/source/evaluator versions, repair generation, exact Market terms, and
 payout-set membership. The present refusal is correct but supplies no liveness

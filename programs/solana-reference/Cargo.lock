@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "clutch-accumulator"
+version = "0.1.0"
+
+[[package]]
 name = "clutch-kernel"
 version = "0.1.0"
 
@@ -14,6 +18,7 @@ version = "0.1.0"
 name = "clutch-solana-reference"
 version = "0.1.0"
 dependencies = [
+ "clutch-accumulator",
  "clutch-kernel",
  "clutch-solana-layout",
 ]

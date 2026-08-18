@@ -1,0 +1,17 @@
+[package]
+name = "clutch-sbf-harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Host-side differential harness driving the bring-up SBF program under a local SVM"
+
+[[bin]]
+name = "clutch-sbf-harness"
+path = "src/main.rs"
+
+[dependencies]
+clutch-kernel = { path = "../../../crates/clutch-kernel" }
+clutch-solana-layout = { path = "../../solana-layout" }
+clutch-solana-reference = { path = "../../solana-reference" }
+clutch-sbf = { path = "../program" }

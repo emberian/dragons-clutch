@@ -1,0 +1,10 @@
+# Offline-only build configuration.
+#
+# The panamax mirror named in the lab notes (`~/crates.io/full`) does not exist
+# on this host, so there is no registry source replacement to point at.  The
+# only offline crate source available here is the ordinary Cargo download cache
+# under `~/.cargo/registry`.  `offline = true` makes that explicit: a resolution
+# that would need a network fetch fails loudly instead of silently reaching for
+# crates.io.  See docs/implementation/SBF_BRINGUP.md.
+[net]
+offline = true

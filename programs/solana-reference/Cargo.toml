@@ -10,6 +10,7 @@ description = "Offline no_std reference transition adapter for Dragon's Clutch"
 path = "src/lib.rs"
 
 [dependencies]
+clutch-accumulator = { path = "../../crates/clutch-accumulator" }
 clutch-kernel = { path = "../../crates/clutch-kernel" }
 clutch-solana-layout = { path = "../solana-layout" }
 

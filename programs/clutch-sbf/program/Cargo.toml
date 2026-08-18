@@ -1,0 +1,48 @@
+[package]
+name = "clutch-sbf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Bring-up native SBF program exposing exactly one Dragon's Clutch instruction"
+
+[lib]
+name = "clutch_sbf"
+path = "src/lib.rs"
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = []
+
+[dependencies]
+clutch-kernel = { path = "../../../crates/clutch-kernel" }
+clutch-solana-layout = { path = "../../solana-layout" }
+clutch-solana-reference = { path = "../../solana-reference" }
+solana-account-info = "=3.1.1"
+solana-program-entrypoint = "=3.1.1"
+solana-program-error = "=3.0.1"
+
+# `solana-pubkey` is taken with default features off on every target.  Under
+# `target_os = "solana"` program-address derivation is a runtime syscall and
+# needs no extra dependency.  The host-side `curve25519` backend is
+# deliberately NOT enabled: its proc-macro dependency
+# (`curve25519-dalek-derive`) has no `.crate` archive in this host's offline
+# cache, and enabling it makes `cargo metadata` -- which `cargo-build-sbf` runs
+# for every target -- fail offline.  See `seeds::find` and
+# `docs/implementation/SBF_BRINGUP.md`.
+solana-pubkey = { version = "=4.2.0", default-features = false }
+
+# Transitive pin, declared directly so the version is visible and reviewable.
+# `solana-address` requires `solana-define-syscall ^5.1.0`; the offline crate
+# source on this host holds 5.1.0 but not the newer 5.2.0 the resolver would
+# otherwise pick.  The dependency is used only through `solana-address`.
+solana-define-syscall = "=5.1.0"
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+priority = 0
+check-cfg = [
+    'cfg(target_os, values("solana"))',
+    # Emitted by the Anza `entrypoint!` macro expansion, not by this crate.
+    'cfg(feature, values("custom-heap", "custom-panic"))',
+]

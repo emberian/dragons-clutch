@@ -25,6 +25,15 @@ pub const LAYOUT_VERSION_V1: u8 = 1;
 pub const INTENT_VERSION: u8 = 1;
 /// Number of bytes in every identity/hash field.
 pub const HASH_BYTES: usize = 32;
+
+/// Exact byte length of the canonical parent Profile preimage.
+///
+/// Frozen by `docs/implementation/RESOLUTION_EVIDENCE_PLAN.md` §3.2: an eight
+/// byte magic, parent schema and flags, the collateral subfield tag and its
+/// schema, the 32-byte collateral-policy digest, and 16 zero reserved bytes.
+/// This crate owns only the length requirement of [`canonical_profile_hash`];
+/// the parent encoder/decoder is §3.4 obligation 2 and is unwritten here.
+pub const PROFILE_PARENT_BYTES: usize = 64;
 /// Maximum number of outcomes in a market.
 pub const MAX_OUTCOMES: usize = 16;
 /// Maximum number of payout vectors in one immutable terms set.
@@ -235,9 +244,31 @@ pub fn canonical_realm_id(profile: ProfileHash, realm_nonce: u64) -> RealmHash {
     )
 }
 
-/// Derive the profile hash from an exact profile byte sequence.
-pub fn canonical_profile_hash(profile_bytes: &[u8]) -> ProfileHash {
-    digest(b"dragons-clutch/profile/v1", &[profile_bytes])
+/// Derive the parent Profile hash from its exact canonical preimage.
+///
+/// The domain string and the algorithm are unchanged and stay frozen; what is
+/// frozen here is *which bytes they consume*.
+/// `docs/implementation/RESOLUTION_EVIDENCE_PLAN.md` §3.2 fixes the parent
+/// Profile preimage at exactly [`PROFILE_PARENT_BYTES`] bytes, and §3.4
+/// obligation 1 names the one real prefix-freeness hazard on the Rust side:
+/// hashing a *variable-length* payload under a fixed domain string is not
+/// prefix-free, so two different profiles could share a preimage boundary.
+/// The exact length is therefore a refusal condition rather than a convention.
+/// A shorter input is [`CodecError::Truncated`] and a longer one is
+/// [`CodecError::TrailingBytes`], matching every other fixed codec here.
+///
+/// This function still computes an identity only. It does not decode the
+/// parent Profile, does not recompute the collateral-policy subfield digest of
+/// §3.2, and therefore proves nothing about which collateral policy a Profile
+/// commits to; that binding check is §3.4 obligation 3 and is unwritten.
+pub fn canonical_profile_hash(profile_bytes: &[u8]) -> Result<ProfileHash> {
+    if profile_bytes.len() < PROFILE_PARENT_BYTES {
+        return Err(CodecError::Truncated);
+    }
+    if profile_bytes.len() > PROFILE_PARENT_BYTES {
+        return Err(CodecError::TrailingBytes);
+    }
+    Ok(digest(b"dragons-clutch/profile/v1", &[profile_bytes]))
 }
 
 /// Derive a canonical market ID from immutable namespace inputs.
@@ -4828,6 +4859,42 @@ mod tests {
     fn zero_identity_is_reserved() {
         assert_eq!(Hash32::new([0; HASH_BYTES]), Err(CodecError::ZeroIdentity));
         assert_eq!(Hash32::new([1; HASH_BYTES]), Ok(h(1)));
+    }
+    #[test]
+    fn canonical_profile_hash_requires_the_exact_parent_preimage_length() {
+        // The parent Profile preimage of RESOLUTION_EVIDENCE_PLAN.md 3.2 is
+        // exactly 64 bytes: magic, parent schema/flags, subfield tag/schema,
+        // the 32-byte collateral digest, and 16 zero reserved bytes.
+        let mut parent = [0u8; PROFILE_PARENT_BYTES];
+        parent[..8].copy_from_slice(b"DCPROF1\0");
+        parent[8..10].copy_from_slice(&1u16.to_le_bytes());
+        parent[12..14].copy_from_slice(&1u16.to_le_bytes());
+        parent[14..16].copy_from_slice(&1u16.to_le_bytes());
+        parent[16..48].copy_from_slice(&[0xab; 32]);
+        let exact = canonical_profile_hash(&parent).expect("exact parent preimage");
+        assert_ne!(exact, Hash32::ZERO);
+
+        // A variable-length input under one fixed domain string is not
+        // prefix-free, so every other length is a refusal rather than a hash.
+        assert_eq!(
+            canonical_profile_hash(&parent[..PROFILE_PARENT_BYTES - 1]),
+            Err(CodecError::Truncated)
+        );
+        assert_eq!(canonical_profile_hash(b""), Err(CodecError::Truncated));
+        assert_eq!(
+            canonical_profile_hash(b"fixture-profile"),
+            Err(CodecError::Truncated)
+        );
+        let mut extended = [0u8; PROFILE_PARENT_BYTES + 1];
+        extended[..PROFILE_PARENT_BYTES].copy_from_slice(&parent);
+        assert_eq!(
+            canonical_profile_hash(&extended),
+            Err(CodecError::TrailingBytes)
+        );
+
+        // The frozen domain string and algorithm are unchanged: the accepted
+        // length still hashes exactly SHA-256(domain || preimage).
+        assert_eq!(exact, digest(b"dragons-clutch/profile/v1", &[&parent]));
     }
     #[test]
     fn sha256_known_vector() {

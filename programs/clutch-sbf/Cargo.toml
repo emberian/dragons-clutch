@@ -1,0 +1,32 @@
+# Bring-up workspace for the Dragon's Clutch native SBF program.
+#
+# This workspace is deliberately separate from `programs/solana-layout` and
+# `programs/solana-reference`, which stay dependency-free.  Only this workspace
+# is permitted to depend on Anza SDK crates.
+[workspace]
+resolver = "2"
+members = ["program", "harness"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+
+# Link-time optimization is on so that the SBF ELF contains only code the
+# entrypoint can actually reach.  `clutch-solana-reference` is depended on for
+# its reference-only account and request codecs; its offline `apply` and
+# `validate_market_init` functions are never called from a program and must not
+# ride along in the deployable artifact.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+overflow-checks = true
+
+# Offline build plumbing, not a fork.  See `vendor/PROVENANCE.md`: this host has
+# the `solana-define-syscall 5.1.0` source but not its `.crate` archive, and
+# `cargo metadata` (which `cargo-build-sbf` runs) requires an archive for every
+# package in the graph.  The patched source is byte-identical to the published
+# crate.
+[patch.crates-io]
+solana-define-syscall = { path = "vendor/solana-define-syscall-5.1.0" }
