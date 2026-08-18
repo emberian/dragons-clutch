@@ -17,10 +17,11 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
 
 ## Next 3 moves
 
-1. Land B/C/S1 → integrate into solana-reference → full program-test wave.
+1. Land REF-INT + S1 → umbrella gate → clean-tree baseline manifest → push.
 2. Expand SBF program to every instruction; local-validator walk of the
    PROJECT.md §10 lifecycle; measure CU/stack/heap.
-3. Release-evidence manifest + reproducible build story = "deployable" bar.
+3. Closing wave: drift review over waves 3-4, GOAL.md wrap for ember's
+   return (policy decisions + Draft 6 read + John hand-off queued).
 
 ## Done log
 
