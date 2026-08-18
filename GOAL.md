@@ -27,6 +27,10 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- Vector spine implemented: 25 vectors, first executor, ten findings
+  (incl. clutch-sbf parallel error numbering -> consolidation pass;
+  G1/G2 re-scope -> ember review queue). Pushed.
+
 - Inclusion/availability model (degg P1-3): MMR log, receipts,
   equivocation verdicts, 125 tests; six build-time findings; pushed.
 - Cost lab v3 re-pin + source-derived identifier guard; pushed.
