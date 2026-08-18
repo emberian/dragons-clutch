@@ -29,6 +29,14 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- Wave 8 CLOSED: drift review committed, both structural P2s fixed
+  (manifest not-attested text truthful, handoff knows the program
+  exists), fresh strict manifest 33/33 (1a537bc). Everything pushed.
+- Wave 9 open on the gap ledger: GENESIS lane (init instructions +
+  endowment + system-CPI creation + ClearWork/candidate codecs) and
+  TOKEN-COMPLETE lane (CreateMarket makes real mints, collateral leg
+  wired, mandatory token plane, E5 rollback demo).
+
 - TOKEN-CPI landed: real Token-2022 mint/burn on a real bank, exact
   deltas, ~95K CU/leg, extension refusals live, seed bug caught; the
   out-of-band-burn DoS measured as the cutover argument. Pushed.
