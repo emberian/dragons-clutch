@@ -2,16 +2,19 @@
 
 A deployable SBF program with a routed instruction set: Split, Merge,
 Materialize, Dematerialize, CreateMarket, FeedAdvance, evidence-gated
-Resolve, RedeemInternal, and PlaceOrder are implemented, each mirroring the
-offline reference adapter with byte-level differential tests; the SVM harness
-drives all reference-oracled families through a real bank byte-exactly.
+Resolve, and RedeemInternal are implemented, each mirroring the offline
+reference adapter with byte-level differential tests, and the SVM harness
+drives all eight through a real bank byte-exactly. PlaceOrder and
+CancelOrder (v4 tombstones) are implemented with host tests only — the
+reference adapter models no order family, so they have no oracle and no
+SVM leg.
 
 This is **bring-up evidence, not a finished program**. It is not complete,
-not audited, and not authorization to deploy anywhere. `Resolve` currently
-exceeds the per-transaction compute ceiling (measured; the terms facts API
-fix is in flight). `CancelOrder` is implemented via v4 tombstones; `SettlePage` is an honest
-refusal with a recorded finding (on-chain settlement awaits the streaming
-verifier's integration).
+not audited, and not authorization to deploy anywhere. `Resolve` once
+exceeded the per-transaction compute ceiling; the terms facts API fix
+landed and it now executes at 536 123 CU (38% of the ceiling).
+`SettlePage` is an honest refusal with a recorded finding (on-chain
+settlement awaits the streaming verifier's integration).
 A refusal reads no account, writes no byte, and reports no success.
 
 - `program/` — the SBF program. No semantic or economic logic: it authenticates
