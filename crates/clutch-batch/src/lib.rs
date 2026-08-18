@@ -1,13 +1,30 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-//! A small, deterministic frequent-batch relation.
+//! Deterministic frequent-batch relations.
 //!
 //! This crate is deliberately independent of Solana and of any account or
 //! matching-service representation.  A book is a fixed array, its policy is
 //! frozen at construction, and a candidate can be recomputed by any verifier.
-//! The policy is not an optimality claim: the clearing price is the best valid
-//! grid point under the explicit tie rule below.
+//! Nothing here is an optimality claim: an accepted candidate is only ever the
+//! best valid submitted candidate under the frozen, explicit tie rule.
+//!
+//! The crate holds two relations, and they are not the same object:
+//!
+//! * the **scalar** relation in this module ([`FixedBook`]) clears one grid tick
+//!   over side totals with owner and outcome erased.  It is retained unchanged
+//!   as a regression lab, and its known defect (§P1-B of the adversarial review:
+//!   matched volume that no executable transfer can realize) is exactly what the
+//!   coupled relation repairs;
+//! * the **coupled** relation in [`relation_v1`] binds every fill to
+//!   `(owner, outcome, side)`, closes per-outcome conservation through one
+//!   global virtual split/merge pair, and proves from the witness alone that the
+//!   accepted fills admit a complete executable pairing.
+//!
+//! Both are IMPLEMENTED host-model code.  Neither is verified, and neither is
+//! the SVM relation.
+
+pub mod relation_v1;
 
 pub const MAX_ORDERS: usize = 64;
 pub const MAX_GRID_TICKS: usize = 64;
@@ -444,7 +461,7 @@ pub enum Error {
     DustRejected,
 }
 
-fn seeded_rank(order_id: u64, seed: u64) -> u64 {
+pub(crate) fn seeded_rank(order_id: u64, seed: u64) -> u64 {
     // A fixed SplitMix-style permutation seeded by the frozen policy.
     let mut x = order_id ^ seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
     x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -635,6 +652,58 @@ mod tests {
             FixedBook::new(policy(DustPolicy::AssignCanonical), orders, 2),
             Err(Error::NonCanonicalOrderOrder)
         );
+    }
+
+    #[test]
+    fn batch_rejects_buy_below_clearing_tick() {
+        // The §6 name for the repaired ineligible-fill gate, buy direction: a
+        // buy whose limit is below the clearing tick may never carry a fill.
+        let mut orders = empty(policy(DustPolicy::AssignCanonical));
+        orders[0] = order(1, Side::Buy, 2, 10);
+        orders[1] = order(2, Side::Buy, 0, 10);
+        orders[2] = order(3, Side::Sell, 2, 10);
+        let book = FixedBook::new(policy(DustPolicy::AssignCanonical), orders, 3).unwrap();
+        let canonical = book.propose().unwrap();
+        assert_eq!(canonical.clearing_tick, 2);
+        let forged = Candidate {
+            clearing_tick: 2,
+            fills: {
+                let mut fills = [0u64; MAX_ORDERS];
+                fills[1] = 10;
+                fills[2] = 10;
+                fills
+            },
+            len: 3,
+            matched: canonical.matched,
+        };
+        assert_eq!(book.verify(&forged), Err(Error::IneligibleFill));
+    }
+
+    #[test]
+    fn batch_rejects_sell_above_clearing_tick() {
+        // The inverse inequality: a sell whose limit is above the clearing tick
+        // may never carry a fill either.  Both comparisons are gated.
+        let mut orders = empty(policy(DustPolicy::AssignCanonical));
+        orders[0] = order(1, Side::Buy, 0, 10);
+        orders[1] = order(2, Side::Sell, 0, 10);
+        orders[2] = order(3, Side::Sell, 2, 10);
+        let book = FixedBook::new(policy(DustPolicy::AssignCanonical), orders, 3).unwrap();
+        let canonical = book.propose().unwrap();
+        assert_eq!(canonical.clearing_tick, 0);
+        assert_eq!(canonical.fills[1], 10);
+        assert_eq!(canonical.fills[2], 0);
+        let forged = Candidate {
+            clearing_tick: 0,
+            fills: {
+                let mut fills = [0u64; MAX_ORDERS];
+                fills[0] = 10;
+                fills[2] = 10;
+                fills
+            },
+            len: 3,
+            matched: canonical.matched,
+        };
+        assert_eq!(book.verify(&forged), Err(Error::IneligibleFill));
     }
 
     #[test]
