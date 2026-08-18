@@ -32,3 +32,4 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
 - Repos created and pushed (this entry).
 - Draft 6 filings: 20 argued positions, audience ontology, 2/3 length; pushed.
 - Night drift review A-H pass; fixes committed both repos.
+- P0-5 Python defaults removed (behavior byte-identical); VM coupled-path doc.
