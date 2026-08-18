@@ -27,6 +27,10 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- Refusal-order frozen (18 rules, 3 tiers); differential now ZERO
+  divergences over 300.4M cases; custody-bound gap closed; C024 in the
+  claim ledger with the conformance-vs-corroboration distinction. Pushed.
+
 - Posting-path spec landed (policy/record shapes, admission relation,
   value-gap finding, E1-E3 ladder); live-session ceiling corrected at
   primary source: a real api.coinbase.com MPC-TLS session IS recorded
