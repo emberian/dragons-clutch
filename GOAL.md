@@ -137,8 +137,9 @@ posting-path spec; Draft 7 rebalance still out.
 0a. Conflicts NPRM comment candidate (Oct 5; zero-artifact, one seam) - go/no-go.
 0b. Data Q4 insert candidate (rides the Aug 24 filing; consistency proven) - go/no-go.
 
-1. IAC addendum: GO received - being inserted (IAC statement -> Draft 8).
-2. 24/7-perpetuals: GO received - typst conversion in flight (Draft 1).
+1. DONE: IAC Draft 8 carries the operatorless section (8pp; page 8 is
+   apparatus only - sanction content cuts if you want 7pp).
+2. DONE: perpetuals filing Draft 1 (4pp). John packet is now ROUND 1 of 2.
 3. One paid Bedrock MPC-TLS session (first provider-attested transcript).
 4. Vendored solana-define-syscall provenance sign-off.
 5. Policy freezes (residual 1a/1b/1c, lots, AON, fee carry - evidence in).
