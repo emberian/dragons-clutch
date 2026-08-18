@@ -28,8 +28,9 @@ source fields are opaque 32-byte identities here. Account owner/executable/
 signer/writable/alias/PDA checks remain outside this crate.
 
 Several bounds are restatements of constants owned by other crates —
-`MAX_PAYOUTS = 8` (kernel), `MAX_GRID_TICKS = 64` and `MAX_ORDERS = 64` (batch),
-`MAX_BUCKET_SECONDS` and `MAX_BUCKETS` (accumulator), `RELATION_VERSION = 1`.
+`MAX_PAYOUTS = 8` (kernel), `MAX_GRID_TICKS = 64`, `MAX_ORDERS = 64` and
+`MAX_PORTFOLIO_ORDERS = 8` (batch), `MAX_BUCKET_SECONDS` and `MAX_BUCKETS`
+(accumulator), `RELATION_VERSION = 1`.
 The crate stays dependency-free, so they are restated rather than imported and a
 codec test pins each one. A divergence from an owning crate is a real defect,
 not a local policy choice.
@@ -37,18 +38,18 @@ not a local policy choice.
 ## Version discipline
 
 Each account carries its **own** schema version (`account_version::*`).
-`LAYOUT_VERSION` is the largest of them (`2`), not one wire version shared by
-every account. Accounts whose bytes never changed still encode and require
-version `1`; accounts whose bytes changed encode `2` and refuse `1` explicitly
-with `WrongVersion`. New accounts start at `2`, so the pair `(tag, version)`
-never names two different shapes.
+`LAYOUT_VERSION` is the largest of them (`3`), not one wire version shared by
+every account. An account keeps the version its current bytes were introduced
+at; an account whose bytes change moves to the next version and refuses every
+earlier one explicitly with `WrongVersion`, so the pair `(tag, version)` never
+names two different shapes.
 
 | Account | Version | Change |
 | --- | ---: | --- |
 | Realm, Market, Hoard, Position, Feed head | 1 | bytes unchanged |
 | Profile | 2 | gained the 32-byte collateral-policy digest |
-| Dense order page | 2 | gained every page-set commitment field |
-| Every account introduced with this revision | 2 | new |
+| Supply ledger, Terms, Epoch, Price grid, Candidate, Final pot, Receipt, Resolution | 2 | introduced at 2 |
+| Dense order page | 3 | version 2 gained the page-set commitment fields; version 3 replaced its bare 99-byte records with tagged fixed-width order slots and refuses both 1 and 2 |
 
 Intent bytes are versioned separately (`INTENT_VERSION = 1`) and did not change.
 
@@ -71,7 +72,7 @@ All integers are little-endian. The first two bytes are `(tag, version)`.
 | Hoard | 5 | 108 | market/realm/authority, collateral atoms, bump, flags |
 | Position | 6 | 220 | market/owner, generation, 16 `u64` balances, cash/reserved cash |
 | Feed head | 7 | 124 | feed/realm, cursor/boundary/pages, summary digest, bump |
-| Dense order page | 8 | 1819 | market/epoch, 5 page-set commitments, page metadata, 16 × 99-byte records |
+| Dense order page | 8 | 3883 | market/epoch, 5 page-set commitments, page metadata, 16 × 228-byte tagged order slots |
 | Supply ledger | 9 | 333 | market/realm, generation, 16 internal + 16 external `u64` |
 | Immutable terms | 10 | 1304 | terms digest, realm/profile/feed/price-grid, 8 × payout vector, window policy, failure policy |
 | Epoch (book domain) | 11 | 328 | epoch/market/book/terms/grid/policy/order-set IDs, order range, shape, seed, phase |
@@ -81,8 +82,12 @@ All integers are little-endian. The first two bytes are `(tag, version)`.
 | Settlement receipt | 15 | 217 | epoch/market/candidate, buy/sell order ids, slice, quantity, price, consideration, consumed flags |
 | Resolution | 16 | 165 | market/terms/feed, sealed window digest, cursor, repair generation, payout index |
 
-One instance of every listed account is 6,670 bytes; a market whose epoch book
-uses the full four pages is 12,127 bytes. This is the byte-size inventory only;
+One order slot is 228 bytes: a one-byte kind discriminator, that kind's exact
+body (99 bytes single-Egg, 227 bytes portfolio), and canonical zero padding out
+to the common width. The 235-byte page header is unchanged.
+
+One instance of every listed account is 8,734 bytes; a market whose epoch book
+uses the full four pages is 20,383 bytes. This is the byte-size inventory only;
 it is not a rent, account-metadata, transaction-message, or compute-unit
 estimate, and it excludes page multiplicity beyond the one case named.
 
@@ -104,6 +109,7 @@ bytes instead of scanning positions, which is not an onchain option.
 | Limit-to-tick domain | `PriceGridAccount.ticks` | `binds_terms`, `OrderPageAccount::decode_on_grid` |
 | Frozen book domain | `EpochAccount` | `binds_terms`, `binds_page_set` |
 | Frozen order set | every `OrderPageAccount`'s commitment fields | `verify_page_set` |
+| One portfolio order's coefficient vector and cash bound | `PortfolioRecord` inside an `OrderSlot` | `validate`, `validate_on_scale`, `binds_page_set` |
 | One candidate's free coordinates | `CandidateRecord` | `binds_epoch` |
 | Settlement pot | `FinalPotAccount` | `binds_candidate` |
 | One settled slice | `SettlementReceiptAccount` | `binds_candidate` |
@@ -163,16 +169,23 @@ the set-wide order-set digest, and the frozen set order count.
   the order-id sequence strictly increasing across the whole set, not per page;
 - every non-final page of a frozen set is dense and the final page closes the
   count exactly;
-- the per-page order counts sum to the committed set order count; and
+- the per-page order counts sum to the committed set order count;
+- the portfolio records across the whole set do not exceed
+  `MAX_PORTFOLIO_ORDERS = 8`, which a single page cannot decide; and
 - folding the page digests in index order reproduces the stored order-set
   digest.
 
 Adversarial tests cover a dropped middle page, a duplicate order id across a
 page boundary, a page-order swap, a post-freeze mutation of one order byte
 (including the case where the mutator also recomputes that page's own digest), a
-broken predecessor link, and an unfrozen page smuggled into a closed set.
-`EpochAccount::binds_page_set` then ties the verified set to the epoch's
-committed order set, page count, order count, and order range.
+broken predecessor link, an unfrozen page smuggled into a closed set, a
+post-freeze change to one portfolio coefficient atom or cash bound, a slot
+re-typed from portfolio to single-Egg, and a ninth portfolio added on the page
+after the eighth. `EpochAccount::binds_page_set` then ties the verified set to
+the epoch's committed order set, page count, order count, and order range, and —
+because a page alone can only bound an outcome index by `MAX_OUTCOMES` — refuses
+any single-Egg outcome at or above, or any portfolio `active_len` above, the
+epoch's own `outcome_count`.
 
 While an epoch is open it commits to nothing: order-set digest, order range,
 page count, and order count must all be zero, and any nonzero value there is
@@ -180,16 +193,162 @@ refused as noncanonical padding rather than treated as a stale hint.
 
 ## Limit-to-tick mapping
 
-`OrderRecord.limit` remains an opaque `u64` on the venue scale and its 99 bytes
-are unchanged. The frozen mapping to the relation's tick domain lives in
+`OrderRecord.limit` remains an opaque `u64` on the venue scale and its 99-byte
+body is unchanged. The frozen mapping to the relation's tick domain lives in
 `PriceGridAccount`: a strictly increasing tick vector, each tick at most the
 price scale, with the grid identity being the digest of that body. A limit maps
 to a tick by exact membership; a limit that is not exactly one of the ticks has
 no tick. `OrderPageAccount::decode_on_grid` therefore refuses off-grid limits at
 decode time with `InvalidTick`, and the plain `decode` — which cannot see a grid
-— performs only the structural checks. `TermsAccount.price_grid` binds the grid
+— performs only the structural checks. A portfolio record has no tick to look
+up: its bound is a per-lot collateral in complete-set units, not a per-outcome
+limit price, and it may legitimately exceed the price scale. What the grid
+contributes there is the frozen scale, against which `decode_on_grid` refuses
+per-lot values and per-lot bounds that could never be evaluated at all
+(`ArithmeticOverflow`). `TermsAccount.price_grid` binds the grid
 to the market's immutable terms, and `EpochAccount.price_grid` and
 `price_scale` bind it to the clearing epoch.
+
+## Portfolio order records (addendum, 2026-08-18)
+
+The cost lab recorded this as a structural seam rather than a cost result:
+`crates/clutch-batch` `relation_v1` admits up to eight portfolio orders carrying
+a 16-slot coefficient vector, and the landed 99-byte `OrderRecord` carried a
+single `outcome: u8` and no coefficients, so a portfolio order the relation
+admits had no persisted page encoding at all. This addendum is that encoding.
+Like everything else here it is PROPOSED and is not a frozen deployment ABI.
+
+### Representation: tagged fixed-width slots in the same page
+
+Two shapes were on the table: a distinct record type discriminated by a tag
+inside the existing page, and a separate `PortfolioPageAccount`. The page won,
+for a reason that is about the commitment rather than about bytes. The relation
+book is one array of orders in one strictly increasing canonical order-id order,
+interleaving both families, and at most 64 orders in total; the page geometry
+exists precisely so that a full page set *is* one book. A separate account would
+split the one order-id chain into two, so cross-family uniqueness — a portfolio
+and a single-Egg record can never share an order id — would stop being a
+consequence of the checks that already close the set and would become a new
+merge check nothing commits to; it would also let a full set of four dense pages
+plus a portfolio account hold 72 orders, which is not a book. Keeping both
+families in one page keeps one chain, one fold, one `set_order_count`, and one
+`MAX_EPOCH_ORDERS == MAX_ORDERS` identity. The cost of that is a common slot
+width: every slot is `ORDER_SLOT_BYTES = 228` bytes even though a single-Egg body
+is 99, which is why the page grew from 1,819 to 3,883 bytes. That is not slack.
+The unused tail of a single-Egg slot is *required* to be zero, exactly like every
+other padded field in this crate, so a slot has one encoding, the account keeps
+one exact length, and padding can never influence a digest.
+
+### Slot layout
+
+A slot is a one-byte kind discriminator, that kind's exact body, and canonical
+zero padding to the common width. Kind `0` is padding and the whole slot is
+zero; kind `1` is a single-Egg `OrderRecord`; kind `2` is a `PortfolioRecord`.
+Any other kind byte is `WrongTag`, and a nonzero byte anywhere in a slot's
+padding is `NonCanonicalPadding` — including an all-zero record smuggled into a
+padding slot under a real kind byte, which is a record and not padding.
+
+Kind 1, single-Egg (`ORDER_RECORD_BYTES = 99` of body):
+
+| Slot-local offset | Bytes | Field |
+| ---: | ---: | --- |
+| 0 | 1 | kind = 1 |
+| 1 | 32 | `owner` |
+| 33 | 32 | `order_id` |
+| 65 | 1 | `outcome` |
+| 66 | 1 | `side` |
+| 67 | 8 | `quantity` |
+| 75 | 8 | `limit` |
+| 83 | 8 | `minimum_fill` |
+| 91 | 1 | `flags` |
+| 92 | 8 | `generation` |
+| 100 | 128 | zero padding to the common width |
+
+Kind 2, portfolio (`PORTFOLIO_RECORD_BYTES = 227` of body, no padding):
+
+| Slot-local offset | Bytes | Field |
+| ---: | ---: | --- |
+| 0 | 1 | kind = 2 |
+| 1 | 32 | `owner` |
+| 33 | 32 | `order_id` |
+| 65 | 1 | `side` |
+| 66 | 1 | `active_len` |
+| 67 | 1 | `flags` |
+| 68 | 128 | `coefficients[0..16]`, 16 x `u64` |
+| 196 | 8 | `lots` |
+| 204 | 8 | `limit_collateral_per_lot` |
+| 212 | 8 | `minimum_fill_lots` |
+| 220 | 8 | `generation` |
+
+The single-Egg body is byte-identical to the previous 99-byte record and simply
+moved one byte right, behind its kind discriminator. A unit test pins every
+offset in both tables against the encoder, so the tables and the codec cannot
+drift apart.
+
+### What the codec refuses
+
+`PortfolioRecord::validate` is the scale-free half: zero owner or order id;
+`side > 1` or any reserved flag bit; `active_len` outside `1 ..= 16`; any nonzero
+coefficient at or beyond `active_len` (the "coefficient count disagrees with the
+declared outcome width" refusal); an all-zero active vector, which asks for
+nothing at any price; `lots == 0`; `minimum_fill_lots > lots`; an all-or-none
+flag whose `minimum_fill_lots` is not `lots`; and a `lots × Σcoefficients`
+product that is not representable.
+
+`PortfolioRecord::validate_on_scale`, reached through
+`OrderPageAccount::decode_on_grid`, adds the two products that need the frozen
+price scale: `lots × Σcoefficients × price_scale` and
+`lots × limit_collateral_per_lot × price_scale`. A record failing either could
+never be classified against any candidate, so refusing it is a representability
+fact rather than an economic judgement.
+
+Set-wide, `verify_page_set` refuses more than `MAX_PORTFOLIO_ORDERS = 8`
+portfolio records across the frozen set, and a single page refuses more than
+eight by itself. `EpochAccount::binds_page_set` refuses an `active_len` above
+the epoch's `outcome_count` — a page alone can only bound a width by
+`MAX_OUTCOMES`, and the epoch is the account that names the market's actual
+width. The same binding now also refuses a single-Egg `outcome` at or above the
+epoch's `outcome_count`, which no account checked before.
+
+The page digest domain moved to `dragons-clutch/order-page/v2` because its
+preimage shape changed. The order-set fold keeps `dragons-clutch/order-set/v1`:
+its preimage — market, epoch, page count, order count, page digests — did not
+change, and the leaves it folds already carry the new domain.
+
+### Mapping contract to `PortfolioOrderV1`
+
+The layout owns bytes; the relation owns semantics. A decoded `PortfolioRecord`
+maps onto `clutch_batch::relation_v1::PortfolioOrderV1` exactly as follows. The
+rustdoc on `PortfolioRecord` carries this as a doc-tested example.
+
+| `PortfolioOrderV1` field | Source in the decoded record |
+| --- | --- |
+| `coefficients: [u64; 16]` | `coefficients`, verbatim, including its zero padding |
+| `active_len: u8` | `active_len` |
+| `lots: u64` | `lots` |
+| `limit_collateral_per_lot: u64` | `limit_collateral_per_lot` |
+| `minimum_fill_lots: u64` | `minimum_fill_lots` |
+| `side: Side` | `side`: `0` → `Buy`, `1` → `Sell` |
+| `partial_policy: PartialPolicy` | `flags` bit 0 set → `AllOrNone`, clear → `Allow` |
+| `owner: u16` | the adapter's owner-tag image of the 32-byte `owner`, which must land in `0 .. EpochAccount.owner_count` |
+| `canonical_order_id: u64` | the record's rank in the verified page set, plus one — the set already fixes one strictly increasing order, so rank is nonzero, strictly increasing, and order-preserving by construction |
+| `expiry_epoch: u64` | **not persisted by any record.** An adapter must supply it from an authenticated source; the single-Egg family has the same hole and always did |
+| — | `generation` is replay protection for the placing instruction and has no relation field |
+
+The two identity rows are conversions the adapter performs, not values this
+crate stores, and neither is checked here: nothing in this crate proves that an
+owner tag is a bijection into `owner_count`, and nothing proves that a caller
+ranked the set the way the relation will. What the crate does guarantee is that
+the ranking exists and is unique — `verify_page_set` establishes a single
+strictly increasing order-id chain across both families and the whole set — so
+the conversion is well defined rather than a choice.
+
+Correspondingly, these relation refusals are *not* pre-empted here and remain
+`clutch-batch`'s: `active_len <= domain.outcome_count` (checked here only against
+the epoch, not the relation domain), `owner < domain.owner_count`,
+`expiry_epoch >= domain.epoch`, the all-or-none admission policy, and every
+eligibility, fill, conservation, and pairing question. A byte-valid portfolio
+record is not an admissible order.
 
 ## Collateral-policy digest field
 
@@ -262,8 +421,10 @@ The seam is deliberately one-way:
    account bytes, and this crate stores policy identities without interpreting
    them.
 4. It maps a verified page set plus `EpochAccount` to
-   `clutch-batch::relation_v1::RelationDomainV1`, and `CandidateRecord` to that
-   relation's candidate witness. The batch crate owns eligibility, fills,
+   `clutch-batch::relation_v1::RelationDomainV1`, each decoded order slot to a
+   `SingleEggOrderV1` or `PortfolioOrderV1` under the field-by-field contract in
+   the portfolio addendum above, and `CandidateRecord` to that relation's
+   candidate witness. The batch crate owns eligibility, fills,
    conservation, pairing feasibility, tie rules, and its "best valid submitted
    candidate" wording; this crate owns only bytes, identity, and order.
 
@@ -285,5 +446,12 @@ computed correctly, that a resolution's window was really sealed, or that any
 multi-position aggregate closes. Each of those needs the owning semantic crate
 plus an authenticated adapter; the bytes only make the question askable.
 
-Gates run offline and locked: 37 unit tests, `clippy --all-targets -D warnings`,
-`RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`, and `cargo fmt --check`.
+Gates run offline and locked: 45 unit tests and 1 doc test,
+`clippy --all-targets -D warnings`, `RUSTDOCFLAGS="-D warnings" cargo doc
+--no-deps`, and `cargo fmt --check`.
+
+The order page's width change makes `benchmarks/cost_lab.py abi-audit` refuse:
+its Rust size-expression evaluator has no value pinned for `ORDER_SLOT_BYTES`.
+Re-pinning the landed arm — `abi_landed` `order_page` bytes/formula/field terms
+and schema version, `layout_version`, and the new slot widths — belongs to the
+cost lab, not here.

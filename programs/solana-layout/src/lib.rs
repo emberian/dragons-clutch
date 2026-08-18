@@ -15,12 +15,20 @@
 ///
 /// Each account carries its **own** schema version byte (see
 /// [`account_version`]); this constant is the largest of them, not a single
-/// wire version shared by every account.  Accounts whose bytes never changed
-/// still encode and require [`LAYOUT_VERSION_V1`]; accounts whose bytes changed
-/// encode `2` and refuse `1` explicitly with [`CodecError::WrongVersion`].
-pub const LAYOUT_VERSION: u8 = 2;
+/// wire version shared by every account.  An account keeps the version its
+/// current bytes were introduced at; an account whose bytes change moves to the
+/// next version and refuses every earlier one explicitly with
+/// [`CodecError::WrongVersion`], so the pair `(tag, version)` never names two
+/// shapes.
+pub const LAYOUT_VERSION: u8 = 3;
 /// The initial prototype schema version.
 pub const LAYOUT_VERSION_V1: u8 = 1;
+/// The schema version of the first persisted-state revision.
+///
+/// The dense order page encoded this version while its slots were bare 99-byte
+/// single-Egg records; it now encodes [`account_version::ORDER_PAGE`] and
+/// refuses this one.
+pub const LAYOUT_VERSION_V2: u8 = 2;
 /// Schema version of every deterministic intent encoding.
 pub const INTENT_VERSION: u8 = 1;
 /// Number of bytes in every identity/hash field.
@@ -54,6 +62,13 @@ pub const MAX_ORDER_PAGES: usize = 4;
 /// Mirrors `clutch_batch::MAX_ORDERS`; the page geometry is chosen so a full
 /// page set is exactly one relation book.
 pub const MAX_EPOCH_ORDERS: usize = MAX_ORDERS_PER_PAGE * MAX_ORDER_PAGES;
+/// Maximum portfolio orders in one frozen epoch book.
+///
+/// Mirrors `clutch_batch::relation_v1::MAX_PORTFOLIO_ORDERS`.  A page set that
+/// carries more portfolio records than this could never be one relation book,
+/// so [`verify_page_set`] refuses it for the same reason the geometry above
+/// exists.
+pub const MAX_PORTFOLIO_ORDERS: usize = 8;
 /// Relation version projected by [`EpochAccount`].
 ///
 /// Mirrors `clutch_batch::relation_v1::RELATION_VERSION_V1`.
@@ -72,13 +87,39 @@ pub const MAX_WINDOW_BUCKETS: u64 = 1_000_000;
 pub const MAX_PRICE_SCALE: u64 = u64::MAX / MAX_OUTCOMES as u64;
 /// Sentinel payout index meaning "this market has not resolved".
 pub const PAYOUT_INDEX_UNRESOLVED: u8 = u8::MAX;
-/// Exact encoded length of one [`OrderRecord`].
+/// Exact encoded length of one [`OrderRecord`] body, without its slot kind byte.
 pub const ORDER_RECORD_BYTES: usize = 32 + 32 + 1 + 1 + 8 + 8 + 8 + 1 + 8;
+/// Exact encoded length of one [`PortfolioRecord`] body, without its kind byte.
+///
+/// The coefficient vector is stored at full [`MAX_OUTCOMES`] width with
+/// canonical zero padding beyond `active_len`, exactly like every other
+/// outcome-indexed vector here, so this length does not depend on how many
+/// outcomes one portfolio actually touches.
+pub const PORTFOLIO_RECORD_BYTES: usize = 32 + 32 + 1 + 1 + 1 + (MAX_OUTCOMES * 8) + 8 + 8 + 8 + 8;
+/// Exact encoded length of one order slot in a page.
+///
+/// A slot is a one-byte kind discriminator, that kind's exact body, and
+/// canonical zero padding out to this common width.  Fixing the slot width is
+/// what lets one page hold both admitted order families while keeping a single
+/// exact account length, a single strictly increasing order-id chain, and a
+/// single page-set fold.  The padding is not slack: every byte of it is
+/// required to be zero, so it can never influence a digest.
+pub const ORDER_SLOT_BYTES: usize = 1 + PORTFOLIO_RECORD_BYTES;
+/// Order-slot kind: canonical padding.  The whole slot is zero.
+pub const ORDER_KIND_EMPTY: u8 = 0;
+/// Order-slot kind: one single-Egg [`OrderRecord`].
+pub const ORDER_KIND_SINGLE: u8 = 1;
+/// Order-slot kind: one [`PortfolioRecord`].
+pub const ORDER_KIND_PORTFOLIO: u8 = 2;
 /// Maximum encoded instruction length.
 pub const MAX_INTENT_BYTES: usize = 256;
 
 const _: () = assert!(MAX_EPOCH_ORDERS == 64);
 const _: () = assert!(MAX_PRICE_SCALE > 0);
+// The slot is exactly wide enough for the widest record family and no wider.
+const _: () = assert!(PORTFOLIO_RECORD_BYTES > ORDER_RECORD_BYTES);
+const _: () = assert!(ORDER_SLOT_BYTES == 1 + PORTFOLIO_RECORD_BYTES);
+const _: () = assert!(MAX_PORTFOLIO_ORDERS <= MAX_EPOCH_ORDERS);
 
 const REALM_TAG: u8 = 1;
 const PROFILE_TAG: u8 = 2;
@@ -146,7 +187,7 @@ pub enum CodecError {
     Truncated,
     /// Input had bytes after the fixed layout.
     TrailingBytes,
-    /// Account or intent discriminator was not recognized.
+    /// Account, intent, or order-slot discriminator was not recognized.
     WrongTag,
     /// Layout version is not supported.
     WrongVersion,
@@ -316,7 +357,22 @@ pub fn canonical_candidate_digest(body_bytes: &[u8]) -> Hash32 {
     digest(b"dragons-clutch/candidate/v1", &[body_bytes])
 }
 
-/// Derive one order page's digest from its page position and record bytes.
+/// Domain separator of the order-page digest.
+///
+/// It moved to `v2` when the page's records became fixed-width tagged slots:
+/// the preimage shape changed, so the old domain must not be reusable over the
+/// new bytes.  The order-set fold below keeps its own `v1` domain because its
+/// preimage shape — market, epoch, page count, order count, page digests — did
+/// not change; only the leaves it folds did, and those already carry the new
+/// domain.
+const ORDER_PAGE_DOMAIN: &[u8] = b"dragons-clutch/order-page/v2";
+
+/// Derive one order page's digest from its page position and slot bytes.
+///
+/// `record_bytes` is the exact concatenation of all [`MAX_ORDERS_PER_PAGE`]
+/// encoded slots, that is [`ORDER_SLOT_BYTES`] each including canonical
+/// padding.  [`OrderPageAccount::recomputed_page_digest`] streams the same
+/// bytes without buffering them.
 pub fn canonical_page_digest(
     market: MarketId,
     epoch: EpochId,
@@ -325,7 +381,7 @@ pub fn canonical_page_digest(
     record_bytes: &[u8],
 ) -> Hash32 {
     digest(
-        b"dragons-clutch/order-page/v1",
+        ORDER_PAGE_DOMAIN,
         &[
             &market.0,
             &epoch.0,
@@ -373,9 +429,10 @@ pub fn validate_outcome_id(market: MarketId, index: u8, id: OutcomeId) -> Result
 /// Per-account schema versions.
 ///
 /// An account keeps version `1` exactly while its bytes are unchanged from the
-/// first prototype.  `PROFILE` and `ORDER_PAGE` grew fields and therefore
-/// encode `2` and refuse `1`; every account introduced with this revision
-/// starts at `2` so the pair `(tag, version)` never names two shapes.
+/// first prototype.  `PROFILE` grew a field and encodes `2`; `ORDER_PAGE` grew
+/// the page-set commitment fields at `2` and then replaced its bare records
+/// with tagged fixed-width slots, so it encodes `3` and refuses `1` and `2`.
+/// The pair `(tag, version)` therefore never names two shapes.
 pub mod account_version {
     /// Realm account, unchanged since the first prototype.
     pub const REALM: u8 = 1;
@@ -389,8 +446,10 @@ pub mod account_version {
     pub const POSITION: u8 = 1;
     /// Feed head account, unchanged since the first prototype.
     pub const FEED: u8 = 1;
-    /// Order page; version 1 lacked every page-set commitment field.
-    pub const ORDER_PAGE: u8 = 2;
+    /// Order page; version 1 lacked every page-set commitment field and version
+    /// 2 held bare [`super::ORDER_RECORD_BYTES`] single-Egg records with no kind
+    /// discriminator and no portfolio family.
+    pub const ORDER_PAGE: u8 = 3;
     /// Supply ledger account.
     pub const SUPPLY_LEDGER: u8 = 2;
     /// Immutable terms account.
@@ -411,9 +470,7 @@ pub mod account_version {
 
 /// Account discriminator and exact fixed byte lengths.
 pub mod account_len {
-    use super::{
-        MAX_GRID_TICKS, MAX_ORDERS_PER_PAGE, MAX_OUTCOMES, MAX_PAYOUTS, ORDER_RECORD_BYTES,
-    };
+    use super::{MAX_GRID_TICKS, MAX_ORDERS_PER_PAGE, MAX_OUTCOMES, MAX_PAYOUTS, ORDER_SLOT_BYTES};
 
     /// Realm account bytes.
     pub const REALM: usize = 2 + 32 + 32 + 1 + 1 + 1 + 1;
@@ -429,7 +486,7 @@ pub mod account_len {
     pub const FEED: usize = 2 + 32 + 32 + 8 + 8 + 8 + 32 + 1 + 1;
     /// Dense order page account bytes.
     pub const ORDER_PAGE: usize =
-        2 + (7 * 32) + 2 + 2 + 2 + 1 + 1 + 1 + (MAX_ORDERS_PER_PAGE * ORDER_RECORD_BYTES);
+        2 + (7 * 32) + 2 + 2 + 2 + 1 + 1 + 1 + (MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES);
     /// Supply ledger account bytes.
     pub const SUPPLY_LEDGER: usize = 2 + 32 + 32 + 8 + 1 + (2 * MAX_OUTCOMES * 8) + 1 + 1;
     /// Immutable terms account bytes.
@@ -597,13 +654,20 @@ pub struct FeedAccount {
     pub flags: u8,
 }
 
-/// A dense, canonically ordered page of transparent order records.
+/// A dense, canonically ordered page of transparent order slots.
 ///
 /// Beyond within-page ordering, a page carries the whole page-set commitment:
 /// its own digest, its order-id range, the previous page's last order id, and
 /// the set-wide order-set digest.  Those fields are what make cross-page range,
 /// uniqueness, and closure checkable from the bytes; see
 /// [`verify_page_set`].
+///
+/// A slot holds either admitted order family — a single-Egg [`OrderRecord`] or
+/// a [`PortfolioRecord`] — behind a one-byte kind discriminator at a fixed
+/// [`ORDER_SLOT_BYTES`] width.  Both families therefore share one page, one
+/// strictly increasing order-id chain, and one fold, which is what keeps
+/// cross-family order-id uniqueness a property of the same checks that already
+/// close the set.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OrderPageAccount {
     /// Market identity.
@@ -632,8 +696,8 @@ pub struct OrderPageAccount {
     pub frozen: u8,
     /// Stored PDA bump.
     pub stored_bump: u8,
-    /// Orders in strictly increasing canonical order ID.
-    pub orders: [OrderRecord; MAX_ORDERS_PER_PAGE],
+    /// Slots in strictly increasing canonical order ID.
+    pub orders: [OrderSlot; MAX_ORDERS_PER_PAGE],
 }
 
 /// One fixed-size transparent order record. It carries no matching result.
@@ -659,18 +723,261 @@ pub struct OrderRecord {
     pub generation: u64,
 }
 
-impl OrderRecord {
-    const ZERO: Self = Self {
-        owner: Hash32::ZERO,
-        order_id: Hash32::ZERO,
-        outcome: 0,
-        side: 0,
-        quantity: 0,
-        limit: 0,
-        minimum_fill: 0,
-        flags: 0,
-        generation: 0,
-    };
+/// One fixed-size transparent portfolio order record.
+///
+/// A portfolio order is `lots` copies of one nonnegative coefficient vector over
+/// the market's outcomes, bounded by a per-lot cash limit.  Like every other
+/// outcome-indexed vector in this crate the coefficients are stored at full
+/// [`MAX_OUTCOMES`] width with canonical zero padding at and beyond
+/// `active_len`, so the record has one exact length and its padding can never
+/// influence a digest.
+///
+/// This record carries no matching result and no economics.  Its fields are
+/// exactly the persisted half of `clutch_batch::relation_v1::PortfolioOrderV1`;
+/// the relation owns what they mean, and the field-by-field mapping — including
+/// the two fields this crate deliberately does not persist — is written down in
+/// `docs/implementation/SOLANA_LAYOUT.md`.
+///
+/// ```
+/// use clutch_solana_layout::*;
+///
+/// let market = Hash32::from_bytes([1; 32]);
+/// let epoch = canonical_epoch_id(market, 4);
+///
+/// // Three Eggs of outcome 0 and one of outcome 1 per lot, five lots, at most
+/// // 9,000 cash units of collateral per lot on the frozen venue scale.
+/// let mut coefficients = [0u64; MAX_OUTCOMES];
+/// coefficients[0] = 3;
+/// coefficients[1] = 1;
+/// let portfolio = PortfolioRecord {
+///     owner: Hash32::from_bytes([20; 32]),
+///     order_id: Hash32::from_bytes([7; 32]),
+///     side: 0,
+///     active_len: 2,
+///     flags: 0,
+///     coefficients,
+///     lots: 5,
+///     limit_collateral_per_lot: 9_000,
+///     minimum_fill_lots: 2,
+///     generation: 1,
+/// };
+///
+/// let mut orders = [OrderSlot::Empty; MAX_ORDERS_PER_PAGE];
+/// orders[0] = OrderSlot::Portfolio(portfolio);
+/// let mut page = OrderPageAccount {
+///     market,
+///     epoch,
+///     order_set: Hash32::ZERO,
+///     page_digest: Hash32::ZERO,
+///     first_order_id: portfolio.order_id,
+///     last_order_id: portfolio.order_id,
+///     prev_page_last_order_id: Hash32::ZERO,
+///     page_index: 0,
+///     page_count: 1,
+///     set_order_count: 0,
+///     order_count: 1,
+///     frozen: 0,
+///     stored_bump: 5,
+///     orders,
+/// };
+/// page.page_digest = page.recomputed_page_digest().unwrap();
+///
+/// let mut bytes = [0u8; account_len::ORDER_PAGE];
+/// assert_eq!(page.encode(&mut bytes), Ok(account_len::ORDER_PAGE));
+/// let decoded = OrderPageAccount::decode(&bytes).unwrap();
+/// let record = match decoded.orders[0] {
+///     OrderSlot::Portfolio(p) => p,
+///     _ => panic!("slot 0 is a portfolio record"),
+/// };
+///
+/// // The mapping contract: the layout owns these bytes, the relation owns
+/// // their meaning.  Each assertion below is one `PortfolioOrderV1` field.
+/// assert_eq!(record.coefficients, coefficients); // -> coefficients
+/// assert_eq!(record.active_len, 2); //              -> active_len
+/// assert_eq!(record.lots, 5); //                    -> lots
+/// assert_eq!(record.limit_collateral_per_lot, 9_000); // -> limit_collateral_per_lot
+/// assert_eq!(record.minimum_fill_lots, 2); //       -> minimum_fill_lots
+/// assert_eq!(record.side, 0); //                    -> side == Side::Buy
+/// assert_eq!(record.flags & 1, 0); //               -> partial_policy == Allow
+///
+/// // `canonical_order_id` and `owner` are the set-rank and owner-tag images of
+/// // these 32-byte identities; `expiry_epoch` is not persisted by any record.
+/// assert_eq!(record.order_id, Hash32::from_bytes([7; 32]));
+/// assert_eq!(record.owner, Hash32::from_bytes([20; 32]));
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PortfolioRecord {
+    /// Position owner identity.
+    pub owner: OwnerId,
+    /// Canonical order identity.
+    pub order_id: Hash32,
+    /// Side: 0 buy, 1 sell.
+    pub side: u8,
+    /// Active coefficient width, `1 ..= MAX_OUTCOMES`.
+    pub active_len: u8,
+    /// Flags: bit 0 all-or-none; all other bits reserved.
+    pub flags: u8,
+    /// Exact nonnegative Egg atoms per lot; zero at and beyond `active_len`.
+    pub coefficients: [u64; MAX_OUTCOMES],
+    /// Lots, nonzero.
+    pub lots: u64,
+    /// Per-lot cash bound, in complete-set units on the frozen venue scale.
+    pub limit_collateral_per_lot: u64,
+    /// Minimum acceptable lot fill, at most `lots`.
+    pub minimum_fill_lots: u64,
+    /// Replay generation.
+    pub generation: u64,
+}
+
+impl PortfolioRecord {
+    /// Validate a portfolio record without a frozen price scale.
+    ///
+    /// This is the scale-free half: identities, side and flag ranges, the
+    /// coefficient width against its canonical zero padding, a nonzero demand,
+    /// the lot bounds, and representability of the per-order Egg demand.  It
+    /// deliberately decides nothing about whether the order is economically
+    /// admissible; that is `clutch_batch`'s question.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.owner)?;
+        check_hash(self.order_id)?;
+        if self.side > 1 || self.flags & !1 != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        // `active_len` is a count, and it is the count the padding rule below
+        // is stated against, so a bad width is refused before the padding is
+        // read rather than after.
+        if self.active_len == 0 || self.active_len as usize > MAX_OUTCOMES {
+            return Err(CodecError::InvalidCount);
+        }
+        check_padded_amounts(&self.coefficients, self.active_len as usize)?;
+        if self.lots == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        if self.minimum_fill_lots > self.lots {
+            return Err(CodecError::InvalidEnum);
+        }
+        if self.flags & 1 != 0 && self.minimum_fill_lots != self.lots {
+            return Err(CodecError::InvalidEnum);
+        }
+        let demand = self.active_demand();
+        // An all-zero active vector asks for nothing at any price; no
+        // recomputation could ever accept it.
+        if demand == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        (self.lots as u128)
+            .checked_mul(demand)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        Ok(())
+    }
+
+    /// Validate a portfolio record against a frozen price scale.
+    ///
+    /// The relation values one lot at `sum(coefficients[i] * price[i])` and
+    /// bounds it by `limit_collateral_per_lot * price_scale`; both products,
+    /// times `lots`, must stay inside the `u128` ledger or no candidate could
+    /// ever be classified against this order.  The scale is frozen in
+    /// [`PriceGridAccount`], which is why this is separate from
+    /// [`PortfolioRecord::validate`] and why
+    /// [`OrderPageAccount::decode_on_grid`] is the decoder that applies it.
+    ///
+    /// A portfolio's cash bound is **not** looked up in the tick vector.  The
+    /// grid's domain is a per-outcome limit price in `0 ..= price_scale`; a
+    /// per-lot collateral bound is in complete-set units and can legitimately
+    /// exceed the scale, so it has no tick and none is required.
+    pub fn validate_on_scale(&self, price_scale: u64) -> Result<()> {
+        self.validate()?;
+        if price_scale == 0 || price_scale > MAX_PRICE_SCALE {
+            return Err(CodecError::InvalidPriceGrid);
+        }
+        let scale = price_scale as u128;
+        let per_lot_value = self
+            .active_demand()
+            .checked_mul(scale)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        (self.lots as u128)
+            .checked_mul(per_lot_value)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        let per_lot_bound = (self.limit_collateral_per_lot as u128)
+            .checked_mul(scale)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        (self.lots as u128)
+            .checked_mul(per_lot_bound)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        Ok(())
+    }
+
+    /// Sum of the active coefficients.  At most `16 * (2^64 - 1)`, so the
+    /// accumulation itself cannot overflow a `u128`.
+    fn active_demand(&self) -> u128 {
+        let mut sum: u128 = 0;
+        let mut i = 0;
+        while i < self.active_len as usize && i < MAX_OUTCOMES {
+            sum += self.coefficients[i] as u128;
+            i += 1;
+        }
+        sum
+    }
+}
+
+/// One page slot: canonical padding, a single-Egg record, or a portfolio record.
+///
+/// Every slot occupies exactly [`ORDER_SLOT_BYTES`] bytes — a one-byte kind
+/// discriminator, that kind's exact body, and canonical zero padding to the
+/// common width — so a page keeps one exact account length no matter which
+/// families it holds.  Canonical padding is the all-zero slot, which is also
+/// [`ORDER_KIND_EMPTY`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OrderSlot {
+    /// Canonical padding: [`ORDER_SLOT_BYTES`] zero bytes, no record.
+    Empty,
+    /// One single-Egg order on one outcome.
+    Single(OrderRecord),
+    /// One portfolio order over a coefficient vector.
+    Portfolio(PortfolioRecord),
+}
+
+impl OrderSlot {
+    /// This slot's kind discriminator byte.
+    pub fn kind(&self) -> u8 {
+        match self {
+            Self::Empty => ORDER_KIND_EMPTY,
+            Self::Single(_) => ORDER_KIND_SINGLE,
+            Self::Portfolio(_) => ORDER_KIND_PORTFOLIO,
+        }
+    }
+    /// The record's canonical order identity, or zero for padding.
+    pub fn order_id(&self) -> Hash32 {
+        match self {
+            Self::Empty => Hash32::ZERO,
+            Self::Single(o) => o.order_id,
+            Self::Portfolio(p) => p.order_id,
+        }
+    }
+    /// The record's owner identity, or zero for padding.
+    pub fn owner(&self) -> OwnerId {
+        match self {
+            Self::Empty => Hash32::ZERO,
+            Self::Single(o) => o.owner,
+            Self::Portfolio(p) => p.owner,
+        }
+    }
+    /// Whether this slot holds a portfolio record.
+    pub fn is_portfolio(&self) -> bool {
+        matches!(self, Self::Portfolio(_))
+    }
+    /// Validate a populated slot.
+    ///
+    /// Padding has no record to validate and is refused here; a page reaches
+    /// this only for slots below its own `order_count`, where an empty slot is
+    /// a missing order rather than padding.
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            Self::Empty => Err(CodecError::ZeroIdentity),
+            Self::Single(o) => o.validate(),
+            Self::Portfolio(p) => p.validate(),
+        }
+    }
 }
 
 fn check_hash(hash: Hash32) -> Result<()> {
@@ -1204,27 +1511,29 @@ impl FeedAccount {
 }
 
 impl OrderPageAccount {
-    /// Encode this page's records into a fixed scratch buffer.
-    fn record_bytes(&self, out: &mut [u8; MAX_ORDERS_PER_PAGE * ORDER_RECORD_BYTES]) -> Result<()> {
-        let mut w = Writer::new(out);
+    /// Recompute this page's digest from its position and slot bytes.
+    ///
+    /// The slots are streamed into the hash one at a time instead of being
+    /// buffered, so recomputing a digest costs one [`ORDER_SLOT_BYTES`] scratch
+    /// slot rather than a whole page of stack.  The value is identical to
+    /// [`canonical_page_digest`] over the concatenated slot bytes and a test
+    /// pins that equality.
+    pub fn recomputed_page_digest(&self) -> Result<Hash32> {
+        let mut h = Sha256::new();
+        h.update(ORDER_PAGE_DOMAIN);
+        h.update(&self.market.0);
+        h.update(&self.epoch.0);
+        h.update(&self.page_index.to_le_bytes());
+        h.update(&[self.order_count]);
+        let mut slot = [0; ORDER_SLOT_BYTES];
         let mut i = 0;
         while i < MAX_ORDERS_PER_PAGE {
-            encode_order(&mut w, self.orders[i])?;
+            let mut w = Writer::new(&mut slot);
+            encode_slot(&mut w, self.orders[i])?;
+            h.update(&slot);
             i += 1;
         }
-        Ok(())
-    }
-    /// Recompute this page's digest from its position and record bytes.
-    pub fn recomputed_page_digest(&self) -> Result<Hash32> {
-        let mut records = [0; MAX_ORDERS_PER_PAGE * ORDER_RECORD_BYTES];
-        self.record_bytes(&mut records)?;
-        Ok(canonical_page_digest(
-            self.market,
-            self.epoch,
-            self.page_index,
-            self.order_count,
-            &records,
-        ))
+        Ok(Hash32(h.finish()))
     }
     /// Validate dense ordering, page bounds, records, commitments, and padding.
     pub fn validate(&self) -> Result<()> {
@@ -1243,28 +1552,37 @@ impl OrderPageAccount {
             return Err(CodecError::InvalidCount);
         };
         let mut previous = Hash32::ZERO;
+        let mut portfolios = 0usize;
         let mut i = 0;
         while i < MAX_ORDERS_PER_PAGE {
             if i < self.order_count as usize {
                 self.orders[i].validate()?;
-                if self.orders[i].order_id == Hash32::ZERO
-                    || (previous != Hash32::ZERO && self.orders[i].order_id.0 <= previous.0)
-                {
+                let id = self.orders[i].order_id();
+                if id == Hash32::ZERO || (previous != Hash32::ZERO && id.0 <= previous.0) {
                     return Err(CodecError::NonCanonicalIdentity);
                 };
-                previous = self.orders[i].order_id;
-            } else if self.orders[i] != OrderRecord::ZERO {
+                previous = id;
+                if self.orders[i].is_portfolio() {
+                    portfolios += 1;
+                }
+            } else if self.orders[i] != OrderSlot::Empty {
                 return Err(CodecError::NonCanonicalPadding);
             };
             i += 1;
+        }
+        // One page cannot hold more portfolio records than the whole frozen
+        // book admits; see [`MAX_PORTFOLIO_ORDERS`].  The set-wide sum is
+        // checked in [`verify_page_set`].
+        if portfolios > MAX_PORTFOLIO_ORDERS {
+            return Err(CodecError::InvalidCount);
         }
         // The stored range must be exactly the records' range.
         let (expected_first, expected_last) = if self.order_count == 0 {
             (Hash32::ZERO, Hash32::ZERO)
         } else {
             (
-                self.orders[0].order_id,
-                self.orders[self.order_count as usize - 1].order_id,
+                self.orders[0].order_id(),
+                self.orders[self.order_count as usize - 1].order_id(),
             )
         };
         if self.first_order_id != expected_first || self.last_order_id != expected_last {
@@ -1342,7 +1660,7 @@ impl OrderPageAccount {
         w.u8(self.stored_bump)?;
         let mut i = 0;
         while i < MAX_ORDERS_PER_PAGE {
-            encode_order(&mut w, self.orders[i])?;
+            encode_slot(&mut w, self.orders[i])?;
             i += 1;
         }
         Ok(w.at)
@@ -1368,10 +1686,10 @@ impl OrderPageAccount {
         let order_count = r.u8()?;
         let frozen = r.u8()?;
         let stored_bump = r.u8()?;
-        let mut orders = [OrderRecord::ZERO; MAX_ORDERS_PER_PAGE];
+        let mut orders = [OrderSlot::Empty; MAX_ORDERS_PER_PAGE];
         let mut i = 0;
         while i < MAX_ORDERS_PER_PAGE {
-            orders[i] = decode_order(&mut r)?;
+            orders[i] = decode_slot(&mut r)?;
             i += 1;
         }
         let v = Self {
@@ -1394,13 +1712,29 @@ impl OrderPageAccount {
         v.validate()?;
         Ok(v)
     }
-    /// Parse a page and refuse any order limit that is off the frozen grid.
+    /// Parse a page and apply every check that needs the frozen price grid.
+    ///
+    /// A single-Egg record's `limit` must be an exact member of the tick vector
+    /// or it has no tick, which is [`CodecError::InvalidTick`].  A portfolio
+    /// record has no tick to look up — its bound is a per-lot collateral in
+    /// complete-set units, not a per-outcome limit price — so what the grid
+    /// contributes there is the frozen scale, against which
+    /// [`PortfolioRecord::validate_on_scale`] refuses bounds that no candidate
+    /// could ever be classified against.
     pub fn decode_on_grid(input: &[u8], grid: &PriceGridAccount) -> Result<Self> {
         let page = Self::decode(input)?;
         grid.validate()?;
         let mut i = 0;
         while i < page.order_count as usize {
-            grid.tick_of(page.orders[i].limit)?;
+            match page.orders[i] {
+                OrderSlot::Single(o) => {
+                    grid.tick_of(o.limit)?;
+                }
+                OrderSlot::Portfolio(p) => p.validate_on_scale(grid.price_scale)?,
+                // Unreachable after `decode`, which refuses an empty slot below
+                // `order_count`; stated rather than assumed.
+                OrderSlot::Empty => return Err(CodecError::ZeroIdentity),
+            }
             i += 1;
         }
         Ok(page)
@@ -1424,6 +1758,7 @@ pub fn verify_page_set(pages: &[OrderPageAccount]) -> Result<Hash32> {
     }
     let mut digests = [Hash32::ZERO; MAX_ORDER_PAGES];
     let mut total: u16 = 0;
+    let mut portfolios = 0usize;
     let mut i = 0;
     while i < pages.len() {
         let page = &pages[i];
@@ -1450,11 +1785,24 @@ pub fn verify_page_set(pages: &[OrderPageAccount]) -> Result<Hash32> {
         total = total
             .checked_add(page.order_count as u16)
             .ok_or(CodecError::ArithmeticOverflow)?;
+        let mut j = 0;
+        while j < page.order_count as usize {
+            if page.orders[j].is_portfolio() {
+                portfolios += 1;
+            }
+            j += 1;
+        }
         digests[i] = page.page_digest;
         i += 1;
     }
     if total != head.set_order_count {
         return Err(CodecError::MismatchedBinding);
+    }
+    // A set carrying more portfolio records than the relation admits could
+    // never be one book, exactly as a set of more than `MAX_ORDER_PAGES` pages
+    // could not.  Both are restated bounds, not local policy.
+    if portfolios > MAX_PORTFOLIO_ORDERS {
+        return Err(CodecError::InvalidCount);
     }
     let order_set = canonical_order_set_id(
         head.market,
@@ -1511,6 +1859,68 @@ fn decode_order(r: &mut Reader<'_>) -> Result<OrderRecord> {
         flags: r.u8()?,
         generation: r.u64()?,
     })
+}
+fn encode_portfolio(w: &mut Writer<'_>, p: PortfolioRecord) -> Result<()> {
+    w.hash(p.owner)?;
+    w.hash(p.order_id)?;
+    w.u8(p.side)?;
+    w.u8(p.active_len)?;
+    w.u8(p.flags)?;
+    w.amounts(&p.coefficients)?;
+    w.u64(p.lots)?;
+    w.u64(p.limit_collateral_per_lot)?;
+    w.u64(p.minimum_fill_lots)?;
+    w.u64(p.generation)
+}
+fn decode_portfolio(r: &mut Reader<'_>) -> Result<PortfolioRecord> {
+    Ok(PortfolioRecord {
+        owner: r.hash()?,
+        order_id: r.hash()?,
+        side: r.u8()?,
+        active_len: r.u8()?,
+        flags: r.u8()?,
+        coefficients: r.amounts()?,
+        lots: r.u64()?,
+        limit_collateral_per_lot: r.u64()?,
+        minimum_fill_lots: r.u64()?,
+        generation: r.u64()?,
+    })
+}
+/// Write exactly [`ORDER_SLOT_BYTES`]: a kind byte, that kind's body, and zero
+/// padding out to the common width.  The padding is written explicitly rather
+/// than assumed, because the destination buffer is caller-owned and may be
+/// dirty.
+fn encode_slot(w: &mut Writer<'_>, slot: OrderSlot) -> Result<()> {
+    let start = w.at;
+    w.u8(slot.kind())?;
+    match slot {
+        OrderSlot::Empty => {}
+        OrderSlot::Single(o) => encode_order(w, o)?,
+        OrderSlot::Portfolio(p) => encode_portfolio(w, p)?,
+    }
+    while w.at - start < ORDER_SLOT_BYTES {
+        w.u8(0)?;
+    }
+    Ok(())
+}
+/// Read exactly [`ORDER_SLOT_BYTES`].  An unrecognized kind is
+/// [`CodecError::WrongTag`]; any nonzero byte between the body and the common
+/// width is [`CodecError::NonCanonicalPadding`], so a slot has exactly one
+/// encoding.
+fn decode_slot(r: &mut Reader<'_>) -> Result<OrderSlot> {
+    let start = r.at;
+    let slot = match r.u8()? {
+        ORDER_KIND_EMPTY => OrderSlot::Empty,
+        ORDER_KIND_SINGLE => OrderSlot::Single(decode_order(r)?),
+        ORDER_KIND_PORTFOLIO => OrderSlot::Portfolio(decode_portfolio(r)?),
+        _ => return Err(CodecError::WrongTag),
+    };
+    while r.at - start < ORDER_SLOT_BYTES {
+        if r.u8()? != 0 {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+    }
+    Ok(slot)
 }
 
 /* ---------------------------------------------------------------------------
@@ -2252,6 +2662,32 @@ impl EpochAccount {
             || tail.last_order_id != self.last_order_id
         {
             return Err(CodecError::MismatchedBinding);
+        }
+        // A page alone can only bound an order's outcome width by
+        // [`MAX_OUTCOMES`]; the epoch is the account that names this market's
+        // actual width, so a record claiming an outcome or an active
+        // coefficient width the market does not have contradicts a binding the
+        // epoch already committed to.
+        let mut i = 0;
+        while i < pages.len() {
+            let mut j = 0;
+            while j < pages[i].order_count as usize {
+                match pages[i].orders[j] {
+                    OrderSlot::Single(o) => {
+                        if o.outcome >= self.outcome_count {
+                            return Err(CodecError::MismatchedBinding);
+                        }
+                    }
+                    OrderSlot::Portfolio(p) => {
+                        if p.active_len > self.outcome_count {
+                            return Err(CodecError::MismatchedBinding);
+                        }
+                    }
+                    OrderSlot::Empty => return Err(CodecError::ZeroIdentity),
+                }
+                j += 1;
+            }
+            i += 1;
         }
         Ok(())
     }
@@ -3611,12 +4047,39 @@ mod tests {
             generation: 1,
         }
     }
+    fn single(id: u8) -> OrderSlot {
+        OrderSlot::Single(order(id))
+    }
+    /// A two-outcome portfolio: three Eggs of outcome 0 and one of outcome 1.
+    fn portfolio(id: u8) -> PortfolioRecord {
+        let mut coefficients = [0; MAX_OUTCOMES];
+        coefficients[0] = 3;
+        coefficients[1] = 1;
+        PortfolioRecord {
+            owner: h(21),
+            order_id: h(id),
+            side: 0,
+            active_len: 2,
+            flags: 0,
+            coefficients,
+            lots: 5,
+            limit_collateral_per_lot: 9_000,
+            minimum_fill_lots: 2,
+            generation: 1,
+        }
+    }
+    /// Rebuild the page's range and digest after a slot was replaced.
+    fn reseal(page: &mut OrderPageAccount) {
+        page.first_order_id = page.orders[0].order_id();
+        page.last_order_id = page.orders[page.order_count as usize - 1].order_id();
+        page.page_digest = page.recomputed_page_digest().unwrap();
+    }
     /// Build one open page over the given order ids.
     fn build_page(index: u16, count: u16, ids: &[u8], prev: Hash32) -> OrderPageAccount {
-        let mut orders = [OrderRecord::ZERO; MAX_ORDERS_PER_PAGE];
+        let mut orders = [OrderSlot::Empty; MAX_ORDERS_PER_PAGE];
         let mut i = 0;
         while i < ids.len() {
-            orders[i] = order(ids[i]);
+            orders[i] = single(ids[i]);
             i += 1;
         }
         let (first, last) = if ids.is_empty() {
@@ -3816,7 +4279,7 @@ mod tests {
         assert_eq!(account_len::HOARD, 108);
         assert_eq!(account_len::POSITION, 220);
         assert_eq!(account_len::FEED, 124);
-        assert_eq!(account_len::ORDER_PAGE, 1819);
+        assert_eq!(account_len::ORDER_PAGE, 3883);
         assert_eq!(account_len::SUPPLY_LEDGER, 333);
         assert_eq!(account_len::TERMS, 1304);
         assert_eq!(account_len::PRICE_GRID, 589);
@@ -3826,6 +4289,13 @@ mod tests {
         assert_eq!(account_len::SETTLEMENT_RECEIPT, 217);
         assert_eq!(account_len::RESOLUTION, 165);
         assert_eq!(ORDER_RECORD_BYTES, 99);
+        assert_eq!(PORTFOLIO_RECORD_BYTES, 227);
+        assert_eq!(ORDER_SLOT_BYTES, 228);
+        // The page is exactly its header plus sixteen common-width slots.
+        assert_eq!(
+            account_len::ORDER_PAGE,
+            235 + MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES
+        );
     }
     #[test]
     fn mirrored_bounds_match_their_owning_crates() {
@@ -3834,6 +4304,7 @@ mod tests {
         assert_eq!(MAX_PAYOUTS, 8);
         assert_eq!(MAX_GRID_TICKS, 64);
         assert_eq!(MAX_EPOCH_ORDERS, 64);
+        assert_eq!(MAX_PORTFOLIO_ORDERS, 8);
         assert_eq!(MAX_BUCKET_SECONDS, 86_400);
         assert_eq!(MAX_WINDOW_BUCKETS, 1_000_000);
         assert_eq!(RELATION_VERSION, 1);
@@ -4053,15 +4524,22 @@ mod tests {
         };
         let mut b = [0; account_len::PROFILE];
         profile.encode(&mut b).unwrap();
-        assert_eq!(b[1], LAYOUT_VERSION);
+        assert_eq!(b[1], account_version::PROFILE);
+        assert_eq!(account_version::PROFILE, LAYOUT_VERSION_V2);
         b[1] = LAYOUT_VERSION_V1;
         assert_eq!(ProfileAccount::decode(&b), Err(CodecError::WrongVersion));
 
+        // The page is on its third shape: bare records, then the page-set
+        // commitment fields, then tagged fixed-width slots.  Both earlier
+        // versions are refused explicitly.
         let page = build_page(0, 1, &[3], Hash32::ZERO);
         let mut b = [0; account_len::ORDER_PAGE];
         page.encode(&mut b).unwrap();
         assert_eq!(b[1], LAYOUT_VERSION);
+        assert_eq!(account_version::ORDER_PAGE, 3);
         b[1] = LAYOUT_VERSION_V1;
+        assert_eq!(OrderPageAccount::decode(&b), Err(CodecError::WrongVersion));
+        b[1] = LAYOUT_VERSION_V2;
         assert_eq!(OrderPageAccount::decode(&b), Err(CodecError::WrongVersion));
 
         let mut b = [0; account_len::MARKET];
@@ -4361,7 +4839,10 @@ mod tests {
         assert_eq!(OrderPageAccount::decode_on_grid(&b, &g), Ok(page));
 
         let mut off = page;
-        off.orders[1].limit = 2_501;
+        off.orders[1] = OrderSlot::Single(OrderRecord {
+            limit: 2_501,
+            ..order(4)
+        });
         off.page_digest = off.recomputed_page_digest().unwrap();
         let mut b = [0; account_len::ORDER_PAGE];
         off.encode(&mut b).unwrap();
@@ -4463,7 +4944,7 @@ mod tests {
 
         // Duplicate order id across a page boundary.
         let mut dup = pages;
-        dup[1].orders[0] = order(16);
+        dup[1].orders[0] = single(16);
         dup[1].first_order_id = h(16);
         dup[1].page_digest = dup[1].recomputed_page_digest().unwrap();
         assert_eq!(dup[1].validate(), Err(CodecError::NonCanonicalIdentity));
@@ -4478,7 +4959,10 @@ mod tests {
 
         // Post-freeze mutation of one order byte.
         let mut mutated = pages;
-        mutated[0].orders[3].quantity = 11;
+        mutated[0].orders[3] = OrderSlot::Single(OrderRecord {
+            quantity: 11,
+            ..order(4)
+        });
         assert_eq!(mutated[0].validate(), Err(CodecError::MismatchedBinding));
         // Recomputing the page digest does not repair the set commitment.
         mutated[0].page_digest = mutated[0].recomputed_page_digest().unwrap();
@@ -4535,7 +5019,7 @@ mod tests {
         let mut sparse = set;
         sparse[0].order_count = 15;
         sparse[0].last_order_id = h(15);
-        sparse[0].orders[15] = OrderRecord::ZERO;
+        sparse[0].orders[15] = OrderSlot::Empty;
         sparse[0].page_digest = sparse[0].recomputed_page_digest().unwrap();
         assert_eq!(sparse[0].validate(), Err(CodecError::InvalidCount));
 
@@ -4550,24 +5034,480 @@ mod tests {
     #[test]
     fn page_rejects_duplicate_or_unsorted_orders() {
         let mut page = build_page(0, 1, &[3], Hash32::ZERO);
-        page.orders[1] = order(3);
+        page.orders[1] = single(3);
         page.order_count = 2;
         page.last_order_id = h(3);
         page.page_digest = page.recomputed_page_digest().unwrap();
         assert_eq!(page.validate(), Err(CodecError::NonCanonicalIdentity));
 
         let mut unsorted = build_page(0, 1, &[3, 4], Hash32::ZERO);
-        unsorted.orders[0] = order(4);
-        unsorted.orders[1] = order(3);
+        unsorted.orders[0] = single(4);
+        unsorted.orders[1] = single(3);
         unsorted.first_order_id = h(4);
         unsorted.last_order_id = h(3);
         unsorted.page_digest = unsorted.recomputed_page_digest().unwrap();
         assert_eq!(unsorted.validate(), Err(CodecError::NonCanonicalIdentity));
 
         let mut padded = build_page(0, 1, &[3], Hash32::ZERO);
-        padded.orders[5] = order(9);
+        padded.orders[5] = single(9);
         padded.page_digest = padded.recomputed_page_digest().unwrap();
         assert_eq!(padded.validate(), Err(CodecError::NonCanonicalPadding));
+    }
+    /// Byte offset of slot zero: everything before the slot array.
+    const PAGE_HEADER_BYTES: usize =
+        account_len::ORDER_PAGE - MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES;
+    fn slot_at(bytes: &[u8], index: usize) -> &[u8] {
+        let start = PAGE_HEADER_BYTES + index * ORDER_SLOT_BYTES;
+        &bytes[start..start + ORDER_SLOT_BYTES]
+    }
+    /// A frozen two-page set whose tail page opens with a portfolio record.
+    fn frozen_pages_with_portfolio() -> [OrderPageAccount; 2] {
+        let ids: [u8; MAX_ORDERS_PER_PAGE] =
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let page0 = build_page(0, 2, &ids, Hash32::ZERO);
+        let mut page1 = build_page(1, 2, &[17, 18, 19], page0.last_order_id);
+        page1.orders[0] = OrderSlot::Portfolio(portfolio(17));
+        reseal(&mut page1);
+        let mut pages = [page0, page1];
+        freeze_set(&mut pages);
+        pages
+    }
+    #[test]
+    fn portfolio_and_single_egg_records_share_one_page_and_one_order_chain() {
+        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(portfolio(9));
+        reseal(&mut page);
+        assert_eq!(page.validate(), Ok(()));
+
+        let mut b = [0; account_len::ORDER_PAGE];
+        assert_eq!(page.encode(&mut b), Ok(account_len::ORDER_PAGE));
+        assert_eq!(OrderPageAccount::decode(&b), Ok(page));
+
+        // Every slot is the same width and starts with its kind byte.
+        assert_eq!(slot_at(&b, 0)[0], ORDER_KIND_SINGLE);
+        assert_eq!(slot_at(&b, 1)[0], ORDER_KIND_PORTFOLIO);
+        assert_eq!(slot_at(&b, 2)[0], ORDER_KIND_EMPTY);
+        // A single-Egg slot pads its unused tail with canonical zeros, and a
+        // padding slot is zero end to end.
+        assert!(slot_at(&b, 0)[1 + ORDER_RECORD_BYTES..]
+            .iter()
+            .all(|x| *x == 0));
+        assert!(slot_at(&b, 2).iter().all(|x| *x == 0));
+        assert_eq!(
+            slot_at(&b, 1).len(),
+            1 + PORTFOLIO_RECORD_BYTES,
+            "a portfolio body fills its slot exactly"
+        );
+
+        // The field offsets published in `docs/implementation/SOLANA_LAYOUT.md`
+        // are pinned here, in slot-local coordinates, so the byte tables and the
+        // codec cannot drift apart.
+        let o = slot_at(&b, 0);
+        let single = order(3);
+        assert_eq!(&o[1..33], &single.owner.0);
+        assert_eq!(&o[33..65], &single.order_id.0);
+        assert_eq!(o[65], single.outcome);
+        assert_eq!(o[66], single.side);
+        assert_eq!(&o[67..75], &single.quantity.to_le_bytes());
+        assert_eq!(&o[75..83], &single.limit.to_le_bytes());
+        assert_eq!(&o[83..91], &single.minimum_fill.to_le_bytes());
+        assert_eq!(o[91], single.flags);
+        assert_eq!(&o[92..100], &single.generation.to_le_bytes());
+        assert!(o[100..].iter().all(|x| *x == 0));
+
+        let p = slot_at(&b, 1);
+        let expected = portfolio(9);
+        assert_eq!(&p[1..33], &expected.owner.0);
+        assert_eq!(&p[33..65], &expected.order_id.0);
+        assert_eq!(p[65], expected.side);
+        assert_eq!(p[66], expected.active_len);
+        assert_eq!(p[67], expected.flags);
+        assert_eq!(&p[68..76], &expected.coefficients[0].to_le_bytes());
+        assert_eq!(&p[76..84], &expected.coefficients[1].to_le_bytes());
+        assert_eq!(
+            &p[188..196],
+            &expected.coefficients[MAX_OUTCOMES - 1].to_le_bytes()
+        );
+        assert_eq!(&p[196..204], &expected.lots.to_le_bytes());
+        assert_eq!(
+            &p[204..212],
+            &expected.limit_collateral_per_lot.to_le_bytes()
+        );
+        assert_eq!(&p[212..220], &expected.minimum_fill_lots.to_le_bytes());
+        assert_eq!(&p[220..228], &expected.generation.to_le_bytes());
+
+        // The order-id chain is one chain across both families.
+        assert_eq!(page.orders[0].order_id(), h(3));
+        assert_eq!(page.orders[1].order_id(), h(9));
+        assert!(page.orders[1].is_portfolio());
+        assert!(!page.orders[0].is_portfolio());
+        assert_eq!(page.orders[1].owner(), h(21));
+        assert_eq!(page.orders[2].order_id(), Hash32::ZERO);
+
+        let mut crossed = page;
+        crossed.orders[1] = OrderSlot::Portfolio(portfolio(3));
+        crossed.last_order_id = h(3);
+        crossed.page_digest = crossed.recomputed_page_digest().unwrap();
+        assert_eq!(crossed.validate(), Err(CodecError::NonCanonicalIdentity));
+    }
+    #[test]
+    fn the_page_set_fold_covers_portfolio_record_bytes() {
+        let pages = frozen_pages_with_portfolio();
+        let order_set = verify_page_set(&pages).unwrap();
+        assert_eq!(order_set, pages[0].order_set);
+        assert_eq!(pages[0].set_order_count, 19);
+
+        // One coefficient atom is one changed digest.
+        let mut mutated = pages;
+        let mut coefficients = portfolio(17).coefficients;
+        coefficients[1] = 2;
+        mutated[1].orders[0] = OrderSlot::Portfolio(PortfolioRecord {
+            coefficients,
+            ..portfolio(17)
+        });
+        assert_eq!(mutated[1].validate(), Err(CodecError::MismatchedBinding));
+        // Repairing the page's own digest does not repair the set commitment.
+        mutated[1].page_digest = mutated[1].recomputed_page_digest().unwrap();
+        assert_eq!(mutated[1].validate(), Ok(()));
+        assert_eq!(
+            verify_page_set(&mutated),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        // So is one changed cash bound, and one changed lot count.
+        let mut rebound = pages;
+        rebound[1].orders[0] = OrderSlot::Portfolio(PortfolioRecord {
+            limit_collateral_per_lot: 9_001,
+            ..portfolio(17)
+        });
+        assert_eq!(rebound[1].validate(), Err(CodecError::MismatchedBinding));
+
+        // Re-typing a slot from portfolio to single-Egg is a digest change too.
+        let mut retyped = pages;
+        retyped[1].orders[0] = single(17);
+        assert_eq!(retyped[1].validate(), Err(CodecError::MismatchedBinding));
+
+        let mut e = frozen_epoch();
+        e.first_order_id = pages[0].first_order_id;
+        e.last_order_id = pages[1].last_order_id;
+        e.order_set = pages[0].order_set;
+        assert_eq!(e.binds_page_set(&pages), Ok(()));
+
+        // The epoch owns the market's outcome width; a page cannot.  A
+        // portfolio whose active coefficient width exceeds it, and a single-Egg
+        // record naming an outcome the market does not have, are both refused
+        // by the binding rather than by the page.
+        let mut narrow = e;
+        narrow.outcome_count = 2;
+        assert_eq!(narrow.binds_page_set(&pages), Ok(()));
+
+        let mut wide = pages;
+        let mut coefficients = [0; MAX_OUTCOMES];
+        coefficients[0] = 3;
+        coefficients[2] = 1;
+        wide[1].orders[0] = OrderSlot::Portfolio(PortfolioRecord {
+            active_len: 3,
+            coefficients,
+            ..portfolio(17)
+        });
+        wide[1].page_digest = wide[1].recomputed_page_digest().unwrap();
+        freeze_set(&mut wide);
+        let mut wide_epoch = e;
+        wide_epoch.order_set = wide[0].order_set;
+        assert_eq!(wide_epoch.binds_page_set(&wide), Ok(()));
+        wide_epoch.outcome_count = 2;
+        assert_eq!(
+            wide_epoch.binds_page_set(&wide),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        // The same binding governs the single-Egg family it already held.
+        let mut off_market = pages;
+        off_market[1].orders[1] = OrderSlot::Single(OrderRecord {
+            outcome: 5,
+            ..order(18)
+        });
+        off_market[1].page_digest = off_market[1].recomputed_page_digest().unwrap();
+        freeze_set(&mut off_market);
+        let mut narrow_epoch = e;
+        narrow_epoch.order_set = off_market[0].order_set;
+        assert_eq!(narrow_epoch.binds_page_set(&off_market), Ok(()));
+        narrow_epoch.outcome_count = 5;
+        assert_eq!(
+            narrow_epoch.binds_page_set(&off_market),
+            Err(CodecError::MismatchedBinding)
+        );
+    }
+    #[test]
+    fn the_streamed_page_digest_equals_the_public_helper() {
+        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(portfolio(9));
+        reseal(&mut page);
+        let mut b = [0; account_len::ORDER_PAGE];
+        page.encode(&mut b).unwrap();
+        assert_eq!(PAGE_HEADER_BYTES, 235);
+        assert_eq!(
+            page.page_digest,
+            canonical_page_digest(
+                page.market,
+                page.epoch,
+                page.page_index,
+                page.order_count,
+                &b[PAGE_HEADER_BYTES..],
+            )
+        );
+    }
+    #[test]
+    fn portfolio_records_refuse_bad_widths_coefficients_and_lot_bounds() {
+        let base = portfolio(9);
+        assert_eq!(base.validate(), Ok(()));
+
+        let mut zero_width = base;
+        zero_width.active_len = 0;
+        assert_eq!(zero_width.validate(), Err(CodecError::InvalidCount));
+
+        let mut over_width = base;
+        over_width.active_len = MAX_OUTCOMES as u8 + 1;
+        assert_eq!(over_width.validate(), Err(CodecError::InvalidCount));
+
+        // A coefficient outside the declared width is padding, and padding is
+        // zero.  This is the "coefficient count disagrees with the declared
+        // outcome width" refusal.
+        let mut leaked = base;
+        leaked.coefficients[2] = 1;
+        assert_eq!(leaked.validate(), Err(CodecError::NonCanonicalPadding));
+        let mut widened = leaked;
+        widened.active_len = 3;
+        assert_eq!(widened.validate(), Ok(()));
+
+        let mut empty_demand = base;
+        empty_demand.coefficients = [0; MAX_OUTCOMES];
+        assert_eq!(empty_demand.validate(), Err(CodecError::ZeroValue));
+
+        let mut no_lots = base;
+        no_lots.lots = 0;
+        assert_eq!(no_lots.validate(), Err(CodecError::ZeroValue));
+
+        let mut over_fill = base;
+        over_fill.minimum_fill_lots = base.lots + 1;
+        assert_eq!(over_fill.validate(), Err(CodecError::InvalidEnum));
+
+        let mut partial_aon = base;
+        partial_aon.flags = 1;
+        assert_eq!(partial_aon.validate(), Err(CodecError::InvalidEnum));
+        partial_aon.minimum_fill_lots = partial_aon.lots;
+        assert_eq!(partial_aon.validate(), Ok(()));
+
+        let mut reserved_flag = base;
+        reserved_flag.flags = 2;
+        assert_eq!(reserved_flag.validate(), Err(CodecError::InvalidEnum));
+
+        let mut bad_side = base;
+        bad_side.side = 2;
+        assert_eq!(bad_side.validate(), Err(CodecError::InvalidEnum));
+
+        let mut anonymous = base;
+        anonymous.owner = Hash32::ZERO;
+        assert_eq!(anonymous.validate(), Err(CodecError::ZeroIdentity));
+        let mut unnamed = base;
+        unnamed.order_id = Hash32::ZERO;
+        assert_eq!(unnamed.validate(), Err(CodecError::ZeroIdentity));
+
+        // Boundary values that must be admitted: the full outcome width, a
+        // single active outcome, and the largest representable lot count.
+        let mut widest = base;
+        widest.active_len = MAX_OUTCOMES as u8;
+        widest.coefficients = [1; MAX_OUTCOMES];
+        assert_eq!(widest.validate(), Ok(()));
+        let mut narrowest = base;
+        narrowest.active_len = 1;
+        narrowest.coefficients = [0; MAX_OUTCOMES];
+        narrowest.coefficients[0] = 1;
+        assert_eq!(narrowest.validate(), Ok(()));
+        let mut many_lots = narrowest;
+        many_lots.lots = u64::MAX;
+        assert_eq!(many_lots.validate(), Ok(()));
+
+        // A page carrying a refused record cannot be encoded at all.
+        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(no_lots);
+        page.page_digest = page.recomputed_page_digest().unwrap();
+        let mut b = [0; account_len::ORDER_PAGE];
+        assert_eq!(page.encode(&mut b), Err(CodecError::ZeroValue));
+    }
+    #[test]
+    fn portfolio_bounds_are_checked_against_the_frozen_price_scale() {
+        let g = grid();
+        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(portfolio(9));
+        reseal(&mut page);
+        let mut b = [0; account_len::ORDER_PAGE];
+        page.encode(&mut b).unwrap();
+
+        // 9,000 is not a tick, and a portfolio cash bound is deliberately not
+        // looked up in the tick vector: it is a per-lot collateral in
+        // complete-set units, not a per-outcome limit price.
+        assert_eq!(g.tick_of(9_000), Err(CodecError::InvalidTick));
+        assert_eq!(OrderPageAccount::decode_on_grid(&b, &g), Ok(page));
+
+        // What the grid does contribute is the frozen scale.  A per-lot value
+        // that cannot be represented could never be classified.
+        let mut huge_value = portfolio(9);
+        huge_value.coefficients = [0; MAX_OUTCOMES];
+        huge_value.coefficients[0] = u64::MAX;
+        huge_value.active_len = 1;
+        huge_value.lots = u64::MAX;
+        huge_value.minimum_fill_lots = 0;
+        assert_eq!(huge_value.validate(), Ok(()));
+        assert_eq!(
+            huge_value.validate_on_scale(g.price_scale),
+            Err(CodecError::ArithmeticOverflow)
+        );
+
+        let mut huge_bound = portfolio(9);
+        huge_bound.coefficients = [0; MAX_OUTCOMES];
+        huge_bound.coefficients[0] = 1;
+        huge_bound.active_len = 1;
+        huge_bound.lots = u64::MAX;
+        huge_bound.minimum_fill_lots = 0;
+        huge_bound.limit_collateral_per_lot = u64::MAX;
+        assert_eq!(huge_bound.validate(), Ok(()));
+        assert_eq!(
+            huge_bound.validate_on_scale(g.price_scale),
+            Err(CodecError::ArithmeticOverflow)
+        );
+
+        let mut overflowing = page;
+        overflowing.orders[1] = OrderSlot::Portfolio(huge_bound);
+        overflowing.page_digest = overflowing.recomputed_page_digest().unwrap();
+        let mut b = [0; account_len::ORDER_PAGE];
+        overflowing.encode(&mut b).unwrap();
+        assert_eq!(OrderPageAccount::decode(&b), Ok(overflowing));
+        assert_eq!(
+            OrderPageAccount::decode_on_grid(&b, &g),
+            Err(CodecError::ArithmeticOverflow)
+        );
+
+        // A scale of zero or above the simplex bound is not a scale.
+        assert_eq!(
+            portfolio(9).validate_on_scale(0),
+            Err(CodecError::InvalidPriceGrid)
+        );
+        assert_eq!(
+            portfolio(9).validate_on_scale(MAX_PRICE_SCALE + 1),
+            Err(CodecError::InvalidPriceGrid)
+        );
+    }
+    #[test]
+    fn hostile_order_slots_refuse_unknown_kinds_and_nonzero_slot_padding() {
+        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(portfolio(9));
+        reseal(&mut page);
+        let mut clean = [0; account_len::ORDER_PAGE];
+        page.encode(&mut clean).unwrap();
+
+        // An unrecognized slot kind is refused like any other discriminator.
+        let mut unknown = clean;
+        unknown[PAGE_HEADER_BYTES] = 3;
+        assert_eq!(
+            OrderPageAccount::decode(&unknown),
+            Err(CodecError::WrongTag)
+        );
+        let mut unknown_pad = clean;
+        unknown_pad[PAGE_HEADER_BYTES + 2 * ORDER_SLOT_BYTES] = u8::MAX;
+        assert_eq!(
+            OrderPageAccount::decode(&unknown_pad),
+            Err(CodecError::WrongTag)
+        );
+
+        // The unused tail of a single-Egg slot is canonical zero.
+        let mut stuffed = clean;
+        stuffed[PAGE_HEADER_BYTES + 1 + ORDER_RECORD_BYTES] = 1;
+        assert_eq!(
+            OrderPageAccount::decode(&stuffed),
+            Err(CodecError::NonCanonicalPadding)
+        );
+        let mut stuffed_end = clean;
+        stuffed_end[PAGE_HEADER_BYTES + ORDER_SLOT_BYTES - 1] = 1;
+        assert_eq!(
+            OrderPageAccount::decode(&stuffed_end),
+            Err(CodecError::NonCanonicalPadding)
+        );
+
+        // So is every byte of a padding slot.
+        let mut dirty_pad = clean;
+        dirty_pad[PAGE_HEADER_BYTES + 2 * ORDER_SLOT_BYTES + 5] = 1;
+        assert_eq!(
+            OrderPageAccount::decode(&dirty_pad),
+            Err(CodecError::NonCanonicalPadding)
+        );
+
+        // An all-zero record smuggled into a padding slot under a real kind
+        // byte is not padding either.
+        let mut typed_pad = clean;
+        typed_pad[PAGE_HEADER_BYTES + 2 * ORDER_SLOT_BYTES] = ORDER_KIND_SINGLE;
+        assert_eq!(
+            OrderPageAccount::decode(&typed_pad),
+            Err(CodecError::NonCanonicalPadding)
+        );
+        let mut typed_portfolio_pad = clean;
+        typed_portfolio_pad[PAGE_HEADER_BYTES + 2 * ORDER_SLOT_BYTES] = ORDER_KIND_PORTFOLIO;
+        assert_eq!(
+            OrderPageAccount::decode(&typed_portfolio_pad),
+            Err(CodecError::NonCanonicalPadding)
+        );
+
+        // An empty slot below `order_count` is a missing order, not padding.
+        let mut hollow = page;
+        hollow.orders[1] = OrderSlot::Empty;
+        hollow.last_order_id = Hash32::ZERO;
+        hollow.page_digest = hollow.recomputed_page_digest().unwrap();
+        assert_eq!(hollow.validate(), Err(CodecError::ZeroIdentity));
+
+        // Exact length still governs: the slot array cannot be short or long.
+        assert_eq!(
+            OrderPageAccount::decode(&clean[..clean.len() - 1]),
+            Err(CodecError::Truncated)
+        );
+        let mut long = [0; account_len::ORDER_PAGE + 1];
+        long[..clean.len()].copy_from_slice(&clean);
+        assert_eq!(
+            OrderPageAccount::decode(&long),
+            Err(CodecError::TrailingBytes)
+        );
+    }
+    #[test]
+    fn a_page_set_refuses_more_portfolios_than_the_relation_admits() {
+        // `MAX_PORTFOLIO_ORDERS` portfolios on one page is admitted.
+        let ids: [u8; MAX_ORDERS_PER_PAGE] =
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let mut full = build_page(0, 2, &ids, Hash32::ZERO);
+        let mut i = 0;
+        while i < MAX_PORTFOLIO_ORDERS {
+            full.orders[i] = OrderSlot::Portfolio(portfolio(ids[i]));
+            i += 1;
+        }
+        reseal(&mut full);
+        assert_eq!(full.validate(), Ok(()));
+
+        // One more on the same page is refused by the page itself.
+        let mut over = full;
+        over.orders[MAX_PORTFOLIO_ORDERS] =
+            OrderSlot::Portfolio(portfolio(ids[MAX_PORTFOLIO_ORDERS]));
+        over.page_digest = over.recomputed_page_digest().unwrap();
+        assert_eq!(over.validate(), Err(CodecError::InvalidCount));
+
+        // One more on the *next* page is refused only by the set, which is
+        // exactly the cross-page bound `verify_page_set` exists to check.
+        let mut tail = build_page(1, 2, &[17, 18, 19], full.last_order_id);
+        tail.orders[0] = OrderSlot::Portfolio(portfolio(17));
+        reseal(&mut tail);
+        assert_eq!(tail.validate(), Ok(()));
+        let mut set = [full, tail];
+        freeze_set(&mut set);
+        assert_eq!(set[0].validate(), Ok(()));
+        assert_eq!(set[1].validate(), Ok(()));
+        assert_eq!(verify_page_set(&set), Err(CodecError::InvalidCount));
     }
     #[test]
     fn candidate_identity_binds_only_the_free_coordinates() {
