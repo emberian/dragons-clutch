@@ -10,6 +10,7 @@
 //! | range | meaning |
 //! | --- | --- |
 //! | `0x0001..=0x00ff` | account/runtime metadata and adapter checks |
+//! | `0x0018..=0x001e` | the token plane's appends ([`ClutchError::WrongTokenProgram`] .. [`ClutchError::ShadowSupplyMismatch`]) |
 //! | `0x0040..=0x004f` | market-initialization appends ([`ClutchError::AlreadyInitialized`] .. [`ClutchError::TermsBindingMismatch`]) |
 //! | `0x0050..=0x005f` | the evidence gate's numeric projection (see below) |
 //! | `0x1000 + n` | [`clutch_solana_layout::CodecError`] variant `n` |
@@ -89,6 +90,63 @@ pub enum ClutchError {
     /// this code is looking at an honest stub: no state was read, no state was
     /// written, and nothing was faked.
     NotYetImplemented = 0x0017,
+    /// A mint or token account was not owned by the pinned token program.
+    ///
+    /// The pinned program is `clutch_solana_layout::collateral::TOKEN_2022_PROGRAM`.
+    /// A non-executable account at the token-program role reports this too: an
+    /// account that cannot be invoked is not the token program regardless of
+    /// what its key says.
+    WrongTokenProgram = 0x0018,
+    /// A mint failed its admission policy on a non-extension ground.
+    ///
+    /// Identity, decimals, supply ceiling, zero supply, or a surviving mint or
+    /// freeze authority.  Deliberately separate from
+    /// [`ClutchError::TokenExtensionNotAllowed`] so a transaction log
+    /// distinguishes "this is the wrong asset" from "this asset carries
+    /// behaviour the Realm forbids".
+    MintNotAdmitted = 0x0019,
+    /// A present extension is outside the effective allowed set, a required
+    /// extension is absent, or the TLV region did not parse.
+    ///
+    /// An extension discriminant this build does not know is *this* refusal
+    /// and not a shrug: the fail-closed rule of
+    /// `docs/implementation/COLLATERAL_PROFILES.md`.  The offending
+    /// discriminant is not encoded in the number — one `ProgramError::Custom`
+    /// carries one `u32` — and is recovered from the mint bytes by
+    /// [`crate::token::first_denied_extension`], exactly as the sub-reasons of
+    /// `Window(_)` stay host-differential facts.
+    TokenExtensionNotAllowed = 0x001a,
+    /// A token account failed the Hoard or holder policy on a non-extension
+    /// ground: wrong mint, frozen, wrong owner authority, or a delegate or
+    /// close authority the policy refuses.
+    TokenAccountNotAdmitted = 0x001b,
+    /// An observed post-CPI balance or supply delta was not the exact expected
+    /// one.
+    ///
+    /// Not `>=`, not "at least": `docs/implementation/TOKEN2022_PLAN.md` §3.3
+    /// step 6.  This is what makes solvency independent of the extension
+    /// refusal being complete, and it is also what makes the off-chain no-op
+    /// `solana_cpi::invoke_signed` detectable rather than silent.
+    TokenDeltaMismatch = 0x001c,
+    /// `HoardAccount::collateral_atoms` is not the Hoard token account's
+    /// `amount`.
+    ///
+    /// The checked-mirror half of open decision 3 in
+    /// `docs/implementation/TOKEN2022_PLAN.md` §3.5.  Reserved by this wave;
+    /// the collateral leg that raises it is not wired yet.
+    HoardMirrorMismatch = 0x001d,
+    /// The market-wide external-shadow term is not the outcome mint's supply.
+    ///
+    /// **Appended beyond the plan's table**, which stops at `0x001d`.  The
+    /// plan's `HoardMirrorMismatch` names the *collateral* mirror; this names
+    /// the *outcome* mirror, and collapsing them would make a diagnostic
+    /// unable to say which of two different single-truth cutovers broke.  The
+    /// statement checked is
+    /// `SupplyLedgerAccount::external_supply[o] == outcome_mint[o].supply`,
+    /// market-wide — see [`crate::token`] for why the *per-owner*
+    /// `ExternalAccount::balances[o]` is not reconcilable against any one token
+    /// account.
+    ShadowSupplyMismatch = 0x001e,
     /// A target of an initialization write was not all-zero.
     ///
     /// The account-plane re-initialization refusal: a market that already

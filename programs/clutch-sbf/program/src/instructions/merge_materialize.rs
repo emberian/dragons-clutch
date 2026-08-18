@@ -118,7 +118,9 @@ mod tests {
         edit_position, fixture, h, ids, key, layout_request, second_position, split_request, Case,
         Class,
     };
-    use crate::instructions::split::{IX_ACTOR, IX_EXTERNAL, IX_POSITION, IX_REPLAY};
+    use crate::instructions::split::tests::{token_leg, TokenLegCase};
+    use crate::instructions::split::{IX_ACTOR, IX_EXTERNAL, IX_MARKET, IX_POSITION, IX_REPLAY};
+    use crate::token;
     use clutch_kernel::Error as KernelError;
     use clutch_solana_layout::{
         Hash32, HoardAccount, Intent, PositionAccount, SupplyLedgerAccount,
@@ -357,6 +359,418 @@ mod tests {
         let supply = SupplyLedgerAccount::decode(&post.supply).expect("ledger decodes");
         assert_eq!(supply.internal_supply[0], 0);
         assert_eq!(supply.external_supply[0], 0);
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* The optional Token-2022 leg                                           */
+    /* -------------------------------------------------------------------- */
+
+    /// A funded case plus a well-formed token leg for one outcome.
+    ///
+    /// The injected outcome-mint binding stands in for the derivation
+    /// `crate::seeds::find` deliberately does not compile off-chain; on-chain
+    /// `derive_bindings` computes the same address from the same seeds.
+    fn token_case(outcome: u8, mint_supply: u64, holder_amount: u64) -> (Case, TokenLegCase) {
+        let mut case = funded();
+        let leg = token_leg(&case, outcome, mint_supply, holder_amount);
+        case.bindings.outcome_mint = Some((leg.mint, 11));
+        (case, leg)
+    }
+
+    /// Refuse with exactly one adapter code, and write nothing at all.
+    ///
+    /// Every refusal reachable *before* the CPI leaves all nine program
+    /// accounts byte-identical, because steps 1-3 of `TOKEN2022_PLAN.md` §3.3
+    /// run before the first write.  The one refusal that does not is the
+    /// post-CPI delta check, which has [`refuses_after_the_kernel_ran`].
+    fn refuses_with(
+        case: &Case,
+        request: &[u8],
+        leg: &TokenLegCase,
+        expected: ClutchError,
+        label: &str,
+    ) {
+        let (result, post) = case.program_with_token_leg(request, leg);
+        assert_eq!(result, Err(expected.into()), "{label}");
+        assert_eq!(
+            post, case.state,
+            "{label}: a pre-CPI refusal writes nothing"
+        );
+    }
+
+    /// Refuse after the kernel and the ledger have already been written.
+    ///
+    /// **This is the one deviation from `TOKEN2022_PLAN.md` §3.3, stated as a
+    /// test rather than as a footnote.**  The plan's step order is validate,
+    /// admit, snapshot, compute, token effects, verify, *commit*.  This program
+    /// runs the compute step through [`super::split::seam`]'s existing
+    /// `kernel_step` and `ledger_step`, and those two **write their accounts as
+    /// they compute**: splitting them into compute-and-commit halves would mean
+    /// carrying a decoded `KernelAccount` — most of an SBF frame on its own —
+    /// across two frames, which is the constraint `SBF_BRINGUP.md` records.
+    ///
+    /// So a refusal raised by the post-CPI delta check leaves the kernel
+    /// aggregate and the supply ledger already written, and the Hoard,
+    /// position, external shadow and replay accounts untouched.  On chain that
+    /// is invisible: SVM transaction semantics discard every byte of it.  Off
+    /// chain, in this test harness, there is no rollback, so the writes are
+    /// observable — and asserting them here is what keeps the deviation a
+    /// measured fact instead of a claim.
+    fn refuses_after_the_kernel_ran(
+        case: &Case,
+        request: &[u8],
+        leg: &TokenLegCase,
+        expected: ClutchError,
+        label: &str,
+    ) {
+        let (result, post) = case.program_with_token_leg(request, leg);
+        assert_eq!(result, Err(expected.into()), "{label}");
+        assert_eq!(post.hoard, case.state.hoard, "{label}: hoard untouched");
+        assert_eq!(
+            post.position, case.state.position,
+            "{label}: position untouched"
+        );
+        assert_eq!(
+            post.external, case.state.external,
+            "{label}: shadow untouched"
+        );
+        assert_eq!(post.replay, case.state.replay, "{label}: replay untouched");
+        assert_eq!(post.market, case.state.market, "{label}: market untouched");
+        assert_ne!(
+            post.supply, case.state.supply,
+            "{label}: the ledger write is the deviation this test exists to pin"
+        );
+    }
+
+    #[test]
+    fn the_account_count_selects_the_plane_and_nothing_else_does() {
+        let (case, leg) = token_case(1, 0, 0);
+
+        /* Ten accounts is the plane that existed before this lane, and it is
+         * unchanged: the shadow moves and no token is touched. */
+        let request = materialize(&case, 1, 1, 7);
+        let mut ten = case.clone();
+        ten.advance(&request, "ten-account materialize still works");
+        let external = ExternalAccount::decode(&ten.state.external).expect("shadow decodes");
+        assert_eq!(external.balances[1], 7);
+
+        /* Eleven or twelve is neither plane.  A partial token leg is a caller
+         * error and not a plane this program will guess at. */
+        let (result, _) = case.program(&request);
+        assert!(result.is_ok(), "the ten-account plane is still accepted");
+
+        /* `Split` and `Merge` move collateral, whose leg is unwired, so a
+         * thirteen-account collateral intent is refused rather than having its
+         * suffix ignored. */
+        let (result, post) = case.program_with_token_leg(&merge(1, 1), &leg);
+        assert_eq!(result, Err(ClutchError::AccountCount.into()));
+        assert_eq!(post, case.state);
+        let (result, post) = case.program_with_token_leg(&split_request(1, 1), &leg);
+        assert_eq!(result, Err(ClutchError::AccountCount.into()));
+        assert_eq!(post, case.state);
+    }
+
+    #[test]
+    fn an_off_chain_token_leg_refuses_the_delta_it_could_not_move() {
+        /* `solana_cpi::invoke_signed` compiles to `Ok(())` under
+         * `not(target_os = "solana")`.  Without the exact-delta check of
+         * `TOKEN2022_PLAN.md` §3.3 step 6 this materialize would report success
+         * having moved nothing -- which is precisely the failure mode the check
+         * exists for, and precisely why the check is not "defence in depth".
+         *
+         * This is the one property of the CPI that can be established on the
+         * host.  The CPI actually working is `programs/clutch-sbf/svm-tests`. */
+        let (case, leg) = token_case(1, 0, 0);
+        refuses_after_the_kernel_ran(
+            &case,
+            &materialize(&case, 1, 1, 7),
+            &leg,
+            ClutchError::TokenDeltaMismatch,
+            "off-chain mint_to moves nothing",
+        );
+        /* The same for a burn, and note the fixture's holder does hold enough:
+         * the refusal is about the delta, not about the balance. */
+        let (case, leg) = token_case(1, 7, 7);
+        let mut funded_shadow = case.clone();
+        funded_shadow.advance(&materialize(&case, 1, 1, 7), "materialize without the leg");
+        funded_shadow.bindings.outcome_mint = case.bindings.outcome_mint;
+        refuses_after_the_kernel_ran(
+            &funded_shadow,
+            &dematerialize(&funded_shadow, 2, 1, 3),
+            &leg,
+            ClutchError::TokenDeltaMismatch,
+            "off-chain burn moves nothing",
+        );
+    }
+
+    #[test]
+    fn the_token_program_role_is_authenticated_before_anything_is_read() {
+        let (case, base) = token_case(1, 0, 0);
+        let request = materialize(&case, 1, 1, 7);
+
+        let mut impostor = base.clone();
+        impostor.token_program = key(0x4d);
+        refuses_with(
+            &case,
+            &request,
+            &impostor,
+            ClutchError::WrongTokenProgram,
+            "another program at the token-program role",
+        );
+
+        /* The right key on an account that cannot be invoked is not the token
+         * program either. */
+        let mut inert = base.clone();
+        inert.token_program_executable = false;
+        refuses_with(
+            &case,
+            &request,
+            &inert,
+            ClutchError::WrongTokenProgram,
+            "a non-executable token program",
+        );
+
+        let mut writable = base.clone();
+        writable.token_program_writable = true;
+        refuses_with(
+            &case,
+            &request,
+            &writable,
+            ClutchError::UnexpectedWritable,
+            "a writable token program",
+        );
+
+        /* The mint and the holder are written by the CPI, so a caller that did
+         * not declare them writable is refused before the CPI, not by it. */
+        let mut read_only_mint = base.clone();
+        read_only_mint.mint_writable = false;
+        refuses_with(
+            &case,
+            &request,
+            &read_only_mint,
+            ClutchError::NotWritable,
+            "a read-only outcome mint",
+        );
+        let mut read_only_holder = base;
+        read_only_holder.holder_writable = false;
+        refuses_with(
+            &case,
+            &request,
+            &read_only_holder,
+            ClutchError::NotWritable,
+            "a read-only holder account",
+        );
+    }
+
+    #[test]
+    fn the_outcome_mint_is_derived_and_never_believed() {
+        let (case, base) = token_case(1, 0, 0);
+        let request = materialize(&case, 1, 1, 7);
+
+        // A perfectly well-formed mint at an address the seeds do not produce.
+        let mut elsewhere = base.clone();
+        elsewhere.mint = key(0x5e);
+        elsewhere.holder_data = token::fixtures::account_bytes(
+            elsewhere.mint.to_bytes(),
+            case.keys[IX_ACTOR].to_bytes(),
+            0,
+        );
+        refuses_with(
+            &case,
+            &request,
+            &elsewhere,
+            ClutchError::WrongPda,
+            "a mint at an underived address",
+        );
+
+        // The mint of another outcome, presented for this one.
+        let mut other_outcome = base;
+        other_outcome.mint = crate::instructions::split::tests::outcome_mint_key(0);
+        refuses_with(
+            &case,
+            &request,
+            &other_outcome,
+            ClutchError::WrongPda,
+            "outcome 0's mint presented for outcome 1",
+        );
+    }
+
+    #[test]
+    fn the_extension_refusal_runs_at_the_instruction_and_not_only_at_init() {
+        /* `TOKEN2022_PLAN.md` §3.4: a mint address is not a stable description
+         * of a mint's behaviour, because `MintCloseAuthority` lets a zero-supply
+         * mint be closed and reinitialized with a different extension set.  So
+         * the refusal runs over the mint as loaded in *this* transaction. */
+        let (case, base) = token_case(1, 0, 0);
+        let request = materialize(&case, 1, 1, 7);
+        let authority = case.keys[IX_MARKET].to_bytes();
+
+        for (discriminant, label) in [
+            (1_u16, "TransferFeeConfig"),
+            (3, "MintCloseAuthority"),
+            (6, "DefaultAccountState"),
+            (9, "NonTransferable"),
+            (12, "PermanentDelegate"),
+            (14, "TransferHook"),
+            (26, "Pausable"),
+        ] {
+            let mut hostile = base.clone();
+            hostile.mint_data = token::fixtures::mint_with_extension(authority, 0, discriminant);
+            refuses_with(
+                &case,
+                &request,
+                &hostile,
+                ClutchError::TokenExtensionNotAllowed,
+                label,
+            );
+        }
+
+        /* And a discriminant no build knows: fail closed, not shrug.  29 is the
+         * first one `EXTENSION_KNOWN_MASK` does not cover. */
+        let mut future = base;
+        future.mint_data = token::fixtures::mint_with_extension(authority, 0, 29);
+        refuses_with(
+            &case,
+            &request,
+            &future,
+            ClutchError::TokenExtensionNotAllowed,
+            "an extension discriminant from the future",
+        );
+    }
+
+    #[test]
+    fn an_outcome_mint_this_program_could_not_have_created_is_refused() {
+        let (case, base) = token_case(1, 0, 0);
+        let request = materialize(&case, 1, 1, 7);
+
+        // Somebody else holds the mint authority: this is not our liability.
+        let mut stolen = base.clone();
+        stolen.mint_data = token::fixtures::outcome_mint_bytes([0x9a; 32], 0);
+        refuses_with(
+            &case,
+            &request,
+            &stolen,
+            ClutchError::MintNotAdmitted,
+            "a mint somebody else can mint",
+        );
+
+        // Nonzero decimals: the PROPOSED unit decision, enforced.
+        let mut scaled = base.clone();
+        scaled.mint_data =
+            token::fixtures::mint_bytes(6, 0, Some(case.keys[IX_MARKET].to_bytes()), None);
+        refuses_with(
+            &case,
+            &request,
+            &scaled,
+            ClutchError::MintNotAdmitted,
+            "an outcome mint with decimals",
+        );
+
+        // A freeze authority on a claim token is discretionary seizure.
+        let mut freezable = base.clone();
+        freezable.mint_data = token::fixtures::mint_bytes(
+            0,
+            0,
+            Some(case.keys[IX_MARKET].to_bytes()),
+            Some([0x3b; 32]),
+        );
+        refuses_with(
+            &case,
+            &request,
+            &freezable,
+            ClutchError::MintNotAdmitted,
+            "an outcome mint with a freeze authority",
+        );
+
+        // The right bytes under the wrong program.
+        let mut wrong_program = base;
+        wrong_program.mint_owner = key(0x77);
+        refuses_with(
+            &case,
+            &request,
+            &wrong_program,
+            ClutchError::WrongTokenProgram,
+            "a mint some other program owns",
+        );
+    }
+
+    #[test]
+    fn the_holder_account_is_bound_to_the_mint_and_to_the_authenticated_actor() {
+        let (case, base) = token_case(1, 0, 0);
+        let request = materialize(&case, 1, 1, 7);
+
+        // A token account for a different mint.
+        let mut wrong_mint = base.clone();
+        wrong_mint.holder_data =
+            token::fixtures::account_bytes([0x21; 32], case.keys[IX_ACTOR].to_bytes(), 0);
+        refuses_with(
+            &case,
+            &request,
+            &wrong_mint,
+            ClutchError::TokenAccountNotAdmitted,
+            "a holder account for another mint",
+        );
+        /* And the subject matters: the *same* `TokenRefusal::WrongMint` reason
+         * on the mint itself is `MintNotAdmitted`, because on a mint it says
+         * "wrong asset" and on an account it says "this account holds the wrong
+         * asset". */
+
+        /* A stranger's account for the right mint.  The destination is
+         * caller-supplied, so this is the check that stops a materialize from
+         * minting somebody else's claim into somebody else's wallet. */
+        let mut stranger = base.clone();
+        stranger.holder_data = token::fixtures::account_bytes(base.mint.to_bytes(), [0x8f; 32], 0);
+        refuses_with(
+            &case,
+            &request,
+            &stranger,
+            ClutchError::TokenAccountNotAdmitted,
+            "a stranger's holder account",
+        );
+
+        // A frozen account cannot receive.
+        let mut frozen = base;
+        let mut data = token::fixtures::account_bytes(
+            frozen.mint.to_bytes(),
+            case.keys[IX_ACTOR].to_bytes(),
+            0,
+        );
+        data[108] = 2;
+        frozen.holder_data = data;
+        refuses_with(
+            &case,
+            &request,
+            &frozen,
+            ClutchError::TokenAccountNotAdmitted,
+            "a frozen holder account",
+        );
+    }
+
+    #[test]
+    fn a_token_leg_never_reaches_a_refused_transition() {
+        /* Ordering, stated as a property: every check the ten-account plane
+         * already ran still runs, and it runs *first*.  A stale sequence with a
+         * hostile token leg reports the replay fault, not a token fault, and
+         * writes nothing -- so a caller cannot use the token leg to change
+         * which refusal a request gets. */
+        let (case, base) = token_case(1, 0, 0);
+        let mut hostile = base;
+        hostile.mint_data =
+            token::fixtures::mint_with_extension(case.keys[IX_MARKET].to_bytes(), 0, 1);
+        refuses_with(
+            &case,
+            &materialize(&case, 9, 1, 7),
+            &hostile,
+            ClutchError::Replay,
+            "a stale sequence outranks a hostile mint",
+        );
+        refuses_with(
+            &case,
+            &materialize(&case, 1, 0, 21),
+            &hostile,
+            ClutchError::TokenExtensionNotAllowed,
+            "the kernel has not run yet when the mint is admitted",
+        );
     }
 
     #[test]

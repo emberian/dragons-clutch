@@ -1,0 +1,42 @@
+== recorded run, 2026-08-18T12:33:49Z ==
+
+toolchain:
+rustc 1.93.1 (01f6ddf75 2026-02-11)
+
+program ELF (cargo-build-sbf, from programs/clutch-sbf/program):
+d8a9267c75ac0d4e8021320f3009c09532fd0cfda5a70508bd6c8312b400975c  tests/fixtures/clutch_sbf.so
+
+source tree:
+4a723b4daeb3cf3e32ffc2ab78e26a7dee425a01
+  (working tree carries this lane's uncommitted changes)
+
+== run ==
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/token_leg.rs (target/debug/deps/token_leg-509db742ca589f1c)
+
+running 6 tests
+test a_supply_that_drifted_outside_the_program_is_refused ... SVM reconciliation: out-of-band burn refused with Custom(30) (0x001e)
+ok
+test an_extension_on_the_outcome_mint_is_refused_at_instruction_time ... SVM extension refusal: TransferFeeConfig refused with Custom(26) (0x001a)
+SVM extension refusal: MintCloseAuthority refused with Custom(26) (0x001a)
+ok
+test e1_dematerialize_burns_exactly_and_the_shadow_reconciles ... SVM e1_dematerialize: materialize=95122 CU  dematerialize=95105 CU
+ok
+test e1_materialize_mints_exactly_q_and_the_shadow_reconciles ... SVM e1_materialize: quantity=7 compute_units=95122
+ok
+test the_derived_hoard_authority_cannot_be_signed_for_by_a_wallet ... SVM hoard outflow: wallet-signed withdrawal from the derived hoard authority refused with Custom(4)
+ok
+test the_ten_account_plane_moves_only_the_shadow ... SVM ten-account plane: shadow-only materialize accepted at 84178 CU, and the token leg then refuses with Custom(30)
+ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

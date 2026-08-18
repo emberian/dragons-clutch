@@ -67,12 +67,13 @@
 //! it is the reference adapter's own gap too.
 
 use crate::accounts::{
-    self, apply_ledger_delta, expect_pda, require, require_count, require_distinct,
-    require_representation_bound, require_signer, require_two_term_closure, KernelFacts, Outcome,
-    StateRole, SupplyFacts,
+    self, apply_ledger_delta, expect_pda, require, require_distinct, require_representation_bound,
+    require_signer, require_two_term_closure, KernelFacts, MarketFacts, Outcome, StateRole,
+    SupplyFacts,
 };
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
+use crate::token;
 use clutch_kernel::{MarketState, Phase, Position, MAX_OUTCOMES as KERNEL_MAX_OUTCOMES};
 use clutch_solana_layout::{
     account_len, Hash32, HoardAccount, Intent, PositionAccount, SupplyLedgerAccount, MAX_OUTCOMES,
@@ -110,6 +111,96 @@ pub const IX_EXTERNAL: usize = 7;
 pub const IX_REPLAY: usize = 8;
 /// Market-wide two-term supply ledger.
 pub const IX_SUPPLY: usize = 9;
+
+/* --------------------------------------------------------------------- */
+/* The optional Token-2022 leg                                            */
+/* --------------------------------------------------------------------- */
+
+/// Account count of a seam instruction that carries the Token-2022 leg.
+///
+/// Ten seam accounts plus the token program, the outcome mint, and the
+/// holder's outcome-token account.
+pub const ACCOUNT_COUNT_TOKEN: usize = 13;
+
+/// The pinned Token-2022 program (read-only, executable).
+pub const IX_TOKEN_PROGRAM: usize = 10;
+/// The outcome mint for the outcome this intent names (writable).
+pub const IX_OUTCOME_MINT: usize = 11;
+/// The holder's Token-2022 account for that outcome mint (writable).
+pub const IX_HOLDER_TOKEN: usize = 12;
+
+/// Whether this instruction was presented with the Token-2022 leg.
+///
+/// **This optionality is a transitional hole, not a design.**  `Materialize`
+/// and `Dematerialize` accept ten accounts (shadow only, exactly the behaviour
+/// that existed before this lane) or thirteen (shadow *and* a real `MintTo` /
+/// `Burn` with the exact-delta and reconciliation checks).  A caller may
+/// therefore omit the token leg and get the weaker instruction.
+///
+/// It is here for one reason and it is a scheduling reason: **no instruction in
+/// this program creates an outcome mint.**  `CreateMarket` creates no account
+/// at all — the `system_instruction::create_account` CPI is deferred check 2 of
+/// `docs/implementation/SBF_BRINGUP.md` — so a market founded by this program
+/// has no mint for the leg to name, and making the leg mandatory would make
+/// `Materialize` unreachable rather than stronger.  It also keeps `harness/`,
+/// which is frozen this wave and emits ten-account seam transactions, honest
+/// rather than broken.
+///
+/// The hole closes when `CreateMarket` creates the mints: at that point the
+/// count becomes fixed at thirteen and [`TokenLeg::Absent`] is deleted.  Until
+/// then a market's operator, not this program, is what decides whether claims
+/// are tokens.  That is written down here and in
+/// `docs/implementation/TOKEN2022_PLAN.md` rather than discovered later.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TokenLeg {
+    /// Ten accounts: the external shadow moves and no token exists.
+    Absent,
+    /// Thirteen accounts: the outcome mint and a holder token account.
+    Present,
+}
+
+/// Choose the account plane from the intent and the presented count.
+///
+/// `Split` and `Merge` move *collateral*, whose leg is unwired this wave (see
+/// the module docs), so they take exactly ten accounts and a thirteen-account
+/// `Split` is [`ClutchError::AccountCount`] rather than a silently ignored
+/// suffix.
+fn select_token_leg(op: &SeamOp, presented: usize) -> Outcome<TokenLeg> {
+    match op {
+        SeamOp::Split { .. } | SeamOp::Merge { .. } => {
+            require(presented == ACCOUNT_COUNT, ClutchError::AccountCount)?;
+            Ok(TokenLeg::Absent)
+        }
+        SeamOp::Materialize { .. } | SeamOp::Dematerialize { .. } => match presented {
+            ACCOUNT_COUNT => Ok(TokenLeg::Absent),
+            ACCOUNT_COUNT_TOKEN => Ok(TokenLeg::Present),
+            _ => Err(ClutchError::AccountCount.into()),
+        },
+    }
+}
+
+/// Everything the token leg will change, read before anything is written.
+///
+/// Step 3 of `docs/implementation/TOKEN2022_PLAN.md` §3.3: the exact pre-CPI
+/// `amount` of every token account this instruction will change and the exact
+/// pre-CPI `supply` of every mint it will change.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TokenSnapshot {
+    /// Outcome index this leg acts on.
+    outcome: u8,
+    /// Claim atoms the kernel decided to move.
+    quantity: u64,
+    /// Outcome-mint supply before the CPI.
+    mint_supply: u64,
+    /// Holder token-account balance before the CPI.
+    holder_amount: u64,
+    /// Market PDA signing seeds, carried so the signer is derived once.
+    realm: [u8; 32],
+    /// Market identity, the second market seed.
+    market: [u8; 32],
+    /// Canonical market bump, already proved equal to the stored one.
+    bump: [u8; 1],
+}
 
 /// The program-owned state roles of the seam plane, in account-list order.
 const STATE_ROLES: [StateRole; 9] = [
@@ -289,6 +380,13 @@ pub struct Identities {
     pub owner: [u8; 32],
     /// Position generation, from the position account.
     pub generation: u64,
+    /// Outcome index the token leg acts on, when a token leg is present.
+    ///
+    /// `None` on every instruction that carries no token leg, and the point of
+    /// the option is cost: program-address derivation is a syscall, and
+    /// `Split`, `Merge`, and a ten-account `Materialize` must not pay for an
+    /// address they never use.
+    pub outcome: Option<u8>,
 }
 
 /// Canonical program address and bump for every account in the seam plane.
@@ -316,6 +414,13 @@ pub struct Bindings {
     pub replay: (Pubkey, u8),
     /// Canonical supply-ledger address and bump.
     pub supply: (Pubkey, u8),
+    /// Canonical outcome-mint address and bump, when one was asked for.
+    ///
+    /// `Some` exactly when [`Identities::outcome`] was `Some`.  The bump is
+    /// carried but never compared: a Token-2022 mint's layout has no field to
+    /// store one in, which is the same `None` case [`expect_pda`] already has
+    /// for the Profile and the kernel aggregate.
+    pub outcome_mint: Option<(Pubkey, u8)>,
 }
 
 /// Derive every seam program address from the frozen seed schema.
@@ -337,6 +442,9 @@ pub fn derive_bindings(program_id: &Pubkey, ids: &Identities) -> Bindings {
         external: seeds::external_pda(program_id, &ids.market, &ids.owner, ids.generation),
         replay: seeds::replay_pda(program_id, &ids.market, &ids.owner, ids.generation),
         supply: seeds::supply_pda(program_id, &ids.market),
+        outcome_mint: ids
+            .outcome
+            .map(|outcome| seeds::outcome_mint_pda(program_id, &ids.market, outcome)),
     }
 }
 
@@ -457,6 +565,191 @@ fn ledger_step(
     Ok(())
 }
 
+/// Authenticate the token leg and snapshot it, before anything is written.
+///
+/// Steps 1-3 of `docs/implementation/TOKEN2022_PLAN.md` §3.3, for the three
+/// accounts the seam plane does not already own.  Nothing here writes, and the
+/// data borrows every reader takes are dropped before it returns: a live
+/// `RefCell` borrow across `invoke` is a runtime failure, not a lint.
+///
+/// The extension refusal runs **here**, over the mint account as loaded in this
+/// transaction, and not only at market initialization.  §3.4 argues why, and
+/// the argument is not defensive habit: `MintCloseAuthority` is refused
+/// precisely because a zero-supply mint can be closed and reinitialized with a
+/// different extension set, so an address recorded at initialization does not
+/// bind a mint's behaviour forever.  For an outcome mint the program itself
+/// created that is belt and braces; for the same code path over a collateral
+/// mint it is the whole check.
+#[inline(never)]
+fn validate_token_leg(
+    accounts: &[AccountInfo],
+    market: &MarketFacts,
+    outcome_mint: Option<(Pubkey, u8)>,
+    outcome: u8,
+    quantity: u64,
+) -> Outcome<TokenSnapshot> {
+    let token_program = &accounts[IX_TOKEN_PROGRAM];
+    /* A non-executable account at the token-program role is not the token
+     * program whatever its key says, so both facts report one refusal. */
+    require(
+        *token_program.key == token::TOKEN_2022_PROGRAM_ID && token_program.executable,
+        ClutchError::WrongTokenProgram,
+    )?;
+    require(!token_program.is_writable, ClutchError::UnexpectedWritable)?;
+
+    let mint = &accounts[IX_OUTCOME_MINT];
+    let holder = &accounts[IX_HOLDER_TOKEN];
+    require(
+        !mint.executable && !holder.executable,
+        ClutchError::ExecutableAccount,
+    )?;
+    /* Both are mutated by the CPI, so both must have been *declared* writable
+     * by the caller; the runtime will not let the token program write an
+     * account this transaction did not declare. */
+    require(
+        mint.is_writable && holder.is_writable,
+        ClutchError::NotWritable,
+    )?;
+
+    /* The outcome mint is derived, never named: one mint per
+     * `(market, outcome index)`.  There is no stored bump to compare against,
+     * because the account belongs to the token program and its layout has no
+     * room for one -- the same `None` case `expect_pda` already carries for the
+     * Profile and the kernel aggregate. */
+    let derived = outcome_mint.ok_or(Refusal::Adapter(ClutchError::WrongPda))?;
+    expect_pda(mint.key, derived, None)?;
+
+    /* The market PDA is the outcome mints' authority.  It is already proved to
+     * be the canonical derived address by the caller, and its stored bump is
+     * already proved canonical, so signing as it needs no further evidence.
+     * PROPOSED: `TOKEN2022_PLAN.md` §3.1 says "the market authority PDA"
+     * without saying which address that is.  Using the Market account's own
+     * address rather than minting a fourth seed keeps the authority inside the
+     * account list every seam instruction already carries; the alternative --
+     * a dedicated `market-authority` PDA -- costs one more seed and one more
+     * account and buys separation this program does not currently need. */
+    let authority = accounts[IX_MARKET].key;
+    let mint_observation =
+        token::admit_mint(mint, &token::MintPolicy::outcome(*mint.key, *authority))?;
+    let holder_observation = token::admit_token_account(
+        holder,
+        &token::TokenAccountPolicy::holder(*mint.key, *accounts[IX_ACTOR].key),
+    )?;
+
+    Ok(TokenSnapshot {
+        outcome,
+        quantity,
+        mint_supply: mint_observation.supply,
+        holder_amount: holder_observation.amount,
+        realm: market.realm.bytes(),
+        market: market.market.bytes(),
+        bump: [market.stored_bump],
+    })
+}
+
+/// Perform the token CPI and require the exact deltas it must have produced.
+///
+/// Steps 5 and 6 of §3.3.  The returned value is the **post-CPI mint supply**,
+/// which the caller reconciles against the market-wide external term.
+///
+/// `Materialize` mints, so its authority is the market PDA and the call is
+/// `invoke_signed`.  `Dematerialize` burns from an account the actor owns, so
+/// the actor's already-authenticated signature propagates and the call is a
+/// plain `invoke`.  That asymmetry is the probe's finding, not a convention:
+/// moving value *into* program control needs only the user's signature, and
+/// moving it *out* is impossible without the program signing.
+#[inline(never)]
+fn token_effect(accounts: &[AccountInfo], op: &SeamOp, snapshot: &TokenSnapshot) -> Outcome<u64> {
+    let token_program = &accounts[IX_TOKEN_PROGRAM];
+    let mint = &accounts[IX_OUTCOME_MINT];
+    let holder = &accounts[IX_HOLDER_TOKEN];
+    let quantity = snapshot.quantity;
+
+    match op {
+        SeamOp::Materialize { .. } => {
+            let signer: [&[u8]; 4] = [
+                seeds::SEED_MARKET,
+                &snapshot.realm,
+                &snapshot.market,
+                &snapshot.bump,
+            ];
+            token::mint_to_signed(
+                token_program,
+                mint,
+                holder,
+                &accounts[IX_MARKET],
+                quantity,
+                &signer,
+            )?;
+        }
+        SeamOp::Dematerialize { .. } => {
+            token::burn(token_program, holder, mint, &accounts[IX_ACTOR], quantity)?;
+        }
+        SeamOp::Split { .. } | SeamOp::Merge { .. } => {
+            /* Unreachable: `select_token_leg` refuses a token leg on the
+             * collateral intents.  Refusing rather than silently returning the
+             * pre-CPI supply is what keeps that a check and not a comment. */
+            return Err(ClutchError::UnsupportedInstruction.into());
+        }
+    }
+
+    let post_supply = token::mint_supply(mint)?;
+    let post_amount = token::token_amount(holder)?;
+    match op {
+        SeamOp::Materialize { .. } => {
+            token::require_exact_credit(snapshot.mint_supply, post_supply, quantity)?;
+            token::require_exact_credit(snapshot.holder_amount, post_amount, quantity)?;
+        }
+        _ => {
+            token::require_exact_debit(snapshot.mint_supply, post_supply, quantity)?;
+            token::require_exact_debit(snapshot.holder_amount, post_amount, quantity)?;
+        }
+    }
+    Ok(post_supply)
+}
+
+/// Require the market-wide external term to equal the outcome mint's supply.
+///
+/// **The reconciliation check**, and the reason this lane does not delete the
+/// external shadow: `TOKEN2022_PLAN.md` open decision 3 is not this lane's to
+/// take, so instead of removing the second balance truth the two are required
+/// to agree, which makes the eventual cutover a *deletion* rather than a change
+/// of semantics.
+///
+/// The statement is market-wide and deliberately not per-owner.
+/// `ExternalAccount::balances[o]` is *this owner's* shadow balance, and no
+/// single token account is its counterpart: a holder may keep outcome tokens in
+/// several accounts and may transfer them to anybody. `SupplyLedgerAccount`'s
+/// `external_supply[o]` is the market-wide term, and *that* is exactly what the
+/// mint's `supply` field is. Reconciling the aggregate is sound; reconciling
+/// the per-owner shadow against one account would be a check that is false for
+/// legitimate reasons.
+///
+/// Two consequences worth stating plainly, because both are real:
+///
+/// * once the leg is present, an outcome token that leaves its holder makes the
+///   *per-owner* shadow wrong while the aggregate stays right. The shadow is
+///   already not a balance anybody should trust; this makes it measurable.
+/// * `Burn` is permissionless for a token's owner, so a holder can burn outcome
+///   tokens outside this program. The mint's supply falls, the ledger's does
+///   not, and the next seam instruction on that outcome refuses
+///   [`ClutchError::ShadowSupplyMismatch`] until the ledger is reconciled —
+///   which nothing can currently do. That is a denial-of-service surface
+///   created by carrying two truths, and it is an argument for the cutover
+///   rather than against the check.
+#[inline(never)]
+fn require_shadow_reconciles(supply_data: &[u8], outcome: u8, mint_supply: u64) -> Outcome<()> {
+    let ledger = accounts::read_supply(supply_data)?;
+    require(
+        usize::from(outcome) < MAX_OUTCOMES,
+        ClutchError::NonCanonical,
+    )?;
+    require(
+        ledger.external_supply[usize::from(outcome)] == mint_supply,
+        ClutchError::ShadowSupplyMismatch,
+    )
+}
+
 /// Validate hostile accounts and apply exactly one seam transition.
 ///
 /// The check order is the bring-up program's, which is the offline reference
@@ -487,7 +780,11 @@ pub fn seam<D>(
 where
     D: FnOnce(&Identities) -> Bindings,
 {
-    require_count(accounts, ACCOUNT_COUNT)?;
+    /* The account *count* is the first check and it now selects a plane: ten
+     * accounts is the shadow-only seam, thirteen adds the Token-2022 leg to
+     * `Materialize` and `Dematerialize`.  Everything below index nine is
+     * identical either way. */
+    let leg = select_token_leg(op, accounts.len())?;
 
     let actor = &accounts[IX_ACTOR];
     require_signer(actor)?;
@@ -519,6 +816,13 @@ where
         market: market.market.bytes(),
         owner: position.owner.bytes(),
         generation: position.generation,
+        outcome: match (leg, op) {
+            (
+                TokenLeg::Present,
+                SeamOp::Materialize { outcome, .. } | SeamOp::Dematerialize { outcome, .. },
+            ) => Some(*outcome),
+            _ => None,
+        },
     });
     expect_pda(
         accounts[IX_REALM].key,
@@ -690,6 +994,31 @@ where
         }
     }
 
+    /* Steps 1-3 of `TOKEN2022_PLAN.md` §3.3 for the token leg: authenticate it,
+     * re-run the extension refusal over the mint as loaded in *this*
+     * transaction, and snapshot the exact pre-CPI supply and balance.  All of
+     * it before the first write, and all of it dropped back to a 90-byte
+     * snapshot so nothing large crosses this frame. */
+    let snapshot = match (leg, op) {
+        (TokenLeg::Absent, _) => None,
+        (
+            TokenLeg::Present,
+            SeamOp::Materialize {
+                outcome, quantity, ..
+            }
+            | SeamOp::Dematerialize {
+                outcome, quantity, ..
+            },
+        ) => Some(validate_token_leg(
+            accounts,
+            &market,
+            bindings.outcome_mint,
+            *outcome,
+            *quantity,
+        )?),
+        (TokenLeg::Present, _) => return Err(ClutchError::UnsupportedInstruction.into()),
+    };
+
     /* Everything below this line writes.  A refusal after this point aborts the
      * instruction, and SVM transaction semantics -- not this program -- are
      * what discard the partial write. */
@@ -737,6 +1066,20 @@ where
             &pre_external,
             &moved,
             &kernel_post,
+        )?;
+    }
+
+    /* Steps 5-6 of §3.3: the token effects, then the *exact* deltas they must
+     * have produced, then the reconciliation.  Every `RefCell` borrow above is
+     * out of scope by now -- `hoard`, `position`, `external` and `replay` are
+     * decoded values, not borrows -- which is the precondition `invoke` has
+     * and `invoke_signed` checks for itself. */
+    if let Some(snapshot) = snapshot {
+        let mint_supply = token_effect(accounts, op, &snapshot)?;
+        require_shadow_reconciles(
+            &accounts[IX_SUPPLY].data.borrow(),
+            snapshot.outcome,
+            mint_supply,
         )?;
     }
 
@@ -1028,6 +1371,73 @@ pub(crate) mod tests {
                     })
             };
             let datas: Vec<Vec<u8>> = cells.into_iter().skip(1).map(|cell| cell.data).collect();
+            (result, Seam::from_datas(&datas))
+        }
+
+        /// Run this program's processor path over a **thirteen**-account seam.
+        ///
+        /// The three extra cells are the token leg.  Nothing about the ten
+        /// below them changes, which is the property the plane split exists to
+        /// have.
+        ///
+        /// There is no reference leg to compare against and there cannot be:
+        /// `clutch_solana_reference` models no token account, and
+        /// `solana_cpi::invoke_signed` is `Ok(())` off-chain, so the CPI moves
+        /// nothing here.  What this runner tests is everything *around* the
+        /// CPI — plane selection, authentication, admission, and the fact that
+        /// the exact-delta check turns the off-chain no-op into a refusal.  The
+        /// CPI itself is tested in `programs/clutch-sbf/svm-tests`, against a
+        /// real Token-2022 program.
+        pub(crate) fn program_with_token_leg(
+            &self,
+            request: &[u8],
+            leg: &TokenLegCase,
+        ) -> (Outcome<()>, Seam) {
+            let mut cells = self.cells();
+            cells.push(Cell {
+                key: leg.token_program,
+                owner: Pubkey::new_from_array([0; 32]),
+                lamports: 1,
+                data: Vec::new(),
+                is_signer: false,
+                is_writable: leg.token_program_writable,
+                executable: leg.token_program_executable,
+            });
+            cells.push(Cell {
+                key: leg.mint,
+                owner: leg.mint_owner,
+                lamports: 1,
+                data: leg.mint_data.clone(),
+                is_signer: false,
+                is_writable: leg.mint_writable,
+                executable: false,
+            });
+            cells.push(Cell {
+                key: leg.holder,
+                owner: leg.holder_owner,
+                lamports: 1,
+                data: leg.holder_data.clone(),
+                is_signer: false,
+                is_writable: leg.holder_writable,
+                executable: false,
+            });
+            let result = {
+                let infos: Vec<AccountInfo<'_>> = cells.iter_mut().map(Cell::info).collect();
+                Request::decode(request)
+                    .map_err(Refusal::from)
+                    .and_then(|decoded| {
+                        let op = seam_op(&decoded)?;
+                        seam(&self.program, &infos, decoded.sequence, &op, |_| {
+                            self.bindings
+                        })
+                    })
+            };
+            let datas: Vec<Vec<u8>> = cells
+                .into_iter()
+                .skip(1)
+                .take(9)
+                .map(|cell| cell.data)
+                .collect();
             (result, Seam::from_datas(&datas))
         }
 
@@ -1471,8 +1881,75 @@ pub(crate) mod tests {
                 external: (keys[IX_EXTERNAL], 6),
                 replay: (keys[IX_REPLAY], 7),
                 supply: (keys[IX_SUPPLY], 10),
+                outcome_mint: Some((outcome_mint_key(0), 11)),
             },
             state,
+        }
+    }
+
+    /// The address the fixture pretends `seeds::outcome_mint_pda` derives.
+    ///
+    /// Off-chain derivation is `unimplemented!()` by design (see
+    /// [`crate::seeds::find`]), which is why [`Bindings`] carries the outcome
+    /// mint as an injected value rather than deriving it inside [`seam`].
+    pub(crate) fn outcome_mint_key(outcome: u8) -> Pubkey {
+        key(0xc0_u8.wrapping_add(outcome))
+    }
+
+    /// Backing bytes for the three accounts of the optional token leg.
+    #[derive(Clone, Debug)]
+    pub(crate) struct TokenLegCase {
+        /// Key presented at [`IX_TOKEN_PROGRAM`].
+        pub token_program: Pubkey,
+        /// Whether that account reports itself executable.
+        pub token_program_executable: bool,
+        /// Whether the caller declared the token program writable.
+        pub token_program_writable: bool,
+        /// Key presented at [`IX_OUTCOME_MINT`].
+        pub mint: Pubkey,
+        /// Runtime owner of the mint account.
+        pub mint_owner: Pubkey,
+        /// Mint account bytes.
+        pub mint_data: Vec<u8>,
+        /// Declared writability of the mint.
+        pub mint_writable: bool,
+        /// Key presented at [`IX_HOLDER_TOKEN`].
+        pub holder: Pubkey,
+        /// Runtime owner of the holder token account.
+        pub holder_owner: Pubkey,
+        /// Holder token-account bytes.
+        pub holder_data: Vec<u8>,
+        /// Declared writability of the holder account.
+        pub holder_writable: bool,
+    }
+
+    /// A token leg that passes every check, so a test can break exactly one.
+    pub(crate) fn token_leg(
+        case: &Case,
+        outcome: u8,
+        mint_supply: u64,
+        holder_amount: u64,
+    ) -> TokenLegCase {
+        let mint = outcome_mint_key(outcome);
+        TokenLegCase {
+            token_program: crate::token::TOKEN_2022_PROGRAM_ID,
+            token_program_executable: true,
+            token_program_writable: false,
+            mint,
+            mint_owner: crate::token::TOKEN_2022_PROGRAM_ID,
+            mint_data: crate::token::fixtures::outcome_mint_bytes(
+                case.keys[IX_MARKET].to_bytes(),
+                mint_supply,
+            ),
+            mint_writable: true,
+            holder: key(0xe0),
+            holder_owner: crate::token::TOKEN_2022_PROGRAM_ID,
+            holder_data: crate::token::fixtures::account_bytes(
+                mint.to_bytes(),
+                case.keys[IX_ACTOR].to_bytes(),
+                holder_amount,
+            ),
+            holder_writable: true,
         }
     }
 

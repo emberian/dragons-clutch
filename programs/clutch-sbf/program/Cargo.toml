@@ -25,6 +25,18 @@ clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-solana-layout = { path = "../../solana-layout" }
 clutch-solana-reference = { path = "../../solana-reference" }
 solana-account-info = "=3.1.1"
+
+# Cross-program invocation, added by the Token-2022 lane.  Both resolve from
+# this host's offline cache and both survive `cargo-build-sbf`, which resolves
+# for every platform: `solana-cpi` pulls `solana-stable-layout` and
+# `solana-define-syscall 4.0.1` only under `target_os = "solana"`, and every one
+# of those has a `.crate` archive here.  Note that `solana-define-syscall 4.0.1`
+# coexists with the vendored 5.1.0 the workspace patch supplies for
+# `solana-address`; they are semver-incompatible and both are in the graph.
+solana-cpi = "=3.1.0"
+solana-instruction = { version = "=3.4.1", default-features = false, features = [
+    "std",
+] }
 solana-program-entrypoint = "=3.1.1"
 solana-program-error = "=3.0.1"
 

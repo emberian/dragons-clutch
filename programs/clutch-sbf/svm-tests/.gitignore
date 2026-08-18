@@ -1,0 +1,10 @@
+# The program ELF this workspace drives is a build product of
+# `programs/clutch-sbf/program`, staged here by `run_svm_tests.sh`.  A binary
+# checked into the tree would be a second, silently stale copy of the program.
+#
+# `cargo-build-sbf` also emits a deploy keypair beside the ELF.  It is key
+# material, it is generated, and it is never used here — these tests deploy at
+# the fixed `clutch_svm_fixture::PROGRAM_ID` instead — so it is ignored rather
+# than committed.
+tests/fixtures/
+target/

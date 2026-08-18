@@ -170,18 +170,18 @@
 //! `docs/implementation/SOLANA_REFERENCE_ADAPTER.md` and it stays open.
 
 use crate::accounts::{
-    self, expect_pda, require, require_count, require_distinct, require_representation_bound,
-    require_signer, require_two_term_closure, MarketFacts, Outcome, RealmFacts, StateRole,
-    SupplyFacts, TermsFacts,
+    self, expect_pda, require, require_distinct, require_representation_bound, require_signer,
+    require_two_term_closure, MarketFacts, Outcome, RealmFacts, StateRole, SupplyFacts, TermsFacts,
 };
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
+use crate::token;
 use clutch_kernel::{
     MarketState, PayoutSet, PayoutVector, Phase, MAX_OUTCOMES as KERNEL_MAX_OUTCOMES,
 };
 use clutch_solana_layout::{
-    account_len, canonical_market_id, canonical_outcome_id, Hash32, HoardAccount, Intent,
-    MarketAccount, PositionAccount, ProfileAccount, ResolutionAccount, SupplyLedgerAccount,
+    account_len, canonical_market_id, canonical_outcome_id, collateral, Hash32, HoardAccount,
+    Intent, MarketAccount, PositionAccount, ProfileAccount, ResolutionAccount, SupplyLedgerAccount,
     TermsAccount, MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_INDEX_UNRESOLVED, PROFILE_FLAG_POLICY_FROZEN,
 };
 use clutch_solana_reference::{
@@ -240,6 +240,101 @@ const STATE_ROLES: [StateRole; 11] = [
     StateRole::writable(IX_SUPPLY, account_len::SUPPLY_LEDGER),
     StateRole::writable(IX_RESOLUTION, account_len::RESOLUTION),
 ];
+
+/* --------------------------------------------------------------------- */
+/* The optional collateral-admission leg                                  */
+/* --------------------------------------------------------------------- */
+
+/// Account count of a `CreateMarket` that carries collateral admission.
+///
+/// Twelve, plus the Realm's 266 collateral-policy bytes, the token program, and
+/// the collateral mint itself.
+pub const ACCOUNT_COUNT_TOKEN: usize = 15;
+
+/// The Realm's 266-byte collateral policy (read-only).
+///
+/// **Content-authenticated, not address-authenticated.**  This account has no
+/// seed and no PDA: `collateral::verify_profile_identity` recomputes the child
+/// digest `D_col` from the bytes, compares it against the Profile's frozen
+/// `collateral_policy_digest`, and *also* recomputes the parent Profile
+/// identity from that digest and compares it against the stored Profile ID.
+/// A caller may therefore supply the policy from any account it likes and
+/// cannot supply a different policy, which is why this closes the gap the
+/// module docs above name ("no account in this frozen twelve-account plane
+/// carries those bytes") without appending a fourth seed.
+pub const IX_POLICY: usize = 12;
+/// The pinned Token-2022 program (read-only, executable).
+pub const IX_TOKEN_PROGRAM: usize = 13;
+/// The collateral mint the Realm's policy names (read-only).
+pub const IX_COLLATERAL_MINT: usize = 14;
+
+/// Whether this `CreateMarket` was presented with collateral admission.
+///
+/// The same transitional optionality [`super::split::TokenLeg`] carries, for
+/// the same reason and with the same closing condition: this instruction
+/// creates no account, so a market founded here has no Hoard token account for
+/// the collateral to live in, and requiring the admission would refuse every
+/// market anyone can currently found.  A twelve-account `CreateMarket` is
+/// exactly the instruction that existed before this lane.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CollateralLeg {
+    /// Twelve accounts: no mint is inspected.
+    Absent,
+    /// Fifteen accounts: the Realm's policy is bound and the mint admitted.
+    Present,
+}
+
+/// Bind the Realm's collateral policy and admit the collateral mint.
+///
+/// This is the **market-initialization** half of the two enforcement points
+/// `docs/implementation/TOKEN2022_PLAN.md` §3.4 requires; the other half is
+/// [`super::split::seam`], which re-runs the extension refusal at every token
+/// instruction because a mint address is not a stable description of a mint.
+///
+/// Three things happen here that nothing else in this program could do:
+///
+/// 1. the 266 policy bytes are **bound** to the Profile by recomputed digest,
+///    so the Realm's actual frozen policy — not a well-formed impostor — is
+///    what decides;
+/// 2. the whole `COLLATERAL_PROFILES.md` matrix runs against the mint through
+///    [`token::MintPolicy::collateral`], which reads the policy's four
+///    extension bitsets rather than re-stating the matrix; and
+/// 3. `collateral_cap` is checked against the policy's mint ceiling, which the
+///    module docs above record as an obligation this program could not
+///    discharge. It can now.
+#[inline(never)]
+fn admit_collateral(accounts: &[AccountInfo], collateral_cap: u64) -> Outcome<()> {
+    let policy_account = &accounts[IX_POLICY];
+    require(!policy_account.is_writable, ClutchError::UnexpectedWritable)?;
+    require(!policy_account.executable, ClutchError::ExecutableAccount)?;
+    require(
+        policy_account.data_len() == collateral::COLLATERAL_POLICY_BYTES,
+        ClutchError::WrongDataLength,
+    )?;
+
+    let policy = {
+        let profile = ProfileAccount::decode(&accounts[IX_PROFILE].data.borrow())?;
+        collateral::verify_profile_identity(&policy_account.data.borrow(), &profile)?
+    };
+
+    /* V1's `CurrencyRef` admits two token programs and this adapter drives one.
+     * Saying so here is more useful than discovering it at the first CPI. */
+    token::require_drivable_collateral(&policy)?;
+    policy.check_market_cap(collateral_cap)?;
+
+    let token_program = &accounts[IX_TOKEN_PROGRAM];
+    require(
+        *token_program.key == token::TOKEN_2022_PROGRAM_ID && token_program.executable,
+        ClutchError::WrongTokenProgram,
+    )?;
+    require(!token_program.is_writable, ClutchError::UnexpectedWritable)?;
+
+    let mint = &accounts[IX_COLLATERAL_MINT];
+    require(!mint.is_writable, ClutchError::UnexpectedWritable)?;
+    require(!mint.executable, ClutchError::ExecutableAccount)?;
+    token::admit_mint(mint, &token::MintPolicy::collateral(&policy))?;
+    Ok(())
+}
 
 /// The eight roles this instruction initializes, which must arrive all-zero.
 const TARGET_ROLES: [usize; 8] = [
@@ -1134,7 +1229,11 @@ pub fn validate_initial_plane(
 pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request) -> Outcome<()> {
     let intent = create_market_intent(request)?;
 
-    require_count(accounts, ACCOUNT_COUNT)?;
+    let leg = match accounts.len() {
+        ACCOUNT_COUNT => CollateralLeg::Absent,
+        ACCOUNT_COUNT_TOKEN => CollateralLeg::Present,
+        _ => return Err(ClutchError::AccountCount.into()),
+    };
 
     /* The authority model, in three lines: the creator signs, nothing else is
      * privileged, and the creator's address is the founding position owner. */
@@ -1164,7 +1263,10 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
     let owner_bytes = creator.key.to_bytes();
 
     let realm_stored_bump = accounts::read_realm(&accounts[IX_REALM].data.borrow())?.stored_bump;
-    let terms_stored_bump = accounts::read_terms(&accounts[IX_TERMS].data.borrow())?.stored_bump;
+    let (terms_stored_bump, terms_collateral_cap) = {
+        let terms = accounts::read_terms(&accounts[IX_TERMS].data.borrow())?;
+        (terms.stored_bump, terms.collateral_cap)
+    };
     expect_pda(
         accounts[IX_REALM].key,
         seeds::realm_pda(program_id, &realm_bytes),
@@ -1211,6 +1313,16 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         supply: supply_derived.1,
         resolution: resolution_derived.1,
     };
+    /* Collateral admission, before the first write.  The cap compared against
+     * the policy ceiling is the *terms'* cap, which is the same value
+     * `write_initial_plane` is about to put in `MarketAccount::collateral_cap`
+     * and which `validate_initial_plane` then re-checks equal to it -- so a
+     * market cannot be founded above its Realm's ceiling by writing one cap and
+     * admitting another. */
+    if leg == CollateralLeg::Present {
+        admit_collateral(accounts, terms_collateral_cap)?;
+    }
+
     let identities = FoundingIdentities {
         market: market_id,
         owner: Hash32::from_bytes(owner_bytes),
@@ -1296,6 +1408,264 @@ mod tests {
 
     fn h(value: u8) -> Hash32 {
         Hash32::from_bytes([value; 32])
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* The optional collateral-admission leg                               */
+    /* ------------------------------------------------------------------ */
+
+    /// Owned backing store for one host-side `AccountInfo`.
+    struct Cell {
+        key: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        data: Vec<u8>,
+        is_writable: bool,
+        executable: bool,
+    }
+
+    impl Cell {
+        fn inert() -> Self {
+            Self {
+                key: Pubkey::new_from_array([0; 32]),
+                owner: Pubkey::new_from_array([0; 32]),
+                lamports: 1,
+                data: Vec::new(),
+                is_writable: false,
+                executable: false,
+            }
+        }
+
+        fn info(&mut self) -> AccountInfo<'_> {
+            AccountInfo::new(
+                &self.key,
+                false,
+                self.is_writable,
+                &mut self.lamports,
+                &mut self.data,
+                &self.owner,
+                self.executable,
+            )
+        }
+    }
+
+    /// The four accounts [`admit_collateral`] actually reads, in a
+    /// fifteen-slot list.
+    ///
+    /// The other eleven are inert: this exercises the admission decision
+    /// itself, which is the half of `process` that does not derive an address
+    /// and therefore *can* run on a host where `seeds::find` is
+    /// `unimplemented!()`. The derivation half is covered by the SVM
+    /// workspace.
+    struct CollateralCase {
+        profile: Vec<u8>,
+        policy: Vec<u8>,
+        policy_len_override: Option<usize>,
+        token_program: Pubkey,
+        token_program_executable: bool,
+        mint_key: Pubkey,
+        mint_owner: Pubkey,
+        mint_data: Vec<u8>,
+        cap: u64,
+    }
+
+    fn fixture_policy(mint: [u8; 32], decimals: u8) -> collateral::CollateralPolicy {
+        let backing = collateral::CurrencyRef::spl(collateral::TOKEN_2022_PROGRAM, mint, decimals);
+        collateral::CollateralPolicy {
+            schema_version: collateral::COLLATERAL_POLICY_SCHEMA,
+            flags: collateral::COLLATERAL_POLICY_STRICT_FLAGS,
+            collateral: backing,
+            fee: collateral::CurrencyRef::NATIVE_SOL,
+            liveness: collateral::CurrencyRef::NATIVE_SOL,
+            max_supply_atoms: 10_000,
+            allowed_mint_extensions: 0,
+            required_mint_extensions: 0,
+            allowed_account_extensions: collateral::EXTENSION_IMMUTABLE_OWNER,
+            required_account_extensions: 0,
+        }
+    }
+
+    impl CollateralCase {
+        /// A case that passes every check, so a test can break exactly one.
+        fn admitted() -> Self {
+            let mint = [0x6d_u8; 32];
+            let policy = fixture_policy(mint, 6);
+            let policy_bytes = policy
+                .canonical_bytes()
+                .expect("the fixture policy must encode")
+                .to_vec();
+            /* The Profile identity is the *parent* hash over this policy's own
+             * digest, recomputed rather than chosen: `verify_profile_identity`
+             * refuses any other pairing, which is the whole point of binding
+             * by digest instead of by address. */
+            let parent = collateral::ParentProfile::from_policy(&policy)
+                .expect("the parent profile must compose");
+            let profile_id = parent.identity().expect("the parent identity must derive");
+            let profile = ProfileAccount {
+                profile: profile_id,
+                realm: h(0x11),
+                collateral_policy_digest: policy.digest().expect("digest"),
+                version: 1,
+                flags: PROFILE_FLAG_POLICY_FROZEN,
+            };
+            let mut profile_bytes = vec![0_u8; account_len::PROFILE];
+            profile
+                .encode(&mut profile_bytes)
+                .expect("the fixture profile must encode");
+            Self {
+                profile: profile_bytes,
+                policy: policy_bytes,
+                policy_len_override: None,
+                token_program: crate::token::TOKEN_2022_PROGRAM_ID,
+                token_program_executable: true,
+                mint_key: Pubkey::new_from_array(mint),
+                mint_owner: crate::token::TOKEN_2022_PROGRAM_ID,
+                mint_data: crate::token::fixtures::mint_bytes(6, 5_000, None, None),
+                cap: 5_000,
+            }
+        }
+
+        fn run(&self) -> Outcome<()> {
+            let mut cells: Vec<Cell> = (0..ACCOUNT_COUNT_TOKEN).map(|_| Cell::inert()).collect();
+            cells[IX_PROFILE].data = self.profile.clone();
+            cells[IX_POLICY].data = self.policy.clone();
+            if let Some(len) = self.policy_len_override {
+                cells[IX_POLICY].data.resize(len, 0);
+            }
+            cells[IX_TOKEN_PROGRAM].key = self.token_program;
+            cells[IX_TOKEN_PROGRAM].executable = self.token_program_executable;
+            cells[IX_COLLATERAL_MINT].key = self.mint_key;
+            cells[IX_COLLATERAL_MINT].owner = self.mint_owner;
+            cells[IX_COLLATERAL_MINT].data = self.mint_data.clone();
+            let infos: Vec<AccountInfo<'_>> = cells.iter_mut().map(Cell::info).collect();
+            admit_collateral(&infos, self.cap)
+        }
+    }
+
+    #[test]
+    fn the_realms_own_frozen_policy_admits_its_own_collateral_mint() {
+        CollateralCase::admitted()
+            .run()
+            .expect("a base Token-2022 mint under a V1 policy is admitted");
+    }
+
+    #[test]
+    fn a_policy_the_profile_is_not_frozen_to_cannot_decide_admission() {
+        /* The load-bearing check. Without the recomputed digest a well-formed
+         * policy and a well-formed Profile could be paired freely, and an
+         * adapter that merely decoded both would have checked nothing. */
+        let mut case = CollateralCase::admitted();
+        let other = fixture_policy([0x21; 32], 6);
+        case.policy = other.canonical_bytes().expect("encodes").to_vec();
+        assert!(
+            case.run().is_err(),
+            "a policy the Profile does not commit to must not decide anything"
+        );
+
+        // And a policy account of the wrong length never reaches the decoder.
+        let mut short = CollateralCase::admitted();
+        short.policy_len_override = Some(collateral::COLLATERAL_POLICY_BYTES - 1);
+        assert_eq!(
+            short.run().unwrap_err(),
+            ClutchError::WrongDataLength.into()
+        );
+    }
+
+    #[test]
+    fn the_collateral_matrix_refuses_a_hostile_mint_at_market_initialization() {
+        /* The market-initialization half of `TOKEN2022_PLAN.md` §3.4, over the
+         * Realm's actual bitsets rather than a re-stated matrix. Every
+         * discriminant here is a row of `COLLATERAL_PROFILES.md`. */
+        for (discriminant, label) in [
+            (1_u16, "TransferFeeConfig"),
+            (3, "MintCloseAuthority"),
+            (6, "DefaultAccountState"),
+            (9, "NonTransferable"),
+            (12, "PermanentDelegate"),
+            (14, "TransferHook"),
+            (26, "Pausable"),
+        ] {
+            let mut case = CollateralCase::admitted();
+            case.mint_data = crate::token::fixtures::with_extension(
+                &crate::token::fixtures::mint_bytes(6, 5_000, None, None),
+                crate::token::BASE_MINT_LEN,
+                1,
+                discriminant,
+            );
+            assert_eq!(
+                case.run().unwrap_err(),
+                ClutchError::TokenExtensionNotAllowed.into(),
+                "{label} must be refused at market initialization"
+            );
+        }
+    }
+
+    #[test]
+    fn a_live_mint_authority_or_freeze_authority_refuses_the_collateral() {
+        let mut live = CollateralCase::admitted();
+        live.mint_data = crate::token::fixtures::mint_bytes(6, 5_000, Some([0x33; 32]), None);
+        assert_eq!(
+            live.run().unwrap_err(),
+            ClutchError::MintNotAdmitted.into(),
+            "a live mint authority means the collateral supply is not fixed"
+        );
+
+        let mut freezable = CollateralCase::admitted();
+        freezable.mint_data = crate::token::fixtures::mint_bytes(6, 5_000, None, Some([0x44; 32]));
+        assert_eq!(
+            freezable.run().unwrap_err(),
+            ClutchError::MintNotAdmitted.into()
+        );
+
+        // Another mint entirely, presented for this Realm's policy.
+        let mut elsewhere = CollateralCase::admitted();
+        elsewhere.mint_key = Pubkey::new_from_array([0x9e; 32]);
+        assert_eq!(
+            elsewhere.run().unwrap_err(),
+            ClutchError::MintNotAdmitted.into()
+        );
+
+        // And the right mint under some other program.
+        let mut wrong_program = CollateralCase::admitted();
+        wrong_program.mint_owner = Pubkey::new_from_array([0x5a; 32]);
+        assert_eq!(
+            wrong_program.run().unwrap_err(),
+            ClutchError::WrongTokenProgram.into()
+        );
+    }
+
+    #[test]
+    fn the_market_cap_ceiling_is_finally_checkable_on_chain() {
+        /* The module docs above record this as "an obligation on whoever adds a
+         * policy-bytes account to the schema". This is that obligation
+         * discharged: the fixture policy's mint ceiling is 10 000 atoms, so a
+         * market founded with a larger cap is refused rather than founded. */
+        let mut over = CollateralCase::admitted();
+        over.cap = 10_001;
+        assert!(over.run().is_err(), "a cap above the Realm ceiling refuses");
+
+        let mut at_ceiling = CollateralCase::admitted();
+        at_ceiling.cap = 10_000;
+        at_ceiling
+            .run()
+            .expect("a cap exactly at the ceiling is admitted");
+    }
+
+    #[test]
+    fn the_token_program_role_is_authenticated_at_initialization_too() {
+        let mut impostor = CollateralCase::admitted();
+        impostor.token_program = Pubkey::new_from_array([0x4d; 32]);
+        assert_eq!(
+            impostor.run().unwrap_err(),
+            ClutchError::WrongTokenProgram.into()
+        );
+
+        let mut inert = CollateralCase::admitted();
+        inert.token_program_executable = false;
+        assert_eq!(
+            inert.run().unwrap_err(),
+            ClutchError::WrongTokenProgram.into()
+        );
     }
 
     fn plane_bumps() -> PlaneBumps {

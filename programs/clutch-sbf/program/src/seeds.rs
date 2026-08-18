@@ -229,3 +229,145 @@ pub fn receipt_pda(
         &[SEED_RECEIPT, epoch, candidate, &slice_index.to_le_bytes()],
     )
 }
+
+/* ------------------------------------------------------------------------ */
+/* Token plane — PROPOSED appends                                            */
+/* ------------------------------------------------------------------------ */
+
+/* `docs/implementation/TOKEN2022_PLAN.md` §3.2 records that this module "is
+ * missing every token address" and proposes exactly three.  They are appended
+ * here, unfrozen like every other seed above, with one correction the plan
+ * could not make because it never derived an address: **the proposed
+ * `"dragons-clutch:hoard-authority:v1"` is 33 bytes and cannot be a seed.**  A
+ * single seed is capped at 32 bytes, so `find_program_address` refuses it
+ * outright — on-chain that is a panic, not a refusal code.  The prefix is
+ * therefore `"dragons-clutch:hoard-auth:v1"` (28 bytes).  The other two are the
+ * plan's, unaltered, at 30 and 29 bytes.
+ *
+ * The Hoard *authority* and the Hoard *token account* stay two addresses, for
+ * the reason the plan gives: collapsing them makes the signing seeds and the
+ * account seeds the same bytes. */
+
+/// Outcome-mint seed prefix; 30 bytes.
+pub const SEED_OUTCOME_MINT: &[u8] = b"dragons-clutch:outcome-mint:v1";
+/// Hoard signing-authority seed prefix; 28 bytes.
+///
+/// Shortened from the plan's `hoard-authority`, which does not fit a seed.
+pub const SEED_HOARD_AUTHORITY: &[u8] = b"dragons-clutch:hoard-auth:v1";
+/// Hoard token-account seed prefix; 29 bytes.
+pub const SEED_HOARD_TOKEN: &[u8] = b"dragons-clutch:hoard-token:v1";
+
+/// Canonical outcome-mint address and bump.
+///
+/// One mint per `(market, outcome index)`.  The index rather than the outcome
+/// identity is the seed, for the same reason [`epoch_pda`] seeds on the index:
+/// the address stays derivable by a caller that has not fetched the market
+/// account, and `MarketAccount::outcomes` already binds index to identity.
+pub fn outcome_mint_pda(program_id: &Pubkey, market: &[u8; 32], outcome_index: u8) -> (Pubkey, u8) {
+    find(program_id, &[SEED_OUTCOME_MINT, market, &[outcome_index]])
+}
+
+/// Canonical Hoard signing-authority address and bump.
+///
+/// This is the address the program signs *as* to move collateral out of the
+/// Hoard token account.  It holds no data and is never a state account.
+pub fn hoard_authority_pda(program_id: &Pubkey, market: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_HOARD_AUTHORITY, market])
+}
+
+/// Canonical Hoard token-account address and bump.
+///
+/// The Token-2022 account [`hoard_authority_pda`] owns.  Distinct from
+/// [`hoard_pda`], which is this program's own collateral-accounting state.
+pub fn hoard_token_pda(program_id: &Pubkey, market: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_HOARD_TOKEN, market])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A seed longer than 32 bytes is not a refusal code, it is a panic inside
+    /// `find_program_address`.  Every prefix this module exports is checked
+    /// here rather than by inspection, which is how the plan's proposed
+    /// `hoard-authority` prefix was caught at 33 bytes.
+    #[test]
+    fn every_seed_prefix_fits_one_seed() {
+        const PREFIXES: [&[u8]; 21] = [
+            SEED_REALM,
+            SEED_PROFILE,
+            SEED_MARKET,
+            SEED_HOARD,
+            SEED_POSITION,
+            SEED_KERNEL,
+            SEED_EXTERNAL,
+            SEED_REPLAY,
+            SEED_SUPPLY,
+            SEED_FEED,
+            SEED_TERMS,
+            SEED_GRID,
+            SEED_RESOLUTION,
+            SEED_EPOCH,
+            SEED_PAGE,
+            SEED_CANDIDATE,
+            SEED_POT,
+            SEED_RECEIPT,
+            SEED_OUTCOME_MINT,
+            SEED_HOARD_AUTHORITY,
+            SEED_HOARD_TOKEN,
+        ];
+        for prefix in PREFIXES {
+            assert!(
+                prefix.len() <= 32,
+                "seed prefix {:?} is {} bytes and cannot be a seed",
+                core::str::from_utf8(prefix).unwrap_or("<non-utf8>"),
+                prefix.len()
+            );
+        }
+        assert_eq!(SEED_HOARD_AUTHORITY.len(), 28);
+        assert_eq!(SEED_OUTCOME_MINT.len(), 30);
+        assert_eq!(SEED_HOARD_TOKEN.len(), 29);
+        // The plan's own proposal, kept here as the falsifier: it does not fit.
+        assert_eq!(b"dragons-clutch:hoard-authority:v1".len(), 33);
+    }
+
+    /// The three token prefixes are distinct from each other and from every
+    /// prefix that was already here: a shared prefix is a shared address space.
+    #[test]
+    fn the_token_prefixes_collide_with_nothing() {
+        const EXISTING: [&[u8]; 18] = [
+            SEED_REALM,
+            SEED_PROFILE,
+            SEED_MARKET,
+            SEED_HOARD,
+            SEED_POSITION,
+            SEED_KERNEL,
+            SEED_EXTERNAL,
+            SEED_REPLAY,
+            SEED_SUPPLY,
+            SEED_FEED,
+            SEED_TERMS,
+            SEED_GRID,
+            SEED_RESOLUTION,
+            SEED_EPOCH,
+            SEED_PAGE,
+            SEED_CANDIDATE,
+            SEED_POT,
+            SEED_RECEIPT,
+        ];
+        const APPENDED: [&[u8]; 3] = [SEED_OUTCOME_MINT, SEED_HOARD_AUTHORITY, SEED_HOARD_TOKEN];
+        for added in APPENDED {
+            for old in EXISTING {
+                assert_ne!(added, old);
+            }
+        }
+        assert_ne!(APPENDED[0], APPENDED[1]);
+        assert_ne!(APPENDED[0], APPENDED[2]);
+        assert_ne!(APPENDED[1], APPENDED[2]);
+        /* `SEED_HOARD` is a strict prefix of `SEED_HOARD_TOKEN` as a *string*,
+         * which is harmless: seeds are length-delimited arguments, not a
+         * concatenation, so `["dragons-clutch:hoard:v1", m]` and
+         * `["dragons-clutch:hoard-token:v1", m]` are different tuples. */
+        assert!(SEED_HOARD_TOKEN.starts_with(b"dragons-clutch:hoard"));
+    }
+}

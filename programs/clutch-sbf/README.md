@@ -26,10 +26,19 @@ A refusal reads no account, writes no byte, and reports no success.
     tag. One arm per instruction family.
   - `src/instructions/` — one module per family, one lane per module. The
     ownership table is in `docs/implementation/SBF_BRINGUP.md`.
+  - `src/token.rs` — Token-2022 observation, admission against the frozen
+    collateral bitsets, and CPI construction. No economics: every quantity is a
+    parameter the kernel already decided.
 - `harness/` — host binary that builds one deterministic fixture, computes the
   expected post-state with the offline reference adapter, and emits genesis
   account dumps and unsigned transactions. It signs nothing and holds no key
   material.
+- `svm-tests/` — a **separate** Cargo workspace that drives the real ELF against
+  the real Token-2022 program on an in-process Agave bank: `Materialize` mints
+  and `Dematerialize` burns by CPI, with exact post-CPI delta checks and the
+  shadow/supply reconciliation. It carries its own 1.93.1 toolchain pin because
+  the Agave runtime cannot be built by this repository's 1.89.0 host pin; see
+  its README and `docs/implementation/TOKEN2022_PLAN.md` §1.2.
 - `scripts/run_bringup.sh` — the gate: builds the ELF twice, compares hashes,
   runs a loopback `solana-test-validator`, and diffs the SVM post-state against
   the reference post-state.

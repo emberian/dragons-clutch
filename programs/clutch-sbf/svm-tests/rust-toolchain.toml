@@ -1,0 +1,13 @@
+# `toolchain/PINNED_PROOF_TOOLS.md` pins the host build toolchain at 1.89.0 and
+# `programs/clutch-sbf` is built with it.  That toolchain cannot build this
+# workspace: `solana-syscalls 4.2.1` uses `MaybeUninit::write_copy_of_slice`,
+# still unstable on 1.89 and on 1.92 and stabilized in 1.93.  1.93.1 is the
+# lowest installed toolchain that compiles the Agave 4.2.1 runtime.  The
+# verbatim failure is in `docs/implementation/TOKEN2022_PLAN.md` §1.2, and the
+# pin is copied from `toolchain/probes/token2022/rust-toolchain.toml`, which
+# established it.
+#
+# This divergence is the whole reason this is a separate workspace rather than
+# a third member of `programs/clutch-sbf`.
+[toolchain]
+channel = "1.93.1"

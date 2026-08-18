@@ -1,0 +1,69 @@
+# SVM tests for the Dragon's Clutch Token-2022 leg.
+#
+# A standalone workspace, deliberately.  Two things make it impossible for
+# these tests to live beside the program they drive:
+#
+#   * the Agave 4.2.1 runtime needs Rust >= 1.93 and `programs/clutch-sbf` is
+#     built by the 1.89.0 host pin and by `cargo-build-sbf`; and
+#   * `cargo-build-sbf` resolves the program's graph for every platform and
+#     needs a `.crate` archive for every package in it, which a 731-package
+#     Agave graph does not have on this host.
+#
+# See `docs/implementation/TOKEN2022_PLAN.md` §1.2.  The same separation
+# `toolchain/probes/token2022` already maintains, for the same reason.
+#
+# What this drives is the **real program ELF**, built by `cargo-build-sbf`, and
+# the **real Token-2022 program**, installed at genesis by
+# `solana-program-test`.  Nothing here is a model of either.
+[workspace]
+
+[patch.crates-io]
+solana-define-syscall = { path = "../vendor/solana-define-syscall-5.1.0" }
+
+[package]
+name = "clutch-sbf-svm-tests"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "Program-test scenarios driving the clutch-sbf ELF against real Token-2022"
+
+[lib]
+name = "clutch_svm_fixture"
+path = "src/lib.rs"
+
+[dependencies]
+# The frozen byte layouts and the reference-only codecs.  Both are
+# dependency-free pure Rust, so pulling them into a 1.93 workspace costs
+# nothing and — this is the point — the account bytes this harness writes at
+# genesis come from the *same* encoders the program decodes with.  A hand-rolled
+# second copy would test the copy.
+clutch-sbf = { path = "../program" }
+clutch-kernel = { path = "../../../crates/clutch-kernel" }
+clutch-solana-layout = { path = "../../solana-layout" }
+clutch-solana-reference = { path = "../../solana-reference" }
+
+# `curve25519` is what makes off-chain `find_program_address` available at all.
+# `programs/clutch-sbf` deliberately cannot enable it (its proc-macro dependency
+# has no archive in this host's offline cache and `cargo-build-sbf` runs
+# `cargo metadata` for every target), which is why `crate::seeds::find` is
+# `unimplemented!()` off-chain.  Here it resolves.
+solana-address = { version = "=2.6.1", features = ["curve25519"] }
+solana-program-option = "=3.1.0"
+solana-program-pack = "=3.1.0"
+spl-token-2022-interface = "=3.1.1"
+
+[dev-dependencies]
+solana-account = "=4.3.2"
+solana-instruction = "=3.4.1"
+solana-keypair = "=3.1.2"
+# The entire `solana-program-test` API sits behind `agave-unstable-api`.  Anza's
+# name for the feature is a stability warning and should be read as one: this is
+# acceptable for a test harness and would not be acceptable for anything that
+# ships.  `TOKEN2022_PLAN.md` open decision 2.
+solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-rent = "=4.3.0"
+solana-signer = "=3.0.1"
+solana-system-interface = { version = "=3.2.0", features = ["bincode"] }
+solana-transaction = "=4.1.6"
+solana-transaction-error = "=3.3.2"
