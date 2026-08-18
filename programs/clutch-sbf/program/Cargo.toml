@@ -15,6 +15,12 @@ crate-type = ["cdylib", "lib"]
 default = []
 
 [dependencies]
+# The window/summary algebra the observation and resolution plane folds
+# hostile observation bytes through.  It is already in the graph through
+# `clutch-solana-reference`, which re-exports only `WindowError`; naming it
+# here is what lets `instructions::observe_resolve` drive `WindowAccumulator`
+# and `Summary` directly instead of re-deriving their algebra.
+clutch-accumulator = { path = "../../../crates/clutch-accumulator" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-solana-layout = { path = "../../solana-layout" }
 clutch-solana-reference = { path = "../../solana-reference" }
