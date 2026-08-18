@@ -13,10 +13,15 @@ python3 benchmarks/cost_lab.py abi-audit
 python3 -m unittest discover -s benchmarks/tests -v
 ```
 
-`abi-audit` re-derives every `account_len` constant from `programs/solana-layout/src/lib.rs` on
-disk and refuses if the landed arm below has gone stale. It reads one source file, is not part of
-golden closure, and is the tripwire that keeps a cost conclusion from being attributed to a layout
-the codec no longer has.
+`abi-audit` re-derives every pinned identifier, `account_len` and `account_version` constant,
+account and intent discriminator, and `Intent::encoded_len` arm from
+`programs/solana-layout/src/lib.rs` on disk, and refuses if the landed arm below has gone stale. It
+reads one source file, is not part of golden closure, and is the tripwire that keeps a cost
+conclusion from being attributed to a layout the codec no longer has. Every disagreement it can
+find is reported as a named drift line — including a token it cannot resolve, which names the
+constant that referenced it and the pin table to add it to — so the gate can never fail quietly:
+an unpinned `MAX_KNOTS` once aborted the whole audit with a one-line refusal and left the tripwire
+dead across several commits.
 
 To regenerate the checked-in deterministic artifacts after an intentional model change:
 
@@ -31,9 +36,9 @@ Every row carries an `arm`.
 
 - `layout_hypothesis` is the original design sketch: 193 rows, retained unchanged so its
   falsifications stay readable. It is a design arm, not a description of the current program.
-- `abi_landed` reads the landed codec in `programs/solana-layout` (pinned at commit `da2fbf7`)
+- `abi_landed` reads the landed codec in `programs/solana-layout` (pinned at commit `e780d5b`)
   and the landed relation bounds in `crates/clutch-batch`: the 15-account family and its exact
-  widths, the forced 3,883-byte order page of sixteen 228-byte tag-discriminated slots, the
+  widths, the forced 4,012-byte order page of sixteen 236-byte tag-discriminated slots, the
   64-order epoch book, and the nine intent payload widths. `constants.json` stores each width as
   the codec's own field terms, and the harness refuses to run unless every pinned total equals the
   sum of its terms.

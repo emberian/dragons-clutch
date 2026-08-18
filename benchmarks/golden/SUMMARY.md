@@ -2,7 +2,7 @@
 
 Evidence ceiling: offline synthetic wire measurement plus analytical lower bounds. No SBF, validator, RPC, fee-market, or landing measurement occurred.
 
-Arms: `layout_hypothesis` (design sketch, retained) and `abi_landed` (read from `programs/solana-layout/src/lib.rs` at `da2fbf7`), plus their `abi_differential`. A landed width is an encoding fact, never a measured cost.
+Arms: `layout_hypothesis` (design sketch, retained) and `abi_landed` (read from `programs/solana-layout/src/lib.rs` at `e780d5b`), plus their `abi_differential`. A landed width is an encoding fact, never a measured cost.
 
 ## Claim transition envelope
 
@@ -43,7 +43,7 @@ These minimum transaction counts ignore compute. They cannot be used to claim th
 
 ## Landed ABI inventory
 
-Source: `programs/solana-layout/src/lib.rs` at `da2fbf7`, one instance of each account.
+Source: `programs/solana-layout/src/lib.rs` at `e780d5b`, one instance of each account.
 
 | account | Rust constant | data bytes | package-default rent principal (lamports) |
 |---|---|---:|---:|
@@ -53,16 +53,16 @@ Source: `programs/solana-layout/src/lib.rs` at `da2fbf7`, one instance of each a
 | hoard | `account_len::HOARD` | 108 | 1642560 |
 | position | `account_len::POSITION` | 220 | 2422080 |
 | feed_head | `account_len::FEED` | 124 | 1753920 |
-| order_page | `account_len::ORDER_PAGE` | 3883 | 27916560 |
+| order_page | `account_len::ORDER_PAGE` | 4012 | 28814400 |
 | supply_ledger | `account_len::SUPPLY_LEDGER` | 333 | 3208560 |
-| terms | `account_len::TERMS` | 1304 | 9966720 |
+| terms | `account_len::TERMS` | 1656 | 12416640 |
 | price_grid | `account_len::PRICE_GRID` | 589 | 4990320 |
 | epoch | `account_len::EPOCH` | 328 | 3173760 |
 | candidate_record | `account_len::CANDIDATE` | 305 | 3013680 |
 | final_pot | `account_len::FINAL_POT` | 262 | 2714400 |
 | settlement_receipt | `account_len::SETTLEMENT_RECEIPT` | 217 | 2401200 |
 | resolution | `account_len::RESOLUTION` | 165 | 2039280 |
-| **one instance of each (15)** | | **8734** | **74151840** |
+| **one instance of each (15)** | | **9215** | **77499600** |
 
 Of that principal, 13363200 lamports is the per-account 128-byte storage overhead, so account count is a first-class capital term.
 
@@ -70,12 +70,12 @@ Of that principal, 13363200 lamports is the per-account 128-byte storage overhea
 
 | orders | representable | pages | padding slot bytes | page rent principal (lamports) | SettlePage instructions |
 |---:|---|---:|---:|---:|---:|
-| 1 | yes | 1 | 3420 | 27916560 | 1 |
-| 16 | yes | 1 | 0 | 27916560 | 1 |
-| 17 | yes | 2 | 3420 | 55833120 | 2 |
-| 32 | yes | 2 | 0 | 55833120 | 2 |
-| 48 | yes | 3 | 0 | 83749680 | 3 |
-| 64 | yes | 4 | 0 | 111666240 | 4 |
+| 1 | yes | 1 | 3540 | 28814400 | 1 |
+| 16 | yes | 1 | 0 | 28814400 | 1 |
+| 17 | yes | 2 | 3540 | 57628800 | 2 |
+| 32 | yes | 2 | 0 | 57628800 | 2 |
+| 48 | yes | 3 | 0 | 86443200 | 3 |
+| 64 | yes | 4 | 0 | 115257600 | 4 |
 | 65 | no: order_count_above_landed_max_epoch_orders_64 | - | - | - | - |
 
 ## Landed intent payloads on the wire
@@ -88,8 +88,8 @@ Of that principal, 13363200 lamports is the per-account 128-byte storage overhea
 | materialize | 107 | 508 | 327 | 9 |
 | dematerialize | 107 | 508 | 327 | 9 |
 | feed_advance | 74 | 310 | 284 | 4 |
-| place_order | 165 | 501 | 382 | 7 |
-| cancel_order | 130 | 433 | 345 | 6 |
+| place_order | 302 | 638 | 519 | 7 |
+| cancel_order | 138 | 441 | 353 | 6 |
 | settle_page | 68 | 436 | 286 | 8 |
 
 Payload widths are landed; the account sets are hypotheses and are labeled as such in every row.
@@ -98,21 +98,21 @@ Payload widths are landed; the account sets are hypotheses and are labeled as su
 
 | n | orders | pages | order authentications | relation steps floor | frozen epoch state bytes | frozen epoch rent principal (lamports) | V1 |
 |---:|---:|---:|---:|---:|---:|---:|---|
-| 2 | 16 | 1 | 16 | 37 | 5105 | 39094320 | admit |
-| 2 | 32 | 2 | 32 | 69 | 8988 | 67010880 | admit |
-| 2 | 64 | 4 | 64 | 133 | 16754 | 122844000 | admit |
-| 4 | 16 | 1 | 16 | 41 | 5105 | 39094320 | admit |
-| 4 | 32 | 2 | 32 | 73 | 8988 | 67010880 | admit |
-| 4 | 64 | 4 | 64 | 137 | 16754 | 122844000 | admit |
-| 8 | 16 | 1 | 16 | 49 | 5105 | 39094320 | admit |
-| 8 | 32 | 2 | 32 | 81 | 8988 | 67010880 | admit |
-| 8 | 64 | 4 | 64 | 145 | 16754 | 122844000 | admit |
-| 16 | 16 | 1 | 16 | 65 | 5105 | 39094320 | admit |
-| 16 | 32 | 2 | 32 | 97 | 8988 | 67010880 | admit |
-| 16 | 64 | 4 | 64 | 161 | 16754 | 122844000 | admit |
-| 24 | 16 | 1 | 16 | 81 | 5105 | 39094320 | refuse |
-| 24 | 32 | 2 | 32 | 113 | 8988 | 67010880 | refuse |
-| 24 | 64 | 4 | 64 | 177 | 16754 | 122844000 | refuse |
+| 2 | 16 | 1 | 16 | 37 | 5234 | 39992160 | admit |
+| 2 | 32 | 2 | 32 | 69 | 9246 | 68806560 | admit |
+| 2 | 64 | 4 | 64 | 133 | 17270 | 126435360 | admit |
+| 4 | 16 | 1 | 16 | 41 | 5234 | 39992160 | admit |
+| 4 | 32 | 2 | 32 | 73 | 9246 | 68806560 | admit |
+| 4 | 64 | 4 | 64 | 137 | 17270 | 126435360 | admit |
+| 8 | 16 | 1 | 16 | 49 | 5234 | 39992160 | admit |
+| 8 | 32 | 2 | 32 | 81 | 9246 | 68806560 | admit |
+| 8 | 64 | 4 | 64 | 145 | 17270 | 126435360 | admit |
+| 16 | 16 | 1 | 16 | 65 | 5234 | 39992160 | admit |
+| 16 | 32 | 2 | 32 | 97 | 9246 | 68806560 | admit |
+| 16 | 64 | 4 | 64 | 161 | 17270 | 126435360 | admit |
+| 24 | 16 | 1 | 16 | 81 | 5234 | 39992160 | refuse |
+| 24 | 32 | 2 | 32 | 113 | 9246 | 68806560 | refuse |
+| 24 | 64 | 4 | 64 | 177 | 17270 | 126435360 | refuse |
 
 ## Hypothesis versus landed ABI
 
@@ -120,16 +120,16 @@ Payload widths are landed; the account sets are hypotheses and are labeled as su
 |---|---|---:|---:|---:|---|
 | position_account | bytes | 192 | 220 | +28 | The 128-byte 16-outcome balance vector is unchanged; the landed account also stores market and owner identities, a replay generation, cash and reserved-cash atoms, a stored bump and a close state, so the header is 92 bytes rather than the hypothetical 64. |
 | supply_ledger_account | bytes | 320 | 333 | +13 | Both arms carry two u64 totals per outcome (256 bytes); the landed header is 77 bytes of market, realm, generation, outcome count, bump and flags rather than the hypothetical 64. |
-| single_egg_order_record | bytes | 80 | 99 | +19 | The landed record spends 64 bytes on owner and order identity plus quantity, limit, minimum fill, generation, outcome, side and flags; the 80-byte sketch had no room for the replay generation and dual 32-byte identities. |
-| portfolio_order_record | bytes | 208 | 227 | +19 | The portfolio order gained a persisted page encoding: the same 128-byte 16-slot coefficient vector plus dual 32-byte identities, side, active length, flags, lots, per-lot collateral bound, minimum fill and a replay generation, so the landed body is 227 bytes against the 208-byte sketch. It rides a 228-byte tagged slot shared with the single-Egg family. |
-| order_page_account | bytes | 8192 | 3883 | -4309 | The landed page is a fixed 16-slot array with cross-page closure fields, not a variable byte budget, so page size stopped being a tunable parameter. The slot is wide enough for either admitted family, which is why it is 3883 bytes rather than the 1819 of the single-family v2 page. |
-| order_page_header | bytes | 128 | 235 | +107 | The landed header carries seven 32-byte identities (market, epoch, order set, page digest, first, last and previous-page-last order ids) that the hypothesis never budgeted for. |
+| single_egg_order_record | bytes | 80 | 107 | +27 | The landed record spends 64 bytes on owner and order identity plus quantity, limit, minimum fill, generation, outcome, side, flags and, since v4, an eight-byte per-order expiry epoch; the 80-byte sketch had no room for the replay generation, the expiry horizon or dual 32-byte identities. |
+| portfolio_order_record | bytes | 208 | 235 | +27 | The portfolio order has a persisted page encoding: the same 128-byte 16-slot coefficient vector plus dual 32-byte identities, side, active length, flags and five u64s (lots, per-lot collateral bound, minimum fill, replay generation, expiry epoch), so the landed body is 235 bytes against the 208-byte sketch. It rides a 236-byte tagged slot shared with the single-Egg family and with retirements. |
+| order_page_account | bytes | 8192 | 4012 | -4180 | The landed page is a fixed 16-slot array with cross-page closure fields, not a variable byte budget, so page size stopped being a tunable parameter. The slot is wide enough for every admitted slot kind, both order families and a retirement, which is why it is 4012 bytes rather than the 1819 of the single-family v2 page. |
+| order_page_header | bytes | 128 | 236 | +108 | The landed header carries seven 32-byte identities (market, epoch, order set, page digest, first, last and previous-page-last order ids) that the hypothesis never budgeted for, plus the page/set counters and the v4 retirement count. |
 | order_page_record_capacity | records_per_page | 100 | 16 | -84 | A landed page holds 16 slots, not about a hundred records, so any per-page cost is amortized over six times fewer orders. |
 | epoch_book_order_capacity | orders_per_book | 512 | 64 | -448 | One frozen book is capped at 64 orders across 4 pages, so the 128- and 512-order cases describe multiple epochs, never one relation instance. |
 | claim_instruction_internal_split | bytes | 11 | 74 | +63 | The landed payload names market and owner by 32-byte identity instead of packing an outcome count and a u64 into 11 bytes. |
 | claim_instruction_materialize_one | bytes | 11 | 107 | +96 | The landed payload adds a 32-byte destination and an outcome index to the market/owner pair, still far inside MAX_INTENT_BYTES. |
 | accumulator_full_summary | bytes | 272 | absent | absent | No accumulator summary account exists in the landed family; FeedHead is a 124-byte cursor plus evidence digest, not a fold summary, so the accumulator arm stays entirely hypothetical. |
-| landed_only_account_family | bytes | absent | 4298 | absent | Realm, Profile, Market, Hoard, FeedHead, Terms, PriceGrid, Epoch, CandidateRecord, FinalPot, SettlementReceipt and Resolution were never in the hypothesis arm, so most of the landed rent inventory was previously unmodeled. |
+| landed_only_account_family | bytes | absent | 4650 | absent | Realm, Profile, Market, Hoard, FeedHead, Terms, PriceGrid, Epoch, CandidateRecord, FinalPot, SettlementReceipt and Resolution were never in the hypothesis arm, so most of the landed rent inventory was previously unmodeled. |
 
 ## Interpretation
 
@@ -140,5 +140,5 @@ Payload widths are landed; the account sets are hypotheses and are labeled as su
 - Batch verification remains Omega(orders) without a separately verified succinct proof; page layout changes rent and transaction partitioning, not that information bound.
 - The landed page is not a tunable byte budget: 16 slots per page is forced, so the 4/8/10 KiB page trade in the hypothesis arm no longer describes the current layout.
 - One frozen landed book holds 64 orders, so the 128- and 512-order hypothesis rows describe several epochs rather than one relation instance.
-- Portfolio orders now have a persisted page encoding: one 228-byte tagged slot holds either family, so the seam `relation_v1` opened against the page is closed. The price is a common slot width, which is the whole of the page growth from 1819 to 3883 bytes.
+- Portfolio orders have a persisted page encoding: one 236-byte tagged slot holds either order family and a retirement, so the seam `relation_v1` opened against the page is closed. The price is a common slot width, which is the whole of the page growth from 1819 to 4012 bytes.
 - No landed candidate-verification instruction exists, so the landed arm reports relation work and rent without any wire byte count for that step.

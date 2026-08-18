@@ -1,6 +1,6 @@
 {
   "schema": "dragons.cost_lab.constants.v2",
-  "snapshot_date": "2026-08-17",
+  "snapshot_date": "2026-08-18",
   "source_baseline": {
     "agave": {
       "release": "v4.2.1",
@@ -101,21 +101,23 @@
     "source": {
       "owner": "programs/solana-layout",
       "codec_path": "programs/solana-layout/src/lib.rs",
-      "commit": "da2fbf77c47345c76b5fab9115b5d57fb01d51b4",
-      "commit_short": "da2fbf7",
-      "commit_subject": "Portfolio orders gain a persisted page encoding (P1 seam closed)",
-      "codec_blob_sha256_at_commit": "d0228c5a6355918f62908cfbd2eac76aeb16d398016151f6b3ee0360fbedd357",
+      "commit": "e780d5b67749b25415a1dc6ec8011a0122643db4",
+      "commit_short": "e780d5b",
+      "commit_subject": "OrderPage v4: derived-rank ids, tombstones, per-order expiry, streaming writer",
+      "codec_blob_sha256_at_commit": "ab97bc4229aa966ac6741891fec81f1eeaa5f697bcc749f2f24735f320fee9fb",
       "relation_path": "crates/clutch-batch/src/lib.rs",
-      "relation_blob_sha256_at_commit": "dac79ada3f8799bb516a4571974925b4f303382592c23fb5541498ec222ada45",
+      "relation_blob_sha256_at_commit": "f25ce5524a71f9e8ad5200992bb69290444865243f26040906d7aa6798013249",
       "relation_v1_path": "crates/clutch-batch/src/relation_v1.rs",
-      "relation_v1_blob_sha256_at_commit": "8b76d7b8063c9924bace504f0741ab43ba2a46dffd96d2aa00dc2ef4061e1db3",
-      "note": "One codec owner. Every width below is that file's own account_len/encoded_len expression restated term by term, so the harness re-derives each total instead of quoting it. Digests are the blobs at the pinned commit, not a mutable working tree."
+      "relation_v1_blob_sha256_at_commit": "f95b4931414386f109ef52b844616f86f11e21121d6f9ef8901f18b77eafc490",
+      "note": "One codec owner. Every width below is that file's own account_len, account_version and Intent::encoded_len expression restated term by term, so the harness re-derives each total instead of quoting it, and `abi-audit` re-derives them again from the file on disk. Digests are the blobs at the pinned commit, not a mutable working tree. The relation bounds come from crates/clutch-batch and are not re-derived by the audit: their blob digests are checked instead, so a moved relation blob is drift until someone re-verifies the bounds by hand."
     },
     "bounds": {
-      "layout_version": 3,
+      "layout_version": 4,
       "layout_version_v1": 1,
       "layout_version_v2": 2,
-      "intent_version": 1,
+      "layout_version_v3": 3,
+      "intent_version": 2,
+      "intent_version_v1": 1,
       "hash_bytes": 32,
       "minimum_outcomes": 2,
       "max_outcomes": 16,
@@ -124,15 +126,18 @@
       "max_orders_per_page": 16,
       "max_order_pages": 4,
       "max_epoch_orders": 64,
-      "order_record_bytes": 99,
-      "order_record_field_terms": [32, 32, 1, 1, 8, 8, 8, 1, 8],
-      "portfolio_record_bytes": 227,
-      "portfolio_record_field_terms": [32, 32, 1, 1, 1, 128, 8, 8, 8, 8],
-      "order_slot_bytes": 228,
-      "order_slot_field_terms": [1, 227],
+      "order_record_bytes": 107,
+      "order_record_field_terms": [32, 32, 1, 1, 8, 8, 8, 1, 8, 8],
+      "portfolio_record_bytes": 235,
+      "portfolio_record_field_terms": [32, 32, 1, 1, 1, 128, 40],
+      "tombstone_record_bytes": 80,
+      "tombstone_record_field_terms": [32, 32, 8, 8],
+      "order_slot_bytes": 236,
+      "order_slot_field_terms": [1, 235],
       "max_portfolio_orders": 8,
-      "order_page_header_bytes": 235,
-      "max_intent_bytes": 256,
+      "order_page_header_bytes": 236,
+      "max_intent_bytes": 302,
+      "max_intent_field_terms": [2, 64, 1, 235],
       "relation_version": 1,
       "relation_max_orders": 64,
       "relation_max_portfolio_orders": 8,
@@ -191,11 +196,11 @@
       },
       "order_page": {
         "rust_const": "account_len::ORDER_PAGE",
-        "bytes": 3883,
+        "bytes": 4012,
         "discriminator_tag": 8,
-        "schema_version": 3,
-        "field_terms": [2, 224, 2, 2, 2, 1, 1, 1, 3648],
-        "formula": "2 + (7 * 32) + 2 + 2 + 2 + 1 + 1 + 1 + (MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES)"
+        "schema_version": 4,
+        "field_terms": [2, 224, 2, 2, 2, 1, 1, 1, 1, 3776],
+        "formula": "2 + (7 * 32) + 2 + 2 + 2 + 1 + 1 + 1 + 1 + (MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES)"
       },
       "supply_ledger": {
         "rust_const": "account_len::SUPPLY_LEDGER",
@@ -207,11 +212,11 @@
       },
       "terms": {
         "rust_const": "account_len::TERMS",
-        "bytes": 1304,
+        "bytes": 1656,
         "discriminator_tag": 10,
-        "schema_version": 2,
-        "field_terms": [2, 160, 1, 1, 1088, 4, 2, 8, 8, 8, 8, 4, 4, 4, 1, 1],
-        "formula": "2 + (5 * 32) + 1 + 1 + (MAX_PAYOUTS * (8 + MAX_OUTCOMES * 8)) + 4 + 2 + 8 + 8 + 8 + 8 + 4 + 4 + 4 + 1 + 1"
+        "schema_version": 3,
+        "field_terms": [2, 160, 1, 1, 1088, 4, 2, 8, 8, 8, 8, 4, 4, 4, 2, 1, 1, 1, 1, 1, 1, 1, 8, 8, 4, 4, 32, 16, 256, 8, 7, 1, 1],
+        "formula": "2 + (5 * 32) + 1 + 1 + (MAX_PAYOUTS * (8 + MAX_OUTCOMES * 8)) + 4 + 2 + 8 + 8 + 8 + 8 + 4 + 4 + 4 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 8 + 8 + 4 + 4 + 32 + MAX_OUTCOMES + (MAX_KNOTS * 16) + 8 + 7 + 1 + 1"
       },
       "price_grid": {
         "rust_const": "account_len::PRICE_GRID",
@@ -264,64 +269,83 @@
     },
     "intents": {
       "create_market": {
+        "rust_variant": "CreateMarket",
+        "rust_tag_const": "CREATE_TAG",
         "intent_tag": 1,
-        "intent_version": 1,
+        "intent_version": 2,
         "bytes": 139,
         "field_terms": [2, 32, 32, 8, 1, 32, 32],
         "formula": "2 + 32 + 32 + 8 + 1 + 32 + 32"
       },
       "split": {
+        "rust_variant": "Split",
+        "rust_tag_const": "SPLIT_TAG",
         "intent_tag": 2,
-        "intent_version": 1,
+        "intent_version": 2,
         "bytes": 74,
         "field_terms": [2, 32, 32, 8],
         "formula": "2 + 32 + 32 + 8"
       },
       "merge": {
+        "rust_variant": "Merge",
+        "rust_tag_const": "MERGE_TAG",
         "intent_tag": 3,
-        "intent_version": 1,
+        "intent_version": 2,
         "bytes": 74,
         "field_terms": [2, 32, 32, 8],
         "formula": "2 + 32 + 32 + 8"
       },
       "materialize": {
+        "rust_variant": "Materialize",
+        "rust_tag_const": "MATERIALIZE_TAG",
         "intent_tag": 4,
-        "intent_version": 1,
+        "intent_version": 2,
         "bytes": 107,
         "field_terms": [2, 32, 32, 32, 1, 8],
         "formula": "2 + 32 + 32 + 32 + 1 + 8"
       },
       "dematerialize": {
+        "rust_variant": "Dematerialize",
+        "rust_tag_const": "DEMATERIALIZE_TAG",
         "intent_tag": 5,
-        "intent_version": 1,
+        "intent_version": 2,
         "bytes": 107,
         "field_terms": [2, 32, 32, 32, 1, 8],
         "formula": "2 + 32 + 32 + 32 + 1 + 8"
       },
       "feed_advance": {
+        "rust_variant": "FeedAdvance",
+        "rust_tag_const": "FEED_ADVANCE_TAG",
         "intent_tag": 6,
-        "intent_version": 1,
+        "intent_version": 2,
         "bytes": 74,
         "field_terms": [2, 32, 8, 32],
         "formula": "2 + 32 + 8 + 32"
       },
       "place_order": {
+        "rust_variant": "PlaceOrder",
+        "rust_slot_kind": "Portfolio",
+        "rust_tag_const": "PLACE_TAG",
         "intent_tag": 7,
-        "intent_version": 1,
-        "bytes": 165,
-        "field_terms": [2, 32, 32, 99],
-        "formula": "2 + 32 + 32 + ORDER_RECORD_BYTES"
+        "intent_version": 2,
+        "bytes": 302,
+        "field_terms": [2, 32, 32, 1, 235],
+        "formula": "2 + 32 + 32 + 1 + PORTFOLIO_RECORD_BYTES"
       },
       "cancel_order": {
+        "rust_variant": "CancelOrder",
+        "rust_tag_const": "CANCEL_TAG",
         "intent_tag": 8,
-        "intent_version": 1,
-        "bytes": 130,
-        "field_terms": [2, 32, 32, 32, 32],
-        "formula": "2 + 32 + 32 + 32 + 32"
+        "intent_version": 2,
+        "bytes": 138,
+        "field_terms": [2, 32, 32, 32, 32, 8],
+        "formula": "2 + 32 + 32 + 32 + 32 + 8"
       },
       "settle_page": {
+        "rust_variant": "SettlePage",
+        "rust_tag_const": "SETTLE_TAG",
         "intent_tag": 9,
-        "intent_version": 1,
+        "intent_version": 2,
         "bytes": 68,
         "field_terms": [2, 32, 32, 2],
         "formula": "2 + 32 + 32 + 2"
@@ -381,8 +405,10 @@
     "notes": [
       "Every width in this arm is read from the landed codec; the lab proposes none of them.",
       "A landed width is still not a measured cost. No Dragon SBF program exists, so this arm carries no CU, heap, stack, account-copy, or landing figure either.",
-      "Both admitted order families share one ORDER_SLOT_BYTES-wide tagged slot, so the page holds either family without a second account, a second order-id chain, or a second fold.",
-      "A single-Egg slot pays for the wider family: 99 bytes of body under a kind byte and 128 bytes of required-zero padding. Those 129 bytes per slot are the whole of the page growth from 1819 to 3883; the padding is required to be zero and is not spare capacity.",
+      "Both admitted order families and a retirement share one 236-byte tagged slot, so the page holds every admitted slot kind without a second account, a second order-id chain, or a second fold.",
+      "A single-Egg slot pays for the widest admitted body: 107 bytes of body under a kind byte and 128 bytes of required-zero padding. The growth from the 1819-byte v2 single-family page to 4012 is those sixteen wider slots plus one header byte; the padding is required to be zero and is not spare capacity.",
+      "A cancellation writes a 80-byte tombstone into the slot and order id it retires, so a retirement never renumbers a later order and never widens the slot.",
+      "place_order is pinned at the widest admitted placement, a portfolio slot at 302 bytes, which is exactly MAX_INTENT_BYTES. A single-Egg placement is 174 bytes and a padding or tombstone placement is refused by the codec at 67 bytes of header.",
       "check_count refuses outcome_count below 2 and above 16, so n=24 is a codec refusal in this arm on top of the unchanged V1 policy refusal."
     ]
   }

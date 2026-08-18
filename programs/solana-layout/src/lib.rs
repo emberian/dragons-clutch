@@ -130,9 +130,6 @@ pub const ORDER_RECORD_BYTES: usize = 32 + 32 + 1 + 1 + 8 + 8 + 8 + 1 + 8 + 8;
 ///
 /// The five trailing `u64` fields — `lots`, `limit_collateral_per_lot`,
 /// `minimum_fill_lots`, `generation`, `expiry_epoch` — are grouped rather than
-/// written one term per field so the whole declaration stays on one line: the
-/// offline ABI audit re-derives this constant by reading its own `pub const`
-/// line, and a wrapped declaration would leave it nothing to read.
 pub const PORTFOLIO_RECORD_BYTES: usize = 32 + 32 + 1 + 1 + 1 + (MAX_OUTCOMES * 8) + (5 * 8);
 /// Exact encoded length of one [`TombstoneRecord`] body, without its kind byte.
 ///

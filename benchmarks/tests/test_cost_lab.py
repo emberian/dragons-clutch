@@ -135,9 +135,9 @@ class LandedAbiTests(unittest.TestCase):
             "hoard": 108,
             "position": 220,
             "feed_head": 124,
-            "order_page": 3883,
+            "order_page": 4012,
             "supply_ledger": 333,
-            "terms": 1304,
+            "terms": 1656,
             "price_grid": 589,
             "epoch": 328,
             "candidate_record": 305,
@@ -189,20 +189,30 @@ class LandedAbiTests(unittest.TestCase):
     def test_abi_expression_evaluator_refuses_anything_but_sizes(self) -> None:
         self.assertEqual(cost_lab.evaluate_rust_arithmetic("2 + (7 * 32) + 1"), 227)
         self.assertEqual(
-            cost_lab.evaluate_rust_arithmetic("MAX_ORDERS_PER_PAGE * ORDER_RECORD_BYTES"), 1584
+            cost_lab.evaluate_rust_arithmetic("MAX_ORDERS_PER_PAGE * ORDER_RECORD_BYTES"), 1712
         )
         self.assertEqual(
-            cost_lab.evaluate_rust_arithmetic("MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES"), 3648
+            cost_lab.evaluate_rust_arithmetic("MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES"), 3776
         )
-        for hostile in ("__import__('os')", "1 - 1", "open(1)", "MAX_UNKNOWN"):
+        self.assertEqual(cost_lab.evaluate_rust_arithmetic("MAX_KNOTS * 16"), 256)
+        self.assertEqual(
+            cost_lab.evaluate_rust_arithmetic("2 + (2 * HASH) + 1", {"HASH": 32}), 67
+        )
+        for hostile in ("__import__('os')", "1 - 1", "open(1)"):
             with self.assertRaises(cost_lab.ModelError):
                 cost_lab.evaluate_rust_arithmetic(hostile)
+        # An unpinned identifier is a value the audit can name, not a bare refusal: this is the
+        # exception that once aborted the whole gate on MAX_KNOTS.
+        with self.assertRaises(cost_lab.UnknownRustToken) as caught:
+            cost_lab.evaluate_rust_arithmetic("MAX_UNKNOWN * 8")
+        self.assertEqual(caught.exception.token, "MAX_UNKNOWN")
 
     def test_order_page_geometry_is_forced(self) -> None:
         bounds = self.landed["bounds"]
-        self.assertEqual(bounds["order_record_bytes"], 99)
-        self.assertEqual(bounds["portfolio_record_bytes"], 227)
-        self.assertEqual(bounds["order_slot_bytes"], 228)
+        self.assertEqual(bounds["order_record_bytes"], 107)
+        self.assertEqual(bounds["portfolio_record_bytes"], 235)
+        self.assertEqual(bounds["tombstone_record_bytes"], 80)
+        self.assertEqual(bounds["order_slot_bytes"], 236)
         self.assertEqual(bounds["max_orders_per_page"], 16)
         self.assertEqual(bounds["max_order_pages"], 4)
         self.assertEqual(bounds["max_epoch_orders"], 64)
@@ -222,15 +232,15 @@ class LandedAbiTests(unittest.TestCase):
 
     def test_one_instance_inventory_totals(self) -> None:
         row = cost_lab.find_row(self.rows, "landed-account-inventory-one-instance")
-        self.assertEqual(row["outputs"]["data_bytes"], 8_734)
-        self.assertEqual(row["outputs"]["rent_principal_lamports"], 74_151_840)
+        self.assertEqual(row["outputs"]["data_bytes"], 9_215)
+        self.assertEqual(row["outputs"]["rent_principal_lamports"], 77_499_600)
         self.assertEqual(row["outputs"]["rent_overhead_component_lamports"], 13_363_200)
         self.assertEqual(row["outputs"]["largest_account"], "order_page")
         self.assertEqual(row["outputs"]["smallest_account"], "realm")
 
     def test_landed_rent_examples(self) -> None:
         self.assertEqual(cost_lab.rent_minimum(220, self.constants), 2_422_080)
-        self.assertEqual(cost_lab.rent_minimum(3_883, self.constants), 27_916_560)
+        self.assertEqual(cost_lab.rent_minimum(4_012, self.constants), 28_814_400)
         self.assertEqual(cost_lab.rent_minimum(333, self.constants), 3_208_560)
 
     def test_epoch_book_refuses_more_than_max_epoch_orders(self) -> None:
@@ -242,11 +252,11 @@ class LandedAbiTests(unittest.TestCase):
         self.assertTrue(full["admission"]["v1_admitted"])
         self.assertEqual(full["outputs"]["page_count"], 4)
         self.assertEqual(full["outputs"]["padding_slot_bytes"], 0)
-        self.assertEqual(full["outputs"]["rent_principal_lamports"], 4 * 27_916_560)
+        self.assertEqual(full["outputs"]["rent_principal_lamports"], 4 * 28_814_400)
         partial = cost_lab.find_row(self.rows, "landed-epoch-book-m17")
         self.assertEqual(partial["outputs"]["page_count"], 2)
         self.assertEqual(partial["outputs"]["final_page_order_count"], 1)
-        self.assertEqual(partial["outputs"]["padding_slot_bytes"], 15 * 228)
+        self.assertEqual(partial["outputs"]["padding_slot_bytes"], 15 * 236)
 
     def test_landed_intent_payload_widths(self) -> None:
         expected = {
@@ -256,8 +266,8 @@ class LandedAbiTests(unittest.TestCase):
             "materialize": 107,
             "dematerialize": 107,
             "feed_advance": 74,
-            "place_order": 165,
-            "cancel_order": 130,
+            "place_order": 302,
+            "cancel_order": 138,
             "settle_page": 68,
         }
         self.assertEqual(set(expected), set(cost_lab.LANDED_INTENT_ORDER))
@@ -303,14 +313,14 @@ class LandedAbiTests(unittest.TestCase):
         expected = {
             "diff-position-account": (192, 220, 28),
             "diff-supply-ledger-account": (320, 333, 13),
-            "diff-single-egg-order-record": (80, 99, 19),
-            "diff-order-page-account": (8192, 3883, -4309),
-            "diff-order-page-header": (128, 235, 107),
+            "diff-single-egg-order-record": (80, 107, 27),
+            "diff-order-page-account": (8192, 4012, -4180),
+            "diff-order-page-header": (128, 236, 108),
             "diff-order-page-record-capacity": (100, 16, -84),
             "diff-epoch-book-order-capacity": (512, 64, -448),
             "diff-claim-instruction-internal-split": (11, 74, 63),
             "diff-claim-instruction-materialize-one": (11, 107, 96),
-            "diff-portfolio-order-record": (208, 227, 19),
+            "diff-portfolio-order-record": (208, 235, 27),
         }
         for scenario_id, (hypothesis, landed, delta) in expected.items():
             output = cost_lab.find_row(self.rows, scenario_id)["outputs"]
@@ -324,7 +334,7 @@ class LandedAbiTests(unittest.TestCase):
             self.assertIsNone(output["delta"], scenario_id)
         landed_only = cost_lab.find_row(self.rows, "diff-landed-only-account-family")["outputs"]
         self.assertIsNone(landed_only["hypothesis_value"])
-        self.assertEqual(landed_only["landed_value"], 4_298)
+        self.assertEqual(landed_only["landed_value"], 4_650)
 
     def test_position_rent_delta_is_reported(self) -> None:
         output = cost_lab.find_row(self.rows, "diff-position-account")["outputs"]
@@ -355,6 +365,18 @@ class LandedAbiTests(unittest.TestCase):
         self.assertEqual(page["outputs"]["single_order_bytes"], 80)
         self.assertEqual(page["outputs"]["half_mix_pages"], 10)
 
+    def test_hypothesis_arm_rows_are_byte_identical_to_their_pinned_digest(self) -> None:
+        """The design arm is falsification history: a landed re-pin must not move one byte of it."""
+
+        rows = [row for row in self.rows if row["arm"] == cost_lab.ARM_HYPOTHESIS]
+        self.assertEqual(len(rows), cost_lab.RETAINED_HYPOTHESIS_ROW_COUNT)
+        self.assertEqual(
+            cost_lab.sha256_bytes(cost_lab.canonical_json_bytes(rows)),
+            "f2ed6d5345517b65dd3c87410bb0cd5c40baebe709ba5621ca0389cf16104131",
+            "the retained layout_hypothesis rows moved; they are kept unchanged so their "
+            "falsifications stay readable, and a landed re-pin must not touch them",
+        )
+
     def test_constants_refuse_a_landed_width_that_is_not_its_field_terms(self) -> None:
         import copy
 
@@ -362,6 +384,180 @@ class LandedAbiTests(unittest.TestCase):
         broken[cost_lab.ARM_LANDED]["accounts"]["position"]["bytes"] = 192
         with self.assertRaises(cost_lab.ModelError):
             cost_lab.verify_landed_arm(broken)
+
+
+class AbiAuditHardeningTests(unittest.TestCase):
+    """The gate must be loud.
+
+    Every one of these mutates a copy of the real codec source and asserts the audit *reports*
+    rather than aborts. The audit spent several commits dead — `refusing to evaluate unknown
+    token in ABI expression: MAX_KNOTS`, exit 2, no drift list — because an unpinned identifier
+    raised instead of being named.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.constants = cost_lab.load_constants()
+        path = cost_lab.REPO_ROOT / cls.constants[cost_lab.ARM_LANDED]["source"]["codec_path"]
+        cls.source = path.read_text() if path.is_file() else None
+
+    def codec_source(self) -> str:
+        if self.source is None:
+            self.skipTest("landed codec source is not present in this checkout")
+        return self.source
+
+    def test_the_audit_is_clean_on_the_unmutated_source(self) -> None:
+        self.assertEqual(cost_lab.abi_drift(self.constants, self.codec_source()), [])
+
+    def test_an_unpinned_identifier_is_a_named_drift_line_not_a_dead_gate(self) -> None:
+        source = self.codec_source()
+        mutated = source.replace(
+            "pub const MAX_KNOTS: usize = 16;",
+            "pub const MAX_KNOTS: usize = 16;\npub const MAX_SPLINE_KNOTS: usize = 16;",
+            1,
+        ).replace("+ (MAX_KNOTS * 16)", "+ (MAX_SPLINE_KNOTS * 16)", 1)
+        self.assertNotEqual(mutated, source)
+        drift = cost_lab.abi_drift(self.constants, mutated)
+        named = [line for line in drift if "MAX_SPLINE_KNOTS" in line]
+        self.assertTrue(named, drift)
+        self.assertTrue(
+            any("account_len::TERMS" in line for line in named),
+            "the drift line must name the constant that referenced the unpinned token",
+        )
+        self.assertTrue(
+            any(cost_lab.PIN_TABLE in line and '"MAX_SPLINE_KNOTS": 16' in line for line in named),
+            "the drift line must name the pin-table fix and the codec's own value",
+        )
+
+    def test_an_unresolvable_token_does_not_stop_the_rest_of_the_audit(self) -> None:
+        source = self.codec_source()
+        mutated = source.replace("+ (MAX_KNOTS * 16)", "+ (MAX_MYSTERY * 16)", 1).replace(
+            "pub const MAX_GRID_TICKS: usize = 64;", "pub const MAX_GRID_TICKS: usize = 65;", 1
+        )
+        self.assertNotEqual(mutated, source)
+        drift = cost_lab.abi_drift(self.constants, mutated)
+        self.assertTrue(
+            any("MAX_MYSTERY" in line and "account_len::TERMS" in line for line in drift), drift
+        )
+        self.assertTrue(
+            any("MAX_GRID_TICKS: codec says 65" in line for line in drift),
+            "an unreadable expression must not abort the audit before the next check",
+        )
+
+    def test_a_moved_identifier_reports_both_the_identifier_and_the_width(self) -> None:
+        """A referenced identifier is compared to its pin, never substituted for it.
+
+        Substituting the pin is what hid the v4 page: `ORDER_SLOT_BYTES` 228 -> 236 read as no
+        identifier drift at all and `ORDER_PAGE` moved by the one header byte instead of 129.
+        """
+
+        source = self.codec_source()
+        mutated = source.replace(
+            "pub const ORDER_SLOT_BYTES: usize = 1 + PORTFOLIO_RECORD_BYTES;",
+            "pub const ORDER_SLOT_BYTES: usize = 2 + PORTFOLIO_RECORD_BYTES;",
+            1,
+        )
+        self.assertNotEqual(mutated, source)
+        drift = cost_lab.abi_drift(self.constants, mutated)
+        self.assertIn("ORDER_SLOT_BYTES: codec says 237, cost lab pins 236", drift)
+        self.assertTrue(
+            any(
+                "account_len::ORDER_PAGE references ORDER_SLOT_BYTES" in line
+                and "codec says 237" in line
+                for line in drift
+            ),
+            drift,
+        )
+        # 236 header + 16 * 237: the whole move, not the masked one-byte remainder.
+        self.assertIn("order_page: codec says 4028 bytes, cost lab pins 4012", drift)
+
+    def test_a_lockstep_move_through_a_derived_identifier_is_still_reported(self) -> None:
+        source = self.codec_source()
+        mutated = source.replace(
+            "pub const PORTFOLIO_RECORD_BYTES: usize = 32 + 32 + 1 + 1 + 1 + (MAX_OUTCOMES * 8) + (5 * 8);",
+            "pub const PORTFOLIO_RECORD_BYTES: usize = 32 + 32 + 1 + 1 + 1 + (MAX_OUTCOMES * 8) + (6 * 8);",
+            1,
+        )
+        self.assertNotEqual(mutated, source)
+        drift = cost_lab.abi_drift(self.constants, mutated)
+        self.assertIn("PORTFOLIO_RECORD_BYTES: codec says 243, cost lab pins 235", drift)
+        # ORDER_SLOT_BYTES is `1 + PORTFOLIO_RECORD_BYTES`, so it moves without its own edit.
+        self.assertIn("ORDER_SLOT_BYTES: codec says 244, cost lab pins 236", drift)
+        self.assertIn("order_page: codec says 4140 bytes, cost lab pins 4012", drift)
+
+    def test_a_rustfmt_wrapped_declaration_is_not_drift(self) -> None:
+        """Formatting is not an ABI change; the parser used to die on it with a SyntaxError."""
+
+        source = self.codec_source()
+        wrapped = source.replace(
+            "pub const ORDER_SLOT_BYTES: usize = 1 + PORTFOLIO_RECORD_BYTES;",
+            "pub const ORDER_SLOT_BYTES: usize =\n    1 + PORTFOLIO_RECORD_BYTES;",
+            1,
+        )
+        self.assertNotEqual(wrapped, source)
+        self.assertEqual(
+            cost_lab.derive_pinned_identifiers_from_source(wrapped)["ORDER_SLOT_BYTES"], 236
+        )
+        self.assertEqual(cost_lab.abi_drift(self.constants, wrapped), [])
+
+    def test_a_declaration_inside_a_comment_is_not_a_declaration(self) -> None:
+        source = self.codec_source()
+        commented = source.replace(
+            "pub const ORDER_SLOT_BYTES: usize = 1 + PORTFOLIO_RECORD_BYTES;",
+            "/* pub const ORDER_SLOT_BYTES: usize = 999; */\n"
+            "pub const ORDER_SLOT_BYTES: usize = 1 + PORTFOLIO_RECORD_BYTES;",
+            1,
+        )
+        self.assertNotEqual(commented, source)
+        self.assertEqual(cost_lab.abi_drift(self.constants, commented), [])
+
+    def test_the_multi_line_account_length_is_read_whole(self) -> None:
+        source = self.codec_source()
+        self.assertIn("pub const TERMS: usize = 2\n", source, "TERMS is the wrapped-const case")
+        self.assertEqual(cost_lab.derive_account_lengths_from_source(source)["TERMS"], 1_656)
+
+    def test_intent_widths_are_read_from_the_codec_match_arms(self) -> None:
+        arms = cost_lab.derive_intent_lengths_from_source(self.codec_source())
+        self.assertIn("PlaceOrder.Portfolio", arms)
+        self.assertIn("PlaceOrder.Single", arms)
+        self.assertEqual(
+            cost_lab.evaluate_rust_arithmetic(arms["PlaceOrder.Single"]), 174
+        )
+        self.assertEqual(
+            cost_lab.evaluate_rust_arithmetic(arms["PlaceOrder.Portfolio"]), 302
+        )
+        mutated = self.codec_source().replace(
+            "Self::CancelOrder { .. } => 2 + 32 + 32 + 32 + 32 + 8,",
+            "Self::CancelOrder { .. } => 2 + 32 + 32 + 32 + 32 + 8 + 8,",
+            1,
+        )
+        drift = cost_lab.abi_drift(self.constants, mutated)
+        self.assertIn("intent cancel_order: codec says 146 bytes, cost lab pins 138", drift)
+
+    def test_a_lumped_field_term_list_is_drift_even_when_it_sums(self) -> None:
+        import copy
+
+        broken = copy.deepcopy(self.constants)
+        account = broken[cost_lab.ARM_LANDED]["accounts"]["order_page"]
+        account["field_terms"] = [sum(account["field_terms"])]
+        cost_lab.verify_landed_arm(broken)  # the sum still closes, so this alone is not enough
+        drift = cost_lab.abi_drift(broken, self.codec_source())
+        self.assertTrue(
+            any("account_len::ORDER_PAGE" in line and "field terms" in line for line in drift),
+            drift,
+        )
+
+    def test_a_moved_account_version_or_discriminator_is_drift(self) -> None:
+        import copy
+
+        broken = copy.deepcopy(self.constants)
+        broken[cost_lab.ARM_LANDED]["accounts"]["order_page"]["schema_version"] = 3
+        broken[cost_lab.ARM_LANDED]["accounts"]["terms"]["discriminator_tag"] = 11
+        drift = cost_lab.abi_drift(broken, self.codec_source())
+        self.assertIn(
+            "order_page: codec writes schema version 4, cost lab pins 3", drift
+        )
+        self.assertIn("terms: codec discriminator TERMS_TAG is 10, cost lab pins 11", drift)
 
 
 class GoldenTests(unittest.TestCase):

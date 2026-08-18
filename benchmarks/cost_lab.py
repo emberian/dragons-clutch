@@ -21,6 +21,7 @@ import hashlib
 import io
 import json
 import math
+import re
 import struct
 import sys
 from dataclasses import dataclass
@@ -847,9 +848,9 @@ LANDED_ACCOUNT_ROLES = {
     "hoard": "Market collateral custody seam.",
     "position": "Owner internal balances over the fixed 16-outcome vector.",
     "feed_head": "Feed cursor and evidence digest; not a fold summary.",
-    "order_page": "Dense 16-slot order page carrying either admitted order family, with cross-page closure fields.",
+    "order_page": "Dense 16-slot order page carrying either admitted order family or a retirement, with cross-page closure fields.",
     "supply_ledger": "Per-outcome internal and external supply totals.",
-    "terms": "Immutable payout terms over at most 8 payout vectors.",
+    "terms": "Immutable payout terms over at most 8 payout vectors, plus the v3 resolution basis, its knot vector and the per-market collateral cap.",
     "price_grid": "Frozen strictly increasing 64-tick price grid.",
     "epoch": "Book domain, phase, and frozen page-set binding.",
     "candidate_record": "Submitted clearing candidate and its score.",
@@ -1185,6 +1186,12 @@ def landed_relation_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+# The superseded v2 order page: a 235-byte header over sixteen bare 99-byte single-Egg records,
+# with no kind discriminator, no portfolio family and no retirement. It is quoted only as the
+# baseline the tagged-slot page grew from and is not read from the codec, which no longer has it.
+V2_SINGLE_FAMILY_PAGE_BYTES = 1819
+
+
 def differential_entries(constants: dict[str, Any]) -> list[dict[str, Any]]:
     bounds = constants["dragon_design_bounds"]
     landed = constants[ARM_LANDED]
@@ -1226,7 +1233,7 @@ def differential_entries(constants: dict[str, Any]) -> list[dict[str, Any]]:
             "hypothesis_source": "single_egg_order_bytes",
             "landed": landed_bounds_value["order_record_bytes"],
             "landed_source": "ORDER_RECORD_BYTES",
-            "change": "The landed record spends 64 bytes on owner and order identity plus quantity, limit, minimum fill, generation, outcome, side and flags; the 80-byte sketch had no room for the replay generation and dual 32-byte identities.",
+            "change": "The landed record spends 64 bytes on owner and order identity plus quantity, limit, minimum fill, generation, outcome, side, flags and, since v4, an eight-byte per-order expiry epoch; the 80-byte sketch had no room for the replay generation, the expiry horizon or dual 32-byte identities.",
         },
         {
             "object": "portfolio_order_record",
@@ -1237,7 +1244,9 @@ def differential_entries(constants: dict[str, Any]) -> list[dict[str, Any]]:
             "hypothesis_source": "portfolio_order_fixed_bytes + 8 * max_v1_outcomes at n=16",
             "landed": landed_bounds_value["portfolio_record_bytes"],
             "landed_source": "PORTFOLIO_RECORD_BYTES",
-            "change": "The portfolio order gained a persisted page encoding: the same 128-byte 16-slot coefficient vector plus dual 32-byte identities, side, active length, flags, lots, per-lot collateral bound, minimum fill and a replay generation, so the landed body is 227 bytes against the 208-byte sketch. It rides a 228-byte tagged slot shared with the single-Egg family.",
+            "change": "The portfolio order has a persisted page encoding: the same 128-byte 16-slot coefficient vector plus dual 32-byte identities, side, active length, flags and five u64s (lots, per-lot collateral bound, minimum fill, replay generation, expiry epoch), so the landed body is "
+            f"{landed_bounds_value['portfolio_record_bytes']} bytes against the {bounds['portfolio_order_fixed_bytes'] + bounds['portfolio_coefficient_bytes_per_outcome'] * bounds['max_v1_outcomes']}-byte sketch. It rides a "
+            f"{landed_bounds_value['order_slot_bytes']}-byte tagged slot shared with the single-Egg family and with retirements.",
         },
         {
             "object": "order_page_account",
@@ -1247,7 +1256,8 @@ def differential_entries(constants: dict[str, Any]) -> list[dict[str, Any]]:
             "hypothesis_source": "8 KiB page hypothesis",
             "landed": landed["accounts"]["order_page"]["bytes"],
             "landed_source": "account_len::ORDER_PAGE",
-            "change": "The landed page is a fixed 16-slot array with cross-page closure fields, not a variable byte budget, so page size stopped being a tunable parameter. The slot is wide enough for either admitted family, which is why it is 3883 bytes rather than the 1819 of the single-family v2 page.",
+            "change": "The landed page is a fixed 16-slot array with cross-page closure fields, not a variable byte budget, so page size stopped being a tunable parameter. The slot is wide enough for every admitted slot kind, both order families and a retirement, which is why it is "
+            f"{landed['accounts']['order_page']['bytes']} bytes rather than the {V2_SINGLE_FAMILY_PAGE_BYTES} of the single-family v2 page.",
         },
         {
             "object": "order_page_header",
@@ -1257,7 +1267,7 @@ def differential_entries(constants: dict[str, Any]) -> list[dict[str, Any]]:
             "hypothesis_source": "page_header_bytes",
             "landed": landed_bounds_value["order_page_header_bytes"],
             "landed_source": "account_len::ORDER_PAGE minus the slot array",
-            "change": "The landed header carries seven 32-byte identities (market, epoch, order set, page digest, first, last and previous-page-last order ids) that the hypothesis never budgeted for.",
+            "change": "The landed header carries seven 32-byte identities (market, epoch, order set, page digest, first, last and previous-page-last order ids) that the hypothesis never budgeted for, plus the page/set counters and the v4 retirement count.",
         },
         {
             "object": "order_page_record_capacity",
@@ -1870,7 +1880,7 @@ def summary_bytes(constants: dict[str, Any], rows: list[dict[str, Any]]) -> byte
             "- Batch verification remains Omega(orders) without a separately verified succinct proof; page layout changes rent and transaction partitioning, not that information bound.",
             "- The landed page is not a tunable byte budget: 16 slots per page is forced, so the 4/8/10 KiB page trade in the hypothesis arm no longer describes the current layout.",
             "- One frozen landed book holds 64 orders, so the 128- and 512-order hypothesis rows describe several epochs rather than one relation instance.",
-            "- Portfolio orders now have a persisted page encoding: one 228-byte tagged slot holds either family, so the seam `relation_v1` opened against the page is closed. The price is a common slot width, which is the whole of the page growth from 1819 to 3883 bytes.",
+            f"- Portfolio orders have a persisted page encoding: one {landed['bounds']['order_slot_bytes']}-byte tagged slot holds either order family and a retirement, so the seam `relation_v1` opened against the page is closed. The price is a common slot width, which is the whole of the page growth from {V2_SINGLE_FAMILY_PAGE_BYTES} to {landed['accounts']['order_page']['bytes']} bytes.",
             "- No landed candidate-verification instruction exists, so the landed arm reports relation work and rent without any wire byte count for that step.",
             "",
         ]
@@ -1918,43 +1928,288 @@ def check_artifacts(output: Path, artifacts: dict[str, bytes]) -> None:
         raise ModelError("\n".join(errors))
 
 
+# The offline ABI audit: re-derive the landed arm from the codec source on disk.
+#
+# Everything below is a pure function of (pinned constants, codec source text) except
+# `abi_audit`, which reads the one file and reports. The audit is a tripwire, so its only two
+# outcomes are "no drift" and a *named* drift list: an expression the evaluator cannot read, a
+# module it cannot find, or an identifier the lab does not pin are all drift entries that say
+# what moved and how to re-pin it, never a bare crash. `refusing to evaluate unknown token`
+# raised as an exception once left this gate dead for several commits without anyone noticing.
+PIN_TABLE = "RUST_IDENTIFIER_VALUES in benchmarks/cost_lab.py"
+
 RUST_IDENTIFIER_VALUES = {
-    "MAX_OUTCOMES": 16,
-    "MAX_PAYOUTS": 8,
+    "HASH_BYTES": 32,
+    "MAX_EPOCH_ORDERS": 64,
     "MAX_GRID_TICKS": 64,
+    "MAX_INTENT_BYTES": 302,
+    "MAX_KNOTS": 16,
     "MAX_ORDERS_PER_PAGE": 16,
     "MAX_ORDER_PAGES": 4,
-    "ORDER_RECORD_BYTES": 99,
-    "PORTFOLIO_RECORD_BYTES": 227,
-    "ORDER_SLOT_BYTES": 228,
-    "HASH_BYTES": 32,
+    "MAX_OUTCOMES": 16,
+    "MAX_PAYOUTS": 8,
+    "MAX_PORTFOLIO_ORDERS": 8,
+    "ORDER_RECORD_BYTES": 107,
+    "ORDER_SLOT_BYTES": 236,
+    "PORTFOLIO_RECORD_BYTES": 235,
+    "TOMBSTONE_RECORD_BYTES": 80,
 }
 
+BOUNDS_IDENTIFIERS = {
+    "hash_bytes": "HASH_BYTES",
+    "intent_version": "INTENT_VERSION",
+    "intent_version_v1": "INTENT_VERSION_V1",
+    "layout_version": "LAYOUT_VERSION",
+    "layout_version_v1": "LAYOUT_VERSION_V1",
+    "layout_version_v2": "LAYOUT_VERSION_V2",
+    "layout_version_v3": "LAYOUT_VERSION_V3",
+    "max_epoch_orders": "MAX_EPOCH_ORDERS",
+    "max_grid_ticks": "MAX_GRID_TICKS",
+    "max_intent_bytes": "MAX_INTENT_BYTES",
+    "max_order_pages": "MAX_ORDER_PAGES",
+    "max_orders_per_page": "MAX_ORDERS_PER_PAGE",
+    "max_outcomes": "MAX_OUTCOMES",
+    "max_portfolio_orders": "MAX_PORTFOLIO_ORDERS",
+    "order_record_bytes": "ORDER_RECORD_BYTES",
+    "order_slot_bytes": "ORDER_SLOT_BYTES",
+    "portfolio_record_bytes": "PORTFOLIO_RECORD_BYTES",
+    "tombstone_record_bytes": "TOMBSTONE_RECORD_BYTES",
+}
 
-def evaluate_rust_arithmetic(expression: str) -> int:
-    """Evaluate one `+`/`*`/parenthesis Rust size expression over pinned identifiers.
+BOUNDS_RECORD_TERMS = {
+    "max_intent_field_terms": "MAX_INTENT_BYTES",
+    "order_record_field_terms": "ORDER_RECORD_BYTES",
+    "order_slot_field_terms": "ORDER_SLOT_BYTES",
+    "portfolio_record_field_terms": "PORTFOLIO_RECORD_BYTES",
+    "tombstone_record_field_terms": "TOMBSTONE_RECORD_BYTES",
+}
 
-    Anything else refuses. This exists to re-derive `account_len` from the codec instead of
-    trusting a transcription, so it must never become a general evaluator.
+RUST_INTEGER_SUFFIXES = ("usize", "u128", "u64", "u32", "u16", "u8")
+
+
+class UnknownRustToken(ModelError):
+    """A token in a codec expression that the pin table does not define.
+
+    Carried as a value rather than a bare refusal so the audit can turn it into a drift line
+    that names the token, the constant that referenced it, and the table to add it to.
     """
 
-    tokens = expression.replace("(", " ( ").replace(")", " ) ").replace("+", " + ").replace(
-        "*", " * "
-    )
-    parts = tokens.split()
+    def __init__(self, token: str, expression: str) -> None:
+        self.token = token
+        self.expression = expression.strip()
+        super().__init__(
+            f"refusing to evaluate unknown token in ABI expression: {token} "
+            f"(in `{self.expression}`)"
+        )
+
+
+def strip_rust_comments(source: str) -> str:
+    """Blank every comment and string body, preserving offsets and line structure.
+
+    The declaration scanners below are regular expressions over this text, so a `pub const`
+    inside a doc comment, a block comment or a string literal must not be readable as a
+    declaration. Nested block comments are Rust-legal and are counted.
+    """
+
+    out: list[str] = []
+    index = 0
+    length = len(source)
+    depth = 0
+    while index < length:
+        char = source[index]
+        following = source[index + 1] if index + 1 < length else ""
+        if depth:
+            if char == "/" and following == "*":
+                depth += 1
+                out.append("  ")
+                index += 2
+                continue
+            if char == "*" and following == "/":
+                depth -= 1
+                out.append("  ")
+                index += 2
+                continue
+            out.append("\n" if char == "\n" else " ")
+            index += 1
+            continue
+        if char == "/" and following == "*":
+            depth = 1
+            out.append("  ")
+            index += 2
+            continue
+        if char == "/" and following == "/":
+            while index < length and source[index] != "\n":
+                out.append(" ")
+                index += 1
+            continue
+        if char == '"':
+            out.append('"')
+            index += 1
+            while index < length:
+                inner = source[index]
+                if inner == "\\" and index + 1 < length:
+                    out.append("  ")
+                    index += 2
+                    continue
+                if inner == '"':
+                    out.append('"')
+                    index += 1
+                    break
+                out.append("\n" if inner == "\n" else " ")
+                index += 1
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+TOP_LEVEL_CONST_PATTERN = re.compile(
+    r"^(?:pub(?:\([^)]*\))? )?const (?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*[^=;]+=\s*(?P<expr>[^;]*);",
+    re.MULTILINE,
+)
+SCOPED_CONST_PATTERN = re.compile(
+    r"^[ \t]*(?:pub(?:\([^)]*\))? )?const (?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*[^=;]+=\s*(?P<expr>[^;]*);",
+    re.MULTILINE,
+)
+
+
+def rust_top_level_constants(stripped: str) -> dict[str, str]:
+    """Every column-zero `const NAME: T = expr;` declaration, expression text unevaluated.
+
+    The expression pattern runs to the terminating semicolon rather than to end of line, so a
+    rustfmt-wrapped multi-line declaration reads exactly like a one-line one. The audit used to
+    be line-oriented here and died with a bare SyntaxError on a wrapped constant.
+    """
+
+    return {
+        match.group("name"): match.group("expr")
+        for match in TOP_LEVEL_CONST_PATTERN.finditer(stripped)
+        if match.group("name") != "_"
+    }
+
+
+def rust_block_body(stripped: str, marker: str, what: str) -> str:
+    start = stripped.find(marker)
+    if start < 0:
+        raise ModelError(f"codec source has no {what} (looked for `{marker.strip()}`)")
+    index = start + len(marker)
+    depth = 1
+    while index < len(stripped) and depth:
+        if stripped[index] == "{":
+            depth += 1
+        elif stripped[index] == "}":
+            depth -= 1
+        index += 1
+    if depth:
+        raise ModelError(f"codec source {what} is never brace-closed")
+    return stripped[start + len(marker) : index - 1]
+
+
+def rust_module_constants(stripped: str, module: str) -> dict[str, str]:
+    body = rust_block_body(stripped, f"pub mod {module} {{", f"a `{module}` module")
+    return {
+        match.group("name"): match.group("expr")
+        for match in SCOPED_CONST_PATTERN.finditer(body)
+        if match.group("name") != "_"
+    }
+
+
+def rust_additive_terms(expression: str) -> list[str]:
+    """Split a size expression into its top-level `+` terms, parentheses intact.
+
+    The landed arm stores each width as the codec's own field terms rather than a total, so the
+    audit has to see the same decomposition the codec wrote: a re-pin that lumps two fields into
+    one term still sums correctly and would otherwise pass unnoticed.
+    """
+
+    terms: list[str] = []
+    depth = 0
+    current = ""
+    for char in expression:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                raise ModelError(f"unbalanced parentheses in ABI expression `{expression.strip()}`")
+        if char == "+" and depth == 0:
+            terms.append(current)
+            current = ""
+            continue
+        current += char
+    if depth:
+        raise ModelError(f"unbalanced parentheses in ABI expression `{expression.strip()}`")
+    terms.append(current)
+    return [term.strip() for term in terms]
+
+
+def normalized_rust_expression(expression: str) -> str:
+    return " ".join(expression.split())
+
+
+def rust_tokens(expression: str) -> list[str]:
+    spaced = expression
+    for symbol in "()+*":
+        spaced = spaced.replace(symbol, f" {symbol} ")
+    return spaced.split()
+
+
+def rust_integer_literal(token: str) -> int | None:
+    body = token
+    for suffix in RUST_INTEGER_SUFFIXES:
+        if body.endswith(suffix):
+            body = body[: -len(suffix)]
+            break
+    body = body.rstrip("_").replace("_", "")
+    return int(body) if body.isdigit() else None
+
+
+def rust_expression_identifiers(expression: str) -> list[str]:
+    """Identifiers a size expression depends on, in first-appearance order."""
+
+    seen: list[str] = []
+    for token in rust_tokens(expression):
+        if token in {"(", ")", "+", "*"} or rust_integer_literal(token) is not None:
+            continue
+        if token not in seen:
+            seen.append(token)
+    return seen
+
+
+def evaluate_rust_arithmetic(expression: str, environment: dict[str, int] | None = None) -> int:
+    """Evaluate one `+`/`*`/parenthesis Rust size expression over an identifier environment.
+
+    Anything else refuses. This exists to re-derive `account_len` from the codec instead of
+    trusting a transcription, so it must never become a general evaluator. The environment
+    defaults to the pinned table; the audit passes the codec's own derived values instead, so a
+    stale pin cannot be substituted into a width and hide itself.
+    """
+
+    values = RUST_IDENTIFIER_VALUES if environment is None else environment
+    parts = rust_tokens(expression)
+    if not parts:
+        raise ModelError(
+            "refusing to evaluate an empty ABI expression: the declaration parsed to no terms"
+        )
     rendered: list[str] = []
     for part in parts:
         if part in {"(", ")", "+", "*"}:
             rendered.append(part)
-        elif part.isdigit():
-            rendered.append(part)
-        elif part in RUST_IDENTIFIER_VALUES:
-            rendered.append(str(RUST_IDENTIFIER_VALUES[part]))
-        elif part.endswith("usize") and part[: -len("usize")].rstrip("_").isdigit():
-            rendered.append(part[: -len("usize")].rstrip("_"))
-        else:
-            raise ModelError(f"refusing to evaluate unknown token in ABI expression: {part}")
-    node = compile(" ".join(rendered), "<abi>", "eval")
+            continue
+        literal = rust_integer_literal(part)
+        if literal is not None:
+            rendered.append(str(literal))
+            continue
+        if part in values:
+            rendered.append(str(values[part]))
+            continue
+        raise UnknownRustToken(part, expression)
+    try:
+        node = compile(" ".join(rendered), "<abi>", "eval")
+    except SyntaxError as exc:
+        raise ModelError(
+            f"refusing to evaluate malformed ABI expression `{expression.strip()}`: {exc.msg}"
+        ) from exc
     if node.co_names:  # pragma: no cover - defensive, every name was already substituted
         raise ModelError(f"ABI expression referenced names: {sorted(node.co_names)}")
     value = eval(node, {"__builtins__": {}}, {})  # noqa: S307 - digits and + * only
@@ -1963,45 +2218,417 @@ def evaluate_rust_arithmetic(expression: str) -> int:
     return value
 
 
-def derive_account_lengths_from_source(source: str) -> dict[str, int]:
-    body = source.split("pub mod account_len {", 1)
-    if len(body) != 2:
-        raise ModelError("codec source has no account_len module")
-    module = body[1].split("\n}\n", 1)[0]
-    derived: dict[str, int] = {}
-    for declaration in module.split("pub const ")[1:]:
-        name, _, remainder = declaration.partition(":")
-        expression, _, _rest = remainder.partition("=")[2].partition(";")
-        derived[name.strip()] = evaluate_rust_arithmetic(expression)
-    return derived
+def resolve_rust_constant(
+    name: str,
+    declarations: dict[str, str],
+    resolved: dict[str, int],
+    pending: tuple[str, ...] = (),
+) -> int:
+    """Evaluate one declared constant from the codec's own declarations, dependencies first."""
+
+    if name in resolved:
+        return resolved[name]
+    if name in pending:
+        raise ModelError(f"codec constant {name} is defined in terms of itself")
+    if name not in declarations:
+        raise UnknownRustToken(name, f"<no `const {name}` declaration in the codec source>")
+    expression = declarations[name]
+    environment: dict[str, int] = {}
+    for identifier in rust_expression_identifiers(expression):
+        environment[identifier] = resolve_rust_constant(
+            identifier, declarations, resolved, pending + (name,)
+        )
+    value = evaluate_rust_arithmetic(expression, environment)
+    resolved[name] = value
+    return value
+
+
+def resolve_expression_from_source(
+    expression: str, declarations: dict[str, str], resolved: dict[str, int]
+) -> int:
+    environment = {
+        identifier: resolve_rust_constant(identifier, declarations, resolved)
+        for identifier in rust_expression_identifiers(expression)
+    }
+    return evaluate_rust_arithmetic(expression, environment)
+
+
+def derive_identifier_values_from_source(
+    source: str,
+) -> tuple[dict[str, int], dict[str, str]]:
+    """Re-derive every pinned Rust identifier from its own declaration in the codec.
+
+    `RUST_IDENTIFIER_VALUES` is the table every codec expression is evaluated against, so a
+    stale pin there would move every derived width in lockstep and an account-level comparison
+    would not notice. Reading each name back from the crate's own declaration closes that: an
+    identifier is only ever trusted after the codec restates it, and a name the codec derives
+    from another name (`ORDER_SLOT_BYTES = 1 + PORTFOLIO_RECORD_BYTES`) is resolved from the
+    codec's value of that other name, never from the lab's pin of it.
+    """
+
+    declarations = rust_top_level_constants(strip_rust_comments(source))
+    resolved: dict[str, int] = {}
+    values: dict[str, int] = {}
+    failures: dict[str, str] = {}
+    for name in sorted(RUST_IDENTIFIER_VALUES):
+        try:
+            values[name] = resolve_rust_constant(name, declarations, resolved)
+        except ModelError as exc:
+            failures[name] = str(exc)
+    return values, failures
 
 
 def derive_pinned_identifiers_from_source(source: str) -> dict[str, int]:
-    """Re-derive every pinned Rust identifier from its own top-level declaration.
+    values, failures = derive_identifier_values_from_source(source)
+    if failures:
+        raise ModelError(
+            "codec source does not declare every pinned identifier: "
+            + "; ".join(f"{name}: {reason}" for name, reason in sorted(failures.items()))
+        )
+    return values
 
-    `RUST_IDENTIFIER_VALUES` is the substitution table every `account_len` expression is
-    evaluated against, so a stale pin there would move every derived width in lockstep and the
-    account-level comparison would not notice. Reading each name back from the crate's own
-    `pub const` line closes that: an identifier is only ever trusted after the codec restates it.
+
+def derive_account_lengths_from_source(source: str) -> dict[str, int]:
+    """Every `account_len` constant, evaluated over the codec's own identifier values."""
+
+    stripped = strip_rust_comments(source)
+    declarations = rust_top_level_constants(stripped)
+    resolved: dict[str, int] = {}
+    derived: dict[str, int] = {}
+    for name, expression in rust_module_constants(stripped, "account_len").items():
+        derived[name] = resolve_expression_from_source(expression, declarations, resolved)
+    return derived
+
+
+INTENT_ARM_PATTERN = re.compile(r"^\s*(?P<patterns>[^=]*?)\s*=>\s*(?P<value>.+?),?\s*$")
+VARIANT_PATTERN = re.compile(r"(?P<enum>Self|OrderSlot)::(?P<variant>[A-Za-z_][A-Za-z0-9_]*)")
+
+
+def derive_intent_lengths_from_source(source: str) -> dict[str, str]:
+    """Map every `Intent::encoded_len` match arm to its size expression.
+
+    A placement's width depends on which slot kind it carries, so the nested `match slot` arms
+    are keyed `PlaceOrder.Single`, `PlaceOrder.Portfolio` and so on. An arm whose value is not
+    a size expression (the nested `match` itself) contributes no width and is skipped; a pinned
+    intent whose key is therefore missing becomes a named drift entry rather than silence.
     """
 
-    derived: dict[str, int] = {}
-    for line in source.splitlines():
-        if not line.startswith("pub const "):
+    stripped = strip_rust_comments(source)
+    body = rust_block_body(
+        stripped,
+        "pub const fn encoded_len(&self) -> usize {",
+        "an `Intent::encoded_len` function",
+    )
+    arms: dict[str, str] = {}
+    outer = ""
+    for line in body.splitlines():
+        match = INTENT_ARM_PATTERN.match(line)
+        if match is None:
             continue
-        name, _, remainder = line[len("pub const ") :].partition(":")
-        if name.strip() not in RUST_IDENTIFIER_VALUES:
+        variants = VARIANT_PATTERN.findall(match.group("patterns"))
+        if not variants:
             continue
-        expression, _, _rest = remainder.partition("=")[2].partition(";")
-        derived[name.strip()] = evaluate_rust_arithmetic(expression)
-    return derived
+        value = match.group("value").strip()
+        if value.endswith("{"):
+            outer = variants[0][1] if variants[0][0] == "Self" else outer
+            continue
+        for enum_name, variant in variants:
+            key = variant if enum_name == "Self" else f"{outer}.{variant}"
+            arms[key] = value
+    return arms
+
+
+def intent_source_key(intent: dict[str, Any]) -> str:
+    variant = intent["rust_variant"]
+    kind = intent.get("rust_slot_kind")
+    return f"{variant}.{kind}" if kind else variant
+
+
+def cross_check_expression(
+    label: str,
+    expression: str,
+    declarations: dict[str, str],
+    resolved: dict[str, int],
+    drift: list[str],
+) -> int | None:
+    """Compare every identifier a codec expression references against its pin, then evaluate.
+
+    Both halves are reported. Substituting the pinned value of a referenced identifier would
+    make a lockstep move invisible: with `ORDER_SLOT_BYTES` pinned at 228 while the codec said
+    236, an `ORDER_PAGE` re-derived over the pins moved by one byte instead of 129, and the
+    audit called that no drift.
+    """
+
+    unresolved = False
+    for identifier in rust_expression_identifiers(expression):
+        try:
+            codec_value = resolve_rust_constant(identifier, declarations, resolved)
+        except ModelError as exc:
+            drift.append(f"{label} references {identifier}, which this audit cannot resolve: {exc}")
+            unresolved = True
+            continue
+        pinned = RUST_IDENTIFIER_VALUES.get(identifier)
+        if pinned is None:
+            drift.append(
+                f"{label} references {identifier}, which the cost lab does not pin: "
+                f"the codec declares it as {codec_value}; add "
+                f'"{identifier}": {codec_value} to {PIN_TABLE} and re-run abi-audit'
+            )
+        elif pinned != codec_value:
+            drift.append(
+                f"{label} references {identifier}: codec says {codec_value}, "
+                f"cost lab pins {pinned}"
+            )
+    if unresolved:
+        return None
+    try:
+        return resolve_expression_from_source(expression, declarations, resolved)
+    except ModelError as exc:
+        drift.append(f"{label}: this audit cannot evaluate the codec expression: {exc}")
+        return None
+
+
+def cross_check_terms(
+    label: str,
+    expression: str,
+    pinned: dict[str, Any],
+    terms_key: str,
+    declarations: dict[str, str],
+    resolved: dict[str, int],
+    drift: list[str],
+) -> None:
+    """Hold the pinned formula text and field terms to the codec's own decomposition."""
+
+    codec_formula = normalized_rust_expression(expression)
+    if pinned.get("formula") != codec_formula:
+        drift.append(
+            f"{label}: codec expression is `{codec_formula}`, cost lab pins "
+            f"`{pinned.get('formula')}`"
+        )
+    try:
+        codec_terms = [
+            resolve_expression_from_source(term, declarations, resolved)
+            for term in rust_additive_terms(expression)
+        ]
+    except ModelError as exc:
+        drift.append(f"{label}: this audit cannot decompose the codec expression: {exc}")
+        return
+    if pinned.get(terms_key) != codec_terms:
+        drift.append(
+            f"{label}: codec field terms are {codec_terms}, cost lab pins "
+            f"{pinned.get(terms_key)}"
+        )
+
+
+def abi_drift(constants: dict[str, Any], source: str) -> list[str]:
+    """Every way the pinned landed arm disagrees with this codec source, as named lines."""
+
+    landed = constants[ARM_LANDED]
+    bounds = landed["bounds"]
+    drift: list[str] = []
+    stripped = strip_rust_comments(source)
+    try:
+        declarations = rust_top_level_constants(stripped)
+    except ModelError as exc:  # pragma: no cover - defensive, the scanner cannot raise today
+        return [f"codec source is unreadable to this audit: {exc}"]
+    resolved: dict[str, int] = {}
+
+    identifiers, failures = derive_identifier_values_from_source(source)
+    for name, pinned in sorted(RUST_IDENTIFIER_VALUES.items()):
+        if name in failures:
+            drift.append(
+                f"{name}: the cost lab pins {pinned} and this audit cannot read it back from "
+                f"the codec ({failures[name]}); re-pin or drop the entry in {PIN_TABLE}"
+            )
+        elif identifiers[name] != pinned:
+            drift.append(f"{name}: codec says {identifiers[name]}, cost lab pins {pinned}")
+
+    for key, name in sorted(BOUNDS_IDENTIFIERS.items()):
+        if key not in bounds:
+            drift.append(
+                f"bounds.{key} is gone from constants.json and the audit still cross-checks "
+                f"it against {name}"
+            )
+            continue
+        try:
+            codec_value = resolve_rust_constant(name, declarations, resolved)
+        except ModelError as exc:
+            drift.append(f"bounds.{key}: the codec no longer declares {name} readably ({exc})")
+            continue
+        if bounds[key] != codec_value:
+            drift.append(
+                f"bounds.{key}: codec says {codec_value} for {name}, "
+                f"constants.json pins {bounds[key]}"
+            )
+
+    for key, name in sorted(BOUNDS_RECORD_TERMS.items()):
+        if name not in declarations:
+            drift.append(f"bounds.{key}: the codec no longer declares {name}")
+            continue
+        codec_terms_ok = key in bounds
+        if not codec_terms_ok:
+            drift.append(
+                f"bounds.{key} is gone from constants.json and the audit still cross-checks it "
+                f"against {name}"
+            )
+            continue
+        try:
+            codec_terms = [
+                resolve_expression_from_source(term, declarations, resolved)
+                for term in rust_additive_terms(declarations[name])
+            ]
+        except ModelError as exc:
+            drift.append(f"bounds.{key}: this audit cannot decompose {name}: {exc}")
+            continue
+        if bounds[key] != codec_terms:
+            drift.append(
+                f"bounds.{key}: codec field terms for {name} are {codec_terms}, "
+                f"constants.json pins {bounds[key]}"
+            )
+
+    try:
+        lengths = rust_module_constants(stripped, "account_len")
+    except ModelError as exc:
+        drift.append(f"account_len is unreadable to this audit: {exc}")
+        lengths = {}
+    try:
+        versions = rust_module_constants(stripped, "account_version")
+    except ModelError as exc:
+        drift.append(f"account_version is unreadable to this audit: {exc}")
+        versions = {}
+
+    for name in LANDED_ACCOUNT_ORDER:
+        account = landed["accounts"][name]
+        rust_name = account["rust_const"].split("::", 1)[1]
+        if rust_name not in lengths:
+            drift.append(f"{name}: {account['rust_const']} is gone from the codec")
+        else:
+            derived = cross_check_expression(
+                account["rust_const"], lengths[rust_name], declarations, resolved, drift
+            )
+            if derived is not None and derived != account["bytes"]:
+                drift.append(
+                    f"{name}: codec says {derived} bytes, cost lab pins {account['bytes']}"
+                )
+            cross_check_terms(
+                account["rust_const"],
+                lengths[rust_name],
+                account,
+                "field_terms",
+                declarations,
+                resolved,
+                drift,
+            )
+        if rust_name not in versions:
+            drift.append(f"{name}: account_version::{rust_name} is gone from the codec")
+        else:
+            derived_version = cross_check_expression(
+                f"account_version::{rust_name}", versions[rust_name], declarations, resolved, drift
+            )
+            if derived_version is not None and derived_version != account["schema_version"]:
+                drift.append(
+                    f"{name}: codec writes schema version {derived_version}, "
+                    f"cost lab pins {account['schema_version']}"
+                )
+        tag_name = f"{rust_name}_TAG"
+        if tag_name not in declarations:
+            drift.append(f"{name}: the codec has no `const {tag_name}` discriminator")
+        else:
+            derived_tag = cross_check_expression(
+                tag_name, declarations[tag_name], declarations, resolved, drift
+            )
+            if derived_tag is not None and derived_tag != account["discriminator_tag"]:
+                drift.append(
+                    f"{name}: codec discriminator {tag_name} is {derived_tag}, "
+                    f"cost lab pins {account['discriminator_tag']}"
+                )
+
+    extra = set(lengths) - {
+        landed["accounts"][name]["rust_const"].split("::", 1)[1] for name in LANDED_ACCOUNT_ORDER
+    }
+    for name in sorted(extra):
+        drift.append(f"account_len::{name} exists in the codec and is absent from the cost lab")
+
+    try:
+        arms = derive_intent_lengths_from_source(source)
+    except ModelError as exc:
+        drift.append(f"Intent::encoded_len is unreadable to this audit: {exc}")
+        arms = {}
+    widest = 0
+    for name in LANDED_INTENT_ORDER:
+        intent = landed["intents"][name]
+        unpinned = [key for key in ("rust_variant", "rust_tag_const") if key not in intent]
+        if unpinned:
+            drift.append(
+                f"intent {name}: constants.json pins no {' or '.join(unpinned)}, so this audit "
+                "cannot read the intent back from the codec at all"
+            )
+            continue
+        key = intent_source_key(intent)
+        if key not in arms:
+            drift.append(
+                f"intent {name}: the codec has no readable `Intent::{key}` encoded_len arm, so "
+                "this audit cannot verify its width; re-pin rust_variant/rust_slot_kind in "
+                "benchmarks/constants.json"
+            )
+        else:
+            derived = cross_check_expression(
+                f"Intent::{key} encoded_len", arms[key], declarations, resolved, drift
+            )
+            if derived is not None and derived != intent["bytes"]:
+                drift.append(
+                    f"intent {name}: codec says {derived} bytes, cost lab pins {intent['bytes']}"
+                )
+            cross_check_terms(
+                f"Intent::{key} encoded_len",
+                arms[key],
+                intent,
+                "field_terms",
+                declarations,
+                resolved,
+                drift,
+            )
+        tag_name = intent["rust_tag_const"]
+        if tag_name not in declarations:
+            drift.append(f"intent {name}: the codec has no `const {tag_name}` discriminator")
+        else:
+            derived_tag = cross_check_expression(
+                tag_name, declarations[tag_name], declarations, resolved, drift
+            )
+            if derived_tag is not None and derived_tag != intent["intent_tag"]:
+                drift.append(
+                    f"intent {name}: codec discriminator {tag_name} is {derived_tag}, "
+                    f"cost lab pins {intent['intent_tag']}"
+                )
+        pinned_version = bounds.get("intent_version")
+        if pinned_version is not None and intent["intent_version"] != pinned_version:
+            drift.append(
+                f"intent {name}: pinned version {intent['intent_version']} is not the pinned "
+                f"INTENT_VERSION {pinned_version}"
+            )
+    for key, expression in sorted(arms.items()):
+        try:
+            widest = max(widest, resolve_expression_from_source(expression, declarations, resolved))
+        except ModelError as exc:
+            drift.append(f"Intent::{key} encoded_len is not a size expression to this audit: {exc}")
+    ceiling = identifiers.get("MAX_INTENT_BYTES")
+    if arms and ceiling is not None and widest != ceiling:
+        drift.append(
+            "MAX_INTENT_BYTES is not the widest admitted intent: the widest encoded_len arm is "
+            f"{widest} and the codec declares the ceiling as {ceiling}"
+        )
+    return drift
+
+
+def landed_codec_path(constants: dict[str, Any]) -> Path:
+    return REPO_ROOT / constants[ARM_LANDED]["source"]["codec_path"]
 
 
 def abi_audit(constants: dict[str, Any]) -> tuple[list[str], list[str]]:
     """Compare the pinned landed arm against the codec on disk. Not part of golden closure."""
 
     landed = constants[ARM_LANDED]
-    source_path = REPO_ROOT / landed["source"]["codec_path"]
+    source_path = landed_codec_path(constants)
     notes = [f"pinned commit: {landed['source']['commit']}"]
     if not source_path.is_file():
         return notes + [f"codec source not present at {source_path}; audit skipped"], []
@@ -2014,34 +2641,35 @@ def abi_audit(constants: dict[str, Any]) -> tuple[list[str], list[str]]:
             "working-tree codec digest differs from the pinned blob "
             f"({digest}); widths are re-derived below"
         )
-    drift: list[str] = []
-    identifiers = derive_pinned_identifiers_from_source(source)
-    for name, pinned in sorted(RUST_IDENTIFIER_VALUES.items()):
-        if name not in identifiers:
-            drift.append(f"{name} is gone from the codec and the cost lab still pins it")
-        elif identifiers[name] != pinned:
-            drift.append(
-                f"{name}: codec says {identifiers[name]}, cost lab pins {pinned}"
-            )
-    derived = derive_account_lengths_from_source(source)
-    for name in LANDED_ACCOUNT_ORDER:
-        account = landed["accounts"][name]
-        rust_name = account["rust_const"].split("::", 1)[1]
-        if rust_name not in derived:
-            drift.append(f"{name}: {account['rust_const']} is gone from the codec")
+    drift = abi_drift(constants, source)
+    for key, path_key in (
+        ("relation_blob_sha256_at_commit", "relation_path"),
+        ("relation_v1_blob_sha256_at_commit", "relation_v1_path"),
+    ):
+        relation_path = REPO_ROOT / landed["source"][path_key]
+        if not relation_path.is_file():
+            drift.append(f"{landed['source'][path_key]} is gone and the arm still pins its bounds")
             continue
-        if derived[rust_name] != account["bytes"]:
+        relation_digest = sha256_bytes(relation_path.read_bytes())
+        if relation_digest != landed["source"][key]:
             drift.append(
-                f"{name}: codec says {derived[rust_name]} bytes, cost lab pins {account['bytes']}"
+                f"{landed['source'][path_key]}: blob moved to {relation_digest}; this audit does "
+                "not re-derive relation bounds, so re-verify them by hand and re-pin the digest"
             )
-    extra = set(derived) - {
-        landed["accounts"][name]["rust_const"].split("::", 1)[1] for name in LANDED_ACCOUNT_ORDER
-    }
-    for name in sorted(extra):
-        drift.append(f"account_len::{name} exists in the codec and is absent from the cost lab")
+    counted = []
+    for label, reader in (
+        ("pinned identifiers", lambda: derive_identifier_values_from_source(source)[0]),
+        ("account_len constants", lambda: derive_account_lengths_from_source(source)),
+        ("Intent::encoded_len arms", lambda: derive_intent_lengths_from_source(source)),
+    ):
+        try:
+            counted.append(f"{len(reader())} {label}")
+        except ModelError:
+            counted.append(f"no readable {label}")
+    notes.append("re-derived " + ", ".join(counted) + " from the codec source")
     notes.append(
-        f"re-derived {len(identifiers)} pinned identifiers and {len(derived)} account_len "
-        "constants from the codec source"
+        "relation bounds are pinned from crates/clutch-batch and are not re-derived here; "
+        "their blob digests are checked instead"
     )
     return notes, drift
 
@@ -2071,7 +2699,15 @@ def main(argv: list[str] | None = None) -> int:
         for item in drift:
             print(f"drift: {item}")
         if drift:
-            raise ModelError("landed ABI arm is stale; re-pin constants.json and regenerate")
+            raise ModelError(
+                f"landed ABI arm is stale: {len(drift)} drift "
+                f"{'line' if len(drift) == 1 else 'lines'} above, each naming what moved; re-pin "
+                "benchmarks/constants.json (and RUST_IDENTIFIER_VALUES where a line says so) and "
+                "regenerate the goldens"
+            )
+        if not landed_codec_path(constants).is_file():
+            print("abi-audit skipped: the pinned codec source is not present in this checkout")
+            return 0
         print("abi-audit passed: landed arm equals the codec on disk")
         return 0
     rows = generate_rows(constants)
