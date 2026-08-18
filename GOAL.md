@@ -64,9 +64,16 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
   flags stand (forked FRI w/ unmerged fix, restricted-license vendor).
   EMBER DECISION QUEUED: one paid Bedrock session would produce the first
   D-grade provider-attested transcript.
-- In flight: Draft 7 rebalance, open-matters map, closing drift review,
-  B-conversion suite re-run on persvati, operatorless-agents memo + IAC
-  addendum candidate.
+- OPEN-MATTERS MAP landed: IAC agenda published (Session II = agentic
+  finance - our addendum answers a printed heading); FalconX CEO +
+  Chainlink founder are IAC members; 24/7-perpetuals RFC due Aug 26 asks
+  for our manipulation-cost material verbatim (EMBER: go/no-go within
+  ~24h); on-point event-contract reporting NPRM closed Jul 31, missed -
+  standing watch established; pushed.
+- B-CONVERSION landed: 86 attestation tests reproduced green on pinned
+  tree (persvati, 213s); Lean-emit caveat recorded; pushed.
+- In flight: Draft 7 rebalance, closing drift review, operatorless memo
+  + IAC addendum candidate.
 - D1: independent FBA oracle, 300M-case differential, zero semantic
   divergences, vectors byte-identical; spec gap (refusal-class priority)
   found and pinned; pushed.
