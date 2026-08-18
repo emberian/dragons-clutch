@@ -16,6 +16,20 @@
 //! state needed to expose the missing semantic seams. Their layouts are not a
 //! deployment ABI.
 //!
+//! # Multi-position closure is inductive, not scanned
+//!
+//! Aggregate closure follows CLO-DELTA-V1
+//! (`docs/implementation/MULTI_POSITION_CLOSURE.md`): the supply ledger is the
+//! only counted truth, every transition moves it by exactly the delta it
+//! applies to the one presented position triple, a position enters the system
+//! only provably zero ([`validate_position_init`]), and the per-transition
+//! checks are the ledger's two-term closure against the kernel aggregate plus
+//! a one-sided bound of the presented triple by the ledger terms. The full
+//! `sum over positions == ledger` invariant is a theorem about histories;
+//! that every position's history goes through these transitions is the
+//! runtime's obligation (PDA uniqueness, ownership, write locks), named in
+//! `SOLANA_REFERENCE_ADAPTER.md` obligations 1 through 3 and 9.
+//!
 //! # Resolution is evidence-gated, not authenticated
 //!
 //! `Action::Resolve` and `Action::RedeemInternal` no longer refuse
@@ -164,7 +178,17 @@ pub enum Error {
     WrongBump,
     /// Account identities, generations, phases, or immutable fields disagreed.
     MismatchedState,
-    /// The closed reference model's one position did not equal aggregate supply.
+    /// A presented position exceeded, or the supply ledger disagreed with, the
+    /// market aggregate it must be represented in.
+    ///
+    /// Raised by the CLO-DELTA-V1 closure checks of
+    /// `docs/implementation/MULTI_POSITION_CLOSURE.md`: the ledger's two terms
+    /// must sum to the kernel aggregate per outcome, and the presented
+    /// position's internal and external balances must each be bounded by the
+    /// matching ledger term. The full multi-position sum invariant is
+    /// inductive — zero at initialization, preserved by the checked delta
+    /// write-back — so this class is what a counterfeit claim, a tampered
+    /// ledger, or a diverging aggregate effect refuses with.
     AggregateClosureMismatch,
     /// Market initialization contained pre-existing claims or a closing position.
     NonEmptyInitialization,
@@ -870,6 +894,58 @@ pub fn validate_market_init(
     Ok(())
 }
 
+/// Validate that a position triple enters an existing market provably zero.
+///
+/// This is the base case C0 of the multi-position closure scheme
+/// (`docs/implementation/MULTI_POSITION_CLOSURE.md`): the represented-balances
+/// invariant `sum over positions == ledger term` is inductive, so a position
+/// (with its external shadow and replay accounts) may join the set it ranges
+/// over only in the state that leaves every sum unchanged. Like
+/// [`validate_market_init`], this validates and does not authorize or execute
+/// creation; who may create a position, and that these bytes are the ones a
+/// fresh account actually holds, are runtime facts
+/// (`SOLANA_REFERENCE_ADAPTER.md` obligations 1 through 3).
+///
+/// The market-wide accounts (market, hoard, kernel, supply ledger) are
+/// presented mid-life and checked for linkage, padding, closure, and kernel
+/// invariants, not emptiness. The triple itself must be all zero: internal
+/// balances, external shadow balances, position cash and reserved cash, replay
+/// sequence, and an open close-state, with the three accounts mutually bound
+/// to one owner and one generation. A market that is no longer active refuses:
+/// new positions in a resolved market are outside this reference subset.
+pub fn validate_position_init(
+    state: StateBytes<'_>,
+    metadata: &TransitionMetadata,
+    bindings: &ExpectedBindings,
+) -> Result<()> {
+    validate_metadata(metadata, bindings, false)?;
+    let decoded = DecodedState::decode(state)?;
+    validate_links(&decoded, bindings)?;
+    validate_padding(&decoded)?;
+    validate_aggregate_closure(&decoded)?;
+    let pure = kernel_market(&decoded)?;
+    pure.check_invariants()?;
+    if decoded.market.lifecycle != 0 || decoded.kernel.phase != 0 {
+        return Err(Error::MismatchedState);
+    }
+    let DecodedState {
+        position,
+        external,
+        replay,
+        ..
+    } = &decoded;
+    if position.close_state != 0
+        || position.internal.iter().any(|amount| *amount != 0)
+        || position.cash_atoms != 0
+        || position.reserved_cash_atoms != 0
+        || external.balances.iter().any(|amount| *amount != 0)
+        || replay.sequence != 0
+    {
+        return Err(Error::NonEmptyInitialization);
+    }
+    Ok(())
+}
+
 /// Refuse a Realm profile whose collateral policy digest is not frozen.
 ///
 /// `docs/implementation/RESOLUTION_EVIDENCE_PLAN.md` §3.4 records that the
@@ -1108,10 +1184,15 @@ fn apply_inner(
         }
     };
     decoded.hoard.collateral_atoms = pure_market.collateral;
+    apply_position_delta_to_ledger(
+        &mut decoded.supply,
+        decoded.market.outcome_count,
+        &decoded.position.internal,
+        &decoded.external.balances,
+        &pure_position,
+    )?;
     decoded.position.internal = pure_position.internal;
     decoded.external.balances = pure_position.external;
-    decoded.supply.internal_supply = pure_position.internal;
-    decoded.supply.external_supply = pure_position.external;
     decoded.kernel.phase = match pure_market.phase {
         Phase::Active => 0,
         Phase::Resolved => 1,
@@ -1506,6 +1587,17 @@ fn validate_evidence_metadata(
     Ok(())
 }
 
+/// Cross-account identity, bump, and lifecycle linkage.
+///
+/// `position.generation` is the per-position close/reopen era and stays bound
+/// to the triple: the external shadow and replay accounts must carry it
+/// exactly. `supply.generation` is the market accounting era and is
+/// deliberately *not* identified with any position's generation (the retired
+/// closed single-position model equated the two): the reference admits one
+/// era per ledger lifetime — no instruction writes it — and the proposed SVM
+/// rule derives the ledger PDA from the market with no close path, so an era
+/// bump is structurally impossible. See
+/// `docs/implementation/MULTI_POSITION_CLOSURE.md` §4.
 fn validate_links(state: &DecodedState, bindings: &ExpectedBindings) -> Result<()> {
     let DecodedState {
         market,
@@ -1535,7 +1627,6 @@ fn validate_links(state: &DecodedState, bindings: &ExpectedBindings) -> Result<(
         || market.market != supply.market
         || market.realm != supply.realm
         || market.outcome_count != supply.outcome_count
-        || position.generation != supply.generation
         || position.owner != external.owner
         || position.owner != replay.owner
         || position.generation != external.position_generation
@@ -1569,23 +1660,32 @@ fn validate_padding(state: &DecodedState) -> Result<()> {
     Ok(())
 }
 
-/// The closed single-position equality, now against the two-term ledger.
+/// The multi-position closure checks C1 and C2 of CLO-DELTA-V1.
 ///
 /// [`SupplyLedgerAccount`] persists the market-wide aggregate as the two terms
 /// whose sum it is: claims still credited internally and claims materialized
-/// outside the internal ledger and accounted for. The reference model is still
-/// deliberately closed and single-position, so this checks all three of:
+/// outside the internal ledger and accounted for. Under
+/// `docs/implementation/MULTI_POSITION_CLOSURE.md` this checks, per active
+/// outcome, both of:
 ///
 /// ```text
-/// supply.internal[o] + supply.external[o] == kernel.total_supply[o]
-/// position.internal[o]                    == supply.internal[o]
-/// external.balances[o]                    == supply.external[o]
+/// C1  supply.internal[o] + supply.external[o] == kernel.total_supply[o]
+/// C2  position.internal[o] <= supply.internal[o]
+///     external.balances[o] <= supply.external[o]
 /// ```
 ///
-/// The first is the ledger's own two-term closure and would hold for any number
-/// of positions. The second and third are the single-position identification,
-/// and they are the part a multi-position design must replace with a checked
-/// aggregate-closure witness rather than relax.
+/// C1 is the ledger's own two-term closure and holds for any number of
+/// positions. C2 replaces the retired closed single-position equalities: it is
+/// the part of the represented-balances invariant
+/// `sum over positions == ledger term` that one transition can check about the
+/// one triple it sees. The full sum invariant is inductive — established at
+/// initialization ([`validate_market_init`], [`validate_position_init`]) and
+/// preserved by the checked delta write-back
+/// ([`apply_position_delta_to_ledger`]) — never scanned. The bound is
+/// deliberately one-sided: a ledger term exceeding the presented position is
+/// another position's business (or stranded, conservatively locked claims),
+/// while a position exceeding the ledger term is a counterfeit claim and
+/// refuses.
 fn validate_aggregate_closure(state: &DecodedState) -> Result<()> {
     let DecodedState {
         market,
@@ -1604,11 +1704,47 @@ fn validate_aggregate_closure(state: &DecodedState) -> Result<()> {
         if aggregate != kernel.total_supply[outcome] {
             return Err(Error::AggregateClosureMismatch);
         }
-        if position.internal[outcome] != supply.internal_supply[outcome]
-            || external.balances[outcome] != supply.external_supply[outcome]
+        if position.internal[outcome] > supply.internal_supply[outcome]
+            || external.balances[outcome] > supply.external_supply[outcome]
         {
             return Err(Error::AggregateClosureMismatch);
         }
+        outcome += 1;
+    }
+    Ok(())
+}
+
+/// The inductive step C3 of CLO-DELTA-V1: `ledger' = ledger - pre + post`.
+///
+/// The ledger is never overwritten with the presented position; it is moved by
+/// exactly the delta the transition applied to that position, per term, per
+/// active outcome, with checked arithmetic. Padding beyond the active outcome
+/// count is untouched (it is validated zero on both sides). An underflow means
+/// the position exceeded the ledger term it must be represented in — a closure
+/// violation, unreachable after the C2 pre-check — and an overflow means the
+/// ledger term left `u64`. Together with the two-term closure re-checked over
+/// the post-state, this forces the kernel's aggregate supply effect to equal
+/// its per-position effect: a divergence refuses rather than corrupting the
+/// ledger.
+fn apply_position_delta_to_ledger(
+    supply: &mut SupplyLedgerAccount,
+    outcome_count: u8,
+    pre_internal: &[u64; MAX_OUTCOMES],
+    pre_external: &[u64; MAX_OUTCOMES],
+    post: &Position,
+) -> Result<()> {
+    let mut outcome = 0_usize;
+    while outcome < usize::from(outcome_count) {
+        supply.internal_supply[outcome] = supply.internal_supply[outcome]
+            .checked_sub(pre_internal[outcome])
+            .ok_or(Error::AggregateClosureMismatch)?
+            .checked_add(post.internal[outcome])
+            .ok_or(Error::Arithmetic)?;
+        supply.external_supply[outcome] = supply.external_supply[outcome]
+            .checked_sub(pre_external[outcome])
+            .ok_or(Error::AggregateClosureMismatch)?
+            .checked_add(post.external[outcome])
+            .ok_or(Error::Arithmetic)?;
         outcome += 1;
     }
     Ok(())
@@ -2147,6 +2283,113 @@ mod tests {
         .unwrap()
     }
 
+    /// A second owner's position/external/replay triple joined to the
+    /// fixture's market-wide accounts, with its own keys, bumps, owner, and a
+    /// generation (5) that deliberately differs from the supply ledger's era
+    /// (2), pinning the CLO-DELTA-V1 decoupling.
+    fn second_triple(
+        f: &Fixture,
+        cash_atoms: u64,
+    ) -> (TransitionOutput, TransitionMetadata, ExpectedBindings) {
+        let market_id = MarketAccount::decode(&f.state.market).unwrap().market;
+        let owner = h(32);
+        let position = PositionAccount {
+            market: market_id,
+            owner,
+            generation: 5,
+            internal: [0; MAX_OUTCOMES],
+            cash_atoms,
+            reserved_cash_atoms: 0,
+            stored_bump: 11,
+            close_state: 0,
+        };
+        let external = ExternalAccount {
+            market: market_id,
+            owner,
+            position_generation: 5,
+            balances: [0; MAX_OUTCOMES],
+            stored_bump: 12,
+            flags: 0,
+        };
+        let replay = ReplayAccount {
+            market: market_id,
+            owner,
+            position_generation: 5,
+            sequence: 0,
+            stored_bump: 13,
+            flags: 0,
+        };
+        let mut state = f.state.clone();
+        position.encode(&mut state.position).unwrap();
+        external.encode(&mut state.external).unwrap();
+        replay.encode(&mut state.replay).unwrap();
+        let mut metadata = f.metadata;
+        metadata.position.key = h(61);
+        metadata.external.key = h(62);
+        metadata.replay.key = h(63);
+        metadata.actor = ActorMetadata {
+            key: owner,
+            signer: true,
+        };
+        let mut bindings = f.bindings;
+        bindings.position = h(61);
+        bindings.external = h(62);
+        bindings.replay = h(63);
+        bindings.position_bump = 11;
+        bindings.external_bump = 12;
+        bindings.replay_bump = 13;
+        (state, metadata, bindings)
+    }
+
+    /// Copy the market-wide accounts (market, hoard, kernel, supply ledger)
+    /// from one owner's transition output into another owner's working state.
+    fn sync_shared(from: &TransitionOutput, to: &mut TransitionOutput) {
+        to.market = from.market;
+        to.hoard = from.hoard;
+        to.kernel = from.kernel;
+        to.supply = from.supply;
+    }
+
+    fn apply_layout(
+        state: &TransitionOutput,
+        metadata: &TransitionMetadata,
+        bindings: &ExpectedBindings,
+        sequence: u64,
+        intent: Intent,
+    ) -> Result<TransitionOutput> {
+        let request = layout_request(sequence, intent);
+        apply(
+            &request[..layout_request_len(&request)],
+            state_bytes(state),
+            metadata,
+            bindings,
+        )
+    }
+
+    /// The test-side scan the adapter never performs: the ledger terms must
+    /// equal the componentwise sums over the known triples, and the two-term
+    /// aggregate must equal the kernel supply.
+    fn assert_ledger_is_position_sum(shared: &TransitionOutput, triples: &[&TransitionOutput]) {
+        let ledger = SupplyLedgerAccount::decode(&shared.supply).unwrap();
+        let kernel = KernelAccount::decode(&shared.kernel).unwrap();
+        let mut outcome = 0_usize;
+        while outcome < 2 {
+            let mut internal = 0_u64;
+            let mut external = 0_u64;
+            for triple in triples {
+                internal += PositionAccount::decode(&triple.position).unwrap().internal[outcome];
+                external += ExternalAccount::decode(&triple.external).unwrap().balances[outcome];
+            }
+            assert_eq!(ledger.internal_supply[outcome], internal);
+            assert_eq!(ledger.external_supply[outcome], external);
+            assert_eq!(
+                ledger.aggregate_supply(outcome as u8),
+                Ok(kernel.total_supply[outcome])
+            );
+            outcome += 1;
+        }
+    }
+
     #[test]
     fn initialized_market_validation_runs_kernel_invariants() {
         let mut f = fixture();
@@ -2423,6 +2666,638 @@ mod tests {
             }
             quantity += 1;
         }
+    }
+
+    #[test]
+    fn multi_position_lifecycle_tracks_ledger_sums() {
+        let f = fixture();
+        let market = MarketAccount::decode(&f.state.market).unwrap().market;
+        let owner_a = PositionAccount::decode(&f.state.position).unwrap().owner;
+        let (b_start, metadata_b, bindings_b) = second_triple(&f, 100);
+        let owner_b = PositionAccount::decode(&b_start.position).unwrap().owner;
+
+        // A splits 20 against the shared market-wide accounts.
+        let a = split_state(&f, 20);
+        let mut b = b_start.clone();
+        sync_shared(&a, &mut b);
+
+        // B splits 5 against the same evolving aggregate. B's generation (5)
+        // differs from the ledger era (2): the retired single-position
+        // identification is gone and the triple still validates.
+        let b = apply_layout(
+            &b,
+            &metadata_b,
+            &bindings_b,
+            0,
+            Intent::Split {
+                market,
+                owner: owner_b,
+                quantity: 5,
+            },
+        )
+        .unwrap();
+        let mut a = a;
+        sync_shared(&b, &mut a);
+        assert_ledger_is_position_sum(&b, &[&a, &b]);
+        assert_eq!(HoardAccount::decode(&b.hoard).unwrap().collateral_atoms, 25);
+
+        // A materializes 7 of outcome 1: the ledger terms move by exactly A's
+        // delta while B's holdings stay represented.
+        let a = apply_layout(
+            &a,
+            &f.metadata,
+            &f.bindings,
+            1,
+            Intent::Materialize {
+                market,
+                owner: owner_a,
+                destination: f.metadata.external.key,
+                outcome: 1,
+                quantity: 7,
+            },
+        )
+        .unwrap();
+        let mut b = b;
+        sync_shared(&a, &mut b);
+        assert_ledger_is_position_sum(&a, &[&a, &b]);
+        let ledger = SupplyLedgerAccount::decode(&a.supply).unwrap();
+        assert_eq!(ledger.internal_supply[1], 18);
+        assert_eq!(ledger.external_supply[1], 7);
+
+        // A dematerializes the 7 back; the aggregate is unchanged throughout.
+        let a = apply_layout(
+            &a,
+            &f.metadata,
+            &f.bindings,
+            2,
+            Intent::Dematerialize {
+                market,
+                owner: owner_a,
+                source: f.metadata.external.key,
+                outcome: 1,
+                quantity: 7,
+            },
+        )
+        .unwrap();
+        sync_shared(&a, &mut b);
+        assert_ledger_is_position_sum(&a, &[&a, &b]);
+
+        // Resolve payout 1 through A's triple; sums are untouched.
+        let (window, len) = encode_window(&f.window_spec(), &winning_records());
+        let a = apply_with_evidence(
+            &resolve_request(3, 1),
+            state_bytes(&a),
+            &ResolutionEvidence {
+                bytes: EvidenceBytes {
+                    terms: &f.terms,
+                    resolution: &f.resolution,
+                    window: &window[..len],
+                },
+                metadata: f.evidence_metadata,
+                bindings: f.evidence_bindings,
+                feed_cursor: FEED_CURSOR,
+                resolved_slot: RESOLVED_SLOT,
+            },
+            &f.metadata,
+            &f.bindings,
+        )
+        .unwrap();
+        let record = a.resolution.unwrap();
+        sync_shared(&a, &mut b);
+        assert_ledger_is_position_sum(&a, &[&a, &b]);
+
+        let mut readonly = f.evidence_metadata;
+        readonly.resolution.writable = false;
+
+        // A redeems its 20 winning claims; B's 5 stay represented.
+        let a = apply_with_evidence(
+            &redeem_request(4, 1, 20),
+            state_bytes(&a),
+            &ResolutionEvidence {
+                bytes: EvidenceBytes {
+                    terms: &f.terms,
+                    resolution: &record,
+                    window: &[],
+                },
+                metadata: readonly,
+                bindings: f.evidence_bindings,
+                feed_cursor: FEED_CURSOR,
+                resolved_slot: RESOLVED_SLOT,
+            },
+            &f.metadata,
+            &f.bindings,
+        )
+        .unwrap();
+        assert_eq!(a.redemption_payout, 20);
+        sync_shared(&a, &mut b);
+        assert_ledger_is_position_sum(&a, &[&a, &b]);
+        assert_eq!(
+            SupplyLedgerAccount::decode(&a.supply)
+                .unwrap()
+                .internal_supply[1],
+            5
+        );
+
+        // B redeems its 5: the winning aggregate drains to zero exactly.
+        let b = apply_with_evidence(
+            &redeem_request(1, 1, 5),
+            state_bytes(&b),
+            &ResolutionEvidence {
+                bytes: EvidenceBytes {
+                    terms: &f.terms,
+                    resolution: &record,
+                    window: &[],
+                },
+                metadata: readonly,
+                bindings: f.evidence_bindings,
+                feed_cursor: FEED_CURSOR,
+                resolved_slot: RESOLVED_SLOT,
+            },
+            &metadata_b,
+            &bindings_b,
+        )
+        .unwrap();
+        assert_eq!(b.redemption_payout, 5);
+        let mut a = a;
+        sync_shared(&b, &mut a);
+        assert_ledger_is_position_sum(&b, &[&a, &b]);
+        let ledger = SupplyLedgerAccount::decode(&b.supply).unwrap();
+        assert_eq!(ledger.internal_supply[1], 0);
+        assert_eq!(KernelAccount::decode(&b.kernel).unwrap().total_supply[1], 0);
+        assert_eq!(HoardAccount::decode(&b.hoard).unwrap().collateral_atoms, 0);
+        // The losing outcome's claims remain outstanding and represented.
+        assert_eq!(ledger.internal_supply[0], 25);
+    }
+
+    #[test]
+    fn position_init_forgery_refuses() {
+        let f = fixture();
+        let market = MarketAccount::decode(&f.state.market).unwrap().market;
+        let owner_a = PositionAccount::decode(&f.state.position).unwrap().owner;
+
+        // Mid-life market: A holds 20 split claims, 3 of them materialized,
+        // so both ledger terms are nonzero.
+        let a = split_state(&f, 20);
+        let a = apply_layout(
+            &a,
+            &f.metadata,
+            &f.bindings,
+            1,
+            Intent::Materialize {
+                market,
+                owner: owner_a,
+                destination: f.metadata.external.key,
+                outcome: 0,
+                quantity: 3,
+            },
+        )
+        .unwrap();
+        let (mut b, metadata_b, bindings_b) = second_triple(&f, 0);
+        sync_shared(&a, &mut b);
+
+        // A provably-zero triple joins.
+        assert_eq!(
+            validate_position_init(state_bytes(&b), &metadata_b, &bindings_b),
+            Ok(())
+        );
+
+        // Every nonzero field of the entering triple refuses, even when the
+        // ledger would cover the forged claims.
+        let mut internal = b.clone();
+        let mut position = PositionAccount::decode(&internal.position).unwrap();
+        position.internal[0] = 1;
+        position.encode(&mut internal.position).unwrap();
+        assert_eq!(
+            validate_position_init(state_bytes(&internal), &metadata_b, &bindings_b),
+            Err(Error::NonEmptyInitialization)
+        );
+
+        let mut external = b.clone();
+        let mut shadow = ExternalAccount::decode(&external.external).unwrap();
+        shadow.balances[0] = 1;
+        shadow.encode(&mut external.external).unwrap();
+        assert_eq!(
+            validate_position_init(state_bytes(&external), &metadata_b, &bindings_b),
+            Err(Error::NonEmptyInitialization)
+        );
+
+        let mut cash = b.clone();
+        let mut position = PositionAccount::decode(&cash.position).unwrap();
+        position.cash_atoms = 1;
+        position.encode(&mut cash.position).unwrap();
+        assert_eq!(
+            validate_position_init(state_bytes(&cash), &metadata_b, &bindings_b),
+            Err(Error::NonEmptyInitialization)
+        );
+
+        // Reserved cash cannot exceed total cash at the codec, so the
+        // encodable reserved forgery carries both; init refuses it whole.
+        let mut reserved = b.clone();
+        let mut position = PositionAccount::decode(&reserved.position).unwrap();
+        position.cash_atoms = 1;
+        position.reserved_cash_atoms = 1;
+        position.encode(&mut reserved.position).unwrap();
+        assert_eq!(
+            validate_position_init(state_bytes(&reserved), &metadata_b, &bindings_b),
+            Err(Error::NonEmptyInitialization)
+        );
+
+        let mut sequence = b.clone();
+        let mut replay = ReplayAccount::decode(&sequence.replay).unwrap();
+        replay.sequence = 1;
+        replay.encode(&mut sequence.replay).unwrap();
+        assert_eq!(
+            validate_position_init(state_bytes(&sequence), &metadata_b, &bindings_b),
+            Err(Error::NonEmptyInitialization)
+        );
+
+        let mut closing = b.clone();
+        let mut position = PositionAccount::decode(&closing.position).unwrap();
+        position.close_state = 1;
+        position.encode(&mut closing.position).unwrap();
+        assert_eq!(
+            validate_position_init(state_bytes(&closing), &metadata_b, &bindings_b),
+            Err(Error::NonEmptyInitialization)
+        );
+
+        // Entering claims exceeding the ledger term refuse as counterfeits
+        // before the emptiness check is even reached.
+        let mut counterfeit = b.clone();
+        let mut position = PositionAccount::decode(&counterfeit.position).unwrap();
+        position.internal[0] = 18;
+        position.encode(&mut counterfeit.position).unwrap();
+        assert_eq!(
+            validate_position_init(state_bytes(&counterfeit), &metadata_b, &bindings_b),
+            Err(Error::AggregateClosureMismatch)
+        );
+
+        // A resolved market admits no new positions.
+        let (window, len) = encode_window(&f.window_spec(), &winning_records());
+        let resolved = apply_with_evidence(
+            &resolve_request(2, 1),
+            state_bytes(&a),
+            &ResolutionEvidence {
+                bytes: EvidenceBytes {
+                    terms: &f.terms,
+                    resolution: &f.resolution,
+                    window: &window[..len],
+                },
+                metadata: f.evidence_metadata,
+                bindings: f.evidence_bindings,
+                feed_cursor: FEED_CURSOR,
+                resolved_slot: RESOLVED_SLOT,
+            },
+            &f.metadata,
+            &f.bindings,
+        )
+        .unwrap();
+        let mut late = b.clone();
+        sync_shared(&resolved, &mut late);
+        assert_eq!(
+            validate_position_init(state_bytes(&late), &metadata_b, &bindings_b),
+            Err(Error::MismatchedState)
+        );
+    }
+
+    #[test]
+    fn generation_replay_after_close_reopen_refuses() {
+        let f = fixture();
+        let market = MarketAccount::decode(&f.state.market).unwrap().market;
+        let owner = PositionAccount::decode(&f.state.position).unwrap().owner;
+        let a = split_state(&f, 20);
+
+        // Reopen: the position restarts zeroed at generation 3, but the
+        // external shadow and replay accounts are still the retired
+        // generation's. The triple binding refuses.
+        let mut reopened = a.clone();
+        let mut position = PositionAccount::decode(&reopened.position).unwrap();
+        position.generation = 3;
+        position.internal = [0; MAX_OUTCOMES];
+        position.cash_atoms = 0;
+        position.reserved_cash_atoms = 0;
+        position.encode(&mut reopened.position).unwrap();
+        assert_eq!(
+            validate_position_init(state_bytes(&reopened), &f.metadata, &f.bindings),
+            Err(Error::MismatchedState)
+        );
+        assert_eq!(
+            apply_layout(
+                &reopened,
+                &f.metadata,
+                &f.bindings,
+                0,
+                Intent::Split {
+                    market,
+                    owner,
+                    quantity: 1,
+                },
+            ),
+            Err(Error::MismatchedState)
+        );
+
+        // A fresh external and replay at generation 3 complete the reopen.
+        // The retired position's 20 claims stay counted in the ledger — the
+        // conservative over-count — and the zeroed triple still validates.
+        let mut shadow = ExternalAccount::decode(&reopened.external).unwrap();
+        shadow.position_generation = 3;
+        shadow.balances = [0; MAX_OUTCOMES];
+        shadow.encode(&mut reopened.external).unwrap();
+        let mut replay = ReplayAccount::decode(&reopened.replay).unwrap();
+        replay.position_generation = 3;
+        replay.sequence = 0;
+        replay.encode(&mut reopened.replay).unwrap();
+        assert_eq!(
+            validate_position_init(state_bytes(&reopened), &f.metadata, &f.bindings),
+            Ok(())
+        );
+
+        // Balances surviving into the reopened triple refuse: reopen is an
+        // initialization event and must re-establish the base case.
+        let mut resurrected = reopened.clone();
+        let mut position = PositionAccount::decode(&resurrected.position).unwrap();
+        position.internal[0] = 20;
+        position.encode(&mut resurrected.position).unwrap();
+        assert_eq!(
+            validate_position_init(state_bytes(&resurrected), &f.metadata, &f.bindings),
+            Err(Error::NonEmptyInitialization)
+        );
+
+        // The retired generation's next sequence (1) does not replay against
+        // the restarted triple.
+        assert_eq!(
+            apply_layout(
+                &reopened,
+                &f.metadata,
+                &f.bindings,
+                1,
+                Intent::Split {
+                    market,
+                    owner,
+                    quantity: 1,
+                },
+            ),
+            Err(Error::Replay)
+        );
+    }
+
+    #[test]
+    fn aliased_position_keys_refuse() {
+        let f = fixture();
+        let market = MarketAccount::decode(&f.state.market).unwrap().market;
+        let a = split_state(&f, 20);
+        let (mut b, metadata_b, bindings_b) = second_triple(&f, 100);
+        sync_shared(&a, &mut b);
+        let owner_b = PositionAccount::decode(&b.position).unwrap().owner;
+        let split_b = Intent::Split {
+            market,
+            owner: owner_b,
+            quantity: 5,
+        };
+
+        // B's transition presented with A's position key refuses against B's
+        // trusted bindings.
+        let mut foreign_key = metadata_b;
+        foreign_key.position.key = f.metadata.position.key;
+        let request = layout_request(0, split_b);
+        assert_eq!(
+            apply(
+                &request[..layout_request_len(&request)],
+                state_bytes(&b),
+                &foreign_key,
+                &bindings_b,
+            ),
+            Err(Error::WrongAccountKey)
+        );
+
+        // A's position bytes presented inside B's triple. Verbatim, A's
+        // stored bump already refuses against B's derivation; with the bump
+        // forged to match, the owner binding across position, external
+        // shadow, and replay is what refuses.
+        let mut cross = b.clone();
+        cross.position = a.position;
+        assert_eq!(
+            apply(
+                &request[..layout_request_len(&request)],
+                state_bytes(&cross),
+                &metadata_b,
+                &bindings_b,
+            ),
+            Err(Error::WrongBump)
+        );
+        let mut rebumped = PositionAccount::decode(&a.position).unwrap();
+        rebumped.stored_bump = bindings_b.position_bump;
+        rebumped.encode(&mut cross.position).unwrap();
+        assert_eq!(
+            apply(
+                &request[..layout_request_len(&request)],
+                state_bytes(&cross),
+                &metadata_b,
+                &bindings_b,
+            ),
+            Err(Error::MismatchedState)
+        );
+
+        // One key claimed for two roles refuses as an alias even when the
+        // bindings agree with the metadata.
+        let mut aliased_metadata = metadata_b;
+        aliased_metadata.position.key = metadata_b.supply.key;
+        let mut aliased_bindings = bindings_b;
+        aliased_bindings.position = bindings_b.supply;
+        assert_eq!(
+            apply(
+                &request[..layout_request_len(&request)],
+                state_bytes(&b),
+                &aliased_metadata,
+                &aliased_bindings,
+            ),
+            Err(Error::AccountAlias)
+        );
+
+        // The actor aliased onto the position account refuses.
+        let mut actor_alias = metadata_b;
+        actor_alias.actor.key = metadata_b.position.key;
+        assert_eq!(
+            apply(
+                &request[..layout_request_len(&request)],
+                state_bytes(&b),
+                &actor_alias,
+                &bindings_b,
+            ),
+            Err(Error::AccountAlias)
+        );
+    }
+
+    #[test]
+    fn donation_and_direct_burn_accounting_is_one_sided() {
+        let f = fixture();
+        let market = MarketAccount::decode(&f.state.market).unwrap().market;
+        let owner = PositionAccount::decode(&f.state.position).unwrap().owner;
+        let a = split_state(&f, 20);
+
+        // Over-counting — the ledger carries 5 claims per outcome of a
+        // position this transition never sees — is the accepted, conservative
+        // direction. A's transition moves the ledger by A's delta only and
+        // the unpresented claims stay represented.
+        let mut over = a.clone();
+        let mut ledger = SupplyLedgerAccount::decode(&over.supply).unwrap();
+        ledger.internal_supply[0] += 5;
+        ledger.internal_supply[1] += 5;
+        ledger.encode(&mut over.supply).unwrap();
+        let mut kernel = KernelAccount::decode(&over.kernel).unwrap();
+        kernel.total_supply[0] += 5;
+        kernel.total_supply[1] += 5;
+        kernel.encode(&mut over.kernel).unwrap();
+        let mut hoard = HoardAccount::decode(&over.hoard).unwrap();
+        hoard.collateral_atoms = 25;
+        hoard.encode(&mut over.hoard).unwrap();
+        let materialized = apply_layout(
+            &over,
+            &f.metadata,
+            &f.bindings,
+            1,
+            Intent::Materialize {
+                market,
+                owner,
+                destination: f.metadata.external.key,
+                outcome: 0,
+                quantity: 4,
+            },
+        )
+        .unwrap();
+        let ledger = SupplyLedgerAccount::decode(&materialized.supply).unwrap();
+        assert_eq!(ledger.internal_supply[0], 21);
+        assert_eq!(ledger.external_supply[0], 4);
+        assert_eq!(ledger.aggregate_supply(0), Ok(25));
+
+        // Under-counting — the position exceeding the ledger's internal term
+        // — is the refused direction: a burned ledger term with an intact
+        // position is a counterfeit claim.
+        let mut under = a.clone();
+        let mut ledger = SupplyLedgerAccount::decode(&under.supply).unwrap();
+        ledger.internal_supply[0] = 15;
+        ledger.encode(&mut under.supply).unwrap();
+        let mut kernel = KernelAccount::decode(&under.kernel).unwrap();
+        kernel.total_supply[0] = 15;
+        kernel.encode(&mut under.kernel).unwrap();
+        assert_eq!(
+            apply_layout(
+                &under,
+                &f.metadata,
+                &f.bindings,
+                1,
+                Intent::Materialize {
+                    market,
+                    owner,
+                    destination: f.metadata.external.key,
+                    outcome: 0,
+                    quantity: 1,
+                },
+            ),
+            Err(Error::AggregateClosureMismatch)
+        );
+
+        // A forged external shadow exceeding the ledger's external term
+        // refuses the same way.
+        let mut minted = a.clone();
+        let mut shadow = ExternalAccount::decode(&minted.external).unwrap();
+        shadow.balances[0] = 1;
+        shadow.encode(&mut minted.external).unwrap();
+        assert_eq!(
+            apply_layout(
+                &minted,
+                &f.metadata,
+                &f.bindings,
+                1,
+                Intent::Dematerialize {
+                    market,
+                    owner,
+                    source: f.metadata.external.key,
+                    outcome: 0,
+                    quantity: 1,
+                },
+            ),
+            Err(Error::AggregateClosureMismatch)
+        );
+    }
+
+    #[test]
+    fn concurrent_same_slot_interleavings_commute_on_the_ledger() {
+        let f = fixture();
+        let market = MarketAccount::decode(&f.state.market).unwrap().market;
+        let owner_a = PositionAccount::decode(&f.state.position).unwrap().owner;
+        let (b_start, metadata_b, bindings_b) = second_triple(&f, 100);
+        let owner_b = PositionAccount::decode(&b_start.position).unwrap().owner;
+        let split_a = Intent::Split {
+            market,
+            owner: owner_a,
+            quantity: 20,
+        };
+        let split_b = Intent::Split {
+            market,
+            owner: owner_b,
+            quantity: 5,
+        };
+
+        // Order one: A then B.
+        let a1 = split_state(&f, 20);
+        let mut b1 = b_start.clone();
+        sync_shared(&a1, &mut b1);
+        let b1 = apply_layout(&b1, &metadata_b, &bindings_b, 0, split_b).unwrap();
+
+        // Order two: B then A.
+        let b2 = apply_layout(&b_start, &metadata_b, &bindings_b, 0, split_b).unwrap();
+        let mut a2 = f.state.clone();
+        sync_shared(&b2, &mut a2);
+        let a2 = apply_layout(&a2, &f.metadata, &f.bindings, 0, split_a).unwrap();
+
+        // Both serializations preserve the sums and land on the identical
+        // market-wide post-state, and each owner's triple is byte-identical
+        // either way. The runtime's writable-account lock on the one ledger
+        // is what forces some serialization to exist (obligation 3); each
+        // serialized transition preserves the invariant, so any order does.
+        assert_ledger_is_position_sum(&b1, &[&a1, &b1]);
+        assert_ledger_is_position_sum(&a2, &[&a2, &b2]);
+        assert_eq!(b1.supply, a2.supply);
+        assert_eq!(b1.kernel, a2.kernel);
+        assert_eq!(b1.hoard, a2.hoard);
+        assert_eq!(a1.position, a2.position);
+        assert_eq!(a1.replay, a2.replay);
+        assert_eq!(b1.position, b2.position);
+        assert_eq!(b1.replay, b2.replay);
+
+        // Within one position the replay sequence is the concurrency control:
+        // re-submitting A's split against the serialized post-state refuses.
+        let mut a_replay = a1.clone();
+        sync_shared(&b1, &mut a_replay);
+        assert_eq!(
+            apply_layout(&a_replay, &f.metadata, &f.bindings, 0, split_a),
+            Err(Error::Replay)
+        );
+
+        // A stale ledger snapshot that cannot cover a position's holdings
+        // refuses; that a *live* ledger is presented at all is the runtime's
+        // writable-account guarantee, which the offline model names rather
+        // than checks.
+        let mut stale = b1.clone();
+        stale.supply = f.state.supply;
+        stale.kernel = f.state.kernel;
+        stale.hoard = f.state.hoard;
+        assert_eq!(
+            apply_layout(
+                &stale,
+                &metadata_b,
+                &bindings_b,
+                1,
+                Intent::Materialize {
+                    market,
+                    owner: owner_b,
+                    destination: metadata_b.external.key,
+                    outcome: 0,
+                    quantity: 1,
+                },
+            ),
+            Err(Error::AggregateClosureMismatch)
+        );
     }
 
     #[test]
