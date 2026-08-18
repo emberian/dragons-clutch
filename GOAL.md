@@ -10,18 +10,20 @@ committee questions. Opus-mostly blend.
 
 ## Current thrust
 
-Wave 3 pillar burn: persisted-state closure (C), resolution/window join (B),
-SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
-(D1) + committee-question memos (D2). In flight from wave 2: drift review
-(dragons-clutch), Draft 6 filings rewrite (degg).
+Wave 5 full-width: SBF foundation (module-per-instruction split) -> then
+per-instruction fan-out; vector-spine fixtures + checker; portfolio page
+encoding; multi-position closure (Fable); Token-2022 probe; degg
+relation-IR (Fable), inclusion/availability, refusal-order freeze,
+posting-path spec; Draft 7 rebalance still out.
 
 ## Next 3 moves
 
-1. Land REF-INT + S1 → umbrella gate → clean-tree baseline manifest → push.
-2. Expand SBF program to every instruction; local-validator walk of the
-   PROJECT.md §10 lifecycle; measure CU/stack/heap.
-3. Closing wave: drift review over waves 3-4, GOAL.md wrap for ember's
-   return (policy decisions + Draft 6 read + John hand-off queued).
+1. Foundation lands -> fan out instruction lanes (merge/materialize,
+   market-init, observe/resolve, orders/batch) on the module ownership map.
+2. Token-2022 probe verdict -> CPI leg into its module; multi-position
+   scheme -> adapter + program.
+3. Lifecycle-walk script (PROJECT.md section 10 items 1-10) once the
+   instruction set closes; then umbrella + manifest + drift review.
 
 ## Done log
 
@@ -75,8 +77,9 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
   pushed.
 - Closing drift review: A-F pass, fixes committed both repos; manifest
   widened to 33/33 gates incl. SBF lane; clean emit pushed.
-- OPERATORLESS memo + IAC addendum candidate landed (filing-worthy per
-  its own verdict; EMBER go/no-go). Pushed.
+- OPERATORLESS memo + IAC addendum candidate landed (EMBER go/no-go). Pushed.
+- 24/7 candidate drafted, quotes GPO-verified (Q40 digital-asset bracket
+  found and confronted); pushed. Decision object ready.
 - In flight: Draft 7 rebalance, 24/7-RFC candidate draft.
 
 ## Ember decision queue (morning)
