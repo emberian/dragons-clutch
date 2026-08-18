@@ -49,6 +49,8 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
   clean emit queued for wave end; pushed.
 - COST: P1-F closed, landed-ABI arm + abi-audit drift refusal, 261 rows;
   seam found: portfolio orders lack persisted page encoding; pushed.
+- REF-INT + S1 co-committed: resolution evidence-gated (fail-closed path
+  intact), reproducible ELF + 6/6 SVM differential; pushed.
 - D1: independent FBA oracle, 300M-case differential, zero semantic
   divergences, vectors byte-identical; spec gap (refusal-class priority)
   found and pinned; pushed.
