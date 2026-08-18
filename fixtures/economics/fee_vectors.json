@@ -1,0 +1,743 @@
+{
+  "allocation_arm": {
+    "denominator": 100,
+    "executor_numerator": 15,
+    "maker_numerator": 60,
+    "status": "experimental arm; 60/15/25 is not promoted"
+  },
+  "carry_closes": [
+    "terminal_ceil",
+    "dropped_carry"
+  ],
+  "carry_domains": [
+    "position",
+    "intent",
+    "epoch"
+  ],
+  "experiment": "EXP-ALIGN-03",
+  "fee_side_arms": [
+    "per_intent_both_sides",
+    "charge_once_split"
+  ],
+  "schema": "dragons-clutch/economics/fee-vectors/v1",
+  "source": "docs/implementation/POLICY_ANALYSIS_LOTS_FEES.md sections 2.2-2.5, 3.4",
+  "status": "PROPOSED model vectors from docs/implementation/POLICY_ANALYSIS_LOTS_FEES.md; no protocol constant, fee parameter, or payout candidate is promoted here",
+  "vectors": [
+    {
+      "carry_close": "terminal_ceil",
+      "carry_domain": "intent",
+      "close_events": "every open domain instance closes at the end of the schedule",
+      "derivation": "G=q*p*(S-p)=2*50*50=5000; fee_num=kappa_num*G=20000 per side; den=kappa_den*S^2=10^7; floor=0, carry=20000; terminal ceil=1 per intent; C=q*p/S=1",
+      "expected": {
+        "allocation": {
+          "executor": 0,
+          "executor_cap": null,
+          "maker": 1,
+          "treasury": 1
+        },
+        "buyer_debit_total": 2,
+        "conservation": {
+          "hoard_untouched": true,
+          "payer_identity": true
+        },
+        "consideration_total": 1,
+        "denominator": 10000000,
+        "domain_paid": [
+          [
+            "buy-1",
+            1
+          ],
+          [
+            "sell-1",
+            1
+          ]
+        ],
+        "fee_numerator_total": 40000,
+        "fee_pot": 2,
+        "fill_legs": [
+          [
+            "buy-1",
+            "buy",
+            0,
+            20000
+          ],
+          [
+            "sell-1",
+            "sell",
+            0,
+            20000
+          ]
+        ],
+        "hoard_delta": 0,
+        "seller_credit_total": 0,
+        "terminal_charges": 2
+      },
+      "fee_side_arm": "per_intent_both_sides",
+      "fills": [
+        {
+          "buyer_intent": "buy-1",
+          "buyer_position": "buyer-1",
+          "epoch": 0,
+          "price": 50,
+          "quantity": 2,
+          "seller_intent": "sell-1",
+          "seller_position": "seller-1"
+        }
+      ],
+      "id": "FEE-001",
+      "kappa_den": 1000,
+      "kappa_num": 4,
+      "kind": "single_egg_schedule",
+      "name": "dust-fill-terminal-ceil-both-sides",
+      "note": "one dust fill: the exact fee is 40000/10000000 of an atom on each side, so both sides pay zero on the fill and one atom at intent close -- the structural anti-dust floor of section 2.2",
+      "price_scale": 100
+    },
+    {
+      "carry_close": "terminal_ceil",
+      "carry_domain": "intent",
+      "close_events": "every open domain instance closes at the end of the schedule",
+      "derivation": "4 x 20000 = 80000 numerator per side; floor 0; one terminal atom per side",
+      "expected": {
+        "allocation": {
+          "executor": 0,
+          "executor_cap": null,
+          "maker": 1,
+          "treasury": 1
+        },
+        "buyer_debit_total": 5,
+        "conservation": {
+          "hoard_untouched": true,
+          "payer_identity": true
+        },
+        "consideration_total": 4,
+        "denominator": 10000000,
+        "domain_paid": [
+          [
+            "buy-1",
+            1
+          ],
+          [
+            "sell-1",
+            1
+          ]
+        ],
+        "fee_numerator_total": 160000,
+        "fee_pot": 2,
+        "fill_legs": [
+          [
+            "buy-1",
+            "buy",
+            0,
+            20000
+          ],
+          [
+            "sell-1",
+            "sell",
+            0,
+            20000
+          ],
+          [
+            "buy-1",
+            "buy",
+            0,
+            40000
+          ],
+          [
+            "sell-1",
+            "sell",
+            0,
+            40000
+          ],
+          [
+            "buy-1",
+            "buy",
+            0,
+            60000
+          ],
+          [
+            "sell-1",
+            "sell",
+            0,
+            60000
+          ],
+          [
+            "buy-1",
+            "buy",
+            0,
+            80000
+          ],
+          [
+            "sell-1",
+            "sell",
+            0,
+            80000
+          ]
+        ],
+        "hoard_delta": 0,
+        "seller_credit_total": 3,
+        "terminal_charges": 2
+      },
+      "fee_side_arm": "per_intent_both_sides",
+      "fills": [
+        {
+          "buyer_intent": "buy-1",
+          "buyer_position": "buyer-1",
+          "epoch": 0,
+          "price": 50,
+          "quantity": 2,
+          "seller_intent": "sell-1",
+          "seller_position": "seller-1"
+        },
+        {
+          "buyer_intent": "buy-1",
+          "buyer_position": "buyer-1",
+          "epoch": 0,
+          "price": 50,
+          "quantity": 2,
+          "seller_intent": "sell-1",
+          "seller_position": "seller-1"
+        },
+        {
+          "buyer_intent": "buy-1",
+          "buyer_position": "buyer-1",
+          "epoch": 0,
+          "price": 50,
+          "quantity": 2,
+          "seller_intent": "sell-1",
+          "seller_position": "seller-1"
+        },
+        {
+          "buyer_intent": "buy-1",
+          "buyer_position": "buyer-1",
+          "epoch": 0,
+          "price": 50,
+          "quantity": 2,
+          "seller_intent": "sell-1",
+          "seller_position": "seller-1"
+        }
+      ],
+      "id": "FEE-002",
+      "kappa_den": 1000,
+      "kappa_num": 4,
+      "kind": "single_egg_schedule",
+      "name": "four-dust-fills-one-intent",
+      "note": "fragmentation inside one domain instance still pays exactly ceil(exact)",
+      "price_scale": 100
+    },
+    {
+      "carry_close": "terminal_ceil",
+      "carry_domain": "intent",
+      "close_events": "every open domain instance closes at the end of the schedule",
+      "derivation": "8 domain instances, each carrying 20000 < den, each charged one terminal atom",
+      "expected": {
+        "allocation": {
+          "executor": 1,
+          "executor_cap": null,
+          "maker": 4,
+          "treasury": 3
+        },
+        "buyer_debit_total": 8,
+        "conservation": {
+          "hoard_untouched": true,
+          "payer_identity": true
+        },
+        "consideration_total": 4,
+        "denominator": 10000000,
+        "domain_paid": [
+          [
+            "buy-0",
+            1
+          ],
+          [
+            "buy-1",
+            1
+          ],
+          [
+            "buy-2",
+            1
+          ],
+          [
+            "buy-3",
+            1
+          ],
+          [
+            "sell-0",
+            1
+          ],
+          [
+            "sell-1",
+            1
+          ],
+          [
+            "sell-2",
+            1
+          ],
+          [
+            "sell-3",
+            1
+          ]
+        ],
+        "fee_numerator_total": 160000,
+        "fee_pot": 8,
+        "fill_legs": [
+          [
+            "buy-0",
+            "buy",
+            0,
+            20000
+          ],
+          [
+            "sell-0",
+            "sell",
+            0,
+            20000
+          ],
+          [
+            "buy-1",
+            "buy",
+            0,
+            20000
+          ],
+          [
+            "sell-1",
+            "sell",
+            0,
+            20000
+          ],
+          [
+            "buy-2",
+            "buy",
+            0,
+            20000
+          ],
+          [
+            "sell-2",
+            "sell",
+            0,
+            20000
+          ],
+          [
+            "buy-3",
+            "buy",
+            0,
+            20000
+          ],
+          [
+            "sell-3",
+            "sell",
+            0,
+            20000
+          ]
+        ],
+        "hoard_delta": 0,
+        "seller_credit_total": 0,
+        "terminal_charges": 8
+      },
+      "fee_side_arm": "per_intent_both_sides",
+      "fills": [
+        {
+          "buyer_intent": "buy-0",
+          "buyer_position": "buyer-1",
+          "epoch": 0,
+          "price": 50,
+          "quantity": 2,
+          "seller_intent": "sell-0",
+          "seller_position": "seller-1"
+        },
+        {
+          "buyer_intent": "buy-1",
+          "buyer_position": "buyer-1",
+          "epoch": 0,
+          "price": 50,
+          "quantity": 2,
+          "seller_intent": "sell-1",
+          "seller_position": "seller-1"
+        },
+        {
+          "buyer_intent": "buy-2",
+          "buyer_position": "buyer-1",
+          "epoch": 0,
+          "price": 50,
+          "quantity": 2,
+          "seller_intent": "sell-2",
+          "seller_position": "seller-1"
+        },
+        {
+          "buyer_intent": "buy-3",
+          "buyer_position": "buyer-1",
+          "epoch": 0,
+          "price": 50,
+          "quantity": 2,
+          "seller_intent": "sell-3",
+          "seller_position": "seller-1"
+        }
+      ],
+      "id": "FEE-003",
+      "kappa_den": 1000,
+      "kappa_num": 4,
+      "kind": "single_egg_schedule",
+      "name": "four-dust-fills-four-intents",
+      "note": "the same economic flow split across four signed intents pays four times as much: the carry-reset attack inverts sign under terminal ceil",
+      "price_scale": 100
+    },
+    {
+      "carry_close": "dropped_carry",
+      "carry_domain": "epoch",
+      "close_events": "every open domain instance closes at the end of the schedule",
+      "derivation": "each (payer, epoch) instance carries 20000 < den and drops it at close",
+      "expected": {
+        "allocation": {
+          "executor": 0,
+          "executor_cap": null,
+          "maker": 0,
+          "treasury": 0
+        },
+        "buyer_debit_total": 4,
+        "conservation": {
+          "hoard_untouched": true,
+          "payer_identity": true
+        },
+        "consideration_total": 4,
+        "denominator": 10000000,
+        "domain_paid": [
+          [
+            "buyer-1@0",
+            0
+          ],
+          [
+            "buyer-1@1",
+            0
+          ],
+          [
+            "buyer-1@2",
+            0
+          ],
+          [
+            "buyer-1@3",
+            0
+          ],
+          [
+            "seller-1@0",
+            0
+          ],
+          [
+            "seller-1@1",
+            0
+          ],
+          [
+            "seller-1@2",
+            0
+          ],
+          [
+            "seller-1@3",
+            0
+          ]
+        ],
+        "fee_numerator_total": 160000,
+        "fee_pot": 0,
+        "fill_legs": [
+          [
+            "buy-1",
+            "buy",
+            0,
+            20000
+          ],
+          [
+            "sell-1",
+            "sell",
+            0,
+            20000
+          ],
+          [
+            "buy-1",
+            "buy",
+            0,
+            20000
+          ],
+          [
+            "sell-1",
+            "sell",
+            0,
+            20000
+          ],
+          [
+            "buy-1",
+            "buy",
+            0,
+            20000
+          ],
+          [
+            "sell-1",
+            "sell",
+            0,
+            20000
+          ],
+          [
+            "buy-1",
+            "buy",
+            0,
+            20000
+          ],
+          [
+            "sell-1",
+            "sell",
+            0,
+            20000
+          ]
+        ],
+        "hoard_delta": 0,
+        "seller_credit_total": 4,
+        "terminal_charges": 0
+      },
+      "fee_side_arm": "per_intent_both_sides",
+      "fills": [
+        {
+          "buyer_intent": "buy-1",
+          "buyer_position": "buyer-1",
+          "epoch": 0,
+          "price": 50,
+          "quantity": 2,
+          "seller_intent": "sell-1",
+          "seller_position": "seller-1"
+        },
+        {
+          "buyer_intent": "buy-1",
+          "buyer_position": "buyer-1",
+          "epoch": 1,
+          "price": 50,
+          "quantity": 2,
+          "seller_intent": "sell-1",
+          "seller_position": "seller-1"
+        },
+        {
+          "buyer_intent": "buy-1",
+          "buyer_position": "buyer-1",
+          "epoch": 2,
+          "price": 50,
+          "quantity": 2,
+          "seller_intent": "sell-1",
+          "seller_position": "seller-1"
+        },
+        {
+          "buyer_intent": "buy-1",
+          "buyer_position": "buyer-1",
+          "epoch": 3,
+          "price": 50,
+          "quantity": 2,
+          "seller_intent": "sell-1",
+          "seller_position": "seller-1"
+        }
+      ],
+      "id": "FEE-004",
+      "kappa_den": 1000,
+      "kappa_num": 4,
+      "kind": "single_egg_schedule",
+      "name": "epoch-domain-dropped-carry-evasion",
+      "note": "the Epoch carry domain with a dropped carry collects nothing at all while volume is positive: the section 2.2 refusal evidence",
+      "price_scale": 100
+    },
+    {
+      "carry_close": "terminal_ceil",
+      "carry_domain": "intent",
+      "close_events": "every open domain instance closes at the end of the schedule",
+      "derivation": "G=2000*50*50=5*10^6; fee_num=2*10^7 per side; den=10^7; floor=2, carry=0; C=2000*50/100=1000",
+      "expected": {
+        "allocation": {
+          "executor": 0,
+          "executor_cap": null,
+          "maker": 2,
+          "treasury": 2
+        },
+        "buyer_debit_total": 1002,
+        "conservation": {
+          "hoard_untouched": true,
+          "payer_identity": true
+        },
+        "consideration_total": 1000,
+        "denominator": 10000000,
+        "domain_paid": [
+          [
+            "buy-1",
+            2
+          ],
+          [
+            "sell-1",
+            2
+          ]
+        ],
+        "fee_numerator_total": 40000000,
+        "fee_pot": 4,
+        "fill_legs": [
+          [
+            "buy-1",
+            "buy",
+            2,
+            0
+          ],
+          [
+            "sell-1",
+            "sell",
+            2,
+            0
+          ]
+        ],
+        "hoard_delta": 0,
+        "seller_credit_total": 998,
+        "terminal_charges": 0
+      },
+      "fee_side_arm": "per_intent_both_sides",
+      "fills": [
+        {
+          "buyer_intent": "buy-1",
+          "buyer_position": "buyer-1",
+          "epoch": 0,
+          "price": 50,
+          "quantity": 2000,
+          "seller_intent": "sell-1",
+          "seller_position": "seller-1"
+        }
+      ],
+      "id": "FEE-005",
+      "kappa_den": 1000,
+      "kappa_num": 4,
+      "kind": "single_egg_schedule",
+      "name": "supra-atom-fill-both-sides",
+      "note": "a fill large enough that the fee clears whole atoms without any terminal charge",
+      "price_scale": 100
+    },
+    {
+      "carry_close": "terminal_ceil",
+      "carry_domain": "intent",
+      "close_events": "every open domain instance closes at the end of the schedule",
+      "derivation": "gross 2*10^7 split ceil/floor into 10^7 + 10^7; each floors to one atom",
+      "expected": {
+        "allocation": {
+          "executor": 0,
+          "executor_cap": null,
+          "maker": 1,
+          "treasury": 1
+        },
+        "buyer_debit_total": 1001,
+        "conservation": {
+          "hoard_untouched": true,
+          "payer_identity": true
+        },
+        "consideration_total": 1000,
+        "denominator": 10000000,
+        "domain_paid": [
+          [
+            "buy-1",
+            1
+          ],
+          [
+            "sell-1",
+            1
+          ]
+        ],
+        "fee_numerator_total": 20000000,
+        "fee_pot": 2,
+        "fill_legs": [
+          [
+            "buy-1",
+            "buy",
+            1,
+            0
+          ],
+          [
+            "sell-1",
+            "sell",
+            1,
+            0
+          ]
+        ],
+        "hoard_delta": 0,
+        "seller_credit_total": 999,
+        "terminal_charges": 0
+      },
+      "fee_side_arm": "charge_once_split",
+      "fills": [
+        {
+          "buyer_intent": "buy-1",
+          "buyer_position": "buyer-1",
+          "epoch": 0,
+          "price": 50,
+          "quantity": 2000,
+          "seller_intent": "sell-1",
+          "seller_position": "seller-1"
+        }
+      ],
+      "id": "FEE-006",
+      "kappa_den": 1000,
+      "kappa_num": 4,
+      "kind": "single_egg_schedule",
+      "name": "supra-atom-fill-charge-once-split",
+      "note": "the same fill under the charge-once-split reading of FEE_GEOMETRY section 4: half the venue take, half the incidence per side",
+      "price_scale": 100
+    },
+    {
+      "derivation": "G=2*3*|3-0| + 2*5*|3-1| + 3*5*|0-1| = 18+20+15 = 53; fee_num=kappa_num*q*G=4*1*53=212; den=kappa_den*S^2=10^5; floor=0, carry=212, terminal ceil=1",
+      "expected": {
+        "allocation": {
+          "executor": 0,
+          "executor_cap": null,
+          "maker": 0,
+          "treasury": 1
+        },
+        "carry": 212,
+        "denominator": 100000,
+        "dispersion_numerator": 53,
+        "fee_numerator": 212,
+        "paid": 0,
+        "terminal_ceil_charge": 1
+      },
+      "id": "FEE-007",
+      "kappa_den": 1000,
+      "kappa_num": 4,
+      "kind": "dispersion_point",
+      "name": "multi-outcome-dispersion-point",
+      "note": "the general G_num base of section 2.4 on a three-outcome vector",
+      "payoffs": [
+        3,
+        0,
+        1
+      ],
+      "price_scale": 10,
+      "prices": [
+        2,
+        3,
+        5
+      ],
+      "quantity": 1
+    },
+    {
+      "derivation": "maker=floor(1000*60/100)=600; executor=min(floor(1000*15/100), cap); treasury=pot-maker-executor",
+      "expected": {
+        "allocations": [
+          {
+            "cap": null,
+            "executor": 150,
+            "maker": 600,
+            "treasury": 250
+          },
+          {
+            "cap": 100,
+            "executor": 100,
+            "maker": 600,
+            "treasury": 300
+          },
+          {
+            "cap": 0,
+            "executor": 0,
+            "maker": 600,
+            "treasury": 400
+          }
+        ]
+      },
+      "id": "FEE-008",
+      "kind": "allocation_point",
+      "name": "allocation-executor-cap",
+      "note": "section 2.3 allocation with and without the batch executor cap",
+      "pot": 1000
+    }
+  ]
+}

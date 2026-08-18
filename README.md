@@ -29,9 +29,10 @@ This repository is in **offline prototype implementation**. It contains bounded
 pure-Rust kernel, accumulator, and batch-relation prototypes, a static offline
 client, plus deterministic economics, cost, and toolchain labs. It contains no
 deployed program, transaction builder, private key, market, or financial
-authority. Verus is not yet installed or pinned, and Rocq is unavailable on the
-current host, so the present Rust code is tested and linted but not formally
-verified.
+authority. Verus and Rocq are installed and pinned
+(see toolchain/PINNED_PROOF_TOOLS.md), but no proof has been closed: the shadow
+specifications currently fail to check, so the present Rust code is tested and
+linted but not formally verified.
 All parameters remain hypotheses until the required proofs, benchmarks,
 simulations, and adversarial tests pass.
 

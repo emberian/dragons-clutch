@@ -1,0 +1,1712 @@
+{
+  "bounds": {
+    "amount_max": "2**64 - 1",
+    "max_outcomes": 16,
+    "max_payouts": 8,
+    "min_outcomes": 2
+  },
+  "error_classes": [
+    "invalid_outcome_count",
+    "invalid_payout_count",
+    "invalid_payout_index",
+    "invalid_denominator",
+    "invalid_payout_weights",
+    "zero_quantity",
+    "arithmetic_overflow",
+    "arithmetic_underflow",
+    "insufficient_balance",
+    "insufficient_collateral",
+    "not_active",
+    "already_resolved",
+    "not_resolved",
+    "invariant_violation",
+    "remainder_required",
+    "lot_violation",
+    "no_credit"
+  ],
+  "experiment": "EXP-ALIGN-02",
+  "operations": [
+    "split",
+    "merge",
+    "materialize",
+    "dematerialize",
+    "transfer_external",
+    "resolve",
+    "redeem_internal",
+    "redeem_external",
+    "claim_credit",
+    "redeem_complete_set"
+  ],
+  "policy_arm_status": {
+    "credit": "PROPOSED candidate (c)",
+    "kernel_baseline": "landed: crates/clutch-kernel as committed",
+    "lots": "PROPOSED candidate (b1)",
+    "one_hot": "PROPOSED candidate (a1)"
+  },
+  "policy_arms": [
+    "kernel_baseline",
+    "one_hot",
+    "lots",
+    "credit"
+  ],
+  "replay_contract": "A consumer that implements only landed_kernel transitions replays the step prefix up to the first proposed step expected to succeed; a refused step never changes state, so refusal expectations before that point are binding for every consumer",
+  "schema": "dragons-clutch/economics/trace-vectors/v1",
+  "source": "docs/implementation/POLICY_ANALYSIS_LOTS_FEES.md sections 1, 3.2, 3.4",
+  "status": "PROPOSED model vectors from docs/implementation/POLICY_ANALYSIS_LOTS_FEES.md; no protocol constant, fee parameter, or payout candidate is promoted here",
+  "vectors": [
+    {
+      "arms": {
+        "credit": {
+          "admitted": true,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              0
+            ]
+          },
+          "results": [
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "payout": 0,
+              "result": "ok"
+            },
+            {
+              "payout": 0,
+              "result": "ok"
+            },
+            {
+              "payout": 1,
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            }
+          ]
+        },
+        "kernel_baseline": {
+          "admitted": true,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              0
+            ]
+          },
+          "results": [
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "remainder_required",
+              "result": "refuse"
+            },
+            {
+              "error_class": "remainder_required",
+              "result": "refuse"
+            },
+            {
+              "error_class": "no_credit",
+              "result": "refuse"
+            },
+            {
+              "payout": 1,
+              "result": "ok"
+            }
+          ]
+        },
+        "lots": {
+          "admitted": true,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              0
+            ]
+          },
+          "results": [
+            {
+              "error_class": "lot_violation",
+              "result": "refuse"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "error_class": "no_credit",
+              "result": "refuse"
+            },
+            {
+              "error_class": "lot_violation",
+              "result": "refuse"
+            }
+          ]
+        },
+        "one_hot": {
+          "admitted": false,
+          "error_class": "invalid_payout_weights"
+        }
+      },
+      "id": "TRC-001",
+      "market": {
+        "count": 1,
+        "initial_collateral": 0,
+        "outcomes": 2,
+        "payout_vectors": [
+          {
+            "denominator": 2,
+            "weights": [
+              1,
+              1
+            ]
+          }
+        ],
+        "wallets": 1
+      },
+      "name": "p1a-exit-dead-complete-set",
+      "note": "POLICY_ANALYSIS section 1.1: weights [1,1] over D=2, split one atom, resolve. Both per-outcome redemptions refuse forever under the landed kernel; the section 1.5 complete-set exit clears it, candidate (a) refuses the market, candidate (b) refuses the split, candidate (c) pays a floor and a credit",
+      "steps": [
+        {
+          "op": "split",
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "resolve",
+          "payout_index": 0,
+          "transition_class": "landed_kernel"
+        },
+        {
+          "op": "redeem_internal",
+          "outcome": 0,
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "redeem_internal",
+          "outcome": 1,
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "claim_credit",
+          "transition_class": "proposed_candidate_c",
+          "wallet": 0
+        },
+        {
+          "internal": true,
+          "op": "redeem_complete_set",
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        }
+      ]
+    },
+    {
+      "arms": {
+        "credit": {
+          "admitted": true,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              0
+            ]
+          },
+          "results": [
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "payout": 0,
+              "result": "ok"
+            },
+            {
+              "payout": 4,
+              "result": "ok"
+            },
+            {
+              "payout": 1,
+              "result": "ok"
+            },
+            {
+              "error_class": "no_credit",
+              "result": "refuse"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            }
+          ]
+        },
+        "kernel_baseline": {
+          "admitted": true,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              0
+            ]
+          },
+          "results": [
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "payout": 0,
+              "result": "ok"
+            },
+            {
+              "payout": 4,
+              "result": "ok"
+            },
+            {
+              "payout": 1,
+              "result": "ok"
+            },
+            {
+              "error_class": "no_credit",
+              "result": "refuse"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            }
+          ]
+        },
+        "lots": {
+          "admitted": true,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              0
+            ]
+          },
+          "results": [
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "payout": 0,
+              "result": "ok"
+            },
+            {
+              "payout": 4,
+              "result": "ok"
+            },
+            {
+              "payout": 1,
+              "result": "ok"
+            },
+            {
+              "error_class": "no_credit",
+              "result": "refuse"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            }
+          ]
+        },
+        "one_hot": {
+          "admitted": true,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              0
+            ]
+          },
+          "results": [
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "payout": 0,
+              "result": "ok"
+            },
+            {
+              "payout": 4,
+              "result": "ok"
+            },
+            {
+              "payout": 1,
+              "result": "ok"
+            },
+            {
+              "error_class": "no_credit",
+              "result": "refuse"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            }
+          ]
+        }
+      },
+      "id": "TRC-002",
+      "market": {
+        "count": 2,
+        "initial_collateral": 0,
+        "outcomes": 2,
+        "payout_vectors": [
+          {
+            "denominator": 1,
+            "weights": [
+              1,
+              0
+            ]
+          },
+          {
+            "denominator": 1,
+            "weights": [
+              0,
+              1
+            ]
+          }
+        ],
+        "wallets": 1
+      },
+      "name": "one-hot-full-lifecycle",
+      "note": "every arm must agree exactly on the degenerate one-hot lifecycle",
+      "steps": [
+        {
+          "op": "split",
+          "quantity": 5,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "materialize",
+          "outcome": 1,
+          "quantity": 2,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "dematerialize",
+          "outcome": 1,
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "resolve",
+          "payout_index": 1,
+          "transition_class": "landed_kernel"
+        },
+        {
+          "op": "redeem_internal",
+          "outcome": 0,
+          "quantity": 5,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "redeem_internal",
+          "outcome": 1,
+          "quantity": 4,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "redeem_external",
+          "outcome": 1,
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "claim_credit",
+          "transition_class": "proposed_candidate_c",
+          "wallet": 0
+        },
+        {
+          "internal": true,
+          "op": "redeem_complete_set",
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        }
+      ]
+    },
+    {
+      "arms": {
+        "credit": {
+          "admitted": true,
+          "exit_dead": false,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              0
+            ]
+          },
+          "results": [
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "payout": 0,
+              "result": "ok"
+            },
+            {
+              "payout": 0,
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "payout": 1,
+              "result": "ok"
+            }
+          ]
+        },
+        "kernel_baseline": {
+          "admitted": true,
+          "exit_dead": true,
+          "final": {
+            "collateral": 1,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  1,
+                  0
+                ],
+                "internal": [
+                  0,
+                  1
+                ]
+              }
+            ],
+            "total_supply": [
+              1,
+              1
+            ]
+          },
+          "results": [
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "remainder_required",
+              "result": "refuse"
+            },
+            {
+              "error_class": "remainder_required",
+              "result": "refuse"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "error_class": "no_credit",
+              "result": "refuse"
+            }
+          ]
+        },
+        "lots": {
+          "admitted": true,
+          "exit_dead": false,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              0
+            ]
+          },
+          "results": [
+            {
+              "error_class": "lot_violation",
+              "result": "refuse"
+            },
+            {
+              "error_class": "lot_violation",
+              "result": "refuse"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "error_class": "lot_violation",
+              "result": "refuse"
+            },
+            {
+              "error_class": "lot_violation",
+              "result": "refuse"
+            },
+            {
+              "error_class": "no_credit",
+              "result": "refuse"
+            }
+          ]
+        },
+        "one_hot": {
+          "admitted": false,
+          "error_class": "invalid_payout_weights"
+        }
+      },
+      "id": "TRC-003",
+      "market": {
+        "count": 1,
+        "initial_collateral": 0,
+        "outcomes": 2,
+        "payout_vectors": [
+          {
+            "denominator": 2,
+            "weights": [
+              1,
+              1
+            ]
+          }
+        ],
+        "wallets": 1
+      },
+      "name": "p1a-materialize-strands-the-set",
+      "note": "moving one leg of the complete set across the Token-2022 boundary removes the section 1.5 exit: internal and external sides can no longer form a set, so the baseline arm is exit-dead with liability outstanding",
+      "steps": [
+        {
+          "op": "split",
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "materialize",
+          "outcome": 0,
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "resolve",
+          "payout_index": 0,
+          "transition_class": "landed_kernel"
+        },
+        {
+          "op": "redeem_external",
+          "outcome": 0,
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "redeem_internal",
+          "outcome": 1,
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "internal": true,
+          "op": "redeem_complete_set",
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "internal": false,
+          "op": "redeem_complete_set",
+          "quantity": 1,
+          "transition_class": "lab_extension",
+          "wallet": 0
+        },
+        {
+          "op": "claim_credit",
+          "transition_class": "proposed_candidate_c",
+          "wallet": 0
+        }
+      ]
+    },
+    {
+      "arms": {
+        "credit": {
+          "admitted": true,
+          "final": {
+            "collateral": 1,
+            "credit_total": 2,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  1,
+                  0
+                ]
+              },
+              {
+                "credit": 2,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0
+                ]
+              }
+            ],
+            "total_supply": [
+              1,
+              0
+            ]
+          },
+          "results": [
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "payout": 0,
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "payout": 1,
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            }
+          ]
+        },
+        "kernel_baseline": {
+          "admitted": true,
+          "final": {
+            "collateral": 1,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  1,
+                  0
+                ]
+              },
+              {
+                "credit": 0,
+                "external": [
+                  1,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0
+                ]
+              }
+            ],
+            "total_supply": [
+              2,
+              0
+            ]
+          },
+          "results": [
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "remainder_required",
+              "result": "refuse"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "payout": 1,
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            }
+          ]
+        },
+        "lots": {
+          "admitted": true,
+          "final": {
+            "collateral": 1,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  1,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0
+                ]
+              },
+              {
+                "credit": 0,
+                "external": [
+                  1,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0
+                ]
+              }
+            ],
+            "total_supply": [
+              2,
+              0
+            ]
+          },
+          "results": [
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "lot_violation",
+              "result": "refuse"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "remainder_required",
+              "result": "refuse"
+            },
+            {
+              "error_class": "remainder_required",
+              "result": "refuse"
+            },
+            {
+              "payout": 1,
+              "result": "ok"
+            },
+            {
+              "error_class": "lot_violation",
+              "result": "refuse"
+            }
+          ]
+        },
+        "one_hot": {
+          "admitted": false,
+          "error_class": "invalid_payout_weights"
+        }
+      },
+      "id": "TRC-004",
+      "market": {
+        "count": 2,
+        "initial_collateral": 0,
+        "outcomes": 2,
+        "payout_vectors": [
+          {
+            "denominator": 4,
+            "weights": [
+              2,
+              2
+            ]
+          },
+          {
+            "denominator": 4,
+            "weights": [
+              4,
+              0
+            ]
+          }
+        ],
+        "wallets": 2
+      },
+      "name": "lot-gated-two-wallet-fragmentation",
+      "note": "candidate (b1): internal transitions are lot-gated, the bearer transfer is not, so wallet 1 ends holding a sub-lot fragment that refuses redemption while the aggregate stays lot-aligned",
+      "steps": [
+        {
+          "op": "split",
+          "quantity": 2,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "materialize",
+          "outcome": 0,
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "materialize",
+          "outcome": 0,
+          "quantity": 2,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "destination": 1,
+          "op": "transfer_external",
+          "outcome": 0,
+          "quantity": 1,
+          "transition_class": "external_adapter",
+          "wallet": 0
+        },
+        {
+          "op": "resolve",
+          "payout_index": 0,
+          "transition_class": "landed_kernel"
+        },
+        {
+          "op": "redeem_external",
+          "outcome": 0,
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 1
+        },
+        {
+          "op": "redeem_external",
+          "outcome": 0,
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "redeem_internal",
+          "outcome": 1,
+          "quantity": 2,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "internal": true,
+          "op": "redeem_complete_set",
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        }
+      ]
+    },
+    {
+      "arms": {
+        "credit": {
+          "admitted": true,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  3
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              3
+            ]
+          },
+          "results": [
+            {
+              "error_class": "not_resolved",
+              "result": "refuse"
+            },
+            {
+              "error_class": "zero_quantity",
+              "result": "refuse"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_collateral",
+              "result": "refuse"
+            },
+            {
+              "error_class": "invalid_payout_index",
+              "result": "refuse"
+            },
+            {
+              "error_class": "invalid_payout_index",
+              "result": "refuse"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "already_resolved",
+              "result": "refuse"
+            },
+            {
+              "error_class": "already_resolved",
+              "result": "refuse"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "payout": 3,
+              "result": "ok"
+            }
+          ]
+        },
+        "kernel_baseline": {
+          "admitted": true,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  3
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              3
+            ]
+          },
+          "results": [
+            {
+              "error_class": "not_resolved",
+              "result": "refuse"
+            },
+            {
+              "error_class": "zero_quantity",
+              "result": "refuse"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_collateral",
+              "result": "refuse"
+            },
+            {
+              "error_class": "invalid_payout_index",
+              "result": "refuse"
+            },
+            {
+              "error_class": "invalid_payout_index",
+              "result": "refuse"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "already_resolved",
+              "result": "refuse"
+            },
+            {
+              "error_class": "already_resolved",
+              "result": "refuse"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "payout": 3,
+              "result": "ok"
+            }
+          ]
+        },
+        "lots": {
+          "admitted": true,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  3
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              3
+            ]
+          },
+          "results": [
+            {
+              "error_class": "not_resolved",
+              "result": "refuse"
+            },
+            {
+              "error_class": "zero_quantity",
+              "result": "refuse"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_collateral",
+              "result": "refuse"
+            },
+            {
+              "error_class": "invalid_payout_index",
+              "result": "refuse"
+            },
+            {
+              "error_class": "invalid_payout_index",
+              "result": "refuse"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "already_resolved",
+              "result": "refuse"
+            },
+            {
+              "error_class": "already_resolved",
+              "result": "refuse"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "payout": 3,
+              "result": "ok"
+            }
+          ]
+        },
+        "one_hot": {
+          "admitted": true,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  3
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              3
+            ]
+          },
+          "results": [
+            {
+              "error_class": "not_resolved",
+              "result": "refuse"
+            },
+            {
+              "error_class": "zero_quantity",
+              "result": "refuse"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_collateral",
+              "result": "refuse"
+            },
+            {
+              "error_class": "invalid_payout_index",
+              "result": "refuse"
+            },
+            {
+              "error_class": "invalid_payout_index",
+              "result": "refuse"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "already_resolved",
+              "result": "refuse"
+            },
+            {
+              "error_class": "already_resolved",
+              "result": "refuse"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "payout": 3,
+              "result": "ok"
+            }
+          ]
+        }
+      },
+      "id": "TRC-005",
+      "market": {
+        "count": 2,
+        "initial_collateral": 0,
+        "outcomes": 2,
+        "payout_vectors": [
+          {
+            "denominator": 1,
+            "weights": [
+              1,
+              0
+            ]
+          },
+          {
+            "denominator": 1,
+            "weights": [
+              0,
+              1
+            ]
+          }
+        ],
+        "wallets": 1
+      },
+      "name": "refusal-vocabulary",
+      "note": "one vector per shared error class that a one-hot market can reach",
+      "steps": [
+        {
+          "op": "redeem_internal",
+          "outcome": 0,
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "split",
+          "quantity": 0,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "split",
+          "quantity": 3,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "merge",
+          "quantity": 4,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "materialize",
+          "outcome": 5,
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "resolve",
+          "payout_index": 5,
+          "transition_class": "landed_kernel"
+        },
+        {
+          "op": "resolve",
+          "payout_index": 0,
+          "transition_class": "landed_kernel"
+        },
+        {
+          "op": "resolve",
+          "payout_index": 1,
+          "transition_class": "landed_kernel"
+        },
+        {
+          "op": "merge",
+          "quantity": 1,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "redeem_internal",
+          "outcome": 0,
+          "quantity": 4,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "redeem_internal",
+          "outcome": 0,
+          "quantity": 3,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        }
+      ]
+    },
+    {
+      "arms": {
+        "credit": {
+          "admitted": true,
+          "final": {
+            "collateral": 2,
+            "credit_total": 2,
+            "positions": [
+              {
+                "credit": 2,
+                "external": [
+                  0,
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  2,
+                  2
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              2,
+              2
+            ]
+          },
+          "results": [
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "payout": 0,
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "error_class": "no_credit",
+              "result": "refuse"
+            }
+          ]
+        },
+        "kernel_baseline": {
+          "admitted": true,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              0,
+              0
+            ]
+          },
+          "results": [
+            {
+              "result": "ok"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "remainder_required",
+              "result": "refuse"
+            },
+            {
+              "payout": 2,
+              "result": "ok"
+            },
+            {
+              "error_class": "no_credit",
+              "result": "refuse"
+            }
+          ]
+        },
+        "lots": {
+          "admitted": true,
+          "final": {
+            "collateral": 0,
+            "credit_total": 0,
+            "positions": [
+              {
+                "credit": 0,
+                "external": [
+                  0,
+                  0,
+                  0
+                ],
+                "internal": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            ],
+            "total_supply": [
+              0,
+              0,
+              0
+            ]
+          },
+          "results": [
+            {
+              "error_class": "lot_violation",
+              "result": "refuse"
+            },
+            {
+              "result": "ok"
+            },
+            {
+              "error_class": "insufficient_balance",
+              "result": "refuse"
+            },
+            {
+              "error_class": "lot_violation",
+              "result": "refuse"
+            },
+            {
+              "error_class": "no_credit",
+              "result": "refuse"
+            }
+          ]
+        },
+        "one_hot": {
+          "admitted": false,
+          "error_class": "invalid_payout_weights"
+        }
+      },
+      "id": "TRC-006",
+      "market": {
+        "count": 1,
+        "initial_collateral": 0,
+        "outcomes": 3,
+        "payout_vectors": [
+          {
+            "denominator": 3,
+            "weights": [
+              1,
+              1,
+              1
+            ]
+          }
+        ],
+        "wallets": 1
+      },
+      "name": "ternary-equal-weight-residue",
+      "note": "equal-weight fallback over three outcomes with D=3: two atoms remainder under the baseline, the complete-set exit clears them, and candidate (c) leaves a sub-atom residue that cannot yet be claimed",
+      "steps": [
+        {
+          "op": "split",
+          "quantity": 2,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "resolve",
+          "payout_index": 0,
+          "transition_class": "landed_kernel"
+        },
+        {
+          "op": "redeem_internal",
+          "outcome": 0,
+          "quantity": 2,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "internal": true,
+          "op": "redeem_complete_set",
+          "quantity": 2,
+          "transition_class": "landed_kernel",
+          "wallet": 0
+        },
+        {
+          "op": "claim_credit",
+          "transition_class": "proposed_candidate_c",
+          "wallet": 0
+        }
+      ]
+    }
+  ]
+}

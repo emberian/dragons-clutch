@@ -7,13 +7,22 @@ from __future__ import annotations
 import json
 from fractions import Fraction
 
+from experiments import ALL_EXPERIMENTS, exp_fee_g2, exp_lot_b4, exp_lot_x2
 from model import (
     ALLOWED_POOL_PURPOSES,
+    CarryClose,
+    CarryDomain,
+    FeeSideArm,
+    Fill,
+    KernelRefusal,
+    PayoutPolicy,
     Pool,
     ProtectedPools,
     ReverseDutchSchedule,
     SharedFeedEpoch,
+    WeightedBook,
     allocate_fee,
+    carry_domain_totals,
     common_mode_exposure,
     dominant_tail_attack,
     enumerate_solvency_traces,
@@ -23,8 +32,11 @@ from model import (
     fee_with_carry,
     integer_shares,
     midpoint_effective_bps,
+    payout_set,
     required_weighted_volume,
+    run_fee_schedule,
     single_egg_dispersion_numerator,
+    sybil_wash_result,
 )
 
 
@@ -188,6 +200,106 @@ def price_collapse_table() -> list[dict[str, object]]:
     return rows
 
 
+def payout_candidate_arms() -> dict[str, object]:
+    """Per-candidate behaviour on the P1-A trap, plus derived lot magnitudes."""
+
+    trap = payout_set(2, [[1, 1]], 2)
+    arms: dict[str, object] = {}
+    for policy in PayoutPolicy:
+        try:
+            book = WeightedBook.open(trap, policy)
+        except KernelRefusal as refusal:
+            arms[policy.value] = {"admitted": False, "error_class": refusal.error_class}
+            continue
+        entry: dict[str, object] = {"admitted": True}
+        try:
+            book = book.split(0, 1).resolve(0)
+        except KernelRefusal as refusal:
+            entry["split_one_atom"] = f"refused:{refusal.error_class}"
+            arms[policy.value] = entry
+            continue
+        entry["split_one_atom"] = "ok"
+        try:
+            _, payout = book.redeem_internal(0, 0, 1)
+            entry["redeem_one_atom"] = f"ok:{payout}"
+        except KernelRefusal as refusal:
+            entry["redeem_one_atom"] = f"refused:{refusal.error_class}"
+        entry["retirement_residue_without_complete_set"] = book.retirement_residue(False)
+        entry["retirement_residue_with_complete_set"] = book.retirement_residue(True)
+        arms[policy.value] = entry
+    return {
+        "note": "MODEL arms; no payout candidate is promoted by this report",
+        "p1a_trap": arms,
+        "lot_magnitude": exp_lot_b4().data["rows"],
+        "retirement_liveness": exp_lot_x2().data["rows"],
+    }
+
+
+def fee_policy_arms() -> dict[str, object]:
+    """Carry-domain, payer-debit, side-arm and width tables (sections 2.2-2.4)."""
+
+    dust = [
+        Fill(2, 50, buyer_intent=f"buy-{index}", seller_intent=f"sell-{index}", epoch=index)
+        for index in range(4)
+    ]
+    supra = [Fill(2000, 50)]
+    side_arm_rows = []
+    for fills, label in ((dust, "four_dust_fills"), (supra, "one_supra_atom_fill")):
+        for side_arm in FeeSideArm:
+            result = run_fee_schedule(
+                fills,
+                100,
+                KAPPA_NUM,
+                KAPPA_DEN,
+                domain=CarryDomain.INTENT,
+                close_policy=CarryClose.TERMINAL_CEIL,
+                side_arm=side_arm,
+            )
+            side_arm_rows.append(
+                {
+                    "schedule": label,
+                    "fee_side_arm": side_arm.value,
+                    "buyer_debit_total": result.buyer_debit_total,
+                    "seller_credit_total": result.seller_credit_total,
+                    "consideration_total": result.consideration_total,
+                    "fee_pot": result.fee_pot,
+                    "terminal_charges": result.terminal_charges,
+                    "payer_identity_holds": result.conserves,
+                    "wash_net": sybil_wash_result(
+                        fills, 100, KAPPA_NUM, KAPPA_DEN, side_arm=side_arm
+                    )["net_wash"],
+                }
+            )
+    return {
+        "note": "MODEL arms; kappa, the 60/15/25 split, and the carry domain stay unpromoted",
+        "carry_domain_pot_table_four_dust_fills": carry_domain_totals(
+            dust, 100, KAPPA_NUM, KAPPA_DEN
+        ),
+        "payer_debit_side_arms": side_arm_rows,
+        "width_proposal": exp_fee_g2().data["rows"],
+    }
+
+
+def experiment_summary() -> list[dict[str, object]]:
+    """Every section 5 matrix row this lab owns, with its falsification verdict."""
+
+    rows = []
+    for experiment in ALL_EXPERIMENTS:
+        result = experiment()
+        rows.append(
+            {
+                "experiment": result.experiment,
+                "bounds": result.bounds,
+                "claim": result.claim,
+                "counts": result.counts,
+                "falsified": result.falsified,
+                "falsifier": result.falsifier,
+                "witnesses": list(result.witnesses),
+            }
+        )
+    return rows
+
+
 def main() -> None:
     attack_rows = []
     for outcomes in (2, 4, 16):
@@ -239,6 +351,9 @@ def main() -> None:
                 (1,) * 1_001, 5_000, PRICE_SCALE, KAPPA_NUM, KAPPA_DEN
             ),
         },
+        "payout_candidate_arms": payout_candidate_arms(),
+        "fee_policy_arms": fee_policy_arms(),
+        "experiment_matrix": experiment_summary(),
         "price_collapse": price_collapse_table(),
         "break_even_sensitivity": {
             "operating_cost_sol": "100",

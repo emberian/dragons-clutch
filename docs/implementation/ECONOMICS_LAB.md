@@ -187,3 +187,181 @@ business equation never enters market admission.
 Future recorded inputs must use the result-directory and provenance contracts in
 [`BENCHMARK_PLAN.md`](../BENCHMARK_PLAN.md) and
 [`PROVENANCE.md`](../PROVENANCE.md).
+
+## Addendum 2026-08-18: kernel alignment, payout candidates, fee payer debit
+
+Status unchanged: deterministic synthetic research scaffold. Everything below is
+MODEL (a property of the host-only code, checkable by the cited experiment) or
+PROPOSED (a candidate awaiting decision). No candidate, carry domain, `kappa`,
+allocation split, executor cap, or lot magnitude is promoted by this addendum.
+
+This addendum implements section 3 and the lab-scoped rows of the section 5
+matrix of
+[`POLICY_ANALYSIS_LOTS_FEES.md`](POLICY_ANALYSIS_LOTS_FEES.md). It closes the
+three lab-side mismatches named in [`ADVERSARIAL_REVIEW_V0.md`](ADVERSARIAL_REVIEW_V0.md)
+section P1-E: the lab admitted payout vectors the kernel refuses, the lab had no
+fractional payout semantics at all, and no fee in the lab debited a payer.
+
+### Same admitted market set (section 3.1)
+
+`maximum_liability` now refuses any payout vector whose weights do not sum to
+**exactly** one collateral unit, matching the kernel's `sum(w_i) == D`. The
+previous `sum <= 1` behaviour is gone rather than kept as an arm: the policy
+analysis section 4 table assigns this mismatch to the lab under every candidate,
+so there is no contrast arm to preserve. Refusal tests cover both sub-unit and
+super-unit sums.
+
+`model.py` gained an integer mirror of the kernel's shape rules —
+`IntegerPayoutVector`, `IntegerPayoutSet`, `WeightedBook` — using plain integers
+and never `Fraction`. It reproduces the kernel's refusal *ordering* as well as
+its refusals: zero denominator, weight above the denominator, weights not summing
+to `D`, nonzero weight padding, nonzero vector padding, mixed denominators, and
+the `MIN_OUTCOMES`/`MAX_OUTCOMES`/`MAX_PAYOUTS` bounds. Refusals carry a shared
+`error_class` string so the two languages can be compared without sharing types.
+
+### Payout candidate arms (section 3.2)
+
+`WeightedBook` walks four arms:
+
+- `kernel_baseline` — the landed kernel; the arm under which the P1-A trap is
+  reachable. It is kept as a labelled contrast arm, not as a recommendation.
+- `one_hot` — PROPOSED candidate (a1): non-one-hot sets are refused at admission
+  with `invalid_payout_weights`.
+- `lots` — PROPOSED candidate (b1): `split`/`merge` gate on
+  `L_split = lcm_i L_i`, `materialize`/`dematerialize` gate on
+  `L_i = D / gcd(D, {v_i != 0})`, bearer transfers stay ungated.
+- `credit` — PROPOSED candidate (c): redemption pays `floor(q*v_i/D)` and accrues
+  the exact `1/D` remainder to a per-position credit, with the solvency invariant
+  carrying `credit_num_total`.
+
+The terminal complete-set redemption of section 1.5 exists in every arm.
+`enumerate_weighted_traces` is the companion to `enumerate_solvency_traces`: it
+walks one arm and reports refusal classes, sub-lot residency by phase, stranded
+value, and exit-dead states — exit-liveness, not solvency alone.
+
+### Payer-debit fee accounting and carry policy (section 3.3)
+
+`run_fee_schedule` settles fills with explicit legs: `buyer cash debit = C + f_b`,
+`seller cash credit = C - f_s`, `fee pot delta = f_b + f_s`. Every atom in the
+pot came from a named payer's cash; the Hoard is never a fee source; the identity
+`sum(buyer debits) - sum(seller credits) = fee pot delta` is a reported flag, not
+prose. Consideration is computed by `exact_consideration`, which *refuses*
+off-grid `(q, p)` pairs instead of silently flooring.
+
+Carry policy is now two orthogonal choices: the domain (`position` / `intent` /
+`epoch`) and the close policy (`terminal_ceil` / `dropped_carry`).
+`fee_fragmentation_result` keeps its three original arms and adds
+`terminal_ceil_total`, `dropped_carry_total` and `exact_ceil_total`.
+`allocate_fee` gained the per-batch `executor_cap`; the uncapped default is
+unchanged. `dispersion_numerator` is now wired into the debit path as the fee
+base of record instead of existing beside it.
+
+### Executed matrix rows
+
+All rows below execute in the test suite and in `run_lab.py`; each states its own
+falsification condition and checks it. Bounds are recorded in each result. None
+was falsified at the bounds stated in the code.
+
+| Row | What it executes |
+|---|---|
+| EXP-LOT-A1 | one-hot admission over all weight tuples (outcomes ≤ 4, D ≤ 6, sets ≤ 2) plus bounded traces asserting `remainder_required` unreachable |
+| EXP-LOT-B1 | `L_i` is exactly the minimal exact-redemption modulus, both directions |
+| EXP-LOT-B2 | lot-gated walks reach no Active-phase sub-lot balance and no exit-dead state; the P1-A split is refused with `lot_violation` |
+| EXP-LOT-B3 | three-wallet bearer fragmentation: aggregate stays lot-aligned, trapping is sub-lot dust, recombination always recovers |
+| EXP-LOT-B4 | lot magnitudes for the equal-weight compatibility families (data) |
+| EXP-LOT-B5 | lot-aligned states never ceiling: reservation equals exact liability |
+| EXP-LOT-C1 | credit conservation `q*v_i = D*paid + credit_delta`, carry in `[0, D)`, fragmentation-identical totals |
+| EXP-LOT-C2 | fragmenting a redemption across positions never pays more and strands `< k` atoms |
+| EXP-LOT-X1 | complete-set redemption is exact in every arm and exits the P1-A trap |
+| EXP-LOT-X2 | retirement liveness per arm (data) |
+| EXP-FEE-D1 | terminal-ceil pays exactly `ceil(exact)` per domain instance; cross-domain splitting never pays less |
+| EXP-FEE-D2 | epoch domain with dropped carry collects zero while volume is positive |
+| EXP-FEE-P1 | payer conservation, escrow head-room, untouched Hoard across every domain × close × side cell |
+| EXP-FEE-P2 | both-sides versus charge-once-split (data) |
+| EXP-FEE-G1 | the six seminorm identities, exact, at stated bounds |
+| EXP-FEE-G2 | exact width maximum and u128 head-room for three proposed frozen-bound sets |
+| EXP-FEE-W1 | self-wash sign over the whole policy matrix |
+| EXP-FEE-A1 | allocation exactness with the executor cap |
+| EXP-ALIGN-01/02/03 | the differential fixtures below, replayed through the lab |
+
+Rows owned by other lanes are not implemented here: EXP-TERMS-01 targets the
+static-client terms fixture, and the batch-relation obligations of sections 1.3
+and 2.3 belong to the batch lane.
+
+### Differential fixtures
+
+`fixtures/economics/` holds three hand-authored, language-neutral families —
+`admission_vectors.json`, `trace_vectors.json`, `fee_vectors.json` — with the
+cross-language contract in `fixtures/economics/README.md`. The P1-A fixture is
+trace vector #1. Expectations are authored from the policy analysis, not
+generated from the model, and the lab is checked against them; the same files are
+the contract for a future Rust consumer. Bytes are deterministic (sorted keys,
+two-space indent, trailing newline, no timestamps) and regenerating must produce
+no diff.
+
+### Findings and resolved ambiguities
+
+1. **The complete-set primitive must be lot-gated under candidate (b).** Section
+   1.5 says the terminal complete-set redemption is exact for any quantity, and
+   section 1.3 gates `merge` at `L_split`. Left ungated, the Resolved-phase twin
+   of `merge` re-creates sub-lot internal balances and breaks (b)'s internal
+   closure claim. The lab gates it at `L_split` in the `lots` arm only.
+2. **Post-resolution sub-lot balances are normal and are not a defect.** After
+   resolution the binding modulus is `D / gcd(D, resolved w_i)`, which can be
+   smaller than the set-wide `L_i`; balances below the set-wide lot can still
+   redeem exactly. EXP-LOT-B2 therefore checks Active-phase alignment and
+   exit-liveness in both phases, and reports the resolved sub-lot count as data.
+3. **The kernel landed the section 1.5 primitive while this lane ran.** Commit
+   `d60ccf3` added `redeem_complete_set` for internal balances only. The lab's
+   arms and fixtures already assumed the primitive, so the fixture step class
+   for the internal side reads `landed_kernel`; the external-side complete-set
+   exit used by `TRC-003` remains a lab extension with no kernel counterpart.
+4. **Materialization can strand a complete set.** Moving one leg of a P1-A set
+   across the Token-2022 boundary leaves an internal side and an external side
+   that cannot each form a set, so the section 1.5 exit no longer applies and the
+   position is exit-dead with liability outstanding (fixture `TRC-003`). Any
+   complete-set exit rule has to say whether a set may be assembled across the
+   internal/external boundary.
+5. **Below the one-atom floor the two fee-side arms are indistinguishable.**
+   At the section 5 dust bounds (`q <= 20` on the price grid), terminal-ceil
+   charges one atom per intent under both readings, so per-intent-both-sides and
+   charge-once-split collect the same pot. They separate only above the floor,
+   where charge-once-split collects about half. EXP-FEE-P2 therefore runs a
+   supra-atom grid as well as the dust grid.
+6. **Zero-fee cells are non-negative, not positive.** With dropped carry and dust
+   flow the pot is zero, so a washer's net is exactly zero rather than negative.
+   EXP-FEE-W1 checks `net wash <= 0` everywhere and strict negativity in every
+   terminal-ceil cell, and counts the zero-fee cells as the evasion evidence that
+   EXP-FEE-D2 quantifies.
+7. **`claim_credit` refuses when nothing whole has accrued.** The policy analysis
+   does not say what a no-op credit claim does; the lab refuses with `no_credit`
+   rather than succeeding with a zero payout, so the transition is never a
+   silent no-op. This is a lab convention, not a decision.
+8. **A negative weight is classified, not crashed.** It is unrepresentable in the
+   kernel's `u64`; the lab classifies it as `invalid_payout_weights` and the
+   shared fixtures avoid the case so no consumer is forced into an
+   implementation-defined answer.
+
+### Added stop and promotion rules
+
+- Do not promote any payout candidate, redemption lot, credit layout, carry
+  domain, close policy, fee side arm, or executor cap from these checks. The
+  arms exist to be compared, and `kappa=0.004` and 60/15/25 remain unpromoted.
+- Stop any payout policy that admits a reachable state holding claim value which
+  no admissible transition can release. Solvency is not exit-liveness: the P1-A
+  state satisfies the collateral invariant and is still dead.
+- Stop any fee policy that credits the fee pot without an equal, simultaneous
+  debit of a named payer's escrowed cash. A fee that increments revenue from thin
+  air cannot be checked for conservation at all.
+- Stop any fee policy whose carry domain instance can be closed for free; require
+  the domain-lifetime charge to be `ceil(exact)` and cross-domain splitting to be
+  weakly more expensive.
+- Stop any redemption policy that floors silently. Refusing, lot-gating, or
+  crediting the exact remainder are the admissible shapes; dropping the remainder
+  is not.
+- A differential fixture that fails on either side is a finding. Fixtures are
+  never edited to match an implementation, and a minimized failure becomes a
+  permanent named vector.
+- Passing these fixtures shows that two implementations agree. It is not evidence
+  for `P-SOLV-01` or `P-FEE-01` until the semantics they encode are frozen and
+  both sides are the frozen ones.
