@@ -51,6 +51,9 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
   seam found: portfolio orders lack persisted page encoding; pushed.
 - REF-INT + S1 co-committed: resolution evidence-gated (fail-closed path
   intact), reproducible ELF + 6/6 SVM differential; pushed.
+- LANDSCAPE: 11 filed comments surveyed; IAC docket empty of technical
+  statements; P-D5 crowded, P-R6 preempted; our formal-methods ground is
+  a corpus-wide zero. Draft 7 rebalance queued behind TYPESET.
 - D1: independent FBA oracle, 300M-case differential, zero semantic
   divergences, vectors byte-identical; spec gap (refusal-class priority)
   found and pinned; pushed.
