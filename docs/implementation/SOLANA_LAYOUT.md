@@ -38,7 +38,7 @@ not a local policy choice.
 ## Version discipline
 
 Each account carries its **own** schema version (`account_version::*`).
-`LAYOUT_VERSION` is the largest of them (`3`), not one wire version shared by
+`LAYOUT_VERSION` is the largest of them (`4`), not one wire version shared by
 every account. An account keeps the version its current bytes were introduced
 at; an account whose bytes change moves to the next version and refuses every
 earlier one explicitly with `WrongVersion`, so the pair `(tag, version)` never
@@ -49,9 +49,12 @@ names two different shapes.
 | Realm, Market, Hoard, Position, Feed head | 1 | bytes unchanged |
 | Profile | 2 | gained the 32-byte collateral-policy digest |
 | Supply ledger, Terms, Epoch, Price grid, Candidate, Final pot, Receipt, Resolution | 2 | introduced at 2 |
-| Dense order page | 3 | version 2 gained the page-set commitment fields; version 3 replaced its bare 99-byte records with tagged fixed-width order slots and refuses both 1 and 2 |
+| Dense order page | 4 | version 2 gained the page-set commitment fields; version 3 replaced its bare 99-byte records with tagged fixed-width order slots; version 4 made order ids positional, added the retirement slot kind and its header count, and gave every record a persisted expiry. It refuses 1, 2, and 3 |
 
-Intent bytes are versioned separately (`INTENT_VERSION = 1`) and did not change.
+Intent bytes are versioned separately and moved to `INTENT_VERSION = 2` with the
+same revision: a placement now carries an `OrderSlot` rather than a bare
+`OrderRecord`, and a cancellation carries the retirement's generation. Every
+decoder refuses `INTENT_VERSION_V1 = 1` explicitly with `WrongVersion`.
 
 Two validation tightenings apply to unchanged bytes, and are refusals rather
 than new fields: `RealmAccount.max_outcomes` must now be exactly `16` (the
@@ -72,7 +75,7 @@ All integers are little-endian. The first two bytes are `(tag, version)`.
 | Hoard | 5 | 108 | market/realm/authority, collateral atoms, bump, flags |
 | Position | 6 | 220 | market/owner, generation, 16 `u64` balances, cash/reserved cash |
 | Feed head | 7 | 124 | feed/realm, cursor/boundary/pages, summary digest, bump |
-| Dense order page | 8 | 3883 | market/epoch, 5 page-set commitments, page metadata, 16 × 228-byte tagged order slots |
+| Dense order page | 8 | 4012 | market/epoch, 5 page-set commitments, page metadata + retirement count, 16 × 236-byte tagged order slots |
 | Supply ledger | 9 | 333 | market/realm, generation, 16 internal + 16 external `u64` |
 | Immutable terms | 10 | 1656 | terms digest, realm/profile/feed/price-grid, 8 × payout vector, window policy, failure policy |
 | Epoch (book domain) | 11 | 328 | epoch/market/book/terms/grid/policy/order-set IDs, order range, shape, seed, phase |
@@ -82,12 +85,13 @@ All integers are little-endian. The first two bytes are `(tag, version)`.
 | Settlement receipt | 15 | 217 | epoch/market/candidate, buy/sell order ids, slice, quantity, price, consideration, consumed flags |
 | Resolution | 16 | 165 | market/terms/feed, sealed window digest, cursor, repair generation, payout index |
 
-One order slot is 228 bytes: a one-byte kind discriminator, that kind's exact
-body (99 bytes single-Egg, 227 bytes portfolio), and canonical zero padding out
-to the common width. The 235-byte page header is unchanged.
+One order slot is 236 bytes: a one-byte kind discriminator, that kind's exact
+body (107 bytes single-Egg, 235 bytes portfolio, 80 bytes retirement), and
+canonical zero padding out to the common width. The page header is 236 bytes —
+one more than v3, for `tombstone_count`.
 
-One instance of every listed account is 8,734 bytes; a market whose epoch book
-uses the full four pages is 20,383 bytes. This is the byte-size inventory only;
+One instance of every listed account is 8,863 bytes; a market whose epoch book
+uses the full four pages is 20,899 bytes. This is the byte-size inventory only;
 it is not a rent, account-metadata, transaction-message, or compute-unit
 estimate, and it excludes page multiplicity beyond the one case named.
 
@@ -165,13 +169,16 @@ the set-wide order-set digest, and the frozen set order count.
 - page indices are `0..page_count` with no gap, repeat, or reordering;
 - market, epoch, order-set digest, and set order count agree across all pages;
 - each page's stored range is exactly its records' first and last order id;
-- each page opens strictly above the previous page's last order id, which makes
-  the order-id sequence strictly increasing across the whole set, not per page;
+- each page's stored `prev_page_last_order_id` is exactly the canonical id of
+  the rank its own index fixes, which makes the order-id sequence dense and
+  strictly increasing across the whole set, not per page;
 - every non-final page of a frozen set is dense and the final page closes the
   count exactly;
 - the per-page order counts sum to the committed set order count;
 - the portfolio records across the whole set do not exceed
-  `MAX_PORTFOLIO_ORDERS = 8`, which a single page cannot decide; and
+  `MAX_PORTFOLIO_ORDERS = 8`, which a single page cannot decide;
+- at least one order in the whole set is still live, that is not retired, which
+  a single page also cannot decide; and
 - folding the page digests in index order reproduces the stored order-set
   digest.
 
@@ -183,9 +190,13 @@ post-freeze change to one portfolio coefficient atom or cash bound, a slot
 re-typed from portfolio to single-Egg, and a ninth portfolio added on the page
 after the eighth. `EpochAccount::binds_page_set` then ties the verified set to
 the epoch's committed order set, page count, order count, and order range, and —
-because a page alone can only bound an outcome index by `MAX_OUTCOMES` — refuses
-any single-Egg outcome at or above, or any portfolio `active_len` above, the
-epoch's own `outcome_count`.
+because a page alone can bound neither an outcome index (it knows only
+`MAX_OUTCOMES`) nor a horizon (it stores a 32-byte epoch identity that cannot be
+inverted into an epoch index) — refuses any live single-Egg outcome at or above,
+or any live portfolio `active_len` above, the epoch's own `outcome_count`, and
+any live record whose `expiry_epoch` is already below the epoch's own
+`epoch_index`. Retired records are skipped by both checks: nothing will ever be
+fed to the relation from one.
 
 While an epoch is open it commits to nothing: order-set digest, order range,
 page count, and order count must all be zero, and any nonzero value there is
@@ -193,8 +204,8 @@ refused as noncanonical padding rather than treated as a stale hint.
 
 ## Limit-to-tick mapping
 
-`OrderRecord.limit` remains an opaque `u64` on the venue scale and its 99-byte
-body is unchanged. The frozen mapping to the relation's tick domain lives in
+`OrderRecord.limit` remains an opaque `u64` on the venue scale; its body is
+107 bytes at v4, the 99 of v3 plus `expiry_epoch`. The frozen mapping to the relation's tick domain lives in
 `PriceGridAccount`: a strictly increasing tick vector, each tick at most the
 price scale, with the grid identity being the digest of that body. A limit maps
 to a tick by exact membership; a limit that is not exactly one of the ticks has
@@ -233,8 +244,9 @@ merge check nothing commits to; it would also let a full set of four dense pages
 plus a portfolio account hold 72 orders, which is not a book. Keeping both
 families in one page keeps one chain, one fold, one `set_order_count`, and one
 `MAX_EPOCH_ORDERS == MAX_ORDERS` identity. The cost of that is a common slot
-width: every slot is `ORDER_SLOT_BYTES = 228` bytes even though a single-Egg body
-is 99, which is why the page grew from 1,819 to 3,883 bytes. That is not slack.
+width: every slot is `ORDER_SLOT_BYTES` bytes — 228 at v3, 236 at v4 — even
+though a single-Egg body is 99 and then 107, which is why the page grew from
+1,819 to 3,883 and then to 4,012 bytes. That is not slack.
 The unused tail of a single-Egg slot is *required* to be zero, exactly like every
 other padded field in this crate, so a slot has one encoding, the account keeps
 one exact length, and padding can never influence a digest.
@@ -243,12 +255,16 @@ one exact length, and padding can never influence a digest.
 
 A slot is a one-byte kind discriminator, that kind's exact body, and canonical
 zero padding to the common width. Kind `0` is padding and the whole slot is
-zero; kind `1` is a single-Egg `OrderRecord`; kind `2` is a `PortfolioRecord`.
-Any other kind byte is `WrongTag`, and a nonzero byte anywhere in a slot's
-padding is `NonCanonicalPadding` — including an all-zero record smuggled into a
-padding slot under a real kind byte, which is a record and not padding.
+zero; kind `1` is a single-Egg `OrderRecord`; kind `2` is a `PortfolioRecord`;
+kind `3` is a `TombstoneRecord` (v4). Any other kind byte is `WrongTag`, and a
+nonzero byte anywhere in a slot's padding is `NonCanonicalPadding` — including
+an all-zero record smuggled into a padding slot under a real kind byte, which is
+a record and not padding.
 
-Kind 1, single-Egg (`ORDER_RECORD_BYTES = 99` of body):
+The tables below are the **v4** shapes; a unit test pins every offset in all
+three against the encoder, so the tables and the codec cannot drift apart.
+
+Kind 1, single-Egg (`ORDER_RECORD_BYTES = 107` of body):
 
 | Slot-local offset | Bytes | Field |
 | ---: | ---: | --- |
@@ -262,9 +278,10 @@ Kind 1, single-Egg (`ORDER_RECORD_BYTES = 99` of body):
 | 83 | 8 | `minimum_fill` |
 | 91 | 1 | `flags` |
 | 92 | 8 | `generation` |
-| 100 | 128 | zero padding to the common width |
+| 100 | 8 | `expiry_epoch` |
+| 108 | 128 | zero padding to the common width |
 
-Kind 2, portfolio (`PORTFOLIO_RECORD_BYTES = 227` of body, no padding):
+Kind 2, portfolio (`PORTFOLIO_RECORD_BYTES = 235` of body, no padding):
 
 | Slot-local offset | Bytes | Field |
 | ---: | ---: | --- |
@@ -279,11 +296,22 @@ Kind 2, portfolio (`PORTFOLIO_RECORD_BYTES = 227` of body, no padding):
 | 204 | 8 | `limit_collateral_per_lot` |
 | 212 | 8 | `minimum_fill_lots` |
 | 220 | 8 | `generation` |
+| 228 | 8 | `expiry_epoch` |
 
-The single-Egg body is byte-identical to the previous 99-byte record and simply
-moved one byte right, behind its kind discriminator. A unit test pins every
-offset in both tables against the encoder, so the tables and the codec cannot
-drift apart.
+Kind 3, retirement (`TOMBSTONE_RECORD_BYTES = 80` of body):
+
+| Slot-local offset | Bytes | Field |
+| ---: | ---: | --- |
+| 0 | 1 | kind = 3 |
+| 1 | 32 | `order_id` — the retired rank, unchanged |
+| 33 | 32 | `owner` — the retired record's owner |
+| 65 | 8 | `retired_generation` |
+| 73 | 8 | `generation`, strictly above `retired_generation` |
+| 81 | 155 | zero padding to the common width |
+
+At v3 the single-Egg body was byte-identical to the previous bare 99-byte record
+and simply moved one byte right, behind its kind discriminator; at v4 it is that
+body plus `expiry_epoch`.
 
 ### What the codec refuses
 
@@ -310,10 +338,11 @@ the epoch's `outcome_count` — a page alone can only bound a width by
 width. The same binding now also refuses a single-Egg `outcome` at or above the
 epoch's `outcome_count`, which no account checked before.
 
-The page digest domain moved to `dragons-clutch/order-page/v2` because its
-preimage shape changed. The order-set fold keeps `dragons-clutch/order-set/v1`:
-its preimage — market, epoch, page count, order count, page digests — did not
-change, and the leaves it folds already carry the new domain.
+The page digest domain moved to `dragons-clutch/order-page/v2` here, and again
+to `/v3` at v4, because its preimage shape changed both times. The order-set fold
+keeps `dragons-clutch/order-set/v1` through both: its preimage — market, epoch,
+page count, order count, page digests — did not change, and the leaves it folds
+already carry the new domain.
 
 ### Mapping contract to `PortfolioOrderV1`
 
@@ -331,24 +360,25 @@ rustdoc on `PortfolioRecord` carries this as a doc-tested example.
 | `side: Side` | `side`: `0` → `Buy`, `1` → `Sell` |
 | `partial_policy: PartialPolicy` | `flags` bit 0 set → `AllOrNone`, clear → `Allow` |
 | `owner: u16` | the adapter's owner-tag image of the 32-byte `owner`, which must land in `0 .. EpochAccount.owner_count` |
-| `canonical_order_id: u64` | the record's rank in the verified page set, plus one — the set already fixes one strictly increasing order, so rank is nonzero, strictly increasing, and order-preserving by construction |
-| `expiry_epoch: u64` | **not persisted by any record.** An adapter must supply it from an authenticated source; the single-Egg family has the same hole and always did |
+| `canonical_order_id: u64` | the record's **live rank** in the canonical page-set walk, plus one — the walk skips retirements, so this is not the same number as the stored `order_id` on a set that has any (see the v4 addendum) |
+| `expiry_epoch: u64` | `expiry_epoch`, verbatim; v4 persists it, and `EpochAccount::binds_page_set` refuses a frozen set holding a live record already past it |
 | — | `generation` is replay protection for the placing instruction and has no relation field |
 
-The two identity rows are conversions the adapter performs, not values this
-crate stores, and neither is checked here: nothing in this crate proves that an
-owner tag is a bijection into `owner_count`, and nothing proves that a caller
-ranked the set the way the relation will. What the crate does guarantee is that
-the ranking exists and is unique — `verify_page_set` establishes a single
-strictly increasing order-id chain across both families and the whole set — so
-the conversion is well defined rather than a choice.
+The owner row is a conversion the adapter performs, not a value this crate
+stores, and it is not checked here: nothing in this crate proves that an owner
+tag is a bijection into `owner_count`. The order-id row changed shape at v4:
+the stored id is now itself a rank (`canonical_order_id(rank)`), so the *slot*
+numbering is a value this crate fixes rather than one a caller chooses, and the
+only work left to the projection is the live-rank renumbering that skips
+retirements.
 
 Correspondingly, these relation refusals are *not* pre-empted here and remain
 `clutch-batch`'s: `active_len <= domain.outcome_count` (checked here only against
-the epoch, not the relation domain), `owner < domain.owner_count`,
-`expiry_epoch >= domain.epoch`, the all-or-none admission policy, and every
-eligibility, fill, conservation, and pairing question. A byte-valid portfolio
-record is not an admissible order.
+the epoch, not the relation domain), `owner < domain.owner_count`, the
+all-or-none admission policy, and every eligibility, fill, conservation, and
+pairing question. A byte-valid portfolio record is not an admissible order.
+`expiry_epoch >= domain.epoch` is now checked here too, against the epoch
+account's index — the relation still owns it against its own domain.
 
 ## Streaming page decoders (addendum, 2026-08-18)
 
@@ -356,8 +386,8 @@ The SBF foundation lane measured a hard blocker rather than predicting one: on
 the pinned `cargo-build-sbf` toolchain, `OrderPageAccount::decode` is reported
 at an estimated **8,640-byte** call frame and `decode_on_grid` at **8,320**,
 against SBF's 4,096-byte per-frame maximum. The v3 page — a 235-byte header and
-16 tag-discriminated 228-byte slots, 3,883 bytes in all — could therefore not be
-read on-chain at all, and `clutch-sbf` compiles its `read_order_page` wrapper
+16 tag-discriminated 228-byte slots, 3,883 bytes in all; v4 is 236 and 236, 4,012
+in all, which only widens the gap — could therefore not be read on-chain at all, and `clutch-sbf` compiles its `read_order_page` wrapper
 off-chain only so that reaching for it is a compile error instead of a frame
 overflow the loader would happily run.
 
@@ -394,13 +424,25 @@ nothing calls them.
 | `stream::verify_page_set` | `verify_page_set` |
 | `stream::epoch_binds_page_set` | `EpochAccount::binds_page_set` |
 
+| Streaming writer | What it writes |
+| --- | --- |
+| `stream::init_page` | an empty open page over a fresh account |
+| `stream::append_slot` | one order, of either family, at the derived id |
+| `stream::write_single_slot` | `append_slot` at the single-Egg family |
+| `stream::write_tombstone` | one retirement, in place, over a live record |
+| `stream::frozen_set_commitment` | nothing — it computes what a freeze would stamp |
+| `stream::seal_page` | one page's three freeze fields |
+| `stream::OrderPageHeader::next_order_id` | nothing — the id a placement must carry |
+| `stream::OrderPageHeader::slot_index_of` | nothing — the slot an order id names |
+| `stream::OrderPageHeader::live_count` | nothing — `order_count - tombstone_count` |
+
 `OrderPageHeader` is every page field except the slots. `OrderSlotCursor`
 decodes exactly one `ORDER_SLOT_BYTES` slot per step — kind byte, that kind's
 exact body, canonical zero padding to the common width — and carries across
-steps the two facts a single slot cannot decide: that a slot below
-`order_count` holds a valid record whose order id is strictly above its
-predecessor, and that a slot at or above it is canonical padding. A refused step
-fuses the cursor.
+steps the one fact a single slot cannot decide: which position it is at, so that
+a slot below `order_count` can be required to hold a valid record carrying
+exactly *that* position's canonical order id, and a slot at or above it can be
+required to be canonical padding. A refused step fuses the cursor.
 
 `stream::verify_page` reads the header alone, sweeps the slot array once
 structurally while folding the page digest, checks the header's own shape,
@@ -428,7 +470,7 @@ hidden: a set of more than `MAX_ORDER_PAGES` page slices is refused with
 book whatever its pages hold.
 
 Equivalence is a property of the whole verdict, not of every helper.
-`OrderPageHeader::validate_shape` deliberately decides only what the first 235
+`OrderPageHeader::validate_shape` deliberately decides only what the first 236
 bytes can decide; it is a cheap precondition, never a page's verdict.
 
 The tests are written as harnesses rather than as fixture-by-fixture assertions:
@@ -486,6 +528,365 @@ that decodes has exactly one encoding. Whether an instruction that verifies a
 four-page set fits an SBF compute budget is still an open obligation-10 question
 for the owning lane, and this addendum answers only the frame question.
 
+## Order page v4: positional ids, retirements, expiry (addendum, 2026-08-18)
+
+Three landed findings and one proposed spec converge on one page-format
+revision, so they were done as one rather than three:
+
+* the orders lane (5cb4ad1) found the layout publishes a streaming **reader**
+  and no streaming **writer**, so the SBF placement instruction hand-writes four
+  regions at offsets it computes itself and re-verifies the page afterwards to
+  learn whether it guessed right — recorded there as debt;
+* the same lane found `CancelOrder` **unrepresentable**: the frozen page format
+  had no way to say "this order is retired", so the instruction refuses;
+* the same lane found caller-chosen 32-byte order ids are a **page-burning
+  griefing vector** — a caller may place `0xff…ff` and no later order can extend
+  a strictly increasing chain past it — and that portfolio placement is a **wire
+  gap**, because `Intent::PlaceOrder` carried a bare `OrderRecord` while pages
+  hold `OrderSlot`;
+* `STREAMING_RELATION_DESIGN.md` §10 proposed that the relation's
+  `canonical_order_id` be a **derived** page-set rank and that per-order expiry
+  be "folded into the same format revision as the tombstone later".
+
+Later is now. The page moves to `account_version::ORDER_PAGE = 4`, refusing 1,
+2, and 3 explicitly, and the page-digest domain moves to
+`dragons-clutch/order-page/v3` because the preimage shape changed again. The
+order-set fold keeps its own `v1` domain by the rule it was given when the slots
+were introduced: its preimage shape — market, epoch, page count, order count,
+page digests — did not change, only the leaves it folds, and those carry the new
+domain themselves.
+
+### Order ids are positional
+
+An order id is no longer a value a caller supplies. It is
+`canonical_order_id(rank)`: the rank encoded big-endian in the low eight bytes
+of a `Hash32`, zero elsewhere, where
+
+```
+rank = page_index * MAX_ORDERS_PER_PAGE + slot_index + 1
+```
+
+so page 0 owns ranks 1..16, page 1 owns 17..32, and the last rank any book can
+hold is `MAX_EPOCH_ORDERS = 64`. `order_id_rank` inverts it and refuses
+everything else: a nonzero prefix byte is `NonCanonicalIdentity`, rank zero is
+`ZeroIdentity` (the all-zero identity stays reserved for "no order", as
+everywhere else in this crate), and a rank above 64 is `InvalidCount` before any
+page is consulted.
+
+Four things follow from the encoding rather than from a check:
+
+1. **The griefing vector is gone.** A caller has no id to choose. The only id a
+   placement may carry is `OrderPageHeader::next_order_id()`, which is
+   arithmetic over the page's own header.
+2. **Byte order is rank order**, so the page's lexicographic id chain and the
+   numeric rank chain are the same chain and the cross-page closure did not have
+   to change shape.
+3. **The chain check got stronger.** v3 asked that each id be strictly above its
+   predecessor; v4 asks that each id be *exactly* the one its own slot's
+   position admits. That refuses a gap as well as a repeat, it refuses a page-one
+   slot carrying a page-zero rank — the cross-page duplicate v3 could only catch
+   at closure time — and it needs no state carried between slots.
+4. **A cancellation names a slot by arithmetic.** `slot_index_of` recovers the
+   position from the id, so no search over the page is needed to find the order
+   being retired.
+
+`prev_page_last_order_id` is correspondingly the canonical id of
+`page_index * MAX_ORDERS_PER_PAGE`, zero on page zero. It is a fact about the
+page's index, not about how full its predecessors happen to be — which is
+exactly why a rank is globally unique the moment it is written: a half-filled
+page zero can never reach a rank page one has already used.
+
+### Retirements
+
+`OrderSlot` gains a third populated kind, `ORDER_KIND_TOMBSTONE = 3`, carrying a
+`TombstoneRecord`: the retired order id, the retired record's owner, the retired
+record's `generation`, and the retirement's own `generation`, which must be
+strictly above it.
+
+The rule is **retire in place**. A cancellation replaces the record in its slot,
+keeping the slot and keeping the id. Removing a record instead would either
+leave a hole the dense-page rules forbid, or renumber every later order — and
+under positional ids renumbering silently rewrites identities that receipts,
+candidates, and clients already name. So:
+
+| Question | Answer under v4 |
+| --- | --- |
+| Does a retirement count toward `order_count`? | Yes. The slot is populated. |
+| Does it move `first_order_id` / `last_order_id`? | No. The id did not move. |
+| Is it covered by the page-set commitment? | Yes. Its bytes are slot bytes, so they are in the page digest and therefore in the order-set fold. It cannot be added, undone, or moved after a freeze without changing `order_set`. |
+| Does the relation projection see it? | No. It is skipped, and takes no live rank. |
+| Can it be retired again? | No. `write_tombstone` refuses a slot that is not a live record, which is what makes a replayed cancellation refuse on state. |
+
+The header gains `tombstone_count: u8`, checked exactly against a fold over the
+page's own slots, and folded into the page-digest preimage next to
+`order_count` for the same reason `order_count` is there: both are header bytes
+a writer stores, and a digest that did not cover them would let a page disagree
+with its own header without disagreeing with its own digest. `live_count()` is
+`order_count - tombstone_count`, which lets the header-only page-set closure
+size a book's live order feed without touching a slot — and lets it refuse a
+frozen set in which every order has been retired, which has nothing to clear and
+no feed to project.
+
+### Per-order expiry
+
+Both order families gain `expiry_epoch: u64`. §10 recommended an epoch-level
+single expiry *now* and a per-order field folded into this revision *later*;
+this addendum takes the per-order field, for three reasons stated plainly:
+
+* **It is the cheaper revision, not the more expensive one.** An epoch-level
+  expiry is a new `EpochAccount` field, which is a *second* account format
+  revision (`EPOCH` 2 → 3) on top of this one. The per-order field rides the
+  page revision already happening.
+* **It gives the horizon a real refusal.** No page can check an expiry: a page
+  stores a 32-byte epoch identity, which is not invertible into an epoch index.
+  The epoch account owns the index, so `EpochAccount::binds_page_set` and
+  `stream::epoch_binds_page_set` refuse a frozen set holding a **live** record
+  whose `expiry_epoch` is below `epoch_index`. That is the same place the
+  outcome-width bound already lives, for the same reason.
+* **It costs no slot width in the family that pays for it.** The single-Egg body
+  grows 99 → 107 bytes and stays far inside the common slot width, which the
+  portfolio body sets. The portfolio body grows 227 → 235, so the slot grows
+  228 → 236 and the page grows 3,883 → 4,012.
+
+What per-order expiry does **not** do is worth stating, because the field would
+otherwise read as more than it is: a page set belongs to one epoch, and no
+mechanism carries an order from one epoch's book into the next. So today the
+field's whole effect is the dead-on-arrival refusal above. It persists the
+relation's `expiry_epoch` coordinate — which nothing persisted before — and it
+is the coordinate a carry-over mechanism would need; it is not itself GTC.
+
+### Exact widths
+
+| Quantity | v3 | v4 |
+| --- | ---: | ---: |
+| `ORDER_RECORD_BYTES` | 99 | 107 (`+ expiry_epoch`) |
+| `PORTFOLIO_RECORD_BYTES` | 227 | 235 (`+ expiry_epoch`) |
+| `TOMBSTONE_RECORD_BYTES` | — | 80 (`32 + 32 + 8 + 8`) |
+| `ORDER_SLOT_BYTES` | 228 | 236 (`1 + PORTFOLIO_RECORD_BYTES`) |
+| page header | 235 | 236 (`+ tombstone_count`) |
+| `account_len::ORDER_PAGE` | 3,883 | 4,012 (`236 + 16 × 236`) |
+| `MAX_INTENT_BYTES` | 256 | 302 (the widest intent, exactly) |
+
+The slot is still exactly as wide as the widest body and no wider, and every
+byte between a body and the common width is still required to be zero. The
+retirement is by far the narrowest body, so cancellation costs no width at all.
+
+### The streaming writer
+
+`stream` was a reader-only module; it now publishes the write side, and the
+whole of the placement and cancellation transitions live in it rather than in an
+instruction:
+
+```
+stream::init_page(page, market, epoch, page_index, page_count, bump)  -> header
+stream::append_slot(page, slot)                                       -> header
+stream::write_single_slot(page, &order)                               -> header
+stream::write_tombstone(page, order_id, owner, generation)            -> header
+stream::frozen_set_commitment(&[&page…])            -> (order_set, set_order_count)
+stream::seal_page(page, order_set, set_order_count)                   -> header
+```
+
+Three properties hold for all of them:
+
+1. **No offsets escape the module.** A header is written through the same
+   `Writer` field sequence `OrderPageAccount::encode` uses and a slot through the
+   same `encode_slot`, so the write side is not a second transcription of the
+   layout that could drift from the first. There are no `OFF_*` constants.
+2. **One fold per mutation**, at the end, to store the page digest — and that
+   fold decodes every slot as it folds, so a page left non-canonical in any slot
+   has no digest rather than a digest over junk.
+3. **The post-state is the writer's**, returned as a header, so "what did the
+   page become" is an answer rather than a second decode and a field-by-field
+   comparison against a guess.
+
+What a writer does not re-establish is the whole pre-state: it decodes and
+shape-checks the header, and it does not re-walk the record semantics of slots
+it is not touching. The caller reads the page once with `verify_page_on_grid`,
+which it needs anyway for the grid, and then writes. A test pins the writer's
+output byte-for-byte against `OrderPageAccount::encode` of the same page — an
+empty page, after two appends of different families, and after a retirement —
+so "the writer writes what the codec would have written" is checked rather than
+asserted.
+
+Freezing is two calls because it is two facts: `frozen_set_commitment` verifies
+every page of an open set, checks the density and link rules a freeze is allowed
+to assume, and returns the `(order_set, set_order_count)` a freeze would stamp;
+`seal_page` stamps one page with it and shape-checks the post-state header
+before writing it. The page digest is deliberately not refolded by `seal_page`,
+because none of the three freeze fields is in its preimage: what commits to a
+freeze is `order_set`, which every page stores and which `verify_page_set`
+recomputes from the page digests themselves. A test drives the whole path —
+init, sixteen appends, a retirement, commitment, seal, closure — and shows
+`verify_page_set` accepting the result and refusing the half-frozen intermediate.
+
+### Integration note: what `orders_batch` deletes
+
+The SBF placement instruction currently owns thirteen `OFF_*` header offsets,
+nine `SLOT_OFF_*` record offsets, two `const _: () = assert!` tripwires against
+the layout's constants, four writer helpers (`write_single_slot`,
+`write_stored_range`, `seal_page_digest`, and the `read_slot` used only by the
+post-write proof), and a post-write re-verification that decodes the page a
+second time and compares the resulting header field by field against an
+intended post-state. All of it goes. Both tripwires already fire on this
+revision, which is what they were for.
+
+The transition body becomes three layout calls with the module's own checks
+between them:
+
+```rust
+fn apply_place_order(page: &mut [u8], placement: &Placement<'_>) -> Outcome<()> {
+    let epoch = accounts::read_epoch(placement.epoch)?;
+    let mut grid = ZERO_GRID;
+    load_grid(placement.grid, &mut grid)?;
+
+    // 1. The whole pre-state, on the frozen grid.
+    let header = verify_page_on_grid(page, &grid)?;
+
+    // Checks 4..10 are unchanged: epoch phase, page/grid/intent identities,
+    // the replay counter, actor == owner, the record, the epoch's outcome
+    // width, and the exact tick.
+
+    // 2. The id is not a choice; the page's own state fixes it.
+    require(
+        placement.order.order_id == header.next_order_id()?,
+        ClutchError::MismatchedState,
+    )?;
+
+    // 3. Slot bytes, header, and digest, in one call that returns the
+    //    post-state rather than leaving the caller to reconstruct it.
+    stream::write_single_slot(page, &placement.order)?;
+    Ok(())
+}
+```
+
+Call 2 is optional — `write_single_slot` refuses the same mismatch with
+`NonCanonicalIdentity` — and is worth keeping only to preserve the module's
+stated property that every check runs before any byte is written, in the
+module's own error vocabulary. It costs no fold. The writers themselves already
+hold that property: `append_slot` validates the header shape, the free slot, the
+record, and the id before it touches a byte, so a refused placement leaves the
+account unchanged whether or not the instruction pre-checks.
+
+`CancelOrder` stops being a refusal and becomes the same shape:
+
+```rust
+let header = verify_page(page)?;                    // 1
+require(epoch.phase == EPOCH_PHASE_OPEN, ClutchError::NotActive)?;
+require(header.frozen == 0, ClutchError::NotActive)?;
+require(header.market == epoch.market && header.epoch == epoch.epoch, …)?;
+require(actor == intent_owner, ClutchError::UnauthorizedActor)?;
+stream::write_tombstone(page, intent_order_id, intent_owner, generation)?;  // 2
+```
+
+Three notes for whoever lands it:
+
+* **Replay.** Placement uses the page's `order_count` as its counter; a
+  cancellation does not move that count, so it needs a different one. It has
+  two: the slot kind (a retired slot refuses a second retirement) and the
+  generation rule (`generation > retired_generation`). Passing the request
+  envelope's `sequence` as the generation is the natural binding.
+* **Which page.** The target order id *is* the page and the slot:
+  `rank / MAX_ORDERS_PER_PAGE` selects the page and
+  `OrderPageHeader::slot_index_of` the slot. An account list that supplies the
+  wrong page refuses with `MismatchedBinding` rather than searching.
+* **Cost.** The page-digest preimage grows from 3,743 bytes to 3,872 — a
+  28-byte domain, market, epoch, `page_index`, `order_count`, the new
+  `tombstone_count`, and sixteen 236-byte slots — so one fold is 61 SHA-256
+  compression blocks rather than 59. But the module stops folding three times
+  per placement and folds twice, so the documented per-placement figure moves
+  from `3 x 59 = 177` blocks to `2 x 61 = 122`, and full slot-decode passes drop
+  from five to three. That is arithmetic over the frozen widths, in the same
+  form the module's existing `the_documented_page_fold_follows_from_the_frozen_widths`
+  test states it — not a compute-unit measurement. Re-measuring CUs against v4
+  is the integration lane's.
+
+### Projection contract: slot rank vs live rank
+
+Two numbers exist and they are not the same number once anything is cancelled.
+
+* The **slot rank** is the stored `order_id`: positional, dense over populated
+  slots, and unchanged by a cancellation.
+* The **live rank** is the relation's `canonical_order_id`: the one-based
+  position among *live* records in the canonical page-set walk. The walk visits
+  pages in `page_index` order and slots in index order — which the frozen set's
+  own closure already fixes — and increments the live counter only on a slot
+  that `is_live()`. A retirement is skipped, and the skip is recorded in the
+  projection walk's fold, so a walk over a set with a retirement is
+  distinguishable from a walk over a set that never had one.
+
+Worked example. A frozen page 0 holds ranks 1..5 and rank 3 has been retired:
+
+| slot | slot rank (stored id) | live? | live rank (relation id) |
+| ---: | ---: | :---: | ---: |
+| 0 | 1 | yes | 1 |
+| 1 | 2 | yes | 2 |
+| 2 | 3 | **no** | — |
+| 3 | 4 | yes | 3 |
+| 4 | 5 | yes | 4 |
+
+Ranks are assigned over live orders only. That is not a convenience: the
+relation's `canonical_order_id` indexes the candidate's fill array, which carries
+`order_len` entries read in step with the walk. A numbering with holes would
+force either filler entries for dead orders — inflating `order_len` and putting
+cancelled orders back into the priced set — or a broken index/fill
+correspondence. Dense-over-live keeps `order_len` equal to the set's live count,
+which the header-only closure can compute from `live_count()` alone.
+
+**Why this is sound for resumed verification.** The live counter is a pure
+function of the walk prefix, and the walk prefix is fixed by the frozen set's
+bytes: the visit order is `(page_index, slot_index)`, which `verify_page_set`
+pins, and the liveness of each slot is a byte fact the page digest covers, which
+the order-set fold covers in turn. So the whole live-rank sequence is a function
+of `order_set`. A pass that stops at `(page p, slot j)` and resumes there
+therefore yields the same numbering as an unbroken walk provided it carries the
+live counter in its checkpoint alongside the cursor — which is the same
+obligation the checkpoint already has for its consumed fold, and the same
+anchoring §10 assigns: bind `(order_set, consumed_fold)` at pass-1 finalize and
+refuse any later pass whose epoch shows a different `order_set`. Nothing here is
+a proof; it is a contract, and the layout side of it is that a retirement is
+inside the commitment rather than outside it.
+
+### Intent v2
+
+`INTENT_VERSION = 2`; `INTENT_VERSION_V1 = 1` is refused explicitly by every
+decoder.
+
+* **`PlaceOrder` carries an `OrderSlot`**, not an `OrderRecord`, closing the
+  portfolio wire gap. The encoding is the slot's kind byte and that kind's
+  *exact* body, with none of the padding a page slot carries: 174 bytes
+  single-Egg, 302 portfolio. `ORDER_KIND_EMPTY` and `ORDER_KIND_TOMBSTONE` are
+  recognized kinds that are not placements and are refused with `InvalidEnum`;
+  any other kind byte is `WrongTag`.
+* **The intent still carries the order id, and it is an assertion rather than a
+  choice.** The alternative — dropping the field and letting the writer fill it
+  in — saves 32 wire bytes and loses a property worth more than they cost: a
+  caller states the rank it believes it is taking, so a placement that lost a
+  race to another placement is *refused* (`NonCanonicalIdentity`) instead of
+  quietly landing at a different rank. The griefing vector dies either way,
+  because the page's state fixes the only acceptable value.
+* **`CancelOrder` carries the retirement's generation** alongside the target id
+  and owner, which is exactly the tombstone write: 138 bytes. Its `order_id` is
+  now checked as a canonical rank on the wire, and because ids are positional it
+  names the page and the slot with no search — no slot index is carried.
+
+### Deliberately out of scope
+
+Named here so they are debt rather than oversight:
+
+* `SettlementReceiptAccount.buy_order_id` / `.sell_order_id` are still opaque
+  32-byte identities that may also be zero (the virtual split/merge legs). Under
+  v4 they should be canonical ranks. That is a receipt-side tightening on an
+  account this revision does not otherwise touch, and it was left out to keep
+  the blast radius at the page and the intent.
+* `EpochAccount` records `order_count` (populated slots) and not the set's live
+  count, and its `first_order_id` / `last_order_id` are now derivable from
+  `order_count` alone. Collapsing them, and adding a frozen live count, is an
+  `EPOCH` revision this one deliberately does not open.
+* Nothing here proves the owner-tag bijection §10 describes; the epoch's
+  `owner_count` is still an unchecked claim from this crate's point of view.
+* `init_page` exists, but no intent creates a page and no instruction calls it;
+  page creation remains unrepresentable on the wire.
+
 ## Collateral-policy digest field
 
 `ProfileAccount` gained a 32-byte `collateral_policy_digest` at byte offset
@@ -531,11 +932,15 @@ one. The five codes added with this revision are `shape.invalid-price-grid`
 
 Intent bytes use a `(tag, INTENT_VERSION)` prefix and no variable-length fields:
 CreateMarket (139 bytes), Split/Merge (74), Materialize/Dematerialize (107),
-FeedAdvance (74), PlaceOrder (165), CancelOrder (130), and SettlePage (68).
+FeedAdvance (74), PlaceOrder (174 single-Egg or 302 portfolio), CancelOrder
+(138), and SettlePage (68). `MAX_INTENT_BYTES = 302` is exactly the widest of
+them — a portfolio placement — rather than a round number with slack in it.
 `Intent::encode` writes into caller-owned storage; `Intent::decode` accepts only
-the exact length implied by its tag. Zero quantities, invalid outcomes, zero
-identities, invalid order flags, and unsupported tags are refusals. The intent
-is data for a future adapter, not authority to sign or submit anything. No
+the exact length implied by its tag **and its slot kind**. Zero quantities,
+invalid outcomes, zero identities, invalid order flags, non-rank order ids, a
+placement whose slot kind is padding or a retirement, and unsupported tags are
+refusals. The intent is data for a future adapter, not authority to sign or
+submit anything. No
 intent exists yet for freezing a page set, submitting a candidate, or settling a
 slice; those state accounts are currently written by no encoded intent in this
 crate.
@@ -557,9 +962,10 @@ The seam is deliberately one-way:
    account bytes, and this crate stores policy identities without interpreting
    them.
 4. It maps a verified page set plus `EpochAccount` to
-   `clutch-batch::relation_v1::RelationDomainV1`, each decoded order slot to a
-   `SingleEggOrderV1` or `PortfolioOrderV1` under the field-by-field contract in
-   the portfolio addendum above, and `CandidateRecord` to that relation's
+   `clutch-batch::relation_v1::RelationDomainV1`, each decoded **live** order
+   slot to a `SingleEggOrderV1` or `PortfolioOrderV1` under the field-by-field
+   contract in the portfolio addendum above — retired slots are skipped and take
+   no live rank, per the v4 addendum — and `CandidateRecord` to that relation's
    candidate witness. The batch crate owns eligibility, fills,
    conservation, pairing feasibility, tie rules, and its "best valid submitted
    candidate" wording; this crate owns only bytes, identity, and order.

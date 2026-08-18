@@ -23,7 +23,7 @@ pub mod stream;
 /// next version and refuses every earlier one explicitly with
 /// [`CodecError::WrongVersion`], so the pair `(tag, version)` never names two
 /// shapes.
-pub const LAYOUT_VERSION: u8 = 3;
+pub const LAYOUT_VERSION: u8 = 4;
 /// The initial prototype schema version.
 pub const LAYOUT_VERSION_V1: u8 = 1;
 /// The schema version of the first persisted-state revision.
@@ -32,8 +32,22 @@ pub const LAYOUT_VERSION_V1: u8 = 1;
 /// single-Egg records; it now encodes [`account_version::ORDER_PAGE`] and
 /// refuses this one.
 pub const LAYOUT_VERSION_V2: u8 = 2;
+/// The schema version of the first tagged-slot order page.
+///
+/// The dense order page encoded this version while its order ids were
+/// caller-chosen 32-byte hashes, a cancellation had no representation at all,
+/// and no record persisted an expiry.  It now encodes
+/// [`account_version::ORDER_PAGE`] and refuses this one.
+pub const LAYOUT_VERSION_V3: u8 = 3;
 /// Schema version of every deterministic intent encoding.
-pub const INTENT_VERSION: u8 = 1;
+pub const INTENT_VERSION: u8 = 2;
+/// The superseded intent encoding version.
+///
+/// Version 1 carried a placement as a bare [`OrderRecord`], so a portfolio
+/// order was unrepresentable on the wire, and a cancellation carried no
+/// generation.  Every intent decoder refuses it explicitly with
+/// [`CodecError::WrongVersion`].
+pub const INTENT_VERSION_V1: u8 = 1;
 /// Number of bytes in every identity/hash field.
 pub const HASH_BYTES: usize = 32;
 
@@ -106,22 +120,35 @@ pub const UNIFORM_SPACING_NONE: u8 = 0xFF;
 /// [`TermsAccount::payout_map`] entry meaning "this cell index is not live".
 pub const PAYOUT_MAP_UNUSED: u8 = 0xFF;
 /// Exact encoded length of one [`OrderRecord`] body, without its slot kind byte.
-pub const ORDER_RECORD_BYTES: usize = 32 + 32 + 1 + 1 + 8 + 8 + 8 + 1 + 8;
+pub const ORDER_RECORD_BYTES: usize = 32 + 32 + 1 + 1 + 8 + 8 + 8 + 1 + 8 + 8;
 /// Exact encoded length of one [`PortfolioRecord`] body, without its kind byte.
 ///
 /// The coefficient vector is stored at full [`MAX_OUTCOMES`] width with
 /// canonical zero padding beyond `active_len`, exactly like every other
 /// outcome-indexed vector here, so this length does not depend on how many
 /// outcomes one portfolio actually touches.
-pub const PORTFOLIO_RECORD_BYTES: usize = 32 + 32 + 1 + 1 + 1 + (MAX_OUTCOMES * 8) + 8 + 8 + 8 + 8;
+///
+/// The five trailing `u64` fields — `lots`, `limit_collateral_per_lot`,
+/// `minimum_fill_lots`, `generation`, `expiry_epoch` — are grouped rather than
+/// written one term per field so the whole declaration stays on one line: the
+/// offline ABI audit re-derives this constant by reading its own `pub const`
+/// line, and a wrapped declaration would leave it nothing to read.
+pub const PORTFOLIO_RECORD_BYTES: usize = 32 + 32 + 1 + 1 + 1 + (MAX_OUTCOMES * 8) + (5 * 8);
+/// Exact encoded length of one [`TombstoneRecord`] body, without its kind byte.
+///
+/// A retirement keeps the identity and the owner it retired and adds the two
+/// generations that order the retirement against the placement.  It is by far
+/// the narrowest body, so a cancellation never widens a slot.
+pub const TOMBSTONE_RECORD_BYTES: usize = 32 + 32 + 8 + 8;
 /// Exact encoded length of one order slot in a page.
 ///
 /// A slot is a one-byte kind discriminator, that kind's exact body, and
 /// canonical zero padding out to this common width.  Fixing the slot width is
-/// what lets one page hold both admitted order families while keeping a single
-/// exact account length, a single strictly increasing order-id chain, and a
-/// single page-set fold.  The padding is not slack: every byte of it is
-/// required to be zero, so it can never influence a digest.
+/// what lets one page hold every admitted slot kind — both order families and
+/// a retirement — while keeping a single exact account length, a single
+/// positional order-id chain, and a single page-set fold.  The padding is not
+/// slack: every byte of it is required to be zero, so it can never influence a
+/// digest.
 pub const ORDER_SLOT_BYTES: usize = 1 + PORTFOLIO_RECORD_BYTES;
 /// Order-slot kind: canonical padding.  The whole slot is zero.
 pub const ORDER_KIND_EMPTY: u8 = 0;
@@ -129,15 +156,29 @@ pub const ORDER_KIND_EMPTY: u8 = 0;
 pub const ORDER_KIND_SINGLE: u8 = 1;
 /// Order-slot kind: one [`PortfolioRecord`].
 pub const ORDER_KIND_PORTFOLIO: u8 = 2;
+/// Order-slot kind: one [`TombstoneRecord`], a retired order id.
+///
+/// A tombstone is what a cancellation writes.  It occupies the slot and the
+/// order id of the record it retired, so retiring an order never renumbers a
+/// later one; see [`canonical_order_id`].
+pub const ORDER_KIND_TOMBSTONE: u8 = 3;
 /// Maximum encoded instruction length.
-pub const MAX_INTENT_BYTES: usize = 256;
+///
+/// This is exactly the widest admitted intent — a portfolio placement, which
+/// carries a whole [`PortfolioRecord`] body behind its slot kind byte — not a
+/// round number with slack in it.  A test pins every variant against it.
+pub const MAX_INTENT_BYTES: usize = 2 + (2 * HASH_BYTES) + 1 + PORTFOLIO_RECORD_BYTES;
 
 const _: () = assert!(MAX_EPOCH_ORDERS == 64);
 const _: () = assert!(MAX_PRICE_SCALE > 0);
 // The slot is exactly wide enough for the widest record family and no wider.
 const _: () = assert!(PORTFOLIO_RECORD_BYTES > ORDER_RECORD_BYTES);
+const _: () = assert!(ORDER_RECORD_BYTES > TOMBSTONE_RECORD_BYTES);
 const _: () = assert!(ORDER_SLOT_BYTES == 1 + PORTFOLIO_RECORD_BYTES);
 const _: () = assert!(MAX_PORTFOLIO_ORDERS <= MAX_EPOCH_ORDERS);
+// Every canonical order id in an admitted book is a rank in `1 ..= 64`, so the
+// eight-byte rank field can never be the thing that overflows.
+const _: () = assert!(MAX_EPOCH_ORDERS <= u16::MAX as usize);
 
 const REALM_TAG: u8 = 1;
 const PROFILE_TAG: u8 = 2;
@@ -392,13 +433,103 @@ pub fn canonical_candidate_digest(body_bytes: &[u8]) -> Hash32 {
 
 /// Domain separator of the order-page digest.
 ///
-/// It moved to `v2` when the page's records became fixed-width tagged slots:
-/// the preimage shape changed, so the old domain must not be reusable over the
-/// new bytes.  The order-set fold below keeps its own `v1` domain because its
-/// preimage shape — market, epoch, page count, order count, page digests — did
-/// not change; only the leaves it folds did, and those already carry the new
+/// It moved to `v2` when the page's records became fixed-width tagged slots
+/// and to `v3` when the preimage gained the retirement count: the preimage
+/// shape changed both times, so an old domain must not be reusable over the new
+/// bytes.  The order-set fold below keeps its own `v1` domain because its
+/// preimage shape — market, epoch, page count, order count, page digests — has
+/// never changed; only the leaves it folds did, and those already carry the new
 /// domain.
-const ORDER_PAGE_DOMAIN: &[u8] = b"dragons-clutch/order-page/v2";
+const ORDER_PAGE_DOMAIN: &[u8] = b"dragons-clutch/order-page/v3";
+
+/// Bytes of the rank inside a canonical order identity; the rest is zero.
+pub const ORDER_ID_RANK_BYTES: usize = 8;
+
+/// Derive the canonical order identity of the `rank`-th slot of a page set.
+///
+/// An order id is **not** a caller's choice.  It is the big-endian encoding of
+/// the order's one-based position in the frozen page set — page
+/// `p`, slot `j` is always rank `p * MAX_ORDERS_PER_PAGE + j + 1` — left-padded
+/// with zeros to [`HASH_BYTES`].  Three properties follow from the encoding
+/// rather than from a check:
+///
+/// * **No griefing.**  A caller cannot pick an id, so it cannot burn the
+///   remainder of a page by claiming a huge one; the id it may place at is
+///   whatever [`stream::OrderPageHeader::next_order_id`] says.
+/// * **Byte order is rank order.**  The big-endian encoding makes the page's
+///   lexicographic id chain and the numeric rank chain the same chain, which is
+///   why the cross-page closure did not have to change shape.
+/// * **Position is recoverable.**  [`order_id_rank`] inverts this exactly, so a
+///   cancellation naming an order id names a page and a slot with no search.
+///
+/// `rank` zero has no order: ranks are one-based so that the all-zero identity
+/// stays reserved for "no order", exactly as every other identity in this crate
+/// reserves it.
+pub fn canonical_order_id(rank: u64) -> Hash32 {
+    let mut bytes = [0u8; HASH_BYTES];
+    let rank_bytes = rank.to_be_bytes();
+    let mut i = 0;
+    while i < ORDER_ID_RANK_BYTES {
+        bytes[HASH_BYTES - ORDER_ID_RANK_BYTES + i] = rank_bytes[i];
+        i += 1;
+    }
+    Hash32(bytes)
+}
+
+/// Recover the rank a canonical order identity encodes, or refuse.
+///
+/// The inverse of [`canonical_order_id`], and the only admitted reading of an
+/// order id anywhere in this crate.  Every byte before the rank must be zero
+/// ([`CodecError::NonCanonicalIdentity`]), the rank must be nonzero
+/// ([`CodecError::ZeroIdentity`]), and it must be a rank some admitted page set
+/// could actually hold ([`CodecError::InvalidCount`]) — a book is exactly
+/// [`MAX_EPOCH_ORDERS`] slots wide, so an id above that names no slot in any
+/// book and is refused before any page is consulted.
+pub fn order_id_rank(id: Hash32) -> Result<u64> {
+    let mut i = 0;
+    while i < HASH_BYTES - ORDER_ID_RANK_BYTES {
+        if id.0[i] != 0 {
+            return Err(CodecError::NonCanonicalIdentity);
+        }
+        i += 1;
+    }
+    let mut rank_bytes = [0u8; ORDER_ID_RANK_BYTES];
+    let mut j = 0;
+    while j < ORDER_ID_RANK_BYTES {
+        rank_bytes[j] = id.0[HASH_BYTES - ORDER_ID_RANK_BYTES + j];
+        j += 1;
+    }
+    let rank = u64::from_be_bytes(rank_bytes);
+    if rank == 0 {
+        return Err(CodecError::ZeroIdentity);
+    }
+    if rank > MAX_EPOCH_ORDERS as u64 {
+        return Err(CodecError::InvalidCount);
+    }
+    Ok(rank)
+}
+
+/// The rank of the last slot before page `page_index`, as a canonical id.
+///
+/// Zero for page zero, which opens the chain.  A page's stored
+/// `prev_page_last_order_id` is exactly this value, and it is a fact about the
+/// page **geometry**, not about how full the earlier pages happen to be: ranks
+/// are positional, so the slots before page `p` are the `p * MAX_ORDERS_PER_PAGE`
+/// slots those pages own whether or not they are populated yet.  That is what
+/// makes a rank globally unique the moment it is written — a half-filled page
+/// zero can never reach a rank page one has already used.
+fn page_base_order_id(page_index: u16) -> Hash32 {
+    if page_index == 0 {
+        Hash32::ZERO
+    } else {
+        canonical_order_id(page_base_rank(page_index))
+    }
+}
+
+/// The count of slots in every page before `page_index`.
+const fn page_base_rank(page_index: u16) -> u64 {
+    (page_index as u64) * (MAX_ORDERS_PER_PAGE as u64)
+}
 
 /// Derive one order page's digest from its page position and slot bytes.
 ///
@@ -406,11 +537,17 @@ const ORDER_PAGE_DOMAIN: &[u8] = b"dragons-clutch/order-page/v2";
 /// encoded slots, that is [`ORDER_SLOT_BYTES`] each including canonical
 /// padding.  [`OrderPageAccount::recomputed_page_digest`] streams the same
 /// bytes without buffering them.
+///
+/// `tombstone_count` is in the preimage even though it is a fold over the very
+/// slots that follow it, for the same reason `order_count` is: both are header
+/// bytes a writer stores, and a digest that did not cover them would let a page
+/// disagree with its own header without disagreeing with its own digest.
 pub fn canonical_page_digest(
     market: MarketId,
     epoch: EpochId,
     page_index: u16,
     order_count: u8,
+    tombstone_count: u8,
     record_bytes: &[u8],
 ) -> Hash32 {
     digest(
@@ -419,7 +556,7 @@ pub fn canonical_page_digest(
             &market.0,
             &epoch.0,
             &page_index.to_le_bytes(),
-            &[order_count],
+            &[order_count, tombstone_count],
             record_bytes,
         ],
     )
@@ -463,8 +600,10 @@ pub fn validate_outcome_id(market: MarketId, index: u8, id: OutcomeId) -> Result
 ///
 /// An account keeps version `1` exactly while its bytes are unchanged from the
 /// first prototype.  `PROFILE` grew a field and encodes `2`; `ORDER_PAGE` grew
-/// the page-set commitment fields at `2` and then replaced its bare records
-/// with tagged fixed-width slots, so it encodes `3` and refuses `1` and `2`.
+/// the page-set commitment fields at `2`, replaced its bare records with tagged
+/// fixed-width slots at `3`, and then made order ids positional, added the
+/// retirement slot kind and its header count, and gave every record a persisted
+/// expiry, so it encodes `4` and refuses `1`, `2`, and `3`.
 /// The pair `(tag, version)` therefore never names two shapes.
 pub mod account_version {
     /// Realm account, unchanged since the first prototype.
@@ -482,7 +621,7 @@ pub mod account_version {
     /// Order page; version 1 lacked every page-set commitment field and version
     /// 2 held bare [`super::ORDER_RECORD_BYTES`] single-Egg records with no kind
     /// discriminator and no portfolio family.
-    pub const ORDER_PAGE: u8 = 3;
+    pub const ORDER_PAGE: u8 = 4;
     /// Supply ledger account.
     pub const SUPPLY_LEDGER: u8 = 2;
     /// Immutable terms account.
@@ -530,7 +669,7 @@ pub mod account_len {
     pub const FEED: usize = 2 + 32 + 32 + 8 + 8 + 8 + 32 + 1 + 1;
     /// Dense order page account bytes.
     pub const ORDER_PAGE: usize =
-        2 + (7 * 32) + 2 + 2 + 2 + 1 + 1 + 1 + (MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES);
+        2 + (7 * 32) + 2 + 2 + 2 + 1 + 1 + 1 + 1 + (MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES);
     /// Supply ledger account bytes.
     pub const SUPPLY_LEDGER: usize = 2 + 32 + 32 + 8 + 1 + (2 * MAX_OUTCOMES * 8) + 1 + 1;
     /// Immutable terms account bytes.
@@ -766,13 +905,22 @@ pub struct OrderPageAccount {
     pub page_count: u16,
     /// Orders across the whole page set; zero until the set is frozen.
     pub set_order_count: u16,
-    /// Number of populated records.
+    /// Number of populated slots: live records **and** retirements.
+    ///
+    /// A cancellation replaces a record with a [`TombstoneRecord`] in the same
+    /// slot, so it never lowers this count and never renumbers a later order.
     pub order_count: u8,
+    /// How many of those populated slots are retirements.
+    ///
+    /// `order_count - tombstone_count` is the page's live-order count, which is
+    /// what the relation projection walks; a fold over headers alone can
+    /// therefore size a book's live order feed without touching a slot.
+    pub tombstone_count: u8,
     /// Freeze state: 0 open, 1 frozen.
     pub frozen: u8,
     /// Stored PDA bump.
     pub stored_bump: u8,
-    /// Slots in strictly increasing canonical order ID.
+    /// Slots in positional canonical order-id order; see [`canonical_order_id`].
     pub orders: [OrderSlot; MAX_ORDERS_PER_PAGE],
 }
 
@@ -781,7 +929,8 @@ pub struct OrderPageAccount {
 pub struct OrderRecord {
     /// Position owner identity.
     pub owner: OwnerId,
-    /// Canonical order identity.
+    /// Canonical order identity: this record's slot rank; see
+    /// [`canonical_order_id`].
     pub order_id: Hash32,
     /// Outcome index.
     pub outcome: u8,
@@ -797,6 +946,16 @@ pub struct OrderRecord {
     pub flags: u8,
     /// Replay generation.
     pub generation: u64,
+    /// Last epoch index this order may be cleared in, inclusive.
+    ///
+    /// The relation admits an order while `expiry_epoch >= domain.epoch`.  No
+    /// page knows its own epoch **index** — it stores the 32-byte epoch
+    /// identity, which is not invertible — so the horizon is checked exactly
+    /// where the index is authenticated: [`EpochAccount::binds_page_set`] and
+    /// [`stream::epoch_binds_page_set`] refuse a frozen set holding a live
+    /// record already past its expiry.  There is no page-local rule, and none
+    /// is claimed.
+    pub expiry_epoch: u64,
 }
 
 /// One fixed-size transparent portfolio order record.
@@ -827,7 +986,8 @@ pub struct OrderRecord {
 /// coefficients[1] = 1;
 /// let portfolio = PortfolioRecord {
 ///     owner: Hash32::from_bytes([20; 32]),
-///     order_id: Hash32::from_bytes([7; 32]),
+///     // Not a choice: slot 0 of page 0 is rank 1, and nothing else decodes.
+///     order_id: canonical_order_id(1),
 ///     side: 0,
 ///     active_len: 2,
 ///     flags: 0,
@@ -836,6 +996,7 @@ pub struct OrderRecord {
 ///     limit_collateral_per_lot: 9_000,
 ///     minimum_fill_lots: 2,
 ///     generation: 1,
+///     expiry_epoch: 7,
 /// };
 ///
 /// let mut orders = [OrderSlot::Empty; MAX_ORDERS_PER_PAGE];
@@ -852,6 +1013,7 @@ pub struct OrderRecord {
 ///     page_count: 1,
 ///     set_order_count: 0,
 ///     order_count: 1,
+///     tombstone_count: 0,
 ///     frozen: 0,
 ///     stored_bump: 5,
 ///     orders,
@@ -875,17 +1037,21 @@ pub struct OrderRecord {
 /// assert_eq!(record.minimum_fill_lots, 2); //       -> minimum_fill_lots
 /// assert_eq!(record.side, 0); //                    -> side == Side::Buy
 /// assert_eq!(record.flags & 1, 0); //               -> partial_policy == Allow
+/// assert_eq!(record.expiry_epoch, 7); //            -> expiry_epoch
 ///
-/// // `canonical_order_id` and `owner` are the set-rank and owner-tag images of
-/// // these 32-byte identities; `expiry_epoch` is not persisted by any record.
-/// assert_eq!(record.order_id, Hash32::from_bytes([7; 32]));
+/// // `canonical_order_id` is now the persisted identity itself: the id decodes
+/// // to the record's rank in the page set, which is the relation's coordinate
+/// // once retirements are skipped.  `owner` is still the owner-tag preimage;
+/// // the tag is interned during the projection walk, not stored here.
+/// assert_eq!(order_id_rank(record.order_id), Ok(1));
 /// assert_eq!(record.owner, Hash32::from_bytes([20; 32]));
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PortfolioRecord {
     /// Position owner identity.
     pub owner: OwnerId,
-    /// Canonical order identity.
+    /// Canonical order identity: this record's slot rank; see
+    /// [`canonical_order_id`].
     pub order_id: Hash32,
     /// Side: 0 buy, 1 sell.
     pub side: u8,
@@ -903,6 +1069,9 @@ pub struct PortfolioRecord {
     pub minimum_fill_lots: u64,
     /// Replay generation.
     pub generation: u64,
+    /// Last epoch index this order may be cleared in, inclusive; see
+    /// [`OrderRecord::expiry_epoch`], which this field mirrors exactly.
+    pub expiry_epoch: u64,
 }
 
 impl PortfolioRecord {
@@ -915,7 +1084,7 @@ impl PortfolioRecord {
     /// admissible; that is `clutch_batch`'s question.
     pub fn validate(&self) -> Result<()> {
         check_hash(self.owner)?;
-        check_hash(self.order_id)?;
+        order_id_rank(self.order_id)?;
         if self.side > 1 || self.flags & !1 != 0 {
             return Err(CodecError::InvalidEnum);
         }
@@ -996,12 +1165,64 @@ impl PortfolioRecord {
     }
 }
 
-/// One page slot: canonical padding, a single-Egg record, or a portfolio record.
+/// One retired order id: what a cancellation writes.
+///
+/// A cancellation cannot remove a record.  Removing one would either leave a
+/// hole in the slot array — which the dense-page rules forbid — or renumber
+/// every later order, and order ids are positional
+/// ([`canonical_order_id`]), so renumbering would silently rewrite identities
+/// that receipts, candidates, and clients already name.  A retirement instead
+/// **replaces the record in place**, keeping its slot and its id, and the page
+/// counts it in `order_count` and again in `tombstone_count`.
+///
+/// The page-set commitment covers a tombstone exactly as it covers a record:
+/// the retirement's bytes are slot bytes, so they are in the page digest and
+/// therefore in the order-set fold.  A retirement cannot be added, undone, or
+/// moved after a freeze without changing `order_set`.
+///
+/// The relation projection **skips** a tombstone: a retired order has no
+/// coordinates to feed and takes no rank among live orders.  See
+/// `docs/implementation/SOLANA_LAYOUT.md` for how the skip is recorded in the
+/// projection walk's fold, which is what keeps a resumed walk on the same
+/// numbering as an unbroken one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TombstoneRecord {
+    /// The retired order's canonical identity: the slot's own rank, unchanged.
+    pub order_id: Hash32,
+    /// The retired record's owner, copied from the record being retired.
+    pub owner: OwnerId,
+    /// The retired record's replay generation, copied from it.
+    pub retired_generation: u64,
+    /// The retirement's own replay generation, strictly above the retired one.
+    pub generation: u64,
+}
+
+impl TombstoneRecord {
+    /// Validate a retirement without consulting the page it sits in.
+    ///
+    /// Identities are nonzero and the order id is a canonical rank; the
+    /// retirement strictly follows the placement it retires, which is the one
+    /// ordering fact a tombstone can state on its own.  Everything else about a
+    /// retirement — that its slot really held a live record by this owner — is
+    /// a page fact, checked by [`stream::write_tombstone`] at the moment of
+    /// writing and by the slot's own position afterwards.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.owner)?;
+        order_id_rank(self.order_id)?;
+        if self.generation <= self.retired_generation {
+            return Err(CodecError::InvalidEnum);
+        }
+        Ok(())
+    }
+}
+
+/// One page slot: canonical padding, a single-Egg record, a portfolio record,
+/// or a retirement.
 ///
 /// Every slot occupies exactly [`ORDER_SLOT_BYTES`] bytes — a one-byte kind
 /// discriminator, that kind's exact body, and canonical zero padding to the
 /// common width — so a page keeps one exact account length no matter which
-/// families it holds.  Canonical padding is the all-zero slot, which is also
+/// kinds it holds.  Canonical padding is the all-zero slot, which is also
 /// [`ORDER_KIND_EMPTY`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OrderSlot {
@@ -1011,6 +1232,8 @@ pub enum OrderSlot {
     Single(OrderRecord),
     /// One portfolio order over a coefficient vector.
     Portfolio(PortfolioRecord),
+    /// One retired order id; see [`TombstoneRecord`].
+    Tombstone(TombstoneRecord),
 }
 
 impl OrderSlot {
@@ -1020,27 +1243,54 @@ impl OrderSlot {
             Self::Empty => ORDER_KIND_EMPTY,
             Self::Single(_) => ORDER_KIND_SINGLE,
             Self::Portfolio(_) => ORDER_KIND_PORTFOLIO,
+            Self::Tombstone(_) => ORDER_KIND_TOMBSTONE,
         }
     }
-    /// The record's canonical order identity, or zero for padding.
+    /// The slot's canonical order identity, or zero for padding.
+    ///
+    /// A retirement answers with the id it retired, which is the whole point of
+    /// retiring in place: the id chain does not notice a cancellation.
     pub fn order_id(&self) -> Hash32 {
         match self {
             Self::Empty => Hash32::ZERO,
             Self::Single(o) => o.order_id,
             Self::Portfolio(p) => p.order_id,
+            Self::Tombstone(t) => t.order_id,
         }
     }
-    /// The record's owner identity, or zero for padding.
+    /// The slot's owner identity, or zero for padding.
     pub fn owner(&self) -> OwnerId {
         match self {
             Self::Empty => Hash32::ZERO,
             Self::Single(o) => o.owner,
             Self::Portfolio(p) => p.owner,
+            Self::Tombstone(t) => t.owner,
+        }
+    }
+    /// The slot's replay generation, or zero for padding.
+    pub fn generation(&self) -> u64 {
+        match self {
+            Self::Empty => 0,
+            Self::Single(o) => o.generation,
+            Self::Portfolio(p) => p.generation,
+            Self::Tombstone(t) => t.generation,
         }
     }
     /// Whether this slot holds a portfolio record.
     pub fn is_portfolio(&self) -> bool {
         matches!(self, Self::Portfolio(_))
+    }
+    /// Whether this slot holds a retirement.
+    pub fn is_tombstone(&self) -> bool {
+        matches!(self, Self::Tombstone(_))
+    }
+    /// Whether this slot holds an order the relation projection will feed.
+    ///
+    /// Exactly the two order families.  Padding is not a record and a
+    /// retirement is not live, so both answer `false`; this is the predicate
+    /// the live-order fold and every live count are stated against.
+    pub fn is_live(&self) -> bool {
+        matches!(self, Self::Single(_) | Self::Portfolio(_))
     }
     /// Validate a populated slot.
     ///
@@ -1052,6 +1302,7 @@ impl OrderSlot {
             Self::Empty => Err(CodecError::ZeroIdentity),
             Self::Single(o) => o.validate(),
             Self::Portfolio(p) => p.validate(),
+            Self::Tombstone(t) => t.validate(),
         }
     }
 }
@@ -1608,7 +1859,7 @@ impl OrderPageAccount {
         h.update(&self.market.0);
         h.update(&self.epoch.0);
         h.update(&self.page_index.to_le_bytes());
-        h.update(&[self.order_count]);
+        h.update(&[self.order_count, self.tombstone_count]);
         let mut slot = [0; ORDER_SLOT_BYTES];
         let mut i = 0;
         while i < MAX_ORDERS_PER_PAGE {
@@ -1631,28 +1882,40 @@ impl OrderPageAccount {
             || self.page_count as usize > MAX_ORDER_PAGES
             || self.page_index >= self.page_count
             || self.order_count as usize > MAX_ORDERS_PER_PAGE
+            || self.tombstone_count > self.order_count
             || (frozen && self.order_count == 0)
         {
             return Err(CodecError::InvalidCount);
         };
-        let mut previous = Hash32::ZERO;
+        /* Order ids are positional, so a slot's id is never compared with its
+         * predecessor's: it is compared with the single value this slot's own
+         * position admits.  That is strictly stronger than "strictly
+         * increasing" — it refuses a gap as well as a repeat — and it is what
+         * removes the caller's choice of id entirely. */
+        let base = page_base_rank(self.page_index);
         let mut portfolios = 0usize;
+        let mut tombstones = 0u8;
         let mut i = 0;
         while i < MAX_ORDERS_PER_PAGE {
             if i < self.order_count as usize {
                 self.orders[i].validate()?;
-                let id = self.orders[i].order_id();
-                if id == Hash32::ZERO || (previous != Hash32::ZERO && id.0 <= previous.0) {
+                if order_id_rank(self.orders[i].order_id())? != base + i as u64 + 1 {
                     return Err(CodecError::NonCanonicalIdentity);
                 };
-                previous = id;
                 if self.orders[i].is_portfolio() {
                     portfolios += 1;
+                }
+                if self.orders[i].is_tombstone() {
+                    tombstones += 1;
                 }
             } else if self.orders[i] != OrderSlot::Empty {
                 return Err(CodecError::NonCanonicalPadding);
             };
             i += 1;
+        }
+        // The stored retirement count is a fold over the very slots above.
+        if tombstones != self.tombstone_count {
+            return Err(CodecError::MismatchedBinding);
         }
         // One page cannot hold more portfolio records than the whole frozen
         // book admits; see [`MAX_PORTFOLIO_ORDERS`].  The set-wide sum is
@@ -1672,9 +1935,8 @@ impl OrderPageAccount {
         if self.first_order_id != expected_first || self.last_order_id != expected_last {
             return Err(CodecError::MismatchedBinding);
         }
-        // Page zero opens the chain; every later page links to its predecessor
-        // and must open strictly above it, which is what makes the cross-page
-        // order-id sequence strictly increasing rather than merely per-page.
+        // Page zero opens the chain; every later page states the rank its own
+        // slots start above, which is a fact about its index alone.
         if self.page_index == 0 {
             if self.prev_page_last_order_id != Hash32::ZERO {
                 return Err(CodecError::NonCanonicalPadding);
@@ -1683,7 +1945,7 @@ impl OrderPageAccount {
             if self.prev_page_last_order_id == Hash32::ZERO {
                 return Err(CodecError::ZeroIdentity);
             }
-            if self.order_count > 0 && self.first_order_id.0 <= self.prev_page_last_order_id.0 {
+            if self.prev_page_last_order_id != page_base_order_id(self.page_index) {
                 return Err(CodecError::NonCanonicalIdentity);
             }
         }
@@ -1740,6 +2002,7 @@ impl OrderPageAccount {
         w.u16(self.page_count)?;
         w.u16(self.set_order_count)?;
         w.u8(self.order_count)?;
+        w.u8(self.tombstone_count)?;
         w.u8(self.frozen)?;
         w.u8(self.stored_bump)?;
         let mut i = 0;
@@ -1768,6 +2031,7 @@ impl OrderPageAccount {
         let page_count = r.u16()?;
         let set_order_count = r.u16()?;
         let order_count = r.u8()?;
+        let tombstone_count = r.u8()?;
         let frozen = r.u8()?;
         let stored_bump = r.u8()?;
         let mut orders = [OrderSlot::Empty; MAX_ORDERS_PER_PAGE];
@@ -1788,6 +2052,7 @@ impl OrderPageAccount {
             page_count,
             set_order_count,
             order_count,
+            tombstone_count,
             frozen,
             stored_bump,
             orders,
@@ -1815,6 +2080,10 @@ impl OrderPageAccount {
                     grid.tick_of(o.limit)?;
                 }
                 OrderSlot::Portfolio(p) => p.validate_on_scale(grid.price_scale)?,
+                /* A retirement has no limit and no lots; the grid has nothing
+                 * to say about one, and the record it retired was checked
+                 * against the grid while it was live. */
+                OrderSlot::Tombstone(_) => {}
                 // Unreachable after `decode`, which refuses an empty slot below
                 // `order_count`; stated rather than assumed.
                 OrderSlot::Empty => return Err(CodecError::ZeroIdentity),
@@ -1842,6 +2111,7 @@ pub fn verify_page_set(pages: &[OrderPageAccount]) -> Result<Hash32> {
     }
     let mut digests = [Hash32::ZERO; MAX_ORDER_PAGES];
     let mut total: u16 = 0;
+    let mut live: u16 = 0;
     let mut portfolios = 0usize;
     let mut i = 0;
     while i < pages.len() {
@@ -1876,11 +2146,21 @@ pub fn verify_page_set(pages: &[OrderPageAccount]) -> Result<Hash32> {
             }
             j += 1;
         }
+        live = live
+            .checked_add((page.order_count - page.tombstone_count) as u16)
+            .ok_or(CodecError::ArithmeticOverflow)?;
         digests[i] = page.page_digest;
         i += 1;
     }
     if total != head.set_order_count {
         return Err(CodecError::MismatchedBinding);
+    }
+    /* A frozen set every one of whose records has been retired is not a book
+     * with nothing in it — it is a book with nothing to clear, and the relation
+     * has no order feed to build from it.  One live order is the floor, exactly
+     * as one populated slot is the floor for a frozen page. */
+    if live == 0 {
+        return Err(CodecError::InvalidCount);
     }
     // A set carrying more portfolio records than the relation admits could
     // never be one book, exactly as a set of more than `MAX_ORDER_PAGES` pages
@@ -1905,7 +2185,7 @@ impl OrderRecord {
     /// Validate an order without interpreting price/economic semantics.
     pub fn validate(&self) -> Result<()> {
         check_hash(self.owner)?;
-        check_hash(self.order_id)?;
+        order_id_rank(self.order_id)?;
         if self.outcome >= MAX_OUTCOMES as u8
             || self.side > 1
             || self.quantity == 0
@@ -1929,7 +2209,8 @@ fn encode_order(w: &mut Writer<'_>, o: OrderRecord) -> Result<()> {
     w.u64(o.limit)?;
     w.u64(o.minimum_fill)?;
     w.u8(o.flags)?;
-    w.u64(o.generation)
+    w.u64(o.generation)?;
+    w.u64(o.expiry_epoch)
 }
 fn decode_order(r: &mut Reader<'_>) -> Result<OrderRecord> {
     Ok(OrderRecord {
@@ -1942,6 +2223,7 @@ fn decode_order(r: &mut Reader<'_>) -> Result<OrderRecord> {
         minimum_fill: r.u64()?,
         flags: r.u8()?,
         generation: r.u64()?,
+        expiry_epoch: r.u64()?,
     })
 }
 fn encode_portfolio(w: &mut Writer<'_>, p: PortfolioRecord) -> Result<()> {
@@ -1954,7 +2236,8 @@ fn encode_portfolio(w: &mut Writer<'_>, p: PortfolioRecord) -> Result<()> {
     w.u64(p.lots)?;
     w.u64(p.limit_collateral_per_lot)?;
     w.u64(p.minimum_fill_lots)?;
-    w.u64(p.generation)
+    w.u64(p.generation)?;
+    w.u64(p.expiry_epoch)
 }
 fn decode_portfolio(r: &mut Reader<'_>) -> Result<PortfolioRecord> {
     Ok(PortfolioRecord {
@@ -1967,6 +2250,21 @@ fn decode_portfolio(r: &mut Reader<'_>) -> Result<PortfolioRecord> {
         lots: r.u64()?,
         limit_collateral_per_lot: r.u64()?,
         minimum_fill_lots: r.u64()?,
+        generation: r.u64()?,
+        expiry_epoch: r.u64()?,
+    })
+}
+fn encode_tombstone(w: &mut Writer<'_>, t: TombstoneRecord) -> Result<()> {
+    w.hash(t.order_id)?;
+    w.hash(t.owner)?;
+    w.u64(t.retired_generation)?;
+    w.u64(t.generation)
+}
+fn decode_tombstone(r: &mut Reader<'_>) -> Result<TombstoneRecord> {
+    Ok(TombstoneRecord {
+        order_id: r.hash()?,
+        owner: r.hash()?,
+        retired_generation: r.u64()?,
         generation: r.u64()?,
     })
 }
@@ -1981,6 +2279,7 @@ fn encode_slot(w: &mut Writer<'_>, slot: OrderSlot) -> Result<()> {
         OrderSlot::Empty => {}
         OrderSlot::Single(o) => encode_order(w, o)?,
         OrderSlot::Portfolio(p) => encode_portfolio(w, p)?,
+        OrderSlot::Tombstone(t) => encode_tombstone(w, t)?,
     }
     while w.at - start < ORDER_SLOT_BYTES {
         w.u8(0)?;
@@ -1997,6 +2296,7 @@ fn decode_slot(r: &mut Reader<'_>) -> Result<OrderSlot> {
         ORDER_KIND_EMPTY => OrderSlot::Empty,
         ORDER_KIND_SINGLE => OrderSlot::Single(decode_order(r)?),
         ORDER_KIND_PORTFOLIO => OrderSlot::Portfolio(decode_portfolio(r)?),
+        ORDER_KIND_TOMBSTONE => OrderSlot::Tombstone(decode_tombstone(r)?),
         _ => return Err(CodecError::WrongTag),
     };
     while r.at - start < ORDER_SLOT_BYTES {
@@ -3071,26 +3371,30 @@ impl EpochAccount {
         {
             return Err(CodecError::MismatchedBinding);
         }
-        // A page alone can only bound an order's outcome width by
-        // [`MAX_OUTCOMES`]; the epoch is the account that names this market's
-        // actual width, so a record claiming an outcome or an active
-        // coefficient width the market does not have contradicts a binding the
-        // epoch already committed to.
+        /* A page alone can bound neither an order's outcome width nor its
+         * horizon: it knows `MAX_OUTCOMES` and it stores a 32-byte epoch
+         * identity that no page can invert back into an epoch index.  The epoch
+         * is the account that names this market's actual width and this book's
+         * actual index, so both checks live here.  A retired record is skipped:
+         * it will never be fed to the relation, so neither bound applies to it,
+         * and refusing a whole frozen book because an order someone cancelled
+         * had already expired would be a refusal with no meaning. */
         let mut i = 0;
         while i < pages.len() {
             let mut j = 0;
             while j < pages[i].order_count as usize {
                 match pages[i].orders[j] {
                     OrderSlot::Single(o) => {
-                        if o.outcome >= self.outcome_count {
+                        if o.outcome >= self.outcome_count || o.expiry_epoch < self.epoch_index {
                             return Err(CodecError::MismatchedBinding);
                         }
                     }
                     OrderSlot::Portfolio(p) => {
-                        if p.active_len > self.outcome_count {
+                        if p.active_len > self.outcome_count || p.expiry_epoch < self.epoch_index {
                             return Err(CodecError::MismatchedBinding);
                         }
                     }
+                    OrderSlot::Tombstone(_) => {}
                     OrderSlot::Empty => return Err(CodecError::ZeroIdentity),
                 }
                 j += 1;
@@ -3859,17 +4163,36 @@ pub enum Intent {
         evidence: Hash32,
     },
     /// Append one order to a frozen-shape order page.
+    ///
+    /// The payload is an [`OrderSlot`] rather than a bare [`OrderRecord`], so
+    /// the two admitted order families are both placeable on the wire; the
+    /// encoding is the slot's kind byte and that kind's **exact** body, with
+    /// none of the slot padding a page carries.
+    ///
+    /// `slot.order_id()` is not a choice.  Order ids are positional
+    /// ([`canonical_order_id`]), so the only id this intent may carry is the
+    /// one the target page's state already fixes — the placement path refuses
+    /// any other.  Carrying it anyway is what turns a lost race into a refusal:
+    /// a caller states the rank it believes it is taking, and a placement that
+    /// slipped behind another one is refused instead of quietly landing at a
+    /// different rank.
     PlaceOrder {
         market: MarketId,
         epoch: EpochId,
-        order: OrderRecord,
+        slot: OrderSlot,
     },
-    /// Cancel one existing order identity.
+    /// Retire one existing order identity, writing a [`TombstoneRecord`].
+    ///
+    /// `order_id` is a canonical rank, so it names the page and the slot with
+    /// no search; `owner` must be the record's own owner; `generation` is the
+    /// retirement's replay generation and must be strictly above the retired
+    /// record's.
     CancelOrder {
         market: MarketId,
         epoch: EpochId,
         owner: OwnerId,
         order_id: Hash32,
+        generation: u64,
     },
     /// Settle one already-verified page.
     SettlePage {
@@ -3877,6 +4200,20 @@ pub enum Intent {
         epoch: EpochId,
         page_index: u16,
     },
+}
+
+/// The placement admissibility rule, shared by the encoder and the decoder.
+///
+/// A placement carries an order, and only an order.  Padding is not an order,
+/// and a retirement is what a cancellation writes rather than something a
+/// caller may place, so both are [`CodecError::InvalidEnum`] — the kind byte is
+/// recognized, it simply names something that is not a placement.
+fn check_placement(slot: &OrderSlot) -> Result<()> {
+    match slot {
+        OrderSlot::Single(o) => o.validate(),
+        OrderSlot::Portfolio(p) => p.validate(),
+        OrderSlot::Empty | OrderSlot::Tombstone(_) => Err(CodecError::InvalidEnum),
+    }
 }
 
 const CREATE_TAG: u8 = 1;
@@ -3897,8 +4234,14 @@ impl Intent {
             Self::Split { .. } | Self::Merge { .. } => 2 + 32 + 32 + 8,
             Self::Materialize { .. } | Self::Dematerialize { .. } => 2 + 32 + 32 + 32 + 1 + 8,
             Self::FeedAdvance { .. } => 2 + 32 + 8 + 32,
-            Self::PlaceOrder { .. } => 2 + 32 + 32 + 99,
-            Self::CancelOrder { .. } => 2 + 32 + 32 + 32 + 32,
+            Self::PlaceOrder { slot, .. } => match slot {
+                OrderSlot::Single(_) => 2 + 32 + 32 + 1 + ORDER_RECORD_BYTES,
+                OrderSlot::Portfolio(_) => 2 + 32 + 32 + 1 + PORTFOLIO_RECORD_BYTES,
+                /* Neither padding nor a retirement is a placement; `encode`
+                 * refuses both before this length could be used to write. */
+                OrderSlot::Empty | OrderSlot::Tombstone(_) => 2 + 32 + 32 + 1,
+            },
+            Self::CancelOrder { .. } => 2 + 32 + 32 + 32 + 32 + 8,
             Self::SettlePage { .. } => 2 + 32 + 32 + 2,
         }
     }
@@ -4011,31 +4354,42 @@ impl Intent {
             Self::PlaceOrder {
                 market,
                 epoch,
-                order,
+                slot,
             } => {
                 check_hash(*market)?;
                 check_hash(*epoch)?;
-                order.validate()?;
+                check_placement(slot)?;
                 put_header(&mut w, PLACE_TAG, INTENT_VERSION)?;
                 w.hash(*market)?;
                 w.hash(*epoch)?;
-                encode_order(&mut w, *order)?
+                w.u8(slot.kind())?;
+                match slot {
+                    OrderSlot::Single(o) => encode_order(&mut w, *o)?,
+                    OrderSlot::Portfolio(p) => encode_portfolio(&mut w, *p)?,
+                    /* Unreachable: `check_placement` refused every other kind
+                     * above.  Stated, not assumed. */
+                    OrderSlot::Empty | OrderSlot::Tombstone(_) => {
+                        return Err(CodecError::InvalidEnum)
+                    }
+                }
             }
             Self::CancelOrder {
                 market,
                 epoch,
                 owner,
                 order_id,
+                generation,
             } => {
                 check_hash(*market)?;
                 check_hash(*epoch)?;
                 check_hash(*owner)?;
-                check_hash(*order_id)?;
+                order_id_rank(*order_id)?;
                 put_header(&mut w, CANCEL_TAG, INTENT_VERSION)?;
                 w.hash(*market)?;
                 w.hash(*epoch)?;
                 w.hash(*owner)?;
-                w.hash(*order_id)?
+                w.hash(*order_id)?;
+                w.u64(*generation)?
             }
             Self::SettlePage {
                 market,
@@ -4149,15 +4503,23 @@ impl Intent {
             PLACE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
-                let order = decode_order(&mut r)?;
+                let slot = match r.u8()? {
+                    ORDER_KIND_SINGLE => OrderSlot::Single(decode_order(&mut r)?),
+                    ORDER_KIND_PORTFOLIO => OrderSlot::Portfolio(decode_portfolio(&mut r)?),
+                    /* Padding and a retirement are real slot kinds that are not
+                     * placements, so they are refused as a reserved value in
+                     * this position; any other byte is no slot kind at all. */
+                    ORDER_KIND_EMPTY | ORDER_KIND_TOMBSTONE => return Err(CodecError::InvalidEnum),
+                    _ => return Err(CodecError::WrongTag),
+                };
                 r.done()?;
                 check_hash(market)?;
                 check_hash(epoch)?;
-                order.validate()?;
+                check_placement(&slot)?;
                 Ok(Self::PlaceOrder {
                     market,
                     epoch,
-                    order,
+                    slot,
                 })
             }
             CANCEL_TAG => {
@@ -4165,15 +4527,17 @@ impl Intent {
                 let epoch = r.hash()?;
                 let owner = r.hash()?;
                 let order_id = r.hash()?;
+                let generation = r.u64()?;
                 check_hash(market)?;
                 check_hash(epoch)?;
                 check_hash(owner)?;
-                check_hash(order_id)?;
+                order_id_rank(order_id)?;
                 let v = Self::CancelOrder {
                     market,
                     epoch,
                     owner,
                     order_id,
+                    generation,
                 };
                 r.done()?;
                 Ok(v)
@@ -4339,6 +4703,10 @@ mod tests {
     fn h(n: u8) -> Hash32 {
         Hash32::from_bytes([n; 32])
     }
+    /// The canonical order identity of slot rank `n`; see [`canonical_order_id`].
+    fn oid(n: u8) -> Hash32 {
+        canonical_order_id(n as u64)
+    }
     fn market() -> MarketAccount {
         let m = h(1);
         let mut outcomes = [Hash32::ZERO; MAX_OUTCOMES];
@@ -4489,7 +4857,7 @@ mod tests {
     fn order(id: u8) -> OrderRecord {
         OrderRecord {
             owner: h(20),
-            order_id: h(id),
+            order_id: oid(id),
             outcome: 0,
             side: 0,
             quantity: 10,
@@ -4497,6 +4865,7 @@ mod tests {
             minimum_fill: 0,
             flags: 0,
             generation: 1,
+            expiry_epoch: u64::MAX,
         }
     }
     fn single(id: u8) -> OrderSlot {
@@ -4509,7 +4878,7 @@ mod tests {
         coefficients[1] = 1;
         PortfolioRecord {
             owner: h(21),
-            order_id: h(id),
+            order_id: oid(id),
             side: 0,
             active_len: 2,
             flags: 0,
@@ -4518,6 +4887,7 @@ mod tests {
             limit_collateral_per_lot: 9_000,
             minimum_fill_lots: 2,
             generation: 1,
+            expiry_epoch: u64::MAX,
         }
     }
     /// Rebuild the page's range and digest after a slot was replaced.
@@ -4537,7 +4907,7 @@ mod tests {
         let (first, last) = if ids.is_empty() {
             (Hash32::ZERO, Hash32::ZERO)
         } else {
-            (h(ids[0]), h(ids[ids.len() - 1]))
+            (oid(ids[0]), oid(ids[ids.len() - 1]))
         };
         let mut page = OrderPageAccount {
             market: h(1),
@@ -4551,6 +4921,7 @@ mod tests {
             page_count: count,
             set_order_count: 0,
             order_count: ids.len() as u8,
+            tombstone_count: 0,
             frozen: 0,
             stored_bump: 5,
             orders,
@@ -4731,7 +5102,7 @@ mod tests {
         assert_eq!(account_len::HOARD, 108);
         assert_eq!(account_len::POSITION, 220);
         assert_eq!(account_len::FEED, 124);
-        assert_eq!(account_len::ORDER_PAGE, 3883);
+        assert_eq!(account_len::ORDER_PAGE, 4012);
         assert_eq!(account_len::SUPPLY_LEDGER, 333);
         assert_eq!(account_len::TERMS, 1656);
         assert_eq!(account_len::PRICE_GRID, 589);
@@ -4740,14 +5111,17 @@ mod tests {
         assert_eq!(account_len::FINAL_POT, 262);
         assert_eq!(account_len::SETTLEMENT_RECEIPT, 217);
         assert_eq!(account_len::RESOLUTION, 165);
-        assert_eq!(ORDER_RECORD_BYTES, 99);
-        assert_eq!(PORTFOLIO_RECORD_BYTES, 227);
-        assert_eq!(ORDER_SLOT_BYTES, 228);
+        assert_eq!(ORDER_RECORD_BYTES, 107);
+        assert_eq!(PORTFOLIO_RECORD_BYTES, 235);
+        assert_eq!(TOMBSTONE_RECORD_BYTES, 80);
+        assert_eq!(ORDER_SLOT_BYTES, 236);
         // The page is exactly its header plus sixteen common-width slots.
         assert_eq!(
             account_len::ORDER_PAGE,
-            235 + MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES
+            236 + MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES
         );
+        // The widest admitted intent is a portfolio placement, exactly.
+        assert_eq!(MAX_INTENT_BYTES, 302);
     }
     #[test]
     fn mirrored_bounds_match_their_owning_crates() {
@@ -4835,7 +5209,7 @@ mod tests {
         feed.encode(&mut feed_bytes).unwrap();
         assert_eq!(FeedAccount::decode(&feed_bytes), Ok(feed));
 
-        let page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        let page = build_page(0, 1, &[1, 2], Hash32::ZERO);
         let mut page_bytes = [0; account_len::ORDER_PAGE];
         page.encode(&mut page_bytes).unwrap();
         assert_eq!(OrderPageAccount::decode(&page_bytes), Ok(page));
@@ -4981,18 +5355,24 @@ mod tests {
         b[1] = LAYOUT_VERSION_V1;
         assert_eq!(ProfileAccount::decode(&b), Err(CodecError::WrongVersion));
 
-        // The page is on its third shape: bare records, then the page-set
-        // commitment fields, then tagged fixed-width slots.  Both earlier
-        // versions are refused explicitly.
-        let page = build_page(0, 1, &[3], Hash32::ZERO);
+        /* The page is on its fourth shape: bare records, then the page-set
+         * commitment fields, then tagged fixed-width slots, then positional
+         * order ids with a retirement kind and a persisted expiry.  All three
+         * earlier versions are refused explicitly. */
+        let page = build_page(0, 1, &[1], Hash32::ZERO);
         let mut b = [0; account_len::ORDER_PAGE];
         page.encode(&mut b).unwrap();
         assert_eq!(b[1], LAYOUT_VERSION);
-        assert_eq!(account_version::ORDER_PAGE, 3);
-        b[1] = LAYOUT_VERSION_V1;
-        assert_eq!(OrderPageAccount::decode(&b), Err(CodecError::WrongVersion));
-        b[1] = LAYOUT_VERSION_V2;
-        assert_eq!(OrderPageAccount::decode(&b), Err(CodecError::WrongVersion));
+        assert_eq!(account_version::ORDER_PAGE, 4);
+        for superseded in [LAYOUT_VERSION_V1, LAYOUT_VERSION_V2, LAYOUT_VERSION_V3] {
+            b[1] = superseded;
+            assert_eq!(OrderPageAccount::decode(&b), Err(CodecError::WrongVersion));
+            assert_eq!(
+                stream::verify_page(&b),
+                Err(CodecError::WrongVersion),
+                "the streaming reader refuses every superseded page version too"
+            );
+        }
 
         let mut b = [0; account_len::MARKET];
         market().encode(&mut b).unwrap();
@@ -5602,7 +5982,7 @@ mod tests {
     #[test]
     fn off_grid_order_limits_are_refused_at_decode_time() {
         let g = grid();
-        let page = build_page(0, 1, &[3, 4], Hash32::ZERO);
+        let page = build_page(0, 1, &[1, 2], Hash32::ZERO);
         let mut b = [0; account_len::ORDER_PAGE];
         page.encode(&mut b).unwrap();
         assert_eq!(OrderPageAccount::decode_on_grid(&b, &g), Ok(page));
@@ -5610,7 +5990,7 @@ mod tests {
         let mut off = page;
         off.orders[1] = OrderSlot::Single(OrderRecord {
             limit: 2_501,
-            ..order(4)
+            ..order(2)
         });
         off.page_digest = off.recomputed_page_digest().unwrap();
         let mut b = [0; account_len::ORDER_PAGE];
@@ -5714,7 +6094,7 @@ mod tests {
         // Duplicate order id across a page boundary.
         let mut dup = pages;
         dup[1].orders[0] = single(16);
-        dup[1].first_order_id = h(16);
+        dup[1].first_order_id = oid(16);
         dup[1].page_digest = dup[1].recomputed_page_digest().unwrap();
         assert_eq!(dup[1].validate(), Err(CodecError::NonCanonicalIdentity));
         assert_eq!(verify_page_set(&dup), Err(CodecError::NonCanonicalIdentity));
@@ -5742,7 +6122,7 @@ mod tests {
 
         // A broken predecessor link.
         let mut unlinked = pages;
-        unlinked[1].prev_page_last_order_id = h(15);
+        unlinked[1].prev_page_last_order_id = oid(15);
         assert_eq!(
             verify_page_set(&unlinked),
             Err(CodecError::NonCanonicalIdentity)
@@ -5758,19 +6138,19 @@ mod tests {
     }
     #[test]
     fn order_page_refuses_stale_ranges_and_sparse_frozen_pages() {
-        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        let mut page = build_page(0, 1, &[1, 2], Hash32::ZERO);
         assert_eq!(page.validate(), Ok(()));
 
         let mut stale = page;
-        stale.last_order_id = h(8);
+        stale.last_order_id = oid(8);
         assert_eq!(stale.validate(), Err(CodecError::MismatchedBinding));
 
         let mut chained = page;
-        chained.prev_page_last_order_id = h(2);
+        chained.prev_page_last_order_id = oid(2);
         assert_eq!(chained.validate(), Err(CodecError::NonCanonicalPadding));
 
-        // Page one must link, and must open strictly above its predecessor.
-        let mut second = build_page(1, 2, &[9, 10], h(9));
+        // Page one must link to exactly the rank its own index fixes.
+        let mut second = build_page(1, 2, &[17, 18], h(9));
         assert_eq!(second.validate(), Err(CodecError::NonCanonicalIdentity));
         second.prev_page_last_order_id = Hash32::ZERO;
         assert_eq!(second.validate(), Err(CodecError::ZeroIdentity));
@@ -5787,7 +6167,7 @@ mod tests {
         freeze_set(&mut set);
         let mut sparse = set;
         sparse[0].order_count = 15;
-        sparse[0].last_order_id = h(15);
+        sparse[0].last_order_id = oid(15);
         sparse[0].orders[15] = OrderSlot::Empty;
         sparse[0].page_digest = sparse[0].recomputed_page_digest().unwrap();
         assert_eq!(sparse[0].validate(), Err(CodecError::InvalidCount));
@@ -5796,28 +6176,29 @@ mod tests {
         empty_frozen[1].order_count = 0;
         assert_eq!(empty_frozen[1].validate(), Err(CodecError::InvalidCount));
 
-        let mut too_many = build_page(0, 5, &[3], Hash32::ZERO);
+        let mut too_many = build_page(0, 5, &[1], Hash32::ZERO);
         too_many.page_digest = too_many.recomputed_page_digest().unwrap();
         assert_eq!(too_many.validate(), Err(CodecError::InvalidCount));
     }
     #[test]
     fn page_rejects_duplicate_or_unsorted_orders() {
-        let mut page = build_page(0, 1, &[3], Hash32::ZERO);
-        page.orders[1] = single(3);
+        let mut page = build_page(0, 1, &[1], Hash32::ZERO);
+        page.orders[1] = single(1);
         page.order_count = 2;
-        page.last_order_id = h(3);
+        page.last_order_id = oid(1);
         page.page_digest = page.recomputed_page_digest().unwrap();
         assert_eq!(page.validate(), Err(CodecError::NonCanonicalIdentity));
 
-        let mut unsorted = build_page(0, 1, &[3, 4], Hash32::ZERO);
-        unsorted.orders[0] = single(4);
-        unsorted.orders[1] = single(3);
-        unsorted.first_order_id = h(4);
-        unsorted.last_order_id = h(3);
+        // The same two ids, transposed: each slot now holds the other's rank.
+        let mut unsorted = build_page(0, 1, &[1, 2], Hash32::ZERO);
+        unsorted.orders[0] = single(2);
+        unsorted.orders[1] = single(1);
+        unsorted.first_order_id = oid(2);
+        unsorted.last_order_id = oid(1);
         unsorted.page_digest = unsorted.recomputed_page_digest().unwrap();
         assert_eq!(unsorted.validate(), Err(CodecError::NonCanonicalIdentity));
 
-        let mut padded = build_page(0, 1, &[3], Hash32::ZERO);
+        let mut padded = build_page(0, 1, &[1], Hash32::ZERO);
         padded.orders[5] = single(9);
         padded.page_digest = padded.recomputed_page_digest().unwrap();
         assert_eq!(padded.validate(), Err(CodecError::NonCanonicalPadding));
@@ -5843,8 +6224,8 @@ mod tests {
     }
     #[test]
     fn portfolio_and_single_egg_records_share_one_page_and_one_order_chain() {
-        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
-        page.orders[1] = OrderSlot::Portfolio(portfolio(9));
+        let mut page = build_page(0, 1, &[1, 2], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(portfolio(2));
         reseal(&mut page);
         assert_eq!(page.validate(), Ok(()));
 
@@ -5872,7 +6253,7 @@ mod tests {
         // are pinned here, in slot-local coordinates, so the byte tables and the
         // codec cannot drift apart.
         let o = slot_at(&b, 0);
-        let single = order(3);
+        let single = order(1);
         assert_eq!(&o[1..33], &single.owner.0);
         assert_eq!(&o[33..65], &single.order_id.0);
         assert_eq!(o[65], single.outcome);
@@ -5882,10 +6263,11 @@ mod tests {
         assert_eq!(&o[83..91], &single.minimum_fill.to_le_bytes());
         assert_eq!(o[91], single.flags);
         assert_eq!(&o[92..100], &single.generation.to_le_bytes());
-        assert!(o[100..].iter().all(|x| *x == 0));
+        assert_eq!(&o[100..108], &single.expiry_epoch.to_le_bytes());
+        assert!(o[108..].iter().all(|x| *x == 0));
 
         let p = slot_at(&b, 1);
-        let expected = portfolio(9);
+        let expected = portfolio(2);
         assert_eq!(&p[1..33], &expected.owner.0);
         assert_eq!(&p[33..65], &expected.order_id.0);
         assert_eq!(p[65], expected.side);
@@ -5904,18 +6286,19 @@ mod tests {
         );
         assert_eq!(&p[212..220], &expected.minimum_fill_lots.to_le_bytes());
         assert_eq!(&p[220..228], &expected.generation.to_le_bytes());
+        assert_eq!(&p[228..236], &expected.expiry_epoch.to_le_bytes());
 
         // The order-id chain is one chain across both families.
-        assert_eq!(page.orders[0].order_id(), h(3));
-        assert_eq!(page.orders[1].order_id(), h(9));
+        assert_eq!(page.orders[0].order_id(), oid(1));
+        assert_eq!(page.orders[1].order_id(), oid(2));
         assert!(page.orders[1].is_portfolio());
         assert!(!page.orders[0].is_portfolio());
         assert_eq!(page.orders[1].owner(), h(21));
         assert_eq!(page.orders[2].order_id(), Hash32::ZERO);
 
         let mut crossed = page;
-        crossed.orders[1] = OrderSlot::Portfolio(portfolio(3));
-        crossed.last_order_id = h(3);
+        crossed.orders[1] = OrderSlot::Portfolio(portfolio(1));
+        crossed.last_order_id = oid(1);
         crossed.page_digest = crossed.recomputed_page_digest().unwrap();
         assert_eq!(crossed.validate(), Err(CodecError::NonCanonicalIdentity));
     }
@@ -6009,12 +6392,12 @@ mod tests {
     }
     #[test]
     fn the_streamed_page_digest_equals_the_public_helper() {
-        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
-        page.orders[1] = OrderSlot::Portfolio(portfolio(9));
+        let mut page = build_page(0, 1, &[1, 2], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(portfolio(2));
         reseal(&mut page);
         let mut b = [0; account_len::ORDER_PAGE];
         page.encode(&mut b).unwrap();
-        assert_eq!(PAGE_HEADER_BYTES, 235);
+        assert_eq!(PAGE_HEADER_BYTES, 236);
         assert_eq!(
             page.page_digest,
             canonical_page_digest(
@@ -6022,13 +6405,14 @@ mod tests {
                 page.epoch,
                 page.page_index,
                 page.order_count,
+                page.tombstone_count,
                 &b[PAGE_HEADER_BYTES..],
             )
         );
     }
     #[test]
     fn portfolio_records_refuse_bad_widths_coefficients_and_lot_bounds() {
-        let base = portfolio(9);
+        let base = portfolio(2);
         assert_eq!(base.validate(), Ok(()));
 
         let mut zero_width = base;
@@ -6098,7 +6482,7 @@ mod tests {
         assert_eq!(many_lots.validate(), Ok(()));
 
         // A page carrying a refused record cannot be encoded at all.
-        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        let mut page = build_page(0, 1, &[1, 2], Hash32::ZERO);
         page.orders[1] = OrderSlot::Portfolio(no_lots);
         page.page_digest = page.recomputed_page_digest().unwrap();
         let mut b = [0; account_len::ORDER_PAGE];
@@ -6107,8 +6491,8 @@ mod tests {
     #[test]
     fn portfolio_bounds_are_checked_against_the_frozen_price_scale() {
         let g = grid();
-        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
-        page.orders[1] = OrderSlot::Portfolio(portfolio(9));
+        let mut page = build_page(0, 1, &[1, 2], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(portfolio(2));
         reseal(&mut page);
         let mut b = [0; account_len::ORDER_PAGE];
         page.encode(&mut b).unwrap();
@@ -6121,7 +6505,7 @@ mod tests {
 
         // What the grid does contribute is the frozen scale.  A per-lot value
         // that cannot be represented could never be classified.
-        let mut huge_value = portfolio(9);
+        let mut huge_value = portfolio(2);
         huge_value.coefficients = [0; MAX_OUTCOMES];
         huge_value.coefficients[0] = u64::MAX;
         huge_value.active_len = 1;
@@ -6133,7 +6517,7 @@ mod tests {
             Err(CodecError::ArithmeticOverflow)
         );
 
-        let mut huge_bound = portfolio(9);
+        let mut huge_bound = portfolio(2);
         huge_bound.coefficients = [0; MAX_OUTCOMES];
         huge_bound.coefficients[0] = 1;
         huge_bound.active_len = 1;
@@ -6159,25 +6543,25 @@ mod tests {
 
         // A scale of zero or above the simplex bound is not a scale.
         assert_eq!(
-            portfolio(9).validate_on_scale(0),
+            portfolio(2).validate_on_scale(0),
             Err(CodecError::InvalidPriceGrid)
         );
         assert_eq!(
-            portfolio(9).validate_on_scale(MAX_PRICE_SCALE + 1),
+            portfolio(2).validate_on_scale(MAX_PRICE_SCALE + 1),
             Err(CodecError::InvalidPriceGrid)
         );
     }
     #[test]
     fn hostile_order_slots_refuse_unknown_kinds_and_nonzero_slot_padding() {
-        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
-        page.orders[1] = OrderSlot::Portfolio(portfolio(9));
+        let mut page = build_page(0, 1, &[1, 2], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(portfolio(2));
         reseal(&mut page);
         let mut clean = [0; account_len::ORDER_PAGE];
         page.encode(&mut clean).unwrap();
 
         // An unrecognized slot kind is refused like any other discriminator.
         let mut unknown = clean;
-        unknown[PAGE_HEADER_BYTES] = 3;
+        unknown[PAGE_HEADER_BYTES] = ORDER_KIND_TOMBSTONE + 1;
         assert_eq!(
             OrderPageAccount::decode(&unknown),
             Err(CodecError::WrongTag)
@@ -6647,6 +7031,7 @@ mod tests {
         w.u16(page.page_count).unwrap();
         w.u16(page.set_order_count).unwrap();
         w.u8(page.order_count).unwrap();
+        w.u8(page.tombstone_count).unwrap();
         w.u8(page.frozen).unwrap();
         w.u8(page.stored_bump).unwrap();
         let mut i = 0;
@@ -6697,8 +7082,8 @@ mod tests {
     fn streaming_page_verdicts_match_the_buffered_decoder() {
         // Accepted shapes.
         let mixed = {
-            let mut p = build_page(0, 1, &[3, 9], Hash32::ZERO);
-            p.orders[1] = OrderSlot::Portfolio(portfolio(9));
+            let mut p = build_page(0, 1, &[1, 2], Hash32::ZERO);
+            p.orders[1] = OrderSlot::Portfolio(portfolio(2));
             reseal(&mut p);
             p
         };
@@ -6709,7 +7094,7 @@ mod tests {
         let frozen = frozen_pages();
         let with_portfolio = frozen_pages_with_portfolio();
         let accepted = [
-            ("single-egg page", build_page(0, 1, &[3, 9], Hash32::ZERO)),
+            ("single-egg page", build_page(0, 1, &[1, 2], Hash32::ZERO)),
             ("mixed families", mixed),
             ("dense page", full),
             ("empty open page", empty),
@@ -6731,7 +7116,7 @@ mod tests {
         }
 
         // Refused shapes, built as bytes so both decoders see the same input.
-        let base = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        let base = build_page(0, 1, &[1, 2], Hash32::ZERO);
         let refused: [(&str, OrderPageAccount); 16] = [
             (
                 "zero market",
@@ -6782,14 +7167,14 @@ mod tests {
             (
                 "stale range",
                 OrderPageAccount {
-                    last_order_id: h(8),
+                    last_order_id: oid(8),
                     ..base
                 },
             ),
             (
                 "page zero links to a predecessor",
                 OrderPageAccount {
-                    prev_page_last_order_id: h(2),
+                    prev_page_last_order_id: oid(2),
                     ..base
                 },
             ),
@@ -6825,7 +7210,7 @@ mod tests {
             ("duplicate order id", {
                 let mut p = base;
                 p.orders[1] = single(3);
-                p.last_order_id = h(3);
+                p.last_order_id = oid(3);
                 p.page_digest = p.recomputed_page_digest().unwrap();
                 p
             }),
@@ -6838,7 +7223,7 @@ mod tests {
                 let mut p = base;
                 p.orders[0] = OrderSlot::Single(OrderRecord {
                     quantity: 11,
-                    ..order(3)
+                    ..order(1)
                 });
                 p
             }),
@@ -6876,7 +7261,7 @@ mod tests {
             freeze_set(&mut set);
             let mut s = set[0];
             s.order_count = 15;
-            s.last_order_id = h(15);
+            s.last_order_id = oid(15);
             s.orders[15] = OrderSlot::Empty;
             s.page_digest = s.recomputed_page_digest().unwrap();
             s
@@ -6914,7 +7299,7 @@ mod tests {
             &encode_page_unchecked(&unlinked),
         );
         let mut overlapping = frozen[1];
-        overlapping.prev_page_last_order_id = h(30);
+        overlapping.prev_page_last_order_id = oid(30);
         agrees(
             "later page opening below its predecessor",
             &encode_page_unchecked(&overlapping),
@@ -6922,8 +7307,8 @@ mod tests {
     }
     #[test]
     fn streaming_page_verdicts_match_the_buffered_decoder_on_hostile_bytes() {
-        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
-        page.orders[1] = OrderSlot::Portfolio(portfolio(9));
+        let mut page = build_page(0, 1, &[1, 2], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(portfolio(2));
         reseal(&mut page);
         let clean = encode_page_unchecked(&page);
         agrees("clean", &clean);
@@ -6943,7 +7328,7 @@ mod tests {
 
         // Slot framing: every byte-level fixture the buffered slot decoder has.
         let mut unknown = clean;
-        unknown[PAGE_HEADER_BYTES] = 3;
+        unknown[PAGE_HEADER_BYTES] = ORDER_KIND_TOMBSTONE + 1;
         agrees("unknown slot kind", &unknown);
         let mut unknown_pad = clean;
         unknown_pad[PAGE_HEADER_BYTES + 2 * ORDER_SLOT_BYTES] = u8::MAX;
@@ -6972,7 +7357,7 @@ mod tests {
         // array before it validates anything, and so does the streamed one.
         let mut both = clean;
         both[2] = 0; // zero the first byte of `market`
-        both[PAGE_HEADER_BYTES] = 3;
+        both[PAGE_HEADER_BYTES] = ORDER_KIND_TOMBSTONE + 1;
         assert_eq!(stream::verify_page(&both), Err(CodecError::WrongTag));
         agrees("bad slot and bad header at once", &both);
 
@@ -6980,14 +7365,14 @@ mod tests {
         agrees("all zero", &[0; account_len::ORDER_PAGE]);
     }
     #[test]
-    fn the_streaming_header_reads_235_bytes_and_decides_only_header_facts() {
-        let page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+    fn the_streaming_header_reads_236_bytes_and_decides_only_header_facts() {
+        let page = build_page(0, 1, &[1, 2], Hash32::ZERO);
         let bytes = encode_page_unchecked(&page);
         assert_eq!(
             stream::ORDER_PAGE_HEADER_BYTES,
             account_len::ORDER_PAGE - MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES
         );
-        assert_eq!(stream::ORDER_PAGE_HEADER_BYTES, 235);
+        assert_eq!(stream::ORDER_PAGE_HEADER_BYTES, 236);
         let header = stream::OrderPageHeader::decode(&bytes).unwrap();
         assert_eq!(header, stream::OrderPageHeader::of_page(&page));
         assert_eq!(header.validate_shape(), Ok(()));
@@ -7003,7 +7388,7 @@ mod tests {
         // has a well-formed header, and the page verdict is the one that sees
         // the difference.
         let mut junk = bytes;
-        junk[PAGE_HEADER_BYTES] = 3;
+        junk[PAGE_HEADER_BYTES] = ORDER_KIND_TOMBSTONE + 1;
         assert_eq!(
             stream::OrderPageHeader::decode(&junk)
                 .unwrap()
@@ -7030,7 +7415,7 @@ mod tests {
             Err(CodecError::ZeroIdentity)
         );
         let mut ranged = build_page(0, 1, &[], Hash32::ZERO);
-        ranged.first_order_id = h(3);
+        ranged.first_order_id = oid(3);
         assert_eq!(
             stream::OrderPageHeader::decode(&encode_page_unchecked(&ranged))
                 .unwrap()
@@ -7040,19 +7425,19 @@ mod tests {
     }
     #[test]
     fn the_slot_cursor_reads_one_slot_at_a_time_and_keeps_the_order_chain() {
-        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
-        page.orders[1] = OrderSlot::Portfolio(portfolio(9));
+        let mut page = build_page(0, 1, &[1, 2], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(portfolio(2));
         reseal(&mut page);
         let bytes = encode_page_unchecked(&page);
 
         let mut cursor = stream::OrderSlotCursor::new(&bytes).unwrap();
         assert_eq!(cursor.index(), 0);
         assert_eq!(cursor.remaining(), MAX_ORDERS_PER_PAGE);
-        assert_eq!(cursor.next_slot(), Some(Ok(single(3))));
+        assert_eq!(cursor.next_slot(), Some(Ok(single(1))));
         assert_eq!(cursor.index(), 1);
         assert_eq!(
             cursor.next_slot(),
-            Some(Ok(OrderSlot::Portfolio(portfolio(9))))
+            Some(Ok(OrderSlot::Portfolio(portfolio(2))))
         );
         let mut seen = 2;
         while let Some(step) = cursor.next_slot() {
@@ -7072,12 +7457,14 @@ mod tests {
         }
         assert_eq!(records, page.order_count as usize);
 
-        // The chain is enforced across calls, not within one slot.
-        let mut descending = build_page(0, 1, &[9, 3], Hash32::ZERO);
-        descending.page_digest = descending.recomputed_page_digest().unwrap();
-        let descending_bytes = encode_page_unchecked(&descending);
+        /* An id is checked against its own slot's position, so a wrong id
+         * refuses at the slot that holds it — the slots before it are still
+         * good, and the ones after it are never reached. */
+        let mut misranked = build_page(0, 1, &[1, 9], Hash32::ZERO);
+        misranked.page_digest = misranked.recomputed_page_digest().unwrap();
+        let descending_bytes = encode_page_unchecked(&misranked);
         let mut chain = stream::OrderSlotCursor::new(&descending_bytes).unwrap();
-        assert_eq!(chain.next_slot(), Some(Ok(single(9))));
+        assert_eq!(chain.next_slot(), Some(Ok(single(1))));
         assert_eq!(
             chain.next_slot(),
             Some(Err(CodecError::NonCanonicalIdentity))
@@ -7089,7 +7476,7 @@ mod tests {
         let mut unknown = bytes;
         unknown[PAGE_HEADER_BYTES + ORDER_SLOT_BYTES] = 7;
         let mut kinds = stream::OrderSlotCursor::new(&unknown).unwrap();
-        assert_eq!(kinds.next_slot(), Some(Ok(single(3))));
+        assert_eq!(kinds.next_slot(), Some(Ok(single(1))));
         assert_eq!(kinds.next_slot(), Some(Err(CodecError::WrongTag)));
         let mut dirty = bytes;
         dirty[PAGE_HEADER_BYTES + 3 * ORDER_SLOT_BYTES + 1] = 1;
@@ -7098,8 +7485,8 @@ mod tests {
     }
     #[test]
     fn the_streamed_page_digest_matches_the_buffered_recompute() {
-        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
-        page.orders[1] = OrderSlot::Portfolio(portfolio(9));
+        let mut page = build_page(0, 1, &[1, 2], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(portfolio(2));
         reseal(&mut page);
         let bytes = encode_page_unchecked(&page);
         assert_eq!(
@@ -7113,6 +7500,7 @@ mod tests {
                 page.epoch,
                 page.page_index,
                 page.order_count,
+                page.tombstone_count,
                 &bytes[PAGE_HEADER_BYTES..],
             ))
         );
@@ -7120,7 +7508,7 @@ mod tests {
         let mut moved = page;
         moved.orders[0] = OrderSlot::Single(OrderRecord {
             quantity: 11,
-            ..order(3)
+            ..order(1)
         });
         assert_ne!(
             stream::streamed_page_digest(&encode_page_unchecked(&moved)),
@@ -7169,7 +7557,7 @@ mod tests {
         // Duplicate order id across a page boundary.
         let mut dup = pages;
         dup[1].orders[0] = single(16);
-        dup[1].first_order_id = h(16);
+        dup[1].first_order_id = oid(16);
         dup[1].page_digest = dup[1].recomputed_page_digest().unwrap();
         let d1 = encode_page_unchecked(&dup[1]);
         set_agrees("duplicate id across the boundary", &[&b0, &d1]);
@@ -7192,7 +7580,7 @@ mod tests {
 
         // A broken predecessor link, and an unfrozen page in a closed set.
         let mut unlinked = pages;
-        unlinked[1].prev_page_last_order_id = h(15);
+        unlinked[1].prev_page_last_order_id = oid(15);
         let u1 = encode_page_unchecked(&unlinked[1]);
         set_agrees("broken predecessor link", &[&b0, &u1]);
         let mut thawed = pages;
@@ -7225,7 +7613,7 @@ mod tests {
         // A page that does not decode at all is refused in page order, exactly
         // as decoding each page before closing the set would refuse it.
         let mut junk = b1;
-        junk[PAGE_HEADER_BYTES] = 3;
+        junk[PAGE_HEADER_BYTES] = ORDER_KIND_TOMBSTONE + 1;
         set_agrees("undecodable tail page", &[&b0, &junk]);
         set_agrees("undecodable head page", &[&junk, &b1]);
 
@@ -7238,7 +7626,7 @@ mod tests {
     #[test]
     fn streaming_grid_and_epoch_bindings_match_the_buffered_ones() {
         let grid = grid();
-        let page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        let page = build_page(0, 1, &[1, 2], Hash32::ZERO);
         let bytes = encode_page_unchecked(&page);
         assert_eq!(
             stream::verify_page_on_grid(&bytes, &grid),
@@ -7250,7 +7638,7 @@ mod tests {
         let mut off = page;
         off.orders[0] = OrderSlot::Single(OrderRecord {
             limit: 2_501,
-            ..order(3)
+            ..order(1)
         });
         off.page_digest = off.recomputed_page_digest().unwrap();
         let off_bytes = encode_page_unchecked(&off);
@@ -7270,7 +7658,7 @@ mod tests {
             lots: u64::MAX,
             limit_collateral_per_lot: u64::MAX,
             minimum_fill_lots: 0,
-            ..portfolio(9)
+            ..portfolio(2)
         });
         wild.page_digest = wild.recomputed_page_digest().unwrap();
         let wild_bytes = encode_page_unchecked(&wild);
@@ -7428,5 +7816,818 @@ mod tests {
                 "buffered call: {line}"
             );
         }
+    }
+
+    /* ------------------------------------------------------------------------
+     * v4: positional order ids, retirements, per-order expiry, and the writer.
+     * --------------------------------------------------------------------- */
+
+    /// One retirement of the record at `rank`, as this page's writers make it.
+    fn tombstone(rank: u8, owner: Hash32, retired: u64, generation: u64) -> OrderSlot {
+        OrderSlot::Tombstone(TombstoneRecord {
+            order_id: oid(rank),
+            owner,
+            retired_generation: retired,
+            generation,
+        })
+    }
+
+    #[test]
+    fn a_canonical_order_id_is_a_rank_and_nothing_else_decodes_as_one() {
+        // The encoding is a rank, big-endian, in the low eight bytes.
+        let mut expected = [0u8; HASH_BYTES];
+        expected[HASH_BYTES - 1] = 7;
+        assert_eq!(canonical_order_id(7), Hash32::from_bytes(expected));
+        // Round trip over every rank a book can hold, and one past it.
+        let mut rank = 1u64;
+        while rank <= MAX_EPOCH_ORDERS as u64 {
+            assert_eq!(order_id_rank(canonical_order_id(rank)), Ok(rank));
+            rank += 1;
+        }
+        assert_eq!(
+            order_id_rank(canonical_order_id(MAX_EPOCH_ORDERS as u64 + 1)),
+            Err(CodecError::InvalidCount)
+        );
+
+        // Byte order is rank order, which is what let the id chain keep its
+        // shape: the encoding of a larger rank compares larger.
+        assert!(canonical_order_id(2).0 > canonical_order_id(1).0);
+        assert!(canonical_order_id(17).0 > canonical_order_id(16).0);
+
+        // Nothing else is an order id.
+        assert_eq!(order_id_rank(Hash32::ZERO), Err(CodecError::ZeroIdentity));
+        assert_eq!(order_id_rank(h(3)), Err(CodecError::NonCanonicalIdentity));
+        let mut smuggled = canonical_order_id(1);
+        smuggled.0[0] = 1;
+        assert_eq!(
+            order_id_rank(smuggled),
+            Err(CodecError::NonCanonicalIdentity)
+        );
+        let mut high = canonical_order_id(1);
+        high.0[HASH_BYTES - ORDER_ID_RANK_BYTES - 1] = 1;
+        assert_eq!(order_id_rank(high), Err(CodecError::NonCanonicalIdentity));
+        // A rank that does not fit the eight-byte field is not a near miss.
+        assert_eq!(
+            order_id_rank(canonical_order_id(u64::MAX)),
+            Err(CodecError::InvalidCount)
+        );
+
+        // A record carrying a non-rank id is refused by the record, not only
+        // by the page that would hold it.
+        let mut wild = order(1);
+        wild.order_id = h(9);
+        assert_eq!(wild.validate(), Err(CodecError::NonCanonicalIdentity));
+        let mut wild_portfolio = portfolio(1);
+        wild_portfolio.order_id = h(9);
+        assert_eq!(
+            wild_portfolio.validate(),
+            Err(CodecError::NonCanonicalIdentity)
+        );
+    }
+
+    #[test]
+    fn a_slot_id_is_fixed_by_its_position_on_every_page_of_the_set() {
+        // Page one's slots are ranks 17..; page two's are 33...
+        let ids: [u8; MAX_ORDERS_PER_PAGE] =
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let p0 = build_page(0, 3, &ids, Hash32::ZERO);
+        let p1 = build_page(1, 3, &[17, 18], oid(16));
+        assert_eq!(p0.validate(), Ok(()));
+        assert_eq!(p1.validate(), Ok(()));
+        assert_eq!(p1.prev_page_last_order_id, oid(16));
+
+        // A page that links to anything but the rank its index fixes is
+        // refused, even when the link it claims is a perfectly good order id.
+        let mut short_link = p1;
+        short_link.prev_page_last_order_id = oid(15);
+        assert_eq!(short_link.validate(), Err(CodecError::NonCanonicalIdentity));
+
+        // A page-one slot holding a page-zero rank is refused, which is the
+        // cross-page duplicate the old chain could only catch at closure time.
+        let mut stolen = build_page(1, 3, &[3, 18], oid(16));
+        stolen.first_order_id = oid(3);
+        stolen.page_digest = stolen.recomputed_page_digest().unwrap();
+        assert_eq!(stolen.validate(), Err(CodecError::NonCanonicalIdentity));
+
+        // The last rank a book admits is exactly `MAX_EPOCH_ORDERS`, and it is
+        // the last slot of the last page rather than a value anyone chose.
+        let tail_ids: [u8; MAX_ORDERS_PER_PAGE] = [
+            49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64,
+        ];
+        let last = build_page(3, 4, &tail_ids, oid(48));
+        assert_eq!(last.validate(), Ok(()));
+        assert_eq!(
+            order_id_rank(last.orders[MAX_ORDERS_PER_PAGE - 1].order_id()),
+            Ok(MAX_EPOCH_ORDERS as u64)
+        );
+    }
+
+    #[test]
+    fn a_retirement_keeps_the_slot_and_the_id_it_retired() {
+        let mut page = build_page(0, 1, &[1, 2], Hash32::ZERO);
+        let owner = page.orders[0].owner();
+        page.orders[0] = tombstone(1, owner, 1, 2);
+        page.tombstone_count = 1;
+        page.page_digest = page.recomputed_page_digest().unwrap();
+        assert_eq!(page.validate(), Ok(()));
+
+        // The retirement occupies the count and the range exactly as the record
+        // it replaced did: nothing after it is renumbered.
+        assert_eq!(page.order_count, 2);
+        assert_eq!(page.first_order_id, oid(1));
+        assert_eq!(page.last_order_id, oid(2));
+        assert_eq!(order_id_rank(page.orders[1].order_id()), Ok(2));
+        assert!(page.orders[0].is_tombstone());
+        assert!(!page.orders[0].is_live());
+        assert!(page.orders[1].is_live());
+
+        // It round-trips as bytes, and the streaming reader sees the same page.
+        let mut b = [0; account_len::ORDER_PAGE];
+        page.encode(&mut b).unwrap();
+        assert_eq!(OrderPageAccount::decode(&b), Ok(page));
+        let header = stream::verify_page(&b).unwrap();
+        assert_eq!(header, stream::OrderPageHeader::of_page(&page));
+        assert_eq!(header.tombstone_count, 1);
+        assert_eq!(header.live_count(), 1);
+
+        // Its body is exactly `TOMBSTONE_RECORD_BYTES` behind the kind byte,
+        // and every byte to the common slot width is canonical padding.
+        let t = slot_at(&b, 0);
+        assert_eq!(t[0], ORDER_KIND_TOMBSTONE);
+        assert_eq!(&t[1..33], &oid(1).0);
+        assert_eq!(&t[33..65], &owner.0);
+        assert_eq!(&t[65..73], &1u64.to_le_bytes());
+        assert_eq!(&t[73..81], &2u64.to_le_bytes());
+        assert_eq!(1 + TOMBSTONE_RECORD_BYTES, 81);
+        assert!(t[81..].iter().all(|x| *x == 0));
+
+        // The page-set commitment covers the retirement's bytes: changing the
+        // retirement changes the digest, exactly as changing a record does.
+        let mut regenerated = page;
+        regenerated.orders[0] = tombstone(1, owner, 1, 3);
+        assert_ne!(
+            regenerated.recomputed_page_digest().unwrap(),
+            page.page_digest
+        );
+        assert_eq!(regenerated.validate(), Err(CodecError::MismatchedBinding));
+    }
+
+    #[test]
+    fn retirements_refuse_bad_generations_counts_and_positions() {
+        let mut page = build_page(0, 1, &[1, 2], Hash32::ZERO);
+        let owner = page.orders[0].owner();
+
+        // A retirement must strictly follow the placement it retires.
+        let mut stale = page;
+        stale.orders[0] = tombstone(1, owner, 2, 2);
+        stale.tombstone_count = 1;
+        stale.page_digest = stale.recomputed_page_digest().unwrap();
+        assert_eq!(stale.validate(), Err(CodecError::InvalidEnum));
+
+        // A retirement has an owner.
+        let mut unowned = page;
+        unowned.orders[0] = OrderSlot::Tombstone(TombstoneRecord {
+            order_id: oid(1),
+            owner: Hash32::ZERO,
+            retired_generation: 1,
+            generation: 2,
+        });
+        unowned.tombstone_count = 1;
+        unowned.page_digest = unowned.recomputed_page_digest().unwrap();
+        assert_eq!(unowned.validate(), Err(CodecError::ZeroIdentity));
+
+        // A retirement is still a positional id: it cannot move slots.
+        let mut moved = page;
+        moved.orders[0] = tombstone(2, owner, 1, 2);
+        moved.tombstone_count = 1;
+        moved.page_digest = moved.recomputed_page_digest().unwrap();
+        assert_eq!(moved.validate(), Err(CodecError::NonCanonicalIdentity));
+
+        // The stored retirement count is a fold, both ways.
+        page.orders[0] = tombstone(1, owner, 1, 2);
+        page.page_digest = page.recomputed_page_digest().unwrap();
+        assert_eq!(page.validate(), Err(CodecError::MismatchedBinding));
+        let mut overcounted = page;
+        overcounted.tombstone_count = 2;
+        overcounted.page_digest = overcounted.recomputed_page_digest().unwrap();
+        assert_eq!(overcounted.validate(), Err(CodecError::MismatchedBinding));
+        let mut impossible = build_page(0, 1, &[1, 2], Hash32::ZERO);
+        impossible.tombstone_count = 3;
+        impossible.page_digest = impossible.recomputed_page_digest().unwrap();
+        assert_eq!(impossible.validate(), Err(CodecError::InvalidCount));
+
+        // A retirement above `order_count` is padding that is not.
+        let mut padded = build_page(0, 1, &[1], Hash32::ZERO);
+        padded.orders[5] = tombstone(6, owner, 1, 2);
+        padded.page_digest = padded.recomputed_page_digest().unwrap();
+        assert_eq!(padded.validate(), Err(CodecError::NonCanonicalPadding));
+    }
+
+    #[test]
+    fn a_frozen_set_needs_one_live_order_and_the_streaming_closure_agrees() {
+        let mut pages = frozen_pages();
+        assert_eq!(verify_page_set(&pages), Ok(pages[0].order_set));
+
+        // Retire every record of both pages: the set still closes as bytes, and
+        // is still refused as a book, because it has nothing to clear.
+        let mut i = 0;
+        while i < pages.len() {
+            let mut j = 0;
+            while j < pages[i].order_count as usize {
+                let rank = order_id_rank(pages[i].orders[j].order_id()).unwrap() as u8;
+                let owner = pages[i].orders[j].owner();
+                pages[i].orders[j] = tombstone(rank, owner, 1, 2);
+                j += 1;
+            }
+            pages[i].tombstone_count = pages[i].order_count;
+            pages[i].frozen = 0;
+            pages[i].set_order_count = 0;
+            pages[i].order_set = Hash32::ZERO;
+            pages[i].page_digest = pages[i].recomputed_page_digest().unwrap();
+            assert_eq!(pages[i].validate(), Ok(()));
+            i += 1;
+        }
+        freeze_set(&mut pages);
+        assert_eq!(verify_page_set(&pages), Err(CodecError::InvalidCount));
+        let b0 = encode_page_unchecked(&pages[0]);
+        let b1 = encode_page_unchecked(&pages[1]);
+        set_agrees("every record retired", &[&b0, &b1]);
+
+        // One live order left is enough.
+        let mut revived = pages;
+        revived[1].orders[0] = single(17);
+        revived[1].tombstone_count -= 1;
+        revived[1].frozen = 0;
+        revived[1].set_order_count = 0;
+        revived[1].order_set = Hash32::ZERO;
+        revived[1].page_digest = revived[1].recomputed_page_digest().unwrap();
+        revived[0].frozen = 0;
+        revived[0].set_order_count = 0;
+        revived[0].order_set = Hash32::ZERO;
+        freeze_set(&mut revived);
+        assert_eq!(verify_page_set(&revived), Ok(revived[0].order_set));
+        let r0 = encode_page_unchecked(&revived[0]);
+        let r1 = encode_page_unchecked(&revived[1]);
+        set_agrees("one live order left", &[&r0, &r1]);
+    }
+
+    #[test]
+    fn the_epoch_binding_refuses_a_live_record_that_is_already_expired() {
+        let pages = frozen_pages();
+        let mut e = frozen_epoch();
+        e.first_order_id = pages[0].first_order_id;
+        e.last_order_id = pages[1].last_order_id;
+        e.order_set = pages[0].order_set;
+        assert_eq!(e.binds_page_set(&pages), Ok(()));
+
+        // An expiry exactly at this epoch is still live; one below it is not.
+        let mut edge = pages;
+        edge[0].orders[0] = OrderSlot::Single(OrderRecord {
+            expiry_epoch: e.epoch_index,
+            ..order(1)
+        });
+        edge[0].frozen = 0;
+        edge[0].set_order_count = 0;
+        edge[0].order_set = Hash32::ZERO;
+        edge[1].frozen = 0;
+        edge[1].set_order_count = 0;
+        edge[1].order_set = Hash32::ZERO;
+        edge[0].page_digest = edge[0].recomputed_page_digest().unwrap();
+        freeze_set(&mut edge);
+        let mut edge_epoch = e;
+        edge_epoch.order_set = edge[0].order_set;
+        assert_eq!(edge_epoch.binds_page_set(&edge), Ok(()));
+
+        let mut stale = edge;
+        stale[0].orders[0] = OrderSlot::Single(OrderRecord {
+            expiry_epoch: e.epoch_index - 1,
+            ..order(1)
+        });
+        stale[0].frozen = 0;
+        stale[0].set_order_count = 0;
+        stale[0].order_set = Hash32::ZERO;
+        stale[1].frozen = 0;
+        stale[1].set_order_count = 0;
+        stale[1].order_set = Hash32::ZERO;
+        stale[0].page_digest = stale[0].recomputed_page_digest().unwrap();
+        freeze_set(&mut stale);
+        let mut stale_epoch = e;
+        stale_epoch.order_set = stale[0].order_set;
+        assert_eq!(
+            stale_epoch.binds_page_set(&stale),
+            Err(CodecError::MismatchedBinding)
+        );
+        // The streaming binding gives the identical verdict.
+        let s0 = encode_page_unchecked(&stale[0]);
+        let s1 = encode_page_unchecked(&stale[1]);
+        assert_eq!(
+            stream::epoch_binds_page_set(&stale_epoch, &[&s0, &s1]),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        // A retired record's expiry binds nothing: it is never fed.
+        let mut retired = stale;
+        let owner = retired[0].orders[0].owner();
+        retired[0].orders[0] = tombstone(1, owner, 1, 2);
+        retired[0].tombstone_count = 1;
+        retired[0].frozen = 0;
+        retired[0].set_order_count = 0;
+        retired[0].order_set = Hash32::ZERO;
+        retired[1].frozen = 0;
+        retired[1].set_order_count = 0;
+        retired[1].order_set = Hash32::ZERO;
+        retired[0].page_digest = retired[0].recomputed_page_digest().unwrap();
+        freeze_set(&mut retired);
+        let mut retired_epoch = e;
+        retired_epoch.order_set = retired[0].order_set;
+        assert_eq!(retired_epoch.binds_page_set(&retired), Ok(()));
+        let t0 = encode_page_unchecked(&retired[0]);
+        let t1 = encode_page_unchecked(&retired[1]);
+        assert_eq!(
+            stream::epoch_binds_page_set(&retired_epoch, &[&t0, &t1]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn the_streaming_writer_produces_exactly_the_buffered_encoders_bytes() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 4);
+        let mut written = [0; account_len::ORDER_PAGE];
+        let header = stream::init_page(&mut written, market, epoch, 0, 1, 5).unwrap();
+
+        // An empty open page is a real page with a real digest, not zeros.
+        let empty = build_page(0, 1, &[], Hash32::ZERO);
+        let mut encoded = [0; account_len::ORDER_PAGE];
+        empty.encode(&mut encoded).unwrap();
+        assert_eq!(written, encoded);
+        assert_eq!(header, stream::OrderPageHeader::of_page(&empty));
+        assert_ne!(header.page_digest, Hash32::ZERO);
+
+        // Two appends: one of each order family, each at the id the page fixes.
+        let post = stream::write_single_slot(&mut written, &order(1)).unwrap();
+        assert_eq!(post.order_count, 1);
+        assert_eq!(post.first_order_id, oid(1));
+        assert_eq!(post.last_order_id, oid(1));
+        let post = stream::append_slot(&mut written, OrderSlot::Portfolio(portfolio(2))).unwrap();
+        assert_eq!(post.order_count, 2);
+        assert_eq!(post.last_order_id, oid(2));
+
+        let mut expected = build_page(0, 1, &[1, 2], Hash32::ZERO);
+        expected.orders[1] = OrderSlot::Portfolio(portfolio(2));
+        reseal(&mut expected);
+        let mut encoded = [0; account_len::ORDER_PAGE];
+        expected.encode(&mut encoded).unwrap();
+        assert_eq!(written, encoded, "the writer's bytes are the encoder's");
+        assert_eq!(post, stream::OrderPageHeader::of_page(&expected));
+        assert_eq!(stream::verify_page(&written), Ok(post));
+
+        // A retirement, written the same way.
+        let owner = order(1).owner;
+        let post = stream::write_tombstone(&mut written, oid(1), owner, 2).unwrap();
+        assert_eq!(post.order_count, 2);
+        assert_eq!(post.tombstone_count, 1);
+        assert_eq!(post.live_count(), 1);
+        assert_eq!(post.first_order_id, oid(1));
+        let mut retired = expected;
+        retired.orders[0] = tombstone(1, owner, order(1).generation, 2);
+        retired.tombstone_count = 1;
+        retired.page_digest = retired.recomputed_page_digest().unwrap();
+        let mut encoded = [0; account_len::ORDER_PAGE];
+        retired.encode(&mut encoded).unwrap();
+        assert_eq!(written, encoded);
+        assert_eq!(stream::verify_page(&written), Ok(post));
+    }
+
+    #[test]
+    fn the_streaming_writer_refuses_every_placement_the_page_format_refuses() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 4);
+        let mut page = [0; account_len::ORDER_PAGE];
+        let header = stream::init_page(&mut page, market, epoch, 0, 1, 5).unwrap();
+
+        // A caller cannot choose an id: only the one the page's state fixes.
+        assert_eq!(header.next_order_id(), Ok(oid(1)));
+        let mut chosen = order(1);
+        chosen.order_id = oid(2);
+        assert_eq!(
+            stream::write_single_slot(&mut page, &chosen),
+            Err(CodecError::NonCanonicalIdentity)
+        );
+        chosen.order_id = h(200);
+        assert_eq!(
+            stream::write_single_slot(&mut page, &chosen),
+            Err(CodecError::NonCanonicalIdentity)
+        );
+        // ... and a refused placement wrote nothing.
+        assert_eq!(stream::verify_page(&page), Ok(header));
+
+        // Padding and retirements are not placements.
+        assert_eq!(
+            stream::append_slot(&mut page, OrderSlot::Empty),
+            Err(CodecError::InvalidEnum)
+        );
+        assert_eq!(
+            stream::append_slot(&mut page, tombstone(1, h(20), 1, 2)),
+            Err(CodecError::InvalidEnum)
+        );
+        // Neither is a record the codec would not accept anywhere.
+        let mut empty_quantity = order(1);
+        empty_quantity.quantity = 0;
+        assert_eq!(
+            stream::write_single_slot(&mut page, &empty_quantity),
+            Err(CodecError::InvalidEnum)
+        );
+
+        // A full page has no free slot, and says so as a count fault.
+        let mut rank = 1u8;
+        while rank <= MAX_ORDERS_PER_PAGE as u8 {
+            stream::write_single_slot(&mut page, &order(rank)).unwrap();
+            rank += 1;
+        }
+        let full = stream::verify_page(&page).unwrap();
+        assert_eq!(full.order_count as usize, MAX_ORDERS_PER_PAGE);
+        assert_eq!(full.next_order_id(), Err(CodecError::InvalidCount));
+        assert_eq!(
+            stream::write_single_slot(&mut page, &order(17)),
+            Err(CodecError::InvalidCount)
+        );
+
+        // A page that does not decode is not a page to write to.
+        let mut wrong_version = page;
+        wrong_version[1] = LAYOUT_VERSION_V3;
+        assert_eq!(
+            stream::write_single_slot(&mut wrong_version, &order(1)),
+            Err(CodecError::WrongVersion)
+        );
+        assert_eq!(
+            stream::write_single_slot(&mut [0; account_len::ORDER_PAGE - 1], &order(1)),
+            Err(CodecError::Truncated)
+        );
+    }
+
+    #[test]
+    fn the_streaming_writer_refuses_every_cancellation_the_page_format_refuses() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 4);
+        let mut page = [0; account_len::ORDER_PAGE];
+        stream::init_page(&mut page, market, epoch, 0, 1, 5).unwrap();
+        stream::write_single_slot(&mut page, &order(1)).unwrap();
+        stream::write_single_slot(&mut page, &order(2)).unwrap();
+        let owner = order(1).owner;
+
+        // An id this page does not hold names no slot here.
+        assert_eq!(
+            stream::write_tombstone(&mut page, oid(3), owner, 2),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(
+            stream::write_tombstone(&mut page, h(9), owner, 2),
+            Err(CodecError::NonCanonicalIdentity)
+        );
+        assert_eq!(
+            stream::write_tombstone(&mut page, Hash32::ZERO, owner, 2),
+            Err(CodecError::ZeroIdentity)
+        );
+
+        // Only the record's own owner may retire it.
+        assert_eq!(
+            stream::write_tombstone(&mut page, oid(1), h(21), 2),
+            Err(CodecError::MismatchedBinding)
+        );
+        // The retirement must strictly follow the placement.
+        assert_eq!(
+            stream::write_tombstone(&mut page, oid(1), owner, 1),
+            Err(CodecError::InvalidEnum)
+        );
+        // Nothing above wrote a byte.
+        let before = stream::verify_page(&page).unwrap();
+        assert_eq!(before.tombstone_count, 0);
+
+        // The retirement lands, and a replay of it refuses on the slot kind.
+        let post = stream::write_tombstone(&mut page, oid(1), owner, 2).unwrap();
+        assert_eq!(post.tombstone_count, 1);
+        assert_eq!(
+            stream::write_tombstone(&mut page, oid(1), owner, 3),
+            Err(CodecError::MismatchedBinding)
+        );
+        // The order after it still holds its own rank.
+        assert_eq!(post.last_order_id, oid(2));
+        assert_eq!(post.next_order_id(), Ok(oid(3)));
+    }
+
+    #[test]
+    fn the_freeze_writers_close_a_set_the_closure_then_accepts() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 4);
+        let mut page0 = [0; account_len::ORDER_PAGE];
+        let mut page1 = [0; account_len::ORDER_PAGE];
+        stream::init_page(&mut page0, market, epoch, 0, 2, 5).unwrap();
+        stream::init_page(&mut page1, market, epoch, 1, 2, 5).unwrap();
+
+        // A set whose non-final page is not dense cannot be frozen.
+        stream::write_single_slot(&mut page0, &order(1)).unwrap();
+        stream::write_single_slot(&mut page1, &order(17)).unwrap();
+        assert_eq!(
+            stream::frozen_set_commitment(&[&page0, &page1]),
+            Err(CodecError::InvalidCount)
+        );
+
+        let mut rank = 2u8;
+        while rank <= MAX_ORDERS_PER_PAGE as u8 {
+            stream::write_single_slot(&mut page0, &order(rank)).unwrap();
+            rank += 1;
+        }
+        stream::write_single_slot(&mut page1, &order(18)).unwrap();
+        // One of the two retired before the freeze: it stays in the set.
+        stream::write_tombstone(&mut page1, oid(18), order(18).owner, 2).unwrap();
+
+        let (order_set, set_order_count) =
+            stream::frozen_set_commitment(&[&page0, &page1]).unwrap();
+        assert_eq!(set_order_count, MAX_ORDERS_PER_PAGE as u16 + 2);
+
+        // The closure refuses a half-frozen set, and accepts a whole one.
+        stream::seal_page(&mut page0, order_set, set_order_count).unwrap();
+        assert_eq!(
+            stream::verify_page_set(&[&page0, &page1]),
+            Err(CodecError::MismatchedBinding)
+        );
+        let sealed = stream::seal_page(&mut page1, order_set, set_order_count).unwrap();
+        assert_eq!(sealed.frozen, 1);
+        assert_eq!(sealed.tombstone_count, 1);
+        assert_eq!(stream::verify_page_set(&[&page0, &page1]), Ok(order_set));
+        set_agrees("writer-built frozen set", &[&page0, &page1]);
+
+        // A freeze is once, and a frozen page takes no more placements.
+        assert_eq!(
+            stream::seal_page(&mut page1, order_set, set_order_count),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(
+            stream::write_single_slot(&mut page1, &order(19)),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(
+            stream::write_tombstone(&mut page1, oid(17), order(17).owner, 3),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        // A commitment the pages do not justify is refused before it is stored.
+        let mut page2 = [0; account_len::ORDER_PAGE];
+        stream::init_page(&mut page2, market, epoch, 0, 1, 5).unwrap();
+        stream::write_single_slot(&mut page2, &order(1)).unwrap();
+        assert_eq!(
+            stream::seal_page(&mut page2, order_set, 0),
+            Err(CodecError::InvalidCount)
+        );
+        assert_eq!(
+            stream::seal_page(&mut page2, Hash32::ZERO, 1),
+            Err(CodecError::ZeroIdentity)
+        );
+    }
+
+    #[test]
+    fn placement_intents_carry_either_order_family_and_only_an_order() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 4);
+        let mut b = [0; MAX_INTENT_BYTES];
+
+        let single_placement = Intent::PlaceOrder {
+            market,
+            epoch,
+            slot: single(1),
+        };
+        let n = single_placement.encode(&mut b).unwrap();
+        assert_eq!(n, 2 + 32 + 32 + 1 + ORDER_RECORD_BYTES);
+        assert_eq!(n, 174);
+        assert_eq!(&b[..2], [PLACE_TAG, INTENT_VERSION]);
+        assert_eq!(b[66], ORDER_KIND_SINGLE);
+        assert_eq!(Intent::decode(&b[..n]), Ok(single_placement));
+
+        let portfolio_placement = Intent::PlaceOrder {
+            market,
+            epoch,
+            slot: OrderSlot::Portfolio(portfolio(1)),
+        };
+        let n = portfolio_placement.encode(&mut b).unwrap();
+        assert_eq!(n, 2 + 32 + 32 + 1 + PORTFOLIO_RECORD_BYTES);
+        assert_eq!(n, 302);
+        assert_eq!(
+            n, MAX_INTENT_BYTES,
+            "a portfolio placement is the widest intent"
+        );
+        assert_eq!(b[66], ORDER_KIND_PORTFOLIO);
+        assert_eq!(Intent::decode(&b[..n]), Ok(portfolio_placement));
+        /* The wire body is the kind's *exact* body, not a slot: the widest
+         * placement is exactly one slot wide because the portfolio body is what
+         * sets the slot width, and the single-Egg one is far narrower than the
+         * common width a page would pad it to. */
+        assert_eq!(n, 2 + 32 + 32 + ORDER_SLOT_BYTES);
+        assert_eq!(
+            single_placement.encoded_len(),
+            2 + 32 + 32 + 1 + ORDER_RECORD_BYTES
+        );
+        assert!(single_placement.encoded_len() < 2 + 32 + 32 + ORDER_SLOT_BYTES);
+
+        // Padding and retirements are recognized kinds that are not placements.
+        for refused in [OrderSlot::Empty, tombstone(1, h(20), 1, 2)] {
+            let i = Intent::PlaceOrder {
+                market,
+                epoch,
+                slot: refused,
+            };
+            assert_eq!(i.encode(&mut b), Err(CodecError::InvalidEnum));
+        }
+        let n = single_placement.encode(&mut b).unwrap();
+        let mut retired_kind = b;
+        retired_kind[66] = ORDER_KIND_TOMBSTONE;
+        assert_eq!(
+            Intent::decode(&retired_kind[..n]),
+            Err(CodecError::InvalidEnum)
+        );
+        let mut empty_kind = b;
+        empty_kind[66] = ORDER_KIND_EMPTY;
+        assert_eq!(
+            Intent::decode(&empty_kind[..n]),
+            Err(CodecError::InvalidEnum)
+        );
+        let mut no_kind = b;
+        no_kind[66] = ORDER_KIND_TOMBSTONE + 1;
+        assert_eq!(Intent::decode(&no_kind[..n]), Err(CodecError::WrongTag));
+
+        // A placement id is still a rank on the wire.
+        let mut wild = order(1);
+        wild.order_id = h(9);
+        assert_eq!(
+            Intent::PlaceOrder {
+                market,
+                epoch,
+                slot: OrderSlot::Single(wild),
+            }
+            .encode(&mut b),
+            Err(CodecError::NonCanonicalIdentity)
+        );
+
+        // Trailing bytes and truncation are both refused exactly.
+        let n = single_placement.encode(&mut b).unwrap();
+        assert_eq!(Intent::decode(&b[..n - 1]), Err(CodecError::Truncated));
+        assert_eq!(Intent::decode(&b[..n + 1]), Err(CodecError::TrailingBytes));
+    }
+
+    #[test]
+    fn cancellation_intents_name_a_rank_an_owner_and_a_generation() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 4);
+        let i = Intent::CancelOrder {
+            market,
+            epoch,
+            owner: h(20),
+            order_id: oid(3),
+            generation: 7,
+        };
+        let mut b = [0; MAX_INTENT_BYTES];
+        let n = i.encode(&mut b).unwrap();
+        assert_eq!(n, 2 + 32 + 32 + 32 + 32 + 8);
+        assert_eq!(n, 138);
+        assert_eq!(&b[..2], [CANCEL_TAG, INTENT_VERSION]);
+        assert_eq!(&b[130..138], &7u64.to_le_bytes());
+        assert_eq!(Intent::decode(&b[..n]), Ok(i));
+
+        // The target is an order id, which is a rank and nothing else.
+        for wrong in [
+            Hash32::ZERO,
+            h(9),
+            canonical_order_id(MAX_EPOCH_ORDERS as u64 + 1),
+        ] {
+            let mut raw = b;
+            raw[98..130].copy_from_slice(&wrong.0);
+            assert!(Intent::decode(&raw[..n]).is_err());
+        }
+        assert_eq!(
+            Intent::CancelOrder {
+                market,
+                epoch,
+                owner: h(20),
+                order_id: h(9),
+                generation: 7,
+            }
+            .encode(&mut b),
+            Err(CodecError::NonCanonicalIdentity)
+        );
+    }
+
+    #[test]
+    fn every_intent_refuses_the_superseded_encoding_version() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 4);
+        let intents = [
+            Intent::Split {
+                market,
+                owner: h(2),
+                quantity: 9,
+            },
+            Intent::PlaceOrder {
+                market,
+                epoch,
+                slot: single(1),
+            },
+            Intent::PlaceOrder {
+                market,
+                epoch,
+                slot: OrderSlot::Portfolio(portfolio(1)),
+            },
+            Intent::CancelOrder {
+                market,
+                epoch,
+                owner: h(20),
+                order_id: oid(1),
+                generation: 2,
+            },
+            Intent::SettlePage {
+                market,
+                epoch,
+                page_index: 0,
+            },
+        ];
+        assert_eq!(INTENT_VERSION, 2);
+        assert_eq!(INTENT_VERSION_V1, 1);
+        let mut i = 0;
+        while i < intents.len() {
+            let mut b = [0; MAX_INTENT_BYTES];
+            let n = intents[i].encode(&mut b).unwrap();
+            assert_eq!(b[1], INTENT_VERSION);
+            assert_eq!(n, intents[i].encoded_len());
+            assert!(n <= MAX_INTENT_BYTES);
+            assert_eq!(Intent::decode(&b[..n]), Ok(intents[i]));
+            b[1] = INTENT_VERSION_V1;
+            assert_eq!(Intent::decode(&b[..n]), Err(CodecError::WrongVersion));
+            b[1] = INTENT_VERSION + 1;
+            assert_eq!(Intent::decode(&b[..n]), Err(CodecError::WrongVersion));
+            i += 1;
+        }
+    }
+
+    #[test]
+    fn streaming_and_buffered_verdicts_agree_on_hostile_retirements() {
+        let owner = order(1).owner;
+        let mut page = build_page(0, 1, &[1, 2], Hash32::ZERO);
+        page.orders[0] = tombstone(1, owner, 1, 2);
+        page.tombstone_count = 1;
+        page.page_digest = page.recomputed_page_digest().unwrap();
+        agrees("one retirement", &encode_page_unchecked(&page));
+
+        let refused: [(&str, OrderPageAccount); 5] = [
+            ("retirement count not folded", {
+                let mut p = page;
+                p.tombstone_count = 0;
+                p.page_digest = p.recomputed_page_digest().unwrap();
+                p
+            }),
+            ("more retirements than slots", {
+                let mut p = page;
+                p.tombstone_count = 9;
+                p.page_digest = p.recomputed_page_digest().unwrap();
+                p
+            }),
+            ("retirement out of position", {
+                let mut p = page;
+                p.orders[0] = tombstone(2, owner, 1, 2);
+                p.page_digest = p.recomputed_page_digest().unwrap();
+                p
+            }),
+            ("retirement before its placement", {
+                let mut p = page;
+                p.orders[0] = tombstone(1, owner, 5, 2);
+                p.page_digest = p.recomputed_page_digest().unwrap();
+                p
+            }),
+            ("retirement smuggled above the count", {
+                let mut p = build_page(0, 1, &[1], Hash32::ZERO);
+                p.orders[7] = tombstone(8, owner, 1, 2);
+                p.page_digest = p.recomputed_page_digest().unwrap();
+                p
+            }),
+        ];
+        let mut i = 0;
+        while i < refused.len() {
+            let (label, p) = refused[i];
+            let bytes = encode_page_unchecked(&p);
+            assert!(
+                stream::verify_page(&bytes).is_err(),
+                "fixture is supposed to refuse: {label}"
+            );
+            agrees(label, &bytes);
+            i += 1;
+        }
+
+        // Nonzero padding after a retirement body is still non-canonical.
+        let clean = encode_page_unchecked(&page);
+        let mut dirty = clean;
+        dirty[PAGE_HEADER_BYTES + 1 + TOMBSTONE_RECORD_BYTES] = 1;
+        assert_eq!(
+            stream::verify_page(&dirty),
+            Err(CodecError::NonCanonicalPadding)
+        );
+        agrees("dirty retirement padding", &dirty);
     }
 }
