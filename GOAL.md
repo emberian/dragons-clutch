@@ -47,6 +47,8 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
   72,869 CU Split; commit held until REF-INT lands (shared dep mid-edit).
 - MANIFEST: baseline-manifest emit/check tool landed, live-fire validated;
   clean emit queued for wave end; pushed.
+- COST: P1-F closed, landed-ABI arm + abi-audit drift refusal, 261 rows;
+  seam found: portfolio orders lack persisted page encoding; pushed.
 - D1: independent FBA oracle, 300M-case differential, zero semantic
   divergences, vectors byte-identical; spec gap (refusal-class priority)
   found and pinned; pushed.
