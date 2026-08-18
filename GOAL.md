@@ -30,6 +30,10 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- Launched SHIELDED (degg P1-4): the composition test of relation-IR x
+  inclusion-availability x frozen refusal order, with the honest core
+  being exactly what stays executor-trusted.
+
 - HARNESS-REGEN landed: 52/52 byte-exact SVM differentials across eight
   families through one real bank session; self-falsifying gate; new
   pinned ELF. MEASURED blocker: Resolve exceeds the 1.4M CU ceiling
