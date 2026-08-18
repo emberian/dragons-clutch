@@ -30,6 +30,12 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- SHIELDED (degg P1-4) landed: composition of all three packets by path
+  dependency; executor freedom MEASURED (377/1,125 admissible alt
+  publications - the proof rung justified by experiment); 51 tests,
+  90,082-book differential. degg P1 packets 1-4 now ALL landed tonight.
+  VERDICTS reconciliation + C-1 refund fix launched. Pushed.
+
 - CONSOL-TERMS landed (927d4bc): TermsAccount v3 unifies cap + oblig 18
   + distributional basis; threshold markets resolve end-to-end; deg-1
   derivation via preset membership (kernel residue named); error
