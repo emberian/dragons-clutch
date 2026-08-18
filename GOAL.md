@@ -27,6 +27,16 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- Streaming page decoders: on-chain pages unblocked, frames MEASURED
+  (1,856 max vs 8,640 buffered); pushed (unsigned - 1Password away).
+- CreateMarket implemented (23 negative tests, byte-exact founding
+  writes). COORDINATOR ITEMS: collateral-policy decoder needed before
+  any market can accept collateral (cap honestly written 0); error-code
+  consolidation pass owed.
+- Bundling corpus: 683k decompositions, smallest witness [1,0]+[0,1],
+  support-union invariance theorem narrows the filing claim usefully;
+  census 300/65,536; pushed.
+
 - Vector spine implemented: 25 vectors, first executor, ten findings
   (incl. clutch-sbf parallel error numbering -> consolidation pass;
   G1/G2 re-scope -> ember review queue). Pushed.
