@@ -56,10 +56,12 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
   a corpus-wide zero. Draft 7 rebalance queued behind TYPESET.
 - TYPESET: STIX Two Text, ten diseases fixed, content byte-preserved; pushed.
 - Clean-tree baseline manifest: 28/28 gates, 37 digests; pushed.
-- Attestation survey landed: STARK parse/render legs REAL (plonky3, Lean
-  descriptors); TLSNotary 2PC real but loopback-only (live provider path
-  wired, never run); agent-growth R3 rung and zkML are gaps; provenance
-  red flags (forked FRI w/ unmerged fix, restricted-license vendor).
+- Attestation survey (corrected pass): parsing lane S+D (Lean-emitted
+  byte-pinned Dyck/DFA AIRs joined to deployed prover, tamper canaries);
+  STARK<->TLSNotary join EXISTS (shared commitment, splice attack closed);
+  four named gaps for operatorless loop: R3 whole-history, onchain posting,
+  pinned-notary-is-an-operator, public tool-loop spec. Provenance red
+  flags stand (forked FRI w/ unmerged fix, restricted-license vendor).
   EMBER DECISION QUEUED: one paid Bedrock session would produce the first
   D-grade provider-attested transcript.
 - In flight: Draft 7 rebalance, open-matters map, closing drift review,
