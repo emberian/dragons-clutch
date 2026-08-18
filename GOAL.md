@@ -71,7 +71,10 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
   ~24h); on-point event-contract reporting NPRM closed Jul 31, missed -
   standing watch established; pushed.
 - B-CONVERSION landed: 86 attestation tests reproduced green on pinned
-  tree (persvati, 213s); Lean-emit caveat recorded; pushed.
+  breadstuffs tree 436c2a8 (persvati, 213s); Lean-emit caveat recorded;
+  pushed.
+- Closing drift review: A-F pass, fixes committed both repos; manifest
+  widened to 33/33 gates incl. SBF lane; clean emit pushed.
 - In flight: Draft 7 rebalance, closing drift review, operatorless memo
   + IAC addendum candidate.
 - D1: independent FBA oracle, 300M-case differential, zero semantic
