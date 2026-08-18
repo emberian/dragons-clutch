@@ -30,6 +30,12 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- HARNESS-REGEN landed: 52/52 byte-exact SVM differentials across eight
+  families through one real bank session; self-falsifying gate; new
+  pinned ELF. MEASURED blocker: Resolve exceeds the 1.4M CU ceiling
+  (five-fold terms decode) -> fed to CONSOL-TERMS with the numbers;
+  redeem at 97%, create at 71%. Pushed.
+
 - ORDERS landed: PlaceOrder byte-exact; SettlePage blocked with MEASURED
   frames (relation needs 39-45KB vs 4KB) -> streaming-relation API +
   page->book projection are the next design round; cancellation needs a
