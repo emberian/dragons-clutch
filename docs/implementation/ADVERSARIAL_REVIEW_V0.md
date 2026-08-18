@@ -495,7 +495,7 @@ The cost lab clearly labels its layout values as hypotheses, but concrete codecs
 now coexist with different values. Examples include a hypothetical fixed
 Position size of `64 + 8*16 = 192` bytes versus the landed 220-byte Position, an
 80-byte single-Egg record versus the landed 99-byte record, 4/8/10 KiB variable
-pages versus the landed fixed 1,656-byte/16-record page, and 32/128/512-order
+pages versus the landed fixed 1,656-byte/16-record page (2026-08-19: now 1,819 bytes after page-set commitment fields, commit efb0ed5), and 32/128/512-order
 batch cases versus the crate's `MAX_ORDERS=64`.
 
 No cost conclusion should be attributed to the current layout or batch crate.

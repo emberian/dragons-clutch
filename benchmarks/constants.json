@@ -1,5 +1,5 @@
 {
-  "schema": "dragons.cost_lab.constants.v1",
+  "schema": "dragons.cost_lab.constants.v2",
   "snapshot_date": "2026-08-17",
   "source_baseline": {
     "agave": {
@@ -60,6 +60,8 @@
     ]
   },
   "dragon_design_bounds": {
+    "arm": "layout_hypothesis",
+    "evidence_class": "layout_hypothesis",
     "max_v1_outcomes": 16,
     "outcome_axis": [2, 4, 8, 16, 24],
     "page_sizes_bytes": [4096, 8192, 10240],
@@ -88,7 +90,293 @@
     "notes": [
       "Dragon account, order, page, summary, and instruction layouts are explicit hypotheses, not frozen program ABI.",
       "Outcome count 24 is diagnostic and must be refused by V1 independently of apparent packet headroom.",
-      "The model uses exact integer arithmetic and no floating point."
+      "The model uses exact integer arithmetic and no floating point.",
+      "Retained unchanged as a separately named design arm per adversarial review P1-F. The landed ABI lives in abi_landed and never silently replaces these values."
+    ]
+  },
+  "abi_landed": {
+    "arm": "abi_landed",
+    "evidence_class": "landed_codec_constant",
+    "snapshot_date": "2026-08-18",
+    "source": {
+      "owner": "programs/solana-layout",
+      "codec_path": "programs/solana-layout/src/lib.rs",
+      "commit": "efb0ed597a23454440f7ab069cd96f48ff7c26a1",
+      "commit_short": "efb0ed5",
+      "commit_subject": "Close P1-C: persisted-state account family, cross-page closure, frozen grid",
+      "codec_blob_sha256_at_commit": "e0b036b032eaab344546bb7ce6b4634625c94ee7ad8dde167ff899448a877354",
+      "relation_path": "crates/clutch-batch/src/lib.rs",
+      "relation_blob_sha256_at_commit": "dac79ada3f8799bb516a4571974925b4f303382592c23fb5541498ec222ada45",
+      "relation_v1_path": "crates/clutch-batch/src/relation_v1.rs",
+      "relation_v1_blob_sha256_at_commit": "8b76d7b8063c9924bace504f0741ab43ba2a46dffd96d2aa00dc2ef4061e1db3",
+      "note": "One codec owner. Every width below is that file's own account_len/encoded_len expression restated term by term, so the harness re-derives each total instead of quoting it. Digests are the blobs at the pinned commit, not a mutable working tree."
+    },
+    "bounds": {
+      "layout_version": 2,
+      "layout_version_v1": 1,
+      "intent_version": 1,
+      "hash_bytes": 32,
+      "minimum_outcomes": 2,
+      "max_outcomes": 16,
+      "max_payouts": 8,
+      "max_grid_ticks": 64,
+      "max_orders_per_page": 16,
+      "max_order_pages": 4,
+      "max_epoch_orders": 64,
+      "order_record_bytes": 99,
+      "order_record_field_terms": [32, 32, 1, 1, 8, 8, 8, 1, 8],
+      "order_page_header_bytes": 235,
+      "max_intent_bytes": 256,
+      "relation_version": 1,
+      "relation_max_orders": 64,
+      "relation_max_portfolio_orders": 8,
+      "relation_max_legs": 192,
+      "relation_max_slices": 416,
+      "relation_price_scale": 10000
+    },
+    "accounts": {
+      "realm": {
+        "rust_const": "account_len::REALM",
+        "bytes": 70,
+        "discriminator_tag": 1,
+        "schema_version": 1,
+        "field_terms": [2, 32, 32, 1, 1, 1, 1],
+        "formula": "2 + 32 + 32 + 1 + 1 + 1 + 1"
+      },
+      "profile": {
+        "rust_const": "account_len::PROFILE",
+        "bytes": 100,
+        "discriminator_tag": 2,
+        "schema_version": 2,
+        "field_terms": [2, 32, 32, 32, 1, 1],
+        "formula": "2 + 32 + 32 + 32 + 1 + 1"
+      },
+      "market": {
+        "rust_const": "account_len::MARKET",
+        "bytes": 726,
+        "discriminator_tag": 3,
+        "schema_version": 1,
+        "field_terms": [2, 32, 32, 32, 32, 1, 1, 1, 1, 512, 32, 8, 8, 32],
+        "formula": "2 + 32 + 32 + 32 + 32 + 1 + 1 + 1 + 1 + 512 + 32 + 8 + 8 + 32"
+      },
+      "hoard": {
+        "rust_const": "account_len::HOARD",
+        "bytes": 108,
+        "discriminator_tag": 5,
+        "schema_version": 1,
+        "field_terms": [2, 32, 32, 32, 8, 1, 1],
+        "formula": "2 + 32 + 32 + 32 + 8 + 1 + 1"
+      },
+      "position": {
+        "rust_const": "account_len::POSITION",
+        "bytes": 220,
+        "discriminator_tag": 6,
+        "schema_version": 1,
+        "field_terms": [2, 32, 32, 8, 128, 8, 8, 1, 1],
+        "formula": "2 + 32 + 32 + 8 + 128 + 8 + 8 + 1 + 1"
+      },
+      "feed_head": {
+        "rust_const": "account_len::FEED",
+        "bytes": 124,
+        "discriminator_tag": 7,
+        "schema_version": 1,
+        "field_terms": [2, 32, 32, 8, 8, 8, 32, 1, 1],
+        "formula": "2 + 32 + 32 + 8 + 8 + 8 + 32 + 1 + 1"
+      },
+      "order_page": {
+        "rust_const": "account_len::ORDER_PAGE",
+        "bytes": 1819,
+        "discriminator_tag": 8,
+        "schema_version": 2,
+        "field_terms": [2, 224, 2, 2, 2, 1, 1, 1, 1584],
+        "formula": "2 + (7 * 32) + 2 + 2 + 2 + 1 + 1 + 1 + (MAX_ORDERS_PER_PAGE * ORDER_RECORD_BYTES)"
+      },
+      "supply_ledger": {
+        "rust_const": "account_len::SUPPLY_LEDGER",
+        "bytes": 333,
+        "discriminator_tag": 9,
+        "schema_version": 2,
+        "field_terms": [2, 32, 32, 8, 1, 256, 1, 1],
+        "formula": "2 + 32 + 32 + 8 + 1 + (2 * MAX_OUTCOMES * 8) + 1 + 1"
+      },
+      "terms": {
+        "rust_const": "account_len::TERMS",
+        "bytes": 1304,
+        "discriminator_tag": 10,
+        "schema_version": 2,
+        "field_terms": [2, 160, 1, 1, 1088, 4, 2, 8, 8, 8, 8, 4, 4, 4, 1, 1],
+        "formula": "2 + (5 * 32) + 1 + 1 + (MAX_PAYOUTS * (8 + MAX_OUTCOMES * 8)) + 4 + 2 + 8 + 8 + 8 + 8 + 4 + 4 + 4 + 1 + 1"
+      },
+      "price_grid": {
+        "rust_const": "account_len::PRICE_GRID",
+        "bytes": 589,
+        "discriminator_tag": 12,
+        "schema_version": 2,
+        "field_terms": [2, 32, 32, 8, 1, 512, 1, 1],
+        "formula": "2 + 32 + 32 + 8 + 1 + (MAX_GRID_TICKS * 8) + 1 + 1"
+      },
+      "epoch": {
+        "rust_const": "account_len::EPOCH",
+        "bytes": 328,
+        "discriminator_tag": 11,
+        "schema_version": 2,
+        "field_terms": [2, 288, 8, 4, 8, 8, 2, 2, 2, 1, 1, 1, 1],
+        "formula": "2 + (9 * 32) + 8 + 4 + 8 + 8 + 2 + 2 + 2 + 1 + 1 + 1 + 1"
+      },
+      "candidate_record": {
+        "rust_const": "account_len::CANDIDATE",
+        "bytes": 305,
+        "discriminator_tag": 13,
+        "schema_version": 2,
+        "field_terms": [2, 96, 128, 8, 8, 8, 16, 16, 8, 8, 2, 1, 1, 1, 1, 1],
+        "formula": "2 + (3 * 32) + (MAX_OUTCOMES * 8) + 8 + 8 + 8 + 16 + 16 + 8 + 8 + 2 + 1 + 1 + 1 + 1 + 1"
+      },
+      "final_pot": {
+        "rust_const": "account_len::FINAL_POT",
+        "bytes": 262,
+        "discriminator_tag": 14,
+        "schema_version": 2,
+        "field_terms": [2, 96, 128, 16, 16, 1, 1, 1, 1],
+        "formula": "2 + (3 * 32) + (MAX_OUTCOMES * 8) + 16 + 16 + 1 + 1 + 1 + 1"
+      },
+      "settlement_receipt": {
+        "rust_const": "account_len::SETTLEMENT_RECEIPT",
+        "bytes": 217,
+        "discriminator_tag": 15,
+        "schema_version": 2,
+        "field_terms": [2, 160, 16, 8, 8, 8, 8, 2, 1, 1, 1, 1, 1],
+        "formula": "2 + (5 * 32) + 16 + 8 + 8 + 8 + 8 + 2 + 1 + 1 + 1 + 1 + 1"
+      },
+      "resolution": {
+        "rust_const": "account_len::RESOLUTION",
+        "bytes": 165,
+        "discriminator_tag": 16,
+        "schema_version": 2,
+        "field_terms": [2, 128, 8, 8, 8, 8, 1, 1, 1],
+        "formula": "2 + (4 * 32) + 8 + 8 + 8 + 8 + 1 + 1 + 1"
+      }
+    },
+    "intents": {
+      "create_market": {
+        "intent_tag": 1,
+        "intent_version": 1,
+        "bytes": 139,
+        "field_terms": [2, 32, 32, 8, 1, 32, 32],
+        "formula": "2 + 32 + 32 + 8 + 1 + 32 + 32"
+      },
+      "split": {
+        "intent_tag": 2,
+        "intent_version": 1,
+        "bytes": 74,
+        "field_terms": [2, 32, 32, 8],
+        "formula": "2 + 32 + 32 + 8"
+      },
+      "merge": {
+        "intent_tag": 3,
+        "intent_version": 1,
+        "bytes": 74,
+        "field_terms": [2, 32, 32, 8],
+        "formula": "2 + 32 + 32 + 8"
+      },
+      "materialize": {
+        "intent_tag": 4,
+        "intent_version": 1,
+        "bytes": 107,
+        "field_terms": [2, 32, 32, 32, 1, 8],
+        "formula": "2 + 32 + 32 + 32 + 1 + 8"
+      },
+      "dematerialize": {
+        "intent_tag": 5,
+        "intent_version": 1,
+        "bytes": 107,
+        "field_terms": [2, 32, 32, 32, 1, 8],
+        "formula": "2 + 32 + 32 + 32 + 1 + 8"
+      },
+      "feed_advance": {
+        "intent_tag": 6,
+        "intent_version": 1,
+        "bytes": 74,
+        "field_terms": [2, 32, 8, 32],
+        "formula": "2 + 32 + 8 + 32"
+      },
+      "place_order": {
+        "intent_tag": 7,
+        "intent_version": 1,
+        "bytes": 165,
+        "field_terms": [2, 32, 32, 99],
+        "formula": "2 + 32 + 32 + ORDER_RECORD_BYTES"
+      },
+      "cancel_order": {
+        "intent_tag": 8,
+        "intent_version": 1,
+        "bytes": 130,
+        "field_terms": [2, 32, 32, 32, 32],
+        "formula": "2 + 32 + 32 + 32 + 32"
+      },
+      "settle_page": {
+        "intent_tag": 9,
+        "intent_version": 1,
+        "bytes": 68,
+        "field_terms": [2, 32, 32, 2],
+        "formula": "2 + 32 + 32 + 2"
+      }
+    },
+    "intent_account_topology_hypothesis": {
+      "evidence_class": "layout_hypothesis_not_landed",
+      "note": "The landed crate freezes instruction PAYLOAD bytes only. Which accounts an instruction locks, and whether one intent is carried by exactly one Solana instruction, is not landed. These counts stay hypotheses and are named as such.",
+      "create_market": {
+        "total_accounts": 8,
+        "writable_accounts": 3,
+        "static_accounts_v0": 2
+      },
+      "split": {
+        "total_accounts": 7,
+        "writable_accounts": 4,
+        "static_accounts_v0": 2
+      },
+      "merge": {
+        "total_accounts": 7,
+        "writable_accounts": 4,
+        "static_accounts_v0": 2
+      },
+      "materialize": {
+        "total_accounts": 9,
+        "writable_accounts": 5,
+        "static_accounts_v0": 2
+      },
+      "dematerialize": {
+        "total_accounts": 9,
+        "writable_accounts": 5,
+        "static_accounts_v0": 2
+      },
+      "feed_advance": {
+        "total_accounts": 4,
+        "writable_accounts": 2,
+        "static_accounts_v0": 2
+      },
+      "place_order": {
+        "total_accounts": 7,
+        "writable_accounts": 3,
+        "static_accounts_v0": 2
+      },
+      "cancel_order": {
+        "total_accounts": 6,
+        "writable_accounts": 3,
+        "static_accounts_v0": 2
+      },
+      "settle_page": {
+        "total_accounts": 8,
+        "writable_accounts": 4,
+        "static_accounts_v0": 2
+      }
+    },
+    "epoch_book_order_counts": [1, 16, 17, 32, 48, 64, 65],
+    "relation_order_counts": [16, 32, 64],
+    "notes": [
+      "Every width in this arm is read from the landed codec; the lab proposes none of them.",
+      "A landed width is still not a measured cost. No Dragon SBF program exists, so this arm carries no CU, heap, stack, account-copy, or landing figure either.",
+      "The landed OrderRecord carries one outcome index and no coefficient vector, so a portfolio order that relation_v1 admits has no persisted page encoding today.",
+      "check_count refuses outcome_count below 2 and above 16, so n=24 is a codec refusal in this arm on top of the unchanged V1 policy refusal."
     ]
   }
 }

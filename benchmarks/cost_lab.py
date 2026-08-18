@@ -4,6 +4,13 @@
 This module intentionally has no Solana SDK, RPC, signing, or deployment surface. It emits
 synthetic transaction byte strings with correct legacy/v0 framing and reports analytical topology
 and information lower bounds separately from those local byte measurements.
+
+Every row carries an `arm`. `layout_hypothesis` rows are the original design sketch, retained
+unchanged. `abi_landed` rows consume the landed codec in `programs/solana-layout` and the landed
+relation bounds in `crates/clutch-batch`; the harness re-derives each landed width from that
+file's own field terms rather than quoting a total. `abi_differential` rows carry the delta
+between the two arms for every object that exists in both. A landed width is still not a measured
+cost: no Dragon SBF program exists, so no arm reports a total CU, heap, stack, or landing figure.
 """
 
 from __future__ import annotations
@@ -21,11 +28,48 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-SCHEMA = "dragons.cost_lab.matrix.v1"
-ROW_SCHEMA = "dragons.cost_lab.row.v1"
+SCHEMA = "dragons.cost_lab.matrix.v2"
+ROW_SCHEMA = "dragons.cost_lab.row.v2"
+CONSTANTS_SCHEMA = "dragons.cost_lab.constants.v2"
 ROOT = Path(__file__).resolve().parent
 CONSTANTS_PATH = ROOT / "constants.json"
 DEFAULT_GOLDEN = ROOT / "golden"
+REPO_ROOT = ROOT.parent
+
+ARM_HYPOTHESIS = "layout_hypothesis"
+ARM_LANDED = "abi_landed"
+ARM_DIFFERENTIAL = "abi_differential"
+ARMS = (ARM_HYPOTHESIS, ARM_LANDED, ARM_DIFFERENTIAL)
+
+LANDED_ACCOUNT_ORDER = (
+    "realm",
+    "profile",
+    "market",
+    "hoard",
+    "position",
+    "feed_head",
+    "order_page",
+    "supply_ledger",
+    "terms",
+    "price_grid",
+    "epoch",
+    "candidate_record",
+    "final_pot",
+    "settlement_receipt",
+    "resolution",
+)
+
+LANDED_INTENT_ORDER = (
+    "create_market",
+    "split",
+    "merge",
+    "materialize",
+    "dematerialize",
+    "feed_advance",
+    "place_order",
+    "cancel_order",
+    "settle_page",
+)
 
 
 class ModelError(ValueError):
@@ -43,9 +87,64 @@ def sha256_bytes(value: bytes) -> str:
 def load_constants() -> dict[str, Any]:
     with CONSTANTS_PATH.open("rb") as handle:
         value = json.load(handle)
-    if value.get("schema") != "dragons.cost_lab.constants.v1":
+    if value.get("schema") != CONSTANTS_SCHEMA:
         raise ModelError("unknown constants schema")
+    verify_landed_arm(value)
     return value
+
+
+def verify_landed_arm(constants: dict[str, Any]) -> None:
+    """Re-derive every pinned landed width from the codec's own field terms.
+
+    The landed arm exists so no cost conclusion is attributed to a stale layout. A pinned total
+    that does not equal the sum of the terms transcribed from `account_len`/`encoded_len` is a
+    transcription error, and the harness must refuse rather than publish it.
+    """
+
+    landed = constants[ARM_LANDED]
+    bounds = landed["bounds"]
+    if landed["arm"] != ARM_LANDED or constants["dragon_design_bounds"]["arm"] != ARM_HYPOTHESIS:
+        raise ModelError("cost-lab arms are not distinctly named")
+    for name in LANDED_ACCOUNT_ORDER:
+        account = landed["accounts"][name]
+        if sum(account["field_terms"]) != account["bytes"]:
+            raise ModelError(f"landed account width does not equal its field terms: {name}")
+    if set(landed["accounts"]) != set(LANDED_ACCOUNT_ORDER):
+        raise ModelError("landed account family does not match the pinned inventory")
+    for name in LANDED_INTENT_ORDER:
+        intent = landed["intents"][name]
+        if sum(intent["field_terms"]) != intent["bytes"]:
+            raise ModelError(f"landed intent width does not equal its field terms: {name}")
+        if intent["bytes"] > bounds["max_intent_bytes"]:
+            raise ModelError(f"landed intent exceeds MAX_INTENT_BYTES: {name}")
+    if set(landed["intents"]) != set(LANDED_INTENT_ORDER):
+        raise ModelError("landed intent family does not match the pinned inventory")
+    if sum(bounds["order_record_field_terms"]) != bounds["order_record_bytes"]:
+        raise ModelError("landed order record width does not equal its field terms")
+    page = landed["accounts"]["order_page"]["bytes"]
+    derived_page = (
+        bounds["order_page_header_bytes"]
+        + bounds["max_orders_per_page"] * bounds["order_record_bytes"]
+    )
+    if derived_page != page:
+        raise ModelError("landed order page is not its header plus a dense record array")
+    if bounds["max_epoch_orders"] != bounds["max_orders_per_page"] * bounds["max_order_pages"]:
+        raise ModelError("landed epoch book capacity is not the page geometry")
+    if bounds["max_epoch_orders"] != bounds["relation_max_orders"]:
+        raise ModelError("landed page set and relation book capacity disagree")
+    if (
+        bounds["relation_max_legs"]
+        != bounds["relation_max_orders"]
+        + bounds["relation_max_portfolio_orders"] * bounds["max_outcomes"]
+    ):
+        raise ModelError("landed relation leg capacity is not its order and portfolio bound")
+    if (
+        bounds["relation_max_slices"]
+        != 2 * bounds["relation_max_legs"] + 2 * bounds["max_outcomes"]
+    ):
+        raise ModelError("landed relation slice capacity is not its leg and outcome bound")
+    if bounds["max_outcomes"] != constants["dragon_design_bounds"]["max_v1_outcomes"]:
+        raise ModelError("landed outcome bound and V1 policy bound disagree")
 
 
 def shortvec(value: int) -> bytes:
@@ -361,6 +460,7 @@ def claim_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
                     {
                         "schema": ROW_SCHEMA,
                         "scenario_id": f"claim-{operation}-n{outcomes}-{tx_format}",
+                        "arm": ARM_HYPOTHESIS,
                         "family": "claim_transition",
                         "inputs": {
                             "outcomes": outcomes,
@@ -442,6 +542,7 @@ def page_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
                     {
                         "schema": ROW_SCHEMA,
                         "scenario_id": f"page-n{outcomes}-b{page_size}-m{order_count}",
+                        "arm": ARM_HYPOTHESIS,
                         "family": "order_page_layout",
                         "inputs": {
                             "outcomes": outcomes,
@@ -512,6 +613,7 @@ def accumulator_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
                     {
                         "schema": ROW_SCHEMA,
                         "scenario_id": f"accumulator-{summary_kind}-p{page_count}-{tx_format}",
+                        "arm": ARM_HYPOTHESIS,
                         "family": "accumulator_fold",
                         "inputs": {
                             "summary_kind": summary_kind,
@@ -634,6 +736,7 @@ def batch_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
                             "scenario_id": (
                                 f"batch-n{outcomes}-b{page_size}-m{order_count}-{tx_format}"
                             ),
+                            "arm": ARM_HYPOTHESIS,
                             "family": "batch_verification",
                             "inputs": {
                                 "outcomes": outcomes,
@@ -662,11 +765,685 @@ def batch_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def landed_bounds(constants: dict[str, Any]) -> dict[str, Any]:
+    return constants[ARM_LANDED]["bounds"]
+
+
+def landed_account_bytes(constants: dict[str, Any], name: str) -> int:
+    return constants[ARM_LANDED]["accounts"][name]["bytes"]
+
+
+def landed_intent_bytes(constants: dict[str, Any], name: str) -> int:
+    return constants[ARM_LANDED]["intents"][name]["bytes"]
+
+
+def landed_admission(
+    constants: dict[str, Any],
+    outcomes: int | None = None,
+    order_count: int | None = None,
+) -> dict[str, Any]:
+    """Landed-codec refusals stack on top of the unchanged V1 policy admission rule."""
+
+    bounds = landed_bounds(constants)
+    if outcomes is not None and not (
+        bounds["minimum_outcomes"] <= outcomes <= bounds["max_outcomes"]
+    ):
+        return {
+            "v1_admitted": False,
+            "reason": "refuse_landed_codec_outcome_count_outside_"
+            f"{bounds['minimum_outcomes']}_to_{bounds['max_outcomes']}",
+        }
+    if order_count is not None and order_count > bounds["max_epoch_orders"]:
+        return {
+            "v1_admitted": False,
+            "reason": f"refuse_landed_order_count_above_{bounds['max_epoch_orders']}",
+        }
+    return admission(outcomes, constants)
+
+
+def landed_intent_data(constants: dict[str, Any], name: str) -> bytes:
+    """Emit one landed intent payload: exact landed field widths, placeholder identities.
+
+    Only the widths and their order are landed. The identities are deterministic placeholders, so
+    this is a byte-width measurement of a landed encoding and never a valid signed instruction.
+    """
+
+    intent = constants[ARM_LANDED]["intents"][name]
+    terms = intent["field_terms"]
+    if terms[0] != 2:
+        raise ModelError(f"landed intent does not open with a tag/version header: {name}")
+    payload = bytearray([intent["intent_tag"], intent["intent_version"]])
+    for index, width in enumerate(terms[1:]):
+        payload.extend(deterministic_bytes(f"landed-intent-{name}-field-{index}", width))
+    if len(payload) != intent["bytes"]:
+        raise ModelError(f"landed intent payload width drifted: {name}")
+    return bytes(payload)
+
+
+def landed_page_count(constants: dict[str, Any], order_count: int) -> int | None:
+    """Pages in a frozen epoch book, or None when the landed codec refuses the book."""
+
+    bounds = landed_bounds(constants)
+    if order_count < 1 or order_count > bounds["max_epoch_orders"]:
+        return None
+    per_page = bounds["max_orders_per_page"]
+    return (order_count + per_page - 1) // per_page
+
+
+LANDED_ACCOUNT_ROLES = {
+    "realm": "Realm collateral/profile namespace, frozen by an external adapter.",
+    "profile": "Collateral profile identity bound to a Realm.",
+    "market": "Market namespace with its 512-byte question commitment.",
+    "hoard": "Market collateral custody seam.",
+    "position": "Owner internal balances over the fixed 16-outcome vector.",
+    "feed_head": "Feed cursor and evidence digest; not a fold summary.",
+    "order_page": "Dense 16-record order page with cross-page closure fields.",
+    "supply_ledger": "Per-outcome internal and external supply totals.",
+    "terms": "Immutable payout terms over at most 8 payout vectors.",
+    "price_grid": "Frozen strictly increasing 64-tick price grid.",
+    "epoch": "Book domain, phase, and frozen page-set binding.",
+    "candidate_record": "Submitted clearing candidate and its score.",
+    "final_pot": "Terminal per-outcome pot the settlement path draws from.",
+    "settlement_receipt": "One settled leg's replay-separated receipt.",
+    "resolution": "Resolved payout index and its evidence binding.",
+}
+
+
+def landed_inventory_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
+    rent = constants["rent_package_default"]
+    landed = constants[ARM_LANDED]
+    overhead = rent["account_storage_overhead_bytes"]
+    per_byte = rent["default_lamports_per_byte"]
+    rows: list[dict[str, Any]] = []
+    total_bytes = 0
+    total_rent = 0
+    for name in LANDED_ACCOUNT_ORDER:
+        account = landed["accounts"][name]
+        data_bytes = account["bytes"]
+        principal = rent_minimum(data_bytes, constants)
+        total_bytes += data_bytes
+        total_rent += principal
+        rows.append(
+            {
+                "schema": ROW_SCHEMA,
+                "scenario_id": f"landed-account-{name.replace('_', '-')}",
+                "arm": ARM_LANDED,
+                "family": "landed_account_inventory",
+                "inputs": {
+                    "account": name,
+                    "rust_const": account["rust_const"],
+                    "discriminator_tag": account["discriminator_tag"],
+                    "schema_version": account["schema_version"],
+                    "formula": account["formula"],
+                    "role": LANDED_ACCOUNT_ROLES[name],
+                },
+                "outputs": {
+                    "data_bytes": data_bytes,
+                    "field_term_sum": sum(account["field_terms"]),
+                    "field_term_count": len(account["field_terms"]),
+                    "rent_principal_lamports": principal,
+                    "rent_payload_component_lamports": data_bytes * per_byte,
+                    "rent_overhead_component_lamports": overhead * per_byte,
+                    "instances_per_market_note": "not_modeled",
+                },
+                "evidence": {
+                    "layout": "landed_codec_constant",
+                    "layout_derivation": "independent_field_term_sum",
+                    "rent": "analytical_package_default_not_cluster_measurement",
+                    "compute": "not_measured_no_sbf_program",
+                },
+                "admission": landed_admission(constants),
+                "caveats": [
+                    "A landed byte width is an exact encoding fact, not a measured operation cost.",
+                    "Rent principal is refundable under the pinned package default and is not a target-cluster quote.",
+                    "Account instance counts per market are a lifecycle question this lab does not model.",
+                ],
+            }
+        )
+    largest = max(LANDED_ACCOUNT_ORDER, key=lambda name: landed["accounts"][name]["bytes"])
+    smallest = min(LANDED_ACCOUNT_ORDER, key=lambda name: landed["accounts"][name]["bytes"])
+    rows.append(
+        {
+            "schema": ROW_SCHEMA,
+            "scenario_id": "landed-account-inventory-one-instance",
+            "arm": ARM_LANDED,
+            "family": "landed_account_inventory",
+            "inputs": {
+                "account": "one_instance_of_every_landed_account",
+                "account_count": len(LANDED_ACCOUNT_ORDER),
+                "codec_commit": landed["source"]["commit_short"],
+            },
+            "outputs": {
+                "data_bytes": total_bytes,
+                "rent_principal_lamports": total_rent,
+                "rent_payload_component_lamports": total_bytes * per_byte,
+                "rent_overhead_component_lamports": len(LANDED_ACCOUNT_ORDER) * overhead * per_byte,
+                "rent_overhead_bytes_total": len(LANDED_ACCOUNT_ORDER) * overhead,
+                "largest_account": largest,
+                "largest_account_bytes": landed["accounts"][largest]["bytes"],
+                "smallest_account": smallest,
+                "smallest_account_bytes": landed["accounts"][smallest]["bytes"],
+            },
+            "evidence": {
+                "layout": "landed_codec_constant",
+                "layout_derivation": "independent_field_term_sum",
+                "rent": "analytical_package_default_not_cluster_measurement",
+                "compute": "not_measured_no_sbf_program",
+            },
+            "admission": landed_admission(constants),
+            "caveats": [
+                "One instance of each account is an inventory unit, not a deployment plan: a live market holds many Positions, pages, and receipts.",
+                "The per-account 128-byte storage overhead is a fifth of this inventory's principal, so account count matters as much as payload.",
+            ],
+        }
+    )
+    return rows
+
+
+def landed_epoch_book_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
+    landed = constants[ARM_LANDED]
+    bounds = landed["bounds"]
+    per_page = bounds["max_orders_per_page"]
+    record_bytes = bounds["order_record_bytes"]
+    page_bytes = landed_account_bytes(constants, "order_page")
+    epoch_bytes = landed_account_bytes(constants, "epoch")
+    page_rent = rent_minimum(page_bytes, constants)
+    epoch_rent = rent_minimum(epoch_bytes, constants)
+    settle_bytes = landed_intent_bytes(constants, "settle_page")
+    rows: list[dict[str, Any]] = []
+    for order_count in landed["epoch_book_order_counts"]:
+        pages = landed_page_count(constants, order_count)
+        representable = pages is not None
+        if representable:
+            final_page_orders = order_count - (pages - 1) * per_page
+            outputs = {
+                "landed_codec_representable": True,
+                "refusal_reason": None,
+                "page_count": pages,
+                "dense_pages": pages - 1,
+                "final_page_order_count": final_page_orders,
+                "stored_record_bytes": order_count * record_bytes,
+                "allocated_record_bytes": pages * per_page * record_bytes,
+                "padding_record_bytes": (pages * per_page - order_count) * record_bytes,
+                "page_header_bytes_total": pages * bounds["order_page_header_bytes"],
+                "page_account_data_bytes_total": pages * page_bytes,
+                "page_rent_principal_lamports_per_page": page_rent,
+                "rent_principal_lamports": pages * page_rent,
+                "epoch_account_data_bytes": epoch_bytes,
+                "epoch_account_rent_principal_lamports": epoch_rent,
+                "book_rent_principal_lamports": pages * page_rent + epoch_rent,
+                "settle_page_intent_bytes": settle_bytes,
+                "settle_page_instructions_lower_bound": pages,
+                "page_accounts_locked_if_one_transaction": pages,
+            }
+        else:
+            outputs = {
+                "landed_codec_representable": False,
+                "refusal_reason": f"order_count_above_landed_max_epoch_orders_{bounds['max_epoch_orders']}",
+                "page_count": None,
+                "dense_pages": None,
+                "final_page_order_count": None,
+                "stored_record_bytes": None,
+                "allocated_record_bytes": None,
+                "padding_record_bytes": None,
+                "page_header_bytes_total": None,
+                "page_account_data_bytes_total": None,
+                "page_rent_principal_lamports_per_page": page_rent,
+                "rent_principal_lamports": None,
+                "epoch_account_data_bytes": epoch_bytes,
+                "epoch_account_rent_principal_lamports": epoch_rent,
+                "book_rent_principal_lamports": None,
+                "settle_page_intent_bytes": settle_bytes,
+                "settle_page_instructions_lower_bound": None,
+                "page_accounts_locked_if_one_transaction": None,
+            }
+        rows.append(
+            {
+                "schema": ROW_SCHEMA,
+                "scenario_id": f"landed-epoch-book-m{order_count}",
+                "arm": ARM_LANDED,
+                "family": "landed_epoch_book",
+                "inputs": {
+                    "order_count": order_count,
+                    "orders_per_page": per_page,
+                    "max_order_pages": bounds["max_order_pages"],
+                    "order_page_bytes": page_bytes,
+                    "order_record_bytes": record_bytes,
+                },
+                "outputs": outputs,
+                "evidence": {
+                    "layout": "landed_codec_constant",
+                    "packing": "landed_dense_page_rule_not_a_packer_hypothesis",
+                    "rent": "analytical_package_default_not_cluster_measurement",
+                    "instruction_bytes": "landed_codec_constant",
+                    "compute": "not_measured_no_sbf_program",
+                },
+                "admission": landed_admission(constants, order_count=order_count),
+                "caveats": [
+                    "The landed page rule is not a packing choice: every non-final page of a frozen set must hold exactly 16 records, so the page count is forced by the order count.",
+                    "Padding record bytes are paid rent for canonically zeroed slots, not spare capacity for later orders in a frozen set.",
+                    "Whether one transaction may lock the whole page set is an account-topology question the landed ABI does not answer.",
+                ],
+            }
+        )
+    return rows
+
+
+def landed_intent_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
+    landed = constants[ARM_LANDED]
+    bounds = landed["bounds"]
+    topology = landed["intent_account_topology_hypothesis"]
+    limits = constants["protocol_limits"]
+    rows: list[dict[str, Any]] = []
+    for name in LANDED_INTENT_ORDER:
+        intent = landed["intents"][name]
+        shape = topology[name]
+        data = landed_intent_data(constants, name)
+        for tx_format in ("legacy_inline", "v0_alt"):
+            spec = WireSpec(
+                tx_format=tx_format,
+                total_accounts=shape["total_accounts"],
+                writable_accounts=shape["writable_accounts"],
+                static_accounts_v0=shape["static_accounts_v0"],
+                instruction_data=data,
+            )
+            output = wire_outputs(spec, constants)
+            output.update(
+                {
+                    "intent_bytes": intent["bytes"],
+                    "intent_tag": intent["intent_tag"],
+                    "intent_version": intent["intent_version"],
+                    "max_intent_bytes_margin": bounds["max_intent_bytes"] - intent["bytes"],
+                    "instruction_trace_entries_lower_bound": 1,
+                    "instruction_trace_margin": limits["max_instruction_trace_length"] - 1,
+                }
+            )
+            rows.append(
+                {
+                    "schema": ROW_SCHEMA,
+                    "scenario_id": f"landed-intent-{name.replace('_', '-')}-{tx_format}",
+                    "arm": ARM_LANDED,
+                    "family": "landed_intent_wire",
+                    "inputs": {
+                        "intent": name,
+                        "tx_format": tx_format,
+                        "total_accounts_hypothesis": shape["total_accounts"],
+                        "writable_accounts_hypothesis": shape["writable_accounts"],
+                        "top_level_instructions": 1,
+                    },
+                    "outputs": output,
+                    "evidence": {
+                        "wire_bytes_measured": "measured_local_serialization",
+                        "wire_bytes_analytical": "independent_analytical_field_sum",
+                        "instruction_data_bytes": "landed_codec_constant",
+                        "account_topology": "layout_hypothesis_not_landed",
+                        "compute": "not_measured_no_sbf_program",
+                    },
+                    "admission": landed_admission(constants),
+                    "caveats": [
+                        "The payload width is landed; the account set around it is a hypothesis and is labeled as one.",
+                        "One intent is modeled as one top-level instruction. The landed crate does not fix that mapping.",
+                        "No CPI, ATA creation, compute-budget instruction, or signature validity is modeled.",
+                    ],
+                }
+            )
+    return rows
+
+
+def landed_relation_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
+    landed = constants[ARM_LANDED]
+    bounds = landed["bounds"]
+    page_bytes = landed_account_bytes(constants, "order_page")
+    page_rent = rent_minimum(page_bytes, constants)
+    frozen_companions = ("epoch", "price_grid", "candidate_record")
+    companion_bytes = sum(landed_account_bytes(constants, name) for name in frozen_companions)
+    companion_rent = sum(
+        rent_minimum(landed_account_bytes(constants, name), constants) for name in frozen_companions
+    )
+    rows: list[dict[str, Any]] = []
+    for outcomes in constants["dragon_design_bounds"]["outcome_axis"]:
+        codec_outcomes_ok = bounds["minimum_outcomes"] <= outcomes <= bounds["max_outcomes"]
+        for order_count in landed["relation_order_counts"]:
+            pages = landed_page_count(constants, order_count)
+            if pages is None:
+                raise ModelError("landed relation order count exceeds the landed book")
+            rows.append(
+                {
+                    "schema": ROW_SCHEMA,
+                    "scenario_id": f"landed-relation-n{outcomes}-m{order_count}",
+                    "arm": ARM_LANDED,
+                    "family": "landed_batch_relation",
+                    "inputs": {
+                        "outcomes": outcomes,
+                        "order_count": order_count,
+                        "max_orders": bounds["relation_max_orders"],
+                        "price_scale": bounds["relation_price_scale"],
+                        "relation_version": bounds["relation_version"],
+                    },
+                    "outputs": {
+                        "landed_codec_representable": codec_outcomes_ok,
+                        "page_count": pages,
+                        "order_page_accounts": pages,
+                        "order_authentications_lower_bound": order_count,
+                        "fill_bound_checks_lower_bound": order_count,
+                        "simplex_terms_lower_bound": outcomes,
+                        "asset_closure_checks_lower_bound": outcomes + 1,
+                        "primitive_relation_steps_floor_excluding_hash_and_allocation": 2
+                        * order_count
+                        + 2 * outcomes
+                        + 1,
+                        "relation_leg_capacity": bounds["relation_max_legs"],
+                        "relation_slice_capacity": bounds["relation_max_slices"],
+                        "grid_tick_capacity": bounds["max_grid_ticks"],
+                        "portfolio_orders_admitted_by_relation_upper_bound": bounds[
+                            "relation_max_portfolio_orders"
+                        ],
+                        "portfolio_orders_persistable_in_landed_pages": 0,
+                        "order_page_data_bytes_total": pages * page_bytes,
+                        "rent_principal_lamports": pages * page_rent,
+                        "frozen_epoch_companion_bytes": companion_bytes,
+                        "frozen_epoch_state_bytes": pages * page_bytes + companion_bytes,
+                        "frozen_epoch_state_rent_principal_lamports": pages * page_rent
+                        + companion_rent,
+                    },
+                    "evidence": {
+                        "layout": "landed_codec_constant",
+                        "bounds": "landed_relation_crate_constant",
+                        "work": "analytical_information_lower_bound",
+                        "rent": "analytical_package_default_not_cluster_measurement",
+                        "instruction_bytes": "absent_no_landed_verification_instruction",
+                        "compute": "not_measured_no_sbf_program",
+                    },
+                    "admission": landed_admission(constants, outcomes=outcomes),
+                    "caveats": [
+                        "No wire row is emitted here: the landed ABI has no candidate-verification instruction, and this arm refuses to invent one.",
+                        "relation_v1 admits up to 8 portfolio orders, but the landed OrderRecord stores one outcome index and no coefficient vector, so those orders have no persisted page encoding.",
+                        "Work counters are semantic steps, not compute units.",
+                        "MAX_ORDERS=64 caps one frozen book, not a market's order flow; more orders means more epochs, not a bigger book.",
+                    ],
+                }
+            )
+    return rows
+
+
+def differential_entries(constants: dict[str, Any]) -> list[dict[str, Any]]:
+    bounds = constants["dragon_design_bounds"]
+    landed = constants[ARM_LANDED]
+    landed_bounds_value = landed["bounds"]
+    hypothesis_page = 8192
+    hypothesis_payload = hypothesis_page - bounds["page_header_bytes"]
+    landed_only = [
+        name
+        for name in LANDED_ACCOUNT_ORDER
+        if name not in {"position", "supply_ledger", "order_page"}
+    ]
+    landed_only_bytes = sum(landed["accounts"][name]["bytes"] for name in landed_only)
+    return [
+        {
+            "object": "position_account",
+            "unit": "bytes",
+            "rent_class": True,
+            "hypothesis": bounds["position_header_bytes"] + 8 * bounds["max_v1_outcomes"],
+            "hypothesis_source": "position_header_bytes + 8 * max_v1_outcomes",
+            "landed": landed["accounts"]["position"]["bytes"],
+            "landed_source": "account_len::POSITION",
+            "change": "The 128-byte 16-outcome balance vector is unchanged; the landed account also stores market and owner identities, a replay generation, cash and reserved-cash atoms, a stored bump and a close state, so the header is 92 bytes rather than the hypothetical 64.",
+        },
+        {
+            "object": "supply_ledger_account",
+            "unit": "bytes",
+            "rent_class": True,
+            "hypothesis": bounds["supply_ledger_header_bytes"] + 16 * bounds["max_v1_outcomes"],
+            "hypothesis_source": "supply_ledger_header_bytes + 16 * max_v1_outcomes",
+            "landed": landed["accounts"]["supply_ledger"]["bytes"],
+            "landed_source": "account_len::SUPPLY_LEDGER",
+            "change": "Both arms carry two u64 totals per outcome (256 bytes); the landed header is 77 bytes of market, realm, generation, outcome count, bump and flags rather than the hypothetical 64.",
+        },
+        {
+            "object": "single_egg_order_record",
+            "unit": "bytes",
+            "rent_class": False,
+            "hypothesis": bounds["single_egg_order_bytes"],
+            "hypothesis_source": "single_egg_order_bytes",
+            "landed": landed_bounds_value["order_record_bytes"],
+            "landed_source": "ORDER_RECORD_BYTES",
+            "change": "The landed record spends 64 bytes on owner and order identity plus quantity, limit, minimum fill, generation, outcome, side and flags; the 80-byte sketch had no room for the replay generation and dual 32-byte identities.",
+        },
+        {
+            "object": "portfolio_order_record",
+            "unit": "bytes",
+            "rent_class": False,
+            "hypothesis": bounds["portfolio_order_fixed_bytes"]
+            + bounds["portfolio_coefficient_bytes_per_outcome"] * bounds["max_v1_outcomes"],
+            "hypothesis_source": "portfolio_order_fixed_bytes + 8 * max_v1_outcomes at n=16",
+            "landed": None,
+            "landed_source": "absent",
+            "change": "relation_v1 admits up to 8 portfolio orders with a 16-slot coefficient vector, but the landed OrderRecord holds a single outcome index, so no persisted encoding for a portfolio order exists in the landed page today.",
+        },
+        {
+            "object": "order_page_account",
+            "unit": "bytes",
+            "rent_class": True,
+            "hypothesis": hypothesis_page,
+            "hypothesis_source": "8 KiB page hypothesis",
+            "landed": landed["accounts"]["order_page"]["bytes"],
+            "landed_source": "account_len::ORDER_PAGE",
+            "change": "The landed page is a fixed 16-record array with cross-page closure fields, not a variable byte budget, so page size stopped being a tunable parameter.",
+        },
+        {
+            "object": "order_page_header",
+            "unit": "bytes",
+            "rent_class": False,
+            "hypothesis": bounds["page_header_bytes"],
+            "hypothesis_source": "page_header_bytes",
+            "landed": landed_bounds_value["order_page_header_bytes"],
+            "landed_source": "account_len::ORDER_PAGE minus the record array",
+            "change": "The landed header carries seven 32-byte identities (market, epoch, order set, page digest, first, last and previous-page-last order ids) that the hypothesis never budgeted for.",
+        },
+        {
+            "object": "order_page_record_capacity",
+            "unit": "records_per_page",
+            "rent_class": False,
+            "hypothesis": hypothesis_payload // bounds["single_egg_order_bytes"],
+            "hypothesis_source": "(8192 - 128) // 80",
+            "landed": landed_bounds_value["max_orders_per_page"],
+            "landed_source": "MAX_ORDERS_PER_PAGE",
+            "change": "A landed page holds 16 records, not about a hundred, so any per-page cost is amortized over six times fewer orders.",
+        },
+        {
+            "object": "epoch_book_order_capacity",
+            "unit": "orders_per_book",
+            "rent_class": False,
+            "hypothesis": max(bounds["order_counts"]),
+            "hypothesis_source": "largest modeled order count",
+            "landed": landed_bounds_value["max_epoch_orders"],
+            "landed_source": "MAX_EPOCH_ORDERS and clutch-batch MAX_ORDERS",
+            "change": "One frozen book is capped at 64 orders across 4 pages, so the 128- and 512-order cases describe multiple epochs, never one relation instance.",
+        },
+        {
+            "object": "claim_instruction_internal_split",
+            "unit": "bytes",
+            "rent_class": False,
+            "hypothesis": 11,
+            "hypothesis_source": "synthetic claim instruction data",
+            "landed": landed["intents"]["split"]["bytes"],
+            "landed_source": "Intent::Split encoded_len",
+            "change": "The landed payload names market and owner by 32-byte identity instead of packing an outcome count and a u64 into 11 bytes.",
+        },
+        {
+            "object": "claim_instruction_materialize_one",
+            "unit": "bytes",
+            "rent_class": False,
+            "hypothesis": 11,
+            "hypothesis_source": "synthetic claim instruction data",
+            "landed": landed["intents"]["materialize"]["bytes"],
+            "landed_source": "Intent::Materialize encoded_len",
+            "change": "The landed payload adds a 32-byte destination and an outcome index to the market/owner pair, still far inside MAX_INTENT_BYTES.",
+        },
+        {
+            "object": "accumulator_full_summary",
+            "unit": "bytes",
+            "rent_class": True,
+            "hypothesis": bounds["summary_layouts"]["full"]["data_bytes"],
+            "hypothesis_source": "summary_layouts.full.data_bytes",
+            "landed": None,
+            "landed_source": "absent",
+            "change": "No accumulator summary account exists in the landed family; FeedHead is a 124-byte cursor plus evidence digest, not a fold summary, so the accumulator arm stays entirely hypothetical.",
+        },
+        {
+            "object": "landed_only_account_family",
+            "unit": "bytes",
+            "rent_class": True,
+            "hypothesis": None,
+            "hypothesis_source": "absent",
+            "landed": landed_only_bytes,
+            "landed_source": f"sum of {len(landed_only)} landed accounts with no hypothesis counterpart",
+            "change": "Realm, Profile, Market, Hoard, FeedHead, Terms, PriceGrid, Epoch, CandidateRecord, FinalPot, SettlementReceipt and Resolution were never in the hypothesis arm, so most of the landed rent inventory was previously unmodeled.",
+        },
+    ]
+
+
+def differential_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for entry in differential_entries(constants):
+        hypothesis = entry["hypothesis"]
+        landed = entry["landed"]
+        both = hypothesis is not None and landed is not None
+        delta = landed - hypothesis if both else None
+        rent_class = entry["rent_class"]
+        hypothesis_rent = (
+            rent_minimum(hypothesis, constants)
+            if rent_class and hypothesis is not None
+            else None
+        )
+        landed_rent = (
+            rent_minimum(landed, constants) if rent_class and landed is not None else None
+        )
+        rows.append(
+            {
+                "schema": ROW_SCHEMA,
+                "scenario_id": f"diff-{entry['object'].replace('_', '-')}",
+                "arm": ARM_DIFFERENTIAL,
+                "family": "abi_differential",
+                "inputs": {
+                    "object": entry["object"],
+                    "unit": entry["unit"],
+                    "hypothesis_source": entry["hypothesis_source"],
+                    "landed_source": entry["landed_source"],
+                    "present_in_both_arms": both,
+                },
+                "outputs": {
+                    "hypothesis_value": hypothesis,
+                    "landed_value": landed,
+                    "delta": delta,
+                    "landed_over_hypothesis_permille": (
+                        (landed * 1000) // hypothesis if both and hypothesis else None
+                    ),
+                    "hypothesis_rent_principal_lamports": hypothesis_rent,
+                    "landed_rent_principal_lamports": landed_rent,
+                    "delta_rent_principal_lamports": (
+                        landed_rent - hypothesis_rent
+                        if hypothesis_rent is not None and landed_rent is not None
+                        else None
+                    ),
+                    "change": entry["change"],
+                },
+                "evidence": {
+                    "hypothesis_value": "layout_hypothesis",
+                    "landed_value": "landed_codec_constant",
+                    "delta": "exact_integer_difference_of_the_two_arms",
+                    "rent": "analytical_package_default_not_cluster_measurement",
+                    "compute": "not_measured_no_sbf_program",
+                },
+                "admission": landed_admission(constants),
+                "caveats": [
+                    "A delta is a layout fact, not a cost verdict: no arm has a measured CU, account-copy, or landing figure.",
+                    "The hypothesis value is retained for falsification history and must not be quoted as current layout.",
+                ],
+            }
+        )
+    return rows
+
+
 def generate_rows(constants: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = claim_rows(constants) + page_rows(constants) + accumulator_rows(constants) + batch_rows(constants)
-    rows.sort(key=lambda row: row["scenario_id"])
+    rows = (
+        claim_rows(constants)
+        + page_rows(constants)
+        + accumulator_rows(constants)
+        + batch_rows(constants)
+        + landed_inventory_rows(constants)
+        + landed_epoch_book_rows(constants)
+        + landed_intent_rows(constants)
+        + landed_relation_rows(constants)
+        + differential_rows(constants)
+    )
+    rows.sort(key=lambda row: (ARMS.index(row["arm"]), row["scenario_id"]))
     validate_rows(rows, constants)
     return rows
+
+
+RETAINED_HYPOTHESIS_ROW_COUNT = 193
+
+
+def validate_landed_rows(rows: list[dict[str, Any]], constants: dict[str, Any]) -> None:
+    """Guard the properties that make the landed arm usable as evidence."""
+
+    bounds = landed_bounds(constants)
+    hypothesis_rows = [row for row in rows if row["arm"] == ARM_HYPOTHESIS]
+    if len(hypothesis_rows) != RETAINED_HYPOTHESIS_ROW_COUNT:
+        raise ModelError(
+            "the layout_hypothesis arm must be retained whole: expected "
+            f"{RETAINED_HYPOTHESIS_ROW_COUNT} rows, found {len(hypothesis_rows)}"
+        )
+
+    inventory = {
+        row["inputs"]["account"]: row["outputs"]["data_bytes"]
+        for row in rows
+        if row["family"] == "landed_account_inventory"
+    }
+    for name in LANDED_ACCOUNT_ORDER:
+        if inventory[name] != constants[ARM_LANDED]["accounts"][name]["bytes"]:
+            raise ModelError(f"landed inventory row drifted from the pinned ABI: {name}")
+    total = inventory["one_instance_of_every_landed_account"]
+    if total != sum(inventory[name] for name in LANDED_ACCOUNT_ORDER):
+        raise ModelError("landed one-instance inventory is not the sum of its accounts")
+
+    for row in rows:
+        if row["arm"] != ARM_LANDED:
+            continue
+        outcomes = row["inputs"].get("outcomes")
+        if outcomes is not None and outcomes > bounds["max_outcomes"]:
+            if row["admission"]["v1_admitted"]:
+                raise ModelError("landed arm admitted an outcome count the codec refuses")
+            if row["outputs"].get("landed_codec_representable"):
+                raise ModelError("landed arm marked an unencodable outcome count representable")
+        order_count = row["inputs"].get("order_count")
+        if order_count is not None and order_count > bounds["max_epoch_orders"]:
+            if row["admission"]["v1_admitted"]:
+                raise ModelError("landed arm admitted a book larger than MAX_EPOCH_ORDERS")
+        if row["family"] == "landed_batch_relation":
+            if row["outputs"]["order_authentications_lower_bound"] != row["inputs"]["order_count"]:
+                raise ModelError("landed relation must authenticate every frozen order")
+            if row["outputs"]["portfolio_orders_persistable_in_landed_pages"] != 0:
+                raise ModelError("landed page cannot persist a portfolio order")
+        if row["family"] == "landed_epoch_book" and row["outputs"]["landed_codec_representable"]:
+            pages = row["outputs"]["page_count"]
+            per_page = bounds["max_orders_per_page"]
+            covered = (pages - 1) * per_page + row["outputs"]["final_page_order_count"]
+            if covered != row["inputs"]["order_count"] or not 1 <= row["outputs"][
+                "final_page_order_count"
+            ] <= per_page:
+                raise ModelError("landed page set does not close its order count exactly")
+
+    differential = {row["inputs"]["object"]: row["outputs"] for row in rows if row["arm"] == ARM_DIFFERENTIAL}
+    for output in differential.values():
+        hypothesis = output["hypothesis_value"]
+        landed = output["landed_value"]
+        if hypothesis is not None and landed is not None:
+            if output["delta"] != landed - hypothesis:
+                raise ModelError("differential delta is not the exact integer difference")
+        elif output["delta"] is not None:
+            raise ModelError("differential delta exists without both arms")
 
 
 def validate_rows(rows: list[dict[str, Any]], constants: dict[str, Any]) -> None:
@@ -676,6 +1453,8 @@ def validate_rows(rows: list[dict[str, Any]], constants: dict[str, Any]) -> None
     for row in rows:
         if row["schema"] != ROW_SCHEMA:
             raise ModelError("row schema mismatch")
+        if row["arm"] not in ARMS:
+            raise ModelError(f"row carries no known arm: {row['scenario_id']}")
         outcomes = row["inputs"].get("outcomes")
         if outcomes == 24 and row["admission"]["v1_admitted"]:
             raise ModelError("n=24 must remain a V1 refusal")
@@ -686,12 +1465,23 @@ def validate_rows(rows: list[dict[str, Any]], constants: dict[str, Any]) -> None
         evidence_values = set(row["evidence"].values())
         if "measured_validator_execution" in evidence_values:
             raise ModelError("offline harness cannot emit validator measurements")
+        if row["arm"] != ARM_HYPOTHESIS and any(key.endswith("_cu") for key in output):
+            raise ModelError(
+                f"landed and differential arms must not report compute units: {row['scenario_id']}"
+            )
+
+    validate_landed_rows(rows, constants)
 
     expected_counts = {
         "claim_transition": 5 * 4 * 2,
         "order_page_layout": 5 * 3 * 3,
         "accumulator_fold": 3 * 3 * 2,
         "batch_verification": 5 * 3 * 3 * 2,
+        "landed_account_inventory": 15 + 1,
+        "landed_epoch_book": 7,
+        "landed_intent_wire": 9 * 2,
+        "landed_batch_relation": 5 * 3,
+        "abi_differential": 12,
     }
     actual_counts = {
         family: sum(1 for row in rows if row["family"] == family)
@@ -721,10 +1511,29 @@ def matrix_document(constants: dict[str, Any], rows: list[dict[str, Any]]) -> di
     return {
         "schema": SCHEMA,
         "evidence_ceiling": "offline_wire_measurement_and_analytical_lower_bounds_only",
+        "arms": {
+            ARM_HYPOTHESIS: {
+                "role": "original design sketch, retained unchanged for falsification history",
+                "evidence_class": "layout_hypothesis",
+                "row_count": sum(1 for row in rows if row["arm"] == ARM_HYPOTHESIS),
+            },
+            ARM_LANDED: {
+                "role": "widths read from the landed codec and relation crate",
+                "evidence_class": "landed_codec_constant",
+                "source": constants[ARM_LANDED]["source"],
+                "row_count": sum(1 for row in rows if row["arm"] == ARM_LANDED),
+            },
+            ARM_DIFFERENTIAL: {
+                "role": "exact integer delta for every object present in both arms",
+                "evidence_class": "exact_integer_difference_of_the_two_arms",
+                "row_count": sum(1 for row in rows if row["arm"] == ARM_DIFFERENTIAL),
+            },
+        },
         "source_binding": {
             "cost_lab_py_sha256": sha256_bytes(harness_bytes),
             "constants_json_sha256": sha256_bytes(constants_bytes),
             "external_baseline": constants["source_baseline"],
+            "landed_abi_source": constants[ARM_LANDED]["source"],
         },
         "determinism": {
             "randomness": "none",
@@ -740,7 +1549,9 @@ def matrix_document(constants: dict[str, Any], rows: list[dict[str, Any]]) -> di
 
 CSV_COLUMNS = [
     "scenario_id",
+    "arm",
     "family",
+    "object",
     "outcomes",
     "operation",
     "tx_format",
@@ -758,6 +1569,8 @@ CSV_COLUMNS = [
     "page_count",
     "order_authentications_lower_bound",
     "portfolio_dot_terms_at_fifty_percent",
+    "data_bytes",
+    "delta",
     "rent_principal_lamports",
     "v1_admitted",
 ]
@@ -770,20 +1583,30 @@ def csv_bytes(rows: list[dict[str, Any]]) -> bytes:
     for row in rows:
         inputs = row["inputs"]
         output = row["outputs"]
-        rent_value = output.get(
+        rent_value = ""
+        for key in (
             "order_page_rent_principal_lamports",
-            output.get(
-                "half_mix_total_rent_principal_lamports",
-                output.get(
-                    "summary_rent_principal_lamports",
-                    output.get("outcome_mint_rent_principal_lamports", ""),
-                ),
-            ),
-        )
+            "half_mix_total_rent_principal_lamports",
+            "summary_rent_principal_lamports",
+            "outcome_mint_rent_principal_lamports",
+            "rent_principal_lamports",
+            "landed_rent_principal_lamports",
+        ):
+            if output.get(key) is not None:
+                rent_value = output[key]
+                break
+        data_bytes = output.get("data_bytes", output.get("landed_value", ""))
+        if data_bytes is None:
+            data_bytes = ""
+        delta_value = output.get("delta", "")
+        if delta_value is None:
+            delta_value = ""
         writer.writerow(
             {
                 "scenario_id": row["scenario_id"],
+                "arm": row["arm"],
                 "family": row["family"],
+                "object": inputs.get("object", inputs.get("account", inputs.get("intent", ""))),
                 "outcomes": inputs.get("outcomes", ""),
                 "operation": inputs.get("operation", ""),
                 "tx_format": inputs.get("tx_format", ""),
@@ -811,6 +1634,8 @@ def csv_bytes(rows: list[dict[str, Any]]) -> bytes:
                 "portfolio_dot_terms_at_fifty_percent": output.get(
                     "portfolio_dot_terms_at_fifty_percent", ""
                 ),
+                "data_bytes": data_bytes,
+                "delta": delta_value,
                 "rent_principal_lamports": rent_value,
                 "v1_admitted": str(row["admission"]["v1_admitted"]).lower(),
             }
@@ -826,10 +1651,13 @@ def find_row(rows: list[dict[str, Any]], scenario_id: str) -> dict[str, Any]:
 
 
 def summary_bytes(constants: dict[str, Any], rows: list[dict[str, Any]]) -> bytes:
+    landed = constants[ARM_LANDED]
     lines = [
         "# Deterministic cost-lab summary",
         "",
         "Evidence ceiling: offline synthetic wire measurement plus analytical lower bounds. No SBF, validator, RPC, fee-market, or landing measurement occurred.",
+        "",
+        f"Arms: `layout_hypothesis` (design sketch, retained) and `abi_landed` (read from `{landed['source']['codec_path']}` at `{landed['source']['commit_short']}`), plus their `abi_differential`. A landed width is an encoding fact, never a measured cost.",
         "",
         "## Claim transition envelope",
         "",
@@ -904,13 +1732,126 @@ def summary_bytes(constants: dict[str, Any], rows: list[dict[str, Any]]) -> byte
     lines.extend(
         [
             "",
+            "## Landed ABI inventory",
+            "",
+            f"Source: `{landed['source']['codec_path']}` at `{landed['source']['commit_short']}`, one instance of each account.",
+            "",
+            "| account | Rust constant | data bytes | package-default rent principal (lamports) |",
+            "|---|---|---:|---:|",
+        ]
+    )
+    for name in LANDED_ACCOUNT_ORDER:
+        row = find_row(rows, f"landed-account-{name.replace('_', '-')}")
+        lines.append(
+            f"| {name} | `{row['inputs']['rust_const']}` | {row['outputs']['data_bytes']} |"
+            f" {row['outputs']['rent_principal_lamports']} |"
+        )
+    total_row = find_row(rows, "landed-account-inventory-one-instance")
+    lines.append(
+        f"| **one instance of each ({total_row['inputs']['account_count']})** | | "
+        f"**{total_row['outputs']['data_bytes']}** | "
+        f"**{total_row['outputs']['rent_principal_lamports']}** |"
+    )
+    lines.extend(
+        [
+            "",
+            f"Of that principal, {total_row['outputs']['rent_overhead_component_lamports']} lamports is the per-account 128-byte storage overhead, so account count is a first-class capital term.",
+            "",
+            "## Landed epoch book",
+            "",
+            "| orders | representable | pages | padding record bytes | page rent principal (lamports) | SettlePage instructions |",
+            "|---:|---|---:|---:|---:|---:|",
+        ]
+    )
+    for order_count in landed["epoch_book_order_counts"]:
+        row = find_row(rows, f"landed-epoch-book-m{order_count}")
+        output = row["outputs"]
+        if output["landed_codec_representable"]:
+            lines.append(
+                f"| {order_count} | yes | {output['page_count']} | {output['padding_record_bytes']} |"
+                f" {output['rent_principal_lamports']} | {output['settle_page_instructions_lower_bound']} |"
+            )
+        else:
+            lines.append(
+                f"| {order_count} | no: {output['refusal_reason']} | - | - | - | - |"
+            )
+    lines.extend(
+        [
+            "",
+            "## Landed intent payloads on the wire",
+            "",
+            "| intent | payload bytes | legacy bytes | v0+ALT bytes | accounts (hypothesis) |",
+            "|---|---:|---:|---:|---:|",
+        ]
+    )
+    for name in LANDED_INTENT_ORDER:
+        legacy = find_row(rows, f"landed-intent-{name.replace('_', '-')}-legacy_inline")
+        v0 = find_row(rows, f"landed-intent-{name.replace('_', '-')}-v0_alt")
+        lines.append(
+            f"| {name} | {legacy['outputs']['intent_bytes']} |"
+            f" {legacy['outputs']['wire_bytes_measured']} |"
+            f" {v0['outputs']['wire_bytes_measured']} |"
+            f" {legacy['outputs']['account_count']} |"
+        )
+    lines.extend(
+        [
+            "",
+            "Payload widths are landed; the account sets are hypotheses and are labeled as such in every row.",
+            "",
+            "## Landed relation at MAX_ORDERS=64",
+            "",
+            "| n | orders | pages | order authentications | relation steps floor | frozen epoch state bytes | frozen epoch rent principal (lamports) | V1 |",
+            "|---:|---:|---:|---:|---:|---:|---:|---|",
+        ]
+    )
+    for outcomes in constants["dragon_design_bounds"]["outcome_axis"]:
+        for order_count in landed["relation_order_counts"]:
+            row = find_row(rows, f"landed-relation-n{outcomes}-m{order_count}")
+            output = row["outputs"]
+            lines.append(
+                f"| {outcomes} | {order_count} | {output['page_count']} |"
+                f" {output['order_authentications_lower_bound']} |"
+                f" {output['primitive_relation_steps_floor_excluding_hash_and_allocation']} |"
+                f" {output['frozen_epoch_state_bytes']} |"
+                f" {output['frozen_epoch_state_rent_principal_lamports']} |"
+                f" {'admit' if row['admission']['v1_admitted'] else 'refuse'} |"
+            )
+    lines.extend(
+        [
+            "",
+            "## Hypothesis versus landed ABI",
+            "",
+            "| object | unit | hypothesis | landed | delta | what changed |",
+            "|---|---|---:|---:|---:|---|",
+        ]
+    )
+    for entry in differential_entries(constants):
+        row = find_row(rows, f"diff-{entry['object'].replace('_', '-')}")
+        output = row["outputs"]
+        rendered = {
+            key: ("absent" if output[key] is None else str(output[key]))
+            for key in ("hypothesis_value", "landed_value", "delta")
+        }
+        if output["delta"] is not None and output["delta"] > 0:
+            rendered["delta"] = f"+{output['delta']}"
+        lines.append(
+            f"| {entry['object']} | {entry['unit']} | {rendered['hypothesis_value']} |"
+            f" {rendered['landed_value']} | {rendered['delta']} | {output['change']} |"
+        )
+    lines.extend(
+        [
+            "",
             "## Interpretation",
             "",
-            "- `n=24` is always a V1 refusal even when one synthetic resource axis appears green.",
+            "- `n=24` is always a V1 refusal even when one synthetic resource axis appears green, and in the landed arm the codec itself refuses it.",
             "- Legacy inline addresses become the first obvious byte bottleneck for broad outcome operations; ALT is not relief from locks or CPIs.",
             "- Rent values are refundable principal under the pinned package default, not fees and not a cluster quote.",
             "- No total-CU number appears because no Dragon SBF program exists to measure. The only CU field is the pinned runtime CPI invocation charge component.",
             "- Batch verification remains Omega(orders) without a separately verified succinct proof; page layout changes rent and transaction partitioning, not that information bound.",
+            "- The landed page is not a tunable byte budget: 16 records per page is forced, so the 4/8/10 KiB page trade in the hypothesis arm no longer describes the current layout.",
+            "- One frozen landed book holds 64 orders, so the 128- and 512-order hypothesis rows describe several epochs rather than one relation instance.",
+            "- The landed OrderRecord has no coefficient vector, so portfolio orders that `relation_v1` admits cannot be persisted by the landed page today.",
+            "- No landed candidate-verification instruction exists, so the landed arm reports relation work and rent without any wire byte count for that step.",
             "",
         ]
     )
@@ -957,6 +1898,100 @@ def check_artifacts(output: Path, artifacts: dict[str, bytes]) -> None:
         raise ModelError("\n".join(errors))
 
 
+RUST_IDENTIFIER_VALUES = {
+    "MAX_OUTCOMES": 16,
+    "MAX_PAYOUTS": 8,
+    "MAX_GRID_TICKS": 64,
+    "MAX_ORDERS_PER_PAGE": 16,
+    "MAX_ORDER_PAGES": 4,
+    "ORDER_RECORD_BYTES": 99,
+    "HASH_BYTES": 32,
+}
+
+
+def evaluate_rust_arithmetic(expression: str) -> int:
+    """Evaluate one `+`/`*`/parenthesis Rust size expression over pinned identifiers.
+
+    Anything else refuses. This exists to re-derive `account_len` from the codec instead of
+    trusting a transcription, so it must never become a general evaluator.
+    """
+
+    tokens = expression.replace("(", " ( ").replace(")", " ) ").replace("+", " + ").replace(
+        "*", " * "
+    )
+    parts = tokens.split()
+    rendered: list[str] = []
+    for part in parts:
+        if part in {"(", ")", "+", "*"}:
+            rendered.append(part)
+        elif part.isdigit():
+            rendered.append(part)
+        elif part in RUST_IDENTIFIER_VALUES:
+            rendered.append(str(RUST_IDENTIFIER_VALUES[part]))
+        elif part.endswith("usize") and part[: -len("usize")].rstrip("_").isdigit():
+            rendered.append(part[: -len("usize")].rstrip("_"))
+        else:
+            raise ModelError(f"refusing to evaluate unknown token in ABI expression: {part}")
+    node = compile(" ".join(rendered), "<abi>", "eval")
+    if node.co_names:  # pragma: no cover - defensive, every name was already substituted
+        raise ModelError(f"ABI expression referenced names: {sorted(node.co_names)}")
+    value = eval(node, {"__builtins__": {}}, {})  # noqa: S307 - digits and + * only
+    if not isinstance(value, int):
+        raise ModelError("ABI expression did not evaluate to an integer")
+    return value
+
+
+def derive_account_lengths_from_source(source: str) -> dict[str, int]:
+    body = source.split("pub mod account_len {", 1)
+    if len(body) != 2:
+        raise ModelError("codec source has no account_len module")
+    module = body[1].split("\n}\n", 1)[0]
+    derived: dict[str, int] = {}
+    for declaration in module.split("pub const ")[1:]:
+        name, _, remainder = declaration.partition(":")
+        expression, _, _rest = remainder.partition("=")[2].partition(";")
+        derived[name.strip()] = evaluate_rust_arithmetic(expression)
+    return derived
+
+
+def abi_audit(constants: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Compare the pinned landed arm against the codec on disk. Not part of golden closure."""
+
+    landed = constants[ARM_LANDED]
+    source_path = REPO_ROOT / landed["source"]["codec_path"]
+    notes = [f"pinned commit: {landed['source']['commit']}"]
+    if not source_path.is_file():
+        return notes + [f"codec source not present at {source_path}; audit skipped"], []
+    source = source_path.read_text()
+    digest = sha256_bytes(source_path.read_bytes())
+    if digest == landed["source"]["codec_blob_sha256_at_commit"]:
+        notes.append("working-tree codec digest equals the pinned blob")
+    else:
+        notes.append(
+            "working-tree codec digest differs from the pinned blob "
+            f"({digest}); widths are re-derived below"
+        )
+    derived = derive_account_lengths_from_source(source)
+    drift: list[str] = []
+    for name in LANDED_ACCOUNT_ORDER:
+        account = landed["accounts"][name]
+        rust_name = account["rust_const"].split("::", 1)[1]
+        if rust_name not in derived:
+            drift.append(f"{name}: {account['rust_const']} is gone from the codec")
+            continue
+        if derived[rust_name] != account["bytes"]:
+            drift.append(
+                f"{name}: codec says {derived[rust_name]} bytes, cost lab pins {account['bytes']}"
+            )
+    extra = set(derived) - {
+        landed["accounts"][name]["rust_const"].split("::", 1)[1] for name in LANDED_ACCOUNT_ORDER
+    }
+    for name in sorted(extra):
+        drift.append(f"account_len::{name} exists in the codec and is absent from the cost lab")
+    notes.append(f"re-derived {len(derived)} account_len constants from the codec source")
+    return notes, drift
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -965,12 +2000,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     check = subparsers.add_parser("check", help="validate model and checked-in artifacts")
     check.add_argument("--output", type=Path, default=DEFAULT_GOLDEN)
     subparsers.add_parser("summary", help="print the deterministic derived summary")
+    subparsers.add_parser(
+        "abi-audit",
+        help="re-derive the landed ABI from the codec on disk and report drift",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     constants = load_constants()
+    if args.command == "abi-audit":
+        notes, drift = abi_audit(constants)
+        for note in notes:
+            print(note)
+        for item in drift:
+            print(f"drift: {item}")
+        if drift:
+            raise ModelError("landed ABI arm is stale; re-pin constants.json and regenerate")
+        print("abi-audit passed: landed arm equals the codec on disk")
+        return 0
     rows = generate_rows(constants)
     artifacts = rendered_artifacts(constants, rows)
     if args.command == "generate":

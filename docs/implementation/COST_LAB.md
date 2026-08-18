@@ -1,16 +1,23 @@
 # Cost lab implementation
 
 Status: offline deterministic harness implemented and validated on 2026-08-18  
+Landed-ABI arm added 2026-08-18 (adversarial review P1-F)  
 Source-constant snapshot: 2026-08-17  
+Landed-ABI snapshot: `programs/solana-layout` at commit `efb0ed5`  
 Owned path: `benchmarks/`
 
 ## Outcome
 
-The cost lab now generates 193 deterministic scenarios covering outcome counts
-`n = 2, 4, 8, 16, 24`; internal split, fully external split, one-Egg materialization and
-all-Egg materialization; legacy inline and v0+ALT wire layouts; 4/8/10 KiB dense order pages;
-terminal/TWAP/full accumulator summaries over 1/4/16 pages; and batch verification over
-32/128/512 alternating single-Egg/portfolio orders.
+The cost lab generates 261 deterministic scenarios across three named arms: 193 rows in the
+retained `layout_hypothesis` arm, 56 rows in the `abi_landed` arm, and 12 `abi_differential` rows.
+
+The `layout_hypothesis` arm is the original sketch and is described in this section as it was
+written: outcome counts `n = 2, 4, 8, 16, 24`; internal split, fully external split, one-Egg
+materialization and all-Egg materialization; legacy inline and v0+ALT wire layouts; 4/8/10 KiB
+dense order pages; terminal/TWAP/full accumulator summaries over 1/4/16 pages; and batch
+verification over 32/128/512 alternating single-Egg/portfolio orders. Every finding below it is a
+statement about that hypothesis, not about the landed program; the addendum dated 2026-08-18
+carries the landed arm and the delta between the two.
 
 It intentionally produces two evidence classes:
 
@@ -33,8 +40,13 @@ execution, account copying/serialization, syscalls, and Dragon logic.
 ```text
 python3 benchmarks/cost_lab.py check
 python3 benchmarks/cost_lab.py summary
+python3 benchmarks/cost_lab.py abi-audit
 python3 -m unittest discover -s benchmarks/tests -v
 ```
+
+`abi-audit` re-derives every `account_len` constant from the codec source on disk and refuses when
+the landed arm has gone stale. It is deliberately outside golden closure: goldens pin a commit,
+the audit checks the working tree against that pin.
 
 The checked artifacts are:
 
@@ -48,7 +60,7 @@ Generation uses Python's standard library, exact integers, no random input, and 
 rows. It performs zero RPC calls, validator calls, signatures, submissions, account mutations, or
 package downloads. `check` regenerates the bytes in memory and refuses any golden drift.
 
-## Current findings
+## Findings in the retained hypothesis arm
 
 ### Claim-transition wire and CPI geometry
 
@@ -123,6 +135,120 @@ package default. Folding 1/4/16 page summaries yields legacy messages of 307/406
 widths remain contingent on associative conservative semantics for variance and drawdown; the lab
 must not make an unproved field permanent merely because 272 bytes appears affordable.
 
+## Addendum 2026-08-18: the landed ABI arm (P1-F)
+
+Adversarial review P1-F recorded that the lab's layout values had become hypotheses coexisting
+with a landed ABI, and that no cost conclusion could be attributed to the current layout until the
+lab consumed it. This addendum closes that item. The hypothesis arm is retained under its own
+name; nothing in it was edited, replaced, or quietly re-pointed.
+
+### Where the landed arm comes from
+
+`programs/solana-layout/src/lib.rs` is the single codec owner, pinned at commit `efb0ed5`
+(blob SHA-256 `e0b036b0...`), with the relation bounds from `crates/clutch-batch`. Rather than
+quoting totals, `benchmarks/constants.json` stores each width as the codec's own field terms and
+formula, and `cost_lab.py` refuses to run unless every pinned total equals the sum of its terms.
+`python3 benchmarks/cost_lab.py abi-audit` goes further: it re-derives all fifteen `account_len`
+constants from the Rust source on disk and refuses when the arm has gone stale, so a later ABI
+change turns the cost lab red instead of silently ageing it.
+
+### Landed account inventory
+
+| account | Rust constant | data bytes | package-default rent principal |
+|---|---|---:|---:|
+| Realm | `account_len::REALM` | 70 | 1,378,080 |
+| Profile | `account_len::PROFILE` | 100 | 1,586,880 |
+| Market | `account_len::MARKET` | 726 | 5,943,840 |
+| Hoard | `account_len::HOARD` | 108 | 1,642,560 |
+| Position | `account_len::POSITION` | 220 | 2,422,080 |
+| FeedHead | `account_len::FEED` | 124 | 1,753,920 |
+| OrderPage | `account_len::ORDER_PAGE` | 1,819 | 13,551,120 |
+| SupplyLedger | `account_len::SUPPLY_LEDGER` | 333 | 3,208,560 |
+| Terms | `account_len::TERMS` | 1,304 | 9,966,720 |
+| PriceGrid | `account_len::PRICE_GRID` | 589 | 4,990,320 |
+| Epoch | `account_len::EPOCH` | 328 | 3,173,760 |
+| CandidateRecord | `account_len::CANDIDATE` | 305 | 3,013,680 |
+| FinalPot | `account_len::FINAL_POT` | 262 | 2,714,400 |
+| SettlementReceipt | `account_len::SETTLEMENT_RECEIPT` | 217 | 2,401,200 |
+| Resolution | `account_len::RESOLUTION` | 165 | 2,039,280 |
+| **one instance of each (15)** | | **6,670** | **59,786,400 lamports** |
+
+Of that principal, 13,363,200 lamports is the per-account 128-byte storage overhead, so the
+account count is a first-class capital term and not a rounding detail. A one-instance inventory is
+an accounting unit, not a deployment plan: a live market holds many Positions, pages and receipts.
+
+### The order page stopped being a parameter
+
+The landed page is a 235-byte header plus a dense array of sixteen 99-byte records, so
+`235 + 16 * 99 = 1,819` bytes exactly, and a frozen non-final page must hold exactly sixteen
+records. Page count is therefore forced by order count rather than chosen: 1 order still costs a
+whole page (1,485 bytes of paid zero padding), 17 orders cost two, and `MAX_ORDER_PAGES = 4` with
+`MAX_ORDERS_PER_PAGE = 16` caps one frozen book at `MAX_EPOCH_ORDERS = 64`, which is exactly
+`clutch_batch::MAX_ORDERS`. A 65-order book is a codec refusal, not an expensive case. A full
+four-page book is 54,204,480 lamports of page rent principal, and the frozen epoch state around it
+(Epoch, PriceGrid, CandidateRecord) adds 1,222 bytes and 11,177,760 lamports.
+
+The hypothesis arm's 4/8/10 KiB page trade-off is consequently a statement about a design that no
+longer matches the codec. It is retained for its falsification history and must not be quoted as
+current layout.
+
+### Differential
+
+| object | unit | hypothesis | landed | delta | what changed |
+|---|---|---:|---:|---:|---|
+| Position account | bytes | 192 | 220 | +28 | Same 128-byte 16-outcome balance vector; the landed header is 92 bytes (market, owner, generation, cash and reserved cash, bump, close state) rather than 64. |
+| SupplyLedger account | bytes | 320 | 333 | +13 | Same two u64 totals per outcome; the landed header is 77 bytes rather than 64. |
+| single-Egg order record | bytes | 80 | 99 | +19 | The landed record carries dual 32-byte identities plus a replay generation the sketch had no room for. |
+| portfolio order record | bytes | 208 | absent | - | `relation_v1` admits up to 8 portfolio orders with a 16-slot coefficient vector, but the landed `OrderRecord` stores one outcome index, so no persisted page encoding exists. |
+| order page account | bytes | 8,192 | 1,819 | -6,373 | A fixed 16-record array with cross-page closure fields replaced a variable byte budget. |
+| order page header | bytes | 128 | 235 | +107 | Seven 32-byte identities (market, epoch, order set, page digest, first, last, previous-page-last) were never budgeted. |
+| records per page | records | 100 | 16 | -84 | Any per-page cost now amortizes over six times fewer orders. |
+| orders per book | orders | 512 | 64 | -448 | The 128- and 512-order rows describe several epochs, never one relation instance. |
+| internal-split instruction | bytes | 11 | 74 | +63 | `Intent::Split` names market and owner by 32-byte identity. |
+| materialize-one instruction | bytes | 11 | 107 | +96 | `Intent::Materialize` adds a 32-byte destination and an outcome index. |
+| accumulator full summary | bytes | 272 | absent | - | No summary account exists in the landed family; FeedHead is a 124-byte cursor, not a fold. |
+| landed-only accounts | bytes | absent | 4,298 | - | Twelve landed accounts had no counterpart in the hypothesis arm, so most of the landed rent inventory was previously unmodeled. |
+
+Two of these are structural rather than numeric. The persisted page cannot represent a portfolio
+order that the landed relation admits, which is a seam between `clutch-batch` and
+`programs/solana-layout` rather than a cost result. And the accumulator family remains entirely
+hypothetical, so its summary widths inherit no landed support at all.
+
+### Landed intent payloads
+
+Nine intents have landed encoded widths: CreateMarket 139, Split 74, Merge 74, Materialize 107,
+Dematerialize 107, FeedAdvance 74, PlaceOrder 165, CancelOrder 130 and SettlePage 68 bytes, all
+far inside `MAX_INTENT_BYTES = 256`. The lab emits real transaction bytes around those exact
+payloads, so the payload column is landed. The account set around each payload is not: those
+counts stay explicitly named `layout_hypothesis_not_landed`.
+
+### What is still a hypothesis, and what is still unmeasured
+
+- **Wire format.** No landed Solana message exists. Every transaction byte count in either arm is
+  the lab's own synthetic legacy/v0 framing with placeholder signatures and keys.
+- **Account topology.** Which accounts an instruction locks, which are writable, which live in a
+  lookup table, and whether one intent is exactly one instruction are all unlanded.
+- **Instruction bytes in composite paths.** Payload widths are landed for the nine intents. There
+  is no landed instruction for candidate verification, so the landed relation rows report work and
+  rent and emit no wire byte count rather than inventing a payload.
+- **Everything about execution.** No Dragon SBF program exists. There is still no measured CU,
+  heap, stack, account-copy, write-contention, or landing figure in any arm; the harness refuses
+  any landed or differential output key ending in `_cu`.
+- **Account lifecycle.** Instance counts per market, reallocation, closure and rent refunds are
+  not modeled, so the inventory is a unit price list and not a capital plan.
+- **The accumulator arm in full**, plus the summary algebra it depends on.
+
+A landed byte width is an exact encoding fact. It is not evidence that the operation executes,
+fits, or lands.
+
+### Promotion path is unchanged
+
+The five-step promotion path below is unaffected by this addendum: step 1 is now partly done for
+account state (the codec is frozen and the lab consumes it) and untouched for messages, so the
+differential comparison against a pinned Solana SDK serializer still has to happen before any
+packet or lock conclusion is drawn from these rows. Steps 2 through 5 stand exactly as written.
+No result here opens Gate L0 or authorizes devnet or mainnet activity.
+
 ## Facts, pins, and model assumptions
 
 ### External facts
@@ -160,14 +286,16 @@ The following values are deliberately not called facts:
 - 11-byte claim instructions, `88 + 8n` byte candidate-verification instructions, and which
   accounts live inline versus in one lookup table;
 - a 64-byte Position header, 64-byte SupplyLedger header, 128-byte page header, 80-byte single-Egg
-  record, and `80 + 8n` byte portfolio record;
+  record, and `80 + 8n` byte portfolio record (all superseded by the landed arm in the 2026-08-18
+  addendum, and retained here only as the design arm's own record);
 - 120/160/272-byte terminal/TWAP/full summaries and their scalar combine counts; and
 - one signature, one top-level Dragon instruction, existing destination accounts, no compute-budget
   instruction, and no ATA creation.
 
 They are centralized in `benchmarks/constants.json`, labeled `layout_hypothesis`, and guarded by
-goldens so any change is explicit. Actual fixed ABI work should replace them, not quietly add a
-second source of truth.
+goldens so any change is explicit. Where a landed ABI now exists, it lives beside them in the
+`abi_landed` arm with its own source pin and its own rows, and the difference is published rather
+than left implicit.
 
 ## Falsifiers and promotion path
 
@@ -199,14 +327,22 @@ Gate L0 or authorizes devnet/mainnet activity.
 
 Validated with Python 3.14.6 on Apple arm64 macOS:
 
-- 193 unique scenario IDs with exact family counts;
+- 261 unique scenario IDs with exact family counts, of which the retained `layout_hypothesis` arm
+  is exactly 193 and is asserted to stay that size;
 - every emitted transaction length equals the independent analytical sum;
 - every `n=24` row is refused by V1;
 - every external split reports `n+1` Token CPIs and `n+2` trace entries;
 - every batch row authenticates exactly its input order count;
 - short-vector boundary encodings and non-splitting page packing have adversarial tests;
+- every landed width equals the sum of the codec field terms it was transcribed from, and
+  `abi-audit` re-derives all fifteen `account_len` constants from the Rust source with no drift;
+- the landed order page is exactly its header plus sixteen records, a 65-order book is refused,
+  and no landed relation row exceeds `MAX_ORDERS = 64`;
+- `n = 24` is refused in the landed arm by the codec's own `check_count` bound as well as by V1
+  policy;
+- no landed or differential row carries a compute-unit field;
 - golden JSON/CSV/Markdown and checksums reproduce byte-for-byte; and
-- 12/12 unit tests pass.
+- 28/28 unit tests pass (the original 12 plus 16 covering the landed and differential arms).
 
 No RPC, validator, wallet, key, purchase, deployment, root manifest, or external state was used or
 changed.

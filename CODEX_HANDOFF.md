@@ -187,7 +187,7 @@ proof has been run.
   shared-feed capitalization, failure incentives, and price collapse. The
   current run explores 409 solvency states and 1,338 transitions and rejects 91
   forbidden pool debits. Parameters, including `kappa = 1/250`, are hypotheses.
-- **MODEL:** `benchmarks` contains 193 deterministic synthetic wire/account/CPI/
+- **MODEL:** `benchmarks` contains 193 (2026-08-19: now 261, incl. the landed-ABI arm) deterministic synthetic wire/account/CPI/
   rent/accumulator/batch scenarios and 12 passing tests. These are analytical
   layout hypotheses and pinned external constants, not SBF compute measurements.
 - **IMPLEMENTED:** the tiny E0 toolchain probe builds identical source bytes on
