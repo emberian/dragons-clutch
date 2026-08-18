@@ -27,6 +27,11 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- ORDERS landed: PlaceOrder byte-exact; SettlePage blocked with MEASURED
+  frames (relation needs 39-45KB vs 4KB) -> streaming-relation API +
+  page->book projection are the next design round; cancellation needs a
+  tombstone slot kind; portfolio placement is a wire gap. Pushed.
+
 - Merge implemented at the semantic owner + program mirror; round-trip
   byte identity; SBF_BRINGUP status now truthful (8 families host-diff,
   Split-only SVM pending regen); pushed.
