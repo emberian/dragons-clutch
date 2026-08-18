@@ -3,8 +3,11 @@
 > **Update 2026-08-19:** the evidence gate specified here has LANDED in
 > `programs/solana-reference` (`apply_with_evidence`): resolution is now
 > evidence-gated, with the evidence-absent path still returning
-> `ResolutionEvidenceUnavailable`. V1 pins the ordinal partition and refuses
-> threshold boundary tables (obligation 18 - needs a TermsAccount revision).
+> `ResolutionEvidenceUnavailable`. V1 pins the ordinal partition; a threshold
+> boundary table is inexpressible in the frozen TermsAccount — there is no
+> field to carry one, so a threshold market cannot resolve here, and every
+> non-pinned registry value that the terms *can* carry is refused
+> (obligation 18 - needs a TermsAccount revision).
 > Status lines below describing an unconditional refusal or "not implemented
 > anywhere" describe the pre-landing state; §2.1's digest claim is superseded
 > by the landed TermsAccount.

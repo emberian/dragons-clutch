@@ -218,6 +218,15 @@ Relative to obligations 1-4 of `SOLANA_REFERENCE_ADAPTER.md`:
     [Toolchain and offline constraints](#toolchain-and-offline-constraints)), so
     `process` cannot run on the host at all; the SVM differential is the only
     test of it.
+13. The `SupplyLedgerAccount` the same change set added to the offline
+    adapter's state has no on-chain counterpart. The nine-account set carries
+    no supply-ledger PDA; the program checks the closed single-position closure
+    directly as `internal + external == total_supply`, which is equivalent for
+    one position, and the harness supplies the ledger bytes only to the offline
+    adapter. The six-account differential therefore cannot observe
+    supply-ledger drift, and a future instruction set that persists the
+    two-term ledger on-chain must add the account, its seed, and its
+    comparison.
 
 ## How the transition is executed
 
