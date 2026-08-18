@@ -358,3 +358,10 @@ nothing in the gate reads that field.
 
 This is a named artifact of simulate-only execution, not a modelling choice.
 Under a committing runtime it would be one head.
+
+
+> **Clean-tree ELF record (2026-08-19):** full gate re-run at commit
+> `5c88505` on a clean tree: bring-up PASS, lifecycle PASS, both
+> falsifiability self-checks fired. ELF sha256
+> `d8a9267c75ac0d4e8021320f3009c09532fd0cfda5a70508bd6c8312b400975c`. This supersedes digests above recorded
+> against dirty trees.
