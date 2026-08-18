@@ -29,6 +29,15 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- TOKEN-CPI landed: real Token-2022 mint/burn on a real bank, exact
+  deltas, ~95K CU/leg, extension refusals live, seed bug caught; the
+  out-of-band-burn DoS measured as the cutover argument. Pushed.
+- Clean-tree gates: bring-up + lifecycle PASS at 5c88505, ELF recorded.
+- Grand umbrella: 400 Rust + 152 Python tests green, both traces
+  identical, goldens OK; strict manifest 33/33 pushed (c3517a3).
+- Closing drift review (waves 5-8, both repos) running - produces the
+  consolidated remaining-gap ledger and the single morning-decision list.
+
 - THE LIFECYCLE WALK PASSES (section-10 items 1-10, one SVM gate,
   terminal identity closed, self-falsifying). Sharpest named gap: no
   endowment instruction. Pushed.
