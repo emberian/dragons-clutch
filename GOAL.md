@@ -29,6 +29,13 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- THE LIFECYCLE WALK PASSES (section-10 items 1-10, one SVM gate,
+  terminal identity closed, self-falsifying). Sharpest named gap: no
+  endowment instruction. Pushed.
+- abi-audit resurrected + hardened (34 owed drift lines delivered);
+  re-pinned to v4; goldens stable. Pushed.
+- INTEGRATE landed earlier this wave; TOKEN-CPI is the last lane out.
+
 - INTEGRATE landed: orders on v4, CancelOrder + portfolio placement
   live, write path -115 lines net; 113 tests. Pushed.
 
