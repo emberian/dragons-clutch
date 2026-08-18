@@ -1,15 +1,18 @@
 # `clutch-sbf` — bring-up SBF program
 
-A deployable SBF program with a routed instruction set of which exactly one
-instruction, `Split`, is implemented, so that the account-facing half of
-Dragon's Clutch can be executed by a real SVM rather than only reasoned about
-offline.
+A deployable SBF program with a routed instruction set: Split, Merge,
+Materialize, Dematerialize, CreateMarket, FeedAdvance, evidence-gated
+Resolve, RedeemInternal, and PlaceOrder are implemented, each mirroring the
+offline reference adapter with byte-level differential tests; the SVM harness
+drives all reference-oracled families through a real bank byte-exactly.
 
-This is **bring-up evidence, not a program**. It is not complete, not audited,
-and not authorization to deploy anywhere. `Resolve` and `RedeemInternal` refuse
-here exactly as they refuse in `programs/solana-reference`, and the four
-unimplemented instruction families are honest stubs: they read no account, write
-no byte, and report no success.
+This is **bring-up evidence, not a finished program**. It is not complete,
+not audited, and not authorization to deploy anywhere. `Resolve` currently
+exceeds the per-transaction compute ceiling (measured; the terms facts API
+fix is in flight). `CancelOrder` and `SettlePage` are honest refusals with
+recorded findings (cancellation is unrepresentable in the frozen page format;
+the batch relation does not fit an SBF frame pending the streaming verifier).
+A refusal reads no account, writes no byte, and reports no success.
 
 - `program/` — the SBF program. No semantic or economic logic: it authenticates
   hostile `AccountInfo` metadata, derives and checks program addresses, decodes

@@ -6,7 +6,7 @@
 //! ## What this is
 //!
 //! A deployable SBF program with a routed instruction set of which exactly
-//! **one** instruction, `Split`, is implemented, so that the account-facing half
+//! the instruction set is implemented (see [`instructions`]), so that the account-facing half
 //! of the protocol can be executed by a real SVM rather than only reasoned
 //! about offline.  It exists to produce bring-up evidence for
 //! `docs/implementation/SBF_BRINGUP.md`.
@@ -15,8 +15,8 @@
 //!
 //! It is not a complete program, is not audited, carries no token or CPI code,
 //! and is not a deployment authorization.  Four of the five instruction-family
-//! modules are honest stubs that read no account, write no byte, and refuse.
-//! `Resolve` and `RedeemInternal` refuse here exactly as they refuse in the
+//! CancelOrder and SettlePage are honest refusals with recorded findings.
+//! `Resolve` and `RedeemInternal` are evidence-gated exactly as in the
 //! offline reference adapter, and `CreateMarket` refuses because no authority
 //! model exists.  The PDA seed schema in [`seeds`] is a **proposal**, not a
 //! frozen ABI.
@@ -38,7 +38,7 @@
 //! | [`seeds`] | the proposed PDA seed schema for all 15 protocol accounts plus the 3 reference-only ones |
 //! | [`accounts`] | hostile-metadata authentication, address comparison, and every account decoder |
 //! | [`dispatch`] | request decoding and routing to exactly one instruction family |
-//! | [`instructions`] | one module per instruction family; only `split` is implemented |
+//! | [`instructions`] | one module per instruction family; see each module's status |
 //!
 //! The per-lane ownership boundaries are tabulated in
 //! `docs/implementation/SBF_BRINGUP.md`.
