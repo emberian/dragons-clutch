@@ -25,6 +25,7 @@
 //! the SVM relation.
 
 pub mod relation_v1;
+pub mod relation_v1_stream;
 
 pub const MAX_ORDERS: usize = 64;
 pub const MAX_GRID_TICKS: usize = 64;

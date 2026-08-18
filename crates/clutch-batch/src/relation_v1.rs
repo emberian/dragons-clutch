@@ -497,7 +497,7 @@ impl OrderV1 {
     }
 
     /// Reservation in price units: what the owner locked when placing.
-    fn reservation_price_units(&self, price_scale: u64) -> Result<u128, ErrorV1> {
+    pub(crate) fn reservation_price_units(&self, price_scale: u64) -> Result<u128, ErrorV1> {
         match self {
             OrderV1::SingleEgg(o) => match o.side {
                 Side::Buy => Ok((o.quantity as u128) * (o.limit_price as u128)),
@@ -1459,7 +1459,7 @@ struct DerivationState {
     honored: [bool; MAX_ORDERS],
 }
 
-fn mask_bit(mask: u64, index: usize) -> bool {
+pub(crate) fn mask_bit(mask: u64, index: usize) -> bool {
     index < 64 && (mask >> index) & 1 == 1
 }
 
@@ -2122,7 +2122,11 @@ fn fee_total_bps_units(
     Ok(total)
 }
 
-fn scaled_reservation(order: &OrderV1, units: u64, price_scale: u64) -> Result<u128, ErrorV1> {
+pub(crate) fn scaled_reservation(
+    order: &OrderV1,
+    units: u64,
+    price_scale: u64,
+) -> Result<u128, ErrorV1> {
     match order {
         OrderV1::SingleEgg(o) => (units as u128)
             .checked_mul(o.limit_price as u128)
@@ -2143,6 +2147,77 @@ fn mix(state: &mut u64, value: u64) {
     *state = (x ^ (x >> 31)).rotate_left(29).wrapping_add(*state);
 }
 
+/// The streaming accumulator behind [`candidate_digest`].
+///
+/// The digest has exactly one owner: both the batch verifier and the streaming
+/// verifier drive this fold, in the same feed sequence, so no code path can
+/// fold a candidate identity differently.  It is a deterministic host-model
+/// identity, never a cryptographic commitment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DigestFoldV1 {
+    high: u64,
+    low: u64,
+}
+
+impl DigestFoldV1 {
+    /// The frozen initialization vector.
+    pub(crate) const NEW: Self = Self {
+        high: 0x243F_6A88_85A3_08D3,
+        low: 0x1319_8A2E_0370_7344,
+    };
+
+    /// Fold one value.
+    pub(crate) fn feed(&mut self, value: u64) {
+        mix(&mut self.high, value);
+        mix(&mut self.low, value.rotate_left(32) ^ self.high);
+    }
+
+    /// Fold the frozen domain and the candidate head (everything the digest
+    /// binds before the fill vector): domain identity, policy code, order
+    /// length, prices, and the virtual pair.
+    pub(crate) fn feed_head(
+        &mut self,
+        domain: &RelationDomainV1,
+        order_len: u8,
+        prices: &[u64; MAX_OUTCOMES],
+        virtual_split: u64,
+        virtual_merge: u64,
+    ) {
+        self.feed(domain.relation_version as u64);
+        self.feed(domain.market_id);
+        self.feed(domain.book_id);
+        self.feed(domain.epoch);
+        self.feed(domain.policy_id);
+        self.feed(domain.order_set_id);
+        self.feed(domain.outcome_count as u64);
+        self.feed(domain.owner_count as u64);
+        self.feed(domain.price_scale);
+        self.feed(domain.remainder_seed);
+        self.feed(domain.policy.code());
+        self.feed(order_len as u64);
+        let mut i = 0usize;
+        while i < MAX_OUTCOMES {
+            self.feed(prices[i]);
+            i += 1;
+        }
+        self.feed(virtual_split);
+        self.feed(virtual_merge);
+    }
+
+    /// Fold one pairing slice.
+    pub(crate) fn feed_slice(&mut self, slice: &PairingSliceV1) {
+        self.feed(leg_ref_code(slice.buy_ref));
+        self.feed(leg_ref_code(slice.sell_ref));
+        self.feed(slice.outcome as u64);
+        self.feed(slice.quantity);
+    }
+
+    /// The folded identity.
+    pub(crate) fn digest(&self) -> u128 {
+        ((self.high as u128) << 64) | (self.low as u128)
+    }
+}
+
 /// The canonical candidate digest: a deterministic, non-cryptographic identity
 /// over the frozen domain, the free coordinates, the fills, and — under the
 /// explicit-slice variant — the submitted decomposition.
@@ -2151,50 +2226,29 @@ pub fn candidate_digest(
     candidate: &CandidateV1,
     pairing: Option<&PairingWitnessV1>,
 ) -> u128 {
-    let mut high = 0x243F_6A88_85A3_08D3u64;
-    let mut low = 0x1319_8A2E_0370_7344u64;
-    let mut feed = |value: u64| {
-        mix(&mut high, value);
-        mix(&mut low, value.rotate_left(32) ^ high);
-    };
-    feed(domain.relation_version as u64);
-    feed(domain.market_id);
-    feed(domain.book_id);
-    feed(domain.epoch);
-    feed(domain.policy_id);
-    feed(domain.order_set_id);
-    feed(domain.outcome_count as u64);
-    feed(domain.owner_count as u64);
-    feed(domain.price_scale);
-    feed(domain.remainder_seed);
-    feed(domain.policy.code());
-    feed(candidate.order_len as u64);
-    let mut i = 0usize;
-    while i < MAX_OUTCOMES {
-        feed(candidate.prices[i]);
-        i += 1;
-    }
-    feed(candidate.virtual_split);
-    feed(candidate.virtual_merge);
+    let mut fold = DigestFoldV1::NEW;
+    fold.feed_head(
+        domain,
+        candidate.order_len,
+        &candidate.prices,
+        candidate.virtual_split,
+        candidate.virtual_merge,
+    );
     let mut j = 0usize;
     while j < MAX_ORDERS {
-        feed(candidate.fills[j]);
+        fold.feed(candidate.fills[j]);
         j += 1;
     }
-    feed(candidate.honored_aon_mask);
+    fold.feed(candidate.honored_aon_mask);
     if let Some(witness) = pairing {
-        feed(witness.len as u64);
+        fold.feed(witness.len as u64);
         let mut k = 0usize;
         while k < witness.len as usize {
-            let slice = witness.slices[k];
-            feed(leg_ref_code(slice.buy_ref));
-            feed(leg_ref_code(slice.sell_ref));
-            feed(slice.outcome as u64);
-            feed(slice.quantity);
+            fold.feed_slice(&witness.slices[k]);
             k += 1;
         }
     }
-    ((high as u128) << 64) | (low as u128)
+    fold.digest()
 }
 
 fn leg_ref_code(leg: LegRefV1) -> u64 {
