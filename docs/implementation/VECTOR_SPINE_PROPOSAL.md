@@ -469,6 +469,12 @@ none is fixed by this document, and none may be closed by editing a vector.
   (clone/apply/commit staging) both promise the opposite. The manifest therefore
   needs an explicit `post_state_on_error` field per surface (§3.4, COMP-6), and
   the kernel should state its contract in rustdoc.
+  *Resolved in code 2026-08-18 (commit d60ccf3), after this proposal was
+  written: every kernel transition now completes every check, prospective
+  invariant evaluation included, before its first write, and each rustdoc
+  states the on-`Err`-unchanged contract. The `post_state_on_error` manifest
+  field remains useful — it is what pins that contract per surface — but the
+  flag's description of `split` no longer matches the landed kernel.*
 - **R8 — `InsufficientCollateral` in `merge` is reachable only via check
   ordering.** `merge` tests `collateral < quantity` before it tests the per-outcome
   balances. Because weights sum to the denominator, any state passing the balance

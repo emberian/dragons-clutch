@@ -1041,3 +1041,10 @@ These are design-document corrections discovered by exhaustive falsifiers,
 not code weakenings: the accept set only shrank or stayed equal at every
 deviation. The feasibility argument and constructor invariant remain design
 arguments with oracle evidence, not machine-checked theorems.
+
+Vertical-model integration record (commit f671156): the landed coupled golden
+trace is `research/vertical-model/golden/coupled.trace`, not the
+`golden/relation_v1.trace` named in §14.3's checklist above; and the R-b
+price-unit/atom rounding pot is carried per ledger by the model but never
+drawn on (the model settles in exact price units), so R-b's conversion
+boundary is recorded, not exercised, on that path.

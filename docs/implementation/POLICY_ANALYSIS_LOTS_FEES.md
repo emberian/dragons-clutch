@@ -254,6 +254,12 @@ every candidate, and is zero-state. It does not replace a candidate — an
 candidate composes with it and wave 2 should test it once, not three times.
 (EXP-LOT-X1.)
 
+Executed correction (2026-08-18): EXP-LOT-X1 passed, and the lab found that
+under candidate (b) the primitive itself must be lot-gated at `L_split` or it
+re-creates sub-lot internal balances and breaks (b)'s internal-closure claim —
+see [`ECONOMICS_LAB.md`](ECONOMICS_LAB.md) addendum finding 1. "Composes with
+every candidate" therefore reads "composes, with (b) gating it like `merge`".
+
 ### 1.6 Comparison and lean
 
 | Axis | (a) one-hot V1 | (b) lots | (c) remainder credit |

@@ -111,11 +111,11 @@ if command -v verus >/dev/null 2>&1; then
     verus_state=NOT_RUN
     say "verus=AVAILABLE"
     say "verus_version=$(verus --version 2>&1 | head -n 1)"
-    say "verus_probe=NOT_RUN (invocation is pinned in the report only after the exact local Verus release is selected)"
+    say "verus_probe=NOT_RUN (the authoritative pinned invocation is toolchain/scripts/run_verus.sh; its current result is recorded in toolchain/PINNED_PROOF_TOOLS.md)"
 else
     verus_state=BLOCKED
-    say "verus=UNAVAILABLE"
-    say "verus_probe=BLOCKED"
+    say "verus=UNAVAILABLE (on PATH; this lab checks PATH only — the pinned install is exercised by toolchain/scripts/run_verus.sh)"
+    say "verus_probe=BLOCKED (see toolchain/PINNED_PROOF_TOOLS.md for the pinned install and its current failing result)"
 fi
 
 say "compatibility=HOST_AND_SBF_PASS_VERUS_$verus_state"
