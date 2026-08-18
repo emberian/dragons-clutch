@@ -1,12 +1,16 @@
-# SBF bring-up: one instruction, executed by a real SVM
+# SBF bring-up: the instruction set, executed against the reference oracle
 
-Status: **bring-up evidence for a single instruction (`Split`), inside a routed
-instruction set whose other four families are honest stubs**. Not a complete
-program, not audited, not a deployment authorization, and not mainnet, devnet,
-or testnet evidence. `Resolve` and `RedeemInternal` refuse here exactly as they
-refuse in the offline reference adapter, `CreateMarket` refuses because no
-authority model exists, and every remaining instruction refuses as not yet
-implemented. A stub reads no account, writes no byte, and reports no success.
+Status: **host-differential evidence for eight instruction families**
+(Split, Merge, Materialize, Dematerialize, CreateMarket, FeedAdvance,
+evidence-gated Resolve, RedeemInternal), each mirroring the offline
+reference adapter's semantics with byte-level differential tests, plus
+SVM execution evidence for Split only (the recorded run predates the
+ten-account CLO-DELTA plane; the harness fixtures are stale and the SVM
+leg for every family is owed to the regeneration wave). Order placement,
+cancellation, and batch settlement remain honest stubs pending the
+orders_batch lane. Not a complete program, not audited, not a deployment
+authorization, and not mainnet, devnet, or testnet evidence. A stub
+reads no account, writes no byte, and reports no success.
 
 This document records what the `programs/clutch-sbf` lane built, what actually
 ran, what failed, and what is deferred. Numbers below are from the run recorded
@@ -65,14 +69,50 @@ reference crate, and nothing else:
 clutch_solana_reference::KernelAccount::encode
 clutch_solana_reference::KernelAccount::decode
 clutch_solana_reference::KernelAccount::validate_shape
+clutch_solana_reference::ExternalAccount::encode
 clutch_solana_reference::ExternalAccount::decode
 clutch_solana_reference::ReplayAccount::encode
 clutch_solana_reference::ReplayAccount::decode
 clutch_solana_reference::Request::decode
+clutch_solana_reference::resolution::derive_payout
+clutch_solana_reference::resolution::ResolutionTerms::from_market_terms
+clutch_solana_reference::resolution::ResolutionTerms::validate
+clutch_solana_reference::resolution::ResolutionTerms::cell_of
+clutch_solana_reference::resolution::ResolutionTerms::cell_of_ratio
 ```
 
+`ExternalAccount::encode` joined the list when the seam plane grew
+`Materialize`/`Dematerialize` and began writing the shadow rather than only
+reading it. The five `resolution::` symbols are the *pure* terms-to-payout
+derivation, which the observation and resolution plane calls directly; that
+module owns no account bytes and no evidence plane, so calling it is not the
+offline `apply` leaking in. `apply`, `apply_with_evidence`, `apply_inner`,
+`validate_market_init`, `validate_position_init`, `resolve_from_evidence`,
+`redeem_from_evidence`, and `DecodedState::decode` are all absent.
+
+**A caveat about that check.** `cargo-build-sbf` emits platform-tools frame
+diagnostics for eight functions that are *not* in the map:
+`clutch_solana_reference::{apply_inner, DecodedState::decode,
+validate_market_init, validate_position_init, resolve_from_evidence,
+redeem_from_evidence}` and
+`clutch_solana_layout::OrderPageAccount::{decode, decode_on_grid}`. The stack
+analyser runs over the objects before `--gc-sections` drops them, so these are
+diagnostics about dead code that never reaches the image — the map is the
+authority on what is in the artifact, not the diagnostic list. They are still
+worth reading as a resource signal for the day any of those functions *does*
+need an on-chain counterpart, and the `OrderPageAccount` pair is the same stack
+finding that blocks the `orders_batch` family. **No `clutch_sbf` function
+produces a frame diagnostic.**
+
 `clutch-accumulator` entered the graph late, as a new dependency of
-`clutch-solana-reference`. Not one of its symbols reaches the ELF either.
+`clutch-solana-reference`. It used to reach the ELF with **no** symbols; it now
+reaches it with thirteen (`WindowAccumulator::{observe, absorb, result}`,
+`WindowDomain::{new, check_against}`, `WindowResult::check_domain`,
+`FeedIdentity::new`, `Summary::{append, combine, validate}`, `combine_extrema`,
+and two byte helpers), because the observation and resolution plane drives the
+accumulator's `Open -> Mature -> Sealed` state machine on-chain rather than
+re-deriving its algebra. That is a deliberate dependency, not a leak, and it is
+why `clutch-accumulator` is now named directly in the program's `Cargo.toml`.
 
 Reproduce with
 `RUSTFLAGS="-C link-arg=-Map=<file>" cargo-build-sbf --manifest-path programs/clutch-sbf/program/Cargo.toml`.
@@ -91,7 +131,7 @@ two lanes editing one file. Every path below is under
 | `accounts.rs` | hostile-metadata authentication, PDA comparison, and every account decoder | shared — foundation lane |
 | `dispatch.rs` | request decoding and routing on the action tag | shared — one arm per family |
 | `instructions/split.rs` | `Intent::Split` | **implemented** |
-| `instructions/merge_materialize.rs` | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` | one lane, stub today |
+| `instructions/merge_materialize.rs` | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` | **implemented** — all three, through the `split.rs` seam plane |
 | `instructions/market_init.rs` | `Intent::CreateMarket` | one lane, stub today |
 | `instructions/observe_resolve.rs` | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` | one lane, stub today |
 | `instructions/orders_batch.rs` | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SettlePage` | one lane, **blocked**, see below |
@@ -132,14 +172,31 @@ in which case this program mirrors that reason exactly:
 | --- | --- | --- |
 | `CreateMarket` | `AuthorizationUnavailable` `0x000f` | no authority model exists; code is not the missing part |
 | `Resolve`, `RedeemInternal` | `ResolutionEvidenceUnavailable` `0x0010` | the typed evidence plane has no on-chain counterpart, and the fail-closed default must stay a missing code path |
-| `Merge`, `Materialize`, `Dematerialize` | `NotYetImplemented` `0x0017` | the offline adapter implements all three; only the account plane is missing |
+| `Merge`, `Materialize`, `Dematerialize` | — **implemented**, no blanket refusal | see below |
 | `FeedAdvance` | `NotYetImplemented` `0x0017` | nothing structural is missing |
 | `PlaceOrder`, `CancelOrder`, `SettlePage` | `NotYetImplemented` `0x0017` | no adapter, offline or on-chain, joins these layouts to a transition |
 
 `Merge`, `Materialize`, and `Dematerialize` previously refused
-`UnsupportedInstruction` (`0x000e`). That code says "outside this program's
-scope", which was true of a one-instruction probe and is not true of a routed
-instruction set; `NotYetImplemented` is the honest replacement.
+`UnsupportedInstruction` (`0x000e`), then `NotYetImplemented` (`0x0017`). All
+three now run through the ten-account seam plane of `instructions/split.rs` and
+refuse only what the transition itself refuses.
+
+**Correction.** This table used to justify that row with "the offline adapter
+implements all three". For `Merge` that sentence was **wrong** and had been
+wrong since it was written: `clutch_solana_reference::apply_inner` had no
+`Intent::Merge` arm at all, so the intent fell through to
+`Err(Error::UnsupportedIntent)` — this despite `clutch_kernel::MarketState::merge`
+existing and despite PROJECT.md's central promise that a complete set can always
+be recombined into its collateral before resolution. The program mirrored the
+refusal rather than accepting a transition its own oracle refused, and left an
+alarm test (`merge_is_refused_by_both_adapters`) designed to fail the day the
+reference grew the arm. The reference has since grown it — with the cash
+direction named, which was the missing semantics — the alarm fired, and both
+sides now implement `Merge` as the exact inverse of `Split`. The two decisions
+that are not sign flips (no collateral-cap check on the way down; the cash
+credit lands *after* the kernel step) are recorded in
+[`SOLANA_REFERENCE_ADAPTER.md`](SOLANA_REFERENCE_ADAPTER.md) and in the
+`merge_materialize.rs` module docs.
 
 ## Proposed PDA seed schema
 
@@ -202,10 +259,16 @@ aggregate — so those two are checked by address only; that gap is listed under
 
 ## Instruction and account set
 
-One *implemented* instruction, `Split`, carried in the reference adapter's
-`Request` envelope (`0xd1`, version, u64 sequence, layout action, `u16` length,
-frozen `Intent` bytes) and owned by `instructions/split.rs`. Its account list is
-fixed at exactly nine, in this order, and a different count refuses:
+The **seam plane** carries all four Hoard/Position intents — `Split`, `Merge`,
+`Materialize`, `Dematerialize` — in the reference adapter's `Request` envelope
+(`0xd1`, version, u64 sequence, layout action, `u16` length, frozen `Intent`
+bytes). One account list serves all four, because the offline reference adapter
+routes all four through one `TransitionMetadata` / `StateBytes` /
+`ExpectedBindings` triple. The list, the check order, and the write-back live in
+`instructions/split.rs`, and `instructions/merge_materialize.rs` calls into
+them; a second copy of the list would be a second place for the seam's writable
+set to drift. The list is fixed at exactly ten, in this order, and a different
+count refuses:
 
 | # | role | signer | writable |
 | --- | --- | --- | --- |
@@ -218,23 +281,36 @@ fixed at exactly nine, in this order, and a different count refuses:
 | 6 | kernel aggregate | no | yes |
 | 7 | external shadow | no | yes |
 | 8 | replay sequence | no | yes |
+| 9 | supply ledger | no | yes |
 
-The external-balance shadow is **not** omitted. It could have been — `Split`
-does not change it — but the closed single-position aggregate-closure check
-(`internal + external == total_supply`) is only meaningful with it present, and
-keeping it makes the differential an exact six-account byte comparison.
+The external-balance shadow is **not** omitted. It could have been — neither
+`Split` nor `Merge` changes it — but the CLO-DELTA-V1 obligations are stated
+over *both* ledger terms, so C1's two-term closure and C2's representation bound
+need it present, and keeping it makes the differential an exact seven-account
+byte comparison.
+
+The supply ledger at index 9 is the tenth account, appended after the replay
+account exactly as `ExpectedBindings::supply` is the last state binding of the
+reference adapter. It arrived with the CLO-DELTA-V1 port; the retired
+single-position equality `internal + external == total_supply` that preceded it
+made a market holding a second position unrepresentable.
+
+The other instruction families (`market_init`, `observe_resolve`,
+`orders_batch`) own their own account planes; this section describes the seam
+plane only.
 
 ### Checks the program performs
 
 Metadata, before any borrow: exact account count; actor signature; pairwise key
-distinctness across all nine roles (including actor-versus-state aliasing);
-program ownership of all eight state accounts; non-executable bit; declared
+distinctness across all ten roles (including actor-versus-state aliasing);
+program ownership of all nine state accounts; non-executable bit; declared
 writability per role, including refusing a *writable* Realm or Profile; exact
 data length per role.
 
 Derivation: canonical address and canonical bump for Realm, Market, Hoard,
-Position, external shadow, and replay; canonical address for Profile and the
-kernel aggregate; and `MarketAccount::hoard_bump` against the derived Hoard bump.
+Position, external shadow, replay, and the supply ledger; canonical address for
+Profile and the kernel aggregate; and `MarketAccount::hoard_bump` against the
+derived Hoard bump.
 
 Decoding: every account through its frozen codec, which re-checks length,
 discriminator, version, enums, identities, and canonical padding.
@@ -243,26 +319,37 @@ Linkage, mirroring `validate_links` in the offline adapter and adding the
 Realm/Profile edges that the offline adapter only checks at market
 initialization: Realm/Profile/Market identity agreement, profile version
 agreement, `realm.max_outcomes == MAX_OUTCOMES`, `outcome_count <=
-max_outcomes`, Market/Hoard/Position/kernel/external/replay identity agreement,
+max_outcomes`, Market/Hoard/Position/kernel/external/replay/ledger identity
+agreement, Realm and outcome-count agreement with the ledger,
 owner and generation agreement across Position, external shadow, and replay,
 lifecycle-versus-phase agreement, `lifecycle <= 1`, payout outcome count against
 market outcome count, and outcome count within the kernel bound.
 
 State: zero padding beyond the active outcome count in every balance vector;
-aggregate closure before the transition and again after it; exact replay
-sequence and a checked increment.
+the CLO-DELTA-V1 obligations C1 (two-term closure against the kernel aggregate)
+and C2 (representation bound on the presented triple) before the transition and
+again after it, with C3 (the ledger moved by exactly the position delta) in
+between; exact replay sequence and a checked increment.
 
 Transition: signer identity equal to `position.owner`; intent market and owner
-bound to the stored accounts; `lifecycle == 0` and `close_state == 0`; checked
-collateral cap; checked position-cash debit; then `clutch_kernel`'s
-`MarketState::split`, which runs its own invariant check over the prospective
+bound to the stored accounts. For `Split`: `lifecycle == 0` and
+`close_state == 0`; checked collateral cap; checked position-cash debit; then
+`clutch_kernel`'s `MarketState::split`. For `Merge`: the same phase discipline;
+**no** cap check, because a merge lowers the hoard and cannot cross a ceiling
+the pre-state was under; then `MarketState::merge`; then the checked
+position-cash *credit*, which follows the kernel step because it is the
+consequence of a burn rather than the precondition of a mint. For `Materialize`
+and `Dematerialize`: the caller-named destination or source must equal the
+already-derived external-shadow address, then the matching kernel transition.
+Every `MarketState` transition runs its own invariant check over the prospective
 state before its first write.
 
-Write-back: Hoard, Position, kernel aggregate, and replay are re-encoded through
-their codecs. Market and the external shadow are left untouched because `Split`
-changes neither; the differential still compares all six against the reference
-adapter's re-encoded post-state, so a codec that failed to round-trip would fail
-the comparison rather than be hidden by a rewrite.
+Write-back: Hoard, Position, kernel aggregate, supply ledger, external shadow,
+and replay are re-encoded through their codecs. Market is left untouched because
+no seam transition changes it; the differential still compares all seven state
+accounts against the reference adapter's re-encoded post-state, so a codec that
+failed to round-trip would fail the comparison rather than be hidden by a
+rewrite.
 
 Every refusal maps to a stable `ProgramError::Custom(code)`; the table is in
 `programs/clutch-sbf/program/src/error.rs`.
@@ -274,8 +361,15 @@ first written and say so in place; the rest are untouched.
 
 Relative to what `programs/solana-reference` already does:
 
-1. `Merge`, `Materialize`, and `Dematerialize` are refused
-   (`NotYetImplemented`) even though the offline adapter implements them.
+1. **Closed.** `Merge`, `Materialize`, and `Dematerialize` were refused
+   (`NotYetImplemented`); all three now run through the seam plane and are
+   covered by the host differential. `Merge` closed on *both* sides at once,
+   because the gap was mis-stated: the offline adapter did not implement it
+   either (see the correction under
+   [Refusal discipline](#refusal-discipline-for-the-stubs)). What is still open
+   is the **SVM leg** for the whole seam family — `harness/` emits a
+   nine-account `Split` transaction, so no emitted transaction exercises the
+   ten-account plane at all; see item 13.
 2. `validate_market_init` has no on-chain counterpart: there is no
    initialization instruction, so every account in the fixture is preloaded at
    genesis instead of being created and validated by the program.
@@ -313,41 +407,43 @@ Relative to obligations 1-4 of `SOLANA_REFERENCE_ADAPTER.md`:
     wrong length, aliasing, missing signature, wrong account count), the
     key-and-bump comparison, a short/long/mistagged/misversioned battery against
     every account decoder, and the three CLO-DELTA-V1 closure primitives. What
-    is still untested on the host is the *transition*: off-chain address
-    derivation is not compiled into the crate (see
+    is still untested on the host is the *derivation*, and only that: off-chain
+    address derivation is not compiled into the crate (see
     [Toolchain and offline constraints](#toolchain-and-offline-constraints)), so
-    `split::process` cannot run there at all, and the SVM differential remains
-    the only test of it.
-13. **The supply ledger is loaded but not used, and this is now a divergence,
-    not just a gap.** The ledger has a seed and a canonical address, is written
-    into genesis by the harness, and its pre- and post-state bytes are emitted
-    to `expected/supply.pre.hex` and `expected/supply.hex` — but `Split` does
-    not take it, so the SVM never writes it and `simulate.py` does not compare
-    it.
+    `split::seam` takes an already-derived `Bindings` value as a parameter and
+    the host differential supplies the same trusted bindings the offline
+    adapter takes as `ExpectedBindings`. The *transition* is therefore covered
+    on the host for all four seam intents — request decoding, metadata
+    authentication, every linkage and closure check, the kernel step, and the
+    write-back — and the SVM differential remains the only test of the one
+    thing that gap names: that the derived address is the canonical one.
+13. **Partly closed, and the remainder moved.** This item used to read "the
+    supply ledger is loaded but not used, and this is now a divergence": the
+    ledger had a seed, a canonical address, and genesis bytes, but `Split` did
+    not take it, so this program still checked the retired single-position
+    equality `internal + external == total_supply` while the offline adapter had
+    moved to CLO-DELTA-V1 (commit `9c43863`,
+    [`MULTI_POSITION_CLOSURE.md`](MULTI_POSITION_CLOSURE.md)).
 
-    Meanwhile the offline adapter moved: commit `9c43863` replaced the
-    single-position equality with CLO-DELTA-V1
-    ([`MULTI_POSITION_CLOSURE.md`](MULTI_POSITION_CLOSURE.md)) — a per-triple
-    bound against the ledger (C2) plus a delta write into it (C3). This program
-    still checks `internal + external == total_supply`.
+    **The host side of that is discharged.** The seam plane now takes the ledger
+    as a tenth account and carries the three obligations through the shared
+    primitives — `accounts::require_two_term_closure` (C1),
+    `accounts::require_representation_bound` (C2), and two
+    `accounts::apply_ledger_delta` calls (C3) — for all four seam intents,
+    `Merge` included. A market holding a second position is representable and
+    differentially tested against the reference on both `Split` and `Merge`, so
+    the concrete symptom the old text named ("it refuses every market holding a
+    second position") is gone.
 
-    The divergence is fail-closed, and that is checkable rather than asserted:
-    the equality is strictly stronger than C2's `<=`, so this program refuses
-    states the reference now accepts and accepts nothing the reference refuses.
-    Concretely it refuses every market holding a second position. The bring-up
-    fixture is single-position, which is why the differential below is still
-    green; a multi-position fixture would show the two adapters disagreeing,
-    with this one refusing.
-
-    The port is the first follow-on for an instruction lane, and it is an
-    account-list change rather than a check swap: `Split` takes a tenth
-    account, the differential becomes seven accounts, and the inline equality is
-    replaced by `accounts::require_two_term_closure` (C1),
-    `accounts::require_representation_bound` (C2), and two calls to
-    `accounts::apply_ledger_delta` (C3). Those three primitives are already
-    written in the shared plane and covered by host tests, in the same shapes
-    and with the same refusal classes the reference uses, so that four
-    instruction lanes do not each re-derive them.
+    **The SVM side is not, and it regressed while the host side advanced.**
+    `harness/` is frozen and still emits a *nine*-account `Split` transaction,
+    so the transactions under `tx/` no longer match the instruction's account
+    count: the SVM leg of the differential is stale rather than merely
+    incomplete, and `simulate.py` still does not compare `expected/supply.hex`.
+    No emitted transaction exercises `Merge`, `Materialize`, or `Dematerialize`
+    at all. Regenerating the fixtures for the ten-account plane, and adding
+    transactions for the other three seam intents, is a named harness-lane wave
+    and is the whole of what item 13 still owes.
 
 14. **An order page cannot be decoded on-chain at all.** See
     [Stack findings](#stack-findings) — this blocks the whole

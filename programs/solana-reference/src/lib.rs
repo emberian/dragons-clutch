@@ -1104,6 +1104,53 @@ fn apply_inner(
                     pure_market.split(&mut pure_position, quantity)?;
                     0
                 }
+                Intent::Merge {
+                    market: intent_market,
+                    owner,
+                    quantity,
+                } => {
+                    authorize_owner(metadata.actor, decoded.position.owner)?;
+                    require_intent_binding(
+                        intent_market,
+                        owner,
+                        &decoded.market,
+                        &decoded.position,
+                    )?;
+                    /* Same phase discipline as `Split`.  `MarketState::merge`
+                     * already refuses a resolved market through
+                     * `require_active`, so the lifecycle half is redundant with
+                     * the kernel and the `close_state` half is not: a closing
+                     * position must not recombine its way back into cash. */
+                    if decoded.market.lifecycle != 0 || decoded.position.close_state != 0 {
+                        return Err(Error::MismatchedState);
+                    }
+                    /* NO COLLATERAL-CAP CHECK, deliberately.  `Split` checks
+                     * the cap because it is the only transition that raises
+                     * `hoard.collateral_atoms`; `merge` lowers it
+                     * (`MarketState::merge` refuses `InsufficientCollateral`
+                     * and then subtracts), so the post-state collateral is
+                     * strictly below the pre-state collateral and cannot cross
+                     * a ceiling it was under.  A cap check here would be worse
+                     * than redundant: a market already above its cap — a cap
+                     * lowered by some future governance path, say — would be
+                     * unable to unwind, which is the one direction that always
+                     * has to stay open. */
+                    pure_market.merge(&mut pure_position, quantity)?;
+                    /* The cash credit is the *consequence* of the burn, so it
+                     * lands after the kernel step that justified it. That is
+                     * the mirror image of `Split`, where the debit is the
+                     * precondition and precedes the mint, and it is the order
+                     * `Action::RedeemInternal` already credits a payout in.
+                     * `quantity` is the released collateral because a complete
+                     * set is worth exactly one atom of collateral: the same
+                     * one-to-one the kernel enforces on both sides. */
+                    decoded.position.cash_atoms = decoded
+                        .position
+                        .cash_atoms
+                        .checked_add(quantity)
+                        .ok_or(Error::Arithmetic)?;
+                    0
+                }
                 Intent::Materialize {
                     market: intent_market,
                     owner,
@@ -2283,6 +2330,29 @@ mod tests {
         .unwrap()
     }
 
+    /// Recombine `quantity` complete sets back into collateral, from a state
+    /// an earlier transition already produced.
+    fn merge_from(
+        f: &Fixture,
+        state: &TransitionOutput,
+        sequence: u64,
+        quantity: u64,
+    ) -> Result<TransitionOutput> {
+        let market = MarketAccount::decode(&state.market).unwrap().market;
+        let owner = PositionAccount::decode(&state.position).unwrap().owner;
+        apply_layout(
+            state,
+            &f.metadata,
+            &f.bindings,
+            sequence,
+            Intent::Merge {
+                market,
+                owner,
+                quantity,
+            },
+        )
+    }
+
     /// A second owner's position/external/replay triple joined to the
     /// fixture's market-wide accounts, with its own keys, bumps, owner, and a
     /// generation (5) that deliberately differs from the supply ledger's era
@@ -2534,6 +2604,223 @@ mod tests {
         assert_eq!(output.supply, expected_supply);
         assert_eq!(output.resolution, None);
         assert_eq!(output.redemption_payout, 0);
+    }
+
+    #[test]
+    fn merge_has_exact_full_account_pre_and_post_vectors() {
+        /* The named little-endian field deltas of one merge, read against the
+         * split-11 state rather than the fixture, so every number below is the
+         * inverse of the vector directly above: collateral 11 -> 7, both
+         * internal balances 11 -> 7, cash 89 -> 93 (credited, not debited),
+         * both kernel aggregates 11 -> 7, both ledger internal terms 11 -> 7,
+         * sequence 1 -> 2, and the market and the external shadow untouched. */
+        let f = fixture();
+        let split = split_state(&f, 11);
+        let output = merge_from(&f, &split, 1, 4).unwrap();
+
+        let expected_market = split.market;
+        let mut expected_hoard = split.hoard;
+        expected_hoard[98..106].copy_from_slice(&7_u64.to_le_bytes());
+        let mut expected_position = split.position;
+        expected_position[74..82].copy_from_slice(&7_u64.to_le_bytes());
+        expected_position[82..90].copy_from_slice(&7_u64.to_le_bytes());
+        expected_position[202..210].copy_from_slice(&93_u64.to_le_bytes());
+        let mut expected_kernel = split.kernel;
+        expected_kernel[38..46].copy_from_slice(&7_u64.to_le_bytes());
+        expected_kernel[46..54].copy_from_slice(&7_u64.to_le_bytes());
+        let expected_external = split.external;
+        let mut expected_replay = split.replay;
+        expected_replay[74..82].copy_from_slice(&2_u64.to_le_bytes());
+        let mut expected_supply = split.supply;
+        expected_supply[75..83].copy_from_slice(&7_u64.to_le_bytes());
+        expected_supply[83..91].copy_from_slice(&7_u64.to_le_bytes());
+
+        assert_eq!(output.market, expected_market);
+        assert_eq!(output.hoard, expected_hoard);
+        assert_eq!(output.position, expected_position);
+        assert_eq!(output.kernel, expected_kernel);
+        assert_eq!(output.external, expected_external);
+        assert_eq!(output.replay, expected_replay);
+        assert_eq!(output.supply, expected_supply);
+        assert_eq!(output.resolution, None);
+        assert_eq!(output.redemption_payout, 0);
+
+        /* The reserved cash the position parked is untouched by both legs: a
+         * merge credits `cash_atoms` and never `reserved_cash_atoms`. */
+        let position = PositionAccount::decode(&output.position).unwrap();
+        assert_eq!(position.reserved_cash_atoms, 7);
+        assert_eq!(position.cash_atoms, 93);
+    }
+
+    #[test]
+    fn split_then_merge_returns_every_account_to_its_pre_split_bytes() {
+        /* PROJECT.md's central recombination promise, at byte resolution: a
+         * complete set goes back into its collateral and leaves no residue.
+         * The replay sequence is the one field that must differ, because two
+         * transitions were consumed and a state machine that forgot them would
+         * be replayable. */
+        let f = fixture();
+        let split = split_state(&f, 11);
+        let round_trip = merge_from(&f, &split, 1, 11).unwrap();
+
+        assert_eq!(round_trip.market, f.state.market);
+        assert_eq!(round_trip.hoard, f.state.hoard);
+        assert_eq!(round_trip.position, f.state.position);
+        assert_eq!(round_trip.kernel, f.state.kernel);
+        assert_eq!(round_trip.external, f.state.external);
+        assert_eq!(round_trip.supply, f.state.supply);
+        assert_eq!(round_trip.resolution, None);
+        assert_eq!(round_trip.redemption_payout, 0);
+
+        let mut expected_replay = f.state.replay;
+        expected_replay[74..82].copy_from_slice(&2_u64.to_le_bytes());
+        assert_eq!(round_trip.replay, expected_replay);
+        assert_ne!(round_trip.replay, f.state.replay);
+        assert_eq!(
+            ReplayAccount::decode(&round_trip.replay).unwrap().sequence,
+            2
+        );
+
+        /* And the round trip is not an artifact of one quantity.  93 is the
+         * largest one the fixture can split at all: `PositionAccount::validate`
+         * refuses `reserved_cash_atoms > cash_atoms`, so the reserved 7 atoms
+         * are a floor under the cash a split may spend, not merely an
+         * annotation. */
+        for quantity in [1_u64, 7, 93] {
+            let split = split_state(&f, quantity);
+            let back = merge_from(&f, &split, 1, quantity).unwrap();
+            assert_eq!(back.hoard, f.state.hoard);
+            assert_eq!(back.position, f.state.position);
+            assert_eq!(back.kernel, f.state.kernel);
+            assert_eq!(back.supply, f.state.supply);
+        }
+    }
+
+    #[test]
+    fn merge_refuses_insufficient_claims_a_closing_position_and_a_resolved_market() {
+        let f = fixture();
+        let split = split_state(&f, 11);
+
+        /* Merging more than the market holds as collateral.  The kernel tests
+         * collateral before per-outcome balances (`MarketState::merge`), which
+         * is the only reason `InsufficientCollateral` is reachable at all, so
+         * a single-position market over-merging reports the collateral fault. */
+        assert_eq!(
+            merge_from(&f, &split, 1, 12),
+            Err(Error::Kernel(KernelError::InsufficientCollateral))
+        );
+
+        /* Merging more than *this position* holds, in a market whose
+         * collateral covers the request because a second position funded it.
+         * This is the counterfeit direction a single-position market cannot
+         * express — there, `collateral >= quantity` already implies the
+         * balances — and it reports the balance fault instead. */
+        let market_id = MarketAccount::decode(&f.state.market).unwrap().market;
+        let (second_state, second_metadata, second_bindings) = second_triple(&f, 100);
+        let mut second = second_state;
+        sync_shared(&split, &mut second);
+        let second_owner = PositionAccount::decode(&second.position).unwrap().owner;
+        let second = apply_layout(
+            &second,
+            &second_metadata,
+            &second_bindings,
+            0,
+            Intent::Split {
+                market: market_id,
+                owner: second_owner,
+                quantity: 30,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            HoardAccount::decode(&second.hoard)
+                .unwrap()
+                .collateral_atoms,
+            41,
+            "the hoard now covers a 31-atom merge that this position cannot back"
+        );
+        assert_eq!(
+            apply_layout(
+                &second,
+                &second_metadata,
+                &second_bindings,
+                1,
+                Intent::Merge {
+                    market: market_id,
+                    owner: second_owner,
+                    quantity: 31,
+                },
+            ),
+            Err(Error::Kernel(KernelError::InsufficientBalance)),
+            "a position cannot merge against another position's claims"
+        );
+
+        // A closing position cannot recombine its way back into cash.
+        let mut closing = split.clone();
+        let mut position = PositionAccount::decode(&closing.position).unwrap();
+        position.close_state = 1;
+        position.encode(&mut closing.position).unwrap();
+        assert_eq!(merge_from(&f, &closing, 1, 1), Err(Error::MismatchedState));
+
+        /* A resolved market refuses too, and by two independent checks: the
+         * adapter's own lifecycle discipline reports first, and
+         * `MarketState::require_active` stands behind it. */
+        let mut resolved = split.clone();
+        let mut market = MarketAccount::decode(&resolved.market).unwrap();
+        market.lifecycle = 1;
+        market.encode(&mut resolved.market).unwrap();
+        let mut kernel = KernelAccount::decode(&resolved.kernel).unwrap();
+        kernel.phase = 1;
+        kernel.encode(&mut resolved.kernel).unwrap();
+        assert_eq!(merge_from(&f, &resolved, 1, 1), Err(Error::MismatchedState));
+
+        // Every refusal above left the split state exactly as it was.
+        assert_eq!(split, split_state(&f, 11));
+    }
+
+    #[test]
+    fn merge_refuses_a_counterfeit_claim_and_a_tampered_ledger() {
+        let f = fixture();
+
+        /* CLO-DELTA-V1 C2 over the pre-state: a position claiming internal
+         * balance the market-wide ledger does not carry cannot melt it into
+         * collateral, which is the counterfeit path a merge would otherwise
+         * open — `Split` mints against cash, but `Merge` pays cash out. */
+        let mut forged = f.state.clone();
+        let mut position = PositionAccount::decode(&forged.position).unwrap();
+        position.internal[0] = 5;
+        position.internal[1] = 5;
+        position.encode(&mut forged.position).unwrap();
+        assert_eq!(
+            merge_from(&f, &forged, 0, 5),
+            Err(Error::AggregateClosureMismatch)
+        );
+
+        /* C1 over the pre-state: a ledger whose two terms no longer sum to the
+         * kernel aggregate refuses before the kernel is even built. */
+        let split = split_state(&f, 11);
+        let mut tampered = split.clone();
+        let mut supply = SupplyLedgerAccount::decode(&tampered.supply).unwrap();
+        supply.internal_supply[0] += 1;
+        supply.encode(&mut tampered.supply).unwrap();
+        assert_eq!(
+            merge_from(&f, &tampered, 1, 1),
+            Err(Error::AggregateClosureMismatch)
+        );
+
+        // Neither refusal moved the hoard, the aggregate, or the ledger.
+        assert_eq!(
+            HoardAccount::decode(&forged.hoard)
+                .unwrap()
+                .collateral_atoms,
+            0
+        );
+        assert_eq!(
+            SupplyLedgerAccount::decode(&f.state.supply)
+                .unwrap()
+                .internal_supply[0],
+            0
+        );
     }
 
     #[test]
@@ -4384,23 +4671,43 @@ mod tests {
         let f = fixture();
         let market = MarketAccount::decode(&f.state.market).unwrap().market;
         let owner = PositionAccount::decode(&f.state.position).unwrap().owner;
-        let merge = layout_request(
-            0,
-            Intent::Merge {
-                market,
-                owner,
-                quantity: 1,
+        /* `Merge` is no longer on this list: it is implemented, and the four
+         * seam intents (`Split`, `Merge`, `Materialize`, `Dematerialize`) plus
+         * `CreateMarket` are now the whole of the layout plane this adapter
+         * models.  What remains outside the reference subset is the feed and
+         * order families, and each of them must still fall through to
+         * `UnsupportedIntent` rather than into a plane that does not model it. */
+        for unsupported in [
+            Intent::FeedAdvance {
+                feed: FeedId::from_bytes([9; 32]),
+                cursor: 1,
+                evidence: h(0x1e),
             },
-        );
-        assert_eq!(
-            apply(
-                &merge[..layout_request_len(&merge)],
-                state_bytes(&f.state),
-                &f.metadata,
-                &f.bindings,
-            ),
-            Err(Error::UnsupportedIntent)
-        );
+            Intent::CancelOrder {
+                market,
+                epoch: h(0x2e),
+                owner,
+                order_id: h(0x3e),
+            },
+            Intent::SettlePage {
+                market,
+                epoch: h(0x2e),
+                page_index: 0,
+            },
+        ] {
+            let request = layout_request(0, unsupported);
+            assert_eq!(
+                apply(
+                    &request[..layout_request_len(&request)],
+                    state_bytes(&f.state),
+                    &f.metadata,
+                    &f.bindings,
+                ),
+                Err(Error::UnsupportedIntent),
+                "{unsupported:?} is outside the reference subset"
+            );
+        }
+
         let mut unsigned = f.metadata;
         unsigned.actor.signer = false;
         let split = layout_request(

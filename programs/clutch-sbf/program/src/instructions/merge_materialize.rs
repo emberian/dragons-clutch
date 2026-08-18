@@ -1,7 +1,6 @@
 //! `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize`.
 //!
-//! `Materialize` and `Dematerialize` are **implemented** here.  `Merge` is
-//! **refused**, and the reason is the point of this module's documentation.
+//! All three are **implemented** here.
 //!
 //! All three share the ten-account seam plane of [`super::split`]: the account
 //! list, the check order, the CLO-DELTA-V1 closure obligations, the kernel step,
@@ -30,39 +29,48 @@
 //! lane moves balances through the shadow exactly as the reference adapter does
 //! and restructures nothing.
 //!
-//! ## Why `Merge` refuses
+//! ## `Merge` is the exact inverse of `Split`
 //!
-//! `clutch_kernel::MarketState::merge` exists and is exercised in the kernel's
-//! own tests.  The offline reference adapter — this program's semantic oracle
-//! for the seam — nevertheless has **no `Intent::Merge` arm** in `apply_inner`:
-//! the intent falls through to `_ => Err(Error::UnsupportedIntent)`, and the
-//! adapter's own test `unsupported_layout_intents_and_unsigned_owner_refuse`
-//! pins that refusal.  (`docs/implementation/SBF_BRINGUP.md` line 135 says "the
-//! offline adapter implements all three"; for `Merge` that sentence is wrong,
-//! and correcting it is a documentation follow-up this lane does not own.)
+//! `Merge` used to be **refused** here, and the refusal was mirrored from the
+//! offline reference adapter, which had no `Intent::Merge` arm at all: the
+//! intent fell through to `_ => Err(Error::UnsupportedIntent)` despite
+//! `clutch_kernel::MarketState::merge` existing and despite PROJECT.md's
+//! central promise that "the complete set can always be recombined into its
+//! collateral before resolution".  The differential test in this module was
+//! written as an alarm designed to fail the day the reference grew the arm.
+//! The reference grew the arm; the alarm fired; this is what replaced it.
 //!
-//! Implementing `Merge` on-chain would therefore do two things this project
-//! does not do.  It would make the program **accept a transition its own oracle
-//! refuses**, which is fail-open with respect to the only semantics anybody has
-//! written down.  And it would require inventing the cash direction of a merge:
-//! `Split` debits `PositionAccount::cash_atoms` against the collateral it mints,
-//! and nothing anywhere credits it back, so a merge's cash effect is an
-//! economic decision that belongs to the reference adapter, not to an account
-//! plane.  So the refusal is mirrored instead, at the same point in the check
-//! order the reference reaches it — after the kernel invariants, before any
-//! write — and it is reported as
-//! [`crate::error::ClutchError::UnsupportedInstruction`], the adapter-level
-//! analogue of the reference's `Error::UnsupportedIntent`.
+//! The seam plane needed no new shape.  What the reference named, and what this
+//! module now mirrors, is the direction of every term:
 //!
-//! **Follow-up for the coordinator:** `Merge` becomes implementable here the
-//! moment `clutch_solana_reference::apply_inner` grows a `Merge` arm that names
-//! the cash direction.  The differential test
-//! `merge_is_refused_by_both_adapters` in this module fails the day that
-//! happens, which is the intended alarm.
+//! | | `Split` | `Merge` |
+//! | --- | --- | --- |
+//! | `PositionAccount::cash_atoms` | debited `quantity` (checked sub) | credited `quantity` (checked add) |
+//! | `HoardAccount::collateral_atoms` | raised by the kernel | lowered by the kernel |
+//! | every internal balance, per outcome | `+quantity` | `-quantity` |
+//! | `MarketAccount::collateral_cap` | checked | **not** checked |
+//! | phase discipline | `lifecycle == 0 && close_state == 0` | identical |
+//!
+//! Two of those rows are decisions rather than sign flips.
+//!
+//! **The cap is not checked on the way down.**  A merge lowers the hoard
+//! (`MarketState::merge` refuses `InsufficientCollateral` and then subtracts),
+//! so the post-state collateral is strictly below the pre-state collateral and
+//! cannot cross a ceiling the pre-state was under.  Checking it anyway would be
+//! worse than redundant: a market somehow already above its cap would be unable
+//! to unwind, and unwinding is the one direction that always has to stay open.
+//!
+//! **The cash credit lands after the kernel step, not in the per-intent arm.**
+//! `Split`'s debit is a precondition — you pay, then the claims are minted — so
+//! it sits with the cap check above the kernel.  A merge's credit is the
+//! consequence of a burn that already succeeded, so it sits below, which is
+//! both where the reference adapter credits it and where `RedeemInternal`
+//! already credits a payout.  [`super::split::seam`] carries the credit at that
+//! point for exactly this reason.
 //!
 //! ## An asymmetry observed in the oracle, mirrored rather than corrected
 //!
-//! `Split` refuses when `MarketAccount::lifecycle != 0` **or**
+//! `Split` and `Merge` refuse when `MarketAccount::lifecycle != 0` **or**
 //! `PositionAccount::close_state != 0`.  `Materialize` and `Dematerialize`
 //! check neither in the offline reference adapter: the market's lifecycle is
 //! still covered indirectly, because `validate_links` ties it to the kernel
@@ -94,7 +102,8 @@ use solana_pubkey::Pubkey;
 /// The request is converted to a [`split::SeamOp`] and handed to the shared
 /// seam plane; nothing about the account list, the check order, or the
 /// write-back differs from `Split`, because in the reference adapter nothing
-/// about them differs either.
+/// about them differs either.  `Merge` differs from `Split` only in the sign of
+/// every term it moves, and in the two decisions the module docs name.
 pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request) -> Outcome<()> {
     let op = split::seam_op(request)?;
     split::seam(program_id, accounts, request.sequence, &op, |ids| {
@@ -106,12 +115,15 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
 mod tests {
     use crate::error::ClutchError;
     use crate::instructions::split::tests::{
-        edit_position, fixture, h, ids, key, layout_request, split_request, Case, Class,
+        edit_position, fixture, h, ids, key, layout_request, second_position, split_request, Case,
+        Class,
     };
     use crate::instructions::split::{IX_ACTOR, IX_EXTERNAL, IX_POSITION, IX_REPLAY};
     use clutch_kernel::Error as KernelError;
-    use clutch_solana_layout::{Hash32, Intent, PositionAccount, SupplyLedgerAccount};
-    use clutch_solana_reference::ExternalAccount;
+    use clutch_solana_layout::{
+        Hash32, HoardAccount, Intent, PositionAccount, SupplyLedgerAccount,
+    };
+    use clutch_solana_reference::{ExternalAccount, ReplayAccount};
 
     /// The fixture's external-shadow account key, as the intent names it.
     fn shadow(case: &Case) -> Hash32 {
@@ -348,20 +360,180 @@ mod tests {
     }
 
     #[test]
-    fn merge_is_refused_by_both_adapters() {
-        /* This test is the alarm described in the module docs.  The offline
-         * reference adapter has no `Intent::Merge` arm and refuses it
-         * `UnsupportedIntent`; this program mirrors that rather than accepting
-         * a transition its own oracle refuses.  The day `apply_inner` grows a
-         * `Merge` arm, the reference stops refusing, this test fails, and the
-         * seam lane implements the transition against a semantics that finally
-         * exists. */
-        let case = funded();
-        case.refuses(&merge(1, 5), "merge a complete set", Class::Unsupported);
-        case.refuses(&merge(1, 1), "merge one set", Class::Unsupported);
+    fn merge_agrees_byte_for_byte_with_the_reference_adapter() {
+        /* This test replaces the alarm the previous wave left here.  It used to
+         * assert that both adapters refuse `Merge` `UnsupportedIntent`, and it
+         * was written to fail the day the reference grew an `Intent::Merge`
+         * arm.  It did. */
+        let mut case = funded();
+        case.advance(&merge(1, 4), "merge 4 complete sets");
 
-        let (result, post) = case.program(&merge(1, 5));
-        assert_eq!(result, Err(ClutchError::UnsupportedInstruction.into()));
-        assert_eq!(post, case.state, "a refused merge writes nothing");
+        let position = PositionAccount::decode(&case.state.position).expect("position decodes");
+        let hoard = HoardAccount::decode(&case.state.hoard).expect("hoard decodes");
+        let supply = SupplyLedgerAccount::decode(&case.state.supply).expect("ledger decodes");
+        /* Every term of a split, with the sign flipped: 20 - 4 internal claims
+         * per outcome, 20 - 4 collateral atoms in the hoard, and cash credited
+         * rather than debited (100 - 20 after the split, + 4 here). */
+        assert_eq!(position.internal[0], 16);
+        assert_eq!(position.internal[1], 16);
+        assert_eq!(position.cash_atoms, 84);
+        assert_eq!(hoard.collateral_atoms, 16);
+        assert_eq!(supply.internal_supply[0], 16);
+        assert_eq!(supply.internal_supply[1], 16);
+        assert_eq!(supply.external_supply[0], 0);
+        assert_eq!(supply.external_supply[1], 0);
+        /* Reserved cash is untouched: a merge credits free cash and never the
+         * encumbered part. */
+        assert_eq!(position.reserved_cash_atoms, 7);
+    }
+
+    #[test]
+    fn split_then_merge_returns_the_seam_to_its_pre_split_bytes() {
+        /* PROJECT.md's recombination promise at byte resolution, on the program
+         * side of the differential: eight of the nine accounts come back
+         * exactly, and the replay account must not, because two sequences were
+         * consumed. */
+        let before = fixture();
+        let mut case = before.clone();
+        case.advance(&split_request(0, 11), "split 11");
+        assert_ne!(case.state, before.state, "the split moved something");
+        case.advance(&merge(1, 11), "merge all 11 back");
+
+        assert_eq!(case.state.realm, before.state.realm);
+        assert_eq!(case.state.profile, before.state.profile);
+        assert_eq!(case.state.market, before.state.market);
+        assert_eq!(case.state.hoard, before.state.hoard);
+        assert_eq!(case.state.position, before.state.position);
+        assert_eq!(case.state.kernel, before.state.kernel);
+        assert_eq!(case.state.external, before.state.external);
+        assert_eq!(case.state.supply, before.state.supply);
+        assert_ne!(
+            case.state.replay, before.state.replay,
+            "two transitions were consumed and the sequence must show it"
+        );
+        assert_eq!(
+            ReplayAccount::decode(&case.state.replay)
+                .expect("replay decodes")
+                .sequence,
+            2
+        );
+    }
+
+    #[test]
+    fn merge_refusals_agree_with_the_reference_adapter() {
+        let case = funded();
+
+        /* More than the market holds as collateral.  `MarketState::merge` tests
+         * collateral before the per-outcome balances, so a single-position
+         * market over-merging reports the collateral fault, which is the only
+         * way that refusal is reachable at all. */
+        case.refuses(
+            &merge(1, 21),
+            "merge beyond the hoard",
+            Class::Kernel(KernelError::InsufficientCollateral),
+        );
+
+        /* More than *this position* holds, in a market a second position has
+         * funded past the request.  This is the counterfeit direction, and it
+         * reports the balance fault. */
+        let ids = ids();
+        let mut second = second_position(&funded());
+        second.advance(
+            &layout_request(
+                0,
+                Intent::Split {
+                    market: ids.market,
+                    owner: h(32),
+                    quantity: 30,
+                },
+            ),
+            "second owner splits 30",
+        );
+        assert_eq!(
+            HoardAccount::decode(&second.state.hoard)
+                .expect("hoard decodes")
+                .collateral_atoms,
+            50
+        );
+        second.refuses(
+            &layout_request(
+                1,
+                Intent::Merge {
+                    market: ids.market,
+                    owner: h(32),
+                    quantity: 31,
+                },
+            ),
+            "merge against another position's claims",
+            Class::Kernel(KernelError::InsufficientBalance),
+        );
+
+        // A closing position cannot recombine its way back into cash.
+        let mut closed = funded();
+        edit_position(&mut closed.state, |position| position.close_state = 1);
+        closed.refuses(
+            &merge(1, 1),
+            "closing position merges",
+            Class::MismatchedState,
+        );
+
+        // The intent names a market these accounts do not carry.
+        case.refuses(
+            &layout_request(
+                1,
+                Intent::Merge {
+                    market: h(0x77),
+                    owner: ids.owner,
+                    quantity: 1,
+                },
+            ),
+            "intent names another market",
+            Class::MismatchedState,
+        );
+
+        // Wrong signer, and no signer at all.
+        let mut stranger = funded();
+        stranger.keys[IX_ACTOR] = key(0x9e);
+        stranger.refuses(&merge(1, 1), "stranger merges", Class::Actor);
+
+        let mut unsigned = funded();
+        unsigned.signer = false;
+        unsigned.refuses(&merge(1, 1), "unsigned merge", Class::Signature);
+
+        // Aliased accounts, and a stale replay sequence.
+        let mut aliased = funded();
+        aliased.keys[IX_REPLAY] = aliased.keys[IX_EXTERNAL];
+        aliased.bindings.replay = aliased.bindings.external;
+        aliased.refuses(&merge(1, 1), "replay aliases the shadow", Class::Alias);
+
+        case.refuses(&merge(9, 1), "stale merge sequence", Class::Replay);
+    }
+
+    #[test]
+    fn a_counterfeit_merge_cannot_melt_claims_the_ledger_never_carried() {
+        /* The mirror of `a_forged_position_cannot_split_against_an_empty_ledger`
+         * and the reason a merge needs C2 at least as much as a split does: a
+         * split mints against cash the position must actually hold, but a merge
+         * *pays cash out*, so a position claiming internal balance the
+         * market-wide ledger does not carry would be converting a counterfeit
+         * into collateral.  CLO-DELTA-V1's representation bound refuses it
+         * before any write. */
+        let mut forged = fixture();
+        edit_position(&mut forged.state, |position| {
+            position.internal[0] = 5;
+            position.internal[1] = 5;
+        });
+        forged.refuses(&merge(0, 5), "forged complete set", Class::Closure);
+
+        let (result, post) = forged.program(&merge(0, 5));
+        assert_eq!(result, Err(ClutchError::AggregateClosureMismatch.into()));
+        assert_eq!(post, forged.state, "a refused merge writes nothing");
+        let hoard = HoardAccount::decode(&post.hoard).expect("hoard decodes");
+        assert_eq!(hoard.collateral_atoms, 0, "no collateral was released");
+        let position = PositionAccount::decode(&post.position).expect("position decodes");
+        assert_eq!(
+            position.cash_atoms, 100,
+            "no cash was credited for the counterfeit"
+        );
     }
 }

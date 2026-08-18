@@ -22,6 +22,25 @@ signing, deployment, or network behavior.
   creation. `CreateMarket` through the transition function fails closed.
 - `Split` debits position cash, checks the immutable collateral cap, credits
   hoard collateral, and invokes the complete-set kernel split.
+- `Merge` is the exact inverse of `Split`, and it is the transition
+  PROJECT.md's central promise names: "the complete set can always be
+  recombined into its collateral before resolution". It invokes the
+  complete-set kernel merge — which debits every internal balance and the
+  Hoard collateral, refusing `InsufficientCollateral` before
+  `InsufficientBalance` — and then credits position cash by the released
+  collateral with a checked add. It carries `Split`'s phase discipline
+  verbatim (`lifecycle == 0` and `close_state == 0`), and two of its
+  differences from `Split` are decisions rather than sign flips:
+  - **No collateral-cap check.** A merge lowers `hoard.collateral_atoms`, so
+    the post-state cannot cross a ceiling the pre-state was under. Checking
+    the cap here would be worse than redundant: a market already above its cap
+    would be unable to unwind, and unwinding is the one direction that must
+    always stay open.
+  - **The cash credit follows the kernel step**, where `Split`'s debit
+    precedes it. A debit is the precondition of a mint; a credit is the
+    consequence of a burn. That is the order `RedeemInternal` already credits
+    a payout in, so every cash credit in this adapter lands after the kernel
+    step that justified it.
 - `Materialize` and `Dematerialize` invoke the kernel and move quantities
   between internal balances and an explicit reference-only external shadow.
   They do not mint or burn an SPL token.
@@ -206,6 +225,19 @@ the named little-endian fields:
 - Supply ledger internal terms 0 and 1 at `75..83` and `83..91`; and
 - Replay sequence at `74..82`.
 
+The merge vector is read against the split-11 post-state rather than the
+fixture, so every number in it is the inverse of the split vector at the same
+offsets: Hoard collateral `11 -> 7`, both position outcomes `11 -> 7`, position
+cash `89 -> 93` (credited, not debited), both kernel aggregates `11 -> 7`, both
+ledger internal terms `11 -> 7`, sequence `1 -> 2`, and the Market and the
+external shadow untouched. A round-trip test then runs `split q -> merge q` and
+requires every one of the seven accounts back at its pre-split bytes **except**
+the replay account, whose sequence must read 2 — the residue a state machine
+that forgot two consumed transitions would not have. It repeats over quantities
+1, 7, and 93; 93 rather than 100 because `PositionAccount::validate` refuses
+`reserved_cash_atoms > cash_atoms`, which makes the fixture's 7 reserved atoms a
+floor under the cash a split may spend rather than an annotation.
+
 The full lifecycle vector runs `create -> split 20 -> observe/seal -> resolve ->
 redeem_internal 20` and compares every account array at every step. Resolve
 changes exactly the Market lifecycle byte at `131`, the kernel phase and
@@ -234,6 +266,20 @@ outcome balance one, aggregate supply zero, Hoard zero, then `Materialize(0, 1)`
 It must return `AggregateClosureMismatch` without producing post-state. A
 bounded trace test checks the equality after splits and materializations across
 quantities 1 through 16.
+
+`Merge` carries the same counterfeit regression in the direction that matters
+more: a split mints against cash the position must actually hold, but a merge
+*pays cash out*, so a forged complete set would be a counterfeit converted into
+collateral. Both C2 (position above its ledger term) and C1 (ledger terms no
+longer summing to the kernel aggregate) refuse it before any write. `Merge`'s
+own refusal battery pins `InsufficientCollateral` for a single-position market
+over-merging, `InsufficientBalance` for a position merging against a *second*
+position's claims — the fault the kernel's collateral-before-balance order makes
+reachable only in a multi-position market — a closing position, and a resolved
+market. `Merge` is correspondingly no longer on the unsupported-intent list;
+what remains outside the reference subset is the feed and order families
+(`FeedAdvance`, `PlaceOrder`, `CancelOrder`, `SettlePage`), and the test now
+sweeps three of them.
 
 Run the evidence gates independently because this crate is intentionally not in
 a root workspace:

@@ -144,9 +144,7 @@ pub struct SplitRequest {
 /// One already-routed seam transition.
 ///
 /// The four variants are exactly the four layout intents the offline reference
-/// adapter routes through one account plane.  `Merge` is carried as a variant
-/// rather than refused at the router so that it is refused at the *same point
-/// in the check order* the reference refuses it; see [`seam`].
+/// adapter routes through one account plane, and all four are implemented.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SeamOp {
     /// Add a complete internal set.
@@ -387,25 +385,13 @@ fn kernel_step(
     market.check_invariants()?;
     match op {
         SeamOp::Split { quantity, .. } => market.split(position, *quantity)?,
+        SeamOp::Merge { quantity, .. } => market.merge(position, *quantity)?,
         SeamOp::Materialize {
             outcome, quantity, ..
         } => market.materialize(position, *outcome, *quantity)?,
         SeamOp::Dematerialize {
             outcome, quantity, ..
         } => market.dematerialize(position, *outcome, *quantity)?,
-        /* NAMED DIVERGENCE-BY-MIRRORING.  `MarketState::merge` exists and is
-         * exercised in `clutch-kernel`, but the offline reference adapter --
-         * this program's semantic oracle for the seam -- has no `Intent::Merge`
-         * arm in `apply_inner` and refuses it `Error::UnsupportedIntent`.
-         * Implementing it here would make this program *accept* a transition
-         * its own oracle refuses, and would additionally require inventing the
-         * cash direction of a merge (`Split` debits `cash_atoms`; nothing
-         * anywhere credits it), which is an economic decision belonging to the
-         * reference adapter and not to an account plane.  So the refusal is
-         * mirrored, at the same point in the check order the reference reaches
-         * it: after the kernel invariants, before any write.  See the module
-         * docs of `super::merge_materialize`. */
-        SeamOp::Merge { .. } => return Err(ClutchError::UnsupportedInstruction.into()),
     }
     account.phase = match market.phase {
         Phase::Active => 0,
@@ -483,6 +469,10 @@ fn ledger_step(
 ///    assertion before it hands it any account data; and
 /// 2. `Split`'s collateral-cap and cash checks precede the kernel invariant
 ///    check here and follow it there.
+///
+/// `Merge`'s cash *credit* is not one of those differences: it lands after the
+/// kernel step on both sides, because on both sides it is the consequence of a
+/// burn rather than a precondition of a mint.
 ///
 /// Every check that decides *acceptance* is in the reference's order, and the
 /// host differential in this module's tests pins the correspondence one fault
@@ -641,10 +631,7 @@ where
         .ok_or(Refusal::Adapter(ClutchError::Replay))?;
 
     /* Per-intent authorization and binding, in the offline reference adapter's
-     * per-arm order.  `Merge` deliberately authorizes nothing: the reference
-     * reaches its refusal without authorizing either, and a program that
-     * demanded an owner signature to say "unsupported" would leak a different
-     * refusal order than its oracle. */
+     * per-arm order. */
     match op {
         SeamOp::Split { quantity, .. } => {
             authorize_and_bind(actor, &position, market.market, op)?;
@@ -667,6 +654,20 @@ where
                 .checked_sub(*quantity)
                 .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
         }
+        SeamOp::Merge { .. } => {
+            authorize_and_bind(actor, &position, market.market, op)?;
+            require(
+                market.lifecycle == 0 && position.close_state == 0,
+                ClutchError::NotActive,
+            )?;
+            /* NO COLLATERAL-CAP CHECK, and the reference adapter has none
+             * either: a merge lowers `hoard.collateral_atoms`, so it cannot
+             * cross a ceiling the pre-state was under, and a cap check here
+             * would strand a market that is somehow already above its cap in
+             * the one direction that must always stay open.  The cash credit
+             * is not here either: it is the *consequence* of the burn and
+             * lands after the kernel step below, mirroring the reference. */
+        }
         SeamOp::Materialize { destination, .. } => {
             authorize_and_bind(actor, &position, market.market, op)?;
             /* The caller names a destination; the program never believes it.
@@ -687,7 +688,6 @@ where
                 ClutchError::WrongPda,
             )?;
         }
-        SeamOp::Merge { .. } => {}
     }
 
     /* Everything below this line writes.  A refusal after this point aborts the
@@ -711,6 +711,21 @@ where
             op,
         )?
     };
+
+    /* A merge's cash credit, at exactly the reference adapter's point in the
+     * order: after the kernel burned the complete set that justifies it, and
+     * before the ledger delta.  `quantity` is the released collateral because
+     * a complete set is worth exactly one atom of it on both sides of the
+     * kernel.  `Split`'s debit is a *precondition* and therefore sits above,
+     * with the collateral cap; this is a *consequence* and sits here, which is
+     * the order `Action::RedeemInternal` credits a payout in too. */
+    if let SeamOp::Merge { quantity, .. } = op {
+        position.cash_atoms = position
+            .cash_atoms
+            .checked_add(*quantity)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    }
+
     {
         let mut supply_data = accounts[IX_SUPPLY]
             .try_borrow_mut_data()
