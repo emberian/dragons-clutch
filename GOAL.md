@@ -29,6 +29,36 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- THEORY WAVE landed, all six lanes. Headlines: the dual IS the measure
+  at deg 0-1 (proved) and refuted at deg>=2 with an executable
+  arbitrage; the relation is a disassembled Cert-F checker; the
+  constraint matrix is totally unimodular so there is no integrality
+  gap; dispersion is NOT the quotient norm (refuted, exact relationship
+  given) plus a feeless zero-price laundering vector; verified bytecode
+  is the wrong plane (every P0 we ever had would have compiled); and
+  lean/ now holds 86 theorems with zero sorry, having found four
+  corrections to the design's proof sketch incl. an unstated u128
+  bricking hazard whose absence depends on partition of unity.
+
+## NEXT SESSION - start here
+
+1. **solanalib fork scoping** (ember-encouraged): the Solana Foundation
+   maintains a Lean 4 sBPF semantics (Apache-2.0) whose refinement layer
+   is open and whose validation harness is a dead link. Nobody models
+   syscalls anywhere - and our correctness rides on address derivation
+   and invoke_signed. Scope: what their tree gives us, what the three
+   syscall models must say, whether our byte-exact differential can
+   serve as the validator they lack. See docs/research/
+   VERIFIED_BYTECODE_PATHS.md.
+2. **Aeneas/Charon spike** - Rust to Lean, may remove the
+   two-implementation cost entirely. Our kernel is unusually
+   Aeneas-friendly (no_std, no unsafe, fixed arrays, checked arith).
+3. House rule to add: ban native_decide in our Lean tree (it can
+   currently prove False; Lean's compiler is in its own TCB).
+4. Ember decisions still queued: filings go/no-gos, policy freezes, the
+   fee-base fork, PROJECT.md section 9 vs cross-market netting, the
+   single-truth token cutover.
+
 - THEORY WAVE launched (the B-spline consequences, with ember):
   DUAL_IS_THE_MEASURE (Fable - is the LP dual literally the implied
   measure? then certificate and density are one object),
