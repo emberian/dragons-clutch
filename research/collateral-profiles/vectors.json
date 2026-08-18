@@ -1,0 +1,105 @@
+{
+  "schema": "dragons-clutch/collateral-validation-v1",
+  "mint_vectors": [
+    {
+      "name": "base-token-2022",
+      "expected": "ACCEPT"
+    },
+    {
+      "name": "transfer-fee-config",
+      "extensions": [1],
+      "expected": "EXTENSION_NOT_ALLOWED"
+    },
+    {
+      "name": "confidential-transfer-mint",
+      "extensions": [4],
+      "expected": "EXTENSION_NOT_ALLOWED"
+    },
+    {
+      "name": "default-frozen-capable",
+      "extensions": [6],
+      "expected": "EXTENSION_NOT_ALLOWED"
+    },
+    {
+      "name": "non-transferable",
+      "extensions": [9],
+      "expected": "EXTENSION_NOT_ALLOWED"
+    },
+    {
+      "name": "permanent-delegate",
+      "extensions": [12],
+      "expected": "EXTENSION_NOT_ALLOWED"
+    },
+    {
+      "name": "transfer-hook",
+      "extensions": [14],
+      "expected": "EXTENSION_NOT_ALLOWED"
+    },
+    {
+      "name": "mint-authority-remains",
+      "mint_authority": true,
+      "expected": "MINT_AUTHORITY_PRESENT"
+    },
+    {
+      "name": "freeze-authority-remains",
+      "freeze_authority": true,
+      "expected": "FREEZE_AUTHORITY_PRESENT"
+    },
+    {
+      "name": "wrong-decimals",
+      "decimals": 9,
+      "expected": "WRONG_DECIMALS"
+    },
+    {
+      "name": "zero-supply",
+      "supply_atoms": 0,
+      "expected": "ZERO_SUPPLY"
+    },
+    {
+      "name": "unknown-extension",
+      "extensions": [65535],
+      "expected": "UNKNOWN_EXTENSION"
+    }
+  ],
+  "account_vectors": [
+    {
+      "name": "base-token-2022-account",
+      "expected": "ACCEPT"
+    },
+    {
+      "name": "immutable-owner-account",
+      "extensions": [7],
+      "expected": "ACCEPT"
+    },
+    {
+      "name": "withheld-transfer-fee-account",
+      "extensions": [2],
+      "expected": "EXTENSION_NOT_ALLOWED"
+    },
+    {
+      "name": "confidential-transfer-account",
+      "extensions": [5],
+      "expected": "EXTENSION_NOT_ALLOWED"
+    },
+    {
+      "name": "cpi-guard-account",
+      "extensions": [11],
+      "expected": "EXTENSION_NOT_ALLOWED"
+    },
+    {
+      "name": "frozen-hoard",
+      "frozen": true,
+      "expected": "FROZEN_ACCOUNT"
+    },
+    {
+      "name": "delegated-hoard",
+      "delegate": true,
+      "expected": "DELEGATE_PRESENT"
+    },
+    {
+      "name": "closeable-hoard",
+      "close_authority": true,
+      "expected": "CLOSE_AUTHORITY_PRESENT"
+    }
+  ]
+}

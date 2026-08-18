@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0d1718">
+    <meta name="description" content="Offline inspection surface for Dragon's Clutch static client">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
+    <title>Glass · Dragon's Clutch</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">◈</span><span>GLASS</span><small>DRAGON'S CLUTCH</small></div>
+      <div class="offline-pill"><span class="status-dot"></span>OFFLINE BUILD</div>
+    </header>
+
+    <main id="main" class="shell">
+      <section class="hero" aria-labelledby="page-title">
+        <div class="eyebrow">A replaceable lens · v0.1.0</div>
+        <h1 id="page-title">Inspect. Compose.<br><em>Stay in control.</em></h1>
+        <p class="hero-copy">A static, unsigned workbench for Dragon's Clutch. Everything on this page is local and inspectable. Nothing connects to a chain, wallet, or operator service.</p>
+        <div class="hero-actions" aria-label="Client capability status">
+          <span class="tag tag-green">No RPC at startup</span>
+          <span class="tag">No wallet auto-connect</span>
+          <span class="tag">No signing or submission</span>
+        </div>
+      </section>
+
+      <section class="warning-card" aria-labelledby="warning-title">
+        <div class="warning-icon" aria-hidden="true">!</div>
+        <div><h2 id="warning-title">Untrusted static projection</h2><p>This client is not an authority. It can help you inspect a proposed intent, but it cannot prove account state, settlement, market availability, or deployment identity. Treat every future RPC response and every wallet prompt as untrusted input.</p></div>
+        <span class="status-label">CHAIN PATHS UNAVAILABLE</span>
+      </section>
+
+      <div class="grid two-col">
+        <section class="panel identity-panel" aria-labelledby="identity-title">
+          <div class="section-heading"><div><div class="eyebrow">01 / identity</div><h2 id="identity-title">Release surface</h2></div><span class="verified-badge">UNPUBLISHED</span></div>
+          <dl class="identity-list">
+            <div><dt>Application</dt><dd>Glass / Dragon's Clutch</dd></div>
+            <div><dt>Release</dt><dd>0.1.0-offline <span class="muted">· prototype</span></dd></div>
+            <div><dt>Bundle SHA-256</dt><dd class="mono">UNPUBLISHED-BUNDLE-DIGEST</dd></div>
+            <div><dt>IPFS CID</dt><dd class="mono muted">not assigned</dd></div>
+            <div><dt>Source commit</dt><dd class="mono">UNBOUND-OFFLINE-SNAPSHOT</dd></div>
+          </dl>
+          <p class="micro-note">A GitHub Pages mirror, if one exists later, is convenience hosting—not the integrity root.</p>
+        </section>
+
+        <section class="panel" aria-labelledby="terms-title">
+          <div class="section-heading"><div><div class="eyebrow">02 / immutable input</div><h2 id="terms-title">Terms digest</h2></div><span class="lock-mark" aria-label="Immutable display">⌁</span></div>
+          <p class="panel-intro">The client displays a canonical terms fixture. The digest binds the exact sorted-key JSON shown below.</p>
+          <div class="digest-box"><span class="digest-algorithm">SHA-256</span><code id="terms-digest">computing locally…</code><button id="copy-digest" class="icon-button" type="button" title="Copy terms digest" aria-label="Copy terms digest">⧉</button></div>
+          <div class="terms-grid"><div><span>Template</span><strong id="term-template">—</strong></div><div><span>Outcomes</span><strong id="term-outcomes">—</strong></div><div><span>Rounding</span><strong id="term-rounding">—</strong></div></div>
+          <details class="disclosure"><summary>Inspect canonical terms JSON</summary><pre id="terms-json" class="code-block"></pre></details>
+        </section>
+      </div>
+
+      <section class="panel manifest-panel" aria-labelledby="manifest-title">
+        <div class="section-heading"><div><div class="eyebrow">03 / explicit bindings</div><h2 id="manifest-title">Cluster · program · profile</h2></div><span class="muted mono">manifest.json</span></div>
+        <div class="binding-grid">
+          <label class="field"><span>Cluster manifest</span><select id="cluster-select"></select><small id="cluster-note"></small></label>
+          <label class="field"><span>Program manifest</span><select id="program-select"></select><small id="program-note"></small></label>
+          <label class="field"><span>Collateral profile</span><select id="profile-select"></select><small id="profile-note"></small></label>
+        </div>
+        <div class="binding-status"><span class="status-dot"></span><strong id="binding-status-title">No executable chain binding</strong><span id="binding-status-copy">Selections are labels only until a checked release manifest and deployment exist.</span></div>
+      </section>
+
+      <section class="panel workbench" aria-labelledby="intent-title">
+        <div class="section-heading"><div><div class="eyebrow">04 / local workbench</div><h2 id="intent-title">Transaction-intent inspector</h2></div><span class="inspect-badge">INSPECT ONLY</span></div>
+        <p class="panel-intro">Create a deterministic, unsigned description of a future public instruction. This stub intentionally has no serializer, signer, RPC client, wallet adapter, or submit path.</p>
+        <div class="intent-layout">
+          <form id="intent-form" class="intent-form">
+            <label class="field"><span>Intent type</span><select id="intent-kind"><option value="inspect-market">Inspect market (read-only)</option><option value="prepare-deposit">Prepare deposit (stub)</option><option value="prepare-order">Prepare order (stub)</option><option value="prepare-redemption">Prepare redemption (stub)</option></select></label>
+            <label class="field"><span>Market / account reference <i>optional</i></span><input id="account-ref" name="account" inputmode="text" placeholder="Paste an address for local inspection" autocomplete="off"><small>No address is resolved or sent anywhere.</small></label>
+            <label class="field"><span>Amount in collateral atoms <i>optional</i></span><input id="amount" name="amount" inputmode="numeric" pattern="[0-9]*" placeholder="0" autocomplete="off"><small>Exact integer atoms only; no decimal conversion.</small></label>
+            <button class="primary-button" type="submit">Build local intent <span aria-hidden="true">→</span></button>
+            <p class="form-error" id="form-error" role="alert" hidden></p>
+          </form>
+          <div class="intent-output" aria-live="polite">
+            <div class="output-heading"><span>Canonical intent preview</span><span id="intent-state" class="muted">waiting for input</span></div>
+            <pre id="intent-json" class="code-block output-code">Select an intent to generate a local preview.
+
+No bytes will be signed or submitted.</pre>
+            <div class="output-actions"><button id="copy-intent" class="secondary-button" type="button" disabled>Copy JSON</button><span class="muted">signing: <strong>disabled</strong> · submit: <strong>disabled</strong></span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="notes-grid" aria-label="Security and provenance notes">
+        <article class="note-card"><span class="note-number">A</span><h2>Provenance</h2><p>Fixtures are labeled and digest-bound where possible. No deployment, source adapter, ELF, account read, or external index is claimed by this build.</p><a href="terms.json">Open terms.json ↗</a></article>
+        <article class="note-card"><span class="note-number">B</span><h2>Security boundary</h2><p>Static files can be forked or replaced. Verify the release manifest and bundle hash independently before treating a future signing surface as authentic.</p><a href="manifest.json">Open manifest.json ↗</a></article>
+        <article class="note-card"><span class="note-number">C</span><h2>Unavailable by design</h2><p>Wallet, RPC, market discovery, account validation, transaction serialization, signing, and submission are visibly unavailable. There is no hidden retry.</p></article>
+      </section>
+    </main>
+
+    <footer class="footer"><span>DRAGON'S CLUTCH · OFFLINE PROTOTYPE</span><span>Static files · no operator required</span></footer>
+    <script src="app.js"></script>
+  </body>
+</html>

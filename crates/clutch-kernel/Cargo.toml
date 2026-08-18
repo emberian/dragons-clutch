@@ -1,0 +1,12 @@
+[package]
+name = "clutch-kernel"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Small pure Rust collateral-generic complete-claim transition kernel"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []

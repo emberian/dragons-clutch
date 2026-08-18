@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "dragon-clutch.terms.v0",
+  "termsVersion": "terms-v0-offline-sample",
+  "canonicalTerms": {
+    "collateralProfile": "synthetic-six-decimal",
+    "feeAtoms": 0,
+    "maxOutcomes": 16,
+    "outcomeCount": 2,
+    "rounding": "exact-scaled-integer-floor-at-final-payout-boundary",
+    "sourceAdapter": "none-offline-fixture",
+    "sourceVersion": "unbound",
+    "state": "inspection-only",
+    "templateId": "offline-sample-template-v0",
+    "window": {
+      "endUnixSeconds": 0,
+      "startUnixSeconds": 0
+    }
+  },
+  "digest": "sha256:a21f6cbb1ab3b06afc7c8625f3388835843edb17c48173e8fb57df8b7e0dd8e8",
+  "warning": "These are display fixtures, not live market terms or an offer."
+}

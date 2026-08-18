@@ -1,0 +1,94 @@
+{
+  "schema": "dragons.cost_lab.constants.v1",
+  "snapshot_date": "2026-08-17",
+  "source_baseline": {
+    "agave": {
+      "release": "v4.2.1",
+      "commit": "c4b48df969a9e4f121e14a389bd7bec34c752507",
+      "release_url": "https://github.com/anza-xyz/agave/releases/tag/v4.2.1",
+      "cargo_lock_sha256": "8a1defb0522a34cb7f5c522e558617328346608a192ac626b51c34da83ad00f2",
+      "program_runtime_execution_budget_sha256": "139ecd8dd861bd8b82345d2d015702d6b25d5cb95e7d4fa9af06d678729d6e93",
+      "transaction_context_lib_sha256": "03c2f419b2276d4cfc0c284998da2e4079deb62b7f4172d8461140f296a30c39"
+    },
+    "token_2022_interface": {
+      "release": "interface@v3.1.1",
+      "tag_object": "4645257e753275f31a8ac606c52f25ac2989dcfa",
+      "commit": "e18f9c6f9bf6044b934f48e3090e8e59e4820f02",
+      "state_rs_sha256": "4566daf8b06ff2e7b975bed3e631ef4ab9591a95ddabd4117300ca1f639a59d2",
+      "source_url": "https://github.com/solana-program/token-2022/blob/e18f9c6f9bf6044b934f48e3090e8e59e4820f02/interface/src/state.rs"
+    },
+    "official_docs": {
+      "transactions": "https://solana.com/docs/core/transactions",
+      "constants": "https://solana.com/docs/core/constants-reference",
+      "compute_budget": "https://solana.com/docs/core/fees/compute-budget",
+      "retrieved": "2026-08-17"
+    }
+  },
+  "protocol_limits": {
+    "packet_data_size_bytes": 1232,
+    "runtime_account_lock_limit": 64,
+    "conditional_account_lock_limit": 128,
+    "hard_account_index_limit": 256,
+    "max_instruction_trace_length": 64,
+    "max_compute_units_per_transaction": 1400000,
+    "default_instruction_compute_units": 200000,
+    "cpi_invocation_charge_compute_units": 946,
+    "notes": [
+      "The 64-account runtime limit is the official documentation snapshot; the documented 128-account feature was inactive at retrieval time.",
+      "Feature activation and cluster configuration require action-time revalidation. No RPC was queried.",
+      "The 946-CU value is only the Agave v4.2.1 CPI invocation charge. It excludes invoked-program execution, account-data copying, serialization, syscalls, and Dragon logic."
+    ]
+  },
+  "rent_package_default": {
+    "crate": "solana-rent",
+    "version": "4.3.0",
+    "cargo_checksum": "39f0d780bf8e8a1fe8b5b5fce1acad6b209485b86dec246e7523d5e4a8b7c7fc",
+    "source_url": "https://docs.rs/solana-rent/4.3.0/src/solana_rent/lib.rs.html",
+    "account_storage_overhead_bytes": 128,
+    "default_lamports_per_byte": 6960,
+    "formula": "(account_storage_overhead_bytes + data_len) * default_lamports_per_byte",
+    "evidence_class": "analytical_package_default_not_cluster_measurement",
+    "action_time_rule": "Read and bind the target cluster Rent sysvar before budgeting or funding."
+  },
+  "token_2022_base_layout": {
+    "bare_mint_bytes": 82,
+    "base_token_account_bytes": 165,
+    "evidence_class": "pinned_source_constant",
+    "notes": [
+      "Extension-bearing Token-2022 accounts are larger.",
+      "The harness assumes destination accounts already exist; it does not model ATA creation inside split or materialize."
+    ]
+  },
+  "dragon_design_bounds": {
+    "max_v1_outcomes": 16,
+    "outcome_axis": [2, 4, 8, 16, 24],
+    "page_sizes_bytes": [4096, 8192, 10240],
+    "order_counts": [32, 128, 512],
+    "accumulator_page_counts": [1, 4, 16],
+    "page_header_bytes": 128,
+    "single_egg_order_bytes": 80,
+    "portfolio_order_fixed_bytes": 80,
+    "portfolio_coefficient_bytes_per_outcome": 8,
+    "position_header_bytes": 64,
+    "supply_ledger_header_bytes": 64,
+    "summary_layouts": {
+      "terminal": {
+        "data_bytes": 120,
+        "combine_scalar_steps": 4
+      },
+      "twap": {
+        "data_bytes": 160,
+        "combine_scalar_steps": 8
+      },
+      "full": {
+        "data_bytes": 272,
+        "combine_scalar_steps": 18
+      }
+    },
+    "notes": [
+      "Dragon account, order, page, summary, and instruction layouts are explicit hypotheses, not frozen program ABI.",
+      "Outcome count 24 is diagnostic and must be refused by V1 independently of apparent packet headroom.",
+      "The model uses exact integer arithmetic and no floating point."
+    ]
+  }
+}

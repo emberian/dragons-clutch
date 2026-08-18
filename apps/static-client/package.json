@@ -1,0 +1,11 @@
+{
+  "name": "dragons-clutch-static-client",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "check": "node --check app.js",
+    "test": "node test/smoke.mjs"
+  }
+}

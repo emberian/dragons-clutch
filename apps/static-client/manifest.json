@@ -1,0 +1,90 @@
+{
+  "schemaVersion": "dragon-clutch.static-release-manifest.v0",
+  "application": {
+    "name": "Glass / Dragon's Clutch",
+    "version": "0.1.0-offline",
+    "releaseStatus": "offline-prototype",
+    "official": false
+  },
+  "releaseIdentity": {
+    "sourceRepository": "dragon-clutch",
+    "sourceCommit": "UNBOUND-OFFLINE-SNAPSHOT",
+    "bundleSha256": "UNPUBLISHED-BUNDLE-DIGEST",
+    "ipfsCid": null,
+    "githubPagesMirror": null,
+    "manifestSha256": "UNPUBLISHED-MANIFEST-DIGEST"
+  },
+  "clusters": [
+    {
+      "id": "mainnet-beta",
+      "label": "Solana Mainnet Beta",
+      "status": "unavailable",
+      "rpcPolicy": "user-selected-only",
+      "endpoint": null,
+      "note": "No RPC endpoint is embedded or contacted by this build."
+    },
+    {
+      "id": "devnet",
+      "label": "Solana Devnet",
+      "status": "unavailable",
+      "rpcPolicy": "user-selected-only",
+      "endpoint": null,
+      "note": "No devnet deployment is checked by this build."
+    },
+    {
+      "id": "localnet",
+      "label": "Local validator",
+      "status": "unavailable",
+      "rpcPolicy": "user-selected-only",
+      "endpoint": null,
+      "note": "A local validator is optional future infrastructure, not started here."
+    }
+  ],
+  "programs": [
+    {
+      "key": "clutch",
+      "label": "Dragon's Clutch protocol",
+      "programId": null,
+      "status": "not-deployed",
+      "sbfElfSha256": null,
+      "deploymentManifest": null,
+      "note": "No program ID or ELF release has been checked."
+    }
+  ],
+  "profiles": [
+    {
+      "id": "synthetic-six-decimal",
+      "label": "Synthetic six-decimal Realm",
+      "status": "offline-fixture",
+      "mint": "SYNTHETIC-MINT-NOT-ONCHAIN",
+      "decimals": 6,
+      "termsVersion": "realm-profile-v0",
+      "note": "A local shape-only fixture. It has no collateral value and no chain identity."
+    },
+    {
+      "id": "dregg-reference",
+      "label": "DREGG reference Realm",
+      "status": "reference-only-unchecked",
+      "mint": "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump",
+      "decimals": 6,
+      "termsVersion": "realm-profile-v0",
+      "note": "Copied from repository prose as a reference only; no deployment or account read is asserted."
+    }
+  ],
+  "terms": {
+    "path": "terms.json",
+    "termsVersion": "terms-v0-offline-sample",
+    "digestAlgorithm": "sha256",
+    "digestScope": "canonicalTerms object (sorted keys, compact UTF-8 JSON)",
+    "digest": "sha256:a21f6cbb1ab3b06afc7c8625f3388835843edb17c48173e8fb57df8b7e0dd8e8"
+  },
+  "capabilities": {
+    "staticHosting": true,
+    "ipfsCompatible": true,
+    "rpcReads": false,
+    "walletConnection": false,
+    "transactionSigning": false,
+    "transactionSubmission": false,
+    "backgroundWork": false
+  }
+}

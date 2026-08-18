@@ -1,0 +1,19 @@
+market.create outcomes=2 payouts=2 principal=0
+market.maturity buckets=3
+liveness.book reserved=9
+kernel.split owner=0 quantity=8
+kernel.split owner=1 quantity=4
+kernel.materialize owner=0 outcome=1 quantity=2
+kernel.dematerialize owner=0 outcome=1 quantity=1
+batch.clear tick=2 matched=3 fee=1 liveness_paid=2
+cash.fund owner=0 amount=30
+batch.fill buy_index=0 buy_id=1 sell_index=1 sell_id=2 seller=1 buyer=0 outcome=1 quantity=1 consideration=30
+accumulator.accept bucket=0 low=20 high=20
+accumulator.accept bucket=1 low=30 high=30
+accumulator.accept bucket=2 low=70 high=70
+accumulator.seal end_bucket=3
+kernel.merge owner=1 quantity=1
+kernel.resolve payout_index=1
+kernel.redeem_internal owner=0 outcome=1 quantity=3 payout=3
+kernel.redeem_external owner=0 outcome=1 quantity=1 payout=1
+liveness.return amount=7

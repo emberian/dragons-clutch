@@ -1,0 +1,13 @@
+[package]
+name = "clutch-solana-layout"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Offline fixed-layout and deterministic intent codec for the transparent V1 adapter"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []

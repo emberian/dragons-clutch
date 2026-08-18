@@ -1,0 +1,221 @@
+# Cryptoeconomic design
+
+## 1. Three independent economic propositions
+
+1. **Solvency:** claimant principal covers every allowed terminal payout.
+2. **Liveness:** every mandatory future job is prepaid when the obligation is
+   admitted.
+3. **Revenue:** optional activity may pay maintainers and replenish future public
+   infrastructure.
+
+Revenue cannot prove either solvency or liveness. This distinction survives zero
+volume, team disappearance, and collapse in either the chosen collateral's or an
+optional reward token's external exchange value.
+
+## 2. Protected pools
+
+| Pool | Asset | Permitted payments | Forbidden payments |
+|---|---|---|---|
+| Market Hoard | Realm collateral | Complete merges and resolved redemptions | Keepers, rent, rebates, creator refunds, treasury |
+| Order escrow | Realm collateral/Eggs | Matched consideration and cancellation refunds | Claim liability |
+| Batch fee pot | Realm collateral | Maker rebate, capped clearer reward, protocol share | Hoard shortfall |
+| Market liveness | SOL | Market-specific finalization and cleanup | Claims or treasury |
+| Shared-feed reserve | SOL | Accepted observations and repairs | Claims or withdrawals while booked |
+| Keeper endowment | Frozen reward asset, optionally DREGG | Supplemental accepted-job rewards | Claims |
+| Rent bond | SOL | Account/mint/page creation and valid close refund | Ordinary work |
+| Treasury | Disclosed fee assets/SOL | Protocol operations | Any guaranteed obligation |
+
+A one-way treasury top-up into liveness is safe. Reverse movement out of booked
+liveness is forbidden. The Hoard is never lent, staked, rehypothecated, or netted
+against another Market.
+
+## 3. Worst-case liveness accounting
+
+For every unfinished job `j`, freeze the maximum unavoidable SOL payout and, if
+the Realm uses one, the maximum supplemental reward-asset payout:
+
+```text
+B_SOL[j]
+B_REWARD[j]
+```
+
+The invariant is:
+
+```text
+liveness_SOL.balance    >= sum(B_SOL[j]    for unfinished j)
+liveness_REWARD.balance >= sum(B_REWARD[j] for unfinished j)
+free(asset) = balance(asset) - booked(asset) >= 0
+```
+
+Market admission fails unless the invariant remains true after adding every
+observation, repair, finalization, and cleanup obligation. Expected fees, future
+top-ups, subscribers, token appreciation, and treasury charity count as zero.
+
+No finite bounty guarantees inclusion under unbounded congestion or censorship.
+The honest guarantee is conditional liveness while the frozen maximum remains
+competitive, followed by a deterministic failure outcome if the repair window
+closes. Admission of new obligations stops when recent landing-cost quantiles
+approach the supported maximum.
+
+The candidate keeper schedule reserves the maximum but pays a reverse-Dutch
+amount:
+
+- initial bounty near `1.2 * measured P50 all-in cost`;
+- deterministic steps as the deadline approaches;
+- final bounty at least `2 * measured P99.9 cost`;
+- only the first novel accepted transition earns;
+- catch-up may earn the sum of novel work minus a frozen batching discount.
+
+SOL pays unavoidable network/provider costs. A frozen reward asset—DREGG in the
+house configuration—is supplemental service income. There is no automatic
+critical-window collateral/reward-to-SOL swap and therefore no circular price-
+oracle dependency.
+
+## 4. Shared-feed capitalization
+
+One feed bucket serves every Market with identical source/grid semantics. Work is
+booked over the union of buckets, not the sum of market requests:
+
+```text
+shared work = |union(required buckets)|
+naive work  = sum(|market buckets|)
+```
+
+For a feed epoch with maximum reserve `B`, the first subscriber capitalizes `B`.
+When subscriber `k` joins, it deposits `B/k`; each of the previous `k-1`
+subscribers accrues reimbursement `B/[k(k-1)]`. After the update all `k`
+subscribers have equal net at-risk capital `B/k`, while the reserve still contains
+`B`. A cumulative reimbursement index makes joining and later claiming O(1).
+
+Subscriptions become irrevocable once committed. Otherwise departure would
+retroactively increase other Markets' frozen obligations. At successful epoch
+completion, unused reserve may be divided by the frozen rule. After a data-failure
+outcome, unused funds must not return to the creator, resolver, or current
+claimants; doing so would pay an interested party for inducing failure. Residual
+funds roll into the source-wide liveness reserve or a predeclared neutral sink.
+
+## 5. Simplex-auction fee hypothesis
+
+Kernel operations and ordinary token movement remain percentage-free:
+
+- no split fee;
+- no merge fee;
+- no redemption fee;
+- no Token-2022 transfer fee or transfer hook.
+
+Those taxes corrupt the complete-set arbitrage bands, terminal payoff, or external
+routing. The simplex venue instead charges filled state-contingent risk transfer
+in Realm collateral. For a single Egg this remains:
+
+```text
+F = kappa * q * p * (1 - p)
+kappa = 0.004                       # initial experimental policy
+```
+
+For an atomic portfolio `a` under scaled simplex prices `p_i`, the candidate fee
+base generalizes to:
+
+```text
+G_num(a,p) = sum_{i<j} p_i * p_j * abs(a_i - a_j)
+```
+
+with exact scale and one final carry-aware division. This is invariant to adding a
+risk-free complete set, symmetric under outcome relabeling, and reduces exactly to
+`q*p*(1-p)` for one Egg. See [FEE_GEOMETRY.md](FEE_GEOMETRY.md). It remains an
+experimental arm against flat-notional and per-leg controls.
+
+All values use exact scaled integer arithmetic. At `p = 0.5`, the candidate fee is
+20 basis points of cash consideration. Tentative distribution:
+
+- 60% standing-maker rebate;
+- at most 15% batch executor, capped by that batch's collected fees;
+- at least 25% protocol treasury.
+
+For the single-Egg midpoint example these correspond to approximately 12, 3, and
+5 basis points. Empty batches and zero-fee fills pay no executor subsidy. Obvious
+same-authority self-crosses are rejected. A Sybil controlling taker, maker, and
+executor recovers at most 75% before network costs, leaving wash volume negative.
+
+Taker fees round upward; rebates round downward; residual atoms follow a frozen
+allocation. Order splitting must not erase fees. The fee schedule is immutable per
+Market and selected only from audited policies under a protocol hard cap.
+
+The curve and portfolio generalization are hypotheses, not revenue entitlements.
+Test them against flat-notional and decomposed-leg controls over midpoint-
+equivalent rates of 0, 5, 10, 20, 35, and 50 basis points. Choose the lowest rate
+satisfying market-quality and positive-contribution floors. Liveness reliability
+is independently prepaid and therefore cannot justify raising the trading fee.
+
+## 6. Maintainer break-even
+
+For one Realm, let:
+
+```text
+W       = sum(state-contingent fee base) over filled trades, in collateral atoms
+a       = treasury fraction of fee (initially 0.25)
+x_floor = conservatively haircutted SOL per collateral atom
+P_SOL   = optional SOL service-premium revenue
+O_SOL   = measured protocol operating and maintenance cost
+```
+
+Then maintenance break-even is:
+
+```text
+a * kappa * W * x_floor + P_SOL >= O_SOL
+```
+
+This is a business measurement, not an admission invariant. At a five-basis-point
+net take, each dollar of uncovered cost requires roughly $2,000 of volume. If
+volume does not arrive, the team is not funded—but already accepted Markets still
+settle from prepaid resources.
+
+No emissions, points, wash rebates, or fee-share staking is required to
+manufacture activity. A DREGG Realm may create organic DREGG demand, and a Realm
+may nominate DREGG as an optional keeper reward, but Eggcrate never privileges
+that mint and no other Realm must touch it.
+
+Fee destinations are an immutable deployment/Realm `RevenuePolicy`, not Eggcrate
+solvency law. Every destination must be separately disclosed, conflict-reviewed,
+and unable to spend Hoard principal or booked liveness funds. See
+[DEPLOYMENT_REVENUE_BOUNDARY.md](DEPLOYMENT_REVENUE_BOUNDARY.md).
+
+## 7. Data-failure incentives
+
+An equal failure payout is not neutral. When one outcome is nearly certain, cheap
+tail Eggs may gain sharply if somebody can force equalization. A dedicated
+`INVALID_DATA` Egg merely makes the incentive directly tradeable.
+
+The preferred direction is:
+
+1. preserve every monotone authenticated observation;
+2. allow a long permissionless repair window with rising bounty;
+3. after repair closes, distribute only among outcomes still compatible with the
+   frozen authenticated evidence;
+4. make resolver compensation independent of the selected payout;
+5. cap common-mode exposure to any feed/bucket/source.
+
+For bucket `(f,k)`, publish maximum affected collateral:
+
+```text
+A[f,k] = sum(market_cap[m] * maximum_payout_change[m,f,k])
+```
+
+If a defensible manipulation-cost lower bound `M[f,k]` exists, a conservative
+initial admission cap is `A[f,k] <= 0.1 * M[f,k]`. When censorship or publisher
+failure has no defensible numeric bound, expose a security tier and hard notional
+cap rather than inventing one.
+
+Failure payout remains the most important open cryptoeconomic design gate.
+
+## 8. Thin-market behavior
+
+A thin Market may stop accepting native-auction orders. It must not stop
+observing or settling because volume disappeared. Missing a required bucket moves
+the venue into a frozen `DEGRADED` state, stops new order exposure, displays the
+pending failure rule, and continues paid repair. Ordinary external Token-2022
+transfers remain possible because no freeze authority exists.
+
+When every external and internal liability is zero, anyone may retire the Market,
+cancel only genuinely unnecessary future jobs, collect a prepaid cleanup bounty,
+and return eligible rent. Nonzero claims retain indefinite redemption; abandoned
+claimants are not confiscated to recover rent.

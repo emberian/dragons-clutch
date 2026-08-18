@@ -1,0 +1,12 @@
+[package]
+name = "clutch-vertical-model"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Deterministic offline integration/reference simulator for Dragon's Clutch"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+clutch-kernel = { path = "../../crates/clutch-kernel" }
+clutch-accumulator = { path = "../../crates/clutch-accumulator" }
+clutch-batch = { path = "../../crates/clutch-batch" }
