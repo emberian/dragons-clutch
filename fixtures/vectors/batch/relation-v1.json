@@ -1,0 +1,1250 @@
+{
+  "digests": {
+    "manifest": "d991870db0a5e514774eb17b88d5d6793e8d6da8781f7978ba01516b7d10d2d7",
+    "taxonomy": "1025002bef00f599a188f52bd68465cf5782f88ded63fbdc1bc8f470d0a20af4"
+  },
+  "family": "batch",
+  "notes": "The coupled relation BatchRelationV1. Every taxonomy code these vectors name comes from the extension block of TAXONOMY.json: VECTOR_SPINE_PROPOSAL.md section 2.4 maps only the scalar clutch_batch::Error and does not map relation_v1::ErrorV1 at all.",
+  "schema": "dragons-clutch/vector-manifest-v1",
+  "schema_version": 1,
+  "status": "proposed",
+  "taxonomy_version": 1,
+  "vectors": [
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "3357dbc19471e4e7c6b33cd269ec8971a62e86d2db83ca9efce089b4cf007641"
+      },
+      "domain": "success",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "EVIDENCE_MATRIX.md#6 names BatchRelationV1 as the first Lean seam",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-statistic-family"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "id": "batch-v1-cross-outcome-book-clears-with-zero-fee-eligible-volume",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "batch.relation-v1/v1",
+        "value": {
+          "book": {
+            "len": 2,
+            "orders": [
+              {
+                "canonical_order_id": "1",
+                "expiry_epoch": "18446744073709551615",
+                "kind": "single-egg",
+                "limit_price": "10000",
+                "minimum_fill": "1",
+                "outcome": 0,
+                "owner": 0,
+                "partial_policy": "allow",
+                "quantity": "1",
+                "side": "buy"
+              },
+              {
+                "canonical_order_id": "2",
+                "expiry_epoch": "18446744073709551615",
+                "kind": "single-egg",
+                "limit_price": "0",
+                "minimum_fill": "1",
+                "outcome": 1,
+                "owner": 1,
+                "partial_policy": "allow",
+                "quantity": "1",
+                "side": "sell"
+              }
+            ]
+          },
+          "domain": {
+            "book_id": "22",
+            "epoch": "7",
+            "market_id": "11",
+            "order_set_id": "44",
+            "outcome_count": 2,
+            "owner_count": 4,
+            "policy": {
+              "allocation": "full-pro-rata",
+              "aon": "refuse-admission",
+              "dust": "assign-canonical",
+              "fee_base": {
+                "kind": "none"
+              },
+              "pairing_witness": "recomputed-constructor",
+              "portfolio_lots": "strict-whole-order",
+              "residual_settlement": "unique-slice-receipts",
+              "rounding": "terminal-owner-floor",
+              "score": "lexicographic-dispersion-v1",
+              "self_cross": "allow-gate-at-pairing",
+              "transfer_phase": "active-or-resolved"
+            },
+            "policy_id": "33",
+            "price_scale": "10000",
+            "relation_version": 1,
+            "remainder_seed": "7"
+          }
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "honored_aon_mask": "0",
+            "prices": [
+              "5000",
+              "5000"
+            ],
+            "virtual_merge": "0",
+            "virtual_split": "0"
+          },
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "canonical_candidate_digest": "46259546203823794791718521295338432364",
+              "claimed_score": {
+                "churn": "0",
+                "digest": "46259546203823794791718521295338432364",
+                "distinct_owners": 0,
+                "limit_surplus_price_units": "0",
+                "weighted_direct_volume": {
+                  "magnitude": "0",
+                  "sign": "+"
+                }
+              },
+              "fills": [
+                "0",
+                "0"
+              ],
+              "virtual_merge": "0",
+              "virtual_split": "0"
+            }
+          },
+          "op": "canonical_candidate",
+          "step": 0
+        },
+        {
+          "args": {
+            "candidate": {
+              "canonical_candidate_digest": "46259546203823794791718521295338432364",
+              "claimed_score": {
+                "churn": "0",
+                "digest": "46259546203823794791718521295338432364",
+                "distinct_owners": 0,
+                "limit_surplus_price_units": "0",
+                "weighted_direct_volume": {
+                  "magnitude": "0",
+                  "sign": "+"
+                }
+              },
+              "fills": [
+                "0",
+                "0"
+              ],
+              "honored_aon_mask": "0",
+              "order_len": 2,
+              "prices": [
+                "5000",
+                "5000"
+              ],
+              "virtual_merge": "0",
+              "virtual_split": "0"
+            }
+          },
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "buy_flow": [
+                "0",
+                "0"
+              ],
+              "buyer_consideration_price_units": "0",
+              "credit_atoms": "0",
+              "debit_atoms": "0",
+              "direct_flow": [
+                "0",
+                "0"
+              ],
+              "distinct_participating_owners": 0,
+              "fee_price_units": "0",
+              "score": {
+                "weighted_direct_volume": {
+                  "magnitude": "0",
+                  "sign": "+"
+                }
+              },
+              "sell_flow": [
+                "0",
+                "0"
+              ],
+              "seller_credit_price_units": "0",
+              "total_flow": [
+                "0",
+                "0"
+              ]
+            }
+          },
+          "op": "verify",
+          "step": 1
+        }
+      ],
+      "primary_property_id": "P-BATCH-03",
+      "property_ids": [
+        "P-BATCH-03",
+        "P-BATCH-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "The accept half of the P1-B pair. A buy bound to outcome 0 and a sell bound to outcome 1 is exactly the book on which the scalar relation matched one unit, charged a fee, and then refused every settlement. Under the coupled relation the book still clears, but only as the empty candidate: zero flow on both outcomes, zero consideration, zero fee, zero weighted direct volume, and no participating owner. The digest and score were read off the implementation's own recomputation at these coordinates; they are the value the relation defines as canonical, and step 0 pins them so no later step can rely on an unpinned derivation.",
+        "source": "crates/clutch-batch/src/relation_v1_tests.rs (relation_v1_cross_outcome_pair_cannot_produce_matched_volume)"
+      },
+      "status": "proposed",
+      "surface": "clutch-batch",
+      "title": "P1-B: a cross-outcome pair clears only as the empty candidate, with no fee-eligible volume"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "precedence_note": "The module's documented deviation 1: the witness-level conservation identity (V4) is checked before the canonical-allocation exact equality (V3), so this forgery reports OutcomeConservationMismatch and not CandidateMismatch. The accepted set is identical either way; only the reported refusal changes.",
+        "semantic": true,
+        "single_fault": false
+      },
+      "digests": {
+        "vector": "78f1f5b5b0aedb6bddc71b2c94270bdb371a83f48831f9a96f696d239489ef45"
+      },
+      "domain": "cons",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "EVIDENCE_MATRIX.md#6 names BatchRelationV1 as the first Lean seam",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-statistic-family"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "id": "batch-v1-cross-outcome-forgery-refused-on-conservation",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "batch.relation-v1/v1",
+        "value": {
+          "book": {
+            "len": 2,
+            "orders": [
+              {
+                "canonical_order_id": "1",
+                "expiry_epoch": "18446744073709551615",
+                "kind": "single-egg",
+                "limit_price": "10000",
+                "minimum_fill": "1",
+                "outcome": 0,
+                "owner": 0,
+                "partial_policy": "allow",
+                "quantity": "1",
+                "side": "buy"
+              },
+              {
+                "canonical_order_id": "2",
+                "expiry_epoch": "18446744073709551615",
+                "kind": "single-egg",
+                "limit_price": "0",
+                "minimum_fill": "1",
+                "outcome": 1,
+                "owner": 1,
+                "partial_policy": "allow",
+                "quantity": "1",
+                "side": "sell"
+              }
+            ]
+          },
+          "domain": {
+            "book_id": "22",
+            "epoch": "7",
+            "market_id": "11",
+            "order_set_id": "44",
+            "outcome_count": 2,
+            "owner_count": 4,
+            "policy": {
+              "allocation": "full-pro-rata",
+              "aon": "refuse-admission",
+              "dust": "assign-canonical",
+              "fee_base": {
+                "kind": "none"
+              },
+              "pairing_witness": "recomputed-constructor",
+              "portfolio_lots": "strict-whole-order",
+              "residual_settlement": "unique-slice-receipts",
+              "rounding": "terminal-owner-floor",
+              "score": "lexicographic-dispersion-v1",
+              "self_cross": "allow-gate-at-pairing",
+              "transfer_phase": "active-or-resolved"
+            },
+            "policy_id": "33",
+            "price_scale": "10000",
+            "relation_version": 1,
+            "remainder_seed": "7"
+          }
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "candidate": {
+              "canonical_candidate_digest": "0",
+              "claimed_score": {
+                "churn": "0",
+                "digest": "0",
+                "distinct_owners": 0,
+                "limit_surplus_price_units": "0",
+                "weighted_direct_volume": {
+                  "magnitude": "0",
+                  "sign": "+"
+                }
+              },
+              "fills": [
+                "1",
+                "1"
+              ],
+              "honored_aon_mask": "0",
+              "order_len": 2,
+              "prices": [
+                "5000",
+                "5000"
+              ],
+              "virtual_merge": "0",
+              "virtual_split": "0"
+            }
+          },
+          "expect": {
+            "code": 5026,
+            "frame": "batch",
+            "name": "cons.outcome-conservation-mismatch",
+            "result_kind": "error"
+          },
+          "op": "verify",
+          "step": 0
+        },
+        {
+          "args": {
+            "candidate": {
+              "canonical_candidate_digest": "0",
+              "claimed_score": {
+                "churn": "0",
+                "digest": "0",
+                "distinct_owners": 0,
+                "limit_surplus_price_units": "0",
+                "weighted_direct_volume": {
+                  "magnitude": "0",
+                  "sign": "+"
+                }
+              },
+              "fills": [
+                "1",
+                "1"
+              ],
+              "honored_aon_mask": "0",
+              "order_len": 2,
+              "prices": [
+                "5000",
+                "5000"
+              ],
+              "virtual_merge": "0",
+              "virtual_split": "0"
+            }
+          },
+          "expect": {
+            "code": 5026,
+            "frame": "batch",
+            "name": "cons.outcome-conservation-mismatch",
+            "result_kind": "error"
+          },
+          "op": "verify_ignoring_claimed_aggregates",
+          "step": 1
+        }
+      ],
+      "primary_property_id": "P-BATCH-03",
+      "property_ids": [
+        "P-BATCH-03",
+        "P-BATCH-02"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "The refuse half of the P1-B pair, and the whole point of the coupled relation. Per-outcome conservation with one global virtual split/merge pair requires the same net imbalance c on every active outcome; a fill of 1 on outcome 0's buy and 1 on outcome 1's sell forces c = -1 on outcome 0 and c = +1 on outcome 1 simultaneously, so the system has no solution. Both entry points are exercised because the module documents a deliberate V4-before-V3 precedence: the diagnostic 5026 must be reported rather than the generic 5009, and step 0 shows the full verifier reaches the same conclusion before its V9 aggregate binding.",
+        "source": "crates/clutch-batch/src/relation_v1_tests.rs (relation_v1_cross_outcome_pair_cannot_produce_matched_volume)"
+      },
+      "status": "proposed",
+      "surface": "clutch-batch",
+      "title": "P1-B: a candidate claiming the cross-outcome match has no solution at all"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "7562e63f2baeace378633042088f72adabd18659ef1c4c593cb40b23d574319e"
+      },
+      "domain": "success",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "EVIDENCE_MATRIX.md#6 names BatchRelationV1 as the first Lean seam",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-statistic-family"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "id": "batch-v1-bound-owners-admit-a-complete-executable-pairing",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "batch.relation-v1/v1",
+        "value": {
+          "book": {
+            "len": 2,
+            "orders": [
+              {
+                "canonical_order_id": "1",
+                "expiry_epoch": "18446744073709551615",
+                "kind": "single-egg",
+                "limit_price": "10000",
+                "minimum_fill": "1",
+                "outcome": 0,
+                "owner": 0,
+                "partial_policy": "allow",
+                "quantity": "4",
+                "side": "buy"
+              },
+              {
+                "canonical_order_id": "2",
+                "expiry_epoch": "18446744073709551615",
+                "kind": "single-egg",
+                "limit_price": "0",
+                "minimum_fill": "1",
+                "outcome": 0,
+                "owner": 1,
+                "partial_policy": "allow",
+                "quantity": "4",
+                "side": "sell"
+              }
+            ]
+          },
+          "domain": {
+            "book_id": "22",
+            "epoch": "7",
+            "market_id": "11",
+            "order_set_id": "44",
+            "outcome_count": 2,
+            "owner_count": 4,
+            "policy": {
+              "allocation": "price-priority-marginal-pro-rata",
+              "aon": "refuse-admission",
+              "dust": "assign-canonical",
+              "fee_base": {
+                "kind": "none"
+              },
+              "pairing_witness": "recomputed-constructor",
+              "portfolio_lots": "strict-whole-order",
+              "residual_settlement": "unique-slice-receipts",
+              "rounding": "terminal-owner-floor",
+              "score": "lexicographic-dispersion-v1",
+              "self_cross": "allow-gate-at-pairing",
+              "transfer_phase": "active-or-resolved"
+            },
+            "policy_id": "33",
+            "price_scale": "10000",
+            "relation_version": 1,
+            "remainder_seed": "7"
+          }
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "honored_aon_mask": "0",
+            "prices": [
+              "5000",
+              "5000"
+            ],
+            "virtual_merge": "0",
+            "virtual_split": "0"
+          },
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "canonical_candidate_digest": "217262973876000398979303838267102196092",
+              "claimed_score": {
+                "churn": "0",
+                "digest": "217262973876000398979303838267102196092",
+                "distinct_owners": 2,
+                "limit_surplus_price_units": "40000",
+                "weighted_direct_volume": {
+                  "magnitude": "100000000",
+                  "sign": "+"
+                }
+              },
+              "fills": [
+                "4",
+                "4"
+              ]
+            }
+          },
+          "op": "canonical_candidate",
+          "step": 0
+        },
+        {
+          "args": {
+            "candidate": {
+              "canonical_candidate_digest": "217262973876000398979303838267102196092",
+              "claimed_score": {
+                "churn": "0",
+                "digest": "217262973876000398979303838267102196092",
+                "distinct_owners": 2,
+                "limit_surplus_price_units": "40000",
+                "weighted_direct_volume": {
+                  "magnitude": "100000000",
+                  "sign": "+"
+                }
+              },
+              "fills": [
+                "4",
+                "4"
+              ],
+              "honored_aon_mask": "0",
+              "order_len": 2,
+              "prices": [
+                "5000",
+                "5000"
+              ],
+              "virtual_merge": "0",
+              "virtual_split": "0"
+            }
+          },
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "buy_flow": [
+                "4",
+                "0"
+              ],
+              "buyer_consideration_price_units": "20000",
+              "credit_atoms": "2",
+              "debit_atoms": "2",
+              "direct_flow": [
+                "4",
+                "0"
+              ],
+              "distinct_participating_owners": 2,
+              "self_overlap_volume": "0",
+              "sell_flow": [
+                "4",
+                "0"
+              ],
+              "seller_credit_price_units": "20000",
+              "total_flow": [
+                "4",
+                "0"
+              ]
+            }
+          },
+          "op": "verify",
+          "step": 1
+        },
+        {
+          "args": {
+            "candidate": {
+              "canonical_candidate_digest": "217262973876000398979303838267102196092",
+              "claimed_score": {
+                "churn": "0",
+                "digest": "217262973876000398979303838267102196092",
+                "distinct_owners": 2,
+                "limit_surplus_price_units": "40000",
+                "weighted_direct_volume": {
+                  "magnitude": "100000000",
+                  "sign": "+"
+                }
+              },
+              "fills": [
+                "4",
+                "4"
+              ],
+              "honored_aon_mask": "0",
+              "order_len": 2,
+              "prices": [
+                "5000",
+                "5000"
+              ],
+              "virtual_merge": "0",
+              "virtual_split": "0"
+            }
+          },
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "len": 1,
+              "slices": [
+                {
+                  "buy_ref": {
+                    "index": 0,
+                    "kind": "order"
+                  },
+                  "outcome": 0,
+                  "quantity": "4",
+                  "sell_ref": {
+                    "index": 1,
+                    "kind": "order"
+                  }
+                }
+              ]
+            }
+          },
+          "op": "verify_pairing_witness",
+          "step": 2
+        }
+      ],
+      "primary_property_id": "P-BATCH-03",
+      "property_ids": [
+        "P-BATCH-03",
+        "P-BATCH-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "The accept half of the pairing-feasibility pair. Four atoms of outcome 0 cross between two distinct bound owners, so the V5 inequality holds and the canonical constructor emits exactly one slice moving all four atoms from order 1 to order 0. Consideration is 4 * 5000 = 20000 price units and the terminal-owner floor converts that to 2 collateral atoms in each direction; both were read off the implementation's exact ledger.",
+        "source": "crates/clutch-batch/src/relation_v1_tests.rs (batch_bound_outcomes_and_owners_admit_complete_executable_pairing)"
+      },
+      "status": "proposed",
+      "surface": "clutch-batch",
+      "title": "same outcome, distinct owners: the accepted fills decompose into one executable transfer"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "2ba7c134c9a34a8afcf18947a46aa2ad6191976984df43019e220aa296fa8037"
+      },
+      "domain": "cons",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "EVIDENCE_MATRIX.md#6 names BatchRelationV1 as the first Lean seam",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-statistic-family"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "id": "batch-v1-self-cross-fails-the-pairing-feasibility-gate",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "batch.relation-v1/v1",
+        "value": {
+          "book": {
+            "len": 2,
+            "orders": [
+              {
+                "canonical_order_id": "1",
+                "expiry_epoch": "18446744073709551615",
+                "kind": "single-egg",
+                "limit_price": "10000",
+                "minimum_fill": "1",
+                "outcome": 0,
+                "owner": 0,
+                "partial_policy": "allow",
+                "quantity": "2",
+                "side": "buy"
+              },
+              {
+                "canonical_order_id": "2",
+                "expiry_epoch": "18446744073709551615",
+                "kind": "single-egg",
+                "limit_price": "0",
+                "minimum_fill": "1",
+                "outcome": 0,
+                "owner": 0,
+                "partial_policy": "allow",
+                "quantity": "2",
+                "side": "sell"
+              }
+            ]
+          },
+          "domain": {
+            "book_id": "22",
+            "epoch": "7",
+            "market_id": "11",
+            "order_set_id": "44",
+            "outcome_count": 2,
+            "owner_count": 4,
+            "policy": {
+              "allocation": "full-pro-rata",
+              "aon": "refuse-admission",
+              "dust": "assign-canonical",
+              "fee_base": {
+                "kind": "none"
+              },
+              "pairing_witness": "recomputed-constructor",
+              "portfolio_lots": "strict-whole-order",
+              "residual_settlement": "unique-slice-receipts",
+              "rounding": "terminal-owner-floor",
+              "score": "lexicographic-dispersion-v1",
+              "self_cross": "allow-gate-at-pairing",
+              "transfer_phase": "active-or-resolved"
+            },
+            "policy_id": "33",
+            "price_scale": "10000",
+            "relation_version": 1,
+            "remainder_seed": "7"
+          }
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "honored_aon_mask": "0",
+            "prices": [
+              "5000",
+              "5000"
+            ],
+            "virtual_merge": "0",
+            "virtual_split": "0"
+          },
+          "expect": {
+            "code": 5029,
+            "frame": "batch",
+            "name": "cons.pairing-infeasible",
+            "result_kind": "error"
+          },
+          "op": "canonical_candidate",
+          "step": 0
+        },
+        {
+          "args": {
+            "candidate": {
+              "canonical_candidate_digest": "0",
+              "claimed_score": {
+                "churn": "0",
+                "digest": "0",
+                "distinct_owners": 0,
+                "limit_surplus_price_units": "0",
+                "weighted_direct_volume": {
+                  "magnitude": "0",
+                  "sign": "+"
+                }
+              },
+              "fills": [
+                "2",
+                "2"
+              ],
+              "honored_aon_mask": "0",
+              "order_len": 2,
+              "prices": [
+                "5000",
+                "5000"
+              ],
+              "virtual_merge": "0",
+              "virtual_split": "0"
+            }
+          },
+          "expect": {
+            "code": 5029,
+            "frame": "batch",
+            "name": "cons.pairing-infeasible",
+            "result_kind": "error"
+          },
+          "op": "verify",
+          "step": 1
+        }
+      ],
+      "primary_property_id": "P-BATCH-03",
+      "property_ids": [
+        "P-BATCH-03",
+        "P-BATCH-02"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "The refuse half of the pairing-feasibility pair. Owner 0 stands on both sides of outcome 0, so its participation in that outcome is 4 against a total flow of 2 and the V5 inequality fails with outcome 0, owner 0. Under the frozen N-c variant the book is admitted and the gate owns the refusal, which is exactly the variant this vector pins: under N-a the same book would refuse at admission with SelfCrossRefused instead. The refusal payload (outcome, owner) is diagnostic and is deliberately not part of the taxonomy code.",
+        "source": "crates/clutch-batch/src/relation_v1_tests.rs (relation_v1_pairing_feasibility_inequality_is_necessary)"
+      },
+      "status": "proposed",
+      "surface": "clutch-batch",
+      "title": "one owner on both sides of one outcome admits no complete executable pairing"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "9aa24159f9f6e4786cb54ec5bd49ddc5339348dd968ebf1cd25ae8a7f21871d4"
+      },
+      "domain": "cons",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "EVIDENCE_MATRIX.md#6 names BatchRelationV1 as the first Lean seam",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-statistic-family"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "id": "batch-v1-aon-mask-leak-refused",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "batch.relation-v1/v1",
+        "value": {
+          "book": {
+            "len": 3,
+            "orders": [
+              {
+                "canonical_order_id": "1",
+                "expiry_epoch": "18446744073709551615",
+                "kind": "single-egg",
+                "limit_price": "5000",
+                "minimum_fill": "10",
+                "outcome": 0,
+                "owner": 0,
+                "partial_policy": "all-or-none",
+                "quantity": "10",
+                "side": "buy"
+              },
+              {
+                "canonical_order_id": "2",
+                "expiry_epoch": "18446744073709551615",
+                "kind": "single-egg",
+                "limit_price": "5000",
+                "minimum_fill": "10",
+                "outcome": 0,
+                "owner": 1,
+                "partial_policy": "all-or-none",
+                "quantity": "10",
+                "side": "buy"
+              },
+              {
+                "canonical_order_id": "3",
+                "expiry_epoch": "18446744073709551615",
+                "kind": "single-egg",
+                "limit_price": "5000",
+                "minimum_fill": "1",
+                "outcome": 0,
+                "owner": 2,
+                "partial_policy": "allow",
+                "quantity": "15",
+                "side": "sell"
+              }
+            ]
+          },
+          "domain": {
+            "book_id": "22",
+            "epoch": "7",
+            "market_id": "11",
+            "order_set_id": "44",
+            "outcome_count": 2,
+            "owner_count": 3,
+            "policy": {
+              "allocation": "price-priority-marginal-pro-rata",
+              "aon": "witnessed-honored-mask",
+              "dust": "assign-canonical",
+              "fee_base": {
+                "kind": "none"
+              },
+              "pairing_witness": "recomputed-constructor",
+              "portfolio_lots": "strict-whole-order",
+              "residual_settlement": "unique-slice-receipts",
+              "rounding": "terminal-owner-floor",
+              "score": "lexicographic-dispersion-v1",
+              "self_cross": "allow-gate-at-pairing",
+              "transfer_phase": "active-or-resolved"
+            },
+            "policy_id": "33",
+            "price_scale": "10000",
+            "relation_version": 1,
+            "remainder_seed": "7"
+          }
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "honored_aon_mask": "1",
+            "prices": [
+              "5000",
+              "5000"
+            ],
+            "virtual_merge": "0",
+            "virtual_split": "0"
+          },
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "canonical_candidate_digest": "252272033613592186522560000220663523074",
+              "claimed_score": {
+                "churn": "0",
+                "digest": "252272033613592186522560000220663523074",
+                "distinct_owners": 2,
+                "limit_surplus_price_units": "0",
+                "weighted_direct_volume": {
+                  "magnitude": "250000000",
+                  "sign": "+"
+                }
+              },
+              "fills": [
+                "10",
+                "0",
+                "10"
+              ],
+              "honored_aon_mask": "1"
+            }
+          },
+          "op": "canonical_candidate",
+          "step": 0
+        },
+        {
+          "args": {
+            "candidate": {
+              "canonical_candidate_digest": "252272033613592186522560000220663523074",
+              "claimed_score": {
+                "churn": "0",
+                "digest": "252272033613592186522560000220663523074",
+                "distinct_owners": 2,
+                "limit_surplus_price_units": "0",
+                "weighted_direct_volume": {
+                  "magnitude": "250000000",
+                  "sign": "+"
+                }
+              },
+              "fills": [
+                "10",
+                "0",
+                "10"
+              ],
+              "honored_aon_mask": "0",
+              "order_len": 3,
+              "prices": [
+                "5000",
+                "5000"
+              ],
+              "virtual_merge": "0",
+              "virtual_split": "0"
+            }
+          },
+          "expect": {
+            "code": 5025,
+            "frame": "batch",
+            "name": "cons.aon-mask-leak",
+            "result_kind": "error"
+          },
+          "op": "verify_ignoring_claimed_aggregates",
+          "step": 1
+        }
+      ],
+      "primary_property_id": "P-BATCH-04",
+      "property_ids": [
+        "P-BATCH-04",
+        "P-BATCH-02"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "Under AON variant 2b the untrusted solver submits the honored subset as a mask and the verifier only ever checks a mask; it never computes one, because the two-cycle book below has no unique maximum honorable subset. Dropping the mask bit while keeping the fill is the leak this refusal exists for. The refusal-only entry point is used deliberately: it is what the crate's own falsifiers use, so the structural refusal is observed rather than masked by the V9 digest comparison that a hand-edited candidate would also fail.",
+        "source": "crates/clutch-batch/src/relation_v1_tests.rs (aon_witness_mask_cannot_claim_unhonorable_order)"
+      },
+      "status": "proposed",
+      "surface": "clutch-batch",
+      "title": "an unhonored all-or-none order carrying a nonzero fill is refused"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "63c8d237a8c0804aab3f4c816e6715ed6b3e8cd7e397d85e5e68ff975b4e93fc"
+      },
+      "domain": "cons",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "EVIDENCE_MATRIX.md#6 names BatchRelationV1 as the first Lean seam",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-statistic-family"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "id": "batch-v1-aon-mask-dishonored-refused",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "batch.relation-v1/v1",
+        "value": {
+          "book": {
+            "len": 3,
+            "orders": [
+              {
+                "canonical_order_id": "1",
+                "expiry_epoch": "18446744073709551615",
+                "kind": "single-egg",
+                "limit_price": "5000",
+                "minimum_fill": "10",
+                "outcome": 0,
+                "owner": 0,
+                "partial_policy": "all-or-none",
+                "quantity": "10",
+                "side": "buy"
+              },
+              {
+                "canonical_order_id": "2",
+                "expiry_epoch": "18446744073709551615",
+                "kind": "single-egg",
+                "limit_price": "5000",
+                "minimum_fill": "10",
+                "outcome": 0,
+                "owner": 1,
+                "partial_policy": "all-or-none",
+                "quantity": "10",
+                "side": "buy"
+              },
+              {
+                "canonical_order_id": "3",
+                "expiry_epoch": "18446744073709551615",
+                "kind": "single-egg",
+                "limit_price": "5000",
+                "minimum_fill": "1",
+                "outcome": 0,
+                "owner": 2,
+                "partial_policy": "allow",
+                "quantity": "15",
+                "side": "sell"
+              }
+            ]
+          },
+          "domain": {
+            "book_id": "22",
+            "epoch": "7",
+            "market_id": "11",
+            "order_set_id": "44",
+            "outcome_count": 2,
+            "owner_count": 3,
+            "policy": {
+              "allocation": "price-priority-marginal-pro-rata",
+              "aon": "witnessed-honored-mask",
+              "dust": "assign-canonical",
+              "fee_base": {
+                "kind": "none"
+              },
+              "pairing_witness": "recomputed-constructor",
+              "portfolio_lots": "strict-whole-order",
+              "residual_settlement": "unique-slice-receipts",
+              "rounding": "terminal-owner-floor",
+              "score": "lexicographic-dispersion-v1",
+              "self_cross": "allow-gate-at-pairing",
+              "transfer_phase": "active-or-resolved"
+            },
+            "policy_id": "33",
+            "price_scale": "10000",
+            "relation_version": 1,
+            "remainder_seed": "7"
+          }
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "honored_aon_mask": "3",
+            "prices": [
+              "5000",
+              "5000"
+            ],
+            "virtual_merge": "0",
+            "virtual_split": "0"
+          },
+          "expect": {
+            "code": 5024,
+            "frame": "batch",
+            "name": "cons.aon-mask-dishonored",
+            "result_kind": "error"
+          },
+          "op": "canonical_candidate",
+          "step": 0
+        },
+        {
+          "args": {
+            "candidate": {
+              "canonical_candidate_digest": "252272033613592186522560000220663523074",
+              "claimed_score": {
+                "churn": "0",
+                "digest": "252272033613592186522560000220663523074",
+                "distinct_owners": 2,
+                "limit_surplus_price_units": "0",
+                "weighted_direct_volume": {
+                  "magnitude": "250000000",
+                  "sign": "+"
+                }
+              },
+              "fills": [
+                "5",
+                "0",
+                "10"
+              ],
+              "honored_aon_mask": "1",
+              "order_len": 3,
+              "prices": [
+                "5000",
+                "5000"
+              ],
+              "virtual_merge": "0",
+              "virtual_split": "0"
+            }
+          },
+          "expect": {
+            "code": 5024,
+            "frame": "batch",
+            "name": "cons.aon-mask-dishonored",
+            "result_kind": "error"
+          },
+          "op": "verify_ignoring_claimed_aggregates",
+          "step": 1
+        },
+        {
+          "args": {
+            "candidate": {
+              "canonical_candidate_digest": "252272033613592186522560000220663523074",
+              "claimed_score": {
+                "churn": "0",
+                "digest": "252272033613592186522560000220663523074",
+                "distinct_owners": 2,
+                "limit_surplus_price_units": "0",
+                "weighted_direct_volume": {
+                  "magnitude": "250000000",
+                  "sign": "+"
+                }
+              },
+              "fills": [
+                "10",
+                "0",
+                "10"
+              ],
+              "honored_aon_mask": "5",
+              "order_len": 3,
+              "prices": [
+                "5000",
+                "5000"
+              ],
+              "virtual_merge": "0",
+              "virtual_split": "0"
+            }
+          },
+          "expect": {
+            "code": 2066,
+            "frame": "batch",
+            "name": "shape.aon-mask-not-applicable",
+            "result_kind": "error"
+          },
+          "op": "verify_ignoring_claimed_aggregates",
+          "step": 2
+        }
+      ],
+      "primary_property_id": "P-BATCH-04",
+      "property_ids": [
+        "P-BATCH-04",
+        "P-BATCH-02"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "The two-cycle book: two all-or-none buys of 10 against one sell of 15. T({}) = {X, Y} and T({X, Y}) = {}, so the honorable subsets are exactly {}, {X}, {Y} and there is no unique maximum. Step 0 shows a mask claiming both is refused rather than resolved by a fixed-point iteration a verifier could oscillate on. Step 1 shows a honored order filled at half size is refused, and step 2 shows a mask bit on the sell order, which carries no minimum-fill obligation, is a shape fault and not a conservation fault.",
+        "source": "crates/clutch-batch/src/relation_v1_tests.rs (aon_two_cycle_book_has_no_unique_honorable_subset, aon_witness_mask_cannot_claim_unhonorable_order)"
+      },
+      "status": "proposed",
+      "surface": "clutch-batch",
+      "title": "a masked all-or-none order that is not filled at full size is refused"
+    }
+  ]
+}

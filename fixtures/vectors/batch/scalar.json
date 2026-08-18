@@ -1,0 +1,285 @@
+{
+  "digests": {
+    "manifest": "0dba55df7c2ef9a525b0ebfb31a695dfb022e0ae130d85c3163c3109b574eb5c",
+    "taxonomy": "1025002bef00f599a188f52bd68465cf5782f88ded63fbdc1bc8f470d0a20af4"
+  },
+  "family": "batch",
+  "notes": "The scalar clearing lab of the crate root, retained as a regression lab. Its known P1-B defect is the subject of batch/relation-v1.json.",
+  "schema": "dragons-clutch/vector-manifest-v1",
+  "schema_version": 1,
+  "status": "proposed",
+  "taxonomy_version": 1,
+  "vectors": [
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "precedence_note": "verify checks candidate shape, then matched, then per-order fills; the eligibility test precedes the canonical-allocation equality test, so this input yields 5006 rather than 5009.",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "9e714f8b89c738481b840c8531ffe0583188765e74e84394742fce3f9d596bcf"
+      },
+      "domain": "cons",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "EVIDENCE_MATRIX.md#6 names BatchRelationV1 as the first Lean seam",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-statistic-family"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "id": "batch-ineligible-fill-below-clearing-tick",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "batch.book/v1",
+        "value": {
+          "len": 3,
+          "orders": [
+            {
+              "canonical_order_id": "1",
+              "limit_tick": 2,
+              "minimum_fill": "1",
+              "partial_policy": "allow",
+              "quantity": "10",
+              "side": "buy"
+            },
+            {
+              "canonical_order_id": "2",
+              "limit_tick": 0,
+              "minimum_fill": "1",
+              "partial_policy": "allow",
+              "quantity": "10",
+              "side": "buy"
+            },
+            {
+              "canonical_order_id": "3",
+              "limit_tick": 2,
+              "minimum_fill": "1",
+              "partial_policy": "allow",
+              "quantity": "10",
+              "side": "sell"
+            }
+          ],
+          "policy": {
+            "dust_policy": "assign-canonical",
+            "grid": {
+              "len": 3,
+              "ticks": [
+                "10",
+                "20",
+                "30"
+              ]
+            },
+            "remainder_seed": "7",
+            "tie_rule": "max-volume-min-imbalance-highest-tick"
+          }
+        }
+      },
+      "operations": [
+        {
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "clearing_tick": 2,
+              "fills": [
+                "10",
+                "0",
+                "10"
+              ],
+              "len": 3,
+              "matched": "10"
+            }
+          },
+          "op": "propose",
+          "step": 0
+        },
+        {
+          "args": {
+            "candidate": {
+              "clearing_tick": 2,
+              "fills": [
+                "0",
+                "10",
+                "10"
+              ],
+              "len": 3,
+              "matched": "10"
+            }
+          },
+          "expect": {
+            "code": 5006,
+            "frame": "batch",
+            "name": "cons.ineligible-fill",
+            "result_kind": "error"
+          },
+          "op": "verify",
+          "step": 1
+        }
+      ],
+      "primary_property_id": "P-BATCH-01",
+      "property_ids": [
+        "P-BATCH-01",
+        "P-BATCH-02"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "The proposal's own worked example, ported. Aggregate side totals are preserved by the forgery, so conservation alone cannot catch it; eligibility must be checked per order. Single-fault: the forged vector satisfies the matched, length, tick, minimum-fill, and all-or-none checks.",
+        "source": "docs/implementation/VECTOR_SPINE_PROPOSAL.md#42"
+      },
+      "status": "proposed",
+      "surface": "clutch-batch",
+      "title": "a nonzero fill on an order the clearing tick excludes is refused"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "61d7660f6304edf64644c9b76f90a7b97e0e9ca22958db75ee4fd56c9a237499"
+      },
+      "domain": "cons",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "EVIDENCE_MATRIX.md#6 names BatchRelationV1 as the first Lean seam",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-statistic-family"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "id": "batch-forged-reallocation-refused-as-candidate-mismatch",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "batch.book/v1",
+        "value": {
+          "len": 3,
+          "orders": [
+            {
+              "canonical_order_id": "1",
+              "limit_tick": 2,
+              "minimum_fill": "1",
+              "partial_policy": "allow",
+              "quantity": "8",
+              "side": "buy"
+            },
+            {
+              "canonical_order_id": "2",
+              "limit_tick": 2,
+              "minimum_fill": "1",
+              "partial_policy": "allow",
+              "quantity": "8",
+              "side": "buy"
+            },
+            {
+              "canonical_order_id": "3",
+              "limit_tick": 2,
+              "minimum_fill": "1",
+              "partial_policy": "allow",
+              "quantity": "10",
+              "side": "sell"
+            }
+          ],
+          "policy": {
+            "dust_policy": "assign-canonical",
+            "grid": {
+              "len": 3,
+              "ticks": [
+                "10",
+                "20",
+                "30"
+              ]
+            },
+            "remainder_seed": "7",
+            "tie_rule": "max-volume-min-imbalance-highest-tick"
+          }
+        }
+      },
+      "operations": [
+        {
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "clearing_tick": 2,
+              "fills": [
+                "5",
+                "5",
+                "10"
+              ],
+              "len": 3,
+              "matched": "10"
+            }
+          },
+          "op": "propose",
+          "step": 0
+        },
+        {
+          "args": {
+            "candidate": {
+              "clearing_tick": 2,
+              "fills": [
+                "6",
+                "4",
+                "10"
+              ],
+              "len": 3,
+              "matched": "10"
+            }
+          },
+          "expect": {
+            "code": 5009,
+            "frame": "batch",
+            "name": "cons.candidate-mismatch",
+            "result_kind": "error"
+          },
+          "op": "verify",
+          "step": 1
+        }
+      ],
+      "primary_property_id": "P-BATCH-02",
+      "property_ids": [
+        "P-BATCH-02",
+        "P-BATCH-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "Two eligible buys of quantity 8 share a matched volume of 10, so the canonical allocation is 5 and 5 with no dust. The forgery moves one atom between them: eligibility, per-order quantity, minimum fill, all-or-none, and both side folds all still hold, so only byte-for-byte equality with the recomputed canonical fill vector catches it. Expected fills derived by reading allocate_side: 8 * 10 / 16 = 5 exactly, remainder 0, so the seeded largest-remainder pass never runs.",
+        "source": "crates/clutch-batch/src/lib.rs (FixedBook::verify)"
+      },
+      "status": "proposed",
+      "surface": "clutch-batch",
+      "title": "a forgery that preserves both side totals is refused by exact canonical equality"
+    }
+  ]
+}

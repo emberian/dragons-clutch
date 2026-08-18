@@ -1,0 +1,2001 @@
+{
+  "digests": {
+    "manifest": "ae64d0f1ac71dacbf128bd8cace3425201b8919cbc9c309c7853891ebf4caccb",
+    "taxonomy": "1025002bef00f599a188f52bd68465cf5782f88ded63fbdc1bc8f470d0a20af4"
+  },
+  "family": "kernel",
+  "notes": "The kernel family: complete-set split and merge, finite resolution, exact and refused redemption, transfer conservation, the phase gate, and the two landed check-order facts R1 and R8.",
+  "schema": "dragons-clutch/vector-manifest-v1",
+  "schema_version": 1,
+  "status": "proposed",
+  "taxonomy_version": 1,
+  "vectors": [
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "4f24d512e1a3bb50a7d212f0fb0564d1ace9e7f8110e47c00066f6375035910a"
+      },
+      "domain": "success",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "optional per EVIDENCE_MATRIX.md#6",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "refusal-only",
+          "reason": "refusal-only-evaluator"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-3",
+          "mode": "pending"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "1",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "resolved",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "11",
+              "1"
+            ]
+          },
+          "resolved_payout": 1,
+          "total_supply": [
+            "11",
+            "1"
+          ]
+        }
+      },
+      "id": "kernel-binary-split-resolve-redeem-exact",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "0",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "0",
+              "0"
+            ]
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "0",
+            "0"
+          ]
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "quantity": "11"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "split",
+          "post_state": {
+            "constructed_by": "operation-sequence",
+            "form": "kernel.market-position/v1",
+            "value": {
+              "collateral": "11",
+              "outcomes": 2,
+              "payouts": {
+                "count": 2,
+                "outcomes": 2,
+                "vectors": [
+                  {
+                    "denominator": "1",
+                    "weights": [
+                      "1",
+                      "0"
+                    ]
+                  },
+                  {
+                    "denominator": "1",
+                    "weights": [
+                      "0",
+                      "1"
+                    ]
+                  }
+                ]
+              },
+              "phase": "active",
+              "position": {
+                "external": [
+                  "0",
+                  "0"
+                ],
+                "internal": [
+                  "11",
+                  "11"
+                ]
+              },
+              "resolved_payout": 0,
+              "total_supply": [
+                "11",
+                "11"
+              ]
+            }
+          },
+          "step": 0
+        },
+        {
+          "args": {
+            "payout_index": 1
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "resolve",
+          "step": 1
+        },
+        {
+          "args": {
+            "outcome": 1,
+            "quantity": "10"
+          },
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "payout": "10"
+            }
+          },
+          "op": "redeem_internal",
+          "step": 2
+        }
+      ],
+      "primary_property_id": "P-SOLV-01",
+      "property_ids": [
+        "P-SOLV-01",
+        "P-PAY-01",
+        "P-SUP-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "The proposal's own worked example, ported as the first real vector. Smallest trace exercising complete-set split, finite resolution, and an exact integral redemption whose maximum-liability requirement drops from 11 to 1. total_supply[0] stays at 11 after redemption because outcome 0 carries weight 0 under the resolved vector; tidying it to 0 would encode a supply leak.",
+        "source": "docs/implementation/VECTOR_SPINE_PROPOSAL.md#41"
+      },
+      "status": "proposed",
+      "surface": "clutch-kernel",
+      "title": "complete split, finite resolution, exact one-hot redemption"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "25df5b48b46dc11a97c658b417d70bc0ea9ee584cc7774fec62c10aa1a02525e"
+      },
+      "domain": "success",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "optional per EVIDENCE_MATRIX.md#6",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "refusal-only",
+          "reason": "refusal-only-evaluator"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-3",
+          "mode": "pending"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "8",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "8",
+              "8"
+            ]
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "8",
+            "8"
+          ]
+        }
+      },
+      "id": "kernel-split-merge-round-trip-conserves",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "0",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "0",
+              "0"
+            ]
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "0",
+            "0"
+          ]
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "quantity": "17"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "split",
+          "step": 0
+        },
+        {
+          "args": {
+            "quantity": "9"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "merge",
+          "step": 1
+        },
+        {
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "required": "8"
+            }
+          },
+          "op": "required_collateral",
+          "step": 2
+        }
+      ],
+      "primary_property_id": "P-SOLV-01",
+      "property_ids": [
+        "P-SOLV-01",
+        "P-SUP-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "merge is the exact inverse of split on the merged quantity: collateral and every outcome supply fall by exactly the merged amount, and the residual maximum-liability requirement equals the residual collateral. Derived by reading split/merge and required_for_vector, with the crate's own test as the reference reading.",
+        "source": "crates/clutch-kernel/src/lib.rs (complete_split_merge_preserves_claims_and_collateral)"
+      },
+      "status": "proposed",
+      "surface": "clutch-kernel",
+      "title": "split then partial merge conserves collateral and every outcome supply"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "b30dbb23cd011d75f6dbb4a629f3a6fbf5fc494d5fb8a90c8e2d6c37044cbe1c"
+      },
+      "domain": "success",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "optional per EVIDENCE_MATRIX.md#6",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "refusal-only",
+          "reason": "refusal-only-evaluator"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-3",
+          "mode": "pending"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "10",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "10",
+              "10"
+            ]
+          },
+          "positions": {
+            "buyer": {
+              "external": [
+                "0",
+                "0"
+              ],
+              "internal": [
+                "0",
+                "0"
+              ]
+            }
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "10",
+            "10"
+          ]
+        }
+      },
+      "id": "kernel-transfer-internal-conserves-supply",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "0",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "0",
+              "0"
+            ]
+          },
+          "positions": {
+            "buyer": {
+              "external": [
+                "0",
+                "0"
+              ],
+              "internal": [
+                "0",
+                "0"
+              ]
+            }
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "0",
+            "0"
+          ]
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "quantity": "10"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "split",
+          "step": 0
+        },
+        {
+          "args": {
+            "from": "position",
+            "outcome": 1,
+            "phase_policy": "active-only",
+            "quantity": "4",
+            "to": "buyer"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "transfer_internal",
+          "post_state": {
+            "constructed_by": "operation-sequence",
+            "form": "kernel.market-position/v1",
+            "value": {
+              "collateral": "10",
+              "outcomes": 2,
+              "payouts": {
+                "count": 2,
+                "outcomes": 2,
+                "vectors": [
+                  {
+                    "denominator": "1",
+                    "weights": [
+                      "1",
+                      "0"
+                    ]
+                  },
+                  {
+                    "denominator": "1",
+                    "weights": [
+                      "0",
+                      "1"
+                    ]
+                  }
+                ]
+              },
+              "phase": "active",
+              "position": {
+                "external": [
+                  "0",
+                  "0"
+                ],
+                "internal": [
+                  "10",
+                  "6"
+                ]
+              },
+              "positions": {
+                "buyer": {
+                  "external": [
+                    "0",
+                    "0"
+                  ],
+                  "internal": [
+                    "0",
+                    "4"
+                  ]
+                }
+              },
+              "resolved_payout": 0,
+              "total_supply": [
+                "10",
+                "10"
+              ]
+            }
+          },
+          "step": 1
+        },
+        {
+          "args": {
+            "from": "buyer",
+            "outcome": 1,
+            "phase_policy": "active-only",
+            "quantity": "4",
+            "to": "position"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "transfer_internal",
+          "step": 2
+        },
+        {
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "check_invariants",
+          "step": 3
+        }
+      ],
+      "primary_property_id": "P-SUP-01",
+      "property_ids": [
+        "P-SUP-01",
+        "P-SOLV-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "transfer_internal takes &self, so supply and collateral neutrality is structural rather than checked. The vector pins the whole market state across two transfers so a future signature change to &mut self could not pass silently.",
+        "source": "crates/clutch-kernel/src/lib.rs (transfer_internal_conserves_supply_and_refuses_insufficient)"
+      },
+      "status": "proposed",
+      "surface": "clutch-kernel",
+      "title": "a transfer relabels a holder without touching supply or collateral"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "971570b317aaa8ab5a69928235144226e167ad3c1f86726b184491b42ad1520e"
+      },
+      "domain": "cons",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "optional per EVIDENCE_MATRIX.md#6",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "refusal-only",
+          "reason": "refusal-only-evaluator"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-3",
+          "mode": "pending"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "10",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "10",
+              "10"
+            ]
+          },
+          "positions": {
+            "buyer": {
+              "external": [
+                "0",
+                "0"
+              ],
+              "internal": [
+                "0",
+                "0"
+              ]
+            }
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "10",
+            "10"
+          ]
+        }
+      },
+      "id": "kernel-transfer-internal-insufficient-balance-refused",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "0",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "0",
+              "0"
+            ]
+          },
+          "positions": {
+            "buyer": {
+              "external": [
+                "0",
+                "0"
+              ],
+              "internal": [
+                "0",
+                "0"
+              ]
+            }
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "0",
+            "0"
+          ]
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "quantity": "10"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "split",
+          "step": 0
+        },
+        {
+          "args": {
+            "from": "position",
+            "outcome": 1,
+            "phase_policy": "active-only",
+            "quantity": "11",
+            "to": "buyer"
+          },
+          "expect": {
+            "code": 5001,
+            "frame": "kernel",
+            "name": "cons.insufficient-balance",
+            "result_kind": "error"
+          },
+          "op": "transfer_internal",
+          "step": 1
+        }
+      ],
+      "primary_property_id": "P-SUP-01",
+      "property_ids": [
+        "P-SUP-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "The single fault is the sender's balance: the quantity is nonzero, the outcome is in range, the market is Active, and the receiver cannot overflow. The final_state is the whole state after the refusal, which is what makes post_state_on_error \"unchanged\" a checked claim rather than a comment.",
+        "source": "crates/clutch-kernel/src/lib.rs (transfer_internal_conserves_supply_and_refuses_insufficient)"
+      },
+      "status": "proposed",
+      "surface": "clutch-kernel",
+      "title": "a transfer above the holder's balance is refused and moves nothing"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "9812c5e4aa717aeb00828786b3d0c4c35d00c25752efef0491cba2faba5fadba"
+      },
+      "domain": "success",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "optional per EVIDENCE_MATRIX.md#6",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "refusal-only",
+          "reason": "refusal-only-evaluator"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-3",
+          "mode": "pending"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "0",
+          "outcomes": 2,
+          "payouts": {
+            "count": 1,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "2",
+                "weights": [
+                  "1",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "resolved",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "0",
+              "0"
+            ]
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "0",
+            "0"
+          ]
+        }
+      },
+      "id": "kernel-complete-set-exits-the-fractional-payout-trap",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "0",
+          "outcomes": 2,
+          "payouts": {
+            "count": 1,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "2",
+                "weights": [
+                  "1",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "0",
+              "0"
+            ]
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "0",
+            "0"
+          ]
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "quantity": "1"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "split",
+          "step": 0
+        },
+        {
+          "args": {
+            "payout_index": 0
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "resolve",
+          "step": 1
+        },
+        {
+          "args": {
+            "outcome": 0,
+            "quantity": "1"
+          },
+          "expect": {
+            "code": 1004,
+            "frame": "kernel",
+            "name": "arith.remainder-not-representable",
+            "result_kind": "error"
+          },
+          "op": "redeem_internal",
+          "step": 2
+        },
+        {
+          "args": {
+            "outcome": 1,
+            "quantity": "1"
+          },
+          "expect": {
+            "code": 1004,
+            "frame": "kernel",
+            "name": "arith.remainder-not-representable",
+            "result_kind": "error"
+          },
+          "op": "redeem_internal",
+          "step": 3
+        },
+        {
+          "args": {
+            "quantity": "1"
+          },
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "payout": "1"
+            }
+          },
+          "op": "redeem_complete_set",
+          "step": 4
+        },
+        {
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "check_invariants",
+          "step": 5
+        }
+      ],
+      "primary_property_id": "P-PAY-01",
+      "property_ids": [
+        "P-PAY-01",
+        "P-SOLV-01",
+        "P-SUP-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "The P1-A fixture: one payout vector with weights [1, 1] over denominator 2. One atom of each outcome is solvent (collateral 1) but exit-dead through every single-outcome path, because 1 * 1 is not divisible by 2. sum_i q * w_i = q * D makes the complete set exact unconditionally, so redeem_complete_set pays exactly 1 and closes the market. Expected values derived by reading redeem and redeem_complete_set, not by running a generator.",
+        "source": "docs/implementation/POLICY_ANALYSIS_LOTS_FEES.md#1.1 and crates/clutch-kernel/src/lib.rs (complete_set_redemption_exits_the_fractional_trap)"
+      },
+      "status": "proposed",
+      "surface": "clutch-kernel",
+      "title": "P1-A: every single-outcome redemption remainders forever, the complete set is exact"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "c30ff213d6acc111f2a3bff6db28a0f20ce487e2fb5122fffd6182b68772b2e0"
+      },
+      "domain": "cons",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "optional per EVIDENCE_MATRIX.md#6",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "refusal-only",
+          "reason": "refusal-only-evaluator"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-3",
+          "mode": "pending"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "1",
+          "outcomes": 2,
+          "payouts": {
+            "count": 1,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "2",
+                "weights": [
+                  "1",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "resolved",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "0",
+              "1"
+            ]
+          },
+          "positions": {
+            "other": {
+              "external": [
+                "0",
+                "0"
+              ],
+              "internal": [
+                "1",
+                "0"
+              ]
+            }
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "1",
+            "1"
+          ]
+        }
+      },
+      "id": "kernel-complete-set-partial-holding-refused",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "0",
+          "outcomes": 2,
+          "payouts": {
+            "count": 1,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "2",
+                "weights": [
+                  "1",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "0",
+              "0"
+            ]
+          },
+          "positions": {
+            "other": {
+              "external": [
+                "0",
+                "0"
+              ],
+              "internal": [
+                "0",
+                "0"
+              ]
+            }
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "0",
+            "0"
+          ]
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "quantity": "3"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "split",
+          "step": 0
+        },
+        {
+          "args": {
+            "from": "position",
+            "outcome": 0,
+            "phase_policy": "active-only",
+            "quantity": "1",
+            "to": "other"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "transfer_internal",
+          "step": 1
+        },
+        {
+          "args": {
+            "payout_index": 0
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "resolve",
+          "step": 2
+        },
+        {
+          "args": {
+            "quantity": "0"
+          },
+          "expect": {
+            "code": 2045,
+            "frame": "kernel",
+            "name": "shape.zero-quantity",
+            "result_kind": "error"
+          },
+          "op": "redeem_complete_set",
+          "step": 3
+        },
+        {
+          "args": {
+            "quantity": "3"
+          },
+          "expect": {
+            "code": 5001,
+            "frame": "kernel",
+            "name": "cons.insufficient-balance",
+            "result_kind": "error"
+          },
+          "op": "redeem_complete_set",
+          "step": 4
+        },
+        {
+          "args": {
+            "quantity": "2"
+          },
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "payout": "2"
+            }
+          },
+          "op": "redeem_complete_set",
+          "step": 5
+        },
+        {
+          "args": {
+            "outcome": 0,
+            "position": "other",
+            "quantity": "1"
+          },
+          "expect": {
+            "code": 1004,
+            "frame": "kernel",
+            "name": "arith.remainder-not-representable",
+            "result_kind": "error"
+          },
+          "op": "redeem_internal",
+          "step": 6
+        }
+      ],
+      "primary_property_id": "P-PAY-01",
+      "property_ids": [
+        "P-PAY-01",
+        "P-SOLV-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "Three sets are not held after one atom of outcome 0 leaves, so the short leg is a balance fault, not a remainder fault. The rescue of POLICY_ANALYSIS_LOTS_FEES.md 1.5 is for balanced positions only: the recipient of the single atom is still permanently exit-dead, and step 6 pins that.",
+        "source": "crates/clutch-kernel/src/lib.rs (complete_set_redemption_refuses_wrong_phase_and_partial_sets)"
+      },
+      "status": "proposed",
+      "surface": "clutch-kernel",
+      "title": "an unbalanced fractional holding is refused as a balance fault and stays exit-dead"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "6241a2ab9c2d264a8185abdfb5474c3bd84e3daa2b7fd9486d6eca6b7f9bb901"
+      },
+      "domain": "phase",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "optional per EVIDENCE_MATRIX.md#6",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "refusal-only",
+          "reason": "refusal-only-evaluator"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-3",
+          "mode": "pending"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "5",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "5",
+              "5"
+            ]
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "5",
+            "5"
+          ]
+        }
+      },
+      "id": "kernel-redeem-before-resolution-refused",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "0",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "0",
+              "0"
+            ]
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "0",
+            "0"
+          ]
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "quantity": "5"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "split",
+          "step": 0
+        },
+        {
+          "args": {
+            "outcome": 0,
+            "quantity": "1"
+          },
+          "expect": {
+            "code": 3003,
+            "frame": "kernel",
+            "name": "phase.not-resolved",
+            "result_kind": "error"
+          },
+          "op": "redeem_internal",
+          "step": 1
+        },
+        {
+          "args": {
+            "outcome": 0,
+            "quantity": "1"
+          },
+          "expect": {
+            "code": 3003,
+            "frame": "kernel",
+            "name": "phase.not-resolved",
+            "result_kind": "error"
+          },
+          "op": "redeem_external",
+          "step": 2
+        },
+        {
+          "args": {
+            "quantity": "1"
+          },
+          "expect": {
+            "code": 3003,
+            "frame": "kernel",
+            "name": "phase.not-resolved",
+            "result_kind": "error"
+          },
+          "op": "redeem_complete_set",
+          "step": 3
+        }
+      ],
+      "primary_property_id": "P-PHASE-01",
+      "property_ids": [
+        "P-PHASE-01",
+        "P-SOLV-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "The phase gate precedes the balance and quantity gates on all three redemption paths, so the reported fact is the phase and not the (also true) absence of a resolved payout vector.",
+        "source": "crates/clutch-kernel/src/lib.rs (refused_active_transitions_leave_market_and_position_unchanged)"
+      },
+      "status": "proposed",
+      "surface": "clutch-kernel",
+      "title": "redemption before resolution is refused on every redemption path"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "7da1b03023c21e000336e074b6f8ba7cc5ea4070c9c36830c935a3c13131909e"
+      },
+      "domain": "phase",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "optional per EVIDENCE_MATRIX.md#6",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "refusal-only",
+          "reason": "refusal-only-evaluator"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-3",
+          "mode": "pending"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "12",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "resolved",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "12",
+              "12"
+            ]
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "12",
+            "12"
+          ]
+        }
+      },
+      "id": "kernel-active-only-transitions-refused-after-resolution",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "0",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "0",
+              "0"
+            ]
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "0",
+            "0"
+          ]
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "quantity": "12"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "split",
+          "step": 0
+        },
+        {
+          "args": {
+            "payout_index": 0
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "resolve",
+          "step": 1
+        },
+        {
+          "args": {
+            "quantity": "1"
+          },
+          "expect": {
+            "code": 3002,
+            "frame": "kernel",
+            "name": "phase.already-resolved",
+            "result_kind": "error"
+          },
+          "op": "split",
+          "step": 2
+        },
+        {
+          "args": {
+            "quantity": "1"
+          },
+          "expect": {
+            "code": 3002,
+            "frame": "kernel",
+            "name": "phase.already-resolved",
+            "result_kind": "error"
+          },
+          "op": "merge",
+          "step": 3
+        },
+        {
+          "args": {
+            "outcome": 0,
+            "quantity": "1"
+          },
+          "expect": {
+            "code": 3002,
+            "frame": "kernel",
+            "name": "phase.already-resolved",
+            "result_kind": "error"
+          },
+          "op": "materialize",
+          "step": 4
+        },
+        {
+          "args": {
+            "payout_index": 0
+          },
+          "expect": {
+            "code": 3002,
+            "frame": "kernel",
+            "name": "phase.already-resolved",
+            "result_kind": "error"
+          },
+          "op": "resolve",
+          "step": 5
+        }
+      ],
+      "primary_property_id": "P-PHASE-01",
+      "property_ids": [
+        "P-PHASE-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "require_active returns AlreadyResolved, never NotActive: R6 records that kernel::Error::NotActive is declared and never constructed anywhere in the tree, so this vector deliberately expects 3002 and code 3001 stays vector-less on this surface.",
+        "source": "crates/clutch-kernel/src/lib.rs (refused_resolved_transitions_leave_market_and_position_unchanged)"
+      },
+      "status": "proposed",
+      "surface": "clutch-kernel",
+      "title": "every Active-only transition is refused once the market is Resolved"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "precedence_note": "merge validates shape, checks invariants, requires Active, refuses zero quantity, then tests collateral < quantity, and only then tests the per-outcome balances. Because weights sum to the denominator, any state passing the balance tests already holds collateral >= quantity, so 5002 is observable from merge only through this ordering.",
+        "semantic": true,
+        "single_fault": false
+      },
+      "digests": {
+        "vector": "cba4e0ba7cdcf195ffb8c4d78e5663b38c8f9f72c851eb5d11491f5406cc2722"
+      },
+      "domain": "cons",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "optional per EVIDENCE_MATRIX.md#6",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "refusal-only",
+          "reason": "refusal-only-evaluator"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-3",
+          "mode": "pending"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "0",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "0",
+              "0"
+            ]
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "0",
+            "0"
+          ]
+        }
+      },
+      "id": "kernel-merge-reports-collateral-before-balance",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "0",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "0",
+              "0"
+            ]
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "0",
+            "0"
+          ]
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "quantity": "1"
+          },
+          "expect": {
+            "code": 5002,
+            "frame": "kernel",
+            "name": "cons.insufficient-collateral",
+            "result_kind": "error"
+          },
+          "op": "merge",
+          "step": 0
+        }
+      ],
+      "primary_property_id": "P-SOLV-01",
+      "property_ids": [
+        "P-SOLV-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "An empty market fails both the collateral test and the per-outcome balance tests. Which code is observable is decided purely by the documented check order, so this vector pins that order as landed behaviour. Reordering the two checks would make code 5002 unreachable from merge and relabel a whole family of inputs; that is a reviewable decision, not a refactor.",
+        "source": "docs/implementation/VECTOR_SPINE_PROPOSAL.md#25 (R8) and crates/clutch-kernel/src/lib.rs (merge_reports_the_collateral_fault_before_the_balance_fault)"
+      },
+      "status": "proposed",
+      "surface": "clutch-kernel",
+      "title": "R8: merge's collateral test precedes its balance tests, and the order is observable"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "db94e677aefd8565ea9e063687382053e039d76bf2fd9f8252ec457445b3eed6"
+      },
+      "domain": "shape",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "optional per EVIDENCE_MATRIX.md#6",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "refusal-only",
+          "reason": "refusal-only-evaluator"
+        },
+        "rust-reference": {
+          "coarsens_to": 2060,
+          "mode": "coarsened"
+        },
+        "sbf-program-test": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-3",
+          "mode": "pending"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "12",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "12",
+              "12"
+            ]
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "12",
+            "12"
+          ]
+        }
+      },
+      "id": "kernel-outcome-index-out-of-range-is-coarsened",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "kernel.market-position/v1",
+        "value": {
+          "collateral": "0",
+          "outcomes": 2,
+          "payouts": {
+            "count": 2,
+            "outcomes": 2,
+            "vectors": [
+              {
+                "denominator": "1",
+                "weights": [
+                  "1",
+                  "0"
+                ]
+              },
+              {
+                "denominator": "1",
+                "weights": [
+                  "0",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "phase": "active",
+          "position": {
+            "external": [
+              "0",
+              "0"
+            ],
+            "internal": [
+              "0",
+              "0"
+            ]
+          },
+          "resolved_payout": 0,
+          "total_supply": [
+            "0",
+            "0"
+          ]
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "quantity": "12"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "split",
+          "step": 0
+        },
+        {
+          "args": {
+            "outcome": 4,
+            "quantity": "1"
+          },
+          "expect": {
+            "code": 2062,
+            "frame": "kernel",
+            "name": "shape.outcome-index-out-of-range",
+            "result_kind": "error"
+          },
+          "op": "materialize",
+          "step": 1
+        }
+      ],
+      "primary_property_id": "P-PAY-01",
+      "property_ids": [
+        "P-PAY-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "Position::validate_outcome raises InvalidPayoutIndex for an out-of-range *outcome*, while PayoutSet::get raises the same variant for an out-of-range *payout vector*. The vector names the exact fact (2062) and the executor answers with the coarse 2060, which is admitted only because kernel::Error::InvalidPayoutIndex declares coarsens [2061, 2062]. If R1 option (a) is taken and the variant is split, this vector becomes an exact match with no edit.",
+        "source": "docs/implementation/VECTOR_SPINE_PROPOSAL.md#25 (R1)"
+      },
+      "status": "proposed",
+      "surface": "clutch-kernel",
+      "title": "R1: an out-of-range outcome index is reported through the coarse payout-index variant"
+    }
+  ]
+}

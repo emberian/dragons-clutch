@@ -1,0 +1,876 @@
+{
+  "digests": {
+    "manifest": "06177e24ad6b1e686ce9cf2a49dc1d7a57ac0e2d3894591580c1d4d42616e599",
+    "taxonomy": "1025002bef00f599a188f52bd68465cf5782f88ded63fbdc1bc8f470d0a20af4"
+  },
+  "family": "adapter",
+  "notes": "The offline reference transition adapter. These vectors name the decoded account plane, not its bytes: the checker encodes them with the frozen solana-layout codecs before calling apply, so the byte layout stays owned by one crate and the vector stays language-neutral.",
+  "schema": "dragons-clutch/vector-manifest-v1",
+  "schema_version": 1,
+  "status": "proposed",
+  "taxonomy_version": 1,
+  "vectors": [
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "397f6911b49ef47ae1c9c841f7b2fa9b05d63a4dc01db1a569bcfc0914865c72"
+      },
+      "domain": "success",
+      "executors": {
+        "lean-checker": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-3",
+          "mode": "pending"
+        },
+        "verus-host": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "adapter.reference-transition/v1",
+        "value": {
+          "external": {
+            "balances": [
+              "0",
+              "0"
+            ]
+          },
+          "hoard": {
+            "collateral_atoms": "6"
+          },
+          "kernel": {
+            "phase": "active",
+            "total_supply": [
+              "6",
+              "6"
+            ]
+          },
+          "market": {
+            "lifecycle": "active"
+          },
+          "position": {
+            "cash_atoms": "94",
+            "internal": [
+              "6",
+              "6"
+            ]
+          },
+          "replay": {
+            "sequence": "2"
+          },
+          "supply": {
+            "external_supply": [
+              "0",
+              "0"
+            ],
+            "internal_supply": [
+              "6",
+              "6"
+            ]
+          }
+        }
+      },
+      "id": "adapter-split-debits-cash-and-closes-the-supply-ledger",
+      "initial_state": {
+        "constructed_by": "raw-fields",
+        "form": "adapter.reference-transition/v1",
+        "value": {
+          "accounts": {
+            "external": {
+              "balances": [
+                "0",
+                "0"
+              ],
+              "flags": 0,
+              "position_generation": "2",
+              "stored_bump": 6
+            },
+            "hoard": {
+              "authority": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+              "collateral_atoms": "0",
+              "flags": 0,
+              "stored_bump": 4
+            },
+            "kernel": {
+              "payouts": {
+                "count": 2,
+                "outcomes": 2,
+                "vectors": [
+                  {
+                    "denominator": "1",
+                    "weights": [
+                      "1",
+                      "0"
+                    ]
+                  },
+                  {
+                    "denominator": "1",
+                    "weights": [
+                      "0",
+                      "1"
+                    ]
+                  }
+                ]
+              },
+              "phase": "active",
+              "resolved_payout": 0,
+              "total_supply": [
+                "0",
+                "0"
+              ]
+            },
+            "market": {
+              "collateral_cap": "1000",
+              "created_slot": "55",
+              "feed": "0909090909090909090909090909090909090909090909090909090909090909",
+              "hoard_bump": 4,
+              "lifecycle": "active",
+              "market": "387095d2df0aefc4e8d4b5199dafb5af01e277ea3d4425f7d765b856e8c000a1",
+              "outcome_count": 2,
+              "outcomes": [
+                "00706683d6ae7739c07498c1e1c4fdac5b154b1966e35d4ca944cc50096d8e93",
+                "4a1d5760db2cd6e8654750cc0fb416ed3229652448605c8db405178935e3ab81"
+              ],
+              "profile": "3099d3fc21784506527b8dc58930f91d78c6005f65503e28af94779407fdc41e",
+              "realm": "a6d92592d51a1e9e90db4a9355ef7dea6bc7f4a151384719f6715eb45e1e4be9",
+              "stored_bump": 3,
+              "terms": "0808080808080808080808080808080808080808080808080808080808080808"
+            },
+            "position": {
+              "cash_atoms": "100",
+              "close_state": "open",
+              "generation": "2",
+              "internal": [
+                "0",
+                "0"
+              ],
+              "owner": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+              "reserved_cash_atoms": "7",
+              "stored_bump": 5
+            },
+            "replay": {
+              "flags": 0,
+              "position_generation": "2",
+              "sequence": "0",
+              "stored_bump": 7
+            },
+            "supply": {
+              "external_supply": [
+                "0",
+                "0"
+              ],
+              "flags": 0,
+              "generation": "2",
+              "internal_supply": [
+                "0",
+                "0"
+              ],
+              "stored_bump": 10
+            }
+          },
+          "bindings": {
+            "external": "3737373737373737373737373737373737373737373737373737373737373737",
+            "external_bump": 6,
+            "hoard": "3434343434343434343434343434343434343434343434343434343434343434",
+            "hoard_bump": 4,
+            "kernel": "3636363636363636363636363636363636363636363636363636363636363636",
+            "market": "3333333333333333333333333333333333333333333333333333333333333333",
+            "market_bump": 3,
+            "position": "3535353535353535353535353535353535353535353535353535353535353535",
+            "position_bump": 5,
+            "program_id": "3232323232323232323232323232323232323232323232323232323232323232",
+            "replay": "3838383838383838383838383838383838383838383838383838383838383838",
+            "replay_bump": 7,
+            "supply": "3939393939393939393939393939393939393939393939393939393939393939",
+            "supply_bump": 10
+          },
+          "metadata": {
+            "actor": {
+              "key": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+              "signer": true
+            },
+            "external": {
+              "key": "3737373737373737373737373737373737373737373737373737373737373737",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "hoard": {
+              "key": "3434343434343434343434343434343434343434343434343434343434343434",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "kernel": {
+              "key": "3636363636363636363636363636363636363636363636363636363636363636",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "market": {
+              "key": "3333333333333333333333333333333333333333333333333333333333333333",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "position": {
+              "key": "3535353535353535353535353535353535353535353535353535353535353535",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "replay": {
+              "key": "3838383838383838383838383838383838383838383838383838383838383838",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "supply": {
+              "key": "3939393939393939393939393939393939393939393939393939393939393939",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            }
+          }
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "request": {
+              "action": "layout",
+              "intent": {
+                "kind": "split",
+                "market": "387095d2df0aefc4e8d4b5199dafb5af01e277ea3d4425f7d765b856e8c000a1",
+                "owner": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+                "quantity": "4"
+              },
+              "sequence": "0"
+            }
+          },
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "redemption_payout": "0"
+            }
+          },
+          "op": "apply",
+          "step": 0
+        },
+        {
+          "args": {
+            "request": {
+              "action": "layout",
+              "intent": {
+                "kind": "split",
+                "market": "387095d2df0aefc4e8d4b5199dafb5af01e277ea3d4425f7d765b856e8c000a1",
+                "owner": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+                "quantity": "2"
+              },
+              "sequence": "1"
+            }
+          },
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "redemption_payout": "0"
+            }
+          },
+          "op": "apply",
+          "step": 1
+        },
+        {
+          "args": {
+            "request": {
+              "action": "layout",
+              "intent": {
+                "kind": "split",
+                "market": "387095d2df0aefc4e8d4b5199dafb5af01e277ea3d4425f7d765b856e8c000a1",
+                "owner": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+                "quantity": "1"
+              },
+              "sequence": "1"
+            }
+          },
+          "expect": {
+            "code": 7001,
+            "frame": "reference-adapter",
+            "name": "replay.sequence-mismatch",
+            "result_kind": "error"
+          },
+          "op": "apply",
+          "step": 2
+        }
+      ],
+      "primary_property_id": "P-SUP-01",
+      "property_ids": [
+        "P-SUP-01",
+        "P-SOLV-01",
+        "P-POOL-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "The adapter's only success path that mints claims. Two splits of 4 and 2 move 6 atoms of cash into the hoard and credit 6 internal claims of every outcome; the supply ledger's two terms and the kernel aggregate stay equal at every step, which is the closure re-checked after the transition as well as before it. Step 2 replays sequence 1 after it was consumed, and the replay refusal precedes every state write, so the post-state is the one step 1 left.",
+        "source": "programs/solana-reference/src/lib.rs (apply, validate_aggregate_closure)"
+      },
+      "status": "proposed",
+      "surface": "solana-reference",
+      "title": "a split moves cash to collateral, mints one complete set, and keeps the ledger closed"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "precedence_note": "validate_metadata, then Request::decode, then account decode, then validate_links, validate_padding, validate_aggregate_closure, then the replay sequence check. Closure precedes replay, so a stale sequence would not mask this fault.",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "571ac4254e0b1ea0dea23dd8a7fdbedc9d02d523bf4bbceeadb7c7c7cfbae387"
+      },
+      "domain": "cons",
+      "executors": {
+        "lean-checker": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-3",
+          "mode": "pending"
+        },
+        "verus-host": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "adapter.reference-transition/v1",
+        "value": {
+          "hoard": {
+            "collateral_atoms": "0"
+          },
+          "kernel": {
+            "total_supply": [
+              "0",
+              "0"
+            ]
+          },
+          "position": {
+            "cash_atoms": "100",
+            "internal": [
+              "1",
+              "0"
+            ]
+          },
+          "replay": {
+            "sequence": "0"
+          },
+          "supply": {
+            "external_supply": [
+              "0",
+              "0"
+            ],
+            "internal_supply": [
+              "1",
+              "0"
+            ]
+          }
+        }
+      },
+      "id": "adapter-materialize-breaks-aggregate-closure",
+      "initial_state": {
+        "constructed_by": "raw-fields",
+        "form": "adapter.reference-transition/v1",
+        "value": {
+          "accounts": {
+            "external": {
+              "balances": [
+                "0",
+                "0"
+              ],
+              "flags": 0,
+              "position_generation": "2",
+              "stored_bump": 6
+            },
+            "hoard": {
+              "authority": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+              "collateral_atoms": "0",
+              "flags": 0,
+              "stored_bump": 4
+            },
+            "kernel": {
+              "payouts": {
+                "count": 2,
+                "outcomes": 2,
+                "vectors": [
+                  {
+                    "denominator": "1",
+                    "weights": [
+                      "1",
+                      "0"
+                    ]
+                  },
+                  {
+                    "denominator": "1",
+                    "weights": [
+                      "0",
+                      "1"
+                    ]
+                  }
+                ]
+              },
+              "phase": "active",
+              "resolved_payout": 0,
+              "total_supply": [
+                "0",
+                "0"
+              ]
+            },
+            "market": {
+              "collateral_cap": "1000",
+              "created_slot": "55",
+              "feed": "0909090909090909090909090909090909090909090909090909090909090909",
+              "hoard_bump": 4,
+              "lifecycle": "active",
+              "market": "387095d2df0aefc4e8d4b5199dafb5af01e277ea3d4425f7d765b856e8c000a1",
+              "outcome_count": 2,
+              "outcomes": [
+                "00706683d6ae7739c07498c1e1c4fdac5b154b1966e35d4ca944cc50096d8e93",
+                "4a1d5760db2cd6e8654750cc0fb416ed3229652448605c8db405178935e3ab81"
+              ],
+              "profile": "3099d3fc21784506527b8dc58930f91d78c6005f65503e28af94779407fdc41e",
+              "realm": "a6d92592d51a1e9e90db4a9355ef7dea6bc7f4a151384719f6715eb45e1e4be9",
+              "stored_bump": 3,
+              "terms": "0808080808080808080808080808080808080808080808080808080808080808"
+            },
+            "position": {
+              "cash_atoms": "100",
+              "close_state": "open",
+              "generation": "2",
+              "internal": [
+                "1",
+                "0"
+              ],
+              "owner": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+              "reserved_cash_atoms": "7",
+              "stored_bump": 5
+            },
+            "replay": {
+              "flags": 0,
+              "position_generation": "2",
+              "sequence": "0",
+              "stored_bump": 7
+            },
+            "supply": {
+              "external_supply": [
+                "0",
+                "0"
+              ],
+              "flags": 0,
+              "generation": "2",
+              "internal_supply": [
+                "1",
+                "0"
+              ],
+              "stored_bump": 10
+            }
+          },
+          "bindings": {
+            "external": "3737373737373737373737373737373737373737373737373737373737373737",
+            "external_bump": 6,
+            "hoard": "3434343434343434343434343434343434343434343434343434343434343434",
+            "hoard_bump": 4,
+            "kernel": "3636363636363636363636363636363636363636363636363636363636363636",
+            "market": "3333333333333333333333333333333333333333333333333333333333333333",
+            "market_bump": 3,
+            "position": "3535353535353535353535353535353535353535353535353535353535353535",
+            "position_bump": 5,
+            "program_id": "3232323232323232323232323232323232323232323232323232323232323232",
+            "replay": "3838383838383838383838383838383838383838383838383838383838383838",
+            "replay_bump": 7,
+            "supply": "3939393939393939393939393939393939393939393939393939393939393939",
+            "supply_bump": 10
+          },
+          "metadata": {
+            "actor": {
+              "key": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+              "signer": true
+            },
+            "external": {
+              "key": "3737373737373737373737373737373737373737373737373737373737373737",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "hoard": {
+              "key": "3434343434343434343434343434343434343434343434343434343434343434",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "kernel": {
+              "key": "3636363636363636363636363636363636363636363636363636363636363636",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "market": {
+              "key": "3333333333333333333333333333333333333333333333333333333333333333",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "position": {
+              "key": "3535353535353535353535353535353535353535353535353535353535353535",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "replay": {
+              "key": "3838383838383838383838383838383838383838383838383838383838383838",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "supply": {
+              "key": "3939393939393939393939393939393939393939393939393939393939393939",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            }
+          }
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "request": {
+              "action": "layout",
+              "intent": {
+                "destination": "3737373737373737373737373737373737373737373737373737373737373737",
+                "kind": "materialize",
+                "market": "387095d2df0aefc4e8d4b5199dafb5af01e277ea3d4425f7d765b856e8c000a1",
+                "outcome": 0,
+                "owner": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+                "quantity": "1"
+              },
+              "sequence": "0"
+            }
+          },
+          "expect": {
+            "code": 5011,
+            "frame": "reference-adapter",
+            "name": "cons.aggregate-closure-mismatch",
+            "result_kind": "error"
+          },
+          "op": "apply",
+          "step": 0
+        }
+      ],
+      "primary_property_id": "P-SUP-01",
+      "property_ids": [
+        "P-SUP-01",
+        "P-SOLV-01",
+        "P-POOL-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "The proposal's own worked example, ported and brought up to the landed account plane. Two things changed since 4.3 was written and both are recorded rather than hidden: the transition now carries a seventh account, the SupplyLedgerAccount, and the identities in 4.3's table are not reproducible because canonical_profile_hash now requires exactly 64 preimage bytes. The identities here are the real derivations for the canonical 64-byte parent profile preimage with realm nonce 7 and market nonce 9. The closed single-position model refuses before the kernel runs: the ledger says one internal atom of outcome 0 exists, and the kernel aggregate says zero. Metadata, bindings, bumps, links, padding, replay sequence, and signature are all valid, so closure is the only fault.",
+        "source": "docs/implementation/VECTOR_SPINE_PROPOSAL.md#43"
+      },
+      "status": "proposed",
+      "surface": "solana-reference",
+      "title": "a forged position cannot materialize claims absent from aggregate supply"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "precedence_note": "apply_inner runs validate_metadata, Request::decode, account decode, validate_links, validate_padding, validate_aggregate_closure, and the replay sequence check before it dispatches on the action; the Resolve and RedeemInternal arms then take `evidence.ok_or(ResolutionEvidenceUnavailable)` as their first statement, before any signature, authority, terms, window, or payout-index check. Step 2 therefore carries a second latent fault (payout index 9 is outside the payout set) that the evidence gate strictly precedes.",
+        "semantic": true,
+        "single_fault": false
+      },
+      "digests": {
+        "vector": "ebc5d7edb2215255782d439b37ea4cce982c04eb982e9155d57739de4948cd9a"
+      },
+      "domain": "evid",
+      "executors": {
+        "lean-checker": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-3",
+          "mode": "pending"
+        },
+        "verus-host": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "adapter.reference-transition/v1",
+        "value": {
+          "hoard": {
+            "collateral_atoms": "0"
+          },
+          "kernel": {
+            "phase": "active"
+          },
+          "market": {
+            "lifecycle": "active"
+          },
+          "replay": {
+            "sequence": "0"
+          }
+        }
+      },
+      "id": "adapter-resolution-without-evidence-fails-closed",
+      "initial_state": {
+        "constructed_by": "raw-fields",
+        "form": "adapter.reference-transition/v1",
+        "value": {
+          "accounts": {
+            "external": {
+              "balances": [
+                "0",
+                "0"
+              ],
+              "flags": 0,
+              "position_generation": "2",
+              "stored_bump": 6
+            },
+            "hoard": {
+              "authority": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+              "collateral_atoms": "0",
+              "flags": 0,
+              "stored_bump": 4
+            },
+            "kernel": {
+              "payouts": {
+                "count": 2,
+                "outcomes": 2,
+                "vectors": [
+                  {
+                    "denominator": "1",
+                    "weights": [
+                      "1",
+                      "0"
+                    ]
+                  },
+                  {
+                    "denominator": "1",
+                    "weights": [
+                      "0",
+                      "1"
+                    ]
+                  }
+                ]
+              },
+              "phase": "active",
+              "resolved_payout": 0,
+              "total_supply": [
+                "0",
+                "0"
+              ]
+            },
+            "market": {
+              "collateral_cap": "1000",
+              "created_slot": "55",
+              "feed": "0909090909090909090909090909090909090909090909090909090909090909",
+              "hoard_bump": 4,
+              "lifecycle": "active",
+              "market": "387095d2df0aefc4e8d4b5199dafb5af01e277ea3d4425f7d765b856e8c000a1",
+              "outcome_count": 2,
+              "outcomes": [
+                "00706683d6ae7739c07498c1e1c4fdac5b154b1966e35d4ca944cc50096d8e93",
+                "4a1d5760db2cd6e8654750cc0fb416ed3229652448605c8db405178935e3ab81"
+              ],
+              "profile": "3099d3fc21784506527b8dc58930f91d78c6005f65503e28af94779407fdc41e",
+              "realm": "a6d92592d51a1e9e90db4a9355ef7dea6bc7f4a151384719f6715eb45e1e4be9",
+              "stored_bump": 3,
+              "terms": "0808080808080808080808080808080808080808080808080808080808080808"
+            },
+            "position": {
+              "cash_atoms": "100",
+              "close_state": "open",
+              "generation": "2",
+              "internal": [
+                "0",
+                "0"
+              ],
+              "owner": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+              "reserved_cash_atoms": "7",
+              "stored_bump": 5
+            },
+            "replay": {
+              "flags": 0,
+              "position_generation": "2",
+              "sequence": "0",
+              "stored_bump": 7
+            },
+            "supply": {
+              "external_supply": [
+                "0",
+                "0"
+              ],
+              "flags": 0,
+              "generation": "2",
+              "internal_supply": [
+                "0",
+                "0"
+              ],
+              "stored_bump": 10
+            }
+          },
+          "bindings": {
+            "external": "3737373737373737373737373737373737373737373737373737373737373737",
+            "external_bump": 6,
+            "hoard": "3434343434343434343434343434343434343434343434343434343434343434",
+            "hoard_bump": 4,
+            "kernel": "3636363636363636363636363636363636363636363636363636363636363636",
+            "market": "3333333333333333333333333333333333333333333333333333333333333333",
+            "market_bump": 3,
+            "position": "3535353535353535353535353535353535353535353535353535353535353535",
+            "position_bump": 5,
+            "program_id": "3232323232323232323232323232323232323232323232323232323232323232",
+            "replay": "3838383838383838383838383838383838383838383838383838383838383838",
+            "replay_bump": 7,
+            "supply": "3939393939393939393939393939393939393939393939393939393939393939",
+            "supply_bump": 10
+          },
+          "metadata": {
+            "actor": {
+              "key": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+              "signer": true
+            },
+            "external": {
+              "key": "3737373737373737373737373737373737373737373737373737373737373737",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "hoard": {
+              "key": "3434343434343434343434343434343434343434343434343434343434343434",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "kernel": {
+              "key": "3636363636363636363636363636363636363636363636363636363636363636",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "market": {
+              "key": "3333333333333333333333333333333333333333333333333333333333333333",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "position": {
+              "key": "3535353535353535353535353535353535353535353535353535353535353535",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "replay": {
+              "key": "3838383838383838383838383838383838383838383838383838383838383838",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            },
+            "supply": {
+              "key": "3939393939393939393939393939393939393939393939393939393939393939",
+              "owner_program": "3232323232323232323232323232323232323232323232323232323232323232",
+              "writable": true
+            }
+          }
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "request": {
+              "action": "resolve",
+              "payout_index": 1,
+              "sequence": "0"
+            }
+          },
+          "expect": {
+            "by_design": true,
+            "code": 6001,
+            "frame": "reference-adapter",
+            "name": "evid.resolution-evidence-unavailable",
+            "result_kind": "error"
+          },
+          "op": "apply",
+          "step": 0
+        },
+        {
+          "args": {
+            "request": {
+              "action": "redeem_internal",
+              "outcome": 1,
+              "quantity": "1",
+              "sequence": "0"
+            }
+          },
+          "expect": {
+            "by_design": true,
+            "code": 6001,
+            "frame": "reference-adapter",
+            "name": "evid.resolution-evidence-unavailable",
+            "result_kind": "error"
+          },
+          "op": "apply",
+          "step": 1
+        },
+        {
+          "args": {
+            "request": {
+              "action": "resolve",
+              "payout_index": 9,
+              "sequence": "0"
+            }
+          },
+          "expect": {
+            "by_design": true,
+            "code": 6001,
+            "frame": "reference-adapter",
+            "name": "evid.resolution-evidence-unavailable",
+            "result_kind": "error"
+          },
+          "op": "apply",
+          "step": 2
+        }
+      ],
+      "primary_property_id": "P-EVID-01",
+      "property_ids": [
+        "P-EVID-01",
+        "P-PAY-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "`apply` supplies no evidence plane, so the fail-closed default is the absence of a code path rather than a flag anybody can set. Step 2 uses an out-of-range payout index deliberately: the refusal is still the evidence class and not a shape class, because the evidence gate precedes every payout-set read. This is the by_design refusal of TAX-5, and weakening it to make an integration test pass is exactly what AGENTS.md forbids.",
+        "source": "programs/solana-reference/src/lib.rs (apply, apply_inner)"
+      },
+      "status": "proposed",
+      "surface": "solana-reference",
+      "title": "resolve and redeem fail closed when no typed evidence plane is supplied at all"
+    }
+  ]
+}

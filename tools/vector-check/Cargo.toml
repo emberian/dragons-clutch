@@ -1,0 +1,21 @@
+[package]
+name = "clutch-vector-check"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Standalone rust-reference executor for the Dragon's Clutch semantic vector spine"
+
+[[bin]]
+name = "vector-check"
+path = "src/main.rs"
+
+[dependencies]
+clutch-kernel = { path = "../../crates/clutch-kernel" }
+clutch-accumulator = { path = "../../crates/clutch-accumulator" }
+clutch-batch = { path = "../../crates/clutch-batch" }
+clutch-solana-layout = { path = "../../programs/solana-layout" }
+clutch-solana-reference = { path = "../../programs/solana-reference" }
+
+[features]
+default = []

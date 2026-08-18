@@ -1,0 +1,3050 @@
+{
+  "codes": [
+    {
+      "by_design": false,
+      "coarsens": [
+        1001,
+        1002
+      ],
+      "code": 1000,
+      "domain": "arith",
+      "fact": "a checked operation failed, direction not distinguished",
+      "granularity": "coarse",
+      "name": "arith.checked-failure",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 1001,
+      "domain": "arith",
+      "fact": "a checked addition/multiplication/cast exceeded its width",
+      "granularity": "exact",
+      "name": "arith.overflow",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 1002,
+      "domain": "arith",
+      "fact": "a checked subtraction would go below zero",
+      "granularity": "exact",
+      "name": "arith.underflow",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 1003,
+      "domain": "arith",
+      "fact": "a bucket index cannot advance to its exclusive end",
+      "granularity": "exact",
+      "name": "arith.bucket-index-overflow",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 1004,
+      "domain": "arith",
+      "fact": "an exact quotient does not exist and rounding is refused",
+      "granularity": "exact",
+      "name": "arith.remainder-not-representable",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": true,
+      "code": 1005,
+      "domain": "arith",
+      "fact": "a denominator admits zero, so division is not conservative",
+      "granularity": "exact",
+      "name": "arith.ambiguous-denominator",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "coarsens": [
+        2011,
+        2012
+      ],
+      "code": 2010,
+      "domain": "shape",
+      "fact": "input length is not the exact fixed length",
+      "granularity": "coarse",
+      "name": "shape.length-mismatch",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2011,
+      "domain": "shape",
+      "fact": "input ended before the fixed layout ended",
+      "granularity": "exact",
+      "name": "shape.truncated",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2012,
+      "domain": "shape",
+      "fact": "input had bytes after the fixed layout",
+      "granularity": "exact",
+      "name": "shape.trailing-bytes",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "coarsens": [
+        2021,
+        2022
+      ],
+      "code": 2020,
+      "domain": "shape",
+      "fact": "a reserved enum, flag, or padding field was invalid",
+      "granularity": "coarse",
+      "name": "shape.non-canonical",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2021,
+      "domain": "shape",
+      "fact": "a reserved or unrecognized enum/flag value was present",
+      "granularity": "exact",
+      "name": "shape.invalid-enum",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2022,
+      "domain": "shape",
+      "fact": "a padding or reserved slot was nonzero",
+      "granularity": "exact",
+      "name": "shape.non-canonical-padding",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2030,
+      "domain": "shape",
+      "fact": "a discriminator was not the expected value",
+      "granularity": "exact",
+      "name": "shape.wrong-tag",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2031,
+      "domain": "shape",
+      "fact": "a layout/reference version is unsupported",
+      "granularity": "exact",
+      "name": "shape.wrong-version",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2040,
+      "domain": "shape",
+      "fact": "a generic count is outside its frozen bound",
+      "granularity": "exact",
+      "name": "shape.invalid-count",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2041,
+      "domain": "shape",
+      "fact": "outcome count is out of MIN_OUTCOMES..=MAX_OUTCOMES or disagrees with the payout set",
+      "granularity": "exact",
+      "name": "shape.invalid-outcome-count",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2042,
+      "domain": "shape",
+      "fact": "payout-vector count is zero or above MAX_PAYOUTS",
+      "granularity": "exact",
+      "name": "shape.invalid-payout-count",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2043,
+      "domain": "shape",
+      "fact": "a payout denominator is zero or not the common denominator",
+      "granularity": "exact",
+      "name": "shape.invalid-denominator",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2044,
+      "domain": "shape",
+      "fact": "weights exceed the denominator, do not sum to it, or intrude into padding",
+      "granularity": "exact",
+      "name": "shape.invalid-payout-weights",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2045,
+      "domain": "shape",
+      "fact": "a semantic quantity that must be positive was zero",
+      "granularity": "exact",
+      "name": "shape.zero-quantity",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2046,
+      "domain": "shape",
+      "fact": "an encoded field that must be nonzero was zero",
+      "granularity": "exact",
+      "name": "shape.zero-value",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2047,
+      "domain": "shape",
+      "fact": "an observation interval is reversed or exceeds MAX_VALUE",
+      "granularity": "exact",
+      "name": "shape.invalid-observation",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2048,
+      "domain": "shape",
+      "fact": "a bucket duration is zero or above MAX_BUCKET_SECONDS",
+      "granularity": "exact",
+      "name": "shape.invalid-time-grid",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2049,
+      "domain": "shape",
+      "fact": "a price tick vector is empty, unsorted, or over-length",
+      "granularity": "exact",
+      "name": "shape.invalid-price-grid",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2050,
+      "domain": "shape",
+      "fact": "an order's limit tick is outside the grid",
+      "granularity": "exact",
+      "name": "shape.invalid-tick",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2051,
+      "domain": "shape",
+      "fact": "order quantity is zero or below its own minimum fill",
+      "granularity": "exact",
+      "name": "shape.invalid-order-quantity",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2052,
+      "domain": "shape",
+      "fact": "an all-or-none order's minimum fill is not its quantity",
+      "granularity": "exact",
+      "name": "shape.invalid-minimum-fill",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2053,
+      "domain": "shape",
+      "fact": "order identities are zero or not strictly increasing",
+      "granularity": "exact",
+      "name": "shape.non-canonical-order-sequence",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2054,
+      "domain": "shape",
+      "fact": "a summary failed its internal consistency conditions",
+      "granularity": "exact",
+      "name": "shape.malformed-summary",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2055,
+      "domain": "shape",
+      "fact": "a basis-point parameter is outside its frozen denominator",
+      "granularity": "exact",
+      "name": "shape.invalid-bps",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2056,
+      "domain": "shape",
+      "fact": "an owner index is outside the modeled owner set",
+      "granularity": "exact",
+      "name": "shape.invalid-owner-index",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2057,
+      "domain": "shape",
+      "fact": "a domain price scale is zero or wider than the accumulator bound",
+      "granularity": "exact",
+      "name": "shape.invalid-price-scale",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2058,
+      "domain": "shape",
+      "fact": "the active prices do not sum to the frozen price scale",
+      "granularity": "exact",
+      "name": "shape.simplex-sum-mismatch",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2059,
+      "domain": "shape",
+      "fact": "a price or limit price is above the frozen price scale",
+      "granularity": "exact",
+      "name": "shape.price-out-of-range",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "coarsens": [
+        2061,
+        2062
+      ],
+      "code": 2060,
+      "domain": "shape",
+      "fact": "an index is out of range, kind not distinguished",
+      "granularity": "coarse",
+      "name": "shape.index-out-of-range",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2061,
+      "domain": "shape",
+      "fact": "a payout-vector index is at or above the payout count",
+      "granularity": "exact",
+      "name": "shape.payout-index-out-of-range",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2062,
+      "domain": "shape",
+      "fact": "an outcome index is at or above the outcome count",
+      "granularity": "exact",
+      "name": "shape.outcome-index-out-of-range",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2063,
+      "domain": "shape",
+      "fact": "two legs of one settlement name the same order slot",
+      "granularity": "exact",
+      "name": "shape.aliased-order-index",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2064,
+      "domain": "shape",
+      "fact": "an order index is at or above the candidate length",
+      "granularity": "exact",
+      "name": "shape.order-index-out-of-range",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2065,
+      "domain": "shape",
+      "fact": "a leg's declared side is not the side its identity requires",
+      "granularity": "exact",
+      "name": "shape.side-mismatch",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2066,
+      "domain": "shape",
+      "fact": "a mask bit names an order with no minimum-fill obligation, or a mask is nonzero under a policy that has none",
+      "granularity": "exact",
+      "name": "shape.aon-mask-not-applicable",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2067,
+      "domain": "shape",
+      "fact": "an explicit pairing witness was supplied under the recomputed-constructor policy",
+      "granularity": "exact",
+      "name": "shape.pairing-witness-not-admitted",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2068,
+      "domain": "shape",
+      "fact": "no explicit pairing witness was supplied under the explicit-slice policy",
+      "granularity": "exact",
+      "name": "shape.pairing-witness-missing",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2070,
+      "domain": "shape",
+      "fact": "tick selection completed with no admissible tick",
+      "granularity": "exact",
+      "name": "shape.no-admissible-grid-tick",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2071,
+      "domain": "shape",
+      "fact": "a claimed score is not the recomputed score",
+      "granularity": "exact",
+      "name": "shape.claimed-score-mismatch",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2072,
+      "domain": "shape",
+      "fact": "a claimed candidate digest is not the recomputed digest",
+      "granularity": "exact",
+      "name": "shape.claimed-digest-mismatch",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2073,
+      "domain": "shape",
+      "fact": "an expected bucket range is empty, reversed, or exceeds MAX_BUCKETS",
+      "granularity": "exact",
+      "name": "shape.invalid-bucket-range",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2074,
+      "domain": "shape",
+      "fact": "a maturity bound is earlier than the window's exclusive end",
+      "granularity": "exact",
+      "name": "shape.invalid-maturity-bound",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2075,
+      "domain": "shape",
+      "fact": "a coverage policy identifier is not in the crate's registry",
+      "granularity": "exact",
+      "name": "shape.unknown-coverage-policy",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2076,
+      "domain": "shape",
+      "fact": "a registered policy's parameter is outside its registered domain",
+      "granularity": "exact",
+      "name": "shape.invalid-policy-parameter",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2077,
+      "domain": "shape",
+      "fact": "a resolution evidence plane was supplied for an action that admits none",
+      "granularity": "exact",
+      "name": "shape.unexpected-evidence",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2078,
+      "domain": "shape",
+      "fact": "a terms artifact names an unregistered statistic or policy, or is otherwise malformed",
+      "granularity": "exact",
+      "name": "shape.malformed-terms",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 2079,
+      "domain": "shape",
+      "fact": "a value partition has an out-of-range cell count, non-increasing boundaries, or an empty cell",
+      "granularity": "exact",
+      "name": "shape.malformed-partition",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 3001,
+      "domain": "phase",
+      "fact": "the market is not Active where Active is required",
+      "granularity": "exact",
+      "name": "phase.not-active",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 3002,
+      "domain": "phase",
+      "fact": "an Active-only transition was requested after resolution",
+      "granularity": "exact",
+      "name": "phase.already-resolved",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 3003,
+      "domain": "phase",
+      "fact": "a Resolved-only transition was requested before resolution",
+      "granularity": "exact",
+      "name": "phase.not-resolved",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 3004,
+      "domain": "phase",
+      "fact": "the frozen maturity horizon has not been reached",
+      "granularity": "exact",
+      "name": "phase.not-mature",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 3005,
+      "domain": "phase",
+      "fact": "the observation window has not been sealed",
+      "granularity": "exact",
+      "name": "phase.not-sealed",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 3006,
+      "domain": "phase",
+      "fact": "the observation window is already sealed",
+      "granularity": "exact",
+      "name": "phase.already-sealed",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 3007,
+      "domain": "phase",
+      "fact": "an observation was offered after the seal",
+      "granularity": "exact",
+      "name": "phase.observation-after-seal",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 3008,
+      "domain": "phase",
+      "fact": "an observation is not the next expected bucket",
+      "granularity": "exact",
+      "name": "phase.observation-out-of-order",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 3009,
+      "domain": "phase",
+      "fact": "more observations were offered than the horizon admits",
+      "granularity": "exact",
+      "name": "phase.maturity-horizon-exceeded",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 3010,
+      "domain": "phase",
+      "fact": "the right operand does not begin at the left exclusive end",
+      "granularity": "exact",
+      "name": "phase.non-adjacent-range",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 3011,
+      "domain": "phase",
+      "fact": "an order's expiry epoch precedes the clearing epoch",
+      "granularity": "exact",
+      "name": "phase.order-expired",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 3012,
+      "domain": "phase",
+      "fact": "a page would extend past the window's exclusive end",
+      "granularity": "exact",
+      "name": "phase.window-range-overflow",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 3013,
+      "domain": "phase",
+      "fact": "a witnessed authenticated feed cursor moved backwards",
+      "granularity": "exact",
+      "name": "phase.non-monotone-cursor",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4001,
+      "domain": "auth",
+      "fact": "the actor presented no signature assertion",
+      "granularity": "exact",
+      "name": "auth.missing-signature",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4002,
+      "domain": "auth",
+      "fact": "the signed actor is not authorized for this action",
+      "granularity": "exact",
+      "name": "auth.unauthorized-actor",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": true,
+      "code": 4003,
+      "domain": "auth",
+      "fact": "no authority policy exists, so the action fails closed",
+      "granularity": "exact",
+      "name": "auth.policy-unavailable",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4004,
+      "domain": "auth",
+      "fact": "an account is not owned by the expected program identity",
+      "granularity": "exact",
+      "name": "auth.wrong-program-owner",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4005,
+      "domain": "auth",
+      "fact": "an account key did not match its trusted binding",
+      "granularity": "exact",
+      "name": "auth.wrong-account-key",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4006,
+      "domain": "auth",
+      "fact": "two logical account roles share one key",
+      "granularity": "exact",
+      "name": "auth.account-alias",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4007,
+      "domain": "auth",
+      "fact": "a state account required for a transition is not writable",
+      "granularity": "exact",
+      "name": "auth.not-writable",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4008,
+      "domain": "auth",
+      "fact": "a stored bump differs from the trusted expected bump",
+      "granularity": "exact",
+      "name": "auth.wrong-bump",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4009,
+      "domain": "auth",
+      "fact": "a reserved all-zero identity was supplied",
+      "granularity": "exact",
+      "name": "auth.zero-identity",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4010,
+      "domain": "auth",
+      "fact": "an identity is not the canonical domain-separated derivation",
+      "granularity": "exact",
+      "name": "auth.non-canonical-identity",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4011,
+      "domain": "auth",
+      "fact": "identities, generations, phases, or immutable fields disagree",
+      "granularity": "coarse",
+      "name": "auth.mismatched-state",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4012,
+      "domain": "auth",
+      "fact": "two operands use different semantic grids",
+      "granularity": "exact",
+      "name": "auth.mismatched-grid",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4013,
+      "domain": "auth",
+      "fact": "a candidate carries no authenticated owner/side/outcome bindings",
+      "granularity": "exact",
+      "name": "auth.missing-pair-bindings",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4014,
+      "domain": "auth",
+      "fact": "a settlement leg names an order id the ledger does not hold at that slot",
+      "granularity": "exact",
+      "name": "auth.order-identity-mismatch",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4015,
+      "domain": "auth",
+      "fact": "both settlement legs resolve to one owner",
+      "granularity": "exact",
+      "name": "auth.self-cross",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4016,
+      "domain": "auth",
+      "fact": "the legs' outcomes disagree with each other or with the receipt",
+      "granularity": "exact",
+      "name": "auth.outcome-binding-mismatch",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4017,
+      "domain": "auth",
+      "fact": "no ledger entry exists for the receipt's domain/candidate identity",
+      "granularity": "exact",
+      "name": "auth.unknown-candidate-identity",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4018,
+      "domain": "auth",
+      "fact": "one owner stands on both sides of one outcome in a frozen book, or the overlap cannot be netted",
+      "granularity": "exact",
+      "name": "auth.self-cross-book",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4019,
+      "domain": "auth",
+      "fact": "a feed identity, source version, or evaluator version differs from the expected domain",
+      "granularity": "exact",
+      "name": "auth.mismatched-feed",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4020,
+      "domain": "auth",
+      "fact": "a registered coverage policy differs from the expected domain",
+      "granularity": "exact",
+      "name": "auth.mismatched-coverage-policy",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4021,
+      "domain": "auth",
+      "fact": "a repair generation differs from the expected domain",
+      "granularity": "exact",
+      "name": "auth.mismatched-generation",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4022,
+      "domain": "auth",
+      "fact": "a maturity bound differs from the expected domain",
+      "granularity": "exact",
+      "name": "auth.mismatched-maturity",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4023,
+      "domain": "auth",
+      "fact": "a bucket range differs from the expected domain",
+      "granularity": "exact",
+      "name": "auth.wrong-window",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4024,
+      "domain": "auth",
+      "fact": "a terms artifact is not the one the market's digest binds",
+      "granularity": "exact",
+      "name": "auth.terms-binding-mismatch",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4025,
+      "domain": "auth",
+      "fact": "a kernel payout set is not the immutable terms payout set",
+      "granularity": "exact",
+      "name": "auth.payout-set-mismatch",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4026,
+      "domain": "auth",
+      "fact": "a resolution record is not bound to this market's immutable terms",
+      "granularity": "exact",
+      "name": "auth.resolution-binding-mismatch",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4027,
+      "domain": "auth",
+      "fact": "a requested payout index is not the one the evidence derives",
+      "granularity": "exact",
+      "name": "auth.payout-index-mismatch",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 4028,
+      "domain": "auth",
+      "fact": "an immutable evidence account was presented as writable",
+      "granularity": "exact",
+      "name": "auth.immutable-account-writable",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": true,
+      "code": 4029,
+      "domain": "auth",
+      "fact": "the trusted window identity binding was absent, so the gate fails closed",
+      "granularity": "exact",
+      "name": "auth.window-identity-unavailable",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": true,
+      "code": 4030,
+      "domain": "auth",
+      "fact": "the Realm profile's collateral policy digest is not frozen, so the gate fails closed",
+      "granularity": "exact",
+      "name": "auth.collateral-policy-not-frozen",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5001,
+      "domain": "cons",
+      "fact": "a claim balance is below the requested quantity",
+      "granularity": "exact",
+      "name": "cons.insufficient-balance",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5002,
+      "domain": "cons",
+      "fact": "collateral is below the requested debit",
+      "granularity": "exact",
+      "name": "cons.insufficient-collateral",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5003,
+      "domain": "cons",
+      "fact": "a state fails the maximum-liability/solvency invariant",
+      "granularity": "exact",
+      "name": "cons.invariant-violation",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5004,
+      "domain": "cons",
+      "fact": "side folds do not equal the matched quantity, or a per-asset equation does not close",
+      "granularity": "exact",
+      "name": "cons.conservation-failure",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5005,
+      "domain": "cons",
+      "fact": "a fill exceeds its order's quantity",
+      "granularity": "exact",
+      "name": "cons.fill-exceeds-quantity",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5006,
+      "domain": "cons",
+      "fact": "a nonzero fill was assigned to an order the clearing tick excludes",
+      "granularity": "exact",
+      "name": "cons.ineligible-fill",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5007,
+      "domain": "cons",
+      "fact": "a nonzero fill is below the order's minimum fill",
+      "granularity": "exact",
+      "name": "cons.minimum-fill-violation",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5008,
+      "domain": "cons",
+      "fact": "an all-or-none order received a partial fill",
+      "granularity": "exact",
+      "name": "cons.all-or-none-violation",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5009,
+      "domain": "cons",
+      "fact": "a candidate differs from the recomputed canonical candidate",
+      "granularity": "exact",
+      "name": "cons.candidate-mismatch",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": true,
+      "code": 5010,
+      "domain": "cons",
+      "fact": "an allocation requires a leftover atom under a Reject dust policy",
+      "granularity": "exact",
+      "name": "cons.dust-rejected",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5011,
+      "domain": "cons",
+      "fact": "internal + external claims do not equal aggregate supply",
+      "granularity": "exact",
+      "name": "cons.aggregate-closure-mismatch",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5012,
+      "domain": "cons",
+      "fact": "an initial market carries pre-existing claims, cash, or sequence",
+      "granularity": "exact",
+      "name": "cons.non-empty-initialization",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5013,
+      "domain": "cons",
+      "fact": "a payer's cash is below the exact consideration",
+      "granularity": "exact",
+      "name": "cons.insufficient-cash",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5014,
+      "domain": "cons",
+      "fact": "a transferring position's claims are below the transferred quantity",
+      "granularity": "exact",
+      "name": "cons.transfer-insufficient",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5015,
+      "domain": "cons",
+      "fact": "consideration is not clearing price times quantity",
+      "granularity": "exact",
+      "name": "cons.invalid-consideration",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5016,
+      "domain": "cons",
+      "fact": "a liveness debit exceeds the prepaid liveness pool",
+      "granularity": "exact",
+      "name": "cons.insufficient-liveness",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5017,
+      "domain": "cons",
+      "fact": "liveness buckets do not sum to the funded amount",
+      "granularity": "exact",
+      "name": "cons.liveness-conservation-failure",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "coarsens": [
+        5021,
+        5022
+      ],
+      "code": 5020,
+      "domain": "cons",
+      "fact": "a settlement leg is not admissible against the frozen candidate",
+      "granularity": "coarse",
+      "name": "cons.inadmissible-settlement-leg",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5021,
+      "domain": "cons",
+      "fact": "a leg's quantity exceeds the candidate's fill for that slot",
+      "granularity": "exact",
+      "name": "cons.settlement-quantity-exceeds-fill",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5022,
+      "domain": "cons",
+      "fact": "cumulative settled quantity would exceed the candidate's fill",
+      "granularity": "exact",
+      "name": "cons.settlement-cumulative-overfill",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5023,
+      "domain": "cons",
+      "fact": "a strict order cannot fill fully at these coordinates under allocation A",
+      "granularity": "exact",
+      "name": "cons.strict-underfill",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5024,
+      "domain": "cons",
+      "fact": "a masked order is ineligible or is not filled to its full size",
+      "granularity": "exact",
+      "name": "cons.aon-mask-dishonored",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5025,
+      "domain": "cons",
+      "fact": "an unhonored minimum-fill order carries a nonzero fill",
+      "granularity": "exact",
+      "name": "cons.aon-mask-leak",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5026,
+      "domain": "cons",
+      "fact": "fills do not carry one constant net imbalance on every active outcome",
+      "granularity": "exact",
+      "name": "cons.outcome-conservation-mismatch",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5027,
+      "domain": "cons",
+      "fact": "a candidate carries a simultaneous virtual split and virtual merge",
+      "granularity": "exact",
+      "name": "cons.churn-not-canonical",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5028,
+      "domain": "cons",
+      "fact": "a candidate proposes more virtual conversion than the book supports",
+      "granularity": "exact",
+      "name": "cons.infeasible-virtual-leg",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5029,
+      "domain": "cons",
+      "fact": "one owner's participation exceeds an outcome's flow, so no complete executable pairing exists",
+      "granularity": "exact",
+      "name": "cons.pairing-infeasible",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5030,
+      "domain": "cons",
+      "fact": "a submitted settlement slice is not an executable transfer",
+      "granularity": "exact",
+      "name": "cons.slice-not-executable",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5031,
+      "domain": "cons",
+      "fact": "submitted slices do not sum to the fills or to sigma/mu",
+      "granularity": "exact",
+      "name": "cons.slice-sum-mismatch",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5032,
+      "domain": "cons",
+      "fact": "the canonical pairing constructor could not complete a feasible decomposition",
+      "granularity": "exact",
+      "name": "cons.constructor-stalled",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5033,
+      "domain": "cons",
+      "fact": "a recomputed fee disagrees with the exact ledger",
+      "granularity": "exact",
+      "name": "cons.fee-mismatch",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 5034,
+      "domain": "cons",
+      "fact": "a payer's reservation cannot fund consideration plus fee",
+      "granularity": "exact",
+      "name": "cons.fee-payer-unfunded",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": true,
+      "code": 6001,
+      "domain": "evid",
+      "fact": "no typed maturity/seal/source/terms/payout evidence exists",
+      "granularity": "exact",
+      "name": "evid.resolution-evidence-unavailable",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 6002,
+      "domain": "evid",
+      "fact": "no accepted observation exists for the requested statistic",
+      "granularity": "exact",
+      "name": "evid.no-accepted-coverage",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 6003,
+      "domain": "evid",
+      "fact": "the range contains an explicit missing bucket",
+      "granularity": "exact",
+      "name": "evid.gapped-coverage",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 6004,
+      "domain": "evid",
+      "fact": "the terminal interval straddles a partition boundary",
+      "granularity": "exact",
+      "name": "evid.ambiguous-terminal-interval",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 6005,
+      "domain": "evid",
+      "fact": "not every expected bucket of the window is represented yet",
+      "granularity": "exact",
+      "name": "evid.incomplete-domain",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "coarsens": [
+        6003,
+        6007
+      ],
+      "code": 6006,
+      "domain": "evid",
+      "fact": "the observed coverage is refused by the registered coverage policy",
+      "granularity": "coarse",
+      "name": "evid.coverage-policy-refused",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 6007,
+      "domain": "evid",
+      "fact": "the number of explicit gaps exceeds the registered bounded-gap budget",
+      "granularity": "exact",
+      "name": "evid.gap-budget-exceeded",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 7001,
+      "domain": "replay",
+      "fact": "a request sequence is stale, skipped, or exhausted",
+      "granularity": "exact",
+      "name": "replay.sequence-mismatch",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 7002,
+      "domain": "replay",
+      "fact": "this ordered leg pair was already settled for this candidate",
+      "granularity": "exact",
+      "name": "replay.pair-already-settled",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 7003,
+      "domain": "replay",
+      "fact": "a payout was already recorded for this market, so it cannot resolve again",
+      "granularity": "exact",
+      "name": "replay.resolution-already-recorded",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 8001,
+      "domain": "cap",
+      "fact": "an order count exceeds the frozen maximum",
+      "granularity": "exact",
+      "name": "cap.order-count-exceeded",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 8002,
+      "domain": "cap",
+      "fact": "a summary would exceed MAX_BUCKETS",
+      "granularity": "exact",
+      "name": "cap.span-too-large",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 8003,
+      "domain": "cap",
+      "fact": "the market's immutable collateral cap would be exceeded",
+      "granularity": "exact",
+      "name": "cap.collateral-cap-exceeded",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 8004,
+      "domain": "cap",
+      "fact": "the destination buffer is shorter than the exact encoded length",
+      "granularity": "exact",
+      "name": "cap.output-buffer-too-small",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 8005,
+      "domain": "cap",
+      "fact": "a portfolio-order count exceeds the frozen maximum",
+      "granularity": "exact",
+      "name": "cap.portfolio-count-exceeded",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 8006,
+      "domain": "cap",
+      "fact": "a pairing decomposition needs more than MAX_SLICES slices",
+      "granularity": "exact",
+      "name": "cap.slice-capacity-exceeded",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
+      "code": 8007,
+      "domain": "cap",
+      "fact": "a bounded constructor search exceeded its explicit budget",
+      "granularity": "exact",
+      "name": "cap.search-budget-exceeded",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": true,
+      "code": 9001,
+      "domain": "refuse",
+      "fact": "the operation is outside this deliberately small subset",
+      "granularity": "exact",
+      "name": "refuse.unsupported-intent",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": true,
+      "code": 9002,
+      "domain": "refuse",
+      "fact": "the statistic needs information the summary family does not carry",
+      "granularity": "exact",
+      "name": "refuse.unsupported-statistic",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": true,
+      "code": 9003,
+      "domain": "refuse",
+      "fact": "a claim-only settlement path is refused; a cash leg is mandatory",
+      "granularity": "exact",
+      "name": "refuse.missing-consideration",
+      "origin": "proposal",
+      "status": "proposed"
+    },
+    {
+      "by_design": true,
+      "code": 9004,
+      "domain": "refuse",
+      "fact": "a frozen policy names a variant this implementation does not implement",
+      "granularity": "exact",
+      "name": "refuse.unimplemented-policy-variant",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": true,
+      "code": 9005,
+      "domain": "refuse",
+      "fact": "all-or-none orders are not admitted under the frozen AON variant",
+      "granularity": "exact",
+      "name": "refuse.all-or-none-not-admitted",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": true,
+      "code": 9006,
+      "domain": "refuse",
+      "fact": "minimum-fill obligations are not admitted under the frozen AON variant",
+      "granularity": "exact",
+      "name": "refuse.minimum-fill-not-admitted",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": true,
+      "code": 9007,
+      "domain": "refuse",
+      "fact": "a bounded constructor search found no valid candidate for this epoch",
+      "granularity": "exact",
+      "name": "refuse.no-valid-candidate",
+      "origin": "extension",
+      "status": "proposed"
+    }
+  ],
+  "domains": [
+    {
+      "band": 1000,
+      "domain": "arithmetic",
+      "facts": "checked overflow/underflow, exactness, representability",
+      "prefix": "arith"
+    },
+    {
+      "band": 2000,
+      "domain": "shape",
+      "facts": "structure, bounds, counts, canonicality, codec framing, indices",
+      "prefix": "shape"
+    },
+    {
+      "band": 3000,
+      "domain": "phase",
+      "facts": "lifecycle, ordering, adjacency, maturity, seal",
+      "prefix": "phase"
+    },
+    {
+      "band": 4000,
+      "domain": "authorization",
+      "facts": "signer, actor, ownership, keys, bumps, identity and binding",
+      "prefix": "auth"
+    },
+    {
+      "band": 5000,
+      "domain": "conservation",
+      "facts": "balances, solvency, closure, fills, settlement admissibility",
+      "prefix": "cons"
+    },
+    {
+      "band": 6000,
+      "domain": "evidence",
+      "facts": "required evidence absent, coverage, ambiguity",
+      "prefix": "evid"
+    },
+    {
+      "band": 7000,
+      "domain": "replay",
+      "facts": "sequence, duplicate settlement, idempotence",
+      "prefix": "replay"
+    },
+    {
+      "band": 8000,
+      "domain": "capacity",
+      "facts": "a frozen bound would be exceeded",
+      "prefix": "cap"
+    },
+    {
+      "band": 9000,
+      "domain": "refusal-by-design",
+      "facts": "a well-formed request is deliberately out of scope",
+      "prefix": "refuse"
+    }
+  ],
+  "executors": [
+    {
+      "capability": "exact",
+      "id": "rust-reference",
+      "today": "available"
+    },
+    {
+      "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+      "capability": "spec-only-shadow",
+      "id": "verus-host",
+      "today": "pending"
+    },
+    {
+      "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+      "capability": "refusal-only",
+      "id": "rocq-extracted",
+      "today": "pending"
+    },
+    {
+      "blocked_by": "EVIDENCE_MATRIX.md#6",
+      "capability": "optional",
+      "id": "lean-checker",
+      "today": "pending"
+    },
+    {
+      "blocked_by": "CODEX_HANDOFF.md#7-P0-3",
+      "capability": "exact-and-byte-exact",
+      "id": "sbf-program-test",
+      "today": "pending"
+    }
+  ],
+  "notes": "The 2.3 registry of the committed proposal, transcribed verbatim, plus additive codes for the three error surfaces 2.4 does not map at all and for the variants that landed on three mapped surfaces after 2.4 was written. Nothing from the proposal is removed, renumbered, repointed, or given a new meaning (TAX-2, VER-2, VER-3). Every added code carries origin \"extension\" and is a taxonomy change awaiting the review gate.",
+  "proposal_deltas": {
+    "codes_added": [
+      2057,
+      2058,
+      2059,
+      2066,
+      2067,
+      2068,
+      2071,
+      2072,
+      2073,
+      2074,
+      2075,
+      2076,
+      2077,
+      2078,
+      2079,
+      3011,
+      3012,
+      3013,
+      4018,
+      4019,
+      4020,
+      4021,
+      4022,
+      4023,
+      4024,
+      4025,
+      4026,
+      4027,
+      4028,
+      4029,
+      4030,
+      5023,
+      5024,
+      5025,
+      5026,
+      5027,
+      5028,
+      5029,
+      5030,
+      5031,
+      5032,
+      5033,
+      5034,
+      6005,
+      6006,
+      6007,
+      7003,
+      8005,
+      8006,
+      8007,
+      9004,
+      9005,
+      9006,
+      9007
+    ],
+    "count_claim_in_proposal": {
+      "actual_error_enums": 12,
+      "actual_variant_rows": 215,
+      "claimed_error_enums": 9,
+      "claimed_numbered_surfaces": 6,
+      "claimed_variants": 104,
+      "note": "Section 2.4 opens with 'Six Rust error surfaces, 104 variants, all mapped'. Those six numbered surfaces span nine error enums; the tree holds twelve. That sentence no longer holds and is the single largest finding of the vector-spine lane.",
+      "transparent_rows": 11,
+      "unmapped_pending_review_rows": 12
+    },
+    "surfaces_unmapped_by_proposal": [
+      {
+        "note": "the coupled batch relation. VECTOR_SPINE_PROPOSAL.md 2.4 maps only the scalar clutch_batch::Error (S3).",
+        "surface": "S7",
+        "type": "clutch_batch::relation_v1::ErrorV1",
+        "variants": 47
+      },
+      {
+        "note": "the window state machine. 2.4 maps only SummaryError and StatisticError.",
+        "surface": "S8",
+        "type": "clutch_accumulator::WindowError",
+        "variants": 23
+      },
+      {
+        "note": "the R-01..R-11 resolution refusal classes of RESOLUTION_EVIDENCE_PLAN.md.",
+        "surface": "S9",
+        "type": "clutch_solana_reference::ResolutionRefusal",
+        "variants": 11
+      }
+    ],
+    "variants_added_to_mapped_surfaces": [
+      {
+        "added": [
+          "InvalidPriceGrid",
+          "InvalidTick",
+          "MismatchedBinding",
+          "AggregateClosureMismatch",
+          "InvalidConsideration"
+        ],
+        "note": "CodecError has 17 variants; 2.4 lists 12. The landed CodecError::code() already returns 2049/2050/4011/5011/5015 for them, so the mapping here restates landed behaviour rather than proposing it.",
+        "surface": "S4"
+      },
+      {
+        "added": [
+          "Window(WindowError)",
+          "Resolution(ResolutionRefusal)",
+          "TermsBindingMismatch",
+          "PayoutSetMismatch",
+          "ResolutionBindingMismatch",
+          "ResolutionAlreadyRecorded",
+          "ResolutionNotRecorded",
+          "PayoutIndexMismatch",
+          "ImmutableAccountWritable",
+          "UnexpectedEvidence",
+          "WindowIdentityUnavailable",
+          "CollateralPolicyNotFrozen"
+        ],
+        "note": "Error has 34 variants; 2.4 lists 22.",
+        "surface": "S5"
+      },
+      {
+        "added": [
+          "Relation(ErrorV1)",
+          "RelationDomainMismatch",
+          "UnrepresentableBinding",
+          "VirtualLegNotHosted",
+          "RelationIdentityCollision",
+          "MissingRelationLedger",
+          "SettlementTargetNotAdmitted",
+          "UnknownSlice",
+          "SliceExceeded",
+          "UnknownPair",
+          "ExceedsPairRemaining",
+          "PartialPairRefused",
+          "ResidualVariantUnimplemented"
+        ],
+        "note": "ModelError has 34 variants; 2.4 lists 18. Twelve are left unmapped-pending-review rather than given a code without a reviewer.",
+        "surface": "S6"
+      }
+    ]
+  },
+  "schema": "dragons-clutch/vector-taxonomy-v1",
+  "schema_version": 1,
+  "source": "docs/implementation/VECTOR_SPINE_PROPOSAL.md#2",
+  "status": "proposed",
+  "surfaces": [
+    {
+      "id": "S1",
+      "mapped_in_proposal": true,
+      "path": "crates/clutch-kernel",
+      "type": "clutch_kernel::Error",
+      "variants": [
+        {
+          "code": 2041,
+          "reachability": "reachable",
+          "variant": "InvalidOutcomeCount"
+        },
+        {
+          "code": 2042,
+          "reachability": "reachable",
+          "variant": "InvalidPayoutCount"
+        },
+        {
+          "code": 2060,
+          "note": "coarse; coarsens 2061 and 2062. Review flag R1.",
+          "reachability": "reachable",
+          "variant": "InvalidPayoutIndex"
+        },
+        {
+          "code": 2043,
+          "reachability": "reachable",
+          "variant": "InvalidDenominator"
+        },
+        {
+          "code": 2044,
+          "reachability": "reachable",
+          "variant": "InvalidPayoutWeights"
+        },
+        {
+          "code": 2045,
+          "reachability": "reachable",
+          "variant": "ZeroQuantity"
+        },
+        {
+          "code": 1001,
+          "reachability": "reachable",
+          "variant": "ArithmeticOverflow"
+        },
+        {
+          "code": 1002,
+          "note": "every checked_sub is guarded by an explicit comparison first (R6)",
+          "reachability": "defensive-unreachable",
+          "variant": "ArithmeticUnderflow"
+        },
+        {
+          "code": 5001,
+          "reachability": "reachable",
+          "variant": "InsufficientBalance"
+        },
+        {
+          "code": 5002,
+          "note": "reachable from merge only because the collateral check precedes the balance checks (R8)",
+          "reachability": "reachable",
+          "variant": "InsufficientCollateral"
+        },
+        {
+          "code": 3001,
+          "note": "declared, never constructed; require_active returns AlreadyResolved (R6)",
+          "reachability": "dead",
+          "variant": "NotActive"
+        },
+        {
+          "code": 3002,
+          "reachability": "reachable",
+          "variant": "AlreadyResolved"
+        },
+        {
+          "code": 3003,
+          "reachability": "reachable",
+          "variant": "NotResolved"
+        },
+        {
+          "code": 5003,
+          "reachability": "reachable",
+          "variant": "InvariantViolation"
+        },
+        {
+          "code": 1004,
+          "reachability": "reachable",
+          "variant": "RemainderRequired"
+        }
+      ]
+    },
+    {
+      "id": "S2",
+      "mapped_in_proposal": true,
+      "path": "crates/clutch-accumulator",
+      "type": "clutch_accumulator::SummaryError",
+      "variants": [
+        {
+          "code": 2048,
+          "note": "time grid, deliberately not the batch price-grid code (R5)",
+          "reachability": "reachable",
+          "variant": "InvalidGrid"
+        },
+        {
+          "code": 2047,
+          "reachability": "reachable",
+          "variant": "InvalidObservation"
+        },
+        {
+          "code": 1003,
+          "reachability": "reachable",
+          "variant": "BucketOverflow"
+        },
+        {
+          "code": 8002,
+          "reachability": "reachable",
+          "variant": "SpanTooLarge"
+        },
+        {
+          "code": 1001,
+          "reachability": "reachable",
+          "variant": "ArithmeticOverflow"
+        },
+        {
+          "code": 4012,
+          "reachability": "reachable",
+          "variant": "MismatchedGrid"
+        },
+        {
+          "code": 3010,
+          "reachability": "reachable",
+          "variant": "NonAdjacent"
+        },
+        {
+          "code": 2054,
+          "reachability": "reachable",
+          "variant": "MalformedSummary"
+        }
+      ]
+    },
+    {
+      "id": "S2b",
+      "mapped_in_proposal": true,
+      "path": "crates/clutch-accumulator",
+      "type": "clutch_accumulator::StatisticError",
+      "variants": [
+        {
+          "code": 6002,
+          "note": "same fact as Refusal::NoAcceptedCoverage, different result kind (R9)",
+          "reachability": "reachable",
+          "variant": "NoAcceptedCoverage"
+        },
+        {
+          "code": 9002,
+          "note": "same fact as Refusal::UnsupportedStatistic under a second name (R9)",
+          "reachability": "reachable",
+          "variant": "UnsupportedPredicate"
+        },
+        {
+          "code": 1005,
+          "reachability": "reachable",
+          "variant": "AmbiguousDenominator"
+        },
+        {
+          "code": 1001,
+          "reachability": "reachable",
+          "variant": "ArithmeticOverflow"
+        }
+      ]
+    },
+    {
+      "id": "S3",
+      "mapped_in_proposal": true,
+      "path": "crates/clutch-batch",
+      "type": "clutch_batch::Error",
+      "variants": [
+        {
+          "code": 2049,
+          "note": "price grid (R5)",
+          "reachability": "reachable",
+          "variant": "InvalidGrid"
+        },
+        {
+          "code": 2050,
+          "reachability": "reachable",
+          "variant": "InvalidTick"
+        },
+        {
+          "code": 8001,
+          "reachability": "reachable",
+          "variant": "TooManyOrders"
+        },
+        {
+          "code": 2051,
+          "reachability": "reachable",
+          "variant": "InvalidQuantity"
+        },
+        {
+          "code": 2052,
+          "reachability": "reachable",
+          "variant": "InvalidMinimumFill"
+        },
+        {
+          "code": 2053,
+          "reachability": "reachable",
+          "variant": "NonCanonicalOrderOrder"
+        },
+        {
+          "code": 2022,
+          "reachability": "reachable",
+          "variant": "NonCanonicalPadding"
+        },
+        {
+          "code": 2070,
+          "note": "validate guarantees len >= 1 so the selection loop always initializes (R6)",
+          "reachability": "defensive-unreachable",
+          "variant": "NoGridTick"
+        },
+        {
+          "code": 1001,
+          "note": "also the no-remainder-recipient fallback in allocate_side, a second fact (R10)",
+          "reachability": "reachable",
+          "variant": "ArithmeticOverflow"
+        },
+        {
+          "code": 5009,
+          "reachability": "reachable",
+          "variant": "CandidateMismatch"
+        },
+        {
+          "code": 5004,
+          "reachability": "reachable",
+          "variant": "ConservationFailure"
+        },
+        {
+          "code": 5005,
+          "reachability": "reachable",
+          "variant": "FillExceedsQuantity"
+        },
+        {
+          "code": 5006,
+          "reachability": "reachable",
+          "variant": "IneligibleFill"
+        },
+        {
+          "code": 5007,
+          "reachability": "reachable",
+          "variant": "MinimumFillViolation"
+        },
+        {
+          "code": 5008,
+          "reachability": "reachable",
+          "variant": "AllOrNoneViolation"
+        },
+        {
+          "code": 5010,
+          "reachability": "reachable",
+          "variant": "DustRejected"
+        }
+      ]
+    },
+    {
+      "id": "S4",
+      "mapped_in_proposal": "partial",
+      "path": "programs/solana-layout",
+      "type": "clutch_solana_layout::CodecError",
+      "variants": [
+        {
+          "code": 2011,
+          "reachability": "reachable",
+          "variant": "Truncated"
+        },
+        {
+          "code": 2012,
+          "reachability": "reachable",
+          "variant": "TrailingBytes"
+        },
+        {
+          "code": 2030,
+          "reachability": "reachable",
+          "variant": "WrongTag"
+        },
+        {
+          "code": 2031,
+          "reachability": "reachable",
+          "variant": "WrongVersion"
+        },
+        {
+          "code": 2040,
+          "reachability": "reachable",
+          "variant": "InvalidCount"
+        },
+        {
+          "code": 2021,
+          "reachability": "reachable",
+          "variant": "InvalidEnum"
+        },
+        {
+          "code": 2046,
+          "reachability": "reachable",
+          "variant": "ZeroValue"
+        },
+        {
+          "code": 4009,
+          "reachability": "reachable",
+          "variant": "ZeroIdentity"
+        },
+        {
+          "code": 4010,
+          "reachability": "reachable",
+          "variant": "NonCanonicalIdentity"
+        },
+        {
+          "code": 2022,
+          "reachability": "reachable",
+          "variant": "NonCanonicalPadding"
+        },
+        {
+          "code": 1001,
+          "reachability": "reachable",
+          "variant": "ArithmeticOverflow"
+        },
+        {
+          "code": 8004,
+          "reachability": "reachable",
+          "variant": "OutputTooSmall"
+        },
+        {
+          "code": 2049,
+          "note": "not in proposal 2.4; the landed CodecError::code() already returns 2049",
+          "reachability": "reachable",
+          "variant": "InvalidPriceGrid"
+        },
+        {
+          "code": 2050,
+          "note": "not in proposal 2.4; the landed CodecError::code() already returns 2050",
+          "reachability": "reachable",
+          "variant": "InvalidTick"
+        },
+        {
+          "code": 4011,
+          "note": "not in proposal 2.4; the landed CodecError::code() already returns 4011",
+          "reachability": "reachable",
+          "variant": "MismatchedBinding"
+        },
+        {
+          "code": 5011,
+          "note": "not in proposal 2.4; the landed CodecError::code() already returns 5011",
+          "reachability": "reachable",
+          "variant": "AggregateClosureMismatch"
+        },
+        {
+          "code": 5015,
+          "note": "not in proposal 2.4; the landed CodecError::code() already returns 5015",
+          "reachability": "reachable",
+          "variant": "InvalidConsideration"
+        }
+      ]
+    },
+    {
+      "id": "S5",
+      "mapped_in_proposal": "partial",
+      "path": "programs/solana-reference",
+      "type": "clutch_solana_reference::Error",
+      "variants": [
+        {
+          "code": null,
+          "note": "frame \"layout\"; code is the inner S4 code",
+          "reachability": "reachable",
+          "transparent": true,
+          "variant": "Layout(CodecError)"
+        },
+        {
+          "code": null,
+          "note": "frame \"kernel\"; code is the inner S1 code",
+          "reachability": "reachable",
+          "transparent": true,
+          "variant": "Kernel(KernelError)"
+        },
+        {
+          "code": 2010,
+          "note": "coarse; coarsens 2011 and 2012",
+          "reachability": "reachable",
+          "variant": "WrongLength"
+        },
+        {
+          "code": 2030,
+          "note": "frame \"reference-adapter\"; a distinct path from Layout(WrongTag) (R11)",
+          "reachability": "reachable",
+          "variant": "WrongTag"
+        },
+        {
+          "code": 2031,
+          "note": "frame \"reference-adapter\"",
+          "reachability": "reachable",
+          "variant": "WrongVersion"
+        },
+        {
+          "code": 2020,
+          "note": "coarse; coarsens 2021 and 2022",
+          "reachability": "reachable",
+          "variant": "NonCanonical"
+        },
+        {
+          "code": 1000,
+          "note": "coarse; coarsens 1001 and 1002",
+          "reachability": "reachable",
+          "variant": "Arithmetic"
+        },
+        {
+          "code": 4004,
+          "reachability": "reachable",
+          "variant": "WrongProgramOwner"
+        },
+        {
+          "code": 4006,
+          "reachability": "reachable",
+          "variant": "AccountAlias"
+        },
+        {
+          "code": 4005,
+          "reachability": "reachable",
+          "variant": "WrongAccountKey"
+        },
+        {
+          "code": 4007,
+          "reachability": "reachable",
+          "variant": "NotWritable"
+        },
+        {
+          "code": 4001,
+          "reachability": "reachable",
+          "variant": "MissingSignature"
+        },
+        {
+          "code": 4002,
+          "reachability": "reachable",
+          "variant": "UnauthorizedActor"
+        },
+        {
+          "code": 4003,
+          "note": "by_design; the only path for CreateMarket",
+          "reachability": "reachable",
+          "variant": "AuthorizationUnavailable"
+        },
+        {
+          "code": 6001,
+          "note": "by_design; the only path for Resolve and RedeemInternal under apply()",
+          "reachability": "reachable",
+          "variant": "ResolutionEvidenceUnavailable"
+        },
+        {
+          "code": 4008,
+          "reachability": "reachable",
+          "variant": "WrongBump"
+        },
+        {
+          "code": 4011,
+          "note": "coarse and cross-cutting (R3)",
+          "reachability": "reachable",
+          "variant": "MismatchedState"
+        },
+        {
+          "code": 5011,
+          "reachability": "reachable",
+          "variant": "AggregateClosureMismatch"
+        },
+        {
+          "code": 5012,
+          "reachability": "reachable",
+          "variant": "NonEmptyInitialization"
+        },
+        {
+          "code": 7001,
+          "note": "also raised for a sequence checked_add overflow, which is 1001 (R10)",
+          "reachability": "reachable",
+          "variant": "Replay"
+        },
+        {
+          "code": 9001,
+          "reachability": "reachable",
+          "variant": "UnsupportedIntent"
+        },
+        {
+          "code": 8003,
+          "reachability": "reachable",
+          "variant": "CollateralCap"
+        },
+        {
+          "code": null,
+          "note": "not in proposal 2.4; frame \"accumulator\", code is the inner S8 code",
+          "reachability": "reachable",
+          "transparent": true,
+          "variant": "Window(WindowError)"
+        },
+        {
+          "code": null,
+          "note": "not in proposal 2.4; code is the inner S9 code",
+          "reachability": "reachable",
+          "transparent": true,
+          "variant": "Resolution(ResolutionRefusal)"
+        },
+        {
+          "code": 4024,
+          "note": "not in proposal 2.4",
+          "reachability": "reachable",
+          "variant": "TermsBindingMismatch"
+        },
+        {
+          "code": 4025,
+          "note": "not in proposal 2.4",
+          "reachability": "reachable",
+          "variant": "PayoutSetMismatch"
+        },
+        {
+          "code": 4026,
+          "note": "not in proposal 2.4",
+          "reachability": "reachable",
+          "variant": "ResolutionBindingMismatch"
+        },
+        {
+          "code": 7003,
+          "note": "not in proposal 2.4",
+          "reachability": "reachable",
+          "variant": "ResolutionAlreadyRecorded"
+        },
+        {
+          "code": 3003,
+          "note": "not in proposal 2.4; same fact as kernel NotResolved on the evidence plane",
+          "reachability": "reachable",
+          "variant": "ResolutionNotRecorded"
+        },
+        {
+          "code": 4027,
+          "note": "not in proposal 2.4",
+          "reachability": "reachable",
+          "variant": "PayoutIndexMismatch"
+        },
+        {
+          "code": 4028,
+          "note": "not in proposal 2.4",
+          "reachability": "reachable",
+          "variant": "ImmutableAccountWritable"
+        },
+        {
+          "code": 2077,
+          "note": "not in proposal 2.4",
+          "reachability": "reachable",
+          "variant": "UnexpectedEvidence"
+        },
+        {
+          "code": 4029,
+          "note": "not in proposal 2.4; by_design",
+          "reachability": "reachable",
+          "variant": "WindowIdentityUnavailable"
+        },
+        {
+          "code": 4030,
+          "note": "not in proposal 2.4; by_design",
+          "reachability": "reachable",
+          "variant": "CollateralPolicyNotFrozen"
+        }
+      ]
+    },
+    {
+      "id": "S6",
+      "mapped_in_proposal": "partial",
+      "path": "research/vertical-model",
+      "type": "clutch_vertical_model::ModelError",
+      "variants": [
+        {
+          "code": null,
+          "note": "frame \"kernel\"",
+          "reachability": "reachable",
+          "transparent": true,
+          "variant": "Kernel(_)"
+        },
+        {
+          "code": null,
+          "note": "frame \"accumulator\"",
+          "reachability": "reachable",
+          "transparent": true,
+          "variant": "Summary(_)"
+        },
+        {
+          "code": null,
+          "note": "frame \"batch\"",
+          "reachability": "reachable",
+          "transparent": true,
+          "variant": "Batch(_)"
+        },
+        {
+          "code": null,
+          "note": "not in proposal 2.4; frame \"batch\", code is the inner S7 code",
+          "reachability": "reachable",
+          "transparent": true,
+          "variant": "Relation(ErrorV1)"
+        },
+        {
+          "code": null,
+          "note": "frame \"accounting\"",
+          "reachability": "reachable",
+          "transparent": true,
+          "variant": "Accounting(_)"
+        },
+        {
+          "code": 2056,
+          "reachability": "reachable",
+          "variant": "InvalidOwner"
+        },
+        {
+          "code": 2055,
+          "reachability": "reachable",
+          "variant": "InvalidBps"
+        },
+        {
+          "code": 3008,
+          "reachability": "reachable",
+          "variant": "InvalidObservationOrder"
+        },
+        {
+          "code": 3007,
+          "reachability": "reachable",
+          "variant": "ObservationAfterSeal"
+        },
+        {
+          "code": 3009,
+          "reachability": "reachable",
+          "variant": "MaturityExceeded"
+        },
+        {
+          "code": 3004,
+          "note": "result_kind error on the sealing path (R9)",
+          "reachability": "reachable",
+          "variant": "NotMature"
+        },
+        {
+          "code": 3006,
+          "reachability": "reachable",
+          "variant": "AlreadySealed"
+        },
+        {
+          "code": 9003,
+          "reachability": "reachable",
+          "variant": "MissingConsideration"
+        },
+        {
+          "code": 4013,
+          "reachability": "reachable",
+          "variant": "MissingPairBindings"
+        },
+        {
+          "code": 7002,
+          "reachability": "reachable",
+          "variant": "PairAlreadySettled"
+        },
+        {
+          "code": 5015,
+          "note": "also raised for a price x quantity overflow, which is 1001 (R10)",
+          "reachability": "reachable",
+          "variant": "InvalidConsideration"
+        },
+        {
+          "code": 5013,
+          "note": "also raised for a seller-cash checked_add overflow (R4)",
+          "reachability": "reachable",
+          "variant": "InsufficientCash"
+        },
+        {
+          "code": 5014,
+          "note": "also raised for a buyer-claim checked_add overflow (R4)",
+          "reachability": "reachable",
+          "variant": "TransferInsufficient"
+        },
+        {
+          "code": 5020,
+          "note": "coarse over twelve facts across five domains (R2)",
+          "reachability": "reachable",
+          "variant": "InvalidFill"
+        },
+        {
+          "code": null,
+          "note": "landed after VECTOR_SPINE_PROPOSAL.md 2.4 was written; TAX-8 makes this a taxonomy change under review, and no vector may reference it until it is decided",
+          "reachability": "reachable",
+          "status": "unmapped-pending-review",
+          "variant": "RelationDomainMismatch"
+        },
+        {
+          "code": null,
+          "note": "landed after VECTOR_SPINE_PROPOSAL.md 2.4 was written; TAX-8 makes this a taxonomy change under review, and no vector may reference it until it is decided",
+          "reachability": "reachable",
+          "status": "unmapped-pending-review",
+          "variant": "UnrepresentableBinding"
+        },
+        {
+          "code": null,
+          "note": "landed after VECTOR_SPINE_PROPOSAL.md 2.4 was written; TAX-8 makes this a taxonomy change under review, and no vector may reference it until it is decided",
+          "reachability": "reachable",
+          "status": "unmapped-pending-review",
+          "variant": "VirtualLegNotHosted"
+        },
+        {
+          "code": null,
+          "note": "landed after VECTOR_SPINE_PROPOSAL.md 2.4 was written; TAX-8 makes this a taxonomy change under review, and no vector may reference it until it is decided",
+          "reachability": "reachable",
+          "status": "unmapped-pending-review",
+          "variant": "RelationIdentityCollision"
+        },
+        {
+          "code": null,
+          "note": "landed after VECTOR_SPINE_PROPOSAL.md 2.4 was written; TAX-8 makes this a taxonomy change under review, and no vector may reference it until it is decided",
+          "reachability": "reachable",
+          "status": "unmapped-pending-review",
+          "variant": "MissingRelationLedger"
+        },
+        {
+          "code": null,
+          "note": "landed after VECTOR_SPINE_PROPOSAL.md 2.4 was written; TAX-8 makes this a taxonomy change under review, and no vector may reference it until it is decided",
+          "reachability": "reachable",
+          "status": "unmapped-pending-review",
+          "variant": "SettlementTargetNotAdmitted"
+        },
+        {
+          "code": null,
+          "note": "landed after VECTOR_SPINE_PROPOSAL.md 2.4 was written; TAX-8 makes this a taxonomy change under review, and no vector may reference it until it is decided",
+          "reachability": "reachable",
+          "status": "unmapped-pending-review",
+          "variant": "UnknownSlice"
+        },
+        {
+          "code": null,
+          "note": "landed after VECTOR_SPINE_PROPOSAL.md 2.4 was written; TAX-8 makes this a taxonomy change under review, and no vector may reference it until it is decided",
+          "reachability": "reachable",
+          "status": "unmapped-pending-review",
+          "variant": "SliceExceeded"
+        },
+        {
+          "code": null,
+          "note": "landed after VECTOR_SPINE_PROPOSAL.md 2.4 was written; TAX-8 makes this a taxonomy change under review, and no vector may reference it until it is decided",
+          "reachability": "reachable",
+          "status": "unmapped-pending-review",
+          "variant": "UnknownPair"
+        },
+        {
+          "code": null,
+          "note": "landed after VECTOR_SPINE_PROPOSAL.md 2.4 was written; TAX-8 makes this a taxonomy change under review, and no vector may reference it until it is decided",
+          "reachability": "reachable",
+          "status": "unmapped-pending-review",
+          "variant": "ExceedsPairRemaining"
+        },
+        {
+          "code": null,
+          "note": "landed after VECTOR_SPINE_PROPOSAL.md 2.4 was written; TAX-8 makes this a taxonomy change under review, and no vector may reference it until it is decided",
+          "reachability": "reachable",
+          "status": "unmapped-pending-review",
+          "variant": "PartialPairRefused"
+        },
+        {
+          "code": null,
+          "note": "landed after VECTOR_SPINE_PROPOSAL.md 2.4 was written; TAX-8 makes this a taxonomy change under review, and no vector may reference it until it is decided",
+          "reachability": "reachable",
+          "status": "unmapped-pending-review",
+          "variant": "ResidualVariantUnimplemented"
+        }
+      ]
+    },
+    {
+      "id": "S6b",
+      "mapped_in_proposal": true,
+      "path": "research/vertical-model",
+      "type": "clutch_vertical_model::AccountingError",
+      "variants": [
+        {
+          "code": 1001,
+          "reachability": "reachable",
+          "variant": "Overflow"
+        },
+        {
+          "code": 5016,
+          "reachability": "reachable",
+          "variant": "InsufficientLiveness"
+        },
+        {
+          "code": 5017,
+          "reachability": "reachable",
+          "variant": "LivenessConservation"
+        }
+      ]
+    },
+    {
+      "id": "S6c",
+      "mapped_in_proposal": true,
+      "path": "research/vertical-model",
+      "result_kind": "refusal",
+      "type": "clutch_vertical_model::Refusal",
+      "variants": [
+        {
+          "code": 3004,
+          "reachability": "reachable",
+          "variant": "NotMature"
+        },
+        {
+          "code": 3005,
+          "reachability": "reachable",
+          "variant": "NotSealed"
+        },
+        {
+          "code": 6003,
+          "reachability": "reachable",
+          "variant": "GappedCoverage"
+        },
+        {
+          "code": 6002,
+          "reachability": "reachable",
+          "variant": "NoAcceptedCoverage"
+        },
+        {
+          "code": 6004,
+          "reachability": "reachable",
+          "variant": "AmbiguousTerminalInterval"
+        },
+        {
+          "code": 9002,
+          "reachability": "reachable",
+          "variant": "UnsupportedStatistic"
+        }
+      ]
+    },
+    {
+      "id": "S7",
+      "mapped_in_proposal": false,
+      "path": "crates/clutch-batch",
+      "type": "clutch_batch::relation_v1::ErrorV1",
+      "variants": [
+        {
+          "code": 2031,
+          "reachability": "reachable",
+          "variant": "UnknownRelationVersion"
+        },
+        {
+          "code": 2057,
+          "reachability": "reachable",
+          "variant": "InvalidPriceScale"
+        },
+        {
+          "code": 9004,
+          "reachability": "reachable",
+          "variant": "PolicyVariantUnimplemented"
+        },
+        {
+          "code": 2056,
+          "reachability": "reachable",
+          "variant": "InvalidOwner"
+        },
+        {
+          "code": 2062,
+          "reachability": "reachable",
+          "variant": "InvalidOutcome"
+        },
+        {
+          "code": 2051,
+          "reachability": "reachable",
+          "variant": "InvalidQuantity"
+        },
+        {
+          "code": 2052,
+          "reachability": "reachable",
+          "variant": "InvalidMinimumFill"
+        },
+        {
+          "code": 2053,
+          "reachability": "reachable",
+          "variant": "NonCanonicalOrderOrder"
+        },
+        {
+          "code": 2022,
+          "reachability": "reachable",
+          "variant": "NonCanonicalPadding"
+        },
+        {
+          "code": 9005,
+          "reachability": "reachable",
+          "variant": "AonNotAdmitted"
+        },
+        {
+          "code": 9006,
+          "reachability": "reachable",
+          "variant": "MinimumFillNotAdmitted"
+        },
+        {
+          "code": 4018,
+          "reachability": "reachable",
+          "variant": "SelfCrossRefused"
+        },
+        {
+          "code": 3011,
+          "reachability": "reachable",
+          "variant": "ExpiredOrder"
+        },
+        {
+          "code": 8001,
+          "reachability": "reachable",
+          "variant": "TooManyOrders"
+        },
+        {
+          "code": 8005,
+          "reachability": "reachable",
+          "variant": "TooManyPortfolios"
+        },
+        {
+          "code": 2058,
+          "reachability": "reachable",
+          "variant": "SimplexSumMismatch"
+        },
+        {
+          "code": 2059,
+          "reachability": "reachable",
+          "variant": "PriceOutOfRange"
+        },
+        {
+          "code": 5006,
+          "reachability": "reachable",
+          "variant": "IneligibleFill"
+        },
+        {
+          "code": 5009,
+          "reachability": "reachable",
+          "variant": "CandidateMismatch"
+        },
+        {
+          "code": 5023,
+          "reachability": "reachable",
+          "variant": "StrictUnderfill"
+        },
+        {
+          "code": 5005,
+          "reachability": "reachable",
+          "variant": "FillExceedsQuantity"
+        },
+        {
+          "code": 5007,
+          "reachability": "reachable",
+          "variant": "MinimumFillViolation"
+        },
+        {
+          "code": 5008,
+          "reachability": "reachable",
+          "variant": "AllOrNoneViolation"
+        },
+        {
+          "code": 5024,
+          "reachability": "reachable",
+          "variant": "AonMaskDishonored"
+        },
+        {
+          "code": 5025,
+          "reachability": "reachable",
+          "variant": "AonMaskLeak"
+        },
+        {
+          "code": 2066,
+          "reachability": "reachable",
+          "variant": "AonMaskNotApplicable"
+        },
+        {
+          "code": 5010,
+          "reachability": "reachable",
+          "variant": "DustRejected"
+        },
+        {
+          "code": 5026,
+          "reachability": "reachable",
+          "variant": "OutcomeConservationMismatch"
+        },
+        {
+          "code": 5027,
+          "reachability": "reachable",
+          "variant": "ChurnNotCanonical"
+        },
+        {
+          "code": 5028,
+          "reachability": "reachable",
+          "variant": "InfeasibleVirtualLeg"
+        },
+        {
+          "code": 5029,
+          "note": "carries the offending outcome and owner as payload; the payload is diagnostic, never part of the code",
+          "reachability": "reachable",
+          "variant": "PairingInfeasible { outcome, owner }"
+        },
+        {
+          "code": 5030,
+          "reachability": "reachable",
+          "variant": "SliceNotExecutable"
+        },
+        {
+          "code": 5031,
+          "reachability": "reachable",
+          "variant": "SliceSumMismatch"
+        },
+        {
+          "code": 2067,
+          "reachability": "reachable",
+          "variant": "PairingWitnessNotAdmitted"
+        },
+        {
+          "code": 2068,
+          "reachability": "reachable",
+          "variant": "PairingWitnessMissing"
+        },
+        {
+          "code": 5032,
+          "reachability": "reachable",
+          "variant": "ConstructorStalled"
+        },
+        {
+          "code": 8006,
+          "reachability": "reachable",
+          "variant": "SliceCapacityExceeded"
+        },
+        {
+          "code": 5015,
+          "reachability": "reachable",
+          "variant": "ConsiderationMismatch"
+        },
+        {
+          "code": 1004,
+          "reachability": "reachable",
+          "variant": "RemainderRequired"
+        },
+        {
+          "code": 5033,
+          "reachability": "reachable",
+          "variant": "FeeMismatch"
+        },
+        {
+          "code": 5034,
+          "reachability": "reachable",
+          "variant": "FeePayerUnfunded"
+        },
+        {
+          "code": 5004,
+          "reachability": "reachable",
+          "variant": "ConservationFailure"
+        },
+        {
+          "code": 2071,
+          "reachability": "reachable",
+          "variant": "ScoreMismatch"
+        },
+        {
+          "code": 2072,
+          "reachability": "reachable",
+          "variant": "DigestMismatch"
+        },
+        {
+          "code": 1001,
+          "reachability": "reachable",
+          "variant": "ArithmeticOverflow"
+        },
+        {
+          "code": 9007,
+          "reachability": "reachable",
+          "variant": "NoValidCandidate"
+        },
+        {
+          "code": 8007,
+          "reachability": "reachable",
+          "variant": "SearchBudgetExceeded"
+        }
+      ]
+    },
+    {
+      "id": "S8",
+      "mapped_in_proposal": false,
+      "path": "crates/clutch-accumulator",
+      "type": "clutch_accumulator::WindowError",
+      "variants": [
+        {
+          "code": 4009,
+          "reachability": "reachable",
+          "variant": "ZeroIdentity"
+        },
+        {
+          "code": 2046,
+          "reachability": "reachable",
+          "variant": "UnversionedIdentity"
+        },
+        {
+          "code": 2073,
+          "reachability": "reachable",
+          "variant": "InvalidRange"
+        },
+        {
+          "code": 2074,
+          "reachability": "reachable",
+          "variant": "InvalidMaturity"
+        },
+        {
+          "code": 2075,
+          "reachability": "reachable",
+          "variant": "UnknownCoveragePolicy"
+        },
+        {
+          "code": 2076,
+          "reachability": "reachable",
+          "variant": "InvalidPolicyParameter"
+        },
+        {
+          "code": 4012,
+          "reachability": "reachable",
+          "variant": "MismatchedGrid"
+        },
+        {
+          "code": 4019,
+          "reachability": "reachable",
+          "variant": "MismatchedFeed"
+        },
+        {
+          "code": 4020,
+          "reachability": "reachable",
+          "variant": "MismatchedCoveragePolicy"
+        },
+        {
+          "code": 4021,
+          "reachability": "reachable",
+          "variant": "MismatchedGeneration"
+        },
+        {
+          "code": 4022,
+          "reachability": "reachable",
+          "variant": "MismatchedMaturity"
+        },
+        {
+          "code": 4023,
+          "reachability": "reachable",
+          "variant": "WrongWindow"
+        },
+        {
+          "code": 3008,
+          "reachability": "reachable",
+          "variant": "NonContiguous"
+        },
+        {
+          "code": 3012,
+          "reachability": "reachable",
+          "variant": "RangeOverflow"
+        },
+        {
+          "code": 3013,
+          "reachability": "reachable",
+          "variant": "NonMonotoneCursor"
+        },
+        {
+          "code": 3007,
+          "reachability": "reachable",
+          "variant": "ObservationAfterSeal"
+        },
+        {
+          "code": 6005,
+          "reachability": "reachable",
+          "variant": "IncompleteDomain"
+        },
+        {
+          "code": 3004,
+          "reachability": "reachable",
+          "variant": "NotMature"
+        },
+        {
+          "code": 3006,
+          "reachability": "reachable",
+          "variant": "AlreadySealed"
+        },
+        {
+          "code": 3005,
+          "reachability": "reachable",
+          "variant": "NotSealed"
+        },
+        {
+          "code": 6006,
+          "note": "coarse; coarsens 6003 and 6007",
+          "reachability": "reachable",
+          "variant": "CoverageRefused"
+        },
+        {
+          "code": 2054,
+          "reachability": "reachable",
+          "variant": "MalformedResult"
+        },
+        {
+          "code": null,
+          "note": "frame \"accumulator\"; code is the inner S2 SummaryError code",
+          "reachability": "reachable",
+          "transparent": true,
+          "variant": "Summary(SummaryError)"
+        }
+      ]
+    },
+    {
+      "id": "S9",
+      "mapped_in_proposal": false,
+      "path": "programs/solana-reference",
+      "type": "clutch_solana_reference::ResolutionRefusal",
+      "variants": [
+        {
+          "code": 4024,
+          "note": "R-01",
+          "reachability": "reachable",
+          "variant": "TermsDigestMismatch"
+        },
+        {
+          "code": 2078,
+          "note": "R-02",
+          "reachability": "reachable",
+          "variant": "TermsMalformed"
+        },
+        {
+          "code": 2079,
+          "note": "R-03",
+          "reachability": "reachable",
+          "variant": "PartitionMalformed"
+        },
+        {
+          "code": null,
+          "note": "R-04; code is the inner S8 code",
+          "reachability": "reachable",
+          "transparent": true,
+          "variant": "WindowDomainMismatch(WindowError)"
+        },
+        {
+          "code": 9002,
+          "note": "R-05",
+          "reachability": "reachable",
+          "variant": "StatisticUnsupported"
+        },
+        {
+          "code": 6004,
+          "note": "R-06",
+          "reachability": "reachable",
+          "variant": "AmbiguousInterval"
+        },
+        {
+          "code": 6002,
+          "note": "R-07",
+          "reachability": "reachable",
+          "variant": "NoAcceptedCoverage"
+        },
+        {
+          "code": 1005,
+          "note": "R-08",
+          "reachability": "reachable",
+          "variant": "AmbiguousDenominator"
+        },
+        {
+          "code": 2061,
+          "note": "R-09",
+          "reachability": "reachable",
+          "variant": "PayoutIndexOutOfRange"
+        },
+        {
+          "code": 3001,
+          "note": "R-10; the adapter's live path to 3001, which R6 records as dead in the kernel",
+          "reachability": "reachable",
+          "variant": "MarketNotActive"
+        },
+        {
+          "code": 1001,
+          "note": "R-11",
+          "reachability": "reachable",
+          "variant": "ArithmeticOverflow"
+        }
+      ]
+    }
+  ],
+  "taxonomy_version": 1
+}

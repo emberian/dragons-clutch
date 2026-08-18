@@ -1,0 +1,794 @@
+{
+  "digests": {
+    "manifest": "ee377db274ae150017002a0b9cebca5837d000731eb804afc3c3149f79c5df8c",
+    "taxonomy": "1025002bef00f599a188f52bd68465cf5782f88ded63fbdc1bc8f470d0a20af4"
+  },
+  "family": "accumulator",
+  "notes": "The window state machine. Every taxonomy code these vectors name for a WindowError comes from the extension block of TAXONOMY.json: VECTOR_SPINE_PROPOSAL.md section 2.4 maps SummaryError and StatisticError but not WindowError.",
+  "schema": "dragons-clutch/vector-manifest-v1",
+  "schema_version": 1,
+  "status": "proposed",
+  "taxonomy_version": 1,
+  "vectors": [
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "cd925f0995c8142deb8f7402646d3cf832c29575a14bade51ba81b359e945e13"
+      },
+      "domain": "success",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "optional per EVIDENCE_MATRIX.md#6",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-statistic-family"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "accumulator.window/v1",
+        "value": {
+          "cursor": "103",
+          "feed_cursor": "104",
+          "phase": "sealed"
+        }
+      },
+      "id": "accumulator-window-complete-fold-seals-and-yields-terminal",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "accumulator.window/v1",
+        "value": {
+          "domain": {
+            "coverage": {
+              "policy": "complete-required"
+            },
+            "end_bucket_exclusive": "103",
+            "feed": {
+              "evaluator_version": 4,
+              "feed_spec_id": "0202020202020202020202020202020202020202020202020202020202020202",
+              "source_adapter_id": "0101010101010101010101010101010101010101010101010101010101010101",
+              "source_version": 3
+            },
+            "generation": "0",
+            "grid": {
+              "bucket_seconds": "60",
+              "family_id": 7,
+              "version": 1
+            },
+            "maturity_bucket_exclusive": "104",
+            "start_bucket": "100"
+          }
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "bucket": "100",
+            "high": "11",
+            "kind": "accepted",
+            "low": "10"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "observe",
+          "step": 0
+        },
+        {
+          "args": {
+            "bucket": "101",
+            "high": "21",
+            "kind": "accepted",
+            "low": "20"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "observe",
+          "step": 1
+        },
+        {
+          "args": {
+            "bucket": "102",
+            "high": "31",
+            "kind": "accepted",
+            "low": "30"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "observe",
+          "step": 2
+        },
+        {
+          "expect": {
+            "code": 3004,
+            "frame": "accumulator",
+            "name": "phase.not-mature",
+            "result_kind": "error"
+          },
+          "op": "seal",
+          "step": 3
+        },
+        {
+          "args": {
+            "next_bucket": "104"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "witness_feed_cursor",
+          "step": 4
+        },
+        {
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "seal",
+          "step": 5
+        },
+        {
+          "expect": {
+            "code": 3006,
+            "frame": "accumulator",
+            "name": "phase.already-sealed",
+            "result_kind": "error"
+          },
+          "op": "seal",
+          "step": 6
+        },
+        {
+          "expect": {
+            "result_kind": "ok",
+            "value": {
+              "accepted_buckets": "3",
+              "coverage_state": "complete",
+              "missing_buckets": "0",
+              "sealed_cursor": "104",
+              "terminal": {
+                "high": "31",
+                "low": "30"
+              },
+              "total_buckets": "3"
+            }
+          },
+          "op": "result",
+          "step": 7
+        },
+        {
+          "args": {
+            "domain": {
+              "coverage": {
+                "policy": "complete-required"
+              },
+              "end_bucket_exclusive": "103",
+              "feed": {
+                "evaluator_version": 4,
+                "feed_spec_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                "source_adapter_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                "source_version": 3
+              },
+              "generation": "0",
+              "grid": {
+                "bucket_seconds": "60",
+                "family_id": 7,
+                "version": 1
+              },
+              "maturity_bucket_exclusive": "104",
+              "start_bucket": "100"
+            }
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "check_domain",
+          "step": 8
+        }
+      ],
+      "primary_property_id": "P-EVID-01",
+      "property_ids": [
+        "P-EVID-01",
+        "P-PHASE-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "Every expected bucket is accepted, but the repair grace has not elapsed until the authenticated feed cursor reaches 104, so step 3 pins that a complete window is still immature. Sealing is terminal, so step 6 pins that it cannot happen twice. INT-4: the terminal interval ships as its exact endpoints and is never pre-divided.",
+        "source": "crates/clutch-accumulator/src/window.rs (sealed_complete_window_produces_domain_bound_result)"
+      },
+      "status": "proposed",
+      "surface": "clutch-accumulator",
+      "title": "a complete, mature window seals once and yields its exact terminal interval"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "ecb7953c79d4c39dc70111084652c64a2a9a203781558c8d3d15a22e29e1b015"
+      },
+      "domain": "evid",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "optional per EVIDENCE_MATRIX.md#6",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-statistic-family"
+        },
+        "rust-reference": {
+          "coarsens_to": 6006,
+          "mode": "coarsened"
+        },
+        "sbf-program-test": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "accumulator.window/v1",
+        "value": {
+          "cursor": "103",
+          "feed_cursor": "104",
+          "phase": "sealed"
+        }
+      },
+      "id": "accumulator-window-explicit-gap-refused-by-coverage-policy",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "accumulator.window/v1",
+        "value": {
+          "domain": {
+            "coverage": {
+              "policy": "complete-required"
+            },
+            "end_bucket_exclusive": "103",
+            "feed": {
+              "evaluator_version": 4,
+              "feed_spec_id": "0202020202020202020202020202020202020202020202020202020202020202",
+              "source_adapter_id": "0101010101010101010101010101010101010101010101010101010101010101",
+              "source_version": 3
+            },
+            "generation": "0",
+            "grid": {
+              "bucket_seconds": "60",
+              "family_id": 7,
+              "version": 1
+            },
+            "maturity_bucket_exclusive": "104",
+            "start_bucket": "100"
+          }
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "bucket": "100",
+            "high": "11",
+            "kind": "accepted",
+            "low": "10"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "observe",
+          "step": 0
+        },
+        {
+          "args": {
+            "bucket": "101",
+            "kind": "missing"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "observe",
+          "step": 1
+        },
+        {
+          "args": {
+            "bucket": "102",
+            "high": "31",
+            "kind": "accepted",
+            "low": "30"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "observe",
+          "step": 2
+        },
+        {
+          "args": {
+            "next_bucket": "104"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "witness_feed_cursor",
+          "step": 3
+        },
+        {
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "seal",
+          "step": 4
+        },
+        {
+          "expect": {
+            "code": 6003,
+            "frame": "accumulator",
+            "name": "evid.gapped-coverage",
+            "result_kind": "error"
+          },
+          "op": "result",
+          "step": 5
+        }
+      ],
+      "primary_property_id": "P-EVID-01",
+      "property_ids": [
+        "P-EVID-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "An explicit source gap is an accepted input to the fold, not an error: it advances the cursor and lets the window seal, and the registered coverage policy is what refuses it afterwards. Under COMPLETE_REQUIRED the fact is exactly 6003, an explicit missing bucket in the range. The implementation reports the coarse CoverageRefused, which cannot distinguish this from a bounded-gaps budget overrun, so the acceptance is a declared coarsening rather than an exact match.",
+        "source": "crates/clutch-accumulator/src/window.rs (WindowAccumulator::result, CoveragePolicy::admits)"
+      },
+      "status": "proposed",
+      "surface": "clutch-accumulator",
+      "title": "an explicit missing bucket seals but is refused by the complete-required policy"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "d66ff61874f6bd80580d3b5ac241e16bf4a4fe92c1f0120b8a8fc0c458c31920"
+      },
+      "domain": "evid",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "optional per EVIDENCE_MATRIX.md#6",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-statistic-family"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "accumulator.window/v1",
+        "value": {
+          "cursor": "102",
+          "feed_cursor": "104",
+          "phase": "open"
+        }
+      },
+      "id": "accumulator-window-truncated-prefix-cannot-seal",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "accumulator.window/v1",
+        "value": {
+          "domain": {
+            "coverage": {
+              "policy": "complete-required"
+            },
+            "end_bucket_exclusive": "103",
+            "feed": {
+              "evaluator_version": 4,
+              "feed_spec_id": "0202020202020202020202020202020202020202020202020202020202020202",
+              "source_adapter_id": "0101010101010101010101010101010101010101010101010101010101010101",
+              "source_version": 3
+            },
+            "generation": "0",
+            "grid": {
+              "bucket_seconds": "60",
+              "family_id": 7,
+              "version": 1
+            },
+            "maturity_bucket_exclusive": "104",
+            "start_bucket": "100"
+          }
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "bucket": "100",
+            "high": "11",
+            "kind": "accepted",
+            "low": "10"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "observe",
+          "step": 0
+        },
+        {
+          "args": {
+            "bucket": "101",
+            "high": "21",
+            "kind": "accepted",
+            "low": "20"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "observe",
+          "step": 1
+        },
+        {
+          "args": {
+            "next_bucket": "104"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "witness_feed_cursor",
+          "step": 2
+        },
+        {
+          "expect": {
+            "code": 6005,
+            "frame": "accumulator",
+            "name": "evid.incomplete-domain",
+            "result_kind": "error"
+          },
+          "op": "seal",
+          "step": 3
+        },
+        {
+          "expect": {
+            "code": 3005,
+            "frame": "accumulator",
+            "name": "phase.not-sealed",
+            "result_kind": "error"
+          },
+          "op": "result",
+          "step": 4
+        },
+        {
+          "args": {
+            "bucket": "100",
+            "high": "11",
+            "kind": "accepted",
+            "low": "10"
+          },
+          "expect": {
+            "code": 3008,
+            "frame": "accumulator",
+            "name": "phase.observation-out-of-order",
+            "result_kind": "error"
+          },
+          "op": "observe",
+          "step": 5
+        }
+      ],
+      "primary_property_id": "P-EVID-01",
+      "property_ids": [
+        "P-EVID-01",
+        "P-PHASE-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "Silently skipping bucket 102 is a different fact from explicitly recording it as missing: the cursor never reaches the exclusive end, so the seal itself refuses and no WindowResult can exist. Step 5 pins that a replayed bucket is refused as a non-contiguous page rather than absorbed, which is what makes the fold's coverage counters trustworthy.",
+        "source": "crates/clutch-accumulator/src/window.rs (truncated_prefix_cannot_seal_or_yield_a_result)"
+      },
+      "status": "proposed",
+      "surface": "clutch-accumulator",
+      "title": "a window missing an expected bucket cannot seal and yields no result"
+    },
+    {
+      "comparison": {
+        "byte_exact": "not-applicable",
+        "post_state_on_error": "unchanged",
+        "semantic": true,
+        "single_fault": true
+      },
+      "digests": {
+        "vector": "58884e40c4bbfa8fafc5ce003e8732e731cbd3bf1b14c9ecf8db75fec09a6184"
+      },
+      "domain": "auth",
+      "executors": {
+        "lean-checker": {
+          "blocked_by": "optional per EVIDENCE_MATRIX.md#6",
+          "mode": "pending"
+        },
+        "rocq-extracted": {
+          "mode": "not-applicable",
+          "reason": "no-statistic-family"
+        },
+        "rust-reference": {
+          "mode": "exact"
+        },
+        "sbf-program-test": {
+          "mode": "not-applicable",
+          "reason": "no-account-plane"
+        },
+        "verus-host": {
+          "blocked_by": "CODEX_HANDOFF.md#7-P0-2",
+          "mode": "pending",
+          "reason": "spec-only-shadow"
+        }
+      },
+      "final_state": {
+        "constructed_by": "operation-sequence",
+        "form": "accumulator.window/v1",
+        "value": {
+          "cursor": "103",
+          "feed_cursor": "104",
+          "phase": "sealed"
+        }
+      },
+      "id": "accumulator-window-wrong-generation-is-a-distinguishable-refusal",
+      "initial_state": {
+        "constructed_by": "constructor",
+        "form": "accumulator.window/v1",
+        "value": {
+          "domain": {
+            "coverage": {
+              "policy": "complete-required"
+            },
+            "end_bucket_exclusive": "103",
+            "feed": {
+              "evaluator_version": 4,
+              "feed_spec_id": "0202020202020202020202020202020202020202020202020202020202020202",
+              "source_adapter_id": "0101010101010101010101010101010101010101010101010101010101010101",
+              "source_version": 3
+            },
+            "generation": "0",
+            "grid": {
+              "bucket_seconds": "60",
+              "family_id": 7,
+              "version": 1
+            },
+            "maturity_bucket_exclusive": "104",
+            "start_bucket": "100"
+          }
+        }
+      },
+      "operations": [
+        {
+          "args": {
+            "bucket": "100",
+            "high": "11",
+            "kind": "accepted",
+            "low": "10"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "observe",
+          "step": 0
+        },
+        {
+          "args": {
+            "bucket": "101",
+            "high": "21",
+            "kind": "accepted",
+            "low": "20"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "observe",
+          "step": 1
+        },
+        {
+          "args": {
+            "bucket": "102",
+            "high": "31",
+            "kind": "accepted",
+            "low": "30"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "observe",
+          "step": 2
+        },
+        {
+          "args": {
+            "next_bucket": "104"
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "witness_feed_cursor",
+          "step": 3
+        },
+        {
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "seal",
+          "step": 4
+        },
+        {
+          "args": {
+            "domain": {
+              "coverage": {
+                "policy": "complete-required"
+              },
+              "end_bucket_exclusive": "103",
+              "feed": {
+                "evaluator_version": 4,
+                "feed_spec_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                "source_adapter_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                "source_version": 3
+              },
+              "generation": "1",
+              "grid": {
+                "bucket_seconds": "60",
+                "family_id": 7,
+                "version": 1
+              },
+              "maturity_bucket_exclusive": "104",
+              "start_bucket": "100"
+            }
+          },
+          "expect": {
+            "code": 4021,
+            "frame": "accumulator",
+            "name": "auth.mismatched-generation",
+            "result_kind": "error"
+          },
+          "op": "check_domain",
+          "step": 5
+        },
+        {
+          "args": {
+            "domain": {
+              "coverage": {
+                "policy": "complete-required"
+              },
+              "end_bucket_exclusive": "203",
+              "feed": {
+                "evaluator_version": 4,
+                "feed_spec_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                "source_adapter_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                "source_version": 3
+              },
+              "generation": "0",
+              "grid": {
+                "bucket_seconds": "60",
+                "family_id": 7,
+                "version": 1
+              },
+              "maturity_bucket_exclusive": "204",
+              "start_bucket": "200"
+            }
+          },
+          "expect": {
+            "code": 4023,
+            "frame": "accumulator",
+            "name": "auth.wrong-window",
+            "result_kind": "error"
+          },
+          "op": "check_domain",
+          "step": 6
+        },
+        {
+          "args": {
+            "domain": {
+              "coverage": {
+                "policy": "complete-required"
+              },
+              "end_bucket_exclusive": "103",
+              "feed": {
+                "evaluator_version": 4,
+                "feed_spec_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                "source_adapter_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                "source_version": 3
+              },
+              "generation": "0",
+              "grid": {
+                "bucket_seconds": "60",
+                "family_id": 7,
+                "version": 1
+              },
+              "maturity_bucket_exclusive": "110",
+              "start_bucket": "100"
+            }
+          },
+          "expect": {
+            "code": 4022,
+            "frame": "accumulator",
+            "name": "auth.mismatched-maturity",
+            "result_kind": "error"
+          },
+          "op": "check_domain",
+          "step": 7
+        },
+        {
+          "args": {
+            "domain": {
+              "coverage": {
+                "policy": "complete-required"
+              },
+              "end_bucket_exclusive": "103",
+              "feed": {
+                "evaluator_version": 4,
+                "feed_spec_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                "source_adapter_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                "source_version": 3
+              },
+              "generation": "0",
+              "grid": {
+                "bucket_seconds": "60",
+                "family_id": 7,
+                "version": 1
+              },
+              "maturity_bucket_exclusive": "104",
+              "start_bucket": "100"
+            }
+          },
+          "expect": {
+            "result_kind": "ok"
+          },
+          "op": "check_domain",
+          "step": 8
+        }
+      ],
+      "primary_property_id": "P-EVID-01",
+      "property_ids": [
+        "P-EVID-01",
+        "P-AUTH-01"
+      ],
+      "provenance": {
+        "kind": "handwritten",
+        "rationale": "A result is interchangeable with another only when every field of its domain is equal, and check_domain names which field differed. Repair generation is the field an adapter is most likely to get wrong under a feed repair, so a wrong generation must never collapse into one opaque mismatch. Each step differs from the expected domain in exactly one field.",
+        "source": "crates/clutch-accumulator/src/window.rs (wrong_window_generation_maturity_and_feed_are_distinguishable_refusals)"
+      },
+      "status": "proposed",
+      "surface": "clutch-accumulator",
+      "title": "a sealed result bound to another repair generation is refused by name"
+    }
+  ]
+}

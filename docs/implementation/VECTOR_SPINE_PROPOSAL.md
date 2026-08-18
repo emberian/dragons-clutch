@@ -1438,3 +1438,218 @@ decisions, none of which this document may make for the reviewer:
 
 Until G1–G7 are decided, this document is the artifact; there are no files under
 `fixtures/vectors/`, no reader crate, and no root workspace.
+
+---
+
+## Addendum, 2026-08-18 — what landed, and what reading the tree turned up
+
+Status of this addendum: **PROPOSED**, exactly as the document above. It records
+that the data and the first executor now exist as files; it does not record that
+any gate item G1–G7 was decided, that any executor other than `rust-reference`
+exists, or that anything is frozen. Nothing above is amended: §2.3's numbers,
+§2.4's rows, and §3.3's schema are transcribed verbatim into the landed files,
+and every difference is additive and named in §A.3 below.
+
+### A.1 What landed
+
+```text
+fixtures/vectors/README.md                        provenance and ownership contract
+fixtures/vectors/TAXONOMY.json                    the §2 registry, machine-readable
+fixtures/vectors/SCHEMA.json                      the §3.3 schema, machine-readable
+fixtures/vectors/kernel/core.json                 10 vectors
+fixtures/vectors/batch/scalar.json                 2 vectors
+fixtures/vectors/batch/relation-v1.json            6 vectors
+fixtures/vectors/accumulator/window.json           4 vectors
+fixtures/vectors/adapter/reference-transition.json 3 vectors
+tools/vector-check/                                the `rust-reference` executor
+```
+
+`tools/vector-check` is a standalone crate with its own manifest and lockfile,
+exactly as every other crate in this repository is: **it does not create a root
+workspace**, and G6 is untouched. It has path dependencies on the five semantic
+crates and no registry dependencies at all — its JSON reader, its RFC 8785
+canonicalizer, and its SHA-256 are written out, so it builds offline on the same
+terms the `no_std` crates do. Nothing depends on it, and no semantic crate gained
+any edge from it, which is what G5 asks to be confirmed. The proposal's §6 names
+the reader `tools/clutch-vectors/`; the landed directory is `tools/vector-check/`
+and every property §6 asks for holds.
+
+The three hand-written vectors of §4 are the first three real files. §4.1 and
+§4.2 are ported with their content unchanged. §4.3 is ported with two recorded
+corrections, both of them drift the port surfaced rather than introduced (§A.2,
+finding 6).
+
+### A.2 Coverage
+
+| Measure | Value |
+|---|---|
+| vectors | 25 across 5 manifests and 4 families |
+| operation steps executed | 93 |
+| asserted facts (named leaves compared) | 439 |
+| failures | 0 |
+| taxonomy codes defined | 152 (98 transcribed from §2.3, 54 additive) |
+| distinct codes named by a vector | 26 |
+| coarsened acceptances (TAX-6) | 2, both declared |
+| surfaces mapped | 12 error enums across 6 crates, 215 variant rows, 12 left `unmapped-pending-review` |
+
+By domain: `success` 8, `cons` 10, `evid` 3, `phase` 2, `auth` 1, `shape` 1.
+By surface: `clutch-kernel` 10, `clutch-batch` 8, `clutch-accumulator` 4,
+`solana-reference` 3.
+
+Executor dispositions, which COMP-4 requires on every vector and which the report
+therefore always prints as a ratio:
+
+| Executor | exact | coarsened | refusal-only | not-applicable | pending |
+|---|---|---|---|---|---|
+| `rust-reference` | 23 | 2 | 0 | 0 | 0 |
+| `verus-host` | 0 | 0 | 0 | 3 | 22 |
+| `rocq-extracted` | 0 | 0 | 10 | 15 | 0 |
+| `lean-checker` | 0 | 0 | 0 | 3 | 22 |
+| `sbf-program-test` | 0 | 0 | 0 | 12 | 13 |
+
+**26 of 152 codes have a vector.** That is the number TAX-7 asks for and it is
+small: 126 codes are named by the registry and owned by no vector. That is a
+standing review item, not a silent gap, and it is why the checker prints the
+ratio on every run.
+
+Every expectation was derived by reading the implementation, with the crate's own
+tests used as a reference reading where one existed. No generator produced an
+expectation. The only thing a program produced is the digests. The binding is
+real: flipping `kernel-merge-reports-collateral-before-balance` to expect 5001
+fails on the code, and "tidying" `total_supply[0]` to 0 in the §4.1 port fails on
+the supply leak §4.1's own note warns about.
+
+### A.3 Every difference from the document above
+
+1. **`TAXONOMY.json` carries 54 additive codes.** All 98 §2.3 codes are
+   transcribed with their number, name, granularity, coarsening, and `by_design`
+   flag unchanged. Every added code carries `"origin": "extension"` and a new
+   number in the correct band. Nothing is renumbered, repointed, or given a new
+   meaning (TAX-2, VER-2, VER-3). `taxonomy_version` stays 1 because §2.3 was
+   never frozen; §7 is explicit that until G1–G7 are decided this document is the
+   artifact.
+2. **Twelve `ModelError` variants carry `"code": null`** and
+   `"status": "unmapped-pending-review"`. TAX-8 makes an unmapped fact a taxonomy
+   change under review; a reviewer, not this lane, should decide their codes. No
+   vector may name them and the loader refuses any code the taxonomy lacks.
+3. **`SCHEMA.json` adds two `state.form` values**, `accumulator.window/v1` and
+   `batch.relation-v1/v1`; §3.3's six forms cannot name the window state machine
+   or the coupled relation's domain-plus-book.
+4. **One encoding rule needed an extension.** INT-1 admits no sign character, and
+   `ScoreV1::weighted_direct_volume` is `i128`. A signed exact integer ships as
+   `{"sign": "+"|"-", "magnitude": <uint>}`.
+5. **Named-fact comparison.** A vector's `value`, `post_state`, and `final_state`
+   are compared as named facts: every key the vector names must be present and
+   equal, arrays compare element-wise at equal length, and a key the vector does
+   not name is not asserted. The count of asserted leaves is reported per vector,
+   so a vector that names nothing can never read as agreement.
+
+### A.4 Findings — implementation behaviour that surprised the port
+
+These are reported, not fixed: this lane owns `fixtures/vectors/**`,
+`tools/vector-check/**`, and this addendum, and touched no crate.
+
+1. **§2.4's completeness claim no longer holds, and it is the largest finding.**
+   §2.4 maps six numbered surfaces spanning nine error enums and 104 variants.
+   The tree holds twelve error enums and 215 variant rows. Three enums are mapped
+   nowhere in §2.4:
+   `clutch_batch::relation_v1::ErrorV1` (47 variants — the coupled relation that
+   the whole P1-B repair lives in), `clutch_accumulator::WindowError` (23), and
+   `clutch_solana_reference::ResolutionRefusal` (11). Three mapped surfaces have
+   grown: `solana_reference::Error` 22 → 34, `CodecError` 12 → 17,
+   `ModelError` 18 → 31. Every batch-relation, accumulator-window, and
+   evidence-plane vector in this drop therefore names a code the committed
+   taxonomy does not define. **G1 and G2 should be re-scoped to the real surface
+   count before either is decided.**
+2. **A `fn code()` already landed inside a semantic crate, and it silently
+   extends the taxonomy.** `clutch_solana_layout::CodecError::code()` exists,
+   cites §2.3, and returns registry numbers — including for five variants §2.4
+   never listed (`InvalidPriceGrid` → 2049, `InvalidTick` → 2050,
+   `MismatchedBinding` → 4011, `AggregateClosureMismatch` → 5011,
+   `InvalidConsideration` → 5015). TAX-3 asks for exactly this function, so this
+   is the right shape; the hazard is that a crate can now extend a PROPOSED
+   registry without the registry changing. `TAXONOMY.json` restates those five
+   rows as landed behaviour rather than as a proposal.
+3. **A second, incompatible numbering exists for the same enum.**
+   `programs/clutch-sbf/program/src/error.rs` maps `ReferenceError` onto a
+   `0x3000`-band `ProgramError::Custom` space with a `_ => 0x3fff` catch-all.
+   Those are runtime codes rather than taxonomy codes, but they are a parallel
+   truth for the same facts, they cover only §2.4's original 22 variants, and the
+   catch-all is precisely the `Other` that TAX-8 forbids. Whichever way the
+   reviewer rules, the SBF executor of EVIDENCE_MATRIX §7 has to translate
+   through the taxonomy, not through this band.
+4. **R7 is resolved in code and the vectors now pin it.** Every kernel transition
+   completes every check, prospective invariant evaluation included, before its
+   first write. Every kernel refusal vector carries a `final_state`, so
+   `post_state_on_error: "unchanged"` is a checked claim; the loader refuses a
+   refusal vector on a mutable surface that declares `unchanged` and pins no
+   post-state, so the claim cannot quietly become a comment.
+5. **R8's check order is now pinned, and its twin inverts it deliberately.**
+   `merge` tests collateral before balances, which is the only reason 5002 is
+   observable there. `redeem_complete_set` tests balances first and says so in its
+   rustdoc, making 5002 unreachable defence-in-depth on that path. Two
+   transitions with opposite orders is defensible and documented, but it means
+   "insufficient collateral" is not one behaviour on this surface.
+6. **§4.3's identity table is not reproducible against the landed tree.**
+   `canonical_profile_hash` now refuses any preimage that is not exactly 64 bytes,
+   so `canonical_profile_hash(b"fixture-profile")` returns `CodecError::Truncated`
+   rather than the profile hash the table names, and the four derived identities
+   below it cannot be recomputed. Separately, the transition now carries a seventh
+   account, `SupplyLedgerAccount`, and `validate_aggregate_closure` checks three
+   equations against it rather than one against the kernel. The ported vector
+   carries the real derivations and the seventh account.
+7. **Which refusal a cross-owner forgery earns depends on the allocation
+   variant.** The obvious pairing-infeasibility fixture — one buy and two sells
+   where an owner stands on both sides — reports `StrictUnderfill` (V3), not
+   `PairingInfeasible` (V5), under allocation A, because the strict-fill check
+   precedes the feasibility gate. A vector that means to exercise V5 must choose
+   coordinates where V3 passes; the landed one uses full pro-rata and a pure
+   self-cross book. This is not a defect, but it means "the V5 gate refuses this
+   book" is not a variant-independent statement, and a Lean or Rocq shadow of the
+   relation will need the same care.
+8. **`WindowError::CoverageRefused` is coarse over two distinct facts** — an
+   explicit gap under `COMPLETE_REQUIRED`, and a gap count over a bounded-gaps
+   budget. The landed vector expects the exact fact (6003) and is accepted only
+   through a declared coarsening. This is a new review flag of the R1/R2 family:
+   an evidence refusal that cannot say whether the policy or the data was the
+   problem is the weaker half of a resolution argument.
+9. **The reference request framing is private, which blocks the SBF executor.**
+   `REQUEST_TAG`, `REFERENCE_VERSION`, and the three `ACTION_*` discriminants are
+   private `const`s in `solana-reference`. Any executor outside that crate — this
+   one, and the promised `sbf-program-test` — must restate them. This checker
+   restates them and then round-trips every request it builds through the crate's
+   public `Request::decode`, so a drifted restatement fails loudly; a real fix is
+   to export them or to export a request builder.
+10. **R6's `NotActive` is still dead in the kernel, but code 3001 is not.**
+    `ResolutionRefusal::MarketNotActive` (R-10) gives `phase.not-active` a live
+    path on the adapter surface. Deleting `kernel::Error::NotActive`, which R6
+    recommends considering, would not retire the code.
+11. **`verify_ignoring_claimed_aggregates` is a public non-acceptance entry
+    point.** Its own rustdoc says it is not an acceptance path. Three relation
+    vectors use it, because it is what the crate's own falsifiers use and it lets
+    the structural refusal be observed rather than masked by the V9 digest
+    comparison that any hand-edited candidate would also fail. Each such vector
+    says so in its provenance. A reviewer should decide whether a public
+    non-acceptance verifier is a seam an adapter could reach for.
+
+### A.5 Gate status
+
+Unchanged. G1–G7 are human decisions and none of them is made by this drop.
+
+- **G1, G2** — re-scope first: the taxonomy shape should be accepted against
+  twelve error enums, not nine, and the R-flag list should gain findings 8 and 10
+  above.
+- **G3** — INT-1 needs the signed-integer form of §A.3.4 before it is accepted.
+- **G4** — accepted in the data as written; COMP-1…COMP-8, the five executor ids,
+  and the five-disposition requirement are all enforced by the loader.
+- **G5** — the evidence a reviewer needs is now checkable: `fixtures/vectors/`
+  has no Cargo manifest, and no semantic crate gained a library-target edge.
+- **G6** — **no root workspace was created**, and none is needed. The checker is
+  standalone exactly as every other crate here is. If a workspace is ever created,
+  the vector data directory stays outside it.
+- **G7** — the bootstrap set is 25 vectors against a target of one success and one
+  refusal per reachable code. 26 of 152 codes have a vector, so the set is a first
+  cut and the ratio is printed on every run rather than described.
+
+No manifest contains a placeholder digest; DIG-5 is satisfied and the checker
+refuses one outright.

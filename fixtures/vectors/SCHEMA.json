@@ -1,0 +1,535 @@
+{
+  "$defs": {
+    "comparison": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_artifacts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "bytes": {
+                "$ref": "#/$defs/hex"
+              },
+              "digest": {
+                "$ref": "#/$defs/sha256"
+              },
+              "length": {
+                "$ref": "#/$defs/small"
+              },
+              "role": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "role",
+              "digest"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "byte_exact": {
+          "enum": [
+            "required",
+            "optional",
+            "not-applicable"
+          ]
+        },
+        "post_state_on_error": {
+          "enum": [
+            "unchanged",
+            "as-declared",
+            "unspecified"
+          ]
+        },
+        "precedence_note": {
+          "type": "string"
+        },
+        "semantic": {
+          "const": true
+        },
+        "single_fault": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "semantic",
+        "byte_exact",
+        "post_state_on_error"
+      ],
+      "type": "object"
+    },
+    "disposition": {
+      "additionalProperties": false,
+      "properties": {
+        "blocked_by": {
+          "type": "string"
+        },
+        "coarsens_to": {
+          "maximum": 9999,
+          "minimum": 1000,
+          "type": "integer"
+        },
+        "mode": {
+          "enum": [
+            "exact",
+            "coarsened",
+            "refusal-only",
+            "not-applicable",
+            "pending"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "no-account-plane",
+            "no-byte-plane",
+            "no-cash-plane",
+            "no-statistic-family",
+            "refusal-only-evaluator",
+            "spec-only-shadow"
+          ]
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    },
+    "executor_id": {
+      "enum": [
+        "rust-reference",
+        "verus-host",
+        "rocq-extracted",
+        "lean-checker",
+        "sbf-program-test"
+      ]
+    },
+    "hash32": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "hex": {
+      "pattern": "^([0-9a-f]{2})*$",
+      "type": "string"
+    },
+    "outcome": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "result_kind": {
+              "const": "ok"
+            },
+            "value": {
+              "description": "The canonical success value, if the operation returns one (a redeemed payout, a verified candidate). Absent means unit."
+            }
+          },
+          "required": [
+            "result_kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "by_design": {
+              "type": "boolean"
+            },
+            "code": {
+              "maximum": 9999,
+              "minimum": 1000,
+              "type": "integer"
+            },
+            "frame": {
+              "enum": [
+                "kernel",
+                "accumulator",
+                "batch",
+                "accounting",
+                "layout",
+                "reference-adapter",
+                "vertical-model"
+              ]
+            },
+            "name": {
+              "pattern": "^[a-z]+\\.[a-z0-9-]+$",
+              "type": "string"
+            },
+            "result_kind": {
+              "enum": [
+                "error",
+                "refusal"
+              ]
+            }
+          },
+          "required": [
+            "result_kind",
+            "code",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "property_id": {
+      "pattern": "^P-[A-Z]+-[0-9]{2}$",
+      "type": "string"
+    },
+    "provenance": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "handwritten"
+            },
+            "rationale": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "source"
+          ]
+        },
+        {
+          "properties": {
+            "generator": {
+              "type": "string"
+            },
+            "generator_version": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "generated"
+            },
+            "minimized_from": {
+              "$ref": "#/$defs/vector_id"
+            },
+            "reproduction_command": {
+              "type": "string"
+            },
+            "seed": {
+              "pattern": "^[0-9a-f]{16}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "generator",
+            "generator_version",
+            "seed",
+            "reproduction_command"
+          ]
+        }
+      ],
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "small": {
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "state": {
+      "additionalProperties": false,
+      "properties": {
+        "constructed_by": {
+          "description": "raw-fields is required whenever the state is not reachable through the surface's own constructors; it must be declared, never inferred.",
+          "enum": [
+            "constructor",
+            "raw-fields",
+            "operation-sequence"
+          ]
+        },
+        "form": {
+          "enum": [
+            "accumulator.summary/v1",
+            "accumulator.window/v1",
+            "adapter.reference-transition/v1",
+            "batch.book/v1",
+            "batch.relation-v1/v1",
+            "kernel.market-position/v1",
+            "layout.accounts/v1",
+            "model.vertical/v1"
+          ]
+        },
+        "padding_override": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "index": {
+                "$ref": "#/$defs/small"
+              },
+              "value": {
+                "$ref": "#/$defs/uint"
+              }
+            },
+            "required": [
+              "field",
+              "index",
+              "value"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "value": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "form",
+        "constructed_by",
+        "value"
+      ],
+      "type": "object"
+    },
+    "step": {
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "type": "object"
+        },
+        "expect": {
+          "$ref": "#/$defs/outcome"
+        },
+        "op": {
+          "pattern": "^[a-z0-9]+(_[a-z0-9]+)*$",
+          "type": "string"
+        },
+        "post_state": {
+          "$ref": "#/$defs/state"
+        },
+        "step": {
+          "$ref": "#/$defs/small"
+        }
+      },
+      "required": [
+        "step",
+        "op",
+        "expect"
+      ],
+      "type": "object"
+    },
+    "uint": {
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "type": "string"
+    },
+    "vector": {
+      "additionalProperties": false,
+      "properties": {
+        "comparison": {
+          "$ref": "#/$defs/comparison"
+        },
+        "digests": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_bytes": {
+              "$ref": "#/$defs/sha256"
+            },
+            "vector": {
+              "$ref": "#/$defs/sha256"
+            }
+          },
+          "required": [
+            "vector"
+          ],
+          "type": "object"
+        },
+        "domain": {
+          "enum": [
+            "arith",
+            "shape",
+            "phase",
+            "auth",
+            "cons",
+            "evid",
+            "replay",
+            "cap",
+            "refuse",
+            "success"
+          ]
+        },
+        "executors": {
+          "additionalProperties": false,
+          "minProperties": 5,
+          "patternProperties": {
+            "^(rust-reference|verus-host|rocq-extracted|lean-checker|sbf-program-test)$": {
+              "$ref": "#/$defs/disposition"
+            }
+          },
+          "type": "object"
+        },
+        "final_state": {
+          "$ref": "#/$defs/state"
+        },
+        "id": {
+          "$ref": "#/$defs/vector_id"
+        },
+        "initial_state": {
+          "$ref": "#/$defs/state"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/step"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "primary_property_id": {
+          "$ref": "#/$defs/property_id"
+        },
+        "property_ids": {
+          "items": {
+            "$ref": "#/$defs/property_id"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "frozen",
+            "superseded"
+          ]
+        },
+        "superseded_by": {
+          "$ref": "#/$defs/vector_id"
+        },
+        "surface": {
+          "enum": [
+            "clutch-kernel",
+            "clutch-accumulator",
+            "clutch-batch",
+            "solana-layout",
+            "solana-reference",
+            "vertical-model"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "primary_property_id",
+        "property_ids",
+        "domain",
+        "surface",
+        "status",
+        "initial_state",
+        "operations",
+        "provenance",
+        "executors",
+        "comparison",
+        "digests"
+      ],
+      "type": "object"
+    },
+    "vector_id": {
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "type": "string"
+    }
+  },
+  "$id": "https://dragons-clutch.invalid/schema/vector-manifest/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "digests": {
+      "additionalProperties": false,
+      "properties": {
+        "manifest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "taxonomy": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "manifest"
+      ],
+      "type": "object"
+    },
+    "family": {
+      "enum": [
+        "kernel",
+        "accumulator",
+        "batch",
+        "layout",
+        "adapter",
+        "model",
+        "cross-runtime"
+      ]
+    },
+    "notes": {
+      "type": "string"
+    },
+    "schema": {
+      "const": "dragons-clutch/vector-manifest-v1"
+    },
+    "schema_version": {
+      "maximum": 65535,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "status": {
+      "enum": [
+        "proposed",
+        "frozen",
+        "superseded"
+      ]
+    },
+    "taxonomy_version": {
+      "maximum": 65535,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "vectors": {
+      "items": {
+        "$ref": "#/$defs/vector"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "taxonomy_version",
+    "family",
+    "status",
+    "vectors",
+    "digests"
+  ],
+  "title": "dragons-clutch/vector-manifest-v1",
+  "type": "object",
+  "x-deviations-from-proposal": {
+    "added_form_values": [
+      "accumulator.window/v1",
+      "batch.relation-v1/v1"
+    ],
+    "checker_conventions": {
+      "kernel-positions": "`kernel.market-position/v1` values may carry an optional `positions` object of additional named positions beside the required `position`, because `transfer_internal` needs two. Operations name them by key.",
+      "named-fact-match": "A vector's `expect.value`, `post_state.value`, and `final_state.value` are compared as named facts: every key the vector names must be present and equal in what the executor produced, arrays compare element-wise at equal length, and a key the vector does not name is not asserted. The count of asserted leaves is reported per vector so a vector that names nothing can never be mistaken for agreement (COMP-1, COMP-7).",
+      "signed-integers": "INT-1 admits no sign character. A signed exact integer (today only the relation's `weighted_direct_volume`) ships as {\"sign\": \"+\"|\"-\", \"magnitude\": <uint>}."
+    },
+    "note": "Transcribed from the committed proposal. One change: the `state.form` enum gains `accumulator.window/v1` and `batch.relation-v1/v1`. The proposal's six forms cannot name the WindowAccumulator state machine or the coupled BatchRelationV1 domain-plus-book, both of which landed after section 3.3 was written. Nothing is removed or repointed, so no manifest that would have validated against 3.3 fails against this file, and schema_version stays 1 because 3.3 was never frozen (VER-6 applies to a frozen schema).",
+    "source": "docs/implementation/VECTOR_SPINE_PROPOSAL.md#33"
+  }
+}
