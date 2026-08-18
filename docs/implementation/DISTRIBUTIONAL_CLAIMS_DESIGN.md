@@ -6,7 +6,9 @@ this round; several implementation lanes are live in the tree and this document
 deliberately touches none of their files. Claim labels follow the handoff
 vocabulary: IMPLEMENTED / MODEL / PROPOSED / BLOCKER. Where this document says
 "recommended," that is a design recommendation awaiting the falsifier gate and
-the user's decision, not a selection.
+the user's decision, not a selection. *(Since written: the terms-revision wave
+at `927d4bc` landed the §6 TermsAccount revision — see the §15 implementation
+addendum for exactly what is now IMPLEMENTED versus still PROPOSED.)*
 
 The ask this design answers: real distributions and curves over outcomes, not a
 handful of fixed bins — a parameterized kernel general enough to describe the

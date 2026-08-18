@@ -4,10 +4,10 @@ Status: **host-differential evidence for eight instruction families**
 (Split, Merge, Materialize, Dematerialize, CreateMarket, FeedAdvance,
 evidence-gated Resolve, RedeemInternal), each mirroring the offline
 reference adapter's semantics with byte-level differential tests, **plus
-SVM execution evidence for seven of the eight**: every one of those
-families except `Resolve` now executes inside a local Agave bank against
-regenerated fixtures, and every writable account it touches comes back
-byte-identical to the oracle's post-state.
+SVM execution evidence for all eight**: every one of those families now
+executes inside a local Agave bank against regenerated fixtures, and
+every writable account it touches comes back byte-identical to the
+oracle's post-state.
 
 `Resolve` used to be the exception — on this runtime it consumed the
 entire 1 400 000-unit per-transaction compute ceiling and was aborted —
@@ -19,9 +19,10 @@ larger 1 656-byte v3 terms account): `Resolve` executes at **536 123**
 program units and `RedeemInternal` at **408 294** — 38% and 29% of the
 ceiling. The numbers are recorded in [Results](#results).
 
-`PlaceOrder` landed on-chain after these fixtures were regenerated and
-has **no SVM leg**; cancellation and batch settlement remain honest
-stubs. Not a complete program, not audited, not a deployment
+`PlaceOrder` and `CancelOrder` landed on-chain after these fixtures were
+regenerated and have **no SVM leg** and no offline oracle (the reference
+adapter models no order family); batch settlement (`SettlePage`) remains
+the one honest stub. Not a complete program, not audited, not a deployment
 authorization, and not mainnet, devnet, or testnet evidence. A stub
 reads no account, writes no byte, and reports no success.
 
@@ -162,8 +163,8 @@ two lanes editing one file. Every path below is under
 | `instructions/split.rs` | `Intent::Split` | **implemented** |
 | `instructions/merge_materialize.rs` | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` | **implemented** — all three, through the `split.rs` seam plane |
 | `instructions/market_init.rs` | `Intent::CreateMarket` | **implemented** — validated initialization-write over pre-created accounts |
-| `instructions/observe_resolve.rs` | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` | **implemented** — `Resolve` does not fit a transaction, see deferred check 15 |
-| `instructions/orders_batch.rs` | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SettlePage` | `PlaceOrder` **implemented**; the other two **blocked**, see below |
+| `instructions/observe_resolve.rs` | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` | **implemented** — `Resolve` fits a transaction again (536 123 CU) since the terms revision; deferred check 15 is closed |
+| `instructions/orders_batch.rs` | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SettlePage` | `PlaceOrder` and `CancelOrder` **implemented**; `SettlePage` **blocked**, see below |
 
 A lane owns its `instructions/*.rs` file outright. It touches the shared files
 only to *append*: a new refusal code at the end of `error.rs`, a new seed
@@ -205,7 +206,8 @@ history of that discipline and where each family stands now:
 | `Merge`, `Materialize`, `Dematerialize` | `UnsupportedInstruction`, then `NotYetImplemented` | **implemented**, see the correction below |
 | `FeedAdvance` | `NotYetImplemented` `0x0017` | **implemented** behind the PROPOSED `0x48` feed page |
 | `PlaceOrder` | `NotYetImplemented` `0x0017` | **implemented**; no SVM evidence yet (deferred check 16) |
-| `CancelOrder`, `SettlePage` | `NotYetImplemented` `0x0017` | still refused: no adapter, offline or on-chain, joins these layouts to a transition |
+| `CancelOrder` | `NotYetImplemented` `0x0017` | **implemented** (v4 tombstone retirement, landed with the orders-on-v4 integration); like `PlaceOrder`, no offline adapter and no SVM evidence |
+| `SettlePage` | `NotYetImplemented` `0x0017` | still refused: the relation does not fit an SBF frame and the page-to-book projection has not landed (see `STREAMING_RELATION_DESIGN.md`) |
 
 `Merge`, `Materialize`, and `Dematerialize` previously refused
 `UnsupportedInstruction` (`0x000e`), then `NotYetImplemented` (`0x0017`). All
@@ -447,7 +449,15 @@ Relative to obligations 1-4 of `SOLANA_REFERENCE_ADAPTER.md`:
    validates and computes before its first write, and relies on SVM rollback to
    discard partial writes on a later failure. No test forces a failure after the
    first write (obligation 4).
-9. No token program, CPI, mint, or escrow behaviour exists (obligations 5-7).
+9. **Half closed (2026-08-19).** When written: no token program, CPI, mint, or
+   escrow behaviour existed. Since `5c88505`, the Token-2022 CPI leg is live
+   for outcome mints — Materialize mints and Dematerialize burns via
+   `invoke_signed`, with exact post-delta checks and svm-tests evidence on a
+   real bank (`programs/clutch-sbf/svm-tests`). Still true: the collateral
+   escrow leg (`TransferChecked` into/out of a Hoard token account) is
+   constructed and unit-tested but wired into no instruction, and no mint or
+   token account is ever created by the program (obligations 5-7 remain open
+   on that half; see `TOKEN2022_PLAN.md` §status).
 10. **Closed on both sides.** Multi-position aggregate closure used to be
     refused by representation. It is now carried by the CLO-DELTA-V1 two-term
     ledger in both adapters, and the ledger is compared on-chain on every
@@ -762,6 +772,13 @@ syscalls `sol_try_find_program_address`, `sol_log_`, `sol_panic_`, `abort`,
 `sol_memset_`, `sol_memcpy_`, and `sol_memcmp_`. There is no CPI syscall and no
 token program reference, because there is no CPI and no token code — and that
 is unchanged by seven more instruction families landing.
+
+> **Superseded (2026-08-19):** the paragraph above describes the pre-token
+> ELF. Since the Token-2022 CPI leg landed (`5c88505`), the recorded
+> clean-tree ELF (`d8a9267c…`, the digest in the record below) additionally
+> imports `sol_invoke_signed_rust` — the CPI syscall the materialize mint /
+> dematerialize burn legs use. "No token program reference" still holds: the
+> Token-2022 program id is data, not a dynamic symbol.
 
 ### Genesis
 
@@ -1125,18 +1142,20 @@ before re-running.
 
 ## Correct description
 
-"A bring-up SBF program implementing eight instruction families, seven of which
+"A bring-up SBF program implementing ten instruction families, eight of which
 execute inside a local simulated bank on regenerated fixtures with account
 validation, address derivation, and post-state bytes agreeing byte for byte with
 the offline reference adapter — or, where no reference transition exists, with an
-independent re-encode that the reference's own validator accepts — plus one
-family, `Resolve`, that is implemented and measured not to fit a Solana
-transaction at all."
+independent re-encode that the reference's own validator accepts. `Resolve`,
+once measured not to fit a Solana transaction, fits again at 536 123 compute
+units since the terms revision. `PlaceOrder` and `CancelOrder` are implemented
+with host tests only — no reference oracle and no SVM leg — and `SettlePage` is
+the one remaining stub."
 
 It is not a complete program, not verified, not audited, and not authorization
 to deploy anywhere. Every transaction is simulated with signature verification
 off and nothing is committed, so "the actor signed" remains a message-header
-fact. `PlaceOrder` has no SVM evidence; cancellation and settlement are stubs.
+fact. `PlaceOrder` and `CancelOrder` have no SVM evidence; settlement is a stub.
 `CreateMarket` founds markets over pre-created accounts and cannot create an
 account. The window identity and the feed summary digest are recorded and never
 verified, because the program owns no hash primitive.

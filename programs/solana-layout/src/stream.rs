@@ -61,10 +61,12 @@
 //! Three properties hold for every one of them, and they are why an instruction
 //! does not need to re-verify afterwards:
 //!
-//! 1. **No offsets escape this module.**  A header is written with the same
-//!    `Writer` field sequence [`OrderPageAccount::encode`] uses and a slot with
-//!    the same `encode_slot`, so there is no second transcription of the layout
-//!    to drift from the first.
+//! 1. **No offsets escape this module.**  A slot is written with the encoder's
+//!    own `encode_slot`; the header restates [`OrderPageAccount::encode`]'s
+//!    field sequence through the same `Writer` — that one prefix *is* a second
+//!    transcription, and the byte-for-byte equivalence test
+//!    (`the_streaming_writer_produces_exactly_the_buffered_encoders_bytes`) is
+//!    what pins it to the encoder.
 //! 2. **One fold per mutation.**  Each writer takes exactly one pass over the
 //!    slot array, at the end, to store the page digest — and that pass decodes
 //!    every slot as it folds, so a page left non-canonical in *any* slot has no
@@ -811,9 +813,11 @@ pub fn epoch_binds_page_set(epoch: &EpochAccount, pages: &[&[u8]]) -> Result<()>
 /// Write the fixed header of a page in place.
 ///
 /// This is [`OrderPageAccount::encode`]'s own prefix, field for field, over the
-/// account's own first [`ORDER_PAGE_HEADER_BYTES`] bytes.  Writing it through
-/// the same `Writer` the encoder uses is what keeps the write side from being a
-/// second transcription of the layout that could drift from the first.
+/// account's own first [`ORDER_PAGE_HEADER_BYTES`] bytes.  The field sequence
+/// is restated here — a second transcription of that prefix — through the
+/// encoder's own `Writer`; the byte-for-byte equivalence test is what holds
+/// the two transcriptions identical, so a drift is a red test, not a silent
+/// divergence.
 ///
 /// Nothing about `header` is checked here: every caller below has already
 /// decided what the post-state must be.

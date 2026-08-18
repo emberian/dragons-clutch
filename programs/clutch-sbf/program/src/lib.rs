@@ -5,11 +5,11 @@
 //!
 //! ## What this is
 //!
-//! A deployable SBF program with a routed instruction set of which exactly
-//! the instruction set is implemented (see [`instructions`]), so that the account-facing half
-//! of the protocol can be executed by a real SVM rather than only reasoned
-//! about offline.  It exists to produce bring-up evidence for
-//! `docs/implementation/SBF_BRINGUP.md`.
+//! A deployable SBF program with a routed instruction set (see
+//! [`instructions`] for exactly what is implemented), so that the
+//! account-facing half of the protocol can be executed by a real SVM rather
+//! than only reasoned about offline.  It exists to produce bring-up evidence
+//! for `docs/implementation/SBF_BRINGUP.md`.
 //!
 //! ## What this is not
 //!
@@ -19,14 +19,14 @@
 //! `Materialize`/`Dematerialize` drive a real `MintTo`/`Burn` **when the
 //! optional token leg is present in the account list**.  That optionality is a
 //! transitional hole named in [`instructions::split`] and in
-//! `docs/implementation/TOKEN2022_PLAN.md`, not a design.  Four of the five instruction-family
-//! SettlePage is an honest refusal with a recorded finding (the batch
-//! relation awaits the on-chain streaming verifier); CancelOrder is
-//! implemented via v4 tombstones.
-//! `Resolve` and `RedeemInternal` are evidence-gated exactly as in the
-//! offline reference adapter, and `CreateMarket` refuses because no authority
-//! model exists.  The PDA seed schema in [`seeds`] is a **proposal**, not a
-//! frozen ABI.
+//! `docs/implementation/TOKEN2022_PLAN.md`, not a design.  `SettlePage` is the
+//! one honest refusal, with a recorded finding (the batch relation awaits the
+//! on-chain streaming verifier); `PlaceOrder` and `CancelOrder` (page-v4
+//! tombstone retirement) are implemented with host tests only — no reference
+//! oracle and no SVM leg.  `Resolve` and `RedeemInternal` are evidence-gated
+//! exactly as in the offline reference adapter, and `CreateMarket` is a
+//! permissionless founding write over pre-created accounts.  The PDA seed
+//! schema in [`seeds`] is a **proposal**, not a frozen ABI.
 //!
 //! ## Layering
 //!

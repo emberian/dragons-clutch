@@ -1,7 +1,9 @@
 //! `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal`.
 //!
 //! This module owns the observation and resolution plane: the feed head that
-//! turns a folded observation page into an authenticated cursor, and the
+//! turns a folded observation page into an advanced, replay-guarded cursor
+//! (digest-chained and signer-authorized — nothing here authenticates the
+//! observation *sources*), and the
 //! evidence gate that turns a sealed window into exactly one payout index.  It
 //! contains no economic logic — the payout algebra is [`clutch_kernel`], the
 //! window algebra is [`clutch_accumulator`], the terms-to-payout derivation is

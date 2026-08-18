@@ -38,9 +38,11 @@ posting-path spec; Draft 7 rebalance still out.
 - Closing drift review (waves 5-8, both repos) running - produces the
   consolidated remaining-gap ledger and the single morning-decision list.
 
-- THE LIFECYCLE WALK PASSES (section-10 items 1-10, one SVM gate,
-  terminal identity closed, self-falsifying). Sharpest named gap: no
-  endowment instruction. Pushed.
+- THE LIFECYCLE WALK PASSES (one SVM gate; section-10 items 4-7, 9, 10
+  driven plus the market half of 1; items 2, 3, 8 carried as explicit
+  skips — see LIFECYCLE_WALK.md's skip list; terminal identity closed,
+  self-falsifying). Sharpest named gap: no endowment instruction.
+  Pushed.
 - abi-audit resurrected + hardened (34 owed drift lines delivered);
   re-pinned to v4; goldens stable. Pushed.
 - INTEGRATE landed earlier this wave; TOKEN-CPI is the last lane out.
@@ -68,7 +70,9 @@ posting-path spec; Draft 7 rebalance still out.
   derivation via preset membership (kernel residue named); error
   registry consolidated, lossy-projection pin green; decode-once facts
   API takes Resolve from CEILING-ABORT to 536K CU (38%). Bring-up PASS,
-  0 undrivable. Markets are now FUNDABLE. Pushed.
+  0 undrivable. Markets are now FUNDABLE at founding (the cap decision
+  is structural; cash arrival still has no endowment instruction).
+  Pushed.
 
 - BATCH-STREAM landed: streaming verifier at 1,280B frames (was 39KB),
   ClearWork checkpoint with fold-digest tamper refusal, P-BATCH-03
@@ -134,7 +138,7 @@ posting-path spec; Draft 7 rebalance still out.
 - Cost lab v3 re-pin + source-derived identifier guard; pushed.
 
 - Token-2022 probe: deps RESOLVE, 6 scenarios green, extension matrix
-  proven on real bytes; toolchain split finding (1.93 for program-test).
+  exercised on real bytes; toolchain split finding (1.93 for program-test).
 - SBF foundation: module split, 18 seeds, Split differential PASS;
   OrderPage v3 on-chain decode blocker found -> streaming decoder lane.
 - Distributional claims design: PoU theorem + derive-last-and-subtract;

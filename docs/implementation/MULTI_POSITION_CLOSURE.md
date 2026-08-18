@@ -273,6 +273,13 @@ Not changed here (out of this lane's scope, named for the coordinator):
   instruction; porting CLO-DELTA-V1 there means adding the supply-ledger
   account to the instruction and replacing its inline equality with the C1/C2
   checks plus the C3 delta write — the same shape as this change.
+  *(Done since — 2026-08-19: the port landed. `accounts.rs` carries
+  `require_two_term_closure`/`require_representation_bound`/`apply_ledger_delta`,
+  composed by `split.rs` and `market_init.rs`; `observe_resolve.rs` carries an
+  inline C1+C2 transcription; the supply ledger is on-chain and compared on
+  every accepting transaction — SBF_BRINGUP deferred checks 10 and 13. The
+  remaining program-side gap is a position-init instruction, blocked on
+  account creation via system CPI.)*
 - `SOLANA_REFERENCE_ADAPTER.md`'s "closed single-position model" section and
   obligation 11 should now say: the reference enforces CLO-DELTA-V1
   (this document); obligation 11's *representational* half is discharged in

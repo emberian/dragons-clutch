@@ -21,9 +21,9 @@
 //!
 //! Implemented: split, merge_materialize (Merge/Materialize/Dematerialize),
 //! market_init, observe_resolve (FeedAdvance/Resolve/RedeemInternal), and
-//! orders_batch's PlaceOrder. CancelOrder and SettlePage refuse with recorded
-//! findings (cancellation is unrepresentable in the frozen page format; the
-//! relation does not fit an SBF frame).
+//! orders_batch's PlaceOrder and CancelOrder (page-v4 tombstone retirement).
+//! SettlePage refuses with a recorded finding (the relation does not fit an
+//! SBF frame and the page-to-book projection has not landed).  A stub must read
 //! no account, write no byte, and return a refusal.  A stub that validated
 //! accounts and *then* refused would be worse, not better — it would suggest
 //! that the account list it validated is the right one, and choosing that list

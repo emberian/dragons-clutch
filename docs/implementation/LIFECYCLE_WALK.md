@@ -8,7 +8,11 @@ closed six ways. Both falsifiability self-checks fired.
 
 This is a bring-up walk under a simulating runtime, not a deployment, not a
 proof, and not a mainnet market. Read
-[What this walk is not](#what-this-walk-is-not) before quoting it.
+[What this walk is not](#what-this-walk-is-not) and the skip list in
+[Section 10 items this walk does not drive](#section-10-items-this-walk-does-not-drive)
+(items 2, 3, and 8 are not driven; item 1 is half-driven — the market half —
+and item 6's observations are accepted but never source-authenticated) before
+quoting it.
 
 PROJECT.md section 10 does not define success as ten green instruction
 families. It defines it as **one reproducible local walk** proving that the
@@ -333,9 +337,11 @@ Verus-verified host kernel, and it is not a triple reproduction.
 - **Not one committed sequence.** See the first section: it is ten pre-states
   chained by the reference adapter, plus one three-instruction chain the bank
   sequenced itself.
-- **Not a token movement.** There is no CPI and no token program in the ELF.
-  Every "collateral" quantity in this walk is a field in a program-owned
-  account, not an SPL balance.
+- **Not a token movement.** The walk's transactions present no token
+  accounts and exercise no CPI; every "collateral" quantity in this walk is a
+  field in a program-owned account, not an SPL balance. (Since the Token-2022
+  leg landed at `5c88505`, the ELF itself does carry CPI code — the walk
+  simply never presents the optional token plane, so none of it runs.)
 - **Not evidence about any deployment.** Loopback only, one local
   `solana-test-validator`, nothing committed to any ledger.
 - **Not an envelope.** One fixture, two outcomes, one three-observation

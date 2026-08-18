@@ -29,12 +29,14 @@
 //! A family module refuses with [`ClutchError::NotYetImplemented`] unless the
 //! offline reference adapter refuses the same action for a *stronger,
 //! structural* reason, in which case this program mirrors that reason exactly.
-//! Today that is `CreateMarket` refusing
-//! [`ClutchError::AuthorizationUnavailable`] because no authority model exists,
+//! Historically that was `CreateMarket` refusing
+//! [`ClutchError::AuthorizationUnavailable`] before an authority model existed,
 //! and `Resolve`/`RedeemInternal` refusing
-//! [`ClutchError::ResolutionEvidenceUnavailable`] because the evidence plane
-//! has no on-chain counterpart.  Nothing anywhere returns success it did not
-//! earn.
+//! [`ClutchError::ResolutionEvidenceUnavailable`] before the evidence plane
+//! landed; today the one stub is `SettlePage`, refusing
+//! [`ClutchError::NotYetImplemented`] for the measured frame reason recorded
+//! in [`crate::instructions::orders_batch`].  Nothing anywhere returns success
+//! it did not earn.
 
 use crate::accounts::Outcome;
 use crate::error::ClutchError;

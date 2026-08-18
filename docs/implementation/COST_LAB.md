@@ -3,8 +3,8 @@
 Status: offline deterministic harness implemented and validated on 2026-08-18  
 Landed-ABI arm added 2026-08-18 (adversarial review P1-F)  
 Source-constant snapshot: 2026-08-17  
-Landed-ABI snapshot: `programs/solana-layout` at commit `da2fbf7` (OrderPage v3)  
-Landed-ABI arm re-pinned 2026-08-18: OrderPage v3, 228-byte tagged order slots, 3,883-byte page  
+Landed-ABI snapshot: `programs/solana-layout` at commit `da2fbf7` (OrderPage v3) — superseded by the `e780d5b` re-pin below  
+Landed-ABI arm re-pinned 2026-08-18: OrderPage v3, 228-byte tagged order slots, 3,883-byte page — superseded by the `e780d5b` re-pin below  
 ABI-audit repaired and re-pinned 2026-08-18: the gate had been dead since `927d4bc` — `MAX_KNOTS` entered `account_len::TERMS` unpinned, so every run aborted with `refusing to evaluate unknown token in ABI expression: MAX_KNOTS` and exit 2 before printing one drift line, and it therefore never reported TermsAccount v3 (1,304 -> 1,656) or OrderPage v4 at `e780d5b` (record 107, portfolio 235, tombstone 80, slot 236, header 236, page 4,012, MAX_INTENT_BYTES 302, CancelOrder 138, ORDER_PAGE schema 4, TERMS schema 3); the evaluator also substituted pinned values for identifiers referenced inside `account_len`, which masked lockstep drift (ORDER_SLOT_BYTES 228 -> 236 read as no drift and the page moved by 1 of 129 bytes), and its declaration parser was single-line only. Repaired: an unpinned or unreadable token is now a named drift line carrying the referencing constant and the pin-table fix, referenced identifiers are cross-checked against the codec instead of substituted, wrapped multi-line declarations and commented-out ones parse correctly, and the audit additionally re-derives `account_version`, account/intent discriminators, field-term decompositions and `Intent::encoded_len` arms; landed arm re-pinned to `e780d5b`, goldens regenerated, 193 `layout_hypothesis` rows byte-identical  
 Owned path: `benchmarks/`
 

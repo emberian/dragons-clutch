@@ -316,9 +316,11 @@ pub fn read_kernel(data: &[u8]) -> Outcome<KernelFacts> {
  * what a transition may do, only whether the market aggregate and the one
  * presented position triple can both be true at once.
  *
- * Nothing in this program calls them yet.  The one implemented instruction
- * still carries the older closed single-position equality and does not take a
- * supply-ledger account at all; see `SBF_BRINGUP.md`. */
+ * `split.rs` (Split/Merge/Materialize/Dematerialize) and `market_init.rs`
+ * compose them; `observe_resolve.rs` currently carries its own inline
+ * transcription of C1+C2 (`check_closure`) rather than composing these —
+ * one function, two in-program transcriptions, held together by the SVM
+ * differential.  See `SBF_BRINGUP.md`. */
 
 /// C1: the two-term ledger closes against the kernel aggregate.
 ///
