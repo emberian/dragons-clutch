@@ -29,6 +29,10 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- Wave 9 landed and pushed: genesis plane, token completion (real mints,
+  collateral wired, atomic-revert shown), kernel resolve_with_vector,
+  degg settlement relation (P1-7). Pace slowed per ember.
+
 - Wave 8 CLOSED: drift review committed, both structural P2s fixed
   (manifest not-attested text truthful, handoff knows the program
   exists), fresh strict manifest 33/33 (1a537bc). Everything pushed.
