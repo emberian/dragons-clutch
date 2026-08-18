@@ -1,0 +1,1286 @@
+{
+  "schema": "dragons-clutch/baseline-manifest/v1",
+  "generator": {
+    "path": "scripts/baseline_manifest.py",
+    "sha256": "f7d015d2691156b2d20848a0a6c58255886312eebe01227d9ae29995c4f7753a",
+    "stdlib_only": true
+  },
+  "dirty": false,
+  "dirty_check_excludes": {
+    "paths": [
+      "MANIFEST.baseline.json"
+    ],
+    "observed": [
+      "?? MANIFEST.baseline.json"
+    ],
+    "reason": "the manifest is this tool's own output; its git status cannot gate its regeneration. Nothing else is excluded from the dirtiness decision."
+  },
+  "baseline": {
+    "commit": "de8a4de82b000feabc1eb2cf3203bd00e9549702",
+    "tree_hash": "875811cc34bc762a662381c2d91e2bae57ca6c4c",
+    "commit_subject": "Goal log: LANDSCAPE landed, Draft 7 queued",
+    "remotes": [
+      {
+        "name": "origin",
+        "fetch_url": "git@github.com:emberian/dragons-clutch.git"
+      }
+    ],
+    "tags_at_head": [],
+    "note": "git object ids and configured remote names only. A configured remote is not provenance and a pushed branch is not a release: neither is signed, neither is tagged, and neither is attested here. An empty `tags_at_head` means no release tag exists, which is the expected state while CODEX_HANDOFF.md section 7 P0-1 is open."
+  },
+  "claims": {
+    "verified": false,
+    "deployed": false,
+    "release": false,
+    "reviewed_offline_checks_recorded": true,
+    "label_vocabulary": {
+      "IMPLEMENTED": "source exists locally and the named offline checks pass; implies no formal verification, SBF runtime evidence, security review, or deployment readiness",
+      "MODEL": "a deterministic reference model, specification, theorem statement, synthetic experiment, or cost hypothesis exists; not consensus code and not production evidence",
+      "PROPOSED": "a design choice, parameter, policy, architecture, or backlog item has not crossed its stated evidence gate",
+      "BLOCKER": "the named work must refuse promotion until it is closed; a blocker is not permission to weaken the claim or bypass the gate"
+    },
+    "manifest_label": "IMPLEMENTED",
+    "not_attested": [
+      "no release: nothing here publishes, tags, pushes, or authorizes a release",
+      "no signature chain: no signed tag, no signed artifact, no key material, no transparency log entry",
+      "no reproducible-build closure: only the narrow E0 rlib self-comparison inside toolchain/scripts/run_lab.sh is measured; no ELF, no toolchain bootstrap, no dependency-source rebuild",
+      "no proof content: the Rocq gate typechecks Definitions (zero theorems) and the Verus gate fails on the pinned probe; both are recorded as-is",
+      "no SBF runtime evidence: no entrypoint, program-test lifecycle, Token-2022 CPI, CU/stack/heap measurement, or cross-runtime vector closure",
+      "no SBOM, license closure, fixture provenance chain, or source offer",
+      "no published provenance: the identities below are git object ids. A configured remote or a pushed branch is neither a signed tag nor a release artifact, and this manifest asserts nothing about either",
+      "no security review and no regulatory closure (Gate L0 remains open)"
+    ]
+  },
+  "gates": [
+    {
+      "id": "cargo_test.clutch_kernel",
+      "section": "5",
+      "command": "cargo test --manifest-path \"crates/clutch-kernel/Cargo.toml\" --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "unit and integration tests; not a proof and not runtime evidence"
+    },
+    {
+      "id": "cargo_test.clutch_accumulator",
+      "section": "5",
+      "command": "cargo test --manifest-path \"crates/clutch-accumulator/Cargo.toml\" --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "unit and integration tests; not a proof and not runtime evidence"
+    },
+    {
+      "id": "cargo_test.clutch_batch",
+      "section": "5",
+      "command": "cargo test --manifest-path \"crates/clutch-batch/Cargo.toml\" --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "unit and integration tests; not a proof and not runtime evidence"
+    },
+    {
+      "id": "cargo_test.solana_layout",
+      "section": "5",
+      "command": "cargo test --manifest-path \"programs/solana-layout/Cargo.toml\" --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "unit and integration tests; not a proof and not runtime evidence"
+    },
+    {
+      "id": "cargo_test.solana_reference",
+      "section": "5",
+      "command": "cargo test --manifest-path \"programs/solana-reference/Cargo.toml\" --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "unit and integration tests; not a proof and not runtime evidence"
+    },
+    {
+      "id": "cargo_test.vertical_model",
+      "section": "5",
+      "command": "cargo test --manifest-path \"research/vertical-model/Cargo.toml\" --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "unit and integration tests; not a proof and not runtime evidence"
+    },
+    {
+      "id": "cargo_clippy.clutch_kernel",
+      "section": "5",
+      "command": "cargo clippy --manifest-path \"crates/clutch-kernel/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "lint gate; no matched key lines is the clean state"
+    },
+    {
+      "id": "cargo_clippy.clutch_accumulator",
+      "section": "5",
+      "command": "cargo clippy --manifest-path \"crates/clutch-accumulator/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "lint gate; no matched key lines is the clean state"
+    },
+    {
+      "id": "cargo_clippy.clutch_batch",
+      "section": "5",
+      "command": "cargo clippy --manifest-path \"crates/clutch-batch/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "lint gate; no matched key lines is the clean state"
+    },
+    {
+      "id": "cargo_clippy.solana_layout",
+      "section": "5",
+      "command": "cargo clippy --manifest-path \"programs/solana-layout/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "lint gate; no matched key lines is the clean state"
+    },
+    {
+      "id": "cargo_clippy.solana_reference",
+      "section": "5",
+      "command": "cargo clippy --manifest-path \"programs/solana-reference/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "lint gate; no matched key lines is the clean state"
+    },
+    {
+      "id": "cargo_clippy.vertical_model",
+      "section": "5",
+      "command": "cargo clippy --manifest-path \"research/vertical-model/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "lint gate; no matched key lines is the clean state"
+    },
+    {
+      "id": "cargo_doc.clutch_kernel",
+      "section": "5",
+      "command": "cargo doc --manifest-path crates/clutch-kernel/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^\\s*Documenting ",
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build; asserts nothing about content"
+    },
+    {
+      "id": "cargo_doc.clutch_accumulator",
+      "section": "5",
+      "command": "cargo doc --manifest-path crates/clutch-accumulator/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^\\s*Documenting ",
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build; asserts nothing about content"
+    },
+    {
+      "id": "cargo_doc.clutch_batch",
+      "section": "5",
+      "command": "cargo doc --manifest-path crates/clutch-batch/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^\\s*Documenting ",
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build; asserts nothing about content"
+    },
+    {
+      "id": "cargo_doc.solana_layout",
+      "section": "5",
+      "command": "cargo doc --manifest-path programs/solana-layout/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^\\s*Documenting ",
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build; asserts nothing about content"
+    },
+    {
+      "id": "cargo_doc.solana_reference",
+      "section": "5",
+      "command": "cargo doc --manifest-path programs/solana-reference/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^\\s*Documenting ",
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build; asserts nothing about content"
+    },
+    {
+      "id": "vertical_model.golden_basic_trace",
+      "section": "5",
+      "command": "cargo run --quiet --manifest-path research/vertical-model/Cargo.toml --offline --locked | cmp - research/vertical-model/golden/basic.trace",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^cmp: ",
+        " differ"
+      ],
+      "note": "byte identity against the pinned scalar-lab trace"
+    },
+    {
+      "id": "vertical_model.golden_coupled_trace",
+      "section": "5-extended",
+      "command": "cargo run --quiet --manifest-path research/vertical-model/Cargo.toml --offline --locked -- coupled | cmp - research/vertical-model/golden/coupled.trace",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^cmp: ",
+        " differ"
+      ],
+      "note": "the coupled-relation trace is pinned by docs/implementation/VERTICAL_MODEL.md but is not listed in CODEX_HANDOFF.md section 5; added here so the second golden artifact is covered"
+    },
+    {
+      "id": "python.economics_unittest",
+      "section": "5",
+      "command": "python3 -m unittest discover -s research/economics -p 'test_*.py' -v",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^Ran \\d+ tests?$",
+        "^(OK|FAILED)\\b",
+        "^(ERROR|FAIL): "
+      ],
+      "note": "reference-model tests; MODEL evidence, not consensus code"
+    },
+    {
+      "id": "python.collateral_profiles_unittest",
+      "section": "5",
+      "command": "python3 -m unittest discover -s research/collateral-profiles -p 'test_*.py' -v",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^Ran \\d+ tests?$",
+        "^(OK|FAILED)\\b",
+        "^(ERROR|FAIL): "
+      ],
+      "note": "reference-model tests; MODEL evidence, not consensus code"
+    },
+    {
+      "id": "python.collateral_profiles_lab",
+      "section": "5",
+      "command": "python3 research/collateral-profiles/run_lab.py",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^generic_profile_bytes=",
+        "^generic_profile_digest=",
+        "^dregg_dogfood_digest=",
+        "^parent_profile_bytes=",
+        "^generic_parent_identity=",
+        "^dregg_parent_identity=",
+        "^network_actions="
+      ],
+      "note": "emits the collateral-profile identity digests it computes"
+    },
+    {
+      "id": "benchmarks.cost_lab_check",
+      "section": "5",
+      "command": "python3 benchmarks/cost_lab.py check",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^check passed: "
+      ],
+      "note": "cost model is a hypothesis (MODEL); no measured CU evidence"
+    },
+    {
+      "id": "benchmarks.golden_checksums",
+      "section": "5",
+      "command": "(cd benchmarks/golden && shasum -a 256 -c checksums.sha256)",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        ": OK$",
+        ": FAILED"
+      ],
+      "note": "byte identity of the checked-in benchmark goldens"
+    },
+    {
+      "id": "static_client.npm",
+      "section": "5",
+      "command": "(cd apps/static-client && npm test && npm run check)",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^ℹ (tests|suites|pass|fail|cancelled|skipped|todo) \\d+$",
+        "^✖ ",
+        "^not ok ",
+        "^static-client smoke: ",
+        "^AssertionError"
+      ],
+      "note": "no package runtime dependencies; the smoke test recomputes the canonical terms digest from terms.json"
+    },
+    {
+      "id": "toolchain.run_lab",
+      "section": "5",
+      "command": "CARGO_NET_OFFLINE=true toolchain/scripts/run_lab.sh",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^lab_schema=",
+        "^source_sha256=",
+        "^host_toolchain=",
+        "^host_rustc=",
+        "^sbf_build=",
+        "^host_build=",
+        "^sbf_rlib_sha256",
+        "^sbf_reproducibility=",
+        "^prohibited_source_scan=",
+        "^verus(_probe)?=",
+        "^compatibility="
+      ],
+      "note": "E0 host+SBF compatibility probe; the SBF product is an rlib, not a deployable ELF, and reproducibility here is a single same-machine rebuild comparison",
+      "volatile_patterns": [
+        "^host_rlib_sha256="
+      ],
+      "volatile_reason": "host_rlib_sha256 is not stable across runs: run_lab.sh builds the host probe into a fresh mktemp target directory and the path is embedded in the artifact. run_lab.sh never rebuilds the host side, so it measures no host reproducibility and TOOLCHAIN_SPIKE.md claims none. The value is recorded as evidence but excluded from the drift digest. Only sbf_rlib_sha256 is measured reproducible, and only by one same-machine rebuild."
+    },
+    {
+      "id": "proof.verus_probe",
+      "section": "5-expected-unavailable",
+      "command": "toolchain/scripts/run_verus.sh",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "nonzero",
+        "exit": null,
+        "reason": "the pinned Verus release rejects the pinned probe source (verus_builtin crate not imported). Making it pass requires editing the probe, which changes the pinned source digest, so the correct state is a recorded failure, not a green gate."
+      },
+      "key_patterns": [
+        "^verus_observed_version=",
+        "^verus_observed_toolchain=",
+        "^verus_pinned_version=",
+        "^source_sha256=",
+        "^source_sha256_pin=",
+        "^BLOCKED: ",
+        "^error: "
+      ],
+      "note": "BLOCKER (CODEX_HANDOFF.md section 7 P0-2): formal-tool gap",
+      "proof_content": "none"
+    },
+    {
+      "id": "proof.rocq_check",
+      "section": "5-expected-unavailable",
+      "command": "rocq/check.sh",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "either",
+        "accepted_exits": [
+          0,
+          2
+        ],
+        "reason": "exit 0 means rocq/ClutchKernel.v elaborates; exit 2 means no rocq/coqc is on PATH. Neither outcome carries proof content: the file contains zero theorems, only `Definition ... : Prop` obligations, one of which (successful_transition_is_well_formed) has a machine-checked vacuous conjunct."
+      },
+      "key_patterns": [
+        "^status=",
+        "^rocq=",
+        "^coqc=",
+        "^reason="
+      ],
+      "note": "BLOCKER (CODEX_HANDOFF.md section 7 P0-2): typecheck is not proof",
+      "proof_content": "none"
+    }
+  ],
+  "digests": {
+    "static_client.terms_json": {
+      "path": "apps/static-client/terms.json",
+      "kind": "file-sha256",
+      "sha256": "1eeaef6b7d08a032d9c05adff112e2bb92e7f7eeb51b6948656a6a679be1a6b1",
+      "bytes": 1167,
+      "status": "present"
+    },
+    "static_client.manifest_json": {
+      "path": "apps/static-client/manifest.json",
+      "kind": "file-sha256",
+      "sha256": "a526539f578e4ad7ec77aec5a7b8622a5078d3287016c9260453bbd90e0f7b90",
+      "bytes": 2760,
+      "status": "present"
+    },
+    "static_client.app_js": {
+      "path": "apps/static-client/app.js",
+      "kind": "file-sha256",
+      "sha256": "9ac5ce7235e80c909e740f4a53b4bf7dc75dad1c0b80d7266e62a145cd928fce",
+      "bytes": 10175,
+      "status": "present"
+    },
+    "static_client.index_html": {
+      "path": "apps/static-client/index.html",
+      "kind": "file-sha256",
+      "sha256": "6fa62fe124ff4c25c51e2836efadabf99e9dbe59a6603a4b996bab87259e47fc",
+      "bytes": 9564,
+      "status": "present"
+    },
+    "static_client.styles_css": {
+      "path": "apps/static-client/styles.css",
+      "kind": "file-sha256",
+      "sha256": "06894dce6a227276e1582cc23bb5101e4beac94ba447fa46f70fbd24292613e6",
+      "bytes": 11177,
+      "status": "present"
+    },
+    "static_client.package_json": {
+      "path": "apps/static-client/package.json",
+      "kind": "file-sha256",
+      "sha256": "5392e20f0e522dd6d210c003fa26120aa865cb8133275bed0333a72adad48506",
+      "bytes": 332,
+      "status": "present"
+    },
+    "static_client.smoke_mjs": {
+      "path": "apps/static-client/test/smoke.mjs",
+      "kind": "file-sha256",
+      "sha256": "6ef9f43f7096e2cc3240cff2869cb66653fe3bd7d10592694447397d552a78c0",
+      "bytes": 8026,
+      "status": "present"
+    },
+    "toolchain.e0_probe_source": {
+      "path": "toolchain/probes/no_std_core/src/lib.rs",
+      "kind": "file-sha256",
+      "sha256": "10b2087683d3c2cb423768eb9c612c00ea929b171835c15d3d16792d6b8b19ac",
+      "bytes": 1226,
+      "status": "present",
+      "handoff_declared_sha256": "10b2087683d3c2cb423768eb9c612c00ea929b171835c15d3d16792d6b8b19ac",
+      "matches_handoff": true,
+      "handoff_reference": "CODEX_HANDOFF.md section 6 (E0 probe source); toolchain/scripts/run_verus.sh SOURCE_SHA256_PIN"
+    },
+    "toolchain.e0_probe_manifest": {
+      "path": "toolchain/probes/no_std_core/Cargo.toml",
+      "kind": "file-sha256",
+      "sha256": "c77e2ebb5e6df3f93a134fa88a9c2bd4c0ad0f35a843b490620f8f5656eea8bf",
+      "bytes": 225,
+      "status": "present"
+    },
+    "toolchain.e0_probe_lock": {
+      "path": "toolchain/probes/no_std_core/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "9a6651307e93355f729b4b9b6e974d97dd4d6305d1a0d65ffa237e672f6cac87",
+      "bytes": 173,
+      "status": "present"
+    },
+    "toolchain.host_harness_lock": {
+      "path": "toolchain/probes/host_harness/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "102970b9a8af4d2136204c35ff73a125a8b07869eabaa860d52aef9831f35488",
+      "bytes": 301,
+      "status": "present"
+    },
+    "vertical_model.golden_basic_trace": {
+      "path": "research/vertical-model/golden/basic.trace",
+      "kind": "file-sha256",
+      "sha256": "ab808dd308e3bdce0fa8cc2d3b9b4a14e87dbd1b41ae7143e897c53f7f3f1639",
+      "bytes": 817,
+      "status": "present",
+      "handoff_declared_sha256": "ab808dd308e3bdce0fa8cc2d3b9b4a14e87dbd1b41ae7143e897c53f7f3f1639",
+      "matches_handoff": true,
+      "handoff_reference": "CODEX_HANDOFF.md section 6 (vertical-model golden trace)"
+    },
+    "vertical_model.golden_coupled_trace": {
+      "path": "research/vertical-model/golden/coupled.trace",
+      "kind": "file-sha256",
+      "sha256": "b92775e27c7727964b5935fec8270c8afe88609a0afe14df033c80b30c02618e",
+      "bytes": 946,
+      "status": "present",
+      "handoff_reference": "docs/implementation/VERTICAL_MODEL.md (second golden trace; not named in CODEX_HANDOFF.md section 6)"
+    },
+    "collateral_profiles.vectors": {
+      "path": "research/collateral-profiles/vectors.json",
+      "kind": "file-sha256",
+      "sha256": "5bcf3a6117c4e411a5b9b339093eaf3dcd9ca1eee0bb7a2b6814a42f46639e48",
+      "bytes": 2344,
+      "status": "present",
+      "handoff_declared_sha256": "5bcf3a6117c4e411a5b9b339093eaf3dcd9ca1eee0bb7a2b6814a42f46639e48",
+      "matches_handoff": true,
+      "handoff_reference": "CODEX_HANDOFF.md section 6 (collateral-profile vectors)"
+    },
+    "collateral_profiles.identity_vectors": {
+      "path": "research/collateral-profiles/identity_vectors.json",
+      "kind": "file-sha256",
+      "sha256": "02a3722bd2d9fac5d9b49f721530530e82a444e1b9e521cfddf0831c4896d84d",
+      "bytes": 8970,
+      "status": "present"
+    },
+    "benchmarks.golden_checksums": {
+      "path": "benchmarks/golden/checksums.sha256",
+      "kind": "file-sha256",
+      "sha256": "98c6377a8587486dc4934269e5e038867b11623f544c6771fa62c9f3ce86af71",
+      "bytes": 232,
+      "status": "present",
+      "handoff_reference": "CODEX_HANDOFF.md section 6 points at this file rather than inlining the benchmark digests"
+    },
+    "benchmarks.golden_summary": {
+      "path": "benchmarks/golden/SUMMARY.md",
+      "kind": "file-sha256",
+      "sha256": "30e45cc1ad0b0ca2261b1ae380d27aa454826bca84e77a4509e26abfdbfc2adf",
+      "bytes": 9627,
+      "status": "present"
+    },
+    "benchmarks.golden_matrix_csv": {
+      "path": "benchmarks/golden/matrix.csv",
+      "kind": "file-sha256",
+      "sha256": "43d3e9024b4cd4e8208f4f02f54284819981fcf224b1813e59d319381aab6dd4",
+      "bytes": 33204,
+      "status": "present"
+    },
+    "benchmarks.golden_matrix_json": {
+      "path": "benchmarks/golden/matrix.json",
+      "kind": "file-sha256",
+      "sha256": "3e4afb4ace32aa21ce90f46e31476bfe41cb6ff1cb6a9dc5dadc907766447538",
+      "bytes": 412032,
+      "status": "present"
+    },
+    "benchmarks.constants": {
+      "path": "benchmarks/constants.json",
+      "kind": "file-sha256",
+      "sha256": "3e07c49a22a5763e3dedabac220317715dc7813f573f3d0e177430bc53a7b431",
+      "bytes": 14638,
+      "status": "present"
+    },
+    "fixtures.economics_admission": {
+      "path": "fixtures/economics/admission_vectors.json",
+      "kind": "file-sha256",
+      "sha256": "1f0d7d96b1f1dcbbba0d28fb69614ba91476d6df90f2ec5a9f3655a745350ec7",
+      "bytes": 14356,
+      "status": "present"
+    },
+    "fixtures.economics_fee": {
+      "path": "fixtures/economics/fee_vectors.json",
+      "kind": "file-sha256",
+      "sha256": "668b611e26911e9e1690781a270c4e850f673107c7dfff279274d61e87eb2903",
+      "bytes": 18102,
+      "status": "present"
+    },
+    "fixtures.economics_trace": {
+      "path": "fixtures/economics/trace_vectors.json",
+      "kind": "file-sha256",
+      "sha256": "a99c2bd583e709ec2f560b4cca7e25606912ed9d1fe4f930871c4efcdd678fb6",
+      "bytes": 40354,
+      "status": "present"
+    },
+    "locks.clutch_kernel": {
+      "path": "crates/clutch-kernel/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "ba950d47c4b6e90efde241c399773425c9eba11fb3beec7b85585b2a198f4255",
+      "bytes": 157,
+      "status": "present"
+    },
+    "locks.clutch_accumulator": {
+      "path": "crates/clutch-accumulator/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "e138f43d687d385ab7fd1e461e690380bfc0abdc970fe25ee886720625d8711f",
+      "bytes": 162,
+      "status": "present"
+    },
+    "locks.clutch_batch": {
+      "path": "crates/clutch-batch/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "919e265bd4213fd40afa76586b0f77012669619a1b66fb18703a4b45cce4e155",
+      "bytes": 156,
+      "status": "present"
+    },
+    "locks.solana_layout": {
+      "path": "programs/solana-layout/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "028897423a4bf6b2be271b282bbbc57ecd9d30cb2eab655394972a1379a9190b",
+      "bytes": 164,
+      "status": "present"
+    },
+    "locks.solana_reference": {
+      "path": "programs/solana-reference/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "3828d437a86a3a0ac598c4bceaa5ae1862046e2d3cc4f90c28a26bb3b93a4ca3",
+      "bytes": 426,
+      "status": "present"
+    },
+    "locks.vertical_model": {
+      "path": "research/vertical-model/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "a03cc2fc3259a4c4578007bb532b2723183f369021c9165181dbd0d1420be1c1",
+      "bytes": 408,
+      "status": "present"
+    },
+    "toolchain.versions_env": {
+      "path": "toolchain/versions.env",
+      "kind": "file-sha256",
+      "sha256": "f715e36474ede2382bcdc7d7e6ea91ec38f57d94e9e34ff6ab9f80bd2857131e",
+      "bytes": 2924,
+      "status": "present"
+    },
+    "toolchain.pinned_proof_tools": {
+      "path": "toolchain/PINNED_PROOF_TOOLS.md",
+      "kind": "file-sha256",
+      "sha256": "e14a1a9f55b64cbd20160cae1521b07d4766c2f94129c27027fb4f49b5c82418",
+      "bytes": 10974,
+      "status": "present"
+    },
+    "proof_shadow.rocq_spec": {
+      "path": "rocq/ClutchKernel.v",
+      "kind": "file-sha256",
+      "sha256": "6f2d5f5175ddd42445f7b3aeeea74f0a25c6f25ab2e09363275384af91d40ae8",
+      "bytes": 15626,
+      "status": "present"
+    },
+    "proof_shadow.verus_kernel": {
+      "path": "verus/kernel/lib.rs",
+      "kind": "file-sha256",
+      "sha256": "4017231de63e21481d3e8562f9cdc144881df4eb47545e961d93e923fff1f176",
+      "bytes": 2688,
+      "status": "present"
+    },
+    "proof_shadow.verus_accumulator": {
+      "path": "verus/accumulator/accumulator.rs",
+      "kind": "file-sha256",
+      "sha256": "3561b24ae0d702c03c78c18be43bef97aadef6a7456e8a14833c0c364dff0512",
+      "bytes": 4482,
+      "status": "present"
+    },
+    "proof_shadow.verus_batch": {
+      "path": "verus/batch/batch.rs",
+      "kind": "file-sha256",
+      "sha256": "83bd9e0f5a0f245a61693cf55999870b848fd741f0aa688ebbf6d4c7c837ccad",
+      "bytes": 1033,
+      "status": "present"
+    },
+    "static_client.canonical_terms": {
+      "path": "apps/static-client/terms.json",
+      "kind": "derived-sha256",
+      "rule": "sha256 over UTF-8 of JSON.stringify of the `canonicalTerms` object with every object's keys sorted recursively and no whitespace (separators ',' and ':'), non-ASCII left unescaped",
+      "sha256": "62b06b2107636686648507e4f9ecd8a4d90733dcebf81177d4a63b25bc698d02",
+      "status": "present",
+      "handoff_declared_sha256": "a21f6cbb1ab3b06afc7c8625f3388835843edb17c48173e8fb57df8b7e0dd8e8",
+      "matches_handoff": false,
+      "handoff_reference": "CODEX_HANDOFF.md section 6 (static canonical terms); docs/implementation/STATIC_CLIENT.md; enforced by apps/static-client/test/smoke.mjs"
+    },
+    "toolchain.e0_sbf_rlib": {
+      "kind": "declared-build-output",
+      "sha256": null,
+      "handoff_declared_sha256": "d444c0ac118de1cb24d9fe6b509df7beafc1c0f1a8c2828b24e26b170da0ad1c",
+      "handoff_reference": "CODEX_HANDOFF.md section 6 (reproducible E0 SBF rlib); docs/implementation/TOOLCHAIN_SPIKE.md",
+      "produced_by_gate": "toolchain.run_lab",
+      "produced_by_output_key": "sbf_rlib_sha256",
+      "note": "an rlib emitted into a temporary directory by cargo-build-sbf, not a deployable program ELF and not a repository artifact",
+      "status": "not-a-repository-file",
+      "observed_sha256": "d444c0ac118de1cb24d9fe6b509df7beafc1c0f1a8c2828b24e26b170da0ad1c",
+      "matches_handoff": true
+    }
+  },
+  "toolchain": {
+    "records": {
+      "versions_env": {
+        "path": "toolchain/versions.env",
+        "sha256": "f715e36474ede2382bcdc7d7e6ea91ec38f57d94e9e34ff6ab9f80bd2857131e"
+      },
+      "pinned_proof_tools_md": {
+        "path": "toolchain/PINNED_PROOF_TOOLS.md",
+        "sha256": "e14a1a9f55b64cbd20160cae1521b07d4766c2f94129c27027fb4f49b5c82418"
+      }
+    },
+    "host": {
+      "rust_toolchain": "1.89.0-aarch64-apple-darwin",
+      "rust_version": "rustc 1.89.0 (29483883e 2025-08-04)",
+      "sbf_cli_version": "solana-cli 4.0.2",
+      "sbf_build_version": "cargo-build-sbf 4.0.0",
+      "sbf_platform_tools_version": "platform-tools v1.53",
+      "sbf_rust_version": "rustc 1.89.0",
+      "z3_version": "Z3 version 4.16.0"
+    },
+    "verus": {
+      "version": "0.2026.08.15.7d4628a",
+      "release_tag": "release/0.2026.08.15.7d4628a",
+      "commit": "7d4628a8543d3e51e6e314c52032c9bab43f0f53",
+      "artifact": "verus-0.2026.08.15.7d4628a-arm64-macos.zip",
+      "artifact_sha256": "a9d03889dfbf841c92565be605cd857b4171943dac564b1f4c00ddcda9830ada",
+      "binary_sha256": "07b3859fc335fd9bf803323baf82584dcefb62d74329561875353f5fde93fe8b",
+      "rust_frontend_toolchain": "1.97.1-aarch64-apple-darwin",
+      "bundled_z3": "Z3 version 4.16.0 - 64 bit",
+      "bundled_z3_sha256": "edae32f9e37ea4b5bb35310d72f0e352d0dc07626cac4e9e30bc1ea9a5bc8efb",
+      "vstd_rlib_sha256": "91f842643674660a1da8799eda3eceaa37e5816682d026b3d860bc59a81be61c",
+      "vstd_vir_sha256": "3061321483841360c760fa3fb38b22be57533052cf2100eb51956aa31205fa7d",
+      "probe_status": "FAIL",
+      "probe_reason": "pinned Verus rejects the pinned probe source: verus_builtin crate not imported",
+      "note": "the Verus Rust frontend pin is independent of the host build toolchain and must not be conflated with it; vstd has no independent revision and is pinned only transitively by the Verus commit"
+    },
+    "rocq": {
+      "version": "The Rocq Prover, version 9.2",
+      "release": "9.2.0",
+      "install_method": "homebrew/core formula rocq 9.2.0 (bottle arm64_tahoe, rebuild 0)",
+      "source_url": "https://github.com/rocq-prover/rocq/releases/download/V9.2.0/rocq-9.2.0.tar.gz",
+      "source_sha256": "a45280ab4fbaac7540b136a6b073b4a6db15739ec1e149bded43fa6f4fc25f20",
+      "bottle_sha256": "2e2a4c16e90c21d3baa45352ff39df6bc934d643c5e9fecdddf9f4ee3483aecd",
+      "ocaml_version": "5.5.0",
+      "check_status": "PASS",
+      "check_proof_content": "NONE"
+    },
+    "pin_agreement": {
+      "rule": "each sha256 recorded in versions.env must also appear literally in PINNED_PROOF_TOOLS.md",
+      "checks": {
+        "VERUS_ARTIFACT_SHA256": {
+          "label": "verus artifact zip",
+          "versions_env": "a9d03889dfbf841c92565be605cd857b4171943dac564b1f4c00ddcda9830ada",
+          "present_in_pinned_proof_tools_md": true
+        },
+        "VERUS_BIN_SHA256": {
+          "label": "verus binary",
+          "versions_env": "07b3859fc335fd9bf803323baf82584dcefb62d74329561875353f5fde93fe8b",
+          "present_in_pinned_proof_tools_md": true
+        },
+        "VERUS_Z3_SHA256": {
+          "label": "verus bundled z3",
+          "versions_env": "edae32f9e37ea4b5bb35310d72f0e352d0dc07626cac4e9e30bc1ea9a5bc8efb",
+          "present_in_pinned_proof_tools_md": true
+        },
+        "VERUS_VSTD_RLIB_SHA256": {
+          "label": "libvstd.rlib",
+          "versions_env": "91f842643674660a1da8799eda3eceaa37e5816682d026b3d860bc59a81be61c",
+          "present_in_pinned_proof_tools_md": true
+        },
+        "VERUS_VSTD_VIR_SHA256": {
+          "label": "vstd.vir",
+          "versions_env": "3061321483841360c760fa3fb38b22be57533052cf2100eb51956aa31205fa7d",
+          "present_in_pinned_proof_tools_md": true
+        },
+        "ROCQ_SOURCE_SHA256": {
+          "label": "rocq upstream tarball",
+          "versions_env": "a45280ab4fbaac7540b136a6b073b4a6db15739ec1e149bded43fa6f4fc25f20",
+          "present_in_pinned_proof_tools_md": true
+        },
+        "ROCQ_BOTTLE_SHA256": {
+          "label": "rocq homebrew bottle",
+          "versions_env": "2e2a4c16e90c21d3baa45352ff39df6bc934d643c5e9fecdddf9f4ee3483aecd",
+          "present_in_pinned_proof_tools_md": true
+        }
+      },
+      "all_agree": true
+    },
+    "unpinned": [
+      "vstd revision (transitive via VERUS_COMMIT only)",
+      "homebrew formula provenance (JSON API install, no tap commit)",
+      "rocq stdlib / dependency closure (no lockfile)",
+      "librustc_driver dylib supplied by the ambient rustup toolchain",
+      "correspondence between the Verus/Rocq shadows and crates/clutch-*"
+    ]
+  },
+  "run": {
+    "started_at_utc": "2026-08-18T08:18:05Z",
+    "finished_at_utc": "2026-08-18T08:18:13Z",
+    "gate_timeout_seconds": 1800,
+    "note": "timestamps here are the only nondeterministic fields in this manifest; `check` ignores them"
+  },
+  "gate_runs": {
+    "cargo_test.clutch_kernel": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "3d0904d91f7393e7d876e62226c48b19637ab31c16b231ae633c6ec15d874a46",
+      "output_bytes": 1587,
+      "tail": []
+    },
+    "cargo_test.clutch_accumulator": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "05fdf007417f6322d38653f0012235b60a07135606b33801bcee7dd2ab729b35",
+      "output_bytes": 2362,
+      "tail": []
+    },
+    "cargo_test.clutch_batch": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "3d2f067e15603d2ee7bfffec8214ba6cf631c33e0641ebbd869e24394d18a43f",
+      "output_bytes": 3979,
+      "tail": []
+    },
+    "cargo_test.solana_layout": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "25ee802a51122367e98040a2b9d9b0dd30bc52de89411adbc386fb346f986046",
+      "output_bytes": 2962,
+      "tail": []
+    },
+    "cargo_test.solana_reference": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "bbb6111d56a0cdeb381e336537801285b341c3bc1783f4443514dea99dfc895f",
+      "output_bytes": 1956,
+      "tail": []
+    },
+    "cargo_test.vertical_model": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "c44e130fd0ebd20d318d46f9bb08bb17fe17dd40d49b94d2c93c004f98cbfa65",
+      "output_bytes": 2062,
+      "tail": []
+    },
+    "cargo_clippy.clutch_kernel": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 72,
+      "tail": []
+    },
+    "cargo_clippy.clutch_accumulator": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 72,
+      "tail": []
+    },
+    "cargo_clippy.clutch_batch": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 72,
+      "tail": []
+    },
+    "cargo_clippy.solana_layout": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 72,
+      "tail": []
+    },
+    "cargo_clippy.solana_reference": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 72,
+      "tail": []
+    },
+    "cargo_clippy.vertical_model": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 72,
+      "tail": []
+    },
+    "cargo_doc.clutch_kernel": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 174,
+      "tail": []
+    },
+    "cargo_doc.clutch_accumulator": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 184,
+      "tail": []
+    },
+    "cargo_doc.clutch_batch": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 172,
+      "tail": []
+    },
+    "cargo_doc.solana_layout": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        " Documenting clutch-solana-layout v0.1.0 (/Users/ember/dev/dragons-clutch/programs/solana-layout)"
+      ],
+      "key_lines_sha256": "00c25a7cdaf01422753cfe40d3081d4d3d4d6ab20e2d2ec7be3546225217679b",
+      "output_bytes": 281,
+      "tail": []
+    },
+    "cargo_doc.solana_reference": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        " Documenting clutch-solana-reference v0.1.0 (/Users/ember/dev/dragons-clutch/programs/solana-reference)"
+      ],
+      "key_lines_sha256": "6f21a13dedde05f0dccefc51d01ecd565a9cbced80308cc3b0ffcf740dbf52e5",
+      "output_bytes": 293,
+      "tail": []
+    },
+    "vertical_model.golden_basic_trace": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 0,
+      "tail": []
+    },
+    "vertical_model.golden_coupled_trace": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_bytes": 0,
+      "tail": []
+    },
+    "python.economics_unittest": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "Ran 83 tests",
+        "OK"
+      ],
+      "key_lines_sha256": "40f30bd0b692a0e481a77ab5f0dec1c9f862e7e5954e1085b4ed52336e381db9",
+      "output_bytes": 11767,
+      "tail": []
+    },
+    "python.collateral_profiles_unittest": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "Ran 28 tests",
+        "OK"
+      ],
+      "key_lines_sha256": "ffbc7a7f7ee577872f0e5b606f347403d10aa3c0b19ecaaaf0b3d78463c57f4e",
+      "output_bytes": 4042,
+      "tail": []
+    },
+    "python.collateral_profiles_lab": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "generic_profile_bytes=266",
+        "generic_profile_digest=aafb22527b09935db83362d09eebb7cd875a7714fc9e3c3764a9e57c207c5c32",
+        "dregg_dogfood_digest=ef63ccd0c5e1616c1570dd96a985ef9924f622d44c246f5aa88e1b9545f54343",
+        "parent_profile_bytes=64",
+        "generic_parent_identity=8180f42830d90ef060ec2e4d91c6c19145db9cd9e2dbfd759045770930831688",
+        "dregg_parent_identity=31cd82668ac7846bbf6bf38d25107d0301bc468d40816bf9a565ac93766f93b3",
+        "network_actions=0"
+      ],
+      "key_lines_sha256": "a5be43182e6f3312005d4928008283760db71b48a518b6be6beee8d958d56f31",
+      "output_bytes": 418,
+      "tail": []
+    },
+    "benchmarks.cost_lab_check": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "check passed: 261 scenarios; offline; rpc=0; validator=0"
+      ],
+      "key_lines_sha256": "6ceabbf4926b5ca9fb597f124b2cc309aa6e6538a5c60eef674ddb269366e8d2",
+      "output_bytes": 57,
+      "tail": []
+    },
+    "benchmarks.golden_checksums": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "SUMMARY.md: OK",
+        "matrix.csv: OK",
+        "matrix.json: OK"
+      ],
+      "key_lines_sha256": "c82fca843215068f09ed3aa9b6d718a55950cd86da8f2d7612a0fc10a481efb0",
+      "output_bytes": 46,
+      "tail": []
+    },
+    "static_client.npm": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "ℹ tests 11",
+        "ℹ suites 0",
+        "ℹ pass 11",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0"
+      ],
+      "key_lines_sha256": "f47a05a5ef85198ea3bff51976bc50998c1e287e0d96990203770b638657ec23",
+      "output_bytes": 1066,
+      "tail": []
+    },
+    "toolchain.run_lab": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "lab_schema=1",
+        "source_sha256=10b2087683d3c2cb423768eb9c612c00ea929b171835c15d3d16792d6b8b19ac",
+        "host_toolchain=1.89.0-aarch64-apple-darwin",
+        "host_rustc=rustc 1.89.0 (29483883e 2025-08-04)",
+        "sbf_build=cargo-build-sbf 4.0.0",
+        "host_build=START",
+        "host_build=PASS",
+        "sbf_build=START",
+        "sbf_build=PASS",
+        "sbf_rlib_sha256=d444c0ac118de1cb24d9fe6b509df7beafc1c0f1a8c2828b24e26b170da0ad1c",
+        "sbf_reproducibility=START",
+        "sbf_reproducibility=PASS",
+        "sbf_rlib_sha256_second=d444c0ac118de1cb24d9fe6b509df7beafc1c0f1a8c2828b24e26b170da0ad1c",
+        "prohibited_source_scan=START",
+        "prohibited_source_scan=PASS",
+        "verus=UNAVAILABLE (on PATH; this lab checks PATH only — the pinned install is exercised by toolchain/scripts/run_verus.sh)",
+        "verus_probe=BLOCKED (see toolchain/PINNED_PROOF_TOOLS.md for the pinned install and its current failing result)",
+        "compatibility=HOST_AND_SBF_PASS_VERUS_BLOCKED"
+      ],
+      "key_lines_sha256": "eab01540da4fd3c974151ad65149c01238f4c98ba077d0715bdb4990ba1855e5",
+      "volatile_lines": [
+        "host_rlib_sha256=c5794b8c875315b7cf3da2bb2c9a7399e2b8c1b379906f50ab63e00e869b3bd6"
+      ],
+      "output_bytes": 1451,
+      "tail": []
+    },
+    "proof.verus_probe": {
+      "exit_code": 1,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "verus_observed_version=0.2026.08.15.7d4628a",
+        "verus_observed_toolchain=1.97.1-aarch64-apple-darwin",
+        "verus_pinned_version=0.2026.08.15.7d4628a",
+        "source_sha256=10b2087683d3c2cb423768eb9c612c00ea929b171835c15d3d16792d6b8b19ac",
+        "source_sha256_pin=10b2087683d3c2cb423768eb9c612c00ea929b171835c15d3d16792d6b8b19ac",
+        "error: Error: The verus_builtin crate was not imported but it is necessary to run Verus. You likely need to add `use vstd::prelude::*;` at the top of a lib.rs or main.rs file.",
+        "error: aborting due to 1 previous error"
+      ],
+      "key_lines_sha256": "059d0328b4d85997fd93b3f3f545b9cff129594e4ef2248b2bb08bf8e11689ab",
+      "output_bytes": 1267,
+      "tail": []
+    },
+    "proof.rocq_check": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "rocq=The Rocq Prover, version 9.2",
+        "status=PASS"
+      ],
+      "key_lines_sha256": "be26a9df8406aa4ce4473c4c4dbe1b627e5deda8e1b85574f8b76fdea8881aa6",
+      "output_bytes": 417,
+      "tail": []
+    }
+  },
+  "gate_summary": {
+    "total": 28,
+    "matching_expectation": 28,
+    "contradicting_expectation": []
+  },
+  "unavailable_or_failing_gates": [
+    {
+      "gate": "proof.verus_probe",
+      "command": "toolchain/scripts/run_verus.sh",
+      "disposition": "declared-failing",
+      "reason": "the pinned Verus release rejects the pinned probe source (verus_builtin crate not imported). Making it pass requires editing the probe, which changes the pinned source digest, so the correct state is a recorded failure, not a green gate.",
+      "proof_content": "none",
+      "observed_exit_code": 1,
+      "matches_expectation": true
+    },
+    {
+      "gate": "proof.rocq_check",
+      "command": "rocq/check.sh",
+      "disposition": "declared-typecheck-or-unavailable",
+      "reason": "exit 0 means rocq/ClutchKernel.v elaborates; exit 2 means no rocq/coqc is on PATH. Neither outcome carries proof content: the file contains zero theorems, only `Definition ... : Prop` obligations, one of which (successful_transition_is_well_formed) has a machine-checked vacuous conjunct.",
+      "proof_content": "none",
+      "observed_exit_code": 0,
+      "matches_expectation": true
+    }
+  ],
+  "handoff_digest_disagreements": [
+    "static_client.canonical_terms"
+  ]
+}
