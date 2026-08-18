@@ -42,6 +42,9 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
 - C lane: P1-C closed - 8 new accounts, cross-page closure, frozen grid,
   per-account versions; 37 layout tests; pushed.
 - REF-INT launched: evidence-gated resolution into solana-reference.
+- GLASS: equality gates, CSP honesty, kernel-true terms (new digest); pushed.
+- S1: reproducible ELF, 6/6 byte-exact SVM differential vs offline adapter,
+  72,869 CU Split; commit held until REF-INT lands (shared dep mid-edit).
 - D1: independent FBA oracle, 300M-case differential, zero semantic
   divergences, vectors byte-identical; spec gap (refusal-class priority)
   found and pinned; pushed.
