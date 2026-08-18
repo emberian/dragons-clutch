@@ -10,15 +10,13 @@
     "paths": [
       "MANIFEST.baseline.json"
     ],
-    "observed": [
-      " M MANIFEST.baseline.json"
-    ],
+    "observed": [],
     "reason": "the manifest is this tool's own output; its git status cannot gate its regeneration. Nothing else is excluded from the dirtiness decision."
   },
   "baseline": {
-    "commit": "617a521c30ca961178fd2dd67a06414ade3f2503",
-    "tree_hash": "42084e0b85a2f7011fe594c8da7aad80d56118b9",
-    "commit_subject": "Manifest gains the SBF lane and post-section-5 benchmark gates (28 -> 33)",
+    "commit": "1bad84da586d9e8d9fa6c8159150223a569fd298",
+    "tree_hash": "8c9440045ac29b25f5dd75d9ef8ce7a322f16c16",
+    "commit_subject": "Clean-tree ELF record: gates PASS at 5c88505",
     "remotes": [
       {
         "name": "origin",
@@ -737,7 +735,7 @@
     "benchmarks.golden_checksums": {
       "path": "benchmarks/golden/checksums.sha256",
       "kind": "file-sha256",
-      "sha256": "98c6377a8587486dc4934269e5e038867b11623f544c6771fa62c9f3ce86af71",
+      "sha256": "6b1bc75445fe973364367f3af55f0a0f418fcca6e7d97b738d39c7e007b74946",
       "bytes": 232,
       "status": "present",
       "handoff_reference": "CODEX_HANDOFF.md section 6 points at this file rather than inlining the benchmark digests"
@@ -745,29 +743,29 @@
     "benchmarks.golden_summary": {
       "path": "benchmarks/golden/SUMMARY.md",
       "kind": "file-sha256",
-      "sha256": "30e45cc1ad0b0ca2261b1ae380d27aa454826bca84e77a4509e26abfdbfc2adf",
-      "bytes": 9627,
+      "sha256": "4eed27b63cd4dd67f2ea9e16a239be3d28ece422a4ff7238efa2af40d9bfb759",
+      "bytes": 10246,
       "status": "present"
     },
     "benchmarks.golden_matrix_csv": {
       "path": "benchmarks/golden/matrix.csv",
       "kind": "file-sha256",
-      "sha256": "43d3e9024b4cd4e8208f4f02f54284819981fcf224b1813e59d319381aab6dd4",
-      "bytes": 33204,
+      "sha256": "ee1b6194510e420d84224a914d6cfd8fd670b216172e99866e30195e6c4eb321",
+      "bytes": 33217,
       "status": "present"
     },
     "benchmarks.golden_matrix_json": {
       "path": "benchmarks/golden/matrix.json",
       "kind": "file-sha256",
-      "sha256": "3e4afb4ace32aa21ce90f46e31476bfe41cb6ff1cb6a9dc5dadc907766447538",
-      "bytes": 412032,
+      "sha256": "365c95350668770f6f3d7f91c6adbd5f3dc94284b51a2445695accb3b13c8ac3",
+      "bytes": 416127,
       "status": "present"
     },
     "benchmarks.constants": {
       "path": "benchmarks/constants.json",
       "kind": "file-sha256",
-      "sha256": "3e07c49a22a5763e3dedabac220317715dc7813f573f3d0e177430bc53a7b431",
-      "bytes": 14638,
+      "sha256": "8f29a25c6131eff0f03ea38de19080a878ac4b3d863411dd029b992b12aa26ec",
+      "bytes": 17064,
       "status": "present"
     },
     "fixtures.economics_admission": {
@@ -995,8 +993,8 @@
     ]
   },
   "run": {
-    "started_at_utc": "2026-08-18T08:38:57Z",
-    "finished_at_utc": "2026-08-18T08:39:05Z",
+    "started_at_utc": "2026-08-18T12:40:22Z",
+    "finished_at_utc": "2026-08-18T12:41:15Z",
     "gate_timeout_seconds": 1800,
     "note": "timestamps here are the only nondeterministic fields in this manifest; `check` ignores them"
   },
@@ -1030,14 +1028,26 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "3d2f067e15603d2ee7bfffec8214ba6cf631c33e0641ebbd869e24394d18a43f",
-      "output_bytes": 3979,
+      "key_lines_sha256": "cb3eaba2888bec5e087b6b57c077de48acd6fbc4d503401992d90de2069d303a",
+      "output_bytes": 5453,
       "tail": []
     },
     "cargo_test.solana_layout": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 97 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "1b0cbf8728dd7aa492dd15b5b71854d317259903177e4b26d07576babe029f30",
+      "output_bytes": 7864,
+      "tail": []
+    },
+    "cargo_test.solana_reference": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
@@ -1046,19 +1056,7 @@
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
       "key_lines_sha256": "25ee802a51122367e98040a2b9d9b0dd30bc52de89411adbc386fb346f986046",
-      "output_bytes": 2962,
-      "tail": []
-    },
-    "cargo_test.solana_reference": {
-      "exit_code": 0,
-      "timed_out": false,
-      "matches_expectation": true,
-      "key_lines": [
-        "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
-        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
-      ],
-      "key_lines_sha256": "bbb6111d56a0cdeb381e336537801285b341c3bc1783f4443514dea99dfc895f",
-      "output_bytes": 1956,
+      "output_bytes": 3273,
       "tail": []
     },
     "cargo_test.vertical_model": {
@@ -1078,11 +1076,12 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
-        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+        "test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "48e3185799401debae1a3fb75b42861126382409fbc748d82e24aef5851734f4",
-      "output_bytes": 874,
+      "key_lines_sha256": "23c1a9ffcf92581625e6093205205e7516b45a59a9b40736766f76d1447db16d",
+      "output_bytes": 12723,
       "tail": []
     },
     "cargo_clippy.clutch_kernel": {
@@ -1118,7 +1117,7 @@
       "matches_expectation": true,
       "key_lines": [],
       "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 72,
+      "output_bytes": 170,
       "tail": []
     },
     "cargo_clippy.solana_reference": {
@@ -1127,7 +1126,7 @@
       "matches_expectation": true,
       "key_lines": [],
       "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 72,
+      "output_bytes": 274,
       "tail": []
     },
     "cargo_clippy.vertical_model": {
@@ -1136,7 +1135,7 @@
       "matches_expectation": true,
       "key_lines": [],
       "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 72,
+      "output_bytes": 259,
       "tail": []
     },
     "cargo_clippy.clutch_sbf": {
@@ -1170,36 +1169,45 @@
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
-      "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 172,
+      "key_lines": [
+        " Documenting clutch-batch v0.1.0 (/Users/ember/dev/dragons-clutch/crates/clutch-batch)"
+      ],
+      "key_lines_sha256": "3cf0cddbebaae79ce0c5514a71478e21c837150188152223ac4b2b7480e079c7",
+      "output_bytes": 259,
       "tail": []
     },
     "cargo_doc.solana_layout": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
-      "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 183,
+      "key_lines": [
+        " Documenting clutch-solana-layout v0.1.0 (/Users/ember/dev/dragons-clutch/programs/solana-layout)"
+      ],
+      "key_lines_sha256": "00c25a7cdaf01422753cfe40d3081d4d3d4d6ab20e2d2ec7be3546225217679b",
+      "output_bytes": 281,
       "tail": []
     },
     "cargo_doc.solana_reference": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
-      "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 189,
+      "key_lines": [
+        " Documenting clutch-solana-reference v0.1.0 (/Users/ember/dev/dragons-clutch/programs/solana-reference)"
+      ],
+      "key_lines_sha256": "6f21a13dedde05f0dccefc51d01ecd565a9cbced80308cc3b0ffcf740dbf52e5",
+      "output_bytes": 293,
       "tail": []
     },
     "cargo_doc.clutch_sbf": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
-      "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 187,
+      "key_lines": [
+        " Documenting clutch-sbf v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/program)",
+        " Documenting clutch-sbf-harness v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/harness)"
+      ],
+      "key_lines_sha256": "191506f3338637069d3ea721e34ce770ee7a9ab187e3ca3c44dcb8e5936f7aeb",
+      "output_bytes": 381,
       "tail": []
     },
     "vertical_model.golden_basic_trace": {
@@ -1277,11 +1285,11 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "Ran 28 tests",
+        "Ran 41 tests",
         "OK"
       ],
-      "key_lines_sha256": "ffbc7a7f7ee577872f0e5b606f347403d10aa3c0b19ecaaaf0b3d78463c57f4e",
-      "output_bytes": 127,
+      "key_lines_sha256": "ed14775a3e29deb8e71374f6330e55c5da19891b538527b7b51fd0728ed642f5",
+      "output_bytes": 140,
       "tail": []
     },
     "benchmarks.abi_audit": {
@@ -1292,7 +1300,7 @@
         "abi-audit passed: landed arm equals the codec on disk"
       ],
       "key_lines_sha256": "7dcc81e1dac6ba5f6565aea2755729a6b1da1f5d5b0b32743d785c3513930a1a",
-      "output_bytes": 319,
+      "output_bytes": 491,
       "tail": []
     },
     "benchmarks.golden_checksums": {
@@ -1322,7 +1330,7 @@
         "ℹ todo 0"
       ],
       "key_lines_sha256": "f47a05a5ef85198ea3bff51976bc50998c1e287e0d96990203770b638657ec23",
-      "output_bytes": 1065,
+      "output_bytes": 1061,
       "tail": []
     },
     "toolchain.run_lab": {
@@ -1351,7 +1359,7 @@
       ],
       "key_lines_sha256": "eab01540da4fd3c974151ad65149c01238f4c98ba077d0715bdb4990ba1855e5",
       "volatile_lines": [
-        "host_rlib_sha256=75bc52f3cc5df0c3b4f4472e4fe27ab92829da3b8ec0c8ba3e792bf57a11c84c"
+        "host_rlib_sha256=866fa6ca1d52018109409e209bb7ed866356436bb3b4462cc0b9596a62027f07"
       ],
       "output_bytes": 1451,
       "tail": []
