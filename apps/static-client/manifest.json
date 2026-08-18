@@ -73,10 +73,10 @@
   ],
   "terms": {
     "path": "terms.json",
-    "termsVersion": "terms-v0-offline-sample",
+    "termsVersion": "terms-v0-offline-sample-r2",
     "digestAlgorithm": "sha256",
     "digestScope": "canonicalTerms object (sorted keys, compact UTF-8 JSON)",
-    "digest": "sha256:a21f6cbb1ab3b06afc7c8625f3388835843edb17c48173e8fb57df8b7e0dd8e8"
+    "digest": "sha256:62b06b2107636686648507e4f9ecd8a4d90733dcebf81177d4a63b25bc698d02"
   },
   "capabilities": {
     "staticHosting": true,

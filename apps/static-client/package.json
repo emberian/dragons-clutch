@@ -5,7 +5,8 @@
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {
-    "check": "node --check app.js",
+    "check": "node --check app.js && node --check embedded-data.js && node --check tools/embed.mjs",
+    "embed": "node tools/embed.mjs",
     "test": "node test/smoke.mjs"
   }
 }

@@ -273,7 +273,10 @@ These digests are reproducibility aids for the reviewed local baseline, not
 release attestations:
 
 - static canonical terms:
-  `a21f6cbb1ab3b06afc7c8625f3388835843edb17c48173e8fb57df8b7e0dd8e8`;
+  `a21f6cbb1ab3b06afc7c8625f3388835843edb17c48173e8fb57df8b7e0dd8e8`
+  (superseded 2026-08-18: terms fixture now matches kernel refuse-on-remainder
+  semantics, digest `62b06b2107636686648507e4f9ecd8a4d90733dcebf81177d4a63b25bc698d02`;
+  MANIFEST.baseline.json is the living digest record);
 - E0 probe source:
   `10b2087683d3c2cb423768eb9c612c00ea929b171835c15d3d16792d6b8b19ac`;
 - reproducible E0 SBF `rlib`:

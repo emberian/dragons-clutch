@@ -1,48 +1,19 @@
 /*
  * Glass offline client. This file deliberately has no network, wallet, RPC,
- * signing, or submission capability. Keep the data below in lockstep with the
- * checked-in manifest.json and terms.json until a reproducible build emits it.
+ * signing, or submission capability.
+ *
+ * It holds no copy of the release data. manifest.json and terms.json are
+ * mirrored once into embedded-data.js (regenerate with `npm run embed`), and
+ * the test `embedded_static_data_equals_reviewed_manifest_and_terms` fails the
+ * build if that mirror drifts from the reviewed files. Nothing here re-states a
+ * digest, note, or binding as a second literal.
  */
 (function () {
   "use strict";
 
-  const MANIFEST = {
-    application: { name: "Glass / Dragon's Clutch", version: "0.1.0-offline" },
-    releaseIdentity: {
-      sourceCommit: "UNBOUND-OFFLINE-SNAPSHOT",
-      bundleSha256: "UNPUBLISHED-BUNDLE-DIGEST",
-      ipfsCid: null
-    },
-    clusters: [
-      { id: "mainnet-beta", label: "Solana Mainnet Beta", status: "unavailable", note: "No RPC endpoint is embedded or contacted by this build." },
-      { id: "devnet", label: "Solana Devnet", status: "unavailable", note: "No devnet deployment is checked by this build." },
-      { id: "localnet", label: "Local validator", status: "unavailable", note: "A local validator is optional future infrastructure, not started here." }
-    ],
-    programs: [
-      { key: "clutch", label: "Dragon's Clutch protocol", programId: null, status: "not-deployed", note: "No program ID or ELF release has been checked." }
-    ],
-    profiles: [
-      { id: "synthetic-six-decimal", label: "Synthetic six-decimal Realm", status: "offline-fixture", mint: "SYNTHETIC-MINT-NOT-ONCHAIN", note: "A local shape-only fixture. It has no collateral value and no chain identity." },
-      { id: "dregg-reference", label: "DREGG reference Realm", status: "reference-only-unchecked", mint: "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump", note: "Reference only; no deployment or account read is asserted." }
-    ]
-  };
-
-  const TERMS = {
-    schemaVersion: "dragon-clutch.terms.v0",
-    termsVersion: "terms-v0-offline-sample",
-    canonicalTerms: {
-      collateralProfile: "synthetic-six-decimal",
-      feeAtoms: 0,
-      maxOutcomes: 16,
-      outcomeCount: 2,
-      rounding: "exact-scaled-integer-floor-at-final-payout-boundary",
-      sourceAdapter: "none-offline-fixture",
-      sourceVersion: "unbound",
-      state: "inspection-only",
-      templateId: "offline-sample-template-v0",
-      window: { endUnixSeconds: 0, startUnixSeconds: 0 }
-    }
-  };
+  const EMBEDDED = globalThis.GlassEmbeddedData;
+  const MANIFEST = EMBEDDED && EMBEDDED.manifest;
+  const TERMS = EMBEDDED && EMBEDDED.terms;
 
   const $ = (id) => document.getElementById(id);
   const canonicalize = (value) => {
@@ -57,24 +28,20 @@
   };
   const canonicalJson = (value) => JSON.stringify(canonicalize(value));
 
-  // Synchronous fallback keeps the local file:// experience useful. A secure
-  // host additionally gets a real SHA-256 comparison through Web Crypto.
-  const fallbackDigest = (text) => {
-    let hash = 2166136261;
-    for (let i = 0; i < text.length; i += 1) {
-      hash ^= text.charCodeAt(i);
-      hash = Math.imul(hash, 16777619);
-    }
-    return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, "0")}`;
-  };
-  const localDigest = async (text) => {
-    if (globalThis.crypto && globalThis.crypto.subtle && globalThis.TextEncoder) {
-      const bytes = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-      return `sha256:${Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-    }
-    return fallbackDigest(text);
+  // SHA-256 through Web Crypto or nothing. An insecure context (including a
+  // plain file:// open) has no Web Crypto, and a cheap non-cryptographic
+  // checksum shown under a SHA-256 label would be worse than an honest "not
+  // recomputed here": it looks like verification and is not.
+  const subtleAvailable = () => Boolean(globalThis.crypto && globalThis.crypto.subtle && globalThis.TextEncoder);
+  const sha256 = async (text) => {
+    const bytes = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return `sha256:${Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
   };
   const short = (value, width = 26) => value && value.length > width ? `${value.slice(0, width - 1)}…` : (value || "—");
+
+  // Set when a locally checkable integrity claim fails. The page then refuses
+  // to compose intents instead of presenting a binding it cannot stand behind.
+  let integrityFault = null;
 
   const populateSelect = (select, values, valueLabel) => {
     values.forEach((entry) => {
@@ -100,7 +67,7 @@
     $("binding-status-copy").textContent = `${binding.cluster.label}, ${binding.program.label}, and ${binding.profile.label} are labels only until checked release data exists.`;
   };
 
-  const buildIntent = (kind, account, amount, binding) => {
+  const buildIntent = (kind, account, amount, binding, termsDigest) => {
     const normalizedAmount = amount === "" ? null : amount;
     if (normalizedAmount !== null && !/^[0-9]+$/.test(normalizedAmount)) throw new Error("Amount must be an exact non-negative integer in atoms.");
     if (account.length > 160) throw new Error("Account reference is too long for a local intent.");
@@ -116,7 +83,8 @@
         accountReference: account || null
       },
       quantities: { collateralAtoms: normalizedAmount },
-      termsDigest: "sha256:a21f6cbb1ab3b06afc7c8625f3388835843edb17c48173e8fb57df8b7e0dd8e8",
+      termsVersion: TERMS.termsVersion,
+      termsDigest: termsDigest || TERMS.digest,
       authorization: {
         wallet: "not-connected",
         signer: "none",
@@ -127,15 +95,49 @@
     };
   };
 
+  // The digest check is asynchronous, so composition stays closed until it
+  // settles. An early submit must not slip past a check that has not run.
+  const settleTermsCheck = () => {
+    $("build-intent").disabled = Boolean(integrityFault);
+    if (!integrityFault) return;
+    const error = $("form-error");
+    error.textContent = `Refusing to compose an intent: ${integrityFault}`;
+    error.hidden = false;
+  };
+
+  const setDigestStatus = (text, tone) => {
+    const status = $("digest-status");
+    status.textContent = text;
+    status.className = `digest-status ${tone}`;
+  };
+
   const renderTerms = async () => {
-    const canonical = canonicalJson(TERMS.canonicalTerms);
-    const digest = await localDigest(canonical);
-    $("terms-digest").textContent = digest;
+    const declared = TERMS.digest;
+    $("terms-digest").textContent = declared;
     $("terms-json").textContent = JSON.stringify(TERMS.canonicalTerms, null, 2);
     $("term-template").textContent = TERMS.canonicalTerms.templateId;
     $("term-outcomes").textContent = `${TERMS.canonicalTerms.outcomeCount} / ${TERMS.canonicalTerms.maxOutcomes}`;
-    $("term-rounding").textContent = "floor at payout";
-    return digest;
+    $("term-rounding").textContent = TERMS.canonicalTerms.rounding;
+    $("term-redemption").textContent = TERMS.canonicalTerms.redemption;
+    $("terms-semantics").textContent = TERMS.semanticsNote;
+
+    if (MANIFEST.terms && MANIFEST.terms.digest !== declared) {
+      integrityFault = "manifest.json and terms.json declare different terms digests.";
+      setDigestStatus(integrityFault, "bad");
+    } else if (!subtleAvailable()) {
+      setDigestStatus("Declared digest shown as published. Web Crypto is unavailable in this context, so it was not recomputed here — verify terms.json yourself.", "unknown");
+    } else {
+      const computed = await sha256(canonicalJson(TERMS.canonicalTerms));
+      if (computed === declared) {
+        setDigestStatus("Recomputed locally from the displayed canonical terms; matches the declared digest.", "good");
+      } else {
+        integrityFault = `Declared terms digest does not match the locally recomputed ${computed}.`;
+        setDigestStatus(integrityFault, "bad");
+      }
+    }
+    if (integrityFault) $("intent-state").textContent = "refused · integrity fault";
+    settleTermsCheck();
+    return declared;
   };
 
   const renderIntent = (event) => {
@@ -143,6 +145,7 @@
     const error = $("form-error");
     error.hidden = true;
     try {
+      if (integrityFault) throw new Error(`Refusing to compose an intent: ${integrityFault}`);
       const intent = buildIntent($("intent-kind").value, $("account-ref").value.trim(), $("amount").value.trim(), selectedBinding());
       $("intent-json").textContent = JSON.stringify(intent, null, 2);
       $("intent-state").textContent = "local object created · unsigned";
@@ -151,12 +154,13 @@
     } catch (buildError) {
       error.textContent = buildError.message;
       error.hidden = false;
+      error.focus();
       $("intent-state").textContent = "refused";
       $("copy-intent").disabled = true;
     }
   };
 
-  const copyText = async (text, button) => {
+  const copyText = async (text, button, label) => {
     if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
     else {
       const area = document.createElement("textarea");
@@ -171,24 +175,56 @@
     }
     const original = button.textContent;
     button.textContent = "Copied";
-    window.setTimeout(() => { button.textContent = original; }, 1100);
+    button.setAttribute("aria-label", `${label} copied`);
+    window.setTimeout(() => {
+      button.textContent = original;
+      button.setAttribute("aria-label", label);
+    }, 1100);
+  };
+
+  const refuseToRender = (message) => {
+    const error = $("form-error");
+    if (error) {
+      error.textContent = message;
+      error.hidden = false;
+    }
+    const digest = $("terms-digest");
+    if (digest) digest.textContent = "unavailable";
+    const status = $("digest-status");
+    if (status) {
+      status.textContent = message;
+      status.className = "digest-status bad";
+    }
+    const state = $("intent-state");
+    if (state) state.textContent = "refused · no embedded data";
+    const button = $("build-intent");
+    if (button) button.disabled = true;
   };
 
   const init = () => {
-    populateSelect($("cluster-select"), MANIFEST.clusters, (entry) => `${entry.label} · unavailable`);
-    populateSelect($("program-select"), MANIFEST.programs, (entry) => `${entry.label} · not deployed`);
+    if (!MANIFEST || !TERMS) {
+      refuseToRender("embedded-data.js did not load, so no release data is available. This page shows nothing rather than guessing a binding.");
+      return;
+    }
+    populateSelect($("cluster-select"), MANIFEST.clusters, (entry) => `${entry.label} · ${entry.status}`);
+    populateSelect($("program-select"), MANIFEST.programs, (entry) => `${entry.label} · ${entry.status}`);
     populateSelect($("profile-select"), MANIFEST.profiles, (entry) => entry.label);
+    $("build-intent").disabled = true;
     ["cluster-select", "program-select", "profile-select"].forEach((id) => $(id).addEventListener("change", renderBinding));
     $("intent-form").addEventListener("submit", renderIntent);
-    $("copy-intent").addEventListener("click", () => copyText(window.__lastIntentPreview, $("copy-intent")));
-    $("copy-digest").addEventListener("click", () => copyText($("terms-digest").textContent, $("copy-digest")));
+    $("copy-intent").addEventListener("click", () => copyText(window.__lastIntentPreview, $("copy-intent"), "Copy intent JSON"));
+    $("copy-digest").addEventListener("click", () => copyText($("terms-digest").textContent, $("copy-digest"), "Copy terms digest"));
     renderBinding();
-    renderTerms();
+    renderTerms().catch((checkError) => {
+      integrityFault = `the terms digest check did not complete (${checkError.message}).`;
+      setDigestStatus(integrityFault, "bad");
+      settleTermsCheck();
+    });
   };
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
 
   // Expose pure local construction for a future test harness, never a signer.
-  window.StaticClientOffline = Object.freeze({ buildIntent, canonicalJson, fallbackDigest });
+  window.StaticClientOffline = Object.freeze({ buildIntent, canonicalJson, canonicalize });
 })();

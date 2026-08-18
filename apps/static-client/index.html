@@ -5,7 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#0d1718">
     <meta name="description" content="Offline inspection surface for Dragon's Clutch static client">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
+    <!--
+      Meta-delivered CSP. A <meta> policy can only carry the directives below;
+      frame-ancestors, sandbox, and report-to are ignored when delivered this
+      way, so clickjacking protection is NOT claimed here. It requires response
+      headers from the host - see SERVING.md for the exact header set.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; object-src 'none'; connect-src 'none'; form-action 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
     <title>Glass · Dragon's Clutch</title>
     <link rel="stylesheet" href="styles.css">
   </head>
@@ -50,8 +56,10 @@
         <section class="panel" aria-labelledby="terms-title">
           <div class="section-heading"><div><div class="eyebrow">02 / immutable input</div><h2 id="terms-title">Terms digest</h2></div><span class="lock-mark" aria-label="Immutable display">⌁</span></div>
           <p class="panel-intro">The client displays a canonical terms fixture. The digest binds the exact sorted-key JSON shown below.</p>
-          <div class="digest-box"><span class="digest-algorithm">SHA-256</span><code id="terms-digest">computing locally…</code><button id="copy-digest" class="icon-button" type="button" title="Copy terms digest" aria-label="Copy terms digest">⧉</button></div>
-          <div class="terms-grid"><div><span>Template</span><strong id="term-template">—</strong></div><div><span>Outcomes</span><strong id="term-outcomes">—</strong></div><div><span>Rounding</span><strong id="term-rounding">—</strong></div></div>
+          <div class="digest-box"><span class="digest-algorithm">SHA-256</span><code id="terms-digest">loading…</code><button id="copy-digest" class="icon-button" type="button" title="Copy terms digest" aria-label="Copy terms digest">⧉</button></div>
+          <p id="digest-status" class="digest-status" role="status" aria-live="polite">checking the declared digest against the displayed terms…</p>
+          <div class="terms-grid"><div><span>Template</span><strong id="term-template">—</strong></div><div><span>Outcomes</span><strong id="term-outcomes">—</strong></div><div><span>Rounding</span><strong id="term-rounding" class="mono">—</strong></div><div><span>Redemption</span><strong id="term-redemption" class="mono">—</strong></div></div>
+          <p id="terms-semantics" class="micro-note"></p>
           <details class="disclosure"><summary>Inspect canonical terms JSON</summary><pre id="terms-json" class="code-block"></pre></details>
         </section>
       </div>
@@ -74,8 +82,8 @@
             <label class="field"><span>Intent type</span><select id="intent-kind"><option value="inspect-market">Inspect market (read-only)</option><option value="prepare-deposit">Prepare deposit (stub)</option><option value="prepare-order">Prepare order (stub)</option><option value="prepare-redemption">Prepare redemption (stub)</option></select></label>
             <label class="field"><span>Market / account reference <i>optional</i></span><input id="account-ref" name="account" inputmode="text" placeholder="Paste an address for local inspection" autocomplete="off"><small>No address is resolved or sent anywhere.</small></label>
             <label class="field"><span>Amount in collateral atoms <i>optional</i></span><input id="amount" name="amount" inputmode="numeric" pattern="[0-9]*" placeholder="0" autocomplete="off"><small>Exact integer atoms only; no decimal conversion.</small></label>
-            <button class="primary-button" type="submit">Build local intent <span aria-hidden="true">→</span></button>
-            <p class="form-error" id="form-error" role="alert" hidden></p>
+            <button class="primary-button" id="build-intent" type="submit" aria-describedby="form-error">Build local intent <span aria-hidden="true">→</span></button>
+            <p class="form-error" id="form-error" role="alert" tabindex="-1" hidden></p>
           </form>
           <div class="intent-output" aria-live="polite">
             <div class="output-heading"><span>Canonical intent preview</span><span id="intent-state" class="muted">waiting for input</span></div>
@@ -88,13 +96,14 @@ No bytes will be signed or submitted.</pre>
       </section>
 
       <section class="notes-grid" aria-label="Security and provenance notes">
-        <article class="note-card"><span class="note-number">A</span><h2>Provenance</h2><p>Fixtures are labeled and digest-bound where possible. No deployment, source adapter, ELF, account read, or external index is claimed by this build.</p><a href="terms.json">Open terms.json ↗</a></article>
+        <article class="note-card"><span class="note-number">A</span><h2>Provenance</h2><p>Fixtures are labeled and digest-bound where possible. No deployment, source adapter, ELF, account read, or external index is claimed by this build.</p><a href="terms.json">Open terms.json ↗</a> <a href="SERVING.md">Serving requirements ↗</a></article>
         <article class="note-card"><span class="note-number">B</span><h2>Security boundary</h2><p>Static files can be forked or replaced. Verify the release manifest and bundle hash independently before treating a future signing surface as authentic.</p><a href="manifest.json">Open manifest.json ↗</a></article>
         <article class="note-card"><span class="note-number">C</span><h2>Unavailable by design</h2><p>Wallet, RPC, market discovery, account validation, transaction serialization, signing, and submission are visibly unavailable. There is no hidden retry.</p></article>
       </section>
     </main>
 
     <footer class="footer"><span>DRAGON'S CLUTCH · OFFLINE PROTOTYPE</span><span>Static files · no operator required</span></footer>
+    <script src="embedded-data.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
