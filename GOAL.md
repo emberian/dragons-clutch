@@ -30,6 +30,13 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- CONSOL-TERMS landed (927d4bc): TermsAccount v3 unifies cap + oblig 18
+  + distributional basis; threshold markets resolve end-to-end; deg-1
+  derivation via preset membership (kernel residue named); error
+  registry consolidated, lossy-projection pin green; decode-once facts
+  API takes Resolve from CEILING-ABORT to 536K CU (38%). Bring-up PASS,
+  0 undrivable. Markets are now FUNDABLE. Pushed.
+
 - BATCH-STREAM landed: streaming verifier at 1,280B frames (was 39KB),
   ClearWork checkpoint with fold-digest tamper refusal, P-BATCH-03
   tested across 210 resume points, 19,520-comparison equivalence at
