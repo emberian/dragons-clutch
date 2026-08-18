@@ -11,6 +11,7 @@
 //! authenticate account metadata and then hand these checked values to the
 //! semantic kernel.
 
+pub mod clearing;
 pub mod collateral;
 pub mod stream;
 
@@ -91,6 +92,31 @@ pub const MAX_PORTFOLIO_ORDERS: usize = 8;
 ///
 /// Mirrors `clutch_batch::relation_v1::RELATION_VERSION_V1`.
 pub const RELATION_VERSION: u32 = 1;
+/// Maximum slices in one explicit pairing witness.
+///
+/// Mirrors `clutch_batch::relation_v1::MAX_SLICES` (`2 * MAX_LEGS + 2 *
+/// MAX_OUTCOMES` at `MAX_LEGS = 192`).  Restated rather than imported, like
+/// every other bound here; [`clearing::CandidateFeedAccount`] is the account
+/// that carries that many slices and a codec test pins the number.
+pub const MAX_SLICES: usize = 416;
+/// Exact byte length of the streaming-checkpoint body.
+///
+/// Mirrors the pinned `core::mem::size_of::<ClearWorkV1>()` of
+/// `clutch_batch::relation_v1_stream`
+/// (`docs/implementation/STREAMING_RELATION_DESIGN.md` §7, pinned there by
+/// `clear_work_size_is_pinned`).
+///
+/// **This crate owns the length and nothing inside it.**  `ClearWorkV1` is
+/// `#[derive(Clone, Debug, PartialEq, Eq)]` over a plain `repr(Rust)` struct,
+/// so the number above is a *measurement of one build*, not a wire fact: Rust
+/// makes no layout guarantee, and no code anywhere may reinterpret these bytes
+/// as a `ClearWorkV1`.  Until `clutch-batch` either declares `#[repr(C)]` with
+/// a `Pod` bound or grows an explicit serializer, the body region of
+/// [`clearing::ClearWorkAccount`] is **opaque bytes of exactly this length**,
+/// and this crate's contract is the framing, the identity binding, and the
+/// streaming window accessors — never an interpretation.  See
+/// `docs/implementation/SOLANA_LAYOUT.md`, "The clearing plane".
+pub const CLEAR_WORK_BODY_BYTES: usize = 48_592;
 /// Largest admitted observation bucket duration, in seconds.
 ///
 /// Mirrors `clutch_accumulator::MAX_BUCKET_SECONDS`.
@@ -192,6 +218,8 @@ const CANDIDATE_TAG: u8 = 13;
 const FINAL_POT_TAG: u8 = 14;
 const SETTLEMENT_RECEIPT_TAG: u8 = 15;
 const RESOLUTION_TAG: u8 = 16;
+const CLEAR_WORK_TAG: u8 = 17;
+const CANDIDATE_FEED_TAG: u8 = 18;
 
 /// A fixed 32-byte domain-separated identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -644,12 +672,25 @@ pub mod account_version {
     pub const SETTLEMENT_RECEIPT: u8 = 2;
     /// Resolution account.
     pub const RESOLUTION: u8 = 2;
+    /// Streaming-checkpoint account; introduced by the clearing plane.
+    pub const CLEAR_WORK: u8 = 1;
+    /// Candidate feed account; introduced by the clearing plane.
+    ///
+    /// Version 1 is its first shape.  It is a *different account* from
+    /// [`CANDIDATE`], which is at version 2: the candidate **record** persists
+    /// a proposal's free coordinates and deliberately does not persist fills,
+    /// while the candidate **feed** is the solver-written artifact the
+    /// streaming verifier consumes — the same coordinates plus the fill vector
+    /// and the optional pairing witness.  Two accounts, two tags, two version
+    /// ladders.
+    pub const CANDIDATE_FEED: u8 = 1;
 }
 
 /// Account discriminator and exact fixed byte lengths.
 pub mod account_len {
     use super::{
-        MAX_GRID_TICKS, MAX_KNOTS, MAX_ORDERS_PER_PAGE, MAX_OUTCOMES, MAX_PAYOUTS, ORDER_SLOT_BYTES,
+        CLEAR_WORK_BODY_BYTES, MAX_EPOCH_ORDERS, MAX_GRID_TICKS, MAX_KNOTS, MAX_ORDERS_PER_PAGE,
+        MAX_OUTCOMES, MAX_PAYOUTS, MAX_SLICES, ORDER_SLOT_BYTES,
     };
 
     /// Realm account bytes.
@@ -725,6 +766,34 @@ pub mod account_len {
     pub const SETTLEMENT_RECEIPT: usize = 2 + (5 * 32) + 16 + 8 + 8 + 8 + 8 + 2 + 1 + 1 + 1 + 1 + 1;
     /// Resolution account bytes.
     pub const RESOLUTION: usize = 2 + (4 * 32) + 8 + 8 + 8 + 8 + 1 + 1 + 1;
+    /// Streaming-checkpoint account bytes: the header, then the opaque body.
+    ///
+    /// [`super::clearing::CLEAR_WORK_HEADER_BYTES`] of layout-owned framing
+    /// plus exactly [`super::CLEAR_WORK_BODY_BYTES`] the layout never reads.
+    /// This is by far the largest account in the inventory and it is the one
+    /// that does not fit a single system-program creation via CPI; the
+    /// creation path is analyzed in `docs/implementation/SOLANA_LAYOUT.md`.
+    pub const CLEAR_WORK: usize =
+        2 + (4 * 32) + 16 + 4 + 2 + 2 + 1 + 1 + 1 + 1 + CLEAR_WORK_BODY_BYTES;
+    /// Candidate feed account bytes: header, fill vector, slice vector.
+    pub const CANDIDATE_FEED: usize = 2
+        + (4 * 32)
+        + (MAX_OUTCOMES * 8)
+        + 8
+        + 8
+        + 8
+        + 16
+        + 16
+        + 16
+        + 8
+        + 2
+        + 2
+        + 1
+        + 1
+        + 1
+        + 1
+        + (MAX_EPOCH_ORDERS * 8)
+        + (MAX_SLICES * super::clearing::PAIRING_SLICE_BYTES);
 }
 
 /// Realm collateral/profile configuration, frozen by an external adapter.
@@ -4197,6 +4266,94 @@ pub enum Intent {
         epoch: EpochId,
         page_index: u16,
     },
+    /// Bring one Realm namespace into existence.
+    ///
+    /// The Realm identity is not carried, because it is not a choice:
+    /// [`canonical_realm_id`] derives it from exactly `(profile,
+    /// realm_nonce)`.  `profile` is the **parent** Profile identity, which is
+    /// itself a total function of the Realm's collateral policy through
+    /// [`collateral::ParentProfile`] — so an adapter holding the 266 policy
+    /// bytes can refuse a claimed `profile` that those bytes do not produce,
+    /// and this intent is checkable rather than merely well-formed.
+    InitRealm {
+        profile: ProfileHash,
+        realm_nonce: u64,
+        max_outcomes: u8,
+        profile_version: u8,
+    },
+    /// Freeze one Realm's Profile identity against its collateral policy.
+    ///
+    /// The 266 collateral-policy bytes **do not travel in this intent**, and
+    /// that is a decision rather than a size accident: they already have a
+    /// carrier.  `market_init`'s `IX_POLICY` established the evidence-buffer
+    /// pattern — a content-authenticated account holding the exact policy
+    /// bytes, bound by recomputation
+    /// ([`collateral::verify_profile_identity`]) rather than by address — and
+    /// a second carrier for the same bytes would be a second truth.  What the
+    /// intent carries is the **digest binding**: the child digest `D_col` the
+    /// Profile freezes, and the subfield schema version that digest was
+    /// composed under, both of which the adapter recomputes from the presented
+    /// policy and refuses on mismatch.
+    InitProfile {
+        realm: RealmHash,
+        collateral_policy_digest: Hash32,
+        subfield_schema_version: u16,
+        profile_version: u8,
+    },
+    /// Bring one frozen price grid into existence.
+    ///
+    /// The grid body — 64 ticks and a scale, 521 bytes — rides an
+    /// evidence-buffer account for the same reason the terms body does; see
+    /// [`Intent::InitTerms`].  A [`PriceGridAccount`] is self-certifying
+    /// ([`PriceGridAccount::recomputed_grid_id`]), so the digest this intent
+    /// carries is exactly the binding: a buffer whose bytes do not produce
+    /// `grid` is refused before anything is created.
+    InitPriceGrid { realm: RealmHash, grid: Hash32 },
+    /// Bring one immutable terms artifact into existence.
+    ///
+    /// The terms body is 1,656 bytes and [`MAX_INTENT_BYTES`] is 302; that is
+    /// **by design**, not a limitation being worked around.  The intent budget
+    /// is the width of the widest *transition*, and an initialization that
+    /// carried a whole account would make every instruction's wire format as
+    /// wide as the largest artifact anyone might ever found.  So the body
+    /// rides an evidence-buffer account and the intent carries the digest
+    /// binding, exactly as [`Intent::InitPriceGrid`] does.  A
+    /// [`TermsAccount`] is self-certifying too
+    /// ([`TermsAccount::recomputed_terms_digest`]), so "the buffer is the
+    /// terms this intent names" is a recomputation and not a trust.
+    InitTerms { realm: RealmHash, terms: Hash32 },
+    /// Bring one order page of a frozen-shape page set into existence.
+    ///
+    /// The page set's geometry is a decision made once for the whole epoch, so
+    /// `page_count` travels with every page rather than being read off the
+    /// epoch: an open epoch's own `page_count` is zero until the set freezes
+    /// (see [`EpochAccount::page_count`]), which is precisely the window in
+    /// which pages are created.  `page_index` is the page's position, and
+    /// [`stream::init_page`] derives everything else — the base order id, the
+    /// empty range, the digest over sixteen canonical padding slots.
+    InitOrderPage {
+        market: MarketId,
+        epoch: EpochId,
+        page_index: u16,
+        page_count: u16,
+    },
+    /// Credit one position's internal trading cash.
+    ///
+    /// The internal-ledger half of a deposit, and **only** that half.  Real
+    /// value arrival is the collateral leg — a Token-2022 `TransferChecked`
+    /// into the market's Hoard token account — which is constructed in
+    /// `clutch-sbf`'s token module and wired by no instruction.  Until it is,
+    /// an `Endow` credits cash that nothing backs.  That is exactly what the
+    /// bring-up fixtures already do when they write an opening `cash_atoms`
+    /// into a genesis account; making it an instruction does not create the
+    /// hole, it makes the hole **auditable** — a transaction with a signer, a
+    /// replay sequence, and a log line, instead of a number that appeared in a
+    /// fixture.
+    Endow {
+        market: MarketId,
+        owner: OwnerId,
+        amount: u64,
+    },
 }
 
 /// The placement admissibility rule, shared by the encoder and the decoder.
@@ -4213,6 +4370,59 @@ fn check_placement(slot: &OrderSlot) -> Result<()> {
     }
 }
 
+/// The Realm-initialization admissibility rule, shared by both directions.
+///
+/// V1 freezes a Realm's outcome width at exactly [`MAX_OUTCOMES`], so an
+/// intent claiming any other width names a Realm [`RealmAccount::validate`]
+/// would refuse — better to refuse it on the wire than to create an account
+/// that cannot decode.  A zero `profile_version` is the same kind of fault in
+/// the other field.
+fn check_realm_shape(profile: ProfileHash, max_outcomes: u8, profile_version: u8) -> Result<()> {
+    check_hash(profile)?;
+    if max_outcomes as usize != MAX_OUTCOMES {
+        return Err(CodecError::InvalidCount);
+    }
+    if profile_version == 0 {
+        return Err(CodecError::InvalidEnum);
+    }
+    Ok(())
+}
+
+/// The Profile-initialization admissibility rule, shared by both directions.
+///
+/// A zero collateral-policy digest is the *unfrozen* sentinel
+/// ([`ProfileAccount::collateral_policy_digest`]), and this intent exists to
+/// freeze one, so the zero is refused as an identity rather than accepted as a
+/// value.  The subfield schema version is inside the parent preimage
+/// ([`collateral::ParentProfile`]) and a zero names no schema.
+fn check_profile_shape(
+    realm: RealmHash,
+    collateral_policy_digest: Hash32,
+    subfield_schema_version: u16,
+    profile_version: u8,
+) -> Result<()> {
+    check_hash(realm)?;
+    check_hash(collateral_policy_digest)?;
+    if subfield_schema_version == 0 || profile_version == 0 {
+        return Err(CodecError::InvalidEnum);
+    }
+    Ok(())
+}
+
+/// The page-creation geometry rule, shared by both directions.
+///
+/// A page set is at most [`MAX_ORDER_PAGES`] pages and at least one, and a
+/// page's index is a position inside its own set.  Both are refusals on the
+/// wire because both are facts about a geometry that is chosen once: a page
+/// created outside its set's declared width could never be closed by
+/// [`verify_page_set`].
+fn check_page_geometry(page_index: u16, page_count: u16) -> Result<()> {
+    if page_count == 0 || page_count as usize > MAX_ORDER_PAGES || page_index >= page_count {
+        return Err(CodecError::InvalidCount);
+    }
+    Ok(())
+}
+
 const CREATE_TAG: u8 = 1;
 const SPLIT_TAG: u8 = 2;
 const MERGE_TAG: u8 = 3;
@@ -4222,6 +4432,12 @@ const FEED_ADVANCE_TAG: u8 = 6;
 const PLACE_TAG: u8 = 7;
 const CANCEL_TAG: u8 = 8;
 const SETTLE_TAG: u8 = 9;
+const INIT_REALM_TAG: u8 = 10;
+const INIT_PROFILE_TAG: u8 = 11;
+const INIT_PRICE_GRID_TAG: u8 = 12;
+const INIT_TERMS_TAG: u8 = 13;
+const INIT_ORDER_PAGE_TAG: u8 = 14;
+const ENDOW_TAG: u8 = 15;
 
 impl Intent {
     /// Return the exact encoded byte length for this intent.
@@ -4240,6 +4456,11 @@ impl Intent {
             },
             Self::CancelOrder { .. } => 2 + 32 + 32 + 32 + 32 + 8,
             Self::SettlePage { .. } => 2 + 32 + 32 + 2,
+            Self::InitRealm { .. } => 2 + 32 + 8 + 1 + 1,
+            Self::InitProfile { .. } => 2 + 32 + 32 + 2 + 1,
+            Self::InitPriceGrid { .. } | Self::InitTerms { .. } => 2 + 32 + 32,
+            Self::InitOrderPage { .. } => 2 + 32 + 32 + 2 + 2,
+            Self::Endow { .. } => 2 + 32 + 32 + 8,
         }
     }
     /// Validate and encode into a caller-provided buffer.
@@ -4400,6 +4621,89 @@ impl Intent {
                 w.hash(*epoch)?;
                 w.u16(*page_index)?
             }
+            Self::InitRealm {
+                profile,
+                realm_nonce,
+                max_outcomes,
+                profile_version,
+            } => {
+                check_realm_shape(*profile, *max_outcomes, *profile_version)?;
+                put_header(&mut w, INIT_REALM_TAG, INTENT_VERSION)?;
+                w.hash(*profile)?;
+                w.u64(*realm_nonce)?;
+                w.u8(*max_outcomes)?;
+                w.u8(*profile_version)?
+            }
+            Self::InitProfile {
+                realm,
+                collateral_policy_digest,
+                subfield_schema_version,
+                profile_version,
+            } => {
+                check_profile_shape(
+                    *realm,
+                    *collateral_policy_digest,
+                    *subfield_schema_version,
+                    *profile_version,
+                )?;
+                put_header(&mut w, INIT_PROFILE_TAG, INTENT_VERSION)?;
+                w.hash(*realm)?;
+                w.hash(*collateral_policy_digest)?;
+                w.u16(*subfield_schema_version)?;
+                w.u8(*profile_version)?
+            }
+            Self::InitPriceGrid {
+                realm,
+                grid: artifact,
+            }
+            | Self::InitTerms {
+                realm,
+                terms: artifact,
+            } => {
+                check_hash(*realm)?;
+                check_hash(*artifact)?;
+                put_header(
+                    &mut w,
+                    if matches!(self, Self::InitPriceGrid { .. }) {
+                        INIT_PRICE_GRID_TAG
+                    } else {
+                        INIT_TERMS_TAG
+                    },
+                    INTENT_VERSION,
+                )?;
+                w.hash(*realm)?;
+                w.hash(*artifact)?
+            }
+            Self::InitOrderPage {
+                market,
+                epoch,
+                page_index,
+                page_count,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                check_page_geometry(*page_index, *page_count)?;
+                put_header(&mut w, INIT_ORDER_PAGE_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.u16(*page_index)?;
+                w.u16(*page_count)?
+            }
+            Self::Endow {
+                market,
+                owner,
+                amount,
+            } => {
+                check_hash(*market)?;
+                check_hash(*owner)?;
+                if *amount == 0 {
+                    return Err(CodecError::ZeroValue);
+                };
+                put_header(&mut w, ENDOW_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*owner)?;
+                w.u64(*amount)?
+            }
         };
         Ok(w.at)
     }
@@ -4552,6 +4856,89 @@ impl Intent {
                 };
                 r.done()?;
                 Ok(v)
+            }
+            INIT_REALM_TAG => {
+                let profile = r.hash()?;
+                let realm_nonce = r.u64()?;
+                let max_outcomes = r.u8()?;
+                let profile_version = r.u8()?;
+                r.done()?;
+                check_realm_shape(profile, max_outcomes, profile_version)?;
+                Ok(Self::InitRealm {
+                    profile,
+                    realm_nonce,
+                    max_outcomes,
+                    profile_version,
+                })
+            }
+            INIT_PROFILE_TAG => {
+                let realm = r.hash()?;
+                let collateral_policy_digest = r.hash()?;
+                let subfield_schema_version = r.u16()?;
+                let profile_version = r.u8()?;
+                r.done()?;
+                check_profile_shape(
+                    realm,
+                    collateral_policy_digest,
+                    subfield_schema_version,
+                    profile_version,
+                )?;
+                Ok(Self::InitProfile {
+                    realm,
+                    collateral_policy_digest,
+                    subfield_schema_version,
+                    profile_version,
+                })
+            }
+            INIT_PRICE_GRID_TAG | INIT_TERMS_TAG => {
+                let realm = r.hash()?;
+                let artifact = r.hash()?;
+                r.done()?;
+                check_hash(realm)?;
+                check_hash(artifact)?;
+                Ok(if tag == INIT_PRICE_GRID_TAG {
+                    Self::InitPriceGrid {
+                        realm,
+                        grid: artifact,
+                    }
+                } else {
+                    Self::InitTerms {
+                        realm,
+                        terms: artifact,
+                    }
+                })
+            }
+            INIT_ORDER_PAGE_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let page_index = r.u16()?;
+                let page_count = r.u16()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                check_page_geometry(page_index, page_count)?;
+                Ok(Self::InitOrderPage {
+                    market,
+                    epoch,
+                    page_index,
+                    page_count,
+                })
+            }
+            ENDOW_TAG => {
+                let market = r.hash()?;
+                let owner = r.hash()?;
+                let amount = r.u64()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(owner)?;
+                if amount == 0 {
+                    return Err(CodecError::ZeroValue);
+                };
+                Ok(Self::Endow {
+                    market,
+                    owner,
+                    amount,
+                })
             }
             _ => Err(CodecError::WrongTag),
         }
@@ -8545,6 +8932,37 @@ mod tests {
                 epoch,
                 page_index: 0,
             },
+            Intent::InitRealm {
+                profile: h(3),
+                realm_nonce: 5,
+                max_outcomes: MAX_OUTCOMES as u8,
+                profile_version: 2,
+            },
+            Intent::InitProfile {
+                realm: h(4),
+                collateral_policy_digest: h(5),
+                subfield_schema_version: 1,
+                profile_version: 2,
+            },
+            Intent::InitPriceGrid {
+                realm: h(4),
+                grid: h(6),
+            },
+            Intent::InitTerms {
+                realm: h(4),
+                terms: h(7),
+            },
+            Intent::InitOrderPage {
+                market,
+                epoch,
+                page_index: 1,
+                page_count: 4,
+            },
+            Intent::Endow {
+                market,
+                owner: h(8),
+                amount: 12,
+            },
         ];
         assert_eq!(INTENT_VERSION, 2);
         assert_eq!(INTENT_VERSION_V1, 1);
@@ -8626,5 +9044,267 @@ mod tests {
             Err(CodecError::NonCanonicalPadding)
         );
         agrees("dirty retirement padding", &dirty);
+    }
+
+    /* --------------------------------------------------------------------
+     * The genesis intents.
+     *
+     * Six intents that bring accounts into existence, plus the one that
+     * credits a position's opening cash.  Each is pinned at its exact width
+     * and round-tripped, then every field that can carry a lie is made to
+     * carry one.
+     * ----------------------------------------------------------------- */
+
+    /// Every genesis intent, at the values the width test pins.
+    fn genesis_intents() -> [Intent; 6] {
+        let market = h(1);
+        [
+            Intent::InitRealm {
+                profile: h(3),
+                realm_nonce: 5,
+                max_outcomes: MAX_OUTCOMES as u8,
+                profile_version: 2,
+            },
+            Intent::InitProfile {
+                realm: h(4),
+                collateral_policy_digest: h(5),
+                subfield_schema_version: 1,
+                profile_version: 2,
+            },
+            Intent::InitPriceGrid {
+                realm: h(4),
+                grid: h(6),
+            },
+            Intent::InitTerms {
+                realm: h(4),
+                terms: h(7),
+            },
+            Intent::InitOrderPage {
+                market,
+                epoch: canonical_epoch_id(market, 4),
+                page_index: 1,
+                page_count: 4,
+            },
+            Intent::Endow {
+                market,
+                owner: h(8),
+                amount: 12,
+            },
+        ]
+    }
+
+    #[test]
+    fn genesis_intents_round_trip_at_their_exact_widths() {
+        let widths = [44_usize, 69, 66, 66, 70, 74];
+        let tags = [
+            INIT_REALM_TAG,
+            INIT_PROFILE_TAG,
+            INIT_PRICE_GRID_TAG,
+            INIT_TERMS_TAG,
+            INIT_ORDER_PAGE_TAG,
+            ENDOW_TAG,
+        ];
+        let intents = genesis_intents();
+        let mut i = 0;
+        while i < intents.len() {
+            let mut b = [0; MAX_INTENT_BYTES];
+            let n = intents[i].encode(&mut b).unwrap();
+            assert_eq!(n, widths[i], "width of intent {i}");
+            assert_eq!(n, intents[i].encoded_len());
+            assert_eq!(b[0], tags[i]);
+            assert_eq!(b[1], INTENT_VERSION);
+            assert_eq!(Intent::decode(&b[..n]), Ok(intents[i]));
+            assert_eq!(Intent::decode(&b[..n - 1]), Err(CodecError::Truncated));
+            let mut longer = [0; MAX_INTENT_BYTES + 1];
+            longer[..n].copy_from_slice(&b[..n]);
+            assert_eq!(
+                Intent::decode(&longer[..n + 1]),
+                Err(CodecError::TrailingBytes)
+            );
+            let mut small = [0; 8];
+            assert_eq!(
+                intents[i].encode(&mut small),
+                Err(CodecError::OutputTooSmall)
+            );
+            i += 1;
+        }
+        /* Not one of them widens the wire: the budget is still exactly a
+         * portfolio placement, which is what makes `MAX_INTENT_BYTES` a
+         * measurement rather than a reservation. */
+        let mut widest = 0;
+        let mut i = 0;
+        while i < widths.len() {
+            if widths[i] > widest {
+                widest = widths[i];
+            }
+            i += 1;
+        }
+        assert!(widest < MAX_INTENT_BYTES);
+        assert_eq!(MAX_INTENT_BYTES, 302);
+    }
+
+    #[test]
+    fn genesis_intents_refuse_every_hostile_field() {
+        let refused: [(&str, Intent, CodecError); 12] = [
+            (
+                "a Realm with no Profile",
+                Intent::InitRealm {
+                    profile: Hash32::ZERO,
+                    realm_nonce: 0,
+                    max_outcomes: MAX_OUTCOMES as u8,
+                    profile_version: 1,
+                },
+                CodecError::ZeroIdentity,
+            ),
+            (
+                "a Realm narrower than V1 admits",
+                Intent::InitRealm {
+                    profile: h(3),
+                    realm_nonce: 0,
+                    max_outcomes: 8,
+                    profile_version: 1,
+                },
+                CodecError::InvalidCount,
+            ),
+            (
+                "a Realm expecting Profile version zero",
+                Intent::InitRealm {
+                    profile: h(3),
+                    realm_nonce: 0,
+                    max_outcomes: MAX_OUTCOMES as u8,
+                    profile_version: 0,
+                },
+                CodecError::InvalidEnum,
+            ),
+            (
+                "a Profile freezing the unfrozen sentinel",
+                Intent::InitProfile {
+                    realm: h(4),
+                    collateral_policy_digest: Hash32::ZERO,
+                    subfield_schema_version: 1,
+                    profile_version: 1,
+                },
+                CodecError::ZeroIdentity,
+            ),
+            (
+                "a Profile naming no subfield schema",
+                Intent::InitProfile {
+                    realm: h(4),
+                    collateral_policy_digest: h(5),
+                    subfield_schema_version: 0,
+                    profile_version: 1,
+                },
+                CodecError::InvalidEnum,
+            ),
+            (
+                "a grid under no Realm",
+                Intent::InitPriceGrid {
+                    realm: Hash32::ZERO,
+                    grid: h(6),
+                },
+                CodecError::ZeroIdentity,
+            ),
+            (
+                "a grid that is not a digest",
+                Intent::InitPriceGrid {
+                    realm: h(4),
+                    grid: Hash32::ZERO,
+                },
+                CodecError::ZeroIdentity,
+            ),
+            (
+                "terms that are not a digest",
+                Intent::InitTerms {
+                    realm: h(4),
+                    terms: Hash32::ZERO,
+                },
+                CodecError::ZeroIdentity,
+            ),
+            (
+                "a page set with no pages",
+                Intent::InitOrderPage {
+                    market: h(1),
+                    epoch: canonical_epoch_id(h(1), 0),
+                    page_index: 0,
+                    page_count: 0,
+                },
+                CodecError::InvalidCount,
+            ),
+            (
+                "a page set wider than one book",
+                Intent::InitOrderPage {
+                    market: h(1),
+                    epoch: canonical_epoch_id(h(1), 0),
+                    page_index: 0,
+                    page_count: MAX_ORDER_PAGES as u16 + 1,
+                },
+                CodecError::InvalidCount,
+            ),
+            (
+                "a page outside its own set",
+                Intent::InitOrderPage {
+                    market: h(1),
+                    epoch: canonical_epoch_id(h(1), 0),
+                    page_index: 4,
+                    page_count: 4,
+                },
+                CodecError::InvalidCount,
+            ),
+            (
+                "an endowment of nothing",
+                Intent::Endow {
+                    market: h(1),
+                    owner: h(8),
+                    amount: 0,
+                },
+                CodecError::ZeroValue,
+            ),
+        ];
+        let mut i = 0;
+        while i < refused.len() {
+            let (label, intent, error) = refused[i];
+            let mut b = [0; MAX_INTENT_BYTES];
+            assert_eq!(intent.encode(&mut b), Err(error), "{label}");
+            i += 1;
+        }
+    }
+
+    /// The decoder is not the encoder run backwards: bytes that never came
+    /// from `encode` must hit the same refusals.
+    #[test]
+    fn genesis_intent_bytes_refuse_hostile_wire_forms() {
+        let intents = genesis_intents();
+        // A zeroed identity smuggled straight into the bytes.
+        let mut i = 0;
+        while i < intents.len() {
+            let mut b = [0; MAX_INTENT_BYTES];
+            let n = intents[i].encode(&mut b).unwrap();
+            b[2..2 + HASH_BYTES].fill(0);
+            assert_eq!(Intent::decode(&b[..n]), Err(CodecError::ZeroIdentity));
+            i += 1;
+        }
+        // A page index at its own count, written past the encoder.
+        let mut b = [0; MAX_INTENT_BYTES];
+        let page = Intent::InitOrderPage {
+            market: h(1),
+            epoch: canonical_epoch_id(h(1), 0),
+            page_index: 0,
+            page_count: 1,
+        };
+        let n = page.encode(&mut b).unwrap();
+        b[66..68].copy_from_slice(&1_u16.to_le_bytes());
+        assert_eq!(Intent::decode(&b[..n]), Err(CodecError::InvalidCount));
+        // An endowment of zero, written past the encoder.
+        let endow = Intent::Endow {
+            market: h(1),
+            owner: h(8),
+            amount: 1,
+        };
+        let n = endow.encode(&mut b).unwrap();
+        b[66..74].fill(0);
+        assert_eq!(Intent::decode(&b[..n]), Err(CodecError::ZeroValue));
+        // A tag past the last one this version defines.
+        b[0] = ENDOW_TAG + 1;
+        assert_eq!(Intent::decode(&b[..n]), Err(CodecError::WrongTag));
     }
 }

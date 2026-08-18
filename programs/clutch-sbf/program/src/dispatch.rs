@@ -40,7 +40,9 @@
 
 use crate::accounts::Outcome;
 use crate::error::ClutchError;
-use crate::instructions::{market_init, merge_materialize, observe_resolve, orders_batch, split};
+use crate::instructions::{
+    genesis, market_init, merge_materialize, observe_resolve, orders_batch, split,
+};
 use clutch_solana_layout::Intent;
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
@@ -84,6 +86,12 @@ pub fn process(
         | Action::Layout(Intent::SettlePage { .. }) => {
             orders_batch::process(program_id, accounts, &request)
         }
+        Action::Layout(Intent::InitRealm { .. })
+        | Action::Layout(Intent::InitProfile { .. })
+        | Action::Layout(Intent::InitPriceGrid { .. })
+        | Action::Layout(Intent::InitTerms { .. })
+        | Action::Layout(Intent::InitOrderPage { .. })
+        | Action::Layout(Intent::Endow { .. }) => genesis::process(program_id, accounts, &request),
     }
 }
 

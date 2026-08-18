@@ -13,22 +13,30 @@
 //!
 //! | module | intents and actions |
 //! | --- | --- |
+//! | [`genesis`] | `Intent::InitRealm`, `Intent::InitProfile`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::Endow` |
 //! | [`split`] | `Intent::Split` |
 //! | [`merge_materialize`] | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` |
 //! | [`market_init`] | `Intent::CreateMarket` |
 //! | [`observe_resolve`] | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` |
 //! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SettlePage` |
 //!
-//! Implemented: split, merge_materialize (Merge/Materialize/Dematerialize),
-//! market_init, observe_resolve (FeedAdvance/Resolve/RedeemInternal), and
-//! orders_batch's PlaceOrder and CancelOrder (page-v4 tombstone retirement).
+//! Implemented: genesis (the five account-creating initializers plus `Endow`),
+//! split, merge_materialize (Merge/Materialize/Dematerialize), market_init,
+//! observe_resolve (FeedAdvance/Resolve/RedeemInternal), and orders_batch's
+//! PlaceOrder and CancelOrder (page-v4 tombstone retirement).
 //! SettlePage refuses with a recorded finding (the relation does not fit an
 //! SBF frame and the page-to-book projection has not landed).  A stub must read
 //! no account, write no byte, and return a refusal.  A stub that validated
 //! accounts and *then* refused would be worse, not better — it would suggest
 //! that the account list it validated is the right one, and choosing that list
 //! is precisely the decision the owning lane has to make.
+//!
+//! [`genesis`] is the only module that creates accounts.  Every other module
+//! writes over accounts that arrived already created and correctly sized, and
+//! that split is deliberate: the account-creation CPI, the rent computation
+//! and the `invoke_signed` seed plumbing are one concern with one owner.
 
+pub mod genesis;
 pub mod market_init;
 pub mod merge_materialize;
 pub mod observe_resolve;

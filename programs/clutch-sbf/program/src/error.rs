@@ -13,6 +13,7 @@
 //! | `0x0018..=0x001e` | the token plane's appends ([`ClutchError::WrongTokenProgram`] .. [`ClutchError::ShadowSupplyMismatch`]) |
 //! | `0x0040..=0x004f` | market-initialization appends ([`ClutchError::AlreadyInitialized`] .. [`ClutchError::TermsBindingMismatch`]) |
 //! | `0x0050..=0x005f` | the evidence gate's numeric projection (see below) |
+//! | `0x0070..=0x007f` | the genesis plane's appends ([`ClutchError::WrongSystemProgram`] .. [`ClutchError::EvidenceBufferMismatch`]) |
 //! | `0x1000 + n` | [`clutch_solana_layout::CodecError`] variant `n` |
 //! | `0x2000 + n` | [`clutch_kernel::Error`] variant `n` |
 //! | `0x3000 + n` | [`clutch_solana_reference::Error`] variant `n` |
@@ -25,6 +26,13 @@
 //! differential, which compares typed values — because minting a numeric
 //! identifier per sub-reason would be a parallel truth, not a diagnostic.
 //! `0x005b-0x005f` stay unallocated.
+//!
+//! The `0x0070-0x007f` block belongs to [`crate::instructions::genesis`], the
+//! first family that creates accounts rather than writing over pre-created
+//! ones.  Four of its sixteen numbers are allocated and `0x0074-0x007f` stay
+//! free.  `0x0060-0x006f` is deliberately skipped: leaving a gap between the
+//! evidence block and the genesis block costs nothing and keeps a later
+//! evidence append from having to jump over an unrelated family.
 
 use clutch_kernel::Error as KernelError;
 use clutch_solana_layout::CodecError;
@@ -166,6 +174,38 @@ pub enum ClutchError {
     /// The immutable terms artifact does not bind this market, or the
     /// market's stored collateral cap is not the terms' digest-committed cap.
     TermsBindingMismatch = 0x0043,
+    /// The account at the system-program role is not the system program.
+    ///
+    /// The system program's address is the all-zero key, which is also what an
+    /// uninitialized account slot looks like, so this check reads the
+    /// executable bit too: an account that cannot be invoked is not the system
+    /// program regardless of what its key says.  Exactly the reading
+    /// [`ClutchError::WrongTokenProgram`] already applies to the token
+    /// program, for exactly the same reason.
+    WrongSystemProgram = 0x0070,
+    /// The account at the rent-sysvar role is not the rent sysvar.
+    ///
+    /// Raised for a wrong key, a wrong data length, or a writable
+    /// declaration.  The genesis plane reads rent parameters off the chain
+    /// rather than pinning them as constants, so this account is evidence and
+    /// is checked like evidence.
+    WrongRentSysvar = 0x0071,
+    /// The `CreateAccount` cross-program invocation refused.
+    ///
+    /// Most often an unfunded payer or an address the runtime already knows,
+    /// and the system program's own error is not recoverable through
+    /// `ProgramError::Custom`; the transaction log carries the inner
+    /// instruction's error alongside this one.  Deliberately distinct from
+    /// [`ClutchError::AlreadyInitialized`], which fires *before* any CPI.
+    AccountCreationFailed = 0x0072,
+    /// A presented artifact buffer is not the artifact the intent names.
+    ///
+    /// The evidence-buffer pattern's refusal: a terms body or a price-grid
+    /// body whose recomputed digest is not the one the intent declared, or
+    /// whose Realm is not the Realm the account plane authenticated.  It is a
+    /// *recomputation* failure and not a decode failure — a perfectly
+    /// well-formed artifact for some other market earns this code.
+    EvidenceBufferMismatch = 0x0073,
 }
 
 impl From<ClutchError> for ProgramError {
@@ -223,6 +263,7 @@ pub const fn kernel_code(error: KernelError) -> u32 {
         KernelError::NotResolved => 12,
         KernelError::InvariantViolation => 13,
         KernelError::RemainderRequired => 14,
+        KernelError::WrongResolutionMode => 15,
         // See the note in `codec_code`.
         _ => 0xfff,
     };

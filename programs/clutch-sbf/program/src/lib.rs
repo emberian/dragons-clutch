@@ -25,8 +25,15 @@
 //! tombstone retirement) are implemented with host tests only — no reference
 //! oracle and no SVM leg.  `Resolve` and `RedeemInternal` are evidence-gated
 //! exactly as in the offline reference adapter, and `CreateMarket` is a
-//! permissionless founding write over pre-created accounts.  The PDA seed
-//! schema in [`seeds`] is a **proposal**, not a frozen ABI.
+//! permissionless founding transition that creates the outcome mints and
+//! the Hoard token account via CPI and writes the founding plane; the
+//! genesis module creates the remaining accounts via system CPI.
+//! [`instructions::genesis`] is the one family that **creates** accounts,
+//! through a real system-program CPI: it too has host tests only, its CPI has
+//! never run on a bank, and its `Endow` credits internal position cash that no
+//! collateral backs — the internal-ledger half of a deposit whose value leg is
+//! still unwired.  The PDA seed schema in [`seeds`] is a **proposal**, not a
+//! frozen ABI.
 //!
 //! ## Layering
 //!

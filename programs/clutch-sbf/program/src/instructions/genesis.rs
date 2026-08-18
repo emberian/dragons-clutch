@@ -1,0 +1,1911 @@
+//! The genesis plane: the instructions that bring accounts into existence.
+//!
+//! Every other family in this program writes over accounts that arrived
+//! already created, program-owned, rent-funded and correctly sized — the
+//! arrangement [`super::market_init`] records as "account creation is out of
+//! scope this wave", and deferred check 2 of
+//! `docs/implementation/SBF_BRINGUP.md` ("the
+//! `system_instruction::create_account` CPI, the rent-exemption computation,
+//! and the `invoke_signed` seed plumbing are unwritten and untested").  This
+//! module is that half.  It creates five of the fifteen protocol accounts
+//! through a real system-program CPI, and it carries one transition that
+//! creates nothing: [`Intent::Endow`], the internal-ledger half of a deposit.
+//!
+//! | intent | creates | accounts |
+//! | --- | --- | ---: |
+//! | [`Intent::InitRealm`] | [`RealmAccount`] | 5 |
+//! | [`Intent::InitProfile`] | [`ProfileAccount`], policy frozen | 6 |
+//! | [`Intent::InitPriceGrid`] | [`clutch_solana_layout::PriceGridAccount`] | 6 |
+//! | [`Intent::InitTerms`] | [`clutch_solana_layout::TermsAccount`] | 7 |
+//! | [`Intent::InitOrderPage`] | one order page | 6 |
+//! | [`Intent::Endow`] | nothing — credits position cash | 4 |
+//!
+//! ## `Endow` credits cash that nothing backs, and says so
+//!
+//! `PROJECT.md` §10 item 2 is a *prepay*: value arrives, and the position can
+//! trade.  Value arrival is a Token-2022 `TransferChecked` into the market's
+//! Hoard token account — [`crate::token::transfer_checked`] constructs exactly
+//! that CPI and **no instruction wires it**
+//! (`docs/implementation/TOKEN2022_PLAN.md`: "constructed, not wired").  So
+//! `Endow` moves the internal ledger and nothing else: after it,
+//! [`PositionAccount::cash_atoms`] is larger and no collateral has moved
+//! anywhere.
+//!
+//! That is not a new hole.  It is the *existing* hole, made auditable.  The
+//! bring-up harness already conjures opening cash — its genesis fixture writes
+//! a `cash_atoms` into the position account before any transaction runs, and
+//! `LIFECYCLE_WALK.md` names that as "the sharpest gap in the walk".  A number
+//! that appears in a fixture has no signer, no sequence, no log line and no
+//! ceiling.  An `Endow` has all four.  Replacing the conjuring with an
+//! instruction is worth doing precisely *because* it does not fix the backing:
+//! the uncollateralized credit becomes a transaction someone signed, which is
+//! the shape the collateral leg will later attach to.
+//!
+//! The one ceiling that is real is stated as what it is.  `Endow` refuses when
+//! the resulting `cash_atoms` would exceed [`MarketAccount::collateral_cap`],
+//! which is a **necessary and not sufficient** condition: the market's
+//! immutable cap bounds all collateral the market may ever hold, so it bounds
+//! a fortiori any one position's claim on it.  The sufficient check — the sum
+//! of every position's cash plus the escrowed collateral — needs a market-wide
+//! cash aggregate that no account in the frozen layout carries, and inventing
+//! one here would be inventing an ABI.  That residue is named, not closed.
+//!
+//! The cap is deliberately *not* checked against
+//! [`clutch_solana_layout::HoardAccount::collateral_atoms`]: the Hoard's
+//! number is escrowed
+//! collateral backing complete sets, which only `Split` raises, and cash is
+//! the un-escrowed balance sitting beside it.  Adding the two would be
+//! double-counting the same atoms across the seam they are defined by.
+//!
+//! ## Authority — **PROPOSED**, and it is the same proposal `market_init` made
+//!
+//! Creation here is **permissionless**: the account at index [`IX_PAYER`]
+//! signs and pays, and nothing else is privileged.  The frozen layout carries
+//! no authority field for a Realm, a Profile, a grid, a terms artifact or a
+//! page, so a gate here would be an invented ABI — the argument
+//! [`super::market_init`] sets out at length, unchanged.  What bounds the
+//! plane instead is that **every address is content- or nonce-derived**: a
+//! Realm's identity is a function of its Profile and a nonce, a Profile's is a
+//! function of its collateral policy, a grid's and a terms artifact's are
+//! digests of their own bodies, and a page's is its position in its epoch.  So
+//! a second caller can create the same account first, and cannot create a
+//! *different* account at that address.  Naming that residue is not fixing it;
+//! it is the same first-come-address residue market creation has.
+//!
+//! `Endow` is not permissionless: the signer must be the position's own owner.
+//! Anyone may therefore credit **their own** position with unbacked cash, and
+//! that is the honest statement of what an unwired collateral leg means.
+//!
+//! ## Where the bytes come from: the evidence-buffer pattern
+//!
+//! Two of the five artifacts do not fit an intent, by design.  A
+//! [`clutch_solana_layout::TermsAccount`] is 1,656 bytes and a
+//! [`clutch_solana_layout::PriceGridAccount`] is 589;
+//! `MAX_INTENT_BYTES` is 302, and it is 302 because that is the widest
+//! *transition*, not because 302 was convenient.  Widening the wire so an
+//! initialization could carry a whole account would make every instruction's
+//! envelope as wide as the largest artifact anyone might found.
+//!
+//! So the body rides an **evidence buffer**: a read-only account holding
+//! exactly the artifact's encoded bytes, presented by the caller from anywhere
+//! it likes, and authenticated by *recomputation* rather than by address —
+//! precisely the pattern `market_init`'s `IX_POLICY` established for the 266
+//! collateral-policy bytes.  Both artifacts are self-certifying
+//! ([`clutch_solana_layout::TermsAccount::recomputed_terms_digest`],
+//! [`clutch_solana_layout::PriceGridAccount::recomputed_grid_id`]), so
+//! decoding a buffer already
+//! proves its digest is its own, and the intent's declared digest is compared
+//! against that.  A buffer that decodes but names another Realm, another
+//! grid, or another bump earns [`ClutchError::EvidenceBufferMismatch`].
+//!
+//! **The buffer is copied verbatim.**  It is not decoded into a struct and
+//! re-encoded, for two reasons: a terms value plus its encode buffer
+//! is 3.3 KiB on one 4 KiB frame, and a verbatim copy makes "what did the
+//! account become" answerable by byte comparison rather than by trusting a
+//! round trip.  The consequence is that the caller must present the buffer
+//! carrying the **derived PDA bump** already — the program checks it
+//! ([`ClutchError::WrongBump`]) rather than patching it at an offset, because
+//! an offset written here would be a second transcription of a layout the
+//! layout crate owns.
+//!
+//! ## Rent is read from the chain, not pinned here
+//!
+//! `CreateAccount` takes a lamport figure and something has to decide it.
+//! This module reads the **rent sysvar account** — 17 bytes: rate, exemption
+//! threshold, burn percent — and computes
+//! `((ACCOUNT_STORAGE_OVERHEAD + space) * rate) as f64 * threshold`, which is
+//! `solana_rent::Rent::minimum_balance` transcribed.  Pinning the mainnet
+//! defaults as constants would have been shorter and would have made this
+//! program's idea of rent a parallel truth to the runtime's.  The sysvar's key
+//! and length are checked ([`ClutchError::WrongRentSysvar`]) because it is
+//! evidence like any other account.
+//!
+//! The transcription is named as a transcription: the formula lives in
+//! `solana-rent`, this crate does not depend on that crate (adding a
+//! dependency to reach one three-line function is a worse trade than restating
+//! it under a citation), and `the_rent_formula_matches_the_runtimes` below
+//! pins the result against the published defaults.
+//!
+//! ## What is *not* here, and who owns it
+//!
+//! * **No `InitEpoch`.**  [`Intent::InitOrderPage`] requires an epoch account
+//!   to already exist, which on a fresh chain nothing creates.  The epoch is a
+//!   ten-identity account whose freeze semantics belong with the order-set
+//!   commitment work (gap row 14), and creating it from a bring-up genesis
+//!   lane would fix a wire format for a freeze this program cannot yet
+//!   perform.  Named, not done.
+//! * **No `InitClearWork` and no `InitCandidateFeed`.**  The two clearing
+//!   accounts landed as codecs this wave
+//!   ([`clutch_solana_layout::clearing`]) and are consumed by nothing.  The
+//!   checkpoint is also the one account in the inventory that a single
+//!   system-program CPI **cannot** allocate — 48,750 bytes against the
+//!   runtime's 10,240-byte per-instruction growth ceiling — so its creation is
+//!   a five-instruction sequence or a top-level client-signed
+//!   `CreateAccount`, analyzed in `docs/implementation/SOLANA_LAYOUT.md`.
+//! * **No reference oracle.**  `clutch_solana_reference::apply` refuses every
+//!   intent in this module with `UnsupportedIntent`, exactly as it refuses
+//!   `PlaceOrder` and `CancelOrder` (gap row 16).  So the SVM differential
+//!   must not be pointed at this family: a comparison would be this program
+//!   agreeing with a refusal.  The host tests below use the **layout codecs**
+//!   as the oracle instead — every expected account is produced by
+//!   `clutch_solana_layout`'s own encoder and compared byte for byte, and no
+//!   expected byte is typed by hand.
+//!
+//! ## Refusal codes
+//!
+//! | check | emitted | code |
+//! | --- | --- | --- |
+//! | a creation target already exists | [`ClutchError::AlreadyInitialized`] | `0x0040` |
+//! | the system-program role is not the system program | [`ClutchError::WrongSystemProgram`] | `0x0070` |
+//! | the rent-sysvar role is not the rent sysvar | [`ClutchError::WrongRentSysvar`] | `0x0071` |
+//! | the `CreateAccount` CPI refused, or created nothing | [`ClutchError::AccountCreationFailed`] | `0x0072` |
+//! | an evidence buffer is not the artifact the intent names | [`ClutchError::EvidenceBufferMismatch`] | `0x0073` |
+//! | an endowment would pass the market's immutable cap | [`ClutchError::CollateralCap`] | `0x0012` |
+//! | every other check | the [`ClutchError`] the check already has | `0x0001..=0x0017` |
+//!
+//! ## Frame discipline
+//!
+//! No function here holds a terms artifact, a price grid, or an order page by
+//! value: artifacts are read through [`crate::accounts`]'s facts
+//! readers and copied as bytes, and the page is written by the layout crate's
+//! streaming writer [`stream::init_page`].  The largest value on any frame in
+//! this module is a [`RealmAccount`] and its 70-byte encode buffer.  As
+//! everywhere else in this crate that is **measured**: `cargo-build-sbf` emits
+//! no frame diagnostic for any `clutch_sbf` function.
+
+use crate::accounts::{
+    self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
+};
+use crate::error::{ClutchError, Refusal};
+use crate::seeds;
+use clutch_solana_layout::{
+    account_len, canonical_realm_id, collateral, stream, Hash32, Intent, MarketAccount,
+    PositionAccount, ProfileAccount, RealmAccount, EPOCH_PHASE_OPEN, PROFILE_FLAG_POLICY_FROZEN,
+};
+use clutch_solana_reference::{Action, ReplayAccount, Request, REPLAY_ACCOUNT_LEN};
+use solana_account_info::AccountInfo;
+use solana_cpi::invoke_signed;
+use solana_instruction::{AccountMeta, Instruction};
+use solana_pubkey::Pubkey;
+
+/// Borrow one account's data mutably, or refuse.
+///
+/// A macro rather than a function for the reason [`super::observe_resolve`]
+/// records: `AccountInfo` is invariant in its lifetime.
+macro_rules! borrow_mut {
+    ($account:expr) => {
+        $account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))
+    };
+}
+
+/* ------------------------------------------------------------------------ */
+/* The system program and the rent sysvar                                    */
+/* ------------------------------------------------------------------------ */
+
+/// The system program's address: the all-zero key.
+///
+/// Hand-stated for the same reason [`crate::token`] hand-states the
+/// Token-2022 instruction discriminants — this crate depends on no Anza
+/// interface crate that carries it, and a 32-byte constant with a test is a
+/// smaller thing to audit than a dependency.  The all-zero key is also what an
+/// uninitialized account slot looks like, which is exactly why
+/// [`require_system_program`] checks the executable bit too.
+pub const SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0; 32]);
+
+/// The rent sysvar's address, `SysvarRent111111111111111111111111111111111`.
+pub const RENT_SYSVAR_ID: Pubkey = Pubkey::new_from_array([
+    6, 167, 213, 23, 25, 44, 92, 81, 33, 140, 201, 76, 61, 74, 241, 127, 88, 218, 238, 8, 155, 161,
+    253, 68, 227, 219, 217, 138, 0, 0, 0, 0,
+]);
+
+/// Exact data length of the rent sysvar account.
+pub const RENT_SYSVAR_LEN: usize = 8 + 8 + 1;
+
+/// `SystemInstruction::CreateAccount`'s bincode variant index.
+///
+/// The system program's instruction enum is bincode-encoded: a four-byte
+/// little-endian variant index, then the variant's fields in declaration
+/// order.  `CreateAccount { lamports: u64, space: u64, owner: Pubkey }` is
+/// variant zero, so the whole payload is 52 bytes.
+const SYSTEM_IX_CREATE_ACCOUNT: u32 = 0;
+
+/// Exact encoded length of a `CreateAccount` instruction payload.
+const CREATE_ACCOUNT_DATA_LEN: usize = 4 + 8 + 8 + 32;
+
+/// Per-account storage overhead in the rent formula.
+///
+/// `solana_rent::ACCOUNT_STORAGE_OVERHEAD`.
+pub const ACCOUNT_STORAGE_OVERHEAD: u64 = 128;
+
+/// The runtime's per-instruction account-data growth ceiling.
+///
+/// `solana_program_entrypoint::MAX_PERMITTED_DATA_INCREASE`.  An account
+/// created through a cross-program invocation grows from zero inside one
+/// instruction, so this is also the largest account a program can allocate in
+/// one CPI.  Every account this module creates is under it; the streaming
+/// checkpoint of [`clutch_solana_layout::clearing`] is not, which is why no
+/// instruction here creates one.
+pub const MAX_PERMITTED_DATA_INCREASE: usize = 10 * 1024;
+
+/// The two rent parameters the exemption minimum is a function of.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RentParameters {
+    /// Rental rate in lamports per byte-year.
+    pub lamports_per_byte_year: u64,
+    /// Years of rent a balance must cover to be exempt.
+    pub exemption_threshold: f64,
+}
+
+impl RentParameters {
+    /// The rent-exempt minimum for an account of `space` data bytes.
+    ///
+    /// `solana_rent::Rent::minimum_balance`, transcribed:
+    /// `(((ACCOUNT_STORAGE_OVERHEAD + bytes) * rate) as f64 * threshold) as
+    /// u64`.  The two multiplications are checked in the integer half; the
+    /// float half is the runtime's own and is reproduced rather than improved.
+    pub fn minimum_balance(&self, space: usize) -> Outcome<u64> {
+        let bytes = ACCOUNT_STORAGE_OVERHEAD
+            .checked_add(space as u64)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        let base = bytes
+            .checked_mul(self.lamports_per_byte_year)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        Ok((base as f64 * self.exemption_threshold) as u64)
+    }
+}
+
+/// Read the rent parameters off the chain's own sysvar account.
+///
+/// The account is authenticated as evidence: right key, right length, not
+/// writable, and a threshold that is a finite non-negative number.  A hostile
+/// or corrupt threshold is [`ClutchError::WrongRentSysvar`] rather than a
+/// silently enormous or `NaN` lamport figure.
+pub fn read_rent(account: &AccountInfo) -> Outcome<RentParameters> {
+    require(*account.key == RENT_SYSVAR_ID, ClutchError::WrongRentSysvar)?;
+    require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+    require(
+        account.data_len() == RENT_SYSVAR_LEN,
+        ClutchError::WrongRentSysvar,
+    )?;
+    let data = account.data.borrow();
+    let mut rate = [0_u8; 8];
+    rate.copy_from_slice(&data[0..8]);
+    let mut threshold = [0_u8; 8];
+    threshold.copy_from_slice(&data[8..16]);
+    let value = RentParameters {
+        lamports_per_byte_year: u64::from_le_bytes(rate),
+        exemption_threshold: f64::from_le_bytes(threshold),
+    };
+    require(
+        value.exemption_threshold.is_finite() && value.exemption_threshold >= 0.0,
+        ClutchError::WrongRentSysvar,
+    )?;
+    Ok(value)
+}
+
+/// Refuse anything at the system-program role that is not the system program.
+pub fn require_system_program(account: &AccountInfo) -> Outcome<()> {
+    require(
+        *account.key == SYSTEM_PROGRAM_ID && account.executable,
+        ClutchError::WrongSystemProgram,
+    )?;
+    require(!account.is_writable, ClutchError::UnexpectedWritable)
+}
+
+/// Refuse a creation target that is not an empty, system-owned, writable slot.
+///
+/// This is the re-initialization gate, and it fires **before** any CPI: an
+/// account that already carries bytes, or that this program already owns, is
+/// [`ClutchError::AlreadyInitialized`] rather than a system-program error
+/// buried in an inner instruction.
+pub fn require_creatable(account: &AccountInfo) -> Outcome<()> {
+    require(account.is_writable, ClutchError::NotWritable)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(
+        account.data_len() == 0 && *account.owner == SYSTEM_PROGRAM_ID,
+        ClutchError::AlreadyInitialized,
+    )
+}
+
+/// The `CreateAccount` payload, split out so the CPI and the tests build one
+/// identical encoding.
+pub fn create_account_data(lamports: u64, space: usize, owner: &Pubkey) -> [u8; 52] {
+    let mut data = [0_u8; CREATE_ACCOUNT_DATA_LEN];
+    data[0..4].copy_from_slice(&SYSTEM_IX_CREATE_ACCOUNT.to_le_bytes());
+    data[4..12].copy_from_slice(&lamports.to_le_bytes());
+    data[12..20].copy_from_slice(&(space as u64).to_le_bytes());
+    data[20..52].copy_from_slice(&owner.to_bytes());
+    data
+}
+
+/// Create one program-derived account, signed by its own seeds.
+///
+/// The whole creation step in one call: refuse a target that already exists,
+/// refuse a space the runtime cannot allocate in one instruction, compute the
+/// rent-exempt minimum from the chain's parameters, invoke the system program
+/// with the target's seeds, and then **check that an account actually
+/// appeared**.  That last check is not ceremony: `solana_cpi::invoke_signed`
+/// compiles to `Ok(())` off-chain, so without it every host path would report
+/// a creation that did not happen — the same silent-no-op hazard
+/// [`crate::token`] answers with its exact-delta checks.
+#[allow(clippy::too_many_arguments)] // one argument per account and per value
+#[inline(never)]
+pub fn create_pda_account<'a>(
+    program_id: &Pubkey,
+    payer: &AccountInfo<'a>,
+    target: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    rent: &RentParameters,
+    space: usize,
+    signer_seeds: &[&[u8]],
+) -> Outcome<()> {
+    require_creatable(target)?;
+    require(
+        space <= MAX_PERMITTED_DATA_INCREASE,
+        ClutchError::AccountCreationFailed,
+    )?;
+    let lamports = rent.minimum_balance(space)?;
+    let instruction = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &create_account_data(lamports, space, program_id),
+        vec![
+            AccountMeta::new(*payer.key, true),
+            AccountMeta::new(*target.key, true),
+        ],
+    );
+    invoke_signed(
+        &instruction,
+        &[payer.clone(), target.clone(), system_program.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        target.data_len() == space && target.owner == program_id,
+        ClutchError::AccountCreationFailed,
+    )
+}
+
+/* ------------------------------------------------------------------------ */
+/* Account planes                                                            */
+/* ------------------------------------------------------------------------ */
+
+/// Authenticated payer; signs, funds every creation, and is privileged in no
+/// other way.  Also the actor of [`Intent::Endow`], where it must be the
+/// position owner.
+pub const IX_PAYER: usize = 0;
+/// The account this instruction creates.  Every creating instruction.
+pub const IX_TARGET: usize = 1;
+
+/// Accounts in an `InitRealm` instruction, exactly.
+pub const INIT_REALM_ACCOUNT_COUNT: usize = 5;
+/// The Realm's 266 collateral-policy bytes (read-only, content-authenticated).
+pub const IX_REALM_POLICY: usize = 2;
+/// The system program (read-only, executable).  `InitRealm`.
+pub const IX_REALM_SYSTEM: usize = 3;
+/// The rent sysvar (read-only).  `InitRealm`.
+pub const IX_REALM_RENT: usize = 4;
+
+/// Accounts in an `InitProfile` instruction, exactly.
+pub const INIT_PROFILE_ACCOUNT_COUNT: usize = 6;
+/// The Realm this Profile belongs to (read-only, program-owned).
+pub const IX_PROFILE_REALM: usize = 2;
+/// The Realm's 266 collateral-policy bytes (read-only).
+pub const IX_PROFILE_POLICY: usize = 3;
+/// The system program.  `InitProfile`.
+pub const IX_PROFILE_SYSTEM: usize = 4;
+/// The rent sysvar.  `InitProfile`.
+pub const IX_PROFILE_RENT: usize = 5;
+
+/// Accounts in an `InitPriceGrid` instruction, exactly.
+pub const INIT_GRID_ACCOUNT_COUNT: usize = 6;
+/// The Realm the grid is namespaced under (read-only, program-owned).
+pub const IX_GRID_REALM: usize = 2;
+/// The evidence buffer holding the grid's exact encoded bytes (read-only).
+pub const IX_GRID_BODY: usize = 3;
+/// The system program.  `InitPriceGrid`.
+pub const IX_GRID_SYSTEM: usize = 4;
+/// The rent sysvar.  `InitPriceGrid`.
+pub const IX_GRID_RENT: usize = 5;
+
+/// Accounts in an `InitTerms` instruction, exactly.
+pub const INIT_TERMS_ACCOUNT_COUNT: usize = 7;
+/// The Realm the terms are authored under (read-only, program-owned).
+pub const IX_TERMS_REALM: usize = 2;
+/// The frozen price grid the terms bind (read-only, program-owned).
+pub const IX_TERMS_GRID: usize = 3;
+/// The evidence buffer holding the terms' exact encoded bytes (read-only).
+pub const IX_TERMS_BODY: usize = 4;
+/// The system program.  `InitTerms`.
+pub const IX_TERMS_SYSTEM: usize = 5;
+/// The rent sysvar.  `InitTerms`.
+pub const IX_TERMS_RENT: usize = 6;
+
+/// Accounts in an `InitOrderPage` instruction, exactly.
+pub const INIT_PAGE_ACCOUNT_COUNT: usize = 6;
+/// The market the epoch belongs to (read-only, program-owned).
+pub const IX_PAGE_MARKET: usize = 2;
+/// The epoch whose page set this page joins (read-only, program-owned).
+pub const IX_PAGE_EPOCH: usize = 3;
+/// The system program.  `InitOrderPage`.
+pub const IX_PAGE_SYSTEM: usize = 4;
+/// The rent sysvar.  `InitOrderPage`.
+pub const IX_PAGE_RENT: usize = 5;
+
+/// Accounts in an `Endow` instruction, exactly.
+///
+/// Four, and none of them is the system program: an endowment creates nothing
+/// and moves no lamports.
+pub const ENDOW_ACCOUNT_COUNT: usize = 4;
+/// The market whose immutable cap bounds the credit (read-only).
+///
+/// It sits where the creation target sits in the other five lists, because
+/// `Endow` has no creation target: it is the one instruction in this module
+/// that allocates nothing.
+pub const IX_ENDOW_MARKET: usize = 1;
+/// The position being credited (writable).
+pub const IX_ENDOW_POSITION: usize = 2;
+/// The reference-only replay-sequence account (writable).
+pub const IX_ENDOW_REPLAY: usize = 3;
+
+/// Program-owned roles of `InitProfile`, in account-index order.
+const PROFILE_STATE_ROLES: [StateRole; 1] =
+    [StateRole::read_only(IX_PROFILE_REALM, account_len::REALM)];
+/// Program-owned roles of `InitPriceGrid`.
+const GRID_STATE_ROLES: [StateRole; 1] = [StateRole::read_only(IX_GRID_REALM, account_len::REALM)];
+/// Program-owned roles of `InitTerms`.
+const TERMS_STATE_ROLES: [StateRole; 2] = [
+    StateRole::read_only(IX_TERMS_REALM, account_len::REALM),
+    StateRole::read_only(IX_TERMS_GRID, account_len::PRICE_GRID),
+];
+/// Program-owned roles of `InitOrderPage`.
+const PAGE_STATE_ROLES: [StateRole; 2] = [
+    StateRole::read_only(IX_PAGE_MARKET, account_len::MARKET),
+    StateRole::read_only(IX_PAGE_EPOCH, account_len::EPOCH),
+];
+/// Program-owned roles of `Endow`.
+const ENDOW_STATE_ROLES: [StateRole; 3] = [
+    StateRole::read_only(IX_ENDOW_MARKET, account_len::MARKET),
+    StateRole::writable(IX_ENDOW_POSITION, account_len::POSITION),
+    StateRole::writable(IX_ENDOW_REPLAY, REPLAY_ACCOUNT_LEN),
+];
+
+/// Refuse a read-only, non-executable evidence buffer of the wrong width.
+///
+/// The buffer has no seed and no owner requirement: it is authenticated by
+/// what its bytes recompute to, not by where it lives.  What is checked here
+/// is only that it *could* be the artifact — a caller cannot present a
+/// writable account, a program, or a truncated body.
+fn require_buffer(account: &AccountInfo, len: usize) -> Outcome<()> {
+    require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(account.data_len() == len, ClutchError::WrongDataLength)
+}
+
+/// A creation consumes no replay sequence.
+///
+/// Exactly [`super::market_init`]'s rule and for exactly its reason: the
+/// replay plane is per `(market, owner, generation)` and nothing in this
+/// module has one, so a nonzero sequence is a claim about a plane the
+/// instruction does not touch.  `Endow` is the exception and consumes one.
+fn require_creation_sequence(sequence: u64) -> Outcome<()> {
+    require(sequence == 0, ClutchError::Replay)
+}
+
+/* ------------------------------------------------------------------------ */
+/* Frame-bounded readers                                                     */
+/* ------------------------------------------------------------------------ */
+
+/// Recompute a Profile identity from the Realm's actual collateral policy.
+///
+/// The whole chain of `RESOLUTION_EVIDENCE_PLAN.md` §3.2 in one call: decode
+/// the 266 bytes, take the child digest `D_col`, compose the parent under the
+/// policy's own schema version, and hash it.  Returns the pair the two Realm
+/// and Profile initializers both need — the identity and the digest — and
+/// never lets the decoded policy escape into a caller's frame.
+#[inline(never)]
+fn profile_identity_from_policy(policy_bytes: &[u8]) -> Outcome<(Hash32, Hash32, u16)> {
+    let policy = collateral::CollateralPolicy::decode(policy_bytes)?;
+    let digest = policy.digest()?;
+    let parent = collateral::ParentProfile::from_policy_digest(digest, policy.schema_version)?;
+    Ok((parent.identity()?, digest, policy.schema_version))
+}
+
+/// Encode one Realm account into a freshly created account's bytes.
+#[inline(never)]
+fn write_realm(target: &mut [u8], value: &RealmAccount) -> Outcome<()> {
+    value.encode(target)?;
+    /* The post-write read is the same discipline `market_init` keeps: the
+     * bytes that are now on chain are decoded again, so a writer that produced
+     * something its own codec refuses fails here rather than at the first
+     * reader. */
+    let written = RealmAccount::decode(target)?;
+    require(written == *value, ClutchError::MismatchedState)
+}
+
+/// Encode one Profile account, then re-bind it to the policy it froze.
+///
+/// The strongest post-write check in this module:
+/// [`collateral::verify_profile_identity`] recomputes the child digest from
+/// the 266 policy bytes *and* the parent identity from that digest, so a
+/// Profile that landed committing to some other Realm's policy cannot survive
+/// this call.
+#[inline(never)]
+fn write_profile(target: &mut [u8], value: &ProfileAccount, policy_bytes: &[u8]) -> Outcome<()> {
+    value.encode(target)?;
+    let written = ProfileAccount::decode(target)?;
+    require(written == *value, ClutchError::MismatchedState)?;
+    collateral::verify_profile_identity(policy_bytes, &written)?;
+    Ok(())
+}
+
+/* ------------------------------------------------------------------------ */
+/* Routing                                                                   */
+/* ------------------------------------------------------------------------ */
+
+/// Route one already-decoded genesis request to its instruction.
+pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request) -> Outcome<()> {
+    match request.action {
+        Action::Layout(Intent::InitRealm {
+            profile,
+            realm_nonce,
+            max_outcomes,
+            profile_version,
+        }) => init_realm(
+            program_id,
+            accounts,
+            request.sequence,
+            &RealmInit {
+                profile,
+                realm_nonce,
+                max_outcomes,
+                profile_version,
+            },
+        ),
+        Action::Layout(Intent::InitProfile {
+            realm,
+            collateral_policy_digest,
+            subfield_schema_version,
+            profile_version,
+        }) => init_profile(
+            program_id,
+            accounts,
+            request.sequence,
+            &ProfileInit {
+                realm,
+                collateral_policy_digest,
+                subfield_schema_version,
+                profile_version,
+            },
+        ),
+        Action::Layout(Intent::InitPriceGrid { realm, grid }) => {
+            init_price_grid(program_id, accounts, request.sequence, realm, grid)
+        }
+        Action::Layout(Intent::InitTerms { realm, terms }) => {
+            init_terms(program_id, accounts, request.sequence, realm, terms)
+        }
+        Action::Layout(Intent::InitOrderPage {
+            market,
+            epoch,
+            page_index,
+            page_count,
+        }) => init_order_page(
+            program_id,
+            accounts,
+            request.sequence,
+            &PageInit {
+                market,
+                epoch,
+                page_index,
+                page_count,
+            },
+        ),
+        Action::Layout(Intent::Endow {
+            market,
+            owner,
+            amount,
+        }) => endow(
+            program_id,
+            accounts,
+            &EndowRequest {
+                sequence: request.sequence,
+                market,
+                owner,
+                amount,
+            },
+        ),
+        /* Every other action belongs to another family module; the router
+         * never sends one here, and this arm exists so that adding one to the
+         * router is a compile error rather than a silent success. */
+        _ => Err(ClutchError::UnsupportedInstruction.into()),
+    }
+}
+
+/* ------------------------------------------------------------------------ */
+/* InitRealm                                                                 */
+/* ------------------------------------------------------------------------ */
+
+/// One already-matched `InitRealm` intent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RealmInit {
+    /// Parent Profile identity the Realm commits to.
+    pub profile: Hash32,
+    /// Nonce distinguishing Realms over one Profile.
+    pub realm_nonce: u64,
+    /// Outcome width; V1 admits only [`clutch_solana_layout::MAX_OUTCOMES`].
+    pub max_outcomes: u8,
+    /// Profile schema version this Realm expects.
+    pub profile_version: u8,
+}
+
+fn init_realm(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent: &RealmInit,
+) -> Outcome<()> {
+    require_count(accounts, INIT_REALM_ACCOUNT_COUNT)?;
+    require_signer(&accounts[IX_PAYER])?;
+    require_distinct(accounts)?;
+    require_creation_sequence(sequence)?;
+    require_system_program(&accounts[IX_REALM_SYSTEM])?;
+    require_buffer(
+        &accounts[IX_REALM_POLICY],
+        collateral::COLLATERAL_POLICY_BYTES,
+    )?;
+    let rent = read_rent(&accounts[IX_REALM_RENT])?;
+
+    /* The claimed Profile identity is *recomputed* from the Realm's actual
+     * collateral policy, so a Realm cannot be founded pointing at a Profile
+     * nobody can produce a policy for.  This is the check that makes
+     * `RealmAccount::profile` evidence rather than a caller's assertion. */
+    let (profile, _digest, _schema) =
+        profile_identity_from_policy(&accounts[IX_REALM_POLICY].data.borrow())?;
+    require(
+        profile == intent.profile,
+        ClutchError::EvidenceBufferMismatch,
+    )?;
+
+    let realm = canonical_realm_id(profile, intent.realm_nonce);
+    let realm_bytes = realm.bytes();
+    let (address, bump) = seeds::realm_pda(program_id, &realm_bytes);
+    expect_pda(accounts[IX_TARGET].key, (address, bump), None)?;
+
+    create_pda_account(
+        program_id,
+        &accounts[IX_PAYER],
+        &accounts[IX_TARGET],
+        &accounts[IX_REALM_SYSTEM],
+        &rent,
+        account_len::REALM,
+        &[seeds::SEED_REALM, &realm_bytes, &[bump]],
+    )?;
+
+    let value = RealmAccount {
+        realm,
+        profile,
+        max_outcomes: intent.max_outcomes,
+        profile_version: intent.profile_version,
+        stored_bump: bump,
+        flags: 0,
+    };
+    let mut data = borrow_mut!(accounts[IX_TARGET])?;
+    write_realm(&mut data, &value)
+}
+
+/* ------------------------------------------------------------------------ */
+/* InitProfile                                                               */
+/* ------------------------------------------------------------------------ */
+
+/// One already-matched `InitProfile` intent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProfileInit {
+    /// Realm this Profile belongs to.
+    pub realm: Hash32,
+    /// Child collateral-policy digest the Profile freezes.
+    pub collateral_policy_digest: Hash32,
+    /// Subfield schema version the parent identity was composed under.
+    pub subfield_schema_version: u16,
+    /// Profile schema version.
+    pub profile_version: u8,
+}
+
+fn init_profile(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent: &ProfileInit,
+) -> Outcome<()> {
+    require_count(accounts, INIT_PROFILE_ACCOUNT_COUNT)?;
+    require_signer(&accounts[IX_PAYER])?;
+    require_distinct(accounts)?;
+    accounts::validate_state_roles(program_id, accounts, &PROFILE_STATE_ROLES)?;
+    require_creation_sequence(sequence)?;
+    require_system_program(&accounts[IX_PROFILE_SYSTEM])?;
+    require_buffer(
+        &accounts[IX_PROFILE_POLICY],
+        collateral::COLLATERAL_POLICY_BYTES,
+    )?;
+    let rent = read_rent(&accounts[IX_PROFILE_RENT])?;
+
+    let (profile, digest, schema) =
+        profile_identity_from_policy(&accounts[IX_PROFILE_POLICY].data.borrow())?;
+    /* Both declared bindings are checked against the recomputation rather than
+     * trusted: the digest the Profile will freeze, and the schema version that
+     * digest was composed under. */
+    require(
+        digest == intent.collateral_policy_digest && schema == intent.subfield_schema_version,
+        ClutchError::EvidenceBufferMismatch,
+    )?;
+
+    let realm = accounts::read_realm(&accounts[IX_PROFILE_REALM].data.borrow())?;
+    let realm_bytes = realm.realm.bytes();
+    expect_pda(
+        accounts[IX_PROFILE_REALM].key,
+        seeds::realm_pda(program_id, &realm_bytes),
+        Some(realm.stored_bump),
+    )?;
+    /* The Realm already committed to a Profile identity and to a Profile
+     * schema version; the Profile being created must be that one.  A Realm
+     * whose Profile is some other identity has no Profile account it can ever
+     * accept. */
+    require(
+        realm.realm == intent.realm
+            && realm.profile == profile
+            && realm.profile_version == intent.profile_version,
+        ClutchError::MismatchedState,
+    )?;
+
+    let profile_bytes = profile.bytes();
+    let (address, bump) = seeds::profile_pda(program_id, &realm_bytes, &profile_bytes);
+    expect_pda(accounts[IX_TARGET].key, (address, bump), None)?;
+
+    create_pda_account(
+        program_id,
+        &accounts[IX_PAYER],
+        &accounts[IX_TARGET],
+        &accounts[IX_PROFILE_SYSTEM],
+        &rent,
+        account_len::PROFILE,
+        &[seeds::SEED_PROFILE, &realm_bytes, &profile_bytes, &[bump]],
+    )?;
+
+    /* A Profile created here is frozen on arrival.  There is no unfrozen
+     * Profile state to reach: the policy bytes were required, bound, and
+     * recomputed before anything was created, so "frozen later" would be a
+     * state with no transition into it. */
+    let value = ProfileAccount {
+        profile,
+        realm: realm.realm,
+        collateral_policy_digest: digest,
+        version: intent.profile_version,
+        flags: PROFILE_FLAG_POLICY_FROZEN,
+    };
+    let policy_bytes = accounts[IX_PROFILE_POLICY].data.borrow();
+    let mut data = borrow_mut!(accounts[IX_TARGET])?;
+    write_profile(&mut data, &value, &policy_bytes)
+}
+
+/* ------------------------------------------------------------------------ */
+/* InitPriceGrid and InitTerms — the evidence-buffer initializers            */
+/* ------------------------------------------------------------------------ */
+
+fn init_price_grid(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent_realm: Hash32,
+    intent_grid: Hash32,
+) -> Outcome<()> {
+    require_count(accounts, INIT_GRID_ACCOUNT_COUNT)?;
+    require_signer(&accounts[IX_PAYER])?;
+    require_distinct(accounts)?;
+    accounts::validate_state_roles(program_id, accounts, &GRID_STATE_ROLES)?;
+    require_creation_sequence(sequence)?;
+    require_system_program(&accounts[IX_GRID_SYSTEM])?;
+    require_buffer(&accounts[IX_GRID_BODY], account_len::PRICE_GRID)?;
+    let rent = read_rent(&accounts[IX_GRID_RENT])?;
+
+    let realm = accounts::read_realm(&accounts[IX_GRID_REALM].data.borrow())?;
+    expect_pda(
+        accounts[IX_GRID_REALM].key,
+        seeds::realm_pda(program_id, &realm.realm.bytes()),
+        Some(realm.stored_bump),
+    )?;
+    require(realm.realm == intent_realm, ClutchError::MismatchedState)?;
+
+    /* Decoding the buffer is already a proof that its digest is its own: a
+     * `PriceGridAccount` refuses unless `grid == recomputed_grid_id()`.  What
+     * is checked here is that it is the grid the *intent* names, under the
+     * Realm the account plane authenticated. */
+    let grid = accounts::read_price_grid(&accounts[IX_GRID_BODY].data.borrow())?;
+    require(
+        grid.grid == intent_grid && grid.realm == realm.realm,
+        ClutchError::EvidenceBufferMismatch,
+    )?;
+
+    let realm_bytes = realm.realm.bytes();
+    let grid_bytes = grid.grid.bytes();
+    let (address, bump) = seeds::grid_pda(program_id, &realm_bytes, &grid_bytes);
+    expect_pda(accounts[IX_TARGET].key, (address, bump), None)?;
+    /* The buffer is copied verbatim, so it must already carry the bump this
+     * program derived.  Patching it at an offset here would be a second
+     * transcription of a layout the layout crate owns. */
+    require(grid.stored_bump == bump, ClutchError::WrongBump)?;
+
+    create_pda_account(
+        program_id,
+        &accounts[IX_PAYER],
+        &accounts[IX_TARGET],
+        &accounts[IX_GRID_SYSTEM],
+        &rent,
+        account_len::PRICE_GRID,
+        &[seeds::SEED_GRID, &realm_bytes, &grid_bytes, &[bump]],
+    )?;
+
+    let body = accounts[IX_GRID_BODY].data.borrow();
+    let mut data = borrow_mut!(accounts[IX_TARGET])?;
+    copy_artifact(&mut data, &body, account_len::PRICE_GRID)?;
+    accounts::read_price_grid(&data)?;
+    Ok(())
+}
+
+fn init_terms(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent_realm: Hash32,
+    intent_terms: Hash32,
+) -> Outcome<()> {
+    require_count(accounts, INIT_TERMS_ACCOUNT_COUNT)?;
+    require_signer(&accounts[IX_PAYER])?;
+    require_distinct(accounts)?;
+    accounts::validate_state_roles(program_id, accounts, &TERMS_STATE_ROLES)?;
+    require_creation_sequence(sequence)?;
+    require_system_program(&accounts[IX_TERMS_SYSTEM])?;
+    require_buffer(&accounts[IX_TERMS_BODY], account_len::TERMS)?;
+    let rent = read_rent(&accounts[IX_TERMS_RENT])?;
+
+    let realm = accounts::read_realm(&accounts[IX_TERMS_REALM].data.borrow())?;
+    let realm_bytes = realm.realm.bytes();
+    expect_pda(
+        accounts[IX_TERMS_REALM].key,
+        seeds::realm_pda(program_id, &realm_bytes),
+        Some(realm.stored_bump),
+    )?;
+    require(realm.realm == intent_realm, ClutchError::MismatchedState)?;
+
+    let grid = accounts::read_price_grid(&accounts[IX_TERMS_GRID].data.borrow())?;
+    expect_pda(
+        accounts[IX_TERMS_GRID].key,
+        seeds::grid_pda(program_id, &realm_bytes, &grid.grid.bytes()),
+        Some(grid.stored_bump),
+    )?;
+    require(grid.realm == realm.realm, ClutchError::MismatchedState)?;
+
+    let terms = accounts::read_terms(&accounts[IX_TERMS_BODY].data.borrow())?;
+    /* Four bindings, all recomputed or read from authenticated accounts: the
+     * digest the intent names, the Realm, the Profile that Realm committed to,
+     * and the frozen grid whose ticks every limit in this market must land on.
+     * A terms artifact naming a grid nobody created is inert, so the grid is
+     * an account here rather than a field. */
+    require(
+        terms.terms == intent_terms
+            && terms.realm == realm.realm
+            && terms.profile == realm.profile
+            && terms.price_grid == grid.grid,
+        ClutchError::EvidenceBufferMismatch,
+    )?;
+
+    let terms_bytes = terms.terms.bytes();
+    let (address, bump) = seeds::terms_pda(program_id, &realm_bytes, &terms_bytes);
+    expect_pda(accounts[IX_TARGET].key, (address, bump), None)?;
+    require(terms.stored_bump == bump, ClutchError::WrongBump)?;
+
+    create_pda_account(
+        program_id,
+        &accounts[IX_PAYER],
+        &accounts[IX_TARGET],
+        &accounts[IX_TERMS_SYSTEM],
+        &rent,
+        account_len::TERMS,
+        &[seeds::SEED_TERMS, &realm_bytes, &terms_bytes, &[bump]],
+    )?;
+
+    let body = accounts[IX_TERMS_BODY].data.borrow();
+    let mut data = borrow_mut!(accounts[IX_TARGET])?;
+    copy_artifact(&mut data, &body, account_len::TERMS)?;
+    accounts::read_terms(&data)?;
+    Ok(())
+}
+
+/// Copy an evidence buffer into a freshly created account, verbatim.
+///
+/// No decode, no re-encode, no offset: the artifact is self-certifying, it was
+/// already read through a facts reader (which decoded and validated it), and
+/// what lands on chain is byte for byte what the caller presented.
+#[inline(never)]
+fn copy_artifact(target: &mut [u8], body: &[u8], len: usize) -> Outcome<()> {
+    require(
+        target.len() == len && body.len() == len,
+        ClutchError::WrongDataLength,
+    )?;
+    target.copy_from_slice(body);
+    Ok(())
+}
+
+/* ------------------------------------------------------------------------ */
+/* InitOrderPage                                                             */
+/* ------------------------------------------------------------------------ */
+
+/// One already-matched `InitOrderPage` intent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PageInit {
+    /// Market identity.
+    pub market: Hash32,
+    /// Epoch identity.
+    pub epoch: Hash32,
+    /// Zero-based page position.
+    pub page_index: u16,
+    /// Declared page count of the whole set.
+    pub page_count: u16,
+}
+
+fn init_order_page(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent: &PageInit,
+) -> Outcome<()> {
+    require_count(accounts, INIT_PAGE_ACCOUNT_COUNT)?;
+    require_signer(&accounts[IX_PAYER])?;
+    require_distinct(accounts)?;
+    accounts::validate_state_roles(program_id, accounts, &PAGE_STATE_ROLES)?;
+    require_creation_sequence(sequence)?;
+    require_system_program(&accounts[IX_PAGE_SYSTEM])?;
+    let rent = read_rent(&accounts[IX_PAGE_RENT])?;
+
+    let market = accounts::read_market(&accounts[IX_PAGE_MARKET].data.borrow())?;
+    let epoch = accounts::read_epoch(&accounts[IX_PAGE_EPOCH].data.borrow())?;
+    expect_pda(
+        accounts[IX_PAGE_MARKET].key,
+        seeds::market_pda(program_id, &market.realm.bytes(), &market.market.bytes()),
+        Some(market.stored_bump),
+    )?;
+    expect_pda(
+        accounts[IX_PAGE_EPOCH].key,
+        seeds::epoch_pda(program_id, &epoch.market.bytes(), epoch.epoch_index),
+        Some(epoch.stored_bump),
+    )?;
+    require(
+        market.market == intent.market
+            && epoch.epoch == intent.epoch
+            && epoch.market == market.market,
+        ClutchError::MismatchedState,
+    )?;
+    /* A page is created into an *open* epoch and an *active* market.  A frozen
+     * epoch's page set is closed by `verify_page_set`, and adding a page to it
+     * would mean the frozen `order_set` no longer folds the set it names. */
+    require(
+        epoch.phase == EPOCH_PHASE_OPEN && market.lifecycle == 0,
+        ClutchError::NotActive,
+    )?;
+    /* The set's geometry is a decision made once.  Before the freeze the epoch
+     * carries no page count (`page_count` is zero until frozen), so the intent
+     * declares it and every page of one set must declare the same number —
+     * which `verify_page_set` then checks across the whole set. */
+    require(epoch.page_count == 0, ClutchError::MismatchedState)?;
+
+    let epoch_bytes = epoch.epoch.bytes();
+    let (address, bump) = seeds::page_pda(program_id, &epoch_bytes, intent.page_index);
+    expect_pda(accounts[IX_TARGET].key, (address, bump), None)?;
+
+    create_pda_account(
+        program_id,
+        &accounts[IX_PAYER],
+        &accounts[IX_TARGET],
+        &accounts[IX_PAGE_SYSTEM],
+        &rent,
+        account_len::ORDER_PAGE,
+        &[
+            seeds::SEED_PAGE,
+            &epoch_bytes,
+            &intent.page_index.to_le_bytes(),
+            &[bump],
+        ],
+    )?;
+
+    let mut data = borrow_mut!(accounts[IX_TARGET])?;
+    write_empty_page(&mut data, intent, bump)
+}
+
+/// Write one empty open page, and verify it the way a reader will.
+///
+/// Every byte comes from the layout crate's streaming writer: an empty page is
+/// not a zeroed account — it commits to its own position and to sixteen
+/// canonically padded slots, and that digest is not zero.  The verify
+/// afterwards is the same streaming path `PlaceOrder` uses, so a page created
+/// here is a page that instruction can already append to.
+#[inline(never)]
+fn write_empty_page(target: &mut [u8], intent: &PageInit, bump: u8) -> Outcome<()> {
+    stream::init_page(
+        target,
+        intent.market,
+        intent.epoch,
+        intent.page_index,
+        intent.page_count,
+        bump,
+    )?;
+    stream::verify_page(target)?;
+    Ok(())
+}
+
+/* ------------------------------------------------------------------------ */
+/* Endow                                                                     */
+/* ------------------------------------------------------------------------ */
+
+/// One already-matched `Endow` intent plus its replay sequence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EndowRequest {
+    /// Exact replay sequence the request claims.
+    pub sequence: u64,
+    /// Market the position belongs to.
+    pub market: Hash32,
+    /// Position owner the credit lands on.
+    pub owner: Hash32,
+    /// Collateral atoms credited to internal cash.
+    pub amount: u64,
+}
+
+fn endow(program_id: &Pubkey, accounts: &[AccountInfo], request: &EndowRequest) -> Outcome<()> {
+    require_count(accounts, ENDOW_ACCOUNT_COUNT)?;
+    require_signer(&accounts[IX_PAYER])?;
+    require_distinct(accounts)?;
+    accounts::validate_state_roles(program_id, accounts, &ENDOW_STATE_ROLES)?;
+
+    let market = accounts::read_market(&accounts[IX_ENDOW_MARKET].data.borrow())?;
+    let (position_owner, position_generation, position_bump) = {
+        let data = accounts[IX_ENDOW_POSITION].data.borrow();
+        let position = PositionAccount::decode(&data)?;
+        (position.owner, position.generation, position.stored_bump)
+    };
+    let replay_bump = {
+        let data = accounts[IX_ENDOW_REPLAY].data.borrow();
+        ReplayAccount::decode(&data)?.stored_bump
+    };
+    let market_bytes = market.market.bytes();
+    let owner_bytes = position_owner.bytes();
+    expect_pda(
+        accounts[IX_ENDOW_MARKET].key,
+        seeds::market_pda(program_id, &market.realm.bytes(), &market_bytes),
+        Some(market.stored_bump),
+    )?;
+    expect_pda(
+        accounts[IX_ENDOW_POSITION].key,
+        seeds::position_pda(program_id, &market_bytes, &owner_bytes),
+        Some(position_bump),
+    )?;
+    expect_pda(
+        accounts[IX_ENDOW_REPLAY].key,
+        seeds::replay_pda(program_id, &market_bytes, &owner_bytes, position_generation),
+        Some(replay_bump),
+    )?;
+
+    let actor = Hash32::from_bytes(accounts[IX_PAYER].key.to_bytes());
+    let market_data = accounts[IX_ENDOW_MARKET].data.borrow();
+    let mut position_data = borrow_mut!(accounts[IX_ENDOW_POSITION])?;
+    let mut replay_data = borrow_mut!(accounts[IX_ENDOW_REPLAY])?;
+    apply_endow(
+        &market_data,
+        &mut position_data,
+        &mut replay_data,
+        actor,
+        request,
+    )
+}
+
+/// The whole endowment transition over authenticated bytes.
+///
+/// Split out from the account plane exactly as `orders_batch` splits its
+/// placement: the account plane derives addresses (a runtime syscall, so it
+/// cannot run off-chain), and this half is the transition, which host tests
+/// drive directly against the layout codecs.
+///
+/// The order of refusals is deliberate and is the order every other value
+/// transition in this program uses: identity bindings, then phase, then
+/// replay, then arithmetic, then the cap, then the writes.
+#[inline(never)]
+pub fn apply_endow(
+    market_bytes: &[u8],
+    position_bytes: &mut [u8],
+    replay_bytes: &mut [u8],
+    actor: Hash32,
+    request: &EndowRequest,
+) -> Outcome<()> {
+    let market = MarketAccount::decode(market_bytes)?;
+    let mut position = PositionAccount::decode(position_bytes)?;
+    let mut replay = ReplayAccount::decode(replay_bytes)?;
+
+    require(actor == position.owner, ClutchError::UnauthorizedActor)?;
+    require(
+        request.market == market.market
+            && request.owner == position.owner
+            && market.market == position.market
+            && market.market == replay.market
+            && position.owner == replay.owner
+            && position.generation == replay.position_generation,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        market.lifecycle == 0 && position.close_state == 0,
+        ClutchError::NotActive,
+    )?;
+
+    require(request.sequence == replay.sequence, ClutchError::Replay)?;
+    let next_sequence = replay
+        .sequence
+        .checked_add(1)
+        .ok_or(Refusal::Adapter(ClutchError::Replay))?;
+
+    let next_cash = position
+        .cash_atoms
+        .checked_add(request.amount)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    /* Necessary, not sufficient — see the module docs.  The market's immutable
+     * cap bounds all collateral it may ever hold, so it bounds any one
+     * position's claim on that collateral; the market-wide sum is unavailable
+     * because no account carries it. */
+    require(
+        next_cash <= market.collateral_cap,
+        ClutchError::CollateralCap,
+    )?;
+
+    position.cash_atoms = next_cash;
+    replay.sequence = next_sequence;
+    position.encode(position_bytes)?;
+    replay
+        .encode(replay_bytes)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(())
+}
+
+/// The Hoard is untouched by an endowment, stated as code.
+///
+/// `HoardAccount::collateral_atoms` is escrowed collateral backing complete
+/// sets and only `Split` raises it; internal cash is the un-escrowed balance
+/// beside it.  This function exists so that "the endowment does not move the
+/// Hoard" is a compiled assertion in the test below rather than a sentence in
+/// a comment.
+#[cfg(test)]
+fn hoard_is_unmoved(
+    before: &clutch_solana_layout::HoardAccount,
+    after: &clutch_solana_layout::HoardAccount,
+) -> bool {
+    before.collateral_atoms == after.collateral_atoms
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clutch_solana_layout::{
+        canonical_epoch_id, canonical_market_id, canonical_outcome_id, stream, CodecError, EpochId,
+        HoardAccount, MarketId, OrderPageAccount, PriceGridAccount, MAX_ORDER_PAGES, MAX_OUTCOMES,
+        RELATION_VERSION,
+    };
+
+    fn h(byte: u8) -> Hash32 {
+        Hash32([byte; 32])
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* The system-program and rent plumbing                                */
+    /* ------------------------------------------------------------------ */
+
+    /// The two pinned addresses, checked against their base58 spellings rather
+    /// than against themselves.  A wrong constant here does not fail loudly —
+    /// it addresses the wrong program — so it is pinned by decoding the name.
+    #[test]
+    fn the_pinned_addresses_are_the_ones_they_are_named_for() {
+        assert_eq!(SYSTEM_PROGRAM_ID.to_bytes(), [0; 32]);
+        // `SysvarRent111111111111111111111111111111111`, base58-decoded.
+        assert_eq!(
+            RENT_SYSVAR_ID.to_bytes(),
+            [
+                6, 167, 213, 23, 25, 44, 92, 81, 33, 140, 201, 76, 61, 74, 241, 127, 88, 218, 238,
+                8, 155, 161, 253, 68, 227, 219, 217, 138, 0, 0, 0, 0
+            ]
+        );
+        assert_ne!(SYSTEM_PROGRAM_ID, RENT_SYSVAR_ID);
+    }
+
+    /// The `CreateAccount` payload is bincode, and bincode is exact.
+    #[test]
+    fn the_create_account_payload_is_the_system_programs_encoding() {
+        let owner = Pubkey::new_from_array([7; 32]);
+        let data = create_account_data(1_000, 70, &owner);
+        assert_eq!(data.len(), 52);
+        // Variant zero, little-endian, four bytes wide.
+        assert_eq!(&data[0..4], &[0, 0, 0, 0]);
+        assert_eq!(&data[4..12], &1_000_u64.to_le_bytes());
+        assert_eq!(&data[12..20], &70_u64.to_le_bytes());
+        assert_eq!(&data[20..52], &[7; 32]);
+    }
+
+    /// The rent transcription against `solana-rent`'s published defaults:
+    /// `DEFAULT_LAMPORTS_PER_BYTE_YEAR = 3480`, `DEFAULT_EXEMPTION_THRESHOLD =
+    /// 2.0`, `ACCOUNT_STORAGE_OVERHEAD = 128`.  At a threshold of exactly two
+    /// the float half is an integer doubling, so the expected values are
+    /// computable here in integers and the transcription is falsifiable.
+    #[test]
+    fn the_rent_formula_matches_the_runtimes() {
+        let rent = RentParameters {
+            lamports_per_byte_year: 3_480,
+            exemption_threshold: 2.0,
+        };
+        for space in [
+            0,
+            account_len::REALM,
+            account_len::PROFILE,
+            account_len::PRICE_GRID,
+            account_len::TERMS,
+            account_len::ORDER_PAGE,
+        ] {
+            let expected = (ACCOUNT_STORAGE_OVERHEAD + space as u64) * 3_480 * 2;
+            assert_eq!(rent.minimum_balance(space).unwrap(), expected, "{space}");
+        }
+        /* The figures `docs/implementation/SBF_BRINGUP.md` quotes, pinned
+         * here so the doc is falsifiable rather than decorative.  The order
+         * page — the widest account this module creates — is about 0.0288
+         * SOL to hold rent-exempt at the default parameters. */
+        for (space, lamports) in [
+            (account_len::REALM, 1_378_080_u64),
+            (account_len::PROFILE, 1_586_880),
+            (account_len::PRICE_GRID, 4_990_320),
+            (account_len::TERMS, 12_416_640),
+            (account_len::ORDER_PAGE, 28_814_400),
+        ] {
+            assert_eq!(rent.minimum_balance(space).unwrap(), lamports, "{space}");
+        }
+        /* And the one this module deliberately cannot create: the streaming
+         * checkpoint at 48,750 bytes, quoted in `SOLANA_LAYOUT.md`. */
+        assert_eq!(
+            rent.minimum_balance(account_len::CLEAR_WORK).unwrap(),
+            340_190_880
+        );
+        // A rate that would overflow the integer half refuses rather than wraps.
+        let absurd = RentParameters {
+            lamports_per_byte_year: u64::MAX,
+            exemption_threshold: 2.0,
+        };
+        assert_eq!(
+            absurd.minimum_balance(account_len::TERMS),
+            Err(Refusal::Adapter(ClutchError::Arithmetic))
+        );
+    }
+
+    /// Every account this module creates fits one system-program CPI, and the
+    /// one account that does not is the one no instruction here creates.
+    #[test]
+    fn every_created_account_fits_the_cpi_growth_ceiling() {
+        for (label, len, fits) in [
+            ("realm", account_len::REALM, true),
+            ("profile", account_len::PROFILE, true),
+            ("price grid", account_len::PRICE_GRID, true),
+            ("terms", account_len::TERMS, true),
+            ("order page", account_len::ORDER_PAGE, true),
+            /* The one account in the whole inventory that a single CPI
+             * cannot allocate, and the reason no instruction here creates
+             * one: the streaming checkpoint is 48,750 bytes. */
+            ("clear work", account_len::CLEAR_WORK, false),
+        ] {
+            assert_eq!(len <= MAX_PERMITTED_DATA_INCREASE, fits, "{label}");
+        }
+        assert_eq!(MAX_PERMITTED_DATA_INCREASE, 10_240);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* The initialization writers, against the layout codecs as oracle     */
+    /* ------------------------------------------------------------------ */
+
+    /// The expected bytes of every initializer come from the layout crate's
+    /// own encoder, never from a hand-typed literal: the writer and the oracle
+    /// are the same codec, so what this pins is that the *values* the
+    /// instruction chose are the ones the account plane requires.
+    #[test]
+    fn the_realm_writer_produces_exactly_the_layout_encoders_bytes() {
+        let value = RealmAccount {
+            realm: h(1),
+            profile: h(2),
+            max_outcomes: MAX_OUTCOMES as u8,
+            profile_version: 2,
+            stored_bump: 254,
+            flags: 0,
+        };
+        let mut written = [0_u8; account_len::REALM];
+        write_realm(&mut written, &value).unwrap();
+        let mut expected = [0_u8; account_len::REALM];
+        value.encode(&mut expected).unwrap();
+        assert_eq!(written, expected);
+        assert_eq!(RealmAccount::decode(&written), Ok(value));
+
+        // A Realm the codec refuses is refused by the writer, not written.
+        let narrow = RealmAccount {
+            max_outcomes: 8,
+            ..value
+        };
+        let mut out = [0_u8; account_len::REALM];
+        assert_eq!(
+            write_realm(&mut out, &narrow),
+            Err(Refusal::Codec(CodecError::InvalidCount))
+        );
+        assert_eq!(out, [0; account_len::REALM]);
+    }
+
+    #[test]
+    fn the_profile_writer_binds_the_policy_it_froze() {
+        let policy = policy_bytes();
+        let (profile, digest, _schema) = profile_identity_from_policy(&policy).unwrap();
+        let value = ProfileAccount {
+            profile,
+            realm: h(9),
+            collateral_policy_digest: digest,
+            version: 2,
+            flags: PROFILE_FLAG_POLICY_FROZEN,
+        };
+        let mut written = [0_u8; account_len::PROFILE];
+        write_profile(&mut written, &value, &policy).unwrap();
+        let mut expected = [0_u8; account_len::PROFILE];
+        value.encode(&mut expected).unwrap();
+        assert_eq!(written, expected);
+
+        /* The load-bearing negative: a well-formed Profile that commits to a
+         * *different* policy digest is refused by the post-write binding, not
+         * accepted because it decodes. */
+        let mut forged = value;
+        forged.collateral_policy_digest = h(0x5a);
+        forged.profile = collateral::ParentProfile::from_policy_digest(h(0x5a), 1)
+            .unwrap()
+            .identity()
+            .unwrap();
+        let mut out = [0_u8; account_len::PROFILE];
+        assert_eq!(
+            write_profile(&mut out, &forged, &policy),
+            Err(Refusal::Codec(CodecError::MismatchedBinding))
+        );
+
+        // And a Profile whose identity is not the parent hash of its own
+        // digest fails the identity half rather than the digest half.
+        let mut misnamed = value;
+        misnamed.profile = h(0x33);
+        assert_eq!(
+            write_profile(&mut out, &misnamed, &policy),
+            Err(Refusal::Codec(CodecError::NonCanonicalIdentity))
+        );
+    }
+
+    #[test]
+    fn the_artifact_copy_is_verbatim_and_width_checked() {
+        let mut body = [0_u8; account_len::PRICE_GRID];
+        grid_account(254).encode(&mut body).unwrap();
+        let mut target = [0_u8; account_len::PRICE_GRID];
+        copy_artifact(&mut target, &body, account_len::PRICE_GRID).unwrap();
+        assert_eq!(target, body);
+        accounts::read_price_grid(&target).unwrap();
+
+        let mut short = [0_u8; account_len::PRICE_GRID - 1];
+        assert_eq!(
+            copy_artifact(&mut short, &body, account_len::PRICE_GRID),
+            Err(Refusal::Adapter(ClutchError::WrongDataLength))
+        );
+    }
+
+    #[test]
+    fn the_page_writer_produces_exactly_the_streaming_writers_page() {
+        let market = canonical_market_id(h(1), h(2), 3);
+        let epoch = canonical_epoch_id(market, 4);
+        let intent = PageInit {
+            market,
+            epoch,
+            page_index: 2,
+            page_count: 4,
+        };
+        let mut written = [0_u8; account_len::ORDER_PAGE];
+        write_empty_page(&mut written, &intent, 251).unwrap();
+
+        let mut expected = [0_u8; account_len::ORDER_PAGE];
+        stream::init_page(&mut expected, market, epoch, 2, 4, 251).unwrap();
+        assert_eq!(written, expected);
+
+        /* An empty page is not a zeroed account: it commits to its position
+         * and to sixteen canonical padding slots, and that digest is not
+         * zero.  The buffered decoder — the golden reference — agrees. */
+        assert_ne!(written, [0; account_len::ORDER_PAGE]);
+        let page = OrderPageAccount::decode(&written).unwrap();
+        assert_eq!(page.market, market);
+        assert_eq!(page.epoch, epoch);
+        assert_eq!(page.page_index, 2);
+        assert_eq!(page.page_count, 4);
+        assert_eq!(page.order_count, 0);
+        assert_eq!(page.tombstone_count, 0);
+        assert_eq!(page.frozen, 0);
+        assert_eq!(page.stored_bump, 251);
+        assert_ne!(page.page_digest, Hash32::ZERO);
+        assert_eq!(page.page_digest, page.recomputed_page_digest().unwrap());
+        assert_eq!(
+            stream::verify_page(&written).unwrap(),
+            stream::OrderPageHeader::decode(&written).unwrap()
+        );
+
+        /* Four pages written this way are one positional chain.  Order ids
+         * are positional, so a page's base rank is a fact about its index and
+         * not about how full its predecessors are — which is exactly what
+         * makes creating pages in any order safe. */
+        let mut pages = [[0_u8; account_len::ORDER_PAGE]; MAX_ORDER_PAGES];
+        for (index, page) in pages.iter_mut().enumerate() {
+            write_empty_page(
+                page,
+                &PageInit {
+                    market,
+                    epoch,
+                    page_index: index as u16,
+                    page_count: MAX_ORDER_PAGES as u16,
+                },
+                251,
+            )
+            .unwrap();
+        }
+        for (index, page) in pages.iter().enumerate() {
+            let header = stream::verify_page(page).unwrap();
+            assert_eq!(header.page_index as usize, index);
+            assert_eq!(header.page_count as usize, MAX_ORDER_PAGES);
+            /* The base rank of page `p` is the rank of the last slot before
+             * it — `p * MAX_ORDERS_PER_PAGE` — as a canonical order id, and
+             * zero on page zero. */
+            let base = index * clutch_solana_layout::MAX_ORDERS_PER_PAGE;
+            assert_eq!(
+                header.prev_page_last_order_id,
+                if base == 0 {
+                    Hash32::ZERO
+                } else {
+                    clutch_solana_layout::canonical_order_id(base as u64)
+                }
+            );
+        }
+
+        /* And a page written this way is one the freeze path accepts.
+         * Nothing in this program freezes anything — no intent and no
+         * instruction can, which is the standing gap the order-set commitment
+         * work owns — so this is a property of the *bytes* the creation
+         * produced, driven here through the layout crate's own freeze
+         * writers.  A one-page set is used because a frozen set must be
+         * dense: every page but the last is full. */
+        let mut single = [0_u8; account_len::ORDER_PAGE];
+        write_empty_page(
+            &mut single,
+            &PageInit {
+                market,
+                epoch,
+                page_index: 0,
+                page_count: 1,
+            },
+            250,
+        )
+        .unwrap();
+        stream::write_single_slot(&mut single, &order_record(1)).unwrap();
+        let views: [&[u8]; 1] = [&single];
+        // Open pages do not close: the closure requires every page frozen.
+        assert_eq!(
+            stream::verify_page_set(&views),
+            Err(CodecError::MismatchedBinding)
+        );
+        let (order_set, set_order_count) = stream::frozen_set_commitment(&views).unwrap();
+        assert_eq!(set_order_count, 1);
+        stream::seal_page(&mut single, order_set, set_order_count).unwrap();
+        let views: [&[u8]; 1] = [&single];
+        assert_eq!(stream::verify_page_set(&views), Ok(order_set));
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Endow                                                               */
+    /* ------------------------------------------------------------------ */
+
+    /// The endowment transition, checked against the layout codecs: the
+    /// post-state bytes are what the codecs encode for the expected values,
+    /// and the Hoard is untouched.
+    #[test]
+    fn an_endowment_credits_cash_advances_replay_and_moves_no_collateral() {
+        let mut case = EndowCase::new();
+        let hoard_before = case.hoard;
+        apply_endow(
+            &case.market,
+            &mut case.position,
+            &mut case.replay,
+            case.owner,
+            &EndowRequest {
+                sequence: 0,
+                market: case.market_id,
+                owner: case.owner,
+                amount: 250,
+            },
+        )
+        .unwrap();
+
+        let mut expected_position = case.position_value;
+        expected_position.cash_atoms = 250;
+        let mut expected_position_bytes = [0_u8; account_len::POSITION];
+        expected_position
+            .encode(&mut expected_position_bytes)
+            .unwrap();
+        assert_eq!(case.position, expected_position_bytes);
+
+        let mut expected_replay = case.replay_value;
+        expected_replay.sequence = 1;
+        let mut expected_replay_bytes = [0_u8; REPLAY_ACCOUNT_LEN];
+        expected_replay.encode(&mut expected_replay_bytes).unwrap();
+        assert_eq!(case.replay, expected_replay_bytes);
+
+        assert!(hoard_is_unmoved(&hoard_before, &case.hoard));
+
+        // A second endowment at the consumed sequence is a replay.
+        assert_eq!(
+            apply_endow(
+                &case.market,
+                &mut case.position,
+                &mut case.replay,
+                case.owner,
+                &EndowRequest {
+                    sequence: 0,
+                    market: case.market_id,
+                    owner: case.owner,
+                    amount: 1,
+                },
+            ),
+            Err(Refusal::Adapter(ClutchError::Replay))
+        );
+        // At the next sequence it lands, and cash accumulates.
+        apply_endow(
+            &case.market,
+            &mut case.position,
+            &mut case.replay,
+            case.owner,
+            &EndowRequest {
+                sequence: 1,
+                market: case.market_id,
+                owner: case.owner,
+                amount: 50,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            PositionAccount::decode(&case.position).unwrap().cash_atoms,
+            300
+        );
+    }
+
+    #[test]
+    fn an_endowment_refuses_every_hostile_caller_and_state() {
+        let base = EndowCase::new();
+        let request = EndowRequest {
+            sequence: 0,
+            market: base.market_id,
+            owner: base.owner,
+            amount: 250,
+        };
+
+        // A signer who is not the position owner.
+        let mut case = EndowCase::new();
+        assert_eq!(
+            apply_endow(
+                &case.market,
+                &mut case.position,
+                &mut case.replay,
+                h(0x77),
+                &request
+            ),
+            Err(Refusal::Adapter(ClutchError::UnauthorizedActor))
+        );
+
+        // An intent naming another market, and one naming another owner.
+        let mut case = EndowCase::new();
+        assert_eq!(
+            apply_endow(
+                &case.market,
+                &mut case.position,
+                &mut case.replay,
+                case.owner,
+                &EndowRequest {
+                    market: h(0x66),
+                    ..request
+                }
+            ),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+        assert_eq!(
+            apply_endow(
+                &case.market,
+                &mut case.position,
+                &mut case.replay,
+                case.owner,
+                &EndowRequest {
+                    owner: h(0x55),
+                    ..request
+                }
+            ),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+
+        // A resolved market and a closing position both refuse.
+        let mut case = EndowCase::new();
+        let mut resolved = case.market_value;
+        resolved.lifecycle = 1;
+        resolved.encode(&mut case.market).unwrap();
+        assert_eq!(
+            apply_endow(
+                &case.market,
+                &mut case.position,
+                &mut case.replay,
+                case.owner,
+                &request
+            ),
+            Err(Refusal::Adapter(ClutchError::NotActive))
+        );
+
+        let mut case = EndowCase::new();
+        let mut closing = case.position_value;
+        closing.close_state = 1;
+        closing.encode(&mut case.position).unwrap();
+        assert_eq!(
+            apply_endow(
+                &case.market,
+                &mut case.position,
+                &mut case.replay,
+                case.owner,
+                &request
+            ),
+            Err(Refusal::Adapter(ClutchError::NotActive))
+        );
+
+        // A credit past the market's immutable cap, and one that would wrap.
+        let mut case = EndowCase::new();
+        assert_eq!(
+            apply_endow(
+                &case.market,
+                &mut case.position,
+                &mut case.replay,
+                case.owner,
+                &EndowRequest {
+                    amount: case.market_value.collateral_cap + 1,
+                    ..request
+                }
+            ),
+            Err(Refusal::Adapter(ClutchError::CollateralCap))
+        );
+        // Exactly at the cap is admitted: the bound is inclusive.
+        apply_endow(
+            &case.market,
+            &mut case.position,
+            &mut case.replay,
+            case.owner,
+            &EndowRequest {
+                amount: case.market_value.collateral_cap,
+                ..request
+            },
+        )
+        .unwrap();
+
+        let mut case = EndowCase::new();
+        let mut rich = case.position_value;
+        rich.cash_atoms = u64::MAX;
+        rich.encode(&mut case.position).unwrap();
+        assert_eq!(
+            apply_endow(
+                &case.market,
+                &mut case.position,
+                &mut case.replay,
+                case.owner,
+                &EndowRequest {
+                    amount: 1,
+                    ..request
+                }
+            ),
+            Err(Refusal::Adapter(ClutchError::Arithmetic))
+        );
+
+        // A replay account bound to another generation.
+        let mut case = EndowCase::new();
+        let mut foreign = case.replay_value;
+        foreign.position_generation = 9;
+        foreign.encode(&mut case.replay).unwrap();
+        assert_eq!(
+            apply_endow(
+                &case.market,
+                &mut case.position,
+                &mut case.replay,
+                case.owner,
+                &request
+            ),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+
+        // Nothing above wrote: every refusing path left the bytes alone.
+        let untouched = EndowCase::new();
+        assert_eq!(base.position, untouched.position);
+        assert_eq!(base.replay, untouched.replay);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Fixtures                                                            */
+    /* ------------------------------------------------------------------ */
+
+    /// A generic, well-formed 266-byte collateral policy.
+    ///
+    /// Built through the layout crate's own encoder rather than transcribed as
+    /// hex: this module is not the owner of those bytes and has no business
+    /// carrying a second copy of them.
+    fn policy_bytes() -> [u8; collateral::COLLATERAL_POLICY_BYTES] {
+        let backing = collateral::CurrencyRef::spl(collateral::TOKEN_2022_PROGRAM, [0x6d; 32], 6);
+        let policy = collateral::CollateralPolicy {
+            schema_version: collateral::COLLATERAL_POLICY_SCHEMA,
+            flags: collateral::COLLATERAL_POLICY_STRICT_FLAGS,
+            collateral: backing,
+            fee: collateral::CurrencyRef::NATIVE_SOL,
+            liveness: collateral::CurrencyRef::NATIVE_SOL,
+            max_supply_atoms: 10_000,
+            allowed_mint_extensions: 0,
+            required_mint_extensions: 0,
+            allowed_account_extensions: collateral::EXTENSION_IMMUTABLE_OWNER,
+            required_account_extensions: 0,
+        };
+        let mut out = [0; collateral::COLLATERAL_POLICY_BYTES];
+        policy.encode(&mut out).unwrap();
+        out
+    }
+
+    fn grid_account(stored_bump: u8) -> PriceGridAccount {
+        let mut ticks = [0_u64; clutch_solana_layout::MAX_GRID_TICKS];
+        ticks[0] = 1;
+        ticks[1] = 2;
+        let mut value = PriceGridAccount {
+            grid: Hash32::ZERO,
+            realm: h(1),
+            price_scale: 10_000,
+            tick_count: 2,
+            ticks,
+            stored_bump,
+            flags: 0,
+        };
+        value.grid = value.recomputed_grid_id().unwrap();
+        value
+    }
+
+    fn order_record(rank: u64) -> clutch_solana_layout::OrderRecord {
+        clutch_solana_layout::OrderRecord {
+            owner: h(0x20),
+            order_id: clutch_solana_layout::canonical_order_id(rank),
+            outcome: 0,
+            side: 0,
+            quantity: 10,
+            limit: 1,
+            minimum_fill: 0,
+            flags: 0,
+            generation: 1,
+            expiry_epoch: 9,
+        }
+    }
+
+    /// One coherent `(market, hoard, position, replay)` plane for `Endow`.
+    struct EndowCase {
+        market_id: MarketId,
+        owner: Hash32,
+        market_value: MarketAccount,
+        position_value: PositionAccount,
+        replay_value: ReplayAccount,
+        hoard: HoardAccount,
+        market: [u8; account_len::MARKET],
+        position: [u8; account_len::POSITION],
+        replay: [u8; REPLAY_ACCOUNT_LEN],
+    }
+
+    impl EndowCase {
+        fn new() -> Self {
+            let realm = h(1);
+            let profile = h(2);
+            let market_id = canonical_market_id(realm, profile, 3);
+            let owner = h(0x11);
+            let mut outcomes = [Hash32::ZERO; MAX_OUTCOMES];
+            for (index, slot) in outcomes.iter_mut().enumerate().take(2) {
+                *slot = canonical_outcome_id(market_id, index as u8);
+            }
+            let market_value = MarketAccount {
+                market: market_id,
+                realm,
+                profile,
+                terms: h(4),
+                outcome_count: 2,
+                lifecycle: 0,
+                stored_bump: 255,
+                hoard_bump: 254,
+                outcomes,
+                feed: h(5),
+                collateral_cap: 1_000,
+                created_slot: 0,
+                reserved: Hash32::ZERO,
+            };
+            let position_value = PositionAccount {
+                market: market_id,
+                owner,
+                generation: 0,
+                internal: [0; MAX_OUTCOMES],
+                cash_atoms: 0,
+                reserved_cash_atoms: 0,
+                stored_bump: 253,
+                close_state: 0,
+            };
+            let replay_value = ReplayAccount {
+                market: market_id,
+                owner,
+                position_generation: 0,
+                sequence: 0,
+                stored_bump: 252,
+                flags: 0,
+            };
+            let hoard = HoardAccount {
+                market: market_id,
+                realm,
+                authority: h(6),
+                collateral_atoms: 0,
+                stored_bump: 254,
+                flags: 0,
+            };
+            let mut market = [0; account_len::MARKET];
+            let mut position = [0; account_len::POSITION];
+            let mut replay = [0; REPLAY_ACCOUNT_LEN];
+            market_value.encode(&mut market).unwrap();
+            position_value.encode(&mut position).unwrap();
+            replay_value.encode(&mut replay).unwrap();
+            Self {
+                market_id,
+                owner,
+                market_value,
+                position_value,
+                replay_value,
+                hoard,
+                market,
+                position,
+                replay,
+            }
+        }
+    }
+
+    /// The epoch identity helper the page test leans on, pinned so that a
+    /// change in derivation is a failure here rather than a mystery address.
+    #[test]
+    fn the_page_geometry_matches_the_relation_book() {
+        let market: MarketId = canonical_market_id(h(1), h(2), 3);
+        let epoch: EpochId = canonical_epoch_id(market, 4);
+        assert_ne!(epoch, Hash32::ZERO);
+        assert_eq!(RELATION_VERSION, 1);
+        assert_eq!(MAX_ORDER_PAGES, 4);
+    }
+}

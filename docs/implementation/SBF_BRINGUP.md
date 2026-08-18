@@ -160,6 +160,7 @@ two lanes editing one file. Every path below is under
 | `seeds.rs` | the proposed PDA seed schema for all 15 protocol accounts and the 3 reference-only ones | shared — append only |
 | `accounts.rs` | hostile-metadata authentication, PDA comparison, and every account decoder | shared — foundation lane |
 | `dispatch.rs` | request decoding and routing on the action tag | shared — one arm per family |
+| `instructions/genesis.rs` | `Intent::InitRealm`, `Intent::InitProfile`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::Endow` | **implemented** — the only module that creates accounts; see the genesis addendum |
 | `instructions/split.rs` | `Intent::Split` | **implemented** |
 | `instructions/merge_materialize.rs` | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` | **implemented** — all three, through the `split.rs` seam plane |
 | `instructions/market_init.rs` | `Intent::CreateMarket` | **implemented** — validated initialization-write over pre-created accounts |
@@ -426,6 +427,17 @@ Relative to what `programs/solana-reference` already does:
    the `invoke_signed` seed plumbing are unwritten and untested, and the
    all-zero precondition is what keeps that missing half detectable rather than
    assumed. Genesis pre-creates the eight zeroed accounts.
+
+   **Update 2026-08-19 — the creation half now exists, for a different set of
+   accounts.** `instructions/genesis.rs` writes the
+   `system_instruction::create_account` CPI, reads the rent-exemption parameters
+   off the rent sysvar, and drives `invoke_signed` with PDA seeds, for five
+   accounts: Realm, Profile, price grid, terms, and order page. `CreateMarket`
+   is **unchanged** and still creates nothing — its twelve accounts still arrive
+   pre-created — so the item stays open *for the market plane*. What it is no
+   longer true of is the program: the three named sub-gaps are written and host-
+   tested, and what remains for `market_init` is adopting them, which is that
+   lane's edit and not this one's.
 3. **Closed.** `CreateMarket` no longer refuses `AuthorizationUnavailable` and
    `Resolve`/`RedeemInternal` no longer refuse `ResolutionEvidenceUnavailable`;
    all three are implemented and all three are driven in the SVM. What replaced
@@ -1116,6 +1128,180 @@ plan/expected/<case>.<plane>.<role>.pre.hex   genesis pre-state
 
 `scripts/simulate.py --plan <dir> --only <case>` re-runs a single case.
 
+## The genesis plane (addendum, 2026-08-19)
+
+`instructions/genesis.rs` is the first family in this program that **creates**
+accounts. Every other family writes over accounts that arrived already created,
+program-owned, rent-funded and correctly sized; that arrangement is deferred
+check 2 above, and this module is the missing half of it — the
+`system_instruction::create_account` CPI, the rent-exemption computation, and
+the `invoke_signed` seed plumbing, written and host-tested.
+
+### Instruction coverage
+
+| intent | accounts | creates | oracle |
+| --- | ---: | --- | --- |
+| `InitRealm` | 5 | `RealmAccount`, 70 B | layout codec |
+| `InitProfile` | 6 | `ProfileAccount`, 100 B, policy frozen | layout codec + `verify_profile_identity` |
+| `InitPriceGrid` | 6 | `PriceGridAccount`, 589 B | layout codec, verbatim buffer copy |
+| `InitTerms` | 7 | `TermsAccount`, 1,656 B | layout codec, verbatim buffer copy |
+| `InitOrderPage` | 6 | one order page, 4,012 B | `stream::init_page` |
+| `Endow` | 4 | nothing — credits position cash | layout codecs on the post-state |
+
+Account lists all start `[payer, target, …]` and the creating five end
+`[…, system program, rent sysvar]`. The payer signs and funds; nothing else is
+privileged, which is the same **PROPOSED** permissionless model `market_init`
+argues for and for the same reason — the frozen layout carries no authority
+field to gate against, so a gate here would be an invented ABI. What bounds the
+plane instead is that every address is content- or nonce-derived: a caller names
+evidence and the address follows.
+
+`Endow` is not permissionless: its signer must be the position's own owner.
+
+### The creation step, and the two checks that make it falsifiable
+
+`create_pda_account` refuses a target that is not an empty, system-owned,
+writable slot (`AlreadyInitialized`, **before** any CPI), refuses a space above
+the runtime's 10,240-byte per-instruction growth ceiling, computes the
+rent-exempt minimum, invokes the system program with the target's seeds, and
+then checks that an account actually appeared — `target.data_len() == space &&
+target.owner == program_id`.
+
+That last check is not ceremony. `solana_cpi::invoke_signed` compiles to
+`Ok(())` off `target_os = "solana"`, exactly as the token lane measured, so
+without it every host path would report a creation that did not happen. It is
+the same silent-no-op detector `token.rs` answers with its exact-delta
+comparisons, and it means the honest statement about this module is precise:
+**the account-creation path is host-tested for its refusals and its written
+bytes, and its CPI has not yet been executed on a bank.** Driving it needs a
+harness plane that does *not* pre-create the target — which is the harness
+lane's edit, not this one's.
+
+### Rent is read from the chain
+
+The `CreateAccount` instruction takes a lamport figure and something has to
+decide it. This module reads the **rent sysvar account** — 17 bytes: rate
+(`u64`), exemption threshold (`f64`), burn percent (`u8`) — and computes
+`(((128 + space) * rate) as f64 * threshold) as u64`, which is
+`solana_rent::Rent::minimum_balance` transcribed under a citation. Pinning the
+mainnet defaults as constants would have been shorter and would have made this
+program's idea of rent a parallel truth to the runtime's. The sysvar is
+authenticated like any other evidence account: right key, right length, not
+writable, and a threshold that is a finite non-negative number.
+
+At the default parameters (`3,480` lamports/byte-year, threshold `2.0`) the
+figures are: Realm 1,378,080; Profile 1,586,880; price grid 4,990,320; terms
+12,416,640; order page **28,814,400** lamports (≈ 0.0288 SOL), the widest
+account this module creates.
+
+No dependency was added to reach the formula. `solana-rent` would have brought
+one transitive crate for one three-line function; restating it under a citation,
+with a test that pins the result against the published defaults, is the smaller
+thing to audit. That is a judgement call and it is recorded as one.
+
+### The evidence-buffer initializers copy verbatim
+
+`InitPriceGrid` and `InitTerms` take a read-only buffer account holding exactly
+the artifact's encoded bytes. Both artifacts are self-certifying, so decoding
+the buffer already proves its digest is its own; the intent's declared digest is
+compared against that, and the Realm, Profile and grid bindings are compared
+against accounts the plane authenticated. Then the buffer is copied **verbatim**
+— not decoded into a struct and re-encoded — for two reasons: a terms value plus
+its encode buffer is 3.3 KiB on one 4 KiB frame, and a verbatim copy makes "what
+did the account become" a byte comparison rather than a trusted round trip.
+
+The consequence is stated rather than hidden: the caller must present the buffer
+already carrying the derived PDA bump, and a buffer carrying any other bump is
+`WrongBump`. Patching the bump at a byte offset here would be a second
+transcription of a layout that `clutch-solana-layout` owns.
+
+### Refusal codes
+
+`error.rs` gains four appends in the reserved `0x0070-0x007f` block; `0x0060`
+onward was previously unallocated and `0x0074-0x007f` stay free.
+
+| code | name | fires when |
+| --- | --- | --- |
+| `0x0070` | `WrongSystemProgram` | the system-program role is not the all-zero, executable system program |
+| `0x0071` | `WrongRentSysvar` | wrong key, wrong length, writable, or a non-finite exemption threshold |
+| `0x0072` | `AccountCreationFailed` | the `CreateAccount` CPI refused, or returned without creating anything |
+| `0x0073` | `EvidenceBufferMismatch` | a policy or artifact buffer is not the artifact the intent names |
+
+Reused, unchanged: `AlreadyInitialized` (`0x0040`) for a target that already
+exists, `WrongBump` (`0x000a`) for a buffer carrying the wrong bump,
+`CollateralCap` (`0x0012`) for an endowment past the market's immutable cap,
+`Replay` (`0x000d`), `UnauthorizedActor` (`0x0011`), `NotActive` (`0x0016`), and
+`Arithmetic` (`0x0013`).
+
+### `Endow`: the internal-ledger half of a deposit
+
+`Endow` credits `PositionAccount::cash_atoms` and advances the replay sequence.
+It moves no collateral, touches no Hoard, and is backed by nothing — the value
+leg is `token::transfer_checked` into the Hoard token account, constructed and
+wired by nothing (`TOKEN2022_PLAN.md`: "constructed, not wired").
+
+This is the harness's existing conjuring, promoted to an instruction. The
+bring-up genesis fixture writes an opening `cash_atoms` into a position account
+before any transaction runs, and `LIFECYCLE_WALK.md` §item 2 names that as the
+sharpest gap in the walk. A number in a fixture has no signer, no sequence, no
+log line and no ceiling. An `Endow` has all four, and the seam the collateral
+leg will later attach to now exists as code rather than as a plan.
+
+One ceiling is real and is stated as what it is: the resulting `cash_atoms` must
+not exceed `MarketAccount::collateral_cap`. That is **necessary and not
+sufficient** — the market's immutable cap bounds all collateral it may ever
+hold, so a fortiori it bounds any one position's claim on that collateral, but
+the sufficient check needs a market-wide cash aggregate no account in the frozen
+layout carries. Named, not closed.
+
+The cap is deliberately **not** checked against `HoardAccount::collateral_atoms`:
+the Hoard's number is escrowed collateral backing complete sets, which only
+`Split` raises, and cash is the un-escrowed balance beside it. Adding the two
+would double-count the same atoms across the seam they are defined by. A test
+asserts the Hoard is unmoved by an endowment.
+
+### No reference oracle — the differential must not be pointed here
+
+`clutch_solana_reference::apply` refuses every intent in this module with
+`UnsupportedIntent`, exactly as it refuses `PlaceOrder` and `CancelOrder`
+(deferred check 16). So a differential run over this family would be this
+program agreeing with a refusal, which is worth nothing. The host tests use the
+**layout codecs** as the oracle instead: every expected account is produced by
+`clutch-solana-layout`'s own encoder and compared byte for byte, and no expected
+byte is typed by hand. Closing this properly means an order-and-genesis
+transition family in `programs/solana-reference`, which is the same open row the
+order family has.
+
+### What this module does not do
+
+* **No `InitEpoch`.** `InitOrderPage` requires an epoch account to already
+  exist, and on a fresh chain nothing creates one; the harness loads the epoch
+  plane at genesis. The epoch is a ten-identity account whose freeze semantics
+  belong with the order-set commitment work, and fixing a wire format for a
+  freeze this program cannot perform would be the wrong order. Gap-ledger row 14
+  is therefore **half** closed: page creation is representable and driveable,
+  epoch creation and epoch freeze are not.
+* **No clearing accounts.** The two accounts of `clutch_solana_layout::clearing`
+  landed as codecs and are consumed by nothing. The checkpoint is also the one
+  account in the inventory a single CPI cannot allocate — 48,750 bytes against
+  the 10,240-byte growth ceiling — so its creation is a five-instruction realloc
+  sequence or a client-signed top-level `CreateAccount`; both are analyzed in
+  `SOLANA_LAYOUT.md`, neither is implemented, and `create_pda_account` refuses
+  the space outright rather than emitting a CPI that would fail deeper.
+* **No SVM leg.** Nothing in this family has an accepting transaction on a bank
+  yet, for the reason above: the harness pre-creates every account, so it cannot
+  present the empty target these instructions require.
+
+### Frames
+
+`cargo-build-sbf` on the pinned toolchain emits **zero** frame diagnostics for
+any `clutch_sbf` function, this module included. The diagnostic set is
+byte-identical to the pre-genesis build: thirteen diagnostics, all in
+`clutch_solana_reference` and in the two host-only `OrderPageAccount` decoders
+of `clutch_solana_layout`, none of which the entrypoint reaches. The new layout
+module (`clearing`) adds none of its own, which is the measurement its
+streaming-only shape was chosen for.
+
 ## Reproducing
 
 ```sh
@@ -1142,23 +1328,27 @@ before re-running.
 
 ## Correct description
 
-"A bring-up SBF program implementing ten instruction families, eight of which
-execute inside a local simulated bank on regenerated fixtures with account
+"A bring-up SBF program implementing sixteen instruction families, eight of
+which execute inside a local simulated bank on regenerated fixtures with account
 validation, address derivation, and post-state bytes agreeing byte for byte with
 the offline reference adapter — or, where no reference transition exists, with an
 independent re-encode that the reference's own validator accepts. `Resolve`,
 once measured not to fit a Solana transaction, fits again at 536 123 compute
-units since the terms revision. `PlaceOrder` and `CancelOrder` are implemented
-with host tests only — no reference oracle and no SVM leg — and `SettlePage` is
-the one remaining stub."
+units since the terms revision. `PlaceOrder`, `CancelOrder`, and the six genesis
+families — five account-creating initializers plus the `Endow` cash credit — are
+implemented with host tests only: no reference oracle and no SVM leg.
+`SettlePage` is the one remaining stub."
 
 It is not a complete program, not verified, not audited, and not authorization
 to deploy anywhere. Every transaction is simulated with signature verification
 off and nothing is committed, so "the actor signed" remains a message-header
-fact. `PlaceOrder` and `CancelOrder` have no SVM evidence; settlement is a stub.
-`CreateMarket` founds markets over pre-created accounts and cannot create an
-account. The window identity and the feed summary digest are recorded and never
-verified, because the program owns no hash primitive.
+fact. `PlaceOrder`, `CancelOrder`, and the genesis family have no SVM evidence;
+settlement is a stub. `CreateMarket` founds markets over pre-created accounts
+and cannot create an account — the account-creation CPI now exists in
+`instructions/genesis.rs`, for five other accounts, and has never been executed
+on a bank. `Endow` credits internal cash that no collateral backs, by design and
+in writing. The window identity and the feed summary digest are recorded and
+never verified, because the program owns no hash primitive.
 
 
 > **Clean-tree ELF record (2026-08-19):** full gate re-run at commit

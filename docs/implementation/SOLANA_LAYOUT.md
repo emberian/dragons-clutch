@@ -84,16 +84,25 @@ All integers are little-endian. The first two bytes are `(tag, version)`.
 | Final pot | 14 | 262 | epoch/market/candidate, 16 pot balances, pot cash, rounding pot, phase |
 | Settlement receipt | 15 | 217 | epoch/market/candidate, buy/sell order ids, slice, quantity, price, consideration, consumed flags |
 | Resolution | 16 | 165 | market/terms/feed, sealed window digest, cursor, repair generation, payout index |
+| Clearing checkpoint | 17 | 48750 | 158-byte header (market/epoch/candidate, order-set binding, consumed fold, walk cursor) + 48,592 opaque body |
+| Candidate feed | 18 | 6266 | 346-byte header (candidate/epoch/market/order-set, prices, sigma/mu, mask, claimed score) + 64 fills + 416 slices |
 
 One order slot is 236 bytes: a one-byte kind discriminator, that kind's exact
 body (107 bytes single-Egg, 235 bytes portfolio, 80 bytes retirement), and
 canonical zero padding out to the common width. The page header is 236 bytes —
 one more than v3, for `tombstone_count`.
 
-One instance of every listed account is 8,863 bytes; a market whose epoch book
-uses the full four pages is 20,899 bytes. This is the byte-size inventory only;
-it is not a rent, account-metadata, transaction-message, or compute-unit
-estimate, and it excludes page multiplicity beyond the one case named.
+One instance of each of the fifteen **protocol** accounts (tags 1-16, the two
+clearing-plane rows excluded) is 9,215 bytes; a market whose epoch book uses the
+full four pages is 21,251 bytes. **Both figures are corrected here**: they read
+8,863 and 20,899 until this revision, which is the pre-`927d4bc` terms width —
+the v3 terms revision grew that account by 352 bytes and these two sums were not
+re-added. The clearing plane is not per-market and is excluded on purpose: it is
+one checkpoint and one feed per `(market, epoch, candidate)` under verification,
+adding 55,016 bytes for each candidate a crank is working on. This is the
+byte-size inventory only; it is not a rent, account-metadata,
+transaction-message, or compute-unit estimate, and it excludes page multiplicity
+beyond the one case named.
 
 `MAX_ORDERS_PER_PAGE = 16` and `MAX_ORDER_PAGES = 4`, so one frozen page set is
 exactly `MAX_EPOCH_ORDERS = 64` orders — the batch relation's `MAX_ORDERS`. A
@@ -884,8 +893,11 @@ Named here so they are debt rather than oversight:
   `EPOCH` revision this one deliberately does not open.
 * Nothing here proves the owner-tag bijection §10 describes; the epoch's
   `owner_count` is still an unchecked claim from this crate's point of view.
-* `init_page` exists, but no intent creates a page and no instruction calls it;
-  page creation remains unrepresentable on the wire.
+* ~~`init_page` exists, but no intent creates a page and no instruction calls
+  it; page creation remains unrepresentable on the wire.~~ **Closed
+  2026-08-19** by `Intent::InitOrderPage` and `instructions::genesis`; the
+  *freeze* half of the same row is still open — `frozen_set_commitment` and
+  `seal_page` are still called by nothing.
 
 ## Collateral-policy digest field
 
@@ -933,17 +945,21 @@ one. The five codes added with this revision are `shape.invalid-price-grid`
 Intent bytes use a `(tag, INTENT_VERSION)` prefix and no variable-length fields:
 CreateMarket (139 bytes), Split/Merge (74), Materialize/Dematerialize (107),
 FeedAdvance (74), PlaceOrder (174 single-Egg or 302 portfolio), CancelOrder
-(138), and SettlePage (68). `MAX_INTENT_BYTES = 302` is exactly the widest of
-them — a portfolio placement — rather than a round number with slack in it.
+(138), SettlePage (68), and the genesis appends below — InitRealm (44),
+InitProfile (69), InitPriceGrid (66), InitTerms (66), InitOrderPage (70), Endow
+(74). `MAX_INTENT_BYTES = 302` is exactly the widest of them — a portfolio
+placement — rather than a round number with slack in it, and **none of the six
+appends widened it**.
 `Intent::encode` writes into caller-owned storage; `Intent::decode` accepts only
 the exact length implied by its tag **and its slot kind**. Zero quantities,
 invalid outcomes, zero identities, invalid order flags, non-rank order ids, a
 placement whose slot kind is padding or a retirement, and unsupported tags are
 refusals. The intent is data for a future adapter, not authority to sign or
 submit anything. No
-intent exists yet for freezing a page set, submitting a candidate, or settling a
-slice; those state accounts are currently written by no encoded intent in this
-crate.
+intent exists yet for freezing a page set, submitting a candidate, freezing an epoch's
+page set, or settling a slice; those state accounts are currently written by no
+encoded intent in this crate. Page *creation* is no longer on that list — see
+the genesis addendum.
 
 ## Seam to the semantic crates
 
@@ -975,6 +991,218 @@ future adapter must check all aliases and authenticated mints/programs before
 applying the kernel's logical writes. CPI construction, return-data checking,
 clock/replay policy, and SBF/runtime behavior are explicit unverified seams.
 
+## Genesis intents (addendum, 2026-08-19)
+
+Six intents that bring accounts into existence, plus the one that credits a
+position's opening cash. All are `INTENT_VERSION = 2` and all refuse
+`INTENT_VERSION_V1 = 1` explicitly — not because a version-1 encoding of these
+tags ever existed, but because the pair `(tag, version)` must never name two
+shapes, and version 1 names none at tags 10-15 and must keep naming none.
+
+| intent | tag | bytes | fields |
+| --- | ---: | ---: | --- |
+| `InitRealm` | 10 | 44 | parent Profile identity, Realm nonce, outcome width, Profile version |
+| `InitProfile` | 11 | 69 | Realm, child collateral-policy digest, subfield schema version, Profile version |
+| `InitPriceGrid` | 12 | 66 | Realm, grid digest |
+| `InitTerms` | 13 | 66 | Realm, terms digest |
+| `InitOrderPage` | 14 | 70 | market, epoch, page index, page count |
+| `Endow` | 15 | 74 | market, owner, amount |
+
+`MAX_INTENT_BYTES` is unchanged at 302. That is the point of every decision
+below: the intent budget is the width of the widest *transition*, and an
+initialization that carried a whole artifact would make every instruction's
+envelope as wide as the largest artifact anyone might ever found.
+
+### Identities are derived, never carried
+
+`InitRealm` does not carry a Realm identity, because there is none to carry:
+`canonical_realm_id` derives it from exactly `(profile, realm_nonce)`. The
+`profile` it does carry is the *parent* Profile identity, which is itself a
+total function of the Realm's 266-byte collateral policy through
+`collateral::ParentProfile` — so an adapter holding those bytes recomputes the
+claim and refuses a mismatch. The same rule runs through the family: a Profile's
+identity comes from its policy digest, a grid's and a terms artifact's from
+their own bodies, and a page's address from its position in its epoch. Nothing
+here lets a caller name an address; a caller names *evidence*, and the address
+follows.
+
+Two fields are carried anyway and are checked rather than trusted, for the
+reason `PlaceOrder` carries an order id it cannot choose: `InitRealm`'s
+`max_outcomes` (V1 admits exactly `MAX_OUTCOMES`) and `InitProfile`'s
+`subfield_schema_version`. A caller states the shape it believes it is
+creating, and a caller that believes wrong is refused instead of quietly
+creating something else.
+
+### Where the bodies travel: the evidence-buffer pattern, made general
+
+A `TermsAccount` is 1,656 bytes and a `PriceGridAccount` is 589. Neither fits an
+intent and neither should. Both ride an **evidence buffer**: a read-only account
+holding exactly the artifact's encoded bytes, presented from anywhere the caller
+likes, authenticated by *recomputation* rather than by address. That is
+precisely the pattern the collateral-policy account established (`market_init`'s
+`IX_POLICY`), generalized from one artifact to three.
+
+The pattern works here because both artifacts are already **self-certifying**:
+`TermsAccount::recomputed_terms_digest` and
+`PriceGridAccount::recomputed_grid_id` are decode-time refusals, so a buffer
+that decodes has already proved its digest is its own. The intent then carries
+that digest, and the adapter compares. A well-formed artifact belonging to
+another Realm therefore earns a *binding* refusal, not a decode refusal — the
+two are different facts and the adapter reports them as different codes.
+
+The decision recorded plainly, because the alternative was live: `InitProfile`
+could have carried the 266 policy bytes in a widened intent. It does not. The
+policy already has a carrier, and a second carrier for the same bytes would be
+a second truth — the thing this crate spends most of its refusals preventing.
+What the intent carries is the digest binding.
+
+### `Endow`, and what it is not
+
+`Endow { market, owner, amount }` credits `PositionAccount::cash_atoms`. It
+moves no collateral, touches no Hoard, and is backed by nothing: the value leg
+is a Token-2022 `TransferChecked` into the market's Hoard token account, which
+is constructed in `clutch-sbf`'s token module and wired by no instruction.
+
+This is not a new hole. It is the existing one, made auditable. The bring-up
+harness already conjures opening cash by writing a `cash_atoms` into a genesis
+fixture, which `LIFECYCLE_WALK.md` names as the sharpest gap in the walk; a
+number that appears in a fixture has no signer, no sequence, no log line and no
+ceiling, and an `Endow` has all four. Naming the instruction after the honest
+thing it does — an internal-ledger credit — is what keeps a later reader from
+mistaking it for a deposit.
+
+## The clearing plane (addendum, 2026-08-19)
+
+`STREAMING_RELATION_DESIGN.md` §10 names two accounts the streaming verifier
+needs and assigns both to this crate. They are here, in `src/clearing.rs`, and
+**nothing consumes them**: no instruction reads or writes either, and no claim
+is made that the streaming verifier has been integrated. What landed is byte
+ownership, frozen and adversarially tested before the lane that needs it starts.
+
+| account | tag | version | bytes | shape |
+| --- | ---: | ---: | ---: | --- |
+| `ClearWorkAccount` | 17 | 1 | 48,750 | 158-byte header + 48,592-byte opaque body |
+| `CandidateFeedAccount` | 18 | 1 | 6,266 | 346-byte header + 64 × 8 fills + 416 × 13 slices |
+
+### Neither account is ever a value
+
+The order page taught the 4 KiB lesson at 4,012 bytes; the checkpoint is twelve
+times the page. So there is deliberately **no** `decode` returning either
+account: every entry point returns a small header by value, walks one element at
+a time (`FillCursor`, `SliceCursor`, `fill_at`, `slice_at`), or writes into a
+caller-owned slice. The largest value any function in the module holds is one
+`CandidateFeedHeader` at 346 bytes. `cargo-build-sbf` emits no frame diagnostic
+for anything in `clearing`, which is the measurement rather than the intent.
+
+### The body is opaque, and that is a finding
+
+`CLEAR_WORK_BODY_BYTES = 48,592` is the pinned `size_of::<ClearWorkV1>()` of
+`clutch_batch::relation_v1_stream`. That struct is `#[derive(Clone, Debug,
+PartialEq, Eq)]` over a plain **`repr(Rust)`** layout, and Rust guarantees
+nothing about `repr(Rust)` field order or padding across compiler versions.
+
+So the number is a measurement of one build, not a wire fact, and this crate
+refuses to give the body any interpretation at all. It owns the length, the
+framing, the identity binding, and two window accessors (`clear_work_body`,
+`clear_work_body_mut`) that hand the region to whoever does own it. **Casting
+these bytes to a `&mut ClearWorkV1` is not sanctioned by anything here.** The
+obligation that would sanction it is on `clutch-batch` and is one of:
+
+1. declare `#[repr(C)]` on `ClearWorkV1` and its five nested value types, add a
+   `Pod`/`Zeroable` bound, and re-pin the size — after which a zero-copy cast is
+   defensible and the account body becomes the struct; or
+2. grow an explicit serializer in `clutch-batch`, at which point this crate's
+   length constant follows the serializer's width rather than `size_of`.
+
+Until one of those lands, an integration that byte-casts is unsound, and a
+toolchain bump can silently change the required account length. A codec test
+pins the constant so the change is a red test rather than a mainnet surprise.
+
+### The consumed-fold binding
+
+§10 assigns the cryptographic anchoring of P-BATCH-03 to this crate: SHA-256
+page digests authenticate the *bytes*, the in-crate `mix` fold authenticates the
+*walk*. `bind_order_set` is the layout half — it stamps `(order_set,
+consumed_fold)` **once**, at pass-1 finalize, and refuses a second stamp — and
+`require_continuation` is the refusal a later pass runs into when its epoch
+shows a different `order_set`. Neither function verifies a fold; the fold is
+`clutch-batch`'s, and saying so is the point.
+
+The header carries one more thing the checkpoint body cannot: the **walk
+position**. `ClearWorkV1`'s cursor counts pushes; `page_cursor`/`slot_cursor`
+name a page and a slot, and `live_rank` is the relation's order index, which
+counts records and not retirements. Those are layout facts and only this crate
+knows them. What the header deliberately does **not** restate is the feed phase,
+the pass number, the push cursor, the interned owner count, or the running fold
+— all of which the body already decides, and restating them would be a second
+truth that could disagree with the first.
+
+### One candidate, one identity
+
+`CandidateFeedHeader::recomputed_candidate_digest` uses **exactly** the preimage
+`CandidateRecord::recomputed_candidate_digest` uses — epoch, market, order
+length, outcome count, prices, sigma, mu, honored mask. So a feed and a record
+for the same candidate agree by construction or one of them does not decode. The
+feed is not a second candidate account; it is the fill and witness half of the
+one candidate, and the record stays the coordinates half.
+
+The feed adds one field the record has no use for: `order_set`, the frozen
+page-set digest the fills were computed against. It is required nonzero, because
+a fill vector against an unfrozen book is a claim about a book that can still
+change.
+
+`declared_slices` is a real `Option<u16>` on the wire, carried as a flag bit
+plus a count. "No witness" and "a witness of zero slices" are different feeds —
+the second asserts an empty canonical decomposition and the first asserts
+nothing — and collapsing them would make an assertion unrepresentable.
+
+### The 10 KiB creation ceiling — the real design point
+
+The Solana runtime caps how much an account's data may grow inside one
+instruction at `MAX_PERMITTED_DATA_INCREASE = 10,240` bytes. An account created
+through a cross-program invocation grows from zero inside the creating
+instruction, so **10,240 bytes is also the largest account a program can
+allocate in one CPI**. (The absolute account ceiling,
+`MAX_PERMITTED_DATA_LENGTH`, is 10 MiB and is not the binding constraint here.)
+
+| account | bytes | one CPI creation? |
+| --- | ---: | --- |
+| every protocol account, order page included | ≤ 4,012 | yes |
+| candidate feed | 6,266 | yes |
+| **clearing checkpoint** | **48,750** | **no** |
+
+The checkpoint is the only account in the inventory that a program cannot
+create. Two paths exist and both are real:
+
+* **Client-signed top-level `CreateAccount`.** A `SystemProgram::CreateAccount`
+  submitted as a *top-level* instruction is not subject to the per-instruction
+  growth cap and allocates 48,750 bytes directly. The cost: the checkpoint
+  becomes a keypair-addressed account, not a PDA, so the program must
+  authenticate it by its stored `(market, epoch, candidate)` header rather than
+  by derivation — which the header is already shaped to support, but which is a
+  strictly weaker authentication than every other account in this program has.
+* **CPI create, then realloc.** Create a PDA at ≤ 10,240 bytes and grow it by at
+  most 10,240 per instruction: `⌈48,750 / 10,240⌉ = 5` instructions, which may
+  sit in one transaction because the cap is per instruction. This keeps the
+  checkpoint a PDA. The cost: the account is *observable in a partially grown
+  state* between instructions, so the header must carry a length field the
+  decoder checks — which it does (`body_len`, refused unless it equals
+  `CLEAR_WORK_BODY_BYTES`) — and each realloc step must also top up rent.
+
+**Recommendation: the realloc path**, and the reason is authentication rather
+than ergonomics. A checkpoint at a keypair address can be substituted; a
+checkpoint at `(epoch, candidate)` cannot. The `body_len` field exists precisely
+so a half-grown checkpoint is a refusal and not a short read, and the walk
+cursor's monotonicity means a partially grown account can never be advanced.
+Rent for the whole account at the default parameters is `(128 + 48,750) × 3,480
+× 2 = 340,190,880` lamports, about **0.34 SOL**, which is a real number a
+clearing crank has to fund and is worth quoting before the design is committed
+to.
+
+Neither path is implemented. `instructions::genesis` creates no checkpoint, and
+its `create_pda_account` refuses any space above the CPI ceiling outright rather
+than emitting a CPI that would fail deeper.
+
 ## Non-goals and evidence
 
 There is no Solana dependency, account-info type, PDA derivation, Token-2022
@@ -988,7 +1216,7 @@ computed correctly, that a resolution's window was really sealed, or that any
 multi-position aggregate closes. Each of those needs the owning semantic crate
 plus an authenticated adapter; the bytes only make the question askable.
 
-Gates run offline and locked: 53 unit tests and 2 doc tests,
+Gates run offline and locked: 113 unit tests and 2 doc tests,
 `clippy --all-targets -D warnings`, `RUSTDOCFLAGS="-D warnings" cargo doc
 --no-deps`, and `cargo fmt --check`.
 
