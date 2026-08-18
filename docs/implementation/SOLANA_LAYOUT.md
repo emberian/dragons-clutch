@@ -350,6 +350,142 @@ the epoch, not the relation domain), `owner < domain.owner_count`,
 eligibility, fill, conservation, and pairing question. A byte-valid portfolio
 record is not an admissible order.
 
+## Streaming page decoders (addendum, 2026-08-18)
+
+The SBF foundation lane measured a hard blocker rather than predicting one: on
+the pinned `cargo-build-sbf` toolchain, `OrderPageAccount::decode` is reported
+at an estimated **8,640-byte** call frame and `decode_on_grid` at **8,320**,
+against SBF's 4,096-byte per-frame maximum. The v3 page — a 235-byte header and
+16 tag-discriminated 228-byte slots, 3,883 bytes in all — could therefore not be
+read on-chain at all, and `clutch-sbf` compiles its `read_order_page` wrapper
+off-chain only so that reaching for it is a compile error instead of a frame
+overflow the loader would happily run.
+
+The `stream` module is the fix, in the shape this crate already used for
+`OrderPageAccount::recomputed_page_digest`: nothing ever holds more than one
+slot. It is **additive**. The buffered decoders are unchanged, and they remain
+the golden reference every equivalence test is written against.
+
+### On-chain consumers use only the streaming path
+
+`OrderPageAccount::decode`, `OrderPageAccount::decode_on_grid`, and
+`verify_page_set` are host-only. No instruction compiled for
+`target_os = "solana"` may call them; the frame overflow is undefined behaviour
+at execution time, not a refusal. An on-chain consumer reads a page with
+`stream::verify_page` (or `stream::verify_page_on_grid`), walks its orders with
+`stream::OrderSlotCursor`, and closes a frozen set with
+`stream::verify_page_set` or `stream::epoch_binds_page_set`.
+
+This is a rule about which functions may appear on-chain, not a compiler
+guarantee: the buffered decoders are still codegen'd into an SBF build of this
+crate, so their frame diagnostics still appear in an SBF build log even when
+nothing calls them.
+
+### API surface
+
+| Streaming entry point | Buffered counterpart |
+| --- | --- |
+| `stream::OrderPageHeader::decode` | — (the header half of `OrderPageAccount::decode`) |
+| `stream::OrderPageHeader::validate_shape` | — (the header-local half of `OrderPageAccount::validate`) |
+| `stream::OrderSlotCursor` | — (`OrderPageAccount.orders`, one slot at a time) |
+| `stream::streamed_page_digest` | `OrderPageAccount::recomputed_page_digest` |
+| `stream::verify_page` | `OrderPageAccount::decode` |
+| `stream::verify_page_on_grid` | `OrderPageAccount::decode_on_grid` |
+| `stream::verify_page_set` | `verify_page_set` |
+| `stream::epoch_binds_page_set` | `EpochAccount::binds_page_set` |
+
+`OrderPageHeader` is every page field except the slots. `OrderSlotCursor`
+decodes exactly one `ORDER_SLOT_BYTES` slot per step — kind byte, that kind's
+exact body, canonical zero padding to the common width — and carries across
+steps the two facts a single slot cannot decide: that a slot below
+`order_count` holds a valid record whose order id is strictly above its
+predecessor, and that a slot at or above it is canonical padding. A refused step
+fuses the cursor.
+
+`stream::verify_page` reads the header alone, sweeps the slot array once
+structurally while folding the page digest, checks the header's own shape,
+walks the array a second time for record semantics and the order-id chain, and
+compares the stored digest last. Two passes over the bytes is what buys the
+bounded frame; the bytes are in the account, not on the stack.
+
+`stream::verify_page_set` is the same trade one level up. Every cross-page fact
+— page index, market, epoch, order-set digest, set order count, stored range,
+predecessor link, page digest — is a **header** field, and the only slot facts
+the closure needs are per-page folds already computed while each page was
+verified. So it verifies each page's bytes in index order and then closes the
+set over four headers: under a kilobyte of stack, where four pages would be
+fifteen.
+
+### Equivalence contract
+
+For any byte input, the streaming path returns exactly what the buffered path
+returns — the same `Ok`, or the identical `CodecError`, including which of
+several faults is reported first. `stream::verify_page_set` is stated against
+the composition an on-chain caller would otherwise have written: decode every
+page in index order, then close the set. One exception is stated rather than
+hidden: a set of more than `MAX_ORDER_PAGES` page slices is refused with
+`InvalidCount` before any page bytes are read, because no such set could be a
+book whatever its pages hold.
+
+Equivalence is a property of the whole verdict, not of every helper.
+`OrderPageHeader::validate_shape` deliberately decides only what the first 235
+bytes can decide; it is a cheap precondition, never a page's verdict.
+
+The tests are written as harnesses rather than as fixture-by-fixture assertions:
+each fixture is decided by both paths and the two verdicts are compared. They
+cover every accepted page shape, sixteen structural refusals, the frozen-set
+density and commitment refusals, every hostile byte fixture the buffered slot
+decoder already had (unknown kind, kind byte on a padding slot, nonzero
+single-Egg tail, nonzero slot end, dirty padding, truncation, trailing byte,
+wrong tag, wrong version, all-zero page), and every adversarial page-set fixture
+(dropped middle page, duplicate order id across a boundary, page-order swap,
+post-freeze mutation with and without a repaired page digest, broken predecessor
+link, unfrozen page in a closed set, a ninth portfolio across two pages, an
+undecodable page in either position). A fixture that the buffered path refuses
+is encoded through a validation-free writer, because `OrderPageAccount::encode`
+validates first and so cannot produce the bytes of a page the codec refuses.
+
+### Measured frames
+
+`-Zemit-stack-sizes` on the pinned `cargo-build-sbf` toolchain
+(platform-tools v1.53, `sbpf-solana-solana`), read back with
+`llvm-readelf --stack-sizes`. These are the compiler's per-function frame sizes,
+not a measurement of any executed instruction.
+
+| Function | Frame (bytes) |
+| --- | ---: |
+| `OrderPageAccount::decode` (host-only) | 8,640 |
+| `OrderPageAccount::decode_on_grid` (host-only) | 8,320 |
+| `stream::verify_page_set` | 1,856 |
+| `stream::verify_page_on_grid` | 1,024 |
+| `stream::OrderSlotCursor::next_slot` | 960 |
+| `stream::verify_page` (with its folding body) | 896 |
+| `stream::streamed_page_digest` | 512 |
+| `stream::epoch_binds_page_set` | 512 |
+| `stream::fold_page_digest` | 448 |
+| `stream::OrderPageHeader::decode` | 128 |
+
+The largest streaming frame is 45% of the 4,096-byte maximum, and the SBF build
+of this crate reports no frame overflow for any `stream::` function. Each of
+these is a separate call frame — SBF caps a frame at 4,096 bytes and the call
+depth at 64 — so the nesting `verify_page_set` → `verify_page` → `next_slot` →
+`decode_slot` costs four frames, not one sum.
+
+A unit test keeps the shape from regressing without needing the SBF toolchain:
+it pins `size_of` for every value the streaming API puts on a frame, and it
+reads the module's own source to assert that no slot array, slot-width buffer,
+or page-width byte buffer appears anywhere in it. Those are exactly the
+regressions that would put the 8,640-byte frame back.
+
+Compute units are **not** measured here. The work is close to the buffered
+path's rather than double it: both fold the page preimage into SHA-256 exactly
+once, and where the buffered path decodes each slot once and then *re-encodes*
+all sixteen to hash them, the streaming path decodes each slot twice and hashes
+the account's own bytes. Hashing the raw bytes is sound precisely because a slot
+that decodes has exactly one encoding. Whether an instruction that verifies a
+four-page set fits an SBF compute budget is still an open obligation-10 question
+for the owning lane, and this addendum answers only the frame question.
+
 ## Collateral-policy digest field
 
 `ProfileAccount` gained a 32-byte `collateral_policy_digest` at byte offset
@@ -446,7 +582,7 @@ computed correctly, that a resolution's window was really sealed, or that any
 multi-position aggregate closes. Each of those needs the owning semantic crate
 plus an authenticated adapter; the bytes only make the question askable.
 
-Gates run offline and locked: 45 unit tests and 1 doc test,
+Gates run offline and locked: 53 unit tests and 2 doc tests,
 `clippy --all-targets -D warnings`, `RUSTDOCFLAGS="-D warnings" cargo doc
 --no-deps`, and `cargo fmt --check`.
 

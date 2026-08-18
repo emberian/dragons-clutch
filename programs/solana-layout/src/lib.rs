@@ -11,6 +11,8 @@
 //! authenticate account metadata and then hand these checked values to the
 //! semantic kernel.
 
+pub mod stream;
+
 /// Highest account schema version this build understands.
 ///
 /// Each account carries its **own** schema version byte (see
@@ -1084,6 +1086,14 @@ impl<'a> Reader<'a> {
     fn new(input: &'a [u8], tag: u8, version: u8, len: usize) -> Result<Self> {
         check_header(input, tag, version, len)?;
         Ok(Self { input, at: 2 })
+    }
+    /// Position a reader at a byte offset inside an already-checked buffer.
+    ///
+    /// The streaming page decoders use this to read one slot without walking
+    /// the slots before it; the caller has already established the buffer's
+    /// tag, version, and exact length.
+    fn at(input: &'a [u8], at: usize) -> Self {
+        Self { input, at }
     }
     fn bytes<const N: usize>(&mut self) -> Result<[u8; N]> {
         let end = self.at.checked_add(N).ok_or(CodecError::Truncated)?;
@@ -5847,5 +5857,817 @@ mod tests {
                 0x78, 0x52, 0xb8, 0x55
             ]
         );
+    }
+
+    /* --- streaming decoder equivalence -------------------------------------
+     *
+     * The buffered decoders above stay the golden reference.  Every fixture
+     * below is decided twice — once through `OrderPageAccount::decode` and once
+     * through `stream::verify_page` — and the two verdicts must be the same
+     * value: the same page, or the identical `CodecError`.
+     * ---------------------------------------------------------------------- */
+
+    /// Encode a page **without** validating it.
+    ///
+    /// `OrderPageAccount::encode` validates first, so it cannot produce the
+    /// bytes of a page the codec refuses.  A refusal fixture is exactly what an
+    /// equivalence test needs, so this writes the same bytes with no verdict
+    /// attached.
+    fn encode_page_unchecked(page: &OrderPageAccount) -> [u8; account_len::ORDER_PAGE] {
+        let mut out = [0; account_len::ORDER_PAGE];
+        let mut w = Writer::new(&mut out);
+        put_header(&mut w, ORDER_PAGE_TAG, account_version::ORDER_PAGE).unwrap();
+        w.hash(page.market).unwrap();
+        w.hash(page.epoch).unwrap();
+        w.hash(page.order_set).unwrap();
+        w.hash(page.page_digest).unwrap();
+        w.hash(page.first_order_id).unwrap();
+        w.hash(page.last_order_id).unwrap();
+        w.hash(page.prev_page_last_order_id).unwrap();
+        w.u16(page.page_index).unwrap();
+        w.u16(page.page_count).unwrap();
+        w.u16(page.set_order_count).unwrap();
+        w.u8(page.order_count).unwrap();
+        w.u8(page.frozen).unwrap();
+        w.u8(page.stored_bump).unwrap();
+        let mut i = 0;
+        while i < MAX_ORDERS_PER_PAGE {
+            encode_slot(&mut w, page.orders[i]).unwrap();
+            i += 1;
+        }
+        assert_eq!(w.at, account_len::ORDER_PAGE);
+        out
+    }
+    /// The buffered verdict, projected onto the header the streaming decoder
+    /// returns.
+    fn buffered_page(bytes: &[u8]) -> Result<stream::OrderPageHeader> {
+        OrderPageAccount::decode(bytes).map(|p| stream::OrderPageHeader::of_page(&p))
+    }
+    fn agrees(label: &str, bytes: &[u8]) {
+        assert_eq!(
+            stream::verify_page(bytes),
+            buffered_page(bytes),
+            "page verdict diverged: {label}"
+        );
+    }
+    /// The buffered page-set verdict over raw page bytes: decode every page in
+    /// index order, then close the set.  This is the composition an on-chain
+    /// caller would have written if the buffered decoder fitted a call frame.
+    fn buffered_set(bufs: &[&[u8]]) -> Result<Hash32> {
+        if bufs.is_empty() {
+            return verify_page_set(&[]);
+        }
+        assert!(bufs.len() <= MAX_ORDER_PAGES);
+        let first = OrderPageAccount::decode(bufs[0])?;
+        let mut pages = [first; MAX_ORDER_PAGES];
+        let mut i = 1;
+        while i < bufs.len() {
+            pages[i] = OrderPageAccount::decode(bufs[i])?;
+            i += 1;
+        }
+        verify_page_set(&pages[..bufs.len()])
+    }
+    fn set_agrees(label: &str, bufs: &[&[u8]]) {
+        assert_eq!(
+            stream::verify_page_set(bufs),
+            buffered_set(bufs),
+            "page-set verdict diverged: {label}"
+        );
+    }
+    #[test]
+    fn streaming_page_verdicts_match_the_buffered_decoder() {
+        // Accepted shapes.
+        let mixed = {
+            let mut p = build_page(0, 1, &[3, 9], Hash32::ZERO);
+            p.orders[1] = OrderSlot::Portfolio(portfolio(9));
+            reseal(&mut p);
+            p
+        };
+        let ids: [u8; MAX_ORDERS_PER_PAGE] =
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let full = build_page(0, 2, &ids, Hash32::ZERO);
+        let empty = build_page(0, 1, &[], Hash32::ZERO);
+        let frozen = frozen_pages();
+        let with_portfolio = frozen_pages_with_portfolio();
+        let accepted = [
+            ("single-egg page", build_page(0, 1, &[3, 9], Hash32::ZERO)),
+            ("mixed families", mixed),
+            ("dense page", full),
+            ("empty open page", empty),
+            ("frozen head", frozen[0]),
+            ("frozen tail", frozen[1]),
+            ("frozen head, portfolio set", with_portfolio[0]),
+            ("frozen tail, portfolio set", with_portfolio[1]),
+        ];
+        let mut i = 0;
+        while i < accepted.len() {
+            let (label, page) = accepted[i];
+            let bytes = encode_page_unchecked(&page);
+            assert_eq!(
+                stream::verify_page(&bytes),
+                Ok(stream::OrderPageHeader::of_page(&page))
+            );
+            agrees(label, &bytes);
+            i += 1;
+        }
+
+        // Refused shapes, built as bytes so both decoders see the same input.
+        let base = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        let refused: [(&str, OrderPageAccount); 16] = [
+            (
+                "zero market",
+                OrderPageAccount {
+                    market: Hash32::ZERO,
+                    ..base
+                },
+            ),
+            (
+                "zero epoch",
+                OrderPageAccount {
+                    epoch: Hash32::ZERO,
+                    ..base
+                },
+            ),
+            (
+                "freeze flag out of range",
+                OrderPageAccount { frozen: 2, ..base },
+            ),
+            (
+                "no pages",
+                OrderPageAccount {
+                    page_count: 0,
+                    ..base
+                },
+            ),
+            (
+                "too many pages",
+                OrderPageAccount {
+                    page_count: (MAX_ORDER_PAGES + 1) as u16,
+                    ..base
+                },
+            ),
+            (
+                "index past count",
+                OrderPageAccount {
+                    page_index: 1,
+                    ..base
+                },
+            ),
+            (
+                "order count past width",
+                OrderPageAccount {
+                    order_count: (MAX_ORDERS_PER_PAGE + 1) as u8,
+                    ..base
+                },
+            ),
+            (
+                "stale range",
+                OrderPageAccount {
+                    last_order_id: h(8),
+                    ..base
+                },
+            ),
+            (
+                "page zero links to a predecessor",
+                OrderPageAccount {
+                    prev_page_last_order_id: h(2),
+                    ..base
+                },
+            ),
+            (
+                "open page commits a count",
+                OrderPageAccount {
+                    set_order_count: 2,
+                    ..base
+                },
+            ),
+            (
+                "open page commits a set digest",
+                OrderPageAccount {
+                    order_set: h(9),
+                    ..base
+                },
+            ),
+            ("record above the order count", {
+                // A record smuggled above `order_count` is padding that is not.
+                let mut p = base;
+                p.orders[5] = single(11);
+                p.page_digest = p.recomputed_page_digest().unwrap();
+                p
+            }),
+            ("hole below the order count", {
+                // An empty slot below `order_count` is a missing order.
+                let mut p = base;
+                p.orders[1] = OrderSlot::Empty;
+                p.last_order_id = Hash32::ZERO;
+                p.page_digest = p.recomputed_page_digest().unwrap();
+                p
+            }),
+            ("duplicate order id", {
+                let mut p = base;
+                p.orders[1] = single(3);
+                p.last_order_id = h(3);
+                p.page_digest = p.recomputed_page_digest().unwrap();
+                p
+            }),
+            ("descending order ids", {
+                let mut p = build_page(0, 1, &[9, 3], Hash32::ZERO);
+                p.page_digest = p.recomputed_page_digest().unwrap();
+                p
+            }),
+            ("record mutated without repairing the page digest", {
+                let mut p = base;
+                p.orders[0] = OrderSlot::Single(OrderRecord {
+                    quantity: 11,
+                    ..order(3)
+                });
+                p
+            }),
+        ];
+        let mut i = 0;
+        while i < refused.len() {
+            let (label, page) = refused[i];
+            let bytes = encode_page_unchecked(&page);
+            assert!(
+                stream::verify_page(&bytes).is_err(),
+                "fixture is supposed to refuse: {label}"
+            );
+            agrees(label, &bytes);
+            i += 1;
+        }
+
+        // Nine portfolio records on one page: the per-page bound.
+        let mut over = build_page(0, 2, &ids, Hash32::ZERO);
+        let mut j = 0;
+        while j < MAX_PORTFOLIO_ORDERS + 1 {
+            over.orders[j] = OrderSlot::Portfolio(portfolio(ids[j]));
+            j += 1;
+        }
+        reseal(&mut over);
+        let over_bytes = encode_page_unchecked(&over);
+        assert_eq!(
+            stream::verify_page(&over_bytes),
+            Err(CodecError::InvalidCount)
+        );
+        agrees("nine portfolios on one page", &over_bytes);
+
+        // A frozen page set's density and closure rules.
+        let sparse = {
+            let mut set = [full, build_page(1, 2, &[17], full.last_order_id)];
+            freeze_set(&mut set);
+            let mut s = set[0];
+            s.order_count = 15;
+            s.last_order_id = h(15);
+            s.orders[15] = OrderSlot::Empty;
+            s.page_digest = s.recomputed_page_digest().unwrap();
+            s
+        };
+        let sparse_bytes = encode_page_unchecked(&sparse);
+        agrees("sparse non-final frozen page", &sparse_bytes);
+        let mut hollow_frozen = frozen[1];
+        hollow_frozen.order_count = 0;
+        agrees(
+            "frozen page with no records",
+            &encode_page_unchecked(&hollow_frozen),
+        );
+        let mut unset = frozen[0];
+        unset.order_set = Hash32::ZERO;
+        agrees(
+            "frozen page with no set digest",
+            &encode_page_unchecked(&unset),
+        );
+        let mut miscounted = frozen[0];
+        miscounted.set_order_count = MAX_EPOCH_ORDERS as u16 + 1;
+        agrees(
+            "set count past the book",
+            &encode_page_unchecked(&miscounted),
+        );
+        let mut short_set = frozen[1];
+        short_set.set_order_count = 18;
+        agrees(
+            "final page does not close the count",
+            &encode_page_unchecked(&short_set),
+        );
+        let mut unlinked = frozen[1];
+        unlinked.prev_page_last_order_id = Hash32::ZERO;
+        agrees(
+            "later page with no predecessor",
+            &encode_page_unchecked(&unlinked),
+        );
+        let mut overlapping = frozen[1];
+        overlapping.prev_page_last_order_id = h(30);
+        agrees(
+            "later page opening below its predecessor",
+            &encode_page_unchecked(&overlapping),
+        );
+    }
+    #[test]
+    fn streaming_page_verdicts_match_the_buffered_decoder_on_hostile_bytes() {
+        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(portfolio(9));
+        reseal(&mut page);
+        let clean = encode_page_unchecked(&page);
+        agrees("clean", &clean);
+
+        // Header framing.
+        agrees("truncated", &clean[..clean.len() - 1]);
+        agrees("empty input", &[]);
+        let mut long = [0; account_len::ORDER_PAGE + 1];
+        long[..clean.len()].copy_from_slice(&clean);
+        agrees("trailing byte", &long);
+        let mut wrong_tag = clean;
+        wrong_tag[0] = ORDER_PAGE_TAG + 1;
+        agrees("wrong tag", &wrong_tag);
+        let mut wrong_version = clean;
+        wrong_version[1] = account_version::ORDER_PAGE - 1;
+        agrees("wrong version", &wrong_version);
+
+        // Slot framing: every byte-level fixture the buffered slot decoder has.
+        let mut unknown = clean;
+        unknown[PAGE_HEADER_BYTES] = 3;
+        agrees("unknown slot kind", &unknown);
+        let mut unknown_pad = clean;
+        unknown_pad[PAGE_HEADER_BYTES + 2 * ORDER_SLOT_BYTES] = u8::MAX;
+        agrees("unknown kind in a padding slot", &unknown_pad);
+        let mut stuffed = clean;
+        stuffed[PAGE_HEADER_BYTES + 1 + ORDER_RECORD_BYTES] = 1;
+        agrees("nonzero single-egg tail", &stuffed);
+        let mut stuffed_end = clean;
+        stuffed_end[PAGE_HEADER_BYTES + ORDER_SLOT_BYTES - 1] = 1;
+        agrees("nonzero slot end", &stuffed_end);
+        let mut dirty_pad = clean;
+        dirty_pad[PAGE_HEADER_BYTES + 2 * ORDER_SLOT_BYTES + 5] = 1;
+        agrees("dirty padding slot", &dirty_pad);
+        let mut typed_pad = clean;
+        typed_pad[PAGE_HEADER_BYTES + 2 * ORDER_SLOT_BYTES] = ORDER_KIND_SINGLE;
+        agrees("all-zero record in a padding slot", &typed_pad);
+        let mut typed_portfolio_pad = clean;
+        typed_portfolio_pad[PAGE_HEADER_BYTES + 2 * ORDER_SLOT_BYTES] = ORDER_KIND_PORTFOLIO;
+        agrees("all-zero portfolio in a padding slot", &typed_portfolio_pad);
+        let mut last_slot = clean;
+        last_slot[account_len::ORDER_PAGE - 1] = 1;
+        agrees("nonzero final byte", &last_slot);
+
+        // A structurally broken slot is refused before any header fault the
+        // same bytes also carry: the buffered decoder reads its whole slot
+        // array before it validates anything, and so does the streamed one.
+        let mut both = clean;
+        both[2] = 0; // zero the first byte of `market`
+        both[PAGE_HEADER_BYTES] = 3;
+        assert_eq!(stream::verify_page(&both), Err(CodecError::WrongTag));
+        agrees("bad slot and bad header at once", &both);
+
+        // A page-sized buffer of zeros is not a page.
+        agrees("all zero", &[0; account_len::ORDER_PAGE]);
+    }
+    #[test]
+    fn the_streaming_header_reads_235_bytes_and_decides_only_header_facts() {
+        let page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        let bytes = encode_page_unchecked(&page);
+        assert_eq!(
+            stream::ORDER_PAGE_HEADER_BYTES,
+            account_len::ORDER_PAGE - MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES
+        );
+        assert_eq!(stream::ORDER_PAGE_HEADER_BYTES, 235);
+        let header = stream::OrderPageHeader::decode(&bytes).unwrap();
+        assert_eq!(header, stream::OrderPageHeader::of_page(&page));
+        assert_eq!(header.validate_shape(), Ok(()));
+
+        // The header still owns the account's framing: tag, version, and the
+        // exact page length.  A 235-byte prefix is not an account.
+        assert_eq!(
+            stream::OrderPageHeader::decode(&bytes[..stream::ORDER_PAGE_HEADER_BYTES]),
+            Err(CodecError::Truncated)
+        );
+
+        // It decides header facts only.  A page whose slot array is junk still
+        // has a well-formed header, and the page verdict is the one that sees
+        // the difference.
+        let mut junk = bytes;
+        junk[PAGE_HEADER_BYTES] = 3;
+        assert_eq!(
+            stream::OrderPageHeader::decode(&junk)
+                .unwrap()
+                .validate_shape(),
+            Ok(())
+        );
+        assert_eq!(stream::verify_page(&junk), Err(CodecError::WrongTag));
+
+        // And it refuses every header-local fault on its own.
+        let mut open_with_commitment = page;
+        open_with_commitment.set_order_count = 2;
+        assert_eq!(
+            stream::OrderPageHeader::decode(&encode_page_unchecked(&open_with_commitment))
+                .unwrap()
+                .validate_shape(),
+            Err(CodecError::NonCanonicalPadding)
+        );
+        let mut zero_market = page;
+        zero_market.market = Hash32::ZERO;
+        assert_eq!(
+            stream::OrderPageHeader::decode(&encode_page_unchecked(&zero_market))
+                .unwrap()
+                .validate_shape(),
+            Err(CodecError::ZeroIdentity)
+        );
+        let mut ranged = build_page(0, 1, &[], Hash32::ZERO);
+        ranged.first_order_id = h(3);
+        assert_eq!(
+            stream::OrderPageHeader::decode(&encode_page_unchecked(&ranged))
+                .unwrap()
+                .validate_shape(),
+            Err(CodecError::MismatchedBinding)
+        );
+    }
+    #[test]
+    fn the_slot_cursor_reads_one_slot_at_a_time_and_keeps_the_order_chain() {
+        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(portfolio(9));
+        reseal(&mut page);
+        let bytes = encode_page_unchecked(&page);
+
+        let mut cursor = stream::OrderSlotCursor::new(&bytes).unwrap();
+        assert_eq!(cursor.index(), 0);
+        assert_eq!(cursor.remaining(), MAX_ORDERS_PER_PAGE);
+        assert_eq!(cursor.next_slot(), Some(Ok(single(3))));
+        assert_eq!(cursor.index(), 1);
+        assert_eq!(
+            cursor.next_slot(),
+            Some(Ok(OrderSlot::Portfolio(portfolio(9))))
+        );
+        let mut seen = 2;
+        while let Some(step) = cursor.next_slot() {
+            assert_eq!(step, Ok(OrderSlot::Empty));
+            seen += 1;
+        }
+        assert_eq!(seen, MAX_ORDERS_PER_PAGE);
+        assert_eq!(cursor.remaining(), 0);
+
+        // The whole array, as an iterator, is the same walk.
+        let walked = stream::OrderSlotCursor::new(&bytes).unwrap();
+        let mut records = 0;
+        for step in walked {
+            if step.unwrap() != OrderSlot::Empty {
+                records += 1;
+            }
+        }
+        assert_eq!(records, page.order_count as usize);
+
+        // The chain is enforced across calls, not within one slot.
+        let mut descending = build_page(0, 1, &[9, 3], Hash32::ZERO);
+        descending.page_digest = descending.recomputed_page_digest().unwrap();
+        let descending_bytes = encode_page_unchecked(&descending);
+        let mut chain = stream::OrderSlotCursor::new(&descending_bytes).unwrap();
+        assert_eq!(chain.next_slot(), Some(Ok(single(9))));
+        assert_eq!(
+            chain.next_slot(),
+            Some(Err(CodecError::NonCanonicalIdentity))
+        );
+        // A refusal fuses the cursor.
+        assert_eq!(chain.next_slot(), None);
+
+        // Structural refusals are per slot: kind byte, exact width, padding.
+        let mut unknown = bytes;
+        unknown[PAGE_HEADER_BYTES + ORDER_SLOT_BYTES] = 7;
+        let mut kinds = stream::OrderSlotCursor::new(&unknown).unwrap();
+        assert_eq!(kinds.next_slot(), Some(Ok(single(3))));
+        assert_eq!(kinds.next_slot(), Some(Err(CodecError::WrongTag)));
+        let mut dirty = bytes;
+        dirty[PAGE_HEADER_BYTES + 3 * ORDER_SLOT_BYTES + 1] = 1;
+        let mut pad = stream::OrderSlotCursor::new(&dirty).unwrap();
+        assert_eq!(pad.nth(3), Some(Err(CodecError::NonCanonicalPadding)));
+    }
+    #[test]
+    fn the_streamed_page_digest_matches_the_buffered_recompute() {
+        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        page.orders[1] = OrderSlot::Portfolio(portfolio(9));
+        reseal(&mut page);
+        let bytes = encode_page_unchecked(&page);
+        assert_eq!(
+            stream::streamed_page_digest(&bytes),
+            Ok(page.recomputed_page_digest().unwrap())
+        );
+        assert_eq!(
+            stream::streamed_page_digest(&bytes),
+            Ok(canonical_page_digest(
+                page.market,
+                page.epoch,
+                page.page_index,
+                page.order_count,
+                &bytes[PAGE_HEADER_BYTES..],
+            ))
+        );
+        // One changed record atom is one changed digest.
+        let mut moved = page;
+        moved.orders[0] = OrderSlot::Single(OrderRecord {
+            quantity: 11,
+            ..order(3)
+        });
+        assert_ne!(
+            stream::streamed_page_digest(&encode_page_unchecked(&moved)),
+            stream::streamed_page_digest(&bytes)
+        );
+        // A page whose slot array is not canonical has no digest at all.
+        let mut junk = bytes;
+        junk[PAGE_HEADER_BYTES + 2 * ORDER_SLOT_BYTES] = 9;
+        assert_eq!(
+            stream::streamed_page_digest(&junk),
+            Err(CodecError::WrongTag)
+        );
+    }
+    #[test]
+    fn streaming_page_set_closure_matches_the_buffered_closure() {
+        let pages = frozen_pages();
+        let b0 = encode_page_unchecked(&pages[0]);
+        let b1 = encode_page_unchecked(&pages[1]);
+        assert_eq!(stream::verify_page_set(&[&b0, &b1]), Ok(pages[0].order_set));
+        set_agrees("dense frozen set", &[&b0, &b1]);
+        set_agrees("no pages", &[]);
+        set_agrees("head alone", &[&b0]);
+
+        let mixed = frozen_pages_with_portfolio();
+        let m0 = encode_page_unchecked(&mixed[0]);
+        let m1 = encode_page_unchecked(&mixed[1]);
+        set_agrees("frozen set with a portfolio record", &[&m0, &m1]);
+
+        // A three-page set, and the same set with its middle page dropped.
+        let ids: [u8; MAX_ORDERS_PER_PAGE] =
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let ids2: [u8; MAX_ORDERS_PER_PAGE] = [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+        ];
+        let p0 = build_page(0, 3, &ids, Hash32::ZERO);
+        let p1 = build_page(1, 3, &ids2, p0.last_order_id);
+        let p2 = build_page(2, 3, &[33, 34], p1.last_order_id);
+        let mut three = [p0, p1, p2];
+        freeze_set(&mut three);
+        let t0 = encode_page_unchecked(&three[0]);
+        let t1 = encode_page_unchecked(&three[1]);
+        let t2 = encode_page_unchecked(&three[2]);
+        set_agrees("three dense pages", &[&t0, &t1, &t2]);
+        set_agrees("middle page dropped", &[&t0, &t2]);
+
+        // Duplicate order id across a page boundary.
+        let mut dup = pages;
+        dup[1].orders[0] = single(16);
+        dup[1].first_order_id = h(16);
+        dup[1].page_digest = dup[1].recomputed_page_digest().unwrap();
+        let d1 = encode_page_unchecked(&dup[1]);
+        set_agrees("duplicate id across the boundary", &[&b0, &d1]);
+
+        // Pages presented out of index order.
+        set_agrees("reordered pages", &[&b1, &b0]);
+
+        // A post-freeze mutation, including the case where the mutator also
+        // repairs that page's own digest.
+        let mut mutated = pages;
+        mutated[0].orders[3] = OrderSlot::Single(OrderRecord {
+            quantity: 11,
+            ..order(4)
+        });
+        let raw = encode_page_unchecked(&mutated[0]);
+        set_agrees("mutated record", &[&raw, &b1]);
+        mutated[0].page_digest = mutated[0].recomputed_page_digest().unwrap();
+        let repaired = encode_page_unchecked(&mutated[0]);
+        set_agrees("mutated record, page digest repaired", &[&repaired, &b1]);
+
+        // A broken predecessor link, and an unfrozen page in a closed set.
+        let mut unlinked = pages;
+        unlinked[1].prev_page_last_order_id = h(15);
+        let u1 = encode_page_unchecked(&unlinked[1]);
+        set_agrees("broken predecessor link", &[&b0, &u1]);
+        let mut thawed = pages;
+        thawed[1].frozen = 0;
+        let w1 = encode_page_unchecked(&thawed[1]);
+        set_agrees("unfrozen page in a closed set", &[&b0, &w1]);
+
+        // A ninth portfolio order added on the next page: the cross-page bound
+        // no single page can decide.
+        let mut full = build_page(0, 2, &ids, Hash32::ZERO);
+        let mut j = 0;
+        while j < MAX_PORTFOLIO_ORDERS {
+            full.orders[j] = OrderSlot::Portfolio(portfolio(ids[j]));
+            j += 1;
+        }
+        reseal(&mut full);
+        let mut tail = build_page(1, 2, &[17, 18, 19], full.last_order_id);
+        tail.orders[0] = OrderSlot::Portfolio(portfolio(17));
+        reseal(&mut tail);
+        let mut nine = [full, tail];
+        freeze_set(&mut nine);
+        let n0 = encode_page_unchecked(&nine[0]);
+        let n1 = encode_page_unchecked(&nine[1]);
+        assert_eq!(
+            stream::verify_page_set(&[&n0, &n1]),
+            Err(CodecError::InvalidCount)
+        );
+        set_agrees("nine portfolios across two pages", &[&n0, &n1]);
+
+        // A page that does not decode at all is refused in page order, exactly
+        // as decoding each page before closing the set would refuse it.
+        let mut junk = b1;
+        junk[PAGE_HEADER_BYTES] = 3;
+        set_agrees("undecodable tail page", &[&b0, &junk]);
+        set_agrees("undecodable head page", &[&junk, &b1]);
+
+        // More pages than a book can have is refused before any page is read.
+        assert_eq!(
+            stream::verify_page_set(&[&t0, &t1, &t2, &t0, &t1]),
+            Err(CodecError::InvalidCount)
+        );
+    }
+    #[test]
+    fn streaming_grid_and_epoch_bindings_match_the_buffered_ones() {
+        let grid = grid();
+        let page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        let bytes = encode_page_unchecked(&page);
+        assert_eq!(
+            stream::verify_page_on_grid(&bytes, &grid),
+            OrderPageAccount::decode_on_grid(&bytes, &grid)
+                .map(|p| stream::OrderPageHeader::of_page(&p))
+        );
+
+        // An off-grid limit has no tick, on either path.
+        let mut off = page;
+        off.orders[0] = OrderSlot::Single(OrderRecord {
+            limit: 2_501,
+            ..order(3)
+        });
+        off.page_digest = off.recomputed_page_digest().unwrap();
+        let off_bytes = encode_page_unchecked(&off);
+        assert_eq!(
+            stream::verify_page_on_grid(&off_bytes, &grid),
+            Err(CodecError::InvalidTick)
+        );
+        assert_eq!(
+            stream::verify_page_on_grid(&off_bytes, &grid),
+            OrderPageAccount::decode_on_grid(&off_bytes, &grid)
+                .map(|p| stream::OrderPageHeader::of_page(&p))
+        );
+
+        // A portfolio bound that no candidate could ever be classified against.
+        let mut wild = page;
+        wild.orders[1] = OrderSlot::Portfolio(PortfolioRecord {
+            lots: u64::MAX,
+            limit_collateral_per_lot: u64::MAX,
+            minimum_fill_lots: 0,
+            ..portfolio(9)
+        });
+        wild.page_digest = wild.recomputed_page_digest().unwrap();
+        let wild_bytes = encode_page_unchecked(&wild);
+        assert_eq!(
+            stream::verify_page_on_grid(&wild_bytes, &grid),
+            Err(CodecError::ArithmeticOverflow)
+        );
+        assert_eq!(
+            stream::verify_page_on_grid(&wild_bytes, &grid),
+            OrderPageAccount::decode_on_grid(&wild_bytes, &grid)
+                .map(|p| stream::OrderPageHeader::of_page(&p))
+        );
+
+        // A refused grid refuses the page on either path.
+        let mut broken = grid;
+        broken.tick_count = 0;
+        assert_eq!(
+            stream::verify_page_on_grid(&bytes, &broken),
+            OrderPageAccount::decode_on_grid(&bytes, &broken)
+                .map(|p| stream::OrderPageHeader::of_page(&p))
+        );
+
+        // The epoch binding.
+        let pages = frozen_pages_with_portfolio();
+        let b0 = encode_page_unchecked(&pages[0]);
+        let b1 = encode_page_unchecked(&pages[1]);
+        let bufs: [&[u8]; 2] = [&b0, &b1];
+        let mut e = frozen_epoch();
+        e.first_order_id = pages[0].first_order_id;
+        e.last_order_id = pages[1].last_order_id;
+        e.order_set = pages[0].order_set;
+        assert_eq!(stream::epoch_binds_page_set(&e, &bufs), Ok(()));
+        assert_eq!(
+            stream::epoch_binds_page_set(&e, &bufs),
+            e.binds_page_set(&pages)
+        );
+
+        // An open epoch commits to nothing, so it can bind no set.
+        let mut open = e;
+        open.phase = EPOCH_PHASE_OPEN;
+        assert_eq!(
+            stream::epoch_binds_page_set(&open, &bufs),
+            open.binds_page_set(&pages)
+        );
+
+        // A set whose commitment is not this epoch's.
+        let mut wrong = e;
+        wrong.order_set = h(200);
+        assert_eq!(
+            stream::epoch_binds_page_set(&wrong, &bufs),
+            wrong.binds_page_set(&pages)
+        );
+
+        // The epoch owns the market's outcome width; a page cannot.
+        let mut narrow = e;
+        narrow.outcome_count = 2;
+        assert_eq!(stream::epoch_binds_page_set(&narrow, &bufs), Ok(()));
+        let mut wide = pages;
+        let mut coefficients = [0; MAX_OUTCOMES];
+        coefficients[0] = 3;
+        coefficients[2] = 1;
+        wide[1].orders[0] = OrderSlot::Portfolio(PortfolioRecord {
+            active_len: 3,
+            coefficients,
+            ..portfolio(17)
+        });
+        wide[1].page_digest = wide[1].recomputed_page_digest().unwrap();
+        freeze_set(&mut wide);
+        let w0 = encode_page_unchecked(&wide[0]);
+        let w1 = encode_page_unchecked(&wide[1]);
+        let wide_bufs: [&[u8]; 2] = [&w0, &w1];
+        let mut wide_epoch = e;
+        wide_epoch.order_set = wide[0].order_set;
+        assert_eq!(
+            stream::epoch_binds_page_set(&wide_epoch, &wide_bufs),
+            Ok(())
+        );
+        wide_epoch.outcome_count = 2;
+        assert_eq!(
+            stream::epoch_binds_page_set(&wide_epoch, &wide_bufs),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(
+            stream::epoch_binds_page_set(&wide_epoch, &wide_bufs),
+            wide_epoch.binds_page_set(&wide)
+        );
+
+        // And the single-Egg family it already held.
+        let mut off_market = pages;
+        off_market[1].orders[1] = OrderSlot::Single(OrderRecord {
+            outcome: 5,
+            ..order(18)
+        });
+        off_market[1].page_digest = off_market[1].recomputed_page_digest().unwrap();
+        freeze_set(&mut off_market);
+        let o0 = encode_page_unchecked(&off_market[0]);
+        let o1 = encode_page_unchecked(&off_market[1]);
+        let off_bufs: [&[u8]; 2] = [&o0, &o1];
+        let mut narrow_epoch = e;
+        narrow_epoch.order_set = off_market[0].order_set;
+        assert_eq!(
+            stream::epoch_binds_page_set(&narrow_epoch, &off_bufs),
+            Ok(())
+        );
+        narrow_epoch.outcome_count = 5;
+        assert_eq!(
+            stream::epoch_binds_page_set(&narrow_epoch, &off_bufs),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(
+            stream::epoch_binds_page_set(&narrow_epoch, &off_bufs),
+            narrow_epoch.binds_page_set(&off_market)
+        );
+    }
+    #[test]
+    fn the_streaming_decoders_never_hold_a_page_sized_value() {
+        // What the streaming API puts on a frame, by construction: one header,
+        // one slot, one cursor, and — only in the set closure — one header per
+        // page of a book.  What the buffered decoder puts on a frame is the
+        // page itself, twice over: a reader's copy and the returned value.
+        use core::mem::size_of;
+        assert!(size_of::<stream::OrderPageHeader>() <= 256);
+        assert!(size_of::<OrderSlot>() <= ORDER_SLOT_BYTES + 16);
+        assert!(size_of::<stream::OrderSlotCursor<'_>>() <= 96);
+        assert!(size_of::<[stream::OrderPageHeader; MAX_ORDER_PAGES]>() <= 1024);
+        assert!(size_of::<OrderPageAccount>() > 3 * 1024);
+
+        // The mechanical half of the same claim: no page-sized array type may
+        // appear anywhere in the streaming module.  A slot array or a
+        // page-sized byte buffer is exactly the regression that would put the
+        // 8,640-byte frame back.
+        //
+        // Doc comments are excluded: the module's examples legitimately build a
+        // fixture page through the buffered encoder, which is host-side code in
+        // a doctest and never in a frame the loader runs.
+        for line in include_str!("stream.rs").lines() {
+            let code = line.trim_start();
+            if code.starts_with("//") {
+                continue;
+            }
+            // An array of slots, of slot-width buffers, or of page-width bytes.
+            assert!(
+                !code.contains("; MAX_ORDERS_PER_PAGE]"),
+                "slot array: {line}"
+            );
+            assert!(!code.contains("; ORDER_SLOT_BYTES]"), "slot buffer: {line}");
+            assert!(
+                !code.contains("; account_len::ORDER_PAGE]"),
+                "page buffer: {line}"
+            );
+            assert!(!code.contains("[OrderSlot;"), "slot array: {line}");
+            // And no call into the buffered page decoder.
+            assert!(
+                !code.contains("OrderPageAccount::decode"),
+                "buffered call: {line}"
+            );
+        }
     }
 }
