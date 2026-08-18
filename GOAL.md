@@ -29,6 +29,9 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- INTEGRATE landed: orders on v4, CancelOrder + portfolio placement
+  live, write path -115 lines net; 113 tests. Pushed.
+
 - Page v4 landed (e780d5b): derived-rank ids kill the griefing vector,
   tombstones, per-order expiry, streaming writer, intent v2 closes the
   portfolio wire gap. Finding: abi-audit DEAD since 927d4bc -> repair
