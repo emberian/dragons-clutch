@@ -29,6 +29,12 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- Page v4 landed (e780d5b): derived-rank ids kill the griefing vector,
+  tombstones, per-order expiry, streaming writer, intent v2 closes the
+  portfolio wire gap. Finding: abi-audit DEAD since 927d4bc -> repair
+  lane. INTEGRATE (orders onto v4) + COST-REPAIR launched; LIFECYCLE and
+  TOKEN-CPI briefed on the v4 fallout in their files.
+
 - VERDICTS reconciled (ladder with per-rung status; V9/V10 added);
   C-1 refund path closed with conservation demonstrated; pushed.
 
