@@ -38,3 +38,6 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
   before any filing use).
 - B lane: typed WindowResult (substitution = compile error), derive_payout
   spec, digest unification decided + Python side; pushed.
+- C lane: P1-C closed - 8 new accounts, cross-page closure, frozen grid,
+  per-account versions; 37 layout tests; pushed.
+- REF-INT launched: evidence-gated resolution into solana-reference.
