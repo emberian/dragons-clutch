@@ -6,9 +6,9 @@ use**.
 
 This file is the entry point for the next engineering model. Read
 [`AGENTS.md`](AGENTS.md), [`PROJECT.md`](PROJECT.md), and this file before making
-changes. The worktree is an unborn, uncommitted repository; paths and byte
-digests below identify the current local snapshot, not a release provenance
-chain.
+changes. The repository now has local baseline history on `main`; use
+`git rev-parse HEAD` to identify the exact working baseline. Paths and byte
+digests below identify a reviewed local snapshot, not a release provenance chain.
 
 ## 1. Claim vocabulary
 
@@ -269,7 +269,7 @@ Token-2022, RPC, signing, or a public network.
 
 ## 6. Current byte identities
 
-These digests are reproducibility aids for the present uncommitted snapshot, not
+These digests are reproducibility aids for the reviewed local baseline, not
 release attestations:
 
 - static canonical terms:
@@ -292,10 +292,11 @@ ELF, and static bundle to a clean immutable revision and a release manifest.
 
 ### P0: close before calling the repository handoff/release stable
 
-1. **BLOCKER - no immutable baseline.** The repository has no commits. The
-   current worktree cannot support provenance, review diffs, source digests, or a
-   checked release manifest. Creating/pushing a commit requires explicit user
-   direction; do not infer it from this handoff.
+1. **BLOCKER - no release manifest.** A local Git baseline now supports review
+   diffs and source identity, but no remote, signed tag, release artifact, or
+   checked source/build manifest exists. Keep subsequent local work in coherent
+   commits. Pushing, tagging, publishing, or declaring a release requires
+   explicit user direction; do not infer it from this handoff.
 2. **BLOCKER - formal-tool gap.** Verus and Rocq are unavailable. The existing
    Rust is tested, not formally verified; the Rocq properties are unproved. Pin
    reviewed tools before expanding proof claims. Never vendor or install a tool
