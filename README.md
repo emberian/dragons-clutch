@@ -61,6 +61,9 @@ simulations, and adversarial tests pass.
 - [Competitive position](docs/COMPETITIVE_POSITION.md): prior art, substitutes,
   distinctive conjunction, and bootstrap test.
 - [Partition algebra](docs/PARTITION_ALGEBRA.md): basis assets and payoff vectors.
+- [Continuous claims and passive range liquidity](docs/design/continuous-claims/README.md):
+  exact range/kernel compilation, proof-constrained LP policies, and the
+  formalization backlog.
 - [Simplex auction](docs/SIMPLEX_AUCTION.md): clutch-aware coupled clearing.
 - [Specialized batch relation](docs/SPECIALIZED_BATCH_RELATION.md): the bounded
   transparent market relation and witness/verifier boundary.

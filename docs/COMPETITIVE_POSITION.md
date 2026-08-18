@@ -17,6 +17,15 @@ Primary references:
 - [Kalshi's Solana tokenization announcement](https://news.kalshi.com/p/kalshi-solana-tokenized-predictions)
 - [Manifest source and design](https://github.com/Bonasa-Tech/manifest)
 
+Continuous/range prediction designs add a useful aspirational benchmark:
+discretized range claims, graded payouts, and passive single-sided liquidity.
+Clutch already contains that finite payoff family—and a strictly larger bounded
+coefficient language—at an equal admitted grid. The open differentiation is
+[proof-constrained passive range liquidity](design/continuous-claims/README.md).
+The design refuses variable-depth quote fields without one convex potential,
+stacked independent pricing curves, uncapitalized insurance, and
+VaR/liquidation as a solvency substitute.
+
 The project should rerun this primary-source comparison before any public novelty
 claim. A protocol can be valuable without pretending every primitive is new.
 
