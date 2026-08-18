@@ -1,23 +1,56 @@
 //! Differential bring-up harness for the Dragon's Clutch SBF program.
 //!
-//! This binary builds one deterministic `Split` fixture, computes the expected
-//! post-state with the **offline reference adapter**
-//! (`clutch_solana_reference::apply`), and emits everything a local
-//! `solana-test-validator` needs to execute the same transition inside a real
-//! SVM: genesis account dumps, a serialized transaction, and the expected
-//! post-state bytes.
+//! This binary builds one deterministic genesis and one transaction per
+//! implemented instruction family, computes the expected post-state with the
+//! **offline reference adapter** (`clutch_solana_reference::apply` and
+//! `apply_with_evidence`) wherever that adapter models the family, and emits
+//! everything a local `solana-test-validator` needs to execute the same
+//! transitions inside a real SVM: genesis account dumps, serialized
+//! transactions, expected and pre-state bytes, and a machine-readable plan.
 //!
 //! It never signs anything and never touches a keypair.  Every address it uses
-//! is a program-derived address of the System program with a fixed seed, so the
-//! fixture is reproducible and carries no key material.  Signature verification
-//! is switched off at the RPC layer by `scripts/simulate.py`; see
+//! is either a program-derived address of this program's frozen seed schema or
+//! a program-derived address of the System program with a fixed literal seed,
+//! so the fixture is reproducible and carries no key material.  Signature
+//! verification is switched off at the RPC layer by `scripts/simulate.py`; see
 //! `docs/implementation/SBF_BRINGUP.md` for exactly what that does and does not
 //! establish.
 //!
+//! ## Which oracle covers which family
+//!
+//! | family | oracle |
+//! | --- | --- |
+//! | `Split`, `Merge`, `Materialize`, `Dematerialize` | `clutch_solana_reference::apply` |
+//! | `Resolve`, `RedeemInternal` | `clutch_solana_reference::apply_with_evidence` |
+//! | `CreateMarket` | the frozen `clutch_solana_layout` codecs re-encoded here, then accepted by `clutch_solana_reference::validate_market_init` |
+//! | `FeedAdvance` | `clutch_accumulator`'s own fold plus the frozen `FeedAccount` codec |
+//!
+//! The last two are weaker than the first two and are labelled as such in the
+//! emitted plan: the reference adapter has no `CreateMarket` transition and no
+//! `FeedAdvance` at all, so there is no second implementation of those to
+//! disagree with.  What is compared is still bytes against bytes, and the
+//! `CreateMarket` expectation is additionally required to satisfy the
+//! reference's own `validate_market_init`.
+//!
+//! ## Why there are several markets
+//!
+//! `simulateTransaction` never commits, so every transaction in the plan runs
+//! against the *genesis* state.  A family whose precondition is another
+//! family's post-state therefore needs its own genesis, and each such genesis
+//! is produced by running the reference adapter forward from an empty market --
+//! never by hand-writing the intermediate bytes.  The one place a real
+//! sequence is executed is the `roundtrip` transaction, which carries `Split`
+//! and `Merge` as two instructions of one transaction so that the bank itself
+//! sequences them.
+//!
 //! Nothing here is evidence about mainnet, devnet, or any deployment.
 
-use clutch_accumulator::COVERAGE_POLICY_COMPLETE_REQUIRED;
+use clutch_accumulator::{Grid, Observation, Summary, COVERAGE_POLICY_COMPLETE_REQUIRED};
 use clutch_kernel::{PayoutSet, PayoutVector, MAX_PAYOUTS};
+use clutch_sbf::instructions::observe_resolve::{
+    BUFFER_VERSION, EVIDENCE_BUFFER_HEADER_BYTES, EVIDENCE_BUFFER_TAG, FEED_PAGE_HEADER_BYTES,
+    FEED_PAGE_TAG,
+};
 use clutch_sbf::seeds;
 use clutch_solana_layout::{
     account_len, canonical_epoch_id, canonical_market_id, canonical_order_set_id,
@@ -27,66 +60,147 @@ use clutch_solana_layout::{
     PriceGridAccount, ProfileAccount, RealmAccount, ResolutionAccount, SettlementReceiptAccount,
     SupplyLedgerAccount, TermsAccount, CANDIDATE_STATUS_SELECTED, EPOCH_PHASE_CLEARED,
     MAX_GRID_TICKS, MAX_INTENT_BYTES, MAX_ORDERS_PER_PAGE, MAX_OUTCOMES, PAYOUT_INDEX_UNRESOLVED,
-    POT_PHASE_OPEN, PROFILE_PARENT_BYTES, RECEIPT_LEG_DIRECT, RELATION_VERSION,
+    POT_PHASE_OPEN, PROFILE_FLAG_POLICY_FROZEN, PROFILE_PARENT_BYTES, RECEIPT_LEG_DIRECT,
+    RELATION_VERSION,
 };
 use clutch_solana_reference::{
-    apply, AccountMetadata, ActorMetadata, ExpectedBindings, ExternalAccount, KernelAccount,
-    ReplayAccount, StateBytes, TransitionMetadata, TransitionOutput, EXTERNAL_ACCOUNT_LEN,
-    FAIL_UNIFORM_REFUND_01, GEN_EXACT_01, KERNEL_ACCOUNT_LEN, REPLAY_ACCOUNT_LEN,
+    apply, apply_with_evidence, validate_market_init, AccountMetadata, ActorMetadata,
+    EvidenceBindings, EvidenceBytes, EvidenceMetadata, ExpectedBindings, ExternalAccount,
+    KernelAccount, ReplayAccount, ResolutionEvidence, StateBytes, TransitionMetadata,
+    TransitionOutput, EXTERNAL_ACCOUNT_LEN, FAIL_UNIFORM_REFUND_01, GEN_EXACT_01,
+    KERNEL_ACCOUNT_LEN, REPLAY_ACCOUNT_LEN, V1_EVALUATOR_VERSION, V1_EXACT_GENERATION,
+    V1_SOURCE_VERSION,
 };
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Fixture constants.  These mirror the offline reference adapter's `Split`
-/// test so that a divergence is a real disagreement rather than a different
-/// scenario.
-///
+/* ------------------------------------------------------------------------ */
+/* Fixture constants                                                         */
+/* ------------------------------------------------------------------------ */
+
 /// The parent-Profile preimage is exactly `PROFILE_PARENT_BYTES` long because
 /// `canonical_profile_hash` refuses any other length; the contents are an
 /// arbitrary fixed pattern, since this lane derives an identity and makes no
 /// claim about which collateral policy the Profile commits to.
 const PROFILE_PREIMAGE_FILL: u8 = 0x5b;
+/// Opaque frozen collateral-policy digest.
+///
+/// The Profile is *frozen* in this fixture -- the flag is set and the digest is
+/// nonzero -- because `CreateMarket` refuses a Realm whose Profile has not
+/// frozen its collateral policy.  Freezing it here is a shape claim only: this
+/// harness owns no 266-byte collateral policy and does not claim this digest is
+/// the digest of one.
+const COLLATERAL_POLICY_FILL: u8 = 0xc7;
 const REALM_NONCE: u64 = 7;
-const MARKET_NONCE: u64 = 9;
 const GENERATION: u64 = 2;
-const SEQUENCE: u64 = 0;
 const CASH_ATOMS: u64 = 100;
 const RESERVED_CASH_ATOMS: u64 = 7;
 const COLLATERAL_CAP: u64 = 1_000;
-const SPLIT_QUANTITY: u64 = 5;
 const OUTCOME_COUNT: u8 = 2;
 /// Comfortably above the rent-exempt minimum for every account in the fixture.
 const ACCOUNT_LAMPORTS: u64 = 100_000_000;
 
-/* Wave-3 plane constants.  The window-policy numbers are exactly the offline
- * reference adapter's own resolution fixture, so that a future resolution
- * differential compares two adapters over one scenario rather than over two.
- * The batch-auction numbers have no reference counterpart at all -- no adapter,
- * offline or on-chain, implements that family yet -- so they are the smallest
- * shape the frozen codecs accept. */
+/// Market nonces.  One market per distinct genesis pre-state.
+const NONCE_SEAM: u64 = 9;
+const NONCE_HELD: u64 = 10;
+const NONCE_SHADOW: u64 = 11;
+const NONCE_REDEEM: u64 = 13;
+const NONCE_CREATE: u64 = 14;
+
+/// Quantities.
+const SPLIT_QUANTITY: u64 = 5;
+const HELD_QUANTITY: u64 = 20;
+const MERGE_QUANTITY: u64 = 5;
+const MATERIALIZE_QUANTITY: u64 = 3;
+const REDEEM_QUANTITY: u64 = 20;
+
+/* Window-policy constants.  These are exactly the offline reference adapter's
+ * own resolution fixture and the `observe_resolve` lifecycle vector, so that
+ * the resolution differential compares two adapters over one scenario rather
+ * than over two. */
 const START_BUCKET: u64 = 100;
 const END_BUCKET_EXCLUSIVE: u64 = 103;
 const MATURITY_HORIZON: u64 = 4;
+const FEED_CURSOR: u64 = 104;
 const GRID_FAMILY: u32 = 7;
 const GRID_VERSION: u16 = 1;
 const BUCKET_SECONDS: u64 = 60;
 const PRICE_SCALE: u64 = 10_000;
+const WINNING_PAYOUT_INDEX: u8 = 1;
+/// The declared window identity, recorded and never believed; the value is the
+/// `observe_resolve` lifecycle vector's own `h(77)`.
+const WINDOW_ID_FILL: u8 = 77;
+/// The recorded feed-page digest of a `FeedAdvance`, likewise recorded only.
+const FEED_EVIDENCE_FILL: u8 = 0x5e;
+
+/* Batch-auction plane constants.  No adapter implements that family, so these
+ * are the smallest shape the frozen codecs accept. */
 const EPOCH_INDEX: u64 = 0;
 const REMAINDER_SEED: u64 = 99;
-/// Opaque book identity inside the market; this lane names no book policy.
 const BOOK_ID_FILL: u8 = 0x6b;
-/// Opaque frozen-policy identity; this lane names no clearing policy.
 const POLICY_ID_FILL: u8 = 0x70;
 const BUY_ORDER_ID_FILL: u8 = 0x11;
 const SELL_ORDER_ID_FILL: u8 = 0x22;
 const SLICE_QUANTITY: u64 = 3;
 const VIRTUAL_SPLIT: u64 = 5;
 
+/* The reference request envelope and the window-evidence blob format.  Both
+ * are private to `clutch_solana_reference`, so these copies are pinned by use
+ * rather than by import: every blob this harness encodes is folded by
+ * `apply_with_evidence` while the fixture is built, and every request it
+ * encodes is decoded by `Request::decode` on the same path, so a drift in any
+ * constant below is a build-time panic rather than a silent divergence. */
+const REQUEST_TAG: u8 = 0xd1;
+const REFERENCE_VERSION: u8 = 1;
+const ACTION_LAYOUT: u8 = 0;
+const ACTION_RESOLVE: u8 = 1;
+const ACTION_REDEEM_INTERNAL: u8 = 2;
+const WINDOW_EVIDENCE_TAG: u8 = 0x45;
+const OBSERVATION_ACCEPTED: u8 = 1;
+
+/// Refusal codes this plan expects, from `programs/clutch-sbf/program/src/error.rs`.
+mod code {
+    /// `ClutchError::MissingSignature`.
+    pub const MISSING_SIGNATURE: u32 = 0x0002;
+    /// `ClutchError::WrongPda`.
+    pub const WRONG_PDA: u32 = 0x0009;
+    /// `ClutchError::UnauthorizedActor`.
+    pub const UNAUTHORIZED_ACTOR: u32 = 0x0011;
+    /// `Error::MissingSignature` projected through `reference_code`.
+    pub const REFERENCE_MISSING_SIGNATURE: u32 = 0x3009;
+    /// `Error::UnauthorizedActor` projected through `reference_code`.
+    pub const REFERENCE_UNAUTHORIZED_ACTOR: u32 = 0x300a;
+    /// `Error::Replay` projected through `reference_code`.
+    pub const REFERENCE_REPLAY: u32 = 0x3011;
+    /// `Error::NonEmptyInitialization` projected through `reference_code`.
+    pub const REFERENCE_NON_EMPTY_INIT: u32 = 0x3010;
+    /// The documented lossy catch-all for a gate refusal `reference_code`
+    /// predates.  See `observe_resolve`'s
+    /// `the_numeric_projection_of_the_gate_is_lossy`.
+    pub const LOSSY_GATE: u32 = 0x3fff;
+}
+
 const B58: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
+/// The runtime's compute-budget program.
+///
+/// Three of the eight families do not fit the 200 000-unit default: the
+/// evidence gate decodes the immutable terms artifact four or five times, and
+/// `CreateMarket` scans, writes, and then re-validates eight accounts.  A real
+/// caller raises the limit the same way, so the plan raises it rather than
+/// declaring those families undrivable -- and the raised number is itself the
+/// measurement, recorded in `docs/implementation/SBF_BRINGUP.md`.
+const COMPUTE_BUDGET_PROGRAM: &str = "ComputeBudget111111111111111111111111111111";
+/// `SetComputeUnitLimit` discriminator.
+const SET_COMPUTE_UNIT_LIMIT: u8 = 2;
+/// The per-transaction ceiling the runtime will grant.
+const COMPUTE_UNIT_CEILING: u32 = 1_400_000;
+
+/* ------------------------------------------------------------------------ */
+/* Encodings                                                                 */
+/* ------------------------------------------------------------------------ */
 
 fn b58_decode32(text: &str) -> [u8; 32] {
     let mut out = [0_u8; 32];
@@ -169,6 +283,10 @@ fn json_u64_field(text: &str, key: &str) -> u64 {
     digits.parse().expect("numeric field")
 }
 
+/* ------------------------------------------------------------------------ */
+/* Program-derived addresses                                                 */
+/* ------------------------------------------------------------------------ */
+
 /// One program-derived address, kept in both the forms the pipeline needs.
 #[derive(Clone, Debug)]
 struct Pda {
@@ -223,6 +341,254 @@ fn fixed_address(label: &str) -> Pda {
     derive(SYSTEM_PROGRAM, &[label.as_bytes().to_vec()])
 }
 
+/* ------------------------------------------------------------------------ */
+/* Requests and blobs                                                        */
+/* ------------------------------------------------------------------------ */
+
+/// Build the reference request envelope around one frozen layout intent.
+fn layout_request(sequence: u64, intent: Intent) -> Vec<u8> {
+    let mut intent_bytes = [0_u8; MAX_INTENT_BYTES];
+    let len = intent.encode(&mut intent_bytes).expect("intent encodes");
+    let mut out = Vec::with_capacity(13 + len);
+    out.push(REQUEST_TAG);
+    out.push(REFERENCE_VERSION);
+    out.extend_from_slice(&sequence.to_le_bytes());
+    out.push(ACTION_LAYOUT);
+    out.extend_from_slice(&(len as u16).to_le_bytes());
+    out.extend_from_slice(&intent_bytes[..len]);
+    out
+}
+
+/// Build the reference request envelope for `Action::Resolve`.
+fn resolve_request(sequence: u64, payout_index: u8) -> Vec<u8> {
+    let mut out = Vec::with_capacity(12);
+    out.push(REQUEST_TAG);
+    out.push(REFERENCE_VERSION);
+    out.extend_from_slice(&sequence.to_le_bytes());
+    out.push(ACTION_RESOLVE);
+    out.push(payout_index);
+    out
+}
+
+/// Build the reference request envelope for `Action::RedeemInternal`.
+fn redeem_request(sequence: u64, outcome: u8, quantity: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(20);
+    out.push(REQUEST_TAG);
+    out.push(REFERENCE_VERSION);
+    out.extend_from_slice(&sequence.to_le_bytes());
+    out.push(ACTION_REDEEM_INTERNAL);
+    out.push(outcome);
+    out.extend_from_slice(&quantity.to_le_bytes());
+    out
+}
+
+/// One observation record in the reference's encoding.
+type Record = (u8, u64, u128, u128);
+
+fn encode_records(out: &mut Vec<u8>, records: &[Record]) {
+    for (kind, bucket, low, high) in records {
+        out.push(*kind);
+        out.extend_from_slice(&bucket.to_le_bytes());
+        out.extend_from_slice(&low.to_le_bytes());
+        out.extend_from_slice(&high.to_le_bytes());
+    }
+}
+
+/// The window this fixture's terms expect: buckets 100 and 101 land in cell 0,
+/// bucket 102 terminates in cell 1, so the terminal statistic selects payout 1.
+fn winning_records() -> [Record; 3] {
+    [
+        (OBSERVATION_ACCEPTED, 100, 0, 0),
+        (OBSERVATION_ACCEPTED, 101, 0, 0),
+        (OBSERVATION_ACCEPTED, 102, 1, 1),
+    ]
+}
+
+/// Encode one window-evidence blob in the reference adapter's own format.
+fn encode_window(feed: FeedId, records: &[Record]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(WINDOW_EVIDENCE_TAG);
+    out.push(REFERENCE_VERSION);
+    out.extend_from_slice(&feed.bytes());
+    out.extend_from_slice(&feed.bytes());
+    out.extend_from_slice(&V1_SOURCE_VERSION.to_le_bytes());
+    out.extend_from_slice(&V1_EVALUATOR_VERSION.to_le_bytes());
+    out.extend_from_slice(&GRID_FAMILY.to_le_bytes());
+    out.extend_from_slice(&GRID_VERSION.to_le_bytes());
+    out.extend_from_slice(&BUCKET_SECONDS.to_le_bytes());
+    out.extend_from_slice(&START_BUCKET.to_le_bytes());
+    out.extend_from_slice(&END_BUCKET_EXCLUSIVE.to_le_bytes());
+    out.extend_from_slice(&(START_BUCKET + MATURITY_HORIZON).to_le_bytes());
+    out.extend_from_slice(&V1_EXACT_GENERATION.to_le_bytes());
+    out.extend_from_slice(&COVERAGE_POLICY_COMPLETE_REQUIRED.to_le_bytes());
+    out.extend_from_slice(&0_u64.to_le_bytes());
+    out.extend_from_slice(&(records.len() as u16).to_le_bytes());
+    encode_records(&mut out, records);
+    out
+}
+
+/// Wrap one window-evidence payload in the program's PROPOSED evidence buffer.
+fn encode_evidence_buffer(window_id: Hash32, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(EVIDENCE_BUFFER_TAG);
+    out.push(BUFFER_VERSION);
+    out.extend_from_slice(&window_id.bytes());
+    out.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+    assert_eq!(out.len(), EVIDENCE_BUFFER_HEADER_BYTES);
+    out.extend_from_slice(payload);
+    out
+}
+
+/// Encode a PROPOSED feed observation page.
+fn encode_feed_page(feed: Hash32, start: u64, end: u64, records: &[Record]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(FEED_PAGE_TAG);
+    out.push(BUFFER_VERSION);
+    out.extend_from_slice(&feed.bytes());
+    out.extend_from_slice(&GRID_FAMILY.to_le_bytes());
+    out.extend_from_slice(&GRID_VERSION.to_le_bytes());
+    out.extend_from_slice(&BUCKET_SECONDS.to_le_bytes());
+    out.extend_from_slice(&start.to_le_bytes());
+    out.extend_from_slice(&end.to_le_bytes());
+    out.extend_from_slice(&(records.len() as u16).to_le_bytes());
+    assert_eq!(out.len(), FEED_PAGE_HEADER_BYTES);
+    encode_records(&mut out, records);
+    out
+}
+
+/* ------------------------------------------------------------------------ */
+/* Transaction assembly                                                      */
+/* ------------------------------------------------------------------------ */
+
+fn compact_u16(value: usize, out: &mut Vec<u8>) {
+    let mut remaining = value;
+    loop {
+        let mut byte = (remaining & 0x7f) as u8;
+        remaining >>= 7;
+        if remaining != 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if remaining == 0 {
+            break;
+        }
+    }
+}
+
+/// One legacy message, in the account order the runtime requires.
+///
+/// The four groups are the message's own ordering rule -- writable signers,
+/// read-only signers, writable non-signers, read-only non-signers -- and
+/// [`Message::index`] is what turns a role's *key* into the index an
+/// instruction account list needs.  Computing those indices by hand is how an
+/// account list silently points at the wrong account, so it is not done here.
+#[derive(Clone, Debug)]
+struct Message {
+    keys: Vec<[u8; 32]>,
+    required_signatures: u8,
+    readonly_signed: u8,
+    readonly_unsigned: u8,
+}
+
+impl Message {
+    fn new(
+        writable_signers: &[[u8; 32]],
+        readonly_signers: &[[u8; 32]],
+        writable: &[[u8; 32]],
+        readonly: &[[u8; 32]],
+    ) -> Self {
+        let mut keys = Vec::new();
+        keys.extend_from_slice(writable_signers);
+        keys.extend_from_slice(readonly_signers);
+        keys.extend_from_slice(writable);
+        keys.extend_from_slice(readonly);
+        for (index, key) in keys.iter().enumerate() {
+            assert!(
+                !keys[index + 1..].contains(key),
+                "duplicate key in message account list"
+            );
+        }
+        Self {
+            keys,
+            required_signatures: (writable_signers.len() + readonly_signers.len()) as u8,
+            readonly_signed: readonly_signers.len() as u8,
+            readonly_unsigned: readonly.len() as u8,
+        }
+    }
+
+    fn index(&self, key: &[u8; 32]) -> u8 {
+        self.keys
+            .iter()
+            .position(|candidate| candidate == key)
+            .expect("account is not in the message") as u8
+    }
+
+    fn indices(&self, keys: &[[u8; 32]]) -> Vec<u8> {
+        keys.iter().map(|key| self.index(key)).collect()
+    }
+}
+
+/// One instruction: a program index plus already-resolved account indices.
+#[derive(Clone, Debug)]
+struct Instruction {
+    program_index: u8,
+    accounts: Vec<u8>,
+    data: Vec<u8>,
+}
+
+/// One `SetComputeUnitLimit` instruction, for a family the default cannot run.
+fn budget_instruction(message: &Message, budget: &[u8; 32], units: u32) -> Instruction {
+    let mut data = Vec::with_capacity(5);
+    data.push(SET_COMPUTE_UNIT_LIMIT);
+    data.extend_from_slice(&units.to_le_bytes());
+    Instruction {
+        program_index: message.index(budget),
+        accounts: Vec::new(),
+        data,
+    }
+}
+
+/// Serialize one unsigned legacy transaction.
+///
+/// Signatures are zero-filled.  `scripts/simulate.py` sends this to
+/// `simulateTransaction` with `sigVerify: false`, so the runtime executes the
+/// instructions without authenticating the signature bytes.  The `is_signer`
+/// bits the program sees still come from the message header, which is the fact
+/// under test.
+fn transaction(message: &Message, instructions: &[Instruction]) -> Vec<u8> {
+    let mut out = Vec::new();
+    compact_u16(usize::from(message.required_signatures), &mut out);
+    for _ in 0..message.required_signatures {
+        out.extend_from_slice(&[0_u8; 64]);
+    }
+    out.push(message.required_signatures);
+    out.push(message.readonly_signed);
+    out.push(message.readonly_unsigned);
+    compact_u16(message.keys.len(), &mut out);
+    for key in &message.keys {
+        out.extend_from_slice(key);
+    }
+    out.extend_from_slice(&[0_u8; 32]);
+    compact_u16(instructions.len(), &mut out);
+    for instruction in instructions {
+        out.push(instruction.program_index);
+        compact_u16(instruction.accounts.len(), &mut out);
+        out.extend_from_slice(&instruction.accounts);
+        compact_u16(instruction.data.len(), &mut out);
+        out.extend_from_slice(&instruction.data);
+    }
+    assert!(
+        out.len() <= 1232,
+        "transaction exceeds the legacy packet limit: {} bytes",
+        out.len()
+    );
+    out
+}
+
+/* ------------------------------------------------------------------------ */
+/* The shared plane                                                          */
+/* ------------------------------------------------------------------------ */
+
 fn payout_set() -> PayoutSet {
     let mut vectors = [PayoutVector::ZERO; MAX_PAYOUTS];
     let mut left = [0; MAX_OUTCOMES];
@@ -234,68 +600,97 @@ fn payout_set() -> PayoutSet {
     PayoutSet::new(2, OUTCOME_COUNT, vectors)
 }
 
-/// The wave-3 account plane.
-///
-/// These are the frozen-layout accounts the single implemented instruction does
-/// **not** touch: the immutable terms artifact and its price grid, the
-/// resolution record, the feed head, and the whole batch-auction family.  They
-/// are loaded at genesis so that a per-instruction lane has a real, bound,
-/// on-chain plane to write against instead of inventing one.
-///
-/// ## What this fixture claims, and what it does not
-///
-/// Every account here decodes through its frozen codec, and every *identity*
-/// binding the layout crate can decide is asserted in [`build_wave3`] and in
-/// [`build_fixture`]: terms to market, supply ledger to market, grid to terms,
-/// epoch to terms and grid, epoch to its frozen page set, candidate to epoch,
-/// pot to candidate, receipt to candidate, and resolution to terms.
-///
-/// No *economic* coherence is claimed and none should be read in.  Whether this
-/// candidate is the best valid submitted candidate for this book, whether the
-/// pot balances against the receipts, and whether the prices clear anything are
-/// questions for a batch relation that no adapter runs yet.  The fixture is a
-/// shape, bound at every seam a codec owns and at none that it does not.
-struct Wave3 {
-    grid: Pda,
-    terms: Pda,
-    resolution: Pda,
-    feed: Pda,
-    epoch: Pda,
-    page: Pda,
-    candidate: Pda,
-    pot: Pda,
-    receipt: Pda,
-    /// The immutable terms digest, which [`MarketAccount::terms`] must equal.
-    terms_digest: Hash32,
-    terms_account: TermsAccount,
-    grid_bytes: [u8; account_len::PRICE_GRID],
-    terms_bytes: [u8; account_len::TERMS],
-    resolution_bytes: [u8; account_len::RESOLUTION],
-    feed_bytes: [u8; account_len::FEED],
-    epoch_bytes: [u8; account_len::EPOCH],
-    page_bytes: [u8; account_len::ORDER_PAGE],
-    candidate_bytes: [u8; account_len::CANDIDATE],
-    pot_bytes: [u8; account_len::FINAL_POT],
-    receipt_bytes: [u8; account_len::SETTLEMENT_RECEIPT],
+fn payout_vector_bytes() -> [PayoutVectorBytes; MAX_PAYOUTS] {
+    let mut payouts = [PayoutVectorBytes::ZERO; MAX_PAYOUTS];
+    let mut left = [0; MAX_OUTCOMES];
+    left[0] = 1;
+    let mut right = [0; MAX_OUTCOMES];
+    right[1] = 1;
+    payouts[0] = PayoutVectorBytes {
+        denominator: 1,
+        weights: left,
+    };
+    payouts[1] = PayoutVectorBytes {
+        denominator: 1,
+        weights: right,
+    };
+    payouts
 }
 
-/// Build and bind the wave-3 plane, deriving every address from `seeds`.
+/// The Realm-wide accounts every market in the plan shares.
 ///
-/// Each content-addressed account is built with a zero stored bump, digested,
-/// used to derive its own address, and only then given the canonical bump: the
-/// bump is deliberately outside every digest, so a PDA derived from a digest can
-/// still carry the bump that derivation produced.
-fn build_wave3(
-    pid: &str,
+/// One Realm, one Profile, one price grid, and one immutable terms artifact
+/// serve every market here, because none of those four codecs binds a market
+/// identity: `TermsAccount::binds_market` compares realm, profile, feed, and
+/// outcome count, and this plan varies only the market nonce.
+struct Shared {
+    program: Pda,
+    compute_budget: [u8; 32],
+    payer: Pda,
+    actor: Pda,
+    stranger: Pda,
+    imposter: Pda,
     realm_hash: Hash32,
     profile_hash: Hash32,
-    market_id: Hash32,
     feed: FeedId,
-    buyer: Hash32,
-    seller: Hash32,
-) -> Wave3 {
+    advance_feed: FeedId,
+    realm: Pda,
+    profile: Pda,
+    grid: Pda,
+    terms: Pda,
+    feed_head: Pda,
+    advance_feed_head: Pda,
+    terms_digest: Hash32,
+    terms_account: TermsAccount,
+    realm_bytes: [u8; account_len::REALM],
+    profile_bytes: [u8; account_len::PROFILE],
+    grid_bytes: [u8; account_len::PRICE_GRID],
+    terms_bytes: [u8; account_len::TERMS],
+    feed_bytes: [u8; account_len::FEED],
+    advance_feed_bytes: [u8; account_len::FEED],
+}
+
+fn build_shared() -> Shared {
+    let program = fixed_address("clutch-sbf/bringup/program/v1");
+    let payer = fixed_address("clutch-sbf/bringup/payer/v1");
+    let actor = fixed_address("clutch-sbf/bringup/actor/v1");
+    let stranger = fixed_address("clutch-sbf/bringup/stranger/v1");
+    let imposter = fixed_address("clutch-sbf/bringup/imposter/v1");
+    let pid = program.address.clone();
+
+    let profile_preimage = [PROFILE_PREIMAGE_FILL; PROFILE_PARENT_BYTES];
+    let profile_hash = canonical_profile_hash(&profile_preimage)
+        .expect("the fixture profile preimage must be a canonical profile hash");
+    let realm_hash = canonical_realm_id(profile_hash, REALM_NONCE);
+    let feed = FeedId::from_bytes([9; 32]);
+    let advance_feed = FeedId::from_bytes([0x0b; 32]);
+
     let realm_seed = realm_hash.bytes().to_vec();
-    let market_seed = market_id.bytes().to_vec();
+    let realm = derive(&pid, &[seeds::SEED_REALM.to_vec(), realm_seed.clone()]);
+    let profile = derive(
+        &pid,
+        &[
+            seeds::SEED_PROFILE.to_vec(),
+            realm_seed.clone(),
+            profile_hash.bytes().to_vec(),
+        ],
+    );
+
+    let realm_account = RealmAccount {
+        realm: realm_hash,
+        profile: profile_hash,
+        max_outcomes: MAX_OUTCOMES as u8,
+        profile_version: 1,
+        stored_bump: realm.bump,
+        flags: 0,
+    };
+    let profile_account = ProfileAccount {
+        profile: profile_hash,
+        realm: realm_hash,
+        collateral_policy_digest: Hash32::from_bytes([COLLATERAL_POLICY_FILL; 32]),
+        version: 1,
+        flags: PROFILE_FLAG_POLICY_FROZEN,
+    };
 
     // Frozen price grid: the exact tick domain every order limit lives on.
     let mut ticks = [0; MAX_GRID_TICKS];
@@ -316,7 +711,7 @@ fn build_wave3(
         .recomputed_grid_id()
         .expect("the fixture grid body must digest");
     let grid = derive(
-        pid,
+        &pid,
         &[
             seeds::SEED_GRID.to_vec(),
             realm_seed.clone(),
@@ -326,21 +721,8 @@ fn build_wave3(
     grid_account.stored_bump = grid.bump;
 
     /* Immutable terms.  The window policy is exactly the offline reference
-     * adapter's resolution fixture, so a future resolution differential is a
+     * adapter's resolution fixture, so the resolution differential is a
      * disagreement between two adapters rather than between two scenarios. */
-    let mut payouts = [PayoutVectorBytes::ZERO; MAX_PAYOUTS];
-    let mut left = [0; MAX_OUTCOMES];
-    left[0] = 1;
-    let mut right = [0; MAX_OUTCOMES];
-    right[1] = 1;
-    payouts[0] = PayoutVectorBytes {
-        denominator: 1,
-        weights: left,
-    };
-    payouts[1] = PayoutVectorBytes {
-        denominator: 1,
-        weights: right,
-    };
     let mut terms_account = TermsAccount {
         terms: Hash32::ZERO,
         realm: realm_hash,
@@ -349,7 +731,7 @@ fn build_wave3(
         price_grid: grid_account.grid,
         outcome_count: OUTCOME_COUNT,
         payout_count: 2,
-        payouts,
+        payouts: payout_vector_bytes(),
         grid_family_id: GRID_FAMILY,
         grid_version: GRID_VERSION,
         bucket_seconds: BUCKET_SECONDS,
@@ -366,7 +748,7 @@ fn build_wave3(
         .recomputed_terms_digest()
         .expect("the fixture terms body must digest");
     let terms = derive(
-        pid,
+        &pid,
         &[
             seeds::SEED_TERMS.to_vec(),
             realm_seed.clone(),
@@ -374,52 +756,530 @@ fn build_wave3(
         ],
     );
     terms_account.stored_bump = terms.bump;
+    grid_account
+        .binds_terms(&terms_account)
+        .expect("grid binds terms");
 
-    /* Resolution record, unresolved.  An unresolved record is the honest
-     * genesis state: nothing has sealed a window, so no payout is selected. */
-    let resolution = derive(pid, &[seeds::SEED_RESOLUTION.to_vec(), market_seed.clone()]);
-    let resolution_account = ResolutionAccount {
-        market: market_id,
-        terms: terms_account.terms,
-        feed,
-        window: Hash32::ZERO,
-        feed_cursor: 0,
-        sealed_end_bucket_exclusive: 0,
-        repair_generation: 0,
-        resolved_slot: 0,
-        payout_index: PAYOUT_INDEX_UNRESOLVED,
-        stored_bump: resolution.bump,
-        flags: 0,
-    };
-
-    let feed_pda = derive(pid, &[seeds::SEED_FEED.to_vec(), feed.bytes().to_vec()]);
+    /* The feed head every market resolves against, already matured: its cursor
+     * is past the window's maturity bound, which is the fact `Resolve` reads
+     * and no caller may assert. */
+    let feed_head = derive(&pid, &[seeds::SEED_FEED.to_vec(), feed.bytes().to_vec()]);
     let feed_account = FeedAccount {
         feed,
         realm: realm_hash,
-        cursor: 0,
+        cursor: FEED_CURSOR,
         next_boundary: START_BUCKET,
-        archive_pages: 0,
+        archive_pages: 1,
         /* Nonzero because the codec refuses a zero identity; this lane has no
          * accumulator summary to commit to and makes no claim about one. */
         summary: Hash32::from_bytes([0x5c; 32]),
-        stored_bump: feed_pda.bump,
+        stored_bump: feed_head.bump,
         flags: 0,
     };
 
-    /* Batch-auction plane.  One epoch, one frozen page holding two orders, one
-     * selected candidate, its pot, and one unsettled receipt slice. */
+    /* A second feed identity exists only so that `FeedAdvance` has a *writable*
+     * head to move.  The resolution head above must arrive read-only and
+     * already matured; one account cannot be both. */
+    let advance_feed_head = derive(
+        &pid,
+        &[seeds::SEED_FEED.to_vec(), advance_feed.bytes().to_vec()],
+    );
+    let advance_feed_account = FeedAccount {
+        feed: advance_feed,
+        realm: realm_hash,
+        cursor: START_BUCKET,
+        next_boundary: START_BUCKET,
+        archive_pages: 0,
+        summary: Hash32::from_bytes([0x5d; 32]),
+        stored_bump: advance_feed_head.bump,
+        flags: 0,
+    };
+
+    let mut realm_bytes = [0; account_len::REALM];
+    let mut profile_bytes = [0; account_len::PROFILE];
+    let mut grid_bytes = [0; account_len::PRICE_GRID];
+    let mut terms_bytes = [0; account_len::TERMS];
+    let mut feed_bytes = [0; account_len::FEED];
+    let mut advance_feed_bytes = [0; account_len::FEED];
+    realm_account.encode(&mut realm_bytes).expect("realm");
+    profile_account.encode(&mut profile_bytes).expect("profile");
+    grid_account.encode(&mut grid_bytes).expect("grid");
+    terms_account.encode(&mut terms_bytes).expect("terms");
+    feed_account.encode(&mut feed_bytes).expect("feed");
+    advance_feed_account
+        .encode(&mut advance_feed_bytes)
+        .expect("advance feed");
+
+    Shared {
+        program,
+        compute_budget: b58_decode32(COMPUTE_BUDGET_PROGRAM),
+        payer,
+        actor,
+        stranger,
+        imposter,
+        realm_hash,
+        profile_hash,
+        feed,
+        advance_feed,
+        realm,
+        profile,
+        grid,
+        terms,
+        feed_head,
+        advance_feed_head,
+        terms_digest: terms_account.terms,
+        terms_account,
+        realm_bytes,
+        profile_bytes,
+        grid_bytes,
+        terms_bytes,
+        feed_bytes,
+        advance_feed_bytes,
+    }
+}
+
+/* ------------------------------------------------------------------------ */
+/* One market plane                                                          */
+/* ------------------------------------------------------------------------ */
+
+/// Every account of one market, plus the state bytes its genesis carries.
+struct Plane {
+    label: &'static str,
+    market_id: Hash32,
+    owner: Hash32,
+    generation: u64,
+    market: Pda,
+    hoard: Pda,
+    position: Pda,
+    kernel: Pda,
+    external: Pda,
+    replay: Pda,
+    supply: Pda,
+    resolution: Pda,
+    state: TransitionOutput,
+    resolution_bytes: [u8; account_len::RESOLUTION],
+}
+
+fn state_bytes(state: &TransitionOutput) -> StateBytes<'_> {
+    StateBytes {
+        market: &state.market,
+        hoard: &state.hoard,
+        position: &state.position,
+        kernel: &state.kernel,
+        external: &state.external,
+        replay: &state.replay,
+        supply: &state.supply,
+    }
+}
+
+impl Plane {
+    /// Derive every address of one market and encode its opening state.
+    ///
+    /// `cash` is the founding position's cash balance; a plane built with the
+    /// zero flag set carries all-zero bytes instead, which is the pre-state
+    /// `CreateMarket` requires.
+    fn build(shared: &Shared, label: &'static str, nonce: u64, generation: u64) -> Self {
+        let pid = shared.program.address.clone();
+        let market_id = canonical_market_id(shared.realm_hash, shared.profile_hash, nonce);
+        let owner = Hash32::from_bytes(shared.actor.bytes);
+        let realm_seed = shared.realm_hash.bytes().to_vec();
+        let market_seed = market_id.bytes().to_vec();
+        let owner_seed = owner.bytes().to_vec();
+        let generation_seed = generation.to_le_bytes().to_vec();
+
+        let market = derive(
+            &pid,
+            &[seeds::SEED_MARKET.to_vec(), realm_seed, market_seed.clone()],
+        );
+        let hoard = derive(&pid, &[seeds::SEED_HOARD.to_vec(), market_seed.clone()]);
+        let position = derive(
+            &pid,
+            &[
+                seeds::SEED_POSITION.to_vec(),
+                market_seed.clone(),
+                owner_seed.clone(),
+            ],
+        );
+        let kernel = derive(&pid, &[seeds::SEED_KERNEL.to_vec(), market_seed.clone()]);
+        let external = derive(
+            &pid,
+            &[
+                seeds::SEED_EXTERNAL.to_vec(),
+                market_seed.clone(),
+                owner_seed.clone(),
+                generation_seed.clone(),
+            ],
+        );
+        let replay = derive(
+            &pid,
+            &[
+                seeds::SEED_REPLAY.to_vec(),
+                market_seed.clone(),
+                owner_seed,
+                generation_seed,
+            ],
+        );
+        let supply = derive(&pid, &[seeds::SEED_SUPPLY.to_vec(), market_seed.clone()]);
+        let resolution = derive(&pid, &[seeds::SEED_RESOLUTION.to_vec(), market_seed]);
+
+        Self {
+            label,
+            market_id,
+            owner,
+            generation,
+            market,
+            hoard,
+            position,
+            kernel,
+            external,
+            replay,
+            supply,
+            resolution,
+            state: zero_state(),
+            resolution_bytes: [0; account_len::RESOLUTION],
+        }
+    }
+
+    /// Encode the opening state of an active, empty market.
+    fn open(&mut self, shared: &Shared, cash: u64) {
+        let mut outcomes = [Hash32::ZERO; MAX_OUTCOMES];
+        outcomes[0] = canonical_outcome_id(self.market_id, 0);
+        outcomes[1] = canonical_outcome_id(self.market_id, 1);
+        let market_account = MarketAccount {
+            market: self.market_id,
+            realm: shared.realm_hash,
+            profile: shared.profile_hash,
+            terms: shared.terms_digest,
+            outcome_count: OUTCOME_COUNT,
+            lifecycle: 0,
+            stored_bump: self.market.bump,
+            hoard_bump: self.hoard.bump,
+            outcomes,
+            feed: shared.feed,
+            collateral_cap: COLLATERAL_CAP,
+            created_slot: 55,
+            reserved: Hash32::ZERO,
+        };
+        let hoard_account = HoardAccount {
+            market: self.market_id,
+            realm: shared.realm_hash,
+            authority: Hash32::from_bytes(self.hoard.bytes),
+            collateral_atoms: 0,
+            stored_bump: self.hoard.bump,
+            flags: 0,
+        };
+        let position_account = PositionAccount {
+            market: self.market_id,
+            owner: self.owner,
+            generation: self.generation,
+            internal: [0; MAX_OUTCOMES],
+            cash_atoms: cash,
+            reserved_cash_atoms: RESERVED_CASH_ATOMS,
+            stored_bump: self.position.bump,
+            close_state: 0,
+        };
+        let kernel_account = KernelAccount {
+            market: self.market_id,
+            phase: 0,
+            resolved_payout: 0,
+            payouts: payout_set(),
+            total_supply: [0; MAX_OUTCOMES],
+        };
+        let external_account = ExternalAccount {
+            market: self.market_id,
+            owner: self.owner,
+            position_generation: self.generation,
+            balances: [0; MAX_OUTCOMES],
+            stored_bump: self.external.bump,
+            flags: 0,
+        };
+        let replay_account = ReplayAccount {
+            market: self.market_id,
+            owner: self.owner,
+            position_generation: self.generation,
+            sequence: 0,
+            stored_bump: self.replay.bump,
+            flags: 0,
+        };
+        let supply_account = SupplyLedgerAccount {
+            market: self.market_id,
+            realm: shared.realm_hash,
+            generation: self.generation,
+            outcome_count: OUTCOME_COUNT,
+            internal_supply: [0; MAX_OUTCOMES],
+            external_supply: [0; MAX_OUTCOMES],
+            stored_bump: self.supply.bump,
+            flags: 0,
+        };
+        let resolution_account = ResolutionAccount {
+            market: self.market_id,
+            terms: shared.terms_digest,
+            feed: shared.feed,
+            window: Hash32::ZERO,
+            feed_cursor: 0,
+            sealed_end_bucket_exclusive: 0,
+            repair_generation: 0,
+            resolved_slot: 0,
+            payout_index: PAYOUT_INDEX_UNRESOLVED,
+            stored_bump: self.resolution.bump,
+            flags: 0,
+        };
+
+        shared
+            .terms_account
+            .binds_market(&market_account)
+            .expect("terms bind the market");
+        supply_account
+            .binds_market(&market_account)
+            .expect("supply ledger binds the market");
+        resolution_account
+            .binds_terms(&shared.terms_account)
+            .expect("resolution binds the immutable terms");
+
+        market_account
+            .encode(&mut self.state.market)
+            .expect("market");
+        hoard_account.encode(&mut self.state.hoard).expect("hoard");
+        position_account
+            .encode(&mut self.state.position)
+            .expect("position");
+        kernel_account
+            .encode(&mut self.state.kernel)
+            .expect("kernel");
+        external_account
+            .encode(&mut self.state.external)
+            .expect("external");
+        replay_account
+            .encode(&mut self.state.replay)
+            .expect("replay");
+        supply_account
+            .encode(&mut self.state.supply)
+            .expect("supply");
+        resolution_account
+            .encode(&mut self.resolution_bytes)
+            .expect("resolution");
+    }
+
+    fn metadata(&self, shared: &Shared, actor: [u8; 32], signer: bool) -> TransitionMetadata {
+        let program = Hash32::from_bytes(shared.program.bytes);
+        let account = |pda: &Pda| AccountMetadata {
+            key: Hash32::from_bytes(pda.bytes),
+            owner_program: program,
+            writable: true,
+        };
+        TransitionMetadata {
+            market: account(&self.market),
+            hoard: account(&self.hoard),
+            position: account(&self.position),
+            kernel: account(&self.kernel),
+            external: account(&self.external),
+            replay: account(&self.replay),
+            supply: account(&self.supply),
+            actor: ActorMetadata {
+                key: Hash32::from_bytes(actor),
+                signer,
+            },
+        }
+    }
+
+    fn bindings(&self, shared: &Shared) -> ExpectedBindings {
+        ExpectedBindings {
+            program_id: Hash32::from_bytes(shared.program.bytes),
+            market: Hash32::from_bytes(self.market.bytes),
+            hoard: Hash32::from_bytes(self.hoard.bytes),
+            position: Hash32::from_bytes(self.position.bytes),
+            kernel: Hash32::from_bytes(self.kernel.bytes),
+            external: Hash32::from_bytes(self.external.bytes),
+            replay: Hash32::from_bytes(self.replay.bytes),
+            supply: Hash32::from_bytes(self.supply.bytes),
+            market_bump: self.market.bump,
+            hoard_bump: self.hoard.bump,
+            position_bump: self.position.bump,
+            external_bump: self.external.bump,
+            replay_bump: self.replay.bump,
+            supply_bump: self.supply.bump,
+        }
+    }
+
+    fn evidence_metadata(&self, shared: &Shared, resolution_writable: bool) -> EvidenceMetadata {
+        let program = Hash32::from_bytes(shared.program.bytes);
+        EvidenceMetadata {
+            terms: AccountMetadata {
+                key: Hash32::from_bytes(shared.terms.bytes),
+                owner_program: program,
+                writable: false,
+            },
+            resolution: AccountMetadata {
+                key: Hash32::from_bytes(self.resolution.bytes),
+                owner_program: program,
+                writable: resolution_writable,
+            },
+        }
+    }
+
+    fn evidence_bindings(&self, shared: &Shared) -> EvidenceBindings {
+        EvidenceBindings {
+            terms: Hash32::from_bytes(shared.terms.bytes),
+            resolution: Hash32::from_bytes(self.resolution.bytes),
+            terms_bump: shared.terms.bump,
+            resolution_bump: self.resolution.bump,
+            window_id: Hash32::from_bytes([WINDOW_ID_FILL; 32]),
+        }
+    }
+
+    /// Run the offline reference adapter over this plane's current state.
+    fn layout(
+        &self,
+        shared: &Shared,
+        request: &[u8],
+        actor: [u8; 32],
+        signer: bool,
+    ) -> Result<TransitionOutput, clutch_solana_reference::Error> {
+        apply(
+            request,
+            state_bytes(&self.state),
+            &self.metadata(shared, actor, signer),
+            &self.bindings(shared),
+        )
+    }
+
+    /// Run the offline reference adapter's evidence gate over this plane.
+    fn gate(
+        &self,
+        shared: &Shared,
+        request: &[u8],
+        window: &[u8],
+        resolution_writable: bool,
+        actor: [u8; 32],
+        signer: bool,
+    ) -> Result<TransitionOutput, clutch_solana_reference::Error> {
+        apply_with_evidence(
+            request,
+            state_bytes(&self.state),
+            &ResolutionEvidence {
+                bytes: EvidenceBytes {
+                    terms: &shared.terms_bytes,
+                    resolution: &self.resolution_bytes,
+                    window,
+                },
+                metadata: self.evidence_metadata(shared, resolution_writable),
+                bindings: self.evidence_bindings(shared),
+                feed_cursor: FEED_CURSOR,
+                /* Named gap: the program has no clock, so it records zero and
+                 * the oracle must be told the same thing or the two would
+                 * disagree about a field neither one can source. */
+                resolved_slot: 0,
+            },
+            &self.metadata(shared, actor, signer),
+            &self.bindings(shared),
+        )
+    }
+
+    /// Advance this plane's genesis by one reference transition.
+    fn advance(&mut self, output: TransitionOutput) {
+        if let Some(record) = output.resolution {
+            self.resolution_bytes = record;
+        }
+        self.state = output;
+    }
+
+    /// The seven state accounts, in the seam plane's account order.
+    fn state_roles(&self) -> [(&'static str, &Pda); 7] {
+        [
+            ("market", &self.market),
+            ("hoard", &self.hoard),
+            ("position", &self.position),
+            ("kernel", &self.kernel),
+            ("external", &self.external),
+            ("replay", &self.replay),
+            ("supply", &self.supply),
+        ]
+    }
+
+    fn state_slice(&self, role: &str) -> &[u8] {
+        match role {
+            "market" => &self.state.market,
+            "hoard" => &self.state.hoard,
+            "position" => &self.state.position,
+            "kernel" => &self.state.kernel,
+            "external" => &self.state.external,
+            "replay" => &self.state.replay,
+            "supply" => &self.state.supply,
+            "resolution" => &self.resolution_bytes,
+            other => panic!("unknown state role {other}"),
+        }
+    }
+}
+
+fn zero_state() -> TransitionOutput {
+    TransitionOutput {
+        market: [0; account_len::MARKET],
+        hoard: [0; account_len::HOARD],
+        position: [0; account_len::POSITION],
+        kernel: [0; KERNEL_ACCOUNT_LEN],
+        external: [0; EXTERNAL_ACCOUNT_LEN],
+        replay: [0; REPLAY_ACCOUNT_LEN],
+        supply: [0; account_len::SUPPLY_LEDGER],
+        resolution: None,
+        redemption_payout: 0,
+    }
+}
+
+fn output_slice<'a>(output: &'a TransitionOutput, role: &str) -> &'a [u8] {
+    match role {
+        "market" => &output.market,
+        "hoard" => &output.hoard,
+        "position" => &output.position,
+        "kernel" => &output.kernel,
+        "external" => &output.external,
+        "replay" => &output.replay,
+        "supply" => &output.supply,
+        other => panic!("unknown state role {other}"),
+    }
+}
+
+/* ------------------------------------------------------------------------ */
+/* The batch-auction plane                                                   */
+/* ------------------------------------------------------------------------ */
+
+/// The frozen-layout accounts no implemented instruction touches.
+///
+/// They are loaded at genesis so that a per-instruction lane inherits a real,
+/// bound, canonically addressed plane instead of inventing one.  Every identity
+/// binding the layout crate can decide is asserted while they are built; no
+/// economic coherence is claimed and none should be read in.
+struct Batch {
+    epoch: Pda,
+    page: Pda,
+    candidate: Pda,
+    pot: Pda,
+    receipt: Pda,
+    epoch_bytes: [u8; account_len::EPOCH],
+    page_bytes: [u8; account_len::ORDER_PAGE],
+    candidate_bytes: [u8; account_len::CANDIDATE],
+    pot_bytes: [u8; account_len::FINAL_POT],
+    receipt_bytes: [u8; account_len::SETTLEMENT_RECEIPT],
+}
+
+fn build_batch(shared: &Shared, plane: &Plane) -> Batch {
+    let pid = shared.program.address.clone();
+    let market_id = plane.market_id;
+    let market_seed = market_id.bytes().to_vec();
     let epoch_id = canonical_epoch_id(market_id, EPOCH_INDEX);
     let epoch_seed = epoch_id.bytes().to_vec();
+    let buyer = plane.owner;
+    let seller = Hash32::from_bytes(shared.stranger.bytes);
+
     let epoch = derive(
-        pid,
+        &pid,
         &[
             seeds::SEED_EPOCH.to_vec(),
-            market_seed.clone(),
+            market_seed,
             EPOCH_INDEX.to_le_bytes().to_vec(),
         ],
     );
     let page = derive(
-        pid,
+        &pid,
         &[
             seeds::SEED_PAGE.to_vec(),
             epoch_seed.clone(),
@@ -484,8 +1344,8 @@ fn build_wave3(
         epoch: epoch_id,
         market: market_id,
         book: Hash32::from_bytes([BOOK_ID_FILL; 32]),
-        terms: terms_account.terms,
-        price_grid: grid_account.grid,
+        terms: shared.terms_digest,
+        price_grid: shared.terms_account.price_grid,
         policy: Hash32::from_bytes([POLICY_ID_FILL; 32]),
         order_set,
         first_order_id: buy_order_id,
@@ -529,7 +1389,7 @@ fn build_wave3(
         .recomputed_candidate_digest()
         .expect("the fixture candidate body must digest");
     let candidate = derive(
-        pid,
+        &pid,
         &[
             seeds::SEED_CANDIDATE.to_vec(),
             epoch_seed.clone(),
@@ -538,7 +1398,7 @@ fn build_wave3(
     );
     candidate_account.stored_bump = candidate.bump;
 
-    let pot = derive(pid, &[seeds::SEED_POT.to_vec(), epoch_seed.clone()]);
+    let pot = derive(&pid, &[seeds::SEED_POT.to_vec(), epoch_seed.clone()]);
     let mut pot_internal = [0; MAX_OUTCOMES];
     pot_internal[0] = VIRTUAL_SPLIT;
     pot_internal[1] = VIRTUAL_SPLIT;
@@ -556,7 +1416,7 @@ fn build_wave3(
     };
 
     let receipt = derive(
-        pid,
+        &pid,
         &[
             seeds::SEED_RECEIPT.to_vec(),
             epoch_seed,
@@ -583,14 +1443,8 @@ fn build_wave3(
         flags: 0,
     };
 
-    /* Every binding the frozen layout can decide, asserted here so that a
-     * fixture which drifted apart fails the harness instead of quietly
-     * shipping an incoherent genesis. */
-    grid_account
-        .binds_terms(&terms_account)
-        .expect("grid binds terms");
     epoch_account
-        .binds_terms(&terms_account, &grid_account)
+        .binds_terms(&shared.terms_account, &grid_of(shared))
         .expect("epoch binds terms and grid");
     epoch_account
         .binds_page_set(&[page_account])
@@ -604,25 +1458,12 @@ fn build_wave3(
     receipt_account
         .binds_candidate(&candidate_account)
         .expect("receipt binds the selected candidate");
-    resolution_account
-        .binds_terms(&terms_account)
-        .expect("resolution binds the immutable terms");
 
-    let mut grid_bytes = [0; account_len::PRICE_GRID];
-    let mut terms_bytes = [0; account_len::TERMS];
-    let mut resolution_bytes = [0; account_len::RESOLUTION];
-    let mut feed_bytes = [0; account_len::FEED];
     let mut epoch_bytes = [0; account_len::EPOCH];
     let mut page_bytes = [0; account_len::ORDER_PAGE];
     let mut candidate_bytes = [0; account_len::CANDIDATE];
     let mut pot_bytes = [0; account_len::FINAL_POT];
     let mut receipt_bytes = [0; account_len::SETTLEMENT_RECEIPT];
-    grid_account.encode(&mut grid_bytes).expect("grid");
-    terms_account.encode(&mut terms_bytes).expect("terms");
-    resolution_account
-        .encode(&mut resolution_bytes)
-        .expect("resolution");
-    feed_account.encode(&mut feed_bytes).expect("feed");
     epoch_account.encode(&mut epoch_bytes).expect("epoch");
     page_account.encode(&mut page_bytes).expect("page");
     candidate_account
@@ -631,22 +1472,12 @@ fn build_wave3(
     pot_account.encode(&mut pot_bytes).expect("pot");
     receipt_account.encode(&mut receipt_bytes).expect("receipt");
 
-    Wave3 {
-        grid,
-        terms,
-        resolution,
-        feed: feed_pda,
+    Batch {
         epoch,
         page,
         candidate,
         pot,
         receipt,
-        terms_digest: terms_account.terms,
-        terms_account,
-        grid_bytes,
-        terms_bytes,
-        resolution_bytes,
-        feed_bytes,
         epoch_bytes,
         page_bytes,
         candidate_bytes,
@@ -655,436 +1486,1510 @@ fn build_wave3(
     }
 }
 
-/// Everything the fixture needs, in both byte and address form.
+fn grid_of(shared: &Shared) -> PriceGridAccount {
+    PriceGridAccount::decode(&shared.grid_bytes).expect("the fixture grid decodes")
+}
+
+/* ------------------------------------------------------------------------ */
+/* The emitted plan                                                          */
+/* ------------------------------------------------------------------------ */
+
+/// One genesis account dump.
+struct Genesis {
+    role: String,
+    address: String,
+    data: Vec<u8>,
+}
+
+/// One writable account the SVM must return byte-identical to the oracle.
+struct Compare {
+    role: String,
+    address: String,
+    expected: Vec<u8>,
+    pre: Vec<u8>,
+}
+
+/// One transaction in the plan.
+struct Case {
+    name: String,
+    family: &'static str,
+    oracle: &'static str,
+    note: String,
+    tx: Vec<u8>,
+    instruction_count: usize,
+    /// `None` for a refusal case.
+    compare: Option<Vec<Compare>>,
+    /// Roles that must come back byte-identical to the genesis pre-state.
+    identical_to_pre: Vec<String>,
+    /// Expected `ProgramError::Custom` code, for a refusal case.
+    expect_code: Option<u32>,
+    /// The offline reference adapter's own refusal for the same situation.
+    reference: String,
+    /// Compute-unit limit this transaction asks the runtime for, when the
+    /// 200 000-unit default is not enough.
+    compute_limit: Option<u32>,
+    /// This transaction exhausts the runtime's per-transaction compute ceiling
+    /// before the program reaches a decision.
+    ///
+    /// It is kept in the plan, with its oracle expectation still written to
+    /// disk, because "this instruction does not fit in a Solana transaction"
+    /// is a measurement and not a reason to stop measuring.  The gate asserts
+    /// the exhaustion, so a program that became cheap enough to finish turns
+    /// this red and the evidence in `SBF_BRINGUP.md` has to be re-written
+    /// rather than quietly left wrong.
+    exhausted: bool,
+}
+
+impl Case {
+    fn accept(
+        name: &str,
+        family: &'static str,
+        oracle: &'static str,
+        note: &str,
+        tx: Vec<u8>,
+        instruction_count: usize,
+        compare: Vec<Compare>,
+    ) -> Self {
+        let identical_to_pre = compare
+            .iter()
+            .filter(|entry| entry.expected == entry.pre)
+            .map(|entry| entry.role.clone())
+            .collect();
+        Self {
+            name: name.to_string(),
+            family,
+            oracle,
+            note: note.to_string(),
+            tx,
+            instruction_count,
+            compare: Some(compare),
+            identical_to_pre,
+            expect_code: None,
+            reference: String::new(),
+            compute_limit: None,
+            exhausted: false,
+        }
+    }
+
+    fn refuse(
+        name: &str,
+        family: &'static str,
+        note: &str,
+        tx: Vec<u8>,
+        expect_code: u32,
+        reference: String,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            family,
+            oracle: "reference-refusal",
+            note: note.to_string(),
+            tx,
+            instruction_count: 1,
+            compare: None,
+            identical_to_pre: Vec::new(),
+            expect_code: Some(expect_code),
+            reference,
+            compute_limit: None,
+            exhausted: false,
+        }
+    }
+}
+
+/// Everything the plan writer needs, accumulated as the fixture is built.
+#[derive(Default)]
+struct Plan {
+    genesis: Vec<Genesis>,
+    cases: Vec<Case>,
+}
+
+impl Plan {
+    fn account(&mut self, role: &str, pda: &Pda, data: &[u8]) {
+        assert!(
+            !self
+                .genesis
+                .iter()
+                .any(|entry| entry.address == pda.address),
+            "two genesis accounts at one address: {role}"
+        );
+        self.genesis.push(Genesis {
+            role: role.to_string(),
+            address: pda.address.clone(),
+            data: data.to_vec(),
+        });
+    }
+}
+
+fn compare_of(plane: &Plane, role: &str, expected: &[u8]) -> Compare {
+    let address = match role {
+        "market" => &plane.market,
+        "hoard" => &plane.hoard,
+        "position" => &plane.position,
+        "kernel" => &plane.kernel,
+        "external" => &plane.external,
+        "replay" => &plane.replay,
+        "supply" => &plane.supply,
+        "resolution" => &plane.resolution,
+        other => panic!("unknown role {other}"),
+    };
+    Compare {
+        role: format!("{}.{}", plane.label, role),
+        address: address.address.clone(),
+        expected: expected.to_vec(),
+        pre: plane.state_slice(role).to_vec(),
+    }
+}
+
+/// Every writable state account of a seam or gate transition, compared.
+fn state_compares(plane: &Plane, post: &TransitionOutput) -> Vec<Compare> {
+    plane
+        .state_roles()
+        .iter()
+        .map(|(role, _)| compare_of(plane, role, output_slice(post, role)))
+        .collect()
+}
+
+/* ------------------------------------------------------------------------ */
+/* Instruction account lists                                                 */
+/* ------------------------------------------------------------------------ */
+
+/// Build the seam plane's ten-account instruction against a message.
+fn seam_instruction(
+    message: &Message,
+    shared: &Shared,
+    plane: &Plane,
+    actor: [u8; 32],
+    replay_override: Option<[u8; 32]>,
+    data: Vec<u8>,
+) -> Instruction {
+    let replay = replay_override.unwrap_or(plane.replay.bytes);
+    Instruction {
+        program_index: message.index(&shared.program.bytes),
+        accounts: message.indices(&[
+            actor,
+            shared.realm.bytes,
+            shared.profile.bytes,
+            plane.market.bytes,
+            plane.hoard.bytes,
+            plane.position.bytes,
+            plane.kernel.bytes,
+            plane.external.bytes,
+            replay,
+            plane.supply.bytes,
+        ]),
+        data,
+    }
+}
+
+/// The message every seam transaction uses.
+fn seam_message(
+    shared: &Shared,
+    plane: &Plane,
+    actor: [u8; 32],
+    actor_signs: bool,
+    replay_override: Option<[u8; 32]>,
+) -> Message {
+    let replay = replay_override.unwrap_or(plane.replay.bytes);
+    let writable = [
+        plane.market.bytes,
+        plane.hoard.bytes,
+        plane.position.bytes,
+        plane.kernel.bytes,
+        plane.external.bytes,
+        replay,
+        plane.supply.bytes,
+    ];
+    if actor_signs {
+        Message::new(
+            &[shared.payer.bytes],
+            &[actor],
+            &writable,
+            &[
+                shared.realm.bytes,
+                shared.profile.bytes,
+                shared.program.bytes,
+            ],
+        )
+    } else {
+        Message::new(
+            &[shared.payer.bytes],
+            &[],
+            &writable,
+            &[
+                shared.realm.bytes,
+                shared.profile.bytes,
+                actor,
+                shared.program.bytes,
+            ],
+        )
+    }
+}
+
+/// The message and instruction of one evidence-gated transaction.
+fn gate_transaction(
+    shared: &Shared,
+    plane: &Plane,
+    buffer: &Pda,
+    actor: [u8; 32],
+    actor_signs: bool,
+    resolution_writable: bool,
+    data: Vec<u8>,
+) -> Vec<u8> {
+    let mut writable = vec![
+        plane.market.bytes,
+        plane.hoard.bytes,
+        plane.position.bytes,
+        plane.kernel.bytes,
+        plane.external.bytes,
+        plane.replay.bytes,
+        plane.supply.bytes,
+    ];
+    let mut readonly = vec![
+        shared.terms.bytes,
+        shared.feed_head.bytes,
+        buffer.bytes,
+        shared.program.bytes,
+        shared.compute_budget,
+    ];
+    if resolution_writable {
+        writable.push(plane.resolution.bytes);
+    } else {
+        readonly.insert(1, plane.resolution.bytes);
+    }
+    let message = if actor_signs {
+        Message::new(&[shared.payer.bytes], &[actor], &writable, &readonly)
+    } else {
+        let mut readonly_unsigned = readonly.clone();
+        readonly_unsigned.insert(0, actor);
+        Message::new(&[shared.payer.bytes], &[], &writable, &readonly_unsigned)
+    };
+    let instruction = Instruction {
+        program_index: message.index(&shared.program.bytes),
+        accounts: message.indices(&[
+            actor,
+            plane.market.bytes,
+            plane.hoard.bytes,
+            plane.position.bytes,
+            plane.kernel.bytes,
+            plane.external.bytes,
+            plane.replay.bytes,
+            plane.supply.bytes,
+            shared.terms.bytes,
+            plane.resolution.bytes,
+            shared.feed_head.bytes,
+            buffer.bytes,
+        ]),
+        data,
+    };
+    transaction(
+        &message,
+        &[
+            budget_instruction(&message, &shared.compute_budget, COMPUTE_UNIT_CEILING),
+            instruction,
+        ],
+    )
+}
+
+/// The message and instruction of one `FeedAdvance` transaction.
+fn advance_transaction(
+    shared: &Shared,
+    buffer: &Pda,
+    actor: [u8; 32],
+    actor_signs: bool,
+    data: Vec<u8>,
+) -> Vec<u8> {
+    let writable = [shared.advance_feed_head.bytes];
+    let message = if actor_signs {
+        Message::new(
+            &[shared.payer.bytes],
+            &[actor],
+            &writable,
+            &[buffer.bytes, shared.program.bytes],
+        )
+    } else {
+        Message::new(
+            &[shared.payer.bytes],
+            &[],
+            &writable,
+            &[buffer.bytes, actor, shared.program.bytes],
+        )
+    };
+    let instruction = Instruction {
+        program_index: message.index(&shared.program.bytes),
+        accounts: message.indices(&[actor, shared.advance_feed_head.bytes, buffer.bytes]),
+        data,
+    };
+    transaction(&message, &[instruction])
+}
+
+/// The message and instruction of one `CreateMarket` transaction.
+fn create_transaction(
+    shared: &Shared,
+    plane: &Plane,
+    creator: [u8; 32],
+    creator_signs: bool,
+    data: Vec<u8>,
+) -> Vec<u8> {
+    let writable = [
+        plane.market.bytes,
+        plane.hoard.bytes,
+        plane.position.bytes,
+        plane.kernel.bytes,
+        plane.external.bytes,
+        plane.replay.bytes,
+        plane.supply.bytes,
+        plane.resolution.bytes,
+    ];
+    let readonly = [
+        shared.realm.bytes,
+        shared.profile.bytes,
+        shared.terms.bytes,
+        shared.program.bytes,
+        shared.compute_budget,
+    ];
+    let message = if creator_signs {
+        Message::new(&[shared.payer.bytes], &[creator], &writable, &readonly)
+    } else {
+        let mut readonly_unsigned = readonly.to_vec();
+        readonly_unsigned.insert(0, creator);
+        Message::new(&[shared.payer.bytes], &[], &writable, &readonly_unsigned)
+    };
+    let instruction = Instruction {
+        program_index: message.index(&shared.program.bytes),
+        accounts: message.indices(&[
+            creator,
+            shared.realm.bytes,
+            shared.profile.bytes,
+            shared.terms.bytes,
+            plane.market.bytes,
+            plane.hoard.bytes,
+            plane.position.bytes,
+            plane.kernel.bytes,
+            plane.external.bytes,
+            plane.replay.bytes,
+            plane.supply.bytes,
+            plane.resolution.bytes,
+        ]),
+        data,
+    };
+    transaction(
+        &message,
+        &[
+            budget_instruction(&message, &shared.compute_budget, COMPUTE_UNIT_CEILING),
+            instruction,
+        ],
+    )
+}
+
+/* ------------------------------------------------------------------------ */
+/* Fixture assembly                                                          */
+/* ------------------------------------------------------------------------ */
+
+/// Everything the plan needs, built once.
 struct Fixture {
-    program: Pda,
-    payer: Pda,
-    actor: Pda,
-    stranger: Pda,
-    imposter: Pda,
-    realm: Pda,
-    profile: Pda,
-    market: Pda,
-    hoard: Pda,
-    position: Pda,
-    kernel: Pda,
-    external: Pda,
-    replay: Pda,
-    supply: Pda,
-    wave3: Wave3,
-    realm_bytes: [u8; account_len::REALM],
-    profile_bytes: [u8; account_len::PROFILE],
-    pre: TransitionOutput,
-    post: TransitionOutput,
-    request: Vec<u8>,
+    shared: Shared,
+    seam: Plane,
+    held: Plane,
+    shadow: Plane,
+    redeem: Plane,
+    create: Plane,
+    batch: Batch,
+    resolve_buffer: Pda,
+    resolve_buffer_bytes: Vec<u8>,
+    redeem_buffer: Pda,
+    redeem_buffer_bytes: Vec<u8>,
+    page_buffer: Pda,
+    page_buffer_bytes: Vec<u8>,
+    /// The `FeedAdvance` post-state, folded by the accumulator here.
+    advanced_feed_bytes: [u8; account_len::FEED],
+    /// The eight founding account images `CreateMarket` must write.
+    created: TransitionOutput,
+    created_resolution: [u8; account_len::RESOLUTION],
 }
 
 fn build_fixture() -> Fixture {
-    let program = fixed_address("clutch-sbf/bringup/program/v1");
-    let payer = fixed_address("clutch-sbf/bringup/payer/v1");
-    let actor = fixed_address("clutch-sbf/bringup/actor/v1");
-    let stranger = fixed_address("clutch-sbf/bringup/stranger/v1");
-    let imposter = fixed_address("clutch-sbf/bringup/imposter/v1");
+    let shared = build_shared();
 
-    let profile_preimage = [PROFILE_PREIMAGE_FILL; PROFILE_PARENT_BYTES];
-    let profile_hash = canonical_profile_hash(&profile_preimage)
-        .expect("the fixture profile preimage must be a canonical profile hash");
-    let realm_hash = canonical_realm_id(profile_hash, REALM_NONCE);
-    let market_id = canonical_market_id(realm_hash, profile_hash, MARKET_NONCE);
-    let owner = Hash32::from_bytes(actor.bytes);
+    /* The seam market: an empty, active market at replay sequence zero. */
+    let mut seam = Plane::build(&shared, "seam", NONCE_SEAM, GENERATION);
+    seam.open(&shared, CASH_ATOMS);
 
-    let realm_seed = realm_hash.bytes().to_vec();
-    let profile_seed = profile_hash.bytes().to_vec();
-    let market_seed = market_id.bytes().to_vec();
-    let owner_seed = owner.bytes().to_vec();
-    let generation_seed = GENERATION.to_le_bytes().to_vec();
+    /* The held market: the same market after the *oracle itself* split twenty
+     * complete sets out of it.  A pre-state a lane hand-wrote would be a state
+     * neither implementation produced. */
+    let mut held = Plane::build(&shared, "held", NONCE_HELD, GENERATION);
+    held.open(&shared, CASH_ATOMS);
+    let split_twenty = layout_request(
+        0,
+        Intent::Split {
+            market: held.market_id,
+            owner: held.owner,
+            quantity: HELD_QUANTITY,
+        },
+    );
+    let held_post = held
+        .layout(&shared, &split_twenty, shared.actor.bytes, true)
+        .expect("the oracle splits the held market open");
+    held.advance(held_post);
 
-    let pid = program.address.clone();
-    let realm = derive(&pid, &[seeds::SEED_REALM.to_vec(), realm_seed.clone()]);
-    let profile = derive(
-        &pid,
-        &[
-            seeds::SEED_PROFILE.to_vec(),
-            realm_seed.clone(),
-            profile_seed.clone(),
-        ],
+    /* The shadow market: split, then materialized, so `Dematerialize` has an
+     * external balance to move back. */
+    let mut shadow = Plane::build(&shared, "shadow", NONCE_SHADOW, GENERATION);
+    shadow.open(&shared, CASH_ATOMS);
+    let shadow_split = layout_request(
+        0,
+        Intent::Split {
+            market: shadow.market_id,
+            owner: shadow.owner,
+            quantity: HELD_QUANTITY,
+        },
     );
-    let market = derive(
-        &pid,
-        &[
-            seeds::SEED_MARKET.to_vec(),
-            realm_seed.clone(),
-            market_seed.clone(),
-        ],
+    let shadow_post = shadow
+        .layout(&shared, &shadow_split, shared.actor.bytes, true)
+        .expect("the oracle splits the shadow market open");
+    shadow.advance(shadow_post);
+    let shadow_materialize = layout_request(
+        1,
+        Intent::Materialize {
+            market: shadow.market_id,
+            owner: shadow.owner,
+            destination: Hash32::from_bytes(shadow.external.bytes),
+            outcome: 0,
+            quantity: MATERIALIZE_QUANTITY,
+        },
     );
-    let hoard = derive(&pid, &[seeds::SEED_HOARD.to_vec(), market_seed.clone()]);
-    let position = derive(
-        &pid,
-        &[
-            seeds::SEED_POSITION.to_vec(),
-            market_seed.clone(),
-            owner_seed.clone(),
-        ],
+    let shadow_post = shadow
+        .layout(&shared, &shadow_materialize, shared.actor.bytes, true)
+        .expect("the oracle materializes the shadow market");
+    shadow.advance(shadow_post);
+
+    /* The redeem market: split, then resolved by the oracle's evidence gate, so
+     * `RedeemInternal` starts from a state a resolve actually produced. */
+    let mut redeem = Plane::build(&shared, "redeem", NONCE_REDEEM, GENERATION);
+    redeem.open(&shared, CASH_ATOMS);
+    let redeem_split = layout_request(
+        0,
+        Intent::Split {
+            market: redeem.market_id,
+            owner: redeem.owner,
+            quantity: HELD_QUANTITY,
+        },
     );
-    let kernel = derive(&pid, &[seeds::SEED_KERNEL.to_vec(), market_seed.clone()]);
-    let external = derive(
-        &pid,
-        &[
-            seeds::SEED_EXTERNAL.to_vec(),
-            market_seed.clone(),
-            owner_seed.clone(),
-            generation_seed.clone(),
-        ],
-    );
-    let supply = derive(&pid, &[seeds::SEED_SUPPLY.to_vec(), market_seed.clone()]);
-    let replay = derive(
-        &pid,
-        &[
-            seeds::SEED_REPLAY.to_vec(),
-            market_seed,
-            owner_seed,
-            generation_seed,
-        ],
+    let redeem_post = redeem
+        .layout(&shared, &redeem_split, shared.actor.bytes, true)
+        .expect("the oracle splits the redeem market open");
+    redeem.advance(redeem_post);
+    let window = encode_window(shared.feed, &winning_records());
+    let redeem_resolve = resolve_request(1, WINNING_PAYOUT_INDEX);
+    let redeem_post = redeem
+        .gate(
+            &shared,
+            &redeem_resolve,
+            &window,
+            true,
+            shared.actor.bytes,
+            true,
+        )
+        .expect("the oracle resolves the redeem market");
+    redeem.advance(redeem_post);
+
+    /* The created market: eight zeroed accounts at their canonical addresses. */
+    let create = Plane::build(&shared, "create", NONCE_CREATE, 0);
+
+    let batch = build_batch(&shared, &seam);
+
+    /* Caller-supplied buffers.  None of the three is address-bound: the buffer
+     * is the one account in the program that is deliberately not, because its
+     * bytes are the claim and not the state. */
+    let resolve_buffer = fixed_address("clutch/bringup/buffer/resolve/v1");
+    let resolve_buffer_bytes =
+        encode_evidence_buffer(Hash32::from_bytes([WINDOW_ID_FILL; 32]), &window);
+    let redeem_buffer = fixed_address("clutch/bringup/buffer/redeem/v1");
+    let redeem_buffer_bytes = encode_evidence_buffer(Hash32::from_bytes([WINDOW_ID_FILL; 32]), &[]);
+    let page_buffer = fixed_address("clutch/bringup/buffer/page/v1");
+    let page_records: Vec<Record> = (START_BUCKET..END_BUCKET_EXCLUSIVE)
+        .map(|bucket| (OBSERVATION_ACCEPTED, bucket, 40, 41))
+        .collect();
+    let page_buffer_bytes = encode_feed_page(
+        Hash32::from_bytes(shared.advance_feed.bytes()),
+        START_BUCKET,
+        END_BUCKET_EXCLUSIVE,
+        &page_records,
     );
 
-    /* The wave-3 plane is built before the Market account because the Market
-     * binds the immutable terms by digest: `MarketAccount::terms` is not a free
-     * field, it is the identity of the terms artifact loaded beside it.  The
-     * offline reference adapter's own fixture does the same thing, and a Market
-     * carrying an unbound terms digest could never resolve. */
-    let feed = FeedId::from_bytes([9; 32]);
-    let wave3 = build_wave3(
-        &pid,
-        realm_hash,
-        profile_hash,
-        market_id,
-        feed,
-        owner,
-        Hash32::from_bytes(stranger.bytes),
-    );
+    /* The `FeedAdvance` expectation is the accumulator's own fold, not a
+     * restatement of what the program does: the page is folded here with
+     * `Summary::append`, and the cursor the fold lands on is what the expected
+     * post-state carries. */
+    let advanced_feed_bytes = fold_feed_page(&shared, &page_records);
 
+    let (created, created_resolution) = founding_plane(&shared, &create, NONCE_CREATE);
+
+    Fixture {
+        shared,
+        seam,
+        held,
+        shadow,
+        redeem,
+        create,
+        batch,
+        resolve_buffer,
+        resolve_buffer_bytes,
+        redeem_buffer,
+        redeem_buffer_bytes,
+        page_buffer,
+        page_buffer_bytes,
+        advanced_feed_bytes,
+        created,
+        created_resolution,
+    }
+}
+
+/// Fold the `FeedAdvance` page with the accumulator and encode the post-state.
+fn fold_feed_page(shared: &Shared, records: &[Record]) -> [u8; account_len::FEED] {
+    let grid = Grid::new(GRID_FAMILY, GRID_VERSION, BUCKET_SECONDS).expect("the fixture grid");
+    let mut summary = Summary::empty(grid);
+    for (kind, bucket, low, high) in records {
+        assert_eq!(*kind, OBSERVATION_ACCEPTED, "the fixture page is complete");
+        summary = summary
+            .append(Observation::accepted(*bucket, *low, *high))
+            .expect("the fixture page folds");
+    }
+    let cursor = summary
+        .end_bucket_exclusive()
+        .expect("a folded page has an end bucket");
+    let mut feed = FeedAccount::decode(&shared.advance_feed_bytes).expect("the advance feed head");
+    feed.cursor = cursor;
+    feed.archive_pages += 1;
+    feed.summary = Hash32::from_bytes([FEED_EVIDENCE_FILL; 32]);
+    let mut bytes = [0; account_len::FEED];
+    feed.encode(&mut bytes).expect("the advanced feed head");
+    bytes
+}
+
+/// The eight account images a `CreateMarket` must produce.
+///
+/// This is an independent re-encode through the frozen `clutch_solana_layout`
+/// and reference-only codecs, from the intent and the immutable terms alone,
+/// following exactly the PROPOSED initial values `market_init.rs` documents:
+/// a zero collateral cap, a zero created slot, generation zero, the Hoard PDA
+/// as its own authority, the terms artifact's payout set, and an unresolved
+/// resolution record.  It is then required to satisfy the reference adapter's
+/// own `validate_market_init`, which is what makes it an oracle rather than a
+/// restatement.
+fn founding_plane(
+    shared: &Shared,
+    plane: &Plane,
+    nonce: u64,
+) -> (TransitionOutput, [u8; account_len::RESOLUTION]) {
+    assert_eq!(
+        plane.market_id,
+        canonical_market_id(shared.realm_hash, shared.profile_hash, nonce),
+        "the founding plane must be the plane the intent names"
+    );
     let mut outcomes = [Hash32::ZERO; MAX_OUTCOMES];
-    outcomes[0] = canonical_outcome_id(market_id, 0);
-    outcomes[1] = canonical_outcome_id(market_id, 1);
+    outcomes[0] = canonical_outcome_id(plane.market_id, 0);
+    outcomes[1] = canonical_outcome_id(plane.market_id, 1);
     let market_account = MarketAccount {
-        market: market_id,
-        realm: realm_hash,
-        profile: profile_hash,
-        terms: wave3.terms_digest,
+        market: plane.market_id,
+        realm: shared.realm_hash,
+        profile: shared.profile_hash,
+        terms: shared.terms_digest,
         outcome_count: OUTCOME_COUNT,
         lifecycle: 0,
-        stored_bump: market.bump,
-        hoard_bump: hoard.bump,
+        stored_bump: plane.market.bump,
+        hoard_bump: plane.hoard.bump,
         outcomes,
-        feed,
-        collateral_cap: COLLATERAL_CAP,
-        created_slot: 55,
+        feed: shared.feed,
+        collateral_cap: 0,
+        created_slot: 0,
         reserved: Hash32::ZERO,
     };
     let hoard_account = HoardAccount {
-        market: market_id,
-        realm: realm_hash,
-        authority: Hash32::from_bytes(hoard.bytes),
+        market: plane.market_id,
+        realm: shared.realm_hash,
+        authority: Hash32::from_bytes(plane.hoard.bytes),
         collateral_atoms: 0,
-        stored_bump: hoard.bump,
+        stored_bump: plane.hoard.bump,
         flags: 0,
     };
     let position_account = PositionAccount {
-        market: market_id,
-        owner,
-        generation: GENERATION,
+        market: plane.market_id,
+        owner: plane.owner,
+        generation: 0,
         internal: [0; MAX_OUTCOMES],
-        cash_atoms: CASH_ATOMS,
-        reserved_cash_atoms: RESERVED_CASH_ATOMS,
-        stored_bump: position.bump,
+        cash_atoms: 0,
+        reserved_cash_atoms: 0,
+        stored_bump: plane.position.bump,
         close_state: 0,
     };
     let kernel_account = KernelAccount {
-        market: market_id,
+        market: plane.market_id,
         phase: 0,
         resolved_payout: 0,
         payouts: payout_set(),
         total_supply: [0; MAX_OUTCOMES],
     };
     let external_account = ExternalAccount {
-        market: market_id,
-        owner,
-        position_generation: GENERATION,
+        market: plane.market_id,
+        owner: plane.owner,
+        position_generation: 0,
         balances: [0; MAX_OUTCOMES],
-        stored_bump: external.bump,
+        stored_bump: plane.external.bump,
         flags: 0,
     };
     let replay_account = ReplayAccount {
-        market: market_id,
-        owner,
-        position_generation: GENERATION,
-        sequence: SEQUENCE,
-        stored_bump: replay.bump,
+        market: plane.market_id,
+        owner: plane.owner,
+        position_generation: 0,
+        sequence: 0,
+        stored_bump: plane.replay.bump,
         flags: 0,
     };
-    let realm_account = RealmAccount {
-        realm: realm_hash,
-        profile: profile_hash,
-        max_outcomes: MAX_OUTCOMES as u8,
-        profile_version: 1,
-        stored_bump: realm.bump,
-        flags: 0,
-    };
-    let profile_account = ProfileAccount {
-        profile: profile_hash,
-        realm: realm_hash,
-        /* The collateral policy is not frozen in this fixture, so the digest is
-         * zero and the freeze flag is clear.  Freezing it is the collateral
-         * profile lane's decision, not this harness's. */
-        collateral_policy_digest: Hash32::ZERO,
-        version: 1,
-        flags: 0,
-    };
-
     let supply_account = SupplyLedgerAccount {
-        market: market_id,
-        realm: realm_hash,
-        generation: GENERATION,
+        market: plane.market_id,
+        realm: shared.realm_hash,
+        generation: 0,
         outcome_count: OUTCOME_COUNT,
         internal_supply: [0; MAX_OUTCOMES],
         external_supply: [0; MAX_OUTCOMES],
-        stored_bump: supply.bump,
+        stored_bump: plane.supply.bump,
+        flags: 0,
+    };
+    let resolution_account = ResolutionAccount {
+        market: plane.market_id,
+        terms: shared.terms_digest,
+        feed: shared.feed,
+        window: Hash32::ZERO,
+        feed_cursor: 0,
+        sealed_end_bucket_exclusive: 0,
+        repair_generation: 0,
+        resolved_slot: 0,
+        payout_index: PAYOUT_INDEX_UNRESOLVED,
+        stored_bump: plane.resolution.bump,
         flags: 0,
     };
 
-    /* The two bindings that need the Market account itself. */
-    wave3
-        .terms_account
-        .binds_market(&market_account)
-        .expect("terms bind the market");
-    supply_account
-        .binds_market(&market_account)
-        .expect("supply ledger binds the market");
-    let mut pre = TransitionOutput {
-        market: [0; account_len::MARKET],
-        hoard: [0; account_len::HOARD],
-        position: [0; account_len::POSITION],
-        kernel: [0; KERNEL_ACCOUNT_LEN],
-        external: [0; EXTERNAL_ACCOUNT_LEN],
-        replay: [0; REPLAY_ACCOUNT_LEN],
-        supply: [0; account_len::SUPPLY_LEDGER],
-        resolution: None,
-        redemption_payout: 0,
-    };
-    market_account.encode(&mut pre.market).expect("market");
-    hoard_account.encode(&mut pre.hoard).expect("hoard");
+    let mut state = zero_state();
+    market_account.encode(&mut state.market).expect("market");
+    hoard_account.encode(&mut state.hoard).expect("hoard");
     position_account
-        .encode(&mut pre.position)
+        .encode(&mut state.position)
         .expect("position");
-    kernel_account.encode(&mut pre.kernel).expect("kernel");
+    kernel_account.encode(&mut state.kernel).expect("kernel");
     external_account
-        .encode(&mut pre.external)
+        .encode(&mut state.external)
         .expect("external");
-    replay_account.encode(&mut pre.replay).expect("replay");
-    supply_account.encode(&mut pre.supply).expect("supply");
-    let mut realm_bytes = [0; account_len::REALM];
-    let mut profile_bytes = [0; account_len::PROFILE];
-    realm_account.encode(&mut realm_bytes).expect("realm bytes");
-    profile_account
-        .encode(&mut profile_bytes)
-        .expect("profile bytes");
+    replay_account.encode(&mut state.replay).expect("replay");
+    supply_account.encode(&mut state.supply).expect("supply");
+    let mut resolution_bytes = [0; account_len::RESOLUTION];
+    resolution_account
+        .encode(&mut resolution_bytes)
+        .expect("resolution");
+    resolution_account
+        .binds_terms(&shared.terms_account)
+        .expect("the founding record binds the immutable terms");
 
-    let request = layout_request(
-        SEQUENCE,
+    validate_market_init(
+        &shared.realm_bytes,
+        &shared.profile_bytes,
+        state_bytes(&state),
+        &create_intent_bytes(shared, nonce),
+        &plane.metadata(shared, shared.actor.bytes, true),
+        &plane.bindings(shared),
+    )
+    .expect("the offline reference adapter must accept the founding plane");
+
+    (state, resolution_bytes)
+}
+
+/// The frozen `CreateMarket` intent bytes for one market nonce.
+fn create_intent(shared: &Shared, nonce: u64) -> Intent {
+    Intent::CreateMarket {
+        realm: shared.realm_hash,
+        profile: shared.profile_hash,
+        market_nonce: nonce,
+        outcome_count: OUTCOME_COUNT,
+        terms: shared.terms_digest,
+        feed: shared.feed,
+    }
+}
+
+/// The bare frozen intent encoding `validate_market_init` reads.
+fn create_intent_bytes(shared: &Shared, nonce: u64) -> Vec<u8> {
+    let mut bytes = [0_u8; MAX_INTENT_BYTES];
+    let len = create_intent(shared, nonce)
+        .encode(&mut bytes)
+        .expect("create intent encodes");
+    bytes[..len].to_vec()
+}
+
+/* ------------------------------------------------------------------------ */
+/* Cases                                                                     */
+/* ------------------------------------------------------------------------ */
+
+fn refusal_text(error: clutch_solana_reference::Error) -> String {
+    format!("{error:?}")
+}
+
+/// The numeric code a refusal the program shares with the oracle projects to.
+///
+/// This is used only where both implementations raise the *same* class -- the
+/// pure kernel's own refusals, which neither adapter re-vocabularizes -- so the
+/// expected number is `error.rs`'s projection of the class the oracle actually
+/// returned rather than a constant this harness typed out and could get wrong.
+/// Every adapter-vocabulary refusal keeps an explicit constant, because there
+/// the two implementations deliberately differ.
+fn shared_class_code(error: clutch_solana_reference::Error) -> u32 {
+    clutch_sbf::error::reference_code(error)
+}
+
+fn build_cases(f: &Fixture) -> Vec<Case> {
+    let shared = &f.shared;
+    let actor = shared.actor.bytes;
+    let mut cases = Vec::new();
+
+    /* ---------------------------------------------------------------- */
+    /* Split, on the empty seam market                                   */
+    /* ---------------------------------------------------------------- */
+    let split = layout_request(
+        0,
         Intent::Split {
-            market: market_id,
-            owner,
+            market: f.seam.market_id,
+            owner: f.seam.owner,
             quantity: SPLIT_QUANTITY,
         },
     );
+    let split_post = f
+        .seam
+        .layout(shared, &split, actor, true)
+        .expect("the oracle accepts the bring-up Split");
+    let message = seam_message(shared, &f.seam, actor, true, None);
+    let instruction = seam_instruction(&message, shared, &f.seam, actor, None, split.clone());
+    cases.push(Case::accept(
+        "split",
+        "Split",
+        "reference::apply",
+        "one Split of five complete sets on the ten-account seam plane",
+        transaction(&message, std::slice::from_ref(&instruction)),
+        1,
+        state_compares(&f.seam, &split_post),
+    ));
 
-    let metadata = transition_metadata(
-        &market,
-        &hoard,
-        &position,
-        &kernel,
-        &external,
-        &replay,
-        &supply,
-        &program,
-        actor.bytes,
-        true,
-    );
-    let bindings = expected_bindings(
-        &program, &market, &hoard, &position, &kernel, &external, &replay, &supply,
-    );
-    let post = apply(&request, state_bytes(&pre), &metadata, &bindings)
-        .expect("the offline reference adapter must accept the bring-up fixture");
-
-    Fixture {
-        program,
-        payer,
-        actor,
-        stranger,
-        imposter,
-        realm,
-        profile,
-        market,
-        hoard,
-        position,
-        kernel,
-        external,
-        replay,
-        supply,
-        wave3,
-        realm_bytes,
-        profile_bytes,
-        pre,
-        post,
-        request,
-    }
-}
-
-fn state_bytes(state: &TransitionOutput) -> StateBytes<'_> {
-    StateBytes {
-        market: &state.market,
-        hoard: &state.hoard,
-        position: &state.position,
-        kernel: &state.kernel,
-        external: &state.external,
-        replay: &state.replay,
-        supply: &state.supply,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn transition_metadata(
-    market: &Pda,
-    hoard: &Pda,
-    position: &Pda,
-    kernel: &Pda,
-    external: &Pda,
-    replay: &Pda,
-    supply: &Pda,
-    program: &Pda,
-    actor: [u8; 32],
-    signer: bool,
-) -> TransitionMetadata {
-    let account = |pda: &Pda| AccountMetadata {
-        key: Hash32::from_bytes(pda.bytes),
-        owner_program: Hash32::from_bytes(program.bytes),
-        writable: true,
-    };
-    TransitionMetadata {
-        market: account(market),
-        hoard: account(hoard),
-        position: account(position),
-        kernel: account(kernel),
-        external: account(external),
-        replay: account(replay),
-        supply: account(supply),
-        actor: ActorMetadata {
-            key: Hash32::from_bytes(actor),
-            signer,
+    /* Split then Merge, sequenced by the bank inside one transaction. */
+    let merge_back = layout_request(
+        1,
+        Intent::Merge {
+            market: f.seam.market_id,
+            owner: f.seam.owner,
+            quantity: SPLIT_QUANTITY,
         },
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn expected_bindings(
-    program: &Pda,
-    market: &Pda,
-    hoard: &Pda,
-    position: &Pda,
-    kernel: &Pda,
-    external: &Pda,
-    replay: &Pda,
-    supply: &Pda,
-) -> ExpectedBindings {
-    ExpectedBindings {
-        program_id: Hash32::from_bytes(program.bytes),
-        market: Hash32::from_bytes(market.bytes),
-        hoard: Hash32::from_bytes(hoard.bytes),
-        position: Hash32::from_bytes(position.bytes),
-        kernel: Hash32::from_bytes(kernel.bytes),
-        external: Hash32::from_bytes(external.bytes),
-        replay: Hash32::from_bytes(replay.bytes),
-        supply: Hash32::from_bytes(supply.bytes),
-        market_bump: market.bump,
-        hoard_bump: hoard.bump,
-        position_bump: position.bump,
-        external_bump: external.bump,
-        replay_bump: replay.bump,
-        supply_bump: supply.bump,
-    }
-}
-
-/// Build the reference request envelope around one frozen layout intent.
-///
-/// The envelope shape is the one `clutch_solana_reference::Request::decode`
-/// accepts.  The constants are re-stated here because they are private to that
-/// crate; the decoder is the authority, and a mismatch shows up immediately as
-/// a refusal rather than as a silent divergence.
-fn layout_request(sequence: u64, intent: Intent) -> Vec<u8> {
-    let mut intent_bytes = [0_u8; MAX_INTENT_BYTES];
-    let len = intent.encode(&mut intent_bytes).expect("intent encodes");
-    let mut out = Vec::with_capacity(13 + len);
-    out.push(0xd1);
-    out.push(1);
-    out.extend_from_slice(&sequence.to_le_bytes());
-    out.push(0);
-    out.extend_from_slice(&(len as u16).to_le_bytes());
-    out.extend_from_slice(&intent_bytes[..len]);
-    out
-}
-
-fn compact_u16(value: usize, out: &mut Vec<u8>) {
-    let mut remaining = value;
-    loop {
-        let mut byte = (remaining & 0x7f) as u8;
-        remaining >>= 7;
-        if remaining != 0 {
-            byte |= 0x80;
-        }
-        out.push(byte);
-        if remaining == 0 {
-            break;
+    );
+    let after_split = Plane::clone_state(&f.seam, &split_post);
+    let roundtrip_post = after_split
+        .layout(shared, &merge_back, actor, true)
+        .expect("the oracle merges the round trip closed");
+    let merge_instruction =
+        seam_instruction(&message, shared, &f.seam, actor, None, merge_back.clone());
+    let roundtrip_compares = state_compares(&f.seam, &roundtrip_post);
+    for entry in &roundtrip_compares {
+        if entry.role.ends_with(".replay") {
+            assert_ne!(
+                entry.expected, entry.pre,
+                "the round trip must consume two sequences"
+            );
+        } else {
+            assert_eq!(
+                entry.expected, entry.pre,
+                "the round trip must restore {} exactly",
+                entry.role
+            );
         }
     }
+    cases.push(Case::accept(
+        "roundtrip",
+        "Split+Merge",
+        "reference::apply",
+        "Split then Merge as two instructions of one transaction; every account except the replay sequence must return to its pre-state",
+        transaction(&message, &[instruction, merge_instruction]),
+        2,
+        roundtrip_compares,
+    ));
+
+    /* Refusal: the position owner is present but never signed. */
+    let unsigned_message = seam_message(shared, &f.seam, actor, false, None);
+    let unsigned_instruction = seam_instruction(
+        &unsigned_message,
+        shared,
+        &f.seam,
+        actor,
+        None,
+        split.clone(),
+    );
+    cases.push(Case::refuse(
+        "split-unsigned",
+        "Split",
+        "the position owner is present, read-only, and never signed",
+        transaction(&unsigned_message, &[unsigned_instruction]),
+        code::MISSING_SIGNATURE,
+        refusal_text(
+            f.seam
+                .layout(shared, &split, actor, false)
+                .expect_err("the oracle refuses an unsigned Split"),
+        ),
+    ));
+
+    /* Refusal: an authenticated signer who is not the position owner. */
+    let stranger_message = seam_message(shared, &f.seam, shared.stranger.bytes, true, None);
+    let stranger_instruction = seam_instruction(
+        &stranger_message,
+        shared,
+        &f.seam,
+        shared.stranger.bytes,
+        None,
+        split.clone(),
+    );
+    cases.push(Case::refuse(
+        "split-stranger",
+        "Split",
+        "a different authenticated signer presents the owner's position",
+        transaction(&stranger_message, &[stranger_instruction]),
+        code::UNAUTHORIZED_ACTOR,
+        refusal_text(
+            f.seam
+                .layout(shared, &split, shared.stranger.bytes, true)
+                .expect_err("the oracle refuses a stranger's Split"),
+        ),
+    ));
+
+    /* Refusal: byte-identical replay state at a non-canonical address. */
+    let imposter_message = seam_message(shared, &f.seam, actor, true, Some(shared.imposter.bytes));
+    let imposter_instruction = seam_instruction(
+        &imposter_message,
+        shared,
+        &f.seam,
+        actor,
+        Some(shared.imposter.bytes),
+        split.clone(),
+    );
+    let mut imposter_metadata = f.seam.metadata(shared, actor, true);
+    imposter_metadata.replay.key = Hash32::from_bytes(shared.imposter.bytes);
+    cases.push(Case::refuse(
+        "split-imposter",
+        "Split",
+        "byte-identical replay state at an address that is not the canonical replay PDA",
+        transaction(&imposter_message, &[imposter_instruction]),
+        code::WRONG_PDA,
+        refusal_text(
+            apply(
+                &split,
+                state_bytes(&f.seam.state),
+                &imposter_metadata,
+                &f.seam.bindings(shared),
+            )
+            .expect_err("the oracle refuses an imposter replay account"),
+        ),
+    ));
+
+    /* ---------------------------------------------------------------- */
+    /* Merge and Materialize, on the held market                         */
+    /* ---------------------------------------------------------------- */
+    let merge = layout_request(
+        1,
+        Intent::Merge {
+            market: f.held.market_id,
+            owner: f.held.owner,
+            quantity: MERGE_QUANTITY,
+        },
+    );
+    let merge_post = f
+        .held
+        .layout(shared, &merge, actor, true)
+        .expect("the oracle accepts the Merge");
+    let held_message = seam_message(shared, &f.held, actor, true, None);
+    cases.push(Case::accept(
+        "merge",
+        "Merge",
+        "reference::apply",
+        "merge five complete sets back into cash on a market holding twenty",
+        transaction(
+            &held_message,
+            &[seam_instruction(
+                &held_message,
+                shared,
+                &f.held,
+                actor,
+                None,
+                merge.clone(),
+            )],
+        ),
+        1,
+        state_compares(&f.held, &merge_post),
+    ));
+
+    let held_unsigned = seam_message(shared, &f.held, actor, false, None);
+    cases.push(Case::refuse(
+        "merge-unsigned",
+        "Merge",
+        "the position owner is present, read-only, and never signed",
+        transaction(
+            &held_unsigned,
+            &[seam_instruction(
+                &held_unsigned,
+                shared,
+                &f.held,
+                actor,
+                None,
+                merge.clone(),
+            )],
+        ),
+        code::MISSING_SIGNATURE,
+        refusal_text(
+            f.held
+                .layout(shared, &merge, actor, false)
+                .expect_err("the oracle refuses an unsigned Merge"),
+        ),
+    ));
+
+    let overdraw = layout_request(
+        1,
+        Intent::Merge {
+            market: f.held.market_id,
+            owner: f.held.owner,
+            quantity: HELD_QUANTITY + 1,
+        },
+    );
+    let overdraw_refusal = f
+        .held
+        .layout(shared, &overdraw, actor, true)
+        .expect_err("the oracle refuses an overdrawing Merge");
+    cases.push(Case::refuse(
+        "merge-overdraw",
+        "Merge",
+        "merge one more complete set than the position holds",
+        transaction(
+            &held_message,
+            &[seam_instruction(
+                &held_message,
+                shared,
+                &f.held,
+                actor,
+                None,
+                overdraw.clone(),
+            )],
+        ),
+        shared_class_code(overdraw_refusal),
+        refusal_text(overdraw_refusal),
+    ));
+
+    let materialize = layout_request(
+        1,
+        Intent::Materialize {
+            market: f.held.market_id,
+            owner: f.held.owner,
+            destination: Hash32::from_bytes(f.held.external.bytes),
+            outcome: 0,
+            quantity: MATERIALIZE_QUANTITY,
+        },
+    );
+    let materialize_post = f
+        .held
+        .layout(shared, &materialize, actor, true)
+        .expect("the oracle accepts the Materialize");
+    cases.push(Case::accept(
+        "materialize",
+        "Materialize",
+        "reference::apply",
+        "move three atoms of outcome zero from the internal ledger to the external shadow",
+        transaction(
+            &held_message,
+            &[seam_instruction(
+                &held_message,
+                shared,
+                &f.held,
+                actor,
+                None,
+                materialize.clone(),
+            )],
+        ),
+        1,
+        state_compares(&f.held, &materialize_post),
+    ));
+
+    cases.push(Case::refuse(
+        "materialize-unsigned",
+        "Materialize",
+        "the position owner is present, read-only, and never signed",
+        transaction(
+            &held_unsigned,
+            &[seam_instruction(
+                &held_unsigned,
+                shared,
+                &f.held,
+                actor,
+                None,
+                materialize.clone(),
+            )],
+        ),
+        code::MISSING_SIGNATURE,
+        refusal_text(
+            f.held
+                .layout(shared, &materialize, actor, false)
+                .expect_err("the oracle refuses an unsigned Materialize"),
+        ),
+    ));
+
+    let wrong_destination = layout_request(
+        1,
+        Intent::Materialize {
+            market: f.held.market_id,
+            owner: f.held.owner,
+            destination: Hash32::from_bytes(shared.imposter.bytes),
+            outcome: 0,
+            quantity: MATERIALIZE_QUANTITY,
+        },
+    );
+    cases.push(Case::refuse(
+        "materialize-wrong-destination",
+        "Materialize",
+        "the caller names a destination that is not the derived external-shadow address",
+        transaction(
+            &held_message,
+            &[seam_instruction(
+                &held_message,
+                shared,
+                &f.held,
+                actor,
+                None,
+                wrong_destination.clone(),
+            )],
+        ),
+        code::WRONG_PDA,
+        refusal_text(
+            f.held
+                .layout(shared, &wrong_destination, actor, true)
+                .expect_err("the oracle refuses a mis-named destination"),
+        ),
+    ));
+
+    /* ---------------------------------------------------------------- */
+    /* Dematerialize, on the shadow market                               */
+    /* ---------------------------------------------------------------- */
+    let dematerialize = layout_request(
+        2,
+        Intent::Dematerialize {
+            market: f.shadow.market_id,
+            owner: f.shadow.owner,
+            source: Hash32::from_bytes(f.shadow.external.bytes),
+            outcome: 0,
+            quantity: MATERIALIZE_QUANTITY,
+        },
+    );
+    let dematerialize_post = f
+        .shadow
+        .layout(shared, &dematerialize, actor, true)
+        .expect("the oracle accepts the Dematerialize");
+    let shadow_message = seam_message(shared, &f.shadow, actor, true, None);
+    cases.push(Case::accept(
+        "dematerialize",
+        "Dematerialize",
+        "reference::apply",
+        "move three atoms of outcome zero from the external shadow back to the internal ledger",
+        transaction(
+            &shadow_message,
+            &[seam_instruction(
+                &shadow_message,
+                shared,
+                &f.shadow,
+                actor,
+                None,
+                dematerialize.clone(),
+            )],
+        ),
+        1,
+        state_compares(&f.shadow, &dematerialize_post),
+    ));
+
+    let shadow_unsigned = seam_message(shared, &f.shadow, actor, false, None);
+    cases.push(Case::refuse(
+        "dematerialize-unsigned",
+        "Dematerialize",
+        "the position owner is present, read-only, and never signed",
+        transaction(
+            &shadow_unsigned,
+            &[seam_instruction(
+                &shadow_unsigned,
+                shared,
+                &f.shadow,
+                actor,
+                None,
+                dematerialize.clone(),
+            )],
+        ),
+        code::MISSING_SIGNATURE,
+        refusal_text(
+            f.shadow
+                .layout(shared, &dematerialize, actor, false)
+                .expect_err("the oracle refuses an unsigned Dematerialize"),
+        ),
+    ));
+
+    let demat_overdraw = layout_request(
+        2,
+        Intent::Dematerialize {
+            market: f.shadow.market_id,
+            owner: f.shadow.owner,
+            source: Hash32::from_bytes(f.shadow.external.bytes),
+            outcome: 0,
+            quantity: MATERIALIZE_QUANTITY + 1,
+        },
+    );
+    let demat_refusal = f
+        .shadow
+        .layout(shared, &demat_overdraw, actor, true)
+        .expect_err("the oracle refuses an overdrawing Dematerialize");
+    cases.push(Case::refuse(
+        "dematerialize-overdraw",
+        "Dematerialize",
+        "dematerialize one more atom than the external shadow holds",
+        transaction(
+            &shadow_message,
+            &[seam_instruction(
+                &shadow_message,
+                shared,
+                &f.shadow,
+                actor,
+                None,
+                demat_overdraw.clone(),
+            )],
+        ),
+        shared_class_code(demat_refusal),
+        refusal_text(demat_refusal),
+    ));
+
+    /* ---------------------------------------------------------------- */
+    /* Resolve, on the held market                                       */
+    /* ---------------------------------------------------------------- */
+    let window = encode_window(shared.feed, &winning_records());
+    let resolve = resolve_request(1, WINNING_PAYOUT_INDEX);
+    let resolve_post = f
+        .held
+        .gate(shared, &resolve, &window, true, actor, true)
+        .expect("the oracle accepts the evidence-gated Resolve");
+    let mut resolve_compares = state_compares(&f.held, &resolve_post);
+    resolve_compares.push(compare_of(
+        &f.held,
+        "resolution",
+        &resolve_post
+            .resolution
+            .expect("a resolve writes a resolution record"),
+    ));
+    cases.push(Case::accept(
+        "resolve",
+        "Resolve",
+        "reference::apply_with_evidence",
+        "one evidence-gated Resolve: the 0x47 buffer carries the sealed window, the feed head carries the matured cursor",
+        gate_transaction(
+            shared,
+            &f.held,
+            &f.resolve_buffer,
+            actor,
+            true,
+            true,
+            resolve.clone(),
+        ),
+        1,
+        resolve_compares,
+    ));
+
+    cases.push(Case::refuse(
+        "resolve-unsigned",
+        "Resolve",
+        "no authenticated signer; the gate checks the signature at the reference's point in the order, not hoisted",
+        gate_transaction(
+            shared,
+            &f.held,
+            &f.resolve_buffer,
+            actor,
+            false,
+            true,
+            resolve.clone(),
+        ),
+        code::REFERENCE_MISSING_SIGNATURE,
+        refusal_text(
+            f.held
+                .gate(shared, &resolve, &window, true, actor, false)
+                .expect_err("the oracle refuses an unsigned Resolve"),
+        ),
+    ));
+
+    let wrong_payout = resolve_request(1, 0);
+    cases.push(Case::refuse(
+        "resolve-wrong-payout",
+        "Resolve",
+        "the request names payout zero while the sealed window selects payout one; the numeric projection is the documented lossy 0x3fff",
+        gate_transaction(
+            shared,
+            &f.held,
+            &f.resolve_buffer,
+            actor,
+            true,
+            true,
+            wrong_payout.clone(),
+        ),
+        code::LOSSY_GATE,
+        refusal_text(
+            f.held
+                .gate(shared, &wrong_payout, &window, true, actor, true)
+                .expect_err("the oracle refuses a mis-named payout index"),
+        ),
+    ));
+
+    /* ---------------------------------------------------------------- */
+    /* RedeemInternal, on the resolved market                            */
+    /* ---------------------------------------------------------------- */
+    let redeem = redeem_request(2, WINNING_PAYOUT_INDEX, REDEEM_QUANTITY);
+    let redeem_post = f
+        .redeem
+        .gate(shared, &redeem, &[], false, actor, true)
+        .expect("the oracle accepts the RedeemInternal");
+    assert_eq!(
+        redeem_post.redemption_payout, REDEEM_QUANTITY,
+        "the winning outcome pays one atom per claim"
+    );
+    let mut redeem_compares = state_compares(&f.redeem, &redeem_post);
+    redeem_compares.push(compare_of(
+        &f.redeem,
+        "resolution",
+        &redeem_post
+            .resolution
+            .expect("a redemption returns the record unchanged"),
+    ));
+    cases.push(Case::accept(
+        "redeem",
+        "RedeemInternal",
+        "reference::apply_with_evidence",
+        "redeem twenty atoms of the winning outcome against the recorded resolution; the record is presented read-only and must come back unchanged",
+        gate_transaction(
+            shared,
+            &f.redeem,
+            &f.redeem_buffer,
+            actor,
+            true,
+            false,
+            redeem.clone(),
+        ),
+        1,
+        redeem_compares,
+    ));
+
+    cases.push(Case::refuse(
+        "redeem-unsigned",
+        "RedeemInternal",
+        "the position owner is present, read-only, and never signed",
+        gate_transaction(
+            shared,
+            &f.redeem,
+            &f.redeem_buffer,
+            actor,
+            false,
+            false,
+            redeem.clone(),
+        ),
+        code::REFERENCE_MISSING_SIGNATURE,
+        refusal_text(
+            f.redeem
+                .gate(shared, &redeem, &[], false, actor, false)
+                .expect_err("the oracle refuses an unsigned redemption"),
+        ),
+    ));
+
+    cases.push(Case::refuse(
+        "redeem-stranger",
+        "RedeemInternal",
+        "a different authenticated signer redeems the owner's claims",
+        gate_transaction(
+            shared,
+            &f.redeem,
+            &f.redeem_buffer,
+            shared.stranger.bytes,
+            true,
+            false,
+            redeem.clone(),
+        ),
+        code::REFERENCE_UNAUTHORIZED_ACTOR,
+        refusal_text(
+            f.redeem
+                .gate(shared, &redeem, &[], false, shared.stranger.bytes, true)
+                .expect_err("the oracle refuses a stranger's redemption"),
+        ),
+    ));
+
+    /* ---------------------------------------------------------------- */
+    /* FeedAdvance                                                       */
+    /* ---------------------------------------------------------------- */
+    let advance = layout_request(
+        0,
+        Intent::FeedAdvance {
+            feed: shared.advance_feed,
+            cursor: END_BUCKET_EXCLUSIVE,
+            evidence: Hash32::from_bytes([FEED_EVIDENCE_FILL; 32]),
+        },
+    );
+    cases.push(Case::accept(
+        "feed-advance",
+        "FeedAdvance",
+        "accumulator fold + FeedAccount codec",
+        "fold one 0x48 observation page and move the feed cursor exactly across it",
+        advance_transaction(shared, &f.page_buffer, actor, true, advance.clone()),
+        1,
+        vec![Compare {
+            role: "advance.feed".to_string(),
+            address: shared.advance_feed_head.address.clone(),
+            expected: f.advanced_feed_bytes.to_vec(),
+            pre: shared.advance_feed_bytes.to_vec(),
+        }],
+    ));
+
+    cases.push(Case::refuse(
+        "feed-advance-unsigned",
+        "FeedAdvance",
+        "no authenticated signer",
+        advance_transaction(shared, &f.page_buffer, actor, false, advance.clone()),
+        code::MISSING_SIGNATURE,
+        "n/a (the offline adapter has no FeedAdvance)".to_string(),
+    ));
+
+    let replayed = layout_request(
+        1,
+        Intent::FeedAdvance {
+            feed: shared.advance_feed,
+            cursor: END_BUCKET_EXCLUSIVE,
+            evidence: Hash32::from_bytes([FEED_EVIDENCE_FILL; 32]),
+        },
+    );
+    cases.push(Case::refuse(
+        "feed-advance-replay",
+        "FeedAdvance",
+        "the envelope names a page index the feed head has not reached; the page index is the feed's replay guard",
+        advance_transaction(shared, &f.page_buffer, actor, true, replayed),
+        code::REFERENCE_REPLAY,
+        "n/a (the offline adapter has no FeedAdvance)".to_string(),
+    ));
+
+    /* ---------------------------------------------------------------- */
+    /* CreateMarket                                                      */
+    /* ---------------------------------------------------------------- */
+    let create = layout_request(0, create_intent(shared, NONCE_CREATE));
+    let mut create_compares: Vec<Compare> = f
+        .create
+        .state_roles()
+        .iter()
+        .map(|(role, _)| compare_of(&f.create, role, output_slice(&f.created, role)))
+        .collect();
+    create_compares.push(compare_of(&f.create, "resolution", &f.created_resolution));
+    cases.push(Case::accept(
+        "create-market",
+        "CreateMarket",
+        "layout re-encode + reference::validate_market_init",
+        "found one market over eight pre-created, all-zero, canonically addressed accounts",
+        create_transaction(shared, &f.create, actor, true, create.clone()),
+        1,
+        create_compares,
+    ));
+
+    cases.push(Case::refuse(
+        "create-unsigned",
+        "CreateMarket",
+        "the creator is present, read-only, and never signed",
+        create_transaction(shared, &f.create, actor, false, create.clone()),
+        code::MISSING_SIGNATURE,
+        "n/a (validate_market_init models no signer)".to_string(),
+    ));
+
+    /* The seam market's live accounts sit at exactly the canonical addresses a
+     * `CreateMarket` for nonce 9 derives, and they are not zero. */
+    let recreate = layout_request(0, create_intent(shared, NONCE_SEAM));
+    cases.push(Case::refuse(
+        "create-already-initialized",
+        "CreateMarket",
+        "re-found an existing market: every target account is at its canonical address and is not all-zero",
+        create_transaction(shared, &f.seam, actor, true, recreate),
+        code::REFERENCE_NON_EMPTY_INIT,
+        refusal_text(
+            validate_market_init(
+                &shared.realm_bytes,
+                &shared.profile_bytes,
+                state_bytes(&f.seam.state),
+                &create_intent_bytes(shared, NONCE_SEAM),
+                &f.seam.metadata(shared, actor, true),
+                &f.seam.bindings(shared),
+            )
+            .expect_err("the oracle refuses a re-initialization"),
+        ),
+    ));
+
+    /* Three families do not fit the runtime's 200 000-unit default and carry a
+     * `SetComputeUnitLimit` instruction ahead of the program instruction.
+     * `gate_transaction` and `create_transaction` are the two builders that
+     * emit it, so the marking is by family rather than by hand per case. */
+    for case in &mut cases {
+        if matches!(case.family, "Resolve" | "RedeemInternal" | "CreateMarket") {
+            case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+        }
+    }
+
+    /* MEASURED, on the pinned runtime: `Resolve` does not fit in a Solana
+     * transaction at all.  With `SetComputeUnitLimit` at the per-transaction
+     * ceiling the program consumes every unit granted and the runtime aborts
+     * it with `ProgramFailedToComplete`, so no post-state and no gate refusal
+     * past the signature check is observable on-chain today.
+     *
+     * The cause is named in `observe_resolve`'s own module docs: the resolve
+     * path decodes the immutable terms artifact five times and
+     * `TermsAccount::decode` recomputes a SHA-256 over the 1.2 KiB terms body
+     * on every call.  `RedeemInternal` decodes it four times and measures
+     * 1 356 878 units -- 97% of the same ceiling -- which is the corroborating
+     * measurement, not a guess.
+     *
+     * `resolve-unsigned` is *not* listed here: the gate checks the signature
+     * before the first terms decode, so that refusal is reached and observed.
+     * The fix is a facts or `decode_unchecked` API in `clutch-solana-layout`
+     * and belongs to that crate, not to this harness. */
+    for case in &mut cases {
+        if matches!(case.name.as_str(), "resolve" | "resolve-wrong-payout") {
+            case.exhausted = true;
+        }
+    }
+
+    cases
 }
 
-/// One legacy transaction, unsigned.
-///
-/// Signatures are zero-filled.  `scripts/simulate.py` sends this to
-/// `simulateTransaction` with `sigVerify: false`, so the runtime executes the
-/// instruction without authenticating the signature bytes.  The `is_signer`
-/// bits the program sees still come from the message header, which is the fact
-/// under test.
-fn transaction(
-    keys: &[[u8; 32]],
-    required_signatures: u8,
-    readonly_signed: u8,
-    readonly_unsigned: u8,
-    program_index: u8,
-    instruction_accounts: &[u8],
-    data: &[u8],
-) -> Vec<u8> {
-    let mut out = Vec::new();
-    compact_u16(usize::from(required_signatures), &mut out);
-    for _ in 0..required_signatures {
-        out.extend_from_slice(&[0_u8; 64]);
+impl Plane {
+    /// A shallow copy of one plane at a different state, for chained oracles.
+    fn clone_state(source: &Plane, state: &TransitionOutput) -> Plane {
+        Plane {
+            label: source.label,
+            market_id: source.market_id,
+            owner: source.owner,
+            generation: source.generation,
+            market: source.market.clone(),
+            hoard: source.hoard.clone(),
+            position: source.position.clone(),
+            kernel: source.kernel.clone(),
+            external: source.external.clone(),
+            replay: source.replay.clone(),
+            supply: source.supply.clone(),
+            resolution: source.resolution.clone(),
+            state: state.clone(),
+            resolution_bytes: source.resolution_bytes,
+        }
     }
-    out.push(required_signatures);
-    out.push(readonly_signed);
-    out.push(readonly_unsigned);
-    compact_u16(keys.len(), &mut out);
-    for key in keys {
-        out.extend_from_slice(key);
-    }
-    out.extend_from_slice(&[0_u8; 32]);
-    compact_u16(1, &mut out);
-    out.push(program_index);
-    compact_u16(instruction_accounts.len(), &mut out);
-    out.extend_from_slice(instruction_accounts);
-    compact_u16(data.len(), &mut out);
-    out.extend_from_slice(data);
-    out
 }
+
+/* ------------------------------------------------------------------------ */
+/* Output                                                                    */
+/* ------------------------------------------------------------------------ */
 
 fn write(path: &Path, contents: &str) {
     fs::write(path, contents).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
@@ -1098,287 +3003,231 @@ fn account_json(pubkey: &str, owner: &str, data: &[u8]) -> String {
     )
 }
 
+fn json_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn json_list(items: &[String]) -> String {
+    format!("[{}]", items.join(", "))
+}
+
 fn main() {
     let out_dir = PathBuf::from(
         std::env::args()
             .nth(1)
             .expect("usage: clutch-sbf-harness <out-dir>"),
     );
-    fs::create_dir_all(out_dir.join("accounts")).expect("create accounts dir");
-    fs::create_dir_all(out_dir.join("expected")).expect("create expected dir");
-    fs::create_dir_all(out_dir.join("tx")).expect("create tx dir");
+    for sub in ["accounts", "expected", "tx"] {
+        fs::create_dir_all(out_dir.join(sub)).expect("create plan directory");
+    }
 
     let f = build_fixture();
+    let shared = &f.shared;
+    let mut plan = Plan::default();
 
-    /* Genesis account dumps.  Realm and Profile are read-only roles but are
-     * still program-owned state, so they are preloaded the same way. */
-    let program_address = f.program.address.clone();
-    let dumps: [(&str, &Pda, &[u8]); 8] = [
-        ("realm", &f.realm, &f.realm_bytes),
-        ("profile", &f.profile, &f.profile_bytes),
-        ("market", &f.market, &f.pre.market),
-        ("hoard", &f.hoard, &f.pre.hoard),
-        ("position", &f.position, &f.pre.position),
-        ("kernel", &f.kernel, &f.pre.kernel),
-        ("external", &f.external, &f.pre.external),
-        ("replay", &f.replay, &f.pre.replay),
-    ];
-    /* The wave-3 plane.  No transaction in this plan touches any of these
-     * accounts: the one implemented instruction does not take them, and a
-     * differential over them would compare nothing.  They are loaded at genesis
-     * so that a per-instruction lane inherits a bound on-chain plane instead of
-     * inventing one, and so that the addresses in `manifest.txt` are already
-     * the canonical ones for the seed schema. */
-    let wave3_dumps: [(&str, &Pda, &[u8]); 10] = [
-        ("supply", &f.supply, &f.pre.supply),
-        ("grid", &f.wave3.grid, &f.wave3.grid_bytes),
-        ("terms", &f.wave3.terms, &f.wave3.terms_bytes),
-        ("resolution", &f.wave3.resolution, &f.wave3.resolution_bytes),
-        ("feed", &f.wave3.feed, &f.wave3.feed_bytes),
-        ("epoch", &f.wave3.epoch, &f.wave3.epoch_bytes),
-        ("page", &f.wave3.page, &f.wave3.page_bytes),
-        ("candidate", &f.wave3.candidate, &f.wave3.candidate_bytes),
-        ("pot", &f.wave3.pot, &f.wave3.pot_bytes),
-        ("receipt", &f.wave3.receipt, &f.wave3.receipt_bytes),
-    ];
-    for (name, pda, data) in dumps.iter().chain(wave3_dumps.iter()) {
-        write(
-            &out_dir.join(format!("accounts/{name}.json")),
-            &account_json(&pda.address, &program_address, data),
-        );
-    }
-    /* The imposter carries byte-identical replay state at an address that is
-     * not the canonical replay PDA.  Every decode and linkage check passes on
-     * it, so the only thing that can refuse it is address derivation. */
-    write(
-        &out_dir.join("accounts/replay-imposter.json"),
-        &account_json(&f.imposter.address, &program_address, &f.pre.replay),
+    /* Realm-wide accounts. */
+    plan.account("realm", &shared.realm, &shared.realm_bytes);
+    plan.account("profile", &shared.profile, &shared.profile_bytes);
+    plan.account("grid", &shared.grid, &shared.grid_bytes);
+    plan.account("terms", &shared.terms, &shared.terms_bytes);
+    plan.account("feed", &shared.feed_head, &shared.feed_bytes);
+    plan.account(
+        "advance-feed",
+        &shared.advance_feed_head,
+        &shared.advance_feed_bytes,
     );
 
-    /* Expected post-state, from the offline reference adapter. */
-    let expected: [(&str, &[u8]); 6] = [
-        ("market", &f.post.market),
-        ("hoard", &f.post.hoard),
-        ("position", &f.post.position),
-        ("kernel", &f.post.kernel),
-        ("external", &f.post.external),
-        ("replay", &f.post.replay),
-    ];
-    for (name, data) in expected {
-        write(
-            &out_dir.join(format!("expected/{name}.hex")),
-            &format!("{}\n", hex_encode(data)),
-        );
-    }
-    let pre_state: [(&str, &[u8]); 6] = [
-        ("market", &f.pre.market),
-        ("hoard", &f.pre.hoard),
-        ("position", &f.pre.position),
-        ("kernel", &f.pre.kernel),
-        ("external", &f.pre.external),
-        ("replay", &f.pre.replay),
-    ];
-    for (name, data) in pre_state {
-        write(
-            &out_dir.join(format!("expected/{name}.pre.hex")),
-            &format!("{}\n", hex_encode(data)),
+    /* Every market plane. */
+    for plane in [&f.seam, &f.held, &f.shadow, &f.redeem, &f.create] {
+        for (role, pda) in plane.state_roles() {
+            plan.account(
+                &format!("{}.{role}", plane.label),
+                pda,
+                plane.state_slice(role),
+            );
+        }
+        plan.account(
+            &format!("{}.resolution", plane.label),
+            &plane.resolution,
+            &plane.resolution_bytes,
         );
     }
 
-    /* The supply ledger is written out but deliberately **not** compared.  The
-     * offline adapter updates it on every transition; the nine-account
-     * instruction set has no ledger account, so the SVM cannot.  Emitting both
-     * sides makes the size of that gap visible and gives the lane that adds the
-     * account its expectation already computed.  See deferred check 13 in
-     * `docs/implementation/SBF_BRINGUP.md`. */
-    write(
-        &out_dir.join("expected/supply.pre.hex"),
-        &format!("{}\n", hex_encode(&f.pre.supply)),
-    );
-    write(
-        &out_dir.join("expected/supply.hex"),
-        &format!("{}\n", hex_encode(&f.post.supply)),
-    );
+    /* The batch-auction plane, bound to the seam market. */
+    plan.account("epoch", &f.batch.epoch, &f.batch.epoch_bytes);
+    plan.account("page", &f.batch.page, &f.batch.page_bytes);
+    plan.account("candidate", &f.batch.candidate, &f.batch.candidate_bytes);
+    plan.account("pot", &f.batch.pot, &f.batch.pot_bytes);
+    plan.account("receipt", &f.batch.receipt, &f.batch.receipt_bytes);
 
-    /* Message account order: writable signers, readonly signers, writable
-     * non-signers, readonly non-signers.  The instruction's own account order
-     * is the program's fixed role order and is independent of this. */
-    let state = [
-        f.market.bytes,
-        f.hoard.bytes,
-        f.position.bytes,
-        f.kernel.bytes,
-        f.external.bytes,
-        f.replay.bytes,
-    ];
+    /* Caller-supplied buffers, and the imposter replay account. */
+    plan.account("resolve-buffer", &f.resolve_buffer, &f.resolve_buffer_bytes);
+    plan.account("redeem-buffer", &f.redeem_buffer, &f.redeem_buffer_bytes);
+    plan.account("page-buffer", &f.page_buffer, &f.page_buffer_bytes);
+    plan.account("replay-imposter", &shared.imposter, &f.seam.state.replay);
 
-    // Accepting transaction.
-    let mut keys = vec![f.payer.bytes, f.actor.bytes];
-    keys.extend_from_slice(&state);
-    keys.push(f.realm.bytes);
-    keys.push(f.profile.bytes);
-    keys.push(f.program.bytes);
-    let accept = transaction(&keys, 2, 1, 3, 10, &[1, 8, 9, 2, 3, 4, 5, 6, 7], &f.request);
-    write(
-        &out_dir.join("tx/accept.b64"),
-        &format!("{}\n", b64_encode(&accept)),
-    );
+    plan.cases = build_cases(&f);
 
-    // Refusal A: the position owner is present but never signed.
-    let mut keys_unsigned = vec![f.payer.bytes];
-    keys_unsigned.extend_from_slice(&state);
-    keys_unsigned.push(f.realm.bytes);
-    keys_unsigned.push(f.profile.bytes);
-    keys_unsigned.push(f.actor.bytes);
-    keys_unsigned.push(f.program.bytes);
-    let refuse_unsigned = transaction(
-        &keys_unsigned,
-        1,
-        0,
-        4,
-        10,
-        &[9, 7, 8, 1, 2, 3, 4, 5, 6],
-        &f.request,
-    );
-    write(
-        &out_dir.join("tx/refuse-unsigned.b64"),
-        &format!("{}\n", b64_encode(&refuse_unsigned)),
-    );
+    /* Files. */
+    let program_address = shared.program.address.clone();
+    let mut genesis_lines = String::new();
+    for account in &plan.genesis {
+        let file = format!("accounts/{}.json", account.role);
+        write(
+            &out_dir.join(&file),
+            &account_json(&account.address, &program_address, &account.data),
+        );
+        genesis_lines.push_str(&format!("{} {} {}\n", account.role, account.address, file));
+    }
+    write(&out_dir.join("genesis.txt"), &genesis_lines);
 
-    // Refusal B: an authenticated signer who is not the position owner.
-    let mut keys_stranger = vec![f.payer.bytes, f.stranger.bytes];
-    keys_stranger.extend_from_slice(&state);
-    keys_stranger.push(f.realm.bytes);
-    keys_stranger.push(f.profile.bytes);
-    keys_stranger.push(f.program.bytes);
-    let refuse_stranger = transaction(
-        &keys_stranger,
-        2,
-        1,
-        3,
-        10,
-        &[1, 8, 9, 2, 3, 4, 5, 6, 7],
-        &f.request,
-    );
-    write(
-        &out_dir.join("tx/refuse-stranger.b64"),
-        &format!("{}\n", b64_encode(&refuse_stranger)),
-    );
-
-    // Refusal C: byte-identical replay state at a non-canonical address.
-    let mut keys_imposter = vec![f.payer.bytes, f.actor.bytes];
-    keys_imposter.extend_from_slice(&state[..5]);
-    keys_imposter.push(f.imposter.bytes);
-    keys_imposter.push(f.realm.bytes);
-    keys_imposter.push(f.profile.bytes);
-    keys_imposter.push(f.program.bytes);
-    let refuse_imposter = transaction(
-        &keys_imposter,
-        2,
-        1,
-        3,
-        10,
-        &[1, 8, 9, 2, 3, 4, 5, 6, 7],
-        &f.request,
-    );
-    write(
-        &out_dir.join("tx/refuse-imposter.b64"),
-        &format!("{}\n", b64_encode(&refuse_imposter)),
-    );
-
-    /* Cross-check the same three refusals against the offline reference
-     * adapter, so the SBF refusal is compared with a refusal and not merely
-     * asserted on its own. */
-    let bindings = expected_bindings(
-        &f.program,
-        &f.market,
-        &f.hoard,
-        &f.position,
-        &f.kernel,
-        &f.external,
-        &f.replay,
-        &f.supply,
-    );
-    let unsigned_metadata = transition_metadata(
-        &f.market,
-        &f.hoard,
-        &f.position,
-        &f.kernel,
-        &f.external,
-        &f.replay,
-        &f.supply,
-        &f.program,
-        f.actor.bytes,
-        false,
-    );
-    let stranger_metadata = transition_metadata(
-        &f.market,
-        &f.hoard,
-        &f.position,
-        &f.kernel,
-        &f.external,
-        &f.replay,
-        &f.supply,
-        &f.program,
-        f.stranger.bytes,
-        true,
-    );
-    let imposter_metadata = transition_metadata(
-        &f.market,
-        &f.hoard,
-        &f.position,
-        &f.kernel,
-        &f.external,
-        &f.imposter,
-        &f.supply,
-        &f.program,
-        f.actor.bytes,
-        true,
-    );
-    let mut reference_refusals = BTreeMap::new();
-    for (name, metadata) in [
-        ("refuse-unsigned", unsigned_metadata),
-        ("refuse-stranger", stranger_metadata),
-        ("refuse-imposter", imposter_metadata),
-    ] {
-        let outcome = apply(&f.request, state_bytes(&f.pre), &metadata, &bindings);
-        let text = match outcome {
-            Ok(_) => panic!("the offline reference adapter accepted {name}"),
-            Err(error) => format!("{error:?}"),
+    let mut case_json = Vec::new();
+    for case in &plan.cases {
+        let tx_file = format!("tx/{}.b64", case.name);
+        write(
+            &out_dir.join(&tx_file),
+            &format!("{}\n", b64_encode(&case.tx)),
+        );
+        let mut fields = vec![
+            format!("\"name\": {}", json_string(&case.name)),
+            format!("\"family\": {}", json_string(case.family)),
+            format!("\"oracle\": {}", json_string(case.oracle)),
+            format!("\"note\": {}", json_string(&case.note)),
+            format!("\"tx\": {}", json_string(&tx_file)),
+            format!("\"instructions\": {}", case.instruction_count),
+            format!("\"bytes\": {}", case.tx.len()),
+            match case.compute_limit {
+                Some(limit) => format!("\"compute_limit\": {limit}"),
+                None => "\"compute_limit\": null".to_string(),
+            },
+        ];
+        let kind = if case.exhausted {
+            "exhausted"
+        } else {
+            "accept"
         };
-        reference_refusals.insert(name, text);
+        match (&case.compare, case.expect_code) {
+            (Some(compares), _) => {
+                let mut entries = Vec::new();
+                for compare in compares {
+                    let expected_file = format!("expected/{}.{}.hex", case.name, compare.role);
+                    let pre_file = format!("expected/{}.{}.pre.hex", case.name, compare.role);
+                    write(
+                        &out_dir.join(&expected_file),
+                        &format!("{}\n", hex_encode(&compare.expected)),
+                    );
+                    write(
+                        &out_dir.join(&pre_file),
+                        &format!("{}\n", hex_encode(&compare.pre)),
+                    );
+                    entries.push(format!(
+                        "{{\"role\": {}, \"address\": {}, \"expected\": {}, \"pre\": {}}}",
+                        json_string(&compare.role),
+                        json_string(&compare.address),
+                        json_string(&expected_file),
+                        json_string(&pre_file)
+                    ));
+                }
+                fields.push(format!("\"kind\": {}", json_string(kind)));
+                fields.push(format!("\"compare\": [{}]", entries.join(", ")));
+                fields.push(format!(
+                    "\"identical_to_pre\": {}",
+                    json_list(
+                        &case
+                            .identical_to_pre
+                            .iter()
+                            .map(|role| json_string(role))
+                            .collect::<Vec<_>>()
+                    )
+                ));
+            }
+            (None, Some(expect)) => {
+                fields.push(format!(
+                    "\"kind\": {}",
+                    json_string(if case.exhausted {
+                        "exhausted"
+                    } else {
+                        "refuse"
+                    })
+                ));
+                fields.push(format!("\"expect_code\": {expect}"));
+                fields.push(format!(
+                    "\"expect_code_hex\": {}",
+                    json_string(&format!("0x{expect:04x}"))
+                ));
+                fields.push(format!("\"reference\": {}", json_string(&case.reference)));
+            }
+            (None, None) => panic!("case {} is neither an accept nor a refusal", case.name),
+        }
+        case_json.push(format!("    {{{}}}", fields.join(", ")));
     }
 
-    let mut manifest = String::new();
-    manifest.push_str("# Generated by clutch-sbf-harness. Do not edit.\n");
-    manifest.push_str(&format!("program_id={}\n", f.program.address));
-    manifest.push_str(&format!("payer={}\n", f.payer.address));
-    manifest.push_str(&format!("actor={}\n", f.actor.address));
-    manifest.push_str(&format!("stranger={}\n", f.stranger.address));
-    manifest.push_str(&format!("imposter={}\n", f.imposter.address));
-    for (name, pda, _) in dumps.iter().chain(wave3_dumps.iter()) {
-        manifest.push_str(&format!("account.{name}={}\n", pda.address));
-        manifest.push_str(&format!("bump.{name}={}\n", pda.bump));
-    }
-    manifest.push_str(&format!("split_quantity={SPLIT_QUANTITY}\n"));
-    manifest.push_str(&format!("sequence={SEQUENCE}\n"));
-    manifest.push_str("expect.accept=ok\n");
-    manifest.push_str("expect.refuse-unsigned=0x0002\n");
-    manifest.push_str("expect.refuse-stranger=0x0011\n");
-    manifest.push_str("expect.refuse-imposter=0x0009\n");
-    for (name, text) in &reference_refusals {
-        manifest.push_str(&format!("reference.{name}={text}\n"));
-    }
-    write(&out_dir.join("manifest.txt"), &manifest);
+    let genesis_json: Vec<String> = plan
+        .genesis
+        .iter()
+        .map(|account| {
+            format!(
+                "    {{\"role\": {}, \"address\": {}, \"file\": {}}}",
+                json_string(&account.role),
+                json_string(&account.address),
+                json_string(&format!("accounts/{}.json", account.role))
+            )
+        })
+        .collect();
+
+    let plan_json = format!(
+        "{{\n  \"program_id\": {},\n  \"payer\": {},\n  \"actor\": {},\n  \"stranger\": {},\n  \"imposter\": {},\n  \"genesis\": [\n{}\n  ],\n  \"cases\": [\n{}\n  ]\n}}\n",
+        json_string(&program_address),
+        json_string(&shared.payer.address),
+        json_string(&shared.actor.address),
+        json_string(&shared.stranger.address),
+        json_string(&shared.imposter.address),
+        genesis_json.join(",\n"),
+        case_json.join(",\n")
+    );
+    write(&out_dir.join("plan.json"), &plan_json);
 
     println!("bring-up plan written to {}", out_dir.display());
-    println!("program_id  {}", f.program.address);
-    println!("actor       {}", f.actor.address);
-    for (name, pda, _) in dumps.iter().chain(wave3_dumps.iter()) {
-        println!("{name:<11} {} bump {}", pda.address, pda.bump);
-    }
-    for (name, text) in &reference_refusals {
-        println!("reference {name:<16} {text}");
+    println!("program_id   {program_address}");
+    println!("payer        {}", shared.payer.address);
+    println!("actor        {}", shared.actor.address);
+    println!(
+        "genesis      {} accounts, {} transactions",
+        plan.genesis.len(),
+        plan.cases.len()
+    );
+    for case in &plan.cases {
+        if case.exhausted {
+            println!(
+                "  EXHAUSTED {:<27} does not fit the {COMPUTE_UNIT_CEILING}-unit transaction ceiling",
+                case.name
+            );
+            continue;
+        }
+        match case.expect_code {
+            None => println!(
+                "  accept {:<30} {} instruction(s), {} account(s) compared, oracle {}",
+                case.name,
+                case.instruction_count,
+                case.compare.as_ref().map(Vec::len).unwrap_or(0),
+                case.oracle
+            ),
+            Some(expect) => println!(
+                "  refuse {:<30} expect Custom(0x{expect:04x})  offline reference: {}",
+                case.name, case.reference
+            ),
+        }
     }
 }
 
@@ -1414,33 +3263,6 @@ mod tests {
     }
 
     #[test]
-    fn the_whole_fixture_builds_and_every_binding_holds() {
-        /* `build_fixture` asserts every cross-account binding the frozen layout
-         * can decide -- terms to market, supply ledger to market, grid to
-         * terms, epoch to terms and grid, epoch to its frozen page set,
-         * candidate to epoch, pot and receipt to candidate, resolution to terms
-         * -- and it runs the offline reference adapter over the `Split`
-         * request.  Building it here is what makes a fixture that drifted apart
-         * a test failure rather than a genesis nobody checked.
-         *
-         * It is deliberately not an assertion about the SVM: that is the
-         * differential in `scripts/simulate.py`. */
-        let f = build_fixture();
-        assert_ne!(f.pre.position, f.post.position, "Split must move position");
-        assert_ne!(f.pre.hoard, f.post.hoard, "Split must move collateral");
-        assert_eq!(f.pre.market, f.post.market, "Split must not touch Market");
-        assert_eq!(
-            f.pre.external, f.post.external,
-            "Split must not touch the external shadow"
-        );
-        assert!(
-            f.post.resolution.is_none(),
-            "a layout intent admits no resolution record"
-        );
-        assert_eq!(f.post.redemption_payout, 0, "Split pays nothing out");
-    }
-
-    #[test]
     fn compact_u16_matches_the_short_vec_encoding() {
         let mut out = Vec::new();
         compact_u16(0, &mut out);
@@ -1454,5 +3276,80 @@ mod tests {
         out.clear();
         compact_u16(16384, &mut out);
         assert_eq!(out, vec![0x80, 0x80, 0x01]);
+    }
+
+    #[test]
+    fn the_whole_plan_builds_and_every_oracle_accepts_it() {
+        /* Building the fixture runs the offline reference adapter over every
+         * accepting transition, `validate_market_init` over the founding
+         * plane, and the accumulator over the observation page; it asserts
+         * every cross-account binding the frozen layout can decide.  A fixture
+         * that drifted apart is a test failure here rather than a genesis
+         * nobody checked.
+         *
+         * It is deliberately not an assertion about the SVM: that is the
+         * differential in `scripts/simulate.py`. */
+        let f = build_fixture();
+        let cases = build_cases(&f);
+        assert!(
+            cases.iter().any(|case| case.name == "roundtrip"),
+            "the plan must carry the Split/Merge round trip"
+        );
+        for family in [
+            "Split",
+            "Merge",
+            "Materialize",
+            "Dematerialize",
+            "Resolve",
+            "RedeemInternal",
+            "FeedAdvance",
+            "CreateMarket",
+        ] {
+            assert!(
+                cases
+                    .iter()
+                    .any(|case| case.family == family && case.compare.is_some()),
+                "no accepting transaction for {family}"
+            );
+            assert!(
+                cases
+                    .iter()
+                    .filter(|case| case.family == family && case.expect_code.is_some())
+                    .count()
+                    >= 2,
+                "fewer than two refusals for {family}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_round_trip_restores_every_account_but_the_replay_sequence() {
+        let f = build_fixture();
+        let cases = build_cases(&f);
+        let roundtrip = cases
+            .iter()
+            .find(|case| case.name == "roundtrip")
+            .expect("the round trip case");
+        let compares = roundtrip.compare.as_ref().expect("an accepting case");
+        for compare in compares {
+            if compare.role.ends_with(".replay") {
+                assert_ne!(compare.expected, compare.pre);
+            } else {
+                assert_eq!(compare.expected, compare.pre, "{} moved", compare.role);
+            }
+        }
+    }
+
+    #[test]
+    fn every_transaction_fits_one_legacy_packet() {
+        let f = build_fixture();
+        for case in build_cases(&f) {
+            assert!(
+                case.tx.len() <= 1232,
+                "{} is {} bytes",
+                case.name,
+                case.tx.len()
+            );
+        }
     }
 }

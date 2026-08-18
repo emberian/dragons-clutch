@@ -3,12 +3,23 @@
 Status: **host-differential evidence for eight instruction families**
 (Split, Merge, Materialize, Dematerialize, CreateMarket, FeedAdvance,
 evidence-gated Resolve, RedeemInternal), each mirroring the offline
-reference adapter's semantics with byte-level differential tests, plus
-SVM execution evidence for Split only (the recorded run predates the
-ten-account CLO-DELTA plane; the harness fixtures are stale and the SVM
-leg for every family is owed to the regeneration wave). Order placement,
-cancellation, and batch settlement remain honest stubs pending the
-orders_batch lane. Not a complete program, not audited, not a deployment
+reference adapter's semantics with byte-level differential tests, **plus
+SVM execution evidence for seven of the eight**: every one of those
+families except `Resolve` now executes inside a local Agave bank against
+regenerated fixtures, and every writable account it touches comes back
+byte-identical to the oracle's post-state.
+
+`Resolve` is the exception and it is a **measurement, not an omission**:
+on the pinned runtime it consumes the entire 1 400 000-unit
+per-transaction compute ceiling and is aborted, so it cannot be executed
+on-chain today at all. `RedeemInternal` executes but costs 1 356 878
+units — 97% of the same ceiling. Both numbers are recorded in
+[Results](#results) and the cause is one named defect in
+`clutch-solana-layout`.
+
+`PlaceOrder` landed on-chain after these fixtures were regenerated and
+has **no SVM leg**; cancellation and batch settlement remain honest
+stubs. Not a complete program, not audited, not a deployment
 authorization, and not mainnet, devnet, or testnet evidence. A stub
 reads no account, writes no byte, and reports no success.
 
@@ -25,22 +36,30 @@ account bytes to post-state bytes, with no entrypoint, no runtime, no address
 derivation, and no write-back. The open question was whether that shape survives
 contact with an actual SVM.
 
-This lane answers that for one instruction. It produces:
+This lane answers that for an instruction set. It produces:
 
 1. a real deployable SBF ELF with a `entrypoint` symbol, built reproducibly by
    the pinned `cargo-build-sbf`;
 2. a program that validates hostile `AccountInfo` metadata, derives and checks
    every program address, decodes through `clutch-solana-layout`, transitions
    through `clutch-kernel`, and writes back into runtime account data;
-3. a **differential result**: for one fixture, the six state accounts after a
-   real SVM execution are byte-identical to the offline reference adapter's
-   post-state; and
-4. three adversarial refusals that refuse in the SVM with the same meaning the
-   offline adapter gives them.
+3. a **differential result per family**: for eight accepting transactions
+   across seven families, every writable account after a real SVM execution is
+   byte-identical to the oracle's post-state;
+4. a **round trip through the bank**: `Split` and `Merge` as two instructions of
+   one transaction, after which every account except the replay sequence is
+   byte-identical to its pre-state, sequenced by the bank rather than by the
+   harness;
+5. sixteen adversarial refusals executed in the SVM, whose numeric
+   `ProgramError::Custom` codes are compared against the projection the offline
+   adapter's refusal class maps to; and
+6. one **negative** result recorded as evidence: `Resolve` does not fit a Solana
+   transaction on this runtime.
 
 It does **not** establish correctness of the protocol, of the kernel, of the
-layout, or of any economic claim. It establishes that this one instruction
-survives the account-facing boundary on the pinned toolchain.
+layout, or of any economic claim. It establishes that these instructions survive
+the account-facing boundary on the pinned toolchain, and names the one that does
+not.
 
 ## Layering, and where the logic is not
 
@@ -132,9 +151,9 @@ two lanes editing one file. Every path below is under
 | `dispatch.rs` | request decoding and routing on the action tag | shared — one arm per family |
 | `instructions/split.rs` | `Intent::Split` | **implemented** |
 | `instructions/merge_materialize.rs` | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` | **implemented** — all three, through the `split.rs` seam plane |
-| `instructions/market_init.rs` | `Intent::CreateMarket` | one lane, stub today |
-| `instructions/observe_resolve.rs` | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` | one lane, stub today |
-| `instructions/orders_batch.rs` | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SettlePage` | one lane, **blocked**, see below |
+| `instructions/market_init.rs` | `Intent::CreateMarket` | **implemented** — validated initialization-write over pre-created accounts |
+| `instructions/observe_resolve.rs` | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` | **implemented** — `Resolve` does not fit a transaction, see deferred check 15 |
+| `instructions/orders_batch.rs` | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SettlePage` | `PlaceOrder` **implemented**; the other two **blocked**, see below |
 
 A lane owns its `instructions/*.rs` file outright. It touches the shared files
 only to *append*: a new refusal code at the end of `error.rs`, a new seed
@@ -166,15 +185,17 @@ state is read or written in either case.
 
 A family module refuses with `NotYetImplemented` (`0x0017`) unless the offline
 reference adapter refuses the same action for a *stronger, structural* reason,
-in which case this program mirrors that reason exactly:
+in which case this program mirrors that reason exactly. The table below is the
+history of that discipline and where each family stands now:
 
-| action | refusal | why this one |
+| action | blanket refusal it used to return | now |
 | --- | --- | --- |
-| `CreateMarket` | `AuthorizationUnavailable` `0x000f` | no authority model exists; code is not the missing part |
-| `Resolve`, `RedeemInternal` | `ResolutionEvidenceUnavailable` `0x0010` | the typed evidence plane has no on-chain counterpart, and the fail-closed default must stay a missing code path |
-| `Merge`, `Materialize`, `Dematerialize` | — **implemented**, no blanket refusal | see below |
-| `FeedAdvance` | `NotYetImplemented` `0x0017` | nothing structural is missing |
-| `PlaceOrder`, `CancelOrder`, `SettlePage` | `NotYetImplemented` `0x0017` | no adapter, offline or on-chain, joins these layouts to a transition |
+| `CreateMarket` | `AuthorizationUnavailable` `0x000f` — no authority model existed | **implemented**, permissionless, over pre-created accounts |
+| `Resolve`, `RedeemInternal` | `ResolutionEvidenceUnavailable` `0x0010` — the typed evidence plane had no on-chain counterpart | **implemented** behind the PROPOSED `0x47` evidence buffer |
+| `Merge`, `Materialize`, `Dematerialize` | `UnsupportedInstruction`, then `NotYetImplemented` | **implemented**, see the correction below |
+| `FeedAdvance` | `NotYetImplemented` `0x0017` | **implemented** behind the PROPOSED `0x48` feed page |
+| `PlaceOrder` | `NotYetImplemented` `0x0017` | **implemented**; no SVM evidence yet (deferred check 16) |
+| `CancelOrder`, `SettlePage` | `NotYetImplemented` `0x0017` | still refused: no adapter, offline or on-chain, joins these layouts to a transition |
 
 `Merge`, `Materialize`, and `Dematerialize` previously refused
 `UnsupportedInstruction` (`0x000e`), then `NotYetImplemented` (`0x0017`). All
@@ -295,9 +316,23 @@ reference adapter. It arrived with the CLO-DELTA-V1 port; the retired
 single-position equality `internal + external == total_supply` that preceded it
 made a market holding a second position unrepresentable.
 
-The other instruction families (`market_init`, `observe_resolve`,
-`orders_batch`) own their own account planes; this section describes the seam
-plane only.
+The other instruction families own their own account planes. They are listed
+here because the SVM differential now drives all of them, so a reader
+reproducing the run needs to know what each transaction carries:
+
+| family | accounts | shape |
+| --- | --- | --- |
+| seam (`Split`, `Merge`, `Materialize`, `Dematerialize`) | 10 | the table above |
+| `CreateMarket` | 12 | creator, Realm, Profile, terms (read-only); Market, Hoard, Position, kernel, external, replay, ledger, resolution record (writable, and required to arrive **all-zero**) |
+| `Resolve` / `RedeemInternal` | 12 | actor; Market, Hoard, Position, kernel, external, replay, ledger (writable); terms (read-only); resolution record (writable for a resolve, read-only for a redemption); feed head (read-only); caller-supplied evidence buffer (read-only) |
+| `FeedAdvance` | 3 | actor; feed head (writable); caller-supplied observation page (read-only) |
+
+The two caller-supplied buffers are the only accounts in the program with no
+canonical address, deliberately: their bytes are the claim rather than the
+state, so binding their identity would suggest the bytes are trusted. They are
+still required to be program-owned, non-executable, and read-only. Their formats
+are the **PROPOSED** `0x47` evidence buffer and `0x48` feed page defined in
+`instructions/observe_resolve.rs`.
 
 ### Checks the program performs
 
@@ -362,21 +397,28 @@ first written and say so in place; the rest are untouched.
 Relative to what `programs/solana-reference` already does:
 
 1. **Closed.** `Merge`, `Materialize`, and `Dematerialize` were refused
-   (`NotYetImplemented`); all three now run through the seam plane and are
-   covered by the host differential. `Merge` closed on *both* sides at once,
+   (`NotYetImplemented`); all three now run through the seam plane, are covered
+   by the host differential, and — since the fixture regeneration — each has its
+   own accepting SVM transaction on the ten-account plane, plus a `Split`/`Merge`
+   round trip sequenced by the bank. `Merge` closed on *both* sides at once,
    because the gap was mis-stated: the offline adapter did not implement it
    either (see the correction under
-   [Refusal discipline](#refusal-discipline-for-the-stubs)). What is still open
-   is the **SVM leg** for the whole seam family — `harness/` emits a
-   nine-account `Split` transaction, so no emitted transaction exercises the
-   ten-account plane at all; see item 13.
-2. `validate_market_init` has no on-chain counterpart: there is no
-   initialization instruction, so every account in the fixture is preloaded at
-   genesis instead of being created and validated by the program.
-3. `CreateMarket` refuses with `AuthorizationUnavailable` and
-   `Resolve`/`RedeemInternal` refuse with `ResolutionEvidenceUnavailable`, which
-   matches the offline adapter — these are intended refusals, not gaps, but they
-   mean the program cannot bring a market into existence at all.
+   [Refusal discipline](#refusal-discipline-for-the-stubs)).
+2. **Closed as stated, and replaced by a narrower gap.** `validate_market_init`
+   now has an on-chain counterpart: `CreateMarket` founds a market and its
+   post-state is compared byte for byte against an independent re-encode that
+   the reference's own `validate_market_init` accepts. What it still does **not**
+   do is *create* accounts: all twelve arrive already created, rent-funded,
+   correctly sized, and — for the eight it writes — all-zero. The
+   `system_instruction::create_account` CPI, the rent-exemption computation, and
+   the `invoke_signed` seed plumbing are unwritten and untested, and the
+   all-zero precondition is what keeps that missing half detectable rather than
+   assumed. Genesis pre-creates the eight zeroed accounts.
+3. **Closed.** `CreateMarket` no longer refuses `AuthorizationUnavailable` and
+   `Resolve`/`RedeemInternal` no longer refuse `ResolutionEvidenceUnavailable`;
+   all three are implemented and all three are driven in the SVM. What replaced
+   this item is item 15: `Resolve` is implemented and *cannot be executed*
+   because of its compute cost.
 
 Relative to obligations 1-4 of `SOLANA_REFERENCE_ADAPTER.md`:
 
@@ -396,11 +438,16 @@ Relative to obligations 1-4 of `SOLANA_REFERENCE_ADAPTER.md`:
    discard partial writes on a later failure. No test forces a failure after the
    first write (obligation 4).
 9. No token program, CPI, mint, or escrow behaviour exists (obligations 5-7).
-10. Multi-position aggregate closure remains refused by representation, exactly
-    as in the offline adapter (obligation 11).
-11. The resource envelope is one compute measurement for one fixture. Heap,
-    account count, transaction size, and worst-case outcome counts are unmeasured
-    (obligation 10).
+10. **Closed on both sides.** Multi-position aggregate closure used to be
+    refused by representation. It is now carried by the CLO-DELTA-V1 two-term
+    ledger in both adapters, and the ledger is compared on-chain on every
+    accepting transaction of every family (obligation 11, and item 13).
+11. **Partly closed.** The resource envelope is now eight compute measurements
+    across seven families plus one measured ceiling exhaustion, and every
+    transaction's serialized size is recorded; see
+    [Resource envelope](#resource-envelope). Heap, worst-case outcome counts,
+    worst-case page sizes, and any envelope over more than the two-outcome
+    fixture remain unmeasured (obligation 10).
 12. **Partly closed.** The account plane now has 20 host-side unit tests
     covering metadata authentication in both directions (foreign owner,
     executable bit, read-only-arrived-writable, writable-arrived-read-only,
@@ -417,37 +464,48 @@ Relative to obligations 1-4 of `SOLANA_REFERENCE_ADAPTER.md`:
     authentication, every linkage and closure check, the kernel step, and the
     write-back — and the SVM differential remains the only test of the one
     thing that gap names: that the derived address is the canonical one.
-13. **Partly closed, and the remainder moved.** This item used to read "the
-    supply ledger is loaded but not used, and this is now a divergence": the
-    ledger had a seed, a canonical address, and genesis bytes, but `Split` did
-    not take it, so this program still checked the retired single-position
-    equality `internal + external == total_supply` while the offline adapter had
-    moved to CLO-DELTA-V1 (commit `9c43863`,
-    [`MULTI_POSITION_CLOSURE.md`](MULTI_POSITION_CLOSURE.md)).
+13. **Closed.** This item tracked the supply ledger being loaded but unused,
+    then the host side closing while the SVM side regressed: `harness/` emitted
+    a *nine*-account `Split` transaction after the instruction had grown to ten,
+    so no emitted transaction exercised the CLO-DELTA plane at all and
+    `simulate.py` never compared the ledger.
 
-    **The host side of that is discharged.** The seam plane now takes the ledger
-    as a tenth account and carries the three obligations through the shared
-    primitives — `accounts::require_two_term_closure` (C1),
-    `accounts::require_representation_bound` (C2), and two
-    `accounts::apply_ledger_delta` calls (C3) — for all four seam intents,
-    `Merge` included. A market holding a second position is representable and
-    differentially tested against the reference on both `Split` and `Merge`, so
-    the concrete symptom the old text named ("it refuses every market holding a
-    second position") is gone.
-
-    **The SVM side is not, and it regressed while the host side advanced.**
-    `harness/` is frozen and still emits a *nine*-account `Split` transaction,
-    so the transactions under `tx/` no longer match the instruction's account
-    count: the SVM leg of the differential is stale rather than merely
-    incomplete, and `simulate.py` still does not compare `expected/supply.hex`.
-    No emitted transaction exercises `Merge`, `Materialize`, or `Dematerialize`
-    at all. Regenerating the fixtures for the ten-account plane, and adding
-    transactions for the other three seam intents, is a named harness-lane wave
-    and is the whole of what item 13 still owes.
+    The fixtures were regenerated. The seam plane's SVM transactions now carry
+    ten accounts, the supply ledger is compared byte for byte on every accepting
+    transaction of every family, and `Merge`, `Materialize`, and `Dematerialize`
+    each have their own transaction. The three CLO-DELTA obligations are
+    therefore exercised on-chain and not only on the host: C1 and C2 run over the
+    pre-state and again over the post-state, and C3 is visible as the ledger
+    delta in the compared bytes.
 
 14. **An order page cannot be decoded on-chain at all.** See
     [Stack findings](#stack-findings) — this blocks the whole
     `orders_batch` family and the fix belongs in `clutch-solana-layout`.
+
+15. **`Resolve` does not fit a Solana transaction.** MEASURED on the pinned
+    runtime: with `SetComputeUnitLimit` at the 1 400 000-unit per-transaction
+    ceiling, the program consumes every unit granted and the runtime aborts it
+    with `ProgramFailedToComplete`. No post-state and no gate refusal past the
+    signature check is observable on-chain. `RedeemInternal` executes at
+    1 356 878 units, 97% of the same ceiling.
+
+    The cause is named in `observe_resolve.rs`'s own module docs and is not a
+    surprise: the resolve path decodes the immutable terms artifact **five**
+    times and `TermsAccount::decode` recomputes a SHA-256 over the 1.2 KiB terms
+    body on every call; a redemption decodes it four times, which is the
+    corroborating measurement rather than a guess. The fix is a facts or
+    `decode_unchecked` API in `clutch-solana-layout` — the same crate that owns
+    deferred check 14 — and it is not correct to fix it by skipping a binding.
+
+    The gate asserts the exhaustion rather than skipping the case, so an
+    instruction that became cheap enough to finish turns the check red and this
+    section has to be re-measured instead of being left stale.
+
+16. **`PlaceOrder` has no SVM leg.** It landed on-chain in commit `5cb4ad1`,
+    after these fixtures were regenerated, and the offline reference adapter has
+    no `PlaceOrder` transition to be an oracle for one. Driving it needs a
+    writable epoch and order-page plane in genesis and an oracle decision that
+    is not a harness lane's to make.
 
 ## How the transition is executed
 
@@ -456,12 +514,50 @@ a stranger, and an imposter address — is a System-program PDA of a fixed liter
 seed, so the fixture is reproducible and this lane holds no key material of any
 kind.
 
-`scripts/run_bringup.sh` starts a `solana-test-validator` bound to loopback with
-the ELF at the chosen program id and nineteen accounts loaded at genesis, then
-`scripts/simulate.py` sends each transaction to `simulateTransaction` with
-`sigVerify: false`, `replaceRecentBlockhash: true`, and an `accounts` request for
-the six state accounts, and compares the returned data against the reference
-post-state.
+`scripts/run_bringup.sh` starts one `solana-test-validator` bound to loopback
+with the ELF at the chosen program id and **55 accounts loaded at genesis**,
+then `scripts/simulate.py` sends every transaction in `plan.json` to
+`simulateTransaction` with `sigVerify: false`, `replaceRecentBlockhash: true`,
+and an `accounts` request for exactly that transaction's writable accounts, and
+compares the returned data against the oracle post-state the harness wrote to
+`expected/`.
+
+### Why the plan carries several markets
+
+`simulateTransaction` never commits, so **every transaction runs against
+genesis**. A family whose precondition is another family's post-state therefore
+needs its own genesis, and each such genesis is produced by running the offline
+reference adapter forward from an empty market rather than by hand-writing the
+intermediate bytes — a pre-state a lane typed out would be a state neither
+implementation produced. Five market planes exist, all in one Realm, all bound
+to one Profile, one price grid, and one immutable terms artifact, because none
+of those four codecs binds a market identity:
+
+| plane | nonce | genesis pre-state | drives |
+| --- | --- | --- | --- |
+| `seam` | 9 | empty, active, replay sequence 0 | `Split`, the `Split`/`Merge` round trip, the three `Split` refusals, and the `CreateMarket` re-initialization refusal |
+| `held` | 10 | `apply(Split 20)` | `Merge`, `Materialize`, `Resolve` |
+| `shadow` | 11 | `apply(Split 20)` then `apply(Materialize 0, 3)` | `Dematerialize` |
+| `redeem` | 13 | `apply(Split 20)` then `apply_with_evidence(Resolve 1)` | `RedeemInternal` |
+| `create` | 14 | eight all-zero accounts at their canonical addresses | `CreateMarket` |
+
+Two feed identities exist for the same reason: `Resolve` needs a **read-only**
+feed head whose cursor is already past the window's maturity bound, and
+`FeedAdvance` needs a **writable** one sitting at the start bucket. One account
+cannot be both.
+
+The one place a real sequence executes is the `roundtrip` transaction, which
+carries `Split` and `Merge` as two instructions of one transaction so that the
+**bank** sequences them and the second instruction reads the first's writes.
+That is what makes the round-trip claim a bank fact rather than a harness fact.
+
+### Three families need a raised compute limit
+
+`Resolve`, `RedeemInternal`, and `CreateMarket` do not fit the runtime's default
+200 000-unit budget, so their transactions carry a `SetComputeUnitLimit`
+instruction at the 1 400 000-unit per-transaction ceiling ahead of the program
+instruction, exactly as a real caller would. The raised number is itself the
+measurement; see [Resource envelope](#resource-envelope).
 
 What that does establish: the ELF is loaded and executed by an Agave bank; the
 runtime serializes real account data into the VM and writes the program's
@@ -598,111 +694,297 @@ result.** See [How the transition is executed](#how-the-transition-is-executed).
 
 ## Results
 
-Command: `programs/clutch-sbf/scripts/run_bringup.sh`, recorded against commit
-`ad1e330` on `aarch64-apple-darwin`.
+Command: `programs/clutch-sbf/scripts/run_bringup.sh`, one validator session,
+recorded on `aarch64-apple-darwin` with `HEAD` at `9ac1d27` and a working tree
+dirty in exactly four files.
 
-The ELF is a function of the `clutch-kernel`, `clutch-solana-layout`, and
-`clutch-solana-reference` sources, all three of which changed while this lane
-ran. A later commit to any of them changes the hash; that is correct behaviour,
-not a reproducibility failure. The reproducibility claim is that two builds of
-one source tree agree.
+**The tree-state caveat, stated precisely.** The gate prints `git rev-parse HEAD`
+and `git status --porcelain` before it builds, and this run reported:
+
+```text
+== source pin ==
+9ac1d273b9e7a1c4382e4228309b13c0f1149f0b
+tree=DIRTY (the ELF digest below names this working tree, not a commit)
+   M docs/implementation/SBF_BRINGUP.md
+   M programs/clutch-sbf/harness/src/main.rs
+   M programs/clutch-sbf/scripts/run_bringup.sh
+   M programs/clutch-sbf/scripts/simulate.py
+```
+
+The four dirty files are this document, the harness, and the two scripts.
+**None of them is an input to the ELF**: `cargo-build-sbf` is invoked on
+`program/Cargo.toml`, and the program crate does not depend on the harness, on
+anything under `scripts/`, or on documentation. The last commit touching any ELF
+input — `programs/clutch-sbf/program`, `programs/solana-layout`,
+`programs/solana-reference`, `crates/clutch-kernel`, `crates/clutch-accumulator`
+— is **`5cb4ad1`**, so the digest below is pinned to `5cb4ad1`'s sources even
+though the tree was not clean.
+
+What cannot be claimed from a dirty tree is a clean-tree reproduction of the
+whole *run*: re-running the gate from `5cb4ad1` alone would use the pre-
+regeneration harness and emit the old nine-account plan. Once the harness and
+scripts land, re-run the gate on a clean tree and re-record both the digest and
+the commit here.
+
+Earlier in this same session the digest moved between runs — `7a02ca02…`,
+`3ad336c5…`, `921b514c…` — because a concurrent lane was editing
+`program/src/accounts.rs` and `program/src/instructions/orders_batch.rs` while
+the gate ran. That is the ELF correctly tracking its inputs, not a
+reproducibility failure, and it is why the source-pin block exists at all.
 
 ### Reproducible ELF
 
 Built twice into fresh target directories:
 
 ```text
-pass 1  sha256=42d553132b0a22ebffd374c85d12a444e4ca8c3e99aa211322c5b8a947467cdd  bytes=102568
-pass 2  sha256=42d553132b0a22ebffd374c85d12a444e4ca8c3e99aa211322c5b8a947467cdd  bytes=102568
+pass 1  sha256=921b514c3ee5eba104e5063c684e4ce3672a09be73e969eeada2d5c0426f838f  bytes=332368
+pass 2  sha256=921b514c3ee5eba104e5063c684e4ce3672a09be73e969eeada2d5c0426f838f  bytes=332368
 sbf_reproducibility=PASS
 ```
 
-Dynamic symbols: exports `entrypoint` and `custom_panic`; imports the syscalls
-`sol_try_find_program_address`, `sol_log_`, `sol_panic_`, `sol_memset_`,
-`sol_memcpy_`, `sol_memcmp_`, and `abort`. There is no CPI syscall and no token
-program reference, because there is no CPI and no token code.
+The same digest was reproduced a third time from two further independent target
+directories outside the gate, so the agreement is not an artifact of the gate's
+own directory layout. The previously recorded digest
+(`42d553132b0a22ebffd374c85d12a444e4ca8c3e99aa211322c5b8a947467cdd`, 102 568
+bytes) predates the whole instruction set and is retired; the artifact is now
+3.2× larger because seven more instruction families are in it.
 
-### Differential against the offline reference adapter
+Dynamic symbols, re-read from this ELF with the pinned `llvm-readelf`: ten
+`.dynsym` entries, exporting `entrypoint` and `custom_panic` and importing the
+syscalls `sol_try_find_program_address`, `sol_log_`, `sol_panic_`, `abort`,
+`sol_memset_`, `sol_memcpy_`, and `sol_memcmp_`. There is no CPI syscall and no
+token program reference, because there is no CPI and no token code — and that
+is unchanged by seven more instruction families landing.
 
-One `Split` of quantity 5 on a two-outcome market, from a fixture that mirrors
-the offline adapter's own `Split` test: position generation 2, replay sequence 0,
-position cash 100, reserved cash 7, collateral cap 1000, Hoard collateral 0, all
-balances zero.
+### Genesis
 
-The offline adapter computes the expected post-state; the SVM executes the ELF;
-the six returned accounts are compared byte for byte.
+55 accounts, all program-owned, loaded at genesis by one validator invocation:
+the Realm-wide plane (Realm, Profile, price grid, immutable terms, two feed
+heads), five market planes of eight accounts each, the batch-auction plane no
+implemented instruction touches (epoch, order page, candidate, final pot,
+settlement receipt), three caller-supplied buffers, and the imposter replay
+account. The Profile is **frozen** — the policy flag is set and the digest is
+nonzero — because `CreateMarket` refuses a Realm that has not frozen its
+collateral policy; that is a shape claim and this harness owns no 266-byte
+collateral policy to back it.
+
+### Differential against the oracle, per family
+
+Every accepting transaction's writable accounts are compared byte for byte. A
+role marked *unchanged* is additionally required to come back equal to its
+pre-state, and a role marked *changed* is required to differ from it: an
+expectation that happens to equal the pre-state cannot pass by accident.
+
+| transaction | family | oracle | accounts compared | result |
+| --- | --- | --- | --- | --- |
+| `split` | `Split` | `reference::apply` | 7 | 7/7 MATCH |
+| `roundtrip` | `Split`+`Merge` | `reference::apply` ∘ `apply` | 7 | 7/7 MATCH |
+| `merge` | `Merge` | `reference::apply` | 7 | 7/7 MATCH |
+| `materialize` | `Materialize` | `reference::apply` | 7 | 7/7 MATCH |
+| `dematerialize` | `Dematerialize` | `reference::apply` | 7 | 7/7 MATCH |
+| `resolve` | `Resolve` | `reference::apply_with_evidence` | 8 written, 0 compared | **not executable** (compute ceiling) |
+| `redeem` | `RedeemInternal` | `reference::apply_with_evidence` | 8 | 8/8 MATCH |
+| `feed-advance` | `FeedAdvance` | accumulator fold + `FeedAccount` codec | 1 | 1/1 MATCH |
+| `create-market` | `CreateMarket` | layout re-encode + `reference::validate_market_init` | 8 | 8/8 MATCH |
+
+52 account comparisons, 52 matches, 0 mismatches. The eight `resolve`
+expectations are written to disk on every run but cannot be compared, because
+the transaction never completes.
+
+**The oracles are not all equally strong, and the plan says so per case.** For
+the seam plane and for `RedeemInternal` the oracle is a second, independently
+written implementation of the same transition, so a match is two adapters
+agreeing. For `CreateMarket` there is no reference transition: the expectation is
+an independent re-encode through the frozen `clutch-solana-layout` codecs from
+the intent and the terms artifact alone, following the PROPOSED initial values
+`market_init.rs` documents (zero collateral cap, zero created slot, generation
+zero, the Hoard PDA as its own authority, the terms artifact's payout set, an
+unresolved record), and that re-encode is then required to satisfy the
+reference's own `validate_market_init`. For `FeedAdvance` there is no reference
+adapter at all: the expected cursor is what `clutch_accumulator`'s `Summary`
+fold lands on for the same records, re-encoded through the frozen `FeedAccount`
+codec.
+
+### The round trip through the bank
+
+`roundtrip` is one transaction carrying two instructions — `Split` 5 at sequence
+0 and `Merge` 5 at sequence 1 — so the **bank**, not the harness, sequences them
+and the `Merge` reads the `Split`'s writes:
 
 ```text
-accept: executed, unitsConsumed=72869
-differential market    MATCH (unchanged by Split)
-differential hoard     MATCH (changed by Split)
-differential position  MATCH (changed by Split)
-differential kernel    MATCH (changed by Split)
-differential external  MATCH (unchanged by Split)
-differential replay    MATCH (changed by Split)
+accept roundtrip  program_units=155800 per-instruction [77924, 77876] bytes=750
+  differential seam.market    MATCH (unchanged)
+  differential seam.hoard     MATCH (unchanged)
+  differential seam.position  MATCH (unchanged)
+  differential seam.kernel    MATCH (unchanged)
+  differential seam.external  MATCH (unchanged)
+  differential seam.replay    MATCH (changed)
+  differential seam.supply    MATCH (unchanged)
 ```
 
-`market` and `external` are unchanged by `Split` and match the reference's
-re-encoded post-state; `hoard`, `position`, `kernel`, and `replay` change and
-match exactly.
-
-Diffing the pre-state and post-state bytes shows that the SVM execution changed
-exactly the fields the offline adapter's own byte-evidence section names, at the
-same offsets:
-
-| account | offset | before | after |
-| --- | --- | --- | --- |
-| Hoard | collateral at `98..106` | 0 | 5 |
-| Position | outcome 0 at `74..82` | 0 | 5 |
-| Position | outcome 1 at `82..90` | 0 | 5 |
-| Position | cash at `202..210` | 100 | 95 |
-| kernel aggregate | supply 0 at `38..46` | 0 | 5 |
-| kernel aggregate | supply 1 at `46..54` | 0 | 5 |
-| replay | sequence at `74..82` | 0 | 1 |
-
-No other byte of any of the six accounts changed.
+Six of the seven accounts are byte-identical to the pre-split genesis. The
+seventh is the replay account, whose sequence advanced 0 → 2. The harness asserts
+that shape at build time as well, so a round trip that stopped closing would fail
+`cargo test` before it ever reached a validator.
 
 ### Refusals
 
-Each adversarial case is run in the SVM and cross-checked against the offline
-adapter's refusal for the same situation.
+Every refusal is executed in the SVM and its numeric `ProgramError::Custom` code
+compared against an expected value, with the offline adapter's own refusal class
+for the same situation recorded beside it. Sixteen executed cases, at least two
+per family, plus one that cannot be executed:
+
+| transaction | code | offline reference |
+| --- | --- | --- |
+| `split-unsigned` | `0x0002` `MissingSignature` | `MissingSignature` |
+| `split-stranger` | `0x0011` `UnauthorizedActor` | `UnauthorizedActor` |
+| `split-imposter` | `0x0009` `WrongPda` | `WrongAccountKey` |
+| `merge-unsigned` | `0x0002` | `MissingSignature` |
+| `merge-overdraw` | `0x2009` kernel `InsufficientCollateral` | `Kernel(InsufficientCollateral)` |
+| `materialize-unsigned` | `0x0002` | `MissingSignature` |
+| `materialize-wrong-destination` | `0x0009` `WrongPda` | `WrongAccountKey` |
+| `dematerialize-unsigned` | `0x0002` | `MissingSignature` |
+| `dematerialize-overdraw` | `0x2008` kernel `InsufficientBalance` | `Kernel(InsufficientBalance)` |
+| `resolve-unsigned` | `0x3009` | `MissingSignature` |
+| `resolve-wrong-payout` | — | `PayoutIndexMismatch` (**not executable**, see below) |
+| `redeem-unsigned` | `0x3009` | `MissingSignature` |
+| `redeem-stranger` | `0x300a` | `UnauthorizedActor` |
+| `feed-advance-unsigned` | `0x0002` | n/a — the offline adapter has no `FeedAdvance` |
+| `feed-advance-replay` | `0x3011` | n/a — the offline adapter has no `FeedAdvance` |
+| `create-unsigned` | `0x0002` | n/a — `validate_market_init` models no signer |
+| `create-already-initialized` | `0x3010` `NonEmptyInitialization` | `NonEmptyInitialization` |
+
+Three things in that table are deliberate and are not defects:
+
+- **`0x0002` versus `0x3009` for the same fault.** The seam plane and
+  `FeedAdvance` hoist the signature check to the account plane and report
+  `ClutchError::MissingSignature`; the evidence gate checks it at the reference's
+  point in the gate order and reports `Error::MissingSignature` projected to
+  `0x3009`. Hoisting it would be a cheaper refusal and a *different order*, and
+  order is what the differential is checking.
+- **`0x0009` versus `WrongAccountKey`.** The program *derives* the address and
+  the reference is handed a trusted binding, so the on-chain check is strictly
+  stronger and gets its own adapter-level code. `split-imposter` presents
+  byte-identical replay state at a non-canonical address: every decode and every
+  linkage check passes on it, so only derivation can refuse it.
+- **The kernel codes are not typed out by the harness.** `0x2008` and `0x2009`
+  are `error.rs`'s projection of whatever class the oracle actually returned,
+  computed at fixture-build time, because both implementations raise the pure
+  kernel's own refusal there and neither re-vocabularizes it. Every
+  adapter-vocabulary code above is an explicit constant, because there the two
+  implementations deliberately differ.
+
+**The KNOWN lossy `0x3fff` collapse.** `error::reference_code` predates the
+evidence plane and maps eleven distinct gate refusal classes onto one catch-all
+`0x3fff`. `resolve-wrong-payout` is such a case — the request names payout 0
+while the sealed window selects payout 1, which is `Error::PayoutIndexMismatch`
+— and the plan expects `0x3fff` and nothing finer. That is asserted as the
+documented collapse rather than dressed up as precision: on-chain those eleven
+classes are indistinguishable, and they stay exactly distinguishable only in the
+host differential, which compares typed values.
+`observe_resolve.rs`'s `the_numeric_projection_of_the_gate_is_lossy` pins the
+collapse and carries the proposed `0x0050-0x005f` allocation that would fix it;
+widening `reference_code` is an `error.rs` decision.
+
+### `Resolve` does not fit a transaction — measured
+
+This is the headline negative result of the regeneration.
 
 ```text
-refusal refuse-unsigned  Custom(0x0002) (offline reference: MissingSignature)
-refusal refuse-stranger  Custom(0x0011) (offline reference: UnauthorizedActor)
-refusal refuse-imposter  Custom(0x0009) (offline reference: WrongAccountKey)
+== Resolve ==
+  UNDRIVABLE resolve              consumed 1399850 of 1399850 granted and was aborted
+  refuse    resolve-unsigned      Custom(0x3009)  offline reference: MissingSignature
+  UNDRIVABLE resolve-wrong-payout consumed 1399850 of 1399850 granted and was aborted
 ```
 
-- `refuse-unsigned` presents the position owner as a read-only, non-signing
-  account.
-- `refuse-stranger` presents a different authenticated signer.
-- `refuse-imposter` presents byte-identical replay-account state at an address
-  that is not the canonical replay PDA. Every decode and every linkage check
-  passes on it, so only address derivation can refuse it. The offline adapter
-  refuses the same situation as `WrongAccountKey` because it is handed a trusted
-  binding; the program derives the address instead, which is the stronger check
-  obligation 1 asks for.
+With `SetComputeUnitLimit` at 1 400 000 — the per-transaction ceiling, of which
+150 units are the budget instruction itself — the program consumes every unit
+granted and the runtime aborts it with `ProgramFailedToComplete`. There is
+therefore **no observable post-state and no observable gate refusal past the
+signature check** for `Resolve` on this runtime. The oracle's expectation is
+still written to `plan/expected/` on every run, so the comparison is ready for
+the day the instruction fits.
 
-### The wave-3 plane is loaded but not transacted against
+`resolve-unsigned` *is* observed, because the gate checks the signature before
+the first terms decode.
 
-Genesis carries the nine accounts the `Split` instruction takes, the imposter
-replay account, and nine more that no transaction in this plan touches: the
-supply ledger, the immutable terms artifact and its price grid, the resolution
-record, the feed head, and one epoch with its frozen order page, selected
-candidate, final pot, and settlement receipt. They are loaded so that an
-instruction lane inherits a real, bound, canonically addressed plane instead of
-inventing one, and so that `manifest.txt` already lists the addresses the seed
-schema produces.
+The cause is not mysterious and `observe_resolve.rs` predicted it in prose: the
+resolve path decodes the immutable terms artifact **five** times — address
+derivation, market binding, payout-set binding, record binding, payout
+derivation — and `TermsAccount::decode` recomputes a SHA-256 over the 1.2 KiB
+terms body on every call. `RedeemInternal` decodes it four times and measures
+1 356 878 units, which is the corroborating measurement. The fix is a facts or
+`decode_unchecked` API in `clutch-solana-layout`; skipping a binding to save the
+hash would not be correct.
 
-What that fixture claims is narrow and checked. Every account decodes through
-its frozen codec, and every *identity* binding the layout crate can decide is
+The gate **asserts** the exhaustion — the exact `consumed N of N` shape and the
+`ProgramFailedToComplete` class — rather than skipping the case. An instruction
+that becomes cheap enough to finish turns that check red, which is the signal to
+re-measure and rewrite this section rather than leave it stale.
+
+### Resource envelope
+
+Program compute, from the run above. `program_units` counts only the units the
+program under test consumed, filtered by program id so the `SetComputeUnitLimit`
+instruction is not miscounted as a second measurement.
+
+| transaction | program units | % of 200 000 default | tx bytes | needs a raised limit |
+| --- | --- | --- | --- | --- |
+| `feed-advance` | 7 673 | 4% | 419 | no |
+| `split` | 77 924 | 39% | 650 | no |
+| `merge` | 79 376 | 40% | 650 | no |
+| `materialize` | 79 320 | 40% | 683 | no |
+| `dematerialize` | 80 821 | 40% | 683 | no |
+| `roundtrip` | 155 800 (77 924 + 77 876) | 78% | 750 | no |
+| `create-market` | 988 153 | 494% | 822 | yes — 71% of the 1 400 000 ceiling |
+| `redeem` | 1 356 878 | 678% | 689 | yes — **97%** of the ceiling |
+| `resolve` | > 1 399 850 | — | 681 | **exceeds the ceiling; aborted** |
+
+Read those last three rows as a resource finding, not a footnote. `Split` costs
+what it did before (72 869 → 73 273 → 77 924 across three recorded runs on
+changing dependencies); the evidence gate and the initializer cost one to two
+orders of magnitude more, and one of them does not fit at all. Address
+derivation dominates the cheap instructions — eight to nine
+`sol_try_find_program_address` syscalls each — and terms decoding dominates the
+expensive ones.
+
+This is still one fixture with two outcomes and one page of three observations.
+It is not an envelope: worst-case outcome counts, worst-case payout sets, and
+larger evidence buffers are unmeasured, and every number above would grow.
+
+### The differential is falsifiable
+
+A comparison that cannot go red is not evidence, so the gate falsifies itself
+inside the same validator session. After the differential passes, one byte of one
+oracle expectation is flipped — the Hoard collateral a `Split` moved — and the
+split case is re-run against the same still-running validator and the same
+unmodified ELF:
+
+```text
+== falsifiability self-check (same validator session) ==
+one byte of the Hoard collateral expectation was flipped; the differential went red:
+    split / seam.hoard: on-chain bytes != oracle bytes
+```
+
+The expectation is restored afterwards. A gate whose self-check *passes* fails
+the run.
+
+### The batch-auction plane is loaded but not transacted against
+
+Genesis still carries one epoch with its frozen order page, selected candidate,
+final pot, and settlement receipt, bound to the `seam` market. No transaction in
+this plan touches them: `PlaceOrder` landed after the fixtures were regenerated
+and has no oracle, and cancellation and settlement are stubs. They are loaded so
+that an instruction lane inherits a real, bound, canonically addressed plane
+instead of inventing one.
+
+What that fixture claims is narrow and checked. Every account decodes through its
+frozen codec, and every *identity* binding the layout crate can decide is
 asserted while the harness builds it — terms to market, supply ledger to market,
 grid to terms, epoch to terms and grid, epoch to its frozen page set, candidate
-to epoch, pot and receipt to candidate, resolution to terms. A fixture that
-drifted apart fails `cargo test` rather than shipping as a genesis nobody
-checked. `MarketAccount::terms` in particular is no longer a free byte pattern:
-it is the digest of the terms artifact loaded beside it, exactly as in the
-offline adapter's own fixture.
+to epoch, pot and receipt to candidate, resolution to terms — for every one of
+the five market planes. A fixture that drifted apart fails `cargo test` rather
+than shipping as a genesis nobody checked.
 
 What it does **not** claim is any economic coherence. Whether this candidate is
 the best valid submitted candidate for this book, whether the pot balances
@@ -710,63 +992,13 @@ against the receipts, and whether the prices clear anything are questions for a
 batch relation that no adapter runs yet. The fixture is a shape, bound at every
 seam a codec owns and at none that it does not.
 
-The window-policy numbers in the terms artifact are copied from the offline
-reference adapter's own resolution fixture, so that a future resolution
-differential is a disagreement between two adapters rather than between two
-scenarios. The batch-auction numbers have no reference counterpart to copy —
-no adapter implements that family — so they are the smallest shape the frozen
-codecs accept.
-
-### Re-run after the module split
-
-The gate was re-run after the restructure, on the same host and toolchain:
-
-```text
-sbf_reproducibility=PASS
-accept: executed, unitsConsumed=73273
-differential market    MATCH (unchanged by Split)
-differential hoard     MATCH (changed by Split)
-differential position  MATCH (changed by Split)
-differential kernel    MATCH (changed by Split)
-differential external  MATCH (unchanged by Split)
-differential replay    MATCH (changed by Split)
-refusal refuse-unsigned  Custom(0x0002) (offline reference: MissingSignature)
-refusal refuse-stranger  Custom(0x0011) (offline reference: UnauthorizedActor)
-refusal refuse-imposter  Custom(0x0009) (offline reference: WrongAccountKey)
-```
-
-Six of six accounts byte-identical and three of three refusal codes unchanged,
-which is what pins "the module split moved code and did not change behaviour".
-
-Two honest qualifications. The ELF digest from this run is deliberately **not**
-recorded here: it was measured on a working tree with other lanes live, and a
-digest that names no commit is not a reproducibility record. Re-record it from a
-clean tree. And the compute measurement moved from 72 869 to 73 273 units, which
-is a re-measurement on changed dependencies and a new routing match, not a
-before/after comparison of one variable.
-
-### The differential is falsifiable
-
-A comparison that cannot go red is not evidence. Mutating the reference
-expectation for one field — Hoard collateral `5` to `6` at byte 98 of
-`plan/expected/hoard.hex`, leaving the program and the SVM run untouched — turns
-the check red on exactly that account and leaves the other five green:
-
-```text
-FAIL
-  differential hoard: on-chain bytes != reference bytes
-```
-
-Reproduce by running the gate once, editing that byte in the work directory, and
-re-running `scripts/simulate.py --plan <work>/plan` against the still-running
-validator.
-
-### Resource envelope
-
-`unitsConsumed=72 869` for the accepting `Split`, against a 200 000
-compute-unit default. Address derivation dominates: eight
-`sol_try_find_program_address` calls. This is one measurement of one fixture with
-two outcomes; it is not an envelope.
+The window-policy numbers in the terms artifact are exactly the offline reference
+adapter's own resolution fixture and the `observe_resolve` lifecycle vector —
+buckets 100 to 103, maturity horizon 4, feed cursor 104, grid family 7 version 1
+at 60 seconds, complete-coverage policy, `GEN-EXACT-01`, `FAIL-UNIFORM-REFUND-01`
+— so the resolution differential compares two adapters over one scenario rather
+than over two, and the offline oracle accepts the same evidence bytes the SVM is
+handed.
 
 ### Stack findings
 
@@ -775,7 +1007,7 @@ that does **not** fail the build. An SBF program that overflows its frame is
 undefined behaviour at execution time, so these lines are the only warning there
 is, and `scripts/run_bringup.sh` greps them out of the build log on every run.
 
-As of the run below, every reported function belongs to `clutch-solana-layout`
+As of the run above, every reported function belongs to `clutch-solana-layout`
 or `clutch-solana-reference`. **None belongs to `clutch-sbf`.**
 
 | function | estimated frame |
@@ -789,10 +1021,12 @@ or `clutch-solana-reference`. **None belongs to `clutch-sbf`.**
 | `clutch_solana_reference::resolve_from_evidence` | 6592 |
 | `clutch_solana_reference::redeem_from_evidence` | 4544 |
 
-Reference-crate functions are dead-code-eliminated from this ELF and are never
-called by a program. The finding still stands on its own as obligation-10
-evidence about the *offline adapter's shape*: its by-value, whole-state calling
-convention does not fit an SBF frame.
+The backend additionally reports that a call inside
+`clutch_solana_reference::resolve_from_evidence` *overwrites values in the
+frame*. Reference-crate functions are dead-code-eliminated from this ELF and are
+never called by a program, so none of these reaches the artifact; the finding
+stands on its own as obligation-10 evidence about the *offline adapter's shape*:
+its by-value, whole-state calling convention does not fit an SBF frame.
 
 Staying inside 4 KiB is not automatic, and it is why every account decoder in
 `accounts.rs` is an `#[inline(never)]` reader that keeps the large decoded value
@@ -828,15 +1062,29 @@ above ends up with nothing from this crate in it.
 The fix belongs in `clutch-solana-layout`: a streaming header-and-commitment
 decoder that never materializes the slot array, in the same shape as that
 crate's own `recomputed_page_digest`, which already streams one
-`ORDER_SLOT_BYTES` scratch slot instead of buffering a page. Until it exists, no
-on-chain instruction can read an order page, and the `orders_batch` family
-cannot be started. `verify_page_set` has the same problem one level up: it takes
-pages by value as a slice.
+`ORDER_SLOT_BYTES` scratch slot instead of buffering a page. `verify_page_set`
+has the same problem one level up: it takes pages by value as a slice.
+
+### What the plan looks like on disk
+
+`clutch-sbf-harness <out-dir>` writes a self-describing plan, so re-running one
+case against a live validator needs no shell archaeology:
+
+```text
+plan/plan.json              every case: family, oracle, tx file, expected files, expected refusal code
+plan/genesis.txt            role, address, and file of all 55 genesis accounts
+plan/accounts/<role>.json   one validator --account dump per genesis account
+plan/tx/<case>.b64          one serialized unsigned transaction per case
+plan/expected/<case>.<plane>.<role>.hex       oracle post-state
+plan/expected/<case>.<plane>.<role>.pre.hex   genesis pre-state
+```
+
+`scripts/simulate.py --plan <dir> --only <case>` re-runs a single case.
 
 ## Reproducing
 
 ```sh
-programs/clutch-sbf/scripts/run_bringup.sh          # full gate, ~1 minute
+programs/clutch-sbf/scripts/run_bringup.sh          # full gate, ~2 minutes
 cargo test   --manifest-path programs/clutch-sbf/Cargo.toml
 cargo clippy --manifest-path programs/clutch-sbf/Cargo.toml --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path programs/clutch-sbf/Cargo.toml --no-deps
@@ -844,19 +1092,32 @@ cargo fmt --manifest-path programs/clutch-sbf/Cargo.toml --all -- --check
 ```
 
 `cargo test` needs the pinned `solana` CLI on `PATH` or in `SOLANA_BIN`: address
-derivation is not compiled into these crates, so both the harness fixture and
-its decoder test derive out of process.
+derivation is not compiled into these crates, so the harness derives ~70
+program addresses out of process while it builds the plan. That is also why the
+plan takes a few seconds to write.
 
 The gate needs `solana-test-validator`, `python3`, and `curl`. It binds
 `127.0.0.1:18899` and `127.0.0.1:19900` by default (`CLUTCH_RPC_PORT`,
-`CLUTCH_FAUCET_PORT` override) and contacts nothing else.
+`CLUTCH_FAUCET_PORT` override) and contacts nothing else. It uses **one**
+validator session for all 26 transactions, including the falsifiability
+self-check. If a previous run was interrupted before its `trap` fired, an
+orphaned validator will still hold the RPC port; `pkill -f solana-test-validator`
+before re-running.
 
 ## Correct description
 
-"A bring-up SBF program whose instruction set is routed but of which one
-instruction is implemented, whose account validation, address derivation, and
-post-state bytes agree with the offline reference adapter on one single-position
-fixture under a local simulated bank." It is not a complete program, not
-verified, not audited, and not authorization to deploy anywhere. Its closure
-check is currently stricter than the reference adapter's and refuses any market
-with a second position.
+"A bring-up SBF program implementing eight instruction families, seven of which
+execute inside a local simulated bank on regenerated fixtures with account
+validation, address derivation, and post-state bytes agreeing byte for byte with
+the offline reference adapter — or, where no reference transition exists, with an
+independent re-encode that the reference's own validator accepts — plus one
+family, `Resolve`, that is implemented and measured not to fit a Solana
+transaction at all."
+
+It is not a complete program, not verified, not audited, and not authorization
+to deploy anywhere. Every transaction is simulated with signature verification
+off and nothing is committed, so "the actor signed" remains a message-header
+fact. `PlaceOrder` has no SVM evidence; cancellation and settlement are stubs.
+`CreateMarket` founds markets over pre-created accounts and cannot create an
+account. The window identity and the feed summary digest are recorded and never
+verified, because the program owns no hash primitive.

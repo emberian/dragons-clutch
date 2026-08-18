@@ -12,6 +12,12 @@ loaded and executed by an Agave bank, the account data really is serialized
 into the VM and written back, and the `is_signer` bits the program reads really
 do come from the transaction message header -- but no Ed25519 signature is
 verified, and nothing is committed to a ledger.
+
+The plan is `plan.json`, written by `clutch-sbf-harness`.  Every accepting case
+names the exact writable accounts to compare and the oracle that produced the
+expectation; every refusing case names the numeric `ProgramError::Custom` code
+the program must return and the offline reference adapter's own refusal for the
+same situation.
 """
 
 from __future__ import annotations
@@ -19,11 +25,12 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 import sys
 import urllib.request
 from pathlib import Path
 
-STATE_ROLES = ["market", "hoard", "position", "kernel", "external", "replay"]
+CONSUMED = re.compile(r"^Program (\S+) consumed (\d+) of (\d+) compute units$")
 
 
 def rpc(url: str, method: str, params: list) -> dict:
@@ -40,25 +47,16 @@ def rpc(url: str, method: str, params: list) -> dict:
     return body["result"]
 
 
-def read_manifest(plan: Path) -> dict:
-    values = {}
-    for line in (plan / "manifest.txt").read_text().splitlines():
-        if line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key] = value
-    return values
-
-
-def simulate(url: str, plan: Path, name: str, addresses: list[str]) -> dict:
-    encoded = (plan / "tx" / f"{name}.b64").read_text().strip()
+def simulate(url: str, plan: Path, case: dict, addresses: list[str]) -> dict:
+    encoded = (plan / case["tx"]).read_text().strip()
     config = {
         "encoding": "base64",
         "sigVerify": False,
         "replaceRecentBlockhash": True,
         "commitment": "processed",
-        "accounts": {"encoding": "base64", "addresses": addresses},
     }
+    if addresses:
+        config["accounts"] = {"encoding": "base64", "addresses": addresses}
     return rpc(url, "simulateTransaction", [encoded, config])["value"]
 
 
@@ -75,62 +73,190 @@ def custom_error_code(err) -> int | None:
     return None
 
 
+def per_instruction_units(logs, program_id: str) -> list[int]:
+    """Compute units the *program under test* consumed, one entry per invocation.
+
+    Filtered by program id so that a `SetComputeUnitLimit` instruction ahead of
+    the program instruction does not show up as a second measurement.
+    """
+    units = []
+    for line in logs or []:
+        match = CONSUMED.match(line)
+        if match and match.group(1) == program_id:
+            units.append(int(match.group(2)))
+    return units
+
+
+def granted_and_consumed(logs, program_id: str) -> tuple[int, int] | None:
+    """The `consumed X of Y` pair the runtime logged for the program."""
+    for line in logs or []:
+        match = CONSUMED.match(line)
+        if match and match.group(1) == program_id:
+            return int(match.group(2)), int(match.group(3))
+    return None
+
+
+def check_exhausted(
+    url: str,
+    plan: Path,
+    program_id: str,
+    case: dict,
+    report: list[str],
+    failures: list[str],
+) -> None:
+    """Assert a documented compute-ceiling exhaustion.
+
+    This is a claim that can go red: an instruction that became cheap enough to
+    finish fails this check, which is the signal to re-measure it and rewrite
+    the evidence rather than leave a stale "does not fit" in the docs.
+    """
+    result = simulate(url, plan, case, [])
+    err = result["err"]
+    detail = None
+    if isinstance(err, dict) and isinstance(err.get("InstructionError"), list):
+        detail = err["InstructionError"][1]
+    pair = granted_and_consumed(result.get("logs"), program_id)
+    if detail != "ProgramFailedToComplete" or pair is None or pair[0] != pair[1]:
+        failures.append(
+            f"{case['name']}: expected a compute-ceiling exhaustion, got err={err} "
+            f"units={pair}"
+        )
+        for line in result.get("logs") or []:
+            report.append(f"      log {line}")
+        return
+    report.append(
+        f"  UNDRIVABLE {case['name']:<24} consumed {pair[0]} of {pair[1]} granted "
+        f"and was aborted: does not fit one transaction"
+    )
+
+
+def read_hex(plan: Path, relative: str) -> str:
+    return (plan / relative).read_text().strip()
+
+
+def check_accept(
+    url: str,
+    plan: Path,
+    program_id: str,
+    case: dict,
+    report: list[str],
+    failures: list[str],
+) -> None:
+    entries = case["compare"]
+    addresses = [entry["address"] for entry in entries]
+    result = simulate(url, plan, case, addresses)
+    if result["err"] is not None:
+        failures.append(f"{case['name']}: expected success, got err={result['err']}")
+        for line in result.get("logs") or []:
+            report.append(f"      log {line}")
+        return
+
+    per = per_instruction_units(result.get("logs"), program_id)
+    program_units = sum(per)
+    detail = f" per-instruction {per}" if len(per) > 1 else ""
+    limit = case.get("compute_limit")
+    budget = f" limit={limit}" if limit else ""
+    report.append(
+        f"  accept {case['name']:<28} program_units={program_units}{detail} "
+        f"tx_units={result.get('unitsConsumed')}{budget} "
+        f"bytes={case['bytes']} oracle={case['oracle']}"
+    )
+
+    returned = result.get("accounts") or []
+    if len(returned) != len(entries):
+        failures.append(
+            f"{case['name']}: expected {len(entries)} accounts back, got {len(returned)}"
+        )
+        return
+
+    identical = set(case.get("identical_to_pre") or [])
+    for entry, account in zip(entries, returned):
+        observed = base64.b64decode(account["data"][0]).hex()
+        expected = read_hex(plan, entry["expected"])
+        pre = read_hex(plan, entry["pre"])
+        role = entry["role"]
+        if observed != expected:
+            failures.append(
+                f"{case['name']} / {role}: on-chain bytes != oracle bytes"
+            )
+            report.append(f"      oracle   {expected}")
+            report.append(f"      on-chain {observed}")
+            continue
+        if role in identical and observed != pre:
+            failures.append(
+                f"{case['name']} / {role}: expected to be untouched, but it moved"
+            )
+            continue
+        if role not in identical and observed == pre:
+            failures.append(
+                f"{case['name']} / {role}: expected to move, but it is unchanged"
+            )
+            continue
+        state = "unchanged" if role in identical else "changed"
+        report.append(f"    differential {role:<22} MATCH ({state})")
+
+
+def check_refuse(url: str, plan: Path, case: dict, report: list[str], failures: list[str]) -> None:
+    result = simulate(url, plan, case, [])
+    expected = int(case["expect_code"])
+    code = custom_error_code(result["err"])
+    if code == expected:
+        report.append(
+            f"  refuse {case['name']:<28} Custom({case['expect_code_hex']})  "
+            f"offline reference: {case['reference']}"
+        )
+        return
+    failures.append(
+        f"{case['name']}: expected Custom({case['expect_code_hex']}), got err={result['err']}"
+    )
+    for line in result.get("logs") or []:
+        report.append(f"      log {line}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://127.0.0.1:18899")
     parser.add_argument("--plan", required=True, type=Path)
+    parser.add_argument("--only", default=None, help="run one case by name")
     args = parser.parse_args()
 
-    manifest = read_manifest(args.plan)
-    addresses = [manifest[f"account.{role}"] for role in STATE_ROLES]
+    plan = json.loads((args.plan / "plan.json").read_text())
     failures: list[str] = []
     report: list[str] = []
 
-    accept = simulate(args.url, args.plan, "accept", addresses)
-    if accept["err"] is not None:
-        failures.append(f"accept: expected success, got err={accept['err']}")
-        for line in accept.get("logs") or []:
-            report.append(f"    log {line}")
-    else:
-        report.append(f"  accept: executed, unitsConsumed={accept.get('unitsConsumed')}")
+    families: dict[str, list[dict]] = {}
+    for case in plan["cases"]:
+        if args.only and case["name"] != args.only:
+            continue
+        families.setdefault(case["family"], []).append(case)
 
-    returned = accept.get("accounts") or []
-    if len(returned) != len(STATE_ROLES):
-        failures.append(
-            f"accept: expected {len(STATE_ROLES)} accounts back, got {len(returned)}"
-        )
-    else:
-        for role, account in zip(STATE_ROLES, returned):
-            observed = base64.b64decode(account["data"][0]).hex()
-            expected = (args.plan / "expected" / f"{role}.hex").read_text().strip()
-            pre = (args.plan / "expected" / f"{role}.pre.hex").read_text().strip()
-            if observed == expected:
-                changed = "changed" if expected != pre else "unchanged"
-                report.append(f"  differential {role:<9} MATCH ({changed} by Split)")
+    for family, cases in families.items():
+        report.append(f"\n== {family} ==")
+        for case in cases:
+            if case["kind"] == "exhausted":
+                check_exhausted(
+                    args.url, args.plan, plan["program_id"], case, report, failures
+                )
+            elif case["kind"] == "accept":
+                check_accept(
+                    args.url, args.plan, plan["program_id"], case, report, failures
+                )
             else:
-                failures.append(f"differential {role}: on-chain bytes != reference bytes")
-                report.append(f"    reference {expected}")
-                report.append(f"    on-chain  {observed}")
-
-    for name in ["refuse-unsigned", "refuse-stranger", "refuse-imposter"]:
-        expected_code = int(manifest[f"expect.{name}"], 16)
-        result = simulate(args.url, args.plan, name, [])
-        code = custom_error_code(result["err"])
-        reference = manifest.get(f"reference.{name}", "?")
-        if code == expected_code:
-            report.append(
-                f"  refusal {name:<16} Custom(0x{code:04x}) "
-                f"(offline reference: {reference})"
-            )
-        else:
-            failures.append(
-                f"refusal {name}: expected Custom(0x{expected_code:04x}), "
-                f"got err={result['err']}"
-            )
-            for line in result.get("logs") or []:
-                report.append(f"    log {line}")
+                check_refuse(args.url, args.plan, case, report, failures)
 
     print("\n".join(report))
+    accepts = sum(1 for case in plan["cases"] if case["kind"] == "accept")
+    refuses = sum(1 for case in plan["cases"] if case["kind"] == "refuse")
+    exhausted = [case["name"] for case in plan["cases"] if case["kind"] == "exhausted"]
+    print(
+        f"\n{accepts} accepting transactions, {refuses} refusals, "
+        f"{len(exhausted)} undrivable, {len(plan['genesis'])} genesis accounts"
+    )
+    if exhausted:
+        print(
+            "  UNDRIVABLE on this runtime (compute ceiling, documented in "
+            "SBF_BRINGUP.md): " + ", ".join(exhausted)
+        )
     if failures:
         print("\nFAIL")
         for failure in failures:
