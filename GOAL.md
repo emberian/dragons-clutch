@@ -75,8 +75,19 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
   pushed.
 - Closing drift review: A-F pass, fixes committed both repos; manifest
   widened to 33/33 gates incl. SBF lane; clean emit pushed.
-- In flight: Draft 7 rebalance, closing drift review, operatorless memo
-  + IAC addendum candidate.
+- OPERATORLESS memo + IAC addendum candidate landed (filing-worthy per
+  its own verdict; EMBER go/no-go). Pushed.
+- In flight: Draft 7 rebalance, 24/7-RFC candidate draft.
+
+## Ember decision queue (morning)
+
+1. IAC addendum go/no-go (answers published Session II heading; text ready).
+2. 24/7-perpetuals RFC go/no-go - deadline Aug 26, decision needed ~24h.
+3. One paid Bedrock MPC-TLS session (first provider-attested transcript).
+4. Vendored solana-define-syscall provenance sign-off.
+5. Policy freezes (residual 1a/1b/1c, lots, AON, fee carry - evidence in).
+6. Draft 7 read + John hand-off + signature-block form.
+7. Full list: docs/implementation/DRIFT_REVIEW_2026-08-19.md final section.
 - D1: independent FBA oracle, 300M-case differential, zero semantic
   divergences, vectors byte-identical; spec gap (refusal-class priority)
   found and pinned; pushed.
