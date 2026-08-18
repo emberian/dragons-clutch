@@ -18,15 +18,14 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Next 3 moves
 
-1. CONSOL-TERMS (Fable, running): unified TermsAccount v2 - cap +
-   obligation 18 + distributional basis; markets become fundable;
-   threshold markets resolve. BATCH-STREAM (Fable, running): streaming
-   relation verifier + ClearWork checkpoint + projection spec.
-2. HARNESS-REGEN lands -> all-families SVM differential recorded; then
-   LAYOUT-WRITE lane (streaming writer, tombstone, Intent rev,
-   canonical order ids) on the projection spec.
-3. Token-2022 CPI leg into the instruction modules; lifecycle-walk
-   script; umbrella + fresh manifest + closing drift review.
+1. Running: LAYOUT-WRITE (page v4: writer/tombstone/derived ids/intent
+   rev), TOKEN-CPI (real mint/burn/transfer + program-test evidence),
+   LIFECYCLE (the PROJECT.md section-10 walk as one recorded SVM gate),
+   degg VERDICTS + C-1 refund closure.
+2. Integration: orders module onto page v4; ClearWork/candidate accounts
+   onto the streaming verifier; cost re-pin (terms 1656 + page v4).
+3. Wave close: umbrella both repos, fresh clean-tree manifest with the
+   new ELF, closing drift review, push everything.
 
 ## Done log
 
