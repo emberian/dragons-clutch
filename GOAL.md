@@ -27,6 +27,18 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- Token-2022 probe: deps RESOLVE, 6 scenarios green, extension matrix
+  proven on real bytes; toolchain split finding (1.93 for program-test).
+- SBF foundation: module split, 18 seeds, Split differential PASS;
+  OrderPage v3 on-chain decode blocker found -> streaming decoder lane.
+- Distributional claims design: PoU theorem + derive-last-and-subtract;
+  deg>=2 interval ambiguity narrowed honestly; TermsAccount v3 unified
+  with obligation 18.
+- Relation-IR landed (degg P1-2): relation as data, frozen check order
+  live in the digest, 2.1M-case zero-divergence Clear lowering.
+- Wave 6 launched: 3 instruction lanes + streaming decoder; John
+  two-round protocol; bundling corpus + manipulation-cost experiments.
+
 - Draft 7 landed: bundling-invariance as a criteria-test, Ariadne/FalconX
   by-name engagements, machine-checked-negatives table, P-I8, addendum
   slack held; pushed.
