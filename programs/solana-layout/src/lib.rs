@@ -1983,7 +1983,7 @@ pub const RECEIPT_FLAG_SLICE_EXHAUSTED: u8 = 4;
 
 /// Market-wide supply, decomposed into its two accounted terms.
 ///
-/// The reference adapter's closure equality is
+/// The reference adapter's closure invariant (CLO-DELTA-V1) is
 /// `position internal + accounted external == aggregate supply`.  Summing
 /// positions is not an onchain option, so the aggregate is persisted here as
 /// the two terms whose sum it is: claims still credited internally, and claims

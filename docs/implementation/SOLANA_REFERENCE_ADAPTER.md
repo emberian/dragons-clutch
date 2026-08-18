@@ -48,29 +48,32 @@ reference kernel account's payout set is bound to the immutable
 balances, and reference accounts each retain one semantic owner; the adapter
 reconstructs a kernel state only on the stack.
 
-This reference is intentionally a **closed single-position model**. Before and
-after every transition, for every active outcome, it requires all three of:
+This reference is a **multi-position adapter under the CLO-DELTA-V1
+delta-accounting invariant** (design and refusal-set analysis in
+[`MULTI_POSITION_CLOSURE.md`](MULTI_POSITION_CLOSURE.md)). The supply ledger
+is the only counted truth. Per transition, for every active outcome, the
+adapter checks:
 
 ```text
-supply.internal_supply[o] + supply.external_supply[o] == kernel.total_supply[o]
-position.internal[o]                                  == supply.internal_supply[o]
-external.balance[o]                                   == supply.external_supply[o]
+C0  a newly initialized position triple is provably zero
+C1  supply.internal[o] + supply.external[o] == kernel.total_supply[o]  (pre and post)
+C2  position.internal[o] <= supply.internal[o]  and
+    external.balance[o]  <= supply.external[o]  (presented triple, pre and post)
+C3  supply' == supply - position_pre + position_post   (checked; moved, never overwritten)
 ```
 
-The first is the `SupplyLedgerAccount`'s own two-term closure and would hold for
-any number of positions. The second and third are the single-position
-identification, and they are the part a multi-position design must replace with
-a checked aggregate-closure witness rather than relax.
-
-Checked addition is mandatory. Requiring only `<=` would still permit a forged
-position to consume aggregate claims attributed to somebody else. Permitting a
-larger local position would permit materialization or redemption of claims that
-do not exist in aggregate. Equality is therefore the strongest honest linkage
-available without enumerating all positions. Multi-position execution remains
-refused by this reference representation until an SVM design supplies a checked
-aggregate-closure witness. Initialization additionally requires zero internal,
-external, and aggregate claims, zero position cash and reserved cash, zero Hoard
-collateral, an open position, and a zero replay sequence.
+C2 is deliberately one-sided: over-counting in the ledger is the conservative,
+locked-collateral direction, while a position exceeding the ledger term — the
+counterfeit-claim direction — refuses. C3 with C1-post forces the kernel's
+aggregate effect to equal the presented position's effect, making the
+represented-balances property an inductive invariant of histories rather than
+a scan. The residue a purely local check cannot catch — position bytes
+fabricated outside any history that nonetheless satisfy C1/C2 — is named in
+the design doc and belongs to the PDA/authentication obligations (1-3, 9),
+not to this invariant. Initialization additionally requires zero position
+cash and reserved cash, an open position, and a zero replay sequence; ledger
+generation is the market accounting era (proposed SVM rule: ledger PDA with
+no close path).
 
 
 ## The resolution evidence gate
@@ -288,8 +291,9 @@ is added. The reference crate does not establish them.
 11. Reconcile concurrent multi-position aggregate supply. Each owner position
     must change the single market aggregate exactly once; closure must prove
     that all internal and external balances are represented without scanning an
-    unbounded set. The offline adapter's single-position equality is a refusal
-    boundary, not a multi-position solution.
+    unbounded set. The offline adapter now implements the CLO-DELTA-V1 inductive
+    closure (see MULTI_POSITION_CLOSURE.md); the SVM design still owes the
+    PDA/authentication half that makes fabricated-history bytes unreachable.
 12. Establish upgrade authority, program-data identity, initialization race
     handling, account closing destinations, migration/version rules, emergency
     posture, and immutable-profile behavior without introducing discretionary
