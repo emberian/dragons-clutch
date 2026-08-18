@@ -1139,15 +1139,16 @@ mod tests {
             realm: realm_hash,
             profile: profile_hash,
             max_outcomes: 16,
-            profile_version: 1,
+            profile_version: 2,
             stored_bump: 2,
             flags: 0,
         };
         let profile = ProfileAccount {
             profile: profile_hash,
             realm: realm_hash,
-            version: 1,
+            version: 2,
             flags: 0,
+            collateral_policy_digest: Hash32::ZERO,
         };
         let mut realm_bytes = [0; account_len::REALM];
         let mut profile_bytes = [0; account_len::PROFILE];

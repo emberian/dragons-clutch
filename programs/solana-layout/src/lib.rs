@@ -11,16 +11,65 @@
 //! authenticate account metadata and then hand these checked values to the
 //! semantic kernel.
 
-/// Frozen wire version for this prototype.
-pub const LAYOUT_VERSION: u8 = 1;
+/// Highest account schema version this build understands.
+///
+/// Each account carries its **own** schema version byte (see
+/// [`account_version`]); this constant is the largest of them, not a single
+/// wire version shared by every account.  Accounts whose bytes never changed
+/// still encode and require [`LAYOUT_VERSION_V1`]; accounts whose bytes changed
+/// encode `2` and refuse `1` explicitly with [`CodecError::WrongVersion`].
+pub const LAYOUT_VERSION: u8 = 2;
+/// The initial prototype schema version.
+pub const LAYOUT_VERSION_V1: u8 = 1;
+/// Schema version of every deterministic intent encoding.
+pub const INTENT_VERSION: u8 = 1;
 /// Number of bytes in every identity/hash field.
 pub const HASH_BYTES: usize = 32;
 /// Maximum number of outcomes in a market.
 pub const MAX_OUTCOMES: usize = 16;
+/// Maximum number of payout vectors in one immutable terms set.
+///
+/// Mirrors `clutch_kernel::MAX_PAYOUTS`; this crate stays dependency-free, so
+/// the bound is restated rather than imported, and a codec test pins it.
+pub const MAX_PAYOUTS: usize = 8;
+/// Maximum number of ticks in a frozen price grid.
+///
+/// Mirrors `clutch_batch::MAX_GRID_TICKS`.
+pub const MAX_GRID_TICKS: usize = 64;
 /// Maximum records in one order page.
 pub const MAX_ORDERS_PER_PAGE: usize = 16;
+/// Maximum pages in one frozen epoch book.
+pub const MAX_ORDER_PAGES: usize = 4;
+/// Maximum orders in one frozen epoch book.
+///
+/// Mirrors `clutch_batch::MAX_ORDERS`; the page geometry is chosen so a full
+/// page set is exactly one relation book.
+pub const MAX_EPOCH_ORDERS: usize = MAX_ORDERS_PER_PAGE * MAX_ORDER_PAGES;
+/// Relation version projected by [`EpochAccount`].
+///
+/// Mirrors `clutch_batch::relation_v1::RELATION_VERSION_V1`.
+pub const RELATION_VERSION: u32 = 1;
+/// Largest admitted observation bucket duration, in seconds.
+///
+/// Mirrors `clutch_accumulator::MAX_BUCKET_SECONDS`.
+pub const MAX_BUCKET_SECONDS: u64 = 86_400;
+/// Largest admitted observation window span, in buckets.
+///
+/// Mirrors `clutch_accumulator::MAX_BUCKETS`.
+pub const MAX_WINDOW_BUCKETS: u64 = 1_000_000;
+/// Largest price scale whose simplex sum cannot overflow a `u64`.
+///
+/// Mirrors `clutch_batch::relation_v1::MAX_PRICE_SCALE`.
+pub const MAX_PRICE_SCALE: u64 = u64::MAX / MAX_OUTCOMES as u64;
+/// Sentinel payout index meaning "this market has not resolved".
+pub const PAYOUT_INDEX_UNRESOLVED: u8 = u8::MAX;
+/// Exact encoded length of one [`OrderRecord`].
+pub const ORDER_RECORD_BYTES: usize = 32 + 32 + 1 + 1 + 8 + 8 + 8 + 1 + 8;
 /// Maximum encoded instruction length.
 pub const MAX_INTENT_BYTES: usize = 256;
+
+const _: () = assert!(MAX_EPOCH_ORDERS == 64);
+const _: () = assert!(MAX_PRICE_SCALE > 0);
 
 const REALM_TAG: u8 = 1;
 const PROFILE_TAG: u8 = 2;
@@ -29,6 +78,14 @@ const HOARD_TAG: u8 = 5;
 const POSITION_TAG: u8 = 6;
 const FEED_TAG: u8 = 7;
 const ORDER_PAGE_TAG: u8 = 8;
+const SUPPLY_LEDGER_TAG: u8 = 9;
+const TERMS_TAG: u8 = 10;
+const EPOCH_TAG: u8 = 11;
+const PRICE_GRID_TAG: u8 = 12;
+const CANDIDATE_TAG: u8 = 13;
+const FINAL_POT_TAG: u8 = 14;
+const SETTLEMENT_RECEIPT_TAG: u8 = 15;
+const RESOLUTION_TAG: u8 = 16;
 
 /// A fixed 32-byte domain-separated identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -96,10 +153,50 @@ pub enum CodecError {
     NonCanonicalIdentity,
     /// Noncanonical bytes were found in padding or reserved fields.
     NonCanonicalPadding,
+    /// A price grid is empty, unsorted, over-length, or exceeds its scale.
+    InvalidPriceGrid,
+    /// An order limit is not an exact member of the frozen price grid.
+    InvalidTick,
+    /// Two accounts that must agree on an immutable field disagree.
+    MismatchedBinding,
+    /// Internal plus accounted-external supply does not close.
+    AggregateClosureMismatch,
+    /// Consideration is not exactly quantity times the frozen price.
+    InvalidConsideration,
     /// Arithmetic would exceed the fixed representation.
     ArithmeticOverflow,
     /// The destination buffer is too short.
     OutputTooSmall,
+}
+
+impl CodecError {
+    /// The stable taxonomy code of this refusal.
+    ///
+    /// Numbers come from the `VECTOR_SPINE_PROPOSAL.md` §2.3 registry, which is
+    /// PROPOSED.  Per its rule TAX-3 the enum's own discriminants are never a
+    /// taxonomy code; this function is the only sanctioned mapping, and it is
+    /// stable across variant insertion.
+    pub const fn code(self) -> u32 {
+        match self {
+            Self::Truncated => 2011,
+            Self::TrailingBytes => 2012,
+            Self::WrongTag => 2030,
+            Self::WrongVersion => 2031,
+            Self::InvalidCount => 2040,
+            Self::InvalidEnum => 2021,
+            Self::ZeroValue => 2046,
+            Self::ZeroIdentity => 4009,
+            Self::NonCanonicalIdentity => 4010,
+            Self::NonCanonicalPadding => 2022,
+            Self::InvalidPriceGrid => 2049,
+            Self::InvalidTick => 2050,
+            Self::MismatchedBinding => 4011,
+            Self::AggregateClosureMismatch => 5011,
+            Self::InvalidConsideration => 5015,
+            Self::ArithmeticOverflow => 1001,
+            Self::OutputTooSmall => 8004,
+        }
+    }
 }
 
 /// Result used by this crate.
@@ -161,6 +258,79 @@ pub fn canonical_feed_id(spec_bytes: &[u8]) -> FeedId {
     digest(b"dragons-clutch/feed/v1", &[spec_bytes])
 }
 
+/// Derive a canonical epoch ID from its parent market and epoch index.
+pub fn canonical_epoch_id(market: MarketId, epoch_index: u64) -> EpochId {
+    digest(
+        b"dragons-clutch/epoch/v1",
+        &[&market.0, &epoch_index.to_le_bytes()],
+    )
+}
+
+/// Derive the immutable terms digest from the exact terms body bytes.
+///
+/// The body is everything an encoded [`TermsAccount`] holds after its own
+/// identity field, so the digest commits to the payout set, the window policy,
+/// and the failure policy together.  [`MarketAccount::terms`] stores this value.
+pub fn canonical_terms_digest(body_bytes: &[u8]) -> Hash32 {
+    digest(b"dragons-clutch/terms/v1", &[body_bytes])
+}
+
+/// Derive the frozen price-grid identity from its exact body bytes.
+pub fn canonical_price_grid_id(body_bytes: &[u8]) -> Hash32 {
+    digest(b"dragons-clutch/price-grid/v1", &[body_bytes])
+}
+
+/// Derive a candidate identity from its exact body bytes.
+pub fn canonical_candidate_digest(body_bytes: &[u8]) -> Hash32 {
+    digest(b"dragons-clutch/candidate/v1", &[body_bytes])
+}
+
+/// Derive one order page's digest from its page position and record bytes.
+pub fn canonical_page_digest(
+    market: MarketId,
+    epoch: EpochId,
+    page_index: u16,
+    order_count: u8,
+    record_bytes: &[u8],
+) -> Hash32 {
+    digest(
+        b"dragons-clutch/order-page/v1",
+        &[
+            &market.0,
+            &epoch.0,
+            &page_index.to_le_bytes(),
+            &[order_count],
+            record_bytes,
+        ],
+    )
+}
+
+/// Fold every page digest, in page order, into the set-wide order-set identity.
+///
+/// This is the cross-page commitment: a page cannot be added, dropped,
+/// reordered, or mutated without changing the value every page of the set
+/// stores in [`OrderPageAccount::order_set`].
+pub fn canonical_order_set_id(
+    market: MarketId,
+    epoch: EpochId,
+    page_count: u16,
+    set_order_count: u16,
+    page_digests: &[Hash32],
+) -> Hash32 {
+    let mut h = Sha256::new();
+    h.update(b"dragons-clutch/order-set/v1");
+    h.update(&market.0);
+    h.update(&epoch.0);
+    h.update(&page_count.to_le_bytes());
+    h.update(&set_order_count.to_le_bytes());
+    let mut i = 0;
+    while i < page_digests.len() {
+        h.update(&page_digests[i].0);
+        i += 1;
+    }
+    Hash32(h.finish())
+}
+
 /// Check a market/outcome identity pair.
 pub fn validate_outcome_id(market: MarketId, index: u8, id: OutcomeId) -> Result<()> {
     if index >= MAX_OUTCOMES as u8 || id != canonical_outcome_id(market, index) {
@@ -169,12 +339,55 @@ pub fn validate_outcome_id(market: MarketId, index: u8, id: OutcomeId) -> Result
     Ok(())
 }
 
+/// Per-account schema versions.
+///
+/// An account keeps version `1` exactly while its bytes are unchanged from the
+/// first prototype.  `PROFILE` and `ORDER_PAGE` grew fields and therefore
+/// encode `2` and refuse `1`; every account introduced with this revision
+/// starts at `2` so the pair `(tag, version)` never names two shapes.
+pub mod account_version {
+    /// Realm account, unchanged since the first prototype.
+    pub const REALM: u8 = 1;
+    /// Profile account; version 1 lacked the collateral-policy digest.
+    pub const PROFILE: u8 = 2;
+    /// Market account, unchanged since the first prototype.
+    pub const MARKET: u8 = 1;
+    /// Hoard account, unchanged since the first prototype.
+    pub const HOARD: u8 = 1;
+    /// Position account, unchanged since the first prototype.
+    pub const POSITION: u8 = 1;
+    /// Feed head account, unchanged since the first prototype.
+    pub const FEED: u8 = 1;
+    /// Order page; version 1 lacked every page-set commitment field.
+    pub const ORDER_PAGE: u8 = 2;
+    /// Supply ledger account.
+    pub const SUPPLY_LEDGER: u8 = 2;
+    /// Immutable terms account.
+    pub const TERMS: u8 = 2;
+    /// Epoch/book-domain account.
+    pub const EPOCH: u8 = 2;
+    /// Frozen price-grid account.
+    pub const PRICE_GRID: u8 = 2;
+    /// Candidate record account.
+    pub const CANDIDATE: u8 = 2;
+    /// Final-pot account.
+    pub const FINAL_POT: u8 = 2;
+    /// Settlement receipt account.
+    pub const SETTLEMENT_RECEIPT: u8 = 2;
+    /// Resolution account.
+    pub const RESOLUTION: u8 = 2;
+}
+
 /// Account discriminator and exact fixed byte lengths.
 pub mod account_len {
+    use super::{
+        MAX_GRID_TICKS, MAX_ORDERS_PER_PAGE, MAX_OUTCOMES, MAX_PAYOUTS, ORDER_RECORD_BYTES,
+    };
+
     /// Realm account bytes.
     pub const REALM: usize = 2 + 32 + 32 + 1 + 1 + 1 + 1;
     /// Profile account bytes.
-    pub const PROFILE: usize = 2 + 32 + 32 + 1 + 1;
+    pub const PROFILE: usize = 2 + 32 + 32 + 32 + 1 + 1;
     /// Market account bytes.
     pub const MARKET: usize = 2 + 32 + 32 + 32 + 32 + 1 + 1 + 1 + 1 + 512 + 32 + 8 + 8 + 32;
     /// Hoard account bytes.
@@ -184,7 +397,40 @@ pub mod account_len {
     /// Feed head account bytes.
     pub const FEED: usize = 2 + 32 + 32 + 8 + 8 + 8 + 32 + 1 + 1;
     /// Dense order page account bytes.
-    pub const ORDER_PAGE: usize = 2 + 32 + 32 + 2 + 2 + 1 + 1 + (16 * 99);
+    pub const ORDER_PAGE: usize =
+        2 + (7 * 32) + 2 + 2 + 2 + 1 + 1 + 1 + (MAX_ORDERS_PER_PAGE * ORDER_RECORD_BYTES);
+    /// Supply ledger account bytes.
+    pub const SUPPLY_LEDGER: usize = 2 + 32 + 32 + 8 + 1 + (2 * MAX_OUTCOMES * 8) + 1 + 1;
+    /// Immutable terms account bytes.
+    pub const TERMS: usize = 2
+        + (5 * 32)
+        + 1
+        + 1
+        + (MAX_PAYOUTS * (8 + MAX_OUTCOMES * 8))
+        + 4
+        + 2
+        + 8
+        + 8
+        + 8
+        + 8
+        + 4
+        + 4
+        + 4
+        + 1
+        + 1;
+    /// Frozen price-grid account bytes.
+    pub const PRICE_GRID: usize = 2 + 32 + 32 + 8 + 1 + (MAX_GRID_TICKS * 8) + 1 + 1;
+    /// Epoch/book-domain account bytes.
+    pub const EPOCH: usize = 2 + (9 * 32) + 8 + 4 + 8 + 8 + 2 + 2 + 2 + 1 + 1 + 1 + 1;
+    /// Candidate record account bytes.
+    pub const CANDIDATE: usize =
+        2 + (3 * 32) + (MAX_OUTCOMES * 8) + 8 + 8 + 8 + 16 + 16 + 8 + 8 + 2 + 1 + 1 + 1 + 1 + 1;
+    /// Final-pot account bytes.
+    pub const FINAL_POT: usize = 2 + (3 * 32) + (MAX_OUTCOMES * 8) + 16 + 16 + 1 + 1 + 1 + 1;
+    /// Settlement receipt account bytes.
+    pub const SETTLEMENT_RECEIPT: usize = 2 + (5 * 32) + 16 + 8 + 8 + 8 + 8 + 2 + 1 + 1 + 1 + 1 + 1;
+    /// Resolution account bytes.
+    pub const RESOLUTION: usize = 2 + (4 * 32) + 8 + 8 + 8 + 8 + 1 + 1 + 1;
 }
 
 /// Realm collateral/profile configuration, frozen by an external adapter.
@@ -211,11 +457,24 @@ pub struct ProfileAccount {
     pub profile: ProfileHash,
     /// Owning Realm identity.
     pub realm: RealmHash,
+    /// Domain-separated collateral-policy digest, at byte offset 66.
+    ///
+    /// Zero until the policy is frozen, and nonzero exactly when
+    /// [`PROFILE_FLAG_POLICY_FROZEN`] is set in [`ProfileAccount::flags`]; the
+    /// decoder refuses every other combination.  This crate owns **only** those
+    /// 32 bytes and that zero-until-frozen rule.  The digest *algorithm* —
+    /// domain string, preimage, and the Python/Rust cross-language equality —
+    /// is owned by the collateral-profile lane, so no derivation function for
+    /// it exists here and none may be added to this crate.
+    pub collateral_policy_digest: Hash32,
     /// Profile schema version.
     pub version: u8,
-    /// Reserved flags; currently zero.
+    /// Flags; bit 0 is [`PROFILE_FLAG_POLICY_FROZEN`], all other bits reserved.
     pub flags: u8,
 }
+
+/// Flag bit meaning the collateral policy digest is frozen and nonzero.
+pub const PROFILE_FLAG_POLICY_FROZEN: u8 = 1;
 
 /// Market account. Economics are interpreted by the kernel, not this codec.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -308,18 +567,38 @@ pub struct FeedAccount {
 }
 
 /// A dense, canonically ordered page of transparent order records.
+///
+/// Beyond within-page ordering, a page carries the whole page-set commitment:
+/// its own digest, its order-id range, the previous page's last order id, and
+/// the set-wide order-set digest.  Those fields are what make cross-page range,
+/// uniqueness, and closure checkable from the bytes; see
+/// [`verify_page_set`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OrderPageAccount {
     /// Market identity.
     pub market: MarketId,
     /// Epoch identity.
     pub epoch: EpochId,
+    /// Set-wide order-set digest; zero until the page set is frozen.
+    pub order_set: Hash32,
+    /// Digest of this page's position and record bytes.
+    pub page_digest: Hash32,
+    /// This page's lowest order id; zero exactly when the page is empty.
+    pub first_order_id: Hash32,
+    /// This page's highest order id; zero exactly when the page is empty.
+    pub last_order_id: Hash32,
+    /// The previous page's `last_order_id`; zero exactly on page zero.
+    pub prev_page_last_order_id: Hash32,
     /// Zero-based page index.
     pub page_index: u16,
     /// Total frozen page count.
     pub page_count: u16,
+    /// Orders across the whole page set; zero until the set is frozen.
+    pub set_order_count: u16,
     /// Number of populated records.
     pub order_count: u8,
+    /// Freeze state: 0 open, 1 frozen.
+    pub frozen: u8,
     /// Stored PDA bump.
     pub stored_bump: u8,
     /// Orders in strictly increasing canonical order ID.
@@ -379,7 +658,7 @@ fn check_count(count: u8) -> Result<()> {
     }
 }
 
-fn check_header(input: &[u8], tag: u8, len: usize) -> Result<()> {
+fn check_header(input: &[u8], tag: u8, version: u8, len: usize) -> Result<()> {
     if input.len() < len {
         return Err(CodecError::Truncated);
     }
@@ -389,8 +668,21 @@ fn check_header(input: &[u8], tag: u8, len: usize) -> Result<()> {
     if input[0] != tag {
         return Err(CodecError::WrongTag);
     }
-    if input[1] != LAYOUT_VERSION {
+    // Every version other than this account's own schema version is refused,
+    // including the superseded prototype version 1 and any future version.
+    if input[1] != version {
         return Err(CodecError::WrongVersion);
+    }
+    Ok(())
+}
+
+fn check_padded_amounts(values: &[u64; MAX_OUTCOMES], active: usize) -> Result<()> {
+    let mut i = active;
+    while i < MAX_OUTCOMES {
+        if values[i] != 0 {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        i += 1;
     }
     Ok(())
 }
@@ -421,11 +713,28 @@ impl<'a> Writer<'a> {
     fn u16(&mut self, value: u16) -> Result<()> {
         self.bytes(&value.to_le_bytes())
     }
+    fn u32(&mut self, value: u32) -> Result<()> {
+        self.bytes(&value.to_le_bytes())
+    }
     fn u64(&mut self, value: u64) -> Result<()> {
+        self.bytes(&value.to_le_bytes())
+    }
+    fn u128(&mut self, value: u128) -> Result<()> {
+        self.bytes(&value.to_le_bytes())
+    }
+    fn i128(&mut self, value: i128) -> Result<()> {
         self.bytes(&value.to_le_bytes())
     }
     fn hash(&mut self, value: Hash32) -> Result<()> {
         self.bytes(&value.0)
+    }
+    fn amounts(&mut self, values: &[u64; MAX_OUTCOMES]) -> Result<()> {
+        let mut i = 0;
+        while i < MAX_OUTCOMES {
+            self.u64(values[i])?;
+            i += 1;
+        }
+        Ok(())
     }
 }
 
@@ -434,8 +743,8 @@ struct Reader<'a> {
     at: usize,
 }
 impl<'a> Reader<'a> {
-    fn new(input: &'a [u8], tag: u8, len: usize) -> Result<Self> {
-        check_header(input, tag, len)?;
+    fn new(input: &'a [u8], tag: u8, version: u8, len: usize) -> Result<Self> {
+        check_header(input, tag, version, len)?;
         Ok(Self { input, at: 2 })
     }
     fn bytes<const N: usize>(&mut self) -> Result<[u8; N]> {
@@ -454,11 +763,29 @@ impl<'a> Reader<'a> {
     fn u16(&mut self) -> Result<u16> {
         Ok(u16::from_le_bytes(self.bytes::<2>()?))
     }
+    fn u32(&mut self) -> Result<u32> {
+        Ok(u32::from_le_bytes(self.bytes::<4>()?))
+    }
     fn u64(&mut self) -> Result<u64> {
         Ok(u64::from_le_bytes(self.bytes::<8>()?))
     }
+    fn u128(&mut self) -> Result<u128> {
+        Ok(u128::from_le_bytes(self.bytes::<16>()?))
+    }
+    fn i128(&mut self) -> Result<i128> {
+        Ok(i128::from_le_bytes(self.bytes::<16>()?))
+    }
     fn hash(&mut self) -> Result<Hash32> {
         Ok(Hash32(self.bytes::<32>()?))
+    }
+    fn amounts(&mut self) -> Result<[u64; MAX_OUTCOMES]> {
+        let mut values = [0; MAX_OUTCOMES];
+        let mut i = 0;
+        while i < MAX_OUTCOMES {
+            values[i] = self.u64()?;
+            i += 1;
+        }
+        Ok(values)
     }
     fn done(self) -> Result<()> {
         if self.at == self.input.len() {
@@ -469,17 +796,22 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn put_header(w: &mut Writer<'_>, tag: u8) -> Result<()> {
+fn put_header(w: &mut Writer<'_>, tag: u8, version: u8) -> Result<()> {
     w.u8(tag)?;
-    w.u8(LAYOUT_VERSION)
+    w.u8(version)
 }
 
 impl RealmAccount {
     /// Validate semantic shape without external account metadata.
+    ///
+    /// V1 freezes `max_outcomes` at exactly [`MAX_OUTCOMES`]; a Realm claiming
+    /// any smaller admitted width is refused rather than silently accepted.
     pub fn validate(&self) -> Result<()> {
         check_hash(self.realm)?;
         check_hash(self.profile)?;
-        check_count(self.max_outcomes)?;
+        if self.max_outcomes as usize != MAX_OUTCOMES {
+            return Err(CodecError::InvalidCount);
+        }
         if self.profile_version == 0 || self.flags != 0 {
             return Err(CodecError::InvalidEnum);
         }
@@ -492,7 +824,7 @@ impl RealmAccount {
             return Err(CodecError::OutputTooSmall);
         }
         let mut w = Writer::new(out);
-        put_header(&mut w, REALM_TAG)?;
+        put_header(&mut w, REALM_TAG, account_version::REALM)?;
         w.hash(self.realm)?;
         w.hash(self.profile)?;
         w.u8(self.max_outcomes)?;
@@ -503,7 +835,7 @@ impl RealmAccount {
     }
     /// Parse exactly [`account_len::REALM`] bytes.
     pub fn decode(input: &[u8]) -> Result<Self> {
-        let mut r = Reader::new(input, REALM_TAG, account_len::REALM)?;
+        let mut r = Reader::new(input, REALM_TAG, account_version::REALM, account_len::REALM)?;
         let v = Self {
             realm: r.hash()?,
             profile: r.hash()?,
@@ -519,12 +851,20 @@ impl RealmAccount {
 }
 
 impl ProfileAccount {
-    /// Validate profile shape and parent identity.
+    /// Validate profile shape, parent identity, and policy-freeze consistency.
     pub fn validate(&self) -> Result<()> {
         check_hash(self.profile)?;
         check_hash(self.realm)?;
-        if self.version == 0 || self.flags != 0 {
+        if self.version == 0 || self.flags & !PROFILE_FLAG_POLICY_FROZEN != 0 {
             return Err(CodecError::InvalidEnum);
+        }
+        let frozen = self.flags & PROFILE_FLAG_POLICY_FROZEN != 0;
+        if frozen == (self.collateral_policy_digest == Hash32::ZERO) {
+            return Err(if frozen {
+                CodecError::ZeroIdentity
+            } else {
+                CodecError::NonCanonicalPadding
+            });
         }
         Ok(())
     }
@@ -535,19 +875,26 @@ impl ProfileAccount {
             return Err(CodecError::OutputTooSmall);
         }
         let mut w = Writer::new(out);
-        put_header(&mut w, PROFILE_TAG)?;
+        put_header(&mut w, PROFILE_TAG, account_version::PROFILE)?;
         w.hash(self.profile)?;
         w.hash(self.realm)?;
+        w.hash(self.collateral_policy_digest)?;
         w.u8(self.version)?;
         w.u8(self.flags)?;
         Ok(w.at)
     }
     /// Parse exactly [`account_len::PROFILE`] bytes.
     pub fn decode(input: &[u8]) -> Result<Self> {
-        let mut r = Reader::new(input, PROFILE_TAG, account_len::PROFILE)?;
+        let mut r = Reader::new(
+            input,
+            PROFILE_TAG,
+            account_version::PROFILE,
+            account_len::PROFILE,
+        )?;
         let v = Self {
             profile: r.hash()?,
             realm: r.hash()?,
+            collateral_policy_digest: r.hash()?,
             version: r.u8()?,
             flags: r.u8()?,
         };
@@ -590,7 +937,7 @@ impl MarketAccount {
             return Err(CodecError::OutputTooSmall);
         }
         let mut w = Writer::new(out);
-        put_header(&mut w, MARKET_TAG)?;
+        put_header(&mut w, MARKET_TAG, account_version::MARKET)?;
         w.hash(self.market)?;
         w.hash(self.realm)?;
         w.hash(self.profile)?;
@@ -612,7 +959,12 @@ impl MarketAccount {
     }
     /// Parse exactly [`account_len::MARKET`] bytes.
     pub fn decode(input: &[u8]) -> Result<Self> {
-        let mut r = Reader::new(input, MARKET_TAG, account_len::MARKET)?;
+        let mut r = Reader::new(
+            input,
+            MARKET_TAG,
+            account_version::MARKET,
+            account_len::MARKET,
+        )?;
         let market = r.hash()?;
         let realm = r.hash()?;
         let profile = r.hash()?;
@@ -666,7 +1018,7 @@ impl HoardAccount {
             return Err(CodecError::OutputTooSmall);
         }
         let mut w = Writer::new(out);
-        put_header(&mut w, HOARD_TAG)?;
+        put_header(&mut w, HOARD_TAG, account_version::HOARD)?;
         w.hash(self.market)?;
         w.hash(self.realm)?;
         w.hash(self.authority)?;
@@ -677,7 +1029,7 @@ impl HoardAccount {
     }
     /// Parse exactly [`account_len::HOARD`] bytes.
     pub fn decode(input: &[u8]) -> Result<Self> {
-        let mut r = Reader::new(input, HOARD_TAG, account_len::HOARD)?;
+        let mut r = Reader::new(input, HOARD_TAG, account_version::HOARD, account_len::HOARD)?;
         let v = Self {
             market: r.hash()?,
             realm: r.hash()?,
@@ -693,14 +1045,29 @@ impl HoardAccount {
 }
 
 impl PositionAccount {
-    /// Validate close state and canonical zero padding.
+    /// Validate close state and the frozen cash decomposition.
+    ///
+    /// `cash_atoms` is the **total** Realm collateral cash held for this
+    /// position and `reserved_cash_atoms` is the encumbered part of that total,
+    /// so free cash is their difference and the reserved part can never exceed
+    /// the total.  A byte pattern claiming otherwise is refused.
     pub fn validate(&self) -> Result<()> {
         check_hash(self.market)?;
         check_hash(self.owner)?;
         if self.close_state > 2 {
             return Err(CodecError::InvalidEnum);
         };
+        if self.reserved_cash_atoms > self.cash_atoms {
+            return Err(CodecError::AggregateClosureMismatch);
+        }
         Ok(())
+    }
+    /// Free (unencumbered) collateral cash, or a refusal if the split is invalid.
+    pub const fn free_cash_atoms(&self) -> Result<u64> {
+        match self.cash_atoms.checked_sub(self.reserved_cash_atoms) {
+            Some(free) => Ok(free),
+            None => Err(CodecError::AggregateClosureMismatch),
+        }
     }
     /// Encode exactly [`account_len::POSITION`] bytes.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
@@ -709,7 +1076,7 @@ impl PositionAccount {
             return Err(CodecError::OutputTooSmall);
         }
         let mut w = Writer::new(out);
-        put_header(&mut w, POSITION_TAG)?;
+        put_header(&mut w, POSITION_TAG, account_version::POSITION)?;
         w.hash(self.market)?;
         w.hash(self.owner)?;
         w.u64(self.generation)?;
@@ -726,7 +1093,12 @@ impl PositionAccount {
     }
     /// Parse exactly [`account_len::POSITION`] bytes.
     pub fn decode(input: &[u8]) -> Result<Self> {
-        let mut r = Reader::new(input, POSITION_TAG, account_len::POSITION)?;
+        let mut r = Reader::new(
+            input,
+            POSITION_TAG,
+            account_version::POSITION,
+            account_len::POSITION,
+        )?;
         let market = r.hash()?;
         let owner = r.hash()?;
         let generation = r.u64()?;
@@ -770,7 +1142,7 @@ impl FeedAccount {
             return Err(CodecError::OutputTooSmall);
         }
         let mut w = Writer::new(out);
-        put_header(&mut w, FEED_TAG)?;
+        put_header(&mut w, FEED_TAG, account_version::FEED)?;
         w.hash(self.feed)?;
         w.hash(self.realm)?;
         w.u64(self.cursor)?;
@@ -783,7 +1155,7 @@ impl FeedAccount {
     }
     /// Parse exactly [`account_len::FEED`] bytes.
     pub fn decode(input: &[u8]) -> Result<Self> {
-        let mut r = Reader::new(input, FEED_TAG, account_len::FEED)?;
+        let mut r = Reader::new(input, FEED_TAG, account_version::FEED, account_len::FEED)?;
         let v = Self {
             feed: r.hash()?,
             realm: r.hash()?,
@@ -801,13 +1173,41 @@ impl FeedAccount {
 }
 
 impl OrderPageAccount {
-    /// Validate dense ordering, page bounds, records, and zero padding.
+    /// Encode this page's records into a fixed scratch buffer.
+    fn record_bytes(&self, out: &mut [u8; MAX_ORDERS_PER_PAGE * ORDER_RECORD_BYTES]) -> Result<()> {
+        let mut w = Writer::new(out);
+        let mut i = 0;
+        while i < MAX_ORDERS_PER_PAGE {
+            encode_order(&mut w, self.orders[i])?;
+            i += 1;
+        }
+        Ok(())
+    }
+    /// Recompute this page's digest from its position and record bytes.
+    pub fn recomputed_page_digest(&self) -> Result<Hash32> {
+        let mut records = [0; MAX_ORDERS_PER_PAGE * ORDER_RECORD_BYTES];
+        self.record_bytes(&mut records)?;
+        Ok(canonical_page_digest(
+            self.market,
+            self.epoch,
+            self.page_index,
+            self.order_count,
+            &records,
+        ))
+    }
+    /// Validate dense ordering, page bounds, records, commitments, and padding.
     pub fn validate(&self) -> Result<()> {
         check_hash(self.market)?;
         check_hash(self.epoch)?;
+        if self.frozen > 1 {
+            return Err(CodecError::InvalidEnum);
+        }
+        let frozen = self.frozen == 1;
         if self.page_count == 0
+            || self.page_count as usize > MAX_ORDER_PAGES
             || self.page_index >= self.page_count
             || self.order_count as usize > MAX_ORDERS_PER_PAGE
+            || (frozen && self.order_count == 0)
         {
             return Err(CodecError::InvalidCount);
         };
@@ -827,6 +1227,65 @@ impl OrderPageAccount {
             };
             i += 1;
         }
+        // The stored range must be exactly the records' range.
+        let (expected_first, expected_last) = if self.order_count == 0 {
+            (Hash32::ZERO, Hash32::ZERO)
+        } else {
+            (
+                self.orders[0].order_id,
+                self.orders[self.order_count as usize - 1].order_id,
+            )
+        };
+        if self.first_order_id != expected_first || self.last_order_id != expected_last {
+            return Err(CodecError::MismatchedBinding);
+        }
+        // Page zero opens the chain; every later page links to its predecessor
+        // and must open strictly above it, which is what makes the cross-page
+        // order-id sequence strictly increasing rather than merely per-page.
+        if self.page_index == 0 {
+            if self.prev_page_last_order_id != Hash32::ZERO {
+                return Err(CodecError::NonCanonicalPadding);
+            }
+        } else {
+            if self.prev_page_last_order_id == Hash32::ZERO {
+                return Err(CodecError::ZeroIdentity);
+            }
+            if self.order_count > 0 && self.first_order_id.0 <= self.prev_page_last_order_id.0 {
+                return Err(CodecError::NonCanonicalIdentity);
+            }
+        }
+        // Set-wide commitments exist exactly while the set is frozen.
+        if frozen {
+            check_hash(self.order_set)?;
+            if self.set_order_count < self.order_count as u16
+                || self.set_order_count as usize > MAX_EPOCH_ORDERS
+            {
+                return Err(CodecError::InvalidCount);
+            }
+            let full_pages = self.page_count as usize - 1;
+            let low = full_pages * MAX_ORDERS_PER_PAGE;
+            if self.page_index as usize + 1 == self.page_count as usize {
+                // The last page closes the count exactly.
+                if self.set_order_count as usize != low + self.order_count as usize {
+                    return Err(CodecError::MismatchedBinding);
+                }
+            } else {
+                // Every non-final page of a frozen set is dense.
+                if self.order_count as usize != MAX_ORDERS_PER_PAGE {
+                    return Err(CodecError::InvalidCount);
+                }
+                if self.set_order_count as usize <= low
+                    || self.set_order_count as usize > low + MAX_ORDERS_PER_PAGE
+                {
+                    return Err(CodecError::MismatchedBinding);
+                }
+            }
+        } else if self.order_set != Hash32::ZERO || self.set_order_count != 0 {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        if self.page_digest != self.recomputed_page_digest()? {
+            return Err(CodecError::MismatchedBinding);
+        }
         Ok(())
     }
     /// Encode exactly [`account_len::ORDER_PAGE`] bytes.
@@ -836,12 +1295,19 @@ impl OrderPageAccount {
             return Err(CodecError::OutputTooSmall);
         }
         let mut w = Writer::new(out);
-        put_header(&mut w, ORDER_PAGE_TAG)?;
+        put_header(&mut w, ORDER_PAGE_TAG, account_version::ORDER_PAGE)?;
         w.hash(self.market)?;
         w.hash(self.epoch)?;
+        w.hash(self.order_set)?;
+        w.hash(self.page_digest)?;
+        w.hash(self.first_order_id)?;
+        w.hash(self.last_order_id)?;
+        w.hash(self.prev_page_last_order_id)?;
         w.u16(self.page_index)?;
         w.u16(self.page_count)?;
+        w.u16(self.set_order_count)?;
         w.u8(self.order_count)?;
+        w.u8(self.frozen)?;
         w.u8(self.stored_bump)?;
         let mut i = 0;
         while i < MAX_ORDERS_PER_PAGE {
@@ -852,12 +1318,24 @@ impl OrderPageAccount {
     }
     /// Parse exactly [`account_len::ORDER_PAGE`] bytes.
     pub fn decode(input: &[u8]) -> Result<Self> {
-        let mut r = Reader::new(input, ORDER_PAGE_TAG, account_len::ORDER_PAGE)?;
+        let mut r = Reader::new(
+            input,
+            ORDER_PAGE_TAG,
+            account_version::ORDER_PAGE,
+            account_len::ORDER_PAGE,
+        )?;
         let market = r.hash()?;
         let epoch = r.hash()?;
+        let order_set = r.hash()?;
+        let page_digest = r.hash()?;
+        let first_order_id = r.hash()?;
+        let last_order_id = r.hash()?;
+        let prev_page_last_order_id = r.hash()?;
         let page_index = r.u16()?;
         let page_count = r.u16()?;
+        let set_order_count = r.u16()?;
         let order_count = r.u8()?;
+        let frozen = r.u8()?;
         let stored_bump = r.u8()?;
         let mut orders = [OrderRecord::ZERO; MAX_ORDERS_PER_PAGE];
         let mut i = 0;
@@ -868,9 +1346,16 @@ impl OrderPageAccount {
         let v = Self {
             market,
             epoch,
+            order_set,
+            page_digest,
+            first_order_id,
+            last_order_id,
+            prev_page_last_order_id,
             page_index,
             page_count,
+            set_order_count,
             order_count,
+            frozen,
             stored_bump,
             orders,
         };
@@ -878,6 +1363,79 @@ impl OrderPageAccount {
         v.validate()?;
         Ok(v)
     }
+    /// Parse a page and refuse any order limit that is off the frozen grid.
+    pub fn decode_on_grid(input: &[u8], grid: &PriceGridAccount) -> Result<Self> {
+        let page = Self::decode(input)?;
+        grid.validate()?;
+        let mut i = 0;
+        while i < page.order_count as usize {
+            grid.tick_of(page.orders[i].limit)?;
+            i += 1;
+        }
+        Ok(page)
+    }
+}
+
+/// Verify cross-page order range, uniqueness, and closure over a frozen set.
+///
+/// The pages must be supplied in page-index order.  On success the recomputed
+/// set-wide order-set digest is returned; it is the value every page stores and
+/// the value [`EpochAccount::order_set`] must equal.  A dropped page, a
+/// duplicated order id across a page boundary, a reordered page, or any
+/// post-freeze byte mutation changes one of the checked commitments.
+pub fn verify_page_set(pages: &[OrderPageAccount]) -> Result<Hash32> {
+    if pages.is_empty() || pages.len() > MAX_ORDER_PAGES {
+        return Err(CodecError::InvalidCount);
+    }
+    let head = &pages[0];
+    if head.page_count as usize != pages.len() {
+        return Err(CodecError::InvalidCount);
+    }
+    let mut digests = [Hash32::ZERO; MAX_ORDER_PAGES];
+    let mut total: u16 = 0;
+    let mut i = 0;
+    while i < pages.len() {
+        let page = &pages[i];
+        page.validate()?;
+        if page.frozen != 1 {
+            return Err(CodecError::MismatchedBinding);
+        }
+        if page.page_index as usize != i
+            || page.page_count != head.page_count
+            || page.market != head.market
+            || page.epoch != head.epoch
+            || page.order_set != head.order_set
+            || page.set_order_count != head.set_order_count
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        if i == 0 {
+            if page.prev_page_last_order_id != Hash32::ZERO {
+                return Err(CodecError::NonCanonicalPadding);
+            }
+        } else if page.prev_page_last_order_id != pages[i - 1].last_order_id {
+            return Err(CodecError::NonCanonicalIdentity);
+        }
+        total = total
+            .checked_add(page.order_count as u16)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        digests[i] = page.page_digest;
+        i += 1;
+    }
+    if total != head.set_order_count {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let order_set = canonical_order_set_id(
+        head.market,
+        head.epoch,
+        head.page_count,
+        head.set_order_count,
+        &digests[..pages.len()],
+    );
+    if order_set != head.order_set {
+        return Err(CodecError::MismatchedBinding);
+    }
+    Ok(order_set)
 }
 
 impl OrderRecord {
@@ -922,6 +1480,1447 @@ fn decode_order(r: &mut Reader<'_>) -> Result<OrderRecord> {
         flags: r.u8()?,
         generation: r.u64()?,
     })
+}
+
+/* ---------------------------------------------------------------------------
+ * Persisted protocol state.
+ *
+ * The accounts below exist so the kernel/protocol state an adapter needs can be
+ * reconstructed from authenticated bytes instead of from a scan over positions.
+ * Each one owns exactly one fact family (ARCHITECTURE.md section 3): supply
+ * decomposition, immutable terms, the frozen tick domain, the epoch book
+ * domain, one candidate, the settlement pot, one receipt, and the resolution.
+ * They are an offline codec prototype, not a frozen deployment ABI.
+ * ------------------------------------------------------------------------- */
+
+const TERMS_BODY_BYTES: usize = account_len::TERMS - 2 - HASH_BYTES - 1 - 1;
+const PRICE_GRID_BODY_BYTES: usize = account_len::PRICE_GRID - 2 - HASH_BYTES - 1 - 1;
+const CANDIDATE_BODY_BYTES: usize = (2 * HASH_BYTES) + 1 + 1 + (MAX_OUTCOMES * 8) + 8 + 8 + 8;
+
+/// Epoch phase: the book accepts placements and cancellations.
+pub const EPOCH_PHASE_OPEN: u8 = 0;
+/// Epoch phase: the page set is frozen; no placement or cancellation remains.
+pub const EPOCH_PHASE_FROZEN: u8 = 1;
+/// Epoch phase: one candidate has been selected and its slices frozen.
+pub const EPOCH_PHASE_CLEARED: u8 = 2;
+/// Epoch phase: every slice has settled and the pot is empty.
+pub const EPOCH_PHASE_SETTLED: u8 = 3;
+/// Epoch phase: the window closed with no valid candidate; reservations refund.
+pub const EPOCH_PHASE_LAPSED: u8 = 4;
+
+/// Candidate status: submitted, not yet recomputed.
+pub const CANDIDATE_STATUS_SUBMITTED: u8 = 0;
+/// Candidate status: every claimed aggregate was recomputed and matched.
+pub const CANDIDATE_STATUS_VERIFIED: u8 = 1;
+/// Candidate status: the best valid submitted candidate of its window.
+pub const CANDIDATE_STATUS_SELECTED: u8 = 2;
+/// Candidate status: refused by the relation.
+pub const CANDIDATE_STATUS_REFUSED: u8 = 3;
+/// Candidate status: superseded by a better valid submitted candidate.
+pub const CANDIDATE_STATUS_SUPERSEDED: u8 = 4;
+
+/// Pot phase: the pot is being funded from collected buyer consideration.
+pub const POT_PHASE_FUNDING: u8 = 0;
+/// Pot phase: the pot is open and settlement draws on it.
+pub const POT_PHASE_OPEN: u8 = 1;
+/// Pot phase: the pot is closed and every balance is zero.
+pub const POT_PHASE_CLOSED: u8 = 2;
+
+/// Receipt leg kind: a direct pair between two distinct real owners.
+pub const RECEIPT_LEG_DIRECT: u8 = 0;
+/// Receipt leg kind: a buy leg served from the virtual split.
+pub const RECEIPT_LEG_SPLIT: u8 = 1;
+/// Receipt leg kind: a sell leg absorbed by the virtual merge.
+pub const RECEIPT_LEG_MERGE: u8 = 2;
+
+/// Receipt flag: the buy leg's cumulative fill ceiling has been charged.
+pub const RECEIPT_FLAG_BUY_CONSUMED: u8 = 1;
+/// Receipt flag: the sell leg's cumulative fill ceiling has been charged.
+pub const RECEIPT_FLAG_SELL_CONSUMED: u8 = 2;
+/// Receipt flag: the named slice is exhausted.
+pub const RECEIPT_FLAG_SLICE_EXHAUSTED: u8 = 4;
+
+/// Market-wide supply, decomposed into its two accounted terms.
+///
+/// The reference adapter's closure equality is
+/// `position internal + accounted external == aggregate supply`.  Summing
+/// positions is not an onchain option, so the aggregate is persisted here as
+/// the two terms whose sum it is: claims still credited internally, and claims
+/// materialized outside the internal ledger and accounted for by the adapter.
+/// This account is not authority over any single position's balance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SupplyLedgerAccount {
+    /// Market identity this ledger is bound to.
+    pub market: MarketId,
+    /// Realm namespace identity.
+    pub realm: RealmHash,
+    /// Generation, separating a closed/reopened accounting era from its replays.
+    pub generation: u64,
+    /// Active outcome count, in `2..=MAX_OUTCOMES`.
+    pub outcome_count: u8,
+    /// Claims credited inside the internal ledger, per outcome.
+    pub internal_supply: [u64; MAX_OUTCOMES],
+    /// Claims materialized externally and accounted, per outcome.
+    pub external_supply: [u64; MAX_OUTCOMES],
+    /// Stored PDA bump.
+    pub stored_bump: u8,
+    /// Reserved flags; currently zero.
+    pub flags: u8,
+}
+
+impl SupplyLedgerAccount {
+    /// Total supply of one outcome, refusing a representation overflow.
+    pub fn aggregate_supply(&self, outcome: u8) -> Result<u64> {
+        let index = outcome as usize;
+        if index >= self.outcome_count as usize {
+            return Err(CodecError::InvalidCount);
+        }
+        self.internal_supply[index]
+            .checked_add(self.external_supply[index])
+            .ok_or(CodecError::ArithmeticOverflow)
+    }
+    /// Validate identities, bounds, padding, and representability of every sum.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.market)?;
+        check_hash(self.realm)?;
+        check_count(self.outcome_count)?;
+        if self.flags != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        let active = self.outcome_count as usize;
+        check_padded_amounts(&self.internal_supply, active)?;
+        check_padded_amounts(&self.external_supply, active)?;
+        let mut i = 0;
+        while i < active {
+            self.aggregate_supply(i as u8)?;
+            i += 1;
+        }
+        Ok(())
+    }
+    /// Check that this ledger belongs to the supplied market bytes.
+    pub fn binds_market(&self, market: &MarketAccount) -> Result<()> {
+        self.validate()?;
+        market.validate()?;
+        if self.market != market.market
+            || self.realm != market.realm
+            || self.outcome_count != market.outcome_count
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(())
+    }
+    /// Check one position's balances against this ledger's internal term.
+    ///
+    /// This is a necessary condition only: a single position can never exceed
+    /// the market-wide internal aggregate.  It is not the multi-position
+    /// closure equality, which no single account can decide.
+    pub fn check_position_bound(&self, position: &PositionAccount) -> Result<()> {
+        self.validate()?;
+        position.validate()?;
+        if self.market != position.market {
+            return Err(CodecError::MismatchedBinding);
+        }
+        let mut i = 0;
+        while i < self.outcome_count as usize {
+            if position.internal[i] > self.internal_supply[i] {
+                return Err(CodecError::AggregateClosureMismatch);
+            }
+            i += 1;
+        }
+        check_padded_amounts(&position.internal, self.outcome_count as usize)?;
+        Ok(())
+    }
+    /// Encode exactly [`account_len::SUPPLY_LEDGER`] bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        if out.len() < account_len::SUPPLY_LEDGER {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut w = Writer::new(out);
+        put_header(&mut w, SUPPLY_LEDGER_TAG, account_version::SUPPLY_LEDGER)?;
+        w.hash(self.market)?;
+        w.hash(self.realm)?;
+        w.u64(self.generation)?;
+        w.u8(self.outcome_count)?;
+        w.amounts(&self.internal_supply)?;
+        w.amounts(&self.external_supply)?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        Ok(w.at)
+    }
+    /// Parse exactly [`account_len::SUPPLY_LEDGER`] bytes.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(
+            input,
+            SUPPLY_LEDGER_TAG,
+            account_version::SUPPLY_LEDGER,
+            account_len::SUPPLY_LEDGER,
+        )?;
+        let v = Self {
+            market: r.hash()?,
+            realm: r.hash()?,
+            generation: r.u64()?,
+            outcome_count: r.u8()?,
+            internal_supply: r.amounts()?,
+            external_supply: r.amounts()?,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        r.done()?;
+        v.validate()?;
+        Ok(v)
+    }
+}
+
+/// One payout vector: exact integer weights over a common denominator.
+///
+/// Mirrors `clutch_kernel::PayoutVector`; the kernel owns the redemption
+/// semantics and this crate owns only the bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PayoutVectorBytes {
+    /// Common denominator; zero only in an inactive padding slot.
+    pub denominator: u64,
+    /// Weights, which must sum to the denominator over the active outcomes.
+    pub weights: [u64; MAX_OUTCOMES],
+}
+
+impl PayoutVectorBytes {
+    /// The all-zero padding vector.
+    pub const ZERO: Self = Self {
+        denominator: 0,
+        weights: [0; MAX_OUTCOMES],
+    };
+    /// Validate one active vector against the set's common denominator.
+    pub fn validate_active(&self, outcome_count: u8, denominator: u64) -> Result<()> {
+        if self.denominator == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        if self.denominator != denominator {
+            return Err(CodecError::MismatchedBinding);
+        }
+        let active = outcome_count as usize;
+        check_padded_amounts(&self.weights, active)?;
+        let mut sum: u64 = 0;
+        let mut i = 0;
+        while i < active {
+            if self.weights[i] > denominator {
+                return Err(CodecError::InvalidCount);
+            }
+            sum = sum
+                .checked_add(self.weights[i])
+                .ok_or(CodecError::ArithmeticOverflow)?;
+            i += 1;
+        }
+        if sum != denominator {
+            return Err(CodecError::InvalidCount);
+        }
+        Ok(())
+    }
+}
+
+/// Immutable market terms: the payout set, the window policy, and the digest.
+///
+/// [`MarketAccount::terms`] stores [`TermsAccount::terms`], and that value is
+/// the domain-separated digest of every other field below.  A market therefore
+/// cannot be pointed at a different payout set, feed, grid, expected range,
+/// coverage/repair policy, maturity horizon, or failure policy without changing
+/// the digest the market already committed to.  That binding is what closes the
+/// "payouts are not cryptographically bound to terms" gap at the byte level.
+///
+/// The account-local `stored_bump` and `flags` are outside the digest: they are
+/// address-derivation artifacts, and a PDA derived from the digest cannot also
+/// be an input to it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TermsAccount {
+    /// The terms digest; equals the canonical digest of every field below.
+    pub terms: Hash32,
+    /// Realm namespace these terms were authored under.
+    pub realm: RealmHash,
+    /// Immutable collateral/profile identity.
+    pub profile: ProfileHash,
+    /// Feed identity the window is evaluated against.
+    pub feed: FeedId,
+    /// Identity of the frozen price grid, binding the order limit tick domain.
+    pub price_grid: Hash32,
+    /// Active outcome count, in `2..=MAX_OUTCOMES`.
+    pub outcome_count: u8,
+    /// Active payout vectors, in `1..=MAX_PAYOUTS`.
+    pub payout_count: u8,
+    /// The payout-vector set; inactive slots are all zero.
+    pub payouts: [PayoutVectorBytes; MAX_PAYOUTS],
+    /// Observation grid family identity.
+    pub grid_family_id: u32,
+    /// Observation grid version.
+    pub grid_version: u16,
+    /// Observation bucket duration in seconds, in `1..=MAX_BUCKET_SECONDS`.
+    pub bucket_seconds: u64,
+    /// First bucket of the exact expected range.
+    pub expected_start_bucket: u64,
+    /// Exclusive end bucket of the exact expected range.
+    pub expected_end_bucket_exclusive: u64,
+    /// Buckets that must be offered before resolution may be attempted.
+    pub maturity_horizon_buckets: u64,
+    /// Registered coverage-policy identity; zero is refused.
+    pub coverage_policy_id: u32,
+    /// Registered repair-policy identity; zero is refused.
+    pub repair_policy_id: u32,
+    /// Registered failure-policy identity; zero is refused.
+    pub failure_policy_id: u32,
+    /// Stored PDA bump; outside the digest.
+    pub stored_bump: u8,
+    /// Reserved flags; currently zero, and outside the digest.
+    pub flags: u8,
+}
+
+impl TermsAccount {
+    fn body(&self, out: &mut [u8; TERMS_BODY_BYTES]) -> Result<()> {
+        let mut w = Writer::new(out);
+        w.hash(self.realm)?;
+        w.hash(self.profile)?;
+        w.hash(self.feed)?;
+        w.hash(self.price_grid)?;
+        w.u8(self.outcome_count)?;
+        w.u8(self.payout_count)?;
+        let mut i = 0;
+        while i < MAX_PAYOUTS {
+            w.u64(self.payouts[i].denominator)?;
+            w.amounts(&self.payouts[i].weights)?;
+            i += 1;
+        }
+        w.u32(self.grid_family_id)?;
+        w.u16(self.grid_version)?;
+        w.u64(self.bucket_seconds)?;
+        w.u64(self.expected_start_bucket)?;
+        w.u64(self.expected_end_bucket_exclusive)?;
+        w.u64(self.maturity_horizon_buckets)?;
+        w.u32(self.coverage_policy_id)?;
+        w.u32(self.repair_policy_id)?;
+        w.u32(self.failure_policy_id)?;
+        if w.at != TERMS_BODY_BYTES {
+            return Err(CodecError::OutputTooSmall);
+        }
+        Ok(())
+    }
+    /// Recompute the terms digest from the current field values.
+    pub fn recomputed_terms_digest(&self) -> Result<Hash32> {
+        let mut body = [0; TERMS_BODY_BYTES];
+        self.body(&mut body)?;
+        Ok(canonical_terms_digest(&body))
+    }
+    /// Number of buckets in the exact expected range.
+    pub fn expected_span(&self) -> Result<u64> {
+        self.expected_end_bucket_exclusive
+            .checked_sub(self.expected_start_bucket)
+            .ok_or(CodecError::InvalidCount)
+    }
+    /// Validate the payout set, the window policy, and the self-certifying digest.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.realm)?;
+        check_hash(self.profile)?;
+        check_hash(self.feed)?;
+        check_hash(self.price_grid)?;
+        check_count(self.outcome_count)?;
+        if self.payout_count == 0 || self.payout_count as usize > MAX_PAYOUTS {
+            return Err(CodecError::InvalidCount);
+        }
+        if self.flags != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        let denominator = self.payouts[0].denominator;
+        let mut i = 0;
+        while i < MAX_PAYOUTS {
+            if i < self.payout_count as usize {
+                self.payouts[i].validate_active(self.outcome_count, denominator)?;
+            } else if self.payouts[i] != PayoutVectorBytes::ZERO {
+                return Err(CodecError::NonCanonicalPadding);
+            }
+            i += 1;
+        }
+        if self.grid_family_id == 0 || self.grid_version == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        if self.bucket_seconds == 0 || self.bucket_seconds > MAX_BUCKET_SECONDS {
+            return Err(CodecError::InvalidCount);
+        }
+        let span = self.expected_span()?;
+        if span == 0 || span > MAX_WINDOW_BUCKETS {
+            return Err(CodecError::InvalidCount);
+        }
+        // A maturity horizon shorter than the expected range would let a
+        // prefix resolve; it is refused rather than clamped.
+        if self.maturity_horizon_buckets < span
+            || self.maturity_horizon_buckets > MAX_WINDOW_BUCKETS
+        {
+            return Err(CodecError::InvalidCount);
+        }
+        if self.coverage_policy_id == 0 || self.repair_policy_id == 0 || self.failure_policy_id == 0
+        {
+            return Err(CodecError::ZeroValue);
+        }
+        if self.terms != self.recomputed_terms_digest()? {
+            return Err(CodecError::NonCanonicalIdentity);
+        }
+        Ok(())
+    }
+    /// Check that a market's committed terms digest is exactly these terms.
+    pub fn binds_market(&self, market: &MarketAccount) -> Result<()> {
+        self.validate()?;
+        market.validate()?;
+        if market.terms != self.terms
+            || market.realm != self.realm
+            || market.profile != self.profile
+            || market.feed != self.feed
+            || market.outcome_count != self.outcome_count
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(())
+    }
+    /// Encode exactly [`account_len::TERMS`] bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        if out.len() < account_len::TERMS {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut body = [0; TERMS_BODY_BYTES];
+        self.body(&mut body)?;
+        let mut w = Writer::new(out);
+        put_header(&mut w, TERMS_TAG, account_version::TERMS)?;
+        w.hash(self.terms)?;
+        w.bytes(&body)?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        Ok(w.at)
+    }
+    /// Parse exactly [`account_len::TERMS`] bytes.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(input, TERMS_TAG, account_version::TERMS, account_len::TERMS)?;
+        let terms = r.hash()?;
+        let realm = r.hash()?;
+        let profile = r.hash()?;
+        let feed = r.hash()?;
+        let price_grid = r.hash()?;
+        let outcome_count = r.u8()?;
+        let payout_count = r.u8()?;
+        let mut payouts = [PayoutVectorBytes::ZERO; MAX_PAYOUTS];
+        let mut i = 0;
+        while i < MAX_PAYOUTS {
+            payouts[i] = PayoutVectorBytes {
+                denominator: r.u64()?,
+                weights: r.amounts()?,
+            };
+            i += 1;
+        }
+        let v = Self {
+            terms,
+            realm,
+            profile,
+            feed,
+            price_grid,
+            outcome_count,
+            payout_count,
+            payouts,
+            grid_family_id: r.u32()?,
+            grid_version: r.u16()?,
+            bucket_seconds: r.u64()?,
+            expected_start_bucket: r.u64()?,
+            expected_end_bucket_exclusive: r.u64()?,
+            maturity_horizon_buckets: r.u64()?,
+            coverage_policy_id: r.u32()?,
+            repair_policy_id: r.u32()?,
+            failure_policy_id: r.u32()?,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        r.done()?;
+        v.validate()?;
+        Ok(v)
+    }
+}
+
+/// The frozen price grid: the only admitted mapping from an order limit to a tick.
+///
+/// [`OrderRecord::limit`] is an opaque `u64` on the venue scale.  The relation
+/// consumes a tick index, so the mapping must be frozen somewhere; it is frozen
+/// here, as an exact membership test in a strictly increasing tick vector.  A
+/// limit that is not exactly one of the ticks has no tick and is refused, which
+/// is why [`OrderPageAccount::decode_on_grid`] exists beside the plain decoder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PriceGridAccount {
+    /// Grid identity; equals the canonical digest of the body below.
+    pub grid: Hash32,
+    /// Realm namespace identity.
+    pub realm: RealmHash,
+    /// Exact integer price scale; a complete set values at exactly this much.
+    pub price_scale: u64,
+    /// Active ticks, in `2..=MAX_GRID_TICKS`.
+    pub tick_count: u8,
+    /// Strictly increasing ticks; inactive slots are zero.
+    pub ticks: [u64; MAX_GRID_TICKS],
+    /// Stored PDA bump; outside the digest.
+    pub stored_bump: u8,
+    /// Reserved flags; currently zero, and outside the digest.
+    pub flags: u8,
+}
+
+impl PriceGridAccount {
+    fn body(&self, out: &mut [u8; PRICE_GRID_BODY_BYTES]) -> Result<()> {
+        let mut w = Writer::new(out);
+        w.hash(self.realm)?;
+        w.u64(self.price_scale)?;
+        w.u8(self.tick_count)?;
+        let mut i = 0;
+        while i < MAX_GRID_TICKS {
+            w.u64(self.ticks[i])?;
+            i += 1;
+        }
+        if w.at != PRICE_GRID_BODY_BYTES {
+            return Err(CodecError::OutputTooSmall);
+        }
+        Ok(())
+    }
+    /// Recompute the grid identity from the current field values.
+    pub fn recomputed_grid_id(&self) -> Result<Hash32> {
+        let mut body = [0; PRICE_GRID_BODY_BYTES];
+        self.body(&mut body)?;
+        Ok(canonical_price_grid_id(&body))
+    }
+    /// The tick index of an exact grid member, or [`CodecError::InvalidTick`].
+    pub fn tick_of(&self, limit: u64) -> Result<u8> {
+        let mut i = 0;
+        while i < self.tick_count as usize {
+            if self.ticks[i] == limit {
+                return Ok(i as u8);
+            }
+            i += 1;
+        }
+        Err(CodecError::InvalidTick)
+    }
+    /// The exact limit value of a tick index.
+    pub fn tick_value(&self, tick: u8) -> Result<u64> {
+        if tick as usize >= self.tick_count as usize {
+            return Err(CodecError::InvalidTick);
+        }
+        Ok(self.ticks[tick as usize])
+    }
+    /// Validate scale, ordering, bounds, padding, and the self-certifying identity.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.realm)?;
+        if self.flags != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        if self.price_scale == 0 || self.price_scale > MAX_PRICE_SCALE {
+            return Err(CodecError::InvalidPriceGrid);
+        }
+        if self.tick_count < 2 || self.tick_count as usize > MAX_GRID_TICKS {
+            return Err(CodecError::InvalidPriceGrid);
+        }
+        let mut i = 0;
+        while i < MAX_GRID_TICKS {
+            if i < self.tick_count as usize {
+                if self.ticks[i] > self.price_scale {
+                    return Err(CodecError::InvalidPriceGrid);
+                }
+                if i > 0 && self.ticks[i] <= self.ticks[i - 1] {
+                    return Err(CodecError::InvalidPriceGrid);
+                }
+            } else if self.ticks[i] != 0 {
+                return Err(CodecError::NonCanonicalPadding);
+            }
+            i += 1;
+        }
+        if self.grid != self.recomputed_grid_id()? {
+            return Err(CodecError::NonCanonicalIdentity);
+        }
+        Ok(())
+    }
+    /// Check that immutable terms name exactly this grid.
+    pub fn binds_terms(&self, terms: &TermsAccount) -> Result<()> {
+        self.validate()?;
+        terms.validate()?;
+        if terms.price_grid != self.grid || terms.realm != self.realm {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(())
+    }
+    /// Encode exactly [`account_len::PRICE_GRID`] bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        if out.len() < account_len::PRICE_GRID {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut body = [0; PRICE_GRID_BODY_BYTES];
+        self.body(&mut body)?;
+        let mut w = Writer::new(out);
+        put_header(&mut w, PRICE_GRID_TAG, account_version::PRICE_GRID)?;
+        w.hash(self.grid)?;
+        w.bytes(&body)?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        Ok(w.at)
+    }
+    /// Parse exactly [`account_len::PRICE_GRID`] bytes.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(
+            input,
+            PRICE_GRID_TAG,
+            account_version::PRICE_GRID,
+            account_len::PRICE_GRID,
+        )?;
+        let grid = r.hash()?;
+        let realm = r.hash()?;
+        let price_scale = r.u64()?;
+        let tick_count = r.u8()?;
+        let mut ticks = [0; MAX_GRID_TICKS];
+        let mut i = 0;
+        while i < MAX_GRID_TICKS {
+            ticks[i] = r.u64()?;
+            i += 1;
+        }
+        let v = Self {
+            grid,
+            realm,
+            price_scale,
+            tick_count,
+            ticks,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        r.done()?;
+        v.validate()?;
+        Ok(v)
+    }
+}
+
+/// The persisted projection of the relation's frozen book domain.
+///
+/// Field for field this is `clutch_batch::relation_v1::RelationDomainV1` with
+/// its host-model `u64` tags replaced by 32-byte identities: market, book,
+/// epoch, policy, and order set, plus the shape and seed the relation reads.
+/// The policy identity is stored as an opaque digest; this crate never names or
+/// selects a policy variant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EpochAccount {
+    /// Canonical epoch identity, derived from market and epoch index.
+    pub epoch: EpochId,
+    /// Market identity.
+    pub market: MarketId,
+    /// Book identity within the market.
+    pub book: Hash32,
+    /// Immutable terms digest this epoch clears under.
+    pub terms: Hash32,
+    /// Frozen price-grid identity this epoch's limits live on.
+    pub price_grid: Hash32,
+    /// Opaque frozen-policy identity.
+    pub policy: Hash32,
+    /// Set-wide order-set digest; zero until the page set is frozen.
+    pub order_set: Hash32,
+    /// Lowest order id in the frozen set; zero until frozen.
+    pub first_order_id: Hash32,
+    /// Highest order id in the frozen set; zero until frozen.
+    pub last_order_id: Hash32,
+    /// Epoch index within the market.
+    pub epoch_index: u64,
+    /// Relation version; must equal [`RELATION_VERSION`].
+    pub relation_version: u32,
+    /// Exact integer price scale.
+    pub price_scale: u64,
+    /// Seed of the frozen largest-remainder permutation.
+    pub remainder_seed: u64,
+    /// Distinct bound owners admitted in this book.
+    pub owner_count: u16,
+    /// Frozen page count; zero until frozen.
+    pub page_count: u16,
+    /// Frozen order count; zero until frozen.
+    pub order_count: u16,
+    /// Active outcome count, in `2..=MAX_OUTCOMES`.
+    pub outcome_count: u8,
+    /// Lifecycle phase; see the `EPOCH_PHASE_*` constants.
+    pub phase: u8,
+    /// Stored PDA bump.
+    pub stored_bump: u8,
+    /// Reserved flags; currently zero.
+    pub flags: u8,
+}
+
+impl EpochAccount {
+    /// Validate identities, relation shape, and freeze-state consistency.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.market)?;
+        check_hash(self.book)?;
+        check_hash(self.terms)?;
+        check_hash(self.price_grid)?;
+        check_hash(self.policy)?;
+        if self.epoch != canonical_epoch_id(self.market, self.epoch_index) {
+            return Err(CodecError::NonCanonicalIdentity);
+        }
+        if self.relation_version != RELATION_VERSION {
+            return Err(CodecError::WrongVersion);
+        }
+        check_count(self.outcome_count)?;
+        if self.phase > EPOCH_PHASE_LAPSED || self.flags != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        if self.owner_count == 0 {
+            return Err(CodecError::InvalidCount);
+        }
+        if self.price_scale == 0 || self.price_scale > MAX_PRICE_SCALE {
+            return Err(CodecError::InvalidPriceGrid);
+        }
+        if self.phase == EPOCH_PHASE_OPEN {
+            // Nothing is committed while placements can still arrive.
+            if self.order_set != Hash32::ZERO
+                || self.first_order_id != Hash32::ZERO
+                || self.last_order_id != Hash32::ZERO
+                || self.page_count != 0
+                || self.order_count != 0
+            {
+                return Err(CodecError::NonCanonicalPadding);
+            }
+            return Ok(());
+        }
+        check_hash(self.order_set)?;
+        check_hash(self.first_order_id)?;
+        check_hash(self.last_order_id)?;
+        if self.page_count == 0
+            || self.page_count as usize > MAX_ORDER_PAGES
+            || self.order_count == 0
+            || self.order_count as usize > MAX_EPOCH_ORDERS
+        {
+            return Err(CodecError::InvalidCount);
+        }
+        let low = (self.page_count as usize - 1) * MAX_ORDERS_PER_PAGE;
+        if self.order_count as usize <= low || self.order_count as usize > low + MAX_ORDERS_PER_PAGE
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        if self.order_count == 1 {
+            if self.first_order_id != self.last_order_id {
+                return Err(CodecError::MismatchedBinding);
+            }
+        } else if self.first_order_id.0 >= self.last_order_id.0 {
+            return Err(CodecError::NonCanonicalIdentity);
+        }
+        Ok(())
+    }
+    /// Check this epoch against a complete, in-order, frozen page set.
+    pub fn binds_page_set(&self, pages: &[OrderPageAccount]) -> Result<()> {
+        self.validate()?;
+        if self.phase == EPOCH_PHASE_OPEN {
+            return Err(CodecError::MismatchedBinding);
+        }
+        let order_set = verify_page_set(pages)?;
+        let head = &pages[0];
+        let tail = &pages[pages.len() - 1];
+        if order_set != self.order_set
+            || head.market != self.market
+            || head.epoch != self.epoch
+            || head.page_count != self.page_count
+            || head.set_order_count != self.order_count
+            || head.first_order_id != self.first_order_id
+            || tail.last_order_id != self.last_order_id
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(())
+    }
+    /// Check this epoch against the immutable terms and grid it names.
+    pub fn binds_terms(&self, terms: &TermsAccount, grid: &PriceGridAccount) -> Result<()> {
+        self.validate()?;
+        grid.binds_terms(terms)?;
+        if self.terms != terms.terms
+            || self.price_grid != terms.price_grid
+            || self.outcome_count != terms.outcome_count
+            || self.price_scale != grid.price_scale
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(())
+    }
+    /// Encode exactly [`account_len::EPOCH`] bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        if out.len() < account_len::EPOCH {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut w = Writer::new(out);
+        put_header(&mut w, EPOCH_TAG, account_version::EPOCH)?;
+        w.hash(self.epoch)?;
+        w.hash(self.market)?;
+        w.hash(self.book)?;
+        w.hash(self.terms)?;
+        w.hash(self.price_grid)?;
+        w.hash(self.policy)?;
+        w.hash(self.order_set)?;
+        w.hash(self.first_order_id)?;
+        w.hash(self.last_order_id)?;
+        w.u64(self.epoch_index)?;
+        w.u32(self.relation_version)?;
+        w.u64(self.price_scale)?;
+        w.u64(self.remainder_seed)?;
+        w.u16(self.owner_count)?;
+        w.u16(self.page_count)?;
+        w.u16(self.order_count)?;
+        w.u8(self.outcome_count)?;
+        w.u8(self.phase)?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        Ok(w.at)
+    }
+    /// Parse exactly [`account_len::EPOCH`] bytes.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(input, EPOCH_TAG, account_version::EPOCH, account_len::EPOCH)?;
+        let v = Self {
+            epoch: r.hash()?,
+            market: r.hash()?,
+            book: r.hash()?,
+            terms: r.hash()?,
+            price_grid: r.hash()?,
+            policy: r.hash()?,
+            order_set: r.hash()?,
+            first_order_id: r.hash()?,
+            last_order_id: r.hash()?,
+            epoch_index: r.u64()?,
+            relation_version: r.u32()?,
+            price_scale: r.u64()?,
+            remainder_seed: r.u64()?,
+            owner_count: r.u16()?,
+            page_count: r.u16()?,
+            order_count: r.u16()?,
+            outcome_count: r.u8()?,
+            phase: r.u8()?,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        r.done()?;
+        v.validate()?;
+        Ok(v)
+    }
+}
+
+/// One submitted candidate: its free coordinates, identity, score, and status.
+///
+/// Only the price vector, the virtual split/merge pair, and the honored
+/// all-or-none mask are free; fills are derived canonically from those plus the
+/// frozen book, so they are deliberately **not** persisted here.  The stored
+/// score is a claim; the relation recomputes it, and this codec only refuses
+/// shapes that no recomputation could accept.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateRecord {
+    /// Candidate identity; equals the canonical digest of its free coordinates.
+    pub candidate: Hash32,
+    /// Epoch identity.
+    pub epoch: EpochId,
+    /// Market identity.
+    pub market: MarketId,
+    /// Exact scaled prices on the simplex; inactive outcomes are zero.
+    pub prices: [u64; MAX_OUTCOMES],
+    /// `sigma`: complete sets created by the single global virtual split.
+    pub virtual_split: u64,
+    /// `mu`: complete sets destroyed by the single global virtual merge.
+    pub virtual_merge: u64,
+    /// Honored minimum-fill subset, one bit per order.
+    pub honored_aon_mask: u64,
+    /// Score component 1, net of the self-overlap term; may be negative.
+    pub weighted_direct_volume: i128,
+    /// Score component 3, in exact price units.
+    pub limit_surplus_price_units: u128,
+    /// Score component 5: `sigma + mu`.
+    pub churn: u64,
+    /// Slot the candidate was submitted in, as supplied by the adapter.
+    pub submitted_slot: u64,
+    /// Score component 4: distinct participating owners.
+    pub distinct_owners: u16,
+    /// Orders this candidate binds; must equal the frozen book length.
+    pub order_len: u8,
+    /// Active outcome count, in `2..=MAX_OUTCOMES`.
+    pub outcome_count: u8,
+    /// Status; see the `CANDIDATE_STATUS_*` constants.
+    pub status: u8,
+    /// Stored PDA bump.
+    pub stored_bump: u8,
+    /// Reserved flags; currently zero.
+    pub flags: u8,
+}
+
+impl CandidateRecord {
+    fn body(&self, out: &mut [u8; CANDIDATE_BODY_BYTES]) -> Result<()> {
+        let mut w = Writer::new(out);
+        w.hash(self.epoch)?;
+        w.hash(self.market)?;
+        w.u8(self.order_len)?;
+        w.u8(self.outcome_count)?;
+        w.amounts(&self.prices)?;
+        w.u64(self.virtual_split)?;
+        w.u64(self.virtual_merge)?;
+        w.u64(self.honored_aon_mask)?;
+        if w.at != CANDIDATE_BODY_BYTES {
+            return Err(CodecError::OutputTooSmall);
+        }
+        Ok(())
+    }
+    /// Recompute the candidate identity from its free coordinates and domain.
+    pub fn recomputed_candidate_digest(&self) -> Result<Hash32> {
+        let mut body = [0; CANDIDATE_BODY_BYTES];
+        self.body(&mut body)?;
+        Ok(canonical_candidate_digest(&body))
+    }
+    /// Validate coordinates, mask width, canonical churn, status, and identity.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.epoch)?;
+        check_hash(self.market)?;
+        check_count(self.outcome_count)?;
+        if self.order_len == 0 || self.order_len as usize > MAX_EPOCH_ORDERS {
+            return Err(CodecError::InvalidCount);
+        }
+        if self.status > CANDIDATE_STATUS_SUPERSEDED || self.flags != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        check_padded_amounts(&self.prices, self.outcome_count as usize)?;
+        // A mask bit above the book length is a claim about an order that does
+        // not exist; it is a leak, not padding to be ignored.
+        if self.order_len < 64 && self.honored_aon_mask >> self.order_len != 0 {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        // Canonical churn: a candidate never splits and merges at once.
+        if self.virtual_split != 0 && self.virtual_merge != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        let churn = self
+            .virtual_split
+            .checked_add(self.virtual_merge)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        if self.churn != churn {
+            return Err(CodecError::MismatchedBinding);
+        }
+        if self.distinct_owners as usize > MAX_EPOCH_ORDERS {
+            return Err(CodecError::InvalidCount);
+        }
+        if self.candidate != self.recomputed_candidate_digest()? {
+            return Err(CodecError::NonCanonicalIdentity);
+        }
+        Ok(())
+    }
+    /// Check this candidate against the frozen epoch domain it clears.
+    pub fn binds_epoch(&self, epoch: &EpochAccount) -> Result<()> {
+        self.validate()?;
+        epoch.validate()?;
+        if epoch.phase == EPOCH_PHASE_OPEN {
+            return Err(CodecError::MismatchedBinding);
+        }
+        if self.epoch != epoch.epoch
+            || self.market != epoch.market
+            || self.outcome_count != epoch.outcome_count
+            || self.order_len as u16 != epoch.order_count
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        // The price vector lives on the scaled simplex of the frozen domain.
+        let mut sum: u64 = 0;
+        let mut i = 0;
+        while i < self.outcome_count as usize {
+            if self.prices[i] > epoch.price_scale {
+                return Err(CodecError::InvalidPriceGrid);
+            }
+            sum = sum
+                .checked_add(self.prices[i])
+                .ok_or(CodecError::ArithmeticOverflow)?;
+            i += 1;
+        }
+        if sum != epoch.price_scale {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(())
+    }
+    /// Encode exactly [`account_len::CANDIDATE`] bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        if out.len() < account_len::CANDIDATE {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut w = Writer::new(out);
+        put_header(&mut w, CANDIDATE_TAG, account_version::CANDIDATE)?;
+        w.hash(self.candidate)?;
+        w.hash(self.epoch)?;
+        w.hash(self.market)?;
+        w.amounts(&self.prices)?;
+        w.u64(self.virtual_split)?;
+        w.u64(self.virtual_merge)?;
+        w.u64(self.honored_aon_mask)?;
+        w.i128(self.weighted_direct_volume)?;
+        w.u128(self.limit_surplus_price_units)?;
+        w.u64(self.churn)?;
+        w.u64(self.submitted_slot)?;
+        w.u16(self.distinct_owners)?;
+        w.u8(self.order_len)?;
+        w.u8(self.outcome_count)?;
+        w.u8(self.status)?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        Ok(w.at)
+    }
+    /// Parse exactly [`account_len::CANDIDATE`] bytes.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(
+            input,
+            CANDIDATE_TAG,
+            account_version::CANDIDATE,
+            account_len::CANDIDATE,
+        )?;
+        let v = Self {
+            candidate: r.hash()?,
+            epoch: r.hash()?,
+            market: r.hash()?,
+            prices: r.amounts()?,
+            virtual_split: r.u64()?,
+            virtual_merge: r.u64()?,
+            honored_aon_mask: r.u64()?,
+            weighted_direct_volume: r.i128()?,
+            limit_surplus_price_units: r.u128()?,
+            churn: r.u64()?,
+            submitted_slot: r.u64()?,
+            distinct_owners: r.u16()?,
+            order_len: r.u8()?,
+            outcome_count: r.u8()?,
+            status: r.u8()?,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        r.done()?;
+        v.validate()?;
+        Ok(v)
+    }
+}
+
+/// The settlement pot of one selected candidate.
+///
+/// A byte cannot be both an order reservation and a settlement pot
+/// (ARCHITECTURE.md section 3), so this account holds **only** pot-phase
+/// balances: the claims the virtual split produced, the cash collected from
+/// buyer consideration, and the named rounding remainder.  It carries no
+/// reservation field, and Hoard principal never appears in it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FinalPotAccount {
+    /// Epoch identity.
+    pub epoch: EpochId,
+    /// Market identity.
+    pub market: MarketId,
+    /// Selected candidate identity.
+    pub candidate: Hash32,
+    /// Claims held by the pot position, per outcome.
+    pub pot_internal: [u64; MAX_OUTCOMES],
+    /// Pot cash in exact price units.
+    pub pot_cash_price_units: u128,
+    /// Remainder atoms of the one named rounding boundary, in price units.
+    pub rounding_pot_price_units: u128,
+    /// Active outcome count, in `2..=MAX_OUTCOMES`.
+    pub outcome_count: u8,
+    /// Pot phase; see the `POT_PHASE_*` constants.
+    pub phase: u8,
+    /// Stored PDA bump.
+    pub stored_bump: u8,
+    /// Reserved flags; currently zero.
+    pub flags: u8,
+}
+
+impl FinalPotAccount {
+    /// Validate bounds, padding, and the terminal empty-pot condition.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.epoch)?;
+        check_hash(self.market)?;
+        check_hash(self.candidate)?;
+        check_count(self.outcome_count)?;
+        if self.phase > POT_PHASE_CLOSED || self.flags != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        check_padded_amounts(&self.pot_internal, self.outcome_count as usize)?;
+        if self.phase == POT_PHASE_CLOSED {
+            // Epoch-terminal condition: a closed pot is an empty pot.
+            let mut i = 0;
+            while i < self.outcome_count as usize {
+                if self.pot_internal[i] != 0 {
+                    return Err(CodecError::AggregateClosureMismatch);
+                }
+                i += 1;
+            }
+            if self.pot_cash_price_units != 0 || self.rounding_pot_price_units != 0 {
+                return Err(CodecError::AggregateClosureMismatch);
+            }
+        }
+        Ok(())
+    }
+    /// Check that this pot belongs to the supplied candidate.
+    pub fn binds_candidate(&self, candidate: &CandidateRecord) -> Result<()> {
+        self.validate()?;
+        candidate.validate()?;
+        if self.candidate != candidate.candidate
+            || self.epoch != candidate.epoch
+            || self.market != candidate.market
+            || self.outcome_count != candidate.outcome_count
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(())
+    }
+    /// Encode exactly [`account_len::FINAL_POT`] bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        if out.len() < account_len::FINAL_POT {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut w = Writer::new(out);
+        put_header(&mut w, FINAL_POT_TAG, account_version::FINAL_POT)?;
+        w.hash(self.epoch)?;
+        w.hash(self.market)?;
+        w.hash(self.candidate)?;
+        w.amounts(&self.pot_internal)?;
+        w.u128(self.pot_cash_price_units)?;
+        w.u128(self.rounding_pot_price_units)?;
+        w.u8(self.outcome_count)?;
+        w.u8(self.phase)?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        Ok(w.at)
+    }
+    /// Parse exactly [`account_len::FINAL_POT`] bytes.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(
+            input,
+            FINAL_POT_TAG,
+            account_version::FINAL_POT,
+            account_len::FINAL_POT,
+        )?;
+        let v = Self {
+            epoch: r.hash()?,
+            market: r.hash()?,
+            candidate: r.hash()?,
+            pot_internal: r.amounts()?,
+            pot_cash_price_units: r.u128()?,
+            rounding_pot_price_units: r.u128()?,
+            outcome_count: r.u8()?,
+            phase: r.u8()?,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        r.done()?;
+        v.validate()?;
+        Ok(v)
+    }
+}
+
+/// One settlement receipt against one frozen slice of the selected candidate.
+///
+/// The receipt is the single sequential authority for "how much of this slice
+/// has settled"; nothing reconstructs it by combining per-party or per-page
+/// views.  Consideration is bound to the frozen price by exact multiplication,
+/// so a receipt cannot quietly re-price a slice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementReceiptAccount {
+    /// Epoch identity.
+    pub epoch: EpochId,
+    /// Market identity.
+    pub market: MarketId,
+    /// Selected candidate identity.
+    pub candidate: Hash32,
+    /// Buy-side order id; zero exactly when the buy end is the virtual merge.
+    pub buy_order_id: Hash32,
+    /// Sell-side order id; zero exactly when the sell end is the virtual split.
+    pub sell_order_id: Hash32,
+    /// Exact consideration in price units: `quantity * price`.
+    pub consideration_price_units: u128,
+    /// Slice quantity in claim atoms.
+    pub quantity: u64,
+    /// Cumulative settled quantity, never above `quantity`.
+    pub settled_quantity: u64,
+    /// The outcome's scaled price, frozen at clear time.
+    pub price: u64,
+    /// Monotone settlement sequence for this candidate.
+    pub sequence: u64,
+    /// Index of the frozen slice this receipt settles.
+    pub slice_index: u16,
+    /// Bound outcome of both ends.
+    pub outcome: u8,
+    /// Leg kind; see the `RECEIPT_LEG_*` constants.
+    pub leg_kind: u8,
+    /// Consumption flags; see the `RECEIPT_FLAG_*` constants.
+    pub consumed_flags: u8,
+    /// Stored PDA bump.
+    pub stored_bump: u8,
+    /// Reserved flags; currently zero.
+    pub flags: u8,
+}
+
+impl SettlementReceiptAccount {
+    /// Validate leg shape, exact consideration, and consumption consistency.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.epoch)?;
+        check_hash(self.market)?;
+        check_hash(self.candidate)?;
+        if self.leg_kind > RECEIPT_LEG_MERGE
+            || self.flags != 0
+            || self.consumed_flags
+                & !(RECEIPT_FLAG_BUY_CONSUMED
+                    | RECEIPT_FLAG_SELL_CONSUMED
+                    | RECEIPT_FLAG_SLICE_EXHAUSTED)
+                != 0
+        {
+            return Err(CodecError::InvalidEnum);
+        }
+        match self.leg_kind {
+            RECEIPT_LEG_DIRECT => {
+                check_hash(self.buy_order_id)?;
+                check_hash(self.sell_order_id)?;
+                // One order can never be both ends of an executable transfer.
+                if self.buy_order_id == self.sell_order_id {
+                    return Err(CodecError::NonCanonicalIdentity);
+                }
+            }
+            RECEIPT_LEG_SPLIT => {
+                check_hash(self.buy_order_id)?;
+                if self.sell_order_id != Hash32::ZERO {
+                    return Err(CodecError::NonCanonicalPadding);
+                }
+            }
+            _ => {
+                check_hash(self.sell_order_id)?;
+                if self.buy_order_id != Hash32::ZERO {
+                    return Err(CodecError::NonCanonicalPadding);
+                }
+            }
+        }
+        if self.outcome as usize >= MAX_OUTCOMES {
+            return Err(CodecError::InvalidCount);
+        }
+        if self.quantity == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        if self.settled_quantity > self.quantity {
+            return Err(CodecError::InvalidCount);
+        }
+        if self.slice_index as usize >= MAX_EPOCH_ORDERS * 2 {
+            return Err(CodecError::InvalidCount);
+        }
+        // Two `u64` factors always fit a `u128` product, so exactness is the
+        // whole content of this check and no overflow case exists.
+        let exact = u128::from(self.quantity) * u128::from(self.price);
+        if self.consideration_price_units != exact {
+            return Err(CodecError::InvalidConsideration);
+        }
+        let exhausted = self.consumed_flags & RECEIPT_FLAG_SLICE_EXHAUSTED != 0;
+        if exhausted != (self.settled_quantity == self.quantity) {
+            return Err(CodecError::InvalidEnum);
+        }
+        Ok(())
+    }
+    /// Check that this receipt settles against the supplied candidate.
+    pub fn binds_candidate(&self, candidate: &CandidateRecord) -> Result<()> {
+        self.validate()?;
+        candidate.validate()?;
+        if self.candidate != candidate.candidate
+            || self.epoch != candidate.epoch
+            || self.market != candidate.market
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        if self.outcome >= candidate.outcome_count {
+            return Err(CodecError::InvalidCount);
+        }
+        if self.price != candidate.prices[self.outcome as usize] {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(())
+    }
+    /// Encode exactly [`account_len::SETTLEMENT_RECEIPT`] bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        if out.len() < account_len::SETTLEMENT_RECEIPT {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut w = Writer::new(out);
+        put_header(
+            &mut w,
+            SETTLEMENT_RECEIPT_TAG,
+            account_version::SETTLEMENT_RECEIPT,
+        )?;
+        w.hash(self.epoch)?;
+        w.hash(self.market)?;
+        w.hash(self.candidate)?;
+        w.hash(self.buy_order_id)?;
+        w.hash(self.sell_order_id)?;
+        w.u128(self.consideration_price_units)?;
+        w.u64(self.quantity)?;
+        w.u64(self.settled_quantity)?;
+        w.u64(self.price)?;
+        w.u64(self.sequence)?;
+        w.u16(self.slice_index)?;
+        w.u8(self.outcome)?;
+        w.u8(self.leg_kind)?;
+        w.u8(self.consumed_flags)?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        Ok(w.at)
+    }
+    /// Parse exactly [`account_len::SETTLEMENT_RECEIPT`] bytes.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(
+            input,
+            SETTLEMENT_RECEIPT_TAG,
+            account_version::SETTLEMENT_RECEIPT,
+            account_len::SETTLEMENT_RECEIPT,
+        )?;
+        let v = Self {
+            epoch: r.hash()?,
+            market: r.hash()?,
+            candidate: r.hash()?,
+            buy_order_id: r.hash()?,
+            sell_order_id: r.hash()?,
+            consideration_price_units: r.u128()?,
+            quantity: r.u64()?,
+            settled_quantity: r.u64()?,
+            price: r.u64()?,
+            sequence: r.u64()?,
+            slice_index: r.u16()?,
+            outcome: r.u8()?,
+            leg_kind: r.u8()?,
+            consumed_flags: r.u8()?,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        r.done()?;
+        v.validate()?;
+        Ok(v)
+    }
+}
+
+/// The immutable resolution fact of one market.
+///
+/// It names the payout vector by index into the immutable terms set, together
+/// with the sealed window evidence that selected it.  Persisting the index
+/// beside the terms digest is what lets a resolved `clutch_kernel::MarketState`
+/// be reconstructed; `MarketAccount::lifecycle` alone cannot do it.  This
+/// account is bytes only: it is not evidence that a window was in fact sealed,
+/// and an adapter must still authenticate the window result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolutionAccount {
+    /// Market identity.
+    pub market: MarketId,
+    /// Immutable terms digest whose payout set this index refers to.
+    pub terms: Hash32,
+    /// Feed identity the sealed window came from.
+    pub feed: FeedId,
+    /// Digest of the sealed window result.
+    pub window: Hash32,
+    /// Accepted feed cursor at seal.
+    pub feed_cursor: u64,
+    /// Exclusive end bucket of the sealed window.
+    pub sealed_end_bucket_exclusive: u64,
+    /// Repair generation of the sealed window.
+    pub repair_generation: u64,
+    /// Slot the resolution was recorded in, as supplied by the adapter.
+    pub resolved_slot: u64,
+    /// Selected payout index, or [`PAYOUT_INDEX_UNRESOLVED`].
+    pub payout_index: u8,
+    /// Stored PDA bump.
+    pub stored_bump: u8,
+    /// Reserved flags; currently zero.
+    pub flags: u8,
+}
+
+impl ResolutionAccount {
+    /// True when a payout vector has been selected.
+    pub const fn is_resolved(&self) -> bool {
+        self.payout_index != PAYOUT_INDEX_UNRESOLVED
+    }
+    /// Validate identities and the unresolved/resolved field discipline.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.market)?;
+        check_hash(self.terms)?;
+        check_hash(self.feed)?;
+        if self.flags != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        if self.is_resolved() {
+            if self.payout_index as usize >= MAX_PAYOUTS {
+                return Err(CodecError::InvalidCount);
+            }
+            check_hash(self.window)?;
+            if self.sealed_end_bucket_exclusive == 0 {
+                return Err(CodecError::ZeroValue);
+            }
+        } else if self.window != Hash32::ZERO
+            || self.feed_cursor != 0
+            || self.sealed_end_bucket_exclusive != 0
+            || self.repair_generation != 0
+            || self.resolved_slot != 0
+        {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        Ok(())
+    }
+    /// Check the resolution against the immutable terms it selects from.
+    pub fn binds_terms(&self, terms: &TermsAccount) -> Result<()> {
+        self.validate()?;
+        terms.validate()?;
+        if self.terms != terms.terms || self.feed != terms.feed {
+            return Err(CodecError::MismatchedBinding);
+        }
+        if self.is_resolved() {
+            if self.payout_index >= terms.payout_count {
+                return Err(CodecError::InvalidCount);
+            }
+            // Resolution may not precede the frozen expected range's end.
+            if self.sealed_end_bucket_exclusive < terms.expected_end_bucket_exclusive {
+                return Err(CodecError::MismatchedBinding);
+            }
+        }
+        Ok(())
+    }
+    /// Encode exactly [`account_len::RESOLUTION`] bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        if out.len() < account_len::RESOLUTION {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut w = Writer::new(out);
+        put_header(&mut w, RESOLUTION_TAG, account_version::RESOLUTION)?;
+        w.hash(self.market)?;
+        w.hash(self.terms)?;
+        w.hash(self.feed)?;
+        w.hash(self.window)?;
+        w.u64(self.feed_cursor)?;
+        w.u64(self.sealed_end_bucket_exclusive)?;
+        w.u64(self.repair_generation)?;
+        w.u64(self.resolved_slot)?;
+        w.u8(self.payout_index)?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        Ok(w.at)
+    }
+    /// Parse exactly [`account_len::RESOLUTION`] bytes.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(
+            input,
+            RESOLUTION_TAG,
+            account_version::RESOLUTION,
+            account_len::RESOLUTION,
+        )?;
+        let v = Self {
+            market: r.hash()?,
+            terms: r.hash()?,
+            feed: r.hash()?,
+            window: r.hash()?,
+            feed_cursor: r.u64()?,
+            sealed_end_bucket_exclusive: r.u64()?,
+            repair_generation: r.u64()?,
+            resolved_slot: r.u64()?,
+            payout_index: r.u8()?,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        r.done()?;
+        v.validate()?;
+        Ok(v)
+    }
 }
 
 /// Deterministic instruction intent, with no account metadata or signatures.
@@ -1035,7 +3034,7 @@ impl Intent {
                 check_hash(*profile)?;
                 check_hash(*terms)?;
                 check_hash(*feed)?;
-                put_header(&mut w, CREATE_TAG)?;
+                put_header(&mut w, CREATE_TAG, INTENT_VERSION)?;
                 w.hash(*realm)?;
                 w.hash(*profile)?;
                 w.u64(*market_nonce)?;
@@ -1065,6 +3064,7 @@ impl Intent {
                     } else {
                         MERGE_TAG
                     },
+                    INTENT_VERSION,
                 )?;
                 w.hash(*market)?;
                 w.hash(*owner)?;
@@ -1100,6 +3100,7 @@ impl Intent {
                     } else {
                         DEMATERIALIZE_TAG
                     },
+                    INTENT_VERSION,
                 )?;
                 w.hash(*market)?;
                 w.hash(*owner)?;
@@ -1114,7 +3115,7 @@ impl Intent {
             } => {
                 check_hash(*feed)?;
                 check_hash(*evidence)?;
-                put_header(&mut w, FEED_ADVANCE_TAG)?;
+                put_header(&mut w, FEED_ADVANCE_TAG, INTENT_VERSION)?;
                 w.hash(*feed)?;
                 w.u64(*cursor)?;
                 w.hash(*evidence)?
@@ -1127,7 +3128,7 @@ impl Intent {
                 check_hash(*market)?;
                 check_hash(*epoch)?;
                 order.validate()?;
-                put_header(&mut w, PLACE_TAG)?;
+                put_header(&mut w, PLACE_TAG, INTENT_VERSION)?;
                 w.hash(*market)?;
                 w.hash(*epoch)?;
                 encode_order(&mut w, *order)?
@@ -1142,7 +3143,7 @@ impl Intent {
                 check_hash(*epoch)?;
                 check_hash(*owner)?;
                 check_hash(*order_id)?;
-                put_header(&mut w, CANCEL_TAG)?;
+                put_header(&mut w, CANCEL_TAG, INTENT_VERSION)?;
                 w.hash(*market)?;
                 w.hash(*epoch)?;
                 w.hash(*owner)?;
@@ -1155,7 +3156,7 @@ impl Intent {
             } => {
                 check_hash(*market)?;
                 check_hash(*epoch)?;
-                put_header(&mut w, SETTLE_TAG)?;
+                put_header(&mut w, SETTLE_TAG, INTENT_VERSION)?;
                 w.hash(*market)?;
                 w.hash(*epoch)?;
                 w.u16(*page_index)?
@@ -1169,7 +3170,7 @@ impl Intent {
             return Err(CodecError::Truncated);
         };
         let tag = input[0];
-        let mut r = Reader::new(input, tag, input.len())?;
+        let mut r = Reader::new(input, tag, INTENT_VERSION, input.len())?;
         match tag {
             CREATE_TAG => {
                 let v = Self::CreateMarket {
@@ -1474,22 +3475,344 @@ mod tests {
             reserved: Hash32::ZERO,
         }
     }
+    fn grid() -> PriceGridAccount {
+        let mut ticks = [0; MAX_GRID_TICKS];
+        ticks[1] = 2_500;
+        ticks[2] = 5_000;
+        ticks[3] = 7_500;
+        ticks[4] = 10_000;
+        let mut g = PriceGridAccount {
+            grid: Hash32::ZERO,
+            realm: h(2),
+            price_scale: 10_000,
+            tick_count: 5,
+            ticks,
+            stored_bump: 3,
+            flags: 0,
+        };
+        g.grid = g.recomputed_grid_id().unwrap();
+        g
+    }
+    fn terms() -> TermsAccount {
+        let mut payouts = [PayoutVectorBytes::ZERO; MAX_PAYOUTS];
+        let mut first = [0; MAX_OUTCOMES];
+        first[0] = 4;
+        let mut second = [0; MAX_OUTCOMES];
+        second[1] = 4;
+        let mut third = [0; MAX_OUTCOMES];
+        third[0] = 1;
+        third[1] = 3;
+        payouts[0] = PayoutVectorBytes {
+            denominator: 4,
+            weights: first,
+        };
+        payouts[1] = PayoutVectorBytes {
+            denominator: 4,
+            weights: second,
+        };
+        payouts[2] = PayoutVectorBytes {
+            denominator: 4,
+            weights: third,
+        };
+        let mut t = TermsAccount {
+            terms: Hash32::ZERO,
+            realm: h(2),
+            profile: h(3),
+            feed: h(5),
+            price_grid: grid().grid,
+            outcome_count: MAX_OUTCOMES as u8,
+            payout_count: 3,
+            payouts,
+            grid_family_id: 7,
+            grid_version: 1,
+            bucket_seconds: 60,
+            expected_start_bucket: 100,
+            expected_end_bucket_exclusive: 130,
+            maturity_horizon_buckets: 30,
+            coverage_policy_id: 11,
+            repair_policy_id: 12,
+            failure_policy_id: 13,
+            stored_bump: 9,
+            flags: 0,
+        };
+        t.terms = t.recomputed_terms_digest().unwrap();
+        t
+    }
+    fn bound_market() -> MarketAccount {
+        let mut m = market();
+        m.terms = terms().terms;
+        m
+    }
+    fn epoch_account() -> EpochAccount {
+        EpochAccount {
+            epoch: canonical_epoch_id(h(1), 4),
+            market: h(1),
+            book: h(21),
+            terms: terms().terms,
+            price_grid: grid().grid,
+            policy: h(22),
+            order_set: Hash32::ZERO,
+            first_order_id: Hash32::ZERO,
+            last_order_id: Hash32::ZERO,
+            epoch_index: 4,
+            relation_version: RELATION_VERSION,
+            price_scale: 10_000,
+            remainder_seed: 99,
+            owner_count: 3,
+            page_count: 0,
+            order_count: 0,
+            outcome_count: MAX_OUTCOMES as u8,
+            phase: EPOCH_PHASE_OPEN,
+            stored_bump: 6,
+            flags: 0,
+        }
+    }
+    fn order(id: u8) -> OrderRecord {
+        OrderRecord {
+            owner: h(20),
+            order_id: h(id),
+            outcome: 0,
+            side: 0,
+            quantity: 10,
+            limit: 2_500,
+            minimum_fill: 0,
+            flags: 0,
+            generation: 1,
+        }
+    }
+    /// Build one open page over the given order ids.
+    fn build_page(index: u16, count: u16, ids: &[u8], prev: Hash32) -> OrderPageAccount {
+        let mut orders = [OrderRecord::ZERO; MAX_ORDERS_PER_PAGE];
+        let mut i = 0;
+        while i < ids.len() {
+            orders[i] = order(ids[i]);
+            i += 1;
+        }
+        let (first, last) = if ids.is_empty() {
+            (Hash32::ZERO, Hash32::ZERO)
+        } else {
+            (h(ids[0]), h(ids[ids.len() - 1]))
+        };
+        let mut page = OrderPageAccount {
+            market: h(1),
+            epoch: canonical_epoch_id(h(1), 4),
+            order_set: Hash32::ZERO,
+            page_digest: Hash32::ZERO,
+            first_order_id: first,
+            last_order_id: last,
+            prev_page_last_order_id: prev,
+            page_index: index,
+            page_count: count,
+            set_order_count: 0,
+            order_count: ids.len() as u8,
+            frozen: 0,
+            stored_bump: 5,
+            orders,
+        };
+        page.page_digest = page.recomputed_page_digest().unwrap();
+        page
+    }
+    /// Freeze a page vector in place, computing the set-wide commitment.
+    fn freeze_set(pages: &mut [OrderPageAccount]) {
+        let mut total: u16 = 0;
+        let mut i = 0;
+        while i < pages.len() {
+            total += pages[i].order_count as u16;
+            i += 1;
+        }
+        let mut digests = [Hash32::ZERO; MAX_ORDER_PAGES];
+        i = 0;
+        while i < pages.len() {
+            pages[i].frozen = 1;
+            pages[i].set_order_count = total;
+            pages[i].page_digest = pages[i].recomputed_page_digest().unwrap();
+            digests[i] = pages[i].page_digest;
+            i += 1;
+        }
+        let order_set = canonical_order_set_id(
+            pages[0].market,
+            pages[0].epoch,
+            pages[0].page_count,
+            total,
+            &digests[..pages.len()],
+        );
+        i = 0;
+        while i < pages.len() {
+            pages[i].order_set = order_set;
+            i += 1;
+        }
+    }
+    /// A frozen, dense two-page set: page 0 full, page 1 partially filled.
+    fn frozen_pages() -> [OrderPageAccount; 2] {
+        let ids: [u8; MAX_ORDERS_PER_PAGE] =
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let page0 = build_page(0, 2, &ids, Hash32::ZERO);
+        let page1 = build_page(1, 2, &[17, 18, 19], page0.last_order_id);
+        let mut pages = [page0, page1];
+        freeze_set(&mut pages);
+        pages
+    }
+    fn frozen_epoch() -> EpochAccount {
+        let pages = frozen_pages();
+        let mut e = epoch_account();
+        e.phase = EPOCH_PHASE_FROZEN;
+        e.order_set = pages[0].order_set;
+        e.first_order_id = pages[0].first_order_id;
+        e.last_order_id = pages[1].last_order_id;
+        e.page_count = 2;
+        e.order_count = pages[0].set_order_count;
+        e
+    }
+    fn candidate() -> CandidateRecord {
+        let e = frozen_epoch();
+        let mut prices = [0; MAX_OUTCOMES];
+        prices[0] = 10_000;
+        let mut c = CandidateRecord {
+            candidate: Hash32::ZERO,
+            epoch: e.epoch,
+            market: e.market,
+            prices,
+            virtual_split: 5,
+            virtual_merge: 0,
+            honored_aon_mask: 0,
+            weighted_direct_volume: -3,
+            limit_surplus_price_units: 7,
+            churn: 5,
+            submitted_slot: 42,
+            distinct_owners: 3,
+            order_len: e.order_count as u8,
+            outcome_count: MAX_OUTCOMES as u8,
+            status: CANDIDATE_STATUS_VERIFIED,
+            stored_bump: 4,
+            flags: 0,
+        };
+        c.candidate = c.recomputed_candidate_digest().unwrap();
+        c
+    }
+    fn receipt() -> SettlementReceiptAccount {
+        let c = candidate();
+        SettlementReceiptAccount {
+            epoch: c.epoch,
+            market: c.market,
+            candidate: c.candidate,
+            buy_order_id: h(1),
+            sell_order_id: h(2),
+            consideration_price_units: 3 * 10_000,
+            quantity: 3,
+            settled_quantity: 0,
+            price: 10_000,
+            sequence: 1,
+            slice_index: 0,
+            outcome: 0,
+            leg_kind: RECEIPT_LEG_DIRECT,
+            consumed_flags: 0,
+            stored_bump: 2,
+            flags: 0,
+        }
+    }
+    fn supply_ledger() -> SupplyLedgerAccount {
+        let mut internal = [0; MAX_OUTCOMES];
+        let mut external = [0; MAX_OUTCOMES];
+        internal[0] = 40;
+        internal[1] = 10;
+        external[0] = 60;
+        SupplyLedgerAccount {
+            market: h(1),
+            realm: h(2),
+            generation: 3,
+            outcome_count: MAX_OUTCOMES as u8,
+            internal_supply: internal,
+            external_supply: external,
+            stored_bump: 8,
+            flags: 0,
+        }
+    }
+    fn final_pot() -> FinalPotAccount {
+        let c = candidate();
+        let mut pot_internal = [0; MAX_OUTCOMES];
+        pot_internal[0] = 5;
+        FinalPotAccount {
+            epoch: c.epoch,
+            market: c.market,
+            candidate: c.candidate,
+            pot_internal,
+            pot_cash_price_units: 50_000,
+            rounding_pot_price_units: 3,
+            outcome_count: MAX_OUTCOMES as u8,
+            phase: POT_PHASE_OPEN,
+            stored_bump: 1,
+            flags: 0,
+        }
+    }
+    fn resolution() -> ResolutionAccount {
+        ResolutionAccount {
+            market: h(1),
+            terms: terms().terms,
+            feed: h(5),
+            window: h(30),
+            feed_cursor: 130,
+            sealed_end_bucket_exclusive: 130,
+            repair_generation: 2,
+            resolved_slot: 900,
+            payout_index: 1,
+            stored_bump: 3,
+            flags: 0,
+        }
+    }
+    /// Every decoder must refuse a short, long, mistagged, or misversioned account.
+    fn hostile_header<T: core::fmt::Debug + PartialEq>(
+        bytes: &[u8],
+        decode: fn(&[u8]) -> Result<T>,
+    ) {
+        let n = bytes.len();
+        let mut buf = [0u8; 2048];
+        buf[..n].copy_from_slice(bytes);
+        assert_eq!(decode(&buf[..n - 1]), Err(CodecError::Truncated));
+        assert_eq!(decode(&buf[..n + 1]), Err(CodecError::TrailingBytes));
+        let mut wrong_tag = buf;
+        wrong_tag[0] ^= 0x80;
+        assert_eq!(decode(&wrong_tag[..n]), Err(CodecError::WrongTag));
+        let mut wrong_version = buf;
+        wrong_version[1] = 0;
+        assert_eq!(decode(&wrong_version[..n]), Err(CodecError::WrongVersion));
+    }
+
     #[test]
     fn account_golden_lengths() {
         assert_eq!(account_len::REALM, 70);
-        assert_eq!(account_len::PROFILE, 68);
+        assert_eq!(account_len::PROFILE, 100);
         assert_eq!(account_len::MARKET, 726);
         assert_eq!(account_len::HOARD, 108);
         assert_eq!(account_len::POSITION, 220);
         assert_eq!(account_len::FEED, 124);
-        assert_eq!(account_len::ORDER_PAGE, 1656);
+        assert_eq!(account_len::ORDER_PAGE, 1819);
+        assert_eq!(account_len::SUPPLY_LEDGER, 333);
+        assert_eq!(account_len::TERMS, 1304);
+        assert_eq!(account_len::PRICE_GRID, 589);
+        assert_eq!(account_len::EPOCH, 328);
+        assert_eq!(account_len::CANDIDATE, 305);
+        assert_eq!(account_len::FINAL_POT, 262);
+        assert_eq!(account_len::SETTLEMENT_RECEIPT, 217);
+        assert_eq!(account_len::RESOLUTION, 165);
+        assert_eq!(ORDER_RECORD_BYTES, 99);
+    }
+    #[test]
+    fn mirrored_bounds_match_their_owning_crates() {
+        // These are restatements, not imports; a divergence is a real defect.
+        assert_eq!(MAX_OUTCOMES, 16);
+        assert_eq!(MAX_PAYOUTS, 8);
+        assert_eq!(MAX_GRID_TICKS, 64);
+        assert_eq!(MAX_EPOCH_ORDERS, 64);
+        assert_eq!(MAX_BUCKET_SECONDS, 86_400);
+        assert_eq!(MAX_WINDOW_BUCKETS, 1_000_000);
+        assert_eq!(RELATION_VERSION, 1);
     }
     #[test]
     fn market_round_trip_and_golden_prefix() {
         let v = market();
         let mut b = [0; account_len::MARKET];
         assert_eq!(v.encode(&mut b), Ok(account_len::MARKET));
-        assert_eq!(&b[..2], [MARKET_TAG, LAYOUT_VERSION]);
+        assert_eq!(&b[..2], [MARKET_TAG, account_version::MARKET]);
         assert_eq!(MarketAccount::decode(&b), Ok(v));
     }
     #[test]
@@ -1509,6 +3832,7 @@ mod tests {
         let profile = ProfileAccount {
             profile: h(2),
             realm: h(1),
+            collateral_policy_digest: Hash32::ZERO,
             version: 1,
             flags: 0,
         };
@@ -1533,14 +3857,15 @@ mod tests {
             owner: h(7),
             generation: 8,
             internal: [9; MAX_OUTCOMES],
-            cash_atoms: 10,
-            reserved_cash_atoms: 11,
+            cash_atoms: 11,
+            reserved_cash_atoms: 10,
             stored_bump: 12,
             close_state: 0,
         };
         let mut position_bytes = [0; account_len::POSITION];
         position.encode(&mut position_bytes).unwrap();
         assert_eq!(PositionAccount::decode(&position_bytes), Ok(position));
+        assert_eq!(position.free_cash_atoms(), Ok(1));
 
         let feed = FeedAccount {
             feed: h(13),
@@ -1556,31 +3881,60 @@ mod tests {
         feed.encode(&mut feed_bytes).unwrap();
         assert_eq!(FeedAccount::decode(&feed_bytes), Ok(feed));
 
-        let order = OrderRecord {
-            owner: h(20),
-            order_id: h(21),
-            outcome: 0,
-            side: 1,
-            quantity: 22,
-            limit: 23,
-            minimum_fill: 22,
-            flags: 1,
-            generation: 24,
-        };
-        let mut orders = [OrderRecord::ZERO; MAX_ORDERS_PER_PAGE];
-        orders[0] = order;
-        let page = OrderPageAccount {
-            market: h(3),
-            epoch: h(25),
-            page_index: 0,
-            page_count: 1,
-            order_count: 1,
-            stored_bump: 26,
-            orders,
-        };
+        let page = build_page(0, 1, &[3, 9], Hash32::ZERO);
         let mut page_bytes = [0; account_len::ORDER_PAGE];
         page.encode(&mut page_bytes).unwrap();
         assert_eq!(OrderPageAccount::decode(&page_bytes), Ok(page));
+    }
+    #[test]
+    fn every_persisted_state_account_round_trips() {
+        let ledger = supply_ledger();
+        let mut b = [0; account_len::SUPPLY_LEDGER];
+        assert_eq!(ledger.encode(&mut b), Ok(account_len::SUPPLY_LEDGER));
+        assert_eq!(SupplyLedgerAccount::decode(&b), Ok(ledger));
+        hostile_header(&b, SupplyLedgerAccount::decode);
+
+        let t = terms();
+        let mut b = [0; account_len::TERMS];
+        assert_eq!(t.encode(&mut b), Ok(account_len::TERMS));
+        assert_eq!(TermsAccount::decode(&b), Ok(t));
+        hostile_header(&b, TermsAccount::decode);
+
+        let g = grid();
+        let mut b = [0; account_len::PRICE_GRID];
+        assert_eq!(g.encode(&mut b), Ok(account_len::PRICE_GRID));
+        assert_eq!(PriceGridAccount::decode(&b), Ok(g));
+        hostile_header(&b, PriceGridAccount::decode);
+
+        let e = frozen_epoch();
+        let mut b = [0; account_len::EPOCH];
+        assert_eq!(e.encode(&mut b), Ok(account_len::EPOCH));
+        assert_eq!(EpochAccount::decode(&b), Ok(e));
+        hostile_header(&b, EpochAccount::decode);
+
+        let c = candidate();
+        let mut b = [0; account_len::CANDIDATE];
+        assert_eq!(c.encode(&mut b), Ok(account_len::CANDIDATE));
+        assert_eq!(CandidateRecord::decode(&b), Ok(c));
+        hostile_header(&b, CandidateRecord::decode);
+
+        let p = final_pot();
+        let mut b = [0; account_len::FINAL_POT];
+        assert_eq!(p.encode(&mut b), Ok(account_len::FINAL_POT));
+        assert_eq!(FinalPotAccount::decode(&b), Ok(p));
+        hostile_header(&b, FinalPotAccount::decode);
+
+        let r = receipt();
+        let mut b = [0; account_len::SETTLEMENT_RECEIPT];
+        assert_eq!(r.encode(&mut b), Ok(account_len::SETTLEMENT_RECEIPT));
+        assert_eq!(SettlementReceiptAccount::decode(&b), Ok(r));
+        hostile_header(&b, SettlementReceiptAccount::decode);
+
+        let res = resolution();
+        let mut b = [0; account_len::RESOLUTION];
+        assert_eq!(res.encode(&mut b), Ok(account_len::RESOLUTION));
+        assert_eq!(ResolutionAccount::decode(&b), Ok(res));
+        hostile_header(&b, ResolutionAccount::decode);
     }
     #[test]
     fn hostile_lengths_and_padding_refuse() {
@@ -1608,6 +3962,838 @@ mod tests {
         );
         assert_eq!(canonical_outcome_id(h(1), 2), canonical_outcome_id(h(1), 2));
         assert_ne!(canonical_outcome_id(h(1), 2), canonical_outcome_id(h(1), 3));
+        assert_eq!(canonical_epoch_id(h(1), 2), canonical_epoch_id(h(1), 2));
+        assert_ne!(canonical_epoch_id(h(1), 2), canonical_epoch_id(h(1), 3));
+        assert_ne!(canonical_epoch_id(h(1), 2), canonical_outcome_id(h(1), 2));
+        assert_ne!(canonical_terms_digest(b"x"), canonical_price_grid_id(b"x"));
+        assert_ne!(
+            canonical_candidate_digest(b"x"),
+            canonical_terms_digest(b"x")
+        );
+    }
+    #[test]
+    fn error_codes_are_stable_and_never_collide_across_facts() {
+        assert_eq!(CodecError::Truncated.code(), 2011);
+        assert_eq!(CodecError::NonCanonicalPadding.code(), 2022);
+        assert_eq!(CodecError::InvalidPriceGrid.code(), 2049);
+        assert_eq!(CodecError::InvalidTick.code(), 2050);
+        assert_eq!(CodecError::ZeroIdentity.code(), 4009);
+        assert_eq!(CodecError::MismatchedBinding.code(), 4011);
+        assert_eq!(CodecError::AggregateClosureMismatch.code(), 5011);
+        assert_eq!(CodecError::InvalidConsideration.code(), 5015);
+        assert_eq!(CodecError::OutputTooSmall.code(), 8004);
+        let all = [
+            CodecError::Truncated,
+            CodecError::TrailingBytes,
+            CodecError::WrongTag,
+            CodecError::WrongVersion,
+            CodecError::InvalidCount,
+            CodecError::InvalidEnum,
+            CodecError::ZeroValue,
+            CodecError::ZeroIdentity,
+            CodecError::NonCanonicalIdentity,
+            CodecError::NonCanonicalPadding,
+            CodecError::InvalidPriceGrid,
+            CodecError::InvalidTick,
+            CodecError::MismatchedBinding,
+            CodecError::AggregateClosureMismatch,
+            CodecError::InvalidConsideration,
+            CodecError::ArithmeticOverflow,
+            CodecError::OutputTooSmall,
+        ];
+        let mut i = 0;
+        while i < all.len() {
+            let mut j = i + 1;
+            while j < all.len() {
+                assert_ne!(all[i].code(), all[j].code());
+                j += 1;
+            }
+            i += 1;
+        }
+    }
+    #[test]
+    fn changed_accounts_refuse_version_one_and_unchanged_accounts_refuse_version_two() {
+        let profile = ProfileAccount {
+            profile: h(2),
+            realm: h(1),
+            collateral_policy_digest: Hash32::ZERO,
+            version: 1,
+            flags: 0,
+        };
+        let mut b = [0; account_len::PROFILE];
+        profile.encode(&mut b).unwrap();
+        assert_eq!(b[1], LAYOUT_VERSION);
+        b[1] = LAYOUT_VERSION_V1;
+        assert_eq!(ProfileAccount::decode(&b), Err(CodecError::WrongVersion));
+
+        let page = build_page(0, 1, &[3], Hash32::ZERO);
+        let mut b = [0; account_len::ORDER_PAGE];
+        page.encode(&mut b).unwrap();
+        assert_eq!(b[1], LAYOUT_VERSION);
+        b[1] = LAYOUT_VERSION_V1;
+        assert_eq!(OrderPageAccount::decode(&b), Err(CodecError::WrongVersion));
+
+        let mut b = [0; account_len::MARKET];
+        market().encode(&mut b).unwrap();
+        assert_eq!(b[1], LAYOUT_VERSION_V1);
+        b[1] = LAYOUT_VERSION;
+        assert_eq!(MarketAccount::decode(&b), Err(CodecError::WrongVersion));
+    }
+    #[test]
+    fn profile_policy_digest_is_zero_until_frozen() {
+        let mut profile = ProfileAccount {
+            profile: h(2),
+            realm: h(1),
+            collateral_policy_digest: Hash32::ZERO,
+            version: 1,
+            flags: 0,
+        };
+        let mut b = [0; account_len::PROFILE];
+        profile.encode(&mut b).unwrap();
+        // The digest occupies bytes 66..98 of the profile account.
+        assert_eq!(&b[66..98], &[0u8; 32]);
+
+        profile.collateral_policy_digest = h(77);
+        assert_eq!(profile.validate(), Err(CodecError::NonCanonicalPadding));
+
+        profile.flags = PROFILE_FLAG_POLICY_FROZEN;
+        profile.encode(&mut b).unwrap();
+        assert_eq!(&b[66..98], &[77u8; 32]);
+        assert_eq!(ProfileAccount::decode(&b), Ok(profile));
+
+        profile.collateral_policy_digest = Hash32::ZERO;
+        assert_eq!(profile.validate(), Err(CodecError::ZeroIdentity));
+
+        profile.flags = 2;
+        assert_eq!(profile.validate(), Err(CodecError::InvalidEnum));
+    }
+    #[test]
+    fn realm_refuses_a_narrowed_outcome_width() {
+        let mut realm = RealmAccount {
+            realm: h(1),
+            profile: h(2),
+            max_outcomes: 16,
+            profile_version: 1,
+            stored_bump: 3,
+            flags: 0,
+        };
+        assert_eq!(realm.validate(), Ok(()));
+        realm.max_outcomes = 2;
+        assert_eq!(realm.validate(), Err(CodecError::InvalidCount));
+        realm.max_outcomes = 17;
+        assert_eq!(realm.validate(), Err(CodecError::InvalidCount));
+    }
+    #[test]
+    fn position_refuses_reserved_cash_above_total() {
+        let mut position = PositionAccount {
+            market: h(3),
+            owner: h(7),
+            generation: 8,
+            internal: [0; MAX_OUTCOMES],
+            cash_atoms: 10,
+            reserved_cash_atoms: 10,
+            stored_bump: 12,
+            close_state: 0,
+        };
+        assert_eq!(position.validate(), Ok(()));
+        assert_eq!(position.free_cash_atoms(), Ok(0));
+        position.reserved_cash_atoms = 11;
+        assert_eq!(
+            position.validate(),
+            Err(CodecError::AggregateClosureMismatch)
+        );
+        let mut b = [0; account_len::POSITION];
+        assert_eq!(
+            position.encode(&mut b),
+            Err(CodecError::AggregateClosureMismatch)
+        );
+    }
+    #[test]
+    fn supply_ledger_decomposes_aggregate_supply_and_refuses_overflow() {
+        let ledger = supply_ledger();
+        assert_eq!(ledger.aggregate_supply(0), Ok(100));
+        assert_eq!(ledger.aggregate_supply(1), Ok(10));
+        assert_eq!(
+            ledger.aggregate_supply(MAX_OUTCOMES as u8),
+            Err(CodecError::InvalidCount)
+        );
+
+        let mut overflow = ledger;
+        overflow.internal_supply[0] = u64::MAX;
+        overflow.external_supply[0] = 1;
+        assert_eq!(overflow.validate(), Err(CodecError::ArithmeticOverflow));
+
+        let mut narrow = ledger;
+        narrow.outcome_count = 2;
+        assert_eq!(narrow.validate(), Ok(()));
+        narrow.internal_supply[3] = 1;
+        assert_eq!(narrow.validate(), Err(CodecError::NonCanonicalPadding));
+
+        let mut flagged = ledger;
+        flagged.flags = 1;
+        assert_eq!(flagged.validate(), Err(CodecError::InvalidEnum));
+
+        let mut zero_market = ledger;
+        zero_market.market = Hash32::ZERO;
+        assert_eq!(zero_market.validate(), Err(CodecError::ZeroIdentity));
+    }
+    #[test]
+    fn supply_ledger_binds_market_and_bounds_one_position() {
+        let ledger = supply_ledger();
+        assert_eq!(ledger.binds_market(&market()), Ok(()));
+        let mut other = market();
+        other.market = h(9);
+        let mut i = 0;
+        while i < MAX_OUTCOMES {
+            other.outcomes[i] = canonical_outcome_id(other.market, i as u8);
+            i += 1;
+        }
+        assert_eq!(
+            ledger.binds_market(&other),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let mut position = PositionAccount {
+            market: h(1),
+            owner: h(7),
+            generation: 1,
+            internal: [0; MAX_OUTCOMES],
+            cash_atoms: 0,
+            reserved_cash_atoms: 0,
+            stored_bump: 1,
+            close_state: 0,
+        };
+        position.internal[0] = 40;
+        assert_eq!(ledger.check_position_bound(&position), Ok(()));
+        position.internal[0] = 41;
+        assert_eq!(
+            ledger.check_position_bound(&position),
+            Err(CodecError::AggregateClosureMismatch)
+        );
+    }
+    #[test]
+    fn terms_digest_binds_the_payout_set_and_the_window_policy() {
+        let t = terms();
+        assert_eq!(t.validate(), Ok(()));
+        assert_eq!(t.binds_market(&bound_market()), Ok(()));
+        assert_eq!(
+            t.binds_market(&market()),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        // Every field under the digest moves it.
+        let mut moved = t;
+        moved.payouts[0].weights[0] = 3;
+        moved.payouts[0].weights[1] = 1;
+        assert_ne!(moved.recomputed_terms_digest().unwrap(), t.terms);
+        assert_eq!(moved.validate(), Err(CodecError::NonCanonicalIdentity));
+
+        let mut window = t;
+        window.expected_end_bucket_exclusive = 131;
+        assert_ne!(window.recomputed_terms_digest().unwrap(), t.terms);
+
+        let mut policy = t;
+        policy.failure_policy_id = 14;
+        assert_ne!(policy.recomputed_terms_digest().unwrap(), t.terms);
+
+        // The account-local bump is deliberately outside the digest.
+        let mut bumped = t;
+        bumped.stored_bump = 200;
+        assert_eq!(bumped.recomputed_terms_digest().unwrap(), t.terms);
+        assert_eq!(bumped.validate(), Ok(()));
+    }
+    #[test]
+    fn terms_refuse_a_malformed_payout_set() {
+        let base = terms();
+        let mut short = base;
+        short.payout_count = 0;
+        assert_eq!(short.validate(), Err(CodecError::InvalidCount));
+
+        let mut long = base;
+        long.payout_count = MAX_PAYOUTS as u8 + 1;
+        assert_eq!(long.validate(), Err(CodecError::InvalidCount));
+
+        let mut mixed = base;
+        mixed.payouts[1].denominator = 8;
+        mixed.terms = mixed.recomputed_terms_digest().unwrap();
+        assert_eq!(mixed.validate(), Err(CodecError::MismatchedBinding));
+
+        let mut unsummed = base;
+        unsummed.payouts[2].weights[1] = 2;
+        unsummed.terms = unsummed.recomputed_terms_digest().unwrap();
+        assert_eq!(unsummed.validate(), Err(CodecError::InvalidCount));
+
+        let mut padded = base;
+        padded.payouts[3].denominator = 4;
+        padded.terms = padded.recomputed_terms_digest().unwrap();
+        assert_eq!(padded.validate(), Err(CodecError::NonCanonicalPadding));
+
+        let mut zero = base;
+        zero.payouts[0].denominator = 0;
+        zero.payouts[1].denominator = 0;
+        zero.payouts[2].denominator = 0;
+        zero.terms = zero.recomputed_terms_digest().unwrap();
+        assert_eq!(zero.validate(), Err(CodecError::ZeroValue));
+    }
+    #[test]
+    fn terms_refuse_window_policy_holes() {
+        let base = terms();
+        let mut unnamed = base;
+        unnamed.coverage_policy_id = 0;
+        unnamed.terms = unnamed.recomputed_terms_digest().unwrap();
+        assert_eq!(unnamed.validate(), Err(CodecError::ZeroValue));
+
+        let mut empty = base;
+        empty.expected_end_bucket_exclusive = empty.expected_start_bucket;
+        empty.terms = empty.recomputed_terms_digest().unwrap();
+        assert_eq!(empty.validate(), Err(CodecError::InvalidCount));
+
+        let mut reversed = base;
+        reversed.expected_end_bucket_exclusive = reversed.expected_start_bucket - 1;
+        reversed.terms = reversed.recomputed_terms_digest().unwrap();
+        assert_eq!(reversed.validate(), Err(CodecError::InvalidCount));
+
+        let mut prefix = base;
+        prefix.maturity_horizon_buckets = 29;
+        prefix.terms = prefix.recomputed_terms_digest().unwrap();
+        assert_eq!(prefix.validate(), Err(CodecError::InvalidCount));
+
+        let mut coarse = base;
+        coarse.bucket_seconds = MAX_BUCKET_SECONDS + 1;
+        coarse.terms = coarse.recomputed_terms_digest().unwrap();
+        assert_eq!(coarse.validate(), Err(CodecError::InvalidCount));
+
+        let mut boundary = base;
+        boundary.bucket_seconds = MAX_BUCKET_SECONDS;
+        boundary.terms = boundary.recomputed_terms_digest().unwrap();
+        assert_eq!(boundary.validate(), Ok(()));
+    }
+    #[test]
+    fn price_grid_freezes_the_limit_to_tick_mapping() {
+        let g = grid();
+        assert_eq!(g.validate(), Ok(()));
+        assert_eq!(g.tick_of(0), Ok(0));
+        assert_eq!(g.tick_of(10_000), Ok(4));
+        assert_eq!(g.tick_of(2_501), Err(CodecError::InvalidTick));
+        assert_eq!(g.tick_value(4), Ok(10_000));
+        assert_eq!(g.tick_value(5), Err(CodecError::InvalidTick));
+        assert_eq!(g.binds_terms(&terms()), Ok(()));
+
+        let mut other = terms();
+        other.price_grid = h(99);
+        other.terms = other.recomputed_terms_digest().unwrap();
+        assert_eq!(g.binds_terms(&other), Err(CodecError::MismatchedBinding));
+    }
+    #[test]
+    fn price_grid_refuses_unsorted_over_scale_and_padded_ticks() {
+        let base = grid();
+        let mut unsorted = base;
+        unsorted.ticks[2] = 2_500;
+        unsorted.grid = unsorted.recomputed_grid_id().unwrap();
+        assert_eq!(unsorted.validate(), Err(CodecError::InvalidPriceGrid));
+
+        let mut over = base;
+        over.ticks[4] = 10_001;
+        over.grid = over.recomputed_grid_id().unwrap();
+        assert_eq!(over.validate(), Err(CodecError::InvalidPriceGrid));
+
+        let mut padded = base;
+        padded.ticks[5] = 1;
+        padded.grid = padded.recomputed_grid_id().unwrap();
+        assert_eq!(padded.validate(), Err(CodecError::NonCanonicalPadding));
+
+        let mut degenerate = base;
+        degenerate.tick_count = 1;
+        degenerate.grid = degenerate.recomputed_grid_id().unwrap();
+        assert_eq!(degenerate.validate(), Err(CodecError::InvalidPriceGrid));
+
+        let mut scaleless = base;
+        scaleless.price_scale = 0;
+        scaleless.grid = scaleless.recomputed_grid_id().unwrap();
+        assert_eq!(scaleless.validate(), Err(CodecError::InvalidPriceGrid));
+
+        let mut huge = base;
+        huge.price_scale = MAX_PRICE_SCALE + 1;
+        huge.grid = huge.recomputed_grid_id().unwrap();
+        assert_eq!(huge.validate(), Err(CodecError::InvalidPriceGrid));
+
+        let mut forged = base;
+        forged.price_scale = 20_000;
+        assert_eq!(forged.validate(), Err(CodecError::NonCanonicalIdentity));
+    }
+    #[test]
+    fn off_grid_order_limits_are_refused_at_decode_time() {
+        let g = grid();
+        let page = build_page(0, 1, &[3, 4], Hash32::ZERO);
+        let mut b = [0; account_len::ORDER_PAGE];
+        page.encode(&mut b).unwrap();
+        assert_eq!(OrderPageAccount::decode_on_grid(&b, &g), Ok(page));
+
+        let mut off = page;
+        off.orders[1].limit = 2_501;
+        off.page_digest = off.recomputed_page_digest().unwrap();
+        let mut b = [0; account_len::ORDER_PAGE];
+        off.encode(&mut b).unwrap();
+        assert_eq!(OrderPageAccount::decode(&b), Ok(off));
+        assert_eq!(
+            OrderPageAccount::decode_on_grid(&b, &g),
+            Err(CodecError::InvalidTick)
+        );
+    }
+    #[test]
+    fn epoch_open_phase_commits_to_nothing_and_frozen_phase_commits_to_everything() {
+        let open = epoch_account();
+        assert_eq!(open.validate(), Ok(()));
+        let mut leaky = open;
+        leaky.order_set = h(40);
+        assert_eq!(leaky.validate(), Err(CodecError::NonCanonicalPadding));
+
+        let frozen = frozen_epoch();
+        assert_eq!(frozen.validate(), Ok(()));
+        let mut unsealed = frozen;
+        unsealed.order_set = Hash32::ZERO;
+        assert_eq!(unsealed.validate(), Err(CodecError::ZeroIdentity));
+
+        let mut forged = frozen;
+        forged.epoch_index = 5;
+        assert_eq!(forged.validate(), Err(CodecError::NonCanonicalIdentity));
+
+        let mut wrong_relation = frozen;
+        wrong_relation.relation_version = 2;
+        assert_eq!(wrong_relation.validate(), Err(CodecError::WrongVersion));
+
+        let mut sparse = frozen;
+        sparse.order_count = 16;
+        assert_eq!(sparse.validate(), Err(CodecError::MismatchedBinding));
+
+        let mut ownerless = frozen;
+        ownerless.owner_count = 0;
+        assert_eq!(ownerless.validate(), Err(CodecError::InvalidCount));
+
+        let mut phased = frozen;
+        phased.phase = EPOCH_PHASE_LAPSED + 1;
+        assert_eq!(phased.validate(), Err(CodecError::InvalidEnum));
+    }
+    #[test]
+    fn epoch_binds_terms_grid_and_its_frozen_page_set() {
+        let e = frozen_epoch();
+        assert_eq!(e.binds_terms(&terms(), &grid()), Ok(()));
+
+        let mut scaled = e;
+        scaled.price_scale = 9_999;
+        assert_eq!(
+            scaled.binds_terms(&terms(), &grid()),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let pages = frozen_pages();
+        assert_eq!(e.binds_page_set(&pages), Ok(()));
+        assert_eq!(
+            epoch_account().binds_page_set(&pages),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let mut short = e;
+        short.order_count = 18;
+        assert_eq!(
+            short.binds_page_set(&pages),
+            Err(CodecError::MismatchedBinding)
+        );
+    }
+    #[test]
+    fn page_set_closure_accepts_one_dense_ordered_frozen_set() {
+        let pages = frozen_pages();
+        let order_set = verify_page_set(&pages).unwrap();
+        assert_eq!(order_set, pages[0].order_set);
+        assert_eq!(pages[0].set_order_count, 19);
+        assert_eq!(pages[0].order_count, MAX_ORDERS_PER_PAGE as u8);
+        assert_eq!(pages[1].order_count, 3);
+        assert_eq!(verify_page_set(&[]), Err(CodecError::InvalidCount));
+        assert_eq!(verify_page_set(&pages[..1]), Err(CodecError::InvalidCount));
+    }
+    #[test]
+    fn page_set_refuses_gap_duplicate_reorder_and_post_freeze_mutation() {
+        let pages = frozen_pages();
+
+        // Gap: the middle page of a three-page set is dropped.
+        let ids: [u8; MAX_ORDERS_PER_PAGE] =
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let ids2: [u8; MAX_ORDERS_PER_PAGE] = [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+        ];
+        let p0 = build_page(0, 3, &ids, Hash32::ZERO);
+        let p1 = build_page(1, 3, &ids2, p0.last_order_id);
+        let p2 = build_page(2, 3, &[33, 34], p1.last_order_id);
+        let mut three = [p0, p1, p2];
+        freeze_set(&mut three);
+        assert_eq!(verify_page_set(&three), Ok(three[0].order_set));
+        let gapped = [three[0], three[2]];
+        assert_eq!(verify_page_set(&gapped), Err(CodecError::InvalidCount));
+
+        // Duplicate order id across a page boundary.
+        let mut dup = pages;
+        dup[1].orders[0] = order(16);
+        dup[1].first_order_id = h(16);
+        dup[1].page_digest = dup[1].recomputed_page_digest().unwrap();
+        assert_eq!(dup[1].validate(), Err(CodecError::NonCanonicalIdentity));
+        assert_eq!(verify_page_set(&dup), Err(CodecError::NonCanonicalIdentity));
+
+        // Reorder: the two pages are presented out of index order.
+        let reordered = [pages[1], pages[0]];
+        assert_eq!(
+            verify_page_set(&reordered),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        // Post-freeze mutation of one order byte.
+        let mut mutated = pages;
+        mutated[0].orders[3].quantity = 11;
+        assert_eq!(mutated[0].validate(), Err(CodecError::MismatchedBinding));
+        // Recomputing the page digest does not repair the set commitment.
+        mutated[0].page_digest = mutated[0].recomputed_page_digest().unwrap();
+        assert_eq!(
+            verify_page_set(&mutated),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        // A broken predecessor link.
+        let mut unlinked = pages;
+        unlinked[1].prev_page_last_order_id = h(15);
+        assert_eq!(
+            verify_page_set(&unlinked),
+            Err(CodecError::NonCanonicalIdentity)
+        );
+
+        // An unfrozen page cannot participate in a closed set.
+        let mut thawed = pages;
+        thawed[1].frozen = 0;
+        assert_eq!(
+            verify_page_set(&thawed),
+            Err(CodecError::NonCanonicalPadding)
+        );
+    }
+    #[test]
+    fn order_page_refuses_stale_ranges_and_sparse_frozen_pages() {
+        let mut page = build_page(0, 1, &[3, 9], Hash32::ZERO);
+        assert_eq!(page.validate(), Ok(()));
+
+        let mut stale = page;
+        stale.last_order_id = h(8);
+        assert_eq!(stale.validate(), Err(CodecError::MismatchedBinding));
+
+        let mut chained = page;
+        chained.prev_page_last_order_id = h(2);
+        assert_eq!(chained.validate(), Err(CodecError::NonCanonicalPadding));
+
+        // Page one must link, and must open strictly above its predecessor.
+        let mut second = build_page(1, 2, &[9, 10], h(9));
+        assert_eq!(second.validate(), Err(CodecError::NonCanonicalIdentity));
+        second.prev_page_last_order_id = Hash32::ZERO;
+        assert_eq!(second.validate(), Err(CodecError::ZeroIdentity));
+
+        // A frozen set commits a count; an open page commits none.
+        page.set_order_count = 2;
+        assert_eq!(page.validate(), Err(CodecError::NonCanonicalPadding));
+
+        let ids: [u8; MAX_ORDERS_PER_PAGE] =
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let full = build_page(0, 2, &ids, Hash32::ZERO);
+        let tail = build_page(1, 2, &[17], full.last_order_id);
+        let mut set = [full, tail];
+        freeze_set(&mut set);
+        let mut sparse = set;
+        sparse[0].order_count = 15;
+        sparse[0].last_order_id = h(15);
+        sparse[0].orders[15] = OrderRecord::ZERO;
+        sparse[0].page_digest = sparse[0].recomputed_page_digest().unwrap();
+        assert_eq!(sparse[0].validate(), Err(CodecError::InvalidCount));
+
+        let mut empty_frozen = set;
+        empty_frozen[1].order_count = 0;
+        assert_eq!(empty_frozen[1].validate(), Err(CodecError::InvalidCount));
+
+        let mut too_many = build_page(0, 5, &[3], Hash32::ZERO);
+        too_many.page_digest = too_many.recomputed_page_digest().unwrap();
+        assert_eq!(too_many.validate(), Err(CodecError::InvalidCount));
+    }
+    #[test]
+    fn page_rejects_duplicate_or_unsorted_orders() {
+        let mut page = build_page(0, 1, &[3], Hash32::ZERO);
+        page.orders[1] = order(3);
+        page.order_count = 2;
+        page.last_order_id = h(3);
+        page.page_digest = page.recomputed_page_digest().unwrap();
+        assert_eq!(page.validate(), Err(CodecError::NonCanonicalIdentity));
+
+        let mut unsorted = build_page(0, 1, &[3, 4], Hash32::ZERO);
+        unsorted.orders[0] = order(4);
+        unsorted.orders[1] = order(3);
+        unsorted.first_order_id = h(4);
+        unsorted.last_order_id = h(3);
+        unsorted.page_digest = unsorted.recomputed_page_digest().unwrap();
+        assert_eq!(unsorted.validate(), Err(CodecError::NonCanonicalIdentity));
+
+        let mut padded = build_page(0, 1, &[3], Hash32::ZERO);
+        padded.orders[5] = order(9);
+        padded.page_digest = padded.recomputed_page_digest().unwrap();
+        assert_eq!(padded.validate(), Err(CodecError::NonCanonicalPadding));
+    }
+    #[test]
+    fn candidate_identity_binds_only_the_free_coordinates() {
+        let c = candidate();
+        assert_eq!(c.validate(), Ok(()));
+
+        let mut repriced = c;
+        repriced.prices[0] = 9_999;
+        repriced.prices[1] = 1;
+        assert_ne!(repriced.recomputed_candidate_digest().unwrap(), c.candidate);
+
+        let mut churned = c;
+        churned.virtual_split = 6;
+        churned.churn = 6;
+        assert_ne!(churned.recomputed_candidate_digest().unwrap(), c.candidate);
+
+        let mut masked = c;
+        masked.honored_aon_mask = 1;
+        assert_ne!(masked.recomputed_candidate_digest().unwrap(), c.candidate);
+
+        // Score, status, slot, and bump are outside the identity: they are
+        // claims and lifecycle, not coordinates.
+        let mut rescored = c;
+        rescored.weighted_direct_volume = i128::MIN;
+        rescored.limit_surplus_price_units = u128::MAX;
+        rescored.distinct_owners = 1;
+        rescored.status = CANDIDATE_STATUS_SUPERSEDED;
+        rescored.submitted_slot = 0;
+        rescored.stored_bump = 255;
+        assert_eq!(rescored.recomputed_candidate_digest().unwrap(), c.candidate);
+        assert_eq!(rescored.validate(), Ok(()));
+        let mut b = [0; account_len::CANDIDATE];
+        rescored.encode(&mut b).unwrap();
+        assert_eq!(CandidateRecord::decode(&b), Ok(rescored));
+    }
+    #[test]
+    fn candidate_refuses_mask_leaks_double_churn_and_inconsistent_score() {
+        let c = candidate();
+        let mut leak = c;
+        leak.honored_aon_mask = 1 << c.order_len;
+        leak.candidate = leak.recomputed_candidate_digest().unwrap();
+        assert_eq!(leak.validate(), Err(CodecError::NonCanonicalPadding));
+
+        let mut both = c;
+        both.virtual_merge = 1;
+        both.churn = 6;
+        both.candidate = both.recomputed_candidate_digest().unwrap();
+        assert_eq!(both.validate(), Err(CodecError::InvalidEnum));
+
+        let mut miscounted = c;
+        miscounted.churn = 4;
+        assert_eq!(miscounted.validate(), Err(CodecError::MismatchedBinding));
+
+        let mut oversized = c;
+        oversized.order_len = MAX_EPOCH_ORDERS as u8 + 1;
+        oversized.candidate = oversized.recomputed_candidate_digest().unwrap();
+        assert_eq!(oversized.validate(), Err(CodecError::InvalidCount));
+
+        let mut statused = c;
+        statused.status = CANDIDATE_STATUS_SUPERSEDED + 1;
+        assert_eq!(statused.validate(), Err(CodecError::InvalidEnum));
+
+        let mut forged = c;
+        forged.prices[0] = 1;
+        assert_eq!(forged.validate(), Err(CodecError::NonCanonicalIdentity));
+    }
+    #[test]
+    fn candidate_binds_the_frozen_epoch_simplex() {
+        let c = candidate();
+        let e = frozen_epoch();
+        assert_eq!(c.binds_epoch(&e), Ok(()));
+        assert_eq!(
+            c.binds_epoch(&epoch_account()),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let mut off_simplex = c;
+        off_simplex.prices[0] = 9_999;
+        off_simplex.candidate = off_simplex.recomputed_candidate_digest().unwrap();
+        assert_eq!(
+            off_simplex.binds_epoch(&e),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let mut over_scale = c;
+        over_scale.prices[0] = 10_001;
+        over_scale.candidate = over_scale.recomputed_candidate_digest().unwrap();
+        assert_eq!(
+            over_scale.binds_epoch(&e),
+            Err(CodecError::InvalidPriceGrid)
+        );
+
+        let mut wrong_len = c;
+        wrong_len.order_len = 18;
+        wrong_len.candidate = wrong_len.recomputed_candidate_digest().unwrap();
+        assert_eq!(
+            wrong_len.binds_epoch(&e),
+            Err(CodecError::MismatchedBinding)
+        );
+    }
+    #[test]
+    fn final_pot_is_pot_phase_only_and_a_closed_pot_is_empty() {
+        let p = final_pot();
+        assert_eq!(p.validate(), Ok(()));
+        assert_eq!(p.binds_candidate(&candidate()), Ok(()));
+
+        let mut wrong = p;
+        wrong.candidate = h(60);
+        assert_eq!(
+            wrong.binds_candidate(&candidate()),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let mut closed = p;
+        closed.phase = POT_PHASE_CLOSED;
+        assert_eq!(closed.validate(), Err(CodecError::AggregateClosureMismatch));
+        closed.pot_internal[0] = 0;
+        assert_eq!(closed.validate(), Err(CodecError::AggregateClosureMismatch));
+        closed.pot_cash_price_units = 0;
+        assert_eq!(closed.validate(), Err(CodecError::AggregateClosureMismatch));
+        closed.rounding_pot_price_units = 0;
+        assert_eq!(closed.validate(), Ok(()));
+
+        let mut padded = p;
+        padded.outcome_count = 2;
+        assert_eq!(padded.validate(), Ok(()));
+        padded.pot_internal[4] = 1;
+        assert_eq!(padded.validate(), Err(CodecError::NonCanonicalPadding));
+
+        let mut phased = p;
+        phased.phase = POT_PHASE_CLOSED + 1;
+        assert_eq!(phased.validate(), Err(CodecError::InvalidEnum));
+    }
+    #[test]
+    fn settlement_receipt_leg_shapes_are_exclusive() {
+        let direct = receipt();
+        assert_eq!(direct.validate(), Ok(()));
+        assert_eq!(direct.binds_candidate(&candidate()), Ok(()));
+
+        let mut aliased = direct;
+        aliased.sell_order_id = aliased.buy_order_id;
+        assert_eq!(aliased.validate(), Err(CodecError::NonCanonicalIdentity));
+
+        let mut split = direct;
+        split.leg_kind = RECEIPT_LEG_SPLIT;
+        assert_eq!(split.validate(), Err(CodecError::NonCanonicalPadding));
+        split.sell_order_id = Hash32::ZERO;
+        assert_eq!(split.validate(), Ok(()));
+
+        let mut merge = direct;
+        merge.leg_kind = RECEIPT_LEG_MERGE;
+        assert_eq!(merge.validate(), Err(CodecError::NonCanonicalPadding));
+        merge.buy_order_id = Hash32::ZERO;
+        assert_eq!(merge.validate(), Ok(()));
+
+        let mut unknown = direct;
+        unknown.leg_kind = RECEIPT_LEG_MERGE + 1;
+        assert_eq!(unknown.validate(), Err(CodecError::InvalidEnum));
+
+        let mut legless = direct;
+        legless.buy_order_id = Hash32::ZERO;
+        assert_eq!(legless.validate(), Err(CodecError::ZeroIdentity));
+    }
+    #[test]
+    fn settlement_receipt_refuses_inexact_consideration_and_bad_consumption() {
+        let base = receipt();
+        let mut repriced = base;
+        repriced.consideration_price_units += 1;
+        assert_eq!(repriced.validate(), Err(CodecError::InvalidConsideration));
+
+        let mut zero = base;
+        zero.quantity = 0;
+        assert_eq!(zero.validate(), Err(CodecError::ZeroValue));
+
+        let mut over = base;
+        over.settled_quantity = 4;
+        assert_eq!(over.validate(), Err(CodecError::InvalidCount));
+
+        let mut exhausted = base;
+        exhausted.settled_quantity = 3;
+        assert_eq!(exhausted.validate(), Err(CodecError::InvalidEnum));
+        exhausted.consumed_flags = RECEIPT_FLAG_SLICE_EXHAUSTED;
+        assert_eq!(exhausted.validate(), Ok(()));
+        exhausted.consumed_flags |= RECEIPT_FLAG_BUY_CONSUMED | RECEIPT_FLAG_SELL_CONSUMED;
+        assert_eq!(exhausted.validate(), Ok(()));
+        exhausted.consumed_flags = 8;
+        assert_eq!(exhausted.validate(), Err(CodecError::InvalidEnum));
+
+        // Boundary: the widest possible exact product still validates.
+        let mut widest = base;
+        widest.quantity = u64::MAX;
+        widest.price = u64::MAX;
+        widest.consideration_price_units = u128::from(u64::MAX) * u128::from(u64::MAX);
+        assert_eq!(widest.validate(), Ok(()));
+        widest.consideration_price_units -= 1;
+        assert_eq!(widest.validate(), Err(CodecError::InvalidConsideration));
+
+        let mut mispriced = base;
+        mispriced.price = 5_000;
+        mispriced.consideration_price_units = 15_000;
+        assert_eq!(
+            mispriced.binds_candidate(&candidate()),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let mut wrong_outcome = base;
+        wrong_outcome.outcome = 1;
+        wrong_outcome.price = 0;
+        wrong_outcome.consideration_price_units = 0;
+        assert_eq!(wrong_outcome.binds_candidate(&candidate()), Ok(()));
+        wrong_outcome.outcome = MAX_OUTCOMES as u8;
+        assert_eq!(wrong_outcome.validate(), Err(CodecError::InvalidCount));
+    }
+    #[test]
+    fn resolution_keeps_unresolved_fields_zero_and_binds_the_payout_index() {
+        let r = resolution();
+        assert_eq!(r.validate(), Ok(()));
+        assert!(r.is_resolved());
+        assert_eq!(r.binds_terms(&terms()), Ok(()));
+
+        let mut unresolved = r;
+        unresolved.payout_index = PAYOUT_INDEX_UNRESOLVED;
+        assert_eq!(unresolved.validate(), Err(CodecError::NonCanonicalPadding));
+        unresolved.window = Hash32::ZERO;
+        unresolved.feed_cursor = 0;
+        unresolved.sealed_end_bucket_exclusive = 0;
+        unresolved.repair_generation = 0;
+        unresolved.resolved_slot = 0;
+        assert_eq!(unresolved.validate(), Ok(()));
+        assert!(!unresolved.is_resolved());
+        assert_eq!(unresolved.binds_terms(&terms()), Ok(()));
+
+        let mut out_of_set = r;
+        out_of_set.payout_index = 3;
+        assert_eq!(out_of_set.validate(), Ok(()));
+        assert_eq!(
+            out_of_set.binds_terms(&terms()),
+            Err(CodecError::InvalidCount)
+        );
+
+        let mut early = r;
+        early.sealed_end_bucket_exclusive = 129;
+        assert_eq!(
+            early.binds_terms(&terms()),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let mut unsealed = r;
+        unsealed.window = Hash32::ZERO;
+        assert_eq!(unsealed.validate(), Err(CodecError::ZeroIdentity));
+
+        let mut wrong_terms = r;
+        wrong_terms.terms = h(61);
+        assert_eq!(
+            wrong_terms.binds_terms(&terms()),
+            Err(CodecError::MismatchedBinding)
+        );
     }
     #[test]
     fn intent_golden_and_round_trip() {
@@ -1619,7 +4805,7 @@ mod tests {
         let mut b = [0; MAX_INTENT_BYTES];
         let n = i.encode(&mut b).unwrap();
         assert_eq!(n, 74);
-        assert_eq!(&b[..2], [SPLIT_TAG, LAYOUT_VERSION]);
+        assert_eq!(&b[..2], [SPLIT_TAG, INTENT_VERSION]);
         assert_eq!(Intent::decode(&b[..n]), Ok(i));
         assert_eq!(Intent::decode(&b[..n - 1]), Err(CodecError::Truncated));
     }
@@ -1634,36 +4820,14 @@ mod tests {
         assert_eq!(i.encode(&mut b), Err(CodecError::ZeroIdentity));
         let mut raw = [0; 74];
         raw[0] = SPLIT_TAG;
-        raw[1] = LAYOUT_VERSION;
+        raw[1] = INTENT_VERSION;
         raw[66..74].copy_from_slice(&1u64.to_le_bytes());
         assert_eq!(Intent::decode(&raw), Err(CodecError::ZeroIdentity));
     }
     #[test]
-    fn page_rejects_duplicate_or_unsorted_orders() {
-        let o = OrderRecord {
-            owner: h(1),
-            order_id: h(3),
-            outcome: 0,
-            side: 0,
-            quantity: 1,
-            limit: 2,
-            minimum_fill: 1,
-            flags: 0,
-            generation: 0,
-        };
-        let mut orders = [OrderRecord::ZERO; MAX_ORDERS_PER_PAGE];
-        orders[0] = o;
-        orders[1] = o;
-        let p = OrderPageAccount {
-            market: h(1),
-            epoch: h(2),
-            page_index: 0,
-            page_count: 1,
-            order_count: 2,
-            stored_bump: 1,
-            orders,
-        };
-        assert_eq!(p.validate(), Err(CodecError::NonCanonicalIdentity));
+    fn zero_identity_is_reserved() {
+        assert_eq!(Hash32::new([0; HASH_BYTES]), Err(CodecError::ZeroIdentity));
+        assert_eq!(Hash32::new([1; HASH_BYTES]), Ok(h(1)));
     }
     #[test]
     fn sha256_known_vector() {
