@@ -18,12 +18,15 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Next 3 moves
 
-1. Foundation lands -> fan out instruction lanes (merge/materialize,
-   market-init, observe/resolve, orders/batch) on the module ownership map.
-2. Token-2022 probe verdict -> CPI leg into its module; multi-position
-   scheme -> adapter + program.
-3. Lifecycle-walk script (PROJECT.md section 10 items 1-10) once the
-   instruction set closes; then umbrella + manifest + drift review.
+1. CONSOL-TERMS (Fable, running): unified TermsAccount v2 - cap +
+   obligation 18 + distributional basis; markets become fundable;
+   threshold markets resolve. BATCH-STREAM (Fable, running): streaming
+   relation verifier + ClearWork checkpoint + projection spec.
+2. HARNESS-REGEN lands -> all-families SVM differential recorded; then
+   LAYOUT-WRITE lane (streaming writer, tombstone, Intent rev,
+   canonical order ids) on the projection spec.
+3. Token-2022 CPI leg into the instruction modules; lifecycle-walk
+   script; umbrella + fresh manifest + closing drift review.
 
 ## Done log
 
