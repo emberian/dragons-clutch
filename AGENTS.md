@@ -11,7 +11,15 @@ Default work is offline and read-only with respect to external systems.
 
 - Never read wallet/private-key dotfiles or browser sessions.
 - Never sign, submit, deploy, create a market, buy a token, fund an account, or
-  mutate a remote host without an explicit current authorization naming the act.
+  mutate an external production system without an explicit current authorization
+  naming the act. The user's own dev machines (persvati, hbox) are ordinary
+  build/test infrastructure, not gated remotes; on hbox use `swarm-build` and
+  respect co-tenant workloads.
+- Ordinary local commits are default work and need no authorization; keep them
+  coherent and add named files explicitly while parallel lanes are live.
+  Pushing, tagging, publishing, or declaring a release requires explicit user
+  direction. This supersedes any stricter commit language in historical
+  handoff documents.
 - Public RPC reads require an explicit task and must remain bounded.
 - No mainnet program or frontend URL may be described as official without a
   checked release manifest.
