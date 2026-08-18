@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use clutch_kernel::{
-    Amount, Error, MarketState, PayoutSet, PayoutVector, Phase, Position, TransferPhasePolicy,
-    MAX_OUTCOMES, MAX_PAYOUTS,
+    Amount, BasisMode, Error, MarketState, PayoutSet, PayoutVector, Phase, Position,
+    TransferPhasePolicy, MAX_OUTCOMES, MAX_PAYOUTS,
 };
 
 use super::*;
@@ -30,6 +30,11 @@ pub fn code(error: Error) -> Refusal {
         Error::NotResolved => (3003, "NotResolved"),
         Error::InvariantViolation => (5003, "InvariantViolation"),
         Error::RemainderRequired => (1004, "RemainderRequired"),
+        // The 3000 phase block's next free number.  `VECTOR_SPINE_PROPOSAL.md`
+        // §2.4's table entry for `phase.wrong-resolution-mode` is owed by
+        // whoever owns the spine document; the number is claimed here so the
+        // surface stays exhaustive.
+        Error::WrongResolutionMode => (3011, "WrongResolutionMode"),
     };
     Refusal::new(code, "kernel", variant)
 }
@@ -106,13 +111,19 @@ impl KernelExecutor {
             other => return Err(format!("ENUM-1: unknown kernel phase {other:?}")),
         };
         let resolved_payout = small_field(value, "resolved_payout")? as u8;
+        // Every pinned S1 vector predates the derived-basis seam and describes
+        // a `FinitePreset` market.  The vector format gains a `basis_mode`
+        // field when the spine adds one; until then this surface declares the
+        // mode it can actually read rather than inventing a second truth for
+        // it, and a mode-1 vector is simply not expressible here yet.
+        let basis_mode = BasisMode::FinitePreset;
         let total_supply: [u64; MAX_OUTCOMES] = read_prefix(field(value, "total_supply")?, active)?;
 
         let market = match constructed_by {
             // A constructor-built state must be reachable through `new`, and
             // the vector's own declared fields must be what `new` produced.
             "constructor" => {
-                let mut market = MarketState::new(outcomes, payouts, collateral)
+                let mut market = MarketState::new(outcomes, basis_mode, payouts, collateral)
                     .map_err(|error| format!("initial_state is not constructible: {error:?}"))?;
                 if total_supply != [0; MAX_OUTCOMES]
                     || phase != Phase::Active
@@ -131,6 +142,8 @@ impl KernelExecutor {
                 outcomes,
                 phase,
                 resolved_payout,
+                basis_mode,
+                resolved_vector: PayoutVector::ZERO,
                 collateral,
                 total_supply,
                 payouts,

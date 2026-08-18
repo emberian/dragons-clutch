@@ -52,17 +52,24 @@
 //! discrepancy is recorded in the design doc's implementation addendum.
 //!
 //! [`derive_payout_vector`] is the §5.1 sibling seam: it produces the
-//! validated, member-shaped weight vector. The kernel, however, still
-//! resolves **by index into the frozen preset set** — `resolve_with_vector`
-//! (design §4) does not exist, and the kernel crate is outside this wave. The
-//! adapter-side representation is therefore *preset membership*:
-//! [`derive_payout`] on a degree-1 market derives the vector and returns the
-//! index of the preset equal to it, refusing
-//! [`ResolutionRefusal::DerivedVectorUnrepresentable`] when the derived
-//! vector is not a frozen preset. A terms author whose reachable weight
-//! lattice fits in `MAX_PAYOUTS` presets (for two outcomes: any `D ≤ 7`)
-//! gets full derived resolution today; every other derived vector refuses,
-//! and the missing kernel transition is the one named residue.
+//! validated, member-shaped weight vector. The kernel's design §4 transition
+//! `clutch_kernel::MarketState::resolve_with_vector` now exists, and
+//! `crate::resolve_derived_market` joins the two: the derived vector is
+//! installed verbatim, with **no preset-membership step anywhere on that
+//! path**. The reachable lattice is therefore no longer capped at
+//! `MAX_PAYOUTS` members — for a two-outcome degree-1 market the whole
+//! `D + 1` lattice resolves, nine vectors at `D = 8` against eight preset
+//! slots — and [`ResolutionRefusal::DerivedVectorUnrepresentable`] has no
+//! site to arise at there.
+//!
+//! The `Action::Resolve` **account** path still resolves by index, and
+//! [`derive_payout`] therefore keeps its degree-1 preset-membership bridge.
+//! That is not a kernel limit any more; it is a layout one. A redemption
+//! takes its authority from a `ResolutionAccount`, whose frozen layout names
+//! a payout *index* and carries no resolved value, and the reference kernel
+//! account carries neither a basis-mode byte nor a resolved-vector slot. Both
+//! are byte-layout facts owned by crates this one does not revise, so the
+//! residue is now exactly one half wide: the layout half.
 //!
 //! Degrees 2 and 3 refuse as unimplemented variants: no proven
 //! interval-ambiguity rule exists for them (design §5.3/§10.6/§13.1), so
@@ -224,13 +231,23 @@ pub enum ResolutionRefusal {
     /// `[t_0, t_{K-1}]`; control passes to the frozen failure policy.
     ValueOutOfRange,
     /// R-16: the derived weight vector is valid but is not a member of the
-    /// frozen preset set, and this build's kernel can only fix a preset
-    /// member.
+    /// frozen preset set, so the *index-shaped* resolution record cannot name
+    /// it.
     ///
-    /// This is the named residue of the missing kernel transition
-    /// `resolve_with_vector` (design §4): terms whose reachable weight
-    /// lattice is enumerated in the presets resolve today, every other
-    /// derived vector refuses here until the kernel seam exists.
+    /// Unreachable on the derived-basis seam. `crate::resolve_derived_market`
+    /// installs the derived vector through the kernel's `resolve_with_vector`
+    /// and never consults the preset set, so no input to that path can reach
+    /// this refusal; the variant is kept, not retired, because
+    /// [`derive_payout`] still serves the `Action::Resolve` account path,
+    /// where it remains live and load-bearing.
+    ///
+    /// What it now reports is the *layout* half of the design §4 residue: a
+    /// `ResolutionAccount` names a payout index and carries no resolved value
+    /// (design §6.3), and the reference kernel account carries neither a
+    /// basis-mode byte nor a resolved-vector slot, so a market resolved to a
+    /// non-preset vector has nowhere in the accounts to record what it
+    /// resolved to. Fail-closed until those bytes exist; never approximated to
+    /// the nearest preset.
     DerivedVectorUnrepresentable,
     /// R-17: the wrong resolution seam for this market's basis mode —
     /// [`derive_payout_vector`] invoked on a degree-0 (categorical) market,

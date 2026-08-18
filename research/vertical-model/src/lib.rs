@@ -59,7 +59,7 @@ use clutch_batch::{
     MAX_GRID_TICKS, MAX_ORDERS,
 };
 use clutch_kernel::{
-    Amount, MarketState, PayoutSet, PayoutVector, Phase, Position, TransferPhasePolicy,
+    Amount, BasisMode, MarketState, PayoutSet, PayoutVector, Phase, Position, TransferPhasePolicy,
     MAX_OUTCOMES, MAX_PAYOUTS,
 };
 
@@ -829,7 +829,11 @@ impl VerticalModel {
         vectors[0] = PayoutVector::new(1, first);
         vectors[1] = PayoutVector::new(1, second);
         let payouts = PayoutSet::new(2, OUTCOMES, vectors);
-        let market = MarketState::new(OUTCOMES, payouts, 0)?;
+        // Categorical: this model's two outcomes are indicator claims and its
+        // resolution names an index, so the frozen seam is mode 0.  Named
+        // rather than defaulted, because the kernel has no default to fall
+        // back on.
+        let market = MarketState::new(OUTCOMES, BasisMode::FinitePreset, payouts, 0)?;
         let grid = Grid::new(7, 1, 60).map_err(ModelError::Summary)?;
         let mut trace = Vec::new();
         trace.push("market.create outcomes=2 payouts=2 principal=0".to_owned());

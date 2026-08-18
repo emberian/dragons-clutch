@@ -1020,3 +1020,93 @@ previously did not fit the 1,400,000-unit transaction ceiling at all — and
 SHA-256 recomputation, which is exactly why the recomputation count had to
 drop to one. Numbers and method: `SBF_BRINGUP.md`'s regenerated resource
 envelope.
+
+---
+
+## 16. Implementation addendum 2026-08-18 (kernel-vector wave)
+
+Status of this section: IMPLEMENTED (offline, host-tested), against the
+PROPOSED §4 above. It records the kernel half of the §15 residue closing, and
+narrows what is left from "the kernel delta" to a strictly smaller layout
+statement.
+
+**The §4 kernel delta landed as specified, with the mode as an enum.**
+`clutch-kernel` gains `BasisMode { FinitePreset = 0, DerivedBasis = 1 }` —
+an enum rather than §4's `basis_mode: u8`, so an out-of-range mode byte is
+unrepresentable instead of merely refused — a required argument to
+`MarketState::new` with **no `Default`**, `MarketState::resolved_vector`, and
+the transition `resolve_with_vector(&mut self, vector: PayoutVector)`. Refusal
+classes are §4's table verbatim, with `Error::WrongResolutionMode` **appended**
+to the error enum so every previously assigned discriminant (the SBF program's
+`0x2000 + n` block) is unmoved. Mode 0 is preserved bit-for-bit: the whole
+pre-existing kernel suite passes with no change but the new constructor
+argument, and the resolved-index bound check keeps its original site and its
+original `InvariantViolation` class.
+
+**Both gates are structural, not merely transitional.** `resolve` refuses
+`WrongResolutionMode` on a `DerivedBasis` market and `resolve_with_vector`
+refuses it on a `FinitePreset` one — after the phase gate, so an
+already-resolved market still reports `AlreadyResolved` first. Beyond the two
+entry points, the mode also owns which resolution *slot* may be non-empty in
+every reachable state: mode 0 never carries a vector, mode 1 never carries an
+index, and a forged state that violates either is refused by every public
+operation rather than only by the seam that would have written it.
+
+**Theorem (i) is a landed bounded-exhaustive falsifier, not a proof sketch.**
+`mode_one_resolution_never_raises_the_requirement` sweeps 63,108 cases —
+`D ∈ {2, 4, 8, 16}` with all 34 admitted two-weight vectors against 441 supply
+shapes each, plus `D ∈ {2, 4, 8}` with all 66 admitted three-weight vectors
+against 729 supply shapes each — and finds no counterexample to
+`required_resolved(T, x̂) ≤ required_active(T)`. It runs each case through the
+kernel's own transition with the market funded to *exactly* its Active
+requirement, so the claim it establishes is the operational one: the
+prospective invariant check inside `resolve_with_vector` is unreachable over
+these lattices, which is what "defense in depth, not a live refusal" means. The
+count is pinned exactly, so a narrowed loop bound fails rather than silently
+sampling. Claim (ii) is checked over the whole reachable `D = 8` lattice, and
+the mode-1 Active requirement is checked to equal `max_i T_i` and to dominate
+the mode-0 preset maximum over the same set.
+
+**The preset-membership bridge is gone from the derived path.**
+`clutch_solana_reference::resolve_derived_market` joins §5.1's
+`derive_payout_vector` to §4's `resolve_with_vector`: the derived vector is
+installed verbatim and no step consults the preset set, so `R-16` has no site
+to arise at there. The `MAX_PAYOUTS` cap on the reachable lattice is lifted
+and measured — the nine-member `D = g = 8` lattice resolves entirely against
+eight preset slots, and the `(40, 24)` over `D = 64` vector that §15 recorded
+as refusing now resolves and redeems exactly. Remainder refusal and the
+complete-set exit are unchanged on the new path, because redemption reads the
+installed vector through one private accessor that does not know which mode it
+is serving.
+
+**What is left is the layout half, and it is now stated exactly.** Two byte
+facts block derived-basis resolution through the *account* plane, and neither
+is the kernel's:
+
+1. `ResolutionAccount` (frozen in `clutch-solana-layout`) names a payout
+   *index* and carries no `resolved_value`. A redemption takes its authority
+   from that record and may not re-fold the window, so a market resolved to a
+   non-preset vector has no record-bound authority to check against. §6.3's
+   `resolved_value` is therefore not "deferred as unneeded" any more — it is
+   the blocker.
+2. The reference kernel account carries neither a basis-mode byte nor a
+   resolved-vector slot, so the market it can reconstruct is a `FinitePreset`
+   one. Adding them moves `KERNEL_ACCOUNT_LEN` (1,254 bytes today; +137 for
+   both) and with it every pinned byte-level fixture and the SBF account
+   sizing, which is a layout revision with its own evidence, not a side effect
+   of this wave.
+
+Consequently `derive_payout` keeps its degree-1 preset-membership bridge for
+the `Action::Resolve` account path, and `R-16` stays a live, load-bearing
+refusal *there* — reclassified from "the missing kernel transition" to "the
+index-shaped resolution record". Also unaddressed and unchanged: the §9 lot
+posture decision, and the §10.1 `PROJECT.md` edit, which remains the
+coordinator's.
+
+**One cost the design did not price.** `MarketState` grows from 1,240 to
+1,376 bytes (`resolved_vector` is 136; the mode byte lands in existing
+padding), and the SBF program holds a whole `MarketState` in one call frame —
+a frame the split path's own comment already describes as "most of an SBF call
+frame on its own". Measured here as a struct size only; whether it moves stack
+depth or compute units on the pinned runtime is a resource question for the
+on-chain lane and is not measured here.

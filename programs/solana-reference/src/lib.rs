@@ -49,7 +49,7 @@ use clutch_accumulator::{
     IDENTITY_BYTES, WINDOW_DOMAIN_BYTES,
 };
 use clutch_kernel::{
-    Error as KernelError, MarketState, PayoutSet, PayoutVector, Phase, Position,
+    BasisMode, Error as KernelError, MarketState, PayoutSet, PayoutVector, Phase, Position,
     MAX_OUTCOMES as KERNEL_MAX_OUTCOMES, MAX_PAYOUTS,
 };
 use clutch_solana_layout::{
@@ -1323,6 +1323,49 @@ pub fn expected_window_preimage(
     Ok(out)
 }
 
+/// Resolve a derived-basis market from sealed evidence, with no preset bridge.
+///
+/// The design's §4 and §5.1 seams joined end to end: the derivation produces
+/// the validated weight vector at the resolved value, and the kernel installs
+/// exactly that vector through `MarketState::resolve_with_vector`.  No step
+/// searches the frozen preset set, so the reachable lattice is no longer
+/// capped at `MAX_PAYOUTS` members and
+/// [`ResolutionRefusal::DerivedVectorUnrepresentable`] cannot arise on this
+/// path — for a two-outcome degree-1 market the whole `D + 1` member lattice
+/// resolves, not the eight vectors an enumeration could hold.
+///
+/// The division of labour is unchanged from resolve-by-index: the derivation
+/// binds the vector to digest-bound terms and one sealed `WindowResult`, and
+/// the kernel checks only (H1)/(H2) shape against the frozen `D`.  This
+/// function reads no account, clock, or signer and writes nothing but the
+/// market it is handed; it is pure and total, exactly like the two seams it
+/// composes.
+///
+/// Both mode gates are live and independent.  Degree-0 terms refuse
+/// [`ResolutionRefusal::WrongResolutionMode`] in the derivation, and a
+/// `FinitePreset` market refuses `KernelError::WrongResolutionMode` in the
+/// kernel, so a caller cannot cross the seams by supplying a matched pair of
+/// the wrong kind.
+///
+/// What this is *not*: it is not the `Action::Resolve` account path.  That
+/// path still resolves by index, because the record a redemption reads its
+/// authority from is a `ResolutionAccount`, whose frozen layout names a payout
+/// *index* and carries no resolved value.  Routing derived markets through the
+/// accounts needs the layout half of the residue; until it lands, this seam is
+/// where a derived vector meets the kernel.
+pub fn resolve_derived_market(
+    market: &mut MarketState,
+    terms: &ResolutionTerms,
+    window: &WindowResult,
+) -> Result<PayoutVector> {
+    let derived = derive_payout_vector(terms, window)?;
+    // The two crates agree on `MAX_OUTCOMES` by construction: this line does
+    // not compile if the weight arrays ever stop being the same type.
+    let vector = PayoutVector::new(derived.denominator, derived.weights);
+    market.resolve_with_vector(vector)?;
+    Ok(vector)
+}
+
 /// Fold a caller-supplied window-evidence blob into a sealed [`WindowResult`].
 ///
 /// The blob declares its own domain, and the fold runs the accumulator's
@@ -1575,6 +1618,19 @@ fn kernel_market(state: &DecodedState) -> Result<MarketState> {
         outcomes: market.outcome_count,
         phase,
         resolved_payout: kernel.resolved_payout,
+        // The reference kernel account carries no basis-mode byte and no
+        // resolved-vector slot, so the market it can reconstruct is a
+        // `FinitePreset` one and nothing else.  This is not a policy choice:
+        // it is what the landed account bytes can say.  Persisting the mode
+        // and the installed vector — and `ResolutionAccount.resolved_value`,
+        // without which redemption in mode 1 has no record-bound authority to
+        // check against — is the layout half of the design's §4 residue, and
+        // `ResolutionAccount` is a frozen layout-crate type this crate does
+        // not own.  Until that lands, the account-driven adapter path is
+        // mode 0 and derived-basis markets resolve through the pure
+        // [`resolve_derived_market`] seam only.
+        basis_mode: BasisMode::FinitePreset,
+        resolved_vector: PayoutVector::ZERO,
         collateral: hoard.collateral_atoms,
         total_supply: kernel.total_supply,
         payouts: kernel.payouts,
@@ -5283,6 +5339,39 @@ mod tests {
         derive_payout_vector(&derived, &window)
     }
 
+    /// The same evidence as [`derived_vector_at`], handed over unreduced so a
+    /// test can drive the joined derive-and-resolve seam.
+    fn derived_terms_and_window(
+        f: &Fixture,
+        low: u128,
+        high: u128,
+    ) -> (ResolutionTerms, WindowResult) {
+        let market = MarketAccount::decode(&f.state.market).unwrap();
+        let derived = ResolutionTerms::from_market_terms(&market, &f.terms_account).unwrap();
+        let records = [
+            (OBSERVATION_ACCEPTED, 100, 0, 0),
+            (OBSERVATION_ACCEPTED, 101, 0, 0),
+            (OBSERVATION_ACCEPTED, 102, low, high),
+        ];
+        let (window, len) = encode_window(&f.window_spec(), &records);
+        let window = fold_window_evidence(&window[..len], FEED_CURSOR).unwrap();
+        (derived, window)
+    }
+
+    /// The frozen terms presets as the kernel payout set they anchor.
+    fn kernel_payout_set(terms: &TermsAccount) -> PayoutSet {
+        let mut vectors = [PayoutVector::ZERO; MAX_PAYOUTS];
+        let mut index = 0usize;
+        while index < usize::from(terms.payout_count) {
+            vectors[index] = PayoutVector::new(
+                terms.payouts[index].denominator,
+                terms.payouts[index].weights,
+            );
+            index += 1;
+        }
+        PayoutSet::new(terms.payout_count, terms.outcome_count, vectors)
+    }
+
     /// The degree-1 hat-basis terms whose reachable weight lattice is exactly
     /// the preset set: two outcomes, `D = 7`, anchors at 0 and 8, so the
     /// eight reachable vectors `(7 − r, r)` are the eight frozen presets.
@@ -5469,7 +5558,12 @@ mod tests {
             ))
         );
         /* The pure seam still derives the validated member-shaped vector —
-         * the refusal is the missing kernel transition, not the derivation. */
+         * the refusal is now the *layout* half of the residue, not the
+         * kernel half: `resolve_with_vector` exists and installs exactly this
+         * vector through `resolve_derived_market`, but the
+         * `ResolutionAccount` a redemption reads its authority from names a
+         * payout *index* and carries no resolved value, so the account path
+         * has nowhere to record what was installed. */
         assert_eq!(derived_vector_at(&f, 3, 3).unwrap().weights[..2], [40, 24]);
         /* At a knot the derived vector IS a preset, and the market resolves:
          * the residue is exactly the non-member lattice, nothing else. */
@@ -5480,6 +5574,161 @@ mod tests {
                 .resolved_payout,
             1
         );
+    }
+
+    #[test]
+    fn degree_one_vector_outside_the_presets_resolves_through_the_kernel_seam() {
+        /* The kernel half of the §4 residue, closed. The same D = 64 terms
+         * whose derived vector (40, 24) no preset carries — the vector the
+         * preset-membership bridge refused — resolves directly, and pays the
+         * derived fractions exactly. No step of this path searches the preset
+         * set, so `DerivedVectorUnrepresentable` has no site to arise at. */
+        let mut f = fixture();
+        let mut terms = hat_terms_exact_d8(&f);
+        let mut left = [0u64; MAX_OUTCOMES];
+        left[0] = 64;
+        let mut right = [0u64; MAX_OUTCOMES];
+        right[1] = 64;
+        terms.payouts[0] = PayoutVectorBytes {
+            denominator: 64,
+            weights: left,
+        };
+        terms.payouts[1] = PayoutVectorBytes {
+            denominator: 64,
+            weights: right,
+        };
+        refreeze_terms(&mut f, terms);
+
+        let payouts = kernel_payout_set(&f.terms_account);
+        let mut market = MarketState::new(2, BasisMode::DerivedBasis, payouts, 0).unwrap();
+        let mut position = Position::EMPTY;
+        market.split(&mut position, 64).unwrap();
+
+        let (derived, window) = derived_terms_and_window(&f, 3, 3);
+        let installed = resolve_derived_market(&mut market, &derived, &window).unwrap();
+        assert_eq!(installed.denominator, 64);
+        assert_eq!(installed.weights[..2], [40, 24]);
+        assert_eq!(market.resolved_vector, installed);
+        // The vector is genuinely outside the frozen set: this is the case
+        // preset membership could not express, not a member in disguise.
+        let mut index = 0usize;
+        while index < usize::from(f.terms_account.payout_count) {
+            assert_ne!(payouts.vectors[index], installed);
+            index += 1;
+        }
+
+        // 64 * 40 / 64 = 40 and 64 * 24 / 64 = 24, both exact.
+        assert_eq!(market.redeem_internal(&mut position, 0, 64), Ok(40));
+        assert_eq!(market.redeem_internal(&mut position, 1, 64), Ok(24));
+        assert_eq!(market.collateral, 0);
+        market.check_invariants().unwrap();
+
+        // Remainder refusal and the complete-set exit survive the new seam:
+        // 3 * 40 / 64 is not an atom count, and a balanced holder still exits
+        // exactly at the same vector.
+        let mut second = MarketState::new(2, BasisMode::DerivedBasis, payouts, 0).unwrap();
+        let mut holder = Position::EMPTY;
+        second.split(&mut holder, 3).unwrap();
+        resolve_derived_market(&mut second, &derived, &window).unwrap();
+        assert_eq!(
+            second.redeem_internal(&mut holder, 0, 3),
+            Err(KernelError::RemainderRequired)
+        );
+        assert_eq!(second.redeem_complete_set(&mut holder, 3), Ok(3));
+        assert_eq!(second.collateral, 0);
+        assert_eq!(holder, Position::EMPTY);
+    }
+
+    #[test]
+    fn degree_one_lattice_resolves_past_the_eight_preset_cap() {
+        /* The defect the residue named, measured: with D = g = 8 the reachable
+         * lattice has nine members and `MAX_PAYOUTS` is eight, so preset
+         * membership could not represent the lattice at any enumeration. Every
+         * one of the nine resolves through the kernel seam and pays exactly,
+         * and the complete set is worth exactly one collateral unit at each —
+         * Theorem (ii) of design §3.2 over the whole reachable set. */
+        let mut f = fixture();
+        let terms = hat_terms_exact_d8(&f);
+        refreeze_terms(&mut f, terms);
+        let payouts = kernel_payout_set(&f.terms_account);
+
+        let mut distinct = 0u32;
+        let mut value = 0u128;
+        while value <= 8 {
+            let (derived, window) = derived_terms_and_window(&f, value, value);
+            let mut market = MarketState::new(2, BasisMode::DerivedBasis, payouts, 0).unwrap();
+            let mut position = Position::EMPTY;
+            market.split(&mut position, 8).unwrap();
+            let installed = resolve_derived_market(&mut market, &derived, &window).unwrap();
+            let right = value as u64;
+            assert_eq!(installed.denominator, 8);
+            assert_eq!(installed.weights[..2], [8 - right, right], "at {value}");
+
+            // 8 * w_i / 8 = w_i: every leg is exact at this denominator.
+            assert_eq!(market.redeem_internal(&mut position, 0, 8), Ok(8 - right));
+            assert_eq!(market.redeem_internal(&mut position, 1, 8), Ok(right));
+            assert_eq!(market.collateral, 0);
+            market.check_invariants().unwrap();
+
+            // The same vector, exited as a complete set instead.
+            let mut whole = MarketState::new(2, BasisMode::DerivedBasis, payouts, 0).unwrap();
+            let mut balanced = Position::EMPTY;
+            whole.split(&mut balanced, 5).unwrap();
+            resolve_derived_market(&mut whole, &derived, &window).unwrap();
+            assert_eq!(whole.redeem_complete_set(&mut balanced, 5), Ok(5));
+            assert_eq!(whole.collateral, 0);
+
+            distinct += 1;
+            value += 1;
+        }
+        assert_eq!(distinct, 9);
+        assert!(usize::from(distinct as u8) > MAX_PAYOUTS);
+    }
+
+    #[test]
+    fn the_derived_resolution_seam_refuses_both_wrong_modes() {
+        /* One resolution seam per mode, never both, checked at each end
+         * independently: the derivation refuses degree-0 terms (R-17) and the
+         * kernel refuses a `FinitePreset` market, so a caller cannot cross the
+         * seams by supplying a matched pair of the wrong kind. */
+        let mut categorical = fixture();
+        let mut boundary = categorical.terms_account;
+        boundary.knots[0] = 50;
+        refreeze_terms(&mut categorical, boundary);
+        let (deg0_terms, deg0_window) = derived_terms_and_window(&categorical, 47, 49);
+        let mut derived_market = MarketState::new(
+            2,
+            BasisMode::DerivedBasis,
+            kernel_payout_set(&categorical.terms_account),
+            0,
+        )
+        .unwrap();
+        let before = derived_market;
+        assert_eq!(
+            resolve_derived_market(&mut derived_market, &deg0_terms, &deg0_window),
+            Err(Error::Resolution(ResolutionRefusal::WrongResolutionMode))
+        );
+        assert_eq!(derived_market, before);
+
+        let mut hat = fixture();
+        let terms = hat_terms_exact_d8(&hat);
+        refreeze_terms(&mut hat, terms);
+        let (deg1_terms, deg1_window) = derived_terms_and_window(&hat, 3, 3);
+        let mut preset_market = MarketState::new(
+            2,
+            BasisMode::FinitePreset,
+            kernel_payout_set(&hat.terms_account),
+            0,
+        )
+        .unwrap();
+        let before = preset_market;
+        assert_eq!(
+            resolve_derived_market(&mut preset_market, &deg1_terms, &deg1_window),
+            Err(Error::Kernel(KernelError::WrongResolutionMode))
+        );
+        assert_eq!(preset_market, before);
+        // And the mode-0 market still resolves through its own seam.
+        preset_market.resolve(1).unwrap();
     }
 
     #[test]
