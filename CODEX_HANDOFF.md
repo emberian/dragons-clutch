@@ -220,6 +220,18 @@ redemption unconditionally. The final review reproduced every historical P0 as
 closed in the deliberately bounded host subsets. This is the stopping point for
 model transfer, not an integration PASS: P1/P2 joins below remain STOPs.
 
+### 2026-08-19 addendum: the SBF program exists
+
+This handoff predates `programs/clutch-sbf`: a deployable SBF program whose
+instruction set (Split, Merge, Materialize, Dematerialize, CreateMarket,
+FeedAdvance, evidence-gated Resolve, RedeemInternal, PlaceOrder, CancelOrder)
+executes byte-exactly against the offline reference adapter on a real local
+bank, with a recorded lifecycle walk, Token-2022 CPI scenarios, and CU
+measurements. See `docs/implementation/SBF_BRINGUP.md`,
+`docs/implementation/LIFECYCLE_WALK.md`, and the gap ledger in
+`docs/implementation/DRIFT_REVIEW_2026-08-19B.md` for what remains before any
+deployment claim. Nothing here alters section 7's gates.
+
 ## 5. Verification commands
 
 Run from the repository root. Keep Cargo offline and use independent manifests;

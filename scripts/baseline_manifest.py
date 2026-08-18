@@ -86,8 +86,12 @@ NOT_ATTESTED = [
     "bootstrap, no dependency-source rebuild",
     "no proof content: the Rocq gate typechecks Definitions (zero theorems) and "
     "the Verus gate fails on the pinned probe; both are recorded as-is",
-    "no SBF runtime evidence: no entrypoint, program-test lifecycle, Token-2022 "
-    "CPI, CU/stack/heap measurement, or cross-runtime vector closure",
+    "SBF runtime evidence exists but is NOT attested by this manifest: the "
+    "entrypoint, per-family SVM differentials, lifecycle walk, Token-2022 CPI "
+    "scenarios, and CU measurements are recorded in "
+    "docs/implementation/SBF_BRINGUP.md and LIFECYCLE_WALK.md and gated by "
+    "programs/clutch-sbf/scripts/run_bringup.sh, which this manifest neither "
+    "runs nor digests; cross-runtime vector closure remains open",
     "no SBOM, license closure, fixture provenance chain, or source offer",
     "no published provenance: the identities below are git object ids. A "
     "configured remote or a pushed branch is neither a signed tag nor a release "
