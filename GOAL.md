@@ -36,3 +36,5 @@ SBF bring-up (S1) toward a deployable program; degg independent-FBA oracle
 - Committee memos: 42 Qs triaged, 8 position memos; ember decisions queued
   (no-position reversal for Q12-15 material; 8 sources need verification
   before any filing use).
+- B lane: typed WindowResult (substitution = compile error), derive_payout
+  spec, digest unification decided + Python side; pushed.
