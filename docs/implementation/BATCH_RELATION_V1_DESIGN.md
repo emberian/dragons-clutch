@@ -1015,3 +1015,29 @@ requires.
   prohibited assumptions, host/SBF vector agreement, mutation tests failing
   for the intended reason, resource measurement at 2/4/8/16 outcomes, and no
   global-optimality or privacy language anywhere.
+
+## 18. Implementation record and corrections (2026-08-18)
+
+IMPLEMENTED: the coupled relation landed in
+`crates/clutch-batch/src/relation_v1.rs` (commit f7caf04) with 33 falsifier
+tests beside the retained scalar lab. The module documentation is the
+authoritative record of six documented deviations from this text; the two
+that correct this document rather than refine it are:
+
+1. **§8.4 slack-floor rule refuted.** As literally written (floor slack at
+   1), the constructor emits `A-B` on the `{A:1,C:1}` / `{B:1,C:1}` book and
+   strands a forbidden `C-C` residue. The implemented greedy keys the
+   counterparty choice on **total participation** (not side participation),
+   under which positive slack is forced whenever (H-i-O) holds. Oracle
+   evidence: 3,255 + 1,072 exhaustive flow tables and 2,592 bounded books;
+   the constructor's accept set coincides exactly with (H-i-O) and
+   `ConstructorStalled` is unreachable on feasible tables. This section's
+   original text is retained above for history; the implemented rule governs.
+2. **§9.2 rounding direction.** Flooring both legs cannot conserve; the
+   implemented boundary rounds debits up and credits down, with both
+   remainders owned by one named non-negative pot.
+
+These are design-document corrections discovered by exhaustive falsifiers,
+not code weakenings: the accept set only shrank or stayed equal at every
+deviation. The feasibility argument and constructor invariant remain design
+arguments with oracle evidence, not machine-checked theorems.
