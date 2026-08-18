@@ -1,0 +1,10 @@
+[package]
+name = "clutch-lp-mapping-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "PROPOSED host-side probe for the optimality-certificate mapping (research only; not a shipped crate)"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+clutch-batch = { path = "../../crates/clutch-batch" }
