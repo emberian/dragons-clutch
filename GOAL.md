@@ -27,6 +27,15 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- Draft 7 landed: bundling-invariance as a criteria-test, Ariadne/FalconX
+  by-name engagements, machine-checked-negatives table, P-I8, addendum
+  slack held; pushed.
+- Portfolio page encoding v3 (one chain, one fold; 3883B pages); pushed.
+- Multi-position closure IMPLEMENTED (CLO-DELTA-V1 inductive invariant;
+  single-position refusal retired); adapter doc rewritten; pushed.
+- Cost re-pin lane launched for v3; foundation lane briefed on the
+  closure port + page v3.
+
 - Refusal-order frozen (18 rules, 3 tiers); differential now ZERO
   divergences over 300.4M cases; custody-bound gap closed; C024 in the
   claim ledger with the conformance-vs-corroboration distinction. Pushed.
