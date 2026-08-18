@@ -104,8 +104,8 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Ember decision queue (morning)
 
-1. IAC addendum go/no-go (answers published Session II heading; text ready).
-2. 24/7-perpetuals RFC go/no-go - deadline Aug 26, decision needed ~24h.
+1. IAC addendum: GO received - being inserted (IAC statement -> Draft 8).
+2. 24/7-perpetuals: GO received - typst conversion in flight (Draft 1).
 3. One paid Bedrock MPC-TLS session (first provider-attested transcript).
 4. Vendored solana-define-syscall provenance sign-off.
 5. Policy freezes (residual 1a/1b/1c, lots, AON, fee carry - evidence in).
