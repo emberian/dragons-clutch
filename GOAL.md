@@ -27,6 +27,16 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- Manipulation-cost table: 1,080 rows exact, four surprises incl.
+  refuting our own window-length line - the FILING was corrected by its
+  own experiment before any human read it (perpetuals now 5pp); pushed.
+- Perpetuals Draft 1 + operatorless addendum in IAC Draft 8; John packet
+  is ROUND 1 of 2; pushed.
+- Split->CLO-DELTA port + Materialize/Dematerialize; FINDING: reference
+  adapter never implemented Merge -> REF-MERGE lane launched.
+- CreateMarket landed; collateral-cap blocker -> policy-decoder lane
+  launched.
+
 - Streaming page decoders: on-chain pages unblocked, frames MEASURED
   (1,856 max vs 8,640 buffered); pushed (unsigned - 1Password away).
 - CreateMarket implemented (23 negative tests, byte-exact founding
