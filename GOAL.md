@@ -29,6 +29,19 @@ posting-path spec; Draft 7 rebalance still out.
 
 ## Done log
 
+- THEORY WAVE launched (the B-spline consequences, with ember):
+  DUAL_IS_THE_MEASURE (Fable - is the LP dual literally the implied
+  measure? then certificate and density are one object),
+  RISK_SUMMED_POSITIONS (Fable - sup-norm margining over a joint outcome
+  space, model-free; the fee-as-quotient-norm derivation),
+  OPTIMALITY_CERTIFICATE_MAPPING (Opus - our relation as a Cert-F LP,
+  three quantified gaps, the claim-language delta),
+  CERTIFICATE_STACK_INVENTORY (Opus - breadstuffs' Lean-proven cert
+  stack: separability, licensing, provenance gate).
+  Finding that triggered it: breadstuffs fhegg/fhir/CertF already
+  implements dual-certificate verify-not-find with zero-sorry Lean and a
+  real STARK - and has NO consumer. We are the consumer it never had.
+
 - Wave 9 landed and pushed: genesis plane, token completion (real mints,
   collateral wired, atomic-revert shown), kernel resolve_with_vector,
   degg settlement relation (P1-7). Pace slowed per ember.
