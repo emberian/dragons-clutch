@@ -1,6 +1,6 @@
 {
   "schema": "dragons.cost_lab.constants.v2",
-  "snapshot_date": "2026-08-18",
+  "snapshot_date": "2026-08-19",
   "source_baseline": {
     "agave": {
       "release": "v4.2.1",
@@ -97,14 +97,14 @@
   "abi_landed": {
     "arm": "abi_landed",
     "evidence_class": "landed_codec_constant",
-    "snapshot_date": "2026-08-18",
+    "snapshot_date": "2026-08-19",
     "source": {
       "owner": "programs/solana-layout",
       "codec_path": "programs/solana-layout/src/lib.rs",
-      "commit": "e780d5b67749b25415a1dc6ec8011a0122643db4",
-      "commit_short": "e780d5b",
-      "commit_subject": "OrderPage v4: derived-rank ids, tombstones, per-order expiry, streaming writer",
-      "codec_blob_sha256_at_commit": "ab97bc4229aa966ac6741891fec81f1eeaa5f697bcc749f2f24735f320fee9fb",
+      "commit": "0e4bd51c3de62f5ae965907ff3aba036dae9607c",
+      "commit_short": "0e4bd51",
+      "commit_subject": "feat(sbf): route resumable occupation resolution",
+      "codec_blob_sha256_at_commit": "82a995aeef4c326a683d56f22a1eea41cb190eab6b2158427c0beefcd3e6589b",
       "relation_path": "crates/clutch-batch/src/lib.rs",
       "relation_blob_sha256_at_commit": "f25ce5524a71f9e8ad5200992bb69290444865243f26040906d7aa6798013249",
       "relation_v1_path": "crates/clutch-batch/src/relation_v1.rs",
@@ -116,7 +116,7 @@
       "layout_version_v1": 1,
       "layout_version_v2": 2,
       "layout_version_v3": 3,
-      "intent_version": 2,
+      "intent_version": 3,
       "intent_version_v1": 1,
       "hash_bytes": 32,
       "minimum_outcomes": 2,
@@ -136,8 +136,8 @@
       "order_slot_field_terms": [1, 235],
       "max_portfolio_orders": 8,
       "order_page_header_bytes": 236,
-      "max_intent_bytes": 302,
-      "max_intent_field_terms": [2, 64, 1, 235],
+      "max_intent_bytes": 310,
+      "max_intent_field_terms": [2, 64, 8, 1, 235],
       "relation_version": 1,
       "relation_max_orders": 64,
       "relation_max_portfolio_orders": 8,
@@ -265,6 +265,22 @@
         "schema_version": 2,
         "field_terms": [2, 128, 8, 8, 8, 8, 1, 1, 1],
         "formula": "2 + (4 * 32) + 8 + 8 + 8 + 8 + 1 + 1 + 1"
+      },
+      "clear_work": {
+        "rust_const": "account_len::CLEAR_WORK",
+        "bytes": 48750,
+        "discriminator_tag": 17,
+        "schema_version": 1,
+        "field_terms": [2, 128, 16, 4, 2, 2, 1, 1, 1, 1, 48592],
+        "formula": "2 + (4 * 32) + 16 + 4 + 2 + 2 + 1 + 1 + 1 + 1 + CLEAR_WORK_BODY_BYTES"
+      },
+      "candidate_feed": {
+        "rust_const": "account_len::CANDIDATE_FEED",
+        "bytes": 6266,
+        "discriminator_tag": 18,
+        "schema_version": 1,
+        "field_terms": [2, 128, 128, 8, 8, 8, 16, 16, 16, 8, 2, 2, 1, 1, 1, 1, 512, 5408],
+        "formula": "2 + (4 * 32) + (MAX_OUTCOMES * 8) + 8 + 8 + 8 + 16 + 16 + 16 + 8 + 2 + 2 + 1 + 1 + 1 + 1 + (MAX_EPOCH_ORDERS * 8) + (MAX_SLICES * super::clearing::PAIRING_SLICE_BYTES)"
       }
     },
     "intents": {
@@ -272,7 +288,7 @@
         "rust_variant": "CreateMarket",
         "rust_tag_const": "CREATE_TAG",
         "intent_tag": 1,
-        "intent_version": 2,
+        "intent_version": 3,
         "bytes": 139,
         "field_terms": [2, 32, 32, 8, 1, 32, 32],
         "formula": "2 + 32 + 32 + 8 + 1 + 32 + 32"
@@ -281,7 +297,7 @@
         "rust_variant": "Split",
         "rust_tag_const": "SPLIT_TAG",
         "intent_tag": 2,
-        "intent_version": 2,
+        "intent_version": 3,
         "bytes": 74,
         "field_terms": [2, 32, 32, 8],
         "formula": "2 + 32 + 32 + 8"
@@ -290,7 +306,7 @@
         "rust_variant": "Merge",
         "rust_tag_const": "MERGE_TAG",
         "intent_tag": 3,
-        "intent_version": 2,
+        "intent_version": 3,
         "bytes": 74,
         "field_terms": [2, 32, 32, 8],
         "formula": "2 + 32 + 32 + 8"
@@ -299,7 +315,7 @@
         "rust_variant": "Materialize",
         "rust_tag_const": "MATERIALIZE_TAG",
         "intent_tag": 4,
-        "intent_version": 2,
+        "intent_version": 3,
         "bytes": 107,
         "field_terms": [2, 32, 32, 32, 1, 8],
         "formula": "2 + 32 + 32 + 32 + 1 + 8"
@@ -308,7 +324,7 @@
         "rust_variant": "Dematerialize",
         "rust_tag_const": "DEMATERIALIZE_TAG",
         "intent_tag": 5,
-        "intent_version": 2,
+        "intent_version": 3,
         "bytes": 107,
         "field_terms": [2, 32, 32, 32, 1, 8],
         "formula": "2 + 32 + 32 + 32 + 1 + 8"
@@ -317,7 +333,7 @@
         "rust_variant": "FeedAdvance",
         "rust_tag_const": "FEED_ADVANCE_TAG",
         "intent_tag": 6,
-        "intent_version": 2,
+        "intent_version": 3,
         "bytes": 74,
         "field_terms": [2, 32, 8, 32],
         "formula": "2 + 32 + 8 + 32"
@@ -327,16 +343,16 @@
         "rust_slot_kind": "Portfolio",
         "rust_tag_const": "PLACE_TAG",
         "intent_tag": 7,
-        "intent_version": 2,
-        "bytes": 302,
-        "field_terms": [2, 32, 32, 1, 235],
-        "formula": "2 + 32 + 32 + 1 + PORTFOLIO_RECORD_BYTES"
+        "intent_version": 3,
+        "bytes": 310,
+        "field_terms": [2, 32, 32, 8, 1, 235],
+        "formula": "2 + 32 + 32 + 8 + 1 + PORTFOLIO_RECORD_BYTES"
       },
       "cancel_order": {
         "rust_variant": "CancelOrder",
         "rust_tag_const": "CANCEL_TAG",
         "intent_tag": 8,
-        "intent_version": 2,
+        "intent_version": 3,
         "bytes": 138,
         "field_terms": [2, 32, 32, 32, 32, 8],
         "formula": "2 + 32 + 32 + 32 + 32 + 8"
@@ -345,7 +361,7 @@
         "rust_variant": "SettlePage",
         "rust_tag_const": "SETTLE_TAG",
         "intent_tag": 9,
-        "intent_version": 2,
+        "intent_version": 3,
         "bytes": 68,
         "field_terms": [2, 32, 32, 2],
         "formula": "2 + 32 + 32 + 2"
@@ -408,7 +424,7 @@
       "Both admitted order families and a retirement share one 236-byte tagged slot, so the page holds every admitted slot kind without a second account, a second order-id chain, or a second fold.",
       "A single-Egg slot pays for the widest admitted body: 107 bytes of body under a kind byte and 128 bytes of required-zero padding. The growth from the 1819-byte v2 single-family page to 4012 is those sixteen wider slots plus one header byte; the padding is required to be zero and is not spare capacity.",
       "A cancellation writes a 80-byte tombstone into the slot and order id it retires, so a retirement never renumbers a later order and never widens the slot.",
-      "place_order is pinned at the widest admitted placement, a portfolio slot at 302 bytes, which is exactly MAX_INTENT_BYTES. A single-Egg placement is 174 bytes and a padding or tombstone placement is refused by the codec at 67 bytes of header.",
+      "place_order is pinned at the widest admitted placement, a portfolio slot at 310 bytes, which is exactly MAX_INTENT_BYTES. A single-Egg placement is 182 bytes and a padding or tombstone placement is refused by the codec at 75 bytes of header.",
       "check_count refuses outcome_count below 2 and above 16, so n=24 is a codec refusal in this arm on top of the unchanged V1 policy refusal."
     ]
   }

@@ -2,7 +2,7 @@
 
 Evidence ceiling: offline synthetic wire measurement plus analytical lower bounds. No SBF, validator, RPC, fee-market, or landing measurement occurred.
 
-Arms: `layout_hypothesis` (design sketch, retained) and `abi_landed` (read from `programs/solana-layout/src/lib.rs` at `e780d5b`), plus their `abi_differential`. A landed width is an encoding fact, never a measured cost.
+Arms: `layout_hypothesis` (design sketch, retained) and `abi_landed` (read from `programs/solana-layout/src/lib.rs` at `0e4bd51`), plus their `abi_differential`. A landed width is an encoding fact, never a measured cost.
 
 ## Claim transition envelope
 
@@ -43,7 +43,7 @@ These minimum transaction counts ignore compute. They cannot be used to claim th
 
 ## Landed ABI inventory
 
-Source: `programs/solana-layout/src/lib.rs` at `e780d5b`, one instance of each account.
+Source: `programs/solana-layout/src/lib.rs` at `0e4bd51`, one instance of each account.
 
 | account | Rust constant | data bytes | package-default rent principal (lamports) |
 |---|---|---:|---:|
@@ -62,9 +62,11 @@ Source: `programs/solana-layout/src/lib.rs` at `e780d5b`, one instance of each a
 | final_pot | `account_len::FINAL_POT` | 262 | 2714400 |
 | settlement_receipt | `account_len::SETTLEMENT_RECEIPT` | 217 | 2401200 |
 | resolution | `account_len::RESOLUTION` | 165 | 2039280 |
-| **one instance of each (15)** | | **9215** | **77499600** |
+| clear_work | `account_len::CLEAR_WORK` | 48750 | 340190880 |
+| candidate_feed | `account_len::CANDIDATE_FEED` | 6266 | 44502240 |
+| **one instance of each (17)** | | **64231** | **462192720** |
 
-Of that principal, 13363200 lamports is the per-account 128-byte storage overhead, so account count is a first-class capital term.
+Of that principal, 15144960 lamports is the per-account 128-byte storage overhead, so account count is a first-class capital term.
 
 ## Landed epoch book
 
@@ -88,7 +90,7 @@ Of that principal, 13363200 lamports is the per-account 128-byte storage overhea
 | materialize | 107 | 508 | 327 | 9 |
 | dematerialize | 107 | 508 | 327 | 9 |
 | feed_advance | 74 | 310 | 284 | 4 |
-| place_order | 302 | 638 | 519 | 7 |
+| place_order | 310 | 646 | 527 | 7 |
 | cancel_order | 138 | 441 | 353 | 6 |
 | settle_page | 68 | 436 | 286 | 8 |
 
@@ -129,7 +131,7 @@ Payload widths are landed; the account sets are hypotheses and are labeled as su
 | claim_instruction_internal_split | bytes | 11 | 74 | +63 | The landed payload names market and owner by 32-byte identity instead of packing an outcome count and a u64 into 11 bytes. |
 | claim_instruction_materialize_one | bytes | 11 | 107 | +96 | The landed payload adds a 32-byte destination and an outcome index to the market/owner pair, still far inside MAX_INTENT_BYTES. |
 | accumulator_full_summary | bytes | 272 | absent | absent | No accumulator summary account exists in the landed family; FeedHead is a 124-byte cursor plus evidence digest, not a fold summary, so the accumulator arm stays entirely hypothetical. |
-| landed_only_account_family | bytes | absent | 4650 | absent | Realm, Profile, Market, Hoard, FeedHead, Terms, PriceGrid, Epoch, CandidateRecord, FinalPot, SettlementReceipt and Resolution were never in the hypothesis arm, so most of the landed rent inventory was previously unmodeled. |
+| landed_only_account_family | bytes | absent | 59666 | absent | Realm, Profile, Market, Hoard, FeedHead, Terms, PriceGrid, Epoch, CandidateRecord, FinalPot, SettlementReceipt, Resolution, ClearWork and CandidateFeed were never in the hypothesis arm, so most of the landed rent inventory is not represented by the design sketch. |
 
 ## Interpretation
 

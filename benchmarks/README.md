@@ -36,9 +36,9 @@ Every row carries an `arm`.
 
 - `layout_hypothesis` is the original design sketch: 193 rows, retained unchanged so its
   falsifications stay readable. It is a design arm, not a description of the current program.
-- `abi_landed` reads the landed codec in `programs/solana-layout` (pinned at commit `e780d5b`)
-  and the landed relation bounds in `crates/clutch-batch`: the 15-account family and its exact
-  widths, the forced 4,012-byte order page of sixteen 236-byte tag-discriminated slots, the
+- `abi_landed` reads the landed codec in `programs/solana-layout` (pinned at commit `0e4bd51`)
+  and the landed relation bounds in `crates/clutch-batch`: the 17-account family and its exact
+  widths (including the streaming `ClearWork` and `CandidateFeed` accounts), the forced 4,012-byte order page of sixteen 236-byte tag-discriminated slots, the
   64-order epoch book, and the nine intent payload widths. `constants.json` stores each width as
   the codec's own field terms, and the harness refuses to run unless every pinned total equals the
   sum of its terms.

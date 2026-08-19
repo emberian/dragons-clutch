@@ -66,14 +66,14 @@ class CostModelTests(unittest.TestCase):
         self.assertEqual(cost_lab.rent_minimum(165, self.constants), 2_039_280)
 
     def test_matrix_is_complete(self) -> None:
-        self.assertEqual(len(self.rows), 261)
-        self.assertEqual(len({row["scenario_id"] for row in self.rows}), 261)
+        self.assertEqual(len(self.rows), 263)
+        self.assertEqual(len({row["scenario_id"] for row in self.rows}), 263)
         arms = {arm: 0 for arm in cost_lab.ARMS}
         for row in self.rows:
             arms[row["arm"]] += 1
         # The hypothesis arm is retained whole beside the landed arm, never replaced by it.
         self.assertEqual(arms[cost_lab.ARM_HYPOTHESIS], 193)
-        self.assertEqual(arms[cost_lab.ARM_LANDED], 56)
+        self.assertEqual(arms[cost_lab.ARM_LANDED], 58)
         self.assertEqual(arms[cost_lab.ARM_DIFFERENTIAL], 12)
 
     def test_n24_is_always_refused(self) -> None:
@@ -144,6 +144,8 @@ class LandedAbiTests(unittest.TestCase):
             "final_pot": 262,
             "settlement_receipt": 217,
             "resolution": 165,
+            "clear_work": 48_750,
+            "candidate_feed": 6_266,
         }
         self.assertEqual(set(expected), set(cost_lab.LANDED_ACCOUNT_ORDER))
         for name, width in expected.items():
@@ -232,10 +234,10 @@ class LandedAbiTests(unittest.TestCase):
 
     def test_one_instance_inventory_totals(self) -> None:
         row = cost_lab.find_row(self.rows, "landed-account-inventory-one-instance")
-        self.assertEqual(row["outputs"]["data_bytes"], 9_215)
-        self.assertEqual(row["outputs"]["rent_principal_lamports"], 77_499_600)
-        self.assertEqual(row["outputs"]["rent_overhead_component_lamports"], 13_363_200)
-        self.assertEqual(row["outputs"]["largest_account"], "order_page")
+        self.assertEqual(row["outputs"]["data_bytes"], 64_231)
+        self.assertEqual(row["outputs"]["rent_principal_lamports"], 462_192_720)
+        self.assertEqual(row["outputs"]["rent_overhead_component_lamports"], 15_144_960)
+        self.assertEqual(row["outputs"]["largest_account"], "clear_work")
         self.assertEqual(row["outputs"]["smallest_account"], "realm")
 
     def test_landed_rent_examples(self) -> None:
@@ -266,7 +268,7 @@ class LandedAbiTests(unittest.TestCase):
             "materialize": 107,
             "dematerialize": 107,
             "feed_advance": 74,
-            "place_order": 302,
+            "place_order": 310,
             "cancel_order": 138,
             "settle_page": 68,
         }
@@ -334,7 +336,7 @@ class LandedAbiTests(unittest.TestCase):
             self.assertIsNone(output["delta"], scenario_id)
         landed_only = cost_lab.find_row(self.rows, "diff-landed-only-account-family")["outputs"]
         self.assertIsNone(landed_only["hypothesis_value"])
-        self.assertEqual(landed_only["landed_value"], 4_650)
+        self.assertEqual(landed_only["landed_value"], 59_666)
 
     def test_position_rent_delta_is_reported(self) -> None:
         output = cost_lab.find_row(self.rows, "diff-position-account")["outputs"]
@@ -521,10 +523,10 @@ class AbiAuditHardeningTests(unittest.TestCase):
         self.assertIn("PlaceOrder.Portfolio", arms)
         self.assertIn("PlaceOrder.Single", arms)
         self.assertEqual(
-            cost_lab.evaluate_rust_arithmetic(arms["PlaceOrder.Single"]), 174
+            cost_lab.evaluate_rust_arithmetic(arms["PlaceOrder.Single"]), 182
         )
         self.assertEqual(
-            cost_lab.evaluate_rust_arithmetic(arms["PlaceOrder.Portfolio"]), 302
+            cost_lab.evaluate_rust_arithmetic(arms["PlaceOrder.Portfolio"]), 310
         )
         mutated = self.codec_source().replace(
             "Self::CancelOrder { .. } => 2 + 32 + 32 + 32 + 32 + 8,",
@@ -533,6 +535,53 @@ class AbiAuditHardeningTests(unittest.TestCase):
         )
         drift = cost_lab.abi_drift(self.constants, mutated)
         self.assertIn("intent cancel_order: codec says 146 bytes, cost lab pins 138", drift)
+
+    def test_cross_module_widths_use_only_explicitly_pinned_paths(self) -> None:
+        source = self.codec_source()
+        lengths = cost_lab.derive_account_lengths_from_source(source)
+        self.assertEqual(lengths["CLEAR_WORK"], 48_750)
+        self.assertEqual(lengths["CANDIDATE_FEED"], 6_266)
+        arms = cost_lab.derive_intent_lengths_from_source(source)
+        self.assertEqual(
+            cost_lab.evaluate_rust_arithmetic(arms["BeginResolutionWork"]), 83
+        )
+        self.assertEqual(cost_lab.evaluate_rust_arithmetic(arms["FoldResolutionWork"]), 107)
+        self.assertEqual(
+            cost_lab.evaluate_rust_arithmetic(arms["WriteArtifact"]), 263
+        )
+        with self.assertRaises(cost_lab.UnknownRustToken):
+            cost_lab.evaluate_rust_arithmetic("artifact::UNREVIEWED_CHUNK_BYTES")
+        mutated = source.replace(
+            "Self::WriteArtifact { .. } => 2 + 1 + 32 + 32 + 2 + 2 + artifact::ARTIFACT_CHUNK_BYTES,",
+            "Self::WriteArtifact { .. } => 2 + 1 + 32 + 32 + 2 + 2 + artifact::UNREVIEWED_CHUNK_BYTES,",
+            1,
+        )
+        drift = cost_lab.abi_drift(self.constants, mutated)
+        self.assertTrue(
+            any(
+                "Intent::WriteArtifact" in line and "artifact::UNREVIEWED_CHUNK_BYTES" in line
+                for line in drift
+            ),
+            drift,
+        )
+
+    def test_stale_v2_placement_widths_are_named_drift(self) -> None:
+        import copy
+
+        stale = copy.deepcopy(self.constants)
+        bounds = stale[cost_lab.ARM_LANDED]["bounds"]
+        bounds["max_intent_bytes"] = 302
+        bounds["max_intent_field_terms"] = [2, 64, 1, 235]
+        intent = stale[cost_lab.ARM_LANDED]["intents"]["place_order"]
+        intent["bytes"] = 302
+        intent["field_terms"] = [2, 32, 32, 1, 235]
+        intent["formula"] = "2 + 32 + 32 + 1 + PORTFOLIO_RECORD_BYTES"
+        drift = cost_lab.abi_drift(stale, self.codec_source())
+        self.assertIn(
+            "bounds.max_intent_bytes: codec says 310 for MAX_INTENT_BYTES, constants.json pins 302",
+            drift,
+        )
+        self.assertIn("intent place_order: codec says 310 bytes, cost lab pins 302", drift)
 
     def test_a_lumped_field_term_list_is_drift_even_when_it_sums(self) -> None:
         import copy

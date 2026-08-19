@@ -58,6 +58,8 @@ LANDED_ACCOUNT_ORDER = (
     "final_pot",
     "settlement_receipt",
     "resolution",
+    "clear_work",
+    "candidate_feed",
 )
 
 LANDED_INTENT_ORDER = (
@@ -857,6 +859,8 @@ LANDED_ACCOUNT_ROLES = {
     "final_pot": "Terminal per-outcome pot the settlement path draws from.",
     "settlement_receipt": "One settled leg's replay-separated receipt.",
     "resolution": "Resolved payout index and its evidence binding.",
+    "clear_work": "Streaming clearing checkpoint framing plus its opaque, owner-defined work body.",
+    "candidate_feed": "Streaming candidate fill vector and bounded pairing-witness feed.",
 }
 
 
@@ -1327,7 +1331,7 @@ def differential_entries(constants: dict[str, Any]) -> list[dict[str, Any]]:
             "hypothesis_source": "absent",
             "landed": landed_only_bytes,
             "landed_source": f"sum of {len(landed_only)} landed accounts with no hypothesis counterpart",
-            "change": "Realm, Profile, Market, Hoard, FeedHead, Terms, PriceGrid, Epoch, CandidateRecord, FinalPot, SettlementReceipt and Resolution were never in the hypothesis arm, so most of the landed rent inventory was previously unmodeled.",
+            "change": "Realm, Profile, Market, Hoard, FeedHead, Terms, PriceGrid, Epoch, CandidateRecord, FinalPot, SettlementReceipt, Resolution, ClearWork and CandidateFeed were never in the hypothesis arm, so most of the landed rent inventory is not represented by the design sketch.",
         },
     ]
 
@@ -1507,7 +1511,7 @@ def validate_rows(rows: list[dict[str, Any]], constants: dict[str, Any]) -> None
         "order_page_layout": 5 * 3 * 3,
         "accumulator_fold": 3 * 3 * 2,
         "batch_verification": 5 * 3 * 3 * 2,
-        "landed_account_inventory": 15 + 1,
+        "landed_account_inventory": 17 + 1,
         "landed_epoch_book": 7,
         "landed_intent_wire": 9 * 2,
         "landed_batch_relation": 5 * 3,
@@ -1939,20 +1943,44 @@ def check_artifacts(output: Path, artifacts: dict[str, bytes]) -> None:
 PIN_TABLE = "RUST_IDENTIFIER_VALUES in benchmarks/cost_lab.py"
 
 RUST_IDENTIFIER_VALUES = {
+    "CLEAR_WORK_BODY_BYTES": 48_592,
     "HASH_BYTES": 32,
     "MAX_EPOCH_ORDERS": 64,
     "MAX_GRID_TICKS": 64,
-    "MAX_INTENT_BYTES": 302,
+    "MAX_INTENT_BYTES": 310,
     "MAX_KNOTS": 16,
     "MAX_ORDERS_PER_PAGE": 16,
     "MAX_ORDER_PAGES": 4,
     "MAX_OUTCOMES": 16,
     "MAX_PAYOUTS": 8,
     "MAX_PORTFOLIO_ORDERS": 8,
+    "MAX_SLICES": 416,
     "ORDER_RECORD_BYTES": 107,
     "ORDER_SLOT_BYTES": 236,
     "PORTFOLIO_RECORD_BYTES": 235,
     "TOMBSTONE_RECORD_BYTES": 80,
+}
+
+# These paths deliberately name the only cross-module constants that the root codec uses in
+# widths audited here. They are an allowlist, not a Rust evaluator: a new path must be
+# explicitly reviewed and pinned before the audit can use it.
+EXPLICIT_RUST_PATH_VALUES = {
+    "artifact::ARTIFACT_CHUNK_BYTES": 192,
+    "resolution_work::ABORT_RESOLUTION_WORK_BYTES": 74,
+    "resolution_work::BEGIN_RESOLUTION_WORK_BYTES": 83,
+    "resolution_work::FINALIZE_RESOLUTION_WORK_BYTES": 74,
+    "resolution_work::FOLD_RESOLUTION_WORK_BYTES": 107,
+    "super::clearing::PAIRING_SLICE_BYTES": 13,
+}
+ALL_RUST_IDENTIFIER_VALUES = RUST_IDENTIFIER_VALUES | EXPLICIT_RUST_PATH_VALUES
+
+# Intent delegates are not arithmetic expressions. Resolve only these exact, reviewed method
+# calls to the one constant that each delegated codec promises to return.
+INTENT_DELEGATE_EXPRESSIONS = {
+    "AbortResolutionWork": "resolution_work::ABORT_RESOLUTION_WORK_BYTES",
+    "BeginResolutionWork": "resolution_work::BEGIN_RESOLUTION_WORK_BYTES",
+    "FinalizeResolutionWork": "resolution_work::FINALIZE_RESOLUTION_WORK_BYTES",
+    "FoldResolutionWork": "resolution_work::FOLD_RESOLUTION_WORK_BYTES",
 }
 
 BOUNDS_IDENTIFIERS = {
@@ -2185,7 +2213,7 @@ def evaluate_rust_arithmetic(expression: str, environment: dict[str, int] | None
     stale pin cannot be substituted into a width and hide itself.
     """
 
-    values = RUST_IDENTIFIER_VALUES if environment is None else environment
+    values = ALL_RUST_IDENTIFIER_VALUES if environment is None else environment
     parts = rust_tokens(expression)
     if not parts:
         raise ModelError(
@@ -2228,6 +2256,8 @@ def resolve_rust_constant(
 
     if name in resolved:
         return resolved[name]
+    if name in EXPLICIT_RUST_PATH_VALUES:
+        return EXPLICIT_RUST_PATH_VALUES[name]
     if name in pending:
         raise ModelError(f"codec constant {name} is defined in terms of itself")
     if name not in declarations:
@@ -2334,7 +2364,10 @@ def derive_intent_lengths_from_source(source: str) -> dict[str, str]:
             continue
         for enum_name, variant in variants:
             key = variant if enum_name == "Self" else f"{outer}.{variant}"
-            arms[key] = value
+            if enum_name == "Self" and value == "value.encoded_len()":
+                arms[key] = INTENT_DELEGATE_EXPRESSIONS.get(key, value)
+            else:
+                arms[key] = value
     return arms
 
 
@@ -2367,7 +2400,7 @@ def cross_check_expression(
             drift.append(f"{label} references {identifier}, which this audit cannot resolve: {exc}")
             unresolved = True
             continue
-        pinned = RUST_IDENTIFIER_VALUES.get(identifier)
+        pinned = ALL_RUST_IDENTIFIER_VALUES.get(identifier)
         if pinned is None:
             drift.append(
                 f"{label} references {identifier}, which the cost lab does not pin: "
