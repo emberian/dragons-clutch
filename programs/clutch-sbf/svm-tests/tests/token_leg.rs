@@ -34,11 +34,8 @@
 
 use {
     clutch_sbf::error::ClutchError,
-    clutch_sbf::instructions::split::{
-        ACCOUNT_COUNT, ACCOUNT_COUNT_OUTCOME, IX_EXTERNAL, IX_SUPPLY,
-    },
+    clutch_sbf::instructions::split::{ACCOUNT_COUNT, ACCOUNT_PREFIX_OUTCOME, IX_SUPPLY},
     clutch_solana_layout::{Hash32, Intent, SupplyLedgerAccount},
-    clutch_solana_reference::ExternalAccount,
     clutch_svm_fixture::{
         build_plane, layout_request, mint_bytes_with_extension, outcome_mint_bytes, Mode, Plane,
         BASE_TOKEN_ACCOUNT_LEN, EXTENDED_MINT_OVERHEAD, FUNDED_SETS, MARKET_NONCE, PROGRAM_ID,
@@ -134,7 +131,7 @@ impl Scenario {
             );
         }
 
-        /* The outcome mint.  It has to be installed at genesis rather than
+        /* Every outcome mint.  They have to be installed at genesis rather than
          * created in a transaction: it lives at a program-derived address, and
          * `system_instruction::create_account` needs the new account's own
          * signature, which only the owning program can supply.  Creating it is
@@ -146,33 +143,37 @@ impl Scenario {
                 vec![ExtensionType::try_from(discriminant).expect("a known discriminant")]
             }
         };
-        let data = match shape {
-            MintShape::Proposed => outcome_mint_bytes(plane.market.address, 0),
-            MintShape::WithExtension(discriminant) => {
-                /* The real value length, from the real decoder's own sizing
-                 * function.  A short entry would be a malformed mint, which the
-                 * token program refuses for a different reason than the one
-                 * under test. */
-                let total =
-                    ExtensionType::try_calculate_account_len::<Mint>(&mint_extensions).unwrap();
-                mint_bytes_with_extension(
-                    plane.market.address,
-                    0,
-                    discriminant,
-                    total - EXTENDED_MINT_OVERHEAD,
-                )
-            }
-        };
-        test.add_account(
-            mint,
-            Account {
-                lamports: rent_exempt(data.len()),
-                data,
-                owner: TOKEN_2022,
-                executable: false,
-                rent_epoch: 0,
-            },
-        );
+        for (index, outcome_mint) in plane.outcome_mints.iter().enumerate() {
+            let data = if index == usize::from(OUTCOME) {
+                match shape {
+                    MintShape::Proposed => outcome_mint_bytes(plane.market.address, 0),
+                    MintShape::WithExtension(discriminant) => {
+                        /* Size the hostile target from Token-2022's own rule. */
+                        let total =
+                            ExtensionType::try_calculate_account_len::<Mint>(&mint_extensions)
+                                .unwrap();
+                        mint_bytes_with_extension(
+                            plane.market.address,
+                            0,
+                            discriminant,
+                            total - EXTENDED_MINT_OVERHEAD,
+                        )
+                    }
+                }
+            } else {
+                outcome_mint_bytes(plane.market.address, 0)
+            };
+            test.add_account(
+                outcome_mint.address,
+                Account {
+                    lamports: rent_exempt(data.len()),
+                    data,
+                    owner: TOKEN_2022,
+                    executable: false,
+                    rent_epoch: 0,
+                },
+            );
+        }
 
         let (banks, payer, _blockhash) = test.start().await;
         let mut scenario = Self {
@@ -292,27 +293,34 @@ impl Scenario {
         self.plane.outcome_mints[usize::from(OUTCOME)].address
     }
 
-    /// The seam instruction, with or without the optional token leg.
-    fn seam_instruction(&self, request: Vec<u8>, with_token_leg: bool) -> Instruction {
+    /// The seam instruction, optionally omitting the required mint vector for a
+    /// negative account-count case.
+    fn seam_instruction(&self, request: Vec<u8>, with_mint_vector: bool) -> Instruction {
         let addresses = self.plane.seam_addresses();
-        let mut metas = Vec::with_capacity(ACCOUNT_COUNT_OUTCOME);
+        let mut metas = Vec::with_capacity(ACCOUNT_PREFIX_OUTCOME + self.plane.outcome_mints.len());
         metas.push(AccountMeta::new(addresses[0], true));
         metas.push(AccountMeta::new_readonly(addresses[1], false));
         metas.push(AccountMeta::new_readonly(addresses[2], false));
         for address in &addresses[3..ACCOUNT_COUNT] {
             metas.push(AccountMeta::new(*address, false));
         }
-        if with_token_leg {
-            metas.push(AccountMeta::new_readonly(TOKEN_2022, false));
-            metas.push(AccountMeta::new(self.mint(), false));
-            metas.push(AccountMeta::new(self.holder, false));
+        metas.push(AccountMeta::new_readonly(TOKEN_2022, false));
+        metas.push(AccountMeta::new(self.holder, false));
+        if with_mint_vector {
+            metas.extend(self.plane.outcome_mints.iter().map(|mint| {
+                if mint.address == self.mint() {
+                    AccountMeta::new(mint.address, false)
+                } else {
+                    AccountMeta::new_readonly(mint.address, false)
+                }
+            }));
         }
         assert_eq!(
             metas.len(),
-            if with_token_leg {
-                ACCOUNT_COUNT_OUTCOME
+            if with_mint_vector {
+                ACCOUNT_PREFIX_OUTCOME + self.plane.outcome_mints.len()
             } else {
-                ACCOUNT_COUNT
+                ACCOUNT_PREFIX_OUTCOME
             }
         );
         Instruction::new_with_bytes(PROGRAM_ID, &request, metas)
@@ -325,7 +333,7 @@ impl Scenario {
                 Intent::Materialize {
                     market: self.plane.market_id,
                     owner: Hash32::from_bytes(self.actor.pubkey().to_bytes()),
-                    destination: Hash32::from_bytes(self.plane.external.address.to_bytes()),
+                    destination: Hash32::from_bytes(self.holder.to_bytes()),
                     outcome: OUTCOME,
                     quantity,
                 },
@@ -341,7 +349,7 @@ impl Scenario {
                 Intent::Dematerialize {
                     market: self.plane.market_id,
                     owner: Hash32::from_bytes(self.actor.pubkey().to_bytes()),
-                    source: Hash32::from_bytes(self.plane.external.address.to_bytes()),
+                    source: Hash32::from_bytes(self.holder.to_bytes()),
                     outcome: OUTCOME,
                     quantity,
                 },
@@ -386,14 +394,6 @@ impl Scenario {
         SupplyLedgerAccount::decode(&data)
             .expect("ledger decodes")
             .internal_supply[usize::from(OUTCOME)]
-    }
-
-    /// The *per-owner* shadow balance, which is not the mint's counterpart.
-    async fn shadow_balance(&mut self) -> u64 {
-        let data = self.data(self.plane.seam_addresses()[IX_EXTERNAL]).await;
-        ExternalAccount::decode(&data)
-            .expect("shadow decodes")
-            .balances[usize::from(OUTCOME)]
     }
 }
 
@@ -441,7 +441,6 @@ async fn e1_materialize_mints_exactly_q_and_the_shadow_reconciles() {
         scenario.mint_supply().await,
         "the reconciliation the program itself enforced"
     );
-    assert_eq!(scenario.shadow_balance().await, quantity);
 
     println!("SVM e1_materialize: quantity={quantity} compute_units={units}");
 }
@@ -462,7 +461,6 @@ async fn e1_dematerialize_burns_exactly_and_the_shadow_reconciles() {
     assert_eq!(scenario.holder_amount().await, 4);
     assert_eq!(scenario.internal_supply().await, FUNDED_SETS - 4);
     assert_eq!(scenario.external_supply().await, 4);
-    assert_eq!(scenario.shadow_balance().await, 4);
     assert_eq!(
         scenario.external_supply().await,
         scenario.mint_supply().await
@@ -471,19 +469,14 @@ async fn e1_dematerialize_burns_exactly_and_the_shadow_reconciles() {
     println!("SVM e1_dematerialize: materialize={mint_units} CU  dematerialize={burn_units} CU");
 }
 
-/// **The reconciliation is load-bearing, and falsifiable.**
+/// **A permissionless direct burn is a safe liability donation.**
 ///
 /// `Burn` is permissionless for a token's owner, so the actor can destroy
 /// outcome tokens *outside* this program. The mint's supply falls and the
-/// market-wide ledger term does not, and the very next seam instruction on that
-/// outcome must refuse rather than carry two disagreeing truths forward.
-///
-/// This is also the denial-of-service surface the check creates, measured
-/// rather than argued: nothing in this program can currently repair the ledger,
-/// so that outcome is stuck. It is an argument for deleting the shadow, not
-/// against checking it.
+/// market-wide cache initially does not.  The next claim transition must
+/// recognize the lower supply, retain Hoard backing, and continue.
 #[tokio::test]
-async fn a_supply_that_drifted_outside_the_program_is_refused() {
+async fn a_direct_burn_is_synchronized_and_the_market_stays_live() {
     let mut scenario = Scenario::start(MintShape::Proposed).await;
     let actor = scenario.actor.insecure_clone();
     scenario
@@ -512,15 +505,21 @@ async fn a_supply_that_drifted_outside_the_program_is_refused() {
         "the ledger did not move"
     );
 
-    let code = scenario
-        .refusal_code(&[scenario.materialize(1, 1)], &[&actor])
+    let units = scenario
+        .send(&[scenario.materialize(1, 1)], &[&actor])
         .await;
     assert_eq!(
-        code,
-        ClutchError::ShadowSupplyMismatch as u32,
-        "the two truths disagree and the program must say so"
+        scenario.mint_supply().await,
+        6,
+        "five survived and one minted"
     );
-    println!("SVM reconciliation: out-of-band burn refused with Custom({code}) (0x001e)");
+    assert_eq!(
+        scenario.external_supply().await,
+        6,
+        "cache follows actual supply"
+    );
+    assert_eq!(scenario.internal_supply().await, FUNDED_SETS - 8);
+    println!("SVM direct burn: synchronized donation and continued at {units} CU");
 }
 
 /// **E4, at instruction time.** A mint that decodes and is refused.
@@ -643,7 +642,7 @@ async fn the_derived_hoard_authority_cannot_be_signed_for_by_a_wallet() {
     );
 }
 
-/// **The transitional hole, closed.**
+/// **The incomplete mint-vector plane is refused.**
 ///
 /// A ten-account `Materialize` used to be accepted and to move only the
 /// shadow, leaving the market-wide ledger term disagreeing with the mint's
@@ -656,7 +655,7 @@ async fn the_derived_hoard_authority_cannot_be_signed_for_by_a_wallet() {
 /// the shadow-only plane is refused, and after the refusal the two truths are
 /// still equal, because nothing moved.
 #[tokio::test]
-async fn the_ten_account_plane_is_refused_and_moves_nothing() {
+async fn the_incomplete_mint_vector_is_refused_and_moves_nothing() {
     let mut scenario = Scenario::start(MintShape::Proposed).await;
     let actor = scenario.actor.insecure_clone();
     let request = layout_request(
@@ -664,7 +663,7 @@ async fn the_ten_account_plane_is_refused_and_moves_nothing() {
         Intent::Materialize {
             market: scenario.plane.market_id,
             owner: Hash32::from_bytes(actor.pubkey().to_bytes()),
-            destination: Hash32::from_bytes(scenario.plane.external.address.to_bytes()),
+            destination: Hash32::from_bytes(scenario.holder.to_bytes()),
             outcome: OUTCOME,
             quantity: 7,
         },
@@ -675,7 +674,7 @@ async fn the_ten_account_plane_is_refused_and_moves_nothing() {
     assert_eq!(
         code,
         ClutchError::AccountCount as u32,
-        "the shadow-only plane is not a plane any more"
+        "the bounded complete mint vector is mandatory"
     );
 
     assert_eq!(scenario.mint_supply().await, 0, "no token was minted");
