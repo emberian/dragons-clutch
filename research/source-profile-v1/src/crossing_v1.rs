@@ -4,13 +4,10 @@
 //! is not a runtime transition and freezes nothing; the default ELF keeps
 //! refusing `SourceReleaseUnavailable` (`0x79`).
 //!
-//! Let `bucket_seconds = B` and bucket `k` cover `[kB, (k+1)B)`.  The
-//! boundary variant is deliberately **not frozen**; both are registered as
-//! distinct rule ids so the design doc's falsifiers are executable tests:
-//!
-//! - [`SELECTION_CROSSING_V1_CLOSING`] (variant A, recommended):
-//!   `T(k) = (k+1)*B`, the source state in force when the bucket closes;
-//! - [`SELECTION_CROSSING_V1_OPENING`] (variant B): `T(k) = k*B`.
+//! Let the frozen grid origin be `G = 0`, `bucket_seconds = B`, and bucket `k`
+//! cover `[G+kB, G+(k+1)B)`. V1 registers only the closing boundary:
+//! `T(k) = G+(k+1)B`, the source state in force when the bucket closes. The
+//! opening-boundary experiment is not a second live rule.
 //!
 //! Admission for bucket `k` takes the unique update `U` with
 //! `prev_publish_time(U) < T(k) <= publish_time(U)`.  Exactly per the design
@@ -21,7 +18,7 @@
 //! - an absent crossing witness is an explicit [`CrossingError::Stall`] —
 //!   nothing manufactures a `Missing` record or substitutes an adjacent
 //!   update;
-//! - two *distinct* qualifying updates for one boundary is the falsifier for
+//! - two *distinct* qualifying update bodies for one boundary is the falsifier for
 //!   the whole provider selection ([`CrossingError::DoubleWitnessBoundary`]);
 //!   the model refuses rather than picks;
 //! - one update may witness consecutive boundaries, so the archive sequence
@@ -35,14 +32,11 @@
 //! `posted_slot` (receiver-write slot, explicitly not source-native); archive
 //! sequence is `publish_time(U)`.  No field doubles as another.
 
-use crate::spec_v2::MODEL_MAX_BUCKET_SECONDS;
+use crate::spec_v2::{GRID_ORIGIN_UNIX_SECONDS_V1, MODEL_MAX_BUCKET_SECONDS};
 use crate::{normalize_interval, selects_boundary, Error, FullPriceUpdateV2};
 
-/// Variant A (recommended): closing boundary `T(k) = (k+1)*B`.
-pub const SELECTION_CROSSING_V1_CLOSING: u16 = 2;
-
-/// Variant B: opening boundary `T(k) = k*B`.
-pub const SELECTION_CROSSING_V1_OPENING: u16 = 3;
+/// Closing-boundary `CROSSING_V1`: `T(k) = G+(k+1)*B`, with `G = 0`.
+pub const SELECTION_CROSSING_V1: u16 = 2;
 
 /// Exact byte length of one archive record (`SOURCE_ADMISSION_V1` §5.3).
 pub const ARCHIVE_RECORD_V2_BYTES: usize = 64;
@@ -57,6 +51,8 @@ pub enum CrossingError {
     UnknownSelectionRule,
     /// `bucket_seconds` is zero or outside the model grid envelope.
     InvalidBucketSeconds,
+    /// The grid origin is not the frozen Unix-epoch origin.
+    UnknownGridOrigin,
     /// `T(k)` is not representable; no update could ever witness it, so the
     /// configuration is refused rather than stalled.
     BoundaryOverflow,
@@ -73,6 +69,8 @@ pub enum CrossingError {
     InvalidPublishTime,
     /// Records must cover consecutive buckets; gaps and repeats are refused.
     NonContiguousBucket,
+    /// The next exclusive archive cursor is not representable.
+    BucketCursorOverflow,
     /// The archive sequence (`publish_time`) moved backwards.
     SequenceRegression,
     /// Equal sequence with record bodies that are not byte-identical except
@@ -103,6 +101,13 @@ pub struct ArchiveRecordV2 {
     pub publish_time: u64,
 }
 
+/// Immutable normalization projection from one authenticated SourceSpec v2.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecordPolicyV1 {
+    pub target_decimals: u8,
+    pub confidence_multiplier: u16,
+}
+
 impl ArchiveRecordV2 {
     /// Encode the exact fixed record layout.
     pub fn encode(self) -> [u8; ARCHIVE_RECORD_V2_BYTES] {
@@ -122,25 +127,80 @@ pub fn body_identical(a: ArchiveRecordV2, b: ArchiveRecordV2) -> bool {
     a.encode()[BUCKET_FIELD_BYTES..] == b.encode()[BUCKET_FIELD_BYTES..]
 }
 
+/// Start-aware cursor for one contiguous archive window.
+///
+/// The first append is checked against the immutable window start, not merely
+/// accepted because there is no predecessor. Every successful append advances
+/// one exact bucket, and an unrepresentable exclusive cursor is refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArchiveCursorV2 {
+    start_bucket: u64,
+    next_bucket: u64,
+    previous: Option<ArchiveRecordV2>,
+}
+
+impl ArchiveCursorV2 {
+    pub const fn new(start_bucket: u64) -> Self {
+        Self {
+            start_bucket,
+            next_bucket: start_bucket,
+            previous: None,
+        }
+    }
+
+    pub const fn start_bucket(self) -> u64 {
+        self.start_bucket
+    }
+
+    pub const fn next_bucket(self) -> u64 {
+        self.next_bucket
+    }
+
+    pub const fn previous(self) -> Option<ArchiveRecordV2> {
+        self.previous
+    }
+
+    pub fn admit(self, record: ArchiveRecordV2) -> Result<Self, CrossingError> {
+        if record.bucket != self.next_bucket {
+            return Err(CrossingError::NonContiguousBucket);
+        }
+        if let Some(previous) = self.previous {
+            admit_after(previous, record)?;
+        }
+        let next_bucket = self
+            .next_bucket
+            .checked_add(1)
+            .ok_or(CrossingError::BucketCursorOverflow)?;
+        Ok(Self {
+            start_bucket: self.start_bucket,
+            next_bucket,
+            previous: Some(record),
+        })
+    }
+}
+
 /// Compute the boundary instant `T(k)` for one registered variant.
 ///
 /// The result always fits `i64`, so it can be compared against publish
 /// times; an unrepresentable boundary is a refused configuration.
 pub fn boundary_instant(
     rule: u16,
+    grid_origin_unix_seconds: i64,
     bucket_seconds: u64,
     bucket: u64,
 ) -> Result<u64, CrossingError> {
+    if rule != SELECTION_CROSSING_V1 {
+        return Err(CrossingError::UnknownSelectionRule);
+    }
+    if grid_origin_unix_seconds != GRID_ORIGIN_UNIX_SECONDS_V1 {
+        return Err(CrossingError::UnknownGridOrigin);
+    }
     if bucket_seconds == 0 || bucket_seconds > MODEL_MAX_BUCKET_SECONDS {
         return Err(CrossingError::InvalidBucketSeconds);
     }
-    let steps = match rule {
-        SELECTION_CROSSING_V1_CLOSING => bucket
-            .checked_add(1)
-            .ok_or(CrossingError::BoundaryOverflow)?,
-        SELECTION_CROSSING_V1_OPENING => bucket,
-        _ => return Err(CrossingError::UnknownSelectionRule),
-    };
+    let steps = bucket
+        .checked_add(1)
+        .ok_or(CrossingError::BoundaryOverflow)?;
     let boundary = steps
         .checked_mul(bucket_seconds)
         .ok_or(CrossingError::BoundaryOverflow)?;
@@ -153,11 +213,12 @@ pub fn boundary_instant(
 /// Whether one update witnesses bucket `k` under one registered variant.
 pub fn witnesses_boundary(
     rule: u16,
+    grid_origin_unix_seconds: i64,
     bucket_seconds: u64,
     bucket: u64,
     update: FullPriceUpdateV2,
 ) -> Result<bool, CrossingError> {
-    let boundary = boundary_instant(rule, bucket_seconds, bucket)?;
+    let boundary = boundary_instant(rule, grid_origin_unix_seconds, bucket_seconds, bucket)?;
     Ok(selects_boundary(update, boundary))
 }
 
@@ -169,11 +230,12 @@ pub fn witnesses_boundary(
 /// no selection surface and collapse to that witness.
 pub fn select_witness(
     rule: u16,
+    grid_origin_unix_seconds: i64,
     bucket_seconds: u64,
     bucket: u64,
     candidates: &[FullPriceUpdateV2],
 ) -> Result<FullPriceUpdateV2, CrossingError> {
-    let boundary = boundary_instant(rule, bucket_seconds, bucket)?;
+    let boundary = boundary_instant(rule, grid_origin_unix_seconds, bucket_seconds, bucket)?;
     let mut witness: Option<FullPriceUpdateV2> = None;
     for candidate in candidates {
         if !selects_boundary(*candidate, boundary) {
@@ -194,13 +256,14 @@ pub fn select_witness(
 /// not witness the boundary is refused, never adapted.
 pub fn record_from_witness(
     rule: u16,
+    grid_origin_unix_seconds: i64,
     bucket_seconds: u64,
     bucket: u64,
     witness: FullPriceUpdateV2,
     target_decimals: u8,
     confidence_multiplier: u16,
 ) -> Result<ArchiveRecordV2, CrossingError> {
-    let boundary = boundary_instant(rule, bucket_seconds, bucket)?;
+    let boundary = boundary_instant(rule, grid_origin_unix_seconds, bucket_seconds, bucket)?;
     if !selects_boundary(witness, boundary) {
         return Err(CrossingError::NotBoundaryWitness);
     }
@@ -227,7 +290,7 @@ pub fn admit_after(prev: ArchiveRecordV2, next: ArchiveRecordV2) -> Result<(), C
     let expected_bucket = prev
         .bucket
         .checked_add(1)
-        .ok_or(CrossingError::NonContiguousBucket)?;
+        .ok_or(CrossingError::BucketCursorOverflow)?;
     if next.bucket != expected_bucket {
         return Err(CrossingError::NonContiguousBucket);
     }
@@ -243,21 +306,28 @@ pub fn admit_after(prev: ArchiveRecordV2, next: ArchiveRecordV2) -> Result<(), C
 /// Select, normalize, and admit the record for one bucket in one step.
 pub fn advance(
     rule: u16,
+    grid_origin_unix_seconds: i64,
     bucket_seconds: u64,
     prev: Option<ArchiveRecordV2>,
     bucket: u64,
     candidates: &[FullPriceUpdateV2],
-    target_decimals: u8,
-    confidence_multiplier: u16,
+    policy: RecordPolicyV1,
 ) -> Result<ArchiveRecordV2, CrossingError> {
-    let witness = select_witness(rule, bucket_seconds, bucket, candidates)?;
+    let witness = select_witness(
+        rule,
+        grid_origin_unix_seconds,
+        bucket_seconds,
+        bucket,
+        candidates,
+    )?;
     let record = record_from_witness(
         rule,
+        grid_origin_unix_seconds,
         bucket_seconds,
         bucket,
         witness,
-        target_decimals,
-        confidence_multiplier,
+        policy.target_decimals,
+        policy.confidence_multiplier,
     )?;
     if let Some(prev) = prev {
         admit_after(prev, record)?;
@@ -265,9 +335,36 @@ pub fn advance(
     Ok(record)
 }
 
+/// Select and append exactly at an authenticated archive cursor.
+pub fn advance_cursor(
+    rule: u16,
+    grid_origin_unix_seconds: i64,
+    bucket_seconds: u64,
+    cursor: ArchiveCursorV2,
+    candidates: &[FullPriceUpdateV2],
+    policy: RecordPolicyV1,
+) -> Result<(ArchiveCursorV2, ArchiveRecordV2), CrossingError> {
+    let record = advance(
+        rule,
+        grid_origin_unix_seconds,
+        bucket_seconds,
+        cursor.previous(),
+        cursor.next_bucket(),
+        candidates,
+        policy,
+    )?;
+    let next = cursor.admit(record)?;
+    Ok((next, record))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const POLICY: RecordPolicyV1 = RecordPolicyV1 {
+        target_decimals: 8,
+        confidence_multiplier: 2,
+    };
 
     fn update(prev: i64, publish: i64) -> FullPriceUpdateV2 {
         FullPriceUpdateV2 {
@@ -285,53 +382,57 @@ mod tests {
     }
 
     #[test]
-    fn both_boundary_variants_are_exact_and_distinct() {
+    fn closing_boundary_rule_and_zero_origin_are_exact() {
         assert_eq!(
-            boundary_instant(SELECTION_CROSSING_V1_CLOSING, 300, 0),
+            boundary_instant(SELECTION_CROSSING_V1, GRID_ORIGIN_UNIX_SECONDS_V1, 300, 0),
             Ok(300)
         );
         assert_eq!(
-            boundary_instant(SELECTION_CROSSING_V1_CLOSING, 300, 4),
+            boundary_instant(SELECTION_CROSSING_V1, GRID_ORIGIN_UNIX_SECONDS_V1, 300, 4),
             Ok(1_500)
         );
-        assert_eq!(
-            boundary_instant(SELECTION_CROSSING_V1_OPENING, 300, 0),
-            Ok(0)
-        );
-        assert_eq!(
-            boundary_instant(SELECTION_CROSSING_V1_OPENING, 300, 4),
-            Ok(1_200)
-        );
 
-        // The V1 finalized-bucket rule id and unregistered ids are refused.
-        for rule in [0_u16, 1, 4, u16::MAX] {
+        // V1 finalized-bucket id 1, the rejected opening experiment id 3,
+        // and unregistered ids are refused.
+        for rule in [0_u16, 1, 3, 4, u16::MAX] {
             assert_eq!(
-                boundary_instant(rule, 300, 4),
+                boundary_instant(rule, GRID_ORIGIN_UNIX_SECONDS_V1, 300, 4),
                 Err(CrossingError::UnknownSelectionRule)
             );
         }
+        assert_eq!(
+            boundary_instant(SELECTION_CROSSING_V1, 1, 300, 4),
+            Err(CrossingError::UnknownGridOrigin)
+        );
 
         assert_eq!(
-            boundary_instant(SELECTION_CROSSING_V1_CLOSING, 0, 4),
+            boundary_instant(SELECTION_CROSSING_V1, GRID_ORIGIN_UNIX_SECONDS_V1, 0, 4),
             Err(CrossingError::InvalidBucketSeconds)
         );
         assert_eq!(
-            boundary_instant(SELECTION_CROSSING_V1_CLOSING, MODEL_MAX_BUCKET_SECONDS + 1, 4),
+            boundary_instant(
+                SELECTION_CROSSING_V1,
+                GRID_ORIGIN_UNIX_SECONDS_V1,
+                MODEL_MAX_BUCKET_SECONDS + 1,
+                4,
+            ),
             Err(CrossingError::InvalidBucketSeconds)
         );
 
         // Overflow of k+1, of the product, and of the i64 comparison domain.
         assert_eq!(
-            boundary_instant(SELECTION_CROSSING_V1_CLOSING, 2, u64::MAX),
-            Err(CrossingError::BoundaryOverflow)
-        );
-        assert_eq!(
-            boundary_instant(SELECTION_CROSSING_V1_OPENING, 86_400, u64::MAX),
+            boundary_instant(
+                SELECTION_CROSSING_V1,
+                GRID_ORIGIN_UNIX_SECONDS_V1,
+                2,
+                u64::MAX,
+            ),
             Err(CrossingError::BoundaryOverflow)
         );
         assert_eq!(
             boundary_instant(
-                SELECTION_CROSSING_V1_CLOSING,
+                SELECTION_CROSSING_V1,
+                GRID_ORIGIN_UNIX_SECONDS_V1,
                 2,
                 4_999_999_999_999_999_999
             ),
@@ -345,15 +446,15 @@ mod tests {
         let crossing = update(100, 125);
         let candidates = [update(10, 90), crossing, update(125, 300)];
         assert_eq!(
-            select_witness(SELECTION_CROSSING_V1_CLOSING, 30, 3, &candidates),
+            select_witness(SELECTION_CROSSING_V1, 0, 30, 3, &candidates),
             Ok(crossing)
         );
         assert_eq!(
-            witnesses_boundary(SELECTION_CROSSING_V1_CLOSING, 30, 3, crossing),
+            witnesses_boundary(SELECTION_CROSSING_V1, 0, 30, 3, crossing),
             Ok(true)
         );
         assert_eq!(
-            witnesses_boundary(SELECTION_CROSSING_V1_CLOSING, 30, 3, update(125, 300)),
+            witnesses_boundary(SELECTION_CROSSING_V1, 0, 30, 3, update(125, 300)),
             Ok(false)
         );
     }
@@ -364,20 +465,12 @@ mod tests {
         // update, a stale update, and a degenerate update all witness
         // nothing; the model stalls instead of adapting any of them.
         assert_eq!(
-            select_witness(SELECTION_CROSSING_V1_CLOSING, 30, 3, &[]),
+            select_witness(SELECTION_CROSSING_V1, 0, 30, 3, &[]),
             Err(CrossingError::Stall)
         );
         let candidates = [update(120, 130), update(50, 100), update(120, 120)];
         assert_eq!(
-            select_witness(SELECTION_CROSSING_V1_CLOSING, 30, 3, &candidates),
-            Err(CrossingError::Stall)
-        );
-
-        // Opening variant, bucket 0, T = 0: no update with nonnegative
-        // publish times can ever witness it, so a variant-B feed stalls on
-        // bucket 0 by construction.  Stated, not smoothed over.
-        assert_eq!(
-            select_witness(SELECTION_CROSSING_V1_OPENING, 30, 0, &[update(0, 50)]),
+            select_witness(SELECTION_CROSSING_V1, 0, 30, 3, &candidates),
             Err(CrossingError::Stall)
         );
     }
@@ -391,33 +484,27 @@ mod tests {
         let second = update(100, 120); // 100 < 120 <= 120
         assert_ne!(first, second);
         assert_eq!(
-            witnesses_boundary(SELECTION_CROSSING_V1_CLOSING, 30, 3, first),
+            witnesses_boundary(SELECTION_CROSSING_V1, 0, 30, 3, first),
             Ok(true)
         );
         assert_eq!(
-            witnesses_boundary(SELECTION_CROSSING_V1_CLOSING, 30, 3, second),
+            witnesses_boundary(SELECTION_CROSSING_V1, 0, 30, 3, second),
             Ok(true)
         );
         assert_eq!(
-            select_witness(SELECTION_CROSSING_V1_CLOSING, 30, 3, &[first, second]),
+            select_witness(SELECTION_CROSSING_V1, 0, 30, 3, &[first, second]),
             Err(CrossingError::DoubleWitnessBoundary)
         );
         assert_eq!(
             advance(
-                SELECTION_CROSSING_V1_CLOSING,
+                SELECTION_CROSSING_V1,
+                0,
                 30,
                 None,
                 3,
                 &[first, second],
-                8,
-                2
+                POLICY,
             ),
-            Err(CrossingError::DoubleWitnessBoundary)
-        );
-
-        // Same falsifier under the opening variant, bucket 4, T = 120.
-        assert_eq!(
-            select_witness(SELECTION_CROSSING_V1_OPENING, 30, 4, &[first, second]),
             Err(CrossingError::DoubleWitnessBoundary)
         );
     }
@@ -426,13 +513,36 @@ mod tests {
     fn duplicate_identical_candidates_are_one_witness() {
         let crossing = update(100, 125);
         assert_eq!(
+            select_witness(SELECTION_CROSSING_V1, 0, 30, 3, &[crossing, crossing]),
+            Ok(crossing)
+        );
+
+        // Collapse means exact decoded account-body identity. A repost with a
+        // different wrapper authority or posted slot is distinct and refuses;
+        // the model never broadens identity to price-message fields alone.
+        let mut different_authority = crossing;
+        different_authority.write_authority[0] ^= 1;
+        assert_eq!(
             select_witness(
-                SELECTION_CROSSING_V1_CLOSING,
+                SELECTION_CROSSING_V1,
+                0,
                 30,
                 3,
-                &[crossing, crossing]
+                &[crossing, different_authority],
             ),
-            Ok(crossing)
+            Err(CrossingError::DoubleWitnessBoundary)
+        );
+        let mut different_posted_slot = crossing;
+        different_posted_slot.posted_slot += 1;
+        assert_eq!(
+            select_witness(
+                SELECTION_CROSSING_V1,
+                0,
+                30,
+                3,
+                &[crossing, different_posted_slot],
+            ),
+            Err(CrossingError::DoubleWitnessBoundary)
         );
     }
 
@@ -444,13 +554,11 @@ mod tests {
         assert!(!selects_boundary(degenerate, 149));
         assert!(!selects_boundary(degenerate, 150));
         assert!(!selects_boundary(degenerate, 151));
-        for rule in [SELECTION_CROSSING_V1_CLOSING, SELECTION_CROSSING_V1_OPENING] {
-            for bucket in 0..8 {
-                assert_eq!(
-                    select_witness(rule, 30, bucket, &[degenerate]),
-                    Err(CrossingError::Stall)
-                );
-            }
+        for bucket in 0..8 {
+            assert_eq!(
+                select_witness(SELECTION_CROSSING_V1, 0, 30, bucket, &[degenerate]),
+                Err(CrossingError::Stall)
+            );
         }
     }
 
@@ -462,16 +570,16 @@ mod tests {
         // Closing variant, B = 30: U = (100, 200) crosses T(3) = 120 and
         // T(4) = 150.
         let witness = update(100, 200);
-        let third = advance(SELECTION_CROSSING_V1_CLOSING, 30, None, 3, &[witness], 8, 2)
+        let third = advance(SELECTION_CROSSING_V1, 0, 30, None, 3, &[witness], POLICY)
             .expect("bucket 3 admits the crossing witness");
         let fourth = advance(
-            SELECTION_CROSSING_V1_CLOSING,
+            SELECTION_CROSSING_V1,
+            0,
             30,
             Some(third),
             4,
             &[witness],
-            8,
-            2,
+            POLICY,
         )
         .expect("bucket 4 legitimately reuses the same witness");
         assert_eq!(third.bucket, 3);
@@ -488,7 +596,7 @@ mod tests {
     #[test]
     fn falsifier_equal_sequence_with_differing_endpoints_refuses() {
         let witness = update(100, 200);
-        let third = advance(SELECTION_CROSSING_V1_CLOSING, 30, None, 3, &[witness], 8, 2)
+        let third = advance(SELECTION_CROSSING_V1, 0, 30, None, 3, &[witness], POLICY)
             .expect("bucket 3 admits the crossing witness");
 
         // A same-publish-time update with different confidence yields equal
@@ -497,13 +605,13 @@ mod tests {
         drifted.confidence = 20_000;
         assert_eq!(
             advance(
-                SELECTION_CROSSING_V1_CLOSING,
+                SELECTION_CROSSING_V1,
+                0,
                 30,
                 Some(third),
                 4,
                 &[drifted],
-                8,
-                2
+                POLICY,
             ),
             Err(CrossingError::EqualSequenceValueDrift)
         );
@@ -521,7 +629,7 @@ mod tests {
     #[test]
     fn sequence_regression_and_bucket_gaps_are_refused() {
         let witness = update(100, 200);
-        let third = advance(SELECTION_CROSSING_V1_CLOSING, 30, None, 3, &[witness], 8, 2)
+        let third = advance(SELECTION_CROSSING_V1, 0, 30, None, 3, &[witness], POLICY)
             .expect("bucket 3 admits the crossing witness");
 
         let mut regressed = third;
@@ -549,7 +657,33 @@ mod tests {
         saturated.bucket = u64::MAX;
         assert_eq!(
             admit_after(saturated, third),
+            Err(CrossingError::BucketCursorOverflow)
+        );
+    }
+
+    #[test]
+    fn archive_cursor_pins_the_first_bucket_and_checked_exclusive_end() {
+        let witness = update(100, 200);
+        let cursor = ArchiveCursorV2::new(3);
+        let (cursor, third) =
+            advance_cursor(SELECTION_CROSSING_V1, 0, 30, cursor, &[witness], POLICY)
+                .expect("frozen start bucket admits");
+        assert_eq!(cursor.start_bucket(), 3);
+        assert_eq!(cursor.next_bucket(), 4);
+        assert_eq!(cursor.previous(), Some(third));
+
+        let wrong_first = ArchiveRecordV2 { bucket: 2, ..third };
+        assert_eq!(
+            ArchiveCursorV2::new(3).admit(wrong_first),
             Err(CrossingError::NonContiguousBucket)
+        );
+        let saturated = ArchiveRecordV2 {
+            bucket: u64::MAX,
+            ..third
+        };
+        assert_eq!(
+            ArchiveCursorV2::new(u64::MAX).admit(saturated),
+            Err(CrossingError::BucketCursorOverflow)
         );
     }
 
@@ -558,7 +692,7 @@ mod tests {
         // Endpoints match the V1 normalization fixture: price 123_456_789,
         // confidence 12_345, exponent -8, 8 decimals, multiplier 2.
         let witness = update(100, 200);
-        let record = record_from_witness(SELECTION_CROSSING_V1_CLOSING, 30, 3, witness, 8, 2)
+        let record = record_from_witness(SELECTION_CROSSING_V1, 0, 30, 3, witness, 8, 2)
             .expect("crossing witness admits");
         assert_eq!(record.bucket, 3);
         assert_eq!(record.low, 123_432_099);
@@ -582,7 +716,7 @@ mod tests {
     fn paired_non_crossing_or_invalid_witness_is_refused() {
         // update(125, 300) does not cross T(3) = 120.
         assert_eq!(
-            record_from_witness(SELECTION_CROSSING_V1_CLOSING, 30, 3, update(125, 300), 8, 2),
+            record_from_witness(SELECTION_CROSSING_V1, 0, 30, 3, update(125, 300), 8, 2),
             Err(CrossingError::NotBoundaryWitness)
         );
 
@@ -591,7 +725,7 @@ mod tests {
         let mut hostile = update(100, 200);
         hostile.price = -1;
         assert_eq!(
-            record_from_witness(SELECTION_CROSSING_V1_CLOSING, 30, 3, hostile, 8, 2),
+            record_from_witness(SELECTION_CROSSING_V1, 0, 30, 3, hostile, 8, 2),
             Err(CrossingError::Normalization(Error::InvalidPrice))
         );
     }

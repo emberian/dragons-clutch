@@ -17,10 +17,13 @@
 //!    a governance change is a new feed generation);
 //! 2. the provider feed id (Pyth 32-byte `feed_id`) is **added** and must be
 //!    checked equal on every admitted update;
-//! 3. the deployment-generation pin (receiver program key plus generation) is
-//!    **kept** and rechecked on every use, now alongside the config digest;
-//! 4. the canonical selection rule id registers the `CROSSING_V1` rules from
-//!    [`crate::crossing_v1`] — the V1 finalized-bucket rule id is **not**
+//! 3. the deployment pin is the exact receiver program **and ProgramData** key
+//!    plus the ProgramData deployment slot, all rechecked on every use;
+//! 4. the existing zero-origin Unix grid is explicit in the body rather than
+//!    inferred by an adapter;
+//! 5. the canonical selection rule id registers only the closing-boundary
+//!    `CROSSING_V1` rule from [`crate::crossing_v1`] — the V1 finalized-bucket
+//!    rule id and the rejected opening-boundary experiment are **not**
 //!    admissible under this domain, because admission check 12's
 //!    `publish_time / bucket_seconds == cursor` equation does not apply to a
 //!    crossing-rule feed.
@@ -30,14 +33,16 @@
 //! registered here and the digest computation remains an adapter obligation,
 //! exactly as `canonical_feed_id` is for V1.
 
-use crate::crossing_v1::{SELECTION_CROSSING_V1_CLOSING, SELECTION_CROSSING_V1_OPENING};
+use sha2::{Digest, Sha256};
+
+use crate::crossing_v1::SELECTION_CROSSING_V1;
 
 /// Digest domain separating v2 pull-profile feed identities from every V1
 /// feed.  A body hashed under any other domain is a different identity space.
 pub const FEED_DOMAIN_V2: &[u8; 22] = b"dragons-clutch/feed/v2";
 
 /// Exact canonical byte length of a [`SourceSpecV2`] body.
-pub const SOURCE_SPEC_V2_BYTES: usize = 320;
+pub const SOURCE_SPEC_V2_BYTES: usize = 368;
 
 /// Leading magic of the canonical v2 body.  V1 bodies start `DCSRCV1\0` and
 /// are refused here byte-for-byte.
@@ -48,6 +53,10 @@ pub const SOURCE_SPEC_V2_SCHEMA: u16 = 2;
 
 /// Quote-units-per-one-base-unit orientation (the only registered value).
 pub const ORIENTATION_QUOTE_PER_BASE: u8 = 1;
+
+/// V1 crossing buckets are indexed from the Unix epoch. A nonzero origin is a
+/// different grid contract and requires a new registered rule/spec version.
+pub const GRID_ORIGIN_UNIX_SECONDS_V1: i64 = 0;
 
 /// Model copy of the accumulator grid envelope (`clutch_accumulator`
 /// `MAX_BUCKET_SECONDS`).  Pinned here because this research crate is
@@ -60,7 +69,7 @@ pub const MODEL_MAX_BUCKET_SECONDS: u64 = 86_400;
 pub const MODEL_MAX_CONFIDENCE_ATOMS: u128 = 1_000_000_000_000_000_000_000_000;
 
 /// Offset of the six reserved zero bytes closing the canonical body.
-const RESERVED_AT: usize = 314;
+const RESERVED_AT: usize = 362;
 
 /// Refusals from hostile v2 body bytes or invalid construction fields.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,6 +97,8 @@ pub enum SpecV2Error {
     InvalidScale,
     /// The observation grid is structurally invalid.
     InvalidGrid,
+    /// The grid origin is not the frozen Unix-epoch origin for this rule.
+    UnknownGridOrigin,
     /// A freshness rule has no finite positive bound.
     InvalidFreshnessPolicy,
     /// The confidence policy is empty, unbounded, or outside its envelope.
@@ -112,6 +123,9 @@ pub struct SourceSpecFieldsV2 {
     pub parser_version: u16,
     /// Receiver program key that must own every admitted update account.
     pub receiver_program: [u8; 32],
+    /// Exact Upgradeable Loader ProgramData account linked from the receiver
+    /// program account.
+    pub receiver_programdata: [u8; 32],
     /// Receiver `Config` PDA key (stable), replacing the V1 exact source
     /// data-account key.
     pub receiver_config: [u8; 32],
@@ -122,9 +136,8 @@ pub struct SourceSpecFieldsV2 {
     /// Provider feed id (Pyth 32-byte `feed_id`), checked equal on every
     /// admitted update.
     pub provider_feed_id: [u8; 32],
-    /// Pinned receiver deployment generation (program + ProgramData
-    /// identity), rechecked on every use.
-    pub deployment_generation: u64,
+    /// Pinned deployment slot decoded from the exact ProgramData account.
+    pub programdata_deployment_slot: u64,
     /// Canonical base-asset identity.
     pub base_asset_id: [u8; 32],
     /// Canonical quote-asset identity.
@@ -137,8 +150,13 @@ pub struct SourceSpecFieldsV2 {
     pub grid_family_id: u32,
     /// Observation grid version.
     pub grid_version: u16,
+    /// Frozen Unix-seconds origin of bucket zero; V1 requires exactly zero.
+    pub grid_origin_unix_seconds: i64,
     /// Exact duration of one observation bucket in seconds.
     pub bucket_seconds: u64,
+    /// Delay after the selected closing boundary before an update may be
+    /// archived. This is a Clock gate, not an in-program finality claim.
+    pub boundary_grace_seconds: u64,
     /// Maximum age of an admitted update in cluster slots.
     pub max_staleness_slots: u64,
     /// Maximum age of an admitted update in seconds.
@@ -151,8 +169,7 @@ pub struct SourceSpecFieldsV2 {
     pub max_confidence_bps: u32,
     /// Integer multiplier applied to the parser's confidence value.
     pub confidence_multiplier: u16,
-    /// Registered `CROSSING_V1` selection rule id (boundary variant is
-    /// deliberately not frozen; both ids are registered).
+    /// Registered closing-boundary `CROSSING_V1` selection rule id.
     pub selection_rule: u16,
 }
 
@@ -167,6 +184,7 @@ impl SourceSpecV2 {
     pub fn new(fields: SourceSpecFieldsV2) -> Result<Self, SpecV2Error> {
         if is_zero(&fields.source_adapter_id)
             || is_zero(&fields.receiver_program)
+            || is_zero(&fields.receiver_programdata)
             || is_zero(&fields.receiver_config)
             || is_zero(&fields.config_digest)
             || is_zero(&fields.provider_feed_id)
@@ -181,20 +199,21 @@ impl SourceSpecV2 {
         if fields.source_adapter_version == 0
             || fields.parser_id == 0
             || fields.parser_version == 0
-            || fields.deployment_generation == 0
+            || fields.programdata_deployment_slot == 0
         {
             return Err(SpecV2Error::Unversioned);
         }
         if fields.orientation != ORIENTATION_QUOTE_PER_BASE {
             return Err(SpecV2Error::UnknownOrientation);
         }
-        if fields.selection_rule != SELECTION_CROSSING_V1_CLOSING
-            && fields.selection_rule != SELECTION_CROSSING_V1_OPENING
-        {
+        if fields.selection_rule != SELECTION_CROSSING_V1 {
             return Err(SpecV2Error::UnknownSelectionRule);
         }
         if fields.normalized_decimals > 18 {
             return Err(SpecV2Error::InvalidScale);
+        }
+        if fields.grid_origin_unix_seconds != GRID_ORIGIN_UNIX_SECONDS_V1 {
+            return Err(SpecV2Error::UnknownGridOrigin);
         }
         if fields.bucket_seconds == 0 || fields.bucket_seconds > MODEL_MAX_BUCKET_SECONDS {
             return Err(SpecV2Error::InvalidGrid);
@@ -219,7 +238,15 @@ impl SourceSpecV2 {
         self.fields
     }
 
-    /// Encode the exact 320-byte v2 feed-spec preimage.
+    /// Derive the canonical v2 feed identity under its distinct domain.
+    pub fn feed_id(self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(FEED_DOMAIN_V2);
+        hasher.update(self.encode_canonical());
+        hasher.finalize().into()
+    }
+
+    /// Encode the exact 368-byte v2 feed-spec preimage.
     ///
     /// | Offset | Bytes | Field |
     /// | ---: | ---: | --- |
@@ -230,25 +257,28 @@ impl SourceSpecV2 {
     /// | 46 | 2 | closed parser id |
     /// | 48 | 2 | parser version |
     /// | 50 | 32 | receiver program key |
-    /// | 82 | 32 | receiver `Config` PDA key |
-    /// | 114 | 32 | canonical config byte digest |
-    /// | 146 | 32 | provider feed id |
-    /// | 178 | 8 | deployment generation |
-    /// | 186 | 32 | base-asset identity |
-    /// | 218 | 32 | quote-asset identity |
-    /// | 250 | 1 | orientation = quote per base |
-    /// | 251 | 1 | normalized decimals |
-    /// | 252 | 4 | grid family id |
-    /// | 256 | 2 | grid version |
-    /// | 258 | 8 | bucket seconds |
-    /// | 266 | 8 | maximum staleness slots |
-    /// | 274 | 8 | maximum staleness seconds |
-    /// | 282 | 8 | maximum future-time skew seconds |
-    /// | 290 | 16 | maximum widened confidence atoms |
-    /// | 306 | 4 | maximum widened confidence basis points |
-    /// | 310 | 2 | integer confidence multiplier |
-    /// | 312 | 2 | canonical selection rule id |
-    /// | 314 | 6 | zero reserved |
+    /// | 82 | 32 | exact receiver ProgramData key |
+    /// | 114 | 32 | receiver `Config` PDA key |
+    /// | 146 | 32 | canonical config byte digest |
+    /// | 178 | 32 | provider feed id |
+    /// | 210 | 8 | ProgramData deployment slot |
+    /// | 218 | 32 | base-asset identity |
+    /// | 250 | 32 | quote-asset identity |
+    /// | 282 | 1 | orientation = quote per base |
+    /// | 283 | 1 | normalized decimals |
+    /// | 284 | 4 | grid family id |
+    /// | 288 | 2 | grid version |
+    /// | 290 | 8 | grid origin Unix seconds, exactly zero |
+    /// | 298 | 8 | bucket seconds |
+    /// | 306 | 8 | boundary grace seconds |
+    /// | 314 | 8 | maximum staleness slots |
+    /// | 322 | 8 | maximum staleness seconds |
+    /// | 330 | 8 | maximum future-time skew seconds |
+    /// | 338 | 16 | maximum widened confidence atoms |
+    /// | 354 | 4 | maximum widened confidence basis points |
+    /// | 358 | 2 | integer confidence multiplier |
+    /// | 360 | 2 | canonical selection rule id |
+    /// | 362 | 6 | zero reserved |
     pub fn encode_canonical(self) -> [u8; SOURCE_SPEC_V2_BYTES] {
         let mut out = [0_u8; SOURCE_SPEC_V2_BYTES];
         let mut at = 0_usize;
@@ -263,13 +293,14 @@ impl SourceSpecV2 {
         put(&mut out, &mut at, &self.fields.parser_id.to_le_bytes());
         put(&mut out, &mut at, &self.fields.parser_version.to_le_bytes());
         put(&mut out, &mut at, &self.fields.receiver_program);
+        put(&mut out, &mut at, &self.fields.receiver_programdata);
         put(&mut out, &mut at, &self.fields.receiver_config);
         put(&mut out, &mut at, &self.fields.config_digest);
         put(&mut out, &mut at, &self.fields.provider_feed_id);
         put(
             &mut out,
             &mut at,
-            &self.fields.deployment_generation.to_le_bytes(),
+            &self.fields.programdata_deployment_slot.to_le_bytes(),
         );
         put(&mut out, &mut at, &self.fields.base_asset_id);
         put(&mut out, &mut at, &self.fields.quote_asset_id);
@@ -277,7 +308,17 @@ impl SourceSpecV2 {
         put(&mut out, &mut at, &[self.fields.normalized_decimals]);
         put(&mut out, &mut at, &self.fields.grid_family_id.to_le_bytes());
         put(&mut out, &mut at, &self.fields.grid_version.to_le_bytes());
+        put(
+            &mut out,
+            &mut at,
+            &self.fields.grid_origin_unix_seconds.to_le_bytes(),
+        );
         put(&mut out, &mut at, &self.fields.bucket_seconds.to_le_bytes());
+        put(
+            &mut out,
+            &mut at,
+            &self.fields.boundary_grace_seconds.to_le_bytes(),
+        );
         put(
             &mut out,
             &mut at,
@@ -338,24 +379,27 @@ impl SourceSpecV2 {
             parser_id: u16_at(bytes, 46),
             parser_version: u16_at(bytes, 48),
             receiver_program: key_at(bytes, 50),
-            receiver_config: key_at(bytes, 82),
-            config_digest: key_at(bytes, 114),
-            provider_feed_id: key_at(bytes, 146),
-            deployment_generation: u64_at(bytes, 178),
-            base_asset_id: key_at(bytes, 186),
-            quote_asset_id: key_at(bytes, 218),
-            orientation: bytes[250],
-            normalized_decimals: bytes[251],
-            grid_family_id: u32_at(bytes, 252),
-            grid_version: u16_at(bytes, 256),
-            bucket_seconds: u64_at(bytes, 258),
-            max_staleness_slots: u64_at(bytes, 266),
-            max_staleness_seconds: u64_at(bytes, 274),
-            max_future_seconds: u64_at(bytes, 282),
-            max_confidence_atoms: u128_at(bytes, 290),
-            max_confidence_bps: u32_at(bytes, 306),
-            confidence_multiplier: u16_at(bytes, 310),
-            selection_rule: u16_at(bytes, 312),
+            receiver_programdata: key_at(bytes, 82),
+            receiver_config: key_at(bytes, 114),
+            config_digest: key_at(bytes, 146),
+            provider_feed_id: key_at(bytes, 178),
+            programdata_deployment_slot: u64_at(bytes, 210),
+            base_asset_id: key_at(bytes, 218),
+            quote_asset_id: key_at(bytes, 250),
+            orientation: bytes[282],
+            normalized_decimals: bytes[283],
+            grid_family_id: u32_at(bytes, 284),
+            grid_version: u16_at(bytes, 288),
+            grid_origin_unix_seconds: i64_at(bytes, 290),
+            bucket_seconds: u64_at(bytes, 298),
+            boundary_grace_seconds: u64_at(bytes, 306),
+            max_staleness_slots: u64_at(bytes, 314),
+            max_staleness_seconds: u64_at(bytes, 322),
+            max_future_seconds: u64_at(bytes, 330),
+            max_confidence_atoms: u128_at(bytes, 338),
+            max_confidence_bps: u32_at(bytes, 354),
+            confidence_multiplier: u16_at(bytes, 358),
+            selection_rule: u16_at(bytes, 360),
         })
     }
 }
@@ -394,6 +438,12 @@ fn u64_at(bytes: &[u8], at: usize) -> u64 {
     u64::from_le_bytes(value)
 }
 
+fn i64_at(bytes: &[u8], at: usize) -> i64 {
+    let mut value = [0_u8; 8];
+    value.copy_from_slice(&bytes[at..at + 8]);
+    i64::from_le_bytes(value)
+}
+
 fn u128_at(bytes: &[u8], at: usize) -> u128 {
     let mut value = [0_u8; 16];
     value.copy_from_slice(&bytes[at..at + 16]);
@@ -411,24 +461,27 @@ mod tests {
             parser_id: 6,
             parser_version: 5,
             receiver_program: [0xb2; 32],
+            receiver_programdata: [0xb3; 32],
             receiver_config: [0xc3; 32],
             config_digest: [0xd4; 32],
             provider_feed_id: [0xe5; 32],
-            deployment_generation: 7,
+            programdata_deployment_slot: 7,
             base_asset_id: [0x11; 32],
             quote_asset_id: [0x22; 32],
             orientation: ORIENTATION_QUOTE_PER_BASE,
             normalized_decimals: 8,
             grid_family_id: 4,
             grid_version: 9,
+            grid_origin_unix_seconds: GRID_ORIGIN_UNIX_SECONDS_V1,
             bucket_seconds: 300,
+            boundary_grace_seconds: 12,
             max_staleness_slots: 400,
             max_staleness_seconds: 240,
             max_future_seconds: 15,
             max_confidence_atoms: 1_000_000_000_000,
             max_confidence_bps: 500,
             confidence_multiplier: 3,
-            selection_rule: SELECTION_CROSSING_V1_CLOSING,
+            selection_rule: SELECTION_CROSSING_V1,
         }
     }
 
@@ -446,27 +499,27 @@ mod tests {
         assert_eq!(bytes[46..48], 6_u16.to_le_bytes());
         assert_eq!(bytes[48..50], 5_u16.to_le_bytes());
         assert_eq!(bytes[50..82], [0xb2; 32]);
-        assert_eq!(bytes[82..114], [0xc3; 32]);
-        assert_eq!(bytes[114..146], [0xd4; 32]);
-        assert_eq!(bytes[146..178], [0xe5; 32]);
-        assert_eq!(bytes[178..186], 7_u64.to_le_bytes());
-        assert_eq!(bytes[186..218], [0x11; 32]);
-        assert_eq!(bytes[218..250], [0x22; 32]);
-        assert_eq!(bytes[250], ORIENTATION_QUOTE_PER_BASE);
-        assert_eq!(bytes[251], 8);
-        assert_eq!(bytes[252..256], 4_u32.to_le_bytes());
-        assert_eq!(bytes[256..258], 9_u16.to_le_bytes());
-        assert_eq!(bytes[258..266], 300_u64.to_le_bytes());
-        assert_eq!(bytes[266..274], 400_u64.to_le_bytes());
-        assert_eq!(bytes[274..282], 240_u64.to_le_bytes());
-        assert_eq!(bytes[282..290], 15_u64.to_le_bytes());
-        assert_eq!(bytes[290..306], 1_000_000_000_000_u128.to_le_bytes());
-        assert_eq!(bytes[306..310], 500_u32.to_le_bytes());
-        assert_eq!(bytes[310..312], 3_u16.to_le_bytes());
-        assert_eq!(
-            bytes[312..314],
-            SELECTION_CROSSING_V1_CLOSING.to_le_bytes()
-        );
+        assert_eq!(bytes[82..114], [0xb3; 32]);
+        assert_eq!(bytes[114..146], [0xc3; 32]);
+        assert_eq!(bytes[146..178], [0xd4; 32]);
+        assert_eq!(bytes[178..210], [0xe5; 32]);
+        assert_eq!(bytes[210..218], 7_u64.to_le_bytes());
+        assert_eq!(bytes[218..250], [0x11; 32]);
+        assert_eq!(bytes[250..282], [0x22; 32]);
+        assert_eq!(bytes[282], ORIENTATION_QUOTE_PER_BASE);
+        assert_eq!(bytes[283], 8);
+        assert_eq!(bytes[284..288], 4_u32.to_le_bytes());
+        assert_eq!(bytes[288..290], 9_u16.to_le_bytes());
+        assert_eq!(bytes[290..298], 0_i64.to_le_bytes());
+        assert_eq!(bytes[298..306], 300_u64.to_le_bytes());
+        assert_eq!(bytes[306..314], 12_u64.to_le_bytes());
+        assert_eq!(bytes[314..322], 400_u64.to_le_bytes());
+        assert_eq!(bytes[322..330], 240_u64.to_le_bytes());
+        assert_eq!(bytes[330..338], 15_u64.to_le_bytes());
+        assert_eq!(bytes[338..354], 1_000_000_000_000_u128.to_le_bytes());
+        assert_eq!(bytes[354..358], 500_u32.to_le_bytes());
+        assert_eq!(bytes[358..360], 3_u16.to_le_bytes());
+        assert_eq!(bytes[360..362], SELECTION_CROSSING_V1.to_le_bytes());
         assert_eq!(bytes[RESERVED_AT..], [0; 6]);
     }
 
@@ -479,14 +532,12 @@ mod tests {
         assert_eq!(decoded.fields(), fields());
         assert_eq!(decoded.encode_canonical(), bytes);
 
-        let mut opening = fields();
-        opening.selection_rule = SELECTION_CROSSING_V1_OPENING;
-        let opening = SourceSpecV2::new(opening).expect("opening variant is registered");
-        let opening_bytes = opening.encode_canonical();
-        assert_ne!(opening_bytes, bytes);
-        assert_eq!(
-            SourceSpecV2::decode_canonical(&opening_bytes),
-            Ok(opening)
+        assert_eq!(decoded.feed_id(), original.feed_id());
+        let mut changed = fields();
+        changed.receiver_programdata[0] ^= 1;
+        assert_ne!(
+            SourceSpecV2::new(changed).unwrap().feed_id(),
+            original.feed_id()
         );
     }
 
@@ -564,6 +615,9 @@ mod tests {
         case.receiver_program = zero;
         assert_eq!(SourceSpecV2::new(case), Err(SpecV2Error::ZeroIdentity));
         case = fields();
+        case.receiver_programdata = zero;
+        assert_eq!(SourceSpecV2::new(case), Err(SpecV2Error::ZeroIdentity));
+        case = fields();
         case.receiver_config = zero;
         assert_eq!(SourceSpecV2::new(case), Err(SpecV2Error::ZeroIdentity));
         case = fields();
@@ -581,7 +635,7 @@ mod tests {
 
         // The same refusals hold on the byte path for every key field.
         let bytes = spec().encode_canonical();
-        for key_start in [10_usize, 50, 82, 114, 146, 186, 218] {
+        for key_start in [10_usize, 50, 82, 114, 146, 178, 218, 250] {
             let mut hostile = bytes;
             hostile[key_start..key_start + 32].copy_from_slice(&zero);
             assert_eq!(
@@ -591,8 +645,8 @@ mod tests {
         }
 
         let mut same_asset = bytes;
-        let base: [u8; 32] = key_at(&bytes, 186);
-        same_asset[218..250].copy_from_slice(&base);
+        let base: [u8; 32] = key_at(&bytes, 218);
+        same_asset[250..282].copy_from_slice(&base);
         assert_eq!(
             SourceSpecV2::decode_canonical(&same_asset),
             Err(SpecV2Error::SameAsset)
@@ -611,7 +665,7 @@ mod tests {
         case.parser_version = 0;
         assert_eq!(SourceSpecV2::new(case), Err(SpecV2Error::Unversioned));
         case = fields();
-        case.deployment_generation = 0;
+        case.programdata_deployment_slot = 0;
         assert_eq!(SourceSpecV2::new(case), Err(SpecV2Error::Unversioned));
 
         case = fields();
@@ -627,7 +681,7 @@ mod tests {
         );
 
         // The V1 finalized-bucket rule id (1) is not registered under v2.
-        for rule in [0_u16, 1, 4, u16::MAX] {
+        for rule in [0_u16, 1, 3, 4, u16::MAX] {
             case = fields();
             case.selection_rule = rule;
             assert_eq!(
@@ -636,7 +690,7 @@ mod tests {
             );
         }
         let mut hostile = spec().encode_canonical();
-        hostile[312..314].copy_from_slice(&1_u16.to_le_bytes());
+        hostile[360..362].copy_from_slice(&1_u16.to_le_bytes());
         assert_eq!(
             SourceSpecV2::decode_canonical(&hostile),
             Err(SpecV2Error::UnknownSelectionRule)
@@ -649,6 +703,9 @@ mod tests {
         case.normalized_decimals = 19;
         assert_eq!(SourceSpecV2::new(case), Err(SpecV2Error::InvalidScale));
 
+        case = fields();
+        case.grid_origin_unix_seconds = 1;
+        assert_eq!(SourceSpecV2::new(case), Err(SpecV2Error::UnknownGridOrigin));
         case = fields();
         case.bucket_seconds = 0;
         assert_eq!(SourceSpecV2::new(case), Err(SpecV2Error::InvalidGrid));
@@ -707,7 +764,7 @@ mod tests {
         }
 
         let mut hostile = spec().encode_canonical();
-        hostile[258..266].copy_from_slice(&0_u64.to_le_bytes());
+        hostile[298..306].copy_from_slice(&0_u64.to_le_bytes());
         assert_eq!(
             SourceSpecV2::decode_canonical(&hostile),
             Err(SpecV2Error::InvalidGrid)

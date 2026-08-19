@@ -12,10 +12,12 @@
 //!    update for one immutable boundary without allowing the submitter to pick
 //!    another otherwise-fresh update.
 //!
-//! Program deployment, receiver configuration, immediate-post provenance,
-//! signature verification, Clock access, and account ownership remain adapter
-//! obligations.  A parser result is not source authentication.
+//! [`auth_v2`] makes the deployment/config/adjacent-post/Clock/ownership join
+//! executable as a typed contract. Its loader and Instructions-sysvar
+//! projections still require exact production parsers; a raw parser result or
+//! caller-asserted projection is not source authentication.
 
+pub mod auth_v2;
 pub mod crossing_v1;
 pub mod spec_v2;
 
@@ -54,6 +56,9 @@ pub enum Error {
 /// receiver-owned account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AccountView<'a> {
+    /// Ephemeral update-account key. It is bound by the immediate-post proof,
+    /// never by the immutable SourceSpec identity.
+    pub key: [u8; 32],
     pub owner: [u8; 32],
     pub executable: bool,
     pub data: &'a [u8],
@@ -289,6 +294,7 @@ mod tests {
     fn parse(bytes: &[u8]) -> Result<FullPriceUpdateV2, Error> {
         parse_full_price_update_v2(
             AccountView {
+                key: [0x44; 32],
                 owner: RECEIVER,
                 executable: false,
                 data: bytes,
@@ -330,6 +336,7 @@ mod tests {
     fn hostile_metadata_and_bytes_fail_closed() {
         let bytes = fixture();
         let wrong_owner = AccountView {
+            key: [0x44; 32],
             owner: [0x44; 32],
             executable: false,
             data: &bytes,
@@ -340,6 +347,7 @@ mod tests {
         );
 
         let executable = AccountView {
+            key: [0x44; 32],
             owner: RECEIVER,
             executable: true,
             data: &bytes,
