@@ -281,6 +281,27 @@ fn successor_initialization_derives_exact_lineage_from_a_sealed_receipt() {
         Err(SourceArchiveError::NonContiguousLineage)
     );
     assert_eq!(refused, [0_u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES]);
+
+    let repaired = window_range(spec, 103, 106, 107, 1);
+    assert_eq!(
+        initialize_successor_archive::<MockDeployment>(
+            &mut refused,
+            verified,
+            repaired,
+            receipt,
+            251,
+        ),
+        Err(SourceArchiveError::NonContiguousLineage),
+        "V1 has no rule that authorizes a repair-generation transition"
+    );
+    assert_eq!(refused, [0_u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES]);
+
+    assert_eq!(
+        initialize_genesis_archive::<MockDeployment>(&mut refused, verified, repaired, 251),
+        Err(SourceArchiveError::NonContiguousLineage),
+        "a repair generation cannot reset to caller-authored genesis lineage"
+    );
+    assert_eq!(refused, [0_u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES]);
 }
 
 fn provider_program<'a>(data: &'a [u8]) -> RuntimeAccountViewV1<'a> {

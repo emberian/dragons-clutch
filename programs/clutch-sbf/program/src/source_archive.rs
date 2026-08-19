@@ -278,7 +278,12 @@ impl VerifiedArchivePredecessorV1 {
         Ok(Self(ArchivePredecessorV1::GENESIS))
     }
 
-    /// Derive exact successor lineage from a verified sealed archive receipt.
+    /// Derive exact same-generation successor lineage from a verified sealed
+    /// archive receipt.
+    ///
+    /// Repair-generation transitions remain unsupported in V1: incrementing a
+    /// generation needs a separate rule for overlapping/replaced windows and
+    /// cannot silently reuse ordinary contiguous-page lineage.
     pub fn successor(
         receipt: SealedArchiveReceiptV1,
         spec: SourceSpecV1,
