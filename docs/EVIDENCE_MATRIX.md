@@ -22,7 +22,7 @@ assumptions, and every unclosed adapter/refinement boundary.
 | `P-PART-02` | exact value has one cell; interval has canonical compatible set | required | required | optional | exhaustive small domains |
 | `P-PAY-01` | bounded dot product cannot overflow and rounds once | required | required | vector checker | differential maxima |
 | `P-SOLV-01` | successful transition preserves maximum-liability solvency | required local | required reachable-state | optional | randomized traces |
-| `P-SUP-01` | materialize/dematerialize preserves total categorical supply | required | required | optional | direct-burn fixtures |
+| `P-SUP-01` | materialize/dematerialize preserves per-native-basis-Egg total supply | required | required | optional | direct-burn fixtures |
 | `P-POOL-01` | Hoard, order, fee, liveness, rent, treasury cannot alias | required transition | required noninterference | optional | hostile account tests |
 | `P-FEE-01` | fee collection/allocation/carry conserves atoms | required | required | vector checker | fragmentation corpus |
 | `P-ACC-01` | summary combine is associative over admitted adjacent ranges | required | required | preferred reproduce | all page splits |

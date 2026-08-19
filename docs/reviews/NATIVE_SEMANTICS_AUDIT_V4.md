@@ -2,6 +2,16 @@
 
 Date: 2026-08-19
 
+> **Update (later on 2026-08-19):** the P1 joined-evidence residue named below
+> (repair-plan item 2) has since landed at `896a1cc`: one continuous
+> blank-bank joined lifecycle per smooth degree (one, two, three) is
+> SBF-EXECUTED in local in-process banks under both ELF campaigns — the funded
+> segment on the explicitly non-production mock-source ELF with exactly four
+> named injections, and the default empty-registry ELF campaign asserting the
+> exact `0x79` boundary per degree with byte-identical rollback. See
+> `docs/implementation/NATIVE_FULL_LIFECYCLE_SBF.md` and `CURRENT_TRUTH.md`
+> §6.1. The refinement boundary (repair-plan item 5) remains open.
+
 ## Verdict
 
 Native B-spline semantics are now first-class across the implemented runtime

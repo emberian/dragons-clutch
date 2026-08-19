@@ -460,9 +460,11 @@ The routed ResolutionWork V1 establishes the live ABI/layout, exact rent and
 reward schedule, deterministic lock/recovery behavior, sealed-source
 authentication, full-byte monolithic v4 equivalence, late rollback, donation
 segregation, and real-SBF Begin/Fold/Finalize/Abort rows documented in
-`RESOLUTION_WORK_SBF.md`. The sealed R1 artifact's first-party final-LTO stack
-audit passes for exact ELF
-`a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1`.
+`RESOLUTION_WORK_SBF.md`. The current sealed default artifact's first-party
+final-LTO stack audit passes for exact ELF
+`bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`
+(sealed at `b5700a9`; the preceding `a5725a3d…` seal remains valid historical
+evidence only).
 The following remain explicit stops or scope limits:
 
 - route-level evidence is not permission to call the program or deployment

@@ -858,7 +858,11 @@ Consequences for this plan's own text:
   ValueOutOfRange`, `R-16 DerivedVectorUnrepresentable`, `R-17
   WrongResolutionMode` (15 reserved for the unimplemented degrees' point-
   evidence rule). Degree ≥ 1 derivation details are the design doc's
-  addendum, not this plan's.
+  addendum, not this plan's. *(Superseded history, 2026-08-19: degrees one
+  through three now resolve natively through the sole persisted v3 Resolution
+  vector, so R-16 is an unreachable reserved class and no preset-membership
+  bridge remains; public `derive_payout` is degree-zero-only. See
+  `docs/reviews/NATIVE_SEMANTICS_AUDIT_V4.md` and `CURRENT_TRUTH.md` §3.)*
 
 What this addendum does **not** change: nothing here authenticates evidence
 (§1.6 stands verbatim), promotion gates 1-3 of §4 are untouched, and the

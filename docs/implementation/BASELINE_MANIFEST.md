@@ -44,10 +44,10 @@ network, no writes outside the manifest path (gates themselves write to their
 own `target/` directories and to `mktemp` scratch, exactly as they do when run
 by hand).
 
-`MANIFEST.baseline.json` remains a checked historical **schema-v1** artifact.
-The v2 generator intentionally rejects it under `check` until a later clean-tree
-v2 emission is explicitly performed and committed. Do not edit that historical
-artifact merely to make this source documentation or generator pass.
+The checked-in `MANIFEST.baseline.json` is now a clean-tree **schema-v2**
+emission, committed at `6743b9d`. It records 94/94 declared gate outcomes, and
+`check --run-gates` passes after that manifest-only commit. This is a checked
+local evidence baseline, not a release manifest.
 
 Exit codes:
 

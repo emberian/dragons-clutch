@@ -52,6 +52,10 @@ commit passes:
 scripts/baseline_manifest.py check --run-gates
 ```
 
-The remaining evidence step is a fresh Persvati attestation against that
-checked endpoint. This remains local evidence bookkeeping, not authorization
-to publish, sign, deploy, or release.
+The fresh Persvati attestation against that checked endpoint has since
+completed: exact `6743b9d` was independently attested from a fresh archive and
+minimal hashed Git bundle with 40/40 portable gates PASS, 0 STOP, 528 files
+checked twice with zero mismatches, and the sealed `bd20711b…` ELF
+byte-verified on both hosts (recorded in `CURRENT_TRUTH.md` §2). This remains
+local evidence bookkeeping, not authorization to publish, sign, deploy, or
+release.

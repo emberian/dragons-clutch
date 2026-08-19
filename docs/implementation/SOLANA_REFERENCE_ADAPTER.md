@@ -416,7 +416,13 @@ whenever the derived, validated weight vector is a member of the frozen
 preset set — the kernel still resolves by index, and the missing
 `resolve_with_vector` transition is the one named residue, refusing
 `R-16 DerivedVectorUnrepresentable` fail-closed for every non-member vector.
-Degrees 2-3 refuse as unimplemented variants.
+Degrees 2-3 refuse as unimplemented variants. *(Superseded history,
+2026-08-19: degrees one through three now resolve natively — the sole
+persisted 319-byte v3 Resolution vector owns the resolved weights,
+KernelAccount v2 carries the immutable `basis_mode`, R-16 is an unreachable
+reserved class, and public `derive_payout` is degree-zero-only with
+`derive_payout_vector` owning degrees one through three. See
+`docs/reviews/NATIVE_SEMANTICS_AUDIT_V4.md` and `CURRENT_TRUTH.md` §3.)*
 
 **Obligation 19 is wired on the reference side.** `validate_market_init`
 takes the 266 collateral-policy bytes and the terms artifact as evidence

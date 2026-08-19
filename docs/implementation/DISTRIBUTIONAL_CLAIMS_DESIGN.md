@@ -1011,6 +1011,13 @@ adapter). Consequences deferred with the kernel delta: §6.3's
 index), the §4 `Active`-phase `max_i T_i` requirement, and the §9 lot posture
 decision. The §10.1 PROJECT.md edit remains the coordinator's.
 
+*(Superseded history, 2026-08-19: the kernel delta has since landed.
+KernelAccount v2 persists an immutable `basis_mode`, smooth resolution
+persists the sole 319-byte v3 native Resolution vector, and public
+`derive_payout` is degree-zero-only while `derive_payout_vector` owns degrees
+one through three; the preset-membership bridge no longer exists. See
+`docs/reviews/NATIVE_SEMANTICS_AUDIT_V4.md` and `CURRENT_TRUTH.md` §3.)*
+
 **Cost, measured rather than §8-estimated.** The on-chain gate reached the v3
 terms only after a decode-once rework (`TermsAccount::decode_unchecked` /
 `*_into`, digest paid once per transaction in the account plane): with it,
@@ -1102,6 +1109,13 @@ refusal *there* — reclassified from "the missing kernel transition" to "the
 index-shaped resolution record". Also unaddressed and unchanged: the §9 lot
 posture decision, and the §10.1 `PROJECT.md` edit, which remains the
 coordinator's.
+
+*(Superseded history, 2026-08-19: both byte facts above have since been
+resolved — the v3 native Resolution record persists the full vector as its
+sole owner and KernelAccount v2 carries the immutable `basis_mode`. Public
+`derive_payout` is now degree-zero-only, `derive_payout_vector` owns degrees
+one through three, and R-16 is an unreachable reserved class. See
+`docs/reviews/NATIVE_SEMANTICS_AUDIT_V4.md` and `CURRENT_TRUTH.md` §3.)*
 
 **One cost the design did not price.** `MarketState` grows from 1,240 to
 1,376 bytes (`resolved_vector` is 136; the mode byte lands in existing

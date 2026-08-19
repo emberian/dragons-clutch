@@ -161,25 +161,31 @@ V1 charges are zero, so no nonzero charge-disposition claim is made.
 
 ## Real-SBF evidence
 
-The sealed R1 artifact was built twice from exact runtime source
-`7e8f6b1714c3c97a31a4250ecd19f87041433c2d`. Both ordinary builds are
-byte-identical. The 88-file declared runtime-source closure remains unchanged
-through release/test ancestry `b5da74fba46f13794e48d42973304f05d10642f5`;
-the intervening `161f530` native-fixture repair and `316c620` research lock
-repair do not change the program ELF. The liveness profile and artifact/log
-archive are sealed at `0359aec` and `b5da74f`, respectively.
+The current sealed default artifact was built twice from exact runtime source
+`83e124dda22adc15cb5ebf18ff9e0ab971c551dc`. Both ordinary builds are
+byte-identical. The measured liveness profile, exact ELF, audit, and same-ELF
+bank/build logs are sealed at `b5700a9`. The preceding
+`7e8f6b1`/`b5da74f`/`a5725a3d…` seal remains valid historical evidence only;
+the sole executable-closure change between the seals is the required
+rustdoc-link qualification in `programs/solana-reference/src/resolution.rs`,
+which changes seven line-location bytes in `.data.rel.ro` while `.text`,
+`.rodata`, every other stripped section, and normalized instruction
+disassembly remain identical. The CU rows below were remeasured against the
+current artifact rather than relabeled from the historical seal.
 
 ```text
-SHA256: a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1
+SHA256: bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60
 bytes:  1,228,192
-audit:  research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/
-logs:   research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/
+audit:  research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/
+logs:   research/liveness-policy-profile/artifacts/bd20711b01828a74/logs/
 ```
 
-The evidence checksum ledger has SHA-256
-`baaa5ee5ac3e6372faf9fe82cd60e31ed53e93d62b37b8314ef9f6f1634d4ac0`.
+The audit report has SHA-256
+`626a299dd879cff5f8c775b82b488c2d6b300a386b6d5f847913b5e14797e038`
+and the upstream 52-file checksum ledger has SHA-256
+`dbf55f8e28c1674fc0f76b434049fbc8ef1e906c46db6ac0457410eaebc35f35`.
 The complete source/toolchain/dependency and same-ELF account is
-[`RUNTIME_ARTIFACT_AUDIT.md`](../../research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/RUNTIME_ARTIFACT_AUDIT.md).
+[`RUNTIME_ARTIFACT_AUDIT.md`](../../research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/RUNTIME_ARTIFACT_AUDIT.md).
 
 The sealed same-ELF ProgramTest measurements (degree 2, real program ELF) were
 collected with the selected CU limit and the maximum V1 priority-price input:
