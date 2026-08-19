@@ -1,0 +1,25 @@
+[package]
+name = "clutch-sbf-committed-harness"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "Local-only signed-transaction runner for a committed Dragon's Clutch lifecycle"
+
+# This is intentionally not a member of the SBF build workspace.  The program
+# ELF must not acquire host signing or JSON dependencies merely because the
+# local evidence runner needs them.
+[workspace]
+
+[dependencies]
+base64 = "=0.22.1"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.151"
+solana-keypair = "=3.1.2"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
