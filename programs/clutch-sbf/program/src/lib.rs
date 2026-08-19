@@ -72,6 +72,7 @@ pub mod error;
 pub mod instructions;
 pub mod seeds;
 pub mod source;
+pub mod source_archive;
 pub mod token;
 
 #[cfg(target_os = "solana")]
