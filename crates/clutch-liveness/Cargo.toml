@@ -1,0 +1,13 @@
+[package]
+name = "clutch-liveness"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Pure prepaid-liveness admission kernel for Dragon's Clutch"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
