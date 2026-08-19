@@ -1,0 +1,13 @@
+[package]
+name = "clutch-terminal-economics-r4"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Model-only R4 terminal economics and wire codec"
+license = "AGPL-3.0-or-later"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
