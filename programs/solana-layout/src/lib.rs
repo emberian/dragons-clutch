@@ -4343,10 +4343,7 @@ pub enum Intent {
         submission_closes_slot: u64,
     },
     /// Freeze the exact one-page/two-order direct book before submission opens.
-    FreezeDirectEpochV3 {
-        market: MarketId,
-        epoch: EpochId,
-    },
+    FreezeDirectEpochV3 { market: MarketId, epoch: EpochId },
     /// Verify and admit one priced candidate into the streaming direct window.
     SubmitDirectCandidateV2 {
         market: MarketId,
@@ -4354,15 +4351,9 @@ pub enum Intent {
         outcome_price: u64,
     },
     /// Close one expired candidate window and freeze its exact best candidate.
-    SelectDirectWindowV1 {
-        market: MarketId,
-        epoch: EpochId,
-    },
+    SelectDirectWindowV1 { market: MarketId, epoch: EpochId },
     /// Consume the selected direct entitlement exactly once.
-    SettleDirectV2 {
-        market: MarketId,
-        epoch: EpochId,
-    },
+    SettleDirectV2 { market: MarketId, epoch: EpochId },
     /// Bring one Realm namespace into existence.
     ///
     /// The Realm identity is not carried, because it is not a choice:
@@ -9591,7 +9582,10 @@ mod tests {
             assert_eq!(bytes[0], expected_tags[index]);
             assert_eq!(bytes[1], INTENT_VERSION);
             assert_eq!(Intent::decode(&bytes[..len]), Ok(intents[index]));
-            assert_eq!(Intent::decode(&bytes[..len - 1]), Err(CodecError::Truncated));
+            assert_eq!(
+                Intent::decode(&bytes[..len - 1]),
+                Err(CodecError::Truncated)
+            );
             index += 1;
         }
     }
@@ -10010,7 +10004,7 @@ mod tests {
         b[66..74].fill(0);
         assert_eq!(Intent::decode(&b[..n]), Err(CodecError::ZeroValue));
         // A tag past the last one this version defines.
-        b[0] = SUBMIT_DIRECT_PAGE_TAG + 1;
+        b[0] = SETTLE_DIRECT_V2_TAG + 1;
         assert_eq!(Intent::decode(&b[..n]), Err(CodecError::WrongTag));
     }
 

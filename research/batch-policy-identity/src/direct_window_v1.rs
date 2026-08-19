@@ -29,6 +29,7 @@ use sha2::{Digest, Sha256};
 use super::{
     FullRelationDomainV1, FullScoreV1, FullSubmittedCandidateV1, Identity32V1,
     PolicyIdentityErrorV1, VerifiedSubmittedCandidateV1, ACCOUNT_CANDIDATE_DIGEST_DOMAIN,
+    FULL_RELATION_CANDIDATE_DIGEST_DOMAIN,
 };
 
 /// Maximum number of candidate accounts retained for final re-verification.
@@ -210,6 +211,138 @@ pub struct DirectCandidateCoordinatesV1 {
     pub outcome: u8,
     /// Future PDA bump.
     pub stored_bump: u8,
+}
+
+/// Complete small input to the SBF-safe direct relation specialization.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectTwoOrderInputV1 {
+    /// Candidate simplex vector; exactly two entries are active.
+    pub prices: [u64; MAX_OUTCOMES],
+    /// Buy order's frozen limit.
+    pub buy_limit: u64,
+    /// Sell order's frozen limit.
+    pub sell_limit: u64,
+    /// Exact common full-fill quantity.
+    pub quantity: u64,
+    /// Authenticated Clock slot of admission.
+    pub submitted_slot: u64,
+    /// Relation index of the buy order.
+    pub buy_index: u8,
+    /// Relation index of the sell order.
+    pub sell_index: u8,
+    /// Shared Egg outcome.
+    pub outcome: u8,
+    /// Canonical future PDA bump.
+    pub stored_bump: u8,
+}
+
+/// Verify the exact two-order direct specialization without materializing the
+/// 64-order host relation.
+///
+/// The arithmetic and digest are byte-for-byte the same V0--V9 result as the
+/// full relation for two opposite, distinct-owner, full-fill single-Egg orders
+/// under [`DIRECT_POLICY_V1`]. Tests below compare this bounded implementation
+/// against the full verifier across prices and book orderings. No identity is
+/// projected to the host relation's legacy `u64` tags.
+pub fn verify_direct_two_order_candidate(
+    domain: &FullRelationDomainV1,
+    input: DirectTwoOrderInputV1,
+) -> Result<DirectCandidateV2, DirectWindowErrorV1> {
+    domain.validate()?;
+    if domain.policy != DIRECT_POLICY_V1
+        || domain.outcome_count != 2
+        || domain.owner_count != 2
+        || domain.price_scale == 0
+        || input.quantity == 0
+        || input.buy_index > 1
+        || input.sell_index > 1
+        || input.buy_index == input.sell_index
+        || input.outcome >= 2
+        || input.prices[2..].iter().any(|price| *price != 0)
+    {
+        return Err(DirectWindowErrorV1::NotDirect);
+    }
+    let price = input.prices[usize::from(input.outcome)];
+    let other = input.prices[1usize - usize::from(input.outcome)];
+    if price == 0
+        || other == 0
+        || price.checked_add(other) != Some(domain.price_scale)
+        || input.sell_limit > price
+        || price > input.buy_limit
+    {
+        return Err(DirectWindowErrorV1::NotDirect);
+    }
+    let weighted = u128::from(input.quantity)
+        .checked_mul(u128::from(price))
+        .and_then(|value| value.checked_mul(u128::from(other)))
+        .ok_or(DirectWindowErrorV1::ArithmeticOverflow)?;
+    let consideration = u128::from(input.quantity)
+        .checked_mul(u128::from(price))
+        .ok_or(DirectWindowErrorV1::ArithmeticOverflow)?;
+    if consideration % u128::from(domain.price_scale) != 0 {
+        return Err(DirectWindowErrorV1::NotDirect);
+    }
+    let weighted_direct_volume =
+        i128::try_from(weighted).map_err(|_| DirectWindowErrorV1::ArithmeticOverflow)?;
+    let spread = input
+        .buy_limit
+        .checked_sub(input.sell_limit)
+        .ok_or(DirectWindowErrorV1::NotDirect)?;
+    let limit_surplus_price_units = u128::from(input.quantity)
+        .checked_mul(u128::from(spread))
+        .ok_or(DirectWindowErrorV1::ArithmeticOverflow)?;
+    let candidate_id =
+        canonical_account_candidate_id(domain.epoch_id, domain.market_id, &input.prices);
+    let relation_candidate_digest =
+        direct_relation_candidate_digest(domain, candidate_id, input.quantity)?;
+    let value = DirectCandidateV2 {
+        candidate_id,
+        epoch_id: domain.epoch_id,
+        market_id: domain.market_id,
+        order_set_id: domain.order_set_id,
+        policy_id: domain.policy_id,
+        relation_domain_digest: domain.digest()?,
+        relation_candidate_digest,
+        prices: input.prices,
+        fills: [input.quantity, input.quantity],
+        weighted_direct_volume,
+        limit_surplus_price_units,
+        submitted_slot: input.submitted_slot,
+        quantity: input.quantity,
+        buy_index: input.buy_index,
+        sell_index: input.sell_index,
+        outcome: input.outcome,
+        distinct_owners: 2,
+        order_len: 2,
+        outcome_count: 2,
+        status: DIRECT_CANDIDATE_STATUS_VERIFIED,
+        stored_bump: input.stored_bump,
+        flags: 0,
+        reserved: [0; CANDIDATE_RESERVED_BYTES],
+    };
+    value.validate()?;
+    Ok(value)
+}
+
+fn direct_relation_candidate_digest(
+    domain: &FullRelationDomainV1,
+    candidate_id: Identity32V1,
+    quantity: u64,
+) -> Result<Identity32V1, DirectWindowErrorV1> {
+    let mut h = Sha256::new();
+    h.update(FULL_RELATION_CANDIDATE_DIGEST_DOMAIN);
+    h.update(domain.digest()?.0);
+    h.update(candidate_id.0);
+    h.update(quantity.to_le_bytes());
+    h.update(quantity.to_le_bytes());
+    let mut index = 2usize;
+    while index < MAX_ORDERS {
+        h.update(0u64.to_le_bytes());
+        index += 1;
+    }
+    h.update(0u64.to_le_bytes()); // honored AON mask
+    h.update([0]); // no explicit pairing witness under DIRECT_POLICY_V1
+    Ok(Identity32V1(h.finalize().into()))
 }
 
 /// Compact, fixed-layout verified candidate for the bounded direct profile.
@@ -762,6 +895,46 @@ pub struct DirectAdmissionPlanV1 {
     pub displaced_candidate: Identity32V1,
 }
 
+/// Stack-bounded retained-candidate view used by the live SBF registry walk.
+///
+/// Construction validates the complete candidate and its full-width window
+/// binding before discarding fields which do not participate in ranking.  The
+/// compact value therefore cannot be manufactured from an unauthenticated
+/// score by the runtime adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectRetainedCandidateV1 {
+    /// Exact two-digest registry entry frozen in the window.
+    pub entry: DirectCandidateEntryV1,
+    /// Complete total-order score, including its full digest tie-break.
+    pub score: FullScoreV1,
+}
+
+impl DirectRetainedCandidateV1 {
+    /// Validate and project one complete retained candidate.
+    pub fn from_candidate(
+        window: &DirectCandidateWindowV1,
+        candidate: &DirectCandidateV2,
+    ) -> Result<Self, DirectWindowErrorV1> {
+        window.validate()?;
+        candidate.validate()?;
+        bind_candidate(&window.binding(), candidate)?;
+        if candidate.status != DIRECT_CANDIDATE_STATUS_VERIFIED {
+            return Err(DirectWindowErrorV1::MismatchedBinding);
+        }
+        Ok(Self {
+            entry: candidate.entry(),
+            score: candidate.score(),
+        })
+    }
+
+    /// Zero padding for a fixed-capacity stack array.  It is never accepted in
+    /// the active prefix because registry validation requires exact entries.
+    pub const ZERO: Self = Self {
+        entry: DirectCandidateEntryV1::ZERO,
+        score: FullScoreV1::ZERO,
+    };
+}
+
 /// Complete post-state facts of once-only selection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectSelectionPlanV1 {
@@ -788,12 +961,37 @@ pub fn plan_admission(
     submitted: &DirectCandidateV2,
     now: u64,
 ) -> Result<DirectAdmissionPlanV1, DirectWindowErrorV1> {
+    validate_registry(window, current_top)?;
+    let mut retained = [DirectRetainedCandidateV1::ZERO; MAX_DIRECT_CANDIDATES];
+    let mut i = 0usize;
+    while i < current_top.len() {
+        retained[i] = DirectRetainedCandidateV1 {
+            entry: current_top[i].entry(),
+            score: current_top[i].score(),
+        };
+        i += 1;
+    }
+    plan_admission_retained(window, &retained[..current_top.len()], submitted, now)
+}
+
+/// Stack-bounded admission over already authenticated retained projections.
+///
+/// This is byte-for-byte the same transition as [`plan_admission`].  It lets a
+/// constrained adapter decode and authenticate one 440-byte candidate account
+/// at a time, retain only its exact entry and score, and avoid keeping three
+/// complete candidates in one 4 KiB SBF frame.
+pub fn plan_admission_retained(
+    window: &DirectCandidateWindowV1,
+    current_top: &[DirectRetainedCandidateV1],
+    submitted: &DirectCandidateV2,
+    now: u64,
+) -> Result<DirectAdmissionPlanV1, DirectWindowErrorV1> {
     window.validate()?;
     if window.phase != DIRECT_WINDOW_PHASE_OPEN {
         return Err(DirectWindowErrorV1::AlreadySelected);
     }
     require_submission_time(window.opens_slot, window.closes_slot, now)?;
-    validate_registry(window, current_top)?;
+    validate_retained_registry(window, current_top)?;
     submitted.validate()?;
     bind_candidate(&window.binding(), submitted)?;
     if submitted.status != DIRECT_CANDIDATE_STATUS_VERIFIED || submitted.submitted_slot != now {
@@ -802,7 +1000,7 @@ pub fn plan_admission(
     let count = usize::from(window.top_count);
     let mut i = 0usize;
     while i < count {
-        if current_top[i].candidate_id == submitted.candidate_id {
+        if current_top[i].entry.candidate_id == submitted.candidate_id {
             return Err(DirectWindowErrorV1::Replay);
         }
         i += 1;
@@ -824,7 +1022,7 @@ pub fn plan_admission(
     let mut rank = count;
     i = 0;
     while i < count {
-        match submitted.score().total_order(&current_top[i].score()) {
+        match submitted.score().total_order(&current_top[i].score) {
             Ordering::Greater => {
                 rank = i;
                 break;
@@ -871,6 +1069,25 @@ pub fn plan_selection(
     current_top: &[DirectCandidateV2],
     now: u64,
 ) -> Result<DirectSelectionPlanV1, DirectWindowErrorV1> {
+    validate_registry(window, current_top)?;
+    let mut retained = [DirectRetainedCandidateV1::ZERO; MAX_DIRECT_CANDIDATES];
+    let mut i = 0usize;
+    while i < current_top.len() {
+        retained[i] = DirectRetainedCandidateV1 {
+            entry: current_top[i].entry(),
+            score: current_top[i].score(),
+        };
+        i += 1;
+    }
+    plan_selection_retained(window, &retained[..current_top.len()], now)
+}
+
+/// Stack-bounded once-only selection over authenticated retained projections.
+pub fn plan_selection_retained(
+    window: &DirectCandidateWindowV1,
+    current_top: &[DirectRetainedCandidateV1],
+    now: u64,
+) -> Result<DirectSelectionPlanV1, DirectWindowErrorV1> {
     window.validate()?;
     if window.phase != DIRECT_WINDOW_PHASE_OPEN {
         return Err(DirectWindowErrorV1::AlreadySelected);
@@ -878,22 +1095,22 @@ pub fn plan_selection(
     if now < window.closes_slot {
         return Err(DirectWindowErrorV1::SelectionEarly);
     }
-    validate_registry(window, current_top)?;
+    validate_retained_registry(window, current_top)?;
     let mut post = *window;
     post.phase = DIRECT_WINDOW_PHASE_SELECTED;
-    post.selected_candidate = current_top[0].candidate_id;
+    post.selected_candidate = current_top[0].entry.candidate_id;
     post.selected_slot = now;
     post.validate()?;
 
     let mut superseded = [Identity32V1::ZERO; MAX_DIRECT_CANDIDATES - 1];
     let mut i = 1usize;
     while i < current_top.len() {
-        superseded[i - 1] = current_top[i].candidate_id;
+        superseded[i - 1] = current_top[i].entry.candidate_id;
         i += 1;
     }
     Ok(DirectSelectionPlanV1 {
         post_window: post,
-        selected_candidate: current_top[0].candidate_id,
+        selected_candidate: current_top[0].entry.candidate_id,
         superseded,
         superseded_count: window.top_count - 1,
     })
@@ -947,6 +1164,29 @@ fn validate_registry(
         }
         if i > 0 {
             match current_top[i - 1].score().total_order(&candidate.score()) {
+                Ordering::Greater => {}
+                _ => return Err(DirectWindowErrorV1::NonCanonical),
+            }
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+fn validate_retained_registry(
+    window: &DirectCandidateWindowV1,
+    current_top: &[DirectRetainedCandidateV1],
+) -> Result<(), DirectWindowErrorV1> {
+    if current_top.len() != usize::from(window.top_count) {
+        return Err(DirectWindowErrorV1::MismatchedBinding);
+    }
+    let mut i = 0usize;
+    while i < current_top.len() {
+        if current_top[i].entry != window.top[i] {
+            return Err(DirectWindowErrorV1::MismatchedBinding);
+        }
+        if i > 0 {
+            match current_top[i - 1].score.total_order(&current_top[i].score) {
                 Ordering::Greater => {}
                 _ => return Err(DirectWindowErrorV1::NonCanonical),
             }
@@ -1185,6 +1425,55 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn bounded_two_order_verifier_is_byte_exact_with_full_relation() {
+        for (price, slot) in [(2_500, 100), (5_000, 101), (7_500, 102)] {
+            let full = verified_at(price, slot);
+            let mut prices = [0u64; MAX_OUTCOMES];
+            prices[0] = price;
+            prices[1] = PRICE_SCALE - price;
+            let bounded = verify_direct_two_order_candidate(
+                &domain(),
+                DirectTwoOrderInputV1 {
+                    prices,
+                    buy_limit: 7_500,
+                    sell_limit: 2_500,
+                    quantity: 4,
+                    submitted_slot: slot,
+                    buy_index: 0,
+                    sell_index: 1,
+                    outcome: 0,
+                    stored_bump: 7,
+                },
+            )
+            .unwrap();
+            assert_eq!(bounded, full);
+
+            let reversed = verify_direct_two_order_candidate(
+                &domain(),
+                DirectTwoOrderInputV1 {
+                    buy_index: 1,
+                    sell_index: 0,
+                    ..DirectTwoOrderInputV1 {
+                        prices,
+                        buy_limit: 7_500,
+                        sell_limit: 2_500,
+                        quantity: 4,
+                        submitted_slot: slot,
+                        buy_index: 0,
+                        sell_index: 1,
+                        outcome: 0,
+                        stored_bump: 7,
+                    }
+                },
+            )
+            .unwrap();
+            assert_eq!(reversed.score(), full.score());
+            assert_eq!(reversed.candidate_id, full.candidate_id);
+            assert_eq!(reversed.relation_domain_digest, full.relation_domain_digest);
+        }
     }
 
     fn binding() -> DirectWindowBindingV1 {

@@ -472,7 +472,7 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 mod reservation;
-mod settlement;
+pub(super) mod settlement;
 
 /// Borrow one account's data mutably, or refuse.
 ///
@@ -569,16 +569,14 @@ pub const IX_SUBMIT_RENT: usize = 9;
 pub const IX_SUBMIT_CLOCK: usize = 10;
 
 /// Program-owned roles of `PlaceOrder`, in account-index order.
-const PLACE_ORDER_STATE_ROLES: [StateRole; 4] = [
-    StateRole::read_only(IX_EPOCH, account_len::EPOCH),
+const PLACE_ORDER_STATE_ROLES: [StateRole; 3] = [
     StateRole::read_only(IX_GRID, account_len::PRICE_GRID),
     StateRole::writable(IX_PAGE, account_len::ORDER_PAGE),
     StateRole::writable(IX_POSITION, account_len::POSITION),
 ];
 
 /// Program-owned roles of `CancelOrder`, in account-index order.
-const CANCEL_ORDER_STATE_ROLES: [StateRole; 4] = [
-    StateRole::read_only(IX_EPOCH, account_len::EPOCH),
+const CANCEL_ORDER_STATE_ROLES: [StateRole; 3] = [
     StateRole::writable(IX_CANCEL_PAGE, account_len::ORDER_PAGE),
     StateRole::writable(IX_CANCEL_POSITION, account_len::POSITION),
     StateRole::writable(IX_CANCEL_RESERVATION, RESERVATION_ACCOUNT_BYTES),
@@ -1324,6 +1322,15 @@ fn place_order(
     require_signer(&accounts[IX_ACTOR])?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &PLACE_ORDER_STATE_ROLES)?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[IX_EPOCH],
+        false,
+        &[
+            account_len::EPOCH,
+            clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
+        ],
+    )?;
     require(accounts[IX_ACTOR].is_writable, ClutchError::NotWritable)?;
     require_system_program(&accounts[IX_SYSTEM])?;
     require_creatable(&accounts[IX_RESERVATION])?;
@@ -1460,6 +1467,15 @@ fn cancel_order(
     require_signer(&accounts[IX_ACTOR])?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &CANCEL_ORDER_STATE_ROLES)?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[IX_EPOCH],
+        false,
+        &[
+            account_len::EPOCH,
+            clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
+        ],
+    )?;
 
     let epoch = accounts::read_epoch(&accounts[IX_EPOCH].data.borrow())?;
     let page_header = {

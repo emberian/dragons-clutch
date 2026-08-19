@@ -41,8 +41,8 @@
 use crate::accounts::Outcome;
 use crate::error::ClutchError;
 use crate::instructions::{
-    artifact, cash_exit, external_exit, genesis, market_init, merge_materialize, observe_resolve,
-    orders_batch, source_ingest, split,
+    artifact, cash_exit, direct_selection, external_exit, genesis, market_init, merge_materialize,
+    observe_resolve, orders_batch, source_ingest, split,
 };
 use clutch_solana_layout::Intent;
 use clutch_solana_reference::{Action, Request};
@@ -69,6 +69,7 @@ enum Route {
     OrdersBatch,
     Genesis,
     SourceIngest,
+    DirectSelection,
     DecodeOnly,
 }
 
@@ -105,6 +106,11 @@ const INTENT_INIT_SOURCE_SPEC_HINT: u8 = 23;
 const INTENT_INIT_SOURCE_ARCHIVE_HINT: u8 = 24;
 const INTENT_APPEND_SOURCE_ARCHIVE_HINT: u8 = 25;
 const INTENT_SEAL_SOURCE_ARCHIVE_HINT: u8 = 26;
+const INTENT_INIT_DIRECT_EPOCH_V3_HINT: u8 = 27;
+const INTENT_FREEZE_DIRECT_EPOCH_V3_HINT: u8 = 28;
+const INTENT_SUBMIT_DIRECT_CANDIDATE_V2_HINT: u8 = 29;
+const INTENT_SELECT_DIRECT_WINDOW_V1_HINT: u8 = 30;
+const INTENT_SETTLE_DIRECT_V2_HINT: u8 = 31;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
@@ -143,6 +149,13 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_APPEND_SOURCE_ARCHIVE_HINT
                 | INTENT_SEAL_SOURCE_ARCHIVE_HINT,
             ) => Route::SourceIngest,
+            Some(
+                INTENT_INIT_DIRECT_EPOCH_V3_HINT
+                | INTENT_FREEZE_DIRECT_EPOCH_V3_HINT
+                | INTENT_SUBMIT_DIRECT_CANDIDATE_V2_HINT
+                | INTENT_SELECT_DIRECT_WINDOW_V1_HINT
+                | INTENT_SETTLE_DIRECT_V2_HINT,
+            ) => Route::DirectSelection,
             _ => Route::DecodeOnly,
         },
         Some(ACTION_RESOLVE_HINT | ACTION_REDEEM_INTERNAL_HINT) => Route::ObserveResolve,
@@ -174,6 +187,7 @@ pub fn process(
         Route::OrdersBatch => process_orders_batch(program_id, accounts, instruction_data),
         Route::Genesis => process_genesis(program_id, accounts, instruction_data),
         Route::SourceIngest => process_source_ingest(program_id, accounts, instruction_data),
+        Route::DirectSelection => process_direct_selection(program_id, accounts, instruction_data),
         Route::DecodeOnly => decode_only(instruction_data),
     }
 }
@@ -348,6 +362,25 @@ fn process_source_ingest(
         | Action::Layout(Intent::AppendSourceArchive { .. })
         | Action::Layout(Intent::SealSourceArchive { .. }) => {
             source_ingest::process(program_id, accounts, &request)
+        }
+        _ => unexpected_route(),
+    }
+}
+
+#[inline(never)]
+fn process_direct_selection(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request = Request::decode(instruction_data)?;
+    match request.action {
+        Action::Layout(Intent::InitDirectEpochV3 { .. })
+        | Action::Layout(Intent::FreezeDirectEpochV3 { .. })
+        | Action::Layout(Intent::SubmitDirectCandidateV2 { .. })
+        | Action::Layout(Intent::SelectDirectWindowV1 { .. })
+        | Action::Layout(Intent::SettleDirectV2 { .. }) => {
+            direct_selection::process(program_id, accounts, &request)
         }
         _ => unexpected_route(),
     }
@@ -648,6 +681,45 @@ mod tests {
             (
                 Intent::SealSourceArchive { terms: hash(1) },
                 Route::SourceIngest,
+            ),
+            (
+                Intent::InitDirectEpochV3 {
+                    market: hash(1),
+                    epoch_index: 7,
+                    policy: hash(2),
+                    submission_opens_slot: 100,
+                    submission_closes_slot: 120,
+                },
+                Route::DirectSelection,
+            ),
+            (
+                Intent::FreezeDirectEpochV3 {
+                    market: hash(1),
+                    epoch: hash(2),
+                },
+                Route::DirectSelection,
+            ),
+            (
+                Intent::SubmitDirectCandidateV2 {
+                    market: hash(1),
+                    epoch: hash(2),
+                    outcome_price: 5_000,
+                },
+                Route::DirectSelection,
+            ),
+            (
+                Intent::SelectDirectWindowV1 {
+                    market: hash(1),
+                    epoch: hash(2),
+                },
+                Route::DirectSelection,
+            ),
+            (
+                Intent::SettleDirectV2 {
+                    market: hash(1),
+                    epoch: hash(2),
+                },
+                Route::DirectSelection,
             ),
         ]
     }

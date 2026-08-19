@@ -28,6 +28,18 @@ name = "clutch-accumulator"
 version = "0.1.0"
 
 [[package]]
+name = "clutch-batch"
+version = "0.1.0"
+
+[[package]]
+name = "clutch-batch-policy-identity"
+version = "0.1.0"
+dependencies = [
+ "clutch-batch",
+ "sha2",
+]
+
+[[package]]
 name = "clutch-bspline"
 version = "0.1.0"
 
@@ -47,6 +59,8 @@ name = "clutch-sbf"
 version = "0.1.0"
 dependencies = [
  "clutch-accumulator",
+ "clutch-batch",
+ "clutch-batch-policy-identity",
  "clutch-bspline",
  "clutch-bspline-accumulator",
  "clutch-kernel",
@@ -79,6 +93,7 @@ dependencies = [
 name = "clutch-solana-layout"
 version = "0.1.0"
 dependencies = [
+ "clutch-batch-policy-identity",
  "solana-sha256-hasher",
 ]
 

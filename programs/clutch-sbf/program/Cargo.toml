@@ -25,8 +25,10 @@ non-production-mock-source = []
 # here is what lets `instructions::observe_resolve` drive `WindowAccumulator`
 # and `Summary` directly instead of re-deriving their algebra.
 clutch-accumulator = { path = "../../../crates/clutch-accumulator" }
+clutch-batch = { path = "../../../crates/clutch-batch" }
 clutch-bspline = { path = "../../../crates/clutch-bspline" }
 clutch-bspline-accumulator = { path = "../../../crates/clutch-bspline-accumulator" }
+clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-solana-layout = { path = "../../solana-layout" }
 clutch-solana-reference = { path = "../../solana-reference" }

@@ -37,6 +37,7 @@
 
 pub mod artifact;
 pub mod cash_exit;
+pub mod direct_selection;
 pub mod construction;
 pub mod external_exit;
 pub mod genesis;

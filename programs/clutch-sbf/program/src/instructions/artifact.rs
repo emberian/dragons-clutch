@@ -391,6 +391,7 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
         ArtifactKind::CollateralPolicy => seeds::policy_pda(program_id, &context, &digest),
         ArtifactKind::PriceGrid => seeds::grid_pda(program_id, &context, &digest),
         ArtifactKind::Terms => seeds::terms_pda(program_id, &context, &digest),
+        ArtifactKind::BatchPolicy => seeds::batch_policy_pda(program_id, &context, &digest),
     }
 }
 
@@ -482,6 +483,15 @@ fn create_final<'a>(
             usize::from(binding.exact_len),
             &[seeds::SEED_TERMS, &context, &digest, &[bump]],
         ),
+        ArtifactKind::BatchPolicy => create_artifact_pda(
+            program_id,
+            payer,
+            final_account,
+            system,
+            rent,
+            usize::from(binding.exact_len),
+            &[seeds::SEED_BATCH_POLICY, &context, &digest, &[bump]],
+        ),
     }
 }
 
@@ -552,7 +562,10 @@ fn seal(
     let encoded_bump = validate_for_runtime(binding, body)?;
     let (final_address, final_bump) = expected_final_pda(program_id, binding);
     expect_pda(accounts[IX_FINAL].key, (final_address, final_bump), None)?;
-    if !matches!(binding.kind, ArtifactKind::CollateralPolicy) {
+    if !matches!(
+        binding.kind,
+        ArtifactKind::CollateralPolicy | ArtifactKind::BatchPolicy
+    ) {
         require(encoded_bump == final_bump, ClutchError::WrongBump)?;
     }
 

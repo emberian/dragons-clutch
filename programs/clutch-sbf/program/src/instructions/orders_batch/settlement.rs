@@ -451,17 +451,17 @@ fn validate_submission_reservation(
 /// virtual leg, fee, or rounded consideration, so those cases cannot drift
 /// into the implementation by an unchecked branch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct DirectFullSlicePlan {
+pub(in crate::instructions) struct DirectFullSlicePlan {
     /// Candidate-feed slice consumed by this transition.
-    pub slice_index: u16,
+    pub(in crate::instructions) slice_index: u16,
     /// Shared Egg outcome.
-    pub outcome: u8,
+    pub(in crate::instructions) outcome: u8,
     /// Exact Egg quantity transferred from the sell reservation to the buyer.
-    pub quantity: u64,
+    pub(in crate::instructions) quantity: u64,
     /// Exact collateral atoms transferred from buyer cash to seller cash.
-    pub consideration_atoms: u64,
+    pub(in crate::instructions) consideration_atoms: u64,
     /// Buy reservation envelope released from the Position's reserved subset.
-    pub buyer_reserved_release: u64,
+    pub(in crate::instructions) buyer_reserved_release: u64,
 }
 
 /// Immutable inputs to one direct full-slice settlement.
@@ -722,7 +722,7 @@ fn validate_reservation(
 /// exact prestates.  The account-plane wrapper does that and writes all five
 /// accounts in one Solana instruction; a runtime refusal therefore rolls the
 /// whole transaction back.
-pub(super) fn apply_direct_full_slice(
+pub(in crate::instructions) fn apply_direct_full_slice(
     buyer_position: &mut PositionAccount,
     seller_position: &mut PositionAccount,
     buyer_reservation: &mut ReservationAccount,

@@ -499,10 +499,8 @@ pub const IX_ENDOW_RENT: usize = 12;
 const PROFILE_STATE_ROLES: [StateRole; 1] =
     [StateRole::read_only(IX_PROFILE_REALM, account_len::REALM)];
 /// Program-owned roles of `InitOrderPage`.
-const PAGE_STATE_ROLES: [StateRole; 2] = [
-    StateRole::read_only(IX_PAGE_MARKET, account_len::MARKET),
-    StateRole::read_only(IX_PAGE_EPOCH, account_len::EPOCH),
-];
+const PAGE_STATE_ROLES: [StateRole; 1] =
+    [StateRole::read_only(IX_PAGE_MARKET, account_len::MARKET)];
 /// Existing market-global roles of `Endow`.
 const ENDOW_COMMON_STATE_ROLES: [StateRole; 3] = [
     StateRole::read_only(IX_ENDOW_MARKET, account_len::MARKET),
@@ -868,6 +866,15 @@ fn init_order_page(
     require_signer(&accounts[IX_PAYER])?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &PAGE_STATE_ROLES)?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[IX_PAGE_EPOCH],
+        false,
+        &[
+            account_len::EPOCH,
+            clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
+        ],
+    )?;
     require_creation_sequence(sequence)?;
     require_system_program(&accounts[IX_PAGE_SYSTEM])?;
     let rent = read_rent(&accounts[IX_PAGE_RENT])?;

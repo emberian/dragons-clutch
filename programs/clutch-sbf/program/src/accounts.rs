@@ -42,6 +42,7 @@
 use crate::error::{ClutchError, Refusal};
 use clutch_kernel::BasisMode;
 use clutch_solana_layout::{
+    direct_selection::{DirectEpochV3Account, DIRECT_EPOCH_BYTES},
     stream, CandidateRecord, EpochAccount, FeedAccount, FinalPotAccount, Hash32, MarketAccount,
     PriceGridAccount, ProfileAccount, RealmAccount, ResolutionAccount, SettlementReceiptAccount,
     SupplyLedgerAccount, TermsAccount, MAX_OUTCOMES,
@@ -166,6 +167,27 @@ pub fn validate_state_roles(
         )?;
     }
     Ok(())
+}
+
+/// Authenticate one program-owned role whose exact layout version selects one
+/// of a small, explicitly listed account lengths.
+pub fn validate_state_role_lengths(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+    writable: bool,
+    lengths: &[usize],
+) -> Outcome<()> {
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    if writable {
+        require(account.is_writable, ClutchError::NotWritable)?;
+    } else {
+        require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+    }
+    require(
+        lengths.iter().any(|length| *length == account.data_len()),
+        ClutchError::WrongDataLength,
+    )
 }
 
 /// Compare a supplied account key, and optionally a stored bump, against a
@@ -768,8 +790,16 @@ pub fn read_resolution(data: &[u8]) -> Outcome<ResolutionFacts> {
 /// Decode an epoch/book-domain account.
 #[inline(never)]
 pub fn read_epoch(data: &[u8]) -> Outcome<EpochFacts> {
+    if data.len() == DIRECT_EPOCH_BYTES {
+        let value = DirectEpochV3Account::decode(data)?;
+        return Ok(epoch_facts(&value.common));
+    }
     let value = EpochAccount::decode(data)?;
-    Ok(EpochFacts {
+    Ok(epoch_facts(&value))
+}
+
+fn epoch_facts(value: &EpochAccount) -> EpochFacts {
+    EpochFacts {
         epoch: value.epoch,
         market: value.market,
         book: value.book,
@@ -784,8 +814,19 @@ pub fn read_epoch(data: &[u8]) -> Outcome<EpochFacts> {
         outcome_count: value.outcome_count,
         phase: value.phase,
         stored_bump: value.stored_bump,
-    })
+    }
 }
+
+/// Decode exactly a version-three direct Epoch.
+#[inline(never)]
+pub fn read_direct_epoch(data: &[u8]) -> Outcome<DirectEpochV3Account> {
+    Ok(DirectEpochV3Account::decode(data)?)
+}
+
+/* The generic Epoch reader above intentionally returns only the common facts
+ * used by placement, cancellation and page construction. Direct candidate
+ * actions must call `read_direct_epoch` so a V2 account cannot gain a schedule
+ * by defaulting absent fields. */
 
 /// Decode an order-page account, streaming.  **This now runs on SBF.**
 ///

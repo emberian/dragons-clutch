@@ -204,6 +204,7 @@ fn map_direct_error(error: DirectWindowErrorV1) -> CodecError {
 
 /// Encode one exact full-width candidate account.
 pub fn encode_direct_candidate(value: &DirectCandidateV2, out: &mut [u8]) -> Result<usize> {
+    value.validate().map_err(map_direct_error)?;
     if out.len() < DIRECT_CANDIDATE_ACCOUNT_BYTES {
         return Err(CodecError::OutputTooSmall);
     }
@@ -235,6 +236,7 @@ pub fn decode_direct_candidate(input: &[u8]) -> Result<DirectCandidateV2> {
 
 /// Encode one exact direct window account.
 pub fn encode_direct_window(value: &DirectCandidateWindowV1, out: &mut [u8]) -> Result<usize> {
+    value.validate().map_err(map_direct_error)?;
     if out.len() < DIRECT_WINDOW_ACCOUNT_BYTES {
         return Err(CodecError::OutputTooSmall);
     }
@@ -269,7 +271,12 @@ mod tests {
     use super::*;
     use crate::{CandidateRecord, CANDIDATE_STATUS_SUBMITTED, MAX_OUTCOMES};
     use clutch_batch_policy_identity::{
-        direct_window_v1::canonical_account_candidate_id, Identity32V1,
+        direct_window_v1::{
+            canonical_account_candidate_id, DirectCandidateEntryV1, DirectCandidateV2,
+            DirectCandidateWindowV1, DIRECT_CANDIDATE_STATUS_VERIFIED, DIRECT_WINDOW_PHASE_OPEN,
+            MAX_DIRECT_CANDIDATES,
+        },
+        Identity32V1,
     };
 
     fn h(byte: u8) -> Hash32 {
@@ -335,5 +342,60 @@ mod tests {
             &prices,
         );
         assert_eq!(layout.candidate.bytes(), bridged.0);
+    }
+
+    #[test]
+    fn refused_candidate_and_window_encodes_do_not_touch_output() {
+        let invalid_candidate = DirectCandidateV2 {
+            candidate_id: Identity32V1::ZERO,
+            epoch_id: Identity32V1::ZERO,
+            market_id: Identity32V1::ZERO,
+            order_set_id: Identity32V1::ZERO,
+            policy_id: Identity32V1::ZERO,
+            relation_domain_digest: Identity32V1::ZERO,
+            relation_candidate_digest: Identity32V1::ZERO,
+            prices: [0; MAX_OUTCOMES],
+            fills: [0; 2],
+            weighted_direct_volume: 0,
+            limit_surplus_price_units: 0,
+            submitted_slot: 0,
+            quantity: 0,
+            buy_index: 0,
+            sell_index: 0,
+            outcome: 0,
+            distinct_owners: 0,
+            order_len: 0,
+            outcome_count: 0,
+            status: DIRECT_CANDIDATE_STATUS_VERIFIED,
+            stored_bump: 0,
+            flags: 0,
+            reserved: [0; 12],
+        };
+        let mut candidate_bytes = [0xa5; DIRECT_CANDIDATE_ACCOUNT_BYTES];
+        assert!(encode_direct_candidate(&invalid_candidate, &mut candidate_bytes).is_err());
+        assert_eq!(candidate_bytes, [0xa5; DIRECT_CANDIDATE_ACCOUNT_BYTES]);
+
+        let invalid_window = DirectCandidateWindowV1 {
+            epoch_id: Identity32V1::ZERO,
+            market_id: Identity32V1::ZERO,
+            order_set_id: Identity32V1::ZERO,
+            policy_id: Identity32V1::ZERO,
+            relation_domain_digest: Identity32V1::ZERO,
+            admission_transcript: Identity32V1::ZERO,
+            selected_candidate: Identity32V1::ZERO,
+            top: [DirectCandidateEntryV1::ZERO; MAX_DIRECT_CANDIDATES],
+            opens_slot: 0,
+            closes_slot: 0,
+            selected_slot: 0,
+            admitted_count: 0,
+            top_count: 0,
+            phase: DIRECT_WINDOW_PHASE_OPEN,
+            stored_bump: 0,
+            flags: 0,
+            reserved: [0; 2],
+        };
+        let mut window_bytes = [0x5a; DIRECT_WINDOW_ACCOUNT_BYTES];
+        assert!(encode_direct_window(&invalid_window, &mut window_bytes).is_err());
+        assert_eq!(window_bytes, [0x5a; DIRECT_WINDOW_ACCOUNT_BYTES]);
     }
 }

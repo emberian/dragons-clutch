@@ -388,8 +388,7 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
         }
         ArtifactKind::BatchPolicy => {
             let policy = decode_batch_policy(body).map_err(|_| CodecError::MismatchedBinding)?;
-            let digest = batch_policy_digest(&policy)
-                .map_err(|_| CodecError::MismatchedBinding)?;
+            let digest = batch_policy_digest(&policy).map_err(|_| CodecError::MismatchedBinding)?;
             if digest != Identity32V1(binding.digest.bytes()) {
                 return Err(CodecError::MismatchedBinding);
             }
@@ -401,6 +400,9 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clutch_batch_policy_identity::{
+        batch_policy_digest, direct_window_v1::DIRECT_POLICY_V1, encode_batch_policy,
+    };
     extern crate std;
 
     fn binding(kind: ArtifactKind) -> ArtifactBinding {
@@ -531,5 +533,36 @@ mod tests {
         h = header(ArtifactKind::Terms);
         h.cursor = 1;
         assert_eq!(h.validate(), Err(CodecError::InvalidCount));
+    }
+
+    #[test]
+    fn batch_policy_artifact_uses_the_canonical_policy_codec() {
+        let mut bytes = [0u8; BATCH_POLICY_BYTES];
+        assert_eq!(
+            encode_batch_policy(&DIRECT_POLICY_V1, &mut bytes),
+            Ok(BATCH_POLICY_BYTES)
+        );
+        let digest = batch_policy_digest(&DIRECT_POLICY_V1).unwrap();
+        let binding = ArtifactBinding {
+            kind: ArtifactKind::BatchPolicy,
+            context: Hash32::from_bytes([0x44; 32]),
+            digest: Hash32::from_bytes(digest.0),
+            exact_len: BATCH_POLICY_BYTES as u16,
+        };
+        assert_eq!(validate_artifact(binding, &bytes), Ok(0));
+        let mut hostile = bytes;
+        hostile[12] ^= 1;
+        assert_eq!(
+            validate_artifact(binding, &hostile),
+            Err(CodecError::MismatchedBinding)
+        );
+        let substituted = ArtifactBinding {
+            digest: Hash32::from_bytes([0x55; 32]),
+            ..binding
+        };
+        assert_eq!(
+            validate_artifact(substituted, &bytes),
+            Err(CodecError::MismatchedBinding)
+        );
     }
 }

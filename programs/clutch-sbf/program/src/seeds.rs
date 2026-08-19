@@ -92,6 +92,16 @@ pub const SEED_RECEIPT: &[u8] = b"dragons-clutch:receipt:v1";
 pub const SEED_ARTIFACT_STAGE: &[u8] = b"dragons-clutch:upload:v1";
 /// Canonical raw collateral-policy artifact seed prefix.
 pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
+/// Canonical full-width batch-policy artifact seed prefix.
+pub const SEED_BATCH_POLICY: &[u8] = b"dragons-clutch:batch-policy:v1";
+/// Direct candidate-window account seed prefix.
+pub const SEED_DIRECT_WINDOW: &[u8] = b"dragons-clutch:direct-window:v1";
+/// Full-width verified direct candidate seed prefix.
+pub const SEED_DIRECT_CANDIDATE: &[u8] = b"dragons-clutch:dir-candidate:v2";
+/// Direct settlement-receipt seed prefix.
+pub const SEED_DIRECT_RECEIPT: &[u8] = b"dragons-clutch:direct-receipt:v2";
+/// Direct zero-pot seed prefix.
+pub const SEED_DIRECT_POT: &[u8] = b"dragons-clutch:direct-pot:v2";
 /// Immutable authenticated source-spec account seed prefix.
 pub const SEED_SOURCE_SPEC: &[u8] = crate::source_archive::SOURCE_SPEC_SEED_V1;
 /// Per-window authenticated source-archive account seed prefix.
@@ -203,6 +213,42 @@ pub fn grid_pda(program_id: &Pubkey, realm: &[u8; 32], grid: &[u8; 32]) -> (Pubk
 /// and recompute both identities from the exact bytes.
 pub fn policy_pda(program_id: &Pubkey, profile: &[u8; 32], digest: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_POLICY, profile, digest])
+}
+
+/// Canonical full-width batch-policy artifact address.
+pub fn batch_policy_pda(program_id: &Pubkey, epoch: &[u8; 32], digest: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_BATCH_POLICY, epoch, digest])
+}
+
+/// Canonical direct candidate-window address.
+pub fn direct_window_pda(program_id: &Pubkey, epoch: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DIRECT_WINDOW, epoch])
+}
+
+/// Canonical full-width verified direct-candidate address.
+pub fn direct_candidate_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DIRECT_CANDIDATE, epoch, candidate])
+}
+
+/// Canonical direct receipt address for the sole direct slice.
+pub fn direct_receipt_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_DIRECT_RECEIPT, epoch, candidate, &0u16.to_le_bytes()],
+    )
+}
+
+/// Canonical closed direct-pot address.
+pub fn direct_pot_pda(program_id: &Pubkey, epoch: &[u8; 32], candidate: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DIRECT_POT, epoch, candidate])
 }
 
 /// Canonical uploader-scoped staging address and bump.
@@ -364,7 +410,7 @@ mod tests {
     /// `hoard-authority` prefix was caught at 33 bytes.
     #[test]
     fn every_seed_prefix_fits_one_seed() {
-        const PREFIXES: [&[u8]; 23] = [
+        const PREFIXES: [&[u8]; 28] = [
             SEED_REALM,
             SEED_PROFILE,
             SEED_MARKET,
@@ -385,6 +431,11 @@ mod tests {
             SEED_CANDIDATE_FEED,
             SEED_POT,
             SEED_RECEIPT,
+            SEED_BATCH_POLICY,
+            SEED_DIRECT_WINDOW,
+            SEED_DIRECT_CANDIDATE,
+            SEED_DIRECT_RECEIPT,
+            SEED_DIRECT_POT,
             SEED_OUTCOME_MINT,
             SEED_HOARD_AUTHORITY,
             SEED_HOARD_TOKEN,
@@ -400,6 +451,11 @@ mod tests {
         assert_eq!(SEED_HOARD_AUTHORITY.len(), 28);
         assert_eq!(SEED_OUTCOME_MINT.len(), 30);
         assert_eq!(SEED_HOARD_TOKEN.len(), 29);
+        assert_eq!(SEED_BATCH_POLICY.len(), 30);
+        assert_eq!(SEED_DIRECT_WINDOW.len(), 31);
+        assert_eq!(SEED_DIRECT_CANDIDATE.len(), 31);
+        assert_eq!(SEED_DIRECT_RECEIPT.len(), 32);
+        assert_eq!(SEED_DIRECT_POT.len(), 28);
         // The plan's own proposal, kept here as the falsifier: it does not fit.
         assert_eq!(b"dragons-clutch:hoard-authority:v1".len(), 33);
     }
