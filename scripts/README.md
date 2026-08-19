@@ -50,3 +50,35 @@ Focused declaration checks are standard-library only:
 ```sh
 python3 -m unittest scripts/test_baseline_manifest.py
 ```
+
+### `dependency_license_check.py`
+
+In-repo original of the dependency/license closure checker the Persvati
+portable attestation jobs run (job copy name: `dependency_license_check.py`).
+The default mode is the attested fixed twelve-locked-manifest scope and is
+byte-stable: at the `6743b9d` archive it reproduces the attested
+`SUMMARY manifests=12 unique_rows=888 failures=0 status=PASS` byte-for-byte.
+Do not extend or reformat the default mode; revise it only together with a new
+attestation methodology.
+
+```sh
+scripts/dependency_license_check.py [root]            # attested 12-manifest scope
+scripts/dependency_license_check.py --complete [root] # every tracked Cargo.lock
+                                                      # + package.json, writes the
+                                                      # SBOM TSV under
+                                                      # research/liveness-policy-profile/
+```
+
+Per package it requires offline lock resolution, a registry checksum in the
+lock, a license expression or digest-pinned license file, path dependencies
+inside the repository, and no git/unknown sources; failures print as `FAILURE`
+rows and exit 1, never suppressed. The vendored crate's standalone lock is
+recorded as `VENDORED covered-by=programs/clutch-sbf/Cargo.toml` because cargo
+cannot process it outside its vendoring workspace and its packages are checked
+through that workspace. `--complete` is not yet a declared baseline-manifest
+gate; folding it into the gate inventory belongs to the next manifest emission
+cycle so the sealed gate outputs stay byte-stable.
+
+```sh
+python3 -m unittest scripts/test_dependency_license_check.py
+```
