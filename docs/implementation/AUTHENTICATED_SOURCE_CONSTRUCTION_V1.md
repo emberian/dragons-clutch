@@ -81,19 +81,20 @@ The recorded run used the runtime Rent sysvar and reported:
 
 | operation/account | bytes | rent-exempt minimum / retained prefund | CU |
 | --- | ---: | ---: | ---: |
-| `InitSourceSpec` (creates Spec + Feed) | 292 + 124 | 2,923,200 + 1,753,920 lamports | 447,396 |
-| `InitSourceArchive` | 2,560 | 18,708,480 lamports | 550,723 |
-| append record 0 | no growth | — | 653,962 |
-| append record 1 | no growth | — | 653,346 |
-| seal + Feed update | no growth | — | 863,718 |
+| `InitSourceSpec` (creates Spec + Feed) | 292 + 124 | 2,923,200 + 1,753,920 lamports | 448,896 |
+| `InitSourceArchive` | 2,560 | 18,708,480 lamports | 553,723 |
+| append record 0 | no growth | — | 656,962 |
+| append record 1 | no growth | — | 656,346 |
+| seal + Feed update | no growth | — | 866,718 |
 
 The Feed retained a public over-rent prefund of 1,758,241 lamports and the
 archive retained a public over-rent prefund of 18,716,134 lamports. The
 SourceSpec exercised the one-lamport recovery branch. ProgramTest cannot leave
 a newly credited public zero-data account below rent exemption, so that one
 lamport was injected as an otherwise-valid System account; it is hostile-bank
-coverage, not a claim that the public transfer itself succeeded. Replay and a
-wrong maturity bucket both refused with byte-for-byte archive/Feed rollback.
+coverage, not a claim that the public transfer itself succeeded. Replay,
+deployment-account substitution, source-account substitution, and a wrong
+maturity bucket all refused with byte-for-byte archive/Feed rollback.
 
 Both default and mock-feature `cargo-build-sbf` builds completed. They still
 emit the repository's pre-existing oversized-stack diagnostics in

@@ -47,6 +47,8 @@ const MOCK_PROGRAM_OWNER: Address = Address::new_from_array([0xb3; 32]);
 const MOCK_DEPLOYMENT: Address = Address::new_from_array([0xd4; 32]);
 const MOCK_DEPLOYMENT_OWNER: Address = Address::new_from_array([0xd5; 32]);
 const MOCK_SOURCE: Address = Address::new_from_array([0xc3; 32]);
+const SUBSTITUTE_DEPLOYMENT: Address = Address::new_from_array([0xe4; 32]);
+const SUBSTITUTE_SOURCE: Address = Address::new_from_array([0xe3; 32]);
 const DEPLOYMENT_GENERATION: u64 = 19;
 
 fn h(byte: u8) -> Hash32 {
@@ -272,6 +274,20 @@ async fn mock_elf_constructs_appends_and_seals_from_absent_source_state() {
         MOCK_SOURCE,
         account(MOCK_PROGRAM, vec![0; 77], false, 10_000_000).into(),
     );
+    test.add_account(
+        SUBSTITUTE_DEPLOYMENT,
+        account(
+            MOCK_DEPLOYMENT_OWNER,
+            b"DEP1\x13\0\0\0\0\0\0\0".to_vec(),
+            false,
+            10_000_000,
+        )
+        .into(),
+    );
+    test.add_account(
+        SUBSTITUTE_SOURCE,
+        account(MOCK_PROGRAM, vec![0; 77], false, 10_000_000).into(),
+    );
     let mut bank = test.start_with_context().await;
     let payer = bank.payer.pubkey();
     let (slot, unix) = clock(&get(&mut bank, CLOCK_SYSVAR).await.unwrap());
@@ -449,6 +465,46 @@ async fn mock_elf_constructs_appends_and_seals_from_absent_source_state() {
         Err(TransactionError::InstructionError(
             1,
             InstructionError::Custom(ClutchError::Replay as u32)
+        ))
+    );
+    assert_eq!(get(&mut bank, archive_pda).await.unwrap().data, after_first);
+
+    let mut substituted = mutate_ix(
+        terms.terms,
+        spec_pda,
+        feed_pda,
+        terms_pda,
+        archive_pda,
+        1,
+        false,
+    );
+    substituted.accounts[5] = AccountMeta::new_readonly(SUBSTITUTE_DEPLOYMENT, false);
+    let (wrong_deployment, _) = send(&mut bank, &[budget(), substituted]).await;
+    assert_eq!(
+        wrong_deployment,
+        Err(TransactionError::InstructionError(
+            1,
+            InstructionError::Custom(ClutchError::SourceAdmissionFailed as u32)
+        ))
+    );
+    assert_eq!(get(&mut bank, archive_pda).await.unwrap().data, after_first);
+
+    let mut substituted = mutate_ix(
+        terms.terms,
+        spec_pda,
+        feed_pda,
+        terms_pda,
+        archive_pda,
+        1,
+        false,
+    );
+    substituted.accounts[6] = AccountMeta::new_readonly(SUBSTITUTE_SOURCE, false);
+    let (wrong_source, _) = send(&mut bank, &[budget(), substituted]).await;
+    assert_eq!(
+        wrong_source,
+        Err(TransactionError::InstructionError(
+            1,
+            InstructionError::Custom(ClutchError::SourceAdmissionFailed as u32)
         ))
     );
     assert_eq!(get(&mut bank, archive_pda).await.unwrap().data, after_first);
