@@ -35,11 +35,13 @@ economics.
 
 ## 2. Snapshot boundary
 
-The accepted local evidence ancestry is `b5da74f`. The frozen SBF runtime source
-is `7e8f6b1714c3c97a31a4250ecd19f87041433c2d`; the 88-file declared runtime
-source closure is unchanged through `b5da74f`. Commit `161f530` repairs a stale
-native-resolution fixture source-version literal, and `316c620` repairs the
-shape-compiler research lock, without changing the runtime artifact. Commits
+The accepted local evidence ancestry is `6dbe618`. The R1 runtime/evidence seal
+remains `b5da74f`, and the frozen SBF runtime source remains
+`7e8f6b1714c3c97a31a4250ecd19f87041433c2d`; the 88-file declared runtime
+source closure is unchanged through the accepted ancestry. Commit `161f530`
+repairs a stale native-resolution fixture source-version literal, and
+`316c620` repairs the shape-compiler research lock, without changing the
+runtime artifact. Commits
 `0359aec` and `b5da74f` seal the measured liveness profile, exact ELF, audit,
 and bank/build logs.
 
@@ -207,11 +209,11 @@ public `derive_payout` to be degree-zero-only; smooth callers must use
 | --- | --- | --- | --- |
 | Product and Realm model | **PROPOSED** | The product is collateral-generic; DREGG is one optional dogfood profile. Native degree-zero through degree-three claim semantics are the intended ceiling. | No real Realm profile is authenticated, frozen, or released. |
 | Core claim kernel | **HOST-TESTED** plus separate **PROVED-MODEL** results | Safe fixed-layout Rust executes split, merge, materialize, dematerialize, resolution, and redemption fragments. Lean checks named model properties. | Lean/Rust correspondence is manual; the full kernel is not verifier-checked. |
-| Verus refinement | narrow **CHECKED-RUST-SUBSET** | Pinned Verus checked exact debit/credit conservation and overflow refusal for `prepare_internal_transfer`, with source/call-site digests and red mutations. | Accounts, phases, codecs, CPI, SBF codegen, and runtime are outside the result. |
+| Verus evidence | narrow **CHECKED-RUST-SUBSET** plus separate **PROVED-MODEL** | Pinned Verus checked exact debit/credit conservation and overflow refusal for `prepare_internal_transfer`. Separately, the scalar batch shadow proves allocation decomposition/per-fill bounds, unique tick selection, a whole-fill partition conditional on accepted side equalities, and a zero-suffix fold identity; four semantic mutants go red. | The scalar shadow does not prove dust-loop completion, accepted side equality, production zero-padding validation, checked-arithmetic/source correspondence, coupled V1, or any account/SBF behavior. |
 | B-spline model/executable bridge | **CHECKED-FINITE** | Eight Lean-computed vectors match digest-bound production evaluator outputs; five actual-source semantic mutants compile/execute and disagree. | No Verus invocation or universal Rust/SBF refinement; finite adapter association remains reviewed. |
 | General accumulator | **HOST-TESTED** | Source-neutral adjacent summaries, coverage, interval, TWAP, and terminal calculations have bounded tests. | It authenticates no source, clock, archive, or deployment generation. |
 | Native spline stack | point Resolve/exits **SBF-EXECUTED** and measured-profile admitted; broader mixed, see §3 | Degree-selected v2/v3 creation, source-joined exact d1–3 point resolution, sole-vector persistence/replay, and exact-lot internal and bearer redemption execute. The corrected `161f530` fixture passes 15/15 against the sealed default ELF; point-v3 initial Resolve samples clear the selected 25%-headroom policy. | Active Split-family mode binding is P1. Production source ingestion, other consumer audit, non-point semantics, and a total fragment policy remain open. Monolithic occupation-v4 initial Resolve does not clear that policy; the routed staged lane below is the admitted alternative. |
-| Coupled batch relation | **HOST-TESTED** | Exact witness checks, bounded candidate comparison, pairing, conservation, and a bounded streaming verifier have finite/adversarial campaigns. | It supports “best valid submitted candidate,” not globally optimal search. |
+| Coupled batch relation | **HOST-TESTED** plus a narrow scalar **PROVED-MODEL** shadow | Exact witness checks, bounded candidate comparison, pairing, conservation, and a bounded streaming verifier have finite/adversarial campaigns. The separate Verus shadow proves only the four scalar statements named above. | It supports “best valid submitted candidate,” not globally optimal search. The Verus shadow excludes the coupled relation, streaming verifier, production loops, accounts, and SBF. |
 | Funded order admission | **SBF-EXECUTED** focused path | `PlaceOrder` creates a canonical pre-fund-safe per-order reservation and encumbers exact cash or internal Eggs. `CancelOrder` tombstones once and releases only that reservation. Split and Withdraw cannot spend reserved cash. | No frozen reservation-set commitment, permissionless lapse, or general candidate-to-entitlement transition exists. |
 | Pooled custody and cash exit | exits **SBF-EXECUTED**; default value admission **STOP** | Endow is the sole inbound token boundary; Split/Merge/internal redemption are pooled-accounting reclassifications; exact unreserved `WithdrawCash` performs Hoard-to-owner Token-2022 transfer. Since `cfea8e8`, default Endow authenticates Terms/SourceSpec then refuses `SourceReleaseUnavailable` (`0x79`) before owner allocation or Token-2022 CPI because the production registry is empty. | Mock-source Endow success requires a distinct `non-production-mock-source` ELF. No production source release or value-bearing market is admitted by the sealed default artifact. Full venue settlement remains open. |
 | Outcome-token truth and bearer exit | categorical and exact native lots **SBF-EXECUTED** | Actual Token-2022 mint supply is authoritative; ordinary burns are recognized as forfeiture; transferred positionless degree-zero Eggs and exact-lot d1–3 Eggs redeem through `RedeemExternal` in focused local-bank evidence. | Nondivisible native fragments refuse. The total lot/credit policy and full lifecycle remain open. Outcome mints have no `MintCloseAuthority`; bearer-burn forfeiture and fractional fragments have no selected terminal disposition. |
@@ -224,6 +226,7 @@ public `derive_payout` to be degree-zero-only; smooth callers must use
 | Signed committed walk | 22-step **SBF-EXECUTED** at `c05fe84` | Fresh local keys signed 22 confirmed sequential transactions through global resolution, internal/bearer redemption, and both owners withdrawing all free cash; 18 watched accounts were reloaded and the corrupted terminal expectation went red. | It is genesis-assisted by 11 prerequisites and omits clearing/settlement. It is not a blank-bank lifecycle or release baseline. |
 | Static Glass | **HOST-TESTED** inspect-only prototype | A static client can render local terms and unsigned intent material without owning truth. | No frozen release manifest, complete wallet path, browser/accessibility audit, or official hosted instance. |
 | Liveness accounting | one routed path **SBF-EXECUTED / PROFILE-ADMITTED**; system policy **STOP** | `clutch-liveness` remains a host-tested pure kernel. Separately, the sealed liveness profile binds exact ResolutionWork compute, rent, rewards, refund, donation, and close behavior to the `a572...d6b6a1` ELF. | No complete global `LivenessPolicy` is emitted. Direct selection, production source work, most rent ownership/close routes, terminal asset disposition, and inclusion/keeper assumptions remain open. Hoard principal and future fees are never liveness capital. |
+| Terminal lifecycle V2 | internal-only **MODEL-ONLY / HOST-TESTED** | A hostile-prestate model enforces per-role rent identity, once-only refunds, a separately retained replay tombstone, internal claim/supply/mint equality, exact per-Position lots, ordered close dependencies, and an immutable neutral surplus sink. External bearer issuance fails closed in this profile. | No live account ABI, signer/PDA authority, rent funding, Token-2022 CPI/post-state, SBF route, legacy migration, external-bearer terminal path, or fractional credit/carry closure exists. It is not a protocol terminality or no-stranding result. |
 | Economics and fees | **MODEL-ONLY / PROPOSED** | Synthetic solvency, cost, fee, manipulation, and allocation experiments exist. | Fee base/rate/split, measured liveness maxima, neutral-failure policy, and recipient policy are not frozen. Hoard principal is never available. |
 | Artifact/release evidence | exact R1 artifact/stack/bank seal; release **STOP** | Runtime source `7e8f6b1` produced two byte-identical ordinary builds of `a572...d6b6a1`; final-LTO/stack audit passes and same-ELF bank logs are archived at `0359aec`/`b5da74f`. | The Cargo-home-relocated build is path-sensitive. The checked manifest is stale; there is no schema-v2 release manifest, path-independent or independent rebuild, complete release SBOM/license closure, external security review, signed tag, or deployment. |
 
@@ -310,8 +313,11 @@ the sealed default ELF has no registered release and therefore refuses it with
    artifact stages and ResolutionWork; outcome mints lack
    `MintCloseAuthority`; Hoard donations, external claim-burn forfeiture, and
    fractional fragments lack terminal disposition; and most accounts lack an
-   authenticated rent-payer versus donation split. Close these exact domains
-   without inventing a sweep right over owner or Hoard value.
+   authenticated rent-payer versus donation split. The internal-only Terminal
+   Lifecycle V2 research model closes these equations only in its modeled
+   profile; it supplies no live authority or Token-2022 transition. Close these
+   exact runtime domains without inventing a sweep right over owner or Hoard
+   value.
 8. **Evidence promotion:** retain the sealed R1 artifact/stack/bank evidence,
    emit and verify schema-v2 evidence, then obtain a path-independent and
    independent rebuild, complete release materials, and security review before

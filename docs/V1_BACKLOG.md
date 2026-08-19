@@ -24,6 +24,14 @@ value, authority, or reachability dependency is open.
   explicit unproved Rust/refinement boundary.
 - [x] The batch relation has bounded exhaustive/adversarial host campaigns and a
   bounded-memory streaming verifier.
+- [x] A pinned Verus mathematical shadow replaces the four former vacuous batch
+  placeholders with narrowly stated allocation, tick-selection, partition,
+  and padding lemmas; production dust progress and source refinement remain
+  unchecked.
+- [x] An internal-only Terminal Lifecycle V2 research model exercises exact
+  rent/refund roles, replay tombstones, close ordering, and surplus disposition
+  while keeping live Token-2022, authority, migration, bearer, and fractional
+  closure as explicit STOPs.
 - [x] The repository has semantic vectors, a manifest generator, an artifact
   audit, and local-only harnesses.
 - [x] None of the items above is classified as a complete protocol, verified
