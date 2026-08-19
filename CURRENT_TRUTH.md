@@ -96,7 +96,26 @@ under the exact pinned prior compiler; the newer research crates
 (`terminal-lifecycle-v2`, `tools/*`) remain outside the attested dependency
 scope. This is byte-and-reference verification plus portable re-execution of
 host gates — no SBF build, execution, or runtime claim — and it is a checked
-local evidence baseline, not a checked release manifest. No signed tag, path-independent or independent SBF rebuild,
+local evidence baseline, not a checked release manifest.
+
+Hbox independently rebuilt the default ELF from the exact `6743b9d` archive
+under the exact pinned toolchain (`cargo-build-sbf 4.0.0`, platform-tools
+v1.53, offline with all 30 locked registry crates checksum-verified): two
+fresh builds are byte-identical at
+`5e840bb0ca887349e79de79c12d70725602116d4edb553ca16c6f914f3e1b56b`
+(1,228,184 bytes). That digest is NOT byte-identical to the sealed
+`bd20711b…` (1,228,192 bytes); the divergence is exhaustively classified as
+Anza's per-OS platform-tools artifact — two Rust-stdlib CI path strings
+(macOS vs Linux runner prefixes), a reordered prebuilt compiler-builtins
+intrinsics cluster, and the resulting −8-byte address shift — with zero
+bytes derived from source, dependencies, or either build host's paths.
+Cross-OS byte-identity is structurally impossible for this pin; byte-level
+reproduction of the seal needs a second macOS host. The durable job is
+`/tank/joshibot/dragons-clutch-sbf-rebuild-6743b9d-dd4727` (REBUILD_REPORT.md
+plus full comparison evidence). This is an independent same-source rebuild
+with classified divergence, not a release, deployment, or audit claim.
+
+No signed tag, macOS byte-level seal reproduction,
 public-network deployment, official client URL, or value-bearing market
 exists. Nothing here authorizes signing, funding, deployment, publication,
 regulator contact, or an “official” claim.
@@ -253,7 +272,7 @@ public `derive_payout` to be degree-zero-only; smooth callers must use
 | Liveness accounting | one routed path **SBF-EXECUTED / PROFILE-ADMITTED**; system policy **STOP** | `clutch-liveness` remains a host-tested pure kernel. Separately, the current sealed liveness profile binds exact ResolutionWork compute, rent, rewards, refund, donation, and close behavior to the `bd207...16b60` ELF; mixed historical/current measurement identities are machine-refused. | No complete global `LivenessPolicy` is emitted. Direct selection, production source work, most rent ownership/close routes, terminal asset disposition, and inclusion/keeper assumptions remain open. Hoard principal and future fees are never liveness capital. |
 | Terminal lifecycle V2 | internal-only **MODEL-ONLY / HOST-TESTED** | A hostile-prestate model enforces per-role rent identity, once-only refunds, a separately retained replay tombstone, internal claim/supply/mint equality, exact per-Position lots, ordered close dependencies, and an immutable neutral surplus sink. External bearer issuance fails closed in this profile. | No live account ABI, signer/PDA authority, rent funding, Token-2022 CPI/post-state, SBF route, legacy migration, external-bearer terminal path, or fractional credit/carry closure exists. It is not a protocol terminality or no-stranding result. |
 | Economics and fees | **MODEL-ONLY / PROPOSED** | Synthetic solvency, cost, fee, manipulation, and allocation experiments exist. | Fee base/rate/split, measured liveness maxima, neutral-failure policy, and recipient policy are not frozen. Hoard principal is never available. |
-| Artifact/release evidence | exact current artifact/stack/bank seal plus checked schema-v2 local baseline; release **STOP** | Runtime source/test ancestry `83e124d` produced two byte-identical ordinary builds of `bd207...16b60`; final-LTO/stack audit and same-ELF bank campaigns are sealed at `b5700a9`. The old `a572...d6b6a1` seal is historical only. The checked manifest records 94/94 and passes its post-commit full check. | The Cargo-home-relocated build is path-sensitive. There is no path-independent or independent SBF rebuild, complete release SBOM/license closure, external security review, signed tag, or deployment. |
+| Artifact/release evidence | exact current artifact/stack/bank seal plus checked schema-v2 local baseline; release **STOP** | Runtime source/test ancestry `83e124d` produced two byte-identical ordinary builds of `bd207...16b60`; final-LTO/stack audit and same-ELF bank campaigns are sealed at `b5700a9`. The old `a572...d6b6a1` seal is historical only. The checked manifest records 94/94 and passes its post-commit full check. | The Cargo-home-relocated build is path-sensitive. Hbox reproduced the ELF from the same source/toolchain pin at `5e840bb0…` with the seal divergence exhaustively classified as per-OS platform-tools bytes; byte-level seal reproduction needs a second macOS host. No complete release SBOM/license closure, external security review, signed tag, or deployment. |
 
 ## 5. Accounting truth
 
@@ -361,10 +380,13 @@ the sealed default ELF has no registered release and therefore refuses it with
    profile; it supplies no live authority or Token-2022 transition. Close these
    exact runtime domains without inventing a sweep right over owner or Hoard
    value.
-8. **Evidence promotion:** retain the sealed R1 artifact/stack/bank evidence
-   and checked schema-v2 local baseline, then obtain a path-independent and
-   independent rebuild, complete release materials, and security review before
-   a release claim.
+8. **Evidence promotion:** the sealed artifact/stack/bank evidence, checked
+   schema-v2 baseline, fresh Persvati portable attestation, and the hbox
+   independent same-source rebuild (internally byte-reproducible; divergence
+   from the macOS seal exhaustively classified as per-OS toolchain bytes)
+   are retained. Still required before a release claim: byte-level seal
+   reproduction on a second macOS host, complete release SBOM/license
+   closure, external security review, and a signed tag.
 9. **Gate L0:** exact legal/entity/control/deployment facts, qualified advice,
    any required relief, and separate current user authorization remain outside
    engineering. No meeting, filing, proof, or local run closes this gate.

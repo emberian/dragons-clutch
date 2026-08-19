@@ -36,11 +36,14 @@ The R1 evidence checkpoint is sealed:
   `/home/ember/jobs/dragons-clutch-final-portable-attest-b5da74f-20260819-GMqkJL`).
   The fresh durable job is
   `/home/ember/jobs/dragons-clutch-final-portable-attest-6743b9d-20260819-TChWnu`;
-- Hbox received and verified the exact `b5da74f` archive at
-  `/tank/joshibot/dragons-clutch-r1-hbox-vHdulP`, but its independent SBF build
-  is honestly `UNAVAILABLE/STOP`: the pinned Solana/Anza toolchain,
-  platform-tools v1.53, Cargo config, and five locked Solana crates are absent.
-  Do not install substitutes and call that reproduction;
+- Hbox independently rebuilt the default ELF from the exact `6743b9d`
+  archive under the exact pinned toolchain: internally byte-reproducible at
+  `5e840bb0…` (two fresh builds identical), with the divergence from the
+  macOS-built `bd20711b…` seal exhaustively classified as Anza's per-OS
+  platform-tools bytes (CI path strings, prebuilt intrinsics reordering,
+  −8-byte shift) and zero bytes from source/deps/host paths. Job:
+  `/tank/joshibot/dragons-clutch-sbf-rebuild-6743b9d-dd4727`. Byte-level
+  seal reproduction still needs a second macOS host;
 - `b047415`/`345bc78`/`07d5efe` replace the four vacuous scalar batch Verus
   placeholders with narrowly reviewed proofs. They do not prove production
   dust completion, side equality, padding validation, coupled V1, or SBF; and

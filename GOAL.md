@@ -53,6 +53,16 @@ John packet ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- HBOX INDEPENDENT REBUILD LANDED (job dragons-clutch-sbf-rebuild-6743b9d-
+  dd4727): exact pinned toolchain installed from checksummed official Anza
+  artifacts, 30/30 locked crates verified offline, two fresh builds
+  byte-identical at 5e840bb0... — divergence from the macOS-built seal
+  exhaustively classified as per-OS platform-tools bytes (CI path strings,
+  intrinsics reordering, -8-byte shift), zero bytes from source/deps/hosts.
+  Cross-OS byte-identity structurally impossible for this pin; macOS second
+  host is the remaining byte-reproduction gap. UNAVAILABLE/STOP blocker
+  closed; CURRENT_TRUTH Sections 2/4/6.8 + handoff updated.
+
 - Luna hygiene sweep landed at 7e45371: ten stale-seal/manifest/evidence
   fixes across implementation docs (a5725a3d references labeled historical,
   schema-v2 status corrected, v4-audit P2 wording repaired), zero broken
