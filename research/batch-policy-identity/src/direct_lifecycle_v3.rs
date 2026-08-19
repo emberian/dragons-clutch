@@ -3926,6 +3926,139 @@ mod tests {
         .unwrap()
     }
 
+    fn issued_for_state(
+        state: &DirectLifecycleV3,
+        price: u64,
+        slot: u64,
+        payer: u8,
+    ) -> DirectCandidateLeaseV3 {
+        let domain = ValidatedDirectDomainV1::new(&state.relation_domain).unwrap();
+        let facts = state.verification_facts().unwrap();
+        let mut prices = [0u64; MAX_OUTCOMES];
+        prices[0] = price;
+        prices[1] = PRICE_SCALE - price;
+        let input = DirectTwoOrderInputV1 {
+            prices,
+            buy_limit: facts.buy_limit,
+            sell_limit: facts.sell_limit,
+            quantity: facts.quantity,
+            submitted_slot: slot,
+            buy_index: facts.buy_index,
+            sell_index: facts.sell_index,
+            outcome: facts.outcome,
+            stored_bump: 7,
+        };
+        DirectCandidateLeaseV3::issue(
+            &domain,
+            &state.grid,
+            domain.verify(input).unwrap(),
+            input,
+            create(payer, 100 + price / 1_000, 1),
+            state.authority.neutral_lamport_sink,
+        )
+        .unwrap()
+    }
+
+    fn selected_reversed_page() -> (DirectLifecycleV3, DirectSettlementPositionsV3) {
+        let initial = prefreeze();
+        let mut sell_order = prefreeze_order(0);
+        sell_order.side = 1;
+        sell_order.limit = 0;
+        let mut seller = prefreeze_position(1);
+        seller.owner = sell_order.owner;
+        let first = initial
+            .place_reservation(
+                context(5),
+                DirectReservationPlacementV3 {
+                    order: sell_order,
+                    position: seller,
+                    max_fee_atoms: 0,
+                    stored_bump: 5,
+                    creation: create(92, 600, 2),
+                },
+                DirectObservedBalancesV3::ZERO,
+            )
+            .unwrap();
+
+        let mut buy_order = prefreeze_order(1);
+        buy_order.side = 0;
+        buy_order.limit = PRICE_SCALE;
+        let mut buyer = prefreeze_position(0);
+        buyer.owner = buy_order.owner;
+        let second = first
+            .post
+            .place_reservation(
+                context(6),
+                DirectReservationPlacementV3 {
+                    order: buy_order,
+                    position: buyer,
+                    max_fee_atoms: 0,
+                    stored_bump: 6,
+                    creation: create(93, 700, 3),
+                },
+                prefreeze_observed(&first.post, 0),
+            )
+            .unwrap();
+        let positions = DirectSettlementPositionsV3 {
+            buyer: second.position_post,
+            seller: first.position_post,
+        };
+        let frozen = second
+            .post
+            .freeze(
+                context(9),
+                rewards(),
+                work_funding(),
+                prefreeze_observed(&second.post, 0),
+            )
+            .unwrap()
+            .post;
+        let first_candidate = issued_for_state(&frozen, 2_000, 10, 11);
+        let admitted = frozen
+            .admit(
+                context(10),
+                first_candidate,
+                create(21, 200, 2),
+                observed(&frozen, 0),
+            )
+            .unwrap()
+            .post;
+        let second_candidate = issued_for_state(&admitted, 3_000, 11, 12);
+        let admitted = admitted
+            .admit(
+                context(11),
+                second_candidate,
+                DirectCreationFundingV3::ZERO,
+                observed(&admitted, 0),
+            )
+            .unwrap()
+            .post;
+        let third_candidate = issued_for_state(&admitted, 4_000, 12, 13);
+        let admitted = admitted
+            .admit(
+                context(12),
+                third_candidate,
+                DirectCreationFundingV3::ZERO,
+                observed(&admitted, 0),
+            )
+            .unwrap()
+            .post;
+        let verified = verify_all(admitted);
+        let balances = observed(&verified, 0);
+        let selected = verified
+            .finalize_selection(
+                context(24),
+                DirectSelectionFundingV3 {
+                    receipt: create(50, 300, 1),
+                    pot: create(51, 400, 1),
+                },
+                balances,
+            )
+            .unwrap()
+            .post;
+        (selected, positions)
+    }
+
     fn admit_three() -> DirectLifecycleV3 {
         let empty = empty();
         let first = empty
@@ -5304,6 +5437,28 @@ mod tests {
         );
         assert_eq!(original, settlement_positions());
         assert_eq!(effects, DirectLifecycleEffectsV3::NONE);
+    }
+
+    #[test]
+    fn settlement_roles_are_independent_of_page_slot_orientation() {
+        let (state, positions) = selected_reversed_page();
+        let plan = state
+            .settle(context(25), observed(&state, 0), positions)
+            .unwrap();
+        assert_eq!(plan.effects.position_settlements[0].before, positions.buyer);
+        assert_eq!(
+            plan.effects.position_settlements[1].before,
+            positions.seller
+        );
+        assert_eq!(state.frozen_page.orders[0].side, 1);
+        assert_eq!(state.frozen_page.orders[1].side, 0);
+        assert_eq!(state.retained[0].candidate.buy_index, 1);
+        assert_eq!(state.retained[0].candidate.sell_index, 0);
+        assert_eq!(
+            plan.effects.position_settlements[0].after.cash_atoms
+                + plan.effects.position_settlements[1].after.cash_atoms,
+            positions.buyer.cash_atoms + positions.seller.cash_atoms
+        );
     }
 
     #[test]
