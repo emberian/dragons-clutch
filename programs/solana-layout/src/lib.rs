@@ -5,14 +5,18 @@
 
 //! Fixed, hostile-byte-facing layouts for the transparent V1 adapter.
 //!
-//! This crate deliberately contains no Solana SDK, allocator, CPI, token
-//! implementation, RPC client, signing code, or entrypoint.  It only defines
-//! byte ownership and deterministic intent bytes.  The eventual adapter must
-//! authenticate account metadata and then hand these checked values to the
-//! semantic kernel.
+//! This crate contains no allocator, CPI, token implementation, RPC client,
+//! signing code, or entrypoint.  It defines byte ownership and deterministic
+//! intent bytes.  Off-chain builds use its first-party portable SHA-256; the
+//! SBF build delegates only large order-page commitments to Solana's safe
+//! native SHA-256 wrapper so a mandatory pre- and post-state commitment fits
+//! the transaction compute ceiling.  The adapter must still authenticate
+//! account metadata and hand these checked values to the semantic kernel.
 
+pub mod artifact;
 pub mod clearing;
 pub mod collateral;
+pub mod native_resolution;
 pub mod reservation;
 pub mod stream;
 
@@ -72,8 +76,9 @@ pub const PROFILE_PARENT_BYTES: usize = 64;
 pub const MAX_OUTCOMES: usize = 16;
 /// Maximum number of payout vectors in one immutable terms set.
 ///
-/// Mirrors `clutch_kernel::MAX_PAYOUTS`; this crate stays dependency-free, so
-/// the bound is restated rather than imported, and a codec test pins it.
+/// Mirrors `clutch_kernel::MAX_PAYOUTS`; this crate stays independent of the
+/// semantic kernel, so the bound is restated rather than imported, and a codec
+/// test pins it.
 pub const MAX_PAYOUTS: usize = 8;
 /// Maximum number of ticks in a frozen price grid.
 ///
@@ -354,7 +359,7 @@ const fn is_zero(bytes: &[u8; HASH_BYTES]) -> bool {
     true
 }
 
-/* SHA-256 is included as a tiny dependency-free identity primitive.  It is
+/* SHA-256 is included as a tiny portable identity primitive.  It is
  * used only for canonical IDs; this crate makes no claim that a future
  * Solana deployment has selected this primitive until its profile says so. */
 fn digest(domain: &[u8], parts: &[&[u8]]) -> Hash32 {
@@ -4389,6 +4394,36 @@ pub enum Intent {
         destination: Hash32,
         amount: u64,
     },
+    /// Create one uploader-keyed, exact-size typed artifact stage.
+    BeginArtifact {
+        kind: artifact::ArtifactKind,
+        context: Hash32,
+        digest: Hash32,
+        exact_len: u16,
+        expires_slot: u64,
+    },
+    /// Append the unique next chunk to a typed artifact stage.
+    WriteArtifact {
+        kind: artifact::ArtifactKind,
+        context: Hash32,
+        digest: Hash32,
+        cursor: u16,
+        chunk_len: u16,
+        chunk: [u8; artifact::ARTIFACT_CHUNK_BYTES],
+    },
+    /// Validate a complete stage and create/admit its final artifact PDA.
+    SealArtifact {
+        kind: artifact::ArtifactKind,
+        context: Hash32,
+        digest: Hash32,
+        exact_len: u16,
+    },
+    /// Close an upload, always refunding the funder persisted in its header.
+    AbortArtifact {
+        kind: artifact::ArtifactKind,
+        context: Hash32,
+        digest: Hash32,
+    },
 }
 
 /// The placement admissibility rule, shared by the encoder and the decoder.
@@ -4475,6 +4510,10 @@ const INIT_ORDER_PAGE_TAG: u8 = 14;
 const ENDOW_TAG: u8 = 15;
 const REDEEM_EXTERNAL_TAG: u8 = 16;
 const WITHDRAW_CASH_TAG: u8 = 17;
+const BEGIN_ARTIFACT_TAG: u8 = 18;
+const WRITE_ARTIFACT_TAG: u8 = 19;
+const SEAL_ARTIFACT_TAG: u8 = 20;
+const ABORT_ARTIFACT_TAG: u8 = 21;
 
 impl Intent {
     /// Return the exact encoded byte length for this intent.
@@ -4500,6 +4539,10 @@ impl Intent {
             Self::InitOrderPage { .. } => 2 + 32 + 32 + 2 + 2,
             Self::Endow { .. } => 2 + 32 + 32 + 8,
             Self::WithdrawCash { .. } => 2 + 32 + 32 + 32 + 8,
+            Self::BeginArtifact { .. } => 2 + 1 + 32 + 32 + 2 + 8,
+            Self::WriteArtifact { .. } => 2 + 1 + 32 + 32 + 2 + 2 + artifact::ARTIFACT_CHUNK_BYTES,
+            Self::SealArtifact { .. } => 2 + 1 + 32 + 32 + 2,
+            Self::AbortArtifact { .. } => 2 + 1 + 32 + 32,
         }
     }
     /// Validate and encode into a caller-provided buffer.
@@ -4789,6 +4832,94 @@ impl Intent {
                 w.hash(*destination)?;
                 w.u64(*amount)?
             }
+            Self::BeginArtifact {
+                kind,
+                context,
+                digest,
+                exact_len,
+                expires_slot,
+            } => {
+                artifact::ArtifactBinding {
+                    kind: *kind,
+                    context: *context,
+                    digest: *digest,
+                    exact_len: *exact_len,
+                }
+                .validate()?;
+                put_header(&mut w, BEGIN_ARTIFACT_TAG, INTENT_VERSION)?;
+                w.u8(kind.byte())?;
+                w.hash(*context)?;
+                w.hash(*digest)?;
+                w.u16(*exact_len)?;
+                w.u64(*expires_slot)?
+            }
+            Self::WriteArtifact {
+                kind,
+                context,
+                digest,
+                cursor,
+                chunk_len,
+                chunk,
+            } => {
+                artifact::ArtifactBinding {
+                    kind: *kind,
+                    context: *context,
+                    digest: *digest,
+                    exact_len: kind.exact_len() as u16,
+                }
+                .validate()?;
+                if *chunk_len == 0
+                    || usize::from(*chunk_len) > artifact::ARTIFACT_CHUNK_BYTES
+                    || chunk[usize::from(*chunk_len)..]
+                        .iter()
+                        .any(|byte| *byte != 0)
+                {
+                    return Err(CodecError::NonCanonicalPadding);
+                }
+                put_header(&mut w, WRITE_ARTIFACT_TAG, INTENT_VERSION)?;
+                w.u8(kind.byte())?;
+                w.hash(*context)?;
+                w.hash(*digest)?;
+                w.u16(*cursor)?;
+                w.u16(*chunk_len)?;
+                w.bytes(chunk)?
+            }
+            Self::SealArtifact {
+                kind,
+                context,
+                digest,
+                exact_len,
+            } => {
+                artifact::ArtifactBinding {
+                    kind: *kind,
+                    context: *context,
+                    digest: *digest,
+                    exact_len: *exact_len,
+                }
+                .validate()?;
+                put_header(&mut w, SEAL_ARTIFACT_TAG, INTENT_VERSION)?;
+                w.u8(kind.byte())?;
+                w.hash(*context)?;
+                w.hash(*digest)?;
+                w.u16(*exact_len)?
+            }
+            Self::AbortArtifact {
+                kind,
+                context,
+                digest,
+            } => {
+                artifact::ArtifactBinding {
+                    kind: *kind,
+                    context: *context,
+                    digest: *digest,
+                    exact_len: kind.exact_len() as u16,
+                }
+                .validate()?;
+                put_header(&mut w, ABORT_ARTIFACT_TAG, INTENT_VERSION)?;
+                w.u8(kind.byte())?;
+                w.hash(*context)?;
+                w.hash(*digest)?
+            }
         };
         Ok(w.at)
     }
@@ -5073,13 +5204,106 @@ impl Intent {
                     amount,
                 })
             }
+            BEGIN_ARTIFACT_TAG => {
+                let kind = artifact::ArtifactKind::from_byte(r.u8()?)?;
+                let context = r.hash()?;
+                let digest = r.hash()?;
+                let exact_len = r.u16()?;
+                let expires_slot = r.u64()?;
+                r.done()?;
+                artifact::ArtifactBinding {
+                    kind,
+                    context,
+                    digest,
+                    exact_len,
+                }
+                .validate()?;
+                Ok(Self::BeginArtifact {
+                    kind,
+                    context,
+                    digest,
+                    exact_len,
+                    expires_slot,
+                })
+            }
+            WRITE_ARTIFACT_TAG => {
+                let kind = artifact::ArtifactKind::from_byte(r.u8()?)?;
+                let context = r.hash()?;
+                let digest = r.hash()?;
+                let cursor = r.u16()?;
+                let chunk_len = r.u16()?;
+                let chunk = r.bytes::<{ artifact::ARTIFACT_CHUNK_BYTES }>()?;
+                r.done()?;
+                artifact::ArtifactBinding {
+                    kind,
+                    context,
+                    digest,
+                    exact_len: kind.exact_len() as u16,
+                }
+                .validate()?;
+                if chunk_len == 0
+                    || usize::from(chunk_len) > artifact::ARTIFACT_CHUNK_BYTES
+                    || chunk[usize::from(chunk_len)..]
+                        .iter()
+                        .any(|byte| *byte != 0)
+                {
+                    return Err(CodecError::NonCanonicalPadding);
+                }
+                Ok(Self::WriteArtifact {
+                    kind,
+                    context,
+                    digest,
+                    cursor,
+                    chunk_len,
+                    chunk,
+                })
+            }
+            SEAL_ARTIFACT_TAG => {
+                let kind = artifact::ArtifactKind::from_byte(r.u8()?)?;
+                let context = r.hash()?;
+                let digest = r.hash()?;
+                let exact_len = r.u16()?;
+                r.done()?;
+                artifact::ArtifactBinding {
+                    kind,
+                    context,
+                    digest,
+                    exact_len,
+                }
+                .validate()?;
+                Ok(Self::SealArtifact {
+                    kind,
+                    context,
+                    digest,
+                    exact_len,
+                })
+            }
+            ABORT_ARTIFACT_TAG => {
+                let kind = artifact::ArtifactKind::from_byte(r.u8()?)?;
+                let context = r.hash()?;
+                let digest = r.hash()?;
+                r.done()?;
+                artifact::ArtifactBinding {
+                    kind,
+                    context,
+                    digest,
+                    exact_len: kind.exact_len() as u16,
+                }
+                .validate()?;
+                Ok(Self::AbortArtifact {
+                    kind,
+                    context,
+                    digest,
+                })
+            }
             _ => Err(CodecError::WrongTag),
         }
     }
 }
 
 /* Minimal SHA-256 implementation, adapted as straightforward fixed-array
- * code so the crate remains dependency-free and allocator-free. */
+ * code so host/research builds remain allocator-free and independent of a
+ * platform hashing implementation. */
 struct Sha256 {
     state: [u32; 8],
     block: [u8; 64],
@@ -8011,6 +8235,11 @@ mod tests {
             Ok(page.recomputed_page_digest().unwrap())
         );
         assert_eq!(
+            stream::native_page_digest_for_test(&bytes),
+            stream::streamed_page_digest(&bytes),
+            "the SBF hashv slice assembly is the portable SHA-256 preimage"
+        );
+        assert_eq!(
             stream::streamed_page_digest(&bytes),
             Ok(canonical_page_digest(
                 page.market,
@@ -8031,12 +8260,21 @@ mod tests {
             stream::streamed_page_digest(&encode_page_unchecked(&moved)),
             stream::streamed_page_digest(&bytes)
         );
+        assert_eq!(
+            stream::native_page_digest_for_test(&encode_page_unchecked(&moved)),
+            stream::streamed_page_digest(&encode_page_unchecked(&moved))
+        );
         // A page whose slot array is not canonical has no digest at all.
         let mut junk = bytes;
         junk[PAGE_HEADER_BYTES + 2 * ORDER_SLOT_BYTES] = 9;
         assert_eq!(
             stream::streamed_page_digest(&junk),
             Err(CodecError::WrongTag)
+        );
+        assert_eq!(
+            stream::native_page_digest_for_test(&junk),
+            Err(CodecError::WrongTag),
+            "native hashing never commits structurally invalid slot bytes"
         );
     }
     #[test]
@@ -9448,7 +9686,7 @@ mod tests {
         b[66..74].fill(0);
         assert_eq!(Intent::decode(&b[..n]), Err(CodecError::ZeroValue));
         // A tag past the last one this version defines.
-        b[0] = WITHDRAW_CASH_TAG + 1;
+        b[0] = ABORT_ARTIFACT_TAG + 1;
         assert_eq!(Intent::decode(&b[..n]), Err(CodecError::WrongTag));
     }
 
@@ -9572,5 +9810,117 @@ mod tests {
         let n = intent.encode(&mut encoded).unwrap();
         encoded[98..106].fill(0);
         assert_eq!(Intent::decode(&encoded[..n]), Err(CodecError::ZeroValue));
+    }
+
+    #[test]
+    fn artifact_transport_intents_have_exact_unambiguous_wires() {
+        let kind = artifact::ArtifactKind::CollateralPolicy;
+        let context = h(1);
+        let digest = h(2);
+        let exact_len = kind.exact_len() as u16;
+        let mut chunk = [0_u8; artifact::ARTIFACT_CHUNK_BYTES];
+        chunk[..3].copy_from_slice(&[7, 8, 9]);
+        let intents = [
+            Intent::BeginArtifact {
+                kind,
+                context,
+                digest,
+                exact_len,
+                expires_slot: 51,
+            },
+            Intent::WriteArtifact {
+                kind,
+                context,
+                digest,
+                cursor: 0,
+                chunk_len: 3,
+                chunk,
+            },
+            Intent::SealArtifact {
+                kind,
+                context,
+                digest,
+                exact_len,
+            },
+            Intent::AbortArtifact {
+                kind,
+                context,
+                digest,
+            },
+        ];
+        let expected = [77, 263, 69, 67];
+        let tags = [
+            BEGIN_ARTIFACT_TAG,
+            WRITE_ARTIFACT_TAG,
+            SEAL_ARTIFACT_TAG,
+            ABORT_ARTIFACT_TAG,
+        ];
+        let mut i = 0;
+        while i < intents.len() {
+            let mut encoded = [0_u8; MAX_INTENT_BYTES];
+            let n = intents[i].encode(&mut encoded).unwrap();
+            assert_eq!(n, expected[i]);
+            assert_eq!(n, intents[i].encoded_len());
+            assert_eq!(&encoded[..2], &[tags[i], INTENT_VERSION]);
+            assert_eq!(Intent::decode(&encoded[..n]), Ok(intents[i]));
+            assert_eq!(
+                Intent::decode(&encoded[..n - 1]),
+                Err(CodecError::Truncated)
+            );
+            assert_eq!(
+                Intent::decode(&encoded[..n + 1]),
+                Err(CodecError::TrailingBytes)
+            );
+            let mut unknown_kind = encoded;
+            unknown_kind[2] = 0;
+            assert_eq!(
+                Intent::decode(&unknown_kind[..n]),
+                Err(CodecError::InvalidEnum)
+            );
+            i += 1;
+        }
+
+        let mut encoded = [0_u8; MAX_INTENT_BYTES];
+        assert_eq!(
+            Intent::BeginArtifact {
+                kind,
+                context: Hash32::ZERO,
+                digest,
+                exact_len,
+                expires_slot: 51,
+            }
+            .encode(&mut encoded),
+            Err(CodecError::ZeroIdentity)
+        );
+        assert_eq!(
+            Intent::SealArtifact {
+                kind,
+                context,
+                digest,
+                exact_len: exact_len - 1,
+            }
+            .encode(&mut encoded),
+            Err(CodecError::InvalidCount)
+        );
+        assert_eq!(
+            Intent::WriteArtifact {
+                kind,
+                context,
+                digest,
+                cursor: 0,
+                chunk_len: 0,
+                chunk,
+            }
+            .encode(&mut encoded),
+            Err(CodecError::NonCanonicalPadding)
+        );
+
+        let write = intents[1];
+        let n = write.encode(&mut encoded).unwrap();
+        encoded[74] = 1;
+        assert_eq!(
+            Intent::decode(&encoded[..n]),
+            Err(CodecError::NonCanonicalPadding)
+        );
     }
 }

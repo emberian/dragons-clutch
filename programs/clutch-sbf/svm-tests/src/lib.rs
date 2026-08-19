@@ -172,7 +172,12 @@ pub struct Plane {
     pub feed: Pda,
     /// The feed identity the market resolves against.
     pub feed_id: FeedId,
-    /// Evidence buffer, carrying a window identity and no window bytes.
+    /// Evidence buffer used by the fixture.
+    ///
+    /// An active plane carries the complete sealed window needed by `Resolve`.
+    /// A synthetically pre-resolved plane may carry only the identity header
+    /// because `RedeemInternal` does not re-evaluate the window.  A real exact
+    /// `Resolve` retry still presents the original complete sealed evidence.
     pub buffer: Address,
     /// The window identity the resolution record is sealed to.
     pub window_id: Hash32,
@@ -400,7 +405,11 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
         GenesisAccount {
             address: BUFFER_ACCOUNT,
             owner: PROGRAM_ID,
-            data: evidence_buffer_bytes(window_id),
+            data: if matches!(mode, Mode::Resolved(_)) {
+                evidence_buffer_bytes(window_id)
+            } else {
+                resolution_evidence_buffer_bytes(window_id, feed_id)
+            },
         },
     ];
 
@@ -848,6 +857,41 @@ fn evidence_buffer_bytes(window_id: Hash32) -> Vec<u8> {
     data
 }
 
+/// An evidence buffer carrying the fixture's complete, mature sealed window.
+///
+/// The private `0x45` reference tag/version bytes are pinned here against the
+/// production decoder: any drift makes the real SBF Resolve transaction fail.
+fn resolution_evidence_buffer_bytes(window_id: Hash32, feed: FeedId) -> Vec<u8> {
+    let mut window = vec![0x45_u8, 1];
+    window.extend_from_slice(&feed.bytes()); // source adapter
+    window.extend_from_slice(&feed.bytes()); // feed spec
+    window.extend_from_slice(&1_u32.to_le_bytes()); // source version
+    window.extend_from_slice(&1_u32.to_le_bytes()); // evaluator version
+    window.extend_from_slice(&7_u32.to_le_bytes()); // grid family
+    window.extend_from_slice(&1_u16.to_le_bytes()); // grid version
+    window.extend_from_slice(&60_u64.to_le_bytes()); // bucket seconds
+    window.extend_from_slice(&START_BUCKET.to_le_bytes());
+    window.extend_from_slice(&END_BUCKET.to_le_bytes());
+    window.extend_from_slice(&(START_BUCKET + 4).to_le_bytes()); // maturity
+    window.extend_from_slice(&0_u64.to_le_bytes()); // repair generation
+    window.extend_from_slice(&1_u16.to_le_bytes()); // complete-required coverage
+    window.extend_from_slice(&0_u64.to_le_bytes()); // coverage parameter
+    window.extend_from_slice(&3_u16.to_le_bytes());
+    for (bucket, value) in [(100_u64, 0_u128), (101, 0), (102, 1)] {
+        window.push(1); // accepted observation
+        window.extend_from_slice(&bucket.to_le_bytes());
+        window.extend_from_slice(&value.to_le_bytes());
+        window.extend_from_slice(&value.to_le_bytes());
+    }
+    let mut data = vec![0_u8; EVIDENCE_BUFFER_HEADER_BYTES];
+    data[0] = EVIDENCE_BUFFER_TAG;
+    data[1] = BUFFER_VERSION;
+    data[2..34].copy_from_slice(&window_id.bytes());
+    data[34..36].copy_from_slice(&(window.len() as u16).to_le_bytes());
+    data.extend_from_slice(&window);
+    data
+}
+
 /* ------------------------------------------------------------------------ */
 /* Account planes                                                            */
 /* ------------------------------------------------------------------------ */
@@ -870,8 +914,27 @@ impl Plane {
         ]
     }
 
-    /// The eleven-account evidence prefix, in `Resolve`/`RedeemInternal` order.
-    pub fn evidence_addresses(&self) -> [Address; 11] {
+    /// The nine market-global prefix accounts of `Resolve`, in list order.
+    ///
+    /// Callers append every canonical outcome mint after this prefix.  Those
+    /// mints are intentionally absent here because their count is a market
+    /// fact rather than a fixture-wide constant.
+    pub fn resolve_addresses(&self) -> [Address; 9] {
+        [
+            self.actor,
+            self.market.address,
+            self.hoard.address,
+            self.kernel.address,
+            self.supply.address,
+            self.terms.address,
+            self.resolution.address,
+            self.feed.address,
+            self.buffer,
+        ]
+    }
+
+    /// The eleven owner-scoped evidence accounts of `RedeemInternal`.
+    pub fn redeem_addresses(&self) -> [Address; 11] {
         [
             self.actor,
             self.market.address,

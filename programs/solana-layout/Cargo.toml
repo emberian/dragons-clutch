@@ -11,3 +11,20 @@ path = "src/lib.rs"
 
 [features]
 default = []
+
+[target.'cfg(target_os = "solana")'.dependencies]
+# Safe wrapper around Solana's native SHA-256 syscall.  Order-page verification
+# and post-mutation sealing each commit roughly 5 KiB; the portable first-party
+# implementation is retained everywhere off-chain, while SBF needs the native
+# primitive to fit beneath the transaction compute ceiling.
+solana-sha256-hasher = { version = "=3.1.0", default-features = false }
+
+[dev-dependencies]
+# The host implementation is test-only and lets the native preimage assembly be
+# checked byte-for-byte against the portable first-party SHA-256 path.
+solana-sha256-hasher = { version = "=3.1.0", default-features = false, features = ["sha2"] }
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+priority = 0
+check-cfg = ['cfg(target_os, values("solana"))']

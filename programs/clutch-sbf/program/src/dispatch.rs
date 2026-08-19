@@ -41,7 +41,7 @@
 use crate::accounts::Outcome;
 use crate::error::ClutchError;
 use crate::instructions::{
-    cash_exit, external_exit, genesis, market_init, merge_materialize, observe_resolve,
+    artifact, cash_exit, external_exit, genesis, market_init, merge_materialize, observe_resolve,
     orders_batch, split,
 };
 use clutch_solana_layout::Intent;
@@ -87,6 +87,12 @@ pub fn process(
         }
         Action::Layout(Intent::WithdrawCash { .. }) => {
             cash_exit::process(program_id, accounts, &request)
+        }
+        Action::Layout(Intent::BeginArtifact { .. })
+        | Action::Layout(Intent::WriteArtifact { .. })
+        | Action::Layout(Intent::SealArtifact { .. })
+        | Action::Layout(Intent::AbortArtifact { .. }) => {
+            artifact::process(program_id, accounts, &request)
         }
         Action::Layout(Intent::PlaceOrder { .. })
         | Action::Layout(Intent::CancelOrder { .. })

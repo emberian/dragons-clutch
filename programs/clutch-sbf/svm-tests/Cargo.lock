@@ -1215,6 +1215,10 @@ name = "clutch-accumulator"
 version = "0.1.0"
 
 [[package]]
+name = "clutch-bspline"
+version = "0.1.0"
+
+[[package]]
 name = "clutch-kernel"
 version = "0.1.0"
 
@@ -1233,6 +1237,7 @@ dependencies = [
  "solana-program-entrypoint",
  "solana-program-error",
  "solana-pubkey 4.2.0",
+ "solana-sha256-hasher",
 ]
 
 [[package]]
@@ -1261,12 +1266,16 @@ dependencies = [
 [[package]]
 name = "clutch-solana-layout"
 version = "0.1.0"
+dependencies = [
+ "solana-sha256-hasher",
+]
 
 [[package]]
 name = "clutch-solana-reference"
 version = "0.1.0"
 dependencies = [
  "clutch-accumulator",
+ "clutch-bspline",
  "clutch-kernel",
  "clutch-solana-layout",
 ]

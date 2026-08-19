@@ -38,6 +38,7 @@
 //! that split is deliberate: the account-creation CPI, the rent computation
 //! and the `invoke_signed` seed plumbing are one concern with one owner.
 
+pub mod artifact;
 pub mod cash_exit;
 pub mod construction;
 pub mod external_exit;

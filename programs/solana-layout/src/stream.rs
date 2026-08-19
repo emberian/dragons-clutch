@@ -517,15 +517,22 @@ pub fn streamed_page_digest(input: &[u8]) -> Result<Hash32> {
     fold_page_digest(input, &header)
 }
 
-/// Fold the page preimage into a streamed SHA-256, one slot at a time.
+/// Fold the page preimage into SHA-256 after structurally decoding every slot.
 ///
 /// `header` must have been decoded from `input`, which is what makes the
 /// slot-array offsets below in range.  Each slot is decoded before its bytes
-/// are folded, so this performs exactly the structural half of the buffered
+/// are committed, so this performs exactly the structural half of the buffered
 /// decoder's slot pass — kind byte, exact body width, canonical padding — in
 /// the same order, and refuses with the same error.  Hashing the raw bytes is
 /// identical to hashing a re-encoded slot precisely because a slot that decodes
 /// has exactly one encoding.
+///
+/// Host and research builds retain the portable first-party SHA-256.  SBF uses
+/// Solana's safe native-hasher wrapper over the exact same 21-slice preimage.
+/// A page instruction needs this commitment twice — once before mutation and
+/// once after — and two portable 5 KiB hashes exceed Solana's transaction
+/// compute ceiling.  Neither commitment is skipped.
+#[cfg(not(target_os = "solana"))]
 fn fold_page_digest(input: &[u8], header: &OrderPageHeader) -> Result<Hash32> {
     let mut h = Sha256::new();
     h.update(ORDER_PAGE_DOMAIN);
@@ -542,6 +549,45 @@ fn fold_page_digest(input: &[u8], header: &OrderPageHeader) -> Result<Hash32> {
         i += 1;
     }
     Ok(Hash32(h.finish()))
+}
+
+/// Assemble and hash the canonical page preimage with Solana's native wrapper.
+///
+/// This is built on SBF and in host unit tests only.  The test build uses the
+/// wrapper's `sha2` implementation to prove that the slice assembly equals the
+/// portable streaming construction; production SBF invokes `sol_sha256`.
+#[cfg(any(target_os = "solana", test))]
+fn native_page_digest(input: &[u8], header: &OrderPageHeader) -> Result<Hash32> {
+    let page_index = header.page_index.to_le_bytes();
+    let counts = [header.order_count, header.tombstone_count];
+    let mut preimage: [&[u8]; 5 + MAX_ORDERS_PER_PAGE] = [&[]; 5 + MAX_ORDERS_PER_PAGE];
+    preimage[0] = ORDER_PAGE_DOMAIN;
+    preimage[1] = &header.market.0;
+    preimage[2] = &header.epoch.0;
+    preimage[3] = &page_index;
+    preimage[4] = &counts;
+
+    let mut i = 0;
+    while i < MAX_ORDERS_PER_PAGE {
+        let start = ORDER_PAGE_HEADER_BYTES + (i * ORDER_SLOT_BYTES);
+        let mut r = Reader::at(input, start);
+        decode_slot(&mut r)?;
+        preimage[5 + i] = &input[start..start + ORDER_SLOT_BYTES];
+        i += 1;
+    }
+    Ok(Hash32(solana_sha256_hasher::hashv(&preimage).to_bytes()))
+}
+
+#[cfg(target_os = "solana")]
+fn fold_page_digest(input: &[u8], header: &OrderPageHeader) -> Result<Hash32> {
+    native_page_digest(input, header)
+}
+
+/// Test-only view of the SBF-native preimage path.
+#[cfg(test)]
+pub(crate) fn native_page_digest_for_test(input: &[u8]) -> Result<Hash32> {
+    let header = OrderPageHeader::decode(input)?;
+    native_page_digest(input, &header)
 }
 
 /// Verify one order page from its raw bytes and return its header.

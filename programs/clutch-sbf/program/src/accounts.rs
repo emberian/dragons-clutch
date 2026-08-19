@@ -538,6 +538,8 @@ pub struct EpochFacts {
     pub terms: Hash32,
     /// Frozen price-grid identity.
     pub price_grid: Hash32,
+    /// Opaque frozen-policy identity.
+    pub policy: Hash32,
     /// Set-wide order-set digest; zero until the page set is frozen.
     pub order_set: Hash32,
     /// Epoch index within the market.
@@ -763,6 +765,7 @@ pub fn read_epoch(data: &[u8]) -> Outcome<EpochFacts> {
         book: value.book,
         terms: value.terms,
         price_grid: value.price_grid,
+        policy: value.policy,
         order_set: value.order_set,
         epoch_index: value.epoch_index,
         price_scale: value.price_scale,
