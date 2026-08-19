@@ -1,5 +1,13 @@
 # On-chain settlement checkpoint: preflight landed, economic transition STOP
 
+> **Historical checkpoint (superseded in part).** This document records the
+> fail-closed preflight before funded reservation and settlement execution
+> landed. `PlaceOrder`/`CancelOrder` now reserve and release exact value, and
+> `SettlePage` now executes the narrow full-fill direct single-Egg slice defined
+> in [COUPLED_SETTLEMENT_V1.md](COUPLED_SETTLEMENT_V1.md). The broader relation,
+> selection, entitlement, partial-fill, portfolio, fee, and terminal-closure
+> prerequisites below remain open unless that newer document says otherwise.
+
 Status: **IMPLEMENTED byte-level preflight; STOP before relation execution**.
 
 The old “39 KiB batch verifier cannot fit SBF” diagnosis is no longer the

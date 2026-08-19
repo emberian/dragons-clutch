@@ -109,4 +109,5 @@ The gate remains genesis-assisted by 11 program-owned prerequisites. In
 particular, the resolution feed and evidence pages are injected rather than
 produced by an authenticated public archive lifecycle. This is runtime evidence
 for replay-domain separation, not source authentication, blank-bank operation,
-or batch settlement; `SettlePage` remains unimplemented.
+or batch settlement. A narrow `SettlePage` slice is implemented separately in
+`COUPLED_SETTLEMENT_V1.md`, but it is not part of this replay walk.

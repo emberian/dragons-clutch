@@ -5,7 +5,14 @@ progress**.
 
 This document owns one narrow prerequisite of the coupled venue: an accepted
 order must already have one exact, owner-funded reservation.  It does not make
-`SettlePage` reachable, select a candidate, or claim that the current fee
+> **Current disposition (2026-08-19).** Production placement and cancellation
+> now create and consume exact funded reservations, with real-SBF tests. A
+> narrow full-fill direct single-Egg settlement consumer is also live; see
+> [COUPLED_SETTLEMENT_V1.md](COUPLED_SETTLEMENT_V1.md). Candidate selection,
+> general settlement, fee policy, lapse, and complete terminal closure remain
+> outside this reservation document.
+
+This design did not by itself make `SettlePage` reachable, select a candidate, or claim that the current fee
 proposal is final.
 
 ## 1. One reservation identity

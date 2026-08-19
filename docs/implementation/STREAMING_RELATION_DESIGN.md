@@ -382,7 +382,13 @@ layout lane — nothing here edits `programs/**`.
 
 ### What stays refused
 
-Until the projection lands, `SettlePage` keeps refusing.  The streaming
+> **Current disposition (2026-08-19).** The general streaming relation remains
+> blocked as described below. A separate, deliberately narrow same-page,
+> full-fill, direct single-Egg settlement slice is now executable and is
+> specified in [COUPLED_SETTLEMENT_V1.md](COUPLED_SETTLEMENT_V1.md). It does not
+> imply that this general projection or verifier has landed.
+
+Until the general projection lands, relation-backed `SettlePage` keeps refusing. The streaming
 verifier removes the *frame* blocker only; the projection items above are the
 remaining blockers, and each has a named owner (layout lane) and a named
 refusal rule.  No claim is made that the projection is implemented, and

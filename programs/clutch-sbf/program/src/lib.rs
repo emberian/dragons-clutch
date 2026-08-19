@@ -14,26 +14,26 @@
 //! ## What this is not
 //!
 //! It is not a complete program, is not audited, and is not a deployment
-//! authorization.  It now carries token and CPI code: [`token`] observes and
-//! admits Token-2022 mints and token accounts and builds the CPIs, and
-//! `Materialize`/`Dematerialize` drive a real `MintTo`/`Burn` **when the
-//! optional token leg is present in the account list**.  That optionality is a
-//! transitional hole named in [`instructions::split`] and in
-//! `docs/implementation/TOKEN2022_PLAN.md`, not a design.  `SettlePage` is the
-//! one honest refusal, with a recorded finding (the batch relation awaits the
-//! on-chain streaming verifier); `PlaceOrder` and `CancelOrder` (page-v4
-//! tombstone retirement) are implemented with host tests only — no reference
-//! oracle and no SVM leg.  `Resolve` and `RedeemInternal` are evidence-gated
-//! exactly as in the offline reference adapter, and `CreateMarket` is a
-//! permissionless founding transition that creates the outcome mints and
-//! the Hoard token account via CPI and writes the founding plane; the
-//! genesis module creates the remaining accounts via system CPI.
-//! [`instructions::genesis`] is the one family that **creates** accounts,
-//! through a real system-program CPI: it too has host tests only, its CPI has
-//! never run on a bank, and its `Endow` credits internal position cash that no
-//! collateral backs — the internal-ledger half of a deposit whose value leg is
-//! still unwired.  The PDA seed schema in [`seeds`] is a **proposal**, not a
-//! frozen ABI.
+//! authorization.  The current executable subset has real local-bank evidence
+//! for permissionless PDA construction, backed pooled-custody `Endow`,
+//! `Split`/`Merge`, Token-2022 materialization and dematerialization, categorical
+//! and native degree-1--3 point resolution, internal and categorical bearer
+//! redemption, free-cash withdrawal, funded order placement/cancellation, and
+//! one deliberately narrow coupled-settlement slice.  `SettlePage` is therefore
+//! no longer an unconditional stub: it executes only a same-page, full-fill,
+//! direct single-Egg, zero-fee, exactly divisible pair whose selected candidate,
+//! candidate feed, frozen receipt, orders, and ACTIVE reservations all bind.
+//! Every broader settlement form still refuses.  See
+//! `docs/implementation/COUPLED_SETTLEMENT_V1.md`.
+//!
+//! Artifact upload/seal and a typed source/archive seam are implemented, but
+//! live `FeedAdvance`/`Resolve` does not yet authenticate a provider deployment
+//! or consume the canonical sealed archive receipt.  That source join remains
+//! a deployment STOP.  Candidate selection, entitlement creation, general
+//! partial/portfolio settlement, and the full blank-bank venue lifecycle also
+//! remain incomplete.  Evidence labels and the current dependency order live
+//! in `CURRENT_TRUTH.md` and `docs/V1_BACKLOG.md`; older bring-up documents are
+//! historical rather than the source of present tense truth.
 //!
 //! ## Layering
 //!

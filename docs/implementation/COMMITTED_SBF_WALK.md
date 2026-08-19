@@ -127,7 +127,8 @@ by step 15.
 The remaining blank-bank surface includes public construction and lifecycle
 for Realm/Profile/Terms/policy artifacts, authenticated feed archive and page
 production, and the batch epoch/candidate/checkpoint/pot/receipt plane.
-`SettlePage` remains unimplemented. This walk exercises no order-book clearing,
+The narrow `SettlePage` slice in `COUPLED_SETTLEMENT_V1.md` is implemented but
+is not exercised by this walk. This walk exercises no order-book clearing,
 candidate selection, or receipt settlement.
 
 The supported claim is therefore **signed, committed, same-market execution
