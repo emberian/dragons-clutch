@@ -473,24 +473,28 @@ import sys
 
 symbols_path, disassembly_path, summary_path = map(pathlib.Path, sys.argv[1:])
 function_symbols = set()
+function_addresses = set()
 for line in symbols_path.read_text().splitlines():
     fields = line.split()
     if len(fields) >= 6 and fields[2] == "F" and fields[3] == ".text":
         function_symbols.add(fields[-1])
+        function_addresses.add(int(fields[0], 16))
 if not function_symbols:
     raise SystemExit("final ELF symbol table exposes no text functions")
 
 current = None
 seen_functions = set()
+seen_addresses = set()
 max_offset = 0
 max_function = None
 references = 0
-header = re.compile(r"^[0-9a-f]+ <(.+)>:$")
+header = re.compile(r"^([0-9a-f]+) <(.+)>:$")
 reference = re.compile(r"\[r10\s*([+-])\s*0x([0-9a-f]+)\]")
 for line in disassembly_path.read_text().splitlines():
     match = header.match(line.strip())
     if match:
-        current = match.group(1)
+        seen_addresses.add(int(match.group(1), 16))
+        current = match.group(2)
         seen_functions.add(current)
         continue
     for match in reference.finditer(line):
@@ -505,11 +509,16 @@ for line in disassembly_path.read_text().splitlines():
             max_offset = offset
             max_function = current
 
-missing = function_symbols - seen_functions
-if missing:
-    raise SystemExit(f"{len(missing)} text symbols were not disassembled; first: {sorted(missing)[0]}")
+missing_addresses = function_addresses - seen_addresses
+if missing_addresses:
+    raise SystemExit(
+        f"{len(missing_addresses)} text-function addresses were not disassembled; "
+        f"first: 0x{min(missing_addresses):x}"
+    )
 summary_path.write_text(
-    f"final_text_functions={len(function_symbols)}\n"
+    f"final_text_function_symbols={len(function_symbols)}\n"
+    f"final_text_function_addresses={len(function_addresses)}\n"
+    f"disassembled_function_regions={len(seen_addresses)}\n"
     f"direct_r10_references={references}\n"
     f"deepest_direct_r10_offset={max_offset}\n"
     f"deepest_direct_r10_function={max_function}\n"
