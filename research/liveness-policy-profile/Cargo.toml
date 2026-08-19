@@ -7,7 +7,7 @@ license = "AGPL-3.0-or-later"
 description = "Exact local-bank account-size and default-rent evidence probe"
 
 [dependencies]
-clutch-liveness = { path = "../../crates/clutch-liveness" }
+clutch-batch-policy-identity = { path = "../batch-policy-identity" }
 clutch-solana-layout = { path = "../../programs/solana-layout" }
 clutch-solana-reference = { path = "../../programs/solana-reference" }
 solana-rent = "=4.3.0"

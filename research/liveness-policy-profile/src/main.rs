@@ -1,19 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Print the exact account widths and `solana-rent = 4.3.0` default minima
-//! consumed by the liveness-policy evidence manifest.
+//! Print exact account widths and pinned `Rent::default()` minima.
+//!
+//! This probe emits facts only.  It deliberately does not construct a global
+//! `LivenessPolicy`: the measured profile remains STOP while any mandatory
+//! route, source release, storage owner, or terminal path is unadmitted.
 
-use clutch_liveness::{Id, LivenessPolicy};
+use clutch_batch_policy_identity::{
+    direct_window_v1::{DIRECT_CANDIDATE_ACCOUNT_BYTES, DIRECT_WINDOW_ACCOUNT_BYTES},
+    BATCH_POLICY_BYTES,
+};
 use clutch_solana_layout::{
     account_len,
     artifact::{ARTIFACT_STAGE_HEADER_BYTES, MAX_ARTIFACT_BYTES},
     collateral::COLLATERAL_POLICY_BYTES,
+    direct_selection::DIRECT_EPOCH_BYTES,
     native_resolution::NATIVE_RESOLUTION_LEN,
+    occupation_resolution::OCCUPATION_RESOLUTION_LEN,
     reservation::RESERVATION_ACCOUNT_BYTES,
+    resolution_work::RESOLUTION_WORK_ACCOUNT_BYTES,
 };
 use clutch_solana_reference::{KERNEL_ACCOUNT_LEN, REPLAY_ACCOUNT_LEN};
 use solana_rent::{Rent, ACCOUNT_STORAGE_OVERHEAD, DEFAULT_LAMPORTS_PER_BYTE};
 
-// These four widths are owned by the SBF adapter rather than the layout
+// These widths are owned by the SBF adapter or native programs rather than the layout
 // crates. The Python checker pins them against compile-time assertions in the
 // named source files before accepting this probe's output.
 const SOURCE_SPEC_BYTES: usize = 292;
@@ -21,23 +30,13 @@ const SOURCE_ARCHIVE_BYTES: usize = 2_560;
 const TOKEN_MINT_BYTES: usize = 82;
 const IMMUTABLE_OWNER_TOKEN_BYTES: usize = 170;
 
-// This is an arithmetic candidate derived and audited by policy.py. It is not
-// a promoted Realm policy. In particular, the resolution row does not pass the
-// requested 25% CU-headroom gate, per-order storage remains unrepresented, and
-// no production neutral sink has been selected.
-const CANDIDATE_MARKET_WORK_LAMPORTS: u64 = 8_090_000;
-const CANDIDATE_MARKET_STORAGE_LAMPORTS: u64 = 78_529_680;
-const CANDIDATE_RESOLUTION_LAMPORTS: u64 = 1_510_000;
-const CANDIDATE_PER_ORDER_CLEAR_LAMPORTS: u64 = 755_000;
-const CANDIDATE_PER_ORDER_SETTLE_LAMPORTS: u64 = 605_000;
-
 fn row(name: &str, bytes: usize, rent: &Rent) {
     println!("{name}\t{bytes}\t{}", rent.minimum_balance(bytes).max(1));
 }
 
 fn main() {
     let rent = Rent::default();
-    println!("schema\tdragons-clutch/liveness-account-inventory/v1");
+    println!("schema\tdragons-clutch/liveness-account-inventory/v2");
     println!("lamports_per_byte\t{DEFAULT_LAMPORTS_PER_BYTE}");
     println!("account_storage_overhead\t{ACCOUNT_STORAGE_OVERHEAD}");
 
@@ -64,17 +63,25 @@ fn main() {
         ARTIFACT_STAGE_HEADER_BYTES + MAX_ARTIFACT_BYTES,
         &rent,
     );
+    row("artifact.batch_policy.final", BATCH_POLICY_BYTES, &rent);
+    row(
+        "artifact.batch_policy.stage",
+        ARTIFACT_STAGE_HEADER_BYTES + BATCH_POLICY_BYTES,
+        &rent,
+    );
 
     row("realm", account_len::REALM, &rent);
     row("profile", account_len::PROFILE, &rent);
     row("market", account_len::MARKET, &rent);
     row("hoard", account_len::HOARD, &rent);
     row("position", account_len::POSITION, &rent);
+    row("feed", account_len::FEED, &rent);
     row("kernel", KERNEL_ACCOUNT_LEN, &rent);
     row("replay", REPLAY_ACCOUNT_LEN, &rent);
     row("supply_ledger", account_len::SUPPLY_LEDGER, &rent);
     row("resolution.v2", account_len::RESOLUTION, &rent);
     row("resolution.v3", NATIVE_RESOLUTION_LEN, &rent);
+    row("resolution.v4", OCCUPATION_RESOLUTION_LEN, &rent);
     row("token.outcome_mint", TOKEN_MINT_BYTES, &rent);
     row(
         "token.hoard_immutable_owner",
@@ -83,36 +90,19 @@ fn main() {
     );
 
     row("order.page", account_len::ORDER_PAGE, &rent);
-    row("order.reservation", RESERVATION_ACCOUNT_BYTES, &rent);
-    row("candidate", account_len::CANDIDATE, &rent);
-    row("candidate.feed", account_len::CANDIDATE_FEED, &rent);
-    row("settlement.receipt", account_len::SETTLEMENT_RECEIPT, &rent);
+    row("order.reservation.v1", RESERVATION_ACCOUNT_BYTES, &rent);
+    row("legacy.epoch.v2", account_len::EPOCH, &rent);
+    row("legacy.candidate", account_len::CANDIDATE, &rent);
+    row("legacy.candidate_feed", account_len::CANDIDATE_FEED, &rent);
+    row("legacy.clear_work", account_len::CLEAR_WORK, &rent);
+    row("direct.epoch.v3", DIRECT_EPOCH_BYTES, &rent);
+    row("direct.candidate.v2", DIRECT_CANDIDATE_ACCOUNT_BYTES, &rent);
+    row("direct.window.v1", DIRECT_WINDOW_ACCOUNT_BYTES, &rent);
+    row("direct.receipt", account_len::SETTLEMENT_RECEIPT, &rent);
+    row("direct.final_pot", account_len::FINAL_POT, &rent);
 
     row("source.spec", SOURCE_SPEC_BYTES, &rent);
     row("source.archive", SOURCE_ARCHIVE_BYTES, &rent);
-
-    let candidate = LivenessPolicy {
-        market_work_max_lamports: CANDIDATE_MARKET_WORK_LAMPORTS,
-        market_storage_max_lamports: CANDIDATE_MARKET_STORAGE_LAMPORTS,
-        resolution_max_lamports: CANDIDATE_RESOLUTION_LAMPORTS,
-        per_order_clear_max_lamports: CANDIDATE_PER_ORDER_CLEAR_LAMPORTS,
-        per_order_settle_max_lamports: CANDIDATE_PER_ORDER_SETTLE_LAMPORTS,
-        neutral_sink: Id::from_bytes([0xfa; 32]),
-    };
-    let market = candidate.market_quote().expect("candidate must fit u64");
-    let order = candidate.order_quote().expect("candidate must fit u64");
-    println!("candidate.status\tINTERMEDIATE_ARITHMETIC_CANDIDATE_NOT_PROMOTABLE");
-    println!("candidate.market.work_lamports\t{}", market.work_lamports);
-    println!(
-        "candidate.market.storage_lamports\t{}",
-        market.storage_lamports
-    );
-    println!(
-        "candidate.market.resolution_lamports\t{}",
-        market.resolution_lamports
-    );
-    println!("candidate.market.total_lamports\t{}", market.total_lamports);
-    println!("candidate.order.clear_lamports\t{}", order.clear_lamports);
-    println!("candidate.order.settle_lamports\t{}", order.settle_lamports);
-    println!("candidate.order.total_lamports\t{}", order.total_lamports);
+    row("resolution.work.v1", RESOLUTION_WORK_ACCOUNT_BYTES, &rent);
+    row("resolution.reserve.v1", 0, &rent);
 }
