@@ -76,15 +76,27 @@ ready in degg-research.
   regresses in both directions. Product gap found and named: there is NO
   per-order V4 cancellation — an order can only be retired by aborting the
   whole unfrozen epoch. Claim plane: model + host + focused SBF-EXECUTED
-  on a branch. Merge is BLOCKED: the lane claimed its 4 test failures were
-  "pre-existing and not mine — proven, not asserted", and measurement
-  refutes it. Clean main, full logs, both declared gates: default profile
+  on a branch. RESOLVED after refutation: the lane claimed its 4 test
+  failures were "pre-existing and not mine — proven, not asserted", and
+  measurement refuted the proof. Clean main, full logs, both declared gates: default profile
   16 targets / 75 passed / 0 failed (native_resolution 15/15), mock profile
   16 targets / 82 passed / 0 failed (native_full_lifecycle ran and passed).
-  The failures are branch-introduced. Likely method error: branch test
-  sources run against a base-built ELF, a combination that exists nowhere.
-  Sent back to root-cause and fix on the branch, with no relabelling and no
-  weakened expectations.
+  Sent back to root-cause properly. The corrected answer was neither of our
+  hypotheses: all four failures are ONE bug, Custom(0x0050)
+  ReferenceError::Window on native Resolve, and it predates the branch —
+  the merge-base 414d6e4 itself fails. Main had already repaired it at
+  161f530 ("Bind native fixture source version consistently"), a
+  HARNESS-ONLY fixture fix binding an inconsistent source version, which is
+  itself the proof no program refusal was involved. The branch was ~20
+  commits stale and never received it; the failures were unobservable
+  earlier because 1e8b8a3 broke branch compilation under both profiles.
+  Two method errors, both reusable lessons: (1) branch test sources run
+  against a base-built ELF proves nothing about the base; (2) no
+  --no-fail-fast, so "42 passed" was 9 of 16 targets — a fail-fast result
+  is not a suite result. Fixed by cherry-pick 028e7cb; both profiles now
+  green at exactly main's numbers (75 default / 82 mock). Full rebase onto
+  main directed before merge, since staleness that hid four failures is
+  what a rebase eliminates.
   Process note on myself: my first read of this claimed a gate-coverage
   hole, which was an artifact of piping the gate through `tail -40`. The
   house rule about teeing build logs exists for exactly this; a truncated
