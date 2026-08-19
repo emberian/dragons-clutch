@@ -5,9 +5,11 @@ Terms, SourceSpec/archive, native point-v3, and occupation-v4 layouts bind a
 substantial settlement chain. The permissionless SourceSpec/Feed/archive
 construction ABI is live and has real-SBF lifecycle evidence under a deliberately
 non-production mock registry. The shipped default registry is empty, so no
-production source/provider release is admitted. Shape certificates, canonical
-shaped-claim artifacts, liquidity policies, and portfolio entitlement receipts
-are also not current onchain identities.
+production source/provider release is admitted; `Endow` now rechecks that exact
+registry and refuses before collateral custody. Bounded resumable occupation is
+routed, while Direct V2 selection is a measured compute STOP. Shape
+certificates, canonical shaped-claim artifacts, liquidity policies, and
+portfolio entitlement receipts are also not current onchain identities.
 
 > **Supersession notice.** This file originally described one proposed generic
 > `WindowResult -> weight vector` chain. The live smooth paths are now two
@@ -60,7 +62,9 @@ The routed direct-selection source is narrower: one page, two single-Egg
 orders, full fills, and zero fees. It reexecutes its full-width candidate and
 drives Reservations `ACTIVE -> ENTITLED -> CONSUMED`, but does not create a
 coefficient-vector entitlement or authorize an LP policy. Its real-bank/ELF/CU
-evidence is still pending.
+evidence proves Init/Freeze/Submit, while maximum top-three Select consumes
+exactly 1,400,000 CU and rolls back every watched byte and lamport. Direct V3 is
+model-only, so no live settlement or lapse claim follows.
 
 ## Current evidence chains
 
@@ -130,6 +134,11 @@ the archive with the unique next-bucket maturity witness. This full lifecycle
 is proven in a bank only for the non-production mock-source ELF. The default ELF
 registers no provider/parser release and is intentionally inert; source
 availability and transaction inclusion remain external liveness dependencies.
+`Endow` is the protocol-recognized inbound collateral boundary. It now
+reauthenticates canonical Terms/SourceSpec and the same compiled registry before
+allocating an owner plane or calling Token-2022. The default ELF therefore
+refuses with `SourceReleaseUnavailable` (`0x79`); mock-source success is evidence
+about a different non-production ELF, not an exception to that refusal.
 
 For future path predicates, the accumulator must retain enough authenticated
 summary state for the frozen predicate family. A constant-size generic
@@ -155,11 +164,26 @@ from 1,086,756 to 1,108,857 CU, but a retry cannot make the initial resolution
 reachable. Spans `4..=32` remain unmeasured and unadmitted; the nonmonotonic
 measurements do not justify extrapolation.
 
-An isolated resumable occupation model and unexported 1,296-byte layout codec
-have landed. They establish safe-resume semantics and canonical bytes only.
-`ResolutionWork` is not exported, routed, or backed by live handlers, account
-CPIs, CU/rent/account-count measurements, or real-SBF Begin/Fold/Finalize/Abort
-evidence. It therefore earns no current liveness credit.
+The 1,296-byte `ResolutionWork` route now allocates account tag 22 and intents
+32--35. Four real-bank tests execute Begin, Fold widths one through four, late
+Finalize byte-equivalent to monolithic v4, and expired zero-progress Abort.
+Measured maxima are 810,992 / 815,573 / 1,094,832 / 587,197 CU. Terminal paths
+close Work and Reserve, return exact principal/unused budget to the frozen
+payer, pay callers only from prepaid rewards, and transfer unsolicited excess
+to the canonical neutral sink. This is route-level, exact-shape,
+zero-charge-policy evidence: the candidate ELF still needs integrated release
+identity, unmeasured shapes do not inherit admission, and current archives
+still have no authenticated gap record.
+
+These improvements do not establish universal terminal or no-stranding
+semantics. A frozen Direct V2 epoch with no candidate has no Window/lapse route,
+and the top-three Select compute STOP likewise leaves Reservations without a
+terminal release. Except for artifact stages, program accounts have no general
+close instruction; most do not persist a defensible rent payer separately from
+third-party prefunds. Existing outcome mints have no `MintCloseAuthority`.
+Unsolicited Hoard-token donations, externally burned winning claims, and native
+sub-lot fragments can leave value with no frozen terminal recipient. They are
+not fees, keeper capital, insurance, or LP reserve by inference.
 
 ## Coefficient portfolio and liquidity-policy binding
 

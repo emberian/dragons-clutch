@@ -49,10 +49,10 @@ Landed host/model evidence:
   settlement while deliberately refusing live authority;
 - a bounded two-order direct-selection model streams the best three verified
   candidates under a frozen score/window, with full-width candidate/window
-  account-body codecs and now underpins one deliberately narrow source-routed
-  authority; a separate resumable occupation model has safe-resume accumulator
-  semantics and an isolated unexported 1,296-byte layout codec, but is not a
-  routed SBF authority; and
+  account-body codecs and underpins one deliberately narrow Direct V2 source
+  authority; staged deadline/lapse/work-budget Direct V3 remains model-only;
+- a separate resumable occupation model has safe-resume accumulator semantics
+  and a live 1,296-byte Work codec;
 - the proof-constrained liquidity model compiles a maximum-eight-rung schedule,
   maintains `E = B + max_i(q_i+s_i)` without netting, reserves sell-proceeds
   numeric headroom, and models single-owner deposits, partial fills,
@@ -85,22 +85,25 @@ Landed:
   cancellation are live;
 - direct-selection intents `27..=31` route a one-page, two-order, single-Egg,
   full-fill, zero-fee authority chain with full-width candidate reexecution and
-  Reservation `ACTIVE -> ENTITLED -> CONSUMED`; this source route has no
-  real-bank/ELF/CU evidence yet;
+  Reservation `ACTIVE -> ENTITLED -> CONSUMED`; its bank campaign proves
+  Init/Freeze/Submit but maximum top-three Select consumes exactly 1,400,000 CU
+  and rolls back, so no live settlement claim follows;
 - a pure canonical portfolio pair checks Terms, basis, claim, simplex value,
   full funding, exact divisibility, and one-time consumption; and
 - standalone full-width batch-policy identity rejects policy/digest truncation.
 
 Open, in dependency order:
 
-1. general relation candidates, partial fills, portfolio selection, fees,
-   lapse, and full terminal epoch closure beyond the narrow direct route;
-2. complete frozen order-to-Reservation-set commitment;
-3. stable vector receipt codec and program-only entitlement creation;
-4. exact frozen-page provenance and partial portfolio allocation;
-5. live decoded policy preimages and terminal fee-pot/owner/carry authority;
-6. terminal Reservation/receipt closure; and
-7. policy/tranche translation into those existing semantic owners without
+1. replacement or staged repair of Direct V2 Select, permissionless empty/
+   preselection/postselection lapse, and bounded storage/rent closure; Direct V3
+   remains model-only;
+2. general relation candidates, partial fills, portfolio selection, and fees;
+3. complete frozen order-to-Reservation-set commitment;
+4. stable vector receipt codec and program-only entitlement creation;
+5. exact frozen-page provenance and partial portfolio allocation;
+6. live decoded policy preimages and terminal fee-pot/owner/carry authority;
+7. terminal Reservation/receipt closure; and
+8. policy/tranche translation into those existing semantic owners without
    accepting caller-constructed model structs as authority.
 
 Until these close, atomic coefficient settlement and passive liquidity remain
@@ -182,26 +185,47 @@ Landed local SBF evidence includes:
   exercised end-to-end only by a deliberately non-production mock-source ELF;
   the default artifact has an empty provider/parser registry and refuses before
   its first CPI or state write;
+- `Endow` reauthenticates immutable Terms/SourceSpec and the exact compiled
+  source registry before its first allocation or Token-2022 CPI; the default
+  empty registry therefore refuses inbound collateral with `0x79`, while the
+  successful mock lifecycle belongs to a distinct non-production ELF;
 - exact-lot bearer redemption and record-only v2/v3/v4 internal redemption on
   the exact `16+n` account plane, with hostile rollback cases; and
 - occupation-v4 statistics 6/7 with direct sealed-archive folding, exact retry,
-  provenance, and point/gap/substitution/mode refusals.
+  provenance, and point/gap/substitution/mode refusals; and
+- routed ResolutionWork intents `32..=35`, whose four real-bank tests exercise
+  Begin, Fold sizes one through four, late byte-equivalent Finalize, and expired
+  zero-progress Abort. Measured maxima are 810,992 / 815,573 / 1,094,832 /
+  587,197 CU; Work/Reserve close atomically with payer/refund, prepaid reward,
+  and neutral donation-sink separation. The candidate ELF is 1,228,192 bytes
+  with SHA-256
+  `a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1`;
+  its audit reports zero first-party final-LTO diagnostic survivors and direct
+  `r10` no greater than 4,096.
 
 Open:
 
 - review and registration of a production provider/deployment authenticator
   and immutable/finalized parser release in the default artifact;
-- an occupation execution architecture with adequate CU headroom: the measured
-  initial span-1--3/degree-1--3 matrix admits no case under the exact 25%
-  headroom gate, while spans 4--32 remain unmeasured and unadmitted;
-- shared export/registry/router/account-plane integration for prepaid
-  `ResolutionWork`, followed by real-SBF Begin/Fold/Finalize/Abort evidence;
-- a clean build-SBF and real-bank account/CU/rent/rollback campaign for the
-  newly routed narrow direct-selection chain;
+- integrated release identity and repository-wide freeze for ResolutionWork;
+  its route-level evidence is exact-shape, zero-charge-policy evidence and does
+  not extrapolate to unmeasured spans or create an authenticated gap record;
+- Direct V2 selection/lapse replacement: the committed bank proves top-three
+  Select is an exact-1.4M-CU rollback STOP, and an empty frozen epoch has no
+  Window or release path;
 - live atomic portfolio/LP account construction and authority;
 - final-LTO stack, rent, account-lock, transaction-size, and reproducible
   artifact evidence after all source changes; and
 - deployment, upgrade-authority, cluster, and transaction-inclusion evidence.
+
+No universal terminal/no-stranding or rent-recovery claim is live. Except for
+artifact stages, program accounts have no general close route and most layouts
+persist neither an authenticated rent payer nor a prefund-donation split.
+Current outcome mints lack `MintCloseAuthority`; Hoard token donations, external
+claim-burn forfeiture, and fractional bearer fragments have no terminal
+disposition. Any complete state-machine proof must model those residues and
+replay-preserving tombstones rather than assuming zero economic liabilities
+imply zero persistent accounts.
 
 Local SVM execution is runtime evidence, not deployment evidence. Any network
 exercise remains a separate explicit human gate. The record-only redemption

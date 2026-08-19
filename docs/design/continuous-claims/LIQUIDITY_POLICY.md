@@ -286,18 +286,25 @@ Before passive liquidity can be called live, the adapter needs:
 3. atomic sell-Egg and buy-cash Reservation funding without Hoard/reserve
    double-counting;
 4. frozen-page provenance, candidate selection, partial allocation, vector
-   receipt/entitlement creation, and terminal Reservation closure;
+   receipt/entitlement creation, and terminal Reservation closure; Direct V2 is
+   single-Egg-only and its top-three Select is a measured compute STOP, while
+   staged Direct V3 remains model-only;
 5. single terminal fee-pot and carry-escrow custody, exhaustive unique-tranche
    and owner aggregation, atomic direct-credit/application authority, replay
    protection, and a funded terminal-carry rule;
 6. immutable beneficial-owner authentication on deposit, cancellation, and
    withdrawal; V1 accounting shares must remain nontransferable and cannot be
    projected into a multi-holder token;
-7. authenticated native Resolution binding, fractional settlement policy,
-   terminal token burns, and collateral transfer;
+7. authenticated native Resolution binding under a registered production
+   source, fractional settlement policy, terminal token burns, and collateral
+   transfer;
 8. account-size, rent, CU, stack, blank-bank, signed-walk, and hostile runtime
-   evidence; and
-9. named Verus/Rocq refinement if a formal claim is desired.
+   evidence, including authenticated rent principal, third-party donation
+   separation, and replay-safe close/tombstone routes;
+9. explicit terminal disposition for Hoard-token donations, external claim-burn
+   forfeiture, fractional fragments, and current outcome mints that lack
+   `MintCloseAuthority`; and
+10. named Verus/Rocq refinement if a formal claim is desired.
 
 The successor's debug and release campaigns pass 20/20 tests; strict Clippy,
 rustdoc, and an external six-case hostile harness are green. The independent

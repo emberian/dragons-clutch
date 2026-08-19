@@ -33,11 +33,16 @@ The bounded direct-selection model and arrival-invariance evidence landed at
 `471462f804d9018190b7d67a56685f9371b3a153` and
 `14d18325d9dd2f4f72b2580f1dcd5b60abe9753b`, with account codecs at
 `e360a359671bbd66dba037669bd9c705f7fec1ae`. The narrow direct source authority
-landed at `2fdd7cdcc5ea7a0dcfbef9b2c8a0e0c23ed03d65`; its real-bank/ELF/CU campaign
-is still pending. Resumable occupation work is currently an isolated model plus
-unexported layout codec at
+landed at `2fdd7cdcc5ea7a0dcfbef9b2c8a0e0c23ed03d65`; committed real-bank evidence
+`e874db13ceaf552ce37d2fc3878a2895763dd65c` proves its maximum top-three Select
+hits exactly 1,400,000 CU and rolls back. The staged Direct V3 successor remains
+model-only at `ef32495b6b97f6f5c5212e84dedd3cacd217b2a7`.
+Resumable occupation work began as an isolated model plus layout codec at
 `482b395f47fa7af5b26b34719789a407899fcfc1` and
-`a6da4015b0228bae0422d96caa3d26e91da0ec3d`; it is not a live routed authority.
+`a6da4015b0228bae0422d96caa3d26e91da0ec3d`; route tags 22 and 32--35 plus
+real-SBF evidence landed at `0e4bd51c3de62f5ae965907ff3aba036dae9607c`.
+Finally, `cfea8e8c4b9306df937f509fd9fbcd3a94d1039a` makes `Endow` reauthenticate a
+source release registered in the exact ELF before any collateral enters.
 
 > **Supersession notice.** Any earlier sentence in this packet that treated a
 > degree-1 basis, a highest-index residual, or generic smooth TWAP as the chosen
@@ -76,7 +81,7 @@ For one admitted finite basis of `N <= MAX_OUTCOMES` claims:
 | range position | exact native coefficient vector when in span; otherwise a disclosed certified approximation |
 | Gaussian/proximity payout | host-compiled rational coefficient vector plus rational error enclosure; no analytic label is committed onchain |
 | graded point settlement | live native point-v3 vector for degrees `1..=3` |
-| graded path settlement | live quantized-basis occupation-v4 for statistic 6 or 7 |
+| graded path settlement | quantized-basis occupation-v4 for statistic 6 or 7, with a bounded resumable route under exact measured shapes |
 | smooth TWAP | deliberately refused; it is not an alias for point or occupation |
 | early exit | live transfer of materialized Eggs; portfolio placement/reservation is live, while atomic portfolio settlement remains a pure seam |
 | automated pricing | a narrow two-order single-Egg direct candidate authority is routed; no general portfolio or LP pricing authority |
@@ -165,30 +170,42 @@ range, kernel, liquidity, transfer, or early-exit surfaces.
 - **Live SBF semantics:** immutable degree-0--3 basis mode; degree-1--3
   point-v3 and occupation-v4 resolution; exact-lot internal and bearer
   redemption, with internal redemption reading only the canonical v2/v3/v4
-  record; native Egg placement, reservation, cancellation, and transfer. The
-  occupation route executes, but no measured initial span-1--3/degree-1--3
-  combination satisfies the selected 25% CU-headroom admission gate; spans
-  4--32 remain unmeasured and unadmitted. The source also routes a narrow
-  one-page/two-order/single-Egg/full-fill/zero-fee direct selection chain, but
-  that new chain has no real-bank/ELF/CU evidence yet.
+  record; native Egg placement, reservation, cancellation, and transfer.
+  Monolithic occupation admits no measured initial span-1--3/degree-1--3 case
+  at the selected 25% CU-headroom gate. Routed `ResolutionWork` now bank-passes
+  Begin/Fold/Finalize/Abort for its exact measured shapes, with measured maxima
+  810,992 / 815,573 / 1,094,832 / 587,197 CU; those rows do not extrapolate to
+  unmeasured spans. Its candidate ELF is not yet the repository-wide integrated
+  release identity. The narrow Direct V2 Init/Freeze/Submit path executes, but
+  maximum top-three Select reaches exactly 1,400,000 CU and rolls back every
+  watched byte and lamport; no live Direct V2 settlement claim follows.
 - **Pure/host-only semantics:** certified shape compilation and comparison to a
   categorical lowering; canonical coefficient-portfolio identity, funding,
-  valuation, and paired settlement; resumable occupation-work models/codecs;
-  and a passive-liquidity model restricted to
+  valuation, and paired settlement; staged Direct V3 lifecycle/work-budget
+  models; and a passive-liquidity model restricted to
   one immutable owner per tranche, nontransferable accounting shares, and one
   owner-aggregated fixed-grid terminal fee allocation. These are not live
   authority claims; the liquidity verdict is scoped green only for its isolated
   model.
-- **Release STOPs:** a reviewed production provider/parser registry entry, an
-  occupation execution architecture that meets the frozen operating-headroom
-  gate, final clean artifact/supply-chain/liveness attribution, canonical
-  onchain claim
-  artifact/certificate commitment, general/portfolio candidate selection and
-  vector receipt, real-bank evidence for the narrow direct route, routed prepaid
-  ResolutionWork, live LP
-  accounts/authority, and universal source-to-SBF refinement. The source
-  construction ABI is live but the default artifact's empty registry makes it
-  intentionally inert.
+- **Release STOPs:** a reviewed production provider/parser registry entry;
+  integrated artifact/supply-chain identity for the routed ResolutionWork
+  profile and admission limited to measured shapes; canonical onchain claim
+  artifact/certificate commitment; general/portfolio candidate selection and
+  vector receipt; replacement or staged repair of Direct V2 Select plus empty,
+  preselection, and postselection lapse; live LP accounts/authority; and
+  universal source-to-SBF refinement. The default registry remains empty and
+  source construction refuses, but `Endow` now also refuses with
+  `SourceReleaseUnavailable` (`0x79`) before collateral custody. Success under
+  the mock source feature belongs to a distinct non-production ELF.
+
+There is no universal terminal/no-stranding claim. Outside artifact stages,
+program accounts have no general close route or authenticated rent-payer versus
+prefund-donation split; current outcome mints have no `MintCloseAuthority` and
+are permanently unclosable. An empty frozen Direct V2 epoch or a top-three
+Select stop can strand Reservations. Hoard token donations, external claim-burn
+forfeiture, and native fractional fragments have no frozen terminal
+disposition. None may be relabeled as protocol revenue, keeper funding, or LP
+reserve.
 
 ## Documents
 

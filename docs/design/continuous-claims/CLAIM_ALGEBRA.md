@@ -215,8 +215,9 @@ Promotion of named shaped positions still requires:
 2. exact rational-to-integer coefficient scaling and its one rounding boundary;
 3. authoritative portfolio candidate selection and a program-created vector
    entitlement receipt; the routed direct authority is deliberately limited to
-   a two-order, single-Egg, full-fill, zero-fee profile and does not close this
-   coefficient-portfolio boundary;
+   a two-order, single-Egg, full-fill, zero-fee profile, its maximum top-three
+   Select is a measured exact-1.4M-CU rollback STOP, and staged Direct V3 is
+   model-only, so none closes this coefficient-portfolio boundary;
 4. atomic wrapper or position semantics wherever separability is not promised;
 5. a reviewed production provider/parser registry entry and adapter evidence;
    the live construction ABI is currently inert in the default artifact; and
@@ -245,9 +246,18 @@ Promotion of named shaped positions still requires:
   Any later source drift blocks until fixtures, mutants, and pins are
   regenerated.
 - Local SVM campaigns execute native point-v3 and occupation-v4 resolution and
-  exact-lot redemption. Exact measurements admit no initial occupation Resolve
-  at the selected 25% headroom gate for spans `1..=3` and degrees `1..=3`;
-  spans `4..=32` are unmeasured and unadmitted, not extrapolated failures. This
-  is runtime evidence, not formal proof or deployment evidence.
+  exact-lot redemption. Exact measurements admit no monolithic initial
+  occupation Resolve at the selected 25% headroom gate for spans `1..=3` and
+  degrees `1..=3`. Routed `ResolutionWork` now executes bounded
+  Begin/Fold/Finalize/Abort and measures Finalize at 1,094,832 CU for the tested
+  span-three shape, but unmeasured shapes remain unadmitted and the integrated
+  release identity is pending. This is runtime evidence, not formal proof or
+  deployment evidence.
 - Increasing `MAX_OUTCOMES = 16` requires new account, arithmetic, CU, and proof
   gates.
+
+Exact-lot refusal is safe but not universal bearer liveness: an isolated native
+sub-lot can remain permanently nonredeemable without voluntary reaggregation.
+Likewise, externally burned winning claims and unsolicited Hoard-token
+donations can leave collateral with no selected terminal recipient. The current
+protocol has no authority to reinterpret those residues as fees or reserves.
