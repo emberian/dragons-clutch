@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#0d1718">
-    <meta name="description" content="Offline inspection surface for Dragon's Clutch static client">
+    <meta name="theme-color" content="#101312">
+    <meta name="description" content="Offline evidence lens for Dragon's Clutch">
     <!--
       Meta-delivered CSP. A <meta> policy can only carry the directives below;
       frame-ancestors, sandbox, and report-to are ignored when delivered this
@@ -17,88 +17,179 @@
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
+
     <header class="topbar">
-      <div class="brand"><span class="brand-mark" aria-hidden="true">◈</span><span>GLASS</span><small>DRAGON'S CLUTCH</small></div>
-      <div class="offline-pill"><span class="status-dot"></span>OFFLINE BUILD</div>
+      <a class="brand" href="#main" aria-label="Glass, Dragon's Clutch offline evidence lens">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>GLASS</span>
+        <small>DRAGON'S CLUTCH</small>
+      </a>
+      <nav class="site-nav" aria-label="Page sections">
+        <a href="#basis">Protocol</a>
+        <a href="#evidence">Evidence</a>
+        <a href="#boundaries">Boundaries</a>
+        <a href="#inspect">Inspect</a>
+      </nav>
+      <span class="offline-pill"><span class="status-mark" aria-hidden="true"></span>OFFLINE BUILD</span>
     </header>
 
     <main id="main" class="shell">
       <section class="hero" aria-labelledby="page-title">
-        <div class="eyebrow">A replaceable lens · v0.1.0</div>
-        <h1 id="page-title">Inspect. Compose.<br><em>Stay in control.</em></h1>
-        <p class="hero-copy">A static, unsigned workbench for Dragon's Clutch. Everything on this page is local and inspectable. Nothing connects to a chain, wallet, or operator service.</p>
+        <p class="eyebrow">Inspect-only protocol lens</p>
+        <h1 id="page-title">One basis.<br><em>Exact state claims.</em></h1>
+        <p class="hero-copy">Degree zero selects one ordered category. Degrees one through three resolve through an overlapping native B-spline basis—not a categorical approximation.</p>
+        <p class="boundary-line">This file reads no RPC, wallet, index, or chain state. It can inspect local bytes and describe their stated evidence boundary.</p>
         <div class="hero-actions" aria-label="Client capability status">
-          <span class="tag tag-green">No RPC at startup</span>
-          <span class="tag">No wallet auto-connect</span>
-          <span class="tag">No signing or submission</span>
+          <span class="tag tag-neutral">No RPC at startup</span>
+          <span class="tag tag-neutral">No wallet auto-connect</span>
+          <span class="tag tag-neutral">No signing or submission</span>
+        </div>
+        <div class="hero-links">
+          <a href="#basis">Understand the basis <span aria-hidden="true">↓</span></a>
+          <a href="#inspect">Inspect local fixture <span aria-hidden="true">↓</span></a>
         </div>
       </section>
 
-      <section class="warning-card" aria-labelledby="warning-title">
-        <div class="warning-icon" aria-hidden="true">!</div>
-        <div><h2 id="warning-title">Untrusted static projection</h2><p>This client is not an authority. It can help you inspect a proposed intent, but it cannot prove account state, settlement, market availability, or deployment identity. Treat every future RPC response and every wallet prompt as untrusted input.</p></div>
-        <span class="status-label">CHAIN PATHS UNAVAILABLE</span>
-      </section>
-
-      <div class="grid two-col">
-        <section class="panel identity-panel" aria-labelledby="identity-title">
-          <div class="section-heading"><div><div class="eyebrow">01 / identity</div><h2 id="identity-title">Release surface</h2></div><span class="verified-badge">UNPUBLISHED</span></div>
-          <dl class="identity-list">
-            <div><dt>Application</dt><dd>Glass / Dragon's Clutch</dd></div>
-            <div><dt>Release</dt><dd>0.1.0-offline <span class="muted">· prototype</span></dd></div>
-            <div><dt>Bundle SHA-256</dt><dd class="mono">UNPUBLISHED-BUNDLE-DIGEST</dd></div>
-            <div><dt>IPFS CID</dt><dd class="mono muted">not assigned</dd></div>
-            <div><dt>Source commit</dt><dd class="mono">UNBOUND-OFFLINE-SNAPSHOT</dd></div>
-          </dl>
-          <p class="micro-note">A GitHub Pages mirror, if one exists later, is convenience hosting—not the integrity root.</p>
-        </section>
-
-        <section class="panel" aria-labelledby="terms-title">
-          <div class="section-heading"><div><div class="eyebrow">02 / immutable input</div><h2 id="terms-title">Terms digest</h2></div><span class="lock-mark" aria-label="Immutable display">⌁</span></div>
-          <p class="panel-intro">The client displays a canonical terms fixture. The digest binds the exact sorted-key JSON shown below.</p>
-          <div class="digest-box"><span class="digest-algorithm">SHA-256</span><code id="terms-digest">loading…</code><button id="copy-digest" class="icon-button" type="button" title="Copy terms digest" aria-label="Copy terms digest">⧉</button></div>
-          <p id="digest-status" class="digest-status" role="status" aria-live="polite">checking the declared digest against the displayed terms…</p>
-          <div class="terms-grid"><div><span>Template</span><strong id="term-template">—</strong></div><div><span>Outcomes</span><strong id="term-outcomes">—</strong></div><div><span>Rounding</span><strong id="term-rounding" class="mono">—</strong></div><div><span>Redemption</span><strong id="term-redemption" class="mono">—</strong></div></div>
-          <p id="terms-semantics" class="micro-note"></p>
-          <details class="disclosure"><summary>Inspect canonical terms JSON</summary><pre id="terms-json" class="code-block"></pre></details>
-        </section>
-      </div>
-
-      <section class="panel manifest-panel" aria-labelledby="manifest-title">
-        <div class="section-heading"><div><div class="eyebrow">03 / explicit bindings</div><h2 id="manifest-title">Cluster · program · profile</h2></div><span class="muted mono">manifest.json</span></div>
-        <div class="binding-grid">
-          <label class="field"><span>Cluster manifest</span><select id="cluster-select"></select><small id="cluster-note"></small></label>
-          <label class="field"><span>Program manifest</span><select id="program-select"></select><small id="program-note"></small></label>
-          <label class="field"><span>Collateral profile</span><select id="profile-select"></select><small id="profile-note"></small></label>
+      <section class="evidence-rail" aria-labelledby="evidence-rail-title">
+        <div class="rail-heading">
+          <p class="eyebrow">Evidence, not a health meter</p>
+          <h2 id="evidence-rail-title">What the record can—and cannot—say</h2>
         </div>
-        <div class="binding-status"><span class="status-dot"></span><strong id="binding-status-title">No executable chain binding</strong><span id="binding-status-copy">Selections are labels only until a checked release manifest and deployment exist.</span></div>
+        <div id="evidence-rail" class="rail-list"></div>
       </section>
 
-      <section class="panel workbench" aria-labelledby="intent-title">
-        <div class="section-heading"><div><div class="eyebrow">04 / local workbench</div><h2 id="intent-title">Transaction-intent inspector</h2></div><span class="inspect-badge">INSPECT ONLY</span></div>
-        <p class="panel-intro">Create a deterministic, unsigned description of a future public instruction. This stub intentionally has no serializer, signer, RPC client, wallet adapter, or submit path.</p>
-        <div class="intent-layout">
-          <form id="intent-form" class="intent-form">
-            <label class="field"><span>Intent type</span><select id="intent-kind"><option value="inspect-market">Inspect market (read-only)</option><option value="prepare-deposit">Prepare deposit (stub)</option><option value="prepare-order">Prepare order (stub)</option><option value="prepare-redemption">Prepare redemption (stub)</option></select></label>
-            <label class="field"><span>Market / account reference <i>optional</i></span><input id="account-ref" name="account" inputmode="text" placeholder="Paste an address for local inspection" autocomplete="off"><small>No address is resolved or sent anywhere.</small></label>
-            <label class="field"><span>Amount in collateral atoms <i>optional</i></span><input id="amount" name="amount" inputmode="numeric" pattern="[0-9]*" placeholder="0" autocomplete="off"><small>Exact integer atoms only; no decimal conversion.</small></label>
-            <button class="primary-button" id="build-intent" type="submit" aria-describedby="form-error">Build local intent <span aria-hidden="true">→</span></button>
-            <p class="form-error" id="form-error" role="alert" tabindex="-1" hidden></p>
-          </form>
-          <div class="intent-output" aria-live="polite">
-            <div class="output-heading"><span>Canonical intent preview</span><span id="intent-state" class="muted">waiting for input</span></div>
-            <pre id="intent-json" class="code-block output-code">Select an intent to generate a local preview.
-
-No bytes will be signed or submitted.</pre>
-            <div class="output-actions"><button id="copy-intent" class="secondary-button" type="button" disabled>Copy JSON</button><span class="muted">signing: <strong>disabled</strong> · submit: <strong>disabled</strong></span></div>
+      <section id="basis" class="content-section basis-section" aria-labelledby="basis-title">
+        <div class="section-intro">
+          <p class="eyebrow">The claim surface</p>
+          <h2 id="basis-title">A complete set stays coherent across two native forms</h2>
+          <p>A Clutch is a complete conserved basis of state claims. The visual below is semantic, not a market chart, price curve, or live payout.</p>
+        </div>
+        <div class="basis-layout">
+          <figure class="basis-figure" aria-labelledby="basis-figure-caption">
+            <div class="basis-art" aria-hidden="true">
+              <div class="basis-side">
+                <span class="basis-art-label">D0</span>
+                <div class="partition-cells"><i></i><i></i><i></i><i></i><i></i></div>
+                <span class="basis-art-caption">one realized cell</span>
+              </div>
+              <div class="basis-divider"></div>
+              <div class="basis-side">
+                <span class="basis-art-label">D1–3</span>
+                <div class="spline-lines"><i></i><i></i><i></i><i></i></div>
+                <span class="basis-art-caption">overlapping support</span>
+              </div>
+            </div>
+            <figcaption id="basis-figure-caption">Left: a symbolic exhaustive categorical partition. Right: symbolic overlapping native basis functions. The table supplies the accessible semantic equivalent.</figcaption>
+          </figure>
+          <div class="basis-copy">
+            <p class="pull-quote">Smooth native claims remain smooth at resolution. Compatibility lowering is a separately disclosed adapter, never a redefinition.</p>
+            <p>Exact coefficient algebra lives over the selected finite basis. A target outside that span needs an explicit approximation statement; it is not silently sampled into degree-zero outcomes.</p>
           </div>
         </div>
+        <div class="table-wrap">
+          <table class="comparison-table">
+            <caption>Native basis semantics</caption>
+            <thead><tr><th scope="col">Aspect</th><th scope="col">Native degree 0</th><th scope="col">Native degrees 1–3</th><th scope="col">Categorical compatibility lowering</th></tr></thead>
+            <tbody id="basis-table-body"></tbody>
+          </table>
+        </div>
       </section>
 
-      <section class="notes-grid" aria-label="Security and provenance notes">
-        <article class="note-card"><span class="note-number">A</span><h2>Provenance</h2><p>Fixtures are labeled and digest-bound where possible. No deployment, source adapter, ELF, account read, or external index is claimed by this build.</p><a href="terms.json">Open terms.json ↗</a> <a href="SERVING.md">Serving requirements ↗</a></article>
-        <article class="note-card"><span class="note-number">B</span><h2>Security boundary</h2><p>Static files can be forked or replaced. Verify the release manifest and bundle hash independently before treating a future signing surface as authentic.</p><a href="manifest.json">Open manifest.json ↗</a></article>
-        <article class="note-card"><span class="note-number">C</span><h2>Unavailable by design</h2><p>Wallet, RPC, market discovery, account validation, transaction serialization, signing, and submission are visibly unavailable. There is no hidden retry.</p></article>
+      <section id="evidence" class="content-section evidence-section" aria-labelledby="path-title">
+        <div class="section-intro split-intro">
+          <div>
+            <p class="eyebrow">A bounded evidence path</p>
+            <h2 id="path-title">Terms, source lineage, resolution, and exits are different facts</h2>
+          </div>
+          <p>Each node names its strongest current evidence and the boundary it leaves open. The line is not a live workflow or a promise that one node authorizes the next.</p>
+        </div>
+        <ol id="evidence-path" class="path-list"></ol>
+      </section>
+
+      <section id="boundaries" class="content-section boundary-section" aria-labelledby="boundaries-title">
+        <div class="section-intro split-intro">
+          <div>
+            <p class="eyebrow">Refusal is product information</p>
+            <h2 id="boundaries-title">Current boundary ledger</h2>
+          </div>
+          <p>These labels prevent a local fixture, a focused bank run, and a future design from impersonating a public, live protocol surface.</p>
+        </div>
+        <div id="boundary-ledger" class="boundary-ledger"></div>
+      </section>
+
+      <section class="content-section roadmap-section" aria-labelledby="roadmap-title">
+        <div class="section-intro split-intro">
+          <div>
+            <p class="eyebrow">Models and stops</p>
+            <h2 id="roadmap-title">What must remain visibly unfinished</h2>
+          </div>
+          <p>Proposed work is useful for inspection, but it is not a route this client can invoke and it is not accepted protocol state.</p>
+        </div>
+        <div id="roadmap-list" class="roadmap-list"></div>
+      </section>
+
+      <section id="inspect" class="content-section inspect-section" aria-labelledby="inspect-title">
+        <div class="section-intro split-intro">
+          <div>
+            <p class="eyebrow">Local fixture inspector</p>
+            <h2 id="inspect-title">Inspect what is in this file—not what might exist elsewhere</h2>
+          </div>
+          <p id="fixture-inspector-note">Loading fixture information…</p>
+        </div>
+
+        <div class="inspect-grid">
+          <section class="inspect-card digest-card" aria-labelledby="digest-title">
+            <div class="subheading"><h3 id="digest-title">Declared fixture digest</h3><span id="terms-fixture-status" class="evidence-chip local-chip">loading…</span></div>
+            <p>The digest binds the canonical terms object only. It is not an account hash, deployment identity, or market proof.</p>
+            <div class="digest-box"><span class="digest-algorithm">SHA-256</span><code id="terms-digest">loading…</code><button id="copy-digest" class="copy-button" type="button" aria-label="Copy terms digest">Copy</button></div>
+            <p id="digest-status" class="digest-status" role="status" aria-live="polite">Checking the declared digest against bundled terms…</p>
+            <dl class="fixture-facts">
+              <div><dt>Template</dt><dd id="term-template">—</dd></div>
+              <div><dt>Outcomes</dt><dd id="term-outcomes">—</dd></div>
+              <div><dt>Rounding</dt><dd id="term-rounding">—</dd></div>
+              <div><dt>Redemption</dt><dd id="term-redemption">—</dd></div>
+            </dl>
+            <p id="terms-semantics" class="micro-note"></p>
+          </section>
+
+          <section class="inspect-card provenance-card" aria-labelledby="provenance-title">
+            <div class="subheading"><h3 id="provenance-title">Unpublished provenance</h3><span id="release-status" class="evidence-chip stop-chip">loading…</span></div>
+            <dl id="release-identity" class="identity-list"></dl>
+            <p id="snapshot-provenance" class="micro-note"></p>
+          </section>
+        </div>
+
+        <details class="disclosure" id="local-description">
+          <summary>Render a local JSON description</summary>
+          <div class="disclosure-body">
+            <p>This is a deterministic local object for inspection. It has no account metas, serializer, signer, wallet, RPC client, or submit path.</p>
+            <div class="intent-layout">
+              <form id="intent-form" class="intent-form">
+                <label class="field"><span>Description type</span><select id="intent-kind"><option value="inspect-fixture">Inspect fixture</option><option value="describe-reference">Describe an external reference</option><option value="describe-atoms">Describe exact collateral atoms</option></select></label>
+                <label class="field"><span>External reference <i>optional</i></span><input id="account-ref" name="account" inputmode="text" placeholder="Local text only" autocomplete="off"><small>No value is resolved or sent anywhere.</small></label>
+                <label class="field"><span>Collateral atoms <i>optional</i></span><input id="amount" name="amount" inputmode="numeric" pattern="[0-9]*" placeholder="0" autocomplete="off"><small>Exact integer atoms only; no decimal conversion.</small></label>
+                <button class="primary-button" id="build-intent" type="submit" aria-describedby="form-error">Render local description <span aria-hidden="true">→</span></button>
+                <p class="form-error" id="form-error" role="alert" tabindex="-1" hidden></p>
+              </form>
+              <div class="intent-output" aria-live="polite">
+                <div class="output-heading"><span>Unsigned local object</span><span id="intent-state">waiting for input</span></div>
+                <pre id="intent-json" class="code-block output-code">Select a description to render a local object.
+
+No bytes will be signed or submitted.</pre>
+                <div class="output-actions"><button id="copy-intent" class="secondary-button" type="button" disabled>Copy JSON</button><span>signing: disabled · submit: disabled</span></div>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <details class="disclosure">
+          <summary>Inspect raw bundled records</summary>
+          <div class="disclosure-body raw-records">
+            <section aria-labelledby="terms-json-title"><h3 id="terms-json-title">Canonical terms object</h3><pre id="terms-json" class="code-block"></pre></section>
+            <section aria-labelledby="manifest-json-title"><h3 id="manifest-json-title">Manifest record</h3><pre id="manifest-json" class="code-block"></pre></section>
+            <section aria-labelledby="vocabulary-title"><h3 id="vocabulary-title">Local fixture provenance</h3><dl id="evidence-vocabulary" class="vocabulary-list"></dl></section>
+          </div>
+        </details>
       </section>
     </main>
 

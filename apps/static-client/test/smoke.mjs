@@ -154,3 +154,42 @@ test("app_only_addresses_element_ids_present_in_index_html", () => {
     assert.ok(declared.has(id), `app.js addresses #${id}, which index.html does not declare`);
   }
 });
+
+test("display_snapshot_is_digest_bound_and_fails_closed_on_hostile_metadata", () => {
+  // Evaluate only the pure exported snapshot API. Keeping DOMContentLoaded
+  // pending avoids rendering and preserves the same no-dependency test setup
+  // used for embedded-data.js above.
+  const context = vm.createContext({
+    document: { readyState: "loading", addEventListener() {} },
+    window: {}
+  });
+  context.input = JSON.stringify({ manifest, terms, snapshot: manifest.displaySnapshot });
+  vm.runInContext(app, context, { filename: "app.js" });
+  const api = context.window.StaticClientOffline;
+  assert.ok(api, "app.js must expose its pure local snapshot API");
+
+  const accepted = vm.runInContext(`(() => {
+    const input = JSON.parse(globalThis.input);
+    return window.StaticClientOffline.validateDisplaySnapshot(input.snapshot, {
+      manifest: input.manifest,
+      terms: input.terms
+    });
+  })()`, context);
+  assert.equal(accepted.ok, true, "the reviewed display snapshot must validate");
+  assert.equal(accepted.value.termsBinding.digest, terms.digest);
+  assert.equal(accepted.value.snapshotIdentity.releaseSourceCommit, null);
+
+  const rejected = vm.runInContext(`(() => {
+    const input = JSON.parse(globalThis.input);
+    input.snapshot.termsBinding.digest = "sha256:${"0".repeat(64)}";
+    return window.StaticClientOffline.deriveDisplayView(
+      window.StaticClientOffline.validateDisplaySnapshot(input.snapshot, {
+        manifest: input.manifest,
+        terms: input.terms
+      })
+    );
+  })()`, context);
+  assert.equal(rejected.mode, "unavailable");
+  assert.equal(rejected.cards.length, 0);
+  assert.equal(rejected.actionsDisabled, true);
+});
