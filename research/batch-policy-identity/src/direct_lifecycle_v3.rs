@@ -507,6 +507,24 @@ pub struct DirectCandidateLeaseV3 {
     pub account: DirectAccountLedgerV3,
 }
 
+/// Source facts independently authenticated from the frozen page and Epoch.
+///
+/// Candidate-controlled coordinates are intentionally excluded except for the
+/// proposed prices, submission slot, and PDA bump.  Every economic coordinate
+/// below is re-derived from the frozen authority before a persisted Candidate
+/// can be admitted or reverified.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectVerificationFactsV3 {
+    buy_limit: u64,
+    sell_limit: u64,
+    quantity: u64,
+    buy_index: u8,
+    sell_index: u8,
+    outcome: u8,
+    submission_opens_slot: u64,
+    submission_closes_slot: u64,
+}
+
 impl DirectCandidateLeaseV3 {
     /// Canonical inactive slot.
     pub const ZERO: Self = Self {
@@ -2373,8 +2391,13 @@ impl DirectLifecycleV3 {
         self.bind_candidate(&candidate.candidate)?;
         let relation = ValidatedDirectDomainV1::new(&self.relation_domain)
             .map_err(|_| DirectLifecycleErrorV3::MismatchedBinding)?;
-        let (buy, sell, _, _) = self.direct_orders()?;
-        verify_lease(&relation, &self.grid, candidate, buy.limit, sell.limit)?;
+        verify_lease(
+            &relation,
+            &self.grid,
+            candidate,
+            self.verification_facts()?,
+            self.authority.neutral_lamport_sink,
+        )?;
         let first_window_account = if self.phase == DirectLifecyclePhaseV3::FrozenEmpty {
             first_window.account(self.authority.neutral_lamport_sink, 0)?
         } else if first_window != DirectCreationFundingV3::ZERO {
@@ -2512,8 +2535,13 @@ impl DirectLifecycleV3 {
         self.bind_candidate(&retained.candidate)?;
         let domain = ValidatedDirectDomainV1::new(&self.relation_domain)
             .map_err(|_| DirectLifecycleErrorV3::MismatchedBinding)?;
-        let (buy, sell, _, _) = self.direct_orders()?;
-        verify_lease(&domain, &self.grid, retained, buy.limit, sell.limit)?;
+        verify_lease(
+            &domain,
+            &self.grid,
+            retained,
+            self.verification_facts()?,
+            self.authority.neutral_lamport_sink,
+        )?;
         let mut post = self;
         post.observe_live_accounts(observed)?;
         let reward = post.debit_reward(post.rewards.verify_candidate)?;
@@ -2857,6 +2885,20 @@ impl DirectLifecycleV3 {
             return Err(DirectLifecycleErrorV3::MismatchedBinding);
         }
         Ok(())
+    }
+
+    fn verification_facts(&self) -> Result<DirectVerificationFactsV3, DirectLifecycleErrorV3> {
+        let (buy, sell, buy_index, sell_index) = self.direct_orders()?;
+        Ok(DirectVerificationFactsV3 {
+            buy_limit: buy.limit,
+            sell_limit: sell.limit,
+            quantity: buy.quantity,
+            buy_index,
+            sell_index,
+            outcome: buy.outcome,
+            submission_opens_slot: self.schedule.submission_opens_slot,
+            submission_closes_slot: self.schedule.submission_closes_slot,
+        })
     }
 
     fn validate_terminal(&self) -> Result<(), DirectLifecycleErrorV3> {
@@ -3517,31 +3559,35 @@ fn verify_lease(
     domain: &ValidatedDirectDomainV1,
     grid: &DirectGridV3,
     lease: DirectCandidateLeaseV3,
-    buy_limit: u64,
-    sell_limit: u64,
+    facts: DirectVerificationFactsV3,
+    expected_neutral_sink: Identity32V1,
 ) -> Result<(), DirectLifecycleErrorV3> {
     lease.validate_body()?;
-    lease.account.validate(Identity32V1(
-        lease
-            .account
-            .donation
-            .ok_or(DirectLifecycleErrorV3::NonCanonical)?
-            .neutral_sink()
-            .bytes(),
-    ))?;
+    lease.account.validate(expected_neutral_sink)?;
     let candidate = lease.candidate;
+    if candidate.quantity != facts.quantity
+        || candidate.buy_index != facts.buy_index
+        || candidate.sell_index != facts.sell_index
+        || candidate.outcome != facts.outcome
+        || candidate.submitted_slot < facts.submission_opens_slot
+        || candidate.submitted_slot >= facts.submission_closes_slot
+    {
+        return Err(DirectLifecycleErrorV3::MismatchedBinding);
+    }
     let input = DirectTwoOrderInputV1 {
         prices: candidate.prices,
-        buy_limit,
-        sell_limit,
-        quantity: candidate.quantity,
+        buy_limit: facts.buy_limit,
+        sell_limit: facts.sell_limit,
+        quantity: facts.quantity,
         submitted_slot: candidate.submitted_slot,
-        buy_index: candidate.buy_index,
-        sell_index: candidate.sell_index,
-        outcome: candidate.outcome,
+        buy_index: facts.buy_index,
+        sell_index: facts.sell_index,
+        outcome: facts.outcome,
         stored_bump: candidate.stored_bump,
     };
-    domain.reverify_decoded_candidate(&candidate, input)?;
+    if domain.verify(input)? != candidate {
+        return Err(DirectLifecycleErrorV3::MismatchedBinding);
+    }
     grid.tick_of(candidate.prices[0])?;
     grid.tick_of(candidate.prices[1])?;
     if grid.tick_of(candidate.prices[usize::from(candidate.outcome)])? != lease.tick {
@@ -3811,6 +3857,10 @@ mod tests {
 
     fn domain() -> ValidatedDirectDomainV1 {
         ValidatedDirectDomainV1::new(&frozen_plan(schedule()).post.relation_domain).unwrap()
+    }
+
+    fn verification_facts() -> DirectVerificationFactsV3 {
+        frozen_plan(schedule()).post.verification_facts().unwrap()
     }
 
     fn grid() -> DirectGridV3 {
@@ -4626,14 +4676,65 @@ mod tests {
         let mut wrong_tick = valid;
         wrong_tick.tick = 1;
         assert_eq!(
-            verify_lease(&domain(), &grid(), wrong_tick, BUY_LIMIT, SELL_LIMIT),
+            verify_lease(
+                &domain(),
+                &grid(),
+                wrong_tick,
+                verification_facts(),
+                authority().neutral_lamport_sink,
+            ),
             Err(DirectLifecycleErrorV3::MismatchedBinding)
         );
         let mut wrong_score = valid;
         wrong_score.candidate.weighted_direct_volume += 1;
         assert_eq!(
-            verify_lease(&domain(), &grid(), wrong_score, BUY_LIMIT, SELL_LIMIT),
-            Err(DirectLifecycleErrorV3::RelationRefused)
+            verify_lease(
+                &domain(),
+                &grid(),
+                wrong_score,
+                verification_facts(),
+                authority().neutral_lamport_sink,
+            ),
+            Err(DirectLifecycleErrorV3::MismatchedBinding)
+        );
+
+        let mut wrong_facts = verification_facts();
+        wrong_facts.quantity += 1;
+        assert_eq!(
+            verify_lease(
+                &domain(),
+                &grid(),
+                valid,
+                wrong_facts,
+                authority().neutral_lamport_sink,
+            ),
+            Err(DirectLifecycleErrorV3::MismatchedBinding)
+        );
+        let mut wrong_facts = verification_facts();
+        core::mem::swap(&mut wrong_facts.buy_index, &mut wrong_facts.sell_index);
+        assert_eq!(
+            verify_lease(
+                &domain(),
+                &grid(),
+                valid,
+                wrong_facts,
+                authority().neutral_lamport_sink,
+            ),
+            Err(DirectLifecycleErrorV3::MismatchedBinding)
+        );
+        assert_eq!(
+            verify_lease(&domain(), &grid(), valid, verification_facts(), id(82),),
+            Err(DirectLifecycleErrorV3::MismatchedBinding)
+        );
+        assert_eq!(
+            verify_lease(
+                &domain(),
+                &grid(),
+                issued(2_000, schedule().submission_opens_slot - 1, 11),
+                verification_facts(),
+                authority().neutral_lamport_sink,
+            ),
+            Err(DirectLifecycleErrorV3::MismatchedBinding)
         );
         let mut wrong_id = valid.candidate;
         wrong_id.candidate_id = id(44);
