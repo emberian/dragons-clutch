@@ -1,3 +1,69 @@
+# Standing goal (2026-08-19): swarmcycle until project is complete
+
+> Status/claim authority stays with [`CURRENT_TRUTH.md`](CURRENT_TRUTH.md) and
+> [`docs/SWARM_ROADMAP_2026-08-19.md`](docs/SWARM_ROADMAP_2026-08-19.md). This
+> file is the standing-goal execution trail (Fable session, ember authorized).
+
+**Goal:** drive roadmap R1–R5 to closed-or-explicitly-parked with reproducible
+evidence, plus filing-prep artifacts ready for ember's review, ahead of the
+intended CFTC filings. Gate L0 (identity, filing routes, submission,
+deployment, push/publish) stays human. Codex is co-resident and quiescing;
+its dirty paths belong to it until the tree goes quiet.
+
+## Current thrust
+
+R1 close-out. Codex owns the 8-gate repair queue from its b837be7
+contradiction ledger (my 94-gate emission's output); I sweep whatever remains
+after it quiesces, then run the quiet-tree 94/94 re-emission, manifest-only
+commit, and `check --run-gates`. Parallel: V3 blocker verification, R2
+provider selection/design, Draft 10 fork (degg-research).
+
+## Next 3 moves
+
+1. Verify codex's 9fd1ef1 Direct V3 blockers (order-body width 99 vs 107,
+   zero-envelope release trap, 64- vs 96-byte digest conflation) — agent in
+   flight; then decide commit/hold for the jobs-worktree checkpoint.
+2. R2: select the V1 provider (Pyth pull leading on the bucket-uniqueness
+   discriminator) and write the SourceSpec-revision design doc
+   (attested-update admission, crossing-rule registration, post-2026-08-26
+   identity pinning).
+3. After codex quiesces: solana-reference offline lock regen (root cause:
+   solana-layout gained clutch-batch-policy-identity after c05fe84),
+   cost-lab re-pin (MAX_INTENT_BYTES 310, CandidateFeed/ClearWork rows, ABI
+   auditor constants), bringup-walk repair (AlreadyInitialized/
+   MismatchedState state collision — sequencing, not source refusal) →
+   94/94 re-emission.
+
+## Done log (2026-08-19 session)
+
+- Ran the first full 94-gate schema-v2 emission from clean ec77d0b: 86/94
+  match, content id 172ef191…; results consumed into codex's b837be7 ledger
+  (v1 manifest retained under its 94/94 promotion rule). Emission raced
+  codex's commits — quiet-tree convention adopted for the redo.
+- Banked root causes: reference-lock drift = new path deps post-c05fe84;
+  bringup walk-01/04/05 = 0x40 AlreadyInitialized + 0xb MismatchedState
+  (intra-script bank/PDA collision), only committed-walk step 5 is the real
+  0x79 fail-closed boundary.
+- V3 adversarial cross-audit (read-only, jobs worktree): all six claimed
+  closures real at model/codec level, none vacuous; found tautological
+  verify_lease sink check (LOW), unpinned FrozenEmpty admission fields
+  (LOW), Settle omission unlabeled in artifacts (MEDIUM), doc test-count
+  drift 33/17→34/18; solana-layout strict clippy needs codec:12/:16
+  cfg(test)-gated. Codex's three 9fd1ef1 blockers not yet examined by this
+  audit — verification lane re-dispatched.
+- R2 provider primary-source memo landed (scratchpad
+  r2-provider-profiles.md, retrieval-dated): Pyth pull is the only
+  candidate with a documented per-bucket uniqueness rule; Switchboard
+  violates bucket uniqueness; Chainlink Solana is allowlist-gated with
+  unverifiable mainnet identity. Pyth caveats: ephemeral update accounts
+  vs SourceSpec exact-account field; DAO upgrade cutover 2026-08-26.
+- Draft 10 fork lane in degg-research per committed
+  DRAFT10_ENGINEERING_CLAIM_DELTA_PLAN.md — in flight.
+
+---
+
+# Historical execution log (2026-08-18 goal)
+
 # Standing goal (2026-08-18, ember on a walk)
 
 > **Historical execution log.** For current capability claims, STOPs, and the
