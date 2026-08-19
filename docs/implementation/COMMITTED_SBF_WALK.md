@@ -77,14 +77,14 @@ custody account.  The two cash balances remain in the Hoard because no
 The clean-source reproduction used:
 
 - repository source commit
-  `aadc0cd5ad562f2cc144a3a9cddbd2f1c87fd959`;
+  `882204f14b0383f05d851b39a43ebb41d420ad17`;
 - SBF ELF SHA-256
   `98cac8a1e48f629f15d0efbf6295b2c96df5296f6acf6cec28ca76491da4b391`;
 - `solana-cli 4.0.2` (`src:549805f3`, `feat:6ff76655`, Agave client);
 - `cargo-build-sbf 4.0.0`, platform-tools `v1.53`, and SBF Rust
   `1.89.0`; and
 - a fresh loopback ledger under
-  `/tmp/clutch-committed-final-20260818-c`.
+  `/tmp/clutch-committed-final-20260818-e`.
 
 There were 20 signed transactions, 18 unique watched accounts, 94 declared
 post-state reload comparisons, 27 declared unchanged-account comparisons, and
@@ -94,26 +94,26 @@ Every signature reached `confirmed` commitment:
 
 | # | step | local signature |
 |---:|---|---|
-| 1 | create market | `3g85ojqwbkmCQy3yu52mgLUKeeXPw9v35gq61c9TxNPmxFEcxQp19MLr5Wy85E7pUv1McQBj6KQGwXyfMK2psaRL` |
-| 2 | create actor Egg account | `2f9RcYf7RZUakpkGLH7mbuQPcvb3TLvb2NhV71sVeMDMoGFNvfMFCWT6Lq27dpeiQ5goAeWHXs7JuiRPDA8MK5N2` |
-| 3 | create holder Egg account | `4UG6jgKHsxorW2Q6nf74z7Q666NVdXZAAERknWQqrJG625zjfM5iWC2Nun1QrPZ4VbgKcLr9hY3BrsGjhxcNhSZN` |
-| 4 | create holder collateral account | `3nPiyufrmPpK1cgTEmybGFjMZrowecHbShf1zUBsBQ7jDiLL1SqvJg8wXjLnfQieao4ztLeNpTKEuZ13b2JtD48S` |
-| 5 | backed founder Endow | `46MiBAijw7wyU4ad6xk3XcifNmWC8tUPCdoT31sWK7VPqMP8sepjJssvfN3qysJwJdCcTxUvThtTP54GYvxyPrYG` |
-| 6 | create second-owner collateral account | `4kqEWko8vmcsW6qRJ7wBfE8cZJKLmsjrn59wbrnwxaSP3S3x5SRGRUWCBcCk1Xzs1ouuvSYM9LxCUUrmnnjTzFRR` |
-| 7 | fund second owner | `3zx8xmVhJ9B8dBUuBC68RzpW1jgeYBvdopEYxZ4WFbahZVTn3kp1Uo5T7bYGxvZPScPtFnidLqeb2Pb7DhZ5osjA` |
-| 8 | create second owner with Endow | `4a28AWMth4a74QK8kxZ3mTGkcknfYk1b2tyHbarp5sWyGT2z9jPLkFqWrvAeQHsnaFT8wC5Saq2E7uz4oYQKmnRg` |
-| 9 | Split | `3GuAbeBx2EWDrPVSiXshHFiTV7THuYmsPA7AfqFjBsDB1w7KEJakC763au5G2wTEV2smMs43PbUyGqmoSMkVEiEq` |
-| 10 | Materialize | `4JPvawidw7BJti3GQ9WBoSbknex5ZZGM5zBV4FWWwU8Q3SvXXTpmbiMV8sUsczak3nFqxFvRRJu4rG3FM7YVh6Qx` |
-| 11 | Dematerialize | `4c1yRtUD8k4tQ7Kp82wsKQXaucegx8i1J5QE8yZdsnpeQqdZx3aT7ps5daKBbDaVehn1bpjtD2auWjb3xR1y6rLL` |
-| 12 | transfer Egg to bearer | `Jdwkj4N9bsGfubD3nMit2n8jvudFu8ariDgWuJfZMi5CYshpQwa9TDD2MzXSdnb9FWUR83t7vk8VmWWHEzSSt7o` |
-| 13 | Merge | `3ZhTB2YNEJSefDvsYodfbB1oq9t8NJnkfFe63vjP7pWP9JLiHgvFaU4EK971Yiww9rgNjKNfuoVu5395JxFMujfY` |
-| 14 | FeedAdvance | `2wZbKG6pJaZa211XAjsjwPJYALqkpvHUigiUcYHrxRSXppTaoZ4NKWN8uWSrmk7DhRrdWS5FXEFk7MPLtnG5sBBo` |
-| 15 | Resolve | `49cSLkrD42BrGYFSJWWybrACHTrnkpHHWaiXEgwMZcrcqUhXM31wFuaLYCCMVcXejYYNKCXDLq5AcJEohosbmRNY` |
-| 16 | late Merge refusal | `3KjTGh7ZXswvEoopK44zpLSsexi8yNM1YaFezSvKn4fEB4LaUPRJKosr3YGjyyzy5UT5gdgWFnCpuZz92nd21Aa1` |
-| 17 | winning internal redemption | `4NC1LJuDfrNpQwgU2daSN14i5nCbzRGobN45fp61bwPpGCQhiGRG4rTzQxTeLJ6PBMXXk6LpEZE8BL5prthes74W` |
-| 18 | losing internal redemption | `44kEGbfbkppPCfv1rfLKikwJzNuLKa6YidDep84j3k7bvpRKATSwC431RfKbbRYjXdfGSZLMb92pufr6zQ5L3arH` |
-| 19 | external-exit rollback | `5LbVEZpcBiic4m9cvtFYNx2uak1XXThqv8rUBPjDsGrZiC4B8rwgrF2Cf2hHmWyqq98YRYniJq4jQX2hHK3aZtvG` |
-| 20 | external bearer redemption | `zNBMcTkPhyFiYzEVhA6GH8Z8kjABjhumBahKestpt8NesAohE4jz477cJoyd2dDXfwGk6tQhwgnYrchipQJt9Aq` |
+| 1 | create market | `5ow9Yoax8n3UbiWGacFkgofkD2m88AfJHVzDeJEwD29L8K77ynYgMSQx9C3v2Wgno5beBytHoJMtswuEe5kRdZ1B` |
+| 2 | create actor Egg account | `2b95QGTu4rjYWbc5AX727KDLY9QwrLXFHUJQAkWjHfWAe8HorJDYTuJKeTTa9jVEdqgiGwQnDtqcfRGe76uTnHBR` |
+| 3 | create holder Egg account | `528EYfTZT3P56WDWHXvSMzqvxCDVcBVSU3AzLZ6XawQvcAXHvxtWJ4qxKFjCUTNagG74p7W5xyhyWaumwH5ruVZm` |
+| 4 | create holder collateral account | `H43ZpXegGvpUH1EzTL85nWEMwKGKns8wxNymG4QnMWZF7eKQAPDMNtqUhmBdENozXeKiiUD1dJQunXnCkJnGdc8` |
+| 5 | backed founder Endow | `3uMN4DVYNQj55GGqzLLRFAmpAy8E9i4GTdyMAVxEDtG8YJnCFsMqUznCDDGHJ86ajmEPTqWQszSwGKjSgSsY6XvV` |
+| 6 | create second-owner collateral account | `p8RM6iEM3XzQuY2c4Z4Zg7bjmLGnvGuYbUeVorqiK74UrWfqrvHx1DsV5PwNXKXHfkrqbhGTCG2MkhgubAWn4jV` |
+| 7 | fund second owner | `AJckMnHNGqxMTxjsgQFiexUPx2woqcANKYU47uByEib4trFQdQwmktnuTE54g86HHLjM2QR19vHKqyVFwnvEPgf` |
+| 8 | create second owner with Endow | `4w8sLi228Jyb849CLdaDd9sziM8HRNnnKe4hyMCKQ7opcGgzFAJ4eQP8R3dgGLKRekCHxuTGXQFjf7wJyV5d2KaY` |
+| 9 | Split | `3ooadFVwGtQNzP1Khw99eRQPPaXs6Kt2VvcZLsHF8VaFB3n61X3oza29yAvZUTrGubJ5RVun73EcNDvczgNtuL9` |
+| 10 | Materialize | `sqETiCWi8hHTPEaqBxraM5Vu2eejbGjHnAXVz4ey6y4zBrxiuVGZLergTZ6YYDbPu1UQF6JDq5nFA8n9qgp6Pg3` |
+| 11 | Dematerialize | `4V1G7bDXCqYPK4pRgpgc97BwMJC3yEceVw6Zx36FybuuyrUqGPW4TrLU74Jc3reLAbkDqcobgPDbRQ5fHoYsYZ8Y` |
+| 12 | transfer Egg to bearer | `3tyHeGyJehp6qNhqtkFe7aNpya5t96cAh43cpSa2PB1Rq7oQJDfuV41ikYzXbW9q76kc8bbWZJzgaYmL2kRNT4Nw` |
+| 13 | Merge | `47iaJfRv4Jzy849WByP3B2xxWqfFdCNZV3Wxqw1EgebTFX6N5rrZScA5DvZy5HUBTL9QoFW1Qx7n9T5WuEA2grK1` |
+| 14 | FeedAdvance | `msZ6ko7Yza8Nb6CKDdf1u2HJ5NUWaAWPA3z2EUmYX6wY4U8RQ8Er3DcwRxmKuksnRsFMKdJAEtx99tery9DTqcJ` |
+| 15 | Resolve | `4ZRJP5xrNYi99TtrfcRzD5shHHprV8q25t7jAN5hMQ51LK9mDGV5ahBVEcsjRUYffg1xpVyjHnLamQ4p2fQVVpqK` |
+| 16 | late Merge refusal | `4oUf54s9B4nwrNqeqce2vzAXFRXpcQHA7XsXPdJ4SFZPZ1Uoth6dJU99riEuwWvWpKd2hPboHiwPN5HpuusF5FnS` |
+| 17 | winning internal redemption | `66cxYydJHXhgtpPjUPHkqd31D5F23BGYbsVjXjQ7QdWx9MNVB933m7wQF4EVzSoDuwuSiFb5kj3Ydu24EAbYZwRG` |
+| 18 | losing internal redemption | `5RUXMckghSkk7hczUgop1enqo5e9N5xYwCqZmzmixcXZpnf2xzWyZFiUQhfumUEv118jqPUay1e8SmUQdwbcF7vM` |
+| 19 | external-exit rollback | `LKf8R6A9UHPi1Phb5ZqvPRhdHwtogggmYSi3hRBFvSgY2maPCqYTReSbdmNKHPvk4aw8vKB4CrDYWmy8SH6MWbA` |
+| 20 | external bearer redemption | `42P6GS43mbhkoFf16H2dzmTnLKWvUobgh2FYuwB8hy2V3W1p9jvHQ4GDKrJiYi3PhUd8VzoDtM7Yd3LxetHDp7kZ` |
 
 These signatures name only the disposable local ledger; they are not cluster
 transactions or deployment receipts.
