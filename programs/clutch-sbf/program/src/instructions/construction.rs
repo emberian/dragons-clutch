@@ -95,6 +95,24 @@ pub struct MarketStateTargets<'accounts, 'info> {
     pub resolution: &'accounts AccountInfo<'info>,
 }
 
+/// Canonical bumps for one owner's Position and Replay lane.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerStateBumps {
+    /// Position PDA bump.
+    pub position: u8,
+    /// Generation-scoped Replay PDA bump.
+    pub replay: u8,
+}
+
+/// The two absent targets needed to admit a new market participant.
+#[derive(Debug)]
+pub struct OwnerStateTargets<'accounts, 'info> {
+    /// Owner's Position target.
+    pub position: &'accounts AccountInfo<'info>,
+    /// Owner's generation-scoped Replay target.
+    pub replay: &'accounts AccountInfo<'info>,
+}
+
 impl<'accounts, 'info> MarketStateTargets<'accounts, 'info> {
     /// Return the target accounts in canonical creation order.
     pub fn ordered(&self) -> [&'accounts AccountInfo<'info>; MARKET_STATE_TARGET_COUNT] {
@@ -178,6 +196,67 @@ pub fn preflight_absent_market_state(targets: &MarketStateTargets<'_, '_>) -> Ou
         require_absent_target(target)?;
     }
     Ok(())
+}
+
+/// Authenticate and create one absent owner plane.
+///
+/// This is used by the first backed `Endow` for a wallet. It performs both
+/// absence checks before the first CPI, so a mixed existing/absent plane cannot
+/// partially allocate state.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub fn create_owner_state_plane<'info>(
+    program_id: &Pubkey,
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    rent: &RentParameters,
+    targets: &OwnerStateTargets<'_, 'info>,
+    market: &[u8; 32],
+    owner: &[u8; 32],
+    generation: u64,
+    bumps: &OwnerStateBumps,
+) -> Outcome<()> {
+    expect_pda(
+        targets.position.key,
+        seeds::position_pda(program_id, market, owner),
+        Some(bumps.position),
+    )?;
+    expect_pda(
+        targets.replay.key,
+        seeds::replay_pda(program_id, market, owner, generation),
+        Some(bumps.replay),
+    )?;
+    require_absent_target(targets.position)?;
+    require_absent_target(targets.replay)?;
+
+    let position_bump = [bumps.position];
+    create_pda_account(
+        program_id,
+        payer,
+        targets.position,
+        system_program,
+        rent,
+        account_len::POSITION,
+        &[seeds::SEED_POSITION, market, owner, &position_bump],
+    )?;
+
+    let generation_bytes = generation.to_le_bytes();
+    let replay_bump = [bumps.replay];
+    create_pda_account(
+        program_id,
+        payer,
+        targets.replay,
+        system_program,
+        rent,
+        REPLAY_ACCOUNT_LEN,
+        &[
+            seeds::SEED_REPLAY,
+            market,
+            owner,
+            &generation_bytes,
+            &replay_bump,
+        ],
+    )
 }
 
 /// System-CPI-create the complete seven-account founding state plane.

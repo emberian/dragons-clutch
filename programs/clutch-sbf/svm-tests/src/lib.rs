@@ -18,12 +18,11 @@
 //!
 //! ## What is loaded at genesis, and why
 //!
-//! `ProgramTest` cannot create an account at a program-derived address from
-//! outside: `system_instruction::create_account` needs the new account's
-//! signature and only the owning program can sign for a PDA. So the program's
-//! own state accounts *and* the outcome mints are placed at genesis with their
-//! exact bytes, which is the same shape `SBF_BRINGUP.md`'s validator harness
-//! already uses.
+//! Pre-funded scenarios install their historical state at genesis. The empty
+//! market scenario deliberately does not: the canonical Market, Hoard,
+//! founding Position, kernel, Replay, SupplyLedger, Resolution, outcome mints,
+//! and Hoard token account are absent until `CreateMarket` signs the required
+//! System-program CPIs.
 //!
 //! For the outcome mints that is a real claim to defend: these are 82 bytes
 //! this crate wrote, not bytes Token-2022 wrote. They are not taken on trust —
@@ -186,8 +185,8 @@ pub struct Plane {
 /// What state a fixture plane is loaded in.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mode {
-    /// Every account this program would initialize arrives **all-zero**, which
-    /// is exactly the precondition `CreateMarket` demands.
+    /// Every market-specific target is absent from genesis. Existing
+    /// Realm/Profile/Terms/policy/feed evidence remains fixture input.
     Empty,
     /// Pre-funded with [`FUNDED_SETS`] complete sets and active.
     Funded,
@@ -332,15 +331,6 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
         _ => 0,
     };
     let supply_terms = if funded { internal } else { [0; MAX_OUTCOMES] };
-
-    /// One all-zero account of exactly the length its role demands.
-    fn zeroed(address: Address, len: usize) -> GenesisAccount {
-        GenesisAccount {
-            address,
-            owner: PROGRAM_ID,
-            data: vec![0_u8; len],
-        }
-    }
 
     let mut accounts = vec![
         GenesisAccount {
@@ -548,17 +538,6 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
                 }),
             },
         ]);
-    } else {
-        accounts.extend([
-            zeroed(market.address, account_len::MARKET),
-            zeroed(hoard.address, account_len::HOARD),
-            zeroed(position.address, account_len::POSITION),
-            zeroed(kernel.address, KERNEL_ACCOUNT_LEN),
-            zeroed(external.address, EXTERNAL_ACCOUNT_LEN),
-            zeroed(replay.address, REPLAY_ACCOUNT_LEN),
-            zeroed(supply.address, account_len::SUPPLY_LEDGER),
-            zeroed(resolution.address, account_len::RESOLUTION),
-        ]);
     }
 
     Plane {
@@ -614,8 +593,33 @@ where
 }
 
 impl Plane {
-    /// The ten seam accounts, in the program's account-list order.
-    pub fn seam_addresses(&self) -> [Address; 10] {
+    /// Canonical generation-zero Position and Replay addresses for any owner.
+    pub fn owner_plane(&self, owner: Address) -> (Pda, Pda) {
+        let market = self.market_id.bytes();
+        let owner = owner.to_bytes();
+        let generation = GENERATION.to_le_bytes();
+        (
+            derive(&[seeds::SEED_POSITION, &market, &owner]),
+            derive(&[seeds::SEED_REPLAY, &market, &owner, &generation]),
+        )
+    }
+
+    /// The seven program-owned targets `CreateMarket` must create from absent
+    /// System-owned slots, in instruction order.
+    pub fn market_state_addresses(&self) -> [Address; 7] {
+        [
+            self.market.address,
+            self.hoard.address,
+            self.position.address,
+            self.kernel.address,
+            self.replay.address,
+            self.supply.address,
+            self.resolution.address,
+        ]
+    }
+
+    /// The nine seam state accounts, in the program's account-list order.
+    pub fn seam_addresses(&self) -> [Address; 9] {
         [
             self.actor,
             self.realm.address,
@@ -624,7 +628,6 @@ impl Plane {
             self.hoard.address,
             self.position.address,
             self.kernel.address,
-            self.external.address,
             self.replay.address,
             self.supply.address,
         ]
@@ -850,9 +853,9 @@ fn evidence_buffer_bytes(window_id: Hash32) -> Vec<u8> {
 /* ------------------------------------------------------------------------ */
 
 impl Plane {
-    /// The three accounts of the outcome leg, in list order.
-    pub fn outcome_leg(&self, outcome: usize, holder: Address) -> [Address; 3] {
-        [TOKEN_2022, self.outcome_mints[outcome].address, holder]
+    /// The fixed token-program and holder prefix of an outcome leg.
+    pub fn outcome_leg(&self, holder: Address) -> [Address; 2] {
+        [TOKEN_2022, holder]
     }
 
     /// The six accounts of the seam plane's collateral leg, in list order.
@@ -867,15 +870,14 @@ impl Plane {
         ]
     }
 
-    /// The twelve evidence accounts, in `Resolve`/`RedeemInternal` order.
-    pub fn evidence_addresses(&self) -> [Address; 12] {
+    /// The eleven-account evidence prefix, in `Resolve`/`RedeemInternal` order.
+    pub fn evidence_addresses(&self) -> [Address; 11] {
         [
             self.actor,
             self.market.address,
             self.hoard.address,
             self.position.address,
             self.kernel.address,
-            self.external.address,
             self.replay.address,
             self.supply.address,
             self.terms.address,
@@ -909,7 +911,6 @@ impl Plane {
             self.hoard.address,
             self.position.address,
             self.kernel.address,
-            self.external.address,
             self.replay.address,
             self.supply.address,
             self.resolution.address,

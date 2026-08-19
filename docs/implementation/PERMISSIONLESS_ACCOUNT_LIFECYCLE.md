@@ -1,6 +1,6 @@
 # Permissionless account lifecycle
 
-Status: **PROPOSED construction audit, 2026-08-19.** This document is an ABI
+Status: **construction audit and partial implementation, 2026-08-18.** This document is an ABI
 and reachability checkpoint. It does not claim that the listed instructions
 have executed on a blank bank unless the evidence column says so.
 
@@ -36,18 +36,18 @@ planes cannot establish permissionless construction.
 | Profile | `profile_pda(realm, profile)` | `InitProfile`, System CPI | host only | drivable after policy transport exists |
 | Price grid | `grid_pda(realm, grid_digest)` | `InitPriceGrid`, copies a caller-supplied 589-byte evidence account | host only | **STOP: no ordinary-wallet producer for the evidence account** |
 | Terms | `terms_pda(realm, terms_digest)` | `InitTerms`, copies a caller-supplied 1,656-byte evidence account | host only | **STOP: body exceeds a Solana packet and no staged upload exists** |
-| Market | `market_pda(realm, market)` | `CreateMarket` writes a preallocated PDA | real SVM, genesis-assisted | **STOP until the program System-CPI-creates the state target** |
-| Hoard state | `hoard_pda(market)` | same `CreateMarket` preallocated plane | real SVM, genesis-assisted | same stop |
-| founding Position | `position_pda(market, creator)` | same `CreateMarket` preallocated plane | real SVM, genesis-assisted | same stop |
-| kernel aggregate | `kernel_pda(market)` | same `CreateMarket` preallocated plane | real SVM, genesis-assisted | same stop; reference-only state should not silently become a deployment ABI |
-| legacy external shadow | `external_pda(market, owner, generation)` | same `CreateMarket` preallocated plane | real SVM, genesis-assisted | **ABI decision pending actual Token-2022 supply cutover** |
-| replay lane | `replay_pda(market, owner, generation)` | same `CreateMarket` preallocated plane | real SVM, genesis-assisted | same state-creation stop |
-| supply ledger | `supply_pda(market)` | same `CreateMarket` preallocated plane | real SVM, genesis-assisted | same state-creation stop; external term is under redesign |
-| resolution record | `resolution_pda(market)` | same `CreateMarket` preallocated plane | real SVM, genesis-assisted | same state-creation stop |
+| Market | `market_pda(realm, market)` | `CreateMarket`, System CPI from an absent target | real SVM from absent target; owner/rent/codec readback | implemented blank-market constructor |
+| Hoard state | `hoard_pda(market)` | same seven-target constructor | same | implemented |
+| founding Position | `position_pda(market, creator)` | same seven-target constructor | same | implemented |
+| kernel aggregate | `kernel_pda(market)` | same seven-target constructor | same | implemented; explicitly retained as production state |
+| legacy external shadow | `external_pda(market, owner, generation)` | no production constructor | cutover accepted | **removed: actual Token-2022 mints/accounts are external truth** |
+| replay lane | `replay_pda(market, owner, generation)` | same seven-target constructor | real SVM from absent target; owner/rent/codec readback | implemented |
+| supply ledger | `supply_pda(market)` | same seven-target constructor | same | implemented; external term synchronizes to observed mint supplies |
+| resolution record | `resolution_pda(market)` | same seven-target constructor | same | implemented |
 | outcome mints | `outcome_mint_pda(market, index)` | `CreateMarket`, real System and Token-2022 CPIs | real SVM from absent accounts | implemented for the currently admitted mint profile |
 | Hoard token account | `hoard_token_pda(market)` | `CreateMarket`, real System and Token-2022 CPIs | real SVM from absent account | implemented for the currently admitted account profile |
 | Hoard signing authority | `hoard_authority_pda(market)` | address only; no account should be allocated | real SVM authority use | implemented as a signing PDA |
-| later Position/replay generation | seeds above | no intent creates it | none | **STOP: only the market creator can hold an internal Position** |
+| second wallet Position/replay | generation-zero seeds above | first backed `Endow`, System CPI from absent targets | real SVM: unauthorized refusal, late rollback, backed success | implemented; no later generation/reopen ABI yet |
 | feed head | `feed_pda(feed)` | no initializer | none | **STOP: `FeedAdvance` requires injected state** |
 | authenticated source/archive page | source proposal has archive derivation; production wire has none | no initializer or writer | none | **STOP: caller buffers are not source-authenticated state** |
 | Epoch | `epoch_pda(market, index)` | no initializer or freeze transition | none | **STOP: pages cannot be reached from a blank bank** |
@@ -76,16 +76,14 @@ validated as existing program-owned state. The resulting accounts are encoded
 and re-admitted exactly as today. Any state CPI, Token-2022 CPI, encode, or
 post-write validation failure aborts the whole transaction.
 
-This change must follow the external-supply ABI decision. Creating a legacy
-per-owner shadow in the first supposedly deployable market would freeze it as a
-rent-bearing public interface even if actual Token-2022 mint supply becomes the
-only external truth.
+The external-supply decision is now frozen: no per-owner ExternalAccount is
+created. Actual Token-2022 mint supply and holder accounts are authoritative.
 
 ### 2. First deposit may open an actor plane
 
-The narrowest second-owner interface is not necessarily a new `InitPosition`
-tag. `Endow { market, owner, amount }` already binds the owner, authenticates
-their signature, and moves real collateral into the pooled Hoard. It can admit
+The narrowest second-owner interface is not a new `InitPosition` tag.
+`Endow { market, owner, amount }` binds the owner, authenticates their
+signature, and moves real collateral into the pooled Hoard. It admits
 one of two exact prestates:
 
 1. an existing canonical Position/replay generation, which receives the
@@ -94,10 +92,10 @@ one of two exact prestates:
    and initializes before making the same deposit.
 
 That avoids unfunded orphan Positions and makes the first real deposit the
-account-opening transaction. It requires System and Rent roles in the fixed
-account list and a frozen decision on whether any per-owner external state
-survives. It must not silently reopen a closed generation or infer a generation
-from missing bytes.
+account-opening transaction. System and Rent are fixed roles in the 13-account
+plane. No per-owner external state survives. The implementation creates only
+generation zero; it does not silently reopen a closed generation or infer a
+new generation from missing bytes.
 
 ### 3. Artifact transport is protocol state, not a fixture detail
 
@@ -167,6 +165,23 @@ The minimum tests, in order, are:
    deposits, restart, and byte reload, with `genesis_assisted = false`; and
 5. only after Feed/Epoch/settlement ABIs exist, the full promotion gate stated
    above.
+
+Current evidence reaches step 3 for the market-local core:
+
+- `CreateMarket` committed seven absent state PDAs plus two outcome mints and
+  the Hoard token account in one 20-account transaction (888,587 CU), then
+  decoded every state through its owning codec and checked runtime owner and
+  rent exemption;
+- occupying the final outcome-mint address caused a late refusal and left all
+  seven state targets plus earlier token targets absent;
+- a second funded wallet's first `Endow` created exactly its Position and
+  Replay accounts and deposited nine real collateral atoms (248,131 CU); an
+  unauthorized founder could not open that plane, and an overdraw after both
+  System CPIs rolled the accounts back to absence; and
+- re-founding the same market refused with `AlreadyInitialized` (`0x0040`).
+
+These are real-SBF, in-process-bank observations, not cluster or restart
+evidence. Steps 4 and 5 remain STOP.
 
 Until step 4 is green, use **permissionless state creation in progress**, not
 **permissionless lifecycle**. Until step 5 is green, use **blank-bank core

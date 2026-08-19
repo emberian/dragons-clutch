@@ -1,8 +1,8 @@
 //! `Intent::CreateMarket` — validated initialization-write.
 //!
 //! This module brings a market into existence: it authenticates a fixed
-//! twelve-account plane, re-composes the whole of
-//! [`clutch_solana_reference::validate_market_init`] on-chain, writes the eight
+//! eleven-account state prefix, re-composes the whole of
+//! [`clutch_solana_reference::validate_market_init`] on-chain, writes the seven
 //! initial account states, and then re-runs that same validation over the bytes
 //! it just wrote.  A refusal anywhere aborts the instruction, and SVM
 //! transaction semantics — not this program — discard the partial write.
@@ -27,7 +27,7 @@
 //!   frozen [`clutch_solana_layout::RealmAccount`] carries no authority field to
 //!   check one against, so inventing an authority here would be inventing an
 //!   ABI;
-//! - the creator becomes the owner of the founding position triple.  That is
+//! - the creator becomes the owner of the founding Position and Replay pair. That is
 //!   the same owner interpretation [`crate::seeds`] proposes and
 //!   [`super::split`] already enforces: the 32-byte owner identity is the raw
 //!   bytes of the signing wallet address;
@@ -55,13 +55,14 @@
 //!
 //! ## What this instruction creates, and what it still does not
 //!
-//! **It creates the Token-2022 plane and nothing else.**  One outcome mint per
-//! active outcome and the Hoard's token account are brought into existence
-//! here, by `system_instruction::create_account` signed with their own seeds
-//! and then initialized through the token program — deferred checks 2, 4 and 6
-//! of `docs/implementation/SBF_BRINGUP.md`, which this lane writes: the
-//! creation CPI, the rent-exemption computation (from the Rent sysvar, which
-//! is now an account of this plane), and the `invoke_signed` seed plumbing.
+//! It creates both the seven-account program state plane and the Token-2022
+//! plane. The canonical Market, Hoard, founding Position, kernel aggregate,
+//! founding Replay, SupplyLedger, and Resolution addresses must be genuinely
+//! absent System-owned slots: zero lamports, zero data, writable, and
+//! non-executable. All seven are rent-funded by the creator and assigned to
+//! this program with signed System CPIs. One outcome mint per active outcome
+//! and the Hoard's token account are then created and initialized through
+//! Token-2022.
 //!
 //! This is what closes the optional-leg hole of
 //! `docs/implementation/TOKEN2022_PLAN.md` §0.2.  Until a market could be
@@ -70,14 +71,10 @@
 //! one mint per outcome and one Hoard token account, so
 //! [`super::split`]'s legs are mandatory and its `Absent` variant is gone.
 //!
-//! **The twelve program-owned state accounts are still not created here.**
-//! They arrive already created, program-owned, rent-funded, correctly sized,
-//! and — for the eight this instruction writes — **all-zero**.  That mirrors
-//! how the bring-up harness loads its plane at genesis, and the all-zero
-//! precondition is what makes the missing half detectable rather than assumed.
-//! Creating them too is a larger change than this lane took: it needs a
-//! `create_account` per state account inside one frame, and the account-size
-//! table to go with it.
+//! External claims deliberately have no program-owned per-holder shadow. Their
+//! truth is the actual Token-2022 outcome mints and token accounts. Consequently
+//! this instruction founds seven program accounts, not the former eight-account
+//! plane that included `ExternalAccount`.
 //!
 //! ## Where the collateral cap comes from, and the field still unsourced
 //!
@@ -91,16 +88,11 @@
 //!   the old residue ("a market created today exists and cannot accept
 //!   collateral") is closed.  [`validate_initial_plane`] re-checks that the
 //!   written cap equals the terms' cap, so a founding write cannot invent
-//!   one.  What this instruction still cannot check is the *ceiling*: the
-//!   offline reference's `validate_market_init` now takes the 266
-//!   collateral-policy bytes as an evidence input and refuses a cap above
-//!   `check_market_cap`'s mint ceiling, but no account in this frozen
-//!   twelve-account plane carries those bytes, so the on-chain half of that
-//!   check is an obligation on whoever adds a policy-bytes account to the
-//!   schema.  **That account is now in the plane** ([`IX_POLICY`]), bound to
+//!   one. The offline reference's `validate_market_init` takes the 266-byte
+//!   collateral policy as evidence and refuses a cap above its mint ceiling.
+//!   **That evidence account is in this plane** ([`IX_POLICY`]), bound to
 //!   the Profile by recomputed digest, so `admit_collateral` discharges the
-//!   ceiling check on chain; the paragraph above is left as written because
-//!   the argument for why the account had to exist is the reason it does.
+//!   ceiling check on chain.
 //! - [`MarketAccount::created_slot`] is written **`0`**.  The honest value is
 //!   the `Clock` sysvar slot, and this crate has no clock plane: no sysvar
 //!   dependency, no sysvar account role, and adding either is a shared-file
@@ -110,9 +102,9 @@
 //!
 //! ## Free initial values this lane chose — **PROPOSED**
 //!
-//! - `position.generation` and the external/replay `position_generation` are
-//!   **`0`**: a market's founding triple enters at generation zero, and the
-//!   external and replay PDAs are seeded on it.
+//! - `position.generation` and replay `position_generation` are **`0`**: a
+//!   market's founding owner plane enters at generation zero, and the replay
+//!   PDA is seeded on it.
 //! - `supply.generation` is **`0`**: one accounting era per ledger lifetime,
 //!   per `docs/implementation/MULTI_POSITION_CLOSURE.md` §4.  Nothing writes it
 //!   again, so an era bump is structurally impossible.
@@ -130,21 +122,17 @@
 //!
 //! ## What is checked, and where it comes from
 //!
-//! [`validate_initial_plane`] is a re-composition of
+//! [`validate_initial_plane`] preserves the state-account checks from
 //! `clutch_solana_reference::validate_market_init`, which cannot be called from
-//! a program: the SBF backend reports it as overflowing the 4 KiB call frame.
-//! Every check it performs is one of that function's, in that function's
-//! order.  Two of what used to be this module's "named strengthenings" — the
-//! terms artifact binding the new market, and the kernel payout set equalling
-//! the terms payout set — are now the reference's own creation checks (the
-//! terms artifact became an input of `validate_market_init` when the cap flow
-//! landed), so they are parity rather than strengthenings.  One strengthening
-//! remains, and one reference check has no on-chain counterpart:
+//! a program because its SBF frame exceeds 4 KiB. The production token-truth
+//! cut intentionally removes the reference model's per-owner ExternalAccount:
+//! external truth is instead established by the zero-supply Token-2022 mints
+//! this same instruction creates and admits.
 //!
 //! | divergence | direction | why |
 //! | --- | --- | --- |
 //! | the resolution record must be present, bound, and unresolved | stricter here | the reference's `validate_market_init` has no resolution account; this instruction writes one, so it validates one |
-//! | the collateral policy is recomputed and bound, and the cap checked against its ceiling | reference only | the reference takes the 266 policy bytes as an evidence input; no account in this frozen plane carries them, so this program checks freeze discipline only — fail-closed but weaker, and named in the cap section above |
+//! | no per-owner ExternalAccount | production token-truth cut | actual outcome mint supply and token accounts are authoritative; a second program shadow would be a contradictory ledger |
 //!
 //! ## Refusal codes
 //!
@@ -153,7 +141,7 @@
 //!
 //! | check | emitted | code |
 //! | --- | --- | --- |
-//! | a target account was not all-zero (re-initialization) | [`ClutchError::AlreadyInitialized`] | `0x0040` |
+//! | a target address was not genuinely absent (re-initialization or squatting) | [`ClutchError::AlreadyInitialized`] | `0x0040` |
 //! | the Profile's collateral policy is not frozen | [`ClutchError::CollateralPolicyNotFrozen`] | `0x0041` |
 //! | the kernel payout set is not the terms payout set | [`ClutchError::PayoutSetMismatch`] | `0x0042` |
 //! | the terms artifact does not bind this market, or the written cap is not the terms' cap | [`ClutchError::TermsBindingMismatch`] | `0x0043` |
@@ -165,7 +153,7 @@
 //! Every function holding a whole decoded account is `#[inline(never)]`, for
 //! the reason [`crate::accounts`] gives: the kernel account and the terms
 //! artifact are over a kilobyte each, and the 4 KiB SBF frame does not hold two
-//! of them plus a caller.  Each of the eight target accounts is decoded exactly
+//! of them plus a caller. Each of the seven target accounts is decoded exactly
 //! once during validation, into a small facts structure; the payout set is
 //! never carried into [`process`]'s frame.
 //!
@@ -177,15 +165,12 @@
 //! true; a frame overflow is undefined behaviour the loader will happily
 //! execute, so it is not something to discover from a failing transaction.
 //!
-//! The compute-unit cost is a different question and is **not** answered here.
-//! Zeroing checks scan every target account, and validation decodes eight
-//! accounts plus the kernel twice more and the terms artifact twice more.  No
-//! budget has been measured for this instruction; that is obligation 10 of
-//! `docs/implementation/SOLANA_REFERENCE_ADAPTER.md` and it stays open.
+//! Compute cost is measured by the SVM test that drives this instruction from
+//! absent target addresses and reports the transaction's consumed units.
 
 use crate::accounts::{
-    self, expect_pda, require, require_distinct, require_representation_bound, require_signer,
-    require_two_term_closure, MarketFacts, Outcome, RealmFacts, StateRole, SupplyFacts, TermsFacts,
+    self, expect_pda, require, require_distinct, require_signer, require_two_term_closure,
+    MarketFacts, Outcome, RealmFacts, StateRole, SupplyFacts, TermsFacts,
 };
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
@@ -199,11 +184,15 @@ use clutch_solana_layout::{
     TermsAccount, MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_INDEX_UNRESOLVED, PROFILE_FLAG_POLICY_FROZEN,
 };
 use clutch_solana_reference::{
-    Action, Error as ReferenceError, ExternalAccount, KernelAccount, ReplayAccount, Request,
-    EXTERNAL_ACCOUNT_LEN, KERNEL_ACCOUNT_LEN, REPLAY_ACCOUNT_LEN,
+    Action, Error as ReferenceError, KernelAccount, ReplayAccount, Request,
 };
+#[cfg(test)]
+use clutch_solana_reference::{KERNEL_ACCOUNT_LEN, REPLAY_ACCOUNT_LEN};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
+
+use super::construction::{self, MarketStateBumps, MarketStateIdentity, MarketStateTargets};
+use super::genesis;
 
 /* ------------------------------------------------------------------------ */
 /* Account plane                                                             */
@@ -211,9 +200,10 @@ use solana_pubkey::Pubkey;
 
 /// The state prefix of this instruction's account list, in list order.
 ///
-/// Twelve accounts, all of them this program's own.  The token plane follows
-/// and is **not** optional; the exact total is [`account_count`].
-pub const ACCOUNT_COUNT: usize = 12;
+/// Eleven accounts: creator, three immutable inputs, and seven state targets.
+/// The token plane follows and is **not** optional; the exact total is
+/// [`account_count`].
+pub const ACCOUNT_COUNT: usize = 11;
 
 /// Authenticated creator; pays, signs, and owns the founding position.
 pub const IX_CREATOR: usize = 0;
@@ -231,28 +221,21 @@ pub const IX_HOARD: usize = 5;
 pub const IX_POSITION: usize = 6;
 /// Reference-only kernel-aggregate account to initialize.
 pub const IX_KERNEL: usize = 7;
-/// Reference-only external-shadow account to initialize.
-pub const IX_EXTERNAL: usize = 8;
 /// Reference-only replay-sequence account to initialize.
-pub const IX_REPLAY: usize = 9;
+pub const IX_REPLAY: usize = 8;
 /// Market-wide supply-ledger account to initialize.
-pub const IX_SUPPLY: usize = 10;
+pub const IX_SUPPLY: usize = 9;
 /// Resolution-record account to initialize, unresolved.
-pub const IX_RESOLUTION: usize = 11;
+pub const IX_RESOLUTION: usize = 10;
 
-/// The program-owned state roles of this instruction, in account-list order.
-const STATE_ROLES: [StateRole; 11] = [
+/// Existing program-owned inputs, in account-list order.
+///
+/// The seven targets are absent System-owned slots and are authenticated by
+/// [`construction::create_market_state_plane`], not as existing state.
+const INPUT_STATE_ROLES: [StateRole; 3] = [
     StateRole::read_only(IX_REALM, account_len::REALM),
     StateRole::read_only(IX_PROFILE, account_len::PROFILE),
     StateRole::read_only(IX_TERMS, account_len::TERMS),
-    StateRole::writable(IX_MARKET, account_len::MARKET),
-    StateRole::writable(IX_HOARD, account_len::HOARD),
-    StateRole::writable(IX_POSITION, account_len::POSITION),
-    StateRole::writable(IX_KERNEL, KERNEL_ACCOUNT_LEN),
-    StateRole::writable(IX_EXTERNAL, EXTERNAL_ACCOUNT_LEN),
-    StateRole::writable(IX_REPLAY, REPLAY_ACCOUNT_LEN),
-    StateRole::writable(IX_SUPPLY, account_len::SUPPLY_LEDGER),
-    StateRole::writable(IX_RESOLUTION, account_len::RESOLUTION),
 ];
 
 /* --------------------------------------------------------------------- */
@@ -261,12 +244,12 @@ const STATE_ROLES: [StateRole; 11] = [
 
 /// Accounts this instruction takes before the one-per-outcome mints.
 ///
-/// Twelve state accounts, then the Realm's 266 collateral-policy bytes, the
+/// Eleven state/actor accounts, then the Realm's 266 collateral-policy bytes, the
 /// token program, the collateral mint, the System program, the Rent sysvar,
 /// the Hoard's signing authority, and the Hoard token account.  The outcome
 /// mints follow, one per active outcome, so the exact count is
 /// [`account_count`] and not a constant.
-pub const ACCOUNT_COUNT_BASE: usize = 19;
+pub const ACCOUNT_COUNT_BASE: usize = 18;
 
 /// The Realm's 266-byte collateral policy (read-only).
 ///
@@ -276,24 +259,23 @@ pub const ACCOUNT_COUNT_BASE: usize = 19;
 /// `collateral_policy_digest`, and *also* recomputes the parent Profile
 /// identity from that digest and compares it against the stored Profile ID.
 /// A caller may therefore supply the policy from any account it likes and
-/// cannot supply a different policy, which is why this closes the gap the
-/// module docs above name ("no account in this frozen twelve-account plane
-/// carries those bytes") without appending a fourth seed.
-pub const IX_POLICY: usize = 12;
+/// cannot supply a different policy. This closes the cap-policy binding gap
+/// without appending another seed.
+pub const IX_POLICY: usize = 11;
 /// The pinned Token-2022 program (read-only, executable).
-pub const IX_TOKEN_PROGRAM: usize = 13;
+pub const IX_TOKEN_PROGRAM: usize = 12;
 /// The collateral mint the Realm's policy names (read-only).
-pub const IX_COLLATERAL_MINT: usize = 14;
+pub const IX_COLLATERAL_MINT: usize = 13;
 /// The System program, which creates every account this instruction founds.
-pub const IX_SYSTEM_PROGRAM: usize = 15;
+pub const IX_SYSTEM_PROGRAM: usize = 14;
 /// The Rent sysvar, read for the rent-exempt minimum of each new account.
-pub const IX_RENT: usize = 16;
+pub const IX_RENT: usize = 15;
 /// The Hoard's signing authority; holds no data and is never written.
-pub const IX_HOARD_AUTHORITY: usize = 17;
+pub const IX_HOARD_AUTHORITY: usize = 16;
 /// The Hoard's Token-2022 collateral account, created here.
-pub const IX_HOARD_TOKEN: usize = 18;
+pub const IX_HOARD_TOKEN: usize = 17;
 /// First outcome mint; one per active outcome follows, in index order.
-pub const IX_OUTCOME_MINT_BASE: usize = 19;
+pub const IX_OUTCOME_MINT_BASE: usize = 18;
 
 /// The exact account count for a market with `outcome_count` outcomes.
 ///
@@ -398,8 +380,7 @@ fn validate_creation_roles(accounts: &[AccountInfo]) -> Outcome<()> {
 
 /// Refuse an account this instruction is about to create that already exists.
 ///
-/// The token-plane half of the idempotence gate [`require_zeroed`] is for the
-/// state plane: a market founded twice would otherwise reach
+/// The token-plane half of the idempotence gate: a market founded twice would otherwise reach
 /// `system_instruction::create_account` and be refused one frame down with a
 /// worse diagnostic.  Zero lamports and zero data is what the runtime hands a
 /// program for an address nobody has created.
@@ -501,18 +482,6 @@ fn create_token_plane(
     token::require_hoard_mirror(0, observation.amount)
 }
 
-/// The eight roles this instruction initializes, which must arrive all-zero.
-const TARGET_ROLES: [usize; 8] = [
-    IX_MARKET,
-    IX_HOARD,
-    IX_POSITION,
-    IX_KERNEL,
-    IX_EXTERNAL,
-    IX_REPLAY,
-    IX_SUPPLY,
-    IX_RESOLUTION,
-];
-
 /* ------------------------------------------------------------------------ */
 /* Request, bumps, and plane views                                           */
 /* ------------------------------------------------------------------------ */
@@ -542,28 +511,11 @@ pub struct CreateMarketIntent {
 
 /// The canonical bumps of every account this instruction initializes.
 ///
-/// The reference-only kernel aggregate has no stored bump field, so it is
-/// absent here and its derivation check is address-only; that gap is deferred
-/// check 5 of `docs/implementation/SBF_BRINGUP.md`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PlaneBumps {
-    /// Market PDA bump.
-    pub market: u8,
-    /// Hoard PDA bump.
-    pub hoard: u8,
-    /// Founding position PDA bump.
-    pub position: u8,
-    /// External-shadow PDA bump.
-    pub external: u8,
-    /// Replay-sequence PDA bump.
-    pub replay: u8,
-    /// Supply-ledger PDA bump.
-    pub supply: u8,
-    /// Resolution-record PDA bump.
-    pub resolution: u8,
-}
+/// The reference-only kernel aggregate has no stored bump field, but its bump
+/// is still carried because the System CPI must sign for its canonical PDA.
+pub type PlaneBumps = MarketStateBumps;
 
-/// Read-only view of the eight initialized accounts.
+/// Read-only view of the seven initialized accounts.
 #[derive(Clone, Copy, Debug)]
 pub struct PlaneBytes<'a> {
     /// Market account bytes.
@@ -574,8 +526,6 @@ pub struct PlaneBytes<'a> {
     pub position: &'a [u8],
     /// Reference-only kernel-aggregate bytes.
     pub kernel: &'a [u8],
-    /// Reference-only external-shadow bytes.
-    pub external: &'a [u8],
     /// Reference-only replay-sequence bytes.
     pub replay: &'a [u8],
     /// Supply-ledger bytes.
@@ -584,7 +534,7 @@ pub struct PlaneBytes<'a> {
     pub resolution: &'a [u8],
 }
 
-/// Writable view of the eight initialized accounts.
+/// Writable view of the seven initialized accounts.
 #[derive(Debug)]
 pub struct PlaneWrite<'a> {
     /// Market account bytes.
@@ -595,8 +545,6 @@ pub struct PlaneWrite<'a> {
     pub position: &'a mut [u8],
     /// Reference-only kernel-aggregate bytes.
     pub kernel: &'a mut [u8],
-    /// Reference-only external-shadow bytes.
-    pub external: &'a mut [u8],
     /// Reference-only replay-sequence bytes.
     pub replay: &'a mut [u8],
     /// Supply-ledger bytes.
@@ -685,16 +633,6 @@ struct PositionFacts {
     close_state: u8,
 }
 
-/// External-shadow facts.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ExternalFacts {
-    market: Hash32,
-    owner: Hash32,
-    position_generation: u64,
-    balances: [u64; MAX_OUTCOMES],
-    stored_bump: u8,
-}
-
 /// Replay-sequence facts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReplayFacts {
@@ -744,19 +682,6 @@ fn read_position(data: &[u8]) -> Outcome<PositionFacts> {
         reserved_cash_atoms: value.reserved_cash_atoms,
         stored_bump: value.stored_bump,
         close_state: value.close_state,
-    })
-}
-
-/// Decode a reference-only external-shadow account.
-#[inline(never)]
-fn read_external(data: &[u8]) -> Outcome<ExternalFacts> {
-    let value = ExternalAccount::decode(data)?;
-    Ok(ExternalFacts {
-        market: value.market,
-        owner: value.owner,
-        position_generation: value.position_generation,
-        balances: value.balances,
-        stored_bump: value.stored_bump,
     })
 }
 
@@ -922,34 +847,10 @@ pub fn require_creation_sequence(sequence: u64) -> Outcome<()> {
     require(sequence == 0, ClutchError::Replay)
 }
 
-/// Refuse an account that is not entirely zero.
-///
-/// This is the idempotence gate and it is the whole of it: a market that
-/// already exists has nonzero bytes at its canonical address, so a second
-/// `CreateMarket` at that address refuses here before deriving anything,
-/// reading any identity, or writing any byte.  It is also what makes the
-/// missing account-creation CPI *detectable*: an account that was never created
-/// has no data at all and fails the role length check instead.
-pub fn require_zeroed(data: &[u8]) -> Outcome<()> {
-    let mut index = 0_usize;
-    while index < data.len() {
-        if data[index] != 0 {
-            return Err(Refusal::Adapter(ClutchError::AlreadyInitialized));
-        }
-        index += 1;
-    }
-    Ok(())
-}
-
 /// Refuse a Realm whose Profile has not frozen its collateral policy.
 ///
-/// This is a freeze-discipline check, not a binding check: a well-formed
-/// frozen Profile can still commit to another Realm's collateral policy and
-/// nothing here would notice.  The recompute-and-compare exists now —
-/// `collateral::verify_collateral_binding`, consumed by the offline
-/// reference's `validate_market_init` — but it needs the 266 policy bytes,
-/// which no account in this frozen twelve-account plane carries; see the cap
-/// section of the module docs.
+/// This is the Profile-side freeze discipline. The separately presented policy
+/// evidence is content-authenticated by [`admit_collateral`].
 fn require_frozen_collateral_policy(profile: &ProfileInitFacts) -> Outcome<()> {
     require(
         profile.flags & PROFILE_FLAG_POLICY_FROZEN != 0
@@ -1050,21 +951,6 @@ fn write_kernel(data: &mut [u8], terms_data: &[u8], market: Hash32) -> Outcome<(
     Ok(())
 }
 
-/// Encode the founding external shadow, provably zero (C0).
-#[inline(never)]
-fn write_external(data: &mut [u8], market: Hash32, owner: Hash32, bump: u8) -> Outcome<()> {
-    let account = ExternalAccount {
-        market,
-        owner,
-        position_generation: 0,
-        balances: [0; MAX_OUTCOMES],
-        stored_bump: bump,
-        flags: 0,
-    };
-    account.encode(data)?;
-    Ok(())
-}
-
 /// Encode the founding replay sequence, provably zero (C0).
 #[inline(never)]
 fn write_replay(data: &mut [u8], market: Hash32, owner: Hash32, bump: u8) -> Outcome<()> {
@@ -1128,7 +1014,7 @@ fn write_resolution(
     Ok(())
 }
 
-/// Write all eight initial account states.
+/// Write all seven initial account states.
 ///
 /// Every `encode` runs the frozen codec's own `validate` first, so a malformed
 /// account never reaches an account's data.  Nothing here checks anything
@@ -1153,7 +1039,6 @@ pub fn write_initial_plane(
     write_hoard(plane.hoard, identities, intent.realm, bumps.hoard)?;
     write_position(plane.position, market, identities.owner, bumps.position)?;
     write_kernel(plane.kernel, terms_data, market)?;
-    write_external(plane.external, market, identities.owner, bumps.external)?;
     write_replay(plane.replay, market, identities.owner, bumps.replay)?;
     write_supply(
         plane.supply,
@@ -1271,8 +1156,8 @@ fn validate_market_wide(
         ClutchError::MismatchedState,
     )?;
 
-    /* Emptiness.  This is the market-wide half of C0 and of the reference's
-     * `NonEmptyInitialization`; the founding triple's half follows. */
+    /* Emptiness. This is the market-wide half of C0 and of the reference's
+     * `NonEmptyInitialization`; the founding owner plane's half follows. */
     let mut outcome = 0_usize;
     while outcome < MAX_OUTCOMES {
         require_reference(
@@ -1297,38 +1182,30 @@ fn validate_market_wide(
     Ok(market)
 }
 
-/// The founding-triple half of `validate_market_init`: C0.
+/// The founding owner-plane half of `validate_market_init`: C0.
 ///
-/// The triple must be mutually bound to one market, one owner, and one
-/// generation, and must be provably zero — internal balances, external shadow
-/// balances, position cash and reserved cash, replay sequence, and an open
-/// close-state.  This is the base case the multi-position closure induction
-/// starts from (`MULTI_POSITION_CLOSURE.md` C0), so a market founded around a
-/// triple that already holds anything is refused rather than reconciled.
+/// Position and Replay must be mutually bound to one market, owner, and
+/// generation, and must be provably zero. External claims have no per-owner
+/// program shadow: actual Token-2022 mint supply and holder accounts are the
+/// composability-boundary truth.
 #[inline(never)]
-fn validate_founding_triple(
+fn validate_founding_owner_plane(
     plane: PlaneBytes<'_>,
     market: &MarketFacts,
     bumps: &PlaneBumps,
 ) -> Outcome<()> {
     let position = read_position(plane.position)?;
-    let external = read_external(plane.external)?;
     let replay = read_replay(plane.replay)?;
     let supply: SupplyFacts = accounts::read_supply(plane.supply)?;
 
     require(
-        position.stored_bump == bumps.position
-            && external.stored_bump == bumps.external
-            && replay.stored_bump == bumps.replay,
+        position.stored_bump == bumps.position && replay.stored_bump == bumps.replay,
         ClutchError::WrongBump,
     )?;
     require(
         market.market == position.market
-            && market.market == external.market
             && market.market == replay.market
-            && position.owner == external.owner
             && position.owner == replay.owner
-            && position.generation == external.position_generation
             && position.generation == replay.position_generation,
         ClutchError::MismatchedState,
     )?;
@@ -1344,7 +1221,7 @@ fn validate_founding_triple(
     let mut outcome = 0_usize;
     while outcome < MAX_OUTCOMES {
         require_reference(
-            position.internal[outcome] == 0 && external.balances[outcome] == 0,
+            position.internal[outcome] == 0,
             ReferenceError::NonEmptyInitialization,
         )?;
         outcome += 1;
@@ -1363,18 +1240,17 @@ fn validate_founding_triple(
     let count = usize::from(market.outcome_count);
     let mut padding = count;
     while padding < MAX_OUTCOMES {
-        require(
-            position.internal[padding] == 0 && external.balances[padding] == 0,
-            ClutchError::NonCanonical,
-        )?;
+        require(position.internal[padding] == 0, ClutchError::NonCanonical)?;
         padding += 1;
     }
-    require_representation_bound(
-        &supply,
-        &position.internal,
-        &external.balances,
-        market.outcome_count,
-    )?;
+    let mut represented = 0_usize;
+    while represented < count {
+        require(
+            position.internal[represented] <= supply.internal_supply[represented],
+            ClutchError::AggregateClosureMismatch,
+        )?;
+        represented += 1;
+    }
     Ok(())
 }
 
@@ -1395,7 +1271,7 @@ pub fn validate_initial_plane(
     bumps: &PlaneBumps,
 ) -> Outcome<()> {
     let market = validate_market_wide(realm_data, profile_data, terms_data, plane, intent, bumps)?;
-    validate_founding_triple(plane, &market, bumps)
+    validate_founding_owner_plane(plane, &market, bumps)
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1426,16 +1302,8 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
     require(creator.is_writable, ClutchError::NotWritable)?;
 
     require_distinct(accounts)?;
-    accounts::validate_state_roles(program_id, accounts, &STATE_ROLES)?;
+    accounts::validate_state_roles(program_id, accounts, &INPUT_STATE_ROLES)?;
     require_creation_sequence(request.sequence)?;
-
-    /* Idempotence, before any identity is derived or read: every account this
-     * instruction initializes must arrive all-zero. */
-    let mut target = 0_usize;
-    while target < TARGET_ROLES.len() {
-        require_zeroed(&accounts[TARGET_ROLES[target]].data.borrow())?;
-        target += 1;
-    }
 
     /* Identities.  The market identity is a function of the intent alone, and
      * caller-supplied expected keys are never accepted: every address below is
@@ -1468,32 +1336,22 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         Some(terms_stored_bump),
     )?;
 
-    /* The eight target accounts carry no stored bump yet -- they are zeroed --
-     * so the derived bump is compared against nothing here and is *written*
-     * below, then re-checked against these same derivations by
-     * `validate_initial_plane`. */
+    /* The seven target accounts are absent System-owned slots. Their canonical
+     * bumps are written after the construction module derives, authenticates,
+     * rent-funds, allocates, and assigns every one. */
     let market_derived = seeds::market_pda(program_id, &realm_bytes, &market_bytes);
     let hoard_derived = seeds::hoard_pda(program_id, &market_bytes);
     let position_derived = seeds::position_pda(program_id, &market_bytes, &owner_bytes);
     let kernel_derived = seeds::kernel_pda(program_id, &market_bytes);
-    let external_derived = seeds::external_pda(program_id, &market_bytes, &owner_bytes, 0);
     let replay_derived = seeds::replay_pda(program_id, &market_bytes, &owner_bytes, 0);
     let supply_derived = seeds::supply_pda(program_id, &market_bytes);
     let resolution_derived = seeds::resolution_pda(program_id, &market_bytes);
-    expect_pda(accounts[IX_MARKET].key, market_derived, None)?;
-    expect_pda(accounts[IX_HOARD].key, hoard_derived, None)?;
-    expect_pda(accounts[IX_POSITION].key, position_derived, None)?;
-    expect_pda(accounts[IX_KERNEL].key, kernel_derived, None)?;
-    expect_pda(accounts[IX_EXTERNAL].key, external_derived, None)?;
-    expect_pda(accounts[IX_REPLAY].key, replay_derived, None)?;
-    expect_pda(accounts[IX_SUPPLY].key, supply_derived, None)?;
-    expect_pda(accounts[IX_RESOLUTION].key, resolution_derived, None)?;
 
     let bumps = PlaneBumps {
         market: market_derived.1,
         hoard: hoard_derived.1,
         position: position_derived.1,
-        external: external_derived.1,
+        kernel: kernel_derived.1,
         replay: replay_derived.1,
         supply: supply_derived.1,
         resolution: resolution_derived.1,
@@ -1527,10 +1385,38 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
      * admitting another. */
     let hoard_policy = admit_collateral(accounts, terms_collateral_cap, *hoard_authority.key)?;
 
-    /* Everything below this line writes -- and the first writes are not this
-     * program's own state but the mints and the Hoard token account, created
-     * and initialized by CPI and then re-admitted through the very policies
-     * every later instruction will apply to them. */
+    /* Authenticate and create every program-owned state target before writing
+     * any founding bytes. `create_market_state_plane` checks all seven absent
+     * before its first CPI; a later token/encode refusal rolls all of them back
+     * with the transaction. */
+    let rent = genesis::read_rent(&accounts[IX_RENT])?;
+    let targets = MarketStateTargets {
+        market: &accounts[IX_MARKET],
+        hoard: &accounts[IX_HOARD],
+        position: &accounts[IX_POSITION],
+        kernel: &accounts[IX_KERNEL],
+        replay: &accounts[IX_REPLAY],
+        supply: &accounts[IX_SUPPLY],
+        resolution: &accounts[IX_RESOLUTION],
+    };
+    let state_identity = MarketStateIdentity {
+        realm: realm_bytes,
+        market: market_bytes,
+        owner: owner_bytes,
+        generation: 0,
+    };
+    construction::create_market_state_plane(
+        program_id,
+        creator,
+        &accounts[IX_SYSTEM_PROGRAM],
+        &rent,
+        &targets,
+        &state_identity,
+        &bumps,
+    )?;
+
+    /* The outcome mints and Hoard token account follow and are re-admitted
+     * through the policies every later instruction applies. */
     create_token_plane(
         program_id,
         accounts,
@@ -1555,7 +1441,6 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         let mut hoard_data = borrow(IX_HOARD)?;
         let mut position_data = borrow(IX_POSITION)?;
         let mut kernel_data = borrow(IX_KERNEL)?;
-        let mut external_data = borrow(IX_EXTERNAL)?;
         let mut replay_data = borrow(IX_REPLAY)?;
         let mut supply_data = borrow(IX_SUPPLY)?;
         let mut resolution_data = borrow(IX_RESOLUTION)?;
@@ -1566,7 +1451,6 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 hoard: &mut hoard_data,
                 position: &mut position_data,
                 kernel: &mut kernel_data,
-                external: &mut external_data,
                 replay: &mut replay_data,
                 supply: &mut supply_data,
                 resolution: &mut resolution_data,
@@ -1589,7 +1473,6 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             hoard: &accounts[IX_HOARD].data.borrow(),
             position: &accounts[IX_POSITION].data.borrow(),
             kernel: &accounts[IX_KERNEL].data.borrow(),
-            external: &accounts[IX_EXTERNAL].data.borrow(),
             replay: &accounts[IX_REPLAY].data.borrow(),
             supply: &accounts[IX_SUPPLY].data.borrow(),
             resolution: &accounts[IX_RESOLUTION].data.borrow(),
@@ -1944,7 +1827,7 @@ mod tests {
             market: 3,
             hoard: 4,
             position: 5,
-            external: 6,
+            kernel: 6,
             replay: 7,
             supply: 10,
             resolution: 9,
@@ -2070,7 +1953,6 @@ mod tests {
         hoard: Vec<u8>,
         position: Vec<u8>,
         kernel: Vec<u8>,
-        external: Vec<u8>,
         replay: Vec<u8>,
         supply: Vec<u8>,
         resolution: Vec<u8>,
@@ -2083,7 +1965,6 @@ mod tests {
                 hoard: &self.hoard,
                 position: &self.position,
                 kernel: &self.kernel,
-                external: &self.external,
                 replay: &self.replay,
                 supply: &self.supply,
                 resolution: &self.resolution,
@@ -2133,7 +2014,6 @@ mod tests {
         let mut hoard = vec![0; account_len::HOARD];
         let mut position = vec![0; account_len::POSITION];
         let mut kernel = vec![0; KERNEL_ACCOUNT_LEN];
-        let mut external = vec![0; EXTERNAL_ACCOUNT_LEN];
         let mut replay = vec![0; REPLAY_ACCOUNT_LEN];
         let mut supply = vec![0; account_len::SUPPLY_LEDGER];
         let mut resolution = vec![0; account_len::RESOLUTION];
@@ -2144,7 +2024,6 @@ mod tests {
                 hoard: &mut hoard,
                 position: &mut position,
                 kernel: &mut kernel,
-                external: &mut external,
                 replay: &mut replay,
                 supply: &mut supply,
                 resolution: &mut resolution,
@@ -2165,7 +2044,6 @@ mod tests {
             hoard,
             position,
             kernel,
-            external,
             replay,
             supply,
             resolution,
@@ -2236,14 +2114,6 @@ mod tests {
             payouts: PayoutSet::new(PAYOUT_COUNT, OUTCOME_COUNT, vectors),
             total_supply: [0; MAX_OUTCOMES],
         };
-        let expected_external = ExternalAccount {
-            market,
-            owner: owner(),
-            position_generation: 0,
-            balances: [0; MAX_OUTCOMES],
-            stored_bump: bumps.external,
-            flags: 0,
-        };
         let expected_replay = ReplayAccount {
             market,
             owner: owner(),
@@ -2293,11 +2163,6 @@ mod tests {
             .encode(&mut kernel_bytes)
             .expect("kernel encodes");
         assert_eq!(founded.kernel, kernel_bytes);
-        let mut external_bytes = vec![0; EXTERNAL_ACCOUNT_LEN];
-        expected_external
-            .encode(&mut external_bytes)
-            .expect("external encodes");
-        assert_eq!(founded.external, external_bytes);
         let mut replay_bytes = vec![0; REPLAY_ACCOUNT_LEN];
         expected_replay
             .encode(&mut replay_bytes)
@@ -2335,44 +2200,6 @@ mod tests {
         let kernel = accounts::read_kernel(&founded.kernel).expect("decodes");
         assert_eq!(kernel.phase, 0);
         assert_eq!(kernel.total_supply, [0; MAX_OUTCOMES]);
-    }
-
-    /* -------------------------------------------------------------------- */
-    /* Idempotence                                                           */
-    /* -------------------------------------------------------------------- */
-
-    #[test]
-    fn re_initializing_a_founded_market_refuses() {
-        /* The whole idempotence gate: the account a second `CreateMarket` would
-         * write is exactly the account the first one wrote, and it is no longer
-         * zero. */
-        let founded = founded();
-        assert_eq!(require_zeroed(&vec![0; account_len::MARKET]), Ok(()));
-        for account in [
-            &founded.market,
-            &founded.hoard,
-            &founded.position,
-            &founded.kernel,
-            &founded.external,
-            &founded.replay,
-            &founded.supply,
-            &founded.resolution,
-        ] {
-            assert_eq!(
-                require_zeroed(account),
-                Err(Refusal::Adapter(ClutchError::AlreadyInitialized))
-            );
-        }
-    }
-
-    #[test]
-    fn a_single_nonzero_byte_anywhere_in_a_target_refuses() {
-        let mut data = vec![0; account_len::MARKET];
-        data[account_len::MARKET - 1] = 1;
-        assert_eq!(
-            require_zeroed(&data),
-            Err(Refusal::Adapter(ClutchError::AlreadyInitialized))
-        );
     }
 
     /* -------------------------------------------------------------------- */
@@ -2507,8 +2334,7 @@ mod tests {
             ("supply", 2),
             ("resolution", 3),
             ("position", 4),
-            ("external", 5),
-            ("replay", 6),
+            ("replay", 5),
         ] {
             let mut founded = founded();
             match mutate {
@@ -2546,13 +2372,6 @@ mod tests {
                     PositionAccount,
                     account_len::POSITION,
                     |v: &mut PositionAccount| v.stored_bump ^= 1
-                ),
-                5 => rewrite!(
-                    founded,
-                    external,
-                    ExternalAccount,
-                    EXTERNAL_ACCOUNT_LEN,
-                    |v: &mut ExternalAccount| v.stored_bump ^= 1
                 ),
                 _ => rewrite!(
                     founded,
@@ -2597,18 +2416,11 @@ mod tests {
     }
 
     #[test]
-    fn a_triple_that_is_not_mutually_bound_refuses() {
-        for index in 0..3_usize {
+    fn a_founding_owner_plane_that_is_not_mutually_bound_refuses() {
+        for index in 0..2_usize {
             let mut founded = founded();
             match index {
                 0 => rewrite!(
-                    founded,
-                    external,
-                    ExternalAccount,
-                    EXTERNAL_ACCOUNT_LEN,
-                    |v: &mut ExternalAccount| v.owner = h(0x79)
-                ),
-                1 => rewrite!(
                     founded,
                     replay,
                     ReplayAccount,
@@ -2626,7 +2438,7 @@ mod tests {
             assert_eq!(
                 founded.validate(),
                 Err(ClutchError::MismatchedState.into()),
-                "triple linkage case {index}"
+                "owner-plane linkage case {index}"
             );
         }
     }
@@ -2677,7 +2489,7 @@ mod tests {
     }
 
     #[test]
-    fn c0_refuses_a_founding_triple_that_is_not_provably_zero() {
+    fn c0_refuses_a_founding_owner_plane_that_is_not_provably_zero() {
         let empty = Err(Refusal::Reference(ReferenceError::NonEmptyInitialization));
 
         let mut claims = founded();
@@ -2722,16 +2534,6 @@ mod tests {
             |v: &mut PositionAccount| v.close_state = 1
         );
         assert_eq!(closing.validate(), empty);
-
-        let mut shadow = founded();
-        rewrite!(
-            shadow,
-            external,
-            ExternalAccount,
-            EXTERNAL_ACCOUNT_LEN,
-            |v: &mut ExternalAccount| v.balances[1] = 1
-        );
-        assert_eq!(shadow.validate(), empty);
 
         let mut replayed = founded();
         rewrite!(

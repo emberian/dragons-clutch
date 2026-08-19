@@ -1,15 +1,10 @@
 //! The genesis plane: the instructions that bring accounts into existence.
 //!
-//! Every other family in this program writes over accounts that arrived
-//! already created, program-owned, rent-funded and correctly sized — the
-//! arrangement [`super::market_init`] records as "account creation is out of
-//! scope this wave", and deferred check 2 of
-//! `docs/implementation/SBF_BRINGUP.md` ("the
-//! `system_instruction::create_account` CPI, the rent-exemption computation,
-//! and the `invoke_signed` seed plumbing are unwritten and untested").  This
-//! module is that half.  It creates five of the fifteen protocol accounts
-//! through a real system-program CPI, and it carries one transition that
-//! creates nothing: [`Intent::Endow`], the backed collateral-deposit boundary.
+//! This module owns public System-CPI constructors for foundational accounts
+//! outside the market constructor itself. It also owns [`Intent::Endow`], the
+//! backed collateral-deposit boundary: on a wallet's first deposit it creates
+//! that wallet's canonical Position and Replay accounts before transferring
+//! value and crediting cash.
 //!
 //! | intent | creates | accounts |
 //! | --- | --- | ---: |
@@ -18,7 +13,7 @@
 //! | [`Intent::InitPriceGrid`] | [`clutch_solana_layout::PriceGridAccount`] | 6 |
 //! | [`Intent::InitTerms`] | [`clutch_solana_layout::TermsAccount`] | 7 |
 //! | [`Intent::InitOrderPage`] | one order page | 6 |
-//! | [`Intent::Endow`] | nothing — deposits collateral and credits cash | 11 |
+//! | [`Intent::Endow`] | absent generation-zero Position + Replay, then deposits collateral and credits cash | 13 |
 //!
 //! ## `Endow` is the inbound value boundary
 //!
@@ -55,9 +50,9 @@
 //! *different* account at that address.  Naming that residue is not fixing it;
 //! it is the same first-come-address residue market creation has.
 //!
-//! `Endow` is not permissionless: the signer must be the position's own owner.
-//! The signer may therefore deposit only into **their own** position, from a
-//! Token-2022 account whose owner authority is that signer.
+//! `Endow` is permissionless self-service, not a third-party credit interface:
+//! the signer must equal the requested Position owner and may deposit only
+//! from a Token-2022 account whose owner authority is that signer.
 //!
 //! ## Where the bytes come from: the evidence-buffer pattern
 //!
@@ -171,6 +166,8 @@ use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
+
+use super::construction::{self, OwnerStateBumps, OwnerStateTargets};
 
 /// Borrow one account's data mutably, or refuse.
 ///
@@ -442,7 +439,7 @@ pub const IX_PAGE_RENT: usize = 5;
 /// The five program-owned state roles are followed by the Realm's
 /// content-authenticated collateral policy and the five Token-2022 roles
 /// needed for an exact actor-to-Hoard deposit.
-pub const ENDOW_ACCOUNT_COUNT: usize = 11;
+pub const ENDOW_ACCOUNT_COUNT: usize = 13;
 /// The market the deposit belongs to (read-only).
 ///
 /// It sits where the creation target sits in the other five lists, because
@@ -467,6 +464,10 @@ pub const IX_ENDOW_COLLATERAL_MINT: usize = 8;
 pub const IX_ENDOW_ACTOR_TOKEN: usize = 9;
 /// The market's derived Hoard token account (writable destination).
 pub const IX_ENDOW_HOARD_TOKEN: usize = 10;
+/// System program used only when this is the owner's first deposit.
+pub const IX_ENDOW_SYSTEM: usize = 11;
+/// Rent sysvar used only when this is the owner's first deposit.
+pub const IX_ENDOW_RENT: usize = 12;
 
 /// Program-owned roles of `InitProfile`, in account-index order.
 const PROFILE_STATE_ROLES: [StateRole; 1] =
@@ -483,13 +484,16 @@ const PAGE_STATE_ROLES: [StateRole; 2] = [
     StateRole::read_only(IX_PAGE_MARKET, account_len::MARKET),
     StateRole::read_only(IX_PAGE_EPOCH, account_len::EPOCH),
 ];
-/// Program-owned roles of `Endow`.
-const ENDOW_STATE_ROLES: [StateRole; 5] = [
+/// Existing market-global roles of `Endow`.
+const ENDOW_COMMON_STATE_ROLES: [StateRole; 3] = [
     StateRole::read_only(IX_ENDOW_MARKET, account_len::MARKET),
     StateRole::read_only(IX_ENDOW_HOARD, account_len::HOARD),
+    StateRole::read_only(IX_ENDOW_PROFILE, account_len::PROFILE),
+];
+/// Existing owner-plane roles, when this is not the first deposit.
+const ENDOW_OWNER_STATE_ROLES: [StateRole; 2] = [
     StateRole::writable(IX_ENDOW_POSITION, account_len::POSITION),
     StateRole::writable(IX_ENDOW_REPLAY, REPLAY_ACCOUNT_LEN),
-    StateRole::read_only(IX_ENDOW_PROFILE, account_len::PROFILE),
 ];
 
 /// Refuse a read-only, non-executable evidence buffer of the wrong width.
@@ -1079,26 +1083,95 @@ pub struct EndowRequest {
     pub amount: u64,
 }
 
+/// Create a missing generation-zero Position/Replay pair, or authenticate an
+/// existing pair. Mixed prestate is always a refusal.
+#[inline(never)]
+fn ensure_endow_owner_plane(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    rent: &RentParameters,
+    market: Hash32,
+    owner: Hash32,
+) -> Outcome<()> {
+    let position = &accounts[IX_ENDOW_POSITION];
+    let replay = &accounts[IX_ENDOW_REPLAY];
+    let position_exists = position.owner == program_id;
+    let replay_exists = replay.owner == program_id;
+    require(
+        position_exists == replay_exists,
+        ClutchError::AlreadyInitialized,
+    )?;
+
+    if position_exists {
+        return accounts::validate_state_roles(program_id, accounts, &ENDOW_OWNER_STATE_ROLES);
+    }
+
+    let market_bytes = market.bytes();
+    let owner_bytes = owner.bytes();
+    let position_derived = seeds::position_pda(program_id, &market_bytes, &owner_bytes);
+    let replay_derived = seeds::replay_pda(program_id, &market_bytes, &owner_bytes, 0);
+    let bumps = OwnerStateBumps {
+        position: position_derived.1,
+        replay: replay_derived.1,
+    };
+    construction::create_owner_state_plane(
+        program_id,
+        &accounts[IX_PAYER],
+        &accounts[IX_ENDOW_SYSTEM],
+        rent,
+        &OwnerStateTargets { position, replay },
+        &market_bytes,
+        &owner_bytes,
+        0,
+        &bumps,
+    )?;
+
+    {
+        let mut data = borrow_mut!(position)?;
+        PositionAccount {
+            market,
+            owner,
+            generation: 0,
+            internal: [0; clutch_solana_layout::MAX_OUTCOMES],
+            cash_atoms: 0,
+            reserved_cash_atoms: 0,
+            stored_bump: bumps.position,
+            close_state: 0,
+        }
+        .encode(&mut data)?;
+    }
+    {
+        let mut data = borrow_mut!(replay)?;
+        ReplayAccount {
+            market,
+            owner,
+            position_generation: 0,
+            sequence: 0,
+            stored_bump: bumps.replay,
+            flags: 0,
+        }
+        .encode(&mut data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    }
+    Ok(())
+}
+
 fn endow(program_id: &Pubkey, accounts: &[AccountInfo], request: &EndowRequest) -> Outcome<()> {
     require_count(accounts, ENDOW_ACCOUNT_COUNT)?;
     require_signer(&accounts[IX_PAYER])?;
+    require(accounts[IX_PAYER].is_writable, ClutchError::NotWritable)?;
     require_distinct(accounts)?;
-    accounts::validate_state_roles(program_id, accounts, &ENDOW_STATE_ROLES)?;
+    accounts::validate_state_roles(program_id, accounts, &ENDOW_COMMON_STATE_ROLES)?;
+    require_system_program(&accounts[IX_ENDOW_SYSTEM])?;
+    let rent = read_rent(&accounts[IX_ENDOW_RENT])?;
+
+    let actor = Hash32::from_bytes(accounts[IX_PAYER].key.to_bytes());
+    require(actor == request.owner, ClutchError::UnauthorizedActor)?;
 
     let market = accounts::read_market(&accounts[IX_ENDOW_MARKET].data.borrow())?;
     let hoard = HoardAccount::decode(&accounts[IX_ENDOW_HOARD].data.borrow())?;
     let profile = ProfileAccount::decode(&accounts[IX_ENDOW_PROFILE].data.borrow())?;
-    let (position_owner, position_generation, position_bump) = {
-        let data = accounts[IX_ENDOW_POSITION].data.borrow();
-        let position = PositionAccount::decode(&data)?;
-        (position.owner, position.generation, position.stored_bump)
-    };
-    let replay_bump = {
-        let data = accounts[IX_ENDOW_REPLAY].data.borrow();
-        ReplayAccount::decode(&data)?.stored_bump
-    };
     let market_bytes = market.market.bytes();
-    let owner_bytes = position_owner.bytes();
     expect_pda(
         accounts[IX_ENDOW_MARKET].key,
         seeds::market_pda(program_id, &market.realm.bytes(), &market_bytes),
@@ -1112,21 +1185,10 @@ fn endow(program_id: &Pubkey, accounts: &[AccountInfo], request: &EndowRequest) 
     )?;
     require(market.hoard_bump == hoard_derived.1, ClutchError::WrongBump)?;
     expect_pda(
-        accounts[IX_ENDOW_POSITION].key,
-        seeds::position_pda(program_id, &market_bytes, &owner_bytes),
-        Some(position_bump),
-    )?;
-    expect_pda(
-        accounts[IX_ENDOW_REPLAY].key,
-        seeds::replay_pda(program_id, &market_bytes, &owner_bytes, position_generation),
-        Some(replay_bump),
-    )?;
-    expect_pda(
         accounts[IX_ENDOW_PROFILE].key,
         seeds::profile_pda(program_id, &market.realm.bytes(), &market.profile.bytes()),
         None,
     )?;
-
     require(
         hoard.market == market.market
             && hoard.realm == market.realm
@@ -1185,7 +1247,32 @@ fn endow(program_id: &Pubkey, accounts: &[AccountInfo], request: &EndowRequest) 
         .checked_add(request.amount)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
 
-    let actor = Hash32::from_bytes(accounts[IX_PAYER].key.to_bytes());
+    /* Every existing market, collateral, and token role is authenticated
+     * before the first owner-plane CPI. A later transfer or postcondition
+     * refusal still exercises transaction rollback, but hostile metadata does
+     * not spend compute allocating accounts it could never use. */
+    ensure_endow_owner_plane(program_id, accounts, &rent, market.market, actor)?;
+    let (position_owner, position_generation, position_bump) = {
+        let data = accounts[IX_ENDOW_POSITION].data.borrow();
+        let position = PositionAccount::decode(&data)?;
+        (position.owner, position.generation, position.stored_bump)
+    };
+    let replay_bump = {
+        let data = accounts[IX_ENDOW_REPLAY].data.borrow();
+        ReplayAccount::decode(&data)?.stored_bump
+    };
+    let owner_bytes = position_owner.bytes();
+    expect_pda(
+        accounts[IX_ENDOW_POSITION].key,
+        seeds::position_pda(program_id, &market_bytes, &owner_bytes),
+        Some(position_bump),
+    )?;
+    expect_pda(
+        accounts[IX_ENDOW_REPLAY].key,
+        seeds::replay_pda(program_id, &market_bytes, &owner_bytes, position_generation),
+        Some(replay_bump),
+    )?;
+
     let (position_post, replay_post) = validated_endow(
         &accounts[IX_ENDOW_MARKET].data.borrow(),
         &accounts[IX_ENDOW_POSITION].data.borrow(),

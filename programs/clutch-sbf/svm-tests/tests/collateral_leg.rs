@@ -30,11 +30,16 @@ use {
     clutch_sbf::instructions::market_init,
     clutch_sbf::instructions::observe_resolve,
     clutch_sbf::instructions::split as seam,
-    clutch_solana_layout::{Hash32, HoardAccount, Intent, PositionAccount, SupplyLedgerAccount},
+    clutch_solana_layout::{
+        Hash32, HoardAccount, Intent, MarketAccount, PositionAccount, ResolutionAccount,
+        SupplyLedgerAccount,
+    },
+    clutch_solana_reference::{KernelAccount, ReplayAccount},
     clutch_svm_fixture::{
         build_plane, compute_unit_limit_data, create_market_request, immutable_owner_account_bytes,
         layout_request, Mode, Plane, CASH_ATOMS, COMPUTE_BUDGET, FOUNDING_MARKET_NONCE,
-        FUNDED_SETS, MARKET_NONCE, OUTCOME_COUNT, POLICY_ACCOUNT, PROGRAM_ID, TOKEN_2022,
+        FUNDED_SETS, MARKET_NONCE, OUTCOME_COUNT, POLICY_ACCOUNT, PROGRAM_ID, RENT_SYSVAR,
+        SYSTEM_PROGRAM, TOKEN_2022,
     },
     solana_account::Account,
     solana_address::Address,
@@ -85,6 +90,14 @@ fn collateral_mint_keypair() -> Keypair {
     ])
 }
 
+fn second_actor_keypair() -> Keypair {
+    Keypair::new_from_array([
+        0x8f, 0x14, 0x42, 0x73, 0xb9, 0x20, 0x66, 0x35, 0x11, 0xed, 0x07, 0x5a, 0xcc, 0x98, 0x41,
+        0x2e, 0x75, 0xa0, 0x39, 0x81, 0xd2, 0x54, 0x0b, 0xf6, 0x63, 0x18, 0xae, 0x47, 0x90, 0x2c,
+        0xd5, 0x3b,
+    ])
+}
+
 struct Scenario {
     banks: BanksClient,
     payer: Keypair,
@@ -96,6 +109,15 @@ struct Scenario {
 
 impl Scenario {
     async fn start(nonce: u64, mode: Mode) -> Self {
+        Self::start_with_blocked_last_mint(nonce, mode, false).await
+    }
+
+    /// Start with an optional hostile pre-existing final outcome-mint address.
+    ///
+    /// This is not protocol state injection: it is a one-lamport System
+    /// account used to force a refusal after state construction and one mint
+    /// CPI, so the test can observe transaction rollback.
+    async fn start_with_blocked_last_mint(nonce: u64, mode: Mode, block_last_mint: bool) -> Self {
         let actor = actor_keypair();
         let mint = collateral_mint_keypair();
         let plane = build_plane(actor.pubkey(), mint.pubkey(), nonce, mode);
@@ -120,6 +142,25 @@ impl Scenario {
                     lamports: rent_exempt(account.data.len()),
                     data: account.data.clone(),
                     owner: account.owner,
+                    executable: false,
+                    rent_epoch: 0,
+                },
+            );
+        }
+
+        if block_last_mint {
+            assert_eq!(mode, Mode::Empty, "only the empty constructor is probed");
+            let blocked = plane
+                .outcome_mints
+                .last()
+                .expect("a market has at least one outcome")
+                .address;
+            test.add_account(
+                blocked,
+                Account {
+                    lamports: 1,
+                    data: Vec::new(),
+                    owner: solana_system_interface::program::ID,
                     executable: false,
                     rent_epoch: 0,
                 },
@@ -236,6 +277,39 @@ impl Scenario {
         .await;
     }
 
+    async fn fund_signer(&mut self, signer: Address, lamports: u64) {
+        let payer = self.payer.pubkey();
+        self.send(
+            &[system_instruction::transfer(&payer, &signer, lamports)],
+            &[],
+        )
+        .await;
+    }
+
+    async fn transfer_collateral(
+        &mut self,
+        source: Address,
+        destination: Address,
+        authority: &Keypair,
+        amount: u64,
+    ) {
+        self.send(
+            &[token_instruction::transfer_checked(
+                &TOKEN_2022,
+                &source,
+                &self.plane.collateral_mint,
+                &destination,
+                &authority.pubkey(),
+                &[],
+                amount,
+                COLLATERAL_DECIMALS,
+            )
+            .unwrap()],
+            &[authority],
+        )
+        .await;
+    }
+
     /// Revoke the mint authority, which the Realm's V1 policy requires absent.
     async fn revoke_mint_authority(&mut self, mint: &Keypair) {
         let payer = self.payer.pubkey();
@@ -335,21 +409,20 @@ impl Scenario {
         }
     }
 
-    async fn data(&mut self, address: Address) -> Vec<u8> {
+    async fn account(&mut self, address: Address) -> Account {
         self.banks
             .get_account(address)
             .await
             .unwrap()
             .expect("account should exist")
-            .data
     }
 
-    async fn maybe_data(&mut self, address: Address) -> Option<Vec<u8>> {
-        self.banks
-            .get_account(address)
-            .await
-            .unwrap()
-            .map(|account| account.data)
+    async fn data(&mut self, address: Address) -> Vec<u8> {
+        self.account(address).await.data
+    }
+
+    async fn maybe_account(&mut self, address: Address) -> Option<Account> {
+        self.banks.get_account(address).await.unwrap()
     }
 
     async fn amount(&mut self, address: Address) -> u64 {
@@ -372,7 +445,7 @@ impl Scenario {
         PositionAccount::decode(&data).expect("position decodes")
     }
 
-    /// The sixteen-account `Split`/`Merge` instruction.
+    /// The fixed collateral prefix plus every canonical outcome mint.
     fn collateral_seam(&self, request: Vec<u8>) -> Instruction {
         let state = self.plane.seam_addresses();
         let mut metas = vec![
@@ -390,7 +463,16 @@ impl Scenario {
         metas.push(AccountMeta::new(leg[3], false));
         metas.push(AccountMeta::new_readonly(leg[4], false));
         metas.push(AccountMeta::new(leg[5], false));
-        assert_eq!(metas.len(), seam::ACCOUNT_COUNT_COLLATERAL);
+        metas.extend(
+            self.plane
+                .outcome_mints
+                .iter()
+                .map(|mint| AccountMeta::new_readonly(mint.address, false)),
+        );
+        assert_eq!(
+            metas.len(),
+            seam::ACCOUNT_PREFIX_COLLATERAL + usize::from(OUTCOME_COUNT)
+        );
         Instruction::new_with_bytes(PROGRAM_ID, &request, metas)
     }
 
@@ -416,34 +498,55 @@ impl Scenario {
         ))
     }
 
-    /// The eleven-account backed `Endow` deposit.
-    fn endow(&self, sequence: u64, amount: u64) -> Instruction {
+    /// The thirteen-account backed `Endow` deposit.
+    fn endow_for(
+        &self,
+        owner: Address,
+        actor_token: Address,
+        position: Address,
+        replay: Address,
+        sequence: u64,
+        amount: u64,
+    ) -> Instruction {
         let request = layout_request(
             sequence,
             Intent::Endow {
                 market: self.plane.market_id,
-                owner: Hash32::from_bytes(self.actor.pubkey().to_bytes()),
+                owner: Hash32::from_bytes(owner.to_bytes()),
                 amount,
             },
         );
         let metas = vec![
-            AccountMeta::new_readonly(self.actor.pubkey(), true),
+            AccountMeta::new(owner, true),
             AccountMeta::new_readonly(self.plane.market.address, false),
             AccountMeta::new_readonly(self.plane.hoard.address, false),
-            AccountMeta::new(self.plane.position.address, false),
-            AccountMeta::new(self.plane.replay.address, false),
+            AccountMeta::new(position, false),
+            AccountMeta::new(replay, false),
             AccountMeta::new_readonly(self.plane.profile.address, false),
             AccountMeta::new_readonly(POLICY_ACCOUNT, false),
             AccountMeta::new_readonly(TOKEN_2022, false),
             AccountMeta::new_readonly(self.plane.collateral_mint, false),
-            AccountMeta::new(self.actor_collateral, false),
+            AccountMeta::new(actor_token, false),
             AccountMeta::new(self.plane.hoard_token.address, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+            AccountMeta::new_readonly(RENT_SYSVAR, false),
         ];
         assert_eq!(metas.len(), genesis::ENDOW_ACCOUNT_COUNT);
         Instruction::new_with_bytes(PROGRAM_ID, &request, metas)
     }
 
-    /// The thirteen-account `Materialize`/`Dematerialize` instruction.
+    fn endow(&self, sequence: u64, amount: u64) -> Instruction {
+        self.endow_for(
+            self.actor.pubkey(),
+            self.actor_collateral,
+            self.plane.position.address,
+            self.plane.replay.address,
+            sequence,
+            amount,
+        )
+    }
+
+    /// The fixed outcome prefix plus every canonical outcome mint.
     fn outcome_seam(&self, request: Vec<u8>, outcome: usize, holder: Address) -> Instruction {
         let state = self.plane.seam_addresses();
         let mut metas = vec![
@@ -454,11 +557,20 @@ impl Scenario {
         for address in &state[3..] {
             metas.push(AccountMeta::new(*address, false));
         }
-        let leg = self.plane.outcome_leg(outcome, holder);
+        let leg = self.plane.outcome_leg(holder);
         metas.push(AccountMeta::new_readonly(leg[0], false));
         metas.push(AccountMeta::new(leg[1], false));
-        metas.push(AccountMeta::new(leg[2], false));
-        assert_eq!(metas.len(), seam::ACCOUNT_COUNT_OUTCOME);
+        metas.extend(self.plane.outcome_mints.iter().map(|mint| {
+            if mint.address == self.plane.outcome_mints[outcome].address {
+                AccountMeta::new(mint.address, false)
+            } else {
+                AccountMeta::new_readonly(mint.address, false)
+            }
+        }));
+        assert_eq!(
+            metas.len(),
+            seam::ACCOUNT_PREFIX_OUTCOME + usize::from(OUTCOME_COUNT)
+        );
         Instruction::new_with_bytes(PROGRAM_ID, &request, metas)
     }
 
@@ -475,7 +587,7 @@ impl Scenario {
                 Intent::Materialize {
                     market: self.plane.market_id,
                     owner: Hash32::from_bytes(self.actor.pubkey().to_bytes()),
-                    destination: Hash32::from_bytes(self.plane.external.address.to_bytes()),
+                    destination: Hash32::from_bytes(holder.to_bytes()),
                     outcome,
                     quantity,
                 },
@@ -498,7 +610,7 @@ impl Scenario {
                 Intent::Dematerialize {
                     market: self.plane.market_id,
                     owner: Hash32::from_bytes(self.actor.pubkey().to_bytes()),
-                    source: Hash32::from_bytes(self.plane.external.address.to_bytes()),
+                    source: Hash32::from_bytes(holder.to_bytes()),
                     outcome,
                     quantity,
                 },
@@ -523,14 +635,14 @@ impl Scenario {
             .external_supply[outcome]
     }
 
-    /// The nineteen-account `RedeemInternal` instruction.
+    /// The eighteen-account collateral prefix plus every canonical outcome mint.
     fn redeem(&self, sequence: u64, outcome: u8, quantity: u64) -> Instruction {
         let evidence = self.plane.evidence_addresses();
         let mut metas = vec![AccountMeta::new(evidence[0], true)];
-        for address in &evidence[1..8] {
+        for address in &evidence[1..7] {
             metas.push(AccountMeta::new(*address, false));
         }
-        for address in &evidence[8..12] {
+        for address in &evidence[7..11] {
             metas.push(AccountMeta::new_readonly(*address, false));
         }
         let leg = self.plane.redeem_leg(self.actor_collateral);
@@ -541,7 +653,16 @@ impl Scenario {
         metas.push(AccountMeta::new(leg[4], false));
         metas.push(AccountMeta::new_readonly(leg[5], false));
         metas.push(AccountMeta::new(leg[6], false));
-        assert_eq!(metas.len(), observe_resolve::REDEEM_ACCOUNT_COUNT);
+        metas.extend(
+            self.plane
+                .outcome_mints
+                .iter()
+                .map(|mint| AccountMeta::new_readonly(mint.address, false)),
+        );
+        assert_eq!(
+            metas.len(),
+            observe_resolve::REDEEM_ACCOUNT_PREFIX + usize::from(OUTCOME_COUNT)
+        );
         let mut data = vec![0xd1_u8, 1];
         data.extend_from_slice(&sequence.to_le_bytes());
         data.push(2); // ACTION_REDEEM_INTERNAL
@@ -555,7 +676,7 @@ impl Scenario {
         let addresses = self.plane.create_market_addresses(self.actor.pubkey());
         let mut metas = vec![AccountMeta::new(addresses[0], true)];
         for (index, address) in addresses.iter().enumerate().skip(1) {
-            let writable = matches!(index, 4..=11) || index >= market_init::IX_HOARD_TOKEN;
+            let writable = matches!(index, 4..=10) || index >= market_init::IX_HOARD_TOKEN;
             metas.push(if writable {
                 AccountMeta::new(*address, false)
             } else {
@@ -585,6 +706,8 @@ const SEAM_UNITS: u32 = 600_000;
 /// Unit ceiling for `CreateMarket`, which recomputes the terms digest twice
 /// over a multi-kilobyte body *and* performs seven CPIs.
 const CREATE_UNITS: u32 = 1_400_000;
+/// Unit ceiling for the first backed deposit, including two state-creation CPIs.
+const FIRST_ENDOW_UNITS: u32 = 900_000;
 
 fn budget(units: u32) -> Instruction {
     Instruction::new_with_bytes(COMPUTE_BUDGET, &compute_unit_limit_data(units), Vec::new())
@@ -594,32 +717,29 @@ fn rent_exempt(space: usize) -> u64 {
     solana_rent::Rent::default().minimum_balance(space).max(1)
 }
 
-/// **`CreateMarket` creates the mints and the Hoard token account.**
+/// **`CreateMarket` creates seven state PDAs, the mints, and Hoard token.**
 ///
-/// The gap-ledger row that used to read "not implemented". A market founded
-/// from twelve all-zero accounts comes out of one transaction with one
-/// Token-2022 mint per outcome and a Hoard token account, and every property
-/// the plan's §3.1 table demands of them is read back from the bytes the token
-/// program wrote — not from what this program intended to write.
+/// The market-specific plane is genuinely absent before the transaction. A
+/// normal funded signer pays for seven canonical program accounts and the
+/// Token-2022 plane, and every property is read back from the bank.
 #[tokio::test]
-async fn create_market_founds_the_outcome_mints_and_the_hoard_token_account() {
+async fn create_market_founds_seven_state_pdas_and_the_token_plane_from_absence() {
     let mut scenario = Scenario::start(FOUNDING_MARKET_NONCE, Mode::Empty).await;
 
-    // Nothing exists at those addresses before the transaction.
+    for target in scenario.plane.market_state_addresses() {
+        assert!(
+            scenario.maybe_account(target).await.is_none(),
+            "a state target must be absent before CreateMarket"
+        );
+    }
     for mint in scenario.plane.outcome_mints.clone() {
         assert!(
-            scenario
-                .maybe_data(mint.address)
-                .await
-                .is_none_or(|data| data.is_empty()),
+            scenario.maybe_account(mint.address).await.is_none(),
             "an outcome mint must not exist before CreateMarket"
         );
     }
     let hoard_token = scenario.plane.hoard_token.address;
-    assert!(scenario
-        .maybe_data(hoard_token)
-        .await
-        .is_none_or(|data| data.is_empty()));
+    assert!(scenario.maybe_account(hoard_token).await.is_none());
 
     let actor = scenario.actor.insecure_clone();
     let units = scenario
@@ -631,6 +751,84 @@ async fn create_market_founds_the_outcome_mints_and_the_hoard_token_account() {
             &[&actor],
         )
         .await;
+
+    for target in scenario.plane.market_state_addresses() {
+        let account = scenario.account(target).await;
+        assert_eq!(account.owner, PROGRAM_ID, "state target owner");
+        assert!(
+            account.lamports >= rent_exempt(account.data.len()),
+            "state target is rent exempt"
+        );
+    }
+
+    let market_state = MarketAccount::decode(&scenario.data(scenario.plane.market.address).await)
+        .expect("Market decodes");
+    assert_eq!(market_state.market, scenario.plane.market_id);
+    assert_eq!(market_state.realm, scenario.plane.realm_id);
+    assert_eq!(market_state.profile, scenario.plane.profile_id);
+    assert_eq!(market_state.terms, scenario.plane.terms_id);
+    assert_eq!(market_state.outcome_count, OUTCOME_COUNT);
+    assert_eq!(market_state.stored_bump, scenario.plane.market.bump);
+
+    let hoard_state = HoardAccount::decode(&scenario.data(scenario.plane.hoard.address).await)
+        .expect("Hoard decodes");
+    assert_eq!(hoard_state.market, scenario.plane.market_id);
+    assert_eq!(hoard_state.realm, scenario.plane.realm_id);
+    assert_eq!(hoard_state.collateral_atoms, 0);
+    assert_eq!(hoard_state.stored_bump, scenario.plane.hoard.bump);
+
+    let position_state =
+        PositionAccount::decode(&scenario.data(scenario.plane.position.address).await)
+            .expect("Position decodes");
+    assert_eq!(position_state.market, scenario.plane.market_id);
+    assert_eq!(
+        position_state.owner,
+        Hash32::from_bytes(scenario.actor.pubkey().to_bytes())
+    );
+    assert_eq!(
+        position_state.internal,
+        [0; clutch_solana_layout::MAX_OUTCOMES]
+    );
+    assert_eq!(position_state.cash_atoms, 0);
+    assert_eq!(position_state.stored_bump, scenario.plane.position.bump);
+
+    let kernel_state = KernelAccount::decode(&scenario.data(scenario.plane.kernel.address).await)
+        .expect("Kernel decodes");
+    assert_eq!(kernel_state.market, scenario.plane.market_id);
+    assert_eq!(kernel_state.phase, 0);
+    assert_eq!(
+        kernel_state.total_supply,
+        [0; clutch_solana_layout::MAX_OUTCOMES]
+    );
+
+    let replay_state = ReplayAccount::decode(&scenario.data(scenario.plane.replay.address).await)
+        .expect("Replay decodes");
+    assert_eq!(replay_state.market, scenario.plane.market_id);
+    assert_eq!(replay_state.position_generation, 0);
+    assert_eq!(replay_state.sequence, 0);
+    assert_eq!(replay_state.stored_bump, scenario.plane.replay.bump);
+
+    let supply_state =
+        SupplyLedgerAccount::decode(&scenario.data(scenario.plane.supply.address).await)
+            .expect("SupplyLedger decodes");
+    assert_eq!(supply_state.market, scenario.plane.market_id);
+    assert_eq!(
+        supply_state.internal_supply,
+        [0; clutch_solana_layout::MAX_OUTCOMES]
+    );
+    assert_eq!(
+        supply_state.external_supply,
+        [0; clutch_solana_layout::MAX_OUTCOMES]
+    );
+    assert_eq!(supply_state.stored_bump, scenario.plane.supply.bump);
+
+    let resolution_state =
+        ResolutionAccount::decode(&scenario.data(scenario.plane.resolution.address).await)
+            .expect("Resolution decodes");
+    assert_eq!(resolution_state.market, scenario.plane.market_id);
+    assert_eq!(resolution_state.terms, scenario.plane.terms_id);
+    assert_eq!(resolution_state.feed, scenario.plane.feed_id);
+    assert_eq!(resolution_state.stored_bump, scenario.plane.resolution.bump);
 
     let market = scenario.plane.market.address;
     for (index, mint) in scenario.plane.outcome_mints.clone().iter().enumerate() {
@@ -681,7 +879,9 @@ async fn create_market_founds_the_outcome_mints_and_the_hoard_token_account() {
     assert_eq!(scenario.hoard_atoms().await, 0);
     assert_eq!(scenario.amount(hoard_token).await, 0);
 
-    println!("SVM create_market: 21 accounts, 2 outcome mints + hoard token, {units} CU");
+    println!(
+        "SVM create_market: 20 accounts, 7 state PDAs + 2 outcome mints + hoard token, {units} CU"
+    );
 }
 
 /// **A second founding at the same address is refused, and creates nothing.**
@@ -713,6 +913,163 @@ async fn founding_a_market_twice_refuses() {
         "a market that already exists has nonzero bytes at its canonical address"
     );
     println!("SVM create_market idempotence: second founding refused with Custom({code}) (0x0040)");
+}
+
+/// **A late token-plane refusal rolls every earlier System CPI back.**
+///
+/// The final outcome-mint address is occupied by a one-lamport System account.
+/// `CreateMarket` therefore constructs all seven state accounts and the first
+/// outcome mint before it reaches the refusal. Atomic transaction failure must
+/// leave none of those earlier effects in the committed bank.
+#[tokio::test]
+async fn late_create_market_refusal_rolls_back_state_and_token_construction() {
+    let mut scenario =
+        Scenario::start_with_blocked_last_mint(FOUNDING_MARKET_NONCE, Mode::Empty, true).await;
+    let actor = scenario.actor.insecure_clone();
+    let blocked = scenario
+        .plane
+        .outcome_mints
+        .last()
+        .expect("fixture outcomes")
+        .address;
+    let first = scenario.plane.outcome_mints[0].address;
+    let hoard_token = scenario.plane.hoard_token.address;
+
+    let code = scenario
+        .refusal_code(
+            &[
+                budget(CREATE_UNITS),
+                scenario.create_market(FOUNDING_MARKET_NONCE),
+            ],
+            &[&actor],
+        )
+        .await;
+    assert_eq!(code, ClutchError::AlreadyInitialized as u32);
+
+    for target in scenario.plane.market_state_addresses() {
+        assert!(
+            scenario.maybe_account(target).await.is_none(),
+            "a failed transaction must roll back state construction"
+        );
+    }
+    assert!(
+        scenario.maybe_account(first).await.is_none(),
+        "the first outcome mint CPI must roll back"
+    );
+    assert!(
+        scenario.maybe_account(hoard_token).await.is_none(),
+        "the Hoard token account was not reached and remains absent"
+    );
+    let blocker = scenario.account(blocked).await;
+    assert_eq!(blocker.owner, solana_system_interface::program::ID);
+    assert_eq!(blocker.lamports, 1);
+    assert!(blocker.data.is_empty());
+}
+
+/// **A second wallet opens its canonical owner plane with its first deposit.**
+///
+/// No protocol state for the wallet exists beforehand. `Endow` authenticates
+/// the owner, System-CPI-creates Position and Replay, transfers real
+/// collateral into pooled custody, credits cash, and commits replay sequence
+/// one atomically.
+#[tokio::test]
+async fn first_endow_creates_a_second_wallets_position_and_replay() {
+    let mut scenario = Scenario::start(FOUNDING_MARKET_NONCE, Mode::Empty).await;
+    let founder = scenario.actor.insecure_clone();
+    scenario
+        .send(
+            &[
+                budget(CREATE_UNITS),
+                scenario.create_market(FOUNDING_MARKET_NONCE),
+            ],
+            &[&founder],
+        )
+        .await;
+
+    let second = second_actor_keypair();
+    scenario.fund_signer(second.pubkey(), 100_000_000).await;
+    let second_token = scenario
+        .create_token_account(scenario.plane.collateral_mint, second.pubkey())
+        .await;
+    scenario
+        .transfer_collateral(scenario.actor_collateral, second_token, &founder, 9)
+        .await;
+    let (position, replay) = scenario.plane.owner_plane(second.pubkey());
+    assert!(scenario.maybe_account(position.address).await.is_none());
+    assert!(scenario.maybe_account(replay.address).await.is_none());
+
+    /* An authenticated wallet cannot initialize another owner's plane. The
+     * refusal occurs before either System CPI. */
+    let mut forged = scenario.endow_for(
+        second.pubkey(),
+        second_token,
+        position.address,
+        replay.address,
+        0,
+        9,
+    );
+    forged.accounts[0] = AccountMeta::new(founder.pubkey(), true);
+    let code = scenario
+        .refusal_code(&[budget(FIRST_ENDOW_UNITS), forged], &[&founder])
+        .await;
+    assert_eq!(code, ClutchError::UnauthorizedActor as u32);
+    assert!(scenario.maybe_account(position.address).await.is_none());
+    assert!(scenario.maybe_account(replay.address).await.is_none());
+
+    /* The owner is valid and both CPIs now run, but Token-2022 refuses the
+     * overdraw after construction. The owner plane must still remain absent. */
+    let overdraw = scenario.endow_for(
+        second.pubkey(),
+        second_token,
+        position.address,
+        replay.address,
+        0,
+        10,
+    );
+    let code = scenario
+        .refusal_code(&[budget(FIRST_ENDOW_UNITS), overdraw], &[&second])
+        .await;
+    assert_eq!(code, TokenError::InsufficientFunds as u32);
+    assert!(scenario.maybe_account(position.address).await.is_none());
+    assert!(scenario.maybe_account(replay.address).await.is_none());
+
+    let instruction = scenario.endow_for(
+        second.pubkey(),
+        second_token,
+        position.address,
+        replay.address,
+        0,
+        9,
+    );
+    let units = scenario
+        .send(&[budget(FIRST_ENDOW_UNITS), instruction], &[&second])
+        .await;
+
+    for target in [position.address, replay.address] {
+        let account = scenario.account(target).await;
+        assert_eq!(account.owner, PROGRAM_ID);
+        assert!(account.lamports >= rent_exempt(account.data.len()));
+    }
+    let position_state = PositionAccount::decode(&scenario.data(position.address).await)
+        .expect("second Position decodes");
+    assert_eq!(position_state.market, scenario.plane.market_id);
+    assert_eq!(
+        position_state.owner,
+        Hash32::from_bytes(second.pubkey().to_bytes())
+    );
+    assert_eq!(position_state.generation, 0);
+    assert_eq!(position_state.cash_atoms, 9);
+    assert_eq!(position_state.reserved_cash_atoms, 0);
+    assert_eq!(position_state.stored_bump, position.bump);
+    let replay_state =
+        ReplayAccount::decode(&scenario.data(replay.address).await).expect("second Replay decodes");
+    assert_eq!(replay_state.owner, position_state.owner);
+    assert_eq!(replay_state.position_generation, 0);
+    assert_eq!(replay_state.sequence, 1);
+    assert_eq!(replay_state.stored_bump, replay.bump);
+    assert_eq!(scenario.amount(second_token).await, 0);
+    assert_eq!(scenario.amount(scenario.plane.hoard_token.address).await, 9);
+    println!("SVM first Endow: 2 state PDAs + backed deposit, {units} CU");
 }
 
 /// **E2 — pooled-custody reclassification, with real Token-2022 accounts.**
@@ -779,12 +1136,9 @@ async fn endow_debits_the_owner_and_credits_cash_and_custody_exactly() {
 /// collateral back out. Two token programs' worth of arithmetic and one
 /// kernel's, required to agree at every step.
 ///
-/// The external transfer is the part worth having: it is what makes the
-/// *per-owner* external shadow wrong while the market-wide term stays right,
-/// which is the argument `TOKEN2022_PLAN.md` §0.3 makes for reconciling the
-/// aggregate and not the per-owner balance. A holder may keep outcome tokens
-/// anywhere and give them to anybody; the mint's `supply` is the only
-/// counterpart the ledger has.
+/// The external transfer is the part worth having: it demonstrates why actual
+/// mint supply is authoritative and no per-owner program shadow can be. A
+/// holder may keep outcome tokens anywhere and give them to anybody.
 #[tokio::test]
 async fn the_whole_cycle_survives_a_holder_who_is_not_the_actor() {
     let mut scenario = Scenario::start(MARKET_NONCE, Mode::Funded).await;
@@ -905,10 +1259,7 @@ async fn a_failed_endow_leaves_ledger_replay_and_tokens_unchanged() {
 
     let (result, _) = scenario
         .try_send(
-            &[
-                budget(SEAM_UNITS),
-                scenario.endow(0, ACTOR_COLLATERAL + 1),
-            ],
+            &[budget(SEAM_UNITS), scenario.endow(0, ACTOR_COLLATERAL + 1)],
             &[&actor],
         )
         .await;
@@ -1000,7 +1351,6 @@ async fn redeem_reclassifies_locked_collateral_into_position_cash() {
     let actor = scenario.actor.insecure_clone();
     let hoard_token = scenario.plane.hoard_token.address;
     let actor_token = scenario.actor_collateral;
-
     let quantity = 6;
     let units = scenario
         .send(
@@ -1019,7 +1369,7 @@ async fn redeem_reclassifies_locked_collateral_into_position_cash() {
     assert_eq!(position.internal[0], FUNDED_SETS - quantity);
     assert_eq!(position.cash_atoms, CASH_ATOMS + quantity);
 
-    println!("SVM redeem: 19 accounts, payout={quantity} atoms, {units} CU");
+    println!("SVM redeem: 20 accounts, payout={quantity} atoms, {units} CU");
 
     /* The losing outcome pays zero and custody still does not move. */
     let hoard_before = scenario.amount(hoard_token).await;
