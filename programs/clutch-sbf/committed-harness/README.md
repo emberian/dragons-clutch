@@ -7,7 +7,8 @@ prestate.  This runner instead:
 
 1. accepts only an exact loopback RPC URL;
 2. replaces the fixture transaction's zero recent blockhash;
-3. signs the serialized message with fresh test-only payer and actor keys;
+3. signs each required message key with a matching fresh test-only keypair,
+   including additional holder identities when a step needs them;
 4. submits it with `sendTransaction`;
 5. waits for a `confirmed` or `finalized` bank status; and
 6. reloads every declared account at `confirmed` commitment and compares its
@@ -19,8 +20,9 @@ watched account to have the same bytes before and after the failed transaction.
 
 This is not a wallet and is intentionally not in the SBF program workspace.
 The surrounding script creates random payer and actor keypairs in a temporary
-directory and removes that directory on every exit.  No keypair is accepted
-from the Solana CLI configuration, and the runner never prints secret bytes.
+directory and removes that directory on every exit.  Additional test holder
+keys may be supplied explicitly.  No keypair is accepted from the Solana CLI
+configuration, and the runner never prints secret bytes.
 
 ## Current scope boundary
 

@@ -59,7 +59,7 @@ struct Compare {
 fn usage() -> ! {
     eprintln!(
         "usage: clutch-sbf-committed-harness <loopback-url> <plan-dir> \
-         <payer-keypair.json> <actor-keypair.json>"
+         <payer-keypair.json> <actor-keypair.json> [additional-test-keypair.json ...]"
     );
     std::process::exit(2);
 }
@@ -199,29 +199,17 @@ fn message_layout(transaction: &[u8]) -> Result<(usize, usize, usize, Vec<[u8; 3
 fn sign_transaction(
     unsigned: &[u8],
     blockhash: [u8; 32],
-    payer: &Keypair,
-    actor: &Keypair,
+    keypairs: &[&Keypair],
 ) -> Result<Vec<u8>> {
     let (signatures_start, message_start, blockhash_start, signer_keys) = message_layout(unsigned)?;
-    if signer_keys.len() != 2 {
-        return Err(format!(
-            "committed plan requires exactly two signers, found {}",
-            signer_keys.len()
-        )
-        .into());
-    }
-    let expected = [payer.pubkey().to_bytes(), actor.pubkey().to_bytes()];
-    if signer_keys != expected {
-        return Err(format!(
-            "message signer order does not match payer then actor: message={signer_keys:?}, expected={expected:?}"
-        )
-        .into());
-    }
-
     let mut signed = unsigned.to_vec();
     signed[blockhash_start..blockhash_start + 32].copy_from_slice(&blockhash);
     let (signature_prefix, message) = signed.split_at_mut(message_start);
-    for (index, keypair) in [payer, actor].into_iter().enumerate() {
+    for (index, signer_key) in signer_keys.iter().enumerate() {
+        let keypair = keypairs
+            .iter()
+            .find(|candidate| candidate.pubkey().to_bytes() == *signer_key)
+            .ok_or_else(|| format!("no ephemeral keypair for required signer {signer_key:?}"))?;
         let signature = keypair.sign_message(message);
         let start = signatures_start + index * 64;
         signature_prefix[start..start + 64].copy_from_slice(signature.as_ref());
@@ -356,17 +344,24 @@ fn report_scope(plan: &Plan, watched: usize) {
     }
 }
 
-fn run(url: &str, plan_dir: &Path, payer_path: &str, actor_path: &str) -> Result<()> {
+fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
     require_loopback(url)?;
 
     let plan: Plan = serde_json::from_slice(&fs::read(plan_dir.join("committed.json"))?)?;
-    let payer = read_keypair_file(payer_path)?;
-    let actor = read_keypair_file(actor_path)?;
-    if payer.pubkey().to_string() != plan.payer {
-        return Err("payer keypair does not match committed plan".into());
+    let keypairs: Vec<Keypair> = keypair_paths
+        .iter()
+        .map(read_keypair_file)
+        .collect::<std::result::Result<_, _>>()?;
+    let mut public_keys = BTreeSet::new();
+    for keypair in &keypairs {
+        if !public_keys.insert(keypair.pubkey().to_string()) {
+            return Err("the same ephemeral signer was supplied more than once".into());
+        }
     }
-    if actor.pubkey().to_string() != plan.actor {
-        return Err("actor keypair does not match committed plan".into());
+    for (role, address) in [("payer", &plan.payer), ("actor", &plan.actor)] {
+        if !public_keys.contains(address) {
+            return Err(format!("no supplied keypair matches plan {role} {address}").into());
+        }
     }
     if plan.genesis_assisted && plan.precreated_program_accounts.is_empty() {
         return Err("genesis-assisted plan does not enumerate its precreated accounts".into());
@@ -377,6 +372,7 @@ fn run(url: &str, plan_dir: &Path, payer_path: &str, actor_path: &str) -> Result
         .iter()
         .flat_map(|step| step.compare.iter().map(|entry| entry.address.clone()))
         .collect();
+    let keypair_refs: Vec<&Keypair> = keypairs.iter().collect();
     report_scope(&plan, watched.len());
 
     for (ordinal, step) in plan.steps.iter().enumerate() {
@@ -386,7 +382,7 @@ fn run(url: &str, plan_dir: &Path, payer_path: &str, actor_path: &str) -> Result
         } else {
             None
         };
-        let signed = sign_transaction(&unsigned, latest_blockhash(url)?, &payer, &actor)?;
+        let signed = sign_transaction(&unsigned, latest_blockhash(url)?, &keypair_refs)?;
         let signature = submit(url, &signed)?;
         let status = await_confirmation(url, &signature)?;
         let error = status.get("err").cloned().unwrap_or(Value::Null);
@@ -457,16 +453,11 @@ fn main() -> Result<()> {
     let Some(plan_dir) = args.next().map(PathBuf::from) else {
         usage()
     };
-    let Some(payer_path) = args.next() else {
-        usage()
-    };
-    let Some(actor_path) = args.next() else {
-        usage()
-    };
-    if args.next().is_some() {
+    let keypair_paths: Vec<String> = args.collect();
+    if keypair_paths.len() < 2 {
         usage();
     }
-    run(&url, &plan_dir, &payer_path, &actor_path)
+    run(&url, &plan_dir, &keypair_paths)
 }
 
 #[cfg(test)]
@@ -480,6 +471,19 @@ mod tests {
         transaction.push(2);
         transaction.extend_from_slice(&payer.pubkey().to_bytes());
         transaction.extend_from_slice(&actor.pubkey().to_bytes());
+        transaction.extend_from_slice(&[0_u8; 32]);
+        transaction.push(0);
+        transaction
+    }
+
+    fn three_signer_fixture(signers: [&Keypair; 3]) -> Vec<u8> {
+        let mut transaction = vec![3];
+        transaction.extend_from_slice(&[0_u8; 192]);
+        transaction.extend_from_slice(&[3, 0, 0]);
+        transaction.push(3);
+        for signer in signers {
+            transaction.extend_from_slice(&signer.pubkey().to_bytes());
+        }
         transaction.extend_from_slice(&[0_u8; 32]);
         transaction.push(0);
         transaction
@@ -507,7 +511,7 @@ mod tests {
         let payer = Keypair::new();
         let actor = Keypair::new();
         let unsigned = two_signer_fixture(&payer, &actor);
-        let signed = sign_transaction(&unsigned, [7_u8; 32], &payer, &actor)
+        let signed = sign_transaction(&unsigned, [7_u8; 32], &[&payer, &actor])
             .expect("fixture transaction signs");
         let (signatures_start, _, blockhash_start, signers) =
             message_layout(&signed).expect("signed transaction parses");
@@ -525,11 +529,35 @@ mod tests {
     }
 
     #[test]
-    fn signing_refuses_a_plan_whose_signer_order_is_not_exact() {
+    fn signing_refuses_a_plan_with_a_missing_required_key() {
         let payer = Keypair::new();
         let actor = Keypair::new();
         let unsigned = two_signer_fixture(&actor, &payer);
-        assert!(sign_transaction(&unsigned, [7_u8; 32], &payer, &actor).is_err());
+        assert!(sign_transaction(&unsigned, [7_u8; 32], &[&payer]).is_err());
+    }
+
+    #[test]
+    fn a_third_ephemeral_holder_can_sign_in_message_order() {
+        let payer = Keypair::new();
+        let actor = Keypair::new();
+        let holder = Keypair::new();
+        let unsigned = three_signer_fixture([&payer, &holder, &actor]);
+        let signed = sign_transaction(&unsigned, [9_u8; 32], &[&actor, &payer, &holder])
+            .expect("all message signers are found by public key");
+        let (start, _, _, signers) = message_layout(&signed).expect("transaction parses");
+        assert_eq!(
+            signers,
+            [
+                payer.pubkey().to_bytes(),
+                holder.pubkey().to_bytes(),
+                actor.pubkey().to_bytes()
+            ]
+        );
+        for index in 0..3 {
+            assert!(signed[start + index * 64..start + (index + 1) * 64]
+                .iter()
+                .any(|byte| *byte != 0));
+        }
     }
 
     #[test]
