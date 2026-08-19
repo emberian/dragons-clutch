@@ -37,6 +37,34 @@ The only unresolved contradiction is `sbf.runtime_bringup`. The complete
 94-gate emission has not been rerun, so the checked-in manifest must remain
 schema v1.
 
+## Default-ELF identity fork (discovered ~07:30, verified by fresh builds)
+
+`9c371fe` repaired the reference lock graph and, in the same commit, fixed a
+rustdoc link by editing three doc-comment lines in
+`programs/solana-reference/src/resolution.rs` — a file inside the 88-file
+declared runtime source closure (`clutch-sbf` depends on the crate by path).
+Consequence, proven not inferred: a fresh clean build at `ec77d0b`
+reproduces the sealed default ELF `a5725a3d8e149b2b…` exactly, while a fresh
+clean build at HEAD produces
+`bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`; an
+independent interrupted gate run reproduced the same new digest. The full
+source delta between the two identities is exactly that one doc comment.
+
+Because the doc-comment fix is required for `cargo_doc.solana_reference` to
+pass, the sealed `a5725a3d…` identity is unreproducible from any tree that
+can pass 94/94. Under this ledger's own promotion rule the baseline must
+therefore adopt the new clean-HEAD identity and re-seal what is bound to the
+old bytes: the `python.liveness_policy_profile_current_seal` gate and its
+artifact ledger, the final-LTO/stack audit artifacts under
+`research/liveness-policy-profile/artifacts/a5725a3d8e149b2b`, the
+`CURRENT_TRUTH.md` §2 identity paragraph, and a fresh portable attestation
+(already queued by the handoff as the post-`b5da74f` decision — now
+required rather than optional, since the delta is no longer host-only).
+The `a5725a3d…`/`b5da74f` seal and the Persvati attestation remain valid
+historical evidence for source `7e8f6b1`; nothing about them is retracted.
+Do not hand-edit any digest: rebuild, re-measure, and let the gates record
+the new identity from fresh outputs.
+
 ## Exact contradictions
 
 | Gate | Observed result | Required repair |

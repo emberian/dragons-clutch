@@ -36,6 +36,23 @@ provider selection/design, Draft 10 fork (degg-research).
 
 ## Done log (2026-08-19 session)
 
+- Default-ELF identity fork surfaced and ledgered: 9c371fe's rustdoc-link fix
+  touches closure file resolution.rs, so clean HEAD builds bd20711b... while
+  the sealed a5725a3d... reproduces only at ec77d0b (proven by fresh builds
+  at both commits). Since the doc fix is required for the rustdoc gate, the
+  94/94 rule forces adopting the new identity + re-sealing the liveness
+  profile, stack audit, truth Section 2, and a fresh portable attestation.
+  Recorded in BASELINE_MANIFEST_DIAGNOSTIC; old seal remains valid
+  historical evidence for 7e8f6b1. My bringup repair lane stood down
+  correctly on discovering codex mid-flight on the same gate (its worktree
+  dragons-clutch-bringup-split-79 + dirty main-tree files are codex's).
+- R2 pull-profile v2 codec lane landed on its worktree branch (f0e7516 +
+  01291de): 320-byte SourceSpecV2 body, CROSSING_V1 both variants as rule
+  ids 2/3, executable falsifiers incl. double-witness refusal, 26 tests,
+  clippy+rustdoc clean. Six flagged ambiguities for morning review
+  (ProgramData pin, rule-id numbers, grid origin, dup-collapse, contiguity,
+  overflow refusal). Merge deferred until the identity fork settles.
+
 - V3 blocker fixes LANDED at b49c497 on codex/r3-direct-v3 (jobs worktree,
   clean): order-body 107 with a red-demonstrated cross-crate model/live
   digest tripwire, zero-envelope creation refusal keeps release total,
