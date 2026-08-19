@@ -12,22 +12,62 @@ its dirty paths belong to it until the tree goes quiet.
 
 ## Current thrust
 
-R1 close-out. Bringup is fixed at `83e124d`; `b5700a9` re-sealed the current
-local runtime/profile instead of weakening the strict source check. The
-schema-v2 manifest now records 94/94 and passes its post-commit full check.
-Next is a fresh Persvati attestation. Parallel: V3 blocker verification, R2
-provider selection/design, Draft 10 fork (degg-research).
+R1 manifest close is SEALED: schema-v2 MANIFEST.baseline.json committed at
+94/94 (d78f299, stabilized 3294dcd, checked 9625100, bound 6743b9d — codex's
+endgame), fast check binds the tree exactly. The fresh Persvati portable
+attestation of 6743b9d is running now (my lane). Post-R1 design track is
+moving: R2 selection+codec landed, R4 runtime design proposed, Draft 10 +
+John packet ready in degg-research.
 
 ## Next 3 moves
 
-1. Make a fresh Persvati attestation against the checked local manifest. This is
-   not a release, deployment, signature, or public-network authorization.
-2. Preserve the sealed runtime/profile/manifest identities while selecting the
-   next dependency-unblocked R2/R3 work.
-3. Continue the separate V3/R2 research and design queue only after the R1
-   evidence sequence is quiet and recorded.
+1. Harvest the Persvati attestation (job dir on persvati; PASS/STOP table)
+   and record its outcome in CURRENT_TRUTH Section 2 + the handoff.
+2. V3 Settle unit: embed the economic Position-transfer kernel in Settle on
+   codex/r3-direct-v3 (the one terminal that drops reservation assets), then
+   the placement-gate wiring + tags 36-46 routing prerequisites list.
+3. STOP #1 successor: per-degree blank-bank joined lifecycle evidence lane
+   (degrees 1-3), plus the R4 interim mechanical steps (validator
+   PREPAID_UNBOUNDED amendment, EXTERNAL_OWNER_STATE inventory rows).
+
+## Ember decision queue (2026-08-19 morning)
+
+1. R2 CROSSING_V1 boundary variant: A closing T(k)=(k+1)B (recommended) vs
+   B opening. Both implemented as rule ids 2/3 with falsifiers (3b20ea6).
+2. R2 codec ambiguity flags from the lane report: ProgramData-key pin as
+   explicit bytes vs V1 parity; rule-id numbers; grid origin-0 vs DOSSIER
+   G-offset (origin-0 makes opening-variant bucket 0 stall forever);
+   byte-identical duplicate collapse; admit_after contiguity; overflow
+   refusal. Pyth identity freeze deliberately waits for the 2026-08-26
+   cutover (docs/design/SOURCE_PROVIDER_V1_SELECTION.md).
+3. R4 design ratification (docs/design/TERMINAL_LIFECYCLE_RUNTIME_V1.md):
+   notably the frozen-incinerator-sink choice, fractional Arm A
+   live-until-aggregated, legacy rows declared permanent, and the Section 8
+   reference-ownership variant (maturity horizon vs refcount).
+4. V3 optional hardening: verify_lease tautology + FROZEN_EMPTY pinning
+   (open items at b49c497) — fix now or hold for the Settle unit.
+5. Filing ops (human-only): send John packet ROUND 1 (degg-research 55ce13a);
+   signature block + dual-route answers needed before Aug 24; deadlines
+   Aug 24/24/27, perpetuals RFC Aug 26.
 
 ## Done log (2026-08-19 session)
+
+- R1 MANIFEST SEALED (codex endgame): schema-v2 94/94 emitted, stabilized,
+  committed, post-commit checked, and bound to the handoff at 6743b9d. My
+  fast no-gates check confirms the manifest matches the tree byte-exactly.
+- Fresh Persvati portable attestation of 6743b9d launched (fresh job dir,
+  archive+bundle digests both hosts, previous b5da74f methodology, bd20711b
+  artifact checks) — in flight.
+- R4 runtime design PROPOSED at ad3ece9
+  (docs/design/TERMINAL_LIFECYCLE_RUNTIME_V1.md): TerminalIdentityV1 header,
+  37-row dispositions, economic-close-before-rent, fractional Arm A,
+  MintCloseAuthority on new mints, two reference-ownership variants. Built
+  on a full ground-truth map (V2 model internals, machine inventory,
+  ResolutionWork/artifact/Direct-V3 funding precedents, 30 decision points).
+- R2 v2 codec MERGED at 3b20ea6: SourceSpecV2 + CROSSING_V1 (both variants,
+  falsifiers executable), 26 tests + strict clippy re-verified on main.
+- John review packet refreshed in degg-research (55ce13a): Draft-10-aligned,
+  15-row judgments table, five answerable questions with tentative answers.
 
 - Runtime/profile repair resealed at `b5700a9`: current default ELF
   `bd20711b…b60`, runtime-artifact report `626a299d…e038`, and 52-file ledger
