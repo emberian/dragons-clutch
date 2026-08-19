@@ -1177,9 +1177,7 @@ def build_gates() -> list[dict[str, Any]]:
                     r"^source_profile=default-empty-registry$",
                     r"^[0-9a-f]{64}\s+.*clutch_sbf\.so$",
                     r"^running [0-9]+ tests?$",
-                    r"^test [a-zA-Z0-9_]+ .*",
                     r"^test default_elf_refuses_endow_without_a_registered_source_release \.\.\. ok$",
-                    r"^SVM ",
                     r"^test result: ",
                 ],
                 "note": (
@@ -1187,6 +1185,9 @@ def build_gates() -> list[dict[str, Any]]:
                     "in-process Agave bank, including the default Endow 0x0079 "
                     "full-Account-image rollback test, extension refusals, "
                     "mandatory token/collateral planes, and E5 atomic rollback; "
+                    "the manifest captures stable suite totals and the required "
+                    "refusal line, while variable per-test nocapture/CU text stays "
+                    "under the separate same-ELF evidence seal; "
                     "program-test is not a cluster, deployment, or runtime-"
                     "diversity result"
                 ),
@@ -1212,13 +1213,14 @@ def build_gates() -> list[dict[str, Any]]:
                     r"^elf_sha256=[0-9a-f]{64}$",
                     r"^elf_bytes=[0-9]+$",
                     r"^running [0-9]+ tests?$",
-                    r"^test [a-zA-Z0-9_]+ .*",
                     r"^test publicly_prefunded_second_owner_position_and_replay_are_created_by_first_endow \.\.\. ok$",
                     r"^test result: ",
                 ],
                 "note": (
                     "explicitly builds and executes the differently compiled "
                     "non-production mock-source ELF in the local Token-2022 bank; "
+                    "stable suite totals, profile identity, and the required prefund "
+                    "test are captured without volatile per-test nocapture/CU text; "
                     "this is laboratory evidence only, never a production-provider "
                     "or deployment claim"
                 ),

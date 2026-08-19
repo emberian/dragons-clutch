@@ -218,6 +218,15 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
             r"^test default_elf_refuses_endow_without_a_registered_source_release \.\.\. ok$",
             gates["sbf.token2022_program_test"]["expected"]["required_output_patterns"],
         )
+        for gate_id in (
+            "sbf.token2022_program_test",
+            "sbf.token2022_program_test_non_production_mock",
+        ):
+            patterns = gates[gate_id]["key_patterns"]
+            self.assertNotIn(r"^test [a-zA-Z0-9_]+ .*", patterns)
+            self.assertNotIn(r"^SVM ", patterns)
+            self.assertIn(r"^running [0-9]+ tests?$", patterns)
+            self.assertIn(r"^test result: ", patterns)
 
         outputs = {item["id"]: item for item in baseline_manifest.DECLARED_BUILD_OUTPUTS}
         self.assertEqual(outputs["clutch_sbf.default_program_elf"]["handoff"], None)
