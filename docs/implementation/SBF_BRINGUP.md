@@ -1356,3 +1356,9 @@ never verified, because the program owns no hash primitive.
 > falsifiability self-checks fired. ELF sha256
 > `d8a9267c75ac0d4e8021320f3009c09532fd0cfda5a70508bd6c8312b400975c`. This supersedes digests above recorded
 > against dirty trees.
+
+> **STALE AS OF 2026-08-19 (commits 472b7fe, 50c6e35).** Every CU figure,
+> differential result, and refusal code recorded above was measured before
+> the token plane became mandatory. The harness emits pre-token account
+> shapes and the gate now exits 1 with `AccountCount` refusals throughout.
+> Treat the tables as historical until the harness is regenerated.

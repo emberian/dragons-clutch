@@ -371,3 +371,12 @@ Under a committing runtime it would be one head.
 > falsifiability self-checks fired. ELF sha256
 > `d8a9267c75ac0d4e8021320f3009c09532fd0cfda5a70508bd6c8312b400975c`. This supersedes digests above recorded
 > against dirty trees.
+
+> **STALE AS OF 2026-08-19 (commits 472b7fe, 50c6e35).** The recorded PASS
+> above predates the mandatory token plane. `CreateMarket` now creates the
+> outcome mints and Hoard token account, and the collateral leg is wired, so
+> the account planes are 16 (Split/Merge), 13 (Materialize/Dematerialize),
+> 19 (RedeemInternal) and 19+outcome_count (CreateMarket). The harness still
+> emits the pre-token shapes, so every walk step is refused `AccountCount`
+> (`0x1`) and the gate exits 1. The numbers above are historical; a
+> regenerated run supersedes them.
