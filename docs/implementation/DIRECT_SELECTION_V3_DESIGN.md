@@ -612,8 +612,11 @@ zero-envelope placement — a zero-limit buy under the profile's forced zero fee
 release kernel's unchanged-poststate rule refuses forever. The prior attempt
 to length-select these seams from live legacy wires was rejected because an
 injected program-owned V4 prestate could create a Reservation V2 dead end
-before Freeze, Abort, and lapse were all available atomically; they are live
-now only because the complete lifecycle lands with them. Legacy
+before Freeze, Abort, Cancel, and lapse were all available atomically; they
+are live now only because the complete lifecycle lands with them. Of that
+list V3 ships no Cancel at all, deliberately — see *No per-order
+cancellation* below — so the dead-end argument is closed here by Abort's
+permissionless whole-epoch release rather than by a per-order retirement. Legacy
 `InitOrderPage`, eight-account placement, and Reservation V1 production bytes
 retain their prior behavior exactly.
 
@@ -697,11 +700,27 @@ all economic facts from frozen authority and takes the real neutral sink, and
 routed dispatch, and the real-SBF campaign have now landed as well. What
 remains before this branch is promotable:
 
-1. **No per-order V4 cancellation exists.** The legacy `CancelOrder` epoch
-   role admits only the legacy lengths, so a 672-byte V4 Epoch refuses on data
-   length (asserted live). A V4 order can therefore be retired only by
-   aborting the whole unfrozen Epoch. That is a bounded, refusal-shaped gap,
-   not a dead end, but it is a product gap and must be named as one.
+1. **No per-order cancellation — a design decision, with a consequence.**
+   This is not an omission. The executable model forbids retirement slots
+   outright: `DirectPrefreezePageV3` requires `tombstone_count == 0`, commits
+   that count into the page digest, and a model test refuses a page carrying
+   a tombstone. The frozen tag registry `36..=46` accordingly allocates no
+   Cancel, and the legacy `CancelOrder` epoch role admits only the legacy
+   lengths, so a 672-byte V4 Epoch refuses it on data length (asserted live).
+   The V3 direct profile is an **epoch-atomic two-order book**: an
+   append-only page of exactly two positional orders that is either frozen
+   whole or released whole.
+
+   The consequence must be stated at product level rather than buried: a
+   participant cannot unilaterally withdraw a placed order before Freeze.
+   Their exit is the permissionless `AbortUnfrozenDirectV4`, which anyone may
+   call at `submission_opens_slot` and which releases and closes the exact
+   reservation prefix. So no value is trapped and there is no dead end — but
+   between placement and submission-open, a placed order is committed, and
+   the counterparty risk of that window is a venue property, not an
+   implementation detail. If epoch-atomic commitment is *not* the intended
+   economics, the fix is a new V3 tag plus tombstone support in the model,
+   not a runtime patch.
 2. **The campaign is one bank profile, not the whole hostile surface.** It
    drives five candidates over an 11-tick grid; the codec's 64-tick replay
    domain, tied scores, and omitted/reordered retained accounts are covered in
