@@ -44,18 +44,21 @@ remaining unbound/offline. The schema-v2 manifest generator is hardened through
 process-group timeout cleanup, exact Verus failure classification, current
 default/mock ELF parsing, the sealed liveness gate, the signed committed walk,
 and the central proof/model/tool surfaces. The checked-in
-`MANIFEST.baseline.json` is intentionally still historical schema v1. The full
-94-gate emission was not run during convergence and must not be described as
-green.
+`MANIFEST.baseline.json` is intentionally still historical schema v1.
+
+The full 94-gate emission was subsequently run from clean `ec77d0b`: 86 matched
+and eight contradicted. Read
+[`docs/implementation/BASELINE_MANIFEST_DIAGNOSTIC_2026-08-19.md`](docs/implementation/BASELINE_MANIFEST_DIAGNOSTIC_2026-08-19.md)
+before touching the manifest. The diagnostic output was not committed.
 
 Resume R1 in this exact order:
 
 1. run `git status --short` and refuse unrelated dirty bytes;
-2. run `python3 -m unittest scripts/test_baseline_manifest.py`;
-3. from the clean tree run
-   `scripts/baseline_manifest.py emit --run-gates`; preserve every RED rather
-   than weakening a declaration;
-4. inspect the emitted schema-v2 file, commit **only**
+2. repair the exact eight contradictions in the diagnostic without weakening
+   their expected-success declarations;
+3. run the narrow eight gates, then from the clean tree rerun
+   `scripts/baseline_manifest.py emit --run-gates`;
+4. only if all 94 match, inspect the emitted schema-v2 file and commit **only**
    `MANIFEST.baseline.json`, then run
    `scripts/baseline_manifest.py check --run-gates`; and
 5. only after that decide whether the post-`b5da74f` host-only changes warrant

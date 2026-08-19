@@ -92,8 +92,11 @@ Checkpoint disposition: runtime/artifact/stack/bank sealing and the fresh
 Persvati portable subset are complete at `b5da74f`; Hbox independently verified
 the archive but is SBF-UNAVAILABLE because the exact toolchain/dependency cache
 is absent. The schema-v2 generator is hardened through `1a18991`, but the full
-94-gate emission, manifest-only commit, and post-commit check remain the first
-handoff action. The checked-in manifest is still historical schema v1.
+94-gate diagnostic at `ec77d0b` matched 86 and contradicted eight. Repair the
+exact lock/Clippy/cost-lab/bringup/walk rows recorded in
+`BASELINE_MANIFEST_DIAGNOSTIC_2026-08-19.md`, then rerun emission; the
+manifest-only commit and post-commit check remain open. The checked-in manifest
+is still historical schema v1.
 
 ### R2 — Admit one production source profile
 
