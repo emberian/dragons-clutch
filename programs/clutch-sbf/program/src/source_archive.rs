@@ -703,6 +703,40 @@ impl SealedArchiveReceiptV1 {
     }
 }
 
+/// Lifetime-bound read capability for one fully verified sealed archive page.
+///
+/// Construction runs the same key, owner, executable, source-spec, release,
+/// window, lineage, padding, and page-commitment checks as
+/// [`verify_recorded_sealed_archive`].  The borrowed bytes cannot be mutated
+/// while this value is live, so indexed reads need not hash the entire
+/// 2,560-byte page again.  No raw slice accessor exists: consumers can read
+/// only checked [`ArchivedObservationV1`] records and the authenticated
+/// receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedSealedArchiveViewV1<'a> {
+    receipt: SealedArchiveReceiptV1,
+    data: &'a [u8],
+}
+
+impl VerifiedSealedArchiveViewV1<'_> {
+    /// Return the authenticated archive/window provenance.
+    pub const fn receipt(self) -> SealedArchiveReceiptV1 {
+        self.receipt
+    }
+
+    /// Read one bounded record from the immutable page verified at construction.
+    ///
+    /// The index remains hostile and is checked against both the committed
+    /// record count and the compile-time page bound.  Page bytes and metadata
+    /// are not caller-selectable after this capability has been constructed.
+    pub fn archived_observation(
+        self,
+        index: usize,
+    ) -> Result<ArchivedObservationV1, SourceArchiveError> {
+        archived_observation_at(self.data, index)
+    }
+}
+
 /// Authenticate a sealed archive for a later `Resolve` join.
 ///
 /// `expected_archive_key` must be the canonical PDA derived by the SBF seam
@@ -802,6 +836,33 @@ pub fn verify_recorded_sealed_archive(
     })
 }
 
+/// Authenticate one recorded sealed archive and retain its immutable bytes for
+/// bounded record reads without repeated whole-page hashing.
+///
+/// This is the live-fold form of [`verify_recorded_sealed_archive`].  It does
+/// not weaken or replace that receipt API; it first runs it on the exact same
+/// account view, then binds the resulting private receipt to the lifetime of
+/// those already verified bytes.
+pub fn verify_recorded_sealed_archive_view(
+    clutch_program: [u8; 32],
+    expected_archive_key: [u8; 32],
+    account: ArchiveAccountViewV1<'_>,
+    verified_spec: VerifiedSourceSpecAccountV1,
+    window: WindowDomain,
+) -> Result<VerifiedSealedArchiveViewV1<'_>, SourceArchiveError> {
+    let receipt = verify_recorded_sealed_archive(
+        clutch_program,
+        expected_archive_key,
+        account,
+        verified_spec,
+        window,
+    )?;
+    Ok(VerifiedSealedArchiveViewV1 {
+        receipt,
+        data: account.data,
+    })
+}
+
 /// One exact value record read back from a verified sealed archive.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ArchivedObservationV1 {
@@ -841,18 +902,25 @@ pub fn archived_observation(
     if page_commitment(account.data) != receipt.page_commitment {
         return Err(SourceArchiveError::CommitmentMismatch);
     }
-    let count = usize::from(account.data[ARCHIVE_COUNT_OFFSET]);
+    archived_observation_at(account.data, index)
+}
+
+fn archived_observation_at(
+    data: &[u8],
+    index: usize,
+) -> Result<ArchivedObservationV1, SourceArchiveError> {
+    let count = usize::from(data[ARCHIVE_COUNT_OFFSET]);
     if index >= count || index >= SOURCE_ARCHIVE_MAX_RECORDS_V1 {
         return Err(SourceArchiveError::MalformedRecord);
     }
     let offset = record_offset(index);
     Ok(ArchivedObservationV1 {
-        bucket: u64_at(account.data, offset),
-        low: u128_at(account.data, offset + 8),
-        high: u128_at(account.data, offset + 24),
-        source_sequence: u64_at(account.data, offset + 40),
-        publish_slot: u64_at(account.data, offset + 48),
-        publish_time: u64_at(account.data, offset + 56),
+        bucket: u64_at(data, offset),
+        low: u128_at(data, offset + 8),
+        high: u128_at(data, offset + 24),
+        source_sequence: u64_at(data, offset + 40),
+        publish_slot: u64_at(data, offset + 48),
+        publish_time: u64_at(data, offset + 56),
     })
 }
 

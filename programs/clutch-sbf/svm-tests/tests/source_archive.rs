@@ -14,10 +14,11 @@ use clutch_sbf::{
         SELECTION_FINALIZED_BUCKET_RECORD,
     },
     source_archive::{
-        append_authenticated, initialize_archive, initialize_source_spec_account, seal_archive,
-        verify_sealed_archive, verify_source_spec_account, ArchiveAccountViewV1,
-        ArchivePredecessorV1, CoveragePolicy, DeploymentAuthenticatorV1, FeedIdentity, Grid,
-        RuntimeAccountViewV1, SourceArchiveError, SourceSpecAccountViewV1,
+        append_authenticated, archived_observation, initialize_archive,
+        initialize_source_spec_account, seal_archive, verify_recorded_sealed_archive,
+        verify_recorded_sealed_archive_view, verify_sealed_archive, verify_source_spec_account,
+        ArchiveAccountViewV1, ArchivePredecessorV1, CoveragePolicy, DeploymentAuthenticatorV1,
+        FeedIdentity, Grid, RuntimeAccountViewV1, SourceArchiveError, SourceSpecAccountViewV1,
         VerifiedSourceSpecAccountV1, WindowDomain, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES,
         SOURCE_SPEC_ACCOUNT_V1_BYTES,
     },
@@ -335,6 +336,82 @@ fn unrelated_same_domain_buffer_cannot_substitute_for_the_archive_account() {
             window,
         ),
         Err(SourceArchiveError::ArchiveExecutable)
+    );
+}
+
+#[test]
+fn verified_view_reads_each_record_once_with_receipt_equivalent_results() {
+    let (spec_account, archive, window) = complete_archive();
+    let account = ArchiveAccountViewV1::new(ARCHIVE_KEY, CLUTCH_PROGRAM, false, &archive);
+    let receipt = verify_recorded_sealed_archive(
+        CLUTCH_PROGRAM,
+        ARCHIVE_KEY,
+        account,
+        verified_spec(&spec_account),
+        window,
+    )
+    .expect("recorded sealed receipt");
+    let verified = verify_recorded_sealed_archive_view(
+        CLUTCH_PROGRAM,
+        ARCHIVE_KEY,
+        account,
+        verified_spec(&spec_account),
+        window,
+    )
+    .expect("lifetime-bound sealed view");
+    assert_eq!(verified.receipt(), receipt);
+
+    for index in 0..3 {
+        assert_eq!(
+            verified.archived_observation(index),
+            archived_observation(receipt, account, index)
+        );
+    }
+    assert_eq!(
+        verified.archived_observation(3),
+        Err(SourceArchiveError::MalformedRecord)
+    );
+    assert_eq!(
+        verified.archived_observation(usize::MAX),
+        Err(SourceArchiveError::MalformedRecord)
+    );
+}
+
+#[test]
+fn verified_view_construction_rejects_key_owner_and_mutated_bytes() {
+    let (spec_account, archive, window) = complete_archive();
+    assert_eq!(
+        verify_recorded_sealed_archive_view(
+            CLUTCH_PROGRAM,
+            ARCHIVE_KEY,
+            ArchiveAccountViewV1::new(OTHER_ARCHIVE_KEY, CLUTCH_PROGRAM, false, &archive),
+            verified_spec(&spec_account),
+            window,
+        ),
+        Err(SourceArchiveError::ArchiveAccountMismatch)
+    );
+    assert_eq!(
+        verify_recorded_sealed_archive_view(
+            CLUTCH_PROGRAM,
+            ARCHIVE_KEY,
+            ArchiveAccountViewV1::new(ARCHIVE_KEY, [0x99; 32], false, &archive),
+            verified_spec(&spec_account),
+            window,
+        ),
+        Err(SourceArchiveError::ArchiveOwnerMismatch)
+    );
+
+    let mut mutated = archive;
+    mutated[512 + 8] ^= 1;
+    assert_eq!(
+        verify_recorded_sealed_archive_view(
+            CLUTCH_PROGRAM,
+            ARCHIVE_KEY,
+            ArchiveAccountViewV1::new(ARCHIVE_KEY, CLUTCH_PROGRAM, false, &mutated),
+            verified_spec(&spec_account),
+            window,
+        ),
+        Err(SourceArchiveError::CommitmentMismatch)
     );
 }
 
