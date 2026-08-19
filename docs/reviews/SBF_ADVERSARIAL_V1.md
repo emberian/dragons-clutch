@@ -3,20 +3,23 @@
 Status: **STOP for deployment or value-bearing use.** The adapter has a strong
 hostile-account skeleton, and the recorded SVM runs establish several real
 Token-2022 and rollback properties. They do not yet establish a permissionless,
-source-authenticated, redeemable market lifecycle. In particular, deposited
-free cash has no withdrawal instruction, and the materialized-claim exit has no
-integrated runtime promotion evidence.
+source-authenticated, complete market lifecycle. In particular, deposited
+free cash has no withdrawal instruction, the source plane is unauthenticated,
+and the venue's reservation and settlement plane is incomplete. The
+materialized-claim exit is now runtime-promoted only for the narrow bearer path
+stated in SBF-V1-003.
 
 Review date: 2026-08-18. The original review baseline is commit
 `858f4086ff3ed76d71c10d39ce7240eeea2a9ad1`. The pooled-custody disposition was
 re-audited independently at commit
 `4e06710e40098df004c90a1da8e3e617b2171e92`. Bearer-token truth and
 market-local construction were delta-reviewed through integrated commit
-`fa166fb`; their host and real-bank evidence is accepted only at the scope
-stated below. Concurrent committed-harness changes are excluded. This
-review used only local source, local tests, the checked-in local-bank evidence,
-and the loopback harness. It used no public RPC, wallet, credential, network
-target, deployment, or external action.
+`fa166fb`. The signed committed-validator evidence at `aadc0cd` and its
+promotion record at `3a0e45b` were then delta-reviewed; all evidence is accepted
+only at the scope stated below. Later uncommitted harness changes are excluded.
+This review used only local source, local tests, the checked-in local-bank
+evidence, and the loopback harness. It used no public RPC, wallet, credential,
+network target, deployment, or external action.
 
 ## 1. Severity and claim boundary
 
@@ -138,12 +141,14 @@ increase refuses atomically. Restore malformed-account and differential coverage
 for the new complete mint-vector plane rather than counting disabled legacy
 tests.
 
-### SBF-V1-003 — materialized claims have no redemption path
+### SBF-V1-003 — materialized claims lacked a redemption path
 
-**Disposition:** **OPEN pending runtime promotion.** P0 claimant liveness at the
-original baseline. Commit `e67c315` routes a positionless `RedeemExternal`, and
-`e55ff2f` joins authoritative bearer supply to Resolve/RedeemInternal. Real-SVM
-evidence and replacement full-plane differentials remain open.
+**Disposition:** **FIXED and runtime-promoted for the demonstrated transferred-
+holder, one-hot finite-preset path at `aadc0cd`; preserve broader bearer
+hardening as P2.** P0 claimant liveness at the original baseline. Commit
+`e67c315` routes a positionless `RedeemExternal`, `e55ff2f` joins authoritative
+bearer supply to Resolve/RedeemInternal, and the signed committed-validator walk
+now executes the exit against the exact audited ELF.
 
 At the original baseline, the program implements `RedeemInternal` only and has
 no `RedeemExternal`. `Dematerialize` runs through the active-market kernel path
@@ -174,13 +179,24 @@ replay safety. It constructs the kernel redemption as a finite-preset market,
 which matches the current SBF account codec. Any future derived-basis codec must
 cut this path over explicitly rather than inheriting that assumption.
 
-**Regression gate:** the committed-bank lifecycle must transfer a winning Egg
-to a wallet with no originating Position, resolve in every admitted payout mode,
-redeem it externally, and finish with zero source balance, the correct mint
-supply/cache/kernel total, exact collateral payout, and no stranded Hoard
-principal. Mutate every suffix mint/order, claimant/source/destination binding,
+The committed walk supplies the missing runtime disposition. It materializes a
+winning Egg, transfers it through Token-2022 to an independent holder with no
+Clutch Position or Replay account, then resolves the market. A transaction
+containing two identical external redemptions refuses the duplicate with
+`Custom(0x001c)` and restores all eighteen watched accounts byte-for-byte. A
+subsequent valid redemption burns the holder's remaining three Eggs, pays three
+collateral atoms, and exactly reloads the source and destination token accounts,
+outcome mint, Hoard state and token account, SupplyLedger, kernel, and unrelated
+second-owner state. This closes the original stranded-bearer counterexample for
+that path; it does not constitute a hostile-role matrix, an independent
+state-transition differential, or evidence for a future derived payout mode.
+
+**Regression gate:** preserve the signed transferred-holder redemption and
+duplicate-exit rollback. Broaden it across every admitted payout mode and mutate
+every suffix mint/order, claimant/source/destination binding,
 program/owner/extension role, payout lot, and late-CPI failure; every refusal
-must restore all watched bytes.
+must restore all watched bytes. Any derived-basis codec must earn a new runtime
+gate rather than inheriting the finite-preset result.
 
 ### SBF-V1-004 — deterministic resolution is not source-authenticated
 
@@ -270,14 +286,17 @@ nonce/prestate for most steps because `simulateTransaction` does not commit.
 The new narrow SVM cases supersede that claim for the market-local core only;
 they do not make the old whole lifecycle permissionless.
 
-A newer signed committed-bank runner improves the evidence shape: it uses real
-transactions, confirmation, account reload, and a same-address plan. Its
-current generated plan reaches 16 steps including absent-state CreateMarket,
-ordinary Token-2022 accounts, a transfer to a positionless holder, and external
-redemption. Plan generation is not execution. The integrated validator gate has
-not been rerun on the new ABI, and the plan still injects Realm/Profile/Terms,
-feeds, evidence buffers/pages, and has no Withdraw. Its honest label remains
-**GENESIS-ASSISTED / NOT END-TO-END**.
+The signed committed-bank runner now executes rather than merely generates its
+same-address plan. At `aadc0cd`, it commits twenty sequential signed and
+confirmed transactions against one market identity, exercises absent-state
+CreateMarket, ordinary Token-2022 account construction and transfer, second-
+owner Position/Replay construction, and the positionless external exit. It
+reloads eighteen watched accounts, observes two exact expected refusals, and a
+deliberately corrupted terminal expectation makes the fresh rerun fail. This is
+meaningfully stronger lifecycle evidence, but the plan still genesis-injects
+eleven Realm/Profile/Terms/feed/policy/buffer/page prerequisites, uses separate
+advance-feed and matured resolve-feed fixtures, omits SettlePage, and has no
+Withdraw. Its honest label remains **GENESIS-ASSISTED / NOT END-TO-END**.
 
 **Required gate:** start a blank local bank containing only the program, system
 programs/sysvars, token program, a funded payer, and chosen collateral mint.
@@ -520,23 +539,42 @@ It built ELF
 `9b7f3bc6d052cb8778dc17ab2fccc6d08c6f3837fe1873535aed179e0f5d29e7`,
 then passed 12/12 collateral-plane and 6/6 bearer-token tests. This validates
 the direct-burn liveness and core-construction cases described above. It does
-not exercise `RedeemExternal`, the full hostile bearer account matrix, or a
-replacement reference differential, so SBF-V1-003 remains open.
+not itself exercise `RedeemExternal`, the full hostile bearer account matrix,
+or a replacement reference differential. The separate signed-validator walk
+below supplies the narrow external-exit runtime evidence; the broader two gaps
+remain P2 hardening work.
 
 The exact-current `fa166fb` artifact was then rerun through the same complete
 suite: 12/12 collateral and 6/6 bearer-token tests passed with ELF `98cac8a1…`;
 the direct-burn synchronization plus unrelated live transition used 91,624 CU.
 The focused extra `fa166fb` hostile-vector cases remain host-level.
 
+Commit `aadc0cd` drives that exact audited ELF through the loopback-only signed
+committed runner:
+
+```sh
+programs/clutch-sbf/scripts/run_committed.sh
+```
+
+The clean-source run commits twenty signed and confirmed same-market
+transactions, observes two exact refusals, and reloads eighteen watched
+accounts. Its terminal sequence transfers the winning Egg to a holder with no
+Position/Replay, proves a duplicated `RedeemExternal` rolls all watched bytes
+back, then executes an exact positionless bearer redemption. Corrupting one
+terminal expected byte makes a fresh run fail, establishing basic harness
+falsifiability. The run remains genesis-assisted by eleven prerequisite
+accounts and retains 61 plus 6 atoms as owner cash because Withdraw is absent;
+it is not a blank-bank or complete venue lifecycle.
+
 ## 7. Minimum next gate, in dependency order
 
 1. Implement unreserved cash withdrawal and define exact cash/claim reservation
    and release while preserving
    `C = L + F + R_cash + U`; keep `U` unowned.
-2. Preserve the green direct-burn SVM case and complete the replacement
-   bearer-plane differential and hostile-account campaign.
-3. Promote positionless external redemption in the same campaign; define any
-   later Position generation/reopen lifecycle separately.
+2. Preserve the green direct-burn and positionless-redemption runtime cases;
+   complete the replacement bearer-plane differential and hostile-account
+   campaign, and give every future derived payout mode its own runtime gate.
+3. Define any later Position generation/reopen lifecycle separately.
 4. Add public artifact transport plus Feed/Epoch/page/candidate/checkpoint
    constructors and remove genesis injection from the promotion gate.
 5. Wire a concrete authenticated source adapter and Clock into FeedAdvance;
@@ -576,11 +614,11 @@ Two truth-boundary cautions remain until later lanes close them:
    sounds like the full instruction. It can produce cash bytes with no token
    transfer. Only the routed thirteen-account SBF path is value-bearing
    evidence.
-2. Legacy compiled-out seam/evidence fixtures and several public comments still
+2. Legacy compiled-out seam/evidence fixtures and some historical prose still
    use owner-shadow vocabulary. `054b2f6` migrates the executable `token_leg`
-   suite and restores a green build, but its historical test names still say
-   "shadow reconciles." Replacement evidence must describe authoritative mint
-   supply rather than citing deleted per-owner state.
+   suite and `0a01b0a` gives its live tests bearer-truth names. Replacement
+   evidence must continue to describe authoritative mint supply rather than
+   citing deleted per-owner state.
 
 The real-bank Endow evidence covers the existing-owner admitted path and
 insufficient-funds refusal, plus second-owner creation, unauthorized creation,
@@ -594,8 +632,12 @@ pre/post assertions.
 
 Account construction is narrowly executed as described in SBF-V1-005. Bearer
 truth now has real-SVM direct-burn evidence, closing SBF-V1-002's original
-liveness counterexample. Positionless exit remains open under SBF-V1-003 because
-the integrated SVM suite never calls `RedeemExternal`, and replacement
-independent state-transition differentials do not exist, although focused host
-account-boundary mutations do. These evidence gaps are stronger release criteria
-than host test count or generated committed-run plan length.
+liveness counterexample. The signed committed-validator walk closes
+SBF-V1-003's original positionless-exit counterexample for the demonstrated
+transferred-holder, one-hot finite-preset path, including late duplicate-exit
+rollback. A full hostile bearer matrix and independent replacement
+state-transition differential do not yet exist, although focused host
+account-boundary mutations do. Those P2 evidence gaps—and the independent
+Withdraw, source-authentication, genesis-assistance, resolution-replay, and
+order-reservation/settlement STOPs—remain stronger release criteria than raw
+host test count or committed-run plan length.
