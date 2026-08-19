@@ -4,10 +4,12 @@
 //! turns a folded observation page into an advanced, replay-guarded cursor
 //! (digest-chained and signer-authorized — nothing here authenticates the
 //! observation *sources*), and the
-//! categorical evidence gate that turns a sealed window into exactly one
-//! payout index. Native degree-1 through degree-3 terms refuse this persisted
-//! path until its account state can carry `BasisMode` and a resolved vector;
-//! they are never searched through the preset set. It
+//! evidence gate that turns a sealed window into either one categorical payout
+//! index (degree zero, version-two Resolution bytes) or one native B-spline
+//! vector (degrees one through three, version-three Resolution bytes). Smooth
+//! terms are never searched through the preset set. The native vector has one
+//! persisted owner—the immutable Resolution record—and is reconstructed only
+//! into an ephemeral kernel value for redemption. It
 //! contains no economic logic — the payout algebra is [`clutch_kernel`], the
 //! window algebra is [`clutch_accumulator`], the terms-to-payout derivation is
 //! [`clutch_solana_reference::derive_payout`], and byte ownership is
@@ -36,7 +38,11 @@
 //! ## The oracle
 //!
 //! `clutch_solana_reference::apply_market_resolution_with_evidence` is the
-//! market-global Resolve oracle;
+//! degree-zero market-global Resolve oracle. Native resolution composes the
+//! reference's pure `derive_payout_vector` seam with the kernel's
+//! `resolve_with_vector` seam and the v3 layout codec; the real-SBF campaign is
+//! the adapter evidence because the old composed reference account path is
+//! deliberately version-two/index-shaped.
 //! `clutch_solana_reference::apply_with_evidence` remains the owner-scoped
 //! redemption oracle. Every check is rebuilt here from `#[inline(never)]`
 //! frames because calling the composed offline adapter exceeds SBF's 4 KiB
@@ -60,7 +66,7 @@
 //! | `validate_padding` | step 3 | yes |
 //! | `validate_aggregate_closure` | step 4 | yes |
 //! | owner replay sequence (`RedeemInternal` only) | step 5 | yes |
-//! | `kernel_market` invariants | step 6 | yes |
+//! | `kernel_market` invariants | step 6 | yes for v2; v3 additionally reads its sole vector owner |
 //! | `validate_evidence_metadata` writability + zero window id | step 7 | yes |
 //! | `validate_evidence_metadata` owner/key/alias | [`process`], with the other addresses | **moved earlier** |
 //! | signer / `authorize_owner` | step 8 | yes |
@@ -94,12 +100,13 @@
 //!
 //! ## What this program cannot derive, and what that costs
 //!
-//! Two values the frozen layouts require are digests, and this crate owns no
-//! hash primitive: [`clutch_accumulator`] deliberately publishes the canonical
-//! `WindowDomain` preimage and no digest, and `clutch-solana-layout`'s SHA-256
-//! is private to its own canonical identities.
+//! Two values the frozen layouts require are called digests, but this
+//! instruction does not possess canonical digest preimages for them:
+//! [`clutch_accumulator`] deliberately publishes the canonical `WindowDomain`
+//! fields and no authenticated archive commitment, while the feed summary
+//! commitment has no checked source/archive chain here.
 //!
-//! - **The window identity.**  [`clutch_solana_layout::ResolutionAccount`]
+//! - **The window identity.**  Both resolution codecs
 //!   refuses a zero `window` on a resolved record, so a resolve must write one.
 //!   It arrives declared, in the evidence buffer, is refused when zero, and is
 //!   *recorded, not believed* — exactly the posture
@@ -240,15 +247,19 @@ use clutch_kernel::{
     BasisMode, MarketState, PayoutVector, Phase, Position, MAX_OUTCOMES as KERNEL_MAX_OUTCOMES,
 };
 use clutch_solana_layout::{
-    account_len, CodecError, FeedAccount, Hash32, HoardAccount, Intent, MarketAccount,
-    PayoutVectorBytes, PositionAccount, ResolutionAccount, SupplyLedgerAccount, TermsAccount,
-    MAX_OUTCOMES,
+    account_len,
+    native_resolution::{
+        NativeResolutionAccount, NATIVE_RESOLUTION_LEN, RESOLUTION_MODE_DERIVED_POINT,
+    },
+    CodecError, FeedAccount, Hash32, HoardAccount, Intent, MarketAccount, PayoutVectorBytes,
+    PositionAccount, ResolutionAccount, SupplyLedgerAccount, TermsAccount, MAX_OUTCOMES,
+    PAYOUT_INDEX_UNRESOLVED,
 };
 use clutch_solana_reference::{
-    derive_payout, Action, Error as ReferenceError, KernelAccount, ReplayAccount, Request,
-    ResolutionRefusal, ResolutionTerms, WindowError, KERNEL_ACCOUNT_LEN, MAX_OBSERVATIONS,
-    MAX_WINDOW_EVIDENCE_LEN, OBSERVATION_RECORD_BYTES, REPLAY_ACCOUNT_LEN,
-    WINDOW_EVIDENCE_HEADER_BYTES,
+    derive_payout, derive_payout_vector, Action, Error as ReferenceError, KernelAccount,
+    ReplayAccount, Request, ResolutionRefusal, ResolutionTerms, WindowError, KERNEL_ACCOUNT_LEN,
+    MAX_OBSERVATIONS, MAX_WINDOW_EVIDENCE_LEN, OBSERVATION_RECORD_BYTES, REPLAY_ACCOUNT_LEN,
+    STAT_SAMPLED_MAX_03, STAT_SAMPLED_MIN_02, STAT_TERMINAL_01, WINDOW_EVIDENCE_HEADER_BYTES,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -913,6 +924,7 @@ struct TermsHead {
     terms: Hash32,
     feed: Hash32,
     payout_count: u8,
+    basis_degree: u8,
     repair_generation: u64,
 }
 
@@ -922,12 +934,23 @@ struct RecordHead {
     window: Hash32,
     payout_index: u8,
     resolved: bool,
+    native_vector: PayoutVectorBytes,
 }
 
 /// The sealed-window facts a resolve records.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SealedFacts {
     payout_index: u8,
+    sealed_cursor: u64,
+    end_bucket_exclusive: u64,
+    repair_generation: u64,
+}
+
+/// The point and exact native vector derived from one sealed smooth window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NativeSealedFacts {
+    resolved_value: u128,
+    vector: PayoutVectorBytes,
     sealed_cursor: u64,
     end_bucket_exclusive: u64,
     repair_generation: u64,
@@ -1057,6 +1080,13 @@ fn load_terms(bytes: &[u8], out: &mut TermsAccount) -> Gate<()> {
 }
 
 #[inline(never)]
+fn terms_basis_degree(bytes: &[u8]) -> Gate<u8> {
+    let mut terms = ZERO_TERMS;
+    load_terms(bytes, &mut terms)?;
+    Ok(terms.basis_degree)
+}
+
+#[inline(never)]
 fn load_market(bytes: &[u8], out: &mut MarketAccount) -> Gate<()> {
     *out = MarketAccount::decode(bytes)?;
     Ok(())
@@ -1071,6 +1101,12 @@ fn load_kernel(bytes: &[u8], out: &mut KernelAccount) -> Gate<()> {
 #[inline(never)]
 fn load_resolution(bytes: &[u8], out: &mut ResolutionAccount) -> Gate<()> {
     *out = ResolutionAccount::decode(bytes)?;
+    Ok(())
+}
+
+#[inline(never)]
+fn load_native_resolution(bytes: &[u8], out: &mut NativeResolutionAccount) -> Gate<()> {
+    NativeResolutionAccount::decode_into(bytes, out)?;
     Ok(())
 }
 
@@ -1090,6 +1126,55 @@ fn require_record_binds_terms(record: &ResolutionAccount, terms: &TermsAccount) 
     record
         .binds_terms_fields(terms)
         .map_err(|_| ReferenceError::ResolutionBindingMismatch)
+}
+
+/// The reusable v3 projection consumed by any post-resolution payout path.
+///
+/// `external_exit` is intentionally not wired in this commit, but it must call
+/// this helper (and [`reconstruct_native_market`]) rather than decode a second
+/// interpretation of the record.  That keeps the immutable Resolution account
+/// the sole persisted vector owner across internal and bearer redemption.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BoundNativeResolution {
+    /// Declared sealed-window identity recorded at resolution.
+    pub(crate) window: Hash32,
+    /// Exact native payout vector owned by the v3 record.
+    pub(crate) vector: PayoutVectorBytes,
+}
+
+/// Decode and bind a resolved native record to immutable terms and market.
+#[inline(never)]
+pub(crate) fn bound_native_resolution(
+    resolution_bytes: &[u8],
+    terms_bytes: &[u8],
+    resolution_bump: u8,
+    market: Hash32,
+) -> core::result::Result<BoundNativeResolution, ReferenceError> {
+    let mut terms = ZERO_TERMS;
+    load_terms(terms_bytes, &mut terms)?;
+    if !(1..=3).contains(&terms.basis_degree) {
+        return Err(ReferenceError::Resolution(
+            ResolutionRefusal::WrongResolutionMode,
+        ));
+    }
+    let mut record = NativeResolutionAccount::ZEROED;
+    load_native_resolution(resolution_bytes, &mut record)?;
+    if record.stored_bump != resolution_bump {
+        return Err(ReferenceError::WrongBump);
+    }
+    if record.market != market {
+        return Err(ReferenceError::ResolutionBindingMismatch);
+    }
+    record
+        .binds_terms_fields(&terms)
+        .map_err(|_| ReferenceError::ResolutionBindingMismatch)?;
+    if record.mode != RESOLUTION_MODE_DERIVED_POINT {
+        return Err(ReferenceError::ResolutionNotRecorded);
+    }
+    Ok(BoundNativeResolution {
+        window: record.window,
+        vector: record.vector,
+    })
 }
 
 #[inline(never)]
@@ -1112,6 +1197,7 @@ fn terms_binds_market(market_bytes: &[u8], terms_bytes: &[u8], terms_bump: u8) -
         terms: terms.terms,
         feed: terms.feed,
         payout_count: terms.payout_count,
+        basis_degree: terms.basis_degree,
         repair_generation: terms.repair_generation,
     })
 }
@@ -1157,21 +1243,39 @@ fn resolution_binds(
     resolution_bump: u8,
     market: Hash32,
 ) -> Gate<RecordHead> {
-    let mut record = ZERO_RESOLUTION;
-    load_resolution(resolution_bytes, &mut record)?;
-    if record.stored_bump != resolution_bump {
-        return Err(ReferenceError::WrongBump);
+    if resolution_bytes.len() == account_len::RESOLUTION {
+        let mut terms = ZERO_TERMS;
+        load_terms(terms_bytes, &mut terms)?;
+        if terms.basis_degree != 0 {
+            return Err(ReferenceError::Resolution(
+                ResolutionRefusal::WrongResolutionMode,
+            ));
+        }
+        let mut record = ZERO_RESOLUTION;
+        load_resolution(resolution_bytes, &mut record)?;
+        if record.stored_bump != resolution_bump {
+            return Err(ReferenceError::WrongBump);
+        }
+        if record.market != market {
+            return Err(ReferenceError::ResolutionBindingMismatch);
+        }
+        require_record_binds_terms(&record, &terms)?;
+        return Ok(RecordHead {
+            window: record.window,
+            payout_index: record.payout_index,
+            resolved: record.is_resolved(),
+            native_vector: PayoutVectorBytes::ZERO,
+        });
     }
-    if record.market != market {
-        return Err(ReferenceError::ResolutionBindingMismatch);
+    if resolution_bytes.len() != NATIVE_RESOLUTION_LEN {
+        return Err(ReferenceError::WrongLength);
     }
-    let mut terms = ZERO_TERMS;
-    load_terms(terms_bytes, &mut terms)?;
-    require_record_binds_terms(&record, &terms)?;
+    let record = bound_native_resolution(resolution_bytes, terms_bytes, resolution_bump, market)?;
     Ok(RecordHead {
         window: record.window,
-        payout_index: record.payout_index,
-        resolved: record.is_resolved(),
+        payout_index: PAYOUT_INDEX_UNRESOLVED,
+        resolved: true,
+        native_vector: record.vector,
     })
 }
 
@@ -1225,10 +1329,92 @@ fn derive_from_evidence(
     })
 }
 
+/// Derive one smooth-basis payout from an exact integer statistic point.
+///
+/// The persisted v3 record stores the raw point before edge handling.  All
+/// smooth degrees therefore use the stricter point-only admission rule here,
+/// including degree one: an interval whose endpoint vectors happen to
+/// quantize equally is still not a point and cannot be serialized as one.
+/// No midpoint or endpoint choice exists on this path.
+#[inline(never)]
+fn derive_native_from_evidence(
+    market_bytes: &[u8],
+    terms_bytes: &[u8],
+    window_bytes: &[u8],
+    feed_cursor: u64,
+) -> Gate<NativeSealedFacts> {
+    let derived = derived_terms(market_bytes, terms_bytes)?;
+    if !(1..=3).contains(&derived.basis_degree) {
+        return Err(ReferenceError::Resolution(
+            ResolutionRefusal::WrongResolutionMode,
+        ));
+    }
+    let window = fold_window_evidence(window_bytes, feed_cursor)?;
+    /* The reference seam owns source identity, grid, exact window-domain,
+     * edge policy, spline evaluation and largest-remainder quantization. */
+    let vector = derive_payout_vector(&derived, &window)?;
+    let (low, high) = match derived.statistic {
+        STAT_TERMINAL_01 => {
+            let interval = window
+                .terminal()
+                .map_err(|_| ReferenceError::Resolution(ResolutionRefusal::NoAcceptedCoverage))?;
+            (interval.low(), interval.high())
+        }
+        STAT_SAMPLED_MIN_02 => {
+            let interval = window.sampled_min().ok_or(ReferenceError::Resolution(
+                ResolutionRefusal::NoAcceptedCoverage,
+            ))?;
+            (interval.low(), interval.high())
+        }
+        STAT_SAMPLED_MAX_03 => {
+            let interval = window.sampled_max().ok_or(ReferenceError::Resolution(
+                ResolutionRefusal::NoAcceptedCoverage,
+            ))?;
+            (interval.low(), interval.high())
+        }
+        _ => {
+            return Err(ReferenceError::Resolution(
+                ResolutionRefusal::StatisticUnsupported,
+            ))
+        }
+    };
+    if low != high {
+        return Err(ReferenceError::Resolution(
+            ResolutionRefusal::NonPointEvidence,
+        ));
+    }
+    Ok(NativeSealedFacts {
+        resolved_value: low,
+        vector,
+        sealed_cursor: window.sealed_cursor(),
+        end_bucket_exclusive: window.domain().end_bucket_exclusive(),
+        repair_generation: window.domain().generation(),
+    })
+}
+
 /// `kernel_market`: rebuild the pure market and run its invariants.
 #[inline(never)]
 fn kernel_invariants(kernel_bytes: &[u8], outcome_count: u8, collateral: u64) -> Gate<()> {
     pure_market(kernel_bytes, outcome_count, collateral).map(|_| ())
+}
+
+/// Rebuild the derived-basis invariant from the v3 record without retaining a
+/// second persisted vector.
+#[inline(never)]
+fn native_kernel_invariants(
+    kernel_bytes: &[u8],
+    outcome_count: u8,
+    collateral: u64,
+    resolution_bytes: &[u8],
+) -> Gate<()> {
+    let mut record = NativeResolutionAccount::ZEROED;
+    load_native_resolution(resolution_bytes, &mut record)?;
+    let vector = if record.mode == RESOLUTION_MODE_DERIVED_POINT {
+        PayoutVector::new(record.vector.denominator, record.vector.weights)
+    } else {
+        PayoutVector::ZERO
+    };
+    reconstruct_native_market(kernel_bytes, outcome_count, collateral, vector).map(|_| ())
 }
 
 /// Decode the aggregate into a pure `MarketState`, in **its own frame**.
@@ -1251,22 +1437,58 @@ fn pure_market(kernel_bytes: &[u8], outcome_count: u8, collateral: u64) -> Gate<
         1 => Phase::Resolved,
         _ => return Err(ReferenceError::NonCanonical),
     };
-    /* `basis_mode` and `resolved_vector` are the resolution seam
-     * `clutch_kernel` grew for distributional claims.  This program rebuilds
-     * every `MarketState` from a stored `KernelAccount`, and that frozen
-     * layout carries no mode field -- so `FinitePreset` is not a choice made
-     * here, it is the only mode a decoded aggregate can name, and the kernel
-     * documents it as "byte-for-byte the semantics this kernel had before mode
-     * 1 existed".  A market whose terms select mode 1 needs a mode carrier in
-     * the layout before this line may say anything else; until then a
-     * derived-basis market is unrepresentable on chain rather than silently
-     * resolved as a preset one. */
+    /* This constructor is deliberately the degree-zero projection. The
+     * aggregate carries no basis mode or native vector, so smooth terms must
+     * instead enter through `reconstruct_native_market`, which installs the
+     * v3 Resolution record's sole vector ephemerally. Keeping the two
+     * constructors separate prevents an index-zero aggregate from silently
+     * masquerading as a derived payout. */
     let market = MarketState {
         outcomes: outcome_count,
         phase,
         resolved_payout: kernel.resolved_payout,
         basis_mode: BasisMode::FinitePreset,
         resolved_vector: PayoutVector::ZERO,
+        collateral,
+        total_supply: kernel.total_supply,
+        payouts: kernel.payouts,
+    };
+    market.check_invariants()?;
+    Ok(market)
+}
+
+/// Rebuild a derived-basis market from the aggregate and the sole persisted
+/// native vector.  The vector is ephemeral: it is installed only in this
+/// stack value and is never copied into `KernelAccount`.
+#[inline(never)]
+pub(crate) fn reconstruct_native_market(
+    kernel_bytes: &[u8],
+    outcome_count: u8,
+    collateral: u64,
+    resolved_vector: PayoutVector,
+) -> core::result::Result<MarketState, ReferenceError> {
+    let kernel = KernelAccount::decode(kernel_bytes)?;
+    if usize::from(outcome_count) > KERNEL_MAX_OUTCOMES
+        || kernel.payouts.outcomes != outcome_count
+        || (kernel.phase == 1 && kernel.resolved_payout != 0)
+    {
+        return Err(ReferenceError::MismatchedState);
+    }
+    let phase = match kernel.phase {
+        0 => Phase::Active,
+        1 => Phase::Resolved,
+        _ => return Err(ReferenceError::NonCanonical),
+    };
+    let market = MarketState {
+        outcomes: outcome_count,
+        phase,
+        resolved_payout: 0,
+        basis_mode: BasisMode::DerivedBasis,
+        resolved_vector: if phase == Phase::Resolved {
+            resolved_vector
+        } else {
+            PayoutVector::ZERO
+        },
         collateral,
         total_supply: kernel.total_supply,
         payouts: kernel.payouts,
@@ -1300,6 +1522,21 @@ fn kernel_resolve(
     Ok(step_of(&market))
 }
 
+/// Run the native derived-vector resolution seam in its own frame.
+#[inline(never)]
+fn kernel_resolve_native(
+    kernel_bytes: &[u8],
+    outcome_count: u8,
+    collateral: u64,
+    vector: PayoutVectorBytes,
+) -> Gate<KernelStep> {
+    let installed = PayoutVector::new(vector.denominator, vector.weights);
+    let mut market =
+        reconstruct_native_market(kernel_bytes, outcome_count, collateral, PayoutVector::ZERO)?;
+    market.resolve_with_vector(installed)?;
+    Ok(step_of(&market))
+}
+
 /// Run `MarketState::redeem_internal` in its own frame.
 #[inline(never)]
 fn kernel_redeem(
@@ -1311,6 +1548,23 @@ fn kernel_redeem(
     quantity: u64,
 ) -> Gate<(KernelStep, u64)> {
     let mut market = pure_market(kernel_bytes, outcome_count, collateral)?;
+    let paid = market.redeem_internal(position, outcome, quantity)?;
+    Ok((step_of(&market), paid))
+}
+
+/// Redeem against the immutable v3 record's vector without persisting a copy.
+#[inline(never)]
+fn kernel_redeem_native(
+    kernel_bytes: &[u8],
+    outcome_count: u8,
+    collateral: u64,
+    vector: PayoutVectorBytes,
+    position: &mut Position,
+    outcome: u8,
+    quantity: u64,
+) -> Gate<(KernelStep, u64)> {
+    let installed = PayoutVector::new(vector.denominator, vector.weights);
+    let mut market = reconstruct_native_market(kernel_bytes, outcome_count, collateral, installed)?;
     let paid = market.redeem_internal(position, outcome, quantity)?;
     Ok((step_of(&market), paid))
 }
@@ -1497,7 +1751,16 @@ fn apply_evidence_transition(
         .ok_or(ReferenceError::Replay)?;
 
     /* 6. `kernel_market`: the pure invariants, before any evidence is read. */
-    kernel_invariants(state.kernel, market.outcome_count, hoard.collateral_atoms)?;
+    if plane.resolution.len() == NATIVE_RESOLUTION_LEN {
+        native_kernel_invariants(
+            state.kernel,
+            market.outcome_count,
+            hoard.collateral_atoms,
+            plane.resolution,
+        )?;
+    } else {
+        kernel_invariants(state.kernel, market.outcome_count, hoard.collateral_atoms)?;
+    }
     let mut pure_position = Position {
         internal: position.internal,
         external: [0; MAX_OUTCOMES],
@@ -1544,27 +1807,40 @@ fn apply_evidence_transition(
         if record.window != plane.window_id {
             return Err(ReferenceError::ResolutionBindingMismatch);
         }
-        if record.payout_index >= terms.payout_count {
+        if terms.basis_degree == 0 && record.payout_index >= terms.payout_count {
             return Err(ReferenceError::Resolution(
                 ResolutionRefusal::PayoutIndexOutOfRange,
             ));
         }
         if market.lifecycle != 1
             || kernel.phase != 1
-            || kernel.resolved_payout != record.payout_index
+            || (terms.basis_degree == 0 && kernel.resolved_payout != record.payout_index)
+            || (terms.basis_degree != 0 && kernel.resolved_payout != 0)
         {
             return Err(ReferenceError::MismatchedState);
         }
 
         /* 10. Only now does the kernel move. */
-        let (step, paid) = kernel_redeem(
-            state.kernel,
-            market.outcome_count,
-            hoard.collateral_atoms,
-            &mut pure_position,
-            outcome,
-            quantity,
-        )?;
+        let (step, paid) = if terms.basis_degree == 0 {
+            kernel_redeem(
+                state.kernel,
+                market.outcome_count,
+                hoard.collateral_atoms,
+                &mut pure_position,
+                outcome,
+                quantity,
+            )?
+        } else {
+            kernel_redeem_native(
+                state.kernel,
+                market.outcome_count,
+                hoard.collateral_atoms,
+                record.native_vector,
+                &mut pure_position,
+                outcome,
+                quantity,
+            )?
+        };
         position.cash_atoms = position
             .cash_atoms
             .checked_add(paid)
@@ -1606,8 +1882,25 @@ fn apply_evidence_transition(
 /// Result of one market-global resolution attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ResolveOutput {
-    resolution: [u8; account_len::RESOLUTION],
+    resolution: ResolutionWrite,
     repeated: bool,
+}
+
+/// Explicitly versioned resolution bytes.  Account length and terms degree
+/// select one arm; v2 bytes are never interpreted as v3 or vice versa.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResolutionWrite {
+    Legacy([u8; account_len::RESOLUTION]),
+    Native([u8; NATIVE_RESOLUTION_LEN]),
+}
+
+impl ResolutionWrite {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Legacy(bytes) => bytes,
+            Self::Native(bytes) => bytes,
+        }
+    }
 }
 
 /// Apply the market-global resolution transition without an owner state plane.
@@ -1620,6 +1913,29 @@ struct ResolveOutput {
 /// market state; a conflicting repeat refuses.
 #[inline(never)]
 fn apply_market_resolution(
+    state: &mut ResolveStateSlices<'_>,
+    plane: &EvidencePlane<'_>,
+    bumps: &ResolveBumps,
+    signer: bool,
+    sequence: u64,
+    requested_payout: u8,
+) -> Gate<ResolveOutput> {
+    if plane.resolution.len() == NATIVE_RESOLUTION_LEN {
+        return apply_native_market_resolution(
+            state,
+            plane,
+            bumps,
+            signer,
+            sequence,
+            requested_payout,
+        );
+    }
+    apply_legacy_market_resolution(state, plane, bumps, signer, sequence, requested_payout)
+}
+
+/// The unchanged version-two finite-preset transition.
+#[inline(never)]
+fn apply_legacy_market_resolution(
     state: &mut ResolveStateSlices<'_>,
     plane: &EvidencePlane<'_>,
     bumps: &ResolveBumps,
@@ -1738,7 +2054,7 @@ fn apply_market_resolution(
             write_market_lifecycle(state.market, 1)?;
             write_kernel(state.kernel, &step)?;
             Ok(ResolveOutput {
-                resolution: resolution_bytes,
+                resolution: ResolutionWrite::Legacy(resolution_bytes),
                 repeated: false,
             })
         }
@@ -1747,7 +2063,173 @@ fn apply_market_resolution(
                 return Err(ReferenceError::ResolutionBindingMismatch);
             }
             Ok(ResolveOutput {
-                resolution: resolution_bytes,
+                resolution: ResolutionWrite::Legacy(resolution_bytes),
+                repeated: true,
+            })
+        }
+        (0, 0, true) => Err(ReferenceError::ResolutionAlreadyRecorded),
+        _ => Err(ReferenceError::MismatchedState),
+    }
+}
+
+/// Version-three point resolution for degree-one through degree-three terms.
+///
+/// The request's historical `payout_index` byte is a mode discriminator on
+/// this path and must be the unresolved sentinel.  The selected payout is the
+/// vector derived from evidence, never a caller-named preset.
+#[inline(never)]
+fn apply_native_market_resolution(
+    state: &mut ResolveStateSlices<'_>,
+    plane: &EvidencePlane<'_>,
+    bumps: &ResolveBumps,
+    signer: bool,
+    sequence: u64,
+    requested_payout: u8,
+) -> Gate<ResolveOutput> {
+    let market = market_head(state.market)?;
+    let hoard = HoardAccount::decode(state.hoard)?;
+    let kernel = kernel_head(state.kernel)?;
+    let supply = SupplyLedgerAccount::decode(state.supply)?;
+
+    if market.stored_bump != bumps.market
+        || market.hoard_bump != bumps.hoard
+        || hoard.stored_bump != bumps.hoard
+        || supply.stored_bump != bumps.supply
+    {
+        return Err(ReferenceError::WrongBump);
+    }
+    if market.market != hoard.market
+        || market.realm != hoard.realm
+        || market.market != kernel.market
+        || market.market != supply.market
+        || market.realm != supply.realm
+        || market.outcome_count != supply.outcome_count
+        || kernel.payout_outcomes != market.outcome_count
+        || (market.lifecycle == 0 && kernel.phase != 0)
+        || (market.lifecycle == 1 && kernel.phase != 1)
+        || market.lifecycle > 1
+    {
+        return Err(ReferenceError::MismatchedState);
+    }
+    let count = usize::from(market.outcome_count);
+    let mut index = count;
+    while index < MAX_OUTCOMES {
+        if kernel.total_supply[index] != 0 {
+            return Err(ReferenceError::NonCanonical);
+        }
+        index += 1;
+    }
+    check_market_closure(market.outcome_count, &supply, &kernel.total_supply)?;
+
+    if plane.terms_writable {
+        return Err(ReferenceError::ImmutableAccountWritable);
+    }
+    if !plane.resolution_writable {
+        return Err(ReferenceError::NotWritable);
+    }
+    if plane.window_id == Hash32::ZERO {
+        return Err(ReferenceError::WindowIdentityUnavailable);
+    }
+    if !signer {
+        return Err(ReferenceError::MissingSignature);
+    }
+    if requested_payout != PAYOUT_INDEX_UNRESOLVED {
+        return Err(ReferenceError::PayoutIndexMismatch);
+    }
+
+    let terms = terms_binds_market(state.market, plane.terms, bumps.terms)?;
+    if !(1..=3).contains(&terms.basis_degree) {
+        return Err(ReferenceError::Resolution(
+            ResolutionRefusal::WrongResolutionMode,
+        ));
+    }
+    payout_set_binds_terms(state.kernel, plane.terms)?;
+    let mut record = NativeResolutionAccount::ZEROED;
+    load_native_resolution(plane.resolution, &mut record)?;
+    if record.stored_bump != bumps.resolution {
+        return Err(ReferenceError::WrongBump);
+    }
+    if record.market != market.market {
+        return Err(ReferenceError::ResolutionBindingMismatch);
+    }
+    {
+        let mut full_terms = ZERO_TERMS;
+        load_terms(plane.terms, &mut full_terms)?;
+        record
+            .binds_terms_fields(&full_terms)
+            .map_err(|_| ReferenceError::ResolutionBindingMismatch)?;
+    }
+    native_kernel_invariants(
+        state.kernel,
+        market.outcome_count,
+        hoard.collateral_atoms,
+        plane.resolution,
+    )?;
+
+    let sealed =
+        derive_native_from_evidence(state.market, plane.terms, plane.window, plane.feed_cursor)?;
+    if sequence != terms.repair_generation || sequence != sealed.repair_generation {
+        return Err(ReferenceError::Replay);
+    }
+
+    let already_resolved = record.is_resolved();
+    let expected = NativeResolutionAccount {
+        market: market.market,
+        terms: terms.terms,
+        feed: terms.feed,
+        window: plane.window_id,
+        feed_cursor: if already_resolved {
+            record.feed_cursor
+        } else {
+            sealed.sealed_cursor
+        },
+        sealed_end_bucket_exclusive: sealed.end_bucket_exclusive,
+        repair_generation: sealed.repair_generation,
+        resolved_slot: if already_resolved {
+            record.resolved_slot
+        } else {
+            plane.resolved_slot
+        },
+        mode: RESOLUTION_MODE_DERIVED_POINT,
+        payout_index: PAYOUT_INDEX_UNRESOLVED,
+        outcome_count: market.outcome_count,
+        resolved_value: sealed.resolved_value,
+        vector: sealed.vector,
+        stored_bump: bumps.resolution,
+        flags: 0,
+    };
+    {
+        let mut full_terms = ZERO_TERMS;
+        load_terms(plane.terms, &mut full_terms)?;
+        expected
+            .binds_terms_fields(&full_terms)
+            .map_err(|_| ReferenceError::ResolutionBindingMismatch)?;
+    }
+    let mut resolution_bytes = [0_u8; NATIVE_RESOLUTION_LEN];
+    expected.encode(&mut resolution_bytes)?;
+
+    match (market.lifecycle, kernel.phase, already_resolved) {
+        (0, 0, false) => {
+            let step = kernel_resolve_native(
+                state.kernel,
+                market.outcome_count,
+                hoard.collateral_atoms,
+                sealed.vector,
+            )?;
+            check_market_closure(market.outcome_count, &supply, &step.total_supply)?;
+            write_market_lifecycle(state.market, 1)?;
+            write_kernel(state.kernel, &step)?;
+            Ok(ResolveOutput {
+                resolution: ResolutionWrite::Native(resolution_bytes),
+                repeated: false,
+            })
+        }
+        (1, 1, true) => {
+            if kernel.resolved_payout != 0 || record != expected {
+                return Err(ReferenceError::ResolutionBindingMismatch);
+            }
+            Ok(ResolveOutput {
+                resolution: ResolutionWrite::Native(resolution_bytes),
                 repeated: true,
             })
         }
@@ -1952,16 +2434,10 @@ fn resolve_global(
     validate_open_roles(
         program_id,
         accounts,
-        &[
-            OpenRole {
-                index: IX_RESOLVE_TERMS,
-                len: account_len::TERMS,
-            },
-            OpenRole {
-                index: IX_RESOLVE_RESOLUTION,
-                len: account_len::RESOLUTION,
-            },
-        ],
+        &[OpenRole {
+            index: IX_RESOLVE_TERMS,
+            len: account_len::TERMS,
+        }],
     )?;
     validate_buffer_role(
         program_id,
@@ -1976,6 +2452,19 @@ fn resolve_global(
         ClutchError::AccountCount,
     )?;
     let terms = accounts::read_terms(&accounts[IX_RESOLVE_TERMS].data.borrow())?;
+    let resolution_len = if terms_basis_degree(&accounts[IX_RESOLVE_TERMS].data.borrow())? == 0 {
+        account_len::RESOLUTION
+    } else {
+        NATIVE_RESOLUTION_LEN
+    };
+    validate_open_roles(
+        program_id,
+        accounts,
+        &[OpenRole {
+            index: IX_RESOLVE_RESOLUTION,
+            len: resolution_len,
+        }],
+    )?;
     let feed = accounts::read_feed(&accounts[IX_RESOLVE_FEED].data.borrow())?;
     let market_bytes = market.market.bytes();
     let realm_bytes = market.realm.bytes();
@@ -2074,7 +2563,7 @@ fn resolve_global(
             )?;
         }
         let mut record = borrow_mut!(accounts[IX_RESOLVE_RESOLUTION])?;
-        record.copy_from_slice(&output.resolution);
+        record.copy_from_slice(output.resolution.bytes());
     } else {
         /* Exact repeats are observationally idempotent, including the cached
          * external-supply plane. A holder burn after resolution is handled by
@@ -2124,16 +2613,24 @@ fn evidence_gated(
     validate_open_roles(
         program_id,
         accounts,
-        &[
-            OpenRole {
-                index: IX_TERMS,
-                len: account_len::TERMS,
-            },
-            OpenRole {
-                index: IX_RESOLUTION,
-                len: account_len::RESOLUTION,
-            },
-        ],
+        &[OpenRole {
+            index: IX_TERMS,
+            len: account_len::TERMS,
+        }],
+    )?;
+    let terms = accounts::read_terms(&accounts[IX_TERMS].data.borrow())?;
+    let resolution_len = if terms_basis_degree(&accounts[IX_TERMS].data.borrow())? == 0 {
+        account_len::RESOLUTION
+    } else {
+        NATIVE_RESOLUTION_LEN
+    };
+    validate_open_roles(
+        program_id,
+        accounts,
+        &[OpenRole {
+            index: IX_RESOLUTION,
+            len: resolution_len,
+        }],
     )?;
     validate_buffer_role(
         program_id,
@@ -2156,7 +2653,6 @@ fn evidence_gated(
         accounts.len() == mint_prefix + usize::from(market.outcome_count),
         ClutchError::AccountCount,
     )?;
-    let terms = accounts::read_terms(&accounts[IX_TERMS].data.borrow())?;
     let feed = accounts::read_feed(&accounts[IX_FEED].data.borrow())?;
     let (owner, generation) = {
         let position = PositionAccount::decode(&accounts[IX_POSITION].data.borrow())?;
