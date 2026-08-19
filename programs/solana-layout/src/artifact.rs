@@ -15,8 +15,9 @@
 //! become consensus truth by choosing a new discriminant.
 
 use super::{
-    account_len, collateral, is_zero, CodecError, Hash32, PriceGridAccount, Result, TermsAccount,
-    HASH_BYTES,
+    account_len, collateral,
+    direct_selection_v3::{DirectBatchPolicyV3, DIRECT_BATCH_POLICY_V3_BYTES},
+    is_zero, CodecError, Hash32, PriceGridAccount, Result, TermsAccount, HASH_BYTES,
 };
 use clutch_batch_policy_identity::{
     batch_policy_digest, decode_batch_policy, Identity32V1, BATCH_POLICY_BYTES,
@@ -60,6 +61,8 @@ pub enum ArtifactKind {
     Terms = 3,
     /// Immutable full-width batch-policy preimage. Its context is an Epoch id.
     BatchPolicy = 4,
+    /// Direct-policy plus verifier release identity. Its context is an Epoch id.
+    DirectBatchPolicyV3 = 5,
 }
 
 impl ArtifactKind {
@@ -70,6 +73,7 @@ impl ArtifactKind {
             2 => Ok(Self::PriceGrid),
             3 => Ok(Self::Terms),
             4 => Ok(Self::BatchPolicy),
+            5 => Ok(Self::DirectBatchPolicyV3),
             _ => Err(CodecError::InvalidEnum),
         }
     }
@@ -86,6 +90,7 @@ impl ArtifactKind {
             Self::PriceGrid => account_len::PRICE_GRID,
             Self::Terms => account_len::TERMS,
             Self::BatchPolicy => BATCH_POLICY_BYTES,
+            Self::DirectBatchPolicyV3 => DIRECT_BATCH_POLICY_V3_BYTES,
         }
     }
 }
@@ -394,6 +399,13 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             }
             Ok(0)
         }
+        ArtifactKind::DirectBatchPolicyV3 => {
+            let policy = DirectBatchPolicyV3::decode(body)?;
+            if policy.digest_for_epoch(binding.context)? != binding.digest {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
     }
 }
 
@@ -432,6 +444,7 @@ mod tests {
             ArtifactKind::PriceGrid,
             ArtifactKind::Terms,
             ArtifactKind::BatchPolicy,
+            ArtifactKind::DirectBatchPolicyV3,
         ] {
             let h = header(kind);
             let mut bytes = std::vec![0xa5; h.account_len().unwrap()];
@@ -563,6 +576,49 @@ mod tests {
         assert_eq!(
             validate_artifact(substituted, &bytes),
             Err(CodecError::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn direct_batch_policy_artifact_binds_kind_context_release_and_all_bytes() {
+        let context = Hash32::from_bytes([0x44; 32]);
+        let value = DirectBatchPolicyV3::direct(Hash32::from_bytes([0x77; 32])).unwrap();
+        let mut bytes = [0u8; DIRECT_BATCH_POLICY_V3_BYTES];
+        value.encode(&mut bytes).unwrap();
+        let binding = ArtifactBinding {
+            kind: ArtifactKind::DirectBatchPolicyV3,
+            context,
+            digest: value.digest_for_epoch(context).unwrap(),
+            exact_len: DIRECT_BATCH_POLICY_V3_BYTES as u16,
+        };
+        assert_eq!(validate_artifact(binding, &bytes), Ok(0));
+
+        let old_kind = ArtifactBinding {
+            kind: ArtifactKind::BatchPolicy,
+            exact_len: BATCH_POLICY_BYTES as u16,
+            ..binding
+        };
+        assert_eq!(
+            validate_artifact(old_kind, &bytes[..BATCH_POLICY_BYTES]),
+            Err(CodecError::MismatchedBinding)
+        );
+        let substituted_context = ArtifactBinding {
+            context: Hash32::from_bytes([0x45; 32]),
+            ..binding
+        };
+        assert_eq!(
+            validate_artifact(substituted_context, &bytes),
+            Err(CodecError::MismatchedBinding)
+        );
+        let mut hostile = bytes;
+        hostile[DIRECT_BATCH_POLICY_V3_BYTES - 1] ^= 1;
+        assert_eq!(
+            validate_artifact(binding, &hostile),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(
+            validate_artifact(binding, &bytes[..DIRECT_BATCH_POLICY_V3_BYTES - 1]),
+            Err(CodecError::Truncated)
         );
     }
 }

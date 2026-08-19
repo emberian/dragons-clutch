@@ -94,6 +94,8 @@ pub const SEED_ARTIFACT_STAGE: &[u8] = b"dragons-clutch:upload:v1";
 pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
 /// Canonical full-width batch-policy artifact seed prefix.
 pub const SEED_BATCH_POLICY: &[u8] = b"dragons-clutch:batch-policy:v1";
+/// DirectBatchPolicy V3 final-artifact seed prefix, disjoint from legacy policy.
+pub const SEED_DIRECT_BATCH_POLICY_V3: &[u8] = b"dc:direct-policy:v3";
 /// Direct candidate-window account seed prefix.
 pub const SEED_DIRECT_WINDOW: &[u8] = b"dragons-clutch:direct-window:v1";
 /// Full-width verified direct candidate seed prefix.
@@ -236,6 +238,15 @@ pub fn policy_pda(program_id: &Pubkey, profile: &[u8; 32], digest: &[u8; 32]) ->
 /// Canonical full-width batch-policy artifact address.
 pub fn batch_policy_pda(program_id: &Pubkey, epoch: &[u8; 32], digest: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_BATCH_POLICY, epoch, digest])
+}
+
+/// Canonical DirectBatchPolicy V3 artifact address.
+pub fn direct_batch_policy_v3_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    digest: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DIRECT_BATCH_POLICY_V3, epoch, digest])
 }
 
 /// Canonical direct candidate-window address.
@@ -428,7 +439,7 @@ mod tests {
     /// `hoard-authority` prefix was caught at 33 bytes.
     #[test]
     fn every_seed_prefix_fits_one_seed() {
-        const PREFIXES: [&[u8]; 28] = [
+        const PREFIXES: [&[u8]; 29] = [
             SEED_REALM,
             SEED_PROFILE,
             SEED_MARKET,
@@ -450,6 +461,7 @@ mod tests {
             SEED_POT,
             SEED_RECEIPT,
             SEED_BATCH_POLICY,
+            SEED_DIRECT_BATCH_POLICY_V3,
             SEED_DIRECT_WINDOW,
             SEED_DIRECT_CANDIDATE,
             SEED_DIRECT_RECEIPT,
@@ -470,6 +482,7 @@ mod tests {
         assert_eq!(SEED_OUTCOME_MINT.len(), 30);
         assert_eq!(SEED_HOARD_TOKEN.len(), 29);
         assert_eq!(SEED_BATCH_POLICY.len(), 30);
+        assert_eq!(SEED_DIRECT_BATCH_POLICY_V3.len(), 19);
         assert_eq!(SEED_DIRECT_WINDOW.len(), 31);
         assert_eq!(SEED_DIRECT_CANDIDATE.len(), 31);
         assert_eq!(SEED_DIRECT_RECEIPT.len(), 32);
