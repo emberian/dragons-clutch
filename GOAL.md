@@ -61,6 +61,17 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- DEVNET PACES HARNESS LANDED (9bee35f): standalone devnet-paces binary,
+  24 unit tests, pedantic clippy; dry-run PASS both profiles on a blank
+  validator at fresh program ids (devnet's exact shape) plus a required-red
+  negative control. Honest finding: the mock provider trio cannot exist on
+  a public cluster, so devnet paces = 28 accepted public transactions
+  (tokens, artifacts, Realm/Profile, full market plane incl. native v3
+  record) + exact refusal boundaries (0x79/0x7a/0x4) with byte-identical
+  rollback; the funded lifecycle remains local evidence until the real
+  Pyth-pull build. Mainnet double-refused by URL allowlist + genesis hash.
+  Ready to fire the moment the deployer is funded.
+
 - DRAFT 11 x2 (degg-research 0dd6601, 4ce0ce6): both Aug-24 documents
   rewritten in the named-system register — definitions (9pp) with the
   smooth-claim worked example and Pyth crossing-rule source note;
