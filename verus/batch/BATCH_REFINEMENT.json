@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "status": "checked-mathematical-shadow",
+  "property_id": "P-BATCH-SCALAR-SHADOW-01",
+  "statement": "For the scalar FixedBook mathematical shadow: successful positive-total largest-remainder allocation conserves its target and bounds every fill; the max-volume/min-imbalance/highest-index rule has a unique winner on every nonempty bounded grid; accepted buy and sell folds both equal matched and partition the fill sum; canonical zero padding does not change the active-prefix fold.",
+  "statement_digest_sha256": "78b1a2ac704fd21881c93b1e4d88cc7d9543e05a227fac8b1f35b79646a2812a",
+  "model": "verus/batch/batch.rs",
+  "model_digest_sha256": "8582df09205c96d15ab3b99818f6096d0e49849675570caf04085580e7054cf0",
+  "reviewed_production_source": "crates/clutch-batch/src/lib.rs",
+  "reviewed_production_source_digest_sha256": "f25ce5524a71f9e8ad5200992bb69290444865243f26040906d7aa6798013249",
+  "reviewed_production_seams": {
+    "PriceGrid_impl_sha256": "216ad4b7db7967c71206043a1b7775ef0a25df09e8c64329d8a8ff163fb11ae9",
+    "FixedBook_impl_sha256": "6d41c75a1218aa4485730fdf4526143b9b370d364d14535bb5d52c74c51b3c16",
+    "Candidate_struct_sha256": "7dcacb6d06f6702e282f18ab152c7989df635f1c182a5606a4913026e863ce00"
+  },
+  "excluded_pinned_sources": {
+    "crates/clutch-batch/src/relation_v1.rs": "f95b4931414386f109ef52b844616f86f11e21121d6f9ef8901f18b77eafc490",
+    "crates/clutch-batch/src/relation_v1_stream.rs": "c196c096c75adfb85397eda5e5d905dde89349ab06512e5ad02d345d75fbf358"
+  },
+  "theorems": [
+    "allocate_conserves",
+    "choose_tick_deterministic",
+    "relation_conserves",
+    "canonical_padding_zero"
+  ],
+  "tool": {
+    "name": "Verus",
+    "version": "0.2026.08.15.7d4628a",
+    "commit": "7d4628a8543d3e51e6e314c52032c9bab43f0f53",
+    "rust_frontend": "1.97.1-aarch64-apple-darwin",
+    "verus_binary_sha256": "07b3859fc335fd9bf803323baf82584dcefb62d74329561875353f5fde93fe8b",
+    "z3": "4.16.0",
+    "z3_binary_sha256": "edae32f9e37ea4b5bb35310d72f0e352d0dc07626cac4e9e30bc1ea9a5bc8efb",
+    "vstd_rlib_digest_sha256": "91f842643674660a1da8799eda3eceaa37e5816682d026b3d860bc59a81be61c",
+    "vstd_vir_digest_sha256": "3061321483841360c760fa3fb38b22be57533052cf2100eb51956aa31205fa7d"
+  },
+  "configuration": "verus/batch/run_batch_proofs.sh",
+  "configuration_digest_sha256": "37186e5d9f7c8bdcdd26dc88a895f4d3ea4d7109096f4d52c0d56d497fed31b0",
+  "result": "PASS: verification results:: 20 verified, 0 errors",
+  "assumption_manifest": "verus/batch/BATCH_ASSUMPTIONS.md",
+  "assumption_manifest_digest_sha256": "cbee7e392c20c1341f14798ec1b18161748748f66acb781d2799a0e7f95f022d",
+  "proof_log": "verus/batch/evidence/batch_proofs.txt",
+  "proof_log_digest_sha256": "e35d4e562541981c93b4f19de1d419078e9241b9b4af466bedcbba66bf4c5f1f",
+  "checked_date": "2026-08-19",
+  "reproduction_command": "sh verus/batch/run_batch_proofs.sh",
+  "mutations": [
+    {
+      "id": "allocation-double-dust",
+      "edit": "one selected entry receives two atoms instead of one",
+      "result": "EXPECTED_RED: proof obligation"
+    },
+    {
+      "id": "tick-select-worse",
+      "edit": "the scan tests the previous winner against the challenger but still selects the challenger",
+      "result": "EXPECTED_RED: proof obligation"
+    },
+    {
+      "id": "relation-double-count",
+      "edit": "each side fold includes entries from both sides",
+      "result": "EXPECTED_RED: proof obligation"
+    },
+    {
+      "id": "padding-admit-nonzero",
+      "edit": "canonical padding admits nonnegative rather than zero suffixes",
+      "result": "EXPECTED_RED: proof obligation"
+    }
+  ],
+  "project_assumptions_or_axioms": [],
+  "known_unclosed_boundaries": [
+    "the production Rust body is digest-pinned and manually mapped, not imported into Verus",
+    "the dust loop's existence/progress and distinct positive-remainder selection are theorem premises, not proved from the quotient phase",
+    "unbounded mathematical integers are mapped manually to checked u64 totals and widened u128 products",
+    "score construction and the production choose_tick loop are not refined instruction-by-instruction",
+    "inactive scalar Order fields other than canonical_order_id are not required to be zero by production validation",
+    "relation_v1, relation_v1_stream, pairing, portfolio, AON, Solana/SBF, serialization, accounts, and deployment are excluded"
+  ]
+}

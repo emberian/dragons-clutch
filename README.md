@@ -36,11 +36,13 @@ It does not establish the still-missing authenticated live source join,
 general settlement, or complete operatorless venue lifecycle. The repository
 contains no deployed program, production transaction SDK, private key, live
 market, or financial authority. Verus and Rocq are installed and pinned
-(see toolchain/PINNED_PROOF_TOOLS.md). One narrow executable result is now
-closed: pinned Verus checks the exact production arithmetic helper used by an
-internal-claim transfer, with its source and call seam digest-bound and two
-mutations required to go red. The older mathematical Verus shadows still fail,
-and no whole transition, adapter, SBF ELF, or deployment is formally verified.
+(see toolchain/PINNED_PROOF_TOOLS.md). Pinned Verus checks the exact production
+arithmetic helper used by an internal-claim transfer and, separately, four
+non-vacuous mathematical theorems for the scalar batch shadow. Both runners
+digest-bind their stated production seams and require semantic mutations to go
+red. The kernel and accumulator mathematical shadows still fail; the batch
+shadow is not an executable-body refinement; and no whole transition, coupled
+batch relation, adapter, SBF ELF, or deployment is formally verified.
 Separate Lean theorems cover the uniform native degree-1--3 B-spline semantic
 model and canonical largest-remainder quantization, but are not yet a
 source-level refinement proof of the Rust evaluator. The remaining Rust is

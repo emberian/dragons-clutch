@@ -6,8 +6,9 @@ Silicon, Darwin 25.6.0). Machine-readable form: [`versions.env`](versions.env).
 This file first records *what is installed and pinned*, then separately records
 the results those pins produced. Every proof-content claim still has to name a
 non-vacuous contract or theorem, exact source, assumptions, and unclosed
-boundary. The historical probe and three mathematical shadows remain red; a
-later exact production arithmetic subset has the narrow PASS recorded below.
+boundary. The historical probe and two older mathematical shadows remain red;
+the scalar batch shadow and a separate exact production arithmetic subset have
+the narrow PASS results recorded below.
 
 ## Verus
 
@@ -196,21 +197,31 @@ The correct statement almost certainly binds a fresh output, matching its five
 siblings: `forall s o s', resolve s o = Some s' -> state_validb s' = true`.
 That edit belongs to whoever owns the specification, not to this pin record.
 
-### Verus shadow specs — all three fail to compile
+### Verus mathematical shadows
 
 Run directly with the pinned binary
-(`verus --edition 2021 --crate-type=lib <file>`); none has ever been checked
-before, and none was modified.
+(`verus --edition 2021 --crate-type=lib <file>`), the two older shadows remain
+red. The scalar batch shadow now has non-vacuous checked theorems and a pinned
+runner.
 
 | File | Result |
 | --- | --- |
 | `verus/kernel/lib.rs` | 2 × `E0308`: `Seq::subrange` expects `int`, got `nat` (lines 31, 32) |
 | `verus/accumulator/accumulator.rs` | 4 × `E0308`: `int`-typed sums returned from `u64`/`u128` spec fns (lines 71, 75, 79, 83) |
-| `verus/batch/batch.rs` | `cannot find macro 'verus' in this scope` — the file has no `use vstd::prelude::*;` |
+| `verus/batch/batch.rs` | PASS: `20 verified, 0 errors`; four semantic mutants are required to go red |
 
-`verus/batch/batch.rs` additionally carries four `proof fn`s whose entire
-postcondition is `ensures true`. Those are vacuous placeholders, self-labelled
-as `TODO`, and would prove nothing even if the file compiled.
+The batch result proves a mathematical scalar-`FixedBook` shadow: successful
+positive-total allocation conservation and bounds, unique lexicographic tick
+choice, equality of accepted buy/sell folds, and zero-padding fold identity.
+It is not an executable-body refinement. The runner pins the shadow and the
+reviewed production implementations, while
+`verus/batch/BATCH_ASSUMPTIONS.md` records the human correspondence, the
+successful-allocation premises, and the explicit exclusion of coupled
+`relation_v1` and `relation_v1_stream`. Reproduce with:
+
+```sh
+sh verus/batch/run_batch_proofs.sh
+```
 
 ### Production internal-transfer arithmetic — narrow PASS
 
@@ -255,8 +266,10 @@ adapter, SBF, runtime, or deployment result follows. See
   toolchain `1.97.1-aarch64-apple-darwin`, not by the Verus artifact. The
   dylib hash in the link table matches, but the toolchain is outside this
   repository's control.
-* **Correspondence beyond the transfer helper** — the three shadow specs are
-  hand-written restatements and remain unpinned to `crates/clutch-*`. The narrow
-  transfer result checks an exact production function body, but its caller seam
-  is digest-bound manual review rather than a proved whole-transition
-  refinement.
+* **Correspondence beyond the transfer helper** — the kernel and accumulator
+  shadows are hand-written, red, and unpinned to `crates/clutch-*`. The passing
+  scalar batch shadow pins its reviewed production implementations, but that
+  correspondence remains manual rather than an executable-body refinement.
+  The narrow transfer result checks an exact production function body, but its
+  caller seam is likewise digest-bound manual review rather than a proved
+  whole-transition refinement.

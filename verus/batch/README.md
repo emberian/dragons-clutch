@@ -1,32 +1,42 @@
-# Batch relation proof scaffold
+# Verified scalar batch shadow
 
-This directory is an intentionally uncompiled Verus scaffold for the pure
-arithmetic boundary in `crates/clutch-batch`. It is not a proof, and the Rust
-crate does not claim formal verification. No `assume`, `admit`, axiom, or
-`external_body` is used to make a claim appear closed.
+`batch.rs` is a checked mathematical shadow of the scalar `FixedBook` relation
+in `crates/clutch-batch/src/lib.rs`. With the repository's pinned local Verus
+release it reports:
 
-Verus is installed and pinned (see
-[`toolchain/PINNED_PROOF_TOOLS.md`](../../toolchain/PINNED_PROOF_TOOLS.md)).
-Run directly against the pinned binary, `batch.rs` **fails** to compile:
-`cannot find macro 'verus' in this scope`, because the file has no
-`use vstd::prelude::*;`. It has never compiled and no proof log exists.
+```text
+verification results:: 20 verified, 0 errors
+```
 
-`batch.rs` additionally contains four `proof fn`s whose entire postcondition
-is `ensures true`. These are vacuous placeholders, self-labelled `TODO`, and
-would prove nothing even if the file compiled — they must never be counted in
-any theorem or assumption inventory for this repository.
+Reproduce the pinned proof and its four required red mutants offline:
 
-The first obligations are:
+```sh
+sh verus/batch/run_batch_proofs.sh
+```
 
-1. `allocate_conserves`: largest-remainder allocation sums to the target and
-   every fill is bounded by its order quantity.
-2. `choose_tick_deterministic`: the tie rule returns one grid index for every
-   valid fixed grid.
-3. `relation_conserves`: verified buy and sell fills are equal to the selected
-   matched quantity.
-4. `canonical_padding_zero`: inactive fixed-array entries cannot affect a
-   successful relation result.
+The exported theorem inventory is:
 
-The executable facts are the tests and checked arithmetic in the Cargo crate;
-the theorem names below are proposed proof targets only until a pinned Verus
-toolchain verifies this exact source digest.
+- `allocate_conserves`: a successful positive-total quotient/remainder
+  allocation sums exactly to its target and every fill lies between zero and
+  its order quantity;
+- `choose_tick_deterministic`: every nonempty bounded score grid has one unique
+  lexicographic winner under max-volume, min-imbalance, highest-tick ordering;
+- `relation_conserves`: successful scalar verification makes the buy and sell
+  fill folds both equal `matched`, while their partition equals twice matched;
+- `canonical_padding_zero`: validated zero padding contributes nothing to a
+  full fixed-array fold.
+
+The proof unit has no project assumptions or axioms. Its premises describe
+successful production seams and are visible in the theorem signatures. In
+particular, the allocation theorem does not prove that the production dust loop
+always finds the required distinct positive-remainder entries.
+
+This is not an executable-body refinement result. The runner SHA-256-pins the
+mathematical source, the scalar production source, and the precise production
+implementations reviewed for correspondence. Pinned digests detect drift; they
+do not make that human correspondence proof automatic. The coupled
+`relation_v1`, its streaming verifier, pairing feasibility, portfolio legs,
+Solana/SBF, accounts, serialization, and deployment are expressly excluded.
+
+See `BATCH_ASSUMPTIONS.md` for the exact mapping, assumptions, and remaining
+STOPs. Captured output is in `evidence/batch_proofs.txt`.
