@@ -436,6 +436,7 @@ use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
+mod reservation;
 mod settlement;
 
 /// Borrow one account's data mutably, or refuse.
@@ -757,8 +758,17 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         Action::Layout(Intent::PlaceOrder {
             market,
             epoch,
+            max_fee_atoms,
             slot,
-        }) => place_order(program_id, accounts, request.sequence, market, epoch, slot),
+        }) => place_order(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            max_fee_atoms,
+            slot,
+        ),
         Action::Layout(Intent::CancelOrder {
             market,
             epoch,
@@ -796,8 +806,10 @@ fn place_order(
     sequence: u64,
     intent_market: Hash32,
     intent_epoch: Hash32,
+    max_fee_atoms: u64,
     slot: OrderSlot,
 ) -> Outcome<()> {
+    let _ = max_fee_atoms;
     require_count(accounts, PLACE_ORDER_ACCOUNT_COUNT)?;
     require_signer(&accounts[IX_ACTOR])?;
     require_distinct(accounts)?;
@@ -2022,11 +2034,13 @@ mod tests {
         let single = Intent::PlaceOrder {
             market,
             epoch,
+            max_fee_atoms: 0,
             slot: OrderSlot::Single(order(0x20, 1, 5_000)),
         };
         let basket = Intent::PlaceOrder {
             market,
             epoch,
+            max_fee_atoms: 0,
             slot: OrderSlot::Portfolio(portfolio(0x20, 1)),
         };
         assert_eq!(single.encoded_len(), 2 + 32 + 32 + 1 + ORDER_RECORD_BYTES);
@@ -2062,6 +2076,7 @@ mod tests {
                 Intent::PlaceOrder {
                     market,
                     epoch,
+                    max_fee_atoms: 0,
                     slot
                 }
                 .encode(&mut bytes),
@@ -2096,6 +2111,7 @@ mod tests {
             Action::Layout(Intent::PlaceOrder {
                 market,
                 epoch,
+                max_fee_atoms: 0,
                 slot: OrderSlot::Single(order(0x20, 1, 5_000)),
             }),
             Action::Layout(Intent::CancelOrder {

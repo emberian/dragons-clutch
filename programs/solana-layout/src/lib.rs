@@ -13,6 +13,7 @@
 
 pub mod clearing;
 pub mod collateral;
+pub mod reservation;
 pub mod stream;
 
 /// Highest account schema version this build understands.
@@ -41,7 +42,13 @@ pub const LAYOUT_VERSION_V2: u8 = 2;
 /// [`account_version::ORDER_PAGE`] and refuses this one.
 pub const LAYOUT_VERSION_V3: u8 = 3;
 /// Schema version of every deterministic intent encoding.
-pub const INTENT_VERSION: u8 = 2;
+pub const INTENT_VERSION: u8 = 3;
+/// Superseded intent encoding carrying order families but no fee cap.
+///
+/// Version 2 made portfolio placement expressible. It is refused because a
+/// funded buy reservation cannot be computed without the owner's maximum fee
+/// authorization.
+pub const INTENT_VERSION_V2: u8 = 2;
 /// The superseded intent encoding version.
 ///
 /// Version 1 carried a placement as a bare [`OrderRecord`], so a portfolio
@@ -190,7 +197,7 @@ pub const ORDER_KIND_TOMBSTONE: u8 = 3;
 /// This is exactly the widest admitted intent — a portfolio placement, which
 /// carries a whole [`PortfolioRecord`] body behind its slot kind byte — not a
 /// round number with slack in it.  A test pins every variant against it.
-pub const MAX_INTENT_BYTES: usize = 2 + (2 * HASH_BYTES) + 1 + PORTFOLIO_RECORD_BYTES;
+pub const MAX_INTENT_BYTES: usize = 2 + (2 * HASH_BYTES) + 8 + 1 + PORTFOLIO_RECORD_BYTES;
 
 const _: () = assert!(MAX_EPOCH_ORDERS == 64);
 const _: () = assert!(MAX_PRICE_SCALE > 0);
@@ -4263,6 +4270,8 @@ pub enum Intent {
     PlaceOrder {
         market: MarketId,
         epoch: EpochId,
+        /// Maximum collateral fee atoms this owner authorizes.
+        max_fee_atoms: u64,
         slot: OrderSlot,
     },
     /// Retire one existing order identity, writing a [`TombstoneRecord`].
@@ -4329,7 +4338,7 @@ pub enum Intent {
     InitPriceGrid { realm: RealmHash, grid: Hash32 },
     /// Bring one immutable terms artifact into existence.
     ///
-    /// The terms body is 1,656 bytes and [`MAX_INTENT_BYTES`] is 302; that is
+    /// The terms body is 1,656 bytes and [`MAX_INTENT_BYTES`] is 310; that is
     /// **by design**, not a limitation being worked around.  The intent budget
     /// is the width of the widest *transition*, and an initialization that
     /// carried a whole account would make every instruction's wire format as
@@ -4477,11 +4486,11 @@ impl Intent {
             Self::RedeemExternal { .. } => 2 + 32 + 32 + 32 + 32 + 1 + 8,
             Self::FeedAdvance { .. } => 2 + 32 + 8 + 32,
             Self::PlaceOrder { slot, .. } => match slot {
-                OrderSlot::Single(_) => 2 + 32 + 32 + 1 + ORDER_RECORD_BYTES,
-                OrderSlot::Portfolio(_) => 2 + 32 + 32 + 1 + PORTFOLIO_RECORD_BYTES,
+                OrderSlot::Single(_) => 2 + 32 + 32 + 8 + 1 + ORDER_RECORD_BYTES,
+                OrderSlot::Portfolio(_) => 2 + 32 + 32 + 8 + 1 + PORTFOLIO_RECORD_BYTES,
                 /* Neither padding nor a retirement is a placement; `encode`
                  * refuses both before this length could be used to write. */
-                OrderSlot::Empty | OrderSlot::Tombstone(_) => 2 + 32 + 32 + 1,
+                OrderSlot::Empty | OrderSlot::Tombstone(_) => 2 + 32 + 32 + 8 + 1,
             },
             Self::CancelOrder { .. } => 2 + 32 + 32 + 32 + 32 + 8,
             Self::SettlePage { .. } => 2 + 32 + 32 + 2,
@@ -4628,6 +4637,7 @@ impl Intent {
             Self::PlaceOrder {
                 market,
                 epoch,
+                max_fee_atoms,
                 slot,
             } => {
                 check_hash(*market)?;
@@ -4636,6 +4646,7 @@ impl Intent {
                 put_header(&mut w, PLACE_TAG, INTENT_VERSION)?;
                 w.hash(*market)?;
                 w.hash(*epoch)?;
+                w.u64(*max_fee_atoms)?;
                 w.u8(slot.kind())?;
                 match slot {
                     OrderSlot::Single(o) => encode_order(&mut w, *o)?,
@@ -4905,6 +4916,7 @@ impl Intent {
             PLACE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
+                let max_fee_atoms = r.u64()?;
                 let slot = match r.u8()? {
                     ORDER_KIND_SINGLE => OrderSlot::Single(decode_order(&mut r)?),
                     ORDER_KIND_PORTFOLIO => OrderSlot::Portfolio(decode_portfolio(&mut r)?),
@@ -4921,6 +4933,7 @@ impl Intent {
                 Ok(Self::PlaceOrder {
                     market,
                     epoch,
+                    max_fee_atoms,
                     slot,
                 })
             }
@@ -5625,7 +5638,7 @@ mod tests {
             236 + MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES
         );
         // The widest admitted intent is a portfolio placement, exactly.
-        assert_eq!(MAX_INTENT_BYTES, 302);
+        assert_eq!(MAX_INTENT_BYTES, 310);
     }
     #[test]
     fn mirrored_bounds_match_their_owning_crates() {
@@ -8899,64 +8912,69 @@ mod tests {
         let single_placement = Intent::PlaceOrder {
             market,
             epoch,
+            max_fee_atoms: 7,
             slot: single(1),
         };
         let n = single_placement.encode(&mut b).unwrap();
-        assert_eq!(n, 2 + 32 + 32 + 1 + ORDER_RECORD_BYTES);
-        assert_eq!(n, 174);
+        assert_eq!(n, 2 + 32 + 32 + 8 + 1 + ORDER_RECORD_BYTES);
+        assert_eq!(n, 182);
         assert_eq!(&b[..2], [PLACE_TAG, INTENT_VERSION]);
-        assert_eq!(b[66], ORDER_KIND_SINGLE);
+        assert_eq!(&b[66..74], &7u64.to_le_bytes());
+        assert_eq!(b[74], ORDER_KIND_SINGLE);
         assert_eq!(Intent::decode(&b[..n]), Ok(single_placement));
 
         let portfolio_placement = Intent::PlaceOrder {
             market,
             epoch,
+            max_fee_atoms: 9,
             slot: OrderSlot::Portfolio(portfolio(1)),
         };
         let n = portfolio_placement.encode(&mut b).unwrap();
-        assert_eq!(n, 2 + 32 + 32 + 1 + PORTFOLIO_RECORD_BYTES);
-        assert_eq!(n, 302);
+        assert_eq!(n, 2 + 32 + 32 + 8 + 1 + PORTFOLIO_RECORD_BYTES);
+        assert_eq!(n, 310);
         assert_eq!(
             n, MAX_INTENT_BYTES,
             "a portfolio placement is the widest intent"
         );
-        assert_eq!(b[66], ORDER_KIND_PORTFOLIO);
+        assert_eq!(&b[66..74], &9u64.to_le_bytes());
+        assert_eq!(b[74], ORDER_KIND_PORTFOLIO);
         assert_eq!(Intent::decode(&b[..n]), Ok(portfolio_placement));
         /* The wire body is the kind's *exact* body, not a slot: the widest
          * placement is exactly one slot wide because the portfolio body is what
          * sets the slot width, and the single-Egg one is far narrower than the
          * common width a page would pad it to. */
-        assert_eq!(n, 2 + 32 + 32 + ORDER_SLOT_BYTES);
+        assert_eq!(n, 2 + 32 + 32 + 8 + ORDER_SLOT_BYTES);
         assert_eq!(
             single_placement.encoded_len(),
-            2 + 32 + 32 + 1 + ORDER_RECORD_BYTES
+            2 + 32 + 32 + 8 + 1 + ORDER_RECORD_BYTES
         );
-        assert!(single_placement.encoded_len() < 2 + 32 + 32 + ORDER_SLOT_BYTES);
+        assert!(single_placement.encoded_len() < 2 + 32 + 32 + 8 + ORDER_SLOT_BYTES);
 
         // Padding and retirements are recognized kinds that are not placements.
         for refused in [OrderSlot::Empty, tombstone(1, h(20), 1, 2)] {
             let i = Intent::PlaceOrder {
                 market,
                 epoch,
+                max_fee_atoms: 0,
                 slot: refused,
             };
             assert_eq!(i.encode(&mut b), Err(CodecError::InvalidEnum));
         }
         let n = single_placement.encode(&mut b).unwrap();
         let mut retired_kind = b;
-        retired_kind[66] = ORDER_KIND_TOMBSTONE;
+        retired_kind[74] = ORDER_KIND_TOMBSTONE;
         assert_eq!(
             Intent::decode(&retired_kind[..n]),
             Err(CodecError::InvalidEnum)
         );
         let mut empty_kind = b;
-        empty_kind[66] = ORDER_KIND_EMPTY;
+        empty_kind[74] = ORDER_KIND_EMPTY;
         assert_eq!(
             Intent::decode(&empty_kind[..n]),
             Err(CodecError::InvalidEnum)
         );
         let mut no_kind = b;
-        no_kind[66] = ORDER_KIND_TOMBSTONE + 1;
+        no_kind[74] = ORDER_KIND_TOMBSTONE + 1;
         assert_eq!(Intent::decode(&no_kind[..n]), Err(CodecError::WrongTag));
 
         // A placement id is still a rank on the wire.
@@ -8966,6 +8984,7 @@ mod tests {
             Intent::PlaceOrder {
                 market,
                 epoch,
+                max_fee_atoms: 0,
                 slot: OrderSlot::Single(wild),
             }
             .encode(&mut b),
@@ -9033,11 +9052,13 @@ mod tests {
             Intent::PlaceOrder {
                 market,
                 epoch,
+                max_fee_atoms: 0,
                 slot: single(1),
             },
             Intent::PlaceOrder {
                 market,
                 epoch,
+                max_fee_atoms: 0,
                 slot: OrderSlot::Portfolio(portfolio(1)),
             },
             Intent::CancelOrder {
@@ -9084,7 +9105,8 @@ mod tests {
                 amount: 12,
             },
         ];
-        assert_eq!(INTENT_VERSION, 2);
+        assert_eq!(INTENT_VERSION, 3);
+        assert_eq!(INTENT_VERSION_V2, 2);
         assert_eq!(INTENT_VERSION_V1, 1);
         let mut i = 0;
         while i < intents.len() {
@@ -9095,6 +9117,8 @@ mod tests {
             assert!(n <= MAX_INTENT_BYTES);
             assert_eq!(Intent::decode(&b[..n]), Ok(intents[i]));
             b[1] = INTENT_VERSION_V1;
+            assert_eq!(Intent::decode(&b[..n]), Err(CodecError::WrongVersion));
+            b[1] = INTENT_VERSION_V2;
             assert_eq!(Intent::decode(&b[..n]), Err(CodecError::WrongVersion));
             b[1] = INTENT_VERSION + 1;
             assert_eq!(Intent::decode(&b[..n]), Err(CodecError::WrongVersion));
@@ -9260,7 +9284,7 @@ mod tests {
             i += 1;
         }
         assert!(widest < MAX_INTENT_BYTES);
-        assert_eq!(MAX_INTENT_BYTES, 302);
+        assert_eq!(MAX_INTENT_BYTES, 310);
     }
 
     #[test]

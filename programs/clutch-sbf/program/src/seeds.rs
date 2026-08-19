@@ -74,6 +74,8 @@ pub const SEED_RESOLUTION: &[u8] = b"dragons-clutch:resolution:v1";
 pub const SEED_EPOCH: &[u8] = b"dragons-clutch:epoch:v1";
 /// Order-page account seed prefix.
 pub const SEED_PAGE: &[u8] = b"dragons-clutch:page:v1";
+/// Per-order funded-reservation account seed prefix.
+pub const SEED_RESERVATION: &[u8] = b"dragons-clutch:reservation:v1";
 /// Candidate-record account seed prefix.
 pub const SEED_CANDIDATE: &[u8] = b"dragons-clutch:candidate:v1";
 /// Final-pot account seed prefix.
@@ -198,6 +200,15 @@ pub fn page_pda(program_id: &Pubkey, epoch: &[u8; 32], page_index: u16) -> (Pubk
     find(program_id, &[SEED_PAGE, epoch, &page_index.to_le_bytes()])
 }
 
+/// Canonical per-order reservation address and bump.
+///
+/// The layout-owned reservation digest already commits to market, epoch,
+/// owner, Position generation, and order id. Seeding on that one fixed-width
+/// identity keeps the PDA tuple short without truncating any coordinate.
+pub fn reservation_pda(program_id: &Pubkey, reservation: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_RESERVATION, reservation])
+}
+
 /// Canonical candidate-record address and bump.
 ///
 /// A candidate is content-addressed by the digest of its free coordinates, and
@@ -293,7 +304,7 @@ mod tests {
     /// `hoard-authority` prefix was caught at 33 bytes.
     #[test]
     fn every_seed_prefix_fits_one_seed() {
-        const PREFIXES: [&[u8]; 21] = [
+        const PREFIXES: [&[u8]; 22] = [
             SEED_REALM,
             SEED_PROFILE,
             SEED_MARKET,
@@ -309,6 +320,7 @@ mod tests {
             SEED_RESOLUTION,
             SEED_EPOCH,
             SEED_PAGE,
+            SEED_RESERVATION,
             SEED_CANDIDATE,
             SEED_POT,
             SEED_RECEIPT,
@@ -335,7 +347,7 @@ mod tests {
     /// prefix that was already here: a shared prefix is a shared address space.
     #[test]
     fn the_token_prefixes_collide_with_nothing() {
-        const EXISTING: [&[u8]; 18] = [
+        const EXISTING: [&[u8]; 19] = [
             SEED_REALM,
             SEED_PROFILE,
             SEED_MARKET,
@@ -351,6 +363,7 @@ mod tests {
             SEED_RESOLUTION,
             SEED_EPOCH,
             SEED_PAGE,
+            SEED_RESERVATION,
             SEED_CANDIDATE,
             SEED_POT,
             SEED_RECEIPT,
