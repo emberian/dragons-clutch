@@ -136,12 +136,13 @@ John packet ready in degg-research.
   historical evidence for 7e8f6b1. My bringup repair lane stood down
   correctly on discovering codex mid-flight on the same gate (its worktree
   dragons-clutch-bringup-split-79 + dirty main-tree files are codex's).
-- R2 pull-profile v2 codec lane landed on its worktree branch (f0e7516 +
-  01291de): 320-byte SourceSpecV2 body, CROSSING_V1 both variants as rule
-  ids 2/3, executable falsifiers incl. double-witness refusal, 26 tests,
-  clippy+rustdoc clean. Six flagged ambiguities for morning review
-  (ProgramData pin, rule-id numbers, grid origin, dup-collapse, contiguity,
-  overflow refusal). Merge deferred until the identity fork settles.
+- R2 pull-profile v2 baseline landed on its isolated worktree branch
+  (f0e7516 + 01291de) and is superseded there by 4daddd4: a 368-byte
+  SourceSpecV2 body, closing-only CROSSING_V1 rule id 2 (ids 1/3 refused),
+  exact ProgramData key/slot, zero grid origin, decoded-body duplicate
+  collapse, start-aware contiguity, and named overflow refusals. Its 32 model
+  tests plus clippy/rustdoc are green; it remains model-only, unmerged, with
+  the default source registry empty and refusal 0x79 preserved.
 
 - V3 blocker fixes LANDED at b49c497 on codex/r3-direct-v3 (jobs worktree,
   clean): order-body 107 with a red-demonstrated cross-crate model/live

@@ -78,6 +78,9 @@ No default registry entry is justified until all of the following are closed:
 - the exact Upgradeable Loader state decoder and reviewed receiver-post ABI /
   Instructions-sysvar parser replace the model projections and prove account
   indices, mutability/signers, instruction adjacency, and deployment link;
+- a canonical Clock-sysvar `AccountInfo` decoder validates the exact sysvar
+  key, owner, non-executable account state, and canonical Clock data before
+  projecting slot/time; caller-provided `ClockViewV1` values never qualify;
 - a production SourceSpec-v2 account codec, feed-domain registration, archive
   append adapter, and compiled closed registry are reviewed together; none is
   present in this slice;
@@ -104,4 +107,3 @@ cargo clippy --locked --offline --all-targets \
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --offline --no-deps \
   --manifest-path research/source-profile-v1/Cargo.toml
 ```
-
