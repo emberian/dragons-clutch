@@ -236,6 +236,129 @@ pub struct DirectTwoOrderInputV1 {
     pub stored_bump: u8,
 }
 
+/// Once-validated full-width authority for repeated bounded verification.
+///
+/// The fields are private so callers cannot manufacture a cached domain
+/// digest without passing the complete [`FullRelationDomainV1`] validation.
+/// This is especially useful at window selection, where every retained
+/// candidate shares one immutable domain and must still be fully re-executed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ValidatedDirectDomainV1 {
+    domain: FullRelationDomainV1,
+    digest: Identity32V1,
+}
+
+impl ValidatedDirectDomainV1 {
+    /// Authenticate the exact direct-policy domain and cache its full digest.
+    pub fn new(domain: &FullRelationDomainV1) -> Result<Self, DirectWindowErrorV1> {
+        let digest = domain.digest()?;
+        if domain.policy != DIRECT_POLICY_V1
+            || domain.outcome_count != 2
+            || domain.owner_count != 2
+            || domain.price_scale == 0
+        {
+            return Err(DirectWindowErrorV1::NotDirect);
+        }
+        Ok(Self {
+            domain: *domain,
+            digest,
+        })
+    }
+
+    /// Re-execute one candidate while reusing only the validated domain hash.
+    pub fn verify(
+        &self,
+        input: DirectTwoOrderInputV1,
+    ) -> Result<DirectCandidateV2, DirectWindowErrorV1> {
+        verify_direct_two_order_candidate_cached(&self.domain, self.digest, input)
+    }
+
+    /// Re-execute the complete bounded relation against one already-decoded
+    /// persisted candidate without re-running its structural/content-id hash.
+    ///
+    /// The caller must have obtained `candidate` from the fixed-layout decoder,
+    /// which calls [`DirectCandidateV2::validate`]. This method independently
+    /// recomputes every source-dependent coordinate, arithmetic score, and full
+    /// relation-candidate digest before accepting byte equality.
+    pub fn reverify_decoded_candidate(
+        &self,
+        candidate: &DirectCandidateV2,
+        input: DirectTwoOrderInputV1,
+    ) -> Result<(), DirectWindowErrorV1> {
+        if input.quantity == 0
+            || input.buy_index > 1
+            || input.sell_index > 1
+            || input.buy_index == input.sell_index
+            || input.outcome >= 2
+            || input.prices[2..].iter().any(|price| *price != 0)
+        {
+            return Err(DirectWindowErrorV1::NotDirect);
+        }
+        let price = input.prices[usize::from(input.outcome)];
+        let other = input.prices[1usize - usize::from(input.outcome)];
+        if price == 0
+            || other == 0
+            || price.checked_add(other) != Some(self.domain.price_scale)
+            || input.sell_limit > price
+            || price > input.buy_limit
+        {
+            return Err(DirectWindowErrorV1::NotDirect);
+        }
+        let weighted = u128::from(input.quantity)
+            .checked_mul(u128::from(price))
+            .and_then(|value| value.checked_mul(u128::from(other)))
+            .ok_or(DirectWindowErrorV1::ArithmeticOverflow)?;
+        let consideration = u128::from(input.quantity)
+            .checked_mul(u128::from(price))
+            .ok_or(DirectWindowErrorV1::ArithmeticOverflow)?;
+        if consideration % u128::from(self.domain.price_scale) != 0 {
+            return Err(DirectWindowErrorV1::NotDirect);
+        }
+        let weighted_direct_volume =
+            i128::try_from(weighted).map_err(|_| DirectWindowErrorV1::ArithmeticOverflow)?;
+        let spread = input
+            .buy_limit
+            .checked_sub(input.sell_limit)
+            .ok_or(DirectWindowErrorV1::NotDirect)?;
+        let limit_surplus_price_units = u128::from(input.quantity)
+            .checked_mul(u128::from(spread))
+            .ok_or(DirectWindowErrorV1::ArithmeticOverflow)?;
+        let relation_candidate_digest =
+            direct_relation_candidate_digest(self.digest, candidate.candidate_id, input.quantity);
+        if candidate.epoch_id != self.domain.epoch_id
+            || candidate.market_id != self.domain.market_id
+            || candidate.order_set_id != self.domain.order_set_id
+            || candidate.policy_id != self.domain.policy_id
+            || candidate.relation_domain_digest != self.digest
+            || candidate.relation_candidate_digest != relation_candidate_digest
+            || candidate.prices != input.prices
+            || candidate.fills != [input.quantity, input.quantity]
+            || candidate.weighted_direct_volume != weighted_direct_volume
+            || candidate.limit_surplus_price_units != limit_surplus_price_units
+            || candidate.submitted_slot != input.submitted_slot
+            || candidate.quantity != input.quantity
+            || candidate.buy_index != input.buy_index
+            || candidate.sell_index != input.sell_index
+            || candidate.outcome != input.outcome
+            || candidate.distinct_owners != 2
+            || candidate.order_len != 2
+            || candidate.outcome_count != 2
+            || candidate.status != DIRECT_CANDIDATE_STATUS_VERIFIED
+            || candidate.stored_bump != input.stored_bump
+            || candidate.flags != 0
+            || candidate.reserved.iter().any(|byte| *byte != 0)
+        {
+            return Err(DirectWindowErrorV1::MismatchedBinding);
+        }
+        Ok(())
+    }
+
+    /// Exact cached full-width relation-domain identity.
+    pub const fn digest(&self) -> Identity32V1 {
+        self.digest
+    }
+}
+
 /// Verify the exact two-order direct specialization without materializing the
 /// 64-order host relation.
 ///
@@ -248,12 +371,15 @@ pub fn verify_direct_two_order_candidate(
     domain: &FullRelationDomainV1,
     input: DirectTwoOrderInputV1,
 ) -> Result<DirectCandidateV2, DirectWindowErrorV1> {
-    domain.validate()?;
-    if domain.policy != DIRECT_POLICY_V1
-        || domain.outcome_count != 2
-        || domain.owner_count != 2
-        || domain.price_scale == 0
-        || input.quantity == 0
+    ValidatedDirectDomainV1::new(domain)?.verify(input)
+}
+
+fn verify_direct_two_order_candidate_cached(
+    domain: &FullRelationDomainV1,
+    domain_digest: Identity32V1,
+    input: DirectTwoOrderInputV1,
+) -> Result<DirectCandidateV2, DirectWindowErrorV1> {
+    if input.quantity == 0
         || input.buy_index > 1
         || input.sell_index > 1
         || input.buy_index == input.sell_index
@@ -294,14 +420,14 @@ pub fn verify_direct_two_order_candidate(
     let candidate_id =
         canonical_account_candidate_id(domain.epoch_id, domain.market_id, &input.prices);
     let relation_candidate_digest =
-        direct_relation_candidate_digest(domain, candidate_id, input.quantity)?;
+        direct_relation_candidate_digest(domain_digest, candidate_id, input.quantity);
     let value = DirectCandidateV2 {
         candidate_id,
         epoch_id: domain.epoch_id,
         market_id: domain.market_id,
         order_set_id: domain.order_set_id,
         policy_id: domain.policy_id,
-        relation_domain_digest: domain.digest()?,
+        relation_domain_digest: domain_digest,
         relation_candidate_digest,
         prices: input.prices,
         fills: [input.quantity, input.quantity],
@@ -325,13 +451,13 @@ pub fn verify_direct_two_order_candidate(
 }
 
 fn direct_relation_candidate_digest(
-    domain: &FullRelationDomainV1,
+    domain_digest: Identity32V1,
     candidate_id: Identity32V1,
     quantity: u64,
-) -> Result<Identity32V1, DirectWindowErrorV1> {
+) -> Identity32V1 {
     let mut h = Sha256::new();
     h.update(FULL_RELATION_CANDIDATE_DIGEST_DOMAIN);
-    h.update(domain.digest()?.0);
+    h.update(domain_digest.0);
     h.update(candidate_id.0);
     h.update(quantity.to_le_bytes());
     h.update(quantity.to_le_bytes());
@@ -342,7 +468,7 @@ fn direct_relation_candidate_digest(
     }
     h.update(0u64.to_le_bytes()); // honored AON mask
     h.update([0]); // no explicit pairing witness under DIRECT_POLICY_V1
-    Ok(Identity32V1(h.finalize().into()))
+    Identity32V1(h.finalize().into())
 }
 
 /// Compact, fixed-layout verified candidate for the bounded direct profile.
@@ -1474,6 +1600,80 @@ mod tests {
             assert_eq!(reversed.candidate_id, full.candidate_id);
             assert_eq!(reversed.relation_domain_digest, full.relation_domain_digest);
         }
+    }
+
+    #[test]
+    fn cached_domain_verifier_matches_uncached_for_valid_and_hostile_inputs() {
+        let domain = domain();
+        let cached = ValidatedDirectDomainV1::new(&domain).unwrap();
+        assert_eq!(cached.digest(), domain.digest().unwrap());
+        let mut prices = [0u64; MAX_OUTCOMES];
+        prices[0] = 5_000;
+        prices[1] = PRICE_SCALE - prices[0];
+        let valid = DirectTwoOrderInputV1 {
+            prices,
+            buy_limit: 7_500,
+            sell_limit: 2_500,
+            quantity: 4,
+            submitted_slot: 101,
+            buy_index: 0,
+            sell_index: 1,
+            outcome: 0,
+            stored_bump: 7,
+        };
+        let candidate = cached.verify(valid).unwrap();
+        cached
+            .reverify_decoded_candidate(&candidate, valid)
+            .unwrap();
+        let mut hostile_score = candidate;
+        hostile_score.weighted_direct_volume += 1;
+        assert_eq!(
+            cached
+                .reverify_decoded_candidate(&hostile_score, valid)
+                .unwrap_err(),
+            DirectWindowErrorV1::MismatchedBinding
+        );
+        let mut hostile_digest = candidate;
+        hostile_digest.relation_candidate_digest.0[0] ^= 1;
+        assert_eq!(
+            cached
+                .reverify_decoded_candidate(&hostile_digest, valid)
+                .unwrap_err(),
+            DirectWindowErrorV1::MismatchedBinding
+        );
+        for input in [
+            valid,
+            DirectTwoOrderInputV1 {
+                quantity: 0,
+                ..valid
+            },
+            DirectTwoOrderInputV1 {
+                prices: {
+                    let mut hostile = prices;
+                    hostile[0] = 7_501;
+                    hostile[1] = PRICE_SCALE - hostile[0];
+                    hostile
+                },
+                ..valid
+            },
+            DirectTwoOrderInputV1 {
+                buy_index: 1,
+                sell_index: 1,
+                ..valid
+            },
+        ] {
+            assert_eq!(
+                cached.verify(input),
+                verify_direct_two_order_candidate(&domain, input)
+            );
+        }
+
+        let mut hostile_domain = domain;
+        hostile_domain.policy_id.0[0] ^= 1;
+        assert_eq!(
+            ValidatedDirectDomainV1::new(&hostile_domain).unwrap_err(),
+            verify_direct_two_order_candidate(&hostile_domain, valid).unwrap_err()
+        );
     }
 
     fn binding() -> DirectWindowBindingV1 {

@@ -22,10 +22,11 @@ use clutch_batch_policy_identity::{
     direct_window_v1::{
         plan_admission_retained, plan_selection_retained, verify_direct_two_order_candidate,
         DirectCandidateV2, DirectCandidateWindowV1, DirectRetainedCandidateV1,
-        DirectTwoOrderInputV1, DirectWindowBindingV1, DirectWindowErrorV1,
+        DirectTwoOrderInputV1, DirectWindowBindingV1, DirectWindowErrorV1, ValidatedDirectDomainV1,
         DIRECT_CANDIDATE_ACCOUNT_BYTES, DIRECT_CANDIDATE_STATUS_SELECTED,
         DIRECT_CANDIDATE_STATUS_SUPERSEDED, DIRECT_CANDIDATE_STATUS_VERIFIED, DIRECT_POLICY_V1,
-        DIRECT_WINDOW_ACCOUNT_BYTES, DIRECT_WINDOW_PHASE_SELECTED, MAX_DIRECT_CANDIDATES,
+        DIRECT_WINDOW_ACCOUNT_BYTES, DIRECT_WINDOW_PHASE_OPEN, DIRECT_WINDOW_PHASE_SELECTED,
+        MAX_DIRECT_CANDIDATES,
     },
     FullRelationDomainV1, Identity32V1, BATCH_POLICY_BYTES,
 };
@@ -162,6 +163,13 @@ struct SubmissionCommit {
     candidate: DirectCandidateV2,
     window: DirectCandidateWindowV1,
     displaced: Identity32V1,
+}
+
+#[derive(Clone, Copy)]
+struct SubmissionAuthority {
+    candidate: DirectCandidateV2,
+    opens_slot: u64,
+    closes_slot: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -570,7 +578,12 @@ fn select_window(
         accounts[IX_SELECT_PAYER].is_writable,
         ClutchError::NotWritable,
     )?;
-    let top_count = inspect_selected_window(program_id, &accounts[IX_SELECT_WINDOW])?;
+    let (top_count, closes_slot) = inspect_selected_window(
+        program_id,
+        &accounts[IX_SELECT_WINDOW],
+        intent_market,
+        intent_epoch,
+    )?;
     require_count(accounts, SELECT_BASE_ACCOUNT_COUNT + top_count)?;
     require_distinct(accounts)?;
     validate_select_fixed_roles(program_id, accounts)?;
@@ -584,6 +597,7 @@ fn select_window(
     require_system_program(&accounts[system])?;
     let rent = read_rent(&accounts[rent_index])?;
     let now = read_clock_slot(&accounts[clock])?;
+    require(now >= closes_slot, ClutchError::NotActive)?;
     for account in &accounts[IX_SELECT_TOP_START..IX_SELECT_TOP_START + top_count] {
         accounts::validate_state_role_lengths(
             program_id,
@@ -932,7 +946,7 @@ fn prepare_submission_candidate(
     intent_epoch: Hash32,
     outcome_price: u64,
     now: u64,
-) -> Outcome<DirectCandidateV2> {
+) -> Outcome<SubmissionAuthority> {
     let epoch = accounts::read_direct_epoch(&accounts[IX_SUBMIT_EPOCH].data.borrow())?;
     require(
         epoch.common.market == intent_market
@@ -981,7 +995,7 @@ fn prepare_submission_candidate(
     let derived =
         seeds::direct_candidate_pda(program_id, &epoch.common.epoch.bytes(), &candidate_id.0);
     expect_pda(accounts[IX_SUBMIT_CANDIDATE].key, derived, None)?;
-    verify_direct_two_order_candidate(
+    let candidate = verify_direct_two_order_candidate(
         &domain,
         DirectTwoOrderInputV1 {
             prices,
@@ -995,7 +1009,12 @@ fn prepare_submission_candidate(
             stored_bump: derived.1,
         },
     )
-    .map_err(map_window)
+    .map_err(map_window)?;
+    Ok(SubmissionAuthority {
+        candidate,
+        opens_slot: epoch.submission_opens_slot,
+        closes_slot: epoch.submission_closes_slot,
+    })
 }
 
 #[inline(never)]
@@ -1027,7 +1046,7 @@ fn prepare_submission_commit(
     existing_window: bool,
     top_count: usize,
 ) -> Outcome<SubmissionCommit> {
-    let mut candidate = prepare_submission_candidate(
+    let authority = prepare_submission_candidate(
         program_id,
         accounts,
         intent_market,
@@ -1035,10 +1054,10 @@ fn prepare_submission_commit(
         outcome_price,
         now,
     )?;
+    let mut candidate = authority.candidate;
     let derived = seeds::direct_window_pda(program_id, &intent_epoch.bytes());
     if !existing_window {
         expect_pda(accounts[IX_SUBMIT_WINDOW].key, derived, None)?;
-        let (opens_slot, closes_slot) = submission_slots(accounts)?;
         let window = DirectCandidateWindowV1::first(
             DirectWindowBindingV1 {
                 epoch_id: candidate.epoch_id,
@@ -1046,8 +1065,8 @@ fn prepare_submission_commit(
                 order_set_id: candidate.order_set_id,
                 policy_id: candidate.policy_id,
                 relation_domain_digest: candidate.relation_domain_digest,
-                opens_slot,
-                closes_slot,
+                opens_slot: authority.opens_slot,
+                closes_slot: authority.closes_slot,
             },
             &candidate,
             now,
@@ -1067,7 +1086,9 @@ fn prepare_submission_commit(
         Some(current.stored_bump),
     )?;
     require(
-        usize::from(current.top_count) == top_count,
+        usize::from(current.top_count) == top_count
+            && current.opens_slot == authority.opens_slot
+            && current.closes_slot == authority.closes_slot,
         ClutchError::MismatchedState,
     )?;
     let mut retained = [DirectRetainedCandidateV1::ZERO; MAX_DIRECT_CANDIDATES];
@@ -1089,12 +1110,6 @@ fn prepare_submission_commit(
 }
 
 #[inline(never)]
-fn submission_slots(accounts: &[AccountInfo]) -> Outcome<(u64, u64)> {
-    let epoch = accounts::read_direct_epoch(&accounts[IX_SUBMIT_EPOCH].data.borrow())?;
-    Ok((epoch.submission_opens_slot, epoch.submission_closes_slot))
-}
-
-#[inline(never)]
 fn require_grid_ticks(
     program_id: &Pubkey,
     account: &AccountInfo,
@@ -1108,6 +1123,10 @@ fn require_grid_ticks(
     Ok(())
 }
 
+// The indices are compile-time routing coordinates for the same authenticated
+// source shape; grouping them would only hide the fixed ABI behind another
+// aggregate copied into the SBF frame.
+#[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn authenticate_direct_source(
     program_id: &Pubkey,
@@ -1171,12 +1190,26 @@ fn load_retained_registry(
     while index < out.len() {
         let candidate = decode_direct_candidate(&accounts[start + index].data.borrow())?;
         validate_direct_candidate_address(program_id, &accounts[start + index], &candidate)?;
-        out[index] =
-            DirectRetainedCandidateV1::from_candidate(window, &candidate).map_err(map_window)?;
         require(
-            out[index].entry == window.top[index],
+            candidate.epoch_id == window.epoch_id
+                && candidate.market_id == window.market_id
+                && candidate.order_set_id == window.order_set_id
+                && candidate.policy_id == window.policy_id
+                && candidate.relation_domain_digest == window.relation_domain_digest
+                && candidate.status == DIRECT_CANDIDATE_STATUS_VERIFIED
+                && candidate.entry() == window.top[index],
             ClutchError::MismatchedState,
         )?;
+        // `decode_direct_candidate` validates the complete fixed-layout value,
+        // including its content-derived candidate identity.  The PDA check and
+        // exact full-width Window binding above authenticate the persisted
+        // Submit result.  Compact the already-authenticated ranking fields here;
+        // Select independently re-executes the complete relation for every
+        // retained candidate before it can become settlement authority.
+        out[index] = DirectRetainedCandidateV1 {
+            entry: candidate.entry(),
+            score: candidate.score(),
+        };
         index += 1;
     }
     Ok(())
@@ -1193,21 +1226,23 @@ fn mark_displaced_candidate(
     if displaced.is_zero() {
         return Ok(());
     }
-    let mut found = false;
-    let mut index = 0usize;
-    while index < count {
-        let mut candidate = decode_direct_candidate(&accounts[start + index].data.borrow())?;
-        validate_direct_candidate_address(program_id, &accounts[start + index], &candidate)?;
-        if candidate.candidate_id == displaced {
-            require(!found, ClutchError::MismatchedState)?;
-            candidate.status = DIRECT_CANDIDATE_STATUS_SUPERSEDED;
-            candidate.validate().map_err(map_window)?;
-            encode_direct_candidate(&candidate, &mut borrow_mut!(accounts[start + index])?)?;
-            found = true;
-        }
-        index += 1;
-    }
-    require(found, ClutchError::MismatchedState)
+    require(count == MAX_DIRECT_CANDIDATES, ClutchError::MismatchedState)?;
+    // A nonzero displacement from `plan_admission_retained` can only be the
+    // old registry's exact worst entry. `load_retained_registry` already
+    // authenticated every full entry and score in best-to-worst order, so the
+    // plan closes the index as well as the identity. Decode only that one
+    // 440-byte authority account instead of rescanning all three.
+    let index = start + count - 1;
+    let mut candidate = decode_direct_candidate(&accounts[index].data.borrow())?;
+    validate_direct_candidate_address(program_id, &accounts[index], &candidate)?;
+    require(
+        candidate.candidate_id == displaced && candidate.status == DIRECT_CANDIDATE_STATUS_VERIFIED,
+        ClutchError::MismatchedState,
+    )?;
+    candidate.status = DIRECT_CANDIDATE_STATUS_SUPERSEDED;
+    candidate.validate().map_err(map_window)?;
+    encode_direct_candidate(&candidate, &mut borrow_mut!(accounts[index])?)?;
+    Ok(())
 }
 
 #[inline(never)]
@@ -1238,6 +1273,8 @@ fn authenticate_selection_source(
             && window.market_id == domain.market_id
             && window.order_set_id == domain.order_set_id
             && window.policy_id == domain.policy_id
+            && window.opens_slot == epoch.submission_opens_slot
+            && window.closes_slot == epoch.submission_closes_slot
             && window.relation_domain_digest.0
                 == domain
                     .digest()
@@ -1264,54 +1301,50 @@ fn authenticate_selection_source(
 }
 
 #[inline(never)]
-fn inspect_selected_window(program_id: &Pubkey, account: &AccountInfo) -> Outcome<usize> {
+fn inspect_selected_window(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+    intent_market: Hash32,
+    intent_epoch: Hash32,
+) -> Outcome<(usize, u64)> {
     accounts::validate_state_role_lengths(
         program_id,
         account,
         true,
         &[DIRECT_WINDOW_ACCOUNT_BYTES],
     )?;
-    Ok(usize::from(
-        decode_direct_window(&account.data.borrow())?.top_count,
-    ))
+    let window = decode_direct_window(&account.data.borrow())?;
+    expect_pda(
+        account.key,
+        seeds::direct_window_pda(program_id, &intent_epoch.bytes()),
+        Some(window.stored_bump),
+    )?;
+    require(
+        window.epoch_id.0 == intent_epoch.bytes()
+            && window.market_id.0 == intent_market.bytes()
+            && window.phase == DIRECT_WINDOW_PHASE_OPEN,
+        ClutchError::NotActive,
+    )?;
+    Ok((usize::from(window.top_count), window.closes_slot))
 }
 
 #[inline(never)]
-fn prepare_selected_window(
+fn prepare_verified_selected_window(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
+    source: &SelectionSource,
     top_count: usize,
     now: u64,
 ) -> Outcome<DirectCandidateWindowV1> {
+    let domain = ValidatedDirectDomainV1::new(&full_domain(&source.epoch, DIRECT_POLICY_V1)?)
+        .map_err(map_window)?;
     let window = decode_direct_window(&accounts[IX_SELECT_WINDOW].data.borrow())?;
     require(
         usize::from(window.top_count) == top_count,
         ClutchError::MismatchedState,
     )?;
+    let grid = PriceGridAccount::decode(&accounts[IX_SELECT_GRID].data.borrow())?;
     let mut retained = [DirectRetainedCandidateV1::ZERO; MAX_DIRECT_CANDIDATES];
-    load_retained_registry(
-        program_id,
-        accounts,
-        IX_SELECT_TOP_START,
-        &window,
-        &mut retained[..top_count],
-    )?;
-    Ok(
-        plan_selection_retained(&window, &retained[..top_count], now)
-            .map_err(map_window)?
-            .post_window,
-    )
-}
-
-#[inline(never)]
-fn reverify_retained_registry(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    source: &SelectionSource,
-    top_count: usize,
-) -> Outcome<()> {
-    let domain = full_domain(&source.epoch, DIRECT_POLICY_V1)?;
-    let window = decode_direct_window(&accounts[IX_SELECT_WINDOW].data.borrow())?;
     let mut index = 0usize;
     while index < top_count {
         let candidate =
@@ -1322,36 +1355,48 @@ fn reverify_retained_registry(
             &candidate,
         )?;
         require(
-            candidate.status == DIRECT_CANDIDATE_STATUS_VERIFIED
+            candidate.epoch_id == window.epoch_id
+                && candidate.market_id == window.market_id
+                && candidate.order_set_id == window.order_set_id
+                && candidate.policy_id == window.policy_id
+                && candidate.relation_domain_digest == window.relation_domain_digest
+                && candidate.status == DIRECT_CANDIDATE_STATUS_VERIFIED
+                && candidate.entry() == window.top[index]
                 && candidate.submitted_slot >= window.opens_slot
                 && candidate.submitted_slot < window.closes_slot,
             ClutchError::MismatchedState,
         )?;
-        require_grid_ticks(
-            program_id,
-            &accounts[IX_SELECT_GRID],
-            candidate.prices[0],
-            candidate.prices[1],
-        )?;
-        let recomputed = verify_direct_two_order_candidate(
-            &domain,
-            DirectTwoOrderInputV1 {
-                prices: candidate.prices,
-                buy_limit: source.orders.buy_limit,
-                sell_limit: source.orders.sell_limit,
-                quantity: source.orders.quantity,
-                submitted_slot: candidate.submitted_slot,
-                buy_index: source.orders.buy_index,
-                sell_index: source.orders.sell_index,
-                outcome: source.orders.outcome,
-                stored_bump: candidate.stored_bump,
-            },
-        )
-        .map_err(map_window)?;
-        require(candidate == recomputed, ClutchError::MismatchedState)?;
+        // The exact Grid account was authenticated while loading `source` and
+        // no CPI or mutation occurs between that check and this loop.
+        grid.tick_of(candidate.prices[0])?;
+        grid.tick_of(candidate.prices[1])?;
+        domain
+            .reverify_decoded_candidate(
+                &candidate,
+                DirectTwoOrderInputV1 {
+                    prices: candidate.prices,
+                    buy_limit: source.orders.buy_limit,
+                    sell_limit: source.orders.sell_limit,
+                    quantity: source.orders.quantity,
+                    submitted_slot: candidate.submitted_slot,
+                    buy_index: source.orders.buy_index,
+                    sell_index: source.orders.sell_index,
+                    outcome: source.orders.outcome,
+                    stored_bump: candidate.stored_bump,
+                },
+            )
+            .map_err(map_window)?;
+        retained[index] = DirectRetainedCandidateV1 {
+            entry: candidate.entry(),
+            score: candidate.score(),
+        };
         index += 1;
     }
-    Ok(())
+    Ok(
+        plan_selection_retained(&window, &retained[..top_count], now)
+            .map_err(map_window)?
+            .post_window,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1367,8 +1412,7 @@ fn prepare_selection_commit(
     pot_index: usize,
 ) -> Outcome<SelectionCommit> {
     let source = authenticate_selection_source(program_id, accounts, intent_market, intent_epoch)?;
-    reverify_retained_registry(program_id, accounts, &source, top_count)?;
-    let window = prepare_selected_window(program_id, accounts, top_count, now)?;
+    let window = prepare_verified_selected_window(program_id, accounts, &source, top_count, now)?;
     let selected = selected_facts(program_id, &accounts[IX_SELECT_TOP_START])?;
     require(
         selected.candidate_id == window.selected_candidate

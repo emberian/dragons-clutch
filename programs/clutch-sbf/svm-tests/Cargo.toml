@@ -39,6 +39,7 @@ path = "src/lib.rs"
 # genesis come from the *same* encoders the program decodes with.  A hand-rolled
 # second copy would test the copy.
 clutch-sbf = { path = "../program" }
+clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-solana-layout = { path = "../../solana-layout" }
 clutch-solana-reference = { path = "../../solana-reference" }

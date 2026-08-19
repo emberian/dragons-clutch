@@ -192,6 +192,7 @@ fn final_address(kind: ArtifactKind, context: Hash32, digest: Hash32) -> (Addres
         ArtifactKind::CollateralPolicy => seeds::SEED_POLICY,
         ArtifactKind::PriceGrid => seeds::SEED_GRID,
         ArtifactKind::Terms => seeds::SEED_TERMS,
+        ArtifactKind::BatchPolicy => seeds::SEED_BATCH_POLICY,
     };
     derive(&[prefix, &context.bytes(), &digest.bytes()])
 }
