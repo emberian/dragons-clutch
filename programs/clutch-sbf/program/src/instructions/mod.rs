@@ -13,6 +13,7 @@
 //!
 //! | module | intents and actions |
 //! | --- | --- |
+//! | [`construction`] | shared System-CPI construction of the seven-account market state plane |
 //! | [`genesis`] | `Intent::InitRealm`, `Intent::InitProfile`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::Endow` |
 //! | [`split`] | `Intent::Split` |
 //! | [`merge_materialize`] | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` |
@@ -36,6 +37,7 @@
 //! that split is deliberate: the account-creation CPI, the rent computation
 //! and the `invoke_signed` seed plumbing are one concern with one owner.
 
+pub mod construction;
 pub mod genesis;
 pub mod market_init;
 pub mod merge_materialize;
