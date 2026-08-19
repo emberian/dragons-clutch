@@ -2014,35 +2014,18 @@ fn evidence_gated(
         record.copy_from_slice(&output.resolution);
     }
 
-    /* Steps 5-6 of §3.3, and the mirror.  The transfer runs even when the
-     * kernel paid zero — a losing claim redeems for nothing — because a branch
-     * that skipped it would also skip the mirror, and the one transition that
-     * must never quietly leave the two collateral truths disagreeing is the
-     * one that pays out. */
+    /* Redemption changes *which ledger term* owns collateral already retained
+     * by the pooled Hoard: locked complete-set backing falls and this
+     * position's cash rises by the same payout.  It is not a withdrawal and
+     * therefore must move exactly zero Token-2022 atoms. */
     if let Some(leg) = leg {
-        let paid = output.redemption_payout;
-        let signer: [&[u8]; 3] = [
-            seeds::SEED_HOARD_AUTHORITY,
-            &leg.market,
-            &leg.authority_bump,
-        ];
-        token::transfer_checked_signed(
-            &accounts[IX_TOKEN_PROGRAM],
-            &accounts[IX_HOARD_TOKEN],
-            &accounts[IX_COLLATERAL_MINT],
-            &accounts[IX_ACTOR_TOKEN],
-            &accounts[IX_HOARD_AUTHORITY],
-            paid,
-            leg.decimals,
-            &signer,
-        )?;
         let post_actor = token::token_amount(&accounts[IX_ACTOR_TOKEN])?;
         let post_hoard = token::token_amount(&accounts[IX_HOARD_TOKEN])?;
-        token::require_exact_credit(leg.actor_amount, post_actor, paid)?;
-        token::require_exact_debit(leg.hoard_amount, post_hoard, paid)?;
+        token::require_exact_credit(leg.actor_amount, post_actor, 0)?;
+        token::require_exact_credit(leg.hoard_amount, post_hoard, 0)?;
         let collateral_atoms =
             HoardAccount::decode(&accounts[IX_HOARD].data.borrow())?.collateral_atoms;
-        token::require_hoard_mirror(collateral_atoms, post_hoard)?;
+        token::require_hoard_covers_collateral(collateral_atoms, post_hoard)?;
     }
     Ok(())
 }

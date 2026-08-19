@@ -26,14 +26,15 @@
 
 use {
     clutch_sbf::error::ClutchError,
+    clutch_sbf::instructions::genesis,
     clutch_sbf::instructions::market_init,
     clutch_sbf::instructions::observe_resolve,
     clutch_sbf::instructions::split as seam,
     clutch_solana_layout::{Hash32, HoardAccount, Intent, PositionAccount, SupplyLedgerAccount},
     clutch_svm_fixture::{
         build_plane, compute_unit_limit_data, create_market_request, immutable_owner_account_bytes,
-        layout_request, Mode, Plane, CASH_ATOMS, COLLATERAL_CAP, COMPUTE_BUDGET,
-        FOUNDING_MARKET_NONCE, FUNDED_SETS, MARKET_NONCE, OUTCOME_COUNT, PROGRAM_ID, TOKEN_2022,
+        layout_request, Mode, Plane, CASH_ATOMS, COMPUTE_BUDGET, FOUNDING_MARKET_NONCE,
+        FUNDED_SETS, MARKET_NONCE, OUTCOME_COUNT, POLICY_ACCOUNT, PROGRAM_ID, TOKEN_2022,
     },
     solana_account::Account,
     solana_address::Address,
@@ -135,7 +136,10 @@ impl Scenario {
             let data = immutable_owner_account_bytes(
                 mint.pubkey(),
                 plane.hoard_authority.address,
-                plane.hoard_atoms,
+                plane
+                    .hoard_atoms
+                    .checked_add(CASH_ATOMS)
+                    .expect("fixture custody fits u64"),
             );
             test.add_account(
                 plane.hoard_token.address,
@@ -412,6 +416,33 @@ impl Scenario {
         ))
     }
 
+    /// The eleven-account backed `Endow` deposit.
+    fn endow(&self, sequence: u64, amount: u64) -> Instruction {
+        let request = layout_request(
+            sequence,
+            Intent::Endow {
+                market: self.plane.market_id,
+                owner: Hash32::from_bytes(self.actor.pubkey().to_bytes()),
+                amount,
+            },
+        );
+        let metas = vec![
+            AccountMeta::new_readonly(self.actor.pubkey(), true),
+            AccountMeta::new_readonly(self.plane.market.address, false),
+            AccountMeta::new_readonly(self.plane.hoard.address, false),
+            AccountMeta::new(self.plane.position.address, false),
+            AccountMeta::new(self.plane.replay.address, false),
+            AccountMeta::new_readonly(self.plane.profile.address, false),
+            AccountMeta::new_readonly(POLICY_ACCOUNT, false),
+            AccountMeta::new_readonly(TOKEN_2022, false),
+            AccountMeta::new_readonly(self.plane.collateral_mint, false),
+            AccountMeta::new(self.actor_collateral, false),
+            AccountMeta::new(self.plane.hoard_token.address, false),
+        ];
+        assert_eq!(metas.len(), genesis::ENDOW_ACCOUNT_COUNT);
+        Instruction::new_with_bytes(PROGRAM_ID, &request, metas)
+    }
+
     /// The thirteen-account `Materialize`/`Dematerialize` instruction.
     fn outcome_seam(&self, request: Vec<u8>, outcome: usize, holder: Address) -> Instruction {
         let state = self.plane.seam_addresses();
@@ -684,43 +715,60 @@ async fn founding_a_market_twice_refuses() {
     println!("SVM create_market idempotence: second founding refused with Custom({code}) (0x0040)");
 }
 
-/// **E2 — collateral conservation, with real atoms.**
+/// **E2 — pooled-custody reclassification, with real Token-2022 accounts.**
 ///
-/// `Split` moves exactly *q* atoms from the actor's token account into the
-/// Hoard's, changes no other token account, and leaves
-/// `hoard_token.amount == HoardAccount::collateral_atoms`. `Merge` reverses it.
+/// `Split` locks cash already inside the Hoard and `Merge` unlocks it. Neither
+/// may charge or pay the actor a second time, and custody stays constant.
 #[tokio::test]
-async fn split_and_merge_move_exactly_the_collateral_the_kernel_moved() {
+async fn split_and_merge_reclassify_without_a_second_token_transfer() {
     let mut scenario = Scenario::start(MARKET_NONCE, Mode::Funded).await;
     let actor = scenario.actor.insecure_clone();
     let hoard_token = scenario.plane.hoard_token.address;
     let actor_token = scenario.actor_collateral;
 
     assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL);
-    assert_eq!(scenario.amount(hoard_token).await, FUNDED_SETS);
+    let custody = FUNDED_SETS + CASH_ATOMS;
+    assert_eq!(scenario.amount(hoard_token).await, custody);
     assert_eq!(scenario.hoard_atoms().await, FUNDED_SETS);
 
     let split_units = scenario
         .send(&[budget(SEAM_UNITS), scenario.split(0, 12)], &[&actor])
         .await;
-    assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL - 12);
-    assert_eq!(scenario.amount(hoard_token).await, FUNDED_SETS + 12);
+    assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL);
+    assert_eq!(scenario.amount(hoard_token).await, custody);
     assert_eq!(scenario.hoard_atoms().await, FUNDED_SETS + 12);
     assert_eq!(scenario.position().await.internal[0], FUNDED_SETS + 12);
 
     let merge_units = scenario
         .send(&[budget(SEAM_UNITS), scenario.merge(1, 5)], &[&actor])
         .await;
-    assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL - 7);
-    assert_eq!(scenario.amount(hoard_token).await, FUNDED_SETS + 7);
-    assert_eq!(
-        scenario.hoard_atoms().await,
-        scenario.amount(hoard_token).await,
-        "the mirror the program refused to proceed without"
-    );
+    assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL);
+    assert_eq!(scenario.amount(hoard_token).await, custody);
+    assert_eq!(scenario.hoard_atoms().await, FUNDED_SETS + 7);
     assert_eq!(scenario.position().await.internal[1], FUNDED_SETS + 7);
 
     println!("SVM collateral leg: split={split_units} CU  merge={merge_units} CU");
+}
+
+/// `Endow` is the one inbound collateral boundary.
+#[tokio::test]
+async fn endow_debits_the_owner_and_credits_cash_and_custody_exactly() {
+    let mut scenario = Scenario::start(MARKET_NONCE, Mode::Funded).await;
+    let actor = scenario.actor.insecure_clone();
+    let actor_token = scenario.actor_collateral;
+    let hoard_token = scenario.plane.hoard_token.address;
+    let pre_cash = scenario.position().await.cash_atoms;
+    let pre_custody = scenario.amount(hoard_token).await;
+
+    let units = scenario
+        .send(&[budget(SEAM_UNITS), scenario.endow(0, 10)], &[&actor])
+        .await;
+
+    assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL - 10);
+    assert_eq!(scenario.amount(hoard_token).await, pre_custody + 10);
+    assert_eq!(scenario.position().await.cash_atoms, pre_cash + 10);
+    assert_eq!(scenario.hoard_atoms().await, FUNDED_SETS);
+    println!("SVM Endow: exact 10-atom deposit, {units} CU");
 }
 
 /// **The whole cycle, with both legs and a holder who is not the actor.**
@@ -753,12 +801,13 @@ async fn the_whole_cycle_survives_a_holder_who_is_not_the_actor() {
     let hoard_token = scenario.plane.hoard_token.address;
     let actor_token = scenario.actor_collateral;
 
-    // 1. Collateral in.
+    // 1. Pooled cash becomes locked collateral; no second deposit occurs.
+    let custody = FUNDED_SETS + CASH_ATOMS;
     let split_units = scenario
         .send(&[budget(SEAM_UNITS), scenario.split(0, 12)], &[&actor])
         .await;
-    assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL - 12);
-    assert_eq!(scenario.amount(hoard_token).await, FUNDED_SETS + 12);
+    assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL);
+    assert_eq!(scenario.amount(hoard_token).await, custody);
 
     // 2. Claims become tokens.
     let materialize_units = scenario
@@ -814,19 +863,16 @@ async fn the_whole_cycle_survives_a_holder_who_is_not_the_actor() {
         "and the market-wide external term equals it, which the program enforced"
     );
 
-    // 5. Collateral back out.
+    // 5. Locked collateral returns to pooled cash; this is not a withdrawal.
     let position = scenario.position().await;
     assert_eq!(position.internal[0], FUNDED_SETS + 12 - 7 + 4);
     assert_eq!(position.internal[1], FUNDED_SETS + 12);
     let merge_units = scenario
         .send(&[budget(SEAM_UNITS), scenario.merge(3, 9)], &[&actor])
         .await;
-    assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL - 3);
-    assert_eq!(scenario.amount(hoard_token).await, FUNDED_SETS + 3);
-    assert_eq!(
-        scenario.hoard_atoms().await,
-        scenario.amount(hoard_token).await
-    );
+    assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL);
+    assert_eq!(scenario.amount(hoard_token).await, custody);
+    assert_eq!(scenario.hoard_atoms().await, FUNDED_SETS + 3);
 
     println!(
         "SVM full cycle: split={split_units} CU  materialize={materialize_units} CU  \
@@ -835,32 +881,20 @@ async fn the_whole_cycle_survives_a_holder_who_is_not_the_actor() {
     );
 }
 
-/// **E5 — post-CPI rollback, demonstrated rather than asserted.**
+/// A failed deposit cannot mint ledger cash or consume replay.
 ///
-/// `SBF_BRINGUP.md` deferred item 8 has been owed this since before there was
-/// a CPI to fail after. The kernel step and the ledger step **write their
-/// accounts before the CPI** — the one deviation from `TOKEN2022_PLAN.md`
-/// §3.3's step order, which `merge_materialize::refuses_after_the_kernel_ran`
-/// pins off-chain — so a `Split` that computes a valid transition and then
-/// discovers the actor cannot pay has already written the kernel aggregate and
-/// the supply ledger when the CPI fails.
-///
-/// Every one of those bytes must come back. This asserts that against the
-/// bank, byte for byte, over all nine program accounts and both token
-/// accounts, rather than inheriting it from "SVM transactions are atomic".
+/// `Endow` validates its ledger post-state before invoking Token-2022 but
+/// writes it only after the exact debit and credit are observed.  An amount
+/// above the actor's balance therefore leaves both protocol accounts and both
+/// token accounts byte-identical.
 #[tokio::test]
-async fn a_cpi_that_fails_after_the_kernel_ran_reverts_every_byte() {
+async fn a_failed_endow_leaves_ledger_replay_and_tokens_unchanged() {
     let mut scenario = Scenario::start(MARKET_NONCE, Mode::Funded).await;
     let actor = scenario.actor.insecure_clone();
 
     let watched: Vec<Address> = vec![
-        scenario.plane.market.address,
-        scenario.plane.hoard.address,
         scenario.plane.position.address,
-        scenario.plane.kernel.address,
-        scenario.plane.external.address,
         scenario.plane.replay.address,
-        scenario.plane.supply.address,
         scenario.plane.hoard_token.address,
         scenario.actor_collateral,
     ];
@@ -869,51 +903,25 @@ async fn a_cpi_that_fails_after_the_kernel_ran_reverts_every_byte() {
         before.push(scenario.data(*address).await);
     }
 
-    /* The kernel admits this split: the position holds 80 cash and the cap is
-     * 1 000, so `MarketState::split` completes and both the kernel aggregate
-     * and the supply ledger are written.  The actor's *token* account holds
-     * 1 000 atoms and this asks for more, which nothing in this program knows
-     * until Token-2022 refuses the transfer. */
-    /* One split the actor *can* pay for, so the comparison below is against a
-     * state this program actually produced rather than against genesis.  The
-     * failing split that follows moves 40 atoms: the collateral cap (1 000) and
-     * the founding position's free cash (80) both admit it, and the actor's
-     * *token* balance (50, of which 20 is already spent) does not — which is
-     * the only fault this program cannot see until the CPI reports it. */
-    const _: () = assert!(20 + 40 < COLLATERAL_CAP as usize && 20 + 40 <= CASH_ATOMS as usize);
     let (result, _) = scenario
-        .try_send(&[budget(SEAM_UNITS), scenario.split(0, 20)], &[&actor])
+        .try_send(
+            &[
+                budget(SEAM_UNITS),
+                scenario.endow(0, ACTOR_COLLATERAL + 1),
+            ],
+            &[&actor],
+        )
         .await;
-    assert!(result.is_ok(), "a split the actor can pay for succeeds");
-
-    // Now the failing one, from the post-split state.
-    let mut after_success = Vec::new();
-    for address in &watched {
-        after_success.push(scenario.data(*address).await);
-    }
-    let (result, _) = scenario
-        .try_send(&[budget(SEAM_UNITS), scenario.split(1, 40)], &[&actor])
-        .await;
-    assert!(
-        result.is_err(),
-        "a split larger than the actor's token balance must fail"
-    );
+    assert!(result.is_err(), "an unfunded deposit must fail");
 
     for (index, address) in watched.iter().enumerate() {
         let now = scenario.data(*address).await;
         assert_eq!(
-            now, after_success[index],
-            "account {index} was not restored by the rollback"
+            now, before[index],
+            "account {index} changed across a refused deposit"
         );
     }
-    assert_ne!(
-        after_success[3], before[3],
-        "the first split really did move the kernel aggregate, so this is not a vacuous check"
-    );
-    println!(
-        "SVM E5 rollback: a token CPI failing after the kernel and ledger writes \
-         left all nine program accounts and both token accounts byte-identical"
-    );
+    println!("SVM Endow rollback: ledger, replay, actor token, and Hoard token unchanged");
 }
 
 /// **The wallet-signed outflow refusal, on the collateral path.**
@@ -947,7 +955,8 @@ async fn no_wallet_signature_can_take_collateral_out_of_the_hoard() {
             &[&actor],
         )
         .await;
-    assert_eq!(scenario.amount(hoard_token).await, FUNDED_SETS + 5);
+    let donated_custody = FUNDED_SETS + CASH_ATOMS + 5;
+    assert_eq!(scenario.amount(hoard_token).await, donated_custody);
 
     // Taking it back out with the same signature is impossible.
     let code = scenario
@@ -968,27 +977,25 @@ async fn no_wallet_signature_can_take_collateral_out_of_the_hoard() {
         .await;
     assert_eq!(code, TokenError::OwnerMismatch as u32);
 
-    /* And the deposit is now exactly the drift the mirror exists to catch:
-     * the token account holds five atoms the ledger does not know about, and
-     * the next collateral instruction refuses rather than carrying two
-     * disagreeing truths forward. */
-    let mirror = scenario
-        .refusal_code(&[budget(SEAM_UNITS), scenario.split(0, 1)], &[&actor])
+    /* The unsolicited deposit is harmless surplus: it creates no position
+     * cash claim and cannot grief later reclassification. */
+    scenario
+        .send(&[budget(SEAM_UNITS), scenario.split(0, 1)], &[&actor])
         .await;
-    assert_eq!(mirror, ClutchError::HoardMirrorMismatch as u32);
+    assert_eq!(scenario.amount(hoard_token).await, donated_custody);
+    assert_eq!(scenario.hoard_atoms().await, FUNDED_SETS + 1);
     println!(
-        "SVM hoard outflow: wallet withdrawal refused with Custom({code}), \
-         and the out-of-band deposit refused with Custom({mirror}) (0x001d)"
+        "SVM hoard outflow: wallet withdrawal refused with Custom({code}); \
+         donated surplus did not block Split"
     );
 }
 
-/// **The redemption leg pays real collateral out.**
+/// **Redemption credits pooled cash without withdrawing it.**
 ///
-/// A resolved market, a winning outcome, and an `invoke_signed` for the Hoard
-/// authority: the redeemer's collateral account rises by exactly what the
-/// kernel computed, the Hoard's falls by exactly that, and the mirror holds.
+/// A winning claim lowers locked collateral and raises position cash by the
+/// same amount. Token custody and the actor's wallet remain unchanged.
 #[tokio::test]
-async fn redeem_pays_the_kernels_payout_in_real_collateral() {
+async fn redeem_reclassifies_locked_collateral_into_position_cash() {
     let mut scenario = Scenario::start(MARKET_NONCE, Mode::Resolved(0)).await;
     let actor = scenario.actor.insecure_clone();
     let hoard_token = scenario.plane.hoard_token.address;
@@ -1004,26 +1011,23 @@ async fn redeem_pays_the_kernels_payout_in_real_collateral() {
 
     /* Payout vector 0 is `[1, 0]` with denominator 1, so six winning claims
      * pay six atoms. */
-    assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL + 6);
-    assert_eq!(scenario.amount(hoard_token).await, FUNDED_SETS - 6);
+    let custody = FUNDED_SETS + CASH_ATOMS;
+    assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL);
+    assert_eq!(scenario.amount(hoard_token).await, custody);
     assert_eq!(scenario.hoard_atoms().await, FUNDED_SETS - 6);
-    assert_eq!(
-        scenario.hoard_atoms().await,
-        scenario.amount(hoard_token).await
-    );
     let position = scenario.position().await;
     assert_eq!(position.internal[0], FUNDED_SETS - quantity);
+    assert_eq!(position.cash_atoms, CASH_ATOMS + quantity);
 
     println!("SVM redeem: 19 accounts, payout={quantity} atoms, {units} CU");
 
-    /* The losing outcome pays zero, and the transfer still runs -- a branch
-     * that skipped it would also skip the mirror. */
+    /* The losing outcome pays zero and custody still does not move. */
     let hoard_before = scenario.amount(hoard_token).await;
     let zero_units = scenario
         .send(&[budget(SEAM_UNITS), scenario.redeem(1, 1, 4)], &[&actor])
         .await;
     assert_eq!(scenario.amount(hoard_token).await, hoard_before);
-    assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL + 6);
+    assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL);
     println!("SVM redeem (losing claim): payout=0 atoms, {zero_units} CU");
 }
 

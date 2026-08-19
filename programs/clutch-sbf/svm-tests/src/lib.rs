@@ -445,7 +445,7 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
                     HoardAccount {
                         market: market_id,
                         realm: realm_id,
-                        authority: Hash32::from_bytes(hoard.address.to_bytes()),
+                        authority: Hash32::from_bytes(hoard_authority.address.to_bytes()),
                         collateral_atoms: hoard_atoms,
                         stored_bump: hoard.bump,
                         flags: 0,

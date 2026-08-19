@@ -612,7 +612,7 @@ pub struct FoundingIdentities {
     pub market: Hash32,
     /// Founding position owner; the creator's raw address bytes.
     pub owner: Hash32,
-    /// Hoard authority; the Hoard PDA's own address bytes.
+    /// Hoard authority; the dedicated signing PDA's address bytes.
     pub hoard_authority: Hash32,
 }
 
@@ -1542,7 +1542,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
     let identities = FoundingIdentities {
         market: market_id,
         owner: Hash32::from_bytes(owner_bytes),
-        hoard_authority: Hash32::from_bytes(accounts[IX_HOARD].key.to_bytes()),
+        hoard_authority: Hash32::from_bytes(accounts[IX_HOARD_AUTHORITY].key.to_bytes()),
     };
 
     {

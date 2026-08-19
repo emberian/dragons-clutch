@@ -881,7 +881,7 @@ pub fn validate_collateral_leg(
      * already disagree refuses here, before anything moves, rather than at the
      * post-CPI check where the diagnostic would be identical but the kernel
      * would already have run. */
-    token::require_hoard_mirror(collateral_atoms, hoard_observation.amount)?;
+    token::require_hoard_covers_collateral(collateral_atoms, hoard_observation.amount)?;
 
     Ok(CollateralSnapshot {
         quantity,
@@ -937,32 +937,11 @@ pub fn token_effects(
             &accounts[IX_ACTOR],
             snapshot.quantity,
         ),
-        (SeamOp::Split { .. }, TokenSnapshot::Collateral(snapshot)) => token::transfer_checked(
-            token_program,
-            &accounts[IX_ACTOR_TOKEN],
-            &accounts[IX_COLLATERAL_MINT],
-            &accounts[IX_HOARD_TOKEN],
-            &accounts[IX_ACTOR],
-            snapshot.quantity,
-            snapshot.decimals,
-        ),
-        (SeamOp::Merge { .. }, TokenSnapshot::Collateral(snapshot)) => {
-            let signer: [&[u8]; 3] = [
-                seeds::SEED_HOARD_AUTHORITY,
-                &snapshot.market,
-                &snapshot.authority_bump,
-            ];
-            token::transfer_checked_signed(
-                token_program,
-                &accounts[IX_HOARD_TOKEN],
-                &accounts[IX_COLLATERAL_MINT],
-                &accounts[IX_ACTOR_TOKEN],
-                &accounts[IX_HOARD_AUTHORITY],
-                snapshot.quantity,
-                snapshot.decimals,
-                &signer,
-            )
-        }
+        /* Collateral is already inside the pooled Hoard because `Endow` is
+         * the sole inbound value boundary.  Split locks position cash as
+         * complete-set backing and Merge unlocks it; both are accounting
+         * reclassifications and therefore must move zero Token-2022 atoms. */
+        (SeamOp::Split { .. } | SeamOp::Merge { .. }, TokenSnapshot::Collateral(_)) => Ok(()),
         /* Unreachable: `select_token_leg` pairs each intent with exactly one
          * snapshot shape.  Refusing rather than silently succeeding is what
          * keeps that a check and not a comment. */
@@ -1002,13 +981,8 @@ fn verify_token_deltas(
         TokenSnapshot::Collateral(snapshot) => {
             let post_actor = token::token_amount(&accounts[IX_ACTOR_TOKEN])?;
             let post_hoard = token::token_amount(&accounts[IX_HOARD_TOKEN])?;
-            if matches!(op, SeamOp::Split { .. }) {
-                token::require_exact_debit(snapshot.actor_amount, post_actor, snapshot.quantity)?;
-                token::require_exact_credit(snapshot.hoard_amount, post_hoard, snapshot.quantity)?;
-            } else {
-                token::require_exact_credit(snapshot.actor_amount, post_actor, snapshot.quantity)?;
-                token::require_exact_debit(snapshot.hoard_amount, post_hoard, snapshot.quantity)?;
-            }
+            token::require_exact_credit(snapshot.actor_amount, post_actor, 0)?;
+            token::require_exact_credit(snapshot.hoard_amount, post_hoard, 0)?;
             Ok(post_hoard)
         }
     }
@@ -1402,7 +1376,7 @@ where
          * same number.  A kernel that moved a different amount than the CPI
          * did -- in either direction -- refuses here. */
         TokenSnapshot::Collateral(_) => {
-            token::require_hoard_mirror(kernel_post.collateral, observed)?
+            token::require_hoard_covers_collateral(kernel_post.collateral, observed)?
         }
     }
 
@@ -2462,7 +2436,9 @@ pub(crate) mod tests {
             collateral: CollateralLegCase::default(),
         };
         case.token = token_leg(&case, 0, 0, 0);
-        case.collateral = collateral_leg(&case, ACTOR_COLLATERAL_ATOMS, 0);
+        /* The pooled Hoard retains the founding position's cash.  Locked
+         * collateral is zero, so the whole balance is free cash. */
+        case.collateral = collateral_leg(&case, ACTOR_COLLATERAL_ATOMS, CASH_ATOMS);
         case
     }
 
@@ -2688,16 +2664,7 @@ pub(crate) mod tests {
                 shift(&accounts[IX_OUTCOME_MINT], MINT_SUPPLY, delta)?;
                 shift(&accounts[IX_HOLDER_TOKEN], ACCOUNT_AMOUNT, delta)
             }
-            (SeamOp::Split { .. }, TokenSnapshot::Collateral(snapshot)) => {
-                let delta = i128::from(snapshot.quantity);
-                shift(&accounts[IX_ACTOR_TOKEN], ACCOUNT_AMOUNT, -delta)?;
-                shift(&accounts[IX_HOARD_TOKEN], ACCOUNT_AMOUNT, delta)
-            }
-            (SeamOp::Merge { .. }, TokenSnapshot::Collateral(snapshot)) => {
-                let delta = i128::from(snapshot.quantity);
-                shift(&accounts[IX_HOARD_TOKEN], ACCOUNT_AMOUNT, -delta)?;
-                shift(&accounts[IX_ACTOR_TOKEN], ACCOUNT_AMOUNT, delta)
-            }
+            (SeamOp::Split { .. } | SeamOp::Merge { .. }, TokenSnapshot::Collateral(_)) => Ok(()),
             _ => Err(ClutchError::UnsupportedInstruction.into()),
         }
     }

@@ -1346,6 +1346,27 @@ pub fn require_hoard_mirror(collateral_atoms: u64, token_amount: u64) -> Result<
     }
 }
 
+/// Require the pooled Hoard to cover its locked complete-set collateral.
+///
+/// `HoardAccount::collateral_atoms` is the locked-liability term, while the
+/// Token-2022 account also retains every position's free and reserved cash.
+/// Therefore equality is true only at empty-market initialization.  At
+/// runtime the locally checkable solvency condition is the one-sided bound
+/// `token_amount >= collateral_atoms`; the slack is pooled cash plus any
+/// direct token donations.  A donation can increase slack but cannot create a
+/// position cash claim, so equality with the unenumerated position sum is an
+/// inductive protocol invariant rather than a fact one instruction can scan.
+pub fn require_hoard_covers_collateral(
+    collateral_atoms: u64,
+    token_amount: u64,
+) -> Result<(), Refusal> {
+    if token_amount >= collateral_atoms {
+        Ok(())
+    } else {
+        Err(Refusal::Adapter(ClutchError::HoardMirrorMismatch))
+    }
+}
+
 /* ------------------------------------------------------------------------ */
 /* Collateral-policy admission                                               */
 /* ------------------------------------------------------------------------ */

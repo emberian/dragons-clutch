@@ -9,7 +9,7 @@
 //! and the `invoke_signed` seed plumbing are unwritten and untested").  This
 //! module is that half.  It creates five of the fifteen protocol accounts
 //! through a real system-program CPI, and it carries one transition that
-//! creates nothing: [`Intent::Endow`], the internal-ledger half of a deposit.
+//! creates nothing: [`Intent::Endow`], the backed collateral-deposit boundary.
 //!
 //! | intent | creates | accounts |
 //! | --- | --- | ---: |
@@ -18,44 +18,27 @@
 //! | [`Intent::InitPriceGrid`] | [`clutch_solana_layout::PriceGridAccount`] | 6 |
 //! | [`Intent::InitTerms`] | [`clutch_solana_layout::TermsAccount`] | 7 |
 //! | [`Intent::InitOrderPage`] | one order page | 6 |
-//! | [`Intent::Endow`] | nothing — credits position cash | 4 |
+//! | [`Intent::Endow`] | nothing — deposits collateral and credits cash | 11 |
 //!
-//! ## `Endow` credits cash that nothing backs, and says so
+//! ## `Endow` is the inbound value boundary
 //!
-//! `PROJECT.md` §10 item 2 is a *prepay*: value arrives, and the position can
-//! trade.  Value arrival is a Token-2022 `TransferChecked` into the market's
-//! Hoard token account — [`crate::token::transfer_checked`] constructs exactly
-//! that CPI and **no instruction wires it**
-//! (`docs/implementation/TOKEN2022_PLAN.md`: "constructed, not wired").  So
-//! `Endow` moves the internal ledger and nothing else: after it,
-//! [`PositionAccount::cash_atoms`] is larger and no collateral has moved
-//! anywhere.
+//! The owner signs a Token-2022 `TransferChecked` from an admitted collateral
+//! account into the market's derived Hoard token account.  Mint identity,
+//! decimals, extension policy, token-account authorities, Profile/policy
+//! binding, every PDA, replay, and the exact source debit and destination
+//! credit are checked before ledger bytes are committed.  A later refusal is
+//! atomic with the CPI under SVM transaction semantics.
 //!
-//! That is not a new hole.  It is the *existing* hole, made auditable.  The
-//! bring-up harness already conjures opening cash — its genesis fixture writes
-//! a `cash_atoms` into the position account before any transaction runs, and
-//! `LIFECYCLE_WALK.md` names that as "the sharpest gap in the walk".  A number
-//! that appears in a fixture has no signer, no sequence, no log line and no
-//! ceiling.  An `Endow` has all four.  Replacing the conjuring with an
-//! instruction is worth doing precisely *because* it does not fix the backing:
-//! the uncollateralized credit becomes a transaction someone signed, which is
-//! the shape the collateral leg will later attach to.
+//! The pooled Hoard retains both position cash and locked complete-set
+//! collateral. [`HoardAccount::collateral_atoms`] is only the locked term;
+//! direct Token-2022 donations may create unowned surplus, so the locally
+//! checkable condition is `hoard_token.amount >= collateral_atoms`, not
+//! equality.  The stronger global equation over every position's cash is
+//! inductive because no frozen account stores the market-wide cash sum.
 //!
-//! The one ceiling that is real is stated as what it is.  `Endow` refuses when
-//! the resulting `cash_atoms` would exceed [`MarketAccount::collateral_cap`],
-//! which is a **necessary and not sufficient** condition: the market's
-//! immutable cap bounds all collateral the market may ever hold, so it bounds
-//! a fortiori any one position's claim on it.  The sufficient check — the sum
-//! of every position's cash plus the escrowed collateral — needs a market-wide
-//! cash aggregate that no account in the frozen layout carries, and inventing
-//! one here would be inventing an ABI.  That residue is named, not closed.
-//!
-//! The cap is deliberately *not* checked against
-//! [`clutch_solana_layout::HoardAccount::collateral_atoms`]: the Hoard's
-//! number is escrowed
-//! collateral backing complete sets, which only `Split` raises, and cash is
-//! the un-escrowed balance sitting beside it.  Adding the two would be
-//! double-counting the same atoms across the seam they are defined by.
+//! [`MarketAccount::collateral_cap`] limits locked complete-set exposure at
+//! `Split`; it is not silently reused as a custody ceiling.  A position may
+//! deposit more unused cash than the market can lock.
 //!
 //! ## Authority — **PROPOSED**, and it is the same proposal `market_init` made
 //!
@@ -73,8 +56,8 @@
 //! it is the same first-come-address residue market creation has.
 //!
 //! `Endow` is not permissionless: the signer must be the position's own owner.
-//! Anyone may therefore credit **their own** position with unbacked cash, and
-//! that is the honest statement of what an unwired collateral leg means.
+//! The signer may therefore deposit only into **their own** position, from a
+//! Token-2022 account whose owner authority is that signer.
 //!
 //! ## Where the bytes come from: the evidence-buffer pattern
 //!
@@ -160,7 +143,7 @@
 //! | the rent-sysvar role is not the rent sysvar | [`ClutchError::WrongRentSysvar`] | `0x0071` |
 //! | the `CreateAccount` CPI refused, or created nothing | [`ClutchError::AccountCreationFailed`] | `0x0072` |
 //! | an evidence buffer is not the artifact the intent names | [`ClutchError::EvidenceBufferMismatch`] | `0x0073` |
-//! | an endowment would pass the market's immutable cap | [`ClutchError::CollateralCap`] | `0x0012` |
+//! | an Endow token account or exact delta is invalid | token admission / [`ClutchError::TokenDeltaMismatch`] | `0x0018..=0x001c` |
 //! | every other check | the [`ClutchError`] the check already has | `0x0001..=0x0017` |
 //!
 //! ## Frame discipline
@@ -177,10 +160,11 @@ use crate::accounts::{
     self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
 };
 use crate::error::{ClutchError, Refusal};
-use crate::seeds;
+use crate::{seeds, token};
 use clutch_solana_layout::{
-    account_len, canonical_realm_id, collateral, stream, Hash32, Intent, MarketAccount,
-    PositionAccount, ProfileAccount, RealmAccount, EPOCH_PHASE_OPEN, PROFILE_FLAG_POLICY_FROZEN,
+    account_len, canonical_realm_id, collateral, stream, Hash32, HoardAccount, Intent,
+    MarketAccount, PositionAccount, ProfileAccount, RealmAccount, EPOCH_PHASE_OPEN,
+    PROFILE_FLAG_POLICY_FROZEN,
 };
 use clutch_solana_reference::{Action, ReplayAccount, Request, REPLAY_ACCOUNT_LEN};
 use solana_account_info::AccountInfo;
@@ -455,19 +439,34 @@ pub const IX_PAGE_RENT: usize = 5;
 
 /// Accounts in an `Endow` instruction, exactly.
 ///
-/// Four, and none of them is the system program: an endowment creates nothing
-/// and moves no lamports.
-pub const ENDOW_ACCOUNT_COUNT: usize = 4;
-/// The market whose immutable cap bounds the credit (read-only).
+/// The five program-owned state roles are followed by the Realm's
+/// content-authenticated collateral policy and the five Token-2022 roles
+/// needed for an exact actor-to-Hoard deposit.
+pub const ENDOW_ACCOUNT_COUNT: usize = 11;
+/// The market the deposit belongs to (read-only).
 ///
 /// It sits where the creation target sits in the other five lists, because
 /// `Endow` has no creation target: it is the one instruction in this module
 /// that allocates nothing.
 pub const IX_ENDOW_MARKET: usize = 1;
+/// The market-local Hoard accounting account (read-only).
+pub const IX_ENDOW_HOARD: usize = 2;
 /// The position being credited (writable).
-pub const IX_ENDOW_POSITION: usize = 2;
+pub const IX_ENDOW_POSITION: usize = 3;
 /// The reference-only replay-sequence account (writable).
-pub const IX_ENDOW_REPLAY: usize = 3;
+pub const IX_ENDOW_REPLAY: usize = 4;
+/// The immutable Profile whose digest authenticates the collateral policy.
+pub const IX_ENDOW_PROFILE: usize = 5;
+/// The Realm's 266-byte collateral policy (read-only evidence).
+pub const IX_ENDOW_POLICY: usize = 6;
+/// The pinned Token-2022 program (read-only, executable).
+pub const IX_ENDOW_TOKEN_PROGRAM: usize = 7;
+/// The collateral mint named by the authenticated policy (read-only).
+pub const IX_ENDOW_COLLATERAL_MINT: usize = 8;
+/// The owner's collateral token account (writable source).
+pub const IX_ENDOW_ACTOR_TOKEN: usize = 9;
+/// The market's derived Hoard token account (writable destination).
+pub const IX_ENDOW_HOARD_TOKEN: usize = 10;
 
 /// Program-owned roles of `InitProfile`, in account-index order.
 const PROFILE_STATE_ROLES: [StateRole; 1] =
@@ -485,10 +484,12 @@ const PAGE_STATE_ROLES: [StateRole; 2] = [
     StateRole::read_only(IX_PAGE_EPOCH, account_len::EPOCH),
 ];
 /// Program-owned roles of `Endow`.
-const ENDOW_STATE_ROLES: [StateRole; 3] = [
+const ENDOW_STATE_ROLES: [StateRole; 5] = [
     StateRole::read_only(IX_ENDOW_MARKET, account_len::MARKET),
+    StateRole::read_only(IX_ENDOW_HOARD, account_len::HOARD),
     StateRole::writable(IX_ENDOW_POSITION, account_len::POSITION),
     StateRole::writable(IX_ENDOW_REPLAY, REPLAY_ACCOUNT_LEN),
+    StateRole::read_only(IX_ENDOW_PROFILE, account_len::PROFILE),
 ];
 
 /// Refuse a read-only, non-executable evidence buffer of the wrong width.
@@ -1085,6 +1086,8 @@ fn endow(program_id: &Pubkey, accounts: &[AccountInfo], request: &EndowRequest) 
     accounts::validate_state_roles(program_id, accounts, &ENDOW_STATE_ROLES)?;
 
     let market = accounts::read_market(&accounts[IX_ENDOW_MARKET].data.borrow())?;
+    let hoard = HoardAccount::decode(&accounts[IX_ENDOW_HOARD].data.borrow())?;
+    let profile = ProfileAccount::decode(&accounts[IX_ENDOW_PROFILE].data.borrow())?;
     let (position_owner, position_generation, position_bump) = {
         let data = accounts[IX_ENDOW_POSITION].data.borrow();
         let position = PositionAccount::decode(&data)?;
@@ -1101,6 +1104,13 @@ fn endow(program_id: &Pubkey, accounts: &[AccountInfo], request: &EndowRequest) 
         seeds::market_pda(program_id, &market.realm.bytes(), &market_bytes),
         Some(market.stored_bump),
     )?;
+    let hoard_derived = seeds::hoard_pda(program_id, &market_bytes);
+    expect_pda(
+        accounts[IX_ENDOW_HOARD].key,
+        hoard_derived,
+        Some(hoard.stored_bump),
+    )?;
+    require(market.hoard_bump == hoard_derived.1, ClutchError::WrongBump)?;
     expect_pda(
         accounts[IX_ENDOW_POSITION].key,
         seeds::position_pda(program_id, &market_bytes, &owner_bytes),
@@ -1111,18 +1121,108 @@ fn endow(program_id: &Pubkey, accounts: &[AccountInfo], request: &EndowRequest) 
         seeds::replay_pda(program_id, &market_bytes, &owner_bytes, position_generation),
         Some(replay_bump),
     )?;
+    expect_pda(
+        accounts[IX_ENDOW_PROFILE].key,
+        seeds::profile_pda(program_id, &market.realm.bytes(), &market.profile.bytes()),
+        None,
+    )?;
+
+    require(
+        hoard.market == market.market
+            && hoard.realm == market.realm
+            && profile.profile == market.profile
+            && profile.realm == market.realm,
+        ClutchError::MismatchedState,
+    )?;
+
+    let policy_account = &accounts[IX_ENDOW_POLICY];
+    require(!policy_account.is_writable, ClutchError::UnexpectedWritable)?;
+    require(!policy_account.executable, ClutchError::ExecutableAccount)?;
+    require(
+        policy_account.data_len() == collateral::COLLATERAL_POLICY_BYTES,
+        ClutchError::WrongDataLength,
+    )?;
+    let policy = collateral::verify_profile_identity(&policy_account.data.borrow(), &profile)?;
+    token::require_drivable_collateral(&policy)?;
+    super::split::validate_token_program(&accounts[IX_ENDOW_TOKEN_PROGRAM])?;
+
+    let mint = &accounts[IX_ENDOW_COLLATERAL_MINT];
+    require(!mint.is_writable, ClutchError::UnexpectedWritable)?;
+    require(!mint.executable, ClutchError::ExecutableAccount)?;
+    let mint_observation = token::admit_mint(mint, &token::MintPolicy::collateral(&policy))?;
+
+    let actor_token = &accounts[IX_ENDOW_ACTOR_TOKEN];
+    let hoard_token = &accounts[IX_ENDOW_HOARD_TOKEN];
+    require(
+        !actor_token.executable && !hoard_token.executable,
+        ClutchError::ExecutableAccount,
+    )?;
+    require(
+        actor_token.is_writable && hoard_token.is_writable,
+        ClutchError::NotWritable,
+    )?;
+    let authority = seeds::hoard_authority_pda(program_id, &market_bytes).0;
+    require(
+        hoard.authority.bytes() == authority.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        hoard_token.key,
+        seeds::hoard_token_pda(program_id, &market_bytes),
+        None,
+    )?;
+    let actor_observation = token::admit_token_account(
+        actor_token,
+        &token::TokenAccountPolicy::collateral_holder(&policy, *accounts[IX_PAYER].key),
+    )?;
+    let hoard_observation = token::admit_token_account(
+        hoard_token,
+        &token::TokenAccountPolicy::hoard(&policy, authority),
+    )?;
+    token::require_hoard_covers_collateral(hoard.collateral_atoms, hoard_observation.amount)?;
+    let expected_hoard = hoard_observation
+        .amount
+        .checked_add(request.amount)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
 
     let actor = Hash32::from_bytes(accounts[IX_PAYER].key.to_bytes());
-    let market_data = accounts[IX_ENDOW_MARKET].data.borrow();
-    let mut position_data = borrow_mut!(accounts[IX_ENDOW_POSITION])?;
-    let mut replay_data = borrow_mut!(accounts[IX_ENDOW_REPLAY])?;
-    apply_endow(
-        &market_data,
-        &mut position_data,
-        &mut replay_data,
+    let (position_post, replay_post) = validated_endow(
+        &accounts[IX_ENDOW_MARKET].data.borrow(),
+        &accounts[IX_ENDOW_POSITION].data.borrow(),
+        &accounts[IX_ENDOW_REPLAY].data.borrow(),
         actor,
         request,
-    )
+    )?;
+
+    /* This is the value boundary.  Every state mutation follows the CPI and
+     * its exact pre/post checks.  Any later refusal rolls the CPI back with the
+     * rest of the SVM transaction. */
+    token::transfer_checked(
+        &accounts[IX_ENDOW_TOKEN_PROGRAM],
+        actor_token,
+        mint,
+        hoard_token,
+        &accounts[IX_PAYER],
+        request.amount,
+        mint_observation.decimals,
+    )?;
+    let post_actor = token::token_amount(actor_token)?;
+    let post_hoard = token::token_amount(hoard_token)?;
+    token::require_exact_debit(actor_observation.amount, post_actor, request.amount)?;
+    token::require_exact_credit(hoard_observation.amount, post_hoard, request.amount)?;
+    require(
+        post_hoard == expected_hoard,
+        ClutchError::TokenDeltaMismatch,
+    )?;
+    token::require_hoard_covers_collateral(hoard.collateral_atoms, post_hoard)?;
+
+    let mut position_data = borrow_mut!(accounts[IX_ENDOW_POSITION])?;
+    let mut replay_data = borrow_mut!(accounts[IX_ENDOW_REPLAY])?;
+    position_post.encode(&mut position_data)?;
+    replay_post
+        .encode(&mut replay_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(())
 }
 
 /// The whole endowment transition over authenticated bytes.
@@ -1143,6 +1243,29 @@ pub fn apply_endow(
     actor: Hash32,
     request: &EndowRequest,
 ) -> Outcome<()> {
+    let (position, replay) =
+        validated_endow(market_bytes, position_bytes, replay_bytes, actor, request)?;
+    position.encode(position_bytes)?;
+    replay
+        .encode(replay_bytes)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(())
+}
+
+/// Validate and compute the ledger half of one deposit without writing.
+///
+/// The on-chain path calls this before the Token-2022 CPI, so authorization,
+/// identity, lifecycle, replay, and arithmetic all
+/// refuse before value moves.  The returned values are encoded only after the
+/// exact token deltas have been observed.
+#[inline(never)]
+fn validated_endow(
+    market_bytes: &[u8],
+    position_bytes: &[u8],
+    replay_bytes: &[u8],
+    actor: Hash32,
+    request: &EndowRequest,
+) -> Outcome<(PositionAccount, ReplayAccount)> {
     let market = MarketAccount::decode(market_bytes)?;
     let mut position = PositionAccount::decode(position_bytes)?;
     let mut replay = ReplayAccount::decode(replay_bytes)?;
@@ -1172,31 +1295,16 @@ pub fn apply_endow(
         .cash_atoms
         .checked_add(request.amount)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    /* Necessary, not sufficient — see the module docs.  The market's immutable
-     * cap bounds all collateral it may ever hold, so it bounds any one
-     * position's claim on that collateral; the market-wide sum is unavailable
-     * because no account carries it. */
-    require(
-        next_cash <= market.collateral_cap,
-        ClutchError::CollateralCap,
-    )?;
-
     position.cash_atoms = next_cash;
     replay.sequence = next_sequence;
-    position.encode(position_bytes)?;
-    replay
-        .encode(replay_bytes)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    Ok(())
+    Ok((position, replay))
 }
 
-/// The Hoard is untouched by an endowment, stated as code.
+/// The Hoard *accounting record* is untouched by the ledger half of Endow.
 ///
-/// `HoardAccount::collateral_atoms` is escrowed collateral backing complete
-/// sets and only `Split` raises it; internal cash is the un-escrowed balance
-/// beside it.  This function exists so that "the endowment does not move the
-/// Hoard" is a compiled assertion in the test below rather than a sentence in
-/// a comment.
+/// `HoardAccount::collateral_atoms` is locked complete-set backing and Endow
+/// does not change it.  The on-chain wrapper separately moves the physical
+/// Token-2022 balance before committing the returned position and replay.
 #[cfg(test)]
 fn hoard_is_unmoved(
     before: &clutch_solana_layout::HoardAccount,
@@ -1530,11 +1638,10 @@ mod tests {
     /* Endow                                                               */
     /* ------------------------------------------------------------------ */
 
-    /// The endowment transition, checked against the layout codecs: the
-    /// post-state bytes are what the codecs encode for the expected values,
-    /// and the Hoard is untouched.
+    /// The ledger half of Endow, checked against the layout codecs.  The SVM
+    /// test drives the surrounding real Token-2022 transfer.
     #[test]
-    fn an_endowment_credits_cash_advances_replay_and_moves_no_collateral() {
+    fn an_endowment_ledger_credits_cash_and_advances_replay() {
         let mut case = EndowCase::new();
         let hoard_before = case.hoard;
         apply_endow(
@@ -1686,34 +1793,26 @@ mod tests {
             Err(Refusal::Adapter(ClutchError::NotActive))
         );
 
-        // A credit past the market's immutable cap, and one that would wrap.
+        // The market cap limits locked complete-set collateral, not custody.
+        // Unused position cash may exceed it without expanding liabilities.
         let mut case = EndowCase::new();
-        assert_eq!(
-            apply_endow(
-                &case.market,
-                &mut case.position,
-                &mut case.replay,
-                case.owner,
-                &EndowRequest {
-                    amount: case.market_value.collateral_cap + 1,
-                    ..request
-                }
-            ),
-            Err(Refusal::Adapter(ClutchError::CollateralCap))
-        );
-        // Exactly at the cap is admitted: the bound is inclusive.
         apply_endow(
             &case.market,
             &mut case.position,
             &mut case.replay,
             case.owner,
             &EndowRequest {
-                amount: case.market_value.collateral_cap,
+                amount: case.market_value.collateral_cap + 1,
                 ..request
             },
         )
         .unwrap();
+        assert_eq!(
+            PositionAccount::decode(&case.position).unwrap().cash_atoms,
+            case.market_value.collateral_cap + 1
+        );
 
+        // Arithmetic overflow still refuses before any write.
         let mut case = EndowCase::new();
         let mut rich = case.position_value;
         rich.cash_atoms = u64::MAX;

@@ -542,15 +542,10 @@ mod tests {
             ClutchError::TokenDeltaMismatch,
             "off-chain burn moves nothing",
         );
-        /* And the collateral leg, which the same no-op reaches through
-         * `TransferChecked` rather than `MintTo`. */
+        /* The collateral leg is deliberately a no-op: pooled cash is already
+         * in the Hoard, so Merge succeeds without an off-chain CPI. */
         let (case, _) = collateral_case();
-        refuses_after_the_kernel_ran(
-            &case,
-            &merge(1, 4),
-            ClutchError::TokenDeltaMismatch,
-            "off-chain transfer_checked moves nothing",
-        );
+        assert_eq!(case.program_with_real_cpi(&merge(1, 4)).0, Ok(()));
     }
 
     #[test]
@@ -844,55 +839,46 @@ mod tests {
     }
 
     #[test]
-    fn collateral_moves_exactly_with_the_kernel_and_the_mirror_holds() {
-        /* **E2 on the host**: `Split` moves exactly `q` atoms from the actor's
-         * collateral account into the Hoard's, `Merge` reverses it, and
-         * `HoardAccount::collateral_atoms` equals the Hoard token account's
-         * `amount` at every step -- which the program itself enforces, so this
-         * asserts the numbers the enforcement admitted. */
+    fn collateral_is_reclassified_without_a_second_token_transfer() {
+        /* `Endow` already moved the cash into pooled custody.  Split locks it
+         * and Merge unlocks it, while both token balances remain byte-exact. */
         let mut case = fixture();
         let actor_before = token::fixtures::amount_of(&case.collateral.actor_token_data);
-        assert_eq!(
-            token::fixtures::amount_of(&case.collateral.hoard_token_data),
-            0
-        );
+        let custody_before = token::fixtures::amount_of(&case.collateral.hoard_token_data);
+        assert_eq!(custody_before, 100);
 
-        case.advance(&split_request(0, 20), "split 20 with real collateral");
+        case.advance(&split_request(0, 20), "lock 20 of pooled cash");
         let hoard = HoardAccount::decode(&case.state.hoard).expect("hoard decodes");
         assert_eq!(hoard.collateral_atoms, 20);
         assert_eq!(
             token::fixtures::amount_of(&case.collateral.actor_token_data),
-            actor_before - 20,
-            "the actor paid exactly the complete sets"
+            actor_before,
+            "split must not charge the actor a second time"
         );
         assert_eq!(
             token::fixtures::amount_of(&case.collateral.hoard_token_data),
-            hoard.collateral_atoms,
-            "the mirror, which the program refused to proceed without"
+            custody_before,
+            "custody is unchanged while cash becomes locked collateral"
         );
 
-        case.advance(&merge(1, 6), "merge 6 with real collateral out");
+        case.advance(&merge(1, 6), "unlock 6 back to pooled cash");
         let hoard = HoardAccount::decode(&case.state.hoard).expect("hoard decodes");
         assert_eq!(hoard.collateral_atoms, 14);
         assert_eq!(
             token::fixtures::amount_of(&case.collateral.actor_token_data),
-            actor_before - 14
+            actor_before,
+            "merge is not a withdrawal"
         );
         assert_eq!(
             token::fixtures::amount_of(&case.collateral.hoard_token_data),
-            hoard.collateral_atoms
+            custody_before
         );
     }
 
     #[test]
     fn a_hoard_whose_two_truths_disagree_refuses_before_anything_moves() {
-        /* The mirror over the pre-state.  `HoardAccount::collateral_atoms` is
-         * a second truth about a balance the token program also tracks, and
-         * `TOKEN2022_PLAN.md` open decision 3 keeps it only on the condition
-         * that the two are checked equal.  A market whose Hoard token account
-         * was topped up out of band is exactly the state the equality names,
-         * and it refuses rather than letting the kernel run against a number
-         * the token program does not agree with. */
+        /* Custody below the locked-liability term is insolvent and refuses
+         * before the kernel runs. */
         let (case, base) = collateral_case();
         let mut drifted = base;
         drifted.hoard_token_data = token::fixtures::account_bytes(
@@ -905,7 +891,21 @@ mod tests {
             &split_request(1, 4),
             &drifted,
             ClutchError::HoardMirrorMismatch,
-            "the hoard token account holds atoms the ledger does not",
+            "the hoard token account cannot cover locked collateral",
+        );
+
+        /* Direct token donations are harmless surplus: they create no cash
+         * claim and therefore must not grief a market by breaking equality. */
+        let mut donated = case.collateral.clone();
+        donated.hoard_token_data = token::fixtures::account_bytes(
+            donated.mint.to_bytes(),
+            donated.authority.to_bytes(),
+            101,
+        );
+        assert_eq!(
+            case.program_with_collateral_leg(&split_request(1, 4), &donated)
+                .0,
+            Ok(())
         );
     }
 
