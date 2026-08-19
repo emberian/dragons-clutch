@@ -671,6 +671,23 @@ policy/schedule/page/replay/release/funding mutation.
 function. The frames that remain in its output are the pre-existing
 research/reference-crate debt already present in the sealed-main baseline ELF.
 
+The full svm suite is green on the branch under **both** ELF profiles:
+`default-empty-registry` 75 passed / 0 failed, and
+`non-production-mock-source` 82 passed / 0 failed, each matching main's own
+counts for the shared targets. Reaching that required one inherited repair,
+recorded here because it was mis-attributed once: the branch's merge-base
+(`414d6e4`) carried a broken native fixture that bound an inconsistent source
+version, so every native Resolve refused with `0x0050`
+(`ReferenceError::Window`) — three `native_resolution` tests and, under the
+mock profile, `native_full_lifecycle`. Main repaired it after the branch
+diverged, in `161f530` "Bind native fixture source version consistently",
+which touches only harness files. That commit is cherry-picked onto this
+branch. The failures were never V3 behaviour and no refusal or expectation was
+weakened to clear them; they were invisible on the branch only because
+`1e8b8a3` had added `ArtifactKind::DirectBatchPolicyV3` without updating three
+svm test helpers, so the suite could not compile at all under either profile
+until those match arms landed.
+
 ## Remaining promotion boundary
 
 The three former model blockers are closed by `e77238f`, `6267fde`, and
