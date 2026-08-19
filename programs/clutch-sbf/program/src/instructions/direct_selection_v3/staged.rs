@@ -331,20 +331,6 @@ pub(super) fn submit(
         at -= 1;
     }
 
-    // Close the displaced worst before the new account exists: its recorded
-    // payer principal returns to its payer, everything else to the sink.
-    if let Some(worst) = displaced {
-        let payer_index =
-            displaced_payer_index.ok_or(Refusal::Adapter(ClutchError::AccountCount))?;
-        super::common::close_funded_account(
-            &accounts[IX_SUBMIT_TOP_START + worst],
-            &accounts[payer_index],
-            &accounts[sink_index],
-            retained[worst].funding,
-            0,
-        )?;
-    }
-
     let post_admissions = window
         .window
         .admitted_count
@@ -421,6 +407,21 @@ pub(super) fn submit(
         )?;
     }
     write_window_v3(&accounts[IX_SUBMIT_WINDOW], &window)?;
+    /* The displaced worst closes only after the last create CPI: its recorded
+     * payer principal returns to its payer and everything else goes to the
+     * sink, and deferring the direct lamport moves past the CPIs keeps the
+     * transaction context's instruction-wide lamport sum synchronized. */
+    if let Some(worst) = displaced {
+        let payer_index =
+            displaced_payer_index.ok_or(Refusal::Adapter(ClutchError::AccountCount))?;
+        super::common::close_funded_account(
+            &accounts[IX_SUBMIT_TOP_START + worst],
+            &accounts[payer_index],
+            &accounts[sink_index],
+            retained[worst].funding,
+            0,
+        )?;
+    }
     Ok(())
 }
 

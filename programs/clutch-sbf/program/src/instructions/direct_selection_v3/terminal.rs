@@ -46,7 +46,8 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use super::common::{
-    close_funded_account, frozen_pair, observe_funding, pay_reward, read_epoch_v4_boxed,
+    close_funded_account, frozen_pair, move_lamports, observe_funding, pay_reward,
+    read_epoch_v4_boxed,
     read_reservation_v2_boxed, read_window_v3_boxed, read_work_budget,
     release_reservations_into_positions, require_neutral_sink, sink_hash, write_epoch_v4,
     write_reservation_v2, write_window_v3,
@@ -279,12 +280,14 @@ pub(super) fn finalize(
         DIRECT_NEUTRAL_SINK_V3,
     )?;
     let reward = budget.rewards.finalize_selection;
-    pay_reward(
-        &accounts[work_index],
-        &accounts[IX_FINALIZE_PAYER],
-        &mut budget,
-        reward,
-    )?;
+    budget.reward_balance = budget
+        .reward_balance
+        .checked_sub(reward)
+        .ok_or(Refusal::Adapter(ClutchError::AggregateClosureMismatch))?;
+    budget.rewards_paid = budget
+        .rewards_paid
+        .checked_add(reward)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
 
     let receipt_funding = direct_creation_funding(
         &accounts[IX_FINALIZE_PAYER],
@@ -319,24 +322,17 @@ pub(super) fn finalize(
     epoch.terminal.relation_candidate_digest =
         Hash32::from_bytes(winner.candidate.relation_candidate_digest.0);
 
-    /* Existing-state writes, then loser closes, then the create CPIs. */
+    /* Existing-state writes, then the create CPIs. Direct lamport moves —
+     * the loser closes and the keeper reward — come only after the last CPI:
+     * at CPI entry the runtime syncs only the accounts passed to the callee,
+     * so an earlier direct move on a caller-only account would desynchronize
+     * the instruction-wide lamport sum and refuse as unbalanced. */
     write_epoch_v4(&accounts[IX_FINALIZE_EPOCH], &epoch)?;
     write_window_v3(&accounts[IX_FINALIZE_WINDOW], &window)?;
     write_candidate_v3_terminal(&accounts[IX_FINALIZE_TOP_START], &winner)?;
     write_reservation_v2(&accounts[IX_FINALIZE_RES_ZERO], &reservation_zero)?;
     write_reservation_v2(&accounts[IX_FINALIZE_RES_ONE], &reservation_one)?;
     budget.encode(sink_hash(), &mut borrow_mut!(accounts[work_index])?)?;
-    let mut loser = 1usize;
-    while loser < top_count {
-        close_funded_account(
-            &accounts[IX_FINALIZE_TOP_START + loser],
-            &accounts[loser_payers_at + loser - 1],
-            &accounts[sink_index],
-            fundings[loser],
-            0,
-        )?;
-        loser += 1;
-    }
 
     create_pda_account_full_principal(
         program_id,
@@ -382,6 +378,18 @@ pub(super) fn finalize(
         receipt_bump,
         pot_bump,
     )?;
+    let mut loser = 1usize;
+    while loser < top_count {
+        close_funded_account(
+            &accounts[IX_FINALIZE_TOP_START + loser],
+            &accounts[loser_payers_at + loser - 1],
+            &accounts[sink_index],
+            fundings[loser],
+            0,
+        )?;
+        loser += 1;
+    }
+    move_lamports(&accounts[work_index], &accounts[IX_FINALIZE_PAYER], reward)?;
     Ok(())
 }
 
