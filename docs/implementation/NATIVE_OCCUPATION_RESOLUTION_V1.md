@@ -75,13 +75,13 @@ uses no allocation, float, or unbounded search:
 | operation | fixed bound |
 |---|---:|
 | archive verification | one 2,560-byte page and at most 32 records |
-| accepted bucket | one degree-1--3 exact native point evaluation |
-| summary combine | 16 checked `u128` additions after validation |
+| accepted bucket | one degree-1--3 exact native point evaluation plus 16 checked `u128` additions |
+| sequential fold | one domain validation, then adjacent appends; no singleton-summary construction/combine |
 | exact finalizer | 16 division/remainder checks |
 | largest-remainder finalizer | at most 15 winner scans over 16 entries |
 
 Known host type sizes from the accumulator evidence are `BasisSpec = 288`,
-`BasisDomain = 368`, `Summary = 656`, and `FinalWeights = 144` bytes.  The
+`BasisDomain = 384`, `Summary = 672`, and `FinalWeights = 144` bytes.  The
 runtime adapter separates domain construction, archive folding, singleton
 append, and final conversion with `#[inline(never)]`; this is an engineering
 measure, not SBF frame evidence.  `cargo-build-sbf` must still report no frame
@@ -92,6 +92,16 @@ key/owner/lineage/seal/commitment verification. Its private constructor and
 borrowed lifetime prevent an unchecked slice escape or mutation during the
 fold. Indexed reads remain bounded by the authenticated record count and do
 not rehash the page.
+
+The production fold uses an unforgeable validated basis capability stored in
+the private occupation domain and a private-state sequential builder. Smooth
+degree-two and degree-three evaluation has one fixed-denominator production
+path: respectively `2*h^2` and `12*h^3` on the admitted uniform grid.
+Power-of-two factors are cancelled by shifts and the only possible odd factor
+is three. The original reduced-`Fraction` Cox--de Boor evaluator is compiled
+only in tests as a differential oracle; it has no production dispatch arm.
+This changes neither per-bucket quantization nor final largest-remainder
+selection.
 
 Final-LTO SBF diagnostics name no `clutch_sbf` function over the 4,096-byte
 frame limit. This is narrower than saying every backend diagnostic is clean:
@@ -195,12 +205,12 @@ Resolution account, and a runtime rent minimum of 3,556,560 lamports.
 
 | degree | Resolve CU | exact retry CU | internal exact-lot CU | bearer exact-lot CU |
 |---:|---:|---:|---:|---:|
-| 1 | 1,256,230 | 1,102,616 | 699,964 | 783,687 |
-| 2 | 1,321,201 | 1,167,587 | 703,364 | 786,987 |
-| 3 | 1,374,893 | 1,221,279 | 701,304 | 784,692 |
+| 1 | 1,240,370 | 1,086,756 | 774,666 | 783,687 |
+| 2 | 1,253,040 | 1,099,426 | 778,209 | 786,987 |
+| 3 | 1,262,471 | 1,108,857 | 776,599 | 784,692 |
 
 A separate degree-two statistic-7 transaction records finalization byte 2 and
-measures 1,319,677 CU. The table's degree sweep uses statistic 6; host algebra
+measures 1,251,516 CU. The table's degree sweep uses statistic 6; host algebra
 tests independently exercise a non-exact average where statistic 6 refuses and
 statistic 7 applies the canonical lowest-index-tie largest-remainder rule.
 
@@ -212,19 +222,77 @@ and bearer failures roll back all watched accounts. Exact/sub-lot internal and
 bearer cases run for degrees one through three. Blank-bank construction also
 creates an unresolved statistic-6 v4 account and measures 932,585 CU.
 
-These measurements are close to the 1.4M test ceiling: degree-three Resolve has
-only 25,107 CU of raw margin and no 25% operating headroom. They establish the
-tested three-record fixture, not a liveness claim for every admitted 32-record
-archive. A production admission profile still needs a measured span/degree CU
-policy or further optimization.
+The validated fixed-denominator/sequential-fold optimization removes 15,860,
+68,161, and 112,422 CU from the prior span-three initial degree-one, -two, and
+-three rows. It does not close the chosen operating-headroom gate. The exact
+gate is `units * 5 / 4 <= 1,400,000`, hence at most 1,120,000 measured CU.
+A focused same-ELF campaign reconstructs distinct canonical sealed archives
+and Terms for spans one and two rather than truncating the span-three bytes:
 
-Two independent operatorless gaps remain outside this cut:
+| exact record span | degree 1 initial CU | degree 2 initial CU | degree 3 initial CU | admitted at 25% headroom |
+|---:|---:|---:|---:|---|
+| 1 | 1,242,858 | 1,252,676 | 1,252,357 | **NONE** |
+| 2 | 1,236,364 | 1,246,108 | 1,252,164 | **NONE** |
+| 3 | 1,240,370 | 1,253,040 | 1,262,471 | **NONE** |
+
+The small nonmonotonic differences are why this evidence does not extrapolate
+an unmeasured record-count formula. The honest end-to-end initial-Resolve
+admission profile is **NONE for every measured degree 1--3 and exact span
+1--3**; spans 4--32 remain unadmitted and unmeasured, not inferred failures.
+All span-three exact retries happen to clear 1,120,000 CU, but a retry cannot
+make the first resolution reachable. On the same ELF, point-v3 initial Resolve
+measures 1,088,245 / 1,092,118 / 1,100,512 CU for degrees one through three.
+The remaining occupation overhead is therefore dominated by its distinct
+source/archive and v4 account plane rather than the smooth evaluator: the
+degree-three-versus-degree-one occupation spread is only 22,101 CU, far below
+the 120,370 CU still needed even by the cheapest measured occupation row.
+
+### Read-only liveness options beyond evaluator optimization
+
+The following are design candidates only. Neither is implemented by the
+current route, and the checks they discuss remain mandatory.
+
+**Claim-neutral mint-sync omission.** Resolve currently reads and reconciles
+the complete outcome-mint vector before committing the immutable payout
+authority. Omitting that reconciliation is sound only if a protocol proof
+establishes all of the following: every mint has the canonical protocol PDA as
+its sole effective mint authority; no extension, delegate, hook, migration, or
+alternate instruction can increase supply; every protocol mint transition
+first increases the cached SupplyLedger value; external transitions can only
+burn, making a stale cache an upper bound; and resolution/solvency use only
+that conservative upper bound, never equality to live supply. Terminal-state
+rules must also prohibit any later mint increase. Under those prerequisites,
+removing `n` mint reads should remove `n` transaction accounts and save a
+roughly per-outcome amount of parsing/check work (expected tens of thousands
+of CU for the present 2/4/8-mint fixtures). That estimate is not bank evidence
+and is not expected by itself to erase the full degree-three headroom deficit.
+
+**Prepaid canonical `ResolutionWork` cursor PDA.** A separate program-owned
+work account could split a bounded archive fold across transactions. It would
+immutably bind market, Terms, feed, window, exact archive key and commitment,
+statistic/finalizer and evaluator/summary versions; retain start/end and the
+single next bucket cursor; and store checked sample/coverage/gap counts plus
+all sixteen `u128` masses. Each chunk would reauthenticate the sealed immutable
+archive once for that transaction, accept only the exact next contiguous
+records, and atomically advance the cursor. Finalize would require the exact
+end cursor, revalidate the accumulated invariant, create v4 once, drive the
+kernel once, and irreversibly mark the work record finalized; retries could
+only confirm byte identity. A direct fixed-width encoding is expected to be
+about 480--520 bytes, one additional writable PDA, and approximately
+4.23--4.51 million lamports at the currently measured rent schedule. Chunking
+makes fold CU approximately linear in the chosen records per transaction but
+adds dispatch/account verification to every chunk; the final transaction still
+contains mint sync, kernel resolution, and v4 persistence. Exact frame/CU/rent
+measurements, payer/close-recipient rules, conflict/rollback tests, and a proof
+that no skip, duplicate, archive substitution, partial-finalize, or abandoned
+work account can alter semantics are prerequisites to promotion.
+
+One independent operatorless gap remains outside this cut, while a follow-up
+closed the second:
 
 - provider ingestion and public SourceArchive construction are not routed; the
   real-bank archive is canonical and verified but installed at genesis, so this
   is not a provider-ingestion claim; and
-- `RedeemInternal` still requires a Feed and program-owned caller evidence
-  buffer even after v3/v4 Resolution is immutable. The bank fixture installs
-  that empty buffer at genesis because there is no public constructor. Bearer
-  redemption does not have this dependency. A recorded-resolution-only
-  internal account plane remains required.
+- **Closed by `RECORDED_REDEMPTION_SBF.md`:** `RedeemInternal` now consumes
+  immutable Terms plus the persisted v2/v3/v4 Resolution record and accepts no
+  Feed or caller evidence buffer. The retired expanded account list refuses.

@@ -46,7 +46,7 @@ use clutch_sbf::source_archive::{
     seal_archive, verify_source_spec_account, ArchivePredecessorV1, CoveragePolicy,
     DeploymentAuthenticatorV1, FeedIdentity, Grid, RuntimeAccountViewV1, SourceArchiveError,
     SourceSpecAccountViewV1, WindowDomain, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES,
-    SOURCE_SPEC_ACCOUNT_V1_BYTES,
+    SOURCE_ARCHIVE_MAX_RECORDS_V1, SOURCE_SPEC_ACCOUNT_V1_BYTES,
 };
 use clutch_solana_layout::{
     account_len, canonical_market_id, canonical_outcome_id, canonical_realm_id, collateral,
@@ -804,11 +804,30 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
 /// legacy Resolve evidence buffer must encode the exact resulting interval
 /// `[price - confidence, price + confidence]` for all three buckets.
 pub fn rewrite_plane_source_archive(plane: &mut Plane, price: u128, confidence: u128) {
+    rewrite_plane_source_archive_span(plane, price, confidence, END_BUCKET - START_BUCKET);
+}
+
+/// Replace a fixture plane's canonical archive with an exact bounded span.
+///
+/// This focused profiling seam also updates the canonical window identity and
+/// SourceArchive PDA. The caller must separately bind its Terms to the same
+/// exclusive end before submitting a transaction. Existing three-record
+/// scenarios use [`rewrite_plane_source_archive`] and remain byte-identical.
+pub fn rewrite_plane_source_archive_span(
+    plane: &mut Plane,
+    price: u128,
+    confidence: u128,
+    span: u64,
+) {
     assert!(
         confidence <= 1,
         "fixture confidence exceeds SourceSpec ceiling"
     );
     assert!(price >= confidence, "fixture interval underflows");
+    assert!((1..=SOURCE_ARCHIVE_MAX_RECORDS_V1 as u64).contains(&span));
+    let end_bucket = START_BUCKET
+        .checked_add(span)
+        .expect("fixture span end is representable");
 
     let spec_account = plane
         .accounts
@@ -832,13 +851,19 @@ pub fn rewrite_plane_source_archive(plane: &mut Plane, price: u128, confidence: 
         feed_identity,
         Grid::new(7, 1, 60).expect("fixture grid"),
         START_BUCKET,
-        END_BUCKET,
+        end_bucket,
         START_BUCKET + 4,
         0,
         CoveragePolicy::COMPLETE_REQUIRED,
     )
     .expect("fixture window domain");
-    assert_eq!(canonical_window_id(window_domain), plane.window_id);
+    let window_id = canonical_window_id(window_domain);
+    let source_archive = derive(&[
+        seeds::SEED_SOURCE_ARCHIVE,
+        &plane.feed_id.bytes(),
+        &window_id.bytes(),
+    ]);
+    let old_archive_address = plane.source_archive.address;
 
     let mut archive = vec![0_u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES];
     initialize_archive::<FixtureDeployment>(
@@ -846,7 +871,7 @@ pub fn rewrite_plane_source_archive(plane: &mut Plane, price: u128, confidence: 
         verified_spec,
         window_domain,
         ArchivePredecessorV1::GENESIS,
-        plane.source_archive.bump,
+        source_archive.bump,
     )
     .expect("fixture archive initialization");
     let provider = RuntimeAccountViewV1::new(
@@ -861,7 +886,7 @@ pub fn rewrite_plane_source_archive(plane: &mut Plane, price: u128, confidence: 
         false,
         b"fixture-deployment-v1",
     );
-    for (index, bucket) in (START_BUCKET..END_BUCKET).enumerate() {
+    for (index, bucket) in (START_BUCKET..end_bucket).enumerate() {
         let record = fixture_source_record(
             bucket,
             index as u64 + 1,
@@ -885,12 +910,15 @@ pub fn rewrite_plane_source_archive(plane: &mut Plane, price: u128, confidence: 
     }
     seal_archive::<FixtureDeployment>(&mut archive, verified_spec, window_domain, FEED_CURSOR)
         .expect("fixture source archive seal");
-    plane
+    let archive_account = plane
         .accounts
         .iter_mut()
-        .find(|account| account.address == plane.source_archive.address)
-        .expect("plane carries canonical SourceArchive")
-        .data = archive;
+        .find(|account| account.address == old_archive_address)
+        .expect("plane carries canonical SourceArchive");
+    archive_account.address = source_archive.address;
+    archive_account.data = archive;
+    plane.source_archive = source_archive;
+    plane.window_id = window_id;
 }
 
 /// Encode one account into a freshly zeroed buffer of its exact length.

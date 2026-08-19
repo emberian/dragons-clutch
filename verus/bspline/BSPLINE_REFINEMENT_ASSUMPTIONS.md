@@ -31,4 +31,4 @@ The checked result depends on all of the following:
 The result assumes no Solana account, source/archive, statistic, signer,
 Token-2022, SBF VM, runtime, deployment, or network fact.  It does not prove
 all admitted inputs, hostile-input refusal order, arithmetic-bound sufficiency,
-or correctness of every `Fraction` operation outside the finite rows.
+or correctness of every fixed-denominator operation outside the finite rows.

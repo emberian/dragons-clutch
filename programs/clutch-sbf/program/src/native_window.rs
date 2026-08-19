@@ -26,8 +26,8 @@
 use clutch_accumulator::{CoveragePolicy, FeedIdentity, Grid, WindowDomain, MAX_VALUE};
 use clutch_bspline::{BasisSpec, EdgePolicy as BasisEdgePolicy};
 use clutch_bspline_accumulator::{
-    BasisDomain, Error as AccumulatorError, FinalWeights, FinalizationMode, Summary,
-    BASIS_EVALUATOR_VERSION, OCCUPATION_SUMMARY_VERSION,
+    BasisDomain, Error as AccumulatorError, FinalWeights, FinalizationMode,
+    SequentialSummaryBuilder, Summary, BASIS_EVALUATOR_VERSION, OCCUPATION_SUMMARY_VERSION,
 };
 pub use clutch_solana_layout::occupation_resolution::{
     STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06, STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07,
@@ -443,7 +443,7 @@ fn summarize_verified_archive(
     archive: VerifiedSealedArchiveViewV1<'_>,
     span: u64,
 ) -> Result<Summary, NativeWindowError> {
-    let mut summary = Summary::empty(domain)?;
+    let mut summary = SequentialSummaryBuilder::new(domain)?;
     let mut index = 0_u64;
     while index < span {
         let archived = archive.archived_observation(
@@ -456,18 +456,13 @@ fn summarize_verified_archive(
         if archived.bucket != expected_bucket {
             return Err(NativeWindowError::NonCanonicalBucket);
         }
-        summary = append_bucket(
-            summary,
-            domain,
-            expected_bucket,
-            CanonicalBucketV1::Observation {
-                low: archived.low,
-                high: archived.high,
-            },
-        )?;
+        if archived.low != archived.high {
+            return Err(NativeWindowError::NonPointObservation);
+        }
+        summary.append_accepted(expected_bucket, archived.low)?;
         index += 1;
     }
-    Ok(summary)
+    Ok(summary.finish())
 }
 
 #[inline(never)]
@@ -535,8 +530,6 @@ fn basis_spec(terms: &TermsAccount) -> Result<BasisSpec, NativeWindowError> {
         edge_policy,
         knots: terms.knots,
     };
-    spec.validate()
-        .map_err(|error| NativeWindowError::Accumulator(AccumulatorError::Basis(error)))?;
     Ok(spec)
 }
 

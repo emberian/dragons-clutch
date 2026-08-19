@@ -30,6 +30,7 @@ pub const MAX_DEGREE: u8 = 3;
 pub const UNIFORM_SPACING_NONE: u8 = u8::MAX;
 
 const MAX_LOCAL_BASIS: usize = 4;
+#[cfg(test)]
 const MAX_EXPANDED_KNOTS: usize = MAX_KNOTS + (2 * MAX_DEGREE as usize);
 
 /// Frozen handling of values outside a derived basis's knot span.
@@ -77,7 +78,8 @@ pub type Result<T> = core::result::Result<T, Error>;
 
 /// Hostile-input-facing frozen basis description.
 ///
-/// Every public operation validates the whole value before using it. For
+/// Direct operations validate the whole value before using it; callers doing
+/// repeated evaluations may explicitly obtain a [`ValidatedBasisSpec`]. For
 /// degree zero, `knots[0..knot_count]` are interior cell boundaries in
 /// `(0, domain_max]`, and `outcome_count = knot_count + 1`. For degree at
 /// least one, they are distinct breakpoints/anchors and
@@ -100,6 +102,18 @@ pub struct BasisSpec {
     pub edge_policy: EdgePolicy,
     /// Active knot/boundary prefix followed by zero padding.
     pub knots: [u128; MAX_KNOTS],
+}
+
+/// Validated capability for repeated evaluation of one immutable basis.
+///
+/// Its fields are private and the only constructor validates the complete
+/// hostile [`BasisSpec`]. Reusing this value therefore removes redundant shape
+/// validation without introducing an unchecked public precondition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ValidatedBasisSpec {
+    spec: BasisSpec,
+    smooth_common_shift: u8,
+    smooth_common_odd: u8,
 }
 
 impl BasisSpec {
@@ -182,18 +196,19 @@ impl BasisSpec {
         }
 
         if degree >= 1 {
-            // RECURRENCE-BOUND-01. At column j of BasisFuns, every reduced
-            // fraction denominator divides j! * h^j on a uniform grid. A
-            // divide step extends a (j-1)-column denominator by at most j*h;
-            // multiply steps reduce before multiplying; and both addends in
-            // an addition have denominators dividing that same common bound,
-            // so their LCM and (because the partial basis sum is <= 1) their
-            // scaled numerator are at most j! * h^j. Consequently the d!h^d
-            // bound covers every recurrence intermediate, not only the final
-            // basis value. Multiplying a reduced numerator by D in
-            // `scaled_parts` is then also below this checked product. The
-            // strict 2^127 ceiling leaves a factor-two margin for the checked
-            // sum. Near-limit accept/refuse tests pin this argument.
+            // RECURRENCE-BOUND-01. A uniform degree-two pane is exactly
+            // representable over `2*h^2`; every open-clamped degree-three
+            // pane, including overlapping edge effects on short grids, is
+            // exactly representable over `12*h^3`. The fixed recurrence
+            // cancels every `h`, `2h`, or `3h` divisor before multiplying and
+            // checks that cancellation. Nonnegative partial basis sums remain
+            // at most one, so their common-denominator numerators and checked
+            // additions remain at most that common denominator. The admitted
+            // operand is `2*h^2` or `6*h^3`; multiplying it by D below 2^127
+            // therefore proves the quadratic scaled common bound directly and
+            // leaves exactly the factor-two margin needed for the cubic
+            // `12*h^3 * D` bound below 2^128. Near-limit accepted/refused tests
+            // and the test-only Fraction differential pin both boundaries.
             let operand = match degree {
                 1 => largest_gap.checked_sub(1).ok_or(Error::ArithmeticBound)?,
                 2 => largest_gap
@@ -223,32 +238,61 @@ impl BasisSpec {
     /// at most `degree + 1`. The top coordinate is closed: it returns the last
     /// claim at full weight rather than an all-zero half-open evaluation.
     pub fn evaluate(&self, value: u128) -> Result<WeightVector> {
+        self.validated()?.evaluate_point(value)
+    }
+
+    /// Validate once and return a capability suitable for repeated evaluation.
+    pub fn validated(&self) -> Result<ValidatedBasisSpec> {
         self.validate()?;
-        if self.degree == 0 {
-            return self.evaluate_degree_zero(value);
+        let (smooth_common_shift, smooth_common_odd) = match self.degree {
+            2 => uniform_common_parameters(self.uniform_log2_spacing, 2)?,
+            3 => uniform_common_parameters(self.uniform_log2_spacing, 12)?,
+            _ => (0, 0),
+        };
+        Ok(ValidatedBasisSpec {
+            spec: *self,
+            smooth_common_shift,
+            smooth_common_odd,
+        })
+    }
+}
+
+impl ValidatedBasisSpec {
+    /// Return the exact immutable basis captured by this capability.
+    pub const fn spec(self) -> BasisSpec {
+        self.spec
+    }
+
+    /// Evaluate one coordinate under the already validated immutable basis.
+    pub fn evaluate_point(&self, value: u128) -> Result<WeightVector> {
+        let spec = &self.spec;
+        if spec.degree == 0 {
+            return spec.evaluate_degree_zero(value);
         }
-        let handled = self.handle_edge(value)?;
-        let knot_count = usize::from(self.knot_count);
-        let first = self.knots[0];
-        let last = self.knots[knot_count - 1];
+        let handled = spec.handle_edge(value)?;
+        let knot_count = usize::from(spec.knot_count);
+        let first = spec.knots[0];
+        let last = spec.knots[knot_count - 1];
         if handled <= first {
-            return WeightVector::one_hot(self.outcome_count, self.denominator, 0);
+            return WeightVector::one_hot(spec.outcome_count, spec.denominator, 0);
         }
         if handled >= last {
             return WeightVector::one_hot(
-                self.outcome_count,
-                self.denominator,
-                usize::from(self.outcome_count) - 1,
+                spec.outcome_count,
+                spec.denominator,
+                usize::from(spec.outcome_count) - 1,
             );
         }
-        let pane = self.locate_pane(handled)?;
-        if self.degree == 1 {
-            self.evaluate_degree_one(handled, pane)
+        let pane = spec.locate_pane(handled)?;
+        if spec.degree == 1 {
+            spec.evaluate_degree_one(handled, pane)
         } else {
             self.evaluate_smooth(handled, pane)
         }
     }
+}
 
+impl BasisSpec {
     fn evaluate_degree_zero(&self, value: u128) -> Result<WeightVector> {
         let outcomes = usize::from(self.outcome_count);
         let mut cell = 0_usize;
@@ -326,7 +370,8 @@ impl BasisSpec {
         WeightVector::checked(self.outcome_count, denominator, weights, 2)
     }
 
-    fn evaluate_smooth(&self, value: u128, pane: usize) -> Result<WeightVector> {
+    #[cfg(test)]
+    fn evaluate_smooth_fraction_oracle(&self, value: u128, pane: usize) -> Result<WeightVector> {
         let degree = usize::from(self.degree);
         let expanded = self.expanded_knots()?;
         let span = degree.checked_add(pane).ok_or(Error::ArithmeticOverflow)?;
@@ -384,6 +429,7 @@ impl BasisSpec {
         WeightVector::checked(self.outcome_count, self.denominator, weights, degree + 1)
     }
 
+    #[cfg(test)]
     fn expanded_knots(&self) -> Result<[u128; MAX_EXPANDED_KNOTS]> {
         let degree = usize::from(self.degree);
         let knot_count = usize::from(self.knot_count);
@@ -414,6 +460,201 @@ impl BasisSpec {
             return Err(Error::ArithmeticOverflow);
         }
         Ok(expanded)
+    }
+}
+
+impl ValidatedBasisSpec {
+    /// Fixed-denominator specialization of the exact Cox--de Boor recurrence.
+    ///
+    /// For uniform integer spacing `h`, every quadratic intermediate is
+    /// representable over `2*h^2`; every cubic intermediate is representable
+    /// over `12*h^3`. The latter deliberately includes both `3*h` and the
+    /// repeated half factors that meet at clamped/internal panes. Each product
+    /// cancels its divisor before multiplying, so the same freeze-time bound
+    /// that admitted the basis also bounds every runtime intermediate.
+    fn evaluate_smooth(&self, value: u128, pane: usize) -> Result<WeightVector> {
+        let spec = &self.spec;
+        let degree = usize::from(spec.degree);
+        let span = degree.checked_add(pane).ok_or(Error::ArithmeticOverflow)?;
+        let common = u128::from(self.smooth_common_odd)
+            .checked_shl(u32::from(self.smooth_common_shift))
+            .ok_or(Error::ArithmeticOverflow)?;
+        let mut basis = [0_u128; MAX_LOCAL_BASIS];
+        let mut left = [0_u128; MAX_LOCAL_BASIS];
+        let mut right = [0_u128; MAX_LOCAL_BASIS];
+        basis[0] = common;
+        let mut column = 1_usize;
+        while column <= degree {
+            left[column] = value
+                .checked_sub(self.expanded_knot(span + 1 - column)?)
+                .ok_or(Error::ArithmeticOverflow)?;
+            right[column] = self
+                .expanded_knot(span + column)?
+                .checked_sub(value)
+                .ok_or(Error::ArithmeticOverflow)?;
+            let mut saved = 0_u128;
+            let mut row = 0_usize;
+            while row < column {
+                let divisor = right[row + 1]
+                    .checked_add(left[column - row])
+                    .ok_or(Error::ArithmeticOverflow)?;
+                let right_term = mul_div_exact(basis[row], right[row + 1], divisor)?;
+                let left_term = mul_div_exact(basis[row], left[column - row], divisor)?;
+                basis[row] = saved
+                    .checked_add(right_term)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                saved = left_term;
+                row += 1;
+            }
+            basis[column] = saved;
+            column += 1;
+        }
+
+        let mut weights = [0_u64; MAX_OUTCOMES];
+        let mut remainders = [0_u128; MAX_LOCAL_BASIS];
+        let mut floor_sum = 0_u64;
+        let mut local = 0_usize;
+        while local <= degree {
+            let scaled = basis[local]
+                .checked_mul(u128::from(spec.denominator))
+                .ok_or(Error::ArithmeticOverflow)?;
+            let (floor_u128, remainder) =
+                scaled_parts_common(scaled, self.smooth_common_shift, self.smooth_common_odd)?;
+            let floor = u64::try_from(floor_u128).map_err(|_| Error::ArithmeticOverflow)?;
+            weights[pane + local] = floor;
+            remainders[local] = remainder;
+            floor_sum = floor_sum
+                .checked_add(floor)
+                .ok_or(Error::ArithmeticOverflow)?;
+            local += 1;
+        }
+        let residual = spec
+            .denominator
+            .checked_sub(floor_sum)
+            .ok_or(Error::InvalidWeights)?;
+        if residual > spec.degree.into() {
+            return Err(Error::InvalidWeights);
+        }
+        let mut awarded = [false; MAX_LOCAL_BASIS];
+        let mut remaining = residual;
+        while remaining > 0 {
+            let mut best: Option<usize> = None;
+            let mut index = 0_usize;
+            while index <= degree {
+                if !awarded[index] && remainders[index] != 0 {
+                    let replace = match best {
+                        None => true,
+                        Some(current) => remainders[index] > remainders[current],
+                    };
+                    if replace {
+                        best = Some(index);
+                    }
+                }
+                index += 1;
+            }
+            let selected = best.ok_or(Error::InvalidWeights)?;
+            weights[pane + selected] = weights[pane + selected]
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?;
+            awarded[selected] = true;
+            remaining -= 1;
+        }
+        WeightVector::checked(spec.outcome_count, spec.denominator, weights, degree + 1)
+    }
+
+    fn expanded_knot(&self, index: usize) -> Result<u128> {
+        let spec = &self.spec;
+        let degree = usize::from(spec.degree);
+        let knot_count = usize::from(spec.knot_count);
+        let expanded_len = knot_count
+            .checked_add(2 * degree)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if index >= expanded_len {
+            return Err(Error::ArithmeticOverflow);
+        }
+        if index <= degree {
+            return Ok(spec.knots[0]);
+        }
+        let interior_end = degree
+            .checked_add(knot_count - 1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if index < interior_end {
+            return Ok(spec.knots[index - degree]);
+        }
+        Ok(spec.knots[knot_count - 1])
+    }
+}
+
+fn uniform_common_parameters(spacing_shift: u8, degree_coefficient: u8) -> Result<(u8, u8)> {
+    let (common_shift, odd) = match degree_coefficient {
+        2 => (u16::from(spacing_shift) * 2 + 1, 1_u8),
+        12 => (u16::from(spacing_shift) * 3 + 2, 3_u8),
+        _ => return Err(Error::ArithmeticOverflow),
+    };
+    let common_shift = u8::try_from(common_shift).map_err(|_| Error::ArithmeticOverflow)?;
+    u128::from(odd)
+        .checked_shl(u32::from(common_shift))
+        .ok_or(Error::ArithmeticOverflow)?;
+    Ok((common_shift, odd))
+}
+
+fn mul_div_exact(numerator: u128, factor: u128, divisor: u128) -> Result<u128> {
+    if divisor == 0 {
+        return Err(Error::ArithmeticOverflow);
+    }
+    if numerator == 0 || factor == 0 {
+        return Ok(0);
+    }
+    // Every divisor in the validated uniform recurrence is h, 2h, or 3h
+    // with power-of-two h. Cancel its power-of-two component by shifts, then
+    // its only possible odd factor (3) from either multiplicand. This is the
+    // exact reduced multiplication the Fraction oracle performs, without a
+    // variable-width Euclidean GCD in production.
+    let divisor_shift = divisor.trailing_zeros();
+    let factor_shift = factor.trailing_zeros().min(divisor_shift);
+    let reduced_factor = factor >> factor_shift;
+    let remaining_shift = divisor_shift - factor_shift;
+    if numerator.trailing_zeros() < remaining_shift {
+        return Err(Error::ArithmeticOverflow);
+    }
+    let mut reduced_numerator = numerator >> remaining_shift;
+    let odd = divisor >> divisor_shift;
+    let mut reduced_factor = reduced_factor;
+    if odd == 3 {
+        let factor_quotient = reduced_factor / 3;
+        if factor_quotient * 3 == reduced_factor {
+            reduced_factor = factor_quotient;
+        } else {
+            let numerator_quotient = reduced_numerator / 3;
+            if numerator_quotient * 3 != reduced_numerator {
+                return Err(Error::ArithmeticOverflow);
+            }
+            reduced_numerator = numerator_quotient;
+        }
+    } else if odd != 1 {
+        return Err(Error::ArithmeticOverflow);
+    }
+    reduced_numerator
+        .checked_mul(reduced_factor)
+        .ok_or(Error::ArithmeticOverflow)
+}
+
+fn scaled_parts_common(scaled: u128, shift: u8, odd: u8) -> Result<(u128, u128)> {
+    let shift = u32::from(shift);
+    let mask = 1_u128
+        .checked_shl(shift)
+        .and_then(|power| power.checked_sub(1))
+        .ok_or(Error::ArithmeticOverflow)?;
+    let low = scaled & mask;
+    let upper = scaled >> shift;
+    match odd {
+        1 => Ok((upper, low)),
+        3 => {
+            let quotient = upper / 3;
+            let remainder = upper - quotient * 3;
+            Ok((quotient, (remainder << shift) | low))
+        }
+        _ => Err(Error::ArithmeticOverflow),
     }
 }
 
@@ -490,12 +731,14 @@ impl WeightVector {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Fraction {
     numerator: u128,
     denominator: u128,
 }
 
+#[cfg(test)]
 impl Fraction {
     const ZERO: Self = Self {
         numerator: 0,
@@ -640,6 +883,7 @@ impl Fraction {
 /// Endpoint multiplicity, all clamped end panes, and the cases where left and
 /// right edge effects overlap are handled by the expanded knot array itself;
 /// there are no interior-formula substitutions.
+#[cfg(test)]
 fn basis_functions(
     span: usize,
     degree: usize,
@@ -675,6 +919,7 @@ fn basis_functions(
     Ok(basis)
 }
 
+#[cfg(test)]
 fn gcd(mut left: u128, mut right: u128) -> u128 {
     while right != 0 {
         let remainder = left % right;
@@ -708,6 +953,154 @@ mod tests {
             edge_policy: EdgePolicy::Clamp,
             knots,
         }
+    }
+
+    fn fraction_oracle(basis: &BasisSpec, value: u128) -> Result<WeightVector> {
+        basis.validate()?;
+        if basis.degree < 2 {
+            return basis.evaluate(value);
+        }
+        let handled = basis.handle_edge(value)?;
+        let last = basis.knots[usize::from(basis.knot_count) - 1];
+        if handled <= basis.knots[0] {
+            return WeightVector::one_hot(basis.outcome_count, basis.denominator, 0);
+        }
+        if handled >= last {
+            return WeightVector::one_hot(
+                basis.outcome_count,
+                basis.denominator,
+                usize::from(basis.outcome_count) - 1,
+            );
+        }
+        let pane = basis.locate_pane(handled)?;
+        basis.evaluate_smooth_fraction_oracle(handled, pane)
+    }
+
+    fn assert_fixed_matches_fraction(basis: &BasisSpec, value: u128) {
+        let expected = fraction_oracle(basis, value);
+        assert_eq!(basis.evaluate(value), expected);
+        assert_eq!(
+            basis
+                .validated()
+                .and_then(|valid| valid.evaluate_point(value)),
+            expected
+        );
+    }
+
+    #[test]
+    fn fixed_uniform_path_matches_fraction_oracle_on_every_smooth_pane() {
+        let denominators = [1_u64, 2, 3, 7, 257, u16::MAX.into()];
+        let mut degree = 2_u8;
+        while degree <= 3 {
+            let maximum_knots = MAX_OUTCOMES + 1 - usize::from(degree);
+            let mut shift = 0_u8;
+            while shift <= 8 {
+                let spacing = 1_u128 << shift;
+                let mut knot_count = 2_usize;
+                while knot_count <= maximum_knots {
+                    let first = 13_u128;
+                    let mut knots = [0_u128; MAX_KNOTS];
+                    let mut knot = 0_usize;
+                    while knot < knot_count {
+                        knots[knot] = first + (knot as u128 * spacing);
+                        knot += 1;
+                    }
+                    for denominator in denominators {
+                        let basis = BasisSpec {
+                            outcome_count: (knot_count - 1 + usize::from(degree)) as u8,
+                            degree,
+                            knot_count: knot_count as u8,
+                            uniform_log2_spacing: shift,
+                            denominator,
+                            domain_max: knots[knot_count - 1] + 1,
+                            edge_policy: EdgePolicy::Clamp,
+                            knots,
+                        };
+                        // Both clamped outside edges and every pane's near-edge,
+                        // interior, and exact right-boundary coordinates.
+                        assert_fixed_matches_fraction(&basis, first - 1);
+                        assert_fixed_matches_fraction(&basis, knots[knot_count - 1] + 1);
+                        let offsets = [
+                            0,
+                            1.min(spacing),
+                            spacing / 4,
+                            spacing / 3,
+                            spacing / 2,
+                            spacing.saturating_sub(1),
+                            spacing,
+                        ];
+                        let mut pane = 0_usize;
+                        while pane + 1 < knot_count {
+                            for offset in offsets {
+                                assert_fixed_matches_fraction(
+                                    &basis,
+                                    knots[pane].checked_add(offset).unwrap(),
+                                );
+                            }
+                            pane += 1;
+                        }
+                    }
+                    knot_count += 1;
+                }
+                shift += 1;
+            }
+            degree += 1;
+        }
+    }
+
+    #[test]
+    fn fixed_uniform_path_matches_fraction_oracle_near_admission_bounds() {
+        for (degree, shift) in [(2_u8, 62_u8), (3, 41)] {
+            let spacing = 1_u128 << shift;
+            let basis = BasisSpec {
+                uniform_log2_spacing: shift,
+                domain_max: u128::MAX,
+                ..spec(degree, &[0, spacing], 1)
+            };
+            for value in [0, 1, spacing / 3, spacing / 2, spacing - 1, spacing] {
+                assert_fixed_matches_fraction(&basis, value);
+            }
+
+            let translated_low = u128::MAX - spacing;
+            let translated = BasisSpec {
+                uniform_log2_spacing: shift,
+                domain_max: u128::MAX,
+                ..spec(degree, &[translated_low, u128::MAX], 1)
+            };
+            for offset in [0, 1, spacing / 3, spacing / 2, spacing - 1, spacing] {
+                assert_fixed_matches_fraction(&translated, translated_low + offset);
+            }
+        }
+
+        let spacing = 1_u128 << 20;
+        let scaled = BasisSpec {
+            uniform_log2_spacing: 20,
+            denominator: u64::MAX,
+            domain_max: u128::MAX,
+            ..spec(3, &[0, spacing], 1)
+        };
+        for value in [1, spacing / 3, spacing / 2, spacing - 1] {
+            assert_fixed_matches_fraction(&scaled, value);
+        }
+    }
+
+    #[test]
+    fn validated_capability_preserves_refusal_classes() {
+        let mut refusing = spec(3, &[4, 8, 12], 257);
+        refusing.edge_policy = EdgePolicy::Refuse;
+        let validated = refusing.validated().unwrap();
+        assert_eq!(validated.evaluate_point(3), Err(Error::ValueOutOfRange));
+        assert_eq!(validated.evaluate_point(13), Err(Error::ValueOutOfRange));
+
+        let mut malformed = refusing;
+        malformed.uniform_log2_spacing = 1;
+        assert_eq!(malformed.validated(), Err(Error::UniformSpacingMismatch));
+        malformed = refusing;
+        malformed.knots[MAX_KNOTS - 1] = 1;
+        assert_eq!(malformed.validated(), Err(Error::NonCanonicalPadding));
+        malformed = refusing;
+        malformed.uniform_log2_spacing = UNIFORM_SPACING_NONE;
+        assert_eq!(malformed.validated(), Err(Error::UniformSpacingRequired));
     }
 
     #[test]

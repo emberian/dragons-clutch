@@ -21,7 +21,7 @@ LEAN_COMMIT_PIN='d8b18978322de05a8f3dba51ef03cf5461676c17'
 RUST_RELEASE_PIN='1.98.0-nightly'
 RUST_COMMIT_PIN='91fe22da8084a1c9e993d78d4a56f22ab8396236'
 
-SOURCE_SHA256_PIN='bd7e9aa0da1120ce2eb44fcb58f5c51d07485bbfa5ca4c638ba13739f24d23ea'
+SOURCE_SHA256_PIN='220de128366a8311de6579c0ce334a64c97620159eaf9570f61fa10fabb6de92'
 DRIVER_SHA256_PIN='c74ecec10c36fbebc3ab3335f2f933de6ecbaae4e061615f9e0822a917888dc7'
 CARGO_SHA256_PIN='d993057affd6a9ba58a698e59e109ab882353456294ba57712c6cfac378b1c0d'
 LOCK_SHA256_PIN='e49289a908b01a9032b096cfea0499f4a902714abf9475b91b55446d0ab43edd'
@@ -124,9 +124,8 @@ make_mutation() {
     case "$label" in
         tie-direction)
             awk '
-                !done && /== core::cmp::Ordering::Greater/ {
-                    sub(/== core::cmp::Ordering::Greater/,
-                        "!= core::cmp::Ordering::Less")
+                !done && /Some\(current\) => remainders\[index\] > remainders\[current\]/ {
+                    sub(/ > /, " >= ")
                     done = 1
                 }
                 { print }
@@ -135,7 +134,8 @@ make_mutation() {
             ;;
         residual-awards)
             awk '
-                !done && /while remaining > 0/ {
+                /Fixed-denominator specialization/ { production = 1 }
+                production && !done && /while remaining > 0/ {
                     sub(/while remaining > 0/, "while remaining > residual")
                     done = 1
                 }
@@ -145,7 +145,8 @@ make_mutation() {
             ;;
         pane-placement)
             awk '
-                !done && /weights\[pane \+ local\] = floor/ {
+                /Fixed-denominator specialization/ { production = 1 }
+                production && !done && /weights\[pane \+ local\] = floor/ {
                     sub(/weights\[pane \+ local\]/, "weights[local]")
                     done = 1
                 }
@@ -155,7 +156,8 @@ make_mutation() {
             ;;
         span-index)
             awk '
-                !done && /checked_add\(pane\)/ {
+                /Fixed-denominator specialization/ { production = 1 }
+                production && !done && /checked_add\(pane\)/ {
                     sub(/checked_add\(pane\)/, "checked_add(pane + 1)")
                     done = 1
                 }
@@ -221,4 +223,4 @@ run_expected_red closed-top
 
 printf '%s\n' 'status=PASS'
 printf '%s\n' 'claim=finite live Lean-model/production-Rust agreement at pinned source digests'
-printf '%s\n' 'boundary=no universal source refinement; parser bounds, Fraction correctness outside rows, compilers, SBF, Solana, and deployment remain unverified'
+printf '%s\n' 'boundary=no universal source refinement; parser bounds, fixed-denominator correctness outside rows, compilers, SBF, Solana, and deployment remain unverified'

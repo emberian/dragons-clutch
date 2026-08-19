@@ -32,9 +32,10 @@ use {
     clutch_solana_reference::{KernelAccount, ReplayAccount},
     clutch_svm_fixture::{
         build_plane, compute_unit_limit_data, immutable_owner_account_bytes, layout_request,
-        outcome_mint_bytes, rewrite_plane_source_archive, source_resolution_evidence_buffer,
-        token_account_bytes, GenesisAccount, Mode, Pda, Plane, BUFFER_ACCOUNT, CASH_ATOMS,
-        COMPUTE_BUDGET, MARKET_NONCE, PROGRAM_ID, TOKEN_2022,
+        outcome_mint_bytes, rewrite_plane_source_archive, rewrite_plane_source_archive_span,
+        source_resolution_evidence_buffer, token_account_bytes, GenesisAccount, Mode, Pda, Plane,
+        BUFFER_ACCOUNT, CASH_ATOMS, COMPUTE_BUDGET, MARKET_NONCE, PROGRAM_ID, START_BUCKET,
+        TOKEN_2022,
     },
     solana_account::Account,
     solana_address::Address,
@@ -297,6 +298,47 @@ fn occupation_plane_with_statistic(
     );
     account_mut(&mut plane, resolution_address).data =
         encode(OCCUPATION_RESOLUTION_LEN, |out| unresolved.encode(out));
+    plane
+}
+
+fn occupation_plane_with_span(actor: Address, degree: u8, span: u64) -> Plane {
+    let mut plane = occupation_plane_with_external(actor, degree, 4, 4, 0);
+    let old_terms_address = plane.terms.address;
+    let market_address = plane.market.address;
+    let resolution_address = plane.resolution.address;
+    let mut terms = TermsAccount::decode(&account_mut(&mut plane, old_terms_address).data)
+        .expect("occupation terms decode");
+    terms.expected_end_bucket_exclusive = START_BUCKET
+        .checked_add(span)
+        .expect("profile span end is representable");
+    terms.terms = Hash32::ZERO;
+    terms.terms = terms
+        .recomputed_terms_digest()
+        .expect("span-specific occupation terms digest");
+    let realm = plane.realm_id.bytes();
+    let terms_id = terms.terms.bytes();
+    let terms_pda = derive(&[seeds::SEED_TERMS, &realm, &terms_id]);
+    terms.stored_bump = terms_pda.bump;
+    let terms_account = account_mut(&mut plane, old_terms_address);
+    terms_account.address = terms_pda.address;
+    terms_account.data = encode(account_len::TERMS, |out| terms.encode(out));
+    plane.terms = terms_pda;
+    plane.terms_id = terms.terms;
+
+    let mut market = MarketAccount::decode(&account_mut(&mut plane, market_address).data)
+        .expect("market decodes");
+    market.terms = terms.terms;
+    account_mut(&mut plane, market_address).data =
+        encode(account_len::MARKET, |out| market.encode(out));
+    let unresolved = OccupationResolutionAccount::unresolved(
+        plane.market_id,
+        terms.terms,
+        plane.feed_id,
+        plane.resolution.bump,
+    );
+    account_mut(&mut plane, resolution_address).data =
+        encode(OCCUPATION_RESOLUTION_LEN, |out| unresolved.encode(out));
+    rewrite_plane_source_archive_span(&mut plane, 4, 0, span);
     plane
 }
 
@@ -1493,6 +1535,37 @@ async fn occupation_degrees_one_through_three_persist_retry_and_redeem_v4() {
             Rent::default().minimum_balance(OCCUPATION_RESOLUTION_LEN),
         );
     }
+}
+
+#[tokio::test]
+async fn occupation_span_one_two_initial_resolve_cu_profile() {
+    // `units * 5 / 4 <= 1_400_000` is the chosen 25% operating-headroom gate.
+    const MAX_ADMISSIBLE_CU: u64 = 1_120_000;
+    let mut admissible = Vec::new();
+    for span in 1..=2_u64 {
+        for degree in 1..=3_u8 {
+            let actor = actor_keypair();
+            let plane = occupation_plane_with_span(actor.pubkey(), degree, span);
+            let mut scenario = Scenario::start_plane(actor, plane, 0, 0, None).await;
+            let (result, units) = scenario.try_send(scenario.resolve_occupation()).await;
+            result.expect("bounded occupation profile resolves");
+            let record = OccupationResolutionAccount::decode(
+                &scenario.data(scenario.plane.resolution.address).await,
+            )
+            .expect("span-profile v4 record");
+            assert_eq!(record.sample_count, span);
+            assert_eq!(record.coverage_count, span);
+            assert_eq!(record.gap_count, 0);
+            if units <= MAX_ADMISSIBLE_CU {
+                admissible.push((span, degree, units));
+            }
+            println!("occupation-v4 span={span} d{degree}: initial={units} CU");
+        }
+    }
+    assert!(
+        admissible.is_empty(),
+        "review occupation admission: profile unexpectedly changed to {admissible:?}"
+    );
 }
 
 #[tokio::test]
