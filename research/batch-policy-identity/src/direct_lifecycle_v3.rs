@@ -1288,13 +1288,34 @@ impl DirectReservationBodyV3 {
         Ok(post)
     }
 
-    fn consumed(self) -> Result<Self, DirectLifecycleErrorV3> {
+    /// Consume one ENTITLED envelope, archiving the exact consumed amounts.
+    ///
+    /// The consumed body's `remaining_*` fields record what the settlement
+    /// actually moved — never zeroed — so `initial_*` minus `remaining_*` is
+    /// the refunded portion in the durable effects. Consumption above the
+    /// remaining envelope is a refusal, not a clamp. The release-generation
+    /// discipline is unchanged: consumption is not a release.
+    fn consumed(
+        self,
+        consumed_cash: u64,
+        consumed_internal: [u64; MAX_OUTCOMES],
+    ) -> Result<Self, DirectLifecycleErrorV3> {
         if self.state != 2 {
             return Err(DirectLifecycleErrorV3::WrongPhase);
         }
+        if consumed_cash > self.remaining_cash_atoms {
+            return Err(DirectLifecycleErrorV3::MismatchedBinding);
+        }
+        let mut index = 0usize;
+        while index < MAX_OUTCOMES {
+            if consumed_internal[index] > self.remaining_internal[index] {
+                return Err(DirectLifecycleErrorV3::MismatchedBinding);
+            }
+            index += 1;
+        }
         let mut post = self;
-        post.remaining_cash_atoms = 0;
-        post.remaining_internal = [0; MAX_OUTCOMES];
+        post.remaining_cash_atoms = consumed_cash;
+        post.remaining_internal = consumed_internal;
         post.release_generation = 0;
         post.state = 3;
         Ok(post)
@@ -2965,6 +2986,16 @@ impl DirectLifecycleV3 {
                 let consideration = u128::from(receipt.quantity)
                     .checked_mul(u128::from(receipt.price))
                     .ok_or(DirectLifecycleErrorV3::ArithmeticOverflow)?;
+                // The archived fill stays bound to the frozen page and to the
+                // relation's exact-division rule after transient authority is
+                // gone.
+                let (buy, _, _, _) = self.direct_orders()?;
+                if receipt.quantity != buy.quantity
+                    || receipt.outcome != buy.outcome
+                    || consideration % u128::from(self.reservation_domain.price_scale) != 0
+                {
+                    return Err(DirectLifecycleErrorV3::MismatchedBinding);
+                }
                 if receipt.terminal_reservation_count != 2
                     || receipt.selected_slot < self.schedule.submission_closes_slot
                     || receipt.selected_slot >= self.schedule.selection_deadline_slot
@@ -3468,8 +3499,10 @@ fn settle_reservations(
     }
     let selected = state.retained[0].candidate;
     state.bind_candidate(&selected)?;
-    let price = selected.prices[usize::from(selected.outcome)];
+    let outcome = usize::from(selected.outcome);
+    let price = selected.prices[outcome];
     if selected.quantity == 0
+        || price == 0
         || selected.quantity != buy.quantity
         || selected.quantity != sell.quantity
         || selected.fills != [selected.quantity; 2]
@@ -3478,6 +3511,11 @@ fn settle_reservations(
     {
         return Err(DirectLifecycleErrorV3::MismatchedBinding);
     }
+    // The direct policy's rounding boundary is `RoundingBoundaryV1::None`: the
+    // relation refuses any settlement whose consideration leaves a remainder
+    // (`ErrorV1::RemainderRequired`, relation_v1 `settle_cash`). Under exact
+    // division the buyer debit and seller credit are the same atom count, so
+    // proceeds equal cost with no rounding pot and no fee sink.
     let price_units = u128::from(selected.quantity)
         .checked_mul(u128::from(price))
         .ok_or(DirectLifecycleErrorV3::ArithmeticOverflow)?;
@@ -3487,11 +3525,31 @@ fn settle_reservations(
     }
     let consideration_atoms = u64::try_from(price_units / scale)
         .map_err(|_| DirectLifecycleErrorV3::ArithmeticOverflow)?;
-    if buyer_reservation.remaining_cash_atoms < consideration_atoms
-        || seller_reservation.remaining_internal[usize::from(selected.outcome)] != selected.quantity
+    // Stray compartments refuse: a buy envelope holds no Eggs, a sell envelope
+    // holds no cash and no Eggs off the bound outcome. Every reachable state
+    // already guarantees this through `validate_active`; the kernel guards it
+    // independently because kernel-level tests exercise hostile prestates.
+    if buyer_reservation.remaining_internal != [0; MAX_OUTCOMES]
+        || seller_reservation.remaining_cash_atoms != 0
     {
         return Err(DirectLifecycleErrorV3::MismatchedBinding);
     }
+    let mut stray = 0usize;
+    while stray < MAX_OUTCOMES {
+        if stray != outcome && seller_reservation.remaining_internal[stray] != 0 {
+            return Err(DirectLifecycleErrorV3::MismatchedBinding);
+        }
+        stray += 1;
+    }
+    // Deficits refuse, never clamp. The unfilled seller remainder refunds to
+    // the seller Position; on every lifecycle-reachable state the fill is
+    // full, so the remainder is exactly zero there.
+    if buyer_reservation.remaining_cash_atoms < consideration_atoms {
+        return Err(DirectLifecycleErrorV3::MismatchedBinding);
+    }
+    let seller_remainder = seller_reservation.remaining_internal[outcome]
+        .checked_sub(selected.quantity)
+        .ok_or(DirectLifecycleErrorV3::MismatchedBinding)?;
 
     let mut buyer_post = positions.buyer;
     let mut seller_post = positions.seller;
@@ -3503,13 +3561,15 @@ fn settle_reservations(
         .reserved_cash_atoms
         .checked_sub(buyer_reservation.remaining_cash_atoms)
         .ok_or(DirectLifecycleErrorV3::MismatchedBinding)?;
-    buyer_post.internal[usize::from(selected.outcome)] = buyer_post.internal
-        [usize::from(selected.outcome)]
-    .checked_add(selected.quantity)
-    .ok_or(DirectLifecycleErrorV3::ArithmeticOverflow)?;
+    buyer_post.internal[outcome] = buyer_post.internal[outcome]
+        .checked_add(selected.quantity)
+        .ok_or(DirectLifecycleErrorV3::ArithmeticOverflow)?;
     seller_post.cash_atoms = seller_post
         .cash_atoms
         .checked_add(consideration_atoms)
+        .ok_or(DirectLifecycleErrorV3::ArithmeticOverflow)?;
+    seller_post.internal[outcome] = seller_post.internal[outcome]
+        .checked_add(seller_remainder)
         .ok_or(DirectLifecycleErrorV3::ArithmeticOverflow)?;
 
     let cash_before = positions
@@ -3524,6 +3584,26 @@ fn settle_reservations(
     if cash_before != cash_after {
         return Err(DirectLifecycleErrorV3::MismatchedBinding);
     }
+    // Value-plane closure per outcome: the seller envelope is the only Egg
+    // source, split exactly between the buyer fill and the seller remainder.
+    let mut check = 0usize;
+    while check < MAX_OUTCOMES {
+        let before = u128::from(positions.buyer.internal[check])
+            .checked_add(u128::from(positions.seller.internal[check]))
+            .ok_or(DirectLifecycleErrorV3::ArithmeticOverflow)?;
+        let after = u128::from(buyer_post.internal[check])
+            .checked_add(u128::from(seller_post.internal[check]))
+            .ok_or(DirectLifecycleErrorV3::ArithmeticOverflow)?;
+        let source = if check == outcome {
+            u128::from(seller_reservation.remaining_internal[check])
+        } else {
+            0
+        };
+        if after != before + source {
+            return Err(DirectLifecycleErrorV3::MismatchedBinding);
+        }
+        check += 1;
+    }
     buyer_post.validate()?;
     seller_post.validate()?;
     effects.position_settlements = [
@@ -3536,11 +3616,17 @@ fn settle_reservations(
             after: seller_post,
         },
     ];
-    let mut index = 0usize;
-    while index < 2 {
-        effects.terminal_reservations[index] = state.reservations[index].consumed()?;
-        index += 1;
-    }
+    // Consumed bodies archive the exact consumed amounts, never zeroes: the
+    // buy consumed exactly the consideration atoms and no Eggs; the sell
+    // consumed exactly the filled quantity and no cash. `initial_*` minus
+    // `remaining_*` in the durable effects is therefore the refunded portion.
+    let mut sell_consumed = [0u64; MAX_OUTCOMES];
+    sell_consumed[outcome] = selected.quantity;
+    effects.terminal_reservations[usize::from(buy_index)] = state.reservations
+        [usize::from(buy_index)]
+    .consumed(consideration_atoms, [0; MAX_OUTCOMES])?;
+    effects.terminal_reservations[usize::from(sell_index)] =
+        state.reservations[usize::from(sell_index)].consumed(0, sell_consumed)?;
     effects.position_settlement_count = 2;
     effects.settlement_consideration_atoms = consideration_atoms;
     effects.buyer_reserved_release_atoms = buyer_reservation.remaining_cash_atoms;
@@ -5346,16 +5432,30 @@ mod tests {
             buyer_leg.before.internal[usize::from(receipt.outcome)] + receipt.quantity
         );
         assert_eq!(seller_leg.after.internal, seller_leg.before.internal);
+        // The winning candidate is the exact best-scoring admitted price of
+        // 4_000, so the full 10_000-quantity fill costs exactly 4_000 atoms.
+        assert_eq!(plan.effects.settlement_consideration_atoms, 4_000);
         assert_eq!(plan.effects.terminal_reservations[0].state, 3);
         assert_eq!(plan.effects.terminal_reservations[1].state, 3);
+        // Consumed bodies archive the exact consumed amounts, never zeroes.
         assert_eq!(
             plan.effects.terminal_reservations[0].remaining_cash_atoms,
+            4_000
+        );
+        assert_eq!(
+            plan.effects.terminal_reservations[0].remaining_internal,
+            [0; MAX_OUTCOMES]
+        );
+        assert_eq!(
+            plan.effects.terminal_reservations[1].remaining_cash_atoms,
             0
         );
         assert_eq!(
-            plan.effects.terminal_reservations[1].remaining_internal,
-            [0; MAX_OUTCOMES]
+            plan.effects.terminal_reservations[1].remaining_internal[0],
+            PRICE_SCALE
         );
+        assert_eq!(plan.effects.terminal_reservations[0].release_generation, 0);
+        assert_eq!(plan.effects.terminal_reservations[1].release_generation, 0);
         assert_eq!(
             buyer_leg.before.cash_atoms + seller_leg.before.cash_atoms,
             buyer_leg.after.cash_atoms + seller_leg.after.cash_atoms
@@ -5564,6 +5664,187 @@ mod tests {
         assert_eq!(
             swapped_release.validate(),
             Err(DirectLifecycleErrorV3::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn settlement_transfers_exact_anchored_two_sided_legs() {
+        let empty = empty();
+        let admitted = empty
+            .admit(
+                context(10),
+                issued(2_000, 10, 11),
+                create(21, 200, 2),
+                observed(&empty, 0),
+            )
+            .unwrap()
+            .post;
+        let verified = verify_all(admitted);
+        let balances = observed(&verified, 0);
+        let selected = verified
+            .finalize_selection(
+                context(24),
+                DirectSelectionFundingV3 {
+                    receipt: create(50, 300, 1),
+                    pot: create(51, 400, 1),
+                },
+                balances,
+            )
+            .unwrap()
+            .post;
+        let plan = selected
+            .settle(context(25), observed(&selected, 0), settlement_positions())
+            .unwrap();
+        // Quantity 10_000 at price 2_000 on scale 10_000: the exact fill costs
+        // exactly 2_000 collateral atoms, and the 10_000-atom buy envelope
+        // fully unreserves with an 8_000-atom refund to free cash.
+        assert_eq!(plan.effects.settlement_consideration_atoms, 2_000);
+        assert_eq!(plan.effects.buyer_reserved_release_atoms, 10_000);
+        let buyer = plan.effects.position_settlements[0];
+        let seller = plan.effects.position_settlements[1];
+        assert_eq!(buyer.before.cash_atoms, 10_000);
+        assert_eq!(buyer.before.reserved_cash_atoms, 10_000);
+        assert_eq!(buyer.before.internal[0], 0);
+        assert_eq!(buyer.after.cash_atoms, 8_000);
+        assert_eq!(buyer.after.reserved_cash_atoms, 0);
+        assert_eq!(buyer.after.internal[0], 10_000);
+        assert_eq!(seller.before.cash_atoms, 0);
+        assert_eq!(seller.before.internal[0], 0);
+        assert_eq!(seller.after.cash_atoms, 2_000);
+        assert_eq!(seller.after.internal[0], 0);
+        assert_eq!(buyer.after.cash_atoms + seller.after.cash_atoms, 10_000);
+        // Consumed bodies archive the exact fill: 2_000 atoms of cash on the
+        // buy, 10_000 Eggs on the sell, refunds implicit in `initial_*`.
+        assert_eq!(
+            plan.effects.terminal_reservations[0].remaining_cash_atoms,
+            2_000
+        );
+        assert_eq!(
+            plan.effects.terminal_reservations[0].initial_cash_atoms,
+            10_000
+        );
+        assert_eq!(
+            plan.effects.terminal_reservations[1].remaining_internal[0],
+            10_000
+        );
+        assert_eq!(plan.post.terminal_receipt.price, 2_000);
+        assert_eq!(plan.post.terminal_receipt.quantity, 10_000);
+        assert_eq!(
+            plan.post.terminal_receipt.consideration_price_units,
+            20_000_000
+        );
+        assert_eq!(
+            plan.effects.observed_close_total().unwrap(),
+            plan.effects.payer_principal_total().unwrap()
+                + plan.effects.work_budget_refund
+                + plan.effects.neutral_surplus_total().unwrap()
+        );
+    }
+
+    #[test]
+    fn settlement_kernel_refunds_partial_fill_remainders_both_sides() {
+        // A partial fill is unrepresentable through the public lifecycle:
+        // Freeze pins equal order quantities and `bind_candidate` pins the
+        // candidate fill to them, so the remainder-refund arithmetic is
+        // exercised directly on a kernel-level prestate whose seller envelope
+        // exceeds the verified fill. Such a state refuses full validation.
+        let mut state = selected();
+        let (_, _, _, sell_index) = state.direct_orders().unwrap();
+        let sell = usize::from(sell_index);
+        state.reservations[sell].remaining_internal[0] += 4_000;
+        state.reservations[sell].initial_internal[0] += 4_000;
+        let mut effects = DirectLifecycleEffectsV3::NONE;
+        settle_reservations(&state, settlement_positions(), &mut effects).unwrap();
+        // Winner price 4_000: the buyer spends 4_000 of its 10_000 envelope
+        // and refunds 6_000 to free cash while taking the full 10_000 fill.
+        let buyer = effects.position_settlements[0];
+        assert_eq!(buyer.after.cash_atoms, 6_000);
+        assert_eq!(buyer.after.reserved_cash_atoms, 0);
+        assert_eq!(buyer.after.internal[0], 10_000);
+        // The seller receives the buyer's exact 4_000-atom cost and the
+        // 4_000-Egg unfilled remainder refunds to its Position.
+        let seller = effects.position_settlements[1];
+        assert_eq!(seller.after.cash_atoms, 4_000);
+        assert_eq!(seller.after.internal[0], 4_000);
+        assert_eq!(effects.settlement_consideration_atoms, 4_000);
+        // Consumed bodies archive exactly the filled amounts.
+        assert_eq!(
+            effects.terminal_reservations[sell].remaining_internal[0],
+            10_000
+        );
+        assert_eq!(
+            effects.terminal_reservations[1 - sell].remaining_cash_atoms,
+            4_000
+        );
+    }
+
+    #[test]
+    fn tampered_selected_quantity_refuses_settle_before_mutation() {
+        let mut hostile = selected();
+        hostile.retained[0].candidate.quantity -= 1;
+        hostile.retained[0].candidate.fills = [hostile.retained[0].candidate.quantity; 2];
+        let prestate = hostile;
+        assert_eq!(
+            hostile.settle(context(39), observed(&hostile, 0), settlement_positions()),
+            Err(DirectLifecycleErrorV3::MismatchedBinding)
+        );
+        // Byte-identical rollback: the refusal changed nothing.
+        assert_eq!(hostile, prestate);
+    }
+
+    #[test]
+    fn settle_and_lapse_mixed_terminals_conserve_value_and_lamports() {
+        let settling = selected();
+        let settle_plan = settling
+            .settle(context(39), observed(&settling, 0), settlement_positions())
+            .unwrap();
+        let lapsing = selected();
+        let lapse_balances = observed(&lapsing, 0);
+        let lapse_plan = lapsing
+            .lapse(40, lapse_balances, funded_position_set())
+            .unwrap();
+
+        // Settle moves exactly the 4_000-atom cost and drains the envelope to
+        // the buyer; total cash stays 10_000 either way.
+        let buyer = settle_plan.effects.position_settlements[0];
+        let seller = settle_plan.effects.position_settlements[1];
+        assert_eq!(buyer.after.cash_atoms, 6_000);
+        assert_eq!(seller.after.cash_atoms, 4_000);
+        assert_eq!(buyer.after.internal[0], 10_000);
+        assert_eq!(seller.after.internal[0], 0);
+        assert_eq!(buyer.after.cash_atoms + seller.after.cash_atoms, 10_000);
+
+        // Lapse restores both Positions to their exact pre-placement values:
+        // the same 10_000 total cash, with the 10_000-Egg envelope returned
+        // to the seller instead of filled to the buyer.
+        assert_eq!(
+            lapse_plan.effects.position_releases[0].after,
+            prefreeze_position(0)
+        );
+        assert_eq!(
+            lapse_plan.effects.position_releases[1].after,
+            prefreeze_position(1)
+        );
+        assert_eq!(prefreeze_position(0).cash_atoms, 10_000);
+        assert_eq!(prefreeze_position(1).internal[0], 10_000);
+
+        // Both terminals close the same seven lamport legs conservatively.
+        for plan in [&settle_plan, &lapse_plan] {
+            assert_eq!(plan.effects.close_count, 7);
+            assert_eq!(
+                plan.effects.observed_close_total().unwrap(),
+                plan.effects.payer_principal_total().unwrap()
+                    + plan.effects.work_budget_refund
+                    + plan.effects.neutral_surplus_total().unwrap()
+            );
+        }
+        assert_eq!(
+            settle_plan.post.terminal_receipt.reason,
+            DirectTerminalReasonV3::Settled
+        );
+        assert_eq!(
+            lapse_plan.post.terminal_receipt.reason,
+            DirectTerminalReasonV3::PostSelectionLapse
         );
     }
 }

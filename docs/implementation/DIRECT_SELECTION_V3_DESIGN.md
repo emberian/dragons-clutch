@@ -429,8 +429,24 @@ kernel maps the frozen buy/sell indices to the matching Reservations, requires
 distinct owners and accounts, computes `quantity * price / price_scale` in
 `u128` with exact divisibility and checked `u64` conversion, debits buyer cash,
 credits seller cash, credits the bought Egg, and releases the buyer's complete
-reserved-cash headroom. Cash and Egg conservation are checked before either
+reserved-cash headroom. The exact-division refusal is the direct policy's own
+`RoundingBoundaryV1::None` boundary — the relation refuses a remaindered
+consideration (`RemainderRequired`) — so buyer cost and seller proceeds are the
+same atom count with no rounding pot and no fee sink, and a zero price refuses.
+Cash and per-outcome Egg conservation are both checked before either
 Reservation becomes `CONSUMED`.
+
+Consumed Reservation bodies archive the exact consumed amounts, never zeroes:
+the buy's `remaining_cash_atoms` records the consideration actually spent and
+the sell's `remaining_internal` records the filled quantity, so `initial_*`
+minus `remaining_*` is the refunded portion in the durable effects. Any unspent
+buyer envelope refunds implicitly through the reserved-cash release, and an
+unfilled seller remainder refunds to the seller Position — unreachable through
+this full-fill lifecycle, and covered at the kernel level. Deficits refuse
+rather than clamp, and a tampered selected quantity refuses byte-identically
+before any mutation. The archived `SETTLED` receipt stays bound to the frozen
+page's quantity and outcome and to the exact-division rule after transient
+authority is gone.
 
 Before closing transient authority it writes the `SETTLED` receipt into Epoch
 V4. It then closes the selected Candidate, Window, receipt, pot, WorkBudget,
@@ -498,6 +514,10 @@ The host was Linux `6.11.0-29-generic` x86-64 with Cargo
 - exact buyer/seller Position settlement independent of page orientation,
   including cash/Egg transfer, reserved-cash release, consideration
   divisibility, alias/substitution refusal, and atomic overflow refusal;
+- hard-anchored two-sided settlement legs, consumed-amount (never zeroed)
+  Reservation archival, kernel-level partial-fill remainder refunds on both
+  sides, tampered-quantity refusal with byte-identical rollback, and mixed
+  settle/lapse terminal conservation of cash, Eggs, and lamports;
 - partial-verification and selected-path WorkBudget equations;
 - canonical DonationLedger create deltas, monotone donations, shortfall refusal,
   close-time neutral disposition, payer/reward separation, and checked aggregate
