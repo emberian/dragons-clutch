@@ -1,5 +1,10 @@
 # Dragon's Clutch transition handoff
 
+> **Historical snapshot.** This handoff predates most of the current SBF and
+> custody work. Start with [`CURRENT_TRUTH.md`](CURRENT_TRUTH.md) and
+> [`docs/V1_BACKLOG.md`](docs/V1_BACKLOG.md); use this file for provenance and
+> rationale only where the current control plane links back to it.
+
 Snapshot date: 2026-08-18. Transition state: **ready for a supervised offline
 engineering handoff; not release-ready and not authorized for public-network
 use**.

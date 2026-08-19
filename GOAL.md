@@ -1,5 +1,11 @@
 # Standing goal (2026-08-18, ember on a walk)
 
+> **Historical execution log.** For current capability claims, STOPs, and the
+> dependency-ordered queue, use [`CURRENT_TRUTH.md`](CURRENT_TRUTH.md) and
+> [`docs/V1_BACKLOG.md`](docs/V1_BACKLOG.md). Entries below record what agents
+> believed or measured when written; later implementation and adversarial review
+> supersede several “current,” “next,” and completion statements.
+
 Authorized autonomous work. Private repos pushed: `emberian/dragons-clutch`,
 `emberian/degg-research`. Push after each coherent wave.
 

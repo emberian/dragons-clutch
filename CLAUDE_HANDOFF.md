@@ -1,5 +1,10 @@
 # Claude → Codex handoff
 
+> **Historical snapshot.** Current capability claims, economic corrections,
+> STOPs, and next gates live in [`CURRENT_TRUTH.md`](CURRENT_TRUTH.md) and
+> [`docs/V1_BACKLOG.md`](docs/V1_BACKLOG.md). In particular, later adversarial
+> review supersedes this snapshot's green Token-2022/collateral interpretation.
+
 Session: 2026-08-18 into 2026-08-19. Baseline `fa4efb4`, 112 commits, HEAD
 `7ce4c09`. Sibling repo `degg-research` at `18be77e` (36 commits; its most
 recent, Draft 8 review editions, is Codex's own).
