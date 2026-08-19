@@ -25,18 +25,26 @@ publishable to IPFS and GitHub Pages.
 
 ## Status
 
-This repository is in **offline prototype implementation**. It contains bounded
-pure-Rust kernel, accumulator, and batch-relation prototypes, a static offline
-client, plus deterministic economics, cost, and toolchain labs. It contains no
-deployed program, transaction builder, private key, market, or financial
-authority. Verus and Rocq are installed and pinned
+This repository is in **local prototype implementation**. It contains bounded
+pure-Rust kernel, accumulator, batch-relation, and native degree-0--3 B-spline
+semantics; a safe SBF adapter exercised against local Agave banks; a signed
+loopback transaction/reload harness; a static offline client; and deterministic
+economics, cost, and toolchain labs. The SBF evidence includes scoped account
+construction, pooled custody, claim movement, point resolution, redemption,
+withdrawal, funded order reservation, and one narrow coupled-settlement slice.
+It does not establish the still-missing authenticated live source join,
+general settlement, or complete operatorless venue lifecycle. The repository
+contains no deployed program, production transaction SDK, private key, live
+market, or financial authority. Verus and Rocq are installed and pinned
 (see toolchain/PINNED_PROOF_TOOLS.md). One narrow executable result is now
 closed: pinned Verus checks the exact production arithmetic helper used by an
 internal-claim transfer, with its source and call seam digest-bound and two
 mutations required to go red. The older mathematical Verus shadows still fail,
 and no whole transition, adapter, SBF ELF, or deployment is formally verified.
-The remaining Rust is tested and linted under the boundaries named in the
-evidence documents.
+Separate Lean theorems cover the uniform native degree-1--3 B-spline semantic
+model and canonical largest-remainder quantization, but are not yet a
+source-level refinement proof of the Rust evaluator. The remaining Rust is
+tested and linted under the boundaries named in the evidence documents.
 All parameters remain hypotheses until the required proofs, benchmarks,
 simulations, and adversarial tests pass.
 
