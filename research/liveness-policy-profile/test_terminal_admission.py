@@ -52,6 +52,7 @@ def base(accounts: dict[str, dict[str, object]]) -> dict[str, object]:
         "accounts": accounts,
         "token_residues": {},
         "hoard_counts_as_liveness_funding": False,
+        "claims_universal_no_stranded_value": False,
         "blocking_ids": [],
     }
 
@@ -144,9 +145,31 @@ class TerminalAdmissionTests(unittest.TestCase):
         row = permanent()
         row["lifecycle_class"] = "UNCLASSIFIED_STOP"
         row["promotion"] = "STOP"
+        row["blocking_ids"] = ["ACCOUNT.UNKNOWN"]
         terminal = base({"unknown": row})
         with self.assertRaises(TerminalAdmissionError):
             validate_terminal_admission(terminal, expected_accounts={"unknown"})
+
+    def test_unclassified_stop_requires_globally_declared_blocker(self) -> None:
+        row = permanent()
+        row["lifecycle_class"] = "UNCLASSIFIED_STOP"
+        row["promotion"] = "STOP"
+        row["blocking_ids"] = ["ACCOUNT.UNKNOWN"]
+        terminal = base({"unknown": row})
+        terminal["status"] = "STOP"
+        with self.assertRaises(TerminalAdmissionError):
+            validate_terminal_admission(terminal, expected_accounts={"unknown"})
+        terminal["blocking_ids"] = ["ACCOUNT.UNKNOWN"]
+        self.assertEqual(
+            validate_terminal_admission(terminal, expected_accounts={"unknown"}),
+            "STOP",
+        )
+
+    def test_universal_no_stranded_value_claim_is_refused(self) -> None:
+        terminal = base({"batch.policy": permanent()})
+        terminal["claims_universal_no_stranded_value"] = True
+        with self.assertRaises(TerminalAdmissionError):
+            validate_terminal_admission(terminal, expected_accounts={"batch.policy"})
 
 
 if __name__ == "__main__":

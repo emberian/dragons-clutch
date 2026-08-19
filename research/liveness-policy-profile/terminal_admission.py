@@ -98,6 +98,13 @@ def validate_account(name: str, row: Mapping[str, Any]) -> None:
             )
     elif lifecycle == "UNCLASSIFIED_STOP":
         _require(row.get("promotion") == STOP, f"{name}: unclassified account must STOP")
+        blockers = row.get("blocking_ids")
+        _require(
+            isinstance(blockers, list)
+            and bool(blockers)
+            and all(isinstance(value, str) and value for value in blockers),
+            f"{name}: unclassified STOP requires explicit blocker ids",
+        )
 
     if name == "direct.candidate":
         maximum = row.get("max_instances", {})
@@ -141,11 +148,29 @@ def validate_terminal_admission(
         if row.get("required") is True and row.get("status") != PASS:
             computed = STOP
 
+    blockers = terminal.get("blocking_ids")
+    _require(isinstance(blockers, list), "blocking_ids must be a list")
+    _require(len(blockers) == len(set(blockers)), "blocking_ids contain duplicates")
+    blocker_set = set(blockers)
+    for name, row in accounts.items():
+        for blocker in row.get("blocking_ids", []):
+            _require(blocker in blocker_set, f"{name}: blocker is absent from global set")
+
+    if terminal.get("source_release", {}).get("default_release_available") is not True:
+        _require(
+            "SOURCE.DEFAULT_REGISTRY_EMPTY" in blocker_set,
+            "empty default source registry requires its canonical blocker",
+        )
+
     _require(
         terminal.get("hoard_counts_as_liveness_funding") is False,
         "Hoard value must never fund liveness",
     )
+    _require(
+        terminal.get("claims_universal_no_stranded_value") is False,
+        "the current profile must not claim universal no-stranded-value",
+    )
     _require(terminal.get("status") == computed, "declared terminal status disagrees")
     if computed == STOP:
-        _require(bool(terminal.get("blocking_ids")), "STOP requires blocker ids")
+        _require(bool(blockers), "STOP requires blocker ids")
     return computed
