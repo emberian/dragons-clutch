@@ -21,7 +21,8 @@ their own outcomes). Everything the manifest describes about *proofs* remains
 scripts/baseline_manifest.py emit
 
 # The full record: also execute every declared gate and store exit codes plus
-# normalized key output lines. Several minutes; builds two SBF rlibs.
+# normalized key output lines. Several minutes; includes two fresh SBF ELF
+# builds, the loopback lifecycle, and the isolated Token-2022 bank suite.
 scripts/baseline_manifest.py emit --run-gates
 
 # A labelled mid-flight snapshot from a dirty tree. Never a baseline.
@@ -49,18 +50,19 @@ Exit codes:
 
 ## The refusal rule
 
-`emit` is `--strict` by default and **refuses** when `git status --porcelain` is
-non-empty. It prints every dirty path and exits 2 without writing anything. A
-manifest emitted from a dirty tree would pair a clean commit id and tree hash
-with bytes that are not in that tree — a false claim of provenance in the exact
-field the manifest exists to make trustworthy.
+`emit` is `--strict` by default and **refuses** when the NUL-delimited
+`git status --porcelain=v1` contains anything except the manifest output itself.
+It prints every dirty path and exits 2 without writing anything. Rename and copy
+records are parsed as two-path records; an operation involving the manifest and
+another path is not hidden by the manifest exemption.
 
 `--allow-dirty` is the escape hatch for mid-flight snapshots. It emits, but the
 manifest then carries:
 
 - `"dirty": true`;
-- `dirty_warning`, prose stating that the recorded `commit`/`tree_hash` do **not**
-  describe the hashed bytes;
+- `dirty_warning`, prose stating that `content_identity` covers tracked
+  working-tree bytes but the historical provenance commit/tree do **not**
+  describe the tree the gates ran against and untracked bytes are not bound;
 - `dirty_porcelain`, the verbatim porcelain listing;
 - `claims.manifest_label: "PROPOSED"` instead of `"IMPLEMENTED"`.
 
@@ -69,12 +71,11 @@ progress. It may never be cited as a baseline. `check` re-states this in its
 success output so that a passing check on a dirty snapshot cannot be quoted as a
 clean-tree result.
 
-Exactly one path is excluded from the dirtiness decision: the manifest's own
-output path. It is this tool's output, not an input, and letting its git status
-gate its own regeneration would mean the first emit permanently blocks every
-later one. The exclusion is recorded in the manifest as `dirty_check_excludes`,
-including whatever status the excluded path actually had, so it is stated rather
-than hidden. Nothing else is ever excluded.
+Exactly one path is excluded from both the dirtiness decision and the content
+identity: the manifest's own output path. It is this tool's output, not an input,
+and its bytes cannot truthfully attest themselves. The exclusion is recorded in
+both `dirty_check_excludes` and `baseline.content_identity`, including whether
+the excluded path was tracked/modified. Nothing else is excluded.
 
 One consequence deserves saying plainly: gates always execute against the
 **working tree**, never against the recorded commit. On a clean tree those are
@@ -85,15 +86,17 @@ matching `Cargo.lock` has not been regenerated will fail every `--locked` gate
 for that crate, for instance. Read a dirty snapshot's failures as observations
 about *now*, and re-emit on a clean tree before drawing conclusions.
 
-## Schema `dragons-clutch/baseline-manifest/v1`
+## Schema `dragons-clutch/baseline-manifest/v2`
 
 | Key | Contents |
 | --- | --- |
-| `schema` | the literal `dragons-clutch/baseline-manifest/v1` |
+| `schema` | the literal `dragons-clutch/baseline-manifest/v2` |
 | `generator` | path and sha256 of the script that produced the manifest |
 | `dirty`, `dirty_warning`, `dirty_porcelain` | worktree state; the latter two only when dirty |
 | `dirty_check_excludes` | the one path excluded from the dirtiness decision, stated explicitly |
-| `baseline` | `commit`, `tree_hash`, `commit_subject`, `remotes`, `tags_at_head` |
+| `baseline.content_identity` | canonical SHA-256 over every tracked working-tree entry except the manifest itself |
+| `baseline.provenance` | historical emission commit/tree/subject plus remotes and tags; informative, not the drift identity |
+| `baseline.self_reference_policy` | the explicit reason the generated artifact is its only exclusion |
 | `claims` | `verified`/`deployed`/`release` (all `false`), the §1 label vocabulary, and `not_attested` |
 | `gates` | every declared check: id, handoff section, verbatim command, expected disposition, key-line patterns, note |
 | `gate_runs` | with `--run-gates`: per gate exit code, expectation match, normalized key lines, key-line digest, and any `volatile_lines` |
@@ -104,17 +107,35 @@ about *now*, and re-emit on a clean tree before drawing conclusions.
 | `handoff_digest_disagreements` | ids where the tree disagrees with `CODEX_HANDOFF.md` §6 |
 | `run` | wall-clock timestamps; the **only** nondeterministic fields, ignored by `check` |
 
-### `baseline`
+### `baseline`: content identity, not a self-defeating HEAD equality
 
-`commit` and `tree_hash` are git object ids. `remotes` records configured remote
-names and fetch URLs; `tags_at_head` records tags pointing at `HEAD`.
+Schema v1 required the manifest's recorded `commit` and `tree_hash` to equal
+current `HEAD`. That condition could not survive the commit that checked in the
+manifest: adding the manifest changes both object ids. The first clean check
+after the required commit was therefore guaranteed to report drift. That was a
+self-reference bug, not evidence of source drift.
 
-Neither is provenance, and the manifest says so inline rather than letting a
-populated `remotes` list imply something it does not. A configured remote means
-a push destination is configured. A pushed branch means bytes were copied to a
-host. Neither is signed, neither is tagged, and neither is attested here. An
-empty `tags_at_head` means no release tag exists — the expected state while
-`CODEX_HANDOFF.md` §7 P0-1 is open.
+Schema v2 binds `baseline.content_identity.sha256` instead. Its input is every
+stage-0 path returned by `git ls-files --stage -z`, sorted by raw path bytes,
+except the manifest output. Each length-delimited record binds:
+
+- the raw path bytes;
+- the observed Git mode/type (`100644`, `100755`, `120000`, or gitlink);
+- a kind tag and payload length; and
+- SHA-256 of the working-tree bytes, symlink-target bytes, or gitlink object id.
+
+The schema tag prefixes the complete stream. Consequently, committing only the
+generated manifest leaves the identity unchanged, while changing, adding,
+deleting, renaming, or chmodding any other tracked entry changes it. Strict
+cleanliness rejects untracked paths and index/worktree drift, so a clean baseline
+also binds the complete repository input to every gate. The generator has its
+own digest as a redundant, legible check.
+
+`baseline.provenance.emitted_from_commit` and `emitted_from_tree_hash` preserve
+the historical context in which the record was produced, but `check` does not
+require them to equal the later manifest-only commit. Remotes and tags are also
+historical context, not signed provenance. A configured remote means only that a
+destination is configured; no push, tag, signature, or release is attested.
 
 ### `gates`
 
@@ -129,6 +150,9 @@ repository root with `CARGO_NET_OFFLINE=true`, `NO_COLOR=1`, and `LC_ALL=C`.
 - `5-extended` — a check the repository pins elsewhere that §5 omits. Currently
   one: the coupled golden trace, pinned by
   `docs/implementation/VERTICAL_MODEL.md`;
+- `post-5` — benchmark harness and ABI checks added after the handoff list;
+- `post-5-runtime` — the full loopback SBF differential/lifecycle gate and the
+  isolated Agave/Token-2022 program-test gate;
 - `5-expected-unavailable` — the two proof gates §5 lists as expected failures.
 
 `expected.mode` is the reviewed disposition, not a wish:
@@ -164,6 +188,29 @@ it measures no host reproducibility and `TOOLCHAIN_SPIKE.md` claims none. Only
 `sbf_rlib_sha256` is measured reproducible, and only by a single same-machine
 rebuild.
 
+The two runtime gates have intentionally different coverage:
+
+- `sbf.runtime_bringup` builds the deployable ELF twice into fresh targets,
+  requires byte identity, launches a new loopback `solana-test-validator`, waits
+  for a transaction-level program readiness probe, runs every implemented
+  instruction-family differential and refusal, proves the differential can be
+  made red, then executes the ordered lifecycle and its terminal accounting
+  identity. Its stable evidence lines include measured compute units and the ELF
+  digest.
+- `sbf.token2022_program_test` executes that program form and the real
+  Token-2022 binary in an in-process Agave bank. It adds extension-policy cases,
+  mandatory token/collateral plane tests, out-of-band reconciliation failure,
+  and the E5 post-CPI atomic-rollback case. These are not redundant with the
+  loopback differential.
+
+`cargo-build-sbf` may diagnose excessive frames in public dependency functions
+while compiling rlibs. The bringup gate extracts those symbol names and refuses
+unless every one is absent from the final linked, unstripped ELF after LTO. The
+manifest therefore classifies the observed messages as backend build
+diagnostics for eliminated symbols, not reachable undefined behavior. Symbol
+absence is also not a general stack-safety proof; a surviving diagnostic is an
+immediate gate failure.
+
 ### `digests`
 
 Three kinds:
@@ -179,11 +226,12 @@ Three kinds:
   keys sorted recursively. The rule is stored in the manifest so an independent
   implementation can reproduce it without reading the script;
   `apps/static-client/test/smoke.mjs` enforces the same rule from the other side.
-- `declared-build-output` — an identity `CODEX_HANDOFF.md` §6 states that is
-  *not* a repository file. Currently one: the reproducible E0 SBF `rlib`, which
-  only exists inside the temporary directory `toolchain/scripts/run_lab.sh`
-  creates. With `--run-gates` its `observed_sha256` is lifted from that gate's
-  `sbf_rlib_sha256` line and compared to the declared value.
+- `declared-build-output` — a named identity that is *not* a repository file.
+  There are two: the E0 SBF `rlib` produced in `run_lab.sh` scratch, and the
+  deployable `clutch_sbf.so` built twice in `run_bringup.sh` scratch. With
+  `--run-gates`, each `observed_sha256` is lifted from the producing gate's
+  stable output and compared with the documented value. Both are same-machine
+  comparisons, not independent reproducible-build closure.
 
 Where §6 (or a named implementation note) declares a digest, the entry carries
 `handoff_declared_sha256`, `matches_handoff`, and `handoff_reference`. Ids that
@@ -219,15 +267,18 @@ Verbatim from the manifest's own `claims.not_attested`:
 - **No signature chain.** No signed tag, no signed artifact, no key material, no
   transparency log entry. A sha256 in this file proves only that the emitting
   machine saw those bytes.
-- **No reproducible-build closure.** The only reproducibility measured anywhere
-  in this repository is `run_lab.sh` rebuilding one narrow SBF `rlib` twice on
-  the same machine and comparing. No ELF, no toolchain bootstrap, no rebuild
-  from dependency sources, no independent rebuilder.
+- **No independent reproducible-build closure.** `run_lab.sh` rebuilds one narrow
+  SBF `rlib` twice, and `run_bringup.sh` builds the deployable program ELF twice
+  into fresh target directories. Both comparisons occur on one machine with the
+  installed toolchain. There is no independent rebuilder, toolchain bootstrap,
+  or rebuild from pinned dependency sources.
 - **No proof content.** The Rocq gate typechecks `Definition`s (zero theorems);
   the Verus gate fails on the pinned probe. Both are recorded as-is, and
   `check` will flag it as drift if either silently changes disposition.
-- **No SBF runtime evidence.** No entrypoint, program-test lifecycle, Token-2022
-  CPI, CU/stack/heap measurement, or cross-runtime vector closure.
+- **No non-local runtime evidence.** The two SBF gates record a loopback validator
+  differential/lifecycle and an in-process Agave/Token-2022 bank suite. They do
+  not establish public-cluster behavior, deployment, validator diversity, an
+  independently rebuilt ELF, or cross-runtime vector closure.
 - **No SBOM**, license closure, fixture provenance chain, or source offer.
 - **No published provenance.** The identities are git object ids. A configured
   remote or a pushed branch is neither a signed tag nor a release artifact.
@@ -241,18 +292,19 @@ the manifest recorded*. It does not mean correct, verified, safe, or deployable.
 Every step below is future work and every step is user-gated. None may be taken
 by inference from this document.
 
-1. **Clean-tree baseline.** Emit with `--strict --run-gates` on a clean tree and
-   commit the result. That is the first manifest that may be called a baseline;
-   the first one generated is a `--allow-dirty` snapshot taken to prove the
-   machinery, and is labelled as such.
+1. **Clean-tree baseline.** Commit every source/gate change, emit with
+   `--strict --run-gates`, then commit only the generated manifest. Because the
+   v2 content identity excludes that artifact, `check` remains green after the
+   manifest-only commit. A `--allow-dirty` record remains a labelled snapshot,
+   never a baseline.
 2. **CI-independent re-derivation.** A second machine runs `check --run-gates`
    against the committed manifest. Until that happens, "deterministic" is a
    property of one machine.
-3. **Remote and signed tag.** Requires explicit user direction (§7 P0-1). Adds
-   `baseline.remotes` and `baseline.tags_at_head` content, and a detached
-   signature over the manifest. The manifest schema is stable across this: the
-   signature is a sibling artifact, never a field the generator writes about
-   itself.
+3. **Remote and signed tag.** Requires explicit user direction (§7 P0-1). A
+   detached signature is a sibling artifact, never a field the generator writes
+   about itself. Historical remote/tag observations live under
+   `baseline.provenance`; a real release record must separately bind the tag and
+   signature.
 4. **SBOM and license closure.** Dependency graph, licenses, fixture provenance,
    and a source offer, each digest-bound into the manifest.
 5. **Reproducible-build closure.** An independent rebuilder reproducing the SBF
@@ -273,11 +325,10 @@ by inference from this document.
 corresponding evidence exists and is named in the manifest. A convenience commit
 may not flip them to obtain a green result.
 
-## Addendum 2026-08-19: SBF lane and post-section-5 gates
+## Runtime-gate boundary
 
-The gate inventory now includes the `clutch-sbf` cargo gates and two
-post-section-5 benchmark gates (`benchmarks.unittest`,
-`benchmarks.abi_audit`). Deliberately NOT a manifest gate: the SBF
-reproducible-ELF build and the local-validator differential — both are
-multi-minute, environment-heavy procedures whose evidence is recorded in
-`docs/implementation/SBF_BRINGUP.md`; the manifest attests neither.
+The gate inventory includes the `clutch-sbf` cargo gates, the post-handoff
+benchmark/ABI checks, and both real SBF runtime gates. Their cost is deliberate:
+a full `--run-gates` baseline is the evidence path, not a fast presubmit. A
+declaration-only `emit` remains useful for inspecting structure but sets
+`claims.reviewed_offline_checks_recorded` to `false` and records no run outcomes.

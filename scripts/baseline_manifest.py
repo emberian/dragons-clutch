@@ -35,13 +35,15 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "dragons-clutch/baseline-manifest/v1"
+SCHEMA = "dragons-clutch/baseline-manifest/v2"
+CONTENT_IDENTITY_SCHEMA = "dragons-clutch/tracked-working-tree/v1"
 DEFAULT_MANIFEST = "MANIFEST.baseline.json"
 DEFAULT_GATE_TIMEOUT = 1800
 
@@ -59,8 +61,8 @@ EXIT_ENVIRONMENT = 3
 LABEL_VOCABULARY = {
     "IMPLEMENTED": (
         "source exists locally and the named offline checks pass; implies no "
-        "formal verification, SBF runtime evidence, security review, or "
-        "deployment readiness"
+        "formal verification, security review, or deployment readiness; any "
+        "runtime evidence must be separately named"
     ),
     "MODEL": (
         "a deterministic reference model, specification, theorem statement, "
@@ -81,17 +83,15 @@ NOT_ATTESTED = [
     "no release: nothing here publishes, tags, pushes, or authorizes a release",
     "no signature chain: no signed tag, no signed artifact, no key material, no "
     "transparency log entry",
-    "no reproducible-build closure: only the narrow E0 rlib self-comparison "
-    "inside toolchain/scripts/run_lab.sh is measured; no ELF, no toolchain "
-    "bootstrap, no dependency-source rebuild",
+    "no independent reproducible-build closure: the E0 rlib and deployable SBF "
+    "ELF each have a same-machine two-build comparison, but there is no "
+    "independent rebuilder, toolchain bootstrap, or dependency-source rebuild",
     "no proof content: the Rocq gate typechecks Definitions (zero theorems) and "
     "the Verus gate fails on the pinned probe; both are recorded as-is",
-    "SBF runtime evidence exists but is NOT attested by this manifest: the "
-    "entrypoint, per-family SVM differentials, lifecycle walk, Token-2022 CPI "
-    "scenarios, and CU measurements are recorded in "
-    "docs/implementation/SBF_BRINGUP.md and LIFECYCLE_WALK.md and gated by "
-    "programs/clutch-sbf/scripts/run_bringup.sh, which this manifest neither "
-    "runs nor digests; cross-runtime vector closure remains open",
+    "SBF evidence is local only: the manifest gates a loopback test-validator "
+    "differential/lifecycle walk and an in-process Agave bank with Token-2022; "
+    "neither is public-cluster, deployment, independent-rebuild, validator-"
+    "diversity, or cross-runtime-vector evidence",
     "no SBOM, license closure, fixture provenance chain, or source offer",
     "no published provenance: the identities below are git object ids. A "
     "configured remote or a pushed branch is neither a signed tag nor a release "
@@ -221,7 +221,22 @@ DECLARED_BUILD_OUTPUTS = [
             "an rlib emitted into a temporary directory by cargo-build-sbf, not "
             "a deployable program ELF and not a repository artifact"
         ),
-    }
+    },
+    {
+        "id": "clutch_sbf.program_elf",
+        "handoff": "59c48c482831626ae9d7cb908f4de0e3f93b1572cdd82105c61f2f87bdaad25f",
+        "handoff_reference": (
+            "docs/implementation/SBF_BRINGUP.md and CLAUDE_HANDOFF.md "
+            "(same-machine reproducible deployable SBF ELF)"
+        ),
+        "produced_by_gate": "sbf.runtime_bringup",
+        "produced_by_output_key": "sbf_elf_sha256",
+        "note": (
+            "deployable program ELF built twice into fresh target directories "
+            "on one machine; byte identity is not independent reproducible-build "
+            "closure and says nothing about deployment"
+        ),
+    },
 ]
 
 
@@ -392,6 +407,58 @@ def build_gates() -> list[dict[str, Any]]:
                 "note": "byte identity of the checked-in benchmark goldens",
             },
             {
+                "id": "sbf.runtime_bringup",
+                "section": "post-5-runtime",
+                "command": "programs/clutch-sbf/scripts/run_bringup.sh",
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [
+                    r"^pass [12]  sha256=[0-9a-f]{64}  bytes=[0-9]+$",
+                    r"^sbf_reproducibility=PASS$",
+                    r"^final_elf_stack_diagnostic_symbols=ABSENT ",
+                    r"^validator executed program readiness probe ",
+                    r"^[0-9]+ accepting transactions$",
+                    r"^  accept ",
+                    r"^  refuse ",
+                    r"^\s+[0-9]+\s+walk-",
+                    r"^\s+terminal identity:",
+                    r"^one byte .* went red:$",
+                    r"^the terminal .* went red:$",
+                    r"^one payout .* went red:$",
+                    r"^PASS$",
+                    r"^sbf_elf_sha256=[0-9a-f]{64}$",
+                ],
+                "note": (
+                    "builds the deployable ELF twice, confirms byte identity on "
+                    "one machine, rejects any backend stack-diagnostic symbol "
+                    "that survives final-ELF LTO, then runs the entrypoint, "
+                    "per-family differential/refusal matrix, falsifiability "
+                    "checks, and ordered lifecycle on a loopback validator; "
+                    "dependency diagnostics proven absent from the linked ELF "
+                    "are build diagnostics, not evidence of reachable undefined "
+                    "behavior, but their absence is not a general stack-safety proof"
+                ),
+            },
+            {
+                "id": "sbf.token2022_program_test",
+                "section": "post-5-runtime",
+                "command": "programs/clutch-sbf/svm-tests/run_svm_tests.sh",
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [
+                    r"^[0-9a-f]{64}\s+.*clutch_sbf\.so$",
+                    r"^running [0-9]+ tests?$",
+                    r"^test [a-zA-Z0-9_]+ .*",
+                    r"^SVM ",
+                    r"^test result: ",
+                ],
+                "note": (
+                    "executes the real SBF ELF and Token-2022 program in an "
+                    "in-process Agave bank, including extension refusals, "
+                    "mandatory token/collateral planes, and E5 atomic rollback; "
+                    "program-test is not a cluster, deployment, or runtime-"
+                    "diversity result"
+                ),
+            },
+            {
                 "id": "static_client.npm",
                 "section": "5",
                 "command": "(cd apps/static-client && npm test && npm run check)",
@@ -513,6 +580,11 @@ def run_capture(args: list[str], cwd: Path) -> tuple[int, str]:
     return proc.returncode, proc.stdout + proc.stderr
 
 
+def run_capture_bytes(args: list[str], cwd: Path) -> tuple[int, bytes]:
+    proc = subprocess.run(args, cwd=str(cwd), capture_output=True, check=False)
+    return proc.returncode, proc.stdout + proc.stderr
+
+
 def git(repo: Path, *args: str) -> str:
     code, out = run_capture(["git", *args], repo)
     if code != 0:
@@ -589,21 +661,42 @@ def gate_outcome_ok(expected: dict[str, Any], exit_code: int) -> bool:
 
 
 def collect_worktree_state(repo: Path, exclude: list[str]) -> dict[str, Any]:
-    """Porcelain status, minus the manifest's own output path.
+    """NUL-safe porcelain status, minus only the manifest output itself.
 
-    The manifest is an output, not an input. Its own untracked/modified status
-    must not gate its regeneration, or a first emit would permanently block
-    every later one. The exclusion is recorded in the manifest so it is stated,
-    not hidden; nothing else is ever excluded.
+    Rename/copy records name two paths.  Such a record is excluded only when
+    *both* paths name the manifest; a rename between the manifest and any other
+    path remains dirty.  This prevents the output exemption from swallowing a
+    source deletion or insertion hidden in a rename record.
     """
-    porcelain = git(repo, "status", "--porcelain")
+    code, raw = run_capture_bytes(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"], repo
+    )
+    if code != 0:
+        die("git status --porcelain=v1 -z failed")
+    excluded_bytes = {os.fsencode(path) for path in exclude}
+    chunks = raw.split(b"\0")
     entries: list[str] = []
     excluded: list[str] = []
-    for line in porcelain.splitlines():
-        if not line.strip():
+    index = 0
+    while index < len(chunks):
+        item = chunks[index]
+        index += 1
+        if not item:
             continue
-        path = line[3:].strip().strip('"')
-        (excluded if path in exclude else entries).append(line)
+        if len(item) < 4 or item[2:3] != b" ":
+            die("could not parse git status --porcelain=v1 -z output")
+        status_code = item[:2]
+        paths = [item[3:]]
+        if b"R" in status_code or b"C" in status_code:
+            if index >= len(chunks) or not chunks[index]:
+                die("truncated rename/copy record in git status output")
+            paths.append(chunks[index])
+            index += 1
+        rendered = f"{status_code.decode('ascii', 'replace')} " + " -> ".join(
+            os.fsdecode(path) for path in paths
+        )
+        target = excluded if all(path in excluded_bytes for path in paths) else entries
+        target.append(rendered)
     return {
         "dirty": bool(entries),
         "porcelain": entries,
@@ -612,7 +705,125 @@ def collect_worktree_state(repo: Path, exclude: list[str]) -> dict[str, Any]:
     }
 
 
-def collect_baseline(repo: Path) -> dict[str, Any]:
+def _identity_record(
+    hasher: "hashlib._Hash",
+    *,
+    path: bytes,
+    mode: str,
+    kind: str,
+    size: int,
+    digest: bytes,
+) -> None:
+    """Append one unambiguous length-delimited record to a content identity."""
+    fields = (mode.encode("ascii"), kind.encode("ascii"), path, digest)
+    for field in fields:
+        hasher.update(len(field).to_bytes(8, "big"))
+        hasher.update(field)
+    hasher.update(size.to_bytes(8, "big", signed=False))
+
+
+def collect_content_identity(repo: Path, exclude: list[str]) -> dict[str, Any]:
+    """Hash every tracked working-tree byte except this generated artifact.
+
+    This is deliberately independent of commit metadata.  A checked-in
+    manifest necessarily changes HEAD and HEAD^{tree}; excluding the artifact
+    from a byte identity makes the identity stable across that one manifest-only
+    commit while still binding every other tracked path, its Git mode/type, and
+    its working-tree bytes.
+    """
+    code, raw = run_capture_bytes(["git", "ls-files", "--stage", "-z"], repo)
+    if code != 0:
+        die("git ls-files --stage -z failed")
+    excluded_bytes = {os.fsencode(path) for path in exclude}
+    hasher = hashlib.sha256()
+    hasher.update(CONTENT_IDENTITY_SCHEMA.encode("ascii") + b"\0")
+    count = 0
+    excluded_observed: list[str] = []
+
+    rows: list[tuple[bytes, str, str]] = []
+    for item in raw.split(b"\0"):
+        if not item:
+            continue
+        metadata, separator, path = item.partition(b"\t")
+        if not separator:
+            die("could not parse git ls-files --stage -z output")
+        pieces = metadata.split(b" ")
+        if len(pieces) != 3:
+            die("could not parse an index entry while deriving content identity")
+        mode_raw, object_id_raw, stage_raw = pieces
+        if stage_raw != b"0":
+            die(
+                "unmerged index entry prevents a canonical content identity: "
+                + os.fsdecode(path)
+            )
+        rows.append((path, mode_raw.decode("ascii"), object_id_raw.decode("ascii")))
+
+    for path_raw, index_mode, object_id in sorted(rows, key=lambda row: row[0]):
+        if path_raw in excluded_bytes:
+            excluded_observed.append(os.fsdecode(path_raw))
+            continue
+        path = repo / os.fsdecode(path_raw)
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            info = None
+        if info is None:
+            # Strict emission refuses this state before identity collection.  A
+            # dirty snapshot still gets a deterministic sentinel rather than a
+            # misleading hash of the index copy.
+            mode = "missing"
+            kind = "missing"
+            payload = b""
+        elif index_mode == "160000":
+            # A gitlink's repository content is the pinned object id.  Dirt in
+            # a checked-out submodule is separately visible to git status.
+            mode = "160000"
+            kind = "gitlink"
+            payload = object_id.encode("ascii")
+        elif stat.S_ISLNK(info.st_mode):
+            mode = "120000"
+            kind = "symlink-target"
+            payload = os.fsencode(os.readlink(path))
+        elif stat.S_ISREG(info.st_mode):
+            mode = "100755" if info.st_mode & 0o111 else "100644"
+            kind = "regular"
+            payload = path.read_bytes()
+        else:
+            mode = f"special-{stat.S_IFMT(info.st_mode):o}"
+            kind = "unsupported-special"
+            payload = b""
+        digest = hashlib.sha256(payload).digest()
+        _identity_record(
+            hasher,
+            path=path_raw,
+            mode=mode,
+            kind=kind,
+            size=len(payload),
+            digest=digest,
+        )
+        count += 1
+
+    return {
+        "schema": CONTENT_IDENTITY_SCHEMA,
+        "algorithm": "sha256",
+        "sha256": hasher.hexdigest(),
+        "entry_count": count,
+        "excluded_paths": exclude,
+        "excluded_tracked_paths_observed": excluded_observed,
+        "rule": (
+            "enumerate stage-0 entries from `git ls-files --stage -z`, sort by "
+            "raw path bytes, exclude only excluded_paths, and hash the schema "
+            "tag followed by length-delimited (observed Git mode/type, kind, "
+            "raw path, sha256(payload), payload length) records. Payload is "
+            "working-tree bytes for regular files, link-target bytes for "
+            "symlinks, and the index object id for gitlinks. Strict cleanliness "
+            "makes this a complete identity of all checked-in gate/source bytes "
+            "other than the generated manifest itself."
+        ),
+    }
+
+
+def collect_provenance(repo: Path) -> dict[str, Any]:
     commit = git(repo, "rev-parse", "HEAD").strip()
     tree = git(repo, "rev-parse", "HEAD^{tree}").strip()
     subject = git(repo, "log", "-1", "--format=%s").strip()
@@ -626,13 +837,16 @@ def collect_baseline(repo: Path) -> dict[str, Any]:
     code, tags = run_capture(["git", "tag", "--points-at", "HEAD"], repo)
     tag_list = [t for t in tags.splitlines() if t.strip()] if code == 0 else []
     return {
-        "commit": commit,
-        "tree_hash": tree,
+        "emitted_from_commit": commit,
+        "emitted_from_tree_hash": tree,
         "commit_subject": subject,
         "remotes": remote_list,
         "tags_at_head": tag_list,
         "note": (
-            "git object ids and configured remote names only. A configured "
+            "historical emission context only; these fields are not the "
+            "checkable content identity because committing this generated "
+            "manifest necessarily changes HEAD and HEAD^{tree}. Git object ids "
+            "and configured remote names are not provenance attestations. A configured "
             "remote is not provenance and a pushed branch is not a release: "
             "neither is signed, neither is tagged, and neither is attested "
             "here. An empty `tags_at_head` means no release tag exists, which "
@@ -921,6 +1135,29 @@ def summarize_unavailable(
     return out
 
 
+def gate_manifest_record(gate: dict[str, Any]) -> dict[str, Any]:
+    """The complete stable declaration stored for one executable gate."""
+    return {
+        "id": gate["id"],
+        "section": gate["section"],
+        "command": gate["command"],
+        "cwd": ".",
+        "shell": "/bin/sh -c",
+        "expected": gate["expected"],
+        "key_patterns": gate["key_patterns"],
+        "note": gate["note"],
+        **(
+            {
+                "volatile_patterns": gate["volatile_patterns"],
+                "volatile_reason": gate["volatile_reason"],
+            }
+            if "volatile_patterns" in gate
+            else {}
+        ),
+        **({"proof_content": gate["proof_content"]} if "proof_content" in gate else {}),
+    }
+
+
 def build_manifest(
     repo: Path,
     *,
@@ -969,13 +1206,23 @@ def build_manifest(
     if worktree["dirty"]:
         manifest["dirty_warning"] = (
             "THIS IS NOT A BASELINE. The working tree was dirty when this manifest "
-            "was emitted, so the recorded commit and tree_hash do NOT describe the "
-            "bytes that were hashed or the tree the gates ran against. Mid-flight "
-            "snapshot only; regenerate on a clean tree before citing it as evidence."
+            "was emitted. content_identity describes tracked working-tree bytes, "
+            "but untracked paths are not included and the provenance commit/tree do "
+            "not describe the tree the gates ran against. Mid-flight snapshot only; "
+            "regenerate on a clean tree before citing it as evidence."
         )
         manifest["dirty_porcelain"] = worktree["porcelain"]
 
-    manifest["baseline"] = collect_baseline(repo)
+    manifest["baseline"] = {
+        "content_identity": collect_content_identity(repo, [out_rel]),
+        "provenance": collect_provenance(repo),
+        "self_reference_policy": (
+            "the generated manifest is excluded from content_identity and from "
+            "the strict dirty decision. Its bytes cannot truthfully attest "
+            "themselves. Every other tracked path is bound, and every other "
+            "dirty path makes strict emission refuse."
+        ),
+    }
     manifest["claims"] = {
         "verified": False,
         "deployed": False,
@@ -985,28 +1232,7 @@ def build_manifest(
         "manifest_label": "IMPLEMENTED" if not worktree["dirty"] else "PROPOSED",
         "not_attested": NOT_ATTESTED,
     }
-    manifest["gates"] = [
-        {
-            "id": gate["id"],
-            "section": gate["section"],
-            "command": gate["command"],
-            "cwd": ".",
-            "shell": "/bin/sh -c",
-            "expected": gate["expected"],
-            "key_patterns": gate["key_patterns"],
-            "note": gate["note"],
-            **(
-                {
-                    "volatile_patterns": gate["volatile_patterns"],
-                    "volatile_reason": gate["volatile_reason"],
-                }
-                if "volatile_patterns" in gate
-                else {}
-            ),
-            **({"proof_content": gate["proof_content"]} if "proof_content" in gate else {}),
-        }
-        for gate in gates
-    ]
+    manifest["gates"] = [gate_manifest_record(gate) for gate in gates]
     manifest["digests"] = digests["entries"]
     if digests["missing_paths"]:
         manifest["missing_paths"] = digests["missing_paths"]
@@ -1105,12 +1331,13 @@ def check_manifest(
                 "snapshot was taken (informational; a dirty snapshot is never a baseline)"
             )
 
-    baseline = collect_baseline(repo)
-    for field in ("commit", "tree_hash"):
-        if recorded.get("baseline", {}).get(field) != baseline[field]:
+    content_identity = collect_content_identity(repo, [out_rel])
+    recorded_identity = recorded.get("baseline", {}).get("content_identity", {})
+    for field in ("schema", "algorithm", "sha256", "entry_count", "excluded_paths"):
+        if recorded_identity.get(field) != content_identity[field]:
             drift.append(
-                f"baseline.{field}: recorded {recorded.get('baseline', {}).get(field)}, "
-                f"observed {baseline[field]}"
+                f"baseline.content_identity.{field}: recorded "
+                f"{recorded_identity.get(field)}, observed {content_identity[field]}"
             )
 
     digests = collect_digests(repo)["entries"]
@@ -1144,24 +1371,22 @@ def check_manifest(
         drift.append("toolchain.pin_agreement.all_agree changed")
 
     gates = build_gates()
-    recorded_gate_ids = [g["id"] for g in recorded.get("gates", [])]
-    current_gate_ids = [g["id"] for g in gates]
+    recorded_gates = recorded.get("gates", [])
+    current_gate_records = [gate_manifest_record(gate) for gate in gates]
+    recorded_gate_ids = [g["id"] for g in recorded_gates]
+    current_gate_ids = [g["id"] for g in current_gate_records]
     if recorded_gate_ids != current_gate_ids:
         drift.append(
             "gates: the declared gate set changed "
             f"(recorded {len(recorded_gate_ids)}, current {len(current_gate_ids)})"
         )
-    else:
-        by_id = {g["id"]: g for g in recorded.get("gates", [])}
-        for gate in gates:
-            rec = by_id[gate["id"]]
-            if rec.get("command") != gate["command"]:
+    elif recorded_gates != current_gate_records:
+        for recorded_gate, current_gate in zip(recorded_gates, current_gate_records):
+            if recorded_gate != current_gate:
                 drift.append(
-                    f"gates.{gate['id']}.command: recorded {rec.get('command')!r}, "
-                    f"current {gate['command']!r}"
+                    f"gates.{current_gate['id']}: declaration changed "
+                    "(command, expectation, output selection, or classification)"
                 )
-            if rec.get("expected", {}).get("mode") != gate["expected"]["mode"]:
-                drift.append(f"gates.{gate['id']}.expected.mode changed")
 
     if with_gates:
         recorded_runs = recorded.get("gate_runs")
@@ -1278,8 +1503,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"wrote {out}")
         print(f"  schema        {manifest['schema']}")
-        print(f"  commit        {manifest['baseline']['commit']}")
-        print(f"  tree_hash     {manifest['baseline']['tree_hash']}")
+        print(
+            "  source sha256 ",
+            manifest["baseline"]["content_identity"]["sha256"],
+        )
+        print(
+            "  source entries",
+            manifest["baseline"]["content_identity"]["entry_count"],
+        )
+        print(
+            "  provenance    ",
+            manifest["baseline"]["provenance"]["emitted_from_commit"],
+        )
         print(f"  dirty         {manifest['dirty']}")
         print(f"  digests       {len(manifest['digests'])}")
         print(f"  gates         {len(manifest['gates'])}")
