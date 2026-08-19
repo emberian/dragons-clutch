@@ -85,9 +85,14 @@ than aspirational. The project already owns a candidate substrate: the
 Lean-authored dual-certificate STARK stack in the adjacent `breadstuffs`
 tree (verify-not-find semantics, zero-`sorry`), recorded there as having no
 consumer. Joining them is the single highest-leverage architectural move
-available, and it is a design phase, not an implementation task — it needs
-its own semantic owner, a threat model, and an honest account of what the
-FRI/STARK floor does and does not discharge.
+available. **Scouted 2026-08-19 and found feasible with measured numbers:
+see `docs/design/SUCCINCT_CLEARING_FEASIBILITY.md`.** The on-chain Groth16
+verifier already exists at ~255,000 CU in a 795-byte transaction — a 5.5x
+margin against the wall that killed V2 — and the Cert-F semantics are
+literally verify-not-find, machine-checked in Lean over the emitted
+descriptor. Two conditions gate it: the trusted setup is a dev
+single-party ceremony with known toxic waste, and the Cert-F-to-Groth16
+link does not exist yet.
 
 **What to stop.** Adding further verified components. The proof surface is
 adequate for the current claims; marginal value now lies entirely in joins,

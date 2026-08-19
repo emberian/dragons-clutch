@@ -61,6 +61,25 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- SUCCINCT CLEARING FEASIBILITY SCOUTED
+  (docs/design/SUCCINCT_CLEARING_FEASIBILITY.md): the compute wall is NOT an
+  architectural dead end. The adjacent breadstuffs tree's Groth16 verifier
+  is native SBF, measured at ~255k CU in a 795-byte transaction — 5.5x
+  margin against the 1.4M ceiling that killed V2 — and Cert-F's Lean
+  keystone IS verify-not-find (certifies_epsilon_optimal quantifies over
+  all feasible flows), refinement-proved over the EMITTED descriptor, zero
+  sorry, axiom-audited, with refusal teeth exhibited and the
+  modular-to-integer boundary carried as honest hypotheses. Dragon's Clutch
+  independently derived the same dual object in DUAL_IS_THE_MEASURE.
+  Two gating conditions: dev single-party trusted setup (toxic waste known
+  — ceremony problem, longest lead time) and the missing Cert-F-to-Groth16
+  wiring (today the wrap consumes a 25-lane turn statement). Folklore
+  corrected: the forked FRI is a COMPLETENESS defect not a soundness hole,
+  and the restricted-license vendor is off the Cert-F path entirely. Debt
+  surfaced: fhegg-solver/src/air.rs is a hand-written Rust AIR twin;
+  Dragon's Clutch itself has zero AIR debt. Unmeasured and not estimated:
+  Cert-F proof size/time at real batch width, and shrink feasibility.
+
 - R2 RUNTIME CAPABILITIES LANDED on fable/r2-runtime-capabilities (f9045a0):
   the two decoders with zero precedent in the tree — Upgradeable Loader
   ProgramData and Instructions sysvar — verified against pinned published
