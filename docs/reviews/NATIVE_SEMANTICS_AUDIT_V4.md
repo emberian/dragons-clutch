@@ -181,7 +181,9 @@ Green local checks during the audit:
   refusals, 18 watched accounts, exact reloads green, and corrupted terminal
   expectation red. The gate used only freshly generated disposable test keys
   and genesis/faucet test lamports, contacted only `127.0.0.1`, read no wallet
-  configuration, deployed nowhere, and removed its temporary key files.
+  configuration, and deployed nowhere. Its disposable keys remained only in
+  the isolated temp run directory until the exact ELF and five non-sensitive
+  logs were handed off; the entire temp directory was then deleted.
 
 The earlier red dirty-tree commands and their corrected interpretation are
 recorded above. No network, deployment, push, key, fund, or external-system
