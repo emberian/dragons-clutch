@@ -6,15 +6,15 @@ named checks *did*. Its purpose is narrow and worth stating twice: it turns
 "the baseline is intact" into a claim a machine can re-derive and contradict.
 
 It is **not** a release manifest. It publishes nothing, signs nothing, tags
-nothing, and attests no proof content. `CODEX_HANDOFF.md` §7 P0-1 remains open
-after this file lands; this is groundwork under that blocker, not its closure.
+nothing, and does not turn any named check into a release, deployment, security,
+legal, or whole-system verification conclusion. This is evidence bookkeeping
+under the current truth boundary, not closure of any release blocker.
 
 Status: **IMPLEMENTED** (source exists locally, the named offline checks record
 their own outcomes). This includes the current low-cost host-model, research,
 and Glass gates. It does not promote any of those results into runtime,
-deployment, or proof evidence. Everything the manifest describes about *proofs*
-remains **BLOCKER** per §7 P0-2, and everything it describes about *deployment*
-remains **BLOCKER** per §7 P0-6.
+deployment, or system-proof evidence. Individual proof/model lanes retain their
+own narrow labels and explicit boundaries; deployment remains a blocker.
 
 ## Usage
 
@@ -24,9 +24,9 @@ scripts/baseline_manifest.py emit
 
 # The full record: also execute every declared gate and store exit codes plus
 # normalized key output lines. This is intentionally not a presubmit: a
-# cache-cold run can take tens of minutes because it includes the low-cost
-# research/model/frontend inventory, two fresh SBF ELF builds, the loopback
-# lifecycle, and the isolated Token-2022 bank suite.
+# cache-cold run can take tens of minutes because it includes host research,
+# Lean/Verus lanes, two profiles rebuilt twice by bringup, and three local SBF
+# bank/validator lanes (default SVM, explicit mock SVM, and loopback lifecycle).
 scripts/baseline_manifest.py emit --run-gates
 
 # A labelled mid-flight snapshot from a dirty tree. Never a baseline.
@@ -42,6 +42,11 @@ root; `--gate-timeout` is 1800 seconds per gate. Standard library only, no
 network, no writes outside the manifest path (gates themselves write to their
 own `target/` directories and to `mktemp` scratch, exactly as they do when run
 by hand).
+
+`MANIFEST.baseline.json` remains a checked historical **schema-v1** artifact.
+The v2 generator intentionally rejects it under `check` until a later clean-tree
+v2 emission is explicitly performed and committed. Do not edit that historical
+artifact merely to make this source documentation or generator pass.
 
 Exit codes:
 
@@ -101,15 +106,15 @@ about *now*, and re-emit on a clean tree before drawing conclusions.
 | `baseline.content_identity` | canonical SHA-256 over every tracked working-tree entry except the manifest itself |
 | `baseline.provenance` | historical emission commit/tree/subject plus remotes and tags; informative, not the drift identity |
 | `baseline.self_reference_policy` | the explicit reason the generated artifact is its only exclusion |
-| `claims` | `verified`/`deployed`/`release` (all `false`), the §1 label vocabulary, and `not_attested` |
-| `gates` | every declared check: id, handoff section, verbatim command, expected disposition, key-line patterns, note |
-| `gate_runs` | with `--run-gates`: per gate exit code, expectation match, normalized key lines, key-line digest, and any `volatile_lines` |
+| `claims` | `verified`/`deployed`/`release` (all `false`), label vocabulary, and `not_attested` |
+| `gates` | every declared check: id, current inventory class, command, expected disposition, key-line patterns, note |
+| `gate_runs` | with `--run-gates`: per gate exit code, expectation match, normalized key lines, and key-line digest |
 | `gate_summary` | totals and the list of gates that contradicted their declaration |
 | `digests` | the artifact ledger: per-entry path, kind, sha256, and the handoff-declared value where one exists |
 | `toolchain` | parsed `versions.env` pins, digests of both pin records, their cross-agreement, and the explicit unpinned list |
 | `unavailable_or_failing_gates` | the honest list, declared and observed |
-| `handoff_digest_disagreements` | ids where the tree disagrees with `CODEX_HANDOFF.md` §6 |
-| `run` | wall-clock timestamps; the **only** nondeterministic fields, ignored by `check` |
+| `handoff_digest_disagreements` | ids where a tree digest disagrees with its named declared authority |
+| `run` | wall-clock timestamps; ignored by `check` |
 
 ### `baseline`: content identity, not a self-defeating HEAD equality
 
@@ -143,36 +148,38 @@ destination is configured; no push, tag, signature, or release is attested.
 
 ### `gates`
 
-Commands are the verbatim `CODEX_HANDOFF.md` §5 forms, with the per-manifest
-loop expanded so each crate's `cargo test`, `cargo clippy`, and `cargo doc`
-carries its own exit code. Each gate is run through `/bin/sh -c` from the
-repository root with `CARGO_NET_OFFLINE=true`, `NO_COLOR=1`, and `LC_ALL=C`.
+Commands are the current repository's documented local forms, with the
+per-manifest loops expanded so each crate's `cargo test`, `cargo clippy`, and
+`cargo doc` carries its own exit code. Each gate is run through `/bin/sh -c`
+from the repository root with `CARGO_NET_OFFLINE=true`, `NO_COLOR=1`, and
+`LC_ALL=C`.
+
+Each command starts in its own process group. A per-gate timeout sends `SIGKILL`
+to that group and waits for it to exit, so a timed-out compiler, validator, or
+helper cannot leak descendants into a later gate.
 
 `section` records where a gate comes from:
 
-- `5` — verbatim from `CODEX_HANDOFF.md` §5;
-- `5-extended` — a check the repository pins elsewhere that §5 omits. Currently
-  one: the coupled golden trace, pinned by
-  `docs/implementation/VERTICAL_MODEL.md`;
-- `post-5` — benchmark harness and ABI checks added after the handoff list;
-- `post-5-research` — documented, low-cost local research/model/frontend checks
-  added after the handoff list. Their notes retain each surface's model or
-  host-only boundary; they are not substitute SBF or proof gates;
-- `post-5-runtime` — the full loopback SBF differential/lifecycle gate and the
-  isolated Agave/Token-2022 program-test gate;
-- `5-expected-unavailable` — the two proof gates §5 lists as expected failures.
+- `current-baseline` — maintained core offline checks;
+- `documented-extension` — a separately documented current surface, presently
+  the coupled vertical-model golden trace;
+- `current-benchmark` — checked benchmark-harness and ABI checks;
+- `current-research` — documented bounded host research/model/frontend checks;
+- `current-runtime` — the loopback bringup plus default and explicitly
+  non-production mock local SVM suites; and
+- `current-proof-boundary` — Lean/Verus/Rocq commands whose proof content and
+  boundaries are recorded explicitly rather than being inflated into a generic
+  “verified” label.
 
 `expected.mode` is the reviewed disposition, not a wish:
 
 - `zero` — the gate must exit 0;
-- `nonzero` — the gate is **expected to fail**, with the reason recorded inline.
-  `toolchain/scripts/run_verus.sh` is the only one: the pinned Verus release
-  rejects the pinned probe source (`verus_builtin` crate not imported). Making it
-  pass requires editing the probe, which changes the pinned source digest, so a
-  recorded failure is the correct state and a green gate here would be the
-  defect. The separately isolated Verus batch shadow is still in flight and is
-  deliberately neither a declared gate nor proof evidence until its source and
-  reproduction command are committed;
+- `exact` — one non-zero tool disposition is the only accepted result. The root
+  `toolchain/scripts/run_verus.sh` probe must return **exit 1**, the pinned
+  Verus proof-status failure for the digest-pinned source, and print its
+  reviewed `verus_builtin crate was not imported` diagnostic. Its setup
+  refusals are deliberately rejected: exit 2 means missing tool, 3 means an
+  off-pin tool/frontend, and 4 means source-digest drift;
 - `either` — `rocq/check.sh`, accepting exit 0 (the `.v` file elaborates) or
   exit 2 (no `rocq`/`coqc` on `PATH`). Both carry `proof_content: "none"`:
   `ClutchKernel.v` contains zero theorems, only `Definition ... : Prop`
@@ -182,35 +189,39 @@ repository root with `CARGO_NET_OFFLINE=true`, `NO_COLOR=1`, and `LC_ALL=C`.
 `key_patterns` are the regexes whose matching output lines are stored. Lines are
 normalized to strip elapsed times (`; finished in 0.03s`, `Ran 45 tests in
 0.12s`) so that a re-run on the same tree produces the same `key_lines_sha256`.
-For lint gates the clean state is *no* matched lines. Raw output is never
-stored: it contains absolute temporary paths and timings, and storing it would
-make the manifest neither deterministic nor reviewable.
+For lint and doc gates the clean state is *no* matched lines. Cargo's
+`Documenting ...` progress is intentionally excluded because target paths and
+cold/warm cache progress are nonsemantic. Raw output, byte counts, and failure
+tails are never stored: they contain temporary paths, timing, and cache noise.
 
-A gate may additionally declare `volatile_patterns`: output worth recording as
-evidence that is genuinely not stable across runs. Those lines land in
-`volatile_lines`, stay out of `key_lines_sha256`, and are never compared by
-`check`, with the reason stored inline. There is currently one, and it is worth
-knowing about: `run_lab.sh` prints `host_rlib_sha256`, which changes every run
-because the host probe is built into a fresh `mktemp` target directory whose
-path is embedded in the artifact. `run_lab.sh` never rebuilds the host side, so
-it measures no host reproducibility and `TOOLCHAIN_SPIKE.md` claims none. Only
-`sbf_rlib_sha256` is measured reproducible, and only by a single same-machine
-rebuild.
+A gate may additionally declare `volatile_patterns` and a reason. Those lines
+are deliberately excluded from the run record, not merely from its digest. The
+current example is `run_lab.sh`'s `host_rlib_sha256`: it changes because the host
+probe is built in a fresh `mktemp` target directory whose path is embedded in
+the artifact. `run_lab.sh` measures no host reproducibility; only
+`sbf_rlib_sha256` is a same-machine two-build comparison. Excluding the volatile
+host hash keeps cold/warm and cross-path manifest records byte-stable.
 
-The two runtime gates have intentionally different coverage:
+The three runtime gates have intentionally different coverage:
 
-- `sbf.runtime_bringup` builds the deployable ELF twice into fresh targets,
-  requires byte identity, launches a new loopback `solana-test-validator`, waits
-  for a transaction-level program readiness probe, runs every implemented
-  instruction-family differential and refusal, proves the differential can be
-  made red, then executes the ordered lifecycle and its terminal accounting
-  identity. Its stable evidence lines include measured compute units and the ELF
-  digest.
-- `sbf.token2022_program_test` executes that program form and the real
+- `sbf.runtime_bringup` builds both the default empty-production-source-registry
+  ELF and the distinct explicitly non-production mock-source ELF twice into
+  fresh targets, requiring per-profile byte identity. It then launches a new
+  loopback `solana-test-validator`, waits for a transaction-level program
+  readiness probe, runs the differential/refusal matrix and ordered lifecycle.
+  Its stable evidence records `default_sbf_elf_sha256`,
+  `non_production_mock_sbf_elf_sha256`, `default_reproducibility`, and
+  `mock_reproducibility`; these are observed fresh-run identities, not a release
+  pin or independent build result.
+- `sbf.token2022_program_test` executes the default program form and the real
   Token-2022 binary in an in-process Agave bank. It adds extension-policy cases,
   mandatory token/collateral plane tests, out-of-band reconciliation failure,
   and the E5 post-CPI atomic-rollback case. These are not redundant with the
   loopback differential.
+- `sbf.token2022_program_test_non_production_mock` separately builds and runs
+  the mock-source ELF in that same local bank. It exists so a successful mock
+  source route cannot be confused with the default ELF's fail-closed production
+  provider behavior.
 
 The present runtime inventory also needs careful reading. The sealed R1 profile
 now admits the measured local `ResolutionWork` Begin/Fold/Finalize/Abort routes:
@@ -242,7 +253,8 @@ Three kinds:
 - `file-sha256` — the sha256 of a file's bytes. Covers the static client bundle,
   the E0 probe source and its lock, both vertical-model golden traces, the
   collateral-profile vector files, the benchmark goldens and their checksum
-  file, the economics fixtures, every `Cargo.lock` named by §5, both toolchain
+  file, the economics fixtures, selected core and newly added gate `Cargo.lock`
+  files, both toolchain
   pin records, and the Rocq/Verus shadow sources.
 - `derived-sha256` — a declared canonicalization rather than raw bytes.
   Currently one: `static_client.canonical_terms`, the sha256 of the
@@ -251,13 +263,16 @@ Three kinds:
   implementation can reproduce it without reading the script;
   `apps/static-client/test/smoke.mjs` enforces the same rule from the other side.
 - `declared-build-output` — a named identity that is *not* a repository file.
-  There are two: the E0 SBF `rlib` produced in `run_lab.sh` scratch, and the
-  deployable `clutch_sbf.so` built twice in `run_bringup.sh` scratch. With
-  `--run-gates`, each `observed_sha256` is lifted from the producing gate's
-  stable output and compared with the documented value. Both are same-machine
-  comparisons, not independent reproducible-build closure.
+  There are three kinds of entry: the E0 SBF `rlib` with its reviewed literal
+  pin, plus separately named default and explicitly non-production mock
+  `clutch_sbf.so` profiles. With `--run-gates`, each `observed_sha256` is lifted
+  from stable output. The two current SBF profile identities are intentionally
+  observed rather than compared to an invented external pin; the sealed R1
+  default artifact/log identity is checked separately by
+  `python.liveness_policy_profile_current_seal`. All are same-machine evidence,
+  not independent reproducible-build closure.
 
-Where §6 (or a named implementation note) declares a digest, the entry carries
+Where a named current source or implementation note declares a digest, the entry carries
 `handoff_declared_sha256`, `matches_handoff`, and `handoff_reference`. Ids that
 disagree are collected into the top-level `handoff_digest_disagreements`. This
 is deliberately a *finding*, not an error: the correct response is to fix
@@ -278,8 +293,9 @@ records cannot silently diverge.
 `unpinned` restates, in the manifest itself, what `PINNED_PROOF_TOOLS.md`
 declares is *not* pinned: the `vstd` revision (transitive via `VERUS_COMMIT`
 only), Homebrew formula provenance, the Rocq dependency closure, the ambient
-`librustc_driver` dylib, and — the important one — any correspondence between
-the Verus/Rocq shadows and `crates/clutch-*`.
+`librustc_driver` dylib, and — the important one — any whole-system
+correspondence between proof/model lanes and `crates/clutch-*` outside the
+explicitly pinned transfer helper.
 
 ## What this manifest does NOT attest
 
@@ -292,19 +308,22 @@ Verbatim from the manifest's own `claims.not_attested`:
   transparency log entry. A sha256 in this file proves only that the emitting
   machine saw those bytes.
 - **No independent reproducible-build closure.** `run_lab.sh` rebuilds one narrow
-  SBF `rlib` twice, and `run_bringup.sh` builds the deployable program ELF twice
-  into fresh target directories. Both comparisons occur on one machine with the
-  installed toolchain. There is no independent rebuilder, toolchain bootstrap,
-  or rebuild from pinned dependency sources.
-- **No formal proof content.** The Rocq gate typechecks `Definition`s (zero
-  theorems), while the root Verus probe is an expected failure. The isolated
-  Verus batch shadow is still in flight, is deliberately absent from this
-  manifest, and is not a claim until its source and reproduction gate are
-  committed. `check` will flag a silent root-gate disposition change as drift.
-- **No non-local runtime evidence.** The two SBF gates record a loopback validator
-  differential/lifecycle and an in-process Agave/Token-2022 bank suite. They do
-  not establish public-cluster behavior, deployment, validator diversity, an
-  independently rebuilt ELF, or cross-runtime vector closure.
+  SBF `rlib` twice, and `run_bringup.sh` builds each default and non-production
+  mock ELF twice into fresh target directories. All comparisons occur on one
+  machine with the installed toolchain. There is no independent rebuilder,
+  toolchain bootstrap, or rebuild from pinned dependency sources.
+- **No whole-system formal proof.** The Rocq gate typechecks `Definition`s
+  (zero theorems). The root Verus probe accepts only its exact pinned proof-tool
+  exit 1; missing, off-pin, and source-drift exits are rejected. The committed
+  batch lane checks a scalar mathematical shadow; the transfer lane checks a
+  narrow production arithmetic helper; and the B-spline lane checks finite
+  Lean/Rust rows. None proves a whole kernel, accounts, CPI, SBF, or runtime
+  refinement. `check` flags any disposition or source-pin drift.
+- **No non-local runtime evidence.** The three local SBF gates record a loopback
+  validator differential/lifecycle plus default and explicit mock in-process
+  Agave/Token-2022 bank suites. They do not establish public-cluster behavior,
+  deployment, validator diversity, an independently rebuilt ELF, or cross-runtime
+  vector closure.
 - **Measured ResolutionWork is not global liveness.** The sealed local R1
   artifact and its committed logs admit the bounded ResolutionWork route under
   its frozen policy. They do not prove transaction inclusion or emit a complete
@@ -339,7 +358,7 @@ by inference from this document.
 2. **CI-independent re-derivation.** A second machine runs `check --run-gates`
    against the committed manifest. Until that happens, "deterministic" is a
    property of one machine.
-3. **Remote and signed tag.** Requires explicit user direction (§7 P0-1). A
+3. **Remote and signed tag.** Requires explicit user direction. A
    detached signature is a sibling artifact, never a field the generator writes
    about itself. Historical remote/tag observations live under
    `baseline.provenance`; a real release record must separately bind the tag and
@@ -349,13 +368,14 @@ by inference from this document.
 5. **Reproducible-build closure.** An independent rebuilder reproducing the SBF
    ELF, not one machine rebuilding one `rlib` twice. Only then may
    `not_attested` lose that line.
-6. **Proof-result records.** When a pinned tool checks a named non-vacuous
-   theorem, its record joins the manifest in the
-   [`docs/EVIDENCE_MATRIX.md`](../EVIDENCE_MATRIX.md) §3 artifact-ledger shape
+6. **Proof-result records.** The current manifest records bounded gate
+   dispositions for the scalar batch shadow, narrow transfer helper, and finite
+   B-spline bridge. A future wider theorem or refinement record must join the
+   manifest in the
+   [`docs/EVIDENCE_MATRIX.md`](../EVIDENCE_MATRIX.md)'s artifact-ledger shape
    (property id, statement digest, tool version and commit, assumption manifest,
-   reproduction command, unclosed boundaries). The current `digests` block is
-   the source/lock half of that ledger; the proof half is empty and must stay
-   visibly empty.
+   reproduction command, unclosed boundaries). A gate result is still not an
+   account/SBF/runtime or whole-system proof claim.
 7. **Deployment identity.** Program id, program-data account, upgrade authority,
    and ELF digest — only under a separately authorized deployment, and never
    before Gate L0 closes.
@@ -366,14 +386,17 @@ may not flip them to obtain a green result.
 
 ## Runtime-gate boundary
 
-The gate inventory currently has 70 declarations: the `clutch-sbf` cargo gates,
-documented low-cost research/model/frontend checks, post-handoff benchmark/ABI
-checks, and both real SBF runtime gates. A full `--run-gates` baseline is the
-evidence path, not a fast presubmit; on a cache-cold host it can take tens of
-minutes. The added research gates cover current committed surfaces such as
-direct-selection authority, the shape compiler, source profile, ResolutionWork
-model, sealed liveness-profile checks, and the 32-check offline Glass client.
-The liveness current-profile gate rehashes committed evidence and recompiles an
-archived host probe; it adds no fresh SBF build. A
-declaration-only `emit` remains useful for inspecting structure but sets
-`claims.reviewed_offline_checks_recorded` to `false` and records no run outcomes.
+The inventory has 93 declarations; the generator records the same count in
+`gate_summary.total` when it runs. It covers core crates including the
+B-spline, occupation accumulator, and liveness kernel; documented model and
+frontend checks; the vector executor and invariant campaign; Lean and bounded
+refinement lanes; the 16-test terminal-lifecycle V2 model; and the three local
+runtime lanes. A full `--run-gates` baseline is evidence collection, not a fast
+presubmit. A cache-cold host can take tens of minutes, dominated by four fresh
+SBF builds in bringup (two default, two mock) plus one fresh SBF build for each
+of the default and explicit mock SVM gates. No runtime command contacts a
+public RPC, signs, deploys, or releases anything. The liveness current-profile
+gate rehashes sealed artifact/log evidence and recompiles an archived host probe;
+it adds no fresh SBF build. A declaration-only `emit` remains useful for
+inspecting structure but sets `claims.reviewed_offline_checks_recorded` to
+`false` and records no run outcomes.

@@ -2,9 +2,10 @@
 """Generate and check the Dragon's Clutch baseline evidence manifest.
 
 This tool makes "the reviewed offline baseline is intact" a *checkable* claim.
-It does not publish, tag, sign, deploy, or release anything, and it attests no
-proof content whatsoever. See ``docs/implementation/BASELINE_MANIFEST.md`` for
-the schema, the explicit non-attestations, and the promotion path.
+It does not publish, tag, sign, deploy, or release anything, and it promotes no
+named model/proof lane into a whole-system verification claim. See
+``docs/implementation/BASELINE_MANIFEST.md`` for the schema, the explicit
+non-attestations, and the promotion path.
 
 Standard library only. Deterministic: for a fixed working tree and a fixed set
 of gate outcomes the emitted JSON is byte-identical, except for the fields under
@@ -35,6 +36,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -54,8 +56,8 @@ EXIT_ENVIRONMENT = 3
 
 
 # --------------------------------------------------------------------------
-# Claim vocabulary (CODEX_HANDOFF.md section 1). Copied verbatim in meaning so
-# that a consumer of the manifest never has to guess what a label licenses.
+# Claim vocabulary, kept alongside the current repository truth so a consumer
+# of the manifest never has to guess what a label licenses.
 # --------------------------------------------------------------------------
 
 LABEL_VOCABULARY = {
@@ -83,13 +85,16 @@ NOT_ATTESTED = [
     "no release: nothing here publishes, tags, pushes, or authorizes a release",
     "no signature chain: no signed tag, no signed artifact, no key material, no "
     "transparency log entry",
-    "no independent reproducible-build closure: the E0 rlib and deployable SBF "
-    "ELF each have a same-machine two-build comparison, but there is no "
+    "no independent reproducible-build closure: the E0 rlib and each default/"
+    "non-production-mock deployable SBF ELF have same-machine two-build "
+    "comparisons, but there is no "
     "independent rebuilder, toolchain bootstrap, or dependency-source rebuild",
-    "no formal proof content: the Rocq gate typechecks Definitions (zero "
-    "theorems) and the root Verus probe is an expected failure; the isolated "
-    "Verus batch shadow is in flight and is deliberately absent until its source "
-    "and reproduction gate are committed",
+    "no whole-system formal proof: the Rocq gate typechecks Definitions (zero "
+    "theorems), the root Verus probe has one exact expected tool failure, the "
+    "batch lane checks a scalar mathematical shadow, the transfer lane checks a "
+    "narrow production arithmetic subset, and the B-spline lane is finite Lean/"
+    "Rust agreement; none closes whole-kernel, account, CPI, SBF, or runtime "
+    "refinement",
     "SBF evidence is local only: the manifest gates a loopback test-validator "
     "differential/lifecycle walk and an in-process Agave bank with Token-2022; "
     "neither is public-cluster, deployment, independent-rebuild, validator-"
@@ -116,9 +121,9 @@ NOT_ATTESTED = [
 
 # --------------------------------------------------------------------------
 # Digest inventory. Every entry is derived from a repository path or from a
-# declared canonicalization of one. `handoff` records the value CODEX_HANDOFF.md
-# section 6 (or a named implementation note) currently prints, so that drift
-# between the tree and the prose is itself detectable.
+# declared canonicalization of one. `handoff` is retained as the schema field
+# for a reviewed literal declared by the named current authority, so drift
+# between the tree and that authority is itself detectable.
 # --------------------------------------------------------------------------
 
 FILE_DIGESTS: list[tuple[str, str, str | None, str | None]] = [
@@ -139,8 +144,8 @@ FILE_DIGESTS: list[tuple[str, str, str | None, str | None]] = [
         "toolchain.e0_probe_source",
         "toolchain/probes/no_std_core/src/lib.rs",
         "10b2087683d3c2cb423768eb9c612c00ea929b171835c15d3d16792d6b8b19ac",
-        "CODEX_HANDOFF.md section 6 (E0 probe source); "
-        "toolchain/scripts/run_verus.sh SOURCE_SHA256_PIN",
+        "toolchain/scripts/run_verus.sh SOURCE_SHA256_PIN; "
+        "toolchain/PINNED_PROOF_TOOLS.md",
     ),
     ("toolchain.e0_probe_manifest", "toolchain/probes/no_std_core/Cargo.toml", None, None),
     ("toolchain.e0_probe_lock", "toolchain/probes/no_std_core/Cargo.lock", None, None),
@@ -149,20 +154,19 @@ FILE_DIGESTS: list[tuple[str, str, str | None, str | None]] = [
         "vertical_model.golden_basic_trace",
         "research/vertical-model/golden/basic.trace",
         "ab808dd308e3bdce0fa8cc2d3b9b4a14e87dbd1b41ae7143e897c53f7f3f1639",
-        "CODEX_HANDOFF.md section 6 (vertical-model golden trace)",
+        "research/vertical-model/golden/basic.trace",
     ),
     (
         "vertical_model.golden_coupled_trace",
         "research/vertical-model/golden/coupled.trace",
         None,
-        "docs/implementation/VERTICAL_MODEL.md (second golden trace; not named "
-        "in CODEX_HANDOFF.md section 6)",
+        "docs/implementation/VERTICAL_MODEL.md (second golden trace)",
     ),
     (
         "collateral_profiles.vectors",
         "research/collateral-profiles/vectors.json",
         "5bcf3a6117c4e411a5b9b339093eaf3dcd9ca1eee0bb7a2b6814a42f46639e48",
-        "CODEX_HANDOFF.md section 6 (collateral-profile vectors)",
+        "research/collateral-profiles/vectors.json",
     ),
     (
         "collateral_profiles.identity_vectors",
@@ -174,8 +178,7 @@ FILE_DIGESTS: list[tuple[str, str, str | None, str | None]] = [
         "benchmarks.golden_checksums",
         "benchmarks/golden/checksums.sha256",
         None,
-        "CODEX_HANDOFF.md section 6 points at this file rather than inlining "
-        "the benchmark digests",
+        "benchmarks/golden/checksums.sha256",
     ),
     ("benchmarks.golden_summary", "benchmarks/golden/SUMMARY.md", None, None),
     ("benchmarks.golden_matrix_csv", "benchmarks/golden/matrix.csv", None, None),
@@ -187,9 +190,36 @@ FILE_DIGESTS: list[tuple[str, str, str | None, str | None]] = [
     ("locks.clutch_kernel", "crates/clutch-kernel/Cargo.lock", None, None),
     ("locks.clutch_accumulator", "crates/clutch-accumulator/Cargo.lock", None, None),
     ("locks.clutch_batch", "crates/clutch-batch/Cargo.lock", None, None),
+    ("locks.clutch_bspline", "crates/clutch-bspline/Cargo.lock", None, None),
+    (
+        "locks.clutch_bspline_accumulator",
+        "crates/clutch-bspline-accumulator/Cargo.lock",
+        None,
+        None,
+    ),
+    ("locks.clutch_liveness", "crates/clutch-liveness/Cargo.lock", None, None),
     ("locks.solana_layout", "programs/solana-layout/Cargo.lock", None, None),
     ("locks.solana_reference", "programs/solana-reference/Cargo.lock", None, None),
     ("locks.vertical_model", "research/vertical-model/Cargo.lock", None, None),
+    (
+        "locks.liveness_policy_profile",
+        "research/liveness-policy-profile/Cargo.lock",
+        None,
+        None,
+    ),
+    (
+        "locks.terminal_lifecycle_v2",
+        "research/terminal-lifecycle-v2/Cargo.lock",
+        None,
+        None,
+    ),
+    ("locks.vector_check", "tools/vector-check/Cargo.lock", None, None),
+    (
+        "locks.invariant_campaign",
+        "tools/invariant-campaign/Cargo.lock",
+        None,
+        None,
+    ),
     ("toolchain.versions_env", "toolchain/versions.env", None, None),
     ("toolchain.pinned_proof_tools", "toolchain/PINNED_PROOF_TOOLS.md", None, None),
     ("proof_shadow.rocq_spec", "rocq/ClutchKernel.v", None, None),
@@ -210,9 +240,10 @@ DERIVED_DIGESTS = [
             "with every object's keys sorted recursively and no whitespace "
             "(separators ',' and ':'), non-ASCII left unescaped"
         ),
-        "handoff": "a21f6cbb1ab3b06afc7c8625f3388835843edb17c48173e8fb57df8b7e0dd8e8",
+        "handoff": "62b06b2107636686648507e4f9ecd8a4d90733dcebf81177d4a63b25bc698d02",
         "handoff_reference": (
-            "CODEX_HANDOFF.md section 6 (static canonical terms); "
+            "apps/static-client/terms.json digest; "
+            "apps/static-client/manifest.json canonical-term identities; "
             "docs/implementation/STATIC_CLIENT.md; enforced by "
             "apps/static-client/test/smoke.mjs"
         ),
@@ -226,7 +257,7 @@ DECLARED_BUILD_OUTPUTS = [
         "id": "toolchain.e0_sbf_rlib",
         "handoff": "d444c0ac118de1cb24d9fe6b509df7beafc1c0f1a8c2828b24e26b170da0ad1c",
         "handoff_reference": (
-            "CODEX_HANDOFF.md section 6 (reproducible E0 SBF rlib); "
+            "toolchain/scripts/run_lab.sh expected SBF rlib identity; "
             "docs/implementation/TOOLCHAIN_SPIKE.md"
         ),
         "produced_by_gate": "toolchain.run_lab",
@@ -237,42 +268,67 @@ DECLARED_BUILD_OUTPUTS = [
         ),
     },
     {
-        "id": "clutch_sbf.program_elf",
-        "handoff": "59c48c482831626ae9d7cb908f4de0e3f93b1572cdd82105c61f2f87bdaad25f",
+        "id": "clutch_sbf.default_program_elf",
+        "handoff": None,
         "handoff_reference": (
-            "docs/implementation/SBF_BRINGUP.md and CLAUDE_HANDOFF.md "
-            "(same-machine reproducible deployable SBF ELF)"
+            "programs/clutch-sbf/scripts/run_bringup.sh default profile; "
+            "fresh same-machine identity observed only when its gate runs"
         ),
         "produced_by_gate": "sbf.runtime_bringup",
-        "produced_by_output_key": "sbf_elf_sha256",
+        "produced_by_output_key": "default_sbf_elf_sha256",
         "note": (
-            "deployable program ELF built twice into fresh target directories "
-            "on one machine; byte identity is not independent reproducible-build "
-            "closure and says nothing about deployment"
+            "default empty-production-source-registry ELF built twice into fresh "
+            "target directories on one machine; byte identity is not independent "
+            "reproducible-build closure and says nothing about deployment"
+        ),
+    },
+    {
+        "id": "clutch_sbf.non_production_mock_program_elf",
+        "handoff": None,
+        "handoff_reference": (
+            "programs/clutch-sbf/scripts/run_bringup.sh non-production mock "
+            "profile; fresh same-machine identity observed only when its gate runs"
+        ),
+        "produced_by_gate": "sbf.runtime_bringup",
+        "produced_by_output_key": "non_production_mock_sbf_elf_sha256",
+        "note": (
+            "explicit non-production mock-source ELF built twice into fresh target "
+            "directories on one machine; it is local test evidence only and is "
+            "not a production-provider, deployment, or release identity"
         ),
     },
 ]
 
 
 # --------------------------------------------------------------------------
-# Gate inventory. Commands are the verbatim CODEX_HANDOFF.md section 5 forms
-# (loop expanded per manifest so each gate carries its own exit code), run
-# through /bin/sh from the repository root.
+# Gate inventory. Commands are current documented local forms (loop expanded
+# per manifest so each gate carries its own exit code), run through /bin/sh
+# from the repository root.
 # --------------------------------------------------------------------------
 
 CARGO_MANIFESTS = [
     ("clutch_kernel", "crates/clutch-kernel/Cargo.toml", True),
     ("clutch_accumulator", "crates/clutch-accumulator/Cargo.toml", True),
     ("clutch_batch", "crates/clutch-batch/Cargo.toml", True),
+    ("clutch_bspline", "crates/clutch-bspline/Cargo.toml", True),
+    (
+        "clutch_bspline_accumulator",
+        "crates/clutch-bspline-accumulator/Cargo.toml",
+        True,
+    ),
+    ("clutch_liveness", "crates/clutch-liveness/Cargo.toml", True),
     ("solana_layout", "programs/solana-layout/Cargo.toml", True),
     ("solana_reference", "programs/solana-reference/Cargo.toml", True),
-    ("vertical_model", "research/vertical-model/Cargo.toml", False),  # no doc gate in section 5
-    ("clutch_sbf", "programs/clutch-sbf/Cargo.toml", True),  # SBF lane (post-section-5; see note)
+    ("vertical_model", "research/vertical-model/Cargo.toml", False),  # no doc surface
+    ("clutch_sbf", "programs/clutch-sbf/Cargo.toml", True),  # host-side crate checks
 ]
 
 TEST_RESULT_PATTERNS = [r"^test result: "]
 CLIPPY_PATTERNS = [r"^error(\[|:)", r"^warning(\[|:)"]
-DOC_PATTERNS = [r"^\s*Documenting ", r"^error(\[|:)", r"^warning(\[|:)"]
+# Cargo's `Documenting ...` progress contains target paths and differs between
+# a cold and warm cache. It is not semantic evidence and must never enter a
+# stable record. Clean doc builds have no captured key lines.
+DOC_PATTERNS = [r"^error(\[|:)", r"^warning(\[|:)"]
 UNITTEST_PATTERNS = [r"^Ran \d+ tests?$", r"^(OK|FAILED)\b", r"^(ERROR|FAIL): "]
 
 
@@ -283,7 +339,7 @@ def build_gates() -> list[dict[str, Any]]:
         gates.append(
             {
                 "id": f"cargo_test.{name}",
-                "section": "5",
+                "section": "current-baseline",
                 "command": f'cargo test --manifest-path "{manifest}" --offline --locked',
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": TEST_RESULT_PATTERNS,
@@ -294,7 +350,7 @@ def build_gates() -> list[dict[str, Any]]:
         gates.append(
             {
                 "id": f"cargo_clippy.{name}",
-                "section": "5",
+                "section": "current-baseline",
                 "command": (
                     f'cargo clippy --manifest-path "{manifest}" --offline --locked '
                     "--all-targets -- -D warnings"
@@ -310,7 +366,7 @@ def build_gates() -> list[dict[str, Any]]:
         gates.append(
             {
                 "id": f"cargo_doc.{name}",
-                "section": "5",
+                "section": "current-baseline",
                 "command": (
                     f"cargo doc --manifest-path {manifest} --offline --locked --no-deps"
                 ),
@@ -324,7 +380,7 @@ def build_gates() -> list[dict[str, Any]]:
         [
             {
                 "id": "vertical_model.golden_basic_trace",
-                "section": "5",
+                "section": "current-baseline",
                 "command": (
                     "cargo run --quiet --manifest-path research/vertical-model/Cargo.toml "
                     "--offline --locked | cmp - research/vertical-model/golden/basic.trace"
@@ -335,7 +391,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "vertical_model.golden_coupled_trace",
-                "section": "5-extended",
+                "section": "documented-extension",
                 "command": (
                     "cargo run --quiet --manifest-path research/vertical-model/Cargo.toml "
                     "--offline --locked -- coupled "
@@ -345,14 +401,13 @@ def build_gates() -> list[dict[str, Any]]:
                 "key_patterns": [r"^cmp: ", r" differ"],
                 "note": (
                     "the coupled-relation trace is pinned by "
-                    "docs/implementation/VERTICAL_MODEL.md but is not listed in "
-                    "CODEX_HANDOFF.md section 5; added here so the second golden "
-                    "artifact is covered"
+                    "docs/implementation/VERTICAL_MODEL.md; it is separately "
+                    "declared so the second golden artifact is covered"
                 ),
             },
             {
                 "id": "python.economics_unittest",
-                "section": "5",
+                "section": "current-baseline",
                 "command": "python3 -m unittest discover -s research/economics -p 'test_*.py' -v",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": UNITTEST_PATTERNS,
@@ -360,7 +415,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "python.collateral_profiles_unittest",
-                "section": "5",
+                "section": "current-baseline",
                 "command": (
                     "python3 -m unittest discover -s research/collateral-profiles "
                     "-p 'test_*.py' -v"
@@ -371,7 +426,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "python.collateral_profiles_lab",
-                "section": "5",
+                "section": "current-baseline",
                 "command": "python3 research/collateral-profiles/run_lab.py",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [
@@ -387,7 +442,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "benchmarks.cost_lab_check",
-                "section": "5",
+                "section": "current-baseline",
                 "command": "python3 benchmarks/cost_lab.py check",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [r"^check passed: "],
@@ -395,7 +450,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "benchmarks.unittest",
-                "section": "post-5",
+                "section": "current-benchmark",
                 "command": "python3 -m unittest discover -s benchmarks/tests",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [r"^Ran \d+ tests", r"^OK$", r"^FAILED"],
@@ -403,7 +458,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "benchmarks.abi_audit",
-                "section": "post-5",
+                "section": "current-benchmark",
                 "command": "python3 benchmarks/cost_lab.py abi-audit",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [r"drift", r"no drift", r"^abi-audit"],
@@ -414,7 +469,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "benchmarks.golden_checksums",
-                "section": "5",
+                "section": "current-baseline",
                 "command": "(cd benchmarks/golden && shasum -a 256 -c checksums.sha256)",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [r": OK$", r": FAILED"],
@@ -422,7 +477,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_test.batch_policy_identity",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo test --manifest-path research/batch-policy-identity/Cargo.toml "
                     "--locked --offline --all-targets"
@@ -436,7 +491,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_clippy.batch_policy_identity",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo clippy --manifest-path research/batch-policy-identity/Cargo.toml "
                     "--locked --offline --all-targets -- -D warnings"
@@ -447,7 +502,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_test.bspline_shape_compiler",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo test --manifest-path research/bspline-shape-compiler/Cargo.toml "
                     "--offline --locked"
@@ -461,7 +516,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_clippy.bspline_shape_compiler",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo clippy --manifest-path research/bspline-shape-compiler/Cargo.toml "
                     "--all-targets --offline --locked -- -D warnings"
@@ -472,7 +527,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_test.claim_algebra_model",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo test --manifest-path research/claim-algebra-model/Cargo.toml "
                     "--offline --locked"
@@ -483,7 +538,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_clippy.claim_algebra_model",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo clippy --manifest-path research/claim-algebra-model/Cargo.toml "
                     "--offline --locked --all-targets -- -D warnings"
@@ -494,7 +549,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_doc.claim_algebra_model",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path "
                     "research/claim-algebra-model/Cargo.toml --offline --locked --no-deps"
@@ -505,7 +560,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_test.claim_neutral_resolution",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo test --manifest-path research/claim-neutral-resolution/Cargo.toml "
                     "--offline --locked"
@@ -516,7 +571,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_test_release.claim_neutral_resolution",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo test --release --manifest-path "
                     "research/claim-neutral-resolution/Cargo.toml --offline --locked"
@@ -527,7 +582,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_clippy.claim_neutral_resolution",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo clippy --manifest-path research/claim-neutral-resolution/Cargo.toml "
                     "--offline --locked --all-targets --all-features -- -D warnings"
@@ -538,7 +593,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_doc.claim_neutral_resolution",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo doc --manifest-path research/claim-neutral-resolution/Cargo.toml "
                     "--offline --locked --no-deps"
@@ -549,7 +604,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_test.fractional_redemption",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo test --manifest-path research/fractional-redemption/Cargo.toml "
                     "--offline --locked"
@@ -560,7 +615,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_clippy.fractional_redemption",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo clippy --manifest-path research/fractional-redemption/Cargo.toml "
                     "--offline --locked --all-targets -- -D warnings"
@@ -571,7 +626,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_test.liquidity_policy_model",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo test --manifest-path research/liquidity-policy-model/Cargo.toml "
                     "--offline --locked"
@@ -582,7 +637,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_clippy.liquidity_policy_model",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo clippy --manifest-path research/liquidity-policy-model/Cargo.toml "
                     "--offline --locked --all-targets -- -D warnings"
@@ -593,7 +648,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_doc.liquidity_policy_model",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path "
                     "research/liquidity-policy-model/Cargo.toml --offline --locked --no-deps"
@@ -604,7 +659,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "python.liveness_policy_profile_unittest",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "python3 -m unittest discover -s research/liveness-policy-profile "
                     "-p 'test_*.py'"
@@ -618,7 +673,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "python.liveness_policy_profile_current_seal",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "python3 research/liveness-policy-profile/policy.py --check-current"
                 ),
@@ -634,7 +689,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_test.liveness_policy_profile",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo test --offline --locked --manifest-path "
                     "research/liveness-policy-profile/Cargo.toml"
@@ -645,7 +700,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_clippy.liveness_policy_profile",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo clippy --offline --locked --manifest-path "
                     "research/liveness-policy-profile/Cargo.toml --all-targets -- -D warnings"
@@ -656,7 +711,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "lp_mapping_probe.release_run",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "(cd research/lp-mapping-probe && cargo run --release --offline --locked)"
                 ),
@@ -666,7 +721,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_test.resolution_work_v1",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo test --manifest-path research/resolution-work-v1/Cargo.toml "
                     "--offline --locked"
@@ -680,7 +735,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_test_release.resolution_work_v1",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo test --release --manifest-path research/resolution-work-v1/Cargo.toml "
                     "--offline --locked"
@@ -691,7 +746,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_clippy.resolution_work_v1",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo clippy --manifest-path research/resolution-work-v1/Cargo.toml "
                     "--offline --locked --all-targets -- -D warnings"
@@ -702,7 +757,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_doc.resolution_work_v1",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo doc --manifest-path research/resolution-work-v1/Cargo.toml "
                     "--offline --locked --no-deps"
@@ -713,7 +768,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_test.source_profile_v1",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo test --manifest-path research/source-profile-v1/Cargo.toml "
                     "--offline --locked"
@@ -727,7 +782,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_clippy.source_profile_v1",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "cargo clippy --manifest-path research/source-profile-v1/Cargo.toml "
                     "--offline --locked --all-targets -- -D warnings"
@@ -738,7 +793,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "cargo_doc.source_profile_v1",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path "
                     "research/source-profile-v1/Cargo.toml --offline --locked --no-deps"
@@ -749,7 +804,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "python.economics_lab",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": "python3 research/economics/run_lab.py",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [r'^  "status": '],
@@ -757,7 +812,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "python.economics_admission_unittest",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "python3 -m unittest discover -s research/economics-admission "
                     "-p 'test_*.py'"
@@ -768,7 +823,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "python.economics_admission_lab",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": "python3 research/economics-admission/run_lab.py",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [r'^  "status": '],
@@ -776,7 +831,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "python.structured_claim_wrapper_unittest",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "python3 -m unittest discover -s research/structured-claim-wrapper "
                     "-p 'test_*.py' -v"
@@ -787,7 +842,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "python.structured_claim_wrapper_lab",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": "python3 research/structured-claim-wrapper/run_lab.py",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [r"^coefficients: ", r"^universal exact redemption lot: "],
@@ -795,7 +850,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "python.bspline_window_semantics_unittest",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": (
                     "python3 -m unittest discover -s research/bspline-window-semantics "
                     "-p 'test_*.py' -v"
@@ -806,20 +861,209 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "python.bspline_window_semantics_compare",
-                "section": "post-5-research",
+                "section": "current-research",
                 "command": "python3 research/bspline-window-semantics/compare.py",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [r"^basis: ", r"^path: ", r"^exact-basis occupation: "],
                 "note": "deterministic comparison for the isolated window-semantics model",
             },
             {
+                "id": "python.clutch_bspline_oracle",
+                "section": "current-research",
+                "command": "python3 crates/clutch-bspline/oracle/check.py",
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [
+                    r"^PASS: [0-9,]+ exact differential cases; seed=[0-9]+; mutants=[0-9]+$",
+                    r"^rounding d=[1-3]: ",
+                    r"^FAIL",
+                ],
+                "note": (
+                    "independent Fraction/Cox-de-Boor differential and mutant "
+                    "campaign for the host-tested point evaluator; not a formal "
+                    "or runtime refinement"
+                ),
+            },
+            {
+                "id": "vector_check.execute",
+                "section": "current-research",
+                "command": (
+                    "cargo run --manifest-path tools/vector-check/Cargo.toml "
+                    "--offline --locked -- --root fixtures/vectors"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [
+                    r"^taxonomy v1 — [0-9]+ codes, digest [0-9a-f]{64}$",
+                    r"^vectors [0-9]+   steps [0-9]+   asserted facts [0-9]+   failures [0-9]+$",
+                    r"^Only `rust-reference` executed\.",
+                    r"^FAIL",
+                ],
+                "note": (
+                    "finite rust-reference execution of the checked vector corpus; "
+                    "the absent Verus/Rocq/Lean/SBF executors remain named blockers"
+                ),
+            },
+            {
+                "id": "cargo_test.vector_check",
+                "section": "current-research",
+                "command": (
+                    "cargo test --manifest-path tools/vector-check/Cargo.toml "
+                    "--offline --locked"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": TEST_RESULT_PATTERNS,
+                "note": "bounded tests for the host-only vector executor",
+            },
+            {
+                "id": "cargo_clippy.vector_check",
+                "section": "current-research",
+                "command": (
+                    "cargo clippy --manifest-path tools/vector-check/Cargo.toml "
+                    "--offline --locked --all-targets -- -D warnings"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": CLIPPY_PATTERNS,
+                "note": "strict lint for the host-only vector executor",
+            },
+            {
+                "id": "invariant_campaign.release_run",
+                "section": "current-research",
+                "command": (
+                    "cargo run --manifest-path tools/invariant-campaign/Cargo.toml "
+                    "--release --offline --locked"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [r"^campaign", r"^transcript", r"^PASS", r"^FAIL"],
+                "note": (
+                    "deterministic host-only adversarial campaign; it does not "
+                    "exercise SVM locking, CPI, token movement, or validators"
+                ),
+            },
+            {
+                "id": "lean.model_build",
+                "section": "current-proof-boundary",
+                "command": "(cd lean && lake build)",
+                "expected": {"mode": "zero", "exit": 0},
+                "proof_content": "proved-model-only",
+                "key_patterns": [r"^Build completed successfully", r"^error:"],
+                "note": (
+                    "Lean model theorem build; its correspondence to Rust, SBF, "
+                    "accounts, and runtime remains explicitly unproved"
+                ),
+            },
+            {
+                "id": "proof.transfer_arithmetic_refinement",
+                "section": "current-proof-boundary",
+                "command": "sh verus/kernel/run_transfer_refinement.sh",
+                "expected": {"mode": "zero", "exit": 0},
+                "proof_content": "checked-rust-subset",
+                "key_patterns": [
+                    r"^verus_version=",
+                    r"^production_source_sha256=",
+                    r"^production_call_site_sha256=",
+                    r"^mutation=.* status=EXPECTED_RED",
+                    r"^status=PASS$",
+                    r"^boundary=",
+                ],
+                "note": (
+                    "pinned Verus checks the exact debit/credit helper with red "
+                    "mutations; accounts, phases, codecs, CPI, SBF, and runtime are "
+                    "outside this narrow result"
+                ),
+            },
+            {
+                "id": "proof.batch_scalar_shadow",
+                "section": "current-proof-boundary",
+                "command": "sh verus/batch/run_batch_proofs.sh",
+                "expected": {"mode": "zero", "exit": 0},
+                "proof_content": "scalar-model-shadow",
+                "key_patterns": [
+                    r"^verus_version=",
+                    r"^proof_source_sha256=",
+                    r"^mutation=.* status=EXPECTED_RED",
+                    r"^status=PASS$",
+                    r"^claim=",
+                    r"^boundary=",
+                    r"^excluded=",
+                ],
+                "note": (
+                    "pinned Verus checks a scalar mathematical batch shadow and four "
+                    "red mutants; digest-pinned human correspondence is not an "
+                    "executable-body or runtime refinement"
+                ),
+            },
+            {
+                "id": "proof.bspline_finite_refinement",
+                "section": "current-proof-boundary",
+                "command": "sh verus/bspline/run_bspline_refinement.sh",
+                "expected": {"mode": "zero", "exit": 0},
+                "proof_content": "checked-finite",
+                "key_patterns": [
+                    r"^lean_version=",
+                    r"^production_source_sha256=",
+                    r"^baseline=PASS fixtures=8 seam=BasisSpec::evaluate$",
+                    r"^mutation=.* status=EXPECTED_RED",
+                    r"^status=PASS$",
+                    r"^boundary=",
+                ],
+                "note": (
+                    "digest-bound eight-row Lean/Rust comparison plus five source "
+                    "mutants; no universal source, SBF, or runtime refinement is claimed"
+                ),
+            },
+            {
+                "id": "cargo_test.terminal_lifecycle_v2",
+                "section": "current-research",
+                "command": (
+                    "cargo test --manifest-path research/terminal-lifecycle-v2/Cargo.toml "
+                    "--offline --locked"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": TEST_RESULT_PATTERNS,
+                "note": "16-test terminal-lifecycle V2 host model; it changes no live V1 or SBF path",
+            },
+            {
+                "id": "cargo_test_release.terminal_lifecycle_v2",
+                "section": "current-research",
+                "command": (
+                    "cargo test --release --manifest-path "
+                    "research/terminal-lifecycle-v2/Cargo.toml --offline --locked"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": TEST_RESULT_PATTERNS,
+                "note": "release-profile run of the 16-test terminal-lifecycle V2 host model",
+            },
+            {
+                "id": "cargo_clippy.terminal_lifecycle_v2",
+                "section": "current-research",
+                "command": (
+                    "cargo clippy --manifest-path research/terminal-lifecycle-v2/Cargo.toml "
+                    "--offline --locked --all-targets --all-features -- -D warnings"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": CLIPPY_PATTERNS,
+                "note": "strict lint for the terminal-lifecycle V2 host model",
+            },
+            {
+                "id": "cargo_doc.terminal_lifecycle_v2",
+                "section": "current-research",
+                "command": (
+                    "cargo doc --manifest-path research/terminal-lifecycle-v2/Cargo.toml "
+                    "--offline --locked --no-deps"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": DOC_PATTERNS,
+                "note": "documentation build for the terminal-lifecycle V2 host model",
+            },
+            {
                 "id": "sbf.runtime_bringup",
-                "section": "post-5-runtime",
+                "section": "current-runtime",
                 "command": "programs/clutch-sbf/scripts/run_bringup.sh",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [
-                    r"^pass [12]  sha256=[0-9a-f]{64}  bytes=[0-9]+$",
-                    r"^sbf_reproducibility=PASS$",
+                    r"^default pass [12]  sha256=[0-9a-f]{64}  bytes=[0-9]+$",
+                    r"^NON-PRODUCTION mock pass [12]  sha256=[0-9a-f]{64}  bytes=[0-9]+$",
+                    r"^default_reproducibility=PASS$",
+                    r"^mock_reproducibility=PASS$",
                     r"^final_elf_stack_diagnostic_symbols=ABSENT ",
                     r"^validator executed program readiness probe ",
                     r"^[0-9]+ accepting transactions$",
@@ -831,12 +1075,14 @@ def build_gates() -> list[dict[str, Any]]:
                     r"^the terminal .* went red:$",
                     r"^one payout .* went red:$",
                     r"^PASS$",
-                    r"^sbf_elf_sha256=[0-9a-f]{64}$",
+                    r"^default_sbf_elf_sha256=[0-9a-f]{64}$",
+                    r"^non_production_mock_sbf_elf_sha256=[0-9a-f]{64}$",
                 ],
                 "note": (
-                    "builds the deployable ELF twice, confirms byte identity on "
-                    "one machine, rejects any backend stack-diagnostic symbol "
-                    "that survives final-ELF LTO, then runs the entrypoint, "
+                    "builds both the default empty-production-source-registry ELF "
+                    "and explicitly non-production mock-source ELF twice, confirms "
+                    "per-profile byte identity on one machine, rejects any backend "
+                    "stack-diagnostic symbol that survives final-ELF LTO, then runs the entrypoint, "
                     "per-family differential/refusal matrix, falsifiability "
                     "checks, and ordered lifecycle on a loopback validator; "
                     "dependency diagnostics proven absent from the linked ELF "
@@ -846,7 +1092,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "sbf.token2022_program_test",
-                "section": "post-5-runtime",
+                "section": "current-runtime",
                 "command": "programs/clutch-sbf/svm-tests/run_svm_tests.sh",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [
@@ -865,8 +1111,32 @@ def build_gates() -> list[dict[str, Any]]:
                 ),
             },
             {
+                "id": "sbf.token2022_program_test_non_production_mock",
+                "section": "current-runtime",
+                "command": (
+                    "programs/clutch-sbf/svm-tests/run_svm_tests.sh "
+                    "--non-production-mock-source"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [
+                    r"^== SVM profile: NON-PRODUCTION-non-production-mock-source ==$",
+                    r"^source_profile=NON-PRODUCTION-non-production-mock-source$",
+                    r"^elf_sha256=[0-9a-f]{64}$",
+                    r"^elf_bytes=[0-9]+$",
+                    r"^running [0-9]+ tests?$",
+                    r"^test [a-zA-Z0-9_]+ .*",
+                    r"^test result: ",
+                ],
+                "note": (
+                    "explicitly builds and executes the differently compiled "
+                    "non-production mock-source ELF in the local Token-2022 bank; "
+                    "this is laboratory evidence only, never a production-provider "
+                    "or deployment claim"
+                ),
+            },
+            {
                 "id": "static_client.npm",
-                "section": "5",
+                "section": "current-baseline",
                 "command": "(cd apps/static-client && npm test && npm run check)",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [
@@ -886,7 +1156,7 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "toolchain.run_lab",
-                "section": "5",
+                "section": "current-baseline",
                 "command": "CARGO_NET_OFFLINE=true toolchain/scripts/run_lab.sh",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [
@@ -921,16 +1191,20 @@ def build_gates() -> list[dict[str, Any]]:
             },
             {
                 "id": "proof.verus_probe",
-                "section": "5-expected-unavailable",
+                "section": "current-proof-boundary",
                 "command": "toolchain/scripts/run_verus.sh",
                 "expected": {
-                    "mode": "nonzero",
-                    "exit": None,
+                    "mode": "exact",
+                    "exit": 1,
+                    "required_output_patterns": [
+                        r"^error: Error: The verus_builtin crate was not imported"
+                    ],
                     "reason": (
-                        "the pinned Verus release rejects the pinned probe source "
-                        "(verus_builtin crate not imported). Making it pass requires "
-                        "editing the probe, which changes the pinned source digest, so "
-                        "the correct state is a recorded failure, not a green gate."
+                        "only the pinned Verus tool's proof-status exit 1 is the "
+                        "reviewed disposition for the digest-pinned probe. Exit 2 "
+                        "means the tool is missing, 3 means off-pin tool/frontend, "
+                        "and 4 means source-digest drift; none is proof evidence or "
+                        "an acceptable substitute for the intended tool result."
                     ),
                 },
                 "proof_content": "none",
@@ -943,11 +1217,11 @@ def build_gates() -> list[dict[str, Any]]:
                     r"^BLOCKED: ",
                     r"^error: ",
                 ],
-                "note": "BLOCKER (CODEX_HANDOFF.md section 7 P0-2): formal-tool gap",
+                "note": "BLOCKER: the root probe's exact expected tool failure is not proof content",
             },
             {
                 "id": "proof.rocq_check",
-                "section": "5-expected-unavailable",
+                "section": "current-proof-boundary",
                 "command": "rocq/check.sh",
                 "expected": {
                     "mode": "either",
@@ -963,7 +1237,7 @@ def build_gates() -> list[dict[str, Any]]:
                 },
                 "proof_content": "none",
                 "key_patterns": [r"^status=", r"^rocq=", r"^coqc=", r"^reason="],
-                "note": "BLOCKER (CODEX_HANDOFF.md section 7 P0-2): typecheck is not proof",
+                "note": "BLOCKER: the Rocq definition typecheck is not proof content",
             },
         ]
     )
@@ -1051,12 +1325,19 @@ def extract_key_lines(output: str, patterns: list[str], cap: int = 256) -> list[
     return seen
 
 
-def gate_outcome_ok(expected: dict[str, Any], exit_code: int) -> bool:
+def gate_outcome_ok(
+    expected: dict[str, Any], exit_code: int, output: str = ""
+) -> bool:
     mode = expected["mode"]
     if mode == "zero":
         return exit_code == 0
     if mode == "nonzero":
         return exit_code != 0
+    if mode == "exact":
+        return exit_code == expected["exit"] and all(
+            re.search(pattern, output, re.MULTILINE) is not None
+            for pattern in expected.get("required_output_patterns", [])
+        )
     if mode == "either":
         return exit_code in expected.get("accepted_exits", [])
     raise ValueError(f"unknown expectation mode {mode!r}")
@@ -1257,7 +1538,8 @@ def collect_provenance(repo: Path) -> dict[str, Any]:
             "remote is not provenance and a pushed branch is not a release: "
             "neither is signed, neither is tagged, and neither is attested "
             "here. An empty `tags_at_head` means no release tag exists, which "
-            "is the expected state while CODEX_HANDOFF.md section 7 P0-1 is open."
+            "is expected until a separately authorized release closes the named "
+            "release blockers."
         ),
     }
 
@@ -1306,22 +1588,25 @@ def collect_digests(repo: Path) -> dict[str, Any]:
                     canonical_json_bytes(payload)
                 ).hexdigest()
                 record["status"] = "present"
-        record["handoff_declared_sha256"] = spec["handoff"]
-        record["matches_handoff"] = record["sha256"] == spec["handoff"]
+        if spec["handoff"] is not None:
+            record["handoff_declared_sha256"] = spec["handoff"]
+            record["matches_handoff"] = record["sha256"] == spec["handoff"]
         record["handoff_reference"] = spec["handoff_reference"]
         entries[spec["id"]] = record
 
     for spec in DECLARED_BUILD_OUTPUTS:
-        entries[spec["id"]] = {
+        record: dict[str, Any] = {
             "kind": "declared-build-output",
             "sha256": None,
-            "handoff_declared_sha256": spec["handoff"],
             "handoff_reference": spec["handoff_reference"],
             "produced_by_gate": spec["produced_by_gate"],
             "produced_by_output_key": spec["produced_by_output_key"],
             "note": spec["note"],
             "status": "not-a-repository-file",
         }
+        if spec["handoff"] is not None:
+            record["handoff_declared_sha256"] = spec["handoff"]
+        entries[spec["id"]] = record
 
     return {"entries": entries, "missing_paths": missing}
 
@@ -1446,7 +1731,8 @@ def collect_toolchain(repo: Path) -> dict[str, Any]:
             "homebrew formula provenance (JSON API install, no tap commit)",
             "rocq stdlib / dependency closure (no lockfile)",
             "librustc_driver dylib supplied by the ambient rustup toolchain",
-            "correspondence between the Verus/Rocq shadows and crates/clutch-*",
+            "whole-system correspondence between the proof/model lanes and "
+            "crates/clutch-* outside the explicitly pinned transfer helper",
         ],
     }
 
@@ -1454,7 +1740,7 @@ def collect_toolchain(repo: Path) -> dict[str, Any]:
 def run_gates(repo: Path, gates: list[dict[str, Any]], timeout: int) -> dict[str, Any]:
     results: dict[str, Any] = {}
     env = dict(os.environ)
-    env.setdefault("CARGO_NET_OFFLINE", "true")
+    env["CARGO_NET_OFFLINE"] = "true"
     env["CARGO_TERM_COLOR"] = "never"
     env["RUSTUP_SKIP_UPDATE_CHECK"] = "1"
     env["NO_COLOR"] = "1"
@@ -1463,42 +1749,49 @@ def run_gates(repo: Path, gates: list[dict[str, Any]], timeout: int) -> dict[str
     for gate in gates:
         gate_id = gate["id"]
         print(f"  gate {gate_id} ...", file=sys.stderr, flush=True)
+        proc = subprocess.Popen(
+            ["/bin/sh", "-c", gate["command"]],
+            cwd=str(repo),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+            # Gates commonly launch compilers, validators, and private helper
+            # processes.  A timeout must kill that complete descendant group,
+            # not leave an orphan consuming the next gate's machine.
+            start_new_session=True,
+        )
         try:
-            proc = subprocess.run(
-                ["/bin/sh", "-c", gate["command"]],
-                cwd=str(repo),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout,
-                env=env,
-            )
+            output, _ = proc.communicate(timeout=timeout)
             exit_code = proc.returncode
-            output = proc.stdout + proc.stderr
             timed_out = False
-        except subprocess.TimeoutExpired as exc:
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:  # The process exited at the timeout edge.
+                pass
+            output, _ = proc.communicate()
             exit_code = -1
-            output = (exc.stdout or "") + (exc.stderr or "")
-            if isinstance(output, bytes):  # pragma: no cover - platform dependent
-                output = output.decode("utf-8", "replace")
             timed_out = True
 
         key_lines = extract_key_lines(output, gate["key_patterns"])
-        volatile = extract_key_lines(output, gate.get("volatile_patterns", []))
-        ok = (not timed_out) and gate_outcome_ok(gate["expected"], exit_code)
+        ok = (not timed_out) and gate_outcome_ok(gate["expected"], exit_code, output)
+        if not ok:
+            print("    diagnostic tail:", file=sys.stderr)
+            for line in output.splitlines()[-12:]:
+                print(f"      {normalize_line(line)}", file=sys.stderr)
         results[gate_id] = {
             "exit_code": exit_code,
             "timed_out": timed_out,
             "matches_expectation": ok,
             "key_lines": key_lines,
-            # Digest over key_lines only. volatile_lines are recorded as evidence
-            # and never enter the drift comparison.
+            # Digest only semantic key lines. Volatile lines named by a gate
+            # declaration are deliberately excluded from run records entirely.
             "key_lines_sha256": hashlib.sha256(
                 "\n".join(key_lines).encode("utf-8")
             ).hexdigest(),
-            **({"volatile_lines": volatile} if volatile else {}),
-            "output_bytes": len(output.encode("utf-8")),
-            "tail": [normalize_line(x) for x in output.splitlines()[-12:]] if not ok else [],
+            # No raw byte count or raw diagnostic tail is recorded: cold/warm
+            # Cargo progress differs although semantic output does not.
         }
         print(
             f"    exit={exit_code} expected={gate['expected']['mode']} "
@@ -1526,6 +1819,8 @@ def summarize_unavailable(
             "disposition": (
                 "declared-failing"
                 if expected["mode"] == "nonzero"
+                else "declared-exact-tool-disposition"
+                if expected["mode"] == "exact"
                 else "declared-typecheck-or-unavailable"
                 if expected["mode"] == "either"
                 else "unexpected-failure"
@@ -1682,7 +1977,8 @@ def build_manifest(
                         observed = line[len(prefix):]
                         break
             record["observed_sha256"] = observed
-            record["matches_handoff"] = observed == spec["handoff"]
+            if spec["handoff"] is not None:
+                record["matches_handoff"] = observed == spec["handoff"]
         if manifest["gate_summary"]["contradicting_expectation"]:
             exit_code = EXIT_DRIFT
 

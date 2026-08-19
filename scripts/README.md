@@ -13,11 +13,10 @@ gate to obtain a green result.
 
 ### `baseline_manifest.py`
 
-Derives and checks `MANIFEST.baseline.json`, the baseline evidence manifest:
-git baseline identity, the `CODEX_HANDOFF.md` §5 gate inventory plus documented
-low-cost research/model/frontend extensions with their reviewed dispositions,
-the §6 byte identities recomputed from the tree, and the pinned toolchain
-records. Standard library only, offline, no writes outside the manifest path.
+Derives and checks the schema-v2 baseline evidence manifest: git content
+identity, the current documented offline gate inventory, named tree and derived
+identities, and pinned toolchain records. Standard library only, offline, no
+writes outside the manifest path.
 
 ```sh
 scripts/baseline_manifest.py emit --run-gates    # refuses on a dirty tree
@@ -30,13 +29,17 @@ working tree, because such a manifest would pair a clean commit id with bytes
 that are not in that commit. `--allow-dirty` emits a snapshot marked
 `"dirty": true` for mid-flight use only.
 
-It attests no release, signature, reproducible-build closure, formal proof
-content, global liveness, production provider closure, direct-selection
+It attests no release, signature, reproducible-build closure, whole-system
+formal proof, global liveness, production provider closure, direct-selection
 promotion, or terminal closure. The sealed R1 gate verifies a bounded measured
 ResolutionWork profile from committed ELF/log evidence; it does not broaden
-those claims. The isolated Verus batch shadow remains absent until its source
-and reproduction gate are committed. A full `--run-gates` run is deliberately
-slow (potentially tens of cache-cold minutes), not a presubmit. See
+those claims. The batch scalar shadow, narrow transfer refinement, and finite
+B-spline Lean/Rust bridge are named bounded lanes, not whole-system proof. The
+root Verus probe accepts only its intended exit 1; missing/off-pin/digest-drift
+setup exits are failures. `MANIFEST.baseline.json` is historical schema v1 and
+cannot pass the v2 checker until a later clean v2 emission; this task must not
+edit it. A full `--run-gates` run is deliberately slow (potentially tens of
+cache-cold minutes, including bounded local SBF rebuilds), not a presubmit. See
 [`docs/implementation/BASELINE_MANIFEST.md`](../docs/implementation/BASELINE_MANIFEST.md).
 
 Focused declaration checks are standard-library only:
