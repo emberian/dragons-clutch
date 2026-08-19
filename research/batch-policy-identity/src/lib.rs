@@ -39,6 +39,11 @@ use clutch_batch::relation_v1::{
 };
 use clutch_batch::{DustPolicy, MAX_ORDERS};
 
+/// Fixed-capacity, full-width candidate-window model for the bounded direct
+/// selection profile.  It is an offline account-body and transition model;
+/// it does not allocate live Solana tags or instructions.
+pub mod direct_window_v1;
+
 /// Exact size of a canonical batch-policy artifact.
 pub const BATCH_POLICY_BYTES: usize = 64;
 /// Exact size of the canonical full-width relation-domain preimage.
