@@ -54,6 +54,14 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- R4 interim step 3 LANDED at eb1215a: TerminalIdentityV1 56-byte header
+  research crate (PROPOSED pending ratification), delegating to the
+  clutch-liveness DonationLedger kernel; 16 tests incl. four falsifiers
+  (prefund-never-reaches-payer, monotone donations, exact close
+  conservation, deficit-refuses), clippy clean. Baseline content identity
+  drifted 546->554 entries across the post-seal wave; re-emission claimed
+  and launched below.
+
 - SBOM/LICENSE CLOSURE LANDED at b10f1ea: the dependency/license checker
   now lives in-repo (previously only inside the persvati attestation job),
   attested 12-manifest default mode proven byte-stable three ways,
