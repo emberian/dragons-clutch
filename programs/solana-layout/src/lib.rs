@@ -17,6 +17,7 @@ pub mod artifact;
 pub mod clearing;
 pub mod collateral;
 pub mod direct_selection;
+pub mod direct_selection_v3;
 pub mod native_resolution;
 pub mod occupation_resolution;
 pub mod portfolio_settlement;

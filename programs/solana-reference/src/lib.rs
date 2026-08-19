@@ -53,9 +53,9 @@ use clutch_kernel::{
     MAX_OUTCOMES as KERNEL_MAX_OUTCOMES, MAX_PAYOUTS,
 };
 use clutch_solana_layout::{
-    account_len, canonical_market_id, collateral, CodecError, Hash32, HoardAccount, Intent,
-    MarketAccount, PositionAccount, ProfileAccount, RealmAccount, ResolutionAccount,
-    SupplyLedgerAccount, TermsAccount, MAX_OUTCOMES, PROFILE_FLAG_POLICY_FROZEN,
+    account_len, canonical_market_id, collateral, direct_selection_v3::DirectV3Intent, CodecError,
+    Hash32, HoardAccount, Intent, MarketAccount, PositionAccount, ProfileAccount, RealmAccount,
+    ResolutionAccount, SupplyLedgerAccount, TermsAccount, MAX_OUTCOMES, PROFILE_FLAG_POLICY_FROZEN,
 };
 
 mod resolution;
@@ -553,6 +553,22 @@ pub struct Request {
     pub action: Action,
 }
 
+/// Dedicated request envelope for the versioned Direct V3 lifecycle.
+///
+/// This decoder deliberately does not widen [`Intent`] or [`Request`]. Until
+/// the SBF adapter routes this exact type to the complete V3 handler family,
+/// tags 36 through 46 continue to fail closed through the legacy request
+/// decoder. Keeping the envelope separate also prevents a partially added V3
+/// tag from falling into a legacy direct handler with different account
+/// versions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectV3Request {
+    /// Exact replay sequence supplied to the routed lifecycle action.
+    pub sequence: u64,
+    /// One exact V3 lifecycle intent.
+    pub intent: DirectV3Intent,
+}
+
 /// Actions supported by the offline reference adapter.
 ///
 /// The size spread between `Layout` and the two narrow variants is deliberate
@@ -910,6 +926,62 @@ impl Request {
             _ => return Err(Error::NonCanonical),
         };
         Ok(Self { sequence, action })
+    }
+}
+
+impl DirectV3Request {
+    /// Encode the strict reference envelope and exact Direct V3 inner wire.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        let inner_len = self.intent.encoded_len();
+        let exact = 13usize.checked_add(inner_len).ok_or(Error::Arithmetic)?;
+        if out.len() < exact {
+            return Err(Error::WrongLength);
+        }
+        out[0] = REQUEST_TAG;
+        out[1] = REFERENCE_VERSION;
+        out[2..10].copy_from_slice(&self.sequence.to_le_bytes());
+        out[10] = ACTION_LAYOUT;
+        out[11..13].copy_from_slice(
+            &u16::try_from(inner_len)
+                .map_err(|_| Error::WrongLength)?
+                .to_le_bytes(),
+        );
+        let written = self.intent.encode(&mut out[13..exact])?;
+        if written != inner_len {
+            return Err(Error::WrongLength);
+        }
+        Ok(exact)
+    }
+
+    /// Decode only the strict Direct V3 request family.
+    ///
+    /// Legacy layout tags, resolution actions, hostile lengths, and trailing
+    /// bytes all refuse before a lifecycle handler can inspect accounts.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() < 13 || bytes.len() > MAX_REQUEST_LEN {
+            return Err(Error::WrongLength);
+        }
+        if bytes[0] != REQUEST_TAG {
+            return Err(Error::WrongTag);
+        }
+        if bytes[1] != REFERENCE_VERSION {
+            return Err(Error::WrongVersion);
+        }
+        if bytes[10] != ACTION_LAYOUT {
+            return Err(Error::WrongTag);
+        }
+        let inner_len = usize::from(u16::from_le_bytes(
+            bytes[11..13].try_into().map_err(|_| Error::WrongLength)?,
+        ));
+        if inner_len > clutch_solana_layout::MAX_INTENT_BYTES
+            || bytes.len() != 13usize.checked_add(inner_len).ok_or(Error::Arithmetic)?
+        {
+            return Err(Error::WrongLength);
+        }
+        Ok(Self {
+            sequence: u64::from_le_bytes(bytes[2..10].try_into().map_err(|_| Error::WrongLength)?),
+            intent: DirectV3Intent::decode(&bytes[13..])?,
+        })
     }
 }
 
@@ -2813,6 +2885,123 @@ mod tests {
 
     fn layout_request_len(request: &[u8; MAX_REQUEST_LEN]) -> usize {
         13 + usize::from(u16::from_le_bytes([request[11], request[12]]))
+    }
+
+    fn direct_v3_intents() -> [DirectV3Intent; 11] {
+        let rewards = clutch_solana_layout::direct_selection_v3::DirectKeeperRewardsV3 {
+            begin_verification: 1,
+            verify_candidate: 2,
+            finalize_selection: 3,
+            settle: 4,
+            lapse: 5,
+        };
+        [
+            DirectV3Intent::InitEpoch {
+                market: h(1),
+                epoch_index: 7,
+                policy: h(2),
+                submission_opens_slot: 10,
+                submission_closes_slot: 20,
+                selection_deadline_slot: 25,
+                settlement_deadline_slot: 27,
+                neutral_lamport_sink: h(3),
+            },
+            DirectV3Intent::FreezeEpoch {
+                market: h(1),
+                epoch: h(4),
+                reward_deposit: 18,
+                rewards,
+            },
+            DirectV3Intent::AbortUnfrozen {
+                market: h(1),
+                epoch: h(4),
+            },
+            DirectV3Intent::SubmitCandidate {
+                market: h(1),
+                epoch: h(4),
+                outcome_price: 5,
+            },
+            DirectV3Intent::BeginVerification {
+                market: h(1),
+                epoch: h(4),
+            },
+            DirectV3Intent::VerifyCandidate {
+                market: h(1),
+                epoch: h(4),
+                retained_index: 2,
+            },
+            DirectV3Intent::FinalizeSelection {
+                market: h(1),
+                epoch: h(4),
+            },
+            DirectV3Intent::Settle {
+                market: h(1),
+                epoch: h(4),
+            },
+            DirectV3Intent::LapseEmpty {
+                market: h(1),
+                epoch: h(4),
+            },
+            DirectV3Intent::LapseUnselected {
+                market: h(1),
+                epoch: h(4),
+            },
+            DirectV3Intent::LapseSelected {
+                market: h(1),
+                epoch: h(4),
+            },
+        ]
+    }
+
+    #[test]
+    fn dedicated_direct_v3_request_envelope_is_exact_and_legacy_refuses() {
+        for (sequence, intent) in direct_v3_intents().into_iter().enumerate() {
+            let request = DirectV3Request {
+                sequence: sequence as u64,
+                intent,
+            };
+            let mut bytes = [0xa5; MAX_REQUEST_LEN];
+            let written = request.encode(&mut bytes).unwrap();
+            assert_eq!(written, 13 + intent.encoded_len());
+            assert_eq!(DirectV3Request::decode(&bytes[..written]), Ok(request));
+            assert_eq!(
+                Request::decode(&bytes[..written]),
+                Err(Error::Layout(CodecError::WrongTag))
+            );
+            assert_eq!(
+                DirectV3Request::decode(&bytes[..written - 1]),
+                Err(Error::WrongLength)
+            );
+            assert_eq!(
+                DirectV3Request::decode(&bytes[..written + 1]),
+                Err(Error::WrongLength)
+            );
+
+            let mut hostile = bytes;
+            hostile[0] ^= 1;
+            assert_eq!(
+                DirectV3Request::decode(&hostile[..written]),
+                Err(Error::WrongTag)
+            );
+            let mut hostile = bytes;
+            hostile[1] ^= 1;
+            assert_eq!(
+                DirectV3Request::decode(&hostile[..written]),
+                Err(Error::WrongVersion)
+            );
+            let mut hostile = bytes;
+            hostile[10] = ACTION_RESOLVE;
+            assert_eq!(
+                DirectV3Request::decode(&hostile[..written]),
+                Err(Error::WrongTag)
+            );
+            let mut hostile = bytes;
+            hostile[11..13].copy_from_slice(&0_u16.to_le_bytes());
+            assert_eq!(
+                DirectV3Request::decode(&hostile[..written]),
+                Err(Error::WrongLength)
+            );
+        }
     }
 
     fn resolve_request(sequence: u64, payout: u8) -> [u8; 12] {

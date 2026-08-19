@@ -41,11 +41,12 @@
 use crate::accounts::Outcome;
 use crate::error::ClutchError;
 use crate::instructions::{
-    artifact, cash_exit, direct_selection, external_exit, genesis, market_init, merge_materialize,
-    observe_resolve, orders_batch, resolution_work, source_ingest, split,
+    artifact, cash_exit, direct_selection, direct_selection_v3, external_exit, genesis,
+    market_init, merge_materialize, observe_resolve, orders_batch, resolution_work, source_ingest,
+    split,
 };
 use clutch_solana_layout::Intent;
-use clutch_solana_reference::{Action, Request};
+use clutch_solana_reference::{Action, DirectV3Request, Request};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -70,6 +71,7 @@ enum Route {
     Genesis,
     SourceIngest,
     DirectSelection,
+    DirectSelectionV3,
     ResolutionWork,
     DecodeOnly,
 }
@@ -116,6 +118,8 @@ const INTENT_BEGIN_RESOLUTION_WORK_HINT: u8 = 32;
 const INTENT_FOLD_RESOLUTION_WORK_HINT: u8 = 33;
 const INTENT_FINALIZE_RESOLUTION_WORK_HINT: u8 = 34;
 const INTENT_ABORT_RESOLUTION_WORK_HINT: u8 = 35;
+const INTENT_INIT_DIRECT_EPOCH_V4_HINT: u8 = 36;
+const INTENT_LAPSE_SELECTED_DIRECT_V3_HINT: u8 = 46;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
@@ -167,6 +171,12 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_FINALIZE_RESOLUTION_WORK_HINT
                 | INTENT_ABORT_RESOLUTION_WORK_HINT,
             ) => Route::ResolutionWork,
+            // Tags 36 through 46 are one all-or-nothing family: the dedicated
+            // Direct V3 request decoder is the only decoder that accepts them,
+            // and its handler match is exhaustive with no unimplemented arm.
+            Some(INTENT_INIT_DIRECT_EPOCH_V4_HINT..=INTENT_LAPSE_SELECTED_DIRECT_V3_HINT) => {
+                Route::DirectSelectionV3
+            }
             _ => Route::DecodeOnly,
         },
         Some(ACTION_RESOLVE_HINT | ACTION_REDEEM_INTERNAL_HINT) => Route::ObserveResolve,
@@ -199,6 +209,9 @@ pub fn process(
         Route::Genesis => process_genesis(program_id, accounts, instruction_data),
         Route::SourceIngest => process_source_ingest(program_id, accounts, instruction_data),
         Route::DirectSelection => process_direct_selection(program_id, accounts, instruction_data),
+        Route::DirectSelectionV3 => {
+            process_direct_selection_v3(program_id, accounts, instruction_data)
+        }
         Route::ResolutionWork => process_resolution_work(program_id, accounts, instruction_data),
         Route::DecodeOnly => decode_only(instruction_data),
     }
@@ -396,6 +409,21 @@ fn process_direct_selection(
         }
         _ => unexpected_route(),
     }
+}
+
+/// The Direct V3 family decodes through its dedicated strict envelope.
+///
+/// The legacy [`Request`] decoder still refuses every tag in `36..=46`, and
+/// [`DirectV3Request::decode`] refuses every legacy tag, so a partially added
+/// tag can never fall into a handler with different account versions.
+#[inline(never)]
+fn process_direct_selection_v3(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request = DirectV3Request::decode(instruction_data)?;
+    direct_selection_v3::process(program_id, accounts, &request)
 }
 
 #[inline(never)]
@@ -904,6 +932,135 @@ mod tests {
             let expected: ProgramError =
                 Refusal::from(Request::decode(&mutation).unwrap_err()).into();
             assert_eq!(process_without_accounts(&mutation), expected);
+        }
+    }
+
+    fn direct_v3_intents() -> [clutch_solana_layout::direct_selection_v3::DirectV3Intent; 11] {
+        use clutch_solana_layout::direct_selection_v3::{DirectKeeperRewardsV3, DirectV3Intent};
+        let rewards = DirectKeeperRewardsV3 {
+            begin_verification: 1,
+            verify_candidate: 2,
+            finalize_selection: 3,
+            settle: 4,
+            lapse: 5,
+        };
+        [
+            DirectV3Intent::InitEpoch {
+                market: hash(1),
+                epoch_index: 7,
+                policy: hash(2),
+                submission_opens_slot: 100,
+                submission_closes_slot: 110,
+                selection_deadline_slot: 120,
+                settlement_deadline_slot: 140,
+                neutral_lamport_sink: hash(90),
+            },
+            DirectV3Intent::FreezeEpoch {
+                market: hash(1),
+                epoch: hash(2),
+                reward_deposit: rewards.worst_case().unwrap(),
+                rewards,
+            },
+            DirectV3Intent::AbortUnfrozen {
+                market: hash(1),
+                epoch: hash(2),
+            },
+            DirectV3Intent::SubmitCandidate {
+                market: hash(1),
+                epoch: hash(2),
+                outcome_price: 2_500,
+            },
+            DirectV3Intent::BeginVerification {
+                market: hash(1),
+                epoch: hash(2),
+            },
+            DirectV3Intent::VerifyCandidate {
+                market: hash(1),
+                epoch: hash(2),
+                retained_index: 0,
+            },
+            DirectV3Intent::FinalizeSelection {
+                market: hash(1),
+                epoch: hash(2),
+            },
+            DirectV3Intent::Settle {
+                market: hash(1),
+                epoch: hash(2),
+            },
+            DirectV3Intent::LapseEmpty {
+                market: hash(1),
+                epoch: hash(2),
+            },
+            DirectV3Intent::LapseUnselected {
+                market: hash(1),
+                epoch: hash(2),
+            },
+            DirectV3Intent::LapseSelected {
+                market: hash(1),
+                epoch: hash(2),
+            },
+        ]
+    }
+
+    fn direct_v3_request(sequence: u64, index: usize) -> Vec<u8> {
+        let request = clutch_solana_reference::DirectV3Request {
+            sequence,
+            intent: direct_v3_intents()[index],
+        };
+        let mut bytes = vec![0; 13 + clutch_solana_layout::MAX_INTENT_BYTES];
+        let written = request.encode(&mut bytes).unwrap();
+        bytes.truncate(written);
+        bytes
+    }
+
+    /// Tags 36 through 46 are one family: every encoded V3 request selects
+    /// the dedicated route, decodes only through the strict V3 envelope, and
+    /// the legacy decoder still refuses every one of those tags, so a V3
+    /// request can never fall into a legacy direct handler.
+    #[test]
+    fn direct_v3_family_routes_all_or_nothing() {
+        for index in 0..direct_v3_intents().len() {
+            let bytes = direct_v3_request(0, index);
+            assert_eq!(route_hint(&bytes), Route::DirectSelectionV3, "{index}");
+            assert!(clutch_solana_reference::DirectV3Request::decode(&bytes).is_ok());
+            assert!(Request::decode(&bytes).is_err(), "{index}");
+            // Fail-closed with no accounts: shape refusal, never a stub.
+            let refusal = process_without_accounts(&bytes);
+            assert_eq!(
+                refusal,
+                ProgramError::Custom(ClutchError::AccountCount as u32),
+                "{index}"
+            );
+
+            // Hostile envelope mutations earn the canonical V3 decode refusal.
+            for mutate in [0usize, 1, 10] {
+                let mut hostile = direct_v3_request(0, index);
+                hostile[mutate] ^= 1;
+                let expected: ProgramError = Refusal::from(
+                    clutch_solana_reference::DirectV3Request::decode(&hostile).unwrap_err(),
+                )
+                .into();
+                // A mutated action byte no longer routes to the V3 family;
+                // whatever route wins must still refuse by decode.
+                assert!(
+                    clutch_solana_reference::DirectV3Request::decode(&hostile).is_err(),
+                    "{index}/{mutate}"
+                );
+                if route_hint(&hostile) == Route::DirectSelectionV3 {
+                    assert_eq!(process_without_accounts(&hostile), expected);
+                } else {
+                    assert!(
+                        process(&Pubkey::new_from_array([9; 32]), &[], &hostile).is_err(),
+                        "{index}/{mutate}"
+                    );
+                }
+            }
+            let mut truncated = direct_v3_request(0, index);
+            truncated.pop();
+            assert!(
+                process(&Pubkey::new_from_array([9; 32]), &[], &truncated).is_err(),
+                "{index}"
+            );
         }
     }
 

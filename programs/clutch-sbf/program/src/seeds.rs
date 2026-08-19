@@ -94,6 +94,8 @@ pub const SEED_ARTIFACT_STAGE: &[u8] = b"dragons-clutch:upload:v1";
 pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
 /// Canonical full-width batch-policy artifact seed prefix.
 pub const SEED_BATCH_POLICY: &[u8] = b"dragons-clutch:batch-policy:v1";
+/// DirectBatchPolicy V3 final-artifact seed prefix, disjoint from legacy policy.
+pub const SEED_DIRECT_BATCH_POLICY_V3: &[u8] = b"dc:direct-policy:v3";
 /// Direct candidate-window account seed prefix.
 pub const SEED_DIRECT_WINDOW: &[u8] = b"dragons-clutch:direct-window:v1";
 /// Full-width verified direct candidate seed prefix.
@@ -102,6 +104,16 @@ pub const SEED_DIRECT_CANDIDATE: &[u8] = b"dragons-clutch:dir-candidate:v2";
 pub const SEED_DIRECT_RECEIPT: &[u8] = b"dragons-clutch:direct-receipt:v2";
 /// Direct zero-pot seed prefix.
 pub const SEED_DIRECT_POT: &[u8] = b"dragons-clutch:direct-pot:v2";
+/// Direct V3 candidate-window seed prefix, disjoint from every V1/V2 address.
+pub const SEED_DIRECT_WINDOW_V3: &[u8] = b"dc:direct-window:v3";
+/// Direct V3 verified-candidate seed prefix, disjoint from every V1/V2 address.
+pub const SEED_DIRECT_CANDIDATE_V3: &[u8] = b"dc:direct-candidate:v3";
+/// Direct V3 finite WorkBudget seed prefix.
+pub const SEED_DIRECT_WORK_V3: &[u8] = b"dc:direct-work:v3";
+/// Direct V3 settlement-receipt seed prefix, disjoint from V2 receipts.
+pub const SEED_DIRECT_RECEIPT_V3: &[u8] = b"dc:direct-receipt:v3";
+/// Direct V3 zero-pot seed prefix, disjoint from V2 pots.
+pub const SEED_DIRECT_POT_V3: &[u8] = b"dc:direct-pot:v3";
 /// Immutable authenticated source-spec account seed prefix.
 pub const SEED_SOURCE_SPEC: &[u8] = crate::source_archive::SOURCE_SPEC_SEED_V1;
 /// Per-window authenticated source-archive account seed prefix.
@@ -238,6 +250,15 @@ pub fn batch_policy_pda(program_id: &Pubkey, epoch: &[u8; 32], digest: &[u8; 32]
     find(program_id, &[SEED_BATCH_POLICY, epoch, digest])
 }
 
+/// Canonical DirectBatchPolicy V3 artifact address.
+pub fn direct_batch_policy_v3_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    digest: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DIRECT_BATCH_POLICY_V3, epoch, digest])
+}
+
 /// Canonical direct candidate-window address.
 pub fn direct_window_pda(program_id: &Pubkey, epoch: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_DIRECT_WINDOW, epoch])
@@ -267,6 +288,51 @@ pub fn direct_receipt_pda(
 /// Canonical closed direct-pot address.
 pub fn direct_pot_pda(program_id: &Pubkey, epoch: &[u8; 32], candidate: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_DIRECT_POT, epoch, candidate])
+}
+
+/// Canonical Direct V3 candidate-window address.
+pub fn direct_window_v3_pda(program_id: &Pubkey, epoch: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DIRECT_WINDOW_V3, epoch])
+}
+
+/// Canonical Direct V3 verified-candidate address.
+pub fn direct_candidate_v3_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DIRECT_CANDIDATE_V3, epoch, candidate])
+}
+
+/// Canonical finite WorkBudget address for one Direct V3 Epoch.
+pub fn direct_work_v3_pda(program_id: &Pubkey, epoch: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DIRECT_WORK_V3, epoch])
+}
+
+/// Canonical Direct V3 receipt address for the sole selected slice.
+pub fn direct_receipt_v3_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_DIRECT_RECEIPT_V3,
+            epoch,
+            candidate,
+            &0u16.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical Direct V3 zero-pot address for one selected Candidate.
+pub fn direct_pot_v3_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DIRECT_POT_V3, epoch, candidate])
 }
 
 /// Canonical uploader-scoped staging address and bump.
@@ -428,7 +494,7 @@ mod tests {
     /// `hoard-authority` prefix was caught at 33 bytes.
     #[test]
     fn every_seed_prefix_fits_one_seed() {
-        const PREFIXES: [&[u8]; 28] = [
+        const PREFIXES: [&[u8]; 40] = [
             SEED_REALM,
             SEED_PROFILE,
             SEED_MARKET,
@@ -449,11 +515,23 @@ mod tests {
             SEED_CANDIDATE_FEED,
             SEED_POT,
             SEED_RECEIPT,
+            SEED_ARTIFACT_STAGE,
+            SEED_POLICY,
             SEED_BATCH_POLICY,
+            SEED_DIRECT_BATCH_POLICY_V3,
             SEED_DIRECT_WINDOW,
             SEED_DIRECT_CANDIDATE,
             SEED_DIRECT_RECEIPT,
             SEED_DIRECT_POT,
+            SEED_DIRECT_WINDOW_V3,
+            SEED_DIRECT_CANDIDATE_V3,
+            SEED_DIRECT_WORK_V3,
+            SEED_DIRECT_RECEIPT_V3,
+            SEED_DIRECT_POT_V3,
+            SEED_SOURCE_SPEC,
+            SEED_SOURCE_ARCHIVE,
+            SEED_RESOLUTION_WORK,
+            SEED_RESOLUTION_RESERVE,
             SEED_OUTCOME_MINT,
             SEED_HOARD_AUTHORITY,
             SEED_HOARD_TOKEN,
@@ -470,10 +548,16 @@ mod tests {
         assert_eq!(SEED_OUTCOME_MINT.len(), 30);
         assert_eq!(SEED_HOARD_TOKEN.len(), 29);
         assert_eq!(SEED_BATCH_POLICY.len(), 30);
+        assert_eq!(SEED_DIRECT_BATCH_POLICY_V3.len(), 19);
         assert_eq!(SEED_DIRECT_WINDOW.len(), 31);
         assert_eq!(SEED_DIRECT_CANDIDATE.len(), 31);
         assert_eq!(SEED_DIRECT_RECEIPT.len(), 32);
         assert_eq!(SEED_DIRECT_POT.len(), 28);
+        assert_eq!(SEED_DIRECT_WINDOW_V3.len(), 19);
+        assert_eq!(SEED_DIRECT_CANDIDATE_V3.len(), 22);
+        assert_eq!(SEED_DIRECT_WORK_V3.len(), 17);
+        assert_eq!(SEED_DIRECT_RECEIPT_V3.len(), 20);
+        assert_eq!(SEED_DIRECT_POT_V3.len(), 16);
         // The plan's own proposal, kept here as the falsifier: it does not fit.
         assert_eq!(b"dragons-clutch:hoard-authority:v1".len(), 33);
     }
@@ -518,5 +602,64 @@ mod tests {
          * concatenation, so `["dragons-clutch:hoard:v1", m]` and
          * `["dragons-clutch:hoard-token:v1", m]` are different tuples. */
         assert!(SEED_HOARD_TOKEN.starts_with(b"dragons-clutch:hoard"));
+    }
+
+    /// Every Direct V3 namespace is disjoint from every historical direct and
+    /// generic namespace. Account versions therefore cannot be squatted by a
+    /// valid older PDA carrying the same semantic identity.
+    #[test]
+    fn direct_v3_prefixes_are_pairwise_disjoint_from_the_full_registry() {
+        const HISTORICAL: [&[u8]; 35] = [
+            SEED_REALM,
+            SEED_PROFILE,
+            SEED_MARKET,
+            SEED_HOARD,
+            SEED_POSITION,
+            SEED_KERNEL,
+            SEED_EXTERNAL,
+            SEED_REPLAY,
+            SEED_SUPPLY,
+            SEED_FEED,
+            SEED_TERMS,
+            SEED_GRID,
+            SEED_RESOLUTION,
+            SEED_EPOCH,
+            SEED_PAGE,
+            SEED_RESERVATION,
+            SEED_CANDIDATE,
+            SEED_CANDIDATE_FEED,
+            SEED_POT,
+            SEED_RECEIPT,
+            SEED_ARTIFACT_STAGE,
+            SEED_POLICY,
+            SEED_BATCH_POLICY,
+            SEED_DIRECT_BATCH_POLICY_V3,
+            SEED_DIRECT_WINDOW,
+            SEED_DIRECT_CANDIDATE,
+            SEED_DIRECT_RECEIPT,
+            SEED_DIRECT_POT,
+            SEED_SOURCE_SPEC,
+            SEED_SOURCE_ARCHIVE,
+            SEED_RESOLUTION_WORK,
+            SEED_RESOLUTION_RESERVE,
+            SEED_OUTCOME_MINT,
+            SEED_HOARD_AUTHORITY,
+            SEED_HOARD_TOKEN,
+        ];
+        const DIRECT_V3: [&[u8]; 5] = [
+            SEED_DIRECT_WINDOW_V3,
+            SEED_DIRECT_CANDIDATE_V3,
+            SEED_DIRECT_WORK_V3,
+            SEED_DIRECT_RECEIPT_V3,
+            SEED_DIRECT_POT_V3,
+        ];
+        for (index, added) in DIRECT_V3.iter().enumerate() {
+            for old in HISTORICAL {
+                assert_ne!(*added, old);
+            }
+            for later in DIRECT_V3.iter().skip(index + 1) {
+                assert_ne!(*added, *later);
+            }
+        }
     }
 }

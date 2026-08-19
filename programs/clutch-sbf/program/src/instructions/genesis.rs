@@ -141,6 +141,9 @@ use crate::accounts::{
 use crate::error::{ClutchError, Refusal};
 use crate::source_archive::SOURCE_SPEC_ACCOUNT_V1_BYTES;
 use crate::{seeds, token};
+use clutch_solana_layout::direct_selection_v3::{
+    DirectEpochV4Account, DirectFundingLedgerV3, DIRECT_EPOCH_V4_BYTES,
+};
 use clutch_solana_layout::{
     account_len, canonical_realm_id, collateral, stream, Hash32, HoardAccount, Intent,
     MarketAccount, PositionAccount, ProfileAccount, RealmAccount, EPOCH_PHASE_OPEN,
@@ -153,6 +156,10 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::construction::{self, OwnerStateBumps, OwnerStateTargets};
+use super::direct_selection_v3::{
+    create_pda_account_full_principal, direct_creation_funding, observe_direct_funding,
+    DIRECT_NEUTRAL_SINK_V3, DIRECT_VERIFIER_RELEASE_ID_V3,
+};
 
 /// Borrow one account's data mutably, or refuse.
 ///
@@ -871,6 +878,13 @@ fn init_order_page(
     sequence: u64,
     intent: &PageInit,
 ) -> Outcome<()> {
+    if accounts
+        .get(IX_PAGE_EPOCH)
+        .map(|account| account.data_len())
+        == Some(DIRECT_EPOCH_V4_BYTES)
+    {
+        return init_direct_v4_order_page(program_id, accounts, sequence, intent);
+    }
     require_count(accounts, INIT_PAGE_ACCOUNT_COUNT)?;
     require_signer(&accounts[IX_PAYER])?;
     require_distinct(accounts)?;
@@ -940,6 +954,117 @@ fn init_order_page(
 
     let mut data = borrow_mut!(accounts[IX_TARGET])?;
     write_empty_page(&mut data, intent, bump)
+}
+
+/// Create the sole page-zero account of a routed Direct V4 Epoch.
+///
+/// This branch is selected only by the 672-byte V4 Epoch schema, which can
+/// exist only through the routed `InitDirectEpochV4`; the legacy page path
+/// below it is byte- and behavior-stable.
+#[inline(never)]
+fn init_direct_v4_order_page(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent: &PageInit,
+) -> Outcome<()> {
+    require_count(accounts, INIT_PAGE_ACCOUNT_COUNT)?;
+    require_signer(&accounts[IX_PAYER])?;
+    require(accounts[IX_PAYER].is_writable, ClutchError::NotWritable)?;
+    require_distinct(accounts)?;
+    accounts::validate_state_roles(program_id, accounts, &PAGE_STATE_ROLES)?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[IX_PAGE_EPOCH],
+        true,
+        &[DIRECT_EPOCH_V4_BYTES],
+    )?;
+    require_creation_sequence(sequence)?;
+    require_system_program(&accounts[IX_PAGE_SYSTEM])?;
+    require_creatable(&accounts[IX_TARGET])?;
+    let rent = read_rent(&accounts[IX_PAGE_RENT])?;
+    let market = accounts::read_market(&accounts[IX_PAGE_MARKET].data.borrow())?;
+    /* `decode` already ran the complete hostile-shape validation; only the
+     * release binding and the sole pre-freeze creation phase re-state here. */
+    let mut epoch = DirectEpochV4Account::decode(&accounts[IX_PAGE_EPOCH].data.borrow())?;
+    require(
+        epoch.verifier_release_id == DIRECT_VERIFIER_RELEASE_ID_V3
+            && epoch.lifecycle_phase
+                == clutch_solana_layout::direct_selection_v3::DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN
+            && epoch.terminal
+                == clutch_solana_layout::direct_selection_v3::DirectTerminalReceiptV3::EMPTY,
+        ClutchError::NotActive,
+    )?;
+    require(
+        epoch.neutral_lamport_sink == Hash32::from_bytes(DIRECT_NEUTRAL_SINK_V3.to_bytes())
+            && market.market == intent.market
+            && epoch.direct.common.epoch == intent.epoch
+            && epoch.direct.common.market == market.market
+            && market.lifecycle == 0
+            && intent.page_index == 0
+            && intent.page_count == 1
+            && epoch.direct.common.page_count == 0
+            && epoch.page_funding == DirectFundingLedgerV3::ZERO,
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        accounts[IX_PAGE_MARKET].key,
+        seeds::market_pda(program_id, &market.realm.bytes(), &market.market.bytes()),
+        Some(market.stored_bump),
+    )?;
+    expect_pda(
+        accounts[IX_PAGE_EPOCH].key,
+        seeds::epoch_pda(
+            program_id,
+            &epoch.direct.common.market.bytes(),
+            epoch.direct.common.epoch_index,
+        ),
+        Some(epoch.direct.common.stored_bump),
+    )?;
+    let epoch_bytes = epoch.direct.common.epoch.bytes();
+    let page_index_bytes = 0u16.to_le_bytes();
+    let (page_address, page_bump) = seeds::page_pda(program_id, &epoch_bytes, 0);
+    expect_pda(accounts[IX_TARGET].key, (page_address, page_bump), None)?;
+    let funding = direct_creation_funding(
+        &accounts[IX_PAYER],
+        &accounts[IX_TARGET],
+        &rent,
+        account_len::ORDER_PAGE,
+        DIRECT_NEUTRAL_SINK_V3,
+    )?;
+    epoch.epoch_funding = observe_direct_funding(
+        epoch.epoch_funding,
+        accounts[IX_PAGE_EPOCH].lamports(),
+        DIRECT_NEUTRAL_SINK_V3,
+    )?;
+    epoch.direct.common.page_count = 1;
+    epoch.page_funding = funding;
+    // `encode` revalidates the complete poststate below.
+    let mut epoch_post = [0u8; DIRECT_EPOCH_V4_BYTES];
+    epoch.encode(&mut epoch_post)?;
+
+    create_pda_account_full_principal(
+        program_id,
+        &accounts[IX_PAYER],
+        &accounts[IX_TARGET],
+        &accounts[IX_PAGE_SYSTEM],
+        &rent,
+        account_len::ORDER_PAGE,
+        funding,
+        0,
+        &[
+            seeds::SEED_PAGE,
+            &epoch_bytes,
+            &page_index_bytes,
+            &[page_bump],
+        ],
+    )?;
+    {
+        let mut page = borrow_mut!(accounts[IX_TARGET])?;
+        write_empty_page(&mut page, intent, page_bump)?;
+    }
+    borrow_mut!(accounts[IX_PAGE_EPOCH])?.copy_from_slice(&epoch_post);
+    Ok(())
 }
 
 /// Write one empty open page, and verify it the way a reader will.

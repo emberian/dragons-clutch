@@ -39,6 +39,7 @@ pub mod artifact;
 pub mod cash_exit;
 pub mod construction;
 pub mod direct_selection;
+pub mod direct_selection_v3;
 pub mod external_exit;
 pub mod genesis;
 pub mod market_init;
