@@ -2,7 +2,7 @@
   "schema": "dragons-clutch/baseline-manifest/v2",
   "generator": {
     "path": "scripts/baseline_manifest.py",
-    "sha256": "2baf56f92d0438cc7695d25f15317a8d59c6d2e52fc202daa77375976bf986f7",
+    "sha256": "e51e94149ef7b9738ffdd12379936827494dea7d1e53d2af785dcfe48326a725",
     "stdlib_only": true
   },
   "dirty": false,
@@ -17,7 +17,7 @@
     "content_identity": {
       "schema": "dragons-clutch/tracked-working-tree/v1",
       "algorithm": "sha256",
-      "sha256": "5d1feafc91a3e0b9076be29087cf2b0f3f268f445e32393adeb0b60ad2ef2d49",
+      "sha256": "21f4afe3c04786be67edd22bb894288a0bc16b6647956ffc8738b1d91842fbca",
       "entry_count": 554,
       "excluded_paths": [
         "MANIFEST.baseline.json"
@@ -28,9 +28,9 @@
       "rule": "enumerate stage-0 entries from `git ls-files --stage -z`, sort by raw path bytes, exclude only excluded_paths, and hash the schema tag followed by length-delimited (observed Git mode/type, kind, raw path, sha256(payload), payload length) records. Payload is working-tree bytes for regular files, link-target bytes for symlinks, and the index object id for gitlinks. Strict cleanliness makes this a complete identity of all checked-in gate/source bytes other than the generated manifest itself."
     },
     "provenance": {
-      "emitted_from_commit": "c4688da84598a38451cfbf7f96c6fa8c85183909",
-      "emitted_from_tree_hash": "988f1bd1d1db8e6ce2b11dc57951441e587455ad",
-      "commit_subject": "Append re-emission claim to repair ledger",
+      "emitted_from_commit": "d2e1cd5340493592537d78ffc458d945f9ee0377",
+      "emitted_from_tree_hash": "fc904b6dcfedd3cb18ac622a9344c6dfae40c14b",
+      "commit_subject": "Catalog dependency/license closure as declared gates",
       "remotes": [
         {
           "name": "origin",
@@ -956,6 +956,38 @@
         "^PASS: exact R1 artifact, bank capture, account probe, rewards, and STOPs agree$"
       ],
       "note": "hashes the sealed 1,228,192-byte default ELF and 23 committed audit/build/bank files, rederives the profile, and refuses source drift; it does not rebuild SBF or establish global liveness"
+    },
+    {
+      "id": "python.dependency_license_unittest",
+      "section": "current-research",
+      "command": "python3 -m unittest scripts/test_dependency_license_check.py",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^Ran \\d+ tests?$",
+        "^(OK|FAILED)\\b",
+        "^(ERROR|FAIL): "
+      ],
+      "note": "offline unit tests over the in-repo dependency/license checker; they pin the attested 12-manifest default mode byte-stable and exercise the complete-scope and SBOM writers"
+    },
+    {
+      "id": "python.dependency_license_complete",
+      "section": "current-research",
+      "command": "python3 scripts/dependency_license_check.py --complete --sbom-out \"${TMPDIR:-/tmp}/clutch-dependency-license-complete.tsv\" && cmp \"${TMPDIR:-/tmp}/clutch-dependency-license-complete.tsv\" research/liveness-policy-profile/dependency_license_complete.tsv",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^SUMMARY manifests=\\d+ unique_rows=\\d+ failures=0 status=PASS$"
+      ],
+      "note": "complete-scope offline dependency/license closure over every locked manifest in the repository plus byte-equality of the committed SBOM catalog; adding a crate without regenerating the catalog goes red. The attested 12-manifest default mode is a separate byte-stable surface and is deliberately not this gate"
     },
     {
       "id": "cargo_test.liveness_policy_profile",
@@ -2261,8 +2293,8 @@
     ]
   },
   "run": {
-    "started_at_utc": "2026-08-19T18:09:19Z",
-    "finished_at_utc": "2026-08-19T18:16:24Z",
+    "started_at_utc": "2026-08-19T21:02:41Z",
+    "finished_at_utc": "2026-08-19T21:09:55Z",
     "gate_timeout_seconds": 1800,
     "note": "timestamps here are the only nondeterministic fields in this manifest; `check` ignores them"
   },
@@ -2745,6 +2777,23 @@
         "PASS: exact R1 artifact, bank capture, account probe, rewards, and STOPs agree"
       ],
       "key_lines_sha256": "3a3ef42d1adf31ca49fc7381293634b8bdde4681a32af3f6ef3fa5512d517212"
+    },
+    "python.dependency_license_unittest": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "Ran 17 tests",
+        "OK"
+      ],
+      "key_lines_sha256": "191440592742ba09b0d11af0f25bad3087f9ded7f9895fe95d4ade4569dfaa92"
+    },
+    "python.dependency_license_complete": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_test.liveness_policy_profile": {
       "exit_code": 0,
@@ -3342,8 +3391,8 @@
     }
   },
   "gate_summary": {
-    "total": 98,
-    "matching_expectation": 98,
+    "total": 100,
+    "matching_expectation": 100,
     "contradicting_expectation": []
   },
   "unavailable_or_failing_gates": [
