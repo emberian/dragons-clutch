@@ -205,6 +205,14 @@ pub const ORDER_KIND_TOMBSTONE: u8 = 3;
 /// carries a whole [`PortfolioRecord`] body behind its slot kind byte — not a
 /// round number with slack in it.  A test pins every variant against it.
 pub const MAX_INTENT_BYTES: usize = 2 + (2 * HASH_BYTES) + 8 + 1 + PORTFOLIO_RECORD_BYTES;
+/// Exact signed-wire width of one V1 source-spec body.
+///
+/// The source admission crate owns the meaning of these bytes.  The layout
+/// owns only their fixed instruction width so a wallet can present the body
+/// without a caller-owned evidence account becoming a competing semantic
+/// owner.  `clutch-sbf` compile-time asserts this equals its reviewed
+/// `SourceSpecV1` codec width before admitting the intent.
+pub const SOURCE_SPEC_BODY_V1_BYTES: usize = 256;
 
 const _: () = assert!(MAX_EPOCH_ORDERS == 64);
 const _: () = assert!(MAX_PRICE_SCALE > 0);
@@ -4260,6 +4268,21 @@ pub enum Intent {
         cursor: u64,
         evidence: Hash32,
     },
+    /// Construct one immutable authenticated source spec and its feed head.
+    ///
+    /// `terms` names the canonical sealed Terms account that supplies Realm,
+    /// feed, window and source-release bindings. `spec_body` is decoded by the
+    /// registered source codec and must hash to that Terms feed identity.
+    InitSourceSpec {
+        terms: Hash32,
+        spec_body: [u8; SOURCE_SPEC_BODY_V1_BYTES],
+    },
+    /// Construct the canonical archive for the exact Terms window.
+    InitSourceArchive { terms: Hash32 },
+    /// Append the uniquely admitted next source record to that archive.
+    AppendSourceArchive { terms: Hash32 },
+    /// Authenticate maturity, seal the archive and advance its feed head.
+    SealSourceArchive { terms: Hash32 },
     /// Append one order to a frozen-shape order page.
     ///
     /// The payload is an [`OrderSlot`] rather than a bare [`OrderRecord`], so
@@ -4527,6 +4550,10 @@ const WRITE_ARTIFACT_TAG: u8 = 19;
 const SEAL_ARTIFACT_TAG: u8 = 20;
 const ABORT_ARTIFACT_TAG: u8 = 21;
 const SUBMIT_DIRECT_PAGE_TAG: u8 = 22;
+const INIT_SOURCE_SPEC_TAG: u8 = 23;
+const INIT_SOURCE_ARCHIVE_TAG: u8 = 24;
+const APPEND_SOURCE_ARCHIVE_TAG: u8 = 25;
+const SEAL_SOURCE_ARCHIVE_TAG: u8 = 26;
 
 impl Intent {
     /// Return the exact encoded byte length for this intent.
@@ -4537,6 +4564,10 @@ impl Intent {
             Self::Materialize { .. } | Self::Dematerialize { .. } => 2 + 32 + 32 + 32 + 1 + 8,
             Self::RedeemExternal { .. } => 2 + 32 + 32 + 32 + 32 + 1 + 8,
             Self::FeedAdvance { .. } => 2 + 32 + 8 + 32,
+            Self::InitSourceSpec { .. } => 2 + 32 + SOURCE_SPEC_BODY_V1_BYTES,
+            Self::InitSourceArchive { .. }
+            | Self::AppendSourceArchive { .. }
+            | Self::SealSourceArchive { .. } => 2 + 32,
             Self::PlaceOrder { slot, .. } => match slot {
                 OrderSlot::Single(_) => 2 + 32 + 32 + 8 + 1 + ORDER_RECORD_BYTES,
                 OrderSlot::Portfolio(_) => 2 + 32 + 32 + 8 + 1 + PORTFOLIO_RECORD_BYTES,
@@ -4690,6 +4721,25 @@ impl Intent {
                 w.hash(*feed)?;
                 w.u64(*cursor)?;
                 w.hash(*evidence)?
+            }
+            Self::InitSourceSpec { terms, spec_body } => {
+                check_hash(*terms)?;
+                put_header(&mut w, INIT_SOURCE_SPEC_TAG, INTENT_VERSION)?;
+                w.hash(*terms)?;
+                w.bytes(spec_body)?
+            }
+            Self::InitSourceArchive { terms }
+            | Self::AppendSourceArchive { terms }
+            | Self::SealSourceArchive { terms } => {
+                check_hash(*terms)?;
+                let tag = match self {
+                    Self::InitSourceArchive { .. } => INIT_SOURCE_ARCHIVE_TAG,
+                    Self::AppendSourceArchive { .. } => APPEND_SOURCE_ARCHIVE_TAG,
+                    Self::SealSourceArchive { .. } => SEAL_SOURCE_ARCHIVE_TAG,
+                    _ => return Err(CodecError::InvalidEnum),
+                };
+                put_header(&mut w, tag, INTENT_VERSION)?;
+                w.hash(*terms)?
             }
             Self::PlaceOrder {
                 market,
@@ -5069,6 +5119,24 @@ impl Intent {
                 };
                 r.done()?;
                 Ok(v)
+            }
+            INIT_SOURCE_SPEC_TAG => {
+                let terms = r.hash()?;
+                let spec_body = r.bytes::<SOURCE_SPEC_BODY_V1_BYTES>()?;
+                r.done()?;
+                check_hash(terms)?;
+                Ok(Self::InitSourceSpec { terms, spec_body })
+            }
+            INIT_SOURCE_ARCHIVE_TAG | APPEND_SOURCE_ARCHIVE_TAG | SEAL_SOURCE_ARCHIVE_TAG => {
+                let terms = r.hash()?;
+                r.done()?;
+                check_hash(terms)?;
+                Ok(match tag {
+                    INIT_SOURCE_ARCHIVE_TAG => Self::InitSourceArchive { terms },
+                    APPEND_SOURCE_ARCHIVE_TAG => Self::AppendSourceArchive { terms },
+                    SEAL_SOURCE_ARCHIVE_TAG => Self::SealSourceArchive { terms },
+                    _ => return Err(CodecError::InvalidEnum),
+                })
             }
             PLACE_TAG => {
                 let market = r.hash()?;
@@ -9987,5 +10055,51 @@ mod tests {
             Intent::decode(&encoded[..n]),
             Err(CodecError::NonCanonicalPadding)
         );
+    }
+
+    #[test]
+    fn authenticated_source_intents_have_exact_unambiguous_wires() {
+        let mut body = [0_u8; SOURCE_SPEC_BODY_V1_BYTES];
+        for (index, byte) in body.iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        let intents = [
+            Intent::InitSourceSpec {
+                terms: h(1),
+                spec_body: body,
+            },
+            Intent::InitSourceArchive { terms: h(1) },
+            Intent::AppendSourceArchive { terms: h(1) },
+            Intent::SealSourceArchive { terms: h(1) },
+        ];
+        let lengths = [290, 34, 34, 34];
+        let tags = [
+            INIT_SOURCE_SPEC_TAG,
+            INIT_SOURCE_ARCHIVE_TAG,
+            APPEND_SOURCE_ARCHIVE_TAG,
+            SEAL_SOURCE_ARCHIVE_TAG,
+        ];
+        for ((intent, expected_len), expected_tag) in intents.into_iter().zip(lengths).zip(tags) {
+            let mut encoded = [0_u8; MAX_INTENT_BYTES];
+            let len = intent.encode(&mut encoded).unwrap();
+            assert_eq!(len, expected_len);
+            assert_eq!(len, intent.encoded_len());
+            assert_eq!(&encoded[..2], &[expected_tag, INTENT_VERSION]);
+            assert_eq!(Intent::decode(&encoded[..len]), Ok(intent));
+            assert_eq!(
+                Intent::decode(&encoded[..len - 1]),
+                Err(CodecError::Truncated)
+            );
+            assert_eq!(
+                Intent::decode(&encoded[..len + 1]),
+                Err(CodecError::TrailingBytes)
+            );
+            encoded[2..34].fill(0);
+            assert_eq!(
+                Intent::decode(&encoded[..len]),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+        assert!(intents[0].encoded_len() <= MAX_INTENT_BYTES);
     }
 }
