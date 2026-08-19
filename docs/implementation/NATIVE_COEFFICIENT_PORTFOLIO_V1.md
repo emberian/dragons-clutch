@@ -128,9 +128,14 @@ The isolated preflight admits only one complete direct pair:
 - both order limits satisfied on the same numerator scale;
 - exact divisibility by `price_scale` (no unnamed rounding);
 - zero signed fee envelopes until fee carry has an authenticated state owner;
-- exact ACTIVE reservations, owner/generation/market/epoch/Terms/grid/policy
+- exact ENTITLED reservations, owner/generation/market/epoch/Terms/grid/policy
   bindings, and open Positions; and
 - no overflow in any debit, credit, or Egg-vector addition.
+
+The pure seam deliberately refuses the currently reachable `ACTIVE` phase. Only
+candidate finalization may move a complete frozen reservation set to
+`ENTITLED`; because that authority is missing, live code cannot reach the
+otherwise successful model transition.
 
 Every post-state is computed and validated before the first caller-visible
 mutation. On success, the buyer receives the whole native Egg vector and pays

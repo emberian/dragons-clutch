@@ -5,7 +5,7 @@
 //! [`crate::reservation::ReservationPlan`] already own placement and exact
 //! funding.  Here, two proportional encodings of the same native B-spline Egg
 //! vector canonicalize to one claim identity, one full-fill pair is checked
-//! against both ACTIVE reservations, and every post-state is staged before a
+//! against both ENTITLED reservations, and every post-state is staged before a
 //! caller can mutate anything.
 //!
 //! It is **not** a live entitlement authority.  [`PortfolioEntitlementV1`] has
@@ -24,7 +24,7 @@
 use crate::{
     check_hash, check_padded_amounts, digest, order_id_rank,
     reservation::{
-        ReservationAccount, ReservationPlan, RESERVATION_STATE_ACTIVE, RESERVATION_STATE_CONSUMED,
+        ReservationAccount, ReservationPlan, RESERVATION_STATE_CONSUMED, RESERVATION_STATE_ENTITLED,
     },
     CodecError, Hash32, OrderSlot, PortfolioRecord, PositionAccount, TermsAccount,
     MAX_BASIS_DEGREE, MAX_OUTCOMES,
@@ -453,9 +453,9 @@ pub struct PortfolioPairInputV1<'a> {
     pub buyer_position: &'a PositionAccount,
     /// Seller's current Position.
     pub seller_position: &'a PositionAccount,
-    /// Buy order's exact ACTIVE reservation.
+    /// Buy order's exact ENTITLED reservation.
     pub buyer_reservation: &'a ReservationAccount,
-    /// Sell order's exact ACTIVE reservation.
+    /// Sell order's exact ENTITLED reservation.
     pub seller_reservation: &'a ReservationAccount,
     /// Proposed immutable vector entitlement content.
     pub entitlement: &'a PortfolioEntitlementV1,
@@ -872,7 +872,7 @@ fn validate_reservation(
     funding: &PortfolioFundingV1,
 ) -> PortfolioResult<()> {
     reservation.validate()?;
-    if reservation.state != RESERVATION_STATE_ACTIVE {
+    if reservation.state != RESERVATION_STATE_ENTITLED {
         return Err(PortfolioSettlementError::AlreadyConsumed);
     }
     if reservation.market != entitlement.market
@@ -1188,6 +1188,16 @@ mod tests {
                 sell_plan,
             )
             .unwrap();
+            // The missing candidate-finalization authority is the only live
+            // code allowed to perform this phase transition. This pure fixture
+            // constructs its expected output directly so consumption cannot
+            // accidentally normalize ACTIVE reservations into entitlements.
+            let mut buyer_reservation = buyer_reservation;
+            let mut seller_reservation = seller_reservation;
+            buyer_reservation.state = RESERVATION_STATE_ENTITLED;
+            seller_reservation.state = RESERVATION_STATE_ENTITLED;
+            buyer_reservation.validate().unwrap();
+            seller_reservation.validate().unwrap();
             let funding = PortfolioFundingV1::for_order(market, &terms, 100, &buy, 0).unwrap();
             let mut prices = [0u64; MAX_OUTCOMES];
             prices[..3].copy_from_slice(&[20, 30, 50]);
