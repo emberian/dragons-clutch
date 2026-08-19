@@ -61,6 +61,18 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- SOPHISTICATION GAP ASSESSMENT committed
+  (docs/reviews/SOPHISTICATION_GAP_2026-08-19.md): the joins are the
+  fiction (three seams structurally impossible on a public cluster, not
+  merely untested), toy dimensions tabulated with citations (16 outcomes /
+  16 order slots / 32 archive records / 8 presets), the compute verdict
+  (1.07M CU for the simplest resolve against a 1.4M ceiling is an
+  architectural result, not a tuning one), absent layers (fees, LP,
+  terminal closure, upgrade governance, client), and the two strategic
+  moves: make the spline claims tradeable via V3, then answer the compute
+  wall with succinct verification — joining the consumerless Lean-authored
+  STARK stack in breadstuffs. Stop adding verified components.
+
 - DRAFT 11 COMPLETE, all four documents (degg-research 0dd6601/4ce0ce6/
   e4bfabf): definitions 9pp, data-reporting 10pp, IAC 10pp, cover 2pp.
   Named system throughout, one status paragraph each with [DEVNET RECORD]
