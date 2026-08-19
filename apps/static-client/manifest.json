@@ -91,7 +91,7 @@
     "schema": "dragon-clutch.glass-display-snapshot.v1",
     "schemaVersion": 1,
     "snapshotIdentity": {
-      "reviewedTreeCommit": "b5da74fba46f13794e48d42973304f05d10642f5",
+      "reviewedTreeCommit": "93886e92ad8434949845ea766bc0595ee930b602",
       "releaseBinding": "unbound-offline-snapshot",
       "releaseSourceCommit": null
     },
@@ -261,6 +261,24 @@
         "sourceRef": { "repositoryPath": "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/resolution_work.log", "locator": "Committed local bank-log evidence seal" },
         "negativeBoundary": "A committed local artifact/log seal is not a release manifest, deployment, public-network execution, inclusion guarantee, or universal liveness proof.",
         "identity": { "sourceCommit": "b5da74fba46f13794e48d42973304f05d10642f5", "artifact": { "kind": "elf-sha256", "value": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1", "path": "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/clutch_sbf.so" } }
+      },
+      {
+        "id": "batch-verus-shadow",
+        "kind": "PROVED_MODEL",
+        "subject": { "id": "batch-verus-shadow", "label": "Scalar batch Verus shadow" },
+        "scope": "Pinned Verus checks allocation decomposition and per-fill bounds, unique tick selection, a whole-fill partition conditional on accepted side equalities, and a zero-suffix fold identity.",
+        "sourceRef": { "repositoryPath": "verus/batch/README.md", "locator": "Verified scalar statements and explicit exclusions" },
+        "negativeBoundary": "The proof does not establish dust-loop completion, accepted side equality, production zero-padding validation, source-level refinement, coupled V1, accounts, SBF, or deployment.",
+        "identity": { "sourceCommit": "345bc785553eebfc1b543139664fe0678d4898ae", "artifact": { "kind": "source-revision", "value": "345bc785553eebfc1b543139664fe0678d4898ae", "path": "verus/batch/batch.rs" } }
+      },
+      {
+        "id": "terminal-lifecycle-v2-model",
+        "kind": "MODEL_ONLY",
+        "subject": { "id": "terminal-lifecycle-v2", "label": "Internal-only terminal lifecycle V2 model" },
+        "scope": "A hostile-prestate model checks exact rent/refund roles, replay tombstone retention, internal claim and modeled mint equality, close ordering, and neutral surplus disposition.",
+        "sourceRef": { "repositoryPath": "docs/implementation/TERMINAL_LIFECYCLE_V2.md", "locator": "Model boundary and acceptance evidence" },
+        "negativeBoundary": "The model supplies no live account ABI, signer or PDA authority, rent funding, Token-2022 CPI, SBF route, legacy migration, external-bearer terminal path, or fractional credit closure.",
+        "identity": { "sourceCommit": "6dbe618dbbb8ef2b40f3d21fdefe8ab8fb885c0b", "artifact": { "kind": "source-revision", "value": "6dbe618dbbb8ef2b40f3d21fdefe8ab8fb885c0b", "path": "research/terminal-lifecycle-v2/src/lib.rs" } }
       }
     ],
     "lifecycle": [
@@ -425,6 +443,20 @@
         "category": "evidence",
         "text": "The committed liveness ELF and bank logs are local evidence artifacts only; they do not close measured liveness, deployment, release, or inclusion gates.",
         "evidenceRefs": ["liveness-artifact-seal"]
+      },
+      {
+        "id": "batch-proof-boundary",
+        "title": "Scalar batch proof boundary",
+        "category": "evidence",
+        "text": "The Verus shadow proves four mathematical statements under explicit premises; it is not a proof of production batch code, dust completion, coupled settlement, or SBF behavior.",
+        "evidenceRefs": ["batch-verus-shadow"]
+      },
+      {
+        "id": "terminal-model-boundary",
+        "title": "Terminal model boundary",
+        "category": "lifecycle",
+        "text": "The internal-only terminal model fails closed on external bearers and has no live authority, account, token, rent-funding, migration, or fractional-credit transition.",
+        "evidenceRefs": ["terminal-lifecycle-v2-model"]
       }
     ]
   }
