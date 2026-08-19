@@ -47,16 +47,24 @@ and the central proof/model/tool surfaces. The checked-in
 `MANIFEST.baseline.json` is intentionally still historical schema v1.
 
 The full 94-gate emission was subsequently run from clean `ec77d0b`: 86 matched
-and eight contradicted. Read
+and eight contradicted. Seven of those eight are now repaired with focused
+green evidence: `b0e87dc` closes the workspace Clippy API lint, `9c371fe`
+repairs the Solana-reference lock/rustdoc lane, `7b056bc` reconciles both cost
+and ABI gates, and `38c8957` moves the 22-step success walk onto the explicitly
+different mock-source ELF. That walk now records one semantic refusal plus one
+two-instruction external-exit probe that reaches the 1,400,000-CU ceiling and
+rolls back, rather than misreporting the latter as a semantic refusal. Read
 [`docs/implementation/BASELINE_MANIFEST_DIAGNOSTIC_2026-08-19.md`](docs/implementation/BASELINE_MANIFEST_DIAGNOSTIC_2026-08-19.md)
-before touching the manifest. The diagnostic output was not committed.
+before touching the manifest. The generated diagnostic manifest was not
+committed.
 
 Resume R1 in this exact order:
 
 1. run `git status --short` and refuse unrelated dirty bytes;
-2. repair the exact eight contradictions in the diagnostic without weakening
-   their expected-success declarations;
-3. run the narrow eight gates, then from the clean tree rerun
+2. repair the one remaining `sbf.runtime_bringup` contradiction by separating
+   the inert default/`0x79` campaign from the explicitly labelled mock-source
+   success campaign; do not weaken its expected-success declaration;
+3. run that gate, then from the clean tree rerun
    `scripts/baseline_manifest.py emit --run-gates`;
 4. only if all 94 match, inspect the emitted schema-v2 file and commit **only**
    `MANIFEST.baseline.json`, then run

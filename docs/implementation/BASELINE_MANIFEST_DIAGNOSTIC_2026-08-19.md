@@ -15,6 +15,28 @@ over 501 tracked entries. Exactly 86 gates matched their declarations and eight
 contradicted them. The emitted diagnostic manifest was not committed and the
 historical schema-v1 `MANIFEST.baseline.json` was restored.
 
+## Repair progress
+
+Seven contradictions are repaired and focused-green after that historical run:
+
+- `b0e87dc` refactors the harness comparison input and restores strict
+  workspace Clippy;
+- `9c371fe` refreshes the Solana-reference lock graph and fixes its rustdoc
+  link; 54 tests, strict Clippy, and strict rustdoc pass offline/locked;
+- `7b056bc` reconciles the cost/ABI model with the current 310-byte intent,
+  account families, and versioned codecs; 43 unit tests, `abi-audit`, and the
+  263-scenario check pass; and
+- `38c8957` runs the signed walk against the explicitly different
+  `non-production-mock-source` ELF. All 22 transactions confirm, 18 watched
+  accounts reload, the terminal falsifier goes red, and the walk ends with both
+  owners' cash and pooled custody drained. It now reports one semantic refusal
+  and one exact two-instruction compute-ceiling STOP with rollback. The default
+  ELF still refuses Endow with `0x79`.
+
+The only unresolved contradiction is `sbf.runtime_bringup`. The complete
+94-gate emission has not been rerun, so the checked-in manifest must remain
+schema v1.
+
 ## Exact contradictions
 
 | Gate | Observed result | Required repair |
@@ -38,7 +60,7 @@ the declared toolchain gates also matched.
 
 Do not change a declaration from expected success to expected failure merely to
 make the summary green. Repair the stale lock/tooling/harness assumptions,
-rerun the narrow eight gates, then run the complete clean-tree emission again.
+run the remaining bringup gate, then run the complete clean-tree emission again.
 Only a 94/94 result may replace the checked-in schema-v1 manifest. After the
 manifest-only commit, rerun:
 
