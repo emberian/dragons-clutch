@@ -14,9 +14,10 @@
 //!
 //! ## `RedeemInternal` now pays real collateral
 //!
-//! `Resolve` moves no value and its plane is unchanged at twelve accounts.
+//! `Resolve` moves no value but carries the complete canonical outcome-mint
+//! vector so direct bearer burns are synchronized before the payout freezes.
 //! `RedeemInternal` pays collateral *out* of the Hoard, so it takes
-//! [`REDEEM_ACCOUNT_COUNT`] — the twelve, plus the Profile, the token program,
+//! [`REDEEM_ACCOUNT_PREFIX`] plus that mint vector — the evidence prefix, plus the Profile, the token program,
 //! the Realm's 266 collateral-policy bytes, the collateral mint, the
 //! redeemer's own token account, the Hoard's signing authority, and the Hoard
 //! token account.  The outflow is a `TransferChecked` signed by
@@ -231,6 +232,7 @@
 use crate::accounts::{
     self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
 };
+use crate::claim_truth;
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use crate::token;
@@ -248,10 +250,10 @@ use clutch_solana_layout::{
     MAX_OUTCOMES,
 };
 use clutch_solana_reference::{
-    derive_payout, Action, Error as ReferenceError, ExternalAccount, KernelAccount, ReplayAccount,
-    Request, ResolutionRefusal, ResolutionTerms, WindowError, EXTERNAL_ACCOUNT_LEN,
-    KERNEL_ACCOUNT_LEN, MAX_OBSERVATIONS, MAX_WINDOW_EVIDENCE_LEN, OBSERVATION_RECORD_BYTES,
-    REPLAY_ACCOUNT_LEN, WINDOW_EVIDENCE_HEADER_BYTES,
+    derive_payout, Action, Error as ReferenceError, KernelAccount, ReplayAccount, Request,
+    ResolutionRefusal, ResolutionTerms, WindowError, KERNEL_ACCOUNT_LEN, MAX_OBSERVATIONS,
+    MAX_WINDOW_EVIDENCE_LEN, OBSERVATION_RECORD_BYTES, REPLAY_ACCOUNT_LEN,
+    WINDOW_EVIDENCE_HEADER_BYTES,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -357,12 +359,12 @@ pub const MAX_FEED_PAGE_LEN: usize =
 /* Account lists                                                             */
 /* ------------------------------------------------------------------------ */
 
-/// Exact number of accounts `Resolve` accepts.
+/// Fixed prefix length of `Resolve`, before its canonical mint vector.
 ///
 /// `Resolve` is token-free — `TOKEN2022_PLAN.md` §3.2's table gives it no CPI —
-/// so its plane is unchanged.  `RedeemInternal` pays collateral out and takes
-/// [`REDEEM_ACCOUNT_COUNT`].
-pub const EVIDENCE_ACCOUNT_COUNT: usize = 12;
+/// `RedeemInternal` pays collateral out and takes
+/// [`REDEEM_ACCOUNT_PREFIX`] plus the same bounded vector.
+pub const EVIDENCE_ACCOUNT_PREFIX: usize = 11;
 /// Exact number of accounts `FeedAdvance` accepts.
 pub const FEED_ADVANCE_ACCOUNT_COUNT: usize = 3;
 
@@ -376,26 +378,24 @@ pub const IX_HOARD: usize = 2;
 pub const IX_POSITION: usize = 3;
 /// Reference-only kernel-aggregate account.
 pub const IX_KERNEL: usize = 4;
-/// Reference-only external-shadow account.
-pub const IX_EXTERNAL: usize = 5;
 /// Reference-only replay-sequence account.
-pub const IX_REPLAY: usize = 6;
+pub const IX_REPLAY: usize = 5;
 /// Market-wide supply-ledger account.
-pub const IX_SUPPLY: usize = 7;
+pub const IX_SUPPLY: usize = 6;
 /// Immutable terms account.
-pub const IX_TERMS: usize = 8;
+pub const IX_TERMS: usize = 7;
 /// Resolution-record account.
-pub const IX_RESOLUTION: usize = 9;
+pub const IX_RESOLUTION: usize = 8;
 /// Feed-head account (read-only).
-pub const IX_FEED: usize = 10;
+pub const IX_FEED: usize = 9;
 /// Caller-supplied evidence buffer (read-only, hostile).
-pub const IX_BUFFER: usize = 11;
+pub const IX_BUFFER: usize = 10;
 
 /* --------------------------------------------------------------------- */
 /* `RedeemInternal`'s collateral leg, mandatory                            */
 /* --------------------------------------------------------------------- */
 
-/// Exact number of accounts `RedeemInternal` accepts.
+/// Fixed prefix length of `RedeemInternal`, before its canonical mint vector.
 ///
 /// The twelve evidence accounts, plus the Profile the 266 policy bytes are
 /// bound to, the token program, the policy, the collateral mint, the
@@ -407,22 +407,26 @@ pub const IX_BUFFER: usize = 11;
 /// the only thing that binds those 266 bytes to *this* Realm is the Profile's
 /// digest.  The evidence plane never needed a Profile before because nothing
 /// in it named an asset.
-pub const REDEEM_ACCOUNT_COUNT: usize = 19;
+pub const REDEEM_ACCOUNT_PREFIX: usize = 18;
 
 /// Profile identity account (read-only).
-pub const IX_PROFILE: usize = 12;
+pub const IX_PROFILE: usize = 11;
 /// The pinned Token-2022 program (read-only, executable).
-pub const IX_TOKEN_PROGRAM: usize = 13;
+pub const IX_TOKEN_PROGRAM: usize = 12;
 /// The Realm's 266-byte collateral policy (read-only).
-pub const IX_POLICY: usize = 14;
+pub const IX_POLICY: usize = 13;
 /// The collateral mint the Realm's policy names (read-only).
-pub const IX_COLLATERAL_MINT: usize = 15;
+pub const IX_COLLATERAL_MINT: usize = 14;
 /// The redeemer's own Token-2022 collateral account (writable).
-pub const IX_ACTOR_TOKEN: usize = 16;
+pub const IX_ACTOR_TOKEN: usize = 15;
 /// The Hoard's signing authority; holds no data and is never written.
-pub const IX_HOARD_AUTHORITY: usize = 17;
+pub const IX_HOARD_AUTHORITY: usize = 16;
 /// The Hoard's Token-2022 collateral account (writable).
-pub const IX_HOARD_TOKEN: usize = 18;
+pub const IX_HOARD_TOKEN: usize = 17;
+/// First canonical outcome mint on a Resolve.
+pub const IX_RESOLVE_OUTCOME_MINTS: usize = EVIDENCE_ACCOUNT_PREFIX;
+/// First canonical outcome mint on a RedeemInternal.
+pub const IX_REDEEM_OUTCOME_MINTS: usize = REDEEM_ACCOUNT_PREFIX;
 
 /// Where this plane puts the collateral accounts the seam plane also carries.
 const REDEEM_COLLATERAL_ROLES: split::CollateralRoles = split::CollateralRoles {
@@ -446,12 +450,11 @@ pub const IX_ADVANCE_BUFFER: usize = 2;
 /// mutability is a *gate* decision made at the reference's point in the order,
 /// so their declared writability is carried into the transition as a fact
 /// rather than refused here.
-const EVIDENCE_STATE_ROLES: [StateRole; 8] = [
+const EVIDENCE_STATE_ROLES: [StateRole; 7] = [
     StateRole::writable(IX_MARKET, account_len::MARKET),
     StateRole::writable(IX_HOARD, account_len::HOARD),
     StateRole::writable(IX_POSITION, account_len::POSITION),
     StateRole::writable(IX_KERNEL, KERNEL_ACCOUNT_LEN),
-    StateRole::writable(IX_EXTERNAL, EXTERNAL_ACCOUNT_LEN),
     StateRole::writable(IX_REPLAY, REPLAY_ACCOUNT_LEN),
     StateRole::writable(IX_SUPPLY, account_len::SUPPLY_LEDGER),
     StateRole::read_only(IX_FEED, account_len::FEED),
@@ -1311,14 +1314,13 @@ fn write_market_lifecycle(market_bytes: &mut [u8], lifecycle: u8) -> Gate<()> {
 /* The evidence-gated transition                                             */
 /* ------------------------------------------------------------------------ */
 
-/// The seven mutable state accounts of one evidence-gated transition.
+/// The six mutable state accounts of one evidence-gated transition.
 #[derive(Debug)]
 struct StateSlices<'a> {
     market: &'a mut [u8],
     hoard: &'a mut [u8],
     position: &'a mut [u8],
     kernel: &'a mut [u8],
-    external: &'a mut [u8],
     replay: &'a mut [u8],
     supply: &'a mut [u8],
 }
@@ -1329,7 +1331,6 @@ struct Bumps {
     market: u8,
     hoard: u8,
     position: u8,
-    external: u8,
     replay: u8,
     supply: u8,
     terms: u8,
@@ -1401,7 +1402,6 @@ fn apply_evidence_transition(
     let mut hoard = HoardAccount::decode(state.hoard)?;
     let mut position = PositionAccount::decode(state.position)?;
     let kernel = kernel_head(state.kernel)?;
-    let mut external = ExternalAccount::decode(state.external)?;
     let mut replay = ReplayAccount::decode(state.replay)?;
     let mut supply = SupplyLedgerAccount::decode(state.supply)?;
 
@@ -1410,7 +1410,6 @@ fn apply_evidence_transition(
         || market.hoard_bump != bumps.hoard
         || hoard.stored_bump != bumps.hoard
         || position.stored_bump != bumps.position
-        || external.stored_bump != bumps.external
         || replay.stored_bump != bumps.replay
         || supply.stored_bump != bumps.supply
     {
@@ -1420,14 +1419,11 @@ fn apply_evidence_transition(
         || market.realm != hoard.realm
         || market.market != position.market
         || market.market != kernel.market
-        || market.market != external.market
         || market.market != replay.market
         || market.market != supply.market
         || market.realm != supply.realm
         || market.outcome_count != supply.outcome_count
-        || position.owner != external.owner
         || position.owner != replay.owner
-        || position.generation != external.position_generation
         || position.generation != replay.position_generation
         || (market.lifecycle == 0 && kernel.phase != 0)
         || (market.lifecycle == 1 && kernel.phase != 1)
@@ -1440,10 +1436,7 @@ fn apply_evidence_transition(
     let count = usize::from(market.outcome_count);
     let mut index = count;
     while index < MAX_OUTCOMES {
-        if position.internal[index] != 0
-            || kernel.total_supply[index] != 0
-            || external.balances[index] != 0
-        {
+        if position.internal[index] != 0 || kernel.total_supply[index] != 0 {
             return Err(ReferenceError::NonCanonical);
         }
         index += 1;
@@ -1455,7 +1448,6 @@ fn apply_evidence_transition(
         &supply,
         &kernel.total_supply,
         &position.internal,
-        &external.balances,
     )?;
 
     /* 5. Replay. */
@@ -1471,7 +1463,7 @@ fn apply_evidence_transition(
     kernel_invariants(state.kernel, market.outcome_count, hoard.collateral_atoms)?;
     let mut pure_position = Position {
         internal: position.internal,
-        external: external.balances,
+        external: [0; MAX_OUTCOMES],
     };
 
     /* 7. `validate_evidence_metadata`, the half that is a byte-level fact. */
@@ -1620,15 +1612,9 @@ fn apply_evidence_transition(
             .ok_or(ReferenceError::AggregateClosureMismatch)?
             .checked_add(pure_position.internal[outcome])
             .ok_or(ReferenceError::Arithmetic)?;
-        supply.external_supply[outcome] = supply.external_supply[outcome]
-            .checked_sub(external.balances[outcome])
-            .ok_or(ReferenceError::AggregateClosureMismatch)?
-            .checked_add(pure_position.external[outcome])
-            .ok_or(ReferenceError::Arithmetic)?;
         outcome += 1;
     }
     position.internal = pure_position.internal;
-    external.balances = pure_position.external;
     replay.sequence = next_sequence;
 
     /* 12. C1 and C2 again, over the post-state. */
@@ -1637,7 +1623,6 @@ fn apply_evidence_transition(
         &supply,
         &step.total_supply,
         &position.internal,
-        &external.balances,
     )?;
 
     /* 13. Everything below this line writes. */
@@ -1647,7 +1632,6 @@ fn apply_evidence_transition(
     write_kernel(state.kernel, &step)?;
     hoard.encode(state.hoard)?;
     position.encode(state.position)?;
-    external.encode(state.external)?;
     replay.encode(state.replay)?;
     supply.encode(state.supply)?;
     Ok(GateOutput {
@@ -1662,7 +1646,6 @@ fn check_closure(
     supply: &SupplyLedgerAccount,
     total_supply: &[u64; MAX_OUTCOMES],
     internal: &[u64; MAX_OUTCOMES],
-    external: &[u64; MAX_OUTCOMES],
 ) -> Gate<()> {
     let mut outcome = 0_usize;
     while outcome < usize::from(outcome_count) {
@@ -1672,9 +1655,7 @@ fn check_closure(
         if aggregate != total_supply[outcome] {
             return Err(ReferenceError::AggregateClosureMismatch);
         }
-        if internal[outcome] > supply.internal_supply[outcome]
-            || external[outcome] > supply.external_supply[outcome]
-        {
+        if internal[outcome] > supply.internal_supply[outcome] {
             return Err(ReferenceError::AggregateClosureMismatch);
         }
         outcome += 1;
@@ -1827,13 +1808,14 @@ fn evidence_gated(
     action: GateAction,
 ) -> Outcome<()> {
     let redeems = matches!(action, GateAction::Redeem { .. });
-    require_count(
-        accounts,
-        if redeems {
-            REDEEM_ACCOUNT_COUNT
-        } else {
-            EVIDENCE_ACCOUNT_COUNT
-        },
+    require(
+        accounts.len()
+            >= if redeems {
+                REDEEM_ACCOUNT_PREFIX
+            } else {
+                EVIDENCE_ACCOUNT_PREFIX
+            },
+        ClutchError::AccountCount,
     )?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &EVIDENCE_STATE_ROLES)?;
@@ -1863,6 +1845,15 @@ fn evidence_gated(
      * carried into the transition instead of being compared here, so that the
      * comparison still happens at the reference's point in the gate order. */
     let market = accounts::read_market(&accounts[IX_MARKET].data.borrow())?;
+    let mint_prefix = if redeems {
+        IX_REDEEM_OUTCOME_MINTS
+    } else {
+        IX_RESOLVE_OUTCOME_MINTS
+    };
+    require(
+        accounts.len() == mint_prefix + usize::from(market.outcome_count),
+        ClutchError::AccountCount,
+    )?;
     let terms = accounts::read_terms(&accounts[IX_TERMS].data.borrow())?;
     let feed = accounts::read_feed(&accounts[IX_FEED].data.borrow())?;
     let (owner, generation) = {
@@ -1883,8 +1874,6 @@ fn evidence_gated(
         seeds::kernel_pda(program_id, &market_bytes),
         None,
     )?;
-    let external_pda = seeds::external_pda(program_id, &market_bytes, &owner, generation);
-    expect_pda(accounts[IX_EXTERNAL].key, external_pda, None)?;
     let replay_pda = seeds::replay_pda(program_id, &market_bytes, &owner, generation);
     expect_pda(accounts[IX_REPLAY].key, replay_pda, None)?;
     let supply_pda = seeds::supply_pda(program_id, &market_bytes);
@@ -1949,6 +1938,28 @@ fn evidence_gated(
         None
     };
 
+    let observed = claim_truth::observe_outcome_mints(
+        program_id,
+        accounts,
+        mint_prefix,
+        *accounts[IX_MARKET].key,
+        market.market,
+        market.outcome_count,
+        None,
+    )?;
+    {
+        let mut supply_data = borrow_mut!(accounts[IX_SUPPLY])?;
+        let mut kernel_data = borrow_mut!(accounts[IX_KERNEL])?;
+        claim_truth::synchronize_external_truth(
+            &mut supply_data,
+            &mut kernel_data,
+            market.market,
+            market.realm,
+            market.outcome_count,
+            &observed,
+        )?;
+    }
+
     let actor = Actor {
         key: Hash32::from_bytes(accounts[IX_ACTOR].key.to_bytes()),
         signer: accounts[IX_ACTOR].is_signer,
@@ -1957,7 +1968,6 @@ fn evidence_gated(
         market: market_pda.1,
         hoard: hoard_pda.1,
         position: position_pda.1,
-        external: external_pda.1,
         replay: replay_pda.1,
         supply: supply_pda.1,
         terms: terms_pda.1,
@@ -1986,7 +1996,6 @@ fn evidence_gated(
         let mut hoard_data = borrow_mut!(accounts[IX_HOARD])?;
         let mut position_data = borrow_mut!(accounts[IX_POSITION])?;
         let mut kernel_data = borrow_mut!(accounts[IX_KERNEL])?;
-        let mut external_data = borrow_mut!(accounts[IX_EXTERNAL])?;
         let mut replay_data = borrow_mut!(accounts[IX_REPLAY])?;
         let mut supply_data = borrow_mut!(accounts[IX_SUPPLY])?;
         let mut state = StateSlices {
@@ -1994,7 +2003,6 @@ fn evidence_gated(
             hoard: &mut hoard_data,
             position: &mut position_data,
             kernel: &mut kernel_data,
-            external: &mut external_data,
             replay: &mut replay_data,
             supply: &mut supply_data,
         };
@@ -2027,10 +2035,37 @@ fn evidence_gated(
             HoardAccount::decode(&accounts[IX_HOARD].data.borrow())?.collateral_atoms;
         token::require_hoard_covers_collateral(collateral_atoms, post_hoard)?;
     }
+    let observed_after = claim_truth::observe_outcome_mints(
+        program_id,
+        accounts,
+        mint_prefix,
+        *accounts[IX_MARKET].key,
+        market.market,
+        market.outcome_count,
+        None,
+    )?;
+    claim_truth::require_exact_mint_vector_delta(&observed, &observed_after, None)?;
+    {
+        let mut supply_data = borrow_mut!(accounts[IX_SUPPLY])?;
+        let kernel_data = accounts[IX_KERNEL]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        claim_truth::commit_observed_supplies(
+            &mut supply_data,
+            &kernel_data,
+            market.market,
+            market.realm,
+            market.outcome_count,
+            &observed_after,
+        )?;
+    }
     Ok(())
 }
 
-#[cfg(test)]
+// The historical differential below carries the deleted owner-local External
+// account.  Keep it as migration archaeology until an external-truth-aware
+// reference state replaces that DTO; do not compile it as bearer-plane proof.
+#[cfg(any())]
 mod tests {
     use super::*;
     use clutch_accumulator::{COVERAGE_POLICY_BOUNDED_GAPS, COVERAGE_POLICY_COMPLETE_REQUIRED};

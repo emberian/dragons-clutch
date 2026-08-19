@@ -1,10 +1,10 @@
 # Token-2022 external truth and bearer exit
 
 Status: **IMPLEMENTED HOST CUTOVER; SVM EVIDENCE OPEN**, 2026-08-19.  The SBF
-adapter uses canonical Token-2022 mint supply for the seam and implements
-positionless `RedeemExternal`.  The old owner-shadow differential is retained
-disabled as migration archaeology.  Resolve/RedeemInternal whole-vector
-cutover and the real Token-2022 committed-bank promotion campaign remain
+adapter uses canonical Token-2022 mint supply for every claim transition and
+implements positionless `RedeemExternal`.  The old owner-shadow differentials
+are retained disabled as migration archaeology.  Replacement host
+differentials and the real Token-2022 committed-bank promotion campaign remain
 release stops.
 
 This design is deliberately narrower than a new token standard.  Outcome Eggs

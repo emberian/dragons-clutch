@@ -45,6 +45,33 @@ pub fn observe_outcome_mints(
     outcome_count: u8,
     writable_outcome: Option<u8>,
 ) -> Outcome<ObservedMintSupplies> {
+    observe_outcome_mints_with(
+        accounts,
+        first,
+        market_account_key,
+        outcome_count,
+        writable_outcome,
+        |outcome| seeds::outcome_mint_pda(program_id, &market.bytes(), outcome),
+    )
+}
+
+/// Host-testable core of [`observe_outcome_mints`].
+///
+/// PDA derivation is a Solana syscall and is deliberately injected here so
+/// host tests can exercise every admission check without pretending that a
+/// caller-supplied key is production authority.
+#[inline(never)]
+fn observe_outcome_mints_with<D>(
+    accounts: &[AccountInfo],
+    first: usize,
+    market_account_key: Pubkey,
+    outcome_count: u8,
+    writable_outcome: Option<u8>,
+    derive: D,
+) -> Outcome<ObservedMintSupplies>
+where
+    D: Fn(u8) -> (Pubkey, u8),
+{
     let count = usize::from(outcome_count);
     let end = first
         .checked_add(count)
@@ -55,7 +82,6 @@ pub fn observe_outcome_mints(
     }
 
     let mut values = [0_u64; MAX_OUTCOMES];
-    let market_bytes = market.bytes();
     let mut outcome = 0_usize;
     while outcome < count {
         let mint = &accounts[first + outcome];
@@ -69,7 +95,7 @@ pub fn observe_outcome_mints(
                 ClutchError::UnexpectedWritable
             },
         )?;
-        let derived = seeds::outcome_mint_pda(program_id, &market_bytes, outcome as u8);
+        let derived = derive(outcome as u8);
         expect_pda(mint.key, derived, None)?;
         let observation = token::admit_mint(
             mint,
@@ -218,6 +244,27 @@ mod tests {
     use super::*;
     use clutch_kernel::{PayoutSet, PayoutVector, MAX_PAYOUTS};
 
+    struct MintCell {
+        key: Pubkey,
+        lamports: u64,
+        data: Vec<u8>,
+        writable: bool,
+    }
+
+    impl MintCell {
+        fn info(&mut self) -> AccountInfo<'_> {
+            AccountInfo::new(
+                &self.key,
+                false,
+                self.writable,
+                &mut self.lamports,
+                &mut self.data,
+                &token::TOKEN_2022_PROGRAM_ID,
+                false,
+            )
+        }
+    }
+
     fn h(value: u8) -> Hash32 {
         Hash32::from_bytes([value; 32])
     }
@@ -333,6 +380,101 @@ mod tests {
         assert_eq!(
             require_exact_mint_vector_delta(&before, &after, Some((0, true, 3))),
             Err(ClutchError::TokenDeltaMismatch.into())
+        );
+    }
+
+    #[test]
+    fn canonical_suffix_authenticates_order_authority_and_exact_mutability() {
+        let market_key = Pubkey::new_from_array([9; 32]);
+        let first_key = Pubkey::new_from_array([10; 32]);
+        let second_key = Pubkey::new_from_array([11; 32]);
+        let mut first = MintCell {
+            key: first_key,
+            lamports: 1,
+            data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 3),
+            writable: false,
+        };
+        let mut second = MintCell {
+            key: second_key,
+            lamports: 1,
+            data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 5),
+            writable: true,
+        };
+        let accounts = [first.info(), second.info()];
+        let observed = observe_outcome_mints_with(
+            &accounts,
+            0,
+            market_key,
+            2,
+            Some(1),
+            |outcome| match outcome {
+                0 => (first_key, 1),
+                _ => (second_key, 2),
+            },
+        )
+        .unwrap();
+        assert_eq!(&observed.values[..2], &[3, 5]);
+    }
+
+    #[test]
+    fn a_swapped_suffix_and_writable_untouched_mint_refuse() {
+        let market_key = Pubkey::new_from_array([9; 32]);
+        let first_key = Pubkey::new_from_array([10; 32]);
+        let second_key = Pubkey::new_from_array([11; 32]);
+        let mut first = MintCell {
+            key: second_key,
+            lamports: 1,
+            data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 3),
+            writable: false,
+        };
+        let mut second = MintCell {
+            key: first_key,
+            lamports: 1,
+            data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 5),
+            writable: true,
+        };
+        let accounts = [first.info(), second.info()];
+        assert_eq!(
+            observe_outcome_mints_with(
+                &accounts,
+                0,
+                market_key,
+                2,
+                Some(1),
+                |outcome| match outcome {
+                    0 => (first_key, 1),
+                    _ => (second_key, 2),
+                }
+            ),
+            Err(ClutchError::WrongPda.into())
+        );
+
+        let mut first = MintCell {
+            key: first_key,
+            lamports: 1,
+            data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 3),
+            writable: true,
+        };
+        let mut second = MintCell {
+            key: second_key,
+            lamports: 1,
+            data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 5),
+            writable: true,
+        };
+        let accounts = [first.info(), second.info()];
+        assert_eq!(
+            observe_outcome_mints_with(
+                &accounts,
+                0,
+                market_key,
+                2,
+                Some(1),
+                |outcome| match outcome {
+                    0 => (first_key, 1),
+                    _ => (second_key, 2),
+                }
+            ),
+            Err(ClutchError::UnexpectedWritable.into())
         );
     }
 }
