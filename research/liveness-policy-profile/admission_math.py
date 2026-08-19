@@ -170,6 +170,7 @@ class DirectWorkBudgetQuote:
 
     max_candidates: int
     selected_success_rewards_lamports: int | None
+    unselected_lapse_rewards_lamports: int | None
     selected_lapse_rewards_lamports: int | None
     empty_lapse_rewards_lamports: int | None
     spendable_reserve_lamports: int | None
@@ -329,10 +330,11 @@ def direct_work_budget_quote(
     """Price every reachable post-Freeze Direct V3 terminal alternative.
 
     A non-empty successful path is ``Begin + k*Verify + Finalize + Settle``.
-    A selected timeout substitutes ``Lapse`` for ``Settle``.  An empty frozen
-    Epoch needs only ``Lapse``.  The account must reserve the greatest path for
-    the bounded retained-candidate maximum; it must not add mutually exclusive
-    terminal actions or divide the budget between two orders.
+    A pre-selection timeout may follow ``Begin + j*Verify`` without Finalize.
+    A selected timeout substitutes ``Lapse`` for ``Settle`` after Finalize.  An
+    empty frozen Epoch needs only ``Lapse``.  The account must reserve the
+    greatest path for the bounded retained-candidate maximum; it must not add
+    mutually exclusive terminal actions or divide the budget between orders.
     """
 
     if not 1 <= max_candidates <= 3:
@@ -352,6 +354,7 @@ def direct_work_budget_quote(
             return DirectWorkBudgetQuote(
                 max_candidates=max_candidates,
                 selected_success_rewards_lamports=None,
+                unselected_lapse_rewards_lamports=None,
                 selected_lapse_rewards_lamports=None,
                 empty_lapse_rewards_lamports=None,
                 spendable_reserve_lamports=None,
@@ -360,18 +363,23 @@ def direct_work_budget_quote(
                 status=f"STOP_{label}",
             )
 
-    prefix = add_many(
+    verifying_prefix = add_many(
         begin.require_reward(),
         checked_mul(verify.require_reward(), max_candidates),
+    )
+    selected_prefix = add_many(
+        verifying_prefix,
         finalize.require_reward(),
     )
-    success = add_many(prefix, settle.require_reward())
-    selected_lapse = add_many(prefix, lapse.require_reward())
+    success = add_many(selected_prefix, settle.require_reward())
+    unselected_lapse = add_many(verifying_prefix, lapse.require_reward())
+    selected_lapse = add_many(selected_prefix, lapse.require_reward())
     empty_lapse = lapse.require_reward()
-    spendable = max(success, selected_lapse, empty_lapse)
+    spendable = max(success, unselected_lapse, selected_lapse, empty_lapse)
     return DirectWorkBudgetQuote(
         max_candidates=max_candidates,
         selected_success_rewards_lamports=success,
+        unselected_lapse_rewards_lamports=unselected_lapse,
         selected_lapse_rewards_lamports=selected_lapse,
         empty_lapse_rewards_lamports=empty_lapse,
         spendable_reserve_lamports=spendable,

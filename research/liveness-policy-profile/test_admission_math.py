@@ -46,8 +46,8 @@ class AdmissionMathTests(unittest.TestCase):
         with self.assertRaises(AdmissionError):
             stopped.require_reward()
 
-    def test_build_11_fold_widths_share_one_flat_reward(self) -> None:
-        observed = {1: 802_103, 2: 812_043, 3: 812_983, 4: 815_423}
+    def test_build_14_fold_widths_share_one_flat_reward(self) -> None:
+        observed = {1: 804_616, 2: 812_193, 3: 813_128, 4: 815_573}
         quotes = {width: quote_route(cu, POLICY) for width, cu in observed.items()}
         self.assertEqual(
             {width: quote.require_reward() for width, quote in quotes.items()},
@@ -60,11 +60,11 @@ class AdmissionMathTests(unittest.TestCase):
     def test_finalize_stop_propagates_to_whole_path(self) -> None:
         folds = {
             width: quote_route(cu, POLICY)
-            for width, cu in {1: 802_103, 2: 812_043, 3: 812_983, 4: 815_423}.items()
+            for width, cu in {1: 804_616, 2: 812_193, 3: 813_128, 4: 815_573}.items()
         }
         result = resolution_path_quote(
             record_count=32,
-            begin=quote_route(810_842, POLICY),
+            begin=quote_route(810_992, POLICY),
             fold_quotes=folds,
             finalize=quote_route(1_170_549, POLICY),
             abort=quote_route(587_047, POLICY),
@@ -78,15 +78,14 @@ class AdmissionMathTests(unittest.TestCase):
     def test_max32_policy_cap_and_abort_alternative(self) -> None:
         folds = {
             width: quote_route(cu, POLICY)
-            for width, cu in {1: 802_103, 2: 812_043, 3: 812_983, 4: 815_423}.items()
+            for width, cu in {1: 804_616, 2: 812_193, 3: 813_128, 4: 815_573}.items()
         }
         result = resolution_path_quote(
             record_count=32,
-            begin=quote_route(810_842, POLICY),
+            begin=quote_route(810_992, POLICY),
             fold_quotes=folds,
-            # Exact largest sample that can meet the selected 25% gate.
-            finalize=quote_route(1_120_000, POLICY),
-            abort=quote_route(587_047, POLICY),
+            finalize=quote_route(1_094_832, POLICY),
+            abort=quote_route(587_197, POLICY),
             rent_principal_lamports=WORK_RENT + RESERVE_RENT,
         )
         self.assertEqual(result.status, "PASS")
@@ -100,10 +99,10 @@ class AdmissionMathTests(unittest.TestCase):
     def test_runtime_schedule_must_cover_every_width_and_terminal(self) -> None:
         folds = {
             width: quote_route(cu, POLICY)
-            for width, cu in {1: 802_103, 2: 812_043, 3: 812_983, 4: 815_423}.items()
+            for width, cu in {1: 804_616, 2: 812_193, 3: 813_128, 4: 815_573}.items()
         }
-        finalize = quote_route(1_120_000, POLICY)
-        abort = quote_route(587_047, POLICY)
+        finalize = quote_route(1_094_832, POLICY)
+        abort = quote_route(587_197, POLICY)
         require_runtime_schedule_covers_policy(
             fold_quotes=folds,
             fold_base_reward=1_160_000,
@@ -153,6 +152,7 @@ class AdmissionMathTests(unittest.TestCase):
         self.assertEqual(result.status, "PASS")
         # Quotes are 760k, 860k, 1.01m, 1.11m, and 610k respectively.
         self.assertEqual(result.selected_success_rewards_lamports, 5_460_000)
+        self.assertEqual(result.unselected_lapse_rewards_lamports, 3_950_000)
         self.assertEqual(result.selected_lapse_rewards_lamports, 4_960_000)
         self.assertEqual(result.empty_lapse_rewards_lamports, 610_000)
         self.assertEqual(result.spendable_reserve_lamports, 5_460_000)
