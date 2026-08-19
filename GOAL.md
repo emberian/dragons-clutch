@@ -36,6 +36,12 @@ provider selection/design, Draft 10 fork (degg-research).
 
 ## Done log (2026-08-19 session)
 
+- Codex landed the last two repairs: 83e124d splits default/mock bringup
+  evidence (gate 8/8) and b5700a9 reseals the liveness profile + stack audit
+  to the new bd20711b... runtime identity (the full-reseal path my fork
+  ledger recommended). Emission claimed in the ledger and launched from the
+  post-claim clean HEAD.
+
 - Default-ELF identity fork surfaced and ledgered: 9c371fe's rustdoc-link fix
   touches closure file resolution.rs, so clean HEAD builds bd20711b... while
   the sealed a5725a3d... reproduces only at ec77d0b (proven by fresh builds

@@ -33,9 +33,13 @@ Seven contradictions are repaired and focused-green after that historical run:
   and one exact two-instruction compute-ceiling STOP with rollback. The default
   ELF still refuses Endow with `0x79`.
 
-The only unresolved contradiction is `sbf.runtime_bringup`. The complete
-94-gate emission has not been rerun, so the checked-in manifest must remain
-schema v1.
+All eight contradictions now have landed repairs (`83e124d` split the
+bringup evidence; `b5700a9` resealed the liveness profile to the current
+runtime identity). The complete clean-tree emission is IN PROGRESS, started
+2026-08-19 ~08:01 by the Fable session at HEAD after this commit. Do not
+commit to this repository until the emission completes and its manifest
+lands; a mid-run commit makes the run non-hermetic (this raced once already
+this morning).
 
 ## Default-ELF identity fork (discovered ~07:30, verified by fresh builds)
 
