@@ -360,8 +360,11 @@ the sealed default ELF has no registered release and therefore refuses it with
    source-joined point Resolve, sole-vector persistence, exact replay, and
    exact-lot internal and bearer redemption are live for degrees one through
    three, and the exact R1 ELF's first-party final-LTO stack audit passes.
-   Audit every post-resolution consumer and freeze the fragment/credit policy
-   promised to bearers. Monolithic occupation-v4 initial Resolve remains over
+   The post-resolution consumer audit is done and CLEAN (fifteen consumers,
+   zero suspects, four recorded asymmetries:
+   docs/reviews/POST_RESOLUTION_CONSUMER_AUDIT_2026-08-19.md). Freeze the
+   fragment/credit policy promised to bearers (Arm A live-until-aggregated is
+   PROPOSED in the R4 design, pending ratification). Monolithic occupation-v4 initial Resolve remains over
    the selected headroom; only the exact measured staged ResolutionWork route
    is profile-admitted.
 3. **Authenticated source/archive ingestion:** pin one concrete source program,

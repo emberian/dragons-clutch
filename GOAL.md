@@ -61,6 +61,19 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- POST-RESOLUTION CONSUMER AUDIT: CLEAN, zero suspects across all fifteen
+  resolution-fact consumers in the sealed runtime + public adapter; the
+  never-infer rule holds everywhere; four honest asymmetries recorded
+  (window-id depth, non-local zero-vector refusal, caller-trusted indices,
+  SettleDirectV2 lifecycle-blind receipt). Backlog item checked, STOP 2
+  audit-half closed: docs/reviews/POST_RESOLUTION_CONSUMER_AUDIT_2026-08-19.md.
+- DRAFT 11 EXEMPLAR delivered (degg-research 0dd6601): definitions comment
+  rewritten around the real named system — smooth-claim worked example with
+  partition-of-unity as the complete-set theorem, Pyth crossing-rule source
+  note, one Track-C status paragraph replacing eleven scattered negations;
+  9pp, builds clean. Awaiting ember's register check before propagating to
+  data-reporting + IAC + cover.
+
 - AMBITION UPGRADE executed: R2 promotion plan committed (c364630 — three
   phases, 36-delta bridge, gates incl. ember's explicit registry-flip go);
   devnet job created (~/jobs/dragons-clutch-devnet-20260819: fresh deployer

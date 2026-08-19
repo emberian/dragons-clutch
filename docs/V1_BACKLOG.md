@@ -374,8 +374,10 @@ depends on the source, layout, and claimant-exit surfaces those gates own.
 - [x] Join native Resolve to the canonical SourceArchive sealed receipt, make
   the legacy projection byte-equal compatibility transport rather than value
   authority, and refuse wrong-PDA/same-domain source substitution in real SBF.
-- [ ] Audit every other post-resolution consumer for forbidden preset-index-zero
-  reconstruction.
+- [x] Audit every other post-resolution consumer for forbidden preset-index-zero
+  reconstruction. CLEAN, zero suspects, 15 consumers enumerated:
+  docs/reviews/POST_RESOLUTION_CONSUMER_AUDIT_2026-08-19.md (four recorded
+  asymmetries, none violations).
 - [ ] Bind immutable Terms-selected basis mode in every active Split/Merge/
   materialize/dematerialize reconstruction. Prefer a Terms-checked Kernel mode
   projection or add authenticated Terms to each account plane; never infer mode
