@@ -1689,4 +1689,137 @@ theorem clampedDegreeThree_complete_set_exact {h u D q : Nat}
   P_PAY_02_complete_set_required_exact
     (clampedDegreeThree_integer_admissible hh hu hD selection)
 
+/-! ## Source-refinement witness vectors
+
+These fixtures are deliberately computed from the definitions above rather
+than copying Rust outputs into Lean.  They exercise the exact one-span
+construction, the generic `BasisFuns` column refinements, zero padding into a
+global outcome vector, open-clamped endpoints, and canonical largest-remainder
+selection.  `verus/bspline/emit_fixtures.lean` serializes them for the
+digest-bound production runner.
+
+The fixture bridge is finite executable evidence.  It is not a theorem that
+the Rust evaluator denotes these definitions for every admitted input.
+-/
+
+/-- A language-neutral input/output row consumed by the refinement runner.
+`driverInput` uses the local oracle driver's documented CSV input grammar;
+`modelWeights` is computed by the Lean semantics in this file. -/
+structure BSplineRefinementFixture where
+  driverInput : String
+  modelWeights : List Nat
+deriving Repr, DecidableEq
+
+def refinementCanonicalWeights (D : Nat) (r : RationalBasis) : List Nat :=
+  applyAwards (floorWeights D r.denominator r.numerators)
+    (largestRemainderMask D r)
+
+/-- Nonuniform degree-one pane `[3,8]` embedded after outcome zero. -/
+def refinementDegreeOneInterior : RationalBasis :=
+  (clampedDegreeOne 5 2).pad 1 0
+
+theorem refinementDegreeOneInterior_exact : refinementDegreeOneInterior.Exact := by
+  exact (clampedDegreeOne_exact (by decide) (by decide)).pad 1 0
+
+theorem refinementDegreeOneInterior_value :
+    refinementDegreeOneInterior.denominator = 5 ∧
+      refinementDegreeOneInterior.numerators = [0, 3, 2] := by
+  decide
+
+/-- First quadratic pane for stored knots `[0,4,8,12]` at `x=2`.
+The two column-two split denominators are four and eight. -/
+def refinementDegreeTwoFirst : RationalBasis :=
+  (refineTwo 4 2 2
+    { low := 2, high := 2, positive := by decide }
+    { low := 2, high := 6, positive := by decide }).pad 0 2
+
+theorem refinementDegreeTwoFirst_exact : refinementDegreeTwoFirst.Exact := by
+  exact (refineTwo_exact (by decide) (by decide)
+    { low := 2, high := 2, positive := by decide }
+    { low := 2, high := 6, positive := by decide }).pad 0 2
+
+theorem refinementDegreeTwoFirst_value :
+    refinementDegreeTwoFirst.denominator = 128 ∧
+      refinementDegreeTwoFirst.numerators = [32, 80, 16, 0, 0] := by
+  decide
+
+/-- Interior quadratic pane for stored knots `[0,4,8,12]` at `x=6`.
+Its local exact vector is `(1,6,1)/8`, embedded at global index one. -/
+def refinementDegreeTwoInterior : RationalBasis :=
+  (refineTwo 4 2 2
+    { low := 6, high := 2, positive := by decide }
+    { low := 2, high := 6, positive := by decide }).pad 1 1
+
+theorem refinementDegreeTwoInterior_exact : refinementDegreeTwoInterior.Exact := by
+  exact (refineTwo_exact (by decide) (by decide)
+    { low := 6, high := 2, positive := by decide }
+    { low := 2, high := 6, positive := by decide }).pad 1 1
+
+theorem refinementDegreeTwoInterior_value :
+    refinementDegreeTwoInterior.denominator = 256 ∧
+      refinementDegreeTwoInterior.numerators = [0, 32, 192, 32, 0] := by
+  decide
+
+/-- First cubic pane for stored knots `[0,4,8]` at `x=2`.
+Column two has common denominator 64 and numerators `(16,40,8)`;
+column three then uses split denominators four, eight, and eight. -/
+def refinementDegreeThreeFirst : RationalBasis :=
+  (refineThree 64 16 40 8
+    { low := 2, high := 2, positive := by decide }
+    { low := 2, high := 6, positive := by decide }
+    { low := 2, high := 6, positive := by decide }).pad 0 1
+
+theorem refinementDegreeThreeFirst_exact : refinementDegreeThreeFirst.Exact := by
+  exact (refineThree_exact (by decide) (by decide)
+    { low := 2, high := 2, positive := by decide }
+    { low := 2, high := 6, positive := by decide }
+    { low := 2, high := 6, positive := by decide }).pad 0 1
+
+theorem refinementDegreeThreeFirst_value :
+    refinementDegreeThreeFirst.denominator = 16384 ∧
+      refinementDegreeThreeFirst.numerators = [2048, 9728, 4096, 512, 0] := by
+  decide
+
+/-- Cubic internal knot `x=4` for stored knots `[0,4,8]`, embedded at
+global index one.  The exact global vector is `(0,1,2,1,0)/4`. -/
+def refinementDegreeThreeBoundary : RationalBasis :=
+  (refineThree 128 64 64 0
+    { low := 4, high := 4, positive := by decide }
+    { low := 4, high := 4, positive := by decide }
+    { low := 0, high := 4, positive := by decide }).pad 1 0
+
+theorem refinementDegreeThreeBoundary_exact :
+    refinementDegreeThreeBoundary.Exact := by
+  exact (refineThree_exact (by decide) (by decide)
+    { low := 4, high := 4, positive := by decide }
+    { low := 4, high := 4, positive := by decide }
+    { low := 0, high := 4, positive := by decide }).pad 1 0
+
+theorem refinementDegreeThreeBoundary_value :
+    refinementDegreeThreeBoundary.denominator = 32768 ∧
+      refinementDegreeThreeBoundary.numerators = [0, 8192, 16384, 8192, 0] := by
+  decide
+
+/-- Lean-computed rows spanning all three implemented positive degrees,
+a nonuniform linear pane,
+first and interior smooth panes, an internal knot, a largest-remainder tie,
+and both closed endpoints. -/
+def bsplineRefinementFixtures : List BSplineRefinementFixture :=
+  [ { driverInput := "1,7,5,c,n,3,0,3,8"
+      modelWeights := refinementCanonicalWeights 7 refinementDegreeOneInterior },
+    { driverInput := "2,2,2,c,2,2,0,4"
+      modelWeights := refinementCanonicalWeights 2 (clampedDegreeTwo 4 2) },
+    { driverInput := "2,7,2,c,2,4,0,4,8,12"
+      modelWeights := refinementCanonicalWeights 7 refinementDegreeTwoFirst },
+    { driverInput := "2,7,6,c,2,4,0,4,8,12"
+      modelWeights := refinementCanonicalWeights 7 refinementDegreeTwoInterior },
+    { driverInput := "3,7,2,c,2,3,0,4,8"
+      modelWeights := refinementCanonicalWeights 7 refinementDegreeThreeFirst },
+    { driverInput := "3,8,4,c,2,3,0,4,8"
+      modelWeights := refinementCanonicalWeights 8 refinementDegreeThreeBoundary },
+    { driverInput := "3,11,0,c,2,3,4,8,12"
+      modelWeights := refinementCanonicalWeights 11 (openClampedLeft 5 11) },
+    { driverInput := "3,11,99,c,2,3,4,8,12"
+      modelWeights := refinementCanonicalWeights 11 (openClampedRight 5 11) } ]
+
 end DragonsClutch

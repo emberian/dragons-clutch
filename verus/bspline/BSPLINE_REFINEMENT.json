@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "status": "checked-finite",
+  "property_id": "BSPLINE-REFINEMENT-01",
+  "claim_class": "finite digest-bound executable refinement evidence",
+  "statement": "At the pinned Lean and Rust source/toolchain digests, the eight rows computed by bsplineRefinementFixtures agree byte-for-byte with outputs of production BasisSpec::evaluate; five named production-source mutations execute all rows and disagree.",
+  "statement_digest_sha256": "bcb0056371ccbca61a70ee9f0ffbd158ff92270cb2e6c2b1801a37a6d8ab8367",
+  "production_source": "crates/clutch-bspline/src/lib.rs",
+  "production_source_digest_sha256": "bd7e9aa0da1120ce2eb44fcb58f5c51d07485bbfa5ca4c638ba13739f24d23ea",
+  "production_seam": "clutch_bspline::BasisSpec::evaluate",
+  "production_driver": "crates/clutch-bspline/examples/oracle_driver.rs",
+  "production_driver_digest_sha256": "c74ecec10c36fbebc3ab3335f2f933de6ecbaae4e061615f9e0822a917888dc7",
+  "lean_model": "lean/DragonsClutch/BSpline.lean",
+  "lean_model_digest_sha256": "3e2961e765cc0aeebe232bb2b4e9667b036fc06a22e5b0960873cc51a91d52bc",
+  "lean_emitter": "verus/bspline/emit_fixtures.lean",
+  "lean_emitter_digest_sha256": "5f732e09b232c2bedb665f2670530b76de21a14f162fa508d999d9efe0288337",
+  "lean_theorem_inventory": [
+    "clampedDegreeOne_exact",
+    "clampedDegreeTwo_exact",
+    "refineTwo_exact",
+    "refineThree_exact",
+    "RationalBasis.Exact.pad",
+    "uniform_rust_expanded_knot_linkage",
+    "canonicalLargestRemainderSelection",
+    "quantizeLargest_canonical_admissible",
+    "refinementDegreeOneInterior_exact",
+    "refinementDegreeOneInterior_value",
+    "refinementDegreeTwoFirst_exact",
+    "refinementDegreeTwoFirst_value",
+    "refinementDegreeTwoInterior_exact",
+    "refinementDegreeTwoInterior_value",
+    "refinementDegreeThreeFirst_exact",
+    "refinementDegreeThreeFirst_value",
+    "refinementDegreeThreeBoundary_exact",
+    "refinementDegreeThreeBoundary_value"
+  ],
+  "tools": {
+    "lean": {
+      "version": "4.33.0",
+      "commit": "d8b18978322de05a8f3dba51ef03cf5461676c17"
+    },
+    "rustc": {
+      "release": "1.98.0-nightly",
+      "commit": "91fe22da8084a1c9e993d78d4a56f22ab8396236"
+    },
+    "verus": {
+      "invoked": false,
+      "claim": null
+    }
+  },
+  "configuration": "verus/bspline/run_bspline_refinement.sh",
+  "configuration_digest_sha256": "898f1414d2fc3e2d0f69645de8ee013af52644f7404c5efdb4632fcec6b153c0",
+  "dependency_lock": "crates/clutch-bspline/Cargo.lock",
+  "dependency_lock_digest_sha256": "e49289a908b01a9032b096cfea0499f4a902714abf9475b91b55446d0ab43edd",
+  "result": "PASS: Lean build; 12 Rust tests; 8/8 byte-exact model/production rows; 5/5 expected-red executable source mutants",
+  "assumption_manifest": "verus/bspline/BSPLINE_REFINEMENT_ASSUMPTIONS.md",
+  "assumption_manifest_digest_sha256": "50ef6d6e4e3501955c142c122d5c6cac5594fe9ead06d678f7ae0684770e5e42",
+  "proof_or_check_log": "verus/bspline/evidence/bspline_refinement.txt",
+  "proof_or_check_log_digest_sha256": "00ccc133c6c367c2d34d01749995f8e330af298215d9beaa9a22630ae3bbc4a9",
+  "vector_manifest": "verus/bspline/evidence/lean_fixtures.txt",
+  "vector_manifest_digest_sha256": "017afe06dfed89e45a802060b701daf2a00e4e6fc28aecd73ecbdd108c1274f0",
+  "production_transcript": "verus/bspline/evidence/production_outputs.txt",
+  "production_transcript_digest_sha256": "eae31ce1e369e25a60883fd2d5206b56a14acc0cff072d7d2c3de1acb7da3814",
+  "checked_date": "2026-08-19",
+  "reproduction_command": "sh verus/bspline/run_bspline_refinement.sh",
+  "mutations": [
+    {
+      "id": "tie-direction",
+      "edit": "strict greater remainder replacement -> replace on greater or equal",
+      "result": "EXPECTED_RED: semantic disagreement"
+    },
+    {
+      "id": "residual-awards",
+      "edit": "suppress residual award loop",
+      "result": "EXPECTED_RED: semantic disagreement"
+    },
+    {
+      "id": "pane-placement",
+      "edit": "weights[pane + local] -> weights[local]",
+      "result": "EXPECTED_RED: semantic disagreement"
+    },
+    {
+      "id": "span-index",
+      "edit": "degree + pane -> degree + pane + 1",
+      "result": "EXPECTED_RED: semantic disagreement"
+    },
+    {
+      "id": "closed-top",
+      "edit": "handled >= last -> handled > last",
+      "result": "EXPECTED_RED: semantic disagreement"
+    }
+  ],
+  "known_unclosed_boundaries": [
+    "the fixture-to-CSV association is finite and reviewed, not a generic Lean parser/evaluator theorem",
+    "agreement is established only for eight rows, not every admitted input",
+    "degree zero and most hostile-input refusal paths are outside the fixture set",
+    "universal reduced-Fraction arithmetic, comparison, and overflow freedom are not refined to Lean",
+    "the production driver transport is digest-pinned but not formally verified",
+    "Lean and Rust compiler correctness and cross-frontend equivalence are assumed",
+    "SBF compilation, accounts, sources, Solana runtime behavior, and deployment identity are outside the result"
+  ]
+}

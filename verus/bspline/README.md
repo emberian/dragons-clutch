@@ -1,0 +1,38 @@
+# B-spline executable refinement evidence
+
+Status: **checked finite source-bound agreement; not a universal refinement
+proof** (2026-08-19).
+
+`run_bspline_refinement.sh` builds the checked Lean model, serializes eight
+rows computed by `DragonsClutch.BSpline.bsplineRefinementFixtures`, and feeds
+the inputs to the actual production `BasisSpec::evaluate` entry point through
+the digest-pinned `oracle_driver` transport.  It compares live and archived
+transcripts byte for byte.
+
+The rows cover:
+
+- nonuniform degree-one pane selection and largest remainder;
+- a quadratic threshold tie resolved toward the lower outcome;
+- first and interior quadratic panes;
+- first cubic pane and a cubic internal-knot boundary;
+- clamping below the low endpoint and above the closed high endpoint; and
+- global zero padding/pane placement for three- and five-outcome vectors.
+
+Five temporary mutations of the exact production source must execute and go
+red for semantic disagreement: tie direction, residual awards, global pane
+placement, `span = degree + pane`, and closed-top comparison.  The runner never
+rewrites the checkout and uses no network or SBF path.
+
+Run:
+
+```sh
+sh verus/bspline/run_bspline_refinement.sh
+```
+
+Despite this directory's historical evidence layout, this campaign does not
+invoke Verus and makes no Verus theorem claim.  Lean proves the exact basis,
+uniform knot linkage, canonical selection, and admissibility properties of its
+mathematical model.  The finite live comparison is evidence connecting that
+model to pinned Rust source only on the archived rows.  See
+`BSPLINE_REFINEMENT_ASSUMPTIONS.md` and
+`docs/implementation/BSPLINE_REFINEMENT.md` for the exact boundary.
