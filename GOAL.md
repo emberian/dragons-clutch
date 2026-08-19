@@ -52,6 +52,16 @@ John packet ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- FRESH PERSVATI ATTESTATION PASSED: 40/40 portable gates, 0 STOP, over exact
+  sealed 6743b9d — archive f9f25afc..., 528 files checked twice zero
+  mismatches, every count identical to the b5da74f run, bd20711b ELF
+  byte-verified both hosts, new digest-only manifest gate green, toolchain
+  drift refused fail-closed then rerun at the pinned compiler. Job:
+  ~/jobs/dragons-clutch-final-portable-attest-6743b9d-20260819-TChWnu.
+  R1 exit criterion is now met in full (one commit, one identity, one ELF,
+  one checked ledger, one independent portable reproduction). Recorded in
+  CURRENT_TRUTH Section 2 + handoff.
+
 - R1 MANIFEST SEALED (codex endgame): schema-v2 94/94 emitted, stabilized,
   committed, post-commit checked, and bound to the handoff at 6743b9d. My
   fast no-gates check confirms the manifest matches the tree byte-exactly.

@@ -83,8 +83,20 @@ Runtime evidence is artifact-specific:
 
 The checked-in `MANIFEST.baseline.json` is now schema v2. Its clean emission
 records 94/94 declared gate outcomes, and `check --run-gates` passes after the
-manifest-only commit. This is a checked local evidence baseline, not a checked
-release manifest. No signed tag, path-independent or independent SBF rebuild,
+manifest-only commit. Persvati independently attested exact `6743b9d` from a
+fresh archive (SHA-256 `f9f25afce1a00f277ad1322787bfc1f757cac26535558d9491fb731e543bf277`)
+and minimal hashed Git bundle: 40/40 portable gates PASS, 0 STOP, 528 files
+checked twice with zero mismatches, every test count identical to the prior
+`b5da74f` attestation, the sealed `bd20711b…` ELF byte-verified on both hosts,
+and the digest-only manifest check green in the pristine bundle checkout. The
+durable job is
+`/home/ember/jobs/dragons-clutch-final-portable-attest-6743b9d-20260819-TChWnu`.
+A persvati toolchain drift was refused fail-closed and every cargo gate reran
+under the exact pinned prior compiler; the newer research crates
+(`terminal-lifecycle-v2`, `tools/*`) remain outside the attested dependency
+scope. This is byte-and-reference verification plus portable re-execution of
+host gates — no SBF build, execution, or runtime claim — and it is a checked
+local evidence baseline, not a checked release manifest. No signed tag, path-independent or independent SBF rebuild,
 public-network deployment, official client URL, or value-bearing market
 exists. Nothing here authorizes signing, funding, deployment, publication,
 regulator contact, or an “official” claim.

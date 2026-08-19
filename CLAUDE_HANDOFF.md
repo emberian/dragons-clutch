@@ -29,10 +29,13 @@ The R1 evidence checkpoint is sealed:
   a required rustdoc repair; executable sections and normalized instructions
   are identical, but the old CU rows are retained as historical rather than
   relabeled;
-- Persvati independently attested exact `b5da74f` from a fresh archive and
-  minimal hashed Git bundle: 39/39 gates PASS, 0 STOP, 492 files checked twice,
-  95 evidence checksums verified. The durable job is
-  `/home/ember/jobs/dragons-clutch-final-portable-attest-b5da74f-20260819-GMqkJL`;
+- Persvati independently attested exact `6743b9d` (the manifest close):
+  40/40 portable gates PASS, 0 STOP, 528 files checked twice, every count
+  identical to the prior `b5da74f` attestation (which remains historical
+  evidence at
+  `/home/ember/jobs/dragons-clutch-final-portable-attest-b5da74f-20260819-GMqkJL`).
+  The fresh durable job is
+  `/home/ember/jobs/dragons-clutch-final-portable-attest-6743b9d-20260819-TChWnu`;
 - Hbox received and verified the exact `b5da74f` archive at
   `/tank/joshibot/dragons-clutch-r1-hbox-vHdulP`, but its independent SBF build
   is honestly `UNAVAILABLE/STOP`: the pinned Solana/Anza toolchain,
@@ -67,7 +70,9 @@ for the historical convergence trail.
 Resume R1 in this exact order:
 
 1. run `git status --short` and refuse unrelated dirty bytes;
-2. run a fresh Persvati portable attestation from the final manifest commit;
+2. (done 2026-08-19) the fresh Persvati portable attestation of `6743b9d`
+   passed 40/40 with 0 STOP; job
+   `dragons-clutch-final-portable-attest-6743b9d-20260819-TChWnu`;
 3. preserve the manifest/runtime seal while selecting the next dependency-
    unblocked R2/R3 lane; and
 4. rerun the manifest only after another accepted source or evidence change.
