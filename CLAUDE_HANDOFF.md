@@ -33,12 +33,21 @@ Consequences, already handled or in flight:
 - `docs/implementation/SBF_BRINGUP.md` and `LIFECYCLE_WALK.md` carry
   **STALE AS OF 2026-08-19** blocks; their CU tables and differential results
   are historical until regenerated.
-- A harness-regeneration lane was running when this handoff was written. If
-  its work is present and the gate is green, delete the stale blocks and this
-  warning. If not, the lane's brief is reproducible from the breakage list in
-  the `50c6e35` commit message, and `programs/clutch-sbf/svm-tests/src/lib.rs`
-  is the working reference for the Profile-identity change that cascades
-  through every PDA.
+- A harness-regeneration attempt exists at **local commit `cd57c69`, deliberately
+  not pushed**. It rebuilds the fixtures for the mandatory token plane and
+  reports both gates PASS with a full CU table. **The coordinator could not
+  reproduce that PASS** and therefore did not push it or record its numbers.
+  Two independent runs, including one with a freshly removed work directory,
+  fail identically: the ELF builds and its digest matches the lane's exactly
+  (`59c48c48…`, 505,960 bytes, `sbf_reproducibility=PASS`), but every
+  transaction returns `Program is not deployed` / `UnsupportedProgramId`. That
+  is a program-account *placement* failure — owner, executable flag, loader
+  version, or programdata sizing against an ELF that grew 332,368 → 505,960
+  bytes this wave — not an account-count failure. Reconcile before trusting
+  anything in that commit; its account-plane work is likely sound and its
+  evidence is unverified. `programs/clutch-sbf/svm-tests/src/lib.rs` remains
+  the working reference for the Profile-identity change that cascades through
+  every PDA.
 
 **The lesson worth keeping** (§8 expands it): host tests stayed green through
 all of this. 328 Rust tests pass at HEAD. Only the SVM gate can see account
