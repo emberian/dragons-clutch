@@ -248,9 +248,32 @@ Epoch/WorkBudget binding; Lapse retains a versioned escape path. Upgradeable
 deployment trust or immutable deployment remains an explicit promotion
 boundary.
 
-## Routed transition plan
+## Frozen intent codec registry
 
-These are design names, not allocated intent tags.
+The layout allocates common intent version 3 tags 36 through 46. These bytes
+are codec authority only until each corresponding runtime handler and real-SBF
+campaign lands:
+
+| Tag | Intent | Bytes |
+|---:|---|---:|
+| 36 | `InitDirectEpochV4` | 138 |
+| 37 | `FreezeDirectEpochV4` | 114 |
+| 38 | `AbortUnfrozenDirectV4` | 66 |
+| 39 | `SubmitDirectCandidateV3` | 74 |
+| 40 | `BeginDirectVerificationV3` | 66 |
+| 41 | `VerifyDirectCandidateV3` | 67 |
+| 42 | `FinalizeDirectSelectionV3` | 66 |
+| 43 | `SettleDirectV3` | 66 |
+| 44 | `LapseEmptyDirectV3` | 66 |
+| 45 | `LapseUnselectedDirectV3` | 66 |
+| 46 | `LapseSelectedDirectV3` | 66 |
+
+No payer, account index, keeper identity, outcome, quantity, settlement price,
+or consideration is caller-selected by the terminal wires. Transaction account
+roles and the authenticated Clock supply operational facts; persisted authority
+supplies every economic fact.
+
+## Routed transition plan
 
 ### `SubmitDirectCandidateV3`
 

@@ -57,6 +57,42 @@ pub const DIRECT_RESERVATION_V2_BYTES: usize = RESERVATION_ACCOUNT_BYTES + 32 + 
 /// Exact DirectBatchPolicy V3 artifact body length.
 pub const DIRECT_BATCH_POLICY_V3_BYTES: usize = BATCH_POLICY_BYTES + 32;
 
+/// Init Direct Epoch V4 intent tag.
+pub const INIT_DIRECT_EPOCH_V4_TAG: u8 = 36;
+/// Freeze Direct Epoch V4 and its prepaid work intent tag.
+pub const FREEZE_DIRECT_EPOCH_V4_TAG: u8 = 37;
+/// Abort an unfrozen Direct Epoch V4 intent tag.
+pub const ABORT_UNFROZEN_DIRECT_V4_TAG: u8 = 38;
+/// Submit one fully verified direct Candidate V3 intent tag.
+pub const SUBMIT_DIRECT_CANDIDATE_V3_TAG: u8 = 39;
+/// Begin staged direct verification intent tag.
+pub const BEGIN_DIRECT_VERIFICATION_V3_TAG: u8 = 40;
+/// Verify one retained direct Candidate intent tag.
+pub const VERIFY_DIRECT_CANDIDATE_V3_TAG: u8 = 41;
+/// Finalize staged direct selection intent tag.
+pub const FINALIZE_DIRECT_SELECTION_V3_TAG: u8 = 42;
+/// Settle exact selected direct authority intent tag.
+pub const SETTLE_DIRECT_V3_TAG: u8 = 43;
+/// Lapse a frozen-empty direct epoch intent tag.
+pub const LAPSE_EMPTY_DIRECT_V3_TAG: u8 = 44;
+/// Lapse an unselected nonempty direct window intent tag.
+pub const LAPSE_UNSELECTED_DIRECT_V3_TAG: u8 = 45;
+/// Lapse selected direct authority intent tag.
+pub const LAPSE_SELECTED_DIRECT_V3_TAG: u8 = 46;
+/// Last allocated common intent tag in this codec revision.
+pub const LAST_DIRECT_V3_INTENT_TAG: u8 = LAPSE_SELECTED_DIRECT_V3_TAG;
+
+/// Init Direct Epoch V4 wire bytes.
+pub const INIT_DIRECT_EPOCH_V4_BYTES: usize = 138;
+/// Freeze Direct Epoch V4 wire bytes.
+pub const FREEZE_DIRECT_EPOCH_V4_BYTES: usize = 114;
+/// Common two-identity V3 action wire bytes.
+pub const DIRECT_V3_COMMON_ACTION_BYTES: usize = 66;
+/// Submit Direct Candidate V3 wire bytes.
+pub const SUBMIT_DIRECT_CANDIDATE_V3_BYTES: usize = 74;
+/// Verify one retained Candidate wire bytes.
+pub const VERIFY_DIRECT_CANDIDATE_V3_BYTES: usize = 67;
+
 /// Direct Epoch exists before its book is frozen.
 pub const DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN: u8 = 0;
 /// Frozen two-order authority exists without a competitive candidate.
@@ -1226,6 +1262,358 @@ pub const fn direct_window_extension_offset() -> usize {
     WINDOW_EXTENSION_OFFSET
 }
 
+/// Complete version-three direct lifecycle instruction family.
+#[allow(missing_docs)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectV3Intent {
+    /// Create an unfrozen Direct Epoch V4 with immutable deadlines and sink.
+    InitEpoch {
+        /// Market identity.
+        market: Hash32,
+        /// Epoch index within the Market.
+        epoch_index: u64,
+        /// DirectBatchPolicy V3 artifact digest.
+        policy: Hash32,
+        /// First accepted Candidate submission slot.
+        submission_opens_slot: u64,
+        /// Exclusive Candidate submission close.
+        submission_closes_slot: u64,
+        /// Exclusive staged-selection deadline.
+        selection_deadline_slot: u64,
+        /// Exclusive selected-settlement deadline.
+        settlement_deadline_slot: u64,
+        /// Immutable destination for unsolicited lamports.
+        neutral_lamport_sink: Hash32,
+    },
+    /// Freeze exact two-order authority and capitalize finite work.
+    FreezeEpoch {
+        /// Market identity.
+        market: Hash32,
+        /// Epoch identity.
+        epoch: Hash32,
+        /// Reward-only lamports deposited by the authenticated sponsor.
+        reward_deposit: u64,
+        /// Frozen per-action rewards.
+        rewards: DirectKeeperRewardsV3,
+    },
+    /// Abort an unfrozen Direct Epoch V4.
+    AbortUnfrozen { market: Hash32, epoch: Hash32 },
+    /// Verify and competitively admit one price tick.
+    SubmitCandidate {
+        market: Hash32,
+        epoch: Hash32,
+        /// Price of the candidate's selected outcome.
+        outcome_price: u64,
+    },
+    /// Close submissions and begin staged verification.
+    BeginVerification { market: Hash32, epoch: Hash32 },
+    /// Reexecute one retained candidate by canonical top index.
+    VerifyCandidate {
+        market: Hash32,
+        epoch: Hash32,
+        /// Retained top index in `0..3`.
+        retained_index: u8,
+    },
+    /// Select the exact fully reverified top candidate.
+    FinalizeSelection { market: Hash32, epoch: Hash32 },
+    /// Consume the selected exact entitlement.
+    Settle { market: Hash32, epoch: Hash32 },
+    /// Lapse a frozen epoch with no competitive Candidate.
+    LapseEmpty { market: Hash32, epoch: Hash32 },
+    /// Lapse an open or partially verified nonempty Window.
+    LapseUnselected { market: Hash32, epoch: Hash32 },
+    /// Lapse selected authority after the settlement deadline.
+    LapseSelected { market: Hash32, epoch: Hash32 },
+}
+
+impl DirectV3Intent {
+    /// Exact stable wire tag.
+    pub const fn tag(self) -> u8 {
+        match self {
+            Self::InitEpoch { .. } => INIT_DIRECT_EPOCH_V4_TAG,
+            Self::FreezeEpoch { .. } => FREEZE_DIRECT_EPOCH_V4_TAG,
+            Self::AbortUnfrozen { .. } => ABORT_UNFROZEN_DIRECT_V4_TAG,
+            Self::SubmitCandidate { .. } => SUBMIT_DIRECT_CANDIDATE_V3_TAG,
+            Self::BeginVerification { .. } => BEGIN_DIRECT_VERIFICATION_V3_TAG,
+            Self::VerifyCandidate { .. } => VERIFY_DIRECT_CANDIDATE_V3_TAG,
+            Self::FinalizeSelection { .. } => FINALIZE_DIRECT_SELECTION_V3_TAG,
+            Self::Settle { .. } => SETTLE_DIRECT_V3_TAG,
+            Self::LapseEmpty { .. } => LAPSE_EMPTY_DIRECT_V3_TAG,
+            Self::LapseUnselected { .. } => LAPSE_UNSELECTED_DIRECT_V3_TAG,
+            Self::LapseSelected { .. } => LAPSE_SELECTED_DIRECT_V3_TAG,
+        }
+    }
+
+    /// Exact stable wire length.
+    pub const fn encoded_len(self) -> usize {
+        match self {
+            Self::InitEpoch { .. } => INIT_DIRECT_EPOCH_V4_BYTES,
+            Self::FreezeEpoch { .. } => FREEZE_DIRECT_EPOCH_V4_BYTES,
+            Self::SubmitCandidate { .. } => SUBMIT_DIRECT_CANDIDATE_V3_BYTES,
+            Self::VerifyCandidate { .. } => VERIFY_DIRECT_CANDIDATE_V3_BYTES,
+            Self::AbortUnfrozen { .. }
+            | Self::BeginVerification { .. }
+            | Self::FinalizeSelection { .. }
+            | Self::Settle { .. }
+            | Self::LapseEmpty { .. }
+            | Self::LapseUnselected { .. }
+            | Self::LapseSelected { .. } => DIRECT_V3_COMMON_ACTION_BYTES,
+        }
+    }
+
+    /// Validate and encode without touching `out` on semantic refusal.
+    pub fn encode(self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        let exact = self.encoded_len();
+        if out.len() < exact {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut writer = Writer::new(out);
+        put_header(&mut writer, self.tag(), super::INTENT_VERSION)?;
+        match self {
+            Self::InitEpoch {
+                market,
+                epoch_index,
+                policy,
+                submission_opens_slot,
+                submission_closes_slot,
+                selection_deadline_slot,
+                settlement_deadline_slot,
+                neutral_lamport_sink,
+            } => {
+                writer.hash(market)?;
+                writer.u64(epoch_index)?;
+                writer.hash(policy)?;
+                writer.u64(submission_opens_slot)?;
+                writer.u64(submission_closes_slot)?;
+                writer.u64(selection_deadline_slot)?;
+                writer.u64(settlement_deadline_slot)?;
+                writer.hash(neutral_lamport_sink)?;
+            }
+            Self::FreezeEpoch {
+                market,
+                epoch,
+                reward_deposit,
+                rewards,
+            } => {
+                writer.hash(market)?;
+                writer.hash(epoch)?;
+                writer.u64(reward_deposit)?;
+                writer.u64(rewards.begin_verification)?;
+                writer.u64(rewards.verify_candidate)?;
+                writer.u64(rewards.finalize_selection)?;
+                writer.u64(rewards.settle)?;
+                writer.u64(rewards.lapse)?;
+            }
+            Self::SubmitCandidate {
+                market,
+                epoch,
+                outcome_price,
+            } => {
+                writer.hash(market)?;
+                writer.hash(epoch)?;
+                writer.u64(outcome_price)?;
+            }
+            Self::VerifyCandidate {
+                market,
+                epoch,
+                retained_index,
+            } => {
+                writer.hash(market)?;
+                writer.hash(epoch)?;
+                writer.u8(retained_index)?;
+            }
+            Self::AbortUnfrozen { market, epoch }
+            | Self::BeginVerification { market, epoch }
+            | Self::FinalizeSelection { market, epoch }
+            | Self::Settle { market, epoch }
+            | Self::LapseEmpty { market, epoch }
+            | Self::LapseUnselected { market, epoch }
+            | Self::LapseSelected { market, epoch } => {
+                writer.hash(market)?;
+                writer.hash(epoch)?;
+            }
+        }
+        if writer.at != exact {
+            return Err(CodecError::OutputTooSmall);
+        }
+        Ok(writer.at)
+    }
+
+    fn validate(self) -> Result<()> {
+        match self {
+            Self::InitEpoch {
+                market,
+                policy,
+                submission_opens_slot,
+                submission_closes_slot,
+                selection_deadline_slot,
+                settlement_deadline_slot,
+                neutral_lamport_sink,
+                ..
+            } => {
+                nonzero(market)?;
+                nonzero(policy)?;
+                nonzero(neutral_lamport_sink)?;
+                checked_span(
+                    submission_opens_slot,
+                    submission_closes_slot,
+                    MIN_SUBMISSION_SPAN_V3,
+                    MAX_SUBMISSION_SPAN_V3,
+                )?;
+                checked_span(
+                    submission_closes_slot,
+                    selection_deadline_slot,
+                    MIN_SELECTION_SPAN_V3,
+                    MAX_SELECTION_SPAN_V3,
+                )?;
+                checked_span(
+                    selection_deadline_slot,
+                    settlement_deadline_slot,
+                    MIN_SETTLEMENT_SPAN_V3,
+                    MAX_SETTLEMENT_SPAN_V3,
+                )
+            }
+            Self::FreezeEpoch {
+                market,
+                epoch,
+                reward_deposit,
+                rewards,
+            } => {
+                nonzero(market)?;
+                nonzero(epoch)?;
+                if reward_deposit < rewards.worst_case()? {
+                    return Err(CodecError::ZeroValue);
+                }
+                Ok(())
+            }
+            Self::SubmitCandidate {
+                market,
+                epoch,
+                outcome_price,
+            } => {
+                nonzero(market)?;
+                nonzero(epoch)?;
+                if outcome_price == 0 {
+                    return Err(CodecError::ZeroValue);
+                }
+                Ok(())
+            }
+            Self::VerifyCandidate {
+                market,
+                epoch,
+                retained_index,
+            } => {
+                nonzero(market)?;
+                nonzero(epoch)?;
+                if usize::from(retained_index) >= MAX_DIRECT_CANDIDATES {
+                    return Err(CodecError::InvalidCount);
+                }
+                Ok(())
+            }
+            Self::AbortUnfrozen { market, epoch }
+            | Self::BeginVerification { market, epoch }
+            | Self::FinalizeSelection { market, epoch }
+            | Self::Settle { market, epoch }
+            | Self::LapseEmpty { market, epoch }
+            | Self::LapseUnselected { market, epoch }
+            | Self::LapseSelected { market, epoch } => {
+                nonzero(market)?;
+                nonzero(epoch)
+            }
+        }
+    }
+
+    /// Decode one exact V3 lifecycle wire. Other tags fail closed.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        if input.len() < 2 {
+            return Err(CodecError::Truncated);
+        }
+        let tag = input[0];
+        let exact = match tag {
+            INIT_DIRECT_EPOCH_V4_TAG => INIT_DIRECT_EPOCH_V4_BYTES,
+            FREEZE_DIRECT_EPOCH_V4_TAG => FREEZE_DIRECT_EPOCH_V4_BYTES,
+            SUBMIT_DIRECT_CANDIDATE_V3_TAG => SUBMIT_DIRECT_CANDIDATE_V3_BYTES,
+            VERIFY_DIRECT_CANDIDATE_V3_TAG => VERIFY_DIRECT_CANDIDATE_V3_BYTES,
+            ABORT_UNFROZEN_DIRECT_V4_TAG
+            | BEGIN_DIRECT_VERIFICATION_V3_TAG
+            | FINALIZE_DIRECT_SELECTION_V3_TAG
+            | SETTLE_DIRECT_V3_TAG
+            | LAPSE_EMPTY_DIRECT_V3_TAG
+            | LAPSE_UNSELECTED_DIRECT_V3_TAG
+            | LAPSE_SELECTED_DIRECT_V3_TAG => DIRECT_V3_COMMON_ACTION_BYTES,
+            _ => return Err(CodecError::WrongTag),
+        };
+        let mut reader = Reader::new(input, tag, super::INTENT_VERSION, exact)?;
+        let value = match tag {
+            INIT_DIRECT_EPOCH_V4_TAG => Self::InitEpoch {
+                market: reader.hash()?,
+                epoch_index: reader.u64()?,
+                policy: reader.hash()?,
+                submission_opens_slot: reader.u64()?,
+                submission_closes_slot: reader.u64()?,
+                selection_deadline_slot: reader.u64()?,
+                settlement_deadline_slot: reader.u64()?,
+                neutral_lamport_sink: reader.hash()?,
+            },
+            FREEZE_DIRECT_EPOCH_V4_TAG => Self::FreezeEpoch {
+                market: reader.hash()?,
+                epoch: reader.hash()?,
+                reward_deposit: reader.u64()?,
+                rewards: DirectKeeperRewardsV3 {
+                    begin_verification: reader.u64()?,
+                    verify_candidate: reader.u64()?,
+                    finalize_selection: reader.u64()?,
+                    settle: reader.u64()?,
+                    lapse: reader.u64()?,
+                },
+            },
+            ABORT_UNFROZEN_DIRECT_V4_TAG => Self::AbortUnfrozen {
+                market: reader.hash()?,
+                epoch: reader.hash()?,
+            },
+            SUBMIT_DIRECT_CANDIDATE_V3_TAG => Self::SubmitCandidate {
+                market: reader.hash()?,
+                epoch: reader.hash()?,
+                outcome_price: reader.u64()?,
+            },
+            BEGIN_DIRECT_VERIFICATION_V3_TAG => Self::BeginVerification {
+                market: reader.hash()?,
+                epoch: reader.hash()?,
+            },
+            VERIFY_DIRECT_CANDIDATE_V3_TAG => Self::VerifyCandidate {
+                market: reader.hash()?,
+                epoch: reader.hash()?,
+                retained_index: reader.u8()?,
+            },
+            FINALIZE_DIRECT_SELECTION_V3_TAG => Self::FinalizeSelection {
+                market: reader.hash()?,
+                epoch: reader.hash()?,
+            },
+            SETTLE_DIRECT_V3_TAG => Self::Settle {
+                market: reader.hash()?,
+                epoch: reader.hash()?,
+            },
+            LAPSE_EMPTY_DIRECT_V3_TAG => Self::LapseEmpty {
+                market: reader.hash()?,
+                epoch: reader.hash()?,
+            },
+            LAPSE_UNSELECTED_DIRECT_V3_TAG => Self::LapseUnselected {
+                market: reader.hash()?,
+                epoch: reader.hash()?,
+            },
+            LAPSE_SELECTED_DIRECT_V3_TAG => Self::LapseSelected {
+                market: reader.hash()?,
+                epoch: reader.hash()?,
+            },
+            _ => return Err(CodecError::WrongTag),
+        };
+        reader.done()?;
+        value.validate()?;
+        Ok(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1829,6 +2217,177 @@ mod tests {
             DirectBatchPolicyV3::decode(&policy),
             Err(CodecError::TrailingBytes)
         );
+    }
+
+    fn intent_fixtures() -> [DirectV3Intent; 11] {
+        let rewards = DirectKeeperRewardsV3 {
+            begin_verification: 1,
+            verify_candidate: 2,
+            finalize_selection: 3,
+            settle: 4,
+            lapse: 5,
+        };
+        [
+            DirectV3Intent::InitEpoch {
+                market: h(1),
+                epoch_index: 7,
+                policy: h(2),
+                submission_opens_slot: 100,
+                submission_closes_slot: 110,
+                selection_deadline_slot: 120,
+                settlement_deadline_slot: 140,
+                neutral_lamport_sink: h(90),
+            },
+            DirectV3Intent::FreezeEpoch {
+                market: h(1),
+                epoch: h(2),
+                reward_deposit: rewards.worst_case().unwrap(),
+                rewards,
+            },
+            DirectV3Intent::AbortUnfrozen {
+                market: h(1),
+                epoch: h(2),
+            },
+            DirectV3Intent::SubmitCandidate {
+                market: h(1),
+                epoch: h(2),
+                outcome_price: 2_500,
+            },
+            DirectV3Intent::BeginVerification {
+                market: h(1),
+                epoch: h(2),
+            },
+            DirectV3Intent::VerifyCandidate {
+                market: h(1),
+                epoch: h(2),
+                retained_index: 2,
+            },
+            DirectV3Intent::FinalizeSelection {
+                market: h(1),
+                epoch: h(2),
+            },
+            DirectV3Intent::Settle {
+                market: h(1),
+                epoch: h(2),
+            },
+            DirectV3Intent::LapseEmpty {
+                market: h(1),
+                epoch: h(2),
+            },
+            DirectV3Intent::LapseUnselected {
+                market: h(1),
+                epoch: h(2),
+            },
+            DirectV3Intent::LapseSelected {
+                market: h(1),
+                epoch: h(2),
+            },
+        ]
+    }
+
+    #[test]
+    fn direct_v3_intent_registry_and_every_exact_wire_are_frozen() {
+        let intents = intent_fixtures();
+        let expected_tags = [36u8, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46];
+        let expected_lengths = [138usize, 114, 66, 74, 66, 67, 66, 66, 66, 66, 66];
+        assert_eq!(
+            INIT_DIRECT_EPOCH_V4_TAG,
+            crate::resolution_work::ABORT_RESOLUTION_WORK_TAG + 1
+        );
+        assert_eq!(LAST_DIRECT_V3_INTENT_TAG, 46);
+        let mut index = 0usize;
+        while index < intents.len() {
+            let intent = intents[index];
+            assert_eq!(intent.tag(), expected_tags[index]);
+            assert_eq!(intent.encoded_len(), expected_lengths[index]);
+            let mut bytes = [0u8; INIT_DIRECT_EPOCH_V4_BYTES];
+            let written = intent.encode(&mut bytes).unwrap();
+            assert_eq!(written, expected_lengths[index]);
+            assert_eq!(&bytes[..2], &[expected_tags[index], crate::INTENT_VERSION]);
+            assert_eq!(DirectV3Intent::decode(&bytes[..written]), Ok(intent));
+            index += 1;
+        }
+    }
+
+    #[test]
+    fn direct_v3_intents_refuse_hostile_versions_lengths_and_values() {
+        for intent in intent_fixtures() {
+            let mut bytes = [0u8; INIT_DIRECT_EPOCH_V4_BYTES + 1];
+            let written = intent.encode(&mut bytes).unwrap();
+            assert_eq!(
+                DirectV3Intent::decode(&bytes[..written - 1]),
+                Err(CodecError::Truncated)
+            );
+            bytes[written] = 0;
+            assert_eq!(
+                DirectV3Intent::decode(&bytes[..written + 1]),
+                Err(CodecError::TrailingBytes)
+            );
+            bytes[1] = crate::INTENT_VERSION - 1;
+            assert_eq!(
+                DirectV3Intent::decode(&bytes[..written]),
+                Err(CodecError::WrongVersion)
+            );
+        }
+
+        let mut refused = [0xa5; INIT_DIRECT_EPOCH_V4_BYTES];
+        let bad_schedule = DirectV3Intent::InitEpoch {
+            market: h(1),
+            epoch_index: 7,
+            policy: h(2),
+            submission_opens_slot: 100,
+            submission_closes_slot: 101,
+            selection_deadline_slot: 106,
+            settlement_deadline_slot: 108,
+            neutral_lamport_sink: h(90),
+        };
+        assert_eq!(
+            bad_schedule.encode(&mut refused),
+            Err(CodecError::InvalidCount)
+        );
+        assert_eq!(refused, [0xa5; INIT_DIRECT_EPOCH_V4_BYTES]);
+
+        let bad_price = DirectV3Intent::SubmitCandidate {
+            market: h(1),
+            epoch: h(2),
+            outcome_price: 0,
+        };
+        assert_eq!(bad_price.validate(), Err(CodecError::ZeroValue));
+        let bad_index = DirectV3Intent::VerifyCandidate {
+            market: h(1),
+            epoch: h(2),
+            retained_index: 3,
+        };
+        assert_eq!(bad_index.validate(), Err(CodecError::InvalidCount));
+        let zero_market = DirectV3Intent::LapseEmpty {
+            market: Hash32::ZERO,
+            epoch: h(2),
+        };
+        assert_eq!(zero_market.validate(), Err(CodecError::ZeroIdentity));
+    }
+
+    #[test]
+    fn direct_v3_freeze_budget_is_checked_and_overflow_refuses() {
+        let mut rewards = DirectKeeperRewardsV3 {
+            begin_verification: 1,
+            verify_candidate: 2,
+            finalize_selection: 3,
+            settle: 4,
+            lapse: 5,
+        };
+        let exact = rewards.worst_case().unwrap();
+        assert_eq!(
+            DirectV3Intent::FreezeEpoch {
+                market: h(1),
+                epoch: h(2),
+                reward_deposit: exact - 1,
+                rewards,
+            }
+            .validate(),
+            Err(CodecError::ZeroValue)
+        );
+        rewards.verify_candidate = u64::MAX;
+        assert_eq!(rewards.worst_case(), Err(CodecError::ArithmeticOverflow));
     }
 
     #[test]
