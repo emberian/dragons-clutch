@@ -61,6 +61,14 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- DRAFT 11 x2 (degg-research 0dd6601, 4ce0ce6): both Aug-24 documents
+  rewritten in the named-system register — definitions (9pp) with the
+  smooth-claim worked example and Pyth crossing-rule source note;
+  data-reporting (10pp) with the four mid-paragraph VERIFIED/STOP blocks
+  unwound and appendix bases cut to one line. One Track-C status paragraph
+  each with [DEVNET RECORD] fill-ins. IAC statement + cover (Aug 27) next;
+  their V3-model-only sentences stay freeze-sensitive to the promotion lane.
+
 - POST-RESOLUTION CONSUMER AUDIT: CLEAN, zero suspects across all fifteen
   resolution-fact consumers in the sealed runtime + public adapter; the
   never-infer rule holds everywhere; four honest asymmetries recorded
