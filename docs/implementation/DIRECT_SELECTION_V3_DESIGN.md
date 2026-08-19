@@ -1,6 +1,7 @@
 # Direct Selection V3: staged, bounded, donation-safe authority
 
-Status: **executable model and frozen codecs; lifecycle runtime STOP**
+Status: **routed lifecycle with model, host, and focused SBF-executed
+evidence on `codex/r3-direct-v3-successor`; not merged, not deployed**
 
 The current V2 direct-selection path is not promotable. Its full-width
 authority checks are correct, but a successful three-Candidate
@@ -17,7 +18,10 @@ gives every successfully frozen phase a permissionless terminal route.
 
 The executable transition model is
 `research/batch-policy-identity/src/direct_lifecycle_v3.rs`. Versioned account
-and intent codecs are frozen, but no lifecycle intent is dispatched yet.
+and intent codecs are frozen, and every intent in tags `36..=46` now routes to
+a real handler and executes against the program ELF under
+`solana-program-test`. That is branch evidence, not a release: see *Measured
+SBF cost* and *Remaining promotion boundary* below.
 
 ## Exact boundary
 
@@ -41,7 +45,7 @@ WorkBudget does not exist before successful Freeze, so a never-frozen Epoch
 cannot trap a work reserve. The executable model covers Reservation placement,
 monotone donation observation, exact zero/one/two pre-Freeze release, hostile
 prefix refusal, and the Freeze boundary. Runtime account construction and
-real-bank evidence remain STOP.
+real-bank evidence for each of those now exist on the successor branch.
 
 ## Non-negotiable authority rules
 
@@ -545,16 +549,25 @@ to the live page fold over the same two records, and the model's
 `direct_policy_v3_digest` is asserted byte-identical to the codec's
 `digest_for_epoch`.
 
-## Unrouted runtime checkpoint
+## Routed runtime status
 
-The SBF crate now compiles an isolated `InitDirectEpochV4` implementation. The
-page-construction and funded-placement seams exist only under `cfg(test)` as
-private host checkpoints: production `InitOrderPage` and `PlaceOrder` never
-length-select them. The production dispatcher still sends every tag `36..=46`
-through the legacy decoder and therefore refuses it. This is deliberately not
-partial ABI authority: every Direct V3 action returns `NotYetImplemented` only
-when called directly by host tests, and there is no live route capable of
-making that call.
+The whole family is now routed and executes in real SBF. `dispatch.rs` sends
+every tag `36..=46` to one `Route::DirectSelectionV3` arm that decodes only
+through the dedicated `DirectV3Request` envelope and calls an **exhaustive**
+handler match with no fallback and no `NotYetImplemented` arm, so a new
+lifecycle intent cannot compile without a handler. The legacy `Request`
+decoder still refuses every tag in `36..=46`, and the V3 decoder refuses every
+legacy tag, so no partially added tag can fall into a handler with different
+account versions.
+
+The `InitOrderPage` and `PlaceOrder` V4 branches left `cfg(test)` in the same
+commit series. Each is selected only by the otherwise-unreachable 672-byte V4
+Epoch schema, which can exist only through the routed `InitDirectEpochV4`, and
+the legacy eight-account placement and six-account page ABIs stay byte- and
+behavior-stable. That is the predecessor's exact failure mode, now covered by
+two live regressions: a legacy-shaped `PlaceOrder` refuses against V4 state on
+account count before any mutation, and a V4-shaped placement refuses against a
+legacy 344-byte Direct Epoch V3 account.
 
 Init's exact nine-account order is:
 
@@ -588,61 +601,151 @@ The new Window, Candidate, WorkBudget, receipt, and pot PDAs use five disjoint
 V3 seed namespaces. Epoch and Reservation keep their existing semantic PDA
 coordinates and are separated by exact version/length.
 
-The private test-only page seam retains the existing six-account shape and the
-test-only funded-placement seam has exactly nine accounts: the legacy eight in
-their unchanged order, with the exact epoch-bound 96-byte DirectBatchPolicy
-artifact appended read-only. They model `PREFREEZE_OPEN`, page zero of one, at
-most two single-Egg orders, zero fees/minimum-fill/flags, an exact grid tick,
-and a 618-byte Reservation V2 with its own payer/principal/donation ledger.
-These shapes are compile and host-test evidence only. A prior attempt to
-length-select them from live legacy wires was rejected because an injected
-program-owned V4 prestate could create a Reservation V2 dead end before
-Freeze, Abort, Cancel, and lapse were all available atomically. Legacy
+The page seam retains the existing six-account shape and the funded-placement
+seam has exactly nine accounts: the legacy eight in their unchanged order,
+with the exact epoch-bound 96-byte DirectBatchPolicy artifact appended
+read-only. They admit `PREFREEZE_OPEN`, page zero of one, at most two
+single-Egg orders, zero fees/minimum-fill/flags, an exact grid tick, and a
+618-byte Reservation V2 with its own payer/principal/donation ledger. A
+zero-envelope placement — a zero-limit buy under the profile's forced zero fee
+— refuses at creation, because its release would be the Position no-op the
+release kernel's unchanged-poststate rule refuses forever. The prior attempt
+to length-select these seams from live legacy wires was rejected because an
+injected program-owned V4 prestate could create a Reservation V2 dead end
+before Freeze, Abort, and lapse were all available atomically; they are live
+now only because the complete lifecycle lands with them. Legacy
 `InitOrderPage`, eight-account placement, and Reservation V1 production bytes
-therefore retain their prior behavior exactly.
+retain their prior behavior exactly.
+
+## Measured SBF cost
+
+Every number below is `compute_units_consumed` from the routed campaign in
+`programs/clutch-sbf/svm-tests/tests/direct_selection_v3.rs`, driving the real
+program ELF under `solana-program-test`. The transaction ceiling is
+1,400,000 CU. **No lifecycle instruction reached the ceiling: there is no
+measured CU STOP in this cut.**
+
+| instruction | measured CU | headroom |
+|---|---:|---:|
+| `InitDirectEpochV4` | 680,723 | 51.4% |
+| `InitOrderPage` (V4 branch) | 407,028 | 70.9% |
+| `PlaceOrder` (V4 branch, buy) | 784,232 | 44.0% |
+| `PlaceOrder` (V4 branch, sell) | 780,758 | 44.2% |
+| `FreezeDirectEpochV4` | 1,018,901 | 27.2% |
+| `AbortUnfrozenDirectV4`, zero reservations | 161,507 | 88.5% |
+| `AbortUnfrozenDirectV4`, one reservation | 371,980 | 73.4% |
+| `AbortUnfrozenDirectV4`, two reservations | 462,166 | 67.0% |
+| `SubmitDirectCandidateV3`, first admission | 904,313 | 35.4% |
+| `SubmitDirectCandidateV3`, retained | 991,101 | 29.2% |
+| `SubmitDirectCandidateV3`, retained (full top) | 1,091,329 | 22.0% |
+| `SubmitDirectCandidateV3`, **replacement (worst)** | **1,123,392** | **19.8%** |
+| `SubmitDirectCandidateV3`, noncompetitive no-state | 959,561 | 31.5% |
+| `BeginDirectVerificationV3` | 174,667 | 87.5% |
+| `VerifyDirectCandidateV3` (worst of three) | 607,601 | 56.6% |
+| `FinalizeDirectSelectionV3` (three retained) | 654,731 | 53.2% |
+| `SettleDirectV3` (incl. all seven closes) | 454,375 | 67.5% |
+| `LapseEmptyDirectV3` | 469,018 | 66.5% |
+| `LapseUnselectedDirectV3` | 507,294 | 63.8% |
+| `LapseSelectedDirectV3` | 516,557 | 63.1% |
+
+The staged design is what buys this: the V2 `SelectDirectWindowV1` reached the
+cap re-executing three Candidates in one transaction, while V3's Begin plus
+three Verifies plus Finalize each stay under 660,000 CU. `SubmitDirectCandidateV3`
+at 1,123,392 CU is the tightest row at just under 20% headroom; it is the shape that runs
+the full verifier, decodes three retained Candidates, and closes the displaced
+worst, and it is the row to watch if any later change adds work to submission.
+
+Two measured cost corrections landed with the campaign. Deferring direct
+lamport moves past every create CPI was required for correctness, not cost:
+the runtime syncs only the accounts passed to a callee at CPI entry, so an
+earlier direct move on a caller-only account desynchronizes the
+instruction-wide lamport sum and the transaction refuses as unbalanced.
+Single-site epoch validation in the two V4 branches cut `PlaceOrder` from
+1,249,641 to 784,232 CU and `InitOrderPage` from 641,047 to 407,028 CU by not
+re-running the decode-time hostile validation (including two software-SHA
+policy digests) up to four more times on the same immutable bytes; no refusal
+was removed, and the host substitution suite still refuses every
+policy/schedule/page/replay/release/funding mutation.
+
+`cargo-build-sbf` reports zero stack-frame errors for every `clutch_sbf`
+function. The frames that remain in its output are the pre-existing
+research/reference-crate debt already present in the sealed-main baseline ELF.
 
 ## Remaining promotion boundary
 
 The three former model blockers are closed by `e77238f`, `6267fde`, and
 `081bd81`: Settle now owns the actual Position transfer, verification derives
 all economic facts from frozen authority and takes the real neutral sink, and
-`FROZEN_EMPTY` pins admission/work history to zero. What remains is the live
-adapter beyond the isolated codec/test checkpoint: stack-bounded per-account
-reconstruction for every
-frozen transition, common intent routing only after every handler exists,
-exact full-principal PDA create/close transfers, and the real-SBF campaign
-below. Standalone codec or unrouted handler acceptance is not live authority.
+`FROZEN_EMPTY` pins admission/work history to zero. The live adapter, the
+routed dispatch, and the real-SBF campaign have now landed as well. What
+remains before this branch is promotable:
+
+1. **No per-order V4 cancellation exists.** The legacy `CancelOrder` epoch
+   role admits only the legacy lengths, so a 672-byte V4 Epoch refuses on data
+   length (asserted live). A V4 order can therefore be retired only by
+   aborting the whole unfrozen Epoch. That is a bounded, refusal-shaped gap,
+   not a dead end, but it is a product gap and must be named as one.
+2. **The campaign is one bank profile, not the whole hostile surface.** It
+   drives five candidates over an 11-tick grid; the codec's 64-tick replay
+   domain, tied scores, and omitted/reordered retained accounts are covered in
+   the executable model and the host suite, not yet in real SBF.
+3. **Upgrade authority remains the trust boundary.** `verifier_release_id` is
+   a compile-time semantic label, not an onchain code or deployment hash; a
+   malicious upgrade authority can replace the checking program. Promotion
+   needs an immutable deployment or an explicit accepted-authority statement.
+4. **Reward amounts are unpriced.** The campaign's frozen rewards are
+   arbitrary positive lamports. Real values need a policy pass over these
+   measured CU numbers.
+5. Existing Reservation V1 accounts stay outside the V3 promotion claim, and
+   the durable Epoch archive still grows linearly with history.
 
 Run:
 
 ```sh
 cargo test --manifest-path research/batch-policy-identity/Cargo.toml --locked --offline --all-targets
 cargo clippy --manifest-path research/batch-policy-identity/Cargo.toml --locked --offline --all-targets -- -D warnings
+cargo test --manifest-path programs/clutch-sbf/Cargo.toml -p clutch-sbf --locked --offline
+programs/clutch-sbf/svm-tests/run_svm_tests.sh direct_selection_v3
 ```
 
 ## Required live evidence before promotion
 
-1. Exact hostile codecs for every new version, phase, length, padding, payer,
-   principal, donation, deadline, verifier, and receipt field.
-2. Real-SBF blank and one-lamport prefund allocate/assign for Candidate, Window,
-   WorkBudget, receipt, pot, and Reservation V2, proving the full payer deposit
-   and neutral DonationLedger split.
-3. Real-SBF multiple/tied Candidates, all 64 ticks, replacement,
-   noncompetitive repetition, admitted replay, omitted/reordered top, corrupt
-   score/digest, policy/grid/page/reservation/release-ID substitution, early/late
-   work, reward replay, recipient substitution, later account donation, and
-   rollback after writes/creates/closes.
-4. CU and stack reports for maximum account shape of every staged route, with
-   explicit headroom below the transaction cap.
-5. Rent, donation, WorkBudget, cash, claim, fee, and reservation snapshots
-   before/after success and every late failure.
-6. Durable Epoch receipt decoding after transient authority is gone.
-7. Real-SBF pre-Freeze abort/release for zero, one, and two OPEN reservations,
-   including late failure rollback and exact recipient substitution refusal.
-8. Real-SBF persistence of DonationLedger `observe` updates for every surviving
-   mutable Candidate, Window, WorkBudget, and Reservation account, proving that
-   an observed donation cannot later be drained while an older lower bound is
-   persisted.
+Each item records what the routed campaign now covers. **Covered** means a
+real-SBF assertion exists in `direct_selection_v3.rs`; **partial** names the
+exact remainder.
+
+1. **Covered (codec/host).** Exact hostile codecs for every new version, phase,
+   length, padding, payer, principal, donation, deadline, verifier, and receipt
+   field, in the layout crate's suite.
+2. **Covered.** Every predictable PDA in the campaign starts as a one-lamport
+   System account; Epoch, page, Candidate, Window, WorkBudget, receipt, pot,
+   and both Reservation V2 accounts are created over that prefund, and each
+   asserts `balance == rent_exempt + 1` with the prefund recorded as neutral
+   donation and never as payer principal.
+3. **Partial.** Covered live: replacement, the noncompetitive no-state
+   outcome, admitted-tick replay (both a retained tick and a displaced tick),
+   post-close submission, wrong-policy substitution, recipient substitution at
+   Finalize and at Abort, early/late staged work, verification replay, wrong
+   retained index, and rollback after staged writes. Not yet live: all 64
+   ticks, exact score ties, and omitted/reordered retained accounts — those
+   remain model and host evidence.
+4. **Covered.** See *Measured SBF cost*: every routed instruction with its
+   worst measured account shape, explicit headroom, and zero `clutch_sbf`
+   stack-frame errors.
+5. **Covered.** The campaign asserts exact per-keypair lamport conservation at
+   terminal (keeper earns exactly the frozen rewards, sponsor loses exactly
+   those rewards, submitter and both owners recover every principal exactly),
+   exact Position cash/Egg poststates, and byte-identical account snapshots
+   across every late failure.
+6. **Covered.** The durable Epoch V4 receipt is decoded after Settle and after
+   each lapse, with every transient account asserted closed.
+7. **Covered.** Zero-, one-, and two-reservation pre-freeze aborts each run,
+   with recipient substitution refusing first and both Positions restored
+   exactly.
+8. **Covered.** An unsolicited transfer to the live Window is observed and
+   persisted as a monotone lower bound by the next mutating transition, and
+   the noncompetitive no-state path refuses while that observation is pending
+   because nothing may persist it.
 
 ## Still out of scope
 
