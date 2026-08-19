@@ -3,9 +3,10 @@
 #
 # This is deliberately independent of scripts/run_bringup.sh.  It does not
 # start a validator or exercise protocol semantics.  Instead it rebuilds the
-# SBF ELF twice from checksum-verified registry archives in two fresh Cargo
-# homes, then audits the linked artifact, backend stack diagnostics, dependency
-# pins, licenses, and loader-v3 account sizing.
+# SBF ELF twice into fresh target directories from a checksum-verified Cargo
+# cache, then audits the linked artifact, backend stack diagnostics, dependency
+# pins, licenses, and loader-v3 account sizing.  A third build relocates the
+# Cargo home to measure (rather than hide) the path-sensitive boundary.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,7 +25,7 @@ sha256() {
 # Build-affecting overrides make a result hard to interpret.  One explicit
 # distribution root is supported; mixed per-binary overrides are not.
 ambiguous_env=(
-  CARGO_BUILD_SBF SOLANA_BIN LLVM_OBJDUMP LLVM_READOBJ RUSTC RUSTDOC RUSTFLAGS
+  CARGO_BUILD_SBF SOLANA_BIN LLVM_OBJDUMP LLVM_READOBJ CARGO_HOME RUSTC RUSTDOC RUSTFLAGS
   CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR SBF_OUT_PATH SBF_SDK_PATH
   CARGO_PROFILE_RELEASE_LTO CARGO_PROFILE_RELEASE_CODEGEN_UNITS
 )
@@ -207,6 +208,101 @@ pathlib.Path(report_path).write_text(
 )
 PY
 
+# Cargo verifies an archive checksum when unpacking, but an already-unpacked
+# registry source is subsequently trusted.  The two runtime-recipe builds below
+# intentionally use the ordinary fixed Cargo home so their digest matches the
+# bring-up recipe.  Re-derive and compare every unpacked file first.
+python3 - "$sbf_root/Cargo.lock" "$HOME/.cargo/registry/cache" \
+  "$HOME/.cargo/registry/src" "$work/registry-source-verification.tsv" <<'PY'
+import glob
+import hashlib
+import io
+import pathlib
+import sys
+import tarfile
+import tomllib
+
+lock_path, cache_root, source_root, report_path = sys.argv[1:]
+lock = tomllib.loads(pathlib.Path(lock_path).read_text())
+rows = []
+for package in lock["package"]:
+    source = package.get("source", "")
+    if not source.startswith("registry+"):
+        continue
+    name = package["name"]
+    version = package["version"]
+    archives = glob.glob(str(pathlib.Path(cache_root) / "*" / f"{name}-{version}.crate"))
+    trees = glob.glob(str(pathlib.Path(source_root) / "*" / f"{name}-{version}"))
+    if len(archives) != 1 or len(trees) != 1:
+        raise SystemExit(
+            f"ambiguous registry cache for {name} {version}: archives={len(archives)} trees={len(trees)}"
+        )
+    archive = pathlib.Path(archives[0])
+    tree = pathlib.Path(trees[0])
+    actual_archive = hashlib.sha256(archive.read_bytes()).hexdigest()
+    if actual_archive != package.get("checksum"):
+        raise SystemExit(f"archive checksum mismatch: {name} {version}")
+
+    expected = {}
+    prefix = f"{name}-{version}/"
+    with tarfile.open(archive, "r:gz") as bundle:
+        for member in bundle.getmembers():
+            if not member.isfile():
+                continue
+            if not member.name.startswith(prefix):
+                raise SystemExit(f"archive member escapes package root: {member.name}")
+            relative = member.name[len(prefix):]
+            extracted = bundle.extractfile(member)
+            if extracted is None:
+                raise SystemExit(f"cannot extract archive member: {member.name}")
+            expected[relative] = hashlib.sha256(extracted.read()).hexdigest()
+    actual = {
+        path.relative_to(tree).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in tree.rglob("*")
+        if path.is_file() and path.name != ".cargo-ok"
+    }
+    if expected != actual:
+        missing = sorted(expected.keys() - actual.keys())
+        extra = sorted(actual.keys() - expected.keys())
+        changed = sorted(key for key in expected.keys() & actual.keys() if expected[key] != actual[key])
+        raise SystemExit(
+            f"unpacked registry source mismatch for {name} {version}: "
+            f"missing={missing[:3]} extra={extra[:3]} changed={changed[:3]}"
+        )
+    rows.append((name, version, actual_archive, str(tree)))
+
+pathlib.Path(report_path).write_text(
+    "name\tversion\tarchive_sha256\tunpacked_source\n"
+    + "".join("\t".join(row) + "\n" for row in sorted(rows))
+)
+PY
+
+# The fixed Cargo home configuration is an input to the bring-up recipe.  It
+# may tune unrelated host targets, but may not redirect a registry/source or
+# inject Rust flags into this artifact without an explicit review.
+global_cargo_config="$HOME/.cargo/config.toml"
+[ -f "$global_cargo_config" ] || fail "fixed Cargo home config is absent: $global_cargo_config"
+python3 - "$global_cargo_config" <<'PY'
+import pathlib
+import sys
+import tomllib
+
+config = tomllib.loads(pathlib.Path(sys.argv[1]).read_text())
+for forbidden in ("source", "registries"):
+    if config.get(forbidden):
+        raise SystemExit(f"global Cargo config has active [{forbidden}] selection")
+if config.get("patch"):
+    nonempty = {key: value for key, value in config["patch"].items() if value}
+    if nonempty:
+        raise SystemExit(f"global Cargo config has active patch selection: {sorted(nonempty)}")
+if config.get("build", {}).get("rustflags"):
+    raise SystemExit("global Cargo config injects build.rustflags")
+for target, values in config.get("target", {}).items():
+    if values.get("rustflags"):
+        raise SystemExit(f"global Cargo config injects target.{target}.rustflags")
+PY
+global_cargo_config_sha256="$(sha256 "$global_cargo_config")"
+
 # The one vendored crate has no local .crate archive.  Require its checked-in
 # provenance declaration and byte identity with Cargo's previously unpacked
 # cache, while recording the limitation in the evidence document.
@@ -252,17 +348,14 @@ hashes=()
 sizes=()
 unstripped_elves=()
 for pass in 1 2; do
-  cargo_home="$work/cargo-home-$pass"
   target="$work/target-$pass"
   out="$work/out-$pass"
   log="$work/sbf-build-$pass.log"
-  mkdir -p "$cargo_home/registry" "$out"
-  ln -s "$HOME/.cargo/registry/index" "$cargo_home/registry/index"
-  ln -s "$HOME/.cargo/registry/cache" "$cargo_home/registry/cache"
+  mkdir -p "$out"
 
   (
     cd "$sbf_root"
-    CARGO_HOME="$cargo_home" CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$target" \
+    CARGO_HOME="$HOME/.cargo" CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$target" \
       "$build_sbf" --manifest-path program/Cargo.toml --arch v0 --offline \
         --skip-tools-install --tools-version "$platform_tools_version" \
         --sbf-out-dir "$out" -- --locked
@@ -282,6 +375,32 @@ for pass in 1 2; do
 done
 [ "${hashes[0]}" = "${hashes[1]}" ] || fail "fresh SBF builds differ: ${hashes[0]} != ${hashes[1]}"
 [ "${sizes[0]}" = "${sizes[1]}" ] || fail "fresh SBF sizes differ"
+
+# Relocation probe.  It is deliberately not the attested artifact: it measures
+# whether dependency source paths embedded by rustc make the recipe sensitive
+# to Cargo-home location.  The result narrows the reproducibility claim.
+relocated_home="$work/cargo-home-relocated"
+relocated_target="$work/target-relocated"
+relocated_out="$work/out-relocated"
+mkdir -p "$relocated_home/registry" "$relocated_out"
+ln -s "$HOME/.cargo/registry/index" "$relocated_home/registry/index"
+ln -s "$HOME/.cargo/registry/cache" "$relocated_home/registry/cache"
+(
+  cd "$sbf_root"
+  CARGO_HOME="$relocated_home" CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$relocated_target" \
+    "$build_sbf" --manifest-path program/Cargo.toml --arch v0 --offline \
+      --skip-tools-install --tools-version "$platform_tools_version" \
+      --sbf-out-dir "$relocated_out" -- --locked
+) > "$work/sbf-build-relocated.log" 2>&1 || {
+  tail -80 "$work/sbf-build-relocated.log" >&2
+  fail "relocated-Cargo-home SBF probe failed"
+}
+relocated_hash="$(sha256 "$relocated_out/clutch_sbf.so")"
+if [ "$relocated_hash" = "${hashes[0]}" ]; then
+  cargo_home_relocation="INDEPENDENT"
+else
+  cargo_home_relocation="PATH_SENSITIVE"
+fi
 
 # Ensure no concurrent edit changed the source closure during the two builds.
 source_digest_after="$(python3 - "$repo" "$work/source-files.txt" <<'PY'
@@ -491,6 +610,7 @@ echo "llvm_objdump_sha256=$(sha256 "$llvm_objdump")"
 echo "llvm_readobj_sha256=$(sha256 "$llvm_readobj")"
 echo "llvm_objcopy_sha256=$(sha256 "$llvm_objcopy")"
 echo "llvm_lld_sha256=$(sha256 "$llvm_lld")"
+echo "global_cargo_config_sha256=$global_cargo_config_sha256"
 echo "dependency_packages=$dependency_rows"
 echo "dependency_registry_archives_verified=$registry_rows"
 echo "dependency_first_party=$first_party_rows"
@@ -498,6 +618,8 @@ echo "dependency_vendored=$vendored_rows"
 echo "vendored_tree_sha256=$vendor_digest"
 echo "elf_pass_1_sha256=${hashes[0]}"
 echo "elf_pass_2_sha256=${hashes[1]}"
+echo "elf_relocated_cargo_home_sha256=$relocated_hash"
+echo "cargo_home_relocation=$cargo_home_relocation"
 echo "elf_bytes=$elf_bytes"
 cat "$work/stack-summary.txt"
 cat "$work/frame-summary.txt"
