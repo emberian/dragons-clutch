@@ -385,11 +385,20 @@ in this transaction.
 Consumes the existing narrow two-order, full-fill, one-Egg, zero-fee economic
 plan from ENTITLED reservations. Outcome, quantity, price, and consideration
 come byte-exactly from the selected, reverified Candidate; callers supply none
-of them. Before closing transient authority it writes the `SETTLED` receipt into
-Epoch V4. It then transitions reservations `ENTITLED -> CONSUMED`, closes the
-selected Candidate, Window, receipt, pot, WorkBudget, and both reservations,
-pays Settle only from WorkBudget, returns unused rewards to the sponsor, returns
-each principal to its payer, and sends all donations only to the neutral sink.
+of them. The settlement input is an exact buyer/seller Position pair in
+economic-role order, independent of the two page slots' order. The checked
+kernel maps the frozen buy/sell indices to the matching Reservations, requires
+distinct owners and accounts, computes `quantity * price / price_scale` in
+`u128` with exact divisibility and checked `u64` conversion, debits buyer cash,
+credits seller cash, credits the bought Egg, and releases the buyer's complete
+reserved-cash headroom. Cash and Egg conservation are checked before either
+Reservation becomes `CONSUMED`.
+
+Before closing transient authority it writes the `SETTLED` receipt into Epoch
+V4. It then closes the selected Candidate, Window, receipt, pot, WorkBudget,
+and both reservations, pays Settle only from WorkBudget, returns unused rewards
+to the sponsor, returns each principal to its payer, and sends all donations
+only to the neutral sink. Positions survive with the exact checked poststates.
 
 ## Permissionless lapse
 
@@ -427,8 +436,19 @@ work, but remain STOP. They must not be implied by transient cleanup.
 
 ## Executed model evidence
 
-The research crate passes 37 tests total, including 21 V3 lifecycle tests, and
-strict Clippy. V3 tests cover:
+At commit `0ccfa18` the research crate passes 40 tests total, including 24 V3
+lifecycle tests, and strict Clippy. The exact archive was independently run in
+release mode on `hbox` from
+`/tank/dregg-build/dragons-clutch-r3-direct-0ccfa18`; all 40 tests passed,
+including the exhaustive five-candidate arrival permutations and all 62
+relation-admissible interior ticks of the 64-tick replay domain. The local and
+remote archive SHA-256 is
+`9805f897eded9515acf9a871cf7af895dff1c12e58b67393bb8e359a457b5f4e`;
+the captured test log SHA-256 is
+`35d3bc51e0f4b32529faee4cbc02931769ee2447aa8425d0c0f2e4969d7dd861`.
+The host was Linux `6.11.0-29-generic` x86-64 with Cargo
+`1.100.0-nightly (8a0d8afba 2026-08-15)` and rustc
+`1.100.0-nightly (e71c0f1e3 2026-08-18)`. GPU was not used. V3 tests cover:
 
 - min/max deadline spans, boundary slots, and strictly positive work rewards;
 - exact full-verifier/grid-issued Candidates and hostile tick/ID/score changes;
@@ -437,6 +457,9 @@ strict Clippy. V3 tests cover:
   refusing before any unsafe index or shift;
 - verifier release-ID checks across staged work;
 - exact `ACTIVE -> ENTITLED -> CONSUMED/RELEASED` effects;
+- exact buyer/seller Position settlement independent of page orientation,
+  including cash/Egg transfer, reserved-cash release, consideration
+  divisibility, alias/substitution refusal, and atomic overflow refusal;
 - partial-verification and selected-path WorkBudget equations;
 - canonical DonationLedger create deltas, monotone donations, shortfall refusal,
   close-time neutral disposition, payer/reward separation, and checked aggregate
@@ -451,7 +474,12 @@ strict Clippy. V3 tests cover:
 - the epoch-bound DirectBatchPolicy V3 artifact identity with wrong-epoch,
   wrong-release, and substituted-identity refusal; and
 - pre-Freeze, empty, pre-selection, post-selection, and settled durable
-  receipts.
+  receipts;
+- independent Candidate reconstruction from the frozen page's quantity,
+  buy/sell indices, outcome, limits, and immutable schedule rather than the
+  persisted Candidate's claims, plus explicit neutral-sink binding; and
+- `FROZEN_EMPTY` refusal of every ghost admission bitmap/count/transcript and
+  every impossible pre-admission work-payment history.
 
 The layout crate additionally carries two cross-crate tripwires: the model's
 recomputed frozen-page digest and order-set fold are asserted byte-identical
@@ -459,21 +487,15 @@ to the live page fold over the same two records, and the model's
 `direct_policy_v3_digest` is asserted byte-identical to the codec's
 `digest_for_epoch`.
 
-## Known model open items
+## Remaining promotion boundary
 
-- Settle consumes ENTITLED reservations and writes the exact economic receipt,
-  but does not yet embed the existing economic Position-transfer kernel: the
-  selected trade's cash/Egg movement between the two Positions is not modeled.
-- `verify_lease` authenticates a lease account against its own ledger's
-  neutral sink, which is tautological in isolation. Both call sites first
-  validate against the Epoch authority sink, so this is a latent trap for
-  future callers rather than a live hole; the redundant self-check should be
-  removed or given the real sink.
-- The `FROZEN_EMPTY` validator does not pin `seen_competitive_ticks`,
-  `competitive_admission_count`, or the admission transcript to zero. The
-  state is unreachable through model transitions and not runtime-encodable
-  (those fields live in the Window account, which must not exist in
-  `FROZEN_EMPTY`), and pre-set ticks could only cause extra Replay refusals.
+The three former model blockers are closed by `e77238f`, `6267fde`, and
+`081bd81`: Settle now owns the actual Position transfer, verification derives
+all economic facts from frozen authority and takes the real neutral sink, and
+`FROZEN_EMPTY` pins admission/work history to zero. What remains is the live
+adapter: stack-bounded per-account reconstruction, common intent routing only
+after every handler exists, exact PDA create/close transfers, and the real-SBF
+campaign below. Standalone codec acceptance is not live authority.
 
 Run:
 
