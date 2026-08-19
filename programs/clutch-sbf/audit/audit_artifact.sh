@@ -528,12 +528,31 @@ PY
 
 # ELF shape and syscall surface.  A new undefined dynamic symbol is a review
 # event, not something this supply-chain gate silently accepts.
-python3 - "$work/final-readobj.txt" "$work/elf-summary.txt" <<'PY'
+#
+# `sol_sha256` is the one reviewed addition to the 2026-08-18 baseline.  The
+# program calls it only through `solana-sha256-hasher =3.1.0`, whose SBF branch
+# re-exports `solana_define_syscall::definitions::sol_sha256` and whose safe
+# `hashv` wrapper owns the unsafe result buffer.  Pin the exact crates.io
+# archive identity here as well as in Cargo.lock/dependency verification so an
+# unrelated package cannot inherit this syscall admission merely by name.
+python3 - "$work/final-readobj.txt" "$work/dependencies.tsv" \
+  "$work/elf-summary.txt" <<'PY'
 import pathlib
 import re
 import sys
 
 text = pathlib.Path(sys.argv[1]).read_text()
+dependency_rows = pathlib.Path(sys.argv[2]).read_text().splitlines()
+expected_sha256_wrapper = (
+    "solana-sha256-hasher\t3.1.0\tcrates.io\t"
+    "db7dc3011ea4c0334aaaa7e7128cb390ecf546b28d412e9bf2064680f57f588f\t"
+    "Apache-2.0"
+)
+if dependency_rows.count(expected_sha256_wrapper) != 1:
+    raise SystemExit(
+        "reviewed sol_sha256 wrapper provenance changed; expected exactly: "
+        + expected_sha256_wrapper
+    )
 required = [
     "Format: elf64-sbf",
     "Arch: sbf",
@@ -560,7 +579,7 @@ for block in re.findall(r"  Symbol \{(.*?)\n  \}", text, re.S):
     name = re.search(r"\n    Name: ([^ ]*)", block)
     if name and name.group(1):
         undefined.add(name.group(1))
-allowed = {
+baseline_allowed = {
     "abort",
     "sol_invoke_signed_rust",
     "sol_log_",
@@ -570,16 +589,40 @@ allowed = {
     "sol_panic_",
     "sol_try_find_program_address",
 }
-if undefined != allowed:
-    raise SystemExit(
-        f"undefined dynamic-symbol surface changed: got {sorted(undefined)}, expected {sorted(allowed)}"
-    )
+reviewed_additions = {"sol_sha256"}
+allowed = baseline_allowed | reviewed_additions
+if allowed - baseline_allowed != {"sol_sha256"}:
+    raise SystemExit("syscall review widened beyond the single intended sol_sha256 addition")
+
+def require_exact_surface(observed):
+    if observed != allowed:
+        raise ValueError(
+            f"undefined dynamic-symbol surface changed: got {sorted(observed)}, "
+            f"expected {sorted(allowed)}"
+        )
+
+# Hostile self-check: the exact-surface predicate used on the ELF must still
+# reject a second hash syscall.  This prevents a future edit from accidentally
+# turning the reviewed one-symbol addition into a prefix or family admission.
+hostile = allowed | {"sol_keccak256"}
+try:
+    require_exact_surface(hostile)
+except ValueError as error:
+    if "sol_keccak256" not in str(error):
+        raise SystemExit("hostile syscall-surface check failed opaquely") from error
+else:
+    raise SystemExit("hostile syscall-surface check admitted sol_keccak256")
+
+try:
+    require_exact_surface(undefined)
+except ValueError as error:
+    raise SystemExit(str(error)) from error
 
 text_size_match = re.search(r"Name: \.text .*?Size: ([0-9]+)", text, re.S)
 load_segments = len(re.findall(r"Type: PT_LOAD", text))
 if not text_size_match or load_segments != 3:
     raise SystemExit("unexpected final ELF section or load-segment shape")
-pathlib.Path(sys.argv[2]).write_text(
+pathlib.Path(sys.argv[3]).write_text(
     f"entrypoint={entry_match.group(1)}\n"
     f"text_bytes={text_size_match.group(1)}\n"
     f"load_segments={load_segments}\n"
