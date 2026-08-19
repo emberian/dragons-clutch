@@ -1,3 +1,5 @@
+#![cfg(feature = "non-production-mock-source")]
+
 //! NON-PRODUCTION local-bank evidence for the mock authenticated-source ELF.
 //!
 //! This test must be run only after building `clutch-sbf` with

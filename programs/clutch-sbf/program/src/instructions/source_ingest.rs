@@ -250,6 +250,43 @@ fn verify_spec(
     Ok(verified)
 }
 
+/// Refuse value admission unless one canonical immutable SourceSpec binds the
+/// market's Terms and selects a release compiled into this exact ELF.
+///
+/// This is deliberately a result-returning capability check, not a caller
+/// supplied availability bit.  The same private [`release_registered`]
+/// registry that dispatches every source-ingest operation is the sole owner of
+/// the decision.  In the default artifact that registry is empty, so a valid
+/// Terms/SourceSpec pair still refuses with
+/// [`ClutchError::SourceReleaseUnavailable`].
+///
+/// A SourceSpec PDA can be constructed onchain only by [`init_source_spec`],
+/// which authenticates the compiled parser and deployment release before
+/// atomically creating both SourceSpec and Feed.  Re-authenticating its owner,
+/// address, body, digest, bump, Terms binding, and current registry membership
+/// here prevents an old or fixture-injected market from bypassing the empty
+/// default registry at the collateral boundary.
+#[inline(never)]
+pub(crate) fn require_registered_source_for_market(
+    program_id: &Pubkey,
+    terms_account: &AccountInfo,
+    source_spec_account: &AccountInfo,
+    expected_terms: Hash32,
+    expected_realm: Hash32,
+    expected_feed: Hash32,
+) -> Outcome<()> {
+    let terms = read_frozen_terms(program_id, terms_account, expected_terms)?;
+    require(
+        terms.realm == expected_realm && terms.feed == expected_feed,
+        ClutchError::MismatchedState,
+    )?;
+    let verified = verify_spec(program_id, source_spec_account, terms)?;
+    require(
+        release_registered(verified.spec()),
+        ClutchError::SourceReleaseUnavailable,
+    )
+}
+
 fn read_initial_feed(
     program_id: &Pubkey,
     account: &AccountInfo,
@@ -694,6 +731,7 @@ fn is_mock_release(spec: SourceSpecV1) -> bool {
         && spec.parser_version() == 3
         && spec.source_program() == MOCK_PROGRAM
         && spec.source_account() == MOCK_SOURCE
+        && spec.deployment_generation() == 19
 }
 
 #[cfg(not(feature = "non-production-mock-source"))]
@@ -901,5 +939,47 @@ mod tests {
         })
         .expect("valid mock identity");
         assert!(!release_registered(spec));
+    }
+}
+
+#[cfg(all(test, feature = "non-production-mock-source"))]
+mod mock_registry_tests {
+    use super::*;
+    use crate::source::{
+        SourceSpecFieldsV1, ORIENTATION_QUOTE_PER_BASE, SELECTION_FINALIZED_BUCKET_RECORD,
+    };
+
+    fn spec(parser_version: u16, deployment_generation: u64) -> SourceSpecV1 {
+        SourceSpecV1::new(SourceSpecFieldsV1 {
+            source_adapter_id: Hash32::from_bytes(MOCK_ADAPTER),
+            source_adapter_version: 7,
+            parser_id: 11,
+            parser_version,
+            source_program: MOCK_PROGRAM,
+            source_account: MOCK_SOURCE,
+            deployment_generation,
+            base_asset_id: Hash32::from_bytes([1; 32]),
+            quote_asset_id: Hash32::from_bytes([2; 32]),
+            orientation: ORIENTATION_QUOTE_PER_BASE,
+            normalized_decimals: 8,
+            grid_family_id: 4,
+            grid_version: 2,
+            bucket_seconds: 60,
+            max_staleness_slots: 20,
+            max_staleness_seconds: 90,
+            max_future_seconds: 2,
+            max_confidence_atoms: 5_000,
+            max_confidence_bps: 100,
+            confidence_multiplier: 2,
+            selection_rule: SELECTION_FINALIZED_BUCKET_RECORD,
+        })
+        .expect("valid mock-shaped spec")
+    }
+
+    #[test]
+    fn mock_elf_registers_only_its_exact_compiled_parser_and_deployment_release() {
+        assert!(release_registered(spec(3, 19)));
+        assert!(!release_registered(spec(4, 19)));
+        assert!(!release_registered(spec(3, 20)));
     }
 }

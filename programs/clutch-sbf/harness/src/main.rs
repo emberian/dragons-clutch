@@ -83,7 +83,7 @@ use clutch_solana_reference::{
     ResolutionExpectedBindings, ResolutionStateBytes, ResolutionTransitionMetadata, StateBytes,
     TransitionMetadata, TransitionOutput, EXTERNAL_ACCOUNT_LEN, FAIL_UNIFORM_REFUND_01,
     GEN_EXACT_01, KERNEL_ACCOUNT_LEN, REPLAY_ACCOUNT_LEN, V1_EVALUATOR_VERSION,
-    V1_EXACT_GENERATION, V1_SOURCE_VERSION,
+    V1_EXACT_GENERATION,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -161,13 +161,16 @@ const FEED_EVIDENCE_FILL: u8 = 0x5e;
  * committed harness's injected genesis archive; they do not name Pyth or any
  * other production provider. */
 const SOURCE_ADAPTER_ID: [u8; 32] = [0xa1; 32];
-const SOURCE_PROGRAM: [u8; 32] = [0xa2; 32];
-const SOURCE_PROGRAM_OWNER: [u8; 32] = [0xa3; 32];
-const SOURCE_DATA_ACCOUNT: [u8; 32] = [0xa4; 32];
-const SOURCE_DEPLOYMENT_ACCOUNT: [u8; 32] = [0xa5; 32];
-const SOURCE_DEPLOYMENT_OWNER: [u8; 32] = [0xa6; 32];
-const SOURCE_DEPLOYMENT_VERIFIER: [u8; 32] = [0xa7; 32];
-const SOURCE_DEPLOYMENT_GENERATION: u64 = 1;
+const REGISTERED_SOURCE_VERSION: u32 = 7;
+const SOURCE_PARSER_ID: u16 = 11;
+const SOURCE_PARSER_VERSION: u16 = 3;
+const SOURCE_PROGRAM: [u8; 32] = [0xb2; 32];
+const SOURCE_PROGRAM_OWNER: [u8; 32] = [0xb3; 32];
+const SOURCE_DATA_ACCOUNT: [u8; 32] = [0xc3; 32];
+const SOURCE_DEPLOYMENT_ACCOUNT: [u8; 32] = [0xd4; 32];
+const SOURCE_DEPLOYMENT_OWNER: [u8; 32] = [0xd5; 32];
+const SOURCE_DEPLOYMENT_VERIFIER: [u8; 32] = [0xd6; 32];
+const SOURCE_DEPLOYMENT_GENERATION: u64 = 19;
 const SOURCE_RECORD_BYTES: usize = 77;
 
 struct HarnessDeployment;
@@ -197,9 +200,9 @@ struct HarnessPriceParser;
 
 impl PriceParserV1 for HarnessPriceParser {
     const SOURCE_ADAPTER_ID: [u8; 32] = SOURCE_ADAPTER_ID;
-    const SOURCE_ADAPTER_VERSION: u32 = V1_SOURCE_VERSION;
-    const PARSER_ID: u16 = 1;
-    const PARSER_VERSION: u16 = 1;
+    const SOURCE_ADAPTER_VERSION: u32 = REGISTERED_SOURCE_VERSION;
+    const PARSER_ID: u16 = SOURCE_PARSER_ID;
+    const PARSER_VERSION: u16 = SOURCE_PARSER_VERSION;
 
     fn parse(account: SourceAccountView<'_>) -> Result<ParsedPriceV1, SourceError> {
         let bytes = account.data();
@@ -703,7 +706,7 @@ fn encode_window(feed: FeedId, records: &[Record]) -> Vec<u8> {
     out.push(REFERENCE_VERSION);
     out.extend_from_slice(&SOURCE_ADAPTER_ID);
     out.extend_from_slice(&feed.bytes());
-    out.extend_from_slice(&V1_SOURCE_VERSION.to_le_bytes());
+    out.extend_from_slice(&REGISTERED_SOURCE_VERSION.to_le_bytes());
     out.extend_from_slice(&V1_EVALUATOR_VERSION.to_le_bytes());
     out.extend_from_slice(&GRID_FAMILY.to_le_bytes());
     out.extend_from_slice(&GRID_VERSION.to_le_bytes());
@@ -1218,9 +1221,9 @@ fn fixture_policy(collateral_mint: [u8; 32]) -> collateral::CollateralPolicy {
 fn harness_source_spec() -> SourceSpecV1 {
     SourceSpecV1::new(SourceSpecFieldsV1 {
         source_adapter_id: Hash32::from_bytes(SOURCE_ADAPTER_ID),
-        source_adapter_version: V1_SOURCE_VERSION,
-        parser_id: 1,
-        parser_version: 1,
+        source_adapter_version: REGISTERED_SOURCE_VERSION,
+        parser_id: SOURCE_PARSER_ID,
+        parser_version: SOURCE_PARSER_VERSION,
         source_program: SOURCE_PROGRAM,
         source_account: SOURCE_DATA_ACCOUNT,
         deployment_generation: SOURCE_DEPLOYMENT_GENERATION,
@@ -1247,7 +1250,7 @@ fn harness_window(feed: FeedId) -> WindowDomain {
         SourceFeedIdentity::new(
             SOURCE_ADAPTER_ID,
             feed.bytes(),
-            V1_SOURCE_VERSION,
+            REGISTERED_SOURCE_VERSION,
             V1_EVALUATOR_VERSION,
         )
         .expect("harness source identity"),
@@ -1449,7 +1452,7 @@ fn build_shared() -> Shared {
         failure_payout_index: 0,
         coverage_policy_parameter: 0,
         repair_generation: 0,
-        source_version: 1,
+        source_version: REGISTERED_SOURCE_VERSION,
         evaluator_version: 1,
         source_adapter_id: Hash32::from_bytes(SOURCE_ADAPTER_ID),
         payout_map,
@@ -2580,7 +2583,9 @@ struct Case {
     note: String,
     tx: Vec<u8>,
     instruction_count: usize,
-    /// `None` for a refusal case.
+    /// Writable post-state witnesses. Most refusal cases need no returned
+    /// accounts; a refusal at a value boundary may carry these same rows as
+    /// explicit rollback witnesses.
     compare: Option<Vec<Compare>>,
     /// Roles that must come back byte-identical to the genesis pre-state.
     identical_to_pre: Vec<String>,
@@ -3286,10 +3291,11 @@ fn paired_resolve_transaction(
 
 /// The message and instruction of one `Endow` transaction.
 ///
-/// Thirteen accounts: a first endowment may create the owner's Position and
+/// Fifteen accounts: a first endowment may create the owner's Position and
 /// Replay through System CPI, then transfers admitted Token-2022 collateral
-/// into pooled custody. The owner is a writable signer because it funds that
-/// owner plane when absent.
+/// into pooled custody. Canonical Terms and SourceSpec are trailing read-only
+/// release evidence; every historical role keeps its index. The owner is a
+/// writable signer because it funds that owner plane when absent.
 fn endow_transaction(shared: &Shared, plane: &Plane, signer: Signer<'_>, data: Vec<u8>) -> Vec<u8> {
     endow_transaction_at(shared, plane, &plane.position, &plane.replay, signer, data)
 }
@@ -3317,6 +3323,8 @@ fn endow_transaction_at(
         shared.collateral_mint.bytes,
         shared.system_program,
         shared.rent_sysvar,
+        shared.terms.bytes,
+        shared.source_spec.bytes,
         shared.program.bytes,
         shared.compute_budget,
     ];
@@ -3345,6 +3353,8 @@ fn endow_transaction_at(
         plane.hoard_token.bytes,
         shared.system_program,
         shared.rent_sysvar,
+        shared.terms.bytes,
+        shared.source_spec.bytes,
     ];
     assert_eq!(
         keys.len(),
@@ -4935,6 +4945,29 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
     cases
 }
 
+/// Rewrite only the source-dependent expectations for the production-shaped
+/// default ELF. Every other family keeps its existing independent genesis
+/// plane and oracle. The valid signed Endow and its skipped-sequence variant
+/// both reach the source gate before replay or Token-2022 and must refuse the
+/// empty registry with the stable `0x0079` code.
+fn expect_default_source_refusals(cases: &mut [Case]) {
+    let unavailable = clutch_sbf::error::ClutchError::SourceReleaseUnavailable as u32;
+    for case in cases {
+        if case.name == "endow" {
+            case.oracle = "default empty source registry";
+            case.note = "canonical Terms and SourceSpec cannot make the default ELF accept collateral because it has zero registered production releases; refusal precedes owner-plane construction and Token-2022".to_string();
+            case.compare = None;
+            case.identical_to_pre.clear();
+            case.expect_code = Some(unavailable);
+            case.reference = "source release unavailable in this exact ELF".to_string();
+        } else if case.name == "endow-skipped-sequence" {
+            case.note = "the default empty source registry refuses before the later replay-sequence predicate".to_string();
+            case.expect_code = Some(unavailable);
+            case.reference = "source release unavailable in this exact ELF".to_string();
+        }
+    }
+}
+
 /* ------------------------------------------------------------------------ */
 /* The lifecycle walk                                                        */
 /* ------------------------------------------------------------------------ */
@@ -4996,12 +5029,11 @@ const WALK_GENERATION: u64 = 0;
 /// NO LONGER A FIXTURE FIELD.  It used to be the one number in the walk's
 /// opening state that no instruction produced -- the walk wrote it into the
 /// position account before any transaction ran -- and step 2 now *drives* it,
-/// through the `Endow` instruction the genesis plane added.  The gap that
-/// remains is narrower and is still named: an endowment credits internal cash
-/// that **no collateral backs**, because the value leg (a Token-2022 transfer
-/// into the market's Hoard) is constructed in `token.rs` and wired by nothing.
-/// So the walk's opening cash now has a signer, a replay sequence, a log line
-/// and a ceiling, and still has no deposit behind it.
+/// through the `Endow` instruction the genesis plane added. Endow now wires a
+/// real Token-2022 `TransferChecked`: the owner loses exactly this many atoms,
+/// pooled Hoard custody gains exactly this many atoms, and only then does cash
+/// advance. This successful walk is generated only for the explicitly
+/// different non-production mock-source ELF; the default ELF refuses Endow.
 const WALK_CASH: u64 = 64;
 
 /// The walk's quantities.  Every terminal number is derived from these.
@@ -5899,7 +5931,7 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
         "walk-02-endow",
         "endow the founding position",
         "2 (in part)",
-        "The walk's opening cash used to be a number this harness wrote into the genesis position account: no signer, no sequence, no ceiling. It is now an instruction. What it still is not is a deposit -- `Endow` moves the internal ledger and no collateral, because the value leg is a Token-2022 transfer into the Hoard that `token.rs` constructs and nothing wires. The credit therefore has an author and a replay sequence and remains unbacked, and the Hoard's untouched bytes in this step are that statement driven.",
+        "Endow is a real deposit: the owner signs, the exact registered SourceSpec binds immutable Terms, Token-2022 debits the owner and credits pooled Hoard custody, cash is credited only after both deltas match, and replay advances atomically. This success belongs only to the explicitly different non-production-mock-source ELF; the default empty-registry ELF refuses before either owner-plane construction or Token-2022.",
     ));
 
     /* 3. Split. */
@@ -6240,7 +6272,7 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
         WalkSkip {
             project_item: "2 (in part)",
             title: "prepay all mandatory work",
-            reason: "PARTLY DRIVEN, at step 2, and the residue is exact. The walk's opening cash is no longer a number this harness wrote into a genesis account: `Endow` credits it under the position owner's own signature, against the market's immutable collateral cap, consuming a replay sequence. What no instruction does is *back* that credit. The value leg is a Token-2022 `TransferChecked` into the market's Hoard token account; `token.rs` constructs exactly that CPI and no instruction wires it, so the endowed cash is an internal-ledger entry with no deposit behind it. `genesis.rs` says so itself, and the sufficient solvency check -- the sum of every position's cash plus the escrowed collateral -- needs a market-wide cash aggregate no account in the frozen layout carries."
+            reason: "PARTLY DRIVEN, at step 2, and the residue is exact. The walk's opening cash is no longer a number this harness wrote into a genesis account: the explicitly non-production mock-source `Endow` debits the owner and credits pooled Token-2022 custody by the exact same amount before it commits cash and replay. What remains unproved is the other half of item 2: no authority presented at Endow demonstrates prepaid source/archive construction, future observation work, or resolution work through the terminal path. The default empty-registry ELF therefore refuses even the collateral half, while this mock walk is evidence only for the wired value leg and compiled mock parser release."
                 .to_string(),
         },
         WalkSkip {
@@ -7516,42 +7548,41 @@ fn emit_cases(out_dir: &Path, cases: &[Case]) -> Vec<String> {
         } else {
             "accept"
         };
-        match (&case.compare, case.expect_code) {
-            (Some(compares), _) => {
-                let mut entries = Vec::new();
-                for compare in compares {
-                    let expected_file = format!("expected/{}.{}.hex", case.name, compare.role);
-                    let pre_file = format!("expected/{}.{}.pre.hex", case.name, compare.role);
-                    write(
-                        &out_dir.join(&expected_file),
-                        &format!("{}\n", hex_encode(&compare.expected)),
-                    );
-                    write(
-                        &out_dir.join(&pre_file),
-                        &format!("{}\n", hex_encode(&compare.pre)),
-                    );
-                    entries.push(format!(
-                        "{{\"role\": {}, \"address\": {}, \"expected\": {}, \"pre\": {}}}",
-                        json_string(&compare.role),
-                        json_string(&compare.address),
-                        json_string(&expected_file),
-                        json_string(&pre_file)
-                    ));
-                }
-                fields.push(format!("\"kind\": {}", json_string(kind)));
-                fields.push(format!("\"compare\": [{}]", entries.join(", ")));
-                fields.push(format!(
-                    "\"identical_to_pre\": {}",
-                    json_list(
-                        &case
-                            .identical_to_pre
-                            .iter()
-                            .map(|role| json_string(role))
-                            .collect::<Vec<_>>()
-                    )
+        if let Some(compares) = &case.compare {
+            let mut entries = Vec::new();
+            for compare in compares {
+                let expected_file = format!("expected/{}.{}.hex", case.name, compare.role);
+                let pre_file = format!("expected/{}.{}.pre.hex", case.name, compare.role);
+                write(
+                    &out_dir.join(&expected_file),
+                    &format!("{}\n", hex_encode(&compare.expected)),
+                );
+                write(
+                    &out_dir.join(&pre_file),
+                    &format!("{}\n", hex_encode(&compare.pre)),
+                );
+                entries.push(format!(
+                    "{{\"role\": {}, \"address\": {}, \"expected\": {}, \"pre\": {}, \"pre_lamports\": {ACCOUNT_LAMPORTS}}}",
+                    json_string(&compare.role),
+                    json_string(&compare.address),
+                    json_string(&expected_file),
+                    json_string(&pre_file)
                 ));
             }
-            (None, Some(expect)) => {
+            fields.push(format!("\"compare\": [{}]", entries.join(", ")));
+            fields.push(format!(
+                "\"identical_to_pre\": {}",
+                json_list(
+                    &case
+                        .identical_to_pre
+                        .iter()
+                        .map(|role| json_string(role))
+                        .collect::<Vec<_>>()
+                )
+            ));
+        }
+        match case.expect_code {
+            Some(expect) => {
                 fields.push(format!(
                     "\"kind\": {}",
                     json_string(if case.exhausted {
@@ -7567,7 +7598,10 @@ fn emit_cases(out_dir: &Path, cases: &[Case]) -> Vec<String> {
                 ));
                 fields.push(format!("\"reference\": {}", json_string(&case.reference)));
             }
-            (None, None) => panic!("case {} is neither an accept nor a refusal", case.name),
+            None if case.compare.is_some() => {
+                fields.push(format!("\"kind\": {}", json_string(kind)));
+            }
+            None => panic!("case {} is neither an accept nor a refusal", case.name),
         }
         case_json.push(format!("    {{{}}}", fields.join(", ")));
     }
@@ -7696,12 +7730,14 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let out_dir = PathBuf::from(
         args.next()
-            .expect("usage: clutch-sbf-harness <out-dir> [--committed]"),
+            .expect("usage: clutch-sbf-harness <out-dir> [--committed|--default-source-refusal]"),
     );
     let mode = args.next();
     assert!(args.next().is_none(), "too many harness arguments");
     assert!(
-        mode.is_none() || mode.as_deref() == Some("--committed"),
+        mode.is_none()
+            || mode.as_deref() == Some("--committed")
+            || mode.as_deref() == Some("--default-source-refusal"),
         "unknown harness mode"
     );
     for sub in ["accounts", "expected", "tx"] {
@@ -7835,6 +7871,12 @@ fn main() {
     }
 
     plan.cases = build_cases(&f);
+    let source_mode = if mode.as_deref() == Some("--default-source-refusal") {
+        expect_default_source_refusals(&mut plan.cases);
+        "default-empty-registry"
+    } else {
+        "non-production-mock-source"
+    };
     let lifecycle = build_lifecycle(&f);
 
     /* Files. */
@@ -7867,7 +7909,8 @@ fn main() {
         .collect();
 
     let plan_json = format!(
-        "{{\n  \"program_id\": {},\n  \"payer\": {},\n  \"actor\": {},\n  \"stranger\": {},\n  \"imposter\": {},\n  \"genesis\": [\n{}\n  ],\n  \"cases\": [\n{}\n  ],\n  \"lifecycle\": {}\n}}\n",
+        "{{\n  \"source_mode\": {},\n  \"program_id\": {},\n  \"payer\": {},\n  \"actor\": {},\n  \"stranger\": {},\n  \"imposter\": {},\n  \"genesis\": [\n{}\n  ],\n  \"cases\": [\n{}\n  ],\n  \"lifecycle\": {}\n}}\n",
+        json_string(source_mode),
         json_string(&program_address),
         json_string(&shared.payer.address),
         json_string(&shared.actor.address),
@@ -7880,6 +7923,7 @@ fn main() {
     write(&out_dir.join("plan.json"), &plan_json);
 
     println!("bring-up plan written to {}", out_dir.display());
+    println!("source_mode  {source_mode}");
     println!("program_id   {program_address}");
     println!("payer        {}", shared.payer.address);
     println!("actor        {}", shared.actor.address);

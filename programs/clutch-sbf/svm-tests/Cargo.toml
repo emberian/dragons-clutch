@@ -32,6 +32,12 @@ description = "Program-test scenarios driving the clutch-sbf ELF against real To
 name = "clutch_svm_fixture"
 path = "src/lib.rs"
 
+[features]
+default = []
+# Explicitly select the different laboratory ELF and expose only tests whose
+# successful value/source path depends on that compiled mock release.
+non-production-mock-source = ["clutch-sbf/non-production-mock-source"]
+
 [dependencies]
 # The frozen byte layouts and the reference-only codecs.  Both are
 # dependency-free pure Rust, so pulling them into a 1.93 workspace costs

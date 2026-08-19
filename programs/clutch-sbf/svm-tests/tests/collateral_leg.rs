@@ -499,7 +499,7 @@ impl Scenario {
         ))
     }
 
-    /// The thirteen-account backed `Endow` deposit.
+    /// The fifteen-account source-gated, backed `Endow` deposit.
     fn endow_for(
         &self,
         owner: Address,
@@ -531,6 +531,8 @@ impl Scenario {
             AccountMeta::new(self.plane.hoard_token.address, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
             AccountMeta::new_readonly(RENT_SYSVAR, false),
+            AccountMeta::new_readonly(self.plane.terms.address, false),
+            AccountMeta::new_readonly(self.plane.source_spec.address, false),
         ];
         assert_eq!(metas.len(), genesis::ENDOW_ACCOUNT_COUNT);
         Instruction::new_with_bytes(PROGRAM_ID, &request, metas)
@@ -752,6 +754,8 @@ impl Scenario {
 /// moving those digests onto the syscall is an obligation on the layout crate,
 /// not something this lane may do to a frozen codec.
 const SEAM_UNITS: u32 = 600_000;
+/// Existing-owner Endow also authenticates the frozen Terms and SourceSpec.
+const ENDOW_UNITS: u32 = 700_000;
 /// Recorded resolution validation reconstructs the full semantic authority.
 const REDEEM_UNITS: u32 = 900_000;
 /// Unit ceiling for `CreateMarket`, which recomputes the terms digest twice
@@ -1024,6 +1028,7 @@ async fn late_create_market_refusal_rolls_back_state_and_token_construction() {
 /// the owner, System-CPI-creates Position and Replay, transfers real
 /// collateral into pooled custody, credits cash, and commits replay sequence
 /// one atomically.
+#[cfg(feature = "non-production-mock-source")]
 #[tokio::test]
 async fn first_endow_creates_a_second_wallets_position_and_replay() {
     let mut scenario = Scenario::start(FOUNDING_MARKET_NONCE, Mode::Empty).await;
@@ -1160,6 +1165,7 @@ async fn split_and_merge_reclassify_without_a_second_token_transfer() {
 }
 
 /// `Endow` is the one inbound collateral boundary.
+#[cfg(feature = "non-production-mock-source")]
 #[tokio::test]
 async fn endow_debits_the_owner_and_credits_cash_and_custody_exactly() {
     let mut scenario = Scenario::start(MARKET_NONCE, Mode::Funded).await;
@@ -1170,7 +1176,7 @@ async fn endow_debits_the_owner_and_credits_cash_and_custody_exactly() {
     let pre_custody = scenario.amount(hoard_token).await;
 
     let units = scenario
-        .send(&[budget(SEAM_UNITS), scenario.endow(0, 10)], &[&actor])
+        .send(&[budget(ENDOW_UNITS), scenario.endow(0, 10)], &[&actor])
         .await;
 
     assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL - 10);
@@ -1306,6 +1312,7 @@ async fn withdraw_refuses_destination_substitution_and_foreign_authority() {
 }
 
 /// Donations remain unowned while two Positions exit only their own cash.
+#[cfg(feature = "non-production-mock-source")]
 #[tokio::test]
 async fn donation_and_multiple_positions_do_not_cross_credit_withdrawals() {
     let mut scenario = Scenario::start(MARKET_NONCE, Mode::Funded).await;
@@ -1497,6 +1504,7 @@ async fn the_whole_cycle_survives_a_holder_who_is_not_the_actor() {
 /// writes it only after the exact debit and credit are observed.  An amount
 /// above the actor's balance therefore leaves both protocol accounts and both
 /// token accounts byte-identical.
+#[cfg(feature = "non-production-mock-source")]
 #[tokio::test]
 async fn a_failed_endow_leaves_ledger_replay_and_tokens_unchanged() {
     let mut scenario = Scenario::start(MARKET_NONCE, Mode::Funded).await;
@@ -1515,7 +1523,7 @@ async fn a_failed_endow_leaves_ledger_replay_and_tokens_unchanged() {
 
     let (result, _) = scenario
         .try_send(
-            &[budget(SEAM_UNITS), scenario.endow(0, ACTOR_COLLATERAL + 1)],
+            &[budget(ENDOW_UNITS), scenario.endow(0, ACTOR_COLLATERAL + 1)],
             &[&actor],
         )
         .await;

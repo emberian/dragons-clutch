@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
 # Dragon's Clutch SBF bring-up gate.
 #
-# Builds the program ELF twice into fresh target directories, records both
-# hashes, generates the differential plan with the offline reference adapter,
-# starts a *local loopback* `solana-test-validator` with the program and every
-# pre-state account loaded at genesis, and compares the SVM post-state against
-# the oracle post-state byte for byte, for every implemented instruction family.
-#
-# It then runs the PROJECT.md section-10 **lifecycle walk** in the same
-# validator session: one market taken end to end as one ordered gate, closing
-# with the section-10 item-10 accounting identity read out of the on-chain
-# bytes.  Both stages must pass for this script to exit zero.
+# Builds two deliberately different reproducible ELF profiles. The default ELF
+# has an empty production source registry and must refuse Endow with 0x0079.
+# The explicitly named NON-PRODUCTION mock-source ELF preserves the successful
+# differential and PROJECT.md section-10 lifecycle campaigns. Separate plan,
+# log, ledger, digest and manifest paths make the two results non-interchangeable.
 #
 # It touches no public network, signs nothing, and deploys nothing.  It is
 # bring-up evidence for an instruction set, not a deployment.
@@ -31,10 +26,11 @@ faucet_port="${CLUTCH_FAUCET_PORT:-19900}"
 url="http://127.0.0.1:${rpc_port}"
 
 rm -rf "$work"
-mkdir -p "$work"
-plan="$work/plan"
-log="$work/logs"
-mkdir -p "$plan" "$log"
+default_plan="$work/plan-default-empty-registry"
+mock_plan="$work/plan-non-production-mock-source"
+default_log="$work/logs/default-empty-registry"
+mock_log="$work/logs/non-production-mock-source"
+mkdir -p "$default_plan" "$mock_plan" "$default_log" "$mock_log"
 
 echo "== toolchain =="
 "$SOLANA_BIN" --version
@@ -78,31 +74,60 @@ else
 fi
 
 echo
-echo "== reproducible ELF build (twice, fresh target dirs) =="
-hashes=()
+echo "== DEFAULT EMPTY-REGISTRY ELF (twice, fresh target dirs) =="
+default_hashes=()
 for pass in 1 2; do
-  target="$work/target-$pass"
-  out="$work/out-$pass"
+  target="$work/default-target-$pass"
+  out="$work/default-out-$pass"
   mkdir -p "$out"
   CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$target" \
     "$build_sbf" --manifest-path "$root/program/Cargo.toml" --sbf-out-dir "$out" \
-    > "$log/sbf-build-$pass.log" 2>&1 || {
-      echo "SBF build $pass failed; see $log/sbf-build-$pass.log"; tail -30 "$log/sbf-build-$pass.log"; exit 1; }
+    > "$default_log/sbf-build-$pass.log" 2>&1 || {
+      echo "default SBF build $pass failed; see $default_log/sbf-build-$pass.log"; tail -30 "$default_log/sbf-build-$pass.log"; exit 1; }
   hash="$(shasum -a 256 "$out/clutch_sbf.so" | awk '{print $1}')"
   size="$(wc -c < "$out/clutch_sbf.so" | tr -d ' ')"
-  hashes+=("$hash")
-  echo "pass $pass  sha256=$hash  bytes=$size"
+  default_hashes+=("$hash")
+  echo "default pass $pass  sha256=$hash  bytes=$size"
 done
-if [ "${hashes[0]}" != "${hashes[1]}" ]; then
-  echo "FAIL: the two SBF builds differ"
+if [ "${default_hashes[0]}" != "${default_hashes[1]}" ]; then
+  echo "FAIL: the two default SBF builds differ"
   exit 1
 fi
-echo "sbf_reproducibility=PASS"
-elf="$work/out-1/clutch_sbf.so"
+default_elf="$work/default-out-1/clutch_sbf.so"
+
+echo
+echo "== NON-PRODUCTION MOCK-SOURCE ELF (twice, fresh target dirs) =="
+mock_hashes=()
+for pass in 1 2; do
+  target="$work/mock-target-$pass"
+  out="$work/mock-out-$pass"
+  mkdir -p "$out"
+  CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$target" \
+    "$build_sbf" --manifest-path "$root/program/Cargo.toml" \
+      --features non-production-mock-source --sbf-out-dir "$out" \
+    > "$mock_log/sbf-build-$pass.log" 2>&1 || {
+      echo "mock SBF build $pass failed; see $mock_log/sbf-build-$pass.log"; tail -30 "$mock_log/sbf-build-$pass.log"; exit 1; }
+  hash="$(shasum -a 256 "$out/clutch_sbf.so" | awk '{print $1}')"
+  size="$(wc -c < "$out/clutch_sbf.so" | tr -d ' ')"
+  mock_hashes+=("$hash")
+  echo "NON-PRODUCTION mock pass $pass  sha256=$hash  bytes=$size"
+done
+if [ "${mock_hashes[0]}" != "${mock_hashes[1]}" ]; then
+  echo "FAIL: the two non-production mock SBF builds differ"
+  exit 1
+fi
+if [ "${default_hashes[0]}" = "${mock_hashes[0]}" ]; then
+  echo "FAIL: default and mock feature produced the same ELF digest"
+  exit 1
+fi
+mock_elf="$work/mock-out-1/clutch_sbf.so"
+echo "default_reproducibility=PASS"
+echo "mock_reproducibility=PASS"
+echo "profile_separation=PASS"
 
 echo
 echo "== stack findings reported by the SBF backend =="
-stack_findings="$({ grep -E "^Error: (Function|A function call)" "$log/sbf-build-1.log" || true; } | sort -u)"
+stack_findings="$({ grep -E "^Error: (Function|A function call)" "$default_log/sbf-build-1.log" || true; } | sort -u)"
 if [ -z "$stack_findings" ]; then
   echo "(none)"
 else
@@ -116,12 +141,12 @@ else
   # reviewer to infer reachability from a noisy build log.
   platform_tools_version="$(printf '%s\n' "$build_sbf_version" | awk '$1 == "platform-tools" { print $2 }')"
   llvm_objdump="${LLVM_OBJDUMP:-$HOME/.cache/solana/$platform_tools_version/platform-tools/llvm/bin/llvm-objdump}"
-  unstripped_elf="$(find "$work/target-1" -type f -path '*/release/deps/clutch_sbf.so' -print -quit)"
+  unstripped_elf="$(find "$work/default-target-1" -type f -path '*/release/deps/clutch_sbf.so' -print -quit)"
   if [ -z "$platform_tools_version" ] || [ ! -x "$llvm_objdump" ] || [ -z "$unstripped_elf" ]; then
     echo "FAIL: cannot inspect final ELF reachability for backend stack findings"
     exit 1
   fi
-  "$llvm_objdump" --syms "$unstripped_elf" > "$log/final-elf-symbols.txt"
+  "$llvm_objdump" --syms "$unstripped_elf" > "$default_log/final-elf-symbols.txt"
   stack_symbols="$(
     printf '%s\n' "$stack_findings" \
       | sed -E -n \
@@ -132,7 +157,7 @@ else
   reachable=0
   while IFS= read -r symbol; do
     [ -z "$symbol" ] && continue
-    if grep -Fq "$symbol" "$log/final-elf-symbols.txt"; then
+    if grep -Fq "$symbol" "$default_log/final-elf-symbols.txt"; then
       echo "FAIL: stack-diagnostic symbol survived final ELF LTO: $symbol"
       reachable=1
     fi
@@ -145,148 +170,139 @@ else
 fi
 
 echo
-echo "== differential plan (the offline reference adapter is the oracle) =="
-(cd "$root" && cargo run --offline -q -p clutch-sbf-harness -- "$plan") | tee "$log/plan.log"
-
-program_id="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["program_id"])' "$plan/plan.json")"
-payer="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["payer"])' "$plan/plan.json")"
-
-validator_args=(
-  --ledger "$work/ledger" --reset --quiet
-  --rpc-port "$rpc_port" --faucet-port "$faucet_port"
-  --mint "$payer"
-  --bpf-program "$program_id" "$elf"
-)
-# Every account of every market plane in the plan, plus the Realm-wide
-# accounts, the two feed heads, the caller-supplied buffers, the batch-auction
-# plane no implemented instruction touches, and the imposter replay account.
-while read -r role address file; do
-  [ -z "$role" ] && continue
-  validator_args+=(--account "$address" "$plan/$file")
-done < "$plan/genesis.txt"
-
+echo "== profile-bound plans =="
+(cd "$root" && cargo run --offline -q -p clutch-sbf-harness -- \
+  "$default_plan" --default-source-refusal) | tee "$default_log/plan.log"
+(cd "$root" && cargo run --offline -q -p clutch-sbf-harness -- \
+  "$mock_plan") | tee "$mock_log/plan.log"
+python3 - "$default_plan/plan.json" "$mock_plan/plan.json" <<'CHECK'
+import json, sys
+default = json.load(open(sys.argv[1]))
+mock = json.load(open(sys.argv[2]))
+assert default["source_mode"] == "default-empty-registry"
+assert mock["source_mode"] == "non-production-mock-source"
+CHECK
 echo
-echo "== local loopback validator =="
-# Refuse to mistake an older validator on the fixed port for this run.  A
-# health-only readiness check cannot distinguish the process we just spawned
-# from a pre-existing listener.
-if curl -s -m 1 "$url" -X POST -H 'Content-Type: application/json' \
-    -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' 2>/dev/null \
-    | grep -q '"result":"ok"'; then
-  echo "FAIL: $url was already serving before this gate started"
-  exit 1
-fi
-"$test_validator" "${validator_args[@]}" > "$log/validator.log" 2>&1 &
-validator_pid=$!
+echo "== refusal rollback checker capability self-test =="
+python3 "$here/simulate.py" --self-test-refusal-rollback 2>&1 \
+  | tee "$default_log/falsify-refusal-rollback-checker.log"
+
+validator_pid=""
 cleanup() {
-  if kill -0 "$validator_pid" 2>/dev/null; then
+  if [ -n "$validator_pid" ] && kill -0 "$validator_pid" 2>/dev/null; then
     kill "$validator_pid" 2>/dev/null || true
     wait "$validator_pid" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
 
-ready=0
-for _ in $(seq 1 60); do
-  if ! kill -0 "$validator_pid" 2>/dev/null; then
-    break
-  fi
-  # `getHealth` turns green ~0.45s after launch, while the bank is still at
-  # SLOT 0 -- and a program whose deployment slot is the current slot is not
-  # yet visible to the runtime, which logs "Program is not deployed" and
-  # returns `UnsupportedProgramId`.  MEASURED: at slot 0 the program account is
-  # already present, `executable=true`, and owned by BPFLoader2, and every
-  # transaction still fails; the identical transaction succeeds at slot 1.
-  #
-  # So an account-shape check CANNOT close this window and must not replace the
-  # probe below: the only readiness signal that works is actually executing
-  # something.  That is why this waits on a real `--only split` simulation.
-  if curl -fsS -m 2 "$url" -X POST -H 'Content-Type: application/json' \
-      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccountInfo\",\"params\":[\"$program_id\",{\"encoding\":\"base64\"}]}" \
-      2>/dev/null \
-      | python3 -c 'import json,sys; v=json.load(sys.stdin).get("result", {}).get("value"); raise SystemExit(not (v and v.get("executable") is True))' \
-      2>/dev/null \
-      && python3 "$here/simulate.py" --url "$url" --plan "$plan" --only split \
-        > "$log/readiness.log" 2>&1; then
-    ready=1
-    break
-  fi
-  sleep 1
-done
-if [ "$ready" -ne 1 ]; then
-  echo "FAIL: local validator did not execute the program readiness probe"
-  tail -30 "$log/readiness.log" 2>/dev/null || true
-  tail -30 "$log/validator.log"
-  exit 1
-fi
-echo "validator executed program readiness probe on $url (loopback only)"
-
-echo
-echo "== differential and refusal checks =="
 status=0
-python3 "$here/simulate.py" --url "$url" --plan "$plan" 2>&1 | tee "$log/differential.log" || status=$?
-if [ "$status" -eq 0 ] && ! grep -q '^PASS$' "$log/differential.log"; then
-  status=1
-fi
+run_profile() {
+  profile="$1"
+  plan="$2"
+  profile_log="$3"
+  elf="$4"
+  lifecycle="$5"
+  program_id="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["program_id"])' "$plan/plan.json")"
+  payer="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["payer"])' "$plan/plan.json")"
+  validator_args=(
+    --ledger "$work/ledger-$profile" --reset --quiet
+    --rpc-port "$rpc_port" --faucet-port "$faucet_port"
+    --mint "$payer"
+    --bpf-program "$program_id" "$elf"
+  )
+  while read -r role address file; do
+    [ -z "$role" ] && continue
+    validator_args+=(--account "$address" "$plan/$file")
+  done < "$plan/genesis.txt"
 
-if [ "$status" -eq 0 ]; then
   echo
-  echo "== falsifiability self-check (same validator session) =="
-  # A comparison that cannot go red is not evidence.  One byte of one oracle
-  # expectation is flipped -- the Hoard collateral a Split moved -- and the
-  # split differential is re-run against the same still-running validator and
-  # the same unmodified ELF.  It must fail, and only on that account.
-  victim="$plan/expected/split.seam.hoard.hex"
-  cp "$victim" "$victim.orig"
-  python3 - "$victim" <<'MUTATE'
+  echo "== $profile local loopback validator =="
+  if curl -s -m 1 "$url" -X POST -H 'Content-Type: application/json' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' 2>/dev/null \
+      | grep -q '"result":"ok"'; then
+    echo "FAIL: $url was already serving before the $profile gate started"
+    exit 1
+  fi
+  "$test_validator" "${validator_args[@]}" > "$profile_log/validator.log" 2>&1 &
+  validator_pid=$!
+  ready=0
+  for _ in $(seq 1 60); do
+    if ! kill -0 "$validator_pid" 2>/dev/null; then break; fi
+    if curl -fsS -m 2 "$url" -X POST -H 'Content-Type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccountInfo\",\"params\":[\"$program_id\",{\"encoding\":\"base64\"}]}" 2>/dev/null \
+        | python3 -c 'import json,sys; v=json.load(sys.stdin).get("result", {}).get("value"); raise SystemExit(not (v and v.get("executable") is True))' 2>/dev/null \
+        && python3 "$here/simulate.py" --url "$url" --plan "$plan" --only split \
+          > "$profile_log/readiness.log" 2>&1; then
+      ready=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "$ready" -ne 1 ]; then
+    echo "FAIL: $profile validator did not execute the readiness probe"
+    tail -30 "$profile_log/readiness.log" 2>/dev/null || true
+    tail -30 "$profile_log/validator.log"
+    status=1
+    cleanup
+    validator_pid=""
+    return
+  fi
+
+  profile_status=0
+  python3 "$here/simulate.py" --url "$url" --plan "$plan" 2>&1 \
+    | tee "$profile_log/differential.log" || profile_status=$?
+  if [ "$profile_status" -eq 0 ] && ! grep -q '^PASS$' "$profile_log/differential.log"; then
+    profile_status=1
+  fi
+  if [ "$profile_status" -ne 0 ]; then status=1; fi
+
+  if [ "$profile_status" -eq 0 ]; then
+    echo
+    echo "== $profile differential falsifiability self-check =="
+    victim="$plan/expected/split.seam.hoard.hex"
+    cp "$victim" "$victim.orig"
+    python3 - "$victim" <<'MUTATE'
 import sys
 path = sys.argv[1]
 text = open(path).read().strip()
-# Byte 98 is the Hoard's collateral field; bump its low byte by one.
 index = 98 * 2
 byte = (int(text[index:index + 2], 16) + 1) % 256
 open(path, "w").write(text[:index] + f"{byte:02x}" + text[index + 2:] + "\n")
 MUTATE
-  if python3 "$here/simulate.py" --url "$url" --plan "$plan" --only split       > "$log/falsify.log" 2>&1; then
-    echo "FAIL: a mutated oracle expectation still passed"
-    status=1
-  else
-    echo "one byte of the Hoard collateral expectation was flipped; the differential went red:"
-    grep -m1 'on-chain bytes != oracle bytes' "$log/falsify.log" | sed 's/^/  /'
+    if python3 "$here/simulate.py" --url "$url" --plan "$plan" --only split \
+        > "$profile_log/falsify.log" 2>&1; then
+      echo "FAIL: $profile mutated oracle expectation still passed"
+      status=1
+    elif ! grep -q 'on-chain bytes != oracle bytes' "$profile_log/falsify.log"; then
+      echo "FAIL: $profile oracle mutation failed for an unrelated reason"
+      tail -30 "$profile_log/falsify.log"
+      status=1
+    else
+      grep -m1 'on-chain bytes != oracle bytes' "$profile_log/falsify.log" \
+        | sed 's/^/  red: /'
+    fi
+    mv "$victim.orig" "$victim"
   fi
-  mv "$victim.orig" "$victim"
-fi
 
-echo
-echo "== the PROJECT.md section 10 lifecycle walk (same validator session) =="
-# One market, walked end to end, as ONE gate.  The walk is not ten more
-# independent checks: any step that diverges, refuses where it should accept,
-# or accepts where it should refuse fails the whole walk, and the terminal
-# accounting identity is part of the same gate.
-walk_status=0
-python3 "$here/simulate.py" --url "$url" --plan "$plan" --lifecycle 2>&1 \
-  | tee "$log/lifecycle.log" || walk_status=$?
-if [ "$walk_status" -eq 0 ] && ! grep -q '^PASS$' "$log/lifecycle.log"; then
-  walk_status=1
-fi
-if [ "$walk_status" -ne 0 ]; then
-  status=1
-fi
+  if [ "$lifecycle" = "yes" ]; then
+    echo
+    echo "== NON-PRODUCTION mock-source lifecycle (same validator session) =="
+    walk_status=0
+    python3 "$here/simulate.py" --url "$url" --plan "$plan" --lifecycle 2>&1 \
+      | tee "$profile_log/lifecycle.log" || walk_status=$?
+    if [ "$walk_status" -eq 0 ] && ! grep -q '^PASS$' "$profile_log/lifecycle.log"; then
+      walk_status=1
+    fi
+    if [ "$walk_status" -ne 0 ]; then status=1; fi
 
-if [ "$walk_status" -eq 0 ]; then
-  echo
-  echo "== lifecycle falsifiability self-check (same validator session) =="
-  # The terminal identity is the one claim in this repository that reads a
-  # number off the chain and asserts an equation over it, so it gets its own
-  # falsification: first the readout (does the gate really compare the bytes
-  # the bank returned?), then the arithmetic (does the gate really evaluate
-  # the equation?).  Both mutations must turn the walk red.
-  cp "$plan/plan.json" "$plan/plan.json.orig"
-
-  python3 - "$plan/plan.json" <<'MUTATE'
+    if [ "$walk_status" -eq 0 ]; then
+      echo
+      echo "== NON-PRODUCTION mock lifecycle falsifiability self-check =="
+      cp "$plan/plan.json" "$plan/plan.json.orig"
+      python3 - "$plan/plan.json" <<'MUTATE'
 import json
 import sys
-
 path = sys.argv[1]
 plan = json.load(open(path))
 values = plan["lifecycle"]["terminal"]["values"]
@@ -294,20 +310,19 @@ target = next(value for value in values if value["label"] == "hoard_collateral")
 target["expected"] += 1
 json.dump(plan, open(path, "w"))
 MUTATE
-  if python3 "$here/simulate.py" --url "$url" --plan "$plan" --lifecycle \
-      > "$log/lifecycle-falsify-readout.log" 2>&1; then
-    echo "FAIL: a mutated terminal readout still passed"
-    status=1
-  else
-    echo "the terminal Hoard expectation was moved by one atom; the walk went red:"
-    grep -m1 'terminal identity:' "$log/lifecycle-falsify-readout.log" | sed 's/^/  /'
-  fi
-  cp "$plan/plan.json.orig" "$plan/plan.json"
+      if python3 "$here/simulate.py" --url "$url" --plan "$plan" --lifecycle \
+          > "$profile_log/lifecycle-falsify-readout.log" 2>&1; then
+        echo "FAIL: a mutated terminal readout still passed"
+        status=1
+      else
+        grep -m1 'terminal identity:' "$profile_log/lifecycle-falsify-readout.log" \
+          | sed 's/^/  red: /'
+      fi
+      cp "$plan/plan.json.orig" "$plan/plan.json"
 
-  python3 - "$plan/plan.json" <<'MUTATE'
+      python3 - "$plan/plan.json" <<'MUTATE'
 import json
 import sys
-
 path = sys.argv[1]
 plan = json.load(open(path))
 for identity in plan["lifecycle"]["terminal"]["identities"]:
@@ -318,20 +333,36 @@ for identity in plan["lifecycle"]["terminal"]["identities"]:
             sys.exit(0)
 raise SystemExit("no identity term to mutate")
 MUTATE
-  if python3 "$here/simulate.py" --url "$url" --plan "$plan" --lifecycle \
-      > "$log/lifecycle-falsify-identity.log" 2>&1; then
-    echo "FAIL: a mutated accounting identity still closed"
-    status=1
-  else
-    echo "one payout weight in one identity was doubled; the walk went red:"
-    grep -m1 'does not close' "$log/lifecycle-falsify-identity.log" | sed 's/^/  /'
+      if python3 "$here/simulate.py" --url "$url" --plan "$plan" --lifecycle \
+          > "$profile_log/lifecycle-falsify-identity.log" 2>&1; then
+        echo "FAIL: a mutated accounting identity still closed"
+        status=1
+      else
+        grep -m1 'does not close' "$profile_log/lifecycle-falsify-identity.log" \
+          | sed 's/^/  red: /'
+      fi
+      mv "$plan/plan.json.orig" "$plan/plan.json"
+    fi
   fi
-  mv "$plan/plan.json.orig" "$plan/plan.json"
-fi
+  cleanup
+  validator_pid=""
+}
 
-echo "${hashes[0]}" > "$work/elf.sha256"
-echo
-echo "elf sha256: ${hashes[0]}"
-echo "sbf_elf_sha256=${hashes[0]}"
-echo "work dir: $work"
+run_profile "default-empty-registry" "$default_plan" "$default_log" "$default_elf" "no"
+run_profile "non-production-mock-source" "$mock_plan" "$mock_log" "$mock_elf" "yes"
+
+cat_manifest="$work/elf-profiles.txt"
+printf '%s\n' \
+  "default_profile=default-empty-registry" \
+  "default_elf_sha256=${default_hashes[0]}" \
+  "default_endow=REFUSE_0x0079" \
+  "mock_profile=NON-PRODUCTION-non-production-mock-source" \
+  "mock_elf_sha256=${mock_hashes[0]}" \
+  "mock_endow=SUCCESS_EVIDENCE_ONLY" \
+  "digests_distinct=true" > "$cat_manifest"
+printf '%s\n' \
+  "default_sbf_elf_sha256=${default_hashes[0]}" \
+  "non_production_mock_sbf_elf_sha256=${mock_hashes[0]}" \
+  "profile_manifest=$cat_manifest" \
+  "work dir: $work"
 exit "$status"

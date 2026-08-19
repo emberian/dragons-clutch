@@ -8,22 +8,55 @@
 #
 # The ELF is staged into `tests/fixtures/` and is deliberately NOT committed: a
 # checked-in binary is a second copy of the program that goes stale silently.
+#
+# Default usage builds the production-shaped empty-registry ELF. Successful
+# source/value scenarios require the explicit, differently compiled laboratory
+# profile:
+#   ./run_svm_tests.sh --non-production-mock-source [test filters ...]
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 program="$(cd "$here/.." && pwd)"
 
+profile="default-empty-registry"
+build_features=()
+test_features=()
+if [ "${1:-}" = "--non-production-mock-source" ]; then
+  shift
+  profile="NON-PRODUCTION-non-production-mock-source"
+  build_features=(--features non-production-mock-source)
+  test_features=(--features non-production-mock-source)
+fi
+
 solana_home="${SOLANA_HOME:-$HOME/.local/share/solana/install/active_release/bin}"
 build_sbf="${CARGO_BUILD_SBF:-$solana_home/cargo-build-sbf}"
 
+echo "== SVM profile: $profile =="
 echo "== building the program ELF =="
 mkdir -p "$here/tests/fixtures"
 CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="${SBF_TARGET_DIR:-$program/target/sbf-build}" \
   "$build_sbf" --manifest-path "$program/program/Cargo.toml" \
-  --sbf-out-dir "$here/tests/fixtures"
-shasum -a 256 "$here/tests/fixtures/clutch_sbf.so"
+  "${build_features[@]}" --sbf-out-dir "$here/tests/fixtures"
+elf="$here/tests/fixtures/clutch_sbf.so"
+elf_hash="$(shasum -a 256 "$elf" | awk '{print $1}')"
+elf_size="$(wc -c < "$elf" | tr -d ' ')"
+profile_file="$here/tests/fixtures/clutch_sbf.profile"
+printf '%s\n' \
+  "source_profile=$profile" \
+  "elf_sha256=$elf_hash" \
+  "elf_bytes=$elf_size" > "$profile_file"
+echo "source_profile=$profile"
+echo "elf_sha256=$elf_hash"
+echo "elf_bytes=$elf_size"
+
+# The feature selecting the tests and the just-built fixture come from the
+# same branch above. Refuse a stale, replaced, or relabelled fixture before a
+# bank starts rather than attributing one profile's result to the other.
+grep -Fxq "source_profile=$profile" "$profile_file"
+grep -Fxq "elf_sha256=$elf_hash" "$profile_file"
+[ "$(shasum -a 256 "$elf" | awk '{print $1}')" = "$elf_hash" ]
 
 echo
-echo "== driving it =="
+echo "== driving SVM profile: $profile =="
 cd "$here"
 export RUST_LOG="${RUST_LOG:-error}"
-cargo test --locked -- --nocapture --test-threads=1 "$@"
+cargo test --locked "${test_features[@]}" -- --nocapture --test-threads=1 "$@"

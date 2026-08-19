@@ -1,3 +1,5 @@
+#![cfg(feature = "non-production-mock-source")]
+
 //! Blank-bank, ordinary-wallet lifecycle for native B-spline degrees one to three.
 //!
 //! The market and every mutable market account are absent at genesis. A wallet
@@ -446,6 +448,8 @@ impl Founding {
             AccountMeta::new(self.hoard_token, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
             AccountMeta::new_readonly(RENT_SYSVAR, false),
+            AccountMeta::new_readonly(self.terms, false),
+            AccountMeta::new_readonly(self.source_spec, false),
         ];
         assert_eq!(metas.len(), genesis::ENDOW_ACCOUNT_COUNT);
         Instruction::new_with_bytes(

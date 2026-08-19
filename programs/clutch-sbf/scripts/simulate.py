@@ -19,6 +19,16 @@ expectation; every refusing case names the numeric `ProgramError::Custom` code
 the program must return and the offline reference adapter's own refusal for the
 same situation.
 
+Agave returns null requested-account rows when a simulation itself refuses.
+The default Endow plan therefore claims only the exact refusal code and compute
+measurement; it does not manufacture rollback evidence by re-reading a bank
+that simulation never committed to. The authoritative rollback test is the
+real ProgramTest failed-transaction check in `svm-tests/tests/prefund_creation.rs`,
+which compares complete Account images after the bank processes the failure.
+This script still implements strict refusal-postimage comparison for any
+runtime that returns such rows, and its focused self-test proves that a missing
+or deliberately altered postimage turns that checker red.
+
 Two gates live here.  Without `--lifecycle` this runs the per-family plan:
 every implemented instruction family, its accepting transactions and its
 refusals, grouped by family.  With `--lifecycle` it runs the PROJECT.md
@@ -36,9 +46,21 @@ import json
 import re
 import sys
 import urllib.request
+from copy import deepcopy
 from pathlib import Path
+from urllib.parse import urlparse
 
 CONSUMED = re.compile(r"^Program (\S+) consumed (\d+) of (\d+) compute units$")
+
+
+def require_loopback_url(url: str) -> None:
+    """Keep this evidence harness on its documented local-only boundary."""
+    parsed = urlparse(url)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        raise SystemExit(
+            "--url must name a loopback HTTP endpoint "
+            "(127.0.0.1, localhost, or ::1); public RPC is out of scope"
+        )
 
 
 def rpc(url: str, method: str, params: list) -> dict:
@@ -142,6 +164,129 @@ def read_hex(plan: Path, relative: str) -> str:
     return (plan / relative).read_text().strip()
 
 
+def account_image(account: dict) -> tuple:
+    """The complete stable account image returned by both local RPC calls."""
+    if not isinstance(account, dict):
+        raise ValueError("missing account row")
+    data = account.get("data")
+    if not isinstance(data, list) or len(data) != 2 or data[1] != "base64":
+        raise ValueError("account row does not carry base64 data")
+    return (
+        int(account["lamports"]),
+        str(account["owner"]),
+        bool(account["executable"]),
+        int(account["rentEpoch"]),
+        int(account["space"]),
+        base64.b64decode(data[0]),
+    )
+
+
+def refusal_witnesses(case: dict, failures: list[str]) -> list[dict]:
+    """Validate declared rollback rows before using their positional RPC reply."""
+    entries = case.get("compare") or []
+    if not isinstance(entries, list):
+        failures.append(f"{case['name']}: refusal compare rows are not a list")
+        return []
+    required = {"role", "address", "expected", "pre", "pre_lamports"}
+    roles: set[str] = set()
+    addresses: set[str] = set()
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or set(entry) != required:
+            failures.append(
+                f"{case['name']}: refusal compare row {index} has missing or unexpected fields"
+            )
+            return []
+        if entry["role"] in roles or entry["address"] in addresses:
+            failures.append(
+                f"{case['name']}: refusal compare row {index} duplicates a role or address"
+            )
+            return []
+        roles.add(entry["role"])
+        addresses.add(entry["address"])
+    if entries and set(case.get("identical_to_pre") or []) != roles:
+        failures.append(
+            f"{case['name']}: refusal rollback roles do not exactly match compare rows"
+        )
+        return []
+    return entries
+
+
+def compare_refusal_postimages(
+    case_name: str,
+    entries: list[dict],
+    before: list[tuple],
+    returned,
+    report: list[str],
+    failures: list[str],
+) -> bool:
+    """Fail closed on absent, surplus, malformed, or changed rollback rows."""
+    if not isinstance(returned, list) or len(returned) != len(entries):
+        failures.append(
+            f"{case_name}: expected {len(entries)} refusal postimage rows, "
+            f"got {0 if not isinstance(returned, list) else len(returned)}"
+        )
+        return False
+    matched = True
+    for entry, preimage, account in zip(entries, before, returned):
+        try:
+            postimage = account_image(account)
+        except (KeyError, TypeError, ValueError) as error:
+            failures.append(
+                f"{case_name} / {entry['role']}: invalid postimage row: {error}"
+            )
+            matched = False
+            continue
+        if postimage != preimage:
+            failures.append(
+                f"{case_name} / {entry['role']}: refusal postimage differs "
+                "from exact preimage"
+            )
+            matched = False
+            continue
+        report.append(
+            f"    rollback     {entry['role']:<22} MATCH "
+            f"(bytes={len(postimage[5])}, lamports={postimage[0]})"
+        )
+    return matched
+
+
+def refusal_rollback_checker_self_test() -> int:
+    """Prove that missing and deliberately changed postimages turn red."""
+    account = {
+        "lamports": 7,
+        "owner": "fixture-owner",
+        "executable": False,
+        "rentEpoch": 0,
+        "space": 1,
+        "data": [base64.b64encode(b"\x01").decode(), "base64"],
+    }
+    entries = [{"role": "fixture-token"}]
+    before = [account_image(account)]
+    changed = deepcopy(account)
+    changed["data"][0] = base64.b64encode(b"\x00").decode()
+
+    changed_failures: list[str] = []
+    changed_ok = compare_refusal_postimages(
+        "self-test", entries, before, [changed], [], changed_failures
+    )
+    missing_failures: list[str] = []
+    missing_ok = compare_refusal_postimages(
+        "self-test", entries, before, [None], [], missing_failures
+    )
+    if (
+        changed_ok
+        or missing_ok
+        or not any("differs from exact preimage" in item for item in changed_failures)
+        or not any("missing account row" in item for item in missing_failures)
+    ):
+        print("refusal_rollback_checker_falsifiability=FAIL")
+        return 1
+    print("refusal_rollback_checker_falsifiability=PASS")
+    print("  altered postimage -> refusal postimage differs from exact preimage")
+    print("  missing postimage -> invalid postimage row: missing account row")
+    return 0
+
+
 def check_accept(
     url: str,
     plan: Path,
@@ -232,9 +377,66 @@ def check_accept(
 
 
 def check_refuse(
-    url: str, plan: Path, program_id: str, case: dict, report: list[str], failures: list[str]
+    url: str,
+    plan: Path,
+    program_id: str,
+    case: dict,
+    report: list[str],
+    failures: list[str],
 ) -> dict:
-    result = simulate(url, plan, case, [])
+    before_failures = len(failures)
+    entries = refusal_witnesses(case, failures)
+    if len(failures) != before_failures:
+        return {
+            "units": None,
+            "per_instruction": [],
+            "bytes": case["bytes"],
+            "written": 0,
+            "verdict": "FAIL",
+            "observed": {},
+        }
+    addresses = [entry["address"] for entry in entries]
+    before = []
+    if entries:
+        fetched = rpc(
+            url,
+            "getMultipleAccounts",
+            [addresses, {"encoding": "base64", "commitment": "processed"}],
+        ).get("value")
+        if not isinstance(fetched, list) or len(fetched) != len(entries):
+            failures.append(
+                f"{case['name']}: expected {len(entries)} refusal preimage rows, "
+                f"got {0 if not isinstance(fetched, list) else len(fetched)}"
+            )
+        else:
+            for entry, account in zip(entries, fetched):
+                try:
+                    image = account_image(account)
+                except (KeyError, TypeError, ValueError) as error:
+                    failures.append(
+                        f"{case['name']} / {entry['role']}: invalid preimage row: {error}"
+                    )
+                    continue
+                if image[5].hex() != read_hex(plan, entry["pre"]):
+                    failures.append(
+                        f"{case['name']} / {entry['role']}: bank bytes != declared preimage"
+                    )
+                if image[0] != int(entry["pre_lamports"]):
+                    failures.append(
+                        f"{case['name']} / {entry['role']}: bank lamports != declared preimage"
+                    )
+                before.append(image)
+        if len(failures) != before_failures:
+            return {
+                "units": None,
+                "per_instruction": [],
+                "bytes": case["bytes"],
+                "written": 0,
+                "verdict": "FAIL",
+                "observed": {},
+            }
+
+    result = simulate(url, plan, case, addresses)
     expected = int(case["expect_code"])
     code = custom_error_code(result["err"])
     pair = granted_and_consumed(result.get("logs"), program_id)
@@ -246,18 +448,27 @@ def check_refuse(
         "verdict": "FAIL",
         "observed": {},
     }
-    if code == expected:
+    refused = code == expected
+    rollback_ok = True
+    if entries:
+        rollback_ok = compare_refusal_postimages(
+            case["name"], entries, before, result.get("accounts"), report, failures
+        )
+    if refused and rollback_ok:
         metrics["verdict"] = f"REFUSED Custom({case['expect_code_hex']})"
+        program_units = pair[0] if pair else "-"
         report.append(
-            f"  refuse {case['name']:<28} Custom({case['expect_code_hex']})  "
+            f"  refuse {case['name']:<28} Custom({case['expect_code_hex']}) "
+            f"program_units={program_units} tx_units={result.get('unitsConsumed')}  "
             f"offline reference: {case['reference']}"
         )
         return metrics
-    failures.append(
-        f"{case['name']}: expected Custom({case['expect_code_hex']}), got err={result['err']}"
-    )
-    for line in result.get("logs") or []:
-        report.append(f"      log {line}")
+    if not refused:
+        failures.append(
+            f"{case['name']}: expected Custom({case['expect_code_hex']}), got err={result['err']}"
+        )
+        for line in result.get("logs") or []:
+            report.append(f"      log {line}")
     return metrics
 
 
@@ -452,14 +663,24 @@ def wrap(text: str, indent: int, width: int = 76) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://127.0.0.1:18899")
-    parser.add_argument("--plan", required=True, type=Path)
+    parser.add_argument("--plan", type=Path)
     parser.add_argument("--only", default=None, help="run one case by name")
     parser.add_argument(
         "--lifecycle",
         action="store_true",
         help="run the PROJECT.md section-10 walk as one gate instead of the per-family plan",
     )
+    parser.add_argument(
+        "--self-test-refusal-rollback",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
+    if args.self_test_refusal_rollback:
+        return refusal_rollback_checker_self_test()
+    if args.plan is None:
+        parser.error("--plan is required")
+    require_loopback_url(args.url)
 
     plan = json.loads((args.plan / "plan.json").read_text())
     if args.lifecycle:
@@ -486,7 +707,12 @@ def main() -> int:
                 )
             else:
                 check_refuse(
-                    args.url, args.plan, plan["program_id"], case, report, failures
+                    args.url,
+                    args.plan,
+                    plan["program_id"],
+                    case,
+                    report,
+                    failures,
                 )
 
     print("\n".join(report))

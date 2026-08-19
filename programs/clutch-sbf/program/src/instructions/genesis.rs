@@ -13,7 +13,7 @@
 //! | [`Intent::InitPriceGrid`] | obsolete: use typed `SealArtifact` | -- |
 //! | [`Intent::InitTerms`] | obsolete: use typed `SealArtifact` | -- |
 //! | [`Intent::InitOrderPage`] | one order page | 6 |
-//! | [`Intent::Endow`] | absent generation-zero Position + Replay, then deposits collateral and credits cash | 13 |
+//! | [`Intent::Endow`] | registered source + absent generation-zero Position/Replay, then collateral deposit and cash credit | 15 |
 //!
 //! ## `Endow` is the inbound value boundary
 //!
@@ -139,6 +139,7 @@ use crate::accounts::{
     self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
 };
 use crate::error::{ClutchError, Refusal};
+use crate::source_archive::SOURCE_SPEC_ACCOUNT_V1_BYTES;
 use crate::{seeds, token};
 use clutch_solana_layout::{
     account_len, canonical_realm_id, collateral, stream, Hash32, HoardAccount, Intent,
@@ -464,8 +465,10 @@ pub const IX_PAGE_RENT: usize = 5;
 ///
 /// The five program-owned state roles are followed by the Realm's
 /// content-authenticated collateral policy and the five Token-2022 roles
-/// needed for an exact actor-to-Hoard deposit.
-pub const ENDOW_ACCOUNT_COUNT: usize = 13;
+/// needed for an exact actor-to-Hoard deposit. Immutable Terms and its
+/// canonical SourceSpec are appended after every existing role so the source
+/// release gate changes no established index.
+pub const ENDOW_ACCOUNT_COUNT: usize = 15;
 /// The market the deposit belongs to (read-only).
 ///
 /// It sits where the creation target sits in the other five lists, because
@@ -494,6 +497,10 @@ pub const IX_ENDOW_HOARD_TOKEN: usize = 10;
 pub const IX_ENDOW_SYSTEM: usize = 11;
 /// Rent sysvar used only when this is the owner's first deposit.
 pub const IX_ENDOW_RENT: usize = 12;
+/// Canonical immutable Terms bound by the Market (read-only).
+pub const IX_ENDOW_TERMS: usize = 13;
+/// Canonical immutable SourceSpec bound by Terms (read-only).
+pub const IX_ENDOW_SOURCE_SPEC: usize = 14;
 
 /// Program-owned roles of `InitProfile`, in account-index order.
 const PROFILE_STATE_ROLES: [StateRole; 1] =
@@ -502,10 +509,12 @@ const PROFILE_STATE_ROLES: [StateRole; 1] =
 const PAGE_STATE_ROLES: [StateRole; 1] =
     [StateRole::read_only(IX_PAGE_MARKET, account_len::MARKET)];
 /// Existing market-global roles of `Endow`.
-const ENDOW_COMMON_STATE_ROLES: [StateRole; 3] = [
+const ENDOW_COMMON_STATE_ROLES: [StateRole; 5] = [
     StateRole::read_only(IX_ENDOW_MARKET, account_len::MARKET),
     StateRole::read_only(IX_ENDOW_HOARD, account_len::HOARD),
     StateRole::read_only(IX_ENDOW_PROFILE, account_len::PROFILE),
+    StateRole::read_only(IX_ENDOW_TERMS, account_len::TERMS),
+    StateRole::read_only(IX_ENDOW_SOURCE_SPEC, SOURCE_SPEC_ACCOUNT_V1_BYTES),
 ];
 /// Existing owner-plane roles, when this is not the first deposit.
 const ENDOW_OWNER_STATE_ROLES: [StateRole; 2] = [
@@ -1083,6 +1092,21 @@ fn endow(program_id: &Pubkey, accounts: &[AccountInfo], request: &EndowRequest) 
             && profile.profile == market.profile
             && profile.realm == market.realm,
         ClutchError::MismatchedState,
+    )?;
+
+    /* Endow is the sole protocol-recognized inbound collateral boundary.
+     * Authenticate the immutable Terms and SourceSpec and ask the exact same
+     * closed registry used by source ingestion before allocating an owner
+     * plane or invoking Token-2022. The default ELF has no registered release
+     * and therefore cannot take custody even of a market left by an older ELF
+     * or installed as a local fixture. */
+    super::source_ingest::require_registered_source_for_market(
+        program_id,
+        &accounts[IX_ENDOW_TERMS],
+        &accounts[IX_ENDOW_SOURCE_SPEC],
+        market.terms,
+        market.realm,
+        market.feed,
     )?;
 
     let policy_account = &accounts[IX_ENDOW_POLICY];

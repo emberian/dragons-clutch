@@ -826,6 +826,8 @@ impl EndowWorld {
             AccountMeta::new(self.plane.hoard_token.address, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
             AccountMeta::new_readonly(RENT_SYSVAR, false),
+            AccountMeta::new_readonly(self.plane.terms.address, false),
+            AccountMeta::new_readonly(self.plane.source_spec.address, false),
         ];
         assert_eq!(metas.len(), genesis::ENDOW_ACCOUNT_COUNT);
         Instruction::new_with_bytes(
@@ -843,6 +845,60 @@ impl EndowWorld {
     }
 }
 
+/// The production-shaped default ELF has an empty source-release registry.
+/// Even a canonical Terms/SourceSpec fixture and a pre-existing Market cannot
+/// make it accept collateral: refusal occurs before owner-plane construction
+/// or Token-2022, and the historical thirteen-account ABI is rejected too.
+/// This failed-transaction ProgramTest is the authoritative rollback evidence:
+/// unlike noncommitting RPC simulation, the bank processes the transaction and
+/// lets the test reload complete Account images afterward.
+#[cfg(not(feature = "non-production-mock-source"))]
+#[tokio::test]
+async fn default_elf_refuses_endow_without_a_registered_source_release() {
+    let mut world = EndowWorld::start(true, 5).await;
+    let watched = [
+        world.position,
+        world.replay,
+        world.owner_token,
+        world.plane.hoard_token.address,
+        world.owner.pubkey(),
+    ];
+    let mut before = Vec::new();
+    for address in watched {
+        before.push(account(&mut world.banks, address).await);
+    }
+
+    let mut legacy = world.endow(1);
+    legacy.accounts.truncate(13);
+    let cases = [
+        (legacy, clutch_sbf::error::ClutchError::AccountCount as u32),
+        (
+            world.endow(1),
+            clutch_sbf::error::ClutchError::SourceReleaseUnavailable as u32,
+        ),
+    ];
+    for (instruction, expected_code) in cases {
+        let result = try_send(
+            &mut world.banks,
+            &world.payer,
+            &[budget(), instruction],
+            &[&world.owner],
+        )
+        .await;
+        assert_eq!(
+            result,
+            Err(TransactionError::InstructionError(
+                1,
+                solana_instruction::error::InstructionError::Custom(expected_code),
+            )),
+        );
+        for (index, address) in watched.iter().enumerate() {
+            assert_account_image_eq(&account(&mut world.banks, *address).await, &before[index]);
+        }
+    }
+}
+
+#[cfg(feature = "non-production-mock-source")]
 #[tokio::test]
 async fn publicly_prefunded_second_owner_position_and_replay_are_created_by_first_endow() {
     let mut world = EndowWorld::start(false, 9).await;
@@ -893,6 +949,7 @@ async fn publicly_prefunded_second_owner_position_and_replay_are_created_by_firs
     assert_eq!(replay.sequence, 1);
 }
 
+#[cfg(feature = "non-production-mock-source")]
 #[tokio::test]
 async fn late_token_failure_restores_one_lamport_owner_targets_byte_exactly() {
     let mut world = EndowWorld::start(true, 5).await;

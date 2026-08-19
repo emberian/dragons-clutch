@@ -76,13 +76,13 @@ pub const TOKEN_2022: Address = Address::new_from_array(collateral::TOKEN_2022_P
 
 /// Fixture-only reviewed-adapter identity. It is not a production source.
 pub const SOURCE_ADAPTER_ID: [u8; 32] = [0xa1; 32];
-const SOURCE_PROGRAM: [u8; 32] = [0xa2; 32];
-const SOURCE_PROGRAM_OWNER: [u8; 32] = [0xa3; 32];
-const SOURCE_DATA_ACCOUNT: [u8; 32] = [0xa4; 32];
-const SOURCE_DEPLOYMENT_ACCOUNT: [u8; 32] = [0xa5; 32];
-const SOURCE_DEPLOYMENT_OWNER: [u8; 32] = [0xa6; 32];
-const SOURCE_DEPLOYMENT_VERIFIER: [u8; 32] = [0xa7; 32];
-const SOURCE_DEPLOYMENT_GENERATION: u64 = 1;
+const SOURCE_PROGRAM: [u8; 32] = [0xb2; 32];
+const SOURCE_PROGRAM_OWNER: [u8; 32] = [0xb3; 32];
+const SOURCE_DATA_ACCOUNT: [u8; 32] = [0xc3; 32];
+const SOURCE_DEPLOYMENT_ACCOUNT: [u8; 32] = [0xd4; 32];
+const SOURCE_DEPLOYMENT_OWNER: [u8; 32] = [0xd5; 32];
+const SOURCE_DEPLOYMENT_VERIFIER: [u8; 32] = [0xd6; 32];
+const SOURCE_DEPLOYMENT_GENERATION: u64 = 19;
 const SOURCE_RECORD_BYTES: usize = 77;
 
 struct FixtureDeployment;
@@ -112,9 +112,9 @@ struct FixturePriceParser;
 
 impl PriceParserV1 for FixturePriceParser {
     const SOURCE_ADAPTER_ID: [u8; 32] = SOURCE_ADAPTER_ID;
-    const SOURCE_ADAPTER_VERSION: u32 = 1;
-    const PARSER_ID: u16 = 1;
-    const PARSER_VERSION: u16 = 1;
+    const SOURCE_ADAPTER_VERSION: u32 = 7;
+    const PARSER_ID: u16 = 11;
+    const PARSER_VERSION: u16 = 3;
 
     fn parse(account: SourceAccountView<'_>) -> Result<ParsedPriceV1, SourceError> {
         let bytes = account.data();
@@ -293,9 +293,9 @@ fn payout_set() -> PayoutSet {
 fn fixture_source_spec() -> SourceSpecV1 {
     SourceSpecV1::new(SourceSpecFieldsV1 {
         source_adapter_id: Hash32::from_bytes(SOURCE_ADAPTER_ID),
-        source_adapter_version: 1,
-        parser_id: 1,
-        parser_version: 1,
+        source_adapter_version: 7,
+        parser_id: 11,
+        parser_version: 3,
         source_program: SOURCE_PROGRAM,
         source_account: SOURCE_DATA_ACCOUNT,
         deployment_generation: SOURCE_DEPLOYMENT_GENERATION,
@@ -454,7 +454,7 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
     let resolution = derive(&[seeds::SEED_RESOLUTION, &market_seed]);
     let feed = derive(&[seeds::SEED_FEED, &feed_id.bytes()]);
     let source_spec = derive(&[seeds::SEED_SOURCE_SPEC, &feed_id.bytes()]);
-    let feed_identity = FeedIdentity::new(SOURCE_ADAPTER_ID, feed_id.bytes(), 1, 1)
+    let feed_identity = FeedIdentity::new(SOURCE_ADAPTER_ID, feed_id.bytes(), 7, 1)
         .expect("fixture source identity");
     let window_domain = WindowDomain::new(
         feed_identity,
@@ -845,7 +845,7 @@ pub fn rewrite_plane_source_archive_span(
         ),
     )
     .expect("fixture SourceSpec remains authenticated");
-    let feed_identity = FeedIdentity::new(SOURCE_ADAPTER_ID, plane.feed_id.bytes(), 1, 1)
+    let feed_identity = FeedIdentity::new(SOURCE_ADAPTER_ID, plane.feed_id.bytes(), 7, 1)
         .expect("fixture source identity");
     let window_domain = WindowDomain::new(
         feed_identity,
@@ -1128,7 +1128,7 @@ pub fn fixture_terms(realm: Hash32, profile: Hash32, feed: FeedId) -> TermsAccou
         failure_payout_index: 0,
         coverage_policy_parameter: 0,
         repair_generation: 0,
-        source_version: 1,
+        source_version: 7,
         evaluator_version: 1,
         source_adapter_id: Hash32::from_bytes(SOURCE_ADAPTER_ID),
         payout_map,
