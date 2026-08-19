@@ -125,6 +125,20 @@ class TerminalAdmissionTests(unittest.TestCase):
             "STOP",
         )
 
+    def test_required_but_unreachable_terminal_shape_propagates_stop(self) -> None:
+        terminal = base({"batch.policy": permanent()})
+        terminal["reachable_terminal_shapes"]["source.default"] = {
+            "reachable": False,
+            "required": True,
+            "status": "STOP",
+        }
+        terminal["status"] = "STOP"
+        terminal["blocking_ids"] = ["SOURCE.DEFAULT_REGISTRY_EMPTY"]
+        self.assertEqual(
+            validate_terminal_admission(terminal, expected_accounts={"batch.policy"}),
+            "STOP",
+        )
+
     def test_default_empty_source_forces_stop(self) -> None:
         terminal = base({"batch.policy": permanent()})
         terminal["source_release"]["default_release_available"] = False

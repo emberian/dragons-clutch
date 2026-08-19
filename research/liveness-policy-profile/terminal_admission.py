@@ -138,9 +138,10 @@ def validate_terminal_admission(
     if terminal.get("source_release", {}).get("default_release_available") is not True:
         computed = STOP
     for row in terminal.get("reachable_terminal_shapes", {}).values():
-        if row.get("reachable") is True and row.get("required") is True:
-            if row.get("status") != PASS:
-                computed = STOP
+        if row.get("required") is True and (
+            row.get("reachable") is not True or row.get("status") != PASS
+        ):
+            computed = STOP
     for row in accounts.values():
         if row.get("promotion") != PASS:
             computed = STOP
