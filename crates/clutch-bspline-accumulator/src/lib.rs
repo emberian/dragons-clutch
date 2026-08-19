@@ -260,6 +260,25 @@ impl SequentialSummaryBuilder {
         })
     }
 
+    /// Restore an append-only builder from one fully validated summary.
+    ///
+    /// This is the safe persistence boundary for resumable accumulation.  It
+    /// revalidates every semantic field before copying state, so hostile or
+    /// stale account bytes must first pass [`Summary::from_canonical_parts`]
+    /// and cannot smuggle an impossible cursor, count, padding component, or
+    /// accumulated partition mass into a later append.
+    pub fn resume(summary: Summary) -> Result<Self> {
+        summary.validate()?;
+        Ok(Self {
+            domain: summary.domain,
+            start_bucket: summary.start_bucket,
+            end_bucket_exclusive: summary.end_bucket_exclusive,
+            sample_count: summary.sample_count,
+            coverage_count: summary.coverage_count,
+            masses: summary.masses,
+        })
+    }
+
     /// Append one accepted point at the next canonical bucket.
     ///
     /// The first bucket may have any representable index. Every later bucket
@@ -345,6 +364,33 @@ impl Summary {
             coverage_count: 0,
             masses: [0; MAX_OUTCOMES],
         })
+    }
+
+    /// Reconstruct a persisted summary from its complete canonical parts.
+    ///
+    /// No field is inferred or repaired. Empty state has exactly the unique
+    /// zero representation; non-empty state must have an exact half-open span,
+    /// accepted coverage no larger than the span, canonical inactive padding,
+    /// and total active mass equal to `denominator * coverage_count`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_canonical_parts(
+        domain: BasisDomain,
+        start_bucket: u64,
+        end_bucket_exclusive: u64,
+        sample_count: u64,
+        coverage_count: u64,
+        masses: [u128; MAX_OUTCOMES],
+    ) -> Result<Self> {
+        let result = Self {
+            domain,
+            start_bucket,
+            end_bucket_exclusive,
+            sample_count,
+            coverage_count,
+            masses,
+        };
+        result.validate()?;
+        Ok(result)
     }
 
     /// Construct one accepted canonical bucket from an authenticated point.
@@ -723,6 +769,145 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn persisted_resume_matches_uninterrupted_and_every_parenthesization() {
+        let alphabet = [None, Some(0), Some(7), Some(16)];
+        for degree in 0..=3 {
+            let domain = domain(degree, 257);
+            for a in alphabet {
+                for b in alphabet {
+                    for c in alphabet {
+                        for d in alphabet {
+                            let points = [a, b, c, d];
+                            let mut first = SequentialSummaryBuilder::new(domain).unwrap();
+                            for (offset, point) in points[..2].iter().enumerate() {
+                                let bucket = 37 + offset as u64;
+                                match point {
+                                    Some(value) => {
+                                        first.append_accepted(bucket, *value).unwrap();
+                                    }
+                                    None => first.append_missing(bucket).unwrap(),
+                                }
+                            }
+                            let persisted = first.finish();
+                            let restored = Summary::from_canonical_parts(
+                                persisted.domain(),
+                                persisted.start_bucket(),
+                                persisted.end_bucket_exclusive(),
+                                persisted.sample_count(),
+                                persisted.coverage_count(),
+                                persisted.masses(),
+                            )
+                            .unwrap();
+                            let mut resumed = SequentialSummaryBuilder::resume(restored).unwrap();
+                            for (offset, point) in points[2..].iter().enumerate() {
+                                let bucket = 39 + offset as u64;
+                                match point {
+                                    Some(value) => {
+                                        resumed.append_accepted(bucket, *value).unwrap();
+                                    }
+                                    None => resumed.append_missing(bucket).unwrap(),
+                                }
+                            }
+                            let resumed = resumed.finish();
+                            assert_eq!(resumed, sequential_fold(domain, 37, &points));
+                            for generic in every_parenthesization(domain, 37, &points) {
+                                assert_eq!(resumed, generic);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn resume_accepts_only_the_unique_empty_representation() {
+        let domain = domain(2, 257);
+        let empty = Summary::from_canonical_parts(domain, 0, 0, 0, 0, [0; MAX_OUTCOMES]).unwrap();
+        let mut resumed = SequentialSummaryBuilder::resume(empty).unwrap();
+        resumed.append_accepted(91, 7).unwrap();
+        assert_eq!(resumed.finish(), Summary::accepted(domain, 91, 7).unwrap());
+
+        let mut nonzero_mass = [0; MAX_OUTCOMES];
+        nonzero_mass[0] = 1;
+        for invalid in [
+            Summary::from_canonical_parts(domain, 1, 1, 0, 0, [0; MAX_OUTCOMES]),
+            Summary::from_canonical_parts(domain, 0, 1, 0, 0, [0; MAX_OUTCOMES]),
+            Summary::from_canonical_parts(domain, 0, 0, 0, 1, [0; MAX_OUTCOMES]),
+            Summary::from_canonical_parts(domain, 0, 0, 0, 0, nonzero_mass),
+        ] {
+            assert_eq!(invalid, Err(Error::InvalidSummary));
+        }
+    }
+
+    #[test]
+    fn resume_rejects_hostile_range_count_mass_and_padding_parts() {
+        let domain = domain(2, 257);
+        let valid = sequential_fold(domain, 40, &[Some(0), None, Some(7)]);
+        let masses = valid.masses();
+        assert_eq!(
+            Summary::from_canonical_parts(domain, 43, 40, 3, 2, masses),
+            Err(Error::InvalidSummary)
+        );
+        assert_eq!(
+            Summary::from_canonical_parts(domain, 40, 44, 3, 2, masses),
+            Err(Error::InvalidSummary)
+        );
+        assert_eq!(
+            Summary::from_canonical_parts(domain, 40, 43, 3, 4, masses),
+            Err(Error::InvalidSummary)
+        );
+
+        let mut wrong_mass = masses;
+        wrong_mass[0] += 1;
+        assert_eq!(
+            Summary::from_canonical_parts(domain, 40, 43, 3, 2, wrong_mass),
+            Err(Error::InvalidSummary)
+        );
+
+        let mut noncanonical_padding = masses;
+        noncanonical_padding[usize::from(domain.spec().outcome_count)] = 257;
+        assert_eq!(
+            Summary::from_canonical_parts(domain, 40, 43, 3, 2, noncanonical_padding),
+            Err(Error::InvalidSummary)
+        );
+
+        let mut overflowing = [0; MAX_OUTCOMES];
+        overflowing[0] = u128::MAX;
+        overflowing[1] = 1;
+        assert_eq!(
+            Summary::from_canonical_parts(domain, 40, 41, 1, 1, overflowing),
+            Err(Error::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn resumed_append_refusals_are_atomic_and_finalization_is_identical() {
+        let domain = domain(3, 257);
+        let prefix = sequential_fold(domain, 9, &[Some(0), Some(4)]);
+        let mut resumed = SequentialSummaryBuilder::resume(prefix).unwrap();
+        let before = resumed.clone();
+        assert_eq!(resumed.append_missing(12), Err(Error::NonAdjacent));
+        assert_eq!(resumed, before);
+        assert_eq!(
+            resumed.append_accepted(u64::MAX, 4),
+            Err(Error::BucketOverflow)
+        );
+        assert_eq!(resumed, before);
+
+        resumed.append_accepted(11, 16).unwrap();
+        let resumed = resumed.finish();
+        let uninterrupted = sequential_fold(domain, 9, &[Some(0), Some(4), Some(16)]);
+        assert_eq!(resumed, uninterrupted);
+        for mode in [
+            FinalizationMode::ExactOnly,
+            FinalizationMode::LargestRemainderV1,
+        ] {
+            assert_eq!(resumed.finalize(mode), uninterrupted.finalize(mode));
         }
     }
 
