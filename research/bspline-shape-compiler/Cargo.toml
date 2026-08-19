@@ -7,10 +7,13 @@ description = "Exact-rational offline shape compiler for Dragon's Clutch native 
 license = "AGPL-3.0-or-later"
 
 [dependencies]
+clutch-accumulator = { path = "../../crates/clutch-accumulator" }
 clutch-bspline = { path = "../../crates/clutch-bspline" }
+clutch-solana-layout = { path = "../../programs/solana-layout" }
 num-bigint = "0.4.6"
 num-rational = "0.4.2"
 num-traits = "0.2.19"
+sha2 = "0.10.9"
 
 [lib]
 path = "src/lib.rs"

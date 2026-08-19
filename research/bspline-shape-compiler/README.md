@@ -15,6 +15,12 @@ the exact open-clamped degree-0 through degree-3 basis owned by
 All construction and certification arithmetic is `BigRational`. Floating point
 is available only through an explicitly display-only helper.
 
+`src/artifact.rs` gives this host compiler a canonical, domain-separated
+BasisSpec and shape-certificate byte boundary, plus the exact live typed Terms
+upload and CreateMarket intents. Rust decoding recompiles the certificate.
+Current Terms does not commit the certificate digest and the on-chain program
+does not parse it, so the certificate remains offline evidence.
+
 ## Supported families
 
 | Family | Exact cases | Other cases |
@@ -107,9 +113,15 @@ and edge-centered Gaussians, extreme distance/sigma ratios, categorical
 comparison, low-denominator consensus quantization, and dense exact-rational
 adversarial points across all piecewise families and degrees.
 
+`tests/native_artifact.rs` additionally covers every degree and shape tag,
+canonical rationals/digests, Terms projection, the nine-write artifact upload,
+exact intent decoding, and the Rust-generated fixture consumed by the static
+client.
+
 ## Deliberate limits
 
-- This compiler does not define artifact bytes or an onchain coefficient parser.
+- The canonical certificate is a host artifact, not an on-chain coefficient
+  parser, account type, or Terms commitment.
 - It does not prove that a named transferable shaped position remains atomic.
 - It does not turn a coefficient vector into externally materialized Eggs.
 - It does not certify an arbitrary user-provided coefficient vector's claimed

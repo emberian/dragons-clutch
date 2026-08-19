@@ -108,3 +108,8 @@ meaning of its open-clamped knots, its exact partition and rounding invariants,
 and ordinary correctness of `num-bigint`/`num-rational`. No theorem currently
 connects this host compiler, a serialized artifact, an SBF parser, authenticated
 resolution evidence, token supply, and payout transfer in one verified chain.
+
+The V1 serialization in `src/artifact.rs` closes byte malleability at the host
+compiler/client seam and requires exact recompilation on Rust decode. It does
+not close this end-to-end boundary: current Terms binds the native basis but no
+shape-certificate digest, and SBF neither parses nor persists the certificate.

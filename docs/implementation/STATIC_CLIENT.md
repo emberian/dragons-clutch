@@ -17,6 +17,9 @@ IPFS gateway) and can also be opened from a local checkout. `manifest.json` and
 - an immutable terms fixture whose `canonicalTerms` object is hashed with
   sorted-key, compact UTF-8 JSON and SHA-256;
 - a local intent inspector that emits a deterministic JSON description only;
+- a separate native B-spline inspection SDK that projects canonical Terms,
+  checks compiler-artifact structure/digests, and emits exact typed artifact
+  upload plus CreateMarket instruction-data bytes from a Rust-generated golden;
 - provenance, static-client, and unavailable-chain warnings on every relevant
   surface.
 
@@ -87,12 +90,19 @@ custom headers and therefore supplies none of them. The gate is
 
 ## Deliberate boundaries
 
-The initial artifact does not import a wallet adapter, call an RPC endpoint,
-perform account discovery, load an index, serialize Solana wire bytes, sign,
-submit, or run background work. There is no startup effect other than rendering
-local DOM. The intent object includes `wallet: not-connected`, `signature: null`,
-and `submission: disabled` so an inspection cannot be mistaken for an executable
-transaction.
+The artifact does not import a wallet adapter, call an RPC endpoint, perform
+account discovery, load an index, build account metas or a Solana message,
+sign, submit, or run background work. The native module serializes only the
+program's canonical unsigned intent data: BeginArtifact, nine WriteArtifact
+chunks, SealArtifact, and CreateMarket. It does not turn those bytes into a
+transaction. There is no startup effect other than rendering local DOM. The
+intent objects include `wallet: not-connected`, `signature: null`, and
+`submission: disabled` so an inspection cannot be mistaken for execution.
+
+The JavaScript certificate check is structural and digest-only. Exact
+compiler re-verification remains Rust-only, and the certificate is not bound
+by current on-chain Terms. See
+[`NATIVE_BSPLINE_CLIENT_SCHEMA_V1.md`](NATIVE_BSPLINE_CLIENT_SCHEMA_V1.md).
 
 The selected cluster and program are labels from an explicit manifest. Every
 current cluster is `unavailable`, and the program has no ID or ELF digest. The

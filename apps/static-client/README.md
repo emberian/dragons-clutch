@@ -14,13 +14,23 @@ capability at all.
 - `app.js` builds unsigned JSON intent previews only. It holds no copy of the
   release data and no hard-coded digest, and it has no RPC, wallet, serializer,
   signer, or submit path.
+- `native-bspline-v1.js` is a dependency-free offline inspection SDK for the
+  native degree-0 through degree-3 basis. It consumes the Rust-generated
+  compiler fixture, projects canonical Terms bytes, structurally checks a
+  shape certificate, and emits exactly 11 Terms-upload intent-data strings
+  (one BeginArtifact, nine WriteArtifact, one SealArtifact) plus a separate
+  CreateMarket intent-data string. It still has no account-meta/message
+  builder, wallet, RPC, signer, or submit path. The analytic certificate
+  remains offline evidence and is not committed by current Terms.
+- `native-bspline-market-creation-v1.schema.json` describes the unsigned JSON
+  preview. Digests cover the documented binary codecs, not this JSON object.
 - [`SERVING.md`](SERVING.md) states which protections require serve-time HTTP
   headers, with an example header set.
 
 Run the local checks without installing anything:
 
 ```sh
-npm test        # named offline gates, including the embedded-data equality gate
+npm test        # named offline gates, including Rust-fixture byte equality
 npm run check   # host JavaScript syntax check
 npm run embed   # regenerate embedded-data.js after editing manifest/terms JSON
 ```

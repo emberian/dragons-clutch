@@ -18,6 +18,7 @@ const manifest = JSON.parse(read("manifest.json"));
 const terms = JSON.parse(read("terms.json"));
 const app = read("app.js");
 const embeddedSource = read("embedded-data.js");
+const nativeBsplineSource = read("native-bspline-v1.js");
 const html = read("index.html");
 
 const canonicalize = (value) => {
@@ -102,7 +103,7 @@ test("app_holds_no_second_copy_of_release_data_or_digest", () => {
 });
 
 test("browser_scripts_reject_wallet_rpc_signing_and_submission_symbols", () => {
-  for (const [name, source] of [["app.js", app], ["embedded-data.js", embeddedSource]]) {
+  for (const [name, source] of [["app.js", app], ["embedded-data.js", embeddedSource], ["native-bspline-v1.js", nativeBsplineSource]]) {
     assert.doesNotMatch(source, /window\.solana|window\.phantom|new\s+WebSocket|\bfetch\s*\(|XMLHttpRequest|EventSource|navigator\.sendBeacon|import\s*\(/, name);
     assert.doesNotMatch(source, /signTransaction|signAllTransactions|sendRawTransaction|sendTransaction|@solana\//, name);
   }
@@ -133,7 +134,7 @@ test("serving_note_states_the_header_only_protections", () => {
 });
 
 test("every_shipped_asset_is_present_and_non_empty", () => {
-  for (const file of ["index.html", "styles.css", "app.js", "embedded-data.js", "manifest.json", "terms.json", "SERVING.md", "README.md"]) {
+  for (const file of ["index.html", "styles.css", "app.js", "embedded-data.js", "native-bspline-v1.js", "native-bspline-market-creation-v1.schema.json", "manifest.json", "terms.json", "SERVING.md", "README.md"]) {
     assert.ok(fs.statSync(path.join(root, file)).size > 0, `${file} should not be empty`);
   }
 });

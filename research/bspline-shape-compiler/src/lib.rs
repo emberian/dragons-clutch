@@ -10,6 +10,9 @@ use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{One, Signed, ToPrimitive, Zero};
 
+/// Canonical native-basis, compiler-certificate, and market-intent artifacts.
+pub mod artifact;
+
 /// Fixed exact-rational interval-subdivision depth.
 pub const CERTIFICATION_DEPTH: u8 = 8;
 
