@@ -26,3 +26,8 @@ clutch-sbf = { path = "../program" }
 # refuse is a build-time panic here rather than an on-chain refusal later.
 # Same pin, same default-features-off configuration as the program's.
 solana-pubkey = { version = "=4.2.0", default-features = false }
+# Host-only fixture construction recomputes the same canonical SourceSpec and
+# SourceArchive digests the SBF program verifies.  The program crate keeps its
+# `default-features = false` dependency and uses the SBF syscall; this feature
+# selects SHA-256 only for the host harness binary.
+solana-sha256-hasher = { version = "=3.1.0", features = ["sha2"] }

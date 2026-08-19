@@ -53,6 +53,18 @@ use clutch_sbf::instructions::observe_resolve::{
     FEED_PAGE_TAG,
 };
 use clutch_sbf::seeds;
+use clutch_sbf::source::{
+    ParsedPriceV1, PriceParserV1, SourceAccountView, SourceError, SourceSpecFieldsV1, SourceSpecV1,
+    TrustedClockV1, ORIENTATION_QUOTE_PER_BASE, SELECTION_FINALIZED_BUCKET_RECORD,
+};
+use clutch_sbf::source_archive::{
+    append_authenticated, canonical_window_id, initialize_archive, initialize_source_spec_account,
+    seal_archive, verify_source_spec_account, ArchivePredecessorV1,
+    CoveragePolicy as SourceCoveragePolicy, DeploymentAuthenticatorV1,
+    FeedIdentity as SourceFeedIdentity, Grid as SourceGrid, RuntimeAccountViewV1,
+    SourceArchiveError, SourceSpecAccountViewV1, WindowDomain, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES,
+    SOURCE_SPEC_ACCOUNT_V1_BYTES,
+};
 use clutch_sbf::token;
 use clutch_solana_layout::{
     account_len, canonical_epoch_id, canonical_market_id, canonical_order_id,
@@ -142,11 +154,84 @@ const GRID_VERSION: u16 = 1;
 const BUCKET_SECONDS: u64 = 60;
 const PRICE_SCALE: u64 = 10_000;
 const WINNING_PAYOUT_INDEX: u8 = 1;
-/// The declared window identity, recorded and never believed; the value is the
-/// `observe_resolve` lifecycle vector's own `h(77)`.
-const WINDOW_ID_FILL: u8 = 77;
 /// The recorded feed-page digest of a `FeedAdvance`, likewise recorded only.
 const FEED_EVIDENCE_FILL: u8 = 0x5e;
+
+/* Deterministic local-only source adapter identities.  They authenticate the
+ * committed harness's injected genesis archive; they do not name Pyth or any
+ * other production provider. */
+const SOURCE_ADAPTER_ID: [u8; 32] = [0xa1; 32];
+const SOURCE_PROGRAM: [u8; 32] = [0xa2; 32];
+const SOURCE_PROGRAM_OWNER: [u8; 32] = [0xa3; 32];
+const SOURCE_DATA_ACCOUNT: [u8; 32] = [0xa4; 32];
+const SOURCE_DEPLOYMENT_ACCOUNT: [u8; 32] = [0xa5; 32];
+const SOURCE_DEPLOYMENT_OWNER: [u8; 32] = [0xa6; 32];
+const SOURCE_DEPLOYMENT_VERIFIER: [u8; 32] = [0xa7; 32];
+const SOURCE_DEPLOYMENT_GENERATION: u64 = 1;
+const SOURCE_RECORD_BYTES: usize = 77;
+
+struct HarnessDeployment;
+
+impl DeploymentAuthenticatorV1 for HarnessDeployment {
+    const VERIFIER_ID: [u8; 32] = SOURCE_DEPLOYMENT_VERIFIER;
+    const VERIFIER_VERSION: u32 = 1;
+    const PROVIDER_PROGRAM: [u8; 32] = SOURCE_PROGRAM;
+    const PROVIDER_PROGRAM_OWNER: [u8; 32] = SOURCE_PROGRAM_OWNER;
+    const DEPLOYMENT_ACCOUNT: [u8; 32] = SOURCE_DEPLOYMENT_ACCOUNT;
+    const DEPLOYMENT_OWNER: [u8; 32] = SOURCE_DEPLOYMENT_OWNER;
+
+    fn deployment_generation(
+        provider_program_data: &[u8],
+        deployment_account_data: &[u8],
+    ) -> Result<u64, SourceArchiveError> {
+        if provider_program_data != b"harness-provider-v1"
+            || deployment_account_data != b"harness-deployment-v1"
+        {
+            return Err(SourceArchiveError::DeploymentAdapterRefused);
+        }
+        Ok(SOURCE_DEPLOYMENT_GENERATION)
+    }
+}
+
+struct HarnessPriceParser;
+
+impl PriceParserV1 for HarnessPriceParser {
+    const SOURCE_ADAPTER_ID: [u8; 32] = SOURCE_ADAPTER_ID;
+    const SOURCE_ADAPTER_VERSION: u32 = V1_SOURCE_VERSION;
+    const PARSER_ID: u16 = 1;
+    const PARSER_VERSION: u16 = 1;
+
+    fn parse(account: SourceAccountView<'_>) -> Result<ParsedPriceV1, SourceError> {
+        let bytes = account.data();
+        if bytes.len() != SOURCE_RECORD_BYTES || &bytes[..4] != b"SRC1" {
+            return Err(SourceError::ParserRefused);
+        }
+        let u64_at = |offset: usize| {
+            u64::from_le_bytes(
+                bytes[offset..offset + 8]
+                    .try_into()
+                    .expect("fixed source record"),
+            )
+        };
+        let u128_at = |offset: usize| {
+            u128::from_le_bytes(
+                bytes[offset..offset + 16]
+                    .try_into()
+                    .expect("fixed source record"),
+            )
+        };
+        Ok(ParsedPriceV1 {
+            deployment_generation: u64_at(4),
+            source_sequence: u64_at(12),
+            publish_slot: u64_at(20),
+            publish_time: u64_at(28),
+            canonical_bucket: u64_at(36),
+            price_atoms: u128_at(44),
+            confidence_atoms: u128_at(60),
+            finalized_bucket: bytes[76] == 1,
+        })
+    }
+}
 
 /* Batch-auction plane constants.  No adapter implements that family, so these
  * are the smallest shape the frozen codecs accept. */
@@ -605,8 +690,8 @@ fn encode_records(out: &mut Vec<u8>, records: &[Record]) {
 /// bucket 102 terminates in cell 1, so the terminal statistic selects payout 1.
 fn winning_records() -> [Record; 3] {
     [
-        (OBSERVATION_ACCEPTED, 100, 0, 0),
-        (OBSERVATION_ACCEPTED, 101, 0, 0),
+        (OBSERVATION_ACCEPTED, 100, 1, 1),
+        (OBSERVATION_ACCEPTED, 101, 1, 1),
         (OBSERVATION_ACCEPTED, 102, 1, 1),
     ]
 }
@@ -616,7 +701,7 @@ fn encode_window(feed: FeedId, records: &[Record]) -> Vec<u8> {
     let mut out = Vec::new();
     out.push(WINDOW_EVIDENCE_TAG);
     out.push(REFERENCE_VERSION);
-    out.extend_from_slice(&feed.bytes());
+    out.extend_from_slice(&SOURCE_ADAPTER_ID);
     out.extend_from_slice(&feed.bytes());
     out.extend_from_slice(&V1_SOURCE_VERSION.to_le_bytes());
     out.extend_from_slice(&V1_EVALUATOR_VERSION.to_le_bytes());
@@ -1057,6 +1142,12 @@ struct Shared {
     grid: Pda,
     terms: Pda,
     feed_head: Pda,
+    /// Canonical local-fixture SourceSpec account used by Resolve.
+    source_spec: Pda,
+    /// Canonical sealed local-fixture SourceArchive account used by Resolve.
+    source_archive: Pda,
+    /// Canonical identity of the immutable settlement window.
+    window_id: Hash32,
     advance_feed_head: Pda,
     terms_digest: Hash32,
     terms_account: TermsAccount,
@@ -1066,6 +1157,8 @@ struct Shared {
     terms_bytes: [u8; account_len::TERMS],
     policy_bytes: [u8; collateral::COLLATERAL_POLICY_BYTES],
     feed_bytes: [u8; account_len::FEED],
+    source_spec_bytes: Vec<u8>,
+    source_archive_bytes: Vec<u8>,
     advance_feed_bytes: [u8; account_len::FEED],
     /// The decoded Realm collateral policy every token leg reads.
     policy: collateral::CollateralPolicy,
@@ -1120,6 +1213,66 @@ fn fixture_policy(collateral_mint: [u8; 32]) -> collateral::CollateralPolicy {
         allowed_account_extensions: collateral::EXTENSION_IMMUTABLE_OWNER,
         required_account_extensions: 0,
     }
+}
+
+fn harness_source_spec() -> SourceSpecV1 {
+    SourceSpecV1::new(SourceSpecFieldsV1 {
+        source_adapter_id: Hash32::from_bytes(SOURCE_ADAPTER_ID),
+        source_adapter_version: V1_SOURCE_VERSION,
+        parser_id: 1,
+        parser_version: 1,
+        source_program: SOURCE_PROGRAM,
+        source_account: SOURCE_DATA_ACCOUNT,
+        deployment_generation: SOURCE_DEPLOYMENT_GENERATION,
+        base_asset_id: Hash32::from_bytes([0xb1; 32]),
+        quote_asset_id: Hash32::from_bytes([0xb2; 32]),
+        orientation: ORIENTATION_QUOTE_PER_BASE,
+        normalized_decimals: 0,
+        grid_family_id: GRID_FAMILY,
+        grid_version: GRID_VERSION,
+        bucket_seconds: BUCKET_SECONDS,
+        max_staleness_slots: 20,
+        max_staleness_seconds: 120,
+        max_future_seconds: 2,
+        max_confidence_atoms: 1,
+        max_confidence_bps: 10_000,
+        confidence_multiplier: 1,
+        selection_rule: SELECTION_FINALIZED_BUCKET_RECORD,
+    })
+    .expect("harness source spec")
+}
+
+fn harness_window(feed: FeedId) -> WindowDomain {
+    WindowDomain::new(
+        SourceFeedIdentity::new(
+            SOURCE_ADAPTER_ID,
+            feed.bytes(),
+            V1_SOURCE_VERSION,
+            V1_EVALUATOR_VERSION,
+        )
+        .expect("harness source identity"),
+        SourceGrid::new(GRID_FAMILY, GRID_VERSION, BUCKET_SECONDS).expect("harness source grid"),
+        START_BUCKET,
+        END_BUCKET_EXCLUSIVE,
+        START_BUCKET + MATURITY_HORIZON,
+        V1_EXACT_GENERATION,
+        SourceCoveragePolicy::COMPLETE_REQUIRED,
+    )
+    .expect("harness source window")
+}
+
+fn harness_source_record(bucket: u64, sequence: u64, slot: u64) -> [u8; SOURCE_RECORD_BYTES] {
+    let mut out = [0_u8; SOURCE_RECORD_BYTES];
+    out[..4].copy_from_slice(b"SRC1");
+    out[4..12].copy_from_slice(&SOURCE_DEPLOYMENT_GENERATION.to_le_bytes());
+    out[12..20].copy_from_slice(&sequence.to_le_bytes());
+    out[20..28].copy_from_slice(&slot.to_le_bytes());
+    out[28..36].copy_from_slice(&(bucket * BUCKET_SECONDS).to_le_bytes());
+    out[36..44].copy_from_slice(&bucket.to_le_bytes());
+    out[44..60].copy_from_slice(&1_u128.to_le_bytes());
+    out[60..76].copy_from_slice(&0_u128.to_le_bytes());
+    out[76] = 1;
+    out
 }
 
 fn build_shared() -> Shared {
@@ -1182,7 +1335,6 @@ fn build_shared() -> Shared {
      * pairing, so this is the only Profile ID a Realm backed by this mint can
      * have, and every address below descends from it. */
     let collateral_mint = fixed_address("clutch/collat/mint/v1");
-    let policy_account = fixed_address("clutch/collat/policy/v1");
     let actor_token = fixed_address("clutch/collat/actor/v1");
     let stranger_token = fixed_address("clutch/collat/stranger/v1");
     let policy = fixture_policy(collateral_mint.bytes);
@@ -1190,8 +1342,18 @@ fn build_shared() -> Shared {
         .expect("the fixture policy must compose a parent profile")
         .identity()
         .expect("the parent profile must derive an identity");
+    let policy_digest = policy.digest().expect("the fixture policy must digest");
+    let policy_account = derive(
+        &pid,
+        &[
+            seeds::SEED_POLICY.to_vec(),
+            profile_hash.bytes().to_vec(),
+            policy_digest.bytes().to_vec(),
+        ],
+    );
     let realm_hash = canonical_realm_id(profile_hash, REALM_NONCE);
-    let feed = FeedId::from_bytes([9; 32]);
+    let source_spec_value = harness_source_spec();
+    let feed = source_spec_value.feed_id();
     let advance_feed = FeedId::from_bytes([0x0b; 32]);
 
     let realm_seed = realm_hash.bytes().to_vec();
@@ -1219,7 +1381,7 @@ fn build_shared() -> Shared {
     let profile_account = ProfileAccount {
         profile: profile_hash,
         realm: realm_hash,
-        collateral_policy_digest: policy.digest().expect("the fixture policy must digest"),
+        collateral_policy_digest: policy_digest,
         version: 1,
         flags: PROFILE_FLAG_POLICY_FROZEN,
     };
@@ -1289,7 +1451,7 @@ fn build_shared() -> Shared {
         repair_generation: 0,
         source_version: 1,
         evaluator_version: 1,
-        source_adapter_id: feed,
+        source_adapter_id: Hash32::from_bytes(SOURCE_ADAPTER_ID),
         payout_map,
         knots,
         collateral_cap: COLLATERAL_CAP,
@@ -1328,6 +1490,77 @@ fn build_shared() -> Shared {
         stored_bump: feed_head.bump,
         flags: 0,
     };
+
+    /* These two accounts are genesis-assisted mock source material.  Resolve
+     * authenticates them as immutable Clutch-owned state, but no production
+     * provider or on-chain append instruction is implied by this harness. */
+    let source_spec = derive(
+        &pid,
+        &[seeds::SEED_SOURCE_SPEC.to_vec(), feed.bytes().to_vec()],
+    );
+    let window = harness_window(feed);
+    let window_id = canonical_window_id(window);
+    let source_archive = derive(
+        &pid,
+        &[
+            seeds::SEED_SOURCE_ARCHIVE.to_vec(),
+            feed.bytes().to_vec(),
+            window_id.bytes().to_vec(),
+        ],
+    );
+    let mut source_spec_bytes = vec![0_u8; SOURCE_SPEC_ACCOUNT_V1_BYTES];
+    initialize_source_spec_account(&mut source_spec_bytes, source_spec_value, source_spec.bump)
+        .expect("harness SourceSpec account");
+    let verified_spec = verify_source_spec_account(
+        program.bytes,
+        source_spec.bytes,
+        SourceSpecAccountViewV1::new(source_spec.bytes, program.bytes, false, &source_spec_bytes),
+    )
+    .expect("harness SourceSpec authenticates");
+    let mut source_archive_bytes = vec![0_u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES];
+    initialize_archive::<HarnessDeployment>(
+        &mut source_archive_bytes,
+        verified_spec,
+        window,
+        ArchivePredecessorV1::GENESIS,
+        source_archive.bump,
+    )
+    .expect("harness SourceArchive initializes");
+    let provider = RuntimeAccountViewV1::new(
+        SOURCE_PROGRAM,
+        SOURCE_PROGRAM_OWNER,
+        true,
+        b"harness-provider-v1",
+    );
+    let deployment = RuntimeAccountViewV1::new(
+        SOURCE_DEPLOYMENT_ACCOUNT,
+        SOURCE_DEPLOYMENT_OWNER,
+        false,
+        b"harness-deployment-v1",
+    );
+    for (index, bucket) in (START_BUCKET..END_BUCKET_EXCLUSIVE).enumerate() {
+        let record = harness_source_record(bucket, index as u64 + 1, 1_000 + index as u64);
+        append_authenticated::<HarnessPriceParser, HarnessDeployment>(
+            &mut source_archive_bytes,
+            verified_spec,
+            window,
+            TrustedClockV1 {
+                slot: 1_005 + index as u64,
+                unix_seconds: bucket * BUCKET_SECONDS + 1,
+            },
+            provider,
+            deployment,
+            SourceAccountView::new(SOURCE_DATA_ACCOUNT, SOURCE_PROGRAM, false, &record),
+        )
+        .expect("harness source record admits");
+    }
+    seal_archive::<HarnessDeployment>(
+        &mut source_archive_bytes,
+        verified_spec,
+        window,
+        FEED_CURSOR,
+    )
+    .expect("harness SourceArchive seals");
 
     /* A second feed identity exists only so that `FeedAdvance` has a *writable*
      * head to move.  The resolution head above must arrive read-only and
@@ -1412,6 +1645,9 @@ fn build_shared() -> Shared {
         grid,
         terms,
         feed_head,
+        source_spec,
+        source_archive,
+        window_id,
         advance_feed_head,
         terms_digest: terms_account.terms,
         terms_account,
@@ -1421,6 +1657,8 @@ fn build_shared() -> Shared {
         terms_bytes,
         policy_bytes,
         feed_bytes,
+        source_spec_bytes,
+        source_archive_bytes,
         advance_feed_bytes,
         policy,
         policy_account,
@@ -1766,7 +2004,7 @@ impl Plane {
             resolution: Hash32::from_bytes(self.resolution.bytes),
             terms_bump: shared.terms.bump,
             resolution_bump: self.resolution.bump,
-            window_id: Hash32::from_bytes([WINDOW_ID_FILL; 32]),
+            window_id: shared.window_id,
         }
     }
 
@@ -2835,12 +3073,9 @@ fn seam_transaction(
 
 /// The message and instruction of one evidence-gated transaction.
 ///
-/// `redeems` selects the plane: `Resolve` moves no value and keeps the twelve
-/// evidence accounts unchanged, while `RedeemInternal` pays collateral out and
-/// takes nineteen -- the twelve, then the Profile the 266 policy bytes are
-/// bound to, the token program, the policy, the collateral mint, the
-/// redeemer's own collateral account, the Hoard's signing authority, and the
-/// Hoard token account.
+/// `redeems` selects the plane: `Resolve` moves no value and reads the
+/// canonical SourceSpec and sealed SourceArchive before the redundant evidence
+/// projection, while `RedeemInternal` retains its owner/value plane.
 #[allow(clippy::too_many_arguments)]
 fn gate_transaction(
     shared: &Shared,
@@ -2876,6 +3111,8 @@ fn gate_transaction(
             plane.hoard.bytes,
             shared.terms.bytes,
             shared.feed_head.bytes,
+            shared.source_spec.bytes,
+            shared.source_archive.bytes,
             buffer.bytes,
             shared.program.bytes,
             shared.compute_budget,
@@ -2910,6 +3147,8 @@ fn gate_transaction(
             shared.terms.bytes,
             plane.resolution.bytes,
             shared.feed_head.bytes,
+            shared.source_spec.bytes,
+            shared.source_archive.bytes,
             buffer.bytes,
         ]
     };
@@ -2988,6 +3227,8 @@ fn paired_resolve_transaction(
         plane.hoard.bytes,
         shared.terms.bytes,
         shared.feed_head.bytes,
+        shared.source_spec.bytes,
+        shared.source_archive.bytes,
         buffer.bytes,
         shared.program.bytes,
         shared.compute_budget,
@@ -3002,6 +3243,8 @@ fn paired_resolve_transaction(
         shared.terms.bytes,
         plane.resolution.bytes,
         shared.feed_head.bytes,
+        shared.source_spec.bytes,
+        shared.source_archive.bytes,
         buffer.bytes,
     ];
     keys.extend(plane.outcome_mints.iter().map(|mint| mint.bytes));
@@ -3583,10 +3826,9 @@ fn build_fixture() -> Fixture {
      * is the one account in the program that is deliberately not, because its
      * bytes are the claim and not the state. */
     let resolve_buffer = fixed_address("clutch/bringup/buffer/resolve/v1");
-    let resolve_buffer_bytes =
-        encode_evidence_buffer(Hash32::from_bytes([WINDOW_ID_FILL; 32]), &window);
+    let resolve_buffer_bytes = encode_evidence_buffer(shared.window_id, &window);
     let redeem_buffer = fixed_address("clutch/bringup/buffer/redeem/v1");
-    let redeem_buffer_bytes = encode_evidence_buffer(Hash32::from_bytes([WINDOW_ID_FILL; 32]), &[]);
+    let redeem_buffer_bytes = encode_evidence_buffer(shared.window_id, &[]);
     let page_buffer = fixed_address("clutch/bringup/buffer/page/v1");
     let page_records: Vec<Record> = (START_BUCKET..END_BUCKET_EXCLUSIVE)
         .map(|bucket| (OBSERVATION_ACCEPTED, bucket, 40, 41))
@@ -7350,6 +7592,16 @@ fn emit_committed_plan(out_dir: &Path, f: &Fixture) {
     plan.account("terms", &shared.terms, &shared.terms_bytes);
     plan.account("feed", &shared.feed_head, &shared.feed_bytes);
     plan.account(
+        "mock-source-spec",
+        &shared.source_spec,
+        &shared.source_spec_bytes,
+    );
+    plan.account(
+        "mock-source-archive",
+        &shared.source_archive,
+        &shared.source_archive_bytes,
+    );
+    plan.account(
         "advance-feed",
         &shared.advance_feed_head,
         &shared.advance_feed_bytes,
@@ -7476,6 +7728,16 @@ fn main() {
     plan.account("grid", &shared.grid, &shared.grid_bytes);
     plan.account("terms", &shared.terms, &shared.terms_bytes);
     plan.account("feed", &shared.feed_head, &shared.feed_bytes);
+    plan.account(
+        "mock-source-spec",
+        &shared.source_spec,
+        &shared.source_spec_bytes,
+    );
+    plan.account(
+        "mock-source-archive",
+        &shared.source_archive,
+        &shared.source_archive_bytes,
+    );
     plan.account(
         "advance-feed",
         &shared.advance_feed_head,
