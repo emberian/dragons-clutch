@@ -13,7 +13,8 @@ use crate::accounts::{
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::artifact::read_clock_slot;
 use crate::instructions::genesis::{
-    create_pda_account, read_rent, require_creatable, require_system_program,
+    allocate_data, assign_data, read_rent, require_creatable, require_system_program,
+    transfer_data, RentParameters, MAX_PERMITTED_DATA_INCREASE, SYSTEM_PROGRAM_ID,
 };
 use crate::seeds;
 use clutch_batch_policy_identity::{batch_policy_digest, direct_window_v1::DIRECT_POLICY_V1};
@@ -21,13 +22,16 @@ use clutch_solana_layout::{
     account_len,
     direct_selection::DirectEpochV3Account,
     direct_selection_v3::{
-        DirectBatchPolicyV3, DirectEpochV4Account, DirectTerminalReceiptV3, DirectV3Intent,
-        DIRECT_BATCH_POLICY_V3_BYTES, DIRECT_EPOCH_V4_BYTES, DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN,
+        DirectBatchPolicyV3, DirectEpochV4Account, DirectFundingLedgerV3, DirectTerminalReceiptV3,
+        DirectV3Intent, DIRECT_BATCH_POLICY_V3_BYTES, DIRECT_EPOCH_V4_BYTES,
+        DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN,
     },
     Hash32,
 };
 use clutch_solana_reference::DirectV3Request;
 use solana_account_info::AccountInfo;
+use solana_cpi::invoke_signed;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 use solana_sdk_ids::incinerator;
 
@@ -179,11 +183,7 @@ fn init_epoch(
 
     let epoch_id = clutch_solana_layout::canonical_epoch_id(intent.market, intent.epoch_index);
     let policy = DirectBatchPolicyV3::decode(&accounts[IX_POLICY].data.borrow())?;
-    require(
-        policy.verifier_release_id == DIRECT_VERIFIER_RELEASE_ID_V3
-            && policy.digest_for_epoch(epoch_id)? == intent.policy,
-        ClutchError::MismatchedState,
-    )?;
+    require_exact_direct_policy(epoch_id, intent.policy, policy)?;
     expect_pda(
         accounts[IX_POLICY].key,
         seeds::direct_batch_policy_v3_pda(program_id, &epoch_id.bytes(), &intent.policy.bytes()),
@@ -193,8 +193,20 @@ fn init_epoch(
     let (epoch_address, epoch_bump) =
         seeds::epoch_pda(program_id, &intent.market.bytes(), intent.epoch_index);
     expect_pda(accounts[IX_EPOCH].key, (epoch_address, epoch_bump), None)?;
-    let epoch = build_open_epoch(intent, terms.terms, grid.grid, grid.price_scale, epoch_bump)?;
-    create_pda_account(
+    let funding = DirectFundingLedgerV3 {
+        payer: Hash32::from_bytes(accounts[IX_PAYER].key.to_bytes()),
+        payer_principal_lamports: rent.minimum_balance(DIRECT_EPOCH_V4_BYTES)?,
+        prior_donation_lamports: accounts[IX_EPOCH].lamports(),
+    };
+    let epoch = build_open_epoch(
+        intent,
+        terms.terms,
+        grid.grid,
+        grid.price_scale,
+        epoch_bump,
+        funding,
+    )?;
+    create_pda_account_full_principal(
         program_id,
         &accounts[IX_PAYER],
         &accounts[IX_EPOCH],
@@ -212,12 +224,25 @@ fn init_epoch(
     Ok(())
 }
 
+fn require_exact_direct_policy(
+    epoch_id: Hash32,
+    intent_policy: Hash32,
+    policy: DirectBatchPolicyV3,
+) -> Outcome<()> {
+    let exact_policy = DirectBatchPolicyV3::direct(DIRECT_VERIFIER_RELEASE_ID_V3)?;
+    require(
+        policy == exact_policy && policy.digest_for_epoch(epoch_id)? == intent_policy,
+        ClutchError::MismatchedState,
+    )
+}
+
 fn build_open_epoch(
     intent: InitEpochV4,
     terms: Hash32,
     grid: Hash32,
     price_scale: u64,
     epoch_bump: u8,
+    funding: DirectFundingLedgerV3,
 ) -> Outcome<DirectEpochV4Account> {
     require(
         intent.neutral_lamport_sink == Hash32::from_bytes(DIRECT_NEUTRAL_SINK_V3.to_bytes()),
@@ -243,10 +268,97 @@ fn build_open_epoch(
         lifecycle_phase: DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN,
         terminal: DirectTerminalReceiptV3::EMPTY,
         neutral_lamport_sink: intent.neutral_lamport_sink,
+        verifier_release_id: DIRECT_VERIFIER_RELEASE_ID_V3,
+        direct_policy_v3_id: intent.policy,
+        funding,
         reserved: [0; 4],
     };
-    epoch.validate()?;
+    epoch.validate_for_release(DIRECT_VERIFIER_RELEASE_ID_V3)?;
     Ok(epoch)
+}
+
+/// Create one durable Epoch while keeping prefund donation disjoint from the
+/// payer's exact rent principal.
+///
+/// Unlike the generic genesis constructor, a hostile predictable-PDA prefund
+/// never discounts this payer's deposit. The target must move from `B` to
+/// exactly `B + P` before allocation, and the persisted ledger records those
+/// two independently owned compartments.
+#[allow(clippy::too_many_arguments)] // one argument per runtime account/value
+#[inline(never)]
+fn create_pda_account_full_principal<'a>(
+    program_id: &Pubkey,
+    payer: &AccountInfo<'a>,
+    target: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    rent: &RentParameters,
+    space: usize,
+    signer_seeds: &[&[u8]],
+) -> Outcome<()> {
+    require_creatable(target)?;
+    require(
+        space <= MAX_PERMITTED_DATA_INCREASE,
+        ClutchError::AccountCreationFailed,
+    )?;
+    let principal = rent.minimum_balance(space)?;
+    let balance_before = target.lamports();
+    let balance_after = balance_before
+        .checked_add(principal)
+        .ok_or(ClutchError::Arithmetic)?;
+    let transfer = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &transfer_data(principal),
+        vec![
+            AccountMeta::new(*payer.key, true),
+            AccountMeta::new(*target.key, false),
+        ],
+    );
+    invoke_signed(
+        &transfer,
+        &[payer.clone(), target.clone(), system_program.clone()],
+        &[],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        target.lamports() == balance_after,
+        ClutchError::AccountCreationFailed,
+    )?;
+
+    let allocate = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &allocate_data(space),
+        vec![AccountMeta::new(*target.key, true)],
+    );
+    invoke_signed(
+        &allocate,
+        &[target.clone(), system_program.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        target.lamports() == balance_after
+            && target.data_len() == space
+            && *target.owner == SYSTEM_PROGRAM_ID,
+        ClutchError::AccountCreationFailed,
+    )?;
+
+    let assign = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &assign_data(program_id),
+        vec![AccountMeta::new(*target.key, true)],
+    );
+    invoke_signed(
+        &assign,
+        &[target.clone(), system_program.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        target.lamports() == balance_after
+            && target.data_len() == space
+            && target.owner == program_id,
+        ClutchError::AccountCreationFailed,
+    )
 }
 
 #[cfg(test)]
@@ -258,15 +370,29 @@ mod tests {
     }
 
     fn intent() -> InitEpochV4 {
+        let market = h(1);
+        let epoch_index = 7;
+        let epoch_id = clutch_solana_layout::canonical_epoch_id(market, epoch_index);
         InitEpochV4 {
-            market: h(1),
-            epoch_index: 7,
-            policy: h(2),
+            market,
+            epoch_index,
+            policy: DirectBatchPolicyV3::direct(DIRECT_VERIFIER_RELEASE_ID_V3)
+                .unwrap()
+                .digest_for_epoch(epoch_id)
+                .unwrap(),
             submission_opens_slot: 10,
             submission_closes_slot: 20,
             selection_deadline_slot: 25,
             settlement_deadline_slot: 27,
             neutral_lamport_sink: Hash32::from_bytes(DIRECT_NEUTRAL_SINK_V3.to_bytes()),
+        }
+    }
+
+    fn funding() -> DirectFundingLedgerV3 {
+        DirectFundingLedgerV3 {
+            payer: h(24),
+            payer_principal_lamports: 1_000,
+            prior_donation_lamports: 7,
         }
     }
 
@@ -292,7 +418,8 @@ mod tests {
 
     #[test]
     fn open_epoch_uses_relation_policy_and_canonical_neutral_sink() {
-        let value = build_open_epoch(intent(), h(3), h(4), 10_000, 9).unwrap();
+        let request = intent();
+        let value = build_open_epoch(request, h(3), h(4), 10_000, 9, funding()).unwrap();
         assert_eq!(
             value.direct.common.policy.bytes(),
             batch_policy_digest(&DIRECT_POLICY_V1).unwrap().0
@@ -303,6 +430,9 @@ mod tests {
         );
         assert_eq!(value.lifecycle_phase, DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN);
         assert_eq!(value.terminal, DirectTerminalReceiptV3::EMPTY);
+        assert_eq!(value.verifier_release_id, DIRECT_VERIFIER_RELEASE_ID_V3);
+        assert_eq!(value.direct_policy_v3_id, request.policy);
+        assert_eq!(value.funding, funding());
         assert_eq!(value.validate(), Ok(()));
     }
 
@@ -310,11 +440,43 @@ mod tests {
     fn open_epoch_refuses_creator_selected_sink_and_bad_schedule() {
         let mut hostile = intent();
         hostile.neutral_lamport_sink = h(99);
-        assert!(build_open_epoch(hostile, h(3), h(4), 10_000, 9).is_err());
+        assert!(build_open_epoch(hostile, h(3), h(4), 10_000, 9, funding()).is_err());
 
         let mut hostile = intent();
         hostile.selection_deadline_slot = hostile.submission_closes_slot;
-        assert!(build_open_epoch(hostile, h(3), h(4), 10_000, 9).is_err());
+        assert!(build_open_epoch(hostile, h(3), h(4), 10_000, 9, funding()).is_err());
+    }
+
+    #[test]
+    fn canonical_non_direct_policy_and_release_substitution_refuse_precreation() {
+        let request = intent();
+        let epoch_id =
+            clutch_solana_layout::canonical_epoch_id(request.market, request.epoch_index);
+        let exact = DirectBatchPolicyV3::direct(DIRECT_VERIFIER_RELEASE_ID_V3).unwrap();
+        assert_eq!(
+            require_exact_direct_policy(epoch_id, request.policy, exact),
+            Ok(())
+        );
+
+        let mut nondirect = exact;
+        nondirect.policy_bytes[20] = 0;
+        assert_eq!(nondirect.validate(), Ok(()));
+        assert_eq!(
+            require_exact_direct_policy(epoch_id, request.policy, nondirect),
+            Err(ClutchError::MismatchedState.into())
+        );
+
+        let wrong_release = DirectBatchPolicyV3::direct(h(81)).unwrap();
+        let coherent_wrong_release_id = wrong_release.digest_for_epoch(epoch_id).unwrap();
+        assert_eq!(wrong_release.validate(), Ok(()));
+        assert_eq!(
+            require_exact_direct_policy(epoch_id, coherent_wrong_release_id, wrong_release),
+            Err(ClutchError::MismatchedState.into())
+        );
+        assert_eq!(
+            require_exact_direct_policy(epoch_id, h(82), exact),
+            Err(ClutchError::MismatchedState.into())
+        );
     }
 
     #[test]

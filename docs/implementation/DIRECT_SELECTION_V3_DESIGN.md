@@ -131,7 +131,12 @@ be designed, but cannot be smuggled into an error path whose effects roll back.
 Sizes below are the intended fixed byte lengths for the codec campaign. They
 are not live allocations.
 
-### Direct Epoch V4 — 512 bytes
+### Direct Epoch V4 — 624 bytes
+
+No 512-byte V4 Epoch was ever routed, emitted, deployed, or accepted by the
+common request decoder. The version remains four because this is a correction
+to an unexported proposed codec, not a migration of live bytes; the exact
+length gate refuses the abandoned draft in both directions.
 
 Bytes `0..344` preserve Direct Epoch V3. The extension is:
 
@@ -151,7 +156,26 @@ Bytes `0..344` preserve Direct Epoch V3. The extension is:
 | 452 | 16 | terminal consideration price-units |
 | 468 | 8 | terminal slot |
 | 476 | 32 | immutable neutral-lamport sink |
-| 508 | 4 | canonical zero reserve |
+| 508 | 32 | compile-time semantic verifier release ID |
+| 540 | 32 | Epoch-bound DirectBatchPolicy V3 artifact ID |
+| 572 | 32 | durable Epoch rent-principal payer |
+| 604 | 8 | exact payer-funded Epoch rent principal |
+| 612 | 8 | prior neutral donation lower bound |
+| 620 | 4 | canonical zero reserve |
+
+The two policy fields are deliberately disjoint. The preserved common Epoch
+`policy` remains the legacy full-relation policy digest. The appended
+`direct_policy_v3_id` must equal the digest of the exact canonical direct
+policy bytes plus the appended `verifier_release_id` under this Epoch's
+identity. Every later handler must reauthenticate that exact artifact account
+and compare both persisted fields; call order is not authority.
+
+Epoch creation uses the same DonationLedger ownership equation as transient
+accounts even though the archive is durable. A predictable-PDA prebalance `B`
+never discounts the authenticated payer's rent principal `P`: Init transfers
+exactly `P`, proves the post-transfer balance is `B + P`, stores `P` as payer
+principal, and stores `B` as neutral donation. Any later balance above those
+compartments belongs only to the immutable sink.
 
 The direct lifecycle byte owns `PREFREEZE_OPEN`, `FROZEN_EMPTY`,
 `WINDOW_OPEN`, `VERIFYING`, `SELECTED`, and `TERMINAL`. The preserved common
@@ -420,7 +444,7 @@ mutation; transaction rollback is the atomicity boundary.
 V3 returns every **transient authority** principal. It does not claim every
 lamport in the protocol is refunded.
 
-- One 512-byte Epoch archive remains per historical epoch. Its principal comes
+- One 624-byte Epoch archive remains per historical epoch. Its principal comes
   from the separately named archive/storage endowment and remains locked under
   the current permanent-audit policy. This is bounded per epoch but grows
   linearly with history.
