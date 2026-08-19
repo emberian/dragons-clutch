@@ -487,15 +487,59 @@ to the live page fold over the same two records, and the model's
 `direct_policy_v3_digest` is asserted byte-identical to the codec's
 `digest_for_epoch`.
 
+## Unrouted runtime checkpoint
+
+The SBF crate now compiles one isolated `InitDirectEpochV4` implementation,
+but the production dispatcher still sends every tag `36..=46` through the
+legacy decoder and therefore refuses it. The handler is deliberately not
+partial ABI authority: every other Direct V3 action returns
+`NotYetImplemented` only when called directly by host tests, and there is no
+live route capable of making that call.
+
+Init's exact nine-account order is:
+
+| index | role | access |
+|---:|---|---|
+| 0 | archive/prefund payer | signer, writable |
+| 1 | canonical Epoch V4 target | writable, System-owned empty |
+| 2 | Market | program-owned read-only |
+| 3 | Terms | program-owned read-only |
+| 4 | PriceGrid | program-owned read-only |
+| 5 | 96-byte DirectBatchPolicy V3 artifact | program-owned read-only |
+| 6 | System program | executable read-only |
+| 7 | Rent sysvar | read-only |
+| 8 | Clock sysvar | read-only |
+
+The runtime release label is
+`dragons-clutch/direct-verifier-release/v3/1`; its fixed SHA-256 identifier is
+`038914d7913057589fa6bf303f02a6b9b5e12a1ee718561079ab57d375947704`.
+This is a semantic release identifier, not an ELF, ProgramData, deployment, or
+source hash. The exact DirectBatchPolicy artifact and its epoch-bound digest
+must carry that identifier.
+
+The current Realm account has no neutral-lamport-sink field. Consequently the
+first runtime profile specializes the model's immutable sink to Solana's
+canonical incinerator and requires the intent field to equal that address; a
+creator-selected donation beneficiary refuses. A future Realm version may own
+a different immutable neutral sink, but inferring one from an arbitrary caller
+is not a migration.
+
+The new Window, Candidate, WorkBudget, receipt, and pot PDAs use five disjoint
+V3 seed namespaces. Epoch and Reservation keep their existing semantic PDA
+coordinates and are separated by exact version/length. No V3 transient account
+is constructed by this checkpoint.
+
 ## Remaining promotion boundary
 
 The three former model blockers are closed by `e77238f`, `6267fde`, and
 `081bd81`: Settle now owns the actual Position transfer, verification derives
 all economic facts from frozen authority and takes the real neutral sink, and
 `FROZEN_EMPTY` pins admission/work history to zero. What remains is the live
-adapter: stack-bounded per-account reconstruction, common intent routing only
-after every handler exists, exact PDA create/close transfers, and the real-SBF
-campaign below. Standalone codec acceptance is not live authority.
+adapter beyond the isolated Init checkpoint: versioned page construction and
+Reservation placement, stack-bounded per-account reconstruction for every
+frozen transition, common intent routing only after every handler exists,
+exact full-principal PDA create/close transfers, and the real-SBF campaign
+below. Standalone codec or unrouted handler acceptance is not live authority.
 
 Run:
 
