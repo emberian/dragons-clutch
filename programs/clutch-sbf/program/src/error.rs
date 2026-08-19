@@ -13,7 +13,7 @@
 //! | `0x0018..=0x001e` | the token plane's appends ([`ClutchError::WrongTokenProgram`] .. [`ClutchError::ShadowSupplyMismatch`]) |
 //! | `0x0040..=0x004f` | market-initialization appends ([`ClutchError::AlreadyInitialized`] .. [`ClutchError::TermsBindingMismatch`]) |
 //! | `0x0050..=0x005f` | the evidence gate's numeric projection (see below) |
-//! | `0x0070..=0x007f` | the genesis plane's appends ([`ClutchError::WrongSystemProgram`] .. [`ClutchError::EvidenceBufferMismatch`]) |
+//! | `0x0070..=0x007f` | construction and typed-artifact appends ([`ClutchError::WrongSystemProgram`] .. [`ClutchError::ArtifactRefundMismatch`]) |
 //! | `0x1000 + n` | [`clutch_solana_layout::CodecError`] variant `n` |
 //! | `0x2000 + n` | [`clutch_kernel::Error`] variant `n` |
 //! | `0x3000 + n` | [`clutch_solana_reference::Error`] variant `n` |
@@ -29,8 +29,9 @@
 //!
 //! The `0x0070-0x007f` block belongs to [`crate::instructions::genesis`], the
 //! first family that creates accounts rather than writing over pre-created
-//! ones.  Four of its sixteen numbers are allocated and `0x0074-0x007f` stay
-//! free.  `0x0060-0x006f` is deliberately skipped: leaving a gap between the
+//! ones.  Typed artifact transport extends that construction plane at
+//! `0x0074..=0x0078`; `0x0079-0x007f` stay free.  `0x0060-0x006f` is
+//! deliberately skipped: leaving a gap between the
 //! evidence block and the genesis block costs nothing and keeps a later
 //! evidence append from having to jump over an unrelated family.
 
@@ -136,12 +137,14 @@ pub enum ClutchError {
     /// refusal being complete, and it is also what makes the off-chain no-op
     /// `solana_cpi::invoke_signed` detectable rather than silent.
     TokenDeltaMismatch = 0x001c,
-    /// `HoardAccount::collateral_atoms` is not the Hoard token account's
-    /// `amount`.
+    /// The Hoard token account does not cover
+    /// `HoardAccount::collateral_atoms`.
     ///
-    /// The checked-mirror half of open decision 3 in
-    /// `docs/implementation/TOKEN2022_PLAN.md` §3.5.  Reserved by this wave;
-    /// the collateral leg that raises it is not wired yet.
+    /// In the pooled-custody model, the accounting field is locked claim
+    /// backing while the token account also contains Position cash and
+    /// unsolicited surplus. Equality is therefore not required; this refusal
+    /// means the one-sided coverage floor `token_amount >= collateral_atoms`
+    /// failed.
     HoardMirrorMismatch = 0x001d,
     /// An observed outcome mint supply exceeded the last atomically persisted
     /// Token-2022 supply.
@@ -206,6 +209,17 @@ pub enum ClutchError {
     /// *recomputation* failure and not a decode failure — a perfectly
     /// well-formed artifact for some other market earns this code.
     EvidenceBufferMismatch = 0x0073,
+    /// The presented Clock sysvar had the wrong key or exact byte length.
+    WrongClockSysvar = 0x0074,
+    /// An upload write or seal arrived after the stage's immutable expiry.
+    ArtifactExpired = 0x0075,
+    /// Seal was attempted before the exact body length had been written.
+    ArtifactIncomplete = 0x0076,
+    /// The requested upload lifetime is shorter or longer than the frozen
+    /// bounded range.
+    InvalidArtifactExpiry = 0x0077,
+    /// Abort's refund account is not the funder persisted at Begin.
+    ArtifactRefundMismatch = 0x0078,
 }
 
 impl From<ClutchError> for ProgramError {

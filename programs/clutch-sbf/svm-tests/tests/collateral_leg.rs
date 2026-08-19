@@ -26,6 +26,7 @@
 
 use {
     clutch_sbf::error::ClutchError,
+    clutch_sbf::instructions::cash_exit,
     clutch_sbf::instructions::genesis,
     clutch_sbf::instructions::market_init,
     clutch_sbf::instructions::observe_resolve,
@@ -39,7 +40,7 @@ use {
         build_plane, compute_unit_limit_data, create_market_request, immutable_owner_account_bytes,
         layout_request, Mode, Plane, CASH_ATOMS, COMPUTE_BUDGET, FOUNDING_MARKET_NONCE,
         FUNDED_SETS, MARKET_NONCE, OUTCOME_COUNT, POLICY_ACCOUNT, PROGRAM_ID, RENT_SYSVAR,
-        SYSTEM_PROGRAM, TOKEN_2022,
+        RESERVED_CASH_ATOMS, SYSTEM_PROGRAM, TOKEN_2022,
     },
     solana_account::Account,
     solana_address::Address,
@@ -546,6 +547,54 @@ impl Scenario {
         )
     }
 
+    /// The twelve-account owner free-cash exit.
+    fn withdraw_for(
+        &self,
+        owner: Address,
+        destination: Address,
+        position: Address,
+        replay: Address,
+        sequence: u64,
+        amount: u64,
+    ) -> Instruction {
+        let request = layout_request(
+            sequence,
+            Intent::WithdrawCash {
+                market: self.plane.market_id,
+                owner: Hash32::from_bytes(owner.to_bytes()),
+                destination: Hash32::from_bytes(destination.to_bytes()),
+                amount,
+            },
+        );
+        let metas = vec![
+            AccountMeta::new_readonly(owner, true),
+            AccountMeta::new_readonly(self.plane.market.address, false),
+            AccountMeta::new_readonly(self.plane.hoard.address, false),
+            AccountMeta::new(position, false),
+            AccountMeta::new(replay, false),
+            AccountMeta::new_readonly(self.plane.profile.address, false),
+            AccountMeta::new_readonly(POLICY_ACCOUNT, false),
+            AccountMeta::new_readonly(TOKEN_2022, false),
+            AccountMeta::new_readonly(self.plane.collateral_mint, false),
+            AccountMeta::new(destination, false),
+            AccountMeta::new_readonly(self.plane.hoard_authority.address, false),
+            AccountMeta::new(self.plane.hoard_token.address, false),
+        ];
+        assert_eq!(metas.len(), cash_exit::ACCOUNT_COUNT);
+        Instruction::new_with_bytes(PROGRAM_ID, &request, metas)
+    }
+
+    fn withdraw(&self, sequence: u64, amount: u64) -> Instruction {
+        self.withdraw_for(
+            self.actor.pubkey(),
+            self.actor_collateral,
+            self.plane.position.address,
+            self.plane.replay.address,
+            sequence,
+            amount,
+        )
+    }
+
     /// The fixed outcome prefix plus every canonical outcome mint.
     fn outcome_seam(&self, request: Vec<u8>, outcome: usize, holder: Address) -> Instruction {
         let state = self.plane.seam_addresses();
@@ -637,7 +686,7 @@ impl Scenario {
 
     /// The eighteen-account collateral prefix plus every canonical outcome mint.
     fn redeem(&self, sequence: u64, outcome: u8, quantity: u64) -> Instruction {
-        let evidence = self.plane.evidence_addresses();
+        let evidence = self.plane.redeem_addresses();
         let mut metas = vec![AccountMeta::new(evidence[0], true)];
         for address in &evidence[1..7] {
             metas.push(AccountMeta::new(*address, false));
@@ -1126,6 +1175,210 @@ async fn endow_debits_the_owner_and_credits_cash_and_custody_exactly() {
     assert_eq!(scenario.position().await.cash_atoms, pre_cash + 10);
     assert_eq!(scenario.hoard_atoms().await, FUNDED_SETS);
     println!("SVM Endow: exact 10-atom deposit, {units} CU");
+}
+
+/// `WithdrawCash` is the exact inverse value boundary for unreserved cash.
+#[tokio::test]
+async fn withdraw_pays_only_unreserved_cash_and_preserves_locked_backing() {
+    let mut scenario = Scenario::start(MARKET_NONCE, Mode::Funded).await;
+    let actor = scenario.actor.insecure_clone();
+    let actor_token = scenario.actor_collateral;
+    let hoard_token = scenario.plane.hoard_token.address;
+    let pre_actor = scenario.amount(actor_token).await;
+    let pre_hoard = scenario.amount(hoard_token).await;
+    let free = CASH_ATOMS - RESERVED_CASH_ATOMS;
+
+    let watched = [
+        scenario.plane.position.address,
+        scenario.plane.replay.address,
+        actor_token,
+        hoard_token,
+    ];
+    let mut before = Vec::new();
+    for address in watched {
+        before.push(scenario.data(address).await);
+    }
+    let code = scenario
+        .refusal_code(
+            &[budget(SEAM_UNITS), scenario.withdraw(0, free + 1)],
+            &[&actor],
+        )
+        .await;
+    assert_eq!(code, 0x2008, "reserved cash must not be withdrawable");
+    for (index, address) in watched.iter().enumerate() {
+        assert_eq!(scenario.data(*address).await, before[index]);
+    }
+
+    let units = scenario
+        .send(&[budget(SEAM_UNITS), scenario.withdraw(0, free)], &[&actor])
+        .await;
+    assert_eq!(scenario.amount(actor_token).await, pre_actor + free);
+    assert_eq!(scenario.amount(hoard_token).await, pre_hoard - free);
+    assert_eq!(scenario.hoard_atoms().await, FUNDED_SETS);
+    let position = scenario.position().await;
+    assert_eq!(position.cash_atoms, RESERVED_CASH_ATOMS);
+    assert_eq!(position.reserved_cash_atoms, RESERVED_CASH_ATOMS);
+    let replay = ReplayAccount::decode(&scenario.data(scenario.plane.replay.address).await)
+        .expect("replay decodes");
+    assert_eq!(replay.sequence, 1);
+    println!("SVM WithdrawCash: paid {free} unreserved atoms, {units} CU");
+}
+
+/// A later instruction failure restores an earlier successful Hoard transfer.
+#[tokio::test]
+async fn duplicate_withdrawal_transaction_rolls_back_the_first_token_cpi() {
+    let mut scenario = Scenario::start(MARKET_NONCE, Mode::Funded).await;
+    let actor = scenario.actor.insecure_clone();
+    let watched = [
+        scenario.plane.position.address,
+        scenario.plane.replay.address,
+        scenario.actor_collateral,
+        scenario.plane.hoard_token.address,
+    ];
+    let mut before = Vec::new();
+    for address in watched {
+        before.push(scenario.data(address).await);
+    }
+    let duplicate = scenario.withdraw(0, 5);
+    let code = scenario
+        .refusal_code(
+            &[budget(SEAM_UNITS), duplicate.clone(), duplicate],
+            &[&actor],
+        )
+        .await;
+    assert_eq!(code, ClutchError::Replay as u32);
+    for (index, address) in watched.iter().enumerate() {
+        assert_eq!(
+            scenario.data(*address).await,
+            before[index],
+            "account {index} changed across atomic duplicate refusal"
+        );
+    }
+    println!("SVM WithdrawCash rollback: first CPI restored after duplicate replay refusal");
+}
+
+/// Both the signed wire destination and current Token-2022 owner must agree.
+#[tokio::test]
+async fn withdraw_refuses_destination_substitution_and_foreign_authority() {
+    let mut scenario = Scenario::start(MARKET_NONCE, Mode::Funded).await;
+    let actor = scenario.actor.insecure_clone();
+    let stranger = Keypair::new();
+    let foreign = scenario
+        .create_token_account(scenario.plane.collateral_mint, stranger.pubkey())
+        .await;
+    let watched = [
+        scenario.plane.position.address,
+        scenario.plane.replay.address,
+        scenario.actor_collateral,
+        scenario.plane.hoard_token.address,
+        foreign,
+    ];
+    let mut before = Vec::new();
+    for address in watched {
+        before.push(scenario.data(address).await);
+    }
+
+    let foreign_authority = scenario.withdraw_for(
+        actor.pubkey(),
+        foreign,
+        scenario.plane.position.address,
+        scenario.plane.replay.address,
+        0,
+        1,
+    );
+    let code = scenario
+        .refusal_code(&[budget(SEAM_UNITS), foreign_authority], &[&actor])
+        .await;
+    assert_eq!(code, ClutchError::TokenAccountNotAdmitted as u32);
+
+    let mut substituted = scenario.withdraw(0, 1);
+    substituted.accounts[cash_exit::IX_DESTINATION] = AccountMeta::new(foreign, false);
+    let code = scenario
+        .refusal_code(&[budget(SEAM_UNITS), substituted], &[&actor])
+        .await;
+    assert_eq!(code, ClutchError::MismatchedState as u32);
+    for (index, address) in watched.iter().enumerate() {
+        assert_eq!(scenario.data(*address).await, before[index]);
+    }
+}
+
+/// Donations remain unowned while two Positions exit only their own cash.
+#[tokio::test]
+async fn donation_and_multiple_positions_do_not_cross_credit_withdrawals() {
+    let mut scenario = Scenario::start(MARKET_NONCE, Mode::Funded).await;
+    let founder = scenario.actor.insecure_clone();
+    let hoard_token = scenario.plane.hoard_token.address;
+    let initial_hoard = scenario.amount(hoard_token).await;
+
+    /* This direct transfer creates surplus and no Position credit. */
+    scenario
+        .transfer_collateral(scenario.actor_collateral, hoard_token, &founder, 5)
+        .await;
+
+    let second = second_actor_keypair();
+    scenario.fund_signer(second.pubkey(), 100_000_000).await;
+    let second_token = scenario
+        .create_token_account(scenario.plane.collateral_mint, second.pubkey())
+        .await;
+    scenario
+        .transfer_collateral(scenario.actor_collateral, second_token, &founder, 9)
+        .await;
+    let (second_position, second_replay) = scenario.plane.owner_plane(second.pubkey());
+    scenario
+        .send(
+            &[
+                budget(FIRST_ENDOW_UNITS),
+                scenario.endow_for(
+                    second.pubkey(),
+                    second_token,
+                    second_position.address,
+                    second_replay.address,
+                    0,
+                    9,
+                ),
+            ],
+            &[&second],
+        )
+        .await;
+
+    let founder_free = CASH_ATOMS - RESERVED_CASH_ATOMS;
+    scenario
+        .send(
+            &[budget(SEAM_UNITS), scenario.withdraw(0, founder_free)],
+            &[&founder],
+        )
+        .await;
+    scenario
+        .send(
+            &[
+                budget(SEAM_UNITS),
+                scenario.withdraw_for(
+                    second.pubkey(),
+                    second_token,
+                    second_position.address,
+                    second_replay.address,
+                    1,
+                    9,
+                ),
+            ],
+            &[&second],
+        )
+        .await;
+
+    let founder_position = scenario.position().await;
+    let second_position_state =
+        PositionAccount::decode(&scenario.data(second_position.address).await)
+            .expect("second position decodes");
+    assert_eq!(founder_position.cash_atoms, RESERVED_CASH_ATOMS);
+    assert_eq!(founder_position.reserved_cash_atoms, RESERVED_CASH_ATOMS);
+    assert_eq!(second_position_state.cash_atoms, 0);
+    assert_eq!(scenario.amount(second_token).await, 9);
+    assert_eq!(
+        scenario.amount(hoard_token).await,
+        initial_hoard + 5 + 9 - founder_free - 9,
+        "the five-atom donation remains in pooled custody and is not withdrawable"
+    );
+    assert_eq!(scenario.hoard_atoms().await, FUNDED_SETS);
 }
 
 /// **The whole cycle, with both legs and a holder who is not the actor.**
