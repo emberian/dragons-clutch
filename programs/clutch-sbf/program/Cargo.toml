@@ -52,6 +52,7 @@ solana-program-error = "=3.0.1"
 # unsafe first-party syscall boundary and the prohibitive compute cost of the
 # dependency-free software hasher used by the portable layout crate.
 solana-sha256-hasher = { version = "=3.1.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
 
 # `solana-pubkey` is taken with default features off on every target.  Under
 # `target_os = "solana"` program-address derivation is a runtime syscall and

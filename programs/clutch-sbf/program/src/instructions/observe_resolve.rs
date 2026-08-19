@@ -970,6 +970,8 @@ fn fold_feed_page(page: &FeedPage<'_>) -> Gate<Summary> {
 struct MarketHead {
     market: Hash32,
     realm: Hash32,
+    profile: Hash32,
+    terms: Hash32,
     feed: Hash32,
     outcome_count: u8,
     lifecycle: u8,
@@ -983,6 +985,8 @@ fn market_head(bytes: &[u8]) -> Gate<MarketHead> {
     Ok(MarketHead {
         market: value.market,
         realm: value.realm,
+        profile: value.profile,
+        terms: value.terms,
         feed: value.feed,
         outcome_count: value.outcome_count,
         lifecycle: value.lifecycle,
@@ -1324,6 +1328,52 @@ fn payout_set_binds_terms(kernel_bytes: &[u8], terms_bytes: &[u8]) -> Gate<()> {
     let mut kernel = ZERO_KERNEL;
     load_kernel(kernel_bytes, &mut kernel)?;
     require_payout_set(&kernel, &terms)
+}
+
+/// ResolutionWork-only one-load Terms join. The ordinary monolithic path
+/// keeps its established helpers; this seam combines the same immutable-Terms
+/// comparisons with the payout-set check in the frame that already owns the
+/// sole full Terms decode, avoiding three redundant 1,656-byte loads during
+/// Finalize.
+#[inline(never)]
+fn resolution_work_terms_and_payouts(
+    kernel_bytes: &[u8],
+    terms_bytes: &[u8],
+    market: &MarketHead,
+    record: &OccupationResolutionAccount,
+    expected: &OccupationResolutionAccount,
+    terms_bump: u8,
+) -> Gate<TermsHead> {
+    let mut terms = ZERO_TERMS;
+    load_terms(terms_bytes, &mut terms)?;
+    if terms.stored_bump != terms_bump {
+        return Err(ReferenceError::WrongBump);
+    }
+    if market.terms != terms.terms
+        || market.realm != terms.realm
+        || market.profile != terms.profile
+        || market.feed != terms.feed
+        || market.outcome_count != terms.outcome_count
+    {
+        return Err(ReferenceError::TermsBindingMismatch);
+    }
+    record
+        .binds_terms_fields(&terms)
+        .map_err(|_| ReferenceError::ResolutionBindingMismatch)?;
+    expected
+        .binds_terms_fields(&terms)
+        .map_err(|_| ReferenceError::ResolutionBindingMismatch)?;
+    let mut kernel = ZERO_KERNEL;
+    load_kernel(kernel_bytes, &mut kernel)?;
+    require_payout_set(&kernel, &terms)?;
+    Ok(TermsHead {
+        terms: terms.terms,
+        feed: terms.feed,
+        payout_count: terms.payout_count,
+        basis_degree: terms.basis_degree,
+        statistic: terms.statistic_id,
+        repair_generation: terms.repair_generation,
+    })
 }
 
 #[inline(never)]
@@ -2191,7 +2241,7 @@ fn apply_market_resolution(
             state,
             plane,
             bumps,
-            *candidate,
+            OccupationCandidate::Preflight(*candidate),
             signer,
             sequence,
             requested_payout,
@@ -2521,16 +2571,39 @@ fn apply_native_market_resolution(
 /// The candidate is derived only from the once-verified canonical archive in
 /// the account plane.  No caller projection, midpoint, preset lookup, or point
 /// statistic enters this transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OccupationCandidate {
+    /// Current monolithic archive preflight.
+    Preflight(NativeWindowPreflightV1),
+    /// Canonical v4 record staged by complete ResolutionWork.
+    Resolution(OccupationResolutionAccount),
+}
+
+/// Recheck a v4 candidate against the complete immutable Terms bytes in a
+/// frame that owns neither Market/kernel state nor another resolution image.
+#[inline(never)]
+fn occupation_record_binds_terms(
+    record: &OccupationResolutionAccount,
+    terms_bytes: &[u8],
+) -> Gate<()> {
+    let mut full_terms = ZERO_TERMS;
+    load_terms(terms_bytes, &mut full_terms)?;
+    record
+        .binds_terms_fields(&full_terms)
+        .map_err(|_| ReferenceError::ResolutionBindingMismatch)
+}
+
 #[inline(never)]
 fn apply_occupation_market_resolution(
     state: &mut ResolveStateSlices<'_>,
     plane: &EvidencePlane<'_>,
     bumps: &ResolveBumps,
-    candidate: NativeWindowPreflightV1,
+    candidate: OccupationCandidate,
     signer: bool,
     sequence: u64,
     requested_payout: u8,
 ) -> Gate<ResolveOutput> {
+    let allow_repeat = matches!(candidate, OccupationCandidate::Preflight(_));
     let market = market_head(state.market)?;
     let hoard = HoardAccount::decode(state.hoard)?;
     let kernel = kernel_head(state.kernel)?;
@@ -2582,13 +2655,6 @@ fn apply_occupation_market_resolution(
         return Err(ReferenceError::PayoutIndexMismatch);
     }
 
-    let terms = terms_binds_market(state.market, plane.terms, bumps.terms)?;
-    if !(1..=3).contains(&terms.basis_degree) || !is_occupation_statistic(terms.statistic) {
-        return Err(ReferenceError::Resolution(
-            ResolutionRefusal::WrongResolutionMode,
-        ));
-    }
-    payout_set_binds_terms(state.kernel, plane.terms)?;
     let record = OccupationResolutionAccount::decode(plane.resolution)?;
     if record.stored_bump != bumps.resolution {
         return Err(ReferenceError::WrongBump);
@@ -2596,12 +2662,26 @@ fn apply_occupation_market_resolution(
     if record.market != market.market {
         return Err(ReferenceError::ResolutionBindingMismatch);
     }
-    {
-        let mut full_terms = ZERO_TERMS;
-        load_terms(plane.terms, &mut full_terms)?;
-        record
-            .binds_terms_fields(&full_terms)
-            .map_err(|_| ReferenceError::ResolutionBindingMismatch)?;
+    let terms = match candidate {
+        OccupationCandidate::Preflight(_) => {
+            let terms = terms_binds_market(state.market, plane.terms, bumps.terms)?;
+            payout_set_binds_terms(state.kernel, plane.terms)?;
+            occupation_record_binds_terms(&record, plane.terms)?;
+            terms
+        }
+        OccupationCandidate::Resolution(expected) => resolution_work_terms_and_payouts(
+            state.kernel,
+            plane.terms,
+            &market,
+            &record,
+            &expected,
+            bumps.terms,
+        )?,
+    };
+    if !(1..=3).contains(&terms.basis_degree) || !is_occupation_statistic(terms.statistic) {
+        return Err(ReferenceError::Resolution(
+            ResolutionRefusal::WrongResolutionMode,
+        ));
     }
     native_kernel_invariants(
         state.kernel,
@@ -2610,53 +2690,59 @@ fn apply_occupation_market_resolution(
         plane.resolution,
     )?;
 
+    let already_resolved = record.is_resolved();
+    let expected = match candidate {
+        OccupationCandidate::Preflight(candidate) => OccupationResolutionAccount {
+            market: market.market,
+            terms: terms.terms,
+            feed: terms.feed,
+            window: candidate.window(),
+            feed_cursor: candidate.sealed_feed_cursor(),
+            sealed_end_bucket_exclusive: candidate.end_bucket_exclusive(),
+            repair_generation: candidate.repair_generation(),
+            resolved_slot: if already_resolved {
+                record.resolved_slot
+            } else {
+                plane.resolved_slot
+            },
+            mode: RESOLUTION_MODE_DERIVED_QUANTIZED_OCCUPATION,
+            payout_index: PAYOUT_INDEX_UNRESOLVED,
+            outcome_count: market.outcome_count,
+            resolved_value: 0,
+            vector: candidate.vector(),
+            archive_commitment: candidate.archive_commitment(),
+            statistic: candidate.statistic(),
+            finalization: candidate.finalization().wire_id(),
+            basis_evaluator_version: candidate.basis_evaluator_version(),
+            occupation_summary_version: candidate.occupation_summary_version(),
+            sample_count: candidate.sample_count(),
+            coverage_count: candidate.coverage_count(),
+            gap_count: candidate.gap_count(),
+            stored_bump: bumps.resolution,
+            flags: 0,
+            reserved: 0,
+        },
+        OccupationCandidate::Resolution(mut candidate) => {
+            if already_resolved {
+                candidate.resolved_slot = record.resolved_slot;
+            }
+            candidate
+        }
+    };
     if sequence != terms.repair_generation
-        || sequence != candidate.repair_generation()
-        || candidate.terms() != terms.terms
-        || candidate.feed() != terms.feed
-        || candidate.window() != plane.window_id
-        || candidate.statistic() != terms.statistic
+        || expected.repair_generation != terms.repair_generation
+        || expected.market != market.market
+        || expected.terms != terms.terms
+        || expected.feed != terms.feed
+        || expected.window != plane.window_id
+        || expected.statistic != terms.statistic
+        || expected.stored_bump != bumps.resolution
+        || (!already_resolved && expected.resolved_slot != plane.resolved_slot)
     {
         return Err(ReferenceError::ResolutionBindingMismatch);
     }
-
-    let already_resolved = record.is_resolved();
-    let expected = OccupationResolutionAccount {
-        market: market.market,
-        terms: terms.terms,
-        feed: terms.feed,
-        window: candidate.window(),
-        feed_cursor: candidate.sealed_feed_cursor(),
-        sealed_end_bucket_exclusive: candidate.end_bucket_exclusive(),
-        repair_generation: candidate.repair_generation(),
-        resolved_slot: if already_resolved {
-            record.resolved_slot
-        } else {
-            plane.resolved_slot
-        },
-        mode: RESOLUTION_MODE_DERIVED_QUANTIZED_OCCUPATION,
-        payout_index: PAYOUT_INDEX_UNRESOLVED,
-        outcome_count: market.outcome_count,
-        resolved_value: 0,
-        vector: candidate.vector(),
-        archive_commitment: candidate.archive_commitment(),
-        statistic: candidate.statistic(),
-        finalization: candidate.finalization().wire_id(),
-        basis_evaluator_version: candidate.basis_evaluator_version(),
-        occupation_summary_version: candidate.occupation_summary_version(),
-        sample_count: candidate.sample_count(),
-        coverage_count: candidate.coverage_count(),
-        gap_count: candidate.gap_count(),
-        stored_bump: bumps.resolution,
-        flags: 0,
-        reserved: 0,
-    };
-    {
-        let mut full_terms = ZERO_TERMS;
-        load_terms(plane.terms, &mut full_terms)?;
-        expected
-            .binds_terms_fields(&full_terms)
-            .map_err(|_| ReferenceError::ResolutionBindingMismatch)?;
+    if allow_repeat {
+        occupation_record_binds_terms(&expected, plane.terms)?;
     }
     let mut resolution_bytes = [0_u8; OCCUPATION_RESOLUTION_LEN];
     expected.encode(&mut resolution_bytes)?;
@@ -2667,7 +2753,7 @@ fn apply_occupation_market_resolution(
                 state.kernel,
                 market.outcome_count,
                 hoard.collateral_atoms,
-                candidate.vector(),
+                expected.vector,
             )?;
             check_market_closure(market.outcome_count, &supply, &step.total_supply)?;
             write_market_lifecycle(state.market, 1)?;
@@ -2677,7 +2763,7 @@ fn apply_occupation_market_resolution(
                 repeated: false,
             })
         }
-        (1, 1, true) => {
+        (1, 1, true) if allow_repeat => {
             if kernel.resolved_payout != 0 || record != expected {
                 return Err(ReferenceError::ResolutionBindingMismatch);
             }
@@ -2686,6 +2772,7 @@ fn apply_occupation_market_resolution(
                 repeated: true,
             })
         }
+        (1, 1, true) => Err(ReferenceError::ResolutionAlreadyRecorded),
         (0, 0, true) => Err(ReferenceError::ResolutionAlreadyRecorded),
         _ => Err(ReferenceError::MismatchedState),
     }
@@ -3146,6 +3233,174 @@ fn resolve_global(
     )?;
     claim_truth::require_exact_mint_vector_delta(&observed, &observed_after, None)?;
     Ok(())
+}
+
+/// Apply one complete ResolutionWork candidate through the exact monolithic-v4
+/// Market/kernel/supply/mint transition.
+///
+/// The caller supplies no vector bytes: `candidate` was constructed from the
+/// program-owned accumulator. The immediately preceding Finalize preparation
+/// has already authenticated the canonical Terms, SourceSpec, and sealed
+/// SourceArchive in this same atomic invocation; this private seam rechecks the
+/// Market, Feed, Resolution PDA, kernel, supply, and observed outcome mints
+/// rather than hashing the source accounts a second time. It then shares
+/// [`apply_occupation_market_resolution`] with the monolithic path. Repeats are
+/// forbidden here because successful Finalize closes Work; a surviving Work
+/// must never become a second resolution authority.
+#[inline(never)]
+pub(crate) fn apply_resumable_occupation_candidate(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    candidate: OccupationResolutionAccount,
+    market: accounts::MarketFacts,
+    terms_bump: u8,
+    resolution_bump: u8,
+) -> Outcome<()> {
+    require(
+        accounts.len() >= OCCUPATION_RESOLVE_ACCOUNT_PREFIX,
+        ClutchError::AccountCount,
+    )?;
+    require_distinct(accounts)?;
+    accounts::validate_state_roles(program_id, accounts, &RESOLVE_STATE_ROLES)?;
+    validate_open_roles(
+        program_id,
+        accounts,
+        &[OpenRole {
+            index: IX_RESOLVE_TERMS,
+            len: account_len::TERMS,
+        }],
+    )?;
+    validate_open_roles(
+        program_id,
+        accounts,
+        &[OpenRole {
+            index: IX_RESOLVE_RESOLUTION,
+            len: OCCUPATION_RESOLUTION_LEN,
+        }],
+    )?;
+    require(
+        accounts.len() == OCCUPATION_RESOLVE_ACCOUNT_PREFIX + usize::from(market.outcome_count),
+        ClutchError::AccountCount,
+    )?;
+    let feed = accounts::read_feed(&accounts[IX_RESOLVE_FEED].data.borrow())?;
+    let market_bytes = market.market.bytes();
+    let market_pda = seeds::market_pda(program_id, &market.realm.bytes(), &market_bytes);
+    let hoard_pda = seeds::hoard_pda(program_id, &market_bytes);
+    let supply_pda = seeds::supply_pda(program_id, &market_bytes);
+    expect_pda(
+        accounts[IX_RESOLVE_MARKET].key,
+        market_pda,
+        Some(market.stored_bump),
+    )?;
+    expect_pda(
+        accounts[IX_RESOLVE_HOARD].key,
+        hoard_pda,
+        Some(market.hoard_bump),
+    )?;
+    expect_pda(
+        accounts[IX_RESOLVE_KERNEL].key,
+        seeds::kernel_pda(program_id, &market_bytes),
+        None,
+    )?;
+    expect_pda(accounts[IX_RESOLVE_SUPPLY].key, supply_pda, None)?;
+    expect_pda(
+        accounts[IX_RESOLVE_FEED].key,
+        seeds::feed_pda(program_id, &feed.feed.bytes()),
+        Some(feed.stored_bump),
+    )?;
+    require(feed.feed == market.feed, ClutchError::MismatchedState)?;
+
+    // `resolution_work::prepare_finalize_evidence` has just authenticated the
+    // canonical SourceSpec (including stored bump) and immutable sealed
+    // SourceArchive and derived this candidate from the bound Work. Repeating
+    // that archive verification here made Finalize exceed the transaction CU
+    // ceiling without adding an independent authority boundary: this private
+    // seam is callable only with that prepared candidate in the same atomic
+    // invocation.
+    require(
+        feed.cursor >= candidate.feed_cursor,
+        ClutchError::MismatchedState,
+    )?;
+
+    let observed = claim_truth::observe_outcome_mints(
+        program_id,
+        accounts,
+        OCCUPATION_RESOLVE_ACCOUNT_PREFIX,
+        *accounts[IX_RESOLVE_MARKET].key,
+        market.market,
+        market.outcome_count,
+        None,
+    )?;
+    let terms_data = accounts[IX_RESOLVE_TERMS].data.borrow();
+    let resolution_data = accounts[IX_RESOLVE_RESOLUTION].data.borrow();
+    let plane = EvidencePlane {
+        terms: &terms_data,
+        resolution: &resolution_data,
+        window: &[],
+        window_id: candidate.window,
+        feed_cursor: candidate.feed_cursor,
+        resolved_slot: candidate.resolved_slot,
+        terms_writable: accounts[IX_RESOLVE_TERMS].is_writable,
+        resolution_writable: accounts[IX_RESOLVE_RESOLUTION].is_writable,
+    };
+    let output = {
+        let mut market_data = borrow_mut!(accounts[IX_RESOLVE_MARKET])?;
+        let hoard_data = accounts[IX_RESOLVE_HOARD]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut kernel_data = borrow_mut!(accounts[IX_RESOLVE_KERNEL])?;
+        let mut supply_data = borrow_mut!(accounts[IX_RESOLVE_SUPPLY])?;
+        let mut state = ResolveStateSlices {
+            market: &mut market_data,
+            hoard: &hoard_data,
+            kernel: &mut kernel_data,
+            supply: &mut supply_data,
+        };
+        apply_occupation_market_resolution(
+            &mut state,
+            &plane,
+            &ResolveBumps {
+                market: market_pda.1,
+                hoard: hoard_pda.1,
+                supply: supply_pda.1,
+                terms: terms_bump,
+                resolution: resolution_bump,
+            },
+            OccupationCandidate::Resolution(candidate),
+            accounts[IX_RESOLVE_ACTOR].is_signer,
+            candidate.repair_generation,
+            PAYOUT_INDEX_UNRESOLVED,
+        )?
+    };
+    require(!output.repeated, ClutchError::Replay)?;
+    drop(resolution_data);
+    drop(terms_data);
+    {
+        let mut supply_data = borrow_mut!(accounts[IX_RESOLVE_SUPPLY])?;
+        let mut kernel_data = borrow_mut!(accounts[IX_RESOLVE_KERNEL])?;
+        claim_truth::synchronize_external_truth(
+            &mut supply_data,
+            &mut kernel_data,
+            market.market,
+            market.realm,
+            market.outcome_count,
+            &observed,
+        )?;
+    }
+    let mut record = borrow_mut!(accounts[IX_RESOLVE_RESOLUTION])?;
+    record.copy_from_slice(output.resolution.bytes());
+    drop(record);
+
+    let observed_after = claim_truth::observe_outcome_mints(
+        program_id,
+        accounts,
+        OCCUPATION_RESOLVE_ACCOUNT_PREFIX,
+        *accounts[IX_RESOLVE_MARKET].key,
+        market.market,
+        market.outcome_count,
+        None,
+    )?;
+    claim_truth::require_exact_mint_vector_delta(&observed, &observed_after, None)
 }
 
 /// Keep the large hostile Terms decode and bounded occupation summary out of

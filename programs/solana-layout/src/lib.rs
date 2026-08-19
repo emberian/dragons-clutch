@@ -21,6 +21,7 @@ pub mod native_resolution;
 pub mod occupation_resolution;
 pub mod portfolio_settlement;
 pub mod reservation;
+pub mod resolution_work;
 pub mod stream;
 
 /// Highest account schema version this build understands.
@@ -4354,6 +4355,14 @@ pub enum Intent {
     SelectDirectWindowV1 { market: MarketId, epoch: EpochId },
     /// Consume the selected direct entitlement exactly once.
     SettleDirectV2 { market: MarketId, epoch: EpochId },
+    /// Begin one deterministic, prepaid occupation-resolution work item.
+    BeginResolutionWork(resolution_work::BeginResolutionWorkV1),
+    /// Fold the exact next bounded archive chunk into program-owned work.
+    FoldResolutionWork(resolution_work::FoldResolutionWorkV1),
+    /// Finalize complete work into the sole canonical v4 Resolution.
+    FinalizeResolutionWork(resolution_work::FinalizeResolutionWorkV1),
+    /// Close work only through one of the narrowly safe abort paths.
+    AbortResolutionWork(resolution_work::AbortResolutionWorkV1),
     /// Bring one Realm namespace into existence.
     ///
     /// The Realm identity is not carried, because it is not a choice:
@@ -4581,6 +4590,24 @@ const SUBMIT_DIRECT_CANDIDATE_V2_TAG: u8 = 29;
 const SELECT_DIRECT_WINDOW_V1_TAG: u8 = 30;
 const SETTLE_DIRECT_V2_TAG: u8 = 31;
 
+fn resolution_work_codec(error: resolution_work::ResolutionWorkCodecError) -> CodecError {
+    use resolution_work::ResolutionWorkCodecError as WorkError;
+    match error {
+        WorkError::Truncated => CodecError::Truncated,
+        WorkError::TrailingBytes => CodecError::TrailingBytes,
+        WorkError::OutputTooSmall => CodecError::OutputTooSmall,
+        WorkError::WrongTag => CodecError::WrongTag,
+        WorkError::WrongVersion => CodecError::WrongVersion,
+        WorkError::ZeroIdentity => CodecError::ZeroIdentity,
+        WorkError::InvalidEnum => CodecError::InvalidEnum,
+        WorkError::InvalidCount | WorkError::InvalidWindow => CodecError::InvalidCount,
+        WorkError::MismatchedBinding => CodecError::MismatchedBinding,
+        WorkError::NonCanonicalPadding => CodecError::NonCanonicalPadding,
+        WorkError::ArithmeticOverflow => CodecError::ArithmeticOverflow,
+        WorkError::Underfunded => CodecError::ZeroValue,
+    }
+}
+
 impl Intent {
     /// Return the exact encoded byte length for this intent.
     pub const fn encoded_len(&self) -> usize {
@@ -4609,6 +4636,10 @@ impl Intent {
             | Self::SelectDirectWindowV1 { .. }
             | Self::SettleDirectV2 { .. } => 2 + 32 + 32,
             Self::SubmitDirectCandidateV2 { .. } => 2 + 32 + 32 + 8,
+            Self::BeginResolutionWork(value) => value.encoded_len(),
+            Self::FoldResolutionWork(value) => value.encoded_len(),
+            Self::FinalizeResolutionWork(value) => value.encoded_len(),
+            Self::AbortResolutionWork(value) => value.encoded_len(),
             Self::InitRealm { .. } => 2 + 32 + 8 + 1 + 1,
             Self::InitProfile { .. } => 2 + 32 + 32 + 2 + 1,
             Self::InitPriceGrid { .. } | Self::InitTerms { .. } => 2 + 32 + 32,
@@ -4893,6 +4924,18 @@ impl Intent {
                 w.hash(*market)?;
                 w.hash(*epoch)?
             }
+            Self::BeginResolutionWork(value) => {
+                return value.encode(out).map_err(resolution_work_codec)
+            }
+            Self::FoldResolutionWork(value) => {
+                return value.encode(out).map_err(resolution_work_codec)
+            }
+            Self::FinalizeResolutionWork(value) => {
+                return value.encode(out).map_err(resolution_work_codec)
+            }
+            Self::AbortResolutionWork(value) => {
+                return value.encode(out).map_err(resolution_work_codec)
+            }
             Self::InitRealm {
                 profile,
                 realm_nonce,
@@ -5091,6 +5134,29 @@ impl Intent {
             return Err(CodecError::Truncated);
         };
         let tag = input[0];
+        match tag {
+            resolution_work::BEGIN_RESOLUTION_WORK_TAG => {
+                return resolution_work::BeginResolutionWorkV1::decode(input)
+                    .map(Self::BeginResolutionWork)
+                    .map_err(resolution_work_codec)
+            }
+            resolution_work::FOLD_RESOLUTION_WORK_TAG => {
+                return resolution_work::FoldResolutionWorkV1::decode(input)
+                    .map(Self::FoldResolutionWork)
+                    .map_err(resolution_work_codec)
+            }
+            resolution_work::FINALIZE_RESOLUTION_WORK_TAG => {
+                return resolution_work::FinalizeResolutionWorkV1::decode(input)
+                    .map(Self::FinalizeResolutionWork)
+                    .map_err(resolution_work_codec)
+            }
+            resolution_work::ABORT_RESOLUTION_WORK_TAG => {
+                return resolution_work::AbortResolutionWorkV1::decode(input)
+                    .map(Self::AbortResolutionWork)
+                    .map_err(resolution_work_codec)
+            }
+            _ => {}
+        }
         let mut r = Reader::new(input, tag, INTENT_VERSION, input.len())?;
         match tag {
             CREATE_TAG => {
@@ -10004,7 +10070,7 @@ mod tests {
         b[66..74].fill(0);
         assert_eq!(Intent::decode(&b[..n]), Err(CodecError::ZeroValue));
         // A tag past the last one this version defines.
-        b[0] = SETTLE_DIRECT_V2_TAG + 1;
+        b[0] = resolution_work::ABORT_RESOLUTION_WORK_TAG + 1;
         assert_eq!(Intent::decode(&b[..n]), Err(CodecError::WrongTag));
     }
 

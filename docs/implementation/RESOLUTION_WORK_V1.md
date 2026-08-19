@@ -1,20 +1,20 @@
 # Resumable occupation resolution V1
 
-Status: **isolated executable MODEL / proposed architecture**
+Status: **executable model oracle plus routed live SBF V1 release candidate**
 
 Executable witness: `research/resolution-work-v1`
 
-Live instruction ABI: **not implemented**
+Live instruction ABI: **implemented at intent tags 32 through 35**
 
-Live account layout: **not implemented**
+Live account layout: **implemented at account tag 22, exactly 1,296 bytes**
 
-SBF compute/rent evidence: **not measured**
+SBF compute/rent evidence: **measured; see `RESOLUTION_WORK_SBF.md`**
 
 ## Decision
 
 A long native degree-0-through-3 occupation reduction should not be one
 all-or-nothing instruction and should not accept a caller-computed payout
-vector. The proposed architecture is an immutable, prepaid, cursor-bound state
+vector. The implemented architecture is an immutable, prepaid, cursor-bound state
 machine:
 
 ```text
@@ -43,8 +43,9 @@ gap meaning, final rounding rule, or payout vector.
 The model is safe Rust, `no_std`, allocation-free outside tests, float-free,
 fixed-width, and unpublished. It directly depends on the current
 `clutch-bspline` and `clutch-bspline-accumulator` semantics. It is deliberately
-isolated from the SBF program and layouts while those semantics and the source
-construction path are still moving.
+kept as a pure oracle beside the live SBF adapter: the model owns state-machine
+and accumulator semantics, while the adapter owns Solana accounts, rent,
+donations, CPIs, and transaction rollback.
 
 The trigger is measured, not speculative. On optimized monolithic commit
 `87d2dbd`, no initial occupation Resolve among measured spans 1 through 3 and
@@ -75,7 +76,7 @@ extrapolation to unmeasured spans, or a claim that every retry passes.
 - `ExactOnly` or `LargestRemainderV1` finalization;
 - the complete cost schedule digest;
 - payer, segregated prepaid-reserve identity, unique work nonce, opening slot,
-  and inclusive Fold expiry; and
+  and tightly bounded Fold expiry; and
 - a deposit covering locked rent plus the complete worst-case work lifecycle.
 
 The archive span must be nonempty and satisfy exactly:
@@ -86,8 +87,8 @@ record_count = end_bucket_exclusive - start_bucket
 
 The current SourceArchive V1 has an explicit 32-record capacity and a fixed
 2,560-byte account. Begin therefore refuses a span outside `1..=32`; there is
-no silent truncation. The independent per-Fold model bound is four records and
-must be replaced by the final measured live constant.
+no silent truncation. Both the model and live adapter bound each Fold to four
+records. The live compile-time lifetime is `8..=4096` slots from Begin.
 
 Counts are bounded by that exact admitted span. Each accepted bucket contributes
 at most one `u64` denominator of mass, so even the conservative product
@@ -105,13 +106,13 @@ validated `BasisDomain`, not only its digest.
 
 ### Begin trust boundary
 
-The executable model checks internal canonical bytes and relationships. It
-does **not** prove that a market, Terms account, SourceSpec, receipt, program
-owner, or PDA came from a live Solana program. A future adapter must load those
-objects from the exact expected owner and addresses, verify their canonical
-codecs and sealed lifecycle, and only then construct the modeled values. That
-adapter remains an unverified boundary until separately implemented and
-tested.
+The executable model checks internal canonical bytes and relationships. The
+live adapter additionally loads the exact Market, Terms, Resolution,
+SourceSpec, and SourceArchive accounts; verifies owners, lengths, canonical
+PDAs and stored bumps; authenticates the Terms digest and full sealed archive
+commitment; and freezes those facts into Work. The real-bank campaign covers a
+malformed stored SourceSpec bump and same-domain alternate-archive
+substitution. The model alone must not be cited as proof of this adapter layer.
 
 ## Fold: authenticate before advancing
 
@@ -141,11 +142,9 @@ Begin recomputes/authenticates the full current archive once. Fold deliberately
 does not rehash all 2,560 bytes: it relies on the program-owned terminal seal.
 The executable archive model has private fields; `append` is its only record
 mutator and atomically refuses after `seal`; there is no unseal, replacement,
-or post-seal mutation API. The live integration must separately audit every
-instruction capable of writing a SourceArchive and prove that every such path
-refuses the sealed flag before mutation. If that closed-world invariant cannot
-be established, the optimization is unsound and Fold must reauthenticate the
-complete archive instead.
+or post-seal mutation API. The live write-surface audit finds only init,
+append, and seal; append and seal refuse an already sealed archive, and the
+router exposes no unseal or record-rewrite path.
 
 The fold clones the internal validated accumulator and funding ledger, verifies
 and evaluates the complete chunk, computes checked costs, and commits all
@@ -153,7 +152,7 @@ fields only after every check succeeds. Authenticated `Missing` records advance
 the cursor and add a gap; they never contribute payout mass. An authenticated
 `Accepted(point)` can still be refused by the frozen basis edge policy. Either
 failure leaves cursor, summary, counters, and funds byte-for-byte unchanged.
-This exact no-caller-record rule is the live proposal.
+This exact no-caller-record rule is the live ABI.
 
 ## Finalize: exact end, one canonical write
 
@@ -273,15 +272,21 @@ charge and caller reward are debited from the frozen prepaid ledger. This
 prevents the state machine from assuming future fees, Hoard principal, market
 collateral, an operator, or a benevolent caller.
 
-`CostScheduleV1.work_state_bytes` and `rent_reserve` are explicit placeholders
-so a future adapter cannot hide these inputs. Before any live ABI proposal they
-must be replaced with reproducible measurements of the final codec, exact
-account allocation, rent rules, transaction account set, compute distribution,
-priority-fee policy, and close/refund behavior.
+`CostScheduleV1.work_state_bytes` and `rent_reserve` remain explicit abstract
+model inputs. The live adapter instantiates them with a compile-time policy:
+1,296-byte Work rent plus zero-data Reserve rent, 1,160,000 lamports per Fold
+call, 1,510,000 for Finalize, 860,000 for Abort, and zero charges. Under
+`Rent::default()` its exact rent principal is 10,801,920 lamports and
+`minimum_deposit(n) = 12,311,920 + n * 1,160,000`; the maximum 32-record
+deposit is 49,431,920. Unsolicited pre- or post-Begin surplus is tracked
+separately as monotone donation, can never satisfy a shortfall or subsidize a
+reward, and goes only to the canonical SDK incinerator at terminal close. Both
+Work and Reserve close; exactly the locked principal and unused prepaid budget
+return to the immutable payer.
 
-### Proposed semantic ABI cut (not yet a live discriminator)
+### Live semantic ABI
 
-The isolated Rust API fixes the instruction-data authority boundary:
+The model and live adapter share this instruction-data authority boundary:
 
 ```text
 BeginV1:
@@ -289,14 +294,14 @@ BeginV1:
   declared_deposit:u64, cost_schedule_digest[32]
 
 FoldV1:
-  work_id[32], archive_account[32], archive_commitment[32],
+  work_commitment[32], archive_account[32], archive_commitment[32],
   expected_cursor:u64, record_count:u8
 
 FinalizeV1:
-  work_id[32], expected_cursor:u64, expected_archive_commitment[32]
+  work_commitment[32], expected_cursor:u64, expected_archive_commitment[32]
 
 AbortV1:
-  work_id[32], expected_cursor:u64, expected_archive_commitment[32]
+  work_commitment[32], expected_cursor:u64, expected_archive_commitment[32]
 ```
 
 No record, observation, mass, weight, archive receipt, or payout vector is
@@ -304,9 +309,12 @@ instruction data. Account-derived identities are repeated only as optimistic
 concurrency/replay guards and must equal the loaded accounts. Clock comes from
 the Clock sysvar, deposit comes from the actual reserve transfer, and final
 costs come from the stored schedule; caller duplicates never override them.
-Numeric tags, reserved bytes, exact encoded lengths, PDA seeds, and the final
-account ordering remain layout-owner work and must be frozen by hostile codec
-tests before dispatch.
+The common envelope uses account tag 22 and intent tags 32 through 35. Exact
+body lengths are 83, 107, 74, and 74 bytes respectively. Deterministic accounts
+are `PDA("resolution-work-v1", market)` and
+`PDA("resolution-reserve-v1", market, Work)`. Hostile codec and collision tests
+freeze tags, lengths, reserved bytes, status, cost digest, TTL, and funding
+invariants.
 
 The Work account must persist exactly one semantic owner for:
 
@@ -317,7 +325,7 @@ SourceSpec/archive domain/generation/grid/duration/window/count;
 BasisSpec artifact bytes+digest and evaluator/summary versions;
 finalization mode; cursor/fold count/completion slot;
 sample/coverage counts and 16 checked u128 masses;
-cost schedule+digest; deposit/rent/remaining/charges/rewards; bump/reserved bytes.
+cost schedule+digest; donation/rent/remaining/charges/rewards; bump/reserved bytes.
 ```
 
 Work is a transparent program-owned account, not confidential state. On
@@ -326,21 +334,21 @@ transfers, validates the complete post-state, writes Resolution, clears the
 Market's active-work lock, and closes Work/reserve atomically. On Abort it
 clears only the active-work lock and closes/refunds; it cannot write Resolution.
 
-### Proposed account-role envelope (not a count claim)
+### Live account-role envelope
 
-The minimum semantic roles are:
+The exact ordered roles are:
 
 | Transition | Read-only authority | Mutable semantic owner | Transfer roles |
 |---|---|---|---|
-| Begin | Realm/Market/Terms, SourceSpec, exact sealed SourceArchive | Market active-work lock, new ResolutionWork | payer, prepaid reserve, system/rent machinery |
-| Fold | same exact sealed SourceArchive, Clock | exact ResolutionWork | prepaid reserve, worker reward destination |
-| Finalize | Market/Terms, Clock | Market lock, ResolutionWork, unique Resolution target | prepaid reserve, finalizer, payer refund |
-| Abort | Market, Clock | Market lock, ResolutionWork | prepaid reserve, aborter, payer refund |
+| Begin | 11: payer, Market, Terms, Resolution, SourceSpec, SourceArchive, Work, Reserve, System, Rent, Clock |
+| Fold | 8: worker, Market, Terms, SourceSpec, SourceArchive, Work, Reserve, Clock |
+| Finalize | `15 + outcome_count`: monolithic prefix 10 plus outcome mints, payer, Work, Reserve, canonical incinerator, Clock |
+| Abort | 8: caller, payer, Market, Terms, Work, Reserve, canonical incinerator, Clock |
 
-This table names ownership and authorization relationships only. It is not a
-Solana account count, message-size result, CPI budget, write-lock estimate, or
-rent measurement. The current proposal uses the one existing sealed archive
-account directly and no auxiliary archive-data account.
+Every role has exact signer, writable, owner, length, PDA, and alias checks.
+Terminal roles contain no redundant System program. The live adapter uses the
+one existing sealed archive account directly and no auxiliary archive-data
+account.
 
 ## Differential and adversarial evidence
 
@@ -447,28 +455,29 @@ append-time side effect.
 
 ## Explicit release stops
 
-This model does **not** establish any of the following:
+The routed ResolutionWork candidate now establishes the live ABI/layout, exact
+rent and reward schedule, deterministic lock/recovery behavior, sealed-source
+authentication, full-byte monolithic v4 equivalence, late rollback, donation
+segregation, and real-SBF Begin/Fold/Finalize/Abort rows documented in
+`RESOLUTION_WORK_SBF.md`. The following remain explicit stops or scope limits:
 
-- a live Begin/Fold/Finalize/Abort instruction discriminator or byte codec;
-- live account ownership, PDA seeds, account count, message size, rent, stack,
-  heap, compute-unit, lock-contention, or retry evidence;
-- a committed live Work codec or proof that every program path preserves the
-  current SourceArchive V1 post-seal immutability invariant;
-- permissionless work funding on a deployed cluster;
-- a market-level response to complete gaps or exact-only refusal;
-- atomic interaction with Token-2022 supply, mint authority, claim settlement,
-  redemption, or resolution replay;
-- a shared summary-cache account, funding rule, or reclamation policy;
-- formal verification of the state machine or hash construction; or
-- permission to accept an unchecked offchain payout or mass vector.
+- the final policy ELF still requires the independent final-LTO stack audit;
+- route-level evidence is not permission to call the entire deployment live;
+  source release, direct selection, and system-wide liveness retain independent
+  gates;
+- the measured spans and degrees do not justify interpolation or extrapolation;
+- the current SourceArchive has no authenticated gap-record encoding, so the
+  live adapter refuses genuine intervals rather than silently capping them;
+- V1 charges are zero and makes no nonzero charge-disposition claim;
+- no shared BasisDomain cache account, funding rule, or reclamation policy is
+  implemented;
+- the state machine and hash constructions are executable refinements, not a
+  formal proof; and
+- no path may accept an unchecked off-chain payout, mass vector, record bytes,
+  or proof material.
 
-No live ABI or CU claim should cite this model. Before integration, the final
-source/archive representation must stabilize; the Work codec must be designed
-against it; account and funding equations must be instantiated;
-all hostile default-program paths must fail closed; full SBF and rollback tests
-must pass; and the resulting exact artifact must be re-audited. Until then the
-current one-shot occupation path retains its measured admission status, and
-resumable work remains a candidate architecture rather than shipped semantics.
+Claims about live ABI, rent, accounts, compute, or rollback must cite the SBF
+evidence document and its exact artifact, not the model alone.
 
 ## Reproduction
 

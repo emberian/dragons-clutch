@@ -54,7 +54,7 @@ impl ArchiveFixture {
     fn fold_request(&self, work: &ResolutionWorkV1, offset: usize, count: usize) -> FoldRequestV1 {
         assert!(count <= MAX_FOLD_RECORDS);
         FoldRequestV1 {
-            work_id: work.work_id(),
+            work_commitment: work.work_commitment(),
             archive_account: self.receipt.archive_account,
             archive_digest: self.receipt.archive_digest,
             expected_cursor: self.records[offset].bucket,
@@ -441,7 +441,7 @@ fn wrong_cursor_bounds_identity_and_replay_are_atomic() {
     assert_eq!(work, before);
 
     let mut wrong_work = fixture.fold_request(&work, 0, 1);
-    wrong_work.work_id = id(0xee);
+    wrong_work.work_commitment = id(0xee);
     let before = work.clone();
     assert_eq!(
         work.fold(wrong_work, &fixture.archive, id(0x50), 110),

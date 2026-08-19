@@ -37,13 +37,14 @@
 
 pub mod artifact;
 pub mod cash_exit;
-pub mod direct_selection;
 pub mod construction;
+pub mod direct_selection;
 pub mod external_exit;
 pub mod genesis;
 pub mod market_init;
 pub mod merge_materialize;
 pub mod observe_resolve;
 pub mod orders_batch;
+pub mod resolution_work;
 pub mod source_ingest;
 pub mod split;

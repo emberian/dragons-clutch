@@ -106,6 +106,10 @@ pub const SEED_DIRECT_POT: &[u8] = b"dragons-clutch:direct-pot:v2";
 pub const SEED_SOURCE_SPEC: &[u8] = crate::source_archive::SOURCE_SPEC_SEED_V1;
 /// Per-window authenticated source-archive account seed prefix.
 pub const SEED_SOURCE_ARCHIVE: &[u8] = crate::source_archive::SOURCE_ARCHIVE_SEED_V1;
+/// One deterministic active ResolutionWork lock per Market.
+pub const SEED_RESOLUTION_WORK: &[u8] = b"resolution-work-v1";
+/// Program-owned prepaid Reserve bound to one deterministic Work PDA.
+pub const SEED_RESOLUTION_RESERVE: &[u8] = b"resolution-reserve-v1";
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -186,6 +190,20 @@ pub fn source_spec_pda(program_id: &Pubkey, feed: &[u8; 32]) -> (Pubkey, u8) {
 /// Canonical sealed source-archive address and bump for one exact window.
 pub fn source_archive_pda(program_id: &Pubkey, feed: &[u8; 32], window: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_SOURCE_ARCHIVE, feed, window])
+}
+
+/// Canonical single-active-work address for one Market.
+pub fn resolution_work_pda(program_id: &Pubkey, market: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_RESOLUTION_WORK, market])
+}
+
+/// Canonical prepaid Reserve for one Market and its deterministic Work PDA.
+pub fn resolution_reserve_pda(
+    program_id: &Pubkey,
+    market: &[u8; 32],
+    work: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_RESOLUTION_RESERVE, market, work])
 }
 
 /// Canonical immutable-terms address and bump.

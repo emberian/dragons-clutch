@@ -42,7 +42,7 @@ use crate::accounts::Outcome;
 use crate::error::ClutchError;
 use crate::instructions::{
     artifact, cash_exit, direct_selection, external_exit, genesis, market_init, merge_materialize,
-    observe_resolve, orders_batch, source_ingest, split,
+    observe_resolve, orders_batch, resolution_work, source_ingest, split,
 };
 use clutch_solana_layout::Intent;
 use clutch_solana_reference::{Action, Request};
@@ -70,6 +70,7 @@ enum Route {
     Genesis,
     SourceIngest,
     DirectSelection,
+    ResolutionWork,
     DecodeOnly,
 }
 
@@ -111,6 +112,10 @@ const INTENT_FREEZE_DIRECT_EPOCH_V3_HINT: u8 = 28;
 const INTENT_SUBMIT_DIRECT_CANDIDATE_V2_HINT: u8 = 29;
 const INTENT_SELECT_DIRECT_WINDOW_V1_HINT: u8 = 30;
 const INTENT_SETTLE_DIRECT_V2_HINT: u8 = 31;
+const INTENT_BEGIN_RESOLUTION_WORK_HINT: u8 = 32;
+const INTENT_FOLD_RESOLUTION_WORK_HINT: u8 = 33;
+const INTENT_FINALIZE_RESOLUTION_WORK_HINT: u8 = 34;
+const INTENT_ABORT_RESOLUTION_WORK_HINT: u8 = 35;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
@@ -156,6 +161,12 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_SELECT_DIRECT_WINDOW_V1_HINT
                 | INTENT_SETTLE_DIRECT_V2_HINT,
             ) => Route::DirectSelection,
+            Some(
+                INTENT_BEGIN_RESOLUTION_WORK_HINT
+                | INTENT_FOLD_RESOLUTION_WORK_HINT
+                | INTENT_FINALIZE_RESOLUTION_WORK_HINT
+                | INTENT_ABORT_RESOLUTION_WORK_HINT,
+            ) => Route::ResolutionWork,
             _ => Route::DecodeOnly,
         },
         Some(ACTION_RESOLVE_HINT | ACTION_REDEEM_INTERNAL_HINT) => Route::ObserveResolve,
@@ -188,6 +199,7 @@ pub fn process(
         Route::Genesis => process_genesis(program_id, accounts, instruction_data),
         Route::SourceIngest => process_source_ingest(program_id, accounts, instruction_data),
         Route::DirectSelection => process_direct_selection(program_id, accounts, instruction_data),
+        Route::ResolutionWork => process_resolution_work(program_id, accounts, instruction_data),
         Route::DecodeOnly => decode_only(instruction_data),
     }
 }
@@ -387,6 +399,24 @@ fn process_direct_selection(
 }
 
 #[inline(never)]
+fn process_resolution_work(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request = Request::decode(instruction_data)?;
+    match request.action {
+        Action::Layout(Intent::BeginResolutionWork(_))
+        | Action::Layout(Intent::FoldResolutionWork(_))
+        | Action::Layout(Intent::FinalizeResolutionWork(_))
+        | Action::Layout(Intent::AbortResolutionWork(_)) => {
+            resolution_work::process(program_id, accounts, &request)
+        }
+        _ => unexpected_route(),
+    }
+}
+
+#[inline(never)]
 fn decode_only(instruction_data: &[u8]) -> Outcome<()> {
     match Request::decode(instruction_data) {
         Err(error) => Err(error.into()),
@@ -415,7 +445,12 @@ mod tests {
     use crate::error::Refusal;
     use clutch_solana_layout::{
         artifact::{ArtifactKind, ARTIFACT_CHUNK_BYTES},
-        canonical_order_id, Hash32, Intent, OrderRecord, OrderSlot, MAX_INTENT_BYTES, MAX_OUTCOMES,
+        canonical_order_id,
+        resolution_work::{
+            AbortResolutionWorkV1, BeginResolutionWorkV1, FinalizeResolutionWorkV1,
+            FoldResolutionWorkV1, FINALIZATION_EXACT_ONLY,
+        },
+        Hash32, Intent, OrderRecord, OrderSlot, MAX_INTENT_BYTES, MAX_OUTCOMES,
     };
     use clutch_solana_reference::Error as ReferenceError;
     use solana_program_error::ProgramError;
@@ -720,6 +755,42 @@ mod tests {
                     epoch: hash(2),
                 },
                 Route::DirectSelection,
+            ),
+            (
+                Intent::BeginResolutionWork(BeginResolutionWorkV1 {
+                    work_nonce: [8; 32],
+                    finalization_mode: FINALIZATION_EXACT_ONLY,
+                    expires_slot: 200,
+                    declared_deposit: 1,
+                    cost_schedule_digest: [9; 32],
+                }),
+                Route::ResolutionWork,
+            ),
+            (
+                Intent::FoldResolutionWork(FoldResolutionWorkV1 {
+                    work_commitment: [1; 32],
+                    archive_account: [2; 32],
+                    archive_commitment: [3; 32],
+                    expected_cursor: 4,
+                    record_count: 1,
+                }),
+                Route::ResolutionWork,
+            ),
+            (
+                Intent::FinalizeResolutionWork(FinalizeResolutionWorkV1 {
+                    work_commitment: [1; 32],
+                    expected_cursor: 4,
+                    expected_archive_commitment: [3; 32],
+                }),
+                Route::ResolutionWork,
+            ),
+            (
+                Intent::AbortResolutionWork(AbortResolutionWorkV1 {
+                    work_commitment: [1; 32],
+                    expected_cursor: 4,
+                    expected_archive_commitment: [3; 32],
+                }),
+                Route::ResolutionWork,
             ),
         ]
     }

@@ -1,9 +1,6 @@
 #![forbid(unsafe_code)]
 
-#[path = "../src/resolution_work.rs"]
-mod resolution_work;
-
-use resolution_work::*;
+use clutch_solana_layout::{resolution_work::*, Intent, MAX_INTENT_BYTES};
 
 fn id(byte: u8) -> [u8; HASH_BYTES] {
     [byte; HASH_BYTES]
@@ -53,7 +50,7 @@ fn account() -> ResolutionWorkAccountV1 {
     masses[1] = 128;
     masses[2] = 129;
     ResolutionWorkAccountV1 {
-        work_id: id(1),
+        work_commitment: id(1),
         payer: id(2),
         prepaid_reserve: id(3),
         work_nonce: id(4),
@@ -85,7 +82,7 @@ fn account() -> ResolutionWorkAccountV1 {
         costs: costs(),
         cost_schedule_digest: id(15),
         funding: ResolutionWorkFundingV1 {
-            deposited: 200,
+            donation_lamports: 0,
             rent_locked: 100,
             prepaid_remaining: 90,
             charges_paid: 7,
@@ -106,7 +103,7 @@ fn account() -> ResolutionWorkAccountV1 {
 }
 
 #[test]
-fn proposed_tags_do_not_collide_with_the_committed_registry_at_isolation() {
+fn live_tags_do_not_collide_with_the_committed_registry() {
     // Account tags committed when this isolated codec was cut. Artifact-stage
     // tag 0x21 (33) is intentionally included even though the dense account
     // registry otherwise ends at direct-window tag 21.
@@ -126,6 +123,57 @@ fn proposed_tags_do_not_collide_with_the_committed_registry_at_isolation() {
         assert!(!proposed_intent_tags.contains(&committed));
     }
     assert_eq!(proposed_intent_tags, [32, 33, 34, 35]);
+}
+
+#[test]
+fn common_intent_envelope_round_trips_every_work_action() {
+    let actions = [
+        Intent::BeginResolutionWork(BeginResolutionWorkV1 {
+            work_nonce: id(1),
+            finalization_mode: FINALIZATION_EXACT_ONLY,
+            expires_slot: 100,
+            declared_deposit: 200,
+            cost_schedule_digest: id(2),
+        }),
+        Intent::FoldResolutionWork(FoldResolutionWorkV1 {
+            work_commitment: id(3),
+            archive_account: id(4),
+            archive_commitment: id(5),
+            expected_cursor: 7,
+            record_count: MAX_FOLD_RECORDS_V1,
+        }),
+        Intent::FinalizeResolutionWork(FinalizeResolutionWorkV1 {
+            work_commitment: id(3),
+            expected_cursor: 11,
+            expected_archive_commitment: id(5),
+        }),
+        Intent::AbortResolutionWork(AbortResolutionWorkV1 {
+            work_commitment: id(3),
+            expected_cursor: 9,
+            expected_archive_commitment: id(5),
+        }),
+    ];
+    let lengths = [
+        BEGIN_RESOLUTION_WORK_BYTES,
+        FOLD_RESOLUTION_WORK_BYTES,
+        FINALIZE_RESOLUTION_WORK_BYTES,
+        ABORT_RESOLUTION_WORK_BYTES,
+    ];
+    for (intent, length) in actions.into_iter().zip(lengths) {
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let encoded = intent.encode(&mut bytes).unwrap();
+        assert_eq!(encoded, length);
+        assert_eq!(intent.encoded_len(), length);
+        assert_eq!(Intent::decode(&bytes[..encoded]), Ok(intent));
+        assert_eq!(
+            Intent::decode(&bytes[..encoded - 1]),
+            Err(clutch_solana_layout::CodecError::Truncated)
+        );
+        assert_eq!(
+            Intent::decode(&bytes[..encoded + 1]),
+            Err(clutch_solana_layout::CodecError::TrailingBytes)
+        );
+    }
 }
 
 #[test]
@@ -213,6 +261,12 @@ fn cursor_count_order_completion_and_lifetime_mutants_refuse() {
         value.validate(),
         Err(ResolutionWorkCodecError::InvalidWindow)
     );
+    value = account();
+    value.expires_slot = value.opened_slot + RESOLUTION_WORK_MAX_LIFETIME_SLOTS_V1 + 1;
+    assert_eq!(
+        value.validate(),
+        Err(ResolutionWorkCodecError::InvalidWindow)
+    );
 
     value = account();
     value.next_bucket = value.end_bucket_exclusive;
@@ -278,7 +332,6 @@ fn checked_mass_basis_and_inactive_padding_mutants_refuse() {
 fn prefund_schedule_and_exact_ledger_are_not_advisory() {
     assert_eq!(costs().minimum_deposit(4).unwrap(), 130);
     let mut value = account();
-    value.funding.deposited = 129;
     value.funding.prepaid_remaining = 19;
     assert_eq!(value.validate(), Err(ResolutionWorkCodecError::Underfunded));
     value = account();
@@ -316,7 +369,7 @@ fn all_four_intents_round_trip_at_exact_pinned_lengths() {
     assert_eq!(BeginResolutionWorkV1::decode(&begin_bytes).unwrap(), begin);
 
     let fold = FoldResolutionWorkV1 {
-        work_id: id(3),
+        work_commitment: id(3),
         archive_account: id(4),
         archive_commitment: id(5),
         expected_cursor: 40,
@@ -327,7 +380,7 @@ fn all_four_intents_round_trip_at_exact_pinned_lengths() {
     assert_eq!(FoldResolutionWorkV1::decode(&fold_bytes).unwrap(), fold);
 
     let finalize = FinalizeResolutionWorkV1 {
-        work_id: id(6),
+        work_commitment: id(6),
         expected_cursor: 44,
         expected_archive_commitment: id(7),
     };
@@ -339,7 +392,7 @@ fn all_four_intents_round_trip_at_exact_pinned_lengths() {
     );
 
     let abort = AbortResolutionWorkV1 {
-        work_id: id(8),
+        work_commitment: id(8),
         expected_cursor: 42,
         expected_archive_commitment: id(9),
     };
@@ -351,7 +404,7 @@ fn all_four_intents_round_trip_at_exact_pinned_lengths() {
 #[test]
 fn fold_has_no_caller_data_channel_and_terminal_tags_do_not_alias() {
     let fold = FoldResolutionWorkV1 {
-        work_id: id(1),
+        work_commitment: id(1),
         archive_account: id(2),
         archive_commitment: id(3),
         expected_cursor: 40,
@@ -383,7 +436,7 @@ fn fold_has_no_caller_data_channel_and_terminal_tags_do_not_alias() {
     );
 
     let abort = AbortResolutionWorkV1 {
-        work_id: id(4),
+        work_commitment: id(4),
         expected_cursor: 42,
         expected_archive_commitment: id(5),
     };
@@ -398,7 +451,7 @@ fn fold_has_no_caller_data_channel_and_terminal_tags_do_not_alias() {
 #[test]
 fn full_archive_identity_and_commitment_are_distinct_optimistic_guards() {
     let first = FoldResolutionWorkV1 {
-        work_id: id(1),
+        work_commitment: id(1),
         archive_account: id(2),
         archive_commitment: id(3),
         expected_cursor: 40,

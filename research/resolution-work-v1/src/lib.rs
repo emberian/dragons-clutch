@@ -349,7 +349,7 @@ impl ArchiveAccountV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FoldRequestV1 {
     /// Exact work identity expected by the caller.
-    pub work_id: Id,
+    pub work_commitment: Id,
     /// Exact canonical archive account expected by the caller.
     pub archive_account: Id,
     /// Full sealed archive commitment expected by the caller.
@@ -746,7 +746,7 @@ pub struct ResolutionV4 {
     /// Resolution layout version, exactly four.
     pub version: u16,
     /// Work instance authorizing this output.
-    pub work_id: Id,
+    pub work_commitment: Id,
     /// Exact market identity.
     pub market: Id,
     /// Complete immutable Terms digest.
@@ -779,7 +779,7 @@ pub struct ResolutionV4 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FoldReceiptV1 {
     /// Work identity.
-    pub work_id: Id,
+    pub work_commitment: Id,
     /// Reward recipient named by the successful caller.
     pub worker: Id,
     /// Segregated reserve from which charge and reward were debited.
@@ -832,7 +832,7 @@ pub enum AbortReasonV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AbortReceiptV1 {
     /// Work identity.
-    pub work_id: Id,
+    pub work_commitment: Id,
     /// Exact permitted reason.
     pub reason: AbortReasonV1,
     /// Reward recipient named by the successful caller.
@@ -852,7 +852,7 @@ pub struct AbortReceiptV1 {
 /// Private resumable state for one exact sealed archive and resolution target.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolutionWorkV1 {
-    work_id: Id,
+    work_commitment: Id,
     payer: Id,
     prepaid_reserve: Id,
     work_nonce: Id,
@@ -926,7 +926,7 @@ impl ResolutionWorkV1 {
         .map_err(|_| Error::InvalidBasis)?;
         let accumulator = SequentialSummaryBuilder::new(domain).map_err(map_accumulator_error)?;
         let cost_schedule_digest = request.costs.digest()?;
-        let work_id = work_identity(
+        let work_commitment = compute_work_commitment(
             &request.market,
             request.archive.archive_digest,
             cost_schedule_digest,
@@ -951,7 +951,7 @@ impl ResolutionWorkV1 {
             refund_paid: 0,
         };
         let work = Self {
-            work_id,
+            work_commitment,
             payer: request.payer,
             prepaid_reserve: request.prepaid_reserve,
             work_nonce: request.work_nonce,
@@ -1039,7 +1039,7 @@ impl ResolutionWorkV1 {
             .ok_or(Error::ArithmeticOverflow)?;
 
         let receipt = FoldReceiptV1 {
-            work_id: self.work_id,
+            work_commitment: self.work_commitment,
             worker,
             prepaid_reserve: self.prepaid_reserve,
             start_bucket: self.next_bucket,
@@ -1084,7 +1084,7 @@ impl ResolutionWorkV1 {
         };
         let mut resolution = ResolutionV4 {
             version: RESOLUTION_V4_VERSION,
-            work_id: self.work_id,
+            work_commitment: self.work_commitment,
             market: self.market.market,
             terms_digest: self.market.terms_digest,
             resolution_target: self.market.resolution_target,
@@ -1168,7 +1168,7 @@ impl ResolutionWorkV1 {
         let refund = next_funding.close_and_refund()?;
         next_funding.validate(true)?;
         let receipt = AbortReceiptV1 {
-            work_id: self.work_id,
+            work_commitment: self.work_commitment,
             reason,
             aborter,
             prepaid_reserve: self.prepaid_reserve,
@@ -1186,8 +1186,8 @@ impl ResolutionWorkV1 {
     }
 
     /// Unique identity of this fully bound work instance.
-    pub const fn work_id(&self) -> Id {
-        self.work_id
+    pub const fn work_commitment(&self) -> Id {
+        self.work_commitment
     }
 
     /// Exact next unprocessed bucket.
@@ -1256,7 +1256,7 @@ impl ResolutionWorkV1 {
         self.market.validate()?;
         self.archive.validate()?;
         self.costs.validate()?;
-        check_id(self.work_id)?;
+        check_id(self.work_commitment)?;
         check_id(self.payer)?;
         check_id(self.prepaid_reserve)?;
         check_id(self.work_nonce)?;
@@ -1270,7 +1270,7 @@ impl ResolutionWorkV1 {
         {
             return Err(Error::InvariantViolation);
         }
-        let expected_work_id = work_identity(
+        let expected_work_commitment = compute_work_commitment(
             &self.market,
             self.archive.archive_digest,
             self.cost_schedule_digest,
@@ -1281,7 +1281,7 @@ impl ResolutionWorkV1 {
             self.opened_slot,
             self.expires_slot,
         );
-        if self.work_id != expected_work_id
+        if self.work_commitment != expected_work_commitment
             || self.cost_schedule_digest != self.costs.digest()?
             || self.market.program_owner != self.archive.archive_owner
             || self.market.archive_account != self.archive.archive_account
@@ -1380,7 +1380,7 @@ pub fn basis_spec_digest(spec: &BasisSpec) -> Id {
 }
 
 fn validate_fold_request(work: &ResolutionWorkV1, request: FoldRequestV1) -> Result<()> {
-    if request.work_id != work.work_id
+    if request.work_commitment != work.work_commitment
         || request.archive_account != work.archive.archive_account
         || request.archive_digest != work.archive.archive_digest
     {
@@ -1482,7 +1482,7 @@ fn archive_account_commitment(archive: &ArchiveAccountV1) -> Id {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn work_identity(
+fn compute_work_commitment(
     market: &MarketBindingV4,
     archive_digest: Id,
     cost_digest: Id,
@@ -1523,7 +1523,7 @@ fn work_identity(
 fn resolution_digest(resolution: &ResolutionV4) -> Id {
     let mut hasher = tagged_hasher(b"DC_NATIVE_RESOLUTION_V4");
     hash_u16(&mut hasher, resolution.version);
-    hasher.update(resolution.work_id);
+    hasher.update(resolution.work_commitment);
     hasher.update(resolution.market);
     hasher.update(resolution.terms_digest);
     hasher.update(resolution.resolution_target);
@@ -1549,7 +1549,7 @@ fn validate_resolution(work: &ResolutionWorkV1, resolution: ResolutionV4) -> Res
     let summary = work.accumulator.clone().finish();
     let expected = summary.finalize(work.mode).map_err(map_accumulator_error)?;
     if resolution.version != RESOLUTION_V4_VERSION
-        || resolution.work_id != work.work_id
+        || resolution.work_commitment != work.work_commitment
         || resolution.market != work.market.market
         || resolution.terms_digest != work.market.terms_digest
         || resolution.resolution_target != work.market.resolution_target

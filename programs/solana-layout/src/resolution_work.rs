@@ -1,16 +1,15 @@
 //! Fixed hostile-byte layout for resumable occupation-resolution work.
 //!
-//! This module is intentionally self-contained until its instruction and
-//! account dispatch is integrated.  It owns no archive bytes, observations,
+//! It owns no archive bytes, observations,
 //! proofs, caller-supplied masses, payout vectors, or terminal resolution
 //! authority.  A live Fold names only the already-bound work and sealed
 //! archive plus an optimistic cursor and bounded count; the program must read
 //! those cursor-indexed records directly from the immutable program-owned
 //! archive account.
 //!
-//! **STOP:** the numeric tags in this isolated module are proposed allocations,
-//! not live ABI. The layout export and instruction router must recheck their
-//! then-current registries before making any of them reachable.
+//! Account tag 22 and intent tags 32--35 are live allocations. Registry tests
+//! pin them against every earlier tag so a later append cannot silently reuse
+//! one of these bytes.
 
 /// Width of every identity and complete commitment.
 pub const HASH_BYTES: usize = 32;
@@ -20,6 +19,8 @@ pub const MAX_OUTCOMES: usize = 16;
 pub const SOURCE_ARCHIVE_MAX_RECORDS_V1: u8 = 32;
 /// Maximum records one Fold instruction may process.
 pub const MAX_FOLD_RECORDS_V1: u8 = 4;
+/// Maximum admitted Begin-to-expiry lifetime for the V1 active-work lock.
+pub const RESOLUTION_WORK_MAX_LIFETIME_SLOTS_V1: u64 = 4_096;
 /// Exact canonical native BasisSpec V1 artifact width.
 pub const BASIS_SPEC_BYTES_V1: usize = 304;
 /// ResolutionWork account discriminator proposed after existing account tag 21.
@@ -110,7 +111,7 @@ pub struct ResolutionWorkCostScheduleV1 {
     pub version: u16,
     /// Exact account bytes on which the release rent quote was measured.
     pub work_state_bytes: u32,
-    /// Rent locked until atomic close.
+    /// Total rent locked in the 1,296-byte Work and zero-byte Reserve accounts.
     pub rent_reserve: u64,
     /// Minimum admitted lifetime from Begin through last Fold slot.
     pub minimum_lifetime_slots: u64,
@@ -184,8 +185,8 @@ impl ResolutionWorkCostScheduleV1 {
 /// Active prepaid accounting. Terminal refunds are absent because Work closes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResolutionWorkFundingV1 {
-    /// Original payer deposit, including rent.
-    pub deposited: u64,
+    /// Pre-Begin and later unsolicited surplus, never payer credit or worker budget.
+    pub donation_lamports: u64,
     /// Rent still locked in the active Work account.
     pub rent_locked: u64,
     /// Work budget remaining for charges, rewards, and eventual refund.
@@ -205,8 +206,8 @@ pub struct ResolutionWorkFundingV1 {
 /// stored digest from the authenticated immutable accounts at Begin.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResolutionWorkAccountV1 {
-    /// Canonical Work identity/PDA.
-    pub work_id: [u8; HASH_BYTES],
+    /// Nonce-bound Work commitment stored at the deterministic Market Work PDA.
+    pub work_commitment: [u8; HASH_BYTES],
     /// Original payer and sole refund recipient.
     pub payer: [u8; HASH_BYTES],
     /// Segregated prepaid reserve/vault identity.
@@ -297,7 +298,7 @@ impl ResolutionWorkAccountV1 {
     /// Validate all self-contained identity, geometry, mass, slot, and ledger invariants.
     pub fn validate(&self) -> Result<()> {
         for identity in [
-            &self.work_id,
+            &self.work_commitment,
             &self.payer,
             &self.prepaid_reserve,
             &self.work_nonce,
@@ -376,7 +377,9 @@ impl ResolutionWorkAccountV1 {
             .expires_slot
             .checked_sub(self.opened_slot)
             .ok_or(ResolutionWorkCodecError::InvalidWindow)?;
-        if lifetime < self.costs.minimum_lifetime_slots {
+        if lifetime < self.costs.minimum_lifetime_slots
+            || lifetime > RESOLUTION_WORK_MAX_LIFETIME_SLOTS_V1
+        {
             return Err(ResolutionWorkCodecError::InvalidWindow);
         }
         if self.sample_count == 0 {
@@ -426,9 +429,7 @@ impl ResolutionWorkAccountV1 {
 
     fn validate_costs_and_funding(&self) -> Result<()> {
         self.costs.validate()?;
-        if self.funding.rent_locked != self.costs.rent_reserve
-            || self.funding.deposited < self.costs.minimum_deposit(self.archive_record_count)?
-        {
+        if self.funding.rent_locked != self.costs.rent_reserve {
             return Err(ResolutionWorkCodecError::Underfunded);
         }
         let expected_charges = self
@@ -459,15 +460,15 @@ impl ResolutionWorkAccountV1 {
         {
             return Err(ResolutionWorkCodecError::MismatchedBinding);
         }
-        let accounted = self
+        let payer_deposit = self
             .funding
             .rent_locked
             .checked_add(self.funding.prepaid_remaining)
             .and_then(|value| value.checked_add(self.funding.charges_paid))
             .and_then(|value| value.checked_add(self.funding.rewards_paid))
             .ok_or(ResolutionWorkCodecError::ArithmeticOverflow)?;
-        if accounted != self.funding.deposited {
-            return Err(ResolutionWorkCodecError::MismatchedBinding);
+        if payer_deposit < self.costs.minimum_deposit(self.archive_record_count)? {
+            return Err(ResolutionWorkCodecError::Underfunded);
         }
         Ok(())
     }
@@ -481,7 +482,7 @@ impl ResolutionWorkAccountV1 {
         let mut writer = Writer::new(out);
         writer.u8(RESOLUTION_WORK_ACCOUNT_TAG)?;
         writer.u8(RESOLUTION_WORK_ACCOUNT_VERSION)?;
-        writer.hash(&self.work_id)?;
+        writer.hash(&self.work_commitment)?;
         writer.hash(&self.payer)?;
         writer.hash(&self.prepaid_reserve)?;
         writer.hash(&self.work_nonce)?;
@@ -541,7 +542,7 @@ impl ResolutionWorkAccountV1 {
             RESOLUTION_WORK_ACCOUNT_BYTES,
         )?;
         let mut basis_spec_artifact = [0; BASIS_SPEC_BYTES_V1];
-        let work_id = reader.hash()?;
+        let work_commitment = reader.hash()?;
         let payer = reader.hash()?;
         let prepaid_reserve = reader.hash()?;
         let work_nonce = reader.hash()?;
@@ -577,7 +578,7 @@ impl ResolutionWorkAccountV1 {
         let cost_schedule_digest = reader.hash()?;
         let funding = decode_funding(&mut reader)?;
         let value = Self {
-            work_id,
+            work_commitment,
             payer,
             prepaid_reserve,
             work_nonce,
@@ -643,6 +644,10 @@ pub struct BeginResolutionWorkV1 {
 }
 
 impl BeginResolutionWorkV1 {
+    /// Exact encoded byte length.
+    pub const fn encoded_len(&self) -> usize {
+        BEGIN_RESOLUTION_WORK_BYTES
+    }
     /// Encode exact Begin instruction data.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
         require_identity(&self.work_nonce)?;
@@ -692,7 +697,7 @@ impl BeginResolutionWorkV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FoldResolutionWorkV1 {
     /// Expected active Work identity.
-    pub work_id: [u8; HASH_BYTES],
+    pub work_commitment: [u8; HASH_BYTES],
     /// Exact sealed SourceArchive account bound at Begin.
     pub archive_account: [u8; HASH_BYTES],
     /// Full stored sealed-archive commitment bound at Begin.
@@ -704,16 +709,20 @@ pub struct FoldResolutionWorkV1 {
 }
 
 impl FoldResolutionWorkV1 {
+    /// Exact encoded byte length.
+    pub const fn encoded_len(&self) -> usize {
+        FOLD_RESOLUTION_WORK_BYTES
+    }
     /// Encode exact Fold instruction data.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
-        require_identity(&self.work_id)?;
+        require_identity(&self.work_commitment)?;
         require_identity(&self.archive_account)?;
         require_identity(&self.archive_commitment)?;
         if self.record_count == 0 || self.record_count > MAX_FOLD_RECORDS_V1 {
             return Err(ResolutionWorkCodecError::InvalidCount);
         }
         let mut writer = intent_writer(out, FOLD_RESOLUTION_WORK_TAG, FOLD_RESOLUTION_WORK_BYTES)?;
-        writer.hash(&self.work_id)?;
+        writer.hash(&self.work_commitment)?;
         writer.hash(&self.archive_account)?;
         writer.hash(&self.archive_commitment)?;
         writer.u64(self.expected_cursor)?;
@@ -730,7 +739,7 @@ impl FoldResolutionWorkV1 {
             FOLD_RESOLUTION_WORK_BYTES,
         )?;
         let value = Self {
-            work_id: reader.hash()?,
+            work_commitment: reader.hash()?,
             archive_account: reader.hash()?,
             archive_commitment: reader.hash()?,
             expected_cursor: reader.u64()?,
@@ -747,7 +756,7 @@ impl FoldResolutionWorkV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FinalizeResolutionWorkV1 {
     /// Expected active Work identity.
-    pub work_id: [u8; HASH_BYTES],
+    pub work_commitment: [u8; HASH_BYTES],
     /// Exact optimistic end cursor.
     pub expected_cursor: u64,
     /// Full stored sealed-archive commitment bound at Begin.
@@ -755,12 +764,16 @@ pub struct FinalizeResolutionWorkV1 {
 }
 
 impl FinalizeResolutionWorkV1 {
+    /// Exact encoded byte length.
+    pub const fn encoded_len(&self) -> usize {
+        FINALIZE_RESOLUTION_WORK_BYTES
+    }
     /// Encode exact Finalize instruction data.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
         encode_terminal(
             out,
             FINALIZE_RESOLUTION_WORK_TAG,
-            self.work_id,
+            self.work_commitment,
             self.expected_cursor,
             self.expected_archive_commitment,
         )
@@ -768,13 +781,13 @@ impl FinalizeResolutionWorkV1 {
 
     /// Decode exact Finalize instruction data.
     pub fn decode(input: &[u8]) -> Result<Self> {
-        let (work_id, expected_cursor, expected_archive_commitment) = decode_terminal(
+        let (work_commitment, expected_cursor, expected_archive_commitment) = decode_terminal(
             input,
             FINALIZE_RESOLUTION_WORK_TAG,
             FINALIZE_RESOLUTION_WORK_BYTES,
         )?;
         Ok(Self {
-            work_id,
+            work_commitment,
             expected_cursor,
             expected_archive_commitment,
         })
@@ -785,7 +798,7 @@ impl FinalizeResolutionWorkV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AbortResolutionWorkV1 {
     /// Expected active Work identity.
-    pub work_id: [u8; HASH_BYTES],
+    pub work_commitment: [u8; HASH_BYTES],
     /// Exact optimistic current cursor.
     pub expected_cursor: u64,
     /// Full stored sealed-archive commitment bound at Begin.
@@ -793,12 +806,16 @@ pub struct AbortResolutionWorkV1 {
 }
 
 impl AbortResolutionWorkV1 {
+    /// Exact encoded byte length.
+    pub const fn encoded_len(&self) -> usize {
+        ABORT_RESOLUTION_WORK_BYTES
+    }
     /// Encode exact Abort instruction data.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
         encode_terminal(
             out,
             ABORT_RESOLUTION_WORK_TAG,
-            self.work_id,
+            self.work_commitment,
             self.expected_cursor,
             self.expected_archive_commitment,
         )
@@ -806,13 +823,13 @@ impl AbortResolutionWorkV1 {
 
     /// Decode exact Abort instruction data.
     pub fn decode(input: &[u8]) -> Result<Self> {
-        let (work_id, expected_cursor, expected_archive_commitment) = decode_terminal(
+        let (work_commitment, expected_cursor, expected_archive_commitment) = decode_terminal(
             input,
             ABORT_RESOLUTION_WORK_TAG,
             ABORT_RESOLUTION_WORK_BYTES,
         )?;
         Ok(Self {
-            work_id,
+            work_commitment,
             expected_cursor,
             expected_archive_commitment,
         })
@@ -926,7 +943,7 @@ fn decode_costs(reader: &mut Reader<'_>) -> Result<ResolutionWorkCostScheduleV1>
 }
 
 fn encode_funding(writer: &mut Writer<'_>, value: &ResolutionWorkFundingV1) -> Result<()> {
-    writer.u64(value.deposited)?;
+    writer.u64(value.donation_lamports)?;
     writer.u64(value.rent_locked)?;
     writer.u64(value.prepaid_remaining)?;
     writer.u64(value.charges_paid)?;
@@ -935,7 +952,7 @@ fn encode_funding(writer: &mut Writer<'_>, value: &ResolutionWorkFundingV1) -> R
 
 fn decode_funding(reader: &mut Reader<'_>) -> Result<ResolutionWorkFundingV1> {
     Ok(ResolutionWorkFundingV1 {
-        deposited: reader.u64()?,
+        donation_lamports: reader.u64()?,
         rent_locked: reader.u64()?,
         prepaid_remaining: reader.u64()?,
         charges_paid: reader.u64()?,
@@ -956,11 +973,11 @@ fn intent_writer<'a>(out: &'a mut [u8], tag: u8, exact: usize) -> Result<Writer<
 fn encode_terminal(
     out: &mut [u8],
     tag: u8,
-    work_id: [u8; HASH_BYTES],
+    work_commitment: [u8; HASH_BYTES],
     cursor: u64,
     commitment: [u8; HASH_BYTES],
 ) -> Result<usize> {
-    require_identity(&work_id)?;
+    require_identity(&work_commitment)?;
     require_identity(&commitment)?;
     let exact = if tag == FINALIZE_RESOLUTION_WORK_TAG {
         FINALIZE_RESOLUTION_WORK_BYTES
@@ -968,7 +985,7 @@ fn encode_terminal(
         ABORT_RESOLUTION_WORK_BYTES
     };
     let mut writer = intent_writer(out, tag, exact)?;
-    writer.hash(&work_id)?;
+    writer.hash(&work_commitment)?;
     writer.u64(cursor)?;
     writer.hash(&commitment)?;
     Ok(writer.at)
@@ -980,13 +997,13 @@ fn decode_terminal(
     exact: usize,
 ) -> Result<([u8; HASH_BYTES], u64, [u8; HASH_BYTES])> {
     let mut reader = Reader::new(input, tag, RESOLUTION_WORK_INTENT_VERSION, exact)?;
-    let work_id = reader.hash()?;
+    let work_commitment = reader.hash()?;
     let cursor = reader.u64()?;
     let commitment = reader.hash()?;
     reader.done()?;
-    require_identity(&work_id)?;
+    require_identity(&work_commitment)?;
     require_identity(&commitment)?;
-    Ok((work_id, cursor, commitment))
+    Ok((work_commitment, cursor, commitment))
 }
 
 fn require_identity(value: &[u8; HASH_BYTES]) -> Result<()> {

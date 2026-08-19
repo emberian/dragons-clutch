@@ -349,7 +349,7 @@ fn validate_archive_binding(
 ) -> Result<(BasisDomain, NativeWindowFinalizationV1, u64), NativeWindowError> {
     let domain = occupation_domain(terms)?;
     let finalization = NativeWindowFinalizationV1::from_statistic(terms.statistic_id)?;
-    let expected_window = terms_window(terms)?;
+    let expected_window = occupation_window(terms)?;
     let expected_window_id = source_archive::canonical_window_id(expected_window);
     if receipt.feed() != terms.feed
         || receipt.window() != expected_window_id
@@ -533,7 +533,12 @@ fn basis_spec(terms: &TermsAccount) -> Result<BasisSpec, NativeWindowError> {
     Ok(spec)
 }
 
-fn terms_window(terms: &TermsAccount) -> Result<WindowDomain, NativeWindowError> {
+/// Construct the exact immutable archive window selected by validated Terms.
+///
+/// Account adapters use this to derive the canonical SourceArchive PDA before
+/// constructing a verified sealed-archive capability. It performs the same
+/// checked maturity and coverage-policy mapping as monolithic resolution.
+pub fn occupation_window(terms: &TermsAccount) -> Result<WindowDomain, NativeWindowError> {
     let coverage_id = u16::try_from(terms.coverage_policy_id)
         .map_err(|_| NativeWindowError::InvalidWindowDomain)?;
     let coverage = CoveragePolicy::from_registry(coverage_id, terms.coverage_policy_parameter)

@@ -14,6 +14,7 @@
 //! | `0x0040..=0x004f` | market-initialization appends ([`ClutchError::AlreadyInitialized`] .. [`ClutchError::TermsBindingMismatch`]) |
 //! | `0x0050..=0x005f` | the evidence gate's numeric projection (see below) |
 //! | `0x0070..=0x007f` | construction and typed-artifact appends ([`ClutchError::WrongSystemProgram`] .. [`ClutchError::ArtifactRefundMismatch`]) |
+//! | `0x0080..=0x008d` | resumable ResolutionWork semantic refusals |
 //! | `0x1000 + n` | [`clutch_solana_layout::CodecError`] variant `n` |
 //! | `0x2000 + n` | [`clutch_kernel::Error`] variant `n` |
 //! | `0x3000 + n` | [`clutch_solana_reference::Error`] variant `n` |
@@ -36,9 +37,11 @@
 //! evidence append from having to jump over an unrelated family.
 
 use clutch_kernel::Error as KernelError;
-use clutch_solana_layout::CodecError;
+use clutch_solana_layout::{resolution_work::ResolutionWorkCodecError, CodecError};
 use clutch_solana_reference::Error as ReferenceError;
 use solana_program_error::ProgramError;
+
+use crate::instructions::resolution_work::ResolutionWorkError;
 
 /// Adapter-level refusals raised by this program.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -345,6 +348,29 @@ pub const fn reference_code(error: ReferenceError) -> u32 {
     }
 }
 
+/// Stable numeric projection for resumable ResolutionWork semantics.
+///
+/// Nested codec/archive/accumulator reasons remain typed host evidence; the
+/// on-chain class still says which trust boundary refused the transition.
+pub const fn resolution_work_code(error: ResolutionWorkError) -> u32 {
+    match error {
+        ResolutionWorkError::Codec(_) => 0x0080,
+        ResolutionWorkError::OutputCodec(_) => 0x0081,
+        ResolutionWorkError::Terms(_) => 0x0082,
+        ResolutionWorkError::Accumulator(_) => 0x0083,
+        ResolutionWorkError::Archive(_) => 0x0084,
+        ResolutionWorkError::BindingMismatch => 0x0085,
+        ResolutionWorkError::WrongCursor => 0x0086,
+        ResolutionWorkError::InvalidChunk => 0x0087,
+        ResolutionWorkError::Expired => 0x0088,
+        ResolutionWorkError::InvalidSlot => 0x0089,
+        ResolutionWorkError::NotAtEnd => 0x008a,
+        ResolutionWorkError::Underfunded => 0x008b,
+        ResolutionWorkError::AbortForbidden => 0x008c,
+        ResolutionWorkError::ArithmeticOverflow => 0x008d,
+    }
+}
+
 /// One refusal type for the whole processor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Refusal {
@@ -356,6 +382,8 @@ pub enum Refusal {
     Kernel(KernelError),
     /// Reference-only codec refusal.
     Reference(ReferenceError),
+    /// Resumable occupation-resolution refusal.
+    ResolutionWork(ResolutionWorkError),
 }
 
 impl Refusal {
@@ -366,6 +394,7 @@ impl Refusal {
             Self::Codec(error) => codec_code(error),
             Self::Kernel(error) => kernel_code(error),
             Self::Reference(error) => reference_code(error),
+            Self::ResolutionWork(error) => resolution_work_code(error),
         }
     }
 }
@@ -391,6 +420,18 @@ impl From<KernelError> for Refusal {
 impl From<ReferenceError> for Refusal {
     fn from(value: ReferenceError) -> Self {
         Self::Reference(value)
+    }
+}
+
+impl From<ResolutionWorkError> for Refusal {
+    fn from(value: ResolutionWorkError) -> Self {
+        Self::ResolutionWork(value)
+    }
+}
+
+impl From<ResolutionWorkCodecError> for Refusal {
+    fn from(value: ResolutionWorkCodecError) -> Self {
+        Self::ResolutionWork(ResolutionWorkError::Codec(value))
     }
 }
 
