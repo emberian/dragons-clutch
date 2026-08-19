@@ -1,0 +1,163 @@
+{
+  "schema": "dragons-clutch/liveness-policy-evidence/v1",
+  "status": "INTERMEDIATE_ARITHMETIC_CANDIDATE_NOT_PROMOTABLE",
+  "runtime_integration": "PROPOSED",
+  "capture_date": "2026-08-19",
+  "evidence_ref": "a29902b2d21f988f9f194b5cc4d89837966804c4",
+  "program_ref": "3a81b38f62c172da588166dcc8b9a8f4d62cd6a3",
+  "source_archive_ref": "0b96a3a5eec1e4ada589f26b5de21f5d32ab700d",
+  "artifact": {
+    "path": "research/liveness-policy-profile/artifacts/c8ff4ac7286004cb/clutch_sbf.so",
+    "sha256": "c8ff4ac7286004cb5d897cc92b05f7a9e386107d295cb1441adcd227e0b35138",
+    "bytes": 809824,
+    "finality": "INTERMEDIATE_PENDING_OCCUPATION_V4_REBUILD"
+  },
+  "capture": {
+    "path": "research/liveness-policy-profile/captured-output.txt",
+    "sha256": "fd5edafad5508388d5a15061b80e94f5ec1f8503295d1a6955625808265e83ed"
+  },
+  "build_evidence": {
+    "research/liveness-policy-profile/artifacts/c8ff4ac7286004cb/logs/build.log": {"sha256": "f78d7d805ed25edc57478fd6d2334eb3daaad7849c5f574a13a4796644baf704", "bytes": 3857},
+    "research/liveness-policy-profile/artifacts/c8ff4ac7286004cb/logs/committed.log": {"sha256": "f479ce00d385d6a56b62d16fa7d133fa8cb74411868805f599d056edb5bd55da", "bytes": 5100},
+    "research/liveness-policy-profile/artifacts/c8ff4ac7286004cb/logs/falsify.log": {"sha256": "242746538e63f67f9adf4ef92af093430d397f39a7b29fc18733a6577b692a9d", "bytes": 4972},
+    "research/liveness-policy-profile/artifacts/c8ff4ac7286004cb/logs/plan.log": {"sha256": "7fd7ea7778ece57974b8a805fa006db2cc2e018725939e3f461c3d0fd679d5a8", "bytes": 1971},
+    "research/liveness-policy-profile/artifacts/c8ff4ac7286004cb/logs/validator.log": {"sha256": "bb7027fd8369d70f3a008b7a097dd53f0bf4b9d48bce665a07d50602ac0e4b9a", "bytes": 105}
+  },
+  "source_blobs": {
+    "programs/clutch-sbf/svm-tests/tests/artifact_transport.rs": "7d21d17f88c7264c94fa6678fd01fe9fb8b0d4fd",
+    "programs/clutch-sbf/svm-tests/tests/blank_bank_lifecycle.rs": "1fe25e7b88c00d87c16ea36828800e00bbfb7a90",
+    "programs/clutch-sbf/svm-tests/tests/order_reservation.rs": "77658748b3c7777eb181446052f1172024f1cc59",
+    "programs/clutch-sbf/svm-tests/tests/coupled_authority.rs": "c621fe392d4120e18ea3466af27497a547a75187",
+    "programs/clutch-sbf/svm-tests/tests/coupled_settlement.rs": "7d55d54f983e738e1d2948754145b27e939a492c",
+    "programs/clutch-sbf/svm-tests/tests/collateral_leg.rs": "c278437e81574601b6140e70168f259d88a53a09",
+    "programs/clutch-sbf/svm-tests/tests/native_resolution.rs": "b3681b86e194a90cc5899a296fddec64285a5ee2",
+    "programs/clutch-sbf/svm-tests/tests/native_full_lifecycle.rs": "031d3b757e399dd43d3e1199dc4b14a54ef4cadc",
+    "programs/clutch-sbf/svm-tests/tests/source_archive.rs": "78942c4da572272227f36e63d17a0fa0f711ae1f",
+    "programs/clutch-sbf/program/src/source_archive.rs": "ae50e681d4c9e3407700f650ee478ba30d8204e3",
+    "programs/clutch-sbf/program/src/token.rs": "c9388b05b8219e87b3e2cd4b6bf5638a825ab07d",
+    "programs/solana-layout/src/lib.rs": "ab82504b4106e684f35321d30f32096f4e5812e1",
+    "programs/solana-layout/src/artifact.rs": "7e11841b853eeca477b0ae1fde777dfbe4e92ba3",
+    "programs/solana-layout/src/collateral.rs": "f4b1630954ce0afccf75a3b64f715b93c13137a9",
+    "programs/solana-layout/src/native_resolution.rs": "8b0370d6991d65b256e7d8016d09e14ef3bf72ee",
+    "programs/solana-layout/src/reservation.rs": "ffc3bceb42910361c519080f6b4e95040afb53ab",
+    "programs/solana-reference/src/lib.rs": "46c191cd1b1e68d6349cea1189c46015adc55aeb",
+    "crates/clutch-liveness/src/lib.rs": "6924b988e65f10dc9f4f92d9b54308ae06aca799"
+  },
+  "rent": {
+    "lamports_per_byte_year": 3480,
+    "exemption_threshold_numerator": 2,
+    "exemption_threshold_denominator": 1,
+    "effective_lamports_per_byte": 6960,
+    "account_storage_overhead_bytes": 128
+  },
+  "accounts": {
+    "artifact.policy.final": {"bytes": 266, "rent_lamports": 2742240},
+    "artifact.policy.stage": {"bytes": 402, "rent_lamports": 3688800},
+    "artifact.grid.final": {"bytes": 589, "rent_lamports": 4990320},
+    "artifact.grid.stage": {"bytes": 725, "rent_lamports": 5936880},
+    "artifact.terms.final": {"bytes": 1656, "rent_lamports": 12416640},
+    "artifact.terms.stage": {"bytes": 1792, "rent_lamports": 13363200},
+    "artifact.maximum.stage": {"bytes": 1792, "rent_lamports": 13363200},
+    "realm": {"bytes": 70, "rent_lamports": 1378080},
+    "profile": {"bytes": 100, "rent_lamports": 1586880},
+    "market": {"bytes": 726, "rent_lamports": 5943840},
+    "hoard": {"bytes": 108, "rent_lamports": 1642560},
+    "position": {"bytes": 220, "rent_lamports": 2422080},
+    "kernel": {"bytes": 1255, "rent_lamports": 9625680},
+    "replay": {"bytes": 84, "rent_lamports": 1475520},
+    "supply_ledger": {"bytes": 333, "rent_lamports": 3208560},
+    "resolution.v2": {"bytes": 165, "rent_lamports": 2039280},
+    "resolution.v3": {"bytes": 319, "rent_lamports": 3111120},
+    "token.outcome_mint": {"bytes": 82, "rent_lamports": 1461600},
+    "token.hoard_immutable_owner": {"bytes": 170, "rent_lamports": 2074080},
+    "order.page": {"bytes": 4012, "rent_lamports": 28814400},
+    "order.reservation": {"bytes": 570, "rent_lamports": 4858080},
+    "candidate": {"bytes": 305, "rent_lamports": 3013680},
+    "candidate.feed": {"bytes": 6266, "rent_lamports": 44502240},
+    "settlement.receipt": {"bytes": 217, "rent_lamports": 2401200},
+    "source.spec": {"bytes": 292, "rent_lamports": 2923200},
+    "source.archive": {"bytes": 2560, "rent_lamports": 18708480}
+  },
+  "measurements": {
+    "artifact.policy": {"successful_transactions_cu": [13373, 9297, 8138, 94175], "attempted_transactions_cu": [13373, 9297, 8138, 94175]},
+    "artifact.grid": {"successful_transactions_cu": [17135, 15319, 12631, 9943, 9577, 107539], "attempted_transactions_cu": [17135, 15319, 12631, 9943, 9577, 107539]},
+    "artifact.terms": {"successful_transactions_cu": [23109, 28757, 26069, 23381, 20693, 18005, 15317, 12629, 9941, 8184, 18048], "attempted_transactions_cu": [23109, 28757, 26069, 23381, 12760, 20330, 20693, 18005, 15317, 12629, 9941, 8184, 18048, 23109, 28757, 26069, 23381, 20693, 18005, 15317, 12629, 9941, 8184, 17111]},
+    "market.create.v2": {"sample_cu": 914280, "account_bytes": 165, "maximum_claim": "UNMEASURED"},
+    "market.create.v3": {"sample_cu": 915284, "account_bytes": 319, "maximum_claim": "UNMEASURED"},
+    "order.place": {"samples_cu": [598889, 596919]},
+    "order.cancel": {"samples_cu": [470322, 474995]},
+    "candidate.submit_direct_page": {"sample_cu": 1249371, "orders_in_page": 2},
+    "settlement.narrow_page": {"sample_cu": 862075, "orders_in_page": 2},
+    "resolution.native.resolve": {"samples_cu": [1092204, 1130463, 1165736]},
+    "resolution.native.retry": {"samples_cu": [938556, 976815, 1012088]},
+    "redemption.native.internal": {"samples_cu": [708298, 705798, 705473]},
+    "redemption.native.external": {"samples_cu": [788047, 785347, 784552]},
+    "withdraw_cash": {"sample_cu": 229755},
+    "native_full_lifecycle": {
+      "create_market_cu": [1081504, 1072104, 1074689],
+      "endow_cu": [294841, 294841, 294841],
+      "split_cu": [276413, 276413, 276413],
+      "materialize_cu": [154683, 154683, 154683],
+      "resolve_cu": [1076536, 1107963, 1144736],
+      "redeem_external_cu": [773047, 762847, 763552],
+      "redeem_internal_cu": [697790, 687790, 688965],
+      "withdraw_cu": [294703, 294703, 294703],
+      "genesis_assisted_source_archive": true
+    },
+    "source_archive": {
+      "host_tests_passed": 4,
+      "host_tests_failed": 0,
+      "standalone_create_append_seal_cu": "UNMEASURED",
+      "resolve_authentication_cost": "INCLUDED_IN_NATIVE_RESOLVE_SAMPLES"
+    }
+  },
+  "policy_inputs": {
+    "cu_headroom_numerator": 5,
+    "cu_headroom_denominator": 4,
+    "cu_rounding_quantum": 50000,
+    "transaction_cu_ceiling": 1400000,
+    "base_transaction_fee_cap_lamports": 10000,
+    "micro_lamports_per_cu_cap": 1000000,
+    "keeper_tip_lamports": 100000,
+    "market_outcome_mints": 2,
+    "founding_unmeasured_transactions": ["init_realm", "init_profile"],
+    "founding_ceiling_transactions": 3
+  },
+  "projection": {
+    "artifact_work_lamports": {
+      "policy": 740000,
+      "grid": 1060000,
+      "terms": 1760000,
+      "total": 3560000
+    },
+    "market_create_state_rent_lamports": 32426640,
+    "artifact_final_rent_lamports": 20149200,
+    "artifact_stage_rent_lamports": 22988880,
+    "realm_profile_rent_lamports": 2964960,
+    "liveness_policy": {
+      "market_work_max_lamports": 8090000,
+      "market_storage_max_lamports": 78529680,
+      "resolution_max_lamports": 1510000,
+      "per_order_clear_max_lamports": 755000,
+      "per_order_settle_max_lamports": 605000,
+      "market_total_lamports": 88129680,
+      "order_total_lamports": 1360000
+    },
+    "headroom_gate": {
+      "candidate.submit_direct_page": false,
+      "resolution.native.resolve": false
+    },
+    "shared_feed_pair": "INCOMPLETE_UNMEASURED",
+    "per_order_storage": "UNREPRESENTED",
+    "neutral_sink": "UNSELECTED"
+  },
+  "blockers": [
+    "SubmitDirectPage exceeds the requested 25 percent CU headroom under the 1400000-CU ceiling.",
+    "Native Resolve d3 exceeds the requested 25 percent CU headroom under the 1400000-CU ceiling.",
+    "Source/archive construction, append, sealing, and cleanup have no routed production CU measurements.",
+    "InitRealm and InitProfile have no isolated CU measurements; the candidate charges the full ceiling for each.",
+    "Order reservation/page/candidate/feed/receipt storage is not represented by clutch-liveness OrderEndowment.",
+    "No production neutral-failure sink policy has been selected.",
+    "A finite CU or lamport cap does not guarantee future transaction inclusion."
+  ]
+}

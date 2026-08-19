@@ -1,0 +1,62 @@
+Dragon's Clutch normalized local-bank evidence capture
+capture date: 2026-08-19 America/New_York
+SBF_OUT_DIR: /Users/ember/dev/dragons-clutch/research/liveness-policy-profile/artifacts/c8ff4ac7286004cb
+ELF sha256: c8ff4ac7286004cb5d897cc92b05f7a9e386107d295cb1441adcd227e0b35138
+ELF bytes: 809824
+
+[artifact_transport/every_admitted_artifact_kind_lands_as_its_exact_raw_codec]
+policy transaction CU sequence: 13373 9297 8138 94175
+grid transaction CU sequence: 17135 15319 12631 9943 9577 107539
+test result: ok. 1 passed; 0 failed
+
+[artifact_transport/terms_upload_resumes_after_bank_rehydration_and_seals_atomically]
+terms transaction CU sequence: 23109 28757 26069 23381 12760 20330 20693 18005 15317 12629 9941 8184 18048 23109 28757 26069 23381 20693 18005 15317 12629 9941 8184 17111
+semantic positions: begin=0; successful initial writes=1..3; early-seal refusal=4; duplicate-write refusal=5; successful resumed writes=6..11; new seal=12; repeat begin=13; repeat writes=14..22; idempotent seal=23
+test result: ok. 1 passed; 0 failed
+
+[blank_bank_lifecycle/categorical_and_native_markets_construct_from_only_sealed_artifacts]
+degree 0; resolution bytes 165; CreateMarket transaction CU sample 914280
+degree 1; resolution bytes 319; CreateMarket transaction CU sample 915284
+note: ProgramTest payer generation makes these samples non-maximal; policy uses the 1400000 transaction ceiling, not either sample
+test result: ok. 1 passed; 0 failed
+
+[order_reservation/funded_orders_reserve_release_and_isolate_owners]
+PlaceOrder transaction CU: buy=598889 sell=596919
+CancelOrder transaction CU: buy=470322 sell=474995
+test result: ok. 1 passed; 0 failed
+
+[coupled_authority/prefunded_submission_is_exact_once_and_leaves_authority_frozen]
+SubmitDirectPage prefunded transaction CU: 1249371
+test result: ok. 1 passed; 0 failed
+
+[coupled_settlement/direct_full_slice_settles_once_and_substitution_rolls_back]
+SettlePage direct full-slice transaction CU: 862075
+test result: ok. 1 passed; 0 failed
+
+[collateral_leg/withdraw_pays_only_unreserved_cash_and_preserves_locked_backing]
+WithdrawCash transaction CU: 229755
+test result: ok. 1 passed; 0 failed
+
+[native_resolution/degrees_one_through_three_persist_retry_and_redeem_the_native_vector]
+d1 resolve=1092204 retry=938556 redeem_internal=708298
+d2 resolve=1130463 retry=976815 redeem_internal=705798
+d3 resolve=1165736 retry=1012088 redeem_internal=705473
+
+[native_resolution/native_bearer_exit_uses_minimal_exact_lots_and_sub_lots_roll_back]
+d1 redeem_external_exact=788047
+d2 redeem_external_exact=785347
+d3 redeem_external_exact=784552
+native_resolution test result: ok. 7 passed; 0 failed
+
+[native_full_lifecycle/blank_bank_native_degrees_one_through_three_reach_zero_hoard]
+d1 create=1081504 endow=294841 split=276413 materialize=154683 resolve=1076536 redeem_external=773047 redeem_internal=697790 withdraw=294703
+d2 create=1072104 endow=294841 split=276413 materialize=154683 resolve=1107963 redeem_external=762847 redeem_internal=687790 withdraw=294703
+d3 create=1074689 endow=294841 split=276413 materialize=154683 resolve=1144736 redeem_external=763552 redeem_internal=688965 withdraw=294703
+native_full_lifecycle test result: ok. 1 passed; 0 failed
+
+[source_archive]
+host tests: 4 passed; 0 failed
+SourceSpec bytes=292 default-rent lamports=2923200
+SourceArchive bytes=2560 default-rent lamports=18708480
+standalone routed creation/append/seal CU: UNMEASURED (no such production instruction)
+archive authentication cost is included in each native Resolve/retry sample above
