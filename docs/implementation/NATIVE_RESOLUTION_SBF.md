@@ -71,21 +71,29 @@ generation, or binding refuses.
 
 ## Internal redemption
 
-`RedeemInternal` chooses the account version from immutable Terms. In native
-mode it:
+`RedeemInternal` is now a single recorded-resolution-only ABI. Its fixed state
+prefix is nine accounts—actor, Market, Hoard, Position, kernel, Replay,
+SupplyLedger, immutable Terms, and immutable Resolution—followed by seven
+collateral-admission/custody roles and the complete canonical mint vector. It
+accepts no Feed, SourceArchive, or caller evidence buffer after resolution.
+Immutable Terms select v2, v3, or v4 record bytes; the selected record plus
+kernel mode/vector/index are the sole payout authority. In native mode it:
 
 1. decodes the v3 record and binds it to the exact market, terms, feed, bump,
    mode, outcome count, denominator, maturity cursor, end bucket, and repair
    generation;
-2. requires the record's declared window identity to equal the read-only
-   redemption evidence label;
+2. requires the record's window identity to equal the canonical identity
+   recomputed from the immutable market Terms;
 3. reconstructs a temporary resolved `MarketState` in `DerivedBasis` mode from
    the kernel aggregate and record-owned vector;
 4. runs the unchanged exact kernel redemption; and
 5. discards the vector after writing only aggregate supply, collateral,
    position cash/claims, and replay sequence.
 
-Fractional payouts are never rounded. `quantity * weight` must be divisible by
+Categorical v2 likewise reads the persisted payout index rather than re-folding
+evidence. Occupation v4 reads the persisted record-owned vector and provenance
+fields without requiring the historical archive to remain live on every
+redemption. Fractional payouts are never rounded. `quantity * weight` must be divisible by
 the common denominator or the kernel returns `RemainderRequired`; an exact
 quantity succeeds. The collateral token accounts are still checked for zero
 movement because internal redemption converts locked backing into Position
@@ -140,9 +148,9 @@ inside an Agave bank. At denominator 64 and raw point 4 it records:
 
 | degree | distinct breakpoints | exact persisted weights | resolve CU | retry CU | internal redeem CU | bearer redeem CU |
 |---:|---|---|---:|---:|---:|---:|
-| 1 | `0,8,16,24` | `32,32,0,0` | 1,092,607 | 938,965 | 708,253 | 788,032 |
-| 2 | `0,8,16` | `16,40,8,0` | 1,130,866 | 977,224 | 705,753 | 785,332 |
-| 3 | `0,8` | `8,24,24,8` | 1,166,139 | 1,012,497 | 705,428 | 784,537 |
+| 1 | `0,8,16,24` | `32,32,0,0` | 1,088,275 | 934,630 | 778,952 | 788,049 |
+| 2 | `0,8,16` | `16,40,8,0` | 1,092,178 | 938,533 | 776,495 | 785,349 |
+| 3 | `0,8` | `8,24,24,8` | 1,100,560 | 946,915 | 776,385 | 784,554 |
 
 The measured exact redemption quantities are 2, 4, and 8 claims respectively,
 each paying one collateral atom. The campaign also checks:
@@ -154,6 +162,11 @@ each paying one collateral atom. The campaign also checks:
 - exact fractional-remainder refusal without consuming replay;
 - immutable Terms presentation, account-alias, and missing-mint-vector
   refusals;
+- exact refusal of the retired Feed/buffer-expanded redemption account list;
+- wrong record mode, terms binding, and canonical window refusals without
+  writes;
+- whole-transaction rollback when a first internal redemption succeeds and a
+  stale replay fails later in the same transaction;
 - full canonical outcome-mint presentation; and
 - transaction rollback after lifecycle/kernel mutation when synchronizing a
   hostile `u64::MAX` bearer mint supply fails late;
@@ -170,10 +183,12 @@ still injects its deliberately chosen prestate at genesis; it is not the
 constructor proof.
 
 `cargo build-sbf --offline` completes and no frame diagnostic names
-`external_exit` or `reconstruct_native_market`. Final LTO still reports live
-first-party diagnostics in shared dispatch, `split::kernel_step`, and
-`observe_resolve::pure_market`. They remain program-wide release STOPs even
-though the focused real-SBF transactions above execute successfully. The
+`external_exit`, `recorded_redeem`, `apply_recorded_redemption`, or
+`reconstruct_native_market`. The latest joined provisional build log names no
+first-party live program function; the final-LTO survivor audit remains the
+authority for whether any dependency diagnostic survives the deployed ELF and
+is still a program-wide release STOP even though the focused real-SBF
+transactions above execute successfully. The
 longstanding unreachable offline-reference and host-only layout diagnostics
 remain separately documented by the SBF program.
 
@@ -182,9 +197,8 @@ remain separately documented by the SBF program.
 The following must close before native settlement is described as generally
 available:
 
-1. close the final-LTO stack-overwrite survivors in dispatch,
-   `split::kernel_step`, and `observe_resolve::pure_market`, then rerun the
-   survivor audit against the final ELF;
+1. close every final-LTO stack-overwrite survivor reported by the artifact
+   audit, then rerun that audit against the final ELF;
 2. audit every other post-resolution instruction so none reconstructs smooth
    state as `FinitePreset` index zero;
 3. rebuild the committed ELF, update its reproducibility manifest, and run the
@@ -192,7 +206,7 @@ available:
 
 Until those gates close, the accurate claim is: permissionless production
 construction, source-authenticated native degree-one through degree-three point
-resolution, and exact internal and positionless bearer redemption are
-implemented with an explicit v2/v3 split and execute in the real SBF program;
+and occupation resolution, and exact record-only internal plus positionless
+bearer redemption are implemented with an explicit v2/v3/v4 split and execute in the real SBF program;
 the shared program artifact is not promoted while its remaining final-LTO
 stack diagnostics and whole-lifecycle integration gate remain open.

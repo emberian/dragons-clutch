@@ -684,14 +684,14 @@ impl Scenario {
             .external_supply[outcome]
     }
 
-    /// The eighteen-account collateral prefix plus every canonical outcome mint.
+    /// The sixteen-account collateral prefix plus every canonical outcome mint.
     fn redeem(&self, sequence: u64, outcome: u8, quantity: u64) -> Instruction {
         let evidence = self.plane.redeem_addresses();
         let mut metas = vec![AccountMeta::new(evidence[0], true)];
         for address in &evidence[1..7] {
             metas.push(AccountMeta::new(*address, false));
         }
-        for address in &evidence[7..11] {
+        for address in &evidence[7..9] {
             metas.push(AccountMeta::new_readonly(*address, false));
         }
         let leg = self.plane.redeem_leg(self.actor_collateral);
@@ -752,6 +752,8 @@ impl Scenario {
 /// moving those digests onto the syscall is an obligation on the layout crate,
 /// not something this lane may do to a frozen codec.
 const SEAM_UNITS: u32 = 600_000;
+/// Recorded resolution validation reconstructs the full semantic authority.
+const REDEEM_UNITS: u32 = 900_000;
 /// Unit ceiling for `CreateMarket`, which recomputes the terms digest twice
 /// over a multi-kilobyte body *and* performs seven CPIs.
 const CREATE_UNITS: u32 = 1_400_000;
@@ -1608,7 +1610,7 @@ async fn redeem_reclassifies_locked_collateral_into_position_cash() {
     let quantity = 6;
     let units = scenario
         .send(
-            &[budget(SEAM_UNITS), scenario.redeem(0, 0, quantity)],
+            &[budget(REDEEM_UNITS), scenario.redeem(0, 0, quantity)],
             &[&actor],
         )
         .await;
@@ -1623,16 +1625,66 @@ async fn redeem_reclassifies_locked_collateral_into_position_cash() {
     assert_eq!(position.internal[0], FUNDED_SETS - quantity);
     assert_eq!(position.cash_atoms, CASH_ATOMS + quantity);
 
-    println!("SVM redeem: 20 accounts, payout={quantity} atoms, {units} CU");
+    println!("SVM redeem: 18 accounts, payout={quantity} atoms, {units} CU");
 
     /* The losing outcome pays zero and custody still does not move. */
     let hoard_before = scenario.amount(hoard_token).await;
     let zero_units = scenario
-        .send(&[budget(SEAM_UNITS), scenario.redeem(1, 1, 4)], &[&actor])
+        .send(&[budget(REDEEM_UNITS), scenario.redeem(1, 1, 4)], &[&actor])
         .await;
     assert_eq!(scenario.amount(hoard_token).await, hoard_before);
     assert_eq!(scenario.amount(actor_token).await, ACTOR_COLLATERAL);
     println!("SVM redeem (losing claim): payout=0 atoms, {zero_units} CU");
+}
+
+/// The retired post-resolution Feed/buffer plane is not a compatibility ABI.
+///
+/// Exact account count rejects it before any writable account can change, and
+/// the same sequence then succeeds through the sole 16+n record-only plane.
+#[tokio::test]
+async fn retired_feed_and_buffer_redeem_plane_is_refused_atomically() {
+    let mut scenario = Scenario::start(MARKET_NONCE, Mode::Resolved(0)).await;
+    let actor = scenario.actor.insecure_clone();
+    let watched = [
+        scenario.plane.market.address,
+        scenario.plane.hoard.address,
+        scenario.plane.position.address,
+        scenario.plane.kernel.address,
+        scenario.plane.replay.address,
+        scenario.plane.supply.address,
+        scenario.plane.hoard_token.address,
+        scenario.actor_collateral,
+        scenario.plane.outcome_mints[0].address,
+        scenario.plane.outcome_mints[1].address,
+    ];
+    let mut before = Vec::with_capacity(watched.len());
+    for address in watched {
+        before.push(scenario.data(address).await);
+    }
+
+    let mut retired = scenario.redeem(0, 0, 1);
+    retired.accounts.insert(
+        9,
+        AccountMeta::new_readonly(scenario.plane.feed.address, false),
+    );
+    retired
+        .accounts
+        .insert(10, AccountMeta::new_readonly(scenario.plane.buffer, false));
+    assert_eq!(
+        retired.accounts.len(),
+        observe_resolve::REDEEM_ACCOUNT_PREFIX + usize::from(OUTCOME_COUNT) + 2
+    );
+    let (result, _) = scenario
+        .try_send(&[budget(REDEEM_UNITS), retired], &[&actor])
+        .await;
+    assert!(result.is_err());
+    for (index, address) in watched.iter().enumerate() {
+        assert_eq!(scenario.data(*address).await, before[index]);
+    }
+
+    scenario
+        .send(&[budget(REDEEM_UNITS), scenario.redeem(0, 0, 1)], &[&actor])
+        .await;
 }
 
 /// **The token leg is not optional any more.**

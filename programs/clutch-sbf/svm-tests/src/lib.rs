@@ -1262,8 +1262,10 @@ impl Plane {
         ]
     }
 
-    /// The eleven owner-scoped evidence accounts of `RedeemInternal`.
-    pub fn redeem_addresses(&self) -> [Address; 11] {
+    /// The nine owner-scoped recorded-resolution accounts of `RedeemInternal`.
+    ///
+    /// Feed and caller evidence are intentionally absent after resolution.
+    pub fn redeem_addresses(&self) -> [Address; 9] {
         [
             self.actor,
             self.market.address,
@@ -1274,8 +1276,6 @@ impl Plane {
             self.supply.address,
             self.terms.address,
             self.resolution.address,
-            self.feed.address,
-            self.buffer,
         ]
     }
 

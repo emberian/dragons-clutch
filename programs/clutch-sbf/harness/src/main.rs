@@ -22,7 +22,7 @@
 //! | --- | --- |
 //! | `Split`, `Merge`, `Materialize`, `Dematerialize` | `clutch_solana_reference::apply` |
 //! | `Resolve` | `clutch_solana_reference::apply_market_resolution_with_evidence` |
-//! | `RedeemInternal` | `clutch_solana_reference::apply_with_evidence` |
+//! | `RedeemInternal` | `clutch_solana_reference::apply_with_evidence` for semantic state bytes; emitted SBF ABI is persisted-record-only |
 //! | `CreateMarket` | the frozen `clutch_solana_layout` codecs re-encoded here, then accepted by `clutch_solana_reference::validate_market_init` |
 //! | `FeedAdvance` | `clutch_accumulator`'s own fold plus the frozen `FeedAccount` codec |
 //!
@@ -3072,21 +3072,28 @@ fn seam_transaction(
     )
 }
 
-/// The message and instruction of one evidence-gated transaction.
+/// The message and instruction of one resolution/redemption transaction.
 ///
 /// `redeems` selects the plane: `Resolve` moves no value and reads the
 /// canonical SourceSpec and sealed SourceArchive before the redundant evidence
-/// projection, while `RedeemInternal` retains its owner/value plane.
+/// projection. `RedeemInternal` retains its owner/value plane but accepts only
+/// immutable Terms plus the persisted Resolution record: the `buffer`
+/// argument is Resolve-only and is deliberately absent from its account list.
 #[allow(clippy::too_many_arguments)]
 fn gate_transaction(
     shared: &Shared,
     plane: &Plane,
-    buffer: &Pda,
+    buffer: Option<&Pda>,
     signer: Signer<'_>,
     resolution_writable: bool,
     redeems: bool,
     data: Vec<u8>,
 ) -> Vec<u8> {
+    assert_eq!(
+        buffer.is_none(),
+        redeems,
+        "only Resolve carries a caller projection buffer"
+    );
     let mut writable = if redeems {
         vec![
             plane.market.bytes,
@@ -3102,8 +3109,6 @@ fn gate_transaction(
     let mut readonly = if redeems {
         vec![
             shared.terms.bytes,
-            shared.feed_head.bytes,
-            buffer.bytes,
             shared.program.bytes,
             shared.compute_budget,
         ]
@@ -3114,7 +3119,7 @@ fn gate_transaction(
             shared.feed_head.bytes,
             shared.source_spec.bytes,
             shared.source_archive.bytes,
-            buffer.bytes,
+            buffer.expect("Resolve buffer").bytes,
             shared.program.bytes,
             shared.compute_budget,
         ]
@@ -3135,8 +3140,6 @@ fn gate_transaction(
             plane.supply.bytes,
             shared.terms.bytes,
             plane.resolution.bytes,
-            shared.feed_head.bytes,
-            buffer.bytes,
         ]
     } else {
         vec![
@@ -3150,7 +3153,7 @@ fn gate_transaction(
             shared.feed_head.bytes,
             shared.source_spec.bytes,
             shared.source_archive.bytes,
-            buffer.bytes,
+            buffer.expect("Resolve buffer").bytes,
         ]
     };
     if redeems {
@@ -3182,7 +3185,7 @@ fn gate_transaction(
             clutch_sbf::instructions::observe_resolve::RESOLVE_ACCOUNT_PREFIX
                 + usize::from(OUTCOME_COUNT)
         },
-        "the emitted evidence plane must be exactly the plane the program requires"
+        "the emitted resolution/redemption plane must exactly match the live ABI"
     );
     let message = if signer.signs {
         Message::new(&[shared.payer.bytes], &[signer.key], &writable, &readonly)
@@ -3726,8 +3729,6 @@ struct Fixture {
     batch: Batch,
     resolve_buffer: Pda,
     resolve_buffer_bytes: Vec<u8>,
-    redeem_buffer: Pda,
-    redeem_buffer_bytes: Vec<u8>,
     page_buffer: Pda,
     page_buffer_bytes: Vec<u8>,
     /// The `FeedAdvance` post-state, folded by the accumulator here.
@@ -3823,13 +3824,11 @@ fn build_fixture() -> Fixture {
 
     let batch = build_batch(&shared, &seam);
 
-    /* Caller-supplied buffers.  None of the three is address-bound: the buffer
+    /* Caller-supplied buffers. Neither is address-bound: the buffer
      * is the one account in the program that is deliberately not, because its
      * bytes are the claim and not the state. */
     let resolve_buffer = fixed_address("clutch/bringup/buffer/resolve/v1");
     let resolve_buffer_bytes = encode_evidence_buffer(shared.window_id, &window);
-    let redeem_buffer = fixed_address("clutch/bringup/buffer/redeem/v1");
-    let redeem_buffer_bytes = encode_evidence_buffer(shared.window_id, &[]);
     let page_buffer = fixed_address("clutch/bringup/buffer/page/v1");
     let page_records: Vec<Record> = (START_BUCKET..END_BUCKET_EXCLUSIVE)
         .map(|bucket| (OBSERVATION_ACCEPTED, bucket, 40, 41))
@@ -3861,8 +3860,6 @@ fn build_fixture() -> Fixture {
         batch,
         resolve_buffer,
         resolve_buffer_bytes,
-        redeem_buffer,
-        redeem_buffer_bytes,
         page_buffer,
         page_buffer_bytes,
         advanced_feed_bytes,
@@ -4537,7 +4534,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         gate_transaction(
             shared,
             &f.held,
-            &f.resolve_buffer,
+            Some(&f.resolve_buffer),
             Signer::own(shared, actor, true),
             true,
             false,
@@ -4604,7 +4601,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         gate_transaction(
             shared,
             &f.held,
-            &f.resolve_buffer,
+            Some(&f.resolve_buffer),
             Signer::own(shared, actor, false),
             true,
             false,
@@ -4626,7 +4623,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         gate_transaction(
             shared,
             &f.held,
-            &f.resolve_buffer,
+            Some(&f.resolve_buffer),
             Signer::own(shared, actor, true),
             true,
             false,
@@ -4668,7 +4665,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         gate_transaction(
             shared,
             &f.redeem,
-            &f.redeem_buffer,
+            None,
             Signer::own(shared, actor, true),
             false,
             true,
@@ -4685,7 +4682,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         gate_transaction(
             shared,
             &f.redeem,
-            &f.redeem_buffer,
+            None,
             Signer::own(shared, actor, false),
             false,
             true,
@@ -4706,7 +4703,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         gate_transaction(
             shared,
             &f.redeem,
-            &f.redeem_buffer,
+            None,
             Signer::own(shared, shared.stranger.bytes, true),
             false,
             true,
@@ -4730,7 +4727,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         gate_transaction(
             shared,
             &f.redeem,
-            &f.redeem_buffer,
+            None,
             Signer::own(shared, actor, true).presenting(&shared.stranger_token),
             false,
             true,
@@ -6081,7 +6078,7 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
         gate_transaction(
             shared,
             &walk.merged,
-            &f.resolve_buffer,
+            Some(&f.resolve_buffer),
             Signer::own(shared, actor, true),
             true,
             false,
@@ -6173,7 +6170,7 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
         gate_transaction(
             shared,
             &walk.resolved,
-            &f.redeem_buffer,
+            None,
             Signer::own(shared, actor, true),
             false,
             true,
@@ -6212,7 +6209,7 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
         gate_transaction(
             shared,
             &walk.redeemed,
-            &f.redeem_buffer,
+            None,
             Signer::own(shared, actor, true),
             false,
             true,
@@ -7073,7 +7070,7 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
         gate_transaction(
             shared,
             plane,
-            &f.resolve_buffer,
+            Some(&f.resolve_buffer),
             Signer::own(shared, actor, true),
             true,
             false,
@@ -7133,7 +7130,7 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
         gate_transaction(
             shared,
             plane,
-            &f.redeem_buffer,
+            None,
             Signer::own(shared, actor, true),
             false,
             true,
@@ -7166,7 +7163,7 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
         gate_transaction(
             shared,
             plane,
-            &f.redeem_buffer,
+            None,
             Signer::own(shared, actor, true),
             false,
             true,
@@ -7631,7 +7628,6 @@ fn emit_committed_plan(out_dir: &Path, f: &Fixture) {
      * committed cases create them through ordinary signed instructions. */
 
     plan.account("resolve-buffer", &f.resolve_buffer, &f.resolve_buffer_bytes);
-    plan.account("redeem-buffer", &f.redeem_buffer, &f.redeem_buffer_bytes);
     for (index, page) in f.walk.pages.iter().enumerate() {
         plan.account(
             &format!("committed-page-{index}"),
@@ -7804,9 +7800,9 @@ fn main() {
     plan.account("pot", &f.batch.pot, &f.batch.pot_bytes);
     plan.account("receipt", &f.batch.receipt, &f.batch.receipt_bytes);
 
-    /* Caller-supplied buffers, and the imposter replay account. */
+    /* Resolve/FeedAdvance buffers, and the imposter replay account. Internal
+     * redemption deliberately has no genesis buffer of its own. */
     plan.account("resolve-buffer", &f.resolve_buffer, &f.resolve_buffer_bytes);
-    plan.account("redeem-buffer", &f.redeem_buffer, &f.redeem_buffer_bytes);
     plan.account("page-buffer", &f.page_buffer, &f.page_buffer_bytes);
     plan.account("replay-imposter", &shared.imposter, &f.seam.state.replay);
 

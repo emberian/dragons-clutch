@@ -74,7 +74,6 @@ const OUTCOMES: u8 = 4;
 const SETS: u64 = 64;
 const DENOMINATOR: u64 = 64;
 const SUBSTITUTE_ARCHIVE: Address = Address::new_from_array([0xd3; 32]);
-const EMPTY_BUFFER: Address = Address::new_from_array([0xd4; 32]);
 const OVERFLOW_DESTINATION: Address = Address::new_from_array([0xd5; 32]);
 
 fn actor_keypair() -> Keypair {
@@ -578,7 +577,7 @@ impl Founding {
         );
         assert_eq!(
             metas.len(),
-            observe_resolve::EVIDENCE_ACCOUNT_PREFIX + usize::from(OUTCOMES)
+            observe_resolve::RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES)
         );
         Instruction::new_with_bytes(PROGRAM_ID, &data, metas)
     }
@@ -591,7 +590,6 @@ impl Founding {
         outcome: u8,
         quantity: u64,
     ) -> Instruction {
-        let feed = derive(&[seeds::SEED_FEED, &self.feed_id.bytes()]).0;
         let mut data = vec![0xd1, 1];
         data.extend_from_slice(&sequence.to_le_bytes());
         data.push(2); // ACTION_REDEEM_INTERNAL
@@ -607,8 +605,6 @@ impl Founding {
             AccountMeta::new(self.supply, false),
             AccountMeta::new_readonly(self.terms, false),
             AccountMeta::new_readonly(self.resolution, false),
-            AccountMeta::new_readonly(feed, false),
-            AccountMeta::new_readonly(EMPTY_BUFFER, false),
             AccountMeta::new_readonly(self.profile, false),
             AccountMeta::new_readonly(TOKEN_2022, false),
             AccountMeta::new_readonly(self.policy, false),
@@ -772,11 +768,6 @@ impl Scenario {
             .expect("fixture buffer")
             .clone();
 
-        let mut empty = vec![0_u8; observe_resolve::EVIDENCE_BUFFER_HEADER_BYTES];
-        empty[0] = observe_resolve::EVIDENCE_BUFFER_TAG;
-        empty[1] = observe_resolve::BUFFER_VERSION;
-        empty[2..34].copy_from_slice(&source.window_id.bytes());
-
         let mut test = ProgramTest::default();
         test.prefer_bpf(true);
         test.add_program("clutch_sbf", PROGRAM_ID, None);
@@ -816,16 +807,6 @@ impl Scenario {
                     .minimum_balance(source_archive_account.data.len())
                     .max(1),
                 data: source_archive_account.data.clone(),
-                owner: PROGRAM_ID,
-                executable: false,
-                rent_epoch: 0,
-            },
-        );
-        test.add_account(
-            EMPTY_BUFFER,
-            Account {
-                lamports: Rent::default().minimum_balance(empty.len()).max(1),
-                data: empty,
                 owner: PROGRAM_ID,
                 executable: false,
                 rent_epoch: 0,

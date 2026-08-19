@@ -1,15 +1,15 @@
 //! `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal`.
 //!
 //! This module owns the observation and resolution plane: the feed head that
-//! turns a folded observation page into an advanced, replay-guarded cursor
-//! (digest-chained and signer-authorized — nothing here authenticates the
-//! observation *sources*), and the
-//! evidence gate that turns a sealed window into either one categorical payout
-//! index (degree zero, version-two Resolution bytes) or one native B-spline
-//! vector (degrees one through three, version-three Resolution bytes). Smooth
-//! terms are never searched through the preset set. The native vector has one
-//! persisted owner—the immutable Resolution record—and is reconstructed only
-//! into an ephemeral kernel value for redemption. It
+//! turns a folded observation page into an advanced, replay-guarded cursor,
+//! and the source-authenticated gate that turns a sealed archive into either
+//! one categorical payout index (degree zero, version-two Resolution bytes),
+//! one native B-spline point vector (degrees one through three, version-three
+//! bytes), or one native occupation vector (degrees one through three,
+//! version-four bytes). Smooth terms are never searched through the preset
+//! set. Each native vector has one persisted owner—the immutable Resolution
+//! record—and is reconstructed only into an ephemeral kernel value for
+//! redemption. It
 //! contains no economic logic — the payout algebra is [`clutch_kernel`], the
 //! window algebra is [`clutch_accumulator`], the terms-to-payout derivation is
 //! [`clutch_solana_reference::derive_payout`], and byte ownership is
@@ -29,8 +29,11 @@
 //! a physical payout. It takes [`REDEEM_ACCOUNT_PREFIX`] plus the mint vector
 //! and collateral admission roles so the program can prove that *zero*
 //! Token-2022 atoms moved and that pooled custody still covers the remaining
-//! locked backing. The admission decision over those accounts is
-//! [`crate::instructions::split::validate_collateral_leg`], called with this
+//! locked backing. It accepts immutable Terms and the persisted Resolution
+//! record as its complete payout authority: no Feed, source archive, or caller
+//! evidence account exists on this post-resolution plane. The admission
+//! decision over the custody accounts is
+//! [`crate::instructions::split::validate_collateral_leg`], called with its
 //! own positions rather than copied — one decision procedure, two account
 //! lists. [`super::cash_exit`] is the separate owner-authorized Hoard-to-wallet
 //! `TransferChecked` boundary.
@@ -40,14 +43,16 @@
 //! `clutch_solana_reference::apply_market_resolution_with_evidence` is the
 //! degree-zero market-global Resolve oracle. Native resolution composes the
 //! reference's pure `derive_payout_vector` seam with the kernel's
-//! `resolve_with_vector` seam and distinct v3 point/v4 occupation codecs; the real-SBF campaign is
-//! the adapter evidence because the old composed reference account path is
-//! deliberately version-two/index-shaped.
-//! `clutch_solana_reference::apply_with_evidence` remains the owner-scoped
-//! redemption oracle. Every check is rebuilt here from `#[inline(never)]`
-//! frames because calling the composed offline adapter exceeds SBF's 4 KiB
-//! frame. The generated harness runs both references on identical bytes; its
-//! committed plan then exercises the production account plane.
+//! `resolve_with_vector` seam and distinct v3 point/v4 occupation codecs; the
+//! real-SBF campaign is the adapter evidence because the old composed reference
+//! account path is deliberately version-two/index-shaped.
+//! `clutch_solana_reference::apply_with_evidence` remains an offline semantic
+//! oracle for the categorical owner transition, run against the record that
+//! Resolve produced. It is not the production account ABI: every owner check
+//! is rebuilt by [`apply_recorded_redemption`] from immutable Terms and the
+//! persisted record in `#[inline(never)]` frames because the composed adapter
+//! exceeds SBF's 4 KiB frame. Native point/occupation redemption composes the
+//! record-owned vector with the unchanged kernel redemption seam.
 //!
 //! The reference has no `FeedAdvance`, so that instruction's oracle is the
 //! accumulator's own algebra plus the frozen [`clutch_solana_layout::FeedAccount`]
@@ -61,21 +66,21 @@
 //! | --- | --- | --- |
 //! | `validate_metadata` (owner, key, writable, alias) | [`process`]: `require_count`, `require_distinct`, `validate_state_roles`, `expect_pda` | yes, first |
 //! | `Request::decode` | [`crate::dispatch`] | yes, already recorded in `SBF_BRINGUP.md` |
-//! | `DecodedState::decode` | `apply_evidence_transition` step 1 | yes |
+//! | `DecodedState::decode` | `apply_recorded_redemption` step 1 | yes |
 //! | `validate_links` | step 2 | yes |
 //! | `validate_padding` | step 3 | yes |
 //! | `validate_aggregate_closure` | step 4 | yes |
 //! | owner replay sequence (`RedeemInternal` only) | step 5 | yes |
 //! | `kernel_market` invariants | step 6 | yes for v2; v3/v4 additionally read their sole vector owner |
-//! | `validate_evidence_metadata` writability + zero window id | step 7 | yes |
-//! | `validate_evidence_metadata` owner/key/alias | [`process`], with the other addresses | **moved earlier** |
+//! | immutable Terms/Resolution writability | step 7 | yes |
+//! | account owner/key/alias | [`process`], with the other addresses | **moved earlier** |
 //! | signer / `authorize_owner` | step 8 | yes |
-//! | `resolve_from_evidence` / `redeem_from_evidence` | step 9 | yes |
+//! | recorded payout authority | step 9 | yes; no re-fold after Resolve |
 //! | kernel transition, ledger delta, post-state closure | steps 10-13 | yes |
 //!
 //! The three divergences, each fail-closed:
 //!
-//! 1. **Evidence-account addresses are checked with the other addresses.** An
+//! 1. **Resolve evidence-account addresses are checked with the other addresses.** An
 //!    on-chain expected key is *derived* from the account's own decoded bytes,
 //!    so no address comparison can happen mid-gate the way it does in the
 //!    reference, where the expected keys arrive as trusted bindings.  The set
@@ -86,11 +91,11 @@
 //!    it in, and the comparison itself still happens at the reference's point
 //!    (`validate_links`, `bind_terms`, `bind_resolution`), so the ordering is
 //!    preserved while the binding is strictly stronger.
-//! 3. **`feed_cursor` is read from the feed head, not supplied.** The reference
-//!    takes the witnessed cursor as a caller parameter; here it is
-//!    [`clutch_solana_layout::FeedAccount::cursor`], which only [`process`]'s
-//!    `FeedAdvance` path can move, and only across buckets a folded page
-//!    covered.  A caller can therefore no longer assert maturity.
+//! 3. **On Resolve, `feed_cursor` is read from the authenticated archive, not
+//!    supplied.** The reference takes the witnessed cursor as a caller
+//!    parameter; here it is the sealed receipt and cross-checks the Feed head. A caller can therefore no
+//!    longer assert maturity. `RedeemInternal` reads neither object; it checks
+//!    the record's window against the identity recomputed from immutable Terms.
 //!
 //! Resolve has the same evidence ordering but a deliberately narrower state
 //! plane: no Position and no owner Replay. Its request sequence is checked
@@ -98,33 +103,16 @@
 //! an exact already-recorded fact is idempotent and any conflicting repeat
 //! refuses.
 //!
-//! ## What this program cannot derive, and what that costs
+//! ## One authority per phase
 //!
-//! Two values the frozen layouts require are called digests, but this
-//! instruction does not possess canonical digest preimages for them:
-//! [`clutch_accumulator`] deliberately publishes the canonical `WindowDomain`
-//! fields and no authenticated archive commitment, while the feed summary
-//! commitment has no checked source/archive chain here.
-//!
-//! - **The window identity.**  Both resolution codecs
-//!   refuses a zero `window` on a resolved record, so a resolve must write one.
-//!   It arrives declared, in the evidence buffer, is refused when zero, and is
-//!   *recorded, not believed* — exactly the posture
-//!   `clutch_solana_reference::EvidenceBindings::window_id` documents.  No gate
-//!   decision depends on it: which payout is selected comes from
-//!   `WindowResult::check_domain` against the domain the market's own terms
-//!   derive, field by field.  Its one live use is the redemption check that the
-//!   record's digest equals the one declared at redeem time, which is a
-//!   cross-transaction consistency check on a caller-chosen label and is not
-//!   evidence about a window.
-//! - **The feed summary digest.**  `Intent::FeedAdvance` carries a non-zero
-//!   `evidence: Hash32` on the frozen wire and [`clutch_solana_layout::FeedAccount`]
-//!   has a `summary` field for it.  It is recorded verbatim.  Nothing reads it,
-//!   and nothing here or anywhere else in this repository proves it is the
-//!   digest of the page that was folded.
-//!
-//! Both are obligations on a build that has selected a hash primitive; neither
-//! is load-bearing for any refusal.
+//! Resolve authenticates the canonical SourceSpec and sealed SourceArchive.
+//! The v2/v3 point path still accepts a redundant projection buffer only when
+//! every projected domain/value fact equals that archive; v4 occupation reads
+//! the archive directly. The resulting record owns the canonical window and
+//! payout/vector. After that transition, internal and bearer redemption never
+//! re-fold a caller payload or trust a second window label. Immutable Terms,
+//! the version-selected persisted Resolution record, and kernel mode/supply
+//! are the sole settlement authority.
 //!
 //! ## Refusal codes
 //!
@@ -201,10 +189,9 @@
 //!   *within* a page by the summary algebra and bound to nothing *across*
 //!   pages.  Two pages on different grids are each internally valid.  This is
 //!   an obligation on a `FeedAccount` revision.
-//! - The evidence buffer has no canonical address: `seeds.rs` is frozen and no
-//!   seed exists for it.  Nothing is lost today — its bytes are hostile by
-//!   construction and no decision depends on its identity — but it cannot be
-//!   *created* on-chain until it has one.
+//! - The v2/v3 point projection buffer has no canonical address. Its bytes are
+//!   hostile and accepted only when they exactly project the authenticated
+//!   archive; v4 Resolve and every post-resolution redemption omit it.
 //! - The terms artifact is still read in its own small frame at each gate
 //!   step — address derivation, market binding, payout-set binding, record
 //!   binding, payout derivation — but the
@@ -389,11 +376,13 @@ pub const RESOLVE_ACCOUNT_PREFIX: usize = 11;
 /// Unlike point resolution, occupation consumes the sealed archive directly
 /// and has no redundant caller-supplied projection account.
 pub const OCCUPATION_RESOLVE_ACCOUNT_PREFIX: usize = 10;
-/// Fixed owner-scoped evidence prefix of `RedeemInternal`.
+/// Fixed owner/state prefix of `RedeemInternal`, before custody roles.
 ///
 /// Redemption remains a position transition and therefore retains the owner
-/// Position and generation-scoped Replay account.
-pub const EVIDENCE_ACCOUNT_PREFIX: usize = 11;
+/// Position and generation-scoped Replay account. Immutable Terms and the
+/// persisted Resolution record are its complete payout-authority plane; no
+/// Feed head or caller evidence buffer is accepted after resolution.
+pub const RECORDED_REDEEM_STATE_PREFIX: usize = 9;
 /// Exact number of accounts `FeedAdvance` accepts.
 pub const FEED_ADVANCE_ACCOUNT_COUNT: usize = 3;
 
@@ -415,11 +404,6 @@ pub const IX_SUPPLY: usize = 6;
 pub const IX_TERMS: usize = 7;
 /// Resolution-record account.
 pub const IX_RESOLUTION: usize = 8;
-/// Feed-head account (read-only).
-pub const IX_FEED: usize = 9;
-/// Caller-supplied evidence buffer (read-only, hostile).
-pub const IX_BUFFER: usize = 10;
-
 /// Authenticated fee-payer on the market-global Resolve plane.
 pub const IX_RESOLVE_ACTOR: usize = 0;
 /// Market account on the market-global Resolve plane.
@@ -449,32 +433,33 @@ pub const IX_RESOLVE_BUFFER: usize = 10;
 
 /// Fixed prefix length of `RedeemInternal`, before its canonical mint vector.
 ///
-/// The twelve evidence accounts, plus the Profile the 266 policy bytes are
+/// The nine owner/state accounts, plus the Profile the 266 policy bytes are
 /// bound to, the token program, the policy, the collateral mint, the
 /// redeemer's own collateral account, the Hoard's signing authority, and the
-/// Hoard token account.
+/// Hoard token account. Feed and evidence-buffer accounts are deliberately
+/// absent: the immutable record is already the result of resolution.
 ///
 /// The Profile is in the list for the same reason it is in the seam plane's:
 /// the collateral mint's identity lives only in the Realm's frozen policy, and
 /// the only thing that binds those 266 bytes to *this* Realm is the Profile's
 /// digest.  The evidence plane never needed a Profile before because nothing
 /// in it named an asset.
-pub const REDEEM_ACCOUNT_PREFIX: usize = 18;
+pub const REDEEM_ACCOUNT_PREFIX: usize = 16;
 
 /// Profile identity account (read-only).
-pub const IX_PROFILE: usize = 11;
+pub const IX_PROFILE: usize = RECORDED_REDEEM_STATE_PREFIX;
 /// The pinned Token-2022 program (read-only, executable).
-pub const IX_TOKEN_PROGRAM: usize = 12;
+pub const IX_TOKEN_PROGRAM: usize = 10;
 /// The Realm's 266-byte collateral policy (read-only).
-pub const IX_POLICY: usize = 13;
+pub const IX_POLICY: usize = 11;
 /// The collateral mint the Realm's policy names (read-only).
-pub const IX_COLLATERAL_MINT: usize = 14;
+pub const IX_COLLATERAL_MINT: usize = 12;
 /// The redeemer's own Token-2022 collateral account (writable).
-pub const IX_ACTOR_TOKEN: usize = 15;
+pub const IX_ACTOR_TOKEN: usize = 13;
 /// The Hoard's signing authority; holds no data and is never written.
-pub const IX_HOARD_AUTHORITY: usize = 16;
+pub const IX_HOARD_AUTHORITY: usize = 14;
 /// The Hoard's Token-2022 collateral account (writable).
-pub const IX_HOARD_TOKEN: usize = 17;
+pub const IX_HOARD_TOKEN: usize = 15;
 /// First canonical outcome mint on a Resolve.
 pub const IX_RESOLVE_OUTCOME_MINTS: usize = RESOLVE_ACCOUNT_PREFIX;
 /// First canonical outcome mint on an occupation Resolve.
@@ -498,20 +483,19 @@ pub const IX_ADVANCE_FEED: usize = 1;
 /// Caller-supplied observation page in the `FeedAdvance` list.
 pub const IX_ADVANCE_BUFFER: usize = 2;
 
-/// Program-owned roles of `Resolve`/`RedeemInternal` whose mutability is fixed.
+/// Program-owned roles of `RedeemInternal` whose mutability is fixed.
 ///
 /// The terms and resolution accounts are deliberately absent: their required
 /// mutability is a *gate* decision made at the reference's point in the order,
 /// so their declared writability is carried into the transition as a fact
 /// rather than refused here.
-const EVIDENCE_STATE_ROLES: [StateRole; 7] = [
+const REDEEM_STATE_ROLES: [StateRole; 6] = [
     StateRole::writable(IX_MARKET, account_len::MARKET),
     StateRole::writable(IX_HOARD, account_len::HOARD),
     StateRole::writable(IX_POSITION, account_len::POSITION),
     StateRole::writable(IX_KERNEL, KERNEL_ACCOUNT_LEN),
     StateRole::writable(IX_REPLAY, REPLAY_ACCOUNT_LEN),
     StateRole::writable(IX_SUPPLY, account_len::SUPPLY_LEDGER),
-    StateRole::read_only(IX_FEED, account_len::FEED),
 ];
 
 /// Program-owned market-global roles of `Resolve`.
@@ -1177,7 +1161,7 @@ const ZERO_RESOLUTION: ResolutionAccount = ResolutionAccount {
     flags: 0,
 };
 
-/* `decode_unchecked`: every call site below runs after [`evidence_gated`]'s
+/* `decode_unchecked`: every call site below runs after the live account plane's
  * address plane already paid `accounts::read_terms` — a FULL decode of the
  * same bytes, self-certifying digest included — and the terms account is
  * presented read-only (step 7 refuses a writable presentation before any of
@@ -1431,6 +1415,19 @@ fn derived_terms(market_bytes: &[u8], terms_bytes: &[u8]) -> Gate<ResolutionTerm
 #[inline(never)]
 fn expected_window_domain(market_bytes: &[u8], terms_bytes: &[u8]) -> Gate<WindowDomain> {
     Ok(derived_terms(market_bytes, terms_bytes)?.window)
+}
+
+/// Recompute the sole canonical window identity from immutable market Terms.
+///
+/// `RedeemInternal` deliberately has no Feed, archive, or projection-buffer
+/// account. The persisted resolution record must name this identity exactly;
+/// callers cannot supply a competing window label after resolution.
+#[inline(never)]
+fn expected_window_id(market_bytes: &[u8], terms_bytes: &[u8]) -> Gate<Hash32> {
+    Ok(source_archive::canonical_window_id(expected_window_domain(
+        market_bytes,
+        terms_bytes,
+    )?))
 }
 
 /// Derive the payout the evidence selects, and refuse any other request.
@@ -1910,6 +1907,19 @@ struct EvidencePlane<'a> {
     resolution_writable: bool,
 }
 
+/// Post-resolution authority presented to `RedeemInternal`.
+///
+/// Unlike [`EvidencePlane`], this has no caller-selected window, Feed cursor,
+/// or evidence payload. The record's own canonical window and payout are the
+/// output of the earlier market-global Resolve transition.
+#[derive(Clone, Copy, Debug)]
+struct RecordedResolutionPlane<'a> {
+    terms: &'a [u8],
+    resolution: &'a [u8],
+    terms_writable: bool,
+    resolution_writable: bool,
+}
+
 /// Runtime facts about the actor, carried so the checks stay in gate order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Actor {
@@ -1924,7 +1934,7 @@ struct RedeemAction {
     quantity: u64,
 }
 
-/// Apply one evidence-gated transition to account bytes.
+/// Apply one recorded-resolution redemption to account bytes.
 ///
 /// This is `clutch_solana_reference::apply_with_evidence` rebuilt over the
 /// account plane.  Nothing is written until every check has passed, so a
@@ -1932,15 +1942,14 @@ struct RedeemAction {
 /// encode that fails after an earlier encode succeeded, which no reachable
 /// state produces and which SVM rollback would discard anyway.
 ///
-/// There is deliberately no evidence-free entry point.  The reference has two
-/// (`apply` and `apply_with_evidence`) because it must show that the absent
-/// case refuses; here the absent case is not expressible — the plane is a
-/// parameter, not an `Option`, and [`process`] cannot build one without the
-/// terms, resolution, and buffer accounts, which the account count requires.
+/// There is deliberately no dual evidence entry point. Resolve owns evidence;
+/// redemption accepts only immutable Terms plus the exact persisted Resolution
+/// record. A second window label or payload would be a competing payout
+/// authority and is not expressible in the canonical account list.
 #[allow(clippy::too_many_arguments)]
-fn apply_evidence_transition(
+fn apply_recorded_redemption(
     state: &mut StateSlices<'_>,
-    plane: &EvidencePlane<'_>,
+    plane: &RecordedResolutionPlane<'_>,
     bumps: &Bumps,
     actor: Actor,
     sequence: u64,
@@ -2026,17 +2035,13 @@ fn apply_evidence_transition(
         external: [0; MAX_OUTCOMES],
     };
 
-    /* 7. `validate_evidence_metadata`, the half that is a byte-level fact. */
+    /* 7. Immutable recorded-resolution metadata. */
     if plane.terms_writable {
         return Err(ReferenceError::ImmutableAccountWritable);
     }
     if plane.resolution_writable {
         return Err(ReferenceError::ImmutableAccountWritable);
     }
-    if plane.window_id == Hash32::ZERO {
-        return Err(ReferenceError::WindowIdentityUnavailable);
-    }
-
     let step = {
         let RedeemAction { outcome, quantity } = action;
         /* 8. Redemption is still the owner's action. */
@@ -2047,12 +2052,9 @@ fn apply_evidence_transition(
             return Err(ReferenceError::UnauthorizedActor);
         }
 
-        /* 9. `redeem_from_evidence`.  Redemption's authority is the
-         * recorded resolution, not a re-fold: re-deriving a payout here
-         * would create a second place a payout can be decided. */
-        if !plane.window.is_empty() {
-            return Err(ReferenceError::UnexpectedEvidence);
-        }
+        /* 9. Recorded-resolution authority. Redemption does not re-fold and
+         * does not accept a caller window: either would create a second place
+         * a payout can be decided. */
         let terms = terms_binds_market(state.market, plane.terms, bumps.terms)?;
         payout_set_binds_terms(state.kernel, plane.terms)?;
         let record = resolution_binds(
@@ -2064,7 +2066,7 @@ fn apply_evidence_transition(
         if !record.resolved {
             return Err(ReferenceError::ResolutionNotRecorded);
         }
-        if record.window != plane.window_id {
+        if record.window != expected_window_id(state.market, plane.terms)? {
             return Err(ReferenceError::ResolutionBindingMismatch);
         }
         if terms.basis_degree == 0 && record.payout_index >= terms.payout_count {
@@ -2815,7 +2817,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         Action::Resolve { payout_index } => {
             resolve_global(program_id, accounts, request.sequence, payout_index)
         }
-        Action::RedeemInternal { outcome, quantity } => evidence_gated(
+        Action::RedeemInternal { outcome, quantity } => recorded_redeem(
             program_id,
             accounts,
             request.sequence,
@@ -3161,24 +3163,18 @@ fn derive_occupation_candidate(
 }
 
 #[inline(never)]
-fn evidence_gated(
+fn recorded_redeem(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
     sequence: u64,
     action: RedeemAction,
 ) -> Outcome<()> {
-    let redeems = true;
     require(
-        accounts.len()
-            >= if redeems {
-                REDEEM_ACCOUNT_PREFIX
-            } else {
-                EVIDENCE_ACCOUNT_PREFIX
-            },
+        accounts.len() >= REDEEM_ACCOUNT_PREFIX,
         ClutchError::AccountCount,
     )?;
     require_distinct(accounts)?;
-    accounts::validate_state_roles(program_id, accounts, &EVIDENCE_STATE_ROLES)?;
+    accounts::validate_state_roles(program_id, accounts, &REDEEM_STATE_ROLES)?;
     validate_open_roles(
         program_id,
         accounts,
@@ -3203,28 +3199,17 @@ fn evidence_gated(
             len: resolution_len,
         }],
     )?;
-    validate_buffer_role(
-        program_id,
-        &accounts[IX_BUFFER],
-        MAX_EVIDENCE_BUFFER_LEN,
-        EVIDENCE_BUFFER_HEADER_BYTES,
-    )?;
 
     /* Addresses.  Caller-supplied expected keys are never accepted: every
      * address is recomputed from the frozen seed schema.  The stored bumps are
      * carried into the transition instead of being compared here, so that the
      * comparison still happens at the reference's point in the gate order. */
     let market = accounts::read_market(&accounts[IX_MARKET].data.borrow())?;
-    let mint_prefix = if redeems {
-        IX_REDEEM_OUTCOME_MINTS
-    } else {
-        IX_RESOLVE_OUTCOME_MINTS
-    };
+    let mint_prefix = IX_REDEEM_OUTCOME_MINTS;
     require(
         accounts.len() == mint_prefix + usize::from(market.outcome_count),
         ClutchError::AccountCount,
     )?;
-    let feed = accounts::read_feed(&accounts[IX_FEED].data.borrow())?;
     let (owner, generation) = {
         let position = PositionAccount::decode(&accounts[IX_POSITION].data.borrow())?;
         (position.owner.bytes(), position.generation)
@@ -3251,61 +3236,45 @@ fn evidence_gated(
     expect_pda(accounts[IX_TERMS].key, terms_pda, None)?;
     let resolution_pda = seeds::resolution_pda(program_id, &market_bytes);
     expect_pda(accounts[IX_RESOLUTION].key, resolution_pda, None)?;
-    expect_pda(
-        accounts[IX_FEED].key,
-        seeds::feed_pda(program_id, &feed.feed.bytes()),
-        Some(feed.stored_bump),
-    )?;
-
-    /* The feed head is this program's replacement for the reference's
-     * caller-supplied witnessed cursor, so it must be *this market's* feed. */
-    require(feed.feed == market.feed, ClutchError::MismatchedState)?;
 
     /* Steps 1-3 of `TOKEN2022_PLAN.md` §3.3 for the redemption's collateral
-     * leg, before anything is written.  A resolve has no leg: it moves no
-     * value and takes the twelve-account plane unchanged.
-     *
-     * The snapshot carries a zero quantity because a redemption does not know
-     * what it pays until the kernel has run; the paid amount is supplied to
-     * the exact-delta check below instead. */
-    let leg = if redeems {
-        split::validate_token_program(&accounts[IX_TOKEN_PROGRAM])?;
-        require(
-            !accounts[IX_PROFILE].is_writable,
-            ClutchError::UnexpectedWritable,
-        )?;
-        validate_open_roles(
-            program_id,
-            accounts,
-            &[OpenRole {
-                index: IX_PROFILE,
-                len: account_len::PROFILE,
-            }],
-        )?;
-        let profile = accounts::read_profile(&accounts[IX_PROFILE].data.borrow())?;
-        expect_pda(
-            accounts[IX_PROFILE].key,
-            seeds::profile_pda(program_id, &realm_bytes, &profile.profile.bytes()),
-            None,
-        )?;
-        require(
-            profile.realm == market.realm && profile.profile == market.profile,
-            ClutchError::MismatchedState,
-        )?;
-        let collateral_atoms =
-            HoardAccount::decode(&accounts[IX_HOARD].data.borrow())?.collateral_atoms;
-        Some(split::validate_collateral_leg(
-            accounts,
-            &REDEEM_COLLATERAL_ROLES,
-            &market_bytes,
-            seeds::hoard_authority_pda(program_id, &market_bytes),
-            seeds::hoard_token_pda(program_id, &market_bytes),
-            collateral_atoms,
-            0,
-        )?)
-    } else {
-        None
-    };
+     * leg, before anything is written. The snapshot carries zero quantity
+     * because internal redemption changes ledger ownership of collateral but
+     * transfers no Token-2022 atoms. */
+    split::validate_token_program(&accounts[IX_TOKEN_PROGRAM])?;
+    require(
+        !accounts[IX_PROFILE].is_writable,
+        ClutchError::UnexpectedWritable,
+    )?;
+    validate_open_roles(
+        program_id,
+        accounts,
+        &[OpenRole {
+            index: IX_PROFILE,
+            len: account_len::PROFILE,
+        }],
+    )?;
+    let profile = accounts::read_profile(&accounts[IX_PROFILE].data.borrow())?;
+    expect_pda(
+        accounts[IX_PROFILE].key,
+        seeds::profile_pda(program_id, &realm_bytes, &profile.profile.bytes()),
+        None,
+    )?;
+    require(
+        profile.realm == market.realm && profile.profile == market.profile,
+        ClutchError::MismatchedState,
+    )?;
+    let collateral_atoms =
+        HoardAccount::decode(&accounts[IX_HOARD].data.borrow())?.collateral_atoms;
+    let leg = split::validate_collateral_leg(
+        accounts,
+        &REDEEM_COLLATERAL_ROLES,
+        &market_bytes,
+        seeds::hoard_authority_pda(program_id, &market_bytes),
+        seeds::hoard_token_pda(program_id, &market_bytes),
+        collateral_atoms,
+        0,
+    )?;
 
     let observed = claim_truth::observe_outcome_mints(
         program_id,
@@ -3343,19 +3312,11 @@ fn evidence_gated(
         resolution: resolution_pda.1,
     };
 
-    let buffer = accounts[IX_BUFFER].data.borrow();
-    let evidence = read_evidence_buffer(&buffer)?;
     let terms_data = accounts[IX_TERMS].data.borrow();
     let resolution_data = accounts[IX_RESOLUTION].data.borrow();
-    let plane = EvidencePlane {
+    let plane = RecordedResolutionPlane {
         terms: &terms_data,
         resolution: &resolution_data,
-        window: evidence.window,
-        window_id: evidence.window_id,
-        feed_cursor: feed.cursor,
-        /* Named gap: this program has no clock.  Zero means "no slot
-         * recorded", which is why nothing may read this field as a slot. */
-        resolved_slot: 0,
         terms_writable: accounts[IX_TERMS].is_writable,
         resolution_writable: accounts[IX_RESOLUTION].is_writable,
     };
@@ -3375,28 +3336,26 @@ fn evidence_gated(
             replay: &mut replay_data,
             supply: &mut supply_data,
         };
-        apply_evidence_transition(&mut state, &plane, &bumps, actor, sequence, action)?;
+        apply_recorded_redemption(&mut state, &plane, &bumps, actor, sequence, action)?;
     }
 
-    /* Every borrow the evidence plane held is released before the CPI: a live
-     * `RefCell` borrow across `invoke` is a runtime failure, not a lint. */
+    /* Every immutable record-plane borrow is released before the post-state
+     * token checks. A live `RefCell` borrow across a later CPI would be a
+     * runtime failure, not a lint. */
     drop(terms_data);
-    drop(buffer);
     drop(resolution_data);
 
     /* Redemption changes *which ledger term* owns collateral already retained
      * by the pooled Hoard: locked complete-set backing falls and this
      * position's cash rises by the same payout.  It is not a withdrawal and
      * therefore must move exactly zero Token-2022 atoms. */
-    if let Some(leg) = leg {
-        let post_actor = token::token_amount(&accounts[IX_ACTOR_TOKEN])?;
-        let post_hoard = token::token_amount(&accounts[IX_HOARD_TOKEN])?;
-        token::require_exact_credit(leg.actor_amount, post_actor, 0)?;
-        token::require_exact_credit(leg.hoard_amount, post_hoard, 0)?;
-        let collateral_atoms =
-            HoardAccount::decode(&accounts[IX_HOARD].data.borrow())?.collateral_atoms;
-        token::require_hoard_covers_collateral(collateral_atoms, post_hoard)?;
-    }
+    let post_actor = token::token_amount(&accounts[IX_ACTOR_TOKEN])?;
+    let post_hoard = token::token_amount(&accounts[IX_HOARD_TOKEN])?;
+    token::require_exact_credit(leg.actor_amount, post_actor, 0)?;
+    token::require_exact_credit(leg.hoard_amount, post_hoard, 0)?;
+    let collateral_atoms =
+        HoardAccount::decode(&accounts[IX_HOARD].data.borrow())?.collateral_atoms;
+    token::require_hoard_covers_collateral(collateral_atoms, post_hoard)?;
     let observed_after = claim_truth::observe_outcome_mints(
         program_id,
         accounts,

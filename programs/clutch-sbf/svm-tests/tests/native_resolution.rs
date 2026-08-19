@@ -50,7 +50,6 @@ use {
 const OUTCOMES: u8 = 4;
 const DENOMINATOR: u64 = 64;
 const SETS: u64 = 64;
-const EMPTY_BUFFER: Address = Address::new_from_array([0x8d; 32]);
 const ACTOR_TOKEN: Address = Address::new_from_array([0x8e; 32]);
 const CONFLICT_BUFFER: Address = Address::new_from_array([0x8f; 32]);
 const OUTCOME_SOURCE: Address = Address::new_from_array([0x90; 32]);
@@ -104,14 +103,6 @@ fn one_hot_payouts() -> ([PayoutVectorBytes; MAX_PAYOUTS], PayoutSet) {
         kernel[outcome] = PayoutVector::new(DENOMINATOR, weights);
     }
     (bytes, PayoutSet::new(OUTCOMES, OUTCOMES, kernel))
-}
-
-fn empty_evidence_buffer(window_id: Hash32) -> Vec<u8> {
-    let mut out = vec![0_u8; observe_resolve::EVIDENCE_BUFFER_HEADER_BYTES];
-    out[0] = observe_resolve::EVIDENCE_BUFFER_TAG;
-    out[1] = observe_resolve::BUFFER_VERSION;
-    out[2..34].copy_from_slice(&window_id.bytes());
-    out
 }
 
 fn smooth_plane(actor: Address, degree: u8, low: u128, high: u128) -> Plane {
@@ -541,17 +532,6 @@ impl Scenario {
                 rent_epoch: 0,
             },
         );
-        let empty = empty_evidence_buffer(plane.window_id);
-        test.add_account(
-            EMPTY_BUFFER,
-            Account {
-                lamports: Rent::default().minimum_balance(empty.len()).max(1),
-                data: empty,
-                owner: PROGRAM_ID,
-                executable: false,
-                rent_epoch: 0,
-            },
-        );
         let conflict = source_resolution_evidence_buffer(plane.window_id, plane.feed_id, 3, 5);
         test.add_account(
             CONFLICT_BUFFER,
@@ -649,8 +629,6 @@ impl Scenario {
             AccountMeta::new(self.plane.supply.address, false),
             AccountMeta::new_readonly(self.plane.terms.address, false),
             AccountMeta::new_readonly(self.plane.resolution.address, false),
-            AccountMeta::new_readonly(self.plane.feed.address, false),
-            AccountMeta::new_readonly(EMPTY_BUFFER, false),
             AccountMeta::new_readonly(self.plane.profile.address, false),
             AccountMeta::new_readonly(TOKEN_2022, false),
             AccountMeta::new_readonly(self.plane.policy_account, false),
@@ -664,6 +642,10 @@ impl Scenario {
                 .outcome_mints
                 .iter()
                 .map(|mint| AccountMeta::new_readonly(mint.address, false)),
+        );
+        assert_eq!(
+            metas.len(),
+            observe_resolve::REDEEM_ACCOUNT_PREFIX + usize::from(OUTCOMES)
         );
         Instruction::new_with_bytes(PROGRAM_ID, &data, metas)
     }
@@ -714,14 +696,24 @@ impl Scenario {
     }
 
     async fn try_send(&mut self, instruction: Instruction) -> (Result<(), TransactionError>, u64) {
+        self.try_send_many(&[instruction]).await
+    }
+
+    async fn try_send_many(
+        &mut self,
+        instructions: &[Instruction],
+    ) -> (Result<(), TransactionError>, u64) {
         let blockhash = self.banks.get_latest_blockhash().await.unwrap();
         let budget = Instruction::new_with_bytes(
             COMPUTE_BUDGET,
             &compute_unit_limit_data(1_400_000),
             Vec::new(),
         );
+        let mut transaction_instructions = Vec::with_capacity(instructions.len() + 1);
+        transaction_instructions.push(budget);
+        transaction_instructions.extend_from_slice(instructions);
         let transaction = Transaction::new_signed_with_payer(
-            &[budget, instruction],
+            &transaction_instructions,
             Some(&self.payer.pubkey()),
             &[&self.payer, &self.actor],
             blockhash,
@@ -806,6 +798,38 @@ fn force_resolved_plane(mut plane: Plane, resolution: Vec<u8>) -> Plane {
         });
     account_mut(&mut plane, resolution_address).data = resolution;
     plane
+}
+
+fn point_record(plane: &Plane, degree: u8) -> NativeResolutionAccount {
+    let terms = TermsAccount::decode(
+        &plane
+            .accounts
+            .iter()
+            .find(|account| account.address == plane.terms.address)
+            .expect("terms account")
+            .data,
+    )
+    .expect("terms decode");
+    NativeResolutionAccount {
+        market: plane.market_id,
+        terms: terms.terms,
+        feed: terms.feed,
+        window: plane.window_id,
+        feed_cursor: 104,
+        sealed_end_bucket_exclusive: 103,
+        repair_generation: 0,
+        resolved_slot: 0,
+        mode: RESOLUTION_MODE_DERIVED_POINT,
+        payout_index: PAYOUT_INDEX_UNRESOLVED,
+        outcome_count: OUTCOMES,
+        resolved_value: 4,
+        vector: PayoutVectorBytes {
+            denominator: DENOMINATOR,
+            weights: expected_weights(degree),
+        },
+        stored_bump: plane.resolution.bump,
+        flags: 0,
+    }
 }
 
 fn occupation_record(
@@ -1051,6 +1075,131 @@ async fn native_account_mutability_alias_and_full_mint_vector_are_fail_closed() 
         scenario.data(scenario.plane.resolution.address).await,
     ];
     assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn recorded_internal_redemption_rejects_retired_evidence_aliases_and_late_replay_atomically()
+{
+    let degree = 2;
+    let lot = exact_lot(degree);
+    let mut scenario = Scenario::start(degree, 4, 4, None).await;
+    scenario
+        .try_send(scenario.resolve())
+        .await
+        .0
+        .expect("native point resolves before internal redemption");
+    let watched = [
+        scenario.plane.market.address,
+        scenario.plane.hoard.address,
+        scenario.plane.position.address,
+        scenario.plane.kernel.address,
+        scenario.plane.replay.address,
+        scenario.plane.supply.address,
+        scenario.plane.resolution.address,
+        scenario.plane.hoard_token.address,
+        ACTOR_TOKEN,
+        scenario.plane.outcome_mints[0].address,
+        scenario.plane.outcome_mints[1].address,
+        scenario.plane.outcome_mints[2].address,
+        scenario.plane.outcome_mints[3].address,
+    ];
+    let before = snapshot(&mut scenario, &watched).await;
+
+    let mut retired = scenario.redeem(0, 0, lot);
+    retired.accounts.insert(
+        9,
+        AccountMeta::new_readonly(scenario.plane.feed.address, false),
+    );
+    retired
+        .accounts
+        .insert(10, AccountMeta::new_readonly(scenario.plane.buffer, false));
+    assert_eq!(
+        retired.accounts.len(),
+        observe_resolve::REDEEM_ACCOUNT_PREFIX + usize::from(OUTCOMES) + 2
+    );
+    assert!(scenario.try_send(retired).await.0.is_err());
+    assert_eq!(snapshot(&mut scenario, &watched).await, before);
+
+    let mut aliased_record = scenario.redeem(0, 0, lot);
+    aliased_record.accounts[8] = aliased_record.accounts[7].clone();
+    assert!(scenario.try_send(aliased_record).await.0.is_err());
+    assert_eq!(snapshot(&mut scenario, &watched).await, before);
+
+    let mut incomplete_mints = scenario.redeem(0, 0, lot);
+    incomplete_mints.accounts.pop();
+    assert!(scenario.try_send(incomplete_mints).await.0.is_err());
+    assert_eq!(snapshot(&mut scenario, &watched).await, before);
+
+    let mut writable_record = scenario.redeem(0, 0, lot);
+    writable_record.accounts[8].is_writable = true;
+    assert!(scenario.try_send(writable_record).await.0.is_err());
+    assert_eq!(snapshot(&mut scenario, &watched).await, before);
+
+    let first = scenario.redeem(0, 0, lot);
+    let stale_second = scenario.redeem(0, 0, lot);
+    assert!(scenario
+        .try_send_many(&[first, stale_second])
+        .await
+        .0
+        .is_err());
+    assert_eq!(
+        snapshot(&mut scenario, &watched).await,
+        before,
+        "the late replay refusal rolls back the first instruction too"
+    );
+
+    scenario
+        .try_send(scenario.redeem(0, 0, lot))
+        .await
+        .0
+        .expect("the exact 16+n recorded-resolution plane succeeds");
+}
+
+#[tokio::test]
+async fn recorded_internal_redemption_rejects_wrong_mode_terms_and_window_without_writes() {
+    let degree = 2;
+    let lot = exact_lot(degree);
+    for corruption in ["mode", "terms", "window"] {
+        let actor = actor_keypair();
+        let plane = smooth_plane(actor.pubkey(), degree, 4, 4);
+        let mut record = point_record(&plane, degree);
+        match corruption {
+            "mode" => {
+                record.mode = RESOLUTION_MODE_PRESET;
+                record.payout_index = 0;
+                record.outcome_count = 0;
+                record.resolved_value = 0;
+                record.vector = PayoutVectorBytes::ZERO;
+            }
+            "terms" => record.terms = Hash32::from_bytes([0xb4; 32]),
+            "window" => record.window = Hash32::from_bytes([0xb5; 32]),
+            _ => unreachable!(),
+        }
+        let resolution = encode(NATIVE_RESOLUTION_LEN, |out| record.encode(out));
+        let mut scenario =
+            Scenario::start_custom(force_resolved_plane(plane, resolution), 0, 0).await;
+        let watched = [
+            scenario.plane.hoard.address,
+            scenario.plane.position.address,
+            scenario.plane.kernel.address,
+            scenario.plane.replay.address,
+            scenario.plane.supply.address,
+            scenario.plane.resolution.address,
+            scenario.plane.hoard_token.address,
+            ACTOR_TOKEN,
+        ];
+        let before = snapshot(&mut scenario, &watched).await;
+        assert!(scenario
+            .try_send(scenario.redeem(0, 0, lot))
+            .await
+            .0
+            .is_err());
+        assert_eq!(
+            snapshot(&mut scenario, &watched).await,
+            before,
+            "{corruption} corruption changed a writable account"
+        );
+    }
 }
 
 #[tokio::test]
