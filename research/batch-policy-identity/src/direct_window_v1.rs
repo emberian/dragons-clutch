@@ -1431,6 +1431,74 @@ mod tests {
     }
 
     #[test]
+    fn every_five_candidate_arrival_permutation_retains_the_same_top_three() {
+        let prototypes = [
+            synthetic(1_000, 100, 10, id(40)),
+            synthetic(2_000, 100, 50, id(41)),
+            synthetic(3_000, 100, 30, id(42)),
+            synthetic(4_000, 100, 20, id(43)),
+            synthetic(5_000, 100, 40, id(44)),
+        ];
+        let mut permutations = 0usize;
+        for a in 0..5 {
+            for b in 0..5 {
+                for c in 0..5 {
+                    for d in 0..5 {
+                        for e in 0..5 {
+                            let order = [a, b, c, d, e];
+                            let mut distinct = true;
+                            let mut i = 0usize;
+                            while i < order.len() {
+                                let mut j = 0usize;
+                                while j < i {
+                                    distinct &= order[i] != order[j];
+                                    j += 1;
+                                }
+                                i += 1;
+                            }
+                            if !distinct {
+                                continue;
+                            }
+                            permutations += 1;
+
+                            let first = DirectCandidateV2 {
+                                submitted_slot: 100,
+                                ..prototypes[order[0]]
+                            };
+                            let mut window =
+                                DirectCandidateWindowV1::first(binding(), &first, 100, 8).unwrap();
+                            let mut top = [first; MAX_DIRECT_CANDIDATES];
+                            let mut top_len = 1usize;
+                            let mut arrival = 1usize;
+                            while arrival < order.len() {
+                                let slot = 100 + arrival as u64;
+                                let candidate = DirectCandidateV2 {
+                                    submitted_slot: slot,
+                                    ..prototypes[order[arrival]]
+                                };
+                                let plan =
+                                    plan_admission(&window, &top[..top_len], &candidate, slot)
+                                        .unwrap();
+                                window = plan.post_window;
+                                apply_plan(plan, &mut top, &mut top_len, candidate);
+                                arrival += 1;
+                            }
+                            assert_eq!(window.admitted_count, 5);
+                            assert_eq!(top_len, 3);
+                            assert_eq!(top[0].weighted_direct_volume, 50);
+                            assert_eq!(top[1].weighted_direct_volume, 40);
+                            assert_eq!(top[2].weighted_direct_volume, 30);
+                            let selected = plan_selection(&window, &top[..top_len], 120).unwrap();
+                            assert_eq!(selected.selected_candidate, prototypes[1].candidate_id);
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(permutations, 120);
+    }
+
+    #[test]
     fn substitution_and_registry_omission_leave_the_window_unchanged() {
         let first = verified_at(2_500, 100);
         let window = DirectCandidateWindowV1::first(binding(), &first, 100, 8).unwrap();

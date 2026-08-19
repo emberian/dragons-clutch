@@ -440,7 +440,7 @@ cargo test --manifest-path research/batch-policy-identity/Cargo.toml \
   --locked --offline --all-targets
 ```
 
-At this draft the full crate passes 14 tests. The five window tests cover:
+At this draft the full crate passes 15 tests. The six window tests cover:
 
 - exact 438/454-byte body round trips and reserved-byte refusal;
 - immutable early/late timing behavior;
@@ -448,6 +448,8 @@ At this draft the full crate passes 14 tests. The five window tests cover:
 - admission count and transcript advancement past capacity;
 - immediate supersession of a worse fourth candidate;
 - displacement of the old worst by a better later candidate;
+- all 120 arrival permutations of five candidates retaining the same exact
+  top three and winner;
 - late selection success, early selection refusal, and selection replay;
 - the real crossed-book relation tie and order-independent winner;
 - full-digest comparison beyond 128 bits;
