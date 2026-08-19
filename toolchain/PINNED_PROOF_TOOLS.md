@@ -253,9 +253,12 @@ adapter, SBF, runtime, or deployment result follows. See
 
 ## What remains unpinned
 
-* **vstd revision** — no independent version; pinned only transitively by
-  `VERUS_COMMIT`. If a future run mixes a source-built vstd with this binary,
-  that pin is lost.
+* **vstd source revision** — no independent source version is recorded beyond
+  `VERUS_COMMIT`. The two shipped artifacts do have recorded SHA-256 digests,
+  and the batch runner enforces both before verification. A replacement
+  source-built vstd would therefore be rejected unless it were byte-identical,
+  but there is still no independent source-revision pin for auditing a new
+  build.
 * **Homebrew formula provenance** — this Homebrew installs from the JSON API,
   not a git tap checkout, so there is no `homebrew-core` commit to record. The
   formula version, bottle sha256, and upstream tarball sha256 above are the
