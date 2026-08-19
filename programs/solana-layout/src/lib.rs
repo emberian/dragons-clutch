@@ -17,6 +17,7 @@ pub mod artifact;
 pub mod clearing;
 pub mod collateral;
 pub mod native_resolution;
+pub mod occupation_resolution;
 pub mod reservation;
 pub mod stream;
 
