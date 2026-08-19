@@ -4,7 +4,10 @@ Status date: 2026-08-19. The former long-form Claude snapshot is preserved in
 Git history but is no longer a current-status document. Start here, then read
 [`AGENTS.md`](AGENTS.md), [`PROJECT.md`](PROJECT.md),
 [`CURRENT_TRUTH.md`](CURRENT_TRUTH.md), and
-[`docs/V1_BACKLOG.md`](docs/V1_BACKLOG.md) in that order.
+[`docs/SWARM_ROADMAP_2026-08-19.md`](docs/SWARM_ROADMAP_2026-08-19.md) in that
+order. Use [`docs/V1_BACKLOG.md`](docs/V1_BACKLOG.md) as the deeper historical
+queue after the roadmap. The roadmap is the current dependency and lane-routing
+guide; this older handoff remains useful context but not a promotion ledger.
 
 ## What changed after the prior handoff
 
