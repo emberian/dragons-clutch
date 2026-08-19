@@ -59,3 +59,11 @@ checked twice with zero mismatches, and the sealed `bd20711b…` ELF
 byte-verified on both hosts (recorded in `CURRENT_TRUTH.md` §2). This remains
 local evidence bookkeeping, not authorization to publish, sign, deploy, or
 release.
+
+## Re-emission claim (14:35 local)
+
+The post-seal wave (SBOM tool + TSV, hygiene fixes, truth updates,
+terminal-identity-v1 crate; no gate-inventory or runtime-closure change)
+drifted the recorded content identity 546->554 entries. The Fable session is
+re-running the full emission from the clean tree now; do not commit until
+its manifest lands and is checked.
