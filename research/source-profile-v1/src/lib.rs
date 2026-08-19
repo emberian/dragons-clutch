@@ -16,6 +16,9 @@
 //! signature verification, Clock access, and account ownership remain adapter
 //! obligations.  A parser result is not source authentication.
 
+pub mod crossing_v1;
+pub mod spec_v2;
+
 /// SHA-256(`"account:PriceUpdateV2"`)[0..8], Anchor's account discriminator.
 pub const PRICE_UPDATE_V2_DISCRIMINATOR: [u8; 8] = [0x22, 0xf1, 0x23, 0x63, 0x9d, 0x7e, 0xf4, 0xcd];
 
