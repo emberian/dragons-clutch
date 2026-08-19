@@ -87,7 +87,10 @@ program-owned canonical accounts, it authenticates the SourceSpec and sealed
 archive receipt, binds the exact feed/window/cursor/domain, requires the legacy
 buffer to be a byte-exact redundant projection, rejects a same-domain archive
 at the wrong address, evaluates the native basis, and persists the v3 record.
-Production provider/parser/archive creation remains a release STOP.
+The routed source-construction intents have real-bank evidence only under the
+explicitly different `non-production-mock-source` ELF. The default registry
+contains no production release and refuses source construction and Endow;
+production provider/parser/archive creation remains a release STOP.
 
 ## Reproduction
 
@@ -95,7 +98,7 @@ From the repository root, after the coherent Kernel-v2 sources are committed:
 
 ```sh
 programs/clutch-sbf/svm-tests/run_svm_tests.sh \
-  --test native_full_lifecycle \
+  --non-production-mock-source \
   blank_bank_native_degrees_one_through_three_reach_zero_hoard
 ```
 
