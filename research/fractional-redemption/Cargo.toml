@@ -1,0 +1,11 @@
+[package]
+name = "clutch-fractional-redemption"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Checked exact-lot and persistent-credit models for Dragon's Clutch fractional redemption"
+license = "AGPL-3.0-or-later"
+
+[lib]
+path = "src/lib.rs"
+
