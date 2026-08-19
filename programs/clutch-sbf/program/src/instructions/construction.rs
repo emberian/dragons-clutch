@@ -15,12 +15,13 @@
 //!
 //! ## Atomicity and refusal order
 //!
-//! Every address and every absence condition is checked before the first CPI.
-//! A target is absent only if it is writable, non-executable, System-owned,
-//! zero-lamport, and zero-data.  A pre-funded system account is not treated as
-//! a helpful donation: accepting it would make the System program's deeper
-//! `CreateAccount` behavior the re-initialization rule and would let a third
-//! party influence which refusal a market sees.
+//! Every address and every availability condition is checked before the first
+//! CPI. A target is available only if it is writable, non-executable,
+//! System-owned, and zero-data. Predictable PDAs may carry arbitrary prior SOL
+//! funding: the shared constructor tops up only the rent shortfall, PDA-signs
+//! Allocate and Assign, and retains excess as a donation. Thus one lamport
+//! cannot squat a market, while bytes or foreign ownership remain
+//! initialization evidence.
 //!
 //! Once the preflight passes, each account is created with the shared
 //! [`super::genesis::create_pda_account`] primitive.  If any CPI or any later
@@ -128,14 +129,12 @@ impl<'accounts, 'info> MarketStateTargets<'accounts, 'info> {
     }
 }
 
-/// Refuse anything other than a genuinely absent System-owned account slot.
+/// Refuse anything other than an unallocated System-owned account slot.
 pub fn require_absent_target(account: &AccountInfo<'_>) -> Outcome<()> {
     require(account.is_writable, ClutchError::NotWritable)?;
     require(!account.executable, ClutchError::ExecutableAccount)?;
     require(
-        *account.owner == SYSTEM_PROGRAM_ID
-            && **account.lamports.borrow() == 0
-            && account.data_is_empty(),
+        *account.owner == SYSTEM_PROGRAM_ID && account.data_is_empty(),
         ClutchError::AlreadyInitialized,
     )
 }
@@ -408,16 +407,13 @@ mod tests {
     }
 
     #[test]
-    fn absence_is_stricter_than_zero_data() {
+    fn availability_admits_prefunding_but_not_bytes_or_foreign_ownership() {
         let mut good = Cell::absent();
         assert_eq!(require_absent_target(&good.info()), Ok(()));
 
         let mut prefunded = Cell::absent();
         prefunded.lamports = 1;
-        assert_eq!(
-            require_absent_target(&prefunded.info()),
-            Err(ClutchError::AlreadyInitialized.into())
-        );
+        assert_eq!(require_absent_target(&prefunded.info()), Ok(()));
 
         let mut allocated = Cell::absent();
         allocated.data.push(0);

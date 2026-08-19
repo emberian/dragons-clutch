@@ -179,15 +179,16 @@ use clutch_kernel::{
     BasisMode, MarketState, PayoutSet, PayoutVector, Phase, MAX_OUTCOMES as KERNEL_MAX_OUTCOMES,
 };
 use clutch_solana_layout::{
-    account_len, canonical_market_id, canonical_outcome_id, collateral, Hash32, HoardAccount,
-    Intent, MarketAccount, PositionAccount, ProfileAccount, ResolutionAccount, SupplyLedgerAccount,
-    TermsAccount, MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_INDEX_UNRESOLVED, PROFILE_FLAG_POLICY_FROZEN,
+    account_len, canonical_market_id, canonical_outcome_id, collateral,
+    native_resolution::{NativeResolutionAccount, NATIVE_RESOLUTION_LEN},
+    Hash32, HoardAccount, Intent, MarketAccount, PositionAccount, ProfileAccount,
+    ResolutionAccount, SupplyLedgerAccount, TermsAccount, MAX_OUTCOMES, MAX_PAYOUTS,
+    PAYOUT_INDEX_UNRESOLVED, PROFILE_FLAG_POLICY_FROZEN,
 };
 use clutch_solana_reference::{
-    Action, Error as ReferenceError, KernelAccount, ReplayAccount, Request,
+    Action, Error as ReferenceError, KernelAccount, ReplayAccount, Request, KERNEL_ACCOUNT_LEN,
+    REPLAY_ACCOUNT_LEN,
 };
-#[cfg(test)]
-use clutch_solana_reference::{KERNEL_ACCOUNT_LEN, REPLAY_ACCOUNT_LEN};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -251,16 +252,12 @@ const INPUT_STATE_ROLES: [StateRole; 3] = [
 /// [`account_count`] and not a constant.
 pub const ACCOUNT_COUNT_BASE: usize = 18;
 
-/// The Realm's 266-byte collateral policy (read-only).
+/// Canonical sealed collateral-policy PDA (read-only, program-owned).
 ///
-/// **Content-authenticated, not address-authenticated.**  This account has no
-/// seed and no PDA: `collateral::verify_profile_identity` recomputes the child
-/// digest `D_col` from the bytes, compares it against the Profile's frozen
-/// `collateral_policy_digest`, and *also* recomputes the parent Profile
-/// identity from that digest and compares it against the stored Profile ID.
-/// A caller may therefore supply the policy from any account it likes and
-/// cannot supply a different policy. This closes the cap-policy binding gap
-/// without appending another seed.
+/// Byte recomputation still proves the child digest and parent Profile
+/// identity. Program ownership plus `policy(Profile, digest)` additionally
+/// proves the bytes came through typed `SealArtifact`; caller-owned copies are
+/// not construction evidence.
 pub const IX_POLICY: usize = 11;
 /// The pinned Token-2022 program (read-only, executable).
 pub const IX_TOKEN_PROGRAM: usize = 12;
@@ -322,11 +319,16 @@ pub const fn account_count(outcome_count: u8) -> usize {
 /// 4 KiB.
 #[inline(never)]
 fn admit_collateral(
+    program_id: &Pubkey,
     accounts: &[AccountInfo],
     collateral_cap: u64,
     hoard_authority: Pubkey,
 ) -> Outcome<token::TokenAccountPolicy> {
     let policy_account = &accounts[IX_POLICY];
+    require(
+        policy_account.owner == program_id,
+        ClutchError::WrongProgramOwner,
+    )?;
     require(!policy_account.is_writable, ClutchError::UnexpectedWritable)?;
     require(!policy_account.executable, ClutchError::ExecutableAccount)?;
     require(
@@ -362,6 +364,22 @@ fn admit_collateral(
     Ok(token::TokenAccountPolicy::hoard(&policy, hoard_authority))
 }
 
+/// Authenticate the sealed policy's content-derived address.
+#[inline(never)]
+fn require_canonical_policy_pda(program_id: &Pubkey, accounts: &[AccountInfo]) -> Outcome<()> {
+    let profile = ProfileAccount::decode(&accounts[IX_PROFILE].data.borrow())?;
+    expect_pda(
+        accounts[IX_POLICY].key,
+        seeds::policy_pda(
+            program_id,
+            &profile.profile.bytes(),
+            &profile.collateral_policy_digest.bytes(),
+        ),
+        None,
+    )?;
+    Ok(())
+}
+
 /// Authenticate the two programs and the sysvar the founding CPIs need.
 #[inline(never)]
 fn validate_creation_roles(accounts: &[AccountInfo]) -> Outcome<()> {
@@ -383,12 +401,14 @@ fn validate_creation_roles(accounts: &[AccountInfo]) -> Outcome<()> {
 /// The token-plane half of the idempotence gate: a market founded twice would otherwise reach
 /// `system_instruction::create_account` and be refused one frame down with a
 /// worse diagnostic.  Zero lamports and zero data is what the runtime hands a
-/// program for an address nobody has created.
+/// program for an address nobody has created. Prior SOL funding is not
+/// initialization: predictable token PDAs use the same shortfall-top-up,
+/// Allocate, Assign sequence as state PDAs, so prefunding cannot squat them.
 fn require_uncreated(account: &AccountInfo) -> Outcome<()> {
     require(account.is_writable, ClutchError::NotWritable)?;
     require(!account.executable, ClutchError::ExecutableAccount)?;
     require(
-        account.data_is_empty() && **account.lamports.borrow() == 0,
+        account.data_is_empty() && *account.owner == genesis::SYSTEM_PROGRAM_ID,
         ClutchError::AlreadyInitialized,
     )
 }
@@ -424,11 +444,11 @@ fn create_token_plane(
     market_bytes: &[u8; 32],
     outcome_count: u8,
     hoard_policy: &token::TokenAccountPolicy,
+    rent: &genesis::RentParameters,
 ) -> Outcome<()> {
     let system = &accounts[IX_SYSTEM_PROGRAM];
     let payer = &accounts[IX_CREATOR];
     let token_program = &accounts[IX_TOKEN_PROGRAM];
-    let mint_rent = token::rent_exempt_minimum(&accounts[IX_RENT], token::MINT_ACCOUNT_LEN)?;
     let authority = *accounts[IX_MARKET].key;
 
     let mut outcome = 0_u8;
@@ -439,13 +459,13 @@ fn create_token_plane(
         expect_pda(mint.key, derived, None)?;
         let index = [outcome];
         let bump = [derived.1];
-        token::create_account_signed(
-            system,
+        genesis::create_pda_account(
+            &token::TOKEN_2022_PROGRAM_ID,
             payer,
             mint,
-            mint_rent,
-            token::MINT_ACCOUNT_LEN as u64,
-            &token::TOKEN_2022_PROGRAM_ID,
+            system,
+            rent,
+            token::MINT_ACCOUNT_LEN,
             &[seeds::SEED_OUTCOME_MINT, market_bytes, &index, &bump],
         )?;
         token::initialize_outcome_mint(token_program, mint, &authority)?;
@@ -458,15 +478,13 @@ fn create_token_plane(
     let derived = seeds::hoard_token_pda(program_id, market_bytes);
     expect_pda(hoard_token.key, derived, None)?;
     let bump = [derived.1];
-    let account_rent =
-        token::rent_exempt_minimum(&accounts[IX_RENT], token::IMMUTABLE_OWNER_ACCOUNT_LEN)?;
-    token::create_account_signed(
-        system,
+    genesis::create_pda_account(
+        &token::TOKEN_2022_PROGRAM_ID,
         payer,
         hoard_token,
-        account_rent,
-        token::IMMUTABLE_OWNER_ACCOUNT_LEN as u64,
-        &token::TOKEN_2022_PROGRAM_ID,
+        system,
+        rent,
+        token::IMMUTABLE_OWNER_ACCOUNT_LEN,
         &[seeds::SEED_HOARD_TOKEN, market_bytes, &bump],
     )?;
     token::initialize_immutable_owner(token_program, hoard_token)?;
@@ -643,6 +661,42 @@ struct ReplayFacts {
     stored_bump: u8,
 }
 
+/// ABI-independent facts needed from the freshly written resolution record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct InitialResolutionFacts {
+    market: Hash32,
+    terms: Hash32,
+    feed: Hash32,
+    resolved: bool,
+    stored_bump: u8,
+}
+
+#[inline(never)]
+fn read_initial_resolution(
+    terms_data: &[u8],
+    resolution_data: &[u8],
+) -> Outcome<InitialResolutionFacts> {
+    if terms_basis_degree(terms_data)? == 0 {
+        let value = ResolutionAccount::decode(resolution_data)?;
+        Ok(InitialResolutionFacts {
+            market: value.market,
+            terms: value.terms,
+            feed: value.feed,
+            resolved: value.is_resolved(),
+            stored_bump: value.stored_bump,
+        })
+    } else {
+        let value = NativeResolutionAccount::decode(resolution_data)?;
+        Ok(InitialResolutionFacts {
+            market: value.market,
+            terms: value.terms,
+            feed: value.feed,
+            resolved: value.is_resolved(),
+            stored_bump: value.stored_bump,
+        })
+    }
+}
+
 /// Decode a Profile account, carrying the freeze discipline fields.
 #[inline(never)]
 fn read_profile_init(data: &[u8]) -> Outcome<ProfileInitFacts> {
@@ -745,6 +799,23 @@ fn terms_collateral_cap(terms_data: &[u8]) -> Outcome<u64> {
     Ok(terms.collateral_cap)
 }
 
+/// The immutable basis mode selects the sole admitted resolution-account ABI.
+#[inline(never)]
+fn terms_basis_degree(terms_data: &[u8]) -> Outcome<u8> {
+    let mut terms = TermsAccount::ZEROED;
+    TermsAccount::decode_unchecked_into(terms_data, &mut terms)?;
+    require(terms.basis_degree <= 3, ClutchError::NonCanonical)?;
+    Ok(terms.basis_degree)
+}
+
+fn resolution_account_len(terms_data: &[u8]) -> Outcome<usize> {
+    Ok(if terms_basis_degree(terms_data)? == 0 {
+        account_len::RESOLUTION
+    } else {
+        NATIVE_RESOLUTION_LEN
+    })
+}
+
 /// Compare an encoded kernel account's payout set against an expected set.
 #[inline(never)]
 fn require_kernel_payouts(kernel_data: &[u8], expected: &PayoutSet) -> Outcome<()> {
@@ -780,6 +851,7 @@ fn require_kernel_invariants(
     kernel_data: &[u8],
     outcome_count: u8,
     collateral: u64,
+    basis_degree: u8,
 ) -> Outcome<()> {
     let kernel = KernelAccount::decode(kernel_data)?;
     require(
@@ -806,7 +878,11 @@ fn require_kernel_invariants(
         outcomes: outcome_count,
         phase,
         resolved_payout: kernel.resolved_payout,
-        basis_mode: BasisMode::FinitePreset,
+        basis_mode: if basis_degree == 0 {
+            BasisMode::FinitePreset
+        } else {
+            BasisMode::DerivedBasis
+        },
         resolved_vector: PayoutVector::ZERO,
         collateral,
         total_supply: kernel.total_supply,
@@ -993,24 +1069,38 @@ fn write_supply(
 #[inline(never)]
 fn write_resolution(
     data: &mut [u8],
+    terms_data: &[u8],
     market: Hash32,
     intent: &CreateMarketIntent,
     bump: u8,
 ) -> Outcome<()> {
-    let account = ResolutionAccount {
-        market,
-        terms: intent.terms,
-        feed: intent.feed,
-        window: Hash32::ZERO,
-        feed_cursor: 0,
-        sealed_end_bucket_exclusive: 0,
-        repair_generation: 0,
-        resolved_slot: 0,
-        payout_index: PAYOUT_INDEX_UNRESOLVED,
-        stored_bump: bump,
-        flags: 0,
-    };
-    account.encode(data)?;
+    if terms_basis_degree(terms_data)? == 0 {
+        require(
+            data.len() == account_len::RESOLUTION,
+            ClutchError::WrongDataLength,
+        )?;
+        let account = ResolutionAccount {
+            market,
+            terms: intent.terms,
+            feed: intent.feed,
+            window: Hash32::ZERO,
+            feed_cursor: 0,
+            sealed_end_bucket_exclusive: 0,
+            repair_generation: 0,
+            resolved_slot: 0,
+            payout_index: PAYOUT_INDEX_UNRESOLVED,
+            stored_bump: bump,
+            flags: 0,
+        };
+        account.encode(data)?;
+    } else {
+        require(
+            data.len() == NATIVE_RESOLUTION_LEN,
+            ClutchError::WrongDataLength,
+        )?;
+        NativeResolutionAccount::unresolved(market, intent.terms, intent.feed, bump)
+            .encode(data)?;
+    }
     Ok(())
 }
 
@@ -1047,7 +1137,13 @@ pub fn write_initial_plane(
         intent.outcome_count,
         bumps.supply,
     )?;
-    write_resolution(plane.resolution, market, intent, bumps.resolution)?;
+    write_resolution(
+        plane.resolution,
+        terms_data,
+        market,
+        intent,
+        bumps.resolution,
+    )?;
     Ok(())
 }
 
@@ -1078,7 +1174,7 @@ fn validate_market_wide(
     let hoard = read_hoard(plane.hoard)?;
     let kernel = accounts::read_kernel(plane.kernel)?;
     let supply: SupplyFacts = accounts::read_supply(plane.supply)?;
-    let resolution = accounts::read_resolution(plane.resolution)?;
+    let resolution = read_initial_resolution(terms_data, plane.resolution)?;
 
     /* Stored bumps, before anything reads a balance: an account presented at a
      * canonical address but carrying another address's bump is a mislinked
@@ -1174,7 +1270,12 @@ fn validate_market_wide(
     )?;
 
     /* Kernel invariants over the founded state, then the payout-set binding. */
-    require_kernel_invariants(plane.kernel, market.outcome_count, hoard.collateral_atoms)?;
+    require_kernel_invariants(
+        plane.kernel,
+        market.outcome_count,
+        hoard.collateral_atoms,
+        terms_basis_degree(terms_data)?,
+    )?;
     require_payout_set_binding(plane.kernel, terms_data)?;
 
     /* C1: the two-term ledger closes against the kernel aggregate. */
@@ -1272,6 +1373,112 @@ pub fn validate_initial_plane(
 ) -> Outcome<()> {
     let market = validate_market_wide(realm_data, profile_data, terms_data, plane, intent, bumps)?;
     validate_founding_owner_plane(plane, &market, bumps)
+}
+
+/// Create the seven-account state plane with a term-selected resolution width.
+///
+/// The shared categorical constructor remains the exact v2 path. Native
+/// degree-1..=3 terms need the v3 record's 319 bytes, so this path reuses the
+/// shared address and zero-prestate preflight, creates the first six accounts
+/// with the same seeds and widths, and varies only the final Resolution width.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn create_native_market_state_plane<'info>(
+    program_id: &Pubkey,
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    rent: &genesis::RentParameters,
+    targets: &MarketStateTargets<'_, 'info>,
+    identity: &MarketStateIdentity,
+    bumps: &PlaneBumps,
+) -> Outcome<()> {
+    construction::validate_market_state_addresses(program_id, targets, identity, bumps)?;
+    construction::preflight_absent_market_state(targets)?;
+
+    genesis::create_pda_account(
+        program_id,
+        payer,
+        targets.market,
+        system_program,
+        rent,
+        account_len::MARKET,
+        &[
+            seeds::SEED_MARKET,
+            &identity.realm,
+            &identity.market,
+            &[bumps.market],
+        ],
+    )?;
+    genesis::create_pda_account(
+        program_id,
+        payer,
+        targets.hoard,
+        system_program,
+        rent,
+        account_len::HOARD,
+        &[seeds::SEED_HOARD, &identity.market, &[bumps.hoard]],
+    )?;
+    genesis::create_pda_account(
+        program_id,
+        payer,
+        targets.position,
+        system_program,
+        rent,
+        account_len::POSITION,
+        &[
+            seeds::SEED_POSITION,
+            &identity.market,
+            &identity.owner,
+            &[bumps.position],
+        ],
+    )?;
+    genesis::create_pda_account(
+        program_id,
+        payer,
+        targets.kernel,
+        system_program,
+        rent,
+        KERNEL_ACCOUNT_LEN,
+        &[seeds::SEED_KERNEL, &identity.market, &[bumps.kernel]],
+    )?;
+    let generation = identity.generation.to_le_bytes();
+    genesis::create_pda_account(
+        program_id,
+        payer,
+        targets.replay,
+        system_program,
+        rent,
+        REPLAY_ACCOUNT_LEN,
+        &[
+            seeds::SEED_REPLAY,
+            &identity.market,
+            &identity.owner,
+            &generation,
+            &[bumps.replay],
+        ],
+    )?;
+    genesis::create_pda_account(
+        program_id,
+        payer,
+        targets.supply,
+        system_program,
+        rent,
+        account_len::SUPPLY_LEDGER,
+        &[seeds::SEED_SUPPLY, &identity.market, &[bumps.supply]],
+    )?;
+    genesis::create_pda_account(
+        program_id,
+        payer,
+        targets.resolution,
+        system_program,
+        rent,
+        NATIVE_RESOLUTION_LEN,
+        &[
+            seeds::SEED_RESOLUTION,
+            &identity.market,
+            &[bumps.resolution],
+        ],
+    )
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1383,7 +1590,13 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
      * and which `validate_initial_plane` then re-checks equal to it -- so a
      * market cannot be founded above its Realm's ceiling by writing one cap and
      * admitting another. */
-    let hoard_policy = admit_collateral(accounts, terms_collateral_cap, *hoard_authority.key)?;
+    require_canonical_policy_pda(program_id, accounts)?;
+    let hoard_policy = admit_collateral(
+        program_id,
+        accounts,
+        terms_collateral_cap,
+        *hoard_authority.key,
+    )?;
 
     /* Authenticate and create every program-owned state target before writing
      * any founding bytes. `create_market_state_plane` checks all seven absent
@@ -1405,15 +1618,28 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         owner: owner_bytes,
         generation: 0,
     };
-    construction::create_market_state_plane(
-        program_id,
-        creator,
-        &accounts[IX_SYSTEM_PROGRAM],
-        &rent,
-        &targets,
-        &state_identity,
-        &bumps,
-    )?;
+    let resolution_len = resolution_account_len(&accounts[IX_TERMS].data.borrow())?;
+    if resolution_len == account_len::RESOLUTION {
+        construction::create_market_state_plane(
+            program_id,
+            creator,
+            &accounts[IX_SYSTEM_PROGRAM],
+            &rent,
+            &targets,
+            &state_identity,
+            &bumps,
+        )?;
+    } else {
+        create_native_market_state_plane(
+            program_id,
+            creator,
+            &accounts[IX_SYSTEM_PROGRAM],
+            &rent,
+            &targets,
+            &state_identity,
+            &bumps,
+        )?;
+    }
 
     /* The outcome mints and Hoard token account follow and are re-admitted
      * through the policies every later instruction applies. */
@@ -1423,6 +1649,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         &market_bytes,
         intent.outcome_count,
         &hoard_policy,
+        &rent,
     )?;
 
     let identities = FoundingIdentities {
@@ -1628,9 +1855,11 @@ mod tests {
         }
 
         fn admit(&self) -> Outcome<token::TokenAccountPolicy> {
+            let program_id = Pubkey::new_from_array([0xc1; 32]);
             let mut cells: Vec<Cell> = (0..account_count(2)).map(|_| Cell::inert()).collect();
             cells[IX_PROFILE].data = self.profile.clone();
             cells[IX_POLICY].data = self.policy.clone();
+            cells[IX_POLICY].owner = program_id;
             if let Some(len) = self.policy_len_override {
                 cells[IX_POLICY].data.resize(len, 0);
             }
@@ -1640,7 +1869,12 @@ mod tests {
             cells[IX_COLLATERAL_MINT].owner = self.mint_owner;
             cells[IX_COLLATERAL_MINT].data = self.mint_data.clone();
             let infos: Vec<AccountInfo<'_>> = cells.iter_mut().map(Cell::info).collect();
-            admit_collateral(&infos, self.cap, Pubkey::new_from_array([0xa5; 32]))
+            admit_collateral(
+                &program_id,
+                &infos,
+                self.cap,
+                Pubkey::new_from_array([0xa5; 32]),
+            )
         }
     }
 

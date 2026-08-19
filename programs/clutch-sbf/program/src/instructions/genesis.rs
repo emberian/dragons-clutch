@@ -10,8 +10,8 @@
 //! | --- | --- | ---: |
 //! | [`Intent::InitRealm`] | [`RealmAccount`] | 5 |
 //! | [`Intent::InitProfile`] | [`ProfileAccount`], policy frozen | 6 |
-//! | [`Intent::InitPriceGrid`] | [`clutch_solana_layout::PriceGridAccount`] | 6 |
-//! | [`Intent::InitTerms`] | [`clutch_solana_layout::TermsAccount`] | 7 |
+//! | [`Intent::InitPriceGrid`] | obsolete: use typed `SealArtifact` | -- |
+//! | [`Intent::InitTerms`] | obsolete: use typed `SealArtifact` | -- |
 //! | [`Intent::InitOrderPage`] | one order page | 6 |
 //! | [`Intent::Endow`] | absent generation-zero Position + Replay, then deposits collateral and credits cash | 13 |
 //!
@@ -54,37 +54,21 @@
 //! the signer must equal the requested Position owner and may deposit only
 //! from a Token-2022 account whose owner authority is that signer.
 //!
-//! ## Where the bytes come from: the evidence-buffer pattern
+//! ## Immutable bytes come only from typed, sealed artifacts
 //!
-//! Two of the five artifacts do not fit an intent, by design.  A
-//! [`clutch_solana_layout::TermsAccount`] is 1,656 bytes and a
-//! [`clutch_solana_layout::PriceGridAccount`] is 589;
-//! `MAX_INTENT_BYTES` is 302, and it is 302 because that is the widest
-//! *transition*, not because 302 was convenient.  Widening the wire so an
-//! initialization could carry a whole account would make every instruction's
-//! envelope as wide as the largest artifact anyone might found.
+//! Collateral policy, price-grid, and Terms bodies are created by the resumable
+//! typed transport in [`super::artifact`].  Its successful `SealArtifact`
+//! transaction validates the owning hostile-byte codec and creates the final
+//! content-derived PDA under this program.  Genesis consumers therefore admit
+//! neither caller-owned buffers nor arbitrary program-owned copies.
 //!
-//! So the body rides an **evidence buffer**: a read-only account holding
-//! exactly the artifact's encoded bytes, presented by the caller from anywhere
-//! it likes, and authenticated by *recomputation* rather than by address —
-//! precisely the pattern `market_init`'s `IX_POLICY` established for the 266
-//! collateral-policy bytes.  Both artifacts are self-certifying
-//! ([`clutch_solana_layout::TermsAccount::recomputed_terms_digest`],
-//! [`clutch_solana_layout::PriceGridAccount::recomputed_grid_id`]), so
-//! decoding a buffer already
-//! proves its digest is its own, and the intent's declared digest is compared
-//! against that.  A buffer that decodes but names another Realm, another
-//! grid, or another bump earns [`ClutchError::EvidenceBufferMismatch`].
-//!
-//! **The buffer is copied verbatim.**  It is not decoded into a struct and
-//! re-encoded, for two reasons: a terms value plus its encode buffer
-//! is 3.3 KiB on one 4 KiB frame, and a verbatim copy makes "what did the
-//! account become" answerable by byte comparison rather than by trusting a
-//! round trip.  The consequence is that the caller must present the buffer
-//! carrying the **derived PDA bump** already — the program checks it
-//! ([`ClutchError::WrongBump`]) rather than patching it at an offset, because
-//! an offset written here would be a second transcription of a layout the
-//! layout crate owns.
+//! `InitRealm` and `InitProfile` both require the same canonical policy PDA,
+//! `policy(Profile, policy_digest)`, and recompute both identities from its
+//! bytes.  `InitPriceGrid` and `InitTerms` are obsolete wire intents: the
+//! canonical accounts already exist when their typed seal succeeds, so a
+//! second copy/initialization path would create a competing semantic owner.
+//! They refuse as unsupported rather than preserving the former arbitrary
+//! evidence-buffer path.
 //!
 //! ## Rent is read from the chain, not pinned here
 //!
@@ -212,8 +196,18 @@ pub const RENT_SYSVAR_LEN: usize = 8 + 8 + 1;
 /// variant zero, so the whole payload is 52 bytes.
 const SYSTEM_IX_CREATE_ACCOUNT: u32 = 0;
 
+/// `SystemInstruction::Assign { owner }` bincode variant.
+const SYSTEM_IX_ASSIGN: u32 = 1;
+/// `SystemInstruction::Transfer { lamports }` bincode variant.
+const SYSTEM_IX_TRANSFER: u32 = 2;
+/// `SystemInstruction::Allocate { space }` bincode variant.
+const SYSTEM_IX_ALLOCATE: u32 = 8;
+
 /// Exact encoded length of a `CreateAccount` instruction payload.
 const CREATE_ACCOUNT_DATA_LEN: usize = 4 + 8 + 8 + 32;
+const ASSIGN_DATA_LEN: usize = 4 + 32;
+const TRANSFER_DATA_LEN: usize = 4 + 8;
+const ALLOCATE_DATA_LEN: usize = 4 + 8;
 
 /// Per-account storage overhead in the rent formula.
 ///
@@ -295,12 +289,11 @@ pub fn require_system_program(account: &AccountInfo) -> Outcome<()> {
     require(!account.is_writable, ClutchError::UnexpectedWritable)
 }
 
-/// Refuse a creation target that is not an empty, system-owned, writable slot.
+/// Refuse a construction target that is not empty, System-owned, and writable.
 ///
-/// This is the re-initialization gate, and it fires **before** any CPI: an
-/// account that already carries bytes, or that this program already owns, is
-/// [`ClutchError::AlreadyInitialized`] rather than a system-program error
-/// buried in an inner instruction.
+/// Lamports are deliberately unconstrained. Anyone may transfer SOL to a
+/// predictable PDA before its constructor runs; treating that donation as
+/// initialization would let one lamport permanently squat every market.
 pub fn require_creatable(account: &AccountInfo) -> Outcome<()> {
     require(account.is_writable, ClutchError::NotWritable)?;
     require(!account.executable, ClutchError::ExecutableAccount)?;
@@ -321,13 +314,37 @@ pub fn create_account_data(lamports: u64, space: usize, owner: &Pubkey) -> [u8; 
     data
 }
 
-/// Create one program-derived account, signed by its own seeds.
+/// Exact System `Transfer` payload used for a rent shortfall.
+pub fn transfer_data(lamports: u64) -> [u8; TRANSFER_DATA_LEN] {
+    let mut data = [0_u8; TRANSFER_DATA_LEN];
+    data[0..4].copy_from_slice(&SYSTEM_IX_TRANSFER.to_le_bytes());
+    data[4..12].copy_from_slice(&lamports.to_le_bytes());
+    data
+}
+
+/// Exact System `Allocate` payload for a PDA-signed target.
+pub fn allocate_data(space: usize) -> [u8; ALLOCATE_DATA_LEN] {
+    let mut data = [0_u8; ALLOCATE_DATA_LEN];
+    data[0..4].copy_from_slice(&SYSTEM_IX_ALLOCATE.to_le_bytes());
+    data[4..12].copy_from_slice(&(space as u64).to_le_bytes());
+    data
+}
+
+/// Exact System `Assign` payload for a PDA-signed target.
+pub fn assign_data(owner: &Pubkey) -> [u8; ASSIGN_DATA_LEN] {
+    let mut data = [0_u8; ASSIGN_DATA_LEN];
+    data[0..4].copy_from_slice(&SYSTEM_IX_ASSIGN.to_le_bytes());
+    data[4..36].copy_from_slice(&owner.to_bytes());
+    data
+}
+
+/// Allocate and assign one canonical PDA, safely admitting prior SOL funding.
 ///
 /// The whole creation step in one call: refuse a target that already exists,
 /// refuse a space the runtime cannot allocate in one instruction, compute the
-/// rent-exempt minimum from the chain's parameters, invoke the system program
-/// with the target's seeds, and then **check that an account actually
-/// appeared**.  That last check is not ceremony: `solana_cpi::invoke_signed`
+/// rent-exempt minimum, transfer only a shortfall, PDA-sign System `Allocate`
+/// and `Assign`, and then check the exact poststate. Excess prefunding remains
+/// in the target as a donation. The postcheck is not ceremony: `invoke_signed`
 /// compiles to `Ok(())` off-chain, so without it every host path would report
 /// a creation that did not happen — the same silent-no-op hazard
 /// [`crate::token`] answers with its exact-delta checks.
@@ -347,23 +364,56 @@ pub fn create_pda_account<'a>(
         space <= MAX_PERMITTED_DATA_INCREASE,
         ClutchError::AccountCreationFailed,
     )?;
-    let lamports = rent.minimum_balance(space)?;
-    let instruction = Instruction::new_with_bytes(
+    let minimum = rent.minimum_balance(space)?;
+    let before = target.lamports();
+    if before < minimum {
+        let shortfall = minimum - before;
+        let transfer = Instruction::new_with_bytes(
+            SYSTEM_PROGRAM_ID,
+            &transfer_data(shortfall),
+            vec![
+                AccountMeta::new(*payer.key, true),
+                AccountMeta::new(*target.key, false),
+            ],
+        );
+        invoke_signed(
+            &transfer,
+            &[payer.clone(), target.clone(), system_program.clone()],
+            &[],
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    }
+    let funded = target.lamports();
+    require(
+        funded == core::cmp::max(before, minimum),
+        ClutchError::AccountCreationFailed,
+    )?;
+
+    let allocate = Instruction::new_with_bytes(
         SYSTEM_PROGRAM_ID,
-        &create_account_data(lamports, space, program_id),
-        vec![
-            AccountMeta::new(*payer.key, true),
-            AccountMeta::new(*target.key, true),
-        ],
+        &allocate_data(space),
+        vec![AccountMeta::new(*target.key, true)],
     );
     invoke_signed(
-        &instruction,
-        &[payer.clone(), target.clone(), system_program.clone()],
+        &allocate,
+        &[target.clone(), system_program.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+
+    let assign = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &assign_data(program_id),
+        vec![AccountMeta::new(*target.key, true)],
+    );
+    invoke_signed(
+        &assign,
+        &[target.clone(), system_program.clone()],
         &[signer_seeds],
     )
     .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
     require(
-        target.data_len() == space && target.owner == program_id,
+        target.data_len() == space && target.owner == program_id && target.lamports() == funded,
         ClutchError::AccountCreationFailed,
     )
 }
@@ -381,7 +431,7 @@ pub const IX_TARGET: usize = 1;
 
 /// Accounts in an `InitRealm` instruction, exactly.
 pub const INIT_REALM_ACCOUNT_COUNT: usize = 5;
-/// The Realm's 266 collateral-policy bytes (read-only, content-authenticated).
+/// Canonical sealed collateral-policy PDA (read-only, program-owned).
 pub const IX_REALM_POLICY: usize = 2;
 /// The system program (read-only, executable).  `InitRealm`.
 pub const IX_REALM_SYSTEM: usize = 3;
@@ -392,36 +442,12 @@ pub const IX_REALM_RENT: usize = 4;
 pub const INIT_PROFILE_ACCOUNT_COUNT: usize = 6;
 /// The Realm this Profile belongs to (read-only, program-owned).
 pub const IX_PROFILE_REALM: usize = 2;
-/// The Realm's 266 collateral-policy bytes (read-only).
+/// Canonical sealed collateral-policy PDA (read-only, program-owned).
 pub const IX_PROFILE_POLICY: usize = 3;
 /// The system program.  `InitProfile`.
 pub const IX_PROFILE_SYSTEM: usize = 4;
 /// The rent sysvar.  `InitProfile`.
 pub const IX_PROFILE_RENT: usize = 5;
-
-/// Accounts in an `InitPriceGrid` instruction, exactly.
-pub const INIT_GRID_ACCOUNT_COUNT: usize = 6;
-/// The Realm the grid is namespaced under (read-only, program-owned).
-pub const IX_GRID_REALM: usize = 2;
-/// The evidence buffer holding the grid's exact encoded bytes (read-only).
-pub const IX_GRID_BODY: usize = 3;
-/// The system program.  `InitPriceGrid`.
-pub const IX_GRID_SYSTEM: usize = 4;
-/// The rent sysvar.  `InitPriceGrid`.
-pub const IX_GRID_RENT: usize = 5;
-
-/// Accounts in an `InitTerms` instruction, exactly.
-pub const INIT_TERMS_ACCOUNT_COUNT: usize = 7;
-/// The Realm the terms are authored under (read-only, program-owned).
-pub const IX_TERMS_REALM: usize = 2;
-/// The frozen price grid the terms bind (read-only, program-owned).
-pub const IX_TERMS_GRID: usize = 3;
-/// The evidence buffer holding the terms' exact encoded bytes (read-only).
-pub const IX_TERMS_BODY: usize = 4;
-/// The system program.  `InitTerms`.
-pub const IX_TERMS_SYSTEM: usize = 5;
-/// The rent sysvar.  `InitTerms`.
-pub const IX_TERMS_RENT: usize = 6;
 
 /// Accounts in an `InitOrderPage` instruction, exactly.
 pub const INIT_PAGE_ACCOUNT_COUNT: usize = 6;
@@ -472,13 +498,6 @@ pub const IX_ENDOW_RENT: usize = 12;
 /// Program-owned roles of `InitProfile`, in account-index order.
 const PROFILE_STATE_ROLES: [StateRole; 1] =
     [StateRole::read_only(IX_PROFILE_REALM, account_len::REALM)];
-/// Program-owned roles of `InitPriceGrid`.
-const GRID_STATE_ROLES: [StateRole; 1] = [StateRole::read_only(IX_GRID_REALM, account_len::REALM)];
-/// Program-owned roles of `InitTerms`.
-const TERMS_STATE_ROLES: [StateRole; 2] = [
-    StateRole::read_only(IX_TERMS_REALM, account_len::REALM),
-    StateRole::read_only(IX_TERMS_GRID, account_len::PRICE_GRID),
-];
 /// Program-owned roles of `InitOrderPage`.
 const PAGE_STATE_ROLES: [StateRole; 2] = [
     StateRole::read_only(IX_PAGE_MARKET, account_len::MARKET),
@@ -496,16 +515,30 @@ const ENDOW_OWNER_STATE_ROLES: [StateRole; 2] = [
     StateRole::writable(IX_ENDOW_REPLAY, REPLAY_ACCOUNT_LEN),
 ];
 
-/// Refuse a read-only, non-executable evidence buffer of the wrong width.
+/// Read and authenticate the one canonical sealed collateral-policy artifact.
 ///
-/// The buffer has no seed and no owner requirement: it is authenticated by
-/// what its bytes recompute to, not by where it lives.  What is checked here
-/// is only that it *could* be the artifact — a caller cannot present a
-/// writable account, a program, or a truncated body.
-fn require_buffer(account: &AccountInfo, len: usize) -> Outcome<()> {
+/// Byte recomputation proves the policy digest and parent Profile identity;
+/// program ownership plus the content-derived PDA proves these are the bytes
+/// admitted by typed `SealArtifact`, not a caller-owned copy.
+#[inline(never)]
+fn read_canonical_policy(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+) -> Outcome<(Hash32, Hash32, u16)> {
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
     require(!account.is_writable, ClutchError::UnexpectedWritable)?;
     require(!account.executable, ClutchError::ExecutableAccount)?;
-    require(account.data_len() == len, ClutchError::WrongDataLength)
+    require(
+        account.data_len() == collateral::COLLATERAL_POLICY_BYTES,
+        ClutchError::WrongDataLength,
+    )?;
+    let (profile, digest, schema) = profile_identity_from_policy(&account.data.borrow())?;
+    expect_pda(
+        account.key,
+        seeds::policy_pda(program_id, &profile.bytes(), &digest.bytes()),
+        None,
+    )?;
+    Ok((profile, digest, schema))
 }
 
 /// A creation consumes no replay sequence.
@@ -604,11 +637,11 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 profile_version,
             },
         ),
-        Action::Layout(Intent::InitPriceGrid { realm, grid }) => {
-            init_price_grid(program_id, accounts, request.sequence, realm, grid)
-        }
-        Action::Layout(Intent::InitTerms { realm, terms }) => {
-            init_terms(program_id, accounts, request.sequence, realm, terms)
+        /* Typed `SealArtifact` is now the sole constructor for grid and Terms
+         * PDAs. Retaining the former copy-from-buffer path would restore an
+         * arbitrary caller-account dependency and a second semantic owner. */
+        Action::Layout(Intent::InitPriceGrid { .. } | Intent::InitTerms { .. }) => {
+            Err(ClutchError::UnsupportedInstruction.into())
         }
         Action::Layout(Intent::InitOrderPage {
             market,
@@ -675,10 +708,6 @@ fn init_realm(
     require_distinct(accounts)?;
     require_creation_sequence(sequence)?;
     require_system_program(&accounts[IX_REALM_SYSTEM])?;
-    require_buffer(
-        &accounts[IX_REALM_POLICY],
-        collateral::COLLATERAL_POLICY_BYTES,
-    )?;
     let rent = read_rent(&accounts[IX_REALM_RENT])?;
 
     /* The claimed Profile identity is *recomputed* from the Realm's actual
@@ -686,7 +715,7 @@ fn init_realm(
      * nobody can produce a policy for.  This is the check that makes
      * `RealmAccount::profile` evidence rather than a caller's assertion. */
     let (profile, _digest, _schema) =
-        profile_identity_from_policy(&accounts[IX_REALM_POLICY].data.borrow())?;
+        read_canonical_policy(program_id, &accounts[IX_REALM_POLICY])?;
     require(
         profile == intent.profile,
         ClutchError::EvidenceBufferMismatch,
@@ -748,14 +777,10 @@ fn init_profile(
     accounts::validate_state_roles(program_id, accounts, &PROFILE_STATE_ROLES)?;
     require_creation_sequence(sequence)?;
     require_system_program(&accounts[IX_PROFILE_SYSTEM])?;
-    require_buffer(
-        &accounts[IX_PROFILE_POLICY],
-        collateral::COLLATERAL_POLICY_BYTES,
-    )?;
     let rent = read_rent(&accounts[IX_PROFILE_RENT])?;
 
     let (profile, digest, schema) =
-        profile_identity_from_policy(&accounts[IX_PROFILE_POLICY].data.borrow())?;
+        read_canonical_policy(program_id, &accounts[IX_PROFILE_POLICY])?;
     /* Both declared bindings are checked against the recomputation rather than
      * trusted: the digest the Profile will freeze, and the schema version that
      * digest was composed under. */
@@ -813,152 +838,8 @@ fn init_profile(
 }
 
 /* ------------------------------------------------------------------------ */
-/* InitPriceGrid and InitTerms — the evidence-buffer initializers            */
+/* InitPriceGrid and InitTerms are superseded by typed SealArtifact          */
 /* ------------------------------------------------------------------------ */
-
-fn init_price_grid(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    sequence: u64,
-    intent_realm: Hash32,
-    intent_grid: Hash32,
-) -> Outcome<()> {
-    require_count(accounts, INIT_GRID_ACCOUNT_COUNT)?;
-    require_signer(&accounts[IX_PAYER])?;
-    require_distinct(accounts)?;
-    accounts::validate_state_roles(program_id, accounts, &GRID_STATE_ROLES)?;
-    require_creation_sequence(sequence)?;
-    require_system_program(&accounts[IX_GRID_SYSTEM])?;
-    require_buffer(&accounts[IX_GRID_BODY], account_len::PRICE_GRID)?;
-    let rent = read_rent(&accounts[IX_GRID_RENT])?;
-
-    let realm = accounts::read_realm(&accounts[IX_GRID_REALM].data.borrow())?;
-    expect_pda(
-        accounts[IX_GRID_REALM].key,
-        seeds::realm_pda(program_id, &realm.realm.bytes()),
-        Some(realm.stored_bump),
-    )?;
-    require(realm.realm == intent_realm, ClutchError::MismatchedState)?;
-
-    /* Decoding the buffer is already a proof that its digest is its own: a
-     * `PriceGridAccount` refuses unless `grid == recomputed_grid_id()`.  What
-     * is checked here is that it is the grid the *intent* names, under the
-     * Realm the account plane authenticated. */
-    let grid = accounts::read_price_grid(&accounts[IX_GRID_BODY].data.borrow())?;
-    require(
-        grid.grid == intent_grid && grid.realm == realm.realm,
-        ClutchError::EvidenceBufferMismatch,
-    )?;
-
-    let realm_bytes = realm.realm.bytes();
-    let grid_bytes = grid.grid.bytes();
-    let (address, bump) = seeds::grid_pda(program_id, &realm_bytes, &grid_bytes);
-    expect_pda(accounts[IX_TARGET].key, (address, bump), None)?;
-    /* The buffer is copied verbatim, so it must already carry the bump this
-     * program derived.  Patching it at an offset here would be a second
-     * transcription of a layout the layout crate owns. */
-    require(grid.stored_bump == bump, ClutchError::WrongBump)?;
-
-    create_pda_account(
-        program_id,
-        &accounts[IX_PAYER],
-        &accounts[IX_TARGET],
-        &accounts[IX_GRID_SYSTEM],
-        &rent,
-        account_len::PRICE_GRID,
-        &[seeds::SEED_GRID, &realm_bytes, &grid_bytes, &[bump]],
-    )?;
-
-    let body = accounts[IX_GRID_BODY].data.borrow();
-    let mut data = borrow_mut!(accounts[IX_TARGET])?;
-    copy_artifact(&mut data, &body, account_len::PRICE_GRID)?;
-    accounts::read_price_grid(&data)?;
-    Ok(())
-}
-
-fn init_terms(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    sequence: u64,
-    intent_realm: Hash32,
-    intent_terms: Hash32,
-) -> Outcome<()> {
-    require_count(accounts, INIT_TERMS_ACCOUNT_COUNT)?;
-    require_signer(&accounts[IX_PAYER])?;
-    require_distinct(accounts)?;
-    accounts::validate_state_roles(program_id, accounts, &TERMS_STATE_ROLES)?;
-    require_creation_sequence(sequence)?;
-    require_system_program(&accounts[IX_TERMS_SYSTEM])?;
-    require_buffer(&accounts[IX_TERMS_BODY], account_len::TERMS)?;
-    let rent = read_rent(&accounts[IX_TERMS_RENT])?;
-
-    let realm = accounts::read_realm(&accounts[IX_TERMS_REALM].data.borrow())?;
-    let realm_bytes = realm.realm.bytes();
-    expect_pda(
-        accounts[IX_TERMS_REALM].key,
-        seeds::realm_pda(program_id, &realm_bytes),
-        Some(realm.stored_bump),
-    )?;
-    require(realm.realm == intent_realm, ClutchError::MismatchedState)?;
-
-    let grid = accounts::read_price_grid(&accounts[IX_TERMS_GRID].data.borrow())?;
-    expect_pda(
-        accounts[IX_TERMS_GRID].key,
-        seeds::grid_pda(program_id, &realm_bytes, &grid.grid.bytes()),
-        Some(grid.stored_bump),
-    )?;
-    require(grid.realm == realm.realm, ClutchError::MismatchedState)?;
-
-    let terms = accounts::read_terms(&accounts[IX_TERMS_BODY].data.borrow())?;
-    /* Four bindings, all recomputed or read from authenticated accounts: the
-     * digest the intent names, the Realm, the Profile that Realm committed to,
-     * and the frozen grid whose ticks every limit in this market must land on.
-     * A terms artifact naming a grid nobody created is inert, so the grid is
-     * an account here rather than a field. */
-    require(
-        terms.terms == intent_terms
-            && terms.realm == realm.realm
-            && terms.profile == realm.profile
-            && terms.price_grid == grid.grid,
-        ClutchError::EvidenceBufferMismatch,
-    )?;
-
-    let terms_bytes = terms.terms.bytes();
-    let (address, bump) = seeds::terms_pda(program_id, &realm_bytes, &terms_bytes);
-    expect_pda(accounts[IX_TARGET].key, (address, bump), None)?;
-    require(terms.stored_bump == bump, ClutchError::WrongBump)?;
-
-    create_pda_account(
-        program_id,
-        &accounts[IX_PAYER],
-        &accounts[IX_TARGET],
-        &accounts[IX_TERMS_SYSTEM],
-        &rent,
-        account_len::TERMS,
-        &[seeds::SEED_TERMS, &realm_bytes, &terms_bytes, &[bump]],
-    )?;
-
-    let body = accounts[IX_TERMS_BODY].data.borrow();
-    let mut data = borrow_mut!(accounts[IX_TARGET])?;
-    copy_artifact(&mut data, &body, account_len::TERMS)?;
-    accounts::read_terms(&data)?;
-    Ok(())
-}
-
-/// Copy an evidence buffer into a freshly created account, verbatim.
-///
-/// No decode, no re-encode, no offset: the artifact is self-certifying, it was
-/// already read through a facts reader (which decoded and validated it), and
-/// what lands on chain is byte for byte what the caller presented.
-#[inline(never)]
-fn copy_artifact(target: &mut [u8], body: &[u8], len: usize) -> Outcome<()> {
-    require(
-        target.len() == len && body.len() == len,
-        ClutchError::WrongDataLength,
-    )?;
-    target.copy_from_slice(body);
-    Ok(())
-}
 
 /* ------------------------------------------------------------------------ */
 /* InitOrderPage                                                             */
@@ -1405,8 +1286,7 @@ mod tests {
     use super::*;
     use clutch_solana_layout::{
         canonical_epoch_id, canonical_market_id, canonical_outcome_id, stream, CodecError, EpochId,
-        HoardAccount, MarketId, OrderPageAccount, PriceGridAccount, MAX_ORDER_PAGES, MAX_OUTCOMES,
-        RELATION_VERSION,
+        HoardAccount, MarketId, OrderPageAccount, MAX_ORDER_PAGES, MAX_OUTCOMES, RELATION_VERSION,
     };
 
     fn h(byte: u8) -> Hash32 {
@@ -1445,6 +1325,18 @@ mod tests {
         assert_eq!(&data[4..12], &1_000_u64.to_le_bytes());
         assert_eq!(&data[12..20], &70_u64.to_le_bytes());
         assert_eq!(&data[20..52], &[7; 32]);
+
+        let transfer = transfer_data(99);
+        assert_eq!(&transfer[0..4], &2_u32.to_le_bytes());
+        assert_eq!(&transfer[4..12], &99_u64.to_le_bytes());
+
+        let allocate = allocate_data(589);
+        assert_eq!(&allocate[0..4], &8_u32.to_le_bytes());
+        assert_eq!(&allocate[4..12], &589_u64.to_le_bytes());
+
+        let assign = assign_data(&owner);
+        assert_eq!(&assign[0..4], &1_u32.to_le_bytes());
+        assert_eq!(&assign[4..36], &[7; 32]);
     }
 
     /// The rent transcription against `solana-rent`'s published defaults:
@@ -1596,22 +1488,6 @@ mod tests {
         assert_eq!(
             write_profile(&mut out, &misnamed, &policy),
             Err(Refusal::Codec(CodecError::NonCanonicalIdentity))
-        );
-    }
-
-    #[test]
-    fn the_artifact_copy_is_verbatim_and_width_checked() {
-        let mut body = [0_u8; account_len::PRICE_GRID];
-        grid_account(254).encode(&mut body).unwrap();
-        let mut target = [0_u8; account_len::PRICE_GRID];
-        copy_artifact(&mut target, &body, account_len::PRICE_GRID).unwrap();
-        assert_eq!(target, body);
-        accounts::read_price_grid(&target).unwrap();
-
-        let mut short = [0_u8; account_len::PRICE_GRID - 1];
-        assert_eq!(
-            copy_artifact(&mut short, &body, account_len::PRICE_GRID),
-            Err(Refusal::Adapter(ClutchError::WrongDataLength))
         );
     }
 
@@ -1966,23 +1842,6 @@ mod tests {
         let mut out = [0; collateral::COLLATERAL_POLICY_BYTES];
         policy.encode(&mut out).unwrap();
         out
-    }
-
-    fn grid_account(stored_bump: u8) -> PriceGridAccount {
-        let mut ticks = [0_u64; clutch_solana_layout::MAX_GRID_TICKS];
-        ticks[0] = 1;
-        ticks[1] = 2;
-        let mut value = PriceGridAccount {
-            grid: Hash32::ZERO,
-            realm: h(1),
-            price_scale: 10_000,
-            tick_count: 2,
-            ticks,
-            stored_bump,
-            flags: 0,
-        };
-        value.grid = value.recomputed_grid_id().unwrap();
-        value
     }
 
     fn order_record(rank: u64) -> clutch_solana_layout::OrderRecord {
