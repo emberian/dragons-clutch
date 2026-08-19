@@ -1,0 +1,12 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/jobs/dragons-clutch-r1-7e8f6b1-worktree.wacx0l/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.52s
+     Running tests/order_reservation.rs (/Users/ember/jobs/dragons-clutch-r1-7e8f6b1-evidence/bank-target-7e8f6b1/debug/deps/order_reservation-a36592192c1e2989)
+
+running 2 tests
+test funded_orders_reserve_release_and_isolate_owners ... PlaceOrder CU: buy=598879, sell=596909
+CancelOrder CU: buy=470318, sell=474991
+ok
+test unfunded_place_refuses_without_creating_or_mutating_anything ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+
