@@ -402,8 +402,10 @@ runtime lanes. A full `--run-gates` baseline is evidence collection, not a fast
 presubmit. A cache-cold host can take tens of minutes and invokes nine bounded
 SBF compiler builds: two E0 `rlib` builds, four bringup builds (two default,
 two mock), default and explicit-mock SVM builds, and one committed-walk build.
-No runtime command contacts a
-public RPC, signs, deploys, or releases anything. The liveness current-profile
+No runtime command contacts a public RPC, deploys, or releases anything. The
+signed-walk gate creates fresh ephemeral local keypairs and test-only validator
+funds to sign loopback transactions; it never reads a real/user wallet or key,
+uses user funds, or submits to a public cluster. The liveness current-profile
 gate rehashes sealed artifact/log evidence and recompiles an archived host probe;
 it adds no fresh SBF build. A declaration-only `emit` remains useful for
 inspecting structure but sets `claims.reviewed_offline_checks_recorded` to

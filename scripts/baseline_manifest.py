@@ -1121,7 +1121,7 @@ def build_gates() -> list[dict[str, Any]]:
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [
                     r"^== signed, confirmed, committed walk ==$",
-                    r"^  red: committed-.*committed bytes differ$",
+                    r"^  red: committed-.*committed bytes differ(?: \(observed .*, expected .*\))?$",
                     r"^committed_signed_transactions=22$",
                     r"^committed_expected_refusals=2$",
                     r"^committed_watched_accounts=18$",

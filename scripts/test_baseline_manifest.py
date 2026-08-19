@@ -201,6 +201,17 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
         )
 
         signed_walk = gates["sbf.committed_signed_walk"]
+        falsifier_pattern = (
+            r"^  red: committed-.*committed bytes differ(?: \(observed .*, expected .*\))?$"
+        )
+        self.assertIn(falsifier_pattern, signed_walk["key_patterns"])
+        self.assertIsNotNone(
+            baseline_manifest.re.search(
+                falsifier_pattern,
+                "  red: committed-22-withdraw-second-owner-cash.committed-market."
+                "hoard-token: committed bytes differ (observed 01, expected 00)",
+            )
+        )
         for pattern in (
             r"^committed_signed_transactions=22$",
             r"^committed_expected_refusals=2$",
