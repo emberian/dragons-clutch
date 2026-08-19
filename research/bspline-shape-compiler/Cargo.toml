@@ -1,0 +1,17 @@
+[package]
+name = "clutch-bspline-shape-compiler"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Exact-rational offline shape compiler for Dragon's Clutch native B-spline Eggs"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+clutch-bspline = { path = "../../crates/clutch-bspline" }
+num-bigint = "0.4.6"
+num-rational = "0.4.2"
+num-traits = "0.2.19"
+
+[lib]
+path = "src/lib.rs"
+
