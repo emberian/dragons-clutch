@@ -11,10 +11,10 @@ guide; this older handoff remains useful context but not a promotion ledger.
 
 ## Overnight convergence checkpoint
 
-The current mainline convergence commit is `b5700a9`. The shared worktree
-should be clean. Do not restart from the older `b5da74f` snapshot: it remains
-valid historical evidence, but the current runtime and evidence identity has
-been rebuilt, remeasured, and resealed.
+The shared worktree should be clean at the checked schema-v2 manifest endpoint.
+Do not restart from the older `b5da74f` snapshot: it remains valid historical
+evidence, but the current runtime/evidence identity and baseline have been
+rebuilt, remeasured, resealed, and checked after the manifest-only commit.
 
 The R1 evidence checkpoint is sealed:
 
@@ -46,12 +46,12 @@ The R1 evidence checkpoint is sealed:
   migration, external-bearer lifecycle, or fractional-credit solution.
 
 Glass now exposes those evidence planes and their negative boundaries while
-remaining unbound/offline. The schema-v2 manifest generator is hardened: 94
+remaining unbound/offline. The schema-v2 manifest is checked in: all 94
 unique declared gates, cache/path-stable evidence records,
 process-group timeout cleanup, exact Verus failure classification, current
 default/mock ELF parsing, the sealed liveness gate, the signed committed walk,
-and the central proof/model/tool surfaces. The checked-in
-`MANIFEST.baseline.json` is intentionally still historical schema v1.
+and the central proof/model/tool surfaces match their declarations. The
+manifest also passes `check --run-gates` after its manifest-only commit.
 
 The first full 94-gate emission at `ec77d0b` matched 86 and contradicted eight;
 those eight repair lanes are now closed. Commit `83e124d` splits the inert
@@ -59,20 +59,18 @@ default/`0x79` campaign from the explicitly non-production mock-source success
 campaign. A quiet-tree full emission at `83e124d` then matched 93/94: the sole
 remaining refusal was the strict liveness seal correctly detecting the new ELF
 identity caused by the rustdoc-link repair. Commit `b5700a9` closes that final
-identity gap with new same-ELF measurements and stack evidence. Read
+identity gap with new same-ELF measurements and stack evidence. The subsequent
+schema-v2 emission and post-commit full check are 94/94. Read
 [`docs/implementation/BASELINE_MANIFEST_DIAGNOSTIC_2026-08-19.md`](docs/implementation/BASELINE_MANIFEST_DIAGNOSTIC_2026-08-19.md)
-before touching the manifest. The generated diagnostic manifest was not
-committed.
+for the historical convergence trail.
 
 Resume R1 in this exact order:
 
 1. run `git status --short` and refuse unrelated dirty bytes;
-2. from the clean tree rerun
-   `scripts/baseline_manifest.py emit --run-gates`;
-3. only if all 94 match, inspect the emitted schema-v2 file and commit **only**
-   `MANIFEST.baseline.json`, then run
-   `scripts/baseline_manifest.py check --run-gates`; and
-4. run a fresh Persvati portable attestation from the final manifest commit.
+2. run a fresh Persvati portable attestation from the final manifest commit;
+3. preserve the manifest/runtime seal while selecting the next dependency-
+   unblocked R2/R3 lane; and
+4. rerun the manifest only after another accepted source or evidence change.
    No Hbox SBF claim exists until the exact missing toolchain/dependency closure
    is supplied and recorded.
 

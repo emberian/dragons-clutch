@@ -67,8 +67,9 @@ This is the immediate coordination gate while parallel lanes are active.
   `b5700a9` seal has zero diagnosed first-party final-LTO survivors and no
   direct `r10` reference beyond 4,096 bytes. The prior `a572...d6b6a1` seal is
   historical. This is artifact evidence, not a release.
-- [ ] Emit and commit a clean schema-v2 `MANIFEST.baseline.json`, then prove it
-  still checks after the manifest-only commit.
+- [x] Emit and commit a clean schema-v2 `MANIFEST.baseline.json`, then prove it
+  still checks after the manifest-only commit. All 94 declared gates match;
+  this is a local evidence baseline, not a release manifest.
 
 Acceptance: one clean commit identity, one content identity, one SBF ELF, and
 one noncontradictory evidence set. A dirty `--allow-dirty` manifest is diagnostic

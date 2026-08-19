@@ -12,20 +12,18 @@ its dirty paths belong to it until the tree goes quiet.
 
 ## Current thrust
 
-R1 close-out. Bringup is fixed at `83e124d`; its prior full run reached 93/94
-with the sole strict liveness source-drift refusal. `b5700a9` re-sealed the
-current local runtime/profile instead of weakening that check. Next is the
-quiet-tree 94/94 emission sequence, then a fresh Persvati attestation. Parallel:
-V3 blocker verification, R2 provider selection/design, Draft 10 fork
-(degg-research).
+R1 close-out. Bringup is fixed at `83e124d`; `b5700a9` re-sealed the current
+local runtime/profile instead of weakening the strict source check. The
+schema-v2 manifest now records 94/94 and passes its post-commit full check.
+Next is a fresh Persvati attestation. Parallel: V3 blocker verification, R2
+provider selection/design, Draft 10 fork (degg-research).
 
 ## Next 3 moves
 
-1. From a quiet tree, obtain a 94/94
-   `scripts/baseline_manifest.py emit --run-gates`, commit only that manifest,
-   and run `scripts/baseline_manifest.py check --run-gates`.
-2. Make a fresh Persvati attestation against that checked local result. This is
+1. Make a fresh Persvati attestation against the checked local manifest. This is
    not a release, deployment, signature, or public-network authorization.
+2. Preserve the sealed runtime/profile/manifest identities while selecting the
+   next dependency-unblocked R2/R3 work.
 3. Continue the separate V3/R2 research and design queue only after the R1
    evidence sequence is quiet and recorded.
 

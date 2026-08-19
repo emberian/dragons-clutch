@@ -81,11 +81,13 @@ Runtime evidence is artifact-specific:
   not a blank-bank venue or the complete schema-v2 baseline. The exact record
   is [`docs/implementation/COMMITTED_SBF_WALK.md`](docs/implementation/COMMITTED_SBF_WALK.md).
 
-The checked-in `MANIFEST.baseline.json` remains a historical schema-v1
-manifest. No clean schema-v2 baseline, checked release manifest, signed tag,
-independent rebuild, public-network deployment, official client URL, or
-value-bearing market exists. Nothing here authorizes signing, funding,
-deployment, publication, regulator contact, or an “official” claim.
+The checked-in `MANIFEST.baseline.json` is now schema v2. Its clean emission
+records 94/94 declared gate outcomes, and `check --run-gates` passes after the
+manifest-only commit. This is a checked local evidence baseline, not a checked
+release manifest. No signed tag, path-independent or independent SBF rebuild,
+public-network deployment, official client URL, or value-bearing market
+exists. Nothing here authorizes signing, funding, deployment, publication,
+regulator contact, or an “official” claim.
 
 The scoped adversarial review at `f48b13c` found no hidden active P0 in the
 reviewed artifact, reservation, replay, withdrawal, or spline transitions. It
@@ -239,7 +241,7 @@ public `derive_payout` to be degree-zero-only; smooth callers must use
 | Liveness accounting | one routed path **SBF-EXECUTED / PROFILE-ADMITTED**; system policy **STOP** | `clutch-liveness` remains a host-tested pure kernel. Separately, the current sealed liveness profile binds exact ResolutionWork compute, rent, rewards, refund, donation, and close behavior to the `bd207...16b60` ELF; mixed historical/current measurement identities are machine-refused. | No complete global `LivenessPolicy` is emitted. Direct selection, production source work, most rent ownership/close routes, terminal asset disposition, and inclusion/keeper assumptions remain open. Hoard principal and future fees are never liveness capital. |
 | Terminal lifecycle V2 | internal-only **MODEL-ONLY / HOST-TESTED** | A hostile-prestate model enforces per-role rent identity, once-only refunds, a separately retained replay tombstone, internal claim/supply/mint equality, exact per-Position lots, ordered close dependencies, and an immutable neutral surplus sink. External bearer issuance fails closed in this profile. | No live account ABI, signer/PDA authority, rent funding, Token-2022 CPI/post-state, SBF route, legacy migration, external-bearer terminal path, or fractional credit/carry closure exists. It is not a protocol terminality or no-stranding result. |
 | Economics and fees | **MODEL-ONLY / PROPOSED** | Synthetic solvency, cost, fee, manipulation, and allocation experiments exist. | Fee base/rate/split, measured liveness maxima, neutral-failure policy, and recipient policy are not frozen. Hoard principal is never available. |
-| Artifact/release evidence | exact current artifact/stack/bank seal; release **STOP** | Runtime source/test ancestry `83e124d` produced two byte-identical ordinary builds of `bd207...16b60`; final-LTO/stack audit and same-ELF bank campaigns are sealed at `b5700a9`. The old `a572...d6b6a1` seal is historical only. | The Cargo-home-relocated build is path-sensitive. The checked manifest remains schema v1 pending the final 94/94 emission and post-commit check; there is no path-independent or independent SBF rebuild, complete release SBOM/license closure, external security review, signed tag, or deployment. |
+| Artifact/release evidence | exact current artifact/stack/bank seal plus checked schema-v2 local baseline; release **STOP** | Runtime source/test ancestry `83e124d` produced two byte-identical ordinary builds of `bd207...16b60`; final-LTO/stack audit and same-ELF bank campaigns are sealed at `b5700a9`. The old `a572...d6b6a1` seal is historical only. The checked manifest records 94/94 and passes its post-commit full check. | The Cargo-home-relocated build is path-sensitive. There is no path-independent or independent SBF rebuild, complete release SBOM/license closure, external security review, signed tag, or deployment. |
 
 ## 5. Accounting truth
 
@@ -334,8 +336,8 @@ the sealed default ELF has no registered release and therefore refuses it with
    profile; it supplies no live authority or Token-2022 transition. Close these
    exact runtime domains without inventing a sweep right over owner or Hoard
    value.
-8. **Evidence promotion:** retain the sealed R1 artifact/stack/bank evidence,
-   emit and verify schema-v2 evidence, then obtain a path-independent and
+8. **Evidence promotion:** retain the sealed R1 artifact/stack/bank evidence
+   and checked schema-v2 local baseline, then obtain a path-independent and
    independent rebuild, complete release materials, and security review before
    a release claim.
 9. **Gate L0:** exact legal/entity/control/deployment facts, qualified advice,

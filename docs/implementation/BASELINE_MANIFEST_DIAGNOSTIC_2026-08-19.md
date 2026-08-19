@@ -43,21 +43,15 @@ no global liveness/inclusion conclusion, Direct V2 remains a measured compute
 STOP, no terminal closure, no independent reproducible-build closure, no
 deployment, no release, no signature chain, and no security or legal closure.
 
-## Exact next gate sequence
+## Final convergence result
 
-From a quiet tree, run:
-
-```sh
-scripts/baseline_manifest.py emit --run-gates
-```
-
-Only a **94/94** result may produce the schema-v2 baseline. Then commit only
-the emitted manifest and run:
+The quiet-tree schema-v2 emission now records **94/94**, and the manifest-only
+commit passes:
 
 ```sh
 scripts/baseline_manifest.py check --run-gates
 ```
 
-Finally, make a fresh Persvati attestation against that checked result. Each
-step is local evidence bookkeeping, not authorization to publish, sign,
-deploy, or release.
+The remaining evidence step is a fresh Persvati attestation against that
+checked endpoint. This remains local evidence bookkeeping, not authorization
+to publish, sign, deploy, or release.

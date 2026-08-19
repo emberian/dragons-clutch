@@ -97,10 +97,11 @@ exact toolchain/dependency cache is absent. The default/`0x79` versus explicit
 mock-source bringup split is closed at `83e124d`. The last quiet-tree full
 emission matched 93/94, with only the strict liveness source-identity gate red;
 `b5700a9` closes that identity fork by remeasuring rather than reusing old CU
-rows. The next gate is a quiet-tree 94/94 emission, followed by the
-manifest-only commit, post-commit `check --run-gates`, and fresh Persvati
-portable attestation. Until those pass, the checked-in manifest remains
-historical schema v1.
+rows. The quiet-tree schema-v2 emission now records 94/94; the manifest-only
+commit also passes post-commit `check --run-gates`. The remaining R1 evidence
+gate is a fresh Persvati portable attestation of that immutable endpoint. This
+is a checked local baseline, not a release, deployment, or independent SBF
+rebuild.
 
 ### R2 — Admit one production source profile
 

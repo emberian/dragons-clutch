@@ -209,9 +209,10 @@ asset. Hoard principal is never rent, liveness, bounty, or revenue.
    authenticated rent ownership and a close route; outcome mints have no
    `MintCloseAuthority`; and Hoard donations, claim-burn forfeiture, and
    fractional fragments lack selected terminal disposition.
-8. The repository lacks one clean schema-v2 evidence baseline, independent
-   rebuild, complete SBOM/license record, external security review, and release
-   bundle.
+8. The clean schema-v2 local evidence baseline now passes 94/94 and its
+   post-commit full check. The repository still lacks an independent SBF
+   rebuild, complete release SBOM/license record, external security review,
+   signed tag, and release bundle.
 9. Gate L0 remains open. No engineering artifact authorizes public-network use,
    filing, regulator contact, or real funds.
 
@@ -219,8 +220,8 @@ asset. Hoard principal is never rent, liveness, bounty, or revenue.
 
 Follow the first dependency-unblocked item in `docs/V1_BACKLOG.md`:
 
-1. preserve the sealed R1 artifact/stack/bank evidence and produce the missing
-   schema-v2 release baseline;
+1. preserve the sealed R1 artifact/stack/bank evidence and checked schema-v2
+   local baseline while obtaining a fresh portable attestation;
 2. audit every native post-resolution consumer without weakening exact-lot or
    source STOPs;
 3. implement the full blank-bank production source/archive lifecycle;
