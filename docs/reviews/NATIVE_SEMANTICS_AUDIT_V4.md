@@ -39,8 +39,6 @@ retained only as an unreachable, reserved numeric registry slot.
 - **P1**: release-blocking semantic ownership, representation, or executable
   evidence gap.
 - **P2**: capability, documentation, or non-consensus evidence gap.
-- **IN FLIGHT**: present only in the dirty concurrent worktree; it is not an
-  accepted claim until rebuilt and rerun as one evidence set.
 
 ## Lifecycle matrix
 
@@ -51,12 +49,12 @@ retained only as an unreachable, reserved numeric registry slot.
 | Evaluator and quantization | `ResolutionTerms` builds a degree-zero classifier or a degree-one--three `BasisSpec`; smooth weights are exact integers and quantized once by the registered largest-remainder rule. | No float, midpoint, endpoint choice, preset search, or outcome-index recovery. Degree two/three refuse non-point evidence; the production record path is point-only for all smooth degrees. Smooth TWAP refuses rather than manufacturing an integer point. | **PASS**: `programs/solana-reference/src/resolution.rs:401-496`, `:637-679`, `:719-792`; production strict point gate at `programs/clutch-sbf/program/src/instructions/observe_resolve.rs:1438-1498`. |
 | Public payout derivation APIs | `derive_payout` owns degree-zero index selection; `derive_payout_vector` owns degrees one through three. | The former smooth-to-preset-index bridge was a real public semantic lowering and is repaired in this audit. R-16 remains an unreachable reserved class so registry numbering does not move. | **REPAIRED P1**: `programs/solana-reference/src/resolution.rs:225-266`, `:719-792`, test `:852-859`; focused crate 50/50 green. |
 | Accumulator and window modes | `clutch-accumulator` seals an identity-typed `WindowResult`. `clutch-bspline-accumulator` separately accumulates exact quantized basis occupation with explicit `ExactOnly` or named largest-remainder finalization. | Point resolution does not midpoint-evaluate. Occupation semantics are an exact host model, but they are not selectable in live Terms/Resolve and are not a substitute for the point path. | **PASS point / P2 occupation integration**: `crates/clutch-accumulator/src/window.rs:268-317`, `:460-753`; `crates/clutch-bspline-accumulator/src/lib.rs:65-171`, `:213-466`. |
-| Split and Merge | Pure `clutch-kernel` transitions are mode-aware. The SBF adapter rebuilds from mode-less `KernelAccount`. | Every persisted market is reconstructed as `FinitePreset`; no Terms or Resolution account is in this seam. Native Active economics happen to coincide for reachable valid states, but the native invariant is not what the adapter checks. | **P1 representation/refinement**: `programs/solana-reference/src/lib.rs:101-103`, `:494-507`, `:677-725`; `programs/clutch-sbf/program/src/instructions/split.rs:545-592`. |
+| Split and Merge | Pure `clutch-kernel` transitions are mode-aware. Both the public account-shaped reference adapter and the SBF adapter rebuild from mode-less `KernelAccount`. | Every persisted market is reconstructed as `FinitePreset`; no Terms or Resolution account is in the SBF seam. Native Active economics happen to coincide for reachable valid states, but the native invariant is not what either adapter checks. | **P1 representation/refinement**: `programs/solana-reference/src/lib.rs:101-103`, `:494-507`, `:677-725`, `:1844-1883`; `programs/clutch-sbf/program/src/instructions/split.rs:545-592`. |
 | Materialize and dematerialize | The claim index denotes one native basis Egg under the market's Terms. The transition moves a quantity between internal and bearer form without changing per-Egg total supply. | No payout is evaluated and no categorical cell is selected. It shares the same mode-less reconstruction defect as Split/Merge. | **P1 representation; economics basis-neutral**: same `split.rs:545-592` kernel step; terminology bug at `docs/EVIDENCE_MATRIX.md:25` calls this “categorical supply.” |
-| Resolution persistence | Degree-zero stores a payout index. Smooth markets store raw point, denominator, and the full vector in the v3 record; the kernel retains only phase/index-zero compatibility state. Consumers reconstruct the vector ephemerally from the sole persisted owner. | No vector duplication or preset lookup on the native path. | **PASS source / evidence pending current join**: `programs/solana-layout/src/native_resolution.rs:43-83`, `:131-236`; `programs/clutch-sbf/program/src/instructions/observe_resolve.rs:1230-1277`, `:1507-1524`, `:1566-1604`, `:2225-2344`. |
-| Source/archive to Resolve | In the current dirty tree, expected domain and window ID come from digest-bound Terms, a SourceSpec and sealed SourceArchive receipt are authenticated, and the legacy numeric buffer must equal the archive projection exactly. | This is not lowering; it removes caller substitution. It was concurrently changed while this audit ran, so the checked-in SBF fixture predates the 9-to-11-account Resolve plane and cannot support an accepted execution claim yet. | **IN FLIGHT / P1 evidence gate**: `programs/clutch-sbf/program/src/instructions/observe_resolve.rs:677-762`, `:2600-2686`; accepted truth before the join is `CURRENT_TRUTH.md:150-171`. |
-| Internal redemption | The canonical v3 record is bound to Terms and market, its vector is installed ephemerally as `DerivedBasis`, and exact redemption refuses a remainder. | First-class native payout; no flooring, index reinterpretation, or second vector owner. | **PASS source; previously SBF-executed baseline**: `programs/clutch-sbf/program/src/instructions/observe_resolve.rs:1886-1949`; `programs/clutch-sbf/svm-tests/tests/native_resolution.rs:689-765`. Re-run is required after the in-flight Resolve ABI join. |
-| External redemption | The current dirty source branches on Terms degree, binds the same v3 record, reconstructs `DerivedBasis`, burns the exact bearer quantity, and pays an exact lot. | No categorical reinterpretation in source. This lane and its SVM tests are concurrent/in-flight; it must not be promoted from the accepted categorical-only baseline until a new ELF passes. | **IN FLIGHT / P1 evidence gate**: `programs/clutch-sbf/program/src/instructions/external_exit.rs:138-235`, `:345-507`; tests at `programs/clutch-sbf/svm-tests/tests/native_resolution.rs:858-1058`. |
+| Resolution persistence | Degree-zero stores a payout index. Smooth markets store raw point, denominator, and the full vector in the v3 record; the kernel retains only phase/index-zero compatibility state. Consumers reconstruct the vector ephemerally from the sole persisted owner. | No vector duplication or preset lookup on the native path. | **PASS, SBF-executed**: `programs/solana-layout/src/native_resolution.rs:43-83`, `:131-236`; `programs/clutch-sbf/program/src/instructions/observe_resolve.rs:1230-1277`, `:1507-1524`, `:1566-1604`, `:2225-2344`; native SVM 7/7 against the joined ELF. |
+| Source/archive to Resolve | Expected domain and window ID come from digest-bound Terms, a SourceSpec and sealed SourceArchive receipt are authenticated, and the compatibility numeric projection must equal the archive exactly. | This is not lowering; it removes caller substitution. The joined source/archive and native-resolution commits were rerun against one ELF. | **PASS, SBF-executed**: `programs/clutch-sbf/program/src/instructions/observe_resolve.rs:677-762`, `:2600-2686`; commit `0b96a3a`; native SVM 7/7. |
+| Internal redemption | The canonical v3 record is bound to Terms and market, its vector is installed ephemerally as `DerivedBasis`, and exact redemption refuses a remainder. | First-class native payout; no flooring, index reinterpretation, or second vector owner. | **PASS, SBF-executed**: `programs/clutch-sbf/program/src/instructions/observe_resolve.rs:1886-1949`; `programs/clutch-sbf/svm-tests/tests/native_resolution.rs:689-765`; joined native SVM 7/7. |
+| External redemption | The adapter branches on Terms degree, binds the same v3 record, reconstructs `DerivedBasis`, burns the exact bearer quantity, and pays an exact lot. | No categorical reinterpretation. Minimal exact lots for degrees one through three execute; sub-lots and hostile role/mode/window/mint cases refuse and rollback. | **PASS, SBF-executed**: `programs/clutch-sbf/program/src/instructions/external_exit.rs:138-235`, `:345-507`; `programs/clutch-sbf/svm-tests/tests/native_resolution.rs:858-1058`; commit `cae3d90`; joined native SVM 7/7. |
 | Orders and reservations | `PortfolioRecord` is an exact coefficient vector over Eggs. Epoch and Reservation bind the Terms digest, grid, width, policy, owner/generation, and exact reserved component/cash amounts. No code selects a terminal category. | Single-Egg orders and coefficient portfolios preserve native basis identity. The name “portfolio” is not categorical lowering. | **PASS placement/reservation**: `programs/clutch-sbf/program/src/instructions/orders_batch.rs:733-787`, `:1848-1907`; `programs/clutch-sbf/program/src/instructions/orders_batch/reservation.rs:15-118`, `:130-190`. |
 | Coupled settlement | The live consumer moves one selected Egg and exact cash between bound reservations. A basis Egg is valid for every degree because Terms names what that Egg means. | V1 admits only same-page, two-owner, two-outcome, full-fill, zero-fee, direct single-Egg pairs. Portfolios, partials, virtual legs, and fees refuse; they are not silently compiled to categorical orders. | **LIMIT, not lowering**: `programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs:237-359`, `:442-665`. |
 | Wrapper model and portfolio compiler | Wrapper identity includes Terms digest, degree, denominator, semantic tag, and canonical native underlyings. Terminal payout is the native dot product. The compiler separates native exact/certified approximation from explicitly named categorical compatibility lowering. | Semantics are honest and first-class inside the host models; neither is a live account/compiler/client path. | **PASS model / P2 integration**: `research/structured-claim-wrapper/model.py:67-136`, `:141-227`, `:434-477`; `research/bspline-shape-compiler/src/lib.rs:197-267`, tests `:1451-1520`. |
@@ -107,10 +105,10 @@ from a vector equalling a preset. Those facts are not injective.
 
 ## Other exact findings
 
-### P1: executable evidence is not one coherent artifact set
+### Joined native evidence is coherent; an earlier dirty-tree run was not
 
-During this audit, the pure reference suite passed 50/50, but the concurrent
-SBF tree was not coherent:
+During concurrent editing, the pure reference suite passed 50/50 but the SBF
+tree was temporarily incoherent:
 
 - `cargo test -p clutch-sbf --lib` passed 132 tests and failed
   `instructions::orders_batch::settlement::tests::narrow_submission_is_deterministic_funded_and_stays_unverified`
@@ -121,17 +119,23 @@ SBF tree was not coherent:
   fixture predates the concurrent Resolve account-plane and external-exit
   changes.
 
-These dirty-tree failures are not classified as native semantic defects. They
-invalidate any claim that the current source, tests, and ELF are one executed
-evidence set. Rebuild the SBF artifact and rerun after the source/archive,
-native external, and order-settlement lanes join.
+Those failures were not native semantic defects; they showed why dirty source
+and a stale fixture are not evidence. After source/archive commit `0b96a3a` and
+native external commit `cae3d90`, I reran
+`BPF_OUT_DIR=programs/clutch-sbf/target/deploy cargo test --test native_resolution -- --nocapture`
+against ELF SHA-256
+`e448f1a9a5fe7c80b2d8ece939dab059ef64ccadab11fa5952328cd31ed35a32`.
+All seven native SVM tests passed. After coupled-settlement commit `1835b79`,
+`cargo test -p clutch-sbf --lib` also passed 135/135. The final native
+Resolve/internal/external claim is therefore one coherent executed artifact
+set; the active Split-family mode-binding P1 remains independent and open.
 
 ### P2: stale terminology and historical claims obscure the boundary
 
 - `docs/EVIDENCE_MATRIX.md:25` says materialize/dematerialize preserves
   “categorical supply”; the invariant is per-native-basis-Egg total supply.
-- `programs/clutch-sbf/program/src/lib.rs:19-20` distinguishes “categorical
-  bearer” while the dirty native external lane is landing.
+- `programs/clutch-sbf/program/src/lib.rs:19-20` still says “categorical bearer”
+  although native external redemption is now SBF-executed.
 - `programs/solana-layout/src/native_resolution.rs:3-5` calls v3 a proposed,
   non-live account although CreateMarket and Resolve consume it.
 - `programs/solana-layout/src/lib.rs:2862-2867` says degrees two and three are
@@ -159,20 +163,17 @@ native lifecycle as one first-class public workflow.
    Terms-checked `KernelAccount` v2 mode projection; otherwise add Terms to all
    Split/Merge/materialize/dematerialize account lists. Add hostile mode-flip,
    wrong-Terms, derived-active-solvency, and resolved-native phase-refusal tests.
-2. Finish the SourceSpec/SourceArchive/Resolve join and native external lane as
-   one ABI change; then rebuild the ELF and rerun host plus SVM evidence. Do not
-   promote current dirty source independently of its fixture.
-3. Add one blank-bank joined lifecycle for each degree one, two, and three:
+2. Add one blank-bank joined lifecycle for each degree one, two, and three:
    seal artifacts, CreateMarket, Split, internal transfer/order reservation,
    materialize, archived Resolve, exact internal redeem, exact bearer redeem,
    and sub-lot rollback. This catches both mode loss and genesis-fixture bias.
-4. Extend coupled consumption from direct single-Egg fills to exact coefficient
+3. Extend coupled consumption from direct single-Egg fills to exact coefficient
    portfolio fills, preserving Terms identity and refusing every unsupported
    rounding/partial/fee case until its owner exists.
-5. Publish a native client schema and compiler artifact that carry Terms digest,
+4. Publish a native client schema and compiler artifact that carry Terms digest,
    degree, knots, denominator, coefficients, approximation certificate, and an
    explicit native-versus-compatibility semantic tag.
-6. Add refinement evidence for Terms bytes -> `BasisSpec` -> quantized vector ->
+5. Add refinement evidence for Terms bytes -> `BasisSpec` -> quantized vector ->
    v3 Resolution bytes -> internal/external payout. Either extend Rocq with
    basis mode/vector resolution or state explicitly that it proves only the
    finite-preset legacy. Correct the stale categorical wording and historical
@@ -189,7 +190,12 @@ Green local checks during the audit:
 - `research/structured-claim-wrapper`: 18 Python tests.
 - `research/bspline-shape-compiler`: 14 tests.
 - `apps/static-client`: 11 Node tests.
+- `programs/clutch-sbf` host: 135 tests after the joined source/native/coupled
+  commits.
+- Joined real-SBF native resolution/internal/external redemption: 7 tests
+  against ELF SHA-256
+  `e448f1a9a5fe7c80b2d8ece939dab059ef64ccadab11fa5952328cd31ed35a32`.
 
-The two red dirty-tree SBF commands and their interpretation are recorded
-above. No network, deployment, push, key, fund, or external-system action was
-performed.
+The earlier red dirty-tree commands and their corrected interpretation are
+recorded above. No network, deployment, push, key, fund, or external-system
+action was performed.
