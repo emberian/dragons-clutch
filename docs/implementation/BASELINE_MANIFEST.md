@@ -25,8 +25,9 @@ scripts/baseline_manifest.py emit
 # The full record: also execute every declared gate and store exit codes plus
 # normalized key output lines. This is intentionally not a presubmit: a
 # cache-cold run can take tens of minutes because it includes host research,
-# Lean/Verus lanes, two profiles rebuilt twice by bringup, and three local SBF
-# bank/validator lanes (default SVM, explicit mock SVM, and loopback lifecycle).
+# Lean/Verus lanes, two profiles rebuilt twice by bringup, and four local SBF
+# bank/validator lanes (default SVM, explicit mock SVM, loopback lifecycle, and
+# the signed committed walk).
 scripts/baseline_manifest.py emit --run-gates
 
 # A labelled mid-flight snapshot from a dirty tree. Never a baseline.
@@ -165,8 +166,8 @@ helper cannot leak descendants into a later gate.
   the coupled vertical-model golden trace;
 - `current-benchmark` — checked benchmark-harness and ABI checks;
 - `current-research` — documented bounded host research/model/frontend checks;
-- `current-runtime` — the loopback bringup plus default and explicitly
-  non-production mock local SVM suites; and
+- `current-runtime` — loopback bringup, default and explicitly non-production
+  mock local SVM suites, and the signed committed local walk; and
 - `current-proof-boundary` — Lean/Verus/Rocq commands whose proof content and
   boundaries are recorded explicitly rather than being inflated into a generic
   “verified” label.
@@ -202,7 +203,7 @@ the artifact. `run_lab.sh` measures no host reproducibility; only
 `sbf_rlib_sha256` is a same-machine two-build comparison. Excluding the volatile
 host hash keeps cold/warm and cross-path manifest records byte-stable.
 
-The three runtime gates have intentionally different coverage:
+The four runtime gates have intentionally different coverage:
 
 - `sbf.runtime_bringup` builds both the default empty-production-source-registry
   ELF and the distinct explicitly non-production mock-source ELF twice into
@@ -222,6 +223,12 @@ The three runtime gates have intentionally different coverage:
   the mock-source ELF in that same local bank. It exists so a successful mock
   source route cannot be confused with the default ELF's fail-closed production
   provider behavior.
+- `sbf.committed_signed_walk` builds the current ELF, then submits 22 signed,
+  confirmed transactions against one fresh loopback validator, including two
+  expected rollback refusals. It reloads 18 watched accounts and reruns after a
+  terminal-byte corruption that must go red. Its 11 program-owned prerequisites
+  are genesis-injected; it is not blank-bank source ingestion, deployment,
+  devnet, or mainnet evidence.
 
 The present runtime inventory also needs careful reading. The sealed R1 profile
 now admits the measured local `ResolutionWork` Begin/Fold/Finalize/Abort routes:
@@ -319,11 +326,11 @@ Verbatim from the manifest's own `claims.not_attested`:
   narrow production arithmetic helper; and the B-spline lane checks finite
   Lean/Rust rows. None proves a whole kernel, accounts, CPI, SBF, or runtime
   refinement. `check` flags any disposition or source-pin drift.
-- **No non-local runtime evidence.** The three local SBF gates record a loopback
-  validator differential/lifecycle plus default and explicit mock in-process
-  Agave/Token-2022 bank suites. They do not establish public-cluster behavior,
-  deployment, validator diversity, an independently rebuilt ELF, or cross-runtime
-  vector closure.
+- **No non-local runtime evidence.** The four local SBF gates record a loopback
+  validator differential/lifecycle, a signed genesis-assisted committed walk,
+  and default/explicit-mock in-process Agave/Token-2022 bank suites. They do
+  not establish public-cluster behavior, deployment, validator diversity, an
+  independently rebuilt ELF, or cross-runtime vector closure.
 - **Measured ResolutionWork is not global liveness.** The sealed local R1
   artifact and its committed logs admit the bounded ResolutionWork route under
   its frozen policy. They do not prove transaction inclusion or emit a complete
@@ -386,15 +393,16 @@ may not flip them to obtain a green result.
 
 ## Runtime-gate boundary
 
-The inventory has 93 declarations; the generator records the same count in
+The inventory has 94 declarations; the generator records the same count in
 `gate_summary.total` when it runs. It covers core crates including the
 B-spline, occupation accumulator, and liveness kernel; documented model and
 frontend checks; the vector executor and invariant campaign; Lean and bounded
-refinement lanes; the 16-test terminal-lifecycle V2 model; and the three local
+refinement lanes; the 16-test terminal-lifecycle V2 model; and the four local
 runtime lanes. A full `--run-gates` baseline is evidence collection, not a fast
-presubmit. A cache-cold host can take tens of minutes, dominated by four fresh
-SBF builds in bringup (two default, two mock) plus one fresh SBF build for each
-of the default and explicit mock SVM gates. No runtime command contacts a
+presubmit. A cache-cold host can take tens of minutes and invokes nine bounded
+SBF compiler builds: two E0 `rlib` builds, four bringup builds (two default,
+two mock), default and explicit-mock SVM builds, and one committed-walk build.
+No runtime command contacts a
 public RPC, signs, deploys, or releases anything. The liveness current-profile
 gate rehashes sealed artifact/log evidence and recompiles an archived host probe;
 it adds no fresh SBF build. A declaration-only `emit` remains useful for

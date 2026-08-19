@@ -35,6 +35,9 @@ promotion, or terminal closure. The sealed R1 gate verifies a bounded measured
 ResolutionWork profile from committed ELF/log evidence; it does not broaden
 those claims. The batch scalar shadow, narrow transfer refinement, and finite
 B-spline Lean/Rust bridge are named bounded lanes, not whole-system proof. The
+signed committed-walk gate records 22 local signed transactions from an
+11-prerequisite genesis-assisted prestate; it is not blank-bank, deployment, or
+public-cluster evidence. The
 root Verus probe accepts only its intended exit 1; missing/off-pin/digest-drift
 setup exits are failures. `MANIFEST.baseline.json` is historical schema v1 and
 cannot pass the v2 checker until a later clean v2 emission; this task must not

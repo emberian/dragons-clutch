@@ -200,6 +200,30 @@ FILE_DIGESTS: list[tuple[str, str, str | None, str | None]] = [
     ("locks.clutch_liveness", "crates/clutch-liveness/Cargo.lock", None, None),
     ("locks.solana_layout", "programs/solana-layout/Cargo.lock", None, None),
     ("locks.solana_reference", "programs/solana-reference/Cargo.lock", None, None),
+    (
+        "locks.clutch_sbf_committed_harness",
+        "programs/clutch-sbf/committed-harness/Cargo.lock",
+        None,
+        None,
+    ),
+    (
+        "clutch_sbf.committed_harness_manifest",
+        "programs/clutch-sbf/committed-harness/Cargo.toml",
+        None,
+        None,
+    ),
+    (
+        "clutch_sbf.committed_harness_source",
+        "programs/clutch-sbf/committed-harness/src/main.rs",
+        None,
+        None,
+    ),
+    (
+        "clutch_sbf.committed_walk_runner",
+        "programs/clutch-sbf/scripts/run_committed.sh",
+        None,
+        None,
+    ),
     ("locks.vertical_model", "research/vertical-model/Cargo.lock", None, None),
     (
         "locks.liveness_policy_profile",
@@ -1088,6 +1112,32 @@ def build_gates() -> list[dict[str, Any]]:
                     "dependency diagnostics proven absent from the linked ELF "
                     "are build diagnostics, not evidence of reachable undefined "
                     "behavior, but their absence is not a general stack-safety proof"
+                ),
+            },
+            {
+                "id": "sbf.committed_signed_walk",
+                "section": "current-runtime",
+                "command": "programs/clutch-sbf/scripts/run_committed.sh",
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [
+                    r"^== signed, confirmed, committed walk ==$",
+                    r"^  red: committed-.*committed bytes differ$",
+                    r"^committed_signed_transactions=22$",
+                    r"^committed_expected_refusals=2$",
+                    r"^committed_watched_accounts=18$",
+                    r"^genesis_assisted_program_accounts=11$",
+                    r"^withdraw_cash=DRIVEN_TO_ZERO$",
+                    r"^redeem_external=DRIVEN$",
+                    r"^falsifiability=PASS$",
+                    r"^sbf_elf_sha256=[0-9a-f]{64}$",
+                ],
+                "note": (
+                    "22 signed, confirmed same-market loopback transactions with "
+                    "two checked rollback refusals, 18 watched accounts, and a "
+                    "required terminal-byte falsification run. The prestate has 11 "
+                    "program-owned genesis-assisted prerequisites; this is local "
+                    "runtime evidence, not blank-bank, source-ingestion, deployment, "
+                    "devnet, or mainnet evidence."
                 ),
             },
             {

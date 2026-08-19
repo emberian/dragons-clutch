@@ -52,6 +52,7 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
                 "programs/clutch-sbf/svm-tests/run_svm_tests.sh "
                 "--non-production-mock-source"
             ),
+            "sbf.committed_signed_walk": "programs/clutch-sbf/scripts/run_committed.sh",
             "static_client.npm": "(cd apps/static-client && npm test && npm run check)",
         }
         for gate_id, command in expected_commands.items():
@@ -60,7 +61,11 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
                 gates[gate_id]["section"],
                 "current-baseline" if gate_id == "static_client.npm" else (
                     "current-runtime"
-                    if gate_id == "sbf.token2022_program_test_non_production_mock"
+                    if gate_id
+                    in {
+                        "sbf.token2022_program_test_non_production_mock",
+                        "sbf.committed_signed_walk",
+                    }
                     else "current-proof-boundary"
                     if gate_id.startswith("proof.") or gate_id == "lean.model_build"
                     else "current-research"
@@ -175,6 +180,7 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
 
     def test_current_runtime_and_terms_authorities_are_declared(self) -> None:
         gates = {gate["id"]: gate for gate in baseline_manifest.build_gates()}
+        self.assertEqual(len(gates), 94)
         bringup_patterns = gates["sbf.runtime_bringup"]["key_patterns"]
         for pattern in (
             r"^default pass [12]  sha256=[0-9a-f]{64}  bytes=[0-9]+$",
@@ -192,6 +198,25 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
         self.assertEqual(
             baseline_manifest.DERIVED_DIGESTS[0]["handoff"],
             "62b06b2107636686648507e4f9ecd8a4d90733dcebf81177d4a63b25bc698d02",
+        )
+
+        signed_walk = gates["sbf.committed_signed_walk"]
+        for pattern in (
+            r"^committed_signed_transactions=22$",
+            r"^committed_expected_refusals=2$",
+            r"^committed_watched_accounts=18$",
+            r"^genesis_assisted_program_accounts=11$",
+            r"^falsifiability=PASS$",
+        ):
+            self.assertIn(pattern, signed_walk["key_patterns"])
+
+        file_digests = {entry[0] for entry in baseline_manifest.FILE_DIGESTS}
+        self.assertTrue(
+            {
+                "locks.clutch_sbf_committed_harness",
+                "clutch_sbf.committed_harness_source",
+                "clutch_sbf.committed_walk_runner",
+            }.issubset(file_digests)
         )
 
     def test_non_attestations_keep_current_boundaries_explicit(self) -> None:
