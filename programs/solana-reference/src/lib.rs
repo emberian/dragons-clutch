@@ -1574,10 +1574,9 @@ pub fn expected_window_preimage(
 /// the validated weight vector at the resolved value, and the kernel installs
 /// exactly that vector through `MarketState::resolve_with_vector`.  No step
 /// searches the frozen preset set, so the reachable lattice is no longer
-/// capped at `MAX_PAYOUTS` members and
-/// [`ResolutionRefusal::DerivedVectorUnrepresentable`] cannot arise on this
-/// path — for a two-outcome degree-1 market the whole `D + 1` member lattice
-/// resolves, not the eight vectors an enumeration could hold.
+/// capped at `MAX_PAYOUTS` members. For a two-outcome degree-1 market the whole
+/// `D + 1` member lattice resolves, not the eight vectors an enumeration could
+/// hold.
 ///
 /// The division of labour is unchanged from resolve-by-index: the derivation
 /// binds the vector to digest-bound terms and one sealed `WindowResult`, and
@@ -1592,12 +1591,9 @@ pub fn expected_window_preimage(
 /// kernel, so a caller cannot cross the seams by supplying a matched pair of
 /// the wrong kind.
 ///
-/// What this is *not*: it is not the `Action::Resolve` account path.  That
-/// path still resolves by index, because the record a redemption reads its
-/// authority from is a `ResolutionAccount`, whose frozen layout names a payout
-/// *index* and carries no resolved value.  Routing derived markets through the
-/// accounts needs the layout half of the residue; until it lands, this seam is
-/// where a derived vector meets the kernel.
+/// What this is *not*: it is not the `Action::Resolve` account path. The SBF
+/// adapter owns that account binding, including the native-resolution record;
+/// this helper remains the pure derivation-to-kernel seam.
 pub fn resolve_derived_market(
     market: &mut MarketState,
     terms: &ResolutionTerms,
@@ -5988,13 +5984,9 @@ mod tests {
             resolve_terminal(&f, &split, 1, 0, 3, 3),
             Err(Error::Resolution(ResolutionRefusal::WrongResolutionMode))
         );
-        /* The pure seam still derives the validated member-shaped vector —
-         * the refusal is now the *layout* half of the residue, not the
-         * kernel half: `resolve_with_vector` exists and installs exactly this
-         * vector through `resolve_derived_market`, but the
-         * `ResolutionAccount` a redemption reads its authority from names a
-         * payout *index* and carries no resolved value, so the account path
-         * has nowhere to record what was installed. */
+        /* The pure seam still derives the validated member-shaped vector.
+         * Account-backed native persistence belongs to the SBF adapter, not
+         * this resolve-by-index compatibility helper. */
         assert_eq!(derived_vector_at(&f, 3, 3).unwrap().weights[..2], [40, 24]);
         /* A knot vector that happens to equal a preset refuses too: the mode
          * boundary is semantic, not a membership optimization. */
@@ -6006,11 +5998,9 @@ mod tests {
 
     #[test]
     fn degree_one_vector_outside_the_presets_resolves_through_the_kernel_seam() {
-        /* The kernel half of the §4 residue, closed. The same D = 64 terms
-         * whose derived vector (40, 24) no preset carries — the vector the
-         * preset-membership bridge refused — resolves directly, and pays the
-         * derived fractions exactly. No step of this path searches the preset
-         * set, so `DerivedVectorUnrepresentable` has no site to arise at. */
+        /* The same D = 64 terms whose derived vector (40, 24) no preset
+         * carries resolves directly and pays the derived fractions exactly.
+         * No step of this path searches the preset set. */
         let mut f = fixture();
         let mut terms = hat_terms_exact_d8(&f);
         let mut left = [0u64; MAX_OUTCOMES];

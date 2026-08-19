@@ -74,12 +74,13 @@ Derived TWAP remains `R-05 StatisticUnsupported`. It needs a separately
 bounded exact-rational path; this integration does not manufacture an integer
 point from the ratio.
 
-`derive_payout` still contains a preset-membership bridge for every derived
-degree because the old account-shaped resolution path names a payout index.
-That is a compatibility residue, not the native semantic ceiling. The direct
-reference seam is `derive_payout_vector` followed by the kernel's
-resolve-with-vector transition. A runtime adapter must authenticate terms,
-source, window, and account identities before that pure seam is reachable.
+`derive_payout` is degree-zero-only and refuses every smooth degree with
+`R-17 WrongResolutionMode`. The smooth reference seam is
+`derive_payout_vector` followed by the kernel's resolve-with-vector transition;
+no public derivation searches a smooth vector in the preset set. `R-16` remains
+only as a retired numeric registry slot. A runtime adapter must authenticate
+terms, source, window, and account identities before that pure seam is
+reachable.
 
 ## Checked evidence
 

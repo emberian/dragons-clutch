@@ -53,25 +53,13 @@
 //! residual rule. It had no deployed compatibility authority and is
 //! intentionally superseded.
 //!
-//! [`derive_payout_vector`] is the §5.1 sibling seam: it produces the
-//! validated, member-shaped weight vector. The kernel's design §4 transition
-//! `clutch_kernel::MarketState::resolve_with_vector` now exists, and
-//! `crate::resolve_derived_market` joins the two: the derived vector is
-//! installed verbatim, with **no preset-membership step anywhere on that
-//! path**. The reachable lattice is therefore no longer capped at
-//! `MAX_PAYOUTS` members — for a two-outcome degree-1 market the whole
-//! `D + 1` lattice resolves, nine vectors at `D = 8` against eight preset
-//! slots — and [`ResolutionRefusal::DerivedVectorUnrepresentable`] has no
-//! site to arise at there.
-//!
-//! The `Action::Resolve` **account** path still resolves by index, and
-//! [`derive_payout`] therefore keeps its degree-1 preset-membership bridge.
-//! That is not a kernel limit any more; it is a layout one. A redemption
-//! takes its authority from a `ResolutionAccount`, whose frozen layout names
-//! a payout *index* and carries no resolved value, and the reference kernel
-//! account carries neither a basis-mode byte nor a resolved-vector slot. Both
-//! are byte-layout facts owned by crates this one does not revise, so the
-//! residue is now exactly one half wide: the layout half.
+//! [`derive_payout_vector`] is the §5.1 smooth seam: it produces the validated,
+//! member-shaped weight vector. The kernel's design §4 transition
+//! `clutch_kernel::MarketState::resolve_with_vector` installs that vector
+//! verbatim. [`derive_payout`] is degree-zero-only and refuses every smooth
+//! degree with [`ResolutionRefusal::WrongResolutionMode`]. No public
+//! derivation searches a smooth vector in the finite preset set, even when an
+//! identical vector happens to be present there.
 //!
 //! Degrees 2 and 3 admit only point evidence after edge handling. An interval
 //! with distinct endpoints refuses `R-15 NonPointEvidence`; no midpoint or
@@ -237,28 +225,17 @@ pub enum ResolutionRefusal {
     /// R-15: a degree-two or degree-three basis received non-point evidence
     /// after edge handling. Smooth interval semantics are not guessed.
     NonPointEvidence,
-    /// R-16: the derived weight vector is valid but is not a member of the
-    /// frozen preset set, so the *index-shaped* resolution record cannot name
-    /// it.
+    /// R-16: retired compatibility slot.
     ///
-    /// Unreachable on the derived-basis seam. `crate::resolve_derived_market`
-    /// installs the derived vector through the kernel's `resolve_with_vector`
-    /// and never consults the preset set, so no input to that path can reach
-    /// this refusal; the variant is kept, not retired, because
-    /// [`derive_payout`] still serves the `Action::Resolve` account path,
-    /// where it remains live and load-bearing.
-    ///
-    /// What it now reports is the *layout* half of the design §4 residue: a
-    /// `ResolutionAccount` names a payout index and carries no resolved value
-    /// (design §6.3), and the reference kernel account carries neither a
-    /// basis-mode byte nor a resolved-vector slot, so a market resolved to a
-    /// non-preset vector has nowhere in the accounts to record what it
-    /// resolved to. Fail-closed until those bytes exist; never approximated to
-    /// the nearest preset.
+    /// No derivation seam returns this refusal. The numeric class remains
+    /// reserved because the refusal registry is an externally inspected
+    /// diagnostic surface; smooth markets never regain the former
+    /// preset-membership bridge merely because the slot is retained.
     DerivedVectorUnrepresentable,
     /// R-17: the wrong resolution seam for this market's basis mode —
     /// [`derive_payout_vector`] invoked on a degree-0 (categorical) market,
-    /// which resolves by index and has no derived vector.
+    /// or [`derive_payout`] invoked on a degree-one through degree-three
+    /// market. One basis mode has exactly one public derivation seam.
     WrongResolutionMode,
 }
 
@@ -750,53 +727,40 @@ fn map_basis_error(error: BasisError) -> ResolutionRefusal {
 /// legitimately pay the same vector — and must never be inverted to recover a
 /// cell.
 ///
-/// Degrees 1 through 3: the derived, validated weight vector must be a member of the
-/// frozen preset set (see the module docs and
-/// [`ResolutionRefusal::DerivedVectorUnrepresentable`]); the returned index
-/// is the member's, so the kernel's resolve-by-index installs exactly the
-/// derived vector.
+/// Degrees 1 through 3 refuse with
+/// [`ResolutionRefusal::WrongResolutionMode`]. They resolve only through
+/// [`derive_payout_vector`], so an exact vector that happens to equal a preset
+/// is never converted into an index.
 ///
-/// The function is total, allocation free, and performs at most 15
-/// comparisons plus one bounded statistic evaluation, one bounded basis
-/// evaluation per admitted endpoint, and at most `MAX_PAYOUTS` vector
-/// comparisons.
+/// The function is total, allocation free, and performs at most 15 boundary
+/// comparisons plus one bounded statistic evaluation.
 ///
 /// `NotSealed`, `NotMature`, and `IncompleteDomain` cannot appear here: a
 /// [`WindowResult`] cannot exist in those states.
 pub fn derive_payout(
     terms: &ResolutionTerms,
-    payouts: &[PayoutVectorBytes; MAX_PAYOUTS],
+    _payouts: &[PayoutVectorBytes; MAX_PAYOUTS],
     window: &WindowResult,
 ) -> Result<u8, ResolutionRefusal> {
     terms.validate()?;
     window
         .check_domain(&terms.window)
         .map_err(ResolutionRefusal::WindowDomainMismatch)?;
-    if terms.basis_degree == 0 {
-        let (first, last) = terms.conservative_cells(window)?;
-        if first != last {
-            // AMBIG-REFUSE-01. AMBIG-MIDPOINT, AMBIG-CONSERVATIVE-LOW, and
-            // AMBIG-CONSERVATIVE-HIGH are never registered: each converts
-            // uncertainty into a definite claim with no evidence.
-            return Err(ResolutionRefusal::AmbiguousInterval);
-        }
-        let payout = terms.payout_map[usize::from(first)];
-        if payout >= terms.payout_count {
-            return Err(ResolutionRefusal::PayoutIndexOutOfRange);
-        }
-        return Ok(payout);
+    if terms.basis_degree != 0 {
+        return Err(ResolutionRefusal::WrongResolutionMode);
     }
-    let vector = terms.derived_vector(window)?;
-    let mut index = 0usize;
-    while index < usize::from(terms.payout_count) {
-        if payouts[index].denominator == vector.denominator
-            && payouts[index].weights == vector.weights
-        {
-            return Ok(index as u8);
-        }
-        index += 1;
+    let (first, last) = terms.conservative_cells(window)?;
+    if first != last {
+        // AMBIG-REFUSE-01. AMBIG-MIDPOINT, AMBIG-CONSERVATIVE-LOW, and
+        // AMBIG-CONSERVATIVE-HIGH are never registered: each converts
+        // uncertainty into a definite claim with no evidence.
+        return Err(ResolutionRefusal::AmbiguousInterval);
     }
-    Err(ResolutionRefusal::DerivedVectorUnrepresentable)
+    let payout = terms.payout_map[usize::from(first)];
+    if payout >= terms.payout_count {
+        return Err(ResolutionRefusal::PayoutIndexOutOfRange);
+    }
+    Ok(payout)
 }
 
 /// Derive the validated weight vector selected by one sealed window under one
@@ -886,6 +850,20 @@ mod native_bspline_tests {
         assert_eq!(derive_payout(&terms, &payouts, &below), Ok(0));
         let at_boundary = window(terms.window, 4, 4);
         assert_eq!(derive_payout(&terms, &payouts, &at_boundary), Ok(1));
+    }
+
+    #[test]
+    fn index_derivation_refuses_smooth_terms_even_when_the_vector_is_a_preset() {
+        let terms = derived_terms(1);
+        let point = window(terms.window, 2, 2);
+        let vector = derive_payout_vector(&terms, &point).unwrap();
+        let mut payouts = [PayoutVectorBytes::ZERO; MAX_PAYOUTS];
+        payouts[0] = vector;
+
+        assert_eq!(
+            derive_payout(&terms, &payouts, &point),
+            Err(ResolutionRefusal::WrongResolutionMode)
+        );
     }
 
     #[test]
