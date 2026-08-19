@@ -1,0 +1,16 @@
+[package]
+name = "clutch-bspline-accumulator"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Bounded native B-spline occupation accumulator for Dragon's Clutch"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+clutch-bspline = { path = "../clutch-bspline" }
