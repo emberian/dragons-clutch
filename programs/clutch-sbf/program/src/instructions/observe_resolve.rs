@@ -4,7 +4,10 @@
 //! turns a folded observation page into an advanced, replay-guarded cursor
 //! (digest-chained and signer-authorized — nothing here authenticates the
 //! observation *sources*), and the
-//! evidence gate that turns a sealed window into exactly one payout index.  It
+//! categorical evidence gate that turns a sealed window into exactly one
+//! payout index. Native degree-1 through degree-3 terms refuse this persisted
+//! path until its account state can carry `BasisMode` and a resolved vector;
+//! they are never searched through the preset set. It
 //! contains no economic logic — the payout algebra is [`clutch_kernel`], the
 //! window algebra is [`clutch_accumulator`], the terms-to-payout derivation is
 //! [`clutch_solana_reference::derive_payout`], and byte ownership is
@@ -12,46 +15,33 @@
 //! the checks, the hostile decoding of the two caller-supplied blobs, and the
 //! write-back.
 //!
-//! ## `RedeemInternal` now pays real collateral
+//! ## Resolution, redemption, and withdrawal are distinct
 //!
 //! `Resolve` moves no value but carries the complete canonical outcome-mint
 //! vector so direct bearer burns are synchronized before the payout freezes.
-//! `RedeemInternal` pays collateral *out* of the Hoard, so it takes
-//! [`REDEEM_ACCOUNT_PREFIX`] plus that mint vector — the evidence prefix, plus the Profile, the token program,
-//! the Realm's 266 collateral-policy bytes, the collateral mint, the
-//! redeemer's own token account, the Hoard's signing authority, and the Hoard
-//! token account.  The outflow is a `TransferChecked` signed by
-//! [`crate::seeds::hoard_authority_pda`]: the probe established there is no
-//! other shape, because a token account owned by a program address refuses a
-//! wallet-signed transfer out.
+//! It has no Position or owner Replay account: immutable Terms and the sealed
+//! window generation define its replay domain, while the canonical Resolution
+//! account records the one market-global fact.
 //!
-//! The admission decision over those accounts is
+//! `RedeemInternal` converts locked backing into owner Position cash; it is not
+//! a physical payout. It takes [`REDEEM_ACCOUNT_PREFIX`] plus the mint vector
+//! and collateral admission roles so the program can prove that *zero*
+//! Token-2022 atoms moved and that pooled custody still covers the remaining
+//! locked backing. The admission decision over those accounts is
 //! [`crate::instructions::split::validate_collateral_leg`], called with this
-//! plane's own positions rather than copied — one decision procedure, two
-//! account lists.  After the CPI the exact deltas and the mirror
-//! `HoardAccount::collateral_atoms == hoard_token.amount` are required, which
-//! is the same step-6 discipline `TOKEN2022_PLAN.md` §3.3 gives every other
-//! token instruction.
-//!
-//! One deviation from that discipline is inherited and named: the transition
-//! writes its seven state accounts *before* the CPI, because
-//! `apply_evidence_transition` holds them as mutable borrows and a live
-//! borrow across `invoke` is a runtime failure.  On chain the deviation is
-//! invisible — SVM transaction semantics discard every byte on any later
-//! refusal — and `programs/clutch-sbf/svm-tests` demonstrates that rather than
-//! assuming it.
+//! own positions rather than copied — one decision procedure, two account
+//! lists. [`super::cash_exit`] is the separate owner-authorized Hoard-to-wallet
+//! `TransferChecked` boundary.
 //!
 //! ## The oracle
 //!
-//! `clutch_solana_reference::apply_with_evidence` is the whole gate offline.
-//! Every check it performs is performed here, in the same order, with the same
-//! refusal class — [`clutch_solana_reference::Error`] values, not a parallel
-//! vocabulary — so that "same class" is `==` in a test rather than a
-//! hand-maintained mapping.  It is not *called*: the SBF backend reports its
-//! composition as overflowing the 4 KiB frame, so it is rebuilt here out of
-//! `#[inline(never)]` frames that each hold at most two large decoded accounts.
-//! The host tests at the bottom of this file run both implementations on
-//! identical bytes and compare post-state and refusals.
+//! `clutch_solana_reference::apply_market_resolution_with_evidence` is the
+//! market-global Resolve oracle;
+//! `clutch_solana_reference::apply_with_evidence` remains the owner-scoped
+//! redemption oracle. Every check is rebuilt here from `#[inline(never)]`
+//! frames because calling the composed offline adapter exceeds SBF's 4 KiB
+//! frame. The generated harness runs both references on identical bytes; its
+//! committed plan then exercises the production account plane.
 //!
 //! The reference has no `FeedAdvance`, so that instruction's oracle is the
 //! accumulator's own algebra plus the frozen [`clutch_solana_layout::FeedAccount`]
@@ -69,7 +59,7 @@
 //! | `validate_links` | step 2 | yes |
 //! | `validate_padding` | step 3 | yes |
 //! | `validate_aggregate_closure` | step 4 | yes |
-//! | replay sequence | step 5 | yes |
+//! | owner replay sequence (`RedeemInternal` only) | step 5 | yes |
 //! | `kernel_market` invariants | step 6 | yes |
 //! | `validate_evidence_metadata` writability + zero window id | step 7 | yes |
 //! | `validate_evidence_metadata` owner/key/alias | [`process`], with the other addresses | **moved earlier** |
@@ -95,6 +85,12 @@
 //!    [`clutch_solana_layout::FeedAccount::cursor`], which only [`process`]'s
 //!    `FeedAdvance` path can move, and only across buckets a folded page
 //!    covered.  A caller can therefore no longer assert maturity.
+//!
+//! Resolve has the same evidence ordering but a deliberately narrower state
+//! plane: no Position and no owner Replay. Its request sequence is checked
+//! against both `Terms.repair_generation` and the sealed window generation;
+//! an exact already-recorded fact is idempotent and any conflicting repeat
+//! refuses.
 //!
 //! ## What this program cannot derive, and what that costs
 //!
@@ -204,7 +200,7 @@
 //!   *created* on-chain until it has one.
 //! - The terms artifact is still read in its own small frame at each gate
 //!   step — address derivation, market binding, payout-set binding, record
-//!   binding, payout derivation (plus the preset-vector load) — but the
+//!   binding, payout derivation — but the
 //!   SHA-256 over its body is paid **once per transaction**, in the account
 //!   plane's `accounts::read_terms`; every later read is
 //!   [`clutch_solana_layout::TermsAccount::decode_unchecked`], which runs
@@ -223,11 +219,10 @@
 //!   would add transaction weight and no fact.  The cost is that the family's
 //!   account-list prefix is not uniform, which is an ABI decision for whoever
 //!   freezes the schema, not a lane's.
-//! - No host test can reach [`process`]: off-chain program-address derivation
-//!   is not compiled into this crate (see [`crate::seeds`]), so the account
-//!   plane of these three instructions is covered only by the SVM differential,
-//!   which does not exercise them yet.  The host tests cover the transition and
-//!   both blob codecs.
+//! - The historical inline differential is retained under `cfg(any())` as
+//!   migration archaeology because it still carries the deleted external
+//!   shadow DTO. Current process coverage lives in the generated SBF harness
+//!   and committed local-bank lane.
 
 use crate::accounts::{
     self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
@@ -359,11 +354,18 @@ pub const MAX_FEED_PAGE_LEN: usize =
 /* Account lists                                                             */
 /* ------------------------------------------------------------------------ */
 
-/// Fixed prefix length of `Resolve`, before its canonical mint vector.
+/// Fixed market-global prefix of `Resolve`, before its canonical mint vector.
 ///
-/// `Resolve` is token-free — `TOKEN2022_PLAN.md` §3.2's table gives it no CPI —
-/// `RedeemInternal` pays collateral out and takes
-/// [`REDEEM_ACCOUNT_PREFIX`] plus the same bounded vector.
+/// Resolution deliberately has no Position or owner Replay account. Its only
+/// replay fact is the market's canonical [`ResolutionAccount`], and an exact
+/// repeat of that fact is idempotent. The nine roles are actor, Market, Hoard,
+/// kernel aggregate, SupplyLedger, immutable Terms, Resolution, Feed, and the
+/// hostile evidence buffer.
+pub const RESOLVE_ACCOUNT_PREFIX: usize = 9;
+/// Fixed owner-scoped evidence prefix of `RedeemInternal`.
+///
+/// Redemption remains a position transition and therefore retains the owner
+/// Position and generation-scoped Replay account.
 pub const EVIDENCE_ACCOUNT_PREFIX: usize = 11;
 /// Exact number of accounts `FeedAdvance` accepts.
 pub const FEED_ADVANCE_ACCOUNT_COUNT: usize = 3;
@@ -390,6 +392,25 @@ pub const IX_RESOLUTION: usize = 8;
 pub const IX_FEED: usize = 9;
 /// Caller-supplied evidence buffer (read-only, hostile).
 pub const IX_BUFFER: usize = 10;
+
+/// Authenticated fee-payer on the market-global Resolve plane.
+pub const IX_RESOLVE_ACTOR: usize = 0;
+/// Market account on the market-global Resolve plane.
+pub const IX_RESOLVE_MARKET: usize = 1;
+/// Hoard account on the market-global Resolve plane.
+pub const IX_RESOLVE_HOARD: usize = 2;
+/// Kernel aggregate on the market-global Resolve plane.
+pub const IX_RESOLVE_KERNEL: usize = 3;
+/// Market-wide SupplyLedger on the market-global Resolve plane.
+pub const IX_RESOLVE_SUPPLY: usize = 4;
+/// Immutable Terms on the market-global Resolve plane.
+pub const IX_RESOLVE_TERMS: usize = 5;
+/// Canonical market Resolution account.
+pub const IX_RESOLVE_RESOLUTION: usize = 6;
+/// Feed head on the market-global Resolve plane.
+pub const IX_RESOLVE_FEED: usize = 7;
+/// Hostile evidence buffer on the market-global Resolve plane.
+pub const IX_RESOLVE_BUFFER: usize = 8;
 
 /* --------------------------------------------------------------------- */
 /* `RedeemInternal`'s collateral leg, mandatory                            */
@@ -424,7 +445,7 @@ pub const IX_HOARD_AUTHORITY: usize = 16;
 /// The Hoard's Token-2022 collateral account (writable).
 pub const IX_HOARD_TOKEN: usize = 17;
 /// First canonical outcome mint on a Resolve.
-pub const IX_RESOLVE_OUTCOME_MINTS: usize = EVIDENCE_ACCOUNT_PREFIX;
+pub const IX_RESOLVE_OUTCOME_MINTS: usize = RESOLVE_ACCOUNT_PREFIX;
 /// First canonical outcome mint on a RedeemInternal.
 pub const IX_REDEEM_OUTCOME_MINTS: usize = REDEEM_ACCOUNT_PREFIX;
 
@@ -458,6 +479,15 @@ const EVIDENCE_STATE_ROLES: [StateRole; 7] = [
     StateRole::writable(IX_REPLAY, REPLAY_ACCOUNT_LEN),
     StateRole::writable(IX_SUPPLY, account_len::SUPPLY_LEDGER),
     StateRole::read_only(IX_FEED, account_len::FEED),
+];
+
+/// Program-owned market-global roles of `Resolve`.
+const RESOLVE_STATE_ROLES: [StateRole; 5] = [
+    StateRole::writable(IX_RESOLVE_MARKET, account_len::MARKET),
+    StateRole::read_only(IX_RESOLVE_HOARD, account_len::HOARD),
+    StateRole::writable(IX_RESOLVE_KERNEL, KERNEL_ACCOUNT_LEN),
+    StateRole::writable(IX_RESOLVE_SUPPLY, account_len::SUPPLY_LEDGER),
+    StateRole::read_only(IX_RESOLVE_FEED, account_len::FEED),
 ];
 
 /// Program-owned roles of `FeedAdvance`.
@@ -883,6 +913,7 @@ struct TermsHead {
     terms: Hash32,
     feed: Hash32,
     payout_count: u8,
+    repair_generation: u64,
 }
 
 /// The resolution-record facts the gate reads.
@@ -1081,6 +1112,7 @@ fn terms_binds_market(market_bytes: &[u8], terms_bytes: &[u8], terms_bump: u8) -
         terms: terms.terms,
         feed: terms.feed,
         payout_count: terms.payout_count,
+        repair_generation: terms.repair_generation,
     })
 }
 
@@ -1153,23 +1185,6 @@ fn derived_terms(market_bytes: &[u8], terms_bytes: &[u8]) -> Gate<ResolutionTerm
     resolution_terms_of(&market, &terms)
 }
 
-/// The frozen terms' payout vectors, loaded into a caller slot.
-///
-/// `derive_payout` consumes the digest-bound preset set alongside the derived
-/// terms (a degree >= 1 market's payout is the preset equal to the derived
-/// weight vector); the vectors are read from the same bytes every other gate
-/// step reads, in their own frame.
-#[inline(never)]
-fn load_terms_payouts(
-    terms_bytes: &[u8],
-    out: &mut [PayoutVectorBytes; clutch_kernel::MAX_PAYOUTS],
-) -> Gate<()> {
-    let mut terms = ZERO_TERMS;
-    load_terms(terms_bytes, &mut terms)?;
-    *out = terms.payouts;
-    Ok(())
-}
-
 /// Derive the payout the evidence selects, and refuse any other request.
 ///
 /// The three reference steps that must stay in this order and in one frame:
@@ -1185,8 +1200,18 @@ fn derive_from_evidence(
     requested_payout: u8,
 ) -> Gate<SealedFacts> {
     let derived = derived_terms(market_bytes, terms_bytes)?;
-    let mut payouts = [PayoutVectorBytes::ZERO; clutch_kernel::MAX_PAYOUTS];
-    load_terms_payouts(terms_bytes, &mut payouts)?;
+    /* This persisted account path carries only a finite-preset index. Native
+     * d1-d3 resolution belongs to `derive_payout_vector` plus the kernel's
+     * `resolve_with_vector`; a preset membership search here would silently
+     * lower shaped settlement back into portfolio sugar. */
+    if derived.basis_degree != 0 {
+        return Err(ReferenceError::Resolution(
+            ResolutionRefusal::WrongResolutionMode,
+        ));
+    }
+    let mut terms = ZERO_TERMS;
+    load_terms(terms_bytes, &mut terms)?;
+    let payouts = terms.payouts;
     let window = fold_window_evidence(window_bytes, feed_cursor)?;
     let payout_index = derive_payout(&derived, &payouts, &window)?;
     if payout_index != requested_payout {
@@ -1325,6 +1350,19 @@ struct StateSlices<'a> {
     supply: &'a mut [u8],
 }
 
+/// The four mutable/read-only market-global state slices of `Resolve`.
+///
+/// There is intentionally no Position or owner Replay slice here. If either
+/// becomes necessary to express resolution, the market-global replay domain
+/// has regressed.
+#[derive(Debug)]
+struct ResolveStateSlices<'a> {
+    market: &'a mut [u8],
+    hoard: &'a [u8],
+    kernel: &'a mut [u8],
+    supply: &'a mut [u8],
+}
+
 /// The canonical bumps [`process`] derived, compared at the reference's points.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Bumps {
@@ -1332,6 +1370,16 @@ struct Bumps {
     hoard: u8,
     position: u8,
     replay: u8,
+    supply: u8,
+    terms: u8,
+    resolution: u8,
+}
+
+/// Canonical market-global bumps used by `Resolve`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ResolveBumps {
+    market: u8,
+    hoard: u8,
     supply: u8,
     terms: u8,
     resolution: u8,
@@ -1357,22 +1405,11 @@ struct Actor {
     signer: bool,
 }
 
-/// The two evidence-gated actions, already routed.
+/// Owner-scoped internal-redemption request, already routed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum GateAction {
-    Resolve { payout_index: u8 },
-    Redeem { outcome: u8, quantity: u64 },
-}
-
-/// Post-state this transition produced for the evidence plane.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct GateOutput {
-    /// Resolution record bytes: written by a resolve, returned unchanged by a
-    /// redemption so a caller can see that redemption never edits its own
-    /// authority.
-    resolution: [u8; account_len::RESOLUTION],
-    /// Collateral atoms paid by a redemption; zero for a resolve.
-    redemption_payout: u64,
+struct RedeemAction {
+    outcome: u8,
+    quantity: u64,
 }
 
 /// Apply one evidence-gated transition to account bytes.
@@ -1395,8 +1432,8 @@ fn apply_evidence_transition(
     bumps: &Bumps,
     actor: Actor,
     sequence: u64,
-    action: GateAction,
-) -> Gate<GateOutput> {
+    action: RedeemAction,
+) -> Gate<()> {
     /* 1. Decode, in the reference's order. */
     let market = market_head(state.market)?;
     let mut hoard = HoardAccount::decode(state.hoard)?;
@@ -1470,137 +1507,69 @@ fn apply_evidence_transition(
     if plane.terms_writable {
         return Err(ReferenceError::ImmutableAccountWritable);
     }
-    match action {
-        GateAction::Resolve { .. } => {
-            if !plane.resolution_writable {
-                return Err(ReferenceError::NotWritable);
-            }
-        }
-        GateAction::Redeem { .. } => {
-            if plane.resolution_writable {
-                return Err(ReferenceError::ImmutableAccountWritable);
-            }
-        }
+    if plane.resolution_writable {
+        return Err(ReferenceError::ImmutableAccountWritable);
     }
     if plane.window_id == Hash32::ZERO {
         return Err(ReferenceError::WindowIdentityUnavailable);
     }
 
-    let mut record_bytes = [0; account_len::RESOLUTION];
-    let (step, paid) = match action {
-        GateAction::Resolve { payout_index } => {
-            /* 8. Resolution is non-discretionary: the typed evidence authorizes
-             * it and no key does.  A signature is still required because a
-             * transaction has a fee payer, but no signer is privileged. */
-            if !actor.signer {
-                return Err(ReferenceError::MissingSignature);
-            }
-
-            /* 9. `resolve_from_evidence`. */
-            if market.lifecycle != 0 || kernel.phase != 0 {
-                return Err(ReferenceError::Resolution(
-                    ResolutionRefusal::MarketNotActive,
-                ));
-            }
-            let terms = terms_binds_market(state.market, plane.terms, bumps.terms)?;
-            payout_set_binds_terms(state.kernel, plane.terms)?;
-            let record = resolution_binds(
-                plane.resolution,
-                plane.terms,
-                bumps.resolution,
-                market.market,
-            )?;
-            if record.resolved {
-                return Err(ReferenceError::ResolutionAlreadyRecorded);
-            }
-            let sealed = derive_from_evidence(
-                state.market,
-                plane.terms,
-                plane.window,
-                plane.feed_cursor,
-                payout_index,
-            )?;
-
-            /* 10. Only now does the kernel move. */
-            let step = kernel_resolve(
-                state.kernel,
-                market.outcome_count,
-                hoard.collateral_atoms,
-                payout_index,
-            )?;
-            ResolutionAccount {
-                market: market.market,
-                terms: terms.terms,
-                feed: terms.feed,
-                window: plane.window_id,
-                feed_cursor: sealed.sealed_cursor,
-                sealed_end_bucket_exclusive: sealed.end_bucket_exclusive,
-                repair_generation: sealed.repair_generation,
-                resolved_slot: plane.resolved_slot,
-                payout_index: sealed.payout_index,
-                stored_bump: bumps.resolution,
-                flags: 0,
-            }
-            .encode(&mut record_bytes)?;
-            (step, 0)
+    let step = {
+        let RedeemAction { outcome, quantity } = action;
+        /* 8. Redemption is still the owner's action. */
+        if !actor.signer {
+            return Err(ReferenceError::MissingSignature);
         }
-        GateAction::Redeem { outcome, quantity } => {
-            /* 8. Redemption is still the owner's action. */
-            if !actor.signer {
-                return Err(ReferenceError::MissingSignature);
-            }
-            if actor.key != position.owner {
-                return Err(ReferenceError::UnauthorizedActor);
-            }
-
-            /* 9. `redeem_from_evidence`.  Redemption's authority is the
-             * recorded resolution, not a re-fold: re-deriving a payout here
-             * would create a second place a payout can be decided. */
-            if !plane.window.is_empty() {
-                return Err(ReferenceError::UnexpectedEvidence);
-            }
-            let terms = terms_binds_market(state.market, plane.terms, bumps.terms)?;
-            payout_set_binds_terms(state.kernel, plane.terms)?;
-            let record = resolution_binds(
-                plane.resolution,
-                plane.terms,
-                bumps.resolution,
-                market.market,
-            )?;
-            if !record.resolved {
-                return Err(ReferenceError::ResolutionNotRecorded);
-            }
-            if record.window != plane.window_id {
-                return Err(ReferenceError::ResolutionBindingMismatch);
-            }
-            if record.payout_index >= terms.payout_count {
-                return Err(ReferenceError::Resolution(
-                    ResolutionRefusal::PayoutIndexOutOfRange,
-                ));
-            }
-            if market.lifecycle != 1
-                || kernel.phase != 1
-                || kernel.resolved_payout != record.payout_index
-            {
-                return Err(ReferenceError::MismatchedState);
-            }
-
-            /* 10. Only now does the kernel move. */
-            let (step, paid) = kernel_redeem(
-                state.kernel,
-                market.outcome_count,
-                hoard.collateral_atoms,
-                &mut pure_position,
-                outcome,
-                quantity,
-            )?;
-            position.cash_atoms = position
-                .cash_atoms
-                .checked_add(paid)
-                .ok_or(ReferenceError::Arithmetic)?;
-            record_bytes.copy_from_slice(plane.resolution);
-            (step, paid)
+        if actor.key != position.owner {
+            return Err(ReferenceError::UnauthorizedActor);
         }
+
+        /* 9. `redeem_from_evidence`.  Redemption's authority is the
+         * recorded resolution, not a re-fold: re-deriving a payout here
+         * would create a second place a payout can be decided. */
+        if !plane.window.is_empty() {
+            return Err(ReferenceError::UnexpectedEvidence);
+        }
+        let terms = terms_binds_market(state.market, plane.terms, bumps.terms)?;
+        payout_set_binds_terms(state.kernel, plane.terms)?;
+        let record = resolution_binds(
+            plane.resolution,
+            plane.terms,
+            bumps.resolution,
+            market.market,
+        )?;
+        if !record.resolved {
+            return Err(ReferenceError::ResolutionNotRecorded);
+        }
+        if record.window != plane.window_id {
+            return Err(ReferenceError::ResolutionBindingMismatch);
+        }
+        if record.payout_index >= terms.payout_count {
+            return Err(ReferenceError::Resolution(
+                ResolutionRefusal::PayoutIndexOutOfRange,
+            ));
+        }
+        if market.lifecycle != 1
+            || kernel.phase != 1
+            || kernel.resolved_payout != record.payout_index
+        {
+            return Err(ReferenceError::MismatchedState);
+        }
+
+        /* 10. Only now does the kernel move. */
+        let (step, paid) = kernel_redeem(
+            state.kernel,
+            market.outcome_count,
+            hoard.collateral_atoms,
+            &mut pure_position,
+            outcome,
+            quantity,
+        )?;
+        position.cash_atoms = position
+            .cash_atoms
+            .checked_add(paid)
+            .ok_or(ReferenceError::Arithmetic)?;
+        step
     };
 
     /* 11. CLO-DELTA-V1 C3: move the ledger by exactly the applied delta. */
@@ -1626,18 +1595,184 @@ fn apply_evidence_transition(
     )?;
 
     /* 13. Everything below this line writes. */
-    if matches!(action, GateAction::Resolve { .. }) {
-        write_market_lifecycle(state.market, 1)?;
-    }
     write_kernel(state.kernel, &step)?;
     hoard.encode(state.hoard)?;
     position.encode(state.position)?;
     replay.encode(state.replay)?;
     supply.encode(state.supply)?;
-    Ok(GateOutput {
-        resolution: record_bytes,
-        redemption_payout: paid,
-    })
+    Ok(())
+}
+
+/// Result of one market-global resolution attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ResolveOutput {
+    resolution: [u8; account_len::RESOLUTION],
+    repeated: bool,
+}
+
+/// Apply the market-global resolution transition without an owner state plane.
+///
+/// `Request::sequence` has a resolution-specific meaning on this action: it is
+/// the exact repair generation selected by immutable Terms and by the sealed
+/// evidence. It is not an incrementing owner nonce. The persisted
+/// [`ResolutionAccount`] is the sole replay fact. An exact repeat validates
+/// the same derivation and returns the record byte-for-byte without writing any
+/// market state; a conflicting repeat refuses.
+#[inline(never)]
+fn apply_market_resolution(
+    state: &mut ResolveStateSlices<'_>,
+    plane: &EvidencePlane<'_>,
+    bumps: &ResolveBumps,
+    signer: bool,
+    sequence: u64,
+    requested_payout: u8,
+) -> Gate<ResolveOutput> {
+    let market = market_head(state.market)?;
+    let hoard = HoardAccount::decode(state.hoard)?;
+    let kernel = kernel_head(state.kernel)?;
+    let supply = SupplyLedgerAccount::decode(state.supply)?;
+
+    if market.stored_bump != bumps.market
+        || market.hoard_bump != bumps.hoard
+        || hoard.stored_bump != bumps.hoard
+        || supply.stored_bump != bumps.supply
+    {
+        return Err(ReferenceError::WrongBump);
+    }
+    if market.market != hoard.market
+        || market.realm != hoard.realm
+        || market.market != kernel.market
+        || market.market != supply.market
+        || market.realm != supply.realm
+        || market.outcome_count != supply.outcome_count
+        || kernel.payout_outcomes != market.outcome_count
+        || (market.lifecycle == 0 && kernel.phase != 0)
+        || (market.lifecycle == 1 && kernel.phase != 1)
+        || market.lifecycle > 1
+    {
+        return Err(ReferenceError::MismatchedState);
+    }
+    let count = usize::from(market.outcome_count);
+    let mut index = count;
+    while index < MAX_OUTCOMES {
+        if kernel.total_supply[index] != 0 {
+            return Err(ReferenceError::NonCanonical);
+        }
+        index += 1;
+    }
+    check_market_closure(market.outcome_count, &supply, &kernel.total_supply)?;
+    kernel_invariants(state.kernel, market.outcome_count, hoard.collateral_atoms)?;
+
+    if plane.terms_writable {
+        return Err(ReferenceError::ImmutableAccountWritable);
+    }
+    if !plane.resolution_writable {
+        return Err(ReferenceError::NotWritable);
+    }
+    if plane.window_id == Hash32::ZERO {
+        return Err(ReferenceError::WindowIdentityUnavailable);
+    }
+    if !signer {
+        return Err(ReferenceError::MissingSignature);
+    }
+
+    let terms = terms_binds_market(state.market, plane.terms, bumps.terms)?;
+    payout_set_binds_terms(state.kernel, plane.terms)?;
+    let mut record = ZERO_RESOLUTION;
+    load_resolution(plane.resolution, &mut record)?;
+    if record.stored_bump != bumps.resolution {
+        return Err(ReferenceError::WrongBump);
+    }
+    if record.market != market.market {
+        return Err(ReferenceError::ResolutionBindingMismatch);
+    }
+    let mut full_terms = ZERO_TERMS;
+    load_terms(plane.terms, &mut full_terms)?;
+    require_record_binds_terms(&record, &full_terms)?;
+
+    let sealed = derive_from_evidence(
+        state.market,
+        plane.terms,
+        plane.window,
+        plane.feed_cursor,
+        requested_payout,
+    )?;
+    if sequence != terms.repair_generation || sequence != sealed.repair_generation {
+        return Err(ReferenceError::Replay);
+    }
+
+    let already_resolved = record.is_resolved();
+    let expected = ResolutionAccount {
+        market: market.market,
+        terms: terms.terms,
+        feed: terms.feed,
+        window: plane.window_id,
+        feed_cursor: if already_resolved {
+            record.feed_cursor
+        } else {
+            sealed.sealed_cursor
+        },
+        sealed_end_bucket_exclusive: sealed.end_bucket_exclusive,
+        repair_generation: sealed.repair_generation,
+        resolved_slot: if already_resolved {
+            record.resolved_slot
+        } else {
+            plane.resolved_slot
+        },
+        payout_index: sealed.payout_index,
+        stored_bump: bumps.resolution,
+        flags: 0,
+    };
+    let mut resolution_bytes = [0; account_len::RESOLUTION];
+    expected.encode(&mut resolution_bytes)?;
+
+    match (market.lifecycle, kernel.phase, already_resolved) {
+        (0, 0, false) => {
+            let step = kernel_resolve(
+                state.kernel,
+                market.outcome_count,
+                hoard.collateral_atoms,
+                requested_payout,
+            )?;
+            check_market_closure(market.outcome_count, &supply, &step.total_supply)?;
+            write_market_lifecycle(state.market, 1)?;
+            write_kernel(state.kernel, &step)?;
+            Ok(ResolveOutput {
+                resolution: resolution_bytes,
+                repeated: false,
+            })
+        }
+        (1, 1, true) => {
+            if kernel.resolved_payout != requested_payout || record != expected {
+                return Err(ReferenceError::ResolutionBindingMismatch);
+            }
+            Ok(ResolveOutput {
+                resolution: resolution_bytes,
+                repeated: true,
+            })
+        }
+        (0, 0, true) => Err(ReferenceError::ResolutionAlreadyRecorded),
+        _ => Err(ReferenceError::MismatchedState),
+    }
+}
+
+/// Market-wide aggregate closure, with no owner-local lower-bound check.
+fn check_market_closure(
+    outcome_count: u8,
+    supply: &SupplyLedgerAccount,
+    total_supply: &[u64; MAX_OUTCOMES],
+) -> Gate<()> {
+    let mut outcome = 0_usize;
+    while outcome < usize::from(outcome_count) {
+        let aggregate = supply
+            .aggregate_supply(outcome as u8)
+            .map_err(|_| ReferenceError::Arithmetic)?;
+        if aggregate != total_supply[outcome] {
+            return Err(ReferenceError::AggregateClosureMismatch);
+        }
+        outcome += 1;
+    }
+    Ok(())
 }
 
 /// CLO-DELTA-V1 C1 and C2 against one presented triple.
@@ -1743,17 +1878,14 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             cursor,
             evidence,
         ),
-        Action::Resolve { payout_index } => evidence_gated(
-            program_id,
-            accounts,
-            request.sequence,
-            GateAction::Resolve { payout_index },
-        ),
+        Action::Resolve { payout_index } => {
+            resolve_global(program_id, accounts, request.sequence, payout_index)
+        }
         Action::RedeemInternal { outcome, quantity } => evidence_gated(
             program_id,
             accounts,
             request.sequence,
-            GateAction::Redeem { outcome, quantity },
+            RedeemAction { outcome, quantity },
         ),
         /* Every other layout intent belongs to another family module; the
          * router never sends one here, and this arm exists so that adding one
@@ -1801,13 +1933,183 @@ fn feed_advance(
     Ok(())
 }
 
+/// Authenticate and apply the market-global Resolve plane.
+///
+/// No account address in this function is derived from an owner, and no
+/// Position or owner Replay account is accepted in the exact account count.
+fn resolve_global(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    payout_index: u8,
+) -> Outcome<()> {
+    require(
+        accounts.len() >= RESOLVE_ACCOUNT_PREFIX,
+        ClutchError::AccountCount,
+    )?;
+    require_distinct(accounts)?;
+    accounts::validate_state_roles(program_id, accounts, &RESOLVE_STATE_ROLES)?;
+    validate_open_roles(
+        program_id,
+        accounts,
+        &[
+            OpenRole {
+                index: IX_RESOLVE_TERMS,
+                len: account_len::TERMS,
+            },
+            OpenRole {
+                index: IX_RESOLVE_RESOLUTION,
+                len: account_len::RESOLUTION,
+            },
+        ],
+    )?;
+    validate_buffer_role(
+        program_id,
+        &accounts[IX_RESOLVE_BUFFER],
+        MAX_EVIDENCE_BUFFER_LEN,
+        EVIDENCE_BUFFER_HEADER_BYTES,
+    )?;
+
+    let market = accounts::read_market(&accounts[IX_RESOLVE_MARKET].data.borrow())?;
+    require(
+        accounts.len() == RESOLVE_ACCOUNT_PREFIX + usize::from(market.outcome_count),
+        ClutchError::AccountCount,
+    )?;
+    let terms = accounts::read_terms(&accounts[IX_RESOLVE_TERMS].data.borrow())?;
+    let feed = accounts::read_feed(&accounts[IX_RESOLVE_FEED].data.borrow())?;
+    let market_bytes = market.market.bytes();
+    let realm_bytes = market.realm.bytes();
+
+    let market_pda = seeds::market_pda(program_id, &realm_bytes, &market_bytes);
+    expect_pda(accounts[IX_RESOLVE_MARKET].key, market_pda, None)?;
+    let hoard_pda = seeds::hoard_pda(program_id, &market_bytes);
+    expect_pda(accounts[IX_RESOLVE_HOARD].key, hoard_pda, None)?;
+    expect_pda(
+        accounts[IX_RESOLVE_KERNEL].key,
+        seeds::kernel_pda(program_id, &market_bytes),
+        None,
+    )?;
+    let supply_pda = seeds::supply_pda(program_id, &market_bytes);
+    expect_pda(accounts[IX_RESOLVE_SUPPLY].key, supply_pda, None)?;
+    let terms_pda = seeds::terms_pda(program_id, &terms.realm.bytes(), &terms.terms.bytes());
+    expect_pda(accounts[IX_RESOLVE_TERMS].key, terms_pda, None)?;
+    let resolution_pda = seeds::resolution_pda(program_id, &market_bytes);
+    expect_pda(accounts[IX_RESOLVE_RESOLUTION].key, resolution_pda, None)?;
+    expect_pda(
+        accounts[IX_RESOLVE_FEED].key,
+        seeds::feed_pda(program_id, &feed.feed.bytes()),
+        Some(feed.stored_bump),
+    )?;
+    require(feed.feed == market.feed, ClutchError::MismatchedState)?;
+
+    let observed = claim_truth::observe_outcome_mints(
+        program_id,
+        accounts,
+        IX_RESOLVE_OUTCOME_MINTS,
+        *accounts[IX_RESOLVE_MARKET].key,
+        market.market,
+        market.outcome_count,
+        None,
+    )?;
+    let buffer = accounts[IX_RESOLVE_BUFFER].data.borrow();
+    let evidence = read_evidence_buffer(&buffer)?;
+    let terms_data = accounts[IX_RESOLVE_TERMS].data.borrow();
+    let resolution_data = accounts[IX_RESOLVE_RESOLUTION].data.borrow();
+    let plane = EvidencePlane {
+        terms: &terms_data,
+        resolution: &resolution_data,
+        window: evidence.window,
+        window_id: evidence.window_id,
+        feed_cursor: feed.cursor,
+        resolved_slot: 0,
+        terms_writable: accounts[IX_RESOLVE_TERMS].is_writable,
+        resolution_writable: accounts[IX_RESOLVE_RESOLUTION].is_writable,
+    };
+    let output = {
+        let mut market_data = borrow_mut!(accounts[IX_RESOLVE_MARKET])?;
+        let hoard_data = accounts[IX_RESOLVE_HOARD]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut kernel_data = borrow_mut!(accounts[IX_RESOLVE_KERNEL])?;
+        let mut supply_data = borrow_mut!(accounts[IX_RESOLVE_SUPPLY])?;
+        let mut state = ResolveStateSlices {
+            market: &mut market_data,
+            hoard: &hoard_data,
+            kernel: &mut kernel_data,
+            supply: &mut supply_data,
+        };
+        apply_market_resolution(
+            &mut state,
+            &plane,
+            &ResolveBumps {
+                market: market_pda.1,
+                hoard: hoard_pda.1,
+                supply: supply_pda.1,
+                terms: terms_pda.1,
+                resolution: resolution_pda.1,
+            },
+            accounts[IX_RESOLVE_ACTOR].is_signer,
+            sequence,
+            payout_index,
+        )?
+    };
+    drop(resolution_data);
+    drop(terms_data);
+    drop(buffer);
+
+    if !output.repeated {
+        /* Direct holder burns are synchronized only after the semantic gate.
+         * A later synchronization refusal is intentionally a late failure;
+         * SVM atomicity must roll the earlier lifecycle writes back. */
+        {
+            let mut supply_data = borrow_mut!(accounts[IX_RESOLVE_SUPPLY])?;
+            let mut kernel_data = borrow_mut!(accounts[IX_RESOLVE_KERNEL])?;
+            claim_truth::synchronize_external_truth(
+                &mut supply_data,
+                &mut kernel_data,
+                market.market,
+                market.realm,
+                market.outcome_count,
+                &observed,
+            )?;
+        }
+        let mut record = borrow_mut!(accounts[IX_RESOLVE_RESOLUTION])?;
+        record.copy_from_slice(&output.resolution);
+    } else {
+        /* Exact repeats are observationally idempotent, including the cached
+         * external-supply plane. A holder burn after resolution is handled by
+         * an actual claim transition, not smuggled into a Resolve replay. */
+        let supply = SupplyLedgerAccount::decode(&accounts[IX_RESOLVE_SUPPLY].data.borrow())?;
+        let mut outcome = 0_usize;
+        while outcome < usize::from(market.outcome_count) {
+            require(
+                supply.external_supply[outcome] == observed.values[outcome],
+                ClutchError::ShadowSupplyMismatch,
+            )?;
+            outcome += 1;
+        }
+    }
+
+    let observed_after = claim_truth::observe_outcome_mints(
+        program_id,
+        accounts,
+        IX_RESOLVE_OUTCOME_MINTS,
+        *accounts[IX_RESOLVE_MARKET].key,
+        market.market,
+        market.outcome_count,
+        None,
+    )?;
+    claim_truth::require_exact_mint_vector_delta(&observed, &observed_after, None)?;
+    Ok(())
+}
+
 fn evidence_gated(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
     sequence: u64,
-    action: GateAction,
+    action: RedeemAction,
 ) -> Outcome<()> {
-    let redeems = matches!(action, GateAction::Redeem { .. });
+    let redeems = true;
     require(
         accounts.len()
             >= if redeems {
@@ -1991,7 +2293,7 @@ fn evidence_gated(
         resolution_writable: accounts[IX_RESOLUTION].is_writable,
     };
 
-    let output = {
+    {
         let mut market_data = borrow_mut!(accounts[IX_MARKET])?;
         let mut hoard_data = borrow_mut!(accounts[IX_HOARD])?;
         let mut position_data = borrow_mut!(accounts[IX_POSITION])?;
@@ -2006,21 +2308,14 @@ fn evidence_gated(
             replay: &mut replay_data,
             supply: &mut supply_data,
         };
-        apply_evidence_transition(&mut state, &plane, &bumps, actor, sequence, action)?
-    };
+        apply_evidence_transition(&mut state, &plane, &bumps, actor, sequence, action)?;
+    }
 
     /* Every borrow the evidence plane held is released before the CPI: a live
      * `RefCell` borrow across `invoke` is a runtime failure, not a lint. */
     drop(terms_data);
     drop(buffer);
     drop(resolution_data);
-
-    /* A redemption returns the record unchanged and never writes it; only a
-     * resolve does, and only after `derive_payout` agreed with the request. */
-    if matches!(action, GateAction::Resolve { .. }) {
-        let mut record = borrow_mut!(accounts[IX_RESOLUTION])?;
-        record.copy_from_slice(&output.resolution);
-    }
 
     /* Redemption changes *which ledger term* owns collateral already retained
      * by the pooled Hoard: locked complete-set backing falls and this

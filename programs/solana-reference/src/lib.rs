@@ -302,6 +302,46 @@ pub struct ExpectedBindings {
     pub supply_bump: u8,
 }
 
+/// Runtime metadata for the market-global resolution transition.
+///
+/// The absence of Position, external-balance, and owner Replay roles is the
+/// replay-domain boundary: resolution is a fact about one Market, never one
+/// wallet's current position generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolutionTransitionMetadata {
+    /// Market account metadata.
+    pub market: AccountMetadata,
+    /// Collateral Hoard metadata.
+    pub hoard: AccountMetadata,
+    /// Kernel aggregate metadata.
+    pub kernel: AccountMetadata,
+    /// Market-wide SupplyLedger metadata.
+    pub supply: AccountMetadata,
+    /// Authenticated fee payer; no key is privileged.
+    pub actor: ActorMetadata,
+}
+
+/// Trusted bindings for the market-global resolution transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolutionExpectedBindings {
+    /// Program expected to own all state accounts.
+    pub program_id: Hash32,
+    /// Expected Market account key.
+    pub market: Hash32,
+    /// Expected Hoard account key.
+    pub hoard: Hash32,
+    /// Expected kernel aggregate key.
+    pub kernel: Hash32,
+    /// Expected SupplyLedger key.
+    pub supply: Hash32,
+    /// Expected Market PDA bump.
+    pub market_bump: u8,
+    /// Expected Hoard PDA bump.
+    pub hoard_bump: u8,
+    /// Expected SupplyLedger PDA bump.
+    pub supply_bump: u8,
+}
+
 /// Immutable byte slices consumed by one reference transition.
 #[derive(Clone, Copy, Debug)]
 pub struct StateBytes<'a> {
@@ -318,6 +358,19 @@ pub struct StateBytes<'a> {
     /// Reference replay bytes.
     pub replay: &'a [u8],
     /// Market-wide supply ledger bytes.
+    pub supply: &'a [u8],
+}
+
+/// Immutable market-global state consumed by resolution.
+#[derive(Clone, Copy, Debug)]
+pub struct ResolutionStateBytes<'a> {
+    /// Market layout bytes.
+    pub market: &'a [u8],
+    /// Hoard layout bytes.
+    pub hoard: &'a [u8],
+    /// Kernel aggregate bytes.
+    pub kernel: &'a [u8],
+    /// Market-wide SupplyLedger bytes.
     pub supply: &'a [u8],
 }
 
@@ -419,6 +472,23 @@ pub struct TransitionOutput {
     pub resolution: Option<[u8; account_len::RESOLUTION]>,
     /// Collateral atoms paid by a redemption; zero for every other action.
     pub redemption_payout: u64,
+}
+
+/// Exact market-global post-state of one resolution attempt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolutionTransitionOutput {
+    /// Market account post-state.
+    pub market: [u8; account_len::MARKET],
+    /// Hoard account post-state; byte-identical because Resolve moves no value.
+    pub hoard: [u8; account_len::HOARD],
+    /// Kernel aggregate post-state.
+    pub kernel: [u8; KERNEL_ACCOUNT_LEN],
+    /// SupplyLedger post-state; byte-identical in this reference relation.
+    pub supply: [u8; account_len::SUPPLY_LEDGER],
+    /// Canonical Resolution record post-state.
+    pub resolution: [u8; account_len::RESOLUTION],
+    /// True only when the input was the already-recorded exact resolution fact.
+    pub repeated: bool,
 }
 
 /// Kernel-only facts not present in the frozen Solana layout prototype.
@@ -1096,6 +1166,178 @@ pub fn apply_with_evidence(
     apply_inner(request_bytes, state, Some(evidence), metadata, bindings)
 }
 
+/// Apply one market-global, evidence-gated Resolve transition.
+///
+/// This is the canonical resolution oracle. Its input type cannot carry a
+/// Position, per-holder external shadow, or owner Replay account. The request
+/// sequence is the immutable repair generation selected by Terms and the
+/// sealed window, not an incrementing owner nonce. The Resolution account is
+/// the sole persisted replay fact: an exact repeat is accepted byte-for-byte
+/// without advancing any counter, while any conflicting repeat refuses.
+pub fn apply_market_resolution_with_evidence(
+    request_bytes: &[u8],
+    state: ResolutionStateBytes<'_>,
+    evidence: &ResolutionEvidence<'_>,
+    metadata: &ResolutionTransitionMetadata,
+    bindings: &ResolutionExpectedBindings,
+) -> Result<ResolutionTransitionOutput> {
+    validate_resolution_metadata(metadata, bindings, evidence)?;
+    let request = Request::decode(request_bytes)?;
+    let requested_payout = match request.action {
+        Action::Resolve { payout_index } => payout_index,
+        _ => return Err(Error::UnsupportedIntent),
+    };
+
+    let mut market = MarketAccount::decode(state.market)?;
+    let hoard = HoardAccount::decode(state.hoard)?;
+    let mut kernel = KernelAccount::decode(state.kernel)?;
+    let supply = SupplyLedgerAccount::decode(state.supply)?;
+    if market.stored_bump != bindings.market_bump
+        || market.hoard_bump != bindings.hoard_bump
+        || hoard.stored_bump != bindings.hoard_bump
+        || supply.stored_bump != bindings.supply_bump
+    {
+        return Err(Error::WrongBump);
+    }
+    if market.market != hoard.market
+        || market.realm != hoard.realm
+        || market.market != kernel.market
+        || market.market != supply.market
+        || market.realm != supply.realm
+        || market.outcome_count != supply.outcome_count
+        || kernel.payouts.outcomes != market.outcome_count
+        || (market.lifecycle == 0 && kernel.phase != 0)
+        || (market.lifecycle == 1 && kernel.phase != 1)
+        || market.lifecycle > 1
+    {
+        return Err(Error::MismatchedState);
+    }
+    let mut outcome = 0_usize;
+    while outcome < usize::from(market.outcome_count) {
+        if supply
+            .aggregate_supply(outcome as u8)
+            .map_err(Error::Layout)?
+            != kernel.total_supply[outcome]
+        {
+            return Err(Error::AggregateClosureMismatch);
+        }
+        outcome += 1;
+    }
+    while outcome < MAX_OUTCOMES {
+        if kernel.total_supply[outcome] != 0 {
+            return Err(Error::NonCanonical);
+        }
+        outcome += 1;
+    }
+
+    if !metadata.actor.signer {
+        return Err(Error::MissingSignature);
+    }
+    let terms = TermsAccount::decode(evidence.bytes.terms)?;
+    if terms.stored_bump != evidence.bindings.terms_bump {
+        return Err(Error::WrongBump);
+    }
+    terms
+        .binds_market(&market)
+        .map_err(|_| Error::TermsBindingMismatch)?;
+    require_payout_set_binding(&kernel, &terms)?;
+    let record = ResolutionAccount::decode(evidence.bytes.resolution)?;
+    if record.stored_bump != evidence.bindings.resolution_bump {
+        return Err(Error::WrongBump);
+    }
+    if record.market != market.market {
+        return Err(Error::ResolutionBindingMismatch);
+    }
+    record
+        .binds_terms(&terms)
+        .map_err(|_| Error::ResolutionBindingMismatch)?;
+
+    let derived = ResolutionTerms::from_market_terms(&market, &terms)?;
+    let window = fold_window_evidence(evidence.bytes.window, evidence.feed_cursor)?;
+    /* The persisted account pair still carries only a finite-preset index.
+     * A native derived-basis resolution must go through
+     * `derive_payout_vector` + `resolve_with_vector`; searching the preset set
+     * here would silently turn a shaped claim back into portfolio sugar. */
+    if derived.basis_degree != 0 {
+        return Err(Error::Resolution(ResolutionRefusal::WrongResolutionMode));
+    }
+    let payout_index = derive_payout(&derived, &terms.payouts, &window)?;
+    if payout_index != requested_payout {
+        return Err(Error::PayoutIndexMismatch);
+    }
+    if request.sequence != terms.repair_generation
+        || request.sequence != window.domain().generation()
+    {
+        return Err(Error::Replay);
+    }
+
+    let repeated = record.is_resolved();
+    let expected = ResolutionAccount {
+        market: market.market,
+        terms: terms.terms,
+        feed: terms.feed,
+        window: evidence.bindings.window_id,
+        feed_cursor: if repeated {
+            record.feed_cursor
+        } else {
+            window.sealed_cursor()
+        },
+        sealed_end_bucket_exclusive: window.domain().end_bucket_exclusive(),
+        repair_generation: window.domain().generation(),
+        resolved_slot: if repeated {
+            record.resolved_slot
+        } else {
+            evidence.resolved_slot
+        },
+        payout_index,
+        stored_bump: evidence.bindings.resolution_bump,
+        flags: 0,
+    };
+
+    match (market.lifecycle, kernel.phase, repeated) {
+        (0, 0, false) => {
+            let mut pure = MarketState {
+                outcomes: market.outcome_count,
+                phase: Phase::Active,
+                resolved_payout: kernel.resolved_payout,
+                basis_mode: BasisMode::FinitePreset,
+                resolved_vector: PayoutVector::ZERO,
+                collateral: hoard.collateral_atoms,
+                total_supply: kernel.total_supply,
+                payouts: kernel.payouts,
+            };
+            pure.check_invariants()?;
+            pure.resolve(requested_payout)?;
+            market.lifecycle = 1;
+            kernel.phase = 1;
+            kernel.resolved_payout = pure.resolved_payout;
+            kernel.total_supply = pure.total_supply;
+        }
+        (1, 1, true) => {
+            if kernel.resolved_payout != requested_payout || record != expected {
+                return Err(Error::ResolutionBindingMismatch);
+            }
+        }
+        (0, 0, true) => return Err(Error::ResolutionAlreadyRecorded),
+        _ => return Err(Error::MismatchedState),
+    }
+
+    let mut output = ResolutionTransitionOutput {
+        market: [0; account_len::MARKET],
+        hoard: [0; account_len::HOARD],
+        kernel: [0; KERNEL_ACCOUNT_LEN],
+        supply: [0; account_len::SUPPLY_LEDGER],
+        resolution: [0; account_len::RESOLUTION],
+        repeated,
+    };
+    market.encode(&mut output.market)?;
+    hoard.encode(&mut output.hoard)?;
+    kernel.encode(&mut output.kernel)?;
+    supply.encode(&mut output.supply)?;
+    expected.encode(&mut output.resolution)?;
+    Ok(output)
+}
+
 fn apply_inner(
     request_bytes: &[u8],
     state: StateBytes<'_>,
@@ -1151,6 +1393,9 @@ fn apply_inner(
                         .ok_or(Error::Arithmetic)?;
                     if next_collateral > decoded.market.collateral_cap {
                         return Err(Error::CollateralCap);
+                    }
+                    if decoded.position.free_cash_atoms().map_err(Error::Layout)? < quantity {
+                        return Err(Error::Arithmetic);
                     }
                     decoded.position.cash_atoms = decoded
                         .position
@@ -1542,6 +1787,9 @@ fn resolve_from_evidence(
     }
     let derived = ResolutionTerms::from_market_terms(market, &terms)?;
     let window = fold_window_evidence(evidence.bytes.window, evidence.feed_cursor)?;
+    if derived.basis_degree != 0 {
+        return Err(Error::Resolution(ResolutionRefusal::WrongResolutionMode));
+    }
     let payout_index = derive_payout(&derived, &terms.payouts, &window)?;
     if payout_index != requested_payout {
         return Err(Error::PayoutIndexMismatch);
@@ -1680,6 +1928,58 @@ fn validate_metadata(
                 return Err(Error::AccountAlias);
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_resolution_metadata(
+    metadata: &ResolutionTransitionMetadata,
+    bindings: &ResolutionExpectedBindings,
+    evidence: &ResolutionEvidence<'_>,
+) -> Result<()> {
+    let accounts = [
+        metadata.market,
+        metadata.hoard,
+        metadata.kernel,
+        metadata.supply,
+        evidence.metadata.terms,
+        evidence.metadata.resolution,
+    ];
+    let expected = [
+        bindings.market,
+        bindings.hoard,
+        bindings.kernel,
+        bindings.supply,
+        evidence.bindings.terms,
+        evidence.bindings.resolution,
+    ];
+    for (index, account) in accounts.iter().enumerate() {
+        if account.owner_program != bindings.program_id {
+            return Err(Error::WrongProgramOwner);
+        }
+        if account.key != expected[index] {
+            return Err(Error::WrongAccountKey);
+        }
+        if account.key == metadata.actor.key {
+            return Err(Error::AccountAlias);
+        }
+        for other in &accounts[index + 1..] {
+            if account.key == other.key {
+                return Err(Error::AccountAlias);
+            }
+        }
+    }
+    if !metadata.market.writable || !metadata.kernel.writable || !metadata.supply.writable {
+        return Err(Error::NotWritable);
+    }
+    if metadata.hoard.writable || evidence.metadata.terms.writable {
+        return Err(Error::ImmutableAccountWritable);
+    }
+    if !evidence.metadata.resolution.writable {
+        return Err(Error::NotWritable);
+    }
+    if evidence.bindings.window_id == Hash32::ZERO {
+        return Err(Error::WindowIdentityUnavailable);
     }
     Ok(())
 }
@@ -2424,6 +2724,40 @@ mod tests {
             external: &state.external,
             replay: &state.replay,
             supply: &state.supply,
+        }
+    }
+
+    fn resolution_state_bytes(state: &TransitionOutput) -> ResolutionStateBytes<'_> {
+        ResolutionStateBytes {
+            market: &state.market,
+            hoard: &state.hoard,
+            kernel: &state.kernel,
+            supply: &state.supply,
+        }
+    }
+
+    fn resolution_metadata(f: &Fixture) -> ResolutionTransitionMetadata {
+        let mut hoard = f.metadata.hoard;
+        hoard.writable = false;
+        ResolutionTransitionMetadata {
+            market: f.metadata.market,
+            hoard,
+            kernel: f.metadata.kernel,
+            supply: f.metadata.supply,
+            actor: f.metadata.actor,
+        }
+    }
+
+    fn resolution_bindings(f: &Fixture) -> ResolutionExpectedBindings {
+        ResolutionExpectedBindings {
+            program_id: f.bindings.program_id,
+            market: f.bindings.market,
+            hoard: f.bindings.hoard,
+            kernel: f.bindings.kernel,
+            supply: f.bindings.supply,
+            market_bump: f.bindings.market_bump,
+            hoard_bump: f.bindings.hoard_bump,
+            supply_bump: f.bindings.supply_bump,
         }
     }
 
@@ -3757,6 +4091,153 @@ mod tests {
     }
 
     #[test]
+    fn market_global_resolution_is_exactly_idempotent_without_owner_replay() {
+        let f = fixture();
+        let split = split_state(&f, 15);
+        let (window, len) = encode_window(&f.window_spec(), &winning_records());
+        let evidence = ResolutionEvidence {
+            bytes: EvidenceBytes {
+                terms: &f.terms,
+                resolution: &f.resolution,
+                window: &window[..len],
+            },
+            metadata: f.evidence_metadata,
+            bindings: f.evidence_bindings,
+            feed_cursor: FEED_CURSOR,
+            resolved_slot: RESOLVED_SLOT,
+        };
+        let metadata = resolution_metadata(&f);
+        let bindings = resolution_bindings(&f);
+
+        /* Split advanced the owner's replay sequence to one. Resolution uses
+         * the immutable repair generation (zero) instead, demonstrating that
+         * the owner nonce is neither read nor consumed. */
+        assert_eq!(ReplayAccount::decode(&split.replay).unwrap().sequence, 1);
+        let first = apply_market_resolution_with_evidence(
+            &resolve_request(V1_EXACT_GENERATION, 1),
+            resolution_state_bytes(&split),
+            &evidence,
+            &metadata,
+            &bindings,
+        )
+        .unwrap();
+        assert!(!first.repeated);
+        assert_eq!(first.hoard, split.hoard);
+        assert_eq!(first.supply, split.supply);
+
+        let repeated_evidence = ResolutionEvidence {
+            bytes: EvidenceBytes {
+                terms: &f.terms,
+                resolution: &first.resolution,
+                window: &window[..len],
+            },
+            metadata: f.evidence_metadata,
+            bindings: f.evidence_bindings,
+            feed_cursor: FEED_CURSOR + 50,
+            /* A retry in a later slot cannot rewrite the first recorded slot. */
+            resolved_slot: RESOLVED_SLOT + 99,
+        };
+        let repeated = apply_market_resolution_with_evidence(
+            &resolve_request(V1_EXACT_GENERATION, 1),
+            ResolutionStateBytes {
+                market: &first.market,
+                hoard: &first.hoard,
+                kernel: &first.kernel,
+                supply: &first.supply,
+            },
+            &repeated_evidence,
+            &metadata,
+            &bindings,
+        )
+        .unwrap();
+        assert!(repeated.repeated);
+        assert_eq!(repeated.market, first.market);
+        assert_eq!(repeated.hoard, first.hoard);
+        assert_eq!(repeated.kernel, first.kernel);
+        assert_eq!(repeated.supply, first.supply);
+        assert_eq!(repeated.resolution, first.resolution);
+
+        assert_eq!(
+            apply_market_resolution_with_evidence(
+                &resolve_request(V1_EXACT_GENERATION + 1, 1),
+                ResolutionStateBytes {
+                    market: &first.market,
+                    hoard: &first.hoard,
+                    kernel: &first.kernel,
+                    supply: &first.supply,
+                },
+                &repeated_evidence,
+                &metadata,
+                &bindings,
+            ),
+            Err(Error::Replay)
+        );
+
+        let mut conflicting = repeated_evidence;
+        conflicting.bindings.window_id = h(78);
+        assert_eq!(
+            apply_market_resolution_with_evidence(
+                &resolve_request(V1_EXACT_GENERATION, 1),
+                ResolutionStateBytes {
+                    market: &first.market,
+                    hoard: &first.hoard,
+                    kernel: &first.kernel,
+                    supply: &first.supply,
+                },
+                &conflicting,
+                &metadata,
+                &bindings,
+            ),
+            Err(Error::ResolutionBindingMismatch)
+        );
+
+        let mut aliased = metadata;
+        aliased.actor.key = aliased.market.key;
+        assert_eq!(
+            apply_market_resolution_with_evidence(
+                &resolve_request(V1_EXACT_GENERATION, 1),
+                resolution_state_bytes(&split),
+                &evidence,
+                &aliased,
+                &bindings,
+            ),
+            Err(Error::AccountAlias)
+        );
+    }
+
+    #[test]
+    fn market_global_resolution_rejects_wrong_window_generation() {
+        let f = fixture();
+        let split = split_state(&f, 15);
+        let mut wrong = f.window_spec();
+        wrong.generation += 1;
+        let (window, len) = encode_window(&wrong, &winning_records());
+        let evidence = ResolutionEvidence {
+            bytes: EvidenceBytes {
+                terms: &f.terms,
+                resolution: &f.resolution,
+                window: &window[..len],
+            },
+            metadata: f.evidence_metadata,
+            bindings: f.evidence_bindings,
+            feed_cursor: FEED_CURSOR,
+            resolved_slot: RESOLVED_SLOT,
+        };
+        assert_eq!(
+            apply_market_resolution_with_evidence(
+                &resolve_request(V1_EXACT_GENERATION, 1),
+                resolution_state_bytes(&split),
+                &evidence,
+                &resolution_metadata(&f),
+                &resolution_bindings(&f),
+            ),
+            Err(Error::Resolution(ResolutionRefusal::WindowDomainMismatch(
+                WindowError::MismatchedGeneration
+            )))
+        );
+    }
+
+    #[test]
     fn signer_cannot_bypass_missing_resolution_evidence() {
         let mut f = fixture();
         let owner = PositionAccount::decode(&f.state.position).unwrap().owner;
@@ -4515,17 +4996,18 @@ mod tests {
         assert_eq!(ResolutionRefusal::BasisMalformed.class(), 12);
         assert_eq!(ResolutionRefusal::WeightDerivationOverflow.class(), 13);
         assert_eq!(ResolutionRefusal::ValueOutOfRange.class(), 14);
-        // 15 is reserved for R-15 NonPointEvidence (degrees >= 2 only).
+        assert_eq!(ResolutionRefusal::NonPointEvidence.class(), 15);
         assert_eq!(ResolutionRefusal::DerivedVectorUnrepresentable.class(), 16);
         assert_eq!(ResolutionRefusal::WrongResolutionMode.class(), 17);
 
-        // Degrees 2 and 3 refuse as unimplemented variants: no proven
-        // interval-ambiguity rule exists for smooth bases (design §10.6).
+        // Merely flipping a categorical artifact's degree cannot manufacture
+        // a smooth basis: its knot/outcome count and uniform declaration are
+        // still malformed. Valid d2/d3 terms are tested at the vector seam.
         let mut smooth = derived;
         smooth.basis_degree = 2;
-        assert_eq!(smooth.validate(), Err(ResolutionRefusal::TermsMalformed));
+        assert_eq!(smooth.validate(), Err(ResolutionRefusal::BasisMalformed));
         smooth.basis_degree = 3;
-        assert_eq!(smooth.validate(), Err(ResolutionRefusal::TermsMalformed));
+        assert_eq!(smooth.validate(), Err(ResolutionRefusal::BasisMalformed));
         smooth.basis_degree = 4;
         assert_eq!(smooth.validate(), Err(ResolutionRefusal::BasisMalformed));
     }
@@ -5464,77 +5946,28 @@ mod tests {
     }
 
     #[test]
-    fn degree_one_market_resolves_by_derived_member_vector_end_to_end() {
-        /* The derived hat-basis path, end to end: at x̂ = 3 in the pane
-         * [0, 8) with D = 7, the derive-last-and-subtract weights are
-         * (7 − ⌊7·3/8⌋, ⌊7·3/8⌋) = (5, 2) — preset index 2 — and the kernel
-         * resolves by that member's index, so redemption pays the derived
-         * fractions exactly. */
+    fn degree_one_account_resolution_refuses_preset_lowering() {
+        /* At x̂ = 3 the native vector is (4, 3). Even though that vector is
+         * also present at preset index 3, the account path has no persisted
+         * BasisMode/resolved-vector slot and must not lower the shaped
+         * settlement into an index lookup. */
         let mut f = fixture();
         let terms = hat_terms_with_enumerated_lattice(&f);
         refreeze_terms(&mut f, terms);
         let split = split_state(&f, 14);
 
-        // The gate refuses every index except the derived member's.
         assert_eq!(
-            resolve_terminal(&f, &split, 1, 0, 3, 3),
-            Err(Error::PayoutIndexMismatch)
+            resolve_terminal(&f, &split, 1, 3, 3, 3),
+            Err(Error::Resolution(ResolutionRefusal::WrongResolutionMode))
         );
-        let resolved = resolve_terminal(&f, &split, 1, 2, 3, 3).unwrap();
-        let kernel = KernelAccount::decode(&resolved.kernel).unwrap();
-        assert_eq!(kernel.resolved_payout, 2);
-        assert_eq!(kernel.payouts.vectors[2].denominator, 7);
-        assert_eq!(kernel.payouts.vectors[2].weights[0], 5);
-        assert_eq!(kernel.payouts.vectors[2].weights[1], 2);
-
-        // Redemption at the derived weights: 14 claims of outcome 0 pay
-        // exactly 14·5/7 = 10, of outcome 1 exactly 14·2/7 = 4; together the
-        // full split collateral, with position cash restored exactly.
-        let mut readonly = f.evidence_metadata;
-        readonly.resolution.writable = false;
-        let record = resolved.resolution.unwrap();
-        let redeem = |state: &TransitionOutput, sequence, outcome, quantity| {
-            apply_with_evidence(
-                &redeem_request(sequence, outcome, quantity),
-                state_bytes(state),
-                &ResolutionEvidence {
-                    bytes: EvidenceBytes {
-                        terms: &f.terms,
-                        resolution: &record,
-                        window: &[],
-                    },
-                    metadata: readonly,
-                    bindings: f.evidence_bindings,
-                    feed_cursor: FEED_CURSOR,
-                    resolved_slot: RESOLVED_SLOT,
-                },
-                &f.metadata,
-                &f.bindings,
-            )
-        };
-        let first = redeem(&resolved, 2, 0, 14).unwrap();
-        assert_eq!(first.redemption_payout, 10);
-        let second = redeem(&first, 3, 1, 14).unwrap();
-        assert_eq!(second.redemption_payout, 4);
-        assert_eq!(
-            HoardAccount::decode(&second.hoard)
-                .unwrap()
-                .collateral_atoms,
-            0
-        );
-        assert_eq!(
-            PositionAccount::decode(&second.position)
-                .unwrap()
-                .cash_atoms,
-            100
-        );
+        assert_eq!(derived_vector_at(&f, 3, 3).unwrap().weights[..2], [4, 3]);
     }
 
     #[test]
-    fn degree_one_derived_vector_outside_presets_names_the_kernel_residue() {
+    fn degree_one_account_path_names_the_native_storage_residue() {
         /* The same derivation under D = 64 lands on (40, 24), which no
-         * preset carries: without the kernel's resolve_with_vector — the one
-         * named residue — the adapter refuses rather than approximates. */
+         * preset carries. The kernel already has resolve_with_vector; the
+         * remaining residue is the account format that cannot persist it. */
         let mut f = fixture();
         let mut terms = hat_terms_exact_d8(&f);
         let mut left = [0u64; MAX_OUTCOMES];
@@ -5553,9 +5986,7 @@ mod tests {
         let split = split_state(&f, 14);
         assert_eq!(
             resolve_terminal(&f, &split, 1, 0, 3, 3),
-            Err(Error::Resolution(
-                ResolutionRefusal::DerivedVectorUnrepresentable
-            ))
+            Err(Error::Resolution(ResolutionRefusal::WrongResolutionMode))
         );
         /* The pure seam still derives the validated member-shaped vector —
          * the refusal is now the *layout* half of the residue, not the
@@ -5565,14 +5996,11 @@ mod tests {
          * payout *index* and carries no resolved value, so the account path
          * has nowhere to record what was installed. */
         assert_eq!(derived_vector_at(&f, 3, 3).unwrap().weights[..2], [40, 24]);
-        /* At a knot the derived vector IS a preset, and the market resolves:
-         * the residue is exactly the non-member lattice, nothing else. */
-        let at_anchor = resolve_terminal(&f, &split, 1, 1, 8, 8).unwrap();
+        /* A knot vector that happens to equal a preset refuses too: the mode
+         * boundary is semantic, not a membership optimization. */
         assert_eq!(
-            KernelAccount::decode(&at_anchor.kernel)
-                .unwrap()
-                .resolved_payout,
-            1
+            resolve_terminal(&f, &split, 1, 1, 8, 8),
+            Err(Error::Resolution(ResolutionRefusal::WrongResolutionMode))
         );
     }
 
