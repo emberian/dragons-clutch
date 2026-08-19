@@ -141,15 +141,15 @@ const SETTLE_ROLES: [StateRole; SETTLE_ACCOUNT_COUNT] = [
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DirectOrders {
-    zero: OrderRecord,
-    one: OrderRecord,
-    buy_index: u8,
-    sell_index: u8,
-    outcome: u8,
-    quantity: u64,
-    buy_limit: u64,
-    sell_limit: u64,
+pub(in crate::instructions) struct DirectOrders {
+    pub(in crate::instructions) zero: OrderRecord,
+    pub(in crate::instructions) one: OrderRecord,
+    pub(in crate::instructions) buy_index: u8,
+    pub(in crate::instructions) sell_index: u8,
+    pub(in crate::instructions) outcome: u8,
+    pub(in crate::instructions) quantity: u64,
+    pub(in crate::instructions) buy_limit: u64,
+    pub(in crate::instructions) sell_limit: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -205,7 +205,7 @@ struct SettleFacts {
 }
 
 impl DirectOrders {
-    fn buy(self) -> OrderRecord {
+    pub(in crate::instructions) fn buy(self) -> OrderRecord {
         if self.buy_index == 0 {
             self.zero
         } else {
@@ -213,7 +213,7 @@ impl DirectOrders {
         }
     }
 
-    fn sell(self) -> OrderRecord {
+    pub(in crate::instructions) fn sell(self) -> OrderRecord {
         if self.sell_index == 0 {
             self.zero
         } else {
@@ -1598,7 +1598,7 @@ fn read_batch_policy(
     Ok(policy)
 }
 
-fn full_domain(
+pub(in crate::instructions) fn full_domain(
     epoch: &DirectEpochV3Account,
     policy: FrozenPolicyV1,
 ) -> Outcome<FullRelationDomainV1> {
@@ -1622,7 +1622,7 @@ fn full_domain(
     Ok(domain)
 }
 
-fn load_direct_orders(
+pub(in crate::instructions) fn load_direct_orders(
     page: &[u8],
     grid: &PriceGridAccount,
     epoch: &clutch_solana_layout::EpochAccount,
@@ -1684,7 +1684,7 @@ fn load_direct_orders(
     })
 }
 
-fn validate_order_reservation(
+pub(in crate::instructions) fn validate_order_reservation(
     reservation: &ReservationAccount,
     epoch: &clutch_solana_layout::EpochAccount,
     order: &OrderSlot,

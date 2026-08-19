@@ -1613,6 +1613,7 @@ fn place_direct_v4_order(
         &rent,
         DIRECT_RESERVATION_V2_BYTES,
         commit.reservation_funding,
+        0,
         &[
             seeds::SEED_RESERVATION,
             &reservation_bytes,

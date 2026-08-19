@@ -1043,6 +1043,7 @@ fn init_direct_v4_order_page(
         &rent,
         account_len::ORDER_PAGE,
         funding,
+        0,
         &[
             seeds::SEED_PAGE,
             &epoch_bytes,

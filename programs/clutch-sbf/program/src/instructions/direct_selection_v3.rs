@@ -1,11 +1,12 @@
-//! Unrouted Direct V3 lifecycle adapter.
+//! Complete Direct V3 lifecycle adapter.
 //!
-//! This module is compiled and host-tested, but [`crate::dispatch`] does not
-//! route any Direct V3 tag to it. The dedicated request decoder and every V3
-//! intent therefore remain fail-closed until the whole account family can be
-//! switched on atomically. The first vertical slice below owns only creation
-//! of the durable pre-freeze Epoch; page creation, Reservation V2 placement,
-//! Freeze, staged verification, settlement, and lapse are still runtime STOPs.
+//! Every V3 lifecycle intent has exactly one handler here: Init and the
+//! [`freeze_abort`], [`staged`], and [`terminal`] submodules cover tags 36
+//! through 46 with no unimplemented arm, so [`crate::dispatch`] can route the
+//! family all-or-nothing. Page creation and funded Reservation V2 placement
+//! remain branches of the existing `InitOrderPage`/`PlaceOrder` wires,
+//! selected only by the 672-byte V4 Epoch account that exists only through
+//! the routed `InitDirectEpochV4`.
 
 use crate::accounts::{
     self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
@@ -34,6 +35,11 @@ use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 use solana_sdk_ids::incinerator;
+
+mod common;
+mod freeze_abort;
+mod staged;
+mod terminal;
 
 /// Domain label whose SHA-256 bytes define this semantic release identifier.
 ///
@@ -81,10 +87,11 @@ macro_rules! borrow_mut {
     };
 }
 
-/// Entry point reserved for the future atomic Direct V3 dispatcher cut.
+/// Route one already-decoded Direct V3 lifecycle request.
 ///
-/// Only Init has an implemented body in this incremental checkpoint. All
-/// other already-decoded actions refuse without reading accounts.
+/// The match is exhaustive with no fallback arm: a new lifecycle intent
+/// cannot compile without a handler, which is what lets [`crate::dispatch`]
+/// admit tags 36 through 46 as one all-or-nothing family.
 pub fn process(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -115,7 +122,65 @@ pub fn process(
                 neutral_lamport_sink,
             },
         ),
-        _ => Err(ClutchError::NotYetImplemented.into()),
+        DirectV3Intent::FreezeEpoch {
+            market,
+            epoch,
+            reward_deposit,
+            rewards,
+        } => freeze_abort::freeze(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            reward_deposit,
+            rewards,
+        ),
+        DirectV3Intent::AbortUnfrozen { market, epoch } => {
+            freeze_abort::abort(program_id, accounts, request.sequence, market, epoch)
+        }
+        DirectV3Intent::SubmitCandidate {
+            market,
+            epoch,
+            outcome_price,
+        } => staged::submit(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            outcome_price,
+        ),
+        DirectV3Intent::BeginVerification { market, epoch } => {
+            staged::begin(program_id, accounts, request.sequence, market, epoch)
+        }
+        DirectV3Intent::VerifyCandidate {
+            market,
+            epoch,
+            retained_index,
+        } => staged::verify(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            retained_index,
+        ),
+        DirectV3Intent::FinalizeSelection { market, epoch } => {
+            terminal::finalize(program_id, accounts, request.sequence, market, epoch)
+        }
+        DirectV3Intent::Settle { market, epoch } => {
+            terminal::settle(program_id, accounts, request.sequence, market, epoch)
+        }
+        DirectV3Intent::LapseEmpty { market, epoch } => {
+            terminal::lapse_empty(program_id, accounts, request.sequence, market, epoch)
+        }
+        DirectV3Intent::LapseUnselected { market, epoch } => {
+            terminal::lapse_unselected(program_id, accounts, request.sequence, market, epoch)
+        }
+        DirectV3Intent::LapseSelected { market, epoch } => {
+            terminal::lapse_selected(program_id, accounts, request.sequence, market, epoch)
+        }
     }
 }
 
@@ -216,6 +281,7 @@ fn init_epoch(
         &rent,
         DIRECT_EPOCH_V4_BYTES,
         funding,
+        0,
         &[
             seeds::SEED_EPOCH,
             &intent.market.bytes(),
@@ -308,7 +374,6 @@ pub(crate) fn direct_creation_funding(
 
 /// Observe one surviving Direct V3 account without letting later donations
 /// replace any part of its authenticated payer principal.
-#[cfg(test)]
 pub(crate) fn observe_direct_funding(
     funding: DirectFundingLedgerV3,
     live_lamports: u64,
@@ -330,6 +395,10 @@ pub(crate) fn observe_direct_funding(
     Ok(observed)
 }
 
+/// `extra_deposit` is a second, independently accounted payer compartment
+/// transferred in the same exact create delta — the WorkBudget reward pool.
+/// It is not principal and never becomes donation: the persisted account
+/// bytes record it separately and every later observation protects it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn create_pda_account_full_principal<'a>(
     program_id: &Pubkey,
@@ -339,6 +408,7 @@ pub(crate) fn create_pda_account_full_principal<'a>(
     rent: &RentParameters,
     space: usize,
     funding: DirectFundingLedgerV3,
+    extra_deposit: u64,
     signer_seeds: &[&[u8]],
 ) -> Outcome<()> {
     require_creatable(target)?;
@@ -354,12 +424,15 @@ pub(crate) fn create_pda_account_full_principal<'a>(
             && funding.prior_donation_lamports == balance_before,
         ClutchError::MismatchedState,
     )?;
+    let deposit = principal
+        .checked_add(extra_deposit)
+        .ok_or(ClutchError::Arithmetic)?;
     let balance_after = balance_before
-        .checked_add(principal)
+        .checked_add(deposit)
         .ok_or(ClutchError::Arithmetic)?;
     let transfer = Instruction::new_with_bytes(
         SYSTEM_PROGRAM_ID,
-        &transfer_data(principal),
+        &transfer_data(deposit),
         vec![
             AccountMeta::new(*payer.key, true),
             AccountMeta::new(*target.key, false),
@@ -550,22 +623,67 @@ mod tests {
         );
     }
 
+    /// Every routed lifecycle action now has one real handler, and each
+    /// fail-closes on account shape or replay sequence before touching state.
+    /// Nothing anywhere in the family returns `NotYetImplemented`.
     #[test]
-    fn every_unimplemented_v3_action_refuses_before_accounts() {
-        let request = DirectV3Request {
-            sequence: 0,
-            intent: DirectV3Intent::BeginVerification {
-                market: h(1),
-                epoch: h(2),
-            },
+    fn every_routed_v3_action_fail_closes_before_reading_state() {
+        let market = h(1);
+        let epoch = h(2);
+        let rewards = clutch_solana_layout::direct_selection_v3::DirectKeeperRewardsV3 {
+            begin_verification: 1,
+            verify_candidate: 1,
+            finalize_selection: 1,
+            settle: 1,
+            lapse: 1,
         };
-        assert_eq!(
-            process(&Pubkey::new_from_array([7; 32]), &[], &request),
-            Err(ClutchError::NotYetImplemented.into())
-        );
-        assert_ne!(
-            Err::<(), _>(ClutchError::NotYetImplemented.into()),
-            Err(Refusal::Reference(clutch_solana_reference::Error::WrongTag))
-        );
+        let intents = [
+            DirectV3Intent::FreezeEpoch {
+                market,
+                epoch,
+                reward_deposit: rewards.worst_case().unwrap(),
+                rewards,
+            },
+            DirectV3Intent::AbortUnfrozen { market, epoch },
+            DirectV3Intent::SubmitCandidate {
+                market,
+                epoch,
+                outcome_price: 2_500,
+            },
+            DirectV3Intent::BeginVerification { market, epoch },
+            DirectV3Intent::VerifyCandidate {
+                market,
+                epoch,
+                retained_index: 0,
+            },
+            DirectV3Intent::FinalizeSelection { market, epoch },
+            DirectV3Intent::Settle { market, epoch },
+            DirectV3Intent::LapseEmpty { market, epoch },
+            DirectV3Intent::LapseUnselected { market, epoch },
+            DirectV3Intent::LapseSelected { market, epoch },
+        ];
+        let not_yet: Refusal = ClutchError::NotYetImplemented.into();
+        for intent in intents {
+            let request = DirectV3Request {
+                sequence: 0,
+                intent,
+            };
+            let refusal = process(&Pubkey::new_from_array([7; 32]), &[], &request).unwrap_err();
+            assert_eq!(
+                refusal,
+                Refusal::Adapter(ClutchError::AccountCount),
+                "{intent:?}"
+            );
+            assert_ne!(refusal, not_yet, "{intent:?}");
+            let replay = DirectV3Request {
+                sequence: 1,
+                intent,
+            };
+            assert_eq!(
+                process(&Pubkey::new_from_array([7; 32]), &[], &replay),
+                Err(ClutchError::Replay.into()),
+                "{intent:?}"
+            );
+        }
     }
 }
