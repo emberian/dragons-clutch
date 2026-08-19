@@ -61,6 +61,25 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- R2 RUNTIME CAPABILITIES LANDED on fable/r2-runtime-capabilities (f9045a0):
+  the two decoders with zero precedent in the tree — Upgradeable Loader
+  ProgramData and Instructions sysvar — verified against pinned published
+  crate sources (loader-v3-interface 8.0.1, instructions-sysvar 3.0.1,
+  layout byte-identical across 2.2.2/3.0.1/4.0.0), fixtures captured from
+  the REAL serializers not hand-tables, 42 adversarial tests (truncation at
+  every byte boundary, off-by-one sweep on the current instruction,
+  non-adjacent post unreachable), 24 refusal variants, clippy+fmt clean,
+  199 lib tests total with exact +42 delta, wired into nothing.
+  Two findings: (1) a revoked upgrade authority serializes to 13 bytes but
+  the loader's metadata region is fixed at 45, so bytes [13..45) still hold
+  the PREVIOUS authority — a naive decoder reports a live authority on an
+  immutable program; ours never reads them and proves it. (2) the current
+  instruction index lives in a 2-byte trailer outside the documented
+  layout, so every body read is bounded by len-2. Also surfaced: two
+  pre-existing private_intra_doc_links rustdoc warnings
+  (observe_resolve.rs:52, split.rs:54) that would block any future strict
+  rustdoc gate. Merge needs a reseal cycle; disjoint from the V3 lane.
+
 - SOPHISTICATION GAP ASSESSMENT committed
   (docs/reviews/SOPHISTICATION_GAP_2026-08-19.md): the joins are the
   fiction (three seams structurally impossible on a public cluster, not
