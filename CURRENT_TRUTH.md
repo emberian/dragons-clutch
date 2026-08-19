@@ -401,9 +401,16 @@ the sealed default ELF has no registered release and therefore refuses it with
    schema-v2 baseline, fresh Persvati portable attestation, and the hbox
    independent same-source rebuild (internally byte-reproducible; divergence
    from the macOS seal exhaustively classified as per-OS toolchain bytes)
-   are retained. Still required before a release claim: byte-level seal
-   reproduction on a second macOS host, complete release SBOM/license
-   closure, external security review, and a signed tag.
+   are retained, and the complete-scope dependency/license closure is now a
+   committed artifact (32 manifests, 1,788 unique rows, 0 failures;
+   `research/liveness-policy-profile/dependency_license_complete.tsv`, tool
+   at `scripts/dependency_license_check.py` with the attested 12-manifest
+   default mode byte-stable). Still required before a release claim:
+   byte-level seal reproduction on a second macOS host, folding the
+   complete-scope closure into a declared gate at the next emission cycle,
+   human review of the flagged license rows (MPL-2.0 family, CDLA roots,
+   one license-file-only crate), external security review, and a signed
+   tag.
 9. **Gate L0:** exact legal/entity/control/deployment facts, qualified advice,
    any required relief, and separate current user authorization remain outside
    engineering. No meeting, filing, proof, or local run closes this gate.

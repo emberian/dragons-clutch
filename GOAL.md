@@ -54,6 +54,15 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- SBOM/LICENSE CLOSURE LANDED at b10f1ea: the dependency/license checker
+  now lives in-repo (previously only inside the persvati attestation job),
+  attested 12-manifest default mode proven byte-stable three ways,
+  --complete mode covers all 32 manifests (1,788 rows, 0 failures) with a
+  committed SBOM TSV; vendored solana-define-syscall handled structurally;
+  notable-but-green license rows flagged for release eyes. STOP 8 residue
+  narrows to macOS byte-repro, gate-folding at next emission, license-row
+  review, external review, signed tag.
+
 - Codex convergence wave (2f55cfc..8e7f827) composed onto my lanes: R2
   contract RESOLVED (closing-boundary rule id 2 only, ProgramData+slot
   pinning, grid origin 0, distinct-witness refusal) with the codec
