@@ -10,9 +10,11 @@ nothing, and attests no proof content. `CODEX_HANDOFF.md` §7 P0-1 remains open
 after this file lands; this is groundwork under that blocker, not its closure.
 
 Status: **IMPLEMENTED** (source exists locally, the named offline checks record
-their own outcomes). Everything the manifest describes about *proofs* remains
-**BLOCKER** per §7 P0-2, and everything it describes about *deployment* remains
-**BLOCKER** per §7 P0-6.
+their own outcomes). This includes the current low-cost host-model, research,
+and Glass gates. It does not promote any of those results into runtime,
+deployment, or proof evidence. Everything the manifest describes about *proofs*
+remains **BLOCKER** per §7 P0-2, and everything it describes about *deployment*
+remains **BLOCKER** per §7 P0-6.
 
 ## Usage
 
@@ -21,8 +23,9 @@ their own outcomes). Everything the manifest describes about *proofs* remains
 scripts/baseline_manifest.py emit
 
 # The full record: also execute every declared gate and store exit codes plus
-# normalized key output lines. Several minutes; includes two fresh SBF ELF
-# builds, the loopback lifecycle, and the isolated Token-2022 bank suite.
+# normalized key output lines. Several minutes; it includes the low-cost
+# research/model/frontend inventory plus two fresh SBF ELF builds, the loopback
+# lifecycle, and the isolated Token-2022 bank suite.
 scripts/baseline_manifest.py emit --run-gates
 
 # A labelled mid-flight snapshot from a dirty tree. Never a baseline.
@@ -151,6 +154,9 @@ repository root with `CARGO_NET_OFFLINE=true`, `NO_COLOR=1`, and `LC_ALL=C`.
   one: the coupled golden trace, pinned by
   `docs/implementation/VERTICAL_MODEL.md`;
 - `post-5` — benchmark harness and ABI checks added after the handoff list;
+- `post-5-research` — documented, low-cost local research/model/frontend checks
+  added after the handoff list. Their notes retain each surface's model or
+  host-only boundary; they are not substitute SBF or proof gates;
 - `post-5-runtime` — the full loopback SBF differential/lifecycle gate and the
   isolated Agave/Token-2022 program-test gate;
 - `5-expected-unavailable` — the two proof gates §5 lists as expected failures.
@@ -163,7 +169,9 @@ repository root with `CARGO_NET_OFFLINE=true`, `NO_COLOR=1`, and `LC_ALL=C`.
   rejects the pinned probe source (`verus_builtin` crate not imported). Making it
   pass requires editing the probe, which changes the pinned source digest, so a
   recorded failure is the correct state and a green gate here would be the
-  defect;
+  defect. The separately isolated Verus batch shadow is still in flight and is
+  deliberately neither a declared gate nor proof evidence until its source and
+  reproduction command are committed;
 - `either` — `rocq/check.sh`, accepting exit 0 (the `.v` file elaborates) or
   exit 2 (no `rocq`/`coqc` on `PATH`). Both carry `proof_content: "none"`:
   `ClutchKernel.v` contains zero theorems, only `Definition ... : Prop`
@@ -202,6 +210,16 @@ The two runtime gates have intentionally different coverage:
   mandatory token/collateral plane tests, out-of-band reconciliation failure,
   and the E5 post-CPI atomic-rollback case. These are not redundant with the
   loopback differential.
+
+The present runtime inventory also needs careful reading. `ResolutionWork` is
+now a routed local-SBF surface, but its isolated host-model gates and the broad
+runtime gates do not close production-source, direct-selection, or terminal
+storage/retirement STOPs. The default bringup ELF has an empty production source
+registry and must refuse `Endow`; only the explicitly named mock-source ELF can
+exercise the local successful path. Similarly, the Direct V2 measurement is a
+negative result: a three-Candidate selection reaches the 1,400,000-CU limit and
+rolls back. The V3 checks in `batch-policy-identity` are bounded host-model
+evidence, not a live ABI or runtime promotion.
 
 `cargo-build-sbf` may diagnose excessive frames in public dependency functions
 while compiling rlibs. The bringup gate extracts those symbol names and refuses
@@ -272,13 +290,24 @@ Verbatim from the manifest's own `claims.not_attested`:
   into fresh target directories. Both comparisons occur on one machine with the
   installed toolchain. There is no independent rebuilder, toolchain bootstrap,
   or rebuild from pinned dependency sources.
-- **No proof content.** The Rocq gate typechecks `Definition`s (zero theorems);
-  the Verus gate fails on the pinned probe. Both are recorded as-is, and
-  `check` will flag it as drift if either silently changes disposition.
+- **No formal proof content.** The Rocq gate typechecks `Definition`s (zero
+  theorems), while the root Verus probe is an expected failure. The isolated
+  Verus batch shadow is still in flight, is deliberately absent from this
+  manifest, and is not a claim until its source and reproduction gate are
+  committed. `check` will flag a silent root-gate disposition change as drift.
 - **No non-local runtime evidence.** The two SBF gates record a loopback validator
   differential/lifecycle and an in-process Agave/Token-2022 bank suite. They do
   not establish public-cluster behavior, deployment, validator diversity, an
   independently rebuilt ELF, or cross-runtime vector closure.
+- **No production-source attestation.** The default runtime ELF refuses `Endow`
+  without a registered source release. The successful mock-source path is local
+  test evidence only, not an oracle/source-release or deployment claim.
+- **No direct-selection promotion.** The V2 three-Candidate selection measurement
+  reaches the 1,400,000-CU transaction limit and rolls back. The V3 authority
+  work is a bounded host model with live ABI/runtime and terminal-cleanup STOPs.
+- **No system-wide terminal/liveness closure.** ResolutionWork has a routed local
+  SBF surface, but it does not close the separate production-source,
+  direct-selection, or storage/retirement STOPs.
 - **No SBOM**, license closure, fixture provenance chain, or source offer.
 - **No published provenance.** The identities are git object ids. A configured
   remote or a pushed branch is neither a signed tag nor a release artifact.
@@ -327,8 +356,12 @@ may not flip them to obtain a green result.
 
 ## Runtime-gate boundary
 
-The gate inventory includes the `clutch-sbf` cargo gates, the post-handoff
-benchmark/ABI checks, and both real SBF runtime gates. Their cost is deliberate:
-a full `--run-gates` baseline is the evidence path, not a fast presubmit. A
+The gate inventory includes the `clutch-sbf` cargo gates, documented low-cost
+research/model/frontend checks, post-handoff benchmark/ABI checks, and both real
+SBF runtime gates. Their cost is deliberate: a full `--run-gates` baseline is
+the evidence path, not a fast presubmit. The added research gates cover current
+committed surfaces such as direct-selection authority, the shape compiler,
+source profile, ResolutionWork model, historical liveness arithmetic, and the
+32-check offline Glass client; they do not add another large SBF run. A
 declaration-only `emit` remains useful for inspecting structure but sets
 `claims.reviewed_offline_checks_recorded` to `false` and records no run outcomes.

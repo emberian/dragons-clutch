@@ -86,13 +86,24 @@ NOT_ATTESTED = [
     "no independent reproducible-build closure: the E0 rlib and deployable SBF "
     "ELF each have a same-machine two-build comparison, but there is no "
     "independent rebuilder, toolchain bootstrap, or dependency-source rebuild",
-    "no proof content: the Rocq gate typechecks Definitions (zero theorems) and "
-    "the Verus gate fails on the pinned probe; both are recorded as-is",
+    "no formal proof content: the Rocq gate typechecks Definitions (zero "
+    "theorems) and the root Verus probe is an expected failure; the isolated "
+    "Verus batch shadow is in flight and is deliberately absent until its source "
+    "and reproduction gate are committed",
     "SBF evidence is local only: the manifest gates a loopback test-validator "
     "differential/lifecycle walk and an in-process Agave bank with Token-2022; "
     "neither is public-cluster, deployment, independent-rebuild, validator-"
     "diversity, or cross-runtime-vector evidence",
     "no SBOM, license closure, fixture provenance chain, or source offer",
+    "no production source attestation: the default runtime build refuses Endow "
+    "without a registered source release, while the named mock-source path is "
+    "local test evidence only",
+    "no direct-selection promotion: the measured V2 three-Candidate selection "
+    "hits the 1,400,000-CU transaction limit and rolls back; V3 remains a host "
+    "model with live ABI/runtime stops",
+    "no system-wide terminal/liveness closure: the local ResolutionWork SBF route "
+    "does not close the separate production-source, direct-selection, or storage "
+    "and retirement stops",
     "no published provenance: the identities below are git object ids. A "
     "configured remote or a pushed branch is neither a signed tag nor a release "
     "artifact, and this manifest asserts nothing about either",
@@ -407,6 +418,382 @@ def build_gates() -> list[dict[str, Any]]:
                 "note": "byte identity of the checked-in benchmark goldens",
             },
             {
+                "id": "cargo_test.batch_policy_identity",
+                "section": "post-5-research",
+                "command": (
+                    "cargo test --manifest-path research/batch-policy-identity/Cargo.toml "
+                    "--locked --offline --all-targets"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": TEST_RESULT_PATTERNS,
+                "note": (
+                    "bounded direct-selection authority model; host evidence only. "
+                    "The measured V2 selection route remains a 1,400,000-CU STOP."
+                ),
+            },
+            {
+                "id": "cargo_clippy.batch_policy_identity",
+                "section": "post-5-research",
+                "command": (
+                    "cargo clippy --manifest-path research/batch-policy-identity/Cargo.toml "
+                    "--locked --offline --all-targets -- -D warnings"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": CLIPPY_PATTERNS,
+                "note": "strict lint for the bounded direct-selection host model",
+            },
+            {
+                "id": "cargo_test.bspline_shape_compiler",
+                "section": "post-5-research",
+                "command": (
+                    "cargo test --manifest-path research/bspline-shape-compiler/Cargo.toml "
+                    "--offline --locked"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": TEST_RESULT_PATTERNS,
+                "note": (
+                    "exact-rational host compiler and cross-language fixture checks; "
+                    "not a consensus certificate or on-chain authority"
+                ),
+            },
+            {
+                "id": "cargo_clippy.bspline_shape_compiler",
+                "section": "post-5-research",
+                "command": (
+                    "cargo clippy --manifest-path research/bspline-shape-compiler/Cargo.toml "
+                    "--all-targets --offline --locked -- -D warnings"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": CLIPPY_PATTERNS,
+                "note": "strict lint for the exact-rational host compiler",
+            },
+            {
+                "id": "cargo_test.claim_algebra_model",
+                "section": "post-5-research",
+                "command": (
+                    "cargo test --manifest-path research/claim-algebra-model/Cargo.toml "
+                    "--offline --locked"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": TEST_RESULT_PATTERNS,
+                "note": "bounded payoff-language MODEL evidence, not consensus code",
+            },
+            {
+                "id": "cargo_clippy.claim_algebra_model",
+                "section": "post-5-research",
+                "command": (
+                    "cargo clippy --manifest-path research/claim-algebra-model/Cargo.toml "
+                    "--offline --locked --all-targets -- -D warnings"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": CLIPPY_PATTERNS,
+                "note": "strict lint for the bounded payoff-language MODEL",
+            },
+            {
+                "id": "cargo_doc.claim_algebra_model",
+                "section": "post-5-research",
+                "command": (
+                    "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path "
+                    "research/claim-algebra-model/Cargo.toml --offline --locked --no-deps"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": DOC_PATTERNS,
+                "note": "documentation build for the bounded payoff-language MODEL",
+            },
+            {
+                "id": "cargo_test.claim_neutral_resolution",
+                "section": "post-5-research",
+                "command": (
+                    "cargo test --manifest-path research/claim-neutral-resolution/Cargo.toml "
+                    "--offline --locked"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": TEST_RESULT_PATTERNS,
+                "note": "adversarial host model; not SBF implementation or runtime evidence",
+            },
+            {
+                "id": "cargo_test_release.claim_neutral_resolution",
+                "section": "post-5-research",
+                "command": (
+                    "cargo test --release --manifest-path "
+                    "research/claim-neutral-resolution/Cargo.toml --offline --locked"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": TEST_RESULT_PATTERNS,
+                "note": "release-profile run of the claim-neutral host model",
+            },
+            {
+                "id": "cargo_clippy.claim_neutral_resolution",
+                "section": "post-5-research",
+                "command": (
+                    "cargo clippy --manifest-path research/claim-neutral-resolution/Cargo.toml "
+                    "--offline --locked --all-targets --all-features -- -D warnings"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": CLIPPY_PATTERNS,
+                "note": "strict lint for the claim-neutral host model",
+            },
+            {
+                "id": "cargo_doc.claim_neutral_resolution",
+                "section": "post-5-research",
+                "command": (
+                    "cargo doc --manifest-path research/claim-neutral-resolution/Cargo.toml "
+                    "--offline --locked --no-deps"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": DOC_PATTERNS,
+                "note": "documentation build for the claim-neutral host model",
+            },
+            {
+                "id": "cargo_test.fractional_redemption",
+                "section": "post-5-research",
+                "command": (
+                    "cargo test --manifest-path research/fractional-redemption/Cargo.toml "
+                    "--offline --locked"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": TEST_RESULT_PATTERNS,
+                "note": "fractional-redemption MODEL evidence, not an SBF path",
+            },
+            {
+                "id": "cargo_clippy.fractional_redemption",
+                "section": "post-5-research",
+                "command": (
+                    "cargo clippy --manifest-path research/fractional-redemption/Cargo.toml "
+                    "--offline --locked --all-targets -- -D warnings"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": CLIPPY_PATTERNS,
+                "note": "strict lint for the fractional-redemption MODEL",
+            },
+            {
+                "id": "cargo_test.liquidity_policy_model",
+                "section": "post-5-research",
+                "command": (
+                    "cargo test --manifest-path research/liquidity-policy-model/Cargo.toml "
+                    "--offline --locked"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": TEST_RESULT_PATTERNS,
+                "note": "proof-constrained liquidity MODEL evidence, not live liquidity",
+            },
+            {
+                "id": "cargo_clippy.liquidity_policy_model",
+                "section": "post-5-research",
+                "command": (
+                    "cargo clippy --manifest-path research/liquidity-policy-model/Cargo.toml "
+                    "--offline --locked --all-targets -- -D warnings"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": CLIPPY_PATTERNS,
+                "note": "strict lint for the liquidity-policy MODEL",
+            },
+            {
+                "id": "cargo_doc.liquidity_policy_model",
+                "section": "post-5-research",
+                "command": (
+                    "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path "
+                    "research/liquidity-policy-model/Cargo.toml --offline --locked --no-deps"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": DOC_PATTERNS,
+                "note": "documentation build for the liquidity-policy MODEL",
+            },
+            {
+                "id": "python.liveness_policy_profile_unittest",
+                "section": "post-5-research",
+                "command": (
+                    "python3 -m unittest discover -s research/liveness-policy-profile "
+                    "-p 'test_*.py'"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": UNITTEST_PATTERNS,
+                "note": (
+                    "historical liveness-profile arithmetic tests; the sealed ELF "
+                    "replay artifact is not committed and this is not final-ELF evidence"
+                ),
+            },
+            {
+                "id": "cargo_test.liveness_policy_profile",
+                "section": "post-5-research",
+                "command": (
+                    "cargo test --offline --locked --manifest-path "
+                    "research/liveness-policy-profile/Cargo.toml"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": TEST_RESULT_PATTERNS,
+                "note": "local account-size and rent evidence probe, not runtime integration",
+            },
+            {
+                "id": "cargo_clippy.liveness_policy_profile",
+                "section": "post-5-research",
+                "command": (
+                    "cargo clippy --offline --locked --manifest-path "
+                    "research/liveness-policy-profile/Cargo.toml --all-targets -- -D warnings"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": CLIPPY_PATTERNS,
+                "note": "strict lint for the local liveness account probe",
+            },
+            {
+                "id": "lp_mapping_probe.release_run",
+                "section": "post-5-research",
+                "command": (
+                    "(cd research/lp-mapping-probe && cargo run --release --offline --locked)"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [r"^== E[1-4]  "],
+                "note": "PROPOSED host-side falsifier probe; not a shipped or on-chain crate",
+            },
+            {
+                "id": "cargo_test.resolution_work_v1",
+                "section": "post-5-research",
+                "command": (
+                    "cargo test --manifest-path research/resolution-work-v1/Cargo.toml "
+                    "--offline --locked"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": TEST_RESULT_PATTERNS,
+                "note": (
+                    "isolated resumable-work model; the separately gated local SBF "
+                    "route is not an end-to-end deployment claim"
+                ),
+            },
+            {
+                "id": "cargo_test_release.resolution_work_v1",
+                "section": "post-5-research",
+                "command": (
+                    "cargo test --release --manifest-path research/resolution-work-v1/Cargo.toml "
+                    "--offline --locked"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": TEST_RESULT_PATTERNS,
+                "note": "release-profile run of the isolated resumable-work model",
+            },
+            {
+                "id": "cargo_clippy.resolution_work_v1",
+                "section": "post-5-research",
+                "command": (
+                    "cargo clippy --manifest-path research/resolution-work-v1/Cargo.toml "
+                    "--offline --locked --all-targets -- -D warnings"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": CLIPPY_PATTERNS,
+                "note": "strict lint for the isolated resumable-work model",
+            },
+            {
+                "id": "cargo_doc.resolution_work_v1",
+                "section": "post-5-research",
+                "command": (
+                    "cargo doc --manifest-path research/resolution-work-v1/Cargo.toml "
+                    "--offline --locked --no-deps"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": DOC_PATTERNS,
+                "note": "documentation build for the isolated resumable-work model",
+            },
+            {
+                "id": "cargo_test.source_profile_v1",
+                "section": "post-5-research",
+                "command": (
+                    "cargo test --manifest-path research/source-profile-v1/Cargo.toml "
+                    "--offline --locked"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": TEST_RESULT_PATTERNS,
+                "note": (
+                    "conditional source parser/model; it does not make Endow's "
+                    "registered production-source gate pass"
+                ),
+            },
+            {
+                "id": "cargo_clippy.source_profile_v1",
+                "section": "post-5-research",
+                "command": (
+                    "cargo clippy --manifest-path research/source-profile-v1/Cargo.toml "
+                    "--offline --locked --all-targets -- -D warnings"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": CLIPPY_PATTERNS,
+                "note": "strict lint for the conditional source-profile model",
+            },
+            {
+                "id": "cargo_doc.source_profile_v1",
+                "section": "post-5-research",
+                "command": (
+                    "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path "
+                    "research/source-profile-v1/Cargo.toml --offline --locked --no-deps"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": DOC_PATTERNS,
+                "note": "documentation build for the conditional source-profile model",
+            },
+            {
+                "id": "python.economics_lab",
+                "section": "post-5-research",
+                "command": "python3 research/economics/run_lab.py",
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [r'^  "status": '],
+                "note": "stable scenario report from the economics MODEL, not a fee policy",
+            },
+            {
+                "id": "python.economics_admission_unittest",
+                "section": "post-5-research",
+                "command": (
+                    "python3 -m unittest discover -s research/economics-admission "
+                    "-p 'test_*.py'"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": UNITTEST_PATTERNS,
+                "note": "admission and fee-policy falsifier; MODEL evidence only",
+            },
+            {
+                "id": "python.economics_admission_lab",
+                "section": "post-5-research",
+                "command": "python3 research/economics-admission/run_lab.py",
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [r'^  "status": '],
+                "note": "stable admission/fee-policy scenario report; no policy promotion",
+            },
+            {
+                "id": "python.structured_claim_wrapper_unittest",
+                "section": "post-5-research",
+                "command": (
+                    "python3 -m unittest discover -s research/structured-claim-wrapper "
+                    "-p 'test_*.py' -v"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": UNITTEST_PATTERNS,
+                "note": "structured-claim wrapper research model; not a Token-2022 path",
+            },
+            {
+                "id": "python.structured_claim_wrapper_lab",
+                "section": "post-5-research",
+                "command": "python3 research/structured-claim-wrapper/run_lab.py",
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [r"^coefficients: ", r"^universal exact redemption lot: "],
+                "note": "stable structured-claim wrapper scenario report; MODEL evidence only",
+            },
+            {
+                "id": "python.bspline_window_semantics_unittest",
+                "section": "post-5-research",
+                "command": (
+                    "python3 -m unittest discover -s research/bspline-window-semantics "
+                    "-p 'test_*.py' -v"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": UNITTEST_PATTERNS,
+                "note": "isolated exact window-semantics model, not a settlement route",
+            },
+            {
+                "id": "python.bspline_window_semantics_compare",
+                "section": "post-5-research",
+                "command": "python3 research/bspline-window-semantics/compare.py",
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [r"^basis: ", r"^path: ", r"^exact-basis occupation: "],
+                "note": "deterministic comparison for the isolated window-semantics model",
+            },
+            {
                 "id": "sbf.runtime_bringup",
                 "section": "post-5-runtime",
                 "command": "programs/clutch-sbf/scripts/run_bringup.sh",
@@ -473,8 +860,9 @@ def build_gates() -> list[dict[str, Any]]:
                     r"^AssertionError",
                 ],
                 "note": (
-                    "no package runtime dependencies; the smoke test recomputes the "
-                    "canonical terms digest from terms.json"
+                    "32 offline Node checks cover the embedded evidence lens, strict "
+                    "snapshot validation, local-asset/CSP boundaries, accessibility, "
+                    "and canonical terms digest; no package runtime dependencies"
                 ),
             },
             {

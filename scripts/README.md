@@ -14,10 +14,10 @@ gate to obtain a green result.
 ### `baseline_manifest.py`
 
 Derives and checks `MANIFEST.baseline.json`, the baseline evidence manifest:
-git baseline identity, the `CODEX_HANDOFF.md` §5 gate inventory with each gate's
-reviewed disposition, the §6 byte identities recomputed from the tree, and the
-pinned toolchain records. Standard library only, offline, no writes outside the
-manifest path.
+git baseline identity, the `CODEX_HANDOFF.md` §5 gate inventory plus documented
+low-cost research/model/frontend extensions with their reviewed dispositions,
+the §6 byte identities recomputed from the tree, and the pinned toolchain
+records. Standard library only, offline, no writes outside the manifest path.
 
 ```sh
 scripts/baseline_manifest.py emit --run-gates    # refuses on a dirty tree
@@ -30,6 +30,14 @@ working tree, because such a manifest would pair a clean commit id with bytes
 that are not in that commit. `--allow-dirty` emits a snapshot marked
 `"dirty": true` for mid-flight use only.
 
-It attests no release, no signature, no reproducible-build closure, and no
-proof content. See
+It attests no release, signature, reproducible-build closure, formal proof
+content, production source release, direct-selection promotion, or system-wide
+terminal/liveness closure. The isolated Verus batch shadow remains absent until
+its source and reproduction gate are committed. See
 [`docs/implementation/BASELINE_MANIFEST.md`](../docs/implementation/BASELINE_MANIFEST.md).
+
+Focused declaration checks are standard-library only:
+
+```sh
+python3 -m unittest scripts/test_baseline_manifest.py
+```
