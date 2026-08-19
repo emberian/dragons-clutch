@@ -1404,6 +1404,7 @@ pub fn require_drivable_collateral(policy: &CollateralPolicy) -> Result<(), Refu
 /// stand up the optional token leg, and two hand-rolled copies of a frozen
 /// external layout is exactly how they drift apart.
 #[cfg(test)]
+#[allow(dead_code)] // retained shadow-ABI fixtures are migration archaeology
 pub(crate) mod fixtures {
     use super::{ACCOUNT_TYPE_MINT, BASE_MINT_LEN, BASE_TOKEN_ACCOUNT_LEN};
 
