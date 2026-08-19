@@ -189,8 +189,8 @@ The preferred direction is:
 
 1. preserve every monotone authenticated observation;
 2. allow a long permissionless repair window with rising bounty;
-3. after repair closes, distribute only among outcomes still compatible with the
-   frozen authenticated evidence;
+3. resolve only if the frozen authenticated evidence relation selects one
+   payout vector; otherwise retain claims in recoverable dormancy;
 4. make resolver compensation independent of the selected payout;
 5. cap common-mode exposure to any feed/bucket/source.
 
@@ -205,15 +205,23 @@ initial admission cap is `A[f,k] <= 0.1 * M[f,k]`. When censorship or publisher
 failure has no defensible numeric bound, expose a security tier and hard notional
 cap rather than inventing one.
 
-Failure payout remains the most important open cryptoeconomic design gate.
+The R4 research profile now selects `EvidenceOnlyRecoveryV1`: a data gap never
+selects a numeric payout. After finite independently prepaid repair, the market
+remains dormant but recoverable by later valid evidence; complete-set merge and
+claims persist. The equal-sum argument, rejected alternatives, terminal burn,
+and fractional-credit STOP are recorded in
+[`implementation/FAILURE_PAYOUT_DECISION_V1.md`](implementation/FAILURE_PAYOUT_DECISION_V1.md).
+This is a model-only policy decision. Versioned ABI, source-specific evidence,
+measured repair paths, Token-2022 lot encoding, and terminal burn integration
+remain release gates.
 
 ## 8. Thin-market behavior
 
 A thin Market may stop accepting native-auction orders. It must not stop
 observing or settling because volume disappeared. Missing a required bucket moves
 the venue into a frozen `DEGRADED` state, stops new order exposure, displays the
-pending failure rule, and continues paid repair. Ordinary external Token-2022
-transfers remain possible because no freeze authority exists.
+evidence-only recovery rule, and continues paid repair. Ordinary external
+Token-2022 transfers remain possible because no freeze authority exists.
 
 When every external and internal liability is zero, anyone may retire the Market,
 cancel only genuinely unnecessary future jobs, collect a prepaid cleanup bounty,

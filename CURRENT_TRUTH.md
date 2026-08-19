@@ -271,7 +271,7 @@ public `derive_payout` to be degree-zero-only; smooth callers must use
 | Static Glass | **HOST-TESTED** inspect-only prototype | A static client can render local terms and unsigned intent material without owning truth. | No frozen release manifest, complete wallet path, browser/accessibility audit, or official hosted instance. |
 | Liveness accounting | one routed path **SBF-EXECUTED / PROFILE-ADMITTED**; system policy **STOP** | `clutch-liveness` remains a host-tested pure kernel. Separately, the current sealed liveness profile binds exact ResolutionWork compute, rent, rewards, refund, donation, and close behavior to the `bd207...16b60` ELF; mixed historical/current measurement identities are machine-refused. | No complete global `LivenessPolicy` is emitted. Direct selection, production source work, most rent ownership/close routes, terminal asset disposition, and inclusion/keeper assumptions remain open. Hoard principal and future fees are never liveness capital. |
 | Terminal lifecycle V2 | internal-only **MODEL-ONLY / HOST-TESTED** | A hostile-prestate model enforces per-role rent identity, once-only refunds, a separately retained replay tombstone, internal claim/supply/mint equality, exact per-Position lots, ordered close dependencies, and an immutable neutral surplus sink. External bearer issuance fails closed in this profile. | No live account ABI, signer/PDA authority, rent funding, Token-2022 CPI/post-state, SBF route, legacy migration, external-bearer terminal path, or fractional credit/carry closure exists. It is not a protocol terminality or no-stranding result. |
-| Economics and fees | **MODEL-ONLY / PROPOSED** | Synthetic solvency, cost, fee, manipulation, and allocation experiments exist. | Fee base/rate/split, measured liveness maxima, neutral-failure policy, and recipient policy are not frozen. Hoard principal is never available. |
+| Economics and fees | **MODEL-ONLY / PROPOSED** | Synthetic solvency, cost, fee, manipulation, and allocation experiments exist. The isolated `EvidenceOnlyRecoveryV1` decision rejects every numeric data-failure fallback, keeps claims recoverable after finite prepaid repair, selects lot-scaled bearer units for new native markets, and permits only terminal collateral burn after authoritative zero. | No failure-policy ABI, source-specific evidence theorem, lot-scaled mint, repair route, or terminal burn executes. Fee base/rate/split and recipient policy remain unfrozen. Existing raw-unit bearer mints and fractional credits remain terminal STOPs. Hoard principal is never available. |
 | Artifact/release evidence | exact current artifact/stack/bank seal plus checked schema-v2 local baseline; release **STOP** | Runtime source/test ancestry `83e124d` produced two byte-identical ordinary builds of `bd207...16b60`; final-LTO/stack audit and same-ELF bank campaigns are sealed at `b5700a9`. The old `a572...d6b6a1` seal is historical only. The checked manifest records 94/94 and passes its post-commit full check. | The Cargo-home-relocated build is path-sensitive. Hbox reproduced the ELF from the same source/toolchain pin at `5e840bb0…` with the seal divergence exhaustively classified as per-OS platform-tools bytes; byte-level seal reproduction needs a second macOS host. No complete release SBOM/license closure, external security review, signed tag, or deployment. |
 
 ## 5. Accounting truth
@@ -377,9 +377,11 @@ the sealed default ELF has no registered release and therefore refuses it with
    fractional fragments lack terminal disposition; and most accounts lack an
    authenticated rent-payer versus donation split. The internal-only Terminal
    Lifecycle V2 research model closes these equations only in its modeled
-   profile; it supplies no live authority or Token-2022 transition. Close these
-   exact runtime domains without inventing a sweep right over owner or Hoard
-   value.
+   profile; it supplies no live authority or Token-2022 transition. The
+   separate `EvidenceOnlyRecoveryV1` hostile model selects no numeric failure
+   payout and a lot-scaled new-market bearer encoding, but supplies no migration
+   or live transition. Close these exact runtime domains without inventing a
+   sweep right over owner or Hoard value.
 8. **Evidence promotion:** the sealed artifact/stack/bank evidence, checked
    schema-v2 baseline, fresh Persvati portable attestation, and the hbox
    independent same-source rebuild (internally byte-reproducible; divergence

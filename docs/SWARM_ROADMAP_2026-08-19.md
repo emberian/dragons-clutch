@@ -213,6 +213,14 @@ issuance and supplies no live ABI, CPI, authority, rent-funding, migration, or
 fractional-credit result. Use it to falsify a runtime design, not as terminal
 runtime evidence.
 
+Failure-policy research checkpoint: `EvidenceOnlyRecoveryV1` rejects numeric
+failure resolution unless authenticated evidence has already selected a unique
+vector. It models finite SOL-prepaid repair, recoverable dormancy, lot-scaled
+new-market bearer units, explicit credit STOPs, authoritative Token-2022 zero,
+and burn-only whole-collateral disposition. It remains MODEL-ONLY and supplies
+no source theorem, live ABI, Token-2022 encoding/migration, measured repair
+route, or terminal CPI authority.
+
 ### R5 — Close formal, confidential, and governance boundaries
 
 These lanes can research in parallel, but promotion depends on R1 and on the
