@@ -1,0 +1,20 @@
+[package]
+name = "clutch-batch-policy-identity"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Canonical batch policy bytes and full-width submitted-candidate relation identity bridge"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+clutch-batch = { path = "../../crates/clutch-batch" }
+sha2 = { version = "=0.10.9", default-features = false }
+
+[dev-dependencies]
+clutch-solana-layout = { path = "../../programs/solana-layout" }
+
+[features]
+default = []
