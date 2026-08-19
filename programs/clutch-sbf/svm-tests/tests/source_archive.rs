@@ -17,8 +17,9 @@ use clutch_sbf::{
         append_authenticated, archived_observation, decode_source_spec_body_v1,
         initialize_archive, initialize_authenticated_source_spec_account,
         initialize_genesis_archive, initialize_source_spec_account, initialize_successor_archive,
-        seal_archive, verify_recorded_sealed_archive, verify_recorded_sealed_archive_view,
-        verify_sealed_archive, verify_source_spec_account, ArchiveAccountViewV1,
+        seal_archive, seal_archive_authenticated, verify_recorded_sealed_archive,
+        verify_recorded_sealed_archive_view, verify_sealed_archive, verify_source_spec_account,
+        ArchiveAccountViewV1,
         ArchivePredecessorV1, CoveragePolicy, DeploymentAuthenticatorV1, FeedIdentity, Grid,
         RuntimeAccountViewV1, SourceArchiveError, SourceSpecAccountViewV1,
         VerifiedSourceSpecAccountV1, WindowDomain, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES,
@@ -302,6 +303,118 @@ fn successor_initialization_derives_exact_lineage_from_a_sealed_receipt() {
         "a repair generation cannot reset to caller-authored genesis lineage"
     );
     assert_eq!(refused, [0_u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES]);
+}
+
+#[test]
+fn sealing_requires_an_authenticated_exactly_next_maturity_record() {
+    let spec = spec();
+    let window = window_range(spec, 100, 103, 104, 0);
+    let mut spec_account = [0_u8; SOURCE_SPEC_ACCOUNT_V1_BYTES];
+    initialize_source_spec_account(&mut spec_account, spec, 254).unwrap();
+    let verified = verified_spec(&spec_account);
+    let mut archive = [0_u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES];
+    initialize_genesis_archive::<MockDeployment>(&mut archive, verified, window, 253).unwrap();
+    for index in 0..3_u64 {
+        let bucket = 100 + index;
+        append(
+            &mut archive,
+            &spec_account,
+            window,
+            &record(bucket, 41 + index, 1_000 + index, 1_000_000, 2_000),
+            1_005 + index,
+            bucket * 60 + 1,
+        )
+        .unwrap();
+    }
+    let deployment_data = deployment_bytes(DEPLOYMENT_GENERATION);
+    let before = archive;
+    assert_eq!(
+        seal_archive_authenticated::<MockPriceParser, MockDeployment>(
+            &mut archive,
+            verified,
+            window,
+            TrustedClockV1 {
+                slot: 1_008,
+                unix_seconds: 6_241,
+            },
+            provider_program(b"mock-provider-program-v1"),
+            deployment(&deployment_data),
+            SourceAccountView::new(
+                SOURCE_ACCOUNT,
+                PROVIDER_PROGRAM,
+                false,
+                &record(104, 44, 1_003, 1_000_003, 2_000),
+            ),
+        ),
+        Err(SourceArchiveError::Source(SourceError::WrongBucket))
+    );
+    assert_eq!(archive, before);
+
+    seal_archive_authenticated::<MockPriceParser, MockDeployment>(
+        &mut archive,
+        verified,
+        window,
+        TrustedClockV1 {
+            slot: 1_008,
+            unix_seconds: 6_181,
+        },
+        provider_program(b"mock-provider-program-v1"),
+        deployment(&deployment_data),
+        SourceAccountView::new(
+            SOURCE_ACCOUNT,
+            PROVIDER_PROGRAM,
+            false,
+            &record(103, 44, 1_003, 1_000_003, 2_000),
+        ),
+    )
+    .expect("bucket end is the unique one-bucket maturity witness");
+    let receipt = verify_sealed_archive::<MockDeployment>(
+        CLUTCH_PROGRAM,
+        ARCHIVE_KEY,
+        ArchiveAccountViewV1::new(ARCHIVE_KEY, CLUTCH_PROGRAM, false, &archive),
+        verified,
+        window,
+    )
+    .unwrap();
+    assert_eq!(receipt.sealed_feed_cursor(), 104);
+
+    let long_horizon = window_range(spec, 100, 103, 105, 0);
+    let mut long = [0_u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES];
+    initialize_genesis_archive::<MockDeployment>(&mut long, verified, long_horizon, 252).unwrap();
+    for index in 0..3_u64 {
+        let bucket = 100 + index;
+        append(
+            &mut long,
+            &spec_account,
+            long_horizon,
+            &record(bucket, 41 + index, 1_000 + index, 1_000_000, 2_000),
+            1_005 + index,
+            bucket * 60 + 1,
+        )
+        .unwrap();
+    }
+    let long_before = long;
+    assert_eq!(
+        seal_archive_authenticated::<MockPriceParser, MockDeployment>(
+            &mut long,
+            verified,
+            long_horizon,
+            TrustedClockV1 {
+                slot: 1_008,
+                unix_seconds: 6_181,
+            },
+            provider_program(b"mock-provider-program-v1"),
+            deployment(&deployment_data),
+            SourceAccountView::new(
+                SOURCE_ACCOUNT,
+                PROVIDER_PROGRAM,
+                false,
+                &record(103, 44, 1_003, 1_000_003, 2_000),
+            ),
+        ),
+        Err(SourceArchiveError::NotMature)
+    );
+    assert_eq!(long, long_before);
 }
 
 fn provider_program<'a>(data: &'a [u8]) -> RuntimeAccountViewV1<'a> {

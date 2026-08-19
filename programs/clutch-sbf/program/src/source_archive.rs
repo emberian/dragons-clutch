@@ -729,6 +729,59 @@ pub fn seal_archive<D: DeploymentAuthenticatorV1>(
     Ok(())
 }
 
+/// Authenticate the unique next source record as a one-bucket maturity
+/// witness, then seal a complete archive.
+///
+/// V1 deliberately admits only `maturity == window_end + 1`. Longer horizons
+/// would require persisting every intervening source transition in a canonical
+/// head/archive account; accepting a caller-supplied cursor would discard that
+/// lineage. The witness interval is not part of the settlement window and is
+/// not archived, but its authenticated next cursor is the sole value written
+/// to `sealed_feed_cursor`.
+pub fn seal_archive_authenticated<P: PriceParserV1, D: DeploymentAuthenticatorV1>(
+    archive: &mut [u8],
+    verified_spec: VerifiedSourceSpecAccountV1,
+    window: WindowDomain,
+    clock: TrustedClockV1,
+    provider_program: RuntimeAccountViewV1<'_>,
+    deployment_account: RuntimeAccountViewV1<'_>,
+    source_account: SourceAccountView<'_>,
+) -> Result<(), SourceArchiveError> {
+    let header = verify_open_archive::<D>(archive, verified_spec.spec, window)?;
+    if u64::from(header.record_count) != header.window_end - header.window_start
+        || header.maturity_bucket_exclusive != header.window_end.saturating_add(1)
+    {
+        return Err(SourceArchiveError::NotMature);
+    }
+    authenticate_deployment::<D>(verified_spec.spec, provider_program, deployment_account)?;
+    if P::SOURCE_ADAPTER_ID != verified_spec.spec.source_adapter_id().bytes()
+        || P::SOURCE_ADAPTER_VERSION != verified_spec.spec.source_adapter_version()
+        || P::PARSER_ID != header.parser_id
+        || P::PARSER_VERSION != header.parser_version
+    {
+        return Err(SourceArchiveError::AdapterReleaseMismatch);
+    }
+    let previous = last_lineage(archive, header)?;
+    let witness = admit_price::<P>(
+        verified_spec.spec,
+        SourceHeadV1 {
+            feed: header.feed,
+            grid: header.grid,
+            cursor: header.window_end,
+            deployment_generation: header.deployment_generation,
+            last_source_sequence: previous.source_sequence,
+            last_publish_slot: previous.publish_slot,
+            last_publish_time: previous.publish_time,
+        },
+        clock,
+        source_account,
+    )?;
+    if witness.next_cursor != header.maturity_bucket_exclusive {
+        return Err(SourceArchiveError::NotMature);
+    }
+    seal_archive::<D>(archive, verified_spec, window, witness.next_cursor)
+}
+
 /// Runtime metadata and bytes for a sealed archive account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ArchiveAccountViewV1<'a> {
