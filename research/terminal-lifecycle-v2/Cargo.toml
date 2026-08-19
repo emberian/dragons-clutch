@@ -1,0 +1,13 @@
+[package]
+name = "clutch-terminal-lifecycle-v2"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "MODEL-only executable terminal lifecycle V2 research model"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
