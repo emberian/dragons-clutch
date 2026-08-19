@@ -633,20 +633,20 @@ measured CU STOP in this cut.**
 | `InitDirectEpochV4` | 680,723 | 51.4% |
 | `InitOrderPage` (V4 branch) | 407,028 | 70.9% |
 | `PlaceOrder` (V4 branch, buy) | 784,232 | 44.0% |
-| `PlaceOrder` (V4 branch, sell) | 780,758 | 44.2% |
-| `FreezeDirectEpochV4` | 1,018,901 | 27.2% |
+| `PlaceOrder` (V4 branch, sell) | 788,258 | 43.7% |
+| `FreezeDirectEpochV4` | 1,023,401 | 26.9% |
 | `AbortUnfrozenDirectV4`, zero reservations | 161,507 | 88.5% |
 | `AbortUnfrozenDirectV4`, one reservation | 371,980 | 73.4% |
 | `AbortUnfrozenDirectV4`, two reservations | 462,166 | 67.0% |
-| `SubmitDirectCandidateV3`, first admission | 904,313 | 35.4% |
-| `SubmitDirectCandidateV3`, retained | 991,101 | 29.2% |
-| `SubmitDirectCandidateV3`, retained (full top) | 1,091,329 | 22.0% |
-| `SubmitDirectCandidateV3`, **replacement (worst)** | **1,123,392** | **19.8%** |
-| `SubmitDirectCandidateV3`, noncompetitive no-state | 959,561 | 31.5% |
+| `SubmitDirectCandidateV3`, first admission | 908,813 | 35.1% |
+| `SubmitDirectCandidateV3`, retained | 995,601 | 28.9% |
+| `SubmitDirectCandidateV3`, retained (full top) | 1,095,829 | 21.7% |
+| `SubmitDirectCandidateV3`, **replacement (worst)** | **1,127,892** | **19.4%** |
+| `SubmitDirectCandidateV3`, noncompetitive no-state | 964,061 | 31.1% |
 | `BeginDirectVerificationV3` | 174,667 | 87.5% |
 | `VerifyDirectCandidateV3` (worst of three) | 607,601 | 56.6% |
-| `FinalizeDirectSelectionV3` (three retained) | 654,731 | 53.2% |
-| `SettleDirectV3` (incl. all seven closes) | 454,375 | 67.5% |
+| `FinalizeDirectSelectionV3` (three retained) | 659,231 | 52.9% |
+| `SettleDirectV3` (incl. all seven closes) | 460,375 | 67.1% |
 | `LapseEmptyDirectV3` | 469,018 | 66.5% |
 | `LapseUnselectedDirectV3` | 507,294 | 63.8% |
 | `LapseSelectedDirectV3` | 516,557 | 63.1% |
@@ -654,7 +654,7 @@ measured CU STOP in this cut.**
 The staged design is what buys this: the V2 `SelectDirectWindowV1` reached the
 cap re-executing three Candidates in one transaction, while V3's Begin plus
 three Verifies plus Finalize each stay under 660,000 CU. `SubmitDirectCandidateV3`
-at 1,123,392 CU is the tightest row at just under 20% headroom; it is the shape that runs
+at 1,127,892 CU is the tightest row at just under 20% headroom; it is the shape that runs
 the full verifier, decodes three retained Candidates, and closes the displaced
 worst, and it is the row to watch if any later change adds work to submission.
 
@@ -664,7 +664,7 @@ the runtime syncs only the accounts passed to a callee at CPI entry, so an
 earlier direct move on a caller-only account desynchronizes the
 instruction-wide lamport sum and the transaction refuses as unbalanced.
 Single-site epoch validation in the two V4 branches cut `PlaceOrder` from
-1,249,641 to 784,232 CU and `InitOrderPage` from 641,047 to 407,028 CU by not
+1,249,641 CU to under 790,000 and `InitOrderPage` from 641,047 to 407,028 CU by not
 re-running the decode-time hostile validation (including two software-SHA
 policy digests) up to four more times on the same immutable bytes; no refusal
 was removed, and the host substitution suite still refuses every
@@ -674,10 +674,10 @@ policy/schedule/page/replay/release/funding mutation.
 function. The frames that remain in its output are the pre-existing
 research/reference-crate debt already present in the sealed-main baseline ELF.
 
-The full svm suite is green on the branch under **both** ELF profiles:
-`default-empty-registry` 75 passed / 0 failed, and
-`non-production-mock-source` 82 passed / 0 failed, each matching main's own
-counts for the shared targets. Reaching that required one inherited repair,
+The full svm suite is green on the branch under **both** ELF profiles, run
+with `--no-fail-fast` after rebasing onto main: `default-empty-registry`
+**78 passed / 0 failed** and `non-production-mock-source` **85 passed / 0
+failed** — main's own 75 and 82 plus this lane's three V3 scenarios. Reaching that required one inherited repair,
 recorded here because it was mis-attributed once: the branch's merge-base
 (`414d6e4`) carried a broken native fixture that bound an inconsistent source
 version, so every native Resolve refused with `0x0050`
