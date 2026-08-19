@@ -743,12 +743,12 @@ pub fn derive_payout(
     window: &WindowResult,
 ) -> Result<u8, ResolutionRefusal> {
     terms.validate()?;
-    window
-        .check_domain(&terms.window)
-        .map_err(ResolutionRefusal::WindowDomainMismatch)?;
     if terms.basis_degree != 0 {
         return Err(ResolutionRefusal::WrongResolutionMode);
     }
+    window
+        .check_domain(&terms.window)
+        .map_err(ResolutionRefusal::WindowDomainMismatch)?;
     let (first, last) = terms.conservative_cells(window)?;
     if first != last {
         // AMBIG-REFUSE-01. AMBIG-MIDPOINT, AMBIG-CONSERVATIVE-LOW, and
