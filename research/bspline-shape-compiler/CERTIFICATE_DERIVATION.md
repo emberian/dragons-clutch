@@ -108,4 +108,3 @@ meaning of its open-clamped knots, its exact partition and rounding invariants,
 and ordinary correctness of `num-bigint`/`num-rational`. No theorem currently
 connects this host compiler, a serialized artifact, an SBF parser, authenticated
 resolution evidence, token supply, and payout transfer in one verified chain.
-

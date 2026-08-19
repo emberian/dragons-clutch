@@ -14,4 +14,3 @@ num-traits = "0.2.19"
 
 [lib]
 path = "src/lib.rs"
-

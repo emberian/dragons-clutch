@@ -117,4 +117,3 @@ adversarial points across all piecewise families and degrees.
 - The fixed subdivision certificate is conservative, not a best approximation
   solver and not an optimality claim.
 - Tests support these claims but are not a formal proof.
-
