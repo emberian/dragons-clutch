@@ -1,459 +1,209 @@
-# Dragon's Clutch transition handoff
+# Dragon's Clutch engineering handoff
 
-> **Historical snapshot.** This handoff predates most of the current SBF and
-> custody work. Start with [`CURRENT_TRUTH.md`](CURRENT_TRUTH.md) and
-> [`docs/V1_BACKLOG.md`](docs/V1_BACKLOG.md); use this file for provenance and
-> rationale only where the current control plane links back to it.
+Status date: 2026-08-19. The repository is an advanced local research and SBF
+bring-up, not a release, deployment, or complete venue.
 
-Snapshot date: 2026-08-18. Transition state: **ready for a supervised offline
-engineering handoff; not release-ready and not authorized for public-network
-use**.
+## Read order
 
-This file is the entry point for the next engineering model. Read
-[`AGENTS.md`](AGENTS.md), [`PROJECT.md`](PROJECT.md), and this file before making
-changes. The repository now has local baseline history on `main`; use
-`git rev-parse HEAD` to identify the exact working baseline. Paths and byte
-digests below identify a reviewed local snapshot, not a release provenance chain.
+1. [`AGENTS.md`](AGENTS.md) — authority, provenance, and correctness language.
+2. [`PROJECT.md`](PROJECT.md) — canonical product semantics.
+3. [`CURRENT_TRUTH.md`](CURRENT_TRUTH.md) — live evidence and STOP ledger.
+4. [`docs/V1_BACKLOG.md`](docs/V1_BACKLOG.md) — dependency-ordered execution.
+5. The owning design/implementation note for the lane you select.
 
-## 1. Claim vocabulary
+This file is a compact transition aid. If it disagrees with
+`CURRENT_TRUTH.md`, the latter controls. Historical detail remains available in
+Git; do not revive an old test count or status sentence as current evidence.
 
-Every status statement in this handoff uses exactly one of these labels:
+## The semantic correction to preserve
 
-- **IMPLEMENTED**: source exists locally and the named offline checks pass. This
-  does not imply formal verification, SBF runtime evidence, security review, or
-  deployment readiness.
-- **MODEL**: a deterministic reference model, specification, theorem statement,
-  synthetic experiment, or cost hypothesis exists. It is not consensus code or
-  production evidence.
-- **PROPOSED**: a design choice, parameter, policy, architecture, or backlog item
-  has not crossed its stated evidence gate.
-- **BLOCKER**: the named work must refuse promotion until it is closed. A
-  blocker is not permission to weaken the claim or bypass the gate.
+Dragon's Clutch does not top out at one-hot outcome tokens.
 
-Preserve the repository's correctness language: “best valid submitted
-candidate,” never “optimal clearing” without a checked optimality certificate;
-“verification-target Rust,” never “formally verified” without the exact
-theorem, digest, toolchain, assumptions, and unverified boundaries.
+- Degree zero is the native categorical basis over an exhaustive, disjoint,
+  ordered state partition.
+- Degrees one through three are native open-clamped B-spline Eggs. Their local
+  supports overlap; exact nonnegative settlement weights sum to the frozen
+  denominator.
+- Exact coefficients over the selected native basis are the native payoff
+  algebra. They are not “portfolio sugar.”
+- Sampling or integrating a shaped payoff into degree-zero Eggs is a
+  compatibility lowering. It must remain labeled and certified as such when
+  approximate.
 
-## 2. Product thesis and non-negotiable shape
+The control document is
+[`docs/design/NATIVE_AND_LOWERED_SEMANTICS.md`](docs/design/NATIVE_AND_LOWERED_SEMANTICS.md).
+Do not make a green categorical implementation the product's semantic ceiling.
 
-**PROPOSED:** Dragon's Clutch compiles a bounded objective state space into an
-exhaustive, disjoint, ordered basis of fully collateralized payoff assets. A
-complete Clutch can be split from, and merged back into, one Realm's collateral
-before resolution. A deterministic observation program selects a frozen payout
-vector; no debt, margin, liquidation, discretionary resolver, or socialized loss
-is introduced.
+## Accepted evidence, by plane
 
-Its distinctive conjunction is:
+### Mathematical model
 
-1. collateral-generic immutable Realms, with DREGG as one dogfood profile rather
-   than a kernel branch;
-2. exact fixed-width categorical claims and bounded payoff portfolios;
-3. a coupled simplex batch relation with virtual complete-set conversion;
-4. protected Hoard principal and separately prepaid liveness;
-5. standard Token-2022 materialization at the composability boundary; and
-6. a replaceable, untrusted static client requiring no Dragon-operated service.
+`lean/DragonsClutch/BSpline.lean` at commit `8c929a9` contains 159 counted
+declarations, including 116 theorems, with no `sorry`, `admit`, axiom, `unsafe`,
+`native_decide`, or `implemented_by`. It checks the rational clamped basis,
+uniform stored-knot/pane/BasisFuns linkage, canonical largest-remainder
+existence and uniqueness, integer admissibility, support, solvency, and
+complete-set results. This is **PROVED-MODEL** only. Rust parser/control-flow/
+Fraction/selection-loop equivalence, arbitrary nonuniform degree-one linkage,
+accounts, source, and runtime remain outside it.
 
-The canonical product description is [`PROJECT.md`](PROJECT.md). The architecture
-and trust boundaries are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Policy
-and parameter prose remains **PROPOSED** unless this handoff explicitly says
-otherwise.
+At `be8eba3`, eight Lean-computed fixtures match digest-pinned production
+`BasisSpec::evaluate` outputs and five actual-source mutants compile, execute,
+and go red. Call this **CHECKED-FINITE**, not a Verus result or universal Rust/
+SBF refinement.
 
-## 3. Architecture and semantic ownership
+The older semantic-plane Lean inventory and narrow Verus
+`prepare_internal_transfer` result retain their own documented boundaries.
+Rocq definitions/typechecking are not a theorem inventory.
+
+### Host and research
+
+- `crates/clutch-bspline`: exact degree-zero through degree-three evaluator,
+  safe `no_std`, no allocation/floats, largest-remainder quantization, and an
+  independent Python `Fraction`/Cox-de-Boor differential.
+- `programs/solana-reference`: conservative native-vector derivation seam;
+  degree two/three non-point evidence and derived TWAP refuse.
+- `research/bspline-shape-compiler`: exact-rational exact-in-span versus
+  certified-approximation compiler for ranges/tails/tents/capped spreads and
+  Gaussian proximity.
+- `research/bspline-window-semantics`: point/interval/TWAP/occupation comparison
+  and counterexamples to endpoint or midpoint shortcuts.
+- `crates/clutch-bspline-accumulator`: fixed-width occupation monoid with
+  explicit gaps and two separately named finalizers.
+- `programs/solana-layout/src/native_resolution.rs`: 319-byte version-three
+  native Resolution codec, selected for degree-one through degree-three Terms;
+  degree zero retains the explicit 165-byte v2 preset ABI.
+- `crates/clutch-liveness`: safe fixed-memory pure admission accounting for
+  component market/order reserves, zero-fee work, source/archive sharing,
+  replay-safe terminal ownership, anti-spam bounds, and persistent fee carry.
+  Its maxima and rates are unmeasured inputs and it has no runtime adapter.
+- `research/fractional-redemption`: safe fixed-width exact-lot and persistent-
+  numerator-credit policy models. A resolved common lot is
+  `lcm_i D/gcd(D,w_i)`; credits preserve the market aggregate liability but
+  expose an irreducible terminal remainder absent subsidy, forfeiture, or a
+  finer unit. No policy is selected or live.
+
+These are **HOST-TESTED**, **MODEL-ONLY**, or **PROVED-MODEL** as named in
+`CURRENT_TRUTH.md`. None is a live native-resolution SBF claim.
+
+### Local SBF runtime
+
+Focused real-bank paths now exist for:
+
+- pooled Token-2022 custody and exact unreserved `WithdrawCash`;
+- actual-mint supply truth, ordinary burn-as-forfeiture, and positionless
+  transferred-holder `RedeemExternal`;
+- typed resumable transport for policy, grid, and Terms artifacts;
+- exact cash/internal-Egg order reservation plus one-shot cancellation;
+- one narrow `SettlePage` consumption seam for a pre-frozen same-page,
+  full-fill, direct single-Egg, zero-fee receipt. It joins selected candidate,
+  canonical CandidateFeed, and two ACTIVE reservations; the focused success
+  consumed 862,107 transaction CU in the latest joined rerun;
+- one pre-fund-safe `SubmitDirectPage` constructor for a frozen two-order,
+  two-outcome, equal-limit, zero-fee direct page. It creates an exact feed and
+  SUBMITTED Candidate in 1,249,403 transaction CU, but leaves Epoch FROZEN and
+  the score/digest zero and unverified; and
+- degree-one through degree-three source-joined point Resolve, sole-vector v3
+  persistence, exact retry/conflict, and exact-lot internal and positionless
+  bearer redemption. Seven focused real-SBF scenarios pass; nondivisible
+  quantities refuse without rounding. Source accounts are still genesis mock
+  fixtures, not a live ingestion lifecycle.
+
+The joined signed walk at source HEAD `c05fe84` used ELF
+`70c33c1cd44b475745b0562a79d9107f1d2101cbf698ebd6c233ca167ebab2e6`.
+It committed 22 signed confirmed transactions, including two expected
+refusals, reloaded 18 watched accounts, separated market resolution replay from
+owner replay, redeemed internal and bearer claims, withdrew both owners' free
+cash, and ended both Position cash balances and the Hoard token balance at
+zero. A corrupted terminal Hoard-token expectation failed specifically on
+committed bytes.
+
+That is **SBF-EXECUTED local evidence**. The walk injects 11 Clutch-owned
+prerequisites and never clears or settles an order epoch. It is neither a
+blank-bank lifecycle nor end-to-end venue evidence.
+
+## Accounting model
+
+For one market:
 
 ```text
-handwritten Rocq shadow (unchecked)       Verus shadow sources (unchecked)
-                  \                         /
-                   canonical semantic vectors
-                              |
-       +----------------------+----------------------+
-       |                      |                      |
-  clutch-kernel       clutch-accumulator       clutch-batch
-       |                      |                      |
-       +----------------------+----------------------+
-                              |
-                   vertical reference model
-                              |
-             fixed Solana layouts and intent bytes
-                              |
-              offline single-position reference adapter
-                              |
-                  hostile SVM adapter (open)
-                              |
-              Token-2022 CPIs / SBF runtime (open)
-                              |
-                   untrusted static client
+H = actual Hoard collateral tokens
+L = retained claim backing
+P = aggregate Position cash
+R = reserved cash, a subset of P
+S = unsolicited unowned surplus
+
+H = L + P + S        and        0 <= R <= P
 ```
 
-One persisted fact must have one semantic owner:
+Split, Merge, and internal redemption are token-neutral pooled-accounting
+reclassifications. Endow and Withdraw are the owner/Hoard Token-2022 boundary.
+External redemption burns a bearer Egg and transfers its exact payout.
+Reserved Eggs remain in the claim-supply identity, not the collateral equation.
+Hoard donations and direct Egg burns create no fee, sweep right, or treasury
+asset. Hoard principal is never rent, liveness, bounty, or revenue.
 
-- `crates/clutch-kernel` owns claim-state transitions, payout liability,
-  split/merge, materialization, resolution, and exact redemption.
-- `crates/clutch-accumulator` owns source-neutral coverage and associative
-  interval-summary semantics.
-- `crates/clutch-batch` owns public fixed-book admission, candidate construction,
-  candidate verification, allocation, conservation, and deterministic score.
-- `programs/solana-layout` owns only canonical account and unsigned-intent bytes.
-  It does not authenticate accounts or execute transitions.
-- A future Solana adapter owns hostile account metadata validation, PDA/alias/
-  signer/owner/replay checks, persistence, and narrow CPI construction. It may
-  call the three semantic owners; it may not duplicate them.
-- `research/vertical-model` is the composition oracle. It is not a fourth
-  production implementation.
-- `apps/static-client` is an untrusted projection and inspect-only UI. It owns no
-  chain truth, deployment identity, signing authority, or transaction semantics.
-- `research/economics` and `benchmarks` own synthetic hypotheses and falsifiers,
-  never protocol constants.
+## Live STOPs
 
-Do not import or copy implementation material from JOSHI, Minidregg, Leanuweave,
-Breadstuffs, Oracle Pit, or prior DREGG work. Cross-repository movement requires
-the provenance process in [`docs/PROVENANCE.md`](docs/PROVENANCE.md).
+1. Degree-one through degree-three source-joined point Resolve, v3 vector
+   persistence/replay, and exact-lot internal and positionless bearer
+   redemption are live. Other post-resolution consumer audit, production
+   source ingestion, the native window/occupation path, final-LTO stack repair,
+   and a total fragment/credit policy remain open.
+2. Both the public account-shaped reference adapter and SBF Split/Merge/
+   materialize/dematerialize still reconstruct mode-less persisted Kernel state
+   as `FinitePreset`. Reachable active states preserve the native bound, but
+   this is a P1 representation/refinement gap. Bind a Terms-checked immutable
+   basis-mode projection before release.
+3. Resolve now derives and authenticates canonical SourceSpec/archive PDAs and
+   requires the caller's compatibility projection to equal the sealed archive.
+   No production provider/parser, onchain create/append/seal path, immediate
+   receiver-post/CPI/config provenance, live Clock/feed admission, or multi-page
+   proof exists. The focused bank still injects deterministic mock source state
+   at genesis. Typed artifact transport does not solve ingestion.
+4. A bank with no injected Clutch account can now seal policy/grid/Terms,
+   create Realm/Profile, and create the complete initial degree-selected market
+   plane. It cannot create the full source/archive/Epoch/candidate/pot/receipt
+   lifecycle. Terms also does not consensus-check referenced Grid existence.
+   Existing Market, Reservation, and later-owner families now have real-bank
+   pre-fund/rollback coverage; every future constructor must inherit the same
+   allocate/assign rule and regression gate.
+5. `SubmitDirectPage` now constructs one narrow SUBMITTED Candidate/feed and
+   `SettlePage` executes one separately preauthorized direct receipt. Candidate
+   completion/scoring/window closure/selection, receipt/pot/entitlement
+   construction, frozen global reservation-set closure, partial/portfolio/
+   virtual/fee paths, permissionless lapse/refund, and terminal sweep remain
+   open; the seams are not reachable end to end.
+6. Mandatory work is not fully measured and prepaid under zero future volume;
+   fee/failure policy is not frozen.
+7. The repository lacks one clean schema-v2 evidence baseline, independent
+   rebuild, complete SBOM/license record, external security review, and release
+   bundle.
+8. Gate L0 remains open. No engineering artifact authorizes public-network use,
+   filing, regulator contact, or real funds.
 
-## 4. Landed surface
+## Recommended execution order
 
-### 4.1 Executable semantic prototypes
+Follow the first dependency-unblocked item in `docs/V1_BACKLOG.md`:
 
-- **IMPLEMENTED:** `crates/clutch-kernel` is dependency-free, `no_std`, safe
-  fixed-layout Rust with `MAX_OUTCOMES = 16` and `MAX_PAYOUTS = 8`. It implements
-  finite payout sets, maximum-liability checks, split/merge,
-  materialize/dematerialize, finite resolution, and internal/external exact
-  redemption. Seven unit tests, strict Clippy, and rustdoc pass offline.
-- **IMPLEMENTED:** `crates/clutch-accumulator` is a dependency-free `no_std`
-  interval-summary monoid with explicit gaps, coverage, first/last/extrema,
-  exact price-time integrals, TWAP, and terminal/TWAP ratio intervals. Unsupported
-  threshold crossings, drawdown, and variance refuse rather than invent
-  precision. Ten unit tests, strict Clippy, and rustdoc pass offline.
-- **IMPLEMENTED:** `crates/clutch-batch` is a dependency-free fixed-capacity
-  transparent relation (`MAX_ORDERS = 64`, `MAX_GRID_TICKS = 64`) with canonical
-  order sequence, maximum-volume/minimum-imbalance/highest-tick selection,
-  deterministic pro-rata allocation, explicit dust policy, candidate
-  verification, and conservation checks. Verification recomputes the frozen
-  canonical allocation and requires exact fill-vector equality; it rejects
-  ineligible fills, pro-rata reweighting, and all-or-none bypasses. Nine unit
-  tests, strict Clippy, and rustdoc pass offline.
+1. settle the shared tree and produce one noncontradictory evidence baseline;
+2. audit every native post-resolution consumer and repair the shared final-LTO
+   stack survivors without weakening exact-lot or source STOPs;
+3. implement the full blank-bank production source/archive lifecycle;
+4. join funded reservations to epoch freeze, candidate selection, immutable
+   entitlements, and `SettlePage`;
+5. measure/prepay liveness and freeze economics only from final instruction
+   shapes; and
+6. run adversarial, proof, SBF, artifact, independent-build, and release gates.
 
-The sibling files under `verus/kernel`, `verus/accumulator`, and `verus/batch`
-are **MODEL** shadow specifications only. No Verus binary is installed and no
-proof has been run.
+Each lane must name its falsifier before editing. Run the narrowest test capable
+of making the claim red. Never edit a vector or relax a refusal merely to get a
+green gate.
 
-### 4.2 Composition, layouts, and client
+## Operational boundary
 
-- **IMPLEMENTED:** `research/vertical-model` joins the three semantic crates in a
-  deterministic host-only lifecycle: create, split, materialize/dematerialize,
-  clear/verify/fill, observe/TWAP, resolve/refuse, merge, and redeem. It keeps
-  principal, fee revenue, and prepaid liveness distinct. A cumulative
-  per-candidate/per-order settlement
-  ledger prevents aggregate overfill and makes candidate replay idempotent. The
-  ledger binds a typed Market/book/Epoch/policy/order-set domain, full candidate,
-  paired canonical buy/sell order identities, side, owner, and outcome; the
-  accepted settlement path moves exact clearing-price cash consideration
-  opposite the claim leg and consumes both fill allowances. The legacy claim-
-  only path and unbound books refuse. All public model mutations use
-  clone/apply/conservation/commit staging, so a failed final invariant leaves
-  claims, cash, ledgers, trace, and accounting unchanged. Protected accounting
-  mutators also use copy/validate/commit staging;
-  resolution also requires a frozen three-bucket maturity horizon and explicit
-  observation seal. Seven tests and a byte-stable golden trace pass.
-- **IMPLEMENTED:** `programs/solana-layout` is a standalone dependency-free
-  `no_std` codec prototype. It has strict fixed layouts for Realm, Profile,
-  Market, Hoard, Position, Feed, and a 16-record OrderPage; domain-separated
-  SHA-256 identities; stored bumps; canonical padding; and fixed unsigned intent
-  bytes. Nine codec/adversarial tests, strict Clippy, and rustdoc pass. This is
-  not an entrypoint, CPI adapter, RPC client, or deployable ELF.
-- **IMPLEMENTED:** `programs/solana-reference` is a `no_std`, safe,
-  allocator-free offline transition adapter over the layout and kernel crates.
-  It validates hostile metadata supplied to the model, exact replay sequence,
-  account links, initial emptiness, split, materialize/dematerialize, and account
-  encoding. `Resolve` and `RedeemInternal` unconditionally return
-  `ResolutionEvidenceUnavailable`; neither a signer nor forged coherent resolved
-  bytes can bypass the missing evidence plane. It requires exact single-position
-  closure `internal + external == aggregate supply` before and after each
-  transition; multi-position execution refuses. Ten tests, strict Clippy,
-  rustdoc, and formatting pass. Its external balance account is an explicit
-  model placeholder. There is no resolver signer, and both `Resolve` and
-  `RedeemInternal` refuse. A future resolution path must bind a mature, sealed
-  `WindowResult`, authenticated feed/source, generation, immutable terms, and
-  terms-to-payout mapping before those refusals can be relaxed. It has no Solana SDK,
-  `AccountInfo`, PDA derivation, SBF
-  entrypoint, CPI, token program, RPC, signing, or deployment behavior.
-- **IMPLEMENTED:** `apps/static-client` is plain HTML/CSS/JavaScript with no
-  runtime dependency, wallet, RPC, signer, submit path, analytics, or active
-  chain capability. It renders local terms and constructs only an inspectable
-  JSON intent. Smoke and syntax checks pass. No in-browser visual, responsive,
-  keyboard, screen-reader, or CSP-header QA has been performed.
-- **MODEL:** `rocq/ClutchKernel.v` defines a Rust-independent pure transition
-  model and names five properties. Those properties are definitions of `Prop`,
-  not proved theorems. Rocq/Coq is unavailable on the current host.
-
-### 4.3 Laboratories
-
-- **MODEL:** `research/economics` contains 28 passing standard-library property
-  tests over solvency, protected pools, liveness booking, fee carry/allocation,
-  shared-feed capitalization, failure incentives, and price collapse. The
-  current run explores 409 solvency states and 1,338 transitions and rejects 91
-  forbidden pool debits. Parameters, including `kappa = 1/250`, are hypotheses.
-- **MODEL:** `benchmarks` contains 193 (2026-08-19: now 261, incl. the landed-ABI arm) deterministic synthetic wire/account/CPI/
-  rent/accumulator/batch scenarios and 12 passing tests. These are analytical
-  layout hypotheses and pinned external constants, not SBF compute measurements.
-- **IMPLEMENTED:** the tiny E0 toolchain probe builds identical source bytes on
-  host Rust 1.89.0 and Anza SBF 4.0.0, with reproducible SBF `rlib` output and a
-  prohibited-source scan. It emits no program ELF and runs no program-test.
-- **MODEL:** `research/collateral-profiles` freezes a 266-byte generic Realm
-  collateral-policy encoding, domain-separated identity, separate collateral/
-  fee/native-SOL-liveness currencies, legacy SPL Token support, and a
-  conservative Token-2022 extension matrix. Nineteen adversarial tests pass.
-  Only account-level `ImmutableOwner` is admitted; every mint extension refuses.
-  DREGG uses the generic dogfood constructor. The current six-decimal/supply
-  example is synthetic: token program, decimals, authorities, extensions, and
-  supply are unauthenticated, and no DREGG Realm is frozen.
-- **IMPLEMENTED:** every current first-party Cargo manifest and the static-client
-  package manifest declares `AGPL-3.0-or-later`; the root README uses
-  “verification-target,” not “verified,” and nested Cargo `target/` directories
-  are ignored. This is a local metadata consistency result, not a completed
-  dependency, copyright, notice, or public-release audit.
-
-### 4.4 Adversarial disposition
-
-[`docs/implementation/ADVERSARIAL_REVIEW_V0.md`](docs/implementation/ADVERSARIAL_REVIEW_V0.md)
-is the current counterexample inventory. Its governing disposition is **STOP for
-integration, release, formal-verification, SVM, and chain-readiness claims**.
-The review found and drove repairs for ineligible batch fills, forged canonical
-allocation, cumulative settlement overfill, pre-maturity resolution, unaccounted
-materialization, license/headline drift, and nested target hygiene. Subsequent
-repair also changed the Solana reference adapter to refuse resolution and
-redemption unconditionally. The final review reproduced every historical P0 as
-closed in the deliberately bounded host subsets. This is the stopping point for
-model transfer, not an integration PASS: P1/P2 joins below remain STOPs.
-
-### 2026-08-19 addendum: the SBF program exists
-
-This handoff predates `programs/clutch-sbf`: a deployable SBF program whose
-instruction set (Split, Merge, Materialize, Dematerialize, CreateMarket,
-FeedAdvance, evidence-gated Resolve, RedeemInternal, PlaceOrder, CancelOrder)
-executes byte-exactly against the offline reference adapter on a real local
-bank, with a recorded lifecycle walk, Token-2022 CPI scenarios, and CU
-measurements. See `docs/implementation/SBF_BRINGUP.md`,
-`docs/implementation/LIFECYCLE_WALK.md`, and the gap ledger in
-`docs/implementation/DRIFT_REVIEW_2026-08-19B.md` for what remains before any
-deployment claim. Nothing here alters section 7's gates.
-
-## 5. Verification commands
-
-Run from the repository root. Keep Cargo offline and use independent manifests;
-there is intentionally no authoritative root workspace yet.
-
-```sh
-for manifest in \
-  crates/clutch-kernel/Cargo.toml \
-  crates/clutch-accumulator/Cargo.toml \
-  crates/clutch-batch/Cargo.toml \
-  programs/solana-layout/Cargo.toml \
-  programs/solana-reference/Cargo.toml \
-  research/vertical-model/Cargo.toml
-do
-  cargo test --manifest-path "$manifest" --offline --locked
-  cargo clippy --manifest-path "$manifest" --offline --locked \
-    --all-targets -- -D warnings
-done
-
-cargo doc --manifest-path crates/clutch-kernel/Cargo.toml --offline --locked --no-deps
-cargo doc --manifest-path crates/clutch-accumulator/Cargo.toml --offline --locked --no-deps
-cargo doc --manifest-path crates/clutch-batch/Cargo.toml --offline --locked --no-deps
-cargo doc --manifest-path programs/solana-layout/Cargo.toml --offline --locked --no-deps
-cargo doc --manifest-path programs/solana-reference/Cargo.toml --offline --locked --no-deps
-
-cargo run --quiet --manifest-path research/vertical-model/Cargo.toml \
-  --offline --locked | cmp - research/vertical-model/golden/basic.trace
-python3 -m unittest discover -s research/economics -p 'test_*.py' -v
-python3 -m unittest discover -s research/collateral-profiles -p 'test_*.py' -v
-python3 research/collateral-profiles/run_lab.py
-python3 benchmarks/cost_lab.py check
-(cd benchmarks/golden && shasum -a 256 -c checksums.sha256)
-(cd apps/static-client && npm test && npm run check)
-CARGO_NET_OFFLINE=true toolchain/scripts/run_lab.sh
-```
-
-Expected unavailable gates:
-
-```sh
-toolchain/scripts/run_verus.sh  # BLOCKED until a reviewed exact Verus pin exists
-rocq/check.sh                   # exits 2 while rocq/coqc is unavailable
-```
-
-The commands above passed on 2026-08-18 except for those two explicitly
-unavailable proof tools. They do not exercise an SBF entrypoint, program-test,
-Token-2022, RPC, signing, or a public network.
-
-## 6. Current byte identities
-
-These digests are reproducibility aids for the reviewed local baseline, not
-release attestations:
-
-- static canonical terms:
-  `a21f6cbb1ab3b06afc7c8625f3388835843edb17c48173e8fb57df8b7e0dd8e8`
-  (superseded 2026-08-18: terms fixture now matches kernel refuse-on-remainder
-  semantics, digest `62b06b2107636686648507e4f9ecd8a4d90733dcebf81177d4a63b25bc698d02`;
-  MANIFEST.baseline.json is the living digest record);
-- E0 probe source:
-  `10b2087683d3c2cb423768eb9c612c00ea929b171835c15d3d16792d6b8b19ac`;
-- reproducible E0 SBF `rlib`:
-  `d444c0ac118de1cb24d9fe6b509df7beafc1c0f1a8c2828b24e26b170da0ad1c`.
-- vertical-model golden trace:
-  `ab808dd308e3bdce0fa8cc2d3b9b4a14e87dbd1b41ae7143e897c53f7f3f1639`;
-- collateral-profile vectors:
-  `5bcf3a6117c4e411a5b9b339093eaf3dcd9ca1eee0bb7a2b6814a42f46639e48`.
-
-The benchmark golden checksums live in
-[`benchmarks/golden/checksums.sha256`](benchmarks/golden/checksums.sha256).
-Before publication, bind every source, lock, generated fixture, proof result,
-ELF, and static bundle to a clean immutable revision and a release manifest.
-
-## 7. Blockers and stop gates
-
-### P0: close before calling the repository handoff/release stable
-
-1. **BLOCKER - no release manifest.** A local Git baseline now supports review
-   diffs and source identity, but no remote, signed tag, release artifact, or
-   checked source/build manifest exists. (Update 2026-08-19: a private remote
-   `emberian/dragons-clutch` exists and is pushed per explicit user direction,
-   and `scripts/baseline_manifest.py` generates a checked baseline manifest; a
-   signed tag, release artifact, and publication remain user-gated.) Keep subsequent local work in coherent
-   commits. Pushing, tagging, publishing, or declaring a release requires
-   explicit user direction; do not infer it from this handoff.
-2. **BLOCKER - formal-tool gap.** Verus and Rocq are unavailable. The existing
-   Rust is tested, not formally verified; the Rocq properties are unproved. Pin
-   reviewed tools before expanding proof claims. Never vendor or install a tool
-   silently.
-3. **BLOCKER - SVM/runtime gap.** The offline reference adapter is not an
-   `AccountInfo`/PDA/token adapter and its closed single-position equality is not
-   a multi-position aggregate witness. There is no accepted native SBF
-   entrypoint, Token-2022 CPI path, program-test lifecycle, runtime atomic-
-   rollback evidence, CU/stack/heap/ELF measurement, or cross-runtime vector
-   closure.
-4. **BLOCKER - resolution and profile joins.** The reference adapter now safely
-   refuses resolution and redemption. It may not enable them until payout is
-   derived from the exact mature, sealed WindowResult and bound source/feed/
-   generation/terms. The canonical collateral-policy digest is also not joined
-   to the Realm/Profile layout and enforced by the adapter. Do not call either
-   seam implemented, non-discretionary, or policy-frozen.
-5. **BLOCKER - policy freeze.** Failure payout, ambiguity, fee/revenue policy,
-   dust/remainder, source admission, exact Realm token profiles, and portfolio
-   intent language remain proposals. Convenience code may not canonize them.
-6. **BLOCKER - Gate L0.** No public-network deployment, real-fund test,
-   solicitation, author-affiliated operation, or claim of legal availability is
-   authorized. [`docs/ENGINEERING_PLAN.md`](docs/ENGINEERING_PLAN.md) defines the
-   human/legal closure conditions.
-
-### P1: next bounded engineering packets
-
-Assign one semantic owner and nonoverlapping paths per packet.
-
-The confirmed redesign queue is:
-
-- fractional payout claims can enter quantities that are individually
-  unredeemable; choose one-hot-only, enforced redemption lots, or persistent
-  remainder ownership before admitting them;
-- the landed batch crate is a scalar call-auction falsifier, not the documented
-  coupled simplex/portfolio/virtual-complete-set relation; it strips BoundOrder
-  owner/outcome semantics, so it can report `matched=1` and charge liveness for
-  a buy/sell pair whose outcome mismatch forces settlement to refuse;
-- paired settlement is currently one-shot even when a receipt consumes less
-  than both fills, which can strand residual fill; freeze full-pair-only,
-  cumulative remaining quantity, or unique match-slice receipts;
-- persisted layouts cannot reconstruct full kernel/protocol state and lack
-  SupplyLedger, immutable payout/window policy, Epoch/final-pot/receipt closure,
-  cross-page closure, and a frozen `limit` to `limit_tick` mapping;
-- bare accumulator statistics do not themselves bind complete coverage,
-  expected range, source, generation, or Window policy;
-- the economics lab and executable kernel admit different payout sets, while the
-  vertical fee model does not debit a payer or implement the proposed
-  dispersion/carry/allocation policy;
-- cost goldens remain a separate hypothesis arm and do not match the landed
-  Position, order-page, and order-count ABI;
-- the Python collateral-policy digest and Rust Profile digest have no frozen
-  parent/subprofile relation or cross-language enforcement;
-- the static client duplicates manifest/terms data in JavaScript and has no
-  checked equality gate; meta CSP cannot promise header-only protections; and
-- Verus shadows contain vacuous placeholders, the Rocq transition obligation has
-  an output-shape defect, and no Rust/Rocq/codec/adapter refinement exists.
-
-These are not permission to solve several facts in one catch-all crate. Use the
-ownership map above and promote only with language-neutral vectors.
-
-1. **Toolchain/proof owner:** pin Verus, Rocq, solver, Rust, and Anza revisions;
-   prove the tiny common-source probe; record assumptions and source/tool
-   digests; make a proceed/redesign decision before broad proof work.
-2. **Semantic-vector owner:** freeze one versioned error taxonomy and canonical
-   vector manifest joining kernel, accumulator, batch, Rocq, Verus, and adapter
-   outputs. Do not create a root workspace until this schema and dependency
-   direction are reviewed.
-3. **SVM-adapter owner:** lower the reviewed offline reference boundary into
-   hostile `AccountInfo`/PDA validation and kernel-issued state/CPI intents. Keep
-   the layout codec and semantic crates unchanged; solve multi-position aggregate
-   closure without scanning an unbounded set, and add alias, owner, signer, PDA,
-   replay, rollback, extension, and malicious-token cases under program-test.
-4. **Resolution/profile-join owner:** freeze the typed `WindowResult` and
-   terms-to-payout derivation, bind its feed/source/generation/maturity/seal to
-   the immutable Market, and bind the canonical collateral-policy digest into
-   Realm/Profile bytes. Remove the modeled resolver discretion; do not add an
-   oracle shortcut.
-5. **Formal-shadow owner:** prove the named Rocq reachability, solvency, supply,
-   exact-redemption, protected-pool, accumulator, and batch properties. Keep the
-   Rust correspondence manual and explicit until a refinement exists.
-6. **Mechanism owner:** independently falsify failure vectors, equal-fallback
-   sabotage, fee carry/fragmentation, dust, self-cross, candidate withholding,
-   and scoring on exhaustive tiny books before freezing policies.
-7. **Release/client owner:** keep Glass inspect-only until program bytes, layouts,
-   schema, cluster, source revision, and CSP/SBOM/license evidence are bound by a
-   checked manifest. Add real browser visual/responsive/accessibility QA and
-   serve-time CSP tests. Wallet/RPC/sign/submit is a separate reviewed trust-
-   boundary project.
-
-## 8. Regulatory and human-only gates
-
-Engineering may prepare factual architecture and evidence. It may not file,
-contact regulators, retain counsel, choose the user's identity/affiliation,
-deploy, announce an official venue, or decide the operator/legal-person facts.
-Those are human decisions.
-
-The sibling Dark Egg Research packet records two joint CFTC/SEC comment deadlines
-on 2026-08-24 and one CFTC IAC written-statement deadline on 2026-08-27. Those
-drafts are unfiled. A deadline is not authorization. Dragon's Clutch must keep
-its exact product/entity/users/control/collateral/source/fee/affiliate/client/
-upgrade/deployment facts synchronized with any later reviewed filing.
-
-## 9. Recommended first Claude session
-
-Do one evidence-and-boundary closure session before adding features:
-
-1. read `AGENTS.md`, this file, `PROJECT.md`, `docs/ARCHITECTURE.md`,
-   `docs/EVIDENCE_MATRIX.md`,
-   `docs/implementation/ADVERSARIAL_REVIEW_V0.md`, and every other file under
-   `docs/implementation/`;
-2. run the offline verification commands above and record exact failures without
-   weakening refusals;
-3. audit all first-party manifests and top-level status prose for license and
-   “verified/optimal/deployed” drift;
-4. inspect the latest active-lane outputs against semantic ownership and reject
-   duplicated transition logic;
-5. propose a minimal immutable baseline/release-evidence manifest, but do not
-   commit, push, install tools, use RPC, or deploy without explicit authorization;
-6. return a short proceed/redesign/refuse memo selecting exactly one P1 packet.
-
-The recommended selection is the bound executable-pairing refinement: make
-clearing prove that owner/outcome bindings admit a complete settlement pairing,
-then freeze residual-pair semantics. Do not expand toward SVM until that host
-relation and its refusal vectors are coherent.
-
-The best next move is not maximum code volume. It is making the current
-prototype surface reproducible, provenance-bound, and impossible to overclaim.
-
-## 10. Authority boundary
-
-Default work is offline. Never read keys, wallets, browser sessions, or private
-configuration. Never sign, submit, deploy, create a market, transfer or buy a
-token, fund an account, mutate a remote host, contact a regulator, publish a
-filing, push a branch, or describe a URL/program as official without explicit
-current authorization naming the act. Public RPC reads also require an explicit
-bounded task. Preserve user-owned changes and do not convert this handoff into
-authority it does not grant.
+Run `git status --short` before choosing files: parallel lanes may share this
+worktree. Add and commit only explicitly owned paths; ordinary local commits
+need no extra permission. Do not push, tag, publish, deploy, contact a public
+RPC, sign with a real wallet, fund anything, create a public market, or contact
+a regulator without explicit current authorization naming that act.

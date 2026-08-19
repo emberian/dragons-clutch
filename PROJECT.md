@@ -2,11 +2,19 @@
 
 ## 1. Purpose
 
-Dragon's Clutch compiles a bounded objective state space into a conserved basis of
-onchain payoff assets. A participant deposits a Realm's collateral and receives
-one claim for each cell in an exhaustive disjoint state partition. The complete
-set can always be recombined into its collateral before resolution. After a frozen
-observation program identifies the realized cell, that Egg redeems.
+Dragon's Clutch compiles a bounded objective state space into a conserved basis
+of onchain payoff assets. A participant deposits a Realm's collateral and
+receives one claim for every member of a frozen partition-of-unity basis. The
+complete set can always be recombined into its collateral before resolution.
+After a frozen observation program derives the realized statistic, consensus
+evaluates the basis and each Egg redeems according to its exact integer weight.
+
+Degree zero is the categorical case: the source domain is divided into an
+exhaustive, disjoint, ordered partition and exactly one Egg receives full
+weight. Degrees one through three are native open-clamped B-spline semantics:
+nearby Eggs overlap, remain nonnegative, and their weights sum exactly to one.
+They are not sampled categorical claims and must not be silently lowered into
+one-hot bins.
 
 The protocol is not a leveraged exchange. It creates no debt, margin call,
 liquidation order, insurance deficit, or socialized loss. Its central promise is
@@ -15,10 +23,12 @@ stronger and narrower:
 > For every reachable protocol state, the market-local Hoard covers the maximum
 > payout allowed by the market's immutable terms.
 
-Portfolios of Eggs form arbitrary nonnegative bounded payoffs over the partition.
-One terminal-price distribution can therefore express crash insurance, digitals,
-ranges, capped directional exposure, and tail positions without creating a new
-vault for each human-language question.
+Exact coefficient vectors over the selected native basis form bounded payoff
+algebra. They can express crash insurance, digitals, ranges, triangles, capped
+directional exposure, and tails without creating a new vault for each
+human-language question. A target outside the finite spline span requires an
+explicit approximation certificate. Sampling the target over degree-zero Eggs
+is a compatibility lowering, not the definition of the native shaped claim.
 
 V1 targets token-native state partitions derived from an onchain fact or a
 deterministic function of authenticated onchain price history: terminal bands,
@@ -33,9 +43,9 @@ lifecycle transitions, pool state, and similarly bounded predicates.
 | Eggcrate | Pure deterministic verified Rust transition kernel |
 | Realm | Immutable collateral profile and protocol-version namespace |
 | Hoard | Market-local collateral vault reserved exclusively for claimants |
-| Egg | One categorical outcome claim |
+| Egg | One native basis claim; categorical at degree zero, smooth at degrees one through three |
 | Clutch | One complete exhaustive set containing one unit of every Egg |
-| Hatch | Immutable resolution and payout-vector transition |
+| Hatch | Immutable evidence-derived resolution and payout-vector transition |
 | Feed | Shared authenticated observation series |
 | Window | Immutable derived result over a frozen feed interval and feature set |
 | Epoch | Reference-venue order collection and deterministic batch clearing unit |
@@ -79,16 +89,18 @@ V1 consists of seven separable layers:
 1. **Eggcrate kernel.** Collateral-generic state transitions, integer arithmetic,
    codecs, and invariants; no Solana SDK, allocation, unsafe code, oracle SDK, or
    CPI.
-2. **Partition compiler.** A small audited language turns source, window,
-   statistic, and exhaustive boundaries into a canonical Market Template and
-   basis of Eggs.
+2. **Basis and coefficient compilers.** A small audited language turns source,
+   window, statistic, domain, degree, knots, denominator, edge policy, and
+   rounding rule into a canonical Market Template and native basis of Eggs.
+   A separate certified compiler constructs exact or explicitly approximate
+   coefficient artifacts over that basis.
 3. **Solana adapter.** Hostile-byte parsing, signer/owner/PDA checks, clock and
    source authentication, persistence, and narrow Token-2022 CPIs.
 4. **Shared accumulator.** Frozen source adapters, bounded observation pages,
    associative summaries, repair windows, and reusable Window results.
-5. **Simplex auction.** Internal balances and dense public order pages lower into
-   one specialized, versioned batch relation: a coupled outcome price vector
-   summing to one, complete-set conversion, bounded atomic payoff intents,
+5. **Simplex auction.** Internal balances and dense public order pages enter one
+   specialized, versioned batch relation: a coupled basis-price vector summing
+   to one, complete-set conversion, bounded atomic coefficient intents,
    permissionless candidate competition, exact witness verification, and lazy
    settlement. It is not a generic matching VM and makes no V1 privacy claim.
 6. **Venue adapters.** Materialized Eggs can trade on Manifest, AMMs, RFQs, and
@@ -104,12 +116,12 @@ charter.
 
 ## 5. Hybrid claim representation
 
-Each outcome has a canonical Token-2022 mint, but native users need not mint all
-of them. A program-owned Position contains fixed internal balances. A complete
-internal split performs one collateral transfer and credits every outcome.
-Materializing one outcome debits the internal balance and mints that Token-2022
-asset. Dematerialization burns the external asset and restores the internal
-balance.
+Each native basis member has a canonical Token-2022 mint, but native users need
+not mint all of them. A program-owned Position contains fixed internal
+balances. A complete internal split reclassifies pooled collateral and credits
+every basis member. Materializing one Egg debits the internal balance and mints
+that Token-2022 asset. Dematerialization burns the external asset and restores
+the internal balance.
 
 For outcome `i`:
 
@@ -146,10 +158,17 @@ dispersion, or arithmetic refusal follows a frozen failure rule; it never grants
 a resolver discretion. The failure payout is itself an adversarial surface and
 remains an explicit design gate.
 
-Normal resolution selects one cell of the Market's exhaustive partition. Prices
-of the basis Eggs live on a simplex, and bounded payoff shapes are exact portfolio
-vectors over them. Fractional payout vectors are reserved for explicitly admitted
-ambiguity policies, not the ordinary product model.
+Degree-zero resolution selects one cell of the Market's exhaustive categorical
+partition. Degree-one through degree-three resolution evaluates the frozen
+open-clamped B-spline basis at the admitted statistic and normally produces a
+fractional payout vector. In both cases the integer weights are nonnegative and
+sum to the frozen denominator, so prices of a complete basis live on a simplex.
+
+The active rounding rule is deterministic largest remainder with lowest-index
+ties. Interval evidence may be admitted only by a separately specified
+conservative rule; an adapter may never invent a midpoint. Exact coefficient
+algebra is native. Degree-zero sampling remains an explicitly disclosed
+compatibility path with an error certificate where needed.
 
 ## 7. Sustainability
 
@@ -184,8 +203,8 @@ submit paid observation, repair, clear, finalize, or cleanup work.
 - A continuous dark order book or V1 dependency on FHE/MPC/TEE infrastructure.
 - An admin-operated matching, oracle, indexing, or settlement service.
 - A privileged hosted API required by the client.
-- Claims that source verification proves the SBF compiler, Solana runtime, or an
-  external Token-2022 program.
+- Claims that source verification, a mathematical model, or host tests prove
+  the SBF compiler, Solana runtime, or an external Token-2022 program.
 - Entanglement with leanuweave, minidregg, breadstuffs, Oracle Pit, or historical
   DREGG prototypes. Those may inspire humans; they are not dependencies.
 
@@ -196,13 +215,18 @@ walk proving that the same frozen terms can:
 
 1. initialize a realm and market;
 2. prepay all mandatory work;
-3. compile and prove one exhaustive state partition;
+3. compile one exhaustive degree-zero partition and one admitted native smooth
+   basis, with exact domain, knot, evaluator, and rounding identities;
 4. split internally;
 5. materialize and dematerialize one Egg;
 6. accept authenticated observations into a shared feed;
 7. derive and seal one Window;
-8. clear one coupled simplex batch containing single-Egg and portfolio intents;
-9. resolve and redeem several payoff shapes;
+8. clear one coupled simplex batch containing single-Egg and atomic
+   coefficient-vector intents;
+9. resolve and redeem categorical and native smooth payoff shapes without
+   compatibility lowering;
 10. close every accounting identity;
-11. reproduce the result in the Rocq model, Verus-verified host kernel, and SBF
-    integration harness.
+11. reproduce each claimed layer in its honestly named evidence plane: checked
+    model theorems where they exist, host differentials and mutation campaigns,
+    and a signed committed SBF integration walk. No one plane substitutes for
+    another.

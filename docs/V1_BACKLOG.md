@@ -10,8 +10,12 @@ value, authority, or reachability dependency is open.
 
 ## 0. Preserve the real foundation
 
-- [x] Canonical product brief separates categorical primitives, portfolios,
-  collateral Realms, protected Hoard principal, and an untrusted static client.
+- [x] Canonical product brief separates native basis claims, exact coefficient
+  algebra, collateral Realms, protected Hoard principal, and an untrusted
+  static client.
+- [x] The product brief distinguishes native degree-zero through degree-three
+  basis semantics, exact coefficient algebra, and categorical compatibility
+  lowering.
 - [x] Host semantic crates exist for claim transitions, source-neutral
   accumulation, and the coupled batch relation.
 - [x] Fixed Solana layouts, hostile-byte tests, an SBF processor, real local-bank
@@ -32,17 +36,23 @@ This is the immediate coordination gate while parallel lanes are active.
 - [x] Commit the source-admission kernel, settlement preflight, signed runner,
   narrow transfer refinement, deterministic invariant campaign, and artifact-
   audit tool as separate semantic-owner changes.
-- [ ] Review and commit the pooled-custody repair and claim-compiler work; treat
-  generated audit evidence as evidence for the exact final ELF only, never as
-  durable source input.
+- [x] Review and commit the pooled-custody repair, native B-spline evaluator,
+  reference seam, compiler research, artifact transport, funded reservation,
+  resolution-replay split, and occupation accumulator as separately owned
+  changes.
 - [ ] Resolve every staged/unstaged conflict; format and run focused checks in
   each owning crate.
-- [ ] Regenerate the SBF harness oracle for the new custody semantics. A stale
-  differential whose two sides still encode the old economics is a failure.
+- [x] Regenerate the SBF harness/reference path for pooled custody, global
+  resolution replay, and terminal cash withdrawal. A stale differential whose
+  two sides encode old economics remains a failure.
 - [ ] Run the loopback bring-up and isolated real Token-2022 bank suite on the
   integrated tree; archive exact output and ELF digest.
-- [ ] Run the signed committed harness and preserve its honest
-  `genesis_assisted`/stranded-value labels until later gates close.
+- [x] Run a 22-step signed committed harness through global resolution,
+  internal/bearer exits, and both owners' terminal cash withdrawal while
+  preserving `genesis_assisted` and `NOT END TO END` labels.
+- [x] Commit a clean refreshed 22-step script footer, joined ELF digest,
+  transaction/account-comparison counts, and falsifiability record after all
+  current SBF integration lanes settle.
 - [ ] Run the final-ELF dependency/symbol audit on the exact ELF produced by the
   gate.
 - [ ] Emit and commit a clean schema-v2 `MANIFEST.baseline.json`, then prove it
@@ -56,69 +66,100 @@ only.
 
 Dependency: gate 1.
 
-- [ ] Freeze the market-wide equation
+- [x] Freeze the market-wide equation
   `custody = locked + free_cash + reserved_cash + unowned_surplus` and exact
   local deltas in one normative design/test owner. Reserved Eggs remain in the
   claim-supply identity, not this collateral equation.
-- [ ] Make `Endow` an authenticated exact Token-2022 actor-to-Hoard deposit.
-- [ ] Make Split, Merge, and internal Redemption token-neutral accounting
+- [x] Make `Endow` an authenticated exact Token-2022 actor-to-Hoard deposit.
+- [x] Make Split, Merge, and internal Redemption token-neutral accounting
   reclassifications.
-- [ ] Keep `collateral_cap` a bound on locked claim backing, not on unrelated
+- [x] Keep `collateral_cap` a bound on locked claim backing, not on unrelated
   deposited free cash.
-- [ ] Define reserved cash/claims now, even if order settlement lands later; no
+- [x] Define reserved cash/claims now, even if order settlement lands later; no
   implicit or unenumerated ownership term.
-- [ ] Implement `Withdraw` for unreserved free cash with exact Hoard-to-owner
+- [x] Implement `WithdrawCash` for unreserved free cash with exact Hoard-to-owner
   CPI, profile/authority admission, replay, and late-failure rollback.
-- [ ] Treat unsolicited Hoard inflow as unowned surplus. Prove a one-atom
+- [x] Treat unsolicited Hoard inflow as unowned surplus. Show in the focused
+  real-bank campaign that a one-atom
   donation cannot block Merge, Withdraw, or either redemption mode and cannot be
   swept as fees/treasury.
-- [ ] Exercise at least two positions and show their operations cannot spend one
+- [x] Exercise at least two positions and show their operations cannot spend one
   another's free or reserved cash.
 
-Acceptance: focused host tests, real Token-2022 bank tests, and committed-state
-reloads close every term and kill deliberate debit/credit/authority mutations.
+Accepted at the focused boundary: host tests, real Token-2022 bank tests, and
+committed-state reloads exercise every listed transition. The clean joined
+baseline and coupled-settlement accounting remain gates 1 and 6; they do not
+reopen the direct cash-exit transition.
 
 ## 3. Establish one outcome-token truth and both claimant exits
 
 Dependency: gate 2 for the payout path.
 
-- [ ] Decide and document the ordinary holder-burn policy: either the real token
-  program refuses out-of-band burns, or a permissionless repair/donation
-  transition safely recognizes reduced liability.
-- [ ] Remove or redefine `ExternalAccount`/`SupplyLedger.external_supply` so no
-  stale shadow can globally brick an outcome after a valid token-program action.
-- [ ] Keep actual mint supply and actual token-account possession authoritative
+- [x] Decide and document the ordinary holder-burn policy: actual Token-2022
+  mint supply is authoritative and an ordinary holder burn is recognized as
+  irrevocable claim forfeiture without moving Hoard collateral.
+- [x] Remove production `ExternalAccount` authority and redefine the remaining
+  observed external-supply field as a cache that current mint supply may only
+  reduce.
+- [x] Keep actual mint supply and actual token-account possession authoritative
   at the composability boundary.
-- [ ] Implement possession-authorized `RedeemExternal` for a holder with no
+- [x] Implement possession-authorized `RedeemExternal` for a holder with no
   originating Position: burn exactly the winning Egg quantity, pay exact
   collateral, reduce locked backing exactly once, and replay safely.
-- [ ] Preserve direct transferability before resolution; a recipient wallet must
-  be able to redeem after resolution.
-- [ ] Define losing external-claim cleanup without granting a collateral or
+- [x] Preserve direct transferability before resolution; a recipient wallet can
+  redeem after resolution.
+- [x] Define losing external-claim cleanup as exact zero-payout bearer
+  redemption/burn without granting a collateral or
   surplus claim.
 
-Acceptance: a real-bank test transfers a winning Egg to a fresh wallet, resolves,
-redeems externally, and closes mint supply, token balance, liability, payout,
-and Hoard accounting. A separate direct-burn campaign either refuses at the
-token program or follows the specified live repair path.
+Accepted for degree-zero live semantics: a real-bank and signed-walk campaign
+transfer a winning Egg to a fresh wallet, resolve, redeem externally, and close
+mint supply, token balance, liability, payout, and Hoard accounting. A separate
+real-bank campaign recognizes a direct holder burn before another transition.
+Native fractional payout lots remain gate 8.
 
 ## 4. Make every required account permissionlessly constructible
 
 Dependency: the state equations and authority meanings in gates 2-3.
 
-- [ ] Make `CreateMarket` create its eight canonical state PDAs from absent
+- [x] Make `CreateMarket` create its canonical market-state PDAs from absent
   accounts using authenticated payer funds, System-program CPI, exact rent,
   `invoke_signed`, and atomic rollback.
-- [ ] Add a permissionless initializer for each later user's Position/replay
+- [x] Add a permissionless first-Endow initializer for each later user's
+  Position/replay
   state (and any remaining external-account state if gate 3 retains it).
-- [ ] Create and bind Realm/Profile/source-spec/feed state without fixture-owned
-  program bytes.
+- [x] From a bank with no injected Clutch account, seal policy/grid/Terms,
+  create Realm/Profile, and create the full initial market state/token plane.
+  Exercise degree-zero v2 and degree-one v3 Resolution widths, over-rent
+  prefunds, sub-rent recovery, and late-target rollback in real SBF.
+- [x] Add typed resumable Begin/Write/Seal transport for final policy, grid,
+  and Terms artifacts, including exact-size validation, restart, abort/reap,
+  idempotent reseal, and rent return.
+- [x] Make artifact stage/final creation pre-fund safe through exact rent-
+  shortfall transfer and PDA-signed allocate/assign; cover one-lamport,
+  over-rent donation, malformed target, and late-failure rollback in real SBF.
+- [ ] Create and bind source-spec/feed/archive state without fixture-owned
+  program bytes. The typed artifact path does not authenticate a source and
+  currently admits no source/archive artifact kind.
+- [ ] Make Terms sealing or market creation prove that its referenced canonical
+  PriceGrid PDA exists; successful offchain construction is not a consensus
+  join.
 - [ ] Create Epoch, pages, CandidateFeed, ClearWork, candidate, pot, receipt,
   and resolution state through bounded/resumable instructions.
+- [x] For the narrow two-order/two-outcome, equal-limit, zero-fee direct subset,
+  pre-fund-safely create an exact CandidateFeed and SUBMITTED Candidate from a
+  frozen page and ACTIVE reservations. This leaves Epoch FROZEN and score/
+  digest zero and unverified; it does not create the receipt or reach settlement.
 - [ ] For ClearWork growth beyond one-instruction limits, make every intermediate
   allocation state tagged, rent-correct, resumable, and economically inert.
 - [ ] Add duplicate, wrong-bump, pre-funded, close/reopen, partial-create, rent,
   and late-CPI rollback regressions.
+- [x] Exercise pre-fund-safe construction for existing Market, Reservation,
+  and second-owner Position/Replay families in six real-bank cases, including
+  over-rent donation retention, hostile owner/data/executable refusal, duplicate
+  refusal, and late Token-2022 byte-exact rollback.
+- [ ] Require every future account creator to inherit the same pre-fund-safe
+  allocate/assign pattern and real-SBF regression before promotion.
 
 Acceptance: a blank local bank contains only system/sysvar/token programs,
 the Clutch ELF, funded ephemeral signers, and a chosen synthetic collateral mint.
@@ -141,9 +182,17 @@ Dependency: source/feed account construction in gate 4.
   their commitments in-program.
 - [ ] Replace caller-authored `FeedAdvance` bytes with authenticated source
   admission against the canonical Clock sysvar.
-- [ ] Replace the independent Resolve buffer with the exact sealed archive
-  commitment accepted by the feed.
-- [ ] Separate market-global resolution replay from owner redemption replay.
+- [x] Make Resolve derive and authenticate the exact sealed SourceArchive PDA
+  and require the legacy projection to equal the archive byte-for-byte. The
+  projection remains transport, not value authority.
+- [ ] Make the live feed admission route construct that exact archive; current
+  focused bank evidence injects mock SourceSpec/archive bytes at genesis.
+- [x] Implement and host-test provider-neutral 292-byte SourceSpec and
+  2,560-byte single-window archive codecs/semantics with exact deployment,
+  parser, grid, window, predecessor, commitment, maturity, key, and owner
+  binding under a deterministic mock adapter.
+- [x] Separate market-global resolution replay from owner redemption replay;
+  exact retry is idempotent and conflicting retry refuses.
 - [ ] Test wrong key/owner/program/deployment/parser/generation/grid/sequence,
   stale/future time, confidence overflow, archive substitution, gaps, ambiguous
   boundary intervals, upgrades, and rollback.
@@ -159,10 +208,14 @@ Dependencies: gates 2-5.
 
 ### 6.1 Order reservation and epoch truth
 
-- [ ] Placement atomically moves exact cash/claim quantity into a reservation
+- [x] Placement atomically moves exact cash/claim quantity into a reservation
   owned by `(market, epoch, owner, generation, order)`.
-- [ ] Cancellation/expiry releases only unused reservation and cannot race a
-  frozen epoch.
+- [x] Prevent a third party from blocking a predictable reservation PDA by
+  pre-funding it before placement; the gate-4 real-bank anti-squatting campaign
+  covers Reservation creation and rollback.
+- [x] Cancellation of an open order releases only the same reservation's unused
+  assets exactly once and refuses substitution/replay.
+- [ ] Add permissionless expiry/lapse and prove it cannot race a frozen epoch.
 - [ ] Freeze one complete page set, populated count, live count after
   tombstones, price grid, full policy preimage/digest, and full-width identities.
 - [ ] Prove owner-tag interning/bijection or replace it with an authenticated
@@ -189,9 +242,17 @@ Dependencies: gates 2-5.
 - [ ] Transfer exact claims and consideration, release only unused reservations,
   and close final pot/receipt/accounting identities in every consumption order.
 - [ ] Prove rollback on late state/CPI errors and idempotence under replay.
+- [x] Execute the narrow direct consumption seam in real SBF: one pre-frozen
+  same-page, full-fill, direct single-Egg, zero-fee receipt joins a selected
+  candidate, canonical CandidateFeed, and two ACTIVE reservations; exact
+  consideration/claim ownership moves once and replay/substitution refuses.
+- [ ] Complete and score candidate claims, close the submission window, select
+  the best valid submitted candidate, freeze the complete reservation and
+  entitlement sets, and construct the pot/receipt authority that makes the
+  narrow consumption seam reachable without fixtures.
 
 Acceptance: a committed multi-owner local-bank epoch containing single-Egg and
-portfolio intents reserves, freezes, verifies, selects, resolves, lazily settles
+coefficient-vector intents reserves, freezes, verifies, selects, resolves, lazily settles
 in several permutations, refunds, and closes with no stranded owned asset.
 
 ## 7. Prepay liveness and freeze economics
@@ -204,6 +265,10 @@ Dependencies: exact instruction/account/resource shapes from gates 4-6.
   and maximum repetitions on final SBF paths.
 - [ ] Capitalize worst-case unfinished work at admission under zero future
   volume; later fees are not liveness backing.
+- [x] Implement the safe fixed-memory pure admission/accounting kernel for
+  component-wise market/order reserves, including zero-fee orders, replay-safe
+  work/storage terminal identities, atomic source/archive share joins, refund/
+  neutral-failure ownership, anti-spam bounds, and persistent fee carry.
 - [ ] Keep principal, owner cash, reservations, rent, liveness endowment, fees,
   and treasury in nonaliasing ownership phases.
 - [ ] Decide failure payout and repair incentives under sabotage.
@@ -215,27 +280,70 @@ Dependencies: exact instruction/account/resource shapes from gates 4-6.
 Acceptance: every admitted market can finish without future traders, token-price
 appreciation, treasury discretion, or access to Hoard principal.
 
-## 8. Generality without new liability primitives
+## 8. Complete native B-spline semantics
 
-This can proceed in parallel with gates 4-7 after primitive accounting is fixed.
+This lane can proceed in parallel with gates 4-7, but live shaped settlement
+depends on the source, layout, and claimant-exit surfaces those gates own.
 
-- [ ] Freeze categorical primitive Eggs as the only ordinary external claim
-  liability.
-- [ ] Specify a compiler from categorical, range, triangle, capped-linear, and
-  finite Gaussian-like payout requests into exact nonnegative integer portfolios
-  over primitive Eggs.
-- [ ] Emit approximation, rounding, support, maximum-payout, and collateral
-  certificates with canonical bytes.
-- [ ] Verify the certificate in bounded Rust and reproduce its mathematics in
-  the independent model.
-- [ ] Keep unsupported degree, negative payoff, nonexhaustive partition,
-  overflow, and approximation-budget cases refusing.
-- [ ] Reserve native fractional payout vectors for an explicitly frozen
-  ambiguity/failure policy; do not make them a dependency of normal trading.
+- [x] Freeze the semantic distinction among native basis evaluation, exact
+  coefficient algebra, and categorical compatibility lowering.
+- [x] Implement the exact safe-Rust, `no_std`, allocation-free, float-free
+  degree-zero through degree-three open-clamped basis evaluator with canonical
+  largest-remainder quantization and an independent exact-rational oracle.
+- [x] Integrate a conservative host reference seam: degree zero selects a cell;
+  degree one may accept equal quantized interval endpoints; degree two/three
+  require point evidence; unsupported TWAP and non-point cases refuse.
+- [x] Check a separate Lean model of the clamped degree-one through degree-three
+  constructions, quantized admissibility, local support, solvency, and
+  complete-set behavior without `sorry`, `admit`, or project axioms.
+- [x] Bind eight Lean-computed fixtures to digests of the production evaluator
+  and driver, require byte-for-byte agreement, and make five mutations of the
+  actual Rust source compile/execute/go red. Classify this as finite executable
+  refinement evidence, not a universal proof or Verus result.
+- [x] Build an exact-rational research compiler that distinguishes exact-in-span
+  ranges/tails/tents/capped spreads from certified approximations, including a
+  Gaussian proximity construction and categorical-lowering comparison.
+- [x] Model point, interval, TWAP, and occupation semantics separately; record
+  the counterexample showing equal endpoints do not justify an interior choice.
+- [x] Implement a pure fixed-width native occupation accumulator with explicit
+  gaps, associative combine, exact-only finalization, and separately named
+  largest-remainder finalization.
+- [x] Specify and host-test an isolated version-three Resolution codec that is
+  the sole persisted owner of a derived point/vector and refuses version two.
+- [x] Model exact fractional exits without hidden truncation: resolved common
+  lots use `lcm_i D/gcd(D,w_i)`, while persistent numerator credits conserve
+  one market aggregate and expose the irreducible terminal-residue trilemma.
+- [x] Select v2 Resolution for degree zero and v3 for degree one through three;
+  integrate smooth point resolution, sole-vector persistence, ephemeral
+  reconstruction, exact retry/conflict, exact-lot internal redemption,
+  rollback, CU/frame measurement, and hostile account tests in real SBF.
+- [x] Integrate native v3 `RedeemExternal` with exact burn/payout/supply deltas,
+  exact-lot remainder refusal, donation handling, replay, and late rollback.
+- [x] Join native Resolve to the canonical SourceArchive sealed receipt, make
+  the legacy projection byte-equal compatibility transport rather than value
+  authority, and refuse wrong-PDA/same-domain source substitution in real SBF.
+- [ ] Audit every other post-resolution consumer for forbidden preset-index-zero
+  reconstruction.
+- [ ] Bind immutable Terms-selected basis mode in every active Split/Merge/
+  materialize/dematerialize reconstruction. Prefer a Terms-checked Kernel mode
+  projection or add authenticated Terms to each account plane; never infer mode
+  from index zero or preset membership.
+- [ ] Freeze and implement exact fractional redemption lot or remainder-credit
+  behavior for both internal and bearer exits; the model narrows the choice but
+  does not select policy or change production. No hidden truncation or sweep.
+- [ ] Define canonical onchain coefficient artifact bytes and bounded verifier,
+  including exact/approximation identity and maximum-liability certificate.
+- [ ] If the product promises a transferable named shaped position, implement
+  atomic internal-vector or wrapper semantics; a UI label on separable Eggs is
+  insufficient.
+- [ ] Keep categorical lowering available only as a disclosed compatibility
+  adapter with a reproducible error certificate where it is not exact.
 
-Acceptance: the compiled portfolio is no more collateral-intensive than its
-stated bound, redeems exactly according to its integer coefficients, and has a
-reproducible maximum-error certificate against the requested finite payout.
+Acceptance: authenticated evidence resolves a live degree-one through
+degree-three market to the exact persisted native vector, every claimant can
+redeem under one frozen fractional rule, exact coefficient intents trade and
+settle atomically, and the same semantics are reproduced by named model, host,
+and SBF evidence without claiming those planes prove one another.
 
 ## 9. Formal, adversarial, and artifact promotion
 
@@ -246,6 +354,11 @@ These gates cover different planes; none substitutes for another.
   unverified call/runtime boundary.
 - [ ] Extend the Lean theorem inventory only for nonvacuous model properties;
   keep model/Rust correspondence manual unless a checked refinement lands.
+- [x] Add the committed native B-spline Lean inventory at `8c929a9`: 159
+  counted declarations including 116 theorems, with no `sorry`, `admit`,
+  axiom, `unsafe`, `native_decide`, or `implemented_by`. It closes uniform
+  stored-knot/BasisFuns linkage and canonical largest-remainder existence and
+  uniqueness while keeping Rust source equivalence explicit.
 - [ ] Decide Rocq's role and either prove named independent theorems or stop
   presenting definitions/typechecking as an active proof lane.
 - [ ] Run deterministic invariant campaigns over kernel, batch, layout, source,
