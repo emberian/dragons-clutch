@@ -456,10 +456,22 @@ use crate::accounts::{
 };
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::artifact::read_clock_slot;
+#[cfg(test)]
+use crate::instructions::direct_selection_v3::{
+    create_pda_account_full_principal, direct_creation_funding, observe_direct_funding,
+    DIRECT_NEUTRAL_SINK_V3, DIRECT_VERIFIER_RELEASE_ID_V3,
+};
+#[cfg(test)]
+use crate::instructions::genesis::RentParameters;
 use crate::instructions::genesis::{
     create_pda_account, read_rent, require_creatable, require_system_program,
 };
 use crate::seeds;
+#[cfg(test)]
+use clutch_solana_layout::direct_selection_v3::{
+    DirectBatchPolicyV3, DirectEpochV4Account, DirectReservationV2Account,
+    DIRECT_BATCH_POLICY_V3_BYTES, DIRECT_EPOCH_V4_BYTES, DIRECT_RESERVATION_V2_BYTES,
+};
 use clutch_solana_layout::{
     account_len,
     clearing::{init_candidate_feed, verify_candidate_feed, write_fill, write_slice_at},
@@ -492,6 +504,9 @@ macro_rules! borrow_mut {
 
 /// Accounts in a `PlaceOrder` instruction, exactly.
 pub const PLACE_ORDER_ACCOUNT_COUNT: usize = 8;
+/// Accounts in the still-unrouted Direct V3 placement branch, exactly.
+#[cfg(test)]
+pub const DIRECT_V4_PLACE_ORDER_ACCOUNT_COUNT: usize = 9;
 
 /// Accounts in a `CancelOrder` instruction, exactly.
 ///
@@ -521,6 +536,9 @@ pub const IX_RESERVATION: usize = 5;
 pub const IX_SYSTEM: usize = 6;
 /// Rent sysvar. `PlaceOrder`.
 pub const IX_RENT: usize = 7;
+/// Exact 96-byte epoch-bound DirectBatchPolicy V3 artifact. Direct V4 only.
+#[cfg(test)]
+pub const IX_DIRECT_V4_POLICY: usize = 8;
 /// The order page the retirement is written into.  `CancelOrder`.
 pub const IX_CANCEL_PAGE: usize = 2;
 /// Owner Position receiving a cancellation release. `CancelOrder`.
@@ -574,6 +592,13 @@ const PLACE_ORDER_STATE_ROLES: [StateRole; 3] = [
     StateRole::writable(IX_PAGE, account_len::ORDER_PAGE),
     StateRole::writable(IX_POSITION, account_len::POSITION),
 ];
+
+/// Program-owned roles unique to the Direct V4 placement branch.
+#[cfg(test)]
+const DIRECT_V4_POLICY_ROLE: [StateRole; 1] = [StateRole::read_only(
+    IX_DIRECT_V4_POLICY,
+    DIRECT_BATCH_POLICY_V3_BYTES,
+)];
 
 /// Program-owned roles of `CancelOrder`, in account-index order.
 const CANCEL_ORDER_STATE_ROLES: [StateRole; 3] = [
@@ -801,6 +826,71 @@ fn validate_place_order(
         ClutchError::MismatchedState,
     )?;
 
+    Ok(header)
+}
+
+/// Validate the fixed two-order Direct V4 admission profile.
+///
+/// This remains a branch of the existing `PlaceOrder` wire: the account
+/// version selects it, and no Direct V3 lifecycle tag is routed by this seam.
+#[allow(clippy::too_many_arguments)]
+#[cfg(test)]
+fn validate_direct_v4_place(
+    page: &[u8],
+    epoch: &DirectEpochV4Account,
+    grid: &PriceGridAccount,
+    actor: Hash32,
+    sequence: u64,
+    intent_market: Hash32,
+    intent_epoch: Hash32,
+    max_fee_atoms: u64,
+    slot: OrderSlot,
+) -> Outcome<stream::OrderPageHeader> {
+    epoch.validate_for_release(DIRECT_VERIFIER_RELEASE_ID_V3)?;
+    epoch.require_prefreeze_placement()?;
+    grid.validate()?;
+    let header = verify_page_on_grid(page, grid)?;
+    let common = epoch.direct.common;
+    require(
+        epoch.neutral_lamport_sink == Hash32::from_bytes(DIRECT_NEUTRAL_SINK_V3.to_bytes())
+            && common.outcome_count == 2
+            && common.page_count == 1
+            && header.market == common.market
+            && header.epoch == common.epoch
+            && header.page_index == 0
+            && header.page_count == 1
+            && header.set_order_count == 0
+            && header.order_count < 2
+            && header.tombstone_count == 0
+            && header.frozen == 0
+            && grid.grid == common.price_grid
+            && grid.price_scale == common.price_scale
+            && intent_market == common.market
+            && intent_epoch == common.epoch
+            && max_fee_atoms == 0,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        sequence == u64::from(header.order_count),
+        ClutchError::Replay,
+    )?;
+    require(actor == slot.owner(), ClutchError::UnauthorizedActor)?;
+    let order = match slot {
+        OrderSlot::Single(order) => order,
+        OrderSlot::Empty | OrderSlot::Portfolio(_) | OrderSlot::Tombstone(_) => {
+            return Err(CodecError::InvalidEnum.into());
+        }
+    };
+    order.validate()?;
+    require(
+        order.outcome < common.outcome_count
+            && order.minimum_fill == 0
+            && order.flags == 0
+            && order.expiry_epoch >= common.epoch_index
+            && order.order_id == header.next_order_id()?,
+        ClutchError::MismatchedState,
+    )?;
+    grid.tick_of(order.limit)?;
     Ok(header)
 }
 
@@ -1318,6 +1408,18 @@ fn place_order(
     max_fee_atoms: u64,
     slot: &OrderSlot,
 ) -> Outcome<()> {
+    #[cfg(test)]
+    if accounts.get(IX_EPOCH).map(|account| account.data_len()) == Some(DIRECT_EPOCH_V4_BYTES) {
+        return place_direct_v4_order(
+            program_id,
+            accounts,
+            sequence,
+            *intent_market,
+            *intent_epoch,
+            max_fee_atoms,
+            *slot,
+        );
+    }
     require_count(accounts, PLACE_ORDER_ACCOUNT_COUNT)?;
     require_signer(&accounts[IX_ACTOR])?;
     require_distinct(accounts)?;
@@ -1452,6 +1554,312 @@ fn place_order(
     Ok(())
 }
 
+#[cfg(test)]
+struct DirectV4PlaceCommit {
+    reservation: DirectReservationV2Account,
+    reservation_id: Hash32,
+    reservation_bump: u8,
+    reservation_funding: clutch_solana_layout::direct_selection_v3::DirectFundingLedgerV3,
+}
+
+/// Place one of at most two direct orders under an authenticated V4 Epoch.
+///
+/// The legacy eight-account ABI above is byte- and behavior-stable. V4 is an
+/// exact nine-account branch selected only by the otherwise-unrouted 672-byte
+/// Epoch schema, with the exact 96-byte DirectBatchPolicy artifact appended.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+#[cfg(test)]
+fn place_direct_v4_order(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent_market: Hash32,
+    intent_epoch: Hash32,
+    max_fee_atoms: u64,
+    slot: OrderSlot,
+) -> Outcome<()> {
+    require_count(accounts, DIRECT_V4_PLACE_ORDER_ACCOUNT_COUNT)?;
+    require_signer(&accounts[IX_ACTOR])?;
+    require(accounts[IX_ACTOR].is_writable, ClutchError::NotWritable)?;
+    require_distinct(accounts)?;
+    accounts::validate_state_roles(program_id, accounts, &PLACE_ORDER_STATE_ROLES)?;
+    accounts::validate_state_roles(program_id, accounts, &DIRECT_V4_POLICY_ROLE)?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[IX_EPOCH],
+        true,
+        &[DIRECT_EPOCH_V4_BYTES],
+    )?;
+    require_system_program(&accounts[IX_SYSTEM])?;
+    require_creatable(&accounts[IX_RESERVATION])?;
+    let rent = read_rent(&accounts[IX_RENT])?;
+    let commit = prepare_direct_v4_order(
+        program_id,
+        accounts,
+        &rent,
+        sequence,
+        intent_market,
+        intent_epoch,
+        max_fee_atoms,
+        slot,
+    )?;
+    let reservation_bytes = commit.reservation_id.bytes();
+    create_pda_account_full_principal(
+        program_id,
+        &accounts[IX_ACTOR],
+        &accounts[IX_RESERVATION],
+        &accounts[IX_SYSTEM],
+        &rent,
+        DIRECT_RESERVATION_V2_BYTES,
+        commit.reservation_funding,
+        &[
+            seeds::SEED_RESERVATION,
+            &reservation_bytes,
+            &[commit.reservation_bump],
+        ],
+    )?;
+    commit.reservation.encode(
+        Hash32::from_bytes(DIRECT_NEUTRAL_SINK_V3.to_bytes()),
+        &mut borrow_mut!(accounts[IX_RESERVATION])?,
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+struct DirectV4EconomicCommit {
+    position: PositionAccount,
+    reservation: DirectReservationV2Account,
+    reservation_id: Hash32,
+    reservation_bump: u8,
+    reservation_funding: clutch_solana_layout::direct_selection_v3::DirectFundingLedgerV3,
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+#[cfg(test)]
+fn prepare_direct_v4_economics(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    rent: &RentParameters,
+    epoch: &DirectEpochV4Account,
+    sequence: u64,
+    intent_market: Hash32,
+    intent_epoch: Hash32,
+    max_fee_atoms: u64,
+    slot: OrderSlot,
+) -> Outcome<DirectV4EconomicCommit> {
+    let mut grid = ZERO_GRID;
+    load_grid(&accounts[IX_GRID].data.borrow(), &mut grid)?;
+    expect_pda(
+        accounts[IX_GRID].key,
+        seeds::grid_pda(program_id, &grid.realm.bytes(), &grid.grid.bytes()),
+        Some(grid.stored_bump),
+    )?;
+    let page_header = stream::OrderPageHeader::decode(&accounts[IX_PAGE].data.borrow())?;
+    expect_pda(
+        accounts[IX_PAGE].key,
+        seeds::page_pda(
+            program_id,
+            &page_header.epoch.bytes(),
+            page_header.page_index,
+        ),
+        Some(page_header.stored_bump),
+    )?;
+    let position = PositionAccount::decode(&accounts[IX_POSITION].data.borrow())?;
+    expect_pda(
+        accounts[IX_POSITION].key,
+        seeds::position_pda(
+            program_id,
+            &position.market.bytes(),
+            &position.owner.bytes(),
+        ),
+        Some(position.stored_bump),
+    )?;
+
+    let actor = Hash32::from_bytes(accounts[IX_ACTOR].key.to_bytes());
+    let reservation_id = canonical_reservation_id(
+        epoch.direct.common.market,
+        epoch.direct.common.epoch,
+        position.owner,
+        position.generation,
+        slot.order_id(),
+    );
+    let reservation_bytes = reservation_id.bytes();
+    let (reservation_address, reservation_bump) =
+        seeds::reservation_pda(program_id, &reservation_bytes);
+    expect_pda(
+        accounts[IX_RESERVATION].key,
+        (reservation_address, reservation_bump),
+        None,
+    )?;
+    let reservation_funding = direct_creation_funding(
+        &accounts[IX_ACTOR],
+        &accounts[IX_RESERVATION],
+        rent,
+        DIRECT_RESERVATION_V2_BYTES,
+        DIRECT_NEUTRAL_SINK_V3,
+    )?;
+    let (next_position, reservation) = {
+        let page_data = accounts[IX_PAGE].data.borrow();
+        validate_direct_v4_place(
+            &page_data,
+            epoch,
+            &grid,
+            actor,
+            sequence,
+            intent_market,
+            intent_epoch,
+            max_fee_atoms,
+            slot,
+        )?;
+        let common = epoch.direct.common;
+        reservation::prepare_placement(
+            &position,
+            &reservation::PlacementInput {
+                actor,
+                domain: reservation::ReservationDomain {
+                    market: common.market,
+                    epoch: common.epoch,
+                    terms: common.terms,
+                    price_grid: common.price_grid,
+                    policy: common.policy,
+                    epoch_index: common.epoch_index,
+                    price_scale: common.price_scale,
+                    outcome_count: common.outcome_count,
+                    page_index: 0,
+                    phase: common.phase,
+                },
+                slot,
+                max_fee_atoms,
+                reservation_bump,
+            },
+        )?
+    };
+    Ok(DirectV4EconomicCommit {
+        position: next_position,
+        reservation: DirectReservationV2Account {
+            reservation,
+            funding: reservation_funding,
+        },
+        reservation_id,
+        reservation_bump,
+        reservation_funding,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+#[cfg(test)]
+fn prepare_direct_v4_order(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    rent: &RentParameters,
+    sequence: u64,
+    intent_market: Hash32,
+    intent_epoch: Hash32,
+    max_fee_atoms: u64,
+    slot: OrderSlot,
+) -> Outcome<DirectV4PlaceCommit> {
+    let mut epoch = DirectEpochV4Account::decode(&accounts[IX_EPOCH].data.borrow())?;
+    epoch.validate_for_release(DIRECT_VERIFIER_RELEASE_ID_V3)?;
+    epoch.require_prefreeze_placement()?;
+    require(
+        epoch.neutral_lamport_sink == Hash32::from_bytes(DIRECT_NEUTRAL_SINK_V3.to_bytes()),
+        ClutchError::MismatchedState,
+    )?;
+    let exact_policy = DirectBatchPolicyV3::direct(DIRECT_VERIFIER_RELEASE_ID_V3)?;
+    let supplied_policy =
+        DirectBatchPolicyV3::decode(&accounts[IX_DIRECT_V4_POLICY].data.borrow())?;
+    require(
+        supplied_policy == exact_policy,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        supplied_policy.digest_for_epoch(epoch.direct.common.epoch)? == epoch.direct_policy_v3_id,
+        ClutchError::MismatchedState,
+    )?;
+
+    expect_pda(
+        accounts[IX_EPOCH].key,
+        seeds::epoch_pda(
+            program_id,
+            &epoch.direct.common.market.bytes(),
+            epoch.direct.common.epoch_index,
+        ),
+        Some(epoch.direct.common.stored_bump),
+    )?;
+    expect_pda(
+        accounts[IX_DIRECT_V4_POLICY].key,
+        seeds::direct_batch_policy_v3_pda(
+            program_id,
+            &epoch.direct.common.epoch.bytes(),
+            &epoch.direct_policy_v3_id.bytes(),
+        ),
+        None,
+    )?;
+    epoch.epoch_funding = observe_direct_funding(
+        epoch.epoch_funding,
+        accounts[IX_EPOCH].lamports(),
+        DIRECT_NEUTRAL_SINK_V3,
+    )?;
+    epoch.page_funding = observe_direct_funding(
+        epoch.page_funding,
+        accounts[IX_PAGE].lamports(),
+        DIRECT_NEUTRAL_SINK_V3,
+    )?;
+    epoch.validate_for_release(DIRECT_VERIFIER_RELEASE_ID_V3)?;
+    let economic = prepare_direct_v4_economics(
+        program_id,
+        accounts,
+        rent,
+        &epoch,
+        sequence,
+        intent_market,
+        intent_epoch,
+        max_fee_atoms,
+        slot,
+    )?;
+    economic
+        .reservation
+        .validate(Hash32::from_bytes(DIRECT_NEUTRAL_SINK_V3.to_bytes()))?;
+    epoch.validate_for_release(DIRECT_VERIFIER_RELEASE_ID_V3)?;
+    economic.position.validate()?;
+
+    /* Every semantic check and every poststate encoding is complete before a
+     * byte moves. Existing-state writes precede the System CPI deliberately:
+     * a failed full-principal transfer is a real late-failure rollback test,
+     * and no account-data borrow survives into that CPI. */
+    stage_direct_v4_existing(accounts, &epoch, &economic.position, slot)?;
+    Ok(DirectV4PlaceCommit {
+        reservation: economic.reservation,
+        reservation_id: economic.reservation_id,
+        reservation_bump: economic.reservation_bump,
+        reservation_funding: economic.reservation_funding,
+    })
+}
+
+/// Commit only the already-authenticated mutable accounts of a Direct V4
+/// placement. All three borrows are acquired before the first byte moves, and
+/// each typed poststate was validated by the caller. This keeps the SBF frame
+/// bounded without weakening host-level refusal atomicity.
+#[inline(never)]
+#[cfg(test)]
+fn stage_direct_v4_existing(
+    accounts: &[AccountInfo],
+    epoch: &DirectEpochV4Account,
+    position: &PositionAccount,
+    slot: OrderSlot,
+) -> Outcome<()> {
+    let mut page_data = borrow_mut!(accounts[IX_PAGE])?;
+    let mut position_data = borrow_mut!(accounts[IX_POSITION])?;
+    let mut epoch_data = borrow_mut!(accounts[IX_EPOCH])?;
+    stream::append_slot(&mut page_data, slot)?;
+    position.encode(&mut position_data)?;
+    epoch.encode(&mut epoch_data)?;
+    Ok(())
+}
+
 /// The `CancelOrder` account plane.
 ///
 /// Cancellation reads no grid account: its reservation has already frozen the
@@ -1560,6 +1968,12 @@ fn cancel_order(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clutch_batch_policy_identity::batch_policy_digest;
+    use clutch_batch_policy_identity::direct_window_v1::DIRECT_POLICY_V1;
+    use clutch_solana_layout::direct_selection::DirectEpochV3Account;
+    use clutch_solana_layout::direct_selection_v3::{
+        DirectFundingLedgerV3, DirectTerminalReceiptV3, DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN,
+    };
     use clutch_solana_layout::{
         canonical_epoch_id, canonical_order_id, EpochAccount, OrderPageAccount, OrderRecord,
         PortfolioRecord, TombstoneRecord, EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN,
@@ -1783,6 +2197,49 @@ mod tests {
         }
     }
 
+    fn direct_v4_epoch(grid: &PriceGridAccount) -> DirectEpochV4Account {
+        let market = h(1);
+        let epoch_id = canonical_epoch_id(market, 4);
+        let relation_policy = Hash32::from_bytes(batch_policy_digest(&DIRECT_POLICY_V1).unwrap().0);
+        let mut direct = DirectEpochV3Account::open(
+            market,
+            h(3),
+            grid.grid,
+            relation_policy,
+            4,
+            grid.price_scale,
+            100,
+            110,
+            6,
+        )
+        .unwrap();
+        direct.common.page_count = 1;
+        let sink = Hash32::from_bytes(DIRECT_NEUTRAL_SINK_V3.to_bytes());
+        let policy = DirectBatchPolicyV3::direct(DIRECT_VERIFIER_RELEASE_ID_V3).unwrap();
+        let ledger = |payer: u8| DirectFundingLedgerV3 {
+            payer: h(payer),
+            payer_principal_lamports: 1_000,
+            prior_donation_lamports: 0,
+        };
+        let epoch = DirectEpochV4Account {
+            direct,
+            selection_deadline_slot: 120,
+            settlement_deadline_slot: 140,
+            lifecycle_phase: DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN,
+            terminal: DirectTerminalReceiptV3::EMPTY,
+            neutral_lamport_sink: sink,
+            verifier_release_id: DIRECT_VERIFIER_RELEASE_ID_V3,
+            direct_policy_v3_id: policy.digest_for_epoch(epoch_id).unwrap(),
+            epoch_funding: ledger(0x70),
+            page_funding: ledger(0x71),
+            reserved: [0; 4],
+        };
+        epoch
+            .validate_for_release(DIRECT_VERIFIER_RELEASE_ID_V3)
+            .unwrap();
+        epoch
+    }
+
     impl Domain {
         /// A well-formed placement of `slot` at `sequence`, signed by its owner.
         fn placement(&self, sequence: u64, slot: OrderSlot) -> Placement<'_> {
@@ -1875,6 +2332,127 @@ mod tests {
         assert_eq!(decoded.orders[0], OrderSlot::Single(first));
         assert_eq!(decoded.orders[1], OrderSlot::Single(second));
         assert_eq!(decoded.orders[2], OrderSlot::Empty);
+    }
+
+    #[test]
+    fn direct_v4_place_accepts_only_the_fixed_two_order_profile() {
+        let grid = grid_account();
+        let epoch = direct_v4_epoch(&grid);
+        let first = OrderSlot::Single(order(0x20, 1, 7_500));
+        let page = encode_page(&page_account(&epoch.direct.common, 0, 1, &[]));
+        assert_eq!(
+            validate_direct_v4_place(
+                &page,
+                &epoch,
+                &grid,
+                first.owner(),
+                0,
+                epoch.direct.common.market,
+                epoch.direct.common.epoch,
+                0,
+                first,
+            ),
+            Ok(stream::OrderPageHeader::decode(&page).unwrap())
+        );
+
+        let hostile_page = page;
+        let mut bad_minimum = order(0x20, 1, 7_500);
+        bad_minimum.minimum_fill = 1;
+        for hostile in [
+            OrderSlot::Single(bad_minimum),
+            OrderSlot::Portfolio(portfolio(0x20, 1)),
+        ] {
+            assert!(validate_direct_v4_place(
+                &hostile_page,
+                &epoch,
+                &grid,
+                hostile.owner(),
+                0,
+                epoch.direct.common.market,
+                epoch.direct.common.epoch,
+                0,
+                hostile,
+            )
+            .is_err());
+            assert_eq!(hostile_page, page, "pure refusal cannot mutate the page");
+        }
+        assert!(validate_direct_v4_place(
+            &page,
+            &epoch,
+            &grid,
+            first.owner(),
+            0,
+            epoch.direct.common.market,
+            epoch.direct.common.epoch,
+            1,
+            first,
+        )
+        .is_err());
+
+        let second = OrderSlot::Single(OrderRecord {
+            side: 1,
+            order_id: canonical_order_id(2),
+            owner: h(0x21),
+            limit: 2_500,
+            ..order(0x21, 2, 2_500)
+        });
+        let full = encode_page(&page_account(&epoch.direct.common, 0, 1, &[first, second]));
+        let third = OrderSlot::Single(order(0x22, 3, 5_000));
+        assert!(validate_direct_v4_place(
+            &full,
+            &epoch,
+            &grid,
+            third.owner(),
+            2,
+            epoch.direct.common.market,
+            epoch.direct.common.epoch,
+            0,
+            third,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn direct_v4_place_refuses_policy_schedule_page_and_replay_substitution() {
+        let grid = grid_account();
+        let epoch = direct_v4_epoch(&grid);
+        let slot = OrderSlot::Single(order(0x20, 1, 5_000));
+        let page = encode_page(&page_account(&epoch.direct.common, 0, 1, &[]));
+        let assert_refuses =
+            |epoch: &DirectEpochV4Account, page: &[u8], sequence: u64, intent_market: Hash32| {
+                assert!(validate_direct_v4_place(
+                    page,
+                    epoch,
+                    &grid,
+                    slot.owner(),
+                    sequence,
+                    intent_market,
+                    epoch.direct.common.epoch,
+                    0,
+                    slot,
+                )
+                .is_err());
+            };
+
+        assert_refuses(&epoch, &page, 1, epoch.direct.common.market);
+        assert_refuses(&epoch, &page, 0, h(0xf0));
+
+        let wrong_page = encode_page(&page_account(&epoch.direct.common, 1, 2, &[]));
+        assert_refuses(&epoch, &wrong_page, 0, epoch.direct.common.market);
+
+        let mut no_page_funding = epoch;
+        no_page_funding.page_funding = DirectFundingLedgerV3::ZERO;
+        assert_refuses(&no_page_funding, &page, 0, epoch.direct.common.market);
+
+        let alternate_release = h(0x81);
+        let mut wrong_release = epoch;
+        wrong_release.verifier_release_id = alternate_release;
+        wrong_release.direct_policy_v3_id = DirectBatchPolicyV3::direct(alternate_release)
+            .unwrap()
+            .digest_for_epoch(epoch.direct.common.epoch)
+            .unwrap();
+        assert_eq!(wrong_release.validate(), Ok(()));
+        assert_refuses(&wrong_release, &page, 0, epoch.direct.common.market);
     }
 
     #[test]

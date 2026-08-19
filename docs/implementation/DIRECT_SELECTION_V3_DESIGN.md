@@ -131,12 +131,12 @@ be designed, but cannot be smuggled into an error path whose effects roll back.
 Sizes below are the intended fixed byte lengths for the codec campaign. They
 are not live allocations.
 
-### Direct Epoch V4 — 624 bytes
+### Direct Epoch V4 — 672 bytes
 
-No 512-byte V4 Epoch was ever routed, emitted, deployed, or accepted by the
-common request decoder. The version remains four because this is a correction
-to an unexported proposed codec, not a migration of live bytes; the exact
-length gate refuses the abandoned draft in both directions.
+Neither the 512-byte nor 624-byte V4 Epoch draft was ever routed, emitted,
+deployed, or accepted by the common request decoder. The version remains four
+because this is a correction to an unexported proposed codec, not a migration
+of live bytes; the exact length gate refuses both abandoned drafts.
 
 Bytes `0..344` preserve Direct Epoch V3. The extension is:
 
@@ -161,7 +161,10 @@ Bytes `0..344` preserve Direct Epoch V3. The extension is:
 | 572 | 32 | durable Epoch rent-principal payer |
 | 604 | 8 | exact payer-funded Epoch rent principal |
 | 612 | 8 | prior neutral donation lower bound |
-| 620 | 4 | canonical zero reserve |
+| 620 | 32 | sole page-zero rent-principal payer |
+| 652 | 8 | exact payer-funded page rent principal |
+| 660 | 8 | page prior neutral donation lower bound |
+| 668 | 4 | canonical zero reserve |
 
 The two policy fields are deliberately disjoint. The preserved common Epoch
 `policy` remains the legacy full-relation policy digest. The appended
@@ -176,6 +179,17 @@ never discounts the authenticated payer's rent principal `P`: Init transfers
 exactly `P`, proves the post-transfer balance is `B + P`, stores `P` as payer
 principal, and stores `B` as neutral donation. Any later balance above those
 compartments belongs only to the immutable sink.
+
+The Epoch owns the page-zero funding ledger because this profile admits
+exactly one page and the existing page codec has no versioned funding tail.
+`page_count == 0` requires the page ledger to be all zero and no page account
+to exist. `InitOrderPage` admits only page index zero/count one, transfers the
+complete page principal `P` even when its predictable PDA already contains
+`B`, proves `after == B + P`, and then atomically commits both
+`page_count == 1` and the ledger. `page_count == 1` requires a nonzero valid
+ledger, so replay refuses before any System CPI. Later V4 transitions observe
+the durable Epoch and page balances and may only monotonically increase their
+neutral-donation lower bounds.
 
 The direct lifecycle byte owns `PREFREEZE_OPEN`, `FROZEN_EMPTY`,
 `WINDOW_OPEN`, `VERIFYING`, `SELECTED`, and `TERMINAL`. The preserved common
@@ -444,7 +458,7 @@ mutation; transaction rollback is the atomicity boundary.
 V3 returns every **transient authority** principal. It does not claim every
 lamport in the protocol is refunded.
 
-- One 624-byte Epoch archive remains per historical epoch. Its principal comes
+- One 672-byte Epoch archive remains per historical epoch. Its principal comes
   from the separately named archive/storage endowment and remains locked under
   the current permanent-audit policy. This is bounded per epoch but grows
   linearly with history.
@@ -513,12 +527,14 @@ to the live page fold over the same two records, and the model's
 
 ## Unrouted runtime checkpoint
 
-The SBF crate now compiles one isolated `InitDirectEpochV4` implementation,
-but the production dispatcher still sends every tag `36..=46` through the
-legacy decoder and therefore refuses it. The handler is deliberately not
-partial ABI authority: every other Direct V3 action returns
-`NotYetImplemented` only when called directly by host tests, and there is no
-live route capable of making that call.
+The SBF crate now compiles an isolated `InitDirectEpochV4` implementation. The
+page-construction and funded-placement seams exist only under `cfg(test)` as
+private host checkpoints: production `InitOrderPage` and `PlaceOrder` never
+length-select them. The production dispatcher still sends every tag `36..=46`
+through the legacy decoder and therefore refuses it. This is deliberately not
+partial ABI authority: every Direct V3 action returns `NotYetImplemented` only
+when called directly by host tests, and there is no live route capable of
+making that call.
 
 Init's exact nine-account order is:
 
@@ -550,8 +566,20 @@ is not a migration.
 
 The new Window, Candidate, WorkBudget, receipt, and pot PDAs use five disjoint
 V3 seed namespaces. Epoch and Reservation keep their existing semantic PDA
-coordinates and are separated by exact version/length. No V3 transient account
-is constructed by this checkpoint.
+coordinates and are separated by exact version/length.
+
+The private test-only page seam retains the existing six-account shape and the
+test-only funded-placement seam has exactly nine accounts: the legacy eight in
+their unchanged order, with the exact epoch-bound 96-byte DirectBatchPolicy
+artifact appended read-only. They model `PREFREEZE_OPEN`, page zero of one, at
+most two single-Egg orders, zero fees/minimum-fill/flags, an exact grid tick,
+and a 618-byte Reservation V2 with its own payer/principal/donation ledger.
+These shapes are compile and host-test evidence only. A prior attempt to
+length-select them from live legacy wires was rejected because an injected
+program-owned V4 prestate could create a Reservation V2 dead end before
+Freeze, Abort, Cancel, and lapse were all available atomically. Legacy
+`InitOrderPage`, eight-account placement, and Reservation V1 production bytes
+therefore retain their prior behavior exactly.
 
 ## Remaining promotion boundary
 
@@ -559,8 +587,8 @@ The three former model blockers are closed by `e77238f`, `6267fde`, and
 `081bd81`: Settle now owns the actual Position transfer, verification derives
 all economic facts from frozen authority and takes the real neutral sink, and
 `FROZEN_EMPTY` pins admission/work history to zero. What remains is the live
-adapter beyond the isolated Init checkpoint: versioned page construction and
-Reservation placement, stack-bounded per-account reconstruction for every
+adapter beyond the isolated codec/test checkpoint: stack-bounded per-account
+reconstruction for every
 frozen transition, common intent routing only after every handler exists,
 exact full-principal PDA create/close transfers, and the real-SBF campaign
 below. Standalone codec or unrouted handler acceptance is not live authority.

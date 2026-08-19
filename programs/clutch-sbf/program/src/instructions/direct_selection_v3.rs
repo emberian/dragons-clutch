@@ -193,11 +193,13 @@ fn init_epoch(
     let (epoch_address, epoch_bump) =
         seeds::epoch_pda(program_id, &intent.market.bytes(), intent.epoch_index);
     expect_pda(accounts[IX_EPOCH].key, (epoch_address, epoch_bump), None)?;
-    let funding = DirectFundingLedgerV3 {
-        payer: Hash32::from_bytes(accounts[IX_PAYER].key.to_bytes()),
-        payer_principal_lamports: rent.minimum_balance(DIRECT_EPOCH_V4_BYTES)?,
-        prior_donation_lamports: accounts[IX_EPOCH].lamports(),
-    };
+    let funding = direct_creation_funding(
+        &accounts[IX_PAYER],
+        &accounts[IX_EPOCH],
+        &rent,
+        DIRECT_EPOCH_V4_BYTES,
+        DIRECT_NEUTRAL_SINK_V3,
+    )?;
     let epoch = build_open_epoch(
         intent,
         terms.terms,
@@ -213,6 +215,7 @@ fn init_epoch(
         &accounts[IX_SYSTEM],
         &rent,
         DIRECT_EPOCH_V4_BYTES,
+        funding,
         &[
             seeds::SEED_EPOCH,
             &intent.market.bytes(),
@@ -270,7 +273,8 @@ fn build_open_epoch(
         neutral_lamport_sink: intent.neutral_lamport_sink,
         verifier_release_id: DIRECT_VERIFIER_RELEASE_ID_V3,
         direct_policy_v3_id: intent.policy,
-        funding,
+        epoch_funding: funding,
+        page_funding: DirectFundingLedgerV3::ZERO,
         reserved: [0; 4],
     };
     epoch.validate_for_release(DIRECT_VERIFIER_RELEASE_ID_V3)?;
@@ -286,13 +290,55 @@ fn build_open_epoch(
 /// two independently owned compartments.
 #[allow(clippy::too_many_arguments)] // one argument per runtime account/value
 #[inline(never)]
-fn create_pda_account_full_principal<'a>(
+pub(crate) fn direct_creation_funding(
+    payer: &AccountInfo,
+    target: &AccountInfo,
+    rent: &RentParameters,
+    space: usize,
+    neutral_sink: Pubkey,
+) -> Outcome<DirectFundingLedgerV3> {
+    let funding = DirectFundingLedgerV3 {
+        payer: Hash32::from_bytes(payer.key.to_bytes()),
+        payer_principal_lamports: rent.minimum_balance(space)?,
+        prior_donation_lamports: target.lamports(),
+    };
+    funding.validate_for_sink(Hash32::from_bytes(neutral_sink.to_bytes()))?;
+    Ok(funding)
+}
+
+/// Observe one surviving Direct V3 account without letting later donations
+/// replace any part of its authenticated payer principal.
+#[cfg(test)]
+pub(crate) fn observe_direct_funding(
+    funding: DirectFundingLedgerV3,
+    live_lamports: u64,
+    neutral_sink: Pubkey,
+) -> Outcome<DirectFundingLedgerV3> {
+    funding.validate_for_sink(Hash32::from_bytes(neutral_sink.to_bytes()))?;
+    let accounted = funding
+        .payer_principal_lamports
+        .checked_add(funding.prior_donation_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(live_lamports >= accounted, ClutchError::MismatchedState)?;
+    let observed = DirectFundingLedgerV3 {
+        prior_donation_lamports: live_lamports
+            .checked_sub(funding.payer_principal_lamports)
+            .ok_or(ClutchError::Arithmetic)?,
+        ..funding
+    };
+    observed.validate_for_sink(Hash32::from_bytes(neutral_sink.to_bytes()))?;
+    Ok(observed)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn create_pda_account_full_principal<'a>(
     program_id: &Pubkey,
     payer: &AccountInfo<'a>,
     target: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
     rent: &RentParameters,
     space: usize,
+    funding: DirectFundingLedgerV3,
     signer_seeds: &[&[u8]],
 ) -> Outcome<()> {
     require_creatable(target)?;
@@ -302,6 +348,12 @@ fn create_pda_account_full_principal<'a>(
     )?;
     let principal = rent.minimum_balance(space)?;
     let balance_before = target.lamports();
+    require(
+        funding.payer == Hash32::from_bytes(payer.key.to_bytes())
+            && funding.payer_principal_lamports == principal
+            && funding.prior_donation_lamports == balance_before,
+        ClutchError::MismatchedState,
+    )?;
     let balance_after = balance_before
         .checked_add(principal)
         .ok_or(ClutchError::Arithmetic)?;
@@ -432,8 +484,27 @@ mod tests {
         assert_eq!(value.terminal, DirectTerminalReceiptV3::EMPTY);
         assert_eq!(value.verifier_release_id, DIRECT_VERIFIER_RELEASE_ID_V3);
         assert_eq!(value.direct_policy_v3_id, request.policy);
-        assert_eq!(value.funding, funding());
+        assert_eq!(value.epoch_funding, funding());
+        assert_eq!(value.page_funding, DirectFundingLedgerV3::ZERO);
         assert_eq!(value.validate(), Ok(()));
+    }
+
+    #[test]
+    fn live_funding_observation_preserves_principal_and_only_grows_donation() {
+        let initial = funding();
+        let sink = DIRECT_NEUTRAL_SINK_V3;
+        assert_eq!(observe_direct_funding(initial, 1_007, sink), Ok(initial));
+        let observed = observe_direct_funding(initial, 1_019, sink).unwrap();
+        assert_eq!(observed.payer, initial.payer);
+        assert_eq!(
+            observed.payer_principal_lamports,
+            initial.payer_principal_lamports
+        );
+        assert_eq!(observed.prior_donation_lamports, 19);
+        assert_eq!(
+            observe_direct_funding(initial, 1_006, sink),
+            Err(ClutchError::MismatchedState.into())
+        );
     }
 
     #[test]

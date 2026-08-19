@@ -40,7 +40,7 @@ use super::direct_selection::{
 /// Direct Epoch schema carrying the complete V3 lifecycle schedule and receipt.
 pub const DIRECT_EPOCH_V4_VERSION: u8 = 4;
 /// Exact Direct Epoch V4 byte length.
-pub const DIRECT_EPOCH_V4_BYTES: usize = 624;
+pub const DIRECT_EPOCH_V4_BYTES: usize = 672;
 /// Direct Candidate schema with exact rent/donation ownership.
 pub const DIRECT_CANDIDATE_V3_VERSION: u8 = 2;
 /// Exact Direct Candidate V3 byte length.
@@ -164,7 +164,7 @@ const CANDIDATE_STATUS_ACCOUNT_OFFSET: usize = 425;
 const CANDIDATE_EXTENSION_OFFSET: usize = DIRECT_CANDIDATE_ACCOUNT_BYTES;
 const WINDOW_EXTENSION_OFFSET: usize = DIRECT_WINDOW_ACCOUNT_BYTES;
 
-const _: () = assert!(DIRECT_EPOCH_V4_BYTES == DIRECT_EPOCH_BYTES + 280);
+const _: () = assert!(DIRECT_EPOCH_V4_BYTES == DIRECT_EPOCH_BYTES + 328);
 const _: () = assert!(DIRECT_CANDIDATE_V3_BYTES == DIRECT_CANDIDATE_ACCOUNT_BYTES + 48);
 const _: () = assert!(DIRECT_WINDOW_V3_BYTES == DIRECT_WINDOW_ACCOUNT_BYTES + 176);
 const _: () = assert!(RESERVATION_ACCOUNT_BYTES == 570);
@@ -347,7 +347,9 @@ pub struct DirectEpochV4Account {
     /// Epoch-bound identity of the exact 96-byte DirectBatchPolicy artifact.
     pub direct_policy_v3_id: Hash32,
     /// Durable Epoch rent principal and prefund donation ownership.
-    pub funding: DirectFundingLedgerV3,
+    pub epoch_funding: DirectFundingLedgerV3,
+    /// Sole page-zero rent principal and prefund donation ownership.
+    pub page_funding: DirectFundingLedgerV3,
     /// Canonical zero reserve.
     pub reserved: [u8; 4],
 }
@@ -355,11 +357,33 @@ pub struct DirectEpochV4Account {
 impl DirectEpochV4Account {
     /// Validate exact schedules, phase mirroring, and terminal receipt shape.
     pub fn validate(&self) -> Result<()> {
-        self.direct.validate()?;
+        let prefreeze_shape = self.direct.common.phase == EPOCH_PHASE_OPEN
+            && (self.lifecycle_phase == DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN
+                || (self.lifecycle_phase == DIRECT_LIFECYCLE_PHASE_TERMINAL
+                    && self.terminal.reason == DIRECT_TERMINAL_REASON_PREFREEZE_ABORT));
+        if prefreeze_shape {
+            if self.direct.common.page_count > 1 {
+                return Err(CodecError::InvalidCount);
+            }
+            let mut normalized = self.direct;
+            normalized.common.page_count = 0;
+            normalized.validate()?;
+        } else {
+            self.direct.validate()?;
+        }
         nonzero(self.neutral_lamport_sink)?;
         nonzero(self.verifier_release_id)?;
         nonzero(self.direct_policy_v3_id)?;
-        self.funding.validate_for_sink(self.neutral_lamport_sink)?;
+        self.epoch_funding
+            .validate_for_sink(self.neutral_lamport_sink)?;
+        if self.direct.common.page_count == 0 {
+            if !self.page_funding.is_zero() {
+                return Err(CodecError::MismatchedBinding);
+            }
+        } else {
+            self.page_funding
+                .validate_for_sink(self.neutral_lamport_sink)?;
+        }
         let exact_policy = DirectBatchPolicyV3::direct(self.verifier_release_id)?;
         if self.direct.common.policy.0
             != batch_policy_digest(
@@ -592,7 +616,8 @@ impl DirectEpochV4Account {
         writer.hash(self.neutral_lamport_sink)?;
         writer.hash(self.verifier_release_id)?;
         writer.hash(self.direct_policy_v3_id)?;
-        write_ledger(&mut writer, self.funding)?;
+        write_ledger(&mut writer, self.epoch_funding)?;
+        write_ledger(&mut writer, self.page_funding)?;
         writer.bytes(&self.reserved)?;
         Ok(writer.at)
     }
@@ -656,7 +681,8 @@ impl DirectEpochV4Account {
             neutral_lamport_sink: reader.hash()?,
             verifier_release_id: reader.hash()?,
             direct_policy_v3_id: reader.hash()?,
-            funding: read_ledger(&mut reader)?,
+            epoch_funding: read_ledger(&mut reader)?,
+            page_funding: read_ledger(&mut reader)?,
             reserved: reader.bytes()?,
         };
         reader.done()?;
@@ -1872,7 +1898,12 @@ mod tests {
             neutral_lamport_sink: h(90),
             verifier_release_id,
             direct_policy_v3_id: direct_policy.digest_for_epoch(epoch_id).unwrap(),
-            funding: ledger(24),
+            epoch_funding: ledger(24),
+            page_funding: if common.page_count == 0 {
+                DirectFundingLedgerV3::ZERO
+            } else {
+                ledger(25)
+            },
             reserved: [0; 4],
         }
     }
@@ -2014,7 +2045,7 @@ mod tests {
 
     #[test]
     fn exact_widths_derive_from_live_constants_and_tags_do_not_collide() {
-        assert_eq!(DIRECT_EPOCH_V4_BYTES, 624);
+        assert_eq!(DIRECT_EPOCH_V4_BYTES, 672);
         assert_eq!(DIRECT_CANDIDATE_V3_BYTES, 488);
         assert_eq!(DIRECT_WINDOW_V3_BYTES, 632);
         assert_eq!(DIRECT_WORK_BUDGET_BYTES, 248);
@@ -2041,16 +2072,25 @@ mod tests {
             assert_eq!(DirectEpochV4Account::decode(&bytes), Ok(value));
             assert_eq!(&bytes[508..540], &value.verifier_release_id.bytes());
             assert_eq!(&bytes[540..572], &value.direct_policy_v3_id.bytes());
-            assert_eq!(&bytes[572..604], &value.funding.payer.bytes());
+            assert_eq!(&bytes[572..604], &value.epoch_funding.payer.bytes());
             assert_eq!(
                 &bytes[604..612],
-                &value.funding.payer_principal_lamports.to_le_bytes()
+                &value.epoch_funding.payer_principal_lamports.to_le_bytes()
             );
             assert_eq!(
                 &bytes[612..620],
-                &value.funding.prior_donation_lamports.to_le_bytes()
+                &value.epoch_funding.prior_donation_lamports.to_le_bytes()
             );
-            assert_eq!(&bytes[620..624], &[0; 4]);
+            assert_eq!(&bytes[620..652], &value.page_funding.payer.bytes());
+            assert_eq!(
+                &bytes[652..660],
+                &value.page_funding.payer_principal_lamports.to_le_bytes()
+            );
+            assert_eq!(
+                &bytes[660..668],
+                &value.page_funding.prior_donation_lamports.to_le_bytes()
+            );
+            assert_eq!(&bytes[668..672], &[0; 4]);
             assert_eq!(
                 DirectEpochV3Account::decode(&bytes),
                 Err(CodecError::TrailingBytes)
@@ -2089,7 +2129,7 @@ mod tests {
             Err(CodecError::MismatchedBinding)
         );
         let mut wrong_funding = epoch(EPOCH_PHASE_FROZEN, DIRECT_LIFECYCLE_PHASE_FROZEN_EMPTY);
-        wrong_funding.funding.payer_principal_lamports = 0;
+        wrong_funding.epoch_funding.payer_principal_lamports = 0;
         assert_eq!(wrong_funding.validate(), Err(CodecError::MismatchedBinding));
 
         let mut coherent_alternate = epoch(EPOCH_PHASE_FROZEN, DIRECT_LIFECYCLE_PHASE_FROZEN_EMPTY);
