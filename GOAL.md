@@ -61,6 +61,13 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- DRAFT 11 COMPLETE, all four documents (degg-research 0dd6601/4ce0ce6/
+  e4bfabf): definitions 9pp, data-reporting 10pp, IAC 10pp, cover 2pp.
+  Named system throughout, one status paragraph each with [DEVNET RECORD]
+  fill-ins, all VERIFIED/STOP label blocks unwound, appendix bases one line,
+  positions/tables/citations intact. Freeze-sensitive: the V3
+  successor-selection sentences; update at ember's filing freeze.
+
 - DEVNET PACES HARNESS LANDED (9bee35f): standalone devnet-paces binary,
   24 unit tests, pedantic clippy; dry-run PASS both profiles on a blank
   validator at fresh program ids (devnet's exact shape) plus a required-red
