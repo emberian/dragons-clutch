@@ -92,6 +92,10 @@ pub const SEED_RECEIPT: &[u8] = b"dragons-clutch:receipt:v1";
 pub const SEED_ARTIFACT_STAGE: &[u8] = b"dragons-clutch:upload:v1";
 /// Canonical raw collateral-policy artifact seed prefix.
 pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
+/// Immutable authenticated source-spec account seed prefix.
+pub const SEED_SOURCE_SPEC: &[u8] = crate::source_archive::SOURCE_SPEC_SEED_V1;
+/// Per-window authenticated source-archive account seed prefix.
+pub const SEED_SOURCE_ARCHIVE: &[u8] = crate::source_archive::SOURCE_ARCHIVE_SEED_V1;
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -162,6 +166,16 @@ pub fn supply_pda(program_id: &Pubkey, market: &[u8; 32]) -> (Pubkey, u8) {
 /// A feed is a Realm-scoped shared cursor, so the feed identity alone names it.
 pub fn feed_pda(program_id: &Pubkey, feed: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_FEED, feed])
+}
+
+/// Canonical immutable source-spec address and bump.
+pub fn source_spec_pda(program_id: &Pubkey, feed: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_SOURCE_SPEC, feed])
+}
+
+/// Canonical sealed source-archive address and bump for one exact window.
+pub fn source_archive_pda(program_id: &Pubkey, feed: &[u8; 32], window: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_SOURCE_ARCHIVE, feed, window])
 }
 
 /// Canonical immutable-terms address and bump.

@@ -237,6 +237,10 @@ use crate::accounts::{
 use crate::claim_truth;
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
+use crate::source_archive::{
+    self, ArchiveAccountViewV1, SealedArchiveReceiptV1, SourceSpecAccountViewV1,
+    SOURCE_ARCHIVE_ACCOUNT_V1_BYTES, SOURCE_SPEC_ACCOUNT_V1_BYTES,
+};
 use crate::token;
 use clutch_accumulator::{
     CoveragePolicy, FeedIdentity, Grid, Observation, Summary, WindowAccumulator, WindowDomain,
@@ -369,10 +373,12 @@ pub const MAX_FEED_PAGE_LEN: usize =
 ///
 /// Resolution deliberately has no Position or owner Replay account. Its only
 /// replay fact is the market's canonical [`ResolutionAccount`], and an exact
-/// repeat of that fact is idempotent. The nine roles are actor, Market, Hoard,
-/// kernel aggregate, SupplyLedger, immutable Terms, Resolution, Feed, and the
-/// hostile evidence buffer.
-pub const RESOLVE_ACCOUNT_PREFIX: usize = 9;
+/// repeat of that fact is idempotent. The eleven roles are actor, Market,
+/// Hoard, kernel aggregate, SupplyLedger, immutable Terms, Resolution, Feed,
+/// immutable SourceSpec, sealed SourceArchive, and the hostile evidence
+/// projection.  The projection remains only because the existing derivation
+/// folds that wire shape; every domain and value record must equal the archive.
+pub const RESOLVE_ACCOUNT_PREFIX: usize = 11;
 /// Fixed owner-scoped evidence prefix of `RedeemInternal`.
 ///
 /// Redemption remains a position transition and therefore retains the owner
@@ -420,8 +426,12 @@ pub const IX_RESOLVE_TERMS: usize = 5;
 pub const IX_RESOLVE_RESOLUTION: usize = 6;
 /// Feed head on the market-global Resolve plane.
 pub const IX_RESOLVE_FEED: usize = 7;
-/// Hostile evidence buffer on the market-global Resolve plane.
-pub const IX_RESOLVE_BUFFER: usize = 8;
+/// Immutable authenticated source-spec account.
+pub const IX_RESOLVE_SOURCE_SPEC: usize = 8;
+/// Canonical sealed source-archive account.
+pub const IX_RESOLVE_SOURCE_ARCHIVE: usize = 9;
+/// Hostile, redundant evidence projection on the market-global Resolve plane.
+pub const IX_RESOLVE_BUFFER: usize = 10;
 
 /* --------------------------------------------------------------------- */
 /* `RedeemInternal`'s collateral leg, mandatory                            */
@@ -493,12 +503,14 @@ const EVIDENCE_STATE_ROLES: [StateRole; 7] = [
 ];
 
 /// Program-owned market-global roles of `Resolve`.
-const RESOLVE_STATE_ROLES: [StateRole; 5] = [
+const RESOLVE_STATE_ROLES: [StateRole; 7] = [
     StateRole::writable(IX_RESOLVE_MARKET, account_len::MARKET),
     StateRole::read_only(IX_RESOLVE_HOARD, account_len::HOARD),
     StateRole::writable(IX_RESOLVE_KERNEL, KERNEL_ACCOUNT_LEN),
     StateRole::writable(IX_RESOLVE_SUPPLY, account_len::SUPPLY_LEDGER),
     StateRole::read_only(IX_RESOLVE_FEED, account_len::FEED),
+    StateRole::read_only(IX_RESOLVE_SOURCE_SPEC, SOURCE_SPEC_ACCOUNT_V1_BYTES),
+    StateRole::read_only(IX_RESOLVE_SOURCE_ARCHIVE, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES),
 ];
 
 /// Program-owned roles of `FeedAdvance`.
@@ -660,6 +672,93 @@ fn read_evidence_buffer(bytes: &[u8]) -> Gate<EvidenceBuffer<'_>> {
         window_id,
         window: &bytes[EVIDENCE_BUFFER_HEADER_BYTES..end],
     })
+}
+
+/// Require the legacy window blob to be an exact value projection of one
+/// canonical sealed source archive.
+///
+/// The blob remains a transport compatibility shape only.  It cannot select a
+/// domain, feed cursor, bucket, missing marker, or endpoint: each is compared
+/// to immutable terms and to a record read back through the sealed archive
+/// receipt.  Source sequence and publish lineage do not appear in the old
+/// shape; they remain committed by the archive and are never supplied by this
+/// projection.
+#[inline(never)]
+fn require_archive_projection(
+    receipt: SealedArchiveReceiptV1,
+    archive: ArchiveAccountViewV1<'_>,
+    bytes: &[u8],
+    expected_domain: WindowDomain,
+) -> Gate<()> {
+    if bytes.len() < WINDOW_EVIDENCE_HEADER_BYTES || bytes.len() > MAX_WINDOW_EVIDENCE_LEN {
+        return Err(ReferenceError::WrongLength);
+    }
+    let count = usize::from(u16::from_le_bytes([
+        bytes[WINDOW_EVIDENCE_HEADER_BYTES - 2],
+        bytes[WINDOW_EVIDENCE_HEADER_BYTES - 1],
+    ]));
+    if count > MAX_OBSERVATIONS
+        || count != usize::try_from(expected_domain.range_len()).unwrap_or(usize::MAX)
+    {
+        return Err(ReferenceError::WrongLength);
+    }
+    let exact = WINDOW_EVIDENCE_HEADER_BYTES
+        .checked_add(
+            count
+                .checked_mul(OBSERVATION_RECORD_BYTES)
+                .ok_or(ReferenceError::WrongLength)?,
+        )
+        .ok_or(ReferenceError::WrongLength)?;
+    if bytes.len() != exact || bytes[0] != WINDOW_EVIDENCE_TAG {
+        return Err(ReferenceError::WrongLength);
+    }
+    if bytes[1] != REFERENCE_VERSION {
+        return Err(ReferenceError::WrongVersion);
+    }
+
+    let mut reader = Cursor::new(bytes, 2);
+    let feed = FeedIdentity::new(
+        reader.raw::<IDENTITY_BYTES>()?,
+        reader.raw::<IDENTITY_BYTES>()?,
+        reader.u32()?,
+        reader.u32()?,
+    )?;
+    let grid = Grid::new(reader.u32()?, reader.u16()?, reader.u64()?)
+        .map_err(|error| ReferenceError::Window(WindowError::Summary(error)))?;
+    let start = reader.u64()?;
+    let end = reader.u64()?;
+    let maturity = reader.u64()?;
+    let generation = reader.u64()?;
+    let coverage = CoveragePolicy::from_registry(reader.u16()?, reader.u64()?)?;
+    if usize::from(reader.u16()?) != count {
+        return Err(ReferenceError::WrongLength);
+    }
+    let declared = WindowDomain::new(feed, grid, start, end, maturity, generation, coverage)?;
+    declared.check_against(&expected_domain)?;
+    if source_archive::canonical_window_id(declared) != receipt.window()
+        || receipt.start_bucket() != start
+        || receipt.end_bucket_exclusive() != end
+    {
+        return Err(ReferenceError::ResolutionBindingMismatch);
+    }
+
+    let mut index = 0_usize;
+    while index < count {
+        let kind = reader.u8()?;
+        let bucket = reader.u64()?;
+        let low = reader.u128()?;
+        let high = reader.u128()?;
+        if kind != OBSERVATION_ACCEPTED {
+            return Err(ReferenceError::ResolutionEvidenceUnavailable);
+        }
+        let archived = source_archive::archived_observation(receipt, archive, index)
+            .map_err(|_| ReferenceError::ResolutionEvidenceUnavailable)?;
+        if bucket != archived.bucket || low != archived.low || high != archived.high {
+            return Err(ReferenceError::ResolutionEvidenceUnavailable);
+        }
+        index += 1;
+    }
+    Ok(())
 }
 
 /// Fold a caller-supplied window-evidence blob into a sealed [`WindowResult`].
@@ -1289,6 +1388,13 @@ fn derived_terms(market_bytes: &[u8], terms_bytes: &[u8]) -> Gate<ResolutionTerm
     resolution_terms_of(&market, &terms)
 }
 
+/// Reconstruct only the immutable expected window, keeping the larger terms
+/// derivation in its own SBF frame.
+#[inline(never)]
+fn expected_window_domain(market_bytes: &[u8], terms_bytes: &[u8]) -> Gate<WindowDomain> {
+    Ok(derived_terms(market_bytes, terms_bytes)?.window)
+}
+
 /// Derive the payout the evidence selects, and refuse any other request.
 ///
 /// The three reference steps that must stay in this order and in one frame:
@@ -1414,7 +1520,9 @@ fn native_kernel_invariants(
     } else {
         PayoutVector::ZERO
     };
-    reconstruct_native_market(kernel_bytes, outcome_count, collateral, vector).map(|_| ())
+    let market = reconstruct_native_market(kernel_bytes, outcome_count, collateral, vector)?;
+    market.check_invariants()?;
+    Ok(())
 }
 
 /// Decode the aggregate into a pure `MarketState`, in **its own frame**.
@@ -1460,6 +1568,13 @@ fn pure_market(kernel_bytes: &[u8], outcome_count: u8, collateral: u64) -> Gate<
 /// Rebuild a derived-basis market from the aggregate and the sole persisted
 /// native vector.  The vector is ephemeral: it is installed only in this
 /// stack value and is never copied into `KernelAccount`.
+///
+/// This constructor deliberately performs no nested `MarketState` call while
+/// its large decoded `KernelAccount` is live.  Such a call caused the final
+/// SBF linker to report a callee overwriting this frame.  Invariant-only users
+/// call `check_invariants` after this decode frame has returned; transition
+/// users immediately call a kernel transition, whose first operation checks
+/// the same invariants before any mutation.
 #[inline(never)]
 pub(crate) fn reconstruct_native_market(
     kernel_bytes: &[u8],
@@ -1493,7 +1608,6 @@ pub(crate) fn reconstruct_native_market(
         total_supply: kernel.total_supply,
         payouts: kernel.payouts,
     };
-    market.check_invariants()?;
     Ok(market)
 }
 
@@ -2491,6 +2605,65 @@ fn resolve_global(
     )?;
     require(feed.feed == market.feed, ClutchError::MismatchedState)?;
 
+    /* The expected source/window addresses come only from digest-bound market
+     * terms.  The hostile compatibility projection is not read until both
+     * canonical accounts have been authenticated. */
+    let expected_window = expected_window_domain(
+        &accounts[IX_RESOLVE_MARKET].data.borrow(),
+        &accounts[IX_RESOLVE_TERMS].data.borrow(),
+    )?;
+    let expected_window_id = source_archive::canonical_window_id(expected_window);
+    let source_spec_pda = seeds::source_spec_pda(program_id, &market.feed.bytes());
+    let source_archive_pda = seeds::source_archive_pda(
+        program_id,
+        &market.feed.bytes(),
+        &expected_window_id.bytes(),
+    );
+    expect_pda(accounts[IX_RESOLVE_SOURCE_SPEC].key, source_spec_pda, None)?;
+    expect_pda(
+        accounts[IX_RESOLVE_SOURCE_ARCHIVE].key,
+        source_archive_pda,
+        None,
+    )?;
+    let source_spec_data = accounts[IX_RESOLVE_SOURCE_SPEC].data.borrow();
+    let verified_spec = source_archive::verify_source_spec_account(
+        program_id.to_bytes(),
+        source_spec_pda.0.to_bytes(),
+        SourceSpecAccountViewV1::new(
+            accounts[IX_RESOLVE_SOURCE_SPEC].key.to_bytes(),
+            accounts[IX_RESOLVE_SOURCE_SPEC].owner.to_bytes(),
+            accounts[IX_RESOLVE_SOURCE_SPEC].executable,
+            &source_spec_data,
+        ),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::ResolutionEvidenceUnavailable))?;
+    require(
+        verified_spec.feed() == market.feed && verified_spec.stored_bump() == source_spec_pda.1,
+        ClutchError::MismatchedState,
+    )?;
+    let source_archive_data = accounts[IX_RESOLVE_SOURCE_ARCHIVE].data.borrow();
+    let source_archive_view = ArchiveAccountViewV1::new(
+        accounts[IX_RESOLVE_SOURCE_ARCHIVE].key.to_bytes(),
+        accounts[IX_RESOLVE_SOURCE_ARCHIVE].owner.to_bytes(),
+        accounts[IX_RESOLVE_SOURCE_ARCHIVE].executable,
+        &source_archive_data,
+    );
+    let archive_receipt = source_archive::verify_recorded_sealed_archive(
+        program_id.to_bytes(),
+        source_archive_pda.0.to_bytes(),
+        source_archive_view,
+        verified_spec,
+        expected_window,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::ResolutionEvidenceUnavailable))?;
+    require(
+        archive_receipt.feed() == market.feed
+            && archive_receipt.window() == expected_window_id
+            && archive_receipt.stored_bump() == source_archive_pda.1
+            && feed.cursor >= archive_receipt.sealed_feed_cursor(),
+        ClutchError::MismatchedState,
+    )?;
+
     let observed = claim_truth::observe_outcome_mints(
         program_id,
         accounts,
@@ -2502,14 +2675,23 @@ fn resolve_global(
     )?;
     let buffer = accounts[IX_RESOLVE_BUFFER].data.borrow();
     let evidence = read_evidence_buffer(&buffer)?;
+    if evidence.window_id != archive_receipt.window() {
+        return Err(ReferenceError::ResolutionBindingMismatch.into());
+    }
+    require_archive_projection(
+        archive_receipt,
+        source_archive_view,
+        evidence.window,
+        expected_window,
+    )?;
     let terms_data = accounts[IX_RESOLVE_TERMS].data.borrow();
     let resolution_data = accounts[IX_RESOLVE_RESOLUTION].data.borrow();
     let plane = EvidencePlane {
         terms: &terms_data,
         resolution: &resolution_data,
         window: evidence.window,
-        window_id: evidence.window_id,
-        feed_cursor: feed.cursor,
+        window_id: archive_receipt.window(),
+        feed_cursor: archive_receipt.sealed_feed_cursor(),
         resolved_slot: 0,
         terms_writable: accounts[IX_RESOLVE_TERMS].is_writable,
         resolution_writable: accounts[IX_RESOLVE_RESOLUTION].is_writable,
@@ -2545,6 +2727,8 @@ fn resolve_global(
     drop(resolution_data);
     drop(terms_data);
     drop(buffer);
+    drop(source_archive_data);
+    drop(source_spec_data);
 
     if !output.repeated {
         /* Direct holder burns are synchronized only after the semantic gate.

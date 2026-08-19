@@ -37,6 +37,17 @@ use clutch_sbf::instructions::observe_resolve::{
     BUFFER_VERSION, EVIDENCE_BUFFER_HEADER_BYTES, EVIDENCE_BUFFER_TAG,
 };
 use clutch_sbf::seeds;
+use clutch_sbf::source::{
+    ParsedPriceV1, PriceParserV1, SourceAccountView, SourceError, SourceSpecFieldsV1, SourceSpecV1,
+    TrustedClockV1, ORIENTATION_QUOTE_PER_BASE, SELECTION_FINALIZED_BUCKET_RECORD,
+};
+use clutch_sbf::source_archive::{
+    append_authenticated, canonical_window_id, initialize_archive, initialize_source_spec_account,
+    seal_archive, verify_source_spec_account, ArchivePredecessorV1, CoveragePolicy,
+    DeploymentAuthenticatorV1, FeedIdentity, Grid, RuntimeAccountViewV1, SourceArchiveError,
+    SourceSpecAccountViewV1, WindowDomain, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES,
+    SOURCE_SPEC_ACCOUNT_V1_BYTES,
+};
 use clutch_solana_layout::{
     account_len, canonical_market_id, canonical_outcome_id, canonical_realm_id, collateral,
     FeedAccount, FeedId, Hash32, HoardAccount, Intent, MarketAccount, PayoutVectorBytes,
@@ -62,6 +73,76 @@ pub const PROGRAM_ID: Address = Address::new_from_array([
 
 /// The Token-2022 program id, taken from the frozen layout crate.
 pub const TOKEN_2022: Address = Address::new_from_array(collateral::TOKEN_2022_PROGRAM);
+
+/// Fixture-only reviewed-adapter identity. It is not a production source.
+pub const SOURCE_ADAPTER_ID: [u8; 32] = [0xa1; 32];
+const SOURCE_PROGRAM: [u8; 32] = [0xa2; 32];
+const SOURCE_PROGRAM_OWNER: [u8; 32] = [0xa3; 32];
+const SOURCE_DATA_ACCOUNT: [u8; 32] = [0xa4; 32];
+const SOURCE_DEPLOYMENT_ACCOUNT: [u8; 32] = [0xa5; 32];
+const SOURCE_DEPLOYMENT_OWNER: [u8; 32] = [0xa6; 32];
+const SOURCE_DEPLOYMENT_VERIFIER: [u8; 32] = [0xa7; 32];
+const SOURCE_DEPLOYMENT_GENERATION: u64 = 1;
+const SOURCE_RECORD_BYTES: usize = 77;
+
+struct FixtureDeployment;
+
+impl DeploymentAuthenticatorV1 for FixtureDeployment {
+    const VERIFIER_ID: [u8; 32] = SOURCE_DEPLOYMENT_VERIFIER;
+    const VERIFIER_VERSION: u32 = 1;
+    const PROVIDER_PROGRAM: [u8; 32] = SOURCE_PROGRAM;
+    const PROVIDER_PROGRAM_OWNER: [u8; 32] = SOURCE_PROGRAM_OWNER;
+    const DEPLOYMENT_ACCOUNT: [u8; 32] = SOURCE_DEPLOYMENT_ACCOUNT;
+    const DEPLOYMENT_OWNER: [u8; 32] = SOURCE_DEPLOYMENT_OWNER;
+
+    fn deployment_generation(
+        provider_program_data: &[u8],
+        deployment_account_data: &[u8],
+    ) -> Result<u64, SourceArchiveError> {
+        if provider_program_data != b"fixture-provider-v1"
+            || deployment_account_data != b"fixture-deployment-v1"
+        {
+            return Err(SourceArchiveError::DeploymentAdapterRefused);
+        }
+        Ok(SOURCE_DEPLOYMENT_GENERATION)
+    }
+}
+
+struct FixturePriceParser;
+
+impl PriceParserV1 for FixturePriceParser {
+    const SOURCE_ADAPTER_ID: [u8; 32] = SOURCE_ADAPTER_ID;
+    const SOURCE_ADAPTER_VERSION: u32 = 1;
+    const PARSER_ID: u16 = 1;
+    const PARSER_VERSION: u16 = 1;
+
+    fn parse(account: SourceAccountView<'_>) -> Result<ParsedPriceV1, SourceError> {
+        let bytes = account.data();
+        if bytes.len() != SOURCE_RECORD_BYTES || &bytes[..4] != b"SRC1" {
+            return Err(SourceError::ParserRefused);
+        }
+        let u64_at = |offset: usize| {
+            let mut value = [0_u8; 8];
+            value.copy_from_slice(&bytes[offset..offset + 8]);
+            u64::from_le_bytes(value)
+        };
+        let u128_at = |offset: usize| {
+            let mut value = [0_u8; 16];
+            value.copy_from_slice(&bytes[offset..offset + 16]);
+            u128::from_le_bytes(value)
+        };
+        Ok(ParsedPriceV1 {
+            deployment_generation: u64_at(4),
+            source_sequence: u64_at(12),
+            publish_slot: u64_at(20),
+            publish_time: u64_at(28),
+            canonical_bucket: u64_at(36),
+            price_atoms: u128_at(44),
+            confidence_atoms: u128_at(60),
+            finalized_bucket: bytes[76] == 1,
+        })
+    }
+}
 
 /// Realm nonce, and the market nonces of the two fixture markets.
 const REALM_NONCE: u64 = 7;
@@ -167,6 +248,10 @@ pub struct Plane {
     pub feed: Pda,
     /// The feed identity the market resolves against.
     pub feed_id: FeedId,
+    /// Canonical immutable source-spec account.
+    pub source_spec: Pda,
+    /// Canonical sealed source archive for this market's exact window.
+    pub source_archive: Pda,
     /// Evidence buffer used by the fixture.
     ///
     /// An active plane carries the complete sealed window needed by `Resolve`.
@@ -203,6 +288,53 @@ fn payout_set() -> PayoutSet {
     right[1] = 1;
     vectors[1] = PayoutVector::new(1, right);
     PayoutSet::new(2, OUTCOME_COUNT, vectors)
+}
+
+fn fixture_source_spec() -> SourceSpecV1 {
+    SourceSpecV1::new(SourceSpecFieldsV1 {
+        source_adapter_id: Hash32::from_bytes(SOURCE_ADAPTER_ID),
+        source_adapter_version: 1,
+        parser_id: 1,
+        parser_version: 1,
+        source_program: SOURCE_PROGRAM,
+        source_account: SOURCE_DATA_ACCOUNT,
+        deployment_generation: SOURCE_DEPLOYMENT_GENERATION,
+        base_asset_id: Hash32::from_bytes([0xb1; 32]),
+        quote_asset_id: Hash32::from_bytes([0xb2; 32]),
+        orientation: ORIENTATION_QUOTE_PER_BASE,
+        normalized_decimals: 0,
+        grid_family_id: 7,
+        grid_version: 1,
+        bucket_seconds: 60,
+        max_staleness_slots: 20,
+        max_staleness_seconds: 120,
+        max_future_seconds: 2,
+        max_confidence_atoms: 1,
+        max_confidence_bps: 10_000,
+        confidence_multiplier: 1,
+        selection_rule: SELECTION_FINALIZED_BUCKET_RECORD,
+    })
+    .expect("fixture source spec")
+}
+
+fn fixture_source_record(
+    bucket: u64,
+    sequence: u64,
+    slot: u64,
+    price: u128,
+    confidence: u128,
+) -> [u8; 77] {
+    let mut out = [0_u8; SOURCE_RECORD_BYTES];
+    out[..4].copy_from_slice(b"SRC1");
+    out[4..12].copy_from_slice(&SOURCE_DEPLOYMENT_GENERATION.to_le_bytes());
+    out[12..20].copy_from_slice(&sequence.to_le_bytes());
+    out[20..28].copy_from_slice(&slot.to_le_bytes());
+    out[28..36].copy_from_slice(&(bucket * 60).to_le_bytes());
+    out[36..44].copy_from_slice(&bucket.to_le_bytes());
+    out[44..60].copy_from_slice(&price.to_le_bytes());
+    out[60..76].copy_from_slice(&confidence.to_le_bytes());
+    out[76] = 1;
+    out
 }
 
 /// The Realm's frozen collateral policy: a real, decodable 266-byte policy.
@@ -302,8 +434,8 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
         *slot = canonical_outcome_id(market_id, index as u8);
     }
 
-    let feed_id = FeedId::from_bytes([9; 32]);
-    let window_id = Hash32::from_bytes([0x77; 32]);
+    let source_spec_value = fixture_source_spec();
+    let feed_id = source_spec_value.feed_id();
     /* The terms artifact is self-certifying: its digest is over its body, and
      * its address is `terms_pda(realm, digest)`.  The stored bump is outside
      * the body (`TERMS_BODY_BYTES` excludes it), so the digest can be computed
@@ -321,6 +453,83 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
     );
     let resolution = derive(&[seeds::SEED_RESOLUTION, &market_seed]);
     let feed = derive(&[seeds::SEED_FEED, &feed_id.bytes()]);
+    let source_spec = derive(&[seeds::SEED_SOURCE_SPEC, &feed_id.bytes()]);
+    let feed_identity = FeedIdentity::new(SOURCE_ADAPTER_ID, feed_id.bytes(), 1, 1)
+        .expect("fixture source identity");
+    let window_domain = WindowDomain::new(
+        feed_identity,
+        Grid::new(7, 1, 60).expect("fixture grid"),
+        START_BUCKET,
+        END_BUCKET,
+        START_BUCKET + 4,
+        0,
+        CoveragePolicy::COMPLETE_REQUIRED,
+    )
+    .expect("fixture window domain");
+    let window_id = canonical_window_id(window_domain);
+    let source_archive = derive(&[
+        seeds::SEED_SOURCE_ARCHIVE,
+        &feed_id.bytes(),
+        &window_id.bytes(),
+    ]);
+    let mut source_spec_bytes = vec![0_u8; SOURCE_SPEC_ACCOUNT_V1_BYTES];
+    initialize_source_spec_account(&mut source_spec_bytes, source_spec_value, source_spec.bump)
+        .expect("fixture source-spec account");
+    let verified_spec = verify_source_spec_account(
+        PROGRAM_ID.to_bytes(),
+        source_spec.address.to_bytes(),
+        SourceSpecAccountViewV1::new(
+            source_spec.address.to_bytes(),
+            PROGRAM_ID.to_bytes(),
+            false,
+            &source_spec_bytes,
+        ),
+    )
+    .expect("fixture source-spec authentication");
+    let mut source_archive_bytes = vec![0_u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES];
+    initialize_archive::<FixtureDeployment>(
+        &mut source_archive_bytes,
+        verified_spec,
+        window_domain,
+        ArchivePredecessorV1::GENESIS,
+        source_archive.bump,
+    )
+    .expect("fixture archive initialization");
+    let provider = RuntimeAccountViewV1::new(
+        SOURCE_PROGRAM,
+        SOURCE_PROGRAM_OWNER,
+        true,
+        b"fixture-provider-v1",
+    );
+    let deployment = RuntimeAccountViewV1::new(
+        SOURCE_DEPLOYMENT_ACCOUNT,
+        SOURCE_DEPLOYMENT_OWNER,
+        false,
+        b"fixture-deployment-v1",
+    );
+    for (index, bucket) in (START_BUCKET..END_BUCKET).enumerate() {
+        let record = fixture_source_record(bucket, index as u64 + 1, 1_000 + index as u64, 1, 0);
+        append_authenticated::<FixturePriceParser, FixtureDeployment>(
+            &mut source_archive_bytes,
+            verified_spec,
+            window_domain,
+            TrustedClockV1 {
+                slot: 1_005 + index as u64,
+                unix_seconds: bucket * 60 + 1,
+            },
+            provider,
+            deployment,
+            SourceAccountView::new(SOURCE_DATA_ACCOUNT, SOURCE_PROGRAM, false, &record),
+        )
+        .expect("fixture authenticated source append");
+    }
+    seal_archive::<FixtureDeployment>(
+        &mut source_archive_bytes,
+        verified_spec,
+        window_domain,
+        FEED_CURSOR,
+    )
+    .expect("fixture source archive seal");
 
     let funded = !matches!(mode, Mode::Empty);
     let hoard_atoms = if funded { FUNDED_SETS } else { 0 };
@@ -393,6 +602,16 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
                 }
                 .encode(out)
             }),
+        },
+        GenesisAccount {
+            address: source_spec.address,
+            owner: PROGRAM_ID,
+            data: source_spec_bytes,
+        },
+        GenesisAccount {
+            address: source_archive.address,
+            owner: PROGRAM_ID,
+            data: source_archive_bytes,
         },
         GenesisAccount {
             address: BUFFER_ACCOUNT,
@@ -566,11 +785,111 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
         resolution,
         feed,
         feed_id,
+        source_spec,
+        source_archive,
         buffer: BUFFER_ACCOUNT,
         window_id,
         hoard_atoms,
         accounts,
     }
+}
+
+/// Replace a fixture plane's canonical archive with three authenticated records.
+///
+/// This is deliberately a **local SBF fixture** seam, not a production source
+/// adapter. The rewritten account keeps the plane's exact SourceSpec, feed,
+/// canonical window, PDA, bump, and sealed cursor. `confidence` must satisfy
+/// the fixture SourceSpec's one-atom ceiling. Callers that also replace the
+/// legacy Resolve evidence buffer must encode the exact resulting interval
+/// `[price - confidence, price + confidence]` for all three buckets.
+pub fn rewrite_plane_source_archive(plane: &mut Plane, price: u128, confidence: u128) {
+    assert!(
+        confidence <= 1,
+        "fixture confidence exceeds SourceSpec ceiling"
+    );
+    assert!(price >= confidence, "fixture interval underflows");
+
+    let spec_account = plane
+        .accounts
+        .iter()
+        .find(|account| account.address == plane.source_spec.address)
+        .expect("plane carries canonical SourceSpec");
+    let verified_spec = verify_source_spec_account(
+        PROGRAM_ID.to_bytes(),
+        plane.source_spec.address.to_bytes(),
+        SourceSpecAccountViewV1::new(
+            plane.source_spec.address.to_bytes(),
+            PROGRAM_ID.to_bytes(),
+            false,
+            &spec_account.data,
+        ),
+    )
+    .expect("fixture SourceSpec remains authenticated");
+    let feed_identity = FeedIdentity::new(SOURCE_ADAPTER_ID, plane.feed_id.bytes(), 1, 1)
+        .expect("fixture source identity");
+    let window_domain = WindowDomain::new(
+        feed_identity,
+        Grid::new(7, 1, 60).expect("fixture grid"),
+        START_BUCKET,
+        END_BUCKET,
+        START_BUCKET + 4,
+        0,
+        CoveragePolicy::COMPLETE_REQUIRED,
+    )
+    .expect("fixture window domain");
+    assert_eq!(canonical_window_id(window_domain), plane.window_id);
+
+    let mut archive = vec![0_u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES];
+    initialize_archive::<FixtureDeployment>(
+        &mut archive,
+        verified_spec,
+        window_domain,
+        ArchivePredecessorV1::GENESIS,
+        plane.source_archive.bump,
+    )
+    .expect("fixture archive initialization");
+    let provider = RuntimeAccountViewV1::new(
+        SOURCE_PROGRAM,
+        SOURCE_PROGRAM_OWNER,
+        true,
+        b"fixture-provider-v1",
+    );
+    let deployment = RuntimeAccountViewV1::new(
+        SOURCE_DEPLOYMENT_ACCOUNT,
+        SOURCE_DEPLOYMENT_OWNER,
+        false,
+        b"fixture-deployment-v1",
+    );
+    for (index, bucket) in (START_BUCKET..END_BUCKET).enumerate() {
+        let record = fixture_source_record(
+            bucket,
+            index as u64 + 1,
+            1_000 + index as u64,
+            price,
+            confidence,
+        );
+        append_authenticated::<FixturePriceParser, FixtureDeployment>(
+            &mut archive,
+            verified_spec,
+            window_domain,
+            TrustedClockV1 {
+                slot: 1_005 + index as u64,
+                unix_seconds: bucket * 60 + 1,
+            },
+            provider,
+            deployment,
+            SourceAccountView::new(SOURCE_DATA_ACCOUNT, SOURCE_PROGRAM, false, &record),
+        )
+        .expect("fixture authenticated source append");
+    }
+    seal_archive::<FixtureDeployment>(&mut archive, verified_spec, window_domain, FEED_CURSOR)
+        .expect("fixture source archive seal");
+    plane
+        .accounts
+        .iter_mut()
+        .find(|account| account.address == plane.source_archive.address)
+        .expect("plane carries canonical SourceArchive")
+        .data = archive;
 }
 
 /// Encode one account into a freshly zeroed buffer of its exact length.
@@ -782,7 +1101,7 @@ pub fn fixture_terms(realm: Hash32, profile: Hash32, feed: FeedId) -> TermsAccou
         repair_generation: 0,
         source_version: 1,
         evaluator_version: 1,
-        source_adapter_id: feed,
+        source_adapter_id: Hash32::from_bytes(SOURCE_ADAPTER_ID),
         payout_map,
         knots,
         collateral_cap: COLLATERAL_CAP,
@@ -854,8 +1173,23 @@ fn evidence_buffer_bytes(window_id: Hash32) -> Vec<u8> {
 /// The private `0x45` reference tag/version bytes are pinned here against the
 /// production decoder: any drift makes the real SBF Resolve transaction fail.
 fn resolution_evidence_buffer_bytes(window_id: Hash32, feed: FeedId) -> Vec<u8> {
+    source_resolution_evidence_buffer(window_id, feed, 1, 1)
+}
+
+/// Encode the exact redundant Resolve projection for a local fixture archive.
+///
+/// The source-adapter identity is distinct from the content-addressed feed
+/// identity.  Keeping this encoder next to [`rewrite_plane_source_archive`]
+/// prevents tests from accidentally writing the feed digest into both fields,
+/// a shape the canonical SourceSpec/window binding correctly refuses.
+pub fn source_resolution_evidence_buffer(
+    window_id: Hash32,
+    feed: FeedId,
+    low: u128,
+    high: u128,
+) -> Vec<u8> {
     let mut window = vec![0x45_u8, 1];
-    window.extend_from_slice(&feed.bytes()); // source adapter
+    window.extend_from_slice(&SOURCE_ADAPTER_ID); // source adapter
     window.extend_from_slice(&feed.bytes()); // feed spec
     window.extend_from_slice(&1_u32.to_le_bytes()); // source version
     window.extend_from_slice(&1_u32.to_le_bytes()); // evaluator version
@@ -869,11 +1203,11 @@ fn resolution_evidence_buffer_bytes(window_id: Hash32, feed: FeedId) -> Vec<u8> 
     window.extend_from_slice(&1_u16.to_le_bytes()); // complete-required coverage
     window.extend_from_slice(&0_u64.to_le_bytes()); // coverage parameter
     window.extend_from_slice(&3_u16.to_le_bytes());
-    for (bucket, value) in [(100_u64, 0_u128), (101, 0), (102, 1)] {
+    for bucket in START_BUCKET..END_BUCKET {
         window.push(1); // accepted observation
         window.extend_from_slice(&bucket.to_le_bytes());
-        window.extend_from_slice(&value.to_le_bytes());
-        window.extend_from_slice(&value.to_le_bytes());
+        window.extend_from_slice(&low.to_le_bytes());
+        window.extend_from_slice(&high.to_le_bytes());
     }
     let mut data = vec![0_u8; EVIDENCE_BUFFER_HEADER_BYTES];
     data[0] = EVIDENCE_BUFFER_TAG;
@@ -906,12 +1240,12 @@ impl Plane {
         ]
     }
 
-    /// The nine market-global prefix accounts of `Resolve`, in list order.
+    /// The eleven market-global prefix accounts of `Resolve`, in list order.
     ///
     /// Callers append every canonical outcome mint after this prefix.  Those
     /// mints are intentionally absent here because their count is a market
     /// fact rather than a fixture-wide constant.
-    pub fn resolve_addresses(&self) -> [Address; 9] {
+    pub fn resolve_addresses(&self) -> [Address; 11] {
         [
             self.actor,
             self.market.address,
@@ -921,6 +1255,8 @@ impl Plane {
             self.terms.address,
             self.resolution.address,
             self.feed.address,
+            self.source_spec.address,
+            self.source_archive.address,
             self.buffer,
         ]
     }

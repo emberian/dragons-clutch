@@ -614,6 +614,7 @@ impl<'a> ArchiveAccountViewV1<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SealedArchiveReceiptV1 {
     archive_key: [u8; 32],
+    archive_owner: [u8; 32],
     feed: Hash32,
     window: Hash32,
     page_commitment: Hash32,
@@ -624,6 +625,7 @@ pub struct SealedArchiveReceiptV1 {
     last_source_sequence: u64,
     last_publish_slot: u64,
     last_publish_time: u64,
+    stored_bump: u8,
 }
 
 impl SealedArchiveReceiptV1 {
@@ -682,6 +684,11 @@ impl SealedArchiveReceiptV1 {
         self.last_publish_time
     }
 
+    /// Canonical archive PDA bump stored in the sealed page.
+    pub const fn stored_bump(self) -> u8 {
+        self.stored_bump
+    }
+
     /// Project into the older typed resolution-archive relation only after the
     /// stronger key/owner/window verifier has constructed this receipt.
     pub const fn authenticated_archive(self) -> AuthenticatedArchiveV1 {
@@ -721,10 +728,17 @@ pub fn verify_sealed_archive<D: DeploymentAuthenticatorV1>(
     if account.executable {
         return Err(SourceArchiveError::ArchiveExecutable);
     }
-    let header = verify_archive::<D>(account.data, verified_spec.spec, window, true)?;
+    let header = verify_archive_release(
+        account.data,
+        verified_spec.spec,
+        window,
+        true,
+        deployment_release::<D>()?,
+    )?;
     let last = last_lineage(account.data, header)?;
     Ok(SealedArchiveReceiptV1 {
         archive_key: account.key,
+        archive_owner: account.owner,
         feed: header.feed,
         window: header.window,
         page_commitment: header.page_commitment,
@@ -735,6 +749,110 @@ pub fn verify_sealed_archive<D: DeploymentAuthenticatorV1>(
         last_source_sequence: last.source_sequence,
         last_publish_slot: last.publish_slot,
         last_publish_time: last.publish_time,
+        stored_bump: account.data[ARCHIVE_BUMP_OFFSET],
+    })
+}
+
+/// Authenticate a sealed archive by its canonical program-owned receipt.
+///
+/// Unlike [`verify_sealed_archive`], this function does not re-run or select a
+/// provider deployment adapter.  It is the resolution-time verifier: the exact
+/// program-owned key, sealed flag, source-spec binding, recorded nonzero
+/// adapter/parser/deployment release, record lineage, and page commitment are
+/// the historical admission capability.  A production archive can reach this
+/// state only through the program's closed-registry append/seal route.  This
+/// function therefore makes no claim that such a route or a production oracle
+/// adapter exists today.
+pub fn verify_recorded_sealed_archive(
+    clutch_program: [u8; 32],
+    expected_archive_key: [u8; 32],
+    account: ArchiveAccountViewV1<'_>,
+    verified_spec: VerifiedSourceSpecAccountV1,
+    window: WindowDomain,
+) -> Result<SealedArchiveReceiptV1, SourceArchiveError> {
+    if is_zero(&clutch_program) || is_zero(&expected_archive_key) {
+        return Err(SourceArchiveError::ZeroIdentity);
+    }
+    if account.key != expected_archive_key {
+        return Err(SourceArchiveError::ArchiveAccountMismatch);
+    }
+    if account.owner != clutch_program {
+        return Err(SourceArchiveError::ArchiveOwnerMismatch);
+    }
+    if account.executable {
+        return Err(SourceArchiveError::ArchiveExecutable);
+    }
+    let release = recorded_deployment_release(account.data, verified_spec.spec)?;
+    let header = verify_archive_release(account.data, verified_spec.spec, window, true, release)?;
+    let last = last_lineage(account.data, header)?;
+    Ok(SealedArchiveReceiptV1 {
+        archive_key: account.key,
+        archive_owner: account.owner,
+        feed: header.feed,
+        window: header.window,
+        page_commitment: header.page_commitment,
+        deployment_generation: header.deployment_generation,
+        start_bucket: header.window_start,
+        end_bucket_exclusive: header.window_end,
+        sealed_feed_cursor: header.sealed_feed_cursor,
+        last_source_sequence: last.source_sequence,
+        last_publish_slot: last.publish_slot,
+        last_publish_time: last.publish_time,
+        stored_bump: account.data[ARCHIVE_BUMP_OFFSET],
+    })
+}
+
+/// One exact value record read back from a verified sealed archive.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArchivedObservationV1 {
+    /// Canonical bucket.
+    pub bucket: u64,
+    /// Conservative low endpoint.
+    pub low: u128,
+    /// Conservative high endpoint.
+    pub high: u128,
+    /// Source-native sequence.
+    pub source_sequence: u64,
+    /// Source publish slot.
+    pub publish_slot: u64,
+    /// Source publish time.
+    pub publish_time: u64,
+}
+
+/// Read one observation from the exact account that produced `receipt`.
+///
+/// The account key, owner, executable bit, length, and recomputed commitment
+/// are repeated so a receipt cannot be paired with another page's bytes.
+pub fn archived_observation(
+    receipt: SealedArchiveReceiptV1,
+    account: ArchiveAccountViewV1<'_>,
+    index: usize,
+) -> Result<ArchivedObservationV1, SourceArchiveError> {
+    if account.key != receipt.archive_key {
+        return Err(SourceArchiveError::ArchiveAccountMismatch);
+    }
+    if account.owner != receipt.archive_owner {
+        return Err(SourceArchiveError::ArchiveOwnerMismatch);
+    }
+    if account.executable {
+        return Err(SourceArchiveError::ArchiveExecutable);
+    }
+    exact_len(account.data, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES)?;
+    if page_commitment(account.data) != receipt.page_commitment {
+        return Err(SourceArchiveError::CommitmentMismatch);
+    }
+    let count = usize::from(account.data[ARCHIVE_COUNT_OFFSET]);
+    if index >= count || index >= SOURCE_ARCHIVE_MAX_RECORDS_V1 {
+        return Err(SourceArchiveError::MalformedRecord);
+    }
+    let offset = record_offset(index);
+    Ok(ArchivedObservationV1 {
+        bucket: u64_at(account.data, offset),
+        low: u128_at(account.data, offset + 8),
+        high: u128_at(account.data, offset + 24),
+        source_sequence: u64_at(account.data, offset + 40),
+        publish_slot: u64_at(account.data, offset + 48),
+        publish_time: u64_at(account.data, offset + 56),
     })
 }
 
@@ -763,6 +881,16 @@ struct ArchiveHeaderV1 {
     previous: LineageV1,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DeploymentReleaseV1 {
+    provider_program: [u8; 32],
+    provider_program_owner: [u8; 32],
+    deployment_account: [u8; 32],
+    deployment_owner: [u8; 32],
+    verifier_id: [u8; 32],
+    verifier_version: u32,
+}
+
 fn verify_open_archive<D: DeploymentAuthenticatorV1>(
     archive: &[u8],
     spec: SourceSpecV1,
@@ -777,8 +905,23 @@ fn verify_archive<D: DeploymentAuthenticatorV1>(
     window: WindowDomain,
     require_sealed: bool,
 ) -> Result<ArchiveHeaderV1, SourceArchiveError> {
+    verify_archive_release(
+        archive,
+        spec,
+        window,
+        require_sealed,
+        deployment_release::<D>()?,
+    )
+}
+
+fn verify_archive_release(
+    archive: &[u8],
+    spec: SourceSpecV1,
+    window: WindowDomain,
+    require_sealed: bool,
+    release: DeploymentReleaseV1,
+) -> Result<ArchiveHeaderV1, SourceArchiveError> {
     exact_len(archive, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES)?;
-    validate_deployment_adapter::<D>()?;
     validate_window(spec, window)?;
     if archive[0] != SOURCE_ARCHIVE_ACCOUNT_TAG {
         return Err(SourceArchiveError::WrongTag);
@@ -828,12 +971,13 @@ fn verify_archive<D: DeploymentAuthenticatorV1>(
     let spec_bytes = spec.encode_canonical();
     if u16_at(archive, ARCHIVE_PARSER_ID_OFFSET) != u16_at(&spec_bytes, 46)
         || u16_at(archive, ARCHIVE_PARSER_VERSION_OFFSET) != u16_at(&spec_bytes, 48)
-        || array_32(archive, ARCHIVE_PROVIDER_PROGRAM_OFFSET) != D::PROVIDER_PROGRAM
-        || array_32(archive, ARCHIVE_PROVIDER_PROGRAM_OWNER_OFFSET) != D::PROVIDER_PROGRAM_OWNER
-        || array_32(archive, ARCHIVE_DEPLOYMENT_ACCOUNT_OFFSET) != D::DEPLOYMENT_ACCOUNT
-        || array_32(archive, ARCHIVE_DEPLOYMENT_OWNER_OFFSET) != D::DEPLOYMENT_OWNER
-        || array_32(archive, ARCHIVE_DEPLOYMENT_VERIFIER_OFFSET) != D::VERIFIER_ID
-        || u32_at(archive, ARCHIVE_DEPLOYMENT_VERIFIER_VERSION_OFFSET) != D::VERIFIER_VERSION
+        || array_32(archive, ARCHIVE_PROVIDER_PROGRAM_OFFSET) != release.provider_program
+        || array_32(archive, ARCHIVE_PROVIDER_PROGRAM_OWNER_OFFSET)
+            != release.provider_program_owner
+        || array_32(archive, ARCHIVE_DEPLOYMENT_ACCOUNT_OFFSET) != release.deployment_account
+        || array_32(archive, ARCHIVE_DEPLOYMENT_OWNER_OFFSET) != release.deployment_owner
+        || array_32(archive, ARCHIVE_DEPLOYMENT_VERIFIER_OFFSET) != release.verifier_id
+        || u32_at(archive, ARCHIVE_DEPLOYMENT_VERIFIER_VERSION_OFFSET) != release.verifier_version
     {
         return Err(SourceArchiveError::AdapterReleaseMismatch);
     }
@@ -889,6 +1033,44 @@ fn verify_archive<D: DeploymentAuthenticatorV1>(
             publish_time: u64_at(archive, ARCHIVE_PREVIOUS_PUBLISH_TIME_OFFSET),
         },
     })
+}
+
+fn deployment_release<D: DeploymentAuthenticatorV1>(
+) -> Result<DeploymentReleaseV1, SourceArchiveError> {
+    validate_deployment_adapter::<D>()?;
+    Ok(DeploymentReleaseV1 {
+        provider_program: D::PROVIDER_PROGRAM,
+        provider_program_owner: D::PROVIDER_PROGRAM_OWNER,
+        deployment_account: D::DEPLOYMENT_ACCOUNT,
+        deployment_owner: D::DEPLOYMENT_OWNER,
+        verifier_id: D::VERIFIER_ID,
+        verifier_version: D::VERIFIER_VERSION,
+    })
+}
+
+fn recorded_deployment_release(
+    archive: &[u8],
+    spec: SourceSpecV1,
+) -> Result<DeploymentReleaseV1, SourceArchiveError> {
+    exact_len(archive, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES)?;
+    let release = DeploymentReleaseV1 {
+        provider_program: array_32(archive, ARCHIVE_PROVIDER_PROGRAM_OFFSET),
+        provider_program_owner: array_32(archive, ARCHIVE_PROVIDER_PROGRAM_OWNER_OFFSET),
+        deployment_account: array_32(archive, ARCHIVE_DEPLOYMENT_ACCOUNT_OFFSET),
+        deployment_owner: array_32(archive, ARCHIVE_DEPLOYMENT_OWNER_OFFSET),
+        verifier_id: array_32(archive, ARCHIVE_DEPLOYMENT_VERIFIER_OFFSET),
+        verifier_version: u32_at(archive, ARCHIVE_DEPLOYMENT_VERIFIER_VERSION_OFFSET),
+    };
+    if release.provider_program != spec.source_program()
+        || is_zero(&release.provider_program_owner)
+        || is_zero(&release.deployment_account)
+        || is_zero(&release.deployment_owner)
+        || is_zero(&release.verifier_id)
+        || release.verifier_version == 0
+    {
+        return Err(SourceArchiveError::AdapterReleaseMismatch);
+    }
+    Ok(release)
 }
 
 fn verify_records(archive: &[u8], count: u8, first_bucket: u64) -> Result<(), SourceArchiveError> {
@@ -1009,7 +1191,8 @@ fn validate_window(spec: SourceSpecV1, window: WindowDomain) -> Result<(), Sourc
     Ok(())
 }
 
-fn canonical_window_id(window: WindowDomain) -> Hash32 {
+/// Derive the canonical identity of one immutable window domain.
+pub fn canonical_window_id(window: WindowDomain) -> Hash32 {
     let mut bytes = [0_u8; WINDOW_DOMAIN_BYTES];
     window.encode_canonical(&mut bytes);
     Hash32::from_bytes(solana_sha256_hasher::hashv(&[WINDOW_DOMAIN_TAG, &bytes]).to_bytes())
