@@ -61,6 +61,26 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- DIRECT V3 MERGED TO MAIN at fb72b34 (15,074 insertions, 23 files). The
+  venue exists: staged clearing routed for tags 36-46 behind one dispatcher
+  arm. Rebase (not cherry-pick) was directed and paid for itself twice —
+  it exposed a FOURTH instance of the 1e8b8a3 non-exhaustive-match defect
+  that only a rebase could reveal, and my predicted post-rebase counts
+  (78/85) caught the lane running a "default" suite against a leftover mock
+  ELF. Final: default 78/0 (af6bb79c), mock 85/0 (3ae97767), offline suites
+  green, strict clippy clean on all touched crates. Re-measured CU keeps
+  the conservative figure per row; tightest is Submit-replacement at
+  1,127,892 = 80.6% of ceiling. Watch item: Finalize at 659,231 now clears
+  its documented "under 660,000" claim by only 769 CU — do not restate that
+  margin loosely. Per-order cancellation answered: DESIGN DECISION, V3 is
+  an epoch-atomic two-order book (page requires tombstone_count == 0,
+  committed into the digest); a placed order's only pre-Freeze exit is the
+  permissionless AbortUnfrozenDirectV4, so no value is trapped but
+  placement-to-submission-open is a committed window — a venue property,
+  not an implementation detail. Lane also self-reported erasing the word
+  "Cancel" from a predecessor-audit sentence and restored it.
+  RESEAL CYCLE NOW MINE: new ELF identity by construction.
+
 - DIRECT V3 ROUTED AND COMPLETE on codex/r3-direct-v3-successor (b00dea1,
   10 commits): the full lifecycle — InitEpoch, InitOrderPage, Place,
   Freeze, Abort, Submit/admit, staged Verify, Finalize/Select, Settle,
