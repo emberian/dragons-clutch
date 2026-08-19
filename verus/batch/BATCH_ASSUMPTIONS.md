@@ -12,8 +12,22 @@ branch in the checked proof unit.
 Verus checks the mathematical model in `batch.rs`; it does not import or
 compile `crates/clutch-batch/src/lib.rs`. The runner refuses drift in the whole
 scalar production file and separately in the `PriceGrid` implementation,
-`FixedBook` implementation, and `Candidate` definition. Those digests make the
-following review stable, but do not turn it into a machine-checked refinement:
+`FixedBook` implementation, exact `allocate_side` body, and `Candidate`
+definition. Those digests make the following review stable, but do not turn it
+into a machine-checked refinement:
+
+- `dust_loop_has_positive_choice` proves the arithmetic progress obligation
+  for one eligible side. From `sum(quantity) = total`, quotient floors, and a
+  one-shot `assigned` mask whose count is below `dust`, it derives an
+  unassigned positive remainder. `dust_loop_maximal_choice_is_positive` then
+  proves any maximal unassigned remainder is positive. The concrete
+  `dust_loop_progress_nonvacuous_example` checks that these premises are
+  satisfiable. The model sequence is the active eligible orders, in production
+  order; ineligible active orders and inactive tail slots are omitted, and
+  `assigned` is the production array projected onto those same eligible
+  indices. Human correspondence maps its count to completed loop iterations
+  and maximality to the nested scan over exactly that eligible projection;
+  those filtering and executable loop invariants are not imported into Verus.
 
 - `allocation_decomposes_and_bounds` models one eligible side after
   `side_total`: `quantity` is mathematical nonnegative order quantity,
@@ -36,18 +50,31 @@ following review stable, but do not turn it into a machine-checked refinement:
   establishes this premise and does not claim every inactive scalar `Order`
   field is zero.
 
+The reviewed series `c1a0a656 -> e6ce886 -> c9d1cd4` was independently rerun
+before this increment and reproduced `20 verified, 0 errors` plus its four
+required expected-red mutants. Against sealed main
+`6743b9d5b4bee313987770cc048983e26d8c70f3`, all three reviewed production
+files are byte-identical: scalar `lib.rs`
+`f25ce5524a71f9e8ad5200992bb69290444865243f26040906d7aa6798013249`,
+`relation_v1.rs`
+`f95b4931414386f109ef52b844616f86f11e21121d6f9ef8901f18b77eafc490`,
+and `relation_v1_stream.rs`
+`c196c096c75adfb85397eda5e5d905dde89349ab06512e5ad02d345d75fbf358`.
+This is source identity evidence, not a proof of correspondence.
+
 The `relation_v1` and `relation_v1_stream` digests are recorded as excluded
-sources. The four theorems are not proofs of the coupled outcome-conservation,
+sources. These theorems are not proofs of the coupled outcome-conservation,
 owner-pairing, AON-mask, portfolio, or streaming relations bearing those names.
 
 ## Remaining STOPs
 
-1. The production `allocate_side` loop itself is not verified. In particular,
-   a proof is still needed that it completes exactly the dust count, that enough
-   distinct positive remainders exist, that its selected entries have positive
-   remainder, and therefore that `selected.ok_or(ArithmeticOverflow)` is
-   unreachable for `AssignCanonical`. Positive remainder is a theorem premise;
-   production progress and completed count are not theorem conclusions.
+1. The production `allocate_side` loop itself is not verified. The new model
+   theorem proves enough distinct positive remainders exist at every unfinished
+   one-shot assignment and that a maximal choice is positive. Mapping
+   `left = dust - count(assigned)`, preservation of one-shot assignment, and
+   the nested scan's maximality to the executable Rust remains a digest-pinned
+   source review. Thus `selected.ok_or(ArithmeticOverflow)` is mathematically
+   unreachable under those mapped invariants, not verifier-checked Rust.
 2. The quotient model uses unbounded mathematical integers. The review relies
    on the production checked `u64` side sum and widening `u64 * u64` to `u128`;
    compiler correspondence and the absence of production arithmetic errors are

@@ -7,13 +7,15 @@
 //! compared; `BATCH_ASSUMPTIONS.md` records the remaining refinement boundary.
 
 use vstd::arithmetic::div_mod::{
-    lemma_div_pos_is_pos, lemma_mod_multiples_basic, lemma_multiply_divide_le,
-    lemma_multiply_divide_lt, lemma_remainder_lower,
+    lemma_div_pos_is_pos, lemma_fundamental_div_mod, lemma_mod_multiples_basic,
+    lemma_mod_pos_bound, lemma_multiply_divide_le, lemma_multiply_divide_lt,
+    lemma_remainder_lower,
 };
 use vstd::arithmetic::mul::{
     lemma_mul_inequality, lemma_mul_inequality_converse,
     lemma_mul_is_commutative, lemma_mul_is_distributive_add_other_way,
-    lemma_mul_nonnegative, lemma_mul_strict_inequality,
+    lemma_mul_is_distributive_sub_other_way, lemma_mul_nonnegative,
+    lemma_mul_strict_inequality,
 };
 use vstd::prelude::*;
 
@@ -106,6 +108,44 @@ pub open spec fn allocation_sum(
     } else {
         allocation_sum(quantities, selected, target, total, (len - 1) as nat)
             + allocated_fill(quantities, selected, target, total, (len - 1) as int)
+    }
+}
+
+/// Sum the production first-loop remainders for the first `len` entries.
+pub open spec fn remainder_sum(
+    quantities: Seq<int>,
+    target: int,
+    total: int,
+    len: nat,
+) -> int
+    recommends len <= quantities.len(), 0 <= target, 0 < total
+    decreases len
+{
+    if len == 0 {
+        0
+    } else {
+        let index = (len - 1) as int;
+        remainder_sum(quantities, target, total, (len - 1) as nat)
+            + (quantities[index] * target) % total
+    }
+}
+
+/// Count entries whose production first-loop remainder is positive.
+pub open spec fn positive_remainder_count(
+    quantities: Seq<int>,
+    target: int,
+    total: int,
+    len: nat,
+) -> int
+    recommends len <= quantities.len(), 0 <= target, 0 < total
+    decreases len
+{
+    if len == 0 {
+        0
+    } else {
+        let index = (len - 1) as int;
+        positive_remainder_count(quantities, target, total, (len - 1) as nat)
+            + if (quantities[index] * target) % total > 0 { 1int } else { 0int }
     }
 }
 
@@ -235,6 +275,272 @@ proof fn selected_floor_has_room(quantity: int, target: int, total: int)
     lemma_mul_strict_inequality(target, total, quantity);
     lemma_mul_is_commutative(quantity, target);
     lemma_multiply_divide_lt(quantity * target, total, quantity);
+}
+
+proof fn floor_remainder_decomposition(
+    quantities: Seq<int>,
+    target: int,
+    total: int,
+    len: nat,
+)
+    requires
+        len <= quantities.len(),
+        0 <= target,
+        0 < total,
+        forall|i: int| 0 <= i < len ==> 0 <= quantities[i],
+    ensures
+        floor_sum(quantities, target, total, len) * total
+            + remainder_sum(quantities, target, total, len)
+            == prefix_sum(quantities, len) * target,
+    decreases len
+{
+    if len > 0 {
+        let index = (len - 1) as int;
+        floor_remainder_decomposition(
+            quantities,
+            target,
+            total,
+            (len - 1) as nat,
+        );
+        lemma_mul_nonnegative(quantities[index], target);
+        lemma_fundamental_div_mod(quantities[index] * target, total);
+        lemma_mul_is_commutative(total, floor_fill(quantities[index], target, total));
+        lemma_mul_is_distributive_add_other_way(
+            total,
+            floor_sum(quantities, target, total, (len - 1) as nat),
+            floor_fill(quantities[index], target, total),
+        );
+        lemma_mul_is_distributive_add_other_way(
+            target,
+            prefix_sum(quantities, (len - 1) as nat),
+            quantities[index],
+        );
+    }
+}
+
+proof fn remainder_sum_positive_count_bound(
+    quantities: Seq<int>,
+    target: int,
+    total: int,
+    len: nat,
+)
+    requires
+        len <= quantities.len(),
+        0 <= target,
+        0 < total,
+        forall|i: int| 0 <= i < len ==> 0 <= quantities[i],
+    ensures
+        0 <= remainder_sum(quantities, target, total, len),
+        remainder_sum(quantities, target, total, len)
+            <= positive_remainder_count(quantities, target, total, len) * (total - 1),
+    decreases len
+{
+    if len > 0 {
+        let index = (len - 1) as int;
+        let remainder = (quantities[index] * target) % total;
+        let previous_sum = remainder_sum(
+            quantities,
+            target,
+            total,
+            (len - 1) as nat,
+        );
+        let previous_positive = positive_remainder_count(
+            quantities,
+            target,
+            total,
+            (len - 1) as nat,
+        );
+        remainder_sum_positive_count_bound(
+            quantities,
+            target,
+            total,
+            (len - 1) as nat,
+        );
+        lemma_mul_nonnegative(quantities[index], target);
+        lemma_mod_pos_bound(quantities[index] * target, total);
+        assert(
+            remainder_sum(quantities, target, total, len)
+                == previous_sum + remainder
+        );
+        if remainder > 0 {
+            assert(remainder <= total - 1);
+            assert(
+                positive_remainder_count(quantities, target, total, len)
+                    == previous_positive + 1
+            );
+            assert(previous_sum + remainder
+                <= previous_positive * (total - 1) + (total - 1));
+            lemma_mul_is_distributive_add_other_way(
+                total - 1,
+                previous_positive,
+                1,
+            );
+            assert(
+                remainder_sum(quantities, target, total, len)
+                    <= positive_remainder_count(quantities, target, total, len)
+                        * (total - 1)
+            );
+        } else {
+            assert(remainder == 0);
+            assert(
+                positive_remainder_count(quantities, target, total, len)
+                    == positive_remainder_count(
+                        quantities,
+                        target,
+                        total,
+                        (len - 1) as nat,
+                    )
+            );
+        }
+    }
+}
+
+proof fn positive_remainders_covered_by_selected(
+    quantities: Seq<int>,
+    selected: Seq<bool>,
+    target: int,
+    total: int,
+    len: nat,
+)
+    requires
+        quantities.len() == selected.len(),
+        len <= quantities.len(),
+        0 <= target,
+        0 < total,
+        forall|i: int| #![auto] 0 <= i < len && (quantities[i] * target) % total > 0
+            ==> selected[i],
+    ensures
+        positive_remainder_count(quantities, target, total, len)
+            <= count_selected(selected, len),
+    decreases len
+{
+    if len > 0 {
+        positive_remainders_covered_by_selected(
+            quantities,
+            selected,
+            target,
+            total,
+            (len - 1) as nat,
+        );
+    }
+}
+
+/// For every unfinished largest-remainder iteration, some unassigned entry
+/// has a positive remainder.  Thus the production `selected.ok_or(...)` is
+/// unreachable when `left != 0`, provided `assigned` records exactly the
+/// earlier one-shot choices.
+pub proof fn dust_loop_has_positive_choice(
+    quantities: Seq<int>,
+    assigned: Seq<bool>,
+    target: int,
+    total: int,
+)
+    requires
+        quantities.len() == assigned.len(),
+        quantities.len() <= max_orders(),
+        0 < total,
+        0 <= target <= total,
+        forall|i: int| 0 <= i < quantities.len() ==> 0 <= quantities[i],
+        prefix_sum(quantities, quantities.len()) == total,
+        0 <= count_selected(assigned, assigned.len())
+            < target - floor_sum(quantities, target, total, quantities.len()),
+    ensures
+        exists|i: int| #![auto] 0 <= i < quantities.len()
+            && !assigned[i]
+            && (quantities[i] * target) % total > 0,
+{
+    let len = quantities.len();
+    let floors = floor_sum(quantities, target, total, len);
+    let remainders = remainder_sum(quantities, target, total, len);
+    let positive = positive_remainder_count(quantities, target, total, len);
+    let dust = target - floors;
+
+    floor_remainder_decomposition(quantities, target, total, len);
+    remainder_sum_positive_count_bound(quantities, target, total, len);
+    lemma_mul_is_commutative(total, target);
+    lemma_mul_is_distributive_sub_other_way(total, target, floors);
+    assert(dust * total == target * total - floors * total);
+    assert(remainders == dust * total);
+    assert(dust < positive) by {
+        if positive <= dust {
+            lemma_mul_inequality(positive, dust, total - 1);
+            lemma_mul_strict_inequality(total - 1, total, dust);
+            assert(remainders < dust * total);
+            assert(false);
+        }
+    };
+    assert(exists|i: int| #![auto] 0 <= i < len
+        && !assigned[i]
+        && (quantities[i] * target) % total > 0) by {
+        if !(exists|i: int| #![auto] 0 <= i < len
+            && !assigned[i]
+            && (quantities[i] * target) % total > 0) {
+            assert forall|i: int| #![auto] 0 <= i < len
+                && (quantities[i] * target) % total > 0 implies assigned[i] by {
+                if !assigned[i] {
+                    assert(false);
+                }
+            };
+            positive_remainders_covered_by_selected(
+                quantities,
+                assigned,
+                target,
+                total,
+                len,
+            );
+            assert(false);
+        }
+    };
+}
+
+/// If the production scan returns a maximal unassigned remainder while dust
+/// remains, that selected remainder is positive.
+pub proof fn dust_loop_maximal_choice_is_positive(
+    quantities: Seq<int>,
+    assigned: Seq<bool>,
+    target: int,
+    total: int,
+    chosen: int,
+)
+    requires
+        quantities.len() == assigned.len(),
+        quantities.len() <= max_orders(),
+        0 < total,
+        0 <= target <= total,
+        forall|i: int| 0 <= i < quantities.len() ==> 0 <= quantities[i],
+        prefix_sum(quantities, quantities.len()) == total,
+        0 <= count_selected(assigned, assigned.len())
+            < target - floor_sum(quantities, target, total, quantities.len()),
+        0 <= chosen < quantities.len(),
+        !assigned[chosen],
+        forall|i: int| #![auto] 0 <= i < quantities.len() && !assigned[i]
+            ==> (quantities[i] * target) % total
+                <= (quantities[chosen] * target) % total,
+    ensures
+        (quantities[chosen] * target) % total > 0,
+{
+    dust_loop_has_positive_choice(quantities, assigned, target, total);
+    let witness = choose|i: int| #![auto] 0 <= i < quantities.len()
+        && !assigned[i]
+        && (quantities[i] * target) % total > 0;
+}
+
+/// A concrete unfinished allocation witnesses that the progress theorem's
+/// premises are jointly satisfiable: one atom split over two unit orders.
+pub proof fn dust_loop_progress_nonvacuous_example()
+    ensures
+        exists|i: int| #![auto] 0 <= i < 2
+            && !seq![false, false][i]
+            && (seq![1int, 1int][i] * 1) % 2 > 0,
+{
+    let quantities = seq![1int, 1int];
+    let assigned = seq![false, false];
+    assert(quantities.len() == 2);
+    assert(assigned.len() == 2);
+    assert(prefix_sum(quantities, 2) == 2) by (compute);
+    assert(floor_sum(quantities, 1, 2, 2) == 0) by (compute);
+    assert(count_selected(assigned, 2) == 0) by (compute);
+    dust_loop_has_positive_choice(quantities, assigned, 1, 2);
 }
 
 /// Decompose quotient floors plus a caller-supplied one-shot selection mask,

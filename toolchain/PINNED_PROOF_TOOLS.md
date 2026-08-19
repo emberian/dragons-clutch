@@ -208,17 +208,20 @@ runner.
 | --- | --- |
 | `verus/kernel/lib.rs` | 2 × `E0308`: `Seq::subrange` expects `int`, got `nat` (lines 31, 32) |
 | `verus/accumulator/accumulator.rs` | 4 × `E0308`: `int`-typed sums returned from `u64`/`u128` spec fns (lines 71, 75, 79, 83) |
-| `verus/batch/batch.rs` | PASS: `20 verified, 0 errors`; four semantic mutants are required to go red |
+| `verus/batch/batch.rs` | PASS: `28 verified, 0 errors`; five semantic mutants are required to go red |
 
 The batch result proves a mathematical scalar-`FixedBook` shadow: quotient and
 selected-mask allocation decomposition with per-fill bounds under stated
-premises, unique lexicographic tick choice, whole-fill partition from accepted
-side-equality premises, and fold identity from a zero-suffix premise. It does
-not derive production dust-loop progress, the accepted side equalities, or the
-padding premise, and is not an executable-body refinement. The runner pins the
-shadow, both shipped vstd artifacts, and the reviewed production
+premises, existence of an unassigned positive remainder at every unfinished
+dust iteration, positivity of a maximal unassigned choice, unique
+lexicographic tick choice, whole-fill partition from accepted side-equality
+premises, and fold identity from a zero-suffix premise. A concrete two-order
+example checks the dust-progress premises are satisfiable. It does not verify
+the production loop or derive the accepted side equalities or padding premise,
+and is not an executable-body refinement. The runner pins the shadow, exact
+`allocate_side` body, both shipped vstd artifacts, and the reviewed production
 implementations, while `verus/batch/BATCH_ASSUMPTIONS.md` records the human
-correspondence, premise/conclusion boundary, dust-loop STOPs, and explicit
+correspondence, premise/conclusion boundary, remaining loop STOPs, and explicit
 exclusion of coupled `relation_v1` and `relation_v1_stream`. Reproduce with:
 
 ```sh

@@ -38,7 +38,8 @@ contains no deployed program, production transaction SDK, private key, live
 market, or financial authority. Verus and Rocq are installed and pinned
 (see toolchain/PINNED_PROOF_TOOLS.md). Pinned Verus checks the exact production
 arithmetic helper used by an internal-claim transfer and, separately, four
-non-vacuous mathematical theorems for the scalar batch shadow. Both runners
+core mathematical properties plus dust-loop progress lemmas for the scalar
+batch shadow. Both runners
 digest-bind their stated production seams and require semantic mutations to go
 red. The kernel and accumulator mathematical shadows still fail; the batch
 shadow is not an executable-body refinement; and no whole transition, coupled

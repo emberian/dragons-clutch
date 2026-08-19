@@ -2,13 +2,14 @@
   "schema": 1,
   "status": "checked-mathematical-shadow",
   "property_id": "P-BATCH-SCALAR-SHADOW-01",
-  "statement": "For the scalar FixedBook mathematical shadow: quotient floors and a caller-supplied selected mask decompose into floor sum plus selection count and have per-fill bounds under a positive-remainder premise; the max-volume/min-imbalance/highest-index rule has a unique winner on every nonempty bounded grid; accepted buy/sell equality premises imply the whole fill vector partitions to twice matched; a canonical zero-suffix premise implies full-fold equals active-prefix fold.",
-  "statement_digest_sha256": "835578e71c7e5c948a9802e12986e956cae8281250324bfe9f889a0283e03852",
+  "statement": "For the scalar FixedBook mathematical shadow: every unfinished one-shot largest-remainder dust assignment has an unassigned positive-remainder entry, and a maximal unassigned choice is positive; quotient floors and a caller-supplied selected mask decompose into floor sum plus selection count and have per-fill bounds under a positive-remainder premise; the max-volume/min-imbalance/highest-index rule has a unique winner on every nonempty bounded grid; accepted buy/sell equality premises imply the whole fill vector partitions to twice matched; a canonical zero-suffix premise implies full-fold equals active-prefix fold.",
+  "statement_digest_sha256": "3d6d27c50370c8440650fe8a2b5078665285f660ec75e14accd11bef91ff154e",
   "model": "verus/batch/batch.rs",
-  "model_digest_sha256": "6dce0d76961a74fe3433edf5b2830366280b2393fa5c013d43e95d5b4355e052",
+  "model_digest_sha256": "f6f5334516db79e249115ab0fd38a38b20d60fe617cba9e3d57cf56572311da4",
   "reviewed_production_source": "crates/clutch-batch/src/lib.rs",
   "reviewed_production_source_digest_sha256": "f25ce5524a71f9e8ad5200992bb69290444865243f26040906d7aa6798013249",
   "reviewed_production_seams": {
+    "allocate_side_body_sha256": "9fc48b2d0ebc1542149b1fe33d24f674eaf61acd164020cc9726af8ad2a00073",
     "PriceGrid_impl_sha256": "216ad4b7db7967c71206043a1b7775ef0a25df09e8c64329d8a8ff163fb11ae9",
     "FixedBook_impl_sha256": "6d41c75a1218aa4485730fdf4526143b9b370d364d14535bb5d52c74c51b3c16",
     "Candidate_struct_sha256": "7dcacb6d06f6702e282f18ab152c7989df635f1c182a5606a4913026e863ce00"
@@ -18,6 +19,9 @@
     "crates/clutch-batch/src/relation_v1_stream.rs": "c196c096c75adfb85397eda5e5d905dde89349ab06512e5ad02d345d75fbf358"
   },
   "theorems": [
+    "dust_loop_has_positive_choice",
+    "dust_loop_maximal_choice_is_positive",
+    "dust_loop_progress_nonvacuous_example",
     "allocation_decomposes_and_bounds",
     "choose_tick_deterministic",
     "accepted_sides_partition_whole_fill",
@@ -35,12 +39,12 @@
     "vstd_vir_digest_sha256": "3061321483841360c760fa3fb38b22be57533052cf2100eb51956aa31205fa7d"
   },
   "configuration": "verus/batch/run_batch_proofs.sh",
-  "configuration_digest_sha256": "ea64c4dd0b2cc651772069b4bd01188e21c3dceb8629479cba6bbc1178fa46e9",
-  "result": "PASS: verification results:: 20 verified, 0 errors",
+  "configuration_digest_sha256": "cbf0ae4a13ceeb0fde4ca9a1c098aabdc8c23ffc463e49095c7ceb14aeb3d04f",
+  "result": "PASS: verification results:: 28 verified, 0 errors",
   "assumption_manifest": "verus/batch/BATCH_ASSUMPTIONS.md",
-  "assumption_manifest_digest_sha256": "00db7123c9fa324a1bbe8f345270e8a741867781966a0564725508df3dc73776",
+  "assumption_manifest_digest_sha256": "e2b2997501cbd9b85727cbaf913c4eb38c6d803a6122475b37050a49418daaec",
   "proof_log": "verus/batch/evidence/batch_proofs.txt",
-  "proof_log_digest_sha256": "419ea16d9c75c4ac28f2171b5a0e9cf6dd719d085d576f717c0ace8eeaf4e011",
+  "proof_log_digest_sha256": "f7c38dfac4ceb51e8efe54ca131f2224844812e457cc14546ebe6a25d8f88f7e",
   "checked_date": "2026-08-19",
   "reproduction_command": "sh verus/batch/run_batch_proofs.sh",
   "mutations": [
@@ -63,12 +67,23 @@
       "id": "padding-admit-nonzero",
       "edit": "canonical padding admits nonnegative rather than zero suffixes",
       "result": "EXPECTED_RED: zero-premise obligation"
+    },
+    {
+      "id": "dust-count-zero-remainders",
+      "edit": "the positive-remainder count includes zero remainders",
+      "result": "EXPECTED_RED: progress obligation"
     }
   ],
+  "sealed_main_audit": {
+    "commit": "6743b9d5b4bee313987770cc048983e26d8c70f3",
+    "reviewed_series": ["c1a0a656", "e6ce886", "c9d1cd4"],
+    "baseline_reproduction": "PASS: 20 verified, 0 errors; four expected-red mutants",
+    "production_source_identity": "all three pinned batch production sources are byte-identical between c9d1cd4 and sealed main"
+  },
   "project_assumptions_or_axioms": [],
   "known_unclosed_boundaries": [
     "the production Rust body is digest-pinned and manually mapped, not imported into Verus",
-    "the dust loop's existence/progress and completed selection count are not proved; positive remainder of caller-selected entries is a theorem premise",
+    "dust progress and maximal-choice positivity are proved in the mathematical shadow, but the executable loop invariants and scan correspondence remain digest-pinned manual review",
     "unbounded mathematical integers are mapped manually to checked u64 totals and widened u128 products",
     "score construction and the production choose_tick loop are not refined instruction-by-instruction",
     "canonical zero suffix is a theorem premise, not a theorem about production validation; inactive scalar Order fields other than canonical_order_id are not required to be zero",

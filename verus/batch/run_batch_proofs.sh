@@ -2,7 +2,7 @@
 set -eu
 
 # Verify the mathematical scalar-batch shadow, refuse production-seam drift,
-# and require four semantic mutants to fail. Generated mutants live only in a
+# and require five semantic mutants to fail. Generated mutants live only in a
 # private temporary directory; this script never rewrites production source.
 
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -26,8 +26,9 @@ Z3="$VERUS_PREFIX/z3"
 VSTD_RLIB="$VERUS_PREFIX/libvstd.rlib"
 VSTD_VIR="$VERUS_PREFIX/vstd.vir"
 
-PROOF_SHA256_PIN='6dce0d76961a74fe3433edf5b2830366280b2393fa5c013d43e95d5b4355e052'
+PROOF_SHA256_PIN='f6f5334516db79e249115ab0fd38a38b20d60fe617cba9e3d57cf56572311da4'
 PRODUCTION_SHA256_PIN='f25ce5524a71f9e8ad5200992bb69290444865243f26040906d7aa6798013249'
+ALLOCATE_SIDE_SHA256_PIN='9fc48b2d0ebc1542149b1fe33d24f674eaf61acd164020cc9726af8ad2a00073'
 PRICE_GRID_IMPL_SHA256_PIN='216ad4b7db7967c71206043a1b7775ef0a25df09e8c64329d8a8ff163fb11ae9'
 FIXED_BOOK_IMPL_SHA256_PIN='6d41c75a1218aa4485730fdf4526143b9b370d364d14535bb5d52c74c51b3c16'
 CANDIDATE_SHA256_PIN='7dcacb6d06f6702e282f18ab152c7989df635f1c182a5606a4913026e863ce00'
@@ -83,6 +84,13 @@ STREAM_SHA256=$(sha256_file "$STREAM")
 PRICE_GRID_IMPL_SHA256=$(
     awk '/^impl PriceGrid \{/,/^\}/' "$PRODUCTION" | shasum -a 256 | awk '{print $1}'
 )
+ALLOCATE_SIDE_SHA256=$(
+    awk '
+        /^    fn allocate_side\(/ { found = 1 }
+        found && /^    fn validate_fills\(/ { exit }
+        found { print }
+    ' "$PRODUCTION" | shasum -a 256 | awk '{print $1}'
+)
 FIXED_BOOK_IMPL_SHA256=$(
     awk '/^impl FixedBook \{/,/^\}/' "$PRODUCTION" | shasum -a 256 | awk '{print $1}'
 )
@@ -92,6 +100,7 @@ CANDIDATE_SHA256=$(
 
 refuse_drift proof-source "$PROOF_SHA256_PIN" "$PROOF_SHA256"
 refuse_drift scalar-production-source "$PRODUCTION_SHA256_PIN" "$PRODUCTION_SHA256"
+refuse_drift allocate-side-body "$ALLOCATE_SIDE_SHA256_PIN" "$ALLOCATE_SIDE_SHA256"
 refuse_drift price-grid-impl "$PRICE_GRID_IMPL_SHA256_PIN" "$PRICE_GRID_IMPL_SHA256"
 refuse_drift fixed-book-impl "$FIXED_BOOK_IMPL_SHA256_PIN" "$FIXED_BOOK_IMPL_SHA256"
 refuse_drift candidate-struct "$CANDIDATE_SHA256_PIN" "$CANDIDATE_SHA256"
@@ -164,6 +173,16 @@ awk '
     END { if (!done) exit 7 }
 ' "$PROOF" > "$TMP/padding-mutant.rs"
 
+awk '
+    /pub open spec fn positive_remainder_count\(/ { in_count = 1 }
+    in_count && !done && /> 0 \{ 1int \}/ {
+        sub(/> 0 \{ 1int \}/, ">= 0 { 1int }")
+        done = 1
+    }
+    { print }
+    END { if (!done) exit 7 }
+' "$PROOF" > "$TMP/dust-mutant.rs"
+
 printf 'verus_version=%s\n' "$OBSERVED_VERSION"
 printf 'verus_commit=%s\n' "$VERUS_PINNED_COMMIT"
 printf 'verus_toolchain=%s\n' "$OBSERVED_TOOLCHAIN"
@@ -173,6 +192,7 @@ printf 'vstd_rlib_sha256=%s\n' "$VSTD_RLIB_SHA256"
 printf 'vstd_vir_sha256=%s\n' "$VSTD_VIR_SHA256"
 printf 'proof_source_sha256=%s\n' "$PROOF_SHA256"
 printf 'scalar_production_source_sha256=%s\n' "$PRODUCTION_SHA256"
+printf 'allocate_side_body_sha256=%s\n' "$ALLOCATE_SIDE_SHA256"
 printf 'price_grid_impl_sha256=%s\n' "$PRICE_GRID_IMPL_SHA256"
 printf 'fixed_book_impl_sha256=%s\n' "$FIXED_BOOK_IMPL_SHA256"
 printf 'candidate_struct_sha256=%s\n' "$CANDIDATE_SHA256"
@@ -190,8 +210,10 @@ run_expected_red relation-double-count "$TMP/relation-mutant.rs" \
     'postcondition not satisfied' postcondition
 run_expected_red padding-admit-nonzero "$TMP/padding-mutant.rs" \
     'assertion failed' zero-premise-obligation
+run_expected_red dust-count-zero-remainders "$TMP/dust-mutant.rs" \
+    'postcondition not satisfied|assertion failed' progress-obligation
 
 printf '%s\n' 'status=PASS'
-printf '%s\n' 'claim=scalar shadow: allocation decomposition/bounds, unique tick, accepted-side partition, zero-suffix fold identity'
+printf '%s\n' 'claim=scalar shadow: dust-loop progress/positive maximal choice, allocation decomposition/bounds, unique tick, accepted-side partition, zero-suffix fold identity'
 printf '%s\n' 'boundary=digest-pinned correspondence review only; production body is not imported by Verus'
 printf '%s\n' 'excluded=relation_v1 relation_v1_stream Solana SBF accounts serialization deployment'
