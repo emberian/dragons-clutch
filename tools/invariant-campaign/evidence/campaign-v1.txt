@@ -1,0 +1,29 @@
+Dragon's Clutch deterministic invariant campaign v1
+run date: 2026-08-18
+host class: aarch64-apple-darwin
+rustc: 1.98.0-nightly (91fe22da8 2026-06-21)
+cargo: 1.98.0-nightly (a595d0da2 2026-06-20)
+
+command:
+  cargo run --manifest-path tools/invariant-campaign/Cargo.toml --release --quiet
+
+stdout:
+  campaign=kernel cases=33554 accepted=350 refused=33204 cumulative_digest=567ecdb73662fbe999998d735cbcb14d
+  campaign=layout cases=4144 accepted=54 refused=4090 cumulative_digest=ec1038d4079d2ed18eea2c64b057b2f8
+  campaign=batch cases=2066 accepted=17 refused=2049 cumulative_digest=6d5df08151033ba6ac2df4a9413173c1
+  campaign=all seeds=16 cases=39764 accepted=421 refused=39343 digest=6d5df08151033ba6ac2df4a9413173c1
+
+command:
+  cargo test --manifest-path programs/solana-reference/Cargo.toml \
+    replayable_settlement_campaign_never_resolves_or_pays_twice -- --nocapture
+
+campaign line:
+  campaign=reference-settlement seed=range-1..93 cases=558 digest=59b361d7228c3c84
+
+result:
+  1 passed; 0 failed
+
+Scope boundary:
+  These are deterministic host-model executions, not proofs and not SVM,
+  Token-2022 CPI, validator, deployment, or mainnet evidence. The 128-bit
+  transcript digest is a change detector, not a cryptographic commitment.

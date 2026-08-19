@@ -5990,4 +5990,6 @@ mod tests {
             Err(Error::Layout(CodecError::WrongTag))
         );
     }
+
+    include!("reference_adversarial_campaign.rs");
 }

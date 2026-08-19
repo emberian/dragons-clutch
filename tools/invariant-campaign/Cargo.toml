@@ -1,0 +1,15 @@
+[package]
+name = "clutch-invariant-campaign"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Deterministic adversarial campaigns over Dragon's Clutch pure models"
+
+[dependencies]
+clutch-kernel = { path = "../../crates/clutch-kernel" }
+clutch-batch = { path = "../../crates/clutch-batch" }
+clutch-solana-layout = { path = "../../programs/solana-layout" }
+
+[lints.rust]
+unsafe_code = "forbid"
