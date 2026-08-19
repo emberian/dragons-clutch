@@ -27,7 +27,7 @@
       "items": { "type": "string", "pattern": "^[0-9a-f]+$" }
     },
     "createMarketIntentBytes": {
-      "description": "The separate unsigned CreateMarket intent-data string, executed only after the 11-intent Terms upload route.",
+      "description": "The separate unsigned CreateMarket intent-data string in this offline runtime-shaped preview, following the 11-intent Terms-upload sequence; this schema performs no execution.",
       "type": "string", "pattern": "^[0-9a-f]{278}$"
     },
     "authorization": {

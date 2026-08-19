@@ -8,6 +8,9 @@ import { createHash, webcrypto } from "node:crypto";
 const clientRoot = path.resolve(import.meta.dirname, "..");
 const repositoryRoot = path.resolve(clientRoot, "../..");
 const source = fs.readFileSync(path.join(clientRoot, "native-bspline-v1.js"), "utf8");
+const schemaSource = fs.readFileSync(path.join(clientRoot, "native-bspline-market-creation-v1.schema.json"), "utf8");
+const clientSchemaDoc = fs.readFileSync(path.join(repositoryRoot, "docs/implementation/NATIVE_BSPLINE_CLIENT_SCHEMA_V1.md"), "utf8");
+const semanticsAudit = fs.readFileSync(path.join(repositoryRoot, "docs/reviews/NATIVE_SEMANTICS_AUDIT_V4.md"), "utf8");
 const previewSchema = JSON.parse(
   fs.readFileSync(path.join(clientRoot, "native-bspline-market-creation-v1.schema.json"), "utf8")
 );
@@ -37,7 +40,7 @@ const rehashTerms = (target) => {
 };
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
-test("rust_generated_fixture_is_the_only_cross_language_authority", async () => {
+test("rust_fixture_fields_match_the_unsigned_offline_preview", async () => {
   assert.equal(fixture.schema, "dragon-clutch.native-bspline-cross-language.v1");
   const termsBytes = unhex(fixture.termsAccountBytes);
   const certificateBytes = unhex(fixture.shapeCertificateBytes);
@@ -74,12 +77,28 @@ test("rust_generated_fixture_is_the_only_cross_language_authority", async () => 
   assert.equal(preview.authorization.submission, "disabled");
 });
 
-test("preview_schema_names_the_live_eleven_intent_terms_route", () => {
+test("preview_schema_names_the_unsigned_offline_eleven_intent_sequence", () => {
   assert.equal(previewSchema.$id, "dragon-clutch.native-bspline-market-creation.v1");
+  assert.equal(previewSchema.properties.mode.const, "offline-inspection-only");
   assert.equal(previewSchema.properties.semanticMode.const, "native-bspline");
   assert.equal(previewSchema.properties.termsArtifactIntentBytes.minItems, 11);
   assert.equal(previewSchema.properties.termsArtifactIntentBytes.maxItems, 11);
   assert.ok(!JSON.stringify(previewSchema).includes("InitTerms"));
+});
+
+test("native_preview_wording_does_not_claim_execution_or_a_live_route", () => {
+  for (const [name, text] of [
+    ["native-bspline-v1.js", source],
+    ["native-bspline-market-creation-v1.schema.json", schemaSource],
+    ["NATIVE_BSPLINE_CLIENT_SCHEMA_V1.md", clientSchemaDoc]
+  ]) {
+    assert.doesNotMatch(text, /live(?:\s+[^\n]{0,40})?route|executed only after/i, `${name} must describe an offline preview`);
+  }
+  assert.match(source, /unsigned, offline runtime-shaped/i);
+  assert.match(schemaSource, /offline runtime-shaped preview/i);
+  assert.match(clientSchemaDoc, /unsigned, offline runtime-shaped/i);
+  assert.match(semanticsAudit, /separate native B-spline inspection SDK/i);
+  assert.doesNotMatch(semanticsAudit, /It has no degree, knots, denominator, native semantic identity, or native order\/compiler artifact/i);
 });
 
 test("client_claim_stops_at_structure_and_digest_not_compiler_or_full_policy", async () => {

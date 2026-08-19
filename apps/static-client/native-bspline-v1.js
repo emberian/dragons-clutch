@@ -3,11 +3,12 @@
  *
  * This module performs no RPC, wallet, signing, or submission. It projects a
  * self-certifying TermsAccount into the same BasisSpec fields used by native
- * resolution, structurally verifies a compiler certificate, and composes the
- * live BeginArtifact -> nine WriteArtifact -> SealArtifact -> CreateMarket
- * route. It never lowers a smooth basis to degree-zero categories. A
- * certificate still requires the Rust compiler's exact recompile check before
- * its analytic claim is trusted.
+ * resolution, structurally verifies a compiler certificate, and composes an
+ * unsigned, offline runtime-shaped BeginArtifact -> nine WriteArtifact ->
+ * SealArtifact -> CreateMarket preview sequence. It never lowers a smooth
+ * basis to degree-zero categories. The preview creates no account metas,
+ * message, signature, or submission path. A certificate still requires the
+ * Rust compiler's exact recompile check before its analytic claim is trusted.
  */
 (function (root) {
   "use strict";

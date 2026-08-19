@@ -9,7 +9,8 @@ not an on-chain certificate account**, 2026-08-19.
 exact degree-0 through degree-3 `BasisSpec` and a recompile-verifiable shape
 certificate. `apps/static-client/native-bspline-v1.js` independently reproduces
 the basis bytes and digests, inspects canonical Terms and certificate bytes,
-and builds the live Terms-upload/market-creation intent sequence:
+and builds an unsigned, offline runtime-shaped Terms-upload/market-creation
+preview sequence:
 
 ```text
 BeginArtifact(Terms)
