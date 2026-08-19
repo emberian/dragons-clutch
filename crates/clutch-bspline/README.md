@@ -9,7 +9,7 @@ It implements:
 - degree 0 categorical cells with a closed top;
 - degree 1 hat functions on uniform or non-uniform anchors; the earlier
   host-only directional rounding vectors are intentionally superseded by the
-  same unbiased largest-remainder rule used for every smooth degree;
+  same lower-error largest-remainder rule used for every smooth degree;
 - degree 2 and 3 open-clamped uniform B-splines, including every end pane;
 - canonical `WEIGHT-ROUND-01`: floor every exact scaled coefficient, then
   distribute the at-most-`degree` remaining atoms to the largest fractional

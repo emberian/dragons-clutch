@@ -11,6 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 clutch-accumulator = { path = "../../crates/clutch-accumulator" }
+clutch-bspline = { path = "../../crates/clutch-bspline" }
 clutch-kernel = { path = "../../crates/clutch-kernel" }
 clutch-solana-layout = { path = "../solana-layout" }
 

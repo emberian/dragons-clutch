@@ -40,16 +40,18 @@
 //!
 //! # Derived-basis (degree ≥ 1) markets, and the one named residue
 //!
-//! Degree 1 is the hat-function basis of design §2: at a resolved value `x̂`
-//! inside pane `[t_k, t_{k+1})`, claim `k+1` weighs `⌊D·u/g⌋` and claim `k`
-//! the exact complement — the design's single named rounding boundary
-//! (`WEIGHT-ROUND-01`, degree-1 form), which under power-of-two spacing with
-//! `D = g = 2^s` is exact with **zero** discarded bits (§2.4). The design
-//! doc states the general ascending-floor rule and the degree-1 form with
-//! opposite subtraction ends; §2.4, §5.3's monotonicity argument, and the
-//! §12 falsifiers all use the degree-1 form (`w_right = ⌊D·u/g⌋`,
-//! `w_left = D − w_right`), so that is the implemented rule, and the
-//! discrepancy is recorded in the design doc's implementation addendum.
+//! [`clutch_bspline`] is the exact evaluator used by derived degrees one
+//! through three and independently pins degree zero's equivalent closed-top
+//! categorical basis. Degrees two and three use the standard open-clamped
+//! expansion of the frozen distinct breakpoints, including every end pane; no
+//! undocumented interior formula substitutes for that evaluator.
+//! `WEIGHT-ROUND-01` is
+//! deterministic largest remainder across every smooth degree: floor each
+//! exact scaled basis value, then award the remaining at-most-`degree` atoms
+//! to the largest exact fractional remainders, with lowest outcome index
+//! breaking ties. Earlier host-only degree-one code used a directional
+//! residual rule. It had no deployed compatibility authority and is
+//! intentionally superseded.
 //!
 //! [`derive_payout_vector`] is the §5.1 sibling seam: it produces the
 //! validated, member-shaped weight vector. The kernel's design §4 transition
@@ -71,17 +73,20 @@
 //! are byte-layout facts owned by crates this one does not revise, so the
 //! residue is now exactly one half wide: the layout half.
 //!
-//! Degrees 2 and 3 refuse as unimplemented variants: no proven
-//! interval-ambiguity rule exists for them (design §5.3/§10.6/§13.1), so
-//! admitting them would manufacture precision.
+//! Degrees 2 and 3 admit only point evidence after edge handling. An interval
+//! with distinct endpoints refuses `R-15 NonPointEvidence`; no midpoint or
+//! endpoint is silently substituted.
 
 use clutch_accumulator::{
     CoveragePolicy, FeedIdentity, Grid, StatisticError, WindowDomain, WindowError, WindowResult,
     MAX_VALUE,
 };
+use clutch_bspline::{
+    BasisSpec, EdgePolicy as BasisEdgePolicy, Error as BasisError,
+    WeightVector as BasisWeightVector,
+};
 use clutch_solana_layout::{
     Hash32, MarketAccount, PayoutVectorBytes, TermsAccount, MAX_KNOTS, MAX_OUTCOMES, MAX_PAYOUTS,
-    UNIFORM_SPACING_NONE,
 };
 
 pub use clutch_solana_layout::PAYOUT_MAP_UNUSED;
@@ -117,6 +122,9 @@ pub const STAT_RELATIVE_TERMINAL_TWAP_05: u16 = 5;
 /// agree — which, by the monotonicity of `φ(x) = Σ i·w_i(x)` (design §5.3),
 /// implies the weights are constant on the whole interval, so endpoint
 /// equality never hides interior movement.
+/// Degrees 2 and 3: refuse every non-point interval after edge handling;
+/// endpoint equality alone is not a sound constancy witness for a smooth
+/// basis.
 pub const AMBIG_REFUSE_01: u8 = 1;
 /// Registered ambiguity policy `AMBIG-COMPATIBLE-SET-02`: not implemented.
 ///
@@ -172,19 +180,15 @@ pub const MAX_BOUNDARIES: usize = MAX_CELLS - 1;
 /// numbering is the `R-01..R-11` registry of plan §2.5 extended by the
 /// design's §5.5 classes, exposed by [`ResolutionRefusal::class`] so that a
 /// taxonomy code never depends on the enum's own discriminants. Class 15
-/// (`R-15 NonPointEvidence`) is reserved: it applies only to degrees ≥ 2,
-/// which this build refuses wholesale, so the variant would be
-/// unconstructible.
+/// `R-15 NonPointEvidence` is the load-bearing smooth-basis ambiguity refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolutionRefusal {
     /// R-01: the terms artifact is not the one this market's digest binds.
     TermsDigestMismatch,
     /// R-02: unregistered statistic, policy, or otherwise malformed terms.
     ///
-    /// Also the class for the *registered but unimplemented* variants:
-    /// `AMBIG-COMPATIBLE-SET-02`, `GEN-FINAL-AT-MATURITY-02`, and basis
-    /// degrees 2 and 3 (no proven interval-ambiguity rule exists for them;
-    /// design §10.6).
+    /// Also the class for registered but unimplemented policy variants:
+    /// `AMBIG-COMPATIBLE-SET-02` and `GEN-FINAL-AT-MATURITY-02`.
     TermsMalformed,
     /// R-03: cell count out of range, non-increasing boundaries, empty cell.
     PartitionMalformed,
@@ -200,7 +204,7 @@ pub enum ResolutionRefusal {
     StatisticUnsupported,
     /// R-06: the conservative interval is ambiguous under `AMBIG-REFUSE-01` —
     /// it straddles cells (degree 0) or its endpoint weight vectors differ
-    /// (degree 1).
+    /// (degree 1). Degrees 2 and 3 use R-15 for every non-point interval.
     AmbiguousInterval,
     /// R-07: the sealed window carries no accepted bucket.
     NoAcceptedCoverage,
@@ -230,6 +234,9 @@ pub enum ResolutionRefusal {
     /// R-14: `EDGE-REFUSE-02` and the resolved value lies outside
     /// `[t_0, t_{K-1}]`; control passes to the frozen failure policy.
     ValueOutOfRange,
+    /// R-15: a degree-two or degree-three basis received non-point evidence
+    /// after edge handling. Smooth interval semantics are not guessed.
+    NonPointEvidence,
     /// R-16: the derived weight vector is valid but is not a member of the
     /// frozen preset set, so the *index-shaped* resolution record cannot name
     /// it.
@@ -273,7 +280,7 @@ impl ResolutionRefusal {
             Self::BasisMalformed => 12,
             Self::WeightDerivationOverflow => 13,
             Self::ValueOutOfRange => 14,
-            // 15 is reserved for R-15 NonPointEvidence (degrees >= 2 only).
+            Self::NonPointEvidence => 15,
             Self::DerivedVectorUnrepresentable => 16,
             Self::WrongResolutionMode => 17,
         }
@@ -309,8 +316,9 @@ pub struct ResolutionTerms {
     /// [`UNIFORM_SPACING_NONE`]. The knot array stays the semantic owner.
     pub uniform_log2_spacing: u8,
     /// Knot vector: degree-0 interior boundaries `b_0 .. b_{n-2}` (so
-    /// `K = n − 1`), or degree-1 claim anchors `t_0 .. t_{n-1}` (`K = n`).
-    /// Entries at `>= K` are zero.
+    /// `K = n − 1`), or distinct degree-`d` breakpoints with
+    /// `K = n + 1 − d`. Entries at `>= K` are zero. For degrees two and
+    /// three the breakpoints must declare uniform power-of-two spacing.
     pub knots: [u128; MAX_KNOTS],
     /// The payout set's common denominator `D`; the weight scale for
     /// degree ≥ 1.
@@ -417,9 +425,10 @@ impl ResolutionTerms {
     /// increase gives disjointness and ordering, `0 < b_0` and the closed top
     /// cell give exhaustiveness with every cell non-empty. An empty cell is
     /// refused because it would mint a liability that can never pay. Design
-    /// §2.1/§2.5 for degree 1: strictly increasing anchors in the admitted
-    /// domain, a truthful uniform declaration, and the freeze-time arithmetic
-    /// bound that makes every runtime overflow refusal defense in depth.
+    /// §2.1/§2.5 for derived degrees: strictly increasing breakpoints in
+    /// the admitted domain, the required truthful spacing declaration, and
+    /// the freeze-time arithmetic bound that makes every runtime overflow
+    /// refusal defense in depth.
     pub fn validate(&self) -> Result<(), ResolutionRefusal> {
         if self.ambiguity_policy != AMBIG_REFUSE_01 {
             return Err(ResolutionRefusal::TermsMalformed);
@@ -441,16 +450,7 @@ impl ResolutionTerms {
         }
         match self.basis_degree {
             0 => self.validate_degree_zero(cells),
-            1 => self.validate_degree_one(cells),
-            2 | 3 => {
-                // Registered but unimplemented: no proven interval-ambiguity
-                // rule exists for smooth bases (design §5.3, §10.6, §13.1),
-                // and a point-evidence-only mode without one would still need
-                // the clamped end-pane polynomial tables this build does not
-                // carry. Refused exactly like the other unimplemented
-                // registered variants.
-                Err(ResolutionRefusal::TermsMalformed)
-            }
+            1..=3 => self.validate_derived(),
             _ => Err(ResolutionRefusal::BasisMalformed),
         }
     }
@@ -499,7 +499,7 @@ impl ResolutionTerms {
         Ok(())
     }
 
-    fn validate_degree_one(&self, cells: usize) -> Result<(), ResolutionRefusal> {
+    fn validate_derived(&self) -> Result<(), ResolutionRefusal> {
         match self.statistic {
             STAT_TERMINAL_01 | STAT_SAMPLED_MIN_02 | STAT_SAMPLED_MAX_03 => {}
             // §2.6: TWAP with degree >= 1 is deferred until an overflow-proof
@@ -512,49 +512,6 @@ impl ResolutionTerms {
         if self.edge_policy != EDGE_CLAMP_01 && self.edge_policy != EDGE_REFUSE_02 {
             return Err(ResolutionRefusal::TermsMalformed);
         }
-        if self.denominator == 0 {
-            return Err(ResolutionRefusal::TermsMalformed);
-        }
-        let knots = usize::from(self.knot_count);
-        if knots != cells {
-            return Err(ResolutionRefusal::BasisMalformed);
-        }
-        let mut largest_gap = 0u128;
-        let mut index = 0usize;
-        while index < MAX_KNOTS {
-            let knot = self.knots[index];
-            if index < knots {
-                if index > 0 {
-                    if knot <= self.knots[index - 1] {
-                        return Err(ResolutionRefusal::BasisMalformed);
-                    }
-                    let gap = knot - self.knots[index - 1];
-                    if gap > largest_gap {
-                        largest_gap = gap;
-                    }
-                }
-                if knot > MAX_VALUE {
-                    return Err(ResolutionRefusal::BasisMalformed);
-                }
-            } else if knot != 0 {
-                return Err(ResolutionRefusal::BasisMalformed);
-            }
-            index += 1;
-        }
-        // The uniform declaration is a validated promise about the array.
-        if self.uniform_log2_spacing != UNIFORM_SPACING_NONE {
-            if self.uniform_log2_spacing >= 128 {
-                return Err(ResolutionRefusal::BasisMalformed);
-            }
-            let gap: u128 = 1 << self.uniform_log2_spacing;
-            let mut index = 1usize;
-            while index < knots {
-                if self.knots[index] - self.knots[index - 1] != gap {
-                    return Err(ResolutionRefusal::BasisMalformed);
-                }
-                index += 1;
-            }
-        }
         // Derived mode has no payout map.
         let mut index = 0usize;
         while index < MAX_CELLS {
@@ -563,16 +520,28 @@ impl ResolutionTerms {
             }
             index += 1;
         }
-        // Freeze-time arithmetic bound (§2.5): D · (g_max − 1) < 2^127, so
-        // every checked product in the weight derivation is unreachable
-        // overflow, proved here once.
-        let product = u128::from(self.denominator)
-            .checked_mul(largest_gap - 1)
-            .ok_or(ResolutionRefusal::BasisMalformed)?;
-        if product >> 127 != 0 {
-            return Err(ResolutionRefusal::BasisMalformed);
-        }
+        self.basis_spec()?;
         Ok(())
+    }
+
+    fn basis_spec(&self) -> Result<BasisSpec, ResolutionRefusal> {
+        let edge_policy = match self.edge_policy {
+            EDGE_CLAMP_01 => BasisEdgePolicy::Clamp,
+            EDGE_REFUSE_02 => BasisEdgePolicy::Refuse,
+            _ => return Err(ResolutionRefusal::TermsMalformed),
+        };
+        let spec = BasisSpec {
+            outcome_count: self.cell_count,
+            degree: self.basis_degree,
+            knot_count: self.knot_count,
+            uniform_log2_spacing: self.uniform_log2_spacing,
+            denominator: self.denominator,
+            domain_max: MAX_VALUE,
+            edge_policy,
+            knots: self.knots,
+        };
+        spec.validate().map_err(map_basis_error)?;
+        Ok(spec)
     }
 
     /// The unique cell index containing `value`; at most 15 comparisons.
@@ -692,56 +661,15 @@ impl ResolutionTerms {
         }
     }
 
-    /// The degree-1 weight vector at one edge-handled resolved value.
+    /// The exact degree-one through degree-three basis at one edge-handled value.
     ///
-    /// `WEIGHT-ROUND-01`, degree-1 form — the single named rounding boundary:
-    /// `w_right = ⌊D·u/g⌋`, `w_left = D − w_right`, zero everywhere else, so
-    /// the weights sum to exactly `D` by construction, never by cancellation
-    /// of two roundings. Under `D = g = 2^s` the floor is the identity and
-    /// the whole path is exact shifts (design §2.4).
+    /// `clutch-bspline` is the semantic owner of knot expansion, clamped end
+    /// panes, exact rational recurrence, and `WEIGHT-ROUND-01`.
     fn weights_at(&self, value: u128) -> Result<[u64; MAX_OUTCOMES], ResolutionRefusal> {
-        let knots = usize::from(self.knot_count);
-        let first = self.knots[0];
-        let last = self.knots[knots - 1];
-        let denominator = self.denominator;
-        let mut weights = [0u64; MAX_OUTCOMES];
-        // Clamp regions and the closed top: the extreme claims at full
-        // weight, mirroring the kernel plan's closed top cell.
-        if value <= first {
-            weights[0] = denominator;
-            return Ok(weights);
-        }
-        if value >= last {
-            weights[knots - 1] = denominator;
-            return Ok(weights);
-        }
-        // Pane location: a shift under the uniform declaration, otherwise a
-        // linear scan of at most 15 comparisons — exactly `cell_of`'s cost.
-        let pane = if self.uniform_log2_spacing != UNIFORM_SPACING_NONE {
-            usize::try_from((value - first) >> self.uniform_log2_spacing)
-                .map_err(|_| ResolutionRefusal::WeightDerivationOverflow)?
-        } else {
-            let mut index = 0usize;
-            while index + 2 < knots && value >= self.knots[index + 1] {
-                index += 1;
-            }
-            index
-        };
-        let lower = self.knots[pane];
-        let upper = self.knots[pane + 1];
-        let gap = upper - lower;
-        let offset = value - lower;
-        let product = u128::from(denominator)
-            .checked_mul(offset)
-            .ok_or(ResolutionRefusal::WeightDerivationOverflow)?;
-        let floored = product / gap;
-        // offset < gap makes floored < D, so the narrowing cannot fail for
-        // admitted terms; refused rather than truncated all the same.
-        let w_right =
-            u64::try_from(floored).map_err(|_| ResolutionRefusal::WeightDerivationOverflow)?;
-        weights[pane] = denominator - w_right;
-        weights[pane + 1] = w_right;
-        Ok(weights)
+        self.basis_spec()?.evaluate(value).map_or_else(
+            |error| Err(map_basis_error(error)),
+            |vector: BasisWeightVector| Ok(vector.weights),
+        )
     }
 
     /// Derive, edge-handle, and ambiguity-check the weight vector.
@@ -754,6 +682,9 @@ impl ResolutionTerms {
     ) -> Result<PayoutVectorBytes, ResolutionRefusal> {
         let (low, high) = self.conservative_values(window)?;
         let (low, high) = self.apply_edge_policy(low, high)?;
+        if self.basis_degree >= 2 && low != high {
+            return Err(ResolutionRefusal::NonPointEvidence);
+        }
         let low_weights = self.weights_at(low)?;
         let high_weights = self.weights_at(high)?;
         if low_weights != high_weights {
@@ -786,6 +717,25 @@ fn map_statistic(error: StatisticError) -> ResolutionRefusal {
     }
 }
 
+fn map_basis_error(error: BasisError) -> ResolutionRefusal {
+    match error {
+        BasisError::ValueOutOfRange => ResolutionRefusal::ValueOutOfRange,
+        BasisError::ArithmeticOverflow | BasisError::InvalidWeights => {
+            ResolutionRefusal::WeightDerivationOverflow
+        }
+        BasisError::InvalidOutcomeCount
+        | BasisError::InvalidDegree
+        | BasisError::InvalidDenominator
+        | BasisError::InvalidKnotCount
+        | BasisError::InvalidKnot
+        | BasisError::NonCanonicalPadding
+        | BasisError::UniformSpacingMismatch
+        | BasisError::UniformSpacingRequired
+        | BasisError::InvalidEdgePolicy
+        | BasisError::ArithmeticBound => ResolutionRefusal::BasisMalformed,
+    }
+}
+
 /// Derive the payout-set index selected by one sealed window under one terms.
 ///
 /// `derive_payout : (ResolutionTerms, PayoutSet bytes, WindowResult) ->
@@ -800,16 +750,16 @@ fn map_statistic(error: StatisticError) -> ResolutionRefusal {
 /// legitimately pay the same vector — and must never be inverted to recover a
 /// cell.
 ///
-/// Degree 1: the derived, validated weight vector must be a member of the
+/// Degrees 1 through 3: the derived, validated weight vector must be a member of the
 /// frozen preset set (see the module docs and
 /// [`ResolutionRefusal::DerivedVectorUnrepresentable`]); the returned index
 /// is the member's, so the kernel's resolve-by-index installs exactly the
 /// derived vector.
 ///
 /// The function is total, allocation free, and performs at most 15
-/// comparisons plus one bounded statistic evaluation and, at degree 1, one
-/// multiply-divide-subtract per interval end and at most `MAX_PAYOUTS`
-/// vector comparisons.
+/// comparisons plus one bounded statistic evaluation, one bounded basis
+/// evaluation per admitted endpoint, and at most `MAX_PAYOUTS` vector
+/// comparisons.
 ///
 /// `NotSealed`, `NotMature`, and `IncompleteDomain` cannot appear here: a
 /// [`WindowResult`] cannot exist in those states.
@@ -872,4 +822,136 @@ pub fn derive_payout_vector(
         .check_domain(&terms.window)
         .map_err(ResolutionRefusal::WindowDomainMismatch)?;
     terms.derived_vector(window)
+}
+
+#[cfg(test)]
+mod native_bspline_tests {
+    use super::*;
+    use clutch_accumulator::{Observation, WindowAccumulator};
+
+    fn domain() -> WindowDomain {
+        let feed = FeedIdentity::new([1; 32], [2; 32], 1, 1).unwrap();
+        let grid = Grid::new(7, 1, 1).unwrap();
+        WindowDomain::new(feed, grid, 0, 1, 1, 0, CoveragePolicy::COMPLETE_REQUIRED).unwrap()
+    }
+
+    fn window(domain: WindowDomain, low: u128, high: u128) -> WindowResult {
+        let mut accumulator = WindowAccumulator::open(domain);
+        accumulator
+            .observe(Observation::accepted(0, low, high))
+            .unwrap();
+        accumulator.seal().unwrap();
+        accumulator.result().unwrap()
+    }
+
+    fn derived_terms(degree: u8) -> ResolutionTerms {
+        let mut knots = [0_u128; MAX_KNOTS];
+        knots[..3].copy_from_slice(&[0, 4, 8]);
+        ResolutionTerms {
+            market: Hash32::ZERO,
+            window: domain(),
+            statistic: STAT_TERMINAL_01,
+            cell_count: degree + 2,
+            basis_degree: degree,
+            edge_policy: EDGE_CLAMP_01,
+            knot_count: 3,
+            uniform_log2_spacing: 2,
+            knots,
+            denominator: 64,
+            payout_map: [PAYOUT_MAP_UNUSED; MAX_CELLS],
+            ambiguity_policy: AMBIG_REFUSE_01,
+            failure_policy: FAIL_UNIFORM_REFUND_01,
+            generation_policy: GEN_EXACT_01,
+            payout_count: 1,
+        }
+    }
+
+    #[test]
+    fn categorical_point_evidence_remains_the_degree_zero_basis() {
+        let mut terms = derived_terms(1);
+        terms.cell_count = 2;
+        terms.basis_degree = 0;
+        terms.knot_count = 1;
+        terms.uniform_log2_spacing = clutch_bspline::UNIFORM_SPACING_NONE;
+        terms.knots = [0; MAX_KNOTS];
+        terms.knots[0] = 4;
+        terms.denominator = 1;
+        terms.payout_map = [PAYOUT_MAP_UNUSED; MAX_CELLS];
+        terms.payout_map[0] = 0;
+        terms.payout_map[1] = 1;
+        terms.payout_count = 2;
+        let payouts = [PayoutVectorBytes::ZERO; MAX_PAYOUTS];
+
+        let below = window(terms.window, 3, 3);
+        assert_eq!(derive_payout(&terms, &payouts, &below), Ok(0));
+        let at_boundary = window(terms.window, 4, 4);
+        assert_eq!(derive_payout(&terms, &payouts, &at_boundary), Ok(1));
+    }
+
+    #[test]
+    fn quadratic_and_cubic_point_evidence_reach_native_reference_vectors() {
+        let quadratic = derived_terms(2);
+        let point = window(quadratic.window, 2, 2);
+        let vector = derive_payout_vector(&quadratic, &point).unwrap();
+        assert_eq!(vector.denominator, 64);
+        assert_eq!(&vector.weights[..4], &[16, 40, 8, 0]);
+        assert_eq!(vector.weights.iter().copied().sum::<u64>(), 64);
+
+        let cubic = derived_terms(3);
+        let point = window(cubic.window, 2, 2);
+        let vector = derive_payout_vector(&cubic, &point).unwrap();
+        assert_eq!(vector.denominator, 64);
+        assert_eq!(&vector.weights[..5], &[8, 38, 16, 2, 0]);
+        assert_eq!(vector.weights.iter().copied().sum::<u64>(), 64);
+    }
+
+    #[test]
+    fn smooth_nonpoint_evidence_refuses_before_quantized_endpoint_comparison() {
+        let mut quadratic = derived_terms(2);
+        quadratic.denominator = 1;
+        let uncertain = window(quadratic.window, 1, 2);
+        assert_eq!(
+            derive_payout_vector(&quadratic, &uncertain),
+            Err(ResolutionRefusal::NonPointEvidence)
+        );
+
+        let cubic = derived_terms(3);
+        let uncertain = window(cubic.window, 2, 3);
+        assert_eq!(
+            derive_payout_vector(&cubic, &uncertain),
+            Err(ResolutionRefusal::NonPointEvidence)
+        );
+    }
+
+    #[test]
+    fn edge_handling_precedes_the_smooth_point_evidence_gate() {
+        let quadratic = derived_terms(2);
+        let clamped = window(quadratic.window, 9, 12);
+        let vector = derive_payout_vector(&quadratic, &clamped).unwrap();
+        assert_eq!(&vector.weights[..4], &[0, 0, 0, 64]);
+
+        let mut refusing = quadratic;
+        refusing.edge_policy = EDGE_REFUSE_02;
+        assert_eq!(
+            derive_payout_vector(&refusing, &clamped),
+            Err(ResolutionRefusal::ValueOutOfRange)
+        );
+    }
+
+    #[test]
+    fn smooth_twap_and_nonuniform_breakpoints_remain_explicit_refusals() {
+        let mut twap = derived_terms(3);
+        twap.statistic = STAT_TWAP_04;
+        assert_eq!(
+            twap.validate(),
+            Err(ResolutionRefusal::StatisticUnsupported)
+        );
+
+        let mut nonuniform = derived_terms(2);
+        nonuniform.uniform_log2_spacing = clutch_bspline::UNIFORM_SPACING_NONE;
+        assert_eq!(
+            nonuniform.validate(),
+            Err(ResolutionRefusal::BasisMalformed)
+        );
+    }
 }
