@@ -9,8 +9,8 @@
 
 use clutch_sbf::{
     native_window::{
-        preflight_sealed_archive, require_live_persistence, NativeWindowError,
-        NativeWindowFinalizationV1, STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06,
+        preflight_sealed_archive, preflight_verified_archive, require_live_persistence,
+        NativeWindowError, NativeWindowFinalizationV1, STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06,
         STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07,
     },
     source::{
@@ -20,9 +20,9 @@ use clutch_sbf::{
     },
     source_archive::{
         append_authenticated, initialize_archive, initialize_source_spec_account, seal_archive,
-        verify_sealed_archive, verify_source_spec_account, ArchiveAccountViewV1,
-        ArchivePredecessorV1, CoveragePolicy, DeploymentAuthenticatorV1, FeedIdentity, Grid,
-        RuntimeAccountViewV1, SourceArchiveError, SourceSpecAccountViewV1,
+        verify_recorded_sealed_archive_view, verify_sealed_archive, verify_source_spec_account,
+        ArchiveAccountViewV1, ArchivePredecessorV1, CoveragePolicy, DeploymentAuthenticatorV1,
+        FeedIdentity, Grid, RuntimeAccountViewV1, SourceArchiveError, SourceSpecAccountViewV1,
         VerifiedSourceSpecAccountV1, WindowDomain, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES,
         SOURCE_SPEC_ACCOUNT_V1_BYTES,
     },
@@ -295,6 +295,18 @@ fn canonical_archive_drives_exact_candidate_but_live_persistence_refuses() {
     let terms = occupation_terms(spec, STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06);
     let (receipt, view) = receipt(&spec_account, &archive, window);
     let candidate = preflight_sealed_archive(&terms, receipt, view).expect("exact occupation");
+    let verified_view = verify_recorded_sealed_archive_view(
+        CLUTCH_PROGRAM,
+        ARCHIVE_KEY,
+        view,
+        verified_spec(&spec_account),
+        window,
+    )
+    .expect("once-verified archive view");
+    assert_eq!(
+        preflight_verified_archive(&terms, verified_view),
+        Ok(candidate)
+    );
 
     assert_eq!(candidate.terms(), terms.terms);
     assert_eq!(candidate.feed(), spec.feed_id());
@@ -351,10 +363,7 @@ fn canonical_archive_selects_only_the_terms_named_finalizer() {
         Err(NativeWindowError::Accumulator(_))
     ));
 
-    let rounded = occupation_terms(
-        spec,
-        STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07,
-    );
+    let rounded = occupation_terms(spec, STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07);
     let candidate =
         preflight_sealed_archive(&rounded, receipt, view).expect("named largest remainder");
     assert_eq!(

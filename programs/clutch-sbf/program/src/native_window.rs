@@ -37,7 +37,7 @@ use clutch_solana_reference::{
 
 use crate::source_archive::{
     self, ArchiveAccountViewV1, SealedArchiveReceiptV1, SourceArchiveError,
-    SOURCE_ARCHIVE_MAX_RECORDS_V1,
+    VerifiedSealedArchiveViewV1, SOURCE_ARCHIVE_MAX_RECORDS_V1,
 };
 
 /// Quantized native basis occupation with componentwise exact averaging only.
@@ -310,6 +310,35 @@ pub fn preflight_sealed_archive(
     receipt: SealedArchiveReceiptV1,
     archive: ArchiveAccountViewV1<'_>,
 ) -> Result<NativeWindowPreflightV1, NativeWindowError> {
+    let (domain, finalization, span) = validate_archive_binding(terms, receipt)?;
+    let summary = summarize_archive(domain, receipt, archive, span)?;
+    finalize_preflight(terms, receipt, finalization, summary)
+}
+
+/// Replay a lifetime-bound, once-verified sealed SourceArchive V1 into an
+/// occupation payout candidate.
+///
+/// This is the production fold seam.  The archive capability's private
+/// constructor has already checked the complete account, release, lineage,
+/// seal, and page commitment, and its immutable borrow prevents page mutation
+/// during this fold.  Each indexed read therefore checks only its bounded
+/// record index; it does not rehash the 2,560-byte page for every bucket.
+#[inline(never)]
+pub fn preflight_verified_archive(
+    terms: &TermsAccount,
+    archive: VerifiedSealedArchiveViewV1<'_>,
+) -> Result<NativeWindowPreflightV1, NativeWindowError> {
+    let receipt = archive.receipt();
+    let (domain, finalization, span) = validate_archive_binding(terms, receipt)?;
+    let summary = summarize_verified_archive(domain, receipt, archive, span)?;
+    finalize_preflight(terms, receipt, finalization, summary)
+}
+
+#[inline(never)]
+fn validate_archive_binding(
+    terms: &TermsAccount,
+    receipt: SealedArchiveReceiptV1,
+) -> Result<(BasisDomain, NativeWindowFinalizationV1, u64), NativeWindowError> {
     let domain = occupation_domain(terms)?;
     let finalization = NativeWindowFinalizationV1::from_statistic(terms.statistic_id)?;
     let expected_window = terms_window(terms)?;
@@ -331,8 +360,16 @@ pub fn preflight_sealed_archive(
     if span == 0 || span > NATIVE_WINDOW_MAX_BUCKETS_V1 as u64 {
         return Err(NativeWindowError::WindowTooLarge);
     }
+    Ok((domain, finalization, span))
+}
 
-    let summary = summarize_archive(domain, receipt, archive, span)?;
+#[inline(never)]
+fn finalize_preflight(
+    terms: &TermsAccount,
+    receipt: SealedArchiveReceiptV1,
+    finalization: NativeWindowFinalizationV1,
+    summary: Summary,
+) -> Result<NativeWindowPreflightV1, NativeWindowError> {
     let finalized = summary.finalize(finalization.accumulator_mode())?;
     let vector = vector_from_final(finalized)?;
     Ok(NativeWindowPreflightV1 {
@@ -377,6 +414,40 @@ fn summarize_archive(
         let archived = source_archive::archived_observation(
             receipt,
             archive,
+            usize::try_from(index).map_err(|_| NativeWindowError::WindowTooLarge)?,
+        )?;
+        let expected_bucket = receipt
+            .start_bucket()
+            .checked_add(index)
+            .ok_or(NativeWindowError::NonCanonicalBucket)?;
+        if archived.bucket != expected_bucket {
+            return Err(NativeWindowError::NonCanonicalBucket);
+        }
+        summary = append_bucket(
+            summary,
+            domain,
+            expected_bucket,
+            CanonicalBucketV1::Observation {
+                low: archived.low,
+                high: archived.high,
+            },
+        )?;
+        index += 1;
+    }
+    Ok(summary)
+}
+
+#[inline(never)]
+fn summarize_verified_archive(
+    domain: BasisDomain,
+    receipt: SealedArchiveReceiptV1,
+    archive: VerifiedSealedArchiveViewV1<'_>,
+    span: u64,
+) -> Result<Summary, NativeWindowError> {
+    let mut summary = Summary::empty(domain)?;
+    let mut index = 0_u64;
+    while index < span {
+        let archived = archive.archived_observation(
             usize::try_from(index).map_err(|_| NativeWindowError::WindowTooLarge)?,
         )?;
         let expected_bucket = receipt
