@@ -1,8 +1,8 @@
 {
-  "schema": "dragons-clutch/baseline-manifest/v1",
+  "schema": "dragons-clutch/baseline-manifest/v2",
   "generator": {
     "path": "scripts/baseline_manifest.py",
-    "sha256": "60d320a296fa821b9a9bcbaf7e339779a61660e49be74307a2e2745e2d7b5122",
+    "sha256": "1f2256055cdd66b2d82685bfffbe9eea12d2f450e7ab493e5b31d24b43ff1184",
     "stdlib_only": true
   },
   "dirty": false,
@@ -10,21 +10,39 @@
     "paths": [
       "MANIFEST.baseline.json"
     ],
-    "observed": [],
+    "observed": [
+      " M MANIFEST.baseline.json"
+    ],
     "reason": "the manifest is this tool's own output; its git status cannot gate its regeneration. Nothing else is excluded from the dirtiness decision."
   },
   "baseline": {
-    "commit": "27ea3b355dde0fcd1b93248aac9e08b42f293b36",
-    "tree_hash": "f28518f61c0f6613b3852c64f0b78216953c2c1e",
-    "commit_subject": "Close the two structural P2s: manifest not-attested text, handoff SBF addendum",
-    "remotes": [
-      {
-        "name": "origin",
-        "fetch_url": "git@github.com:emberian/dragons-clutch.git"
-      }
-    ],
-    "tags_at_head": [],
-    "note": "git object ids and configured remote names only. A configured remote is not provenance and a pushed branch is not a release: neither is signed, neither is tagged, and neither is attested here. An empty `tags_at_head` means no release tag exists, which is the expected state while CODEX_HANDOFF.md section 7 P0-1 is open."
+    "content_identity": {
+      "schema": "dragons-clutch/tracked-working-tree/v1",
+      "algorithm": "sha256",
+      "sha256": "3f2be62ee43ce37eb1167f547c48519343c0e292c3aa0c83a45de5e56e0aa8ca",
+      "entry_count": 527,
+      "excluded_paths": [
+        "MANIFEST.baseline.json"
+      ],
+      "excluded_tracked_paths_observed": [
+        "MANIFEST.baseline.json"
+      ],
+      "rule": "enumerate stage-0 entries from `git ls-files --stage -z`, sort by raw path bytes, exclude only excluded_paths, and hash the schema tag followed by length-delimited (observed Git mode/type, kind, raw path, sha256(payload), payload length) records. Payload is working-tree bytes for regular files, link-target bytes for symlinks, and the index object id for gitlinks. Strict cleanliness makes this a complete identity of all checked-in gate/source bytes other than the generated manifest itself."
+    },
+    "provenance": {
+      "emitted_from_commit": "b2bc1686038f83f4ba1a7a4e1611deac189a1ab6",
+      "emitted_from_tree_hash": "24b5b6f1441058ca9584aa0bb66673d33c555928",
+      "commit_subject": "Clarify nonordinary manifest gate dispositions",
+      "remotes": [
+        {
+          "name": "origin",
+          "fetch_url": "git@github.com:emberian/dragons-clutch.git"
+        }
+      ],
+      "tags_at_head": [],
+      "note": "historical emission context only; these fields are not the checkable content identity because committing this generated manifest necessarily changes HEAD and HEAD^{tree}. Git object ids and configured remote names are not provenance attestations. A configured remote is not provenance and a pushed branch is not a release: neither is signed, neither is tagged, and neither is attested here. An empty `tags_at_head` means no release tag exists, which is expected until a separately authorized release closes the named release blockers."
+    },
+    "self_reference_policy": "the generated manifest is excluded from content_identity and from the strict dirty decision. Its bytes cannot truthfully attest themselves. Every other tracked path is bound, and every other dirty path makes strict emission refuse."
   },
   "claims": {
     "verified": false,
@@ -32,7 +50,7 @@
     "release": false,
     "reviewed_offline_checks_recorded": true,
     "label_vocabulary": {
-      "IMPLEMENTED": "source exists locally and the named offline checks pass; implies no formal verification, SBF runtime evidence, security review, or deployment readiness",
+      "IMPLEMENTED": "source exists locally and the named offline checks pass; implies no formal verification, security review, or deployment readiness; any runtime evidence must be separately named",
       "MODEL": "a deterministic reference model, specification, theorem statement, synthetic experiment, or cost hypothesis exists; not consensus code and not production evidence",
       "PROPOSED": "a design choice, parameter, policy, architecture, or backlog item has not crossed its stated evidence gate",
       "BLOCKER": "the named work must refuse promotion until it is closed; a blocker is not permission to weaken the claim or bypass the gate"
@@ -41,10 +59,14 @@
     "not_attested": [
       "no release: nothing here publishes, tags, pushes, or authorizes a release",
       "no signature chain: no signed tag, no signed artifact, no key material, no transparency log entry",
-      "no reproducible-build closure: only the narrow E0 rlib self-comparison inside toolchain/scripts/run_lab.sh is measured; no ELF, no toolchain bootstrap, no dependency-source rebuild",
-      "no proof content: the Rocq gate typechecks Definitions (zero theorems) and the Verus gate fails on the pinned probe; both are recorded as-is",
-      "SBF runtime evidence exists but is NOT attested by this manifest: the entrypoint, per-family SVM differentials, lifecycle walk, Token-2022 CPI scenarios, and CU measurements are recorded in docs/implementation/SBF_BRINGUP.md and LIFECYCLE_WALK.md and gated by programs/clutch-sbf/scripts/run_bringup.sh, which this manifest neither runs nor digests; cross-runtime vector closure remains open",
+      "no independent reproducible-build closure: the E0 rlib and each default/non-production-mock deployable SBF ELF have same-machine two-build comparisons, but there is no independent rebuilder, toolchain bootstrap, or dependency-source rebuild",
+      "no whole-system formal proof: the Rocq gate typechecks Definitions (zero theorems), the root Verus probe has one exact expected tool failure, the batch lane checks a scalar mathematical shadow, the transfer lane checks a narrow production arithmetic subset, and the B-spline lane is finite Lean/Rust agreement; none closes whole-kernel, account, CPI, SBF, or runtime refinement",
+      "SBF evidence is local only: the manifest gates a loopback test-validator differential/lifecycle walk and an in-process Agave bank with Token-2022; neither is public-cluster, deployment, independent-rebuild, validator-diversity, or cross-runtime-vector evidence",
       "no SBOM, license closure, fixture provenance chain, or source offer",
+      "no global liveness closure: the sealed local R1 artifact admits measured ResolutionWork routes only; it does not establish a protocol-wide policy or future inclusion",
+      "no production provider closure: the default runtime build refuses Endow without a registered source release, while the named mock-source path is local test evidence only",
+      "no direct-selection promotion: the measured V2 three-Candidate selection hits the 1,400,000-CU transaction limit and rolls back; V3 remains a host model with live ABI/runtime stops",
+      "no terminal closure: measured ResolutionWork payer/rent return does not close the separate legacy storage, mint, donation, bearer-burn, or fractional-residue stops",
       "no published provenance: the identities below are git object ids. A configured remote or a pushed branch is neither a signed tag nor a release artifact, and this manifest asserts nothing about either",
       "no security review and no regulatory closure (Gate L0 remains open)"
     ]
@@ -52,7 +74,7 @@
   "gates": [
     {
       "id": "cargo_test.clutch_kernel",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo test --manifest-path \"crates/clutch-kernel/Cargo.toml\" --offline --locked",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -67,7 +89,7 @@
     },
     {
       "id": "cargo_test.clutch_accumulator",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo test --manifest-path \"crates/clutch-accumulator/Cargo.toml\" --offline --locked",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -82,7 +104,7 @@
     },
     {
       "id": "cargo_test.clutch_batch",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo test --manifest-path \"crates/clutch-batch/Cargo.toml\" --offline --locked",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -96,8 +118,53 @@
       "note": "unit and integration tests; not a proof and not runtime evidence"
     },
     {
+      "id": "cargo_test.clutch_bspline",
+      "section": "current-baseline",
+      "command": "cargo test --manifest-path \"crates/clutch-bspline/Cargo.toml\" --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "unit and integration tests; not a proof and not runtime evidence"
+    },
+    {
+      "id": "cargo_test.clutch_bspline_accumulator",
+      "section": "current-baseline",
+      "command": "cargo test --manifest-path \"crates/clutch-bspline-accumulator/Cargo.toml\" --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "unit and integration tests; not a proof and not runtime evidence"
+    },
+    {
+      "id": "cargo_test.clutch_liveness",
+      "section": "current-baseline",
+      "command": "cargo test --manifest-path \"crates/clutch-liveness/Cargo.toml\" --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "unit and integration tests; not a proof and not runtime evidence"
+    },
+    {
       "id": "cargo_test.solana_layout",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo test --manifest-path \"programs/solana-layout/Cargo.toml\" --offline --locked",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -112,7 +179,7 @@
     },
     {
       "id": "cargo_test.solana_reference",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo test --manifest-path \"programs/solana-reference/Cargo.toml\" --offline --locked",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -127,7 +194,7 @@
     },
     {
       "id": "cargo_test.vertical_model",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo test --manifest-path \"research/vertical-model/Cargo.toml\" --offline --locked",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -142,7 +209,7 @@
     },
     {
       "id": "cargo_test.clutch_sbf",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo test --manifest-path \"programs/clutch-sbf/Cargo.toml\" --offline --locked",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -157,7 +224,7 @@
     },
     {
       "id": "cargo_clippy.clutch_kernel",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo clippy --manifest-path \"crates/clutch-kernel/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -173,7 +240,7 @@
     },
     {
       "id": "cargo_clippy.clutch_accumulator",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo clippy --manifest-path \"crates/clutch-accumulator/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -189,7 +256,7 @@
     },
     {
       "id": "cargo_clippy.clutch_batch",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo clippy --manifest-path \"crates/clutch-batch/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -204,8 +271,56 @@
       "note": "lint gate; no matched key lines is the clean state"
     },
     {
+      "id": "cargo_clippy.clutch_bspline",
+      "section": "current-baseline",
+      "command": "cargo clippy --manifest-path \"crates/clutch-bspline/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "lint gate; no matched key lines is the clean state"
+    },
+    {
+      "id": "cargo_clippy.clutch_bspline_accumulator",
+      "section": "current-baseline",
+      "command": "cargo clippy --manifest-path \"crates/clutch-bspline-accumulator/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "lint gate; no matched key lines is the clean state"
+    },
+    {
+      "id": "cargo_clippy.clutch_liveness",
+      "section": "current-baseline",
+      "command": "cargo clippy --manifest-path \"crates/clutch-liveness/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "lint gate; no matched key lines is the clean state"
+    },
+    {
       "id": "cargo_clippy.solana_layout",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo clippy --manifest-path \"programs/solana-layout/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -221,7 +336,7 @@
     },
     {
       "id": "cargo_clippy.solana_reference",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo clippy --manifest-path \"programs/solana-reference/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -237,7 +352,7 @@
     },
     {
       "id": "cargo_clippy.vertical_model",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo clippy --manifest-path \"research/vertical-model/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -253,7 +368,7 @@
     },
     {
       "id": "cargo_clippy.clutch_sbf",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo clippy --manifest-path \"programs/clutch-sbf/Cargo.toml\" --offline --locked --all-targets -- -D warnings",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -269,7 +384,7 @@
     },
     {
       "id": "cargo_doc.clutch_kernel",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo doc --manifest-path crates/clutch-kernel/Cargo.toml --offline --locked --no-deps",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -278,7 +393,6 @@
         "exit": 0
       },
       "key_patterns": [
-        "^\\s*Documenting ",
         "^error(\\[|:)",
         "^warning(\\[|:)"
       ],
@@ -286,7 +400,7 @@
     },
     {
       "id": "cargo_doc.clutch_accumulator",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo doc --manifest-path crates/clutch-accumulator/Cargo.toml --offline --locked --no-deps",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -295,7 +409,6 @@
         "exit": 0
       },
       "key_patterns": [
-        "^\\s*Documenting ",
         "^error(\\[|:)",
         "^warning(\\[|:)"
       ],
@@ -303,7 +416,7 @@
     },
     {
       "id": "cargo_doc.clutch_batch",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo doc --manifest-path crates/clutch-batch/Cargo.toml --offline --locked --no-deps",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -312,7 +425,54 @@
         "exit": 0
       },
       "key_patterns": [
-        "^\\s*Documenting ",
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build; asserts nothing about content"
+    },
+    {
+      "id": "cargo_doc.clutch_bspline",
+      "section": "current-baseline",
+      "command": "cargo doc --manifest-path crates/clutch-bspline/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build; asserts nothing about content"
+    },
+    {
+      "id": "cargo_doc.clutch_bspline_accumulator",
+      "section": "current-baseline",
+      "command": "cargo doc --manifest-path crates/clutch-bspline-accumulator/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build; asserts nothing about content"
+    },
+    {
+      "id": "cargo_doc.clutch_liveness",
+      "section": "current-baseline",
+      "command": "cargo doc --manifest-path crates/clutch-liveness/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
         "^error(\\[|:)",
         "^warning(\\[|:)"
       ],
@@ -320,7 +480,7 @@
     },
     {
       "id": "cargo_doc.solana_layout",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo doc --manifest-path programs/solana-layout/Cargo.toml --offline --locked --no-deps",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -329,7 +489,6 @@
         "exit": 0
       },
       "key_patterns": [
-        "^\\s*Documenting ",
         "^error(\\[|:)",
         "^warning(\\[|:)"
       ],
@@ -337,7 +496,7 @@
     },
     {
       "id": "cargo_doc.solana_reference",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo doc --manifest-path programs/solana-reference/Cargo.toml --offline --locked --no-deps",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -346,7 +505,6 @@
         "exit": 0
       },
       "key_patterns": [
-        "^\\s*Documenting ",
         "^error(\\[|:)",
         "^warning(\\[|:)"
       ],
@@ -354,7 +512,7 @@
     },
     {
       "id": "cargo_doc.clutch_sbf",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo doc --manifest-path programs/clutch-sbf/Cargo.toml --offline --locked --no-deps",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -363,7 +521,6 @@
         "exit": 0
       },
       "key_patterns": [
-        "^\\s*Documenting ",
         "^error(\\[|:)",
         "^warning(\\[|:)"
       ],
@@ -371,7 +528,7 @@
     },
     {
       "id": "vertical_model.golden_basic_trace",
-      "section": "5",
+      "section": "current-baseline",
       "command": "cargo run --quiet --manifest-path research/vertical-model/Cargo.toml --offline --locked | cmp - research/vertical-model/golden/basic.trace",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -387,7 +544,7 @@
     },
     {
       "id": "vertical_model.golden_coupled_trace",
-      "section": "5-extended",
+      "section": "documented-extension",
       "command": "cargo run --quiet --manifest-path research/vertical-model/Cargo.toml --offline --locked -- coupled | cmp - research/vertical-model/golden/coupled.trace",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -399,11 +556,11 @@
         "^cmp: ",
         " differ"
       ],
-      "note": "the coupled-relation trace is pinned by docs/implementation/VERTICAL_MODEL.md but is not listed in CODEX_HANDOFF.md section 5; added here so the second golden artifact is covered"
+      "note": "the coupled-relation trace is pinned by docs/implementation/VERTICAL_MODEL.md; it is separately declared so the second golden artifact is covered"
     },
     {
       "id": "python.economics_unittest",
-      "section": "5",
+      "section": "current-baseline",
       "command": "python3 -m unittest discover -s research/economics -p 'test_*.py' -v",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -420,7 +577,7 @@
     },
     {
       "id": "python.collateral_profiles_unittest",
-      "section": "5",
+      "section": "current-baseline",
       "command": "python3 -m unittest discover -s research/collateral-profiles -p 'test_*.py' -v",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -437,7 +594,7 @@
     },
     {
       "id": "python.collateral_profiles_lab",
-      "section": "5",
+      "section": "current-baseline",
       "command": "python3 research/collateral-profiles/run_lab.py",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -458,7 +615,7 @@
     },
     {
       "id": "benchmarks.cost_lab_check",
-      "section": "5",
+      "section": "current-baseline",
       "command": "python3 benchmarks/cost_lab.py check",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -473,7 +630,7 @@
     },
     {
       "id": "benchmarks.unittest",
-      "section": "post-5",
+      "section": "current-benchmark",
       "command": "python3 -m unittest discover -s benchmarks/tests",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -490,7 +647,7 @@
     },
     {
       "id": "benchmarks.abi_audit",
-      "section": "post-5",
+      "section": "current-benchmark",
       "command": "python3 benchmarks/cost_lab.py abi-audit",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -507,7 +664,7 @@
     },
     {
       "id": "benchmarks.golden_checksums",
-      "section": "5",
+      "section": "current-baseline",
       "command": "(cd benchmarks/golden && shasum -a 256 -c checksums.sha256)",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -522,8 +679,905 @@
       "note": "byte identity of the checked-in benchmark goldens"
     },
     {
+      "id": "cargo_test.batch_policy_identity",
+      "section": "current-research",
+      "command": "cargo test --manifest-path research/batch-policy-identity/Cargo.toml --locked --offline --all-targets",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "bounded direct-selection authority model; host evidence only. The measured V2 selection route remains a 1,400,000-CU STOP."
+    },
+    {
+      "id": "cargo_clippy.batch_policy_identity",
+      "section": "current-research",
+      "command": "cargo clippy --manifest-path research/batch-policy-identity/Cargo.toml --locked --offline --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "strict lint for the bounded direct-selection host model"
+    },
+    {
+      "id": "cargo_test.bspline_shape_compiler",
+      "section": "current-research",
+      "command": "cargo test --manifest-path research/bspline-shape-compiler/Cargo.toml --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "exact-rational host compiler and cross-language fixture checks; not a consensus certificate or on-chain authority"
+    },
+    {
+      "id": "cargo_clippy.bspline_shape_compiler",
+      "section": "current-research",
+      "command": "cargo clippy --manifest-path research/bspline-shape-compiler/Cargo.toml --all-targets --offline --locked -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "strict lint for the exact-rational host compiler"
+    },
+    {
+      "id": "cargo_test.claim_algebra_model",
+      "section": "current-research",
+      "command": "cargo test --manifest-path research/claim-algebra-model/Cargo.toml --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "bounded payoff-language MODEL evidence, not consensus code"
+    },
+    {
+      "id": "cargo_clippy.claim_algebra_model",
+      "section": "current-research",
+      "command": "cargo clippy --manifest-path research/claim-algebra-model/Cargo.toml --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "strict lint for the bounded payoff-language MODEL"
+    },
+    {
+      "id": "cargo_doc.claim_algebra_model",
+      "section": "current-research",
+      "command": "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path research/claim-algebra-model/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build for the bounded payoff-language MODEL"
+    },
+    {
+      "id": "cargo_test.claim_neutral_resolution",
+      "section": "current-research",
+      "command": "cargo test --manifest-path research/claim-neutral-resolution/Cargo.toml --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "adversarial host model; not SBF implementation or runtime evidence"
+    },
+    {
+      "id": "cargo_test_release.claim_neutral_resolution",
+      "section": "current-research",
+      "command": "cargo test --release --manifest-path research/claim-neutral-resolution/Cargo.toml --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "release-profile run of the claim-neutral host model"
+    },
+    {
+      "id": "cargo_clippy.claim_neutral_resolution",
+      "section": "current-research",
+      "command": "cargo clippy --manifest-path research/claim-neutral-resolution/Cargo.toml --offline --locked --all-targets --all-features -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "strict lint for the claim-neutral host model"
+    },
+    {
+      "id": "cargo_doc.claim_neutral_resolution",
+      "section": "current-research",
+      "command": "cargo doc --manifest-path research/claim-neutral-resolution/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build for the claim-neutral host model"
+    },
+    {
+      "id": "cargo_test.fractional_redemption",
+      "section": "current-research",
+      "command": "cargo test --manifest-path research/fractional-redemption/Cargo.toml --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "fractional-redemption MODEL evidence, not an SBF path"
+    },
+    {
+      "id": "cargo_clippy.fractional_redemption",
+      "section": "current-research",
+      "command": "cargo clippy --manifest-path research/fractional-redemption/Cargo.toml --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "strict lint for the fractional-redemption MODEL"
+    },
+    {
+      "id": "cargo_test.liquidity_policy_model",
+      "section": "current-research",
+      "command": "cargo test --manifest-path research/liquidity-policy-model/Cargo.toml --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "proof-constrained liquidity MODEL evidence, not live liquidity"
+    },
+    {
+      "id": "cargo_clippy.liquidity_policy_model",
+      "section": "current-research",
+      "command": "cargo clippy --manifest-path research/liquidity-policy-model/Cargo.toml --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "strict lint for the liquidity-policy MODEL"
+    },
+    {
+      "id": "cargo_doc.liquidity_policy_model",
+      "section": "current-research",
+      "command": "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path research/liquidity-policy-model/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build for the liquidity-policy MODEL"
+    },
+    {
+      "id": "python.liveness_policy_profile_unittest",
+      "section": "current-research",
+      "command": "python3 -m unittest discover -s research/liveness-policy-profile -p 'test_*.py'",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^Ran \\d+ tests?$",
+        "^(OK|FAILED)\\b",
+        "^(ERROR|FAIL): "
+      ],
+      "note": "37 deterministic liveness-profile arithmetic and terminal admission tests; they do not promote a global liveness policy"
+    },
+    {
+      "id": "python.liveness_policy_profile_current_seal",
+      "section": "current-research",
+      "command": "python3 research/liveness-policy-profile/policy.py --check-current",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^PASS: exact R1 artifact, bank capture, account probe, rewards, and STOPs agree$"
+      ],
+      "note": "hashes the sealed 1,228,192-byte default ELF and 23 committed audit/build/bank files, rederives the profile, and refuses source drift; it does not rebuild SBF or establish global liveness"
+    },
+    {
+      "id": "cargo_test.liveness_policy_profile",
+      "section": "current-research",
+      "command": "cargo test --offline --locked --manifest-path research/liveness-policy-profile/Cargo.toml",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "local account-size and rent evidence probe, not runtime integration"
+    },
+    {
+      "id": "cargo_clippy.liveness_policy_profile",
+      "section": "current-research",
+      "command": "cargo clippy --offline --locked --manifest-path research/liveness-policy-profile/Cargo.toml --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "strict lint for the local liveness account probe"
+    },
+    {
+      "id": "lp_mapping_probe.release_run",
+      "section": "current-research",
+      "command": "(cd research/lp-mapping-probe && cargo run --release --offline --locked)",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^== E[1-4]  "
+      ],
+      "note": "PROPOSED host-side falsifier probe; not a shipped or on-chain crate"
+    },
+    {
+      "id": "cargo_test.resolution_work_v1",
+      "section": "current-research",
+      "command": "cargo test --manifest-path research/resolution-work-v1/Cargo.toml --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "isolated resumable-work model; the separately gated local SBF route is not an end-to-end deployment claim"
+    },
+    {
+      "id": "cargo_test_release.resolution_work_v1",
+      "section": "current-research",
+      "command": "cargo test --release --manifest-path research/resolution-work-v1/Cargo.toml --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "release-profile run of the isolated resumable-work model"
+    },
+    {
+      "id": "cargo_clippy.resolution_work_v1",
+      "section": "current-research",
+      "command": "cargo clippy --manifest-path research/resolution-work-v1/Cargo.toml --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "strict lint for the isolated resumable-work model"
+    },
+    {
+      "id": "cargo_doc.resolution_work_v1",
+      "section": "current-research",
+      "command": "cargo doc --manifest-path research/resolution-work-v1/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build for the isolated resumable-work model"
+    },
+    {
+      "id": "cargo_test.source_profile_v1",
+      "section": "current-research",
+      "command": "cargo test --manifest-path research/source-profile-v1/Cargo.toml --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "conditional source parser/model; it does not make Endow's registered production-source gate pass"
+    },
+    {
+      "id": "cargo_clippy.source_profile_v1",
+      "section": "current-research",
+      "command": "cargo clippy --manifest-path research/source-profile-v1/Cargo.toml --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "strict lint for the conditional source-profile model"
+    },
+    {
+      "id": "cargo_doc.source_profile_v1",
+      "section": "current-research",
+      "command": "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path research/source-profile-v1/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build for the conditional source-profile model"
+    },
+    {
+      "id": "python.economics_lab",
+      "section": "current-research",
+      "command": "python3 research/economics/run_lab.py",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^  \"status\": "
+      ],
+      "note": "stable scenario report from the economics MODEL, not a fee policy"
+    },
+    {
+      "id": "python.economics_admission_unittest",
+      "section": "current-research",
+      "command": "python3 -m unittest discover -s research/economics-admission -p 'test_*.py'",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^Ran \\d+ tests?$",
+        "^(OK|FAILED)\\b",
+        "^(ERROR|FAIL): "
+      ],
+      "note": "admission and fee-policy falsifier; MODEL evidence only"
+    },
+    {
+      "id": "python.economics_admission_lab",
+      "section": "current-research",
+      "command": "python3 research/economics-admission/run_lab.py",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^  \"status\": "
+      ],
+      "note": "stable admission/fee-policy scenario report; no policy promotion"
+    },
+    {
+      "id": "python.structured_claim_wrapper_unittest",
+      "section": "current-research",
+      "command": "python3 -m unittest discover -s research/structured-claim-wrapper -p 'test_*.py' -v",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^Ran \\d+ tests?$",
+        "^(OK|FAILED)\\b",
+        "^(ERROR|FAIL): "
+      ],
+      "note": "structured-claim wrapper research model; not a Token-2022 path"
+    },
+    {
+      "id": "python.structured_claim_wrapper_lab",
+      "section": "current-research",
+      "command": "python3 research/structured-claim-wrapper/run_lab.py",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^coefficients: ",
+        "^universal exact redemption lot: "
+      ],
+      "note": "stable structured-claim wrapper scenario report; MODEL evidence only"
+    },
+    {
+      "id": "python.bspline_window_semantics_unittest",
+      "section": "current-research",
+      "command": "python3 -m unittest discover -s research/bspline-window-semantics -p 'test_*.py' -v",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^Ran \\d+ tests?$",
+        "^(OK|FAILED)\\b",
+        "^(ERROR|FAIL): "
+      ],
+      "note": "isolated exact window-semantics model, not a settlement route"
+    },
+    {
+      "id": "python.bspline_window_semantics_compare",
+      "section": "current-research",
+      "command": "python3 research/bspline-window-semantics/compare.py",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^basis: ",
+        "^path: ",
+        "^exact-basis occupation: "
+      ],
+      "note": "deterministic comparison for the isolated window-semantics model"
+    },
+    {
+      "id": "python.clutch_bspline_oracle",
+      "section": "current-research",
+      "command": "python3 crates/clutch-bspline/oracle/check.py",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^PASS: [0-9,]+ exact differential cases; seed=[0-9]+; mutants=[0-9]+$",
+        "^rounding d=[1-3]: ",
+        "^FAIL"
+      ],
+      "note": "independent Fraction/Cox-de-Boor differential and mutant campaign for the host-tested point evaluator; not a formal or runtime refinement"
+    },
+    {
+      "id": "vector_check.execute",
+      "section": "current-research",
+      "command": "cargo run --manifest-path tools/vector-check/Cargo.toml --offline --locked -- --root fixtures/vectors",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^taxonomy v1 — [0-9]+ codes, digest [0-9a-f]{64}$",
+        "^vectors [0-9]+   steps [0-9]+   asserted facts [0-9]+   failures [0-9]+$",
+        "^Only `rust-reference` executed\\.",
+        "^FAIL"
+      ],
+      "note": "finite rust-reference execution of the checked vector corpus; the absent Verus/Rocq/Lean/SBF executors remain named blockers"
+    },
+    {
+      "id": "cargo_test.vector_check",
+      "section": "current-research",
+      "command": "cargo test --manifest-path tools/vector-check/Cargo.toml --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "bounded tests for the host-only vector executor"
+    },
+    {
+      "id": "cargo_clippy.vector_check",
+      "section": "current-research",
+      "command": "cargo clippy --manifest-path tools/vector-check/Cargo.toml --offline --locked --all-targets -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "strict lint for the host-only vector executor"
+    },
+    {
+      "id": "invariant_campaign.release_run",
+      "section": "current-research",
+      "command": "cargo run --manifest-path tools/invariant-campaign/Cargo.toml --release --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^campaign",
+        "^transcript",
+        "^PASS",
+        "^FAIL"
+      ],
+      "note": "deterministic host-only adversarial campaign; it does not exercise SVM locking, CPI, token movement, or validators"
+    },
+    {
+      "id": "lean.model_build",
+      "section": "current-proof-boundary",
+      "command": "(cd lean && lake build)",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^Build completed successfully",
+        "^error:"
+      ],
+      "note": "Lean model theorem build; its correspondence to Rust, SBF, accounts, and runtime remains explicitly unproved",
+      "proof_content": "proved-model-only"
+    },
+    {
+      "id": "proof.transfer_arithmetic_refinement",
+      "section": "current-proof-boundary",
+      "command": "sh verus/kernel/run_transfer_refinement.sh",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^verus_version=",
+        "^production_source_sha256=",
+        "^production_call_site_sha256=",
+        "^mutation=.* status=EXPECTED_RED",
+        "^status=PASS$",
+        "^boundary="
+      ],
+      "note": "pinned Verus checks the exact debit/credit helper with red mutations; accounts, phases, codecs, CPI, SBF, and runtime are outside this narrow result",
+      "proof_content": "checked-rust-subset"
+    },
+    {
+      "id": "proof.batch_scalar_shadow",
+      "section": "current-proof-boundary",
+      "command": "sh verus/batch/run_batch_proofs.sh",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^verus_version=",
+        "^proof_source_sha256=",
+        "^mutation=.* status=EXPECTED_RED",
+        "^status=PASS$",
+        "^claim=",
+        "^boundary=",
+        "^excluded="
+      ],
+      "note": "pinned Verus checks a scalar mathematical batch shadow and four red mutants; digest-pinned human correspondence is not an executable-body or runtime refinement",
+      "proof_content": "scalar-model-shadow"
+    },
+    {
+      "id": "proof.bspline_finite_refinement",
+      "section": "current-proof-boundary",
+      "command": "sh verus/bspline/run_bspline_refinement.sh",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^lean_version=",
+        "^production_source_sha256=",
+        "^baseline=PASS fixtures=8 seam=BasisSpec::evaluate$",
+        "^mutation=.* status=EXPECTED_RED",
+        "^status=PASS$",
+        "^boundary="
+      ],
+      "note": "digest-bound eight-row Lean/Rust comparison plus five source mutants; no universal source, SBF, or runtime refinement is claimed",
+      "proof_content": "checked-finite"
+    },
+    {
+      "id": "cargo_test.terminal_lifecycle_v2",
+      "section": "current-research",
+      "command": "cargo test --manifest-path research/terminal-lifecycle-v2/Cargo.toml --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "16-test terminal-lifecycle V2 host model; it changes no live V1 or SBF path"
+    },
+    {
+      "id": "cargo_test_release.terminal_lifecycle_v2",
+      "section": "current-research",
+      "command": "cargo test --release --manifest-path research/terminal-lifecycle-v2/Cargo.toml --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^test result: "
+      ],
+      "note": "release-profile run of the 16-test terminal-lifecycle V2 host model"
+    },
+    {
+      "id": "cargo_clippy.terminal_lifecycle_v2",
+      "section": "current-research",
+      "command": "cargo clippy --manifest-path research/terminal-lifecycle-v2/Cargo.toml --offline --locked --all-targets --all-features -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "strict lint for the terminal-lifecycle V2 host model"
+    },
+    {
+      "id": "cargo_doc.terminal_lifecycle_v2",
+      "section": "current-research",
+      "command": "cargo doc --manifest-path research/terminal-lifecycle-v2/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build for the terminal-lifecycle V2 host model"
+    },
+    {
+      "id": "sbf.runtime_bringup",
+      "section": "current-runtime",
+      "command": "programs/clutch-sbf/scripts/run_bringup.sh",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "exact",
+        "exit": 0,
+        "required_output_patterns": [
+          "^source_campaign default-endow=REFUSE Custom\\(0x0079\\); lifecycle=NOT_DECLARED$",
+          "^  refuse endow\\s+Custom\\(0x0079\\) program_units=",
+          "^source_campaign NON-PRODUCTION endow=EXPECTED_SUCCESS; lifecycle=EXPECTED_SUCCESS$",
+          "^  accept endow\\s+program_units=",
+          "^  UNDRIVABLE resolve-repeat-idempotent consumed [0-9]+ of [0-9]+ granted and was aborted: does not fit one transaction$",
+          "^  UNDRIVABLE resolve-late-conflict-rolls-back consumed [0-9]+ of [0-9]+ granted and was aborted: does not fit one transaction$"
+        ]
+      },
+      "key_patterns": [
+        "^default pass [12]  sha256=[0-9a-f]{64}  bytes=[0-9]+$",
+        "^NON-PRODUCTION mock pass [12]  sha256=[0-9a-f]{64}  bytes=[0-9]+$",
+        "^default_reproducibility=PASS$",
+        "^mock_reproducibility=PASS$",
+        "^profile_separation=PASS$",
+        "^source_campaign default-endow=REFUSE Custom\\(0x0079\\); lifecycle=NOT_DECLARED$",
+        "^source_campaign NON-PRODUCTION endow=EXPECTED_SUCCESS; lifecycle=EXPECTED_SUCCESS$",
+        "^final_elf_stack_diagnostic_symbols=ABSENT ",
+        "^validator executed program readiness probe ",
+        "^[0-9]+ accepting transactions$",
+        "^  accept ",
+        "^  refuse ",
+        "^  UNDRIVABLE ",
+        "^\\s+[0-9]+\\s+walk-",
+        "^\\s+terminal identity:",
+        "^one byte .* went red:$",
+        "^the terminal .* went red:$",
+        "^one payout .* went red:$",
+        "^PASS$",
+        "^default_sbf_elf_sha256=[0-9a-f]{64}$",
+        "^non_production_mock_sbf_elf_sha256=[0-9a-f]{64}$"
+      ],
+      "note": "builds both the default empty-production-source-registry ELF and explicitly non-production mock-source ELF twice, confirms per-profile byte identity on one machine, rejects any backend stack-diagnostic symbol that survives final-ELF LTO, then runs the entrypoint, profile-bound per-family differential/refusal matrices and falsifiability checks. The default plan declares only the Endow 0x0079 refusal and no lifecycle; only the distinct mock plan declares successful Endow and runs the ordered lifecycle on a loopback validator; dependency diagnostics proven absent from the linked ELF are build diagnostics, not evidence of reachable undefined behavior, but their absence is not a general stack-safety proof"
+    },
+    {
+      "id": "sbf.committed_signed_walk",
+      "section": "current-runtime",
+      "command": "programs/clutch-sbf/scripts/run_committed.sh",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^source_profile=NON-PRODUCTION-non-production-mock-source$",
+        "^== signed, confirmed, committed walk ==$",
+        "^  red: committed-.*committed bytes differ(?: \\(observed .*, expected .*\\))?$",
+        "^committed_signed_transactions=22$",
+        "^committed_expected_refusals=1$",
+        "^committed_compute_exhaustions=1$",
+        "^committed_watched_accounts=18$",
+        "^genesis_assisted_program_accounts=12$",
+        "^withdraw_cash=DRIVEN_TO_ZERO$",
+        "^redeem_external=DRIVEN$",
+        "^falsifiability=PASS$",
+        "^sbf_elf_sha256=[0-9a-f]{64}$"
+      ],
+      "note": "22 signed, confirmed same-market loopback transactions with one checked semantic refusal, one exact compute-ceiling STOP with rollback, 18 watched accounts, and a required terminal-byte falsification run. The prestate has 12 program-owned genesis-assisted prerequisites; this is local runtime evidence against the explicit mock-source ELF, not blank-bank, production source-ingestion, deployment, devnet, or mainnet evidence."
+    },
+    {
+      "id": "sbf.token2022_program_test",
+      "section": "current-runtime",
+      "command": "programs/clutch-sbf/svm-tests/run_svm_tests.sh",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "exact",
+        "exit": 0,
+        "required_output_patterns": [
+          "^source_profile=default-empty-registry$",
+          "^test default_elf_refuses_endow_without_a_registered_source_release \\.\\.\\. ok$"
+        ]
+      },
+      "key_patterns": [
+        "^source_profile=default-empty-registry$",
+        "^[0-9a-f]{64}\\s+.*clutch_sbf\\.so$",
+        "^running [0-9]+ tests?$",
+        "^test [a-zA-Z0-9_]+ .*",
+        "^test default_elf_refuses_endow_without_a_registered_source_release \\.\\.\\. ok$",
+        "^SVM ",
+        "^test result: "
+      ],
+      "note": "executes the real SBF ELF and Token-2022 program in an in-process Agave bank, including the default Endow 0x0079 full-Account-image rollback test, extension refusals, mandatory token/collateral planes, and E5 atomic rollback; program-test is not a cluster, deployment, or runtime-diversity result"
+    },
+    {
+      "id": "sbf.token2022_program_test_non_production_mock",
+      "section": "current-runtime",
+      "command": "programs/clutch-sbf/svm-tests/run_svm_tests.sh --non-production-mock-source",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "exact",
+        "exit": 0,
+        "required_output_patterns": [
+          "^source_profile=NON-PRODUCTION-non-production-mock-source$",
+          "^test publicly_prefunded_second_owner_position_and_replay_are_created_by_first_endow \\.\\.\\. ok$"
+        ]
+      },
+      "key_patterns": [
+        "^== SVM profile: NON-PRODUCTION-non-production-mock-source ==$",
+        "^source_profile=NON-PRODUCTION-non-production-mock-source$",
+        "^elf_sha256=[0-9a-f]{64}$",
+        "^elf_bytes=[0-9]+$",
+        "^running [0-9]+ tests?$",
+        "^test [a-zA-Z0-9_]+ .*",
+        "^test publicly_prefunded_second_owner_position_and_replay_are_created_by_first_endow \\.\\.\\. ok$",
+        "^test result: "
+      ],
+      "note": "explicitly builds and executes the differently compiled non-production mock-source ELF in the local Token-2022 bank; this is laboratory evidence only, never a production-provider or deployment claim"
+    },
+    {
       "id": "static_client.npm",
-      "section": "5",
+      "section": "current-baseline",
       "command": "(cd apps/static-client && npm test && npm run check)",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -538,11 +1592,11 @@
         "^static-client smoke: ",
         "^AssertionError"
       ],
-      "note": "no package runtime dependencies; the smoke test recomputes the canonical terms digest from terms.json"
+      "note": "32 offline Node checks cover the embedded evidence lens, strict snapshot validation, local-asset/CSP boundaries, accessibility, and canonical terms digest; no package runtime dependencies"
     },
     {
       "id": "toolchain.run_lab",
-      "section": "5",
+      "section": "current-baseline",
       "command": "CARGO_NET_OFFLINE=true toolchain/scripts/run_lab.sh",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -571,14 +1625,17 @@
     },
     {
       "id": "proof.verus_probe",
-      "section": "5-expected-unavailable",
+      "section": "current-proof-boundary",
       "command": "toolchain/scripts/run_verus.sh",
       "cwd": ".",
       "shell": "/bin/sh -c",
       "expected": {
-        "mode": "nonzero",
-        "exit": null,
-        "reason": "the pinned Verus release rejects the pinned probe source (verus_builtin crate not imported). Making it pass requires editing the probe, which changes the pinned source digest, so the correct state is a recorded failure, not a green gate."
+        "mode": "exact",
+        "exit": 1,
+        "required_output_patterns": [
+          "^error: Error: The verus_builtin crate was not imported"
+        ],
+        "reason": "only the pinned Verus tool's proof-status exit 1 is the reviewed disposition for the digest-pinned probe. Exit 2 means the tool is missing, 3 means off-pin tool/frontend, and 4 means source-digest drift; none is proof evidence or an acceptable substitute for the intended tool result."
       },
       "key_patterns": [
         "^verus_observed_version=",
@@ -589,12 +1646,12 @@
         "^BLOCKED: ",
         "^error: "
       ],
-      "note": "BLOCKER (CODEX_HANDOFF.md section 7 P0-2): formal-tool gap",
+      "note": "BLOCKER: the root probe's exact expected tool failure is not proof content",
       "proof_content": "none"
     },
     {
       "id": "proof.rocq_check",
-      "section": "5-expected-unavailable",
+      "section": "current-proof-boundary",
       "command": "rocq/check.sh",
       "cwd": ".",
       "shell": "/bin/sh -c",
@@ -612,7 +1669,7 @@
         "^coqc=",
         "^reason="
       ],
-      "note": "BLOCKER (CODEX_HANDOFF.md section 7 P0-2): typecheck is not proof",
+      "note": "BLOCKER: the Rocq definition typecheck is not proof content",
       "proof_content": "none"
     }
   ],
@@ -627,43 +1684,43 @@
     "static_client.manifest_json": {
       "path": "apps/static-client/manifest.json",
       "kind": "file-sha256",
-      "sha256": "a526539f578e4ad7ec77aec5a7b8622a5078d3287016c9260453bbd90e0f7b90",
-      "bytes": 2760,
+      "sha256": "4001bb49c4e95cb0eff56184116a9624e3149b5ea5d07a86afe86d86309aa2c6",
+      "bytes": 29403,
       "status": "present"
     },
     "static_client.app_js": {
       "path": "apps/static-client/app.js",
       "kind": "file-sha256",
-      "sha256": "9ac5ce7235e80c909e740f4a53b4bf7dc75dad1c0b80d7266e62a145cd928fce",
-      "bytes": 10175,
+      "sha256": "438fa755465739a96ebbe3661bc3e7681681a9b070704543faaaec8342da0cca",
+      "bytes": 26718,
       "status": "present"
     },
     "static_client.index_html": {
       "path": "apps/static-client/index.html",
       "kind": "file-sha256",
-      "sha256": "6fa62fe124ff4c25c51e2836efadabf99e9dbe59a6603a4b996bab87259e47fc",
-      "bytes": 9564,
+      "sha256": "77d09ea1aa08d06e46e999c028de7b43655ae51f09a2a3e10bcc596109b6cff9",
+      "bytes": 12385,
       "status": "present"
     },
     "static_client.styles_css": {
       "path": "apps/static-client/styles.css",
       "kind": "file-sha256",
-      "sha256": "06894dce6a227276e1582cc23bb5101e4beac94ba447fa46f70fbd24292613e6",
-      "bytes": 11177,
+      "sha256": "0d2d9eeaa155dcbc8718af290a51b35edf50378efc38cf62496f19419144a16e",
+      "bytes": 21218,
       "status": "present"
     },
     "static_client.package_json": {
       "path": "apps/static-client/package.json",
       "kind": "file-sha256",
-      "sha256": "5392e20f0e522dd6d210c003fa26120aa865cb8133275bed0333a72adad48506",
-      "bytes": 332,
+      "sha256": "bf2c60d418cadc3d770ad3d81ad805d3cabf53f9919e265465342aa8939b18a5",
+      "bytes": 372,
       "status": "present"
     },
     "static_client.smoke_mjs": {
       "path": "apps/static-client/test/smoke.mjs",
       "kind": "file-sha256",
-      "sha256": "6ef9f43f7096e2cc3240cff2869cb66653fe3bd7d10592694447397d552a78c0",
-      "bytes": 8026,
+      "sha256": "4cf94548526510720744d65c19950de27cf84a6e54cc0aface64d35620ce81e0",
+      "bytes": 9883,
       "status": "present"
     },
     "toolchain.e0_probe_source": {
@@ -674,7 +1731,7 @@
       "status": "present",
       "handoff_declared_sha256": "10b2087683d3c2cb423768eb9c612c00ea929b171835c15d3d16792d6b8b19ac",
       "matches_handoff": true,
-      "handoff_reference": "CODEX_HANDOFF.md section 6 (E0 probe source); toolchain/scripts/run_verus.sh SOURCE_SHA256_PIN"
+      "handoff_reference": "toolchain/scripts/run_verus.sh SOURCE_SHA256_PIN; toolchain/PINNED_PROOF_TOOLS.md"
     },
     "toolchain.e0_probe_manifest": {
       "path": "toolchain/probes/no_std_core/Cargo.toml",
@@ -705,7 +1762,7 @@
       "status": "present",
       "handoff_declared_sha256": "ab808dd308e3bdce0fa8cc2d3b9b4a14e87dbd1b41ae7143e897c53f7f3f1639",
       "matches_handoff": true,
-      "handoff_reference": "CODEX_HANDOFF.md section 6 (vertical-model golden trace)"
+      "handoff_reference": "research/vertical-model/golden/basic.trace"
     },
     "vertical_model.golden_coupled_trace": {
       "path": "research/vertical-model/golden/coupled.trace",
@@ -713,7 +1770,7 @@
       "sha256": "b92775e27c7727964b5935fec8270c8afe88609a0afe14df033c80b30c02618e",
       "bytes": 946,
       "status": "present",
-      "handoff_reference": "docs/implementation/VERTICAL_MODEL.md (second golden trace; not named in CODEX_HANDOFF.md section 6)"
+      "handoff_reference": "docs/implementation/VERTICAL_MODEL.md (second golden trace)"
     },
     "collateral_profiles.vectors": {
       "path": "research/collateral-profiles/vectors.json",
@@ -723,7 +1780,7 @@
       "status": "present",
       "handoff_declared_sha256": "5bcf3a6117c4e411a5b9b339093eaf3dcd9ca1eee0bb7a2b6814a42f46639e48",
       "matches_handoff": true,
-      "handoff_reference": "CODEX_HANDOFF.md section 6 (collateral-profile vectors)"
+      "handoff_reference": "research/collateral-profiles/vectors.json"
     },
     "collateral_profiles.identity_vectors": {
       "path": "research/collateral-profiles/identity_vectors.json",
@@ -735,37 +1792,37 @@
     "benchmarks.golden_checksums": {
       "path": "benchmarks/golden/checksums.sha256",
       "kind": "file-sha256",
-      "sha256": "6b1bc75445fe973364367f3af55f0a0f418fcca6e7d97b738d39c7e007b74946",
+      "sha256": "d13f63f50925a44ab94a5edc82afad64da9fda77dd90385bd830706de106be92",
       "bytes": 232,
       "status": "present",
-      "handoff_reference": "CODEX_HANDOFF.md section 6 points at this file rather than inlining the benchmark digests"
+      "handoff_reference": "benchmarks/golden/checksums.sha256"
     },
     "benchmarks.golden_summary": {
       "path": "benchmarks/golden/SUMMARY.md",
       "kind": "file-sha256",
-      "sha256": "4eed27b63cd4dd67f2ea9e16a239be3d28ece422a4ff7238efa2af40d9bfb759",
-      "bytes": 10246,
+      "sha256": "b03a30839a7d3068a71ecdab67c9f798e008f1ced521217560638a23071b3824",
+      "bytes": 10422,
       "status": "present"
     },
     "benchmarks.golden_matrix_csv": {
       "path": "benchmarks/golden/matrix.csv",
       "kind": "file-sha256",
-      "sha256": "ee1b6194510e420d84224a914d6cfd8fd670b216172e99866e30195e6c4eb321",
-      "bytes": 33217,
+      "sha256": "a0205c9962aa4110e4ff6febadab039c47f33596d0799b5bdf7326cd96ec392f",
+      "bytes": 33451,
       "status": "present"
     },
     "benchmarks.golden_matrix_json": {
       "path": "benchmarks/golden/matrix.json",
       "kind": "file-sha256",
-      "sha256": "365c95350668770f6f3d7f91c6adbd5f3dc94284b51a2445695accb3b13c8ac3",
-      "bytes": 416127,
+      "sha256": "ffc2015398dafdfc25c51a7dbc799370aba9597c8815a2eaa8da56503840e5c9",
+      "bytes": 418608,
       "status": "present"
     },
     "benchmarks.constants": {
       "path": "benchmarks/constants.json",
       "kind": "file-sha256",
-      "sha256": "8f29a25c6131eff0f03ea38de19080a878ac4b3d863411dd029b992b12aa26ec",
-      "bytes": 17064,
+      "sha256": "ae65755968b2c2550de23dba4e3c82565d3feb87a92535f4a18dd83be31fafac",
+      "bytes": 17819,
       "status": "present"
     },
     "fixtures.economics_admission": {
@@ -810,18 +1867,67 @@
       "bytes": 156,
       "status": "present"
     },
+    "locks.clutch_bspline": {
+      "path": "crates/clutch-bspline/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "e49289a908b01a9032b096cfea0499f4a902714abf9475b91b55446d0ab43edd",
+      "bytes": 158,
+      "status": "present"
+    },
+    "locks.clutch_bspline_accumulator": {
+      "path": "crates/clutch-bspline-accumulator/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "bfaf7d1de157ec7d57d40410396a2ad783c1b175bf0f26e3de7eade2015ca966",
+      "bytes": 263,
+      "status": "present"
+    },
+    "locks.clutch_liveness": {
+      "path": "crates/clutch-liveness/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "0fb80974de4021b5322d8c9581ad380ceec40bbfa8aca56530ecaf732e38e8f0",
+      "bytes": 159,
+      "status": "present"
+    },
     "locks.solana_layout": {
       "path": "programs/solana-layout/Cargo.lock",
       "kind": "file-sha256",
-      "sha256": "028897423a4bf6b2be271b282bbbc57ecd9d30cb2eab655394972a1379a9190b",
-      "bytes": 164,
+      "sha256": "60a5e22983a7bcf43b72b471953e9c99288cd3696fa0484ffc6881ddeb2718f6",
+      "bytes": 3369,
       "status": "present"
     },
     "locks.solana_reference": {
       "path": "programs/solana-reference/Cargo.lock",
       "kind": "file-sha256",
-      "sha256": "3828d437a86a3a0ac598c4bceaa5ae1862046e2d3cc4f90c28a26bb3b93a4ca3",
-      "bytes": 426,
+      "sha256": "6ae1794abc0e005ef43f4ff396b19b86d01a75b79b5f3b763f2456e65c67712d",
+      "bytes": 3696,
+      "status": "present"
+    },
+    "locks.clutch_sbf_committed_harness": {
+      "path": "programs/clutch-sbf/committed-harness/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "c699d08f2b2176795c402068d2a47dc1cf7e5c1d6a5ca6c3903c1e884ef12d42",
+      "bytes": 18197,
+      "status": "present"
+    },
+    "clutch_sbf.committed_harness_manifest": {
+      "path": "programs/clutch-sbf/committed-harness/Cargo.toml",
+      "kind": "file-sha256",
+      "sha256": "2b67ae0303b378e6822b7c66da92ee4f0ff8d95c60192feef3f7d006e4aa1923",
+      "bytes": 652,
+      "status": "present"
+    },
+    "clutch_sbf.committed_harness_source": {
+      "path": "programs/clutch-sbf/committed-harness/src/main.rs",
+      "kind": "file-sha256",
+      "sha256": "1ca9bb60ea776586a433f7e3b26c1334c3a7c4bc6bd6bd4abcd1da3fef022232",
+      "bytes": 22961,
+      "status": "present"
+    },
+    "clutch_sbf.committed_walk_runner": {
+      "path": "programs/clutch-sbf/scripts/run_committed.sh",
+      "kind": "file-sha256",
+      "sha256": "c1ca28bfd36479d093026dc522076811a45aadcfc147cb61bf13dfcdbee07ace",
+      "bytes": 9644,
       "status": "present"
     },
     "locks.vertical_model": {
@@ -831,18 +1937,46 @@
       "bytes": 408,
       "status": "present"
     },
+    "locks.liveness_policy_profile": {
+      "path": "research/liveness-policy-profile/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "0cd6e375e5349ab4eb9e65d866ab45ca9075d0756ee760a9ec78045b70ca5722",
+      "bytes": 5940,
+      "status": "present"
+    },
+    "locks.terminal_lifecycle_v2": {
+      "path": "research/terminal-lifecycle-v2/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "2e7240aac8d20299a7bdb7ef7dc100cf8dd0a3ce1970e89cc54bc3d554768034",
+      "bytes": 172,
+      "status": "present"
+    },
+    "locks.vector_check": {
+      "path": "tools/vector-check/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "4d6bb492177e82265e04774746773f5cbf8cbfaedba39289372f0c9d85ae06d2",
+      "bytes": 3886,
+      "status": "present"
+    },
+    "locks.invariant_campaign": {
+      "path": "tools/invariant-campaign/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "5041d51d6db9df867410a2431925d3244bf5e7fbfcfeeab0be67e1251cdbc30d",
+      "bytes": 3559,
+      "status": "present"
+    },
     "toolchain.versions_env": {
       "path": "toolchain/versions.env",
       "kind": "file-sha256",
-      "sha256": "f715e36474ede2382bcdc7d7e6ea91ec38f57d94e9e34ff6ab9f80bd2857131e",
-      "bytes": 2924,
+      "sha256": "83c83bcda23923ab6541fb727c6a9273e3bb645a772be424097c14ada504cfac",
+      "bytes": 4048,
       "status": "present"
     },
     "toolchain.pinned_proof_tools": {
       "path": "toolchain/PINNED_PROOF_TOOLS.md",
       "kind": "file-sha256",
-      "sha256": "e14a1a9f55b64cbd20160cae1521b07d4766c2f94129c27027fb4f49b5c82418",
-      "bytes": 10974,
+      "sha256": "722d433d535b469d1e739862d8c978110b7757f592c713eb41b8babbf364b1b0",
+      "bytes": 13616,
       "status": "present"
     },
     "proof_shadow.rocq_spec": {
@@ -869,8 +2003,8 @@
     "proof_shadow.verus_batch": {
       "path": "verus/batch/batch.rs",
       "kind": "file-sha256",
-      "sha256": "83bd9e0f5a0f245a61693cf55999870b848fd741f0aa688ebbf6d4c7c837ccad",
-      "bytes": 1033,
+      "sha256": "6dce0d76961a74fe3433edf5b2830366280b2393fa5c013d43e95d5b4355e052",
+      "bytes": 16424,
       "status": "present"
     },
     "static_client.canonical_terms": {
@@ -879,32 +2013,52 @@
       "rule": "sha256 over UTF-8 of JSON.stringify of the `canonicalTerms` object with every object's keys sorted recursively and no whitespace (separators ',' and ':'), non-ASCII left unescaped",
       "sha256": "62b06b2107636686648507e4f9ecd8a4d90733dcebf81177d4a63b25bc698d02",
       "status": "present",
-      "handoff_declared_sha256": "a21f6cbb1ab3b06afc7c8625f3388835843edb17c48173e8fb57df8b7e0dd8e8",
-      "matches_handoff": false,
-      "handoff_reference": "CODEX_HANDOFF.md section 6 (static canonical terms); docs/implementation/STATIC_CLIENT.md; enforced by apps/static-client/test/smoke.mjs"
+      "handoff_declared_sha256": "62b06b2107636686648507e4f9ecd8a4d90733dcebf81177d4a63b25bc698d02",
+      "matches_handoff": true,
+      "handoff_reference": "apps/static-client/terms.json digest; apps/static-client/manifest.json canonical-term identities; docs/implementation/STATIC_CLIENT.md; enforced by apps/static-client/test/smoke.mjs"
     },
     "toolchain.e0_sbf_rlib": {
       "kind": "declared-build-output",
       "sha256": null,
-      "handoff_declared_sha256": "d444c0ac118de1cb24d9fe6b509df7beafc1c0f1a8c2828b24e26b170da0ad1c",
-      "handoff_reference": "CODEX_HANDOFF.md section 6 (reproducible E0 SBF rlib); docs/implementation/TOOLCHAIN_SPIKE.md",
+      "handoff_reference": "toolchain/scripts/run_lab.sh expected SBF rlib identity; docs/implementation/TOOLCHAIN_SPIKE.md",
       "produced_by_gate": "toolchain.run_lab",
       "produced_by_output_key": "sbf_rlib_sha256",
       "note": "an rlib emitted into a temporary directory by cargo-build-sbf, not a deployable program ELF and not a repository artifact",
       "status": "not-a-repository-file",
+      "handoff_declared_sha256": "d444c0ac118de1cb24d9fe6b509df7beafc1c0f1a8c2828b24e26b170da0ad1c",
       "observed_sha256": "d444c0ac118de1cb24d9fe6b509df7beafc1c0f1a8c2828b24e26b170da0ad1c",
       "matches_handoff": true
+    },
+    "clutch_sbf.default_program_elf": {
+      "kind": "declared-build-output",
+      "sha256": null,
+      "handoff_reference": "programs/clutch-sbf/scripts/run_bringup.sh default profile; fresh same-machine identity observed only when its gate runs",
+      "produced_by_gate": "sbf.runtime_bringup",
+      "produced_by_output_key": "default_sbf_elf_sha256",
+      "note": "default empty-production-source-registry ELF built twice into fresh target directories on one machine; byte identity is not independent reproducible-build closure and says nothing about deployment",
+      "status": "not-a-repository-file",
+      "observed_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60"
+    },
+    "clutch_sbf.non_production_mock_program_elf": {
+      "kind": "declared-build-output",
+      "sha256": null,
+      "handoff_reference": "programs/clutch-sbf/scripts/run_bringup.sh non-production mock profile; fresh same-machine identity observed only when its gate runs",
+      "produced_by_gate": "sbf.runtime_bringup",
+      "produced_by_output_key": "non_production_mock_sbf_elf_sha256",
+      "note": "explicit non-production mock-source ELF built twice into fresh target directories on one machine; it is local test evidence only and is not a production-provider, deployment, or release identity",
+      "status": "not-a-repository-file",
+      "observed_sha256": "5773eedf98721f5ad27d22ca5ea0d87dd59e649fc6d50b83b00d9e56f0985f40"
     }
   },
   "toolchain": {
     "records": {
       "versions_env": {
         "path": "toolchain/versions.env",
-        "sha256": "f715e36474ede2382bcdc7d7e6ea91ec38f57d94e9e34ff6ab9f80bd2857131e"
+        "sha256": "83c83bcda23923ab6541fb727c6a9273e3bb645a772be424097c14ada504cfac"
       },
       "pinned_proof_tools_md": {
         "path": "toolchain/PINNED_PROOF_TOOLS.md",
-        "sha256": "e14a1a9f55b64cbd20160cae1521b07d4766c2f94129c27027fb4f49b5c82418"
+        "sha256": "722d433d535b469d1e739862d8c978110b7757f592c713eb41b8babbf364b1b0"
       }
     },
     "host": {
@@ -989,12 +2143,12 @@
       "homebrew formula provenance (JSON API install, no tap commit)",
       "rocq stdlib / dependency closure (no lockfile)",
       "librustc_driver dylib supplied by the ambient rustup toolchain",
-      "correspondence between the Verus/Rocq shadows and crates/clutch-*"
+      "whole-system correspondence between the proof/model lanes and crates/clutch-* outside the explicitly pinned transfer helper"
     ]
   },
   "run": {
-    "started_at_utc": "2026-08-18T13:06:50Z",
-    "finished_at_utc": "2026-08-18T13:07:40Z",
+    "started_at_utc": "2026-08-19T12:19:58Z",
+    "finished_at_utc": "2026-08-19T12:27:17Z",
     "gate_timeout_seconds": 1800,
     "note": "timestamps here are the only nondeterministic fields in this manifest; `check` ignores them"
   },
@@ -1004,12 +2158,10 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "3d0904d91f7393e7d876e62226c48b19637ab31c16b231ae633c6ec15d874a46",
-      "output_bytes": 1587,
-      "tail": []
+      "key_lines_sha256": "c8666603a7569dbc45958c995fdc836b7188f464894a97584d5c55c99960308d"
     },
     "cargo_test.clutch_accumulator": {
       "exit_code": 0,
@@ -1019,45 +2171,68 @@
         "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "05fdf007417f6322d38653f0012235b60a07135606b33801bcee7dd2ab729b35",
-      "output_bytes": 2362,
-      "tail": []
+      "key_lines_sha256": "05fdf007417f6322d38653f0012235b60a07135606b33801bcee7dd2ab729b35"
     },
     "cargo_test.clutch_batch": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 62 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "cb3eaba2888bec5e087b6b57c077de48acd6fbc4d503401992d90de2069d303a",
-      "output_bytes": 5453,
-      "tail": []
+      "key_lines_sha256": "5a97a096e8e6f8362ca14825781d08c3e19554a5feb8747efa67a619336ac8dc"
+    },
+    "cargo_test.clutch_bspline": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "17725849f8f5a0be77540aef71d09d0dc753f8f12a21d6f08cad01bd95ffa8b5"
+    },
+    "cargo_test.clutch_bspline_accumulator": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "092680b83788a1ae91fb50f05fab4b001ba2da4eb48eb1c46a13c5bf55b387b1"
+    },
+    "cargo_test.clutch_liveness": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "3d0904d91f7393e7d876e62226c48b19637ab31c16b231ae633c6ec15d874a46"
     },
     "cargo_test.solana_layout": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 97 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 154 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "1b0cbf8728dd7aa492dd15b5b71854d317259903177e4b26d07576babe029f30",
-      "output_bytes": 7864,
-      "tail": []
+      "key_lines_sha256": "5734d3ec5fafe3fd1cb9e7f2754b96a36d9a3e1bdb25bc07607f8c3ed80d7752"
     },
     "cargo_test.solana_reference": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 54 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "25ee802a51122367e98040a2b9d9b0dd30bc52de89411adbc386fb346f986046",
-      "output_bytes": 3475,
-      "tail": []
+      "key_lines_sha256": "fd8618b8a3c17323dd5b0ffa3f7c56bee2901bef24890f99191ca26465aac19d"
     },
     "cargo_test.vertical_model": {
       "exit_code": 0,
@@ -1067,159 +2242,169 @@
         "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "c44e130fd0ebd20d318d46f9bb08bb17fe17dd40d49b94d2c93c004f98cbfa65",
-      "output_bytes": 2062,
-      "tail": []
+      "key_lines_sha256": "c44e130fd0ebd20d318d46f9bb08bb17fe17dd40d49b94d2c93c004f98cbfa65"
     },
     "cargo_test.clutch_sbf": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
-        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 157 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "23c1a9ffcf92581625e6093205205e7516b45a59a9b40736766f76d1447db16d",
-      "output_bytes": 12723,
-      "tail": []
+      "key_lines_sha256": "ce3fb75f8bf12ed3c9b5cf1b1494b2daa102c90ba5dedb55495d1248ec3d4f0e"
     },
     "cargo_clippy.clutch_kernel": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 72,
-      "tail": []
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_clippy.clutch_accumulator": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 72,
-      "tail": []
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_clippy.clutch_batch": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 72,
-      "tail": []
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_clippy.clutch_bspline": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_clippy.clutch_bspline_accumulator": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_clippy.clutch_liveness": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_clippy.solana_layout": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 170,
-      "tail": []
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_clippy.solana_reference": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 274,
-      "tail": []
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_clippy.vertical_model": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 72,
-      "tail": []
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_clippy.clutch_sbf": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 266,
-      "tail": []
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_doc.clutch_kernel": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 174,
-      "tail": []
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_doc.clutch_accumulator": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 184,
-      "tail": []
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_doc.clutch_batch": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 172,
-      "tail": []
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_doc.clutch_bspline": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_doc.clutch_bspline_accumulator": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_doc.clutch_liveness": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_doc.solana_layout": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 183,
-      "tail": []
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_doc.solana_reference": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
-      "key_lines": [
-        " Documenting clutch-solana-reference v0.1.0 (/Users/ember/dev/dragons-clutch/programs/solana-reference)"
-      ],
-      "key_lines_sha256": "6f21a13dedde05f0dccefc51d01ecd565a9cbced80308cc3b0ffcf740dbf52e5",
-      "output_bytes": 293,
-      "tail": []
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_doc.clutch_sbf": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
-      "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 187,
-      "tail": []
+      "key_lines": [
+        "warning: public documentation for `observe_resolve` links to private item `apply_recorded_redemption`",
+        "warning: public documentation for `split` links to private item `require_internal_bound`",
+        "warning: `clutch-sbf` (lib doc) generated 2 warnings"
+      ],
+      "key_lines_sha256": "0def9606a8806dfdfaa28becc4b5a2516131c4aeed42a1ac2b027e6c73bcfd72"
     },
     "vertical_model.golden_basic_trace": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 0,
-      "tail": []
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "vertical_model.golden_coupled_trace": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "output_bytes": 0,
-      "tail": []
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "python.economics_unittest": {
       "exit_code": 0,
@@ -1229,9 +2414,7 @@
         "Ran 83 tests",
         "OK"
       ],
-      "key_lines_sha256": "40f30bd0b692a0e481a77ab5f0dec1c9f862e7e5954e1085b4ed52336e381db9",
-      "output_bytes": 11767,
-      "tail": []
+      "key_lines_sha256": "40f30bd0b692a0e481a77ab5f0dec1c9f862e7e5954e1085b4ed52336e381db9"
     },
     "python.collateral_profiles_unittest": {
       "exit_code": 0,
@@ -1241,9 +2424,7 @@
         "Ran 28 tests",
         "OK"
       ],
-      "key_lines_sha256": "ffbc7a7f7ee577872f0e5b606f347403d10aa3c0b19ecaaaf0b3d78463c57f4e",
-      "output_bytes": 4042,
-      "tail": []
+      "key_lines_sha256": "ffbc7a7f7ee577872f0e5b606f347403d10aa3c0b19ecaaaf0b3d78463c57f4e"
     },
     "python.collateral_profiles_lab": {
       "exit_code": 0,
@@ -1258,32 +2439,26 @@
         "dregg_parent_identity=31cd82668ac7846bbf6bf38d25107d0301bc468d40816bf9a565ac93766f93b3",
         "network_actions=0"
       ],
-      "key_lines_sha256": "a5be43182e6f3312005d4928008283760db71b48a518b6be6beee8d958d56f31",
-      "output_bytes": 418,
-      "tail": []
+      "key_lines_sha256": "a5be43182e6f3312005d4928008283760db71b48a518b6be6beee8d958d56f31"
     },
     "benchmarks.cost_lab_check": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "check passed: 261 scenarios; offline; rpc=0; validator=0"
+        "check passed: 263 scenarios; offline; rpc=0; validator=0"
       ],
-      "key_lines_sha256": "6ceabbf4926b5ca9fb597f124b2cc309aa6e6538a5c60eef674ddb269366e8d2",
-      "output_bytes": 57,
-      "tail": []
+      "key_lines_sha256": "3a44308340700c4ea69d7a8818edf4f27ca7c933a6bcf19d69d9eb9c85bd602f"
     },
     "benchmarks.unittest": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "Ran 41 tests",
+        "Ran 43 tests",
         "OK"
       ],
-      "key_lines_sha256": "ed14775a3e29deb8e71374f6330e55c5da19891b538527b7b51fd0728ed642f5",
-      "output_bytes": 140,
-      "tail": []
+      "key_lines_sha256": "76185d2ef1153dd95eb03ed95e5e3bdda7da251ae8db996751108c55da929b38"
     },
     "benchmarks.abi_audit": {
       "exit_code": 0,
@@ -1292,9 +2467,7 @@
       "key_lines": [
         "abi-audit passed: landed arm equals the codec on disk"
       ],
-      "key_lines_sha256": "7dcc81e1dac6ba5f6565aea2755729a6b1da1f5d5b0b32743d785c3513930a1a",
-      "output_bytes": 491,
-      "tail": []
+      "key_lines_sha256": "7dcc81e1dac6ba5f6565aea2755729a6b1da1f5d5b0b32743d785c3513930a1a"
     },
     "benchmarks.golden_checksums": {
       "exit_code": 0,
@@ -1305,26 +2478,813 @@
         "matrix.csv: OK",
         "matrix.json: OK"
       ],
-      "key_lines_sha256": "c82fca843215068f09ed3aa9b6d718a55950cd86da8f2d7612a0fc10a481efb0",
-      "output_bytes": 46,
-      "tail": []
+      "key_lines_sha256": "c82fca843215068f09ed3aa9b6d718a55950cd86da8f2d7612a0fc10a481efb0"
+    },
+    "cargo_test.batch_policy_identity": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "65109f8a87cec6d1dac401ed954db6fd06b11ba594b94575521d9178e927db92"
+    },
+    "cargo_clippy.batch_policy_identity": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_test.bspline_shape_compiler": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "dc0c986505505c09c236dec6a95b2d760bbdad25463eb38d7d2fce81f87c2884"
+    },
+    "cargo_clippy.bspline_shape_compiler": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_test.claim_algebra_model": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "402eb4cb879492f55d84dbb548b28fc1e9d27f6c75fcb11b293df8f528419bc7"
+    },
+    "cargo_clippy.claim_algebra_model": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_doc.claim_algebra_model": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_test.claim_neutral_resolution": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "4034ef6611333922af429069fbcac5ee08e5a6fb0c606454e257253d82441bf0"
+    },
+    "cargo_test_release.claim_neutral_resolution": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "4034ef6611333922af429069fbcac5ee08e5a6fb0c606454e257253d82441bf0"
+    },
+    "cargo_clippy.claim_neutral_resolution": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_doc.claim_neutral_resolution": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_test.fractional_redemption": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "202b5c1841610c71d4948c1ab3ba1a0c793f6b69bc9687be27cb6040fcc776f2"
+    },
+    "cargo_clippy.fractional_redemption": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_test.liquidity_policy_model": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "1998cb002f7d607daea662d50063ba8dea8c48171e4544253c6eee25fb921176"
+    },
+    "cargo_clippy.liquidity_policy_model": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_doc.liquidity_policy_model": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "python.liveness_policy_profile_unittest": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "Ran 37 tests",
+        "OK"
+      ],
+      "key_lines_sha256": "0d9afe90ea28d2a0c9be63a99d03ae2bb97373760f33bccff5c7c8cb7ae08939"
+    },
+    "python.liveness_policy_profile_current_seal": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "PASS: exact R1 artifact, bank capture, account probe, rewards, and STOPs agree"
+      ],
+      "key_lines_sha256": "3a3ef42d1adf31ca49fc7381293634b8bdde4681a32af3f6ef3fa5512d517212"
+    },
+    "cargo_test.liveness_policy_profile": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "14625f37b40a0807cbdbb110791ee50a89b766e327695e72786e7b57c1e3202a"
+    },
+    "cargo_clippy.liveness_policy_profile": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "lp_mapping_probe.release_run": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "== E1  per-tick closed form vs brute-forced LP maximum of component 1 ==",
+        "== E2  canonical allocation vs the frozen ScoreV1 argmax inside one tick ==",
+        "== E3  allocation A's StrictUnderfill removes the best tick from the grid ==",
+        "== E4  largest-remainder deviation from the fractional pro-rata point =="
+      ],
+      "key_lines_sha256": "71b6016943ab90aa6197ede360b7601ff9e4957890ddaaf60a530ba1518c3f88"
+    },
+    "cargo_test.resolution_work_v1": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "a7a0ef3fcc026f7415701e4716d067c66559d02078a72a3c2fb99c91922f2b20"
+    },
+    "cargo_test_release.resolution_work_v1": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "a7a0ef3fcc026f7415701e4716d067c66559d02078a72a3c2fb99c91922f2b20"
+    },
+    "cargo_clippy.resolution_work_v1": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_doc.resolution_work_v1": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_test.source_profile_v1": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "2ede2b908656d3f0718076133fac03a91420a72fd7e818a7b86b8c529ca81e13"
+    },
+    "cargo_clippy.source_profile_v1": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_doc.source_profile_v1": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "python.economics_lab": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "  \"status\": \"synthetic deterministic hypotheses; not protocol constants\""
+      ],
+      "key_lines_sha256": "d976cfa17c43a98797c86163c67ca01ac56441eee4c45e2791d5d20f1b4fe829"
+    },
+    "python.economics_admission_unittest": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "Ran 25 tests",
+        "OK"
+      ],
+      "key_lines_sha256": "c1ad26ee283bfeeddc6c6b1980c36cf2a209316251fef4a7a77624763086985e"
+    },
+    "python.economics_admission_lab": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "  \"status\": \"MODEL_ONLY_PROPOSED_POLICY\""
+      ],
+      "key_lines_sha256": "1d6c39b12ff124c63b0d6cd13f63949349993866939df27afb992f6fb60dd1b4"
+    },
+    "python.structured_claim_wrapper_unittest": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "Ran 18 tests",
+        "OK"
+      ],
+      "key_lines_sha256": "47a8a5ef48c903724aa9c20f2706489bbe2693356e17f6eb0f1e82a6ad665ab8"
+    },
+    "python.structured_claim_wrapper_lab": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "coefficients: (1, 2, 4)",
+        "universal exact redemption lot: 6"
+      ],
+      "key_lines_sha256": "7bea4093ade22598af61423a741bf70d6e0ee5dc8874472e07e5c192d31ac0ad"
+    },
+    "python.bspline_window_semantics_unittest": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "Ran 16 tests",
+        "OK"
+      ],
+      "key_lines_sha256": "80d0e6ddf05b5a03967d30fa3d146886ce03f82b285dcae5154f053159b34e41"
+    },
+    "python.bspline_window_semantics_compare": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "basis: degree=2 knots=(0,16,32) D=64",
+        "path: 1*4, 1*28; exact TWAP=16",
+        "exact-basis occupation:     (18, 14, 14, 18)"
+      ],
+      "key_lines_sha256": "974363c768643989dcd9b513d32db23d4796c7d53b4d933336c78a567c99f400"
+    },
+    "python.clutch_bspline_oracle": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "PASS: 31814 exact differential cases; seed=880230; mutants=6",
+        "rounding d=1: mean-L1 low=0.18382945 high=0.18382945 largest=0.10369466",
+        "rounding d=2: mean-L1 low=0.34691597 high=0.34691597 largest=0.14695295",
+        "rounding d=3: mean-L1 low=0.46078178 high=0.46078178 largest=0.17512679"
+      ],
+      "key_lines_sha256": "e45a64f7495fcd0e58e28142af27823dccc214f113d53a8872103d3e50a37d4f"
+    },
+    "vector_check.execute": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "taxonomy v1 — 152 codes, digest 1025002bef00f599a188f52bd68465cf5782f88ded63fbdc1bc8f470d0a20af4",
+        "vectors 25   steps 93   asserted facts 439   failures 0",
+        "Only `rust-reference` executed. Four executors are declared, counted, and did not"
+      ],
+      "key_lines_sha256": "2ef6b70a95f14a0b5e5fd03bacd8584ad14070d76aa39e5fdc5743807a6069e4"
+    },
+    "cargo_test.vector_check": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "bc8c226b21a3ed8a66dcca81cda8119f97650b6424fe299a3e357d5f225f25db"
+    },
+    "cargo_clippy.vector_check": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "invariant_campaign.release_run": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "campaign=kernel cases=33554 accepted=350 refused=33204 cumulative_digest=567ecdb73662fbe999998d735cbcb14d",
+        "campaign=layout cases=4144 accepted=54 refused=4090 cumulative_digest=ec1038d4079d2ed18eea2c64b057b2f8",
+        "campaign=batch cases=2066 accepted=17 refused=2049 cumulative_digest=6d5df08151033ba6ac2df4a9413173c1",
+        "campaign=all seeds=16 cases=39764 accepted=421 refused=39343 digest=6d5df08151033ba6ac2df4a9413173c1"
+      ],
+      "key_lines_sha256": "753b566d89e15666dc77813c20d9659c43bc708be608ec3bd4c2a6524a030615"
+    },
+    "lean.model_build": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "Build completed successfully (10 jobs)."
+      ],
+      "key_lines_sha256": "da7479f46b3ee33a0b3ab0e65b4b34eca882c85b365f8372295188b4722c6e2e"
+    },
+    "proof.transfer_arithmetic_refinement": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "verus_version=0.2026.08.15.7d4628a",
+        "production_source_sha256=01a04ce8b6cf94680d0451e883a142bc580e358dd06088314f945e5ebaa72df3",
+        "production_call_site_sha256=2fe06410feeb72ce7322a57ae9efd92632c2cd167ba69dce388ace235951791e",
+        "mutation=delta-direction status=EXPECTED_RED reason=postcondition",
+        "mutation=conservation-guard status=EXPECTED_RED reason=postcondition",
+        "status=PASS",
+        "boundary=call-site digest reviewed; MarketState/Position/Solana/SBF are not verified here"
+      ],
+      "key_lines_sha256": "08ce3f834b3edc5e6585ff7caa8c7db8d3807eae9d4fcbe527b34ac557c98a02"
+    },
+    "proof.batch_scalar_shadow": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "verus_version=0.2026.08.15.7d4628a",
+        "proof_source_sha256=6dce0d76961a74fe3433edf5b2830366280b2393fa5c013d43e95d5b4355e052",
+        "mutation=allocation-double-selected-atom status=EXPECTED_RED reason=postcondition",
+        "mutation=tick-select-worse status=EXPECTED_RED reason=invariant-obligation",
+        "mutation=relation-double-count status=EXPECTED_RED reason=postcondition",
+        "mutation=padding-admit-nonzero status=EXPECTED_RED reason=zero-premise-obligation",
+        "status=PASS",
+        "claim=scalar shadow: allocation decomposition/bounds, unique tick, accepted-side partition, zero-suffix fold identity",
+        "boundary=digest-pinned correspondence review only; production body is not imported by Verus",
+        "excluded=relation_v1 relation_v1_stream Solana SBF accounts serialization deployment"
+      ],
+      "key_lines_sha256": "696b6d5cb95b3aa8a9c4914aa846e2890fd452698967770e4c4f2c1eeaa18d8e"
+    },
+    "proof.bspline_finite_refinement": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "lean_version=4.33.0",
+        "production_source_sha256=220de128366a8311de6579c0ce334a64c97620159eaf9570f61fa10fabb6de92",
+        "baseline=PASS fixtures=8 seam=BasisSpec::evaluate",
+        "mutation=tie-direction status=EXPECTED_RED reason=semantic-disagreement",
+        "mutation=residual-awards status=EXPECTED_RED reason=semantic-disagreement",
+        "mutation=pane-placement status=EXPECTED_RED reason=semantic-disagreement",
+        "mutation=span-index status=EXPECTED_RED reason=semantic-disagreement",
+        "mutation=closed-top status=EXPECTED_RED reason=semantic-disagreement",
+        "status=PASS",
+        "boundary=no universal source refinement; parser bounds, fixed-denominator correctness outside rows, compilers, SBF, Solana, and deployment remain unverified"
+      ],
+      "key_lines_sha256": "104f84c47b84615bfbf902f2f99740841f08e9033fc9ecec5e01ecf80db5829b"
+    },
+    "cargo_test.terminal_lifecycle_v2": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "3d0904d91f7393e7d876e62226c48b19637ab31c16b231ae633c6ec15d874a46"
+    },
+    "cargo_test_release.terminal_lifecycle_v2": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "3d0904d91f7393e7d876e62226c48b19637ab31c16b231ae633c6ec15d874a46"
+    },
+    "cargo_clippy.terminal_lifecycle_v2": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_doc.terminal_lifecycle_v2": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "sbf.runtime_bringup": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "default pass 1  sha256=bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60  bytes=1228192",
+        "default pass 2  sha256=bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60  bytes=1228192",
+        "NON-PRODUCTION mock pass 1  sha256=5773eedf98721f5ad27d22ca5ea0d87dd59e649fc6d50b83b00d9e56f0985f40  bytes=1256656",
+        "NON-PRODUCTION mock pass 2  sha256=5773eedf98721f5ad27d22ca5ea0d87dd59e649fc6d50b83b00d9e56f0985f40  bytes=1256656",
+        "default_reproducibility=PASS",
+        "mock_reproducibility=PASS",
+        "profile_separation=PASS",
+        "final_elf_stack_diagnostic_symbols=ABSENT (27 dependency symbols removed by LTO)",
+        "source_campaign default-endow=REFUSE Custom(0x0079); lifecycle=NOT_DECLARED",
+        "  accept split                          1 instruction(s), 8 account(s) compared, oracle reference::apply",
+        "  accept roundtrip                      2 instruction(s), 8 account(s) compared, oracle reference::apply",
+        "  refuse split-unsigned                 expect Custom(0x0002)  offline reference: MissingSignature",
+        "  refuse split-stranger                 expect Custom(0x0011)  offline reference: UnauthorizedActor",
+        "  refuse split-imposter                 expect Custom(0x0009)  offline reference: WrongAccountKey",
+        "  refuse split-foreign-collateral       expect Custom(0x001b)  offline reference: n/a (the offline adapter has no collateral leg)",
+        "  accept merge                          1 instruction(s), 8 account(s) compared, oracle reference::apply",
+        "  refuse merge-unsigned                 expect Custom(0x0002)  offline reference: MissingSignature",
+        "  refuse merge-overdraw                 expect Custom(0x2009)  offline reference: Kernel(InsufficientCollateral)",
+        "  accept materialize                    1 instruction(s), 8 account(s) compared, oracle reference::apply",
+        "  refuse materialize-unsigned           expect Custom(0x0002)  offline reference: MissingSignature",
+        "  refuse materialize-wrong-destination  expect Custom(0x000b)  offline reference: WrongAccountKey",
+        "  accept dematerialize                  1 instruction(s), 8 account(s) compared, oracle reference::apply",
+        "  refuse dematerialize-unsigned         expect Custom(0x0002)  offline reference: MissingSignature",
+        "  refuse dematerialize-overdraw         expect Custom(0x0001)  offline reference: Token-2022 burn CPI: InsufficientFunds; offline internal-release oracle would refuse Kernel(InsufficientBalance)",
+        "  accept resolve                        1 instruction(s), 7 account(s) compared, oracle reference::apply_market_resolution_with_evidence",
+        "  refuse resolve-unsigned               expect Custom(0x3009)  offline reference: MissingSignature",
+        "  refuse resolve-wrong-payout           expect Custom(0x0057)  offline reference: PayoutIndexMismatch",
+        "  accept redeem                         1 instruction(s), 9 account(s) compared, oracle reference::apply_with_evidence",
+        "  refuse redeem-unsigned                expect Custom(0x3009)  offline reference: MissingSignature",
+        "  refuse redeem-stranger                expect Custom(0x300a)  offline reference: UnauthorizedActor",
+        "  refuse redeem-foreign-collateral      expect Custom(0x001b)  offline reference: n/a (the offline adapter has no collateral leg)",
+        "  refuse endow                          expect Custom(0x0079)  offline reference: source release unavailable in this exact ELF",
+        "  refuse endow-unsigned                 expect Custom(0x0002)  offline reference: n/a (the offline adapter has no Endow)",
+        "  refuse endow-stranger                 expect Custom(0x0011)  offline reference: n/a (the offline adapter has no Endow)",
+        "  refuse endow-skipped-sequence         expect Custom(0x0079)  offline reference: source release unavailable in this exact ELF",
+        "  accept feed-advance                   1 instruction(s), 1 account(s) compared, oracle accumulator fold + FeedAccount codec",
+        "  refuse feed-advance-unsigned          expect Custom(0x0002)  offline reference: n/a (the offline adapter has no FeedAdvance)",
+        "  refuse feed-advance-replay            expect Custom(0x3011)  offline reference: n/a (the offline adapter has no FeedAdvance)",
+        "  accept create-market                  1 instruction(s), 7 account(s) compared, oracle layout re-encode + reference::validate_market_init",
+        "  refuse create-unsigned                expect Custom(0x0002)  offline reference: n/a (validate_market_init models no signer)",
+        "  refuse create-already-initialized     expect Custom(0x0040)  offline reference: runtime account-plane refusal before economic-state validation",
+        "source_campaign NON-PRODUCTION endow=EXPECTED_SUCCESS; lifecycle=EXPECTED_SUCCESS",
+        "  accept endow                          1 instruction(s), 4 account(s) compared, oracle layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
+        "  refuse endow-skipped-sequence         expect Custom(0x000d)  offline reference: n/a (the offline adapter has no Endow)",
+        "  accept split                        program_units=222828 tx_units=222978 limit=1400000 bytes=921 oracle=reference::apply",
+        "  refuse split-unsigned               Custom(0x0002) program_units=5805 tx_units=5955  offline reference: MissingSignature",
+        "  refuse split-stranger               Custom(0x0011) program_units=80037 tx_units=80187  offline reference: UnauthorizedActor",
+        "  refuse split-imposter               Custom(0x0009) program_units=78820 tx_units=78970  offline reference: WrongAccountKey",
+        "  refuse split-foreign-collateral     Custom(0x001b) program_units=205910 tx_units=206060  offline reference: n/a (the offline adapter has no collateral leg)",
+        "  accept roundtrip                    program_units=445687 per-instruction [222828, 222859] tx_units=445837 limit=1400000 bytes=1028 oracle=reference::apply",
+        "  accept merge                        program_units=230359 tx_units=230509 limit=1400000 bytes=921 oracle=reference::apply",
+        "  refuse merge-unsigned               Custom(0x0002) program_units=5836 tx_units=5986  offline reference: MissingSignature",
+        "  refuse merge-overdraw               Custom(0x2009) program_units=216047 tx_units=216197  offline reference: Kernel(InsufficientCollateral)",
+        "  accept materialize                  program_units=108106 tx_units=108256 limit=1400000 bytes=822 oracle=reference::apply",
+        "  refuse materialize-unsigned         Custom(0x0002) program_units=4638 tx_units=4788  offline reference: MissingSignature",
+        "  refuse materialize-wrong-destination Custom(0x000b) program_units=73957 tx_units=74107  offline reference: WrongAccountKey",
+        "  accept dematerialize                program_units=112595 tx_units=112745 limit=1400000 bytes=822 oracle=reference::apply",
+        "  refuse dematerialize-unsigned       Custom(0x0002) program_units=4641 tx_units=4791  offline reference: MissingSignature",
+        "  refuse dematerialize-overdraw       Custom(0x0001) program_units=97148 tx_units=97298  offline reference: Token-2022 burn CPI: InsufficientFunds; offline internal-release oracle would refuse Kernel(InsufficientBalance)",
+        "  accept resolve                      program_units=799179 tx_units=799329 limit=1400000 bytes=714 oracle=reference::apply_market_resolution_with_evidence",
+        "  UNDRIVABLE resolve-repeat-idempotent consumed 600671 of 600671 granted and was aborted: does not fit one transaction",
+        "  UNDRIVABLE resolve-late-conflict-rolls-back consumed 600671 of 600671 granted and was aborted: does not fit one transaction",
+        "  refuse resolve-unsigned             Custom(0x3009) program_units=607291 tx_units=607441  offline reference: MissingSignature",
+        "  refuse resolve-wrong-payout         Custom(0x0057) program_units=706900 tx_units=707050  offline reference: PayoutIndexMismatch",
+        "  accept redeem                       program_units=597818 tx_units=597968 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
+        "  refuse redeem-unsigned              Custom(0x3009) program_units=491305 tx_units=491455  offline reference: MissingSignature",
+        "  refuse redeem-stranger              Custom(0x300a) program_units=491307 tx_units=491457  offline reference: UnauthorizedActor",
+        "  refuse redeem-foreign-collateral    Custom(0x001b) program_units=439965 tx_units=440115  offline reference: n/a (the offline adapter has no collateral leg)",
+        "  refuse endow                        Custom(0x0079) program_units=440379 tx_units=440529  offline reference: source release unavailable in this exact ELF",
+        "  refuse endow-unsigned               Custom(0x0002) program_units=5166 tx_units=5316  offline reference: n/a (the offline adapter has no Endow)",
+        "  refuse endow-stranger               Custom(0x0011) program_units=6389 tx_units=6539  offline reference: n/a (the offline adapter has no Endow)",
+        "  refuse endow-skipped-sequence       Custom(0x0079) program_units=440379 tx_units=440529  offline reference: source release unavailable in this exact ELF",
+        "  accept feed-advance                 program_units=7686 tx_units=7686 bytes=419 oracle=accumulator fold + FeedAccount codec",
+        "  refuse feed-advance-unsigned        Custom(0x0002) program_units=1394 tx_units=1394  offline reference: n/a (the offline adapter has no FeedAdvance)",
+        "  refuse feed-advance-replay          Custom(0x3011) program_units=3573 tx_units=3573  offline reference: n/a (the offline adapter has no FeedAdvance)",
+        "  accept create-market                program_units=921470 tx_units=921620 limit=1400000 bytes=1086 oracle=layout re-encode + reference::validate_market_init",
+        "  refuse create-unsigned              Custom(0x0002) program_units=6954 tx_units=7104  offline reference: n/a (validate_market_init models no signer)",
+        "  refuse create-already-initialized   Custom(0x0040) program_units=442550 tx_units=442700  offline reference: runtime account-plane refusal before economic-state validation",
+        "  UNDRIVABLE on this runtime (compute ceiling, documented in SBF_BRINGUP.md): resolve-repeat-idempotent, resolve-late-conflict-rolls-back",
+        "PASS",
+        "  accept endow                        program_units=611871 tx_units=612021 limit=1400000 bytes=855 oracle=layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
+        "  refuse endow-skipped-sequence       Custom(0x000d) program_units=607363 tx_units=607513  offline reference: n/a (the offline adapter has no Endow)",
+        "  accept walk-01-create-market        program_units=913970 tx_units=914120 limit=1400000 bytes=1086 oracle=layout re-encode + reference::validate_market_init",
+        "  accept walk-02-endow                program_units=604371 tx_units=604521 bytes=855 oracle=layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
+        "  accept walk-03-split                program_units=212328 tx_units=212478 bytes=921 oracle=reference::apply",
+        "  accept walk-04-materialize          program_units=97606 tx_units=97756 bytes=822 oracle=reference::apply",
+        "  accept walk-05-dematerialize        program_units=109595 tx_units=109745 bytes=822 oracle=reference::apply",
+        "  accept walk-06-merge                program_units=219859 tx_units=220009 bytes=921 oracle=reference::apply",
+        "  accept walk-07-feed-advance         program_units=15663 per-instruction [6207, 4728, 4728] tx_units=15663 bytes=669 oracle=accumulator fold + FeedAccount codec",
+        "  accept walk-08-resolve              program_units=794679 tx_units=794829 limit=1400000 bytes=714 oracle=reference::apply_market_resolution_with_evidence",
+        "  refuse walk-09-merge-after-resolve  Custom(0x0016) program_units=75611 tx_units=75761  offline reference: MismatchedState",
+        "  accept walk-10-redeem-winning       program_units=620318 tx_units=620468 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
+        "  accept walk-11-redeem-losing        program_units=605318 tx_units=605468 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
+        "   1  walk-01-create-market            913970      1086        7  MATCH",
+        "   2  walk-02-endow                    604371       855        4  MATCH",
+        "   3  walk-03-split                    212328       921        5  MATCH",
+        "   4  walk-04-materialize               97606       822        5  MATCH",
+        "   5  walk-05-dematerialize            109595       822        5  MATCH",
+        "   6  walk-06-merge                    219859       921        5  MATCH",
+        "   7  walk-07-feed-advance         15663 [6207, 4728, 4728]       669        1  MATCH",
+        "   8  walk-08-resolve                  794679       714        3  MATCH",
+        "   9  walk-09-merge-after-resolve       75611       921        0  REFUSED Custom(0x0016)",
+        "  10  walk-10-redeem-winning           620318       887        5  MATCH",
+        "  11  walk-11-redeem-losing            605318       887        4  MATCH",
+        "default_sbf_elf_sha256=bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
+        "non_production_mock_sbf_elf_sha256=5773eedf98721f5ad27d22ca5ea0d87dd59e649fc6d50b83b00d9e56f0985f40"
+      ],
+      "key_lines_sha256": "c42c5a7f075f320f803b5a01d9ac8937e96194d76e2288fb5558623ce7769283"
+    },
+    "sbf.committed_signed_walk": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "source_profile=NON-PRODUCTION-non-production-mock-source",
+        "sbf_elf_sha256=5773eedf98721f5ad27d22ca5ea0d87dd59e649fc6d50b83b00d9e56f0985f40",
+        "== signed, confirmed, committed walk ==",
+        "committed_signed_transactions=22",
+        "committed_expected_refusals=1",
+        "committed_compute_exhaustions=1",
+        "committed_watched_accounts=18",
+        "genesis_assisted_program_accounts=12",
+        "withdraw_cash=DRIVEN_TO_ZERO",
+        "redeem_external=DRIVEN",
+        "falsifiability=PASS"
+      ],
+      "key_lines_sha256": "b8bac6891bc94ff90ecc129a7e175fd38e86d55802902ec4d4992e4b0ba2859e"
+    },
+    "sbf.token2022_program_test": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "source_profile=default-empty-registry",
+        "running 0 tests",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 6 tests",
+        "test every_admitted_artifact_kind_lands_as_its_exact_raw_codec ... ok",
+        "test excess_prefunds_are_donations_and_never_squatting_authority ... ok",
+        "test expired_public_abort_refunds_the_recorded_funder_not_the_reaper ... ok",
+        "test native_terms_hash_rejects_a_semantically_valid_body_with_a_stale_digest ... ok",
+        "test one_lamport_stage_and_final_prefunds_are_topped_up_by_exact_shortfalls ... ok",
+        "test terms_upload_resumes_after_bank_rehydration_and_seals_atomically ... ok",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 2 tests",
+        "test a_late_token_target_refusal_rolls_every_earlier_creation_back ... ok",
+        "test categorical_and_native_markets_construct_from_only_sealed_artifacts ... blank-bank degree=0 occupation=false resolution_bytes=165 rent=2039280 prefund-safe create_market=909790 CU",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 13 tests",
+        "test a_stranger_cannot_fund_a_split_from_an_account_they_do_not_own ... SVM collateral holder: a stranger's account refused with Custom(27) (0x001b)",
+        "test create_market_founds_seven_state_pdas_and_the_token_plane_from_absence ... SVM create_market: 20 accounts, 7 state PDAs + 2 outcome mints + hoard token, 948052 CU",
+        "test duplicate_withdrawal_transaction_rolls_back_the_first_token_cpi ... SVM WithdrawCash rollback: first CPI restored after duplicate replay refusal",
+        "test founding_a_market_twice_refuses ... SVM create_market idempotence: second founding refused with Custom(64) (0x0040)",
+        "test late_create_market_refusal_rolls_back_state_and_token_construction ... ok",
+        "test no_wallet_signature_can_take_collateral_out_of_the_hoard ... SVM hoard outflow: wallet withdrawal refused with Custom(4); donated surplus did not block Split",
+        "test redeem_reclassifies_locked_collateral_into_position_cash ... SVM redeem: 18 accounts, payout=6 atoms, 606399 CU",
+        "SVM redeem (losing claim): payout=0 atoms, 606399 CU",
+        "test retired_feed_and_buffer_redeem_plane_is_refused_atomically ... ok",
+        "test split_and_merge_reclassify_without_a_second_token_transfer ... SVM collateral leg: split=231409 CU  merge=231440 CU",
+        "test the_shadow_only_plane_is_gone ... SVM mandatory leg: the ten-account Split refused with Custom(1) (0x0001)",
+        "test the_whole_cycle_survives_a_holder_who_is_not_the_actor ... SVM full cycle: split=231409 CU  materialize=112755 CU  dematerialize=112744 CU  merge=231440 CU  (3 outcome tokens left with a third party and the aggregate still reconciles)",
+        "test withdraw_pays_only_unreserved_cash_and_preserves_locked_backing ... SVM WithdrawCash: paid 73 unreserved atoms, 229756 CU",
+        "test withdraw_refuses_destination_substitution_and_foreign_authority ... ok",
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test prefunded_submission_is_exact_once_and_leaves_authority_frozen ... SubmitDirectPage prefunded CU: 1249370",
+        "test substitution_cross_outcome_and_late_cpi_failure_roll_back ... ok",
+        "test direct_full_slice_settles_once_and_substitution_rolls_back ... SettlePage direct full-slice CU: 862080",
+        "test stale_candidate_and_cross_outcome_refuse_with_full_rollback ... ok",
+        "test cross_outcome_freeze_refuses_without_mutation ... ok",
+        "test direct_selection_v2_is_a_measured_select_stop_with_rollback ... DirectSelectionV2 submit index=0 price=2500 cu=986765",
+        "running 15 tests",
+        "test a_late_external_supply_overflow_rolls_back_native_resolution ... ok",
+        "test a_late_native_bearer_transfer_failure_rolls_back_the_prior_burn ... ok",
+        "test degrees_one_through_three_persist_retry_and_redeem_the_native_vector ... native d1: resolve 1088267 CU, retry 934622 CU, redeem 775978 CU",
+        "test native_account_mutability_alias_and_full_mint_vector_are_fail_closed ... ok",
+        "test native_bearer_exit_rejects_hostile_roles_modes_windows_and_mint_vectors ... ok",
+        "test native_bearer_exit_uses_minimal_exact_lots_and_sub_lots_roll_back ... native d1 external exact lot 2: 785073 CU",
+        "test non_point_evidence_and_conflicting_retry_refuse_without_writes ... ok",
+        "test occupation_bearer_exit_uses_live_v4_and_exact_lots ... occupation-v4 d1 external exact lot 2: 783711 CU",
+        "test occupation_degrees_one_through_three_persist_retry_and_redeem_v4 ... occupation-v4 d1: accounts=14 resolution_bytes=383 rent=3556560 resolve=1243529 CU retry=1089893 CU internal=774692 CU",
+        "test occupation_late_resolve_and_bearer_failures_roll_back ... ok",
+        "test occupation_midpoints_gaps_substitution_modes_and_conflicts_refuse_atomically ... ok",
+        "test occupation_span_one_two_initial_resolve_cu_profile ... occupation-v4 span=1 d1: initial=1250517 CU",
+        "test occupation_statistic_seven_routes_only_its_named_finalizer ... occupation-v4 statistic-7 named finalizer: 1253176 CU",
+        "test recorded_internal_redemption_rejects_retired_evidence_aliases_and_late_replay_atomically ... ok",
+        "test recorded_internal_redemption_rejects_wrong_mode_terms_and_window_without_writes ... ok",
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 4 tests",
+        "test canonical_archive_drives_the_exact_v4_candidate ... ok",
+        "test canonical_archive_selects_only_the_terms_named_finalizer ... ok",
+        "test canonical_positive_width_archive_is_not_midpoint_selected ... ok",
+        "test receipt_cannot_be_replayed_over_mutated_archive_bytes ... ok",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test funded_orders_reserve_release_and_isolate_owners ... PlaceOrder CU: buy=598879, sell=596909",
+        "test unfunded_place_refuses_without_creating_or_mutating_anything ... ok",
+        "running 5 tests",
+        "test a_later_instruction_failure_rolls_reservation_topup_allocate_and_assign_back ... ok",
+        "test a_public_over_rent_market_prefund_is_retained_and_not_charged_again ... ok",
+        "test default_elf_refuses_endow_without_a_registered_source_release ... ok",
+        "test one_lamport_and_public_over_rent_reservation_prefunds_cannot_squat ... ok",
+        "test reservation_owner_data_and_executable_squats_refuse_without_writes ... ok",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test begin_fold_finalize_is_prefund_safe_replay_safe_and_byte_exact ... ResolutionWork SBF CU: Begin=807676 Fold1=804616 Fold2=809225 Finalize=1094832 monolithic=1253326",
+        "test every_bounded_fold_size_has_a_real_sbf_cost_row ... ResolutionWork SBF CU: span=1 Begin=805308 Fold(1)=802253",
+        "test expiry_keeper_abort_releases_lock_without_capturing_donations ... ResolutionWork SBF CU: BeginAbort=807676 AbortExpired=587197 BeginReopen=807676",
+        "test source_spec_bump_and_same_domain_archive_substitution_refuse_atomically ... ok",
+        "running 9 tests",
+        "test every_failed_admission_is_a_byte_exact_rollback ... ok",
+        "test exact_layouts_append_seal_and_receipt_are_stable ... ok",
+        "test sealing_requires_an_authenticated_exactly_next_maturity_record ... ok",
+        "test source_spec_construction_authenticates_the_closed_release_before_writing ... ok",
+        "test successor_initialization_derives_exact_lineage_from_a_sealed_receipt ... ok",
+        "test tampering_and_post_seal_append_are_refused_without_state_change ... ok",
+        "test unrelated_same_domain_buffer_cannot_substitute_for_the_archive_account ... ok",
+        "test verified_view_construction_rejects_key_owner_and_mutated_bytes ... ok",
+        "test verified_view_reads_each_record_once_with_receipt_equivalent_results ... ok",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test a_direct_burn_is_synchronized_and_the_market_stays_live ... SVM direct burn: synchronized donation and continued at 91605 CU",
+        "test an_extension_on_the_outcome_mint_is_refused_at_instruction_time ... SVM extension refusal: TransferFeeConfig refused with Custom(26) (0x001a)",
+        "SVM extension refusal: MintCloseAuthority refused with Custom(26) (0x001a)",
+        "test e1_dematerialize_burns_exactly_and_the_aggregate_reconciles ... SVM e1_dematerialize: materialize=91605 CU  dematerialize=91594 CU",
+        "test e1_materialize_mints_exactly_q_and_the_aggregate_reconciles ... SVM e1_materialize: quantity=7 compute_units=91605",
+        "test the_derived_hoard_authority_cannot_be_signed_for_by_a_wallet ... SVM hoard outflow: wallet-signed withdrawal from the derived hoard authority refused with Custom(4)",
+        "test the_incomplete_mint_vector_is_refused_and_moves_nothing ... SVM mandatory leg: the ten-account materialize refused with Custom(1) (0x0001); the thirteen-account one accepted at 91605 CU"
+      ],
+      "key_lines_sha256": "4c66444eae4a5ac75b769f286fb7e2a67c6789e6dd34134f045a81b01c28adec"
+    },
+    "sbf.token2022_program_test_non_production_mock": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "== SVM profile: NON-PRODUCTION-non-production-mock-source ==",
+        "source_profile=NON-PRODUCTION-non-production-mock-source",
+        "elf_sha256=5773eedf98721f5ad27d22ca5ea0d87dd59e649fc6d50b83b00d9e56f0985f40",
+        "elf_bytes=1256656",
+        "running 0 tests",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 6 tests",
+        "test every_admitted_artifact_kind_lands_as_its_exact_raw_codec ... ok",
+        "test excess_prefunds_are_donations_and_never_squatting_authority ... ok",
+        "test expired_public_abort_refunds_the_recorded_funder_not_the_reaper ... ok",
+        "test native_terms_hash_rejects_a_semantically_valid_body_with_a_stale_digest ... ok",
+        "test one_lamport_stage_and_final_prefunds_are_topped_up_by_exact_shortfalls ... ok",
+        "test terms_upload_resumes_after_bank_rehydration_and_seals_atomically ... ok",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 2 tests",
+        "test a_late_token_target_refusal_rolls_every_earlier_creation_back ... ok",
+        "test categorical_and_native_markets_construct_from_only_sealed_artifacts ... blank-bank degree=0 occupation=false resolution_bytes=165 rent=2039280 prefund-safe create_market=912790 CU",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 17 tests",
+        "test a_failed_endow_leaves_ledger_replay_and_tokens_unchanged ... SVM Endow rollback: ledger, replay, actor token, and Hoard token unchanged",
+        "test a_stranger_cannot_fund_a_split_from_an_account_they_do_not_own ... SVM collateral holder: a stranger's account refused with Custom(27) (0x001b)",
+        "test create_market_founds_seven_state_pdas_and_the_token_plane_from_absence ... SVM create_market: 20 accounts, 7 state PDAs + 2 outcome mints + hoard token, 948052 CU",
+        "test donation_and_multiple_positions_do_not_cross_credit_withdrawals ... ok",
+        "test duplicate_withdrawal_transaction_rolls_back_the_first_token_cpi ... SVM WithdrawCash rollback: first CPI restored after duplicate replay refusal",
+        "test endow_debits_the_owner_and_credits_cash_and_custody_exactly ... SVM Endow: exact 10-atom deposit, 615953 CU",
+        "test first_endow_creates_a_second_wallets_position_and_replay ... SVM first Endow: 2 state PDAs + backed deposit, 640706 CU",
+        "test founding_a_market_twice_refuses ... SVM create_market idempotence: second founding refused with Custom(64) (0x0040)",
+        "test late_create_market_refusal_rolls_back_state_and_token_construction ... ok",
+        "test no_wallet_signature_can_take_collateral_out_of_the_hoard ... SVM hoard outflow: wallet withdrawal refused with Custom(4); donated surplus did not block Split",
+        "test redeem_reclassifies_locked_collateral_into_position_cash ... SVM redeem: 18 accounts, payout=6 atoms, 606399 CU",
+        "test retired_feed_and_buffer_redeem_plane_is_refused_atomically ... ok",
+        "test split_and_merge_reclassify_without_a_second_token_transfer ... SVM collateral leg: split=231409 CU  merge=231440 CU",
+        "test the_shadow_only_plane_is_gone ... SVM mandatory leg: the ten-account Split refused with Custom(1) (0x0001)",
+        "test the_whole_cycle_survives_a_holder_who_is_not_the_actor ... SVM full cycle: split=231409 CU  materialize=112755 CU  dematerialize=112744 CU  merge=231440 CU  (3 outcome tokens left with a third party and the aggregate still reconciles)",
+        "test withdraw_pays_only_unreserved_cash_and_preserves_locked_backing ... SVM WithdrawCash: paid 73 unreserved atoms, 229756 CU",
+        "test withdraw_refuses_destination_substitution_and_foreign_authority ... ok",
+        "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test prefunded_submission_is_exact_once_and_leaves_authority_frozen ... SubmitDirectPage prefunded CU: 1249370",
+        "test substitution_cross_outcome_and_late_cpi_failure_roll_back ... ok",
+        "test direct_full_slice_settles_once_and_substitution_rolls_back ... SettlePage direct full-slice CU: 862080",
+        "test stale_candidate_and_cross_outcome_refuse_with_full_rollback ... ok",
+        "test cross_outcome_freeze_refuses_without_mutation ... ok",
+        "test direct_selection_v2_is_a_measured_select_stop_with_rollback ... DirectSelectionV2 submit index=0 price=2500 cu=986765",
+        "running 1 test",
+        "test blank_bank_native_degrees_one_through_three_reach_zero_hoard ... native full d1: CreateMarket 1083346 CU",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 15 tests",
+        "test a_late_external_supply_overflow_rolls_back_native_resolution ... ok",
+        "test a_late_native_bearer_transfer_failure_rolls_back_the_prior_burn ... ok",
+        "test degrees_one_through_three_persist_retry_and_redeem_the_native_vector ... native d1: resolve 1088267 CU, retry 934622 CU, redeem 775978 CU",
+        "test native_account_mutability_alias_and_full_mint_vector_are_fail_closed ... ok",
+        "test native_bearer_exit_rejects_hostile_roles_modes_windows_and_mint_vectors ... ok",
+        "test native_bearer_exit_uses_minimal_exact_lots_and_sub_lots_roll_back ... native d1 external exact lot 2: 785073 CU",
+        "test non_point_evidence_and_conflicting_retry_refuse_without_writes ... ok",
+        "test occupation_bearer_exit_uses_live_v4_and_exact_lots ... occupation-v4 d1 external exact lot 2: 783711 CU",
+        "test occupation_degrees_one_through_three_persist_retry_and_redeem_v4 ... occupation-v4 d1: accounts=14 resolution_bytes=383 rent=3556560 resolve=1243529 CU retry=1089893 CU internal=774692 CU",
+        "test occupation_late_resolve_and_bearer_failures_roll_back ... ok",
+        "test occupation_midpoints_gaps_substitution_modes_and_conflicts_refuse_atomically ... ok",
+        "test occupation_span_one_two_initial_resolve_cu_profile ... occupation-v4 span=1 d1: initial=1250517 CU",
+        "test occupation_statistic_seven_routes_only_its_named_finalizer ... occupation-v4 statistic-7 named finalizer: 1253176 CU",
+        "test recorded_internal_redemption_rejects_retired_evidence_aliases_and_late_replay_atomically ... ok",
+        "test recorded_internal_redemption_rejects_wrong_mode_terms_and_window_without_writes ... ok",
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 4 tests",
+        "test canonical_archive_drives_the_exact_v4_candidate ... ok",
+        "test canonical_archive_selects_only_the_terms_named_finalizer ... ok",
+        "test canonical_positive_width_archive_is_not_midpoint_selected ... ok",
+        "test receipt_cannot_be_replayed_over_mutated_archive_bytes ... ok",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test funded_orders_reserve_release_and_isolate_owners ... PlaceOrder CU: buy=598879, sell=596909",
+        "test unfunded_place_refuses_without_creating_or_mutating_anything ... ok",
+        "test a_later_instruction_failure_rolls_reservation_topup_allocate_and_assign_back ... ok",
+        "test a_public_over_rent_market_prefund_is_retained_and_not_charged_again ... ok",
+        "test late_token_failure_restores_one_lamport_owner_targets_byte_exactly ... ok",
+        "test one_lamport_and_public_over_rent_reservation_prefunds_cannot_squat ... ok",
+        "test publicly_prefunded_second_owner_position_and_replay_are_created_by_first_endow ... ok",
+        "test reservation_owner_data_and_executable_squats_refuse_without_writes ... ok",
+        "test begin_fold_finalize_is_prefund_safe_replay_safe_and_byte_exact ... ResolutionWork SBF CU: Begin=807676 Fold1=804616 Fold2=809225 Finalize=1094832 monolithic=1253326",
+        "test every_bounded_fold_size_has_a_real_sbf_cost_row ... ResolutionWork SBF CU: span=1 Begin=805308 Fold(1)=802253",
+        "test expiry_keeper_abort_releases_lock_without_capturing_donations ... ResolutionWork SBF CU: BeginAbort=807676 AbortExpired=587197 BeginReopen=807676",
+        "test source_spec_bump_and_same_domain_archive_substitution_refuse_atomically ... ok",
+        "running 9 tests",
+        "test every_failed_admission_is_a_byte_exact_rollback ... ok",
+        "test exact_layouts_append_seal_and_receipt_are_stable ... ok",
+        "test sealing_requires_an_authenticated_exactly_next_maturity_record ... ok",
+        "test source_spec_construction_authenticates_the_closed_release_before_writing ... ok",
+        "test successor_initialization_derives_exact_lineage_from_a_sealed_receipt ... ok",
+        "test tampering_and_post_seal_append_are_refused_without_state_change ... ok",
+        "test unrelated_same_domain_buffer_cannot_substitute_for_the_archive_account ... ok",
+        "test verified_view_construction_rejects_key_owner_and_mutated_bytes ... ok",
+        "test verified_view_reads_each_record_once_with_receipt_equivalent_results ... ok",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test mock_elf_constructs_appends_and_seals_from_absent_source_state ... NON-PRODUCTION mock source: spec=292B rent=2923200 CU=448898; feed=124B rent/excess=1758241 CU(shared init); archive=2560B rent/excess=18716134 init=552222 CU; append=[655464,654848] CU; seal=865219 CU",
+        "test a_direct_burn_is_synchronized_and_the_market_stays_live ... SVM direct burn: synchronized donation and continued at 91605 CU",
+        "test an_extension_on_the_outcome_mint_is_refused_at_instruction_time ... SVM extension refusal: TransferFeeConfig refused with Custom(26) (0x001a)",
+        "test e1_dematerialize_burns_exactly_and_the_aggregate_reconciles ... SVM e1_dematerialize: materialize=91605 CU  dematerialize=91594 CU",
+        "test e1_materialize_mints_exactly_q_and_the_aggregate_reconciles ... SVM e1_materialize: quantity=7 compute_units=91605",
+        "test the_derived_hoard_authority_cannot_be_signed_for_by_a_wallet ... SVM hoard outflow: wallet-signed withdrawal from the derived hoard authority refused with Custom(4)",
+        "test the_incomplete_mint_vector_is_refused_and_moves_nothing ... SVM mandatory leg: the ten-account materialize refused with Custom(1) (0x0001); the thirteen-account one accepted at 91605 CU"
+      ],
+      "key_lines_sha256": "ca2f3321ebdb478378d29c185a0ba67c5c9373819208ff6bbb368e8ee3ece761"
     },
     "static_client.npm": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "ℹ tests 11",
+        "ℹ tests 32",
         "ℹ suites 0",
-        "ℹ pass 11",
+        "ℹ pass 32",
         "ℹ fail 0",
         "ℹ cancelled 0",
         "ℹ skipped 0",
         "ℹ todo 0"
       ],
-      "key_lines_sha256": "f47a05a5ef85198ea3bff51976bc50998c1e287e0d96990203770b638657ec23",
-      "output_bytes": 1063,
-      "tail": []
+      "key_lines_sha256": "52e4b5559bde83532266ce9bef1cea0fa12c254195abbce8d91688c679e81612"
     },
     "toolchain.run_lab": {
       "exit_code": 0,
@@ -1350,12 +3310,7 @@
         "verus_probe=BLOCKED (see toolchain/PINNED_PROOF_TOOLS.md for the pinned install and its current failing result)",
         "compatibility=HOST_AND_SBF_PASS_VERUS_BLOCKED"
       ],
-      "key_lines_sha256": "eab01540da4fd3c974151ad65149c01238f4c98ba077d0715bdb4990ba1855e5",
-      "volatile_lines": [
-        "host_rlib_sha256=72a4e747806670b587c854fe88bbe46372e332f39c613fab8b06da26b2ae5bf2"
-      ],
-      "output_bytes": 1451,
-      "tail": []
+      "key_lines_sha256": "eab01540da4fd3c974151ad65149c01238f4c98ba077d0715bdb4990ba1855e5"
     },
     "proof.verus_probe": {
       "exit_code": 1,
@@ -1370,9 +3325,7 @@
         "error: Error: The verus_builtin crate was not imported but it is necessary to run Verus. You likely need to add `use vstd::prelude::*;` at the top of a lib.rs or main.rs file.",
         "error: aborting due to 1 previous error"
       ],
-      "key_lines_sha256": "059d0328b4d85997fd93b3f3f545b9cff129594e4ef2248b2bb08bf8e11689ab",
-      "output_bytes": 1267,
-      "tail": []
+      "key_lines_sha256": "059d0328b4d85997fd93b3f3f545b9cff129594e4ef2248b2bb08bf8e11689ab"
     },
     "proof.rocq_check": {
       "exit_code": 0,
@@ -1382,22 +3335,44 @@
         "rocq=The Rocq Prover, version 9.2",
         "status=PASS"
       ],
-      "key_lines_sha256": "be26a9df8406aa4ce4473c4c4dbe1b627e5deda8e1b85574f8b76fdea8881aa6",
-      "output_bytes": 417,
-      "tail": []
+      "key_lines_sha256": "be26a9df8406aa4ce4473c4c4dbe1b627e5deda8e1b85574f8b76fdea8881aa6"
     }
   },
   "gate_summary": {
-    "total": 33,
-    "matching_expectation": 33,
+    "total": 94,
+    "matching_expectation": 94,
     "contradicting_expectation": []
   },
   "unavailable_or_failing_gates": [
     {
+      "gate": "sbf.runtime_bringup",
+      "command": "programs/clutch-sbf/scripts/run_bringup.sh",
+      "disposition": "declared-exact-tool-disposition",
+      "reason": "gate uses a reviewed non-ordinary disposition and is listed here for visibility; the observed outcome matches its declaration",
+      "observed_exit_code": 0,
+      "matches_expectation": true
+    },
+    {
+      "gate": "sbf.token2022_program_test",
+      "command": "programs/clutch-sbf/svm-tests/run_svm_tests.sh",
+      "disposition": "declared-exact-tool-disposition",
+      "reason": "gate uses a reviewed non-ordinary disposition and is listed here for visibility; the observed outcome matches its declaration",
+      "observed_exit_code": 0,
+      "matches_expectation": true
+    },
+    {
+      "gate": "sbf.token2022_program_test_non_production_mock",
+      "command": "programs/clutch-sbf/svm-tests/run_svm_tests.sh --non-production-mock-source",
+      "disposition": "declared-exact-tool-disposition",
+      "reason": "gate uses a reviewed non-ordinary disposition and is listed here for visibility; the observed outcome matches its declaration",
+      "observed_exit_code": 0,
+      "matches_expectation": true
+    },
+    {
       "gate": "proof.verus_probe",
       "command": "toolchain/scripts/run_verus.sh",
-      "disposition": "declared-failing",
-      "reason": "the pinned Verus release rejects the pinned probe source (verus_builtin crate not imported). Making it pass requires editing the probe, which changes the pinned source digest, so the correct state is a recorded failure, not a green gate.",
+      "disposition": "declared-exact-tool-disposition",
+      "reason": "only the pinned Verus tool's proof-status exit 1 is the reviewed disposition for the digest-pinned probe. Exit 2 means the tool is missing, 3 means off-pin tool/frontend, and 4 means source-digest drift; none is proof evidence or an acceptable substitute for the intended tool result.",
       "proof_content": "none",
       "observed_exit_code": 1,
       "matches_expectation": true
@@ -1412,7 +3387,5 @@
       "matches_expectation": true
     }
   ],
-  "handoff_digest_disagreements": [
-    "static_client.canonical_terms"
-  ]
+  "handoff_digest_disagreements": []
 }
