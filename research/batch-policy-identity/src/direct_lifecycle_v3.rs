@@ -2267,11 +2267,16 @@ impl DirectLifecycleV3 {
             DirectLifecyclePhaseV3::FrozenEmpty => {
                 if self.top_count != 0
                     || self.live_candidate_mask != 0
+                    || self.seen_competitive_ticks != 0
+                    || self.competitive_admission_count != 0
+                    || self.competitive_admission_transcript != Identity32V1::ZERO
                     || self.window_account != DirectAccountLedgerV3::ZERO
                     || self.verification_mask != 0
                     || self.selected_slot != 0
                     || self.receipt_account != DirectAccountLedgerV3::ZERO
                     || self.pot_account != DirectAccountLedgerV3::ZERO
+                    || self.work_budget_balance != self.work_budget_initial_balance
+                    || self.work_rewards_paid != 0
                     || self.reservation_state != DirectReservationStateV3::Active
                     || self.terminal_receipt != DirectTerminalReceiptV3::EMPTY
                 {
@@ -4945,6 +4950,43 @@ mod tests {
         let mut hostile = admit_three();
         hostile.retained[2] = DirectCandidateLeaseV3::ZERO;
         assert!(hostile.validate().is_err());
+    }
+
+    #[test]
+    fn frozen_empty_refuses_ghost_admission_or_work_history() {
+        let state = empty();
+        assert_eq!(state.validate(), Ok(()));
+
+        let mut ghost_admission = state;
+        ghost_admission.seen_competitive_ticks = 1;
+        ghost_admission.competitive_admission_count = 1;
+        ghost_admission.competitive_admission_transcript = id(90);
+        assert_eq!(
+            ghost_admission.validate(),
+            Err(DirectLifecycleErrorV3::NonCanonical)
+        );
+
+        let mut ghost_reward = state;
+        ghost_reward.work_budget_balance -= 1;
+        ghost_reward.work_rewards_paid = 1;
+        assert_eq!(
+            ghost_reward.validate(),
+            Err(DirectLifecycleErrorV3::NonCanonical)
+        );
+
+        let mut stray_seen_tick = state;
+        stray_seen_tick.seen_competitive_ticks = 1;
+        assert_eq!(
+            stray_seen_tick.validate(),
+            Err(DirectLifecycleErrorV3::NonCanonical)
+        );
+
+        let mut stray_transcript = state;
+        stray_transcript.competitive_admission_transcript = id(91);
+        assert_eq!(
+            stray_transcript.validate(),
+            Err(DirectLifecycleErrorV3::NonCanonical)
+        );
     }
 
     #[test]
