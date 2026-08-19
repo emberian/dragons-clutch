@@ -51,7 +51,7 @@
 //! | obligation | where |
 //! | --- | --- |
 //! | C1 two-term closure against the kernel aggregate | [`accounts::require_two_term_closure`], pre-state and post-state |
-//! | C2 representation bound on the presented triple | [`accounts::require_representation_bound`], pre-state and post-state |
+//! | C2 position-owned internal balances do not exceed the market aggregate | [`require_internal_bound`], pre-state and post-state |
 //! | C3 ledger moved by exactly the position delta | [`accounts::apply_ledger_delta`], once per ledger term |
 //!
 //! A market holding a second position is therefore representable here, which is
@@ -84,10 +84,10 @@
 //! `programs/clutch-sbf/svm-tests`.
 
 use crate::accounts::{
-    self, apply_ledger_delta, expect_pda, require, require_distinct, require_representation_bound,
-    require_signer, require_two_term_closure, KernelFacts, MarketFacts, Outcome, StateRole,
-    SupplyFacts,
+    self, apply_ledger_delta, expect_pda, require, require_distinct, require_signer,
+    require_two_term_closure, MarketFacts, Outcome, StateRole,
 };
+use crate::claim_truth::{self, ObservedMintSupplies};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use crate::token;
@@ -99,18 +99,17 @@ use clutch_solana_layout::{
     SupplyLedgerAccount, MAX_OUTCOMES,
 };
 use clutch_solana_reference::{
-    Action, ExternalAccount, KernelAccount, ReplayAccount, Request, EXTERNAL_ACCOUNT_LEN,
-    KERNEL_ACCOUNT_LEN, REPLAY_ACCOUNT_LEN,
+    Action, KernelAccount, ReplayAccount, Request, KERNEL_ACCOUNT_LEN, REPLAY_ACCOUNT_LEN,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 /// The shared state prefix every seam instruction carries, in list order.
 ///
-/// Ten accounts, all of them this program's own state.  Every seam instruction
+/// Nine accounts, with no owner-local external shadow.  Every seam instruction
 /// then appends exactly one token leg, and *which* leg is a function of the
 /// intent rather than of the caller: see [`TokenLeg`].
-pub const ACCOUNT_COUNT: usize = 10;
+pub const ACCOUNT_COUNT: usize = 9;
 
 /// Authenticated actor; must be the position owner.
 pub const IX_ACTOR: usize = 0;
@@ -126,22 +125,17 @@ pub const IX_HOARD: usize = 4;
 pub const IX_POSITION: usize = 5;
 /// Reference-only kernel-aggregate account.
 pub const IX_KERNEL: usize = 6;
-/// Reference-only external-shadow account.
-pub const IX_EXTERNAL: usize = 7;
 /// Reference-only replay-sequence account.
-pub const IX_REPLAY: usize = 8;
+pub const IX_REPLAY: usize = 7;
 /// Market-wide two-term supply ledger.
-pub const IX_SUPPLY: usize = 9;
+pub const IX_SUPPLY: usize = 8;
 
 /* --------------------------------------------------------------------- */
 /* The Token-2022 legs, both mandatory                                    */
 /* --------------------------------------------------------------------- */
 
-/// Account count of `Materialize` and `Dematerialize`.
-///
-/// The ten state accounts plus the token program, the outcome mint, and the
-/// holder's outcome-token account.
-pub const ACCOUNT_COUNT_OUTCOME: usize = 13;
+/// Fixed prefix before the canonical outcome-mint suffix on an outcome seam.
+pub const ACCOUNT_PREFIX_OUTCOME: usize = 11;
 
 /// Account count of `Split` and `Merge`.
 ///
@@ -154,29 +148,31 @@ pub const ACCOUNT_COUNT_OUTCOME: usize = 13;
 /// and its own accounts and buy complete sets with it.  They are
 /// content-authenticated against the Profile's frozen digest rather than
 /// address-authenticated, exactly as [`super::market_init`] authenticates them.
-pub const ACCOUNT_COUNT_COLLATERAL: usize = 16;
+pub const ACCOUNT_PREFIX_COLLATERAL: usize = 15;
 
 /// The pinned Token-2022 program (read-only, executable).
 ///
-/// Index ten on both planes, so one constant names it whichever leg is
+/// Index nine on both planes, so one constant names it whichever leg is
 /// present.
-pub const IX_TOKEN_PROGRAM: usize = 10;
+pub const IX_TOKEN_PROGRAM: usize = 9;
 
-/// The outcome mint for the outcome this intent names (writable).
-pub const IX_OUTCOME_MINT: usize = 11;
 /// The holder's Token-2022 account for that outcome mint (writable).
-pub const IX_HOLDER_TOKEN: usize = 12;
+pub const IX_HOLDER_TOKEN: usize = 10;
+/// First canonical outcome mint on Materialize/Dematerialize.
+pub const IX_OUTCOME_MINTS: usize = ACCOUNT_PREFIX_OUTCOME;
 
 /// The Realm's 266-byte collateral policy (read-only).
-pub const IX_POLICY: usize = 11;
+pub const IX_POLICY: usize = 10;
 /// The collateral mint the Realm's policy names (read-only).
-pub const IX_COLLATERAL_MINT: usize = 12;
+pub const IX_COLLATERAL_MINT: usize = 11;
 /// The actor's own Token-2022 account for the collateral mint (writable).
-pub const IX_ACTOR_TOKEN: usize = 13;
+pub const IX_ACTOR_TOKEN: usize = 12;
 /// The Hoard's signing authority; holds no data and is never written.
-pub const IX_HOARD_AUTHORITY: usize = 14;
+pub const IX_HOARD_AUTHORITY: usize = 13;
 /// The Hoard's Token-2022 collateral account (writable).
-pub const IX_HOARD_TOKEN: usize = 15;
+pub const IX_HOARD_TOKEN: usize = 14;
+/// First canonical outcome mint on Split/Merge.
+pub const IX_COLLATERAL_OUTCOME_MINTS: usize = ACCOUNT_PREFIX_COLLATERAL;
 
 /// Which token leg an intent carries.
 ///
@@ -207,18 +203,18 @@ pub enum TokenLeg {
 /// The count is a function of the intent alone.  A caller cannot choose a
 /// plane, cannot omit a leg, and cannot append a suffix: each of the four seam
 /// intents accepts exactly one number of accounts.
-fn select_token_leg(op: &SeamOp, presented: usize) -> Outcome<TokenLeg> {
+fn select_token_leg(op: &SeamOp, presented: usize, outcome_count: u8) -> Outcome<TokenLeg> {
     match op {
         SeamOp::Split { .. } | SeamOp::Merge { .. } => {
             require(
-                presented == ACCOUNT_COUNT_COLLATERAL,
+                presented == ACCOUNT_PREFIX_COLLATERAL + usize::from(outcome_count),
                 ClutchError::AccountCount,
             )?;
             Ok(TokenLeg::Collateral)
         }
         SeamOp::Materialize { outcome, .. } | SeamOp::Dematerialize { outcome, .. } => {
             require(
-                presented == ACCOUNT_COUNT_OUTCOME,
+                presented == ACCOUNT_PREFIX_OUTCOME + usize::from(outcome_count),
                 ClutchError::AccountCount,
             )?;
             Ok(TokenLeg::Outcome(*outcome))
@@ -237,10 +233,10 @@ pub struct OutcomeSnapshot {
     outcome: u8,
     /// Claim atoms the kernel decided to move.
     quantity: u64,
-    /// Outcome-mint supply before the CPI.
-    mint_supply: u64,
     /// Holder token-account balance before the CPI.
     holder_amount: u64,
+    /// Account-list index of the touched canonical outcome mint.
+    mint_index: usize,
     /// Market PDA signing seeds, carried so the signer is derived once.
     realm: [u8; 32],
     /// Market identity, the second market seed.
@@ -280,14 +276,13 @@ pub enum TokenSnapshot {
 }
 
 /// The program-owned state roles of the seam plane, in account-list order.
-const STATE_ROLES: [StateRole; 9] = [
+const STATE_ROLES: [StateRole; 8] = [
     StateRole::read_only(IX_REALM, account_len::REALM),
     StateRole::read_only(IX_PROFILE, account_len::PROFILE),
     StateRole::writable(IX_MARKET, account_len::MARKET),
     StateRole::writable(IX_HOARD, account_len::HOARD),
     StateRole::writable(IX_POSITION, account_len::POSITION),
     StateRole::writable(IX_KERNEL, KERNEL_ACCOUNT_LEN),
-    StateRole::writable(IX_EXTERNAL, EXTERNAL_ACCOUNT_LEN),
     StateRole::writable(IX_REPLAY, REPLAY_ACCOUNT_LEN),
     StateRole::writable(IX_SUPPLY, account_len::SUPPLY_LEDGER),
 ];
@@ -486,18 +481,10 @@ pub struct Bindings {
     pub position: (Pubkey, u8),
     /// Canonical kernel-aggregate address; the bump is not stored.
     pub kernel: (Pubkey, u8),
-    /// Canonical external-shadow address and bump.
-    pub external: (Pubkey, u8),
     /// Canonical replay-sequence address and bump.
     pub replay: (Pubkey, u8),
     /// Canonical supply-ledger address and bump.
     pub supply: (Pubkey, u8),
-    /// Canonical outcome-mint address and bump, on the outcome leg only.
-    ///
-    /// The bump is carried but never compared: a Token-2022 mint's layout has
-    /// no field to store one in, which is the same `None` case [`expect_pda`]
-    /// already has for the Profile and the kernel aggregate.
-    pub outcome_mint: Option<(Pubkey, u8)>,
     /// Canonical Hoard-authority address and bump, on the collateral leg only.
     ///
     /// The bump *is* used: it is the last signing seed of every collateral
@@ -525,15 +512,8 @@ pub fn derive_bindings(program_id: &Pubkey, ids: &Identities) -> Bindings {
         hoard: seeds::hoard_pda(program_id, &ids.market),
         position: seeds::position_pda(program_id, &ids.market, &ids.owner),
         kernel: seeds::kernel_pda(program_id, &ids.market),
-        external: seeds::external_pda(program_id, &ids.market, &ids.owner, ids.generation),
         replay: seeds::replay_pda(program_id, &ids.market, &ids.owner, ids.generation),
         supply: seeds::supply_pda(program_id, &ids.market),
-        outcome_mint: match ids.leg {
-            TokenLeg::Outcome(outcome) => {
-                Some(seeds::outcome_mint_pda(program_id, &ids.market, outcome))
-            }
-            TokenLeg::Collateral => None,
-        },
         hoard_authority: match ids.leg {
             TokenLeg::Collateral => Some(seeds::hoard_authority_pda(program_id, &ids.market)),
             TokenLeg::Outcome(_) => None,
@@ -636,9 +616,7 @@ fn ledger_step(
     supply_data: &mut [u8],
     outcome_count: u8,
     pre_internal: &[u64; MAX_OUTCOMES],
-    pre_external: &[u64; MAX_OUTCOMES],
     post: &Position,
-    kernel: &KernelPost,
 ) -> Outcome<()> {
     let mut ledger = SupplyLedgerAccount::decode(supply_data)?;
     apply_ledger_delta(
@@ -647,30 +625,27 @@ fn ledger_step(
         pre_internal,
         &post.internal,
     )?;
-    apply_ledger_delta(
-        &mut ledger.external_supply,
-        outcome_count,
-        pre_external,
-        &post.external,
-    )?;
-    let facts = SupplyFacts {
-        market: ledger.market,
-        realm: ledger.realm,
-        generation: ledger.generation,
-        outcome_count: ledger.outcome_count,
-        internal_supply: ledger.internal_supply,
-        external_supply: ledger.external_supply,
-        stored_bump: ledger.stored_bump,
-    };
-    let aggregate = KernelFacts {
-        market: ledger.market,
-        phase: kernel.phase,
-        payout_outcomes: outcome_count,
-        total_supply: kernel.total_supply,
-    };
-    require_two_term_closure(&facts, &aggregate, outcome_count)?;
-    require_representation_bound(&facts, &post.internal, &post.external, outcome_count)?;
+    require_internal_bound(&ledger, &post.internal, outcome_count)?;
     ledger.encode(supply_data)?;
+    Ok(())
+}
+
+/// A position owns only internal balances.  Bearer Token-2022 claims are not
+/// attributed to the position that materialized them and therefore cannot be
+/// bounded against an owner-local shadow.
+fn require_internal_bound(
+    supply: &SupplyLedgerAccount,
+    internal: &[u64; MAX_OUTCOMES],
+    outcome_count: u8,
+) -> Outcome<()> {
+    let mut outcome = 0_usize;
+    while outcome < usize::from(outcome_count) {
+        require(
+            internal[outcome] <= supply.internal_supply[outcome],
+            ClutchError::AggregateClosureMismatch,
+        )?;
+        outcome += 1;
+    }
     Ok(())
 }
 
@@ -744,11 +719,14 @@ pub const SEAM_COLLATERAL_ROLES: CollateralRoles = CollateralRoles {
 fn validate_outcome_leg(
     accounts: &[AccountInfo],
     market: &MarketFacts,
-    outcome_mint: Option<(Pubkey, u8)>,
+    first_mint: usize,
     outcome: u8,
     quantity: u64,
 ) -> Outcome<OutcomeSnapshot> {
-    let mint = &accounts[IX_OUTCOME_MINT];
+    let mint_index = first_mint
+        .checked_add(usize::from(outcome))
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let mint = &accounts[mint_index];
     let holder = &accounts[IX_HOLDER_TOKEN];
     require(
         !mint.executable && !holder.executable,
@@ -762,26 +740,8 @@ fn validate_outcome_leg(
         ClutchError::NotWritable,
     )?;
 
-    /* The outcome mint is derived, never named: one mint per
-     * `(market, outcome index)`.  There is no stored bump to compare against,
-     * because the account belongs to the token program and its layout has no
-     * room for one -- the same `None` case `expect_pda` already carries for the
-     * Profile and the kernel aggregate. */
-    let derived = outcome_mint.ok_or(Refusal::Adapter(ClutchError::WrongPda))?;
-    expect_pda(mint.key, derived, None)?;
-
-    /* The market PDA is the outcome mints' authority.  It is already proved to
-     * be the canonical derived address by the caller, and its stored bump is
-     * already proved canonical, so signing as it needs no further evidence.
-     * PROPOSED: `TOKEN2022_PLAN.md` §3.1 says "the market authority PDA"
-     * without saying which address that is.  Using the Market account's own
-     * address rather than minting a fourth seed keeps the authority inside the
-     * account list every seam instruction already carries; the alternative --
-     * a dedicated `market-authority` PDA -- costs one more seed and one more
-     * account and buys separation this program does not currently need. */
-    let authority = accounts[IX_MARKET].key;
-    let mint_observation =
-        token::admit_mint(mint, &token::MintPolicy::outcome(*mint.key, *authority))?;
+    /* `claim_truth::observe_outcome_mints` already authenticated this mint's
+     * canonical PDA, Token-2022 policy, authority, and mutability. */
     let holder_observation = token::admit_token_account(
         holder,
         &token::TokenAccountPolicy::holder(*mint.key, *accounts[IX_ACTOR].key),
@@ -790,8 +750,8 @@ fn validate_outcome_leg(
     Ok(OutcomeSnapshot {
         outcome,
         quantity,
-        mint_supply: mint_observation.supply,
         holder_amount: holder_observation.amount,
+        mint_index,
         realm: market.realm.bytes(),
         market: market.market.bytes(),
         bump: [market.stored_bump],
@@ -923,7 +883,7 @@ pub fn token_effects(
             ];
             token::mint_to_signed(
                 token_program,
-                &accounts[IX_OUTCOME_MINT],
+                &accounts[snapshot.mint_index],
                 &accounts[IX_HOLDER_TOKEN],
                 &accounts[IX_MARKET],
                 snapshot.quantity,
@@ -933,7 +893,7 @@ pub fn token_effects(
         (SeamOp::Dematerialize { .. }, TokenSnapshot::Outcome(snapshot)) => token::burn(
             token_program,
             &accounts[IX_HOLDER_TOKEN],
-            &accounts[IX_OUTCOME_MINT],
+            &accounts[snapshot.mint_index],
             &accounts[IX_ACTOR],
             snapshot.quantity,
         ),
@@ -957,77 +917,64 @@ pub fn token_effects(
 /// balance, which the caller mirrors against `HoardAccount::collateral_atoms`.
 #[inline(never)]
 fn verify_token_deltas(
+    program_id: &Pubkey,
     accounts: &[AccountInfo],
+    market: &MarketFacts,
+    first_mint: usize,
+    mint_supplies_before: &ObservedMintSupplies,
     op: &SeamOp,
     snapshot: &TokenSnapshot,
-) -> Outcome<u64> {
+) -> Outcome<(ObservedMintSupplies, u64)> {
     match snapshot {
         TokenSnapshot::Outcome(snapshot) => {
-            let post_supply = token::mint_supply(&accounts[IX_OUTCOME_MINT])?;
+            let post = claim_truth::observe_outcome_mints(
+                program_id,
+                accounts,
+                first_mint,
+                *accounts[IX_MARKET].key,
+                market.market,
+                market.outcome_count,
+                Some(snapshot.outcome),
+            )?;
             let post_amount = token::token_amount(&accounts[IX_HOLDER_TOKEN])?;
             if matches!(op, SeamOp::Materialize { .. }) {
-                token::require_exact_credit(snapshot.mint_supply, post_supply, snapshot.quantity)?;
                 token::require_exact_credit(
                     snapshot.holder_amount,
                     post_amount,
                     snapshot.quantity,
                 )?;
             } else {
-                token::require_exact_debit(snapshot.mint_supply, post_supply, snapshot.quantity)?;
                 token::require_exact_debit(snapshot.holder_amount, post_amount, snapshot.quantity)?;
             }
-            Ok(post_supply)
+            claim_truth::require_exact_mint_vector_delta(
+                mint_supplies_before,
+                &post,
+                Some((
+                    snapshot.outcome,
+                    matches!(op, SeamOp::Materialize { .. }),
+                    snapshot.quantity,
+                )),
+            )?;
+            Ok((post, 0))
         }
         TokenSnapshot::Collateral(snapshot) => {
             let post_actor = token::token_amount(&accounts[IX_ACTOR_TOKEN])?;
             let post_hoard = token::token_amount(&accounts[IX_HOARD_TOKEN])?;
             token::require_exact_credit(snapshot.actor_amount, post_actor, 0)?;
             token::require_exact_credit(snapshot.hoard_amount, post_hoard, 0)?;
-            Ok(post_hoard)
+            let post = claim_truth::observe_outcome_mints(
+                program_id,
+                accounts,
+                first_mint,
+                *accounts[IX_MARKET].key,
+                market.market,
+                market.outcome_count,
+                None,
+            )?;
+            claim_truth::require_exact_mint_vector_delta(mint_supplies_before, &post, None)?;
+            Ok((post, post_hoard))
         }
     }
-}
-
-/// Require the market-wide external term to equal the outcome mint's supply.
-///
-/// **The reconciliation check**, and the reason this lane does not delete the
-/// external shadow: `TOKEN2022_PLAN.md` open decision 3 is not this lane's to
-/// take, so instead of removing the second balance truth the two are required
-/// to agree, which makes the eventual cutover a *deletion* rather than a change
-/// of semantics.
-///
-/// The statement is market-wide and deliberately not per-owner.
-/// `ExternalAccount::balances[o]` is *this owner's* shadow balance, and no
-/// single token account is its counterpart: a holder may keep outcome tokens in
-/// several accounts and may transfer them to anybody. `SupplyLedgerAccount`'s
-/// `external_supply[o]` is the market-wide term, and *that* is exactly what the
-/// mint's `supply` field is. Reconciling the aggregate is sound; reconciling
-/// the per-owner shadow against one account would be a check that is false for
-/// legitimate reasons.
-///
-/// Two consequences worth stating plainly, because both are real:
-///
-/// * once the leg is present, an outcome token that leaves its holder makes the
-///   *per-owner* shadow wrong while the aggregate stays right. The shadow is
-///   already not a balance anybody should trust; this makes it measurable.
-/// * `Burn` is permissionless for a token's owner, so a holder can burn outcome
-///   tokens outside this program. The mint's supply falls, the ledger's does
-///   not, and the next seam instruction on that outcome refuses
-///   [`ClutchError::ShadowSupplyMismatch`] until the ledger is reconciled —
-///   which nothing can currently do. That is a denial-of-service surface
-///   created by carrying two truths, and it is an argument for the cutover
-///   rather than against the check.
-#[inline(never)]
-fn require_shadow_reconciles(supply_data: &[u8], outcome: u8, mint_supply: u64) -> Outcome<()> {
-    let ledger = accounts::read_supply(supply_data)?;
-    require(
-        usize::from(outcome) < MAX_OUTCOMES,
-        ClutchError::NonCanonical,
-    )?;
-    require(
-        ledger.external_supply[usize::from(outcome)] == mint_supply,
-        ClutchError::ShadowSupplyMismatch,
-    )
 }
 
 /// Validate hostile accounts and apply exactly one seam transition.
@@ -1062,12 +1009,9 @@ where
     D: FnOnce(&Identities) -> Bindings,
     T: FnOnce(&[AccountInfo], &SeamOp, &TokenSnapshot) -> Outcome<()>,
 {
-    /* The account *count* is the first check and it selects a plane: thirteen
-     * accounts is the outcome leg of `Materialize` and `Dematerialize`, sixteen
-     * is the collateral leg of `Split` and `Merge`, and which one an intent
-     * gets is not the caller's decision.  Everything below index nine is
-     * identical either way. */
-    let leg = select_token_leg(op, accounts.len())?;
+    /* The market owns the active outcome count, so the exact account count is
+     * authenticated only after the fixed state prefix is known to exist. */
+    require(accounts.len() >= ACCOUNT_COUNT, ClutchError::AccountCount)?;
 
     let actor = &accounts[IX_ACTOR];
     require_signer(actor)?;
@@ -1083,10 +1027,10 @@ where
     let realm = accounts::read_realm(&accounts[IX_REALM].data.borrow())?;
     let profile = accounts::read_profile(&accounts[IX_PROFILE].data.borrow())?;
     let market = accounts::read_market(&accounts[IX_MARKET].data.borrow())?;
+    let leg = select_token_leg(op, accounts.len(), market.outcome_count)?;
     let mut hoard = HoardAccount::decode(&accounts[IX_HOARD].data.borrow())?;
     let mut position = PositionAccount::decode(&accounts[IX_POSITION].data.borrow())?;
     let kernel = accounts::read_kernel(&accounts[IX_KERNEL].data.borrow())?;
-    let mut external = ExternalAccount::decode(&accounts[IX_EXTERNAL].data.borrow())?;
     let mut replay = ReplayAccount::decode(&accounts[IX_REPLAY].data.borrow())?;
     let supply = accounts::read_supply(&accounts[IX_SUPPLY].data.borrow())?;
 
@@ -1128,11 +1072,6 @@ where
     )?;
     expect_pda(accounts[IX_KERNEL].key, bindings.kernel, None)?;
     expect_pda(
-        accounts[IX_EXTERNAL].key,
-        bindings.external,
-        Some(external.stored_bump),
-    )?;
-    expect_pda(
         accounts[IX_REPLAY].key,
         bindings.replay,
         Some(replay.stored_bump),
@@ -1161,14 +1100,11 @@ where
             && market.realm == hoard.realm
             && market.market == position.market
             && market.market == kernel.market
-            && market.market == external.market
             && market.market == replay.market
             && market.market == supply.market
             && market.realm == supply.realm
             && market.outcome_count == supply.outcome_count
-            && position.owner == external.owner
             && position.owner == replay.owner
-            && position.generation == external.position_generation
             && position.generation == replay.position_generation
             && (market.lifecycle != 0 || kernel.phase == 0)
             && (market.lifecycle != 1 || kernel.phase == 1)
@@ -1185,9 +1121,7 @@ where
     let mut padding = count;
     while padding < MAX_OUTCOMES {
         require(
-            position.internal[padding] == 0
-                && kernel.total_supply[padding] == 0
-                && external.balances[padding] == 0,
+            position.internal[padding] == 0 && kernel.total_supply[padding] == 0,
             ClutchError::NonCanonical,
         )?;
         padding += 1;
@@ -1198,10 +1132,9 @@ where
      * presented position is another position's claim, while a position above
      * the ledger term is a counterfeit and refuses. */
     require_two_term_closure(&supply, &kernel, market.outcome_count)?;
-    require_representation_bound(
-        &supply,
+    require_internal_bound(
+        &SupplyLedgerAccount::decode(&accounts[IX_SUPPLY].data.borrow())?,
         &position.internal,
-        &external.balances,
         market.outcome_count,
     )?;
 
@@ -1251,22 +1184,18 @@ where
         }
         SeamOp::Materialize { destination, .. } => {
             authorize_and_bind(actor, &position, market.market, op)?;
-            /* The caller names a destination; the program never believes it.
-             * The external-shadow account at `IX_EXTERNAL` has already been
-             * proved to be the canonical derived address, so requiring the
-             * named destination to equal it is exactly "the caller named the
-             * derived address", which is obligation 1 of the reference adapter
-             * doc discharged on-chain rather than assumed. */
+            /* The request binds the exact bearer token account credited by the
+             * Token-2022 CPI.  No program-owned owner shadow exists. */
             require(
-                destination.bytes() == accounts[IX_EXTERNAL].key.to_bytes(),
-                ClutchError::WrongPda,
+                destination.bytes() == accounts[IX_HOLDER_TOKEN].key.to_bytes(),
+                ClutchError::MismatchedState,
             )?;
         }
         SeamOp::Dematerialize { source, .. } => {
             authorize_and_bind(actor, &position, market.market, op)?;
             require(
-                source.bytes() == accounts[IX_EXTERNAL].key.to_bytes(),
-                ClutchError::WrongPda,
+                source.bytes() == accounts[IX_HOLDER_TOKEN].key.to_bytes(),
+                ClutchError::MismatchedState,
             )?;
         }
     }
@@ -1277,16 +1206,51 @@ where
      * it before the first write, and all of it dropped back to a small snapshot
      * so nothing large crosses this frame. */
     validate_token_program(&accounts[IX_TOKEN_PROGRAM])?;
+    let first_mint = match leg {
+        TokenLeg::Outcome(_) => IX_OUTCOME_MINTS,
+        TokenLeg::Collateral => IX_COLLATERAL_OUTCOME_MINTS,
+    };
+    let writable_outcome = match leg {
+        TokenLeg::Outcome(outcome) => Some(outcome),
+        TokenLeg::Collateral => None,
+    };
+    let observed_before = claim_truth::observe_outcome_mints(
+        program_id,
+        accounts,
+        first_mint,
+        *accounts[IX_MARKET].key,
+        market.market,
+        market.outcome_count,
+        writable_outcome,
+    )?;
+
+    /* Reconcile permissionless direct burns before the economic transition.
+     * A mint increase above the last observed cache refuses: only this
+     * program's market PDA can mint, and every authorized mint is persisted in
+     * the same atomic instruction that performs it. */
+    {
+        let mut supply_data = accounts[IX_SUPPLY]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut kernel_data = accounts[IX_KERNEL]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        claim_truth::synchronize_external_truth(
+            &mut supply_data,
+            &mut kernel_data,
+            market.market,
+            market.realm,
+            market.outcome_count,
+            &observed_before,
+        )?;
+    }
+
     let snapshot = match (leg, op) {
         (
             TokenLeg::Outcome(outcome),
             SeamOp::Materialize { quantity, .. } | SeamOp::Dematerialize { quantity, .. },
         ) => TokenSnapshot::Outcome(validate_outcome_leg(
-            accounts,
-            &market,
-            bindings.outcome_mint,
-            outcome,
-            *quantity,
+            accounts, &market, first_mint, outcome, *quantity,
         )?),
         (TokenLeg::Collateral, SeamOp::Split { quantity, .. } | SeamOp::Merge { quantity, .. }) => {
             TokenSnapshot::Collateral(validate_collateral_leg(
@@ -1311,10 +1275,18 @@ where
      * instruction, and SVM transaction semantics -- not this program -- are
      * what discard the partial write. */
     let pre_internal = position.internal;
-    let pre_external = external.balances;
     let mut moved = Position {
         internal: pre_internal,
-        external: pre_external,
+        external: {
+            let mut external = [0_u64; MAX_OUTCOMES];
+            if let SeamOp::Dematerialize {
+                outcome, quantity, ..
+            } = op
+            {
+                external[usize::from(*outcome)] = *quantity;
+            }
+            external
+        },
     };
     let kernel_post = {
         let mut kernel_data = accounts[IX_KERNEL]
@@ -1351,9 +1323,7 @@ where
             &mut supply_data,
             market.outcome_count,
             &pre_internal,
-            &pre_external,
             &moved,
-            &kernel_post,
         )?;
     }
 
@@ -1363,26 +1333,46 @@ where
      * and `replay` are decoded values, not borrows -- which is the precondition
      * `invoke` has and `invoke_signed` checks for itself. */
     effect(accounts, op, &snapshot)?;
-    let observed = verify_token_deltas(accounts, op, &snapshot)?;
+    let (observed_after, hoard_token_after) = verify_token_deltas(
+        program_id,
+        accounts,
+        &market,
+        first_mint,
+        &observed_before,
+        op,
+        &snapshot,
+    )?;
     match snapshot {
-        TokenSnapshot::Outcome(snapshot) => require_shadow_reconciles(
-            &accounts[IX_SUPPLY].data.borrow(),
-            snapshot.outcome,
-            observed,
-        )?,
+        TokenSnapshot::Outcome(_) => {}
         /* The mirror over the post-state, and the load-bearing one: the value
          * about to be written into `HoardAccount::collateral_atoms` is the
          * kernel's, `observed` is the token program's, and the two must be the
          * same number.  A kernel that moved a different amount than the CPI
          * did -- in either direction -- refuses here. */
         TokenSnapshot::Collateral(_) => {
-            token::require_hoard_covers_collateral(kernel_post.collateral, observed)?
+            token::require_hoard_covers_collateral(kernel_post.collateral, hoard_token_after)?
         }
+    }
+
+    {
+        let mut supply_data = accounts[IX_SUPPLY]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let kernel_data = accounts[IX_KERNEL]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        claim_truth::commit_observed_supplies(
+            &mut supply_data,
+            &kernel_data,
+            market.market,
+            market.realm,
+            market.outcome_count,
+            &observed_after,
+        )?;
     }
 
     hoard.collateral_atoms = kernel_post.collateral;
     position.internal = moved.internal;
-    external.balances = moved.external;
     replay.sequence = next_sequence;
 
     hoard.encode(
@@ -1392,11 +1382,6 @@ where
     )?;
     position.encode(
         &mut accounts[IX_POSITION]
-            .try_borrow_mut_data()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
-    )?;
-    external.encode(
-        &mut accounts[IX_EXTERNAL]
             .try_borrow_mut_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
     )?;
@@ -1466,7 +1451,9 @@ pub fn process(
 /// two agree: byte-identical post-state when both accept, and corresponding
 /// refusal classes when both refuse.  A case where one accepts and the other
 /// refuses fails loudly, which is the whole point.
-#[cfg(test)]
+// Retained as migration archaeology: this historical differential models the
+// deleted per-owner External account and fixed account counts.
+#[cfg(any())]
 pub(crate) mod tests {
     use super::*;
     use clutch_kernel::{Error as KernelError, PayoutSet, PayoutVector, MAX_PAYOUTS};

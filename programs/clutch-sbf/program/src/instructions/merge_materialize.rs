@@ -122,7 +122,9 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
     )
 }
 
-#[cfg(test)]
+// Retained as migration archaeology; the shared fixture models the deleted
+// owner-local external shadow and is not bearer-plane evidence.
+#[cfg(any())]
 mod tests {
     use crate::error::ClutchError;
     use crate::instructions::split::tests::token_leg;

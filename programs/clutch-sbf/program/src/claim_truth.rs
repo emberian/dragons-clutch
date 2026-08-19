@@ -1,0 +1,338 @@
+//! Token-2022 outcome-mint truth at the adapter boundary.
+//!
+//! Internal claims are aggregated in [`SupplyLedgerAccount::internal_supply`].
+//! External claims are ordinary bearer tokens, so their aggregate is the
+//! authenticated Token-2022 mint supply and never an owner-local program
+//! account.  This module admits the complete bounded mint vector and joins the
+//! two terms to the kernel aggregate.
+//!
+//! The frozen `external_supply` field survives this ABI only as the last mint
+//! supply this program observed.  A lower current supply is an ordinary holder
+//! burn and is synchronized as a safe liability donation.  A higher supply is
+//! impossible without the program's mint-authority PDA and refuses.  Current
+//! Token-2022 bytes, not the cache, own the balance truth.
+
+use crate::accounts::{expect_pda, require, Outcome};
+use crate::error::{ClutchError, Refusal};
+use crate::{seeds, token};
+use clutch_solana_layout::{Hash32, SupplyLedgerAccount, MAX_OUTCOMES};
+use clutch_solana_reference::KernelAccount;
+use solana_account_info::AccountInfo;
+use solana_pubkey::Pubkey;
+
+/// Exact observed Token-2022 supply for every active outcome.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObservedMintSupplies {
+    /// Supply by outcome index; padding is canonical zero.
+    pub values: [u64; MAX_OUTCOMES],
+    /// Active prefix length.
+    pub outcome_count: u8,
+}
+
+/// Admit the canonical complete outcome-mint suffix and read every supply.
+///
+/// `first` is the suffix's first account index.  The caller owns exact total
+/// account count and global alias checks.  `writable_outcome` names the one mint
+/// a mint/burn CPI will change; every other mint must be read-only.  Passing
+/// `None` makes the entire suffix read-only.
+#[inline(never)]
+pub fn observe_outcome_mints(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    first: usize,
+    market_account_key: Pubkey,
+    market: Hash32,
+    outcome_count: u8,
+    writable_outcome: Option<u8>,
+) -> Outcome<ObservedMintSupplies> {
+    let count = usize::from(outcome_count);
+    let end = first
+        .checked_add(count)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(end <= accounts.len(), ClutchError::AccountCount)?;
+    if let Some(outcome) = writable_outcome {
+        require(usize::from(outcome) < count, ClutchError::NonCanonical)?;
+    }
+
+    let mut values = [0_u64; MAX_OUTCOMES];
+    let market_bytes = market.bytes();
+    let mut outcome = 0_usize;
+    while outcome < count {
+        let mint = &accounts[first + outcome];
+        require(!mint.executable, ClutchError::ExecutableAccount)?;
+        let must_write = writable_outcome == Some(outcome as u8);
+        require(
+            mint.is_writable == must_write,
+            if must_write {
+                ClutchError::NotWritable
+            } else {
+                ClutchError::UnexpectedWritable
+            },
+        )?;
+        let derived = seeds::outcome_mint_pda(program_id, &market_bytes, outcome as u8);
+        expect_pda(mint.key, derived, None)?;
+        let observation = token::admit_mint(
+            mint,
+            &token::MintPolicy::outcome(*mint.key, market_account_key),
+        )?;
+        values[outcome] = observation.supply;
+        outcome += 1;
+    }
+    Ok(ObservedMintSupplies {
+        values,
+        outcome_count,
+    })
+}
+
+/// Synchronize direct holder burns into the cached ledger and kernel total.
+///
+/// The pre-sync cache must already close against the persisted kernel.  Actual
+/// mint supply may only stay equal or fall: only this program can sign as the
+/// mint authority, and its own increases are persisted atomically with the CPI.
+/// All checks finish before either byte slice is written.
+#[inline(never)]
+pub fn synchronize_external_truth(
+    supply_data: &mut [u8],
+    kernel_data: &mut [u8],
+    market: Hash32,
+    realm: Hash32,
+    outcome_count: u8,
+    observed: &ObservedMintSupplies,
+) -> Outcome<()> {
+    let mut supply = SupplyLedgerAccount::decode(supply_data)?;
+    let mut kernel = KernelAccount::decode(kernel_data)?;
+    require(
+        supply.market == market
+            && supply.realm == realm
+            && supply.outcome_count == outcome_count
+            && observed.outcome_count == outcome_count
+            && kernel.market == market
+            && kernel.payouts.outcomes == outcome_count,
+        ClutchError::MismatchedState,
+    )?;
+
+    let mut next_total = kernel.total_supply;
+    let mut outcome = 0_usize;
+    while outcome < usize::from(outcome_count) {
+        let cached_total = supply.internal_supply[outcome]
+            .checked_add(supply.external_supply[outcome])
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        require(
+            cached_total == kernel.total_supply[outcome],
+            ClutchError::AggregateClosureMismatch,
+        )?;
+        require(
+            observed.values[outcome] <= supply.external_supply[outcome],
+            ClutchError::ShadowSupplyMismatch,
+        )?;
+        next_total[outcome] = supply.internal_supply[outcome]
+            .checked_add(observed.values[outcome])
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        outcome += 1;
+    }
+
+    supply.external_supply = observed.values;
+    kernel.total_supply = next_total;
+    supply.encode(supply_data)?;
+    kernel.encode(kernel_data)?;
+    Ok(())
+}
+
+/// Persist the exact post-CPI supplies and re-close them against the kernel.
+///
+/// This never repairs a kernel discrepancy.  The transition has already
+/// decided its aggregate effect; Token-2022 must have produced the exact mint
+/// vector whose internal-plus-external sum is that effect.
+#[inline(never)]
+pub fn commit_observed_supplies(
+    supply_data: &mut [u8],
+    kernel_data: &[u8],
+    market: Hash32,
+    realm: Hash32,
+    outcome_count: u8,
+    observed: &ObservedMintSupplies,
+) -> Outcome<()> {
+    let mut supply = SupplyLedgerAccount::decode(supply_data)?;
+    let kernel = KernelAccount::decode(kernel_data)?;
+    require(
+        supply.market == market
+            && supply.realm == realm
+            && supply.outcome_count == outcome_count
+            && observed.outcome_count == outcome_count
+            && kernel.market == market,
+        ClutchError::MismatchedState,
+    )?;
+    let mut outcome = 0_usize;
+    while outcome < usize::from(outcome_count) {
+        let total = supply.internal_supply[outcome]
+            .checked_add(observed.values[outcome])
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        require(
+            total == kernel.total_supply[outcome],
+            ClutchError::AggregateClosureMismatch,
+        )?;
+        outcome += 1;
+    }
+    supply.external_supply = observed.values;
+    supply.encode(supply_data)?;
+    Ok(())
+}
+
+/// Compare pre/post complete mint vectors with one exact optional delta.
+pub fn require_exact_mint_vector_delta(
+    before: &ObservedMintSupplies,
+    after: &ObservedMintSupplies,
+    changed: Option<(u8, bool, u64)>,
+) -> Outcome<()> {
+    require(
+        before.outcome_count == after.outcome_count,
+        ClutchError::MismatchedState,
+    )?;
+    let mut outcome = 0_usize;
+    while outcome < usize::from(before.outcome_count) {
+        let expected = match changed {
+            Some((index, minting, quantity)) if usize::from(index) == outcome => {
+                if minting {
+                    before.values[outcome]
+                        .checked_add(quantity)
+                        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+                } else {
+                    before.values[outcome]
+                        .checked_sub(quantity)
+                        .ok_or(Refusal::Adapter(ClutchError::TokenDeltaMismatch))?
+                }
+            }
+            _ => before.values[outcome],
+        };
+        require(
+            after.values[outcome] == expected,
+            ClutchError::TokenDeltaMismatch,
+        )?;
+        outcome += 1;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clutch_kernel::{PayoutSet, PayoutVector, MAX_PAYOUTS};
+
+    fn h(value: u8) -> Hash32 {
+        Hash32::from_bytes([value; 32])
+    }
+
+    fn payouts() -> PayoutSet {
+        let mut vectors = [PayoutVector::ZERO; MAX_PAYOUTS];
+        let mut first = [0; MAX_OUTCOMES];
+        first[0] = 1;
+        let mut second = [0; MAX_OUTCOMES];
+        second[1] = 1;
+        vectors[0] = PayoutVector::new(1, first);
+        vectors[1] = PayoutVector::new(1, second);
+        PayoutSet::new(2, 2, vectors)
+    }
+
+    fn state() -> (Vec<u8>, Vec<u8>) {
+        let mut supply_bytes = vec![0; clutch_solana_layout::account_len::SUPPLY_LEDGER];
+        let mut internal = [0; MAX_OUTCOMES];
+        internal[0] = 7;
+        internal[1] = 8;
+        let mut external = [0; MAX_OUTCOMES];
+        external[0] = 5;
+        external[1] = 4;
+        SupplyLedgerAccount {
+            market: h(1),
+            realm: h(2),
+            generation: 0,
+            outcome_count: 2,
+            internal_supply: internal,
+            external_supply: external,
+            stored_bump: 9,
+            flags: 0,
+        }
+        .encode(&mut supply_bytes)
+        .unwrap();
+        let mut kernel_bytes = vec![0; clutch_solana_reference::KERNEL_ACCOUNT_LEN];
+        let mut total = [0; MAX_OUTCOMES];
+        total[0] = 12;
+        total[1] = 12;
+        KernelAccount {
+            market: h(1),
+            phase: 0,
+            resolved_payout: 0,
+            payouts: payouts(),
+            total_supply: total,
+        }
+        .encode(&mut kernel_bytes)
+        .unwrap();
+        (supply_bytes, kernel_bytes)
+    }
+
+    #[test]
+    fn a_direct_burn_lowers_recognized_liability_without_touching_internal() {
+        let (mut supply, mut kernel) = state();
+        let observed = ObservedMintSupplies {
+            values: {
+                let mut value = [0; MAX_OUTCOMES];
+                value[0] = 2;
+                value[1] = 4;
+                value
+            },
+            outcome_count: 2,
+        };
+        synchronize_external_truth(&mut supply, &mut kernel, h(1), h(2), 2, &observed).unwrap();
+        let supply = SupplyLedgerAccount::decode(&supply).unwrap();
+        let kernel = KernelAccount::decode(&kernel).unwrap();
+        assert_eq!(supply.internal_supply[0], 7);
+        assert_eq!(supply.external_supply[0], 2);
+        assert_eq!(kernel.total_supply[0], 9);
+        assert_eq!(kernel.total_supply[1], 12);
+    }
+
+    #[test]
+    fn an_unaccounted_mint_increase_refuses_without_writing() {
+        let (mut supply, mut kernel) = state();
+        let before_supply = supply.clone();
+        let before_kernel = kernel.clone();
+        let observed = ObservedMintSupplies {
+            values: {
+                let mut value = [0; MAX_OUTCOMES];
+                value[0] = 6;
+                value[1] = 4;
+                value
+            },
+            outcome_count: 2,
+        };
+        assert_eq!(
+            synchronize_external_truth(&mut supply, &mut kernel, h(1), h(2), 2, &observed),
+            Err(ClutchError::ShadowSupplyMismatch.into())
+        );
+        assert_eq!(supply, before_supply);
+        assert_eq!(kernel, before_kernel);
+    }
+
+    #[test]
+    fn whole_vector_delta_requires_untouched_mints_to_stay_exact() {
+        let before = ObservedMintSupplies {
+            values: {
+                let mut value = [0; MAX_OUTCOMES];
+                value[0] = 2;
+                value[1] = 4;
+                value
+            },
+            outcome_count: 2,
+        };
+        let mut after = before;
+        after.values[0] = 5;
+        assert_eq!(
+            require_exact_mint_vector_delta(&before, &after, Some((0, true, 3))),
+            Ok(())
+        );
+        after.values[1] = 5;
+        assert_eq!(
+            require_exact_mint_vector_delta(&before, &after, Some((0, true, 3))),
+            Err(ClutchError::TokenDeltaMismatch.into())
+        );
+    }
+}

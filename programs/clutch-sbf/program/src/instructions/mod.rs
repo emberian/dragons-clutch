@@ -38,6 +38,7 @@
 //! and the `invoke_signed` seed plumbing are one concern with one owner.
 
 pub mod construction;
+pub mod external_exit;
 pub mod genesis;
 pub mod market_init;
 pub mod merge_materialize;

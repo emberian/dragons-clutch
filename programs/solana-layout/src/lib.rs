@@ -2431,14 +2431,18 @@ pub const RECEIPT_FLAG_SELL_CONSUMED: u8 = 2;
 /// Receipt flag: the named slice is exhausted.
 pub const RECEIPT_FLAG_SLICE_EXHAUSTED: u8 = 4;
 
-/// Market-wide supply, decomposed into its two accounted terms.
+/// Market-wide supply, decomposed into internal claims and observed bearer
+/// supply.
 ///
 /// The reference adapter's closure invariant (CLO-DELTA-V1) is
 /// `position internal + accounted external == aggregate supply`.  Summing
 /// positions is not an onchain option, so the aggregate is persisted here as
 /// the two terms whose sum it is: claims still credited internally, and claims
-/// materialized outside the internal ledger and accounted for by the adapter.
-/// This account is not authority over any single position's balance.
+/// materialized outside the internal ledger.  The external field is only the
+/// last Token-2022 mint-supply vector observed atomically by the adapter; the
+/// actual mint accounts are authoritative.  A lower actual supply is a direct
+/// holder burn and a safe liability donation.  This account is not authority
+/// over any holder or token-account balance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SupplyLedgerAccount {
     /// Market identity this ledger is bound to.
@@ -2451,7 +2455,7 @@ pub struct SupplyLedgerAccount {
     pub outcome_count: u8,
     /// Claims credited inside the internal ledger, per outcome.
     pub internal_supply: [u64; MAX_OUTCOMES],
-    /// Claims materialized externally and accounted, per outcome.
+    /// Last observed Token-2022 mint supply, per outcome.
     pub external_supply: [u64; MAX_OUTCOMES],
     /// Stored PDA bump.
     pub stored_bump: u8,
@@ -4222,6 +4226,20 @@ pub enum Intent {
         outcome: u8,
         quantity: u64,
     },
+    /// Burn a bearer Egg after resolution and pay its current holder directly.
+    ///
+    /// Unlike [`Intent::Dematerialize`], this action is not Position-bound.  The
+    /// signed claimant and both token-account addresses are explicit wire
+    /// bindings; the Solana adapter must still decode current Token-2022 owner,
+    /// mint, and balance facts rather than trusting these names.
+    RedeemExternal {
+        market: MarketId,
+        claimant: OwnerId,
+        source: Hash32,
+        destination: Hash32,
+        outcome: u8,
+        quantity: u64,
+    },
     /// Advance an authenticated feed cursor by one checked evidence digest.
     FeedAdvance {
         feed: FeedId,
@@ -4438,6 +4456,7 @@ const INIT_PRICE_GRID_TAG: u8 = 12;
 const INIT_TERMS_TAG: u8 = 13;
 const INIT_ORDER_PAGE_TAG: u8 = 14;
 const ENDOW_TAG: u8 = 15;
+const REDEEM_EXTERNAL_TAG: u8 = 16;
 
 impl Intent {
     /// Return the exact encoded byte length for this intent.
@@ -4446,6 +4465,7 @@ impl Intent {
             Self::CreateMarket { .. } => 2 + 32 + 32 + 8 + 1 + 32 + 32,
             Self::Split { .. } | Self::Merge { .. } => 2 + 32 + 32 + 8,
             Self::Materialize { .. } | Self::Dematerialize { .. } => 2 + 32 + 32 + 32 + 1 + 8,
+            Self::RedeemExternal { .. } => 2 + 32 + 32 + 32 + 32 + 1 + 8,
             Self::FeedAdvance { .. } => 2 + 32 + 8 + 32,
             Self::PlaceOrder { slot, .. } => match slot {
                 OrderSlot::Single(_) => 2 + 32 + 32 + 1 + ORDER_RECORD_BYTES,
@@ -4553,6 +4573,32 @@ impl Intent {
                 )?;
                 w.hash(*market)?;
                 w.hash(*owner)?;
+                w.hash(*destination)?;
+                w.u8(*outcome)?;
+                w.u64(*quantity)?
+            }
+            Self::RedeemExternal {
+                market,
+                claimant,
+                source,
+                destination,
+                outcome,
+                quantity,
+            } => {
+                check_hash(*market)?;
+                check_hash(*claimant)?;
+                check_hash(*source)?;
+                check_hash(*destination)?;
+                if *outcome >= MAX_OUTCOMES as u8 {
+                    return Err(CodecError::InvalidCount);
+                }
+                if *quantity == 0 {
+                    return Err(CodecError::ZeroValue);
+                }
+                put_header(&mut w, REDEEM_EXTERNAL_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*claimant)?;
+                w.hash(*source)?;
                 w.hash(*destination)?;
                 w.u8(*outcome)?;
                 w.u64(*quantity)?
@@ -4785,6 +4831,33 @@ impl Intent {
                         outcome,
                         quantity,
                     }
+                })
+            }
+            REDEEM_EXTERNAL_TAG => {
+                let market = r.hash()?;
+                let claimant = r.hash()?;
+                let source = r.hash()?;
+                let destination = r.hash()?;
+                let outcome = r.u8()?;
+                let quantity = r.u64()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(claimant)?;
+                check_hash(source)?;
+                check_hash(destination)?;
+                if outcome >= MAX_OUTCOMES as u8 {
+                    return Err(CodecError::InvalidCount);
+                }
+                if quantity == 0 {
+                    return Err(CodecError::ZeroValue);
+                }
+                Ok(Self::RedeemExternal {
+                    market,
+                    claimant,
+                    source,
+                    destination,
+                    outcome,
+                    quantity,
                 })
             }
             FEED_ADVANCE_TAG => {
@@ -9304,7 +9377,73 @@ mod tests {
         b[66..74].fill(0);
         assert_eq!(Intent::decode(&b[..n]), Err(CodecError::ZeroValue));
         // A tag past the last one this version defines.
-        b[0] = ENDOW_TAG + 1;
+        b[0] = REDEEM_EXTERNAL_TAG + 1;
         assert_eq!(Intent::decode(&b[..n]), Err(CodecError::WrongTag));
+    }
+
+    #[test]
+    fn external_redemption_binds_bearer_and_both_token_accounts() {
+        let intent = Intent::RedeemExternal {
+            market: h(1),
+            claimant: h(2),
+            source: h(3),
+            destination: h(4),
+            outcome: 1,
+            quantity: 17,
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = intent.encode(&mut bytes).unwrap();
+        assert_eq!(len, 2 + (4 * HASH_BYTES) + 1 + 8);
+        assert_eq!(bytes[0], REDEEM_EXTERNAL_TAG);
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(intent));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+
+        for invalid in [
+            Intent::RedeemExternal {
+                market: h(1),
+                claimant: Hash32::ZERO,
+                source: h(3),
+                destination: h(4),
+                outcome: 1,
+                quantity: 17,
+            },
+            Intent::RedeemExternal {
+                market: h(1),
+                claimant: h(2),
+                source: Hash32::ZERO,
+                destination: h(4),
+                outcome: 1,
+                quantity: 17,
+            },
+            Intent::RedeemExternal {
+                market: h(1),
+                claimant: h(2),
+                source: h(3),
+                destination: Hash32::ZERO,
+                outcome: 1,
+                quantity: 17,
+            },
+            Intent::RedeemExternal {
+                market: h(1),
+                claimant: h(2),
+                source: h(3),
+                destination: h(4),
+                outcome: MAX_OUTCOMES as u8,
+                quantity: 17,
+            },
+            Intent::RedeemExternal {
+                market: h(1),
+                claimant: h(2),
+                source: h(3),
+                destination: h(4),
+                outcome: 1,
+                quantity: 0,
+            },
+        ] {
+            assert!(invalid.encode(&mut bytes).is_err());
+        }
     }
 }

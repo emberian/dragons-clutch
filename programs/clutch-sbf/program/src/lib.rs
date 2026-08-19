@@ -66,6 +66,7 @@
 //! the `bpf` module below and compiled only for `target_os = "solana"`.
 
 pub mod accounts;
+pub mod claim_truth;
 pub mod dispatch;
 pub mod error;
 pub mod instructions;

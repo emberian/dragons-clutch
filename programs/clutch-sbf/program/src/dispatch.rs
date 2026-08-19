@@ -41,7 +41,7 @@
 use crate::accounts::Outcome;
 use crate::error::ClutchError;
 use crate::instructions::{
-    genesis, market_init, merge_materialize, observe_resolve, orders_batch, split,
+    external_exit, genesis, market_init, merge_materialize, observe_resolve, orders_batch, split,
 };
 use clutch_solana_layout::Intent;
 use clutch_solana_reference::{Action, Request};
@@ -81,6 +81,9 @@ pub fn process(
         Action::Layout(Intent::FeedAdvance { .. })
         | Action::Resolve { .. }
         | Action::RedeemInternal { .. } => observe_resolve::process(program_id, accounts, &request),
+        Action::Layout(Intent::RedeemExternal { .. }) => {
+            external_exit::process(program_id, accounts, &request)
+        }
         Action::Layout(Intent::PlaceOrder { .. })
         | Action::Layout(Intent::CancelOrder { .. })
         | Action::Layout(Intent::SettlePage { .. }) => {

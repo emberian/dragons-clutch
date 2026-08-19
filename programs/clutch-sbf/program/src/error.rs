@@ -143,17 +143,17 @@ pub enum ClutchError {
     /// `docs/implementation/TOKEN2022_PLAN.md` §3.5.  Reserved by this wave;
     /// the collateral leg that raises it is not wired yet.
     HoardMirrorMismatch = 0x001d,
-    /// The market-wide external-shadow term is not the outcome mint's supply.
+    /// An observed outcome mint supply exceeded the last atomically persisted
+    /// Token-2022 supply.
     ///
     /// **Appended beyond the plan's table**, which stops at `0x001d`.  The
     /// plan's `HoardMirrorMismatch` names the *collateral* mirror; this names
     /// the *outcome* mirror, and collapsing them would make a diagnostic
     /// unable to say which of two different single-truth cutovers broke.  The
-    /// statement checked is
-    /// `SupplyLedgerAccount::external_supply[o] == outcome_mint[o].supply`,
-    /// market-wide — see [`crate::token`] for why the *per-owner*
-    /// `ExternalAccount::balances[o]` is not reconcilable against any one token
-    /// account.
+    /// A lower supply is an ordinary direct holder burn and is synchronized as
+    /// a safe liability donation.  A higher supply cannot be accepted because
+    /// only this program's market PDA is admitted as mint authority and every
+    /// authorized mint persists its exact post-CPI supply atomically.
     ShadowSupplyMismatch = 0x001e,
     /// A target of an initialization write was not all-zero.
     ///
