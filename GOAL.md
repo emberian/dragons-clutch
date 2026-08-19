@@ -57,8 +57,15 @@ provider selection/design, Draft 10 fork (degg-research).
   violates bucket uniqueness; Chainlink Solana is allowlist-gated with
   unverifiable mainnet identity. Pyth caveats: ephemeral update accounts
   vs SourceSpec exact-account field; DAO upgrade cutover 2026-08-26.
-- Draft 10 fork lane in degg-research per committed
-  DRAFT10_ENGINEERING_CLAIM_DELTA_PLAN.md — in flight.
+- Draft 10 LANDED in degg-research (a1b8aea): all four filing documents
+  forked from frozen Draft 9 Typst sources with the ten-claim delta table
+  applied (two-artifact 0x79 source truth, ResolutionWork PROFILE-ADMITTED
+  maxima, occupation-v4 measured STOP, Direct V2 1.4M-CU STOP + V3
+  model-only, exact-lot bearer redemption, tightened walk language, Clear
+  energy fourth machine-checked negative, TFHE candidate-only, operatorless
+  + formal-proof boundary sentences). PDFs built, vocabulary audited, zero
+  unverified citations. Filing gates (docket recheck, legal review,
+  submission) remain human.
 - R2 selection landed (765ca81): Pyth pull selected on the bucket-uniqueness
   discriminator; SourceSpec v2 pull-profile deltas, CROSSING_V1 semantics
   with falsifiers, post-2026-08-26 identity-freeze sequencing. PROPOSED/
