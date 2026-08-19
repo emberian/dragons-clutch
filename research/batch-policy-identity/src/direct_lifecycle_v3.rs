@@ -1551,8 +1551,16 @@ pub struct DirectLifecycleEffectsV3 {
     pub position_releases: [DirectPositionReleaseV3; 2],
     /// Active prefix in `position_releases`.
     pub position_release_count: u8,
-    /// Exact released Reservation semantic poststates before account close.
-    pub released_reservations: [DirectReservationBodyV3; 2],
+    /// Exact Position before/after legs for successful settlement.
+    pub position_settlements: [DirectPositionSettlementV3; 2],
+    /// Active prefix in `position_settlements`.
+    pub position_settlement_count: u8,
+    /// Exact collateral atoms transferred buyer to seller.
+    pub settlement_consideration_atoms: u64,
+    /// Exact buy Reservation envelope removed from reserved cash.
+    pub buyer_reserved_release_atoms: u64,
+    /// Exact RELEASED or CONSUMED Reservation poststates before account close.
+    pub terminal_reservations: [DirectReservationBodyV3; 2],
 }
 
 /// One exact aggregate Position mutation caused by releasing one or two
@@ -1573,6 +1581,33 @@ impl DirectPositionReleaseV3 {
     };
 }
 
+/// One exact Position mutation caused by the selected full-fill settlement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectPositionSettlementV3 {
+    /// Authenticated prestate.
+    pub before: DirectPositionV3,
+    /// Exact cash/Egg transfer poststate.
+    pub after: DirectPositionV3,
+}
+
+impl DirectPositionSettlementV3 {
+    /// Canonical inactive suffix.
+    pub const ZERO: Self = Self {
+        before: DirectPositionV3::ZERO,
+        after: DirectPositionV3::ZERO,
+    };
+}
+
+/// Exact buyer/seller Position pair for settlement, independent of frozen
+/// page slot order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectSettlementPositionsV3 {
+    /// Buyer Position prestate.
+    pub buyer: DirectPositionV3,
+    /// Seller Position prestate.
+    pub seller: DirectPositionV3,
+}
+
 impl DirectLifecycleEffectsV3 {
     /// No external effect.
     pub const NONE: Self = Self {
@@ -1586,31 +1621,11 @@ impl DirectLifecycleEffectsV3 {
         reservation_transition_count: 0,
         position_releases: [DirectPositionReleaseV3::ZERO; 2],
         position_release_count: 0,
-        released_reservations: [DirectReservationBodyV3 {
-            reservation_id: Identity32V1::ZERO,
-            market_id: Identity32V1::ZERO,
-            epoch_id: Identity32V1::ZERO,
-            owner: Identity32V1::ZERO,
-            order_id: Identity32V1::ZERO,
-            price_grid_id: Identity32V1::ZERO,
-            terms_id: Identity32V1::ZERO,
-            policy_id: Identity32V1::ZERO,
-            position_generation: 0,
-            order_generation: 0,
-            initial_cash_atoms: 0,
-            remaining_cash_atoms: 0,
-            max_fee_atoms: 0,
-            release_generation: 0,
-            page_index: 0,
-            outcome_count: 0,
-            order_kind: 0,
-            side: 0,
-            state: 0,
-            stored_bump: 0,
-            flags: 0,
-            initial_internal: [0; MAX_OUTCOMES],
-            remaining_internal: [0; MAX_OUTCOMES],
-        }; 2],
+        position_settlements: [DirectPositionSettlementV3::ZERO; 2],
+        position_settlement_count: 0,
+        settlement_consideration_atoms: 0,
+        buyer_reserved_release_atoms: 0,
+        terminal_reservations: [DirectReservationBodyV3::ZERO; 2],
     };
 
     /// Sum exact payer principal, excluding rewards and neutral surplus.
@@ -2583,6 +2598,7 @@ impl DirectLifecycleV3 {
         self,
         context: DirectTransitionContextV3,
         observed: DirectObservedBalancesV3,
+        positions: DirectSettlementPositionsV3,
     ) -> Result<DirectTransitionPlanV3, DirectLifecycleErrorV3> {
         self.validate()?;
         self.require_release(context)?;
@@ -2610,15 +2626,13 @@ impl DirectLifecycleV3 {
             consideration_price_units: consideration,
             terminal_slot: context.now,
         };
-        let mut post = self;
-        post.reservations[0] = post.reservations[0].consumed()?;
-        post.reservations[1] = post.reservations[1].consumed()?;
-        post.finish_terminal(
+        self.finish_terminal(
             receipt,
             DirectReservationTransitionV3::EntitledToConsumed,
             self.rewards.settle,
             observed,
             None,
+            Some(positions),
         )
     }
 
@@ -2687,6 +2701,7 @@ impl DirectLifecycleV3 {
             self.rewards.lapse,
             observed,
             Some(positions),
+            None,
         )
     }
 
@@ -2976,6 +2991,7 @@ impl DirectLifecycleV3 {
         keeper_reward: u64,
         observed: DirectObservedBalancesV3,
         release_positions: Option<DirectPositionSetV3>,
+        settlement_positions: Option<DirectSettlementPositionsV3>,
     ) -> Result<DirectTransitionPlanV3, DirectLifecycleErrorV3> {
         let mut post = self;
         post.observe_live_accounts(observed)?;
@@ -2989,6 +3005,9 @@ impl DirectLifecycleV3 {
         match reservation_transition {
             DirectReservationTransitionV3::ActiveToReleased
             | DirectReservationTransitionV3::EntitledToReleased => {
+                if settlement_positions.is_some() {
+                    return Err(DirectLifecycleErrorV3::MismatchedBinding);
+                }
                 let positions =
                     release_positions.ok_or(DirectLifecycleErrorV3::MismatchedBinding)?;
                 release_reservations(
@@ -3001,13 +3020,15 @@ impl DirectLifecycleV3 {
                 )?;
             }
             DirectReservationTransitionV3::EntitledToConsumed => {
-                if release_positions.is_some()
-                    || post.reservations[0].state != 3
-                    || post.reservations[1].state != 3
-                {
+                let positions =
+                    settlement_positions.ok_or(DirectLifecycleErrorV3::MismatchedBinding)?;
+                if release_positions.is_some() {
                     return Err(DirectLifecycleErrorV3::MismatchedBinding);
                 }
-                effects.released_reservations = post.reservations;
+                if post.reservations[0].state != 2 || post.reservations[1].state != 2 {
+                    return Err(DirectLifecycleErrorV3::MismatchedBinding);
+                }
+                settle_reservations(&post, positions, &mut effects)?;
             }
             DirectReservationTransitionV3::None
             | DirectReservationTransitionV3::ActiveToEntitled => {
@@ -3338,7 +3359,7 @@ fn release_reservations(
             outcome += 1;
         }
         working[position_index].validate()?;
-        effects.released_reservations[reservation_index] = reservation.released()?;
+        effects.terminal_reservations[reservation_index] = reservation.released()?;
         reservation_index += 1;
     }
     let mut position_index = 0usize;
@@ -3353,6 +3374,129 @@ fn release_reservations(
         position_index += 1;
     }
     effects.position_release_count = positions.count;
+    Ok(())
+}
+
+/// Apply the exact economic tail of the live same-page full-fill, zero-fee
+/// settlement kernel. The two Position inputs are in frozen page order; buy
+/// and sell orientation is derived from the page rather than caller supplied.
+fn settle_reservations(
+    state: &DirectLifecycleV3,
+    positions: DirectSettlementPositionsV3,
+    effects: &mut DirectLifecycleEffectsV3,
+) -> Result<(), DirectLifecycleErrorV3> {
+    positions.buyer.validate()?;
+    positions.seller.validate()?;
+    if state.reservation_state != DirectReservationStateV3::Entitled
+        || positions.buyer.market_id != state.reservation_domain.market_id
+        || positions.seller.market_id != state.reservation_domain.market_id
+        || positions.buyer.owner == positions.seller.owner
+        || positions.buyer.close_state != 0
+        || positions.seller.close_state != 0
+    {
+        return Err(DirectLifecycleErrorV3::MismatchedBinding);
+    }
+
+    let (buy, sell, buy_index, sell_index) = state.direct_orders()?;
+    let buyer_reservation = state.reservations[usize::from(buy_index)];
+    let seller_reservation = state.reservations[usize::from(sell_index)];
+    if positions.buyer.owner != buy.owner
+        || positions.seller.owner != sell.owner
+        || positions.buyer.generation != buyer_reservation.position_generation
+        || positions.seller.generation != seller_reservation.position_generation
+        || buyer_reservation.owner != buy.owner
+        || seller_reservation.owner != sell.owner
+        || buyer_reservation.order_id != buy.order_id
+        || seller_reservation.order_id != sell.order_id
+        || buyer_reservation.state != 2
+        || seller_reservation.state != 2
+        || buyer_reservation.max_fee_atoms != 0
+        || seller_reservation.max_fee_atoms != 0
+        || buy.minimum_fill != 0
+        || sell.minimum_fill != 0
+        || buy.flags != 0
+        || sell.flags != 0
+    {
+        return Err(DirectLifecycleErrorV3::MismatchedBinding);
+    }
+    let selected = state.retained[0].candidate;
+    state.bind_candidate(&selected)?;
+    let price = selected.prices[usize::from(selected.outcome)];
+    if selected.quantity == 0
+        || selected.quantity != buy.quantity
+        || selected.quantity != sell.quantity
+        || selected.fills != [selected.quantity; 2]
+        || price > buy.limit
+        || price < sell.limit
+    {
+        return Err(DirectLifecycleErrorV3::MismatchedBinding);
+    }
+    let price_units = u128::from(selected.quantity)
+        .checked_mul(u128::from(price))
+        .ok_or(DirectLifecycleErrorV3::ArithmeticOverflow)?;
+    let scale = u128::from(state.reservation_domain.price_scale);
+    if scale == 0 || price_units % scale != 0 {
+        return Err(DirectLifecycleErrorV3::MismatchedBinding);
+    }
+    let consideration_atoms = u64::try_from(price_units / scale)
+        .map_err(|_| DirectLifecycleErrorV3::ArithmeticOverflow)?;
+    if buyer_reservation.remaining_cash_atoms < consideration_atoms
+        || seller_reservation.remaining_internal[usize::from(selected.outcome)] != selected.quantity
+    {
+        return Err(DirectLifecycleErrorV3::MismatchedBinding);
+    }
+
+    let mut buyer_post = positions.buyer;
+    let mut seller_post = positions.seller;
+    buyer_post.cash_atoms = buyer_post
+        .cash_atoms
+        .checked_sub(consideration_atoms)
+        .ok_or(DirectLifecycleErrorV3::MismatchedBinding)?;
+    buyer_post.reserved_cash_atoms = buyer_post
+        .reserved_cash_atoms
+        .checked_sub(buyer_reservation.remaining_cash_atoms)
+        .ok_or(DirectLifecycleErrorV3::MismatchedBinding)?;
+    buyer_post.internal[usize::from(selected.outcome)] = buyer_post.internal
+        [usize::from(selected.outcome)]
+    .checked_add(selected.quantity)
+    .ok_or(DirectLifecycleErrorV3::ArithmeticOverflow)?;
+    seller_post.cash_atoms = seller_post
+        .cash_atoms
+        .checked_add(consideration_atoms)
+        .ok_or(DirectLifecycleErrorV3::ArithmeticOverflow)?;
+
+    let cash_before = positions
+        .buyer
+        .cash_atoms
+        .checked_add(positions.seller.cash_atoms)
+        .ok_or(DirectLifecycleErrorV3::ArithmeticOverflow)?;
+    let cash_after = buyer_post
+        .cash_atoms
+        .checked_add(seller_post.cash_atoms)
+        .ok_or(DirectLifecycleErrorV3::ArithmeticOverflow)?;
+    if cash_before != cash_after {
+        return Err(DirectLifecycleErrorV3::MismatchedBinding);
+    }
+    buyer_post.validate()?;
+    seller_post.validate()?;
+    effects.position_settlements = [
+        DirectPositionSettlementV3 {
+            before: positions.buyer,
+            after: buyer_post,
+        },
+        DirectPositionSettlementV3 {
+            before: positions.seller,
+            after: seller_post,
+        },
+    ];
+    let mut index = 0usize;
+    while index < 2 {
+        effects.terminal_reservations[index] = state.reservations[index].consumed()?;
+        index += 1;
+    }
+    effects.position_settlement_count = 2;
+    effects.settlement_consideration_atoms = consideration_atoms;
+    effects.buyer_reserved_release_atoms = buyer_reservation.remaining_cash_atoms;
     Ok(())
 }
 
@@ -3546,6 +3690,14 @@ mod tests {
         )
         .unwrap();
         position_set_two(first, second)
+    }
+
+    fn settlement_positions() -> DirectSettlementPositionsV3 {
+        let funded = funded_position_set();
+        DirectSettlementPositionsV3 {
+            buyer: funded.positions[0],
+            seller: funded.positions[1],
+        }
     }
 
     fn placement(
@@ -3910,9 +4062,9 @@ mod tests {
             one_abort.effects.position_releases[0].after,
             prefreeze_position(0)
         );
-        assert_eq!(one_abort.effects.released_reservations[0].state, 1);
+        assert_eq!(one_abort.effects.terminal_reservations[0].state, 1);
         assert_eq!(
-            one_abort.effects.released_reservations[0].release_generation,
+            one_abort.effects.terminal_reservations[0].release_generation,
             2
         );
         assert_eq!(
@@ -4870,15 +5022,17 @@ mod tests {
         let state = selected();
         let initial_budget = state.work_budget_initial_balance;
         assert_eq!(
-            state.settle(context(23), observed(&state, 0)),
+            state.settle(context(23), observed(&state, 0), settlement_positions()),
             Err(DirectLifecycleErrorV3::SettlementClosed)
         );
         assert_eq!(
-            state.settle(context(40), observed(&state, 0)),
+            state.settle(context(40), observed(&state, 0), settlement_positions()),
             Err(DirectLifecycleErrorV3::SettlementClosed)
         );
         let balances = observed(&state, 2);
-        let plan = state.settle(context(39), balances).unwrap();
+        let plan = state
+            .settle(context(39), balances, settlement_positions())
+            .unwrap();
         let receipt = plan.post.terminal_receipt;
         assert_eq!(receipt.reason, DirectTerminalReasonV3::Settled);
         assert_eq!(receipt.selected_slot, state.selected_slot);
@@ -4893,6 +5047,43 @@ mod tests {
             DirectReservationTransitionV3::EntitledToConsumed
         );
         assert_eq!(plan.effects.close_count, 7);
+        assert_eq!(plan.effects.position_settlement_count, 2);
+        let settlement = settlement_positions();
+        let buyer_leg = plan.effects.position_settlements[0];
+        let seller_leg = plan.effects.position_settlements[1];
+        assert_eq!(buyer_leg.before, settlement.buyer);
+        assert_eq!(seller_leg.before, settlement.seller);
+        assert_eq!(
+            buyer_leg.after.cash_atoms,
+            buyer_leg.before.cash_atoms - plan.effects.settlement_consideration_atoms
+        );
+        assert_eq!(
+            seller_leg.after.cash_atoms,
+            seller_leg.before.cash_atoms + plan.effects.settlement_consideration_atoms
+        );
+        assert_eq!(
+            buyer_leg.after.reserved_cash_atoms,
+            buyer_leg.before.reserved_cash_atoms - plan.effects.buyer_reserved_release_atoms
+        );
+        assert_eq!(
+            buyer_leg.after.internal[usize::from(receipt.outcome)],
+            buyer_leg.before.internal[usize::from(receipt.outcome)] + receipt.quantity
+        );
+        assert_eq!(seller_leg.after.internal, seller_leg.before.internal);
+        assert_eq!(plan.effects.terminal_reservations[0].state, 3);
+        assert_eq!(plan.effects.terminal_reservations[1].state, 3);
+        assert_eq!(
+            plan.effects.terminal_reservations[0].remaining_cash_atoms,
+            0
+        );
+        assert_eq!(
+            plan.effects.terminal_reservations[1].remaining_internal,
+            [0; MAX_OUTCOMES]
+        );
+        assert_eq!(
+            buyer_leg.before.cash_atoms + seller_leg.before.cash_atoms,
+            buyer_leg.after.cash_atoms + seller_leg.after.cash_atoms
+        );
         assert_eq!(plan.effects.neutral_lamport_sink, id(81));
         assert_eq!(plan.effects.neutral_surplus_total(), Ok(25));
         assert_eq!(
@@ -4919,12 +5110,66 @@ mod tests {
     }
 
     #[test]
+    fn settlement_position_substitution_and_arithmetic_refuse_atomically() {
+        let state = selected();
+        let original = settlement_positions();
+        let effects = DirectLifecycleEffectsV3::NONE;
+
+        let mut swapped = DirectSettlementPositionsV3 {
+            buyer: original.seller,
+            seller: original.buyer,
+        };
+        assert_eq!(
+            settle_reservations(&state, swapped, &mut effects.clone()),
+            Err(DirectLifecycleErrorV3::MismatchedBinding)
+        );
+        swapped = original;
+        swapped.seller = swapped.buyer;
+        assert_eq!(
+            settle_reservations(&state, swapped, &mut effects.clone()),
+            Err(DirectLifecycleErrorV3::MismatchedBinding)
+        );
+        let mut wrong = original;
+        wrong.buyer.market_id = id(99);
+        assert_eq!(
+            settle_reservations(&state, wrong, &mut effects.clone()),
+            Err(DirectLifecycleErrorV3::MismatchedBinding)
+        );
+        wrong = original;
+        wrong.buyer.generation += 1;
+        assert_eq!(
+            settle_reservations(&state, wrong, &mut effects.clone()),
+            Err(DirectLifecycleErrorV3::MismatchedBinding)
+        );
+        wrong = original;
+        wrong.buyer.reserved_cash_atoms = 0;
+        assert_eq!(
+            settle_reservations(&state, wrong, &mut effects.clone()),
+            Err(DirectLifecycleErrorV3::MismatchedBinding)
+        );
+        wrong = original;
+        wrong.buyer.internal[0] = u64::MAX;
+        assert_eq!(
+            settle_reservations(&state, wrong, &mut effects.clone()),
+            Err(DirectLifecycleErrorV3::ArithmeticOverflow)
+        );
+        wrong = original;
+        wrong.seller.cash_atoms = u64::MAX;
+        assert_eq!(
+            settle_reservations(&state, wrong, &mut effects.clone()),
+            Err(DirectLifecycleErrorV3::ArithmeticOverflow)
+        );
+        assert_eq!(original, settlement_positions());
+        assert_eq!(effects, DirectLifecycleEffectsV3::NONE);
+    }
+
+    #[test]
     fn close_balance_shortfall_refuses_without_state() {
         let state = selected();
         let mut balances = observed(&state, 0);
         balances.candidates[0] = state.retained[0].account.rent.lamports - 1;
         assert_eq!(
-            state.settle(context(39), balances),
+            state.settle(context(39), balances, settlement_positions()),
             Err(DirectLifecycleErrorV3::LivenessRefused)
         );
         assert_eq!(state.validate(), Ok(()));
@@ -4978,9 +5223,9 @@ mod tests {
             aborted.effects.position_releases[0].after,
             prefreeze_position(0)
         );
-        assert_eq!(aborted.effects.released_reservations[0].state, 1);
+        assert_eq!(aborted.effects.terminal_reservations[0].state, 1);
         assert_eq!(
-            aborted.effects.released_reservations[0].release_generation,
+            aborted.effects.terminal_reservations[0].release_generation,
             2
         );
         assert_eq!(aborted.effects.payer_principal_total(), Ok(600));
