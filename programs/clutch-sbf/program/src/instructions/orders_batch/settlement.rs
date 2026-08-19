@@ -1,4 +1,4 @@
-//! Fail-closed settlement preflight and checkpoint model.
+//! Fail-closed settlement preflight and narrow coupled consumption seam.
 //!
 //! This module deliberately stops before `relation_v1_stream`.  It closes the
 //! joins which can be checked without inventing an on-chain policy preimage,
@@ -7,15 +7,32 @@
 //! therefore means only that one submitted candidate feed, one checkpoint
 //! header, and the complete frozen page set are mutually bound.  It is not a
 //! candidate-verification or settlement verdict.
+//!
+//! After an external lifecycle has selected that candidate and frozen an exact
+//! receipt, [`prepare_direct_full_slice`] admits one intentionally small live
+//! subset: a zero-fee, exact-divisibility, same-page, full-fill direct pair of
+//! single-Egg reservations.  This does not create the missing selection or
+//! entitlement authority; it makes their eventual output consumable without
+//! making an order page authority over assets.
 
 use clutch_solana_layout::{
+    canonical_order_id,
     clearing::{
-        verify_candidate_feed, verify_clear_work, CandidateFeedHeader, ClearWorkHeader,
-        CLEAR_WORK_STATUS_COMPLETE,
+        fill_at, slice_at, verify_candidate_feed, verify_clear_work, CandidateFeedHeader,
+        ClearWorkHeader, LegRef, CLEAR_WORK_STATUS_COMPLETE,
     },
-    stream, CandidateRecord, CodecError, EpochAccount, Hash32, CANDIDATE_STATUS_SUBMITTED,
-    EPOCH_PHASE_FROZEN,
+    reservation::{
+        ReservationAccount, ReservationPlan, RESERVATION_STATE_ACTIVE, RESERVATION_STATE_CONSUMED,
+    },
+    stream, CandidateRecord, CodecError, EpochAccount, Hash32, OrderSlot, PositionAccount,
+    SettlementReceiptAccount, CANDIDATE_STATUS_SELECTED, CANDIDATE_STATUS_SUBMITTED,
+    EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN, MAX_ORDERS_PER_PAGE, MAX_OUTCOMES,
+    RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED, RECEIPT_FLAG_SLICE_EXHAUSTED,
+    RECEIPT_LEG_DIRECT,
 };
+
+use crate::accounts::{require, Outcome};
+use crate::error::{ClutchError, Refusal};
 
 /// The facts discharged by the byte-level preflight.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -171,40 +188,418 @@ fn bind_checkpoint(
     Ok(())
 }
 
+/* ------------------------------------------------------------------------ */
+/* Narrow coupled consumption seam                                           */
+/* ------------------------------------------------------------------------ */
+
+/// The exact post-state scalars for the smallest honest settlement slice.
+///
+/// This deliberately represents only a full, direct, one-to-one fill between
+/// two single-Egg orders.  No field can describe a partial slice, portfolio,
+/// virtual leg, fee, or rounded consideration, so those cases cannot drift
+/// into the implementation by an unchecked branch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct DirectFullSlicePlan {
+    /// Candidate-feed slice consumed by this transition.
+    pub slice_index: u16,
+    /// Shared Egg outcome.
+    pub outcome: u8,
+    /// Exact Egg quantity transferred from the sell reservation to the buyer.
+    pub quantity: u64,
+    /// Exact collateral atoms transferred from buyer cash to seller cash.
+    pub consideration_atoms: u64,
+    /// Buy reservation envelope released from the Position's reserved subset.
+    pub buyer_reserved_release: u64,
+}
+
+/// Immutable inputs to one direct full-slice settlement.
+///
+/// `buy_order` and `sell_order` must be read from the frozen page selected by
+/// the candidate slice.  The account-plane wrapper proves that provenance;
+/// this pure seam independently proves every economic and identity join.
+pub(super) struct DirectFullSliceInput<'a> {
+    pub epoch: &'a EpochAccount,
+    pub candidate: &'a CandidateRecord,
+    pub candidate_feed: &'a [u8],
+    pub page_index: u16,
+    pub slice_index: u16,
+    pub buy_order: &'a OrderSlot,
+    pub sell_order: &'a OrderSlot,
+    pub buyer_position: &'a PositionAccount,
+    pub seller_position: &'a PositionAccount,
+    pub buyer_reservation: &'a ReservationAccount,
+    pub seller_reservation: &'a ReservationAccount,
+    pub receipt: &'a SettlementReceiptAccount,
+}
+
+/// Verify one already-selected, already-entitled direct full slice.
+///
+/// The authority chain is candidate feed -> exact pairing slice -> two frozen
+/// order definitions -> two exact ACTIVE reservations -> one pre-frozen
+/// receipt.  The page is evidence for the order definitions, never value
+/// authority.  This function writes nothing and is therefore the atomic
+/// precondition for [`apply_direct_full_slice`].
+#[inline(never)]
+pub(super) fn prepare_direct_full_slice(
+    input: &DirectFullSliceInput<'_>,
+) -> Outcome<DirectFullSlicePlan> {
+    input.epoch.validate()?;
+    input.candidate.validate()?;
+    input.candidate.binds_epoch(input.epoch)?;
+    require(
+        input.epoch.phase == EPOCH_PHASE_CLEARED
+            && input.candidate.status == CANDIDATE_STATUS_SELECTED,
+        ClutchError::NotActive,
+    )?;
+
+    let feed = verify_candidate_feed(input.candidate_feed)?;
+    bind_feed(&feed, input.candidate, input.epoch)?;
+    let slice = slice_at(input.candidate_feed, &feed, input.slice_index)?;
+    let (buy_index, sell_index) = match (slice.buy_ref, slice.sell_ref) {
+        (LegRef::Order(buy), LegRef::Order(sell)) => (buy, sell),
+        _ => return Err(CodecError::InvalidEnum.into()),
+    };
+    require(buy_index != sell_index, ClutchError::MismatchedState)?;
+
+    // V1 consumption is same-page.  Order ids are positional, so binding the
+    // feed indices to canonical ids makes an index/order substitution a red
+    // check rather than an assumption.
+    let buy_page = usize::from(buy_index) / MAX_ORDERS_PER_PAGE;
+    let sell_page = usize::from(sell_index) / MAX_ORDERS_PER_PAGE;
+    require(
+        buy_page == usize::from(input.page_index) && sell_page == usize::from(input.page_index),
+        ClutchError::MismatchedState,
+    )?;
+
+    let (buy, sell) = match (input.buy_order, input.sell_order) {
+        (OrderSlot::Single(buy), OrderSlot::Single(sell)) => (buy, sell),
+        _ => return Err(CodecError::InvalidEnum.into()),
+    };
+    buy.validate()?;
+    sell.validate()?;
+    require(
+        buy.side == 0
+            && sell.side == 1
+            && buy.owner != sell.owner
+            && buy.outcome == sell.outcome
+            && buy.outcome == slice.outcome
+            && buy.order_id == canonical_order_id(u64::from(buy_index) + 1)
+            && sell.order_id == canonical_order_id(u64::from(sell_index) + 1),
+        ClutchError::MismatchedState,
+    )?;
+
+    // This seam is intentionally full-fill and one-to-one.  A candidate that
+    // split either order across receipts needs cumulative entitlement state;
+    // accepting it here would double-spend an ACTIVE reservation.
+    let buy_fill = fill_at(input.candidate_feed, &feed, buy_index)?;
+    let sell_fill = fill_at(input.candidate_feed, &feed, sell_index)?;
+    require(
+        slice.quantity != 0
+            && slice.quantity == buy_fill
+            && slice.quantity == sell_fill
+            && slice.quantity == buy.quantity
+            && slice.quantity == sell.quantity,
+        ClutchError::MismatchedState,
+    )?;
+
+    let price = input.candidate.prices[usize::from(slice.outcome)];
+    require(
+        price <= buy.limit && price >= sell.limit,
+        ClutchError::MismatchedState,
+    )?;
+    let consideration_price_units = u128::from(slice.quantity)
+        .checked_mul(u128::from(price))
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(input.epoch.price_scale != 0, ClutchError::MismatchedState)?;
+    let scale = u128::from(input.epoch.price_scale);
+    require(
+        consideration_price_units % scale == 0,
+        ClutchError::MismatchedState,
+    )?;
+    let consideration_atoms = u64::try_from(consideration_price_units / scale)
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+
+    validate_position_pair(input, buy, sell)?;
+    validate_reservation(
+        input.buyer_reservation,
+        input.epoch,
+        input.page_index,
+        input.buy_order,
+        input.buyer_position,
+    )?;
+    validate_reservation(
+        input.seller_reservation,
+        input.epoch,
+        input.page_index,
+        input.sell_order,
+        input.seller_position,
+    )?;
+    // Fees need a frozen policy preimage and a named recipient.  Until that
+    // exists, only a signed zero-fee envelope can cross this seam.
+    require(
+        input.buyer_reservation.max_fee_atoms == 0 && input.seller_reservation.max_fee_atoms == 0,
+        ClutchError::AuthorizationUnavailable,
+    )?;
+
+    let buy_plan = ReservationPlan::for_order(
+        input.buy_order,
+        input.epoch.outcome_count,
+        input.epoch.price_scale,
+        0,
+    )?;
+    let sell_plan = ReservationPlan::for_order(
+        input.sell_order,
+        input.epoch.outcome_count,
+        input.epoch.price_scale,
+        0,
+    )?;
+    require(
+        buy_plan.cash_atoms == input.buyer_reservation.initial_cash_atoms
+            && buy_plan.internal == input.buyer_reservation.initial_internal
+            && buy_plan.order_kind == input.buyer_reservation.order_kind
+            && buy_plan.side == input.buyer_reservation.side
+            && sell_plan.cash_atoms == input.seller_reservation.initial_cash_atoms
+            && sell_plan.internal == input.seller_reservation.initial_internal
+            && sell_plan.order_kind == input.seller_reservation.order_kind
+            && sell_plan.side == input.seller_reservation.side
+            && input.buyer_reservation.remaining_cash_atoms >= consideration_atoms
+            && input.seller_reservation.remaining_internal[usize::from(slice.outcome)]
+                == slice.quantity,
+        ClutchError::MismatchedState,
+    )?;
+
+    input.receipt.validate()?;
+    input.receipt.binds_candidate(input.candidate)?;
+    let expected_sequence = u64::from(input.slice_index)
+        .checked_add(1)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        input.receipt.leg_kind == RECEIPT_LEG_DIRECT
+            && input.receipt.buy_order_id == buy.order_id
+            && input.receipt.sell_order_id == sell.order_id
+            && input.receipt.slice_index == input.slice_index
+            && input.receipt.outcome == slice.outcome
+            && input.receipt.quantity == slice.quantity
+            && input.receipt.price == price
+            && input.receipt.consideration_price_units == consideration_price_units
+            && input.receipt.sequence == expected_sequence
+            && input.receipt.settled_quantity == 0
+            && input.receipt.consumed_flags == 0,
+        ClutchError::MismatchedState,
+    )?;
+
+    // Decide every post-state arithmetic operation before any caller writes.
+    input
+        .buyer_position
+        .cash_atoms
+        .checked_sub(consideration_atoms)
+        .ok_or(Refusal::Adapter(ClutchError::AggregateClosureMismatch))?;
+    input
+        .buyer_position
+        .reserved_cash_atoms
+        .checked_sub(input.buyer_reservation.remaining_cash_atoms)
+        .ok_or(Refusal::Adapter(ClutchError::AggregateClosureMismatch))?;
+    input.buyer_position.internal[usize::from(slice.outcome)]
+        .checked_add(slice.quantity)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    input
+        .seller_position
+        .cash_atoms
+        .checked_add(consideration_atoms)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+
+    Ok(DirectFullSlicePlan {
+        slice_index: input.slice_index,
+        outcome: slice.outcome,
+        quantity: slice.quantity,
+        consideration_atoms,
+        buyer_reserved_release: input.buyer_reservation.remaining_cash_atoms,
+    })
+}
+
+#[inline(never)]
+fn validate_position_pair(
+    input: &DirectFullSliceInput<'_>,
+    buy: &clutch_solana_layout::OrderRecord,
+    sell: &clutch_solana_layout::OrderRecord,
+) -> Outcome<()> {
+    input.buyer_position.validate()?;
+    input.seller_position.validate()?;
+    require(
+        input.buyer_position.close_state == 0
+            && input.seller_position.close_state == 0
+            && input.buyer_position.market == input.epoch.market
+            && input.seller_position.market == input.epoch.market
+            && input.buyer_position.owner == buy.owner
+            && input.seller_position.owner == sell.owner,
+        ClutchError::MismatchedState,
+    )
+}
+
+#[inline(never)]
+fn validate_reservation(
+    reservation: &ReservationAccount,
+    epoch: &EpochAccount,
+    page_index: u16,
+    order: &OrderSlot,
+    position: &PositionAccount,
+) -> Outcome<()> {
+    reservation.validate()?;
+    require(
+        reservation.state == RESERVATION_STATE_ACTIVE
+            && reservation.market == epoch.market
+            && reservation.epoch == epoch.epoch
+            && reservation.owner == order.owner()
+            && reservation.owner == position.owner
+            && reservation.order_id == order.order_id()
+            && reservation.position_generation == position.generation
+            && reservation.order_generation == order.generation()
+            && reservation.page_index == page_index
+            && reservation.terms == epoch.terms
+            && reservation.price_grid == epoch.price_grid
+            && reservation.policy == epoch.policy
+            && reservation.outcome_count == epoch.outcome_count,
+        ClutchError::MismatchedState,
+    )
+}
+
+/// Commit an already-verified direct full slice with no remaining fallible
+/// operation.
+///
+/// Callers must obtain `plan` from [`prepare_direct_full_slice`] over these
+/// exact prestates.  The account-plane wrapper does that and writes all five
+/// accounts in one Solana instruction; a runtime refusal therefore rolls the
+/// whole transaction back.
+pub(super) fn apply_direct_full_slice(
+    buyer_position: &mut PositionAccount,
+    seller_position: &mut PositionAccount,
+    buyer_reservation: &mut ReservationAccount,
+    seller_reservation: &mut ReservationAccount,
+    receipt: &mut SettlementReceiptAccount,
+    plan: DirectFullSlicePlan,
+) {
+    let outcome = usize::from(plan.outcome);
+    buyer_position.cash_atoms -= plan.consideration_atoms;
+    buyer_position.reserved_cash_atoms -= plan.buyer_reserved_release;
+    buyer_position.internal[outcome] += plan.quantity;
+    seller_position.cash_atoms += plan.consideration_atoms;
+
+    for reservation in [buyer_reservation, seller_reservation] {
+        reservation.remaining_cash_atoms = 0;
+        reservation.remaining_internal = [0; MAX_OUTCOMES];
+        reservation.release_generation = 0;
+        reservation.state = RESERVATION_STATE_CONSUMED;
+    }
+    receipt.settled_quantity = receipt.quantity;
+    receipt.consumed_flags =
+        RECEIPT_FLAG_BUY_CONSUMED | RECEIPT_FLAG_SELL_CONSUMED | RECEIPT_FLAG_SLICE_EXHAUSTED;
+}
+
+/// Read the two order definitions named by one direct slice from one frozen
+/// page.
+///
+/// V1 deliberately refuses tombstones and cross-page pairs.  The first rule
+/// keeps relation indices identical to positional page slots; the second keeps
+/// the account list fixed.  The page is checked against the selected epoch but
+/// remains evidence only: the candidate slice and reservations authorize the
+/// transfer.
+#[inline(never)]
+pub(super) fn load_same_page_direct_orders(
+    page_bytes: &[u8],
+    feed_bytes: &[u8],
+    epoch: &EpochAccount,
+    page_index: u16,
+    slice_index: u16,
+) -> Outcome<(OrderSlot, OrderSlot)> {
+    let header = stream::verify_page(page_bytes)?;
+    require(
+        header.frozen == 1
+            && header.tombstone_count == 0
+            && header.market == epoch.market
+            && header.epoch == epoch.epoch
+            && header.order_set == epoch.order_set
+            && header.set_order_count == epoch.order_count
+            && header.page_count == epoch.page_count
+            && header.page_index == page_index,
+        ClutchError::MismatchedState,
+    )?;
+    let feed = CandidateFeedHeader::decode(feed_bytes)?;
+    let slice = slice_at(feed_bytes, &feed, slice_index)?;
+    let (buy_index, sell_index) = match (slice.buy_ref, slice.sell_ref) {
+        (LegRef::Order(buy), LegRef::Order(sell)) => (buy, sell),
+        _ => return Err(CodecError::InvalidEnum.into()),
+    };
+    let base = usize::from(page_index)
+        .checked_mul(MAX_ORDERS_PER_PAGE)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let buy_global = usize::from(buy_index);
+    let sell_global = usize::from(sell_index);
+    require(
+        buy_global >= base
+            && buy_global < base + MAX_ORDERS_PER_PAGE
+            && sell_global >= base
+            && sell_global < base + MAX_ORDERS_PER_PAGE,
+        ClutchError::MismatchedState,
+    )?;
+    let buy_local = buy_global - base;
+    let sell_local = sell_global - base;
+    let mut buy = OrderSlot::Empty;
+    let mut sell = OrderSlot::Empty;
+    let mut cursor = stream::OrderSlotCursor::new(page_bytes)?;
+    let mut index = 0usize;
+    while let Some(slot) = cursor.next_slot() {
+        let slot = slot?;
+        if index == buy_local {
+            buy = slot;
+        }
+        if index == sell_local {
+            sell = slot;
+        }
+        index += 1;
+    }
+    require(
+        buy.is_live() && sell.is_live(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok((buy, sell))
+}
+
 /// Ranked prerequisites which keep the on-chain relation transition closed.
 ///
 /// Order is dependency order, not severity.  A caller must not skip an earlier
 /// item by fabricating the fact needed by a later one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // Historical full-lifecycle STOP ledger, exercised by unit tests.
 pub(super) enum SettlementBlocker {
-    /// Orders are bookkeeping records; no position/hoard reservation backs them.
-    FundedReservation,
-    /// `EpochAccount` has no exact live-order cardinality after tombstones.
-    TombstoneCardinality,
-    /// The epoch persists a policy identity but no `FrozenPolicyV1` preimage.
-    FrozenPolicyPreimage,
-    /// Four relation-domain `u64` identities have no injective Hash32 mapping.
-    LosslessDomainIdentity,
-    /// `ClearWorkV1` is opaque `repr(Rust)` state, not a stable byte codec.
-    PortableCheckpointBody,
-    /// Neither clearing account has an authenticated init/realloc lifecycle.
-    CheckpointInitialization,
-    /// Candidate-set closure/selection is not an on-chain transition.
+    /// Candidate-set closure/selection is not yet an on-chain transition.
     CandidateSelection,
-    /// Receipts/pot are not frozen as pre-resolution settlement entitlements.
+    /// CandidateFeed/ClearWork have no permissionless authenticated lifecycle.
+    CandidateFeedInitialization,
+    /// Receipts/pot are not created as complete pre-resolution entitlements.
     EntitlementFreeze,
+    /// The frozen book lacks a complete reservation-set commitment.
+    ReservationSetClosure,
+    /// Partial/multi-slice orders need cumulative per-order consumption state.
+    PartialFillLedger,
+    /// Nonzero fees need a policy preimage and exact recipient.
+    FrozenPolicyFees,
+    /// Virtual split/merge legs need a funded FinalPot transition.
+    VirtualPot,
+    /// No terminal sweep proves every reservation/receipt/pot is empty once.
+    TerminalClosure,
 }
 
 /// The exact dependency order of the remaining settlement work.
+#[allow(dead_code)] // Historical full-lifecycle STOP ledger, exercised by unit tests.
 pub(super) const SETTLEMENT_BLOCKERS: [SettlementBlocker; 8] = [
-    SettlementBlocker::FundedReservation,
-    SettlementBlocker::TombstoneCardinality,
-    SettlementBlocker::FrozenPolicyPreimage,
-    SettlementBlocker::LosslessDomainIdentity,
-    SettlementBlocker::PortableCheckpointBody,
-    SettlementBlocker::CheckpointInitialization,
     SettlementBlocker::CandidateSelection,
+    SettlementBlocker::CandidateFeedInitialization,
     SettlementBlocker::EntitlementFreeze,
+    SettlementBlocker::ReservationSetClosure,
+    SettlementBlocker::PartialFillLedger,
+    SettlementBlocker::FrozenPolicyFees,
+    SettlementBlocker::VirtualPot,
+    SettlementBlocker::TerminalClosure,
 ];
 
 /// A tiny executable state machine for the part which is safe today.
@@ -218,6 +613,7 @@ pub(super) struct FailClosedCheckpoint {
     bound: Option<PreflightFacts>,
 }
 
+#[allow(dead_code)] // The narrow live seam starts after this preflight checkpoint.
 impl FailClosedCheckpoint {
     pub const NEW: Self = Self { bound: None };
 
@@ -243,23 +639,19 @@ impl FailClosedCheckpoint {
     }
 }
 
-/// The production `SettlePage` terminus until the ranked prerequisites land.
-pub(super) fn refuse_unintegrated() -> crate::accounts::Outcome<()> {
-    let mut checkpoint = FailClosedCheckpoint::NEW;
-    let before = checkpoint;
-    let _blocker = checkpoint.advance_relation();
-    debug_assert_eq!(checkpoint, before);
-    Err(crate::error::ClutchError::NotYetImplemented.into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use clutch_solana_layout::{
         account_len, canonical_epoch_id, canonical_order_id,
-        clearing::{bind_order_set, init_candidate_feed, init_clear_work, CandidateFeedHeader},
+        clearing::{
+            bind_order_set, init_candidate_feed, init_clear_work, write_fill, write_slice_at,
+            CandidateFeedHeader, PairingSlice, CANDIDATE_FEED_FLAG_SLICES_DECLARED,
+        },
+        reservation::ReservationPlan,
         stream::{append_slot, frozen_set_commitment, init_page, seal_page},
-        CandidateRecord, OrderRecord, OrderSlot, CANDIDATE_STATUS_SELECTED, MAX_OUTCOMES,
+        CandidateRecord, OrderRecord, OrderSlot, PositionAccount, SettlementReceiptAccount,
+        CANDIDATE_STATUS_SELECTED, EPOCH_PHASE_CLEARED, MAX_OUTCOMES, RECEIPT_LEG_DIRECT,
         RELATION_VERSION,
     };
 
@@ -550,7 +942,7 @@ mod tests {
 
         assert_eq!(
             checkpoint.advance_relation(),
-            Err(SettlementBlocker::FundedReservation)
+            Err(SettlementBlocker::CandidateSelection)
         );
         assert_eq!(checkpoint, after_first, "blocked advance writes nothing");
     }
@@ -558,11 +950,341 @@ mod tests {
     #[test]
     fn ranked_blockers_keep_relation_and_entitlement_phases_unreachable() {
         assert_eq!(SETTLEMENT_BLOCKERS.len(), 8);
-        assert_eq!(SETTLEMENT_BLOCKERS[0], SettlementBlocker::FundedReservation);
+        assert_eq!(
+            SETTLEMENT_BLOCKERS[0],
+            SettlementBlocker::CandidateSelection
+        );
         assert_eq!(
             SETTLEMENT_BLOCKERS[1],
-            SettlementBlocker::TombstoneCardinality
+            SettlementBlocker::CandidateFeedInitialization
         );
-        assert_eq!(SETTLEMENT_BLOCKERS[7], SettlementBlocker::EntitlementFreeze);
+        assert_eq!(SETTLEMENT_BLOCKERS[7], SettlementBlocker::TerminalClosure);
+    }
+
+    struct DirectFixture {
+        epoch: EpochAccount,
+        candidate: CandidateRecord,
+        feed: [u8; account_len::CANDIDATE_FEED],
+        buy: OrderSlot,
+        sell: OrderSlot,
+        buyer_position: PositionAccount,
+        seller_position: PositionAccount,
+        buyer_reservation: ReservationAccount,
+        seller_reservation: ReservationAccount,
+        receipt: SettlementReceiptAccount,
+    }
+
+    impl DirectFixture {
+        fn input(&self) -> DirectFullSliceInput<'_> {
+            DirectFullSliceInput {
+                epoch: &self.epoch,
+                candidate: &self.candidate,
+                candidate_feed: &self.feed,
+                page_index: 0,
+                slice_index: 0,
+                buy_order: &self.buy,
+                sell_order: &self.sell,
+                buyer_position: &self.buyer_position,
+                seller_position: &self.seller_position,
+                buyer_reservation: &self.buyer_reservation,
+                seller_reservation: &self.seller_reservation,
+                receipt: &self.receipt,
+            }
+        }
+    }
+
+    fn direct_fixture() -> DirectFixture {
+        let market = h(0x31);
+        let epoch_id = canonical_epoch_id(market, 7);
+        let buy_owner = h(0x41);
+        let sell_owner = h(0x42);
+        let terms = h(0x51);
+        let grid = h(0x52);
+        let policy = h(0x53);
+        let order_set = h(0x54);
+        let buy = OrderSlot::Single(OrderRecord {
+            owner: buy_owner,
+            order_id: canonical_order_id(1),
+            outcome: 0,
+            side: 0,
+            quantity: 4,
+            limit: 5_000,
+            minimum_fill: 0,
+            flags: 0,
+            generation: 1,
+            expiry_epoch: 7,
+        });
+        let sell = OrderSlot::Single(OrderRecord {
+            owner: sell_owner,
+            order_id: canonical_order_id(2),
+            outcome: 0,
+            side: 1,
+            quantity: 4,
+            limit: 5_000,
+            minimum_fill: 0,
+            flags: 0,
+            generation: 1,
+            expiry_epoch: 7,
+        });
+        let epoch = EpochAccount {
+            epoch: epoch_id,
+            market,
+            book: h(0x55),
+            terms,
+            price_grid: grid,
+            policy,
+            order_set,
+            first_order_id: canonical_order_id(1),
+            last_order_id: canonical_order_id(2),
+            epoch_index: 7,
+            relation_version: RELATION_VERSION,
+            price_scale: 10_000,
+            remainder_seed: 9,
+            owner_count: 2,
+            page_count: 1,
+            order_count: 2,
+            outcome_count: 2,
+            phase: EPOCH_PHASE_CLEARED,
+            stored_bump: 3,
+            flags: 0,
+        };
+        let mut prices = [0; MAX_OUTCOMES];
+        prices[0] = 5_000;
+        prices[1] = 5_000;
+        let mut candidate = CandidateRecord {
+            candidate: Hash32::ZERO,
+            epoch: epoch_id,
+            market,
+            prices,
+            virtual_split: 0,
+            virtual_merge: 0,
+            honored_aon_mask: 0,
+            weighted_direct_volume: 8,
+            limit_surplus_price_units: 0,
+            churn: 0,
+            submitted_slot: 80,
+            distinct_owners: 2,
+            order_len: 2,
+            outcome_count: 2,
+            status: CANDIDATE_STATUS_SELECTED,
+            stored_bump: 4,
+            flags: 0,
+        };
+        candidate.candidate = candidate.recomputed_candidate_digest().unwrap();
+        let header = CandidateFeedHeader {
+            candidate: candidate.candidate,
+            epoch: epoch_id,
+            market,
+            order_set,
+            prices,
+            virtual_split: 0,
+            virtual_merge: 0,
+            honored_aon_mask: 0,
+            weighted_direct_volume: 8,
+            limit_surplus_price_units: 0,
+            claimed_digest: 11,
+            churn: 0,
+            declared_slices: 1,
+            distinct_owners: 2,
+            order_len: 2,
+            outcome_count: 2,
+            stored_bump: 5,
+            flags: CANDIDATE_FEED_FLAG_SLICES_DECLARED,
+        };
+        let mut feed = [0; account_len::CANDIDATE_FEED];
+        init_candidate_feed(&mut feed, &header).unwrap();
+        write_fill(&mut feed, 0, 4).unwrap();
+        write_fill(&mut feed, 1, 4).unwrap();
+        write_slice_at(
+            &mut feed,
+            0,
+            &PairingSlice {
+                buy_ref: LegRef::Order(0),
+                sell_ref: LegRef::Order(1),
+                outcome: 0,
+                quantity: 4,
+            },
+        )
+        .unwrap();
+
+        let buyer_position = PositionAccount {
+            market,
+            owner: buy_owner,
+            generation: 0,
+            internal: [0; MAX_OUTCOMES],
+            cash_atoms: 10,
+            reserved_cash_atoms: 2,
+            stored_bump: 6,
+            close_state: 0,
+        };
+        let seller_position = PositionAccount {
+            market,
+            owner: sell_owner,
+            generation: 0,
+            internal: [0; MAX_OUTCOMES],
+            cash_atoms: 0,
+            reserved_cash_atoms: 0,
+            stored_bump: 7,
+            close_state: 0,
+        };
+        let buy_plan = ReservationPlan::for_order(&buy, 2, 10_000, 0).unwrap();
+        let sell_plan = ReservationPlan::for_order(&sell, 2, 10_000, 0).unwrap();
+        let buyer_reservation = ReservationAccount::active(
+            market,
+            epoch_id,
+            buy_owner,
+            buy.order_id(),
+            grid,
+            terms,
+            policy,
+            0,
+            buy.generation(),
+            0,
+            8,
+            buy_plan,
+        )
+        .unwrap();
+        let seller_reservation = ReservationAccount::active(
+            market,
+            epoch_id,
+            sell_owner,
+            sell.order_id(),
+            grid,
+            terms,
+            policy,
+            0,
+            sell.generation(),
+            0,
+            9,
+            sell_plan,
+        )
+        .unwrap();
+        let receipt = SettlementReceiptAccount {
+            epoch: epoch_id,
+            market,
+            candidate: candidate.candidate,
+            buy_order_id: buy.order_id(),
+            sell_order_id: sell.order_id(),
+            consideration_price_units: 20_000,
+            quantity: 4,
+            settled_quantity: 0,
+            price: 5_000,
+            sequence: 1,
+            slice_index: 0,
+            outcome: 0,
+            leg_kind: RECEIPT_LEG_DIRECT,
+            consumed_flags: 0,
+            stored_bump: 10,
+            flags: 0,
+        };
+        DirectFixture {
+            epoch,
+            candidate,
+            feed,
+            buy,
+            sell,
+            buyer_position,
+            seller_position,
+            buyer_reservation,
+            seller_reservation,
+            receipt,
+        }
+    }
+
+    #[test]
+    fn direct_full_slice_couples_both_assets_and_releases_residual_once() {
+        let mut f = direct_fixture();
+        let plan = prepare_direct_full_slice(&f.input()).unwrap();
+        assert_eq!(plan.consideration_atoms, 2);
+        let cash_before = f.buyer_position.cash_atoms + f.seller_position.cash_atoms;
+        let claims_before = f.buyer_position.internal[0]
+            + f.seller_position.internal[0]
+            + f.seller_reservation.remaining_internal[0];
+        apply_direct_full_slice(
+            &mut f.buyer_position,
+            &mut f.seller_position,
+            &mut f.buyer_reservation,
+            &mut f.seller_reservation,
+            &mut f.receipt,
+            plan,
+        );
+        assert_eq!(f.buyer_position.cash_atoms, 8);
+        assert_eq!(f.buyer_position.reserved_cash_atoms, 0);
+        assert_eq!(f.buyer_position.internal[0], 4);
+        assert_eq!(f.seller_position.cash_atoms, 2);
+        assert!(f.buyer_reservation.remaining_is_zero());
+        assert!(f.seller_reservation.remaining_is_zero());
+        assert_eq!(f.buyer_reservation.state, RESERVATION_STATE_CONSUMED);
+        assert_eq!(f.seller_reservation.state, RESERVATION_STATE_CONSUMED);
+        assert_eq!(f.receipt.settled_quantity, 4);
+        assert_eq!(
+            f.receipt.consumed_flags,
+            RECEIPT_FLAG_BUY_CONSUMED | RECEIPT_FLAG_SELL_CONSUMED | RECEIPT_FLAG_SLICE_EXHAUSTED
+        );
+        assert_eq!(
+            f.buyer_position.cash_atoms + f.seller_position.cash_atoms,
+            cash_before
+        );
+        assert_eq!(
+            f.buyer_position.internal[0] + f.seller_position.internal[0],
+            claims_before
+        );
+        assert_eq!(
+            prepare_direct_full_slice(&f.input()),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+    }
+
+    #[test]
+    fn stale_partial_cross_outcome_and_fee_cases_refuse_without_a_write() {
+        let mut stale = direct_fixture();
+        stale.candidate.status = CANDIDATE_STATUS_SUBMITTED;
+        let before = stale.buyer_position;
+        assert_eq!(
+            prepare_direct_full_slice(&stale.input()),
+            Err(Refusal::Adapter(ClutchError::NotActive))
+        );
+        assert_eq!(stale.buyer_position, before);
+
+        let mut cross = direct_fixture();
+        if let OrderSlot::Single(ref mut sell) = cross.sell {
+            sell.outcome = 1;
+        }
+        let before = cross.seller_reservation;
+        assert_eq!(
+            prepare_direct_full_slice(&cross.input()),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+        assert_eq!(cross.seller_reservation, before);
+
+        let mut partial = direct_fixture();
+        write_slice_at(
+            &mut partial.feed,
+            0,
+            &PairingSlice {
+                buy_ref: LegRef::Order(0),
+                sell_ref: LegRef::Order(1),
+                outcome: 0,
+                quantity: 2,
+            },
+        )
+        .unwrap();
+        let before = partial.receipt;
+        assert_eq!(
+            prepare_direct_full_slice(&partial.input()),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+        assert_eq!(partial.receipt, before);
+
+        let mut fee = direct_fixture();
+        fee.buyer_reservation.max_fee_atoms = 1;
+        fee.buyer_reservation.initial_cash_atoms = 3;
+        fee.buyer_reservation.remaining_cash_atoms = 3;
+        fee.buyer_position.reserved_cash_atoms = 3;
+        fee.buyer_reservation.validate().unwrap();
+        assert_eq!(
+            prepare_direct_full_slice(&fee.input()),
+            Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+        );
     }
 }

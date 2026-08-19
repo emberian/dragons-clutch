@@ -33,10 +33,10 @@
 //! [`ClutchError::AuthorizationUnavailable`] before an authority model existed,
 //! and `Resolve`/`RedeemInternal` refusing
 //! [`ClutchError::ResolutionEvidenceUnavailable`] before the evidence plane
-//! landed; today the one stub is `SettlePage`, refusing
-//! [`ClutchError::NotYetImplemented`] for the measured frame reason recorded
-//! in [`crate::instructions::orders_batch`].  Nothing anywhere returns success
-//! it did not earn.
+//! landed. `SettlePage` now admits only the narrow preselected, pre-entitled
+//! direct full-slice subset recorded in
+//! [`crate::instructions::orders_batch`]; every broader settlement shape
+//! refuses. Nothing anywhere returns success it did not earn.
 
 use crate::accounts::Outcome;
 use crate::error::ClutchError;

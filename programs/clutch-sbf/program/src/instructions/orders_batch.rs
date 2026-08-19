@@ -1,18 +1,16 @@
 //! `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SettlePage`.
 //!
-//! This module owns the batch-auction plane's account lists.  Two of its three
-//! intents are implemented: [`Intent::PlaceOrder`] appends one order — of
-//! either family — to an open order page, and [`Intent::CancelOrder`] retires
-//! one in place.  The third remains fail-closed behind the ranked joins written
-//! down below.  Its byte-level preflight is executable and adversarially tested
-//! in the private `settlement` module, but the instruction reads no account until the missing
-//! domain and checkpoint representations have semantic owners.
+//! This module owns the batch-auction plane's account lists.  `PlaceOrder` and
+//! `CancelOrder` own the funded order lifecycle.  `SettlePage` now exposes one
+//! deliberately narrow consumption seam: a selected, pre-entitled, same-page,
+//! full-fill direct pair of single-Egg orders with zero fees and an exactly
+//! divisible price-unit conversion.  Every broader shape still refuses.
 //!
 //! | intent | this wave |
 //! | --- | --- |
 //! | `PlaceOrder` | **implemented**, both order families: the v3 wire carries an `OrderSlot` and signed fee cap; Position assets move into one reservation |
 //! | `CancelOrder` | **implemented**: the v4 page retires an order in place and returns only its unused reservation (§ *Cancellation*) |
-//! | `SettlePage` | **refused**: streaming fixed the frame, not the domain/persistence/reservation joins (§ *Settlement*) |
+//! | `SettlePage` | **conditional consumption seam**: consumes two exact ACTIVE reservations and one frozen receipt; candidate selection/feed initialization/receipt freeze remain unreachable (§ *Settlement*) |
 //!
 //! Nothing here computes a clearing price or selects a candidate. A placement
 //! atomically writes one order record, encumbers exact free cash or moves exact
@@ -239,7 +237,7 @@
 //!   and Epoch must still be open. A replay sees a tombstone and a released
 //!   reservation and cannot release twice.
 //!
-//! ## Settlement: the frame blocker is closed; the joins are not
+//! ## Settlement: one coupled consumption seam; lifecycle still STOP
 //!
 //! The original batch relation still does not fit an SBF frame: its measured
 //! `verify_inner` frame is 39,104 bytes against the 4,096-byte maximum.  That
@@ -255,8 +253,16 @@
 //! and binds the layout-owned ClearWork header and page cursor.  It writes
 //! nothing and it does not interpret the opaque checkpoint body.
 //!
-//! The instruction remains a refusal because the remaining joins are semantic,
-//! not tuning work, in this dependency order:
+//! The selected V1 subset consumes one pre-frozen direct receipt.  It requires
+//! `Epoch.phase == CLEARED`, `Candidate.status == SELECTED`, a canonical
+//! CandidateFeed PDA, a verified direct pairing slice, two frozen same-page
+//! single-Egg orders, and their exact ACTIVE reservations.  It transfers the
+//! Egg and exact collateral consideration together, consumes both reservations
+//! and the receipt once, and releases unused buy reservation back to free cash.
+//! Fees, partials, portfolios, virtual legs, tombstones, cross-page pairs, and
+//! non-divisible price-unit conversions refuse.
+//!
+//! The complete venue remains STOP because these lifecycle joins are missing:
 //!
 //! 1. the complete frozen page set has no equally complete authenticated
 //!    reservation-set commitment or live-order join, so settlement cannot prove
@@ -274,12 +280,9 @@
 //! 7. candidate-set closure and selection are not on-chain transitions; and
 //! 8. FinalPot/SettlementReceipt are codecs, not frozen entitlements.
 //!
-//! The ranked list is an executable constant in `settlement`.  Its tiny
-//! `settlement::FailClosedCheckpoint` binds a successful preflight
-//! idempotently, refuses a conflicting replay atomically, and cannot advance
-//! into the relation: the first missing prerequisite is returned without a
-//! state change.  Conservation, canonical allocation, and exact settlement are
-//! therefore preserved today by *unreachability*, not claimed as implemented.
+//! The typed preflight and ranked STOP remain executable in `settlement`; the
+//! new success path starts strictly after selection and entitlement freeze. It
+//! does not turn a caller-provided feed or page into selection authority.
 //!
 //! **Post-resolution direction (PROPOSED, not integrated).** Verification,
 //! selection, and the complete receipt/pot entitlement set must be frozen
@@ -329,13 +332,11 @@
 //! Each of these is a fact about what an accepted placement or cancellation
 //! does *not* do.
 //!
-//! * **No collateral is reserved, and none is released.**  The relation's
-//!   `opening_reserved_cash_price_units` and `opening_reserved_egg` are
-//!   admission-time reservations, and neither instruction binds a position, a
-//!   hoard, or a supply ledger.  An order placed by this program is unfunded,
-//!   and retiring one frees nothing that was never held.  Nothing downstream is
-//!   misled today — no instruction freezes an epoch and `SettlePage` refuses —
-//!   but a reservation seam must land before either does.
+//! * **Reservations are per-order, but no global frozen reservation-set
+//!   commitment exists.** Placement and cancellation own exact assets, and the
+//!   narrow settlement seam consumes two of them. No transition yet proves
+//!   that every order in a selected candidate has exactly one reservation or
+//!   constructs every receipt before resolution.
 //! * **Nothing moves an epoch out of `EPOCH_PHASE_OPEN`, and nothing creates a
 //!   page.**  No intent in the wire freezes a page set or initializes a page,
 //!   so a book placed by this program can never be closed, `page_count`,
@@ -441,9 +442,8 @@
 //! | candidate verification/checkpoint joins are not integrated | `0x0061` |
 //! | `0x0060` and `0x0062-0x006f` | unallocated |
 //!
-//! Until `error.rs` is unfrozen, `SettlePage` refuses
-//! [`crate::error::ClutchError::NotYetImplemented`] and this file is where its
-//! real causes are the ranked prerequisites above.  None is bridged with a
+//! The narrow seam uses existing typed codec/adapter refusals.  Broader
+//! settlement is made unrepresentable by its checks rather than bridged with a
 //! lossy projection or a `repr(Rust)` byte cast.
 
 use crate::accounts::{
@@ -457,8 +457,8 @@ use crate::seeds;
 use clutch_solana_layout::{
     account_len,
     reservation::{canonical_reservation_id, ReservationAccount, RESERVATION_ACCOUNT_BYTES},
-    stream, CodecError, Hash32, Intent, OrderSlot, PositionAccount, PriceGridAccount,
-    EPOCH_PHASE_OPEN, MAX_GRID_TICKS,
+    stream, CandidateRecord, CodecError, EpochAccount, Hash32, Intent, OrderSlot, PositionAccount,
+    PriceGridAccount, SettlementReceiptAccount, EPOCH_PHASE_OPEN, MAX_GRID_TICKS,
 };
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
@@ -492,6 +492,9 @@ pub const PLACE_ORDER_ACCOUNT_COUNT: usize = 8;
 /// frozen price grid is not in the list at all.
 pub const CANCEL_ORDER_ACCOUNT_COUNT: usize = 5;
 
+/// Accounts in the narrow V1 `SettlePage` consumption seam, exactly.
+pub const SETTLE_PAGE_ACCOUNT_COUNT: usize = 9;
+
 /// Authenticated actor; its key is the order's owner identity.  Both lists.
 pub const IX_ACTOR: usize = 0;
 /// Epoch/book-domain account.  Both lists.
@@ -514,6 +517,24 @@ pub const IX_CANCEL_PAGE: usize = 2;
 pub const IX_CANCEL_POSITION: usize = 3;
 /// Existing per-order reservation released by cancellation. `CancelOrder`.
 pub const IX_CANCEL_RESERVATION: usize = 4;
+/// Frozen Epoch. `SettlePage`.
+pub const IX_SETTLE_EPOCH: usize = 0;
+/// Selected candidate record. `SettlePage`.
+pub const IX_SETTLE_CANDIDATE: usize = 1;
+/// Canonical candidate feed holding fills and pairing slices. `SettlePage`.
+pub const IX_SETTLE_FEED: usize = 2;
+/// Frozen page containing both direct single-Egg orders. `SettlePage`.
+pub const IX_SETTLE_PAGE: usize = 3;
+/// Buyer Position. `SettlePage`.
+pub const IX_SETTLE_BUY_POSITION: usize = 4;
+/// Seller Position. `SettlePage`.
+pub const IX_SETTLE_SELL_POSITION: usize = 5;
+/// Buy order's exact ACTIVE reservation. `SettlePage`.
+pub const IX_SETTLE_BUY_RESERVATION: usize = 6;
+/// Sell order's exact ACTIVE reservation. `SettlePage`.
+pub const IX_SETTLE_SELL_RESERVATION: usize = 7;
+/// Pre-frozen receipt entitlement for exactly one candidate slice. `SettlePage`.
+pub const IX_SETTLE_RECEIPT: usize = 8;
 
 /// Program-owned roles of `PlaceOrder`, in account-index order.
 const PLACE_ORDER_STATE_ROLES: [StateRole; 4] = [
@@ -529,6 +550,19 @@ const CANCEL_ORDER_STATE_ROLES: [StateRole; 4] = [
     StateRole::writable(IX_CANCEL_PAGE, account_len::ORDER_PAGE),
     StateRole::writable(IX_CANCEL_POSITION, account_len::POSITION),
     StateRole::writable(IX_CANCEL_RESERVATION, RESERVATION_ACCOUNT_BYTES),
+];
+
+/// Program-owned roles of the narrow direct-slice settlement seam.
+const SETTLE_PAGE_STATE_ROLES: [StateRole; SETTLE_PAGE_ACCOUNT_COUNT] = [
+    StateRole::read_only(IX_SETTLE_EPOCH, account_len::EPOCH),
+    StateRole::read_only(IX_SETTLE_CANDIDATE, account_len::CANDIDATE),
+    StateRole::read_only(IX_SETTLE_FEED, account_len::CANDIDATE_FEED),
+    StateRole::read_only(IX_SETTLE_PAGE, account_len::ORDER_PAGE),
+    StateRole::writable(IX_SETTLE_BUY_POSITION, account_len::POSITION),
+    StateRole::writable(IX_SETTLE_SELL_POSITION, account_len::POSITION),
+    StateRole::writable(IX_SETTLE_BUY_RESERVATION, RESERVATION_ACCOUNT_BYTES),
+    StateRole::writable(IX_SETTLE_SELL_RESERVATION, RESERVATION_ACCOUNT_BYTES),
+    StateRole::writable(IX_SETTLE_RECEIPT, account_len::SETTLEMENT_RECEIPT),
 ];
 
 /* ------------------------------------------------------------------------ */
@@ -869,16 +903,192 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 generation: *generation,
             },
         ),
-        /* Refused for ranked semantic reasons, not for a schedule: see the
-         * module docs and `settlement`.  It reads no account because doing so
-         * would freeze an account list before the missing policy,
-         * cardinality, checkpoint-body, and initialization owners decide it. */
-        Action::Layout(Intent::SettlePage { .. }) => settlement::refuse_unintegrated(),
+        Action::Layout(Intent::SettlePage {
+            market,
+            epoch,
+            page_index,
+        }) => settle_page(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            *page_index,
+        ),
         /* Every other action belongs to another family module; the router never
          * sends one here, and this arm exists so that adding one to the router
          * is a compile error rather than a silent success. */
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
+}
+
+/// Consume one pre-frozen, same-page, direct full-fill entitlement.
+///
+/// This does not verify/select a candidate or create a receipt.  Those missing
+/// lifecycle transitions are intentional reachability STOPs.  Given their
+/// authenticated outputs, this function consumes both exact ACTIVE
+/// reservations and transfers one coupled cash/claim pair atomically.
+#[inline(never)]
+fn settle_page(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent_market: &Hash32,
+    intent_epoch: &Hash32,
+    intent_page: u16,
+) -> Outcome<()> {
+    require_count(accounts, SETTLE_PAGE_ACCOUNT_COUNT)?;
+    require_distinct(accounts)?;
+    accounts::validate_state_roles(program_id, accounts, &SETTLE_PAGE_STATE_ROLES)?;
+    validate_settle_addresses(program_id, accounts)?;
+
+    let epoch = EpochAccount::decode(&accounts[IX_SETTLE_EPOCH].data.borrow())?;
+    let candidate = CandidateRecord::decode(&accounts[IX_SETTLE_CANDIDATE].data.borrow())?;
+    let mut buyer_position =
+        PositionAccount::decode(&accounts[IX_SETTLE_BUY_POSITION].data.borrow())?;
+    let mut seller_position =
+        PositionAccount::decode(&accounts[IX_SETTLE_SELL_POSITION].data.borrow())?;
+    let mut buyer_reservation =
+        ReservationAccount::decode(&accounts[IX_SETTLE_BUY_RESERVATION].data.borrow())?;
+    let mut seller_reservation =
+        ReservationAccount::decode(&accounts[IX_SETTLE_SELL_RESERVATION].data.borrow())?;
+    let mut receipt = SettlementReceiptAccount::decode(&accounts[IX_SETTLE_RECEIPT].data.borrow())?;
+
+    require(
+        epoch.market == *intent_market
+            && epoch.epoch == *intent_epoch
+            && sequence == receipt.sequence,
+        ClutchError::MismatchedState,
+    )?;
+
+    let (buy_order, sell_order) = {
+        let page_data = accounts[IX_SETTLE_PAGE].data.borrow();
+        let feed_data = accounts[IX_SETTLE_FEED].data.borrow();
+        settlement::load_same_page_direct_orders(
+            &page_data,
+            &feed_data,
+            &epoch,
+            intent_page,
+            receipt.slice_index,
+        )?
+    };
+    let plan = {
+        let feed_data = accounts[IX_SETTLE_FEED].data.borrow();
+        settlement::prepare_direct_full_slice(&settlement::DirectFullSliceInput {
+            epoch: &epoch,
+            candidate: &candidate,
+            candidate_feed: &feed_data,
+            page_index: intent_page,
+            slice_index: receipt.slice_index,
+            buy_order: &buy_order,
+            sell_order: &sell_order,
+            buyer_position: &buyer_position,
+            seller_position: &seller_position,
+            buyer_reservation: &buyer_reservation,
+            seller_reservation: &seller_reservation,
+            receipt: &receipt,
+        })?
+    };
+    settlement::apply_direct_full_slice(
+        &mut buyer_position,
+        &mut seller_position,
+        &mut buyer_reservation,
+        &mut seller_reservation,
+        &mut receipt,
+        plan,
+    );
+    // All validation remains over staged values.  No account byte has moved.
+    buyer_position.validate()?;
+    seller_position.validate()?;
+    buyer_reservation.validate()?;
+    seller_reservation.validate()?;
+    receipt.validate()?;
+
+    buyer_position.encode(&mut borrow_mut!(accounts[IX_SETTLE_BUY_POSITION])?)?;
+    seller_position.encode(&mut borrow_mut!(accounts[IX_SETTLE_SELL_POSITION])?)?;
+    buyer_reservation.encode(&mut borrow_mut!(accounts[IX_SETTLE_BUY_RESERVATION])?)?;
+    seller_reservation.encode(&mut borrow_mut!(accounts[IX_SETTLE_SELL_RESERVATION])?)?;
+    receipt.encode(&mut borrow_mut!(accounts[IX_SETTLE_RECEIPT])?)?;
+    Ok(())
+}
+
+/// Authenticate every settlement address while holding at most one decoded
+/// value at a time. This shape is load-bearing on SBF: keeping all nine
+/// decoded address facts in `settle_page` exceeded the 4 KiB frame.
+#[inline(never)]
+fn validate_settle_addresses(program_id: &Pubkey, accounts: &[AccountInfo]) -> Outcome<()> {
+    {
+        let value = EpochAccount::decode(&accounts[IX_SETTLE_EPOCH].data.borrow())?;
+        expect_pda(
+            accounts[IX_SETTLE_EPOCH].key,
+            seeds::epoch_pda(program_id, &value.market.bytes(), value.epoch_index),
+            Some(value.stored_bump),
+        )?;
+    }
+    {
+        let value = CandidateRecord::decode(&accounts[IX_SETTLE_CANDIDATE].data.borrow())?;
+        expect_pda(
+            accounts[IX_SETTLE_CANDIDATE].key,
+            seeds::candidate_pda(program_id, &value.epoch.bytes(), &value.candidate.bytes()),
+            Some(value.stored_bump),
+        )?;
+    }
+    {
+        let value = clutch_solana_layout::clearing::CandidateFeedHeader::decode(
+            &accounts[IX_SETTLE_FEED].data.borrow(),
+        )?;
+        expect_pda(
+            accounts[IX_SETTLE_FEED].key,
+            seeds::candidate_feed_pda(program_id, &value.epoch.bytes(), &value.candidate.bytes()),
+            Some(value.stored_bump),
+        )?;
+    }
+    {
+        let value = stream::OrderPageHeader::decode(&accounts[IX_SETTLE_PAGE].data.borrow())?;
+        expect_pda(
+            accounts[IX_SETTLE_PAGE].key,
+            seeds::page_pda(program_id, &value.epoch.bytes(), value.page_index),
+            Some(value.stored_bump),
+        )?;
+    }
+    validate_position_address(program_id, &accounts[IX_SETTLE_BUY_POSITION])?;
+    validate_position_address(program_id, &accounts[IX_SETTLE_SELL_POSITION])?;
+    validate_reservation_address(program_id, &accounts[IX_SETTLE_BUY_RESERVATION])?;
+    validate_reservation_address(program_id, &accounts[IX_SETTLE_SELL_RESERVATION])?;
+    {
+        let value = SettlementReceiptAccount::decode(&accounts[IX_SETTLE_RECEIPT].data.borrow())?;
+        expect_pda(
+            accounts[IX_SETTLE_RECEIPT].key,
+            seeds::receipt_pda(
+                program_id,
+                &value.epoch.bytes(),
+                &value.candidate.bytes(),
+                value.slice_index,
+            ),
+            Some(value.stored_bump),
+        )?;
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn validate_position_address(program_id: &Pubkey, account: &AccountInfo) -> Outcome<()> {
+    let value = PositionAccount::decode(&account.data.borrow())?;
+    expect_pda(
+        account.key,
+        seeds::position_pda(program_id, &value.market.bytes(), &value.owner.bytes()),
+        Some(value.stored_bump),
+    )
+}
+
+#[inline(never)]
+fn validate_reservation_address(program_id: &Pubkey, account: &AccountInfo) -> Outcome<()> {
+    let value = ReservationAccount::decode(&account.data.borrow())?;
+    expect_pda(
+        account.key,
+        seeds::reservation_pda(program_id, &value.reservation.bytes()),
+        Some(value.stored_bump),
+    )
 }
 
 /// The `PlaceOrder` account plane.
@@ -2295,13 +2505,11 @@ mod tests {
     }
 
     #[test]
-    fn settle_refuses_before_any_account_is_touched_and_the_others_do_not() {
+    fn all_three_intents_reach_their_account_planes() {
         let program_id = Pubkey::new_from_array([9; 32]);
         let market = h(1);
         let epoch = canonical_epoch_id(market, 4);
 
-        // `SettlePage` reads no account, so an empty list is enough to reach
-        // its refusal, and the refusal is not about the list.
         let request = Request {
             sequence: 0,
             action: Action::Layout(Intent::SettlePage {
@@ -2312,10 +2520,10 @@ mod tests {
         };
         assert_eq!(
             process(&program_id, &[], &request),
-            Err(adapter(ClutchError::NotYetImplemented))
+            Err(adapter(ClutchError::AccountCount))
         );
 
-        // The other two now reach the account plane, and say so.
+        // The other two reach their account planes too.
         for action in [
             Action::Layout(Intent::PlaceOrder {
                 market,

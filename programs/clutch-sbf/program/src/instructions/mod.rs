@@ -25,13 +25,10 @@
 //! Implemented: genesis (the five account-creating initializers plus `Endow`),
 //! split, merge_materialize (Merge/Materialize/Dematerialize), market_init,
 //! observe_resolve (FeedAdvance/Resolve/RedeemInternal), and orders_batch's
-//! PlaceOrder and CancelOrder (page-v4 tombstone retirement).
-//! SettlePage refuses with a recorded finding (the relation does not fit an
-//! SBF frame and the page-to-book projection has not landed).  A stub must read
-//! no account, write no byte, and return a refusal.  A stub that validated
-//! accounts and *then* refused would be worse, not better — it would suggest
-//! that the account list it validated is the right one, and choosing that list
-//! is precisely the decision the owning lane has to make.
+//! PlaceOrder and CancelOrder (page-v4 tombstone retirement), plus one narrow
+//! `SettlePage` consumption seam for a preselected, pre-entitled, same-page
+//! direct full slice. Candidate selection and entitlement creation remain
+//! explicit lifecycle STOPs.
 //!
 //! [`genesis`] is the only module that creates accounts.  Every other module
 //! writes over accounts that arrived already created and correctly sized, and

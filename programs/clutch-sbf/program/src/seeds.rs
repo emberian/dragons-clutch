@@ -78,6 +78,12 @@ pub const SEED_PAGE: &[u8] = b"dragons-clutch:page:v1";
 pub const SEED_RESERVATION: &[u8] = b"dragons-clutch:reservation:v1";
 /// Candidate-record account seed prefix.
 pub const SEED_CANDIDATE: &[u8] = b"dragons-clutch:candidate:v1";
+/// Candidate-feed account seed prefix.
+///
+/// The feed is the stable byte carrier for one candidate's fills and pairing
+/// slices.  Content equality alone is not account authority, so settlement
+/// authenticates exactly one feed address per `(epoch, candidate)`.
+pub const SEED_CANDIDATE_FEED: &[u8] = b"dragons-clutch:cand-feed:v1";
 /// Final-pot account seed prefix.
 pub const SEED_POT: &[u8] = b"dragons-clutch:pot:v1";
 /// Settlement-receipt account seed prefix.
@@ -248,6 +254,15 @@ pub fn candidate_pda(program_id: &Pubkey, epoch: &[u8; 32], candidate: &[u8; 32]
     find(program_id, &[SEED_CANDIDATE, epoch, candidate])
 }
 
+/// Canonical candidate-feed address.
+pub fn candidate_feed_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_CANDIDATE_FEED, epoch, candidate])
+}
+
 /// Canonical final-pot address and bump.
 ///
 /// One pot per epoch.  The pot names the selected candidate in its bytes rather
@@ -335,7 +350,7 @@ mod tests {
     /// `hoard-authority` prefix was caught at 33 bytes.
     #[test]
     fn every_seed_prefix_fits_one_seed() {
-        const PREFIXES: [&[u8]; 22] = [
+        const PREFIXES: [&[u8]; 23] = [
             SEED_REALM,
             SEED_PROFILE,
             SEED_MARKET,
@@ -353,6 +368,7 @@ mod tests {
             SEED_PAGE,
             SEED_RESERVATION,
             SEED_CANDIDATE,
+            SEED_CANDIDATE_FEED,
             SEED_POT,
             SEED_RECEIPT,
             SEED_OUTCOME_MINT,
@@ -378,7 +394,7 @@ mod tests {
     /// prefix that was already here: a shared prefix is a shared address space.
     #[test]
     fn the_token_prefixes_collide_with_nothing() {
-        const EXISTING: [&[u8]; 19] = [
+        const EXISTING: [&[u8]; 20] = [
             SEED_REALM,
             SEED_PROFILE,
             SEED_MARKET,
@@ -396,6 +412,7 @@ mod tests {
             SEED_PAGE,
             SEED_RESERVATION,
             SEED_CANDIDATE,
+            SEED_CANDIDATE_FEED,
             SEED_POT,
             SEED_RECEIPT,
         ];
