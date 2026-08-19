@@ -9,9 +9,9 @@
 # account bytes.  It then corrupts one terminal expectation, starts a fresh
 # local ledger, and requires the same walk to go red.
 #
-# The plan is explicitly genesis-assisted and internal cash is explicitly
-# stranded until WithdrawCash exists. This is runtime evidence, not deployment
-# or an end-to-end venue claim.
+# The plan is explicitly genesis-assisted. Its terminal WithdrawCash steps
+# drain both owners' free cash and the pooled Hoard, but it still does not prove
+# authenticated source ingestion or an end-to-end venue lifecycle.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -214,7 +214,7 @@ stop_validator
 
 echo
 echo "== falsifiability: corrupt one terminal byte and require red =="
-victim="$plan/expected/committed-20-redeem-external-bearer.committed-market.hoard.hex"
+victim="$plan/expected/committed-22-withdraw-second-owner-cash.committed-market.hoard-token.hex"
 cp "$victim" "$victim.orig"
 python3 - "$victim" <<'PY'
 import sys
@@ -243,7 +243,7 @@ echo "committed_signed_transactions=$committed_steps"
 echo "committed_expected_refusals=$committed_refusals"
 echo "committed_watched_accounts=$committed_watched"
 echo "genesis_assisted_program_accounts=$committed_precreated"
-echo "withdraw_cash=ABSENT"
+echo "withdraw_cash=DRIVEN_TO_ZERO"
 echo "redeem_external=DRIVEN"
 echo "falsifiability=PASS"
 echo "sbf_elf_sha256=$elf_sha256"

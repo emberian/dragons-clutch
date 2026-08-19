@@ -82,6 +82,10 @@ pub const SEED_CANDIDATE: &[u8] = b"dragons-clutch:candidate:v1";
 pub const SEED_POT: &[u8] = b"dragons-clutch:pot:v1";
 /// Settlement-receipt account seed prefix.
 pub const SEED_RECEIPT: &[u8] = b"dragons-clutch:receipt:v1";
+/// Uploader-keyed typed artifact staging account seed prefix.
+pub const SEED_ARTIFACT_STAGE: &[u8] = b"dragons-clutch:upload:v1";
+/// Canonical raw collateral-policy artifact seed prefix.
+pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -170,6 +174,33 @@ pub fn terms_pda(program_id: &Pubkey, realm: &[u8; 32], terms: &[u8; 32]) -> (Pu
 /// reason as [`terms_pda`].
 pub fn grid_pda(program_id: &Pubkey, realm: &[u8; 32], grid: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_GRID, realm, grid])
+}
+
+/// Canonical raw collateral-policy address and bump.
+///
+/// `profile` is the parent Profile identity recomputed from the policy digest.
+/// The raw policy codec has no stored bump; callers authenticate this address
+/// and recompute both identities from the exact bytes.
+pub fn policy_pda(program_id: &Pubkey, profile: &[u8; 32], digest: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_POLICY, profile, digest])
+}
+
+/// Canonical uploader-scoped staging address and bump.
+///
+/// Uploader scoping keeps an abandoned partial body from poisoning the one
+/// final content-derived address shared by all uploaders. The stage header
+/// re-binds every seed component before admitting a write, seal, or abort.
+pub fn artifact_stage_pda(
+    program_id: &Pubkey,
+    uploader: &[u8; 32],
+    kind: &[u8; 1],
+    context: &[u8; 32],
+    digest: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_ARTIFACT_STAGE, uploader, kind, context, digest],
+    )
 }
 
 /// Canonical resolution-record address and bump.

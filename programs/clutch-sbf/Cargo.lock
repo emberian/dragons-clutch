@@ -53,6 +53,9 @@ dependencies = [
 [[package]]
 name = "clutch-solana-layout"
 version = "0.1.0"
+dependencies = [
+ "solana-sha256-hasher",
+]
 
 [[package]]
 name = "clutch-solana-reference"
