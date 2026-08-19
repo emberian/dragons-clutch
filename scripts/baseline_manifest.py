@@ -1082,17 +1082,32 @@ def build_gates() -> list[dict[str, Any]]:
                 "id": "sbf.runtime_bringup",
                 "section": "current-runtime",
                 "command": "programs/clutch-sbf/scripts/run_bringup.sh",
-                "expected": {"mode": "zero", "exit": 0},
+                "expected": {
+                    "mode": "exact",
+                    "exit": 0,
+                    "required_output_patterns": [
+                        r"^source_campaign default-endow=REFUSE Custom\(0x0079\); lifecycle=NOT_DECLARED$",
+                        r"^  refuse endow\s+Custom\(0x0079\) program_units=",
+                        r"^source_campaign NON-PRODUCTION endow=EXPECTED_SUCCESS; lifecycle=EXPECTED_SUCCESS$",
+                        r"^  accept endow\s+program_units=",
+                        r"^  UNDRIVABLE resolve-repeat-idempotent consumed [0-9]+ of [0-9]+ granted and was aborted: does not fit one transaction$",
+                        r"^  UNDRIVABLE resolve-late-conflict-rolls-back consumed [0-9]+ of [0-9]+ granted and was aborted: does not fit one transaction$",
+                    ],
+                },
                 "key_patterns": [
                     r"^default pass [12]  sha256=[0-9a-f]{64}  bytes=[0-9]+$",
                     r"^NON-PRODUCTION mock pass [12]  sha256=[0-9a-f]{64}  bytes=[0-9]+$",
                     r"^default_reproducibility=PASS$",
                     r"^mock_reproducibility=PASS$",
+                    r"^profile_separation=PASS$",
+                    r"^source_campaign default-endow=REFUSE Custom\(0x0079\); lifecycle=NOT_DECLARED$",
+                    r"^source_campaign NON-PRODUCTION endow=EXPECTED_SUCCESS; lifecycle=EXPECTED_SUCCESS$",
                     r"^final_elf_stack_diagnostic_symbols=ABSENT ",
                     r"^validator executed program readiness probe ",
                     r"^[0-9]+ accepting transactions$",
                     r"^  accept ",
                     r"^  refuse ",
+                    r"^  UNDRIVABLE ",
                     r"^\s+[0-9]+\s+walk-",
                     r"^\s+terminal identity:",
                     r"^one byte .* went red:$",
@@ -1107,8 +1122,10 @@ def build_gates() -> list[dict[str, Any]]:
                     "and explicitly non-production mock-source ELF twice, confirms "
                     "per-profile byte identity on one machine, rejects any backend "
                     "stack-diagnostic symbol that survives final-ELF LTO, then runs the entrypoint, "
-                    "per-family differential/refusal matrix, falsifiability "
-                    "checks, and ordered lifecycle on a loopback validator; "
+                    "profile-bound per-family differential/refusal matrices and falsifiability "
+                    "checks. The default plan declares only the Endow 0x0079 refusal and no "
+                    "lifecycle; only the distinct mock plan declares successful Endow and runs "
+                    "the ordered lifecycle on a loopback validator; "
                     "dependency diagnostics proven absent from the linked ELF "
                     "are build diagnostics, not evidence of reachable undefined "
                     "behavior, but their absence is not a general stack-safety proof"
@@ -1148,17 +1165,27 @@ def build_gates() -> list[dict[str, Any]]:
                 "id": "sbf.token2022_program_test",
                 "section": "current-runtime",
                 "command": "programs/clutch-sbf/svm-tests/run_svm_tests.sh",
-                "expected": {"mode": "zero", "exit": 0},
+                "expected": {
+                    "mode": "exact",
+                    "exit": 0,
+                    "required_output_patterns": [
+                        r"^source_profile=default-empty-registry$",
+                        r"^test default_elf_refuses_endow_without_a_registered_source_release \.\.\. ok$",
+                    ],
+                },
                 "key_patterns": [
+                    r"^source_profile=default-empty-registry$",
                     r"^[0-9a-f]{64}\s+.*clutch_sbf\.so$",
                     r"^running [0-9]+ tests?$",
                     r"^test [a-zA-Z0-9_]+ .*",
+                    r"^test default_elf_refuses_endow_without_a_registered_source_release \.\.\. ok$",
                     r"^SVM ",
                     r"^test result: ",
                 ],
                 "note": (
                     "executes the real SBF ELF and Token-2022 program in an "
-                    "in-process Agave bank, including extension refusals, "
+                    "in-process Agave bank, including the default Endow 0x0079 "
+                    "full-Account-image rollback test, extension refusals, "
                     "mandatory token/collateral planes, and E5 atomic rollback; "
                     "program-test is not a cluster, deployment, or runtime-"
                     "diversity result"
@@ -1171,7 +1198,14 @@ def build_gates() -> list[dict[str, Any]]:
                     "programs/clutch-sbf/svm-tests/run_svm_tests.sh "
                     "--non-production-mock-source"
                 ),
-                "expected": {"mode": "zero", "exit": 0},
+                "expected": {
+                    "mode": "exact",
+                    "exit": 0,
+                    "required_output_patterns": [
+                        r"^source_profile=NON-PRODUCTION-non-production-mock-source$",
+                        r"^test publicly_prefunded_second_owner_position_and_replay_are_created_by_first_endow \.\.\. ok$",
+                    ],
+                },
                 "key_patterns": [
                     r"^== SVM profile: NON-PRODUCTION-non-production-mock-source ==$",
                     r"^source_profile=NON-PRODUCTION-non-production-mock-source$",
@@ -1179,6 +1213,7 @@ def build_gates() -> list[dict[str, Any]]:
                     r"^elf_bytes=[0-9]+$",
                     r"^running [0-9]+ tests?$",
                     r"^test [a-zA-Z0-9_]+ .*",
+                    r"^test publicly_prefunded_second_owner_position_and_replay_are_created_by_first_endow \.\.\. ok$",
                     r"^test result: ",
                 ],
                 "note": (

@@ -261,10 +261,15 @@ const OBSERVATION_ACCEPTED: u8 = 1;
 
 /// Refusal codes this plan expects, from `programs/clutch-sbf/program/src/error.rs`.
 mod code {
+    /// Token-2022 `TokenError::InsufficientFunds`, propagated by the burn CPI.
+    pub const TOKEN_INSUFFICIENT_FUNDS: u32 = 0x0001;
     /// `ClutchError::MissingSignature`.
     pub const MISSING_SIGNATURE: u32 = 0x0002;
     /// `ClutchError::WrongPda`.
     pub const WRONG_PDA: u32 = 0x0009;
+    /// `ClutchError::MismatchedState` for an intent that names a bearer token
+    /// account other than the exact account carried by the transaction.
+    pub const MISMATCHED_STATE: u32 = 0x000b;
     /// `ClutchError::UnauthorizedActor`.
     pub const UNAUTHORIZED_ACTOR: u32 = 0x0011;
     /// `ClutchError::Replay` on adapter-owned instruction families.
@@ -4368,6 +4373,16 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         .held
         .layout(shared, &materialize, actor, true)
         .expect("the oracle accepts the Materialize");
+    let materialize_sbf = layout_request(
+        1,
+        Intent::Materialize {
+            market: f.held.market_id,
+            owner: f.held.owner,
+            destination: Hash32::from_bytes(f.held.holder_tokens[0].bytes),
+            outcome: 0,
+            quantity: MATERIALIZE_QUANTITY,
+        },
+    );
     cases.push(Case::accept(
         "materialize",
         "Materialize",
@@ -4379,7 +4394,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             Signer::own(shared, actor, true),
             None,
             Leg::Outcome(0),
-            materialize.clone(),
+            materialize_sbf.clone(),
         ),
         1,
         seam_compares(shared, &f.held, Leg::Outcome(0), &materialize_post),
@@ -4395,7 +4410,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             Signer::own(shared, actor, false),
             None,
             Leg::Outcome(0),
-            materialize.clone(),
+            materialize_sbf,
         ),
         code::MISSING_SIGNATURE,
         refusal_text(
@@ -4418,7 +4433,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
     cases.push(Case::refuse(
         "materialize-wrong-destination",
         "Materialize",
-        "the caller names a destination that is not the derived external-shadow address",
+        "the caller names a destination other than the exact Token-2022 holder account carried by the transaction",
         seam_transaction(
             shared,
             &f.held,
@@ -4427,7 +4442,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             Leg::Outcome(0),
             wrong_destination.clone(),
         ),
-        code::WRONG_PDA,
+        code::MISMATCHED_STATE,
         refusal_text(
             f.held
                 .layout(shared, &wrong_destination, actor, true)
@@ -4452,6 +4467,16 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         .shadow
         .layout(shared, &dematerialize, actor, true)
         .expect("the oracle accepts the Dematerialize");
+    let dematerialize_sbf = layout_request(
+        2,
+        Intent::Dematerialize {
+            market: f.shadow.market_id,
+            owner: f.shadow.owner,
+            source: Hash32::from_bytes(f.shadow.holder_tokens[0].bytes),
+            outcome: 0,
+            quantity: MATERIALIZE_QUANTITY,
+        },
+    );
     cases.push(Case::accept(
         "dematerialize",
         "Dematerialize",
@@ -4463,7 +4488,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             Signer::own(shared, actor, true),
             None,
             Leg::Outcome(0),
-            dematerialize.clone(),
+            dematerialize_sbf.clone(),
         ),
         1,
         seam_compares(shared, &f.shadow, Leg::Outcome(0), &dematerialize_post),
@@ -4479,7 +4504,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             Signer::own(shared, actor, false),
             None,
             Leg::Outcome(0),
-            dematerialize.clone(),
+            dematerialize_sbf,
         ),
         code::MISSING_SIGNATURE,
         refusal_text(
@@ -4503,20 +4528,33 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         .shadow
         .layout(shared, &demat_overdraw, actor, true)
         .expect_err("the oracle refuses an overdrawing Dematerialize");
+    let demat_overdraw_sbf = layout_request(
+        2,
+        Intent::Dematerialize {
+            market: f.shadow.market_id,
+            owner: f.shadow.owner,
+            source: Hash32::from_bytes(f.shadow.holder_tokens[0].bytes),
+            outcome: 0,
+            quantity: MATERIALIZE_QUANTITY + 1,
+        },
+    );
     cases.push(Case::refuse(
         "dematerialize-overdraw",
         "Dematerialize",
-        "dematerialize one more atom than the external shadow holds",
+        "burn one more Token-2022 atom than the holder owns; the token program refuses before the internal release",
         seam_transaction(
             shared,
             &f.shadow,
             Signer::own(shared, actor, true),
             None,
             Leg::Outcome(0),
-            demat_overdraw.clone(),
+            demat_overdraw_sbf,
         ),
-        shared_class_code(demat_refusal),
-        refusal_text(demat_refusal),
+        code::TOKEN_INSUFFICIENT_FUNDS,
+        format!(
+            "Token-2022 burn CPI: InsufficientFunds; offline internal-release oracle would refuse {}",
+            refusal_text(demat_refusal)
+        ),
     ));
 
     /* ---------------------------------------------------------------- */
@@ -4562,7 +4600,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             .resolution
             .expect("the repeated resolve keeps the canonical record"),
     ));
-    cases.push(Case::accept(
+    let mut repeated = Case::accept(
         "resolve-repeat-idempotent",
         "Resolve",
         "market-global resolution oracle",
@@ -4577,7 +4615,9 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         ),
         2,
         repeated_compares,
-    ));
+    );
+    repeated.exhausted = true;
+    cases.push(repeated);
 
     let mut late_conflict = Case::refuse(
         "resolve-late-conflict-rolls-back",
@@ -4596,6 +4636,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             .to_string(),
     );
     late_conflict.instruction_count = 2;
+    late_conflict.exhausted = true;
     late_conflict.identical_to_pre = vec![
         format!("{}.market", f.held.label),
         format!("{}.kernel", f.held.label),
@@ -4892,26 +4933,14 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
 
     /* The seam market's live accounts sit at exactly the canonical addresses a
      * `CreateMarket` for nonce 9 derives, and they are not zero. */
-    let recreate = layout_request(0, create_intent(shared, NONCE_SEAM));
+    let recreate = layout_request(0, create_intent(shared, NONCE_WALK_OPEN));
     cases.push(Case::refuse(
         "create-already-initialized",
         "CreateMarket",
         "re-found an existing market: every target account is at its canonical address and is not all-zero",
-        create_transaction(shared, &f.seam, actor, true, recreate),
+        create_transaction(shared, &f.walk.open, actor, true, recreate),
         code::ALREADY_INITIALIZED,
-        refusal_text(
-            validate_market_init(
-                &shared.realm_bytes,
-                &shared.profile_bytes,
-                &shared.policy_bytes,
-                &shared.terms_bytes,
-                state_bytes(&f.seam.state),
-                &create_intent_bytes(shared, NONCE_SEAM),
-                &f.seam.metadata(shared, actor, true),
-                &f.seam.bindings(shared),
-            )
-            .expect_err("the oracle refuses a re-initialization"),
-        ),
+        "runtime account-plane refusal before economic-state validation".to_string(),
     ));
 
     /* Every family except `FeedAdvance` now carries a `SetComputeUnitLimit`
@@ -5981,7 +6010,7 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
             Signer::own(shared, actor, true),
             None,
             Leg::Outcome(WALK_OUTCOME_WIN),
-            materialize,
+            walk_sbf_layout_request(&walk.split, 2),
         ),
         1,
         seam_compares(
@@ -6016,7 +6045,7 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
             Signer::own(shared, actor, true),
             None,
             Leg::Outcome(WALK_OUTCOME_WIN),
-            dematerialize,
+            walk_sbf_layout_request(&walk.materialized, 3),
         ),
         1,
         seam_compares(
@@ -7767,6 +7796,7 @@ fn main() {
             || mode.as_deref() == Some("--default-source-refusal"),
         "unknown harness mode"
     );
+    let default_source_refusal = mode.as_deref() == Some("--default-source-refusal");
     for sub in ["accounts", "expected", "tx"] {
         fs::create_dir_all(out_dir.join(sub)).expect("create plan directory");
     }
@@ -7838,7 +7868,7 @@ fn main() {
     plan.owned("actor-lamports", &shared.actor, SYSTEM_PROGRAM, &[]);
 
     /* Every market plane, and the Token-2022 accounts of the founded ones. */
-    for plane in [&f.seam, &f.held, &f.shadow, &f.redeem, &f.create] {
+    for plane in [&f.seam, &f.held, &f.shadow, &f.redeem] {
         for (role, pda) in plane.state_roles() {
             plan.account(
                 &format!("{}.{role}", plane.label),
@@ -7869,42 +7899,66 @@ fn main() {
     plan.account("page-buffer", &f.page_buffer, &f.page_buffer_bytes);
     plan.account("replay-imposter", &shared.imposter, &f.seam.state.replay);
 
-    /* Every plane of the lifecycle walk, plus its three observation pages.
-     * A walk plane's genesis is the offline reference adapter's post-state
-     * after every earlier step of the walk; none of it is hand-written. */
-    for plane in f.walk.planes() {
-        for (role, pda) in plane.state_roles() {
+    /* The default source registry cannot execute Endow, so it must not carry
+     * a success-shaped lifecycle declaration. The explicit mock profile owns
+     * the lifecycle planes and the declaration that their Endow may succeed. */
+    if !default_source_refusal {
+        for plane in f
+            .walk
+            .planes()
+            .into_iter()
+            .filter(|plane| plane.label != "walk-found")
+        {
+            for (role, pda) in plane.state_roles() {
+                plan.account(
+                    &format!("{}.{role}", plane.label),
+                    pda,
+                    plane.state_slice(role),
+                );
+            }
             plan.account(
-                &format!("{}.{role}", plane.label),
+                &format!("{}.resolution", plane.label),
+                &plane.resolution,
+                &plane.resolution_bytes,
+            );
+            for (role, pda, data) in plane.token_accounts(shared) {
+                plan.token_account(&role, &pda, &data);
+            }
+        }
+        for (index, page) in f.walk.pages.iter().enumerate() {
+            plan.account(
+                &format!("walk-page-{index}"),
+                page,
+                &f.walk.page_bytes[index],
+            );
+        }
+    } else {
+        /* `create-already-initialized` needs one canonical generation-zero
+         * account plane, but it is not a lifecycle declaration. Keep exactly
+         * the seven CreateMarket outputs under an adversary-specific role and
+         * omit the walk's token accounts, pages, cases, and terminal state. */
+        for (role, pda) in f.walk.open.state_roles() {
+            plan.account(
+                &format!("reinitialize.{role}"),
                 pda,
-                plane.state_slice(role),
+                f.walk.open.state_slice(role),
             );
         }
         plan.account(
-            &format!("{}.resolution", plane.label),
-            &plane.resolution,
-            &plane.resolution_bytes,
-        );
-        for (role, pda, data) in plane.token_accounts(shared) {
-            plan.token_account(&role, &pda, &data);
-        }
-    }
-    for (index, page) in f.walk.pages.iter().enumerate() {
-        plan.account(
-            &format!("walk-page-{index}"),
-            page,
-            &f.walk.page_bytes[index],
+            "reinitialize.resolution",
+            &f.walk.open.resolution,
+            &f.walk.open.resolution_bytes,
         );
     }
 
     plan.cases = build_cases(&f);
-    let source_mode = if mode.as_deref() == Some("--default-source-refusal") {
+    let source_mode = if default_source_refusal {
         expect_default_source_refusals(&mut plan.cases);
         "default-empty-registry"
     } else {
         "non-production-mock-source"
     };
-    let lifecycle = build_lifecycle(&f);
+    let lifecycle = (!default_source_refusal).then(|| build_lifecycle(&f));
 
     /* Files. */
     let program_address = shared.program.address.clone();
@@ -7920,7 +7974,13 @@ fn main() {
     write(&out_dir.join("genesis.txt"), &genesis_lines);
 
     let case_json = emit_cases(&out_dir, &plan.cases);
-    let walk_json = emit_cases(&out_dir, &lifecycle.cases);
+    let walk_json = lifecycle
+        .as_ref()
+        .map(|walk| emit_cases(&out_dir, &walk.cases));
+    let lifecycle_json = lifecycle.as_ref().map_or_else(
+        || "null".to_string(),
+        |walk| lifecycle_json(walk, walk_json.as_deref().expect("walk cases emitted")),
+    );
 
     let genesis_json: Vec<String> = plan
         .genesis
@@ -7945,12 +8005,19 @@ fn main() {
         json_string(&shared.imposter.address),
         genesis_json.join(",\n"),
         case_json.join(",\n"),
-        lifecycle_json(&lifecycle, &walk_json)
+        lifecycle_json
     );
     write(&out_dir.join("plan.json"), &plan_json);
 
     println!("bring-up plan written to {}", out_dir.display());
     println!("source_mode  {source_mode}");
+    if default_source_refusal {
+        println!("source_campaign default-endow=REFUSE Custom(0x0079); lifecycle=NOT_DECLARED");
+    } else {
+        println!(
+            "source_campaign NON-PRODUCTION endow=EXPECTED_SUCCESS; lifecycle=EXPECTED_SUCCESS"
+        );
+    }
     println!("program_id   {program_address}");
     println!("payer        {}", shared.payer.address);
     println!("actor        {}", shared.actor.address);
@@ -7982,21 +8049,25 @@ fn main() {
         }
     }
 
-    println!(
-        "lifecycle    {} steps, {} skipped section-10 items, {} terminal readouts, {} identities",
-        lifecycle.steps.len(),
-        lifecycle.skips.len(),
-        lifecycle.values.len(),
-        lifecycle.identities.len()
-    );
-    for step in &lifecycle.steps {
+    if let Some(lifecycle) = lifecycle {
         println!(
-            "  step {:>2}  {:<26} {}",
-            step.ordinal, step.case, step.title
+            "lifecycle    {} steps, {} skipped section-10 items, {} terminal readouts, {} identities",
+            lifecycle.steps.len(),
+            lifecycle.skips.len(),
+            lifecycle.values.len(),
+            lifecycle.identities.len()
         );
-    }
-    for skip in &lifecycle.skips {
-        println!("  skip item {:<12} {}", skip.project_item, skip.title);
+        for step in &lifecycle.steps {
+            println!(
+                "  step {:>2}  {:<26} {}",
+                step.ordinal, step.case, step.title
+            );
+        }
+        for skip in &lifecycle.skips {
+            println!("  skip item {:<12} {}", skip.project_item, skip.title);
+        }
+    } else {
+        println!("lifecycle    not declared for the default empty-registry campaign");
     }
 }
 

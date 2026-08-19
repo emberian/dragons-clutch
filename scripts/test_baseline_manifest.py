@@ -189,8 +189,15 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
             r"^non_production_mock_sbf_elf_sha256=[0-9a-f]{64}$",
             r"^default_reproducibility=PASS$",
             r"^mock_reproducibility=PASS$",
+            r"^source_campaign default-endow=REFUSE Custom\(0x0079\); lifecycle=NOT_DECLARED$",
+            r"^source_campaign NON-PRODUCTION endow=EXPECTED_SUCCESS; lifecycle=EXPECTED_SUCCESS$",
         ):
             self.assertIn(pattern, bringup_patterns)
+        self.assertEqual(gates["sbf.runtime_bringup"]["expected"]["mode"], "exact")
+        self.assertIn(
+            r"^test default_elf_refuses_endow_without_a_registered_source_release \.\.\. ok$",
+            gates["sbf.token2022_program_test"]["expected"]["required_output_patterns"],
+        )
 
         outputs = {item["id"]: item for item in baseline_manifest.DECLARED_BUILD_OUTPUTS}
         self.assertEqual(outputs["clutch_sbf.default_program_elf"]["handoff"], None)

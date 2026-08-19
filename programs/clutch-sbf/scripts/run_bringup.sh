@@ -23,6 +23,7 @@ build_sbf="${CARGO_BUILD_SBF:-$solana_home/cargo-build-sbf}"
 test_validator="${SOLANA_TEST_VALIDATOR:-$solana_home/solana-test-validator}"
 rpc_port="${CLUTCH_RPC_PORT:-18899}"
 faucet_port="${CLUTCH_FAUCET_PORT:-19900}"
+gossip_port="${CLUTCH_GOSSIP_PORT:-18000}"
 url="http://127.0.0.1:${rpc_port}"
 
 rm -rf "$work"
@@ -181,6 +182,15 @@ default = json.load(open(sys.argv[1]))
 mock = json.load(open(sys.argv[2]))
 assert default["source_mode"] == "default-empty-registry"
 assert mock["source_mode"] == "non-production-mock-source"
+default_endow = next(case for case in default["cases"] if case["name"] == "endow")
+mock_endow = next(case for case in mock["cases"] if case["name"] == "endow")
+assert default_endow["kind"] == "refuse"
+assert default_endow["expect_code"] == 0x0079
+assert "compare" not in default_endow
+assert default["lifecycle"] is None
+assert mock_endow["kind"] == "accept"
+assert mock_endow["compare"]
+assert isinstance(mock["lifecycle"], dict)
 CHECK
 echo
 echo "== refusal rollback checker capability self-test =="
@@ -208,6 +218,7 @@ run_profile() {
   validator_args=(
     --ledger "$work/ledger-$profile" --reset --quiet
     --rpc-port "$rpc_port" --faucet-port "$faucet_port"
+    --gossip-port "$gossip_port"
     --mint "$payer"
     --bpf-program "$program_id" "$elf"
   )

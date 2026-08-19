@@ -209,8 +209,11 @@ The four runtime gates have intentionally different coverage:
   ELF and the distinct explicitly non-production mock-source ELF twice into
   fresh targets, requiring per-profile byte identity. It then launches a new
   loopback `solana-test-validator`, waits for a transaction-level program
-  readiness probe, runs the differential/refusal matrix and ordered lifecycle.
-  Its stable evidence records `default_sbf_elf_sha256`,
+  readiness probe, and runs a profile-bound differential/refusal matrix. The
+  default plan declares Endow only as `Custom(0x0079)` and carries no lifecycle;
+  the explicitly different mock plan is the only one that declares successful
+  Endow and runs the ordered lifecycle. Its stable evidence records
+  `default_sbf_elf_sha256`,
   `non_production_mock_sbf_elf_sha256`, `default_reproducibility`, and
   `mock_reproducibility`; these are observed fresh-run identities, not a release
   pin or independent build result.

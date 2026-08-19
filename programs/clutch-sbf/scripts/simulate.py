@@ -63,6 +63,44 @@ def require_loopback_url(url: str) -> None:
         )
 
 
+def source_campaign_declaration(plan: dict) -> str:
+    """Reject plans that mix the default refusal and mock-success claims."""
+    try:
+        endow = next(case for case in plan["cases"] if case["name"] == "endow")
+    except (KeyError, StopIteration) as error:
+        raise SystemExit("plan has no Endow source campaign case") from error
+
+    source_mode = plan.get("source_mode")
+    if source_mode == "default-empty-registry":
+        if (
+            endow.get("kind") != "refuse"
+            or endow.get("expect_code") != 0x0079
+            or "compare" in endow
+        ):
+            raise SystemExit(
+                "default empty-registry plan must declare Endow as a pre-write "
+                "Custom(0x0079) refusal"
+            )
+        if plan.get("lifecycle") is not None:
+            raise SystemExit(
+                "default empty-registry plan must not carry a mock-success lifecycle"
+            )
+        return "source_campaign default-endow=REFUSE Custom(0x0079); lifecycle=NOT_DECLARED"
+
+    if source_mode == "non-production-mock-source":
+        if endow.get("kind") != "accept" or not endow.get("compare"):
+            raise SystemExit(
+                "non-production mock-source plan must explicitly declare successful Endow"
+            )
+        if not isinstance(plan.get("lifecycle"), dict):
+            raise SystemExit(
+                "non-production mock-source plan must carry its expected-success lifecycle"
+            )
+        return "source_campaign NON-PRODUCTION endow=EXPECTED_SUCCESS; lifecycle=EXPECTED_SUCCESS"
+
+    raise SystemExit(f"unknown source campaign mode: {source_mode!r}")
+
+
 def rpc(url: str, method: str, params: list) -> dict:
     payload = json.dumps(
         {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
@@ -118,12 +156,19 @@ def per_instruction_units(logs, program_id: str) -> list[int]:
 
 
 def granted_and_consumed(logs, program_id: str) -> tuple[int, int] | None:
-    """The `consumed X of Y` pair the runtime logged for the program."""
+    """The final `consumed X of Y` pair logged for the program.
+
+    A multi-instruction transaction emits one pair per invocation. The last
+    pair is the one that can prove the later instruction exhausted the
+    transaction's remaining budget; returning the first would inspect the
+    successful predecessor instead.
+    """
+    pair = None
     for line in logs or []:
         match = CONSUMED.match(line)
         if match and match.group(1) == program_id:
-            return int(match.group(2)), int(match.group(3))
-    return None
+            pair = int(match.group(2)), int(match.group(3))
+    return pair
 
 
 def check_exhausted(
@@ -683,7 +728,12 @@ def main() -> int:
     require_loopback_url(args.url)
 
     plan = json.loads((args.plan / "plan.json").read_text())
+    print(source_campaign_declaration(plan))
     if args.lifecycle:
+        if plan["source_mode"] != "non-production-mock-source":
+            raise SystemExit(
+                "--lifecycle is reserved for the explicit non-production mock-source plan"
+            )
         return run_lifecycle(args.url, args.plan, plan, args.only)
     failures: list[str] = []
     report: list[str] = []
