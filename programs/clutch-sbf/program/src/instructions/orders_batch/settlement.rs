@@ -823,19 +823,22 @@ pub(super) fn load_same_page_direct_orders(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)] // Historical full-lifecycle STOP ledger, exercised by unit tests.
 pub(super) enum SettlementBlocker {
-    /// Candidate-set closure/selection is not yet an on-chain transition.
-    CandidateSelection,
-    /// General CandidateFeed/ClearWork have no permissionless authenticated lifecycle.
-    /// The exact two-order submitted-feed constructor is the sole exception.
-    CandidateFeedInitialization,
+    /// Epoch.policy is only an opaque digest; no account transports and
+    /// validates every `FrozenPolicyV1` selector and fee parameter.
+    FrozenPolicyPreimage,
+    /// Relation V1 consumes five `u64` identity tags while this account plane
+    /// owns full Hash32 identities. No lossless bridge is specified.
+    FullWidthRelationDomain,
+    /// A canonical submission is not a closed proposal window. Selection needs
+    /// a deadline and a complete immutable commitment to all admitted candidates.
+    CandidateWindowClosure,
     /// Receipts/pot are not created as complete pre-resolution entitlements.
     EntitlementFreeze,
-    /// The frozen book lacks a complete reservation-set commitment.
-    ReservationSetClosure,
+    /// General frozen books lack a complete reservation-set commitment. The
+    /// exact one-page/two-live-order submission discharges this locally only.
+    GeneralReservationSetClosure,
     /// Partial/multi-slice orders need cumulative per-order consumption state.
     PartialFillLedger,
-    /// Nonzero fees need a policy preimage and exact recipient.
-    FrozenPolicyFees,
     /// Virtual split/merge legs need a funded FinalPot transition.
     VirtualPot,
     /// No terminal sweep proves every reservation/receipt/pot is empty once.
@@ -845,12 +848,12 @@ pub(super) enum SettlementBlocker {
 /// The exact dependency order of the remaining settlement work.
 #[allow(dead_code)] // Historical full-lifecycle STOP ledger, exercised by unit tests.
 pub(super) const SETTLEMENT_BLOCKERS: [SettlementBlocker; 8] = [
-    SettlementBlocker::CandidateSelection,
-    SettlementBlocker::CandidateFeedInitialization,
+    SettlementBlocker::FrozenPolicyPreimage,
+    SettlementBlocker::FullWidthRelationDomain,
+    SettlementBlocker::CandidateWindowClosure,
     SettlementBlocker::EntitlementFreeze,
-    SettlementBlocker::ReservationSetClosure,
+    SettlementBlocker::GeneralReservationSetClosure,
     SettlementBlocker::PartialFillLedger,
-    SettlementBlocker::FrozenPolicyFees,
     SettlementBlocker::VirtualPot,
     SettlementBlocker::TerminalClosure,
 ];
@@ -1195,7 +1198,7 @@ mod tests {
 
         assert_eq!(
             checkpoint.advance_relation(),
-            Err(SettlementBlocker::CandidateSelection)
+            Err(SettlementBlocker::FrozenPolicyPreimage)
         );
         assert_eq!(checkpoint, after_first, "blocked advance writes nothing");
     }
@@ -1205,11 +1208,15 @@ mod tests {
         assert_eq!(SETTLEMENT_BLOCKERS.len(), 8);
         assert_eq!(
             SETTLEMENT_BLOCKERS[0],
-            SettlementBlocker::CandidateSelection
+            SettlementBlocker::FrozenPolicyPreimage
         );
         assert_eq!(
             SETTLEMENT_BLOCKERS[1],
-            SettlementBlocker::CandidateFeedInitialization
+            SettlementBlocker::FullWidthRelationDomain
+        );
+        assert_eq!(
+            SETTLEMENT_BLOCKERS[2],
+            SettlementBlocker::CandidateWindowClosure
         );
         assert_eq!(SETTLEMENT_BLOCKERS[7], SettlementBlocker::TerminalClosure);
     }

@@ -1,7 +1,7 @@
 # Narrow Candidate Submission V1
 
-Status: **IMPLEMENTED NARROW SUBMISSION; VERIFICATION, SELECTION, RECEIPT
-FREEZE, AND GENERAL CLEARING REMAIN STOP**
+Status: **IMPLEMENTED NARROW SUBMISSION; EXECUTABLE SELECTION-AUTHORITY STOP;
+RECEIPT FREEZE AND GENERAL CLEARING REMAIN STOP**
 
 `Intent::SubmitDirectPage` closes one dependency immediately before the live
 coupled settlement slice. It permissionlessly constructs a canonical
@@ -171,3 +171,11 @@ semantic owner:
 Until that map lands, general relation verification, partials, portfolios,
 fees, lapse, receipt construction, Epoch `CLEARED`, and terminal closure are
 explicit STOPs.
+
+The follow-up authority audit is executable and records two concrete policy
+counterexamples plus the minimum immutable policy/domain/window design in
+[DIRECT_SELECTION_AUTHORITY_V1.md](DIRECT_SELECTION_AUTHORITY_V1.md). Its key
+distinction is that this exact one-page/two-order constructor already closes
+the live order-to-reservation set locally; the earlier remaining blockers are
+the frozen policy preimage, full-width relation domain, and closed candidate
+window. No live ABI was added merely to return a guaranteed refusal.

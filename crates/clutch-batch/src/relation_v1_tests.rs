@@ -1846,6 +1846,85 @@ fn relation_v1_explicit_slice_witness_variant_refuses_the_same_books() {
 }
 
 #[test]
+fn narrow_direct_book_is_not_policy_invariant_selection_authority() {
+    // This is the exact economic shape admitted by SubmitDirectPage: two
+    // distinct owners, equal 5_000 limits, equal full quantities, no minimum
+    // fill, no virtual flow, and one direct pairing. Structural determinism of
+    // that proposal does not make an opaque Epoch policy irrelevant.
+    let book = book_of(&[
+        OrderV1::SingleEgg(SingleEggOrderV1 {
+            canonical_order_id: 1,
+            owner: 0,
+            outcome: 0,
+            side: Side::Buy,
+            quantity: 4,
+            limit_price: 5_000,
+            minimum_fill: 0,
+            partial_policy: PartialPolicy::Allow,
+            expiry_epoch: u64::MAX,
+        }),
+        OrderV1::SingleEgg(SingleEggOrderV1 {
+            canonical_order_id: 2,
+            owner: 1,
+            outcome: 0,
+            side: Side::Sell,
+            quantity: 4,
+            limit_price: 5_000,
+            minimum_fill: 0,
+            partial_policy: PartialPolicy::Allow,
+            expiry_epoch: u64::MAX,
+        }),
+    ]);
+    let vector = prices(&[5_000, 5_000]);
+
+    let no_fee = domain_with(base_policy(), 2, 2);
+    let candidate = canonical_candidate(&no_fee, &book, &vector, 0, 0).unwrap();
+    let summary = verify(&no_fee, &book, &candidate, None).unwrap();
+    assert_eq!(summary.fee_price_units, 0);
+    assert_eq!(summary.debit_atoms, 2);
+
+    // The book reserves exactly its two-atom limit consideration. A one-percent
+    // frozen fee policy needs a third debit atom at the named rounding boundary,
+    // so the same candidate is invalid rather than merely differently scored.
+    let with_fee = domain_with(
+        FrozenPolicyV1 {
+            fee_base: FeeBaseV1::FlatNotional { bps: 100 },
+            ..base_policy()
+        },
+        2,
+        2,
+    );
+    assert_eq!(
+        canonical_candidate(&with_fee, &book, &vector, 0, 0),
+        Err(ErrorV1::FeePayerUnfunded)
+    );
+
+    // The witness selector is independently consensus-relevant. It changes
+    // both the admitted proof shape and the relation digest even though fills
+    // and prices are identical.
+    let explicit = domain_with(
+        FrozenPolicyV1 {
+            pairing_witness: PairingWitnessPolicyV1::ExplicitSlices,
+            ..base_policy()
+        },
+        2,
+        2,
+    );
+    let explicit_candidate = canonical_candidate(&explicit, &book, &vector, 0, 0).unwrap();
+    let witness = canonical_pairing(&explicit, &book, &explicit_candidate).unwrap();
+    assert_eq!(candidate.fills, explicit_candidate.fills);
+    assert_ne!(
+        candidate.canonical_candidate_digest,
+        explicit_candidate.canonical_candidate_digest
+    );
+    assert_eq!(
+        verify(&explicit, &book, &explicit_candidate, None),
+        Err(ErrorV1::PairingWitnessMissing)
+    );
+    assert!(verify(&explicit, &book, &explicit_candidate, Some(&witness)).is_ok());
+}
+
+#[test]
 fn relation_v1_epoch_lapse_refunds_all_reservations() {
     // A book whose sides never cross clears as the canonical empty candidate,
     // and every reserved atom is refunded to the owner that reserved it.

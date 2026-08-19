@@ -24,8 +24,8 @@ use {
             RESERVATION_ACCOUNT_BYTES,
         },
         stream, CandidateRecord, EpochAccount, Hash32, Intent, OrderRecord, OrderSlot,
-        PriceGridAccount, CANDIDATE_STATUS_SUBMITTED, EPOCH_PHASE_FROZEN, MAX_GRID_TICKS,
-        MAX_OUTCOMES, RELATION_VERSION,
+        PositionAccount, PriceGridAccount, SettlementReceiptAccount, CANDIDATE_STATUS_SUBMITTED,
+        EPOCH_PHASE_FROZEN, MAX_GRID_TICKS, MAX_OUTCOMES, RECEIPT_LEG_DIRECT, RELATION_VERSION,
     },
     clutch_svm_fixture::{
         compute_unit_limit_data, layout_request, COMPUTE_BUDGET, PROGRAM_ID, RENT_SYSVAR,
@@ -106,6 +106,9 @@ struct Fixture {
     reservation_one: Address,
     candidate: Address,
     feed: Address,
+    buyer_position: Address,
+    seller_position: Address,
+    receipt: Address,
     market: Hash32,
     epoch_id: Hash32,
 }
@@ -152,6 +155,48 @@ impl Fixture {
             self.page,
             self.reservation_zero,
             self.reservation_one,
+        ]
+    }
+
+    fn settle_instruction(&self) -> Instruction {
+        let metas = vec![
+            AccountMeta::new_readonly(self.epoch, false),
+            AccountMeta::new_readonly(self.candidate, false),
+            AccountMeta::new_readonly(self.feed, false),
+            AccountMeta::new_readonly(self.page, false),
+            AccountMeta::new(self.buyer_position, false),
+            AccountMeta::new(self.seller_position, false),
+            AccountMeta::new(self.reservation_zero, false),
+            AccountMeta::new(self.reservation_one, false),
+            AccountMeta::new(self.receipt, false),
+        ];
+        assert_eq!(metas.len(), orders_batch::SETTLE_PAGE_ACCOUNT_COUNT);
+        Instruction::new_with_bytes(
+            PROGRAM_ID,
+            &layout_request(
+                1,
+                Intent::SettlePage {
+                    market: self.market,
+                    epoch: self.epoch_id,
+                    page_index: 0,
+                },
+            ),
+            metas,
+        )
+    }
+
+    fn authority_chain(&self) -> [Address; 10] {
+        [
+            self.epoch,
+            self.page,
+            self.candidate,
+            self.feed,
+            self.buyer_position,
+            self.seller_position,
+            self.reservation_zero,
+            self.reservation_one,
+            self.receipt,
+            self.grid,
         ]
     }
 }
@@ -327,6 +372,60 @@ async fn start(
         &[&epoch_id.bytes(), &candidate.candidate.bytes()],
     );
 
+    let (buyer_position_address, buyer_position_bump) =
+        pda(seeds::SEED_POSITION, &[&market.bytes(), &buy_owner.bytes()]);
+    let buyer_position = PositionAccount {
+        market,
+        owner: buy_owner,
+        generation: 0,
+        internal: [0; MAX_OUTCOMES],
+        cash_atoms: 10,
+        reserved_cash_atoms: buy_plan.cash_atoms,
+        stored_bump: buyer_position_bump,
+        close_state: 0,
+    };
+    let (seller_position_address, seller_position_bump) = pda(
+        seeds::SEED_POSITION,
+        &[&market.bytes(), &sell_owner.bytes()],
+    );
+    let seller_position = PositionAccount {
+        market,
+        owner: sell_owner,
+        generation: 0,
+        internal: [0; MAX_OUTCOMES],
+        cash_atoms: 0,
+        reserved_cash_atoms: 0,
+        stored_bump: seller_position_bump,
+        close_state: 0,
+    };
+    let slice_index = 0u16;
+    let (receipt_address, receipt_bump) = pda(
+        seeds::SEED_RECEIPT,
+        &[
+            &epoch_id.bytes(),
+            &candidate.candidate.bytes(),
+            &slice_index.to_le_bytes(),
+        ],
+    );
+    let receipt = SettlementReceiptAccount {
+        epoch: epoch_id,
+        market,
+        candidate: candidate.candidate,
+        buy_order_id: buy.order_id(),
+        sell_order_id: sell.order_id(),
+        consideration_price_units: 20_000,
+        quantity: 4,
+        settled_quantity: 0,
+        price: 5_000,
+        sequence: 1,
+        slice_index,
+        outcome: 0,
+        leg_kind: RECEIPT_LEG_DIRECT,
+        consumed_flags: 0,
+        stored_bump: receipt_bump,
+        flags: 0,
+    };
+
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
     test.add_program("clutch_sbf", PROGRAM_ID, None);
@@ -353,6 +452,21 @@ async fn start(
             sell_reservation.encode(out)
         }),
     );
+    add_state(
+        &mut test,
+        buyer_position_address,
+        encode(account_len::POSITION, |out| buyer_position.encode(out)),
+    );
+    add_state(
+        &mut test,
+        seller_position_address,
+        encode(account_len::POSITION, |out| seller_position.encode(out)),
+    );
+    add_state(
+        &mut test,
+        receipt_address,
+        encode(account_len::SETTLEMENT_RECEIPT, |out| receipt.encode(out)),
+    );
     if candidate_prefund != 0 {
         test.add_account(candidate_address, system_slot(candidate_prefund));
     }
@@ -378,6 +492,9 @@ async fn start(
         reservation_one: sell_reservation_address,
         candidate: candidate_address,
         feed: feed_address,
+        buyer_position: buyer_position_address,
+        seller_position: seller_position_address,
+        receipt: receipt_address,
         market,
         epoch_id,
     };
@@ -433,6 +550,24 @@ async fn snapshot(banks: &mut BanksClient, addresses: [Address; 5]) -> [Vec<u8>;
         bytes(banks, addresses[2]).await,
         bytes(banks, addresses[3]).await,
         bytes(banks, addresses[4]).await,
+    ]
+}
+
+async fn snapshot_authority_chain(
+    banks: &mut BanksClient,
+    addresses: [Address; 10],
+) -> [Vec<u8>; 10] {
+    [
+        bytes(banks, addresses[0]).await,
+        bytes(banks, addresses[1]).await,
+        bytes(banks, addresses[2]).await,
+        bytes(banks, addresses[3]).await,
+        bytes(banks, addresses[4]).await,
+        bytes(banks, addresses[5]).await,
+        bytes(banks, addresses[6]).await,
+        bytes(banks, addresses[7]).await,
+        bytes(banks, addresses[8]).await,
+        bytes(banks, addresses[9]).await,
     ]
 }
 
@@ -497,6 +632,21 @@ async fn prefunded_submission_is_exact_once_and_leaves_authority_frozen() {
     );
     let epoch = EpochAccount::decode(&bytes(&mut banks, fixture.epoch).await).unwrap();
     assert_eq!(epoch.phase, EPOCH_PHASE_FROZEN);
+
+    // Even with structurally valid Position, reservation, and receipt fixtures,
+    // the live chain cannot promote its own SUBMITTED proposal to settlement
+    // authority. SettlePage must stop on the frozen/submitted phase pair and
+    // the runtime must roll every presented account back byte-for-byte.
+    let authority_after_submission =
+        snapshot_authority_chain(&mut banks, fixture.authority_chain()).await;
+    let blocked = send(&mut banks, &payer, None, fixture.settle_instruction()).await;
+    assert!(blocked.1 < u64::from(CU_LIMIT));
+    eprintln!("SettlePage authority STOP CU: {}", blocked.1);
+    assert_eq!(custom(blocked.0), ClutchError::NotActive as u32);
+    assert_eq!(
+        snapshot_authority_chain(&mut banks, fixture.authority_chain()).await,
+        authority_after_submission
+    );
 
     let candidate_after = candidate_account;
     let feed_after = feed_account;
