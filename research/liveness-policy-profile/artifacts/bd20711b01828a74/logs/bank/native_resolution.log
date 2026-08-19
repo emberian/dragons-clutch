@@ -1,0 +1,44 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.92s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/native_resolution.rs (/Users/ember/jobs/dragons-clutch-r1-83e124d-evidence/bank-target/debug/deps/native_resolution-cf99e02196866857)
+
+running 15 tests
+test a_late_external_supply_overflow_rolls_back_native_resolution ... ok
+test a_late_native_bearer_transfer_failure_rolls_back_the_prior_burn ... ok
+test degrees_one_through_three_persist_retry_and_redeem_the_native_vector ... native d1: resolve 1088267 CU, retry 934622 CU, redeem 775978 CU
+native d2: resolve 1096640 CU, retry 942995 CU, redeem 778021 CU
+native d3: resolve 1103534 CU, retry 949889 CU, redeem 776411 CU
+ok
+test native_account_mutability_alias_and_full_mint_vector_are_fail_closed ... ok
+test native_bearer_exit_rejects_hostile_roles_modes_windows_and_mint_vectors ... ok
+test native_bearer_exit_uses_minimal_exact_lots_and_sub_lots_roll_back ... native d1 external exact lot 2: 785073 CU
+native d2 external exact lot 4: 786873 CU
+native d3 external exact lot 8: 784578 CU
+ok
+test non_point_evidence_and_conflicting_retry_refuse_without_writes ... ok
+test occupation_bearer_exit_uses_live_v4_and_exact_lots ... occupation-v4 d1 external exact lot 2: 783711 CU
+occupation-v4 d2 external exact lot 4: 785511 CU
+occupation-v4 d3 external exact lot 8: 787716 CU
+ok
+test occupation_degrees_one_through_three_persist_retry_and_redeem_v4 ... occupation-v4 d1: accounts=14 resolution_bytes=383 rent=3556560 resolve=1243529 CU retry=1089893 CU internal=774692 CU
+occupation-v4 d2: accounts=14 resolution_bytes=383 rent=3556560 resolve=1254699 CU retry=1101063 CU internal=776735 CU
+occupation-v4 d3: accounts=14 resolution_bytes=383 rent=3556560 resolve=1268630 CU retry=1114994 CU internal=779625 CU
+ok
+test occupation_late_resolve_and_bearer_failures_roll_back ... ok
+test occupation_midpoints_gaps_substitution_modes_and_conflicts_refuse_atomically ... ok
+test occupation_span_one_two_initial_resolve_cu_profile ... occupation-v4 span=1 d1: initial=1250517 CU
+occupation-v4 span=1 d2: initial=1243835 CU
+occupation-v4 span=1 d3: initial=1248016 CU
+occupation-v4 span=2 d1: initial=1244023 CU
+occupation-v4 span=2 d2: initial=1259767 CU
+occupation-v4 span=2 d3: initial=1261323 CU
+ok
+test occupation_statistic_seven_routes_only_its_named_finalizer ... occupation-v4 statistic-7 named finalizer: 1253176 CU
+ok
+test recorded_internal_redemption_rejects_retired_evidence_aliases_and_late_replay_atomically ... ok
+test recorded_internal_redemption_rejects_wrong_mode_terms_and_window_without_writes ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.73s
+

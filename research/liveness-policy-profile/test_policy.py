@@ -17,6 +17,11 @@ class PolicyTests(unittest.TestCase):
 
     def test_projection_is_exactly_rederived(self) -> None:
         self.assertEqual(policy.derive(self.evidence), self.evidence["projection"])
+        tampered = copy.deepcopy(self.evidence)
+        historical = next(iter(tampered["historical_artifacts"]))
+        tampered["measurements"]["resolution_work"]["artifact_sha256"] = historical
+        with self.assertRaises(policy.CheckError):
+            policy.check_artifact_binding(tampered)
 
     def test_exact_headroom_boundary_fails_closed(self) -> None:
         inputs = policy.quote_policy(self.evidence)
@@ -74,6 +79,13 @@ class PolicyTests(unittest.TestCase):
 
     def test_historical_probe_manifest_lock_and_source_are_pinned(self) -> None:
         self.assertTrue(policy.SEALED_PROBE_PATHS <= set(self.evidence["source_blobs"]))
+        tampered = copy.deepcopy(self.evidence)
+        relative, row = tampered["evidence_files"].popitem()
+        tampered["evidence_files"][
+            "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/" + relative
+        ] = row
+        with self.assertRaises(policy.CheckError):
+            policy.check_artifact_binding(tampered)
 
     def test_rent_drift_is_rejected(self) -> None:
         tampered = copy.deepcopy(self.evidence)

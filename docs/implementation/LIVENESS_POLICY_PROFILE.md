@@ -37,12 +37,19 @@ Accordingly the profile publishes measured route quotes and bounded capital
 requirements, but it does **not** emit a complete promoted `LivenessPolicy`
 tuple. A STOP is not converted into a finite placeholder.
 
-The sealed default ELF is `a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1`
-(`1,228,192` bytes), built from runtime source `7e8f6b1`. Two ordinary clean
-builds are byte-identical. A relocated Cargo-home build is explicitly
-path-sensitive and therefore is not substituted as the canonical artifact.
-The release/test ancestry is `316c620`; it changes no one of the 88 declared
-runtime-source paths.
+The sealed default ELF is `bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`
+(`1,228,192` bytes), built from runtime source and test/evidence ancestry
+`83e124d`. Two ordinary clean builds are byte-identical. A relocated Cargo-home
+build is explicitly path-sensitive and therefore is not substituted as the
+canonical artifact.
+
+The preceding `a5725a3d…` seal is retained as historical evidence only. The
+declared closure refreshes the isolated Solana-reference lock and qualifies a
+rustdoc link in `programs/solana-reference/src/resolution.rs`. Exact artifact
+comparison finds identical instructions and only seven changed line-record
+bytes, but the ELF digest still changes. Consequently every current CU row
+below was remeasured against exact `bd20711b…`; no `a5725a3d…` CU was relabeled
+as current evidence.
 
 ## Policy inputs, not measurements
 
@@ -241,10 +248,10 @@ ref; test fixtures are pinned separately at the release/evidence ref. It never
 copies a later probe into an older runtime tree. Any source, ABI, test, probe,
 artifact, or capture drift requires a new profile.
 
-The upstream artifact report and checksum ledger are themselves copied into
-the profile. Their SHA-256 digests are
-`46de5a07ccb2aed018cd8c88a762e6bd5d737d488fe2e992c7abfb420fe4bf1d`
-and `baaa5ee5ac3e6372faf9fe82cd60e31ed53e93d62b37b8314ef9f6f1634d4ac0`.
+The current artifact report and upstream 52-file checksum ledger are themselves
+copied into the profile. Their SHA-256 digests are
+`626a299dd879cff5f8c775b82b488c2d6b300a386b6d5f847913b5e14797e038`
+and `dbf55f8e28c1674fc0f76b434049fbc8ef1e906c46db6ac0457410eaebc35f35`.
 The audit found zero diagnosed first-party final-LTO stack survivors; all
 `40,389` direct `r10` references are at or below `4,096` bytes.
 

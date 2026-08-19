@@ -1,0 +1,213 @@
+   Compiling version_check v0.9.5
+   Compiling five8_core v1.0.0
+   Compiling solana-program-error v3.0.1
+   Compiling solana-sanitize v3.0.1
+   Compiling typenum v1.20.1
+   Compiling solana-define-syscall v5.1.0 (/Users/ember/jobs/dragons-clutch-r1-83e124d-stack-audit-worktree/programs/clutch-sbf/vendor/solana-define-syscall-5.1.0)
+   Compiling solana-define-syscall v4.0.1
+   Compiling autocfg v1.5.1
+   Compiling cfg-if v1.0.4
+   Compiling solana-hash v4.5.0
+   Compiling clutch-batch v0.1.0 (/Users/ember/jobs/dragons-clutch-r1-83e124d-stack-audit-worktree/crates/clutch-batch)
+   Compiling clutch-liveness v0.1.0 (/Users/ember/jobs/dragons-clutch-r1-83e124d-stack-audit-worktree/crates/clutch-liveness)
+   Compiling five8_const v1.0.0
+   Compiling five8 v1.0.0
+   Compiling solana-program-memory v3.1.0
+   Compiling solana-sha256-hasher v3.1.0
+   Compiling clutch-bspline v0.1.0 (/Users/ember/jobs/dragons-clutch-r1-83e124d-stack-audit-worktree/crates/clutch-bspline)
+   Compiling clutch-kernel v0.1.0 (/Users/ember/jobs/dragons-clutch-r1-83e124d-stack-audit-worktree/crates/clutch-kernel)
+   Compiling clutch-accumulator v0.1.0 (/Users/ember/jobs/dragons-clutch-r1-83e124d-stack-audit-worktree/crates/clutch-accumulator)
+   Compiling solana-address v2.6.1
+   Compiling clutch-bspline-accumulator v0.1.0 (/Users/ember/jobs/dragons-clutch-r1-83e124d-stack-audit-worktree/crates/clutch-bspline-accumulator)
+   Compiling solana-pubkey v4.2.0
+   Compiling solana-account-info v3.1.1
+   Compiling solana-sdk-ids v3.1.0
+   Compiling generic-array v0.14.7
+   Compiling num-traits v0.2.19
+   Compiling solana-program-entrypoint v3.1.1
+   Compiling solana-instruction-error v2.4.0
+   Compiling solana-instruction v3.4.1
+   Compiling solana-stable-layout v3.0.1
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling solana-cpi v3.1.0
+   Compiling digest v0.10.7
+   Compiling sha2 v0.10.9
+   Compiling clutch-batch-policy-identity v0.1.0 (/Users/ember/jobs/dragons-clutch-r1-83e124d-stack-audit-worktree/research/batch-policy-identity)
+Error: Function _ZN12clutch_batch11relation_v19normalize17hde61e3f94e53a5e6E overflows the maximum allowed frame space by accessing an offset 8064 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 12160 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN12clutch_batch11relation_v124participation_from_fills17h63715bfbe3375f22E overflows the maximum allowed frame space by accessing an offset 20608 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 24704 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN12clutch_batch11relation_v111settle_cash17h8a79e576d8cdf878E overflows the maximum allowed frame space by accessing an offset 1984 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 6080 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN12clutch_batch11relation_v122verify_pairing_witness17ha87f3885ff89190fE overflows the maximum allowed frame space by accessing an offset 19776 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 23872 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN12clutch_batch11relation_v112verify_inner17hf8bbc862eee817a7E overflows the maximum allowed frame space by accessing an offset 35008 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 39104 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v112verify_inner17hf8bbc862eee817a7E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v112verify_inner17hf8bbc862eee817a7E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v112verify_inner17hf8bbc862eee817a7E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v112verify_inner17hf8bbc862eee817a7E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v112verify_inner17hf8bbc862eee817a7E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v112verify_inner17hf8bbc862eee817a7E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: Function _ZN12clutch_batch11relation_v119canonical_candidate17h8091a60fb12ca00aE overflows the maximum allowed frame space by accessing an offset 41728 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 45824 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v119canonical_candidate17h8091a60fb12ca00aE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v119canonical_candidate17h8091a60fb12ca00aE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v119canonical_candidate17h8091a60fb12ca00aE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v119canonical_candidate17h8091a60fb12ca00aE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v119canonical_candidate17h8091a60fb12ca00aE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v119canonical_candidate17h8091a60fb12ca00aE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v119canonical_candidate17h8091a60fb12ca00aE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: Function _ZN12clutch_batch11relation_v117canonical_pairing17haac3cc0d119415fcE overflows the maximum allowed frame space by accessing an offset 33920 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 38016 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN12clutch_batch11relation_v121check_explicit_slices17h260d3f2f48f4a8dfE overflows the maximum allowed frame space by accessing an offset 4736 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 8832 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN12clutch_batch11relation_v118propose_best_valid17hb91ddafe738fae82E overflows the maximum allowed frame space by accessing an offset 21376 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 25472 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v118propose_best_valid17hb91ddafe738fae82E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN12clutch_batch11relation_v118propose_best_valid17hb91ddafe738fae82E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+   Compiling clutch-solana-layout v0.1.0 (/Users/ember/jobs/dragons-clutch-r1-83e124d-stack-audit-worktree/programs/solana-layout)
+warning: unused import: `Sha256`
+  --> src/stream.rs:89:48
+   |
+89 |     OwnerId, PriceGridAccount, Reader, Result, Sha256, TombstoneRecord, Writer, EPOCH_PHASE_OPEN,
+   |                                                ^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+Error: Function _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV317initialize_frozen17h2b172ff787e86ae0E overflows the maximum allowed frame space by accessing an offset 2048 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 6144 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV35admit17h75a55c8aaf354debE overflows the maximum allowed frame space by accessing an offset 2752 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 6848 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV35admit17h75a55c8aaf354debE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV35admit17h75a55c8aaf354debE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV35admit17h75a55c8aaf354debE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: Function _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV318begin_verification17h78ddae9a7cad2466E overflows the maximum allowed frame space by accessing an offset 1408 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 5504 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV316verify_candidate17h74b3204d5e660b85E overflows the maximum allowed frame space by accessing an offset 1472 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 5568 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV318finalize_selection17h866a3c46a8802c68E overflows the maximum allowed frame space by accessing an offset 2688 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 6784 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV318finalize_selection17h866a3c46a8802c68E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV318finalize_selection17h866a3c46a8802c68E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV318finalize_selection17h866a3c46a8802c68E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV318finalize_selection17h866a3c46a8802c68E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV318finalize_selection17h866a3c46a8802c68E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV318finalize_selection17h866a3c46a8802c68E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: Function _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overflows the maximum allowed frame space by accessing an offset 2496 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 6592 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN28clutch_batch_policy_identity19direct_lifecycle_v317DirectLifecycleV315finish_terminal17h17a835ba58cadd5bE overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: Function _ZN28clutch_batch_policy_identity9recompute17hcb5c5927dbea6ebdE overflows the maximum allowed frame space by accessing an offset 64 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 4160 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+   Compiling clutch-solana-reference v0.1.0 (/Users/ember/jobs/dragons-clutch-r1-83e124d-stack-audit-worktree/programs/solana-reference)
+Error: Function _ZN23clutch_solana_reference20validate_market_init17h5daf0056663cbef9E overflows the maximum allowed frame space by accessing an offset 10560 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 14656 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN23clutch_solana_reference22validate_position_init17hd6133c7923cbb4adE overflows the maximum allowed frame space by accessing an offset 4672 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 8768 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN23clutch_solana_reference12DecodedState6decode17h6662f0bc501a5b3aE overflows the maximum allowed frame space by accessing an offset 1920 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 6016 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN23clutch_solana_reference37apply_market_resolution_with_evidence17h1524a38058449283E overflows the maximum allowed frame space by accessing an offset 7680 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 11776 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN23clutch_solana_reference11apply_inner17h9960908e6851087bE overflows the maximum allowed frame space by accessing an offset 4096 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 8192 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN23clutch_solana_reference21resolve_from_evidence17hdba0d1a32d60c7edE overflows the maximum allowed frame space by accessing an offset 9216 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 13312 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN23clutch_solana_reference20redeem_from_evidence17h000ade7cc702a33fE overflows the maximum allowed frame space by accessing an offset 7680 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 11776 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: A function call in method _ZN20clutch_solana_layout20portfolio_settlement17prepare_full_pair17h50ba9fc45d4db3e0E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN20clutch_solana_layout20portfolio_settlement17prepare_full_pair17h50ba9fc45d4db3e0E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: Function _ZN20clutch_solana_layout20portfolio_settlement17prepare_full_pair17h50ba9fc45d4db3e0E overflows the maximum allowed frame space by accessing an offset 128 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 4224 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: A function call in method _ZN20clutch_solana_layout20portfolio_settlement17prepare_full_pair17h50ba9fc45d4db3e0E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: A function call in method _ZN20clutch_solana_layout20portfolio_settlement17prepare_full_pair17h50ba9fc45d4db3e0E overwrites values in the frame. Please, decrease stack usage or remove parameters from the call. The function call may cause undefined behavior during execution.
+
+Error: Function _ZN20clutch_solana_layout20portfolio_settlement15apply_full_pair17ha98974b821b56041E overflows the maximum allowed frame space by accessing an offset 2688 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 6784 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN20clutch_solana_layout16OrderPageAccount6decode17h2e20c134e261bb3aE overflows the maximum allowed frame space by accessing an offset 4800 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 8896 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+Error: Function _ZN20clutch_solana_layout16OrderPageAccount14decode_on_grid17h6981637686a8e6dbE overflows the maximum allowed frame space by accessing an offset 4480 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 8576 bytes. Exceeding the maximum stack offset may cause undefined behavior during execution.
+
+warning: `clutch-solana-layout` (lib) generated 1 warning (run `cargo fix --lib -p clutch-solana-layout` to apply 1 suggestion)
+   Compiling clutch-sbf v0.1.0 (/Users/ember/jobs/dragons-clutch-r1-83e124d-stack-audit-worktree/programs/clutch-sbf/program)
+    Finished `release` profile [optimized] target(s) in 7.88s

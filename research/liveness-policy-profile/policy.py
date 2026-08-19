@@ -39,6 +39,42 @@ SEALED_PROBE_PATHS = {
     "research/liveness-policy-profile/Cargo.lock",
     "research/liveness-policy-profile/src/main.rs",
 }
+SAME_ELF_MEASUREMENTS = {
+    "resolution_work",
+    "native_point_v3",
+    "native_bearer_redeem",
+    "occupation_v4",
+    "direct_v2",
+    "source_endow",
+    "blank_bank_market_creation",
+    "order_reservation",
+    "withdraw_cash",
+}
+REQUIRED_EVIDENCE_SUFFIXES = {
+    "audit/RUNTIME_ARTIFACT_AUDIT.md",
+    "audit/backend-stack-diagnostics.txt",
+    "audit/dependencies.tsv",
+    "audit/elf-summary.txt",
+    "audit/frame-summary.txt",
+    "audit/metadata.json",
+    "audit/registry-source-verification.tsv",
+    "audit/source-files.txt",
+    "audit/stack-summary.txt",
+    "audit/upstream-SHA256SUMS",
+    "audit/vendor.diff",
+    "logs/sbf-build-1.log",
+    "logs/sbf-build-2.log",
+    "logs/sbf-build-relocated.log",
+    "logs/bank/artifact_transport.log",
+    "logs/bank/blank_bank_lifecycle.log",
+    "logs/bank/collateral_leg.log",
+    "logs/bank/direct_selection_v2.log",
+    "logs/bank/native_resolution.log",
+    "logs/bank/order_reservation.log",
+    "logs/bank/prefund_creation.log",
+    "logs/bank/resolution_work.log",
+    "logs/bank/source_archive.log",
+}
 
 
 class CheckError(RuntimeError):
@@ -313,6 +349,43 @@ def check_files(evidence: dict[str, Any]) -> None:
         require_equal(sha256(path), expected["sha256"], f"{relative} sha256")
 
 
+def check_artifact_binding(evidence: dict[str, Any]) -> None:
+    """Refuse historical/mixed-ELF rows in the current measurement plane."""
+
+    artifact = evidence["artifact"]
+    digest = artifact["sha256"]
+    require_equal(artifact["source_ref"], evidence["runtime_ref"], "artifact source ref")
+    for build in ("normal_build_1", "normal_build_2"):
+        require_equal(
+            evidence["artifact_reproducibility"][build],
+            digest,
+            f"{build} artifact",
+        )
+    for name in SAME_ELF_MEASUREMENTS:
+        require_equal(
+            evidence["measurements"][name]["artifact_sha256"],
+            digest,
+            f"measurement artifact {name}",
+        )
+
+    artifact_root = Path(artifact["path"]).parent
+    expected_files = {str(artifact_root / suffix) for suffix in REQUIRED_EVIDENCE_SUFFIXES}
+    require_equal(set(evidence["evidence_files"]), expected_files, "current evidence set")
+    for relative in evidence["evidence_files"]:
+        try:
+            Path(relative).relative_to(artifact_root)
+        except ValueError as error:
+            raise CheckError(f"current evidence escapes artifact root: {relative}") from error
+
+    for old_digest, row in evidence["historical_artifacts"].items():
+        if old_digest == digest:
+            raise CheckError("current artifact cannot also be historical")
+        if row["disposition"] != "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION":
+            raise CheckError(f"historical artifact disposition is not fail-closed: {old_digest}")
+        old_path = REPO / row["path"]
+        require_equal(sha256(old_path), old_digest, f"historical artifact {old_digest}")
+
+
 def check_capture(evidence: dict[str, Any]) -> None:
     path = REPO / evidence["capture"]["path"]
     require_equal(sha256(path), evidence["capture"]["sha256"], "capture sha256")
@@ -359,6 +432,7 @@ def check_rent_and_accounts(evidence: dict[str, Any]) -> None:
 def check(evidence: dict[str, Any]) -> None:
     check_source_identity(evidence)
     check_files(evidence)
+    check_artifact_binding(evidence)
     check_capture(evidence)
     check_rent_and_accounts(evidence)
     require_equal(derive(evidence), evidence["projection"], "policy projection")
@@ -368,7 +442,7 @@ def check_current(evidence: dict[str, Any]) -> None:
     """Optional strict gate: runtime source closures must match the frozen ref."""
 
     drift: list[str] = []
-    for path in evidence["source_trees"]:
+    for path in set(evidence["source_trees"]) | set(evidence["source_blobs"]):
         tracked = subprocess.run(
             ["git", "diff", "--quiet", evidence["runtime_ref"], "--", path],
             cwd=REPO,

@@ -1,0 +1,20 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.85s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/resolution_work.rs (/Users/ember/jobs/dragons-clutch-r1-83e124d-evidence/bank-target/debug/deps/resolution_work-c62ee485aa97169e)
+
+running 4 tests
+test begin_fold_finalize_is_prefund_safe_replay_safe_and_byte_exact ... ResolutionWork SBF CU: Begin=807676 Fold1=804616 Fold2=809225 Finalize=1094832 monolithic=1253326
+ok
+test every_bounded_fold_size_has_a_real_sbf_cost_row ... ResolutionWork SBF CU: span=1 Begin=805308 Fold(1)=802253
+ResolutionWork SBF CU: span=2 Begin=810992 Fold(2)=812193
+ResolutionWork SBF CU: span=3 Begin=807674 Fold(3)=813128
+ResolutionWork SBF CU: span=4 Begin=805860 Fold(4)=815573
+ok
+test expiry_keeper_abort_releases_lock_without_capturing_donations ... ResolutionWork SBF CU: BeginAbort=807676 AbortExpired=587197 BeginReopen=807676
+ok
+test source_spec_bump_and_same_domain_archive_substitution_refuse_atomically ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.99s
+

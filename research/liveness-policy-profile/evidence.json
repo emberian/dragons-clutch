@@ -2,40 +2,55 @@
   "schema": "dragons-clutch/liveness-policy-evidence/v2",
   "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
   "capture_date": "2026-08-19",
-  "runtime_ref": "7e8f6b1714c3c97a31a4250ecd19f87041433c2d",
-  "runtime_tree": "fbfdc4644b045a8b16a8ca86c552684767289d1f",
-  "evidence_ref": "316c620c8c618142fc3a21964052bcb42c4336b6",
+  "runtime_ref": "83e124dda22adc15cb5ebf18ff9e0ab971c551dc",
+  "runtime_tree": "a8e0b6d182b83dacf17e1a0d01ec13b6d8e26fb6",
+  "evidence_ref": "83e124dda22adc15cb5ebf18ff9e0ab971c551dc",
   "artifact": {
-    "path": "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/clutch_sbf.so",
-    "sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+    "path": "research/liveness-policy-profile/artifacts/bd20711b01828a74/clutch_sbf.so",
+    "sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
     "bytes": 1228192,
-    "source_ref": "7e8f6b1714c3c97a31a4250ecd19f87041433c2d",
+    "source_ref": "83e124dda22adc15cb5ebf18ff9e0ab971c551dc",
     "profile": "default-empty-registry"
   },
   "artifact_reproducibility": {
-    "normal_build_1": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
-    "normal_build_2": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
-    "relocated_cargo_home": "b1a8de39c4405fed6b6da3b430ea7d6109280779dcc2c67011daedda8c06c2de",
+    "normal_build_1": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
+    "normal_build_2": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
+    "relocated_cargo_home": "c2c549aafd42c243e56902c9096472e09ad29200688f5f8c8275c2367edf4866",
     "relocated_disposition": "PATH_SENSITIVE_NOT_CANONICAL",
     "first_party_final_lto_stack_survivors": 0,
     "direct_r10_references": 40389,
     "deepest_direct_r10_offset": 4096
   },
+  "historical_artifacts": {
+    "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1": {
+      "path": "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/clutch_sbf.so",
+      "runtime_ref": "7e8f6b1714c3c97a31a4250ecd19f87041433c2d",
+      "evidence_ref": "316c620c8c618142fc3a21964052bcb42c4336b6",
+      "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
+    }
+  },
   "capture": {
     "path": "research/liveness-policy-profile/captured-output.txt",
-    "sha256": "5d64929881a9f10a5dcfbcf50cd8916edc40d6ca4f73b1302027c4cc60e0be85"
+    "sha256": "ed4b2f9ef47c58694373ff7eaacef1b3d3fa306e6b9b6ef823098e4e8d856e75"
   },
   "source_blobs": {
     "research/liveness-policy-profile/Cargo.toml": "8574e7693c1a85cdb68bf608c5cf4dcde178123b",
     "research/liveness-policy-profile/Cargo.lock": "e6f277e80a2ef7af31e54f8f9eb26272084141b4",
     "research/liveness-policy-profile/src/main.rs": "b466ce85f8d4f5f7a42e720a4c342af1283423f8",
+    "programs/clutch-sbf/Cargo.lock": "96f3373bd1ee1c0acdd1b073e1894b389866e0d3",
+    "programs/clutch-sbf/program/Cargo.toml": "e0c249437a827f5e51af7436ef388149b6eb0b08",
     "programs/clutch-sbf/program/src/instructions/resolution_work.rs": "6c1e176199559a7ae2e47b45aa4695263f19fc1b",
-    "programs/clutch-sbf/program/src/error.rs": "f18ac224821959c9e7a5ab67725c05c3d7c57e96"
+    "programs/clutch-sbf/program/src/error.rs": "f18ac224821959c9e7a5ab67725c05c3d7c57e96",
+    "programs/solana-layout/Cargo.toml": "1949b6f902fbecf4a29107172cd58c12e305e51a",
+    "programs/solana-layout/Cargo.lock": "0293a117d8f11403b57a8766c9341dd3ec83566a",
+    "programs/solana-reference/Cargo.toml": "488acf29bbb84ae3ec6717a91b83587c665a7526",
+    "programs/solana-reference/Cargo.lock": "cca3bea2362f5752a750c76dca82b4ca12c8c38d",
+    "crates/clutch-liveness/Cargo.toml": "99018c975a433ae05e952b4dd6fd89b2ea5b74d8"
   },
   "source_trees": {
     "programs/clutch-sbf/program/src": "49fcd8922ab279521b52591b8ca043a565ea4d93",
     "programs/solana-layout/src": "7ff320e0a951f7bef006b20cd3e3a28792e1aa0f",
-    "programs/solana-reference/src": "13404d8524027904868ec40b1b38c0bc51af2444",
+    "programs/solana-reference/src": "bcd80bf55f7f38a53192e64b457f0bf6e32eb3ce",
     "crates/clutch-liveness/src": "38f21a9a8a931970b261078b996fcf00b68ebd9a"
   },
   "test_blobs": {
@@ -56,29 +71,29 @@
     "programs/clutch-sbf/svm-tests/tests": "9d38a21046513b77389fcdacca2f5d3f0dd9cee2"
   },
   "evidence_files": {
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/RUNTIME_ARTIFACT_AUDIT.md": {"sha256": "46de5a07ccb2aed018cd8c88a762e6bd5d737d488fe2e992c7abfb420fe4bf1d", "bytes": 9398},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/backend-stack-diagnostics.txt": {"sha256": "bc85e02844cb61b4a92a229775015e2f503379b05c574d07d761862b1d8b4c8f", "bytes": 12044},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/dependencies.tsv": {"sha256": "eed650fb0b93d8d97042c44123264c47e1dc0566a391a3a949a06a3102842b1b", "bytes": 3953},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/elf-summary.txt": {"sha256": "15cb2ebe74ea77294736b6e21b37adca72fd032c5b5579bf44686e6a34cc0bcc", "bytes": 220},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/frame-summary.txt": {"sha256": "f038c0c2f54e57d1b990e8f393ec44d848e4456218bb178b497209ad61273738", "bytes": 284},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/metadata.json": {"sha256": "1145dc5651b5604a307dadf56c1c69182a740fc77ba3e7f047ce52e51f2c1d52", "bytes": 129512},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/registry-source-verification.tsv": {"sha256": "c3a8c19b470713e828b08b56f3cedfe4089c0a704c457e15178c24ecd8cfad71", "bytes": 5206},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/source-files.txt": {"sha256": "6e61c98f5f8fa400f4943fb1aea556e87e29e967d71feadcf459634b8a923a8c", "bytes": 4044},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/stack-summary.txt": {"sha256": "691e089c3fdef94d7e124076b3fd11ad0b0f5d3984591af365bb34a57612ff9e", "bytes": 107},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/vendor.diff": {"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "bytes": 0},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/upstream-SHA256SUMS": {"sha256": "baaa5ee5ac3e6372faf9fe82cd60e31ed53e93d62b37b8314ef9f6f1634d4ac0", "bytes": 8848},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/sbf-build-1.log": {"sha256": "4ba1bbbf0fef59e9a963b161da51ac6539b53e7273571d97321bfb06c93df68d", "bytes": 29102},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/sbf-build-2.log": {"sha256": "f3f65ea7e59c339960b3f84f4dd2dbebd7cf83539c5a2c681071dea1e2a79687", "bytes": 29102},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/sbf-build-relocated.log": {"sha256": "c6317e1821b22790de9cefc80d91890ce0c5d6b44d0ff84183851018d402e6ef", "bytes": 29102},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/artifact_transport.log": {"sha256": "e9657f507df50ba6bfd7923b6e3f5f242403f7146c41e2a3e0f209098b384218", "bytes": 24176},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/blank_bank_lifecycle.log": {"sha256": "15bdf9795151234fa8e623320e505bbbfc01479e14bb6021ec357799ce3e8095", "bytes": 963},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/collateral_leg.log": {"sha256": "fab1dfe2e4c5e37c9cfcb6b84be0e482da6ce6ffabc904f504609c1ff1841f7d", "bytes": 3456},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/direct_selection_v2.log": {"sha256": "c37ae0034f0acab0d4302c99ce55204fbffaed989ebfa0902f2feaa07fd69324", "bytes": 979},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/native_resolution.log": {"sha256": "1c4db32caae2209ec5405d872fd39a5a46e13081d0c54fc10b88aa63f72f48bb", "bytes": 26048},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/order_reservation.log": {"sha256": "cf2c22e6d135650934229e7d633ae8d56353c117185d41741be4b437667bafe4", "bytes": 693},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/prefund_creation.log": {"sha256": "bc1a10023dd8085b2d754677fa16c369d1b3034018ca9ddf19c00ba72252fcec", "bytes": 1567},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/resolution_work.log": {"sha256": "5b3a933d3a3db296e5a988f4d4b9bcba4d1648d704a01e190b06efd5873cebd9", "bytes": 1179},
-    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/source_archive.log": {"sha256": "cfcaaf31c382bbaff9879b77ad4a2eabccf6fc5edb635ec0683c0cc4dacdf4dc", "bytes": 1151}
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/RUNTIME_ARTIFACT_AUDIT.md": {"sha256": "626a299dd879cff5f8c775b82b488c2d6b300a386b6d5f847913b5e14797e038", "bytes": 7233},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/backend-stack-diagnostics.txt": {"sha256": "2667804165dafbe814c086a5a52aaee4f2dafbfed7a38ecc81b06e9489fbb835", "bytes": 12044},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/dependencies.tsv": {"sha256": "eed650fb0b93d8d97042c44123264c47e1dc0566a391a3a949a06a3102842b1b", "bytes": 3953},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/elf-summary.txt": {"sha256": "15cb2ebe74ea77294736b6e21b37adca72fd032c5b5579bf44686e6a34cc0bcc", "bytes": 220},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/frame-summary.txt": {"sha256": "a4f7cd2620ede1cfba982cea822d0ceccfaae76477855552c0f18f969001a886", "bytes": 284},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/metadata.json": {"sha256": "184c671ee1b54cb8f1e2dbe92eb18383317fe3d451e4ba4d4369998afc0a5307", "bytes": 130142},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/registry-source-verification.tsv": {"sha256": "c3a8c19b470713e828b08b56f3cedfe4089c0a704c457e15178c24ecd8cfad71", "bytes": 5206},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/source-files.txt": {"sha256": "6e61c98f5f8fa400f4943fb1aea556e87e29e967d71feadcf459634b8a923a8c", "bytes": 4044},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/stack-summary.txt": {"sha256": "691e089c3fdef94d7e124076b3fd11ad0b0f5d3984591af365bb34a57612ff9e", "bytes": 107},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/vendor.diff": {"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "bytes": 0},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/upstream-SHA256SUMS": {"sha256": "dbf55f8e28c1674fc0f76b434049fbc8ef1e906c46db6ac0457410eaebc35f35", "bytes": 12428},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/logs/sbf-build-1.log": {"sha256": "5d0701cd6a29133c78a19dfca2f9fb84dff03ae89b3efef315799489fbfa765a", "bytes": 29157},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/logs/sbf-build-2.log": {"sha256": "d7b2fceac081413a3d99e805d2de2011d895d9b0fdc6a849a03509e0abb6b8c9", "bytes": 29157},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/logs/sbf-build-relocated.log": {"sha256": "e78a4fecf5db10cc4b899dcd7cc5bfd578f11ea06f6ec1e11d7600d330776de5", "bytes": 29157},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/logs/bank/artifact_transport.log": {"sha256": "ff822da57d99810571c56c0b1776b6252a327cc83d32ebb2f9de4eeca8c6be16", "bytes": 24087},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/logs/bank/blank_bank_lifecycle.log": {"sha256": "278938e6cf74f42716a5f235f1fc4e3a81ea871a63e6a6fdb3dcd574353e7781", "bytes": 1182},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/logs/bank/collateral_leg.log": {"sha256": "8a3b795bdb4d5b198fe2f1474f443cbdc0394978984c280f35b43cbe70247d00", "bytes": 3675},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/logs/bank/direct_selection_v2.log": {"sha256": "d8e41bab14354a4ae26e4d6fa3e389509015310ff29b4d05c2312ff2a0b4325d", "bytes": 1198},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/logs/bank/native_resolution.log": {"sha256": "4a01ae53726e277dd7a1472308cc58a24e396b0573f8d22a6b02c04ce401b038", "bytes": 3015},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/logs/bank/order_reservation.log": {"sha256": "476312db277e035e10376600cd25f74b92a0ae1b2c6863dea4469c1baa975def", "bytes": 912},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/logs/bank/prefund_creation.log": {"sha256": "c35581b7b8e1393e0688f36b4de4ad5648d8ce66c81cf1833c6ba471f9d8589b", "bytes": 1786},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/logs/bank/resolution_work.log": {"sha256": "15d27044b9740bfb4b773d27d15b670a2c57c6678d5c4e9844ef5f09a6127aa8", "bytes": 1398},
+    "research/liveness-policy-profile/artifacts/bd20711b01828a74/logs/bank/source_archive.log": {"sha256": "006e1dbc13ac6609950ef64fd9f3f3d6f598c5cc5c01893d048f69f18a7bacea", "bytes": 1370}
   },
   "rent": {
     "lamports_per_byte_year": 3480,
@@ -148,7 +163,7 @@
   },
   "measurements": {
     "resolution_work": {
-      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
       "fold_widths": [1, 2, 3, 4],
       "begin_cu": [807676, 805308, 810992, 807674, 805860],
       "fold_1_cu": [804616, 802253],
@@ -161,7 +176,7 @@
       "test_result": "PASS_4_OF_4"
     },
     "native_point_v3": {
-      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
       "degree_rows": [
         {"degree": 1, "resolve_cu": 1088267, "retry_cu": 934622, "internal_redeem_cu": 775978},
         {"degree": 2, "resolve_cu": 1096640, "retry_cu": 942995, "internal_redeem_cu": 778021},
@@ -170,7 +185,7 @@
       "test_result": "PASS"
     },
     "native_bearer_redeem": {
-      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
       "degree_rows": [
         {"degree": 1, "external_redeem_cu": 785073},
         {"degree": 2, "external_redeem_cu": 786873},
@@ -179,7 +194,7 @@
       "test_result": "PASS"
     },
     "occupation_v4": {
-      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
       "degree_rows": [
         {"degree": 1, "initial_cu": 1243529, "retry_cu": 1089893, "internal_redeem_cu": 774692, "external_redeem_cu": 783711},
         {"degree": 2, "initial_cu": 1254699, "retry_cu": 1101063, "internal_redeem_cu": 776735, "external_redeem_cu": 785511},
@@ -191,37 +206,37 @@
       "test_result": "PASS_BUT_MONOLITHIC_HEADROOM_STOP"
     },
     "direct_v2": {
-      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
       "init_cu": [532149],
       "freeze_cu": [935108],
-      "submit_cu": [986768, 1015185, 1050208, 1194085, 1080684],
+      "submit_cu": [986765, 1015184, 1050208, 1194085, 1080684],
       "select_cu": [1400000],
       "select_result": "ROLLBACK_PROGRAM_FAILED_TO_COMPLETE",
       "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
       "test_result": "PASS_EXPECTED_STOP"
     },
     "source_endow": {
-      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
       "default_refusal_code": "0x79",
       "default_release_available": false,
       "rollback": "BYTE_AND_LAMPORT_EXACT",
       "test_result": "PASS_EXPECTED_REFUSAL"
     },
     "blank_bank_market_creation": {
-      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
-      "v2": {"cu": 915790, "bytes": 165, "rent_lamports": 2039280},
-      "v3": {"cu": 923461, "bytes": 319, "rent_lamports": 3111120},
-      "v4": {"cu": 931066, "bytes": 383, "rent_lamports": 3556560},
+      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
+      "v2": {"cu": 921790, "bytes": 165, "rent_lamports": 2039280},
+      "v3": {"cu": 932461, "bytes": 319, "rent_lamports": 3111120},
+      "v4": {"cu": 925066, "bytes": 383, "rent_lamports": 3556560},
       "test_result": "PASS_2_OF_2"
     },
     "order_reservation": {
-      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
       "place_cu": [598879, 596909],
       "cancel_cu": [470318, 474991],
       "test_result": "PASS_2_OF_2"
     },
     "withdraw_cash": {
-      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
       "cu": [229756],
       "test_result": "PASS"
     },
