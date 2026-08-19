@@ -73,6 +73,7 @@ where
     D: Fn(u8) -> (Pubkey, u8),
 {
     let count = usize::from(outcome_count);
+    require(count <= MAX_OUTCOMES, ClutchError::NonCanonical)?;
     let end = first
         .checked_add(count)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
@@ -293,9 +294,11 @@ mod tests {
 
     struct MintCell {
         key: Pubkey,
+        owner: Pubkey,
         lamports: u64,
         data: Vec<u8>,
         writable: bool,
+        executable: bool,
     }
 
     impl MintCell {
@@ -306,8 +309,8 @@ mod tests {
                 self.writable,
                 &mut self.lamports,
                 &mut self.data,
-                &token::TOKEN_2022_PROGRAM_ID,
-                false,
+                &self.owner,
+                self.executable,
             )
         }
     }
@@ -437,15 +440,19 @@ mod tests {
         let second_key = Pubkey::new_from_array([11; 32]);
         let mut first = MintCell {
             key: first_key,
+            owner: token::TOKEN_2022_PROGRAM_ID,
             lamports: 1,
             data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 3),
             writable: false,
+            executable: false,
         };
         let mut second = MintCell {
             key: second_key,
+            owner: token::TOKEN_2022_PROGRAM_ID,
             lamports: 1,
             data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 5),
             writable: true,
+            executable: false,
         };
         let accounts = [first.info(), second.info()];
         let observed = observe_outcome_mints_with(
@@ -470,15 +477,19 @@ mod tests {
         let second_key = Pubkey::new_from_array([11; 32]);
         let mut first = MintCell {
             key: second_key,
+            owner: token::TOKEN_2022_PROGRAM_ID,
             lamports: 1,
             data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 3),
             writable: false,
+            executable: false,
         };
         let mut second = MintCell {
             key: first_key,
+            owner: token::TOKEN_2022_PROGRAM_ID,
             lamports: 1,
             data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 5),
             writable: true,
+            executable: false,
         };
         let accounts = [first.info(), second.info()];
         assert_eq!(
@@ -498,15 +509,19 @@ mod tests {
 
         let mut first = MintCell {
             key: first_key,
+            owner: token::TOKEN_2022_PROGRAM_ID,
             lamports: 1,
             data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 3),
             writable: true,
+            executable: false,
         };
         let mut second = MintCell {
             key: second_key,
+            owner: token::TOKEN_2022_PROGRAM_ID,
             lamports: 1,
             data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 5),
             writable: true,
+            executable: false,
         };
         let accounts = [first.info(), second.info()];
         assert_eq!(
@@ -522,6 +537,100 @@ mod tests {
                 }
             ),
             Err(ClutchError::UnexpectedWritable.into())
+        );
+    }
+
+    #[test]
+    fn malformed_or_incomplete_mint_vectors_fail_closed() {
+        let market_key = Pubkey::new_from_array([9; 32]);
+        let first_key = Pubkey::new_from_array([10; 32]);
+        let second_key = Pubkey::new_from_array([11; 32]);
+        let mut first = MintCell {
+            key: first_key,
+            owner: token::TOKEN_2022_PROGRAM_ID,
+            lamports: 1,
+            data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 3),
+            writable: false,
+            executable: false,
+        };
+        let accounts = [first.info()];
+        assert_eq!(
+            observe_outcome_mints_with(&accounts, 0, market_key, 2, None, |outcome| {
+                match outcome {
+                    0 => (first_key, 1),
+                    _ => (second_key, 2),
+                }
+            }),
+            Err(ClutchError::AccountCount.into())
+        );
+
+        let mut malformed = MintCell {
+            key: first_key,
+            owner: token::TOKEN_2022_PROGRAM_ID,
+            lamports: 1,
+            data: vec![0; token::BASE_MINT_LEN - 1],
+            writable: false,
+            executable: false,
+        };
+        let accounts = [malformed.info()];
+        assert_eq!(
+            observe_outcome_mints_with(&accounts, 0, market_key, 1, None, |_| (first_key, 1)),
+            Err(ClutchError::TokenExtensionNotAllowed.into())
+        );
+
+        assert_eq!(
+            observe_outcome_mints_with(&[], 0, market_key, (MAX_OUTCOMES + 1) as u8, None, |_| {
+                (first_key, 1)
+            }),
+            Err(ClutchError::NonCanonical.into())
+        );
+    }
+
+    #[test]
+    fn hostile_runtime_roles_and_mint_authority_fail_closed() {
+        let market_key = Pubkey::new_from_array([9; 32]);
+        let first_key = Pubkey::new_from_array([10; 32]);
+        let mut wrong_owner = MintCell {
+            key: first_key,
+            owner: Pubkey::new_from_array([77; 32]),
+            lamports: 1,
+            data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 3),
+            writable: false,
+            executable: false,
+        };
+        let accounts = [wrong_owner.info()];
+        assert_eq!(
+            observe_outcome_mints_with(&accounts, 0, market_key, 1, None, |_| (first_key, 1)),
+            Err(ClutchError::WrongTokenProgram.into())
+        );
+
+        let mut executable = MintCell {
+            key: first_key,
+            owner: token::TOKEN_2022_PROGRAM_ID,
+            lamports: 1,
+            data: token::fixtures::outcome_mint_bytes(market_key.to_bytes(), 3),
+            writable: false,
+            executable: true,
+        };
+        let accounts = [executable.info()];
+        assert_eq!(
+            observe_outcome_mints_with(&accounts, 0, market_key, 1, None, |_| (first_key, 1)),
+            Err(ClutchError::ExecutableAccount.into())
+        );
+
+        let wrong_authority = Pubkey::new_from_array([88; 32]);
+        let mut authority_mismatch = MintCell {
+            key: first_key,
+            owner: token::TOKEN_2022_PROGRAM_ID,
+            lamports: 1,
+            data: token::fixtures::outcome_mint_bytes(wrong_authority.to_bytes(), 3),
+            writable: false,
+            executable: false,
+        };
+        let accounts = [authority_mismatch.info()];
+        assert_eq!(
+            observe_outcome_mints_with(&accounts, 0, market_key, 1, None, |_| (first_key, 1)),
+            Err(ClutchError::MintNotAdmitted.into())
         );
     }
 }
