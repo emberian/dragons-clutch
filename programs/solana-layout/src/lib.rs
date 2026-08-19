@@ -4355,21 +4355,29 @@ pub enum Intent {
         page_index: u16,
         page_count: u16,
     },
-    /// Credit one position's internal trading cash.
+    /// Deposit collateral into pooled custody and credit one position's
+    /// internal trading cash.
     ///
-    /// The internal-ledger half of a deposit, and **only** that half.  Real
-    /// value arrival is the collateral leg — a Token-2022 `TransferChecked`
-    /// into the market's Hoard token account — which is constructed in
-    /// `clutch-sbf`'s token module and wired by no instruction.  Until it is,
-    /// an `Endow` credits cash that nothing backs.  That is exactly what the
-    /// bring-up fixtures already do when they write an opening `cash_atoms`
-    /// into a genesis account; making it an instruction does not create the
-    /// hole, it makes the hole **auditable** — a transaction with a signer, a
-    /// replay sequence, and a log line, instead of a number that appeared in a
-    /// fixture.
+    /// The Solana adapter binds this intent to an exact owner-authorized
+    /// Token-2022 `TransferChecked` into the market's Hoard token account.
+    /// `cash_atoms` is credited only after the observed token deltas match the
+    /// requested amount.
     Endow {
         market: MarketId,
         owner: OwnerId,
+        amount: u64,
+    },
+    /// Withdraw one position's unreserved collateral cash to an owner-controlled
+    /// Token-2022 account.
+    ///
+    /// `destination` is an explicit signed wire binding. The Solana adapter
+    /// must still decode the account's current mint, owner authority, state,
+    /// and extensions before moving any value. Reserved cash is never
+    /// withdrawable through this action.
+    WithdrawCash {
+        market: MarketId,
+        owner: OwnerId,
+        destination: Hash32,
         amount: u64,
     },
 }
@@ -4457,6 +4465,7 @@ const INIT_TERMS_TAG: u8 = 13;
 const INIT_ORDER_PAGE_TAG: u8 = 14;
 const ENDOW_TAG: u8 = 15;
 const REDEEM_EXTERNAL_TAG: u8 = 16;
+const WITHDRAW_CASH_TAG: u8 = 17;
 
 impl Intent {
     /// Return the exact encoded byte length for this intent.
@@ -4481,6 +4490,7 @@ impl Intent {
             Self::InitPriceGrid { .. } | Self::InitTerms { .. } => 2 + 32 + 32,
             Self::InitOrderPage { .. } => 2 + 32 + 32 + 2 + 2,
             Self::Endow { .. } => 2 + 32 + 32 + 8,
+            Self::WithdrawCash { .. } => 2 + 32 + 32 + 32 + 8,
         }
     }
     /// Validate and encode into a caller-provided buffer.
@@ -4750,6 +4760,24 @@ impl Intent {
                 w.hash(*owner)?;
                 w.u64(*amount)?
             }
+            Self::WithdrawCash {
+                market,
+                owner,
+                destination,
+                amount,
+            } => {
+                check_hash(*market)?;
+                check_hash(*owner)?;
+                check_hash(*destination)?;
+                if *amount == 0 {
+                    return Err(CodecError::ZeroValue);
+                }
+                put_header(&mut w, WITHDRAW_CASH_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*owner)?;
+                w.hash(*destination)?;
+                w.u64(*amount)?
+            }
         };
         Ok(w.at)
     }
@@ -5010,6 +5038,25 @@ impl Intent {
                 Ok(Self::Endow {
                     market,
                     owner,
+                    amount,
+                })
+            }
+            WITHDRAW_CASH_TAG => {
+                let market = r.hash()?;
+                let owner = r.hash()?;
+                let destination = r.hash()?;
+                let amount = r.u64()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(owner)?;
+                check_hash(destination)?;
+                if amount == 0 {
+                    return Err(CodecError::ZeroValue);
+                }
+                Ok(Self::WithdrawCash {
+                    market,
+                    owner,
+                    destination,
                     amount,
                 })
             }
@@ -9377,7 +9424,7 @@ mod tests {
         b[66..74].fill(0);
         assert_eq!(Intent::decode(&b[..n]), Err(CodecError::ZeroValue));
         // A tag past the last one this version defines.
-        b[0] = REDEEM_EXTERNAL_TAG + 1;
+        b[0] = WITHDRAW_CASH_TAG + 1;
         assert_eq!(Intent::decode(&b[..n]), Err(CodecError::WrongTag));
     }
 
@@ -9445,5 +9492,61 @@ mod tests {
         ] {
             assert!(invalid.encode(&mut bytes).is_err());
         }
+    }
+
+    #[test]
+    fn cash_withdrawal_binds_owner_destination_and_nonzero_amount() {
+        let intent = Intent::WithdrawCash {
+            market: h(1),
+            owner: h(2),
+            destination: h(3),
+            amount: 17,
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = intent.encode(&mut bytes).unwrap();
+        assert_eq!(len, 2 + (3 * HASH_BYTES) + 8);
+        assert_eq!(bytes[0], WITHDRAW_CASH_TAG);
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(intent));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+
+        for invalid in [
+            Intent::WithdrawCash {
+                market: Hash32::ZERO,
+                owner: h(2),
+                destination: h(3),
+                amount: 17,
+            },
+            Intent::WithdrawCash {
+                market: h(1),
+                owner: Hash32::ZERO,
+                destination: h(3),
+                amount: 17,
+            },
+            Intent::WithdrawCash {
+                market: h(1),
+                owner: h(2),
+                destination: Hash32::ZERO,
+                amount: 17,
+            },
+            Intent::WithdrawCash {
+                market: h(1),
+                owner: h(2),
+                destination: h(3),
+                amount: 0,
+            },
+        ] {
+            assert!(invalid.encode(&mut bytes).is_err());
+        }
+
+        let mut encoded = [0; MAX_INTENT_BYTES];
+        let n = intent.encode(&mut encoded).unwrap();
+        encoded[66..98].fill(0);
+        assert_eq!(Intent::decode(&encoded[..n]), Err(CodecError::ZeroIdentity));
+        let n = intent.encode(&mut encoded).unwrap();
+        encoded[98..106].fill(0);
+        assert_eq!(Intent::decode(&encoded[..n]), Err(CodecError::ZeroValue));
     }
 }
