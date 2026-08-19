@@ -54,6 +54,7 @@
 //! | [`accounts`] | hostile-metadata authentication, address comparison, and every account decoder |
 //! | [`dispatch`] | request decoding and routing to exactly one instruction family |
 //! | [`instructions`] | one module per instruction family; see each module's status |
+//! | [`native_window`] | fail-closed sealed-archive occupation preflight; not routed or persisted |
 //! | [`token`] | Token-2022 observation, admission, and CPI construction |
 //!
 //! The per-lane ownership boundaries are tabulated in
@@ -70,6 +71,7 @@ pub mod claim_truth;
 pub mod dispatch;
 pub mod error;
 pub mod instructions;
+pub mod native_window;
 pub mod seeds;
 pub mod source;
 pub mod source_archive;
