@@ -153,12 +153,7 @@ pub struct Plane {
     pub outcome_mints: Vec<Pda>,
     /// The Realm's frozen collateral policy.
     pub policy: collateral::CollateralPolicy,
-    /// The account the 266 policy bytes are presented from.
-    ///
-    /// The policy is **content**-authenticated: the program recomputes its
-    /// digest and the parent Profile identity and compares both, so the
-    /// address it is presented from is arbitrary and this one is a constant
-    /// rather than a derivation.
+    /// Canonical sealed policy PDA, derived from Profile and policy digest.
     pub policy_account: Address,
     /// The collateral mint the policy names.
     pub collateral_mint: Address,
@@ -210,13 +205,6 @@ fn payout_set() -> PayoutSet {
     PayoutSet::new(2, OUTCOME_COUNT, vectors)
 }
 
-/// The address the 266 policy bytes are presented from.
-///
-/// Arbitrary by construction: the policy is authenticated by recomputed digest
-/// against the Profile, not by address, so nothing derives this and nothing
-/// may.
-pub const POLICY_ACCOUNT: Address = Address::new_from_array([0x9d; 32]);
-
 /// The Realm's frozen collateral policy: a real, decodable 266-byte policy.
 ///
 /// The collateral mint it names is a **live** mint the real Token-2022 program
@@ -260,6 +248,12 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
         .expect("the fixture policy composes a parent profile")
         .identity()
         .expect("the parent profile derives an identity");
+    let policy_digest = policy.digest().expect("the fixture policy must digest");
+    let policy_artifact = derive(&[
+        seeds::SEED_POLICY,
+        &profile_id.bytes(),
+        &policy_digest.bytes(),
+    ]);
     let realm_id = canonical_realm_id(profile_id, REALM_NONCE);
     let market_id = canonical_market_id(realm_id, profile_id, nonce);
     let owner = Hash32::from_bytes(actor.to_bytes());
@@ -360,9 +354,7 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
                 ProfileAccount {
                     profile: profile_id,
                     realm: realm_id,
-                    collateral_policy_digest: policy
-                        .digest()
-                        .expect("the fixture policy must digest"),
+                    collateral_policy_digest: policy_digest,
                     version: 1,
                     flags: PROFILE_FLAG_POLICY_FROZEN,
                 }
@@ -370,7 +362,7 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
             }),
         },
         GenesisAccount {
-            address: POLICY_ACCOUNT,
+            address: policy_artifact.address,
             owner: PROGRAM_ID,
             data: policy
                 .canonical_bytes()
@@ -567,7 +559,7 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
         hoard_token,
         outcome_mints,
         policy,
-        policy_account: POLICY_ACCOUNT,
+        policy_account: policy_artifact.address,
         collateral_mint,
         terms,
         terms_id,

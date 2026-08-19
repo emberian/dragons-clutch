@@ -39,8 +39,8 @@ use {
     clutch_svm_fixture::{
         build_plane, compute_unit_limit_data, create_market_request, immutable_owner_account_bytes,
         layout_request, Mode, Plane, CASH_ATOMS, COMPUTE_BUDGET, FOUNDING_MARKET_NONCE,
-        FUNDED_SETS, MARKET_NONCE, OUTCOME_COUNT, POLICY_ACCOUNT, PROGRAM_ID, RENT_SYSVAR,
-        RESERVED_CASH_ATOMS, SYSTEM_PROGRAM, TOKEN_2022,
+        FUNDED_SETS, MARKET_NONCE, OUTCOME_COUNT, PROGRAM_ID, RENT_SYSVAR, RESERVED_CASH_ATOMS,
+        SYSTEM_PROGRAM, TOKEN_2022,
     },
     solana_account::Account,
     solana_address::Address,
@@ -160,7 +160,7 @@ impl Scenario {
                 blocked,
                 Account {
                     lamports: 1,
-                    data: Vec::new(),
+                    data: vec![1],
                     owner: solana_system_interface::program::ID,
                     executable: false,
                     rent_epoch: 0,
@@ -524,7 +524,7 @@ impl Scenario {
             AccountMeta::new(position, false),
             AccountMeta::new(replay, false),
             AccountMeta::new_readonly(self.plane.profile.address, false),
-            AccountMeta::new_readonly(POLICY_ACCOUNT, false),
+            AccountMeta::new_readonly(self.plane.policy_account, false),
             AccountMeta::new_readonly(TOKEN_2022, false),
             AccountMeta::new_readonly(self.plane.collateral_mint, false),
             AccountMeta::new(actor_token, false),
@@ -573,7 +573,7 @@ impl Scenario {
             AccountMeta::new(position, false),
             AccountMeta::new(replay, false),
             AccountMeta::new_readonly(self.plane.profile.address, false),
-            AccountMeta::new_readonly(POLICY_ACCOUNT, false),
+            AccountMeta::new_readonly(self.plane.policy_account, false),
             AccountMeta::new_readonly(TOKEN_2022, false),
             AccountMeta::new_readonly(self.plane.collateral_mint, false),
             AccountMeta::new(destination, false),
@@ -966,7 +966,8 @@ async fn founding_a_market_twice_refuses() {
 
 /// **A late token-plane refusal rolls every earlier System CPI back.**
 ///
-/// The final outcome-mint address is occupied by a one-lamport System account.
+/// The final outcome-mint address is occupied by a System account carrying one
+/// byte of initialization evidence.
 /// `CreateMarket` therefore constructs all seven state accounts and the first
 /// outcome mint before it reaches the refusal. Atomic transaction failure must
 /// leave none of those earlier effects in the committed bank.
@@ -1012,7 +1013,7 @@ async fn late_create_market_refusal_rolls_back_state_and_token_construction() {
     let blocker = scenario.account(blocked).await;
     assert_eq!(blocker.owner, solana_system_interface::program::ID);
     assert_eq!(blocker.lamports, 1);
-    assert!(blocker.data.is_empty());
+    assert_eq!(blocker.data, vec![1]);
 }
 
 /// **A second wallet opens its canonical owner plane with its first deposit.**
