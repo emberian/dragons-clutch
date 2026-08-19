@@ -236,8 +236,10 @@ The dependency-ordered route is:
 
 1. preserve the sealed R1 artifact/stack/bank evidence and produce the missing
    schema-v2 release baseline;
-2. bind immutable Terms-selected basis mode through Split/Merge/materialize/
-   dematerialize instead of reconstructing every active Kernel as finite preset;
+2. (landed at `3a81b38`, inside the frozen runtime) KernelAccount v2 binds
+   the immutable Terms-selected basis mode through Split/Merge/materialize/
+   dematerialize; the successor gate is per-degree blank-bank joined
+   lifecycle evidence;
 3. audit other post-resolution consumers and freeze the total fragment/credit
    policy;
 4. build permissionless SourceSpec/Feed/archive construction and authenticate a

@@ -173,11 +173,12 @@ asset. Hoard principal is never rent, liveness, bounty, or revenue.
    source ingestion, monolithic occupation-v4 initial liveness, and a total
    fragment/credit policy remain open. The exact sealed ELF's stack gate passes;
    the staged ResolutionWork route is admitted only for its measured shapes.
-2. Both the public account-shaped reference adapter and SBF Split/Merge/
-   materialize/dematerialize still reconstruct mode-less persisted Kernel state
-   as `FinitePreset`. Reachable active states preserve the native bound, but
-   this is a P1 representation/refinement gap. Bind a Terms-checked immutable
-   basis-mode projection before release.
+2. Repaired at `3a81b38` (an ancestor of frozen runtime `7e8f6b1`):
+   KernelAccount v2 persists the Terms-checked immutable basis mode, the
+   reference adapter and SBF Split family reconstruct the stored mode after
+   requiring Active, and hostile flip/wrong-mode/solvency/phase tests landed.
+   Remaining: per-degree blank-bank joined lifecycle evidence and the
+   Terms-to-payout refinement boundary.
 3. Resolve now derives and authenticates canonical SourceSpec/archive PDAs and
    requires the caller's compatibility projection to equal the sealed archive.
    No production provider/parser, onchain create/append/seal path, immediate

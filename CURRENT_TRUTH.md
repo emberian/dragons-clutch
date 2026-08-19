@@ -192,14 +192,21 @@ remains. The exact sealed ELF closes its first-party final-LTO stack diagnostic
 gate, but that does not close these semantic, source, or terminal gates. No path
 may lower a smooth market to categorical portfolios.
 
-The v4 lifecycle audit also found a P1 active-mode representation gap: both the
-public account-shaped Solana reference adapter and SBF Split/Merge/materialize/
-dematerialize reconstruct the mode-less persisted Kernel as `FinitePreset`;
-the SBF account planes receive neither Terms nor Resolution. No valid-origin
-value-extraction trace was found, and the active transitions preserve the
-stronger native collateral bound, but both adapters check the wrong invariant
-and could admit corrupted or future-reachable state. Bind an immutable
-Terms-derived basis-mode projection before release. The same audit repaired
+The v4 lifecycle audit found a P1 active-mode representation gap — the
+mode-less persisted Kernel was reconstructed as `FinitePreset` on Split-family
+seams that receive neither Terms nor Resolution — and the repair landed at
+`3a81b38`, which is an ancestor of the frozen runtime source `7e8f6b1` and is
+therefore inside the sealed `a572...d6b6a1` ELF. KernelAccount v2 (1,255
+bytes) persists an immutable `basis_mode` byte derived only from fully
+validated Terms at creation; hostile mode bytes and every v1 account refuse;
+every Terms-receiving seam cross-checks degree against the stored mode; the
+Split family reconstructs the stored mode only after requiring Active; and
+mode-flip, wrong-Terms, derived-active-solvency, and resolved-native
+phase-refusal/rollback tests exist in-tree
+(`docs/reviews/NATIVE_SEMANTICS_AUDIT_V4.md`, REPAIRED P1 / PASS). The honest
+residues are per-degree blank-bank joined lifecycle evidence and the absent
+refinement theorem joining Terms bytes to evaluator, v3 Resolution bytes, and
+payout. The same audit repaired
 public `derive_payout` to be degree-zero-only; smooth callers must use
 `derive_payout_vector` and can no longer cross a preset-membership bridge.
 
@@ -212,7 +219,7 @@ public `derive_payout` to be degree-zero-only; smooth callers must use
 | Verus evidence | narrow **CHECKED-RUST-SUBSET** plus separate **PROVED-MODEL** | Pinned Verus checked exact debit/credit conservation and overflow refusal for `prepare_internal_transfer`. Separately, the scalar batch shadow proves allocation decomposition/per-fill bounds, unique tick selection, a whole-fill partition conditional on accepted side equalities, and a zero-suffix fold identity; four semantic mutants go red. | The scalar shadow does not prove dust-loop completion, accepted side equality, production zero-padding validation, checked-arithmetic/source correspondence, coupled V1, or any account/SBF behavior. |
 | B-spline model/executable bridge | **CHECKED-FINITE** | Eight Lean-computed vectors match digest-bound production evaluator outputs; five actual-source semantic mutants compile/execute and disagree. | No Verus invocation or universal Rust/SBF refinement; finite adapter association remains reviewed. |
 | General accumulator | **HOST-TESTED** | Source-neutral adjacent summaries, coverage, interval, TWAP, and terminal calculations have bounded tests. | It authenticates no source, clock, archive, or deployment generation. |
-| Native spline stack | point Resolve/exits **SBF-EXECUTED** and measured-profile admitted; broader mixed, see §3 | Degree-selected v2/v3 creation, source-joined exact d1–3 point resolution, sole-vector persistence/replay, and exact-lot internal and bearer redemption execute. The corrected `161f530` fixture passes 15/15 against the sealed default ELF; point-v3 initial Resolve samples clear the selected 25%-headroom policy. | Active Split-family mode binding is P1. Production source ingestion, other consumer audit, non-point semantics, and a total fragment policy remain open. Monolithic occupation-v4 initial Resolve does not clear that policy; the routed staged lane below is the admitted alternative. |
+| Native spline stack | point Resolve/exits **SBF-EXECUTED** and measured-profile admitted; broader mixed, see §3 | Degree-selected v2/v3 creation, source-joined exact d1–3 point resolution, sole-vector persistence/replay, and exact-lot internal and bearer redemption execute. The corrected `161f530` fixture passes 15/15 against the sealed default ELF; point-v3 initial Resolve samples clear the selected 25%-headroom policy. | Kernel v2 immutable mode binding is repaired and host-tested inside the sealed runtime; per-degree blank-bank joined lifecycle evidence remains open. Production source ingestion, other consumer audit, non-point semantics, and a total fragment policy remain open. Monolithic occupation-v4 initial Resolve does not clear that policy; the routed staged lane below is the admitted alternative. |
 | Coupled batch relation | **HOST-TESTED** plus a narrow scalar **PROVED-MODEL** shadow | Exact witness checks, bounded candidate comparison, pairing, conservation, and a bounded streaming verifier have finite/adversarial campaigns. The separate Verus shadow proves only the four scalar statements named above. | It supports “best valid submitted candidate,” not globally optimal search. The Verus shadow excludes the coupled relation, streaming verifier, production loops, accounts, and SBF. |
 | Funded order admission | **SBF-EXECUTED** focused path | `PlaceOrder` creates a canonical pre-fund-safe per-order reservation and encumbers exact cash or internal Eggs. `CancelOrder` tombstones once and releases only that reservation. Split and Withdraw cannot spend reserved cash. | No frozen reservation-set commitment, permissionless lapse, or general candidate-to-entitlement transition exists. |
 | Pooled custody and cash exit | exits **SBF-EXECUTED**; default value admission **STOP** | Endow is the sole inbound token boundary; Split/Merge/internal redemption are pooled-accounting reclassifications; exact unreserved `WithdrawCash` performs Hoard-to-owner Token-2022 transfer. Since `cfea8e8`, default Endow authenticates Terms/SourceSpec then refuses `SourceReleaseUnavailable` (`0x79`) before owner allocation or Token-2022 CPI because the production registry is empty. | Mock-source Endow success requires a distinct `non-production-mock-source` ELF. No production source release or value-bearing market is admitted by the sealed default artifact. Full venue settlement remains open. |
@@ -269,10 +276,15 @@ the sealed default ELF has no registered release and therefore refuses it with
 
 ## 6. Non-negotiable STOP ledger
 
-1. **Bind native mode across the active lifecycle:** cache a Terms-checked
-   immutable basis mode in Kernel state or present/authenticate Terms on every
-   Split/Merge/materialize/dematerialize seam. Add mode-flip, wrong-Terms,
-   derived-active-solvency, and resolved-native phase-refusal tests.
+1. **Native mode binding — repaired at runtime; joined evidence open:** the
+   Terms-checked immutable basis mode is cached in KernelAccount v2 at
+   `3a81b38` (inside the sealed runtime source), with mode-flip, wrong-Terms,
+   derived-active-solvency, and resolved-native phase-refusal tests landed.
+   The remaining STOP is evidence, not code: one public blank-bank joined
+   lifecycle per smooth degree (one, two, three), plus the still-open
+   refinement boundary from Terms bytes through the evaluator to v3
+   Resolution bytes and payout. Never infer mode from `resolved_payout`,
+   preset membership, or vector-equals-preset.
 2. **Complete native live semantics:** degree-selected blank-bank creation,
    source-joined point Resolve, sole-vector persistence, exact replay, and
    exact-lot internal and bearer redemption are live for degrees one through

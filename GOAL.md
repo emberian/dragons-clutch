@@ -36,6 +36,14 @@ provider selection/design, Draft 10 fork (degg-research).
 
 ## Done log (2026-08-19 session)
 
+- STOP #1 reconciled with git truth: the basis-mode binding the STOP demanded
+  landed at 3a81b38 (ancestor of frozen runtime 7e8f6b1; program-src diff to
+  HEAD is empty; NATIVE_SEMANTICS_AUDIT_V4 reads REPAIRED P1 / PASS with all
+  four named test families in-tree). CURRENT_TRUTH Sections 3/4/6, both
+  handoffs updated; successor gate is per-degree blank-bank joined lifecycle
+  evidence plus the Terms-to-payout refinement boundary. Verified the
+  ancestry/diff/audit chain independently before editing.
+
 - V3 blocker verification (cross-audit addendum): all three 9fd1ef1 blockers
   CONFIRMED with two-sided file:line evidence — model hashes a 99-byte order
   body vs live 107 (omits expiry_epoch; digests can never match on nonempty
