@@ -3,14 +3,16 @@
 //! This module owns the batch-auction plane's account lists.  Two of its three
 //! intents are implemented: [`Intent::PlaceOrder`] appends one order — of
 //! either family — to an open order page, and [`Intent::CancelOrder`] retires
-//! one in place.  The third refuses for a *measured* reason written down below
-//! rather than for "not written yet", and it reads no account.
+//! one in place.  The third remains fail-closed behind the ranked joins written
+//! down below.  Its byte-level preflight is executable and adversarially tested
+//! in the private `settlement` module, but the instruction reads no account until the missing
+//! domain and checkpoint representations have semantic owners.
 //!
 //! | intent | this wave |
 //! | --- | --- |
 //! | `PlaceOrder` | **implemented**, both order families: the v2 wire carries an `OrderSlot` |
 //! | `CancelOrder` | **implemented**: the v4 page retires an order in place (§ *Cancellation*) |
-//! | `SettlePage` | **refused**: `clutch_batch::relation_v1::verify` is measured at a 39,104-byte SBF frame (§ *Settlement*) |
+//! | `SettlePage` | **refused**: streaming fixed the frame, not the domain/persistence/reservation joins (§ *Settlement*) |
 //!
 //! Nothing here computes a clearing price, selects a candidate, or moves
 //! collateral.  A placement writes one order record into one page and updates
@@ -218,68 +220,52 @@
 //!   — so it cannot be added, undone, or moved after a freeze without changing
 //!   `order_set`.
 //!
-//! ## Settlement, and the frame budget of the relation — measured
+//! ## Settlement: the frame blocker is closed; the joins are not
 //!
-//! `SettlePage` refuses because the relation does not fit an SBF frame, and
-//! that is measured on the pinned `cargo-build-sbf` (platform-tools frame
-//! diagnostics, the same method the streaming lane used), against a 4,096-byte
-//! per-frame maximum:
+//! The original batch relation still does not fit an SBF frame: its measured
+//! `verify_inner` frame is 39,104 bytes against the 4,096-byte maximum.  That
+//! is no longer the current blocker.  `clutch_batch::relation_v1_stream`
+//! reproduces the batch verdict with one order at a time; its largest measured
+//! frame is 1,280 bytes and its resumable host gate has zero observed verdict
+//! divergence.
 //!
-//! | function | estimated frame |
-//! | --- | --- |
-//! | `clutch_batch::relation_v1::canonical_candidate` | 45,824 |
-//! | `clutch_batch::relation_v1::verify_inner` (what `verify` is) | **39,104** |
-//! | `clutch_batch::relation_v1::canonical_pairing` | 38,016 |
-//! | `clutch_batch::relation_v1::propose_best_valid` | 25,472 |
-//! | `clutch_batch::relation_v1::participation_from_fills` | 24,704 |
-//! | `clutch_batch::relation_v1::verify_pairing_witness` | 23,872 |
-//! | `clutch_batch::relation_v1::normalize` | 12,160 |
-//! | `clutch_batch::relation_v1::check_explicit_slices` | 8,832 |
-//! | `clutch_batch::relation_v1::settle_cash` | 6,080 |
+//! `settlement::verify_preflight` now executes every join which can be stated
+//! without inventing protocol facts: it recomputes the complete frozen page
+//! set, binds it to the epoch, binds a submitted candidate record to that
+//! epoch, binds the solver feed field-for-field to the candidate and order set,
+//! and binds the layout-owned ClearWork header and page cursor.  It writes
+//! nothing and it does not interpret the opaque checkpoint body.
 //!
-//! A caller fares no better: a probe whose whole body is `BookV1::empty()`,
-//! `CandidateV1::empty()`, `verify(..)` is reported at 23,168 bytes, and the
-//! `entrypoint` that calls it at 22,976.
+//! The instruction remains a refusal because the remaining joins are semantic,
+//! not tuning work, in this dependency order:
 //!
-//! The type widths behind those numbers are the cause, and none of them is
-//! target-dependent — every field is a fixed-width integer or a fieldless enum:
+//! 1. placements reserve no position/hoard collateral;
+//! 2. `EpochAccount.order_count` counts slots including tombstones, while the
+//!    relation candidate counts live orders; the owner codec currently refuses
+//!    both possible interpretations after a cancellation;
+//! 3. the epoch carries a 32-byte policy identity but no `FrozenPolicyV1`
+//!    preimage;
+//! 4. the relation domain carries four `u64` identities while the on-chain
+//!    domain carries `Hash32`; no injective mapping has been specified;
+//! 5. `ClearWorkV1` is `repr(Rust)` state containing enums and booleans, not a
+//!    stable account codec, so casting its opaque bytes would be unsound;
+//! 6. ClearWork and CandidateFeed have no authenticated creation/init lifecycle;
+//! 7. candidate-set closure and selection are not on-chain transitions; and
+//! 8. FinalPot/SettlementReceipt are codecs, not frozen entitlements.
 //!
-//! | type | bytes |
-//! | --- | --- |
-//! | `BookV1` (`[OrderV1; 64]`) | 11,272 |
-//! | `NormalizedBookV1` | 11,912 |
-//! | `ParticipationV1` | 16,384 |
-//! | `PairingWitnessV1` (`[PairingSliceV1; 416]`) | 6,664 |
-//! | `SummaryV1` | 1,184 |
-//! | `CandidateV1` | 752 |
-//! | `RelationDomainV1` | 88 |
+//! The ranked list is an executable constant in `settlement`.  Its tiny
+//! `settlement::FailClosedCheckpoint` binds a successful preflight
+//! idempotently, refuses a conflicting replay atomically, and cannot advance
+//! into the relation: the first missing prerequisite is returned without a
+//! state change.  Conservation, canonical allocation, and exact settlement are
+//! therefore preserved today by *unreachability*, not claimed as implemented.
 //!
-//! `OrderV1` is 176 bytes because `PortfolioOrderV1` carries a
-//! `[u64; MAX_OUTCOMES]` coefficient vector, and a 64-order book carries 64 of
-//! them whether or not any order is a portfolio.  `verify_inner` holds a
-//! `BookV1`, the `NormalizedBookV1` it derives, and a `ParticipationV1` at
-//! once: 11,272 + 11,912 + 16,384 is already 39,568, which is the measured
-//! 39,104 to within the compiler's slot reuse.
-//!
-//! **Finding for the design queue.** On-chain candidate verification needs a
-//! *streaming or resumable* relation API in `clutch-batch`, in the same shape
-//! and for the same reason as the page-decode finding the streaming lane
-//! closed: an interface whose working set is one order (176 bytes), not one
-//! book (11 KB).  Nothing in this program can route around it, and no
-//! arrangement of `#[inline(never)]` frames helps, because the large values are
-//! single locals rather than a composition of small ones.
-//!
-//! A second, independent blocker sits behind it and is *not* a frame question:
-//! the projection from the persisted page format to `BookV1` is still undefined
-//! on-chain, though v4 narrowed it by exactly one coordinate.  `expiry_epoch`
-//! is now persisted by both order families, so that coordinate has a source at
-//! last.  The other two do not.  The relation's `canonical_order_id` is a
-//! record's **live** rank — its one-based position among live records in the
-//! canonical page-set walk, which *skips* retirements — so it is a fact about
-//! the whole frozen set rather than about any one page, and it is not the
-//! stored `order_id` on any set that has ever been cancelled from.  And the
-//! `u16` owner tag is still "the adapter's owner-tag image", with nothing in
-//! the layout crate proving it a bijection into `EpochAccount.owner_count`.
+//! **Post-resolution direction (PROPOSED, not integrated).** Verification,
+//! selection, and the complete receipt/pot entitlement set must be frozen
+//! before resolution.  A later resolution may not authorize generic account
+//! mutation; it may only allow consumption of one already-frozen entitlement,
+//! under the relation's `T-b` transfer phase.  Lazy filling therefore need not
+//! delay resolution, while resolution can never create or re-price a receipt.
 //!
 //! ## What the wire carries
 //!
@@ -429,13 +415,13 @@
 //!
 //! | class | proposed code |
 //! | --- | --- |
-//! | candidate verification does not fit an SBF frame | `0x0061` |
+//! | candidate verification/checkpoint joins are not integrated | `0x0061` |
 //! | `0x0060` and `0x0062-0x006f` | unallocated |
 //!
 //! Until `error.rs` is unfrozen, `SettlePage` refuses
 //! [`crate::error::ClutchError::NotYetImplemented`] and this file is where its
-//! real cause is written out — a lossy numeric projection of exactly the kind
-//! `reference_code` already has.
+//! real causes are the ranked prerequisites above.  None is bridged with a
+//! lossy projection or a `repr(Rust)` byte cast.
 
 use crate::accounts::{
     self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
@@ -449,6 +435,8 @@ use clutch_solana_layout::{
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
+
+mod settlement;
 
 /// Borrow one account's data mutably, or refuse.
 ///
@@ -789,11 +777,11 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 generation,
             },
         ),
-        /* Refused for a measured reason, not for a schedule: see the module
-         * docs.  It reads no account, because reading one would suggest that
-         * the account list it read is the right one, and that list cannot be
-         * chosen before the frame budget is. */
-        Action::Layout(Intent::SettlePage { .. }) => Err(ClutchError::NotYetImplemented.into()),
+        /* Refused for ranked semantic reasons, not for a schedule: see the
+         * module docs and `settlement`.  It reads no account because doing so
+         * would freeze an account list before the missing policy,
+         * cardinality, checkpoint-body, and initialization owners decide it. */
+        Action::Layout(Intent::SettlePage { .. }) => settlement::refuse_unintegrated(),
         /* Every other action belongs to another family module; the router never
          * sends one here, and this arm exists so that adding one to the router
          * is a compile error rather than a silent success. */
