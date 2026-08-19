@@ -178,6 +178,26 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
         killpg.assert_called_once_with(4242, baseline_manifest.signal.SIGKILL)
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
 
+    def test_successful_exact_gate_is_not_described_as_a_contradiction(self) -> None:
+        gate = {
+            "id": "fixture.exact",
+            "command": "fixture",
+            "expected": {"mode": "exact", "exit": 0},
+        }
+        rows = baseline_manifest.summarize_unavailable(
+            [gate],
+            {
+                "fixture.exact": {
+                    "exit_code": 0,
+                    "matches_expectation": True,
+                }
+            },
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["matches_expectation"])
+        self.assertNotIn("contradicted", rows[0]["reason"])
+        self.assertIn("matches its declaration", rows[0]["reason"])
+
     def test_current_runtime_and_terms_authorities_are_declared(self) -> None:
         gates = {gate["id"]: gate for gate in baseline_manifest.build_gates()}
         self.assertEqual(len(gates), 94)

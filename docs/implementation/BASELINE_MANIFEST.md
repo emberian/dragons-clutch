@@ -113,7 +113,7 @@ about *now*, and re-emit on a clean tree before drawing conclusions.
 | `gate_summary` | totals and the list of gates that contradicted their declaration |
 | `digests` | the artifact ledger: per-entry path, kind, sha256, and the handoff-declared value where one exists |
 | `toolchain` | parsed `versions.env` pins, digests of both pin records, their cross-agreement, and the explicit unpinned list |
-| `unavailable_or_failing_gates` | the honest list, declared and observed |
+| `unavailable_or_failing_gates` | every reviewed non-ordinary disposition plus every unexpected mismatch, with declared and observed status; a successful exact-output gate is never described as a contradiction |
 | `handoff_digest_disagreements` | ids where a tree digest disagrees with its named declared authority |
 | `run` | wall-clock timestamps; ignored by `check` |
 

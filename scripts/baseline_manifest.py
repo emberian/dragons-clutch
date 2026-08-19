@@ -1902,6 +1902,16 @@ def summarize_unavailable(
         unexpected = result is not None and not result["matches_expectation"]
         if not declared and not unexpected:
             continue
+        reason = expected.get("reason")
+        if reason is None:
+            reason = (
+                "gate outcome contradicted its declaration; see gate_runs"
+                if unexpected
+                else (
+                    "gate uses a reviewed non-ordinary disposition and is listed "
+                    "here for visibility; the observed outcome matches its declaration"
+                )
+            )
         entry = {
             "gate": gate["id"],
             "command": gate["command"],
@@ -1914,8 +1924,7 @@ def summarize_unavailable(
                 if expected["mode"] == "either"
                 else "unexpected-failure"
             ),
-            "reason": expected.get("reason")
-            or "gate outcome contradicted its declaration; see gate_runs",
+            "reason": reason,
         }
         if "proof_content" in gate:
             entry["proof_content"] = gate["proof_content"]
