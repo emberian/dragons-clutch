@@ -1,11 +1,17 @@
 # Token-2022 external truth and bearer exit
 
-Status: **IMPLEMENTED HOST CUTOVER; SVM EVIDENCE OPEN**, 2026-08-19.  The SBF
-adapter uses canonical Token-2022 mint supply for every claim transition and
-implements positionless `RedeemExternal`.  The old owner-shadow differentials
-are retained disabled as migration archaeology.  Replacement host
-differentials and the real Token-2022 committed-bank promotion campaign remain
-release stops.
+Status: **IMPLEMENTED AND RUNTIME-PROMOTED WITHIN THE STATED SCOPE**,
+2026-08-19.  The SBF adapter uses canonical Token-2022 mint supply for every
+claim transition and implements positionless `RedeemExternal`.  Replacement
+host boundary tests, a real Token-2022 in-process bank, and a signed committed
+validator walk all pass.  This is evidence for the bearer-truth and exit cut,
+not a deployment claim for the wider protocol: the committed walk remains
+genesis-assisted for eleven prerequisite accounts, and deposited Position cash
+still has no `WithdrawCash` exit.
+
+The old owner-shadow state-transition differentials remain disabled as
+migration archaeology.  They are not counted as evidence for this cut; the
+replacement tests state the narrower authoritative-mint boundary directly.
 
 This design is deliberately narrower than a new token standard.  Outcome Eggs
 remain ordinary transferable, extension-free Token-2022 tokens.  The protocol
@@ -291,26 +297,80 @@ Hoard increase is intentionally not a refusal.
 
 ## 7. Promotion evidence
 
-The cutover is not complete until a real Token-2022 SVM/committed-bank campaign
-shows all of the following:
+The exact program artifact promoted here is:
 
-1. Materialize, transfer to a second wallet with no Position, resolve, and
-   `RedeemExternal` to that wallet; finish with exact source balance, mint
-   supply, payout, Hoard amount, locked backing, and kernel/ledger totals.
-2. Burn one materialized Egg directly through Token-2022, then successfully
-   run an unrelated claim transition.  Prove the burn is recognized as
-   forfeiture, no claimant/cash entry appears, and surplus remains unswept.
-3. Transfer outcome tokens across multiple ordinary token accounts and prove
-   no per-owner program state is consulted.
-4. Donate one collateral atom directly to the Hoard, then complete internal
-   and external exits while the atom remains unowned surplus.
-5. Mutate every suffix mint key/order/authority and every source/destination
-   binding; each mutation refuses before state changes.
-6. Force a late failure after a successful burn or transfer CPI and compare all
-   watched program/token bytes against the pre-transaction state.
-7. Re-run host differentials with the claim boundary stated honestly: the
-   offline reference can model arithmetic and state deltas, while actual mint
-   and holder truth is evidenced only by the Token-2022 runtime campaign.
+```text
+ELF SHA-256  98cac8a1e48f629f15d0efbf6295b2c96df5296f6acf6cec28ca76491da4b391
+ELF bytes    549000
+```
+
+Two fixed-Cargo-home artifact builds produced that same digest.  The artifact
+audit found zero final-LTO survivors among the backend's nine stack diagnostic
+lines/eight named functions, a deepest valid direct `r10` offset of 4,096, and
+passing ELF shape, reviewed-syscall, and loader-headroom checks.  Relocating the
+Cargo-home path changes the digest, so this is fixed-path reproducibility, not
+path-independent or cross-machine reproducibility.
+
+The same ELF passed 120/120 SBF host tests and the full in-process Agave suite:
+12/12 collateral-plane tests and 6/6 bearer-token tests.  That bank directly
+proves exact real Token-2022 mint/burn deltas, extension refusal, incomplete
+mint-vector refusal, and a holder burn synchronized as forfeiture before an
+unrelated Materialize continued at 91,624 CU.
+
+The signed committed-validator walk at commit `aadc0cd` then executed twenty
+sequential transactions against one market identity.  Every transaction was
+confirmed and every declared post-state reload matched.  The relevant terminal
+sequence:
+
+1. publicly created ordinary Token-2022 accounts for the original actor and an
+   independent bearer;
+2. materialized a winning Egg and transferred it through Token-2022 to the
+   bearer, who had no Clutch Position or Replay account;
+3. resolved the market and performed both internal redemption cases;
+4. submitted two identical `RedeemExternal` instructions in one transaction:
+   the first burned and paid, the duplicate refused `Custom(0x001c)`, and the
+   runtime restored all eighteen watched accounts byte-for-byte; and
+5. submitted one valid bearer exit, which burned the remaining three Eggs,
+   paid three collateral atoms, and exactly reloaded source, destination,
+   outcome mint, Hoard token/account, SupplyLedger, kernel, and the unrelated
+   second owner's Position/Replay.
+
+The terminal Hoard token balance was 67: the two owners retained 61 and 6 atoms
+of Position cash, while the bearer received 3.  This is exact accounting and an
+honest lifecycle stop, not stranded bearer principal: `WithdrawCash` is absent,
+so the two cash owners cannot yet exit.
+
+Promotion ledger:
+
+1. **PASS:** transferred-holder, no-Position `RedeemExternal`, exact payout and
+   aggregate closure in the signed committed walk.
+2. **PASS for the liveness counterexample:** direct Token-2022 burn followed by
+   an unrelated live claim transition in the real in-process bank.  A broader
+   burn-then-every-transition matrix remains desirable hardening.
+3. **PASS for ordinary transfer and position independence:** both the
+   in-process full-cycle case and committed transferred-holder exit consult no
+   owner-local external state.
+4. **PARTIAL:** a real-bank unsolicited Hoard donation remains unowned and does
+   not block Split.  Carrying the same donation through both terminal exits and
+   a future Withdraw is still open.
+5. **PARTIAL:** host tests mutate suffix order, runtime owner, executable role,
+   authority, mutability, length, and maximum outcome count; real-bank tests
+   cover incomplete vectors and hostile extensions.  A role-by-role committed
+   mutation campaign remains open.
+6. **PASS:** the duplicate-exit transaction proves rollback after successful
+   burn and transfer CPIs across all eighteen watched accounts.
+7. **PASS at the stated boundary:** host tests own arithmetic, codecs, and
+   account admission; actual mint/holder truth is claimed only from the real
+   Token-2022 bank and signed-validator evidence.  No disabled owner-shadow
+   differential is cited as bearer-plane proof.
+
+The committed walk is still explicitly **GENESIS-ASSISTED / NOT END-TO-END**.
+Realm, Profile, Terms, two Feed accounts, the collateral-policy artifact, two
+evidence buffers, and three pages were installed as eleven prerequisites.
+CreateMarket state/token targets, the second owner's Position/Replay pair, and
+ordinary holder token accounts were created through public transaction paths.
+Removing the remaining genesis assistance, authenticating the source plane,
+and implementing `WithdrawCash` are wider protocol release stops.
 
 Passing those cases is evidence about the pinned local bank and exact ELF.  It
 is not an audit, cluster deployment, or proof of the Token-2022 runtime.
