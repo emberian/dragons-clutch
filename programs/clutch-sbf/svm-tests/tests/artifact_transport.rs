@@ -84,6 +84,7 @@ fn derive_final(kind: ArtifactKind, context: Hash32, digest: Hash32) -> (Address
         ArtifactKind::PriceGrid => seeds::SEED_GRID,
         ArtifactKind::Terms => seeds::SEED_TERMS,
         ArtifactKind::BatchPolicy => seeds::SEED_BATCH_POLICY,
+        ArtifactKind::DirectBatchPolicyV3 => seeds::SEED_DIRECT_BATCH_POLICY_V3,
     };
     Address::find_program_address(&[prefix, &context.bytes(), &digest.bytes()], &PROGRAM_ID)
 }
