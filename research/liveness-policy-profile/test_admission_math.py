@@ -8,6 +8,7 @@ import unittest
 from admission_math import (
     AdmissionError,
     QuotePolicy,
+    direct_work_budget_quote,
     exact_unique_labels,
     quote_route,
     require_runtime_schedule_covers_policy,
@@ -138,6 +139,60 @@ class AdmissionMathTests(unittest.TestCase):
         for bad in ([1, 1, 3], [1, 3, 2], [1, 2], [1, 2, 3, 4]):
             with self.assertRaises(AdmissionError):
                 exact_unique_labels(bad, [1, 2, 3], "degree")
+
+    def test_direct_budget_is_a_path_max_not_a_per_order_split(self) -> None:
+        result = direct_work_budget_quote(
+            max_candidates=3,
+            begin=quote_route(500_000, POLICY),
+            verify=quote_route(600_000, POLICY),
+            finalize=quote_route(700_000, POLICY),
+            settle=quote_route(800_000, POLICY),
+            lapse=quote_route(400_000, POLICY),
+            rent_principal_lamports=2_000_000,
+        )
+        self.assertEqual(result.status, "PASS")
+        # Quotes are 760k, 860k, 1.01m, 1.11m, and 610k respectively.
+        self.assertEqual(result.selected_success_rewards_lamports, 5_460_000)
+        self.assertEqual(result.selected_lapse_rewards_lamports, 4_960_000)
+        self.assertEqual(result.empty_lapse_rewards_lamports, 610_000)
+        self.assertEqual(result.spendable_reserve_lamports, 5_460_000)
+        self.assertEqual(result.persistent_budget_lamports, 7_460_000)
+
+    def test_direct_budget_propagates_any_mandatory_route_stop(self) -> None:
+        result = direct_work_budget_quote(
+            max_candidates=3,
+            begin=quote_route(500_000, POLICY),
+            verify=quote_route(600_000, POLICY),
+            finalize=quote_route(700_000, POLICY),
+            settle=quote_route(1_120_001, POLICY),
+            lapse=quote_route(400_000, POLICY),
+            rent_principal_lamports=2_000_000,
+        )
+        self.assertEqual(result.status, "STOP_SETTLE")
+        self.assertIsNone(result.spendable_reserve_lamports)
+        self.assertIsNone(result.persistent_budget_lamports)
+
+    def test_direct_budget_rejects_unmeasured_shape_and_u64_overflow(self) -> None:
+        with self.assertRaises(AdmissionError):
+            direct_work_budget_quote(
+                max_candidates=4,
+                begin=quote_route(1, POLICY),
+                verify=quote_route(1, POLICY),
+                finalize=quote_route(1, POLICY),
+                settle=quote_route(1, POLICY),
+                lapse=quote_route(1, POLICY),
+                rent_principal_lamports=1,
+            )
+        with self.assertRaises(AdmissionError):
+            direct_work_budget_quote(
+                max_candidates=3,
+                begin=quote_route(1, POLICY),
+                verify=quote_route(1, POLICY),
+                finalize=quote_route(1, POLICY),
+                settle=quote_route(1, POLICY),
+                lapse=quote_route(1, POLICY),
+                rent_principal_lamports=(1 << 64) - 1,
+            )
 
 
 if __name__ == "__main__":

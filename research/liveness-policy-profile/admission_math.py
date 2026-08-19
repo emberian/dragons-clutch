@@ -158,6 +158,26 @@ class ResolutionPathQuote:
     status: str
 
 
+@dataclass(frozen=True)
+class DirectWorkBudgetQuote:
+    """Worst accepted staged direct-selection work budget.
+
+    Candidate submission is intentionally absent: the submitter pays that
+    optional transaction directly.  This quote covers only the finite work
+    promised after a two-order Epoch freezes successfully.  Rent principal is
+    reported independently and cannot become a keeper reward.
+    """
+
+    max_candidates: int
+    selected_success_rewards_lamports: int | None
+    selected_lapse_rewards_lamports: int | None
+    empty_lapse_rewards_lamports: int | None
+    spendable_reserve_lamports: int | None
+    rent_principal_lamports: int
+    persistent_budget_lamports: int | None
+    status: str
+
+
 def worst_fold_partition(
     record_count: int,
     fold_quotes: Mapping[int, RouteQuote],
@@ -294,6 +314,95 @@ def resolution_path_quote(
         payer_cold_outlay_lamports=persistent + begin_external,
         status="PASS",
     )
+
+
+def direct_work_budget_quote(
+    *,
+    max_candidates: int,
+    begin: RouteQuote,
+    verify: RouteQuote,
+    finalize: RouteQuote,
+    settle: RouteQuote,
+    lapse: RouteQuote,
+    rent_principal_lamports: int,
+) -> DirectWorkBudgetQuote:
+    """Price every reachable post-Freeze Direct V3 terminal alternative.
+
+    A non-empty successful path is ``Begin + k*Verify + Finalize + Settle``.
+    A selected timeout substitutes ``Lapse`` for ``Settle``.  An empty frozen
+    Epoch needs only ``Lapse``.  The account must reserve the greatest path for
+    the bounded retained-candidate maximum; it must not add mutually exclusive
+    terminal actions or divide the budget between two orders.
+    """
+
+    if not 1 <= max_candidates <= 3:
+        raise AdmissionError("direct candidate maximum must be in 1..=3")
+    if rent_principal_lamports <= 0:
+        raise AdmissionError("direct work-budget rent principal must be positive")
+
+    routes = (
+        ("BEGIN", begin),
+        ("VERIFY", verify),
+        ("FINALIZE", finalize),
+        ("SETTLE", settle),
+        ("LAPSE", lapse),
+    )
+    for label, route in routes:
+        if not route.admitted:
+            return DirectWorkBudgetQuote(
+                max_candidates=max_candidates,
+                selected_success_rewards_lamports=None,
+                selected_lapse_rewards_lamports=None,
+                empty_lapse_rewards_lamports=None,
+                spendable_reserve_lamports=None,
+                rent_principal_lamports=rent_principal_lamports,
+                persistent_budget_lamports=None,
+                status=f"STOP_{label}",
+            )
+
+    prefix = add_many(
+        begin.require_reward(),
+        checked_mul(verify.require_reward(), max_candidates),
+        finalize.require_reward(),
+    )
+    success = add_many(prefix, settle.require_reward())
+    selected_lapse = add_many(prefix, lapse.require_reward())
+    empty_lapse = lapse.require_reward()
+    spendable = max(success, selected_lapse, empty_lapse)
+    return DirectWorkBudgetQuote(
+        max_candidates=max_candidates,
+        selected_success_rewards_lamports=success,
+        selected_lapse_rewards_lamports=selected_lapse,
+        empty_lapse_rewards_lamports=empty_lapse,
+        spendable_reserve_lamports=spendable,
+        rent_principal_lamports=rent_principal_lamports,
+        persistent_budget_lamports=add_many(rent_principal_lamports, spendable),
+        status="PASS",
+    )
+
+
+def checked_mul(value: int, multiplier: int) -> int:
+    """Model the nonnegative checked-u64 multiplication used onchain."""
+
+    if value < 0 or multiplier < 0:
+        raise AdmissionError("checked multiplication requires nonnegative inputs")
+    product = value * multiplier
+    if product > (1 << 64) - 1:
+        raise AdmissionError("u64 multiplication overflow")
+    return product
+
+
+def add_many(*values: int) -> int:
+    """Model checked-u64 addition for policy totals."""
+
+    total = 0
+    for value in values:
+        if value < 0:
+            raise AdmissionError("checked addition requires nonnegative inputs")
+        total += value
+        if total > (1 << 64) - 1:
+            raise AdmissionError("u64 addition overflow")
+    return total
 
 
 def runtime_fold_reward(base: int, per_record: int, width: int) -> int:
