@@ -54,6 +54,17 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- Codex convergence wave (2f55cfc..8e7f827) composed onto my lanes: R2
+  contract RESOLVED (closing-boundary rule id 2 only, ProgramData+slot
+  pinning, grid origin 0, distinct-witness refusal) with the codec
+  reconciled on top of my spec_v2/crossing_v1 base (368-byte spec,
+  auth_v2.rs, 32 tests); scalar batch dust-loop progress proved in Verus;
+  failure-payout economics decided as evidence-only recovery
+  (FAILURE_PAYOUT_DECISION_V1 + research/failure-payout-v1, consistent with
+  my R4 frame: rejects equalization/pro-rata/expiry as non-neutral); fresh
+  manifest re-emission at 8e7f827. Decision queue items 1-2 are therefore
+  resolved-by-codex pending your ratification pass.
+
 - HBOX INDEPENDENT REBUILD LANDED (job dragons-clutch-sbf-rebuild-6743b9d-
   dd4727): exact pinned toolchain installed from checksummed official Anza
   artifacts, 30/30 locked crates verified offline, two fresh builds
