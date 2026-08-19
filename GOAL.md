@@ -44,13 +44,25 @@ John packet ready in degg-research.
    notably the frozen-incinerator-sink choice, fractional Arm A
    live-until-aggregated, legacy rows declared permanent, and the Section 8
    reference-ownership variant (maturity horizon vs refcount).
-4. V3 optional hardening: verify_lease tautology + FROZEN_EMPTY pinning
-   (open items at b49c497) — fix now or hold for the Settle unit.
+4. V3 findings B/C (verify_lease tautology, FROZEN_EMPTY pinning) were
+   closed unilaterally by the codex lane at 6267fde/081bd81 — your sign-off
+   on those two closures is still owed; review them on codex/r3-direct-v3.
 5. Filing ops (human-only): send John packet ROUND 1 (degg-research 55ce13a);
    signature block + dual-route answers needed before Aug 24; deadlines
    Aug 24/24/27, perpetuals RFC Aug 26.
 
 ## Done log (2026-08-19 session)
+
+- V3 Settle unit LANDED at 8608385 on codex/r3-direct-v3: consumed
+  reservations archive exact consumed amounts, seller remainder refund per
+  frozen semantics, in-kernel value-plane conservation, receipt binding;
+  4 anchored tests (44 research + 189 layout green, clippy clean). Lane
+  collision documented: codex is ACTIVE on that branch (advanced b49c497 ->
+  e8ba1e4 mid-unit, reset the shared tree three times, independently
+  implemented most of the settle kernel at e77238f, closed findings B/C at
+  6267fde/081bd81 despite ember-pending status, and is now writing the V3
+  SBF dispatcher route). My delta survived via a parked patch; committed
+  atomically on disjoint files. V3 lane ownership is codex's from here.
 
 - FRESH PERSVATI ATTESTATION PASSED: 40/40 portable gates, 0 STOP, over exact
   sealed 6743b9d — archive f9f25afc..., 528 files checked twice zero
