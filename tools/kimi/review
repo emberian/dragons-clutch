@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# Run Kimi as a narrow, read-only Dragon's Clutch reviewer and retain a local
+# JSONL evidence trail. This is capability reduction, not an OS sandbox.
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage:
+  tools/kimi/review new PROMPT...
+  tools/kimi/review resume SESSION_ID PROMPT...
+
+Artifacts are written mode 0600 below .git/kimi-runs/. The prompt itself is
+persisted by Kimi in its private session store; this wrapper records only its
+SHA-256 digest in the per-run provenance file.
+EOF
+  exit 64
+}
+
+[ "$#" -ge 2 ] || usage
+
+mode="$1"
+shift
+session_id=""
+case "$mode" in
+  new)
+    ;;
+  resume)
+    [ "$#" -ge 2 ] || usage
+    session_id="$1"
+    shift
+    case "$session_id" in
+      session_[A-Za-z0-9-]*) ;;
+      *) echo "invalid Kimi session ID: $session_id" >&2; exit 64 ;;
+    esac
+    ;;
+  *)
+    usage
+    ;;
+esac
+
+prompt="$*"
+[ -n "$prompt" ] || usage
+
+command -v kimi >/dev/null 2>&1 || {
+  echo "kimi is not installed or not on PATH" >&2
+  exit 69
+}
+command -v jq >/dev/null 2>&1 || {
+  echo "jq is required to capture structured provenance" >&2
+  exit 69
+}
+
+repo="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "run this command from the Dragon's Clutch Git checkout" >&2
+  exit 69
+}
+repo="$(cd "$repo" && pwd -P)"
+profile="$repo/tools/kimi/read-only-reviewer.md"
+[ -f "$profile" ] || {
+  echo "missing reviewer profile: $profile" >&2
+  exit 69
+}
+
+kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+model_alias="kimi-code/k3"
+if [ "$mode" = "resume" ]; then
+  session_root="$kimi_home/sessions"
+  state="$(find "$session_root" -type f -path "*/$session_id/state.json" -print -quit 2>/dev/null || true)"
+  [ -n "$state" ] || {
+    echo "session not found below $session_root: $session_id" >&2
+    exit 66
+  }
+  session_cwd="$(jq -r '.cwd // empty' "$state")"
+  [ "$session_cwd" = "$repo" ] || {
+    echo "refusing to resume a session rooted at $session_cwd" >&2
+    exit 77
+  }
+  wire="$(dirname "$state")/agents/main/wire.jsonl"
+  jq -e '
+    select(
+      .profileName? == "dragons-clutch-readonly-reviewer"
+      and ((.activeToolNames // []) | sort) == ["Glob", "Grep", "Read"]
+      and (.subagents // null) == []
+    )
+  ' "$wire" >/dev/null || {
+    echo "refusing to resume: session is not bound to the expected read-only profile" >&2
+    exit 77
+  }
+  model_alias="$(jq -r 'select(.profileName? != null) | .modelAlias // empty' "$wire" | head -n 1)"
+  [ -n "$model_alias" ] || {
+    echo "refusing to resume: session does not record a model alias" >&2
+    exit 77
+  }
+fi
+
+umask 077
+run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+artifact_dir="$repo/.git/kimi-runs/$run_id"
+mkdir -p "$artifact_dir"
+events="$artifact_dir/events.jsonl"
+stderr_log="$artifact_dir/stderr.log"
+final="$artifact_dir/final.md"
+provenance="$artifact_dir/provenance.json"
+
+cli_version="$(kimi --version)"
+head_before="$(git -C "$repo" rev-parse HEAD)"
+status_before="$(git -C "$repo" status --porcelain=v1 -z | shasum -a 256 | awk '{print $1}')"
+prompt_sha256="$(printf '%s' "$prompt" | shasum -a 256 | awk '{print $1}')"
+profile_sha256="$(shasum -a 256 "$profile" | awk '{print $1}')"
+
+set +e
+if [ "$mode" = "new" ]; then
+  (
+    cd "$repo"
+    KIMI_DISABLE_CRON=1 kimi \
+      --model="$model_alias" \
+      --agent-file="$profile" \
+      --output-format=stream-json \
+      --prompt="$prompt"
+  ) >"$events" 2>"$stderr_log"
+else
+  (
+    cd "$repo"
+    KIMI_DISABLE_CRON=1 kimi \
+      --session="$session_id" \
+      --output-format=stream-json \
+      --prompt="$prompt"
+  ) >"$events" 2>"$stderr_log"
+fi
+kimi_exit="$?"
+set -e
+
+observed_session_id="$(
+  jq -r 'select(.role == "meta" and .type == "session.resume_hint") | .session_id' \
+    "$events" 2>/dev/null | tail -n 1
+)"
+if [ -n "$observed_session_id" ]; then
+  session_id="$observed_session_id"
+fi
+
+provider_model=""
+if [ -n "$session_id" ]; then
+  observed_state="$(find "$kimi_home/sessions" -type f -path "*/$session_id/state.json" -print -quit 2>/dev/null || true)"
+  if [ -n "$observed_state" ]; then
+    observed_wire="$(dirname "$observed_state")/agents/main/wire.jsonl"
+    provider_model="$(
+      jq -r 'select(.modelAlias? != null and .model? != null) | .model' \
+        "$observed_wire" 2>/dev/null | head -n 1
+    )"
+  fi
+fi
+
+jq -r 'select(.role == "assistant" and (.content? | type) == "string") | .content' \
+  "$events" 2>/dev/null | tail -n 1 >"$final" || true
+
+head_after="$(git -C "$repo" rev-parse HEAD)"
+status_after="$(git -C "$repo" status --porcelain=v1 -z | shasum -a 256 | awk '{print $1}')"
+events_sha256="$(shasum -a 256 "$events" | awk '{print $1}')"
+stderr_sha256="$(shasum -a 256 "$stderr_log" | awk '{print $1}')"
+
+jq -n \
+  --arg run_id "$run_id" \
+  --arg mode "$mode" \
+  --arg session_id "$session_id" \
+  --arg cwd "$repo" \
+  --arg cli_version "$cli_version" \
+  --arg model_alias "$model_alias" \
+  --arg provider_model "$provider_model" \
+  --arg profile "tools/kimi/read-only-reviewer.md" \
+  --arg profile_sha256 "$profile_sha256" \
+  --arg prompt_sha256 "$prompt_sha256" \
+  --arg head_before "$head_before" \
+  --arg head_after "$head_after" \
+  --arg status_before "$status_before" \
+  --arg status_after "$status_after" \
+  --arg events_sha256 "$events_sha256" \
+  --arg stderr_sha256 "$stderr_sha256" \
+  --argjson kimi_exit "$kimi_exit" \
+  '{
+    schema: "dragons-clutch.kimi-readonly-run.v1",
+    run_id: $run_id,
+    mode: $mode,
+    session_id: $session_id,
+    cwd: $cwd,
+    kimi: {
+      cli_version: $cli_version,
+      model_alias: $model_alias,
+      provider_model: $provider_model
+    },
+    profile: {path: $profile, sha256: $profile_sha256},
+    prompt_sha256: $prompt_sha256,
+    repository: {
+      head_before: $head_before,
+      head_after: $head_after,
+      status_sha256_before: $status_before,
+      status_sha256_after: $status_after,
+      observation_stable_during_run: (
+        $head_before == $head_after and $status_before == $status_after
+      )
+    },
+    output: {
+      events_sha256: $events_sha256,
+      stderr_sha256: $stderr_sha256
+    },
+    kimi_exit: $kimi_exit
+  }' >"$provenance"
+
+chmod 600 "$events" "$stderr_log" "$final" "$provenance"
+printf 'session_id=%s\n' "$session_id"
+printf 'artifacts=%s\n' "$artifact_dir"
+printf 'final=%s\n' "$final"
+
+if [ "$head_before" != "$head_after" ] || [ "$status_before" != "$status_after" ]; then
+  echo "WARNING: Git state changed during the run (expected when other agents are active);" >&2
+  echo "the observation does not attribute that change to Kimi" >&2
+fi
+exit "$kimi_exit"
