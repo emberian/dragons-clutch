@@ -53,6 +53,16 @@ John packet ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- STOP-#1 successor gate LANDED at 896a1cc: per-degree (1/2/3) continuous
+  blank-bank joined lifecycles, SBF-EXECUTED under both ELF campaigns —
+  funded segment fully public on the mock ELF (incl. public source
+  create/append/seal) with exactly 4 named injections; default ELF asserts
+  the 0x79 boundary per degree with byte-identical rollback; every step
+  under the 1.4M CU ceiling; suites 75+82 green; sealed runtime untouched.
+  Remaining to fully-public: production registry release, a real provider
+  program, and public evidence-buffer construction (new runtime surface —
+  next seal cycle). CURRENT_TRUTH STOP 1 updated.
+
 - V3 Settle unit LANDED at 8608385 on codex/r3-direct-v3: consumed
   reservations archive exact consumed amounts, seller remainder refund per
   frozen semantics, in-kernel value-plane conservation, receipt binding;

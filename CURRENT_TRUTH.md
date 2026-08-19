@@ -294,15 +294,28 @@ the sealed default ELF has no registered release and therefore refuses it with
 
 ## 6. Non-negotiable STOP ledger
 
-1. **Native mode binding — repaired at runtime; joined evidence open:** the
-   Terms-checked immutable basis mode is cached in KernelAccount v2 at
-   `3a81b38` (inside the sealed runtime source), with mode-flip, wrong-Terms,
-   derived-active-solvency, and resolved-native phase-refusal tests landed.
-   The remaining STOP is evidence, not code: one public blank-bank joined
-   lifecycle per smooth degree (one, two, three), plus the still-open
-   refinement boundary from Terms bytes through the evaluator to v3
-   Resolution bytes and payout. Never infer mode from `resolved_payout`,
-   preset membership, or vector-equals-preset.
+1. **Native mode binding — repaired at runtime; joined evidence landed;
+   refinement boundary open:** the Terms-checked immutable basis mode is
+   cached in KernelAccount v2 at `3a81b38` (inside the sealed runtime
+   source), with mode-flip, wrong-Terms, derived-active-solvency, and
+   resolved-native phase-refusal tests landed. At `896a1cc`, one continuous
+   blank-bank joined lifecycle per smooth degree (one, two, three) is
+   **SBF-EXECUTED** in local in-process banks under both ELF campaigns:
+   the funded segment — public artifact seal, Realm/Profile, public
+   SourceSpec/Feed/archive create/append/seal, v3 market creation, Endow,
+   Split, Materialize, bearer transfer, source-joined point Resolve,
+   exact-lot bearer and internal redemption, terminal withdrawal to zero —
+   runs on the explicitly non-production mock-source ELF with exactly four
+   named injections (the three non-Clutch mock-provider accounts plus the
+   program-owned resolution evidence buffer, which no public instruction
+   constructs); the default empty-registry ELF campaign asserts the exact
+   `0x79` boundary per degree with byte-identical rollback. All steps clear
+   the 1.4M-CU ceiling (Resolve 1,071,197/1,078,758/1,088,652). This is
+   focused local-bank evidence, not a validator walk, production source, or
+   clearing-plane result. Still open: the refinement boundary from Terms
+   bytes through the evaluator to v3 Resolution bytes and payout. Never
+   infer mode from `resolved_payout`, preset membership, or
+   vector-equals-preset.
 2. **Complete native live semantics:** degree-selected blank-bank creation,
    source-joined point Resolve, sole-vector persistence, exact replay, and
    exact-lot internal and bearer redemption are live for degrees one through
