@@ -747,6 +747,41 @@ def build_gates() -> list[dict[str, Any]]:
                 ),
             },
             {
+                "id": "python.dependency_license_unittest",
+                "section": "current-research",
+                "command": (
+                    "python3 -m unittest scripts/test_dependency_license_check.py"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": UNITTEST_PATTERNS,
+                "note": (
+                    "offline unit tests over the in-repo dependency/license checker; "
+                    "they pin the attested 12-manifest default mode byte-stable and "
+                    "exercise the complete-scope and SBOM writers"
+                ),
+            },
+            {
+                "id": "python.dependency_license_complete",
+                "section": "current-research",
+                "command": (
+                    "python3 scripts/dependency_license_check.py --complete "
+                    '--sbom-out "${TMPDIR:-/tmp}/clutch-dependency-license-complete.tsv" '
+                    '&& cmp "${TMPDIR:-/tmp}/clutch-dependency-license-complete.tsv" '
+                    "research/liveness-policy-profile/dependency_license_complete.tsv"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [
+                    r"^SUMMARY manifests=\d+ unique_rows=\d+ failures=0 status=PASS$"
+                ],
+                "note": (
+                    "complete-scope offline dependency/license closure over every "
+                    "locked manifest in the repository plus byte-equality of the "
+                    "committed SBOM catalog; adding a crate without regenerating the "
+                    "catalog goes red. The attested 12-manifest default mode is a "
+                    "separate byte-stable surface and is deliberately not this gate"
+                ),
+            },
+            {
                 "id": "cargo_test.liveness_policy_profile",
                 "section": "current-research",
                 "command": (

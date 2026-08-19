@@ -257,7 +257,7 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
 
     def test_current_runtime_and_terms_authorities_are_declared(self) -> None:
         gates = {gate["id"]: gate for gate in baseline_manifest.build_gates()}
-        self.assertEqual(len(gates), 98)
+        self.assertEqual(len(gates), 100)
         bringup_patterns = gates["sbf.runtime_bringup"]["key_patterns"]
         for pattern in (
             r"^default pass [12]  sha256=[0-9a-f]{64}  bytes=[0-9]+$",

@@ -134,6 +134,7 @@ clutch-solana-layout	0.1.0	path+programs/solana-layout	-	AGPL-3.0-or-later
 clutch-solana-reference	0.1.0	path+programs/solana-reference	-	AGPL-3.0-or-later
 clutch-source-profile-v1	0.1.0	path+research/source-profile-v1	-	AGPL-3.0-or-later
 clutch-terminal-economics-r4	0.1.0	path+research/terminal-economics-r4	-	AGPL-3.0-or-later
+clutch-terminal-identity-v1	0.1.0	path+research/terminal-identity-v1	-	AGPL-3.0-or-later
 clutch-terminal-lifecycle-v2	0.1.0	path+research/terminal-lifecycle-v2	-	AGPL-3.0-or-later
 clutch-token2022-probe	0.1.0	path+toolchain/probes/token2022	-	AGPL-3.0-or-later
 clutch-vector-check	0.1.0	path+tools/vector-check	-	AGPL-3.0-or-later
