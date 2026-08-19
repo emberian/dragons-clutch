@@ -20,16 +20,20 @@ design track is moving: the R2 successor and Verus dust model are
 research-only, R4 runtime design is proposed, and Draft 10 + John packet are
 ready in degg-research.
 
-## Next 3 moves
+## Next 3 moves (per the 17:30 handoff priority order)
 
-1. Preserve the sealed manifest, Persvati attestation, and classified Hbox
-   rebuild identities while recording only accepted post-R1 evidence.
-2. V3 Settle unit: embed the economic Position-transfer kernel in Settle on
-   codex/r3-direct-v3 (the one terminal that drops reservation assets), then
-   the placement-gate wiring + tags 36-46 routing prerequisites list.
-3. Advance R4 only through its explicit model-to-runtime gates: validator
-   `PREPAID_UNBOUNDED` amendment, `EXTERNAL_OWNER_STATE` inventory rows, and
-   the separately scoped terminal adapter design.
+1. Priority 2: pre-cutover R2 promotion plan — bridge PYTH_PULL_PROFILE_R2's
+   frozen contract to the exact runtime deltas (registry entry shape, auth
+   adapter wiring, hostile SVM campaign list, post-2026-08-26 identity-freeze
+   checklist); identity bytes stay unfrozen and Endow keeps refusing 0x79.
+2. Priority 3 support: fable/v3-settle-port (c5d2081) carries the dropped
+   settle Position-transfer semantics onto the successor base, green at
+   231 tests — merge it into codex/r3-direct-v3-successor as part of the
+   atomic Place->Freeze/Abort->verify/finalize->Settle/Lapse/Cancel->cleanup
+   promotion. Never route a partial lifecycle.
+3. Priority 4 staging: terminal/failure models -> versioned Token-2022/SBF
+   authorities is next-runtime-cycle work; TerminalIdentityV1 (eb1215a) and
+   the R4 design are its ingredients, pending ember ratification.
 
 ## Ember decision queue (2026-08-19 morning)
 
@@ -53,6 +57,15 @@ ready in degg-research.
    Aug 24/24/27, perpetuals RFC Aug 26.
 
 ## Done log (2026-08-19 session)
+
+- HANDOFF PRIORITY 1 COMPLETE: dependency/license closure cataloged as two
+  declared gates (d2e1cd5; complete-scope + SBOM byte-equality, catalog
+  regenerated to 33 manifests / 1,790 rows), 100/100 clean-tree emission,
+  manifest committed at bd89de3, post-commit check --run-gates fully green.
+- Settle port secured: the successor branch had dropped 8608385's settle
+  Position-transfer semantics; cherry-picked clean onto
+  fable/v3-settle-port (c5d2081), 44+177+10 tests + clippy green on the
+  successor base. Parked for the atomic V3 promotion.
 
 - BASELINE REFRESHED: clean-tree emission at c4688da matched 98/98 (gate
   inventory grew with codex's R2-auth and failure-payout crates), manifest
