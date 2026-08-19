@@ -52,16 +52,16 @@ use clutch_sbf::instructions::observe_resolve::{
     FEED_PAGE_TAG,
 };
 use clutch_sbf::seeds;
+use clutch_sbf::token;
 use clutch_solana_layout::{
     account_len, canonical_epoch_id, canonical_market_id, canonical_order_id,
-    canonical_order_set_id, canonical_outcome_id, canonical_profile_hash, canonical_realm_id,
-    collateral, CandidateRecord, EpochAccount, FeedAccount, FeedId, FinalPotAccount, Hash32,
-    HoardAccount, Intent, MarketAccount, OrderPageAccount, OrderRecord, OrderSlot,
-    PayoutVectorBytes, PositionAccount, PriceGridAccount, ProfileAccount, RealmAccount,
-    ResolutionAccount, SettlementReceiptAccount, SupplyLedgerAccount, TermsAccount,
-    CANDIDATE_STATUS_SELECTED, EPOCH_PHASE_CLEARED, MAX_GRID_TICKS, MAX_INTENT_BYTES,
-    MAX_ORDERS_PER_PAGE, MAX_OUTCOMES, PAYOUT_INDEX_UNRESOLVED, POT_PHASE_OPEN,
-    PROFILE_FLAG_POLICY_FROZEN, PROFILE_PARENT_BYTES, RECEIPT_LEG_DIRECT, RELATION_VERSION,
+    canonical_order_set_id, canonical_outcome_id, canonical_realm_id, collateral, CandidateRecord,
+    EpochAccount, FeedAccount, FeedId, FinalPotAccount, Hash32, HoardAccount, Intent,
+    MarketAccount, OrderPageAccount, OrderRecord, OrderSlot, PayoutVectorBytes, PositionAccount,
+    PriceGridAccount, ProfileAccount, RealmAccount, ResolutionAccount, SettlementReceiptAccount,
+    SupplyLedgerAccount, TermsAccount, CANDIDATE_STATUS_SELECTED, EPOCH_PHASE_CLEARED,
+    MAX_GRID_TICKS, MAX_INTENT_BYTES, MAX_ORDERS_PER_PAGE, MAX_OUTCOMES, PAYOUT_INDEX_UNRESOLVED,
+    POT_PHASE_OPEN, PROFILE_FLAG_POLICY_FROZEN, RECEIPT_LEG_DIRECT, RELATION_VERSION,
 };
 use clutch_solana_reference::{
     apply, apply_with_evidence, validate_market_init, AccountMetadata, ActorMetadata,
@@ -79,20 +79,26 @@ use std::process::Command;
 /* Fixture constants                                                         */
 /* ------------------------------------------------------------------------ */
 
-/// The parent-Profile preimage is exactly `PROFILE_PARENT_BYTES` long because
-/// `canonical_profile_hash` refuses any other length; the contents are an
-/// arbitrary fixed pattern, since this lane derives an identity and makes no
-/// claim about which collateral policy the Profile commits to.
-const PROFILE_PREIMAGE_FILL: u8 = 0x5b;
-/// Mint identity of the fixture's collateral policy.
+/// Decimals of the fixture collateral mint, as the Realm's policy names them.
 ///
-/// The Profile is *frozen* in this fixture to the digest of a **real**,
-/// decodable 266-byte collateral policy (see `fixture_policy`): the offline
-/// reference's `validate_market_init` now recomputes the child digest from
-/// the policy bytes and compares, so an opaque digest fill would refuse.
-/// Still an offline fixture: the mint named here is a fixed pattern, not a
-/// chain fact.
-const COLLATERAL_MINT_FILL: u8 = 0x9d;
+/// The mint account this harness installs must carry exactly this exponent:
+/// `token::MintPolicy::collateral` reads it out of the 266 policy bytes and
+/// `check_mint` refuses any other, which `assert_admitted_mint` re-runs here at
+/// build time.
+const COLLATERAL_DECIMALS: u8 = 9;
+/// Supply of the fixture collateral mint.
+///
+/// Nonzero because `COLLATERAL_POLICY_STRICT_FLAGS` sets
+/// `FLAG_REQUIRE_NONZERO_SUPPLY`: a mint nobody has ever minted is not
+/// collateral.  Below the policy's `max_supply_atoms` ceiling, which
+/// `check_mint` also enforces.
+const COLLATERAL_SUPPLY: u64 = 100_000_000;
+/// Collateral atoms the fixture actor holds before any `Split`.
+///
+/// Comfortably above every quantity this plan splits, because one actor token
+/// account serves every market plane and each plan transaction is simulated
+/// against genesis independently.
+const ACTOR_COLLATERAL_ATOMS: u64 = 1_000_000;
 const REALM_NONCE: u64 = 7;
 const GENERATION: u64 = 2;
 const CASH_ATOMS: u64 = 100;
@@ -110,6 +116,11 @@ const NONCE_REDEEM: u64 = 13;
 const NONCE_CREATE: u64 = 14;
 
 /// Quantities.
+/// Atoms one `Endow` credits into a position's internal cash.
+///
+/// Below the fixture market's `collateral_cap`, which is the one ceiling
+/// `genesis::apply_endow` enforces and the one this plan can drive over.
+const ENDOW_AMOUNT: u64 = 40;
 const SPLIT_QUANTITY: u64 = 5;
 const HELD_QUANTITY: u64 = 20;
 const MERGE_QUANTITY: u64 = 5;
@@ -188,6 +199,20 @@ mod code {
     /// request the other refuses, so the constant is written out here exactly
     /// as every other adapter-vocabulary refusal in this plan is.
     pub const NOT_ACTIVE: u32 = 0x0016;
+    /// `ClutchError::TokenAccountNotAdmitted`.
+    ///
+    /// New with the mandatory collateral leg and with no counterpart in the
+    /// offline reference adapter, which models no token plane at all: it is
+    /// what a caller earns for presenting a Token-2022 account the Realm's
+    /// frozen policy or the instruction's own owner-authority rule refuses.
+    pub const TOKEN_ACCOUNT_NOT_ADMITTED: u32 = 0x001b;
+    /// `ClutchError::CollateralCap`.
+    ///
+    /// The one ceiling an endowment has, and a *necessary but not sufficient*
+    /// one: `genesis.rs` says so itself, because no account in the frozen
+    /// layout carries a market-wide cash aggregate to check the sufficient
+    /// condition against.
+    pub const COLLATERAL_CAP: u32 = 0x0012;
 }
 
 const B58: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -226,6 +251,44 @@ fn b58_decode32(text: &str) -> [u8; 32] {
         }
         assert_eq!(carry, 0, "base58 value wider than 32 bytes: {text}");
     }
+    out
+}
+
+/// Base58-encode a 32-byte address.
+///
+/// The inverse of [`b58_decode32`], and pinned by it: every address this
+/// harness encodes is decoded straight back and required to be the same
+/// thirty-two bytes, so a carry bug here is a panic rather than a genesis
+/// account installed at the wrong address.
+fn base58_of(bytes: &[u8; 32]) -> String {
+    let mut digits: Vec<u8> = Vec::with_capacity(45);
+    for byte in bytes {
+        let mut carry = u32::from(*byte);
+        for digit in digits.iter_mut() {
+            carry += u32::from(*digit) << 8;
+            *digit = (carry % 58) as u8;
+            carry /= 58;
+        }
+        while carry > 0 {
+            digits.push((carry % 58) as u8);
+            carry /= 58;
+        }
+    }
+    let mut out = String::new();
+    for byte in bytes {
+        if *byte != 0 {
+            break;
+        }
+        out.push('1');
+    }
+    for digit in digits.iter().rev() {
+        out.push(B58[usize::from(*digit)] as char);
+    }
+    assert_eq!(
+        b58_decode32(&out),
+        *bytes,
+        "the base58 encoder must round-trip through the decoder"
+    );
     out
 }
 
@@ -348,6 +411,108 @@ fn derive(program_id: &str, seeds: &[Vec<u8>]) -> Pda {
 fn fixed_address(label: &str) -> Pda {
     assert!(label.len() <= 32, "seed longer than 32 bytes: {label}");
     derive(SYSTEM_PROGRAM, &[label.as_bytes().to_vec()])
+}
+
+/* ------------------------------------------------------------------------ */
+/* Token-2022 account images                                                 */
+/* ------------------------------------------------------------------------ */
+
+/* Every mint and every token account this plan installs at genesis is written
+ * here, byte by byte, rather than created by the token program -- a validator
+ * loaded from a genesis dump cannot run an instruction before the first slot.
+ * That is a real claim to defend, and it is defended twice: the *real*
+ * Token-2022 program is what executes `MintTo`, `Burn` and `TransferChecked`
+ * against these bytes inside the SVM and refuses anything it did not write,
+ * and this harness re-runs the program's own `token::check_mint` /
+ * `token::check_token_account` admission over every image before it is
+ * emitted, so a byte this program would refuse is a build-time panic here and
+ * not a mysterious on-chain refusal later. */
+
+/// A Token-2022 mint exactly as the token program writes one, extension-free.
+///
+/// `authority` is the `COption<Pubkey>` mint authority: `Some` for an outcome
+/// mint whose authority is the market PDA, `None` for a collateral mint, whose
+/// absent authority is what `MintPolicy::collateral` demands.  The freeze
+/// authority is always absent.
+fn mint_bytes(authority: Option<[u8; 32]>, decimals: u8, supply: u64) -> Vec<u8> {
+    let mut data = vec![0_u8; token::BASE_MINT_LEN];
+    if let Some(key) = authority {
+        data[0..4].copy_from_slice(&1_u32.to_le_bytes());
+        data[4..36].copy_from_slice(&key);
+    }
+    data[36..44].copy_from_slice(&supply.to_le_bytes());
+    data[44] = decimals;
+    data[45] = 1; // is_initialized
+    data
+}
+
+/// A base Token-2022 token account, exactly as the token program writes one.
+fn token_account_bytes(mint: [u8; 32], owner: [u8; 32], amount: u64) -> Vec<u8> {
+    let mut data = vec![0_u8; token::BASE_TOKEN_ACCOUNT_LEN];
+    data[0..32].copy_from_slice(&mint);
+    data[32..64].copy_from_slice(&owner);
+    data[64..72].copy_from_slice(&amount.to_le_bytes());
+    data[108] = 1; // AccountState::Initialized
+    data
+}
+
+/// The same, carrying the one `ImmutableOwner` extension entry the Hoard's
+/// token account is created with by `market_init::create_token_plane`.
+fn immutable_owner_account_bytes(mint: [u8; 32], owner: [u8; 32], amount: u64) -> Vec<u8> {
+    let mut data = vec![0_u8; token::IMMUTABLE_OWNER_ACCOUNT_LEN];
+    data[..token::BASE_TOKEN_ACCOUNT_LEN]
+        .copy_from_slice(&token_account_bytes(mint, owner, amount));
+    data[token::BASE_TOKEN_ACCOUNT_LEN] = 2; // AccountType::Account
+    data[166..168].copy_from_slice(&u16::from(token::EXT_IMMUTABLE_OWNER).to_le_bytes());
+    data[168..170].copy_from_slice(&0_u16.to_le_bytes());
+    data
+}
+
+/// Overwrite a token account image's `amount` field, keeping every other byte.
+///
+/// Used to build the *expected* post-state of a token account from a number
+/// the offline reference adapter produced, rather than from a second
+/// description of what a transfer does.
+fn with_amount(image: &[u8], amount: u64) -> Vec<u8> {
+    let mut data = image.to_vec();
+    data[64..72].copy_from_slice(&amount.to_le_bytes());
+    data
+}
+
+/// Overwrite a mint image's `supply` field, keeping every other byte.
+fn with_supply(image: &[u8], supply: u64) -> Vec<u8> {
+    let mut data = image.to_vec();
+    data[36..44].copy_from_slice(&supply.to_le_bytes());
+    data
+}
+
+/// Re-run the program's own mint admission over an image this harness wrote.
+fn assert_admitted_mint(address: &[u8; 32], data: &[u8], policy: &token::MintPolicy, label: &str) {
+    token::check_mint(
+        &solana_pubkey_of(collateral::TOKEN_2022_PROGRAM),
+        &solana_pubkey_of(*address),
+        data,
+        policy,
+    )
+    .unwrap_or_else(|fault| panic!("{label}: this program refuses the fixture mint: {fault:?}"));
+}
+
+/// Re-run the program's own token-account admission over an image this harness
+/// wrote.
+fn assert_admitted_token_account(data: &[u8], policy: &token::TokenAccountPolicy, label: &str) {
+    token::check_token_account(
+        &solana_pubkey_of(collateral::TOKEN_2022_PROGRAM),
+        data,
+        policy,
+    )
+    .unwrap_or_else(|fault| {
+        panic!("{label}: this program refuses the fixture token account: {fault:?}")
+    });
+}
+
+/// The `solana_pubkey::Pubkey` the program's admission functions take.
+fn solana_pubkey_of(bytes: [u8; 32]) -> solana_pubkey::Pubkey {
+    solana_pubkey::Pubkey::new_from_array(bytes)
 }
 
 /* ------------------------------------------------------------------------ */
@@ -658,15 +823,46 @@ struct Shared {
     policy_bytes: [u8; collateral::COLLATERAL_POLICY_BYTES],
     feed_bytes: [u8; account_len::FEED],
     advance_feed_bytes: [u8; account_len::FEED],
+    /// The decoded Realm collateral policy every token leg reads.
+    policy: collateral::CollateralPolicy,
+    /// The account the 266 policy bytes are presented from.
+    ///
+    /// Deliberately **not** derived: the policy is content-authenticated by
+    /// recomputed digest against the Profile, so binding its address would
+    /// suggest the address is what makes it the Realm's policy.
+    policy_account: Pda,
+    /// The Token-2022 collateral mint the policy names.
+    collateral_mint: Pda,
+    collateral_mint_bytes: Vec<u8>,
+    /// The actor's own Token-2022 collateral account, shared by every plane.
+    actor_token: Pda,
+    actor_token_bytes: Vec<u8>,
+    /// The stranger's own collateral account.
+    ///
+    /// It exists so that the two "a different authenticated signer" refusals
+    /// stay refusals *about authorization*.  Without it a stranger would have
+    /// to present the actor's collateral account and be refused
+    /// `TokenAccountNotAdmitted` for owning the wrong token account, which is
+    /// a true refusal about a different question.  Both questions are asked
+    /// here, one case each.
+    stranger_token: Pda,
+    stranger_token_bytes: Vec<u8>,
+    /// The pinned Token-2022 program's address.
+    token_program: [u8; 32],
+    /// The System program's address.
+    system_program: [u8; 32],
+    /// The Rent sysvar's address.
+    rent_sysvar: [u8; 32],
 }
 
 /// The Realm's frozen collateral policy: a real, decodable 266-byte policy
-/// whose recomputed child digest the fixture Profile freezes.
-fn fixture_policy() -> collateral::CollateralPolicy {
+/// whose recomputed child digest the fixture Profile freezes, and whose
+/// recomputed *parent* is the fixture Profile's identity.
+fn fixture_policy(collateral_mint: [u8; 32]) -> collateral::CollateralPolicy {
     let backing = collateral::CurrencyRef::spl(
         collateral::TOKEN_2022_PROGRAM,
-        [COLLATERAL_MINT_FILL; 32],
-        9,
+        collateral_mint,
+        COLLATERAL_DECIMALS,
     );
     collateral::CollateralPolicy {
         schema_version: collateral::COLLATERAL_POLICY_SCHEMA,
@@ -690,9 +886,20 @@ fn build_shared() -> Shared {
     let imposter = fixed_address("clutch-sbf/bringup/imposter/v1");
     let pid = program.address.clone();
 
-    let profile_preimage = [PROFILE_PREIMAGE_FILL; PROFILE_PARENT_BYTES];
-    let profile_hash = canonical_profile_hash(&profile_preimage)
-        .expect("the fixture profile preimage must be a canonical profile hash");
+    /* The Realm's collateral policy names a mint, and the Profile identity is
+     * the canonical parent hash over that policy's own digest -- recomputed,
+     * never chosen.  `collateral::verify_profile_identity` refuses any other
+     * pairing, so this is the only Profile ID a Realm backed by this mint can
+     * have, and every address below descends from it. */
+    let collateral_mint = fixed_address("clutch/collat/mint/v1");
+    let policy_account = fixed_address("clutch/collat/policy/v1");
+    let actor_token = fixed_address("clutch/collat/actor/v1");
+    let stranger_token = fixed_address("clutch/collat/stranger/v1");
+    let policy = fixture_policy(collateral_mint.bytes);
+    let profile_hash = collateral::ParentProfile::from_policy(&policy)
+        .expect("the fixture policy must compose a parent profile")
+        .identity()
+        .expect("the parent profile must derive an identity");
     let realm_hash = canonical_realm_id(profile_hash, REALM_NONCE);
     let feed = FeedId::from_bytes([9; 32]);
     let advance_feed = FeedId::from_bytes([0x0b; 32]);
@@ -716,7 +923,6 @@ fn build_shared() -> Shared {
         stored_bump: realm.bump,
         flags: 0,
     };
-    let policy = fixture_policy();
     let policy_bytes = policy
         .canonical_bytes()
         .expect("the fixture collateral policy must encode");
@@ -866,6 +1072,35 @@ fn build_shared() -> Shared {
         .encode(&mut advance_feed_bytes)
         .expect("advance feed");
 
+    /* The collateral leg's two shared Token-2022 accounts.  Both images are
+     * put through this program's own admission before they leave this
+     * function, so a fixture the program would refuse cannot reach a
+     * validator. */
+    let collateral_mint_bytes = mint_bytes(None, COLLATERAL_DECIMALS, COLLATERAL_SUPPLY);
+    assert_admitted_mint(
+        &collateral_mint.bytes,
+        &collateral_mint_bytes,
+        &token::MintPolicy::collateral(&policy),
+        "the fixture collateral mint",
+    );
+    let actor_token_bytes =
+        token_account_bytes(collateral_mint.bytes, actor.bytes, ACTOR_COLLATERAL_ATOMS);
+    assert_admitted_token_account(
+        &actor_token_bytes,
+        &token::TokenAccountPolicy::collateral_holder(&policy, solana_pubkey_of(actor.bytes)),
+        "the fixture actor collateral account",
+    );
+    let stranger_token_bytes = token_account_bytes(
+        collateral_mint.bytes,
+        stranger.bytes,
+        ACTOR_COLLATERAL_ATOMS,
+    );
+    assert_admitted_token_account(
+        &stranger_token_bytes,
+        &token::TokenAccountPolicy::collateral_holder(&policy, solana_pubkey_of(stranger.bytes)),
+        "the fixture stranger collateral account",
+    );
+
     Shared {
         program,
         compute_budget: b58_decode32(COMPUTE_BUDGET_PROGRAM),
@@ -892,6 +1127,17 @@ fn build_shared() -> Shared {
         policy_bytes,
         feed_bytes,
         advance_feed_bytes,
+        policy,
+        policy_account,
+        collateral_mint,
+        collateral_mint_bytes,
+        actor_token,
+        actor_token_bytes,
+        stranger_token,
+        stranger_token_bytes,
+        token_program: collateral::TOKEN_2022_PROGRAM,
+        system_program: [0; 32],
+        rent_sysvar: token::RENT_SYSVAR_ID.to_bytes(),
     }
 }
 
@@ -913,6 +1159,18 @@ struct Plane {
     replay: Pda,
     supply: Pda,
     resolution: Pda,
+    /// The Hoard's signing authority; holds no data and is never written.
+    hoard_authority: Pda,
+    /// The Hoard's Token-2022 collateral account.
+    hoard_token: Pda,
+    /// One outcome mint per active outcome, in index order.
+    outcome_mints: Vec<Pda>,
+    /// The actor's own Token-2022 account for each outcome mint.
+    ///
+    /// Not derived and not required to be: `TokenAccountPolicy::holder`
+    /// authenticates a holder account by mint and owner authority and
+    /// deliberately does not require an associated token account.
+    holder_tokens: Vec<Pda>,
     state: TransitionOutput,
     resolution_bytes: [u8; account_len::RESOLUTION],
 }
@@ -977,7 +1235,33 @@ impl Plane {
             ],
         );
         let supply = derive(&pid, &[seeds::SEED_SUPPLY.to_vec(), market_seed.clone()]);
-        let resolution = derive(&pid, &[seeds::SEED_RESOLUTION.to_vec(), market_seed]);
+        let resolution = derive(
+            &pid,
+            &[seeds::SEED_RESOLUTION.to_vec(), market_seed.clone()],
+        );
+        let hoard_authority = derive(
+            &pid,
+            &[seeds::SEED_HOARD_AUTHORITY.to_vec(), market_seed.clone()],
+        );
+        let hoard_token = derive(
+            &pid,
+            &[seeds::SEED_HOARD_TOKEN.to_vec(), market_seed.clone()],
+        );
+        let outcome_mints: Vec<Pda> = (0..OUTCOME_COUNT)
+            .map(|outcome| {
+                derive(
+                    &pid,
+                    &[
+                        seeds::SEED_OUTCOME_MINT.to_vec(),
+                        market_seed.clone(),
+                        vec![outcome],
+                    ],
+                )
+            })
+            .collect();
+        let holder_tokens: Vec<Pda> = (0..OUTCOME_COUNT)
+            .map(|outcome| fixed_address(&format!("clutch/tok/{nonce}/{outcome}")))
+            .collect();
 
         Self {
             label,
@@ -992,6 +1276,10 @@ impl Plane {
             replay,
             supply,
             resolution,
+            hoard_authority,
+            hoard_token,
+            outcome_mints,
+            holder_tokens,
             state: zero_state(),
             resolution_bytes: [0; account_len::RESOLUTION],
         }
@@ -1251,6 +1539,92 @@ impl Plane {
             ("replay", &self.replay),
             ("supply", &self.supply),
         ]
+    }
+
+    /// Whether this plane's market exists yet.
+    ///
+    /// A plane whose state bytes are all zero is a `CreateMarket` *target*: the
+    /// instruction founds the market **and** creates its Hoard token account
+    /// and its outcome mints, and `market_init::require_uncreated` demands that
+    /// those addresses hold nothing at all.  So a founding plane installs no
+    /// token accounts, and that absence is the precondition under test.
+    fn founded(&self) -> bool {
+        self.state.market.iter().any(|byte| *byte != 0)
+    }
+
+    /// The Token-2022 account images this plane's genesis installs.
+    ///
+    /// Each one is derived from the plane's own state bytes rather than
+    /// chosen: the Hoard token account holds exactly
+    /// `HoardAccount::collateral_atoms` (the mirror
+    /// `token::require_hoard_mirror` re-checks over the pre-state before
+    /// anything moves), and outcome mint *i* has exactly the supply-ledger's
+    /// external term for outcome *i* (the reconciliation
+    /// `require_shadow_reconciles` re-checks after every mint or burn).  A
+    /// fixture that disagreed with its own state would be refused on chain,
+    /// not silently accepted.
+    fn token_accounts(&self, shared: &Shared) -> Vec<(String, Pda, Vec<u8>)> {
+        if !self.founded() {
+            return Vec::new();
+        }
+        let hoard = HoardAccount::decode(&self.state.hoard).expect("a founded Hoard decodes");
+        let ledger =
+            SupplyLedgerAccount::decode(&self.state.supply).expect("a founded ledger decodes");
+        let mint = shared.collateral_mint.bytes;
+
+        let hoard_token_bytes =
+            immutable_owner_account_bytes(mint, self.hoard_authority.bytes, hoard.collateral_atoms);
+        assert_admitted_token_account(
+            &hoard_token_bytes,
+            &token::TokenAccountPolicy::hoard(
+                &shared.policy,
+                solana_pubkey_of(self.hoard_authority.bytes),
+            ),
+            &format!("{}.hoard-token", self.label),
+        );
+        let mut out = vec![(
+            format!("{}.hoard-token", self.label),
+            self.hoard_token.clone(),
+            hoard_token_bytes,
+        )];
+
+        for outcome in 0..usize::from(OUTCOME_COUNT) {
+            let supply = ledger.external_supply[outcome];
+            let mint_bytes_image = mint_bytes(Some(self.market.bytes), 0, supply);
+            assert_admitted_mint(
+                &self.outcome_mints[outcome].bytes,
+                &mint_bytes_image,
+                &token::MintPolicy::outcome(
+                    solana_pubkey_of(self.outcome_mints[outcome].bytes),
+                    solana_pubkey_of(self.market.bytes),
+                ),
+                &format!("{}.outcome-mint-{outcome}", self.label),
+            );
+            let holder_bytes = token_account_bytes(
+                self.outcome_mints[outcome].bytes,
+                shared.actor.bytes,
+                supply,
+            );
+            assert_admitted_token_account(
+                &holder_bytes,
+                &token::TokenAccountPolicy::holder(
+                    solana_pubkey_of(self.outcome_mints[outcome].bytes),
+                    solana_pubkey_of(shared.actor.bytes),
+                ),
+                &format!("{}.holder-token-{outcome}", self.label),
+            );
+            out.push((
+                format!("{}.outcome-mint-{outcome}", self.label),
+                self.outcome_mints[outcome].clone(),
+                mint_bytes_image,
+            ));
+            out.push((
+                format!("{}.holder-token-{outcome}", self.label),
+                self.holder_tokens[outcome].clone(),
+                holder_bytes,
+            ));
+        }
+        out
     }
 
     fn state_slice(&self, role: &str) -> &[u8] {
@@ -1564,6 +1938,13 @@ fn grid_of(shared: &Shared) -> PriceGridAccount {
 struct Genesis {
     role: String,
     address: String,
+    /// Base58 address of the program that owns the account.
+    ///
+    /// Not a constant any more: this plan installs Token-2022 mints and token
+    /// accounts, which the token program must own for
+    /// `token::check_mint`/`check_token_account` to admit them, and one
+    /// System-owned account holding the creator's lamports.
+    owner: String,
     data: Vec<u8>,
 }
 
@@ -1667,10 +2048,26 @@ impl Case {
 struct Plan {
     genesis: Vec<Genesis>,
     cases: Vec<Case>,
+    /// Base58 address of this program, the default genesis owner.
+    program: String,
+    /// Base58 address of the Token-2022 program.
+    token_program: String,
 }
 
 impl Plan {
+    /// A program-owned genesis account: every account of the frozen layout.
     fn account(&mut self, role: &str, pda: &Pda, data: &[u8]) {
+        let owner = self.program.clone();
+        self.owned(role, pda, &owner, data);
+    }
+
+    /// A genesis account owned by the Token-2022 program.
+    fn token_account(&mut self, role: &str, pda: &Pda, data: &[u8]) {
+        let owner = self.token_program.clone();
+        self.owned(role, pda, &owner, data);
+    }
+
+    fn owned(&mut self, role: &str, pda: &Pda, owner: &str, data: &[u8]) {
         assert!(
             !self
                 .genesis
@@ -1681,6 +2078,7 @@ impl Plan {
         self.genesis.push(Genesis {
             role: role.to_string(),
             address: pda.address.clone(),
+            owner: owner.to_string(),
             data: data.to_vec(),
         });
     }
@@ -1715,48 +2113,222 @@ fn state_compares(plane: &Plane, post: &TransitionOutput) -> Vec<Compare> {
         .collect()
 }
 
+/// Every Token-2022 account one transition moves, compared.
+///
+/// The expectations are **not** a second description of what a transfer, a
+/// mint or a burn does.  Each one is a number the offline reference adapter
+/// produced, written into the field the token program owns:
+///
+/// - the Hoard token account must end holding exactly the adapter's
+///   `HoardAccount::collateral_atoms`, which is the mirror
+///   `token::require_hoard_mirror` re-checks on chain;
+/// - the actor's collateral account must end holding exactly what it started
+///   with, less whatever the adapter says the Hoard gained (or plus whatever
+///   the adapter says it lost); and
+/// - an outcome mint's supply and its holder's balance must end at the
+///   adapter's supply-ledger external term for that outcome, which is the
+///   reconciliation `require_shadow_reconciles` re-checks on chain.
+///
+/// So this is the same claim the program enforces, stated over bytes the bank
+/// returned, against numbers a second implementation computed.
+fn token_compares(
+    shared: &Shared,
+    plane: &Plane,
+    leg: Leg,
+    post: &TransitionOutput,
+) -> Vec<Compare> {
+    match leg {
+        Leg::Collateral => {
+            let pre_hoard = HoardAccount::decode(&plane.state.hoard)
+                .expect("the pre-state Hoard decodes")
+                .collateral_atoms;
+            let post_hoard = HoardAccount::decode(&post.hoard)
+                .expect("the post-state Hoard decodes")
+                .collateral_atoms;
+            let actor_after =
+                i128::from(ACTOR_COLLATERAL_ATOMS) + i128::from(pre_hoard) - i128::from(post_hoard);
+            assert!(
+                actor_after >= 0,
+                "the fixture actor cannot fund {} atoms of collateral",
+                post_hoard - pre_hoard
+            );
+            let hoard_pre = immutable_owner_account_bytes(
+                shared.collateral_mint.bytes,
+                plane.hoard_authority.bytes,
+                pre_hoard,
+            );
+            vec![
+                Compare {
+                    role: format!("{}.hoard-token", plane.label),
+                    address: plane.hoard_token.address.clone(),
+                    expected: with_amount(&hoard_pre, post_hoard),
+                    pre: hoard_pre,
+                },
+                Compare {
+                    role: format!("{}.actor-collateral", plane.label),
+                    address: shared.actor_token.address.clone(),
+                    expected: with_amount(&shared.actor_token_bytes, actor_after as u64),
+                    pre: shared.actor_token_bytes.clone(),
+                },
+            ]
+        }
+        Leg::Outcome(outcome) => {
+            let index = usize::from(outcome);
+            let pre_external = SupplyLedgerAccount::decode(&plane.state.supply)
+                .expect("the pre-state ledger decodes")
+                .external_supply[index];
+            let post_external = SupplyLedgerAccount::decode(&post.supply)
+                .expect("the post-state ledger decodes")
+                .external_supply[index];
+            let mint_pre = mint_bytes(Some(plane.market.bytes), 0, pre_external);
+            let holder_pre = token_account_bytes(
+                plane.outcome_mints[index].bytes,
+                shared.actor.bytes,
+                pre_external,
+            );
+            vec![
+                Compare {
+                    role: format!("{}.outcome-mint-{outcome}", plane.label),
+                    address: plane.outcome_mints[index].address.clone(),
+                    expected: with_supply(&mint_pre, post_external),
+                    pre: mint_pre,
+                },
+                Compare {
+                    role: format!("{}.holder-token-{outcome}", plane.label),
+                    address: plane.holder_tokens[index].address.clone(),
+                    expected: with_amount(&holder_pre, post_external),
+                    pre: holder_pre,
+                },
+            ]
+        }
+    }
+}
+
+/// The state accounts and the token accounts of one seam transition, together.
+fn seam_compares(
+    shared: &Shared,
+    plane: &Plane,
+    leg: Leg,
+    post: &TransitionOutput,
+) -> Vec<Compare> {
+    let mut compares = state_compares(plane, post);
+    compares.extend(token_compares(shared, plane, leg, post));
+    compares
+}
+
 /* ------------------------------------------------------------------------ */
 /* Instruction account lists                                                 */
 /* ------------------------------------------------------------------------ */
 
-/// Build the seam plane's ten-account instruction against a message.
+/// Who signs one transaction, and which collateral account they present.
+///
+/// The two travel together because the program binds them together:
+/// `TokenAccountPolicy::collateral_holder` requires the presented collateral
+/// account's *owner authority* to be the authenticated actor, so "who signs"
+/// and "whose collateral moves" is one decision, not two.  Separating them is
+/// exactly what a hostile caller would try, and
+/// [`Signer::presenting`] is how this plan drives that attempt.
+#[derive(Clone, Copy, Debug)]
+struct Signer<'a> {
+    /// The address at the actor role.
+    key: [u8; 32],
+    /// Whether the message header authenticates it.
+    signs: bool,
+    /// The collateral token account this transaction presents.
+    collateral: &'a Pda,
+}
+
+impl<'a> Signer<'a> {
+    /// A signer presenting **its own** collateral account.
+    fn own(shared: &'a Shared, key: [u8; 32], signs: bool) -> Self {
+        let collateral = if key == shared.stranger.bytes {
+            &shared.stranger_token
+        } else {
+            &shared.actor_token
+        };
+        Self {
+            key,
+            signs,
+            collateral,
+        }
+    }
+
+    /// A signer presenting **someone else's** collateral account.
+    fn presenting(self, collateral: &'a Pda) -> Self {
+        Self { collateral, ..self }
+    }
+}
+
+/// Which mandatory token leg a seam intent carries.
+///
+/// **Not a choice this harness makes.**  `split::select_token_leg` is a total
+/// function of the intent -- `Split` and `Merge` take the sixteen-account
+/// collateral plane, `Materialize` and `Dematerialize` take the thirteen-account
+/// outcome plane -- and presenting any other count is
+/// `ClutchError::AccountCount`.  This enum exists so the emitter says out loud
+/// which plane it is building, and the assertion in [`Leg::account_count`] pins
+/// it to the program's own constants.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Leg {
+    /// `Split` and `Merge`: collateral moves between the actor and the Hoard.
+    Collateral,
+    /// `Materialize` and `Dematerialize`: one outcome token is minted or burned.
+    Outcome(u8),
+}
+
+impl Leg {
+    /// The exact account count the program requires for this leg.
+    ///
+    /// Read out of `clutch_sbf::instructions::split` rather than written here,
+    /// so a future plane change is a compile-time re-read and not a silent
+    /// drift.
+    const fn account_count(self) -> usize {
+        match self {
+            Leg::Collateral => clutch_sbf::instructions::split::ACCOUNT_COUNT_COLLATERAL,
+            Leg::Outcome(_) => clutch_sbf::instructions::split::ACCOUNT_COUNT_OUTCOME,
+        }
+    }
+}
+
+/// The token accounts one seam leg appends, in the program's list order.
+fn seam_leg_accounts(
+    shared: &Shared,
+    plane: &Plane,
+    signer: Signer<'_>,
+    leg: Leg,
+) -> Vec<[u8; 32]> {
+    match leg {
+        Leg::Collateral => vec![
+            shared.token_program,
+            shared.policy_account.bytes,
+            shared.collateral_mint.bytes,
+            signer.collateral.bytes,
+            plane.hoard_authority.bytes,
+            plane.hoard_token.bytes,
+        ],
+        Leg::Outcome(outcome) => vec![
+            shared.token_program,
+            plane.outcome_mints[usize::from(outcome)].bytes,
+            plane.holder_tokens[usize::from(outcome)].bytes,
+        ],
+    }
+}
+
+/// Build the seam plane's instruction against a message.
 fn seam_instruction(
     message: &Message,
     shared: &Shared,
     plane: &Plane,
-    actor: [u8; 32],
+    signer: Signer<'_>,
     replay_override: Option<[u8; 32]>,
+    leg: Leg,
     data: Vec<u8>,
 ) -> Instruction {
     let replay = replay_override.unwrap_or(plane.replay.bytes);
-    Instruction {
-        program_index: message.index(&shared.program.bytes),
-        accounts: message.indices(&[
-            actor,
-            shared.realm.bytes,
-            shared.profile.bytes,
-            plane.market.bytes,
-            plane.hoard.bytes,
-            plane.position.bytes,
-            plane.kernel.bytes,
-            plane.external.bytes,
-            replay,
-            plane.supply.bytes,
-        ]),
-        data,
-    }
-}
-
-/// The message every seam transaction uses.
-fn seam_message(
-    shared: &Shared,
-    plane: &Plane,
-    actor: [u8; 32],
-    actor_signs: bool,
-    replay_override: Option<[u8; 32]>,
-) -> Message {
-    let replay = replay_override.unwrap_or(plane.replay.bytes);
-    let writable = [
+    let mut keys = vec![
+        signer.key,
+        shared.realm.bytes,
+        shared.profile.bytes,
         plane.market.bytes,
         plane.hoard.bytes,
         plane.position.bytes,
@@ -1765,40 +2337,116 @@ fn seam_message(
         replay,
         plane.supply.bytes,
     ];
-    if actor_signs {
-        Message::new(
-            &[shared.payer.bytes],
-            &[actor],
-            &writable,
-            &[
-                shared.realm.bytes,
-                shared.profile.bytes,
-                shared.program.bytes,
-            ],
-        )
-    } else {
-        Message::new(
-            &[shared.payer.bytes],
-            &[],
-            &writable,
-            &[
-                shared.realm.bytes,
-                shared.profile.bytes,
-                actor,
-                shared.program.bytes,
-            ],
-        )
+    keys.extend(seam_leg_accounts(shared, plane, signer, leg));
+    assert_eq!(
+        keys.len(),
+        leg.account_count(),
+        "the emitted seam plane must be exactly the plane the program requires"
+    );
+    Instruction {
+        program_index: message.index(&shared.program.bytes),
+        accounts: message.indices(&keys),
+        data,
     }
 }
 
+/// The message every seam transaction uses.
+///
+/// The token leg decides two of the four groups: on the collateral plane the
+/// actor's and the Hoard's token accounts are writable and the policy, the
+/// mint, the Hoard authority and the token program are read-only; on the
+/// outcome plane the mint and the holder account are writable and only the
+/// token program is read-only.  The program checks every one of those bits
+/// (`NotWritable`, `UnexpectedWritable`), so the message header is part of what
+/// is under test rather than plumbing.
+fn seam_message(
+    shared: &Shared,
+    plane: &Plane,
+    signer: Signer<'_>,
+    replay_override: Option<[u8; 32]>,
+    leg: Leg,
+) -> Message {
+    let replay = replay_override.unwrap_or(plane.replay.bytes);
+    let mut writable = vec![
+        plane.market.bytes,
+        plane.hoard.bytes,
+        plane.position.bytes,
+        plane.kernel.bytes,
+        plane.external.bytes,
+        replay,
+        plane.supply.bytes,
+    ];
+    let mut readonly = vec![
+        shared.realm.bytes,
+        shared.profile.bytes,
+        shared.program.bytes,
+        shared.compute_budget,
+        shared.token_program,
+    ];
+    match leg {
+        Leg::Collateral => {
+            writable.push(signer.collateral.bytes);
+            writable.push(plane.hoard_token.bytes);
+            readonly.push(shared.policy_account.bytes);
+            readonly.push(shared.collateral_mint.bytes);
+            readonly.push(plane.hoard_authority.bytes);
+        }
+        Leg::Outcome(outcome) => {
+            writable.push(plane.outcome_mints[usize::from(outcome)].bytes);
+            writable.push(plane.holder_tokens[usize::from(outcome)].bytes);
+        }
+    }
+    if signer.signs {
+        Message::new(&[shared.payer.bytes], &[signer.key], &writable, &readonly)
+    } else {
+        readonly.insert(0, signer.key);
+        Message::new(&[shared.payer.bytes], &[], &writable, &readonly)
+    }
+}
+
+/// One whole seam transaction: the compute-budget raise, then the instruction.
+///
+/// The raise is no longer optional for any family.  MEASURED: a `Split` that
+/// moves real collateral recomputes the 266-byte policy digest, recomputes the
+/// parent Profile hash, admits a mint and two token accounts, and performs a
+/// `TransferChecked` CPI, which does not fit the runtime's 200 000-unit
+/// default.  A real caller raises the limit the same way; the raised number is
+/// itself the measurement, recorded in `docs/implementation/SBF_BRINGUP.md`.
+fn seam_transaction(
+    shared: &Shared,
+    plane: &Plane,
+    signer: Signer<'_>,
+    replay_override: Option<[u8; 32]>,
+    leg: Leg,
+    data: Vec<u8>,
+) -> Vec<u8> {
+    let message = seam_message(shared, plane, signer, replay_override, leg);
+    let instruction = seam_instruction(&message, shared, plane, signer, replay_override, leg, data);
+    transaction(
+        &message,
+        &[
+            budget_instruction(&message, &shared.compute_budget, COMPUTE_UNIT_CEILING),
+            instruction,
+        ],
+    )
+}
+
 /// The message and instruction of one evidence-gated transaction.
+///
+/// `redeems` selects the plane: `Resolve` moves no value and keeps the twelve
+/// evidence accounts unchanged, while `RedeemInternal` pays collateral out and
+/// takes nineteen -- the twelve, then the Profile the 266 policy bytes are
+/// bound to, the token program, the policy, the collateral mint, the
+/// redeemer's own collateral account, the Hoard's signing authority, and the
+/// Hoard token account.
+#[allow(clippy::too_many_arguments)]
 fn gate_transaction(
     shared: &Shared,
     plane: &Plane,
     buffer: &Pda,
-    actor: [u8; 32],
-    actor_signs: bool,
+    signer: Signer<'_>,
     resolution_writable: bool,
+    redeems: bool,
     data: Vec<u8>,
 ) -> Vec<u8> {
     let mut writable = vec![
@@ -1822,29 +2470,57 @@ fn gate_transaction(
     } else {
         readonly.insert(1, plane.resolution.bytes);
     }
-    let message = if actor_signs {
-        Message::new(&[shared.payer.bytes], &[actor], &writable, &readonly)
+    let mut keys = vec![
+        signer.key,
+        plane.market.bytes,
+        plane.hoard.bytes,
+        plane.position.bytes,
+        plane.kernel.bytes,
+        plane.external.bytes,
+        plane.replay.bytes,
+        plane.supply.bytes,
+        shared.terms.bytes,
+        plane.resolution.bytes,
+        shared.feed_head.bytes,
+        buffer.bytes,
+    ];
+    if redeems {
+        writable.push(signer.collateral.bytes);
+        writable.push(plane.hoard_token.bytes);
+        readonly.push(shared.profile.bytes);
+        readonly.push(shared.token_program);
+        readonly.push(shared.policy_account.bytes);
+        readonly.push(shared.collateral_mint.bytes);
+        readonly.push(plane.hoard_authority.bytes);
+        keys.extend([
+            shared.profile.bytes,
+            shared.token_program,
+            shared.policy_account.bytes,
+            shared.collateral_mint.bytes,
+            signer.collateral.bytes,
+            plane.hoard_authority.bytes,
+            plane.hoard_token.bytes,
+        ]);
+    }
+    assert_eq!(
+        keys.len(),
+        if redeems {
+            clutch_sbf::instructions::observe_resolve::REDEEM_ACCOUNT_COUNT
+        } else {
+            clutch_sbf::instructions::observe_resolve::EVIDENCE_ACCOUNT_COUNT
+        },
+        "the emitted evidence plane must be exactly the plane the program requires"
+    );
+    let message = if signer.signs {
+        Message::new(&[shared.payer.bytes], &[signer.key], &writable, &readonly)
     } else {
         let mut readonly_unsigned = readonly.clone();
-        readonly_unsigned.insert(0, actor);
+        readonly_unsigned.insert(0, signer.key);
         Message::new(&[shared.payer.bytes], &[], &writable, &readonly_unsigned)
     };
     let instruction = Instruction {
         program_index: message.index(&shared.program.bytes),
-        accounts: message.indices(&[
-            actor,
-            plane.market.bytes,
-            plane.hoard.bytes,
-            plane.position.bytes,
-            plane.kernel.bytes,
-            plane.external.bytes,
-            plane.replay.bytes,
-            plane.supply.bytes,
-            shared.terms.bytes,
-            plane.resolution.bytes,
-            shared.feed_head.bytes,
-            buffer.bytes,
-        ]),
+        accounts: message.indices(&keys),
         data,
     };
     transaction(
@@ -1854,6 +2530,103 @@ fn gate_transaction(
             instruction,
         ],
     )
+}
+
+/// The message and instruction of one `Endow` transaction.
+///
+/// Four accounts and no system program: an endowment allocates nothing and
+/// moves no lamports.  The signer sits at
+/// [`clutch_sbf::instructions::genesis::IX_PAYER`] and must be the
+/// position's own owner, which is the one place in `genesis.rs` where creation
+/// is *not* permissionless.
+fn endow_transaction(shared: &Shared, plane: &Plane, signer: Signer<'_>, data: Vec<u8>) -> Vec<u8> {
+    let writable = [plane.position.bytes, plane.replay.bytes];
+    let mut readonly = vec![
+        plane.market.bytes,
+        shared.program.bytes,
+        shared.compute_budget,
+    ];
+    let message = if signer.signs {
+        Message::new(&[shared.payer.bytes], &[signer.key], &writable, &readonly)
+    } else {
+        readonly.insert(0, signer.key);
+        Message::new(&[shared.payer.bytes], &[], &writable, &readonly)
+    };
+    let keys = [
+        signer.key,
+        plane.market.bytes,
+        plane.position.bytes,
+        plane.replay.bytes,
+    ];
+    assert_eq!(
+        keys.len(),
+        clutch_sbf::instructions::genesis::ENDOW_ACCOUNT_COUNT,
+        "the emitted endowment plane must be exactly the plane the program requires"
+    );
+    let instruction = Instruction {
+        program_index: message.index(&shared.program.bytes),
+        accounts: message.indices(&keys),
+        data,
+    };
+    transaction(
+        &message,
+        &[
+            budget_instruction(&message, &shared.compute_budget, COMPUTE_UNIT_CEILING),
+            instruction,
+        ],
+    )
+}
+
+/// The `Endow` intent one credit carries.
+fn endow_request(plane: &Plane, sequence: u64, amount: u64) -> Vec<u8> {
+    layout_request(
+        sequence,
+        Intent::Endow {
+            market: plane.market_id,
+            owner: plane.owner,
+            amount,
+        },
+    )
+}
+
+/// The position and replay bytes one `Endow` must produce.
+///
+/// **This is the weakest oracle in the plan and it is labelled as one.**  The
+/// offline reference adapter refuses `Intent::Endow` with `UnsupportedIntent`
+/// -- it models no endowment -- so there is no second implementation to
+/// disagree with.  What is compared is still bytes against bytes: the two
+/// fields the transition moves are written here through the *frozen*
+/// `PositionAccount` and `ReplayAccount` codecs, and every other byte of both
+/// accounts must come back unchanged, which is what would catch a transition
+/// that touched something it should not have.
+fn endow_post(plane: &Plane, amount: u64) -> (Vec<u8>, Vec<u8>) {
+    let mut position =
+        PositionAccount::decode(&plane.state.position).expect("the pre-state position decodes");
+    let mut replay =
+        ReplayAccount::decode(&plane.state.replay).expect("the pre-state replay decodes");
+    position.cash_atoms = position
+        .cash_atoms
+        .checked_add(amount)
+        .expect("the endowed cash must not overflow");
+    replay.sequence += 1;
+    let mut position_bytes = [0_u8; account_len::POSITION];
+    let mut replay_bytes = [0_u8; REPLAY_ACCOUNT_LEN];
+    position
+        .encode(&mut position_bytes)
+        .expect("the endowed position encodes");
+    replay
+        .encode(&mut replay_bytes)
+        .expect("the endowed replay encodes");
+    (position_bytes.to_vec(), replay_bytes.to_vec())
+}
+
+/// The two accounts one `Endow` writes, compared.
+fn endow_compares(plane: &Plane, amount: u64) -> Vec<Compare> {
+    let (position, replay) = endow_post(plane, amount);
+    vec![
+        compare_of(plane, "position", &position),
+        compare_of(plane, "replay", &replay),
+    ]
 }
 
 /// The message and instruction of one `FeedAdvance` transaction.
@@ -1889,6 +2662,21 @@ fn advance_transaction(
 }
 
 /// The message and instruction of one `CreateMarket` transaction.
+///
+/// Nineteen accounts plus one mint per outcome.  Three things about this list
+/// are load-bearing and none of them is decoration:
+///
+/// 1. **the creator is a writable signer.**  It is the rent payer for every
+///    account this instruction founds, so the runtime has to have been told its
+///    lamports may fall; `market_init::process` refuses a read-only creator
+///    with `ClutchError::NotWritable` before it derives anything;
+/// 2. **the Hoard token account and every outcome mint arrive uncreated.**
+///    They are writable, hold nothing, and are not in the genesis dump at all,
+///    which is exactly what `require_uncreated` demands -- the instruction
+///    creates them by System-program CPI; and
+/// 3. **the System program and the Rent sysvar are in the list**, because the
+///    creation CPI needs the first and the rent-exempt minimum is read off the
+///    second rather than pinned as a constant.
 fn create_transaction(
     shared: &Shared,
     plane: &Plane,
@@ -1896,7 +2684,7 @@ fn create_transaction(
     creator_signs: bool,
     data: Vec<u8>,
 ) -> Vec<u8> {
-    let writable = [
+    let mut writable = vec![
         plane.market.bytes,
         plane.hoard.bytes,
         plane.position.bytes,
@@ -1905,37 +2693,61 @@ fn create_transaction(
         plane.replay.bytes,
         plane.supply.bytes,
         plane.resolution.bytes,
+        plane.hoard_token.bytes,
     ];
+    writable.extend(plane.outcome_mints.iter().map(|mint| mint.bytes));
     let readonly = [
         shared.realm.bytes,
         shared.profile.bytes,
         shared.terms.bytes,
         shared.program.bytes,
         shared.compute_budget,
+        shared.policy_account.bytes,
+        shared.token_program,
+        shared.collateral_mint.bytes,
+        shared.system_program,
+        shared.rent_sysvar,
+        plane.hoard_authority.bytes,
     ];
     let message = if creator_signs {
-        Message::new(&[shared.payer.bytes], &[creator], &writable, &readonly)
+        /* The creator is a *writable* signer here and a read-only one nowhere:
+         * it pays rent, so it is in the first group rather than the second. */
+        Message::new(&[shared.payer.bytes, creator], &[], &writable, &readonly)
     } else {
         let mut readonly_unsigned = readonly.to_vec();
         readonly_unsigned.insert(0, creator);
         Message::new(&[shared.payer.bytes], &[], &writable, &readonly_unsigned)
     };
+    let mut keys = vec![
+        creator,
+        shared.realm.bytes,
+        shared.profile.bytes,
+        shared.terms.bytes,
+        plane.market.bytes,
+        plane.hoard.bytes,
+        plane.position.bytes,
+        plane.kernel.bytes,
+        plane.external.bytes,
+        plane.replay.bytes,
+        plane.supply.bytes,
+        plane.resolution.bytes,
+        shared.policy_account.bytes,
+        shared.token_program,
+        shared.collateral_mint.bytes,
+        shared.system_program,
+        shared.rent_sysvar,
+        plane.hoard_authority.bytes,
+        plane.hoard_token.bytes,
+    ];
+    keys.extend(plane.outcome_mints.iter().map(|mint| mint.bytes));
+    assert_eq!(
+        keys.len(),
+        clutch_sbf::instructions::market_init::account_count(OUTCOME_COUNT),
+        "the emitted founding plane must be exactly the plane the program requires"
+    );
     let instruction = Instruction {
         program_index: message.index(&shared.program.bytes),
-        accounts: message.indices(&[
-            creator,
-            shared.realm.bytes,
-            shared.profile.bytes,
-            shared.terms.bytes,
-            plane.market.bytes,
-            plane.hoard.bytes,
-            plane.position.bytes,
-            plane.kernel.bytes,
-            plane.external.bytes,
-            plane.replay.bytes,
-            plane.supply.bytes,
-            plane.resolution.bytes,
-        ]),
+        accounts: message.indices(&keys),
         data,
     };
     transaction(
@@ -2337,16 +3149,31 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         .seam
         .layout(shared, &split, actor, true)
         .expect("the oracle accepts the bring-up Split");
-    let message = seam_message(shared, &f.seam, actor, true, None);
-    let instruction = seam_instruction(&message, shared, &f.seam, actor, None, split.clone());
+    let signer = Signer::own(shared, actor, true);
+    let message = seam_message(shared, &f.seam, signer, None, Leg::Collateral);
+    let instruction = seam_instruction(
+        &message,
+        shared,
+        &f.seam,
+        signer,
+        None,
+        Leg::Collateral,
+        split.clone(),
+    );
     cases.push(Case::accept(
         "split",
         "Split",
         "reference::apply",
-        "one Split of five complete sets on the ten-account seam plane",
-        transaction(&message, std::slice::from_ref(&instruction)),
+        "one Split of five complete sets on the sixteen-account collateral plane: real Token-2022 collateral moves from the actor to the Hoard",
+        transaction(
+            &message,
+            &[
+                budget_instruction(&message, &shared.compute_budget, COMPUTE_UNIT_CEILING),
+                instruction.clone(),
+            ],
+        ),
         1,
-        state_compares(&f.seam, &split_post),
+        seam_compares(shared, &f.seam, Leg::Collateral, &split_post),
     ));
 
     /* Split then Merge, sequenced by the bank inside one transaction. */
@@ -2362,9 +3189,16 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
     let roundtrip_post = after_split
         .layout(shared, &merge_back, actor, true)
         .expect("the oracle merges the round trip closed");
-    let merge_instruction =
-        seam_instruction(&message, shared, &f.seam, actor, None, merge_back.clone());
-    let roundtrip_compares = state_compares(&f.seam, &roundtrip_post);
+    let merge_instruction = seam_instruction(
+        &message,
+        shared,
+        &f.seam,
+        signer,
+        None,
+        Leg::Collateral,
+        merge_back.clone(),
+    );
+    let roundtrip_compares = seam_compares(shared, &f.seam, Leg::Collateral, &roundtrip_post);
     for entry in &roundtrip_compares {
         if entry.role.ends_with(".replay") {
             assert_ne!(
@@ -2383,27 +3217,32 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         "roundtrip",
         "Split+Merge",
         "reference::apply",
-        "Split then Merge as two instructions of one transaction; every account except the replay sequence must return to its pre-state",
-        transaction(&message, &[instruction, merge_instruction]),
+        "Split then Merge as two instructions of one transaction; every account except the replay sequence must return to its pre-state, the two token accounts included",
+        transaction(
+            &message,
+            &[
+                budget_instruction(&message, &shared.compute_budget, COMPUTE_UNIT_CEILING),
+                instruction,
+                merge_instruction,
+            ],
+        ),
         2,
         roundtrip_compares,
     ));
 
     /* Refusal: the position owner is present but never signed. */
-    let unsigned_message = seam_message(shared, &f.seam, actor, false, None);
-    let unsigned_instruction = seam_instruction(
-        &unsigned_message,
-        shared,
-        &f.seam,
-        actor,
-        None,
-        split.clone(),
-    );
     cases.push(Case::refuse(
         "split-unsigned",
         "Split",
         "the position owner is present, read-only, and never signed",
-        transaction(&unsigned_message, &[unsigned_instruction]),
+        seam_transaction(
+            shared,
+            &f.seam,
+            Signer::own(shared, actor, false),
+            None,
+            Leg::Collateral,
+            split.clone(),
+        ),
         code::MISSING_SIGNATURE,
         refusal_text(
             f.seam
@@ -2413,20 +3252,18 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
     ));
 
     /* Refusal: an authenticated signer who is not the position owner. */
-    let stranger_message = seam_message(shared, &f.seam, shared.stranger.bytes, true, None);
-    let stranger_instruction = seam_instruction(
-        &stranger_message,
-        shared,
-        &f.seam,
-        shared.stranger.bytes,
-        None,
-        split.clone(),
-    );
     cases.push(Case::refuse(
         "split-stranger",
         "Split",
         "a different authenticated signer presents the owner's position",
-        transaction(&stranger_message, &[stranger_instruction]),
+        seam_transaction(
+            shared,
+            &f.seam,
+            Signer::own(shared, shared.stranger.bytes, true),
+            None,
+            Leg::Collateral,
+            split.clone(),
+        ),
         code::UNAUTHORIZED_ACTOR,
         refusal_text(
             f.seam
@@ -2436,13 +3273,12 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
     ));
 
     /* Refusal: byte-identical replay state at a non-canonical address. */
-    let imposter_message = seam_message(shared, &f.seam, actor, true, Some(shared.imposter.bytes));
-    let imposter_instruction = seam_instruction(
-        &imposter_message,
+    let imposter_transaction = seam_transaction(
         shared,
         &f.seam,
-        actor,
+        Signer::own(shared, actor, true),
         Some(shared.imposter.bytes),
+        Leg::Collateral,
         split.clone(),
     );
     let mut imposter_metadata = f.seam.metadata(shared, actor, true);
@@ -2451,7 +3287,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         "split-imposter",
         "Split",
         "byte-identical replay state at an address that is not the canonical replay PDA",
-        transaction(&imposter_message, &[imposter_instruction]),
+        imposter_transaction,
         code::WRONG_PDA,
         refusal_text(
             apply(
@@ -2462,6 +3298,28 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             )
             .expect_err("the oracle refuses an imposter replay account"),
         ),
+    ));
+
+    /* Refusal: the owner signs, but funds the complete sets from an account
+     * it does not own.  NEW WITH THE MANDATORY COLLATERAL LEG, and the reason
+     * the leg has to name the actor at all: without the owner-authority check
+     * a `Split` could be paid for out of anyone's wallet.  The offline
+     * reference adapter models no token plane, so this refusal has no oracle
+     * on the other side and says so. */
+    cases.push(Case::refuse(
+        "split-foreign-collateral",
+        "Split",
+        "the position owner signs but presents a collateral account owned by someone else",
+        seam_transaction(
+            shared,
+            &f.seam,
+            Signer::own(shared, actor, true).presenting(&shared.stranger_token),
+            None,
+            Leg::Collateral,
+            split.clone(),
+        ),
+        code::TOKEN_ACCOUNT_NOT_ADMITTED,
+        "n/a (the offline adapter has no collateral leg)".to_string(),
     ));
 
     /* ---------------------------------------------------------------- */
@@ -2479,42 +3337,34 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         .held
         .layout(shared, &merge, actor, true)
         .expect("the oracle accepts the Merge");
-    let held_message = seam_message(shared, &f.held, actor, true, None);
     cases.push(Case::accept(
         "merge",
         "Merge",
         "reference::apply",
-        "merge five complete sets back into cash on a market holding twenty",
-        transaction(
-            &held_message,
-            &[seam_instruction(
-                &held_message,
-                shared,
-                &f.held,
-                actor,
-                None,
-                merge.clone(),
-            )],
+        "merge five complete sets back into cash on a market holding twenty; the Hoard signs its own collateral out",
+        seam_transaction(
+            shared,
+            &f.held,
+            Signer::own(shared, actor, true),
+            None,
+            Leg::Collateral,
+            merge.clone(),
         ),
         1,
-        state_compares(&f.held, &merge_post),
+        seam_compares(shared, &f.held, Leg::Collateral, &merge_post),
     ));
 
-    let held_unsigned = seam_message(shared, &f.held, actor, false, None);
     cases.push(Case::refuse(
         "merge-unsigned",
         "Merge",
         "the position owner is present, read-only, and never signed",
-        transaction(
-            &held_unsigned,
-            &[seam_instruction(
-                &held_unsigned,
-                shared,
-                &f.held,
-                actor,
-                None,
-                merge.clone(),
-            )],
+        seam_transaction(
+            shared,
+            &f.held,
+            Signer::own(shared, actor, false),
+            None,
+            Leg::Collateral,
+            merge.clone(),
         ),
         code::MISSING_SIGNATURE,
         refusal_text(
@@ -2540,16 +3390,13 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         "merge-overdraw",
         "Merge",
         "merge one more complete set than the position holds",
-        transaction(
-            &held_message,
-            &[seam_instruction(
-                &held_message,
-                shared,
-                &f.held,
-                actor,
-                None,
-                overdraw.clone(),
-            )],
+        seam_transaction(
+            shared,
+            &f.held,
+            Signer::own(shared, actor, true),
+            None,
+            Leg::Collateral,
+            overdraw.clone(),
         ),
         shared_class_code(overdraw_refusal),
         refusal_text(overdraw_refusal),
@@ -2573,36 +3420,30 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         "materialize",
         "Materialize",
         "reference::apply",
-        "move three atoms of outcome zero from the internal ledger to the external shadow",
-        transaction(
-            &held_message,
-            &[seam_instruction(
-                &held_message,
-                shared,
-                &f.held,
-                actor,
-                None,
-                materialize.clone(),
-            )],
+        "move three atoms of outcome zero from the internal ledger to the external shadow: the outcome mint really mints and the holder account really receives",
+        seam_transaction(
+            shared,
+            &f.held,
+            Signer::own(shared, actor, true),
+            None,
+            Leg::Outcome(0),
+            materialize.clone(),
         ),
         1,
-        state_compares(&f.held, &materialize_post),
+        seam_compares(shared, &f.held, Leg::Outcome(0), &materialize_post),
     ));
 
     cases.push(Case::refuse(
         "materialize-unsigned",
         "Materialize",
         "the position owner is present, read-only, and never signed",
-        transaction(
-            &held_unsigned,
-            &[seam_instruction(
-                &held_unsigned,
-                shared,
-                &f.held,
-                actor,
-                None,
-                materialize.clone(),
-            )],
+        seam_transaction(
+            shared,
+            &f.held,
+            Signer::own(shared, actor, false),
+            None,
+            Leg::Outcome(0),
+            materialize.clone(),
         ),
         code::MISSING_SIGNATURE,
         refusal_text(
@@ -2626,16 +3467,13 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         "materialize-wrong-destination",
         "Materialize",
         "the caller names a destination that is not the derived external-shadow address",
-        transaction(
-            &held_message,
-            &[seam_instruction(
-                &held_message,
-                shared,
-                &f.held,
-                actor,
-                None,
-                wrong_destination.clone(),
-            )],
+        seam_transaction(
+            shared,
+            &f.held,
+            Signer::own(shared, actor, true),
+            None,
+            Leg::Outcome(0),
+            wrong_destination.clone(),
         ),
         code::WRONG_PDA,
         refusal_text(
@@ -2662,42 +3500,34 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         .shadow
         .layout(shared, &dematerialize, actor, true)
         .expect("the oracle accepts the Dematerialize");
-    let shadow_message = seam_message(shared, &f.shadow, actor, true, None);
     cases.push(Case::accept(
         "dematerialize",
         "Dematerialize",
         "reference::apply",
-        "move three atoms of outcome zero from the external shadow back to the internal ledger",
-        transaction(
-            &shadow_message,
-            &[seam_instruction(
-                &shadow_message,
-                shared,
-                &f.shadow,
-                actor,
-                None,
-                dematerialize.clone(),
-            )],
+        "move three atoms of outcome zero from the external shadow back to the internal ledger: the holder's tokens are really burned",
+        seam_transaction(
+            shared,
+            &f.shadow,
+            Signer::own(shared, actor, true),
+            None,
+            Leg::Outcome(0),
+            dematerialize.clone(),
         ),
         1,
-        state_compares(&f.shadow, &dematerialize_post),
+        seam_compares(shared, &f.shadow, Leg::Outcome(0), &dematerialize_post),
     ));
 
-    let shadow_unsigned = seam_message(shared, &f.shadow, actor, false, None);
     cases.push(Case::refuse(
         "dematerialize-unsigned",
         "Dematerialize",
         "the position owner is present, read-only, and never signed",
-        transaction(
-            &shadow_unsigned,
-            &[seam_instruction(
-                &shadow_unsigned,
-                shared,
-                &f.shadow,
-                actor,
-                None,
-                dematerialize.clone(),
-            )],
+        seam_transaction(
+            shared,
+            &f.shadow,
+            Signer::own(shared, actor, false),
+            None,
+            Leg::Outcome(0),
+            dematerialize.clone(),
         ),
         code::MISSING_SIGNATURE,
         refusal_text(
@@ -2725,16 +3555,13 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         "dematerialize-overdraw",
         "Dematerialize",
         "dematerialize one more atom than the external shadow holds",
-        transaction(
-            &shadow_message,
-            &[seam_instruction(
-                &shadow_message,
-                shared,
-                &f.shadow,
-                actor,
-                None,
-                demat_overdraw.clone(),
-            )],
+        seam_transaction(
+            shared,
+            &f.shadow,
+            Signer::own(shared, actor, true),
+            None,
+            Leg::Outcome(0),
+            demat_overdraw.clone(),
         ),
         shared_class_code(demat_refusal),
         refusal_text(demat_refusal),
@@ -2766,9 +3593,9 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             shared,
             &f.held,
             &f.resolve_buffer,
-            actor,
+            Signer::own(shared, actor, true),
             true,
-            true,
+            false,
             resolve.clone(),
         ),
         1,
@@ -2783,9 +3610,9 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             shared,
             &f.held,
             &f.resolve_buffer,
-            actor,
-            false,
+            Signer::own(shared, actor, false),
             true,
+            false,
             resolve.clone(),
         ),
         code::REFERENCE_MISSING_SIGNATURE,
@@ -2805,9 +3632,9 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             shared,
             &f.held,
             &f.resolve_buffer,
-            actor,
+            Signer::own(shared, actor, true),
             true,
-            true,
+            false,
             wrong_payout.clone(),
         ),
         code::PAYOUT_INDEX_MISMATCH,
@@ -2830,7 +3657,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         redeem_post.redemption_payout, REDEEM_QUANTITY,
         "the winning outcome pays one atom per claim"
     );
-    let mut redeem_compares = state_compares(&f.redeem, &redeem_post);
+    let mut redeem_compares = seam_compares(shared, &f.redeem, Leg::Collateral, &redeem_post);
     redeem_compares.push(compare_of(
         &f.redeem,
         "resolution",
@@ -2847,9 +3674,9 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             shared,
             &f.redeem,
             &f.redeem_buffer,
-            actor,
-            true,
+            Signer::own(shared, actor, true),
             false,
+            true,
             redeem.clone(),
         ),
         1,
@@ -2864,9 +3691,9 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             shared,
             &f.redeem,
             &f.redeem_buffer,
-            actor,
+            Signer::own(shared, actor, false),
             false,
-            false,
+            true,
             redeem.clone(),
         ),
         code::REFERENCE_MISSING_SIGNATURE,
@@ -2885,9 +3712,9 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             shared,
             &f.redeem,
             &f.redeem_buffer,
-            shared.stranger.bytes,
-            true,
+            Signer::own(shared, shared.stranger.bytes, true),
             false,
+            true,
             redeem.clone(),
         ),
         code::REFERENCE_UNAUTHORIZED_ACTOR,
@@ -2896,6 +3723,91 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
                 .gate(shared, &redeem, &[], false, shared.stranger.bytes, true)
                 .expect_err("the oracle refuses a stranger's redemption"),
         ),
+    ));
+
+    /* Refusal: the redeemer signs, but the payout is directed into an account
+     * it does not own.  The mirror image of `split-foreign-collateral`, on the
+     * one instruction that pays collateral *out*. */
+    cases.push(Case::refuse(
+        "redeem-foreign-collateral",
+        "RedeemInternal",
+        "the claim owner signs but directs the payout into a collateral account owned by someone else",
+        gate_transaction(
+            shared,
+            &f.redeem,
+            &f.redeem_buffer,
+            Signer::own(shared, actor, true).presenting(&shared.stranger_token),
+            false,
+            true,
+            redeem.clone(),
+        ),
+        code::TOKEN_ACCOUNT_NOT_ADMITTED,
+        "n/a (the offline adapter has no collateral leg)".to_string(),
+    ));
+
+    /* ---------------------------------------------------------------- */
+    /* Endow, on the empty seam market                                   */
+    /* ---------------------------------------------------------------- */
+    /* The genesis plane's one non-creating transition, and the only family in
+     * this plan with **no reference oracle at all**: `reference::apply`
+     * refuses `Intent::Endow` with `UnsupportedIntent`.  It is driven anyway,
+     * and labelled as the weaker evidence it is, because the alternative is a
+     * conjured `cash_atoms` in a fixture -- a number with no signer, no
+     * sequence, no log line and no ceiling.  What the endowment does *not* do
+     * is back the credit: no collateral moves, `genesis.rs` says so in its own
+     * module docs, and the Hoard's untouched bytes here are that statement
+     * driven. */
+    let endow = endow_request(&f.seam, 0, ENDOW_AMOUNT);
+    cases.push(Case::accept(
+        "endow",
+        "Endow",
+        "layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
+        "credit forty atoms of internal cash to the founding position; nothing backs the credit and no collateral moves",
+        endow_transaction(shared, &f.seam, Signer::own(shared, actor, true), endow.clone()),
+        1,
+        endow_compares(&f.seam, ENDOW_AMOUNT),
+    ));
+
+    cases.push(Case::refuse(
+        "endow-unsigned",
+        "Endow",
+        "the position owner is present, read-only, and never signed",
+        endow_transaction(
+            shared,
+            &f.seam,
+            Signer::own(shared, actor, false),
+            endow.clone(),
+        ),
+        code::MISSING_SIGNATURE,
+        "n/a (the offline adapter has no Endow)".to_string(),
+    ));
+
+    cases.push(Case::refuse(
+        "endow-stranger",
+        "Endow",
+        "a different authenticated signer credits the owner's position; an endowment is the one genesis transition that is not permissionless",
+        endow_transaction(
+            shared,
+            &f.seam,
+            Signer::own(shared, shared.stranger.bytes, true),
+            endow.clone(),
+        ),
+        code::UNAUTHORIZED_ACTOR,
+        "n/a (the offline adapter has no Endow)".to_string(),
+    ));
+
+    cases.push(Case::refuse(
+        "endow-over-cap",
+        "Endow",
+        "credit one atom more than the market's immutable collateral cap admits",
+        endow_transaction(
+            shared,
+            &f.seam,
+            Signer::own(shared, actor, true),
+            endow_request(&f.seam, 0, COLLATERAL_CAP - CASH_ATOMS + 1),
+        ),
+        code::COLLATERAL_CAP,
+        "n/a (the offline adapter has no Endow)".to_string(),
     ));
 
     /* ---------------------------------------------------------------- */
@@ -3004,12 +3916,18 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         ),
     ));
 
-    /* Three families do not fit the runtime's 200 000-unit default and carry a
-     * `SetComputeUnitLimit` instruction ahead of the program instruction.
-     * `gate_transaction` and `create_transaction` are the two builders that
-     * emit it, so the marking is by family rather than by hand per case. */
+    /* Every family except `FeedAdvance` now carries a `SetComputeUnitLimit`
+     * instruction ahead of the program instruction.  That is a change the
+     * token plane forced and it is a MEASUREMENT, not a workaround: a `Split`
+     * that moves real collateral recomputes a 266-byte policy digest and a
+     * parent Profile hash, admits a mint and two token accounts, and performs
+     * a `TransferChecked` CPI, and a `CreateMarket` additionally creates one
+     * mint per outcome plus the Hoard token account through seven CPIs.  None
+     * of that fits the runtime's 200 000-unit default.  `FeedAdvance` still
+     * does, and is deliberately left without a raise so that the difference
+     * stays visible in the recorded numbers. */
     for case in &mut cases {
-        if matches!(case.family, "Resolve" | "RedeemInternal" | "CreateMarket") {
+        if case.family != "FeedAdvance" {
             case.compute_limit = Some(COMPUTE_UNIT_CEILING);
         }
     }
@@ -3068,6 +3986,12 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
 /// Market nonces of the walk, one per distinct pre-state.
 const NONCE_WALK_FOUND: u64 = 20;
 const NONCE_WALK_OPEN: u64 = 21;
+/// The plane the walk's endowment has already landed on.
+///
+/// Appended rather than inserted: the market identity is a function of the
+/// nonce, so renumbering the walk would move every address in it for no
+/// reason.  The *narrative* order is the step list's, not the nonce's.
+const NONCE_WALK_ENDOWED: u64 = 28;
 const NONCE_WALK_SPLIT: u64 = 22;
 const NONCE_WALK_MATERIALIZED: u64 = 23;
 const NONCE_WALK_DEMATERIALIZED: u64 = 24;
@@ -3081,11 +4005,15 @@ const WALK_GENERATION: u64 = 0;
 
 /// Opening cash of the walk's position.
 ///
-/// NAMED GAP, and the one field of the walk's opening state that no instruction
-/// produced: nothing in this instruction set moves collateral into a Position,
-/// so the walk credits its opening cash in the fixture.  Everything else in the
-/// opening state is `CreateMarket`'s own post-state, and the harness asserts
-/// exactly that (see `walk_opening_state_is_the_founding_state_plus_cash`).
+/// NO LONGER A FIXTURE FIELD.  It used to be the one number in the walk's
+/// opening state that no instruction produced -- the walk wrote it into the
+/// position account before any transaction ran -- and step 2 now *drives* it,
+/// through the `Endow` instruction the genesis plane added.  The gap that
+/// remains is narrower and is still named: an endowment credits internal cash
+/// that **no collateral backs**, because the value leg (a Token-2022 transfer
+/// into the market's Hoard) is constructed in `token.rs` and wired by nothing.
+/// So the walk's opening cash now has a signer, a replay sequence, a log line
+/// and a ceiling, and still has no deposit behind it.
 const WALK_CASH: u64 = 64;
 
 /// The walk's quantities.  Every terminal number is derived from these.
@@ -3189,6 +4117,7 @@ struct Lifecycle {
 struct Walk {
     found: Plane,
     open: Plane,
+    endowed: Plane,
     split: Plane,
     materialized: Plane,
     dematerialized: Plane,
@@ -3207,10 +4136,11 @@ struct Walk {
 }
 
 impl Walk {
-    fn planes(&self) -> [&Plane; 8] {
+    fn planes(&self) -> [&Plane; 9] {
         [
             &self.found,
             &self.open,
+            &self.endowed,
             &self.split,
             &self.materialized,
             &self.dematerialized,
@@ -3224,14 +4154,15 @@ impl Walk {
 /// The layout request the walk issues at `step`, on `plane`'s identity.
 ///
 /// The replay sequence is the step index, because the walk starts from a
-/// founding state whose replay account is at sequence zero and every step
-/// consumes exactly one sequence.
+/// founding state whose replay account is at sequence zero and every step --
+/// the endowment at step zero included -- consumes exactly one sequence.
 fn walk_layout_request(plane: &Plane, step: usize) -> Vec<u8> {
     let market = plane.market_id;
     let owner = plane.owner;
     let sequence = step as u64;
     match step {
-        0 => layout_request(
+        0 => endow_request(plane, sequence, WALK_CASH),
+        1 => layout_request(
             sequence,
             Intent::Split {
                 market,
@@ -3239,7 +4170,7 @@ fn walk_layout_request(plane: &Plane, step: usize) -> Vec<u8> {
                 quantity: WALK_SPLIT,
             },
         ),
-        1 => layout_request(
+        2 => layout_request(
             sequence,
             Intent::Materialize {
                 market,
@@ -3249,7 +4180,7 @@ fn walk_layout_request(plane: &Plane, step: usize) -> Vec<u8> {
                 quantity: WALK_MATERIALIZE,
             },
         ),
-        2 => layout_request(
+        3 => layout_request(
             sequence,
             Intent::Dematerialize {
                 market,
@@ -3259,7 +4190,7 @@ fn walk_layout_request(plane: &Plane, step: usize) -> Vec<u8> {
                 quantity: WALK_DEMATERIALIZE,
             },
         ),
-        3 => layout_request(
+        4 => layout_request(
             sequence,
             Intent::Merge {
                 market,
@@ -3271,27 +4202,41 @@ fn walk_layout_request(plane: &Plane, step: usize) -> Vec<u8> {
     }
 }
 
-/// Run the offline reference adapter forward over the first `steps` steps.
+/// Run the walk forward over its first `steps` steps.
+///
+/// Every step but the first is the **offline reference adapter's** own
+/// transition.  Step zero is the endowment, and it is the one step the
+/// reference cannot run: `apply` refuses `Intent::Endow` with
+/// `UnsupportedIntent`, so the credit is applied here through the frozen
+/// `PositionAccount` and `ReplayAccount` codecs by [`endow_post`] -- the same
+/// weaker oracle the `endow` case in the per-family plan declares, applied to
+/// the same two fields.
 fn walk_forward(shared: &Shared, plane: &mut Plane, steps: usize) {
     let actor = shared.actor.bytes;
     let window = encode_window(shared.feed, &winning_records());
     for step in 0..steps {
+        if step == 0 {
+            let (position, replay) = endow_post(plane, WALK_CASH);
+            plane.state.position.copy_from_slice(&position);
+            plane.state.replay.copy_from_slice(&replay);
+            continue;
+        }
         let output = match step {
-            0..=3 => {
+            1..=4 => {
                 let request = walk_layout_request(plane, step);
                 plane.layout(shared, &request, actor, true)
             }
-            4 => plane.gate(
+            5 => plane.gate(
                 shared,
-                &resolve_request(4, WINNING_PAYOUT_INDEX),
+                &resolve_request(5, WINNING_PAYOUT_INDEX),
                 &window,
                 true,
                 actor,
                 true,
             ),
-            5 => plane.gate(
+            6 => plane.gate(
                 shared,
-                &redeem_request(5, WALK_OUTCOME_WIN, walk_redeem_winning()),
+                &redeem_request(6, WALK_OUTCOME_WIN, walk_redeem_winning()),
                 &[],
                 false,
                 actor,
@@ -3304,31 +4249,14 @@ fn walk_forward(shared: &Shared, plane: &mut Plane, steps: usize) {
     }
 }
 
-/// Build one walk plane: `CreateMarket`'s post-state, funded, walked forward.
+/// Build one walk plane: `CreateMarket`'s post-state, walked forward.
 fn walk_plane(shared: &Shared, label: &'static str, nonce: u64, steps: usize) -> Plane {
     let mut plane = Plane::build(shared, label, nonce, WALK_GENERATION);
     let (state, resolution) = founding_plane(shared, &plane, nonce);
     plane.state = state;
     plane.resolution_bytes = resolution;
-    credit_walk_cash(&mut plane);
     walk_forward(shared, &mut plane, steps);
     plane
-}
-
-/// Credit the walk's opening cash into a founding position.
-///
-/// This is the walk's single fixture-written field; see [`WALK_CASH`].
-fn credit_walk_cash(plane: &mut Plane) {
-    let mut position =
-        PositionAccount::decode(&plane.state.position).expect("the founding position must decode");
-    assert_eq!(
-        position.cash_atoms, 0,
-        "a founding position must open with no cash"
-    );
-    position.cash_atoms = WALK_CASH;
-    position
-        .encode(&mut plane.state.position)
-        .expect("the funded opening position must encode");
 }
 
 /// Fold the walk's observation pages onto the shared advance-feed head.
@@ -3413,19 +4341,20 @@ fn build_walk(shared: &Shared) -> Walk {
     let (founded, founded_resolution) = founding_plane(shared, &found, NONCE_WALK_FOUND);
 
     let open = walk_plane(shared, "walk-open", NONCE_WALK_OPEN, 0);
-    let split = walk_plane(shared, "walk-split", NONCE_WALK_SPLIT, 1);
-    let materialized = walk_plane(shared, "walk-materialized", NONCE_WALK_MATERIALIZED, 2);
-    let dematerialized = walk_plane(shared, "walk-dematerialized", NONCE_WALK_DEMATERIALIZED, 3);
-    let merged = walk_plane(shared, "walk-merged", NONCE_WALK_MERGED, 4);
-    let resolved = walk_plane(shared, "walk-resolved", NONCE_WALK_RESOLVED, 5);
-    let redeemed = walk_plane(shared, "walk-redeemed", NONCE_WALK_REDEEMED, 6);
+    let endowed = walk_plane(shared, "walk-endowed", NONCE_WALK_ENDOWED, 1);
+    let split = walk_plane(shared, "walk-split", NONCE_WALK_SPLIT, 2);
+    let materialized = walk_plane(shared, "walk-materialized", NONCE_WALK_MATERIALIZED, 3);
+    let dematerialized = walk_plane(shared, "walk-dematerialized", NONCE_WALK_DEMATERIALIZED, 4);
+    let merged = walk_plane(shared, "walk-merged", NONCE_WALK_MERGED, 5);
+    let resolved = walk_plane(shared, "walk-resolved", NONCE_WALK_RESOLVED, 6);
+    let redeemed = walk_plane(shared, "walk-redeemed", NONCE_WALK_REDEEMED, 7);
 
     /* The last step's post-state, from the same forward run.  It is the walk's
      * terminal state and the thing the accounting identity is asserted over. */
     let terminal = redeemed
         .gate(
             shared,
-            &redeem_request(6, WALK_OUTCOME_LOSE, walk_redeem_losing()),
+            &redeem_request(7, WALK_OUTCOME_LOSE, walk_redeem_losing()),
             &[],
             false,
             shared.actor.bytes,
@@ -3448,6 +4377,7 @@ fn build_walk(shared: &Shared) -> Walk {
     let walk = Walk {
         found,
         open,
+        endowed,
         split,
         materialized,
         dematerialized,
@@ -3472,43 +4402,71 @@ fn build_walk(shared: &Shared) -> Walk {
 /// `CreateMarket` writes, a feed that does not reach maturity -- is a build
 /// failure rather than a green differential over a fiction.
 fn assert_walk_chains(shared: &Shared, walk: &Walk) {
-    /* The opening state is the founding state with exactly one field credited. */
-    let (mut founded, founded_resolution) = founding_plane(shared, &walk.open, NONCE_WALK_OPEN);
+    /* The opening state is EXACTLY what `CreateMarket` writes -- no field is
+     * credited into it any more.  The walk's cash arrives at step 2, through
+     * an `Endow` a signer authorized and a replay sequence counted. */
+    let (founded, founded_resolution) = founding_plane(shared, &walk.open, NONCE_WALK_OPEN);
     assert_eq!(
         walk.open.resolution_bytes, founded_resolution,
         "the walk opens on the resolution record CreateMarket writes"
     );
     for (role, _) in walk.open.state_roles() {
-        if role == "position" {
-            continue;
-        }
         assert_eq!(
             walk.open.state_slice(role),
             output_slice(&founded, role),
             "the walk's opening {role} must be exactly what CreateMarket writes"
         );
     }
-    let mut position =
-        PositionAccount::decode(&founded.position).expect("the founding position decodes");
-    position.cash_atoms = WALK_CASH;
-    position
-        .encode(&mut founded.position)
-        .expect("the funded position encodes");
     assert_eq!(
-        walk.open.state_slice("position"),
-        founded.position.as_slice(),
-        "the walk's opening position differs from CreateMarket's only in its cash"
+        PositionAccount::decode(&walk.open.state.position)
+            .expect("the opening position decodes")
+            .cash_atoms,
+        0,
+        "the walk must open with no cash: the endowment is a step, not a fixture"
     );
 
+    /* And the endowed plane is its **own** founding state plus exactly two
+     * moved fields: the credited cash and the consumed replay sequence.  The
+     * comparison is against a founding plane rebuilt at the endowed plane's
+     * own nonce rather than against `walk.open`, because every account in a
+     * plane carries its market identity and two planes at two nonces differ in
+     * bytes that have nothing to do with the transition. */
+    let mut founding_endowed =
+        Plane::build(shared, "walk-endowed", NONCE_WALK_ENDOWED, WALK_GENERATION);
+    let (endowed_founding_state, _) = founding_plane(shared, &founding_endowed, NONCE_WALK_ENDOWED);
+    founding_endowed.state = endowed_founding_state;
+    let (endowed_position, endowed_replay) = endow_post(&founding_endowed, WALK_CASH);
+    assert_eq!(
+        walk.endowed.state_slice("position"),
+        endowed_position.as_slice(),
+        "the endowed plane's position is its founding position plus the credit"
+    );
+    assert_eq!(
+        walk.endowed.state_slice("replay"),
+        endowed_replay.as_slice(),
+        "an endowment consumes exactly one replay sequence"
+    );
+    for (role, _) in walk.endowed.state_roles() {
+        if role == "position" || role == "replay" {
+            continue;
+        }
+        assert_eq!(
+            walk.endowed.state_slice(role),
+            founding_endowed.state_slice(role),
+            "an endowment must not move {role}"
+        );
+    }
+
     /* Each plane is the previous plane's step replayed on its own identity. */
-    let stages: [(&Plane, usize); 7] = [
+    let stages: [(&Plane, usize); 8] = [
         (&walk.open, 0),
-        (&walk.split, 1),
-        (&walk.materialized, 2),
-        (&walk.dematerialized, 3),
-        (&walk.merged, 4),
-        (&walk.resolved, 5),
-        (&walk.redeemed, 6),
+        (&walk.endowed, 1),
+        (&walk.split, 2),
+        (&walk.materialized, 3),
+        (&walk.dematerialized, 4),
+        (&walk.merged, 5),
+        (&walk.resolved, 6),
+        (&walk.redeemed, 7),
     ];
     for (plane, steps) in stages {
         let replay = ReplayAccount::decode(&plane.state.replay).expect("a replay account decodes");
@@ -3909,140 +4867,158 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
         "Eight all-zero accounts at their canonical addresses become one active market. The collateral cap, the outcome basis, the payout set, and the feed identity are read out of the frozen terms artifact; the instruction chooses none of them.",
     ));
 
-    /* 2. Split. */
-    let split = walk_layout_request(&walk.open, 0);
-    let split_post = walk
-        .open
-        .layout(shared, &split, actor, true)
-        .expect("the walk splits");
-    let message = seam_message(shared, &walk.open, actor, true, None);
+    /* 2. Endow: the walk's opening cash, driven rather than conjured. */
+    let endow = walk_layout_request(&walk.open, 0);
     cases.push(Case::accept(
-        "walk-02-split",
+        "walk-02-endow",
         "Lifecycle",
-        "reference::apply",
-        "split the funded position into complete sets",
-        transaction(
-            &message,
-            &[seam_instruction(
-                &message, shared, &walk.open, actor, None, split,
-            )],
-        ),
+        "layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
+        "credit the founding position's opening cash through the one instruction that credits it",
+        endow_transaction(shared, &walk.open, Signer::own(shared, actor, true), endow),
         1,
-        state_compares(&walk.open, &split_post),
+        endow_compares(&walk.open, WALK_CASH),
     ));
     steps.push(walk_step(
         2,
-        "walk-02-split",
-        "split internally",
-        "4",
-        "One collateral debit credits one unit of every Egg. No mint CPI, no token account: the complete set lives in the position's internal balances and the Hoard's collateral rises by exactly the quantity split.",
+        "walk-02-endow",
+        "endow the founding position",
+        "2 (in part)",
+        "The walk's opening cash used to be a number this harness wrote into the genesis position account: no signer, no sequence, no ceiling. It is now an instruction. What it still is not is a deposit -- `Endow` moves the internal ledger and no collateral, because the value leg is a Token-2022 transfer into the Hoard that `token.rs` constructs and nothing wires. The credit therefore has an author and a replay sequence and remains unbacked, and the Hoard's untouched bytes in this step are that statement driven.",
     ));
 
-    /* 3. Materialize. */
-    let materialize = walk_layout_request(&walk.split, 1);
+    /* 3. Split. */
+    let split = walk_layout_request(&walk.endowed, 1);
+    let split_post = walk
+        .endowed
+        .layout(shared, &split, actor, true)
+        .expect("the walk splits");
+    cases.push(Case::accept(
+        "walk-03-split",
+        "Lifecycle",
+        "reference::apply",
+        "split the endowed position into complete sets, moving real Token-2022 collateral into the Hoard",
+        seam_transaction(
+            shared,
+            &walk.endowed,
+            Signer::own(shared, actor, true),
+            None,
+            Leg::Collateral,
+            split,
+        ),
+        1,
+        seam_compares(shared, &walk.endowed, Leg::Collateral, &split_post),
+    ));
+    steps.push(walk_step(
+        3,
+        "walk-03-split",
+        "split internally",
+        "4",
+        "One collateral debit credits one unit of every Egg. The complete set lives in the position's internal balances, and the Hoard's accounting and its Token-2022 account both rise by exactly the quantity split -- the two collateral truths the program refuses to let disagree.",
+    ));
+
+    /* 4. Materialize. */
+    let materialize = walk_layout_request(&walk.split, 2);
     let materialize_post = walk
         .split
         .layout(shared, &materialize, actor, true)
         .expect("the walk materializes");
-    let message = seam_message(shared, &walk.split, actor, true, None);
     cases.push(Case::accept(
-        "walk-03-materialize",
+        "walk-04-materialize",
         "Lifecycle",
         "reference::apply",
-        "materialize part of the winning outcome into the external shadow",
-        transaction(
-            &message,
-            &[seam_instruction(
-                &message,
-                shared,
-                &walk.split,
-                actor,
-                None,
-                materialize,
-            )],
+        "materialize part of the winning outcome into the external shadow, minting the outcome token that represents it",
+        seam_transaction(
+            shared,
+            &walk.split,
+            Signer::own(shared, actor, true),
+            None,
+            Leg::Outcome(WALK_OUTCOME_WIN),
+            materialize,
         ),
         1,
-        state_compares(&walk.split, &materialize_post),
+        seam_compares(
+            shared,
+            &walk.split,
+            Leg::Outcome(WALK_OUTCOME_WIN),
+            &materialize_post,
+        ),
     ));
     steps.push(walk_step(
-        3,
-        "walk-03-materialize",
+        4,
+        "walk-04-materialize",
         "materialize one Egg",
         "5",
-        "Part of one outcome leaves the internal ledger for the external shadow. `total_i` is preserved exactly: what the position loses internally the shadow gains, and the Hoard does not move.",
+        "Part of one outcome leaves the internal ledger for the external shadow, and a real Token-2022 `MintTo` signed by the market PDA is what makes it external. `total_i` is preserved exactly: what the position loses internally the shadow gains, the mint's supply is the market-wide external term, and the Hoard does not move.",
     ));
 
-    /* 4. Dematerialize. */
-    let dematerialize = walk_layout_request(&walk.materialized, 2);
+    /* 5. Dematerialize. */
+    let dematerialize = walk_layout_request(&walk.materialized, 3);
     let dematerialize_post = walk
         .materialized
         .layout(shared, &dematerialize, actor, true)
         .expect("the walk dematerializes");
-    let message = seam_message(shared, &walk.materialized, actor, true, None);
     cases.push(Case::accept(
-        "walk-04-dematerialize",
+        "walk-05-dematerialize",
         "Lifecycle",
         "reference::apply",
-        "bring part of the materialized outcome back to the internal ledger",
-        transaction(
-            &message,
-            &[seam_instruction(
-                &message,
-                shared,
-                &walk.materialized,
-                actor,
-                None,
-                dematerialize,
-            )],
+        "bring part of the materialized outcome back to the internal ledger, burning the outcome token",
+        seam_transaction(
+            shared,
+            &walk.materialized,
+            Signer::own(shared, actor, true),
+            None,
+            Leg::Outcome(WALK_OUTCOME_WIN),
+            dematerialize,
         ),
         1,
-        state_compares(&walk.materialized, &dematerialize_post),
+        seam_compares(
+            shared,
+            &walk.materialized,
+            Leg::Outcome(WALK_OUTCOME_WIN),
+            &dematerialize_post,
+        ),
     ));
     steps.push(walk_step(
-        4,
-        "walk-04-dematerialize",
+        5,
+        "walk-05-dematerialize",
         "dematerialize part of it",
         "5",
-        "The reverse boundary crossing, for part of what was materialized. The remainder stays outstanding on the external side for the rest of the walk and is what the terminal Hoard has to cover.",
+        "The reverse boundary crossing, for part of what was materialized: the holder's tokens are burned under the owner's own signature. The remainder stays outstanding on the external side for the rest of the walk and is what the terminal Hoard has to cover.",
     ));
 
-    /* 5. Merge, while the market is still active. */
-    let merge = walk_layout_request(&walk.dematerialized, 3);
+    /* 6. Merge, while the market is still active. */
+    let merge = walk_layout_request(&walk.dematerialized, 4);
     let merge_post = walk
         .dematerialized
         .layout(shared, &merge, actor, true)
         .expect("the walk merges");
-    let message = seam_message(shared, &walk.dematerialized, actor, true, None);
     cases.push(Case::accept(
-        "walk-05-merge",
+        "walk-06-merge",
         "Lifecycle",
         "reference::apply",
-        "recombine complete sets into cash before resolution",
-        transaction(
-            &message,
-            &[seam_instruction(
-                &message,
-                shared,
-                &walk.dematerialized,
-                actor,
-                None,
-                merge,
-            )],
+        "recombine complete sets into cash before resolution, returning collateral from the Hoard",
+        seam_transaction(
+            shared,
+            &walk.dematerialized,
+            Signer::own(shared, actor, true),
+            None,
+            Leg::Collateral,
+            merge,
         ),
         1,
-        state_compares(&walk.dematerialized, &merge_post),
+        seam_compares(shared, &walk.dematerialized, Leg::Collateral, &merge_post),
     ));
     steps.push(walk_step(
-        5,
-        "walk-05-merge",
+        6,
+        "walk-06-merge",
         "merge complete sets back",
         "4",
-        "The promise of section 1 exercised: a complete set can always be recombined into its collateral **before** resolution. Cash rises and the Hoard falls by the same quantity. Step 8 records what happens to the same request after resolution.",
+        "The promise of section 1 exercised: a complete set can always be recombined into its collateral **before** resolution. Cash rises and the Hoard falls by the same quantity, and this is the one direction that is impossible without the program signing for the Hoard authority itself. Step 9 records what happens to the same request after resolution.",
     ));
 
-    /* 6. Three FeedAdvance instructions, sequenced by the bank. */
+    /* 7. Three FeedAdvance instructions, sequenced by the bank. */
     cases.push(Case::accept(
-        "walk-06-feed-advance",
+        "walk-07-feed-advance",
         "Lifecycle",
         "accumulator fold + FeedAccount codec",
         "three contiguous observation pages in one transaction; the bank sequences them and the cursor lands exactly on the window's maturity bound",
@@ -4056,16 +5032,16 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
         }],
     ));
     steps.push(walk_step(
-        6,
-        "walk-06-feed-advance",
+        7,
+        "walk-07-feed-advance",
         "advance the shared feed three times",
         "6, 7",
         "Three observation pages fold into one feed head inside one transaction, so the bank -- not this harness -- sequences the chain and page three is read against page two's writes. The cursor moves 100 -> 102 -> 103 -> 104, and 104 is exactly the maturity bound the market's window needs before it can seal.",
     ));
 
-    /* 7. Resolve. */
+    /* 8. Resolve. */
     let window = encode_window(shared.feed, &winning_records());
-    let resolve = resolve_request(4, WINNING_PAYOUT_INDEX);
+    let resolve = resolve_request(5, WINNING_PAYOUT_INDEX);
     let resolve_post = walk
         .merged
         .gate(shared, &resolve, &window, true, actor, true)
@@ -4079,7 +5055,7 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
             .expect("a resolve writes a resolution record"),
     ));
     let mut case = Case::accept(
-        "walk-07-resolve",
+        "walk-08-resolve",
         "Lifecycle",
         "reference::apply_with_evidence",
         "seal the window from the observation records and resolve onto the cell they select",
@@ -4087,9 +5063,9 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
             shared,
             &walk.merged,
             &f.resolve_buffer,
-            actor,
+            Signer::own(shared, actor, true),
             true,
-            true,
+            false,
             resolve.clone(),
         ),
         1,
@@ -4098,16 +5074,16 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
     case.compute_limit = Some(COMPUTE_UNIT_CEILING);
     cases.push(case);
     steps.push(walk_step(
-        7,
-        "walk-07-resolve",
+        8,
+        "walk-08-resolve",
         "seal the window and resolve",
         "7, 9",
         "No reporter chooses the cell. The buffer carries observation records; the gate folds them through the accumulator's Open -> Mature -> Sealed machine against the terms' own window domain, reads the matured cursor off the feed head, and the payout index the caller named must be the one the sealed window selects.",
     ));
 
-    /* 8. Merge after resolution: refused, and that is the point. */
+    /* 9. Merge after resolution: refused, and that is the point. */
     let late_merge = layout_request(
-        5,
+        6,
         Intent::Merge {
             market: walk.resolved.market_id,
             owner: walk.resolved.owner,
@@ -4127,35 +5103,31 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
         0x300e,
         "the offline reference must refuse a post-resolution merge as MismatchedState"
     );
-    let message = seam_message(shared, &walk.resolved, actor, true, None);
     cases.push(Case::refuse(
-        "walk-08-merge-after-resolve",
+        "walk-09-merge-after-resolve",
         "Lifecycle",
         "recombine a complete set after resolution: the boundary section 1 draws, driven",
-        transaction(
-            &message,
-            &[seam_instruction(
-                &message,
-                shared,
-                &walk.resolved,
-                actor,
-                None,
-                late_merge,
-            )],
+        seam_transaction(
+            shared,
+            &walk.resolved,
+            Signer::own(shared, actor, true),
+            None,
+            Leg::Collateral,
+            late_merge,
         ),
         code::NOT_ACTIVE,
         refusal_text(late_refusal),
     ));
     steps.push(walk_step(
-        8,
-        "walk-08-merge-after-resolve",
+        9,
+        "walk-09-merge-after-resolve",
         "merge after resolution is refused",
         "4, 10",
         "The same complete-set merge that step 5 accepted is refused once the market has resolved. This is the boundary the product model draws -- recombination is a pre-resolution right -- and after this point the only way out of a claim is redemption, which is what makes the terminal accounting a redemption identity rather than a merge identity.",
     ));
 
-    /* 9. Redeem the winning internal claims. */
-    let redeem_win = redeem_request(5, WALK_OUTCOME_WIN, walk_redeem_winning());
+    /* 10. Redeem the winning internal claims. */
+    let redeem_win = redeem_request(6, WALK_OUTCOME_WIN, walk_redeem_winning());
     let redeem_win_post = walk
         .resolved
         .gate(shared, &redeem_win, &[], false, actor, true)
@@ -4165,7 +5137,8 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
         walk_redeem_winning(),
         "the winning outcome pays one atom per claim"
     );
-    let mut redeem_win_compares = state_compares(&walk.resolved, &redeem_win_post);
+    let mut redeem_win_compares =
+        seam_compares(shared, &walk.resolved, Leg::Collateral, &redeem_win_post);
     redeem_win_compares.push(compare_of(
         &walk.resolved,
         "resolution",
@@ -4174,7 +5147,7 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
             .expect("a redemption returns the record unchanged"),
     ));
     let mut case = Case::accept(
-        "walk-09-redeem-winning",
+        "walk-10-redeem-winning",
         "Lifecycle",
         "reference::apply_with_evidence",
         "redeem every internal claim on the winning outcome; the resolution record is read-only and must come back unchanged",
@@ -4182,9 +5155,9 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
             shared,
             &walk.resolved,
             &f.redeem_buffer,
-            actor,
-            true,
+            Signer::own(shared, actor, true),
             false,
+            true,
             redeem_win,
         ),
         1,
@@ -4193,16 +5166,17 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
     case.compute_limit = Some(COMPUTE_UNIT_CEILING);
     cases.push(case);
     steps.push(walk_step(
-        9,
-        "walk-09-redeem-winning",
+        10,
+        "walk-10-redeem-winning",
         "redeem the winning internal claims",
         "9",
         "The first payoff shape: the unit vector on the realized cell. Collateral leaves the Hoard for the position's cash, one atom per claim, and the resolution record the redemption reads is presented read-only so a redemption can never edit its own authority.",
     ));
 
-    /* 10. Redeem the losing claims: they pay zero. */
-    let redeem_lose = redeem_request(6, WALK_OUTCOME_LOSE, walk_redeem_losing());
-    let mut redeem_lose_compares = state_compares(&walk.redeemed, &walk.terminal);
+    /* 11. Redeem the losing claims: they pay zero. */
+    let redeem_lose = redeem_request(7, WALK_OUTCOME_LOSE, walk_redeem_losing());
+    let mut redeem_lose_compares =
+        seam_compares(shared, &walk.redeemed, Leg::Collateral, &walk.terminal);
     redeem_lose_compares.push(compare_of(
         &walk.redeemed,
         "resolution",
@@ -4212,7 +5186,7 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
             .expect("a redemption returns the record unchanged"),
     ));
     let mut case = Case::accept(
-        "walk-10-redeem-losing",
+        "walk-11-redeem-losing",
         "Lifecycle",
         "reference::apply_with_evidence",
         "redeem every internal claim on the losing outcome; the claims burn and the payout is exactly zero",
@@ -4220,9 +5194,9 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
             shared,
             &walk.redeemed,
             &f.redeem_buffer,
-            actor,
-            true,
+            Signer::own(shared, actor, true),
             false,
+            true,
             redeem_lose,
         ),
         1,
@@ -4231,8 +5205,8 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
     case.compute_limit = Some(COMPUTE_UNIT_CEILING);
     cases.push(case);
     steps.push(walk_step(
-        10,
-        "walk-10-redeem-losing",
+        11,
+        "walk-11-redeem-losing",
         "redeem the losing claims for zero",
         "9, 10",
         "The second payoff shape: the zero vector on an unrealized cell. The claims are burned and the Hoard does not move by one atom, which is the half of the solvency promise that is easy to state and easy to get wrong. After this the walk's internal ledger is empty and the terminal identity can be read.",
@@ -4244,13 +5218,13 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
         WalkSkip {
             project_item: "1 (in part)",
             title: "initialize a Realm",
-            reason: "SKIPPED: there is no Realm, Profile, price-grid, or terms initialization instruction in this program. The walk drives `CreateMarket` and nothing else of item 1; the Realm-wide plane is loaded at genesis as frozen bytes the frozen codecs accept."
+            reason: "NOT DRIVEN THIS ROUND, and no longer for want of an instruction. `instructions::genesis` now implements `InitRealm`, `InitProfile`, `InitPriceGrid`, `InitTerms` and `InitOrderPage`, each creating its account through a real System-program CPI. This walk does not drive them and the per-family plan does not either: each needs its own fresh identity plane (a Realm nonce, a policy, a grid body and a terms body whose digests are not the ones already installed at genesis) and none has a reference oracle -- `reference::apply` refuses all five with `UnsupportedIntent`, so a differential would compare this program against a re-encode of its own intent. Their CPI has therefore never run on a bank. The walk drives `CreateMarket` and `Endow` of item 1's family; the Realm-wide plane is still loaded at genesis as frozen bytes the frozen codecs accept."
                 .to_string(),
         },
         WalkSkip {
-            project_item: "2",
+            project_item: "2 (in part)",
             title: "prepay all mandatory work",
-            reason: "SKIPPED: no endowment, prepayment, or deposit instruction exists, and nothing in this instruction set moves collateral into a Position. The walk credits its opening cash in the fixture, which is the one field of the opening state `CreateMarket` did not write."
+            reason: "PARTLY DRIVEN, at step 2, and the residue is exact. The walk's opening cash is no longer a number this harness wrote into a genesis account: `Endow` credits it under the position owner's own signature, against the market's immutable collateral cap, consuming a replay sequence. What no instruction does is *back* that credit. The value leg is a Token-2022 `TransferChecked` into the market's Hoard token account; `token.rs` constructs exactly that CPI and no instruction wires it, so the endowed cash is an internal-ledger entry with no deposit behind it. `genesis.rs` says so itself, and the sufficient solvency check -- the sum of every position's cash plus the escrowed collateral -- needs a market-wide cash aggregate no account in the frozen layout carries."
                 .to_string(),
         },
         WalkSkip {
@@ -4276,9 +5250,9 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
     let notes = vec![
         "`simulateTransaction` never commits, so one address carries one pre-state per genesis. Each step of the walk therefore runs on its own market plane, whose genesis is the offline reference adapter's post-state after every earlier step. Only the market identity differs between planes; the state trajectory is one chain, and the harness asserts the chaining at build time."
             .to_string(),
-        "Step 6 is the exception: three `FeedAdvance` instructions ride in one transaction against one writable feed head, so the bank sequences that chain itself."
+        "Step 7 is the exception: three `FeedAdvance` instructions ride in one transaction against one writable feed head, so the bank sequences that chain itself."
             .to_string(),
-        "The feed head step 6 advances and the feed head step 7 resolves against are two accounts of two feed identities, because the same address cannot hold both cursor 100 and cursor 104 in one genesis. The harness asserts that step 6's three advances land the cursor on exactly the value step 7's head carries, which is the only fact the resolve gate reads off a feed head."
+        "The feed head step 7 advances and the feed head step 8 resolves against are two accounts of two feed identities, because the same address cannot hold both cursor 100 and cursor 104 in one genesis. The harness asserts that step 7's three advances land the cursor on exactly the value step 8's head carries, which is the only fact the resolve gate reads off a feed head."
             .to_string(),
         "No signature is verified anywhere in this walk: every transaction is simulated with `sigVerify: false`. The `is_signer` bits the program reads do come from the transaction message header, and that is the whole of what the authorization steps establish."
             .to_string(),
@@ -4289,7 +5263,7 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
         skips,
         notes,
         cases,
-        terminal_case: "walk-10-redeem-losing".to_string(),
+        terminal_case: "walk-11-redeem-losing".to_string(),
         values,
         identities,
     }
@@ -4311,6 +5285,10 @@ impl Plane {
             replay: source.replay.clone(),
             supply: source.supply.clone(),
             resolution: source.resolution.clone(),
+            hoard_authority: source.hoard_authority.clone(),
+            hoard_token: source.hoard_token.clone(),
+            outcome_mints: source.outcome_mints.clone(),
+            holder_tokens: source.holder_tokens.clone(),
             state: state.clone(),
             resolution_bytes: source.resolution_bytes,
         }
@@ -4547,7 +5525,11 @@ fn main() {
 
     let f = build_fixture();
     let shared = &f.shared;
-    let mut plan = Plan::default();
+    let mut plan = Plan {
+        program: shared.program.address.clone(),
+        token_program: base58_of(&shared.token_program),
+        ..Plan::default()
+    };
 
     /* Realm-wide accounts. */
     plan.account("realm", &shared.realm, &shared.realm_bytes);
@@ -4561,7 +5543,39 @@ fn main() {
         &shared.advance_feed_bytes,
     );
 
-    /* Every market plane. */
+    /* The Realm's collateral plane.  The 266 policy bytes sit in an ordinary
+     * program-owned account because their *address* is arbitrary by design:
+     * `collateral::verify_profile_identity` recomputes the child digest and
+     * the parent Profile identity from the bytes, so the account they arrive
+     * from is not what makes them this Realm's policy. */
+    plan.account(
+        "collateral-policy",
+        &shared.policy_account,
+        &shared.policy_bytes,
+    );
+    plan.token_account(
+        "collateral-mint",
+        &shared.collateral_mint,
+        &shared.collateral_mint_bytes,
+    );
+    plan.token_account(
+        "actor-collateral",
+        &shared.actor_token,
+        &shared.actor_token_bytes,
+    );
+    plan.token_account(
+        "stranger-collateral",
+        &shared.stranger_token,
+        &shared.stranger_token_bytes,
+    );
+
+    /* The creator's lamports.  `CreateMarket` now founds real accounts through
+     * a System-program CPI and the creator is the rent payer, so the creator
+     * must be a System-owned account that *has* lamports -- a signer with no
+     * account cannot fund a creation. */
+    plan.owned("actor-lamports", &shared.actor, SYSTEM_PROGRAM, &[]);
+
+    /* Every market plane, and the Token-2022 accounts of the founded ones. */
     for plane in [&f.seam, &f.held, &f.shadow, &f.redeem, &f.create] {
         for (role, pda) in plane.state_roles() {
             plan.account(
@@ -4575,6 +5589,9 @@ fn main() {
             &plane.resolution,
             &plane.resolution_bytes,
         );
+        for (role, pda, data) in plane.token_accounts(shared) {
+            plan.token_account(&role, &pda, &data);
+        }
     }
 
     /* The batch-auction plane, bound to the seam market. */
@@ -4606,6 +5623,9 @@ fn main() {
             &plane.resolution,
             &plane.resolution_bytes,
         );
+        for (role, pda, data) in plane.token_accounts(shared) {
+            plan.token_account(&role, &pda, &data);
+        }
     }
     for (index, page) in f.walk.pages.iter().enumerate() {
         plan.account(
@@ -4625,7 +5645,7 @@ fn main() {
         let file = format!("accounts/{}.json", account.role);
         write(
             &out_dir.join(&file),
-            &account_json(&account.address, &program_address, &account.data),
+            &account_json(&account.address, &account.owner, &account.data),
         );
         genesis_lines.push_str(&format!("{} {} {}\n", account.role, account.address, file));
     }
@@ -4783,6 +5803,7 @@ mod tests {
             "RedeemInternal",
             "FeedAdvance",
             "CreateMarket",
+            "Endow",
         ] {
             assert!(
                 cases
@@ -4845,7 +5866,7 @@ mod tests {
          * a panic in here rather than a green differential over a fiction. */
         let f = build_fixture();
         let walk = build_lifecycle(&f);
-        assert_eq!(walk.steps.len(), 10, "the walk is ten steps");
+        assert_eq!(walk.steps.len(), 11, "the walk is eleven steps");
         for (index, step) in walk.steps.iter().enumerate() {
             assert_eq!(step.ordinal as usize, index + 1, "the walk is ordered");
             let case = walk
@@ -4883,7 +5904,7 @@ mod tests {
     fn the_walk_records_every_section_ten_item_it_cannot_drive() {
         let f = build_fixture();
         let walk = build_lifecycle(&f);
-        for item in ["1 (in part)", "2", "3", "8", "11"] {
+        for item in ["1 (in part)", "2 (in part)", "3", "8", "11"] {
             let skip = walk
                 .skips
                 .iter()

@@ -46,11 +46,33 @@ echo "== source pin =="
 # state is printed rather than assumed clean: a dirty tree still produces two
 # identical ELFs, but the digest then names a working tree and not a commit,
 # and that has to be visible in the evidence.
-( cd "$root" && git rev-parse HEAD 2>/dev/null || echo "(not a git checkout)" )
-if [ -n "$( cd "$root" && git status --porcelain 2>/dev/null )" ]; then
-  echo "tree=DIRTY (the ELF digest below names this working tree, not a commit)"
-  ( cd "$root" && git status --porcelain ) | sed 's/^/  /'
+repo="$(cd "$root/../.." && pwd)"
+# Exactly the paths `cargo-build-sbf --manifest-path program/Cargo.toml` reads.
+# A tree that is dirty *only* outside this list still produces a digest that
+# names a commit, and saying which of the two situations holds is the whole
+# point of printing the tree state at all.
+elf_inputs=(
+  programs/clutch-sbf/.cargo
+  programs/clutch-sbf/program
+  programs/clutch-sbf/Cargo.toml
+  programs/clutch-sbf/Cargo.lock
+  programs/clutch-sbf/vendor
+  programs/solana-layout
+  programs/solana-reference
+  crates
+)
+( cd "$repo" && git rev-parse HEAD 2>/dev/null || echo "(not a git checkout)" )
+dirty="$( cd "$repo" && git status --porcelain 2>/dev/null )"
+elf_dirty="$( cd "$repo" && git status --porcelain -- "${elf_inputs[@]}" 2>/dev/null )"
+if [ -n "$elf_dirty" ]; then
+  echo "elf_inputs=DIRTY (the ELF digest below names this working tree, not a commit)"
+  echo "$elf_dirty" | sed 's/^/  /'
+elif [ -n "$dirty" ]; then
+  echo "elf_inputs=clean (the ELF digest below names the commit above)"
+  echo "tree=DIRTY outside every ELF input; the dirty files are:"
+  echo "$dirty" | sed 's/^/  /'
 else
+  echo "elf_inputs=clean"
   echo "tree=clean"
 fi
 
@@ -241,5 +263,6 @@ fi
 echo "${hashes[0]}" > "$work/elf.sha256"
 echo
 echo "elf sha256: ${hashes[0]}"
+echo "sbf_elf_sha256=${hashes[0]}"
 echo "work dir: $work"
 exit "$status"

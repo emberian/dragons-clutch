@@ -42,6 +42,7 @@ dependencies = [
  "clutch-sbf",
  "clutch-solana-layout",
  "clutch-solana-reference",
+ "solana-pubkey",
 ]
 
 [[package]]

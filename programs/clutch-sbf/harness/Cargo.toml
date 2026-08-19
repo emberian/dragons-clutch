@@ -20,3 +20,9 @@ clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-solana-layout = { path = "../../solana-layout" }
 clutch-solana-reference = { path = "../../solana-reference" }
 clutch-sbf = { path = "../program" }
+# The `Pubkey` type this program's Token-2022 admission functions take.  The
+# harness re-runs `token::check_mint` and `token::check_token_account` over
+# every fixture image it emits, so a mint or token account the program would
+# refuse is a build-time panic here rather than an on-chain refusal later.
+# Same pin, same default-features-off configuration as the program's.
+solana-pubkey = { version = "=4.2.0", default-features = false }
