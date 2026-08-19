@@ -17,8 +17,8 @@
     "content_identity": {
       "schema": "dragons-clutch/tracked-working-tree/v1",
       "algorithm": "sha256",
-      "sha256": "9e2f2e6f44b9c5686e7346e3ceeb38db37bcb80986b9d28177ffc925f1c68d00",
-      "entry_count": 546,
+      "sha256": "5d1feafc91a3e0b9076be29087cf2b0f3f268f445e32393adeb0b60ad2ef2d49",
+      "entry_count": 554,
       "excluded_paths": [
         "MANIFEST.baseline.json"
       ],
@@ -28,9 +28,9 @@
       "rule": "enumerate stage-0 entries from `git ls-files --stage -z`, sort by raw path bytes, exclude only excluded_paths, and hash the schema tag followed by length-delimited (observed Git mode/type, kind, raw path, sha256(payload), payload length) records. Payload is working-tree bytes for regular files, link-target bytes for symlinks, and the index object id for gitlinks. Strict cleanliness makes this a complete identity of all checked-in gate/source bytes other than the generated manifest itself."
     },
     "provenance": {
-      "emitted_from_commit": "a85d48bd0783e9f586ac523d88b1a22746b7c25c",
-      "emitted_from_tree_hash": "ab99ddefeab9e9880fe1996b5cb44974db8e2695",
-      "commit_subject": "docs: reconcile research evidence boundaries",
+      "emitted_from_commit": "c4688da84598a38451cfbf7f96c6fa8c85183909",
+      "emitted_from_tree_hash": "988f1bd1d1db8e6ce2b11dc57951441e587455ad",
+      "commit_subject": "Append re-emission claim to repair ledger",
       "remotes": [
         {
           "name": "origin",
@@ -2261,8 +2261,8 @@
     ]
   },
   "run": {
-    "started_at_utc": "2026-08-19T14:48:56Z",
-    "finished_at_utc": "2026-08-19T14:58:05Z",
+    "started_at_utc": "2026-08-19T18:09:19Z",
+    "finished_at_utc": "2026-08-19T18:16:24Z",
     "gate_timeout_seconds": 1800,
     "note": "timestamps here are the only nondeterministic fields in this manifest; `check` ignores them"
   },
