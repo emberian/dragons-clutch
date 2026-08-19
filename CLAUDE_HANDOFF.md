@@ -27,9 +27,11 @@ compiler lab, a window-semantics lab, a pure occupation accumulator, and a
 separate Lean construction model. The production path now also selects v3 for
 smooth Terms and executes source-joined degree-one through degree-three point
 Resolve plus exact-lot internal and positionless bearer redemption in real SBF.
-Production source ingestion, other post-resolution consumers, final-LTO stack
-repair, and total fragment policy remain open, so do not call native settlement
-generally available.
+Production source ingestion, other post-resolution consumers, and total
+fragment policy remain open, so do not call native settlement generally
+available. The exact sealed R1 ELF has closed its first-party final-LTO stack
+gate; that is an artifact-specific result, not a semantic or system release
+claim.
 
 The controlling semantic note is
 [`docs/design/NATIVE_AND_LOWERED_SEMANTICS.md`](docs/design/NATIVE_AND_LOWERED_SEMANTICS.md).
@@ -60,6 +62,25 @@ The local SBF adapter has crossed several formerly open value/liveness seams:
    from a frozen two-order/two-outcome equal-limit direct page, but leaves Epoch
    FROZEN and score/digest zero and unverified. Completion, selection, receipt,
    and end-to-end reachability remain STOPs.
+7. Routed ResolutionWork V1 executes Begin/Fold/Finalize/Abort against sealed
+   archive bytes and closes/refunds its Work and Reserve. Its exact measured
+   rows clear the selected liveness profile; no unmeasured shape or system path
+   inherits that admission.
+
+The frozen runtime source is `7e8f6b1`, unchanged across its 88-file declared
+runtime closure through evidence ancestry `b5da74f`. Two ordinary builds are
+byte-identical at 1,228,192 bytes with SHA-256
+`a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1`.
+The `0359aec`/`b5da74f` seal reports zero diagnosed first-party final-LTO
+survivors and no direct `r10` reference above 4,096. `161f530` fixes a fixture
+source-version literal and `316c620` fixes a research lock; neither changes the
+ELF.
+
+The default source registry is empty. Endow therefore refuses
+`SourceReleaseUnavailable` (`0x79`) before owner-plane allocation or token CPI;
+mock success belongs to a distinct `non-production-mock-source` ELF. Direct V2
+full top-three Select reaches exactly 1,400,000 CU and rolls back. Direct V3 at
+`ef32495` remains MODEL/DESIGN only.
 
 The clean-source joined committed walk used source HEAD `c05fe84` and ELF
 SHA-256
@@ -96,13 +117,15 @@ occupation crate, and isolated 319-byte native Resolution codec are supported
 by their named evidence planes. Preserve their exact labels. The v3 account and
 source-joined point/internal/bearer transitions now have focused SBF evidence;
 that does not promote production source ingestion, other post-resolution
-consumers, arbitrary fragments, or the shared ELF to release status.
+consumers, arbitrary fragments, or the complete program to release status.
 
 `clutch-liveness` is now a safe, fixed-memory, host-tested pure admission
 kernel for component reserves, zero-fee work, shared source/archive accounting,
 replay-safe terminal ownership, anti-spam bounds, and fee carry. It does not
-measure maxima, move lamports, authenticate accounts, or establish a runtime
-liveness guarantee.
+by itself measure maxima, move lamports, authenticate accounts, or establish a
+runtime liveness guarantee. The separate ResolutionWork profile binds one
+measured runtime route; it does not emit a global `LivenessPolicy` or prove
+protocol-wide no-stranding.
 
 `research/fractional-redemption` now makes the smooth-exit policy fork exact.
 Resolved lots use `lcm_i D/gcd(D,w_i)`; persistent numerator credits conserve
@@ -119,12 +142,12 @@ inventory.
 
 The dependency-ordered route is:
 
-1. finish one clean joined evidence baseline without absorbing another lane's
-   dirty files;
+1. preserve the sealed R1 artifact/stack/bank evidence and produce the missing
+   schema-v2 release baseline;
 2. bind immutable Terms-selected basis mode through Split/Merge/materialize/
    dematerialize instead of reconstructing every active Kernel as finite preset;
-3. audit other post-resolution consumers, repair the shared final-LTO stack
-   survivors, and freeze the total fragment/credit policy;
+3. audit other post-resolution consumers and freeze the total fragment/credit
+   policy;
 4. build permissionless SourceSpec/Feed/archive construction and authenticate a
    single pinned source/parser/deployment generation against the Clock sysvar;
    preserve the now-tested prefund-safe allocation/assignment discipline for
@@ -142,6 +165,12 @@ The current critical STOP is not a missing mathematical shape. It is the joined
 authority and lifecycle path from authenticated source bytes through persisted
 native resolution and funded settlement.
 
+Terminal closure is also not global: empty frozen Direct V2 epochs can strand
+Reservations; no general program-account close exists outside the named
+transient lanes; outcome mints have no `MintCloseAuthority`; Hoard donations,
+claim-burn forfeiture, and fractional fragments lack terminal disposition; and
+most accounts lack an authenticated rent-payer/donation split.
+
 ## Things not to infer
 
 - “Source-joined native point Resolve and exact-lot internal/bearer redemption
@@ -149,6 +178,9 @@ native resolution and funded settlement.
   arbitrary fragment liveness, or the shared final ELF is complete.
 - “Typed artifact” does not mean authenticated source or archive.
 - “Funded order reservation” does not mean a settled venue.
+- “ResolutionWork clears its measured liveness profile” does not mean a global
+  `LivenessPolicy`, production source, deployment, terminal closure, or
+  no-stranding result.
 - “Public creation from an absent PDA” does not mean squatting-resistant
   permissionless creation. Artifact stages/finals and the initial market plane
   now handle admitted pre-funding, and Market/Reservation/later-owner families

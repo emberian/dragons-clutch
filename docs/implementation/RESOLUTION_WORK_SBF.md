@@ -1,12 +1,14 @@
 # ResolutionWork V1 live SBF cut
 
-Status: **routed release candidate; route-level real-SBF gates pass**.
+Status: **routed live SBF V1; the exact measured route passes its selected
+liveness profile**.
 
-This status is deliberately narrow. It admits the ResolutionWork route under
-the frozen V1 source, compute, rent, and reward policy below. It is not a claim
-that the complete Dragon's Clutch deployment is terminally live: production
-source release, direct selection, and the system-wide storage/retirement
-profile retain their own STOPs.
+This status is deliberately narrow. It admits only the measured
+ResolutionWork route under the frozen V1 source, compute, rent, and reward
+policy below. It is not a program release or deployment claim, does not supply
+a production source release, and does not establish terminal closure or
+no-stranding for the rest of Dragon's Clutch. Direct selection and the
+system-wide storage/retirement profile retain their own STOPs.
 
 ResolutionWork replaces one occupation-resolution reduction with a bounded,
 restartable state machine without accepting an off-chain payout authority:
@@ -54,6 +56,10 @@ the Market indefinitely: the compile-time TTL is in `8..=4096` slots and every
 incomplete state, including zero progress, is permissionlessly abortable
 strictly after expiry. A complete valid state remains finalizable late and is
 never made abortable merely by time.
+
+Replay is market/work-domain state (`Work` PDA, commitment, cursor, and terminal
+close), not a Position replay increment; ResolutionWork does not consume an
+owner's command sequence.
 
 ## Source and semantic authority
 
@@ -155,19 +161,28 @@ V1 charges are zero, so no nonzero charge-disposition claim is made.
 
 ## Real-SBF evidence
 
-Final candidate artifact (dirty integration closure before its exact source
-commit):
+The sealed R1 artifact was built twice from exact runtime source
+`7e8f6b1714c3c97a31a4250ecd19f87041433c2d`. Both ordinary builds are
+byte-identical. The 88-file declared runtime-source closure remains unchanged
+through release/test ancestry `b5da74fba46f13794e48d42973304f05d10642f5`;
+the intervening `161f530` native-fixture repair and `316c620` research lock
+repair do not change the program ELF. The liveness profile and artifact/log
+archive are sealed at `0359aec` and `b5da74f`, respectively.
 
 ```text
-ELF:    /tmp/resolution-work-sbf.cYXtPl/out-16/clutch_sbf.so
 SHA256: a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1
 bytes:  1,228,192
-log:    /tmp/resolution-work-sbf.cYXtPl/build-16.log
-bank:   /tmp/resolution-work-sbf.cYXtPl/bank-16.log
+audit:  research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/
+logs:   research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/
 ```
 
-Build-16 ProgramTest measurements (degree 2, real program ELF) were collected
-with the selected CU limit and the maximum V1 priority-price input:
+The evidence checksum ledger has SHA-256
+`baaa5ee5ac3e6372faf9fe82cd60e31ed53e93d62b37b8314ef9f6f1634d4ac0`.
+The complete source/toolchain/dependency and same-ELF account is
+[`RUNTIME_ARTIFACT_AUDIT.md`](../../research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/RUNTIME_ARTIFACT_AUDIT.md).
+
+The sealed same-ELF ProgramTest measurements (degree 2, real program ELF) were
+collected with the selected CU limit and the maximum V1 priority-price input:
 
 | Transition | Records/span | CU consumed | Selected limit | Accounts |
 |---|---:|---:|---:|---:|
@@ -208,18 +223,36 @@ The bank campaign proves:
   returns exact payer principal, removes both accounts, and permits a nonce-
   separated reopen.
 
-Host gates are 157/157 program tests and 10/10 hostile layout tests. The
-isolated no-std/no-allocation model remains the semantic oracle for arbitrary
-chunk compositions, mass overflow, exact/largest-remainder behavior, gaps, and
-associativity/monolithic equivalence.
+The sealed same-ELF capture passed ResolutionWork 4/4. Its other default-ELF
+suites and the corrected 15/15 native-resolution fixture are inventoried in
+the artifact audit; `161f530` only corrected a stale fixture source-version
+literal and did not change this ELF. The isolated no-std/no-allocation model
+remains the semantic oracle for arbitrary chunk compositions, mass overflow,
+exact/largest-remainder behavior, gaps, and associativity/monolithic
+equivalence.
 
 ## Stack and remaining scope
 
-Earlier final-LTO audit after the stack decomposition found zero first-party
-diagnostic survivors and direct `r10` references no greater than 4,096 for
-Begin/Fold/Finalize/Abort and the shared occupation apply seam. A final audit
-must be rerun over the final policy ELF; pre-LTO dependency diagnostics are not
-deployment claims.
+The exact sealed ELF's final audit found zero diagnostics naming `clutch_sbf`,
+zero diagnosed symbols surviving final LTO, and all 40,389 direct `r10`
+references at or below 4,096 bytes. Begin, Fold, Finalize, Abort, and the shared
+occupation apply seam each have a maximum direct frame of 4,096 bytes. This
+closes the first-party stack diagnostic gate for this ELF only; it is not a
+deployment, inclusion, or system-liveness claim.
+
+The default artifact has no registered production source release. Since
+`cfea8e8`, its 15-account Endow refuses `SourceReleaseUnavailable` (`0x79`)
+before owner-plane allocation or Token-2022 CPI, with rollback. A successful
+mock-source Endow requires the distinct `non-production-mock-source` ELF and
+is not evidence for this default artifact. Live Direct V2 at `e874db1` also
+remains a functional compute STOP: its full top-three Select reaches exactly
+1,400,000 CU and rolls back. Direct V3 at `ef32495` is MODEL/DESIGN only.
+
+No global `LivenessPolicy` or no-stranding theorem has been promoted. The
+profile still stops on production source/archive work, direct lifecycle,
+account retirement/rent ownership, outcome-mint closure, and terminal
+disposition of Hoard donations, bearer-burn forfeiture, and fractional
+fragments.
 
 ResolutionWork does not introduce a BasisDomain cache. A future immutable cache
 may be keyed by the full basis-artifact digest plus archive-domain digest, but

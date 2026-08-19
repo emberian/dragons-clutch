@@ -22,6 +22,7 @@ These labels are deliberately nontransitive:
 | **CHECKED-FINITE** | Digest-bound model-computed fixtures agree with production execution on a named finite corpus and named source mutants go red. This is not a universal refinement theorem. |
 | **HOST-TESTED** | Ordinary host execution, differential testing, or a bounded finite campaign passed. This is executable evidence, not proof or SBF evidence. |
 | **SBF-EXECUTED** | A compiled SBF program executed in a local Agave bank or loopback validator. This is not deployment, public-cluster, audit, or mainnet evidence. |
+| **PROFILE-ADMITTED** | An exact measured route clears one selected finite compute/rent/reward policy. This does not extrapolate to unmeasured shapes or imply inclusion, keeper participation, system terminality, or a global liveness policy. |
 | **MODEL-ONLY** | A design, reference model, research tool, or cost experiment exists but is not the production transition. |
 | **PROPOSED** | A design or policy has not crossed its promotion gate. |
 | **IN-FLIGHT** | Shared dirty-worktree bytes are not an accepted baseline. |
@@ -34,13 +35,25 @@ economics.
 
 ## 2. Snapshot boundary
 
-The accepted local history through `ae2e155` includes the native B-spline
-kernel and reference seam, compiler and window research, committed Lean model,
-pooled cash withdrawal, typed artifact transport, funded order reservations,
-global resolution replay separation, isolated native-resolution layout, shared
-ABI integration, and the pure occupation accumulator. The worktree may contain
-later integration lanes; those bytes are **IN-FLIGHT** until separately
-committed and checked.
+The accepted local evidence ancestry is `b5da74f`. The frozen SBF runtime source
+is `7e8f6b1714c3c97a31a4250ecd19f87041433c2d`; the 88-file declared runtime
+source closure is unchanged through `b5da74f`. Commit `161f530` repairs a stale
+native-resolution fixture source-version literal, and `316c620` repairs the
+shape-compiler research lock, without changing the runtime artifact. Commits
+`0359aec` and `b5da74f` seal the measured liveness profile, exact ELF, audit,
+and bank/build logs.
+
+The sealed default ELF is 1,228,192 bytes with SHA-256
+`a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1`.
+Two ordinary builds from `7e8f6b1` are byte-identical. The final audit found
+zero diagnostics naming `clutch_sbf`, zero diagnosed symbols surviving final
+LTO, and all 40,389 direct `r10` references at or below 4,096 bytes. The audit
+and checksum ledger are archived under
+[`research/liveness-policy-profile/artifacts/a5725a3d8e149b2b`](research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/RUNTIME_ARTIFACT_AUDIT.md);
+the ledger SHA-256 is
+`baaa5ee5ac3e6372faf9fe82cd60e31ed53e93d62b37b8314ef9f6f1634d4ac0`.
+This is exact local artifact/stack/bank evidence, not a release, deployment,
+production source-provider, inclusion, audit, or formal-verification claim.
 
 Runtime evidence is artifact-specific:
 
@@ -172,10 +185,10 @@ accounts are still genesis-injected in the focused bank: production has no
 onchain create/append/seal route, immediate provider receiver-post/CPI/config
 authentication, or live Clock/feed admission, and the deterministic adapter is
 a mock. The one-window archive is capped at 32 records. Other post-resolution
-consumers still need an explicit audit, the active Kernel mode P1 below remains,
-and the current ELF retains final-LTO stack diagnostics in shared dispatch,
-`split::kernel_step`, and `observe_resolve::pure_market`. No path may lower a
-smooth market to categorical portfolios.
+consumers still need an explicit audit and the active Kernel mode P1 below
+remains. The exact sealed ELF closes its first-party final-LTO stack diagnostic
+gate, but that does not close these semantic, source, or terminal gates. No path
+may lower a smooth market to categorical portfolios.
 
 The v4 lifecycle audit also found a P1 active-mode representation gap: both the
 public account-shaped Solana reference adapter and SBF Split/Merge/materialize/
@@ -197,21 +210,22 @@ public `derive_payout` to be degree-zero-only; smooth callers must use
 | Verus refinement | narrow **CHECKED-RUST-SUBSET** | Pinned Verus checked exact debit/credit conservation and overflow refusal for `prepare_internal_transfer`, with source/call-site digests and red mutations. | Accounts, phases, codecs, CPI, SBF codegen, and runtime are outside the result. |
 | B-spline model/executable bridge | **CHECKED-FINITE** | Eight Lean-computed vectors match digest-bound production evaluator outputs; five actual-source semantic mutants compile/execute and disagree. | No Verus invocation or universal Rust/SBF refinement; finite adapter association remains reviewed. |
 | General accumulator | **HOST-TESTED** | Source-neutral adjacent summaries, coverage, interval, TWAP, and terminal calculations have bounded tests. | It authenticates no source, clock, archive, or deployment generation. |
-| Native spline stack | point Resolve/exits **SBF-EXECUTED**; broader mixed, see §3 | Degree-selected v2/v3 creation, source-joined exact d1–3 point resolution, sole-vector persistence/replay, and exact-lot internal and bearer redemption execute; evaluator, proofs, finite bridge, compiler/occupation, and policy models retain their named planes. | Active Split-family mode binding is P1. Production source ingestion, other consumer audit, non-point semantics, final-LTO repair, and clean joined evidence remain open. |
+| Native spline stack | point Resolve/exits **SBF-EXECUTED** and measured-profile admitted; broader mixed, see §3 | Degree-selected v2/v3 creation, source-joined exact d1–3 point resolution, sole-vector persistence/replay, and exact-lot internal and bearer redemption execute. The corrected `161f530` fixture passes 15/15 against the sealed default ELF; point-v3 initial Resolve samples clear the selected 25%-headroom policy. | Active Split-family mode binding is P1. Production source ingestion, other consumer audit, non-point semantics, and a total fragment policy remain open. Monolithic occupation-v4 initial Resolve does not clear that policy; the routed staged lane below is the admitted alternative. |
 | Coupled batch relation | **HOST-TESTED** | Exact witness checks, bounded candidate comparison, pairing, conservation, and a bounded streaming verifier have finite/adversarial campaigns. | It supports “best valid submitted candidate,” not globally optimal search. |
 | Funded order admission | **SBF-EXECUTED** focused path | `PlaceOrder` creates a canonical pre-fund-safe per-order reservation and encumbers exact cash or internal Eggs. `CancelOrder` tombstones once and releases only that reservation. Split and Withdraw cannot spend reserved cash. | No frozen reservation-set commitment, permissionless lapse, or general candidate-to-entitlement transition exists. |
-| Pooled custody and cash exit | **SBF-EXECUTED** focused paths | Endow is the inbound token boundary; Split/Merge/internal redemption are pooled-accounting reclassifications; exact unreserved `WithdrawCash` performs Hoard-to-owner Token-2022 transfer. Donation, reservation, rollback, and two-owner cases execute in a local bank. | A clean joined baseline and full venue settlement campaign remain open. |
-| Outcome-token truth and bearer exit | categorical and exact native lots **SBF-EXECUTED** | Actual Token-2022 mint supply is authoritative; ordinary burns are recognized as forfeiture; transferred positionless degree-zero Eggs and exact-lot d1–3 Eggs redeem through `RedeemExternal` in focused local-bank evidence. | Nondivisible native fragments refuse. The total lot/credit policy, full lifecycle, final-LTO repair, and clean committed artifact remain open. |
+| Pooled custody and cash exit | exits **SBF-EXECUTED**; default value admission **STOP** | Endow is the sole inbound token boundary; Split/Merge/internal redemption are pooled-accounting reclassifications; exact unreserved `WithdrawCash` performs Hoard-to-owner Token-2022 transfer. Since `cfea8e8`, default Endow authenticates Terms/SourceSpec then refuses `SourceReleaseUnavailable` (`0x79`) before owner allocation or Token-2022 CPI because the production registry is empty. | Mock-source Endow success requires a distinct `non-production-mock-source` ELF. No production source release or value-bearing market is admitted by the sealed default artifact. Full venue settlement remains open. |
+| Outcome-token truth and bearer exit | categorical and exact native lots **SBF-EXECUTED** | Actual Token-2022 mint supply is authoritative; ordinary burns are recognized as forfeiture; transferred positionless degree-zero Eggs and exact-lot d1–3 Eggs redeem through `RedeemExternal` in focused local-bank evidence. | Nondivisible native fragments refuse. The total lot/credit policy and full lifecycle remain open. Outcome mints have no `MintCloseAuthority`; bearer-burn forfeiture and fractional fragments have no selected terminal disposition. |
 | Typed artifact transport | **SBF-EXECUTED** | Policy, grid, and Terms use exact typed lengths, ordered 192-byte chunks, restart, seal, abort/reap, idempotent reseal, and rent return. At `e7d975b`, exact rent-shortfall transfer plus PDA-signed allocate/assign closed one-lamport and over-rent stage/final squatting in six real-SBF cases. Native SHA preserves the portable preimage relation. | The transport is not generic and does not authenticate source/archive/clearing artifacts. Excess target lamports remain an unowned donation, not protocol authority. |
 | Account construction | initial market plane **SBF-EXECUTED**; wider lifecycle **STOP** | From a bank with no injected Clutch account, a wallet seals policy/grid/Terms, creates Realm/Profile, and creates all initial market state/token PDAs. Degree-zero v2/165 used 916,052 CU and degree-one v3/319 used 909,302 CU. Existing Market/Reservation/later-owner families have real-bank pre-fund and rollback coverage; one narrow Candidate/feed constructor exists. | Terms does not consensus-check referenced Grid existence. Feed/archive/general Epoch/candidate/pot/receipt construction remains incomplete; every new constructor must inherit the pre-fund-safe pattern and tests. |
 | Resolution replay | focused **SBF-EXECUTED** | Market-global resolution no longer consumes an owner's replay sequence; exact retry is idempotent and conflicting retry refuses. The subsequent owner redemptions/withdrawal retain their own sequence. The current native Resolve also authenticates the sealed archive described below. | Replay separation alone does not establish production source ingestion or a joined blank-bank lifecycle. |
-| Source admission and archive | Resolve join **SBF-EXECUTED**; ingestion **STOP** | A 292-byte content-addressed SourceSpec and 2,560-byte one-window archive bind provider/parser/deployment/spec/grid/window/lineage and a sealed receipt. Resolve derives and authenticates their canonical PDAs and requires the compatibility projection to equal the sealed archive; same-domain value substitution and wrong-archive PDA refuse in the 7/7 native campaign. | Production cannot create, append, or seal the accounts. There is no production provider/parser, immediate provider receiver-post/CPI/config provenance, live Clock/feed admission, or multi-page proof; the focused bank injects mock source state at genesis. |
-| Onchain clearing/settlement | narrow **SBF-EXECUTED** seams; full lifecycle **STOP** | `SubmitDirectPage` can pre-fund-safely create one deterministic SUBMITTED Candidate and exact CandidateFeed from a frozen two-order/two-outcome, equal-limit, zero-fee direct page with ACTIVE reservations. Separately, `SettlePage` can consume one pre-frozen same-page, full-fill, direct single-Egg, zero-fee receipt against a selected Candidate, canonical feed, and those reservations. Both focused campaigns pass 2/2 in real SBF; the joined rerun used 1,249,403 and 862,107 transaction CU respectively. | Submission deliberately leaves Epoch FROZEN and score/digest zero and unverified. Candidate-window closure, scoring/selection, receipt/pot/entitlement construction, global reservation-set closure, partial/portfolio/virtual/fee paths, lapse/refund, and terminal sweep remain open, so the two seams are not yet reachable end to end. |
+| Source admission and archive | Resolve join **SBF-EXECUTED**; production/value admission **STOP** | A 292-byte content-addressed SourceSpec and 2,560-byte one-window archive bind provider/parser/deployment/spec/grid/window/lineage and a sealed receipt. Resolve derives and authenticates their canonical PDAs and requires the compatibility projection to equal the sealed archive. The default source-release registry is empty and Endow fails closed with `0x79`. | Production cannot create, append, or seal the accounts and no production provider is released. There is no immediate provider receiver-post/CPI/config provenance, live Clock/feed admission, or multi-page proof. Focused Resolve evidence injects mock source state; successful Endow requires the distinct non-production mock ELF. |
+| ResolutionWork V1 | measured route **SBF-EXECUTED / PROFILE-ADMITTED** | Routed Begin/Fold/Finalize/Abort at account tag 22 and intents 32–35 operate on sealed archive bytes, preserve monolithic-v4 output equality, segregate prefunds/donations, and close/refund Work and Reserve. Same-ELF CU maxima include Begin 810,992, Fold(4) 815,573, Finalize 1,094,832, and Abort 587,197; all measured rows clear the selected 25%-headroom profile. | Admission is only for the measured route and selected zero-charge policy. It is not system release, deployment, production source, extrapolated shape, terminal-closure, inclusion, or no-stranding evidence. The live archive has no authenticated gap-record encoding. |
+| Onchain clearing/settlement | narrow submission/consumption seams **SBF-EXECUTED**; selection/lifecycle **STOP** | Direct V2 can initialize, freeze, and submit bounded full-width candidates; the sealed same-ELF Submit maximum is 1,194,085 CU. A separate narrow zero-fee consumption fixture exists. | At `e874db1`, full top-three Select reaches exactly 1,400,000 CU and rolls back every watched byte/lamport. An empty frozen epoch can strand Reservations. Direct V3 at `ef32495` is MODEL/DESIGN only; it supplies no live ABI, SBF route, or terminal authority. No live settlement or universal no-stranding claim follows. |
 | Signed committed walk | 22-step **SBF-EXECUTED** at `c05fe84` | Fresh local keys signed 22 confirmed sequential transactions through global resolution, internal/bearer redemption, and both owners withdrawing all free cash; 18 watched accounts were reloaded and the corrupted terminal expectation went red. | It is genesis-assisted by 11 prerequisites and omits clearing/settlement. It is not a blank-bank lifecycle or release baseline. |
 | Static Glass | **HOST-TESTED** inspect-only prototype | A static client can render local terms and unsigned intent material without owning truth. | No frozen release manifest, complete wallet path, browser/accessibility audit, or official hosted instance. |
-| Prepaid liveness accounting | **HOST-TESTED pure kernel** | `clutch-liveness` admits component-wise market/order reserves even at zero fees; models replay-safe work/storage terminal identities, atomic equal-share source/archive joins and refunds, anti-spam bounds, and persistent intent fee carry without treating fees as work capital. | Maxima/rates are unmeasured inputs; there is no account codec, authenticated funding, System transfer, replay adapter, SBF path, or inclusion guarantee. |
+| Liveness accounting | one routed path **SBF-EXECUTED / PROFILE-ADMITTED**; system policy **STOP** | `clutch-liveness` remains a host-tested pure kernel. Separately, the sealed liveness profile binds exact ResolutionWork compute, rent, rewards, refund, donation, and close behavior to the `a572...d6b6a1` ELF. | No complete global `LivenessPolicy` is emitted. Direct selection, production source work, most rent ownership/close routes, terminal asset disposition, and inclusion/keeper assumptions remain open. Hoard principal and future fees are never liveness capital. |
 | Economics and fees | **MODEL-ONLY / PROPOSED** | Synthetic solvency, cost, fee, manipulation, and allocation experiments exist. | Fee base/rate/split, measured liveness maxima, neutral-failure policy, and recipient policy are not frozen. Hoard principal is never available. |
-| Artifact/release evidence | tools **HOST-TESTED**; release **STOP** | Manifest, vector, rebuild, artifact-audit, and local review tools exist. | Current manifest is stale; no clean joined baseline, SBOM/license closure, independent rebuild, audit, or release bundle exists. |
+| Artifact/release evidence | exact R1 artifact/stack/bank seal; release **STOP** | Runtime source `7e8f6b1` produced two byte-identical ordinary builds of `a572...d6b6a1`; final-LTO/stack audit passes and same-ELF bank logs are archived at `0359aec`/`b5da74f`. | The Cargo-home-relocated build is path-sensitive. The checked manifest is stale; there is no schema-v2 release manifest, path-independent or independent rebuild, complete release SBOM/license closure, external security review, signed tag, or deployment. |
 
 ## 5. Accounting truth
 
@@ -246,6 +260,9 @@ Position credit.
 The market collateral cap bounds locked claim backing, not unrelated free cash
 or unsolicited surplus. Local instructions enforce exact deltas and at least
 `H >= L`; the full equality is an inductive market-wide obligation.
+The Endow row is the authenticated transition after source-release admission;
+the sealed default ELF has no registered release and therefore refuses it with
+`0x79` before either delta occurs.
 
 ## 6. Non-negotiable STOP ledger
 
@@ -256,12 +273,18 @@ or unsolicited surplus. Local instructions enforce exact deltas and at least
 2. **Complete native live semantics:** degree-selected blank-bank creation,
    source-joined point Resolve, sole-vector persistence, exact replay, and
    exact-lot internal and bearer redemption are live for degrees one through
-   three. Audit every post-resolution consumer, repair the final-LTO stack
-   survivors, and freeze the fragment/credit policy promised to bearers.
+   three, and the exact R1 ELF's first-party final-LTO stack audit passes.
+   Audit every post-resolution consumer and freeze the fragment/credit policy
+   promised to bearers. Monolithic occupation-v4 initial Resolve remains over
+   the selected headroom; only the exact measured staged ResolutionWork route
+   is profile-admitted.
 3. **Authenticated source/archive ingestion:** pin one concrete source program,
    parser, and deployment profile; publicly create, append, and seal its
    canonical history; authenticate the immediate provider/config state and
    Clock admission; and remove genesis-injected mock source prerequisites.
+   Until then the default registry remains empty and Endow must keep refusing
+   `SourceReleaseUnavailable` (`0x79`); the non-production mock ELF is not a
+   substitute.
 4. **Complete blank-bank lifecycle:** typed artifacts, Realm/Profile, the
    initial degree-selected market plane, Reservation, and later-owner state now
    tolerate admitted pre-funding with focused real-bank rollback evidence. Add
@@ -270,21 +293,30 @@ or unsolicited surplus. Local instructions enforce exact deltas and at least
    candidate/checkpoint, pot/receipt, and cleanup state.
 5. **Coupled settlement:** one narrow direct subset can now construct a
    SUBMITTED Candidate/feed, and one separately preauthorized direct receipt
-   can be consumed in SBF. The full gate still must freeze the exact live
-   reservation set, complete and score claims, close the candidate window,
-   verify and select the best valid submitted candidate, create every immutable
-   entitlement before resolution, support the admitted intent/fee shapes, and
-   consume/refund everything exactly once.
+   can be consumed in SBF. Live V2 top-three Select nevertheless reaches the
+   exact 1,400,000-CU ceiling and rolls back, while V3 is model-only. The full
+   gate still must freeze the exact live reservation set, complete and score
+   claims, close the candidate window, verify and select the best valid
+   submitted candidate, create every immutable entitlement before resolution,
+   support the admitted intent/fee shapes, and consume/refund everything
+   exactly once.
 6. **Prepaid liveness and economics:** measure final SBF paths and capitalize
    every mandatory unfinished action at admission under zero future volume.
-   The pure admission kernel supplies exact component/accounting relations but
-   no measured maxima or runtime funding path. Principal and owner assets never
-   fund this work.
-7. **Evidence promotion:** rerun the joined host, proof, SBF, Token-2022,
-   committed-walk, stack, artifact, and negative gates on one clean tree; emit
-   and verify schema-v2 evidence, then obtain independent rebuild and security
-   review before a release claim.
-8. **Gate L0:** exact legal/entity/control/deployment facts, qualified advice,
+   ResolutionWork now supplies one exact measured, prepaid, physically closing
+   runtime path, but there is no global `LivenessPolicy` and no protocol-wide
+   no-stranding result. Principal and owner assets never fund this work.
+7. **Terminal ownership and retirement:** an empty frozen Direct V2 epoch can
+   strand Reservations; no general program-account close exists outside
+   artifact stages and ResolutionWork; outcome mints lack
+   `MintCloseAuthority`; Hoard donations, external claim-burn forfeiture, and
+   fractional fragments lack terminal disposition; and most accounts lack an
+   authenticated rent-payer versus donation split. Close these exact domains
+   without inventing a sweep right over owner or Hoard value.
+8. **Evidence promotion:** retain the sealed R1 artifact/stack/bank evidence,
+   emit and verify schema-v2 evidence, then obtain a path-independent and
+   independent rebuild, complete release materials, and security review before
+   a release claim.
+9. **Gate L0:** exact legal/entity/control/deployment facts, qualified advice,
    any required relief, and separate current user authorization remain outside
    engineering. No meeting, filing, proof, or local run closes this gate.
 

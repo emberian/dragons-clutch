@@ -76,7 +76,9 @@ Rocq definitions/typechecking are not a theorem inventory.
 - `crates/clutch-liveness`: safe fixed-memory pure admission accounting for
   component market/order reserves, zero-fee work, source/archive sharing,
   replay-safe terminal ownership, anti-spam bounds, and persistent fee carry.
-  Its maxima and rates are unmeasured inputs and it has no runtime adapter.
+  Its generic maxima and rates are model inputs. The separate routed
+  ResolutionWork adapter has an exact measured profile; do not generalize that
+  profile to the rest of the system.
 - `research/fractional-redemption`: safe fixed-width exact-lot and persistent-
   numerator-credit policy models. A resolved common lot is
   `lcm_i D/gcd(D,w_i)`; credits preserve the market aggregate liability but
@@ -87,6 +89,16 @@ These are **HOST-TESTED**, **MODEL-ONLY**, or **PROVED-MODEL** as named in
 `CURRENT_TRUTH.md`. None is a live native-resolution SBF claim.
 
 ### Local SBF runtime
+
+The frozen runtime source is `7e8f6b1`; its 88-file declared runtime closure is
+unchanged through evidence ancestry `b5da74f`. Two ordinary builds produced the
+same 1,228,192-byte ELF with SHA-256
+`a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1`.
+The sealed audit at `0359aec`/`b5da74f` finds zero first-party final-LTO
+diagnostic survivors and no direct `r10` reference beyond 4,096 bytes. Commit
+`161f530` repairs only a stale native fixture version; `316c620` repairs only a
+research lock. This is exact local artifact/stack/bank evidence, not a release
+or deployment.
 
 Focused real-bank paths now exist for:
 
@@ -106,8 +118,18 @@ Focused real-bank paths now exist for:
 - degree-one through degree-three source-joined point Resolve, sole-vector v3
   persistence, exact retry/conflict, and exact-lot internal and positionless
   bearer redemption. Seven focused real-SBF scenarios pass; nondivisible
-  quantities refuse without rounding. Source accounts are still genesis mock
-  fixtures, not a live ingestion lifecycle.
+  quantities refuse without rounding. The corrected fixture passes 15/15
+  against the sealed ELF; and
+- routed ResolutionWork Begin/Fold/Finalize/Abort over sealed archive bytes.
+  Only its exact measured rows clear the selected 25%-headroom liveness
+  profile; this is not a global policy or an extrapolation.
+
+The default source-release registry is empty. Since `cfea8e8`, Endow refuses
+`SourceReleaseUnavailable` (`0x79`) before owner allocation or Token-2022 CPI.
+A successful mock-source Endow uses a distinct `non-production-mock-source`
+ELF. Live Direct V2 at `e874db1` can submit candidates, but full top-three
+Select reaches exactly 1,400,000 CU and rolls back. Direct V3 at `ef32495` is
+MODEL/DESIGN only. There is no live end-to-end settlement or no-stranding claim.
 
 The joined signed walk at source HEAD `c05fe84` used ELF
 `70c33c1cd44b475745b0562a79d9107f1d2101cbf698ebd6c233ca167ebab2e6`.
@@ -148,8 +170,9 @@ asset. Hoard principal is never rent, liveness, bounty, or revenue.
 1. Degree-one through degree-three source-joined point Resolve, v3 vector
    persistence/replay, and exact-lot internal and positionless bearer
    redemption are live. Other post-resolution consumer audit, production
-   source ingestion, the native window/occupation path, final-LTO stack repair,
-   and a total fragment/credit policy remain open.
+   source ingestion, monolithic occupation-v4 initial liveness, and a total
+   fragment/credit policy remain open. The exact sealed ELF's stack gate passes;
+   the staged ResolutionWork route is admitted only for its measured shapes.
 2. Both the public account-shaped reference adapter and SBF Split/Merge/
    materialize/dematerialize still reconstruct mode-less persisted Kernel state
    as `FinitePreset`. Reachable active states preserve the native bound, but
@@ -160,7 +183,8 @@ asset. Hoard principal is never rent, liveness, bounty, or revenue.
    No production provider/parser, onchain create/append/seal path, immediate
    receiver-post/CPI/config provenance, live Clock/feed admission, or multi-page
    proof exists. The focused bank still injects deterministic mock source state
-   at genesis. Typed artifact transport does not solve ingestion.
+   at genesis. Typed artifact transport does not solve ingestion. Default Endow
+   must keep failing closed until a production release is registered.
 4. A bank with no injected Clutch account can now seal policy/grid/Terms,
    create Realm/Profile, and create the complete initial degree-selected market
    plane. It cannot create the full source/archive/Epoch/candidate/pot/receipt
@@ -169,26 +193,33 @@ asset. Hoard principal is never rent, liveness, bounty, or revenue.
    pre-fund/rollback coverage; every future constructor must inherit the same
    allocate/assign rule and regression gate.
 5. `SubmitDirectPage` now constructs one narrow SUBMITTED Candidate/feed and
-   `SettlePage` executes one separately preauthorized direct receipt. Candidate
+   `SettlePage` executes one separately preauthorized direct receipt. Direct V2
+   Select is a measured compute STOP, and Direct V3 is model-only. Candidate
    completion/scoring/window closure/selection, receipt/pot/entitlement
    construction, frozen global reservation-set closure, partial/portfolio/
    virtual/fee paths, permissionless lapse/refund, and terminal sweep remain
    open; the seams are not reachable end to end.
-6. Mandatory work is not fully measured and prepaid under zero future volume;
-   fee/failure policy is not frozen.
-7. The repository lacks one clean schema-v2 evidence baseline, independent
+6. ResolutionWork is measured and prepaid for its exact route, but mandatory
+   system work is not. No complete global `LivenessPolicy`, terminal closure,
+   or no-stranding result exists; fee/failure policy is not frozen.
+7. Empty frozen Direct V2 epochs can strand Reservations; most accounts lack
+   authenticated rent ownership and a close route; outcome mints have no
+   `MintCloseAuthority`; and Hoard donations, claim-burn forfeiture, and
+   fractional fragments lack selected terminal disposition.
+8. The repository lacks one clean schema-v2 evidence baseline, independent
    rebuild, complete SBOM/license record, external security review, and release
    bundle.
-8. Gate L0 remains open. No engineering artifact authorizes public-network use,
+9. Gate L0 remains open. No engineering artifact authorizes public-network use,
    filing, regulator contact, or real funds.
 
 ## Recommended execution order
 
 Follow the first dependency-unblocked item in `docs/V1_BACKLOG.md`:
 
-1. settle the shared tree and produce one noncontradictory evidence baseline;
-2. audit every native post-resolution consumer and repair the shared final-LTO
-   stack survivors without weakening exact-lot or source STOPs;
+1. preserve the sealed R1 artifact/stack/bank evidence and produce the missing
+   schema-v2 release baseline;
+2. audit every native post-resolution consumer without weakening exact-lot or
+   source STOPs;
 3. implement the full blank-bank production source/archive lifecycle;
 4. join funded reservations to epoch freeze, candidate selection, immutable
    entitlements, and `SettlePage`;

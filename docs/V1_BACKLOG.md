@@ -53,8 +53,11 @@ This is the immediate coordination gate while parallel lanes are active.
 - [x] Commit a clean refreshed 22-step script footer, joined ELF digest,
   transaction/account-comparison counts, and falsifiability record after all
   current SBF integration lanes settle.
-- [ ] Run the final-ELF dependency/symbol audit on the exact ELF produced by the
-  gate.
+- [x] Build the exact runtime source `7e8f6b1` twice, archive the byte-identical
+  1,228,192-byte `a572...d6b6a1` ELF and same-ELF bank logs, and run the final
+  dependency/source/final-LTO/direct-frame audit. The `0359aec`/`b5da74f` seal
+  has zero diagnosed first-party final-LTO survivors and no direct `r10`
+  reference beyond 4,096 bytes. This is artifact evidence, not a release.
 - [ ] Emit and commit a clean schema-v2 `MANIFEST.baseline.json`, then prove it
   still checks after the manifest-only commit.
 
@@ -70,7 +73,9 @@ Dependency: gate 1.
   `custody = locked + free_cash + reserved_cash + unowned_surplus` and exact
   local deltas in one normative design/test owner. Reserved Eggs remain in the
   claim-supply identity, not this collateral equation.
-- [x] Make `Endow` an authenticated exact Token-2022 actor-to-Hoard deposit.
+- [x] Make `Endow` an authenticated exact Token-2022 actor-to-Hoard deposit
+  after source-release admission. The sealed default registry is empty, so the
+  transition currently refuses before value movement as recorded in gate 5.
 - [x] Make Split, Merge, and internal Redemption token-neutral accounting
   reclassifications.
 - [x] Keep `collateral_cap` a bound on locked claim backing, not on unrelated
@@ -187,6 +192,11 @@ Dependency: source/feed account construction in gate 4.
   projection remains transport, not value authority.
 - [ ] Make the live feed admission route construct that exact archive; current
   focused bank evidence injects mock SourceSpec/archive bytes at genesis.
+- [x] Fail default value admission closed until a production source is
+  registered. At `cfea8e8`, Endow authenticates Terms/SourceSpec and returns
+  `SourceReleaseUnavailable` (`0x79`) before owner-plane allocation or
+  Token-2022 CPI; mock-source success requires a distinct
+  `non-production-mock-source` ELF.
 - [x] Implement and host-test provider-neutral 292-byte SourceSpec and
   2,560-byte single-window archive codecs/semantics with exact deployment,
   parser, grid, window, predecessor, commitment, maturity, key, and owner
@@ -231,6 +241,13 @@ Dependencies: gates 2-5.
   compare its verdict with the host relation.
 - [ ] Commit the bounded candidate submission set, verify candidates, and select
   the best valid submitted candidate under the frozen total order.
+- [x] Preserve the Direct V2 negative liveness result at `e874db1`: Init,
+  Freeze, and bounded Submit execute, but full top-three Select reaches exactly
+  1,400,000 CU and rolls back every watched byte and lamport. This is a STOP,
+  not successful selection evidence.
+- [ ] Promote a bounded staged replacement. Direct V3 at `ef32495` is an
+  executable MODEL/DESIGN only; it has no live ABI, account plane, SBF route,
+  measured rent/CU, or terminal authority.
 
 ### 6.3 Entitlement and lazy consumption
 
@@ -269,6 +286,19 @@ Dependencies: exact instruction/account/resource shapes from gates 4-6.
   component-wise market/order reserves, including zero-fee orders, replay-safe
   work/storage terminal identities, atomic source/archive share joins, refund/
   neutral-failure ownership, anti-spam bounds, and persistent fee carry.
+- [x] Route and measure ResolutionWork V1 Begin/Fold/Finalize/Abort against the
+  sealed `a572...d6b6a1` ELF. Its exact measured shapes clear the selected
+  25%-headroom profile, use prepaid rewards, segregate donations, and physically
+  close/refund Work and Reserve.
+- [ ] Emit a complete global `LivenessPolicy`. The current profile deliberately
+  refuses this: production source work, Direct selection/lapse, most rent
+  ownership/close routes, terminal asset disposition, inclusion, and keeper
+  participation remain open. No protocol-wide no-stranding claim exists.
+- [ ] Give every admitted account and asset a terminal owner and reachable
+  retirement path. Empty frozen Direct V2 epochs can strand Reservations;
+  outcome mints lack `MintCloseAuthority`; most accounts lack an authenticated
+  rent-payer/donation split; and Hoard donations, external claim-burn
+  forfeiture, and fractional fragments have no selected terminal disposition.
 - [ ] Keep principal, owner cash, reservations, rent, liveness endowment, fees,
   and treasury in nonaliasing ownership phases.
 - [ ] Decide failure payout and repair incentives under sabotage.
@@ -365,8 +395,11 @@ These gates cover different planes; none substitutes for another.
   custody, and settlement; minimized failures become permanent vectors.
 - [ ] Run malformed account, alias, signer, owner, PDA, replay, donation, burn,
   close/reopen, source-substitution, candidate omission, and late-CPI campaigns.
-- [ ] Build the final ELF twice on one machine and inspect the final unstripped
-  image, not only pre-LTO diagnostics.
+- [x] Build the exact `7e8f6b1` ELF twice on one machine and inspect the final
+  unstripped image, final-LTO diagnostic attribution, and all resident direct
+  frames. The two ordinary stripped and unstripped builds are byte-identical;
+  the relocated-Cargo-home build is path-sensitive and is not the canonical
+  artifact.
 - [ ] Rebuild independently from pinned dependency sources and compare ELF bytes.
 - [ ] Produce SBOM, dependency licenses/notices, fixture provenance, source
   offer, theorem/assumption inventory, vectors, gate logs, and static-client
@@ -377,7 +410,7 @@ These gates cover different planes; none substitutes for another.
 Acceptance: every public correctness sentence can point to an artifact that says
 exactly that much and no more.
 
-## 10. Static Glass and release candidate
+## 10. Static Glass and release boundary
 
 Dependencies: frozen program/layout/source semantics and gate 9 artifacts.
 

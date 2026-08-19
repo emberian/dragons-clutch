@@ -1,6 +1,7 @@
 # Resumable occupation resolution V1
 
-Status: **executable model oracle plus routed live SBF V1 release candidate**
+Status: **executable model oracle plus routed live SBF V1; the exact measured
+route is liveness-profile admitted**
 
 Executable witness: `research/resolution-work-v1`
 
@@ -453,18 +454,27 @@ the immutable interval they actually use. Shared summaries, if later admitted,
 are populated on demand from the sealed archive rather than maintained as an
 append-time side effect.
 
-## Explicit release stops
+## Explicit promotion stops
 
-The routed ResolutionWork candidate now establishes the live ABI/layout, exact
-rent and reward schedule, deterministic lock/recovery behavior, sealed-source
+The routed ResolutionWork V1 establishes the live ABI/layout, exact rent and
+reward schedule, deterministic lock/recovery behavior, sealed-source
 authentication, full-byte monolithic v4 equivalence, late rollback, donation
 segregation, and real-SBF Begin/Fold/Finalize/Abort rows documented in
-`RESOLUTION_WORK_SBF.md`. The following remain explicit stops or scope limits:
+`RESOLUTION_WORK_SBF.md`. The sealed R1 artifact's first-party final-LTO stack
+audit passes for exact ELF
+`a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1`.
+The following remain explicit stops or scope limits:
 
-- the final policy ELF still requires the independent final-LTO stack audit;
-- route-level evidence is not permission to call the entire deployment live;
-  source release, direct selection, and system-wide liveness retain independent
-  gates;
+- route-level evidence is not permission to call the program or deployment
+  live; production source release, direct selection, and system-wide liveness
+  retain independent gates;
+- the default source registry is empty, so Endow refuses
+  `SourceReleaseUnavailable` (`0x79`); mock-source success belongs to a distinct
+  `non-production-mock-source` ELF;
+- live Direct V2 Select reaches exactly 1,400,000 CU and rolls back, while
+  Direct V3 remains MODEL/DESIGN only;
+- no global `LivenessPolicy`, terminal-closure result, or no-stranding theorem
+  has been promoted;
 - the measured spans and degrees do not justify interpolation or extrapolation;
 - the current SourceArchive has no authenticated gap-record encoding, so the
   live adapter refuses genuine intervals rather than silently capping them;
