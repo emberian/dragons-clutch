@@ -88,6 +88,13 @@ contradictory current-status prose.
 Do not hold R1 hostage to live Direct V3, a production provider, universal
 terminal cleanup, FHE optimality, or a filing.  Those are named later releases.
 
+Checkpoint disposition: runtime/artifact/stack/bank sealing and the fresh
+Persvati portable subset are complete at `b5da74f`; Hbox independently verified
+the archive but is SBF-UNAVAILABLE because the exact toolchain/dependency cache
+is absent. The schema-v2 generator is hardened through `1a18991`, but the full
+94-gate emission, manifest-only commit, and post-commit check remain the first
+handoff action. The checked-in manifest is still historical schema v1.
+
 ### R2 — Admit one production source profile
 
 The default value gate is now safe, but the default protocol remains inert.
@@ -149,6 +156,11 @@ Required work:
 Exit criterion: candidate admission through settlement or lapse is one
 constructible, permissionless, funded, bounded, replay-closed SBF lifecycle.
 
+Current isolated checkpoint: `529878d`, `1e8b8a3`, and `1241399` freeze V3
+account/artifact/intent codecs on `codex/r3-direct-v3`; no shared runtime route
+exists. Model/wire authentication and asset-release corrections remain under
+review and are prerequisites to any dispatcher or SBF integration.
+
 ### R4 — Version the terminal lifecycle
 
 This is not a cleanup utility.  It is an account/economic ABI migration.
@@ -181,6 +193,12 @@ Exit criterion: a hostile terminal walk covers donations, holder burns,
 fractional fragments, all lapse phases, rent refunds, stale replay, and
 deterministic recreation attempts, and ends in the exact declared account set.
 
+Current model checkpoint: `6dbe618` is independently green only for an
+internal-claim V2 research profile. It deliberately refuses external bearer
+issuance and supplies no live ABI, CPI, authority, rent-funding, migration, or
+fractional-credit result. Use it to falsify a runtime design, not as terminal
+runtime evidence.
+
 ### R5 — Close formal, confidential, and governance boundaries
 
 These lanes can research in parallel, but promotion depends on R1 and on the
@@ -188,9 +206,11 @@ specific runtime they claim to refine.
 
 Formal work:
 
-- Make `verus/batch` compile; replace its four `ensures true` placeholders
-  with allocation conservation, deterministic tick choice, relation
-  conservation, and canonical padding theorems.
+- The four `verus/batch` placeholders are gone. Preserve the reviewed narrow
+  claims at `b047415`/`345bc78`/`07d5efe`; next prove production dust-loop
+  completion/positive selection, validation-to-padding, and source-level
+  correspondence rather than relabeling premise-conditional lemmas as full
+  allocation or relation conservation.
 - Install/pin Rocq in an isolated environment and prove the currently named
   kernel properties.  The present Rocq file is a specification with zero
   checked properties.

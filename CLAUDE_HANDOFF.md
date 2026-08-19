@@ -9,6 +9,78 @@ order. Use [`docs/V1_BACKLOG.md`](docs/V1_BACKLOG.md) as the deeper historical
 queue after the roadmap. The roadmap is the current dependency and lane-routing
 guide; this older handoff remains useful context but not a promotion ledger.
 
+## Overnight convergence checkpoint
+
+The last substantive mainline commit before this handoff note is `1a18991`.
+The shared worktree should be clean. Do not restart from the older `b5da74f`
+snapshot: that commit remains the exact R1 runtime/evidence seal, while later
+mainline commits add reviewed proof/model/frontend/truth/manifest machinery
+without changing the declared 88-file runtime closure.
+
+The R1 evidence checkpoint is sealed:
+
+- runtime source `7e8f6b1` produced the exact 1,228,192-byte
+  `a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1`
+  ELF; the committed audit/log seal is `0359aec`/`b5da74f`;
+- Persvati independently attested exact `b5da74f` from a fresh archive and
+  minimal hashed Git bundle: 39/39 gates PASS, 0 STOP, 492 files checked twice,
+  95 evidence checksums verified. The durable job is
+  `/home/ember/jobs/dragons-clutch-final-portable-attest-b5da74f-20260819-GMqkJL`;
+- Hbox received and verified the exact `b5da74f` archive at
+  `/tank/joshibot/dragons-clutch-r1-hbox-vHdulP`, but its independent SBF build
+  is honestly `UNAVAILABLE/STOP`: the pinned Solana/Anza toolchain,
+  platform-tools v1.53, Cargo config, and five locked Solana crates are absent.
+  Do not install substitutes and call that reproduction;
+- `b047415`/`345bc78`/`07d5efe` replace the four vacuous scalar batch Verus
+  placeholders with narrowly reviewed proofs. They do not prove production
+  dust completion, side equality, padding validation, coupled V1, or SBF; and
+- `6dbe618` adds an independently red-teamed internal-only Terminal Lifecycle
+  V2 model. It is not a live ABI, Token-2022/CPI path, rent-funding proof,
+  migration, external-bearer lifecycle, or fractional-credit solution.
+
+Glass now exposes those evidence planes and their negative boundaries while
+remaining unbound/offline. The schema-v2 manifest generator is hardened through
+`1a18991`: 94 unique declared gates, cache/path-stable evidence records,
+process-group timeout cleanup, exact Verus failure classification, current
+default/mock ELF parsing, the sealed liveness gate, the signed committed walk,
+and the central proof/model/tool surfaces. The checked-in
+`MANIFEST.baseline.json` is intentionally still historical schema v1. The full
+94-gate emission was not run during convergence and must not be described as
+green.
+
+Resume R1 in this exact order:
+
+1. run `git status --short` and refuse unrelated dirty bytes;
+2. run `python3 -m unittest scripts/test_baseline_manifest.py`;
+3. from the clean tree run
+   `scripts/baseline_manifest.py emit --run-gates`; preserve every RED rather
+   than weakening a declaration;
+4. inspect the emitted schema-v2 file, commit **only**
+   `MANIFEST.baseline.json`, then run
+   `scripts/baseline_manifest.py check --run-gates`; and
+5. only after that decide whether the post-`b5da74f` host-only changes warrant
+   another fresh Persvati portable attestation. No Hbox SBF claim exists until
+   the exact missing toolchain/dependency closure is supplied and recorded.
+
+Direct V3 remains isolated at
+`/Users/ember/jobs/dragons-clutch-r3-direct.BDnrsh` on
+`codex/r3-direct-v3`. Commits `529878d`, `1e8b8a3`, and `1241399` freeze the
+account, DirectBatchPolicyV3 artifact, and intent codecs only. Do not
+cherry-pick or route them merely because codec tests pass. The active model
+correction must first close ReservationV2/page/grid authentication, exact
+Position asset release for every abort/lapse, strict clock-boundary ownership,
+DonationLedger observation, durable selected-slot/count projection, and the
+V4 placement phase gate; then it needs a fresh read-only re-audit.
+The current uncommitted diff is exactly
+`research/batch-policy-identity/src/direct_lifecycle_v3.rs`,
+`programs/solana-layout/src/direct_selection_v3.rs`, and
+`docs/implementation/DIRECT_SELECTION_V3_DESIGN.md`, with SHA-256
+`5e4b059e4e94e158c84dd0e666ef945b80bbc54df58fbf611e305be96b9ae7c2`.
+Research 34/34 and layout 175/175 plus ResolutionWork 10/10 pass, but strict
+Clippy still needs two test-only imports gated and the reviewer verdict is
+pending. Settle also does not yet embed the existing economic Position-transfer
+kernel. Preserve this checkpoint rather than inferring live authority.
+
 ## What changed after the prior handoff
 
 The project corrected a major product-model narrowing. Native settlement is
@@ -133,10 +205,14 @@ one market aggregate but cannot make the final sub-denominator residue
 disappear without subsidy, forfeiture, or a finer unit. This is model-only and
 does not select or implement either production policy.
 
-The narrow Verus result still concerns only the exact executable body of
-`prepare_internal_transfer` under its recorded assumptions. Rocq currently
-provides definitions/typechecking, not a completed independent theorem
-inventory.
+The narrow executable-body Verus result still concerns only
+`prepare_internal_transfer` under its recorded assumptions. A separate pinned
+scalar batch shadow now proves only allocation decomposition/per-fill bounds,
+unique tick selection, a whole-fill partition conditional on accepted side
+equalities, and a zero-suffix fold identity. The runner hash-enforces its Verus,
+Z3, and shipped vstd artifacts and four semantic mutants go red. It does not
+import or refine the production batch body. Rocq currently provides
+definitions/typechecking, not a completed independent theorem inventory.
 
 ## The next hard path
 
