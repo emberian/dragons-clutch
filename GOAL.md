@@ -61,6 +61,24 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- DIRECT V3 ROUTED AND COMPLETE on codex/r3-direct-v3-successor (b00dea1,
+  10 commits): the full lifecycle — InitEpoch, InitOrderPage, Place,
+  Freeze, Abort, Submit/admit, staged Verify, Finalize/Select, Settle,
+  three Lapse phases — with tags 36-46 live through ONE dispatcher arm,
+  exhaustive handler match, zero NotYetImplemented in the family, and the
+  legacy/V3 decoders refusing each other. THE 1.4M WALL IS BEATEN: no
+  measured row is a STOP; worst is Submit-replacement at 1,123,392
+  (19.8% headroom). Two cost corrections, not squeezes: single-site epoch
+  validation cut PlaceOrder 1,249,641 -> 784,232 and InitOrderPage
+  641,047 -> 407,028 by not re-running identical decode-time SHA
+  validation up to four times; no refusal removed and the substitution
+  suite still refuses every mutation. The predecessor's exact failure mode
+  regresses in both directions. Product gap found and named: there is NO
+  per-order V4 cancellation — an order can only be retired by aborting the
+  whole unfrozen epoch. Claim plane: model + host + focused SBF-EXECUTED
+  on a branch. Merge is gated on resolving the 4 reported pre-existing
+  test failures (verification in progress).
+
 - SUCCINCT CLEARING FEASIBILITY SCOUTED
   (docs/design/SUCCINCT_CLEARING_FEASIBILITY.md): the compute wall is NOT an
   architectural dead end. The adjacent breadstuffs tree's Groth16 verifier
