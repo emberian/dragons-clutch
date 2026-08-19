@@ -4,10 +4,13 @@
 > [`docs/SWARM_ROADMAP_2026-08-19.md`](docs/SWARM_ROADMAP_2026-08-19.md). This
 > file is the standing-goal execution trail (Fable session, ember authorized).
 
-**Goal:** drive roadmap R1–R5 to closed-or-explicitly-parked with reproducible
-evidence, plus filing-prep artifacts ready for ember's review, ahead of the
-intended CFTC filings. Gate L0 (identity, filing routes, submission,
-deployment, push/publish) stays human. Codex is co-resident and quiescing;
+**Goal (UPGRADED by ember, 2026-08-19 ~18:00):** close out the remaining
+engineering (V3 atomic promotion, R2 pull promotion, R4 runtime authorities)
+AND deploy to public testnets, pushing the programs through their paces.
+Ember's explicit authorization covers devnet/testnet deployment with fresh
+throwaway keys and bounded public-RPC use. Still human-gated: mainnet, real
+value, market creation for real users, the production source-registry flip,
+filings, and Gate L0. Codex is co-resident and quiescing;
 its dirty paths belong to it until the tree goes quiet.
 
 ## Current thrust
@@ -57,6 +60,16 @@ ready in degg-research.
    Aug 24/24/27, perpetuals RFC Aug 26.
 
 ## Done log (2026-08-19 session)
+
+- AMBITION UPGRADE executed: R2 promotion plan committed (c364630 — three
+  phases, 36-delta bridge, gates incl. ember's explicit registry-flip go);
+  devnet job created (~/jobs/dragons-clutch-devnet-20260819: fresh deployer
+  4zrxtw5c..., program ids 3SLhMAFm... default / EbWhsDm4... mock; sealed
+  bd20711b ELF verified for deploy); faucet rate-limited so a patient SOL
+  collector runs in background; V3 ATOMIC PROMOTION lane launched on the
+  successor branch (merge settle port -> full lifecycle handlers -> one
+  all-or-nothing route family -> hostile + real-bank campaign, with the
+  predecessor's legacy-intent failure mode as a mandatory regression).
 
 - HANDOFF PRIORITY 1 COMPLETE: dependency/license closure cataloged as two
   declared gates (d2e1cd5; complete-scope + SBOM byte-equality, catalog
