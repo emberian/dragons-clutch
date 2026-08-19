@@ -11,10 +11,14 @@ use crate::accounts::{
 };
 use crate::claim_truth::{self, ObservedMintSupplies};
 use crate::error::{ClutchError, Refusal};
+use crate::instructions::observe_resolve::{bound_native_resolution, reconstruct_native_market};
 use crate::instructions::split::validate_token_program;
 use crate::{seeds, token};
 use clutch_kernel::{BasisMode, MarketState, PayoutVector, Phase, Position};
-use clutch_solana_layout::{account_len, collateral, Hash32, HoardAccount, Intent, ProfileAccount};
+use clutch_solana_layout::{
+    account_len, collateral, native_resolution::NATIVE_RESOLUTION_LEN, Hash32, HoardAccount,
+    Intent, PayoutVectorBytes, ProfileAccount, TermsAccount,
+};
 use clutch_solana_reference::{Action, KernelAccount, Request, KERNEL_ACCOUNT_LEN};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -52,15 +56,29 @@ pub const IX_SOURCE: usize = 14;
 /// First mint in the canonical complete outcome-mint suffix.
 pub const IX_OUTCOME_MINTS: usize = 15;
 
-const STATE_ROLES: [StateRole; 7] = [
+const STATE_ROLES: [StateRole; 6] = [
     StateRole::read_only(IX_PROFILE, account_len::PROFILE),
     StateRole::read_only(IX_MARKET, account_len::MARKET),
     StateRole::writable(IX_HOARD, account_len::HOARD),
     StateRole::writable(IX_KERNEL, KERNEL_ACCOUNT_LEN),
     StateRole::writable(IX_SUPPLY, account_len::SUPPLY_LEDGER),
-    StateRole::read_only(IX_RESOLUTION, account_len::RESOLUTION),
     StateRole::read_only(IX_TERMS, account_len::TERMS),
 ];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResolutionBinding {
+    Legacy { payout_index: u8 },
+    Native { vector: PayoutVectorBytes },
+}
+
+impl ResolutionBinding {
+    const fn kernel_index(self) -> u8 {
+        match self {
+            Self::Legacy { payout_index } => payout_index,
+            Self::Native { .. } => 0,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ExitRequest {
@@ -81,6 +99,12 @@ struct TokenSnapshot {
     authority_bump: u8,
     mint_index: usize,
     observed: ObservedMintSupplies,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NativeRedeemStep {
+    total_supply: [u64; clutch_solana_layout::MAX_OUTCOMES],
+    payout: u64,
 }
 
 #[inline(never)]
@@ -104,6 +128,17 @@ fn decode_request(request: &Request) -> Outcome<ExitRequest> {
         }),
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
+}
+
+/// Degree is immutable Terms state and therefore selects the Resolution ABI.
+///
+/// This lives in its own frame because a full Terms decode is much larger than
+/// the one-byte fact its caller retains.
+#[inline(never)]
+fn terms_basis_degree(terms_bytes: &[u8]) -> Outcome<u8> {
+    let mut terms = TermsAccount::ZEROED;
+    TermsAccount::decode_into(terms_bytes, &mut terms)?;
+    Ok(terms.basis_degree)
 }
 
 #[inline(never)]
@@ -151,6 +186,67 @@ fn kernel_redeem(
     account.total_supply = market.total_supply;
     account.encode(kernel_data)?;
     Ok(payout)
+}
+
+/// Redeem bearer claims against the v3 record-owned native vector.
+///
+/// The vector exists only in this stack frame. `reconstruct_native_market` is
+/// the same projection used by internal redemption, so bearer exit cannot
+/// invent a second interpretation or persist a copy into `KernelAccount`.
+#[inline(never)]
+fn kernel_redeem_native(
+    kernel_data: &mut [u8],
+    outcome_count: u8,
+    collateral: u64,
+    vector: PayoutVectorBytes,
+    outcome: u8,
+    quantity: u64,
+) -> Outcome<u64> {
+    let step = kernel_redeem_native_step(
+        kernel_data,
+        outcome_count,
+        collateral,
+        vector,
+        outcome,
+        quantity,
+    )?;
+    write_kernel_totals(kernel_data, &step.total_supply)?;
+    Ok(step.payout)
+}
+
+/// Run the large derived market in a frame that holds no decoded aggregate
+/// write-back value.
+#[inline(never)]
+fn kernel_redeem_native_step(
+    kernel_data: &[u8],
+    outcome_count: u8,
+    collateral: u64,
+    vector: PayoutVectorBytes,
+    outcome: u8,
+    quantity: u64,
+) -> Outcome<NativeRedeemStep> {
+    let installed = PayoutVector::new(vector.denominator, vector.weights);
+    let mut market = reconstruct_native_market(kernel_data, outcome_count, collateral, installed)?;
+    let mut position = Position::EMPTY;
+    position.external[usize::from(outcome)] = quantity;
+    let payout = market.redeem_external(&mut position, outcome, quantity)?;
+    Ok(NativeRedeemStep {
+        total_supply: market.total_supply,
+        payout,
+    })
+}
+
+/// Persist only the aggregate-supply projection. The record-owned vector is
+/// not part of this write frame and cannot become a second persisted copy.
+#[inline(never)]
+fn write_kernel_totals(
+    kernel_data: &mut [u8],
+    total_supply: &[u64; clutch_solana_layout::MAX_OUTCOMES],
+) -> Outcome<()> {
+    let mut account = KernelAccount::decode(kernel_data)?;
+    account.total_supply = *total_supply;
+    account.encode(kernel_data)?;
+    Ok(())
 }
 
 #[inline(never)]
@@ -269,10 +365,20 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             && usize::from(request.outcome) < usize::from(market.outcome_count),
         ClutchError::MismatchedState,
     )?;
+    let terms = accounts::read_terms(&accounts[IX_TERMS].data.borrow())?;
+    let basis_degree = terms_basis_degree(&accounts[IX_TERMS].data.borrow())?;
+    let resolution_len = if basis_degree == 0 {
+        account_len::RESOLUTION
+    } else {
+        NATIVE_RESOLUTION_LEN
+    };
+    accounts::validate_state_roles(
+        program_id,
+        accounts,
+        &[StateRole::read_only(IX_RESOLUTION, resolution_len)],
+    )?;
     let mut hoard = HoardAccount::decode(&accounts[IX_HOARD].data.borrow())?;
     let supply = accounts::read_supply(&accounts[IX_SUPPLY].data.borrow())?;
-    let resolution = accounts::read_resolution(&accounts[IX_RESOLUTION].data.borrow())?;
-    let terms = accounts::read_terms(&accounts[IX_TERMS].data.borrow())?;
     let profile = accounts::read_profile(&accounts[IX_PROFILE].data.borrow())?;
     expect_pda(
         accounts[IX_PROFILE].key,
@@ -300,11 +406,6 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         Some(supply.stored_bump),
     )?;
     expect_pda(
-        accounts[IX_RESOLUTION].key,
-        seeds::resolution_pda(program_id, &market.market.bytes()),
-        Some(resolution.stored_bump),
-    )?;
-    expect_pda(
         accounts[IX_TERMS].key,
         seeds::terms_pda(program_id, &market.realm.bytes(), &market.terms.bytes()),
         Some(terms.stored_bump),
@@ -316,8 +417,6 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             && supply.market == market.market
             && supply.realm == market.realm
             && supply.outcome_count == market.outcome_count
-            && resolution.market == market.market
-            && resolution.resolved
             && profile.profile == market.profile
             && profile.realm == market.realm,
         ClutchError::MismatchedState,
@@ -332,16 +431,40 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             && terms.profile == market.profile
             && terms.feed == market.feed
             && terms.outcome_count == market.outcome_count
-            && terms.collateral_cap == market.collateral_cap
-            && resolution.terms == terms.terms
-            && resolution.feed == terms.feed
-            && resolution.payout_index < terms.payout_count,
+            && terms.collateral_cap == market.collateral_cap,
         ClutchError::MismatchedState,
     )?;
+    let resolution_pda = seeds::resolution_pda(program_id, &market.market.bytes());
+    expect_pda(accounts[IX_RESOLUTION].key, resolution_pda, None)?;
+    let resolution = if basis_degree == 0 {
+        let record = accounts::read_resolution(&accounts[IX_RESOLUTION].data.borrow())?;
+        require(
+            record.stored_bump == resolution_pda.1
+                && record.market == market.market
+                && record.terms == terms.terms
+                && record.feed == terms.feed
+                && record.resolved
+                && record.payout_index < terms.payout_count,
+            ClutchError::MismatchedState,
+        )?;
+        ResolutionBinding::Legacy {
+            payout_index: record.payout_index,
+        }
+    } else {
+        let bound = bound_native_resolution(
+            &accounts[IX_RESOLUTION].data.borrow(),
+            &accounts[IX_TERMS].data.borrow(),
+            resolution_pda.1,
+            market.market,
+        )?;
+        ResolutionBinding::Native {
+            vector: bound.vector,
+        }
+    };
     require_resolved_kernel_head(
         &accounts[IX_KERNEL].data.borrow(),
         market.market,
-        resolution.payout_index,
+        resolution.kernel_index(),
         terms.payout_count,
         terms.outcome_count,
     )?;
@@ -367,13 +490,23 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         let mut kernel_data = accounts[IX_KERNEL]
             .try_borrow_mut_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        kernel_redeem(
-            &mut kernel_data,
-            market.outcome_count,
-            hoard.collateral_atoms,
-            request.outcome,
-            request.quantity,
-        )?
+        match resolution {
+            ResolutionBinding::Legacy { .. } => kernel_redeem(
+                &mut kernel_data,
+                market.outcome_count,
+                hoard.collateral_atoms,
+                request.outcome,
+                request.quantity,
+            )?,
+            ResolutionBinding::Native { vector } => kernel_redeem_native(
+                &mut kernel_data,
+                market.outcome_count,
+                hoard.collateral_atoms,
+                vector,
+                request.outcome,
+                request.quantity,
+            )?,
+        }
     };
 
     token::burn(
@@ -511,6 +644,52 @@ mod tests {
             kernel_redeem(&mut bytes, 2, 5, 0, 1),
             Err(Refusal::Kernel(KernelError::RemainderRequired))
         );
+        assert_eq!(bytes, before);
+    }
+
+    #[test]
+    fn native_bearer_redemption_uses_the_ephemeral_vector_exactly() {
+        let mut weights = [0_u64; MAX_OUTCOMES];
+        weights[0] = 1;
+        weights[1] = 1;
+        let vector = PayoutVectorBytes {
+            denominator: 2,
+            weights,
+        };
+        let mut preset_weights = [0_u64; MAX_OUTCOMES];
+        preset_weights[0] = 2;
+        let mut bytes = encoded_kernel(PayoutVector::new(2, preset_weights), 5);
+        let before = bytes.clone();
+        assert_eq!(
+            kernel_redeem_native(&mut bytes, 2, 5, vector, 0, 1),
+            Err(Refusal::Kernel(KernelError::RemainderRequired))
+        );
+        assert_eq!(bytes, before);
+
+        assert_eq!(kernel_redeem_native(&mut bytes, 2, 5, vector, 0, 2), Ok(1));
+        let after = KernelAccount::decode(&bytes).unwrap();
+        assert_eq!(after.total_supply[0], 3);
+        assert_eq!(after.total_supply[1], 5);
+        assert_eq!(
+            after.payouts,
+            KernelAccount::decode(&before).unwrap().payouts
+        );
+    }
+
+    #[test]
+    fn corrupt_native_kernel_prestate_refuses_before_write() {
+        let mut weights = [0_u64; MAX_OUTCOMES];
+        weights[0] = 1;
+        weights[1] = 1;
+        let vector = PayoutVectorBytes {
+            denominator: 2,
+            weights,
+        };
+        let mut preset_weights = [0_u64; MAX_OUTCOMES];
+        preset_weights[0] = 2;
+        let mut bytes = encoded_kernel(PayoutVector::new(2, preset_weights), 6);
+        let before = bytes.clone();
+        assert!(kernel_redeem_native(&mut bytes, 2, 5, vector, 0, 2).is_err());
         assert_eq!(bytes, before);
     }
 

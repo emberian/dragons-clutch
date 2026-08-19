@@ -15,14 +15,16 @@ use {
         account_len, canonical_outcome_id,
         native_resolution::{
             NativeResolutionAccount, NATIVE_RESOLUTION_LEN, RESOLUTION_MODE_DERIVED_POINT,
+            RESOLUTION_MODE_PRESET,
         },
-        Hash32, HoardAccount, MarketAccount, PayoutVectorBytes, PositionAccount,
+        Hash32, HoardAccount, Intent, MarketAccount, PayoutVectorBytes, PositionAccount,
         SupplyLedgerAccount, TermsAccount, MAX_KNOTS, MAX_OUTCOMES, PAYOUT_INDEX_UNRESOLVED,
         PAYOUT_MAP_UNUSED,
     },
     clutch_solana_reference::{KernelAccount, ReplayAccount},
     clutch_svm_fixture::{
-        build_plane, compute_unit_limit_data, immutable_owner_account_bytes, outcome_mint_bytes,
+        build_plane, compute_unit_limit_data, immutable_owner_account_bytes, layout_request,
+        outcome_mint_bytes, rewrite_plane_source_archive, source_resolution_evidence_buffer,
         token_account_bytes, GenesisAccount, Mode, Pda, Plane, BUFFER_ACCOUNT, CASH_ATOMS,
         COMPUTE_BUDGET, MARKET_NONCE, PROGRAM_ID, TOKEN_2022,
     },
@@ -43,6 +45,8 @@ const SETS: u64 = 64;
 const EMPTY_BUFFER: Address = Address::new_from_array([0x8d; 32]);
 const ACTOR_TOKEN: Address = Address::new_from_array([0x8e; 32]);
 const CONFLICT_BUFFER: Address = Address::new_from_array([0x8f; 32]);
+const OUTCOME_SOURCE: Address = Address::new_from_array([0x90; 32]);
+const SUBSTITUTE_ARCHIVE: Address = Address::new_from_array([0x91; 32]);
 
 fn actor_keypair() -> Keypair {
     Keypair::new_from_array([
@@ -94,37 +98,6 @@ fn one_hot_payouts() -> ([PayoutVectorBytes; MAX_PAYOUTS], PayoutSet) {
     (bytes, PayoutSet::new(OUTCOMES, OUTCOMES, kernel))
 }
 
-fn evidence_buffer(window_id: Hash32, feed: Hash32, low: u128, high: u128) -> Vec<u8> {
-    let mut window = vec![0x45_u8, 1];
-    window.extend_from_slice(&feed.bytes());
-    window.extend_from_slice(&feed.bytes());
-    window.extend_from_slice(&1_u32.to_le_bytes());
-    window.extend_from_slice(&1_u32.to_le_bytes());
-    window.extend_from_slice(&7_u32.to_le_bytes());
-    window.extend_from_slice(&1_u16.to_le_bytes());
-    window.extend_from_slice(&60_u64.to_le_bytes());
-    window.extend_from_slice(&100_u64.to_le_bytes());
-    window.extend_from_slice(&103_u64.to_le_bytes());
-    window.extend_from_slice(&104_u64.to_le_bytes());
-    window.extend_from_slice(&0_u64.to_le_bytes());
-    window.extend_from_slice(&1_u16.to_le_bytes());
-    window.extend_from_slice(&0_u64.to_le_bytes());
-    window.extend_from_slice(&3_u16.to_le_bytes());
-    for bucket in 100_u64..103 {
-        window.push(1);
-        window.extend_from_slice(&bucket.to_le_bytes());
-        window.extend_from_slice(&low.to_le_bytes());
-        window.extend_from_slice(&high.to_le_bytes());
-    }
-    let mut out = vec![0_u8; observe_resolve::EVIDENCE_BUFFER_HEADER_BYTES];
-    out[0] = observe_resolve::EVIDENCE_BUFFER_TAG;
-    out[1] = observe_resolve::BUFFER_VERSION;
-    out[2..34].copy_from_slice(&window_id.bytes());
-    out[34..36].copy_from_slice(&(window.len() as u16).to_le_bytes());
-    out.extend_from_slice(&window);
-    out
-}
-
 fn empty_evidence_buffer(window_id: Hash32) -> Vec<u8> {
     let mut out = vec![0_u8; observe_resolve::EVIDENCE_BUFFER_HEADER_BYTES];
     out[0] = observe_resolve::EVIDENCE_BUFFER_TAG;
@@ -134,6 +107,16 @@ fn empty_evidence_buffer(window_id: Hash32) -> Vec<u8> {
 }
 
 fn smooth_plane(actor: Address, degree: u8, low: u128, high: u128) -> Plane {
+    smooth_plane_with_external(actor, degree, low, high, 0)
+}
+
+fn smooth_plane_with_external(
+    actor: Address,
+    degree: u8,
+    low: u128,
+    high: u128,
+    external_quantity: u64,
+) -> Plane {
     let mut plane = build_plane(actor, collateral_mint(), MARKET_NONCE, Mode::Funded);
     let old_terms_address = plane.terms.address;
     let market_id = plane.market_id;
@@ -198,18 +181,23 @@ fn smooth_plane(actor: Address, degree: u8, low: u128, high: u128) -> Plane {
 
     let mut internal = [0_u64; MAX_OUTCOMES];
     internal[..usize::from(OUTCOMES)].fill(SETS);
+    internal[0] = internal[0]
+        .checked_sub(external_quantity)
+        .expect("external fixture is materialized from internal claims");
     let mut position = PositionAccount::decode(&account_mut(&mut plane, position_address).data)
         .expect("position decodes");
     position.internal = internal;
     account_mut(&mut plane, position_address).data =
         encode(account_len::POSITION, |out| position.encode(out));
 
+    let mut total_supply = [0_u64; MAX_OUTCOMES];
+    total_supply[..usize::from(OUTCOMES)].fill(SETS);
     let kernel = KernelAccount {
         market: market_id,
         phase: 0,
         resolved_payout: 0,
         payouts: payout_set,
-        total_supply: internal,
+        total_supply,
     };
     account_mut(&mut plane, kernel_address).data =
         encode(clutch_solana_reference::KERNEL_ACCOUNT_LEN, |out| {
@@ -220,6 +208,7 @@ fn smooth_plane(actor: Address, degree: u8, low: u128, high: u128) -> Plane {
     supply.outcome_count = OUTCOMES;
     supply.internal_supply = internal;
     supply.external_supply = [0; MAX_OUTCOMES];
+    supply.external_supply[0] = external_quantity;
     account_mut(&mut plane, supply_address).data =
         encode(account_len::SUPPLY_LEDGER, |out| supply.encode(out));
     let mut hoard =
@@ -236,9 +225,13 @@ fn smooth_plane(actor: Address, degree: u8, low: u128, high: u128) -> Plane {
     );
     account_mut(&mut plane, resolution_address).data =
         encode(NATIVE_RESOLUTION_LEN, |out| unresolved.encode(out));
-    plane.window_id = Hash32::from_bytes([0x70 + degree; 32]);
+    let width = high.checked_sub(low).expect("ordered fixture interval");
+    assert_eq!(width % 2, 0, "source fixture interval must be symmetric");
+    let confidence = width / 2;
+    let price = low.checked_add(confidence).expect("fixture midpoint");
+    rewrite_plane_source_archive(&mut plane, price, confidence);
     account_mut(&mut plane, BUFFER_ACCOUNT).data =
-        evidence_buffer(plane.window_id, plane.feed_id, low, high);
+        source_resolution_evidence_buffer(plane.window_id, plane.feed_id, low, high);
     plane.hoard_atoms = SETS;
     plane
 }
@@ -267,6 +260,80 @@ impl Scenario {
     ) -> Self {
         let actor = actor_keypair();
         let plane = smooth_plane(actor.pubkey(), degree, low, high);
+        Self::start_plane(actor, plane, 0, 0, hostile_supply).await
+    }
+
+    async fn start_external(degree: u8, external_quantity: u64, destination_amount: u64) -> Self {
+        let actor = actor_keypair();
+        let plane = smooth_plane_with_external(actor.pubkey(), degree, 4, 4, external_quantity);
+        Self::start_plane(actor, plane, external_quantity, destination_amount, None).await
+    }
+
+    async fn start_external_resolved(
+        degree: u8,
+        external_quantity: u64,
+        destination_amount: u64,
+    ) -> Self {
+        let actor = actor_keypair();
+        let plane = smooth_plane_with_external(actor.pubkey(), degree, 4, 4, external_quantity);
+        let terms = TermsAccount::decode(
+            &plane
+                .accounts
+                .iter()
+                .find(|account| account.address == plane.terms.address)
+                .expect("terms account")
+                .data,
+        )
+        .expect("terms decode");
+        let record = NativeResolutionAccount {
+            market: plane.market_id,
+            terms: terms.terms,
+            feed: terms.feed,
+            window: plane.window_id,
+            feed_cursor: 104,
+            sealed_end_bucket_exclusive: 103,
+            repair_generation: 0,
+            resolved_slot: 0,
+            mode: RESOLUTION_MODE_DERIVED_POINT,
+            payout_index: PAYOUT_INDEX_UNRESOLVED,
+            outcome_count: OUTCOMES,
+            resolved_value: 4,
+            vector: PayoutVectorBytes {
+                denominator: DENOMINATOR,
+                weights: expected_weights(degree),
+            },
+            stored_bump: plane.resolution.bump,
+            flags: 0,
+        };
+        let resolution = encode(NATIVE_RESOLUTION_LEN, |out| record.encode(out));
+        Self::start_plane(
+            actor,
+            force_resolved_plane(plane, resolution),
+            external_quantity,
+            destination_amount,
+            None,
+        )
+        .await
+    }
+
+    async fn start_custom(plane: Plane, external_quantity: u64, destination_amount: u64) -> Self {
+        Self::start_plane(
+            actor_keypair(),
+            plane,
+            external_quantity,
+            destination_amount,
+            None,
+        )
+        .await
+    }
+
+    async fn start_plane(
+        actor: Keypair,
+        plane: Plane,
+        external_quantity: u64,
+        destination_amount: u64,
+        hostile_supply: Option<(usize, u64)>,
+    ) -> Self {
         let mut test = ProgramTest::default();
         test.prefer_bpf(true);
         test.add_program("clutch_sbf", PROGRAM_ID, None);
@@ -292,11 +359,30 @@ impl Scenario {
                 },
             );
         }
+        let substitute_archive = plane
+            .accounts
+            .iter()
+            .find(|account| account.address == plane.source_archive.address)
+            .expect("source archive account")
+            .data
+            .clone();
+        test.add_account(
+            SUBSTITUTE_ARCHIVE,
+            Account {
+                lamports: Rent::default()
+                    .minimum_balance(substitute_archive.len())
+                    .max(1),
+                data: substitute_archive,
+                owner: PROGRAM_ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
         for (index, mint) in plane.outcome_mints.iter().enumerate() {
             let supply = hostile_supply
                 .filter(|(hostile, _)| *hostile == index)
                 .map(|(_, supply)| supply)
-                .unwrap_or(0);
+                .unwrap_or(if index == 0 { external_quantity } else { 0 });
             let data = outcome_mint_bytes(plane.market.address, supply);
             test.add_account(
                 mint.address,
@@ -320,12 +406,27 @@ impl Scenario {
                 rent_epoch: 0,
             },
         );
-        let actor_data = token_account_bytes(collateral_mint(), actor.pubkey(), 0);
+        let actor_data = token_account_bytes(collateral_mint(), actor.pubkey(), destination_amount);
         test.add_account(
             ACTOR_TOKEN,
             Account {
                 lamports: Rent::default().minimum_balance(actor_data.len()).max(1),
                 data: actor_data,
+                owner: TOKEN_2022,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
+        let source_data = token_account_bytes(
+            plane.outcome_mints[0].address,
+            actor.pubkey(),
+            external_quantity,
+        );
+        test.add_account(
+            OUTCOME_SOURCE,
+            Account {
+                lamports: Rent::default().minimum_balance(source_data.len()).max(1),
+                data: source_data,
                 owner: TOKEN_2022,
                 executable: false,
                 rent_epoch: 0,
@@ -357,7 +458,7 @@ impl Scenario {
                 rent_epoch: 0,
             },
         );
-        let conflict = evidence_buffer(Hash32::from_bytes([0x99; 32]), plane.feed_id, low, high);
+        let conflict = source_resolution_evidence_buffer(plane.window_id, plane.feed_id, 3, 5);
         test.add_account(
             CONFLICT_BUFFER,
             Account {
@@ -395,6 +496,8 @@ impl Scenario {
             AccountMeta::new_readonly(self.plane.terms.address, false),
             AccountMeta::new(self.plane.resolution.address, false),
             AccountMeta::new_readonly(self.plane.feed.address, false),
+            AccountMeta::new_readonly(self.plane.source_spec.address, false),
+            AccountMeta::new_readonly(self.plane.source_archive.address, false),
             AccountMeta::new_readonly(buffer, false),
         ];
         metas.extend(
@@ -441,6 +544,51 @@ impl Scenario {
         Instruction::new_with_bytes(PROGRAM_ID, &data, metas)
     }
 
+    fn external_exit(&self, quantity: u64) -> Instruction {
+        let mut metas = vec![
+            AccountMeta::new_readonly(self.actor.pubkey(), true),
+            AccountMeta::new_readonly(self.plane.profile.address, false),
+            AccountMeta::new_readonly(self.plane.market.address, false),
+            AccountMeta::new(self.plane.hoard.address, false),
+            AccountMeta::new(self.plane.kernel.address, false),
+            AccountMeta::new(self.plane.supply.address, false),
+            AccountMeta::new_readonly(self.plane.resolution.address, false),
+            AccountMeta::new_readonly(self.plane.terms.address, false),
+            AccountMeta::new_readonly(self.plane.policy_account, false),
+            AccountMeta::new_readonly(TOKEN_2022, false),
+            AccountMeta::new_readonly(collateral_mint(), false),
+            AccountMeta::new(ACTOR_TOKEN, false),
+            AccountMeta::new_readonly(self.plane.hoard_authority.address, false),
+            AccountMeta::new(self.plane.hoard_token.address, false),
+            AccountMeta::new(OUTCOME_SOURCE, false),
+        ];
+        metas.extend(
+            self.plane
+                .outcome_mints
+                .iter()
+                .enumerate()
+                .map(|(outcome, mint)| {
+                    if outcome == 0 {
+                        AccountMeta::new(mint.address, false)
+                    } else {
+                        AccountMeta::new_readonly(mint.address, false)
+                    }
+                }),
+        );
+        let data = layout_request(
+            0,
+            Intent::RedeemExternal {
+                market: self.plane.market_id,
+                claimant: Hash32::from_bytes(self.actor.pubkey().to_bytes()),
+                source: Hash32::from_bytes(OUTCOME_SOURCE.to_bytes()),
+                destination: Hash32::from_bytes(ACTOR_TOKEN.to_bytes()),
+                outcome: 0,
+                quantity,
+            },
+        );
+        Instruction::new_with_bytes(PROGRAM_ID, &data, metas)
+    }
+
     async fn try_send(&mut self, instruction: Instruction) -> (Result<(), TransactionError>, u64) {
         let blockhash = self.banks.get_latest_blockhash().await.unwrap();
         let budget = Instruction::new_with_bytes(
@@ -474,6 +622,16 @@ impl Scenario {
             .expect("account exists")
             .data
     }
+
+    async fn token_amount(&mut self, address: Address) -> u64 {
+        let data = self.data(address).await;
+        u64::from_le_bytes(data[64..72].try_into().expect("token amount field"))
+    }
+
+    async fn mint_supply(&mut self, address: Address) -> u64 {
+        let data = self.data(address).await;
+        u64::from_le_bytes(data[36..44].try_into().expect("mint supply field"))
+    }
 }
 
 fn expected_weights(degree: u8) -> [u64; MAX_OUTCOMES] {
@@ -485,6 +643,42 @@ fn expected_weights(degree: u8) -> [u64; MAX_OUTCOMES] {
         _ => panic!("test degree"),
     }
     out
+}
+
+fn exact_lot(degree: u8) -> u64 {
+    match degree {
+        1 => 2,
+        2 => 4,
+        3 => 8,
+        _ => panic!("test degree"),
+    }
+}
+
+async fn snapshot(scenario: &mut Scenario, addresses: &[Address]) -> Vec<Vec<u8>> {
+    let mut out = Vec::with_capacity(addresses.len());
+    for address in addresses {
+        out.push(scenario.data(*address).await);
+    }
+    out
+}
+
+fn force_resolved_plane(mut plane: Plane, resolution: Vec<u8>) -> Plane {
+    let market_address = plane.market.address;
+    let kernel_address = plane.kernel.address;
+    let resolution_address = plane.resolution.address;
+    let mut market = MarketAccount::decode(&account_mut(&mut plane, market_address).data).unwrap();
+    market.lifecycle = 1;
+    account_mut(&mut plane, market_address).data =
+        encode(account_len::MARKET, |out| market.encode(out));
+    let mut kernel = KernelAccount::decode(&account_mut(&mut plane, kernel_address).data).unwrap();
+    kernel.phase = 1;
+    kernel.resolved_payout = 0;
+    account_mut(&mut plane, kernel_address).data =
+        encode(clutch_solana_reference::KERNEL_ACCOUNT_LEN, |out| {
+            kernel.encode(out)
+        });
+    account_mut(&mut plane, resolution_address).data = resolution;
+    plane
 }
 
 #[tokio::test]
@@ -572,7 +766,7 @@ async fn degrees_one_through_three_persist_retry_and_redeem_the_native_vector() 
 #[tokio::test]
 async fn non_point_evidence_and_conflicting_retry_refuse_without_writes() {
     for degree in 1..=3 {
-        let mut scenario = Scenario::start(degree, 4, 5, None).await;
+        let mut scenario = Scenario::start(degree, 3, 5, None).await;
         let before = [
             scenario.data(scenario.plane.market.address).await,
             scenario.data(scenario.plane.kernel.address).await,
@@ -643,6 +837,10 @@ async fn native_account_mutability_alias_and_full_mint_vector_are_fail_closed() 
     let aliased_buffer = scenario.resolve_from(scenario.plane.feed.address);
     assert!(scenario.try_send(aliased_buffer).await.0.is_err());
 
+    let mut substituted_archive = scenario.resolve();
+    substituted_archive.accounts[9] = AccountMeta::new_readonly(SUBSTITUTE_ARCHIVE, false);
+    assert!(scenario.try_send(substituted_archive).await.0.is_err());
+
     let mut missing_mint = scenario.resolve();
     missing_mint.accounts.pop();
     assert!(scenario.try_send(missing_mint).await.0.is_err());
@@ -654,4 +852,211 @@ async fn native_account_mutability_alias_and_full_mint_vector_are_fail_closed() 
         scenario.data(scenario.plane.resolution.address).await,
     ];
     assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn native_bearer_exit_uses_minimal_exact_lots_and_sub_lots_roll_back() {
+    for degree in 1..=3 {
+        let lot = exact_lot(degree);
+        let mut scenario = Scenario::start_external_resolved(degree, lot, 0).await;
+
+        let watched = [
+            scenario.plane.hoard.address,
+            scenario.plane.kernel.address,
+            scenario.plane.supply.address,
+            scenario.plane.resolution.address,
+            scenario.plane.position.address,
+            scenario.plane.hoard_token.address,
+            ACTOR_TOKEN,
+            OUTCOME_SOURCE,
+            scenario.plane.outcome_mints[0].address,
+        ];
+        let before_sub_lot = snapshot(&mut scenario, &watched).await;
+        assert!(scenario
+            .try_send(scenario.external_exit(lot - 1))
+            .await
+            .0
+            .is_err());
+        assert_eq!(snapshot(&mut scenario, &watched).await, before_sub_lot);
+
+        let resolution_before = scenario.data(scenario.plane.resolution.address).await;
+        let position_before = scenario.data(scenario.plane.position.address).await;
+        let (result, units) = scenario.try_send(scenario.external_exit(lot)).await;
+        result.expect("minimal exact native bearer lot exits");
+        assert_eq!(scenario.token_amount(OUTCOME_SOURCE).await, 0);
+        assert_eq!(
+            scenario
+                .mint_supply(scenario.plane.outcome_mints[0].address)
+                .await,
+            0
+        );
+        assert_eq!(scenario.token_amount(ACTOR_TOKEN).await, 1);
+        assert_eq!(
+            scenario
+                .token_amount(scenario.plane.hoard_token.address)
+                .await,
+            SETS + CASH_ATOMS - 1
+        );
+        let hoard = HoardAccount::decode(&scenario.data(scenario.plane.hoard.address).await)
+            .expect("hoard decodes");
+        let supply =
+            SupplyLedgerAccount::decode(&scenario.data(scenario.plane.supply.address).await)
+                .expect("supply decodes");
+        let kernel = KernelAccount::decode(&scenario.data(scenario.plane.kernel.address).await)
+            .expect("kernel decodes");
+        assert_eq!(hoard.collateral_atoms, SETS - 1);
+        assert_eq!(supply.internal_supply[0], SETS - lot);
+        assert_eq!(supply.external_supply[0], 0);
+        assert_eq!(kernel.total_supply[0], SETS - lot);
+        assert_eq!(
+            scenario.data(scenario.plane.resolution.address).await,
+            resolution_before
+        );
+        assert_eq!(
+            scenario.data(scenario.plane.position.address).await,
+            position_before,
+            "bearer authority is positionless"
+        );
+        println!("native d{degree} external exact lot {lot}: {units} CU");
+    }
+}
+
+#[tokio::test]
+async fn a_late_native_bearer_transfer_failure_rolls_back_the_prior_burn() {
+    let lot = exact_lot(3);
+    let mut scenario = Scenario::start_external_resolved(3, lot, u64::MAX).await;
+    let watched = [
+        scenario.plane.hoard.address,
+        scenario.plane.kernel.address,
+        scenario.plane.supply.address,
+        scenario.plane.resolution.address,
+        scenario.plane.hoard_token.address,
+        ACTOR_TOKEN,
+        OUTCOME_SOURCE,
+        scenario.plane.outcome_mints[0].address,
+    ];
+    let before = snapshot(&mut scenario, &watched).await;
+    assert!(scenario
+        .try_send(scenario.external_exit(lot))
+        .await
+        .0
+        .is_err());
+    assert_eq!(snapshot(&mut scenario, &watched).await, before);
+}
+
+#[tokio::test]
+async fn native_bearer_exit_rejects_hostile_roles_modes_windows_and_mint_vectors() {
+    let lot = exact_lot(2);
+    let mut scenario = Scenario::start_external(2, lot, 0).await;
+    let unresolved_watched = [
+        scenario.plane.hoard.address,
+        scenario.plane.kernel.address,
+        scenario.plane.supply.address,
+        OUTCOME_SOURCE,
+        scenario.plane.outcome_mints[0].address,
+    ];
+    let unresolved_before = snapshot(&mut scenario, &unresolved_watched).await;
+    assert!(scenario
+        .try_send(scenario.external_exit(lot))
+        .await
+        .0
+        .is_err());
+    assert_eq!(
+        snapshot(&mut scenario, &unresolved_watched).await,
+        unresolved_before
+    );
+
+    let mut scenario = Scenario::start_external_resolved(2, lot, 0).await;
+    let resolved_before = snapshot(&mut scenario, &unresolved_watched).await;
+    let mut writable_resolution = scenario.external_exit(lot);
+    writable_resolution.accounts[6].is_writable = true;
+    assert!(scenario.try_send(writable_resolution).await.0.is_err());
+    let mut aliased_source = scenario.external_exit(lot);
+    aliased_source.accounts[14] = aliased_source.accounts[11].clone();
+    assert!(scenario.try_send(aliased_source).await.0.is_err());
+    let mut incomplete_mints = scenario.external_exit(lot);
+    incomplete_mints.accounts.pop();
+    assert!(scenario.try_send(incomplete_mints).await.0.is_err());
+    assert_eq!(
+        snapshot(&mut scenario, &unresolved_watched).await,
+        resolved_before
+    );
+
+    let actor = actor_keypair();
+    let plane = smooth_plane_with_external(actor.pubkey(), 2, 4, 4, lot);
+    let terms = TermsAccount::decode(
+        &plane
+            .accounts
+            .iter()
+            .find(|account| account.address == plane.terms.address)
+            .expect("terms account")
+            .data,
+    )
+    .expect("terms decode");
+    let preset = NativeResolutionAccount {
+        market: plane.market_id,
+        terms: terms.terms,
+        feed: terms.feed,
+        window: Hash32::from_bytes([0xa5; 32]),
+        feed_cursor: 104,
+        sealed_end_bucket_exclusive: 103,
+        repair_generation: 0,
+        resolved_slot: 0,
+        mode: RESOLUTION_MODE_PRESET,
+        payout_index: 0,
+        outcome_count: 0,
+        resolved_value: 0,
+        vector: PayoutVectorBytes::ZERO,
+        stored_bump: plane.resolution.bump,
+        flags: 0,
+    };
+    let preset_bytes = encode(NATIVE_RESOLUTION_LEN, |out| preset.encode(out));
+    let mut wrong_mode =
+        Scenario::start_custom(force_resolved_plane(plane, preset_bytes), lot, 0).await;
+    assert!(wrong_mode
+        .try_send(wrong_mode.external_exit(lot))
+        .await
+        .0
+        .is_err());
+
+    let actor = actor_keypair();
+    let plane = smooth_plane_with_external(actor.pubkey(), 2, 4, 4, lot);
+    let terms = TermsAccount::decode(
+        &plane
+            .accounts
+            .iter()
+            .find(|account| account.address == plane.terms.address)
+            .expect("terms account")
+            .data,
+    )
+    .expect("terms decode");
+    let derived = NativeResolutionAccount {
+        market: plane.market_id,
+        terms: terms.terms,
+        feed: terms.feed,
+        window: Hash32::from_bytes([0xa6; 32]),
+        feed_cursor: 104,
+        sealed_end_bucket_exclusive: 103,
+        repair_generation: 0,
+        resolved_slot: 0,
+        mode: RESOLUTION_MODE_DERIVED_POINT,
+        payout_index: PAYOUT_INDEX_UNRESOLVED,
+        outcome_count: OUTCOMES,
+        resolved_value: 4,
+        vector: PayoutVectorBytes {
+            denominator: DENOMINATOR,
+            weights: expected_weights(2),
+        },
+        stored_bump: plane.resolution.bump,
+        flags: 0,
+    };
+    let mut zero_window = encode(NATIVE_RESOLUTION_LEN, |out| derived.encode(out));
+    zero_window[98..130].fill(0);
+    let mut wrong_window =
+        Scenario::start_custom(force_resolved_plane(plane, zero_window), lot, 0).await;
+    assert!(wrong_window
+        .try_send(wrong_window.external_exit(lot))
+        .await
+        .0
+        .is_err());
 }
