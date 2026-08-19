@@ -1163,6 +1163,10 @@ where
                 next_collateral <= market.collateral_cap,
                 ClutchError::CollateralCap,
             )?;
+            position
+                .free_cash_atoms()?
+                .checked_sub(*quantity)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
             position.cash_atoms = position
                 .cash_atoms
                 .checked_sub(*quantity)
@@ -2723,6 +2727,14 @@ pub(crate) mod tests {
         base.refuses(
             &split_request(0, CASH_ATOMS + 1),
             "cash underflow",
+            Class::Arithmetic,
+        );
+
+        // Reserved order cash is part of total cash but is not available to
+        // mint another complete set.
+        base.refuses(
+            &split_request(0, CASH_ATOMS - RESERVED_CASH_ATOMS + 1),
+            "reserved cash cannot fund split",
             Class::Arithmetic,
         );
 

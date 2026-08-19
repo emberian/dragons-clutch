@@ -4,14 +4,12 @@
 //! stages the complete Position/reservation transition before any byte is
 //! written, so tests can assert exact pre-state preservation on every refusal.
 
-#![allow(dead_code)] // removed when the following account-plane commit calls this seam
-
-use crate::accounts::{require, Outcome};
+use crate::accounts::{require, EpochFacts, Outcome};
 use crate::error::{ClutchError, Refusal};
 use clutch_kernel::Error as KernelError;
 use clutch_solana_layout::{
     reservation::{ReservationAccount, ReservationPlan, RESERVATION_STATE_ACTIVE},
-    EpochAccount, Hash32, OrderSlot, PositionAccount, EPOCH_PHASE_OPEN, MAX_OUTCOMES,
+    Hash32, OrderSlot, PositionAccount, EPOCH_PHASE_OPEN, MAX_OUTCOMES,
 };
 
 /// Immutable facts authenticated from the open Epoch and page header.
@@ -30,8 +28,7 @@ pub(super) struct ReservationDomain {
 }
 
 impl ReservationDomain {
-    #[allow(dead_code)] // production account-plane integration follows this codec commit
-    pub fn from_epoch(epoch: &EpochAccount, page_index: u16) -> Self {
+    pub fn from_epoch(epoch: &EpochFacts, page_index: u16) -> Self {
         Self {
             market: epoch.market,
             epoch: epoch.epoch,
@@ -76,7 +73,7 @@ pub(super) fn prepare_placement(
         ClutchError::MismatchedState,
     )?;
     require(
-        input.slot.generation() > 0 && slot_expiry(&input.slot)? >= input.domain.epoch_index,
+        slot_expiry(&input.slot)? >= input.domain.epoch_index,
         ClutchError::MismatchedState,
     )?;
 
@@ -192,6 +189,24 @@ pub(super) fn prepare_release(
     let next_reservation = reservation.released(input.release_generation)?;
     next_position.validate()?;
     Ok((next_position, next_reservation))
+}
+
+/// Apply a fully staged release to caller-owned account values.
+///
+/// Kept out of line for SBF: returning both fixed-width post-states directly
+/// into the account-plane frame keeps their old and new copies live together
+/// and exceeds the 4 KiB frame limit.  This function computes the same pure
+/// transition first and mutates its inputs only after every check succeeds.
+#[inline(never)]
+pub(super) fn apply_release(
+    position: &mut PositionAccount,
+    reservation: &mut ReservationAccount,
+    input: &ReleaseInput,
+) -> Outcome<()> {
+    let (next_position, next_reservation) = prepare_release(position, reservation, input)?;
+    *position = next_position;
+    *reservation = next_reservation;
+    Ok(())
 }
 
 fn slot_expiry(slot: &OrderSlot) -> Outcome<u64> {

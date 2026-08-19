@@ -10,16 +10,17 @@
 //!
 //! | intent | this wave |
 //! | --- | --- |
-//! | `PlaceOrder` | **implemented**, both order families: the v2 wire carries an `OrderSlot` |
-//! | `CancelOrder` | **implemented**: the v4 page retires an order in place (§ *Cancellation*) |
+//! | `PlaceOrder` | **implemented**, both order families: the v3 wire carries an `OrderSlot` and signed fee cap; Position assets move into one reservation |
+//! | `CancelOrder` | **implemented**: the v4 page retires an order in place and returns only its unused reservation (§ *Cancellation*) |
 //! | `SettlePage` | **refused**: streaming fixed the frame, not the domain/persistence/reservation joins (§ *Settlement*) |
 //!
-//! Nothing here computes a clearing price, selects a candidate, or moves
-//! collateral.  A placement writes one order record into one page and updates
-//! that page's commitment; a cancellation replaces one record with a
-//! retirement and updates the same commitment.  Both are bookkeeping under a
-//! frozen codec, not economic transitions, and the collateral gap that implies
-//! is named in § *Named gaps*.
+//! Nothing here computes a clearing price or selects a candidate. A placement
+//! atomically writes one order record, encumbers exact free cash or moves exact
+//! internal Eggs from its owner's Position, and creates the canonical per-order
+//! reservation. A cancellation atomically tombstones that record and releases
+//! only the same reservation's unused assets. Cash remains pooled in the Hoard;
+//! the reservation owns its decomposition, and an order page alone owns no
+//! funds.
 //!
 //! ## The write path belongs to `clutch-solana-layout`
 //!
@@ -62,7 +63,7 @@
 //!
 //! ## The account lists
 //!
-//! `PlaceOrder`: four accounts, exact count, no remaining-account tail.
+//! `PlaceOrder`: eight accounts, exact count, no remaining-account tail.
 //!
 //! | index | account | role |
 //! | --- | --- | --- |
@@ -70,8 +71,12 @@
 //! | 1 | epoch | read-only; owns the phase, the outcome width, the epoch index, and the grid identity |
 //! | 2 | price grid | read-only; owns the admitted limit prices and the frozen scale |
 //! | 3 | order page | writable; the page the record is appended to |
+//! | 4 | Position | writable; owner-bound free cash and internal Eggs fund the order |
+//! | 5 | reservation | writable, initially absent; canonical PDA created for this exact order |
+//! | 6 | System program | read-only executable; creates the reservation PDA |
+//! | 7 | Rent sysvar | read-only; fixes the reservation's exact rent floor |
 //!
-//! `CancelOrder`: three, and the grid is **absent**.  A retirement has no limit
+//! `CancelOrder`: five, and the grid is **absent**.  A retirement has no limit
 //! and no lots, so nothing in the transition consults a tick vector or a price
 //! scale, and a cancellation does not re-price the records already on the page
 //! — [`clutch_solana_layout::stream::verify_page`] is precisely the reader that
@@ -82,6 +87,8 @@
 //! | 0 | actor | signer; its key must be the retired record's `owner` |
 //! | 1 | epoch | read-only; owns the phase and this market's identity |
 //! | 2 | order page | writable; the page whose slot the retired id names |
+//! | 3 | Position | writable; receives only the reservation's unused assets |
+//! | 4 | reservation | writable; exact active order reservation, released once |
 //!
 //! The market, realm, and profile accounts are deliberately **absent** from
 //! both, for the same reason [`super::observe_resolve`] omits realm and
@@ -93,7 +100,11 @@
 //! lane's.
 //!
 //! Every address is recomputed from [`crate::seeds`] out of the accounts' own
-//! decoded bytes; no caller-supplied expected key is accepted anywhere.
+//! decoded bytes; no caller-supplied expected key is accepted anywhere. The
+//! reservation PDA is derived from the domain-separated digest of `(market,
+//! epoch, owner, position generation, order id)`, while its bytes additionally
+//! bind page, order generation, Terms/basis, grid, policy, family, side, and
+//! signed maximum fee.
 //!
 //! ## The order of the checks
 //!
@@ -108,7 +119,8 @@
 //! writes differ.
 //!
 //! 1. account count, actor signature, role aliasing, program ownership, the
-//!    executable bit, declared writability, exact data lengths;
+//!    executable bit, declared writability, exact data lengths, System program,
+//!    Rent sysvar, and an actually creatable reservation target;
 //! 2. every address, against [`crate::seeds`].  The page's addressing fields
 //!    are read with [`clutch_solana_layout::stream::OrderPageHeader::decode`],
 //!    which reads the fixed 236-byte header and folds no digest, because an
@@ -143,7 +155,11 @@
 //! 11. the order id is the one the page's own state fixes
 //!     ([`clutch_solana_layout::stream::OrderPageHeader::next_order_id`]), which
 //!     is also where a full page and a frozen page refuse;
-//! 12. write, through [`clutch_solana_layout::stream::append_slot`].
+//! 12. the signer owns the canonical Position, its generation binds the
+//!     reservation identity, and the exact reservation fits its free cash or
+//!     internal Egg vector; and
+//! 13. create and encode the reservation PDA and write Position/page through
+//!     their owner codecs in the same instruction.
 //!
 //! `CancelOrder`, from there:
 //!
@@ -156,9 +172,12 @@
 //! 8. the actor is the owner the intent names;
 //! 9. the id names a populated slot **of this page**, by arithmetic
 //!    ([`clutch_solana_layout::stream::OrderPageHeader::slot_index_of`]);
-//! 10. write, through [`clutch_solana_layout::stream::write_tombstone`].
+//! 10. that live slot, Position, and active reservation agree on every frozen
+//!     identity and exact initial envelope; and
+//! 11. tombstone the slot, return only the reservation's remaining assets, and
+//!     mark it released with zero remaining assets.
 //!
-//! Steps 11 and 9 respectively are *optional*: the writers refuse the same
+//! The page prechecks at steps 11 and 9 respectively are *optional*: the writers refuse the same
 //! mismatches themselves, and they refuse them before touching a byte, so a
 //! refused transition leaves the account unchanged whether or not this module
 //! pre-checks.  They are kept because they cost no fold and they preserve this
@@ -212,13 +231,13 @@
 //!   verdict about the id rather than a verdict about the id itself — it may be
 //!   a perfectly good id on another page, and this page is not the one to say
 //!   otherwise.
-//! * **What a retirement is not.**  It is not a refund, a release of reserved
-//!   collateral, or a withdrawal: this instruction binds no position and no
-//!   hoard, exactly as a placement binds none (§ *Named gaps*).  And a
-//!   retirement sits *inside* the page-set commitment — its bytes are slot
-//!   bytes, so they are in the page digest and therefore in the order-set fold
-//!   — so it cannot be added, undone, or moved after a freeze without changing
-//!   `order_set`.
+//! * **What a retirement releases.** It returns exactly one still-active
+//!   reservation's remaining assets to the same-generation Position. It does
+//!   not debit the Hoard or infer an amount from the page alone. The retirement
+//!   sits *inside* the page-set commitment — its bytes are slot bytes, so they
+//!   are in the page digest and therefore in the order-set fold — and both page
+//!   and Epoch must still be open. A replay sees a tombstone and a released
+//!   reservation and cannot release twice.
 //!
 //! ## Settlement: the frame blocker is closed; the joins are not
 //!
@@ -239,7 +258,9 @@
 //! The instruction remains a refusal because the remaining joins are semantic,
 //! not tuning work, in this dependency order:
 //!
-//! 1. placements reserve no position/hoard collateral;
+//! 1. the complete frozen page set has no equally complete authenticated
+//!    reservation-set commitment or live-order join, so settlement cannot prove
+//!    every relation order has exactly one active funded reservation;
 //! 2. `EpochAccount.order_count` counts slots including tombstones, while the
 //!    relation candidate counts live orders; the owner codec currently refuses
 //!    both possible interpretations after a cancellation;
@@ -273,9 +294,11 @@
 //! [`clutch_solana_layout::OrderRecord`], so **a portfolio placement was not
 //! expressible at all**: a page could hold `OrderSlot::Portfolio` records and
 //! no intent could put one there.  That was a wire gap rather than an
-//! unimplemented branch, and intent v2 closes it.  `PlaceOrder` now carries an
-//! [`clutch_solana_layout::OrderSlot`], encoded as its kind byte plus that
-//! kind's *exact* body — 174 bytes single-Egg, 302 portfolio — and
+//! unimplemented branch, and intent v2 closes it. Intent v3 additionally binds
+//! `max_fee_atoms`, making the owner-signed admission envelope exact.
+//! `PlaceOrder` now carries an [`clutch_solana_layout::OrderSlot`], encoded as
+//! the shared identities, fee cap, kind byte, and that kind's *exact* body —
+//! 182 bytes single-Egg, 310 portfolio — and
 //! `MAX_INTENT_BYTES` is the wider of the two exactly rather than a round
 //! number with slack in it.
 //!
@@ -427,10 +450,15 @@ use crate::accounts::{
     self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
 };
 use crate::error::{ClutchError, Refusal};
+use crate::instructions::genesis::{
+    create_pda_account, read_rent, require_creatable, require_system_program,
+};
 use crate::seeds;
 use clutch_solana_layout::{
-    account_len, stream, CodecError, Hash32, Intent, OrderSlot, PriceGridAccount, EPOCH_PHASE_OPEN,
-    MAX_GRID_TICKS,
+    account_len,
+    reservation::{canonical_reservation_id, ReservationAccount, RESERVATION_ACCOUNT_BYTES},
+    stream, CodecError, Hash32, Intent, OrderSlot, PositionAccount, PriceGridAccount,
+    EPOCH_PHASE_OPEN, MAX_GRID_TICKS,
 };
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
@@ -456,13 +484,13 @@ macro_rules! borrow_mut {
 /* ------------------------------------------------------------------------ */
 
 /// Accounts in a `PlaceOrder` instruction, exactly.
-pub const PLACE_ORDER_ACCOUNT_COUNT: usize = 4;
+pub const PLACE_ORDER_ACCOUNT_COUNT: usize = 8;
 
 /// Accounts in a `CancelOrder` instruction, exactly.
 ///
 /// One fewer than a placement: a retirement has no limit and no lots, so the
 /// frozen price grid is not in the list at all.
-pub const CANCEL_ORDER_ACCOUNT_COUNT: usize = 3;
+pub const CANCEL_ORDER_ACCOUNT_COUNT: usize = 5;
 
 /// Authenticated actor; its key is the order's owner identity.  Both lists.
 pub const IX_ACTOR: usize = 0;
@@ -472,20 +500,35 @@ pub const IX_EPOCH: usize = 1;
 pub const IX_GRID: usize = 2;
 /// The order page the record is appended to.  `PlaceOrder`.
 pub const IX_PAGE: usize = 3;
+/// Owner Position whose free assets fund a placement. `PlaceOrder`.
+pub const IX_POSITION: usize = 4;
+/// Newly created per-order reservation account. `PlaceOrder`.
+pub const IX_RESERVATION: usize = 5;
+/// System program. `PlaceOrder`.
+pub const IX_SYSTEM: usize = 6;
+/// Rent sysvar. `PlaceOrder`.
+pub const IX_RENT: usize = 7;
 /// The order page the retirement is written into.  `CancelOrder`.
 pub const IX_CANCEL_PAGE: usize = 2;
+/// Owner Position receiving a cancellation release. `CancelOrder`.
+pub const IX_CANCEL_POSITION: usize = 3;
+/// Existing per-order reservation released by cancellation. `CancelOrder`.
+pub const IX_CANCEL_RESERVATION: usize = 4;
 
 /// Program-owned roles of `PlaceOrder`, in account-index order.
-const PLACE_ORDER_STATE_ROLES: [StateRole; 3] = [
+const PLACE_ORDER_STATE_ROLES: [StateRole; 4] = [
     StateRole::read_only(IX_EPOCH, account_len::EPOCH),
     StateRole::read_only(IX_GRID, account_len::PRICE_GRID),
     StateRole::writable(IX_PAGE, account_len::ORDER_PAGE),
+    StateRole::writable(IX_POSITION, account_len::POSITION),
 ];
 
 /// Program-owned roles of `CancelOrder`, in account-index order.
-const CANCEL_ORDER_STATE_ROLES: [StateRole; 2] = [
+const CANCEL_ORDER_STATE_ROLES: [StateRole; 4] = [
     StateRole::read_only(IX_EPOCH, account_len::EPOCH),
     StateRole::writable(IX_CANCEL_PAGE, account_len::ORDER_PAGE),
+    StateRole::writable(IX_CANCEL_POSITION, account_len::POSITION),
+    StateRole::writable(IX_CANCEL_RESERVATION, RESERVATION_ACCOUNT_BYTES),
 ];
 
 /* ------------------------------------------------------------------------ */
@@ -596,7 +639,10 @@ struct Cancellation<'a> {
 /// Every check runs before any byte is written, and the writer holds that
 /// property too, so a refusal leaves the account unchanged.  The whole write is
 /// [`stream::append_slot`]: this module computes no offset and folds no digest.
-fn apply_place_order(page: &mut [u8], placement: &Placement<'_>) -> Outcome<()> {
+fn validate_place_order(
+    page: &[u8],
+    placement: &Placement<'_>,
+) -> Outcome<stream::OrderPageHeader> {
     let epoch = accounts::read_epoch(placement.epoch)?;
     let mut grid = ZERO_GRID;
     load_grid(placement.grid, &mut grid)?;
@@ -682,7 +728,13 @@ fn apply_place_order(page: &mut [u8], placement: &Placement<'_>) -> Outcome<()> 
         ClutchError::MismatchedState,
     )?;
 
-    // 12. Slot bytes, header, and digest, in one call.
+    Ok(header)
+}
+
+#[cfg(test)]
+fn apply_place_order(page: &mut [u8], placement: &Placement<'_>) -> Outcome<()> {
+    validate_place_order(page, placement)?;
+    // Slot bytes, header, and digest, in one call.
     stream::append_slot(page, placement.slot)?;
     Ok(())
 }
@@ -693,7 +745,10 @@ fn apply_place_order(page: &mut [u8], placement: &Placement<'_>) -> Outcome<()> 
 /// id, moves only `tombstone_count` and the page digest, and refuses a slot
 /// that is not a live record of this owner — which is what makes a replayed
 /// cancellation refuse on state rather than on a caller's assertion.
-fn apply_cancel_order(page: &mut [u8], cancellation: &Cancellation<'_>) -> Outcome<()> {
+fn validate_cancel_order(
+    page: &[u8],
+    cancellation: &Cancellation<'_>,
+) -> Outcome<(stream::OrderPageHeader, OrderSlot)> {
     let epoch = accounts::read_epoch(cancellation.epoch)?;
 
     /* 3. The whole pre-state.  No grid: a retirement carries no limit and no
@@ -736,9 +791,32 @@ fn apply_cancel_order(page: &mut [u8], cancellation: &Cancellation<'_>) -> Outco
      * than by a search.  `write_tombstone` asks the same question again and
      * refuses it identically; the pre-check is kept for the same reason the
      * placement's is. */
-    header.slot_index_of(cancellation.intent.order_id)?;
+    let wanted = header.slot_index_of(cancellation.intent.order_id)?;
 
-    // 10. Retire in place: slot bytes, `tombstone_count`, and the digest.
+    let mut cursor = stream::OrderSlotCursor::new(page)?;
+    let mut live_slot = OrderSlot::Empty;
+    let mut index = 0usize;
+    while let Some(slot) = cursor.next_slot() {
+        let slot = slot?;
+        if index == wanted {
+            live_slot = slot;
+            break;
+        }
+        index += 1;
+    }
+    if !live_slot.is_live()
+        || live_slot.order_id() != cancellation.intent.order_id
+        || live_slot.owner() != cancellation.intent.owner
+    {
+        return Err(CodecError::MismatchedBinding.into());
+    }
+
+    Ok((header, live_slot))
+}
+
+fn apply_cancel_order(page: &mut [u8], cancellation: &Cancellation<'_>) -> Outcome<()> {
+    validate_cancel_order(page, cancellation)?;
+    // Retire in place: slot bytes, `tombstone_count`, and the digest.
     stream::write_tombstone(
         page,
         cancellation.intent.order_id,
@@ -754,7 +832,11 @@ fn apply_cancel_order(page: &mut [u8], cancellation: &Cancellation<'_>) -> Outco
 
 /// Validate hostile accounts and apply exactly one batch-plane transition.
 pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request) -> Outcome<()> {
-    match request.action {
+    /* Match through the borrowed envelope.  `Intent::PlaceOrder` carries a
+     * full fixed-width portfolio slot; copying the whole Action into this
+     * router made its SBF frame 4,736 bytes.  The family handlers own the one
+     * copy they actually need, while this frame carries references only. */
+    match &request.action {
         Action::Layout(Intent::PlaceOrder {
             market,
             epoch,
@@ -766,7 +848,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             request.sequence,
             market,
             epoch,
-            max_fee_atoms,
+            *max_fee_atoms,
             slot,
         ),
         Action::Layout(Intent::CancelOrder {
@@ -779,12 +861,12 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             program_id,
             accounts,
             request.sequence,
-            &Retirement {
-                market,
-                epoch,
-                owner,
-                order_id,
-                generation,
+            Retirement {
+                market: *market,
+                epoch: *epoch,
+                owner: *owner,
+                order_id: *order_id,
+                generation: *generation,
             },
         ),
         /* Refused for ranked semantic reasons, not for a schedule: see the
@@ -800,20 +882,24 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
 }
 
 /// The `PlaceOrder` account plane.
+#[inline(never)]
 fn place_order(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
     sequence: u64,
-    intent_market: Hash32,
-    intent_epoch: Hash32,
+    intent_market: &Hash32,
+    intent_epoch: &Hash32,
     max_fee_atoms: u64,
-    slot: OrderSlot,
+    slot: &OrderSlot,
 ) -> Outcome<()> {
-    let _ = max_fee_atoms;
     require_count(accounts, PLACE_ORDER_ACCOUNT_COUNT)?;
     require_signer(&accounts[IX_ACTOR])?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &PLACE_ORDER_STATE_ROLES)?;
+    require(accounts[IX_ACTOR].is_writable, ClutchError::NotWritable)?;
+    require_system_program(&accounts[IX_SYSTEM])?;
+    require_creatable(&accounts[IX_RESERVATION])?;
+    let rent = read_rent(&accounts[IX_RENT])?;
 
     /* Addresses, recomputed from the frozen seed schema out of each account's
      * own decoded bytes.  The epoch's identity is itself derived from
@@ -826,6 +912,7 @@ fn place_order(
         let data = accounts[IX_PAGE].data.borrow();
         stream::OrderPageHeader::decode(&data)?
     };
+    let position = PositionAccount::decode(&accounts[IX_POSITION].data.borrow())?;
     expect_pda(
         accounts[IX_EPOCH].key,
         seeds::epoch_pda(program_id, &epoch.market.bytes(), epoch.epoch_index),
@@ -845,31 +932,101 @@ fn place_order(
         ),
         Some(page_header.stored_bump),
     )?;
+    expect_pda(
+        accounts[IX_POSITION].key,
+        seeds::position_pda(
+            program_id,
+            &position.market.bytes(),
+            &position.owner.bytes(),
+        ),
+        Some(position.stored_bump),
+    )?;
 
-    let epoch_data = accounts[IX_EPOCH].data.borrow();
-    let grid_data = accounts[IX_GRID].data.borrow();
-    let placement = Placement {
-        epoch: &epoch_data,
-        grid: &grid_data,
-        actor: Hash32::from_bytes(accounts[IX_ACTOR].key.to_bytes()),
-        sequence,
-        intent_market,
-        intent_epoch,
-        slot,
+    let reservation_id = canonical_reservation_id(
+        epoch.market,
+        epoch.epoch,
+        position.owner,
+        position.generation,
+        slot.order_id(),
+    );
+    let reservation_bytes = reservation_id.bytes();
+    let (reservation_address, reservation_bump) =
+        seeds::reservation_pda(program_id, &reservation_bytes);
+    expect_pda(
+        accounts[IX_RESERVATION].key,
+        (reservation_address, reservation_bump),
+        None,
+    )?;
+
+    let actor = Hash32::from_bytes(accounts[IX_ACTOR].key.to_bytes());
+    let (next_position, reservation) = {
+        let epoch_data = accounts[IX_EPOCH].data.borrow();
+        let grid_data = accounts[IX_GRID].data.borrow();
+        let page_data = accounts[IX_PAGE].data.borrow();
+        let placement = Placement {
+            epoch: &epoch_data,
+            grid: &grid_data,
+            actor,
+            sequence,
+            intent_market: *intent_market,
+            intent_epoch: *intent_epoch,
+            slot: *slot,
+        };
+        validate_place_order(&page_data, &placement)?;
+        reservation::prepare_placement(
+            &position,
+            &reservation::PlacementInput {
+                actor,
+                domain: reservation::ReservationDomain::from_epoch(&epoch, page_header.page_index),
+                slot: *slot,
+                max_fee_atoms,
+                reservation_bump,
+            },
+        )?
     };
-    let mut page_data = borrow_mut!(accounts[IX_PAGE])?;
-    apply_place_order(&mut page_data, &placement)
+
+    create_pda_account(
+        program_id,
+        &accounts[IX_ACTOR],
+        &accounts[IX_RESERVATION],
+        &accounts[IX_SYSTEM],
+        &rent,
+        RESERVATION_ACCOUNT_BYTES,
+        &[
+            seeds::SEED_RESERVATION,
+            &reservation_bytes,
+            &[reservation_bump],
+        ],
+    )?;
+
+    {
+        /* The System CPI receives neither page nor Position, so it cannot
+         * invalidate the verdict staged above. `append_slot` still performs
+         * the layout owner's complete page validation before writing; rerunning
+         * this module's epoch/grid admission after the CPI only repeated two
+         * immutable decodes and one full page fold. */
+        let mut page_data = borrow_mut!(accounts[IX_PAGE])?;
+        stream::append_slot(&mut page_data, *slot)?;
+    }
+    {
+        let mut position_data = borrow_mut!(accounts[IX_POSITION])?;
+        next_position.encode(&mut position_data)?;
+    }
+    let mut reservation_data = borrow_mut!(accounts[IX_RESERVATION])?;
+    reservation.encode(&mut reservation_data)?;
+    Ok(())
 }
 
 /// The `CancelOrder` account plane.
 ///
-/// The same shape as [`place_order`] with the grid role removed: three
-/// accounts, two program-owned, two derived addresses.
+/// Cancellation reads no grid account: its reservation has already frozen the
+/// grid and the Epoch still authenticates that identity.
+#[inline(never)]
 fn cancel_order(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
     sequence: u64,
-    intent: &Retirement,
+    intent: Retirement,
 ) -> Outcome<()> {
     require_count(accounts, CANCEL_ORDER_ACCOUNT_COUNT)?;
     require_signer(&accounts[IX_ACTOR])?;
@@ -881,6 +1038,9 @@ fn cancel_order(
         let data = accounts[IX_CANCEL_PAGE].data.borrow();
         stream::OrderPageHeader::decode(&data)?
     };
+    let mut position = PositionAccount::decode(&accounts[IX_CANCEL_POSITION].data.borrow())?;
+    let mut reservation_account =
+        ReservationAccount::decode(&accounts[IX_CANCEL_RESERVATION].data.borrow())?;
     expect_pda(
         accounts[IX_EPOCH].key,
         seeds::epoch_pda(program_id, &epoch.market.bytes(), epoch.epoch_index),
@@ -895,16 +1055,62 @@ fn cancel_order(
         ),
         Some(page_header.stored_bump),
     )?;
+    expect_pda(
+        accounts[IX_CANCEL_POSITION].key,
+        seeds::position_pda(
+            program_id,
+            &position.market.bytes(),
+            &position.owner.bytes(),
+        ),
+        Some(position.stored_bump),
+    )?;
+    expect_pda(
+        accounts[IX_CANCEL_RESERVATION].key,
+        seeds::reservation_pda(program_id, &reservation_account.reservation.bytes()),
+        Some(reservation_account.stored_bump),
+    )?;
 
-    let epoch_data = accounts[IX_EPOCH].data.borrow();
-    let cancellation = Cancellation {
-        epoch: &epoch_data,
-        actor: Hash32::from_bytes(accounts[IX_ACTOR].key.to_bytes()),
-        sequence,
-        intent: *intent,
-    };
-    let mut page_data = borrow_mut!(accounts[IX_CANCEL_PAGE])?;
-    apply_cancel_order(&mut page_data, &cancellation)
+    let actor = Hash32::from_bytes(accounts[IX_ACTOR].key.to_bytes());
+    {
+        let epoch_data = accounts[IX_EPOCH].data.borrow();
+        let page_data = accounts[IX_CANCEL_PAGE].data.borrow();
+        let cancellation = Cancellation {
+            epoch: &epoch_data,
+            actor,
+            sequence,
+            intent,
+        };
+        let (_header, live_slot) = validate_cancel_order(&page_data, &cancellation)?;
+        reservation::apply_release(
+            &mut position,
+            &mut reservation_account,
+            &reservation::ReleaseInput {
+                actor,
+                domain: reservation::ReservationDomain::from_epoch(&epoch, page_header.page_index),
+                live_slot,
+                release_generation: sequence,
+            },
+        )?;
+    }
+
+    {
+        let epoch_data = accounts[IX_EPOCH].data.borrow();
+        let cancellation = Cancellation {
+            epoch: &epoch_data,
+            actor,
+            sequence,
+            intent,
+        };
+        let mut page_data = borrow_mut!(accounts[IX_CANCEL_PAGE])?;
+        apply_cancel_order(&mut page_data, &cancellation)?;
+    }
+    {
+        let mut position_data = borrow_mut!(accounts[IX_CANCEL_POSITION])?;
+        position.encode(&mut position_data)?;
+    }
+    let mut reservation_data = borrow_mut!(accounts[IX_CANCEL_RESERVATION])?;
+    reservation_account.encode(&mut reservation_data)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2024,11 +2230,11 @@ mod tests {
 
     #[test]
     fn the_place_order_wire_carries_both_order_families() {
-        /* `Intent::PlaceOrder` carries an `OrderSlot` at intent v2, so the
-         * portfolio family is expressible: 174 bytes single-Egg and 302
-         * portfolio, the kind byte plus that kind's exact body and none of the
-         * padding a page slot carries.  The v1 wire could carry only the
-         * narrower of the two, which is the gap this closes. */
+        /* `Intent::PlaceOrder` carries an `OrderSlot` and, at intent v3, an
+         * exact fee ceiling.  The portfolio family is expressible: 182 bytes
+         * single-Egg and 310 portfolio, the shared fields, fee ceiling, kind
+         * byte, and that kind's exact body with none of a page slot's padding.
+         * The v1 wire could carry only the narrower family. */
         let market = h(1);
         let epoch = canonical_epoch_id(market, 4);
         let single = Intent::PlaceOrder {
@@ -2043,10 +2249,13 @@ mod tests {
             max_fee_atoms: 0,
             slot: OrderSlot::Portfolio(portfolio(0x20, 1)),
         };
-        assert_eq!(single.encoded_len(), 2 + 32 + 32 + 1 + ORDER_RECORD_BYTES);
+        assert_eq!(
+            single.encoded_len(),
+            2 + 32 + 32 + 8 + 1 + ORDER_RECORD_BYTES
+        );
         assert_eq!(
             basket.encoded_len(),
-            2 + 32 + 32 + 1 + PORTFOLIO_RECORD_BYTES
+            2 + 32 + 32 + 8 + 1 + PORTFOLIO_RECORD_BYTES
         );
 
         for intent in [single, basket] {
