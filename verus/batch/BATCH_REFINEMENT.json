@@ -2,10 +2,10 @@
   "schema": 1,
   "status": "checked-mathematical-shadow",
   "property_id": "P-BATCH-SCALAR-SHADOW-01",
-  "statement": "For the scalar FixedBook mathematical shadow: successful positive-total largest-remainder allocation conserves its target and bounds every fill; the max-volume/min-imbalance/highest-index rule has a unique winner on every nonempty bounded grid; accepted buy and sell folds both equal matched and partition the fill sum; canonical zero padding does not change the active-prefix fold.",
-  "statement_digest_sha256": "78b1a2ac704fd21881c93b1e4d88cc7d9543e05a227fac8b1f35b79646a2812a",
+  "statement": "For the scalar FixedBook mathematical shadow: quotient floors and a caller-supplied selected mask decompose into floor sum plus selection count and have per-fill bounds under a positive-remainder premise; the max-volume/min-imbalance/highest-index rule has a unique winner on every nonempty bounded grid; accepted buy/sell equality premises imply the whole fill vector partitions to twice matched; a canonical zero-suffix premise implies full-fold equals active-prefix fold.",
+  "statement_digest_sha256": "835578e71c7e5c948a9802e12986e956cae8281250324bfe9f889a0283e03852",
   "model": "verus/batch/batch.rs",
-  "model_digest_sha256": "8582df09205c96d15ab3b99818f6096d0e49849675570caf04085580e7054cf0",
+  "model_digest_sha256": "6dce0d76961a74fe3433edf5b2830366280b2393fa5c013d43e95d5b4355e052",
   "reviewed_production_source": "crates/clutch-batch/src/lib.rs",
   "reviewed_production_source_digest_sha256": "f25ce5524a71f9e8ad5200992bb69290444865243f26040906d7aa6798013249",
   "reviewed_production_seams": {
@@ -18,10 +18,10 @@
     "crates/clutch-batch/src/relation_v1_stream.rs": "c196c096c75adfb85397eda5e5d905dde89349ab06512e5ad02d345d75fbf358"
   },
   "theorems": [
-    "allocate_conserves",
+    "allocation_decomposes_and_bounds",
     "choose_tick_deterministic",
-    "relation_conserves",
-    "canonical_padding_zero"
+    "accepted_sides_partition_whole_fill",
+    "canonical_padding_fold_identity"
   ],
   "tool": {
     "name": "Verus",
@@ -35,43 +35,43 @@
     "vstd_vir_digest_sha256": "3061321483841360c760fa3fb38b22be57533052cf2100eb51956aa31205fa7d"
   },
   "configuration": "verus/batch/run_batch_proofs.sh",
-  "configuration_digest_sha256": "37186e5d9f7c8bdcdd26dc88a895f4d3ea4d7109096f4d52c0d56d497fed31b0",
+  "configuration_digest_sha256": "ea64c4dd0b2cc651772069b4bd01188e21c3dceb8629479cba6bbc1178fa46e9",
   "result": "PASS: verification results:: 20 verified, 0 errors",
   "assumption_manifest": "verus/batch/BATCH_ASSUMPTIONS.md",
-  "assumption_manifest_digest_sha256": "cbee7e392c20c1341f14798ec1b18161748748f66acb781d2799a0e7f95f022d",
+  "assumption_manifest_digest_sha256": "00db7123c9fa324a1bbe8f345270e8a741867781966a0564725508df3dc73776",
   "proof_log": "verus/batch/evidence/batch_proofs.txt",
-  "proof_log_digest_sha256": "e35d4e562541981c93b4f19de1d419078e9241b9b4af466bedcbba66bf4c5f1f",
+  "proof_log_digest_sha256": "419ea16d9c75c4ac28f2171b5a0e9cf6dd719d085d576f717c0ace8eeaf4e011",
   "checked_date": "2026-08-19",
   "reproduction_command": "sh verus/batch/run_batch_proofs.sh",
   "mutations": [
     {
-      "id": "allocation-double-dust",
+      "id": "allocation-double-selected-atom",
       "edit": "one selected entry receives two atoms instead of one",
-      "result": "EXPECTED_RED: proof obligation"
+      "result": "EXPECTED_RED: postcondition"
     },
     {
       "id": "tick-select-worse",
       "edit": "the scan tests the previous winner against the challenger but still selects the challenger",
-      "result": "EXPECTED_RED: proof obligation"
+      "result": "EXPECTED_RED: invariant obligation"
     },
     {
       "id": "relation-double-count",
       "edit": "each side fold includes entries from both sides",
-      "result": "EXPECTED_RED: proof obligation"
+      "result": "EXPECTED_RED: postcondition"
     },
     {
       "id": "padding-admit-nonzero",
       "edit": "canonical padding admits nonnegative rather than zero suffixes",
-      "result": "EXPECTED_RED: proof obligation"
+      "result": "EXPECTED_RED: zero-premise obligation"
     }
   ],
   "project_assumptions_or_axioms": [],
   "known_unclosed_boundaries": [
     "the production Rust body is digest-pinned and manually mapped, not imported into Verus",
-    "the dust loop's existence/progress and distinct positive-remainder selection are theorem premises, not proved from the quotient phase",
+    "the dust loop's existence/progress and completed selection count are not proved; positive remainder of caller-selected entries is a theorem premise",
     "unbounded mathematical integers are mapped manually to checked u64 totals and widened u128 products",
     "score construction and the production choose_tick loop are not refined instruction-by-instruction",
-    "inactive scalar Order fields other than canonical_order_id are not required to be zero by production validation",
+    "canonical zero suffix is a theorem premise, not a theorem about production validation; inactive scalar Order fields other than canonical_order_id are not required to be zero",
     "relation_v1, relation_v1_stream, pairing, portfolio, AON, Solana/SBF, serialization, accounts, and deployment are excluded"
   ]
 }

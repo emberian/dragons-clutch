@@ -3,7 +3,9 @@ verus_commit=7d4628a8543d3e51e6e314c52032c9bab43f0f53
 verus_toolchain=1.97.1-aarch64-apple-darwin
 verus_binary_sha256=07b3859fc335fd9bf803323baf82584dcefb62d74329561875353f5fde93fe8b
 z3_binary_sha256=edae32f9e37ea4b5bb35310d72f0e352d0dc07626cac4e9e30bc1ea9a5bc8efb
-proof_source_sha256=8582df09205c96d15ab3b99818f6096d0e49849675570caf04085580e7054cf0
+vstd_rlib_sha256=91f842643674660a1da8799eda3eceaa37e5816682d026b3d860bc59a81be61c
+vstd_vir_sha256=3061321483841360c760fa3fb38b22be57533052cf2100eb51956aa31205fa7d
+proof_source_sha256=6dce0d76961a74fe3433edf5b2830366280b2393fa5c013d43e95d5b4355e052
 scalar_production_source_sha256=f25ce5524a71f9e8ad5200992bb69290444865243f26040906d7aa6798013249
 price_grid_impl_sha256=216ad4b7db7967c71206043a1b7775ef0a25df09e8c64329d8a8ff163fb11ae9
 fixed_book_impl_sha256=6d41c75a1218aa4485730fdf4526143b9b370d364d14535bb5d52c74c51b3c16
@@ -12,11 +14,11 @@ excluded_coupled_relation_sha256=f95b4931414386f109ef52b844616f86f11e21121d6f9ef
 excluded_stream_relation_sha256=c196c096c75adfb85397eda5e5d905dde89349ab06512e5ad02d345d75fbf358
 command=verus --crate-name clutch_batch_shadow --edition 2021 --crate-type=lib verus/batch/batch.rs
 verification results:: 20 verified, 0 errors
-mutation=allocation-double-dust status=EXPECTED_RED reason=proof-obligation
-mutation=tick-select-worse status=EXPECTED_RED reason=proof-obligation
-mutation=relation-double-count status=EXPECTED_RED reason=proof-obligation
-mutation=padding-admit-nonzero status=EXPECTED_RED reason=proof-obligation
+mutation=allocation-double-selected-atom status=EXPECTED_RED reason=postcondition
+mutation=tick-select-worse status=EXPECTED_RED reason=invariant-obligation
+mutation=relation-double-count status=EXPECTED_RED reason=postcondition
+mutation=padding-admit-nonzero status=EXPECTED_RED reason=zero-premise-obligation
 status=PASS
-claim=mathematical scalar FixedBook shadow; four named theorems
+claim=scalar shadow: allocation decomposition/bounds, unique tick, accepted-side partition, zero-suffix fold identity
 boundary=digest-pinned correspondence review only; production body is not imported by Verus
 excluded=relation_v1 relation_v1_stream Solana SBF accounts serialization deployment

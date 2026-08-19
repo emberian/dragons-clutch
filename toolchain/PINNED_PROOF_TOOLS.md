@@ -210,14 +210,16 @@ runner.
 | `verus/accumulator/accumulator.rs` | 4 × `E0308`: `int`-typed sums returned from `u64`/`u128` spec fns (lines 71, 75, 79, 83) |
 | `verus/batch/batch.rs` | PASS: `20 verified, 0 errors`; four semantic mutants are required to go red |
 
-The batch result proves a mathematical scalar-`FixedBook` shadow: successful
-positive-total allocation conservation and bounds, unique lexicographic tick
-choice, equality of accepted buy/sell folds, and zero-padding fold identity.
-It is not an executable-body refinement. The runner pins the shadow and the
-reviewed production implementations, while
-`verus/batch/BATCH_ASSUMPTIONS.md` records the human correspondence, the
-successful-allocation premises, and the explicit exclusion of coupled
-`relation_v1` and `relation_v1_stream`. Reproduce with:
+The batch result proves a mathematical scalar-`FixedBook` shadow: quotient and
+selected-mask allocation decomposition with per-fill bounds under stated
+premises, unique lexicographic tick choice, whole-fill partition from accepted
+side-equality premises, and fold identity from a zero-suffix premise. It does
+not derive production dust-loop progress, the accepted side equalities, or the
+padding premise, and is not an executable-body refinement. The runner pins the
+shadow, both shipped vstd artifacts, and the reviewed production
+implementations, while `verus/batch/BATCH_ASSUMPTIONS.md` records the human
+correspondence, premise/conclusion boundary, dust-loop STOPs, and explicit
+exclusion of coupled `relation_v1` and `relation_v1_stream`. Reproduce with:
 
 ```sh
 sh verus/batch/run_batch_proofs.sh

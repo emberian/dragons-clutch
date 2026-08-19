@@ -237,11 +237,11 @@ proof fn selected_floor_has_room(quantity: int, target: int, total: int)
     lemma_multiply_divide_lt(quantity * target, total, quantity);
 }
 
-/// Successful largest-remainder finalization conserves the target and never
-/// exceeds an eligible order's quantity.  `selected[i]` models the production
-/// dust loop having chosen `i` once; the success seam supplies the exact dust
-/// count and requires every chosen entry to have positive remainder.
-pub proof fn allocate_conserves(
+/// Decompose quotient floors plus a caller-supplied one-shot selection mask,
+/// and bound each modeled fill.  The positive-remainder condition on selected
+/// entries is a premise; this theorem does not prove production dust-loop
+/// progress, its completed selection count, or its choice of those entries.
+pub proof fn allocation_decomposes_and_bounds(
     quantities: Seq<int>,
     selected: Seq<bool>,
     target: int,
@@ -254,12 +254,13 @@ pub proof fn allocate_conserves(
         0 <= target <= total,
         forall|i: int| 0 <= i < quantities.len() ==> 0 <= quantities[i],
         prefix_sum(quantities, quantities.len()) == total,
-        count_selected(selected, selected.len())
-            == target - floor_sum(quantities, target, total, quantities.len()),
         forall|i: int| 0 <= i < selected.len() && #[trigger] selected[i]
             ==> (quantities[i] * target) % total > 0,
     ensures
-        allocation_sum(quantities, selected, target, total, quantities.len()) == target,
+        floor_sum(quantities, target, total, quantities.len()) <= target,
+        allocation_sum(quantities, selected, target, total, quantities.len())
+            == floor_sum(quantities, target, total, quantities.len())
+                + count_selected(selected, selected.len()),
         forall|i: int| 0 <= i < quantities.len()
             ==> 0 <= #[trigger] allocated_fill(quantities, selected, target, total, i)
                 <= quantities[i],
@@ -478,10 +479,10 @@ proof fn side_sums_partition(
     }
 }
 
-/// The successful verifier seam: the candidate's claimed `matched` field has
-/// already been checked against `min(buy_total, sell_total)`, and these are the
-/// two recomputed fill folds checked immediately afterwards.
-pub open spec fn relation_accepts(
+/// Premises extracted from the successful verifier seam: the claimed
+/// `matched` field and both recomputed side folds have already passed their
+/// production equality checks.  This predicate is not a derived theorem.
+pub open spec fn accepted_side_equalities(
     buy_side: Seq<bool>,
     fills: Seq<int>,
     len: nat,
@@ -495,18 +496,19 @@ pub open spec fn relation_accepts(
         && side_sum(buy_side, fills, len, false) == matched
 }
 
-/// Accepted fills conserve the selected relation quantity on both sides; the
-/// partition lemma additionally connects the side folds to the whole vector.
-pub proof fn relation_conserves(
+/// Given the two accepted side equalities as premises, derive only the
+/// whole-fill partition identity and its `2 * matched` consequence.
+pub proof fn accepted_sides_partition_whole_fill(
     buy_side: Seq<bool>,
     fills: Seq<int>,
     len: nat,
     matched: int,
 )
-    requires relation_accepts(buy_side, fills, len, matched)
+    requires accepted_side_equalities(buy_side, fills, len, matched)
     ensures
-        side_sum(buy_side, fills, len, true) == matched,
-        side_sum(buy_side, fills, len, false) == matched,
+        prefix_sum(fills, len)
+            == side_sum(buy_side, fills, len, true)
+                + side_sum(buy_side, fills, len, false),
         prefix_sum(fills, len) == 2 * matched,
 {
     side_sums_partition(buy_side, fills, len);
@@ -535,14 +537,13 @@ proof fn zero_padding_does_not_change_sum(
     }
 }
 
-/// Canonical validation forces every inactive numeric slot to zero and makes
-/// a full-array fold identical to the active-prefix fold.
-pub proof fn canonical_padding_zero(values: Seq<int>, active_len: nat)
+/// Under the `canonical_padding` zero-suffix premise, a full-array fold is
+/// identical to the active-prefix fold.  Production validation is not proved.
+pub proof fn canonical_padding_fold_identity(values: Seq<int>, active_len: nat)
     requires
         values.len() <= max_orders(),
         canonical_padding(values, active_len),
     ensures
-        forall|i: int| active_len <= i < values.len() ==> values[i] == 0,
         prefix_sum(values, values.len()) == prefix_sum(values, active_len),
 {
     zero_padding_does_not_change_sum(values, active_len, values.len());
