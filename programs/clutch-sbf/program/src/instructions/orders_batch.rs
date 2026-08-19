@@ -456,18 +456,15 @@ use crate::accounts::{
 };
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::artifact::read_clock_slot;
-#[cfg(test)]
 use crate::instructions::direct_selection_v3::{
     create_pda_account_full_principal, direct_creation_funding, observe_direct_funding,
     DIRECT_NEUTRAL_SINK_V3, DIRECT_VERIFIER_RELEASE_ID_V3,
 };
-#[cfg(test)]
 use crate::instructions::genesis::RentParameters;
 use crate::instructions::genesis::{
     create_pda_account, read_rent, require_creatable, require_system_program,
 };
 use crate::seeds;
-#[cfg(test)]
 use clutch_solana_layout::direct_selection_v3::{
     DirectBatchPolicyV3, DirectEpochV4Account, DirectReservationV2Account,
     DIRECT_BATCH_POLICY_V3_BYTES, DIRECT_EPOCH_V4_BYTES, DIRECT_RESERVATION_V2_BYTES,
@@ -505,7 +502,6 @@ macro_rules! borrow_mut {
 /// Accounts in a `PlaceOrder` instruction, exactly.
 pub const PLACE_ORDER_ACCOUNT_COUNT: usize = 8;
 /// Accounts in the still-unrouted Direct V3 placement branch, exactly.
-#[cfg(test)]
 pub const DIRECT_V4_PLACE_ORDER_ACCOUNT_COUNT: usize = 9;
 
 /// Accounts in a `CancelOrder` instruction, exactly.
@@ -537,7 +533,6 @@ pub const IX_SYSTEM: usize = 6;
 /// Rent sysvar. `PlaceOrder`.
 pub const IX_RENT: usize = 7;
 /// Exact 96-byte epoch-bound DirectBatchPolicy V3 artifact. Direct V4 only.
-#[cfg(test)]
 pub const IX_DIRECT_V4_POLICY: usize = 8;
 /// The order page the retirement is written into.  `CancelOrder`.
 pub const IX_CANCEL_PAGE: usize = 2;
@@ -594,7 +589,6 @@ const PLACE_ORDER_STATE_ROLES: [StateRole; 3] = [
 ];
 
 /// Program-owned roles unique to the Direct V4 placement branch.
-#[cfg(test)]
 const DIRECT_V4_POLICY_ROLE: [StateRole; 1] = [StateRole::read_only(
     IX_DIRECT_V4_POLICY,
     DIRECT_BATCH_POLICY_V3_BYTES,
@@ -834,7 +828,6 @@ fn validate_place_order(
 /// This remains a branch of the existing `PlaceOrder` wire: the account
 /// version selects it, and no Direct V3 lifecycle tag is routed by this seam.
 #[allow(clippy::too_many_arguments)]
-#[cfg(test)]
 fn validate_direct_v4_place(
     page: &[u8],
     epoch: &DirectEpochV4Account,
@@ -891,6 +884,14 @@ fn validate_direct_v4_place(
         ClutchError::MismatchedState,
     )?;
     grid.tick_of(order.limit)?;
+    /* A reservation that encumbers nothing is refused at creation: with the
+     * profile's forced zero fee, a zero-limit buy would reserve zero cash and
+     * zero Eggs, and its release would be the Position no-op the release
+     * kernel's unchanged-poststate rule refuses forever. */
+    require(
+        order.side == 1 || order.limit != 0,
+        ClutchError::MismatchedState,
+    )?;
     Ok(header)
 }
 
@@ -1408,7 +1409,6 @@ fn place_order(
     max_fee_atoms: u64,
     slot: &OrderSlot,
 ) -> Outcome<()> {
-    #[cfg(test)]
     if accounts.get(IX_EPOCH).map(|account| account.data_len()) == Some(DIRECT_EPOCH_V4_BYTES) {
         return place_direct_v4_order(
             program_id,
@@ -1554,7 +1554,6 @@ fn place_order(
     Ok(())
 }
 
-#[cfg(test)]
 struct DirectV4PlaceCommit {
     reservation: DirectReservationV2Account,
     reservation_id: Hash32,
@@ -1569,7 +1568,6 @@ struct DirectV4PlaceCommit {
 /// Epoch schema, with the exact 96-byte DirectBatchPolicy artifact appended.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-#[cfg(test)]
 fn place_direct_v4_order(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -1627,7 +1625,6 @@ fn place_direct_v4_order(
     Ok(())
 }
 
-#[cfg(test)]
 struct DirectV4EconomicCommit {
     position: PositionAccount,
     reservation: DirectReservationV2Account,
@@ -1638,7 +1635,6 @@ struct DirectV4EconomicCommit {
 
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-#[cfg(test)]
 fn prepare_direct_v4_economics(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -1751,7 +1747,6 @@ fn prepare_direct_v4_economics(
 
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-#[cfg(test)]
 fn prepare_direct_v4_order(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -1845,7 +1840,6 @@ fn prepare_direct_v4_order(
 /// each typed poststate was validated by the caller. This keeps the SBF frame
 /// bounded without weakening host-level refusal atomicity.
 #[inline(never)]
-#[cfg(test)]
 fn stage_direct_v4_existing(
     accounts: &[AccountInfo],
     epoch: &DirectEpochV4Account,

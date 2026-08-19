@@ -141,7 +141,6 @@ use crate::accounts::{
 use crate::error::{ClutchError, Refusal};
 use crate::source_archive::SOURCE_SPEC_ACCOUNT_V1_BYTES;
 use crate::{seeds, token};
-#[cfg(test)]
 use clutch_solana_layout::direct_selection_v3::{
     DirectEpochV4Account, DirectFundingLedgerV3, DIRECT_EPOCH_V4_BYTES,
 };
@@ -157,7 +156,6 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::construction::{self, OwnerStateBumps, OwnerStateTargets};
-#[cfg(test)]
 use super::direct_selection_v3::{
     create_pda_account_full_principal, direct_creation_funding, observe_direct_funding,
     DIRECT_NEUTRAL_SINK_V3, DIRECT_VERIFIER_RELEASE_ID_V3,
@@ -880,7 +878,6 @@ fn init_order_page(
     sequence: u64,
     intent: &PageInit,
 ) -> Outcome<()> {
-    #[cfg(test)]
     if accounts
         .get(IX_PAGE_EPOCH)
         .map(|account| account.data_len())
@@ -959,8 +956,11 @@ fn init_order_page(
     write_empty_page(&mut data, intent, bump)
 }
 
-/// Create the sole page-zero account of an injected, still-unrouted V4 Epoch.
-#[cfg(test)]
+/// Create the sole page-zero account of a routed Direct V4 Epoch.
+///
+/// This branch is selected only by the 672-byte V4 Epoch schema, which can
+/// exist only through the routed `InitDirectEpochV4`; the legacy page path
+/// below it is byte- and behavior-stable.
 #[inline(never)]
 fn init_direct_v4_order_page(
     program_id: &Pubkey,
