@@ -1,62 +1,100 @@
-Dragon's Clutch normalized local-bank evidence capture
-capture date: 2026-08-19 America/New_York
-SBF_OUT_DIR: /Users/ember/dev/dragons-clutch/research/liveness-policy-profile/artifacts/c8ff4ac7286004cb
-ELF sha256: c8ff4ac7286004cb5d897cc92b05f7a9e386107d295cb1441adcd227e0b35138
-ELF bytes: 809824
-
-[artifact_transport/every_admitted_artifact_kind_lands_as_its_exact_raw_codec]
-policy transaction CU sequence: 13373 9297 8138 94175
-grid transaction CU sequence: 17135 15319 12631 9943 9577 107539
-test result: ok. 1 passed; 0 failed
-
-[artifact_transport/terms_upload_resumes_after_bank_rehydration_and_seals_atomically]
-terms transaction CU sequence: 23109 28757 26069 23381 12760 20330 20693 18005 15317 12629 9941 8184 18048 23109 28757 26069 23381 20693 18005 15317 12629 9941 8184 17111
-semantic positions: begin=0; successful initial writes=1..3; early-seal refusal=4; duplicate-write refusal=5; successful resumed writes=6..11; new seal=12; repeat begin=13; repeat writes=14..22; idempotent seal=23
-test result: ok. 1 passed; 0 failed
-
-[blank_bank_lifecycle/categorical_and_native_markets_construct_from_only_sealed_artifacts]
-degree 0; resolution bytes 165; CreateMarket transaction CU sample 914280
-degree 1; resolution bytes 319; CreateMarket transaction CU sample 915284
-note: ProgramTest payer generation makes these samples non-maximal; policy uses the 1400000 transaction ceiling, not either sample
-test result: ok. 1 passed; 0 failed
-
-[order_reservation/funded_orders_reserve_release_and_isolate_owners]
-PlaceOrder transaction CU: buy=598889 sell=596919
-CancelOrder transaction CU: buy=470322 sell=474995
-test result: ok. 1 passed; 0 failed
-
-[coupled_authority/prefunded_submission_is_exact_once_and_leaves_authority_frozen]
-SubmitDirectPage prefunded transaction CU: 1249371
-test result: ok. 1 passed; 0 failed
-
-[coupled_settlement/direct_full_slice_settles_once_and_substitution_rolls_back]
-SettlePage direct full-slice transaction CU: 862075
-test result: ok. 1 passed; 0 failed
-
-[collateral_leg/withdraw_pays_only_unreserved_cash_and_preserves_locked_backing]
-WithdrawCash transaction CU: 229755
-test result: ok. 1 passed; 0 failed
-
-[native_resolution/degrees_one_through_three_persist_retry_and_redeem_the_native_vector]
-d1 resolve=1092204 retry=938556 redeem_internal=708298
-d2 resolve=1130463 retry=976815 redeem_internal=705798
-d3 resolve=1165736 retry=1012088 redeem_internal=705473
-
-[native_resolution/native_bearer_exit_uses_minimal_exact_lots_and_sub_lots_roll_back]
-d1 redeem_external_exact=788047
-d2 redeem_external_exact=785347
-d3 redeem_external_exact=784552
-native_resolution test result: ok. 7 passed; 0 failed
-
-[native_full_lifecycle/blank_bank_native_degrees_one_through_three_reach_zero_hoard]
-d1 create=1081504 endow=294841 split=276413 materialize=154683 resolve=1076536 redeem_external=773047 redeem_internal=697790 withdraw=294703
-d2 create=1072104 endow=294841 split=276413 materialize=154683 resolve=1107963 redeem_external=762847 redeem_internal=687790 withdraw=294703
-d3 create=1074689 endow=294841 split=276413 materialize=154683 resolve=1144736 redeem_external=763552 redeem_internal=688965 withdraw=294703
-native_full_lifecycle test result: ok. 1 passed; 0 failed
-
-[source_archive]
-host tests: 4 passed; 0 failed
-SourceSpec bytes=292 default-rent lamports=2923200
-SourceArchive bytes=2560 default-rent lamports=18708480
-standalone routed creation/append/seal CU: UNMEASURED (no such production instruction)
-archive authentication cost is included in each native Resolve/retry sample above
+{
+  "schema": "dragons-clutch/liveness-bank-capture/v2",
+  "capture_date": "2026-08-19",
+  "runtime_ref": "7e8f6b1714c3c97a31a4250ecd19f87041433c2d",
+  "evidence_ref": "316c620c8c618142fc3a21964052bcb42c4336b6",
+  "artifact": {
+    "path": "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/clutch_sbf.so",
+    "sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+    "bytes": 1228192,
+    "source_ref": "7e8f6b1714c3c97a31a4250ecd19f87041433c2d",
+    "profile": "default-empty-registry"
+  },
+  "measurements": {
+    "resolution_work": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "fold_widths": [1, 2, 3, 4],
+      "begin_cu": [807676, 805308, 810992, 807674, 805860],
+      "fold_1_cu": [804616, 802253],
+      "fold_2_cu": [809225, 812193],
+      "fold_3_cu": [813128],
+      "fold_4_cu": [815573],
+      "finalize_cu": [1094832],
+      "abort_cu": [587197],
+      "monolithic_v4_cu": [1253326],
+      "test_result": "PASS_4_OF_4"
+    },
+    "native_point_v3": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "degree_rows": [
+        {"degree": 1, "resolve_cu": 1088267, "retry_cu": 934622, "internal_redeem_cu": 775978},
+        {"degree": 2, "resolve_cu": 1096640, "retry_cu": 942995, "internal_redeem_cu": 778021},
+        {"degree": 3, "resolve_cu": 1103534, "retry_cu": 949889, "internal_redeem_cu": 776411}
+      ],
+      "test_result": "PASS"
+    },
+    "native_bearer_redeem": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "degree_rows": [
+        {"degree": 1, "external_redeem_cu": 785073},
+        {"degree": 2, "external_redeem_cu": 786873},
+        {"degree": 3, "external_redeem_cu": 784578}
+      ],
+      "test_result": "PASS"
+    },
+    "occupation_v4": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "degree_rows": [
+        {"degree": 1, "initial_cu": 1243529, "retry_cu": 1089893, "internal_redeem_cu": 774692, "external_redeem_cu": 783711},
+        {"degree": 2, "initial_cu": 1254699, "retry_cu": 1101063, "internal_redeem_cu": 776735, "external_redeem_cu": 785511},
+        {"degree": 3, "initial_cu": 1268630, "retry_cu": 1114994, "internal_redeem_cu": 779625, "external_redeem_cu": 787716}
+      ],
+      "span_1_initial_cu": [1250517, 1243835, 1248016],
+      "span_2_initial_cu": [1244023, 1259767, 1261323],
+      "statistic_7_initial_cu": 1253176,
+      "test_result": "PASS_BUT_MONOLITHIC_HEADROOM_STOP"
+    },
+    "direct_v2": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "init_cu": [532149],
+      "freeze_cu": [935108],
+      "submit_cu": [986768, 1015185, 1050208, 1194085, 1080684],
+      "select_cu": [1400000],
+      "select_result": "ROLLBACK_PROGRAM_FAILED_TO_COMPLETE",
+      "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
+      "test_result": "PASS_EXPECTED_STOP"
+    },
+    "source_endow": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "default_refusal_code": "0x79",
+      "default_release_available": false,
+      "rollback": "BYTE_AND_LAMPORT_EXACT",
+      "test_result": "PASS_EXPECTED_REFUSAL"
+    },
+    "blank_bank_market_creation": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "v2": {"cu": 915790, "bytes": 165, "rent_lamports": 2039280},
+      "v3": {"cu": 923461, "bytes": 319, "rent_lamports": 3111120},
+      "v4": {"cu": 931066, "bytes": 383, "rent_lamports": 3556560},
+      "test_result": "PASS_2_OF_2"
+    },
+    "order_reservation": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "place_cu": [598879, 596909],
+      "cancel_cu": [470318, 474991],
+      "test_result": "PASS_2_OF_2"
+    },
+    "withdraw_cash": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "cu": [229756],
+      "test_result": "PASS"
+    },
+    "source_archive_host": {
+      "artifact_sha256": null,
+      "tests_passed": 9,
+      "provider_ingestion": "NOT_EXERCISED_BY_DEFAULT_ELF",
+      "source_archive_bytes": 2560,
+      "source_archive_rent_lamports": 18708480
+    }
+  }
+}

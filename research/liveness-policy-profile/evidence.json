@@ -1,47 +1,84 @@
 {
-  "schema": "dragons-clutch/liveness-policy-evidence/v1",
-  "status": "INTERMEDIATE_ARITHMETIC_CANDIDATE_NOT_PROMOTABLE",
-  "runtime_integration": "PROPOSED",
+  "schema": "dragons-clutch/liveness-policy-evidence/v2",
+  "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
   "capture_date": "2026-08-19",
-  "evidence_ref": "a29902b2d21f988f9f194b5cc4d89837966804c4",
-  "program_ref": "3a81b38f62c172da588166dcc8b9a8f4d62cd6a3",
-  "source_archive_ref": "0b96a3a5eec1e4ada589f26b5de21f5d32ab700d",
+  "runtime_ref": "7e8f6b1714c3c97a31a4250ecd19f87041433c2d",
+  "runtime_tree": "fbfdc4644b045a8b16a8ca86c552684767289d1f",
+  "evidence_ref": "316c620c8c618142fc3a21964052bcb42c4336b6",
   "artifact": {
-    "path": "research/liveness-policy-profile/artifacts/c8ff4ac7286004cb/clutch_sbf.so",
-    "sha256": "c8ff4ac7286004cb5d897cc92b05f7a9e386107d295cb1441adcd227e0b35138",
-    "bytes": 809824,
-    "finality": "INTERMEDIATE_PENDING_OCCUPATION_V4_REBUILD"
+    "path": "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/clutch_sbf.so",
+    "sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+    "bytes": 1228192,
+    "source_ref": "7e8f6b1714c3c97a31a4250ecd19f87041433c2d",
+    "profile": "default-empty-registry"
+  },
+  "artifact_reproducibility": {
+    "normal_build_1": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+    "normal_build_2": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+    "relocated_cargo_home": "b1a8de39c4405fed6b6da3b430ea7d6109280779dcc2c67011daedda8c06c2de",
+    "relocated_disposition": "PATH_SENSITIVE_NOT_CANONICAL",
+    "first_party_final_lto_stack_survivors": 0,
+    "direct_r10_references": 40389,
+    "deepest_direct_r10_offset": 4096
   },
   "capture": {
     "path": "research/liveness-policy-profile/captured-output.txt",
-    "sha256": "fd5edafad5508388d5a15061b80e94f5ec1f8503295d1a6955625808265e83ed"
-  },
-  "build_evidence": {
-    "research/liveness-policy-profile/artifacts/c8ff4ac7286004cb/logs/build.log": {"sha256": "f78d7d805ed25edc57478fd6d2334eb3daaad7849c5f574a13a4796644baf704", "bytes": 3857},
-    "research/liveness-policy-profile/artifacts/c8ff4ac7286004cb/logs/committed.log": {"sha256": "f479ce00d385d6a56b62d16fa7d133fa8cb74411868805f599d056edb5bd55da", "bytes": 5100},
-    "research/liveness-policy-profile/artifacts/c8ff4ac7286004cb/logs/falsify.log": {"sha256": "242746538e63f67f9adf4ef92af093430d397f39a7b29fc18733a6577b692a9d", "bytes": 4972},
-    "research/liveness-policy-profile/artifacts/c8ff4ac7286004cb/logs/plan.log": {"sha256": "7fd7ea7778ece57974b8a805fa006db2cc2e018725939e3f461c3d0fd679d5a8", "bytes": 1971},
-    "research/liveness-policy-profile/artifacts/c8ff4ac7286004cb/logs/validator.log": {"sha256": "bb7027fd8369d70f3a008b7a097dd53f0bf4b9d48bce665a07d50602ac0e4b9a", "bytes": 105}
+    "sha256": "5d64929881a9f10a5dcfbcf50cd8916edc40d6ca4f73b1302027c4cc60e0be85"
   },
   "source_blobs": {
-    "programs/clutch-sbf/svm-tests/tests/artifact_transport.rs": "7d21d17f88c7264c94fa6678fd01fe9fb8b0d4fd",
-    "programs/clutch-sbf/svm-tests/tests/blank_bank_lifecycle.rs": "1fe25e7b88c00d87c16ea36828800e00bbfb7a90",
+    "research/liveness-policy-profile/Cargo.toml": "8574e7693c1a85cdb68bf608c5cf4dcde178123b",
+    "research/liveness-policy-profile/Cargo.lock": "e6f277e80a2ef7af31e54f8f9eb26272084141b4",
+    "research/liveness-policy-profile/src/main.rs": "b466ce85f8d4f5f7a42e720a4c342af1283423f8",
+    "programs/clutch-sbf/program/src/instructions/resolution_work.rs": "6c1e176199559a7ae2e47b45aa4695263f19fc1b",
+    "programs/clutch-sbf/program/src/error.rs": "f18ac224821959c9e7a5ab67725c05c3d7c57e96"
+  },
+  "source_trees": {
+    "programs/clutch-sbf/program/src": "49fcd8922ab279521b52591b8ca043a565ea4d93",
+    "programs/solana-layout/src": "7ff320e0a951f7bef006b20cd3e3a28792e1aa0f",
+    "programs/solana-reference/src": "13404d8524027904868ec40b1b38c0bc51af2444",
+    "crates/clutch-liveness/src": "38f21a9a8a931970b261078b996fcf00b68ebd9a"
+  },
+  "test_blobs": {
+    "programs/clutch-sbf/svm-tests/Cargo.toml": "08e241a922a2fced791f6cafe6367a6999abf9cf",
+    "programs/clutch-sbf/svm-tests/Cargo.lock": "cd492388f1372cbb3ec72fab9523e2e13d4fb125",
+    "programs/clutch-sbf/svm-tests/tests/resolution_work.rs": "a521fb840fada5a856803be01a06e940eebf7912",
+    "programs/clutch-sbf/svm-tests/tests/native_resolution.rs": "5a9ba81d206ce255fcbb29be9012bf450c0f2a00",
+    "programs/clutch-sbf/svm-tests/tests/direct_selection_v2.rs": "12444899c9098f9386ca40b6f74b6f3fb4752bcd",
+    "programs/clutch-sbf/svm-tests/tests/prefund_creation.rs": "528921e972396f37bde27bb5873db51c1f8e6180",
+    "programs/clutch-sbf/svm-tests/tests/blank_bank_lifecycle.rs": "91a13a8d64635546a7e5dd780244d6220c403849",
     "programs/clutch-sbf/svm-tests/tests/order_reservation.rs": "77658748b3c7777eb181446052f1172024f1cc59",
-    "programs/clutch-sbf/svm-tests/tests/coupled_authority.rs": "c621fe392d4120e18ea3466af27497a547a75187",
-    "programs/clutch-sbf/svm-tests/tests/coupled_settlement.rs": "7d55d54f983e738e1d2948754145b27e939a492c",
-    "programs/clutch-sbf/svm-tests/tests/collateral_leg.rs": "c278437e81574601b6140e70168f259d88a53a09",
-    "programs/clutch-sbf/svm-tests/tests/native_resolution.rs": "b3681b86e194a90cc5899a296fddec64285a5ee2",
-    "programs/clutch-sbf/svm-tests/tests/native_full_lifecycle.rs": "031d3b757e399dd43d3e1199dc4b14a54ef4cadc",
-    "programs/clutch-sbf/svm-tests/tests/source_archive.rs": "78942c4da572272227f36e63d17a0fa0f711ae1f",
-    "programs/clutch-sbf/program/src/source_archive.rs": "ae50e681d4c9e3407700f650ee478ba30d8204e3",
-    "programs/clutch-sbf/program/src/token.rs": "c9388b05b8219e87b3e2cd4b6bf5638a825ab07d",
-    "programs/solana-layout/src/lib.rs": "ab82504b4106e684f35321d30f32096f4e5812e1",
-    "programs/solana-layout/src/artifact.rs": "7e11841b853eeca477b0ae1fde777dfbe4e92ba3",
-    "programs/solana-layout/src/collateral.rs": "f4b1630954ce0afccf75a3b64f715b93c13137a9",
-    "programs/solana-layout/src/native_resolution.rs": "8b0370d6991d65b256e7d8016d09e14ef3bf72ee",
-    "programs/solana-layout/src/reservation.rs": "ffc3bceb42910361c519080f6b4e95040afb53ab",
-    "programs/solana-reference/src/lib.rs": "46c191cd1b1e68d6349cea1189c46015adc55aeb",
-    "crates/clutch-liveness/src/lib.rs": "6924b988e65f10dc9f4f92d9b54308ae06aca799"
+    "programs/clutch-sbf/svm-tests/tests/collateral_leg.rs": "10cbc4891eb93cc71e97a931a8f8e6f6a7e99f47",
+    "programs/clutch-sbf/svm-tests/tests/artifact_transport.rs": "613e0b8bb3432d4b19ff4e078c696debd52b308d",
+    "programs/clutch-sbf/svm-tests/tests/source_archive.rs": "7450f45216a63800478416a93b2738735a71eab5"
+  },
+  "test_trees": {
+    "programs/clutch-sbf/svm-tests/src": "4b2f5c9aff5f1738265eb1e535534c596f503b1f",
+    "programs/clutch-sbf/svm-tests/tests": "9d38a21046513b77389fcdacca2f5d3f0dd9cee2"
+  },
+  "evidence_files": {
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/RUNTIME_ARTIFACT_AUDIT.md": {"sha256": "46de5a07ccb2aed018cd8c88a762e6bd5d737d488fe2e992c7abfb420fe4bf1d", "bytes": 9398},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/backend-stack-diagnostics.txt": {"sha256": "bc85e02844cb61b4a92a229775015e2f503379b05c574d07d761862b1d8b4c8f", "bytes": 12044},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/dependencies.tsv": {"sha256": "eed650fb0b93d8d97042c44123264c47e1dc0566a391a3a949a06a3102842b1b", "bytes": 3953},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/elf-summary.txt": {"sha256": "15cb2ebe74ea77294736b6e21b37adca72fd032c5b5579bf44686e6a34cc0bcc", "bytes": 220},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/frame-summary.txt": {"sha256": "f038c0c2f54e57d1b990e8f393ec44d848e4456218bb178b497209ad61273738", "bytes": 284},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/metadata.json": {"sha256": "1145dc5651b5604a307dadf56c1c69182a740fc77ba3e7f047ce52e51f2c1d52", "bytes": 129512},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/registry-source-verification.tsv": {"sha256": "c3a8c19b470713e828b08b56f3cedfe4089c0a704c457e15178c24ecd8cfad71", "bytes": 5206},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/source-files.txt": {"sha256": "6e61c98f5f8fa400f4943fb1aea556e87e29e967d71feadcf459634b8a923a8c", "bytes": 4044},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/stack-summary.txt": {"sha256": "691e089c3fdef94d7e124076b3fd11ad0b0f5d3984591af365bb34a57612ff9e", "bytes": 107},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/vendor.diff": {"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "bytes": 0},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/upstream-SHA256SUMS": {"sha256": "baaa5ee5ac3e6372faf9fe82cd60e31ed53e93d62b37b8314ef9f6f1634d4ac0", "bytes": 8848},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/sbf-build-1.log": {"sha256": "4ba1bbbf0fef59e9a963b161da51ac6539b53e7273571d97321bfb06c93df68d", "bytes": 29102},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/sbf-build-2.log": {"sha256": "f3f65ea7e59c339960b3f84f4dd2dbebd7cf83539c5a2c681071dea1e2a79687", "bytes": 29102},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/sbf-build-relocated.log": {"sha256": "c6317e1821b22790de9cefc80d91890ce0c5d6b44d0ff84183851018d402e6ef", "bytes": 29102},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/artifact_transport.log": {"sha256": "e9657f507df50ba6bfd7923b6e3f5f242403f7146c41e2a3e0f209098b384218", "bytes": 24176},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/blank_bank_lifecycle.log": {"sha256": "15bdf9795151234fa8e623320e505bbbfc01479e14bb6021ec357799ce3e8095", "bytes": 963},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/collateral_leg.log": {"sha256": "fab1dfe2e4c5e37c9cfcb6b84be0e482da6ce6ffabc904f504609c1ff1841f7d", "bytes": 3456},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/direct_selection_v2.log": {"sha256": "c37ae0034f0acab0d4302c99ce55204fbffaed989ebfa0902f2feaa07fd69324", "bytes": 979},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/native_resolution.log": {"sha256": "1c4db32caae2209ec5405d872fd39a5a46e13081d0c54fc10b88aa63f72f48bb", "bytes": 26048},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/order_reservation.log": {"sha256": "cf2c22e6d135650934229e7d633ae8d56353c117185d41741be4b437667bafe4", "bytes": 693},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/prefund_creation.log": {"sha256": "bc1a10023dd8085b2d754677fa16c369d1b3034018ca9ddf19c00ba72252fcec", "bytes": 1567},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/resolution_work.log": {"sha256": "5b3a933d3a3db296e5a988f4d4b9bcba4d1648d704a01e190b06efd5873cebd9", "bytes": 1179},
+    "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/logs/bank/source_archive.log": {"sha256": "cfcaaf31c382bbaff9879b77ad4a2eabccf6fc5edb635ec0683c0cc4dacdf4dc", "bytes": 1151}
   },
   "rent": {
     "lamports_per_byte_year": 3480,
@@ -57,59 +94,37 @@
     "artifact.grid.stage": {"bytes": 725, "rent_lamports": 5936880},
     "artifact.terms.final": {"bytes": 1656, "rent_lamports": 12416640},
     "artifact.terms.stage": {"bytes": 1792, "rent_lamports": 13363200},
-    "artifact.maximum.stage": {"bytes": 1792, "rent_lamports": 13363200},
+    "artifact.batch_policy.final": {"bytes": 64, "rent_lamports": 1336320},
+    "artifact.batch_policy.stage": {"bytes": 200, "rent_lamports": 2282880},
     "realm": {"bytes": 70, "rent_lamports": 1378080},
     "profile": {"bytes": 100, "rent_lamports": 1586880},
     "market": {"bytes": 726, "rent_lamports": 5943840},
     "hoard": {"bytes": 108, "rent_lamports": 1642560},
-    "position": {"bytes": 220, "rent_lamports": 2422080},
     "kernel": {"bytes": 1255, "rent_lamports": 9625680},
-    "replay": {"bytes": 84, "rent_lamports": 1475520},
     "supply_ledger": {"bytes": 333, "rent_lamports": 3208560},
     "resolution.v2": {"bytes": 165, "rent_lamports": 2039280},
     "resolution.v3": {"bytes": 319, "rent_lamports": 3111120},
+    "resolution.v4": {"bytes": 383, "rent_lamports": 3556560},
     "token.outcome_mint": {"bytes": 82, "rent_lamports": 1461600},
     "token.hoard_immutable_owner": {"bytes": 170, "rent_lamports": 2074080},
-    "order.page": {"bytes": 4012, "rent_lamports": 28814400},
-    "order.reservation": {"bytes": 570, "rent_lamports": 4858080},
-    "candidate": {"bytes": 305, "rent_lamports": 3013680},
-    "candidate.feed": {"bytes": 6266, "rent_lamports": 44502240},
-    "settlement.receipt": {"bytes": 217, "rent_lamports": 2401200},
+    "position": {"bytes": 220, "rent_lamports": 2422080},
+    "replay": {"bytes": 84, "rent_lamports": 1475520},
+    "feed": {"bytes": 124, "rent_lamports": 1753920},
     "source.spec": {"bytes": 292, "rent_lamports": 2923200},
-    "source.archive": {"bytes": 2560, "rent_lamports": 18708480}
-  },
-  "measurements": {
-    "artifact.policy": {"successful_transactions_cu": [13373, 9297, 8138, 94175], "attempted_transactions_cu": [13373, 9297, 8138, 94175]},
-    "artifact.grid": {"successful_transactions_cu": [17135, 15319, 12631, 9943, 9577, 107539], "attempted_transactions_cu": [17135, 15319, 12631, 9943, 9577, 107539]},
-    "artifact.terms": {"successful_transactions_cu": [23109, 28757, 26069, 23381, 20693, 18005, 15317, 12629, 9941, 8184, 18048], "attempted_transactions_cu": [23109, 28757, 26069, 23381, 12760, 20330, 20693, 18005, 15317, 12629, 9941, 8184, 18048, 23109, 28757, 26069, 23381, 20693, 18005, 15317, 12629, 9941, 8184, 17111]},
-    "market.create.v2": {"sample_cu": 914280, "account_bytes": 165, "maximum_claim": "UNMEASURED"},
-    "market.create.v3": {"sample_cu": 915284, "account_bytes": 319, "maximum_claim": "UNMEASURED"},
-    "order.place": {"samples_cu": [598889, 596919]},
-    "order.cancel": {"samples_cu": [470322, 474995]},
-    "candidate.submit_direct_page": {"sample_cu": 1249371, "orders_in_page": 2},
-    "settlement.narrow_page": {"sample_cu": 862075, "orders_in_page": 2},
-    "resolution.native.resolve": {"samples_cu": [1092204, 1130463, 1165736]},
-    "resolution.native.retry": {"samples_cu": [938556, 976815, 1012088]},
-    "redemption.native.internal": {"samples_cu": [708298, 705798, 705473]},
-    "redemption.native.external": {"samples_cu": [788047, 785347, 784552]},
-    "withdraw_cash": {"sample_cu": 229755},
-    "native_full_lifecycle": {
-      "create_market_cu": [1081504, 1072104, 1074689],
-      "endow_cu": [294841, 294841, 294841],
-      "split_cu": [276413, 276413, 276413],
-      "materialize_cu": [154683, 154683, 154683],
-      "resolve_cu": [1076536, 1107963, 1144736],
-      "redeem_external_cu": [773047, 762847, 763552],
-      "redeem_internal_cu": [697790, 687790, 688965],
-      "withdraw_cu": [294703, 294703, 294703],
-      "genesis_assisted_source_archive": true
-    },
-    "source_archive": {
-      "host_tests_passed": 4,
-      "host_tests_failed": 0,
-      "standalone_create_append_seal_cu": "UNMEASURED",
-      "resolve_authentication_cost": "INCLUDED_IN_NATIVE_RESOLVE_SAMPLES"
-    }
+    "source.archive": {"bytes": 2560, "rent_lamports": 18708480},
+    "order.page": {"bytes": 4012, "rent_lamports": 28814400},
+    "order.reservation.v1": {"bytes": 570, "rent_lamports": 4858080},
+    "direct.epoch.v3": {"bytes": 344, "rent_lamports": 3285120},
+    "direct.candidate.v2": {"bytes": 440, "rent_lamports": 3953280},
+    "direct.window.v1": {"bytes": 456, "rent_lamports": 4064640},
+    "direct.receipt": {"bytes": 217, "rent_lamports": 2401200},
+    "direct.final_pot": {"bytes": 262, "rent_lamports": 2714400},
+    "legacy.epoch.v2": {"bytes": 328, "rent_lamports": 3173760},
+    "legacy.candidate": {"bytes": 305, "rent_lamports": 3013680},
+    "legacy.candidate_feed": {"bytes": 6266, "rent_lamports": 44502240},
+    "legacy.clear_work": {"bytes": 48750, "rent_lamports": 340190880},
+    "resolution.work.v1": {"bytes": 1296, "rent_lamports": 9911040},
+    "resolution.reserve.v1": {"bytes": 0, "rent_lamports": 890880}
   },
   "policy_inputs": {
     "cu_headroom_numerator": 5,
@@ -118,46 +133,183 @@
     "transaction_cu_ceiling": 1400000,
     "base_transaction_fee_cap_lamports": 10000,
     "micro_lamports_per_cu_cap": 1000000,
-    "keeper_tip_lamports": 100000,
-    "market_outcome_mints": 2,
-    "founding_unmeasured_transactions": ["init_realm", "init_profile"],
-    "founding_ceiling_transactions": 3
+    "keeper_surplus_lamports": 100000
+  },
+  "resolution_work": {
+    "maximum_records": 32,
+    "maximum_fold_width": 4,
+    "accounts": {"begin": 11, "fold": 8, "finalize_base": 15, "abort": 8},
+    "runtime_reward_schedule": {
+      "fold_base_lamports": 1160000,
+      "fold_per_record_lamports": 0,
+      "finalize_lamports": 1510000,
+      "abort_lamports": 860000
+    }
+  },
+  "measurements": {
+    "resolution_work": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "fold_widths": [1, 2, 3, 4],
+      "begin_cu": [807676, 805308, 810992, 807674, 805860],
+      "fold_1_cu": [804616, 802253],
+      "fold_2_cu": [809225, 812193],
+      "fold_3_cu": [813128],
+      "fold_4_cu": [815573],
+      "finalize_cu": [1094832],
+      "abort_cu": [587197],
+      "monolithic_v4_cu": [1253326],
+      "test_result": "PASS_4_OF_4"
+    },
+    "native_point_v3": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "degree_rows": [
+        {"degree": 1, "resolve_cu": 1088267, "retry_cu": 934622, "internal_redeem_cu": 775978},
+        {"degree": 2, "resolve_cu": 1096640, "retry_cu": 942995, "internal_redeem_cu": 778021},
+        {"degree": 3, "resolve_cu": 1103534, "retry_cu": 949889, "internal_redeem_cu": 776411}
+      ],
+      "test_result": "PASS"
+    },
+    "native_bearer_redeem": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "degree_rows": [
+        {"degree": 1, "external_redeem_cu": 785073},
+        {"degree": 2, "external_redeem_cu": 786873},
+        {"degree": 3, "external_redeem_cu": 784578}
+      ],
+      "test_result": "PASS"
+    },
+    "occupation_v4": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "degree_rows": [
+        {"degree": 1, "initial_cu": 1243529, "retry_cu": 1089893, "internal_redeem_cu": 774692, "external_redeem_cu": 783711},
+        {"degree": 2, "initial_cu": 1254699, "retry_cu": 1101063, "internal_redeem_cu": 776735, "external_redeem_cu": 785511},
+        {"degree": 3, "initial_cu": 1268630, "retry_cu": 1114994, "internal_redeem_cu": 779625, "external_redeem_cu": 787716}
+      ],
+      "span_1_initial_cu": [1250517, 1243835, 1248016],
+      "span_2_initial_cu": [1244023, 1259767, 1261323],
+      "statistic_7_initial_cu": 1253176,
+      "test_result": "PASS_BUT_MONOLITHIC_HEADROOM_STOP"
+    },
+    "direct_v2": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "init_cu": [532149],
+      "freeze_cu": [935108],
+      "submit_cu": [986768, 1015185, 1050208, 1194085, 1080684],
+      "select_cu": [1400000],
+      "select_result": "ROLLBACK_PROGRAM_FAILED_TO_COMPLETE",
+      "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
+      "test_result": "PASS_EXPECTED_STOP"
+    },
+    "source_endow": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "default_refusal_code": "0x79",
+      "default_release_available": false,
+      "rollback": "BYTE_AND_LAMPORT_EXACT",
+      "test_result": "PASS_EXPECTED_REFUSAL"
+    },
+    "blank_bank_market_creation": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "v2": {"cu": 915790, "bytes": 165, "rent_lamports": 2039280},
+      "v3": {"cu": 923461, "bytes": 319, "rent_lamports": 3111120},
+      "v4": {"cu": 931066, "bytes": 383, "rent_lamports": 3556560},
+      "test_result": "PASS_2_OF_2"
+    },
+    "order_reservation": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "place_cu": [598879, 596909],
+      "cancel_cu": [470318, 474991],
+      "test_result": "PASS_2_OF_2"
+    },
+    "withdraw_cash": {
+      "artifact_sha256": "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1",
+      "cu": [229756],
+      "test_result": "PASS"
+    },
+    "source_archive_host": {
+      "artifact_sha256": null,
+      "tests_passed": 9,
+      "provider_ingestion": "NOT_EXERCISED_BY_DEFAULT_ELF",
+      "source_archive_bytes": 2560,
+      "source_archive_rent_lamports": 18708480
+    }
+  },
+  "auxiliary_nonproduction_provider": {
+    "status": "AUXILIARY_DIFFERENT_ELF_NOT_USED_IN_PROJECTION",
+    "artifact_sha256": "201f4d7d898d60033b241cc1e68b1e7197f09313c1a2215cf17a6341686f75cd",
+    "artifact_bytes": 1256656,
+    "successful_endow_cu": 615953,
+    "terminal_release": "UNIMPLEMENTED_STOP"
   },
   "projection": {
-    "artifact_work_lamports": {
-      "policy": 740000,
-      "grid": 1060000,
-      "terms": 1760000,
-      "total": 3560000
+    "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
+    "complete_liveness_policy": "NOT_EMITTED_STOP",
+    "maximum_raw_cu_with_requested_headroom": 1120000,
+    "resolution_work": {
+      "status": "PASS",
+      "routes": {
+        "begin": {"measured_cu": 810992, "required_headroom_cu": 1013740, "selected_limit_cu": 1050000, "external_fee_cap_lamports": 1060000, "keeper_reward_lamports": 1160000, "status": "PASS"},
+        "fold_1": {"measured_cu": 804616, "required_headroom_cu": 1005770, "selected_limit_cu": 1050000, "external_fee_cap_lamports": 1060000, "keeper_reward_lamports": 1160000, "status": "PASS"},
+        "fold_2": {"measured_cu": 812193, "required_headroom_cu": 1015242, "selected_limit_cu": 1050000, "external_fee_cap_lamports": 1060000, "keeper_reward_lamports": 1160000, "status": "PASS"},
+        "fold_3": {"measured_cu": 813128, "required_headroom_cu": 1016410, "selected_limit_cu": 1050000, "external_fee_cap_lamports": 1060000, "keeper_reward_lamports": 1160000, "status": "PASS"},
+        "fold_4": {"measured_cu": 815573, "required_headroom_cu": 1019467, "selected_limit_cu": 1050000, "external_fee_cap_lamports": 1060000, "keeper_reward_lamports": 1160000, "status": "PASS"},
+        "finalize": {"measured_cu": 1094832, "required_headroom_cu": 1368540, "selected_limit_cu": 1400000, "external_fee_cap_lamports": 1410000, "keeper_reward_lamports": 1510000, "status": "PASS"},
+        "abort": {"measured_cu": 587197, "required_headroom_cu": 733997, "selected_limit_cu": 750000, "external_fee_cap_lamports": 760000, "keeper_reward_lamports": 860000, "status": "PASS"}
+      },
+      "maximum_records": 32,
+      "fold_path_lamports": 37120000,
+      "success_rewards_lamports": 38630000,
+      "worst_abort_rewards_lamports": 37980000,
+      "spendable_reserve_lamports": 38630000,
+      "rent_principal_lamports": 10801920,
+      "persistent_reserve_lamports": 49431920,
+      "begin_external_lamports": 1160000,
+      "payer_cold_outlay_lamports": 50591920,
+      "runtime_schedule_matches_policy": true
     },
-    "market_create_state_rent_lamports": 32426640,
-    "artifact_final_rent_lamports": 20149200,
-    "artifact_stage_rent_lamports": 22988880,
-    "realm_profile_rent_lamports": 2964960,
-    "liveness_policy": {
-      "market_work_max_lamports": 8090000,
-      "market_storage_max_lamports": 78529680,
-      "resolution_max_lamports": 1510000,
-      "per_order_clear_max_lamports": 755000,
-      "per_order_settle_max_lamports": 605000,
-      "market_total_lamports": 88129680,
-      "order_total_lamports": 1360000
+    "source_value_admission": {
+      "status": "FAIL_CLOSED_STOP",
+      "default_release_available": false,
+      "endow_refusal_code": "0x79",
+      "refusal_cu_not_priced_as_success": true
     },
-    "headroom_gate": {
-      "candidate.submit_direct_page": false,
-      "resolution.native.resolve": false
+    "direct_v2": {
+      "status": "STOP",
+      "select": {"measured_cu": 1400000, "required_headroom_cu": 1750000, "selected_limit_cu": null, "external_fee_cap_lamports": null, "keeper_reward_lamports": null, "status": "STOP_HEADROOM"},
+      "select_result": "ROLLBACK_PROGRAM_FAILED_TO_COMPLETE",
+      "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
+      "live_v3": false
     },
-    "shared_feed_pair": "INCOMPLETE_UNMEASURED",
-    "per_order_storage": "UNREPRESENTED",
-    "neutral_sink": "UNSELECTED"
-  },
-  "blockers": [
-    "SubmitDirectPage exceeds the requested 25 percent CU headroom under the 1400000-CU ceiling.",
-    "Native Resolve d3 exceeds the requested 25 percent CU headroom under the 1400000-CU ceiling.",
-    "Source/archive construction, append, sealing, and cleanup have no routed production CU measurements.",
-    "InitRealm and InitProfile have no isolated CU measurements; the candidate charges the full ceiling for each.",
-    "Order reservation/page/candidate/feed/receipt storage is not represented by clutch-liveness OrderEndowment.",
-    "No production neutral-failure sink policy has been selected.",
-    "A finite CU or lamport cap does not guarantee future transaction inclusion."
-  ]
+    "native_point_v3": {
+      "status": "PASS",
+      "degree_routes": [
+        {"degree": 1, "resolve": {"measured_cu": 1088267, "required_headroom_cu": 1360334, "selected_limit_cu": 1400000, "external_fee_cap_lamports": 1410000, "keeper_reward_lamports": 1510000, "status": "PASS"}},
+        {"degree": 2, "resolve": {"measured_cu": 1096640, "required_headroom_cu": 1370800, "selected_limit_cu": 1400000, "external_fee_cap_lamports": 1410000, "keeper_reward_lamports": 1510000, "status": "PASS"}},
+        {"degree": 3, "resolve": {"measured_cu": 1103534, "required_headroom_cu": 1379418, "selected_limit_cu": 1400000, "external_fee_cap_lamports": 1410000, "keeper_reward_lamports": 1510000, "status": "PASS"}}
+      ]
+    },
+    "occupation_v4_monolithic": {
+      "status": "STOP_HEADROOM",
+      "degree_routes": [
+        {"degree": 1, "initial": {"measured_cu": 1243529, "required_headroom_cu": 1554412, "selected_limit_cu": null, "external_fee_cap_lamports": null, "keeper_reward_lamports": null, "status": "STOP_HEADROOM"}, "retry": {"measured_cu": 1089893, "required_headroom_cu": 1362367, "selected_limit_cu": 1400000, "external_fee_cap_lamports": 1410000, "keeper_reward_lamports": 1510000, "status": "PASS"}},
+        {"degree": 2, "initial": {"measured_cu": 1254699, "required_headroom_cu": 1568374, "selected_limit_cu": null, "external_fee_cap_lamports": null, "keeper_reward_lamports": null, "status": "STOP_HEADROOM"}, "retry": {"measured_cu": 1101063, "required_headroom_cu": 1376329, "selected_limit_cu": 1400000, "external_fee_cap_lamports": 1410000, "keeper_reward_lamports": 1510000, "status": "PASS"}},
+        {"degree": 3, "initial": {"measured_cu": 1268630, "required_headroom_cu": 1585788, "selected_limit_cu": null, "external_fee_cap_lamports": null, "keeper_reward_lamports": null, "status": "STOP_HEADROOM"}, "retry": {"measured_cu": 1114994, "required_headroom_cu": 1393743, "selected_limit_cu": 1400000, "external_fee_cap_lamports": 1410000, "keeper_reward_lamports": 1510000, "status": "PASS"}}
+      ],
+      "live_action": "USE_MEASURED_RESOLUTIONWORK_OR_FAIL_CLOSED"
+    },
+    "terminal_status": "STOP",
+    "terminal_blocking_ids": [
+      "CLAIM.SUBLOT_FRAGMENT_NO_TOTAL_EXIT",
+      "DIRECT.ACCOUNT_REFUND_UNOWNED",
+      "DIRECT.CANDIDATE_RENT_PERSISTS",
+      "DIRECT.EMPTY_FROZEN_NO_LAPSE",
+      "DIRECT.TOP3_SELECT_CU_STOP",
+      "HOARD.RESIDUAL_DISPOSITION_UNSELECTED",
+      "PROFILE.STORAGE_INVENTORY_INCOMPLETE",
+      "RENT.ACCOUNT_REFUND_UNOWNED",
+      "RENT.ARTIFACT_PREFUND_WINDFALL",
+      "SOURCE.DEFAULT_REGISTRY_EMPTY",
+      "SOURCE.NO_TERMINAL_RELEASE",
+      "TOKEN.OUTCOME_MINT_PERMANENT"
+    ]
+  }
 }

@@ -192,3 +192,5 @@ def build_terminal(runtime_ref: str = "0" * 40) -> dict[str, Any]:
         "blocking_ids": blockers,
     }
 
+# Keep this module data-only: the executable validation lives in
+# terminal_admission.py.
