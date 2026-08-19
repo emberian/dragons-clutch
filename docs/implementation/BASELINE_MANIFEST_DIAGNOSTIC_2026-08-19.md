@@ -64,6 +64,8 @@ release.
 
 The post-seal wave (SBOM tool + TSV, hygiene fixes, truth updates,
 terminal-identity-v1 crate; no gate-inventory or runtime-closure change)
-drifted the recorded content identity 546->554 entries. The Fable session is
-re-running the full emission from the clean tree now; do not commit until
-its manifest lands and is checked.
+drifted the recorded content identity 546->554 entries. COMPLETED: the clean-tree emission at
+`c4688da` matched 98/98 declared gates (content identity 5d1feafc..., 554
+entries), the manifest-only commit is `5b68601`, and the post-commit
+`check --run-gates` passed with every gate exit code and key output line
+matching. The tree is open for ordinary commits again.

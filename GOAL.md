@@ -54,6 +54,12 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- BASELINE REFRESHED: clean-tree emission at c4688da matched 98/98 (gate
+  inventory grew with codex's R2-auth and failure-payout crates), manifest
+  committed at 5b68601, post-commit check --run-gates fully green. The
+  post-seal wave (SBOM closure, hygiene, truth updates, terminal-identity
+  crate) is now inside the checked baseline.
+
 - R4 interim step 3 LANDED at eb1215a: TerminalIdentityV1 56-byte header
   research crate (PROPOSED pending ratification), delegating to the
   clutch-liveness DonationLedger kernel; 16 tests incl. four falsifiers
