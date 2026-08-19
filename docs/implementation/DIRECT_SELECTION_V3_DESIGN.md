@@ -145,9 +145,11 @@ Bytes `0..344` preserve Direct Epoch V3. The extension is:
 | 476 | 32 | immutable neutral-lamport sink |
 | 508 | 4 | canonical zero reserve |
 
-Common Epoch phase gains explicit values for `FROZEN_EMPTY`, `WINDOW_OPEN`,
-`VERIFYING`, `SELECTED`, and `TERMINAL`. Phase, not the placeholder receipt
-bytes, distinguishes a nonterminal Epoch from `EMPTY_LAPSE`.
+The direct lifecycle byte owns `PREFREEZE_OPEN`, `FROZEN_EMPTY`,
+`WINDOW_OPEN`, `VERIFYING`, `SELECTED`, and `TERMINAL`. The preserved common
+Epoch phase is only a checked coarse projection (`OPEN`, `FROZEN`, `CLEARED`,
+`SETTLED`, or `LAPSED`); it is not a second semantic owner. Phase, not terminal
+reason zero, distinguishes a nonterminal Epoch from `EMPTY_LAPSE`.
 
 ### Direct Candidate V3 — 488 bytes
 
@@ -211,12 +213,16 @@ This proves solvency for the named finite payments. It does not prove the
 positive amounts are sufficient incentives; final values require measured SBF
 costs and policy review.
 
-### Reservation V2 — 490 bytes
+### Reservation V2 — 618 bytes
 
-Reservation V1 is 442 bytes (`MAX_OUTCOMES = 8` in the account-plane layout).
-V2 adds rent payer (32), exact payer principal
-(8), and neutral donation lower bound (8). Both exact Reservation V2 accounts
-are authenticated by every transition. Their state path is typed:
+The live account-plane `MAX_OUTCOMES` is 16, so Reservation V1 is 570 bytes:
+its `initial_internal[16]` occupies bytes `314..442` and its
+`remaining_internal[16]` occupies `442..570`. V2 preserves all 570 bytes and
+appends rent payer (32), exact payer principal (8), and neutral donation lower
+bound (8). The resulting account is exactly 618 bytes. A 490-byte encoding
+would truncate live reservation semantics and is explicitly refused. Both
+exact Reservation V2 accounts are authenticated by every transition. Their
+state path is typed:
 
 ```text
 Finalize:       ACTIVE   -> ENTITLED
@@ -229,12 +235,18 @@ Terminal routes close and refund both reservation rent principals exactly
 once. Existing Reservation V1 accounts cannot promise this cleanup and stay
 outside the V3 promotion claim.
 
-### BatchPolicy/deployment identity
+### DirectBatchPolicy V3 / verifier release identity
 
-BatchPolicy must gain a full verifier-semantics/deployment-manifest identity.
-Submit, Begin, Verify, Finalize, and Settle compare it to the Epoch/WorkBudget
-binding; Lapse retains a versioned escape path. The exact BatchPolicy artifact
-extension belongs in the codec migration, not an adapter projection.
+Legacy BatchPolicy remains its exact 64-byte artifact. A disjoint 96-byte
+DirectBatchPolicy V3 artifact stores those exact policy bytes followed by one
+full `verifier_release_id`. Its digest is domain-separated over the canonical
+Epoch context and all 96 body bytes, and its final PDA uses a disjoint seed.
+`verifier_release_id` is not called an onchain program-data or deployment hash:
+it is a compile-time release identifier owned by the exact verifier
+implementation. Submit, Begin, Verify, Finalize, and Settle compare it to the
+Epoch/WorkBudget binding; Lapse retains a versioned escape path. Upgradeable
+deployment trust or immutable deployment remains an explicit promotion
+boundary.
 
 ## Routed transition plan
 
@@ -367,6 +379,9 @@ cargo clippy --manifest-path research/batch-policy-identity/Cargo.toml --locked 
    before/after success and every late failure.
 6. Durable Epoch receipt decoding after transient authority is gone.
 7. Pre-Freeze abort/release for zero, one, and two OPEN reservations.
+8. DonationLedger `observe` updates for every surviving mutable Candidate,
+   Window, WorkBudget, and Reservation account, proving that an observed
+   donation cannot later be drained while an older lower bound is persisted.
 
 ## Still out of scope
 
