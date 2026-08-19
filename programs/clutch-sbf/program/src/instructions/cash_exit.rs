@@ -242,9 +242,10 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         seeds::market_pda(program_id, &market.realm.bytes(), &market_bytes),
         Some(market.stored_bump),
     )?;
+    let hoard_derived = seeds::hoard_pda(program_id, &market_bytes);
     expect_pda(
         accounts[IX_HOARD].key,
-        seeds::hoard_pda(program_id, &market_bytes),
+        hoard_derived,
         Some(hoard.stored_bump),
     )?;
     expect_pda(
@@ -265,6 +266,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
     require(
         hoard.market == market.market
             && hoard.realm == market.realm
+            && market.hoard_bump == hoard_derived.1
             && position.market == market.market
             && replay.market == market.market
             && replay.owner == position.owner
