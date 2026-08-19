@@ -1144,6 +1144,7 @@ const ZERO_TERMS: TermsAccount = TermsAccount {
 const ZERO_KERNEL: KernelAccount = KernelAccount {
     market: Hash32::ZERO,
     phase: 0,
+    basis_mode: BasisMode::FinitePreset,
     resolved_payout: 0,
     payouts: PayoutSet::EMPTY,
     total_supply: [0; MAX_OUTCOMES],
@@ -1318,6 +1319,16 @@ fn payout_set_binds_terms(kernel_bytes: &[u8], terms_bytes: &[u8]) -> Gate<()> {
 
 #[inline(never)]
 fn require_payout_set(kernel: &KernelAccount, terms: &TermsAccount) -> Gate<()> {
+    let expected_mode = if terms.basis_degree == 0 {
+        BasisMode::FinitePreset
+    } else {
+        BasisMode::DerivedBasis
+    };
+    if kernel.basis_mode != expected_mode {
+        return Err(ReferenceError::Kernel(
+            clutch_kernel::Error::WrongResolutionMode,
+        ));
+    }
     if kernel.payouts.count != terms.payout_count || kernel.payouts.outcomes != terms.outcome_count
     {
         return Err(ReferenceError::PayoutSetMismatch);
@@ -1536,6 +1547,11 @@ fn native_kernel_invariants(
 #[inline(never)]
 fn pure_market(kernel_bytes: &[u8], outcome_count: u8, collateral: u64) -> Gate<MarketState> {
     let kernel = KernelAccount::decode(kernel_bytes)?;
+    if kernel.basis_mode != BasisMode::FinitePreset {
+        return Err(ReferenceError::Kernel(
+            clutch_kernel::Error::WrongResolutionMode,
+        ));
+    }
     if usize::from(outcome_count) > KERNEL_MAX_OUTCOMES || kernel.payouts.outcomes != outcome_count
     {
         return Err(ReferenceError::MismatchedState);
@@ -1545,17 +1561,11 @@ fn pure_market(kernel_bytes: &[u8], outcome_count: u8, collateral: u64) -> Gate<
         1 => Phase::Resolved,
         _ => return Err(ReferenceError::NonCanonical),
     };
-    /* This constructor is deliberately the degree-zero projection. The
-     * aggregate carries no basis mode or native vector, so smooth terms must
-     * instead enter through `reconstruct_native_market`, which installs the
-     * v3 Resolution record's sole vector ephemerally. Keeping the two
-     * constructors separate prevents an index-zero aggregate from silently
-     * masquerading as a derived payout. */
     let market = MarketState {
         outcomes: outcome_count,
         phase,
         resolved_payout: kernel.resolved_payout,
-        basis_mode: BasisMode::FinitePreset,
+        basis_mode: kernel.basis_mode,
         resolved_vector: PayoutVector::ZERO,
         collateral,
         total_supply: kernel.total_supply,
@@ -1583,6 +1593,11 @@ pub(crate) fn reconstruct_native_market(
     resolved_vector: PayoutVector,
 ) -> core::result::Result<MarketState, ReferenceError> {
     let kernel = KernelAccount::decode(kernel_bytes)?;
+    if kernel.basis_mode != BasisMode::DerivedBasis {
+        return Err(ReferenceError::Kernel(
+            clutch_kernel::Error::WrongResolutionMode,
+        ));
+    }
     if usize::from(outcome_count) > KERNEL_MAX_OUTCOMES
         || kernel.payouts.outcomes != outcome_count
         || (kernel.phase == 1 && kernel.resolved_payout != 0)
@@ -1598,7 +1613,7 @@ pub(crate) fn reconstruct_native_market(
         outcomes: outcome_count,
         phase,
         resolved_payout: 0,
-        basis_mode: BasisMode::DerivedBasis,
+        basis_mode: kernel.basis_mode,
         resolved_vector: if phase == Phase::Resolved {
             resolved_vector
         } else {
@@ -1692,6 +1707,97 @@ fn write_kernel(kernel_bytes: &mut [u8], step: &KernelStep) -> Gate<()> {
     kernel.total_supply = step.total_supply;
     kernel.encode(kernel_bytes)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod basis_mode_tests {
+    use super::*;
+    use clutch_kernel::{Error as KernelError, PayoutSet, MAX_PAYOUTS};
+
+    fn payout() -> PayoutVector {
+        let mut weights = [0_u64; MAX_OUTCOMES];
+        weights[0] = 1;
+        PayoutVector::new(1, weights)
+    }
+
+    fn encoded(mode: BasisMode, phase: u8) -> Vec<u8> {
+        let mut vectors = [PayoutVector::ZERO; MAX_PAYOUTS];
+        vectors[0] = payout();
+        let mut total_supply = [0_u64; MAX_OUTCOMES];
+        total_supply[0] = 4;
+        let account = KernelAccount {
+            market: Hash32::from_bytes([3; 32]),
+            phase,
+            basis_mode: mode,
+            resolved_payout: 0,
+            payouts: PayoutSet::new(1, 2, vectors),
+            total_supply,
+        };
+        let mut bytes = vec![0_u8; KERNEL_ACCOUNT_LEN];
+        account.encode(&mut bytes).unwrap();
+        bytes
+    }
+
+    fn wrong_mode() -> ReferenceError {
+        ReferenceError::Kernel(KernelError::WrongResolutionMode)
+    }
+
+    #[test]
+    fn categorical_and_native_resolution_refuse_opposite_stored_modes() {
+        assert_eq!(
+            kernel_resolve(&encoded(BasisMode::DerivedBasis, 0), 2, 4, 0),
+            Err(wrong_mode())
+        );
+        assert_eq!(
+            kernel_resolve_native(
+                &encoded(BasisMode::FinitePreset, 0),
+                2,
+                4,
+                PayoutVectorBytes {
+                    denominator: 1,
+                    weights: payout().weights,
+                },
+            ),
+            Err(wrong_mode())
+        );
+    }
+
+    #[test]
+    fn categorical_and_native_internal_redemption_refuse_before_position_mutation() {
+        let mut categorical_position = Position::EMPTY;
+        categorical_position.internal[0] = 1;
+        let categorical_before = categorical_position;
+        assert_eq!(
+            kernel_redeem(
+                &encoded(BasisMode::DerivedBasis, 1),
+                2,
+                4,
+                &mut categorical_position,
+                0,
+                1,
+            ),
+            Err(wrong_mode())
+        );
+        assert_eq!(categorical_position, categorical_before);
+
+        let mut native_position = categorical_before;
+        assert_eq!(
+            kernel_redeem_native(
+                &encoded(BasisMode::FinitePreset, 1),
+                2,
+                4,
+                PayoutVectorBytes {
+                    denominator: 1,
+                    weights: payout().weights,
+                },
+                &mut native_position,
+                0,
+                1,
+            ),
+            Err(wrong_mode())
+        );
+        assert_eq!(native_position, categorical_before);
+    }
 }
 
 /// Write the market lifecycle back, in its own frame.
@@ -3349,6 +3455,7 @@ mod tests {
         let kernel = KernelAccount {
             market: market_id,
             phase: 0,
+            basis_mode: BasisMode::FinitePreset,
             resolved_payout: 0,
             payouts: payout_set(),
             total_supply: [0; MAX_OUTCOMES],

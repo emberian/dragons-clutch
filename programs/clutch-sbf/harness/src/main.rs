@@ -47,7 +47,7 @@
 //! Nothing here is evidence about mainnet, devnet, or any deployment.
 
 use clutch_accumulator::{Grid, Observation, Summary, COVERAGE_POLICY_COMPLETE_REQUIRED};
-use clutch_kernel::{PayoutSet, PayoutVector, MAX_PAYOUTS};
+use clutch_kernel::{BasisMode, PayoutSet, PayoutVector, MAX_PAYOUTS};
 use clutch_sbf::instructions::observe_resolve::{
     BUFFER_VERSION, EVIDENCE_BUFFER_HEADER_BYTES, EVIDENCE_BUFFER_TAG, FEED_PAGE_HEADER_BYTES,
     FEED_PAGE_TAG,
@@ -1862,6 +1862,7 @@ impl Plane {
         let kernel_account = KernelAccount {
             market: self.market_id,
             phase: 0,
+            basis_mode: BasisMode::FinitePreset,
             resolved_payout: 0,
             payouts: payout_set(),
             total_supply: [0; MAX_OUTCOMES],
@@ -3952,6 +3953,7 @@ fn founding_plane(
     let kernel_account = KernelAccount {
         market: plane.market_id,
         phase: 0,
+        basis_mode: BasisMode::FinitePreset,
         resolved_payout: 0,
         payouts: payout_set(),
         total_supply: [0; MAX_OUTCOMES],

@@ -76,6 +76,7 @@ const REPLAY_TAG: u8 = 0x43;
 const WINDOW_EVIDENCE_TAG: u8 = 0x45;
 const REQUEST_TAG: u8 = 0xd1;
 const REFERENCE_VERSION: u8 = 1;
+const KERNEL_ACCOUNT_VERSION: u8 = 2;
 const ACTION_LAYOUT: u8 = 0;
 const ACTION_RESOLVE: u8 = 1;
 const ACTION_REDEEM_INTERNAL: u8 = 2;
@@ -100,7 +101,7 @@ pub const MAX_WINDOW_EVIDENCE_LEN: usize =
 
 /// Exact length of the reference-only kernel account.
 pub const KERNEL_ACCOUNT_LEN: usize =
-    2 + 32 + 1 + 1 + 1 + 1 + (8 * MAX_OUTCOMES) + (MAX_PAYOUTS * PAYOUT_VECTOR_BYTES);
+    2 + 32 + 1 + 1 + 1 + 1 + 1 + (8 * MAX_OUTCOMES) + (MAX_PAYOUTS * PAYOUT_VECTOR_BYTES);
 /// Exact length of the reference-only external-balance account.
 pub const EXTERNAL_ACCOUNT_LEN: usize = 2 + 32 + 32 + 8 + (8 * MAX_OUTCOMES) + 1 + 1;
 /// Exact length of the reference-only replay account.
@@ -498,6 +499,8 @@ pub struct KernelAccount {
     pub market: Hash32,
     /// Kernel phase: zero active, one resolved.
     pub phase: u8,
+    /// Immutable resolution mode selected from the validated market terms.
+    pub basis_mode: BasisMode,
     /// Selected payout index after resolution.
     pub resolved_payout: u8,
     /// Immutable finite payout set.
@@ -585,13 +588,16 @@ struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     fn new(bytes: &'a [u8], expected: usize, tag: u8) -> Result<Self> {
+        Self::new_version(bytes, expected, tag, REFERENCE_VERSION)
+    }
+    fn new_version(bytes: &'a [u8], expected: usize, tag: u8, version: u8) -> Result<Self> {
         if bytes.len() != expected {
             return Err(Error::WrongLength);
         }
         if bytes[0] != tag {
             return Err(Error::WrongTag);
         }
-        if bytes[1] != REFERENCE_VERSION {
+        if bytes[1] != version {
             return Err(Error::WrongVersion);
         }
         Ok(Self { bytes, at: 2 })
@@ -640,11 +646,14 @@ struct Writer<'a> {
 
 impl<'a> Writer<'a> {
     fn new(bytes: &'a mut [u8], tag: u8) -> Result<Self> {
+        Self::new_version(bytes, tag, REFERENCE_VERSION)
+    }
+    fn new_version(bytes: &'a mut [u8], tag: u8, version: u8) -> Result<Self> {
         if bytes.len() < 2 {
             return Err(Error::WrongLength);
         }
         bytes[0] = tag;
-        bytes[1] = REFERENCE_VERSION;
+        bytes[1] = version;
         Ok(Self { bytes, at: 2 })
     }
     fn raw(&mut self, value: &[u8]) -> Result<()> {
@@ -680,9 +689,10 @@ impl KernelAccount {
         if out.len() != KERNEL_ACCOUNT_LEN {
             return Err(Error::WrongLength);
         }
-        let mut writer = Writer::new(out, KERNEL_TAG)?;
+        let mut writer = Writer::new_version(out, KERNEL_TAG, KERNEL_ACCOUNT_VERSION)?;
         writer.hash(self.market)?;
         writer.u8(self.phase)?;
+        writer.u8(self.basis_mode as u8)?;
         writer.u8(self.resolved_payout)?;
         writer.u8(self.payouts.count)?;
         writer.u8(self.payouts.outcomes)?;
@@ -701,9 +711,19 @@ impl KernelAccount {
 
     /// Decode the exact reference-only kernel account layout.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let mut reader = Reader::new(bytes, KERNEL_ACCOUNT_LEN, KERNEL_TAG)?;
+        let mut reader = Reader::new_version(
+            bytes,
+            KERNEL_ACCOUNT_LEN,
+            KERNEL_TAG,
+            KERNEL_ACCOUNT_VERSION,
+        )?;
         let market = reader.hash()?;
         let phase = reader.u8()?;
+        let basis_mode = match reader.u8()? {
+            0 => BasisMode::FinitePreset,
+            1 => BasisMode::DerivedBasis,
+            _ => return Err(Error::NonCanonical),
+        };
         let resolved_payout = reader.u8()?;
         let count = reader.u8()?;
         let outcomes = reader.u8()?;
@@ -724,6 +744,7 @@ impl KernelAccount {
         let value = Self {
             market,
             phase,
+            basis_mode,
             resolved_payout,
             payouts: PayoutSet::new(count, outcomes, vectors),
             total_supply,
@@ -740,8 +761,16 @@ impl KernelAccount {
         if self.phase == 0 && self.resolved_payout != 0 {
             return Err(Error::NonCanonical);
         }
-        if self.phase == 1 && self.resolved_payout >= self.payouts.count {
-            return Err(Error::NonCanonical);
+        if self.phase == 1 {
+            match self.basis_mode {
+                BasisMode::FinitePreset if self.resolved_payout >= self.payouts.count => {
+                    return Err(Error::NonCanonical);
+                }
+                BasisMode::DerivedBasis if self.resolved_payout != 0 => {
+                    return Err(Error::NonCanonical);
+                }
+                BasisMode::FinitePreset | BasisMode::DerivedBasis => {}
+            }
         }
         let count = usize::from(self.payouts.outcomes);
         if self.total_supply[count..].iter().any(|amount| *amount != 0) {
@@ -1705,6 +1734,14 @@ fn fold_window_evidence(bytes: &[u8], feed_cursor: u64) -> Result<WindowResult> 
 /// what makes "the payouts this market pays" a committed fact rather than an
 /// assertion of whoever assembled the transaction.
 fn require_payout_set_binding(kernel: &KernelAccount, terms: &TermsAccount) -> Result<()> {
+    let expected_mode = if terms.basis_degree == 0 {
+        BasisMode::FinitePreset
+    } else {
+        BasisMode::DerivedBasis
+    };
+    if kernel.basis_mode != expected_mode {
+        return Err(Error::Kernel(KernelError::WrongResolutionMode));
+    }
     if kernel.payouts.count != terms.payout_count || kernel.payouts.outcomes != terms.outcome_count
     {
         return Err(Error::PayoutSetMismatch);
@@ -1858,22 +1895,17 @@ fn kernel_market(state: &DecodedState) -> Result<MarketState> {
         1 => Phase::Resolved,
         _ => return Err(Error::NonCanonical),
     };
+    if phase == Phase::Resolved && kernel.basis_mode == BasisMode::DerivedBasis {
+        /* KernelAccount owns only the immutable mode.  The v3 Resolution
+         * record remains the sole persisted owner of a native payout vector,
+         * and this legacy account-shaped adapter is not passed that record. */
+        return Err(Error::Kernel(KernelError::WrongResolutionMode));
+    }
     let pure = MarketState {
         outcomes: market.outcome_count,
         phase,
         resolved_payout: kernel.resolved_payout,
-        // The reference kernel account carries no basis-mode byte and no
-        // resolved-vector slot, so the market it can reconstruct is a
-        // `FinitePreset` one and nothing else.  This is not a policy choice:
-        // it is what the landed account bytes can say.  Persisting the mode
-        // and the installed vector — and `ResolutionAccount.resolved_value`,
-        // without which redemption in mode 1 has no record-bound authority to
-        // check against — is the layout half of the design's §4 residue, and
-        // `ResolutionAccount` is a frozen layout-crate type this crate does
-        // not own.  Until that lands, the account-driven adapter path is
-        // mode 0 and derived-basis markets resolve through the pure
-        // [`resolve_derived_market`] seam only.
-        basis_mode: BasisMode::FinitePreset,
+        basis_mode: kernel.basis_mode,
         resolved_vector: PayoutVector::ZERO,
         collateral: hoard.collateral_atoms,
         total_supply: kernel.total_supply,
@@ -2546,6 +2578,7 @@ mod tests {
         let kernel = KernelAccount {
             market: market_id,
             phase: 0,
+            basis_mode: BasisMode::FinitePreset,
             resolved_payout: 0,
             payouts: payout_set(),
             total_supply: [0; MAX_OUTCOMES],
@@ -2973,6 +3006,82 @@ mod tests {
     }
 
     #[test]
+    fn kernel_v2_persists_mode_and_refuses_hostile_or_legacy_mode_bytes() {
+        let f = fixture();
+        let mut kernel = KernelAccount::decode(&f.state.kernel).unwrap();
+        kernel.basis_mode = BasisMode::DerivedBasis;
+        let mut encoded = [0_u8; KERNEL_ACCOUNT_LEN];
+        kernel.encode(&mut encoded).unwrap();
+        assert_eq!(
+            KernelAccount::decode(&encoded).unwrap().basis_mode,
+            BasisMode::DerivedBasis
+        );
+
+        let mut hostile = encoded;
+        hostile[35] = 2;
+        assert_eq!(KernelAccount::decode(&hostile), Err(Error::NonCanonical));
+
+        let mut legacy_version = encoded;
+        legacy_version[1] = REFERENCE_VERSION;
+        assert_eq!(
+            KernelAccount::decode(&legacy_version),
+            Err(Error::WrongVersion)
+        );
+    }
+
+    #[test]
+    fn market_initialization_refuses_a_hostile_mode_flip_exactly() {
+        let mut f = fixture();
+        clear_init_cash(&mut f.state);
+        let mut kernel = KernelAccount::decode(&f.state.kernel).unwrap();
+        kernel.basis_mode = BasisMode::DerivedBasis;
+        kernel.encode(&mut f.state.kernel).unwrap();
+        assert_eq!(
+            validate_market_init(
+                &f.realm,
+                &f.profile,
+                &f.policy,
+                &f.terms,
+                state_bytes(&f.state),
+                &f.create,
+                &f.metadata,
+                &f.bindings,
+            ),
+            Err(Error::Kernel(KernelError::WrongResolutionMode))
+        );
+    }
+
+    #[test]
+    fn active_derived_mode_split_is_solvent_and_preserves_mode() {
+        let mut f = fixture();
+        let mut kernel = KernelAccount::decode(&f.state.kernel).unwrap();
+        kernel.basis_mode = BasisMode::DerivedBasis;
+        kernel.encode(&mut f.state.kernel).unwrap();
+        let market = MarketAccount::decode(&f.state.market).unwrap();
+        let position = PositionAccount::decode(&f.state.position).unwrap();
+        let split = apply_layout(
+            &f.state,
+            &f.metadata,
+            &f.bindings,
+            0,
+            Intent::Split {
+                market: market.market,
+                owner: position.owner,
+                quantity: 6,
+            },
+        )
+        .unwrap();
+        let after = KernelAccount::decode(&split.kernel).unwrap();
+        assert_eq!(after.basis_mode, BasisMode::DerivedBasis);
+        assert_eq!(after.total_supply[0], 6);
+        assert_eq!(after.total_supply[1], 6);
+        assert_eq!(
+            HoardAccount::decode(&split.hoard).unwrap().collateral_atoms,
+            6
+        );
+    }
+
+    #[test]
     fn initialized_market_refuses_preexisting_position_claims() {
         let mut f = fixture();
         clear_init_cash(&mut f.state);
@@ -3085,8 +3194,8 @@ mod tests {
         expected_position[82..90].copy_from_slice(&11_u64.to_le_bytes());
         expected_position[202..210].copy_from_slice(&89_u64.to_le_bytes());
         let mut expected_kernel = f.state.kernel;
-        expected_kernel[38..46].copy_from_slice(&11_u64.to_le_bytes());
-        expected_kernel[46..54].copy_from_slice(&11_u64.to_le_bytes());
+        expected_kernel[39..47].copy_from_slice(&11_u64.to_le_bytes());
+        expected_kernel[47..55].copy_from_slice(&11_u64.to_le_bytes());
         let expected_external = f.state.external;
         let mut expected_replay = f.state.replay;
         expected_replay[74..82].copy_from_slice(&1_u64.to_le_bytes());
@@ -3125,8 +3234,8 @@ mod tests {
         expected_position[82..90].copy_from_slice(&7_u64.to_le_bytes());
         expected_position[202..210].copy_from_slice(&93_u64.to_le_bytes());
         let mut expected_kernel = split.kernel;
-        expected_kernel[38..46].copy_from_slice(&7_u64.to_le_bytes());
-        expected_kernel[46..54].copy_from_slice(&7_u64.to_le_bytes());
+        expected_kernel[39..47].copy_from_slice(&7_u64.to_le_bytes());
+        expected_kernel[47..55].copy_from_slice(&7_u64.to_le_bytes());
         let expected_external = split.external;
         let mut expected_replay = split.replay;
         expected_replay[74..82].copy_from_slice(&2_u64.to_le_bytes());
@@ -5523,7 +5632,7 @@ mod tests {
         expected_market[131] = 1;
         let mut expected_kernel = split.kernel;
         expected_kernel[34] = 1;
-        expected_kernel[35] = 1;
+        expected_kernel[36] = 1;
         let mut expected_replay = split.replay;
         expected_replay[74..82].copy_from_slice(&2_u64.to_le_bytes());
         let mut expected_resolution = f.resolution;
@@ -5572,7 +5681,7 @@ mod tests {
         expected_position[82..90].copy_from_slice(&0_u64.to_le_bytes());
         expected_position[202..210].copy_from_slice(&100_u64.to_le_bytes());
         let mut expected_kernel = resolved.kernel;
-        expected_kernel[46..54].copy_from_slice(&0_u64.to_le_bytes());
+        expected_kernel[47..55].copy_from_slice(&0_u64.to_le_bytes());
         let mut expected_replay = resolved.replay;
         expected_replay[74..82].copy_from_slice(&3_u64.to_le_bytes());
         let mut expected_supply = resolved.supply;
@@ -5944,9 +6053,10 @@ mod tests {
     #[test]
     fn degree_one_account_resolution_refuses_preset_lowering() {
         /* At x̂ = 3 the native vector is (4, 3). Even though that vector is
-         * also present at preset index 3, the account path has no persisted
-         * BasisMode/resolved-vector slot and must not lower the shaped
-         * settlement into an index lookup. */
+         * also present at preset index 3, this compatibility path has no v3
+         * Resolution vector and must not lower shaped settlement into an
+         * index lookup. The immutable stored mode makes that an earlier
+         * kernel refusal. */
         let mut f = fixture();
         let terms = hat_terms_with_enumerated_lattice(&f);
         refreeze_terms(&mut f, terms);
@@ -5954,7 +6064,7 @@ mod tests {
 
         assert_eq!(
             resolve_terminal(&f, &split, 1, 3, 3, 3),
-            Err(Error::Resolution(ResolutionRefusal::WrongResolutionMode))
+            Err(Error::Kernel(KernelError::WrongResolutionMode))
         );
         assert_eq!(derived_vector_at(&f, 3, 3).unwrap().weights[..2], [4, 3]);
     }
@@ -5962,8 +6072,9 @@ mod tests {
     #[test]
     fn degree_one_account_path_names_the_native_storage_residue() {
         /* The same derivation under D = 64 lands on (40, 24), which no
-         * preset carries. The kernel already has resolve_with_vector; the
-         * remaining residue is the account format that cannot persist it. */
+         * preset carries. KernelAccount persists the immutable mode, while
+         * the v3 SBF Resolution record remains the sole vector owner. This
+         * compatibility path has no such record and refuses explicitly. */
         let mut f = fixture();
         let mut terms = hat_terms_exact_d8(&f);
         let mut left = [0u64; MAX_OUTCOMES];
@@ -5982,7 +6093,7 @@ mod tests {
         let split = split_state(&f, 14);
         assert_eq!(
             resolve_terminal(&f, &split, 1, 0, 3, 3),
-            Err(Error::Resolution(ResolutionRefusal::WrongResolutionMode))
+            Err(Error::Kernel(KernelError::WrongResolutionMode))
         );
         /* The pure seam still derives the validated member-shaped vector.
          * Account-backed native persistence belongs to the SBF adapter, not
@@ -5992,7 +6103,7 @@ mod tests {
          * boundary is semantic, not a membership optimization. */
         assert_eq!(
             resolve_terminal(&f, &split, 1, 1, 8, 8),
-            Err(Error::Resolution(ResolutionRefusal::WrongResolutionMode))
+            Err(Error::Kernel(KernelError::WrongResolutionMode))
         );
     }
 

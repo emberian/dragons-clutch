@@ -1,6 +1,6 @@
 {
   "digests": {
-    "manifest": "06177e24ad6b1e686ce9cf2a49dc1d7a57ac0e2d3894591580c1d4d42616e599",
+    "manifest": "59f0dddfbc88d9251ca4e8b8844bc62d6066540a4fb1cb6243d9a80f43cdc576",
     "taxonomy": "1025002bef00f599a188f52bd68465cf5782f88ded63fbdc1bc8f470d0a20af4"
   },
   "family": "adapter",
@@ -18,7 +18,7 @@
         "single_fault": true
       },
       "digests": {
-        "vector": "397f6911b49ef47ae1c9c841f7b2fa9b05d63a4dc01db1a569bcfc0914865c72"
+        "vector": "e9f0ece2ddc738ad1c995a1e546769af3eeefe306be57a2066b4a650a9d09680"
       },
       "domain": "success",
       "executors": {
@@ -109,6 +109,7 @@
               "stored_bump": 4
             },
             "kernel": {
+              "basis_mode": "finite-preset",
               "payouts": {
                 "count": 2,
                 "outcomes": 2,
@@ -336,7 +337,7 @@
         "single_fault": true
       },
       "digests": {
-        "vector": "571ac4254e0b1ea0dea23dd8a7fdbedc9d02d523bf4bbceeadb7c7c7cfbae387"
+        "vector": "d49a311518ef2d15e5e60dd39bc74dbf1ac76b4adf8f101f2c85e5d7dbf487b4"
       },
       "domain": "cons",
       "executors": {
@@ -417,6 +418,7 @@
               "stored_bump": 4
             },
             "kernel": {
+              "basis_mode": "finite-preset",
               "payouts": {
                 "count": 2,
                 "outcomes": 2,
@@ -602,7 +604,7 @@
         "single_fault": false
       },
       "digests": {
-        "vector": "ebc5d7edb2215255782d439b37ea4cce982c04eb982e9155d57739de4948cd9a"
+        "vector": "1bf9b91e67e6f3f180929ab9b8c55789112dcaaf406a9b7bb463f1d1cd7c8a60"
       },
       "domain": "evid",
       "executors": {
@@ -666,6 +668,7 @@
               "stored_bump": 4
             },
             "kernel": {
+              "basis_mode": "finite-preset",
               "payouts": {
                 "count": 2,
                 "outcomes": 2,

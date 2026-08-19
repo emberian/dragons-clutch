@@ -40,6 +40,7 @@
 //! them.
 
 use crate::error::{ClutchError, Refusal};
+use clutch_kernel::BasisMode;
 use clutch_solana_layout::{
     stream, CandidateRecord, EpochAccount, FeedAccount, FinalPotAccount, Hash32, MarketAccount,
     PriceGridAccount, ProfileAccount, RealmAccount, ResolutionAccount, SettlementReceiptAccount,
@@ -245,6 +246,8 @@ pub struct KernelFacts {
     pub market: Hash32,
     /// Kernel phase: zero active, one resolved.
     pub phase: u8,
+    /// Immutable resolution mode copied from validated Terms at creation.
+    pub basis_mode: BasisMode,
     /// Outcome count the frozen payout set was built over.
     pub payout_outcomes: u8,
     /// Aggregate internal plus external supply by outcome.
@@ -300,6 +303,7 @@ pub fn read_kernel(data: &[u8]) -> Outcome<KernelFacts> {
     Ok(KernelFacts {
         market: value.market,
         phase: value.phase,
+        basis_mode: value.basis_mode,
         payout_outcomes: value.payouts.outcomes,
         total_supply: value.total_supply,
     })
@@ -477,6 +481,8 @@ pub struct TermsFacts {
     pub outcome_count: u8,
     /// Active payout-vector count.
     pub payout_count: u8,
+    /// Frozen B-spline degree; zero selects finite presets, one through three native basis mode.
+    pub basis_degree: u8,
     /// Per-market collateral cap the terms digest commits to.
     pub collateral_cap: u64,
     /// Stored PDA bump.
@@ -718,6 +724,7 @@ pub fn read_terms(data: &[u8]) -> Outcome<TermsFacts> {
         price_grid: value.price_grid,
         outcome_count: value.outcome_count,
         payout_count: value.payout_count,
+        basis_degree: value.basis_degree,
         collateral_cap: value.collateral_cap,
         stored_bump: value.stored_bump,
     })
@@ -1441,6 +1448,7 @@ mod tests {
         KernelFacts {
             market: h(1),
             phase: 0,
+            basis_mode: BasisMode::FinitePreset,
             payout_outcomes: 2,
             total_supply: total,
         }

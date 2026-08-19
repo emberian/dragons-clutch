@@ -92,7 +92,7 @@ use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use crate::token;
 use clutch_kernel::{
-    BasisMode, MarketState, PayoutVector, Phase, Position, MAX_OUTCOMES as KERNEL_MAX_OUTCOMES,
+    MarketState, PayoutVector, Phase, Position, MAX_OUTCOMES as KERNEL_MAX_OUTCOMES,
 };
 use clutch_solana_layout::{
     account_len, collateral, Hash32, HoardAccount, Intent, PositionAccount, ProfileAccount,
@@ -554,26 +554,16 @@ fn kernel_step(
     {
         return Err(ClutchError::MismatchedState.into());
     }
-    let phase = match account.phase {
-        0 => Phase::Active,
-        1 => Phase::Resolved,
+    match account.phase {
+        0 => {}
+        1 => return Err(clutch_kernel::Error::NotActive.into()),
         _ => return Err(ClutchError::NonCanonical.into()),
-    };
-    /* `basis_mode` and `resolved_vector` are the resolution seam
-     * `clutch_kernel` grew for distributional claims.  This program rebuilds
-     * every `MarketState` from a stored `KernelAccount`, and that frozen
-     * layout carries no mode field -- so `FinitePreset` is not a choice made
-     * here, it is the only mode a decoded aggregate can name, and the kernel
-     * documents it as "byte-for-byte the semantics this kernel had before mode
-     * 1 existed".  A market whose terms select mode 1 needs a mode carrier in
-     * the layout before this line may say anything else; until then a
-     * derived-basis market is unrepresentable on chain rather than silently
-     * resolved as a preset one. */
+    }
     let mut market = MarketState {
         outcomes: outcome_count,
-        phase,
+        phase: Phase::Active,
         resolved_payout: account.resolved_payout,
-        basis_mode: BasisMode::FinitePreset,
+        basis_mode: account.basis_mode,
         resolved_vector: PayoutVector::ZERO,
         collateral: collateral_before,
         total_supply: account.total_supply,
@@ -603,6 +593,118 @@ fn kernel_step(
         phase: account.phase,
         resolved_payout: account.resolved_payout,
     })
+}
+
+#[cfg(test)]
+mod basis_mode_tests {
+    use super::*;
+    use clutch_kernel::{Error as KernelError, PayoutSet, MAX_PAYOUTS};
+
+    fn payout_set() -> PayoutSet {
+        let mut vectors = [PayoutVector::ZERO; MAX_PAYOUTS];
+        let mut left = [0_u64; MAX_OUTCOMES];
+        let mut right = [0_u64; MAX_OUTCOMES];
+        left[0] = 1;
+        right[1] = 1;
+        vectors[0] = PayoutVector::new(1, left);
+        vectors[1] = PayoutVector::new(1, right);
+        PayoutSet::new(2, 2, vectors)
+    }
+
+    fn encoded_kernel(phase: u8, collateral_supply: u64) -> Vec<u8> {
+        let mut total_supply = [0_u64; MAX_OUTCOMES];
+        total_supply[0] = collateral_supply;
+        total_supply[1] = collateral_supply;
+        let account = KernelAccount {
+            market: Hash32::from_bytes([9; 32]),
+            phase,
+            basis_mode: clutch_kernel::BasisMode::DerivedBasis,
+            resolved_payout: 0,
+            payouts: payout_set(),
+            total_supply,
+        };
+        let mut bytes = vec![0_u8; KERNEL_ACCOUNT_LEN];
+        account.encode(&mut bytes).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn active_native_split_and_materialize_preserve_mode_and_solvency() {
+        for degree in 1..=3 {
+            let mut bytes = encoded_kernel(0, 0);
+            let before_mode = KernelAccount::decode(&bytes).unwrap().basis_mode;
+            let mut position = Position::EMPTY;
+            let split = SeamOp::Split {
+                market: Hash32::from_bytes([9; 32]),
+                owner: Hash32::from_bytes([7; 32]),
+                quantity: 12,
+            };
+            let split_post = kernel_step(&mut bytes, 2, 0, &mut position, &split).unwrap();
+            assert_eq!(split_post.collateral, 12, "degree {degree}");
+            assert_eq!(split_post.total_supply[..2], [12, 12], "degree {degree}");
+
+            let materialize = SeamOp::Materialize {
+                market: Hash32::from_bytes([9; 32]),
+                owner: Hash32::from_bytes([7; 32]),
+                destination: Hash32::from_bytes([8; 32]),
+                outcome: 0,
+                quantity: 5,
+            };
+            let materialize_post =
+                kernel_step(&mut bytes, 2, 12, &mut position, &materialize).unwrap();
+            assert_eq!(materialize_post.collateral, 12, "degree {degree}");
+            assert_eq!(
+                materialize_post.total_supply[..2],
+                [12, 12],
+                "degree {degree}"
+            );
+            assert_eq!(position.internal[0], 7, "degree {degree}");
+            assert_eq!(position.external[0], 5, "degree {degree}");
+            assert_eq!(
+                KernelAccount::decode(&bytes).unwrap().basis_mode,
+                before_mode
+            );
+        }
+    }
+
+    #[test]
+    fn split_family_refuses_resolved_native_state_before_construction_and_write() {
+        let mut bytes = encoded_kernel(1, 0);
+        let before_bytes = bytes.clone();
+        let mut position = Position::EMPTY;
+        let before_position = position;
+        let op = SeamOp::Split {
+            market: Hash32::from_bytes([9; 32]),
+            owner: Hash32::from_bytes([7; 32]),
+            quantity: 1,
+        };
+        assert_eq!(
+            kernel_step(&mut bytes, 2, 0, &mut position, &op),
+            Err(Refusal::Kernel(KernelError::NotActive))
+        );
+        assert_eq!(bytes, before_bytes);
+        assert_eq!(position, before_position);
+    }
+
+    #[test]
+    fn undercollateralized_active_native_prestate_refuses_without_write() {
+        let mut bytes = encoded_kernel(0, 6);
+        let before_bytes = bytes.clone();
+        let mut position = Position::EMPTY;
+        let op = SeamOp::Materialize {
+            market: Hash32::from_bytes([9; 32]),
+            owner: Hash32::from_bytes([7; 32]),
+            destination: Hash32::from_bytes([8; 32]),
+            outcome: 0,
+            quantity: 1,
+        };
+        assert_eq!(
+            kernel_step(&mut bytes, 2, 5, &mut position, &op),
+            Err(Refusal::Kernel(KernelError::InvariantViolation))
+        );
+        assert_eq!(bytes, before_bytes);
+        assert_eq!(position, Position::EMPTY);
+    }
 }
 
 /// Move the two-term ledger by exactly the position delta and re-close it.
@@ -2335,6 +2437,7 @@ pub(crate) mod tests {
         let kernel = KernelAccount {
             market: market_id,
             phase: 0,
+            basis_mode: clutch_kernel::BasisMode::FinitePreset,
             resolved_payout: 0,
             payouts: payout_set(),
             total_supply: [0; MAX_OUTCOMES],

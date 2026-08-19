@@ -32,7 +32,7 @@
 
 #![deny(missing_docs)]
 
-use clutch_kernel::{PayoutSet, PayoutVector};
+use clutch_kernel::{BasisMode, PayoutSet, PayoutVector};
 use clutch_sbf::instructions::observe_resolve::{
     BUFFER_VERSION, EVIDENCE_BUFFER_HEADER_BYTES, EVIDENCE_BUFFER_TAG,
 };
@@ -687,6 +687,7 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
                     KernelAccount {
                         market: market_id,
                         phase: lifecycle,
+                        basis_mode: BasisMode::FinitePreset,
                         resolved_payout,
                         payouts: payout_set(),
                         total_supply: internal,

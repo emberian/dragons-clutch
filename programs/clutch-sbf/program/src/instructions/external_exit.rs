@@ -145,11 +145,15 @@ fn terms_basis_degree(terms_bytes: &[u8]) -> Outcome<u8> {
 fn require_resolved_kernel_head(
     kernel_bytes: &[u8],
     market: Hash32,
+    expected_mode: BasisMode,
     resolution_payout: u8,
     payout_count: u8,
     outcome_count: u8,
 ) -> Outcome<()> {
     let kernel = KernelAccount::decode(kernel_bytes)?;
+    if kernel.basis_mode != expected_mode {
+        return Err(clutch_kernel::Error::WrongResolutionMode.into());
+    }
     require(
         kernel.market == market
             && kernel.phase == 1
@@ -169,12 +173,15 @@ fn kernel_redeem(
     quantity: u64,
 ) -> Outcome<u64> {
     let mut account = KernelAccount::decode(kernel_data)?;
+    if account.basis_mode != BasisMode::FinitePreset {
+        return Err(clutch_kernel::Error::WrongResolutionMode.into());
+    }
     require(account.phase == 1, ClutchError::NotActive)?;
     let mut market = MarketState {
         outcomes: outcome_count,
         phase: Phase::Resolved,
         resolved_payout: account.resolved_payout,
-        basis_mode: BasisMode::FinitePreset,
+        basis_mode: account.basis_mode,
         resolved_vector: PayoutVector::ZERO,
         collateral,
         total_supply: account.total_supply,
@@ -464,6 +471,11 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
     require_resolved_kernel_head(
         &accounts[IX_KERNEL].data.borrow(),
         market.market,
+        if basis_degree == 0 {
+            BasisMode::FinitePreset
+        } else {
+            BasisMode::DerivedBasis
+        },
         resolution.kernel_index(),
         terms.payout_count,
         terms.outcome_count,
@@ -598,12 +610,13 @@ mod tests {
     use super::*;
     use clutch_kernel::{Error as KernelError, PayoutSet, MAX_PAYOUTS};
     use clutch_solana_layout::MAX_OUTCOMES;
+    use clutch_solana_reference::Error as ReferenceError;
 
     fn h(value: u8) -> Hash32 {
         Hash32::from_bytes([value; 32])
     }
 
-    fn encoded_kernel(vector: PayoutVector, supply: u64) -> Vec<u8> {
+    fn encoded_kernel(vector: PayoutVector, supply: u64, basis_mode: BasisMode) -> Vec<u8> {
         let mut vectors = [PayoutVector::ZERO; MAX_PAYOUTS];
         vectors[0] = vector;
         let mut total = [0_u64; MAX_OUTCOMES];
@@ -613,6 +626,7 @@ mod tests {
         KernelAccount {
             market: h(1),
             phase: 1,
+            basis_mode,
             resolved_payout: 0,
             payouts: PayoutSet::new(1, 2, vectors),
             total_supply: total,
@@ -626,7 +640,7 @@ mod tests {
     fn bearer_redemption_needs_no_owner_position() {
         let mut weights = [0_u64; MAX_OUTCOMES];
         weights[0] = 1;
-        let mut bytes = encoded_kernel(PayoutVector::new(1, weights), 5);
+        let mut bytes = encoded_kernel(PayoutVector::new(1, weights), 5, BasisMode::FinitePreset);
         assert_eq!(kernel_redeem(&mut bytes, 2, 5, 0, 2), Ok(2));
         let after = KernelAccount::decode(&bytes).unwrap();
         assert_eq!(after.total_supply[0], 3);
@@ -638,7 +652,7 @@ mod tests {
         let mut weights = [0_u64; MAX_OUTCOMES];
         weights[0] = 1;
         weights[1] = 1;
-        let mut bytes = encoded_kernel(PayoutVector::new(2, weights), 5);
+        let mut bytes = encoded_kernel(PayoutVector::new(2, weights), 5, BasisMode::FinitePreset);
         let before = bytes.clone();
         assert_eq!(
             kernel_redeem(&mut bytes, 2, 5, 0, 1),
@@ -658,7 +672,11 @@ mod tests {
         };
         let mut preset_weights = [0_u64; MAX_OUTCOMES];
         preset_weights[0] = 2;
-        let mut bytes = encoded_kernel(PayoutVector::new(2, preset_weights), 5);
+        let mut bytes = encoded_kernel(
+            PayoutVector::new(2, preset_weights),
+            5,
+            BasisMode::DerivedBasis,
+        );
         let before = bytes.clone();
         assert_eq!(
             kernel_redeem_native(&mut bytes, 2, 5, vector, 0, 1),
@@ -687,10 +705,49 @@ mod tests {
         };
         let mut preset_weights = [0_u64; MAX_OUTCOMES];
         preset_weights[0] = 2;
-        let mut bytes = encoded_kernel(PayoutVector::new(2, preset_weights), 6);
+        let mut bytes = encoded_kernel(
+            PayoutVector::new(2, preset_weights),
+            6,
+            BasisMode::DerivedBasis,
+        );
         let before = bytes.clone();
         assert!(kernel_redeem_native(&mut bytes, 2, 5, vector, 0, 2).is_err());
         assert_eq!(bytes, before);
+    }
+
+    #[test]
+    fn categorical_and_native_redemption_refuse_opposite_stored_modes_without_write() {
+        let mut preset_weights = [0_u64; MAX_OUTCOMES];
+        preset_weights[0] = 1;
+        let preset = PayoutVector::new(1, preset_weights);
+
+        let mut derived_bytes = encoded_kernel(preset, 5, BasisMode::DerivedBasis);
+        let derived_before = derived_bytes.clone();
+        assert_eq!(
+            kernel_redeem(&mut derived_bytes, 2, 5, 0, 1),
+            Err(Refusal::Kernel(KernelError::WrongResolutionMode))
+        );
+        assert_eq!(derived_bytes, derived_before);
+
+        let mut finite_bytes = encoded_kernel(preset, 5, BasisMode::FinitePreset);
+        let finite_before = finite_bytes.clone();
+        assert_eq!(
+            kernel_redeem_native(
+                &mut finite_bytes,
+                2,
+                5,
+                PayoutVectorBytes {
+                    denominator: 1,
+                    weights: preset_weights,
+                },
+                0,
+                1,
+            ),
+            Err(Refusal::Reference(ReferenceError::Kernel(
+                KernelError::WrongResolutionMode
+            )))
+        );
+        assert_eq!(finite_bytes, finite_before);
     }
 
     #[test]

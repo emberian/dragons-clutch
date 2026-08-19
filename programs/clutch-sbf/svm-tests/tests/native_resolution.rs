@@ -195,6 +195,7 @@ fn smooth_plane_with_external(
     let kernel = KernelAccount {
         market: market_id,
         phase: 0,
+        basis_mode: clutch_kernel::BasisMode::DerivedBasis,
         resolved_payout: 0,
         payouts: payout_set,
         total_supply,

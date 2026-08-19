@@ -115,6 +115,7 @@ fn resolution_code(refusal: clutch_solana_reference::ResolutionRefusal) -> (u32,
         R::BasisMalformed => (2080, "BasisMalformed"),
         R::WeightDerivationOverflow => (1006, "WeightDerivationOverflow"),
         R::ValueOutOfRange => (6008, "ValueOutOfRange"),
+        R::NonPointEvidence => (6009, "NonPointEvidence"),
         R::DerivedVectorUnrepresentable => (9008, "DerivedVectorUnrepresentable"),
         R::WrongResolutionMode => (9009, "WrongResolutionMode"),
     }
@@ -283,6 +284,11 @@ impl AdapterExecutor {
                 "active" => 0,
                 "resolved" => 1,
                 other => return Err(format!("ENUM-1: unknown kernel phase {other:?}")),
+            },
+            basis_mode: match str_field(kernel_value, "basis_mode")? {
+                "finite-preset" => clutch_kernel::BasisMode::FinitePreset,
+                "derived-basis" => clutch_kernel::BasisMode::DerivedBasis,
+                other => return Err(format!("ENUM-1: unknown kernel basis mode {other:?}")),
             },
             resolved_payout: small_field(kernel_value, "resolved_payout")? as u8,
             payouts: PayoutSet::new(

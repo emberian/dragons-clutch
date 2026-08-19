@@ -11,18 +11,26 @@ name = "clutch-batch"
 version = "0.1.0"
 
 [[package]]
+name = "clutch-bspline"
+version = "0.1.0"
+
+[[package]]
 name = "clutch-kernel"
 version = "0.1.0"
 
 [[package]]
 name = "clutch-solana-layout"
 version = "0.1.0"
+dependencies = [
+ "solana-sha256-hasher",
+]
 
 [[package]]
 name = "clutch-solana-reference"
 version = "0.1.0"
 dependencies = [
  "clutch-accumulator",
+ "clutch-bspline",
  "clutch-kernel",
  "clutch-solana-layout",
 ]
@@ -36,4 +44,26 @@ dependencies = [
  "clutch-kernel",
  "clutch-solana-layout",
  "clutch-solana-reference",
+]
+
+[[package]]
+name = "solana-define-syscall"
+version = "4.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57e5b1c0bc1d4a4d10c88a4100499d954c09d3fecfae4912c1a074dff68b1738"
+
+[[package]]
+name = "solana-hash"
+version = "4.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0df9b01495ed31100aca97a7f5862d5e19ab1636d60d1a9f02391408dd9dec84"
+
+[[package]]
+name = "solana-sha256-hasher"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db7dc3011ea4c0334aaaa7e7128cb390ecf546b28d412e9bf2064680f57f588f"
+dependencies = [
+ "solana-define-syscall",
+ "solana-hash",
 ]

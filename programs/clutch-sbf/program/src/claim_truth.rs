@@ -357,6 +357,7 @@ mod tests {
         KernelAccount {
             market: h(1),
             phase: 0,
+            basis_mode: clutch_kernel::BasisMode::FinitePreset,
             resolved_payout: 0,
             payouts: payouts(),
             total_supply: total,

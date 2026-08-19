@@ -808,6 +808,14 @@ fn terms_basis_degree(terms_data: &[u8]) -> Outcome<u8> {
     Ok(terms.basis_degree)
 }
 
+fn basis_mode_for_degree(degree: u8) -> BasisMode {
+    if degree == 0 {
+        BasisMode::FinitePreset
+    } else {
+        BasisMode::DerivedBasis
+    }
+}
+
 fn resolution_account_len(terms_data: &[u8]) -> Outcome<usize> {
     Ok(if terms_basis_degree(terms_data)? == 0 {
         account_len::RESOLUTION
@@ -818,8 +826,17 @@ fn resolution_account_len(terms_data: &[u8]) -> Outcome<usize> {
 
 /// Compare an encoded kernel account's payout set against an expected set.
 #[inline(never)]
-fn require_kernel_payouts(kernel_data: &[u8], expected: &PayoutSet) -> Outcome<()> {
+fn require_kernel_payouts(
+    kernel_data: &[u8],
+    expected: &PayoutSet,
+    expected_mode: BasisMode,
+) -> Outcome<()> {
     let kernel = KernelAccount::decode(kernel_data)?;
+    if kernel.basis_mode != expected_mode {
+        return Err(Refusal::Reference(ReferenceError::Kernel(
+            clutch_kernel::Error::WrongResolutionMode,
+        )));
+    }
     require(
         kernel.payouts.count == expected.count && kernel.payouts.outcomes == expected.outcomes,
         ClutchError::PayoutSetMismatch,
@@ -839,7 +856,8 @@ fn require_kernel_payouts(kernel_data: &[u8], expected: &PayoutSet) -> Outcome<(
 #[inline(never)]
 fn require_payout_set_binding(kernel_data: &[u8], terms_data: &[u8]) -> Outcome<()> {
     let expected = terms_payout_set(terms_data)?;
-    require_kernel_payouts(kernel_data, &expected)
+    let expected_mode = basis_mode_for_degree(terms_basis_degree(terms_data)?);
+    require_kernel_payouts(kernel_data, &expected, expected_mode)
 }
 
 /// The reference adapter's `kernel_market` plus `check_invariants`.
@@ -854,6 +872,12 @@ fn require_kernel_invariants(
     basis_degree: u8,
 ) -> Outcome<()> {
     let kernel = KernelAccount::decode(kernel_data)?;
+    let expected_mode = basis_mode_for_degree(basis_degree);
+    if kernel.basis_mode != expected_mode {
+        return Err(Refusal::Reference(ReferenceError::Kernel(
+            clutch_kernel::Error::WrongResolutionMode,
+        )));
+    }
     require(
         usize::from(outcome_count) <= KERNEL_MAX_OUTCOMES
             && kernel.payouts.outcomes == outcome_count,
@@ -864,25 +888,11 @@ fn require_kernel_invariants(
         1 => Phase::Resolved,
         _ => return Err(ClutchError::NonCanonical.into()),
     };
-    /* `basis_mode` and `resolved_vector` are the resolution seam
-     * `clutch_kernel` grew for distributional claims.  This program rebuilds
-     * every `MarketState` from a stored `KernelAccount`, and that frozen
-     * layout carries no mode field -- so `FinitePreset` is not a choice made
-     * here, it is the only mode a decoded aggregate can name, and the kernel
-     * documents it as "byte-for-byte the semantics this kernel had before mode
-     * 1 existed".  A market whose terms select mode 1 needs a mode carrier in
-     * the layout before this line may say anything else; until then a
-     * derived-basis market is unrepresentable on chain rather than silently
-     * resolved as a preset one. */
     let market = MarketState {
         outcomes: outcome_count,
         phase,
         resolved_payout: kernel.resolved_payout,
-        basis_mode: if basis_degree == 0 {
-            BasisMode::FinitePreset
-        } else {
-            BasisMode::DerivedBasis
-        },
+        basis_mode: kernel.basis_mode,
         resolved_vector: PayoutVector::ZERO,
         collateral,
         total_supply: kernel.total_supply,
@@ -1016,9 +1026,11 @@ fn write_position(data: &mut [u8], market: Hash32, owner: Hash32, bump: u8) -> O
 #[inline(never)]
 fn write_kernel(data: &mut [u8], terms_data: &[u8], market: Hash32) -> Outcome<()> {
     let payouts = terms_payout_set(terms_data)?;
+    let basis_mode = basis_mode_for_degree(terms_basis_degree(terms_data)?);
     let account = KernelAccount {
         market,
         phase: 0,
+        basis_mode,
         resolved_payout: 0,
         payouts,
         total_supply: [0; MAX_OUTCOMES],
@@ -2344,6 +2356,7 @@ mod tests {
         let expected_kernel = KernelAccount {
             market,
             phase: 0,
+            basis_mode: BasisMode::FinitePreset,
             resolved_payout: 0,
             payouts: PayoutSet::new(PAYOUT_COUNT, OUTCOME_COUNT, vectors),
             total_supply: [0; MAX_OUTCOMES],
@@ -2883,6 +2896,7 @@ mod tests {
         let broken = KernelAccount {
             market: market_id(),
             phase: 0,
+            basis_mode: BasisMode::FinitePreset,
             resolved_payout: 0,
             payouts: PayoutSet::new(PAYOUT_COUNT, OUTCOME_COUNT, bad),
             total_supply: [0; MAX_OUTCOMES],
@@ -2919,6 +2933,37 @@ mod tests {
         assert_eq!(
             founded.validate(),
             Err(ClutchError::PayoutSetMismatch.into())
+        );
+    }
+
+    #[test]
+    fn degree_zero_through_three_select_exactly_one_immutable_kernel_mode() {
+        assert_eq!(basis_mode_for_degree(0), BasisMode::FinitePreset);
+        for degree in 1..=3 {
+            assert_eq!(basis_mode_for_degree(degree), BasisMode::DerivedBasis);
+        }
+    }
+
+    #[test]
+    fn a_hostile_kernel_mode_flip_refuses_the_exact_wrong_mode_class() {
+        let mut state = founded();
+        let before_terms = state.terms.clone();
+        rewrite!(
+            state,
+            kernel,
+            KernelAccount,
+            KERNEL_ACCOUNT_LEN,
+            |value: &mut KernelAccount| value.basis_mode = BasisMode::DerivedBasis
+        );
+        assert_eq!(
+            state.validate(),
+            Err(Refusal::Reference(ReferenceError::Kernel(
+                clutch_kernel::Error::WrongResolutionMode
+            )))
+        );
+        assert_eq!(
+            state.terms, before_terms,
+            "immutable terms are not rewritten"
         );
     }
 
