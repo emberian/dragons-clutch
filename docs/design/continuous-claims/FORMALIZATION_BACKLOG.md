@@ -1,103 +1,244 @@
-# Continuous-claims formalization backlog
+# Continuous-claims formalization and promotion map
 
-Status: **PROPOSED execution map**. Passing an earlier stage does not imply a
-later stage. No mainnet, audit, or formal-verification claim follows from this
-document.
+Status: **MIXED LANDED EVIDENCE / OPEN UNIVERSAL REFINEMENT AND LIVE
+AUTHORITY** (2026-08-19). Passing an earlier stage does not imply a later stage.
+No mainnet, audit, deployment, or end-to-end formal-verification claim follows
+from this document.
 
-## C0 — Freeze semantics
+> **Supersession notice.** The original C0 item “select the degree-1 basis” is
+> complete and obsolete as a future decision. The selected native semantics are
+> the open-clamped degree-0--3 basis and `WEIGHT-ROUND-01`. The stage labels
+> below now distinguish landed evidence from still-open promotion work; they
+> must not be read as a claim that a whole stage is complete.
 
-- Select the degree-1 finite basis and exact denominator/rounding variants.
-- Freeze `ClaimArtifactV1` and `LiquidityPolicyV1` canonical bytes.
-- Define payoff approximation, edge, gap, fee, tranche, and withdrawal policies.
-- Record rejected alternatives: dual LMSR/sigmoid, mutable per-bin depth, VaR
-  solvency, and uncapitalized insurance.
+## C0 — Freeze semantics: partial
 
-Exit: two independent readers produce identical canonical vectors and digests.
+Landed:
 
-## C1 — Pure exact models
+- native degree `0..=3`, open-clamped knot/count/edge rules, denominator anchor,
+  evaluator version, and largest-remainder/lowest-index-tie semantics;
+- Terms v3 basis, source/window/statistic, and
+  coverage/repair/failure/ambiguity/edge policy identities;
+- immutable Kernel v2 `FinitePreset` versus `DerivedBasis` mode; and
+- distinct point-v3 and quantized-basis occupation-v4 Resolution meanings.
 
-- Implement dependency-light claim compiler and tranche reserve model.
-- Generate hard-range, triangular, capped-linear, and Gaussian-table goldens.
-- Add dynamic-depth, split-position, correlated-loss, and rounding falsifiers.
-- Differentially compare independent compiler implementations.
+Open:
 
-Exit: exhaustive bounded tests and randomized larger-domain tests close with no
-unclassified divergence; all refusals are state-atomic.
+- a consensus `ClaimArtifactV1`, integer coefficient scale, and onchain
+  commitment to the landed host `NativeShapeCertificateV1`;
+- canonical `LiquidityPolicyV1`, schedule, tranche, fee-carry, and share bytes;
+- the complete live batch-policy/selection/entitlement preimage; and
+- broader gap, smooth interval, and smooth TWAP semantics. Current occupation
+  instead requires exact complete point records and smooth TWAP refuses.
 
-## C2 — Kernel and batch refinement
+Exit remains open until two independent hostile-byte readers agree on every new
+claim/policy identity and digest, not merely on model structs.
 
-- Join derived basis vectors to exact terms/evidence receipts.
-- Add schedule-compiled portfolio quotes as an unprivileged batch input family.
-- Prove per-outcome, collateral, fee-pot, tranche, and ownership-phase closure.
-- Preserve the selected-candidate—not global-optimum—claim boundary.
+## C1 — Pure bounded models: substantial, not promoted
 
-Exit: vertical traces cover deposit, quote, partial fill, cancel, opposite flow,
-withdrawal refusal, resolution, and redemption without protected-pool leakage.
+Landed host/model evidence:
 
-## C3 — Verus executable proofs
+- the dependency-light shape compiler constructs degree-0--3 rational
+  coefficients for hard ranges/tails, triangles, capped call/put spreads,
+  affine restrictions, and Gaussian proximity kernels;
+- it distinguishes exact span membership from certified approximation, reports
+  rational sup/L1 and consensus-quantization bounds, and has a canonical host
+  certificate whose Rust decoder recompiles the source description;
+- the pure native coefficient-portfolio seam canonicalizes identity, checks
+  exact funding and full-simplex worst-case payout, and models exact paired
+  settlement while deliberately refusing live authority;
+- a bounded two-order direct-selection model streams the best three verified
+  candidates under a frozen score/window, with full-width candidate/window
+  account-body codecs and now underpins one deliberately narrow source-routed
+  authority; a separate resumable occupation model has safe-resume accumulator
+  semantics and an isolated unexported 1,296-byte layout codec, but is not a
+  routed SBF authority; and
+- the proof-constrained liquidity model compiles a maximum-eight-rung schedule,
+  maintains `E = B + max_i(q_i+s_i)` without netting, reserves sell-proceeds
+  numeric headroom, and models single-owner deposits, partial fills,
+  cancel/lapse, buy-back, withdrawal, settlement, bounded risk weight, and one
+  owner-aggregated fixed-grid terminal fee allocation with physical carry
+  escrow.
 
-Target the small safe-Rust/no-allocation kernels:
+Open:
 
-- basis nonnegativity and exact sum;
-- maximum-liability collateral theorem;
-- claim compiler bounds/rounding;
-- tranche reserve preservation;
-- fee-pot conservation and refusal transactionality; and
-- batch portfolio conservation at frozen array bounds.
+- an independently implemented full shape compiler/certificate reader rather
+  than shared production code plus goldens;
+- a live rational-to-integer coefficient admission rule;
+- broader randomized/differential campaigns across compiler, portfolio, and LP
+  seams; and
+- machine-checked proofs of compiler enclosures and the LP state machine.
 
-Keep Solana account parsing, CPI, runtime ownership, clock/source authentication,
-and deployment outside the proved kernel and enumerate them in the TCB. Run the
-dual-toolchain spike before promising the Verus source can also produce the SBF
-artifact.
+The liquidity successor's 20-test debug/release suite, strict Clippy/rustdoc,
+and independent six-case hostile harness are scoped model evidence. V1 has one
+immutable beneficial owner per tranche and nontransferable accounting shares;
+it does not claim multi-holder exit-order invariance. `MAX_QUOTES = 8` is a
+bounded witness, not equivalence to a continuous maker.
 
-## C4 — Rocq economic state machine
+## C2 — Kernel and batch refinement: partial
 
-Hand-write the authoritative mathematical transition system and prove:
+Landed:
 
-- complete-set and partition-of-unity identities;
+- degree-1--3 native vectors join immutable Terms/evidence to
+  `resolve_with_vector`; degree zero retains its separate categorical seam;
+- signed Portfolio placement and exact buy-cash/sell-Egg Reservation and
+  cancellation are live;
+- direct-selection intents `27..=31` route a one-page, two-order, single-Egg,
+  full-fill, zero-fee authority chain with full-width candidate reexecution and
+  Reservation `ACTIVE -> ENTITLED -> CONSUMED`; this source route has no
+  real-bank/ELF/CU evidence yet;
+- a pure canonical portfolio pair checks Terms, basis, claim, simplex value,
+  full funding, exact divisibility, and one-time consumption; and
+- standalone full-width batch-policy identity rejects policy/digest truncation.
+
+Open, in dependency order:
+
+1. general relation candidates, partial fills, portfolio selection, fees,
+   lapse, and full terminal epoch closure beyond the narrow direct route;
+2. complete frozen order-to-Reservation-set commitment;
+3. stable vector receipt codec and program-only entitlement creation;
+4. exact frozen-page provenance and partial portfolio allocation;
+5. live decoded policy preimages and terminal fee-pot/owner/carry authority;
+6. terminal Reservation/receipt closure; and
+7. policy/tranche translation into those existing semantic owners without
+   accepting caller-constructed model structs as authority.
+
+Until these close, atomic coefficient settlement and passive liquidity remain
+pure/model seams even though primitive Egg placement and Reservations are live.
+
+## C3 — Executable proof/refinement: narrow landed results
+
+Landed, with exact scope:
+
+- Lean proves named mathematical-model exact-basis, open-clamped endpoint,
+  uniform-knot linkage, largest-remainder priority/admissibility,
+  maximum-liability, and complete-set results;
+- eight Lean-computed fixture rows agree byte-for-byte with the digest-pinned
+  complete production Rust evaluator source, and five executable source mutants
+  go red; the released source digest is
+  `220de128366a8311de6579c0ce334a64c97620159eaf9570f61fa10fabb6de92`;
+- the production smooth evaluator uses a validated private capability and one
+  fixed-common-denominator path; the reduced-`Fraction` implementation is now
+  test-only differential evidence rather than an alternate production arm; and
+- a separate Verus result proves the named production transfer-arithmetic helper
+  under its executable caller gate.
+
+These results do not compose into a proof of every evaluator input, parser,
+compiler certificate, occupation fold, portfolio transition, LP transition,
+SBF binary, source adapter, Token CPI, or runtime behavior. At release commit
+`87d2dbd60fa13d50e4f8b9e1c3697cd680697ce3`, the B-spline runner, evidence,
+and assumptions digests are respectively
+`1778824030783f0209d0217cfe158f4f98a3f68ea53e4cb964fc186f0fd9eb67`,
+`b3b32b8bdd617229670e8be3844bd7d2cc88774abe6c3bccc7af76246b6deeed`,
+and `6e463b0c24223f953163cde4a44d78a371d325000c1b36791726ca074da806ea`.
+The evidence-manifest digest is
+`d50579898a58f449c0e28a9a77eac44975ae5a855ce560b191b42acc157f11a8`.
+The runner intentionally blocks on production-source digest drift; every
+evaluator change must be re-pinned and re-exercised before the finite agreement
+claim follows it.
+
+Still-open executable proof targets include:
+
+- universal refinement of pane selection, expanded knots, the production
+  fixed-common-denominator recurrence, `WEIGHT-ROUND-01`, and every refusal for
+  degrees `0..=3`;
+- occupation mass/finalizer conservation and v4 codec refinement;
+- coefficient compiler bounds and integer admission;
+- portfolio/tranche reserve and ownership preservation;
+- fixed-grid owner aggregation, direct fee-pot payout, physical carry-escrow
+  conservation, and terminal carry; and
+- batch vector conservation at frozen array bounds.
+
+Keep account parsing, CPI, runtime ownership, source authentication, compiler
+code generation, and deployment outside any proved kernel unless a separately
+named refinement closes them.
+
+## C4 — Independent economic state machine: open
+
+The handwritten Rocq shadow remains finite-preset/index oriented, has no checked
+native degree-0--3/occupation/portfolio/LP refinement, and its theorem
+obligations are not a current proof claim. A complete independent state machine
+must prove:
+
+- native partition-of-unity and complete-set identities;
 - global solvency across every reachable transition;
-- no principal flow to fees/liveness/insurance;
-- exact tranche share and withdrawal bounds;
-- one-shot resolution/redemption and retry idempotence; and
-- refinement from portfolio claims to primitive Eggs.
+- no principal flow to fees, liveness, LP reserve, carry escrow, or insurance;
+- exact portfolio Reservation and single-owner tranche share/withdrawal bounds;
+- one-shot resolution/redemption, candidate receipt, fee allocation, and retry
+  idempotence; and
+- refinement from atomic coefficient claims to primitive native Eggs.
 
-Use rocq-of-rust only as a shadow translation/refinement experiment until its
-Solana/runtime axiom boundary is mature. `Admitted`/axiom counts are release
-artifacts, not footnotes.
+Any translation experiment must enumerate unsupported constructs,
+`Admitted`/axiom counts, fixed-width assumptions, and the Solana/runtime trust
+boundary as release artifacts, not footnotes.
 
-## C5 — Solana composition
+## C5 — Solana composition: native settlement landed, operatorless path open
 
-- Freeze layouts, owner/signer/alias/replay checks, PDA seeds/bumps, and Token
-  program/profile identities.
-- Implement account creation and Token CPI only behind the proved pure relation.
-- Benchmark transaction bytes, accounts, locks, trace depth, CU, rent, and
-  priority-fee sensitivity at `n = 2,4,8,16`.
-- Exercise devnet only after offline gates and explicit authorization.
+Landed local SBF evidence includes:
 
-Exit: reproducible build plus exact program/IDL/layout/deployment manifest;
-independent security review; no unresolved STOP finding.
+- immutable basis-mode account binding and degree-1--3 blank-bank point-v3
+  lifecycle walks through real Token-2022 mints;
+- the exact permissionless SourceSpec/Feed/SourceArchive construction ABI,
+  exercised end-to-end only by a deliberately non-production mock-source ELF;
+  the default artifact has an empty provider/parser registry and refuses before
+  its first CPI or state write;
+- exact-lot bearer redemption and record-only v2/v3/v4 internal redemption on
+  the exact `16+n` account plane, with hostile rollback cases; and
+- occupation-v4 statistics 6/7 with direct sealed-archive folding, exact retry,
+  provenance, and point/gap/substitution/mode refusals.
 
-## C6 — Optional cost-function maker
+Open:
 
-Only after schedule liquidity works:
+- review and registration of a production provider/deployment authenticator
+  and immutable/finalized parser release in the default artifact;
+- an occupation execution architecture with adequate CU headroom: the measured
+  initial span-1--3/degree-1--3 matrix admits no case under the exact 25%
+  headroom gate, while spans 4--32 remain unmeasured and unadmitted;
+- shared export/registry/router/account-plane integration for prepaid
+  `ResolutionWork`, followed by real-SBF Begin/Fold/Finalize/Abort evidence;
+- a clean build-SBF and real-bank account/CU/rent/rollback campaign for the
+  newly routed narrow direct-selection chain;
+- live atomic portfolio/LP account construction and authority;
+- final-LTO stack, rent, account-lock, transaction-size, and reproducible
+  artifact evidence after all source changes; and
+- deployment, upgrade-authority, cluster, and transaction-inclusion evidence.
+
+Local SVM execution is runtime evidence, not deployment evidence. Any network
+exercise remains a separate explicit human gate. The record-only redemption
+campaign used a named provisional joined ELF; final clean artifact,
+supply-chain, and liveness attribution remains open.
+
+## C6 — Optional cost-function maker: open and ordered later
+
+Only after schedule liquidity has live authority:
 
 - select one regularizer over the actual payoff polytope;
 - prove convexity, coherence, cash invariance, and bounded loss;
 - compile canonical integer endpoint charges with persistent carry;
-- capitalize loss budget before activation; and
-- prove immutable or value-balanced liquidity-parameter transitions.
+- capitalize the loss budget before activation; and
+- prove immutable or value-balanced parameter transitions.
 
-Exit: independent red team cannot produce circulation, dynamic-depth extraction,
-uncapitalized loss, or withdrawal insolvency at the admitted bounds.
+The landed liquidity model has no endogenous potential, dynamic depth, or
+continuous-availability guarantee. No schedule result can be relabeled as a
+cost-function AMM.
 
-## C7 — Static client and release evidence
+## C7 — Static client and release evidence: partial host tooling
 
-- GitHub Pages/IPFS build with no server dependency;
-- local verification of terms, program, upgrade authority, account bytes, and
-  receipts;
+Landed host tooling now has canonical native `BasisSpec` and shape-certificate
+bytes, exact typed Terms artifact upload/CreateMarket intents, a Rust-generated
+fixture, and a static JavaScript implementation which checks structural and
+digest equality. The certificate still remains offline evidence because Terms
+do not commit it and the onchain program does not parse it.
+
+Open:
+
+- onchain claim/policy/tranche admission and returned-account verification;
+- local display of every exact risk, approximation, rounding, source, window,
+  and upgrade boundary;
 - multiple RPC endpoint support without treating RPC as consensus;
-- accessible transaction previews and human-readable exact-risk displays; and
-- source/tool/font/build/artifact manifest for every published document and
+- accessible transaction previews and hostile fixture coverage for all live
+  account versions; and
+- a source/tool/font/build/artifact manifest for every published document and
   binary.
 
 Deployment, filing, regulator contact, key use, and public release remain
