@@ -38,6 +38,9 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
                 "cargo test --manifest-path research/source-profile-v1/Cargo.toml "
                 "--offline --locked"
             ),
+            "python.liveness_policy_profile_current_seal": (
+                "python3 research/liveness-policy-profile/policy.py --check-current"
+            ),
             "static_client.npm": "(cd apps/static-client && npm test && npm run check)",
         }
         for gate_id, command in expected_commands.items():
@@ -53,9 +56,10 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
     def test_non_attestations_keep_current_boundaries_explicit(self) -> None:
         joined = "\n".join(baseline_manifest.NOT_ATTESTED)
         self.assertIn("isolated Verus batch shadow is in flight", joined)
+        self.assertIn("sealed local R1 artifact admits measured ResolutionWork routes", joined)
         self.assertIn("registered source release", joined)
         self.assertIn("1,400,000-CU transaction limit", joined)
-        self.assertIn("ResolutionWork SBF route", joined)
+        self.assertIn("no terminal closure", joined)
 
 
 if __name__ == "__main__":

@@ -95,15 +95,18 @@ NOT_ATTESTED = [
     "neither is public-cluster, deployment, independent-rebuild, validator-"
     "diversity, or cross-runtime-vector evidence",
     "no SBOM, license closure, fixture provenance chain, or source offer",
-    "no production source attestation: the default runtime build refuses Endow "
+    "no global liveness closure: the sealed local R1 artifact admits measured "
+    "ResolutionWork routes only; it does not establish a protocol-wide policy or "
+    "future inclusion",
+    "no production provider closure: the default runtime build refuses Endow "
     "without a registered source release, while the named mock-source path is "
     "local test evidence only",
     "no direct-selection promotion: the measured V2 three-Candidate selection "
     "hits the 1,400,000-CU transaction limit and rolls back; V3 remains a host "
     "model with live ABI/runtime stops",
-    "no system-wide terminal/liveness closure: the local ResolutionWork SBF route "
-    "does not close the separate production-source, direct-selection, or storage "
-    "and retirement stops",
+    "no terminal closure: measured ResolutionWork payer/rent return does not close "
+    "the separate legacy storage, mint, donation, bearer-burn, or fractional-residue "
+    "stops",
     "no published provenance: the identities below are git object ids. A "
     "configured remote or a pushed branch is neither a signed tag nor a release "
     "artifact, and this manifest asserts nothing about either",
@@ -609,8 +612,24 @@ def build_gates() -> list[dict[str, Any]]:
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": UNITTEST_PATTERNS,
                 "note": (
-                    "historical liveness-profile arithmetic tests; the sealed ELF "
-                    "replay artifact is not committed and this is not final-ELF evidence"
+                    "37 deterministic liveness-profile arithmetic and terminal "
+                    "admission tests; they do not promote a global liveness policy"
+                ),
+            },
+            {
+                "id": "python.liveness_policy_profile_current_seal",
+                "section": "post-5-research",
+                "command": (
+                    "python3 research/liveness-policy-profile/policy.py --check-current"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": [
+                    r"^PASS: exact R1 artifact, bank capture, account probe, rewards, and STOPs agree$"
+                ],
+                "note": (
+                    "hashes the sealed 1,228,192-byte default ELF and 23 committed "
+                    "audit/build/bank files, rederives the profile, and refuses source "
+                    "drift; it does not rebuild SBF or establish global liveness"
                 ),
             },
             {

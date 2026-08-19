@@ -23,8 +23,9 @@ remains **BLOCKER** per §7 P0-6.
 scripts/baseline_manifest.py emit
 
 # The full record: also execute every declared gate and store exit codes plus
-# normalized key output lines. Several minutes; it includes the low-cost
-# research/model/frontend inventory plus two fresh SBF ELF builds, the loopback
+# normalized key output lines. This is intentionally not a presubmit: a
+# cache-cold run can take tens of minutes because it includes the low-cost
+# research/model/frontend inventory, two fresh SBF ELF builds, the loopback
 # lifecycle, and the isolated Token-2022 bank suite.
 scripts/baseline_manifest.py emit --run-gates
 
@@ -211,15 +212,20 @@ The two runtime gates have intentionally different coverage:
   and the E5 post-CPI atomic-rollback case. These are not redundant with the
   loopback differential.
 
-The present runtime inventory also needs careful reading. `ResolutionWork` is
-now a routed local-SBF surface, but its isolated host-model gates and the broad
-runtime gates do not close production-source, direct-selection, or terminal
-storage/retirement STOPs. The default bringup ELF has an empty production source
-registry and must refuse `Endow`; only the explicitly named mock-source ELF can
-exercise the local successful path. Similarly, the Direct V2 measurement is a
-negative result: a three-Candidate selection reaches the 1,400,000-CU limit and
-rolls back. The V3 checks in `batch-policy-identity` are bounded host-model
-evidence, not a live ABI or runtime promotion.
+The present runtime inventory also needs careful reading. The sealed R1 profile
+now admits the measured local `ResolutionWork` Begin/Fold/Finalize/Abort routes:
+the current-profile gate hashes the exact ELF and 23 committed audit/build/bank
+files, rederives the rent/reward/account projection, and rejects drift from its
+frozen source closure. That is a bounded subsystem result, not global liveness,
+future inclusion, a production provider, or terminal closure. The default
+bringup ELF has an empty production source registry and must refuse `Endow`;
+only the explicitly named mock-source ELF can exercise the local successful
+path. Similarly, the Direct V2 measurement is a negative result: a
+three-Candidate selection reaches the 1,400,000-CU limit and rolls back. The V3
+checks in `batch-policy-identity` are bounded host-model evidence, not a live
+ABI or runtime promotion. ResolutionWork's measured payer/rent return also does
+not close existing storage, mint, donation, bearer-burn, or fractional-residue
+terminal STOPs.
 
 `cargo-build-sbf` may diagnose excessive frames in public dependency functions
 while compiling rlibs. The bringup gate extracts those symbol names and refuses
@@ -299,15 +305,19 @@ Verbatim from the manifest's own `claims.not_attested`:
   differential/lifecycle and an in-process Agave/Token-2022 bank suite. They do
   not establish public-cluster behavior, deployment, validator diversity, an
   independently rebuilt ELF, or cross-runtime vector closure.
-- **No production-source attestation.** The default runtime ELF refuses `Endow`
+- **Measured ResolutionWork is not global liveness.** The sealed local R1
+  artifact and its committed logs admit the bounded ResolutionWork route under
+  its frozen policy. They do not prove transaction inclusion or emit a complete
+  protocol-wide liveness policy.
+- **No production-provider closure.** The default runtime ELF refuses `Endow`
   without a registered source release. The successful mock-source path is local
   test evidence only, not an oracle/source-release or deployment claim.
 - **No direct-selection promotion.** The V2 three-Candidate selection measurement
   reaches the 1,400,000-CU transaction limit and rolls back. The V3 authority
   work is a bounded host model with live ABI/runtime and terminal-cleanup STOPs.
-- **No system-wide terminal/liveness closure.** ResolutionWork has a routed local
-  SBF surface, but it does not close the separate production-source,
-  direct-selection, or storage/retirement STOPs.
+- **No terminal closure.** ResolutionWork's measured Work/Reserve payer and rent
+  return does not close separate legacy storage, mint, donation, bearer-burn, or
+  fractional-residue STOPs.
 - **No SBOM**, license closure, fixture provenance chain, or source offer.
 - **No published provenance.** The identities are git object ids. A configured
   remote or a pushed branch is neither a signed tag nor a release artifact.
@@ -356,12 +366,14 @@ may not flip them to obtain a green result.
 
 ## Runtime-gate boundary
 
-The gate inventory includes the `clutch-sbf` cargo gates, documented low-cost
-research/model/frontend checks, post-handoff benchmark/ABI checks, and both real
-SBF runtime gates. Their cost is deliberate: a full `--run-gates` baseline is
-the evidence path, not a fast presubmit. The added research gates cover current
-committed surfaces such as direct-selection authority, the shape compiler,
-source profile, ResolutionWork model, historical liveness arithmetic, and the
-32-check offline Glass client; they do not add another large SBF run. A
+The gate inventory currently has 70 declarations: the `clutch-sbf` cargo gates,
+documented low-cost research/model/frontend checks, post-handoff benchmark/ABI
+checks, and both real SBF runtime gates. A full `--run-gates` baseline is the
+evidence path, not a fast presubmit; on a cache-cold host it can take tens of
+minutes. The added research gates cover current committed surfaces such as
+direct-selection authority, the shape compiler, source profile, ResolutionWork
+model, sealed liveness-profile checks, and the 32-check offline Glass client.
+The liveness current-profile gate rehashes committed evidence and recompiles an
+archived host probe; it adds no fresh SBF build. A
 declaration-only `emit` remains useful for inspecting structure but sets
 `claims.reviewed_offline_checks_recorded` to `false` and records no run outcomes.

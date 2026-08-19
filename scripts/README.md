@@ -31,9 +31,12 @@ that are not in that commit. `--allow-dirty` emits a snapshot marked
 `"dirty": true` for mid-flight use only.
 
 It attests no release, signature, reproducible-build closure, formal proof
-content, production source release, direct-selection promotion, or system-wide
-terminal/liveness closure. The isolated Verus batch shadow remains absent until
-its source and reproduction gate are committed. See
+content, global liveness, production provider closure, direct-selection
+promotion, or terminal closure. The sealed R1 gate verifies a bounded measured
+ResolutionWork profile from committed ELF/log evidence; it does not broaden
+those claims. The isolated Verus batch shadow remains absent until its source
+and reproduction gate are committed. A full `--run-gates` run is deliberately
+slow (potentially tens of cache-cold minutes), not a presubmit. See
 [`docs/implementation/BASELINE_MANIFEST.md`](../docs/implementation/BASELINE_MANIFEST.md).
 
 Focused declaration checks are standard-library only:
