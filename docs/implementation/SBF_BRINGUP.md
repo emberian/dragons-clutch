@@ -1,5 +1,17 @@
 # SBF bring-up: the instruction set, executed against the reference oracle
 
+> **Historical evidence ledger.** This long-form document preserves the
+> bring-up chronology and the measurements available at each checkpoint; it is
+> not the present-tense capability index. Since the passages below were
+> written, real-SBF evidence has landed for funded `PlaceOrder`/`CancelOrder`,
+> prefund-safe blank-bank market construction, free-cash withdrawal, a narrow
+> coupled `SettlePage`, and native degree-1--3 point resolution/internal
+> redemption. Consult [CURRENT_TRUTH.md](../../CURRENT_TRUTH.md) and the newer
+> focused implementation reports before relying on any sentence below that
+> says “stub,” “host only,” “unbacked,” or “no SVM leg.” Source-provider/archive
+> authentication, general settlement, and a complete operatorless lifecycle
+> remain STOPs unless a newer evidence record explicitly closes them.
+
 Status: **host-differential evidence for eight instruction families**
 (Split, Merge, Materialize, Dematerialize, CreateMarket, FeedAdvance,
 evidence-gated Resolve, RedeemInternal), each mirroring the offline
