@@ -406,12 +406,10 @@ fn rent_exempt(space: usize) -> u64 {
 ///
 /// `Materialize` of *q* on outcome *o* must increase `outcome_mint[o].supply`
 /// by exactly *q*, increase the destination token account by exactly *q*, and
-/// decrease `position.internal[o]` by exactly *q*. And — the part this lane
-/// adds to the plan's E1 — the market-wide external term must come out equal to
-/// the mint's supply, which is the reconciliation that makes the eventual
-/// deletion of the shadow a deletion rather than a change of semantics.
+/// decrease `position.internal[o]` by exactly *q*. The market-wide observed
+/// mint-supply cache must then equal the authoritative mint supply.
 #[tokio::test]
-async fn e1_materialize_mints_exactly_q_and_the_shadow_reconciles() {
+async fn e1_materialize_mints_exactly_q_and_the_aggregate_reconciles() {
     let mut scenario = Scenario::start(MintShape::Proposed).await;
     assert_eq!(scenario.mint_supply().await, 0, "a founding mint is empty");
     assert_eq!(scenario.holder_amount().await, 0);
@@ -447,7 +445,7 @@ async fn e1_materialize_mints_exactly_q_and_the_shadow_reconciles() {
 
 /// **E1, reversed** — `Dematerialize` burns exactly, and reconciles.
 #[tokio::test]
-async fn e1_dematerialize_burns_exactly_and_the_shadow_reconciles() {
+async fn e1_dematerialize_burns_exactly_and_the_aggregate_reconciles() {
     let mut scenario = Scenario::start(MintShape::Proposed).await;
     let actor = scenario.actor.insecure_clone();
     let mint_units = scenario
@@ -681,7 +679,7 @@ async fn the_incomplete_mint_vector_is_refused_and_moves_nothing() {
     assert_eq!(
         scenario.external_supply().await,
         0,
-        "the shadow did not move"
+        "the observed mint-supply cache did not move"
     );
     assert_eq!(
         scenario.external_supply().await,
