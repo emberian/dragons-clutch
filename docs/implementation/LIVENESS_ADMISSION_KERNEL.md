@@ -82,9 +82,25 @@ closure:   returned_principal = locked_principal
 ```
 
 The returned principal joins the payer's refundable residue. It never enters a
-keeper or treasury field. External account donations are outside this equality
-and need a separately named adapter policy rather than being mislabeled as rent
-principal.
+keeper or treasury field. `DonationLedger` gives external account donations a
+separate monotone equality. For an account balance `B` immediately before
+creation, the recorded payer must transfer the complete independently accounted
+deposit `P` inside the transition:
+
+```text
+post-create balance = B + P
+account balance      = accounted principal/work + neutral donation
+```
+
+The adapter may not charge only a rent shortfall and then call `B` payer
+principal. `B` may have been sent by anyone. It is frozen as neutral donation;
+later surplus increases that donation monotonically, and any balance below
+`accounted + prior_donation` refuses. At terminality the independently
+accounted principal, work payouts, and payer residues follow their own owners,
+while the donation goes only to the same immutable neutral sink. A payer cannot
+capture a one-lamport prefund, and a donation cannot cover a principal or work
+shortfall. The live adapter remains STOP until one acceptable neutral sink is
+selected and every predictable PDA persists or can derive this split.
 
 For both a market and an order, `accounted_lamports()` checks the aggregate
 identity:
@@ -184,6 +200,8 @@ The crate's host tests cover:
 - storage lock/close conservation and return mismatch;
 - zero-fee order underfunding and clear/settle conservation;
 - overflow and zero-mandatory-maximum refusal;
+- exact payer funding in the presence of prefunds, monotone later donations,
+  donation/principal separation, and shortfall refusal;
 - exhaustive shared-feed caps `1..=32`, up to 16 subscribers, and every keeper
   spend `0..=B` while a positive next share exists;
 - join reimbursement, success cost/refund, and terminal-failure identities;

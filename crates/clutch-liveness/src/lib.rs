@@ -61,6 +61,8 @@ pub enum Error {
     WrongIntent,
     ZeroFeeDenominator,
     NoncanonicalFeeCarry,
+    FundingDeltaMismatch,
+    AccountBalanceShortfall,
 }
 
 fn add(left: u64, right: u64) -> Result<u64, Error> {
@@ -77,6 +79,94 @@ fn live_id(id: Id) -> Result<(), Error> {
     } else {
         Ok(())
     }
+}
+
+/// Monotone accounting for unsolicited lamports on one program account.
+///
+/// This value deliberately owns no principal or work budget. The adapter must
+/// first prove that the admission payer transferred the exact named principal
+/// and work deposit; any balance that existed before that transfer, or arrives
+/// later above the accounted compartments, remains a donation assigned only to
+/// the immutable neutral sink.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DonationLedger {
+    neutral_sink: Id,
+    donation_lamports: u64,
+}
+
+impl DonationLedger {
+    /// Admit an account whose exact payer deposit occurs inside the transition.
+    ///
+    /// `balance_before` cannot be credited to `payer`: it may have been sent by
+    /// anyone. `balance_after` must equal that prior balance plus the exact
+    /// independently accounted deposit. A caller cannot use prior donations to
+    /// reduce the payer's required transfer.
+    pub fn admit_prefunded(
+        payer: Id,
+        neutral_sink: Id,
+        balance_before: u64,
+        exact_payer_deposit: u64,
+        balance_after: u64,
+    ) -> Result<Self, Error> {
+        live_id(payer)?;
+        live_id(neutral_sink)?;
+        if payer == neutral_sink {
+            return Err(Error::SameOwnerAndNeutralSink);
+        }
+        let expected_after = add(balance_before, exact_payer_deposit)?;
+        if balance_after != expected_after {
+            return Err(Error::FundingDeltaMismatch);
+        }
+        Ok(Self {
+            neutral_sink,
+            donation_lamports: balance_before,
+        })
+    }
+
+    pub const fn neutral_sink(self) -> Id {
+        self.neutral_sink
+    }
+
+    pub const fn donation_lamports(self) -> u64 {
+        self.donation_lamports
+    }
+
+    /// Observe the account after a transition without letting donations cover
+    /// an accounted principal/work shortfall.
+    ///
+    /// Previously observed donations are monotone. Any new surplus becomes a
+    /// donation as well; it can never be reclassified into another compartment.
+    pub fn observe(self, actual_balance: u64, accounted_lamports: u64) -> Result<Self, Error> {
+        let minimum = add(accounted_lamports, self.donation_lamports)?;
+        if actual_balance < minimum {
+            return Err(Error::AccountBalanceShortfall);
+        }
+        Ok(Self {
+            neutral_sink: self.neutral_sink,
+            donation_lamports: actual_balance - accounted_lamports,
+        })
+    }
+
+    /// Quote the donation amount that must be sent to the neutral sink in the
+    /// same terminal transaction as all independently accounted dispositions.
+    pub fn terminal_split(
+        self,
+        actual_balance: u64,
+        accounted_lamports: u64,
+    ) -> Result<DonationDisposition, Error> {
+        let observed = self.observe(actual_balance, accounted_lamports)?;
+        Ok(DonationDisposition {
+            neutral_sink: observed.neutral_sink,
+            neutral_lamports: observed.donation_lamports,
+        })
+    }
+}
+
+/// Terminal owner and amount for unsolicited balance only.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DonationDisposition {
+    pub neutral_sink: Id,
+    pub neutral_lamports: u64,
 }
 
 /// Unmeasured maxima selected by a Realm policy.
@@ -1171,6 +1261,54 @@ mod tests {
             per_order_settle_max_lamports: 9,
             neutral_sink: id(250),
         }
+    }
+
+    #[test]
+    fn prefund_is_neutral_donation_not_payer_principal() {
+        let ledger = DonationLedger::admit_prefunded(id(1), id(250), 1, 17, 18).unwrap();
+        assert_eq!(ledger.neutral_sink(), id(250));
+        assert_eq!(ledger.donation_lamports(), 1);
+
+        let terminal = ledger.terminal_split(18, 17).unwrap();
+        assert_eq!(terminal.neutral_sink, id(250));
+        assert_eq!(terminal.neutral_lamports, 1);
+    }
+
+    #[test]
+    fn payer_must_supply_the_exact_accounted_deposit() {
+        assert_eq!(
+            DonationLedger::admit_prefunded(id(1), id(250), 9, 17, 17),
+            Err(Error::FundingDeltaMismatch)
+        );
+        assert_eq!(
+            DonationLedger::admit_prefunded(id(1), id(250), 9, 17, 25),
+            Err(Error::FundingDeltaMismatch)
+        );
+        assert_eq!(
+            DonationLedger::admit_prefunded(id(1), id(1), 0, 17, 17),
+            Err(Error::SameOwnerAndNeutralSink)
+        );
+        assert_eq!(
+            DonationLedger::admit_prefunded(id(1), id(250), u64::MAX, 1, 0),
+            Err(Error::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn later_donations_are_monotone_and_cannot_cover_a_shortfall() {
+        let ledger = DonationLedger::admit_prefunded(id(1), id(250), 3, 20, 23).unwrap();
+        assert_eq!(ledger.observe(22, 20), Err(Error::AccountBalanceShortfall));
+
+        let grown = ledger.observe(28, 20).unwrap();
+        assert_eq!(grown.donation_lamports(), 8);
+        assert_eq!(grown.observe(27, 20), Err(Error::AccountBalanceShortfall));
+        assert_eq!(
+            grown.terminal_split(28, 20),
+            Ok(DonationDisposition {
+                neutral_sink: id(250),
+                neutral_lamports: 8,
+            })
+        );
     }
 
     #[test]
