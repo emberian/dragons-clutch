@@ -59,6 +59,10 @@ provider selection/design, Draft 10 fork (degg-research).
   vs SourceSpec exact-account field; DAO upgrade cutover 2026-08-26.
 - Draft 10 fork lane in degg-research per committed
   DRAFT10_ENGINEERING_CLAIM_DELTA_PLAN.md — in flight.
+- R2 selection landed (765ca81): Pyth pull selected on the bucket-uniqueness
+  discriminator; SourceSpec v2 pull-profile deltas, CROSSING_V1 semantics
+  with falsifiers, post-2026-08-26 identity-freeze sequencing. PROPOSED/
+  MODEL-ONLY; registry stays empty, Endow keeps refusing 0x79.
 
 ---
 
