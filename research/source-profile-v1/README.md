@@ -20,8 +20,9 @@ parses the reviewed `PriceUpdateV2` account format, requires full verification,
 implements that crossing relation, and normalizes confidence intervals with
 outward integer rounding.
 
-It deliberately does **not** integrate with `clutch-sbf`.  Four adapter facts
-remain open:
+It deliberately does **not** integrate with `clutch-sbf`. The executable
+authentication contract in [`src/auth_v2.rs`](src/auth_v2.rs) closes the model
+join, but four production facts remain open:
 
 1. the Pyth Core Solana migration is still changing program and signer
    provenance;
@@ -43,33 +44,50 @@ upstream revisions and fixture derivation are in
 
 ## PROPOSED SourceSpec v2 pull profile and CROSSING_V1 (MODEL-ONLY)
 
-[`src/spec_v2.rs`](src/spec_v2.rs) and [`src/crossing_v1.rs`](src/crossing_v1.rs)
-implement the spec revision and selection rule proposed in
+[`src/spec_v2.rs`](src/spec_v2.rs),
+[`src/crossing_v1.rs`](src/crossing_v1.rs), and
+[`src/auth_v2.rs`](src/auth_v2.rs) implement the spec revision, selection rule,
+and atomic authentication join proposed in
 [`SOURCE_PROVIDER_V1_SELECTION.md`](../../docs/design/SOURCE_PROVIDER_V1_SELECTION.md)
 as research models with hostile-byte and falsifier tests:
 
-- a 320-byte canonical pull-profile spec body under the **new domain**
+- a 368-byte canonical pull-profile spec body under the **new domain**
   `dragons-clutch/feed/v2`: the V1 exact source data-account key is replaced by
-  the receiver `Config` PDA key plus a canonical config byte digest, the
-  provider feed id is added, and the deployment-generation pin is kept; and
-- the `CROSSING_V1` admission model with **both** boundary variants registered
-  as distinct rule ids — closing `T(k) = (k+1)*B` (variant A, recommended) and
-  opening `T(k) = k*B` (variant B) — so the design doc's falsifiers
-  (double-witness boundary, equal-sequence value drift, degenerate updates,
-  legitimate witness reuse) are executable tests rather than prose.  The
-  variant choice is deliberately not frozen.
+  the receiver `Config` PDA key plus a SHA-256 digest of its full account
+  bytes; the provider feed id, exact ProgramData key and deployment slot,
+  zero Unix grid origin, and boundary-grace policy are part of the immutable
+  identity;
+- the single registered model rule id `2`, closing-boundary `CROSSING_V1`,
+  with `T(k) = (k+1)*B`. Opening-boundary id `3`, V1 finalized-bucket id `1`,
+  and nonzero grid origins are explicit refusals;
+- exact duplicate collapse: only identical decoded update bodies collapse.
+  A differing write authority or receiver-posted slot is a second witness and
+  refuses the boundary; and
+- a start-aware checked archive cursor, so a missing first bucket, a gap, a
+  repeat, or an unrepresentable next cursor cannot be silently accepted.
 
-This is **not a runtime transition**: no registry entry exists, no identity or
-boundary variant is frozen, an absent crossing witness is an explicit stall
-(never a fabricated `Missing`), and the default ELF keeps refusing
-`SourceReleaseUnavailable` (`0x79`).
+The authentication model distinguishes the canonical v2 feed identity from
+the ephemeral update-account key. It checks the receiver/ProgramData link and
+deployment slot, full Config-byte digest, canonical Clock identity and
+cutover, exact adjacent post projection, parser/feed/owner, both freshness
+clocks, boundary grace, confidence policy, and the crossing rule. The future
+SBF adapter must derive the loader and adjacent-instruction projections from
+the official loader and Instructions-sysvar formats; they are never valid as
+caller-asserted instruction data. RPC commitment/finality is intentionally
+not modeled as an in-program bit because an executing instruction cannot
+prove it.
+
+This is **not a runtime transition**: no registry entry exists and no
+post-cutover deployment/config bytes are frozen. An absent crossing witness is
+an explicit stall (never a fabricated `Missing`), and the default ELF keeps
+refusing `SourceReleaseUnavailable` (`0x79`).
 
 ## Run
 
 ```sh
-cargo test --manifest-path research/source-profile-v1/Cargo.toml
-cargo clippy --manifest-path research/source-profile-v1/Cargo.toml --all-targets -- -D warnings
-RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path research/source-profile-v1/Cargo.toml --no-deps
+cargo test --locked --offline --manifest-path research/source-profile-v1/Cargo.toml
+cargo clippy --locked --offline --manifest-path research/source-profile-v1/Cargo.toml --all-targets -- -D warnings
+RUSTDOCFLAGS='-D warnings' cargo doc --locked --offline --manifest-path research/source-profile-v1/Cargo.toml --no-deps
 ```
 
 This is original AGPL-3.0-or-later research code.  It copies no upstream source

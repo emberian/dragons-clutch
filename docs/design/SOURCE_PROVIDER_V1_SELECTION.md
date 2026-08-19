@@ -67,8 +67,10 @@ Field-level deltas from V1:
      deployment change.
 2. **Add** the provider feed id (Pyth 32-byte `feed_id`), checked equal on
    every admitted update.
-3. **Keep** the deployment-generation pin (program + ProgramData identity),
-   rechecked on every use, now alongside the config digest.
+3. **Pin** the receiver program, its exact Upgradeable Loader ProgramData key,
+   and the deployment slot decoded from that ProgramData account; recheck the
+   program-to-ProgramData link and slot on every use alongside the config
+   digest. A caller-supplied "generation" is not an authentication fact.
 4. **Register a new canonical selection rule** (`CROSSING_V1`) instead of the
    V1 finalized-bucket rule (see §4). Admission check 12's
    `publish_time / bucket_seconds == cursor` equation is specific to the V1
@@ -85,24 +87,32 @@ Field-level deltas from V1:
    must include set/post/restore config races, stale-account reuse,
    write-authority reuse, wrong-CPI, and same-slot substitution
    (`AUTHENTICATED_SOURCE_CONSTRUCTION_V1` §3.3 list).
+6. **Bind the observation grid and maturity rule:** V2 stores an explicit
+   signed Unix-seconds grid origin and boundary-grace seconds. The only
+   registered V1 origin is exactly zero; a nonzero origin needs a new
+   rule/spec generation. Grace gates admission with canonical `Clock`, but is
+   not an in-program assertion of RPC commitment or ledger finality.
 
 ## 4. CROSSING_V1 admission semantics (exact, with falsifiers)
 
-Let `bucket_seconds = B` and bucket `k` cover `[kB, (k+1)B)`.
+Let the frozen grid origin be `G = 0`, `bucket_seconds = B`, and bucket `k`
+cover `[G+kB, G+(k+1)B)`.
 
-- **Boundary instant (PROPOSED, two variants):**
-  - **(a) closing boundary — recommended:** `T(k) = (k+1)B`. Bucket `k`'s
-    record is witnessed by the unique update `U` with
-    `prev_publish_time(U) < T(k) <= publish_time(U)`: the source state in
-    force at the moment the bucket closes. Matches "finalized bucket"
-    settlement reading.
-  - **(b) opening boundary:** `T(k) = kB`. Same machinery, earlier instant.
-  One variant must be frozen before any parser release; both are stated so
-  the choice is visible.
-- **Uniqueness:** for a fixed `T`, the crossing relation admits at most one
+- **Boundary instant (resolved for V1):** rule id `2` is closing-boundary
+  `CROSSING_V1`, `T(k) = G+(k+1)B`. Bucket `k`'s record is witnessed by the
+  unique update `U` with
+  `prev_publish_time(U) < T(k) <= publish_time(U)`: the source state in force
+  at the moment the bucket closes. Opening-boundary experiment id `3` is not
+  registered, and V1 finalized-bucket id `1` is refused in the v2 domain.
+- **Uniqueness and duplicate collapse:** for a fixed `T`, the crossing
+  relation admits at most one
   update by the provider's own documentation. Two distinct qualifying updates
   for one boundary is the falsifier for the whole selection — if it is ever
   exhibited, Pyth loses the deciding property of §1 and R2 reopens.
+  Repeated submission collapses only when the complete decoded update bodies
+  are identical. A difference in wrapper write authority or receiver
+  `posted_slot` is a distinct witness even when price-message fields match;
+  the model refuses instead of selecting one.
 - **Degenerate update:** an update with `prev_publish_time == publish_time`
   (failed aggregation) satisfies the predicate for no `T` and can witness no
   boundary. It is skipped, never adapted into a record.
@@ -124,6 +134,27 @@ Let `bucket_seconds = B` and bucket `k` cover `[kB, (k+1)B)`.
   := `posted_slot` of the admitted update account (receiver-write slot — the
   slot leg of staleness, explicitly not source-native); archive sequence :=
   as above. No field doubles as another.
+- **Contiguity and overflow:** an archive cursor freezes the inclusive first
+  bucket and exact next bucket. The first append must equal the frozen start;
+  every later append must be exactly `previous + 1`. Missing buckets, gaps,
+  repeats, and reordering refuse. Overflow of `k+1`, boundary multiplication,
+  the `i64` comparison domain, or the next exclusive bucket cursor is a named
+  refusal, never a stall, wrap, clamp, or fabricated terminal record.
+
+### 4.1 Resolved model ambiguities
+
+The isolated executable model freezes these six choices from the repository's
+primary-source memo and dossier. They are model decisions, not a default
+registry release:
+
+| Ambiguity | V2 model decision |
+| --- | --- |
+| ProgramData pin | exact ProgramData key + loader owner + receiver link + decoded deployment slot |
+| rule-id allocation | closing `CROSSING_V1 = 2`; opening id `3` and V1 id `1` refused |
+| grid origin | explicit signed field, exactly Unix epoch `0` for this rule |
+| duplicate collapse | only identical decoded update bodies collapse; wrapper authority/posted-slot differences refuse |
+| bucket contiguity | immutable start-aware cursor, exact `+1`, no gaps/repeats/reordering |
+| overflow | named boundary/cursor refusals; no wrap, clamp, stall relabel, or silent cap |
 
 ## 5. Sequencing against the 2026-08-26 cutover
 
@@ -133,8 +164,9 @@ ABI), and the SDK's own migration guide and manifest currently disagree on
 the version to use (1.2.0 vs 2.0.0). Freezing identity now pins a program
 seven days from an in-place mutation.
 
-- **Freeze now (cutover-independent):** the v2 spec layout, `CROSSING_V1`
-  semantics and its frozen boundary variant, the parser/adapter code against
+- **Freeze now (cutover-independent):** the v2 model layout, closing-only
+  `CROSSING_V1` semantics, explicit zero grid origin, checked cursor/overflow
+  rules, duplicate-collapse rule, and parser/authentication model against
   the pinned `ec456fc` layout (ABI is unchanged by the cutover), the hostile
   SVM test plan, and the archive semantic-owner rules.
 - **Freeze only after the cutover lands:** receiver program/ProgramData
@@ -156,8 +188,10 @@ seven days from an in-place mutation.
 
 ## 7. Falsifier summary and promotion gate
 
-This document promotes nothing. The route to a registry entry is: v2 spec
-codec + hostile-byte tests -> parser against pinned post-cutover bytes ->
+This document promotes nothing. The executable v2 spec codec, parser,
+crossing/cursor model, and authentication join have hostile unit falsifiers.
+The route to a registry entry remains: official loader and Instructions-sysvar
+parsers against pinned post-cutover bytes ->
 the §3.5 hostile SVM campaign green on a real bank -> blank-bank
 create/append/seal join (roadmap R2 items 4-5) -> only then a compiled
 default-registry release. Every stage inherits the constructor pre-fund-safe
