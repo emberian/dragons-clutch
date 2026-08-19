@@ -125,26 +125,58 @@ pub fn synchronize_external_truth(
     outcome_count: u8,
     observed: &ObservedMintSupplies,
 ) -> Outcome<()> {
+    let cached_total = read_kernel_totals(kernel_data, market, outcome_count)?;
+    let next_total = synchronize_supply_cache(
+        supply_data,
+        market,
+        realm,
+        outcome_count,
+        observed,
+        &cached_total,
+    )?;
+    write_kernel_totals(kernel_data, market, outcome_count, &next_total)
+}
+
+#[inline(never)]
+fn read_kernel_totals(
+    kernel_data: &[u8],
+    market: Hash32,
+    outcome_count: u8,
+) -> Outcome<[u64; MAX_OUTCOMES]> {
+    let kernel = KernelAccount::decode(kernel_data)?;
+    require(
+        kernel.market == market && kernel.payouts.outcomes == outcome_count,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(kernel.total_supply)
+}
+
+#[inline(never)]
+fn synchronize_supply_cache(
+    supply_data: &mut [u8],
+    market: Hash32,
+    realm: Hash32,
+    outcome_count: u8,
+    observed: &ObservedMintSupplies,
+    cached_total: &[u64; MAX_OUTCOMES],
+) -> Outcome<[u64; MAX_OUTCOMES]> {
     let mut supply = SupplyLedgerAccount::decode(supply_data)?;
-    let mut kernel = KernelAccount::decode(kernel_data)?;
     require(
         supply.market == market
             && supply.realm == realm
             && supply.outcome_count == outcome_count
-            && observed.outcome_count == outcome_count
-            && kernel.market == market
-            && kernel.payouts.outcomes == outcome_count,
+            && observed.outcome_count == outcome_count,
         ClutchError::MismatchedState,
     )?;
 
-    let mut next_total = kernel.total_supply;
+    let mut next_total = *cached_total;
     let mut outcome = 0_usize;
     while outcome < usize::from(outcome_count) {
-        let cached_total = supply.internal_supply[outcome]
+        let accounted_total = supply.internal_supply[outcome]
             .checked_add(supply.external_supply[outcome])
             .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
         require(
-            cached_total == kernel.total_supply[outcome],
+            accounted_total == cached_total[outcome],
             ClutchError::AggregateClosureMismatch,
         )?;
         require(
@@ -158,8 +190,23 @@ pub fn synchronize_external_truth(
     }
 
     supply.external_supply = observed.values;
-    kernel.total_supply = next_total;
     supply.encode(supply_data)?;
+    Ok(next_total)
+}
+
+#[inline(never)]
+fn write_kernel_totals(
+    kernel_data: &mut [u8],
+    market: Hash32,
+    outcome_count: u8,
+    next_total: &[u64; MAX_OUTCOMES],
+) -> Outcome<()> {
+    let mut kernel = KernelAccount::decode(kernel_data)?;
+    require(
+        kernel.market == market && kernel.payouts.outcomes == outcome_count,
+        ClutchError::MismatchedState,
+    )?;
+    kernel.total_supply = *next_total;
     kernel.encode(kernel_data)?;
     Ok(())
 }

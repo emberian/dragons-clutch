@@ -14,10 +14,7 @@ use crate::error::{ClutchError, Refusal};
 use crate::instructions::split::validate_token_program;
 use crate::{seeds, token};
 use clutch_kernel::{BasisMode, MarketState, PayoutVector, Phase, Position};
-use clutch_solana_layout::{
-    account_len, collateral, Hash32, HoardAccount, Intent, MarketAccount, ProfileAccount,
-    ResolutionAccount, SupplyLedgerAccount, TermsAccount,
-};
+use clutch_solana_layout::{account_len, collateral, Hash32, HoardAccount, Intent, ProfileAccount};
 use clutch_solana_reference::{Action, KernelAccount, Request, KERNEL_ACCOUNT_LEN};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -110,40 +107,22 @@ fn decode_request(request: &Request) -> Outcome<ExitRequest> {
 }
 
 #[inline(never)]
-fn require_terms_and_resolution(
-    market_bytes: &[u8],
+fn require_resolved_kernel_head(
     kernel_bytes: &[u8],
-    resolution_bytes: &[u8],
-    terms_bytes: &[u8],
+    market: Hash32,
+    resolution_payout: u8,
+    payout_count: u8,
+    outcome_count: u8,
 ) -> Outcome<()> {
-    let market = MarketAccount::decode(market_bytes)?;
     let kernel = KernelAccount::decode(kernel_bytes)?;
-    let resolution = ResolutionAccount::decode(resolution_bytes)?;
-    let terms = TermsAccount::decode(terms_bytes)?;
-    terms.binds_market_fields(&market).map_err(Refusal::Codec)?;
-    resolution
-        .binds_terms_fields(&terms)
-        .map_err(Refusal::Codec)?;
     require(
-        market.lifecycle == 1
+        kernel.market == market
             && kernel.phase == 1
-            && resolution.is_resolved()
-            && resolution.market == market.market
-            && resolution.payout_index == kernel.resolved_payout
-            && kernel.payouts.count == terms.payout_count
-            && kernel.payouts.outcomes == terms.outcome_count,
+            && kernel.resolved_payout == resolution_payout
+            && kernel.payouts.count == payout_count
+            && kernel.payouts.outcomes == outcome_count,
         ClutchError::MismatchedState,
-    )?;
-    let mut index = 0_usize;
-    while index < clutch_kernel::MAX_PAYOUTS {
-        require(
-            kernel.payouts.vectors[index].denominator == terms.payouts[index].denominator
-                && kernel.payouts.vectors[index].weights == terms.payouts[index].weights,
-            ClutchError::PayoutSetMismatch,
-        )?;
-        index += 1;
-    }
-    Ok(())
+    )
 }
 
 #[inline(never)]
@@ -178,7 +157,7 @@ fn kernel_redeem(
 fn admit_tokens(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
-    market: &MarketAccount,
+    market: &accounts::MarketFacts,
     hoard: &HoardAccount,
     request: &ExitRequest,
 ) -> Outcome<TokenSnapshot> {
@@ -277,7 +256,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
     require_signer(&accounts[IX_CLAIMANT])?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &STATE_ROLES)?;
-    let market = MarketAccount::decode(&accounts[IX_MARKET].data.borrow())?;
+    let market = accounts::read_market(&accounts[IX_MARKET].data.borrow())?;
     require(
         accounts.len() == IX_OUTCOME_MINTS + usize::from(market.outcome_count),
         ClutchError::AccountCount,
@@ -291,10 +270,10 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         ClutchError::MismatchedState,
     )?;
     let mut hoard = HoardAccount::decode(&accounts[IX_HOARD].data.borrow())?;
-    let supply = SupplyLedgerAccount::decode(&accounts[IX_SUPPLY].data.borrow())?;
-    let resolution = ResolutionAccount::decode(&accounts[IX_RESOLUTION].data.borrow())?;
-    let terms = TermsAccount::decode(&accounts[IX_TERMS].data.borrow())?;
-    let profile = ProfileAccount::decode(&accounts[IX_PROFILE].data.borrow())?;
+    let supply = accounts::read_supply(&accounts[IX_SUPPLY].data.borrow())?;
+    let resolution = accounts::read_resolution(&accounts[IX_RESOLUTION].data.borrow())?;
+    let terms = accounts::read_terms(&accounts[IX_TERMS].data.borrow())?;
+    let profile = accounts::read_profile(&accounts[IX_PROFILE].data.borrow())?;
     expect_pda(
         accounts[IX_PROFILE].key,
         seeds::profile_pda(program_id, &market.realm.bytes(), &market.profile.bytes()),
@@ -338,15 +317,33 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             && supply.realm == market.realm
             && supply.outcome_count == market.outcome_count
             && resolution.market == market.market
+            && resolution.resolved
             && profile.profile == market.profile
             && profile.realm == market.realm,
         ClutchError::MismatchedState,
     )?;
-    require_terms_and_resolution(
-        &accounts[IX_MARKET].data.borrow(),
+    /* Terms and Resolution were fully decoded (including the terms digest) by
+     * the small-facts readers above.  Resolve already bound the frozen payout
+     * set into the program-owned kernel; redemption preserves that inductive
+     * fact and need not hold Terms+Kernel together in one unsafe SBF frame. */
+    require(
+        terms.terms == market.terms
+            && terms.realm == market.realm
+            && terms.profile == market.profile
+            && terms.feed == market.feed
+            && terms.outcome_count == market.outcome_count
+            && terms.collateral_cap == market.collateral_cap
+            && resolution.terms == terms.terms
+            && resolution.feed == terms.feed
+            && resolution.payout_index < terms.payout_count,
+        ClutchError::MismatchedState,
+    )?;
+    require_resolved_kernel_head(
         &accounts[IX_KERNEL].data.borrow(),
-        &accounts[IX_RESOLUTION].data.borrow(),
-        &accounts[IX_TERMS].data.borrow(),
+        market.market,
+        resolution.payout_index,
+        terms.payout_count,
+        terms.outcome_count,
     )?;
     let snapshot = admit_tokens(program_id, accounts, &market, &hoard, &request)?;
 
