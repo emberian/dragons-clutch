@@ -1,8 +1,7 @@
 # Resolution replay domain
 
-Status: implemented in the offline reference, SBF adapter, and generated
-committed-bank plan; local-bank execution must be rerun against the resulting
-ELF before this is runtime evidence.
+Status: implemented in the offline reference and SBF adapter, and exercised in
+the clean signed committed-bank baseline at source commit `c05fe84`.
 
 ## One market fact, not one owner's action
 
@@ -98,3 +97,16 @@ sugar.
 - Committed plan: Resolve leaves the actor replay at sequence 5; the subsequent
   two redemptions consume 5 and 6, and terminal `WithdrawCash` consumes 7.
 
+The clean loopback runtime gate used ELF SHA-256
+`70c33c1cd44b475745b0562a79d9107f1d2101cbf698ebd6c233ca167ebab2e6`.
+All 22 signed transactions reached `confirmed`; the two declared refusals
+preserved all 18 watched accounts; and step 15 resolved without consuming an
+owner replay sequence. The terminal custody sequence paid the positionless
+bearer 3 atoms, withdrew 61 atoms to the founder and 6 to the second owner, and
+left the Hoard Token-2022 balance at zero.
+
+The gate remains genesis-assisted by 11 program-owned prerequisites. In
+particular, the resolution feed and evidence pages are injected rather than
+produced by an authenticated public archive lifecycle. This is runtime evidence
+for replay-domain separation, not source authentication, blank-bank operation,
+or batch settlement; `SettlePage` remains unimplemented.
