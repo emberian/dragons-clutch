@@ -6,13 +6,16 @@
 //! competitively admitted tick can never replay. Begin and Verify stage the
 //! full reexecution across transactions so no single instruction repeats the
 //! V2 triple-verification that measured over the transaction compute cap.
+//! Long-lived account values are heap-boxed and every large decode happens in
+//! its own `#[inline(never)]` frame so each handler stays inside the fixed
+//! SBF stack frame.
 
 use crate::accounts::{
     self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
 };
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::artifact::read_clock_slot;
-use crate::instructions::direct_selection::{full_domain, load_direct_orders, DirectOrders};
+use crate::instructions::direct_selection::{full_domain, DirectOrders};
 use crate::instructions::genesis::{
     read_rent, require_creatable, require_system_program, RentParameters,
 };
@@ -21,16 +24,16 @@ use clutch_batch_policy_identity::{
     direct_lifecycle_v3::admission_transcript_v3,
     direct_window_v1::{
         canonical_account_candidate_id, verify_direct_two_order_candidate, DirectCandidateEntryV1,
-        DirectCandidateWindowV1, DirectTwoOrderInputV1, ValidatedDirectDomainV1,
-        DIRECT_CANDIDATE_STATUS_VERIFIED, DIRECT_POLICY_V1, DIRECT_WINDOW_PHASE_OPEN,
-        MAX_DIRECT_CANDIDATES,
+        DirectCandidateV2, DirectCandidateWindowV1, DirectTwoOrderInputV1,
+        ValidatedDirectDomainV1, DIRECT_CANDIDATE_STATUS_VERIFIED, DIRECT_POLICY_V1,
+        DIRECT_WINDOW_PHASE_OPEN, MAX_DIRECT_CANDIDATES,
     },
-    FullScoreV1, Identity32V1,
+    FullRelationDomainV1, FullScoreV1, Identity32V1,
 };
 use clutch_solana_layout::{
     account_len,
     direct_selection_v3::{
-        DirectBatchPolicyV3, DirectCandidateV3Account, DirectFundingLedgerV3,
+        DirectCandidateV3Account, DirectEpochV4Account, DirectFundingLedgerV3,
         DirectWindowV3Account, DIRECT_BATCH_POLICY_V3_BYTES, DIRECT_CANDIDATE_STATUS_REVERIFIED,
         DIRECT_CANDIDATE_V3_BYTES, DIRECT_EPOCH_V4_BYTES, DIRECT_LIFECYCLE_PHASE_FROZEN_EMPTY,
         DIRECT_LIFECYCLE_PHASE_VERIFYING, DIRECT_LIFECYCLE_PHASE_WINDOW_OPEN,
@@ -44,8 +47,9 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use super::common::{
-    close_funded_account, observe_funding, pay_reward, read_epoch_v4, read_reservation_v2,
-    read_window_v3, read_work_budget, require_neutral_sink, sink_hash,
+    frozen_pair, grid_tick, observe_funding, pay_reward, read_epoch_v4_boxed,
+    read_reservation_v2_boxed, read_window_v3_boxed, read_work_budget, require_neutral_sink,
+    sink_hash, write_epoch_v4, write_window_v3,
 };
 use super::{
     create_pda_account_full_principal, direct_creation_funding, require_exact_direct_policy,
@@ -147,7 +151,7 @@ pub(super) fn submit(
     let rent = read_rent(&accounts[system + 1])?;
     let now = read_clock_slot(&accounts[system + 2])?;
 
-    let mut epoch = read_epoch_v4(
+    let mut epoch = read_epoch_v4_boxed(
         program_id,
         &accounts[IX_SUBMIT_EPOCH],
         intent_market,
@@ -166,46 +170,55 @@ pub(super) fn submit(
         now >= epoch.direct.submission_opens_slot && now < epoch.direct.submission_closes_slot,
         ClutchError::NotActive,
     )?;
-    let supplied_policy = DirectBatchPolicyV3::decode(&accounts[IX_SUBMIT_POLICY].data.borrow())?;
-    require_exact_direct_policy(
-        epoch.direct.common.epoch,
-        epoch.direct_policy_v3_id,
-        supplied_policy,
-    )?;
-    expect_pda(
-        accounts[IX_SUBMIT_POLICY].key,
-        seeds::direct_batch_policy_v3_pda(
+    authenticate_policy_artifact(program_id, &accounts[IX_SUBMIT_POLICY], &epoch)?;
+
+    let orders = frozen_pair(program_id, &accounts[IX_SUBMIT_PAGE], &epoch.direct.common)?;
+    let reservation_fundings = [
+        read_reservation_v2_boxed(
             program_id,
-            &epoch.direct.common.epoch.bytes(),
-            &epoch.direct_policy_v3_id.bytes(),
-        ),
-        None,
-    )?;
-
-    let (orders, tick, reservation_fundings) = authenticate_frozen_source_with_tick(
-        program_id,
-        accounts,
-        IX_SUBMIT_GRID,
-        IX_SUBMIT_PAGE,
-        IX_SUBMIT_RES_ZERO,
-        IX_SUBMIT_RES_ONE,
-        &epoch,
-        outcome_price,
-    )?;
-
-    // The complete relation verifier issues the exact Candidate body.
-    let mut prices = [0u64; MAX_OUTCOMES];
+            &accounts[IX_SUBMIT_RES_ZERO],
+            &epoch.direct.common,
+            orders.zero,
+            RESERVATION_STATE_ACTIVE,
+        )?
+        .funding,
+        read_reservation_v2_boxed(
+            program_id,
+            &accounts[IX_SUBMIT_RES_ONE],
+            &epoch.direct.common,
+            orders.one,
+            RESERVATION_STATE_ACTIVE,
+        )?
+        .funding,
+    ];
     let complement = epoch
         .direct
         .common
         .price_scale
         .checked_sub(outcome_price)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    grid_tick(
+        program_id,
+        &accounts[IX_SUBMIT_GRID],
+        &epoch.direct.common,
+        complement,
+    )?;
+    let tick = grid_tick(
+        program_id,
+        &accounts[IX_SUBMIT_GRID],
+        &epoch.direct.common,
+        outcome_price,
+    )?;
+
+    // The complete relation verifier issues the exact Candidate body.
+    let mut prices = [0u64; MAX_OUTCOMES];
     prices[usize::from(orders.outcome)] = outcome_price;
     prices[1usize - usize::from(orders.outcome)] = complement;
-    let domain = full_domain(&epoch.direct, DIRECT_POLICY_V1)?;
-    let candidate_id =
-        canonical_account_candidate_id(domain.epoch_id, domain.market_id, &prices);
+    let candidate_id = canonical_account_candidate_id(
+        Identity32V1(epoch.direct.common.epoch.bytes()),
+        Identity32V1(epoch.direct.common.market.bytes()),
+        &prices,
+    );
     let (candidate_address, candidate_bump) = seeds::direct_candidate_v3_pda(
         program_id,
         &epoch.direct.common.epoch.bytes(),
@@ -216,40 +229,27 @@ pub(super) fn submit(
         (candidate_address, candidate_bump),
         None,
     )?;
-    let candidate = verify_direct_two_order_candidate(
-        &domain,
-        DirectTwoOrderInputV1 {
-            prices,
-            buy_limit: orders.buy_limit,
-            sell_limit: orders.sell_limit,
-            quantity: orders.quantity,
-            submitted_slot: now,
-            buy_index: orders.buy_index,
-            sell_index: orders.sell_index,
-            outcome: orders.outcome,
-            stored_bump: candidate_bump,
-        },
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let candidate = issue_candidate_boxed(&epoch, orders, prices, now, candidate_bump)?;
 
     // Window prestate, retained registry, and the competitive tick bitmap.
     let mut window = if existing_window {
-        let window = read_window_v3(program_id, &accounts[IX_SUBMIT_WINDOW], &epoch)?;
+        let window = read_window_v3_boxed(program_id, &accounts[IX_SUBMIT_WINDOW], &epoch)?;
         require(
             window.window.phase == DIRECT_WINDOW_PHASE_OPEN
                 && usize::from(window.window.top_count) == top_count
-                && window.window.relation_domain_digest.0
-                    == candidate.relation_domain_digest.0,
+                && window.window.relation_domain_digest.0 == candidate.relation_domain_digest.0,
             ClutchError::MismatchedState,
         )?;
         window
     } else {
         let (window_address, window_bump) =
             seeds::direct_window_v3_pda(program_id, &epoch.direct.common.epoch.bytes());
-        expect_pda(accounts[IX_SUBMIT_WINDOW].key, (window_address, window_bump), None)?;
-        let mut state = first_window_state(&epoch, &candidate)?;
-        state.window.stored_bump = window_bump;
-        state
+        expect_pda(
+            accounts[IX_SUBMIT_WINDOW].key,
+            (window_address, window_bump),
+            None,
+        )?;
+        first_window_state(&epoch, &candidate, window_bump)?
     };
     require(
         window.seen_competitive_ticks & (1u64 << tick) == 0,
@@ -336,7 +336,7 @@ pub(super) fn submit(
     if let Some(worst) = displaced {
         let payer_index =
             displaced_payer_index.ok_or(Refusal::Adapter(ClutchError::AccountCount))?;
-        close_funded_account(
+        super::common::close_funded_account(
             &accounts[IX_SUBMIT_TOP_START + worst],
             &accounts[payer_index],
             &accounts[sink_index],
@@ -355,14 +355,11 @@ pub(super) fn submit(
     window.window.top = entries;
     window.window.top_count = post_count as u8;
     window.window.admitted_count = post_admissions;
-    window.window.admission_transcript = Identity32V1(
-        admission_transcript_v3(
-            window.window.admission_transcript,
-            post_admissions_u8,
-            tick,
-            candidate.entry(),
-        )
-        .0,
+    window.window.admission_transcript = admission_transcript_v3(
+        window.window.admission_transcript,
+        post_admissions_u8,
+        tick,
+        candidate.entry(),
     );
     window.seen_competitive_ticks |= 1u64 << tick;
     window.live_candidate_mask = prefix_mask(post_count as u8)?;
@@ -374,24 +371,16 @@ pub(super) fn submit(
 
     /* Existing-state writes precede the create CPIs; no borrow survives into
      * a CPI, and a failed create rolls the whole transaction back. */
-    epoch.encode(&mut borrow_mut!(accounts[IX_SUBMIT_EPOCH])?)?;
+    write_epoch_v4(&accounts[IX_SUBMIT_EPOCH], &epoch)?;
     index = 0;
     while index < top_count {
         if displaced == Some(index) {
             index += 1;
             continue;
         }
-        let survivor = DirectCandidateV3Account::decode(
-            &accounts[IX_SUBMIT_TOP_START + index].data.borrow(),
-            sink_hash(),
-        )?;
-        let observed = DirectCandidateV3Account {
-            candidate: survivor.candidate,
-            funding: retained[index].funding,
-        };
-        observed.encode(
-            sink_hash(),
-            &mut borrow_mut!(accounts[IX_SUBMIT_TOP_START + index])?,
+        persist_candidate_observation(
+            &accounts[IX_SUBMIT_TOP_START + index],
+            retained[index].funding,
         )?;
         index += 1;
     }
@@ -419,14 +408,10 @@ pub(super) fn submit(
             &[candidate_bump],
         ],
     )?;
-    DirectCandidateV3Account {
-        candidate,
-        funding: candidate_funding,
-    }
-    .encode(sink_hash(), &mut borrow_mut!(accounts[IX_SUBMIT_CANDIDATE])?)?;
+    write_new_candidate(&accounts[IX_SUBMIT_CANDIDATE], &candidate, candidate_funding)?;
 
     if !existing_window {
-        let window_funding = create_first_window(
+        window.funding = create_first_window(
             program_id,
             accounts,
             &rent,
@@ -434,9 +419,8 @@ pub(super) fn submit(
             &epoch,
             window.window.stored_bump,
         )?;
-        window.funding = window_funding;
     }
-    window.encode(sink_hash(), &mut borrow_mut!(accounts[IX_SUBMIT_WINDOW])?)?;
+    write_window_v3(&accounts[IX_SUBMIT_WINDOW], &window)?;
     Ok(())
 }
 
@@ -467,7 +451,7 @@ pub(super) fn begin(
         ],
     )?;
     let now = read_clock_slot(&accounts[IX_BEGIN_CLOCK])?;
-    let mut epoch = read_epoch_v4(
+    let mut epoch = read_epoch_v4_boxed(
         program_id,
         &accounts[IX_BEGIN_EPOCH],
         intent_market,
@@ -478,7 +462,7 @@ pub(super) fn begin(
         ClutchError::NotActive,
     )?;
     require_selection_slot(&epoch, now)?;
-    let mut window = read_window_v3(program_id, &accounts[IX_BEGIN_WINDOW], &epoch)?;
+    let mut window = read_window_v3_boxed(program_id, &accounts[IX_BEGIN_WINDOW], &epoch)?;
     require(
         window.window.phase == DIRECT_WINDOW_PHASE_OPEN,
         ClutchError::NotActive,
@@ -507,8 +491,8 @@ pub(super) fn begin(
     window.verification_mask = 0;
     epoch.lifecycle_phase = DIRECT_LIFECYCLE_PHASE_VERIFYING;
 
-    epoch.encode(&mut borrow_mut!(accounts[IX_BEGIN_EPOCH])?)?;
-    window.encode(sink_hash(), &mut borrow_mut!(accounts[IX_BEGIN_WINDOW])?)?;
+    write_epoch_v4(&accounts[IX_BEGIN_EPOCH], &epoch)?;
+    write_window_v3(&accounts[IX_BEGIN_WINDOW], &window)?;
     budget.encode(sink_hash(), &mut borrow_mut!(accounts[IX_BEGIN_WORK])?)?;
     Ok(())
 }
@@ -544,7 +528,7 @@ pub(super) fn verify(
         ],
     )?;
     let now = read_clock_slot(&accounts[IX_VERIFY_CLOCK])?;
-    let epoch = read_epoch_v4(
+    let epoch = read_epoch_v4_boxed(
         program_id,
         &accounts[IX_VERIFY_EPOCH],
         intent_market,
@@ -555,7 +539,7 @@ pub(super) fn verify(
         ClutchError::NotActive,
     )?;
     require_selection_slot(&epoch, now)?;
-    let mut window = read_window_v3(program_id, &accounts[IX_VERIFY_WINDOW], &epoch)?;
+    let mut window = read_window_v3_boxed(program_id, &accounts[IX_VERIFY_WINDOW], &epoch)?;
     require(
         window.window.phase == DIRECT_WINDOW_PHASE_VERIFYING,
         ClutchError::NotActive,
@@ -567,26 +551,11 @@ pub(super) fn verify(
     let bit = 1u8 << retained_index;
     require(window.verification_mask & bit == 0, ClutchError::Replay)?;
 
-    let (orders, _) = authenticate_frozen_page(
+    let orders = frozen_pair(program_id, &accounts[IX_VERIFY_PAGE], &epoch.direct.common)?;
+    let mut retained = read_candidate_v3_boxed(
         program_id,
-        accounts,
-        IX_VERIFY_GRID,
-        IX_VERIFY_PAGE,
-        &epoch,
-    )?;
-
-    let mut retained = DirectCandidateV3Account::decode(
-        &accounts[IX_VERIFY_CANDIDATE].data.borrow(),
-        sink_hash(),
-    )?;
-    expect_pda(
-        accounts[IX_VERIFY_CANDIDATE].key,
-        seeds::direct_candidate_v3_pda(
-            program_id,
-            &epoch.direct.common.epoch.bytes(),
-            &retained.candidate.candidate_id.0,
-        ),
-        Some(retained.candidate.stored_bump),
+        &accounts[IX_VERIFY_CANDIDATE],
+        &epoch.direct.common.epoch,
     )?;
     require(
         retained.candidate.status == DIRECT_CANDIDATE_STATUS_VERIFIED
@@ -598,29 +567,19 @@ pub(super) fn verify(
     )?;
 
     // Full staged reexecution of exactly one retained Candidate.
-    let domain = ValidatedDirectDomainV1::new(&full_domain(&epoch.direct, DIRECT_POLICY_V1)?)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    domain
-        .reverify_decoded_candidate(
-            &retained.candidate,
-            DirectTwoOrderInputV1 {
-                prices: retained.candidate.prices,
-                buy_limit: orders.buy_limit,
-                sell_limit: orders.sell_limit,
-                quantity: orders.quantity,
-                submitted_slot: retained.candidate.submitted_slot,
-                buy_index: orders.buy_index,
-                sell_index: orders.sell_index,
-                outcome: orders.outcome,
-                stored_bump: retained.candidate.stored_bump,
-            },
-        )
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let grid = clutch_solana_layout::PriceGridAccount::decode(
-        &accounts[IX_VERIFY_GRID].data.borrow(),
+    reverify_retained(&epoch, orders, &retained.candidate)?;
+    grid_tick(
+        program_id,
+        &accounts[IX_VERIFY_GRID],
+        &epoch.direct.common,
+        retained.candidate.prices[0],
     )?;
-    grid.tick_of(retained.candidate.prices[0])?;
-    grid.tick_of(retained.candidate.prices[1])?;
+    grid_tick(
+        program_id,
+        &accounts[IX_VERIFY_GRID],
+        &epoch.direct.common,
+        retained.candidate.prices[1],
+    )?;
 
     let mut budget = read_work_budget(program_id, &accounts[IX_VERIFY_WORK], &epoch)?;
     window.funding = observe_funding(window.funding, &accounts[IX_VERIFY_WINDOW])?;
@@ -643,29 +602,29 @@ pub(super) fn verify(
 
     retained.candidate.status = DIRECT_CANDIDATE_STATUS_REVERIFIED;
     window.verification_mask |= bit;
-    window.encode(sink_hash(), &mut borrow_mut!(accounts[IX_VERIFY_WINDOW])?)?;
-    retained.encode(
-        sink_hash(),
-        &mut borrow_mut!(accounts[IX_VERIFY_CANDIDATE])?,
-    )?;
+    write_window_v3(&accounts[IX_VERIFY_WINDOW], &window)?;
+    write_candidate_v3(&accounts[IX_VERIFY_CANDIDATE], &retained)?;
     budget.encode(sink_hash(), &mut borrow_mut!(accounts[IX_VERIFY_WORK])?)?;
     Ok(())
 }
 
 /// Begin/Verify/Finalize lie inside the immutable staged-selection window.
-pub(super) fn require_selection_slot(
-    epoch: &clutch_solana_layout::direct_selection_v3::DirectEpochV4Account,
-    now: u64,
-) -> Outcome<()> {
+pub(super) fn require_selection_slot(epoch: &DirectEpochV4Account, now: u64) -> Outcome<()> {
     require(
         now >= epoch.direct.submission_closes_slot && now < epoch.selection_deadline_slot,
         ClutchError::NotActive,
     )
 }
 
+#[inline(never)]
 fn inspect_submission_window(program_id: &Pubkey, account: &AccountInfo) -> Outcome<(bool, usize)> {
     if account.owner == program_id {
-        accounts::validate_state_role_lengths(program_id, account, true, &[DIRECT_WINDOW_V3_BYTES])?;
+        accounts::validate_state_role_lengths(
+            program_id,
+            account,
+            true,
+            &[DIRECT_WINDOW_V3_BYTES],
+        )?;
         let window = DirectWindowV3Account::decode(&account.data.borrow(), sink_hash())?;
         Ok((true, usize::from(window.window.top_count)))
     } else {
@@ -688,76 +647,150 @@ fn validate_submit_fixed_roles(program_id: &Pubkey, accounts: &[AccountInfo]) ->
     Ok(())
 }
 
-/// Authenticate grid, frozen page, and both ACTIVE reservations, and resolve
-/// the competitive tick of the proposed outcome price.
-#[allow(clippy::too_many_arguments)]
+/// The exact 96-byte DirectBatchPolicy artifact account, in its own frame.
 #[inline(never)]
-fn authenticate_frozen_source_with_tick(
+fn authenticate_policy_artifact(
     program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    grid_index: usize,
-    page_index: usize,
-    reservation_zero_index: usize,
-    reservation_one_index: usize,
-    epoch: &clutch_solana_layout::direct_selection_v3::DirectEpochV4Account,
-    outcome_price: u64,
-) -> Outcome<(DirectOrders, u8, [DirectFundingLedgerV3; 2])> {
-    let (orders, grid) =
-        authenticate_frozen_page(program_id, accounts, grid_index, page_index, epoch)?;
-    let zero = read_reservation_v2(
-        program_id,
-        &accounts[reservation_zero_index],
-        &epoch.direct.common,
-        orders.zero,
-        RESERVATION_STATE_ACTIVE,
+    account: &AccountInfo,
+    epoch: &DirectEpochV4Account,
+) -> Outcome<()> {
+    let supplied_policy =
+        clutch_solana_layout::direct_selection_v3::DirectBatchPolicyV3::decode(
+            &account.data.borrow(),
+        )?;
+    require_exact_direct_policy(
+        epoch.direct.common.epoch,
+        epoch.direct_policy_v3_id,
+        supplied_policy,
     )?;
-    let one = read_reservation_v2(
-        program_id,
-        &accounts[reservation_one_index],
-        &epoch.direct.common,
-        orders.one,
-        RESERVATION_STATE_ACTIVE,
-    )?;
-    let complement = epoch
-        .direct
-        .common
-        .price_scale
-        .checked_sub(outcome_price)
-        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    grid.tick_of(complement)?;
-    let tick = grid.tick_of(outcome_price)?;
-    Ok((orders, tick, [zero.funding, one.funding]))
+    expect_pda(
+        account.key,
+        seeds::direct_batch_policy_v3_pda(
+            program_id,
+            &epoch.direct.common.epoch.bytes(),
+            &epoch.direct_policy_v3_id.bytes(),
+        ),
+        None,
+    )
 }
 
-/// Authenticate the grid and the exact frozen two-order page.
+/// Run the complete cached direct verifier; the full relation domain and its
+/// verification temporaries stay in this frame and the issued Candidate body
+/// returns boxed.
 #[inline(never)]
-fn authenticate_frozen_page(
+fn issue_candidate_boxed(
+    epoch: &DirectEpochV4Account,
+    orders: DirectOrders,
+    prices: [u64; MAX_OUTCOMES],
+    now: u64,
+    stored_bump: u8,
+) -> Outcome<Box<DirectCandidateV2>> {
+    let domain = full_domain(&epoch.direct, DIRECT_POLICY_V1)?;
+    let candidate = verify_direct_two_order_candidate(
+        &domain,
+        DirectTwoOrderInputV1 {
+            prices,
+            buy_limit: orders.buy_limit,
+            sell_limit: orders.sell_limit,
+            quantity: orders.quantity,
+            submitted_slot: now,
+            buy_index: orders.buy_index,
+            sell_index: orders.sell_index,
+            outcome: orders.outcome,
+            stored_bump,
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(Box::new(candidate))
+}
+
+/// Reexecute one retained Candidate against the frozen source in this frame.
+#[inline(never)]
+fn reverify_retained(
+    epoch: &DirectEpochV4Account,
+    orders: DirectOrders,
+    candidate: &DirectCandidateV2,
+) -> Outcome<()> {
+    let domain: FullRelationDomainV1 = full_domain(&epoch.direct, DIRECT_POLICY_V1)?;
+    let validated = ValidatedDirectDomainV1::new(&domain)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    validated
+        .reverify_decoded_candidate(
+            candidate,
+            DirectTwoOrderInputV1 {
+                prices: candidate.prices,
+                buy_limit: orders.buy_limit,
+                sell_limit: orders.sell_limit,
+                quantity: orders.quantity,
+                submitted_slot: candidate.submitted_slot,
+                buy_index: orders.buy_index,
+                sell_index: orders.sell_index,
+                outcome: orders.outcome,
+                stored_bump: candidate.stored_bump,
+            },
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(())
+}
+
+/// Boxed decode of one V3 Candidate account with its PDA authenticated.
+#[inline(never)]
+fn read_candidate_v3_boxed(
     program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    grid_index: usize,
-    page_index: usize,
-    epoch: &clutch_solana_layout::direct_selection_v3::DirectEpochV4Account,
-) -> Outcome<(DirectOrders, clutch_solana_layout::PriceGridAccount)> {
-    let grid = clutch_solana_layout::PriceGridAccount::decode(&accounts[grid_index].data.borrow())?;
+    account: &AccountInfo,
+    epoch_id: &Hash32,
+) -> Outcome<Box<DirectCandidateV3Account>> {
+    let value = DirectCandidateV3Account::decode(&account.data.borrow(), sink_hash())?;
     expect_pda(
-        accounts[grid_index].key,
-        seeds::grid_pda(program_id, &grid.realm.bytes(), &grid.grid.bytes()),
-        Some(grid.stored_bump),
+        account.key,
+        seeds::direct_candidate_v3_pda(
+            program_id,
+            &epoch_id.bytes(),
+            &value.candidate.candidate_id.0,
+        ),
+        Some(value.candidate.stored_bump),
     )?;
-    require(
-        grid.grid == epoch.direct.common.price_grid
-            && grid.price_scale == epoch.direct.common.price_scale,
-        ClutchError::MismatchedState,
-    )?;
-    let page_data = accounts[page_index].data.borrow();
-    let header = clutch_solana_layout::stream::OrderPageHeader::decode(&page_data)?;
-    expect_pda(
-        accounts[page_index].key,
-        seeds::page_pda(program_id, &header.epoch.bytes(), header.page_index),
-        Some(header.stored_bump),
-    )?;
-    let orders = load_direct_orders(&page_data, &grid, &epoch.direct.common, true)?;
-    Ok((orders, grid))
+    Ok(Box::new(value))
+}
+
+/// Persist one V3 Candidate value; encode temporaries stay in this frame.
+#[inline(never)]
+fn write_candidate_v3(account: &AccountInfo, value: &DirectCandidateV3Account) -> Outcome<()> {
+    let mut data = borrow_mut!(account)?;
+    value.encode(sink_hash(), &mut data)?;
+    Ok(())
+}
+
+/// Persist a surviving retained Candidate's observed funding unchanged-body.
+#[inline(never)]
+fn persist_candidate_observation(
+    account: &AccountInfo,
+    funding: DirectFundingLedgerV3,
+) -> Outcome<()> {
+    let survivor = DirectCandidateV3Account::decode(&account.data.borrow(), sink_hash())?;
+    let observed = DirectCandidateV3Account {
+        candidate: survivor.candidate,
+        funding,
+    };
+    let mut data = borrow_mut!(account)?;
+    observed.encode(sink_hash(), &mut data)?;
+    Ok(())
+}
+
+/// Persist the newly issued winner-eligible Candidate account.
+#[inline(never)]
+fn write_new_candidate(
+    account: &AccountInfo,
+    candidate: &DirectCandidateV2,
+    funding: DirectFundingLedgerV3,
+) -> Outcome<()> {
+    let value = DirectCandidateV3Account {
+        candidate: *candidate,
+        funding,
+    };
+    let mut data = borrow_mut!(account)?;
+    value.encode(sink_hash(), &mut data)?;
+    Ok(())
 }
 
 /// Load, authenticate, and compact the retained V3 candidate registry.
@@ -806,12 +839,14 @@ fn load_retained_registry_v3(
     Ok(())
 }
 
-/// The first admission's Window V3 poststate skeleton, before entry insertion.
+/// The first admission's Window V3 poststate skeleton, boxed.
+#[inline(never)]
 fn first_window_state(
-    epoch: &clutch_solana_layout::direct_selection_v3::DirectEpochV4Account,
-    candidate: &clutch_batch_policy_identity::direct_window_v1::DirectCandidateV2,
-) -> Outcome<DirectWindowV3Account> {
-    Ok(DirectWindowV3Account {
+    epoch: &DirectEpochV4Account,
+    candidate: &DirectCandidateV2,
+    window_bump: u8,
+) -> Outcome<Box<DirectWindowV3Account>> {
+    Ok(Box::new(DirectWindowV3Account {
         window: DirectCandidateWindowV1 {
             epoch_id: candidate.epoch_id,
             market_id: candidate.market_id,
@@ -827,7 +862,7 @@ fn first_window_state(
             admitted_count: 0,
             top_count: 0,
             phase: DIRECT_WINDOW_PHASE_OPEN,
-            stored_bump: 0,
+            stored_bump: window_bump,
             flags: 0,
             reserved: [0; 2],
         },
@@ -841,7 +876,7 @@ fn first_window_state(
         receipt_funding: DirectFundingLedgerV3::ZERO,
         pot_funding: DirectFundingLedgerV3::ZERO,
         reserved: [0; 4],
-    })
+    }))
 }
 
 /// Create the first Window account with its exact full-principal delta.
@@ -851,7 +886,7 @@ fn create_first_window(
     accounts: &[AccountInfo],
     rent: &RentParameters,
     system: usize,
-    epoch: &clutch_solana_layout::direct_selection_v3::DirectEpochV4Account,
+    epoch: &DirectEpochV4Account,
     window_bump: u8,
 ) -> Outcome<DirectFundingLedgerV3> {
     let funding = direct_creation_funding(
@@ -881,8 +916,9 @@ fn create_first_window(
 
 /// The model's no-state rule: a rejected noncompetitive attempt must observe
 /// every live funded account byte-unchanged, because nothing is persisted.
+#[inline(never)]
 fn require_submit_observations_unchanged(
-    epoch: &clutch_solana_layout::direct_selection_v3::DirectEpochV4Account,
+    epoch: &DirectEpochV4Account,
     window: &DirectWindowV3Account,
     reservation_fundings: &[DirectFundingLedgerV3; 2],
     accounts: &[AccountInfo],

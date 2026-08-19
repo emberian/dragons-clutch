@@ -36,8 +36,9 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use super::common::{
-    close_funded_account, observe_funding, read_epoch_v4, read_reservation_v2,
-    release_reservations_into_positions, require_neutral_sink, sink_hash,
+    close_funded_account, observe_funding, read_epoch_v4_boxed, read_reservation_v2_boxed,
+    release_reservations_into_positions, require_neutral_sink, sink_hash, write_epoch_v4,
+    write_reservation_v2,
 };
 use super::{
     create_pda_account_full_principal, direct_creation_funding, require_exact_direct_policy,
@@ -107,7 +108,7 @@ pub(super) fn freeze(
     let rent = read_rent(&accounts[IX_FREEZE_RENT])?;
     let now = read_clock_slot(&accounts[IX_FREEZE_CLOCK])?;
 
-    let mut epoch = read_epoch_v4(
+    let mut epoch = read_epoch_v4_boxed(
         program_id,
         &accounts[IX_FREEZE_EPOCH],
         intent_market,
@@ -124,61 +125,18 @@ pub(super) fn freeze(
         now < epoch.direct.submission_opens_slot,
         ClutchError::NotActive,
     )?;
+    authenticate_policy_artifact(program_id, &accounts[IX_FREEZE_POLICY], &epoch)?;
 
-    let supplied_policy = DirectBatchPolicyV3::decode(&accounts[IX_FREEZE_POLICY].data.borrow())?;
-    require_exact_direct_policy(
-        epoch.direct.common.epoch,
-        epoch.direct_policy_v3_id,
-        supplied_policy,
-    )?;
-    expect_pda(
-        accounts[IX_FREEZE_POLICY].key,
-        seeds::direct_batch_policy_v3_pda(
-            program_id,
-            &epoch.direct.common.epoch.bytes(),
-            &epoch.direct_policy_v3_id.bytes(),
-        ),
-        None,
-    )?;
+    let (orders, seal) = freeze_page_facts(program_id, accounts, &epoch)?;
 
-    let grid = PriceGridAccount::decode(&accounts[IX_FREEZE_GRID].data.borrow())?;
-    expect_pda(
-        accounts[IX_FREEZE_GRID].key,
-        seeds::grid_pda(program_id, &grid.realm.bytes(), &grid.grid.bytes()),
-        Some(grid.stored_bump),
-    )?;
-    require(
-        grid.grid == epoch.direct.common.price_grid
-            && grid.price_scale == epoch.direct.common.price_scale,
-        ClutchError::MismatchedState,
-    )?;
-
-    let page_data = accounts[IX_FREEZE_PAGE].data.borrow();
-    let page_header = stream::OrderPageHeader::decode(&page_data)?;
-    expect_pda(
-        accounts[IX_FREEZE_PAGE].key,
-        seeds::page_pda(
-            program_id,
-            &page_header.epoch.bytes(),
-            page_header.page_index,
-        ),
-        Some(page_header.stored_bump),
-    )?;
-    // Two-order pair profile: distinct owners, opposite single-Egg sides on
-    // one outcome, equal quantities, zero minimum-fill/flags, crossed limits.
-    let orders = load_direct_orders(&page_data, &grid, &epoch.direct.common, false)?;
-    let header = stream::verify_page_on_grid(&page_data, &grid)?;
-    let (order_set, set_order_count) = stream::frozen_set_commitment(&[&page_data])?;
-    drop(page_data);
-
-    let mut reservation_zero = read_reservation_v2(
+    let mut reservation_zero = read_reservation_v2_boxed(
         program_id,
         &accounts[IX_FREEZE_RES_ZERO],
         &epoch.direct.common,
         orders.zero,
         RESERVATION_STATE_ACTIVE,
     )?;
-    let mut reservation_one = read_reservation_v2(
+    let mut reservation_one = read_reservation_v2_boxed(
         program_id,
         &accounts[IX_FREEZE_RES_ONE],
         &epoch.direct.common,
@@ -225,10 +183,10 @@ pub(super) fn freeze(
     budget.validate(sink_hash())?;
 
     epoch.direct.common.phase = EPOCH_PHASE_FROZEN;
-    epoch.direct.common.order_set = order_set;
-    epoch.direct.common.first_order_id = header.first_order_id;
-    epoch.direct.common.last_order_id = header.last_order_id;
-    epoch.direct.common.order_count = set_order_count;
+    epoch.direct.common.order_set = seal.order_set;
+    epoch.direct.common.first_order_id = seal.first_order_id;
+    epoch.direct.common.last_order_id = seal.last_order_id;
+    epoch.direct.common.order_count = seal.set_order_count;
     epoch.lifecycle_phase = DIRECT_LIFECYCLE_PHASE_FROZEN_EMPTY;
 
     /* Existing-state writes precede the WorkBudget System CPI deliberately: a
@@ -236,12 +194,12 @@ pub(super) fn freeze(
      * no account-data borrow survives into that CPI. */
     stream::seal_page(
         &mut borrow_mut!(accounts[IX_FREEZE_PAGE])?,
-        order_set,
-        set_order_count,
+        seal.order_set,
+        seal.set_order_count,
     )?;
-    reservation_zero.encode(sink_hash(), &mut borrow_mut!(accounts[IX_FREEZE_RES_ZERO])?)?;
-    reservation_one.encode(sink_hash(), &mut borrow_mut!(accounts[IX_FREEZE_RES_ONE])?)?;
-    epoch.encode(&mut borrow_mut!(accounts[IX_FREEZE_EPOCH])?)?;
+    write_reservation_v2(&accounts[IX_FREEZE_RES_ZERO], &reservation_zero)?;
+    write_reservation_v2(&accounts[IX_FREEZE_RES_ONE], &reservation_one)?;
+    write_epoch_v4(&accounts[IX_FREEZE_EPOCH], &epoch)?;
 
     create_pda_account_full_principal(
         program_id,
@@ -260,6 +218,84 @@ pub(super) fn freeze(
     )?;
     budget.encode(sink_hash(), &mut borrow_mut!(accounts[IX_FREEZE_WORK])?)?;
     Ok(())
+}
+
+/// Exact sealed-page commitment facts; the grid, page header, and page fold
+/// temporaries all stay inside this frame.
+#[derive(Clone, Copy)]
+struct PageSealFacts {
+    order_set: Hash32,
+    first_order_id: Hash32,
+    last_order_id: Hash32,
+    set_order_count: u16,
+}
+
+#[inline(never)]
+fn freeze_page_facts(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    epoch: &clutch_solana_layout::direct_selection_v3::DirectEpochV4Account,
+) -> Outcome<(crate::instructions::direct_selection::DirectOrders, PageSealFacts)> {
+    let grid = PriceGridAccount::decode(&accounts[IX_FREEZE_GRID].data.borrow())?;
+    expect_pda(
+        accounts[IX_FREEZE_GRID].key,
+        seeds::grid_pda(program_id, &grid.realm.bytes(), &grid.grid.bytes()),
+        Some(grid.stored_bump),
+    )?;
+    require(
+        grid.grid == epoch.direct.common.price_grid
+            && grid.price_scale == epoch.direct.common.price_scale,
+        ClutchError::MismatchedState,
+    )?;
+    let page_data = accounts[IX_FREEZE_PAGE].data.borrow();
+    let page_header = stream::OrderPageHeader::decode(&page_data)?;
+    expect_pda(
+        accounts[IX_FREEZE_PAGE].key,
+        seeds::page_pda(
+            program_id,
+            &page_header.epoch.bytes(),
+            page_header.page_index,
+        ),
+        Some(page_header.stored_bump),
+    )?;
+    // Two-order pair profile: distinct owners, opposite single-Egg sides on
+    // one outcome, equal quantities, zero minimum-fill/flags, crossed limits.
+    let orders = load_direct_orders(&page_data, &grid, &epoch.direct.common, false)?;
+    let header = stream::verify_page_on_grid(&page_data, &grid)?;
+    let (order_set, set_order_count) = stream::frozen_set_commitment(&[&page_data])?;
+    Ok((
+        orders,
+        PageSealFacts {
+            order_set,
+            first_order_id: header.first_order_id,
+            last_order_id: header.last_order_id,
+            set_order_count,
+        },
+    ))
+}
+
+/// The exact 96-byte DirectBatchPolicy artifact account, in its own frame.
+#[inline(never)]
+fn authenticate_policy_artifact(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+    epoch: &clutch_solana_layout::direct_selection_v3::DirectEpochV4Account,
+) -> Outcome<()> {
+    let supplied_policy = DirectBatchPolicyV3::decode(&account.data.borrow())?;
+    require_exact_direct_policy(
+        epoch.direct.common.epoch,
+        epoch.direct_policy_v3_id,
+        supplied_policy,
+    )?;
+    expect_pda(
+        account.key,
+        seeds::direct_batch_policy_v3_pda(
+            program_id,
+            &epoch.direct.common.epoch.bytes(),
+            &epoch.direct_policy_v3_id.bytes(),
+        ),
+        None,
+    )
 }
 
 /// `AbortUnfrozenDirectV4`: permissionless terminal route for an Epoch that
@@ -285,7 +321,7 @@ pub(super) fn abort(
     let now = read_clock_slot(&accounts[IX_ABORT_CLOCK])?;
     require_neutral_sink(&accounts[IX_ABORT_SINK])?;
 
-    let mut epoch = read_epoch_v4(
+    let mut epoch = read_epoch_v4_boxed(
         program_id,
         &accounts[IX_ABORT_EPOCH],
         intent_market,
@@ -384,7 +420,9 @@ pub(super) fn abort(
     require_count(accounts, payers_at + reservation_count)?;
     require_distinct(&accounts[..payers_at])?;
 
-    let mut reservations = [None, None];
+    let mut reservation_fundings =
+        [clutch_solana_layout::direct_selection_v3::DirectFundingLedgerV3::ZERO; 2];
+    let mut reservation_ids = [Hash32::ZERO; 2];
     index = 0;
     while index < reservation_count {
         accounts::validate_state_role_lengths(
@@ -393,35 +431,33 @@ pub(super) fn abort(
             true,
             &[DIRECT_RESERVATION_V2_BYTES],
         )?;
-        reservations[index] = Some(read_reservation_v2(
+        let reservation = read_reservation_v2_boxed(
             program_id,
             &accounts[reservations_at + index],
             &epoch.direct.common,
             orders[index],
             RESERVATION_STATE_ACTIVE,
-        )?);
+        )?;
+        reservation_fundings[index] = reservation.funding;
+        reservation_ids[index] = reservation.reservation.reservation;
         index += 1;
     }
 
     if reservation_count > 0 {
-        let first = reservations[0].ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
-        let held = [first, reservations[1].unwrap_or(first)];
         release_reservations_into_positions(
             program_id,
             &epoch.direct.common,
             &orders[..reservation_count],
-            &held[..reservation_count],
+            &accounts[reservations_at..reservations_at + reservation_count],
             &accounts[positions_at..payers_at],
         )?;
         index = 0;
         while index < reservation_count {
-            let reservation =
-                reservations[index].ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
             close_funded_account(
                 &accounts[reservations_at + index],
                 &accounts[payers_at + index],
                 &accounts[IX_ABORT_SINK],
-                reservation.funding,
+                reservation_fundings[index],
                 0,
             )?;
             index += 1;
@@ -438,27 +474,13 @@ pub(super) fn abort(
         outcome: 0,
         terminal_reservation_count: reservation_count as u8,
         selected_slot: 0,
-        candidate: if reservation_count > 0 {
-            reservations[0]
-                .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?
-                .reservation
-                .reservation
-        } else {
-            Hash32::ZERO
-        },
-        relation_candidate_digest: if reservation_count > 1 {
-            reservations[1]
-                .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?
-                .reservation
-                .reservation
-        } else {
-            Hash32::ZERO
-        },
+        candidate: reservation_ids[0],
+        relation_candidate_digest: reservation_ids[1],
         quantity: 0,
         price: 0,
         consideration_price_units: 0,
         terminal_slot: now,
     };
-    epoch.encode(&mut borrow_mut!(accounts[IX_ABORT_EPOCH])?)?;
+    write_epoch_v4(&accounts[IX_ABORT_EPOCH], &epoch)?;
     Ok(())
 }

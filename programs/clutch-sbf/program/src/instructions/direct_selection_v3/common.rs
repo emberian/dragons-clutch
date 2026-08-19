@@ -135,6 +135,105 @@ pub(super) fn read_reservation_v2(
     Ok(value)
 }
 
+/// Boxed [`read_epoch_v4`]: the 672-byte decode lives in this helper's frame
+/// and only a heap pointer crosses back into the handler's bounded SBF frame.
+#[inline(never)]
+pub(super) fn read_epoch_v4_boxed(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+    intent_market: Hash32,
+    intent_epoch: Hash32,
+) -> Outcome<Box<DirectEpochV4Account>> {
+    Ok(Box::new(read_epoch_v4(
+        program_id,
+        account,
+        intent_market,
+        intent_epoch,
+    )?))
+}
+
+/// Boxed [`read_window_v3`] for the same SBF frame discipline.
+#[inline(never)]
+pub(super) fn read_window_v3_boxed(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+    epoch: &DirectEpochV4Account,
+) -> Outcome<Box<DirectWindowV3Account>> {
+    Ok(Box::new(read_window_v3(program_id, account, epoch)?))
+}
+
+/// Boxed [`read_reservation_v2`] for the same SBF frame discipline.
+#[inline(never)]
+pub(super) fn read_reservation_v2_boxed(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+    common: &clutch_solana_layout::EpochAccount,
+    order: OrderRecord,
+    state: u8,
+) -> Outcome<Box<DirectReservationV2Account>> {
+    Ok(Box::new(read_reservation_v2(
+        program_id, account, common, order, state,
+    )?))
+}
+
+/// Persist one Direct V3 account value; the encode temporaries stay here.
+#[inline(never)]
+pub(super) fn write_epoch_v4(account: &AccountInfo, epoch: &DirectEpochV4Account) -> Outcome<()> {
+    let mut data = account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    epoch.encode(&mut data)?;
+    Ok(())
+}
+
+/// Persist one Window V3 value from the handler's boxed state.
+#[inline(never)]
+pub(super) fn write_window_v3(
+    account: &AccountInfo,
+    window: &DirectWindowV3Account,
+) -> Outcome<()> {
+    let mut data = account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    window.encode(sink_hash(), &mut data)?;
+    Ok(())
+}
+
+/// Persist one Reservation V2 value from the handler's boxed state.
+#[inline(never)]
+pub(super) fn write_reservation_v2(
+    account: &AccountInfo,
+    reservation: &DirectReservationV2Account,
+) -> Outcome<()> {
+    let mut data = account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    reservation.encode(sink_hash(), &mut data)?;
+    Ok(())
+}
+
+/// Authenticate the grid account against the Epoch and resolve one price's
+/// competitive tick; the full grid decode never leaves this frame.
+#[inline(never)]
+pub(super) fn grid_tick(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+    common: &clutch_solana_layout::EpochAccount,
+    price: u64,
+) -> Outcome<u8> {
+    let grid = clutch_solana_layout::PriceGridAccount::decode(&account.data.borrow())?;
+    expect_pda(
+        account.key,
+        seeds::grid_pda(program_id, &grid.realm.bytes(), &grid.grid.bytes()),
+        Some(grid.stored_bump),
+    )?;
+    require(
+        grid.grid == common.price_grid && grid.price_scale == common.price_scale,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(grid.tick_of(price)?)
+}
+
 /// Observe one surviving funded account's live balance into its ledger.
 pub(super) fn observe_funding(
     funding: DirectFundingLedgerV3,
@@ -247,20 +346,22 @@ pub(super) fn close_funded_account(
 /// Release the exact remaining envelopes of a Reservation prefix back into
 /// the matching live Positions and persist the Position poststates.
 ///
-/// `orders` and `reservations` are the authenticated page prefix in exact
-/// page order. `position_accounts` are the distinct owners' Positions in
-/// first-appearance order; a repeated owner aggregates both releases into one
-/// poststate. A release that changes nothing refuses, mirroring the model's
-/// unchanged-poststate rule.
+/// `orders` and `reservation_accounts` are the authenticated page prefix in
+/// exact page order; each reservation account was already decoded and bound
+/// to its order by the caller and is re-decoded here one at a time so no
+/// caller frame has to hold the full pair. `position_accounts` are the
+/// distinct owners' Positions in first-appearance order; a repeated owner
+/// aggregates both releases into one poststate. A release that changes
+/// nothing refuses, mirroring the model's unchanged-poststate rule.
 pub(super) fn release_reservations_into_positions(
     program_id: &Pubkey,
     common: &clutch_solana_layout::EpochAccount,
     orders: &[OrderRecord],
-    reservations: &[DirectReservationV2Account],
+    reservation_accounts: &[AccountInfo],
     position_accounts: &[AccountInfo],
 ) -> Outcome<()> {
     require(
-        orders.len() == reservations.len(),
+        orders.len() == reservation_accounts.len(),
         ClutchError::MismatchedState,
     )?;
     // The distinct-owner count expected from the order prefix.
@@ -330,8 +431,11 @@ pub(super) fn release_reservations_into_positions(
     }
 
     index = 0;
-    while index < reservations.len() {
-        let reservation = &reservations[index].reservation;
+    while index < reservation_accounts.len() {
+        let reservation =
+            DirectReservationV2Account::decode(&reservation_accounts[index].data.borrow(), sink_hash())?
+                .reservation;
+        let reservation = &reservation;
         let mut found = None;
         let mut position_index = 0usize;
         while position_index < expected_owners {

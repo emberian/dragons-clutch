@@ -10,7 +10,9 @@
 //! checked before any reservation is consumed, and the durable `SETTLED`
 //! receipt lands in Epoch V4 before every transient authority closes. Each
 //! lapse writes its distinct durable receipt and returns every transient
-//! principal exactly once.
+//! principal exactly once. Long-lived account values are heap-boxed and every
+//! large decode happens in its own `#[inline(never)]` frame so each handler
+//! stays inside the fixed SBF stack frame.
 
 use crate::accounts::{
     self, expect_pda, require, require_count, require_distinct, require_signer, Outcome,
@@ -20,14 +22,15 @@ use crate::instructions::artifact::read_clock_slot;
 use crate::instructions::genesis::{read_rent, require_creatable, require_system_program};
 use crate::seeds;
 use clutch_batch_policy_identity::direct_window_v1::{
-    DIRECT_CANDIDATE_STATUS_SELECTED, DIRECT_WINDOW_PHASE_SELECTED, MAX_DIRECT_CANDIDATES,
+    DirectCandidateEntryV1, DIRECT_CANDIDATE_STATUS_SELECTED, DIRECT_WINDOW_PHASE_SELECTED,
+    MAX_DIRECT_CANDIDATES,
 };
 use clutch_solana_layout::{
     account_len,
     direct_selection_v3::{
         DirectCandidateV3Account, DirectEpochV4Account, DirectFundingLedgerV3,
-        DirectWindowV3Account, DIRECT_CANDIDATE_STATUS_REVERIFIED, DIRECT_CANDIDATE_V3_BYTES,
-        DIRECT_EPOCH_V4_BYTES, DIRECT_LIFECYCLE_PHASE_FROZEN_EMPTY,
+        DirectWindowV3Account, DIRECT_CANDIDATE_STATUS_REVERIFIED,
+        DIRECT_CANDIDATE_V3_BYTES, DIRECT_EPOCH_V4_BYTES, DIRECT_LIFECYCLE_PHASE_FROZEN_EMPTY,
         DIRECT_LIFECYCLE_PHASE_SELECTED, DIRECT_LIFECYCLE_PHASE_TERMINAL,
         DIRECT_LIFECYCLE_PHASE_VERIFYING, DIRECT_LIFECYCLE_PHASE_WINDOW_OPEN,
         DIRECT_RESERVATION_V2_BYTES, DIRECT_TERMINAL_REASON_EMPTY_LAPSE,
@@ -43,9 +46,10 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use super::common::{
-    close_funded_account, frozen_pair, observe_funding, pay_reward, read_epoch_v4,
-    read_reservation_v2, read_window_v3, read_work_budget,
-    release_reservations_into_positions, require_neutral_sink, sink_hash,
+    close_funded_account, frozen_pair, observe_funding, pay_reward, read_epoch_v4_boxed,
+    read_reservation_v2_boxed, read_window_v3_boxed, read_work_budget,
+    release_reservations_into_positions, require_neutral_sink, sink_hash, write_epoch_v4,
+    write_reservation_v2, write_window_v3,
 };
 use super::staged::require_selection_slot;
 use super::{
@@ -124,11 +128,7 @@ pub(super) fn finalize(
         true,
         &[DIRECT_WINDOW_V3_BYTES],
     )?;
-    let top_count = usize::from(
-        DirectWindowV3Account::decode(&accounts[IX_FINALIZE_WINDOW].data.borrow(), sink_hash())?
-            .window
-            .top_count,
-    );
+    let top_count = inspect_window_top_count(&accounts[IX_FINALIZE_WINDOW])?;
     let receipt_index = IX_FINALIZE_TOP_START + top_count;
     let pot_index = receipt_index + 1;
     let work_index = receipt_index + 2;
@@ -165,7 +165,7 @@ pub(super) fn finalize(
     let rent = read_rent(&accounts[rent_index])?;
     let now = read_clock_slot(&accounts[clock])?;
 
-    let mut epoch = read_epoch_v4(
+    let mut epoch = read_epoch_v4_boxed(
         program_id,
         &accounts[IX_FINALIZE_EPOCH],
         intent_market,
@@ -176,7 +176,7 @@ pub(super) fn finalize(
         ClutchError::NotActive,
     )?;
     require_selection_slot(&epoch, now)?;
-    let mut window = read_window_v3(program_id, &accounts[IX_FINALIZE_WINDOW], &epoch)?;
+    let mut window = read_window_v3_boxed(program_id, &accounts[IX_FINALIZE_WINDOW], &epoch)?;
     require(
         window.window.phase == DIRECT_WINDOW_PHASE_VERIFYING
             && usize::from(window.window.top_count) == top_count
@@ -193,35 +193,22 @@ pub(super) fn finalize(
 
     // Every retained Candidate must hold exact REVERIFIED status.
     let mut fundings = [DirectFundingLedgerV3::ZERO; MAX_DIRECT_CANDIDATES];
-    let mut winner = None;
     index = 0;
     while index < top_count {
-        let value = DirectCandidateV3Account::decode(
-            &accounts[IX_FINALIZE_TOP_START + index].data.borrow(),
-            sink_hash(),
+        fundings[index] = reverified_candidate_funding(
+            program_id,
+            &accounts[IX_FINALIZE_TOP_START + index],
+            &epoch,
+            window.window.top[index],
+            window.window.relation_domain_digest.0,
         )?;
-        expect_pda(
-            accounts[IX_FINALIZE_TOP_START + index].key,
-            seeds::direct_candidate_v3_pda(
-                program_id,
-                &epoch.direct.common.epoch.bytes(),
-                &value.candidate.candidate_id.0,
-            ),
-            Some(value.candidate.stored_bump),
-        )?;
-        require(
-            value.candidate.status == DIRECT_CANDIDATE_STATUS_REVERIFIED
-                && value.candidate.entry() == window.window.top[index]
-                && value.candidate.relation_domain_digest == window.window.relation_domain_digest,
-            ClutchError::MismatchedState,
-        )?;
-        fundings[index] = value.funding;
-        if index == 0 {
-            winner = Some(value);
-        }
         index += 1;
     }
-    let mut winner = winner.ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mut winner = read_candidate_v3_boxed_terminal(
+        program_id,
+        &accounts[IX_FINALIZE_TOP_START],
+        &epoch.direct.common.epoch,
+    )?;
     require(
         winner.candidate.outcome == orders.outcome
             && winner.candidate.quantity == orders.quantity
@@ -230,14 +217,14 @@ pub(super) fn finalize(
         ClutchError::MismatchedState,
     )?;
 
-    let mut reservation_zero = read_reservation_v2(
+    let mut reservation_zero = read_reservation_v2_boxed(
         program_id,
         &accounts[IX_FINALIZE_RES_ZERO],
         &epoch.direct.common,
         orders.zero,
         RESERVATION_STATE_ACTIVE,
     )?;
-    let mut reservation_one = read_reservation_v2(
+    let mut reservation_one = read_reservation_v2_boxed(
         program_id,
         &accounts[IX_FINALIZE_RES_ONE],
         &epoch.direct.common,
@@ -265,40 +252,12 @@ pub(super) fn finalize(
         &epoch.direct.common.epoch.bytes(),
         &winner_id.bytes(),
     );
-    expect_pda(accounts[receipt_index].key, (receipt_address, receipt_bump), None)?;
+    expect_pda(
+        accounts[receipt_index].key,
+        (receipt_address, receipt_bump),
+        None,
+    )?;
     expect_pda(accounts[pot_index].key, (pot_address, pot_bump), None)?;
-    let receipt = SettlementReceiptAccount {
-        epoch: epoch.direct.common.epoch,
-        market: epoch.direct.common.market,
-        candidate: winner_id,
-        buy_order_id: orders.buy().order_id,
-        sell_order_id: orders.sell().order_id,
-        consideration_price_units: consideration_units,
-        quantity: winner.candidate.quantity,
-        settled_quantity: 0,
-        price,
-        sequence: 1,
-        slice_index: 0,
-        outcome: winner.candidate.outcome,
-        leg_kind: RECEIPT_LEG_DIRECT,
-        consumed_flags: 0,
-        stored_bump: receipt_bump,
-        flags: 0,
-    };
-    receipt.validate()?;
-    let pot = FinalPotAccount {
-        epoch: epoch.direct.common.epoch,
-        market: epoch.direct.common.market,
-        candidate: winner_id,
-        pot_internal: [0; MAX_OUTCOMES],
-        pot_cash_price_units: 0,
-        rounding_pot_price_units: 0,
-        outcome_count: 2,
-        phase: POT_PHASE_CLOSED,
-        stored_bump: pot_bump,
-        flags: 0,
-    };
-    pot.validate()?;
 
     let mut budget = read_work_budget(program_id, &accounts[work_index], &epoch)?;
 
@@ -361,17 +320,11 @@ pub(super) fn finalize(
         Hash32::from_bytes(winner.candidate.relation_candidate_digest.0);
 
     /* Existing-state writes, then loser closes, then the create CPIs. */
-    epoch.encode(&mut borrow_mut!(accounts[IX_FINALIZE_EPOCH])?)?;
-    window.encode(sink_hash(), &mut borrow_mut!(accounts[IX_FINALIZE_WINDOW])?)?;
-    winner.encode(sink_hash(), &mut borrow_mut!(accounts[IX_FINALIZE_TOP_START])?)?;
-    reservation_zero.encode(
-        sink_hash(),
-        &mut borrow_mut!(accounts[IX_FINALIZE_RES_ZERO])?,
-    )?;
-    reservation_one.encode(
-        sink_hash(),
-        &mut borrow_mut!(accounts[IX_FINALIZE_RES_ONE])?,
-    )?;
+    write_epoch_v4(&accounts[IX_FINALIZE_EPOCH], &epoch)?;
+    write_window_v3(&accounts[IX_FINALIZE_WINDOW], &window)?;
+    write_candidate_v3_terminal(&accounts[IX_FINALIZE_TOP_START], &winner)?;
+    write_reservation_v2(&accounts[IX_FINALIZE_RES_ZERO], &reservation_zero)?;
+    write_reservation_v2(&accounts[IX_FINALIZE_RES_ONE], &reservation_one)?;
     budget.encode(sink_hash(), &mut borrow_mut!(accounts[work_index])?)?;
     let mut loser = 1usize;
     while loser < top_count {
@@ -418,8 +371,17 @@ pub(super) fn finalize(
             &[pot_bump],
         ],
     )?;
-    receipt.encode(&mut borrow_mut!(accounts[receipt_index])?)?;
-    pot.encode(&mut borrow_mut!(accounts[pot_index])?)?;
+    write_receipt_and_pot(
+        &accounts[receipt_index],
+        &accounts[pot_index],
+        &epoch,
+        &winner,
+        orders,
+        consideration_units,
+        price,
+        receipt_bump,
+        pot_bump,
+    )?;
     Ok(())
 }
 
@@ -458,7 +420,7 @@ pub(super) fn settle(
     require_neutral_sink(&accounts[IX_SETTLE_SINK])?;
     let now = read_clock_slot(&accounts[IX_SETTLE_CLOCK])?;
 
-    let mut epoch = read_epoch_v4(
+    let mut epoch = read_epoch_v4_boxed(
         program_id,
         &accounts[IX_SETTLE_EPOCH],
         intent_market,
@@ -472,25 +434,17 @@ pub(super) fn settle(
         now >= epoch.terminal.selected_slot && now < epoch.settlement_deadline_slot,
         ClutchError::NotActive,
     )?;
-    let window = read_window_v3(program_id, &accounts[IX_SETTLE_WINDOW], &epoch)?;
+    let window = read_window_v3_boxed(program_id, &accounts[IX_SETTLE_WINDOW], &epoch)?;
     require(
         window.window.phase == DIRECT_WINDOW_PHASE_SELECTED
             && window.window.selected_candidate.0 == epoch.terminal.candidate.bytes()
             && window.window.selected_slot == epoch.terminal.selected_slot,
         ClutchError::NotActive,
     )?;
-    let selected = DirectCandidateV3Account::decode(
-        &accounts[IX_SETTLE_CANDIDATE].data.borrow(),
-        sink_hash(),
-    )?;
-    expect_pda(
-        accounts[IX_SETTLE_CANDIDATE].key,
-        seeds::direct_candidate_v3_pda(
-            program_id,
-            &epoch.direct.common.epoch.bytes(),
-            &selected.candidate.candidate_id.0,
-        ),
-        Some(selected.candidate.stored_bump),
+    let selected = read_candidate_v3_boxed_terminal(
+        program_id,
+        &accounts[IX_SETTLE_CANDIDATE],
+        &epoch.direct.common.epoch,
     )?;
     require(
         selected.candidate.candidate_id == window.window.selected_candidate
@@ -534,14 +488,14 @@ pub(super) fn settle(
     let consideration_atoms = u64::try_from(consideration_units / scale)
         .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
 
-    let buy_reservation = read_reservation_v2(
+    let buy_reservation = read_reservation_v2_boxed(
         program_id,
         &accounts[IX_SETTLE_BUY_RESERVATION],
         &epoch.direct.common,
         buy,
         RESERVATION_STATE_ENTITLED,
     )?;
-    let sell_reservation = read_reservation_v2(
+    let sell_reservation = read_reservation_v2_boxed(
         program_id,
         &accounts[IX_SETTLE_SELL_RESERVATION],
         &epoch.direct.common,
@@ -625,7 +579,10 @@ pub(super) fn settle(
         .cash_atoms
         .checked_add(seller.cash_atoms)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    require(cash_before == cash_after, ClutchError::AggregateClosureMismatch)?;
+    require(
+        cash_before == cash_after,
+        ClutchError::AggregateClosureMismatch,
+    )?;
     buyer.validate()?;
     seller.validate()?;
 
@@ -661,7 +618,7 @@ pub(super) fn settle(
 
     buyer.encode(&mut borrow_mut!(accounts[IX_SETTLE_BUY_POSITION])?)?;
     seller.encode(&mut borrow_mut!(accounts[IX_SETTLE_SELL_POSITION])?)?;
-    epoch.encode(&mut borrow_mut!(accounts[IX_SETTLE_EPOCH])?)?;
+    write_epoch_v4(&accounts[IX_SETTLE_EPOCH], &epoch)?;
 
     close_funded_account(
         &accounts[IX_SETTLE_CANDIDATE],
@@ -784,11 +741,7 @@ pub(super) fn lapse_unselected(
         true,
         &[DIRECT_WINDOW_V3_BYTES],
     )?;
-    let top_count = usize::from(
-        DirectWindowV3Account::decode(&accounts[3].data.borrow(), sink_hash())?
-            .window
-            .top_count,
-    );
+    let top_count = inspect_window_top_count(&accounts[3])?;
     let res_at = 4 + top_count;
     let pos_at = res_at + 2;
     let work_index = pos_at + 2;
@@ -820,7 +773,7 @@ pub(super) fn lapse_unselected(
         context.now >= context.epoch.selection_deadline_slot,
         ClutchError::NotActive,
     )?;
-    let window = read_window_v3(program_id, &accounts[3], &context.epoch)?;
+    let window = read_window_v3_boxed(program_id, &accounts[3], &context.epoch)?;
     require(
         usize::from(window.window.top_count) == top_count && top_count >= 1,
         ClutchError::MismatchedState,
@@ -835,27 +788,13 @@ pub(super) fn lapse_unselected(
             true,
             &[DIRECT_CANDIDATE_V3_BYTES],
         )?;
-        let value =
-            DirectCandidateV3Account::decode(&accounts[4 + index].data.borrow(), sink_hash())?;
-        expect_pda(
-            accounts[4 + index].key,
-            seeds::direct_candidate_v3_pda(
-                program_id,
-                &context.epoch.direct.common.epoch.bytes(),
-                &value.candidate.candidate_id.0,
-            ),
-            Some(value.candidate.stored_bump),
-        )?;
-        require(
-            value.candidate.entry() == window.window.top[index],
-            ClutchError::MismatchedState,
-        )?;
-        close_funded_account(
+        close_candidate_entry(
+            program_id,
             &accounts[4 + index],
             &accounts[recipients_at + 1 + index],
             &accounts[sink_index],
-            value.funding,
-            0,
+            &context.epoch.direct.common.epoch,
+            window.window.top[index],
         )?;
         index += 1;
     }
@@ -944,30 +883,18 @@ pub(super) fn lapse_selected(
         context.now >= context.epoch.settlement_deadline_slot,
         ClutchError::NotActive,
     )?;
-    let window = read_window_v3(program_id, &accounts[window_index], &context.epoch)?;
+    let window = read_window_v3_boxed(program_id, &accounts[window_index], &context.epoch)?;
     require(
         window.window.phase == DIRECT_WINDOW_PHASE_SELECTED
             && window.window.selected_candidate.0 == context.epoch.terminal.candidate.bytes()
             && window.window.selected_slot == context.epoch.terminal.selected_slot,
         ClutchError::MismatchedState,
     )?;
-    let selected = DirectCandidateV3Account::decode(
-        &accounts[candidate_index].data.borrow(),
-        sink_hash(),
-    )?;
-    expect_pda(
-        accounts[candidate_index].key,
-        seeds::direct_candidate_v3_pda(
-            program_id,
-            &context.epoch.direct.common.epoch.bytes(),
-            &selected.candidate.candidate_id.0,
-        ),
-        Some(selected.candidate.stored_bump),
-    )?;
-    require(
-        selected.candidate.candidate_id == window.window.selected_candidate
-            && selected.candidate.status == DIRECT_CANDIDATE_STATUS_SELECTED,
-        ClutchError::MismatchedState,
+    let selected_funding = selected_candidate_funding(
+        program_id,
+        &accounts[candidate_index],
+        &context.epoch.direct.common.epoch,
+        window.window.selected_candidate.0,
     )?;
     let winner_bytes = context.epoch.terminal.candidate.bytes();
     expect_pda(
@@ -993,7 +920,7 @@ pub(super) fn lapse_selected(
         &accounts[candidate_index],
         &accounts[recipients_at + 1],
         &accounts[sink_index],
-        selected.funding,
+        selected_funding,
         0,
     )?;
     close_funded_account(
@@ -1028,11 +955,12 @@ pub(super) fn lapse_selected(
 
 /// Shared lapse skeleton: keeper, epoch, frozen page, exact reservation pair
 /// with the expected state, both distinct-owner Positions, WorkBudget, sink,
-/// and Clock, all authenticated before any release.
+/// and Clock, all authenticated before any release. The full reservation
+/// decodes stay in helper frames; only their funding ledgers survive here.
 struct LapseContext {
-    epoch: DirectEpochV4Account,
+    epoch: Box<DirectEpochV4Account>,
     orders: crate::instructions::direct_selection::DirectOrders,
-    reservations: [clutch_solana_layout::direct_selection_v3::DirectReservationV2Account; 2],
+    reservation_fundings: [DirectFundingLedgerV3; 2],
     budget: clutch_solana_layout::direct_selection_v3::DirectWorkBudgetV1Account,
     now: u64,
     res_at: usize,
@@ -1071,34 +999,34 @@ fn lapse_shared(
     }
     require_neutral_sink(&accounts[sink_index])?;
     let now = read_clock_slot(&accounts[clock])?;
-    let epoch = read_epoch_v4(
+    let epoch = read_epoch_v4_boxed(
         program_id,
         &accounts[IX_LAPSE_EPOCH],
         intent_market,
         intent_epoch,
     )?;
     let orders = frozen_pair(program_id, &accounts[IX_LAPSE_PAGE], &epoch.direct.common)?;
-    let reservations = [
-        read_reservation_v2(
+    // Each full 618-byte reservation is decoded, bound, and dropped in its
+    // own frame; only the 48-byte funding ledgers survive in this context.
+    let mut reservation_fundings = [DirectFundingLedgerV3::ZERO; 2];
+    let mut index = 0usize;
+    while index < 2 {
+        let order = if index == 0 { orders.zero } else { orders.one };
+        reservation_fundings[index] = read_reservation_v2_boxed(
             program_id,
-            &accounts[res_at],
+            &accounts[res_at + index],
             &epoch.direct.common,
-            orders.zero,
+            order,
             reservation_state,
-        )?,
-        read_reservation_v2(
-            program_id,
-            &accounts[res_at + 1],
-            &epoch.direct.common,
-            orders.one,
-            reservation_state,
-        )?,
-    ];
+        )?
+        .funding;
+        index += 1;
+    }
     let budget = read_work_budget(program_id, &accounts[work_index], &epoch)?;
     Ok(LapseContext {
         epoch,
         orders,
-        reservations,
+        reservation_fundings,
         budget,
         now,
         res_at,
@@ -1121,7 +1049,7 @@ fn finish_lapse(
     let LapseContext {
         mut epoch,
         orders,
-        reservations,
+        reservation_fundings,
         mut budget,
         now,
         res_at,
@@ -1138,7 +1066,7 @@ fn finish_lapse(
         program_id,
         &epoch.direct.common,
         &order_pair,
-        &reservations,
+        &accounts[res_at..res_at + 2],
         &accounts[pos_at..pos_at + 2],
     )?;
 
@@ -1170,7 +1098,7 @@ fn finish_lapse(
             &accounts[res_at + index],
             &accounts[reservation_payers_at + index],
             &accounts[sink_index],
-            reservations[index].funding,
+            reservation_fundings[index],
             0,
         )?;
         index += 1;
@@ -1188,7 +1116,180 @@ fn finish_lapse(
         epoch.terminal.candidate = Hash32::ZERO;
         epoch.terminal.relation_candidate_digest = Hash32::ZERO;
     }
-    epoch.encode(&mut borrow_mut!(accounts[IX_LAPSE_EPOCH])?)?;
+    write_epoch_v4(&accounts[IX_LAPSE_EPOCH], &epoch)?;
+    Ok(())
+}
+
+/// One retained candidate account, required to hold exact REVERIFIED status;
+/// the full decode stays in this frame and only its funding survives.
+#[inline(never)]
+fn reverified_candidate_funding(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+    epoch: &DirectEpochV4Account,
+    expected_entry: DirectCandidateEntryV1,
+    expected_domain_digest: [u8; 32],
+) -> Outcome<DirectFundingLedgerV3> {
+    let value = DirectCandidateV3Account::decode(&account.data.borrow(), sink_hash())?;
+    expect_pda(
+        account.key,
+        seeds::direct_candidate_v3_pda(
+            program_id,
+            &epoch.direct.common.epoch.bytes(),
+            &value.candidate.candidate_id.0,
+        ),
+        Some(value.candidate.stored_bump),
+    )?;
+    require(
+        value.candidate.status == DIRECT_CANDIDATE_STATUS_REVERIFIED
+            && value.candidate.entry() == expected_entry
+            && value.candidate.relation_domain_digest.0 == expected_domain_digest,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(value.funding)
+}
+
+/// Boxed decode of one V3 Candidate account with its PDA authenticated.
+#[inline(never)]
+fn read_candidate_v3_boxed_terminal(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+    epoch_id: &Hash32,
+) -> Outcome<Box<DirectCandidateV3Account>> {
+    let value = DirectCandidateV3Account::decode(&account.data.borrow(), sink_hash())?;
+    expect_pda(
+        account.key,
+        seeds::direct_candidate_v3_pda(
+            program_id,
+            &epoch_id.bytes(),
+            &value.candidate.candidate_id.0,
+        ),
+        Some(value.candidate.stored_bump),
+    )?;
+    Ok(Box::new(value))
+}
+
+/// Persist one V3 Candidate value; encode temporaries stay in this frame.
+#[inline(never)]
+fn write_candidate_v3_terminal(
+    account: &AccountInfo,
+    value: &DirectCandidateV3Account,
+) -> Outcome<()> {
+    let mut data = borrow_mut!(account)?;
+    value.encode(sink_hash(), &mut data)?;
+    Ok(())
+}
+
+/// The SELECTED candidate's funding for a post-deadline lapse close.
+#[inline(never)]
+fn selected_candidate_funding(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+    epoch_id: &Hash32,
+    expected_id: [u8; 32],
+) -> Outcome<DirectFundingLedgerV3> {
+    let value = DirectCandidateV3Account::decode(&account.data.borrow(), sink_hash())?;
+    expect_pda(
+        account.key,
+        seeds::direct_candidate_v3_pda(
+            program_id,
+            &epoch_id.bytes(),
+            &value.candidate.candidate_id.0,
+        ),
+        Some(value.candidate.stored_bump),
+    )?;
+    require(
+        value.candidate.candidate_id.0 == expected_id
+            && value.candidate.status == DIRECT_CANDIDATE_STATUS_SELECTED,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(value.funding)
+}
+
+/// Close one live retained Candidate to its own payer during unselected lapse.
+#[inline(never)]
+fn close_candidate_entry(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+    payer: &AccountInfo,
+    sink: &AccountInfo,
+    epoch_id: &Hash32,
+    expected_entry: DirectCandidateEntryV1,
+) -> Outcome<()> {
+    let value = DirectCandidateV3Account::decode(&account.data.borrow(), sink_hash())?;
+    expect_pda(
+        account.key,
+        seeds::direct_candidate_v3_pda(
+            program_id,
+            &epoch_id.bytes(),
+            &value.candidate.candidate_id.0,
+        ),
+        Some(value.candidate.stored_bump),
+    )?;
+    require(
+        value.candidate.entry() == expected_entry,
+        ClutchError::MismatchedState,
+    )?;
+    close_funded_account(account, payer, sink, value.funding, 0)
+}
+
+/// The Window's retained count without holding the full decode in the caller.
+#[inline(never)]
+fn inspect_window_top_count(account: &AccountInfo) -> Outcome<usize> {
+    let window = DirectWindowV3Account::decode(&account.data.borrow(), sink_hash())?;
+    Ok(usize::from(window.window.top_count))
+}
+
+/// Build, validate, and persist the receipt and pot; their temporaries stay
+/// in this frame.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn write_receipt_and_pot(
+    receipt_account: &AccountInfo,
+    pot_account: &AccountInfo,
+    epoch: &DirectEpochV4Account,
+    winner: &DirectCandidateV3Account,
+    orders: crate::instructions::direct_selection::DirectOrders,
+    consideration_units: u128,
+    price: u64,
+    receipt_bump: u8,
+    pot_bump: u8,
+) -> Outcome<()> {
+    let winner_id = Hash32::from_bytes(winner.candidate.candidate_id.0);
+    let receipt = SettlementReceiptAccount {
+        epoch: epoch.direct.common.epoch,
+        market: epoch.direct.common.market,
+        candidate: winner_id,
+        buy_order_id: orders.buy().order_id,
+        sell_order_id: orders.sell().order_id,
+        consideration_price_units: consideration_units,
+        quantity: winner.candidate.quantity,
+        settled_quantity: 0,
+        price,
+        sequence: 1,
+        slice_index: 0,
+        outcome: winner.candidate.outcome,
+        leg_kind: RECEIPT_LEG_DIRECT,
+        consumed_flags: 0,
+        stored_bump: receipt_bump,
+        flags: 0,
+    };
+    receipt.validate()?;
+    let pot = FinalPotAccount {
+        epoch: epoch.direct.common.epoch,
+        market: epoch.direct.common.market,
+        candidate: winner_id,
+        pot_internal: [0; MAX_OUTCOMES],
+        pot_cash_price_units: 0,
+        rounding_pot_price_units: 0,
+        outcome_count: 2,
+        phase: POT_PHASE_CLOSED,
+        stored_bump: pot_bump,
+        flags: 0,
+    };
+    pot.validate()?;
+    receipt.encode(&mut borrow_mut!(receipt_account)?)?;
+    pot.encode(&mut borrow_mut!(pot_account)?)?;
     Ok(())
 }
 
