@@ -1,0 +1,13 @@
+[package]
+name = "clutch-bspline"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Exact bounded B-spline payout-basis evaluator for Dragon's Clutch"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []

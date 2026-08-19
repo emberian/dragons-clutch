@@ -1,6 +1,6 @@
 # Rust crates
 
-This directory contains three offline, dependency-free prototype crates, none
+This directory contains four offline, dependency-free prototype crates, none
 of which is verified, deployed, or a released workspace:
 
 - `clutch-kernel` — pure `no_std` collateral-generic complete-claim transition
@@ -10,6 +10,9 @@ of which is verified, deployed, or a released workspace:
   extrema, exact price-time integrals, TWAP); unsupported statistics refuse.
 - `clutch-batch` — pure `no_std` fixed-capacity transparent relation
   (selection, deterministic pro-rata allocation, conservation checks).
+- `clutch-bspline` — pure `no_std` exact degree-zero through degree-three
+  open-clamped payout-basis evaluator. It owns basis evaluation only; evidence
+  authentication and account/runtime binding remain adapter obligations.
 
 Do not add another crate until its semantic owner, dependency direction, exact
 toolchain compatibility, and license/provenance are recorded.
