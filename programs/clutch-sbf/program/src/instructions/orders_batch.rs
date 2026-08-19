@@ -839,8 +839,23 @@ fn validate_direct_v4_place(
     max_fee_atoms: u64,
     slot: OrderSlot,
 ) -> Outcome<stream::OrderPageHeader> {
-    epoch.validate_for_release(DIRECT_VERIFIER_RELEASE_ID_V3)?;
-    epoch.require_prefreeze_placement()?;
+    /* The caller decoded (and therefore fully validated) this exact epoch in
+     * the same instruction; only the release binding, the sole placement
+     * phase, and the digest-free funding shape need re-stating here. */
+    require(
+        epoch.verifier_release_id == DIRECT_VERIFIER_RELEASE_ID_V3
+            && epoch.lifecycle_phase
+                == clutch_solana_layout::direct_selection_v3::DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN
+            && epoch.terminal
+                == clutch_solana_layout::direct_selection_v3::DirectTerminalReceiptV3::EMPTY,
+        ClutchError::NotActive,
+    )?;
+    epoch
+        .page_funding
+        .validate_for_sink(epoch.neutral_lamport_sink)?;
+    epoch
+        .epoch_funding
+        .validate_for_sink(epoch.neutral_lamport_sink)?;
     grid.validate()?;
     let header = verify_page_on_grid(page, grid)?;
     let common = epoch.direct.common;
@@ -1757,9 +1772,11 @@ fn prepare_direct_v4_order(
     max_fee_atoms: u64,
     slot: OrderSlot,
 ) -> Outcome<DirectV4PlaceCommit> {
+    /* `decode` already ran the complete hostile-shape validation, including
+     * recomputing the epoch-bound policy identity from the persisted release;
+     * the placement gate below re-checks only the fields that select this
+     * branch. `validate_direct_v4_place` is the single full placement gate. */
     let mut epoch = DirectEpochV4Account::decode(&accounts[IX_EPOCH].data.borrow())?;
-    epoch.validate_for_release(DIRECT_VERIFIER_RELEASE_ID_V3)?;
-    epoch.require_prefreeze_placement()?;
     require(
         epoch.neutral_lamport_sink == Hash32::from_bytes(DIRECT_NEUTRAL_SINK_V3.to_bytes()),
         ClutchError::MismatchedState,
@@ -1804,7 +1821,6 @@ fn prepare_direct_v4_order(
         accounts[IX_PAGE].lamports(),
         DIRECT_NEUTRAL_SINK_V3,
     )?;
-    epoch.validate_for_release(DIRECT_VERIFIER_RELEASE_ID_V3)?;
     let economic = prepare_direct_v4_economics(
         program_id,
         accounts,
@@ -1819,7 +1835,6 @@ fn prepare_direct_v4_order(
     economic
         .reservation
         .validate(Hash32::from_bytes(DIRECT_NEUTRAL_SINK_V3.to_bytes()))?;
-    epoch.validate_for_release(DIRECT_VERIFIER_RELEASE_ID_V3)?;
     economic.position.validate()?;
 
     /* Every semantic check and every poststate encoding is complete before a

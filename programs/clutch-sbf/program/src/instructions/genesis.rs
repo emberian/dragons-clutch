@@ -984,9 +984,17 @@ fn init_direct_v4_order_page(
     require_creatable(&accounts[IX_TARGET])?;
     let rent = read_rent(&accounts[IX_PAGE_RENT])?;
     let market = accounts::read_market(&accounts[IX_PAGE_MARKET].data.borrow())?;
+    /* `decode` already ran the complete hostile-shape validation; only the
+     * release binding and the sole pre-freeze creation phase re-state here. */
     let mut epoch = DirectEpochV4Account::decode(&accounts[IX_PAGE_EPOCH].data.borrow())?;
-    epoch.validate_for_release(DIRECT_VERIFIER_RELEASE_ID_V3)?;
-    epoch.require_prefreeze_placement()?;
+    require(
+        epoch.verifier_release_id == DIRECT_VERIFIER_RELEASE_ID_V3
+            && epoch.lifecycle_phase
+                == clutch_solana_layout::direct_selection_v3::DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN
+            && epoch.terminal
+                == clutch_solana_layout::direct_selection_v3::DirectTerminalReceiptV3::EMPTY,
+        ClutchError::NotActive,
+    )?;
     require(
         epoch.neutral_lamport_sink == Hash32::from_bytes(DIRECT_NEUTRAL_SINK_V3.to_bytes())
             && market.market == intent.market
@@ -1031,7 +1039,7 @@ fn init_direct_v4_order_page(
     )?;
     epoch.direct.common.page_count = 1;
     epoch.page_funding = funding;
-    epoch.validate_for_release(DIRECT_VERIFIER_RELEASE_ID_V3)?;
+    // `encode` revalidates the complete poststate below.
     let mut epoch_post = [0u8; DIRECT_EPOCH_V4_BYTES];
     epoch.encode(&mut epoch_post)?;
 
