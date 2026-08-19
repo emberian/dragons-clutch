@@ -3692,13 +3692,33 @@ fn next_transcript(
     count: u8,
     candidate: &DirectCandidateLeaseV3,
 ) -> Identity32V1 {
+    admission_transcript_v3(
+        previous,
+        count,
+        candidate.tick,
+        candidate.candidate.entry(),
+    )
+}
+
+/// Canonical V3 competitive-admission transcript fold.
+///
+/// This is the exact preimage the executable model chains on every
+/// competitive admission. It is exported so a byte-level adapter can persist
+/// the same transcript the model predicts instead of shipping a second,
+/// drifting copy of the domain and field order.
+pub fn admission_transcript_v3(
+    previous: Identity32V1,
+    count: u8,
+    tick: u8,
+    admitted: DirectCandidateEntryV1,
+) -> Identity32V1 {
     let mut hasher = Sha256::new();
     hasher.update(TRANSCRIPT_DOMAIN_V3);
     hasher.update(previous.0);
     hasher.update([count]);
-    hasher.update([candidate.tick]);
-    hasher.update(candidate.candidate.candidate_id.0);
-    hasher.update(candidate.candidate.relation_candidate_digest.0);
+    hasher.update([tick]);
+    hasher.update(admitted.candidate_id.0);
+    hasher.update(admitted.relation_candidate_digest.0);
     Identity32V1(hasher.finalize().into())
 }
 
@@ -5845,6 +5865,41 @@ mod tests {
         assert_eq!(
             lapse_plan.post.terminal_receipt.reason,
             DirectTerminalReasonV3::PostSelectionLapse
+        );
+    }
+
+    /// The exported admission-transcript fold is byte-identical to the chain
+    /// the lifecycle admits with, so an adapter persisting the exported fold
+    /// persists the model's exact transcript.
+    #[test]
+    fn exported_admission_transcript_fold_matches_lifecycle_admissions() {
+        let empty = empty();
+        let first = issued(2_000, 10, 11);
+        let one = empty
+            .admit(context(10), first, create(21, 200, 2), observed(&empty, 0))
+            .unwrap()
+            .post;
+        let expected_one =
+            admission_transcript_v3(Identity32V1::ZERO, 1, first.tick, first.entry());
+        assert_eq!(one.competitive_admission_transcript, expected_one);
+
+        let second = issued(3_000, 11, 12);
+        let two = one
+            .admit(
+                context(11),
+                second,
+                DirectCreationFundingV3::ZERO,
+                observed(&one, 0),
+            )
+            .unwrap()
+            .post;
+        assert_eq!(
+            two.competitive_admission_transcript,
+            admission_transcript_v3(expected_one, 2, second.tick, second.entry())
+        );
+        assert_ne!(
+            two.competitive_admission_transcript,
+            admission_transcript_v3(expected_one, 2, second.tick.wrapping_add(1), second.entry())
         );
     }
 }
