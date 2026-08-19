@@ -2,7 +2,7 @@
   "schema": "dragons-clutch/baseline-manifest/v2",
   "generator": {
     "path": "scripts/baseline_manifest.py",
-    "sha256": "63999fa9499d0dd03547b30b25b212310c11c30d2178c3cd36f5993493e37a6c",
+    "sha256": "2baf56f92d0438cc7695d25f15317a8d59c6d2e52fc202daa77375976bf986f7",
     "stdlib_only": true
   },
   "dirty": false,
@@ -17,8 +17,8 @@
     "content_identity": {
       "schema": "dragons-clutch/tracked-working-tree/v1",
       "algorithm": "sha256",
-      "sha256": "1a5ef724f3a4b49840b25bbe0bcf443d6429240a21886f652b2dac430c317fc1",
-      "entry_count": 527,
+      "sha256": "9e2f2e6f44b9c5686e7346e3ceeb38db37bcb80986b9d28177ffc925f1c68d00",
+      "entry_count": 546,
       "excluded_paths": [
         "MANIFEST.baseline.json"
       ],
@@ -28,9 +28,9 @@
       "rule": "enumerate stage-0 entries from `git ls-files --stage -z`, sort by raw path bytes, exclude only excluded_paths, and hash the schema tag followed by length-delimited (observed Git mode/type, kind, raw path, sha256(payload), payload length) records. Payload is working-tree bytes for regular files, link-target bytes for symlinks, and the index object id for gitlinks. Strict cleanliness makes this a complete identity of all checked-in gate/source bytes other than the generated manifest itself."
     },
     "provenance": {
-      "emitted_from_commit": "9625100a110c9e3e8920195e9f1b7ba6b75c657f",
-      "emitted_from_tree_hash": "ba41fb886c02bd25755279e9a0bef783057c140d",
-      "commit_subject": "Record checked schema v2 baseline",
+      "emitted_from_commit": "a85d48bd0783e9f586ac523d88b1a22746b7c25c",
+      "emitted_from_tree_hash": "ab99ddefeab9e9880fe1996b5cb44974db8e2695",
+      "commit_subject": "docs: reconcile research evidence boundaries",
       "remotes": [
         {
           "name": "origin",
@@ -1073,12 +1073,17 @@
       "shell": "/bin/sh -c",
       "expected": {
         "mode": "zero",
-        "exit": 0
+        "exit": 0,
+        "required_output_patterns": [
+          "^running 32 tests$",
+          "^test result: ok\\. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out$"
+        ]
       },
       "key_patterns": [
-        "^test result: "
+        "^running 32 tests$",
+        "^test result: ok\\. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out$"
       ],
-      "note": "conditional source parser/model; it does not make Endow's registered production-source gate pass"
+      "note": "32-test conditional source parser/model; it does not make Endow's registered production-source gate pass"
     },
     {
       "id": "cargo_clippy.source_profile_v1",
@@ -1111,6 +1116,78 @@
         "^warning(\\[|:)"
       ],
       "note": "documentation build for the conditional source-profile model"
+    },
+    {
+      "id": "cargo_test.failure_payout_v1",
+      "section": "current-research",
+      "command": "cargo test --manifest-path research/failure-payout-v1/Cargo.toml --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0,
+        "required_output_patterns": [
+          "^running 18 tests$",
+          "^test result: ok\\. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out$"
+        ]
+      },
+      "key_patterns": [
+        "^running 18 tests$",
+        "^test result: ok\\. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out$"
+      ],
+      "note": "18-test evidence-only failure-recovery model; it changes no kernel, SBF, mint, market, or release claim"
+    },
+    {
+      "id": "cargo_clippy.failure_payout_v1",
+      "section": "current-research",
+      "command": "cargo clippy --manifest-path research/failure-payout-v1/Cargo.toml --offline --locked --all-targets --all-features -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "strict lint for the evidence-only failure-recovery model"
+    },
+    {
+      "id": "cargo_test.terminal_economics_r4",
+      "section": "current-research",
+      "command": "cargo test --manifest-path research/terminal-economics-r4/Cargo.toml --offline --locked",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0,
+        "required_output_patterns": [
+          "^running 16 tests$",
+          "^test result: ok\\. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out$"
+        ]
+      },
+      "key_patterns": [
+        "^running 16 tests$",
+        "^test result: ok\\. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out$"
+      ],
+      "note": "16-test R4 terminal-economics model; it does not close the separate runtime terminality STOPs"
+    },
+    {
+      "id": "cargo_clippy.terminal_economics_r4",
+      "section": "current-research",
+      "command": "cargo clippy --manifest-path research/terminal-economics-r4/Cargo.toml --offline --locked --all-targets --all-features -- -D warnings",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "strict lint for the R4 terminal-economics model"
     },
     {
       "id": "python.economics_lab",
@@ -1356,18 +1433,32 @@
       "shell": "/bin/sh -c",
       "expected": {
         "mode": "zero",
-        "exit": 0
+        "exit": 0,
+        "required_output_patterns": [
+          "^verification results:: 28 verified, 0 errors$",
+          "^mutation=allocation-double-selected-atom status=EXPECTED_RED reason=postcondition$",
+          "^mutation=tick-select-worse status=EXPECTED_RED reason=invariant-obligation$",
+          "^mutation=relation-double-count status=EXPECTED_RED reason=postcondition$",
+          "^mutation=padding-admit-nonzero status=EXPECTED_RED reason=zero-premise-obligation$",
+          "^mutation=dust-count-zero-remainders status=EXPECTED_RED reason=progress-obligation$",
+          "^status=PASS$"
+        ]
       },
       "key_patterns": [
         "^verus_version=",
         "^proof_source_sha256=",
-        "^mutation=.* status=EXPECTED_RED",
+        "^verification results:: 28 verified, 0 errors$",
+        "^mutation=allocation-double-selected-atom status=EXPECTED_RED reason=postcondition$",
+        "^mutation=tick-select-worse status=EXPECTED_RED reason=invariant-obligation$",
+        "^mutation=relation-double-count status=EXPECTED_RED reason=postcondition$",
+        "^mutation=padding-admit-nonzero status=EXPECTED_RED reason=zero-premise-obligation$",
+        "^mutation=dust-count-zero-remainders status=EXPECTED_RED reason=progress-obligation$",
         "^status=PASS$",
         "^claim=",
         "^boundary=",
         "^excluded="
       ],
-      "note": "pinned Verus checks a scalar mathematical batch shadow and four red mutants; digest-pinned human correspondence is not an executable-body or runtime refinement",
+      "note": "pinned Verus checks a scalar mathematical batch shadow with 28 verified obligations and five red mutants; digest-pinned human correspondence is not an executable-body or runtime refinement",
       "proof_content": "scalar-model-shadow"
     },
     {
@@ -1946,6 +2037,27 @@
       "bytes": 172,
       "status": "present"
     },
+    "locks.source_profile_v1": {
+      "path": "research/source-profile-v1/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "c8e69dc81d84db207cc6b41d4040a15d3a1b3ef4edd481834aff86b33b8c7d05",
+      "bytes": 2407,
+      "status": "present"
+    },
+    "locks.failure_payout_v1": {
+      "path": "research/failure-payout-v1/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "5812d946c0254f57661022996c473adad890f788fdf6df361e43cbd0628d7793",
+      "bytes": 168,
+      "status": "present"
+    },
+    "locks.terminal_economics_r4": {
+      "path": "research/terminal-economics-r4/Cargo.lock",
+      "kind": "file-sha256",
+      "sha256": "d316164990205fcebe051ace4588859a8f731d4a1188a2c1ab92dba399d06f63",
+      "bytes": 172,
+      "status": "present"
+    },
     "locks.vector_check": {
       "path": "tools/vector-check/Cargo.lock",
       "kind": "file-sha256",
@@ -1963,15 +2075,15 @@
     "toolchain.versions_env": {
       "path": "toolchain/versions.env",
       "kind": "file-sha256",
-      "sha256": "83c83bcda23923ab6541fb727c6a9273e3bb645a772be424097c14ada504cfac",
-      "bytes": 4048,
+      "sha256": "aa39ae245bd76d7f31fc220c14c509fda45a8e7baf4d5554bfdbe0cfcc760652",
+      "bytes": 4186,
       "status": "present"
     },
     "toolchain.pinned_proof_tools": {
       "path": "toolchain/PINNED_PROOF_TOOLS.md",
       "kind": "file-sha256",
-      "sha256": "722d433d535b469d1e739862d8c978110b7757f592c713eb41b8babbf364b1b0",
-      "bytes": 13616,
+      "sha256": "d7915f60b09c6c6a2f1dac23eb3ac5694d7289eb7c2f785dcebd188488a6ace5",
+      "bytes": 13848,
       "status": "present"
     },
     "proof_shadow.rocq_spec": {
@@ -1998,8 +2110,15 @@
     "proof_shadow.verus_batch": {
       "path": "verus/batch/batch.rs",
       "kind": "file-sha256",
-      "sha256": "6dce0d76961a74fe3433edf5b2830366280b2393fa5c013d43e95d5b4355e052",
-      "bytes": 16424,
+      "sha256": "f6f5334516db79e249115ab0fd38a38b20d60fe617cba9e3d57cf56572311da4",
+      "bytes": 26481,
+      "status": "present"
+    },
+    "proof_shadow.verus_batch_runner": {
+      "path": "verus/batch/run_batch_proofs.sh",
+      "kind": "file-sha256",
+      "sha256": "cbf0ae4a13ceeb0fde4ca9a1c098aabdc8c23ffc463e49095c7ceb14aeb3d04f",
+      "bytes": 8991,
       "status": "present"
     },
     "static_client.canonical_terms": {
@@ -2049,11 +2168,11 @@
     "records": {
       "versions_env": {
         "path": "toolchain/versions.env",
-        "sha256": "83c83bcda23923ab6541fb727c6a9273e3bb645a772be424097c14ada504cfac"
+        "sha256": "aa39ae245bd76d7f31fc220c14c509fda45a8e7baf4d5554bfdbe0cfcc760652"
       },
       "pinned_proof_tools_md": {
         "path": "toolchain/PINNED_PROOF_TOOLS.md",
-        "sha256": "722d433d535b469d1e739862d8c978110b7757f592c713eb41b8babbf364b1b0"
+        "sha256": "d7915f60b09c6c6a2f1dac23eb3ac5694d7289eb7c2f785dcebd188488a6ace5"
       }
     },
     "host": {
@@ -2142,8 +2261,8 @@
     ]
   },
   "run": {
-    "started_at_utc": "2026-08-19T12:52:28Z",
-    "finished_at_utc": "2026-08-19T12:59:59Z",
+    "started_at_utc": "2026-08-19T14:48:56Z",
+    "finished_at_utc": "2026-08-19T14:58:05Z",
     "gate_timeout_seconds": 1800,
     "note": "timestamps here are the only nondeterministic fields in this manifest; `check` ignores them"
   },
@@ -2694,10 +2813,10 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
-        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+        "running 32 tests",
+        "test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "2ede2b908656d3f0718076133fac03a91420a72fd7e818a7b86b8c529ca81e13"
+      "key_lines_sha256": "6e8e3f9a2dfb42524be33c37688da96eca4d543b3eb7c5c30f89c7d1732d732c"
     },
     "cargo_clippy.source_profile_v1": {
       "exit_code": 0,
@@ -2707,6 +2826,40 @@
       "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_doc.source_profile_v1": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_test.failure_payout_v1": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "running 18 tests",
+        "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "4810fc738df440aa6257cf590d3e671a373c2bc7c43c8dbd30a44023b2d4bf30"
+    },
+    "cargo_clippy.failure_payout_v1": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_test.terminal_economics_r4": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [
+        "running 16 tests",
+        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+      ],
+      "key_lines_sha256": "31e0786a144e7a225a98e9bab248bfbf282e87f662817c18f8e48ba8481ebb2c"
+    },
+    "cargo_clippy.terminal_economics_r4": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
@@ -2863,17 +3016,19 @@
       "matches_expectation": true,
       "key_lines": [
         "verus_version=0.2026.08.15.7d4628a",
-        "proof_source_sha256=6dce0d76961a74fe3433edf5b2830366280b2393fa5c013d43e95d5b4355e052",
+        "proof_source_sha256=f6f5334516db79e249115ab0fd38a38b20d60fe617cba9e3d57cf56572311da4",
+        "verification results:: 28 verified, 0 errors",
         "mutation=allocation-double-selected-atom status=EXPECTED_RED reason=postcondition",
         "mutation=tick-select-worse status=EXPECTED_RED reason=invariant-obligation",
         "mutation=relation-double-count status=EXPECTED_RED reason=postcondition",
         "mutation=padding-admit-nonzero status=EXPECTED_RED reason=zero-premise-obligation",
+        "mutation=dust-count-zero-remainders status=EXPECTED_RED reason=progress-obligation",
         "status=PASS",
-        "claim=scalar shadow: allocation decomposition/bounds, unique tick, accepted-side partition, zero-suffix fold identity",
+        "claim=scalar shadow: dust-loop progress/positive maximal choice, allocation decomposition/bounds, unique tick, accepted-side partition, zero-suffix fold identity",
         "boundary=digest-pinned correspondence review only; production body is not imported by Verus",
         "excluded=relation_v1 relation_v1_stream Solana SBF accounts serialization deployment"
       ],
-      "key_lines_sha256": "696b6d5cb95b3aa8a9c4914aa846e2890fd452698967770e4c4f2c1eeaa18d8e"
+      "key_lines_sha256": "7501045872871a5dca1b9081b68ce0d523203f9c70f1681fc6d04909686ede4a"
     },
     "proof.bspline_finite_refinement": {
       "exit_code": 0,
@@ -3074,6 +3229,8 @@
         "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 13 tests",
         "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 3 tests",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 15 tests",
         "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 4 tests",
@@ -3084,7 +3241,7 @@
         "running 9 tests",
         "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "5a6c9c291eb39970205e9d0371cbf817553af50a60585dccb1e477ad9140dbb7"
+      "key_lines_sha256": "8238edc17aa6617696e626dc69d213d29fb64de941c837d18b6aa186f0f25246"
     },
     "sbf.token2022_program_test_non_production_mock": {
       "exit_code": 0,
@@ -3103,6 +3260,8 @@
         "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 17 tests",
         "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 3 tests",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 1 test",
         "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 15 tests",
@@ -3113,7 +3272,7 @@
         "running 9 tests",
         "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "587539b912d46fb8552c9e492ebba2dfa0e7982675985777818055ba0b19f126"
+      "key_lines_sha256": "91a89649ce6f945f41a64315700deb813af0e8c5c852f0cf66a74b62e706686c"
     },
     "static_client.npm": {
       "exit_code": 0,
@@ -3183,8 +3342,8 @@
     }
   },
   "gate_summary": {
-    "total": 94,
-    "matching_expectation": 94,
+    "total": 98,
+    "matching_expectation": 98,
     "contradicting_expectation": []
   },
   "unavailable_or_failing_gates": [
