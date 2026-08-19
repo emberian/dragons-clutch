@@ -2,8 +2,9 @@
 //!
 //! This runner is deliberately narrower than a general Solana client.  It
 //! accepts only a loopback RPC URL, only legacy transactions emitted by the
-//! repository's fixture generator, and exactly two ephemeral test signers: a
-//! fee payer followed by the market actor.  It replaces the zero fixture
+//! repository's fixture generator, and only the explicitly supplied ephemeral
+//! test signers (normally a fee payer and market actor, plus any holder identity
+//! a step requires). It replaces the zero fixture
 //! blockhash, signs the actual serialized message bytes, submits with
 //! preflight disabled (so expected refusals are themselves recorded by the
 //! local bank), waits for confirmation, and reloads every compared account.
@@ -28,6 +29,7 @@ struct Plan {
     program_id: String,
     payer: String,
     actor: String,
+    holder: String,
     /// True while the validator must preload zeroed, program-owned market
     /// PDAs that an ordinary wallet cannot create.  The runner reports this
     /// provenance before it submits anything; it must never be confused with
@@ -358,7 +360,11 @@ fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
             return Err("the same ephemeral signer was supplied more than once".into());
         }
     }
-    for (role, address) in [("payer", &plan.payer), ("actor", &plan.actor)] {
+    for (role, address) in [
+        ("payer", &plan.payer),
+        ("actor", &plan.actor),
+        ("holder", &plan.holder),
+    ] {
         if !public_keys.contains(address) {
             return Err(format!("no supplied keypair matches plan {role} {address}").into());
         }

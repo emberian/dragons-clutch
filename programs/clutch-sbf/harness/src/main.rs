@@ -208,6 +208,9 @@ mod code {
     /// what a caller earns for presenting a Token-2022 account the Realm's
     /// frozen policy or the instruction's own owner-authority rule refuses.
     pub const TOKEN_ACCOUNT_NOT_ADMITTED: u32 = 0x001b;
+    /// `ClutchError::TokenDeltaMismatch` after a duplicate bearer exit finds
+    /// the source already burned inside the same transaction.
+    pub const TOKEN_DELTA_MISMATCH: u32 = 0x001c;
 }
 
 const B58: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -569,6 +572,21 @@ fn redeem_request(sequence: u64, outcome: u8, quantity: u64) -> Vec<u8> {
     out
 }
 
+/// Build the canonical sequence-zero bearer redemption envelope.
+fn redeem_external_request(shared: &Shared, plane: &Plane, quantity: u64) -> Vec<u8> {
+    layout_request(
+        0,
+        Intent::RedeemExternal {
+            market: plane.market_id,
+            claimant: Hash32::from_bytes(shared.holder.bytes),
+            source: Hash32::from_bytes(shared.holder_outcome_token.bytes),
+            destination: Hash32::from_bytes(shared.holder_collateral_token.bytes),
+            outcome: WALK_OUTCOME_WIN,
+            quantity,
+        },
+    )
+}
+
 /// One observation record in the reference's encoding.
 type Record = (u8, u64, u128, u128);
 
@@ -772,6 +790,203 @@ fn transaction(message: &Message, instructions: &[Instruction]) -> Vec<u8> {
     out
 }
 
+/// Create and initialize an ordinary, signer-addressed Token-2022 account.
+///
+/// This is intentionally not a Clutch instruction and not validator-genesis
+/// assistance. The fee payer and fresh account identity sign the System
+/// `CreateAccount`; Token-2022 `InitializeAccount3` then binds the resulting
+/// account to the requested mint and bearer authority in the same atomic
+/// transaction.
+fn create_holder_token_transaction(
+    shared: &Shared,
+    mint: &[u8; 32],
+    holder: &[u8; 32],
+    account: &[u8; 32],
+) -> Vec<u8> {
+    let message = Message::new(
+        &[shared.payer.bytes, *account],
+        &[],
+        &[],
+        &[shared.system_program, shared.token_program, *mint],
+    );
+
+    /* `SystemInstruction::CreateAccount` is bincode's enum variant 0,
+     * followed by lamports, space, and owner. This is the same frozen 52-byte
+     * encoding `token::create_account_signed` emits inside the program. */
+    let mut create = vec![0_u8; 52];
+    create[4..12].copy_from_slice(&ACCOUNT_LAMPORTS.to_le_bytes());
+    create[12..20].copy_from_slice(&(token::BASE_TOKEN_ACCOUNT_LEN as u64).to_le_bytes());
+    create[20..52].copy_from_slice(&shared.token_program);
+    let create = Instruction {
+        program_index: message.index(&shared.system_program),
+        accounts: message.indices(&[shared.payer.bytes, *account]),
+        data: create,
+    };
+
+    let mut initialize = vec![0_u8; 33];
+    initialize[0] = 18; // TokenInstruction::InitializeAccount3
+    initialize[1..33].copy_from_slice(holder);
+    let initialize = Instruction {
+        program_index: message.index(&shared.token_program),
+        accounts: message.indices(&[*account, *mint]),
+        data: initialize,
+    };
+    transaction(&message, &[create, initialize])
+}
+
+/// Transfer a materialized outcome token to an independent bearer.
+///
+/// The source authority signs directly. The destination authority does not
+/// sign a Token-2022 transfer, which is why this transaction needs only the
+/// payer and the original actor even though the next committed step is driven
+/// by the new holder.
+fn transfer_outcome_transaction(
+    shared: &Shared,
+    source: &[u8; 32],
+    mint: &[u8; 32],
+    destination: &[u8; 32],
+    quantity: u64,
+) -> Vec<u8> {
+    let message = Message::new(
+        &[shared.payer.bytes],
+        &[shared.actor.bytes],
+        &[*source, *destination],
+        &[*mint, shared.token_program],
+    );
+    let mut data = vec![0_u8; 10];
+    data[0] = 12; // TokenInstruction::TransferChecked
+    data[1..9].copy_from_slice(&quantity.to_le_bytes());
+    data[9] = 0; // outcome mints have indivisible atoms
+    let transfer = Instruction {
+        program_index: message.index(&shared.token_program),
+        accounts: message.indices(&[*source, *mint, *destination, shared.actor.bytes]),
+        data,
+    };
+    transaction(&message, &[transfer])
+}
+
+/// Fund the fee payer's freshly created collateral account from the founding
+/// actor through an ordinary Token-2022 transfer.
+fn transfer_second_owner_collateral_transaction(shared: &Shared, quantity: u64) -> Vec<u8> {
+    let message = Message::new(
+        &[shared.payer.bytes],
+        &[shared.actor.bytes],
+        &[
+            shared.actor_token.bytes,
+            shared.payer_collateral_token.bytes,
+        ],
+        &[shared.collateral_mint.bytes, shared.token_program],
+    );
+    let mut data = vec![0_u8; 10];
+    data[0] = 12; // TokenInstruction::TransferChecked
+    data[1..9].copy_from_slice(&quantity.to_le_bytes());
+    data[9] = COLLATERAL_DECIMALS;
+    let transfer = Instruction {
+        program_index: message.index(&shared.token_program),
+        accounts: message.indices(&[
+            shared.actor_token.bytes,
+            shared.collateral_mint.bytes,
+            shared.payer_collateral_token.bytes,
+            shared.actor.bytes,
+        ]),
+        data,
+    };
+    transaction(&message, &[transfer])
+}
+
+/// Burn a bearer Egg and pay its resolved collateral value directly to the
+/// independent claimant, without a Position or Replay account.
+fn redeem_external_transaction(
+    shared: &Shared,
+    plane: &Plane,
+    outcome: u8,
+    data: Vec<u8>,
+) -> Vec<u8> {
+    redeem_external_transaction_repeated(shared, plane, outcome, data, 1)
+}
+
+/// Repeat the same bearer exit inside one transaction. With `repetitions ==
+/// 2`, the first instruction completes its burn and payout, the duplicate then
+/// refuses on the now-empty source, and SVM atomicity must roll the first one
+/// back too.
+fn redeem_external_transaction_repeated(
+    shared: &Shared,
+    plane: &Plane,
+    outcome: u8,
+    data: Vec<u8>,
+    repetitions: usize,
+) -> Vec<u8> {
+    assert!(repetitions > 0, "at least one bearer exit is required");
+    let touched = usize::from(outcome);
+    let writable = vec![
+        plane.hoard.bytes,
+        plane.kernel.bytes,
+        plane.supply.bytes,
+        shared.holder_collateral_token.bytes,
+        plane.hoard_token.bytes,
+        shared.holder_outcome_token.bytes,
+        plane.outcome_mints[touched].bytes,
+    ];
+    let mut readonly = vec![
+        shared.profile.bytes,
+        plane.market.bytes,
+        plane.resolution.bytes,
+        shared.terms.bytes,
+        shared.policy_account.bytes,
+        shared.token_program,
+        shared.collateral_mint.bytes,
+        plane.hoard_authority.bytes,
+        shared.program.bytes,
+        shared.compute_budget,
+    ];
+    for (index, mint) in plane.outcome_mints.iter().enumerate() {
+        if index != touched {
+            readonly.push(mint.bytes);
+        }
+    }
+    let message = Message::new(
+        &[shared.payer.bytes],
+        &[shared.holder.bytes],
+        &writable,
+        &readonly,
+    );
+    let mut keys = vec![
+        shared.holder.bytes,
+        shared.profile.bytes,
+        plane.market.bytes,
+        plane.hoard.bytes,
+        plane.kernel.bytes,
+        plane.supply.bytes,
+        plane.resolution.bytes,
+        shared.terms.bytes,
+        shared.policy_account.bytes,
+        shared.token_program,
+        shared.collateral_mint.bytes,
+        shared.holder_collateral_token.bytes,
+        plane.hoard_authority.bytes,
+        plane.hoard_token.bytes,
+        shared.holder_outcome_token.bytes,
+    ];
+    keys.extend(plane.outcome_mints.iter().map(|mint| mint.bytes));
+    assert_eq!(
+        keys.len(),
+        clutch_sbf::instructions::external_exit::IX_OUTCOME_MINTS + usize::from(OUTCOME_COUNT),
+        "RedeemExternal must carry the complete canonical mint vector"
+    );
+    let instruction = Instruction {
+        program_index: message.index(&shared.program.bytes),
+        accounts: message.indices(&keys),
+        data,
+    };
+    let mut instructions = vec![budget_instruction(
+        &message,
+        &shared.compute_budget,
+        COMPUTE_UNIT_CEILING,
+    )];
+    instructions.extend(std::iter::repeat_n(instruction, repetitions));
+    transaction(&message, &instructions)
+}
+
 /* ------------------------------------------------------------------------ */
 /* The shared plane                                                          */
 /* ------------------------------------------------------------------------ */
@@ -815,6 +1030,20 @@ struct Shared {
     compute_budget: [u8; 32],
     payer: Pda,
     actor: Pda,
+    /// Fresh ordinary Token-2022 account identity for the actor's materialized
+    /// winning Egg in the committed-bank walk.
+    actor_outcome_token: Pda,
+    /// Fresh ordinary collateral account identity for the fee payer acting as
+    /// a second market participant in the committed-bank walk.
+    payer_collateral_token: Pda,
+    /// Independent bearer claimant used only by the committed-bank walk.
+    holder: Pda,
+    /// Fresh ordinary account identity used to construct that claimant's
+    /// Token-2022 outcome account through public System + Token instructions.
+    holder_outcome_token: Pda,
+    /// Fresh ordinary account identity for that claim holder's collateral
+    /// destination, created through the same public System + Token path.
+    holder_collateral_token: Pda,
     stranger: Pda,
     imposter: Pda,
     realm_hash: Hash32,
@@ -895,7 +1124,52 @@ fn build_shared() -> Shared {
     let program = fixed_address("clutch-sbf/bringup/program/v1");
     let payer = fixture_identity("CLUTCH_COMMITTED_PAYER", "clutch-sbf/bringup/payer/v1");
     let actor = fixture_identity("CLUTCH_COMMITTED_ACTOR", "clutch-sbf/bringup/actor/v1");
+    let actor_outcome_token = fixture_identity(
+        "CLUTCH_COMMITTED_ACTOR_OUTCOME_TOKEN",
+        "clutch-sbf/actor/outcome-token",
+    );
+    let payer_collateral_token = fixture_identity(
+        "CLUTCH_COMMITTED_PAYER_COLLATERAL_TOKEN",
+        "clutch-sbf/payer/collat-token",
+    );
+    let holder = fixture_identity("CLUTCH_COMMITTED_HOLDER", "clutch-sbf/bringup/holder/v1");
+    let holder_outcome_token = fixture_identity(
+        "CLUTCH_COMMITTED_HOLDER_OUTCOME_TOKEN",
+        "clutch-sbf/holder/outcome-token",
+    );
+    let holder_collateral_token = fixture_identity(
+        "CLUTCH_COMMITTED_HOLDER_COLLATERAL_TOKEN",
+        "clutch-sbf/holder/collat-token",
+    );
     assert_ne!(payer.bytes, actor.bytes, "payer and actor must be distinct");
+    assert_ne!(
+        actor_outcome_token.bytes, actor.bytes,
+        "actor outcome account and authority must be distinct"
+    );
+    assert_ne!(
+        payer_collateral_token.bytes, payer.bytes,
+        "payer collateral account and authority must be distinct"
+    );
+    assert_ne!(
+        holder.bytes, actor.bytes,
+        "holder and actor must be distinct"
+    );
+    assert_ne!(
+        holder.bytes, payer.bytes,
+        "holder and payer must be distinct"
+    );
+    assert_ne!(
+        holder_outcome_token.bytes, holder.bytes,
+        "holder-token account and authority must be distinct"
+    );
+    assert_ne!(
+        holder_collateral_token.bytes, holder.bytes,
+        "holder-collateral account and authority must be distinct"
+    );
+    assert_ne!(
+        holder_outcome_token.bytes, holder_collateral_token.bytes,
+        "holder outcome and collateral token accounts must be distinct"
+    );
     let stranger = fixed_address("clutch-sbf/bringup/stranger/v1");
     let imposter = fixed_address("clutch-sbf/bringup/imposter/v1");
     let pid = program.address.clone();
@@ -1120,6 +1394,11 @@ fn build_shared() -> Shared {
         compute_budget: b58_decode32(COMPUTE_BUDGET_PROGRAM),
         payer,
         actor,
+        actor_outcome_token,
+        payer_collateral_token,
+        holder,
+        holder_outcome_token,
+        holder_collateral_token,
         stranger,
         imposter,
         realm_hash,
@@ -1273,9 +1552,12 @@ impl Plane {
                 )
             })
             .collect();
-        let holder_tokens: Vec<Pda> = (0..OUTCOME_COUNT)
+        let mut holder_tokens: Vec<Pda> = (0..OUTCOME_COUNT)
             .map(|outcome| fixed_address(&format!("clutch/tok/{nonce}/{outcome}")))
             .collect();
+        if nonce == NONCE_COMMITTED {
+            holder_tokens[usize::from(WALK_OUTCOME_WIN)] = shared.actor_outcome_token.clone();
+        }
 
         Self {
             label,
@@ -1542,14 +1824,17 @@ impl Plane {
         self.state = output;
     }
 
-    /// The seven state accounts, in the seam plane's account order.
-    fn state_roles(&self) -> [(&'static str, &Pda); 7] {
+    /// The six persisted state accounts shared by seam/gate transitions.
+    ///
+    /// The legacy ExternalAccount remains only as an offline-reference ghost;
+    /// actual Token-2022 supply is the on-chain bearer truth. Resolution is a
+    /// seventh founding target but is carried separately by the evidence gate.
+    fn state_roles(&self) -> [(&'static str, &Pda); 6] {
         [
             ("market", &self.market),
             ("hoard", &self.hoard),
             ("position", &self.position),
             ("kernel", &self.kernel),
-            ("external", &self.external),
             ("replay", &self.replay),
             ("supply", &self.supply),
         ]
@@ -2311,8 +2596,12 @@ impl Leg {
     /// drift.
     const fn account_count(self) -> usize {
         match self {
-            Leg::Collateral => clutch_sbf::instructions::split::ACCOUNT_COUNT_COLLATERAL,
-            Leg::Outcome(_) => clutch_sbf::instructions::split::ACCOUNT_COUNT_OUTCOME,
+            Leg::Collateral => {
+                clutch_sbf::instructions::split::ACCOUNT_PREFIX_COLLATERAL + OUTCOME_COUNT as usize
+            }
+            Leg::Outcome(_) => {
+                clutch_sbf::instructions::split::ACCOUNT_PREFIX_OUTCOME + OUTCOME_COUNT as usize
+            }
         }
     }
 }
@@ -2325,19 +2614,26 @@ fn seam_leg_accounts(
     leg: Leg,
 ) -> Vec<[u8; 32]> {
     match leg {
-        Leg::Collateral => vec![
-            shared.token_program,
-            shared.policy_account.bytes,
-            shared.collateral_mint.bytes,
-            signer.collateral.bytes,
-            plane.hoard_authority.bytes,
-            plane.hoard_token.bytes,
-        ],
-        Leg::Outcome(outcome) => vec![
-            shared.token_program,
-            plane.outcome_mints[usize::from(outcome)].bytes,
-            plane.holder_tokens[usize::from(outcome)].bytes,
-        ],
+        Leg::Collateral => {
+            let mut accounts = vec![
+                shared.token_program,
+                shared.policy_account.bytes,
+                shared.collateral_mint.bytes,
+                signer.collateral.bytes,
+                plane.hoard_authority.bytes,
+                plane.hoard_token.bytes,
+            ];
+            accounts.extend(plane.outcome_mints.iter().map(|mint| mint.bytes));
+            accounts
+        }
+        Leg::Outcome(outcome) => {
+            let mut accounts = vec![
+                shared.token_program,
+                plane.holder_tokens[usize::from(outcome)].bytes,
+            ];
+            accounts.extend(plane.outcome_mints.iter().map(|mint| mint.bytes));
+            accounts
+        }
     }
 }
 
@@ -2360,7 +2656,6 @@ fn seam_instruction(
         plane.hoard.bytes,
         plane.position.bytes,
         plane.kernel.bytes,
-        plane.external.bytes,
         replay,
         plane.supply.bytes,
     ];
@@ -2399,7 +2694,6 @@ fn seam_message(
         plane.hoard.bytes,
         plane.position.bytes,
         plane.kernel.bytes,
-        plane.external.bytes,
         replay,
         plane.supply.bytes,
     ];
@@ -2417,10 +2711,19 @@ fn seam_message(
             readonly.push(shared.policy_account.bytes);
             readonly.push(shared.collateral_mint.bytes);
             readonly.push(plane.hoard_authority.bytes);
+            readonly.extend(plane.outcome_mints.iter().map(|mint| mint.bytes));
         }
         Leg::Outcome(outcome) => {
             writable.push(plane.outcome_mints[usize::from(outcome)].bytes);
             writable.push(plane.holder_tokens[usize::from(outcome)].bytes);
+            readonly.extend(
+                plane
+                    .outcome_mints
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != usize::from(outcome))
+                    .map(|(_, mint)| mint.bytes),
+            );
         }
     }
     if signer.signs {
@@ -2481,7 +2784,6 @@ fn gate_transaction(
         plane.hoard.bytes,
         plane.position.bytes,
         plane.kernel.bytes,
-        plane.external.bytes,
         plane.replay.bytes,
         plane.supply.bytes,
     ];
@@ -2503,7 +2805,6 @@ fn gate_transaction(
         plane.hoard.bytes,
         plane.position.bytes,
         plane.kernel.bytes,
-        plane.external.bytes,
         plane.replay.bytes,
         plane.supply.bytes,
         shared.terms.bytes,
@@ -2529,12 +2830,16 @@ fn gate_transaction(
             plane.hoard_token.bytes,
         ]);
     }
+    readonly.extend(plane.outcome_mints.iter().map(|mint| mint.bytes));
+    keys.extend(plane.outcome_mints.iter().map(|mint| mint.bytes));
     assert_eq!(
         keys.len(),
         if redeems {
-            clutch_sbf::instructions::observe_resolve::REDEEM_ACCOUNT_COUNT
+            clutch_sbf::instructions::observe_resolve::REDEEM_ACCOUNT_PREFIX
+                + usize::from(OUTCOME_COUNT)
         } else {
-            clutch_sbf::instructions::observe_resolve::EVIDENCE_ACCOUNT_COUNT
+            clutch_sbf::instructions::observe_resolve::EVIDENCE_ACCOUNT_PREFIX
+                + usize::from(OUTCOME_COUNT)
         },
         "the emitted evidence plane must be exactly the plane the program requires"
     );
@@ -2561,15 +2866,25 @@ fn gate_transaction(
 
 /// The message and instruction of one `Endow` transaction.
 ///
-/// Eleven accounts and no system program: an endowment allocates nothing but
-/// transfers admitted Token-2022 collateral into pooled custody. The signer sits at
-/// [`clutch_sbf::instructions::genesis::IX_PAYER`] and must be the
-/// position's own owner, which is the one place in `genesis.rs` where creation
-/// is *not* permissionless.
+/// Thirteen accounts: a first endowment may create the owner's Position and
+/// Replay through System CPI, then transfers admitted Token-2022 collateral
+/// into pooled custody. The owner is a writable signer because it funds that
+/// owner plane when absent.
 fn endow_transaction(shared: &Shared, plane: &Plane, signer: Signer<'_>, data: Vec<u8>) -> Vec<u8> {
+    endow_transaction_at(shared, plane, &plane.position, &plane.replay, signer, data)
+}
+
+fn endow_transaction_at(
+    shared: &Shared,
+    plane: &Plane,
+    position: &Pda,
+    replay: &Pda,
+    signer: Signer<'_>,
+    data: Vec<u8>,
+) -> Vec<u8> {
     let writable = [
-        plane.position.bytes,
-        plane.replay.bytes,
+        position.bytes,
+        replay.bytes,
         signer.collateral.bytes,
         plane.hoard_token.bytes,
     ];
@@ -2580,11 +2895,18 @@ fn endow_transaction(shared: &Shared, plane: &Plane, signer: Signer<'_>, data: V
         shared.policy_account.bytes,
         shared.token_program,
         shared.collateral_mint.bytes,
+        shared.system_program,
+        shared.rent_sysvar,
         shared.program.bytes,
         shared.compute_budget,
     ];
     let message = if signer.signs {
-        Message::new(&[shared.payer.bytes], &[signer.key], &writable, &readonly)
+        let writable_signers = if signer.key == shared.payer.bytes {
+            vec![shared.payer.bytes]
+        } else {
+            vec![shared.payer.bytes, signer.key]
+        };
+        Message::new(&writable_signers, &[], &writable, &readonly)
     } else {
         readonly.insert(0, signer.key);
         Message::new(&[shared.payer.bytes], &[], &writable, &readonly)
@@ -2593,14 +2915,16 @@ fn endow_transaction(shared: &Shared, plane: &Plane, signer: Signer<'_>, data: V
         signer.key,
         plane.market.bytes,
         plane.hoard.bytes,
-        plane.position.bytes,
-        plane.replay.bytes,
+        position.bytes,
+        replay.bytes,
         shared.profile.bytes,
         shared.policy_account.bytes,
         shared.token_program,
         shared.collateral_mint.bytes,
         signer.collateral.bytes,
         plane.hoard_token.bytes,
+        shared.system_program,
+        shared.rent_sysvar,
     ];
     assert_eq!(
         keys.len(),
@@ -2623,14 +2947,72 @@ fn endow_transaction(shared: &Shared, plane: &Plane, signer: Signer<'_>, data: V
 
 /// The `Endow` intent one credit carries.
 fn endow_request(plane: &Plane, sequence: u64, amount: u64) -> Vec<u8> {
+    endow_request_for(plane, plane.owner, sequence, amount)
+}
+
+fn endow_request_for(plane: &Plane, owner: Hash32, sequence: u64, amount: u64) -> Vec<u8> {
     layout_request(
         sequence,
         Intent::Endow {
             market: plane.market_id,
-            owner: plane.owner,
+            owner,
             amount,
         },
     )
+}
+
+fn owner_plane(shared: &Shared, plane: &Plane, owner: [u8; 32]) -> (Pda, Pda) {
+    let pid = shared.program.address.clone();
+    let market = plane.market_id.bytes().to_vec();
+    let owner = owner.to_vec();
+    let position = derive(
+        &pid,
+        &[seeds::SEED_POSITION.to_vec(), market.clone(), owner.clone()],
+    );
+    let replay = derive(
+        &pid,
+        &[
+            seeds::SEED_REPLAY.to_vec(),
+            market,
+            owner,
+            0_u64.to_le_bytes().to_vec(),
+        ],
+    );
+    (position, replay)
+}
+
+fn first_endow_owner_bytes(
+    plane: &Plane,
+    owner: [u8; 32],
+    position: &Pda,
+    replay: &Pda,
+    amount: u64,
+) -> (Vec<u8>, Vec<u8>) {
+    let mut position_bytes = vec![0_u8; account_len::POSITION];
+    PositionAccount {
+        market: plane.market_id,
+        owner: Hash32::from_bytes(owner),
+        generation: 0,
+        internal: [0; MAX_OUTCOMES],
+        cash_atoms: amount,
+        reserved_cash_atoms: 0,
+        stored_bump: position.bump,
+        close_state: 0,
+    }
+    .encode(&mut position_bytes)
+    .expect("second owner position encodes");
+    let mut replay_bytes = vec![0_u8; REPLAY_ACCOUNT_LEN];
+    ReplayAccount {
+        market: plane.market_id,
+        owner: Hash32::from_bytes(owner),
+        position_generation: 0,
+        sequence: 1,
+        stored_bump: replay.bump,
+        flags: 0,
+    }
+    .encode(&mut replay_bytes)
+    .expect("second owner replay encodes");
+    (position_bytes, replay_bytes)
 }
 
 /// The position and replay bytes one `Endow` must produce.
@@ -2731,7 +3113,7 @@ fn advance_transaction(
 
 /// The message and instruction of one `CreateMarket` transaction.
 ///
-/// Nineteen accounts plus one mint per outcome.  Three things about this list
+/// Eighteen accounts plus one mint per outcome. Three things about this list
 /// are load-bearing and none of them is decoration:
 ///
 /// 1. **the creator is a writable signer.**  It is the rent payer for every
@@ -2757,7 +3139,6 @@ fn create_transaction(
         plane.hoard.bytes,
         plane.position.bytes,
         plane.kernel.bytes,
-        plane.external.bytes,
         plane.replay.bytes,
         plane.supply.bytes,
         plane.resolution.bytes,
@@ -2795,7 +3176,6 @@ fn create_transaction(
         plane.hoard.bytes,
         plane.position.bytes,
         plane.kernel.bytes,
-        plane.external.bytes,
         plane.replay.bytes,
         plane.supply.bytes,
         plane.resolution.bytes,
@@ -4085,6 +4465,10 @@ const WALK_SPLIT: u64 = 20;
 const WALK_MATERIALIZE: u64 = 8;
 const WALK_DEMATERIALIZE: u64 = 5;
 const WALK_MERGE: u64 = 4;
+/// A second owner's first deposit, used to prove permissionless Position and
+/// Replay creation on the same market without conflating that owner with the
+/// positionless bearer claimant.
+const SECOND_ENDOW_AMOUNT: u64 = 6;
 
 /// The outcome the sealed window selects, and the one it does not.
 ///
@@ -4263,6 +4647,41 @@ fn walk_layout_request(plane: &Plane, step: usize) -> Vec<u8> {
             },
         ),
         other => panic!("the walk has no layout step {other}"),
+    }
+}
+
+/// The production SBF binding for bearer token accounts.
+///
+/// The offline reference adapter still models its retired owner-local External
+/// account, so [`walk_layout_request`] deliberately names that ghost when it
+/// computes expected economic state. The SBF program instead authenticates the
+/// actual Token-2022 holder account. Only the address binding differs.
+fn walk_sbf_layout_request(plane: &Plane, step: usize) -> Vec<u8> {
+    let market = plane.market_id;
+    let owner = plane.owner;
+    let token = Hash32::from_bytes(plane.holder_tokens[usize::from(WALK_OUTCOME_WIN)].bytes);
+    match step {
+        2 => layout_request(
+            step as u64,
+            Intent::Materialize {
+                market,
+                owner,
+                destination: token,
+                outcome: WALK_OUTCOME_WIN,
+                quantity: WALK_MATERIALIZE,
+            },
+        ),
+        3 => layout_request(
+            step as u64,
+            Intent::Dematerialize {
+                market,
+                owner,
+                source: token,
+                outcome: WALK_OUTCOME_WIN,
+                quantity: WALK_DEMATERIALIZE,
+            },
+        ),
+        _ => walk_layout_request(plane, step),
     }
 }
 
@@ -4700,7 +5119,6 @@ fn walk_terminal(walk: &Walk) -> (Vec<TerminalValue>, Vec<TerminalIdentity>) {
     let hoard_role = format!("{label}.hoard");
     let position_role = format!("{label}.position");
     let kernel_role = format!("{label}.kernel");
-    let external_role = format!("{label}.external");
     let supply_role = format!("{label}.supply");
 
     let mut values = vec![
@@ -4732,7 +5150,6 @@ fn walk_terminal(walk: &Walk) -> (Vec<TerminalValue>, Vec<TerminalIdentity>) {
     let outcomes = usize::from(OUTCOME_COUNT);
     const INTERNAL: [&str; 2] = ["position_internal_0", "position_internal_1"];
     const TOTAL: [&str; 2] = ["kernel_total_supply_0", "kernel_total_supply_1"];
-    const EXTERNAL: [&str; 2] = ["external_balance_0", "external_balance_1"];
     const LEDGER_INTERNAL: [&str; 2] = ["ledger_internal_0", "ledger_internal_1"];
     const LEDGER_EXTERNAL: [&str; 2] = ["ledger_external_0", "ledger_external_1"];
     for index in 0..outcomes {
@@ -4757,18 +5174,6 @@ fn walk_terminal(walk: &Walk) -> (Vec<TerminalValue>, Vec<TerminalIdentity>) {
                 probe.total_supply[index] = v;
                 let mut bytes = [0; KERNEL_ACCOUNT_LEN];
                 probe.encode(&mut bytes).expect("kernel probe encodes");
-                bytes.to_vec()
-            },
-        ));
-        values.push(terminal_value(
-            EXTERNAL[index],
-            external_role.clone(),
-            external.balances[index],
-            |v| {
-                let mut probe = external;
-                probe.balances[index] = v;
-                let mut bytes = [0; EXTERNAL_ACCOUNT_LEN];
-                probe.encode(&mut bytes).expect("external probe encodes");
                 bytes.to_vec()
             },
         ));
@@ -4825,10 +5230,12 @@ fn walk_terminal(walk: &Walk) -> (Vec<TerminalValue>, Vec<TerminalIdentity>) {
             right: (0..outcomes).map(|index| observed(INTERNAL[index], 1)).collect(),
         },
         TerminalIdentity {
-            name: "the kernel supply is exactly the outstanding external claims",
-            equation: "sum_i kernel_total_supply_i == sum_i external_balance_i".to_string(),
+            name: "the kernel supply is exactly the cached bearer supply",
+            equation: "sum_i kernel_total_supply_i == sum_i ledger_external_i".to_string(),
             left: (0..outcomes).map(|index| observed(TOTAL[index], 1)).collect(),
-            right: (0..outcomes).map(|index| observed(EXTERNAL[index], 1)).collect(),
+            right: (0..outcomes)
+                .map(|index| observed(LEDGER_EXTERNAL[index], 1))
+                .collect(),
         },
     ];
     for index in 0..outcomes {
@@ -5384,11 +5791,11 @@ fn committed_custody_compares(
     let hoard_token = immutable_owner_account_bytes(
         shared.collateral_mint.bytes,
         plane.hoard_authority.bytes,
-        WALK_CASH,
+        WALK_CASH + SECOND_ENDOW_AMOUNT,
     );
     let actor_token = with_amount(
         &shared.actor_token_bytes,
-        ACTOR_COLLATERAL_ATOMS - WALK_CASH,
+        ACTOR_COLLATERAL_ATOMS - WALK_CASH - SECOND_ENDOW_AMOUNT,
     );
     compares.extend([
         Compare {
@@ -5407,6 +5814,257 @@ fn committed_custody_compares(
     compares
 }
 
+/// Exact token-account post-state of one ordinary System + Token-2022
+/// construction transaction. The account is absent before the transaction,
+/// so the empty `pre` image is provenance rather than an encoded token state.
+fn constructed_token_compare(
+    role: &str,
+    address: &Pda,
+    mint: [u8; 32],
+    owner: [u8; 32],
+) -> Compare {
+    Compare {
+        role: role.to_string(),
+        address: address.address.clone(),
+        expected: token_account_bytes(mint, owner, 0),
+        pre: Vec::new(),
+    }
+}
+
+fn second_owner_funding_compares(shared: &Shared) -> Vec<Compare> {
+    let actor_pre = ACTOR_COLLATERAL_ATOMS - WALK_CASH;
+    vec![
+        Compare {
+            role: "actor-collateral".to_string(),
+            address: shared.actor_token.address.clone(),
+            expected: with_amount(&shared.actor_token_bytes, actor_pre - SECOND_ENDOW_AMOUNT),
+            pre: with_amount(&shared.actor_token_bytes, actor_pre),
+        },
+        Compare {
+            role: "payer-collateral".to_string(),
+            address: shared.payer_collateral_token.address.clone(),
+            expected: token_account_bytes(
+                shared.collateral_mint.bytes,
+                shared.payer.bytes,
+                SECOND_ENDOW_AMOUNT,
+            ),
+            pre: token_account_bytes(shared.collateral_mint.bytes, shared.payer.bytes, 0),
+        },
+    ]
+}
+
+fn second_owner_endow_compares(
+    shared: &Shared,
+    plane: &Plane,
+    position: &Pda,
+    replay: &Pda,
+) -> Vec<Compare> {
+    let (position_bytes, replay_bytes) = first_endow_owner_bytes(
+        plane,
+        shared.payer.bytes,
+        position,
+        replay,
+        SECOND_ENDOW_AMOUNT,
+    );
+    vec![
+        Compare {
+            role: "payer-position".to_string(),
+            address: position.address.clone(),
+            expected: position_bytes,
+            pre: Vec::new(),
+        },
+        Compare {
+            role: "payer-replay".to_string(),
+            address: replay.address.clone(),
+            expected: replay_bytes,
+            pre: Vec::new(),
+        },
+        Compare {
+            role: "payer-collateral".to_string(),
+            address: shared.payer_collateral_token.address.clone(),
+            expected: token_account_bytes(shared.collateral_mint.bytes, shared.payer.bytes, 0),
+            pre: token_account_bytes(
+                shared.collateral_mint.bytes,
+                shared.payer.bytes,
+                SECOND_ENDOW_AMOUNT,
+            ),
+        },
+        Compare {
+            role: format!("{}.hoard-token", plane.label),
+            address: plane.hoard_token.address.clone(),
+            expected: immutable_owner_account_bytes(
+                shared.collateral_mint.bytes,
+                plane.hoard_authority.bytes,
+                WALK_CASH + SECOND_ENDOW_AMOUNT,
+            ),
+            pre: immutable_owner_account_bytes(
+                shared.collateral_mint.bytes,
+                plane.hoard_authority.bytes,
+                WALK_CASH,
+            ),
+        },
+    ]
+}
+
+/// Byte expectations for the ordinary bearer transfer after the actor has
+/// materialized and partly dematerialized the winning Egg.
+fn bearer_transfer_compares(shared: &Shared, plane: &Plane, quantity: u64) -> Vec<Compare> {
+    let index = usize::from(WALK_OUTCOME_WIN);
+    let mint = mint_bytes(Some(plane.market.bytes), 0, quantity);
+    vec![
+        Compare {
+            role: "actor-winning-egg".to_string(),
+            address: plane.holder_tokens[index].address.clone(),
+            expected: token_account_bytes(plane.outcome_mints[index].bytes, shared.actor.bytes, 0),
+            pre: token_account_bytes(
+                plane.outcome_mints[index].bytes,
+                shared.actor.bytes,
+                quantity,
+            ),
+        },
+        Compare {
+            role: "holder-winning-egg".to_string(),
+            address: shared.holder_outcome_token.address.clone(),
+            expected: token_account_bytes(
+                plane.outcome_mints[index].bytes,
+                shared.holder.bytes,
+                quantity,
+            ),
+            pre: token_account_bytes(plane.outcome_mints[index].bytes, shared.holder.bytes, 0),
+        },
+        Compare {
+            role: format!("{}.outcome-mint-{WALK_OUTCOME_WIN}", plane.label),
+            address: plane.outcome_mints[index].address.clone(),
+            expected: mint.clone(),
+            pre: mint,
+        },
+    ]
+}
+
+/// Apply the exact unit-vector bearer redemption to the offline state image.
+///
+/// `RedeemExternal` deliberately has no owner Position and the legacy
+/// reference adapter has no action for it, so this is a codec-level expected
+/// image rather than a second execution oracle. The real gate separately
+/// checks the Token-2022 burn, transfer, supply, and Hoard deltas.
+fn bearer_redeem_post(plane: &Plane, quantity: u64) -> TransitionOutput {
+    let index = usize::from(WALK_OUTCOME_WIN);
+    let mut post = plane.state.clone();
+
+    let mut hoard = HoardAccount::decode(&post.hoard).expect("pre-exit Hoard decodes");
+    hoard.collateral_atoms = hoard
+        .collateral_atoms
+        .checked_sub(quantity)
+        .expect("bearer payout is fully collateralized");
+    hoard
+        .encode(&mut post.hoard)
+        .expect("post-exit Hoard encodes");
+
+    let mut kernel = KernelAccount::decode(&post.kernel).expect("pre-exit kernel decodes");
+    kernel.total_supply[index] = kernel.total_supply[index]
+        .checked_sub(quantity)
+        .expect("bearer supply covers redemption");
+    kernel
+        .encode(&mut post.kernel)
+        .expect("post-exit kernel encodes");
+
+    let mut supply = SupplyLedgerAccount::decode(&post.supply).expect("pre-exit supply decodes");
+    supply.external_supply[index] = supply.external_supply[index]
+        .checked_sub(quantity)
+        .expect("cached bearer supply covers redemption");
+    supply
+        .encode(&mut post.supply)
+        .expect("post-exit supply encodes");
+
+    /* Keep the offline adapter's ghost representation internally coherent.
+     * It is never presented to the SBF program after bearer truth lands. */
+    let mut ghost = ExternalAccount::decode(&post.external).expect("pre-exit ghost decodes");
+    ghost.balances[index] = ghost.balances[index]
+        .checked_sub(quantity)
+        .expect("ghost bearer balance covers redemption");
+    ghost
+        .encode(&mut post.external)
+        .expect("post-exit ghost encodes");
+    post
+}
+
+fn bearer_redeem_compares(
+    shared: &Shared,
+    plane: &Plane,
+    post: &TransitionOutput,
+    quantity: u64,
+) -> Vec<Compare> {
+    let index = usize::from(WALK_OUTCOME_WIN);
+    let mut compares = vec![
+        compare_of(plane, "hoard", &post.hoard),
+        compare_of(plane, "kernel", &post.kernel),
+        compare_of(plane, "supply", &post.supply),
+        Compare {
+            role: "holder-winning-egg".to_string(),
+            address: shared.holder_outcome_token.address.clone(),
+            expected: token_account_bytes(plane.outcome_mints[index].bytes, shared.holder.bytes, 0),
+            pre: token_account_bytes(
+                plane.outcome_mints[index].bytes,
+                shared.holder.bytes,
+                quantity,
+            ),
+        },
+        Compare {
+            role: "holder-collateral".to_string(),
+            address: shared.holder_collateral_token.address.clone(),
+            expected: token_account_bytes(
+                shared.collateral_mint.bytes,
+                shared.holder.bytes,
+                quantity,
+            ),
+            pre: token_account_bytes(shared.collateral_mint.bytes, shared.holder.bytes, 0),
+        },
+        Compare {
+            role: format!("{}.hoard-token", plane.label),
+            address: plane.hoard_token.address.clone(),
+            expected: immutable_owner_account_bytes(
+                shared.collateral_mint.bytes,
+                plane.hoard_authority.bytes,
+                WALK_CASH + SECOND_ENDOW_AMOUNT - quantity,
+            ),
+            pre: immutable_owner_account_bytes(
+                shared.collateral_mint.bytes,
+                plane.hoard_authority.bytes,
+                WALK_CASH + SECOND_ENDOW_AMOUNT,
+            ),
+        },
+        Compare {
+            role: format!("{}.outcome-mint-{WALK_OUTCOME_WIN}", plane.label),
+            address: plane.outcome_mints[index].address.clone(),
+            expected: mint_bytes(Some(plane.market.bytes), 0, 0),
+            pre: mint_bytes(Some(plane.market.bytes), 0, quantity),
+        },
+    ];
+    let (payer_position, payer_replay) = owner_plane(shared, plane, shared.payer.bytes);
+    let (position_bytes, replay_bytes) = first_endow_owner_bytes(
+        plane,
+        shared.payer.bytes,
+        &payer_position,
+        &payer_replay,
+        SECOND_ENDOW_AMOUNT,
+    );
+    compares.extend([
+        Compare {
+            role: "payer-position".to_string(),
+            address: payer_position.address,
+            expected: position_bytes.clone(),
+            pre: position_bytes,
+        },
+        Compare {
+            role: "payer-replay".to_string(),
+            address: payer_replay.address,
+            expected: replay_bytes.clone(),
+            pre: replay_bytes,
+        },
+    ]);
+    compares
+}
+
 /// Build the signed lane over one actual market address.
 ///
 /// Unlike [`build_lifecycle`], this mutates `plane` after every accepted
@@ -5418,7 +6076,7 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
     let actor = shared.actor.bytes;
     let mut cases = Vec::new();
 
-    /* 1. Create the one market over the current genesis-assisted zero PDAs. */
+    /* 1. Create the one market and all seven state PDAs from absent slots. */
     let create = layout_request(0, create_intent(shared, NONCE_COMMITTED));
     let (founded, founded_resolution) = founding_plane(shared, plane, NONCE_COMMITTED);
     let mut compares: Vec<Compare> = plane
@@ -5431,9 +6089,9 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
     founded_plane.resolution_bytes = founded_resolution;
     for (role, pda, data) in founded_plane.token_accounts(shared) {
         /* Holder accounts are user-side prerequisites, not outputs of
-         * CreateMarket.  They are installed independently in the local
-         * genesis below; the Hoard account and outcome mints are the three
-         * token accounts CreateMarket actually creates. */
+         * CreateMarket. Later committed steps create them through ordinary
+         * signed System and Token-2022 instructions; the Hoard account and
+         * outcome mints are the three token accounts created here. */
         if role.contains("holder-token") {
             continue;
         }
@@ -5448,7 +6106,7 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
         "committed-01-create-market",
         "Committed",
         "layout re-encode + reference::validate_market_init",
-        "create one market identity; its eight program state PDAs are still injected by local genesis and are reported as such",
+        "create one market identity and its seven program state PDAs through signed System CPIs from genuinely absent addresses",
         create_transaction(shared, plane, actor, true, create),
         1,
         compares,
@@ -5458,10 +6116,75 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
     plane.state = founded;
     plane.resolution_bytes = founded_resolution;
 
-    /* 2. The sole inbound value boundary: real Token-2022 deposit. */
+    /* 2-4. Create every ordinary holder account by public System and
+     * Token-2022 instructions. None is installed by validator genesis. */
+    let winning = usize::from(WALK_OUTCOME_WIN);
+    assert_eq!(
+        plane.holder_tokens[winning].bytes, shared.actor_outcome_token.bytes,
+        "the committed actor Egg account must be the fresh signer identity"
+    );
+    cases.push(Case::accept(
+        "committed-02-create-actor-egg-account",
+        "Committed",
+        "System CreateAccount + Token-2022 InitializeAccount3",
+        "create the actor's ordinary winning-Egg account with a fresh test-only account signer",
+        create_holder_token_transaction(
+            shared,
+            &plane.outcome_mints[winning].bytes,
+            &actor,
+            &shared.actor_outcome_token.bytes,
+        ),
+        2,
+        vec![constructed_token_compare(
+            "actor-winning-egg",
+            &shared.actor_outcome_token,
+            plane.outcome_mints[winning].bytes,
+            actor,
+        )],
+    ));
+    cases.push(Case::accept(
+        "committed-03-create-holder-egg-account",
+        "Committed",
+        "System CreateAccount + Token-2022 InitializeAccount3",
+        "create an independent bearer's ordinary winning-Egg account",
+        create_holder_token_transaction(
+            shared,
+            &plane.outcome_mints[winning].bytes,
+            &shared.holder.bytes,
+            &shared.holder_outcome_token.bytes,
+        ),
+        2,
+        vec![constructed_token_compare(
+            "holder-winning-egg",
+            &shared.holder_outcome_token,
+            plane.outcome_mints[winning].bytes,
+            shared.holder.bytes,
+        )],
+    ));
+    cases.push(Case::accept(
+        "committed-04-create-holder-collateral-account",
+        "Committed",
+        "System CreateAccount + Token-2022 InitializeAccount3",
+        "create that bearer's ordinary collateral destination account",
+        create_holder_token_transaction(
+            shared,
+            &shared.collateral_mint.bytes,
+            &shared.holder.bytes,
+            &shared.holder_collateral_token.bytes,
+        ),
+        2,
+        vec![constructed_token_compare(
+            "holder-collateral",
+            &shared.holder_collateral_token,
+            shared.collateral_mint.bytes,
+            shared.holder.bytes,
+        )],
+    ));
+
+    /* 5. The sole inbound value boundary: real Token-2022 deposit. */
     let endow = endow_request(plane, 0, WALK_CASH);
     cases.push(Case::accept(
-        "committed-02-backed-endow",
+        "committed-05-backed-endow",
         "Committed",
         "layout re-encode + exact Token-2022 deltas",
         "debit the actor, credit pooled Hoard custody, credit position cash, and advance replay in one committed transaction",
@@ -5473,13 +6196,68 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
     plane.state.position.copy_from_slice(&position);
     plane.state.replay.copy_from_slice(&replay);
 
-    /* 3. Lock pooled cash as complete-set collateral; no second debit. */
+    /* 6-8. Publicly create and fund a second owner's collateral account, then
+     * let that owner's first Endow atomically create its Position/Replay pair. */
+    cases.push(Case::accept(
+        "committed-06-create-payer-collateral-account",
+        "Committed",
+        "System CreateAccount + Token-2022 InitializeAccount3",
+        "create the fee payer's ordinary collateral account for a second-owner first deposit",
+        create_holder_token_transaction(
+            shared,
+            &shared.collateral_mint.bytes,
+            &shared.payer.bytes,
+            &shared.payer_collateral_token.bytes,
+        ),
+        2,
+        vec![constructed_token_compare(
+            "payer-collateral",
+            &shared.payer_collateral_token,
+            shared.collateral_mint.bytes,
+            shared.payer.bytes,
+        )],
+    ));
+    cases.push(Case::accept(
+        "committed-07-fund-second-owner",
+        "Committed",
+        "Token-2022 TransferChecked",
+        "transfer collateral from the founding actor to the second owner's ordinary account",
+        transfer_second_owner_collateral_transaction(shared, SECOND_ENDOW_AMOUNT),
+        1,
+        second_owner_funding_compares(shared),
+    ));
+    let (payer_position, payer_replay) = owner_plane(shared, plane, shared.payer.bytes);
+    let payer_endow = endow_request_for(
+        plane,
+        Hash32::from_bytes(shared.payer.bytes),
+        0,
+        SECOND_ENDOW_AMOUNT,
+    );
+    cases.push(Case::accept(
+        "committed-08-create-second-owner-with-endow",
+        "Committed",
+        "codec expected-state + exact Token-2022 deltas",
+        "the second owner's first backed Endow creates absent Position and Replay PDAs atomically",
+        endow_transaction_at(
+            shared,
+            plane,
+            &payer_position,
+            &payer_replay,
+            Signer::own(shared, shared.payer.bytes, true)
+                .presenting(&shared.payer_collateral_token),
+            payer_endow,
+        ),
+        1,
+        second_owner_endow_compares(shared, plane, &payer_position, &payer_replay),
+    ));
+
+    /* 9. Lock pooled cash as complete-set collateral; no second debit. */
     let split = walk_layout_request(plane, 1);
     let split_post = plane
         .layout(shared, &split, actor, true)
         .expect("the committed walk splits");
     cases.push(Case::accept(
-        "committed-03-split",
+        "committed-09-split",
         "Committed",
         "reference::apply",
         "lock pooled position cash into complete sets while both custody token balances remain unchanged",
@@ -5496,13 +6274,14 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
     ));
     plane.advance(split_post);
 
-    /* 4-5. Cross the internal/external boundary and partly return. */
+    /* 10-11. Cross the internal/external boundary and partly return. */
     let materialize = walk_layout_request(plane, 2);
+    let materialize_sbf = walk_sbf_layout_request(plane, 2);
     let materialize_post = plane
         .layout(shared, &materialize, actor, true)
         .expect("the committed walk materializes");
     cases.push(Case::accept(
-        "committed-04-materialize",
+        "committed-10-materialize",
         "Committed",
         "reference::apply",
         "mint a real Token-2022 outcome balance against the same market state",
@@ -5512,7 +6291,7 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
             Signer::own(shared, actor, true),
             None,
             Leg::Outcome(WALK_OUTCOME_WIN),
-            materialize,
+            materialize_sbf,
         ),
         1,
         seam_compares(
@@ -5525,11 +6304,12 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
     plane.advance(materialize_post);
 
     let dematerialize = walk_layout_request(plane, 3);
+    let dematerialize_sbf = walk_sbf_layout_request(plane, 3);
     let dematerialize_post = plane
         .layout(shared, &dematerialize, actor, true)
         .expect("the committed walk dematerializes");
     cases.push(Case::accept(
-        "committed-05-dematerialize",
+        "committed-11-dematerialize",
         "Committed",
         "reference::apply",
         "burn part of that outcome balance back into the same internal position",
@@ -5539,7 +6319,7 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
             Signer::own(shared, actor, true),
             None,
             Leg::Outcome(WALK_OUTCOME_WIN),
-            dematerialize,
+            dematerialize_sbf,
         ),
         1,
         seam_compares(
@@ -5551,13 +6331,32 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
     ));
     plane.advance(dematerialize_post);
 
-    /* 6. Unlock part of a complete set; pooled tokens still do not move. */
+    /* 12. Move the remaining materialized Egg to an independent bearer using
+     * only the ordinary Token-2022 program. Clutch state does not move. */
+    let bearer_quantity = walk_unredeemed_external();
+    cases.push(Case::accept(
+        "committed-12-transfer-egg-to-bearer",
+        "Committed",
+        "Token-2022 TransferChecked",
+        "transfer the live winning Egg to a wallet with no Clutch Position or Replay account",
+        transfer_outcome_transaction(
+            shared,
+            &plane.holder_tokens[winning].bytes,
+            &plane.outcome_mints[winning].bytes,
+            &shared.holder_outcome_token.bytes,
+            bearer_quantity,
+        ),
+        1,
+        bearer_transfer_compares(shared, plane, bearer_quantity),
+    ));
+
+    /* 13. Unlock part of a complete set; pooled tokens still do not move. */
     let merge = walk_layout_request(plane, 4);
     let merge_post = plane
         .layout(shared, &merge, actor, true)
         .expect("the committed walk merges");
     cases.push(Case::accept(
-        "committed-06-merge",
+        "committed-13-merge",
         "Committed",
         "reference::apply",
         "unlock complete-set backing back into position cash without pretending that reclassification is a withdrawal",
@@ -5574,12 +6373,12 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
     ));
     plane.advance(merge_post);
 
-    /* 7. A separately identified feed head commits three contiguous pages.
+    /* 14. A separately identified feed head commits three contiguous pages.
      * The market's immutable Terms still name the already-matured feed head;
      * this step proves committing feed sequencing, not that the two identities
      * are one.  That remaining construction gap is reported in the evidence. */
     cases.push(Case::accept(
-        "committed-07-feed-advance",
+        "committed-14-feed-advance",
         "Committed",
         "accumulator fold + FeedAccount codec",
         "commit three contiguous pages against one writable feed identity in one signed transaction",
@@ -5593,7 +6392,7 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
         }],
     ));
 
-    /* 8. Resolve the market on its immutable, matured feed. */
+    /* 15. Resolve the market on its immutable, matured feed. */
     let window = encode_window(shared.feed, &winning_records());
     let resolve = resolve_request(5, WINNING_PAYOUT_INDEX);
     let resolve_post = plane
@@ -5608,7 +6407,7 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
             .expect("a committed resolve writes its record"),
     ));
     let mut case = Case::accept(
-        "committed-08-resolve",
+        "committed-15-resolve",
         "Committed",
         "reference::apply_with_evidence",
         "resolve the same market identity from immutable Terms and a sealed observation window",
@@ -5628,7 +6427,7 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
     cases.push(case);
     plane.advance(resolve_post);
 
-    /* 9. Commit the failed transaction too, and require no watched byte move. */
+    /* 16. Commit the failed transaction too, and require no watched byte move. */
     let late_merge = layout_request(
         6,
         Intent::Merge {
@@ -5638,7 +6437,7 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
         },
     );
     cases.push(Case::refuse(
-        "committed-09-late-merge-refused",
+        "committed-16-late-merge-refused",
         "Committed",
         "merge after resolution must fail without consuming replay or changing state",
         seam_transaction(
@@ -5653,7 +6452,7 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
         "reference::apply: MismatchedState".to_string(),
     ));
 
-    /* 10-11. Internal redemptions are reclassifications into stranded cash,
+    /* 17-18. Internal redemptions are reclassifications into stranded cash,
      * not physical payouts; there is no Withdraw instruction yet. */
     let redeem_win = redeem_request(6, WALK_OUTCOME_WIN, walk_redeem_winning());
     let redeem_win_post = plane
@@ -5668,7 +6467,7 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
             .expect("redemption returns the record unchanged"),
     ));
     let mut case = Case::accept(
-        "committed-10-redeem-winning-internal",
+        "committed-17-redeem-winning-internal",
         "Committed",
         "reference::apply_with_evidence",
         "burn winning internal claims into position cash; pooled custody remains inside the Hoard",
@@ -5701,7 +6500,7 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
             .expect("redemption returns the record unchanged"),
     ));
     let mut case = Case::accept(
-        "committed-11-redeem-losing-internal",
+        "committed-18-redeem-losing-internal",
         "Committed",
         "reference::apply_with_evidence",
         "burn losing internal claims for zero while leaving the same pooled custody untouched",
@@ -5721,13 +6520,60 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
     cases.push(case);
     plane.advance(redeem_lose_post);
 
+    /* 19. First prove late-fault atomicity: one bearer exit completes, an
+     * identical sibling then finds the source empty, and the whole transaction
+     * must roll every state write and both Token-2022 CPIs back. */
+    let external_request = redeem_external_request(shared, plane, bearer_quantity);
+    let mut case = Case::refuse(
+        "committed-19-external-exit-rollback",
+        "Committed",
+        "a successful bearer burn+payout followed by a duplicate exit must fail atomically",
+        redeem_external_transaction_repeated(
+            shared,
+            plane,
+            WALK_OUTCOME_WIN,
+            external_request.clone(),
+            2,
+        ),
+        code::TOKEN_DELTA_MISMATCH,
+        "n/a (runtime atomicity over two production instructions)".to_string(),
+    );
+    case.instruction_count = 2;
+    case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+    cases.push(case);
+
+    /* 20. The independent bearer burns its real Token-2022 claim and receives
+     * the exact unit-vector payout directly from pooled custody. */
+    let external_post = bearer_redeem_post(plane, bearer_quantity);
+    let mut case = Case::accept(
+        "committed-20-redeem-external-bearer",
+        "Committed",
+        "codec expected-state + exact Token-2022 deltas",
+        "burn the independent bearer's winning Egg and pay collateral without any claimant Position, External, or Replay account",
+        redeem_external_transaction(
+            shared,
+            plane,
+            WALK_OUTCOME_WIN,
+            external_request,
+        ),
+        1,
+        bearer_redeem_compares(shared, plane, &external_post, bearer_quantity),
+    );
+    case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+    cases.push(case);
+    plane.advance(external_post);
+
     let hoard = HoardAccount::decode(&plane.state.hoard).expect("terminal Hoard decodes");
     let position =
         PositionAccount::decode(&plane.state.position).expect("terminal position decodes");
     assert_eq!(
-        hoard.collateral_atoms + position.cash_atoms,
-        WALK_CASH,
-        "the committed terminal ledger must still equal deposited custody"
+        hoard.collateral_atoms + position.cash_atoms + SECOND_ENDOW_AMOUNT + bearer_quantity,
+        WALK_CASH + SECOND_ENDOW_AMOUNT,
+        "both owners' stranded internal cash plus the paid bearer exit must equal deposits"
+    );
+    assert_eq!(
+        hoard.collateral_atoms, 0,
+        "all terminal backing is discharged"
     );
     assert_eq!(
         position.internal, [0; MAX_OUTCOMES],
@@ -5968,7 +6814,6 @@ fn emit_committed_plan(out_dir: &Path, f: &Fixture) {
      * not at Realm construction. */
     plan.account("realm", &shared.realm, &shared.realm_bytes);
     plan.account("profile", &shared.profile, &shared.profile_bytes);
-    plan.account("grid", &shared.grid, &shared.grid_bytes);
     plan.account("terms", &shared.terms, &shared.terms_bytes);
     plan.account("feed", &shared.feed_head, &shared.feed_bytes);
     plan.account(
@@ -5994,33 +6839,9 @@ fn emit_committed_plan(out_dir: &Path, f: &Fixture) {
     plan.owned("actor-lamports", &shared.actor, SYSTEM_PROGRAM, &[]);
 
     let mut market = Plane::build(shared, "committed-market", NONCE_COMMITTED, WALK_GENERATION);
-    /* These are the eight accounts an ordinary wallet cannot currently
-     * create.  Zero bytes are required by CreateMarket, but program ownership
-     * is privileged and comes only from validator genesis in this lane. */
-    for (role, pda) in market.state_roles() {
-        plan.account(
-            &format!("{}.{}", market.label, role),
-            pda,
-            market.state_slice(role),
-        );
-    }
-    plan.account(
-        &format!("{}.resolution", market.label),
-        &market.resolution,
-        &market.resolution_bytes,
-    );
-
-    /* CreateMarket creates the outcome mints, but a holder account is a user
-     * prerequisite and no current public instruction creates it.  Installing
-     * it here is another explicitly enumerated genesis seam. */
-    for outcome in 0..usize::from(OUTCOME_COUNT) {
-        let data = token_account_bytes(market.outcome_mints[outcome].bytes, shared.actor.bytes, 0);
-        plan.token_account(
-            &format!("{}.holder-token-{outcome}", market.label),
-            &market.holder_tokens[outcome],
-            &data,
-        );
-    }
+    /* All seven program state targets, the Hoard token account, the outcome
+     * mints, and every user-side token account are deliberately absent. The
+     * committed cases create them through ordinary signed instructions. */
 
     plan.account("resolve-buffer", &f.resolve_buffer, &f.resolve_buffer_bytes);
     plan.account("redeem-buffer", &f.redeem_buffer, &f.redeem_buffer_bytes);
@@ -6057,10 +6878,11 @@ fn emit_committed_plan(out_dir: &Path, f: &Fixture) {
         })
         .collect();
     let committed = format!(
-        "{{\n  \"program_id\": {},\n  \"payer\": {},\n  \"actor\": {},\n  \"genesis_assisted\": true,\n  \"precreated_program_accounts\": [\n{}\n  ],\n  \"steps\": [\n{}\n  ]\n}}\n",
+        "{{\n  \"program_id\": {},\n  \"payer\": {},\n  \"actor\": {},\n  \"holder\": {},\n  \"genesis_assisted\": true,\n  \"precreated_program_accounts\": [\n{}\n  ],\n  \"steps\": [\n{}\n  ]\n}}\n",
         json_string(&shared.program.address),
         json_string(&shared.payer.address),
         json_string(&shared.actor.address),
+        json_string(&shared.holder.address),
         precreated.join(",\n"),
         cases.join(",\n")
     );
@@ -6084,7 +6906,9 @@ fn emit_committed_plan(out_dir: &Path, f: &Fixture) {
             Some(code) => println!("  refuse {:<40} Custom(0x{code:04x})", case.name),
         }
     }
-    println!("terminal     no Withdraw and no RedeemExternal: not lifecycle-complete");
+    println!(
+        "terminal     bearer exit drained; two owners retain free cash because WithdrawCash is absent"
+    );
 }
 
 fn main() {
@@ -6439,7 +7263,7 @@ mod tests {
     }
 
     #[test]
-    fn the_committed_plan_uses_one_market_and_two_real_signer_slots() {
+    fn the_committed_plan_uses_one_market_and_only_declared_signer_slots() {
         let f = build_fixture();
         let mut market = Plane::build(
             &f.shared,
@@ -6454,13 +7278,12 @@ mod tests {
             .chain(std::iter::once(market.resolution.address.clone()))
             .collect();
         let cases = build_committed_cases(&f, &mut market);
-        assert_eq!(cases.len(), 11, "the committed lane has eleven steps");
+        assert_eq!(cases.len(), 20, "the committed lane has twenty steps");
         for case in &cases {
-            assert_eq!(
-                case.tx.first(),
-                Some(&2),
-                "{} must reserve exactly payer and actor signature slots",
-                case.name
+            assert!(
+                case.tx.first().is_some_and(|count| (1..=2).contains(count)),
+                "{} must reserve only its one or two declared signer slots",
+                case.name,
             );
             assert!(case.tx.len() <= 1232, "{} exceeds one packet", case.name);
             for compare in case.compare.iter().flatten().filter(|entry| {
@@ -6471,7 +7294,6 @@ mod tests {
                             | "hoard"
                             | "position"
                             | "kernel"
-                            | "external"
                             | "replay"
                             | "supply"
                             | "resolution"
@@ -6491,6 +7313,15 @@ mod tests {
             replay.sequence, 8,
             "one identity consumed eight accepted intents"
         );
+        let (payer_position, payer_replay) = owner_plane(&f.shared, &market, f.shared.payer.bytes);
+        let terminal = cases.last().expect("terminal bearer redemption");
+        let compares = terminal.compare.as_ref().expect("terminal accepts");
+        for address in [payer_position.address, payer_replay.address] {
+            assert!(
+                compares.iter().any(|compare| compare.address == address),
+                "the terminal reload must retain the second owner's state"
+            );
+        }
     }
 
     #[test]
