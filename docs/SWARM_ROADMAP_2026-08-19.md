@@ -28,9 +28,12 @@ protocol in which:
 6. the static Glass explains those facts without acquiring wallet, RPC,
    signing, submission, or truth authority.
 
-Local/offline only remains the controlling authority boundary.  No lane may
-deploy, push, publish, contact regulators, use a public RPC, sign with real
-keys or funds, or infer production readiness.
+Authority boundary (amended 2026-08-19): ember explicitly authorized public
+TESTNET/devnet deployment with fresh throwaway keys and bounded public-RPC
+use, under Track C of docs/DEPLOYMENT_REVENUE_BOUNDARY.md. Outside that exact
+scope, the prior rule stands: no lane may touch mainnet, real keys or funds,
+publication of official claims, or regulator contact, or infer production
+readiness.
 
 ## 2. Snapshot: what is real now
 

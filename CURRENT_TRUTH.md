@@ -116,8 +116,17 @@ plus full comparison evidence). This is an independent same-source rebuild
 with classified divergence, not a release, deployment, or audit claim.
 
 No signed tag, macOS byte-level seal reproduction,
-public-network deployment, official client URL, or value-bearing market
-exists. Nothing here authorizes signing, funding, deployment, publication,
+official client URL, or value-bearing market
+exists. On 2026-08-19 ember explicitly authorized public TESTNET/devnet
+deployment with fresh throwaway keys and bounded public-RPC use, superseding
+the earlier local-only boundary for that exact scope; the authorized frame is
+Track C of docs/DEPLOYMENT_REVENUE_BOUNDARY.md (author-affiliated research
+deployment: no real value, exact build identity, measured operation, and no
+claim that devnet answers any legal question). Mainnet, real value, customer
+anything, the production source-registry flip, filings, and official-claim
+language remain outside this authorization. Deployment facts, when they
+exist, are recorded in their own dated record and never promote local
+evidence. Nothing here authorizes real-value signing, funding, publication,
 regulator contact, or an “official” claim.
 
 The scoped adversarial review at `f48b13c` found no hidden active P0 in the
