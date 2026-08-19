@@ -39,6 +39,31 @@ program-owned account has the exact width, decodes under the same binding, and
 is byte-identical.  Otherwise it refuses.  A stage is closed only in the same
 atomic successful transaction that admits the final artifact.
 
+## Predictable-address prefunding
+
+Every stage and final address is predictable before creation.  A third party
+can therefore transfer lamports to the empty System-owned address, but that
+does not let it squat the PDA.  `BeginArtifact` and the creating branch of
+`SealArtifact` use three System Program operations:
+
+1. transfer exactly `max(rent_minimum - existing_lamports, 0)` from the signed
+   funder;
+2. allocate the exact frozen account width under PDA signature; and
+3. assign the allocated account to Dragon's Clutch under the same signature.
+
+The target must still be writable, non-executable, System-owned, and have zero
+data.  Data-bearing, executable, or non-System targets refuse before CPI.  The
+canonical PDA derivation is checked independently, so an existing balance has
+no naming or authorization effect.
+
+Existing lamports are an unsolicited donation, never an authority, fee
+credit, or refund claim.  If the balance exceeds the rent minimum, no payer
+lamports are transferred.  Excess on an immutable final stays in that final.
+A stage remains governed by its single frozen close destination: every stage
+lamport, including an unsolicited prefund, eventually goes to the recorded
+funder on seal, abort, or public reap.  There is deliberately no attacker
+refund role or second accounting balance.
+
 ## Fail-closed properties
 
 - Stages are uploader-scoped, so one abandoned partial upload cannot occupy
@@ -54,6 +79,8 @@ atomic successful transaction that admits the final artifact.
 - All instructions use sequence zero because the stage cursor and lifecycle
   are the replay state.  A nonzero envelope sequence refuses rather than
   creating a second replay truth.
+- One lamport or an over-rent balance at an otherwise empty canonical stage or
+  final PDA cannot block creation; only the exact rent shortfall is charged.
 
 ## Runtime SHA boundary
 
@@ -100,14 +127,23 @@ A second bank case uploads and seals both other admitted artifact kinds and
 observes the exact canonical collateral-policy and price-grid bytes at their
 respective final PDAs under the default transaction budget.
 
+The prefunding cases start both a stage and final PDA as one-lamport,
+zero-data System accounts, observe successful signed allocation and
+assignment, and prove the funder is charged exactly each rent shortfall.  A
+second case starts both PDAs above their rent floors, proves there is no funder
+debit, observes the final retain its excess, and observes the stage's entire
+balance return to its recorded funder.  The stale-digest Terms case also starts
+the final with one lamport and proves the late semantic refusal rolls both the
+complete stage and that prefunded final back byte-for-byte.
+
 The expiry case proves an unrelated signer cannot abort a live stage, then
 warps beyond expiry and proves that signer can reap it while all rent returns
 to the recorded funder and none goes to the reaper.
 
-In the local real-SBF run on 2026-08-18, the largest first write consumed
-28,751 CU and a new Terms seal consumed 14,597 CU under the default 200,000-CU
-budget.  These figures are execution evidence for that build, not a frozen
-cost promise.
+In the local real-SBF run on 2026-08-19, the largest first write consumed
+28,751 CU and a new Terms seal using the prefund-safe allocation path consumed
+18,045 CU under the default 200,000-CU budget.  These figures are execution
+evidence for that build, not a frozen cost promise.
 
 The whole program's current SBF build still reports pre-existing stack-frame
 warnings in unrelated reference/order-batch functions.  Consequently this

@@ -22,6 +22,7 @@ use {
     solana_instruction::{error::InstructionError, AccountMeta, Instruction},
     solana_keypair::Keypair,
     solana_program_test::{tokio, ProgramTest, ProgramTestContext},
+    solana_rent::Rent,
     solana_signer::Signer,
     solana_transaction::Transaction,
     solana_transaction_error::TransactionError,
@@ -32,6 +33,16 @@ const CLOCK_SYSVAR: Address = Address::new_from_array([
     75, 109, 92, 115, 85, 91, 33, 0, 0, 0, 0,
 ]);
 const UPLOADER_LAMPORTS: u64 = 2_000_000_000;
+
+fn empty_system_account(lamports: u64) -> Account {
+    Account {
+        lamports,
+        data: Vec::new(),
+        owner: SYSTEM_PROGRAM,
+        executable: false,
+        rent_epoch: 0,
+    }
+}
 
 fn uploader() -> Keypair {
     Keypair::new_from_array([
@@ -291,6 +302,36 @@ async fn upload_all(
     (stage, final_account)
 }
 
+async fn write_all_chunks(
+    context: &mut ProgramTestContext,
+    author: &Keypair,
+    stage: Address,
+    kind: ArtifactKind,
+    binding_context: Hash32,
+    digest: Hash32,
+    body: &[u8],
+) {
+    let mut cursor = 0;
+    while cursor < body.len() {
+        send(
+            context,
+            write_ix(
+                author.pubkey(),
+                stage,
+                kind,
+                binding_context,
+                digest,
+                cursor,
+                body,
+            ),
+            author,
+        )
+        .await
+        .expect("typed artifact write");
+        cursor += ARTIFACT_CHUNK_BYTES.min(body.len() - cursor);
+    }
+}
+
 fn encode_terms(mut terms: TermsAccount) -> (Vec<u8>, Hash32, u8) {
     let (address, bump) = derive_final(ArtifactKind::Terms, terms.realm, terms.terms);
     let _ = address;
@@ -370,6 +411,158 @@ async fn every_admitted_artifact_kind_lands_as_its_exact_raw_codec() {
 }
 
 #[tokio::test]
+async fn one_lamport_stage_and_final_prefunds_are_topped_up_by_exact_shortfalls() {
+    let author = uploader();
+    let kind = ArtifactKind::CollateralPolicy;
+    let policy = fixture_policy([0xa1; 32]);
+    let digest = policy.digest().expect("policy digest");
+    let profile = ParentProfile::from_policy(&policy)
+        .and_then(|parent| parent.identity())
+        .expect("profile identity");
+    let body = policy.canonical_bytes().expect("policy bytes");
+    let (stage, _) = derive_stage(author.pubkey(), kind, profile, digest);
+    let (final_account, _) = derive_final(kind, profile, digest);
+    let stage_minimum = Rent::default()
+        .minimum_balance(ARTIFACT_STAGE_HEADER_BYTES + body.len())
+        .max(1);
+    let final_minimum = Rent::default().minimum_balance(body.len()).max(1);
+
+    let mut context = new_bank(&[
+        (author.pubkey(), empty_system_account(UPLOADER_LAMPORTS)),
+        (stage, empty_system_account(1)),
+        (final_account, empty_system_account(1)),
+    ])
+    .start_with_context()
+    .await;
+    let before_begin = account(&mut context, author.pubkey())
+        .await
+        .unwrap()
+        .lamports;
+    send(
+        &mut context,
+        begin_ix(author.pubkey(), stage, kind, profile, digest, 1_000),
+        &author,
+    )
+    .await
+    .expect("one-lamport stage prefund cannot squat BeginArtifact");
+    let staged = account(&mut context, stage).await.expect("allocated stage");
+    assert_eq!(staged.owner, PROGRAM_ID);
+    assert_eq!(staged.lamports, stage_minimum);
+    assert_eq!(
+        account(&mut context, author.pubkey())
+            .await
+            .unwrap()
+            .lamports,
+        before_begin - (stage_minimum - 1),
+        "Begin debits exactly the rent shortfall"
+    );
+
+    write_all_chunks(&mut context, &author, stage, kind, profile, digest, &body).await;
+    let before_seal = account(&mut context, author.pubkey())
+        .await
+        .unwrap()
+        .lamports;
+    send(
+        &mut context,
+        seal_ix(author.pubkey(), stage, final_account, kind, profile, digest),
+        &author,
+    )
+    .await
+    .expect("one-lamport final prefund cannot squat SealArtifact");
+    assert!(account(&mut context, stage).await.is_none());
+    let final_state = account(&mut context, final_account)
+        .await
+        .expect("allocated final");
+    assert_eq!(final_state.owner, PROGRAM_ID);
+    assert_eq!(final_state.data, body);
+    assert_eq!(final_state.lamports, final_minimum);
+    assert_eq!(
+        account(&mut context, author.pubkey())
+            .await
+            .unwrap()
+            .lamports,
+        before_seal - (final_minimum - 1) + stage_minimum,
+        "Seal debits only the final rent shortfall and returns the whole stage"
+    );
+}
+
+#[tokio::test]
+async fn excess_prefunds_are_donations_and_never_squatting_authority() {
+    let author = uploader();
+    let kind = ArtifactKind::CollateralPolicy;
+    let policy = fixture_policy([0xb1; 32]);
+    let digest = policy.digest().expect("policy digest");
+    let profile = ParentProfile::from_policy(&policy)
+        .and_then(|parent| parent.identity())
+        .expect("profile identity");
+    let body = policy.canonical_bytes().expect("policy bytes");
+    let (stage, _) = derive_stage(author.pubkey(), kind, profile, digest);
+    let (final_account, _) = derive_final(kind, profile, digest);
+    let stage_donation = Rent::default()
+        .minimum_balance(ARTIFACT_STAGE_HEADER_BYTES + body.len())
+        .max(1)
+        + 37;
+    let final_donation = Rent::default().minimum_balance(body.len()).max(1) + 53;
+
+    let mut context = new_bank(&[
+        (author.pubkey(), empty_system_account(UPLOADER_LAMPORTS)),
+        (stage, empty_system_account(stage_donation)),
+        (final_account, empty_system_account(final_donation)),
+    ])
+    .start_with_context()
+    .await;
+    let before_begin = account(&mut context, author.pubkey())
+        .await
+        .unwrap()
+        .lamports;
+    send(
+        &mut context,
+        begin_ix(author.pubkey(), stage, kind, profile, digest, 1_000),
+        &author,
+    )
+    .await
+    .expect("overfunded stage remains creatable");
+    assert_eq!(
+        account(&mut context, author.pubkey())
+            .await
+            .unwrap()
+            .lamports,
+        before_begin,
+        "an overfunded target causes no payer debit"
+    );
+    assert_eq!(
+        account(&mut context, stage).await.unwrap().lamports,
+        stage_donation
+    );
+
+    write_all_chunks(&mut context, &author, stage, kind, profile, digest, &body).await;
+    let before_seal = account(&mut context, author.pubkey())
+        .await
+        .unwrap()
+        .lamports;
+    send(
+        &mut context,
+        seal_ix(author.pubkey(), stage, final_account, kind, profile, digest),
+        &author,
+    )
+    .await
+    .expect("overfunded final remains creatable");
+    assert_eq!(
+        account(&mut context, final_account).await.unwrap().lamports,
+        final_donation,
+        "the persistent final retains its unsolicited excess"
+    );
+    assert_eq!(
+        account(&mut context, author.pubkey())
+            .await
+            .unwrap()
+            .lamports,
+        before_seal + stage_donation,
+        "the transient stage keeps one close destination, including donations"
+    );
+}
+
+#[tokio::test]
 async fn native_terms_hash_rejects_a_semantically_valid_body_with_a_stale_digest() {
     let author = uploader();
     let realm = Hash32::from_bytes([0x81; 32]);
@@ -396,9 +589,13 @@ async fn native_terms_hash_rejects_a_semantically_valid_body_with_a_stale_digest
         executable: false,
         rent_epoch: 0,
     };
-    let mut context = new_bank(&[(author.pubkey(), author_genesis)])
-        .start_with_context()
-        .await;
+    let final_prefund = empty_system_account(1);
+    let mut context = new_bank(&[
+        (author.pubkey(), author_genesis),
+        (final_account, final_prefund.clone()),
+    ])
+    .start_with_context()
+    .await;
     send(
         &mut context,
         begin_ix(
@@ -456,7 +653,11 @@ async fn native_terms_hash_rejects_a_semantically_valid_body_with_a_stale_digest
         before,
         "digest refusal rolls the complete stage back byte-exactly"
     );
-    assert!(account(&mut context, final_account).await.is_none());
+    assert_eq!(
+        account(&mut context, final_account).await.unwrap(),
+        final_prefund,
+        "late semantic refusal rolls a prefunded final back byte-exactly"
+    );
 }
 
 #[tokio::test]

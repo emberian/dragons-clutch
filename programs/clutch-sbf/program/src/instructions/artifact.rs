@@ -25,9 +25,14 @@ use clutch_solana_layout::{CodecError, TermsAccount, HASH_BYTES};
 use clutch_solana_layout::{Hash32, Intent};
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
+use solana_cpi::{invoke, invoke_signed};
+use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
-use super::genesis::{create_pda_account, read_rent, require_creatable, require_system_program};
+use super::genesis::{
+    read_rent, require_system_program, RentParameters, MAX_PERMITTED_DATA_INCREASE,
+    SYSTEM_PROGRAM_ID,
+};
 
 /// Shortest stage lifetime admitted at creation.
 pub const MIN_UPLOAD_LIFETIME_SLOTS: u64 = 8;
@@ -37,6 +42,19 @@ pub const MIN_UPLOAD_LIFETIME_SLOTS: u64 = 8;
 /// exact duration guarantee.  An uploader that needs longer may abort and
 /// restart at the same uploader-keyed PDA after the old stage is closed.
 pub const MAX_UPLOAD_LIFETIME_SLOTS: u64 = 432_000;
+
+// `SystemInstruction` is bincode-encoded.  These are the frozen enum variant
+// indices and payload widths for Assign, Transfer, and Allocate in
+// `solana-system-interface`.  Artifact creation deliberately uses the three
+// instructions rather than CreateAccount: a third party can transfer lamports
+// to any predictable PDA before it exists, and CreateAccount rejects that
+// otherwise harmless prefund.
+const SYSTEM_IX_ASSIGN: u32 = 1;
+const SYSTEM_IX_TRANSFER: u32 = 2;
+const SYSTEM_IX_ALLOCATE: u32 = 8;
+const SYSTEM_TRANSFER_DATA_LEN: usize = 4 + 8;
+const SYSTEM_ALLOCATE_DATA_LEN: usize = 4 + 8;
+const SYSTEM_ASSIGN_DATA_LEN: usize = 4 + 32;
 
 const _: () = {
     assert!(MIN_UPLOAD_LIFETIME_SLOTS > 0);
@@ -107,6 +125,129 @@ pub fn read_clock_slot(account: &AccountInfo) -> Outcome<u64> {
 
 fn require_zero_sequence(sequence: u64) -> Outcome<()> {
     require(sequence == 0, ClutchError::Replay)
+}
+
+fn require_artifact_creation_target(target: &AccountInfo) -> Outcome<()> {
+    require(target.is_writable, ClutchError::NotWritable)?;
+    require(!target.executable, ClutchError::ExecutableAccount)?;
+    require(
+        target.data_len() == 0 && *target.owner == SYSTEM_PROGRAM_ID,
+        ClutchError::AlreadyInitialized,
+    )
+}
+
+fn system_transfer_data(lamports: u64) -> [u8; SYSTEM_TRANSFER_DATA_LEN] {
+    let mut data = [0_u8; SYSTEM_TRANSFER_DATA_LEN];
+    data[..4].copy_from_slice(&SYSTEM_IX_TRANSFER.to_le_bytes());
+    data[4..].copy_from_slice(&lamports.to_le_bytes());
+    data
+}
+
+fn system_allocate_data(space: usize) -> [u8; SYSTEM_ALLOCATE_DATA_LEN] {
+    let mut data = [0_u8; SYSTEM_ALLOCATE_DATA_LEN];
+    data[..4].copy_from_slice(&SYSTEM_IX_ALLOCATE.to_le_bytes());
+    data[4..].copy_from_slice(&(space as u64).to_le_bytes());
+    data
+}
+
+fn system_assign_data(owner: &Pubkey) -> [u8; SYSTEM_ASSIGN_DATA_LEN] {
+    let mut data = [0_u8; SYSTEM_ASSIGN_DATA_LEN];
+    data[..4].copy_from_slice(&SYSTEM_IX_ASSIGN.to_le_bytes());
+    data[4..].copy_from_slice(&owner.to_bytes());
+    data
+}
+
+/// Allocate and assign an exact artifact PDA even if someone prefunded it.
+///
+/// Any lamports already present are an unsolicited donation, never identity,
+/// authority, a fee credit, or a refund claim.  The payer supplies exactly the
+/// rent shortfall.  A persistent final retains any excess; a transient stage
+/// follows its one frozen close destination, so all of its lamports eventually
+/// go to the recorded funder on seal, abort, or reap.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn create_artifact_pda<'a>(
+    program_id: &Pubkey,
+    payer: &AccountInfo<'a>,
+    target: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    rent: &RentParameters,
+    space: usize,
+    signer_seeds: &[&[u8]],
+) -> Outcome<()> {
+    require_artifact_creation_target(target)?;
+    require_signer(payer)?;
+    require(payer.is_writable, ClutchError::NotWritable)?;
+    require_system_program(system_program)?;
+    require(
+        space <= MAX_PERMITTED_DATA_INCREASE,
+        ClutchError::AccountCreationFailed,
+    )?;
+
+    let initial_lamports = target.lamports();
+    let minimum_balance = rent.minimum_balance(space)?;
+    let shortfall = minimum_balance.saturating_sub(initial_lamports);
+    let funded_balance = initial_lamports
+        .checked_add(shortfall)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+
+    if shortfall != 0 {
+        let transfer = Instruction::new_with_bytes(
+            SYSTEM_PROGRAM_ID,
+            &system_transfer_data(shortfall),
+            vec![
+                AccountMeta::new(*payer.key, true),
+                AccountMeta::new(*target.key, false),
+            ],
+        );
+        invoke(
+            &transfer,
+            &[payer.clone(), target.clone(), system_program.clone()],
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+        require(
+            target.lamports() == funded_balance
+                && target.data_len() == 0
+                && *target.owner == SYSTEM_PROGRAM_ID,
+            ClutchError::AccountCreationFailed,
+        )?;
+    }
+
+    let allocate = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &system_allocate_data(space),
+        vec![AccountMeta::new(*target.key, true)],
+    );
+    invoke_signed(
+        &allocate,
+        &[target.clone(), system_program.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        target.lamports() == funded_balance
+            && target.data_len() == space
+            && *target.owner == SYSTEM_PROGRAM_ID,
+        ClutchError::AccountCreationFailed,
+    )?;
+
+    let assign = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &system_assign_data(program_id),
+        vec![AccountMeta::new(*target.key, true)],
+    );
+    invoke_signed(
+        &assign,
+        &[target.clone(), system_program.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        target.lamports() == funded_balance
+            && target.data_len() == space
+            && target.owner == program_id,
+        ClutchError::AccountCreationFailed,
+    )
 }
 
 fn require_stage_metadata(program_id: &Pubkey, stage: &AccountInfo) -> Outcome<()> {
@@ -188,7 +329,7 @@ fn begin(
         stored_bump: bump,
     };
     let space = header.account_len()?;
-    create_pda_account(
+    create_artifact_pda(
         program_id,
         &accounts[IX_FUNDER],
         &accounts[IX_STAGE],
@@ -314,7 +455,7 @@ fn create_final<'a>(
     let context = binding.context.bytes();
     let digest = binding.digest.bytes();
     match binding.kind {
-        ArtifactKind::CollateralPolicy => create_pda_account(
+        ArtifactKind::CollateralPolicy => create_artifact_pda(
             program_id,
             payer,
             final_account,
@@ -323,7 +464,7 @@ fn create_final<'a>(
             usize::from(binding.exact_len),
             &[seeds::SEED_POLICY, &context, &digest, &[bump]],
         ),
-        ArtifactKind::PriceGrid => create_pda_account(
+        ArtifactKind::PriceGrid => create_artifact_pda(
             program_id,
             payer,
             final_account,
@@ -332,7 +473,7 @@ fn create_final<'a>(
             usize::from(binding.exact_len),
             &[seeds::SEED_GRID, &context, &digest, &[bump]],
         ),
-        ArtifactKind::Terms => create_pda_account(
+        ArtifactKind::Terms => create_artifact_pda(
             program_id,
             payer,
             final_account,
@@ -427,7 +568,6 @@ fn seal(
             ClutchError::EvidenceBufferMismatch,
         )?;
     } else {
-        require_creatable(&accounts[IX_FINAL])?;
         create_final(
             program_id,
             &accounts[IX_FUNDER],
