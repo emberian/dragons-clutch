@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Signed, committing, same-market local SBF evidence.
+# Signed, committing, same-market local SBF evidence against the explicitly
+# different non-production mock-source ELF.
 #
 # This script refuses non-loopback operation by construction. It creates fresh
 # test-only keys for the payer, actor, bearer, and their ordinary Token-2022
@@ -9,7 +10,11 @@
 # account bytes.  It then corrupts one terminal expectation, starts a fresh
 # local ledger, and requires the same walk to go red.
 #
-# The plan is explicitly genesis-assisted. Its terminal WithdrawCash steps
+# The plan is explicitly genesis-assisted and its successful Endow depends on
+# the one deterministic laboratory release compiled by
+# `non-production-mock-source`. The default empty-registry ELF is exercised by
+# separate fail-closed gates and must never be credited with this success. Its
+# terminal WithdrawCash steps
 # drain both owners' free cash and the pooled Hoard, but it still does not prove
 # authenticated source ingestion or an end-to-end venue lifecycle.
 set -euo pipefail
@@ -116,9 +121,11 @@ echo "== source =="
   | sed 's/^/  /'
 
 echo
-echo "== current SBF ELF =="
+echo "== NON-PRODUCTION mock-source SBF ELF =="
+echo "source_profile=NON-PRODUCTION-non-production-mock-source"
 CARGO_NET_OFFLINE=true "$build_sbf" \
   --manifest-path "$root/program/Cargo.toml" --sbf-out-dir "$out" \
+  --features non-production-mock-source \
   >"$log/build.log" 2>&1 || {
     tail -60 "$log/build.log"
     exit 1
@@ -140,13 +147,13 @@ CLUTCH_COMMITTED_HOLDER_COLLATERAL_TOKEN="$holder_collateral_token" \
     -p clutch-sbf-harness -- "$plan" --committed \
     | tee "$log/plan.log"
 program_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["program_id"])' "$plan/committed.json")"
-read -r committed_steps committed_refusals committed_watched committed_precreated <<EOF
+read -r committed_steps committed_refusals committed_exhausted committed_watched committed_precreated <<EOF
 $(python3 - "$plan/committed.json" <<'PY'
 import json, sys
 plan = json.load(open(sys.argv[1]))
 steps = plan["steps"]
 watched = {entry["address"] for step in steps for entry in step.get("compare", [])}
-print(len(steps), sum(step["kind"] == "refuse" for step in steps), len(watched), len(plan["precreated_program_accounts"]))
+print(len(steps), sum(step["kind"] == "refuse" for step in steps), sum(step["kind"] == "exhausted" for step in steps), len(watched), len(plan["precreated_program_accounts"]))
 PY
 )
 EOF
@@ -241,6 +248,7 @@ victim=""
 echo
 echo "committed_signed_transactions=$committed_steps"
 echo "committed_expected_refusals=$committed_refusals"
+echo "committed_compute_exhaustions=$committed_exhausted"
 echo "committed_watched_accounts=$committed_watched"
 echo "genesis_assisted_program_accounts=$committed_precreated"
 echo "withdraw_cash=DRIVEN_TO_ZERO"

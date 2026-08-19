@@ -1120,12 +1120,14 @@ def build_gates() -> list[dict[str, Any]]:
                 "command": "programs/clutch-sbf/scripts/run_committed.sh",
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [
+                    r"^source_profile=NON-PRODUCTION-non-production-mock-source$",
                     r"^== signed, confirmed, committed walk ==$",
                     r"^  red: committed-.*committed bytes differ(?: \(observed .*, expected .*\))?$",
                     r"^committed_signed_transactions=22$",
-                    r"^committed_expected_refusals=2$",
+                    r"^committed_expected_refusals=1$",
+                    r"^committed_compute_exhaustions=1$",
                     r"^committed_watched_accounts=18$",
-                    r"^genesis_assisted_program_accounts=11$",
+                    r"^genesis_assisted_program_accounts=12$",
                     r"^withdraw_cash=DRIVEN_TO_ZERO$",
                     r"^redeem_external=DRIVEN$",
                     r"^falsifiability=PASS$",
@@ -1133,10 +1135,12 @@ def build_gates() -> list[dict[str, Any]]:
                 ],
                 "note": (
                     "22 signed, confirmed same-market loopback transactions with "
-                    "two checked rollback refusals, 18 watched accounts, and a "
-                    "required terminal-byte falsification run. The prestate has 11 "
+                    "one checked semantic refusal, one exact compute-ceiling STOP "
+                    "with rollback, 18 watched accounts, and a required terminal-byte "
+                    "falsification run. The prestate has 12 "
                     "program-owned genesis-assisted prerequisites; this is local "
-                    "runtime evidence, not blank-bank, source-ingestion, deployment, "
+                    "runtime evidence against the explicit mock-source ELF, not "
+                    "blank-bank, production source-ingestion, deployment, "
                     "devnet, or mainnet evidence."
                 ),
             },

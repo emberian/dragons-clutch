@@ -231,6 +231,15 @@ fn custom_error_code(error: &Value) -> Option<u64> {
         .as_u64()
 }
 
+fn computational_budget_exhausted(error: &Value) -> bool {
+    error
+        .get("InstructionError")
+        .and_then(Value::as_array)
+        .and_then(|parts| parts.get(1))
+        .and_then(Value::as_str)
+        == Some("ComputationalBudgetExceeded")
+}
+
 fn latest_blockhash(url: &str) -> Result<[u8; 32]> {
     let result = rpc(
         url,
@@ -416,6 +425,44 @@ fn load_keypairs(plan: &Plan, paths: &[String]) -> Result<Vec<Keypair>> {
     Ok(keypairs)
 }
 
+fn verify_nonaccepting_step(
+    url: &str,
+    step: &Step,
+    error: &Value,
+    watched: &BTreeSet<String>,
+    before: Option<&BankSnapshot>,
+) -> Result<()> {
+    match step.kind.as_str() {
+        "refuse" => {
+            let expected = step
+                .expect_code
+                .ok_or_else(|| format!("{}: refusal has no expect_code", step.name))?;
+            let observed = custom_error_code(error);
+            if observed != Some(expected) {
+                return Err(format!(
+                    "{}: expected Custom({expected:#06x}), got {error}",
+                    step.name
+                )
+                .into());
+            }
+        }
+        "exhausted" if computational_budget_exhausted(error) => {}
+        "exhausted" => {
+            return Err(format!(
+                "{}: expected ComputationalBudgetExceeded, got {error}",
+                step.name
+            )
+            .into());
+        }
+        other => return Err(format!("{}: unknown step kind {other}", step.name).into()),
+    }
+    let after = snapshot(url, watched)?;
+    if before != Some(&after) {
+        return Err(format!("{}: failed transaction changed watched state", step.name).into());
+    }
+    Ok(())
+}
+
 fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
     require_loopback(url)?;
 
@@ -431,7 +478,7 @@ fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
 
     for (ordinal, step) in plan.steps.iter().enumerate() {
         let unsigned = BASE64.decode(fs::read_to_string(plan_dir.join(&step.tx))?.trim())?;
-        let before = if step.kind == "refuse" {
+        let before = if matches!(step.kind.as_str(), "refuse" | "exhausted") {
             Some(snapshot(url, &watched)?)
         } else {
             None
@@ -446,28 +493,7 @@ fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
         match step.kind.as_str() {
             "accept" if error.is_null() => {}
             "accept" => return Err(format!("{}: expected success, got {error}", step.name).into()),
-            "refuse" => {
-                let expected = step
-                    .expect_code
-                    .ok_or_else(|| format!("{}: refusal has no expect_code", step.name))?;
-                let observed = custom_error_code(&error);
-                if observed != Some(expected) {
-                    return Err(format!(
-                        "{}: expected Custom({expected:#06x}), got {error}",
-                        step.name
-                    )
-                    .into());
-                }
-                let after = snapshot(url, &watched)?;
-                if before.as_ref() != Some(&after) {
-                    return Err(format!(
-                        "{}: refused transaction changed watched state",
-                        step.name
-                    )
-                    .into());
-                }
-            }
-            other => return Err(format!("{}: unknown step kind {other}", step.name).into()),
+            _ => verify_nonaccepting_step(url, step, &error, &watched, before.as_ref())?,
         }
 
         for entry in &step.compare {
@@ -635,5 +661,15 @@ mod tests {
             custom_error_code(&json!({"InstructionError": [1, "Invalid"]})),
             None
         );
+    }
+
+    #[test]
+    fn compute_exhaustion_extraction_is_exact() {
+        assert!(computational_budget_exhausted(
+            &json!({"InstructionError": [2, "ComputationalBudgetExceeded"]})
+        ));
+        assert!(!computational_budget_exhausted(
+            &json!({"InstructionError": [2, "ProgramFailedToComplete"]})
+        ));
     }
 }

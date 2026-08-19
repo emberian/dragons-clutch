@@ -7242,6 +7242,8 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
     );
     case.instruction_count = 2;
     case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+    case.exhausted = true;
+    case.reference = "MEASURED STOP: the two-instruction late-fault witness reaches the 1,400,000-CU ceiling before its intended duplicate-exit refusal".to_string();
     cases.push(case);
 
     /* 20. The independent bearer burns its real Token-2022 claim and receives
@@ -7732,13 +7734,20 @@ fn emit_committed_plan(out_dir: &Path, f: &Fixture) {
         precreated.len()
     );
     for case in &plan.cases {
-        match case.expect_code {
-            None => println!(
-                "  accept {:<40} {} account reload(s)",
-                case.name,
-                case.compare.as_ref().map_or(0, Vec::len)
-            ),
-            Some(code) => println!("  refuse {:<40} Custom(0x{code:04x})", case.name),
+        if case.exhausted {
+            println!(
+                "  EXHAUSTED {:<37} does not fit the {COMPUTE_UNIT_CEILING}-unit transaction ceiling",
+                case.name
+            );
+        } else {
+            match case.expect_code {
+                None => println!(
+                    "  accept {:<40} {} account reload(s)",
+                    case.name,
+                    case.compare.as_ref().map_or(0, Vec::len)
+                ),
+                Some(code) => println!("  refuse {:<40} Custom(0x{code:04x})", case.name),
+            }
         }
     }
     println!("terminal     bearer claim paid; both owner cash planes and pooled custody drained");

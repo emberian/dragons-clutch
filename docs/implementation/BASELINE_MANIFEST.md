@@ -223,11 +223,15 @@ The four runtime gates have intentionally different coverage:
   the mock-source ELF in that same local bank. It exists so a successful mock
   source route cannot be confused with the default ELF's fail-closed production
   provider behavior.
-- `sbf.committed_signed_walk` builds the current ELF, then submits 22 signed,
-  confirmed transactions against one fresh loopback validator, including two
-  expected rollback refusals. It reloads 18 watched accounts and reruns after a
-  terminal-byte corruption that must go red. Its 11 program-owned prerequisites
-  are genesis-injected; it is not blank-bank source ingestion, deployment,
+- `sbf.committed_signed_walk` builds the explicitly different
+  `non-production-mock-source` ELF, then submits 22 signed, confirmed
+  transactions against one fresh loopback validator, including one expected
+  semantic refusal and one measured two-instruction compute-ceiling STOP; both
+  leave all watched state unchanged. It reloads 18 watched accounts and reruns after a
+  terminal-byte corruption that must go red. Its successful Endow is evidence
+  only for that compiled laboratory release; the default empty-registry ELF
+  still refuses `0x79`. Its 12 program-owned prerequisites are genesis-injected;
+  it is not blank-bank source ingestion, production-provider, deployment,
   devnet, or mainnet evidence.
 
 The present runtime inventory also needs careful reading. The sealed R1 profile

@@ -201,6 +201,10 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
         )
 
         signed_walk = gates["sbf.committed_signed_walk"]
+        self.assertIn(
+            r"^source_profile=NON-PRODUCTION-non-production-mock-source$",
+            signed_walk["key_patterns"],
+        )
         falsifier_pattern = (
             r"^  red: committed-.*committed bytes differ(?: \(observed .*, expected .*\))?$"
         )
@@ -214,9 +218,10 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
         )
         for pattern in (
             r"^committed_signed_transactions=22$",
-            r"^committed_expected_refusals=2$",
+            r"^committed_expected_refusals=1$",
+            r"^committed_compute_exhaustions=1$",
             r"^committed_watched_accounts=18$",
-            r"^genesis_assisted_program_accounts=11$",
+            r"^genesis_assisted_program_accounts=12$",
             r"^falsifiability=PASS$",
         ):
             self.assertIn(pattern, signed_walk["key_patterns"])
