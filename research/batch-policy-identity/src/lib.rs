@@ -885,9 +885,6 @@ mod tests {
     use super::*;
     use clutch_batch::relation_v1::{canonical_candidate, OrderV1, SingleEggOrderV1, PRICE_SCALE};
     use clutch_batch::{PartialPolicy, Side};
-    use clutch_solana_layout::{
-        CandidateRecord as LayoutCandidate, Hash32, CANDIDATE_STATUS_SUBMITTED,
-    };
 
     fn id(seed: u8) -> Identity32V1 {
         let mut bytes = [seed; 32];
@@ -1159,38 +1156,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn account_candidate_identity_is_byte_exact_with_layout_owner() {
-        let domain = domain_with(base_policy());
-        let book = crossing_book();
-        let mut prices = [0u64; MAX_OUTCOMES];
-        prices[0] = PRICE_SCALE / 2;
-        prices[1] = PRICE_SCALE / 2;
-        let legacy = canonical_candidate(&arithmetic(&domain), &book, &prices, 0, 0).unwrap();
-        let full = FullSubmittedCandidateV1::from_relation_candidate(&domain, &legacy).unwrap();
-        let mut layout = LayoutCandidate {
-            candidate: Hash32::ZERO,
-            epoch: Hash32::from_bytes(domain.epoch_id.0),
-            market: Hash32::from_bytes(domain.market_id.0),
-            prices: full.prices,
-            virtual_split: full.virtual_split,
-            virtual_merge: full.virtual_merge,
-            honored_aon_mask: full.honored_aon_mask,
-            weighted_direct_volume: 0,
-            limit_surplus_price_units: 0,
-            churn: full.virtual_split + full.virtual_merge,
-            submitted_slot: 99,
-            distinct_owners: 0,
-            order_len: full.order_len,
-            outcome_count: domain.outcome_count,
-            status: CANDIDATE_STATUS_SUBMITTED,
-            stored_bump: 7,
-            flags: 0,
-        };
-        layout.candidate = layout.recomputed_candidate_digest().unwrap();
-        assert_eq!(full.candidate_id.0, layout.candidate.bytes());
     }
 
     #[test]

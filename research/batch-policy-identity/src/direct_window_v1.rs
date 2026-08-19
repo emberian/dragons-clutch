@@ -147,7 +147,10 @@ fn nonzero(value: Identity32V1) -> Result<(), DirectWindowErrorV1> {
     }
 }
 
-fn hash_candidate_identity(
+/// Recompute the existing account-plane candidate identity without truncating
+/// either parent identity. This is public so the hostile-byte layout owner can
+/// pin byte-for-byte parity at the dependency boundary.
+pub fn canonical_account_candidate_id(
     epoch: Identity32V1,
     market: Identity32V1,
     prices: &[u64; MAX_OUTCOMES],
@@ -382,7 +385,8 @@ impl DirectCandidateV2 {
         {
             return Err(DirectWindowErrorV1::NonCanonical);
         }
-        if self.candidate_id != hash_candidate_identity(self.epoch_id, self.market_id, &self.prices)
+        if self.candidate_id
+            != canonical_account_candidate_id(self.epoch_id, self.market_id, &self.prices)
         {
             return Err(DirectWindowErrorV1::MismatchedBinding);
         }
@@ -1202,7 +1206,11 @@ mod tests {
         prices[0] = price;
         prices[1] = PRICE_SCALE - price;
         DirectCandidateV2 {
-            candidate_id: hash_candidate_identity(binding.epoch_id, binding.market_id, &prices),
+            candidate_id: canonical_account_candidate_id(
+                binding.epoch_id,
+                binding.market_id,
+                &prices,
+            ),
             epoch_id: binding.epoch_id,
             market_id: binding.market_id,
             order_set_id: binding.order_set_id,

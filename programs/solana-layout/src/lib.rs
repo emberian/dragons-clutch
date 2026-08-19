@@ -16,6 +16,7 @@
 pub mod artifact;
 pub mod clearing;
 pub mod collateral;
+pub mod direct_selection;
 pub mod native_resolution;
 pub mod occupation_resolution;
 pub mod portfolio_settlement;
@@ -4333,6 +4334,35 @@ pub enum Intent {
         epoch: EpochId,
         page_index: u16,
     },
+    /// Construct a version-three direct Epoch with immutable submission slots.
+    InitDirectEpochV3 {
+        market: MarketId,
+        epoch_index: u64,
+        policy: Hash32,
+        submission_opens_slot: u64,
+        submission_closes_slot: u64,
+    },
+    /// Freeze the exact one-page/two-order direct book before submission opens.
+    FreezeDirectEpochV3 {
+        market: MarketId,
+        epoch: EpochId,
+    },
+    /// Verify and admit one priced candidate into the streaming direct window.
+    SubmitDirectCandidateV2 {
+        market: MarketId,
+        epoch: EpochId,
+        outcome_price: u64,
+    },
+    /// Close one expired candidate window and freeze its exact best candidate.
+    SelectDirectWindowV1 {
+        market: MarketId,
+        epoch: EpochId,
+    },
+    /// Consume the selected direct entitlement exactly once.
+    SettleDirectV2 {
+        market: MarketId,
+        epoch: EpochId,
+    },
     /// Bring one Realm namespace into existence.
     ///
     /// The Realm identity is not carried, because it is not a choice:
@@ -4554,6 +4584,11 @@ const INIT_SOURCE_SPEC_TAG: u8 = 23;
 const INIT_SOURCE_ARCHIVE_TAG: u8 = 24;
 const APPEND_SOURCE_ARCHIVE_TAG: u8 = 25;
 const SEAL_SOURCE_ARCHIVE_TAG: u8 = 26;
+const INIT_DIRECT_EPOCH_V3_TAG: u8 = 27;
+const FREEZE_DIRECT_EPOCH_V3_TAG: u8 = 28;
+const SUBMIT_DIRECT_CANDIDATE_V2_TAG: u8 = 29;
+const SELECT_DIRECT_WINDOW_V1_TAG: u8 = 30;
+const SETTLE_DIRECT_V2_TAG: u8 = 31;
 
 impl Intent {
     /// Return the exact encoded byte length for this intent.
@@ -4578,6 +4613,11 @@ impl Intent {
             Self::CancelOrder { .. } => 2 + 32 + 32 + 32 + 32 + 8,
             Self::SettlePage { .. } => 2 + 32 + 32 + 2,
             Self::SubmitDirectPage { .. } => 2 + 32 + 32 + 2,
+            Self::InitDirectEpochV3 { .. } => 2 + 32 + 8 + 32 + 8 + 8,
+            Self::FreezeDirectEpochV3 { .. }
+            | Self::SelectDirectWindowV1 { .. }
+            | Self::SettleDirectV2 { .. } => 2 + 32 + 32,
+            Self::SubmitDirectCandidateV2 { .. } => 2 + 32 + 32 + 8,
             Self::InitRealm { .. } => 2 + 32 + 8 + 1 + 1,
             Self::InitProfile { .. } => 2 + 32 + 32 + 2 + 1,
             Self::InitPriceGrid { .. } | Self::InitTerms { .. } => 2 + 32 + 32,
@@ -4806,6 +4846,61 @@ impl Intent {
                 w.hash(*market)?;
                 w.hash(*epoch)?;
                 w.u16(*page_index)?
+            }
+            Self::InitDirectEpochV3 {
+                market,
+                epoch_index,
+                policy,
+                submission_opens_slot,
+                submission_closes_slot,
+            } => {
+                check_hash(*market)?;
+                check_hash(*policy)?;
+                if submission_opens_slot >= submission_closes_slot {
+                    return Err(CodecError::InvalidCount);
+                }
+                put_header(&mut w, INIT_DIRECT_EPOCH_V3_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.u64(*epoch_index)?;
+                w.hash(*policy)?;
+                w.u64(*submission_opens_slot)?;
+                w.u64(*submission_closes_slot)?
+            }
+            Self::FreezeDirectEpochV3 { market, epoch } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                put_header(&mut w, FREEZE_DIRECT_EPOCH_V3_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?
+            }
+            Self::SubmitDirectCandidateV2 {
+                market,
+                epoch,
+                outcome_price,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                if *outcome_price == 0 {
+                    return Err(CodecError::ZeroValue);
+                }
+                put_header(&mut w, SUBMIT_DIRECT_CANDIDATE_V2_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.u64(*outcome_price)?
+            }
+            Self::SelectDirectWindowV1 { market, epoch } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                put_header(&mut w, SELECT_DIRECT_WINDOW_V1_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?
+            }
+            Self::SettleDirectV2 { market, epoch } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                put_header(&mut w, SETTLE_DIRECT_V2_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?
             }
             Self::InitRealm {
                 profile,
@@ -5209,6 +5304,66 @@ impl Intent {
                 };
                 r.done()?;
                 Ok(v)
+            }
+            INIT_DIRECT_EPOCH_V3_TAG => {
+                let market = r.hash()?;
+                let epoch_index = r.u64()?;
+                let policy = r.hash()?;
+                let submission_opens_slot = r.u64()?;
+                let submission_closes_slot = r.u64()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(policy)?;
+                if submission_opens_slot >= submission_closes_slot {
+                    return Err(CodecError::InvalidCount);
+                }
+                Ok(Self::InitDirectEpochV3 {
+                    market,
+                    epoch_index,
+                    policy,
+                    submission_opens_slot,
+                    submission_closes_slot,
+                })
+            }
+            FREEZE_DIRECT_EPOCH_V3_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                Ok(Self::FreezeDirectEpochV3 { market, epoch })
+            }
+            SUBMIT_DIRECT_CANDIDATE_V2_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let outcome_price = r.u64()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                if outcome_price == 0 {
+                    return Err(CodecError::ZeroValue);
+                }
+                Ok(Self::SubmitDirectCandidateV2 {
+                    market,
+                    epoch,
+                    outcome_price,
+                })
+            }
+            SELECT_DIRECT_WINDOW_V1_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                Ok(Self::SelectDirectWindowV1 { market, epoch })
+            }
+            SETTLE_DIRECT_V2_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                Ok(Self::SettleDirectV2 { market, epoch })
             }
             INIT_REALM_TAG => {
                 let profile = r.hash()?;
@@ -9403,6 +9558,42 @@ mod tests {
 
         bytes[2..34].fill(0);
         assert_eq!(Intent::decode(&bytes[..len]), Err(CodecError::ZeroIdentity));
+    }
+
+    #[test]
+    fn direct_v3_authority_intents_have_exact_wires() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 7);
+        let intents = [
+            Intent::InitDirectEpochV3 {
+                market,
+                epoch_index: 7,
+                policy: h(4),
+                submission_opens_slot: 100,
+                submission_closes_slot: 120,
+            },
+            Intent::FreezeDirectEpochV3 { market, epoch },
+            Intent::SubmitDirectCandidateV2 {
+                market,
+                epoch,
+                outcome_price: 2_500,
+            },
+            Intent::SelectDirectWindowV1 { market, epoch },
+            Intent::SettleDirectV2 { market, epoch },
+        ];
+        let expected = [90usize, 66, 74, 66, 66];
+        let expected_tags = [27u8, 28, 29, 30, 31];
+        let mut index = 0usize;
+        while index < intents.len() {
+            let mut bytes = [0; MAX_INTENT_BYTES];
+            let len = intents[index].encode(&mut bytes).unwrap();
+            assert_eq!(len, expected[index]);
+            assert_eq!(bytes[0], expected_tags[index]);
+            assert_eq!(bytes[1], INTENT_VERSION);
+            assert_eq!(Intent::decode(&bytes[..len]), Ok(intents[index]));
+            assert_eq!(Intent::decode(&bytes[..len - 1]), Err(CodecError::Truncated));
+            index += 1;
+        }
     }
 
     #[test]

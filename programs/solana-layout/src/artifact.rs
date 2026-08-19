@@ -18,6 +18,9 @@ use super::{
     account_len, collateral, is_zero, CodecError, Hash32, PriceGridAccount, Result, TermsAccount,
     HASH_BYTES,
 };
+use clutch_batch_policy_identity::{
+    batch_policy_digest, decode_batch_policy, Identity32V1, BATCH_POLICY_BYTES,
+};
 
 /// Stage-account discriminator.
 pub const ARTIFACT_STAGE_TAG: u8 = 0x21;
@@ -55,6 +58,8 @@ pub enum ArtifactKind {
     PriceGrid = 2,
     /// Immutable market terms. Its context is the Realm id.
     Terms = 3,
+    /// Immutable full-width batch-policy preimage. Its context is an Epoch id.
+    BatchPolicy = 4,
 }
 
 impl ArtifactKind {
@@ -64,6 +69,7 @@ impl ArtifactKind {
             1 => Ok(Self::CollateralPolicy),
             2 => Ok(Self::PriceGrid),
             3 => Ok(Self::Terms),
+            4 => Ok(Self::BatchPolicy),
             _ => Err(CodecError::InvalidEnum),
         }
     }
@@ -79,6 +85,7 @@ impl ArtifactKind {
             Self::CollateralPolicy => collateral::COLLATERAL_POLICY_BYTES,
             Self::PriceGrid => account_len::PRICE_GRID,
             Self::Terms => account_len::TERMS,
+            Self::BatchPolicy => BATCH_POLICY_BYTES,
         }
     }
 }
@@ -379,6 +386,15 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             }
             Ok(terms.stored_bump)
         }
+        ArtifactKind::BatchPolicy => {
+            let policy = decode_batch_policy(body).map_err(|_| CodecError::MismatchedBinding)?;
+            let digest = batch_policy_digest(&policy)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if digest != Identity32V1(binding.digest.bytes()) {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
     }
 }
 
@@ -413,6 +429,7 @@ mod tests {
             ArtifactKind::CollateralPolicy,
             ArtifactKind::PriceGrid,
             ArtifactKind::Terms,
+            ArtifactKind::BatchPolicy,
         ] {
             let h = header(kind);
             let mut bytes = std::vec![0xa5; h.account_len().unwrap()];
