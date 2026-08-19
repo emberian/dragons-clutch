@@ -7,54 +7,60 @@ prestate.  This runner instead:
 
 1. accepts only an exact loopback RPC URL;
 2. replaces the fixture transaction's zero recent blockhash;
-3. signs each required message key with a matching fresh test-only keypair,
-   including additional holder identities when a step needs them;
-4. submits it with `sendTransaction`;
-5. waits for a `confirmed` or `finalized` bank status; and
+3. signs every required message slot with an explicitly supplied fresh
+   test-only keypair;
+4. submits with `sendTransaction`;
+5. waits for a `confirmed` or `finalized` bank status;
 6. reloads every declared account at `confirmed` commitment and compares its
-   bytes with the offline expectation.
+   bytes with the offline expectation; and
+7. snapshots all watched accounts around an expected refusal and requires
+   exact rollback.
 
-Expected refusals are submitted with preflight disabled.  The runner requires
-the bank to record the declared `InstructionError::Custom` and requires every
-watched account to have the same bytes before and after the failed transaction.
+Run the complete gate from the repository root:
+
+```sh
+programs/clutch-sbf/scripts/run_committed.sh
+```
+
+The script builds the current ELF, generates a same-address 20-step plan,
+starts a fresh `solana-test-validator`, drives the signed walk, and then starts
+another fresh validator after corrupting one terminal expected byte.  The gate
+passes only if the ordinary run stays green and the corrupted run fails with a
+committed-byte mismatch.
 
 This is not a wallet and is intentionally not in the SBF program workspace.
-The surrounding script creates random payer and actor keypairs in a temporary
-directory and removes that directory on every exit.  Additional test holder
-keys may be supplied explicitly.  No keypair is accepted from the Solana CLI
-configuration, and the runner never prints secret bytes.
+The script creates the payer, two wallet identities, and ordinary Token-2022
+account identities in a private temporary directory, passes only their public
+keys to fixture generation, and unlinks every generated key on exit.  Neither
+the runner nor the script reads Solana CLI wallet configuration, prints secret
+bytes, or admits a non-loopback RPC URL.
 
 ## Current scope boundary
 
-The plan has a mandatory `genesis_assisted` field.  While it is true, the
-runner prints `NOT END TO END` and enumerates the program-owned accounts the
-local validator injected at genesis.  In particular, the current
-`CreateMarket` implementation expects eight zeroed, program-owned state PDAs
-to exist already.  An ordinary wallet cannot create an account owned by the
-Clutch program at a PDA for which it cannot sign.
+`CreateMarket` now publicly creates its seven state PDAs, Hoard token account,
+and outcome mints from genuinely absent targets.  A second wallet's first
+backed `Endow` publicly creates its generation-zero Position and Replay.  The
+walk also creates ordinary holder token accounts, transfers an Egg to a
+positionless bearer, proves atomic rollback of a duplicated bearer exit, and
+then burns and redeems that Egg.
 
-Closing that gap requires one atomic program instruction (most naturally a
-repaired `CreateMarket`) to System-program CPI-create, fund to rent exemption,
-allocate, and assign these PDAs before encoding them:
+The plan nevertheless has mandatory `genesis_assisted` provenance.  The
+current walk preloads 11 prerequisites: Realm, Profile, Terms, two Feed heads,
+collateral-policy evidence, two evidence buffers, and three observation pages.
+The runner prints `NOT END TO END` and enumerates them before submitting any
+transaction.
 
-- `MarketAccount`;
-- `HoardAccount`;
-- the founding owner's `PositionAccount`;
-- `KernelAccount`;
-- the founding owner's `ExternalAccount`;
-- the founding owner's `ReplayAccount`;
-- `SupplyLedgerAccount`; and
-- `ResolutionAccount`.
+The feed advanced by the walk is not the already-matured feed used for
+resolution.  There is no public artifact upload, `InitFeed`, authenticated
+archive writer, or complete Epoch/candidate/receipt construction path yet.
+`SettlePage` remains unimplemented.  There is also no `WithdrawCash`, so the
+founder and second owner finish with 61 and 6 free cash atoms respectively
+still inside pooled Hoard custody; the independent bearer alone receives its
+three collateral atoms through `RedeemExternal`.
 
-The instruction must derive every address before moving lamports, require each
-target to be genuinely absent rather than accepting arbitrary zeroed
-program-owned storage, use `invoke_signed` with the frozen seed schema, and
-rely on transaction atomicity for rollback.  A separate permissionless actor
-plane initializer is also needed for every later owner/generation; otherwise
-only the founding owner can ever receive a position, external shadow, and
-replay lane.
-
-Until those instructions exist and this plan sets `genesis_assisted` to false,
-the evidence is accurately named: **signed, committed, sequential execution
-from a genesis-assisted local prestate**.  It is not permissionless lifecycle,
-deployment, devnet evidence, or mainnet evidence.
+Accordingly, this evidence is **signed, committed, sequential execution from a
+genesis-assisted local prestate**.  It is not a blank-bank lifecycle,
+operatorless venue, deployment, devnet evidence, or mainnet evidence.  See
+`docs/implementation/COMMITTED_SBF_WALK.md` for the exact source commit,
+toolchain, ELF digest, signatures, byte-comparison counts, falsifiability run,
+and remaining construction instructions.
