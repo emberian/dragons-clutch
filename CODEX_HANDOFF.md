@@ -90,15 +90,17 @@ These are **HOST-TESTED**, **MODEL-ONLY**, or **PROVED-MODEL** as named in
 
 ### Local SBF runtime
 
-The frozen runtime source is `7e8f6b1`; its 88-file declared runtime closure is
-unchanged through evidence ancestry `b5da74f`. Two ordinary builds produced the
-same 1,228,192-byte ELF with SHA-256
-`a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1`.
-The sealed audit at `0359aec`/`b5da74f` finds zero first-party final-LTO
-diagnostic survivors and no direct `r10` reference beyond 4,096 bytes. Commit
-`161f530` repairs only a stale native fixture version; `316c620` repairs only a
-research lock. This is exact local artifact/stack/bank evidence, not a release
-or deployment.
+The current frozen runtime source and test ancestry is `83e124d`; the current
+liveness/artifact seal is `b5700a9`. Two ordinary builds produced the same
+1,228,192-byte ELF with SHA-256
+`bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`.
+The sealed audit finds zero first-party final-LTO diagnostic survivors and no
+direct `r10` reference beyond 4,096 bytes. The preceding
+`7e8f6b1`/`b5da74f`/`a572...` seal remains historical evidence only. The two
+ELFs have identical executable sections and normalized instructions; seven
+line-location bytes changed after a required rustdoc-link repair, so every
+current CU row was still remeasured against `bd207...`. This is exact local
+artifact/stack/bank evidence, not a release or deployment.
 
 Focused real-bank paths now exist for:
 
@@ -173,7 +175,7 @@ asset. Hoard principal is never rent, liveness, bounty, or revenue.
    source ingestion, monolithic occupation-v4 initial liveness, and a total
    fragment/credit policy remain open. The exact sealed ELF's stack gate passes;
    the staged ResolutionWork route is admitted only for its measured shapes.
-2. Repaired at `3a81b38` (an ancestor of frozen runtime `7e8f6b1`):
+2. Repaired at `3a81b38` (an ancestor of current runtime `83e124d`):
    KernelAccount v2 persists the Terms-checked immutable basis mode, the
    reference adapter and SBF Split family reconstruct the stored mode after
    requiring Active, and hostile flip/wrong-mode/solvency/phase tests landed.

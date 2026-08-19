@@ -61,11 +61,12 @@ This is the immediate coordination gate while parallel lanes are active.
 - [x] Commit a clean refreshed 22-step script footer, joined ELF digest,
   transaction/account-comparison counts, and falsifiability record after all
   current SBF integration lanes settle.
-- [x] Build the exact runtime source `7e8f6b1` twice, archive the byte-identical
-  1,228,192-byte `a572...d6b6a1` ELF and same-ELF bank logs, and run the final
-  dependency/source/final-LTO/direct-frame audit. The `0359aec`/`b5da74f` seal
-  has zero diagnosed first-party final-LTO survivors and no direct `r10`
-  reference beyond 4,096 bytes. This is artifact evidence, not a release.
+- [x] Build the current runtime/test ancestry `83e124d` twice, archive the
+  byte-identical 1,228,192-byte `bd207...16b60` ELF and current same-ELF bank
+  logs, and run the dependency/source/final-LTO/direct-frame audit. The
+  `b5700a9` seal has zero diagnosed first-party final-LTO survivors and no
+  direct `r10` reference beyond 4,096 bytes. The prior `a572...d6b6a1` seal is
+  historical. This is artifact evidence, not a release.
 - [ ] Emit and commit a clean schema-v2 `MANIFEST.baseline.json`, then prove it
   still checks after the manifest-only commit.
 
@@ -403,11 +404,11 @@ These gates cover different planes; none substitutes for another.
   custody, and settlement; minimized failures become permanent vectors.
 - [ ] Run malformed account, alias, signer, owner, PDA, replay, donation, burn,
   close/reopen, source-substitution, candidate omission, and late-CPI campaigns.
-- [x] Build the exact `7e8f6b1` ELF twice on one machine and inspect the final
+- [x] Build the exact `83e124d` ELF twice on one machine and inspect the final
   unstripped image, final-LTO diagnostic attribution, and all resident direct
   frames. The two ordinary stripped and unstripped builds are byte-identical;
   the relocated-Cargo-home build is path-sensitive and is not the canonical
-  artifact.
+  artifact. The current artifact/profile is sealed at `b5700a9`.
 - [ ] Rebuild independently from pinned dependency sources and compare ELF bytes.
 - [ ] Produce SBOM, dependency licenses/notices, fixture provenance, source
   offer, theorem/assumption inventory, vectors, gate logs, and static-client

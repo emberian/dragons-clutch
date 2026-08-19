@@ -88,17 +88,19 @@ contradictory current-status prose.
 Do not hold R1 hostage to live Direct V3, a production provider, universal
 terminal cleanup, FHE optimality, or a filing.  Those are named later releases.
 
-Checkpoint disposition: runtime/artifact/stack/bank sealing and the fresh
-Persvati portable subset are complete at `b5da74f`; Hbox independently verified
-the archive but is SBF-UNAVAILABLE because the exact toolchain/dependency cache
-is absent. The schema-v2 generator is hardened through `1a18991`, but the full
-94-gate diagnostic at `ec77d0b` matched 86 and contradicted eight. Seven rows
-are now repaired at `b0e87dc`, `9c371fe`, `7b056bc`, and `38c8957`; focused
-strict gates and the relabelled mock-source signed walk pass. The sole remaining
-row is `sbf.runtime_bringup`: split its inert default/`0x79` evidence from the
-explicit mock-source success campaign, then rerun the full emission. The
-manifest-only commit and post-commit check remain open. The checked-in manifest
-is still historical schema v1.
+Checkpoint disposition: the current runtime/test ancestry `83e124d` and exact
+1,228,192-byte default ELF `bd207...16b60` are resealed at `b5700a9` with a
+current final-LTO/stack audit and same-ELF bank campaign. The preceding
+`b5da74f`/`a572...` seal and Persvati attestation remain historical evidence;
+Hbox independently verified that archive but is SBF-UNAVAILABLE because the
+exact toolchain/dependency cache is absent. The default/`0x79` versus explicit
+mock-source bringup split is closed at `83e124d`. The last quiet-tree full
+emission matched 93/94, with only the strict liveness source-identity gate red;
+`b5700a9` closes that identity fork by remeasuring rather than reusing old CU
+rows. The next gate is a quiet-tree 94/94 emission, followed by the
+manifest-only commit, post-commit `check --run-gates`, and fresh Persvati
+portable attestation. Until those pass, the checked-in manifest remains
+historical schema v1.
 
 ### R2 — Admit one production source profile
 

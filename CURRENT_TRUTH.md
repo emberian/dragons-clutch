@@ -35,25 +35,29 @@ economics.
 
 ## 2. Snapshot boundary
 
-The accepted local evidence ancestry is `6dbe618`. The R1 runtime/evidence seal
-remains `b5da74f`, and the frozen SBF runtime source remains
-`7e8f6b1714c3c97a31a4250ecd19f87041433c2d`; the 88-file declared runtime
-source closure is unchanged through the accepted ancestry. Commit `161f530`
-repairs a stale native-resolution fixture source-version literal, and
-`316c620` repairs the shape-compiler research lock, without changing the
-runtime artifact. Commits
-`0359aec` and `b5da74f` seal the measured liveness profile, exact ELF, audit,
-and bank/build logs.
+The accepted local evidence ancestry is `b5700a9`. The current frozen SBF
+runtime source and test ancestry is
+`83e124dda22adc15cb5ebf18ff9e0ab971c551dc`; `b5700a9` seals its measured
+liveness profile, exact ELF, audit, and same-ELF bank/build logs. The preceding
+`7e8f6b1`/`b5da74f`/`a5725a3d...` seal remains valid historical evidence only.
+The sole executable-closure change between those seals is the required
+rustdoc-link qualification in `programs/solana-reference/src/resolution.rs`;
+it changes seven line-location bytes in `.data.rel.ro`, while `.text`,
+`.rodata`, every other stripped section, and normalized instruction
+disassembly remain identical. Current CU rows were nevertheless remeasured
+against the current artifact rather than relabeled from the historical seal.
 
-The sealed default ELF is 1,228,192 bytes with SHA-256
-`a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1`.
-Two ordinary builds from `7e8f6b1` are byte-identical. The final audit found
+The current sealed default ELF is 1,228,192 bytes with SHA-256
+`bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`.
+Two ordinary builds from `83e124d` are byte-identical. The final audit found
 zero diagnostics naming `clutch_sbf`, zero diagnosed symbols surviving final
 LTO, and all 40,389 direct `r10` references at or below 4,096 bytes. The audit
-and checksum ledger are archived under
-[`research/liveness-policy-profile/artifacts/a5725a3d8e149b2b`](research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/audit/RUNTIME_ARTIFACT_AUDIT.md);
-the ledger SHA-256 is
-`baaa5ee5ac3e6372faf9fe82cd60e31ed53e93d62b37b8314ef9f6f1634d4ac0`.
+is archived under
+[`research/liveness-policy-profile/artifacts/bd20711b01828a74`](research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/RUNTIME_ARTIFACT_AUDIT.md);
+its report SHA-256 is
+`626a299dd879cff5f8c775b82b488c2d6b300a386b6d5f847913b5e14797e038`,
+and the upstream 52-file checksum-ledger SHA-256 is
+`dbf55f8e28c1674fc0f76b434049fbc8ef1e906c46db6ac0457410eaebc35f35`.
 This is exact local artifact/stack/bank evidence, not a release, deployment,
 production source-provider, inclusion, audit, or formal-verification claim.
 
@@ -195,8 +199,8 @@ may lower a smooth market to categorical portfolios.
 The v4 lifecycle audit found a P1 active-mode representation gap — the
 mode-less persisted Kernel was reconstructed as `FinitePreset` on Split-family
 seams that receive neither Terms nor Resolution — and the repair landed at
-`3a81b38`, which is an ancestor of the frozen runtime source `7e8f6b1` and is
-therefore inside the sealed `a572...d6b6a1` ELF. KernelAccount v2 (1,255
+`3a81b38`, which is an ancestor of current runtime source `83e124d` and is
+therefore inside the sealed `bd207...16b60` ELF. KernelAccount v2 (1,255
 bytes) persists an immutable `basis_mode` byte derived only from fully
 validated Terms at creation; hostile mode bytes and every v1 account refuse;
 every Terms-receiving seam cross-checks degree against the stored mode; the
@@ -232,10 +236,10 @@ public `derive_payout` to be degree-zero-only; smooth callers must use
 | Onchain clearing/settlement | narrow submission/consumption seams **SBF-EXECUTED**; selection/lifecycle **STOP** | Direct V2 can initialize, freeze, and submit bounded full-width candidates; the sealed same-ELF Submit maximum is 1,194,085 CU. A separate narrow zero-fee consumption fixture exists. | At `e874db1`, full top-three Select reaches exactly 1,400,000 CU and rolls back every watched byte/lamport. An empty frozen epoch can strand Reservations. Direct V3 at `ef32495` is MODEL/DESIGN only; it supplies no live ABI, SBF route, or terminal authority. No live settlement or universal no-stranding claim follows. |
 | Signed committed walk | 22-step **SBF-EXECUTED** at `c05fe84` | Fresh local keys signed 22 confirmed sequential transactions through global resolution, internal/bearer redemption, and both owners withdrawing all free cash; 18 watched accounts were reloaded and the corrupted terminal expectation went red. | It is genesis-assisted by 11 prerequisites and omits clearing/settlement. It is not a blank-bank lifecycle or release baseline. |
 | Static Glass | **HOST-TESTED** inspect-only prototype | A static client can render local terms and unsigned intent material without owning truth. | No frozen release manifest, complete wallet path, browser/accessibility audit, or official hosted instance. |
-| Liveness accounting | one routed path **SBF-EXECUTED / PROFILE-ADMITTED**; system policy **STOP** | `clutch-liveness` remains a host-tested pure kernel. Separately, the sealed liveness profile binds exact ResolutionWork compute, rent, rewards, refund, donation, and close behavior to the `a572...d6b6a1` ELF. | No complete global `LivenessPolicy` is emitted. Direct selection, production source work, most rent ownership/close routes, terminal asset disposition, and inclusion/keeper assumptions remain open. Hoard principal and future fees are never liveness capital. |
+| Liveness accounting | one routed path **SBF-EXECUTED / PROFILE-ADMITTED**; system policy **STOP** | `clutch-liveness` remains a host-tested pure kernel. Separately, the current sealed liveness profile binds exact ResolutionWork compute, rent, rewards, refund, donation, and close behavior to the `bd207...16b60` ELF; mixed historical/current measurement identities are machine-refused. | No complete global `LivenessPolicy` is emitted. Direct selection, production source work, most rent ownership/close routes, terminal asset disposition, and inclusion/keeper assumptions remain open. Hoard principal and future fees are never liveness capital. |
 | Terminal lifecycle V2 | internal-only **MODEL-ONLY / HOST-TESTED** | A hostile-prestate model enforces per-role rent identity, once-only refunds, a separately retained replay tombstone, internal claim/supply/mint equality, exact per-Position lots, ordered close dependencies, and an immutable neutral surplus sink. External bearer issuance fails closed in this profile. | No live account ABI, signer/PDA authority, rent funding, Token-2022 CPI/post-state, SBF route, legacy migration, external-bearer terminal path, or fractional credit/carry closure exists. It is not a protocol terminality or no-stranding result. |
 | Economics and fees | **MODEL-ONLY / PROPOSED** | Synthetic solvency, cost, fee, manipulation, and allocation experiments exist. | Fee base/rate/split, measured liveness maxima, neutral-failure policy, and recipient policy are not frozen. Hoard principal is never available. |
-| Artifact/release evidence | exact R1 artifact/stack/bank seal; release **STOP** | Runtime source `7e8f6b1` produced two byte-identical ordinary builds of `a572...d6b6a1`; final-LTO/stack audit passes and same-ELF bank logs are archived at `0359aec`/`b5da74f`. | The Cargo-home-relocated build is path-sensitive. The checked manifest is stale; there is no schema-v2 release manifest, path-independent or independent rebuild, complete release SBOM/license closure, external security review, signed tag, or deployment. |
+| Artifact/release evidence | exact current artifact/stack/bank seal; release **STOP** | Runtime source/test ancestry `83e124d` produced two byte-identical ordinary builds of `bd207...16b60`; final-LTO/stack audit and same-ELF bank campaigns are sealed at `b5700a9`. The old `a572...d6b6a1` seal is historical only. | The Cargo-home-relocated build is path-sensitive. The checked manifest remains schema v1 pending the final 94/94 emission and post-commit check; there is no path-independent or independent SBF rebuild, complete release SBOM/license closure, external security review, signed tag, or deployment. |
 
 ## 5. Accounting truth
 

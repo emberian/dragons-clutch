@@ -11,17 +11,24 @@ guide; this older handoff remains useful context but not a promotion ledger.
 
 ## Overnight convergence checkpoint
 
-The last substantive mainline commit before this handoff note is `1a18991`.
-The shared worktree should be clean. Do not restart from the older `b5da74f`
-snapshot: that commit remains the exact R1 runtime/evidence seal, while later
-mainline commits add reviewed proof/model/frontend/truth/manifest machinery
-without changing the declared 88-file runtime closure.
+The current mainline convergence commit is `b5700a9`. The shared worktree
+should be clean. Do not restart from the older `b5da74f` snapshot: it remains
+valid historical evidence, but the current runtime and evidence identity has
+been rebuilt, remeasured, and resealed.
 
 The R1 evidence checkpoint is sealed:
 
-- runtime source `7e8f6b1` produced the exact 1,228,192-byte
-  `a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1`
-  ELF; the committed audit/log seal is `0359aec`/`b5da74f`;
+- runtime/test ancestry `83e124d` produced two byte-identical ordinary builds
+  of the exact 1,228,192-byte
+  `bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`
+  ELF; the committed current audit/log/profile seal is `b5700a9`;
+- its audit report SHA-256 is `626a299d...e038`, its upstream 52-file ledger
+  SHA-256 is `dbf55f8e...5f35`, zero diagnosed first-party symbols survive final
+  LTO, and all 40,389 direct `r10` references are at most 4,096 bytes;
+- `a5725a3d...` differs only in seven `.data.rel.ro` line-location bytes after
+  a required rustdoc repair; executable sections and normalized instructions
+  are identical, but the old CU rows are retained as historical rather than
+  relabeled;
 - Persvati independently attested exact `b5da74f` from a fresh archive and
   minimal hashed Git bundle: 39/39 gates PASS, 0 STOP, 492 files checked twice,
   95 evidence checksums verified. The durable job is
@@ -39,21 +46,20 @@ The R1 evidence checkpoint is sealed:
   migration, external-bearer lifecycle, or fractional-credit solution.
 
 Glass now exposes those evidence planes and their negative boundaries while
-remaining unbound/offline. The schema-v2 manifest generator is hardened through
-`1a18991`: 94 unique declared gates, cache/path-stable evidence records,
+remaining unbound/offline. The schema-v2 manifest generator is hardened: 94
+unique declared gates, cache/path-stable evidence records,
 process-group timeout cleanup, exact Verus failure classification, current
 default/mock ELF parsing, the sealed liveness gate, the signed committed walk,
 and the central proof/model/tool surfaces. The checked-in
 `MANIFEST.baseline.json` is intentionally still historical schema v1.
 
-The full 94-gate emission was subsequently run from clean `ec77d0b`: 86 matched
-and eight contradicted. Seven of those eight are now repaired with focused
-green evidence: `b0e87dc` closes the workspace Clippy API lint, `9c371fe`
-repairs the Solana-reference lock/rustdoc lane, `7b056bc` reconciles both cost
-and ABI gates, and `38c8957` moves the 22-step success walk onto the explicitly
-different mock-source ELF. That walk now records one semantic refusal plus one
-two-instruction external-exit probe that reaches the 1,400,000-CU ceiling and
-rolls back, rather than misreporting the latter as a semantic refusal. Read
+The first full 94-gate emission at `ec77d0b` matched 86 and contradicted eight;
+those eight repair lanes are now closed. Commit `83e124d` splits the inert
+default/`0x79` campaign from the explicitly non-production mock-source success
+campaign. A quiet-tree full emission at `83e124d` then matched 93/94: the sole
+remaining refusal was the strict liveness seal correctly detecting the new ELF
+identity caused by the rustdoc-link repair. Commit `b5700a9` closes that final
+identity gap with new same-ELF measurements and stack evidence. Read
 [`docs/implementation/BASELINE_MANIFEST_DIAGNOSTIC_2026-08-19.md`](docs/implementation/BASELINE_MANIFEST_DIAGNOSTIC_2026-08-19.md)
 before touching the manifest. The generated diagnostic manifest was not
 committed.
@@ -61,17 +67,14 @@ committed.
 Resume R1 in this exact order:
 
 1. run `git status --short` and refuse unrelated dirty bytes;
-2. repair the one remaining `sbf.runtime_bringup` contradiction by separating
-   the inert default/`0x79` campaign from the explicitly labelled mock-source
-   success campaign; do not weaken its expected-success declaration;
-3. run that gate, then from the clean tree rerun
+2. from the clean tree rerun
    `scripts/baseline_manifest.py emit --run-gates`;
-4. only if all 94 match, inspect the emitted schema-v2 file and commit **only**
+3. only if all 94 match, inspect the emitted schema-v2 file and commit **only**
    `MANIFEST.baseline.json`, then run
    `scripts/baseline_manifest.py check --run-gates`; and
-5. only after that decide whether the post-`b5da74f` host-only changes warrant
-   another fresh Persvati portable attestation. No Hbox SBF claim exists until
-   the exact missing toolchain/dependency closure is supplied and recorded.
+4. run a fresh Persvati portable attestation from the final manifest commit.
+   No Hbox SBF claim exists until the exact missing toolchain/dependency closure
+   is supplied and recorded.
 
 Direct V3 remains isolated at
 `/Users/ember/jobs/dragons-clutch-r3-direct.BDnrsh` on
@@ -155,14 +158,13 @@ The local SBF adapter has crossed several formerly open value/liveness seams:
    rows clear the selected liveness profile; no unmeasured shape or system path
    inherits that admission.
 
-The frozen runtime source is `7e8f6b1`, unchanged across its 88-file declared
-runtime closure through evidence ancestry `b5da74f`. Two ordinary builds are
+The current frozen runtime source and test ancestry is `83e124d`; the current
+profile/artifact evidence is sealed at `b5700a9`. Two ordinary builds are
 byte-identical at 1,228,192 bytes with SHA-256
-`a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1`.
-The `0359aec`/`b5da74f` seal reports zero diagnosed first-party final-LTO
-survivors and no direct `r10` reference above 4,096. `161f530` fixes a fixture
-source-version literal and `316c620` fixes a research lock; neither changes the
-ELF.
+`bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`.
+The seal reports zero diagnosed first-party final-LTO survivors and no direct
+`r10` reference above 4,096. The preceding `a572...` seal remains historical;
+the current same-ELF bank rows were remeasured rather than borrowed.
 
 The default source registry is empty. Endow therefore refuses
 `SourceReleaseUnavailable` (`0x79`) before owner-plane allocation or token CPI;
