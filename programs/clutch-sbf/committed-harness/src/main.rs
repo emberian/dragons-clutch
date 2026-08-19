@@ -23,6 +23,7 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type BankSnapshot = BTreeMap<String, Option<Vec<u8>>>;
 
 #[derive(Debug, Deserialize)]
 struct Plan {
@@ -49,6 +50,8 @@ struct Step {
     expect_code: Option<u64>,
     #[serde(default)]
     compare: Vec<Compare>,
+    #[serde(default)]
+    identical_to_pre: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -320,7 +323,7 @@ fn hex_decode(text: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
-fn snapshot(url: &str, addresses: &BTreeSet<String>) -> Result<BTreeMap<String, Option<Vec<u8>>>> {
+fn snapshot(url: &str, addresses: &BTreeSet<String>) -> Result<BankSnapshot> {
     addresses
         .iter()
         .map(|address| Ok((address.clone(), account_bytes(url, address)?)))
@@ -346,11 +349,52 @@ fn report_scope(plan: &Plan, watched: usize) {
     }
 }
 
-fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
-    require_loopback(url)?;
+fn watch_index(plan: &Plan) -> Result<(BTreeSet<String>, BTreeMap<String, String>)> {
+    let mut watched = BTreeSet::new();
+    let mut role_addresses = BTreeMap::new();
+    for entry in plan.steps.iter().flat_map(|step| step.compare.iter()) {
+        watched.insert(entry.address.clone());
+        if let Some(previous) = role_addresses.insert(entry.role.clone(), entry.address.clone()) {
+            if previous != entry.address {
+                return Err(format!(
+                    "role {} maps to both {} and {}",
+                    entry.role, previous, entry.address
+                )
+                .into());
+            }
+        }
+    }
+    for step in &plan.steps {
+        for role in &step.identical_to_pre {
+            if !role_addresses.contains_key(role) {
+                return Err(format!("{}: unknown identical-to-pre role {role}", step.name).into());
+            }
+        }
+    }
+    Ok((watched, role_addresses))
+}
 
-    let plan: Plan = serde_json::from_slice(&fs::read(plan_dir.join("committed.json"))?)?;
-    let keypairs: Vec<Keypair> = keypair_paths
+fn unchanged_snapshot(
+    url: &str,
+    step: &Step,
+    role_addresses: &BTreeMap<String, String>,
+) -> Result<(BTreeSet<String>, BankSnapshot)> {
+    let addresses: BTreeSet<String> = step
+        .identical_to_pre
+        .iter()
+        .map(|role| {
+            role_addresses
+                .get(role)
+                .expect("roles were validated before transaction submission")
+                .clone()
+        })
+        .collect();
+    let state = snapshot(url, &addresses)?;
+    Ok((addresses, state))
+}
+
+fn load_keypairs(plan: &Plan, paths: &[String]) -> Result<Vec<Keypair>> {
+    let keypairs: Vec<Keypair> = paths
         .iter()
         .map(read_keypair_file)
         .collect::<std::result::Result<_, _>>()?;
@@ -369,15 +413,19 @@ fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
             return Err(format!("no supplied keypair matches plan {role} {address}").into());
         }
     }
+    Ok(keypairs)
+}
+
+fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
+    require_loopback(url)?;
+
+    let plan: Plan = serde_json::from_slice(&fs::read(plan_dir.join("committed.json"))?)?;
+    let keypairs = load_keypairs(&plan, keypair_paths)?;
     if plan.genesis_assisted && plan.precreated_program_accounts.is_empty() {
         return Err("genesis-assisted plan does not enumerate its precreated accounts".into());
     }
 
-    let watched: BTreeSet<String> = plan
-        .steps
-        .iter()
-        .flat_map(|step| step.compare.iter().map(|entry| entry.address.clone()))
-        .collect();
+    let (watched, role_addresses) = watch_index(&plan)?;
     let keypair_refs: Vec<&Keypair> = keypairs.iter().collect();
     report_scope(&plan, watched.len());
 
@@ -388,6 +436,8 @@ fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
         } else {
             None
         };
+        let (unchanged_addresses, unchanged_before) =
+            unchanged_snapshot(url, step, &role_addresses)?;
         let signed = sign_transaction(&unsigned, latest_blockhash(url)?, &keypair_refs)?;
         let signature = submit(url, &signed)?;
         let status = await_confirmation(url, &signature)?;
@@ -435,6 +485,15 @@ fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
                 .into());
             }
         }
+        let unchanged_after = snapshot(url, &unchanged_addresses)?;
+        if unchanged_before != unchanged_after {
+            return Err(format!(
+                "{}: identical-to-pre role changed ({})",
+                step.name,
+                step.identical_to_pre.join(", ")
+            )
+            .into());
+        }
         println!(
             "{:>2} {:<34} {:<7} confirmed={} reloads={} signature={}",
             ordinal + 1,
@@ -444,7 +503,7 @@ fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
                 .get("confirmationStatus")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown"),
-            step.compare.len(),
+            step.compare.len() + step.identical_to_pre.len(),
             signature
         );
     }
