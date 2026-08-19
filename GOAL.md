@@ -15,7 +15,7 @@ its dirty paths belong to it until the tree goes quiet.
 R1 manifest close is SEALED: schema-v2 MANIFEST.baseline.json committed at
 94/94 (d78f299, stabilized 3294dcd, checked 9625100, bound 6743b9d — codex's
 endgame), fast check binds the tree exactly. The fresh Persvati portable
-attestation of 6743b9d is running now (my lane). Post-R1 design track is
+attestation of 6743b9d PASSED 40/40 (recorded in CURRENT_TRUTH §2). Post-R1 design track is
 moving: R2 selection+codec landed, R4 runtime design proposed, Draft 10 +
 John packet ready in degg-research.
 
@@ -52,6 +52,14 @@ John packet ready in degg-research.
    Aug 24/24/27, perpetuals RFC Aug 26.
 
 ## Done log (2026-08-19 session)
+
+- Luna hygiene sweep landed at 7e45371: ten stale-seal/manifest/evidence
+  fixes across implementation docs (a5725a3d references labeled historical,
+  schema-v2 status corrected, v4-audit P2 wording repaired), zero broken
+  links in 136 files, forbidden-claim scan clean. Its flags fixed here:
+  CURRENT_TRUTH matrix row (joined evidence landed), GOAL thrust line,
+  merged R2 worktree pruned. Program-source P2 wording flags stay parked
+  (sealed runtime; next unseal cycle).
 
 - STOP-#1 successor gate LANDED at 896a1cc: per-degree (1/2/3) continuous
   blank-bank joined lifecycles, SBF-EXECUTED under both ELF campaigns —
