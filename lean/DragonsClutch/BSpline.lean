@@ -1,4 +1,5 @@
 import DragonsClutch.Solvency
+import Init.Data.List.Sort.Lemmas
 /-!
 # Exact low-degree clamped B-spline constructions
 
@@ -403,14 +404,12 @@ facts which make those unsigned subtractions and that division valid.  The
 column theorems below are generic in `span`, hence apply to every pane, not only
 to the one-pane Bernstein special case.
 
-The remaining correspondence residue is deliberately named
-`RustExpandedKnotLinkage`: prove that expansion of every admitted stored,
-strictly increasing distinct-knot vector (endpoint multiplicity `degree + 1`)
-produces the required cells for every reached `(span,column,row)`, and that the
-Rust recurrence's reduced `Fraction` values denote the common-denominator
-numerators here.  This file proves the mathematical column transformation once
-those indexing facts are supplied; it does not claim the Rust array adapter is
-verified.
+`RustExpandedKnotLinkage` states the indexing obligation for an admitted
+stored knot vector.  Below, `uniform_rust_expanded_knot_linkage` closes that
+obligation for every positive uniform grid and degree one through three.  The
+remaining boundary is source refinement: this file does not prove that the
+Rust parser, pane-selection control flow, or reduced `Fraction` implementation
+denotes these Lean definitions.
 -/
 
 def basisFunsLeftIndex (span column row : Nat) : Nat :=
@@ -484,6 +483,77 @@ def expandOpenClamped (degree : Nat) : List Nat → List Nat
       List.replicate (degree + 1) first ++ rest.dropLast ++
         List.replicate (degree + 1) (rest.getLastD first)
 
+/-- Canonical stored representation of a distinct uniform knot grid. -/
+def uniformStoredKnots (origin gap : Nat) : Nat → List Nat
+  | 0 => []
+  | count + 1 => origin :: uniformStoredKnots (origin + gap) gap count
+
+@[simp] theorem uniformStoredKnots_length (origin gap count : Nat) :
+    (uniformStoredKnots origin gap count).length = count := by
+  induction count generalizing origin with
+  | zero => simp [uniformStoredKnots]
+  | succ count ih => simp [uniformStoredKnots, ih]
+
+theorem uniformStoredKnots_getD {origin gap count index : Nat} (hi : index < count) :
+    (uniformStoredKnots origin gap count).getD index 0 = origin + index * gap := by
+  induction count generalizing origin index with
+  | zero => omega
+  | succ count ih =>
+      cases index with
+      | zero => simp [uniformStoredKnots]
+      | succ index =>
+          simp only [uniformStoredKnots, List.getD_cons_succ]
+          rw [ih (by omega)]
+          simp only [Nat.succ_mul]
+          omega
+
+theorem uniformStoredKnots_dropLast (origin gap count : Nat) :
+    (uniformStoredKnots origin gap (count + 1)).dropLast =
+      uniformStoredKnots origin gap count := by
+  induction count generalizing origin with
+  | zero => simp [uniformStoredKnots]
+  | succ count ih =>
+      change (origin :: (origin + gap) ::
+        uniformStoredKnots (origin + gap + gap) gap count).dropLast =
+        origin :: uniformStoredKnots (origin + gap) gap count
+      rw [List.dropLast_cons_cons]
+      change origin :: (uniformStoredKnots (origin + gap) gap (count + 1)).dropLast = _
+      rw [ih]
+
+theorem uniformStoredKnots_getLastD (origin gap count fallback : Nat) :
+    (uniformStoredKnots origin gap (count + 1)).getLastD fallback =
+      origin + count * gap := by
+  induction count generalizing origin fallback with
+  | zero => simp [uniformStoredKnots]
+  | succ count ih =>
+      change (origin :: uniformStoredKnots (origin + gap) gap (count + 1)).getLastD
+        fallback = _
+      rw [List.getLastD_cons]
+      rw [ih]
+      simp only [Nat.succ_mul]
+      omega
+
+/-- The list expanded by `expandOpenClamped` has the three exact segments
+used by Rust: repeated low endpoint, each interior knot once, repeated high
+endpoint. -/
+theorem expandOpenClamped_uniform {origin gap count degree : Nat}
+    (hcount : 2 ≤ count) :
+    expandOpenClamped degree (uniformStoredKnots origin gap count) =
+      List.replicate (degree + 1) origin ++
+      uniformStoredKnots (origin + gap) gap (count - 2) ++
+      List.replicate (degree + 1) (origin + (count - 1) * gap) := by
+  obtain ⟨interior, rfl⟩ : ∃ interior, count = interior + 2 := by
+    exact ⟨count - 2, by omega⟩
+  change expandOpenClamped degree
+      (origin :: uniformStoredKnots (origin + gap) gap (interior + 1)) = _
+  simp only [expandOpenClamped]
+  rw [uniformStoredKnots_dropLast, uniformStoredKnots_getLastD]
+  simp only [Nat.add_sub_cancel]
+  congr 2
+  have hindex : interior + 2 - 1 = interior + 1 := by omega
+  rw [hindex, Nat.add_mul]
+  omega
+
 /-- Rust's exact cursor equation `expanded_len = knot_count + 2*degree`. -/
 theorem expandOpenClamped_length {stored : List Nat} {degree : Nat}
     (hstored : 2 ≤ stored.length) :
@@ -496,12 +566,78 @@ theorem expandOpenClamped_length {stored : List Nat} {degree : Nat}
         List.length_dropLast, List.length_cons]
       omega
 
+theorem getD_append_left {alpha : Type} {left right : List alpha} {index : Nat}
+    {fallback : alpha} (hi : index < left.length) :
+    (left ++ right).getD index fallback = left.getD index fallback := by
+  simp [List.getD_eq_getElem?_getD, List.getElem?_append, hi]
+
+theorem getD_append_right {alpha : Type} {left right : List alpha} {index : Nat}
+    {fallback : alpha} (hi : left.length ≤ index) :
+    (left ++ right).getD index fallback = right.getD (index - left.length) fallback := by
+  have hn : ¬ index < left.length := Nat.not_lt_of_ge hi
+  simp [List.getD_eq_getElem?_getD, List.getElem?_append, hn]
+
+theorem getD_replicate {alpha : Type} {count index : Nat} {value fallback : alpha}
+    (hi : index < count) :
+    (List.replicate count value).getD index fallback = value := by
+  simp [List.getD_eq_getElem?_getD, hi]
+
+/-- Stored-knot index denoted by an expanded open-clamped index. -/
+def uniformExpandedKnotIndex (count degree index : Nat) : Nat :=
+  min (index - degree) (count - 1)
+
 def expandedKnotAt (stored : List Nat) (degree index : Nat) : Nat :=
   (expandOpenClamped degree stored).getD index 0
 
-/-- Exact statement still owed at the Rust/Lean adapter boundary.  It is a
-named proposition about the actual expanded list above, not an assumed
-theorem. `pane` is Rust's distinct-knot pane and `span = degree + pane`. -/
+/-- Every in-bounds entry of the actual expanded list denotes the clamped
+uniform stored-knot index.  This includes all repeated endpoint entries. -/
+theorem expandedKnotAt_uniform {origin gap count degree index : Nat}
+    (hcount : 2 ≤ count) (hi : index < count + 2 * degree) :
+    expandedKnotAt (uniformStoredKnots origin gap count) degree index =
+      origin + uniformExpandedKnotIndex count degree index * gap := by
+  unfold expandedKnotAt
+  rw [expandOpenClamped_uniform hcount]
+  let low := List.replicate (degree + 1) origin
+  let middle := uniformStoredKnots (origin + gap) gap (count - 2)
+  let high := List.replicate (degree + 1) (origin + (count - 1) * gap)
+  change (low ++ middle ++ high).getD index 0 = _
+  rw [List.append_assoc]
+  by_cases hlow : index < degree + 1
+  · rw [getD_append_left (left := low) (right := middle ++ high)]
+    · rw [getD_replicate]
+      · have hid : index - degree = 0 := by omega
+        simp [uniformExpandedKnotIndex, hid]
+      · simpa [low] using hlow
+    · simpa [low] using hlow
+  · rw [getD_append_right (left := low) (right := middle ++ high)]
+    · simp only [low, List.length_replicate]
+      by_cases hmiddle : index - (degree + 1) < count - 2
+      · rw [getD_append_left (left := middle) (right := high)]
+        · simp only [middle]
+          rw [uniformStoredKnots_getD hmiddle]
+          have hsub : index - degree = (index - (degree + 1)) + 1 := by omega
+          have hmin : min (index - degree) (count - 1) = index - degree := by
+            apply Nat.min_eq_left
+            omega
+          rw [uniformExpandedKnotIndex, hmin, hsub, Nat.add_mul]
+          omega
+        · simpa [middle] using hmiddle
+      · rw [getD_append_right (left := middle) (right := high)]
+        · simp only [middle, uniformStoredKnots_length]
+          rw [getD_replicate]
+          · have hmin : min (index - degree) (count - 1) = count - 1 := by
+              apply Nat.min_eq_right
+              omega
+            simp [uniformExpandedKnotIndex, hmin]
+          · omega
+        · simpa [middle] using Nat.le_of_not_gt hmiddle
+    · simp only [low, List.length_replicate]
+      omega
+
+/-- Indexing and bracketing obligation for one admitted stored knot vector.
+`pane` is Rust's distinct-knot pane and `span = degree + pane`.  The theorem
+`uniform_rust_expanded_knot_linkage` below constructs this property for the
+implemented positive uniform-grid family. -/
 def RustExpandedKnotLinkage (stored : List Nat) (degree : Nat) : Prop :=
   1 ≤ degree ∧ degree ≤ 3 ∧ 2 ≤ stored.length ∧
   (∀ i, i + 1 < stored.length → stored.getD i 0 < stored.getD (i + 1) 0) ∧
@@ -510,6 +646,165 @@ def RustExpandedKnotLinkage (stored : List Nat) (degree : Nat) : Prop :=
     stored.getD pane 0 ≤ x → x ≤ stored.getD (pane + 1) 0 →
     ∀ column row, 1 ≤ column → column ≤ degree → row < column →
       BasisFunsCell (expandedKnotAt stored degree) (degree + pane) column row x)
+
+/-- Uniform division/shift pane locator. The final stored knot is handled by
+the evaluator's closed-top branch before this function is entered. -/
+def locateUniformPane (origin gap count x : Nat) : Nat :=
+  min ((x - origin) / gap) (count - 2)
+
+theorem locateUniformPane_bracket {origin gap count x : Nat}
+    (hgap : 0 < gap) (hcount : 2 ≤ count)
+    (hlo : origin ≤ x) (hhi : x < origin + (count - 1) * gap) :
+    let pane := locateUniformPane origin gap count x
+    pane + 1 < count ∧
+      origin + pane * gap ≤ x ∧ x < origin + (pane + 1) * gap := by
+  let offset := x - origin
+  let quotient := offset / gap
+  have hoffset : origin + offset = x := by
+    simp only [offset]
+    omega
+  have hqlo : quotient * gap ≤ offset := Nat.div_mul_le_self _ _
+  have hdecomp : quotient * gap + offset % gap = offset := by
+    calc
+      quotient * gap + offset % gap = gap * (offset / gap) + offset % gap := by
+        simp only [quotient]
+        ac_rfl
+      _ = offset := Nat.div_add_mod offset gap
+  have hmod := Nat.mod_lt offset hgap
+  have hqhi : offset < (quotient + 1) * gap := by
+    rw [Nat.add_mul]
+    omega
+  have hoffsetTop : offset < (count - 1) * gap := by omega
+  have hqcount : quotient < count - 1 :=
+    Nat.div_lt_of_lt_mul (by simpa [Nat.mul_comm] using hoffsetTop)
+  have hqbound : quotient ≤ count - 2 := by omega
+  have hpane : locateUniformPane origin gap count x = quotient := by
+    unfold locateUniformPane
+    change min quotient (count - 2) = quotient
+    exact Nat.min_eq_left hqbound
+  simp only [hpane]
+  constructor
+  · omega
+  constructor
+  · omega
+  · omega
+
+/-- An internal knot selects the pane on its right, exactly matching Rust's
+`value >= next_knot` scan and the uniform shift fast path. -/
+theorem locateUniformPane_internal_boundary {origin gap count pane : Nat}
+    (hgap : 0 < gap) (hcount : 2 ≤ count) (hpane : pane + 1 < count) :
+    locateUniformPane origin gap count (origin + pane * gap) = pane := by
+  have hsub : origin + pane * gap - origin = pane * gap :=
+    Nat.add_sub_cancel_left origin (pane * gap)
+  have hdiv : pane * gap / gap = pane := Nat.mul_div_left pane hgap
+  have hbound : pane ≤ count - 2 := by omega
+  simp [locateUniformPane, hsub, hdiv, Nat.min_eq_left hbound]
+
+/-- The actual expanded uniform knot list supplies every positive split used
+by every reached degree-one through degree-three `BasisFuns` row. This theorem
+includes first/last panes and repeated clamped endpoint indices. -/
+theorem uniformBasisFunsCell {origin gap count degree pane column row x : Nat}
+    (hgap : 0 < gap) (hcount : 2 ≤ count)
+    (hdegreeLow : 1 ≤ degree) (hdegreeHigh : degree ≤ 3)
+    (hpane : pane + 1 < count)
+    (hxlo : origin + pane * gap ≤ x)
+    (hxhi : x ≤ origin + (pane + 1) * gap)
+    (hcolumnLow : 1 ≤ column) (hcolumnHigh : column ≤ degree)
+    (hrow : row < column) :
+    BasisFunsCell
+      (expandedKnotAt (uniformStoredKnots origin gap count) degree)
+      (degree + pane) column row x := by
+  let leftIndex := basisFunsLeftIndex (degree + pane) column row
+  let rightIndex := basisFunsRightIndex (degree + pane) row
+  have hleftBound : leftIndex < count + 2 * degree := by
+    simp only [leftIndex, basisFunsLeftIndex]
+    omega
+  have hrightBound : rightIndex < count + 2 * degree := by
+    simp only [rightIndex, basisFunsRightIndex]
+    omega
+  have hleftRaw : leftIndex - degree ≤ pane := by
+    simp only [leftIndex, basisFunsLeftIndex]
+    omega
+  have hleftStored : uniformExpandedKnotIndex count degree leftIndex ≤ pane := by
+    exact Nat.le_trans (Nat.min_le_left _ _) hleftRaw
+  have hrightRaw : pane + 1 ≤ rightIndex - degree := by
+    simp only [rightIndex, basisFunsRightIndex]
+    omega
+  have hrightTop : pane + 1 ≤ count - 1 := by omega
+  have hrightStored : pane + 1 ≤ uniformExpandedKnotIndex count degree rightIndex := by
+    unfold uniformExpandedKnotIndex
+    exact Nat.le_min.mpr ⟨hrightRaw, hrightTop⟩
+  have hstoredOrder : uniformExpandedKnotIndex count degree leftIndex <
+      uniformExpandedKnotIndex count degree rightIndex :=
+    Nat.lt_of_le_of_lt hleftStored (Nat.lt_of_lt_of_le (by omega) hrightStored)
+  have hmulLeft : uniformExpandedKnotIndex count degree leftIndex * gap ≤
+      pane * gap := Nat.mul_le_mul_right gap hleftStored
+  have hmulRight : (pane + 1) * gap ≤
+      uniformExpandedKnotIndex count degree rightIndex * gap :=
+    Nat.mul_le_mul_right gap hrightStored
+  have hmulStrict : uniformExpandedKnotIndex count degree leftIndex * gap <
+      uniformExpandedKnotIndex count degree rightIndex * gap :=
+    (Nat.mul_lt_mul_right hgap).mpr hstoredOrder
+  constructor
+  · change expandedKnotAt (uniformStoredKnots origin gap count) degree leftIndex ≤ x
+    rw [expandedKnotAt_uniform hcount hleftBound]
+    omega
+  · change x ≤ expandedKnotAt (uniformStoredKnots origin gap count) degree rightIndex
+    rw [expandedKnotAt_uniform hcount hrightBound]
+    omega
+  · change expandedKnotAt (uniformStoredKnots origin gap count) degree leftIndex <
+      expandedKnotAt (uniformStoredKnots origin gap count) degree rightIndex
+    rw [expandedKnotAt_uniform hcount hleftBound,
+      expandedKnotAt_uniform hcount hrightBound]
+    omega
+
+/-- The cell theorem exposes the exact two unsigned distances consumed by
+Rust's recurrence, rather than merely asserting that an abstract split exists.
+It remains valid when `x` is either pane boundary, including internal knots. -/
+theorem uniformBasisFunsSplit {origin gap count degree pane column row x : Nat}
+    (hgap : 0 < gap) (hcount : 2 ≤ count)
+    (hdegreeLow : 1 ≤ degree) (hdegreeHigh : degree ≤ 3)
+    (hpane : pane + 1 < count)
+    (hxlo : origin + pane * gap ≤ x)
+    (hxhi : x ≤ origin + (pane + 1) * gap)
+    (hcolumnLow : 1 ≤ column) (hcolumnHigh : column ≤ degree)
+    (hrow : row < column) :
+    ∃ cell : BasisFunsCell
+        (expandedKnotAt (uniformStoredKnots origin gap count) degree)
+        (degree + pane) column row x,
+      cell.toSplit.low =
+          x - expandedKnotAt (uniformStoredKnots origin gap count) degree
+            (basisFunsLeftIndex (degree + pane) column row) ∧
+      cell.toSplit.high =
+          expandedKnotAt (uniformStoredKnots origin gap count) degree
+            (basisFunsRightIndex (degree + pane) row) - x := by
+  let cell := uniformBasisFunsCell hgap hcount hdegreeLow hdegreeHigh hpane
+    hxlo hxhi hcolumnLow hcolumnHigh hrow
+  exact ⟨cell, rfl, rfl⟩
+
+/-- Closure of `RustExpandedKnotLinkage` for every positive uniform stored
+grid and every implemented smooth degree. -/
+theorem uniform_rust_expanded_knot_linkage {origin gap count degree : Nat}
+    (hgap : 0 < gap) (hcount : 2 ≤ count)
+    (hdegreeLow : 1 ≤ degree) (hdegreeHigh : degree ≤ 3) :
+    RustExpandedKnotLinkage (uniformStoredKnots origin gap count) degree := by
+  refine ⟨hdegreeLow, hdegreeHigh, ?_, ?_, ?_⟩
+  · simpa using hcount
+  · intro i hi
+    have hiCount : i + 1 < count := by simpa using hi
+    have hi0 : i < count := by omega
+    rw [uniformStoredKnots_getD hi0,
+      uniformStoredKnots_getD hiCount]
+    have hstrict := (Nat.mul_lt_mul_right hgap).mpr (Nat.lt_succ_self i)
+    simp only [Nat.succ_mul] at hstrict ⊢
+    omega
+  · intro pane x hpane hxlo hxhi column row hcolumnLow hcolumnHigh hrow
+    have hpaneCount : pane + 1 < count := by simpa using hpane
+    have hpane0 : pane < count := by omega
+    rw [uniformStoredKnots_getD hpane0] at hxlo
+    rw [uniformStoredKnots_getD hpaneCount] at hxhi
+    exact uniformBasisFunsCell hgap hcount hdegreeLow hdegreeHigh hpaneCount hxlo hxhi
+      hcolumnLow hcolumnHigh hrow
 
 /-! ## Deterministic largest-remainder `WEIGHT-ROUND-01`
 
@@ -521,10 +816,12 @@ kernel nor its accuracy policy.
 
 `LargestRemainderSelection` is the exact finite semantic certificate for that
 deterministic subset.  It records the cardinality, nonzero-remainder rule,
-largest-first rule, and low-index tie break.  `quantizeLargest` then proves the
-load-bearing fact: the result is an admissible exact integer partition of
-unity.  Construction of this certificate by the Rust selection loop is part of
-the unverified adapter residue named above; no axiom imports it into Lean.
+largest-first rule, and low-index tie break. `canonicalLargestRemainderSelection`
+constructs the unique certificate for every finite exact rational basis, and
+`quantizeLargest` proves the load-bearing fact: the result is an admissible
+exact integer partition of unity. Correspondence between this executable Lean
+sort and the Rust selection loop remains an unverified source-refinement
+boundary; no axiom imports that correspondence into Lean.
 -/
 
 /-- Floor error is always in `[0, denominator)`. -/
@@ -644,8 +941,7 @@ def boolNat (value : Bool) : Nat := if value then 1 else 0
 def awardCount (awarded : List Bool) : Nat :=
   (awarded.map boolNat).sum
 
-/-- Apply a zero/one award mask coordinatewise.  Unequal lengths are rejected
-at the semantic-certificate boundary, so the fallback equations are inert. -/
+/-- Apply a zero/one award mask coordinatewise. -/
 def applyAwards : List Nat → List Bool → List Nat
   | floor :: floors, award :: awards =>
       (floor + boolNat award) :: applyAwards floors awards
@@ -697,6 +993,434 @@ structure LargestRemainderSelection (D : Nat) (r : RationalBasis) where
     remainderAt D r i < remainderAt D r j ∨
       (remainderAt D r i = remainderAt D r j ∧ j < i)
 
+/-! ### Executable canonical selection, existence, and uniqueness -/
+
+def remainderOrder (D : Nat) (r : RationalBasis) (i j : Nat) : Bool :=
+  let ri := remainderAt D r i
+  let rj := remainderAt D r j
+  decide (rj < ri ∨ (ri = rj ∧ i ≤ j))
+
+def rankedIndices (D : Nat) (r : RationalBasis) : List Nat :=
+  (List.range r.numerators.length).mergeSort (remainderOrder D r)
+
+def winnerIndices (D : Nat) (r : RationalBasis) : List Nat :=
+  (rankedIndices D r).take (weightResidual D r)
+
+def largestRemainderMask (D : Nat) (r : RationalBasis) : List Bool :=
+  (List.range r.numerators.length).map
+    (fun i => decide (i ∈ winnerIndices D r))
+
+theorem remainderOrder_trans (D : Nat) (r : RationalBasis) :
+    ∀ a b c, remainderOrder D r a b → remainderOrder D r b c →
+      remainderOrder D r a c := by
+  intro a b c hab hbc
+  simp only [remainderOrder, decide_eq_true_eq] at hab hbc ⊢
+  omega
+
+theorem remainderOrder_total (D : Nat) (r : RationalBasis) :
+    ∀ a b, remainderOrder D r a b || remainderOrder D r b a := by
+  intro a b
+  simp only [remainderOrder, Bool.or_eq_true, decide_eq_true_eq]
+  omega
+
+theorem rankedIndices_pairwise (D : Nat) (r : RationalBasis) :
+    (rankedIndices D r).Pairwise
+      (fun a b => remainderOrder D r a b = true) := by
+  exact List.pairwise_mergeSort (remainderOrder_trans D r)
+    (remainderOrder_total D r) _
+
+theorem rankedIndices_perm (D : Nat) (r : RationalBasis) :
+    (rankedIndices D r).Perm (List.range r.numerators.length) := by
+  exact List.mergeSort_perm _ _
+
+theorem rankedIndices_nodup (D : Nat) (r : RationalBasis) :
+    (rankedIndices D r).Nodup := by
+  exact (rankedIndices_perm D r).nodup_iff.mpr List.nodup_range
+
+theorem rankedIndices_length (D : Nat) (r : RationalBasis) :
+    (rankedIndices D r).length = r.numerators.length := by
+  simp [rankedIndices]
+
+theorem awardCount_eq_countP : ∀ awards : List Bool,
+    awardCount awards = awards.countP (fun b => b)
+  | [] => by simp [awardCount]
+  | b :: bs => by
+      have ih := awardCount_eq_countP bs
+      unfold awardCount at ih
+      cases b
+      · simpa [awardCount, boolNat] using ih
+      · simp only [awardCount, List.map_cons, List.sum_cons, boolNat,
+          List.countP_cons]
+        omega
+
+theorem mask_awardCount (n : Nat) (w : List Nat) :
+    awardCount ((List.range n).map (fun i => decide (i ∈ w))) =
+      (List.range n).countP (fun i => decide (i ∈ w)) := by
+  rw [awardCount_eq_countP, List.countP_map]
+  rfl
+
+theorem countP_mem_self (w : List Nat) :
+    w.countP (fun i => decide (i ∈ w)) = w.length := by
+  rw [List.countP_eq_length]
+  intro a ha
+  simp [ha]
+
+theorem countP_mem_eq_zero_of_disjoint {w losers : List Nat}
+    (h : ∀ a ∈ w, ∀ b ∈ losers, a ≠ b) :
+    losers.countP (fun i => decide (i ∈ w)) = 0 := by
+  rw [List.countP_eq_zero]
+  intro b hb hbw
+  simp only [decide_eq_true_eq] at hbw
+  exact h b hbw b hb rfl
+
+theorem count_range_members_of_prefix
+    {n : Nat} {ranked w losers : List Nat}
+    (hp : ranked.Perm (List.range n))
+    (hsplit : w ++ losers = ranked)
+    (hnodup : ranked.Nodup) :
+    (List.range n).countP (fun i => decide (i ∈ w)) = w.length := by
+  have happ : (w ++ losers).Nodup := by simpa [hsplit] using hnodup
+  have hcross : ∀ a ∈ w, ∀ b ∈ losers, a ≠ b :=
+    (List.nodup_append.mp happ).2.2
+  calc
+    (List.range n).countP (fun i => decide (i ∈ w)) =
+        ranked.countP (fun i => decide (i ∈ w)) := by
+          exact (hp.countP_eq _).symm
+    _ = (w ++ losers).countP (fun i => decide (i ∈ w)) := by rw [hsplit]
+    _ = w.length := by
+      rw [List.countP_append, countP_mem_self,
+        countP_mem_eq_zero_of_disjoint hcross]
+      omega
+
+theorem largestRemainderMask_awardCount (D : Nat) (r : RationalBasis)
+    (hk : weightResidual D r ≤ r.numerators.length) :
+    awardCount (largestRemainderMask D r) = weightResidual D r := by
+  rw [largestRemainderMask, mask_awardCount]
+  let ranked := rankedIndices D r
+  let k := weightResidual D r
+  have htake : (ranked.take k).length = k := by
+    apply List.length_take_of_le
+    simpa [ranked, k, rankedIndices_length] using hk
+  have hcount := count_range_members_of_prefix
+    (rankedIndices_perm D r)
+    (List.take_append_drop k ranked)
+    (rankedIndices_nodup D r)
+  rw [htake] at hcount
+  exact hcount
+
+@[simp] theorem largestRemainderMask_length (D : Nat) (r : RationalBasis) :
+    (largestRemainderMask D r).length = r.numerators.length := by
+  simp [largestRemainderMask]
+
+theorem largestRemainderMask_getD {D : Nat} {r : RationalBasis} {i : Nat}
+    (hi : i < r.numerators.length) :
+    (largestRemainderMask D r).getD i false =
+      decide (i ∈ winnerIndices D r) := by
+  simp [largestRemainderMask, List.getD, hi]
+
+theorem winner_priority {D : Nat} {r : RationalBasis} {i j : Nat}
+    (hi : i < r.numerators.length) (hj : j < r.numerators.length)
+    (hui : (largestRemainderMask D r).getD i false = false)
+    (haj : (largestRemainderMask D r).getD j false = true) :
+    remainderAt D r i < remainderAt D r j ∨
+      (remainderAt D r i = remainderAt D r j ∧ j < i) := by
+  have hiSorted : i ∈ rankedIndices D r := by
+    simp [rankedIndices, hi]
+  have hjWin : j ∈ winnerIndices D r := by
+    rw [largestRemainderMask_getD hj] at haj
+    simpa using haj
+  have hiNotWin : i ∉ winnerIndices D r := by
+    rw [largestRemainderMask_getD hi] at hui
+    simpa using hui
+  have hiLose : i ∈ (rankedIndices D r).drop (weightResidual D r) := by
+    rw [← List.take_append_drop (weightResidual D r) (rankedIndices D r)] at hiSorted
+    rcases List.mem_append.mp hiSorted with hwin | hlose
+    · exact False.elim (hiNotWin (by simpa [winnerIndices] using hwin))
+    · exact hlose
+  have horder := (rankedIndices_pairwise D r).rel_of_mem_take_of_mem_drop
+    (by simpa [winnerIndices] using hjWin) hiLose
+  simp only [remainderOrder, decide_eq_true_eq] at horder
+  rcases horder with hlt | ⟨heq, hle⟩
+  · exact Or.inl hlt
+  · exact Or.inr ⟨heq.symm, by
+      have hne : j ≠ i := by
+        intro hji
+        subst j
+        exact hiNotWin hjWin
+      omega⟩
+
+theorem sum_le_nonzeroCount_mul {denominator : Nat} (hd : 0 < denominator) :
+    ∀ xs : List Nat,
+      (∀ x ∈ xs, x < denominator) →
+      xs.sum ≤ xs.countP (fun x => x != 0) * (denominator - 1)
+  | [], _ => by simp
+  | x :: xs, h => by
+      have hx := h x (by simp)
+      have htail : ∀ y ∈ xs, y < denominator := by
+        intro y hy
+        exact h y (by simp [hy])
+      have ih := sum_le_nonzeroCount_mul hd xs htail
+      by_cases hz : x = 0
+      · subst x
+        simpa using ih
+      · have hxle : x ≤ denominator - 1 := by omega
+        have hbool : (x != 0) = true := by simp [hz]
+        have hc : (x :: xs).countP (fun y => y != 0) =
+            xs.countP (fun y => y != 0) + 1 :=
+          List.countP_cons_of_pos hbool
+        simp only [List.sum_cons]
+        rw [hc]
+        calc
+          x + xs.sum ≤ (denominator - 1) +
+              xs.countP (fun x => x != 0) * (denominator - 1) :=
+            Nat.add_le_add hxle ih
+          _ = (xs.countP (fun x => x != 0) + 1) *
+              (denominator - 1) := by
+            rw [Nat.add_mul]
+            simp only [Nat.one_mul]
+            ac_rfl
+
+theorem residual_le_nonzeroRemainders {D : Nat} {r : RationalBasis}
+    (hr : r.Exact) :
+    weightResidual D r ≤
+      (floorRemainders D r.denominator r.numerators).countP
+        (fun x => x != 0) := by
+  let floors := (floorWeights D r.denominator r.numerators).sum
+  let rems := floorRemainders D r.denominator r.numerators
+  let k := D - floors
+  let p := rems.countP (fun x => x != 0)
+  have hf : floors ≤ D := by
+    dsimp [floors]
+    exact floorWeights_sum_le hr.1 hr.2
+  have hdec := floor_decomposition D r.denominator r.numerators
+  rw [hr.2] at hdec
+  have hkrem : k * r.denominator = rems.sum := by
+    dsimp [k, floors, rems]
+    have hbudget :
+        (D - (floorWeights D r.denominator r.numerators).sum) * r.denominator +
+          (floorWeights D r.denominator r.numerators).sum * r.denominator =
+          D * r.denominator := by
+      rw [← Nat.add_mul]
+      congr 1
+      omega
+    omega
+  have hbound : rems.sum ≤ p * (r.denominator - 1) := by
+    apply sum_le_nonzeroCount_mul hr.1
+    intro x hx
+    dsimp [rems] at hx ⊢
+    simp only [floorRemainders, List.mem_map] at hx
+    rcases hx with ⟨n, _hn, rfl⟩
+    exact Nat.mod_lt _ hr.1
+  change k ≤ p
+  apply Nat.le_of_not_lt
+  intro hpk
+  have hpd : p * r.denominator < k * r.denominator :=
+    (Nat.mul_lt_mul_right hr.1).mpr hpk
+  have hsub : p * (r.denominator - 1) ≤ p * r.denominator :=
+    Nat.mul_le_mul_left p (Nat.sub_le _ _)
+  have : rems.sum < k * r.denominator :=
+    Nat.lt_of_le_of_lt (Nat.le_trans hbound hsub) hpd
+  rw [hkrem] at this
+  omega
+
+theorem countP_getD_range_generic {alpha : Type} (p : alpha → Bool) (fallback : alpha) :
+    ∀ xs : List alpha,
+      (List.range xs.length).countP (fun i => p (xs.getD i fallback)) =
+        xs.countP p
+  | [] => by simp
+  | x :: xs => by
+      rw [List.length_cons, List.range_succ_eq_map]
+      simp only [List.countP_cons, List.countP_map]
+      have hf : ((fun i => p ((x :: xs).getD i fallback)) ∘ Nat.succ) =
+          (fun i => p (xs.getD i fallback)) := by
+        funext i
+        simp [List.getD]
+      rw [hf]
+      rw [countP_getD_range_generic p fallback xs]
+      simp [List.getD]
+
+theorem countP_lt_of_mono_of_witness {l : List Nat} {p q : Nat → Bool}
+    (hmono : ∀ x ∈ l, p x = true → q x = true)
+    (hw : ∃ x ∈ l, p x = false ∧ q x = true) :
+    l.countP p < l.countP q := by
+  rcases hw with ⟨x, hx, hpx, hqx⟩
+  rcases List.mem_iff_append.mp hx with ⟨before, after, hsplit⟩
+  subst l
+  have hb : before.countP p ≤ before.countP q := by
+    apply List.countP_mono_left
+    intro y hy hpy
+    exact hmono y (by simp [hy]) hpy
+  have ha : after.countP p ≤ after.countP q := by
+    apply List.countP_mono_left
+    intro y hy hpy
+    exact hmono y (by simp [hy]) hpy
+  simp only [List.countP_append, List.countP_cons]
+  simp only [hpx, hqx]
+  simp
+  omega
+
+theorem boolMask_swap {a b : List Bool}
+    (hlen : a.length = b.length) (hcount : awardCount a = awardCount b)
+    {i : Nat} (hi : i < a.length)
+    (hai : a.getD i false = true) (hbi : b.getD i false = false) :
+    ∃ j, j < a.length ∧ a.getD j false = false ∧ b.getD j false = true := by
+  by_cases hex : ∃ j, j < a.length ∧
+      a.getD j false = false ∧ b.getD j false = true
+  · exact hex
+  · have hmono : ∀ j ∈ List.range a.length,
+        b.getD j false = true → a.getD j false = true := by
+      intro j hj hb
+      have hj' : j < a.length := by simpa using hj
+      rcases Bool.eq_false_or_eq_true (a.getD j false) with ha | ha
+      · exact ha
+      · exact False.elim (hex ⟨j, hj', ha, hb⟩)
+    have hw : ∃ j ∈ List.range a.length,
+        b.getD j false = false ∧ a.getD j false = true :=
+      ⟨i, by simpa using hi, hbi, hai⟩
+    have hlt := countP_lt_of_mono_of_witness hmono hw
+    have haCount := countP_getD_range_generic (fun x : Bool => x) false a
+    have hbCount := countP_getD_range_generic (fun x : Bool => x) false b
+    rw [← hlen] at hbCount
+    rw [haCount, hbCount, ← awardCount_eq_countP,
+      ← awardCount_eq_countP] at hlt
+    omega
+
+/-- Every index selected by the executable ordering has a nonzero exact
+remainder. The proof uses exactness to show that the residual cannot exceed
+the number of nonzero remainders, then excludes any selected zero by the
+ordering certificate. -/
+theorem canonical_winner_positive {D : Nat} {r : RationalBasis}
+    (hr : r.Exact) {j : Nat} (hj : j < r.numerators.length)
+    (haj : (largestRemainderMask D r).getD j false = true) :
+    0 < remainderAt D r j := by
+  have hne : r.numerators ≠ [] := by
+    intro hnil
+    have hd := hr.1
+    have hsum := hr.2
+    simp only [hnil, List.sum_nil] at hsum
+    omega
+  have hlt := weightRoundResidual_lt_length (D := D) hr.1 hne hr.2
+  have hk : weightResidual D r ≤ r.numerators.length := Nat.le_of_lt hlt
+  by_cases hpos : 0 < remainderAt D r j
+  · exact hpos
+  · have hjzero : remainderAt D r j = 0 := by omega
+    let rems := floorRemainders D r.denominator r.numerators
+    let p : Nat → Bool := fun i => rems.getD i 0 != 0
+    let q : Nat → Bool := fun i => decide (i ∈ winnerIndices D r)
+    have hmono : ∀ i ∈ List.range r.numerators.length,
+        p i = true → q i = true := by
+      intro i hiRange hpi
+      have hi : i < r.numerators.length := by simpa using hiRange
+      have hipos : 0 < remainderAt D r i := by
+        dsimp [p, rems] at hpi
+        simp only [bne_iff_ne] at hpi
+        simp only [remainderAt]
+        omega
+      by_cases hqi : q i = true
+      · exact hqi
+      · have hqfalse : q i = false := by
+          rcases Bool.eq_false_or_eq_true (q i) with htrue | hfalse
+          · exact False.elim (hqi htrue)
+          · exact hfalse
+        have hu : (largestRemainderMask D r).getD i false = false := by
+          rw [largestRemainderMask_getD hi]
+          exact hqfalse
+        have hpord := winner_priority hi hj hu haj
+        rcases hpord with hbad | ⟨heq, _⟩ <;> omega
+    have hw : ∃ i ∈ List.range r.numerators.length,
+        p i = false ∧ q i = true := by
+      refine ⟨j, by simpa using hj, ?_, ?_⟩
+      · dsimp [p, rems]
+        simp [remainderAt] at hjzero ⊢
+        exact hjzero
+      · dsimp [q]
+        rw [largestRemainderMask_getD hj] at haj
+        simpa using haj
+    have hstrict := countP_lt_of_mono_of_witness hmono hw
+    have hpcount : (List.range r.numerators.length).countP p =
+        rems.countP (fun x => x != 0) := by
+      have hc := countP_getD_range_generic (fun x : Nat => x != 0) 0 rems
+      have hlen : rems.length = r.numerators.length := by
+        simp [rems]
+      rw [hlen] at hc
+      exact hc
+    have hqcount : (List.range r.numerators.length).countP q =
+        awardCount (largestRemainderMask D r) := by
+      exact (mask_awardCount r.numerators.length (winnerIndices D r)).symm
+    rw [hpcount, hqcount, largestRemainderMask_awardCount D r hk] at hstrict
+    have hle := residual_le_nonzeroRemainders (D := D) hr
+    dsimp [rems] at hstrict
+    omega
+
+/-- Executable deterministic largest-remainder selection for every finite
+exact rational basis. Sorting is descending by exact remainder with the lower
+index explicitly included as the tie-breaker. -/
+def canonicalLargestRemainderSelection (D : Nat) (r : RationalBasis)
+    (hr : r.Exact) : LargestRemainderSelection D r where
+  awarded := largestRemainderMask D r
+  arity := largestRemainderMask_length D r
+  cardinality := by
+    have hne : r.numerators ≠ [] := by
+      intro hnil
+      have hd := hr.1
+      have hsum := hr.2
+      simp only [hnil, List.sum_nil] at hsum
+      omega
+    have hlt := weightRoundResidual_lt_length (D := D) hr.1 hne hr.2
+    exact largestRemainderMask_awardCount D r (Nat.le_of_lt hlt)
+  positive := by
+    intro i hi haw
+    exact canonical_winner_positive hr hi haw
+  priority := by
+    intro i j hi hj hui haj
+    exact winner_priority hi hj hui haj
+
+/-- The deterministic priority, positivity, and cardinality conditions fix
+the award mask uniquely. -/
+theorem largestRemainderSelection_awarded_unique {D : Nat} {r : RationalBasis}
+    (s t : LargestRemainderSelection D r) : s.awarded = t.awarded := by
+  apply List.ext_getElem
+  · exact s.arity.trans t.arity.symm
+  · intro i hs ht
+    have hi : i < r.numerators.length := by simpa [s.arity] using hs
+    have heq : s.awarded.getD i false = t.awarded.getD i false := by
+      by_cases hst : s.awarded.getD i false = t.awarded.getD i false
+      · exact hst
+      · rcases Bool.eq_false_or_eq_true (s.awarded.getD i false) with hsTrue | hsFalse
+        · have htFalse : t.awarded.getD i false = false := by
+            rcases Bool.eq_false_or_eq_true (t.awarded.getD i false) with htTrue | htFalse
+            · exact False.elim (hst (hsTrue.trans htTrue.symm))
+            · exact htFalse
+          have ⟨j, hjMask, hsj, htj⟩ := boolMask_swap
+            (s.arity.trans t.arity.symm)
+            (s.cardinality.trans t.cardinality.symm) hs hsTrue htFalse
+          have hj : j < r.numerators.length := by simpa [s.arity] using hjMask
+          have hsPri := s.priority j i hj hi hsj hsTrue
+          have htPri := t.priority i j hi hj htFalse htj
+          rcases hsPri with h1 | ⟨h1, hidx1⟩ <;>
+            rcases htPri with h2 | ⟨h2, hidx2⟩ <;> omega
+        · have htTrue : t.awarded.getD i false = true := by
+            rcases Bool.eq_false_or_eq_true (t.awarded.getD i false) with htTrue | htFalse
+            · exact htTrue
+            · exact False.elim (hst (hsFalse.trans htFalse.symm))
+          have ⟨j, hjMask, htj, hsj⟩ := boolMask_swap
+            (t.arity.trans s.arity.symm)
+            (t.cardinality.trans s.cardinality.symm) ht htTrue hsFalse
+          have hj : j < r.numerators.length := by simpa [t.arity] using hjMask
+          have htPri := t.priority j i hj hi htj htTrue
+          have hsPri := s.priority i j hi hj hsFalse hsj
+          rcases htPri with h1 | ⟨h1, hidx1⟩ <;>
+            rcases hsPri with h2 | ⟨h2, hidx2⟩ <;> omega
+    simpa [List.getD, hs, ht] using heq
+
+theorem largestRemainderSelection_unique {D : Nat} {r : RationalBasis}
+    (s t : LargestRemainderSelection D r) : s = t := by
+  have h := largestRemainderSelection_awarded_unique s t
+  cases s
+  cases t
+  cases h
+  rfl
+
 /-- When scaling is exact, the deterministic largest-remainder selection is
 the all-false mask.  This supplies a general, executable nonvacuity witness for
 the important exact-grid path. -/
@@ -741,6 +1465,16 @@ theorem quantizeLargest_admissible {D : Nat} {r : RationalBasis}
     simp only [weightResidual]
     omega
   · simpa using selection.arity.symm
+
+/-- Nonvacuous canonical form of integer admissibility: no externally supplied
+selection certificate is required. -/
+theorem quantizeLargest_canonical_admissible {D : Nat} {r : RationalBasis}
+    (hD : 0 < D) (hr : r.Exact) :
+    (quantizeLargest D r
+      (canonicalLargestRemainderSelection D r hr)).Admissible
+        r.numerators.length :=
+  quantizeLargest_admissible hD hr
+    (canonicalLargestRemainderSelection D r hr)
 
 /-- A largest-remainder result has the same local arity as the exact rational
 block.  This is the support bound needed for degrees one through three. -/
@@ -886,6 +1620,23 @@ theorem exactBasis_complete_set_exact {D q : Nat} {r : RationalBasis}
     requiredResolved (List.replicate r.numerators.length q)
       (quantizeLargest D r selection) = q :=
   P_PAY_02_complete_set_required_exact (quantizeLargest_admissible hD hr selection)
+
+/-- Canonical deterministic quantization inherits the protocol solvency bound
+without an existential or caller-provided rounding witness. -/
+theorem canonicalExactBasis_resolution_bound {D : Nat} {r : RationalBasis}
+    (hD : 0 < D) (hr : r.Exact) (T : List Amount) :
+    requiredResolved T
+        (quantizeLargest D r (canonicalLargestRemainderSelection D r hr)) ≤
+      requiredActive T :=
+  P_SOLV_01_resolution_bound (quantizeLargest_canonical_admissible hD hr)
+
+/-- Canonical deterministic quantization pays an equal complete set exactly. -/
+theorem canonicalExactBasis_complete_set_exact {D q : Nat} {r : RationalBasis}
+    (hD : 0 < D) (hr : r.Exact) :
+    requiredResolved (List.replicate r.numerators.length q)
+      (quantizeLargest D r (canonicalLargestRemainderSelection D r hr)) = q :=
+  P_PAY_02_complete_set_required_exact
+    (quantizeLargest_canonical_admissible hD hr)
 
 theorem clampedDegreeOne_resolution_bound {h u D : Nat}
     (hh : 0 < h) (hu : u ≤ h) (hD : 0 < D)
