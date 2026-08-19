@@ -21,6 +21,15 @@ manifest.
 `run_verus.sh` is a separate explicit probe. It exits with status 2 when Verus
 is not installed; it never installs a tool or contacts the network.
 
+The later production-bound result is separate from that historical probe:
+
+```sh
+sh verus/kernel/run_transfer_refinement.sh
+```
+
+It verifies only the exact internal-transfer arithmetic helper and records its
+manual call-seam boundary; see `verus/kernel/README.md`.
+
 The observed pin snapshot is in [`versions.env`](versions.env). The complete
 interpretation, current blockers, and promotion gates are in
 [`docs/implementation/TOOLCHAIN_SPIKE.md`](../docs/implementation/TOOLCHAIN_SPIKE.md).

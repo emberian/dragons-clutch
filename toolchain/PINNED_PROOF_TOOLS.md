@@ -3,11 +3,11 @@
 Retrieval date: **2026-08-18**. Platform: **aarch64-apple-darwin** (Apple
 Silicon, Darwin 25.6.0). Machine-readable form: [`versions.env`](versions.env).
 
-This file records *what is installed and pinned*. It records no verification
-result. Every proof-content claim in this repository still has to be earned by
-a named, non-vacuous theorem that a pinned tool actually checked; see
-[Current gate status](#current-gate-status) for what these tools report today,
-which is not a passing proof.
+This file first records *what is installed and pinned*, then separately records
+the results those pins produced. Every proof-content claim still has to name a
+non-vacuous contract or theorem, exact source, assumptions, and unclosed
+boundary. The historical probe and three mathematical shadows remain red; a
+later exact production arithmetic subset has the narrow PASS recorded below.
 
 ## Verus
 
@@ -212,6 +212,32 @@ before, and none was modified.
 postcondition is `ensures true`. Those are vacuous placeholders, self-labelled
 as `TODO`, and would prove nothing even if the file compiled.
 
+### Production internal-transfer arithmetic — narrow PASS
+
+A later artifact is separate from all three mathematical shadows above.
+`verus/kernel/run_transfer_refinement.sh` mechanically adds a contract to the
+otherwise exact production body in
+`crates/clutch-kernel/src/transfer_arithmetic.rs` and runs this pinned Verus
+release. The checked result is:
+
+```text
+production_source_sha256=01a04ce8b6cf94680d0451e883a142bc580e358dd06088314f945e5ebaa72df3
+production_call_site_sha256=2fe06410feeb72ce7322a57ae9efd92632c2cd167ba69dce388ace235951791e
+generated_proof_sha256=61ec35d9731fab2626f7be97e5589431a3569396a97d22d1e57b1d68c50a408c
+verification results:: 2 verified, 0 errors
+mutation=delta-direction status=EXPECTED_RED reason=postcondition
+mutation=conservation-guard status=EXPECTED_RED reason=postcondition
+```
+
+The contract covers equal-and-opposite checked `u64` deltas, conservation of
+the two balances as mathematical integers, and the precise receiver-overflow
+alternative under `quantity <= from`. It also makes underflow and the defensive
+conservation refusal unreachable. The contract injector, the digest-pinned
+caller/error-map/delayed-write seam, frontend agreement, and the usual
+Verus/vstd/Z3 stack are assumptions. No whole `MarketState` transition,
+adapter, SBF, runtime, or deployment result follows. See
+`verus/kernel/TRANSFER_REFINEMENT.json` for the machine-readable record.
+
 ## What remains unpinned
 
 * **vstd revision** — no independent version; pinned only transitively by
@@ -229,6 +255,8 @@ as `TODO`, and would prove nothing even if the file compiled.
   toolchain `1.97.1-aarch64-apple-darwin`, not by the Verus artifact. The
   dylib hash in the link table matches, but the toolchain is outside this
   repository's control.
-* **Correspondence to the executable Rust** — entirely unpinned and unproved.
-  The shadow specs are hand-written restatements; nothing checks that they
-  describe `crates/clutch-*`.
+* **Correspondence beyond the transfer helper** — the three shadow specs are
+  hand-written restatements and remain unpinned to `crates/clutch-*`. The narrow
+  transfer result checks an exact production function body, but its caller seam
+  is digest-bound manual review rather than a proved whole-transition
+  refinement.

@@ -1,0 +1,11 @@
+verus_version=0.2026.08.15.7d4628a
+verus_toolchain=1.97.1-aarch64-apple-darwin
+production_source_sha256=01a04ce8b6cf94680d0451e883a142bc580e358dd06088314f945e5ebaa72df3
+production_call_site_sha256=2fe06410feeb72ce7322a57ae9efd92632c2cd167ba69dce388ace235951791e
+generated_proof_sha256=61ec35d9731fab2626f7be97e5589431a3569396a97d22d1e57b1d68c50a408c
+verification results:: 2 verified, 0 errors
+mutation=delta-direction status=EXPECTED_RED reason=postcondition
+mutation=conservation-guard status=EXPECTED_RED reason=postcondition
+status=PASS
+claim=exact production transfer arithmetic under quantity<=from
+boundary=call-site digest reviewed; MarketState/Position/Solana/SBF are not verified here

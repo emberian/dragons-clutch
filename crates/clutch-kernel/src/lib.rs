@@ -24,6 +24,10 @@
 
 use core::convert::TryFrom;
 
+mod transfer_arithmetic;
+
+use transfer_arithmetic::{prepare_internal_transfer, TransferArithmeticError};
+
 pub const MAX_OUTCOMES: usize = 16;
 pub const MAX_PAYOUTS: usize = 8;
 pub const MIN_OUTCOMES: u8 = 2;
@@ -990,29 +994,21 @@ impl MarketState {
             return Err(Error::ZeroQuantity);
         }
         let i = Position::validate_outcome(self.outcomes, outcome)?;
+        // VERUS-TRANSFER-CALLSITE-BEGIN: digest-bound by run_transfer_refinement.sh.
         if from.internal[i] < quantity {
             return Err(Error::InsufficientBalance);
         }
-        let new_from = from.internal[i]
-            .checked_sub(quantity)
-            .ok_or(Error::ArithmeticUnderflow)?;
-        let new_to = to.internal[i]
-            .checked_add(quantity)
-            .ok_or(Error::ArithmeticOverflow)?;
-        // The two deltas must be equal and opposite.  The sum is taken in u128
-        // so the check stays exact even when the two balances jointly exceed
-        // the `Amount` range.
-        let before = u128::from(from.internal[i])
-            .checked_add(u128::from(to.internal[i]))
-            .ok_or(Error::ArithmeticOverflow)?;
-        let after = u128::from(new_from)
-            .checked_add(u128::from(new_to))
-            .ok_or(Error::ArithmeticOverflow)?;
-        if before != after {
-            return Err(Error::InvariantViolation);
-        }
+        let (new_from, new_to) =
+            prepare_internal_transfer(from.internal[i], to.internal[i], quantity).map_err(
+                |error| match error {
+                    TransferArithmeticError::Overflow => Error::ArithmeticOverflow,
+                    TransferArithmeticError::Underflow => Error::ArithmeticUnderflow,
+                    TransferArithmeticError::Conservation => Error::InvariantViolation,
+                },
+            )?;
         from.internal[i] = new_from;
         to.internal[i] = new_to;
+        // VERUS-TRANSFER-CALLSITE-END
         Ok(())
     }
 

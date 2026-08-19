@@ -109,6 +109,25 @@ Verus is expected to prove:
 - codecs reject malformed bytes and round-trip canonical states;
 - each emitted CPI intent is consistent with the proved logical transition.
 
+### Current production-bound result (2026-08-18)
+
+One deliberately narrow part of that target is checked now. Pinned Verus
+verifies the exact executable body in
+`crates/clutch-kernel/src/transfer_arithmetic.rs`: under the executable caller's
+`quantity <= from` gate, a successful internal-claim transfer subtracts and adds
+the same `u64` quantity, conserves the two balances as mathematical integers,
+and reports receiver overflow precisely. Underflow and the defensive
+conservation refusal are proved unreachable for this helper. Two independent
+semantic mutations must fail its postcondition.
+
+This is not a proof of all of `MarketState::transfer_internal`. The caller's
+error mapping and delayed writes are source-digest-bound and reviewed, but not
+Verus-checked. Shape and phase checks, position/account identity, the other
+kernel transitions, the native adapter, Token-2022, SBF code generation, and
+the Solana runtime remain outside the result. The machine-readable record and
+assumptions are in `verus/kernel/TRANSFER_REFINEMENT.json` and
+`verus/kernel/TRANSFER_ASSUMPTIONS.md`.
+
 The scalable auction search algorithm is not automatically inside this proof
 claim. V1 verifies candidate feasibility, conservation, score, and deterministic
 selection. It may call the winner the best valid candidate submitted during the

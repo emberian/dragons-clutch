@@ -166,11 +166,39 @@ model already evaluates two canonical kernel vectors at build time
 (`lean/DragonsClutch/Vectors.lean`, `#guard`), which is an existence proof for
 the column, not the column.
 
-**What this addendum does not claim.** No implementation is verified. No
-refinement exists. Vector agreement, when the column exists, will be agreement
-on the facts a vector names and nothing else. The Lean theorems bound the
-mathematics; the vectors bound the correspondence; nothing yet bounds the SBF
-build, the adapter, or the runtime.
+**What this addendum did not claim when written.** At the time of the Lean wave,
+no implementation refinement existed. The later narrow Verus result below
+supersedes only that sentence. Vector agreement, when the column exists, will
+still be agreement on the facts a vector names and nothing else. The Lean
+theorems bound the mathematics; the vectors bound their broader correspondence;
+nothing here bounds the adapter or runtime.
+
+### Addendum, 2026-08-18 — first production-bound Verus subset
+
+Status: **CHECKED for the named arithmetic contract; REVIEWED for its
+digest-bound call seam; OPEN everywhere else.**
+
+`verus/kernel/run_transfer_refinement.sh` mechanically instruments the exact
+production source of `prepare_internal_transfer`, rather than checking a
+hand-written semantic shadow. Under `quantity <= from`, its postcondition proves
+equal-and-opposite sender/receiver deltas, mathematical-sum conservation, and
+the precise receiver-overflow alternative. Underflow and the defensive
+conservation refusal are unreachable. Changing receiver addition to subtraction
+or inverting the conservation guard makes the same postcondition fail.
+
+This partially discharges only the local arithmetic slice of `P-SUP-01`. The
+`MarketState::transfer_internal` call/error-map/delayed-write region is pinned by
+digest and manually reviewed; it is not itself a checked Verus contract. No
+claim is made about semantic owner identity, phase, whole-state refinement,
+canonical vectors, accounts, SBF, or Solana. Consequently the vector spine's
+`verus-host` dispositions stay `pending`; this helper is not a vector executor.
+
+The evidence record is `verus/kernel/TRANSFER_REFINEMENT.json`, the assumptions
+are `verus/kernel/TRANSFER_ASSUMPTIONS.md`, and the reproduction command is:
+
+```sh
+sh verus/kernel/run_transfer_refinement.sh
+```
 
 ## 7. Cross-runtime differential gate
 

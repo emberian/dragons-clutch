@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "status": "checked",
+  "property_id": "P-SUP-01",
+  "statement": "For every u64 from, to, and quantity with quantity <= from: prepare_internal_transfer either returns (from-quantity, to+quantity) and conserves their mathematical sum, or returns Overflow exactly when to+quantity exceeds u64::MAX; Underflow and Conservation are unreachable.",
+  "statement_digest_sha256": "0968b6dcf2e8ba15860d8cabd0c46d022a71be265742ff42b720b17ab95cea43",
+  "model_or_source": "crates/clutch-kernel/src/transfer_arithmetic.rs",
+  "model_or_source_digest_sha256": "01a04ce8b6cf94680d0451e883a142bc580e358dd06088314f945e5ebaa72df3",
+  "production_call_site": "crates/clutch-kernel/src/lib.rs:VERUS-TRANSFER-CALLSITE-BEGIN..END",
+  "production_call_site_digest_sha256": "2fe06410feeb72ce7322a57ae9efd92632c2cd167ba69dce388ace235951791e",
+  "tool": {
+    "name": "Verus",
+    "version": "0.2026.08.15.7d4628a",
+    "commit": "7d4628a8543d3e51e6e314c52032c9bab43f0f53",
+    "rust_frontend": "1.97.1-aarch64-apple-darwin",
+    "z3": "4.16.0",
+    "vstd_rlib_digest_sha256": "91f842643674660a1da8799eda3eceaa37e5816682d026b3d860bc59a81be61c",
+    "vstd_vir_digest_sha256": "3061321483841360c760fa3fb38b22be57533052cf2100eb51956aa31205fa7d"
+  },
+  "configuration": "verus/kernel/run_transfer_refinement.sh",
+  "configuration_digest_sha256": "52924756ed43c801402ca3c08e918376ad799edb3fde73c1bbc09c328ce1dff4",
+  "dependency_lock_digest": null,
+  "result": "PASS: verification results:: 2 verified, 0 errors",
+  "assumption_manifest": "verus/kernel/TRANSFER_ASSUMPTIONS.md",
+  "assumption_manifest_digest_sha256": "650dbddec6af85b52a85bce5bc61d92e1589edd49d729ef5bdae651ecadf33a8",
+  "proof_log": "verus/kernel/evidence/transfer_refinement.txt",
+  "proof_log_digest_sha256": "9b4195a9ac556680a1761a40aef841e9d2a0a939d92e0d696516b33482477493",
+  "generated_artifact_digests": {
+    "instrumented_proof_sha256": "61ec35d9731fab2626f7be97e5589431a3569396a97d22d1e57b1d68c50a408c"
+  },
+  "vector_manifest_digest": null,
+  "checked_date": "2026-08-18",
+  "reproduction_command": "sh verus/kernel/run_transfer_refinement.sh",
+  "mutations": [
+    {
+      "id": "delta-direction",
+      "edit": "receiver checked_add(quantity) -> checked_sub(quantity)",
+      "result": "EXPECTED_RED: postcondition not satisfied"
+    },
+    {
+      "id": "conservation-guard",
+      "edit": "before != after -> before == after",
+      "result": "EXPECTED_RED: postcondition not satisfied"
+    }
+  ],
+  "known_unclosed_boundaries": [
+    "the contract injector is reviewed, not formally verified",
+    "the call-site/error-map/delayed-write seam is digest-pinned and manually reviewed, not Verus-checked",
+    "the verifier and production compilers use different Rust frontends",
+    "MarketState and Position validity, phase policy, semantic owner identity, and all other transitions are outside this result",
+    "serialization, accounts, Token-2022 CPI, SBF code generation, Solana runtime behaviour, and deployment identity are outside this result"
+  ]
+}
