@@ -17,6 +17,17 @@ pub const MAX_OUTCOMES: usize = 16;
 pub const MAX_QUOTES: usize = 8;
 /// Maximum tranches in one modeled fee-pot allocation.
 pub const MAX_FEE_RECIPIENTS: usize = 8;
+/// Largest collateral, inventory, share, fee-pot, or fee-credit value admitted.
+///
+/// Together with [`MAX_CARRY_DENOMINATOR`] this makes every documented `u128`
+/// product smaller than `10^36 < 2^120`.
+pub const MAX_ACCOUNTING_ATOMS: u64 = 1_000_000_000_000;
+/// Largest accumulated capital-at-risk weight admitted for one tranche.
+pub const MAX_CAPITAL_TIME_WEIGHT: u128 = 1_000_000_000_000;
+/// Derived maximum aggregate weight across all eight fee recipients.
+pub const MAX_AGGREGATE_FEE_WEIGHT: u128 = 8_000_000_000_000;
+/// Frozen common denominator for every nonzero V1 fee carry.
+pub const MAX_CARRY_DENOMINATOR: u128 = 1_000_000_000_000;
 
 /// A fixed-width external identity or authenticated digest.
 pub type Id = [u8; 32];
@@ -34,6 +45,8 @@ pub enum Error {
     InvalidRange,
     /// A required amount, denominator, quantity, or version is zero.
     ZeroValue,
+    /// A value is outside the frozen arithmetic proof domain.
+    ParameterOutOfRange,
     /// A checked fixed-width operation overflowed.
     ArithmeticOverflow,
     /// A policy, Terms, schedule, tranche, quote, or generation binding differs.
@@ -60,7 +73,7 @@ pub enum Error {
     RemainderRequired,
     /// A withdrawal exceeds pro-rata equity or currently free collateral.
     WithdrawalLimit,
-    /// The last LP share cannot leave assets, liabilities, or fractional carry.
+    /// The last owner accounting share cannot leave assets or fractional carry.
     LastShareLocked,
     /// A transition is inconsistent with the tranche's trading/resolved phase.
     InvalidPhase,
@@ -68,8 +81,10 @@ pub enum Error {
     ZeroWeight,
     /// A fee allocation would be replayed or does not match the snapshotted state.
     FeeAllocationMismatch,
-    /// LP shares cannot change until accrued risk weight is checkpointed.
-    FeeCheckpointRequired,
+    /// New owner accounting shares cannot issue while exposure is live.
+    ExposureActive,
+    /// Reserve plus pending minimum sell proceeds exceeds its numeric domain.
+    ReserveHeadroom,
     /// A supplied settlement vector is not the exact immutable integer simplex.
     InvalidPayoutVector,
     /// A cached accounting field disagrees with the authoritative quote ledger.
@@ -137,12 +152,12 @@ pub struct LiquidityPolicyV1 {
     pub max_inventory: [u64; MAX_OUTCOMES],
     /// Maximum fresh contributed reserve and simultaneous encumbrance.
     ///
-    /// Realized sell proceeds or fee credits may make reserve exceed this cap,
-    /// but can never expand the admitted liability envelope beyond it.
+    /// Realized sell proceeds may make reserve exceed this cap, but can never
+    /// expand the admitted liability envelope beyond it.
     pub collateral_cap: u64,
     /// First epoch in which a scheduled quote may be active.
     pub batch_start: u64,
-    /// Last epoch in which a scheduled quote may be active.
+    /// Last epoch in which a scheduled quote may be active or earn fee weight.
     pub batch_end: u64,
     /// Immutable fee allocation policy identity.
     pub fee_policy_id: Id,
@@ -164,13 +179,27 @@ impl LiquidityPolicyV1 {
         if self.collateral_cap == 0 || self.compiler_version == 0 {
             return Err(Error::ZeroValue);
         }
+        if self.collateral_cap > MAX_ACCOUNTING_ATOMS {
+            return Err(Error::ParameterOutOfRange);
+        }
         if self.batch_start > self.batch_end || self.batch_end == u64::MAX {
             return Err(Error::InvalidEpoch);
+        }
+        let fee_window_epochs = u128::from(self.batch_end - self.batch_start) + 1;
+        if fee_window_epochs
+            .checked_mul(u128::from(self.collateral_cap))
+            .ok_or(Error::ArithmeticOverflow)?
+            > MAX_CAPITAL_TIME_WEIGHT
+        {
+            return Err(Error::ParameterOutOfRange);
         }
         validate_padding(self.terms.outcome_count, &self.max_inventory)?;
         let mut any = false;
         let mut i = 0usize;
         while i < usize::from(self.terms.outcome_count) {
+            if self.max_inventory[i] > MAX_ACCOUNTING_ATOMS {
+                return Err(Error::ParameterOutOfRange);
+            }
             any |= self.max_inventory[i] != 0;
             i += 1;
         }
@@ -316,6 +345,8 @@ pub fn compile_schedule(
     }
     let mut plans = [None; MAX_QUOTES];
     let mut aggregate_sell = [0u64; MAX_OUTCOMES];
+    let mut aggregate_buy = [0u64; MAX_OUTCOMES];
+    let mut aggregate_sell_floor_cash = 0u64;
     let mut aggregate_buy_cash = 0u64;
     let mut index = 0usize;
     while index < MAX_QUOTES {
@@ -340,8 +371,17 @@ pub fn compile_schedule(
                         rung.lots,
                         policy.terms.outcome_count,
                     )?;
+                    aggregate_sell_floor_cash = aggregate_sell_floor_cash
+                        .checked_add(checked_mul(rung.lots, rung.limit_collateral_per_lot)?)
+                        .ok_or(Error::ArithmeticOverflow)?;
                 }
                 QuoteSide::BuyOffset => {
+                    add_scaled(
+                        &mut aggregate_buy,
+                        &coefficients,
+                        rung.lots,
+                        policy.terms.outcome_count,
+                    )?;
                     aggregate_buy_cash = aggregate_buy_cash
                         .checked_add(checked_mul(rung.lots, rung.limit_collateral_per_lot)?)
                         .ok_or(Error::ArithmeticOverflow)?;
@@ -372,6 +412,10 @@ pub fn compile_schedule(
         index += 1;
     }
     check_inventory_limit(policy, &[0; MAX_OUTCOMES], &aggregate_sell)?;
+    check_inventory_limit(policy, &[0; MAX_OUTCOMES], &aggregate_buy)?;
+    if aggregate_sell_floor_cash > MAX_ACCOUNTING_ATOMS {
+        return Err(Error::ParameterOutOfRange);
+    }
     let encumbered = maximum(policy.terms.outcome_count, &aggregate_sell)?
         .checked_add(aggregate_buy_cash)
         .ok_or(Error::ArithmeticOverflow)?;
@@ -384,12 +428,12 @@ pub fn compile_schedule(
     })
 }
 
-/// Exact nonnegative fractional collateral-atom carry.
+/// Exact fixed-grid nonnegative fractional collateral-atom carry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FractionalCarry {
     /// Proper-fraction numerator.
     pub numerator: u128,
-    /// Positive denominator; zero carry is canonically `0/1`.
+    /// [`MAX_CARRY_DENOMINATOR`] for nonzero carry; `1` for canonical zero.
     pub denominator: u128,
 }
 
@@ -400,16 +444,19 @@ impl FractionalCarry {
         denominator: 1,
     };
 
-    /// Check proper range and reduced canonical representation.
+    /// Check the frozen common-grid canonical representation.
     pub fn validate(&self) -> Result<()> {
         if self.denominator == 0 || self.numerator >= self.denominator {
             return Err(Error::InvariantViolation);
+        }
+        if self.denominator > MAX_CARRY_DENOMINATOR {
+            return Err(Error::ParameterOutOfRange);
         }
         if self.numerator == 0 {
             if self.denominator != 1 {
                 return Err(Error::NonCanonicalPadding);
             }
-        } else if gcd_u128(self.numerator, self.denominator) != 1 {
+        } else if self.denominator != MAX_CARRY_DENOMINATOR {
             return Err(Error::NonCanonicalPadding);
         }
         Ok(())
@@ -487,10 +534,12 @@ pub struct TrancheStateV1 {
     pub reserve_atoms: u64,
     /// Outstanding nonnegative native Egg payout exposure.
     pub inventory: [u64; MAX_OUTCOMES],
-    /// LP share supply under the frozen conservative-equity convention.
+    /// Nontransferable owner accounting-share supply.
     pub lp_share_supply: u64,
     /// Cash ceiling reserved for all active buy-back quotes.
     pub reserved_buy_cash_atoms: u64,
+    /// Minimum sell proceeds whose receipt must fit the reserve domain.
+    pub reserved_sell_floor_cash_atoms: u64,
     /// Egg exposure reserved by all active write quotes.
     pub reserved_sell_inventory: [u64; MAX_OUTCOMES],
     /// Egg quantities reserved by all active buy-back quotes.
@@ -503,7 +552,7 @@ pub struct TrancheStateV1 {
     pub capital_time_weight: u128,
     /// Epoch through which capital-at-risk has been integrated.
     pub last_weight_epoch: u64,
-    /// Exact sub-atom remainder from prior fee-pot allocations.
+    /// Exact funded sub-atom remainder from the terminal fee allocation.
     pub fee_carry: FractionalCarry,
     /// Last consumed fee allocation generation.
     pub fee_allocation_generation: u64,
@@ -536,6 +585,7 @@ impl TrancheStateV1 {
             inventory: [0; MAX_OUTCOMES],
             lp_share_supply: 0,
             reserved_buy_cash_atoms: 0,
+            reserved_sell_floor_cash_atoms: 0,
             reserved_sell_inventory: [0; MAX_OUTCOMES],
             reserved_buy_inventory: [0; MAX_OUTCOMES],
             capital_time_weight: 0,
@@ -560,6 +610,12 @@ impl TrancheStateV1 {
         if self.tranche_id == self.owner || self.last_weight_epoch < self.policy.batch_start {
             return Err(Error::InvariantViolation);
         }
+        if self.reserve_atoms > MAX_ACCOUNTING_ATOMS
+            || self.lp_share_supply > MAX_ACCOUNTING_ATOMS
+            || self.capital_time_weight > MAX_CAPITAL_TIME_WEIGHT
+        {
+            return Err(Error::ParameterOutOfRange);
+        }
         self.fee_carry.validate()?;
         if (self.fee_allocation_generation == 0 && self.last_fee_allocation_id != [0; 32])
             || (self.fee_allocation_generation != 0 && self.last_fee_allocation_id == [0; 32])
@@ -577,6 +633,7 @@ impl TrancheStateV1 {
         )?;
         let mut sell = [0u64; MAX_OUTCOMES];
         let mut buy = [0u64; MAX_OUTCOMES];
+        let mut sell_floor_cash = 0u64;
         let mut cash = 0u64;
         let mut slot = 0usize;
         while slot < MAX_QUOTES {
@@ -599,12 +656,20 @@ impl TrancheStateV1 {
                         return Err(Error::InvariantViolation);
                     }
                     match quote.plan.side {
-                        QuoteSide::SellWrite => add_scaled(
-                            &mut sell,
-                            &quote.plan.coefficients,
-                            quote.remaining_lots,
-                            self.policy.terms.outcome_count,
-                        )?,
+                        QuoteSide::SellWrite => {
+                            add_scaled(
+                                &mut sell,
+                                &quote.plan.coefficients,
+                                quote.remaining_lots,
+                                self.policy.terms.outcome_count,
+                            )?;
+                            sell_floor_cash = sell_floor_cash
+                                .checked_add(checked_mul(
+                                    quote.remaining_lots,
+                                    quote.plan.limit_collateral_per_lot,
+                                )?)
+                                .ok_or(Error::ArithmeticOverflow)?;
+                        }
                         QuoteSide::BuyOffset => {
                             add_scaled(
                                 &mut buy,
@@ -628,6 +693,7 @@ impl TrancheStateV1 {
         }
         if sell != self.reserved_sell_inventory
             || buy != self.reserved_buy_inventory
+            || sell_floor_cash != self.reserved_sell_floor_cash_atoms
             || cash != self.reserved_buy_cash_atoms
         {
             return Err(Error::InvariantViolation);
@@ -640,6 +706,11 @@ impl TrancheStateV1 {
         }
         if self.reserve_atoms < encumbered {
             return Err(Error::InsufficientReserve);
+        }
+        if self.reserved_sell_floor_cash_atoms > MAX_ACCOUNTING_ATOMS
+            || self.reserve_atoms > MAX_ACCOUNTING_ATOMS - self.reserved_sell_floor_cash_atoms
+        {
+            return Err(Error::ReserveHeadroom);
         }
         if self.lp_share_supply == 0
             && (self.reserve_atoms != 0
@@ -706,7 +777,7 @@ impl TrancheStateV1 {
             .ok_or(Error::ArithmeticOverflow)
     }
 
-    /// Integrate capital at risk through `epoch`, atomically on success.
+    /// Integrate capital at risk through `epoch`, capped at `batch_end + 1`.
     pub fn accrue_risk(&mut self, epoch: u64) -> Result<()> {
         let mut next = *self;
         next.accrue_risk_inner(epoch)?;
@@ -715,20 +786,28 @@ impl TrancheStateV1 {
         Ok(())
     }
 
-    /// Deposit collateral and mint exact pro-rata conservative-equity shares.
+    /// Deposit owner collateral and mint exact pro-rata accounting shares.
     ///
-    /// The first deposit mints one share per atom. Later deposits refuse unless
-    /// exact integer shares exist; the model never silently transfers a
-    /// rounding remainder between LP cohorts.
-    pub fn deposit(&mut self, epoch: u64, collateral_atoms: u64) -> Result<u64> {
+    /// One immutable beneficial owner controls every V1 share; shares are not
+    /// transferable holder claims. The first deposit mints one share per atom.
+    /// Later deposits additionally require zero live exposure and exact integer
+    /// shares. No issuance is admitted after the batch interval.
+    pub fn deposit(&mut self, owner: Id, epoch: u64, collateral_atoms: u64) -> Result<u64> {
+        check_id(owner)?;
+        if owner != self.owner {
+            return Err(Error::MismatchedBinding);
+        }
         if collateral_atoms == 0 {
             return Err(Error::ZeroValue);
+        }
+        if epoch > self.policy.batch_end {
+            return Err(Error::InvalidEpoch);
         }
         let mut next = *self;
         next.require_trading()?;
         next.accrue_risk_inner(epoch)?;
-        if next.capital_time_weight != 0 {
-            return Err(Error::FeeCheckpointRequired);
+        if next.encumbered_collateral()? != 0 {
+            return Err(Error::ExposureActive);
         }
         let new_reserve = next
             .reserve_atoms
@@ -758,8 +837,8 @@ impl TrancheStateV1 {
                 return Err(Error::RemainderRequired);
             }
             let shares = numerator / equity;
-            if shares == 0 || shares > u128::from(u64::MAX) {
-                return Err(Error::ArithmeticOverflow);
+            if shares == 0 || shares > u128::from(MAX_ACCOUNTING_ATOMS) {
+                return Err(Error::ParameterOutOfRange);
             }
             u64::try_from(shares).map_err(|_| Error::ArithmeticOverflow)?
         };
@@ -768,6 +847,9 @@ impl TrancheStateV1 {
             .lp_share_supply
             .checked_add(minted)
             .ok_or(Error::ArithmeticOverflow)?;
+        if next.lp_share_supply > MAX_ACCOUNTING_ATOMS {
+            return Err(Error::ParameterOutOfRange);
+        }
         next.bump_generation()?;
         next.validate()?;
         *self = next;
@@ -868,6 +950,11 @@ impl TrancheStateV1 {
         )?;
         match quote.plan.side {
             QuoteSide::SellWrite => {
+                let released_floor = checked_mul(lots, quote.plan.limit_collateral_per_lot)?;
+                next.reserved_sell_floor_cash_atoms = next
+                    .reserved_sell_floor_cash_atoms
+                    .checked_sub(released_floor)
+                    .ok_or(Error::InvariantViolation)?;
                 subtract_vector(
                     next.policy.terms.outcome_count,
                     &mut next.reserved_sell_inventory,
@@ -878,6 +965,9 @@ impl TrancheStateV1 {
                     .reserve_atoms
                     .checked_add(consideration)
                     .ok_or(Error::ArithmeticOverflow)?;
+                if next.reserve_atoms > MAX_ACCOUNTING_ATOMS - next.reserved_sell_floor_cash_atoms {
+                    return Err(Error::ReserveHeadroom);
+                }
             }
             QuoteSide::BuyOffset => {
                 let released_ceiling = checked_mul(lots, quote.plan.limit_collateral_per_lot)?;
@@ -924,8 +1014,12 @@ impl TrancheStateV1 {
         Ok(receipt)
     }
 
-    /// Cancel and release the entire unfilled reservation for one active quote.
-    pub fn cancel_quote(&mut self, epoch: u64, quote_id: Id) -> Result<()> {
+    /// Cancel and release an owner-controlled active quote.
+    pub fn cancel_quote(&mut self, owner: Id, epoch: u64, quote_id: Id) -> Result<()> {
+        check_id(owner)?;
+        if owner != self.owner {
+            return Err(Error::MismatchedBinding);
+        }
         self.release_quote(epoch, quote_id, QuoteStatus::Cancelled, false)
     }
 
@@ -934,16 +1028,23 @@ impl TrancheStateV1 {
         self.release_quote(epoch, quote_id, QuoteStatus::Lapsed, true)
     }
 
-    /// Burn LP shares and withdraw no more than both pro-rata equity and free cash.
-    pub fn withdraw(&mut self, epoch: u64, burn_shares: u64, collateral_atoms: u64) -> Result<()> {
+    /// Burn owner accounting shares within pro-rata equity and free cash.
+    pub fn withdraw(
+        &mut self,
+        owner: Id,
+        epoch: u64,
+        burn_shares: u64,
+        collateral_atoms: u64,
+    ) -> Result<()> {
+        check_id(owner)?;
+        if owner != self.owner {
+            return Err(Error::MismatchedBinding);
+        }
         if burn_shares == 0 || collateral_atoms == 0 {
             return Err(Error::ZeroValue);
         }
         let mut next = *self;
         next.accrue_risk_inner(epoch)?;
-        if next.capital_time_weight != 0 {
-            return Err(Error::FeeCheckpointRequired);
-        }
         if burn_shares > next.lp_share_supply {
             return Err(Error::WithdrawalLimit);
         }
@@ -951,6 +1052,7 @@ impl TrancheStateV1 {
             if next.inventory_liability()? != 0
                 || next.encumbered_collateral()? != 0
                 || next.fee_carry != FractionalCarry::ZERO
+                || next.capital_time_weight != 0
                 || collateral_atoms != next.reserve_atoms
             {
                 return Err(Error::LastShareLocked);
@@ -979,20 +1081,25 @@ impl TrancheStateV1 {
         Ok(())
     }
 
-    /// Snapshot the tranche's accumulated fee weight and exact prior carry.
+    /// Snapshot accumulated weight for the one terminal fee allocation.
     pub fn fee_input(&self) -> FeeAllocationInputV1 {
         FeeAllocationInputV1 {
             tranche_id: self.tranche_id,
+            owner: self.owner,
             fee_policy_id: self.policy.fee_policy_id,
             snapshot_epoch: self.last_weight_epoch,
+            fee_window_end: self.policy.batch_end + 1,
             lp_share_supply: self.lp_share_supply,
+            reserve_atoms: self.reserve_atoms,
+            fee_allocation_generation: self.fee_allocation_generation,
+            last_fee_allocation_id: self.last_fee_allocation_id,
             tranche_generation: self.generation,
             capital_time_weight: self.capital_time_weight,
             carry: self.fee_carry,
         }
     }
 
-    /// Consume one authority-produced fee allocation exactly once.
+    /// Consume the authority-produced terminal fee allocation exactly once.
     pub fn apply_fee_allocation(
         &mut self,
         allocation_generation: u64,
@@ -1006,9 +1113,14 @@ impl TrancheStateV1 {
         if allocation_generation != expected_generation
             || output.allocation_id == next.last_fee_allocation_id
             || output.tranche_id != next.tranche_id
+            || output.owner != next.owner
             || output.fee_policy_id != next.policy.fee_policy_id
             || output.snapshot_epoch != next.last_weight_epoch
+            || output.fee_window_end != next.policy.batch_end + 1
             || output.lp_share_supply != next.lp_share_supply
+            || output.reserve_atoms != next.reserve_atoms
+            || output.fee_allocation_generation != next.fee_allocation_generation
+            || output.last_fee_allocation_id != next.last_fee_allocation_id
             || output.tranche_generation != next.generation
             || output.consumed_weight != next.capital_time_weight
             || output.old_carry != next.fee_carry
@@ -1016,10 +1128,6 @@ impl TrancheStateV1 {
             return Err(Error::FeeAllocationMismatch);
         }
         output.new_carry.validate()?;
-        next.reserve_atoms = next
-            .reserve_atoms
-            .checked_add(output.credited_atoms)
-            .ok_or(Error::ArithmeticOverflow)?;
         next.fee_carry = output.new_carry;
         next.capital_time_weight = 0;
         next.fee_allocation_generation = allocation_generation;
@@ -1100,9 +1208,23 @@ impl TrancheStateV1 {
         if epoch < self.last_weight_epoch {
             return Err(Error::InvalidEpoch);
         }
-        let mut cursor = self.last_weight_epoch;
-        while cursor < epoch {
-            let mut boundary = epoch;
+        let fee_window_end = self
+            .policy
+            .batch_end
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let accrual_end = if epoch < fee_window_end {
+            epoch
+        } else {
+            fee_window_end
+        };
+        let mut cursor = if self.last_weight_epoch < accrual_end {
+            self.last_weight_epoch
+        } else {
+            accrual_end
+        };
+        while cursor < accrual_end {
+            let mut boundary = accrual_end;
             let mut slot = 0usize;
             while slot < MAX_QUOTES {
                 if let Some(quote) = self.quotes[slot] {
@@ -1127,6 +1249,9 @@ impl TrancheStateV1 {
                 .capital_time_weight
                 .checked_add(increment)
                 .ok_or(Error::ArithmeticOverflow)?;
+            if self.capital_time_weight > MAX_CAPITAL_TIME_WEIGHT {
+                return Err(Error::ParameterOutOfRange);
+            }
             cursor = boundary;
         }
         self.last_weight_epoch = epoch;
@@ -1187,12 +1312,24 @@ impl TrancheStateV1 {
         }
         let slot = free_slot.ok_or(Error::QuoteCapacity)?;
         match plan.side {
-            QuoteSide::SellWrite => add_scaled(
-                &mut self.reserved_sell_inventory,
-                &plan.coefficients,
-                plan.lots,
-                self.policy.terms.outcome_count,
-            )?,
+            QuoteSide::SellWrite => {
+                add_scaled(
+                    &mut self.reserved_sell_inventory,
+                    &plan.coefficients,
+                    plan.lots,
+                    self.policy.terms.outcome_count,
+                )?;
+                self.reserved_sell_floor_cash_atoms = self
+                    .reserved_sell_floor_cash_atoms
+                    .checked_add(checked_mul(plan.lots, plan.limit_collateral_per_lot)?)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                if self.reserved_sell_floor_cash_atoms > MAX_ACCOUNTING_ATOMS
+                    || self.reserve_atoms
+                        > MAX_ACCOUNTING_ATOMS - self.reserved_sell_floor_cash_atoms
+                {
+                    return Err(Error::ReserveHeadroom);
+                }
+            }
             QuoteSide::BuyOffset => {
                 add_scaled(
                     &mut self.reserved_buy_inventory,
@@ -1258,11 +1395,20 @@ impl TrancheStateV1 {
             quote.remaining_lots,
         )?;
         match quote.plan.side {
-            QuoteSide::SellWrite => subtract_vector(
-                next.policy.terms.outcome_count,
-                &mut next.reserved_sell_inventory,
-                &released,
-            )?,
+            QuoteSide::SellWrite => {
+                subtract_vector(
+                    next.policy.terms.outcome_count,
+                    &mut next.reserved_sell_inventory,
+                    &released,
+                )?;
+                next.reserved_sell_floor_cash_atoms = next
+                    .reserved_sell_floor_cash_atoms
+                    .checked_sub(checked_mul(
+                        quote.remaining_lots,
+                        quote.plan.limit_collateral_per_lot,
+                    )?)
+                    .ok_or(Error::InvariantViolation)?;
+            }
             QuoteSide::BuyOffset => {
                 subtract_vector(
                     next.policy.terms.outcome_count,
@@ -1301,42 +1447,62 @@ impl TrancheStateV1 {
 pub struct FeeAllocationInputV1 {
     /// Segregated tranche identity.
     pub tranche_id: Id,
+    /// Immutable beneficial owner paid every whole-atom fee credit directly.
+    pub owner: Id,
     /// Immutable fee policy identity shared by the allocation set.
     pub fee_policy_id: Id,
     /// Epoch through which this weight was integrated.
     pub snapshot_epoch: u64,
-    /// LP share supply entitled to this historical weight.
+    /// First epoch after the immutable fee window.
+    pub fee_window_end: u64,
+    /// Owner accounting-share supply entitled to this historical weight.
     pub lp_share_supply: u64,
-    /// Exact tranche generation at the fee checkpoint.
+    /// Exact reserve bound into the pre-state snapshot.
+    pub reserve_atoms: u64,
+    /// Last consumed fee-allocation generation at this snapshot.
+    pub fee_allocation_generation: u64,
+    /// Last consumed allocation identity, or zero before the first allocation.
+    pub last_fee_allocation_id: Id,
+    /// Exact tranche generation at the terminal fee snapshot.
     pub tranche_generation: u64,
     /// Frozen time-integrated capital-at-risk weight.
     pub capital_time_weight: u128,
-    /// Exact carry entering this allocation.
+    /// Carry entering this allocation; terminal V1 requires canonical zero.
     pub carry: FractionalCarry,
 }
 
-/// Exact whole-atom credit and persistent fractional remainder.
+/// Direct owner credit and funded terminal fractional remainder.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FeeAllocationOutputV1 {
     /// Externally authenticated identity of the realized fee-pot allocation.
     allocation_id: Id,
     /// Segregated tranche identity.
     tranche_id: Id,
+    /// Immutable beneficial owner receiving the direct whole-atom payout.
+    owner: Id,
     /// Immutable fee policy identity authenticated by the input.
     fee_policy_id: Id,
     /// Epoch through which the consumed weight was integrated.
     snapshot_epoch: u64,
-    /// LP share supply entitled to this historical weight.
+    /// First epoch after the immutable fee window.
+    fee_window_end: u64,
+    /// Owner accounting-share supply entitled to this historical weight.
     lp_share_supply: u64,
-    /// Exact tranche generation at the fee checkpoint.
+    /// Exact reserve authenticated by this state snapshot.
+    reserve_atoms: u64,
+    /// Last consumed fee-allocation generation at the snapshot.
+    fee_allocation_generation: u64,
+    /// Last consumed allocation identity at the snapshot.
+    last_fee_allocation_id: Id,
+    /// Exact tranche generation at the terminal fee snapshot.
     tranche_generation: u64,
     /// Weight consumed by this output.
     consumed_weight: u128,
     /// Carry authenticated by the allocation input.
     old_carry: FractionalCarry,
-    /// Whole collateral atoms credited to reserve.
+    /// Whole collateral atoms paid directly to the immutable owner.
     credited_atoms: u64,
-    /// Reduced proper fraction persisted for the next allocation.
+    /// Fixed-grid terminal fraction backed by retained carry escrow.
     new_carry: FractionalCarry,
 }
 
@@ -1351,6 +1517,11 @@ impl FeeAllocationOutputV1 {
         self.tranche_id
     }
 
+    /// Immutable beneficial owner receiving the direct whole-atom payout.
+    pub const fn owner(&self) -> Id {
+        self.owner
+    }
+
     /// Immutable fee policy identity.
     pub const fn fee_policy_id(&self) -> Id {
         self.fee_policy_id
@@ -1361,12 +1532,32 @@ impl FeeAllocationOutputV1 {
         self.snapshot_epoch
     }
 
-    /// LP share supply entitled to this historical weight.
+    /// First epoch after the immutable fee window.
+    pub const fn fee_window_end(&self) -> u64 {
+        self.fee_window_end
+    }
+
+    /// Owner accounting-share supply entitled to this historical weight.
     pub const fn lp_share_supply(&self) -> u64 {
         self.lp_share_supply
     }
 
-    /// Exact tranche generation at the fee checkpoint.
+    /// Reserve authenticated by the state snapshot.
+    pub const fn reserve_atoms(&self) -> u64 {
+        self.reserve_atoms
+    }
+
+    /// Last consumed fee-allocation generation at the snapshot.
+    pub const fn fee_allocation_generation(&self) -> u64 {
+        self.fee_allocation_generation
+    }
+
+    /// Last consumed allocation identity at the snapshot.
+    pub const fn last_fee_allocation_id(&self) -> Id {
+        self.last_fee_allocation_id
+    }
+
+    /// Exact tranche generation at the terminal fee snapshot.
     pub const fn tranche_generation(&self) -> u64 {
         self.tranche_generation
     }
@@ -1381,12 +1572,12 @@ impl FeeAllocationOutputV1 {
         self.old_carry
     }
 
-    /// Whole collateral atoms credited to the tranche.
+    /// Whole collateral atoms paid directly to the immutable owner.
     pub const fn credited_atoms(&self) -> u64 {
         self.credited_atoms
     }
 
-    /// Exact reduced carry persisted after this allocation.
+    /// Exact fixed-grid terminal carry after this allocation.
     pub const fn new_carry(&self) -> FractionalCarry {
         self.new_carry
     }
@@ -1403,7 +1594,7 @@ pub struct FeeAllocationBatchV1 {
     fee_pot_atoms: u64,
     /// Sum of all positive capital-at-risk weights.
     total_weight: u128,
-    /// Whole atoms retained by the fee authority from prior fractional carries.
+    /// Whole atoms entering from prior carry; always zero in terminal V1.
     prior_carry_escrow_atoms: u64,
     /// Whole atoms retained to back every new fractional carry exactly.
     retained_carry_escrow_atoms: u64,
@@ -1434,7 +1625,7 @@ impl FeeAllocationBatchV1 {
         self.total_weight
     }
 
-    /// Whole atoms entering from the prior carry escrow.
+    /// Whole atoms entering from prior carry; always zero in terminal V1.
     pub const fn prior_carry_escrow_atoms(&self) -> u64 {
         self.prior_carry_escrow_atoms
     }
@@ -1459,15 +1650,20 @@ impl FeeAllocationBatchV1 {
     }
 }
 
-/// Allocate a realized fee pot by exact time-integrated capital at risk.
+/// Apportion the one terminal realized fee pot on a frozen common grid.
 ///
-/// Each recipient receives `floor(pot * W / total_W + old_carry)` and keeps the
-/// exact reduced remainder. Complete old and new carry sums must both be whole
-/// atoms. [`FeeAllocationBatchV1`] then checks physical conservation:
-/// `new pot + prior carry escrow = credits + retained carry escrow`. An
-/// external authority must supply each tranche once, own both escrow balances,
-/// and consume the result once; this model does not authenticate that account
-/// set.
+/// Raw weights are aggregated by beneficial owner and Hamilton-normalized to
+/// exactly `10^12` units, with remainder ties broken by owner identity. Each
+/// direct owner credit is the whole part of `pot * units / 10^12`; the terminal
+/// fraction uses that common denominator.
+/// Inputs must be after the fee window, have unique tranche identities, and have
+/// no prior allocation or carry. Inputs with the same beneficial owner are
+/// aggregated before apportionment; their credit and carry are assigned to that
+/// owner's lexicographically smallest tranche identity.
+/// [`FeeAllocationBatchV1`] checks `pot = direct credits + retained carry escrow`.
+/// The external authority must
+/// own that pot, pay every bound owner, retain the reported escrow, and consume
+/// every output atomically; this model does not authenticate that account set.
 pub fn allocate_fee_pot(
     allocation_id: Id,
     fee_pot_atoms: u64,
@@ -1475,6 +1671,9 @@ pub fn allocate_fee_pot(
     inputs: &[Option<FeeAllocationInputV1>; MAX_FEE_RECIPIENTS],
 ) -> Result<FeeAllocationBatchV1> {
     check_id(allocation_id)?;
+    if fee_pot_atoms > MAX_ACCOUNTING_ATOMS {
+        return Err(Error::ParameterOutOfRange);
+    }
     let count = usize::from(recipient_count);
     if count == 0 || count > MAX_FEE_RECIPIENTS {
         return Err(Error::ZeroValue);
@@ -1485,10 +1684,29 @@ pub fn allocate_fee_pot(
         if index < count {
             let input = inputs[index].ok_or(Error::NonCanonicalPadding)?;
             check_id(input.tranche_id)?;
+            check_id(input.owner)?;
             check_id(input.fee_policy_id)?;
             input.carry.validate()?;
+            if input.fee_window_end == 0 || input.snapshot_epoch < input.fee_window_end {
+                return Err(Error::InvalidEpoch);
+            }
+            if input.carry != FractionalCarry::ZERO {
+                return Err(Error::FeeAllocationMismatch);
+            }
             if input.lp_share_supply == 0 {
                 return Err(Error::LastShareLocked);
+            }
+            if input.lp_share_supply > MAX_ACCOUNTING_ATOMS
+                || input.reserve_atoms > MAX_ACCOUNTING_ATOMS
+                || input.capital_time_weight > MAX_CAPITAL_TIME_WEIGHT
+            {
+                return Err(Error::ParameterOutOfRange);
+            }
+            if input.tranche_generation == u64::MAX {
+                return Err(Error::ParameterOutOfRange);
+            }
+            if input.fee_allocation_generation != 0 || input.last_fee_allocation_id != [0; 32] {
+                return Err(Error::FeeAllocationMismatch);
             }
             let mut prior = 0usize;
             while prior < index {
@@ -1498,6 +1716,7 @@ pub fn allocate_fee_pot(
                 }
                 if other.fee_policy_id != input.fee_policy_id
                     || other.snapshot_epoch != input.snapshot_epoch
+                    || other.fee_window_end != input.fee_window_end
                 {
                     return Err(Error::MismatchedBinding);
                 }
@@ -1514,24 +1733,28 @@ pub fn allocate_fee_pot(
     if total_weight == 0 {
         return Err(Error::ZeroWeight);
     }
+    if total_weight > MAX_AGGREGATE_FEE_WEIGHT {
+        return Err(Error::ParameterOutOfRange);
+    }
     let prior_carry_escrow_atoms = integer_sum_of_carries(inputs, count)?;
+    let fee_units = normalized_fee_units(inputs, count)?;
     let mut outputs = [None; MAX_FEE_RECIPIENTS];
     let mut credited_atoms = 0u64;
     index = 0;
     while index < count {
         let input = inputs[index].ok_or(Error::NonCanonicalPadding)?;
-        let (credited, new_carry) = add_weighted_fee(
-            input.carry,
-            fee_pot_atoms,
-            input.capital_time_weight,
-            total_weight,
-        )?;
+        let (credited, new_carry) = add_weighted_fee(input.carry, fee_pot_atoms, fee_units[index])?;
         outputs[index] = Some(FeeAllocationOutputV1 {
             allocation_id,
             tranche_id: input.tranche_id,
+            owner: input.owner,
             fee_policy_id: input.fee_policy_id,
             snapshot_epoch: input.snapshot_epoch,
+            fee_window_end: input.fee_window_end,
             lp_share_supply: input.lp_share_supply,
+            reserve_atoms: input.reserve_atoms,
+            fee_allocation_generation: input.fee_allocation_generation,
+            last_fee_allocation_id: input.last_fee_allocation_id,
             tranche_generation: input.tranche_generation,
             consumed_weight: input.capital_time_weight,
             old_carry: input.carry,
@@ -1591,6 +1814,11 @@ fn validate_rung(policy: &LiquidityPolicyV1, rung: &QuoteRungV1) -> Result<()> {
     }
     if rung.minimum_fill_lots == 0 || rung.minimum_fill_lots > rung.lots {
         return Err(Error::InvalidRange);
+    }
+    if rung.lots > MAX_ACCOUNTING_ATOMS
+        || checked_mul(rung.lots, rung.limit_collateral_per_lot)? > MAX_ACCOUNTING_ATOMS
+    {
+        return Err(Error::ParameterOutOfRange);
     }
     if rung.start_epoch < policy.batch_start
         || rung.expiry_epoch > policy.batch_end
@@ -1712,129 +1940,164 @@ fn integer_sum_of_carries(
     inputs: &[Option<FeeAllocationInputV1>; MAX_FEE_RECIPIENTS],
     count: usize,
 ) -> Result<u64> {
-    let mut whole = 0u64;
-    let mut remainder = FractionalCarry::ZERO;
+    let mut numerator = 0u128;
     let mut index = 0usize;
     while index < count {
         let input = inputs[index].ok_or(Error::NonCanonicalPadding)?;
-        let (added_whole, next_remainder) = add_proper_fractions(remainder, input.carry)?;
-        whole = whole
-            .checked_add(added_whole)
+        input.carry.validate()?;
+        numerator = numerator
+            .checked_add(input.carry.numerator)
             .ok_or(Error::ArithmeticOverflow)?;
-        remainder = next_remainder;
         index += 1;
     }
-    if remainder != FractionalCarry::ZERO {
-        return Err(Error::InvariantViolation);
-    }
-    Ok(whole)
+    integer_grid_sum(numerator)
 }
 
 fn integer_sum_of_output_carries(
     outputs: &[Option<FeeAllocationOutputV1>; MAX_FEE_RECIPIENTS],
     count: usize,
 ) -> Result<u64> {
-    let mut whole = 0u64;
-    let mut remainder = FractionalCarry::ZERO;
+    let mut numerator = 0u128;
     let mut index = 0usize;
     while index < count {
         let output = outputs[index].ok_or(Error::NonCanonicalPadding)?;
-        let (added_whole, next_remainder) = add_proper_fractions(remainder, output.new_carry)?;
-        whole = whole
-            .checked_add(added_whole)
+        output.new_carry.validate()?;
+        numerator = numerator
+            .checked_add(output.new_carry.numerator)
             .ok_or(Error::ArithmeticOverflow)?;
-        remainder = next_remainder;
         index += 1;
     }
-    if remainder != FractionalCarry::ZERO {
-        return Err(Error::InvariantViolation);
-    }
-    Ok(whole)
+    integer_grid_sum(numerator)
 }
 
-fn add_proper_fractions(
-    left: FractionalCarry,
-    right: FractionalCarry,
-) -> Result<(u64, FractionalCarry)> {
-    left.validate()?;
-    right.validate()?;
-    let denominator_gcd = gcd_u128(left.denominator, right.denominator);
-    let left_scale = right.denominator / denominator_gcd;
-    let right_scale = left.denominator / denominator_gcd;
-    let denominator = left
-        .denominator
-        .checked_mul(left_scale)
-        .ok_or(Error::ArithmeticOverflow)?;
-    let numerator = left
-        .numerator
-        .checked_mul(left_scale)
-        .and_then(|value| value.checked_add(right.numerator.checked_mul(right_scale)?))
-        .ok_or(Error::ArithmeticOverflow)?;
-    let whole = numerator / denominator;
-    let remainder = numerator % denominator;
-    let reduced = if remainder == 0 {
-        FractionalCarry::ZERO
-    } else {
-        let divisor = gcd_u128(remainder, denominator);
-        FractionalCarry {
-            numerator: remainder / divisor,
-            denominator: denominator / divisor,
+fn integer_grid_sum(numerator: u128) -> Result<u64> {
+    if !numerator.is_multiple_of(MAX_CARRY_DENOMINATOR) {
+        return Err(Error::InvariantViolation);
+    }
+    u64::try_from(numerator / MAX_CARRY_DENOMINATOR).map_err(|_| Error::ArithmeticOverflow)
+}
+
+fn normalized_fee_units(
+    inputs: &[Option<FeeAllocationInputV1>; MAX_FEE_RECIPIENTS],
+    count: usize,
+) -> Result<[u128; MAX_FEE_RECIPIENTS]> {
+    let mut total_weight = 0u128;
+    let mut index = 0usize;
+    while index < count {
+        let input = inputs[index].ok_or(Error::NonCanonicalPadding)?;
+        total_weight = total_weight
+            .checked_add(input.capital_time_weight)
+            .ok_or(Error::ArithmeticOverflow)?;
+        index += 1;
+    }
+    if total_weight == 0 || total_weight > MAX_AGGREGATE_FEE_WEIGHT {
+        return Err(Error::ZeroWeight);
+    }
+
+    // Aggregate every beneficial owner's weight before rounding. Only the
+    // lexicographically smallest tranche for an owner receives that owner's
+    // units; the other tranche outputs consume their weights with zero credit
+    // and carry. This makes splitting one owner's weight across tranche
+    // identities economically neutral without requiring global creation-time
+    // uniqueness state in this isolated model.
+    let mut owner_weights = [0u128; MAX_FEE_RECIPIENTS];
+    let mut representatives = [false; MAX_FEE_RECIPIENTS];
+    index = 0;
+    while index < count {
+        let input = inputs[index].ok_or(Error::NonCanonicalPadding)?;
+        let mut representative = index;
+        let mut cursor = 0usize;
+        while cursor < count {
+            let other = inputs[cursor].ok_or(Error::NonCanonicalPadding)?;
+            let current = inputs[representative].ok_or(Error::NonCanonicalPadding)?;
+            if other.owner == input.owner && other.tranche_id < current.tranche_id {
+                representative = cursor;
+            }
+            cursor += 1;
         }
-    };
-    Ok((
-        u64::try_from(whole).map_err(|_| Error::ArithmeticOverflow)?,
-        reduced,
-    ))
+        owner_weights[representative] = owner_weights[representative]
+            .checked_add(input.capital_time_weight)
+            .ok_or(Error::ArithmeticOverflow)?;
+        representatives[representative] = true;
+        index += 1;
+    }
+
+    let mut units = [0u128; MAX_FEE_RECIPIENTS];
+    let mut remainders = [0u128; MAX_FEE_RECIPIENTS];
+    let mut assigned = 0u128;
+    index = 0;
+    while index < count {
+        let scaled = owner_weights[index]
+            .checked_mul(MAX_CARRY_DENOMINATOR)
+            .ok_or(Error::ArithmeticOverflow)?;
+        units[index] = scaled / total_weight;
+        remainders[index] = scaled % total_weight;
+        assigned = assigned
+            .checked_add(units[index])
+            .ok_or(Error::ArithmeticOverflow)?;
+        index += 1;
+    }
+    let mut remaining = MAX_CARRY_DENOMINATOR
+        .checked_sub(assigned)
+        .ok_or(Error::InvariantViolation)?;
+    if remaining > count as u128 {
+        return Err(Error::InvariantViolation);
+    }
+    let mut awarded = [false; MAX_FEE_RECIPIENTS];
+    while remaining != 0 {
+        let mut best = None;
+        index = 0;
+        while index < count {
+            let input = inputs[index].ok_or(Error::NonCanonicalPadding)?;
+            if !awarded[index] && representatives[index] && owner_weights[index] != 0 {
+                best = match best {
+                    None => Some(index),
+                    Some(current) => {
+                        let current_input = inputs[current].ok_or(Error::NonCanonicalPadding)?;
+                        if remainders[index] > remainders[current]
+                            || (remainders[index] == remainders[current]
+                                && input.owner < current_input.owner)
+                        {
+                            Some(index)
+                        } else {
+                            Some(current)
+                        }
+                    }
+                };
+            }
+            index += 1;
+        }
+        let selected = best.ok_or(Error::InvariantViolation)?;
+        units[selected] = units[selected]
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        awarded[selected] = true;
+        remaining -= 1;
+    }
+    Ok(units)
 }
 
 fn add_weighted_fee(
     carry: FractionalCarry,
     pot: u64,
-    weight: u128,
-    total_weight: u128,
+    fee_units: u128,
 ) -> Result<(u64, FractionalCarry)> {
     carry.validate()?;
-    if total_weight == 0 || weight > total_weight {
-        return Err(Error::ZeroWeight);
+    if fee_units > MAX_CARRY_DENOMINATOR {
+        return Err(Error::InvariantViolation);
     }
-    if weight == 0 {
-        return Ok((0, carry));
-    }
-    if pot == 0 {
-        return Ok((0, carry));
-    }
-    let share_gcd = gcd_u128(weight, total_weight);
-    let share_num = weight / share_gcd;
-    let share_den = total_weight / share_gcd;
-    let pot_gcd = gcd_u128(u128::from(pot), share_den);
-    let fee_num = u128::from(pot / u64::try_from(pot_gcd).map_err(|_| Error::ArithmeticOverflow)?)
-        .checked_mul(share_num)
+    let numerator = u128::from(pot)
+        .checked_mul(fee_units)
+        .and_then(|value| value.checked_add(carry.numerator))
         .ok_or(Error::ArithmeticOverflow)?;
-    let fee_den = share_den / pot_gcd;
-    let denominator_gcd = gcd_u128(carry.denominator, fee_den);
-    let carry_scale = fee_den / denominator_gcd;
-    let fee_scale = carry.denominator / denominator_gcd;
-    let denominator = carry
-        .denominator
-        .checked_mul(carry_scale)
-        .ok_or(Error::ArithmeticOverflow)?;
-    let numerator = carry
-        .numerator
-        .checked_mul(carry_scale)
-        .and_then(|value| value.checked_add(fee_num.checked_mul(fee_scale)?))
-        .ok_or(Error::ArithmeticOverflow)?;
-    let whole = numerator / denominator;
-    if whole > u128::from(u64::MAX) {
-        return Err(Error::ArithmeticOverflow);
-    }
-    let remainder = numerator % denominator;
+    let whole = numerator / MAX_CARRY_DENOMINATOR;
+    let remainder = numerator % MAX_CARRY_DENOMINATOR;
     let new_carry = if remainder == 0 {
         FractionalCarry::ZERO
     } else {
-        let divisor = gcd_u128(remainder, denominator);
         FractionalCarry {
-            numerator: remainder / divisor,
-            denominator: denominator / divisor,
+            numerator: remainder,
+            denominator: MAX_CARRY_DENOMINATOR,
         }
     };
     Ok((
@@ -2039,13 +2302,4 @@ fn check_id(id: Id) -> Result<()> {
         return Err(Error::InvalidIdentity);
     }
     Ok(())
-}
-
-const fn gcd_u128(mut left: u128, mut right: u128) -> u128 {
-    while right != 0 {
-        let remainder = left % right;
-        left = right;
-        right = remainder;
-    }
-    left
 }

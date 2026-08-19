@@ -10,20 +10,32 @@ solver, and cryptographic dependencies. No function here is a live authority.
 - deterministic hard-range, index-triangle, and exact-vector compilation;
 - copied policy/tranche/Terms/schedule bindings on every quote plan;
 - conservative full-integer-simplex liability `max_i(q_i)`;
-- aggregate sell-Egg and buy-cash quote reservations;
-- segregated tranche reserve, inventory, LP shares, risk weight, fee carry,
-  local generation, and terminal settlement ledger;
+- aggregate sell-Egg, minimum-proceeds headroom, and buy-cash quote
+  reservations;
+- segregated tranche reserve, inventory, single-owner nontransferable accounting
+  shares, risk weight, fee carry, local generation, and terminal settlement
+  ledger;
 - staged partial-fill, cancel, lapse, withdrawal, and settlement arithmetic;
   and
-- exact rational fee-pot allocation arithmetic for a supplied complete input
-  set, including physically conserved whole-atom carry escrow.
+- one terminal fixed-grid fee-pot apportionment for a supplied complete input
+  set, including direct owner credits and physically conserved whole-atom carry
+  escrow.
 
 The eight-rung schedule is only a bounded witness. It is not a continuous AMM,
 does not expose a cost potential, and does not promise continuous availability.
 Simultaneous sells aggregate componentwise before one maximum; buys reserve
-their full cash ceiling without netting. A precommitted future rung may be
+their full cash ceiling without netting, and both sides preflight
+`coefficient*lots`. Active sell floors reserve numeric proceeds headroom, so an
+admitted write is executable at its floor. A precommitted future rung may be
 admitted later, but any quote change absent from the authenticated artifact
 requires a new schedule/policy transition rather than in-place mutation.
+
+The admitted numeric domain is part of V1, not an implementation hint: atoms,
+shares, per-tranche weight, and the fixed fee grid are capped at `10^12`;
+fee-window duration times collateral cap must also fit `10^12`. Up to eight
+tranches compose to aggregate allocation weight `8*10^12`. The one terminal
+allocation uses a named Hamilton normalization and never claims unbounded
+rational precision.
 
 ## Existing semantic owners to reuse
 
@@ -62,7 +74,9 @@ Before any live route, the adapter must provide and test all of the following:
    cannot be substituted, with rent, owner, length, bump, version, and replay
    checks. Asset-changing instructions must bind the expected tranche
    generation so a retried fill/cancel/withdraw cannot consume a later state;
-   the model's monotone generation is evidence, not a live replay gate.
+   cancellation must additionally authenticate the immutable beneficial owner.
+   Post-expiry lapse may remain permissionless. The model's monotone generation
+   is evidence, not a live replay gate.
 5. Atomic funding of sell plans by exact Eggs already owned by the tranche, or
    by a canonical Split that moves collateral to Hoard and receives those Eggs
    before the Reservation becomes active. The liquidity policy never mints.
@@ -77,20 +91,28 @@ Before any live route, the adapter must provide and test all of the following:
 7. Frozen-page provenance, candidate selection, exact partial allocation,
    portfolio receipt/entitlement initialization, and terminal reservation
    closure in the existing batch state machine.
-8. A fee-pot authority that authenticates the realized pot, exhaustive unique
-   tranche set, common fee policy and snapshot epoch, consumes the pot once,
-   owns the exact prior and retained carry-escrow atoms reported by the batch,
-   and applies every returned carry once. No projected volume is an input. A
-   zero-pot checkpoint must remain available so share exit never depends on
-   future volume. Capital-at-risk time may accrue only for quotes proven present
-   and executable in the authoritative frozen page interval; pure model
-   admission is not page-availability evidence. A separately frozen terminal
-   carry rule is still required when funded fractional carries remain; the
-   model fail-closes by locking the last shares.
-9. LP share mint/burn authority and a decided transfer policy. Transferable
-   shares must not bypass the modeled free-collateral bound. The model stores
-   total supply only; authenticated per-holder balances and burn authority are
-   still required.
+8. A fee-pot authority that authenticates the realized pot, the exhaustive set
+   of unique tranche inputs and their bound beneficial owners, common fee
+   policy/snapshot/window epoch, and zero prior allocation/carry. It must
+   consume the single terminal pot
+   once, implement the frozen fixed-grid/tie rule, own the retained carry-escrow
+   atoms reported by the batch, atomically pay every whole credit directly to
+   its bound owner, and apply every output once. No projected volume is an
+   input, and no second allocation is allowed. Capital-at-risk time may accrue
+   only for quotes proven present and executable in the authoritative frozen
+   page interval; pure model admission is not page-availability evidence. A
+   separately frozen terminal carry rule is still required when funded
+   fractional carries remain; the model fail-closes by locking the last shares.
+9. Authentication of the one immutable beneficial owner on every deposit and
+   withdrawal. V1 intentionally has no holder-balance ledger and no transfer
+   policy: its shares are internal accounting units, and different owners need
+   different tranches. The terminal allocator aggregates duplicate owners over
+   the complete input set before rounding and assigns each owner's credit and
+   carry to its lexicographically smallest tranche identity. The live authority
+   must prove that set exhaustive so no owner's tranche weight is omitted.
+   Adding multi-owner or transferable shares is a successor model/account
+   version requiring named per-holder residual claims
+   and an exit order-invariance proof. It cannot be enabled only in an adapter.
 10. Resolution authentication, exact payout-vector binding, fractional payout
     policy, terminal token burns, and collateral transfer. The model's exact
     settlement intentionally refuses an unnamed fractional atom.
@@ -100,8 +122,8 @@ Before any live route, the adapter must provide and test all of the following:
     desired, including the unverified runtime and adapter assumptions.
 
 Until those authorities exist, this crate is evidence that the accounting
-relation is finite, exact, and implementable—not evidence that passive
-liquidity is available in a deployed program.
+relation is finite, deterministically rounded, and implementable—not evidence
+that passive liquidity is available in a deployed program.
 
 ## Economic exclusions preserved at integration
 
