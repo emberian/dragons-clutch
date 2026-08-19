@@ -12,35 +12,31 @@ its dirty paths belong to it until the tree goes quiet.
 
 ## Current thrust
 
-R1 close-out. Codex owns the 8-gate repair queue from its b837be7
-contradiction ledger (my 94-gate emission's output); I sweep whatever remains
-after it quiesces, then run the quiet-tree 94/94 re-emission, manifest-only
-commit, and `check --run-gates`. Parallel: V3 blocker verification, R2
-provider selection/design, Draft 10 fork (degg-research).
+R1 close-out. Bringup is fixed at `83e124d`; its prior full run reached 93/94
+with the sole strict liveness source-drift refusal. `b5700a9` re-sealed the
+current local runtime/profile instead of weakening that check. Next is the
+quiet-tree 94/94 emission sequence, then a fresh Persvati attestation. Parallel:
+V3 blocker verification, R2 provider selection/design, Draft 10 fork
+(degg-research).
 
 ## Next 3 moves
 
-1. Verify codex's 9fd1ef1 Direct V3 blockers (order-body width 99 vs 107,
-   zero-envelope release trap, 64- vs 96-byte digest conflation) — agent in
-   flight; then decide commit/hold for the jobs-worktree checkpoint.
-2. R2: select the V1 provider (Pyth pull leading on the bucket-uniqueness
-   discriminator) and write the SourceSpec-revision design doc
-   (attested-update admission, crossing-rule registration, post-2026-08-26
-   identity pinning).
-3. After codex quiesces: solana-reference offline lock regen (root cause:
-   solana-layout gained clutch-batch-policy-identity after c05fe84),
-   cost-lab re-pin (MAX_INTENT_BYTES 310, CandidateFeed/ClearWork rows, ABI
-   auditor constants), bringup-walk repair (AlreadyInitialized/
-   MismatchedState state collision — sequencing, not source refusal) →
-   94/94 re-emission.
+1. From a quiet tree, obtain a 94/94
+   `scripts/baseline_manifest.py emit --run-gates`, commit only that manifest,
+   and run `scripts/baseline_manifest.py check --run-gates`.
+2. Make a fresh Persvati attestation against that checked local result. This is
+   not a release, deployment, signature, or public-network authorization.
+3. Continue the separate V3/R2 research and design queue only after the R1
+   evidence sequence is quiet and recorded.
 
 ## Done log (2026-08-19 session)
 
-- Codex landed the last two repairs: 83e124d splits default/mock bringup
-  evidence (gate 8/8) and b5700a9 reseals the liveness profile + stack audit
-  to the new bd20711b... runtime identity (the full-reseal path my fork
-  ledger recommended). Emission claimed in the ledger and launched from the
-  post-claim clean HEAD.
+- Runtime/profile repair resealed at `b5700a9`: current default ELF
+  `bd20711b…b60`, runtime-artifact report `626a299d…e038`, and 52-file ledger
+  `dbf55f8e…5f35`. The prior `83e124d` full run was 93/94 with only the strict
+  liveness source-drift refusal. The old `a572…` / `7e8f6b1` / `b5da74f` seal
+  remains historical evidence only. All provider, liveness, Direct V2,
+  terminal, deployment, release, security, and legal STOPs remain open.
 
 - Default-ELF identity fork surfaced and ledgered: 9c371fe's rustdoc-link fix
   touches closure file resolution.rs, so clean HEAD builds bd20711b... while
