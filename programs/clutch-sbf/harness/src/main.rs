@@ -6678,18 +6678,32 @@ fn withdrawn_owner_bytes(
 /// `HoardAccount::collateral_atoms` is locked-claim backing and therefore
 /// stays byte-identical. The token account can fall below its previous amount
 /// only down to that backing floor; at the terminal state the floor is zero.
-fn withdraw_cash_compares(
-    shared: &Shared,
-    plane: &Plane,
-    position: &Pda,
-    replay: &Pda,
-    destination: &Pda,
-    position_pre: &[u8],
-    replay_pre: &[u8],
+struct WithdrawCashExpectation<'a> {
+    position: &'a Pda,
+    replay: &'a Pda,
+    destination: &'a Pda,
+    position_pre: &'a [u8],
+    replay_pre: &'a [u8],
     destination_pre: u64,
     hoard_pre: u64,
     amount: u64,
+}
+
+fn withdraw_cash_compares(
+    shared: &Shared,
+    plane: &Plane,
+    withdrawal: WithdrawCashExpectation<'_>,
 ) -> Vec<Compare> {
+    let WithdrawCashExpectation {
+        position,
+        replay,
+        destination,
+        position_pre,
+        replay_pre,
+        destination_pre,
+        hoard_pre,
+        amount,
+    } = withdrawal;
     let (position_post, replay_post) = withdrawn_owner_bytes(position_pre, replay_pre, amount);
     vec![
         Compare {
@@ -7302,14 +7316,16 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
         withdraw_cash_compares(
             shared,
             plane,
-            &plane.position,
-            &plane.replay,
-            &shared.actor_token,
-            &plane.state.position,
-            &plane.state.replay,
-            ACTOR_COLLATERAL_ATOMS - WALK_CASH - SECOND_ENDOW_AMOUNT,
-            token_after_bearer,
-            actor_cash,
+            WithdrawCashExpectation {
+                position: &plane.position,
+                replay: &plane.replay,
+                destination: &shared.actor_token,
+                position_pre: &plane.state.position,
+                replay_pre: &plane.state.replay,
+                destination_pre: ACTOR_COLLATERAL_ATOMS - WALK_CASH - SECOND_ENDOW_AMOUNT,
+                hoard_pre: token_after_bearer,
+                amount: actor_cash,
+            },
         ),
     ));
     let (actor_position_post, actor_replay_post) =
@@ -7339,14 +7355,16 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
     let payer_compares = withdraw_cash_compares(
         shared,
         plane,
-        &payer_position,
-        &payer_replay,
-        &shared.payer_collateral_token,
-        &payer_position_bytes,
-        &payer_replay_bytes,
-        0,
-        SECOND_ENDOW_AMOUNT,
-        SECOND_ENDOW_AMOUNT,
+        WithdrawCashExpectation {
+            position: &payer_position,
+            replay: &payer_replay,
+            destination: &shared.payer_collateral_token,
+            position_pre: &payer_position_bytes,
+            replay_pre: &payer_replay_bytes,
+            destination_pre: 0,
+            hoard_pre: SECOND_ENDOW_AMOUNT,
+            amount: SECOND_ENDOW_AMOUNT,
+        },
     );
     cases.push(Case::accept(
         "committed-22-withdraw-second-owner-cash",
