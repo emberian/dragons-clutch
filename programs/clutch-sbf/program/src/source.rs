@@ -17,13 +17,15 @@
 //!
 //! ## Current runtime boundary
 //!
-//! `Intent::FeedAdvance` does **not** call this module.  Its current three-
-//! account prototype still folds a caller-supplied observation page, and
-//! resolution still folds a different caller-supplied evidence buffer.  Those
-//! paths are useful SBF/accumulator scaffolding but are not source-authenticated.
-//! The exact persisted-account and instruction join required before this
-//! module can become load-bearing is specified in
-//! `docs/implementation/SOURCE_ADMISSION_V1.md`.
+//! The `InitSourceSpec`, `InitSourceArchive`, `AppendSourceArchive`, and
+//! `SealSourceArchive` instructions call this module through a compile-time
+//! closed registry and persist the exact receipt `Resolve` authenticates. The
+//! default artifact intentionally registers no provider/parser release and
+//! refuses before mutation; only the explicitly different
+//! `non-production-mock-source` ELF exercises the complete local-bank path.
+//! Legacy `Intent::FeedAdvance` still folds a caller-supplied observation page
+//! and must not be described as source-authenticated. See
+//! `docs/implementation/AUTHENTICATED_SOURCE_CONSTRUCTION_V1.md`.
 
 use clutch_accumulator::{Grid, Observation, MAX_VALUE};
 use clutch_solana_layout::{canonical_feed_id, Hash32};
