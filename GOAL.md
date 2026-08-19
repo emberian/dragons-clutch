@@ -76,8 +76,19 @@ ready in degg-research.
   regresses in both directions. Product gap found and named: there is NO
   per-order V4 cancellation — an order can only be retired by aborting the
   whole unfrozen epoch. Claim plane: model + host + focused SBF-EXECUTED
-  on a branch. Merge is gated on resolving the 4 reported pre-existing
-  test failures (verification in progress).
+  on a branch. Merge is BLOCKED: the lane claimed its 4 test failures were
+  "pre-existing and not mine — proven, not asserted", and measurement
+  refutes it. Clean main, full logs, both declared gates: default profile
+  16 targets / 75 passed / 0 failed (native_resolution 15/15), mock profile
+  16 targets / 82 passed / 0 failed (native_full_lifecycle ran and passed).
+  The failures are branch-introduced. Likely method error: branch test
+  sources run against a base-built ELF, a combination that exists nowhere.
+  Sent back to root-cause and fix on the branch, with no relabelling and no
+  weakened expectations.
+  Process note on myself: my first read of this claimed a gate-coverage
+  hole, which was an artifact of piping the gate through `tail -40`. The
+  house rule about teeing build logs exists for exactly this; a truncated
+  log nearly became a false evidence-integrity alarm.
 
 - SUCCINCT CLEARING FEASIBILITY SCOUTED
   (docs/design/SUCCINCT_CLEARING_FEASIBILITY.md): the compute wall is NOT an
