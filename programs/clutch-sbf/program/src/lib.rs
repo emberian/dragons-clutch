@@ -50,6 +50,7 @@
 //! | --- | --- |
 //! | [`error`] | the stable numeric refusal codes |
 //! | [`seeds`] | the proposed PDA seed schema for all 15 protocol accounts plus the 3 reference-only ones |
+//! | [`source`] | fail-closed source-spec and authenticated price-admission kernel; not yet joined to an instruction |
 //! | [`accounts`] | hostile-metadata authentication, address comparison, and every account decoder |
 //! | [`dispatch`] | request decoding and routing to exactly one instruction family |
 //! | [`instructions`] | one module per instruction family; see each module's status |
@@ -69,6 +70,7 @@ pub mod dispatch;
 pub mod error;
 pub mod instructions;
 pub mod seeds;
+pub mod source;
 pub mod token;
 
 #[cfg(target_os = "solana")]
