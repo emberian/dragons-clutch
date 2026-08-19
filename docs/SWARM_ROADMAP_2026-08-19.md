@@ -42,7 +42,7 @@ Exact release pins must be refreshed by the final manifest lane.
 | Native degree 0--3 basis semantics | Lean **PROVED-MODEL**, finite Lean/Rust bridge, host-tested production evaluator | Preserve native smooth semantics; never relabel categorical lowering as equivalence. |
 | Monolithic occupation Resolve | **SBF-EXECUTED**, but every measured initial span 1--3 / degree 1--3 case fails the selected 25% CU-headroom policy | Keep as a compatibility/reference route, not the admitted liveness route. |
 | Resumable occupation ResolutionWork | Routed and **SBF-EXECUTED** at `0e4bd51`; Begin/Fold/Finalize/Abort, prepaid rewards, expiry, refund/donation segregation, rollback, and monolithic byte equivalence have focused evidence | This is the current credible occupation-liveness path, pending one clean integrated release identity. |
-| Source construction | Permissionless one-page construction exists only in a distinct non-production mock-provider ELF | Default production registry still has zero releases. |
+| Source construction | Permissionless one-page construction exists only in a distinct non-production mock-provider ELF; the selected Pyth pull profile has a 368-byte SourceSpec-v2/CROSSING_V1 model | Default production registry still has zero releases. The Pyth cut has no frozen post-cutover identity, loader/Instructions/Clock adapter, registry entry, or SBF route. |
 | First value admission | `Endow` is gated at `cfea8e8` by canonical Terms, SourceSpec, and the exact compiled source-release registry; the default ELF refuses `0x79` before mutation | An inert Market may exist, but the empty-registry build cannot accept collateral.  This is fail-closed, not a production source. |
 | Direct selection V2 | Init/Freeze/Submit execute; full top-three Select consumes exactly 1.4M CU and rolls back at `e874db1` | V2 is a measured non-promotable STOP.  Do not weaken full relation verification merely to make it fit. |
 | Direct lifecycle V3 | Audit-green bounded model/design at `ef32495`; staged verification, 64-tick closure, typed reservation phases, refunds, lapse, and donation ledgers are modeled | No live codec, account migration, SBF route, rent, CU, or terminal bank campaign exists yet. |
@@ -91,17 +91,18 @@ terminal cleanup, FHE optimality, or a filing.  Those are named later releases.
 Checkpoint disposition: the current runtime/test ancestry `83e124d` and exact
 1,228,192-byte default ELF `bd207...16b60` are resealed at `b5700a9` with a
 current final-LTO/stack audit and same-ELF bank campaign. The preceding
-`b5da74f`/`a572...` seal and Persvati attestation remain historical evidence;
-Hbox independently verified that archive but is SBF-UNAVAILABLE because the
-exact toolchain/dependency cache is absent. The default/`0x79` versus explicit
+`b5da74f`/`a572...` seal remains historical evidence. Persvati has since
+attested `6743b9d` 40/40 with 0 STOP, and Hbox independently rebuilt that
+source under the pinned toolchain; its internally byte-identical Linux result
+differs from the macOS seal only in exhaustively classified per-OS platform-tools
+bytes. A second macOS host remains needed for byte-level seal reproduction. The
+default/`0x79` versus explicit
 mock-source bringup split is closed at `83e124d`. The last quiet-tree full
 emission matched 93/94, with only the strict liveness source-identity gate red;
 `b5700a9` closes that identity fork by remeasuring rather than reusing old CU
 rows. The quiet-tree schema-v2 emission now records 94/94; the manifest-only
-commit also passes post-commit `check --run-gates`. The remaining R1 evidence
-gate is a fresh Persvati portable attestation of that immutable endpoint. This
-is a checked local baseline, not a release, deployment, or independent SBF
-rebuild.
+commit also passes post-commit `check --run-gates`. This is a checked local
+baseline, not a release, deployment, or audit claim.
 
 ### R2 — Admit one production source profile
 
@@ -110,18 +111,22 @@ This is the highest-value missing production prerequisite.
 
 Required work:
 
-1. Select one real V1 provider profile from primary official specifications.
-2. Freeze exact program/deployment identity, account semantics, parser version,
+1. Preserve the selected Pyth pull model boundary: it is a distinct-domain
+   368-byte SourceSpec-v2 with closing `CROSSING_V1` rule id 2, not a registry
+   entry or runtime source transition.
+2. Freeze one real V1 provider profile from primary official specifications,
+   including its post-cutover receiver/config identity.
+3. Freeze exact program/deployment identity, account semantics, parser version,
    scale/orientation, finality, retention, bucket uniqueness, and availability
    assumptions.
-3. Implement the default release registry entry and immediate live-account,
+4. Implement the default release registry entry and immediate live-account,
    clock/config, receiver-post or CPI authentication required by that provider.
-4. Join absent-state SourceSpec/Feed/Archive construction to ResolutionWork on
+5. Join absent-state SourceSpec/Feed/Archive construction to ResolutionWork on
    one clean default ELF.  Include substitution, stale deployment, wrong
    parser, reorg/finality, missing bucket, and provider-unavailable refusals.
-5. Fund the complete source/archive/repair/resolution workload at market value
+6. Fund the complete source/archive/repair/resolution workload at market value
    admission.  Provider existence without prepaid work is not liveness.
-6. Keep multi-page archives, repair generations, long maturity horizons,
+7. Keep multi-page archives, repair generations, long maturity horizons,
    cleanup, release succession, and cross-Realm feed reuse refused until each
    has a separate bounded design and evidence campaign.
 
@@ -213,13 +218,23 @@ issuance and supplies no live ABI, CPI, authority, rent-funding, migration, or
 fractional-credit result. Use it to falsify a runtime design, not as terminal
 runtime evidence.
 
+The separate `terminal-economics-r4` checkpoint is **MODEL-ONLY /
+HOST-TESTED**. It distinguishes internal (`I`), registered external (`E`), and
+authoritative Token-2022 (`A`) supply planes and preserves a segregated
+CreditVault/CreditRoot plus every nonzero claimant credit. It establishes that
+arbitrary raw bearer quantities with indivisible collateral cannot generally
+reach tombstone-only closure without subsidy, confiscation, forced owner merge,
+or an immutable exact-lot issuance profile. It supplies no Token-2022 adapter,
+persistent supply ledger, CPI/close router, rent/keeper funding, migration, or
+SBF terminal walk.
+
 Failure-policy research checkpoint: `EvidenceOnlyRecoveryV1` rejects numeric
 failure resolution unless authenticated evidence has already selected a unique
-vector. It models finite SOL-prepaid repair, recoverable dormancy, lot-scaled
-new-market bearer units, explicit credit STOPs, authoritative Token-2022 zero,
-and burn-only whole-collateral disposition. It remains MODEL-ONLY and supplies
-no source theorem, live ABI, Token-2022 encoding/migration, measured repair
-route, or terminal CPI authority.
+vector. It models finite independently prepaid SOL repair, recoverable
+dormancy, lot-scaled new-market bearer units, explicit credit STOPs,
+authoritative Token-2022 zero, and burn-only whole-collateral disposition. It
+remains MODEL-ONLY and supplies no source theorem, live ABI, Token-2022
+encoding/migration, measured repair route, or terminal CPI authority.
 
 ### R5 — Close formal, confidential, and governance boundaries
 
@@ -228,10 +243,11 @@ specific runtime they claim to refine.
 
 Formal work:
 
-- The four `verus/batch` placeholders are gone. Preserve the reviewed narrow
-  claims at `b047415`/`345bc78`/`07d5efe`; next prove production dust-loop
-  completion/positive selection, validation-to-padding, and source-level
-  correspondence rather than relabeling premise-conditional lemmas as full
+- The former `verus/batch` placeholders now culminate in 28 verified scalar
+  obligations with five required red mutants. Preserve the narrow mathematical
+  dust-progress/positive-choice claim; next prove production dust-loop
+  completion/`left`/`assigned` invariants, validation-to-padding, and
+  source-level correspondence rather than relabeling the model as full
   allocation or relation conservation.
 - Install/pin Rocq in an isolated environment and prove the currently named
   kernel properties.  The present Rocq file is a specification with zero

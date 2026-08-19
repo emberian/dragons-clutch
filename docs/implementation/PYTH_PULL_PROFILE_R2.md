@@ -2,9 +2,9 @@
 
 Status: **ISOLATED MODEL / DEFAULT RELEASE STOP**. This slice reconciles the
 selected Pyth pull profile from `765ca81` with the isolated SourceSpec-v2 and
-`CROSSING_V1` work represented by `f0e7516`/`01291de`. It is not integrated in
-main, exports no `clutch-sbf` instruction, adds no source-registry entry, and
-does not change the default `SourceReleaseUnavailable` (`0x79`) refusal.
+`CROSSING_V1` successor. It is integrated as research-only, exports no
+`clutch-sbf` instruction, adds no source-registry entry, and does not change the
+default `SourceReleaseUnavailable` (`0x79`) refusal.
 
 ## Frozen model contract
 

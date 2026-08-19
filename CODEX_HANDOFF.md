@@ -84,6 +84,17 @@ Rocq definitions/typechecking are not a theorem inventory.
   `lcm_i D/gcd(D,w_i)`; credits preserve the market aggregate liability but
   expose an irreducible terminal remainder absent subsidy, forfeiture, or a
   finer unit. No policy is selected or live.
+- `research/source-profile-v1` additionally contains the selected R2 Pyth pull
+  profile model: a distinct-domain 368-byte SourceSpec-v2 with closing
+  `CROSSING_V1` id 2 and a receiver/loader/Instructions/Clock authentication
+  contract. It has no frozen post-cutover identity, registry entry, runtime
+  parser, or SBF route.
+- `research/failure-payout-v1` records the new-research
+  `EvidenceOnlyRecoveryV1` policy: no numeric fallback, finite independently
+  prepaid repair, and recoverable dormancy. `research/terminal-economics-r4`
+  is a separate `I`/`E`/`A` supply-plane and claimant-credit-vault model that
+  rules out general tombstone-only closure for arbitrary raw bearer units.
+  Neither supplies a live ABI, Token-2022 adapter, migration, or terminal walk.
 
 These are **HOST-TESTED**, **MODEL-ONLY**, or **PROVED-MODEL** as named in
 `CURRENT_TRUTH.md`. None is a live native-resolution SBF claim.
@@ -187,7 +198,10 @@ asset. Hoard principal is never rent, liveness, bounty, or revenue.
    receiver-post/CPI/config provenance, live Clock/feed admission, or multi-page
    proof exists. The focused bank still injects deterministic mock source state
    at genesis. Typed artifact transport does not solve ingestion. Default Endow
-   must keep failing closed until a production release is registered.
+   must keep failing closed until a production release is registered. The R2
+   Pyth SourceSpec-v2/CROSSING_V1 cut is model-only; absent post-cutover
+   identity, official loader/Instructions/Clock decoders, registry, and SBF
+   evidence leave the default `0x79` refusal unchanged.
 4. A bank with no injected Clutch account can now seal policy/grid/Terms,
    create Realm/Profile, and create the complete initial degree-selected market
    plane. It cannot create the full source/archive/Epoch/candidate/pot/receipt
@@ -208,11 +222,15 @@ asset. Hoard principal is never rent, liveness, bounty, or revenue.
 7. Empty frozen Direct V2 epochs can strand Reservations; most accounts lack
    authenticated rent ownership and a close route; outcome mints have no
    `MintCloseAuthority`; and Hoard donations, claim-burn forfeiture, and
-   fractional fragments lack selected terminal disposition.
+   fractional fragments lack selected terminal disposition. The R4 model says
+   arbitrary raw bearer quantities instead require a persistent claimant-credit
+   vault/root or another explicit immutable policy; it is not a live
+   Token-2022, migration, or SBF closure.
 8. The clean schema-v2 local evidence baseline now passes 94/94 and its
-   post-commit full check. The repository still lacks an independent SBF
-   rebuild, complete release SBOM/license record, external security review,
-   signed tag, and release bundle.
+   post-commit full check. Hbox has independently rebuilt the same source with
+   its cross-OS divergence classified; byte-level seal reproduction still needs
+   a second macOS host. The repository still lacks complete release SBOM/license
+   record, external security review, signed tag, and release bundle.
 9. Gate L0 remains open. No engineering artifact authorizes public-network use,
    filing, regulator contact, or real funds.
 

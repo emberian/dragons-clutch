@@ -15,31 +15,32 @@ its dirty paths belong to it until the tree goes quiet.
 R1 manifest close is SEALED: schema-v2 MANIFEST.baseline.json committed at
 94/94 (d78f299, stabilized 3294dcd, checked 9625100, bound 6743b9d — codex's
 endgame), fast check binds the tree exactly. The fresh Persvati portable
-attestation of 6743b9d PASSED 40/40 (recorded in CURRENT_TRUTH §2). Post-R1 design track is
-moving: R2 selection+codec landed, R4 runtime design proposed, Draft 10 +
-John packet ready in degg-research.
+attestation of 6743b9d PASSED 40/40 (recorded in CURRENT_TRUTH §2). Post-R1
+design track is moving: the R2 successor and Verus dust model are
+research-only, R4 runtime design is proposed, and Draft 10 + John packet are
+ready in degg-research.
 
 ## Next 3 moves
 
-1. Harvest the Persvati attestation (job dir on persvati; PASS/STOP table)
-   and record its outcome in CURRENT_TRUTH Section 2 + the handoff.
+1. Preserve the sealed manifest, Persvati attestation, and classified Hbox
+   rebuild identities while recording only accepted post-R1 evidence.
 2. V3 Settle unit: embed the economic Position-transfer kernel in Settle on
    codex/r3-direct-v3 (the one terminal that drops reservation assets), then
    the placement-gate wiring + tags 36-46 routing prerequisites list.
-3. STOP #1 successor: per-degree blank-bank joined lifecycle evidence lane
-   (degrees 1-3), plus the R4 interim mechanical steps (validator
-   PREPAID_UNBOUNDED amendment, EXTERNAL_OWNER_STATE inventory rows).
+3. Advance R4 only through its explicit model-to-runtime gates: validator
+   `PREPAID_UNBOUNDED` amendment, `EXTERNAL_OWNER_STATE` inventory rows, and
+   the separately scoped terminal adapter design.
 
 ## Ember decision queue (2026-08-19 morning)
 
-1. R2 CROSSING_V1 boundary variant: A closing T(k)=(k+1)B (recommended) vs
-   B opening. Both implemented as rule ids 2/3 with falsifiers (3b20ea6).
-2. R2 codec ambiguity flags from the lane report: ProgramData-key pin as
-   explicit bytes vs V1 parity; rule-id numbers; grid origin-0 vs DOSSIER
-   G-offset (origin-0 makes opening-variant bucket 0 stall forever);
-   byte-identical duplicate collapse; admit_after contiguity; overflow
-   refusal. Pyth identity freeze deliberately waits for the 2026-08-26
-   cutover (docs/design/SOURCE_PROVIDER_V1_SELECTION.md).
+1. R2 successor closes the model choice to closing `CROSSING_V1` id 2:
+   368-byte SourceSpec-v2, exact ProgramData/config pins, zero grid origin,
+   decoded-body duplicate collapse, start-aware contiguity, and overflow
+   refusals. It remains research-only; post-cutover Pyth identity freeze and
+   every loader/Instructions/Clock/registry/SBF adapter gate remain open.
+2. R2 production identity freeze deliberately waits for the 2026-08-26
+   cutover (docs/design/SOURCE_PROVIDER_V1_SELECTION.md); the model does not
+   authorize an interim registry entry or value admission.
 3. R4 design ratification (docs/design/TERMINAL_LIFECYCLE_RUNTIME_V1.md):
    notably the frozen-incinerator-sink choice, fractional Arm A
    live-until-aggregated, legacy rows declared permanent, and the Section 8
@@ -141,8 +142,26 @@ John packet ready in degg-research.
   SourceSpecV2 body, closing-only CROSSING_V1 rule id 2 (ids 1/3 refused),
   exact ProgramData key/slot, zero grid origin, decoded-body duplicate
   collapse, start-aware contiguity, and named overflow refusals. Its 32 model
-  tests plus clippy/rustdoc are green; it remains model-only, unmerged, with
-  the default source registry empty and refusal 0x79 preserved.
+  tests plus clippy/rustdoc are green; its successor is integrated as
+  research-only, with no post-cutover identity, runtime registry,
+  loader/Instructions/Clock adapter, or SBF route. The default source registry
+  remains empty and refusal 0x79 is preserved.
+
+- Scalar Verus batch shadow now reports 28 verified obligations and five
+  required red mutants. Its dust-choice results remain a digest-pinned
+  mathematical correspondence review: executable loop completion,
+  `left`/`assigned` invariants, source refinement, coupled relation, accounts,
+  and SBF remain STOPs.
+
+- `EvidenceOnlyRecoveryV1` is decided only for a new research profile: no
+  numeric fallback, finite independently prepaid repair, recoverable dormancy,
+  and exact-lot bearer units. It supplies no live ABI, source route, migration,
+  Token-2022 CPI, or terminal authority.
+
+- Terminal-economics R4 is MODEL-ONLY / HOST-TESTED research. Its `I`/`E`/`A`
+  supply-plane and CreditVault model rule out general tombstone-only closure
+  for arbitrary raw bearer quantities; it changes no runtime, mint, authority,
+  migration, or R1 artifact identity.
 
 - V3 blocker fixes LANDED at b49c497 on codex/r3-direct-v3 (jobs worktree,
   clean): order-body 107 with a red-demonstrated cross-crate model/live

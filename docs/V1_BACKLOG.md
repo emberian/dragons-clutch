@@ -24,14 +24,19 @@ value, authority, or reachability dependency is open.
   explicit unproved Rust/refinement boundary.
 - [x] The batch relation has bounded exhaustive/adversarial host campaigns and a
   bounded-memory streaming verifier.
-- [x] A pinned Verus mathematical shadow replaces the four former vacuous batch
-  placeholders with narrowly stated allocation, tick-selection, partition,
-  and padding lemmas; production dust progress and source refinement remain
+- [x] A pinned Verus scalar mathematical shadow reports 28 verified obligations
+  and five required red mutants, including one-shot dust-choice
+  positivity/progress, allocation, tick-selection, partition, and padding
+  lemmas; executable dust-loop completion and source refinement remain
   unchecked.
 - [x] An internal-only Terminal Lifecycle V2 research model exercises exact
   rent/refund roles, replay tombstones, close ordering, and surplus disposition
   while keeping live Token-2022, authority, migration, bearer, and fractional
   closure as explicit STOPs.
+- [x] An isolated R4 terminal-economics model distinguishes internal,
+  registered-external, and authoritative Token-2022 supply planes and proves
+  that arbitrary raw bearer units require persistent claimant credits/vault or
+  another explicit terminal policy; it supplies no runtime or migration path.
 - [x] The repository has semantic vectors, a manifest generator, an artifact
   audit, and local-only harnesses.
 - [x] None of the items above is classified as a complete protocol, verified
@@ -185,6 +190,10 @@ genesis injection is zero.
 
 Dependency: source/feed account construction in gate 4.
 
+- [x] Model the selected Pyth pull profile as a separate 368-byte SourceSpec-v2
+  identity with closing `CROSSING_V1` rule id 2, start-aware cursor, and
+  receiver/loader/Instructions/Clock join. This is MODEL-ONLY: it creates no
+  registry release, runtime parser, or source account.
 - [ ] Select exactly one first V1 source profile from primary official material;
   pin program id, loader/deployment generation, exact data account semantics,
   parser source/version, orientation, scale, finality, retention, and canonical
@@ -311,7 +320,10 @@ Dependencies: exact instruction/account/resource shapes from gates 4-6.
   forfeiture, and fractional fragments have no selected terminal disposition.
 - [ ] Keep principal, owner cash, reservations, rent, liveness endowment, fees,
   and treasury in nonaliasing ownership phases.
-- [ ] Decide failure payout and repair incentives under sabotage.
+- [x] Decide the new-research `EvidenceOnlyRecoveryV1` policy: no numeric
+  data-failure fallback; finite independently prepaid repair; recoverable
+  dormancy; exact-lot new-market bearer units; and no fractional-credit sweep.
+  This model decision creates no live ABI, migration, or terminal transition.
 - [ ] Freeze the fee base, rate/carry/rounding, recipient split, executor cap,
   and withdrawal rules only after exact adversarial and fragmentation models.
 - [ ] Preserve fee-free external venue interoperability for standard

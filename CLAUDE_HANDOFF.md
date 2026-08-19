@@ -44,9 +44,10 @@ The R1 evidence checkpoint is sealed:
   −8-byte shift) and zero bytes from source/deps/host paths. Job:
   `/tank/joshibot/dragons-clutch-sbf-rebuild-6743b9d-dd4727`. Byte-level
   seal reproduction still needs a second macOS host;
-- `b047415`/`345bc78`/`07d5efe` replace the four vacuous scalar batch Verus
-  placeholders with narrowly reviewed proofs. They do not prove production
-  dust completion, side equality, padding validation, coupled V1, or SBF; and
+- `b047415`/`345bc78`/`07d5efe` began the scalar Verus replacement; the current
+  isolated shadow reports 28 verified obligations and five required red
+  mutants. It still does not prove production dust completion, side equality,
+  padding validation, coupled V1, or SBF; and
 - `6dbe618` adds an independently red-teamed internal-only Terminal Lifecycle
   V2 model. It is not a live ABI, Token-2022/CPI path, rent-funding proof,
   migration, external-bearer lifecycle, or fractional-credit solution.
@@ -79,8 +80,9 @@ Resume R1 in this exact order:
 3. preserve the manifest/runtime seal while selecting the next dependency-
    unblocked R2/R3 lane; and
 4. rerun the manifest only after another accepted source or evidence change.
-   No Hbox SBF claim exists until the exact missing toolchain/dependency closure
-   is supplied and recorded.
+   Hbox has an independent same-source rebuild with classified cross-OS
+   divergence; a second macOS host remains the byte-level seal-reproduction
+   boundary.
 
 Direct V3 remains isolated at
 `/Users/ember/jobs/dragons-clutch-r3-direct.BDnrsh` on
@@ -178,6 +180,13 @@ mock success belongs to a distinct `non-production-mock-source` ELF. Direct V2
 full top-three Select reaches exactly 1,400,000 CU and rolls back. Direct V3 at
 `ef32495` remains MODEL/DESIGN only.
 
+The selected R2 Pyth pull profile is also only an integrated research model: its
+proposed 368-byte distinct-domain SourceSpec-v2 uses closing `CROSSING_V1` rule
+id 2 and models receiver/ProgramData/Config, loader, Instructions, and Clock
+joins. Post-cutover identities, the registry entry, official parsers, SBF route,
+and source construction remain absent; this model cannot change the default
+`0x79` refusal.
+
 The clean-source joined committed walk used source HEAD `c05fe84` and ELF
 SHA-256
 `70c33c1cd44b475745b0562a79d9107f1d2101cbf698ebd6c233ca167ebab2e6`.
@@ -231,12 +240,21 @@ does not select or implement either production policy.
 
 The narrow executable-body Verus result still concerns only
 `prepare_internal_transfer` under its recorded assumptions. A separate pinned
-scalar batch shadow now proves only allocation decomposition/per-fill bounds,
-unique tick selection, a whole-fill partition conditional on accepted side
-equalities, and a zero-suffix fold identity. The runner hash-enforces its Verus,
-Z3, and shipped vstd artifacts and four semantic mutants go red. It does not
-import or refine the production batch body. Rocq currently provides
+scalar batch shadow now reports 28 verified obligations and five required red
+mutants. It proves mathematical one-shot dust-choice positivity/progress,
+allocation decomposition/per-fill bounds, unique tick selection, a whole-fill
+partition conditional on accepted side equalities, and a zero-suffix fold
+identity. It does not import or refine the production dust loop or batch body.
+Rocq currently provides
 definitions/typechecking, not a completed independent theorem inventory.
+
+`EvidenceOnlyRecoveryV1` is a decided new-research failure policy only: no
+numeric fallback, finite independently prepaid repair, and recoverable dormancy
+before later valid evidence may resolve. Terminal-economics R4 is separately
+MODEL-ONLY / HOST-TESTED: its `I`/`E`/`A` supply planes and segregated
+claimant-credit vault show why arbitrary raw bearer units cannot generally
+terminate in a tombstone alone. Neither result supplies Token-2022 CPI,
+authority, migration, SBF, or a runtime terminality claim.
 
 ## The next hard path
 

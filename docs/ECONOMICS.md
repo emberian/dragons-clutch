@@ -53,7 +53,8 @@ top-ups, subscribers, token appreciation, and treasury charity count as zero.
 
 No finite bounty guarantees inclusion under unbounded congestion or censorship.
 The honest guarantee is conditional liveness while the frozen maximum remains
-competitive, followed by a deterministic failure outcome if the repair window
+competitive, followed only by a deterministic exhaustion disposition for the
+prepaid repair reserve—not a failure-selected payout—if the repair window
 closes. Admission of new obligations stops when recent landing-cost quantiles
 approach the supported maximum.
 
@@ -218,12 +219,15 @@ remain release gates.
 ## 8. Thin-market behavior
 
 A thin Market may stop accepting native-auction orders. It must not stop
-observing or settling because volume disappeared. Missing a required bucket moves
-the venue into a frozen `DEGRADED` state, stops new order exposure, displays the
-evidence-only recovery rule, and continues paid repair. Ordinary external
-Token-2022 transfers remain possible because no freeze authority exists.
+observing or settle to a numerical fallback because volume disappeared. In the
+proposed `EvidenceOnlyRecoveryV1` profile, a missing required bucket moves the
+market to `DEGRADED_RECOVERABLE`, stops new order exposure, displays the
+evidence-only recovery rule, and runs only its finite independently prepaid
+repair schedule. Ordinary external Token-2022 transfers remain possible because
+no freeze authority exists.
 
-When every external and internal liability is zero, anyone may retire the Market,
-cancel only genuinely unnecessary future jobs, collect a prepaid cleanup bounty,
-and return eligible rent. Nonzero claims retain indefinite redemption; abandoned
-claimants are not confiscated to recover rent.
+Only a future implemented profile may retire a Market after every external and
+internal liability, claimant credit, booked work, and declared terminal
+dependency is zero. R4 shows arbitrary raw bearer units cannot generally reach
+that state with a tombstone alone: nonzero claimant credits need persistent
+segregated backing. Abandoned claimants are not confiscated to recover rent.

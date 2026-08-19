@@ -22,6 +22,13 @@ exact-lot/credit model exists would create a terminal dead end. A production
 design must prove those adapter facts separately; this model does not authorize
 a deployment or migration.
 
+`research/terminal-economics-r4` is a separate later model, not an
+implementation or promotion of V2. It permits arbitrary raw bearer quantities
+only by retaining a CreditRoot/CreditVault and every nonzero claimant credit;
+its `I`/`E`/`A` supply planes make the raw-bearer, indivisible-collateral,
+tombstone-only conflict explicit. It likewise supplies no live ABI,
+Token-2022 adapter, authority, migration, or SBF terminal walk.
+
 ## Versioned account and rent identities
 
 Every V2 account carries the immutable tag
