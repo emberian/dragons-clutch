@@ -36,6 +36,15 @@ provider selection/design, Draft 10 fork (degg-research).
 
 ## Done log (2026-08-19 session)
 
+- V3 blocker verification (cross-audit addendum): all three 9fd1ef1 blockers
+  CONFIRMED with two-sided file:line evidence — model hashes a 99-byte order
+  body vs live 107 (omits expiry_epoch; digests can never match on nonempty
+  pages), zero-envelope buys are admissible yet unreleasable (abort/lapse
+  permanently refuse; FrozenEmpty epochs stuck), and the reservation domain
+  binds the legacy 64-byte policy digest while claiming the epoch-bound
+  96-byte V3 identity. Verdict amended COMMIT→HOLD. Minimal fixes dispatched
+  to the audit lane in the jobs worktree (no commit until my diff review).
+
 - Ran the first full 94-gate schema-v2 emission from clean ec77d0b: 86/94
   match, content id 172ef191…; results consumed into codex's b837be7 ledger
   (v1 manifest retained under its 94/94 promotion rule). Emission raced
