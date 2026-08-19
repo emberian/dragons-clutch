@@ -292,8 +292,17 @@ The final-LTO log is `/tmp/source-archive-final-lto.log`.  The newly observed
 `reconstruct_native_market` frame-overwrite diagnostic was removed by moving
 its nested invariant call into the caller's frame.  The executable still has
 separate pre-existing dispatch, `split::kernel_step`, and `pure_market` stack
-diagnostics; this artifact therefore remains **not deployable** until a
-symbol/offset survivor audit closes those warnings.
+diagnostics.  The final-LTO symbol audit found no surviving warned
+layout/reference helper, but did find those three first-party symbols.  Their
+largest direct `r10` offsets were respectively 760, 3,968, and 4,072 bytes;
+the backend additionally estimates `split::kernel_step` at 4,224 bytes and
+warns about nested-call frame overwrite in all three.  In contrast,
+`reconstruct_native_market` survives at a 4,080-byte maximum direct offset but
+no longer carries the nested-call warning.  The audit used the platform
+`llvm-objdump -t` and `-d --disassemble-symbols` over the unstripped final-LTO
+sibling and scanned every `r10 - 0x...` access.  This artifact therefore
+remains **not deployable**; direct offsets below 4,096 do not overrule the
+backend's surviving call-frame diagnostics.
 
 The signed walk labels `mock-source-spec` and `mock-source-archive` among its
 13 genesis-assisted program accounts.  This is real signed execution of the
