@@ -161,8 +161,12 @@ constructible, permissionless, funded, bounded, replay-closed SBF lifecycle.
 
 Current isolated checkpoint: `529878d`, `1e8b8a3`, and `1241399` freeze V3
 account/artifact/intent codecs on `codex/r3-direct-v3`; no shared runtime route
-exists. Model/wire authentication and asset-release corrections remain under
-review and are prerequisites to any dispatcher or SBF integration.
+exists. The current model correction remains audit-RED: reconcile its 99-byte
+order body with the live 107-byte layout, admit exact unchanged zero-envelope
+buy release, and separate the legacy 64-byte policy digest from the 96-byte
+epoch-bound DirectBatchPolicyV3 artifact digest. These and the remaining
+model/wire authentication and asset-release gates are prerequisites to any
+dispatcher or SBF integration.
 
 ### R4 — Version the terminal lifecycle
 
