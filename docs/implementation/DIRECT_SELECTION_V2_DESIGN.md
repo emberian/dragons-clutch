@@ -77,18 +77,23 @@ which slot is the first slot in which submission must refuse?
 The first submitter cannot answer either question. A fixed duration beginning
 at first submission is still submitter-controlled timing and is forbidden.
 
-The minimum live prerequisite is a versioned immutable Epoch domain carrying:
+The current Epoch account is already tag 11, version 2, and exactly 328 bytes.
+The minimum live prerequisite is a distinct tag-11/version-3 direct Epoch
+schema carrying:
 
 ```text
 submission_opens_slot:  u64
 submission_closes_slot: u64  // opens < closes
 ```
 
-Both values must be fixed before any candidate exists and committed by the
-canonical Epoch identity. An alternative BatchPolicy-V2 duration rule would
-also need an immutable Epoch freeze slot from which to derive both values; the
-current schema has neither fact. Until one of those constructions lands, the
-live selection instruction must not exist.
+Both values must be fixed before any candidate exists and authenticated by the
+program-owned Epoch account. The canonical Epoch identity remains derived from
+`(market, epoch_index)` so existing page and reservation identities do not
+change; the version and exact account length prevent a V2 body from being read
+as a V3 body. An alternative BatchPolicy-V2 duration rule would also need an
+immutable Epoch freeze slot from which to derive both values; the current
+schema has neither fact. Until one of those constructions lands, the live
+selection instruction must not exist.
 
 The offline `DirectWindowBindingV1` makes this dependency explicit. Its
 constructor accepts already-frozen boundaries; the first submission can create
@@ -244,6 +249,51 @@ All creates must use the established prefund-safe state machine:
 - rent and exact target length checked before the first write; and
 - a late create/encode/CPI refusal rolls back every account in the instruction.
 
+### 6.1 Exact Epoch migration and construction
+
+The legacy Epoch schema remains tag 11/version 2/328 bytes. It is not rewritten
+or treated as a prefix. `DirectEpochV3Account` uses tag 11/version 3/344 bytes:
+the same field order through `phase`, followed by
+`submission_opens_slot: u64`, `submission_closes_slot: u64`, and then the
+existing bump and flags. Its decoder accepts only that version and length.
+
+Common read-only placement, cancellation, and page-initialization code may use
+an explicit version dispatch which projects either schema into common facts.
+Old `SubmitDirectPage` and `SettlePage` continue to decode V2 specifically.
+Every instruction in this document decodes V3 specifically. Consequently an
+old Epoch cannot acquire V2 selection authority, and a V3 Epoch cannot enter
+the old candidate path. The shared Epoch PDA still derives from market and
+index, so both schemas cannot exist for one epoch coordinate.
+
+Construction needs two additional transitions before candidate submission:
+
+1. `InitDirectEpochV3` authenticates active Market, Terms, PriceGrid, and the
+   final exact BatchPolicy artifact; derives the Epoch and a domain-separated
+   direct-book identity; fixes relation V1, owner count two, remainder seed
+   zero, and the Terms/Grid shape; requires a bounded future half-open schedule
+   with a minimum lead from the authenticated Clock; and creates one OPEN
+   344-byte Epoch prefund-safely. The schedule is explicit creation state, not
+   a Candidate-submission parameter, and the minimum lead forbids creation and
+   admission in one slot.
+2. `FreezeDirectEpochV3`, before `opens_slot`, authenticates the exact open
+   two-order page, frozen grid, full policy, and both untouched ACTIVE
+   reservations. It computes the one-page order-set commitment with the
+   existing streaming helper, seals the page once, and writes the Epoch's
+   order set, range, counts, and `FROZEN` phase while preserving both schedule
+   fields byte-for-byte. Complete preflight precedes both writes.
+
+The BatchPolicy artifact uses kind 4, exact length 64, context equal to the
+already-derivable Epoch id, and a final PDA namespaced separately from the
+collateral-policy PDA. The canonical policy codec remains one semantic owner;
+the adapter cannot recreate selector mappings.
+
+The Market has no epoch-creation authority field. A permissionless caller can
+therefore race to initialize a canonical `(market, index)` under the existing
+namespace model. This plan makes the result immutable and prevents a
+same-slot first submission, but does not pretend that it supplies governance.
+If creator authorization is required, the next prerequisite is an immutable
+Market/Realm epoch-creation policy, not an ad hoc adapter signer.
+
 ## 7. Proposed instruction ABI
 
 Numeric Intent tags are intentionally unassigned while another lane owns the
@@ -261,7 +311,7 @@ Accounts, exactly `12 + retained_count`:
 
 ```text
 0  payer                 writable signer
-1  Epoch V2              read-only
+1  DirectEpoch V3        read-only
 2  final BatchPolicy     read-only
 3  frozen PriceGrid      read-only
 4  frozen OrderPage      read-only
@@ -293,7 +343,7 @@ Accounts, exactly `13 + retained_count`:
 
 ```text
 0  payer                 writable signer
-1  Epoch V2              writable
+1  DirectEpoch V3        writable
 2  final BatchPolicy     read-only
 3  frozen PriceGrid      read-only
 4  frozen OrderPage      read-only
@@ -338,7 +388,7 @@ market: Hash32, epoch: Hash32, page_index: u16
 Accounts, exactly 10:
 
 ```text
-0 Epoch V2              read-only, CLEARED
+0 DirectEpoch V3        read-only, CLEARED
 1 DirectWindow          read-only, SELECTED
 2 selected Candidate V2 read-only, SELECTED
 3 frozen OrderPage      read-only evidence
