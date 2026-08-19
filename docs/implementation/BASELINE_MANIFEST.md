@@ -174,7 +174,11 @@ helper cannot leak descendants into a later gate.
 
 `expected.mode` is the reviewed disposition, not a wish:
 
-- `zero` — the gate must exit 0;
+- `zero` — the gate must exit 0 and, when declared, print every required
+  stable output pattern. The source-profile, failure-payout, and
+  terminal-economics model gates respectively require their 32-, 18-, and
+  16-test summaries. The scalar batch proof additionally requires its 28
+  verified obligations and all five named expected-red mutants;
 - `exact` — one non-zero tool disposition is the only accepted result. The root
   `toolchain/scripts/run_verus.sh` probe must return **exit 1**, the pinned
   Verus proof-status failure for the digest-pinned source, and print its
@@ -400,20 +404,23 @@ may not flip them to obtain a green result.
 
 ## Runtime-gate boundary
 
-The inventory has 94 declarations; the generator records the same count in
+The inventory has 98 declarations; the generator records the same count in
 `gate_summary.total` when it runs. It covers core crates including the
 B-spline, occupation accumulator, and liveness kernel; documented model and
 frontend checks; the vector executor and invariant campaign; Lean and bounded
-refinement lanes; the 16-test terminal-lifecycle V2 model; and the four local
-runtime lanes. A full `--run-gates` baseline is evidence collection, not a fast
-presubmit. A cache-cold host can take tens of minutes and invokes nine bounded
-SBF compiler builds: two E0 `rlib` builds, four bringup builds (two default,
-two mock), default and explicit-mock SVM builds, and one committed-walk build.
-No runtime command contacts a public RPC, deploys, or releases anything. The
-signed-walk gate creates fresh ephemeral local keypairs and test-only validator
-funds to sign loopback transactions; it never reads a real/user wallet or key,
-uses user funds, or submits to a public cluster. The liveness current-profile
-gate rehashes sealed artifact/log evidence and recompiles an archived host probe;
-it adds no fresh SBF build. A declaration-only `emit` remains useful for
-inspecting structure but sets `claims.reviewed_offline_checks_recorded` to
-`false` and records no run outcomes.
+refinement lanes; the 32-test source-profile, 18-test failure-payout, 16-test
+terminal-economics, and 16-test terminal-lifecycle host models; and the four
+local runtime lanes. The batch scalar proof is likewise bounded: 28 verified
+mathematical obligations and five expected-red source mutants, not an
+executable-body or runtime refinement. A full `--run-gates` baseline is evidence
+collection, not a fast presubmit. A cache-cold host can take tens of minutes and
+invokes nine bounded SBF compiler builds: two E0 `rlib` builds, four bringup
+builds (two default, two mock), default and explicit-mock SVM builds, and one
+committed-walk build. No runtime command contacts a public RPC, deploys, or
+releases anything. The signed-walk gate creates fresh ephemeral local keypairs
+and test-only validator funds to sign loopback transactions; it never reads a
+real/user wallet or key, uses user funds, or submits to a public cluster. The
+liveness current-profile gate rehashes sealed artifact/log evidence and
+recompiles an archived host probe; it adds no fresh SBF build. A declaration-only
+`emit` remains useful for inspecting structure but sets
+`claims.reviewed_offline_checks_recorded` to `false` and records no run outcomes.

@@ -237,6 +237,24 @@ FILE_DIGESTS: list[tuple[str, str, str | None, str | None]] = [
         None,
         None,
     ),
+    (
+        "locks.source_profile_v1",
+        "research/source-profile-v1/Cargo.lock",
+        None,
+        None,
+    ),
+    (
+        "locks.failure_payout_v1",
+        "research/failure-payout-v1/Cargo.lock",
+        None,
+        None,
+    ),
+    (
+        "locks.terminal_economics_r4",
+        "research/terminal-economics-r4/Cargo.lock",
+        None,
+        None,
+    ),
     ("locks.vector_check", "tools/vector-check/Cargo.lock", None, None),
     (
         "locks.invariant_campaign",
@@ -250,6 +268,12 @@ FILE_DIGESTS: list[tuple[str, str, str | None, str | None]] = [
     ("proof_shadow.verus_kernel", "verus/kernel/lib.rs", None, None),
     ("proof_shadow.verus_accumulator", "verus/accumulator/accumulator.rs", None, None),
     ("proof_shadow.verus_batch", "verus/batch/batch.rs", None, None),
+    (
+        "proof_shadow.verus_batch_runner",
+        "verus/batch/run_batch_proofs.sh",
+        None,
+        None,
+    ),
 ]
 
 # Digests that are not the sha256 of a file's bytes but of a declared
@@ -354,6 +378,17 @@ CLIPPY_PATTERNS = [r"^error(\[|:)", r"^warning(\[|:)"]
 # stable record. Clean doc builds have no captured key lines.
 DOC_PATTERNS = [r"^error(\[|:)", r"^warning(\[|:)"]
 UNITTEST_PATTERNS = [r"^Ran \d+ tests?$", r"^(OK|FAILED)\b", r"^(ERROR|FAIL): "]
+
+
+def counted_cargo_test_patterns(count: int) -> list[str]:
+    """Stable Cargo lines that bind a reviewed host-model test count."""
+    return [
+        rf"^running {count} tests$",
+        (
+            rf"^test result: ok\. {count} passed; 0 failed; 0 ignored; "
+            r"0 measured; 0 filtered out$"
+        ),
+    ]
 
 
 def build_gates() -> list[dict[str, Any]]:
@@ -797,11 +832,15 @@ def build_gates() -> list[dict[str, Any]]:
                     "cargo test --manifest-path research/source-profile-v1/Cargo.toml "
                     "--offline --locked"
                 ),
-                "expected": {"mode": "zero", "exit": 0},
-                "key_patterns": TEST_RESULT_PATTERNS,
+                "expected": {
+                    "mode": "zero",
+                    "exit": 0,
+                    "required_output_patterns": counted_cargo_test_patterns(32),
+                },
+                "key_patterns": counted_cargo_test_patterns(32),
                 "note": (
-                    "conditional source parser/model; it does not make Endow's "
-                    "registered production-source gate pass"
+                    "32-test conditional source parser/model; it does not make "
+                    "Endow's registered production-source gate pass"
                 ),
             },
             {
@@ -825,6 +864,64 @@ def build_gates() -> list[dict[str, Any]]:
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": DOC_PATTERNS,
                 "note": "documentation build for the conditional source-profile model",
+            },
+            {
+                "id": "cargo_test.failure_payout_v1",
+                "section": "current-research",
+                "command": (
+                    "cargo test --manifest-path research/failure-payout-v1/Cargo.toml "
+                    "--offline --locked"
+                ),
+                "expected": {
+                    "mode": "zero",
+                    "exit": 0,
+                    "required_output_patterns": counted_cargo_test_patterns(18),
+                },
+                "key_patterns": counted_cargo_test_patterns(18),
+                "note": (
+                    "18-test evidence-only failure-recovery model; it changes no "
+                    "kernel, SBF, mint, market, or release claim"
+                ),
+            },
+            {
+                "id": "cargo_clippy.failure_payout_v1",
+                "section": "current-research",
+                "command": (
+                    "cargo clippy --manifest-path research/failure-payout-v1/Cargo.toml "
+                    "--offline --locked --all-targets --all-features -- -D warnings"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": CLIPPY_PATTERNS,
+                "note": "strict lint for the evidence-only failure-recovery model",
+            },
+            {
+                "id": "cargo_test.terminal_economics_r4",
+                "section": "current-research",
+                "command": (
+                    "cargo test --manifest-path research/terminal-economics-r4/Cargo.toml "
+                    "--offline --locked"
+                ),
+                "expected": {
+                    "mode": "zero",
+                    "exit": 0,
+                    "required_output_patterns": counted_cargo_test_patterns(16),
+                },
+                "key_patterns": counted_cargo_test_patterns(16),
+                "note": (
+                    "16-test R4 terminal-economics model; it does not close the "
+                    "separate runtime terminality STOPs"
+                ),
+            },
+            {
+                "id": "cargo_clippy.terminal_economics_r4",
+                "section": "current-research",
+                "command": (
+                    "cargo clippy --manifest-path research/terminal-economics-r4/Cargo.toml "
+                    "--offline --locked --all-targets --all-features -- -D warnings"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": CLIPPY_PATTERNS,
+                "note": "strict lint for the R4 terminal-economics model",
             },
             {
                 "id": "python.economics_lab",
@@ -998,20 +1095,38 @@ def build_gates() -> list[dict[str, Any]]:
                 "id": "proof.batch_scalar_shadow",
                 "section": "current-proof-boundary",
                 "command": "sh verus/batch/run_batch_proofs.sh",
-                "expected": {"mode": "zero", "exit": 0},
+                "expected": {
+                    "mode": "zero",
+                    "exit": 0,
+                    "required_output_patterns": [
+                        r"^verification results:: 28 verified, 0 errors$",
+                        r"^mutation=allocation-double-selected-atom status=EXPECTED_RED reason=postcondition$",
+                        r"^mutation=tick-select-worse status=EXPECTED_RED reason=invariant-obligation$",
+                        r"^mutation=relation-double-count status=EXPECTED_RED reason=postcondition$",
+                        r"^mutation=padding-admit-nonzero status=EXPECTED_RED reason=zero-premise-obligation$",
+                        r"^mutation=dust-count-zero-remainders status=EXPECTED_RED reason=progress-obligation$",
+                        r"^status=PASS$",
+                    ],
+                },
                 "proof_content": "scalar-model-shadow",
                 "key_patterns": [
                     r"^verus_version=",
                     r"^proof_source_sha256=",
-                    r"^mutation=.* status=EXPECTED_RED",
+                    r"^verification results:: 28 verified, 0 errors$",
+                    r"^mutation=allocation-double-selected-atom status=EXPECTED_RED reason=postcondition$",
+                    r"^mutation=tick-select-worse status=EXPECTED_RED reason=invariant-obligation$",
+                    r"^mutation=relation-double-count status=EXPECTED_RED reason=postcondition$",
+                    r"^mutation=padding-admit-nonzero status=EXPECTED_RED reason=zero-premise-obligation$",
+                    r"^mutation=dust-count-zero-remainders status=EXPECTED_RED reason=progress-obligation$",
                     r"^status=PASS$",
                     r"^claim=",
                     r"^boundary=",
                     r"^excluded=",
                 ],
                 "note": (
-                    "pinned Verus checks a scalar mathematical batch shadow and four "
-                    "red mutants; digest-pinned human correspondence is not an "
+                    "pinned Verus checks a scalar mathematical batch shadow with 28 "
+                    "verified obligations and five red mutants; digest-pinned human "
+                    "correspondence is not an "
                     "executable-body or runtime refinement"
                 ),
             },
@@ -1419,16 +1534,21 @@ def extract_key_lines(output: str, patterns: list[str], cap: int = 256) -> list[
 def gate_outcome_ok(
     expected: dict[str, Any], exit_code: int, output: str = ""
 ) -> bool:
+    normalized_output = "\n".join(normalize_line(line) for line in output.splitlines())
+
+    def required_patterns_match() -> bool:
+        return all(
+            re.search(pattern, normalized_output, re.MULTILINE) is not None
+            for pattern in expected.get("required_output_patterns", [])
+        )
+
     mode = expected["mode"]
     if mode == "zero":
-        return exit_code == 0
+        return exit_code == 0 and required_patterns_match()
     if mode == "nonzero":
         return exit_code != 0
     if mode == "exact":
-        return exit_code == expected["exit"] and all(
-            re.search(pattern, output, re.MULTILINE) is not None
-            for pattern in expected.get("required_output_patterns", [])
-        )
+        return exit_code == expected["exit"] and required_patterns_match()
     if mode == "either":
         return exit_code in expected.get("accepted_exits", [])
     raise ValueError(f"unknown expectation mode {mode!r}")

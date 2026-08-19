@@ -39,6 +39,22 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
                 "cargo test --manifest-path research/source-profile-v1/Cargo.toml "
                 "--offline --locked"
             ),
+            "cargo_test.failure_payout_v1": (
+                "cargo test --manifest-path research/failure-payout-v1/Cargo.toml "
+                "--offline --locked"
+            ),
+            "cargo_clippy.failure_payout_v1": (
+                "cargo clippy --manifest-path research/failure-payout-v1/Cargo.toml "
+                "--offline --locked --all-targets --all-features -- -D warnings"
+            ),
+            "cargo_test.terminal_economics_r4": (
+                "cargo test --manifest-path research/terminal-economics-r4/Cargo.toml "
+                "--offline --locked"
+            ),
+            "cargo_clippy.terminal_economics_r4": (
+                "cargo clippy --manifest-path research/terminal-economics-r4/Cargo.toml "
+                "--offline --locked --all-targets --all-features -- -D warnings"
+            ),
             "python.liveness_policy_profile_current_seal": (
                 "python3 research/liveness-policy-profile/policy.py --check-current"
             ),
@@ -76,6 +92,31 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
         self.assertEqual(
             set(record),
             {"id", "section", "command", "cwd", "shell", "expected", "key_patterns", "note"},
+        )
+
+        for gate_id, count in (
+            ("cargo_test.source_profile_v1", 32),
+            ("cargo_test.failure_payout_v1", 18),
+            ("cargo_test.terminal_economics_r4", 16),
+        ):
+            expected_patterns = baseline_manifest.counted_cargo_test_patterns(count)
+            self.assertEqual(gates[gate_id]["key_patterns"], expected_patterns)
+            self.assertEqual(
+                gates[gate_id]["expected"]["required_output_patterns"],
+                expected_patterns,
+            )
+
+        batch = gates["proof.batch_scalar_shadow"]
+        self.assertIn(
+            r"^verification results:: 28 verified, 0 errors$",
+            batch["expected"]["required_output_patterns"],
+        )
+        self.assertEqual(
+            sum(
+                "status=EXPECTED_RED" in pattern
+                for pattern in batch["expected"]["required_output_patterns"]
+            ),
+            5,
         )
 
     def test_gate_records_are_cache_and_path_stable(self) -> None:
@@ -148,6 +189,22 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
             )
         )
 
+        counted = {
+            "mode": "zero",
+            "exit": 0,
+            "required_output_patterns": baseline_manifest.counted_cargo_test_patterns(2),
+        }
+        self.assertTrue(
+            baseline_manifest.gate_outcome_ok(
+                counted,
+                0,
+                "running 2 tests\n"
+                "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; "
+                "0 filtered out; finished in 0.01s\n",
+            )
+        )
+        self.assertFalse(baseline_manifest.gate_outcome_ok(counted, 0, "running 0 tests\n"))
+
     def test_timeout_kills_the_complete_gate_process_group(self) -> None:
         class TimedOutProcess:
             pid = 4242
@@ -200,7 +257,7 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
 
     def test_current_runtime_and_terms_authorities_are_declared(self) -> None:
         gates = {gate["id"]: gate for gate in baseline_manifest.build_gates()}
-        self.assertEqual(len(gates), 94)
+        self.assertEqual(len(gates), 98)
         bringup_patterns = gates["sbf.runtime_bringup"]["key_patterns"]
         for pattern in (
             r"^default pass [12]  sha256=[0-9a-f]{64}  bytes=[0-9]+$",
@@ -268,6 +325,10 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
                 "locks.clutch_sbf_committed_harness",
                 "clutch_sbf.committed_harness_source",
                 "clutch_sbf.committed_walk_runner",
+                "locks.source_profile_v1",
+                "locks.failure_payout_v1",
+                "locks.terminal_economics_r4",
+                "proof_shadow.verus_batch_runner",
             }.issubset(file_digests)
         )
 
