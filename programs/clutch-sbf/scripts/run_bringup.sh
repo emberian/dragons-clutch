@@ -38,7 +38,8 @@ mkdir -p "$plan" "$log"
 
 echo "== toolchain =="
 "$SOLANA_BIN" --version
-"$build_sbf" --version | tr '\n' ' '
+build_sbf_version="$("$build_sbf" --version)"
+printf '%s\n' "$build_sbf_version" | tr '\n' ' '
 echo
 
 echo "== source pin =="
@@ -101,7 +102,47 @@ elf="$work/out-1/clutch_sbf.so"
 
 echo
 echo "== stack findings reported by the SBF backend =="
-grep -E "^Error: (Function|A function call)" "$log/sbf-build-1.log" | sort -u || echo "(none)"
+stack_findings="$({ grep -E "^Error: (Function|A function call)" "$log/sbf-build-1.log" || true; } | sort -u)"
+if [ -z "$stack_findings" ]; then
+  echo "(none)"
+else
+  printf '%s\n' "$stack_findings"
+
+  # The SBF backend diagnoses every function while it compiles dependency
+  # rlibs, before fat LTO removes host-only public APIs.  A diagnostic is a
+  # deployment blocker if its symbol survives into the final program, but it
+  # is not executable undefined behavior if the final ELF does not contain
+  # that symbol at all.  Check the unstripped linked ELF instead of asking a
+  # reviewer to infer reachability from a noisy build log.
+  platform_tools_version="$(printf '%s\n' "$build_sbf_version" | awk '$1 == "platform-tools" { print $2 }')"
+  llvm_objdump="${LLVM_OBJDUMP:-$HOME/.cache/solana/$platform_tools_version/platform-tools/llvm/bin/llvm-objdump}"
+  unstripped_elf="$(find "$work/target-1" -type f -path '*/release/deps/clutch_sbf.so' -print -quit)"
+  if [ -z "$platform_tools_version" ] || [ ! -x "$llvm_objdump" ] || [ -z "$unstripped_elf" ]; then
+    echo "FAIL: cannot inspect final ELF reachability for backend stack findings"
+    exit 1
+  fi
+  "$llvm_objdump" --syms "$unstripped_elf" > "$log/final-elf-symbols.txt"
+  stack_symbols="$(
+    printf '%s\n' "$stack_findings" \
+      | sed -E -n \
+          -e 's/^Error: Function ([^ ]+) .*/\1/p' \
+          -e 's/^Error: A function call in method ([^ ]+) .*/\1/p' \
+      | sort -u
+  )"
+  reachable=0
+  while IFS= read -r symbol; do
+    [ -z "$symbol" ] && continue
+    if grep -Fq "$symbol" "$log/final-elf-symbols.txt"; then
+      echo "FAIL: stack-diagnostic symbol survived final ELF LTO: $symbol"
+      reachable=1
+    fi
+  done <<< "$stack_symbols"
+  if [ "$reachable" -ne 0 ]; then
+    exit 1
+  fi
+  stack_symbol_count="$(printf '%s\n' "$stack_symbols" | sed '/^$/d' | wc -l | tr -d ' ')"
+  echo "final_elf_stack_diagnostic_symbols=ABSENT ($stack_symbol_count dependency symbols removed by LTO)"
+fi
 
 echo
 echo "== differential plan (the offline reference adapter is the oracle) =="
@@ -126,6 +167,15 @@ done < "$plan/genesis.txt"
 
 echo
 echo "== local loopback validator =="
+# Refuse to mistake an older validator on the fixed port for this run.  A
+# health-only readiness check cannot distinguish the process we just spawned
+# from a pre-existing listener.
+if curl -s -m 1 "$url" -X POST -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' 2>/dev/null \
+    | grep -q '"result":"ok"'; then
+  echo "FAIL: $url was already serving before this gate started"
+  exit 1
+fi
 "$test_validator" "${validator_args[@]}" > "$log/validator.log" 2>&1 &
 validator_pid=$!
 cleanup() {
@@ -138,19 +188,38 @@ trap cleanup EXIT
 
 ready=0
 for _ in $(seq 1 60); do
-  if curl -s -m 2 "$url" -X POST -H 'Content-Type: application/json' \
-      -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' 2>/dev/null | grep -q '"result":"ok"'; then
+  if ! kill -0 "$validator_pid" 2>/dev/null; then
+    break
+  fi
+  # `getHealth` turns green ~0.45s after launch, while the bank is still at
+  # SLOT 0 -- and a program whose deployment slot is the current slot is not
+  # yet visible to the runtime, which logs "Program is not deployed" and
+  # returns `UnsupportedProgramId`.  MEASURED: at slot 0 the program account is
+  # already present, `executable=true`, and owned by BPFLoader2, and every
+  # transaction still fails; the identical transaction succeeds at slot 1.
+  #
+  # So an account-shape check CANNOT close this window and must not replace the
+  # probe below: the only readiness signal that works is actually executing
+  # something.  That is why this waits on a real `--only split` simulation.
+  if curl -fsS -m 2 "$url" -X POST -H 'Content-Type: application/json' \
+      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccountInfo\",\"params\":[\"$program_id\",{\"encoding\":\"base64\"}]}" \
+      2>/dev/null \
+      | python3 -c 'import json,sys; v=json.load(sys.stdin).get("result", {}).get("value"); raise SystemExit(not (v and v.get("executable") is True))' \
+      2>/dev/null \
+      && python3 "$here/simulate.py" --url "$url" --plan "$plan" --only split \
+        > "$log/readiness.log" 2>&1; then
     ready=1
     break
   fi
   sleep 1
 done
 if [ "$ready" -ne 1 ]; then
-  echo "FAIL: local validator did not become healthy"
+  echo "FAIL: local validator did not execute the program readiness probe"
+  tail -30 "$log/readiness.log" 2>/dev/null || true
   tail -30 "$log/validator.log"
   exit 1
 fi
-echo "validator healthy on $url (loopback only)"
+echo "validator executed program readiness probe on $url (loopback only)"
 
 echo
 echo "== differential and refusal checks =="

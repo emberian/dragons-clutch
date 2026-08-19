@@ -16,10 +16,11 @@ agreed signal for "produced while ember was away."
 
 ---
 
-## 1. Read this first: one gate is RED
+## 1. Read this first: a gate failure and its misdiagnosis
 
-`programs/clutch-sbf/scripts/run_bringup.sh` **exits 1**. Every step refuses
-`AccountCount` (`0x1`).
+`programs/clutch-sbf/scripts/run_bringup.sh` is **green at HEAD**. It was red
+for most of this session's tail, for two different reasons in sequence, and
+both are worth reading before trusting any SVM evidence.
 
 This is not a mystery and not a defect in the program. Late in the session the
 token plane became mandatory (`CreateMarket` creates the outcome mints and the
@@ -33,21 +34,22 @@ Consequences, already handled or in flight:
 - `docs/implementation/SBF_BRINGUP.md` and `LIFECYCLE_WALK.md` carry
   **STALE AS OF 2026-08-19** blocks; their CU tables and differential results
   are historical until regenerated.
-- A harness-regeneration attempt exists at **local commit `cd57c69`, deliberately
-  not pushed**. It rebuilds the fixtures for the mandatory token plane and
-  reports both gates PASS with a full CU table. **The coordinator could not
-  reproduce that PASS** and therefore did not push it or record its numbers.
-  Two independent runs, including one with a freshly removed work directory,
-  fail identically: the ELF builds and its digest matches the lane's exactly
-  (`59c48c48…`, 505,960 bytes, `sbf_reproducibility=PASS`), but every
-  transaction returns `Program is not deployed` / `UnsupportedProgramId`. That
-  is a program-account *placement* failure — owner, executable flag, loader
-  version, or programdata sizing against an ELF that grew 332,368 → 505,960
-  bytes this wave — not an account-count failure. Reconcile before trusting
-  anything in that commit; its account-plane work is likely sound and its
-  evidence is unverified. `programs/clutch-sbf/svm-tests/src/lib.rs` remains
-  the working reference for the Profile-identity change that cascades through
-  every PDA.
+- **RESOLVED 2026-08-19.** The harness was regenerated for the mandatory token
+  plane and both gates now **PASS** (exit 0; 10 accepting transactions, 22
+  refusals, 0 undrivable, 195 genesis accounts; 11-step lifecycle walk with its
+  terminal identities closing), independently reproduced by the coordinator on
+  a fresh work directory. ELF `59c48c48…`, 505,960 bytes,
+  `sbf_reproducibility=PASS`.
+- The coordinator's first two attempts failed with `Program is not deployed` /
+  `UnsupportedProgramId` and were **misdiagnosed as a program-account placement
+  failure**. The real cause, measured directly: at slot 0 the account is
+  already `executable=true`, correctly owned and sized, and transactions still
+  fail — a program whose deployment slot *is* the current slot is not yet
+  visible to the runtime. `getHealth` turns green ~0.45 s after launch while
+  the bank is still at slot 0, so the whole differential could run inside it.
+  `run_bringup.sh` now probes by **actually executing** a transaction; an
+  account-shape check cannot close this window and must not be substituted for
+  the execution probe.
 
 **The lesson worth keeping** (§8 expands it): host tests stayed green through
 all of this. 328 Rust tests pass at HEAD. Only the SVM gate can see account
@@ -341,6 +343,17 @@ it.
   checks belong in every lane's gate list. (Also: the stack analyser runs
   *before* `--gc-sections`, so flagged functions may not reach the image —
   check the linker map before believing a diagnostic.)
+- **A validator that answers `getHealth` is not a validator that can run your
+  program.** At slot 0 the program account is fully formed and transactions
+  still fail `UnsupportedProgramId`. Readiness must be proved by executing
+  something, never by inspecting account shape. This cost a confident
+  misdiagnosis; the trace is in the reconciliation.
+- **Never share a work dir between concurrent gate runs.** Two invocations on
+  the default `${TMPDIR}/clutch-sbf-bringup` and port 18899 clobber each
+  other's plan and logs. Always pass an explicit directory.
+- **Editing a shell script while it runs corrupts the run** — bash re-reads by
+  byte offset, and a mid-flight edit produced `line 109: ackend: command not
+  found`. Not a defect; a scheduling artifact.
 - **Evidence goes stale, not just docs.** §1 is the example. Any gate that a
   test suite cannot see must be declared somewhere that refuses.
 - **A drift gate that errors is worse than one that fails.** `abi-audit` sat

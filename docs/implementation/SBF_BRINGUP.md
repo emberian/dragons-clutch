@@ -4,20 +4,33 @@ Status: **host-differential evidence for eight instruction families**
 (Split, Merge, Materialize, Dematerialize, CreateMarket, FeedAdvance,
 evidence-gated Resolve, RedeemInternal), each mirroring the offline
 reference adapter's semantics with byte-level differential tests, **plus
-SVM execution evidence for all eight**: every one of those families now
-executes inside a local Agave bank against regenerated fixtures, and
-every writable account it touches comes back byte-identical to the
-oracle's post-state.
+SVM execution evidence for those eight and for `Endow`**: every one of
+those families executes inside a local Agave bank against regenerated
+fixtures, and every writable account it touches — the Token-2022 mints
+and token accounts included — comes back byte-identical to the oracle's
+post-state.
 
-`Resolve` used to be the exception — on this runtime it consumed the
+**Regenerated 2026-08-19 for the mandatory token plane.** Commits
+`472b7fe` and `50c6e35` made the Token-2022 legs mandatory, gave
+`CreateMarket` seven creation CPIs, and changed every account count; the
+gate exited 1 on every family until the harness was rewritten to emit the
+new planes. Every number in this document is from the post-regeneration
+run and the pre-token value is kept beside it wherever it moved. The
+short version: the outcome leg costs about **15 000** compute units, the
+collateral leg about **135 000** — dominated not by the CPI but by two
+software SHA-256 digests inside `collateral::verify_profile_identity` —
+and eight of the nine families now need a raised compute limit where
+three did before.
+
+`Resolve` used to be an exception — on this runtime it consumed the
 entire 1 400 000-unit per-transaction compute ceiling and was aborted —
 until the named defect was fixed at its named owner: the terms-revision
 wave landed `TermsAccount::decode_unchecked`/`decode_into` in
 `clutch-solana-layout` and the gate now pays the terms digest SHA-256
-once per transaction. Re-measured on the same pinned runtime (with the
-larger 1 656-byte v3 terms account): `Resolve` executes at **536 123**
-program units and `RedeemInternal` at **408 294** — 38% and 29% of the
-ceiling. The numbers are recorded in [Results](#results).
+once per transaction. Re-measured after the token plane: `Resolve`
+executes at **554 929** program units and `RedeemInternal` at **555 739**
+— 40% of the ceiling each. The numbers are recorded in
+[Results](#results).
 
 `PlaceOrder` and `CancelOrder` landed on-chain after these fixtures were
 regenerated and have **no SVM leg** and no offline oracle (the reference
@@ -163,8 +176,8 @@ two lanes editing one file. Every path below is under
 | `instructions/genesis.rs` | `Intent::InitRealm`, `Intent::InitProfile`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::Endow` | **implemented** — the only module that creates accounts; see the genesis addendum |
 | `instructions/split.rs` | `Intent::Split` | **implemented** |
 | `instructions/merge_materialize.rs` | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` | **implemented** — all three, through the `split.rs` seam plane |
-| `instructions/market_init.rs` | `Intent::CreateMarket` | **implemented** — validated initialization-write over pre-created accounts |
-| `instructions/observe_resolve.rs` | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` | **implemented** — `Resolve` fits a transaction again (536 123 CU) since the terms revision; deferred check 15 is closed |
+| `instructions/market_init.rs` | `Intent::CreateMarket` | **implemented** — validated initialization-write over pre-created state accounts, **plus** the creation of every outcome mint and the Hoard token account by CPI |
+| `instructions/observe_resolve.rs` | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` | **implemented** — `Resolve` fits a transaction again (554 929 CU) since the terms revision; deferred check 15 is closed; `RedeemInternal` carries the mandatory collateral leg |
 | `instructions/orders_batch.rs` | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SettlePage` | `PlaceOrder` and `CancelOrder` **implemented**; `SettlePage` **blocked**, see below |
 
 A lane owns its `instructions/*.rs` file outright. It touches the shared files
@@ -212,8 +225,10 @@ history of that discipline and where each family stands now:
 
 `Merge`, `Materialize`, and `Dematerialize` previously refused
 `UnsupportedInstruction` (`0x000e`), then `NotYetImplemented` (`0x0017`). All
-three now run through the ten-account seam plane of `instructions/split.rs` and
-refuse only what the transition itself refuses.
+three now run through the seam plane of `instructions/split.rs` — ten shared
+state accounts plus the intent's mandatory token leg, sixteen accounts for
+`Merge` and thirteen for the other two — and refuse only what the transition
+itself refuses.
 
 **Correction.** This table used to justify that row with "the offline adapter
 implements all three". For `Merge` that sentence was **wrong** and had been
@@ -301,8 +316,9 @@ routes all four through one `TransitionMetadata` / `StateBytes` /
 `ExpectedBindings` triple. The list, the check order, and the write-back live in
 `instructions/split.rs`, and `instructions/merge_materialize.rs` calls into
 them; a second copy of the list would be a second place for the seam's writable
-set to drift. The list is fixed at exactly ten, in this order, and a different
-count refuses:
+set to drift.
+
+The **first ten accounts** are shared by all four intents, in this order:
 
 | # | role | signer | writable |
 | --- | --- | --- | --- |
@@ -316,6 +332,38 @@ count refuses:
 | 7 | external shadow | no | yes |
 | 8 | replay sequence | no | yes |
 | 9 | supply ledger | no | yes |
+
+**Every seam intent then appends exactly one mandatory token leg, and which
+leg it gets is a function of the intent rather than of the caller.** That is
+the ABI break the Token-2022 completion landed (`50c6e35`) and it is why this
+whole document was regenerated: `split::select_token_leg` is a total function
+of the intent, a ten-account seam transaction is now `ClutchError::AccountCount`
+(`0x0001`), and every emitter had to be rewritten. `Split` and `Merge` take the
+**collateral leg** and total sixteen:
+
+| # | role | signer | writable |
+| --- | --- | --- | --- |
+| 10 | Token-2022 program (executable) | no | no |
+| 11 | the Realm's 266 collateral-policy bytes | no | no |
+| 12 | the collateral mint the policy names | no | no |
+| 13 | the actor's own collateral token account | no | yes |
+| 14 | the Hoard's signing authority (holds no data) | no | no |
+| 15 | the Hoard's collateral token account | no | yes |
+
+`Materialize` and `Dematerialize` take the **outcome leg** and total thirteen:
+the token program at index 10, the derived outcome mint for the named outcome
+at 11 (writable), and the holder's token account for that mint at 12
+(writable).
+
+The 266 policy bytes are in the collateral list because the collateral mint's
+*identity* lives nowhere else: without them a caller could present a worthless
+mint and its own accounts and buy complete sets with it. They are
+**content**-authenticated rather than address-authenticated —
+`collateral::verify_profile_identity` recomputes the child digest from the
+bytes, compares it against the Profile's frozen digest, *and* recomputes the
+parent Profile identity from that digest and compares it against the stored
+Profile ID — so the account they arrive from is arbitrary and this plan
+presents them from a fixed literal address that nothing derives.
 
 The external-balance shadow is **not** omitted. It could have been — neither
 `Split` nor `Merge` changes it — but the CLO-DELTA-V1 obligations are stated
@@ -335,10 +383,13 @@ reproducing the run needs to know what each transaction carries:
 
 | family | accounts | shape |
 | --- | --- | --- |
-| seam (`Split`, `Merge`, `Materialize`, `Dematerialize`) | 10 | the table above |
-| `CreateMarket` | 12 | creator, Realm, Profile, terms (read-only); Market, Hoard, Position, kernel, external, replay, ledger, resolution record (writable, and required to arrive **all-zero**) |
-| `Resolve` / `RedeemInternal` | 12 | actor; Market, Hoard, Position, kernel, external, replay, ledger (writable); terms (read-only); resolution record (writable for a resolve, read-only for a redemption); feed head (read-only); caller-supplied evidence buffer (read-only) |
+| `Split`, `Merge` | 16 | the ten above, then the collateral leg |
+| `Materialize`, `Dematerialize` | 13 | the ten above, then the outcome leg |
+| `CreateMarket` | 19 + `outcome_count` (**21** here) | creator (signer **and writable**: it is the rent payer), Realm, Profile, terms (read-only); Market, Hoard, Position, kernel, external, replay, ledger, resolution record (writable, and required to arrive **all-zero**); the policy bytes, the Token-2022 program, the collateral mint, the System program, the Rent sysvar, the Hoard authority (all read-only); the Hoard token account and one outcome mint per outcome (writable, and required to arrive **uncreated** — zero lamports and zero data) |
+| `Resolve` | 12 | actor; Market, Hoard, Position, kernel, external, replay, ledger (writable); terms (read-only); resolution record (writable for a resolve, read-only for a redemption); feed head (read-only); caller-supplied evidence buffer (read-only) |
+| `RedeemInternal` | 19 | the twelve above, then the Profile, the token program, the policy, the collateral mint, the redeemer's own collateral account, the Hoard authority, and the Hoard token account |
 | `FeedAdvance` | 3 | actor; feed head (writable); caller-supplied observation page (read-only) |
+| `Endow` | 4 | actor (must be the position owner); Market (read-only); Position, replay sequence (writable). No System program: an endowment allocates nothing |
 
 The two caller-supplied buffers are the only accounts in the program with no
 canonical address, deliberately: their bytes are the claim rather than the
@@ -412,8 +463,10 @@ Relative to what `programs/solana-reference` already does:
 1. **Closed.** `Merge`, `Materialize`, and `Dematerialize` were refused
    (`NotYetImplemented`); all three now run through the seam plane, are covered
    by the host differential, and — since the fixture regeneration — each has its
-   own accepting SVM transaction on the ten-account plane, plus a `Split`/`Merge`
-   round trip sequenced by the bank. `Merge` closed on *both* sides at once,
+   own accepting SVM transaction on the seam plane — sixteen accounts with the
+   collateral leg, thirteen with the outcome leg — plus a `Split`/`Merge`
+   round trip sequenced by the bank in which real Token-2022 collateral leaves
+   the actor's account and comes back. `Merge` closed on *both* sides at once,
    because the gap was mis-stated: the offline adapter did not implement it
    either (see the correction under
    [Refusal discipline](#refusal-discipline-for-the-stubs)).
@@ -528,7 +581,9 @@ Relative to obligations 1-4 of `SOLANA_REFERENCE_ADAPTER.md`:
     instruction finished — exactly as designed — and this section was
     re-measured rather than left stale: `Resolve` 536 123 program units,
     `RedeemInternal` 408 294, `CreateMarket` 701 548, on the larger v3 terms
-    account (1 656 bytes). See [Resource envelope](#resource-envelope).
+    account (1 656 bytes). Those three numbers are themselves now historical —
+    the token plane moved them to 554 929, 555 739 and 857 343. See
+    [Resource envelope](#resource-envelope).
 
 16. **`PlaceOrder` has no SVM leg.** It landed on-chain in commit `5cb4ad1`,
     after these fixtures were regenerated, and the offline reference adapter has
@@ -544,7 +599,7 @@ seed, so the fixture is reproducible and this lane holds no key material of any
 kind.
 
 `scripts/run_bringup.sh` starts one `solana-test-validator` bound to loopback
-with the ELF at the chosen program id and **55 accounts loaded at genesis**,
+with the ELF at the chosen program id and **195 accounts loaded at genesis**,
 then `scripts/simulate.py` sends every transaction in `plan.json` to
 `simulateTransaction` with `sigVerify: false`, `replaceRecentBlockhash: true`,
 and an `accounts` request for exactly that transaction's writable accounts, and
@@ -564,11 +619,36 @@ of those four codecs binds a market identity:
 
 | plane | nonce | genesis pre-state | drives |
 | --- | --- | --- | --- |
-| `seam` | 9 | empty, active, replay sequence 0 | `Split`, the `Split`/`Merge` round trip, the three `Split` refusals, and the `CreateMarket` re-initialization refusal |
+| `seam` | 9 | empty, active, replay sequence 0 | `Split`, the `Split`/`Merge` round trip, the four `Split` refusals, all four `Endow` cases, and the `CreateMarket` re-initialization refusal |
 | `held` | 10 | `apply(Split 20)` | `Merge`, `Materialize`, `Resolve` |
 | `shadow` | 11 | `apply(Split 20)` then `apply(Materialize 0, 3)` | `Dematerialize` |
 | `redeem` | 13 | `apply(Split 20)` then `apply_with_evidence(Resolve 1)` | `RedeemInternal` |
-| `create` | 14 | eight all-zero accounts at their canonical addresses | `CreateMarket` |
+| `create` | 14 | eight all-zero accounts at their canonical addresses, **and no token accounts at all** | `CreateMarket` |
+
+**Every founded plane now carries a Token-2022 plane too**, and none of it is
+chosen: the Hoard's token account holds exactly the plane's own
+`HoardAccount::collateral_atoms` (the mirror `token::require_hoard_mirror`
+re-checks over the pre-state before anything moves), and outcome mint *i* has
+exactly the plane's own supply-ledger external term for outcome *i* (the
+reconciliation `require_shadow_reconciles` re-checks after every mint or
+burn). A genesis that disagreed with its own state would be refused on chain
+rather than silently accepted.
+
+Those images are bytes this harness wrote rather than bytes Token-2022 wrote,
+because a validator loaded from a genesis dump cannot run an instruction before
+its first slot. That claim is defended twice. The **real** Token-2022 program is
+what executes `MintTo`, `Burn` and `TransferChecked` against them inside the
+SVM, and it refuses anything it did not consider a mint or an account; and the
+harness re-runs this program's own `token::check_mint` and
+`token::check_token_account` admission over every image before emitting it, so
+a byte this program would refuse is a build-time panic in `cargo test` rather
+than a mysterious on-chain refusal later.
+
+The `create` plane is the one that installs **nothing**: `CreateMarket` creates
+the Hoard token account and every outcome mint itself, by System-program CPI,
+and `market_init::require_uncreated` demands that those addresses hold zero
+lamports and zero data. Their absence from the genesis dump is the
+precondition under test.
 
 Two feed identities exist for the same reason: `Resolve` needs a **read-only**
 feed head whose cursor is already past the window's maturity bound, and
@@ -580,13 +660,19 @@ carries `Split` and `Merge` as two instructions of one transaction so that the
 **bank** sequences them and the second instruction reads the first's writes.
 That is what makes the round-trip claim a bank fact rather than a harness fact.
 
-### Three families need a raised compute limit
+### Every family but `FeedAdvance` needs a raised compute limit
 
-`Resolve`, `RedeemInternal`, and `CreateMarket` do not fit the runtime's default
-200 000-unit budget, so their transactions carry a `SetComputeUnitLimit`
-instruction at the 1 400 000-unit per-transaction ceiling ahead of the program
-instruction, exactly as a real caller would. The raised number is itself the
-measurement; see [Resource envelope](#resource-envelope).
+This used to say *three* families. The mandatory token plane moved it to
+**eight of nine**: a `Split` that moves real collateral recomputes the
+266-byte policy digest and the parent Profile hash, admits a mint and two
+token accounts, and performs a `TransferChecked` CPI, and none of that fits
+the runtime's default 200 000-unit budget. Every transaction in the plan
+except `FeedAdvance` therefore carries a `SetComputeUnitLimit` instruction at
+the 1 400 000-unit per-transaction ceiling ahead of the program instruction,
+exactly as a real caller would. `FeedAdvance` is deliberately left without one
+so that the difference stays visible in the recorded numbers. The raised
+number is itself the measurement; see
+[Resource envelope](#resource-envelope).
 
 What that does establish: the ELF is loaded and executed by an Agave bank; the
 runtime serializes real account data into the VM and writes the program's
@@ -724,92 +810,91 @@ result.** See [How the transition is executed](#how-the-transition-is-executed).
 ## Results
 
 Command: `programs/clutch-sbf/scripts/run_bringup.sh`, one validator session,
-recorded on `aarch64-apple-darwin` with `HEAD` at `9ac1d27` and a working tree
-dirty in exactly four files.
+recorded on `aarch64-apple-darwin` with `HEAD` at `7ce4c09`.
+
+**Regenerated 2026-08-19 for the mandatory token plane.** Every number below
+this line was re-measured after commits `472b7fe` (the genesis plane) and
+`50c6e35` (token completion) made the token legs mandatory and changed every
+account count. The previous recording — `split` at 77 924 units on a
+ten-account plane, `create-market` at 701 548 on twelve accounts, 122 genesis
+accounts, no token account anywhere in the plan — is retired, not merely
+superseded: those transactions are now refused `AccountCount` (`0x0001`)
+because the planes they emit no longer exist. A one-line historical note is
+kept at each moved number so a reader can see which direction it moved and
+why.
 
 **The tree-state caveat, stated precisely.** The gate prints `git rev-parse HEAD`
-and `git status --porcelain` before it builds, and this run reported:
+and, since this regeneration, the working-tree status of **exactly the paths
+`cargo-build-sbf` reads** separately from the status of everything else. That
+distinction is the whole point of printing tree state: a tree dirty only in the
+harness, the scripts, or this document still produces a digest that names a
+commit. This run reported:
 
 ```text
 == source pin ==
-9ac1d273b9e7a1c4382e4228309b13c0f1149f0b
-tree=DIRTY (the ELF digest below names this working tree, not a commit)
-   M docs/implementation/SBF_BRINGUP.md
-   M programs/clutch-sbf/harness/src/main.rs
-   M programs/clutch-sbf/scripts/run_bringup.sh
-   M programs/clutch-sbf/scripts/simulate.py
+7ce4c091a6caaecbbee1a3960884d06022529ebb
+elf_inputs=DIRTY (the ELF digest below names this working tree, not a commit)
+   M programs/clutch-sbf/Cargo.lock
 ```
 
-The four dirty files are this document, the harness, and the two scripts.
-**None of them is an input to the ELF**: `cargo-build-sbf` is invoked on
-`program/Cargo.toml`, and the program crate does not depend on the harness, on
-anything under `scripts/`, or on documentation. The last commit touching any ELF
-input — `programs/clutch-sbf/program`, `programs/solana-layout`,
-`programs/solana-reference`, `crates/clutch-kernel`, `crates/clutch-accumulator`
-— is **`5cb4ad1`**, so the digest below is pinned to `5cb4ad1`'s sources even
-though the tree was not clean.
-
-What cannot be claimed from a dirty tree is a clean-tree reproduction of the
-whole *run*: re-running the gate from `5cb4ad1` alone would use the pre-
-regeneration harness and emit the old nine-account plan. Once the harness and
-scripts land, re-run the gate on a clean tree and re-record both the digest and
-the commit here.
-
-Earlier in this same session the digest moved between runs — `7a02ca02…`,
-`3ad336c5…`, `921b514c…` — because a concurrent lane was editing
-`program/src/accounts.rs` and `program/src/instructions/orders_batch.rs` while
-the gate ran. That is the ELF correctly tracking its inputs, not a
-reproducibility failure, and it is why the source-pin block exists at all.
+`Cargo.lock` is an ELF input and it is dirty, so the gate says so rather than
+guessing. The change is confined to the `clutch-sbf-harness` package's own
+dependency list (the harness gained `solana-pubkey`, at the pin the program
+already uses, so that it can re-run this program's Token-2022 admission over
+every fixture image it emits); no version in the program's build graph moved.
+That is an argument, not evidence, so it was **checked**: the same ELF was
+built from a clean extraction of `HEAD` (`git archive HEAD | tar -x` into a
+fresh directory, fresh `CARGO_TARGET_DIR`) and produced the identical digest.
+The digest below therefore names commit `7ce4c09`.
 
 ### Reproducible ELF
 
 Built twice into fresh target directories:
 
 ```text
-pass 1  sha256=921b514c3ee5eba104e5063c684e4ce3672a09be73e969eeada2d5c0426f838f  bytes=332368
-pass 2  sha256=921b514c3ee5eba104e5063c684e4ce3672a09be73e969eeada2d5c0426f838f  bytes=332368
+pass 1  sha256=59c48c482831626ae9d7cb908f4de0e3f93b1572cdd82105c61f2f87bdaad25f  bytes=505960
+pass 2  sha256=59c48c482831626ae9d7cb908f4de0e3f93b1572cdd82105c61f2f87bdaad25f  bytes=505960
 sbf_reproducibility=PASS
 ```
 
-The same digest was reproduced a third time from two further independent target
-directories outside the gate, so the agreement is not an artifact of the gate's
-own directory layout. The previously recorded digest
-(`42d553132b0a22ebffd374c85d12a444e4ca8c3e99aa211322c5b8a947467cdd`, 102 568
-bytes) predates the whole instruction set and is retired; the artifact is now
-3.2× larger because seven more instruction families are in it.
+Reproduced a third time from the clean `HEAD` extraction described above, with
+its own target directory, so the agreement is not an artifact of the gate's own
+directory layout.
 
-Dynamic symbols, re-read from this ELF with the pinned `llvm-readelf`: ten
+The artifact is 505 960 bytes. Historical: the pre-token ELF was 402 192 bytes
+(`d8a9267c…`) and the pre-instruction-set one 102 568 bytes; the growth is the
+genesis plane's System-program CPIs and the Token-2022 admission, CPI
+construction, and TLV walker.
+
+Dynamic symbols, re-read from this ELF with the pinned `llvm-readelf`: eleven
 `.dynsym` entries, exporting `entrypoint` and `custom_panic` and importing the
 syscalls `sol_try_find_program_address`, `sol_log_`, `sol_panic_`, `abort`,
-`sol_memset_`, `sol_memcpy_`, and `sol_memcmp_`. There is no CPI syscall and no
-token program reference, because there is no CPI and no token code — and that
-is unchanged by seven more instruction families landing.
-
-> **Superseded (2026-08-19):** the paragraph above describes the pre-token
-> ELF. Since the Token-2022 CPI leg landed (`5c88505`), the recorded
-> clean-tree ELF (`d8a9267c…`, the digest in the record below) additionally
-> imports `sol_invoke_signed_rust` — the CPI syscall the materialize mint /
-> dematerialize burn legs use. "No token program reference" still holds: the
-> Token-2022 program id is data, not a dynamic symbol.
+**`sol_invoke_signed_rust`**, `sol_memset_`, `sol_memcpy_`, and `sol_memcmp_`.
+The CPI syscall is the one addition since the pre-token ELF, and it is now
+load-bearing on every family but `FeedAdvance` and `Endow`. There is still **no
+hash syscall**: `sol_sha256` is absent because `clutch-solana-layout` carries
+its own software SHA-256, which is why the collateral leg costs what the
+[Resource envelope](#resource-envelope) says it costs. The Token-2022 program
+id remains data, not a dynamic symbol.
 
 ### Genesis
 
-55 accounts, all program-owned, loaded at genesis by one validator invocation:
-the Realm-wide plane (Realm, Profile, price grid, immutable terms, two feed
-heads), five market planes of eight accounts each, the batch-auction plane no
-implemented instruction touches (epoch, order page, candidate, final pot,
-settlement receipt), three caller-supplied buffers, and the imposter replay
-account. The Profile is **frozen** — the policy flag is set and the digest is
-nonzero — because `CreateMarket` refuses a Realm that has not frozen its
-collateral policy; that is a shape claim and this harness owns no 266-byte
-collateral policy to back it.
+**195 accounts**, loaded by one validator invocation, in three ownerships:
 
-**Superseded count.** The lifecycle walk added eight more market planes and
-three more observation-page buffers to the same genesis, so the current plan
-loads **122** accounts in one validator invocation. The 55 above is the count
-for the per-family plan alone and is kept because the rest of this section's
-numbers were recorded against it; the walk's own record is in
-[`LIFECYCLE_WALK.md`](LIFECYCLE_WALK.md).
+| owner | count | what |
+| --- | ---: | --- |
+| this program | 131 | six Realm-wide accounts (Realm, Profile, price grid, immutable terms, two feed heads), the 266-byte collateral policy, **fourteen** market planes of eight accounts each (112), the five-account batch-auction plane no implemented instruction touches, six caller-supplied buffers (three evidence/page buffers plus the walk's three observation pages), and the imposter replay account |
+| Token-2022 | 63 | the collateral mint, the actor's and the stranger's collateral accounts, and — for each of the twelve **founded** planes — a Hoard token account, two outcome mints, and two holder token accounts |
+| System | 1 | the creator's lamports: `CreateMarket` founds real accounts through a System-program CPI and the creator is the rent payer, so a signer with no account could not fund a creation |
+
+Historical: 55 accounts before the lifecycle walk, 122 after it and before the
+token plane. The Profile is **frozen** — the policy flag is set and the digest
+is nonzero — and is no longer a bare shape claim: the digest is the recomputed
+child digest of a real, decodable 266-byte policy that names a mint this
+genesis actually installs, and the Profile *identity* is the canonical parent
+hash over that same digest, because `collateral::verify_profile_identity`
+refuses any other pairing. That is the single change that moved every address
+in this plan.
 
 ### Differential against the oracle, per family
 
@@ -820,19 +905,37 @@ expectation that happens to equal the pre-state cannot pass by accident.
 
 | transaction | family | oracle | accounts compared | result |
 | --- | --- | --- | --- | --- |
-| `split` | `Split` | `reference::apply` | 7 | 7/7 MATCH |
-| `roundtrip` | `Split`+`Merge` | `reference::apply` ∘ `apply` | 7 | 7/7 MATCH |
-| `merge` | `Merge` | `reference::apply` | 7 | 7/7 MATCH |
-| `materialize` | `Materialize` | `reference::apply` | 7 | 7/7 MATCH |
-| `dematerialize` | `Dematerialize` | `reference::apply` | 7 | 7/7 MATCH |
-| `resolve` | `Resolve` | `reference::apply_with_evidence` | 8 written, 0 compared | **not executable** (compute ceiling) |
-| `redeem` | `RedeemInternal` | `reference::apply_with_evidence` | 8 | 8/8 MATCH |
+| `split` | `Split` | `reference::apply` | 9 (7 state + 2 token) | 9/9 MATCH |
+| `roundtrip` | `Split`+`Merge` | `reference::apply` ∘ `apply` | 9 | 9/9 MATCH |
+| `merge` | `Merge` | `reference::apply` | 9 | 9/9 MATCH |
+| `materialize` | `Materialize` | `reference::apply` | 9 (7 state + mint + holder) | 9/9 MATCH |
+| `dematerialize` | `Dematerialize` | `reference::apply` | 9 | 9/9 MATCH |
+| `resolve` | `Resolve` | `reference::apply_with_evidence` | 8 | 8/8 MATCH |
+| `redeem` | `RedeemInternal` | `reference::apply_with_evidence` | 10 (8 + 2 token) | 10/10 MATCH |
+| `endow` | `Endow` | layout re-encode (**no reference oracle**) | 2 | 2/2 MATCH |
 | `feed-advance` | `FeedAdvance` | accumulator fold + `FeedAccount` codec | 1 | 1/1 MATCH |
 | `create-market` | `CreateMarket` | layout re-encode + `reference::validate_market_init` | 8 | 8/8 MATCH |
 
-52 account comparisons, 52 matches, 0 mismatches. The eight `resolve`
-expectations are written to disk on every run but cannot be compared, because
-the transaction never completes.
+74 account comparisons, 74 matches, 0 mismatches. `resolve` is an ordinary
+compared case again and has been since the decode-once rework; the "not
+executable" row it used to occupy is retired.
+
+**The token accounts are compared, and their expectations are the oracle's
+numbers.** They are not a second description of what a transfer, a mint or a
+burn does:
+
+- the Hoard's token account must end holding exactly the reference adapter's
+  `HoardAccount::collateral_atoms` — which is the mirror
+  `token::require_hoard_mirror` re-checks on chain;
+- the actor's collateral account must end holding exactly what it started with,
+  less whatever the adapter says the Hoard gained (or plus whatever it says the
+  Hoard lost); and
+- an outcome mint's supply and its holder's balance must end at the adapter's
+  supply-ledger external term for that outcome — the reconciliation
+  `require_shadow_reconciles` re-checks on chain.
+
+So each is the claim the program enforces, restated over bytes the bank
+returned, against a number a second implementation computed.
 
 **The oracles are not all equally strong, and the plan says so per case.** For
 the seam plane and for `RedeemInternal` the oracle is a second, independently
@@ -840,13 +943,18 @@ written implementation of the same transition, so a match is two adapters
 agreeing. For `CreateMarket` there is no reference transition: the expectation is
 an independent re-encode through the frozen `clutch-solana-layout` codecs from
 the intent and the terms artifact alone, following the PROPOSED initial values
-`market_init.rs` documents (zero collateral cap, zero created slot, generation
-zero, the Hoard PDA as its own authority, the terms artifact's payout set, an
-unresolved record), and that re-encode is then required to satisfy the
-reference's own `validate_market_init`. For `FeedAdvance` there is no reference
-adapter at all: the expected cursor is what `clutch_accumulator`'s `Summary`
-fold lands on for the same records, re-encoded through the frozen `FeedAccount`
-codec.
+`market_init.rs` documents (the terms' collateral cap, zero created slot,
+generation zero, the Hoard PDA as its own authority, the terms artifact's
+payout set, an unresolved record), and that re-encode is then required to
+satisfy the reference's own `validate_market_init`. For `FeedAdvance` there is
+no reference adapter at all: the expected cursor is what `clutch_accumulator`'s
+`Summary` fold lands on for the same records, re-encoded through the frozen
+`FeedAccount` codec. **`Endow` is the weakest of all and the plan labels it
+so**: `reference::apply` refuses `Intent::Endow` with `UnsupportedIntent`, so
+the expectation is this harness moving the two fields the transition moves
+through the frozen `PositionAccount` and `ReplayAccount` codecs. What that
+still catches is every *other* byte of both accounts, which must come back
+unchanged.
 
 ### The round trip through the bank
 
@@ -855,33 +963,44 @@ codec.
 and the `Merge` reads the `Split`'s writes:
 
 ```text
-accept roundtrip  program_units=155800 per-instruction [77924, 77876] bytes=750
-  differential seam.market    MATCH (unchanged)
-  differential seam.hoard     MATCH (unchanged)
-  differential seam.position  MATCH (unchanged)
-  differential seam.kernel    MATCH (unchanged)
-  differential seam.external  MATCH (unchanged)
-  differential seam.replay    MATCH (changed)
-  differential seam.supply    MATCH (unchanged)
+accept roundtrip  program_units=424656 per-instruction [212310, 212346] bytes=994
+  differential seam.market            MATCH (unchanged)
+  differential seam.hoard             MATCH (unchanged)
+  differential seam.position          MATCH (unchanged)
+  differential seam.kernel            MATCH (unchanged)
+  differential seam.external          MATCH (unchanged)
+  differential seam.replay            MATCH (changed)
+  differential seam.supply            MATCH (unchanged)
+  differential seam.hoard-token       MATCH (unchanged)
+  differential seam.actor-collateral  MATCH (unchanged)
 ```
 
-Six of the seven accounts are byte-identical to the pre-split genesis. The
-seventh is the replay account, whose sequence advanced 0 → 2. The harness asserts
-that shape at build time as well, so a round trip that stopped closing would fail
-`cargo test` before it ever reached a validator.
+Eight of the nine accounts are byte-identical to the pre-split genesis. The
+ninth is the replay account, whose sequence advanced 0 → 2. **Two of those
+eight are now Token-2022 accounts**, which is what makes this a round trip
+through the token program and not only through the ledger: real collateral left
+the actor's account for the Hoard's and came back, and the bank's own bytes say
+both are exactly where they started. The harness asserts that shape at build
+time as well, so a round trip that stopped closing would fail `cargo test`
+before it ever reached a validator.
+
+(Historical: 155 800 units across 750 bytes on the pre-token ten-account plane.
+The transaction is 2.7× more expensive and 244 bytes longer because each half
+now moves collateral.)
 
 ### Refusals
 
 Every refusal is executed in the SVM and its numeric `ProgramError::Custom` code
 compared against an expected value, with the offline adapter's own refusal class
-for the same situation recorded beside it. Sixteen executed cases, at least two
-per family, plus one that cannot be executed:
+for the same situation recorded beside it. **Twenty-two executed cases**, at
+least two per family, none undrivable:
 
 | transaction | code | offline reference |
 | --- | --- | --- |
 | `split-unsigned` | `0x0002` `MissingSignature` | `MissingSignature` |
 | `split-stranger` | `0x0011` `UnauthorizedActor` | `UnauthorizedActor` |
 | `split-imposter` | `0x0009` `WrongPda` | `WrongAccountKey` |
+| `split-foreign-collateral` | `0x001b` `TokenAccountNotAdmitted` | n/a — the offline adapter has no collateral leg |
 | `merge-unsigned` | `0x0002` | `MissingSignature` |
 | `merge-overdraw` | `0x2009` kernel `InsufficientCollateral` | `Kernel(InsufficientCollateral)` |
 | `materialize-unsigned` | `0x0002` | `MissingSignature` |
@@ -889,13 +1008,36 @@ per family, plus one that cannot be executed:
 | `dematerialize-unsigned` | `0x0002` | `MissingSignature` |
 | `dematerialize-overdraw` | `0x2008` kernel `InsufficientBalance` | `Kernel(InsufficientBalance)` |
 | `resolve-unsigned` | `0x3009` | `MissingSignature` |
-| `resolve-wrong-payout` | — | `PayoutIndexMismatch` (**not executable**, see below) |
+| `resolve-wrong-payout` | `0x0057` `PayoutIndexMismatch` | `PayoutIndexMismatch` |
 | `redeem-unsigned` | `0x3009` | `MissingSignature` |
 | `redeem-stranger` | `0x300a` | `UnauthorizedActor` |
+| `redeem-foreign-collateral` | `0x001b` `TokenAccountNotAdmitted` | n/a — the offline adapter has no collateral leg |
+| `endow-unsigned` | `0x0002` | n/a — the offline adapter has no `Endow` |
+| `endow-stranger` | `0x0011` `UnauthorizedActor` | n/a — the offline adapter has no `Endow` |
+| `endow-over-cap` | `0x0012` `CollateralCap` | n/a — the offline adapter has no `Endow` |
 | `feed-advance-unsigned` | `0x0002` | n/a — the offline adapter has no `FeedAdvance` |
 | `feed-advance-replay` | `0x3011` | n/a — the offline adapter has no `FeedAdvance` |
 | `create-unsigned` | `0x0002` | n/a — `validate_market_init` models no signer |
-| `create-already-initialized` | `0x3010` `NonEmptyInitialization` | `NonEmptyInitialization` |
+| `create-already-initialized` | `0x0040` `AlreadyInitialized` | `NonEmptyInitialization` |
+
+**The two `0x001b` rows are new with the mandatory collateral leg and they are
+the reason it names the actor at all.** `split-foreign-collateral` is the
+position owner signing a `Split` funded out of an account it does not own;
+`redeem-foreign-collateral` is the claim owner directing a payout into one.
+Both are refused because `TokenAccountPolicy::collateral_holder` binds the
+presented account's owner authority to the *authenticated actor*. Without that
+check a caller who may name the asset could buy complete sets out of anyone's
+wallet.
+
+**One refusal moved class, and it is an order-of-checks fact worth stating.**
+`redeem-stranger` reaches `0x300a UnauthorizedActor` only because the stranger
+presents *its own* collateral account: `RedeemInternal` authenticates the
+collateral leg **before** the evidence gate authorizes the actor, so a stranger
+presenting the owner's account is refused `0x001b` for owning the wrong token
+account — a true refusal about a different question. This plan therefore
+installs a collateral account for the stranger too, so that the authorization
+refusal stays a refusal about authorization, and asks the other question in its
+own case.
 
 Three things in that table are deliberate and are not defects:
 
@@ -954,10 +1096,15 @@ re-measured run, on the *larger* v3 terms account (1 656 bytes, up from
 
 ```text
 == Resolve ==
-  accept resolve                      program_units=536123 tx_units=536273 limit=1400000
+  accept resolve                      program_units=554929 tx_units=555079 limit=1400000
   refuse resolve-unsigned             Custom(0x3009)  offline reference: MissingSignature
   refuse resolve-wrong-payout         Custom(0x0057)  offline reference: PayoutIndexMismatch
 ```
+
+(The re-measurement at the time of the fix read 536 123; the token-plane
+regeneration moved it to 554 929 with no change to the evidence gate itself.
+`Resolve` carries no token leg — `TOKEN2022_PLAN.md` §3.2 gives it no CPI — and
+its plane is still the unchanged twelve accounts.)
 
 Every gate refusal is now observable on-chain, and `resolve-wrong-payout`
 lands on its allocated projection (`0x0057 PayoutIndexMismatch`, from the
@@ -968,36 +1115,59 @@ rather than the former `0x3fff` collapse.
 
 Program compute, from the run above. `program_units` counts only the units the
 program under test consumed, filtered by program id so the `SetComputeUnitLimit`
-instruction is not miscounted as a second measurement.
+instruction is not miscounted as a second measurement. The **was** column is the
+pre-token recording; it is kept in place so the direction and size of every move
+is visible rather than quietly replaced.
 
-| transaction | program units | % of 200 000 default | tx bytes | needs a raised limit |
-| --- | --- | --- | --- | --- |
-| `feed-advance` | 7 673 | 4% | 419 | no |
-| `split` | 77 924 | 39% | 650 | no |
-| `merge` | 79 376 | 40% | 650 | no |
-| `materialize` | 79 320 | 40% | 683 | no |
-| `dematerialize` | 80 821 | 40% | 683 | no |
-| `roundtrip` | 155 800 (77 924 + 77 876) | 78% | 750 | no |
-| `create-market` | 701 548 | 351% | 822 | yes — 50% of the 1 400 000 ceiling |
-| `redeem` | 408 294 | 204% | 689 | yes — 29% of the ceiling |
-| `resolve` | 536 123 | 268% | 681 | yes — 38% of the ceiling |
+| transaction | program units | was (pre-token) | % of 200 000 default | tx bytes | needs a raised limit |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `feed-advance` | 7 689 | 7 673 | 4% | 419 | no |
+| `endow` | 81 675 | — (new) | 41% | 492 | no, but carries one |
+| `dematerialize` | 94 125 | 80 821 | 47% | 822 | yes |
+| `materialize` | 95 647 | 79 320 | 48% | 822 | yes |
+| `split` | 212 310 | 77 924 | 106% | 888 | yes — 15% of the 1 400 000 ceiling |
+| `merge` | 218 346 | 79 376 | 109% | 888 | yes — 16% |
+| `roundtrip` | 424 656 (212 310 + 212 346) | 155 800 | 212% | 994 | yes — 30% |
+| `resolve` | 554 929 | 536 123 | 277% | 681 | yes — 40% |
+| `redeem` | 555 739 | 408 294 | 278% | 920 | yes — 40% |
+| `create-market` | 857 343 | 701 548 | 429% | 1 119 | yes — 61% |
 
-Read those last three rows as a resource finding still, not a victory lap.
-`Split` costs what it did before (72 869 → 73 273 → 77 924 across three
-recorded runs on changing dependencies); the evidence gate and the
-initializer still cost an order of magnitude more — but they all fit now,
-with 2.6× headroom on the worst of them, where `resolve` previously did not
-fit at all (> 1 399 850, aborted) and `redeem` measured 1 356 878. The delta
-is the decode-once rework: one terms-digest SHA-256 per transaction instead
-of four or five, against a terms account that simultaneously *grew* 27%
-(1 304 → 1 656 bytes, the v3 revision). Address derivation dominates the
-cheap instructions — eight to nine `sol_try_find_program_address` syscalls
-each — and the remaining cost of the expensive ones is spread across the one
-digest, the per-step structural re-parses, and the market decodes.
+**What moved, and why.**
 
-This is still one fixture with two outcomes and one page of three observations.
-It is not an envelope: worst-case outcome counts, worst-case payout sets, and
-larger evidence buffers are unmeasured, and every number above would grow.
+- **The outcome leg costs about 15 000 units.** `materialize` +16 327 and
+  `dematerialize` +13 304: one mint admission, one token-account admission, one
+  TLV walk each, and one `MintTo` or `Burn` CPI.
+- **The collateral leg costs about 135 000.** `split` +134 386 and `merge`
+  +138 970 are the clean measurements: those planes gained the leg and nothing
+  else. `redeem` +147 445 includes the same ~19 000-unit baseline shift
+  `resolve` shows below, so the leg's own share there is about 128 600. The CPI
+  is not the expensive part. The expensive
+  part is `collateral::verify_profile_identity`, which runs **two software
+  SHA-256 digests** — the 266-byte policy and the 88-byte parent-Profile
+  preimage — inside the VM, because `clutch-solana-layout` carries its own
+  SHA-256 and this program imports no `sol_sha256` syscall. That is the single
+  largest line item in the token plane and it is a named, addressable one: a
+  syscall-backed digest behind the same API would return most of it.
+- **`CreateMarket` +155 795**, to 857 343. It now performs **seven CPIs** —
+  three `CreateAccount`s, `InitializeMint2` twice, `InitializeImmutableOwner`,
+  `InitializeAccount3` — reads the rent sysvar, and re-admits every account the
+  token program just wrote through the same policies every later instruction
+  will apply to them. At 61% of the per-transaction ceiling with two outcomes,
+  and one more mint per additional outcome, this is the number that bounds
+  `MAX_OUTCOMES` in practice long before the account list does.
+- **`resolve` +18 806** with no token leg at all. The evidence gate did not
+  change; the program around it did (the genesis plane, the market-init
+  rewrite), and the SBF backend's inlining and layout decisions moved with it.
+  It is recorded rather than explained away.
+- **Eight of nine families now need a raised limit**, where three did before.
+  `split` and `merge` crossed the 200 000-unit default in this wave and did not
+  before.
+
+Read those numbers as a resource finding, not a victory lap. This is still one
+fixture with two outcomes, one page of three observations, and one position. It
+is not an envelope: worst-case outcome counts, worst-case payout sets, larger
+evidence buffers, and any market with more than one position are unmeasured,
+and every number above would grow.
 
 ### The differential is falsifiable
 
@@ -1055,18 +1225,22 @@ undefined behaviour at execution time, so these lines are the only warning there
 is, and `scripts/run_bringup.sh` greps them out of the build log on every run.
 
 As of the run above, every reported function belongs to `clutch-solana-layout`
-or `clutch-solana-reference`. **None belongs to `clutch-sbf`.**
+or `clutch-solana-reference`. **None belongs to `clutch-sbf`**, and that is
+still true after the token plane and the genesis plane landed — the same
+`#[inline(never)]` reader discipline covers `token::observe_mint`,
+`token::check_token_account`, `split::validate_collateral_leg` and
+`market_init::create_token_plane`.
 
 | function | estimated frame |
-| --- | --- |
-| `clutch_solana_reference::validate_market_init` | 10496 |
-| `clutch_solana_reference::apply_inner` | 9792 |
-| `clutch_solana_layout::OrderPageAccount::decode` | 8640 |
-| `clutch_solana_layout::OrderPageAccount::decode_on_grid` | 8320 |
-| `clutch_solana_reference::validate_position_init` | 8512 |
-| `clutch_solana_reference::DecodedState::decode` | 7296 |
-| `clutch_solana_reference::resolve_from_evidence` | 6592 |
-| `clutch_solana_reference::redeem_from_evidence` | 4544 |
+| --- | ---: |
+| `clutch_solana_reference::resolve_from_evidence` | 13 568 |
+| `clutch_solana_reference::validate_market_init` | 13 440 |
+| `clutch_solana_reference::redeem_from_evidence` | 11 776 |
+| `clutch_solana_reference::apply_inner` | 9 792 |
+| `clutch_solana_layout::OrderPageAccount::decode` | 8 896 |
+| `clutch_solana_reference::validate_position_init` | 8 768 |
+| `clutch_solana_layout::OrderPageAccount::decode_on_grid` | 8 576 |
+| `clutch_solana_reference::DecodedState::decode` | 7 296 |
 
 The backend additionally reports that a call inside
 `clutch_solana_reference::resolve_from_evidence` *overwrites values in the
@@ -1129,6 +1303,20 @@ plan/expected/<case>.<plane>.<role>.pre.hex   genesis pre-state
 `scripts/simulate.py --plan <dir> --only <case>` re-runs a single case.
 
 ## The genesis plane (addendum, 2026-08-19)
+
+> **Driven status, added at the token-plane regeneration.** Of this module's
+> six intents, **`Endow` is now driven in the SVM** — one accepting case and
+> three refusals in the per-family plan above, and step 2 of the lifecycle
+> walk. The other five (`InitRealm`, `InitProfile`, `InitPriceGrid`,
+> `InitTerms`, `InitOrderPage`) are **drivable but not driven this round**, and
+> the distinction matters: nothing about the fixture model blocks them. Each
+> needs its own fresh identity plane whose target address is absent from the
+> genesis dump — a Realm nonce, a policy, a grid body and a terms body whose
+> digests are not the ones already installed — and none has a reference oracle,
+> so a differential would compare this program against a re-encode of its own
+> intent. Their `system_instruction::create_account` CPI has therefore **never
+> run on a bank**; only `CreateMarket`'s has, seven times per founding
+> transaction. Deferred check 2 is half closed, not closed.
 
 `instructions/genesis.rs` is the first family in this program that **creates**
 accounts. Every other family writes over accounts that arrived already created,
@@ -1240,12 +1428,15 @@ It moves no collateral, touches no Hoard, and is backed by nothing — the value
 leg is `token::transfer_checked` into the Hoard token account, constructed and
 wired by nothing (`TOKEN2022_PLAN.md`: "constructed, not wired").
 
-This is the harness's existing conjuring, promoted to an instruction. The
-bring-up genesis fixture writes an opening `cash_atoms` into a position account
-before any transaction runs, and `LIFECYCLE_WALK.md` §item 2 names that as the
-sharpest gap in the walk. A number in a fixture has no signer, no sequence, no
-log line and no ceiling. An `Endow` has all four, and the seam the collateral
-leg will later attach to now exists as code rather than as a plan.
+This is the harness's existing conjuring, promoted to an instruction — and as
+of this regeneration, promoted in the harness too. The bring-up fixture *used
+to* write an opening `cash_atoms` into a position account before any
+transaction ran, and `LIFECYCLE_WALK.md` §item 2 named that as the sharpest gap
+in the walk. It no longer does: step 2 of the walk is an `Endow`, measured at
+81 675 units, and the walk's opening state is now byte-for-byte exactly what
+`CreateMarket` writes with nothing added. A number in a fixture has no signer,
+no sequence, no log line and no ceiling. This one now has all four, and is
+still unbacked, which is the residue the walk's item-2 entry states.
 
 One ceiling is real and is stated as what it is: the resulting `cash_atoms` must
 not exceed `MarketAccount::collateral_cap`. That is **necessary and not
@@ -1268,7 +1459,11 @@ asserts the Hoard is unmoved by an endowment.
 program agreeing with a refusal, which is worth nothing. The host tests use the
 **layout codecs** as the oracle instead: every expected account is produced by
 `clutch-solana-layout`'s own encoder and compared byte for byte, and no expected
-byte is typed by hand. Closing this properly means an order-and-genesis
+byte is typed by hand. The SVM `endow` case inherits exactly that weakness and
+declares it in the plan (`oracle = "layout re-encode (the offline reference
+refuses Endow: UnsupportedIntent)"`); what it adds over the host test is that a
+real bank executed it, and that every byte of the position and replay accounts
+*other than* the two the transition moves came back untouched. Closing this properly means an order-and-genesis
 transition family in `programs/solana-reference`, which is the same open row the
 order family has.
 
@@ -1332,33 +1527,42 @@ before re-running.
 which execute inside a local simulated bank on regenerated fixtures with account
 validation, address derivation, and post-state bytes agreeing byte for byte with
 the offline reference adapter — or, where no reference transition exists, with an
-independent re-encode that the reference's own validator accepts. `Resolve`,
-once measured not to fit a Solana transaction, fits again at 536 123 compute
-units since the terms revision. `PlaceOrder`, `CancelOrder`, and the six genesis
-families — five account-creating initializers plus the `Endow` cash credit — are
-implemented with host tests only: no reference oracle and no SVM leg.
+independent re-encode that the reference's own validator accepts. The
+Token-2022 legs are **mandatory and driven**: a `Split` moves real collateral
+between the actor's token account and the Hoard's, a `Materialize` mints a real
+outcome token, and a `CreateMarket` creates the mints and the Hoard token
+account itself through seven CPIs. `Endow` is driven with no reference oracle.
+`PlaceOrder`, `CancelOrder`, and the five account-creating genesis initializers
+are implemented with host tests only: no reference oracle and no SVM leg.
 `SettlePage` is the one remaining stub."
 
 It is not a complete program, not verified, not audited, and not authorization
 to deploy anywhere. Every transaction is simulated with signature verification
 off and nothing is committed, so "the actor signed" remains a message-header
-fact. `PlaceOrder`, `CancelOrder`, and the genesis family have no SVM evidence;
-settlement is a stub. `CreateMarket` founds markets over pre-created accounts
-and cannot create an account — the account-creation CPI now exists in
-`instructions/genesis.rs`, for five other accounts, and has never been executed
-on a bank. `Endow` credits internal cash that no collateral backs, by design and
+fact. `PlaceOrder`, `CancelOrder`, and the five creating genesis initializers
+have no SVM evidence; settlement is a stub. The account-creation CPI has run on
+a bank only through `CreateMarket`; `genesis.rs`'s five initializers have never
+executed. `Endow` credits internal cash that no collateral backs, by design and
 in writing. The window identity and the feed summary digest are recorded and
-never verified, because the program owns no hash primitive.
+never verified, because the program owns no hash **syscall** — it does own a
+software SHA-256 in `clutch-solana-layout`, which the collateral leg runs twice
+per transaction and pays about 135 000 compute units for.
 
 
-> **Clean-tree ELF record (2026-08-19):** full gate re-run at commit
-> `5c88505` on a clean tree: bring-up PASS, lifecycle PASS, both
-> falsifiability self-checks fired. ELF sha256
-> `d8a9267c75ac0d4e8021320f3009c09532fd0cfda5a70508bd6c8312b400975c`. This supersedes digests above recorded
-> against dirty trees.
-
-> **STALE AS OF 2026-08-19 (commits 472b7fe, 50c6e35).** Every CU figure,
-> differential result, and refusal code recorded above was measured before
-> the token plane became mandatory. The harness emits pre-token account
-> shapes and the gate now exits 1 with `AccountCount` refusals throughout.
-> Treat the tables as historical until the harness is regenerated.
+> **Token-plane regeneration record (2026-08-19).** The staleness notice that
+> stood here is discharged. Commits `472b7fe` (genesis plane) and `50c6e35`
+> (token completion) made the token legs mandatory and changed every account
+> count; the gate exited 1 with `AccountCount` (`0x0001`) refusals on every
+> family until the harness was regenerated. It now emits the 16/13/19/21-account
+> planes, installs a real collateral mint and the per-market Token-2022 plane at
+> genesis, and derives the Profile identity as
+> `ParentProfile::from_policy(policy).identity()` — which moved every PDA in
+> every fixture. Full gate at `HEAD = 7ce4c09`: **bring-up PASS** (10 accepting
+> transactions, 22 refusals, 0 undrivable, 195 genesis accounts), **lifecycle
+> PASS** (11 steps), all three falsifiability self-checks fired, exit 0. ELF
+> sha256 `59c48c482831626ae9d7cb908f4de0e3f93b1572cdd82105c61f2f87bdaad25f`,
+> 505 960 bytes, reproduced from a clean `HEAD` extraction. Every pre-token
+> number in this document that moved carries its old value beside the new one;
+> the pre-token digest `d8a9267c…` and the pre-token CU table are retired
+> because the transactions that produced them no longer have valid account
+> planes.
