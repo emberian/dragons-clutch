@@ -161,14 +161,16 @@ Required work:
 Exit criterion: candidate admission through settlement or lapse is one
 constructible, permissionless, funded, bounded, replay-closed SBF lifecycle.
 
-Current isolated checkpoint: `529878d`, `1e8b8a3`, and `1241399` freeze V3
-account/artifact/intent codecs on `codex/r3-direct-v3`; no shared runtime route
-exists. The current model correction remains audit-RED: reconcile its 99-byte
-order body with the live 107-byte layout, admit exact unchanged zero-envelope
-buy release, and separate the legacy 64-byte policy digest from the 96-byte
-epoch-bound DirectBatchPolicyV3 artifact digest. These and the remaining
-model/wire authentication and asset-release gates are prerequisites to any
-dispatcher or SBF integration.
+Current isolated checkpoint: `b49c497` on `codex/r3-direct-v3` (atop the
+frozen `529878d`/`1e8b8a3`/`1241399` codecs); no shared runtime route exists.
+The three audit-RED points are closed and tripwired: the 107-byte order body
+now matches the live layout with a cross-crate model/live digest-equality
+test, zero-envelope reservations refuse at creation so release stays total,
+and the epoch-bound 96-byte DirectBatchPolicyV3 identity is enforced
+separately from the legacy relation digest. Remaining before any dispatcher
+or SBF integration: embed the economic Position-transfer kernel in Settle,
+wire the placement gate into a real PlaceOrder V4 branch, route tags 36-46,
+and the design doc's live-evidence list.
 
 ### R4 — Version the terminal lifecycle
 

@@ -36,6 +36,16 @@ provider selection/design, Draft 10 fork (degg-research).
 
 ## Done log (2026-08-19 session)
 
+- V3 blocker fixes LANDED at b49c497 on codex/r3-direct-v3 (jobs worktree,
+  clean): order-body 107 with a red-demonstrated cross-crate model/live
+  digest tripwire, zero-envelope creation refusal keeps release total,
+  epoch-bound 96-byte direct_policy_v3_id enforced by all three validators.
+  37+177+10+2 tests, strict clippy clean both crates, independently rerun
+  before commit. Design doc now carries the open items (Settle kernel,
+  verify_lease tautology, FROZEN_EMPTY pinning). Truth docs reconciled.
+- Postmark doorstep cleared: five letters (stella-letta x2, postmaster,
+  iris — yes to Garcin, aion-solare) shipped as PR #1880.
+
 - STOP #1 reconciled with git truth: the basis-mode binding the STOP demanded
   landed at 3a81b38 (ancestor of frozen runtime 7e8f6b1; program-src diff to
   HEAD is empty; NATIVE_SEMANTICS_AUDIT_V4 reads REPAIRED P1 / PASS with all

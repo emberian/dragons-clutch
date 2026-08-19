@@ -82,20 +82,20 @@ correction must first close ReservationV2/page/grid authentication, exact
 Position asset release for every abort/lapse, strict clock-boundary ownership,
 DonationLedger observation, durable selected-slot/count projection, and the
 V4 placement phase gate; then it needs a fresh read-only re-audit.
-The current uncommitted diff is exactly
-`research/batch-policy-identity/src/direct_lifecycle_v3.rs`,
-`programs/solana-layout/src/direct_selection_v3.rs`, and
-`docs/implementation/DIRECT_SELECTION_V3_DESIGN.md`, with SHA-256
-`5e4b059e4e94e158c84dd0e666ef945b80bbc54df58fbf611e305be96b9ae7c2`.
-Research 34/34 and layout 175/175 plus ResolutionWork 10/10 pass, but the final
-read-only audit is **RED** on three exact points: the model hashes a 99-byte
-order body while live layout hashes 107 bytes; an unchanged zero-envelope
-(`limit=0`, `max_fee=0`) buy Position cannot pass abort/lapse release; and the
-model conflates the legacy 64-byte policy digest with the epoch-bound 96-byte
-DirectBatchPolicyV3 artifact digest. Strict Clippy also needs two test-only
-imports gated, and Settle does not yet embed the existing economic
-Position-transfer kernel. Preserve this checkpoint rather than inferring live
-authority.
+The model correction plus the three audit-RED blocker fixes are committed at
+`b49c497` on that branch (worktree clean). All three blockers closed with
+independent two-sided verification: the order-body constant is 107 and a
+cross-crate tripwire asserts model/live page-digest and order-set equality
+(red at 99, demonstrated); zero-envelope reservations refuse at creation so
+every abort/lapse release path stays reachable; and the reservation authority
+carries the epoch-bound 96-byte `direct_policy_v3_id` enforced by all three
+state validators, disjoint from the relation-side legacy digest. Research
+37/37 and layout 177/177 plus ResolutionWork 10/10 pass and strict Clippy is
+clean on both crates. Still open, recorded in the design doc: Settle does not
+embed the economic Position-transfer kernel; the `verify_lease` self-sink
+check is tautological at its own layer; `FROZEN_EMPTY` does not pin admission
+fields. Status remains MODEL-ONLY / DESIGN with no dispatcher, SBF route, or
+migration. Preserve this checkpoint rather than inferring live authority.
 
 ## What changed after the prior handoff
 
