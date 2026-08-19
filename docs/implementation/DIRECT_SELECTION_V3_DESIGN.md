@@ -1,6 +1,6 @@
 # Direct Selection V3: staged, bounded, donation-safe authority
 
-Status: **executable model; live ABI/runtime STOP**
+Status: **executable model and frozen codecs; lifecycle runtime STOP**
 
 The current V2 direct-selection path is not promotable. Its full-width
 authority checks are correct, but a successful three-Candidate
@@ -16,25 +16,32 @@ every transient account, distinguishes reservation ownership transitions, and
 gives every successfully frozen phase a permissionless terminal route.
 
 The executable transition model is
-`research/batch-policy-identity/src/direct_lifecycle_v3.rs`. It allocates no
-live account tag or intent.
+`research/batch-policy-identity/src/direct_lifecycle_v3.rs`. Versioned account
+and intent codecs are frozen, but no lifecycle intent is dispatched yet.
 
 ## Exact boundary
 
-The V3 lifecycle begins atomically with a successful two-order direct Freeze.
-At that boundary:
+The V3 lifecycle begins as an unfrozen Epoch with no WorkBudget and an exact
+active prefix of zero, one, or two Reservation V2 accounts. Each Reservation
+creation records its own rent payer, exact principal, and neutral donation
+lower bound. If the Epoch has not frozen by `submission_opens_slot`, anyone may
+abort it: the exact active prefix is released and closed, and Epoch records the
+distinct `PREFREEZE_ABORT` terminal reason.
+
+Successful Freeze requires exactly two observed ACTIVE reservations. At that
+atomic boundary:
 
 - the page and exact two Reservation V2 accounts are authenticated and frozen;
 - both reservations are `ACTIVE`;
-- the immutable schedule and verifier-semantics identity are fixed;
+- the immutable schedule and verifier release identifier are fixed;
 - the WorkBudget account is created and fully funded; and
 - the lifecycle enters `FROZEN_EMPTY`.
 
-WorkBudget must not exist before successful Freeze. A never-frozen OPEN Epoch
-therefore cannot trap its work reserve. Promotion still requires a separate
-`AbortUnfrozenDirectV4` route for the existing pre-Freeze Epoch and any zero,
-one, or two OPEN-order reservations. That route is not modeled here and remains
-an explicit migration STOP.
+WorkBudget does not exist before successful Freeze, so a never-frozen Epoch
+cannot trap a work reserve. The executable model covers Reservation placement,
+monotone donation observation, exact zero/one/two pre-Freeze release, hostile
+prefix refusal, and the Freeze boundary. Runtime account construction and
+real-bank evidence remain STOP.
 
 ## Non-negotiable authority rules
 
@@ -71,8 +78,9 @@ an explicit migration STOP.
 8. Window `top_count` and all top entries stay immutable after Finalize. A
    separate physical-live mask records that loser Candidate accounts were
    closed, so the encoded Window and the economic ledger do not disagree.
-9. Each staged action authenticates one frozen verifier-semantics/build
-   identity. This prevents accidental mixing across upgrades. A malicious
+9. Each staged action authenticates one frozen compile-time verifier release
+   identifier. It is not an onchain code hash or deployment identity. This
+   prevents accidental mixing across upgrades. A malicious
    upgrade authority can replace the checking program itself; promotion must
    therefore use an immutable deployment or explicitly name and accept that
    authority as a trust boundary.
@@ -134,7 +142,7 @@ Bytes `0..344` preserve Direct Epoch V3. The extension is:
 | 360 | 1 | lifecycle phase |
 | 361 | 1 | terminal reason |
 | 362 | 1 | terminal outcome |
-| 363 | 1 | terminal flags, zero |
+| 363 | 1 | exact terminal Reservation prefix count, `0..=2` |
 | 364 | 8 | `selected_slot`, zero before selection |
 | 372 | 32 | terminal Candidate ID |
 | 404 | 32 | terminal relation-candidate digest |
@@ -150,6 +158,13 @@ The direct lifecycle byte owns `PREFREEZE_OPEN`, `FROZEN_EMPTY`,
 Epoch phase is only a checked coarse projection (`OPEN`, `FROZEN`, `CLEARED`,
 `SETTLED`, or `LAPSED`); it is not a second semantic owner. Phase, not terminal
 reason zero, distinguishes a nonterminal Epoch from `EMPTY_LAPSE`.
+`PREFREEZE_ABORT` is a distinct nonzero terminal reason. Because no frozen
+order-set exists, its preserved common Epoch phase remains `OPEN`; the exact V4
+lifecycle byte is `TERMINAL` and is the sole terminal semantic owner.
+For that reason only, the two 32-byte terminal commitment fields form a tagged
+union containing Reservation IDs zero and one according to the exact count;
+they are zero-padded beyond the authenticated prefix. Frozen terminal reasons
+always archive count two and retain their Candidate/relation meanings.
 
 ### Direct Candidate V3 — 488 bytes
 
@@ -196,7 +211,7 @@ admissions only. Window phase gains `VERIFYING`.
 
 ### Direct WorkBudget V1 — 248 bytes
 
-The Epoch-bound account stores Epoch, BatchPolicy, verifier identity, reward
+The Epoch-bound account stores Epoch, BatchPolicy, verifier release ID, reward
 sponsor/rent payer, rent principal, neutral donation lower bound, current and
 initial spendable reward balance, rewards paid, five strictly positive frozen
 rewards, bump, phase, flags, and padding. This V3 profile requires one payer to
@@ -248,6 +263,12 @@ Epoch/WorkBudget binding; Lapse retains a versioned escape path. Upgradeable
 deployment trust or immutable deployment remains an explicit promotion
 boundary.
 
+The executable model recomputes this epoch-bound artifact identity
+(`direct_policy_v3_id`) on every state validation and keeps it disjoint from
+the legacy 64-byte policy digest that keys the relation domain, candidate, and
+reservation bodies. A cross-crate test asserts the model digest is
+byte-identical to the codec's `digest_for_epoch`.
+
 ## Frozen intent codec registry
 
 The layout allocates common intent version 3 tags 36 through 46. These bytes
@@ -275,9 +296,54 @@ supplies every economic fact.
 
 ## Routed transition plan
 
+### `InitDirectEpochV4` / V4 Reservation placement
+
+Init creates only the durable pre-freeze Epoch. Each V4 order placement creates
+one append-only Reservation V2 and persists its authenticated payer principal
+and neutral donation lower bound. Every later placement observes the complete
+existing reservation prefix. A third reservation, nonzero padding, late
+placement, release-ID mismatch, or balance below accounted principal plus the
+prior donation refuses before mutation. A reservation that encumbers nothing —
+a zero-limit, zero-fee buy — refuses at creation, because its release is a
+Position no-op the release kernel's unchanged-poststate refusal would
+otherwise block forever.
+
+The existing `PlaceOrder` business wire may be reused, but its V4 branch must
+require lifecycle phase `PREFREEZE_OPEN` in addition to coarse Epoch `OPEN` and
+must create Reservation V2, never V1. The program derives the page-zero prefix
+rank; the caller cannot choose a prefix count. The model authenticates the
+complete Reservation body (canonical identity/PDA input, owner, Position
+generation, order ID/generation, market, Epoch, policy, grid, terms,
+direct-single kind, side, outcome width, cash/Egg envelope, ACTIVE phase,
+bump, and flags) against the exact page record.
+
+### `FreezeDirectEpochV4`
+
+Freeze requires the exact two ACTIVE Reservation V2 accounts, authenticates
+their latest DonationLedgers, and creates the WorkBudget with one exact create
+delta covering rent principal plus the full reward-only deposit. It cannot
+infer a payer or principal from Reservation V1 and cannot freeze zero or one
+reservation.
+
+### `AbortUnfrozenDirectV4`
+
+At `submission_opens_slot` or later, anyone may terminate a still-unfrozen V4
+Epoch. The route releases and closes exactly the zero-, one-, or two-account
+Reservation prefix, returns each recorded principal only to its payer, routes
+all observed donations only to the immutable neutral sink, and writes the
+distinct durable `PREFREEZE_ABORT` receipt. It has no WorkBudget and pays no
+keeper reward. The authenticated page determines the required Reservation and
+Position accounts in exact prefix order; the intent contains no count. Before
+any close, the existing release arithmetic subtracts remaining reserved cash,
+adds every remaining Egg back to the matching live Position, assigns canonical
+`order_generation + 1` as the release generation, zeros the Reservation
+assets, and marks it `RELEASED`. A repeated owner aggregates both releases into
+one Position poststate; stale generations, aliases, missing/extra/reordered
+accounts, and arithmetic failure refuse atomically.
+
 ### `SubmitDirectCandidateV3`
 
-Preflight authenticates Epoch V4, BatchPolicy/deployment identity, Grid, frozen
+Preflight authenticates Epoch V4, BatchPolicy/release identity, Grid, frozen
 page, two ACTIVE reservations, Window (or creatable PDA), exact retained
 Candidate accounts, the new target, and the displaced payer when applicable.
 It runs the full verifier before deciding:
@@ -300,9 +366,9 @@ strictly positive Begin reward from WorkBudget. It performs no relation work.
 ### `VerifyDirectCandidateV3(index)`
 
 Authenticates the same frozen source, exact Window entry, exact Candidate PDA,
-and verifier identity. It runs the cached full verifier, changes only that
+and verifier release ID. It runs the cached full verifier, changes only that
 Candidate `VERIFIED -> REVERIFIED`, sets one mask bit, and pays one fixed Verify
-reward. Replay, corrupt source, code substitution, or deadline failure is
+reward. Replay, corrupt source, release-ID substitution, or deadline failure is
 atomic refusal.
 
 ### `FinalizeDirectSelectionV3`
@@ -361,7 +427,7 @@ work, but remain STOP. They must not be implied by transient cleanup.
 
 ## Executed model evidence
 
-The research crate passes 28 tests total, including 12 V3 lifecycle tests, and
+The research crate passes 37 tests total, including 21 V3 lifecycle tests, and
 strict Clippy. V3 tests cover:
 
 - min/max deadline spans, boundary slots, and strictly positive work rewards;
@@ -369,13 +435,45 @@ strict Clippy. V3 tests cover:
 - noncompetitive no-state outcome, replacement, replay, and top/live split;
 - hostile counts, masks, padding, duplicate identities, and status mismatch
   refusing before any unsafe index or shift;
-- verifier identity checks across staged work;
+- verifier release-ID checks across staged work;
 - exact `ACTIVE -> ENTITLED -> CONSUMED/RELEASED` effects;
 - partial-verification and selected-path WorkBudget equations;
 - canonical DonationLedger create deltas, monotone donations, shortfall refusal,
   close-time neutral disposition, payer/reward separation, and checked aggregate
-  overflow; and
-- empty, pre-selection, post-selection, and settled durable receipts.
+  overflow;
+- exact zero/one/two pre-Freeze Reservation/Position release, deterministic
+  release generation, hostile prefix/order/side/policy/state/alias refusal,
+  late Freeze, and pre-Freeze donation observation;
+- persisted observation of every surviving Candidate, Window, WorkBudget, and
+  Reservation plus next-transition refusal after donation drain;
+- zero-envelope reservation refusal at placement and the exact fee-only
+  zero-limit placement/release path;
+- the epoch-bound DirectBatchPolicy V3 artifact identity with wrong-epoch,
+  wrong-release, and substituted-identity refusal; and
+- pre-Freeze, empty, pre-selection, post-selection, and settled durable
+  receipts.
+
+The layout crate additionally carries two cross-crate tripwires: the model's
+recomputed frozen-page digest and order-set fold are asserted byte-identical
+to the live page fold over the same two records, and the model's
+`direct_policy_v3_digest` is asserted byte-identical to the codec's
+`digest_for_epoch`.
+
+## Known model open items
+
+- Settle consumes ENTITLED reservations and writes the exact economic receipt,
+  but does not yet embed the existing economic Position-transfer kernel: the
+  selected trade's cash/Egg movement between the two Positions is not modeled.
+- `verify_lease` authenticates a lease account against its own ledger's
+  neutral sink, which is tautological in isolation. Both call sites first
+  validate against the Epoch authority sink, so this is a latent trap for
+  future callers rather than a live hole; the redundant self-check should be
+  removed or given the real sink.
+- The `FROZEN_EMPTY` validator does not pin `seen_competitive_ticks`,
+  `competitive_admission_count`, or the admission transcript to zero. The
+  state is unreachable through model transitions and not runtime-encodable
+  (those fields live in the Window account, which must not exist in
+  `FROZEN_EMPTY`), and pre-set ticks could only cause extra Replay refusals.
 
 Run:
 
@@ -393,7 +491,7 @@ cargo clippy --manifest-path research/batch-policy-identity/Cargo.toml --locked 
    and neutral DonationLedger split.
 3. Real-SBF multiple/tied Candidates, all 64 ticks, replacement,
    noncompetitive repetition, admitted replay, omitted/reordered top, corrupt
-   score/digest, policy/grid/page/reservation/code substitution, early/late
+   score/digest, policy/grid/page/reservation/release-ID substitution, early/late
    work, reward replay, recipient substitution, later account donation, and
    rollback after writes/creates/closes.
 4. CU and stack reports for maximum account shape of every staged route, with
@@ -401,16 +499,18 @@ cargo clippy --manifest-path research/batch-policy-identity/Cargo.toml --locked 
 5. Rent, donation, WorkBudget, cash, claim, fee, and reservation snapshots
    before/after success and every late failure.
 6. Durable Epoch receipt decoding after transient authority is gone.
-7. Pre-Freeze abort/release for zero, one, and two OPEN reservations.
-8. DonationLedger `observe` updates for every surviving mutable Candidate,
-   Window, WorkBudget, and Reservation account, proving that an observed
-   donation cannot later be drained while an older lower bound is persisted.
+7. Real-SBF pre-Freeze abort/release for zero, one, and two OPEN reservations,
+   including late failure rollback and exact recipient substitution refusal.
+8. Real-SBF persistence of DonationLedger `observe` updates for every surviving
+   mutable Candidate, Window, WorkBudget, and Reservation account, proving that
+   an observed donation cannot later be drained while an older lower bound is
+   persisted.
 
 ## Still out of scope
 
 V3 does not add partial fills, fees, portfolios, more than two orders, more than
 one Egg, general relation settlement, multiple pages, archive pruning, or an
 operator policy. Existing outcome mints and older account versions do not gain
-retroactive rent cleanup. No live intent, account tag, deployment claim, or
-mainnet path exists until the complete versioned schema and real-SBF campaign
-land together.
+retroactive rent cleanup. The frozen tags and codecs are not live transition
+claims: no lifecycle dispatch, deployment claim, or mainnet path exists until
+the complete routed schema and real-SBF campaign land together.

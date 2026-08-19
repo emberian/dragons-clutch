@@ -9,7 +9,12 @@
 use clutch_batch_policy_identity::{
     canonical_batch_policy_bytes, decode_batch_policy,
     direct_lifecycle_v3::{
-        MAX_DIRECT_TICKS_V3, MAX_SELECTION_SPAN_V3, MAX_SETTLEMENT_SPAN_V3, MAX_SUBMISSION_SPAN_V3,
+        DirectCandidateLeaseV3 as ModelCandidateLeaseV3,
+        DirectCandidateStageV3 as ModelCandidateStageV3,
+        DirectLifecyclePhaseV3 as ModelLifecyclePhaseV3,
+        DirectTerminalReasonV3 as ModelTerminalReasonV3,
+        DirectTerminalReceiptV3 as ModelTerminalReceiptV3, MAX_DIRECT_TICKS_V3,
+        MAX_SELECTION_SPAN_V3, MAX_SETTLEMENT_SPAN_V3, MAX_SUBMISSION_SPAN_V3,
         MIN_SELECTION_SPAN_V3, MIN_SETTLEMENT_SPAN_V3, MIN_SUBMISSION_SPAN_V3,
     },
     direct_window_v1::{
@@ -119,6 +124,31 @@ pub const DIRECT_TERMINAL_REASON_PRESELECTION_LAPSE: u8 = 1;
 pub const DIRECT_TERMINAL_REASON_POSTSELECTION_LAPSE: u8 = 2;
 /// The exact selected pair settled atomically.
 pub const DIRECT_TERMINAL_REASON_SETTLED: u8 = 3;
+/// The Epoch reached submission open without ever freezing.
+pub const DIRECT_TERMINAL_REASON_PREFREEZE_ABORT: u8 = 4;
+
+/// Project the model lifecycle enum to its frozen wire value. Never cast the
+/// model enum: its Rust discriminants are deliberately not protocol bytes.
+pub const fn direct_lifecycle_phase_wire(phase: ModelLifecyclePhaseV3) -> u8 {
+    match phase {
+        ModelLifecyclePhaseV3::FrozenEmpty => DIRECT_LIFECYCLE_PHASE_FROZEN_EMPTY,
+        ModelLifecyclePhaseV3::WindowOpen => DIRECT_LIFECYCLE_PHASE_WINDOW_OPEN,
+        ModelLifecyclePhaseV3::Verifying => DIRECT_LIFECYCLE_PHASE_VERIFYING,
+        ModelLifecyclePhaseV3::Selected => DIRECT_LIFECYCLE_PHASE_SELECTED,
+        ModelLifecyclePhaseV3::Terminal => DIRECT_LIFECYCLE_PHASE_TERMINAL,
+    }
+}
+
+/// Project a model terminal reason to its frozen wire value.
+pub const fn direct_terminal_reason_wire(reason: ModelTerminalReasonV3) -> u8 {
+    match reason {
+        ModelTerminalReasonV3::EmptyLapse => DIRECT_TERMINAL_REASON_EMPTY_LAPSE,
+        ModelTerminalReasonV3::PreSelectionLapse => DIRECT_TERMINAL_REASON_PRESELECTION_LAPSE,
+        ModelTerminalReasonV3::PostSelectionLapse => DIRECT_TERMINAL_REASON_POSTSELECTION_LAPSE,
+        ModelTerminalReasonV3::Settled => DIRECT_TERMINAL_REASON_SETTLED,
+        ModelTerminalReasonV3::PrefreezeAbort => DIRECT_TERMINAL_REASON_PREFREEZE_ABORT,
+    }
+}
 
 /// Candidate status after its independent staged reexecution.
 pub const DIRECT_CANDIDATE_STATUS_REVERIFIED: u8 = 5;
@@ -243,8 +273,8 @@ pub struct DirectTerminalReceiptV3 {
     pub reason: u8,
     /// Settled outcome; zero for lapse and before terminality.
     pub outcome: u8,
-    /// Reserved flags; zero.
-    pub flags: u8,
+    /// Exact Reservation prefix archived by the terminal transition.
+    pub terminal_reservation_count: u8,
     /// Selection slot; zero if no candidate was selected.
     pub selected_slot: u64,
     /// Selected Candidate identity; zero before selection.
@@ -266,7 +296,7 @@ impl DirectTerminalReceiptV3 {
     pub const EMPTY: Self = Self {
         reason: DIRECT_TERMINAL_REASON_NONE,
         outcome: 0,
-        flags: 0,
+        terminal_reservation_count: 0,
         selected_slot: 0,
         candidate: Hash32::ZERO,
         relation_candidate_digest: Hash32::ZERO,
@@ -275,6 +305,24 @@ impl DirectTerminalReceiptV3 {
         consideration_price_units: 0,
         terminal_slot: 0,
     };
+}
+
+/// Byte-exact projection of the executable model receipt.
+pub const fn project_model_terminal_receipt(
+    receipt: ModelTerminalReceiptV3,
+) -> DirectTerminalReceiptV3 {
+    DirectTerminalReceiptV3 {
+        reason: direct_terminal_reason_wire(receipt.reason),
+        outcome: receipt.outcome,
+        terminal_reservation_count: receipt.terminal_reservation_count,
+        selected_slot: receipt.selected_slot,
+        candidate: Hash32::from_bytes(receipt.candidate_id.0),
+        relation_candidate_digest: Hash32::from_bytes(receipt.relation_candidate_digest.0),
+        quantity: receipt.quantity,
+        price: receipt.price,
+        consideration_price_units: receipt.consideration_price_units,
+        terminal_slot: receipt.terminal_slot,
+    }
 }
 
 /// Version-four direct Epoch with complete schedule and durable terminal audit.
@@ -319,7 +367,7 @@ impl DirectEpochV4Account {
             MIN_SETTLEMENT_SPAN_V3,
             MAX_SETTLEMENT_SPAN_V3,
         )?;
-        if self.terminal.flags != 0 || self.reserved.iter().any(|byte| *byte != 0) {
+        if self.reserved.iter().any(|byte| *byte != 0) {
             return Err(CodecError::NonCanonicalPadding);
         }
         match self.lifecycle_phase {
@@ -342,6 +390,7 @@ impl DirectEpochV4Account {
             DIRECT_LIFECYCLE_PHASE_SELECTED => {
                 if self.direct.common.phase != EPOCH_PHASE_CLEARED
                     || self.terminal.reason != DIRECT_TERMINAL_REASON_NONE
+                    || self.terminal.terminal_reservation_count != 0
                     || self.terminal.selected_slot < self.direct.submission_closes_slot
                     || self.terminal.selected_slot >= self.selection_deadline_slot
                     || self.terminal.candidate == Hash32::ZERO
@@ -361,11 +410,49 @@ impl DirectEpochV4Account {
         Ok(())
     }
 
+    /// Require the sole V4 phase in which the existing PlaceOrder wire may
+    /// create a Reservation V2. Coarse `OPEN` alone is insufficient because a
+    /// durable pre-freeze abort intentionally retains that coarse phase.
+    pub fn require_prefreeze_placement(&self) -> Result<()> {
+        self.validate()?;
+        if self.lifecycle_phase != DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN
+            || self.direct.common.phase != EPOCH_PHASE_OPEN
+            || self.terminal != DirectTerminalReceiptV3::EMPTY
+        {
+            return Err(CodecError::InvalidEnum);
+        }
+        Ok(())
+    }
+
     fn validate_terminal(&self) -> Result<()> {
         let terminal = self.terminal;
         match terminal.reason {
+            DIRECT_TERMINAL_REASON_PREFREEZE_ABORT => {
+                if self.direct.common.phase != EPOCH_PHASE_OPEN
+                    || terminal.selected_slot != 0
+                    || terminal.terminal_reservation_count > 2
+                    || (terminal.terminal_reservation_count == 0
+                        && (terminal.candidate != Hash32::ZERO
+                            || terminal.relation_candidate_digest != Hash32::ZERO))
+                    || (terminal.terminal_reservation_count == 1
+                        && (terminal.candidate == Hash32::ZERO
+                            || terminal.relation_candidate_digest != Hash32::ZERO))
+                    || (terminal.terminal_reservation_count == 2
+                        && (terminal.candidate == Hash32::ZERO
+                            || terminal.relation_candidate_digest == Hash32::ZERO
+                            || terminal.candidate == terminal.relation_candidate_digest))
+                    || terminal.outcome != 0
+                    || terminal.quantity != 0
+                    || terminal.price != 0
+                    || terminal.consideration_price_units != 0
+                    || terminal.terminal_slot < self.direct.submission_opens_slot
+                {
+                    return Err(CodecError::MismatchedBinding);
+                }
+            }
             DIRECT_TERMINAL_REASON_EMPTY_LAPSE | DIRECT_TERMINAL_REASON_PRESELECTION_LAPSE => {
                 if self.direct.common.phase != EPOCH_PHASE_LAPSED
+                    || terminal.terminal_reservation_count != 2
                     || terminal.selected_slot != 0
                     || terminal.candidate != Hash32::ZERO
                     || terminal.relation_candidate_digest != Hash32::ZERO
@@ -380,6 +467,7 @@ impl DirectEpochV4Account {
             }
             DIRECT_TERMINAL_REASON_POSTSELECTION_LAPSE => {
                 if self.direct.common.phase != EPOCH_PHASE_LAPSED
+                    || terminal.terminal_reservation_count != 2
                     || terminal.selected_slot < self.direct.submission_closes_slot
                     || terminal.selected_slot >= self.selection_deadline_slot
                     || terminal.candidate == Hash32::ZERO
@@ -400,6 +488,7 @@ impl DirectEpochV4Account {
                     .checked_mul(u128::from(terminal.price))
                     .ok_or(CodecError::ArithmeticOverflow)?;
                 if self.direct.common.phase != EPOCH_PHASE_SETTLED
+                    || terminal.terminal_reservation_count != 2
                     || terminal.selected_slot < self.direct.submission_closes_slot
                     || terminal.selected_slot >= self.selection_deadline_slot
                     || terminal.outcome >= 2
@@ -457,7 +546,7 @@ impl DirectEpochV4Account {
         writer.u8(self.lifecycle_phase)?;
         writer.u8(self.terminal.reason)?;
         writer.u8(self.terminal.outcome)?;
-        writer.u8(self.terminal.flags)?;
+        writer.u8(self.terminal.terminal_reservation_count)?;
         writer.u64(self.terminal.selected_slot)?;
         writer.hash(self.terminal.candidate)?;
         writer.hash(self.terminal.relation_candidate_digest)?;
@@ -517,7 +606,7 @@ impl DirectEpochV4Account {
             terminal: DirectTerminalReceiptV3 {
                 reason: reader.u8()?,
                 outcome: reader.u8()?,
-                flags: reader.u8()?,
+                terminal_reservation_count: reader.u8()?,
                 selected_slot: reader.u64()?,
                 candidate: reader.hash()?,
                 relation_candidate_digest: reader.hash()?,
@@ -1252,6 +1341,39 @@ pub const fn direct_candidate_status_offset() -> usize {
     CANDIDATE_STATUS_ACCOUNT_OFFSET
 }
 
+/// Project the semantic model stage into the sole persisted Candidate status
+/// byte. This explicit match prevents Rust enum discriminants from becoming an
+/// accidental wire format.
+pub const fn direct_candidate_stage_wire(stage: ModelCandidateStageV3) -> u8 {
+    match stage {
+        ModelCandidateStageV3::Verified => DIRECT_CANDIDATE_STATUS_VERIFIED,
+        ModelCandidateStageV3::Reverified => DIRECT_CANDIDATE_STATUS_REVERIFIED,
+        ModelCandidateStageV3::Selected => DIRECT_CANDIDATE_STATUS_SELECTED,
+    }
+}
+
+/// Byte-exact Candidate account projection from the executable lifecycle
+/// lease. The model deliberately keeps the relation-issued body VERIFIED and
+/// owns later status in `stage`; this is the sole join that writes the stage
+/// into the persisted status byte.
+pub fn project_model_candidate(lease: ModelCandidateLeaseV3) -> Result<DirectCandidateV3Account> {
+    if lease.candidate.status != DIRECT_CANDIDATE_STATUS_VERIFIED {
+        return Err(CodecError::MismatchedBinding);
+    }
+    lease.candidate.validate().map_err(map_direct_error)?;
+    let mut candidate = lease.candidate;
+    candidate.status = direct_candidate_stage_wire(lease.stage);
+    let funding = DirectFundingLedgerV3 {
+        payer: hash(lease.account.rent.payer),
+        payer_principal_lamports: lease.account.rent.lamports,
+        prior_donation_lamports: lease
+            .account
+            .donation_lamports()
+            .map_err(|_| CodecError::MismatchedBinding)?,
+    };
+    Ok(DirectCandidateV3Account { candidate, funding })
+}
+
 /// Compile-time tripwire for the first Candidate V3 extension byte.
 pub const fn direct_candidate_extension_offset() -> usize {
     CANDIDATE_EXTENSION_OFFSET
@@ -1626,9 +1748,23 @@ mod tests {
         },
         EpochAccount, OrderRecord, OrderSlot, RELATION_VERSION,
     };
-    use clutch_batch_policy_identity::direct_window_v1::{
-        canonical_account_candidate_id, DirectCandidateEntryV1,
+    use clutch_batch_policy_identity::direct_lifecycle_v3::{
+        direct_policy_v3_digest, DirectAccountLedgerV3 as ModelAccountLedgerV3,
+        DirectCreationFundingV3 as ModelCreationFundingV3, DirectGridV3 as ModelGridV3,
+        DirectKeeperRewardsV3 as ModelKeeperRewardsV3,
+        DirectLifecycleAuthorityV3 as ModelLifecycleAuthorityV3,
+        DirectObservedBalancesV3 as ModelObservedBalancesV3, DirectPositionV3 as ModelPositionV3,
+        DirectPrefreezeOrderV3 as ModelPrefreezeOrderV3, DirectPrefreezeV3 as ModelPrefreezeV3,
+        DirectRentPrincipalV3 as ModelRentPrincipalV3,
+        DirectReservationDomainV3 as ModelReservationDomainV3,
+        DirectReservationPlacementV3 as ModelReservationPlacementV3,
+        DirectScheduleV3 as ModelScheduleV3, DirectTransitionContextV3 as ModelTransitionContextV3,
+        DirectWorkBudgetFundingV3 as ModelWorkBudgetFundingV3,
     };
+    use clutch_batch_policy_identity::direct_window_v1::{
+        canonical_account_candidate_id, DirectCandidateEntryV1, DIRECT_POLICY_V1,
+    };
+    use clutch_batch_policy_identity::{batch_policy_digest, Identity32V1};
     extern crate std;
 
     fn h(byte: u8) -> Hash32 {
@@ -1884,9 +2020,38 @@ mod tests {
     }
 
     #[test]
+    fn v4_placement_requires_prefreeze_lifecycle_not_coarse_open() {
+        let open = epoch(EPOCH_PHASE_OPEN, DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN);
+        assert_eq!(open.require_prefreeze_placement(), Ok(()));
+
+        let mut aborted = epoch(EPOCH_PHASE_OPEN, DIRECT_LIFECYCLE_PHASE_TERMINAL);
+        aborted.terminal.reason = DIRECT_TERMINAL_REASON_PREFREEZE_ABORT;
+        aborted.terminal.terminal_slot = aborted.direct.submission_opens_slot;
+        assert_eq!(aborted.validate(), Ok(()));
+        assert_eq!(
+            aborted.require_prefreeze_placement(),
+            Err(CodecError::InvalidEnum)
+        );
+
+        let frozen = epoch(EPOCH_PHASE_FROZEN, DIRECT_LIFECYCLE_PHASE_FROZEN_EMPTY);
+        assert_eq!(
+            frozen.require_prefreeze_placement(),
+            Err(CodecError::InvalidEnum)
+        );
+    }
+
+    #[test]
     fn every_terminal_reason_has_one_exact_coarse_phase_and_shape() {
+        let mut prefreeze = epoch(EPOCH_PHASE_OPEN, DIRECT_LIFECYCLE_PHASE_TERMINAL);
+        prefreeze.terminal.reason = DIRECT_TERMINAL_REASON_PREFREEZE_ABORT;
+        prefreeze.terminal.terminal_slot = 100;
+        assert_eq!(prefreeze.validate(), Ok(()));
+        prefreeze.direct.common.phase = EPOCH_PHASE_LAPSED;
+        assert!(prefreeze.validate().is_err());
+
         let mut empty = epoch(EPOCH_PHASE_LAPSED, DIRECT_LIFECYCLE_PHASE_TERMINAL);
         empty.terminal.reason = DIRECT_TERMINAL_REASON_EMPTY_LAPSE;
+        empty.terminal.terminal_reservation_count = 2;
         empty.terminal.terminal_slot = 120;
         assert_eq!(empty.validate(), Ok(()));
 
@@ -1897,6 +2062,7 @@ mod tests {
         let mut post = epoch(EPOCH_PHASE_LAPSED, DIRECT_LIFECYCLE_PHASE_TERMINAL);
         post.terminal = DirectTerminalReceiptV3 {
             reason: DIRECT_TERMINAL_REASON_POSTSELECTION_LAPSE,
+            terminal_reservation_count: 2,
             selected_slot: 115,
             candidate: h(40),
             relation_candidate_digest: h(41),
@@ -1909,7 +2075,7 @@ mod tests {
         settled.terminal = DirectTerminalReceiptV3 {
             reason: DIRECT_TERMINAL_REASON_SETTLED,
             outcome: 1,
-            flags: 0,
+            terminal_reservation_count: 2,
             selected_slot: 115,
             candidate: h(40),
             relation_candidate_digest: h(41),
@@ -1924,6 +2090,216 @@ mod tests {
         settled.terminal.consideration_price_units = 30_000;
         settled.direct.common.phase = EPOCH_PHASE_LAPSED;
         assert_eq!(settled.validate(), Err(CodecError::MismatchedBinding));
+
+        let mut unknown = empty;
+        unknown.terminal.reason = DIRECT_TERMINAL_REASON_PREFREEZE_ABORT + 1;
+        assert_eq!(unknown.validate(), Err(CodecError::InvalidEnum));
+    }
+
+    #[test]
+    fn model_enums_and_terminal_receipts_project_without_discriminant_casts() {
+        let phases = [
+            (
+                ModelLifecyclePhaseV3::FrozenEmpty,
+                DIRECT_LIFECYCLE_PHASE_FROZEN_EMPTY,
+            ),
+            (
+                ModelLifecyclePhaseV3::WindowOpen,
+                DIRECT_LIFECYCLE_PHASE_WINDOW_OPEN,
+            ),
+            (
+                ModelLifecyclePhaseV3::Verifying,
+                DIRECT_LIFECYCLE_PHASE_VERIFYING,
+            ),
+            (
+                ModelLifecyclePhaseV3::Selected,
+                DIRECT_LIFECYCLE_PHASE_SELECTED,
+            ),
+            (
+                ModelLifecyclePhaseV3::Terminal,
+                DIRECT_LIFECYCLE_PHASE_TERMINAL,
+            ),
+        ];
+        for (model, wire) in phases {
+            assert_eq!(direct_lifecycle_phase_wire(model), wire);
+        }
+        let reasons = [
+            (
+                ModelTerminalReasonV3::EmptyLapse,
+                DIRECT_TERMINAL_REASON_EMPTY_LAPSE,
+            ),
+            (
+                ModelTerminalReasonV3::PreSelectionLapse,
+                DIRECT_TERMINAL_REASON_PRESELECTION_LAPSE,
+            ),
+            (
+                ModelTerminalReasonV3::PostSelectionLapse,
+                DIRECT_TERMINAL_REASON_POSTSELECTION_LAPSE,
+            ),
+            (
+                ModelTerminalReasonV3::Settled,
+                DIRECT_TERMINAL_REASON_SETTLED,
+            ),
+            (
+                ModelTerminalReasonV3::PrefreezeAbort,
+                DIRECT_TERMINAL_REASON_PREFREEZE_ABORT,
+            ),
+        ];
+        for (model, wire) in reasons {
+            assert_eq!(direct_terminal_reason_wire(model), wire);
+        }
+
+        let model = ModelTerminalReceiptV3 {
+            reason: ModelTerminalReasonV3::Settled,
+            terminal_reservation_count: 2,
+            selected_slot: 115,
+            candidate_id: Identity32V1([40; 32]),
+            relation_candidate_digest: Identity32V1([41; 32]),
+            outcome: 1,
+            quantity: 4,
+            price: 7_500,
+            consideration_price_units: 30_000,
+            terminal_slot: 130,
+        };
+        assert_eq!(
+            project_model_terminal_receipt(model),
+            DirectTerminalReceiptV3 {
+                reason: DIRECT_TERMINAL_REASON_SETTLED,
+                outcome: 1,
+                terminal_reservation_count: 2,
+                selected_slot: 115,
+                candidate: h(40),
+                relation_candidate_digest: h(41),
+                quantity: 4,
+                price: 7_500,
+                consideration_price_units: 30_000,
+                terminal_slot: 130,
+            }
+        );
+
+        let model_receipts = [
+            (
+                EPOCH_PHASE_OPEN,
+                ModelTerminalReceiptV3 {
+                    reason: ModelTerminalReasonV3::PrefreezeAbort,
+                    terminal_reservation_count: 2,
+                    selected_slot: 0,
+                    candidate_id: Identity32V1([42; 32]),
+                    relation_candidate_digest: Identity32V1([43; 32]),
+                    outcome: 0,
+                    quantity: 0,
+                    price: 0,
+                    consideration_price_units: 0,
+                    terminal_slot: 100,
+                },
+            ),
+            (
+                EPOCH_PHASE_LAPSED,
+                ModelTerminalReceiptV3 {
+                    reason: ModelTerminalReasonV3::EmptyLapse,
+                    terminal_reservation_count: 2,
+                    selected_slot: 0,
+                    candidate_id: Identity32V1::ZERO,
+                    relation_candidate_digest: Identity32V1::ZERO,
+                    outcome: 0,
+                    quantity: 0,
+                    price: 0,
+                    consideration_price_units: 0,
+                    terminal_slot: 120,
+                },
+            ),
+            (
+                EPOCH_PHASE_LAPSED,
+                ModelTerminalReceiptV3 {
+                    reason: ModelTerminalReasonV3::PreSelectionLapse,
+                    terminal_reservation_count: 2,
+                    selected_slot: 0,
+                    candidate_id: Identity32V1::ZERO,
+                    relation_candidate_digest: Identity32V1::ZERO,
+                    outcome: 0,
+                    quantity: 0,
+                    price: 0,
+                    consideration_price_units: 0,
+                    terminal_slot: 120,
+                },
+            ),
+            (
+                EPOCH_PHASE_LAPSED,
+                ModelTerminalReceiptV3 {
+                    reason: ModelTerminalReasonV3::PostSelectionLapse,
+                    terminal_reservation_count: 2,
+                    selected_slot: 115,
+                    candidate_id: Identity32V1([40; 32]),
+                    relation_candidate_digest: Identity32V1([41; 32]),
+                    outcome: 0,
+                    quantity: 0,
+                    price: 0,
+                    consideration_price_units: 0,
+                    terminal_slot: 140,
+                },
+            ),
+            (EPOCH_PHASE_SETTLED, model),
+        ];
+        for (coarse_phase, model_receipt) in model_receipts {
+            let mut archived = epoch(coarse_phase, DIRECT_LIFECYCLE_PHASE_TERMINAL);
+            archived.terminal = project_model_terminal_receipt(model_receipt);
+            assert_eq!(archived.validate(), Ok(()));
+        }
+    }
+
+    #[test]
+    fn model_candidate_stage_is_the_persisted_status_owner() {
+        let source = candidate(DIRECT_CANDIDATE_STATUS_VERIFIED);
+        let account = ModelAccountLedgerV3::restore(
+            ModelRentPrincipalV3 {
+                payer: identity(source.funding.payer),
+                lamports: source.funding.payer_principal_lamports,
+            },
+            identity(h(90)),
+            source.funding.prior_donation_lamports,
+        )
+        .unwrap();
+        for (stage, status) in [
+            (
+                ModelCandidateStageV3::Verified,
+                DIRECT_CANDIDATE_STATUS_VERIFIED,
+            ),
+            (
+                ModelCandidateStageV3::Reverified,
+                DIRECT_CANDIDATE_STATUS_REVERIFIED,
+            ),
+            (
+                ModelCandidateStageV3::Selected,
+                DIRECT_CANDIDATE_STATUS_SELECTED,
+            ),
+        ] {
+            let projected = project_model_candidate(ModelCandidateLeaseV3 {
+                candidate: source.candidate,
+                tick: 3,
+                stage,
+                account,
+            })
+            .unwrap();
+            assert_eq!(projected.candidate.status, status);
+            let mut bytes = [0u8; DIRECT_CANDIDATE_V3_BYTES];
+            projected.encode(h(90), &mut bytes).unwrap();
+            assert_eq!(
+                DirectCandidateV3Account::decode(&bytes, h(90)),
+                Ok(projected)
+            );
+        }
+
+        let mut hostile = source.candidate;
+        hostile.status = DIRECT_CANDIDATE_STATUS_SELECTED;
+        assert_eq!(
+            project_model_candidate(ModelCandidateLeaseV3 {
+                candidate: hostile,
+                tick: 3,
+                stage: ModelCandidateStageV3::Selected,
+                account,
+            }),
+            Err(CodecError::MismatchedBinding)
+        );
     }
 
     #[test]
@@ -2405,5 +2781,206 @@ mod tests {
             expiry_epoch: 7,
         };
         assert!(matches!(OrderSlot::Single(order), OrderSlot::Single(_)));
+    }
+
+    /// Byte identity between the two representations.
+    fn im(byte: u8) -> Identity32V1 {
+        Identity32V1([byte; 32])
+    }
+
+    /// Cross-crate tripwire: the executable model's recomputed frozen-page
+    /// digest and order-set fold must byte-match the live layout's page fold
+    /// over the same two records. This is the check that catches a model
+    /// preimage drifting from `ORDER_RECORD_BYTES`/`ORDER_SLOT_BYTES`.
+    #[test]
+    fn model_frozen_page_digest_matches_live_page_fold() {
+        const SCALE: u64 = 10_000;
+        let mut grid = ModelGridV3 {
+            grid_id: Identity32V1::ZERO,
+            realm_id: im(8),
+            price_scale: SCALE,
+            tick_count: 2,
+            ticks: {
+                let mut ticks = [0u64; MAX_DIRECT_TICKS_V3 as usize];
+                ticks[1] = SCALE;
+                ticks
+            },
+            stored_bump: 4,
+            flags: 0,
+        };
+        grid.grid_id = grid.recomputed_grid_id();
+        let domain = ModelReservationDomainV3 {
+            market_id: im(1),
+            epoch_id: im(3),
+            book_id: im(2),
+            price_grid_id: grid.grid_id,
+            terms_id: im(6),
+            policy_id: batch_policy_digest(&DIRECT_POLICY_V1).unwrap(),
+            epoch_index: 7,
+            price_scale: SCALE,
+            outcome_count: 2,
+            remainder_seed: 9,
+        };
+        let schedule = ModelScheduleV3 {
+            submission_opens_slot: 10,
+            submission_closes_slot: 20,
+            selection_deadline_slot: 30,
+            settlement_deadline_slot: 40,
+        };
+        let authority = ModelLifecycleAuthorityV3 {
+            verifier_release_id: im(80),
+            direct_policy_v3_id: direct_policy_v3_digest(im(3), im(80)).unwrap(),
+            neutral_lamport_sink: im(81),
+        };
+        let context = ModelTransitionContextV3 {
+            now: 5,
+            verifier_release_id: im(80),
+        };
+        let model_order = |rank: u64, owner: u8, side: u8, limit: u64| ModelPrefreezeOrderV3 {
+            owner: im(owner),
+            order_id: Identity32V1(canonical_order_id(rank).0),
+            outcome: 0,
+            side,
+            quantity: 5,
+            limit,
+            minimum_fill: 0,
+            flags: 0,
+            generation: 1,
+            expiry_epoch: 7,
+        };
+        let creation = |payer: u8, lamports: u64| ModelCreationFundingV3 {
+            rent: ModelRentPrincipalV3 {
+                payer: im(payer),
+                lamports,
+            },
+            balance_before: 0,
+            balance_after: lamports,
+        };
+        let buy_position = ModelPositionV3 {
+            market_id: im(1),
+            owner: im(70),
+            generation: 1,
+            internal: [0; 16],
+            cash_atoms: 5,
+            reserved_cash_atoms: 0,
+            stored_bump: 3,
+            close_state: 0,
+        };
+        let sell_position = ModelPositionV3 {
+            internal: {
+                let mut internal = [0u64; 16];
+                internal[0] = 5;
+                internal
+            },
+            cash_atoms: 0,
+            owner: im(71),
+            stored_bump: 4,
+            ..buy_position
+        };
+        let one = ModelPrefreezeV3::initialize(schedule, authority, domain, grid, 4)
+            .unwrap()
+            .place_reservation(
+                context,
+                ModelReservationPlacementV3 {
+                    order: model_order(1, 70, 0, SCALE),
+                    position: buy_position,
+                    max_fee_atoms: 0,
+                    stored_bump: 5,
+                    creation: creation(92, 600),
+                },
+                ModelObservedBalancesV3::ZERO,
+            )
+            .unwrap()
+            .post;
+        let two = one
+            .place_reservation(
+                context,
+                ModelReservationPlacementV3 {
+                    order: model_order(2, 71, 1, 0),
+                    position: sell_position,
+                    max_fee_atoms: 0,
+                    stored_bump: 6,
+                    creation: creation(93, 700),
+                },
+                ModelObservedBalancesV3 {
+                    reservations: [600, 0],
+                    ..ModelObservedBalancesV3::ZERO
+                },
+            )
+            .unwrap()
+            .post;
+        let frozen = two
+            .freeze(
+                ModelTransitionContextV3 {
+                    now: 9,
+                    verifier_release_id: im(80),
+                },
+                ModelKeeperRewardsV3 {
+                    begin_verification: 1,
+                    verify_candidate: 1,
+                    finalize_selection: 1,
+                    settle: 1,
+                    lapse: 1,
+                },
+                ModelWorkBudgetFundingV3 {
+                    reward_sponsor: im(90),
+                    creation: ModelCreationFundingV3 {
+                        rent: ModelRentPrincipalV3 {
+                            payer: im(90),
+                            lamports: 500,
+                        },
+                        balance_before: 0,
+                        balance_after: 506,
+                    },
+                    reward_lamports: 6,
+                },
+                ModelObservedBalancesV3 {
+                    reservations: [600, 700],
+                    ..ModelObservedBalancesV3::ZERO
+                },
+            )
+            .unwrap()
+            .post;
+
+        let mut page = [0u8; crate::account_len::ORDER_PAGE];
+        crate::stream::init_page(&mut page, h(1), h(3), 0, 1, 4).unwrap();
+        let live_order = |rank: u64, owner: u8, side: u8, limit: u64| OrderRecord {
+            owner: h(owner),
+            order_id: canonical_order_id(rank),
+            outcome: 0,
+            side,
+            quantity: 5,
+            limit,
+            minimum_fill: 0,
+            flags: 0,
+            generation: 1,
+            expiry_epoch: 7,
+        };
+        crate::stream::write_single_slot(&mut page, &live_order(1, 70, 0, SCALE)).unwrap();
+        let open = crate::stream::write_single_slot(&mut page, &live_order(2, 71, 1, 0)).unwrap();
+        let (live_set, live_count) = crate::stream::frozen_set_commitment(&[&page]).unwrap();
+        let sealed = crate::stream::seal_page(&mut page, live_set, live_count).unwrap();
+        assert_eq!(sealed.page_digest, open.page_digest);
+        assert_eq!(frozen.frozen_page.page_digest.0, sealed.page_digest.0);
+        assert_eq!(frozen.frozen_page.order_set_id.0, live_set.0);
+        assert_eq!(
+            crate::stream::streamed_page_digest(&page).unwrap(),
+            sealed.page_digest
+        );
+    }
+
+    /// The model's epoch-bound DirectBatchPolicy V3 identity is byte-identical
+    /// to the codec artifact digest, so the release identifier the model
+    /// anchors is exactly the artifact identity the account plane binds.
+    #[test]
+    fn model_direct_policy_v3_digest_matches_codec_epoch_digest() {
+        let artifact = DirectBatchPolicyV3::direct(h(80)).unwrap();
+        let codec_digest = artifact.digest_for_epoch(h(3)).unwrap();
+        let model_digest = direct_policy_v3_digest(im(3), im(80)).unwrap();
+        assert_eq!(codec_digest.0, model_digest.0);
+        assert_ne!(
+            artifact.digest_for_epoch(h(4)).unwrap().0,
+            model_digest.0
+        );
     }
 }
