@@ -41,6 +41,29 @@ The full candidate analysis is in [`DOSSIER.md`](DOSSIER.md), and exact reviewed
 upstream revisions and fixture derivation are in
 [`PROVENANCE.md`](PROVENANCE.md).
 
+## PROPOSED SourceSpec v2 pull profile and CROSSING_V1 (MODEL-ONLY)
+
+[`src/spec_v2.rs`](src/spec_v2.rs) and [`src/crossing_v1.rs`](src/crossing_v1.rs)
+implement the spec revision and selection rule proposed in
+[`SOURCE_PROVIDER_V1_SELECTION.md`](../../docs/design/SOURCE_PROVIDER_V1_SELECTION.md)
+as research models with hostile-byte and falsifier tests:
+
+- a 320-byte canonical pull-profile spec body under the **new domain**
+  `dragons-clutch/feed/v2`: the V1 exact source data-account key is replaced by
+  the receiver `Config` PDA key plus a canonical config byte digest, the
+  provider feed id is added, and the deployment-generation pin is kept; and
+- the `CROSSING_V1` admission model with **both** boundary variants registered
+  as distinct rule ids — closing `T(k) = (k+1)*B` (variant A, recommended) and
+  opening `T(k) = k*B` (variant B) — so the design doc's falsifiers
+  (double-witness boundary, equal-sequence value drift, degenerate updates,
+  legitimate witness reuse) are executable tests rather than prose.  The
+  variant choice is deliberately not frozen.
+
+This is **not a runtime transition**: no registry entry exists, no identity or
+boundary variant is frozen, an absent crossing witness is an explicit stall
+(never a fabricated `Missing`), and the default ELF keeps refusing
+`SourceReleaseUnavailable` (`0x79`).
+
 ## Run
 
 ```sh
