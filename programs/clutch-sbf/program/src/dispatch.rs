@@ -42,7 +42,7 @@ use crate::accounts::Outcome;
 use crate::error::ClutchError;
 use crate::instructions::{
     artifact, cash_exit, external_exit, genesis, market_init, merge_materialize, observe_resolve,
-    orders_batch, split,
+    orders_batch, source_ingest, split,
 };
 use clutch_solana_layout::Intent;
 use clutch_solana_reference::{Action, Request};
@@ -68,6 +68,7 @@ enum Route {
     Artifact,
     OrdersBatch,
     Genesis,
+    SourceIngest,
     DecodeOnly,
 }
 
@@ -100,6 +101,10 @@ const INTENT_WRITE_ARTIFACT_HINT: u8 = 19;
 const INTENT_SEAL_ARTIFACT_HINT: u8 = 20;
 const INTENT_ABORT_ARTIFACT_HINT: u8 = 21;
 const INTENT_SUBMIT_DIRECT_PAGE_HINT: u8 = 22;
+const INTENT_INIT_SOURCE_SPEC_HINT: u8 = 23;
+const INTENT_INIT_SOURCE_ARCHIVE_HINT: u8 = 24;
+const INTENT_APPEND_SOURCE_ARCHIVE_HINT: u8 = 25;
+const INTENT_SEAL_SOURCE_ARCHIVE_HINT: u8 = 26;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
@@ -132,6 +137,12 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_INIT_ORDER_PAGE_HINT
                 | INTENT_ENDOW_HINT,
             ) => Route::Genesis,
+            Some(
+                INTENT_INIT_SOURCE_SPEC_HINT
+                | INTENT_INIT_SOURCE_ARCHIVE_HINT
+                | INTENT_APPEND_SOURCE_ARCHIVE_HINT
+                | INTENT_SEAL_SOURCE_ARCHIVE_HINT,
+            ) => Route::SourceIngest,
             _ => Route::DecodeOnly,
         },
         Some(ACTION_RESOLVE_HINT | ACTION_REDEEM_INTERNAL_HINT) => Route::ObserveResolve,
@@ -162,6 +173,7 @@ pub fn process(
         Route::Artifact => process_artifact(program_id, accounts, instruction_data),
         Route::OrdersBatch => process_orders_batch(program_id, accounts, instruction_data),
         Route::Genesis => process_genesis(program_id, accounts, instruction_data),
+        Route::SourceIngest => process_source_ingest(program_id, accounts, instruction_data),
         Route::DecodeOnly => decode_only(instruction_data),
     }
 }
@@ -319,6 +331,24 @@ fn process_genesis(
         | Action::Layout(Intent::InitTerms { .. })
         | Action::Layout(Intent::InitOrderPage { .. })
         | Action::Layout(Intent::Endow { .. }) => genesis::process(program_id, accounts, &request),
+        _ => unexpected_route(),
+    }
+}
+
+#[inline(never)]
+fn process_source_ingest(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request = Request::decode(instruction_data)?;
+    match request.action {
+        Action::Layout(Intent::InitSourceSpec { .. })
+        | Action::Layout(Intent::InitSourceArchive { .. })
+        | Action::Layout(Intent::AppendSourceArchive { .. })
+        | Action::Layout(Intent::SealSourceArchive { .. }) => {
+            source_ingest::process(program_id, accounts, &request)
+        }
         _ => unexpected_route(),
     }
 }
@@ -599,6 +629,25 @@ mod tests {
                     page_index: 0,
                 },
                 Route::OrdersBatch,
+            ),
+            (
+                Intent::InitSourceSpec {
+                    terms: hash(1),
+                    spec_body: [7; clutch_solana_layout::SOURCE_SPEC_BODY_V1_BYTES],
+                },
+                Route::SourceIngest,
+            ),
+            (
+                Intent::InitSourceArchive { terms: hash(1) },
+                Route::SourceIngest,
+            ),
+            (
+                Intent::AppendSourceArchive { terms: hash(1) },
+                Route::SourceIngest,
+            ),
+            (
+                Intent::SealSourceArchive { terms: hash(1) },
+                Route::SourceIngest,
             ),
         ]
     }

@@ -637,6 +637,20 @@ pub fn initialize_successor_archive<D: DeploymentAuthenticatorV1>(
     initialize_archive::<D>(out, verified_spec, window, predecessor.facts(), stored_bump)
 }
 
+/// Authenticate an open archive and return its state-owned append sequence.
+///
+/// The value is the exact number of records already persisted.  A live
+/// instruction binds its request sequence to this value before borrowing the
+/// page mutably, so retries and races refuse without changing a byte.
+pub fn open_archive_sequence<D: DeploymentAuthenticatorV1>(
+    archive: &[u8],
+    verified_spec: VerifiedSourceSpecAccountV1,
+    window: WindowDomain,
+) -> Result<u64, SourceArchiveError> {
+    let header = verify_open_archive::<D>(archive, verified_spec.spec, window)?;
+    Ok(u64::from(header.record_count))
+}
+
 /// Authenticate one provider record and append it atomically to an open archive.
 ///
 /// No page byte changes until provider metadata, deployment provenance, source

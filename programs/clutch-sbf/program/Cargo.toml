@@ -13,6 +13,10 @@ crate-type = ["cdylib", "lib"]
 
 [features]
 default = []
+# Changes the program ELF by registering one deterministic laboratory source
+# parser/deployment pair. Never use for a production deployment or attribute
+# its SVM evidence to the default artifact.
+non-production-mock-source = []
 
 [dependencies]
 # The window/summary algebra the observation and resolution plane folds

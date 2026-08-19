@@ -44,4 +44,5 @@ pub mod market_init;
 pub mod merge_materialize;
 pub mod observe_resolve;
 pub mod orders_batch;
+pub mod source_ingest;
 pub mod split;

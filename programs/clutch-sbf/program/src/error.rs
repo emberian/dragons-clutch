@@ -220,6 +220,16 @@ pub enum ClutchError {
     InvalidArtifactExpiry = 0x0077,
     /// Abort's refund account is not the funder persisted at Begin.
     ArtifactRefundMismatch = 0x0078,
+    /// Immutable terms selected no source parser/deployment release compiled
+    /// into this exact program artifact.
+    ///
+    /// The default production build currently raises this for every release;
+    /// a separately flagged non-production feature registers one deterministic
+    /// mock solely for local-bank lifecycle evidence.
+    SourceReleaseUnavailable = 0x0079,
+    /// A registered source release refused provider deployment, source bytes,
+    /// freshness, lineage, confidence, window, or archive provenance.
+    SourceAdmissionFailed = 0x007a,
 }
 
 impl From<ClutchError> for ProgramError {
