@@ -14,11 +14,13 @@ use clutch_sbf::{
         SELECTION_FINALIZED_BUCKET_RECORD,
     },
     source_archive::{
-        append_authenticated, archived_observation, initialize_archive,
-        initialize_source_spec_account, seal_archive, verify_recorded_sealed_archive,
-        verify_recorded_sealed_archive_view, verify_sealed_archive, verify_source_spec_account,
-        ArchiveAccountViewV1, ArchivePredecessorV1, CoveragePolicy, DeploymentAuthenticatorV1,
-        FeedIdentity, Grid, RuntimeAccountViewV1, SourceArchiveError, SourceSpecAccountViewV1,
+        append_authenticated, archived_observation, decode_source_spec_body_v1,
+        initialize_archive, initialize_authenticated_source_spec_account,
+        initialize_genesis_archive, initialize_source_spec_account, initialize_successor_archive,
+        seal_archive, verify_recorded_sealed_archive, verify_recorded_sealed_archive_view,
+        verify_sealed_archive, verify_source_spec_account, ArchiveAccountViewV1,
+        ArchivePredecessorV1, CoveragePolicy, DeploymentAuthenticatorV1, FeedIdentity, Grid,
+        RuntimeAccountViewV1, SourceArchiveError, SourceSpecAccountViewV1,
         VerifiedSourceSpecAccountV1, WindowDomain, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES,
         SOURCE_SPEC_ACCOUNT_V1_BYTES,
     },
@@ -91,6 +93,19 @@ impl PriceParserV1 for MockPriceParser {
     }
 }
 
+struct WrongPriceParser;
+
+impl PriceParserV1 for WrongPriceParser {
+    const SOURCE_ADAPTER_ID: [u8; 32] = ADAPTER;
+    const SOURCE_ADAPTER_VERSION: u32 = 7;
+    const PARSER_ID: u16 = 99;
+    const PARSER_VERSION: u16 = 3;
+
+    fn parse(_: SourceAccountView<'_>) -> Result<ParsedPriceV1, SourceError> {
+        Err(SourceError::ParserRefused)
+    }
+}
+
 fn spec() -> SourceSpecV1 {
     SourceSpecV1::new(SourceSpecFieldsV1 {
         source_adapter_id: Hash32::from_bytes(ADAPTER),
@@ -119,6 +134,16 @@ fn spec() -> SourceSpecV1 {
 }
 
 fn window(spec: SourceSpecV1) -> WindowDomain {
+    window_range(spec, 100, 103, 104, 6)
+}
+
+fn window_range(
+    spec: SourceSpecV1,
+    start: u64,
+    end: u64,
+    maturity: u64,
+    generation: u64,
+) -> WindowDomain {
     let feed = FeedIdentity::new(
         ADAPTER,
         spec.feed_id().bytes(),
@@ -129,13 +154,133 @@ fn window(spec: SourceSpecV1) -> WindowDomain {
     WindowDomain::new(
         feed,
         Grid::new(5, 2, 60).expect("grid"),
-        100,
-        103,
-        104,
-        6,
+        start,
+        end,
+        maturity,
+        generation,
         CoveragePolicy::COMPLETE_REQUIRED,
     )
     .expect("three-bucket window")
+}
+
+#[test]
+fn source_spec_construction_authenticates_the_closed_release_before_writing() {
+    let spec = spec();
+    let body = spec.encode_canonical();
+    assert_eq!(decode_source_spec_body_v1(&body), Ok(spec));
+    let mut padded = body;
+    padded[255] = 1;
+    assert_eq!(
+        decode_source_spec_body_v1(&padded),
+        Err(SourceArchiveError::NonCanonicalPadding)
+    );
+
+    let deployment_data = deployment_bytes(DEPLOYMENT_GENERATION);
+    let provider = provider_program(b"mock-provider-program-v1");
+    let deployment = deployment(&deployment_data);
+    let source = SourceAccountView::new(SOURCE_ACCOUNT, PROVIDER_PROGRAM, false, b"");
+    let mut account = [0_u8; SOURCE_SPEC_ACCOUNT_V1_BYTES];
+    initialize_authenticated_source_spec_account::<MockPriceParser, MockDeployment>(
+        &mut account,
+        spec,
+        254,
+        provider,
+        deployment,
+        source,
+    )
+    .expect("registered mock release constructs its exact source spec");
+    assert_eq!(verified_spec(&account).spec(), spec);
+
+    let mut refused = [0_u8; SOURCE_SPEC_ACCOUNT_V1_BYTES];
+    assert_eq!(
+        initialize_authenticated_source_spec_account::<WrongPriceParser, MockDeployment>(
+            &mut refused,
+            spec,
+            254,
+            provider,
+            deployment,
+            source,
+        ),
+        Err(SourceArchiveError::AdapterReleaseMismatch)
+    );
+    assert_eq!(refused, [0_u8; SOURCE_SPEC_ACCOUNT_V1_BYTES]);
+
+    assert_eq!(
+        initialize_authenticated_source_spec_account::<MockPriceParser, MockDeployment>(
+            &mut refused,
+            spec,
+            254,
+            provider,
+            deployment,
+            SourceAccountView::new([0x44; 32], PROVIDER_PROGRAM, false, b""),
+        ),
+        Err(SourceArchiveError::Source(
+            SourceError::SourceAccountMismatch
+        ))
+    );
+    assert_eq!(refused, [0_u8; SOURCE_SPEC_ACCOUNT_V1_BYTES]);
+}
+
+#[test]
+fn successor_initialization_derives_exact_lineage_from_a_sealed_receipt() {
+    let spec = spec();
+    let first_window = window_range(spec, 100, 103, 104, 0);
+    let mut spec_account = [0_u8; SOURCE_SPEC_ACCOUNT_V1_BYTES];
+    initialize_source_spec_account(&mut spec_account, spec, 254).unwrap();
+    let verified = verified_spec(&spec_account);
+    let mut first = [0_u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES];
+    initialize_genesis_archive::<MockDeployment>(&mut first, verified, first_window, 253)
+        .expect("generation-zero first archive");
+    for index in 0..3_u64 {
+        let bucket = 100 + index;
+        append(
+            &mut first,
+            &spec_account,
+            first_window,
+            &record(bucket, 41 + index, 1_000 + index, 1_000_000, 2_000),
+            1_005 + index,
+            bucket * 60 + 1,
+        )
+        .unwrap();
+    }
+    seal_archive::<MockDeployment>(&mut first, verified, first_window, 104).unwrap();
+    let receipt = verify_sealed_archive::<MockDeployment>(
+        CLUTCH_PROGRAM,
+        ARCHIVE_KEY,
+        ArchiveAccountViewV1::new(ARCHIVE_KEY, CLUTCH_PROGRAM, false, &first),
+        verified,
+        first_window,
+    )
+    .unwrap();
+    assert_eq!(receipt.repair_generation(), 0);
+
+    let next_window = window_range(spec, 103, 106, 107, 0);
+    let mut next = [0_u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES];
+    initialize_successor_archive::<MockDeployment>(&mut next, verified, next_window, receipt, 252)
+        .expect("sealed receipt supplies the only successor predecessor");
+    append(
+        &mut next,
+        &spec_account,
+        next_window,
+        &record(103, 44, 1_003, 1_000_003, 2_000),
+        1_008,
+        6_181,
+    )
+    .expect("sequence 44 continues receipt sequence 43");
+
+    let mut refused = [0_u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES];
+    let gapped = window_range(spec, 104, 107, 108, 0);
+    assert_eq!(
+        initialize_successor_archive::<MockDeployment>(
+            &mut refused,
+            verified,
+            gapped,
+            receipt,
+            251,
+        ),
+        Err(SourceArchiveError::NonContiguousLineage)
+    );
+    assert_eq!(refused, [0_u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES]);
 }
 
 fn provider_program<'a>(data: &'a [u8]) -> RuntimeAccountViewV1<'a> {

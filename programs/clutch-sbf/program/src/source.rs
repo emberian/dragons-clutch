@@ -238,6 +238,16 @@ impl SourceSpecV1 {
         self.fields.source_adapter_version
     }
 
+    /// Closed parser-registry identifier.
+    pub const fn parser_id(self) -> u16 {
+        self.fields.parser_id
+    }
+
+    /// Reviewed parser release version.
+    pub const fn parser_version(self) -> u16 {
+        self.fields.parser_version
+    }
+
     /// Frozen observation grid.
     pub const fn grid(self) -> Grid {
         self.grid
@@ -325,6 +335,27 @@ impl SourceSpecV1 {
         debug_assert_eq!(at, SOURCE_SPEC_V1_BYTES - 6);
         out
     }
+}
+
+/// Authenticate the immutable source-account metadata named by a specification.
+///
+/// This is the construction-time subset of [`admit_price`]. It deliberately
+/// does not parse or admit a value: source bytes have value authority only in
+/// an append transaction carrying an authenticated clock and expected bucket.
+pub fn authenticate_source_account(
+    spec: SourceSpecV1,
+    account: SourceAccountView<'_>,
+) -> Result<(), SourceError> {
+    if account.key != spec.source_account() {
+        return Err(SourceError::SourceAccountMismatch);
+    }
+    if account.owner != spec.source_program() {
+        return Err(SourceError::SourceOwnerMismatch);
+    }
+    if account.executable {
+        return Err(SourceError::SourceExecutable);
+    }
+    Ok(())
 }
 
 /// Immutable source facts already bound by a market's terms artifact.

@@ -20,8 +20,9 @@ use clutch_accumulator::{Observation, WINDOW_DOMAIN_BYTES, WINDOW_DOMAIN_TAG};
 use clutch_solana_layout::{canonical_feed_id, Hash32};
 
 use crate::source::{
-    admit_price, AuthenticatedArchiveV1, PriceParserV1, SourceAccountView, SourceError,
-    SourceHeadV1, SourceSpecFieldsV1, SourceSpecV1, TrustedClockV1, SOURCE_SPEC_V1_BYTES,
+    admit_price, authenticate_source_account, AuthenticatedArchiveV1, PriceParserV1,
+    SourceAccountView, SourceError, SourceHeadV1, SourceSpecFieldsV1, SourceSpecV1, TrustedClockV1,
+    SOURCE_SPEC_V1_BYTES,
 };
 
 /// Exact bytes of an immutable source-spec account.
@@ -259,6 +260,51 @@ impl ArchivePredecessorV1 {
     };
 }
 
+/// Opaque predecessor capability admitted for a new archive.
+///
+/// Callers cannot manufacture this value from sequence/time fields. It is
+/// produced only for a generation-zero first page or from a verified sealed
+/// predecessor receipt whose feed, deployment, generation, and boundary are
+/// contiguous with the new window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedArchivePredecessorV1(ArchivePredecessorV1);
+
+impl VerifiedArchivePredecessorV1 {
+    /// Admit the unique no-predecessor state for a generation-zero window.
+    pub fn genesis(window: WindowDomain) -> Result<Self, SourceArchiveError> {
+        if window.generation() != 0 {
+            return Err(SourceArchiveError::NonContiguousLineage);
+        }
+        Ok(Self(ArchivePredecessorV1::GENESIS))
+    }
+
+    /// Derive exact successor lineage from a verified sealed archive receipt.
+    pub fn successor(
+        receipt: SealedArchiveReceiptV1,
+        spec: SourceSpecV1,
+        next: WindowDomain,
+    ) -> Result<Self, SourceArchiveError> {
+        validate_window(spec, next)?;
+        if receipt.feed != spec.feed_id()
+            || receipt.deployment_generation != spec.deployment_generation()
+            || receipt.repair_generation != next.generation()
+            || receipt.end_bucket_exclusive != next.start_bucket()
+        {
+            return Err(SourceArchiveError::NonContiguousLineage);
+        }
+        Ok(Self(ArchivePredecessorV1 {
+            source_sequence: receipt.last_source_sequence,
+            publish_slot: receipt.last_publish_slot,
+            publish_time: receipt.last_publish_time,
+            archive_commitment: receipt.page_commitment,
+        }))
+    }
+
+    const fn facts(self) -> ArchivePredecessorV1 {
+        self.0
+    }
+}
+
 /// Decoded immutable source-spec account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VerifiedSourceSpecAccountV1 {
@@ -306,6 +352,72 @@ pub fn initialize_source_spec_account(
     out[SPEC_BODY_OFFSET..SPEC_BODY_OFFSET + SOURCE_SPEC_V1_BYTES].copy_from_slice(&body);
     out[SPEC_BUMP_OFFSET] = stored_bump;
     decode_source_spec_account(out).map(|_| ())
+}
+
+/// Authenticate one compile-time parser/deployment release and initialize its
+/// immutable SourceSpec account image.
+///
+/// This route authenticates metadata only. It never parses the source account
+/// or chooses a price; value admission remains exclusively in
+/// [`append_authenticated`].
+#[allow(clippy::too_many_arguments)]
+pub fn initialize_authenticated_source_spec_account<
+    P: PriceParserV1,
+    D: DeploymentAuthenticatorV1,
+>(
+    out: &mut [u8],
+    spec: SourceSpecV1,
+    stored_bump: u8,
+    provider_program: RuntimeAccountViewV1<'_>,
+    deployment_account: RuntimeAccountViewV1<'_>,
+    source_account: SourceAccountView<'_>,
+) -> Result<(), SourceArchiveError> {
+    authenticate_deployment::<D>(spec, provider_program, deployment_account)?;
+    authenticate_source_account(spec, source_account)?;
+    if P::SOURCE_ADAPTER_ID != spec.source_adapter_id().bytes()
+        || P::SOURCE_ADAPTER_VERSION != spec.source_adapter_version()
+        || P::PARSER_ID != spec.parser_id()
+        || P::PARSER_VERSION != spec.parser_version()
+    {
+        return Err(SourceArchiveError::AdapterReleaseMismatch);
+    }
+    initialize_source_spec_account(out, spec, stored_bump)
+}
+
+/// Decode and validate one exact canonical SourceSpec body supplied by a
+/// construction instruction.
+pub fn decode_source_spec_body_v1(input: &[u8]) -> Result<SourceSpecV1, SourceArchiveError> {
+    exact_len(input, SOURCE_SPEC_V1_BYTES)?;
+    if &input[..8] != b"DCSRCV1\0" || u16_at(input, 8) != 1 {
+        return Err(SourceArchiveError::InvalidSourceSpec);
+    }
+    if input[250..].iter().any(|byte| *byte != 0) {
+        return Err(SourceArchiveError::NonCanonicalPadding);
+    }
+    SourceSpecV1::new(SourceSpecFieldsV1 {
+        source_adapter_id: Hash32::from_bytes(array_32(input, 10)),
+        source_adapter_version: u32_at(input, 42),
+        parser_id: u16_at(input, 46),
+        parser_version: u16_at(input, 48),
+        source_program: array_32(input, 50),
+        source_account: array_32(input, 82),
+        deployment_generation: u64_at(input, 114),
+        base_asset_id: Hash32::from_bytes(array_32(input, 122)),
+        quote_asset_id: Hash32::from_bytes(array_32(input, 154)),
+        orientation: input[186],
+        normalized_decimals: input[187],
+        grid_family_id: u32_at(input, 188),
+        grid_version: u16_at(input, 192),
+        bucket_seconds: u64_at(input, 194),
+        max_staleness_slots: u64_at(input, 202),
+        max_staleness_seconds: u64_at(input, 210),
+        max_future_seconds: u64_at(input, 218),
+        max_confidence_atoms: u128_at(input, 226),
+        max_confidence_bps: u32_at(input, 242),
+        confidence_multiplier: u16_at(input, 246),
+        selection_rule: u16_at(input, 248),
+    })
+    .map_err(|_| SourceArchiveError::InvalidSourceSpec)
 }
 
 /// Runtime metadata and bytes for an immutable source-spec account.
@@ -368,11 +480,10 @@ fn decode_source_spec_account(
     if input[SPEC_FLAGS_OFFSET] != 0 {
         return Err(SourceArchiveError::NonCanonicalPadding);
     }
-    let mut body = [0_u8; SOURCE_SPEC_V1_BYTES];
-    body.copy_from_slice(&input[SPEC_BODY_OFFSET..SPEC_BODY_OFFSET + SOURCE_SPEC_V1_BYTES]);
-    let spec = decode_source_spec(body)?;
+    let body = &input[SPEC_BODY_OFFSET..SPEC_BODY_OFFSET + SOURCE_SPEC_V1_BYTES];
+    let spec = decode_source_spec_body_v1(body)?;
     let feed = Hash32::from_bytes(array_32(input, SPEC_FEED_OFFSET));
-    if feed == Hash32::ZERO || feed != canonical_feed_id(&body) || feed != spec.feed_id() {
+    if feed == Hash32::ZERO || feed != canonical_feed_id(body) || feed != spec.feed_id() {
         return Err(SourceArchiveError::SourceSpecDigestMismatch);
     }
     Ok(VerifiedSourceSpecAccountV1 {
@@ -494,6 +605,31 @@ pub fn initialize_archive<D: DeploymentAuthenticatorV1>(
     out[ARCHIVE_BUMP_OFFSET] = stored_bump;
     stamp_commitment(out);
     verify_open_archive::<D>(out, verified_spec.spec, window).map(|_| ())
+}
+
+/// Initialize a generation-zero archive without caller-authored predecessor
+/// facts.
+pub fn initialize_genesis_archive<D: DeploymentAuthenticatorV1>(
+    out: &mut [u8],
+    verified_spec: VerifiedSourceSpecAccountV1,
+    window: WindowDomain,
+    stored_bump: u8,
+) -> Result<(), SourceArchiveError> {
+    let predecessor = VerifiedArchivePredecessorV1::genesis(window)?;
+    initialize_archive::<D>(out, verified_spec, window, predecessor.facts(), stored_bump)
+}
+
+/// Initialize a successor archive from one already verified sealed receipt.
+pub fn initialize_successor_archive<D: DeploymentAuthenticatorV1>(
+    out: &mut [u8],
+    verified_spec: VerifiedSourceSpecAccountV1,
+    window: WindowDomain,
+    predecessor: SealedArchiveReceiptV1,
+    stored_bump: u8,
+) -> Result<(), SourceArchiveError> {
+    let predecessor =
+        VerifiedArchivePredecessorV1::successor(predecessor, verified_spec.spec, window)?;
+    initialize_archive::<D>(out, verified_spec, window, predecessor.facts(), stored_bump)
 }
 
 /// Authenticate one provider record and append it atomically to an open archive.
@@ -619,6 +755,7 @@ pub struct SealedArchiveReceiptV1 {
     window: Hash32,
     page_commitment: Hash32,
     deployment_generation: u64,
+    repair_generation: u64,
     start_bucket: u64,
     end_bucket_exclusive: u64,
     sealed_feed_cursor: u64,
@@ -652,6 +789,11 @@ impl SealedArchiveReceiptV1 {
     /// Pinned provider deployment generation.
     pub const fn deployment_generation(self) -> u64 {
         self.deployment_generation
+    }
+
+    /// Immutable repair generation of the archived window.
+    pub const fn repair_generation(self) -> u64 {
+        self.repair_generation
     }
 
     /// Inclusive first archived bucket.
@@ -777,6 +919,7 @@ pub fn verify_sealed_archive<D: DeploymentAuthenticatorV1>(
         window: header.window,
         page_commitment: header.page_commitment,
         deployment_generation: header.deployment_generation,
+        repair_generation: header.repair_generation,
         start_bucket: header.window_start,
         end_bucket_exclusive: header.window_end,
         sealed_feed_cursor: header.sealed_feed_cursor,
@@ -826,6 +969,7 @@ pub fn verify_recorded_sealed_archive(
         window: header.window,
         page_commitment: header.page_commitment,
         deployment_generation: header.deployment_generation,
+        repair_generation: header.repair_generation,
         start_bucket: header.window_start,
         end_bucket_exclusive: header.window_end,
         sealed_feed_cursor: header.sealed_feed_cursor,
@@ -940,6 +1084,7 @@ struct ArchiveHeaderV1 {
     parser_id: u16,
     parser_version: u16,
     deployment_generation: u64,
+    repair_generation: u64,
     window_start: u64,
     window_end: u64,
     maturity_bucket_exclusive: u64,
@@ -1089,6 +1234,7 @@ fn verify_archive_release(
         parser_id: u16_at(archive, ARCHIVE_PARSER_ID_OFFSET),
         parser_version: u16_at(archive, ARCHIVE_PARSER_VERSION_OFFSET),
         deployment_generation: spec.deployment_generation(),
+        repair_generation: window.generation(),
         window_start: window.start_bucket(),
         window_end: window.end_bucket_exclusive(),
         maturity_bucket_exclusive: window.maturity_bucket_exclusive(),
@@ -1281,41 +1427,6 @@ fn stamp_commitment(archive: &mut [u8]) {
     archive[ARCHIVE_COMMITMENT_OFFSET..ARCHIVE_COMMITMENT_OFFSET + 32].fill(0);
     let commitment = page_commitment(archive);
     put_32(archive, ARCHIVE_COMMITMENT_OFFSET, commitment.bytes());
-}
-
-fn decode_source_spec(
-    body: [u8; SOURCE_SPEC_V1_BYTES],
-) -> Result<SourceSpecV1, SourceArchiveError> {
-    if &body[..8] != b"DCSRCV1\0" || u16_at(&body, 8) != 1 {
-        return Err(SourceArchiveError::InvalidSourceSpec);
-    }
-    if body[250..].iter().any(|byte| *byte != 0) {
-        return Err(SourceArchiveError::NonCanonicalPadding);
-    }
-    SourceSpecV1::new(SourceSpecFieldsV1 {
-        source_adapter_id: Hash32::from_bytes(array_32(&body, 10)),
-        source_adapter_version: u32_at(&body, 42),
-        parser_id: u16_at(&body, 46),
-        parser_version: u16_at(&body, 48),
-        source_program: array_32(&body, 50),
-        source_account: array_32(&body, 82),
-        deployment_generation: u64_at(&body, 114),
-        base_asset_id: Hash32::from_bytes(array_32(&body, 122)),
-        quote_asset_id: Hash32::from_bytes(array_32(&body, 154)),
-        orientation: body[186],
-        normalized_decimals: body[187],
-        grid_family_id: u32_at(&body, 188),
-        grid_version: u16_at(&body, 192),
-        bucket_seconds: u64_at(&body, 194),
-        max_staleness_slots: u64_at(&body, 202),
-        max_staleness_seconds: u64_at(&body, 210),
-        max_future_seconds: u64_at(&body, 218),
-        max_confidence_atoms: u128_at(&body, 226),
-        max_confidence_bps: u32_at(&body, 242),
-        confidence_multiplier: u16_at(&body, 246),
-        selection_rule: u16_at(&body, 248),
-    })
-    .map_err(|_| SourceArchiveError::InvalidSourceSpec)
 }
 
 fn exact_len(bytes: &[u8], expected: usize) -> Result<(), SourceArchiveError> {
