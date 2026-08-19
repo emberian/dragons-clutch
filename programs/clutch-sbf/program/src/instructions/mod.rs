@@ -20,20 +20,20 @@
 //! | [`merge_materialize`] | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` |
 //! | [`market_init`] | `Intent::CreateMarket` |
 //! | [`observe_resolve`] | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` |
-//! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SettlePage` |
+//! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`, `Intent::SettlePage` |
 //!
 //! Implemented: genesis (the five account-creating initializers plus `Endow`),
 //! split, merge_materialize (Merge/Materialize/Dematerialize), market_init,
 //! observe_resolve (FeedAdvance/Resolve/RedeemInternal), and orders_batch's
-//! PlaceOrder and CancelOrder (page-v4 tombstone retirement), plus one narrow
+//! PlaceOrder and CancelOrder (page-v4 tombstone retirement), one deterministic
+//! two-order `SUBMITTED` Candidate/CandidateFeed constructor, plus one narrow
 //! `SettlePage` consumption seam for a preselected, pre-entitled, same-page
-//! direct full slice. Candidate selection and entitlement creation remain
-//! explicit lifecycle STOPs.
+//! direct full slice. Candidate verification/selection and entitlement creation
+//! remain explicit lifecycle STOPs.
 //!
-//! [`genesis`] is the only module that creates accounts.  Every other module
-//! writes over accounts that arrived already created and correctly sized, and
-//! that split is deliberate: the account-creation CPI, the rent computation
-//! and the `invoke_signed` seed plumbing are one concern with one owner.
+//! [`genesis`] owns namespace construction; [`orders_batch`] reuses its shared
+//! prefund-safe System-CPI helper for the two content-addressed submission
+//! accounts. Other families write over already-created, correctly sized state.
 
 pub mod artifact;
 pub mod cash_exit;

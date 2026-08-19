@@ -96,6 +96,7 @@ pub fn process(
         }
         Action::Layout(Intent::PlaceOrder { .. })
         | Action::Layout(Intent::CancelOrder { .. })
+        | Action::Layout(Intent::SubmitDirectPage { .. })
         | Action::Layout(Intent::SettlePage { .. }) => {
             orders_batch::process(program_id, accounts, &request)
         }

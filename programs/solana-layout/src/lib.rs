@@ -4298,6 +4298,16 @@ pub enum Intent {
         epoch: EpochId,
         page_index: u16,
     },
+    /// Submit the one deterministic direct candidate carried by a frozen page.
+    ///
+    /// Submission is not verification or selection.  The program creates a
+    /// `SUBMITTED` Candidate and its exact fill/slice feed, while the Epoch
+    /// remains frozen and no settlement receipt exists yet.
+    SubmitDirectPage {
+        market: MarketId,
+        epoch: EpochId,
+        page_index: u16,
+    },
     /// Bring one Realm namespace into existence.
     ///
     /// The Realm identity is not carried, because it is not a choice:
@@ -4514,6 +4524,7 @@ const BEGIN_ARTIFACT_TAG: u8 = 18;
 const WRITE_ARTIFACT_TAG: u8 = 19;
 const SEAL_ARTIFACT_TAG: u8 = 20;
 const ABORT_ARTIFACT_TAG: u8 = 21;
+const SUBMIT_DIRECT_PAGE_TAG: u8 = 22;
 
 impl Intent {
     /// Return the exact encoded byte length for this intent.
@@ -4533,6 +4544,7 @@ impl Intent {
             },
             Self::CancelOrder { .. } => 2 + 32 + 32 + 32 + 32 + 8,
             Self::SettlePage { .. } => 2 + 32 + 32 + 2,
+            Self::SubmitDirectPage { .. } => 2 + 32 + 32 + 2,
             Self::InitRealm { .. } => 2 + 32 + 8 + 1 + 1,
             Self::InitProfile { .. } => 2 + 32 + 32 + 2 + 1,
             Self::InitPriceGrid { .. } | Self::InitTerms { .. } => 2 + 32 + 32,
@@ -4727,6 +4739,18 @@ impl Intent {
                 check_hash(*market)?;
                 check_hash(*epoch)?;
                 put_header(&mut w, SETTLE_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.u16(*page_index)?
+            }
+            Self::SubmitDirectPage {
+                market,
+                epoch,
+                page_index,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                put_header(&mut w, SUBMIT_DIRECT_PAGE_TAG, INTENT_VERSION)?;
                 w.hash(*market)?;
                 w.hash(*epoch)?;
                 w.u16(*page_index)?
@@ -5095,6 +5119,20 @@ impl Intent {
                 check_hash(market)?;
                 check_hash(epoch)?;
                 let v = Self::SettlePage {
+                    market,
+                    epoch,
+                    page_index,
+                };
+                r.done()?;
+                Ok(v)
+            }
+            SUBMIT_DIRECT_PAGE_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let page_index = r.u16()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                let v = Self::SubmitDirectPage {
                     market,
                     epoch,
                     page_index,
@@ -9278,6 +9316,26 @@ mod tests {
     }
 
     #[test]
+    fn direct_submission_intent_has_one_exact_page_wire() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 4);
+        let intent = Intent::SubmitDirectPage {
+            market,
+            epoch,
+            page_index: 7,
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = intent.encode(&mut bytes).unwrap();
+        assert_eq!(len, 68);
+        assert_eq!(&bytes[..2], [SUBMIT_DIRECT_PAGE_TAG, INTENT_VERSION]);
+        assert_eq!(&bytes[66..68], &7u16.to_le_bytes());
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(intent));
+
+        bytes[2..34].fill(0);
+        assert_eq!(Intent::decode(&bytes[..len]), Err(CodecError::ZeroIdentity));
+    }
+
+    #[test]
     fn every_intent_refuses_the_superseded_encoding_version() {
         let market = h(1);
         let epoch = canonical_epoch_id(market, 4);
@@ -9307,6 +9365,11 @@ mod tests {
                 generation: 2,
             },
             Intent::SettlePage {
+                market,
+                epoch,
+                page_index: 0,
+            },
+            Intent::SubmitDirectPage {
                 market,
                 epoch,
                 page_index: 0,
@@ -9686,7 +9749,7 @@ mod tests {
         b[66..74].fill(0);
         assert_eq!(Intent::decode(&b[..n]), Err(CodecError::ZeroValue));
         // A tag past the last one this version defines.
-        b[0] = ABORT_ARTIFACT_TAG + 1;
+        b[0] = SUBMIT_DIRECT_PAGE_TAG + 1;
         assert_eq!(Intent::decode(&b[..n]), Err(CodecError::WrongTag));
     }
 

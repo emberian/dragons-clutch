@@ -105,10 +105,13 @@ The focused host tests in
 conservation, one-shot consumption, stale selection, partial fill,
 cross-outcome substitution and nonzero-fee refusal.
 
-The real-bank campaign is
-`svm-tests/tests/coupled_settlement.rs`. It loads the selected CandidateFeed and
-receipt at genesis because their construction lifecycle is still missing, then
-executes the actual SBF ELF. Against the joined working tree on 2026-08-19:
+The real-bank consumption campaign is
+`svm-tests/tests/coupled_settlement.rs`. It loads the Candidate as already
+selected and the receipt at genesis because verification/selection and receipt
+freeze are still missing, then executes the actual SBF ELF. The separate
+`SubmitDirectPage` constructor and its evidence are documented in
+`COUPLED_AUTHORITY_V1.md`; its output remains `SUBMITTED` and cannot reach this
+seam by itself. Against the joined working tree on 2026-08-19:
 
 ```text
 ELF sha256: 07b759e09867a13a89b6f0c27fdfb3f65b03fb4a2e186b94ea5ac87a21ac80a3
@@ -131,9 +134,10 @@ diagnostic was removed before this evidence run.
 
 The full venue remains STOP until all of the following exist and execute:
 
-1. candidate submission closure, relation verification, comparison and one
-   onchain `SELECTED` transition;
-2. authenticated permissionless CandidateFeed/ClearWork construction;
+1. complete candidate submission-window closure, relation verification,
+   comparison and one onchain `SELECTED` transition;
+2. authenticated general CandidateFeed/ClearWork construction beyond the
+   narrow two-order submitted-feed constructor;
 3. a complete reservation-set commitment proving every selected order has one
    funded reservation;
 4. complete immutable receipt/FinalPot construction before resolution;

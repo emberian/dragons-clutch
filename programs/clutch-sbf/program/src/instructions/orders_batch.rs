@@ -1,4 +1,5 @@
-//! `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SettlePage`.
+//! `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`,
+//! `Intent::SettlePage`.
 //!
 //! This module owns the batch-auction plane's account lists.  `PlaceOrder` and
 //! `CancelOrder` own the funded order lifecycle.  `SettlePage` now exposes one
@@ -10,7 +11,8 @@
 //! | --- | --- |
 //! | `PlaceOrder` | **implemented**, both order families: the v3 wire carries an `OrderSlot` and signed fee cap; Position assets move into one reservation |
 //! | `CancelOrder` | **implemented**: the v4 page retires an order in place and returns only its unused reservation (§ *Cancellation*) |
-//! | `SettlePage` | **conditional consumption seam**: consumes two exact ACTIVE reservations and one frozen receipt; candidate selection/feed initialization/receipt freeze remain unreachable (§ *Settlement*) |
+//! | `SubmitDirectPage` | **narrow constructor**: creates one deterministic `SUBMITTED` Candidate and exact feed from a funded two-order frozen page; it does not verify/select or create a receipt |
+//! | `SettlePage` | **conditional consumption seam**: consumes two exact ACTIVE reservations and one frozen receipt; candidate selection/receipt freeze remain unreachable (§ *Settlement*) |
 //!
 //! Nothing here computes a clearing price or selects a candidate. A placement
 //! atomically writes one order record, encumbers exact free cash or moves exact
@@ -276,13 +278,16 @@
 //!    domain carries `Hash32`; no injective mapping has been specified;
 //! 5. `ClearWorkV1` is `repr(Rust)` state containing enums and booleans, not a
 //!    stable account codec, so casting its opaque bytes would be unsound;
-//! 6. ClearWork and CandidateFeed have no authenticated creation/init lifecycle;
+//! 6. ClearWork and general CandidateFeed submission have no authenticated
+//!    creation/init lifecycle; only the exact two-order constructor is live;
 //! 7. candidate-set closure and selection are not on-chain transitions; and
 //! 8. FinalPot/SettlementReceipt are codecs, not frozen entitlements.
 //!
 //! The typed preflight and ranked STOP remain executable in `settlement`; the
-//! new success path starts strictly after selection and entitlement freeze. It
-//! does not turn a caller-provided feed or page into selection authority.
+//! consumption path starts strictly after selection and entitlement freeze.
+//! `SubmitDirectPage` removes the caller-provided feed from the narrow path but
+//! leaves it explicitly `SUBMITTED`; neither it nor the page is selection
+//! authority.
 //!
 //! **Post-resolution direction (PROPOSED, not integrated).** Verification,
 //! selection, and the complete receipt/pot entitlement set must be frozen
@@ -450,12 +455,14 @@ use crate::accounts::{
     self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
 };
 use crate::error::{ClutchError, Refusal};
+use crate::instructions::artifact::read_clock_slot;
 use crate::instructions::genesis::{
     create_pda_account, read_rent, require_creatable, require_system_program,
 };
 use crate::seeds;
 use clutch_solana_layout::{
     account_len,
+    clearing::{init_candidate_feed, verify_candidate_feed, write_fill, write_slice_at},
     reservation::{canonical_reservation_id, ReservationAccount, RESERVATION_ACCOUNT_BYTES},
     stream, CandidateRecord, CodecError, EpochAccount, Hash32, Intent, OrderSlot, PositionAccount,
     PriceGridAccount, SettlementReceiptAccount, EPOCH_PHASE_OPEN, MAX_GRID_TICKS,
@@ -494,6 +501,9 @@ pub const CANCEL_ORDER_ACCOUNT_COUNT: usize = 5;
 
 /// Accounts in the narrow V1 `SettlePage` consumption seam, exactly.
 pub const SETTLE_PAGE_ACCOUNT_COUNT: usize = 9;
+
+/// Accounts in the narrow `SubmitDirectPage` constructor, exactly.
+pub const SUBMIT_DIRECT_PAGE_ACCOUNT_COUNT: usize = 11;
 
 /// Authenticated actor; its key is the order's owner identity.  Both lists.
 pub const IX_ACTOR: usize = 0;
@@ -535,6 +545,28 @@ pub const IX_SETTLE_BUY_RESERVATION: usize = 6;
 pub const IX_SETTLE_SELL_RESERVATION: usize = 7;
 /// Pre-frozen receipt entitlement for exactly one candidate slice. `SettlePage`.
 pub const IX_SETTLE_RECEIPT: usize = 8;
+/// Permissionless rent payer and authenticated transaction signer.
+pub const IX_SUBMIT_PAYER: usize = 0;
+/// Frozen Epoch owning the submitted candidate.
+pub const IX_SUBMIT_EPOCH: usize = 1;
+/// Frozen price grid used by both candidate prices.
+pub const IX_SUBMIT_GRID: usize = 2;
+/// The complete one-page frozen order set.
+pub const IX_SUBMIT_PAGE: usize = 3;
+/// Reservation for live order index zero.
+pub const IX_SUBMIT_RESERVATION_ZERO: usize = 4;
+/// Reservation for live order index one.
+pub const IX_SUBMIT_RESERVATION_ONE: usize = 5;
+/// Canonical, not-yet-created Candidate PDA.
+pub const IX_SUBMIT_CANDIDATE: usize = 6;
+/// Canonical, not-yet-created CandidateFeed PDA.
+pub const IX_SUBMIT_FEED: usize = 7;
+/// System program.
+pub const IX_SUBMIT_SYSTEM: usize = 8;
+/// Rent sysvar.
+pub const IX_SUBMIT_RENT: usize = 9;
+/// Clock sysvar, owning `CandidateRecord.submitted_slot`.
+pub const IX_SUBMIT_CLOCK: usize = 10;
 
 /// Program-owned roles of `PlaceOrder`, in account-index order.
 const PLACE_ORDER_STATE_ROLES: [StateRole; 4] = [
@@ -563,6 +595,15 @@ const SETTLE_PAGE_STATE_ROLES: [StateRole; SETTLE_PAGE_ACCOUNT_COUNT] = [
     StateRole::writable(IX_SETTLE_BUY_RESERVATION, RESERVATION_ACCOUNT_BYTES),
     StateRole::writable(IX_SETTLE_SELL_RESERVATION, RESERVATION_ACCOUNT_BYTES),
     StateRole::writable(IX_SETTLE_RECEIPT, account_len::SETTLEMENT_RECEIPT),
+];
+
+/// Program-owned frozen inputs to deterministic direct submission.
+const SUBMIT_DIRECT_PAGE_STATE_ROLES: [StateRole; 5] = [
+    StateRole::read_only(IX_SUBMIT_EPOCH, account_len::EPOCH),
+    StateRole::read_only(IX_SUBMIT_GRID, account_len::PRICE_GRID),
+    StateRole::read_only(IX_SUBMIT_PAGE, account_len::ORDER_PAGE),
+    StateRole::read_only(IX_SUBMIT_RESERVATION_ZERO, RESERVATION_ACCOUNT_BYTES),
+    StateRole::read_only(IX_SUBMIT_RESERVATION_ONE, RESERVATION_ACCOUNT_BYTES),
 ];
 
 /* ------------------------------------------------------------------------ */
@@ -915,11 +956,188 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             *page_index,
         ),
+        Action::Layout(Intent::SubmitDirectPage {
+            market,
+            epoch,
+            page_index,
+        }) => submit_direct_page(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            *page_index,
+        ),
         /* Every other action belongs to another family module; the router never
          * sends one here, and this arm exists so that adding one to the router
          * is a compile error rather than a silent success. */
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
+}
+
+/// Create one deterministic `SUBMITTED` Candidate and CandidateFeed.
+///
+/// This transition does not mutate the Epoch, does not verify or select the
+/// proposal, and creates no SettlementReceipt. Its two new accounts are an
+/// authenticated candidate submission, not clearing or settlement authority.
+#[inline(never)]
+fn submit_direct_page(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent_market: &Hash32,
+    intent_epoch: &Hash32,
+    intent_page: u16,
+) -> Outcome<()> {
+    require_count(accounts, SUBMIT_DIRECT_PAGE_ACCOUNT_COUNT)?;
+    require_signer(&accounts[IX_SUBMIT_PAYER])?;
+    require(
+        accounts[IX_SUBMIT_PAYER].is_writable,
+        ClutchError::NotWritable,
+    )?;
+    require_distinct(accounts)?;
+    accounts::validate_state_roles(program_id, accounts, &SUBMIT_DIRECT_PAGE_STATE_ROLES)?;
+    require_creatable(&accounts[IX_SUBMIT_CANDIDATE])?;
+    require_creatable(&accounts[IX_SUBMIT_FEED])?;
+    require_system_program(&accounts[IX_SUBMIT_SYSTEM])?;
+    let rent = read_rent(&accounts[IX_SUBMIT_RENT])?;
+    let submitted_slot = read_clock_slot(&accounts[IX_SUBMIT_CLOCK])?;
+    require(sequence == 0, ClutchError::Replay)?;
+    validate_direct_submission_source_addresses(program_id, accounts)?;
+
+    let mut plan = load_direct_submission_plan(
+        accounts,
+        intent_market,
+        intent_epoch,
+        intent_page,
+        submitted_slot,
+    )?;
+
+    let epoch_bytes = plan.candidate.epoch.bytes();
+    let candidate_bytes = plan.candidate.candidate.bytes();
+    let candidate_derived = seeds::candidate_pda(program_id, &epoch_bytes, &candidate_bytes);
+    let feed_derived = seeds::candidate_feed_pda(program_id, &epoch_bytes, &candidate_bytes);
+    expect_pda(accounts[IX_SUBMIT_CANDIDATE].key, candidate_derived, None)?;
+    expect_pda(accounts[IX_SUBMIT_FEED].key, feed_derived, None)?;
+    plan.bind_bumps(candidate_derived.1, feed_derived.1);
+    plan.candidate.validate()?;
+    plan.feed.validate()?;
+
+    let candidate_bump = [candidate_derived.1];
+    let candidate_signer = [
+        seeds::SEED_CANDIDATE,
+        epoch_bytes.as_ref(),
+        candidate_bytes.as_ref(),
+        candidate_bump.as_ref(),
+    ];
+    create_pda_account(
+        program_id,
+        &accounts[IX_SUBMIT_PAYER],
+        &accounts[IX_SUBMIT_CANDIDATE],
+        &accounts[IX_SUBMIT_SYSTEM],
+        &rent,
+        account_len::CANDIDATE,
+        &candidate_signer,
+    )?;
+    let feed_bump = [feed_derived.1];
+    let feed_signer = [
+        seeds::SEED_CANDIDATE_FEED,
+        epoch_bytes.as_ref(),
+        candidate_bytes.as_ref(),
+        feed_bump.as_ref(),
+    ];
+    create_pda_account(
+        program_id,
+        &accounts[IX_SUBMIT_PAYER],
+        &accounts[IX_SUBMIT_FEED],
+        &accounts[IX_SUBMIT_SYSTEM],
+        &rent,
+        account_len::CANDIDATE_FEED,
+        &feed_signer,
+    )?;
+
+    // Creation CPIs are the first mutations. Any later borrow/codec refusal
+    // rolls both creations back at the transaction boundary.
+    plan.candidate
+        .encode(&mut borrow_mut!(accounts[IX_SUBMIT_CANDIDATE])?)?;
+    {
+        let mut feed = borrow_mut!(accounts[IX_SUBMIT_FEED])?;
+        init_candidate_feed(&mut feed, &plan.feed)?;
+        write_fill(&mut feed, 0, plan.fill_zero)?;
+        write_fill(&mut feed, 1, plan.fill_one)?;
+        write_slice_at(&mut feed, 0, &plan.slice)?;
+        verify_candidate_feed(&feed)?;
+    }
+    Ok(())
+}
+
+/// Decode and release every large frozen input before account creation begins.
+///
+/// Keeping the Epoch, grid, two reservations, and output plan alive in the
+/// outer CPI frame exceeds SBF's 4 KiB limit. This helper's return value is the
+/// only state the creator needs after all semantic checks have passed.
+#[inline(never)]
+fn load_direct_submission_plan(
+    accounts: &[AccountInfo],
+    intent_market: &Hash32,
+    intent_epoch: &Hash32,
+    intent_page: u16,
+    submitted_slot: u64,
+) -> Outcome<settlement::DirectSubmissionPlan> {
+    let epoch = EpochAccount::decode(&accounts[IX_SUBMIT_EPOCH].data.borrow())?;
+    require(
+        epoch.market == *intent_market && epoch.epoch == *intent_epoch && intent_page == 0,
+        ClutchError::MismatchedState,
+    )?;
+    let grid = PriceGridAccount::decode(&accounts[IX_SUBMIT_GRID].data.borrow())?;
+    let reservation_zero =
+        ReservationAccount::decode(&accounts[IX_SUBMIT_RESERVATION_ZERO].data.borrow())?;
+    let reservation_one =
+        ReservationAccount::decode(&accounts[IX_SUBMIT_RESERVATION_ONE].data.borrow())?;
+    let page = accounts[IX_SUBMIT_PAGE].data.borrow();
+    settlement::prepare_direct_submission(&settlement::DirectSubmissionInput {
+        epoch: &epoch,
+        grid: &grid,
+        page_bytes: &page,
+        page_index: intent_page,
+        reservation_zero: &reservation_zero,
+        reservation_one: &reservation_one,
+        submitted_slot,
+    })
+}
+
+/// Authenticate every frozen input address without retaining decoded values.
+#[inline(never)]
+fn validate_direct_submission_source_addresses(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+) -> Outcome<()> {
+    {
+        let value = EpochAccount::decode(&accounts[IX_SUBMIT_EPOCH].data.borrow())?;
+        expect_pda(
+            accounts[IX_SUBMIT_EPOCH].key,
+            seeds::epoch_pda(program_id, &value.market.bytes(), value.epoch_index),
+            Some(value.stored_bump),
+        )?;
+    }
+    {
+        let value = PriceGridAccount::decode(&accounts[IX_SUBMIT_GRID].data.borrow())?;
+        expect_pda(
+            accounts[IX_SUBMIT_GRID].key,
+            seeds::grid_pda(program_id, &value.realm.bytes(), &value.grid.bytes()),
+            Some(value.stored_bump),
+        )?;
+    }
+    {
+        let value = stream::OrderPageHeader::decode(&accounts[IX_SUBMIT_PAGE].data.borrow())?;
+        expect_pda(
+            accounts[IX_SUBMIT_PAGE].key,
+            seeds::page_pda(program_id, &value.epoch.bytes(), value.page_index),
+            Some(value.stored_bump),
+        )?;
+    }
+    validate_reservation_address(program_id, &accounts[IX_SUBMIT_RESERVATION_ZERO])?;
+    validate_reservation_address(program_id, &accounts[IX_SUBMIT_RESERVATION_ONE])
 }
 
 /// Consume one pre-frozen, same-page, direct full-fill entitlement.
@@ -2505,7 +2723,7 @@ mod tests {
     }
 
     #[test]
-    fn all_three_intents_reach_their_account_planes() {
+    fn all_four_intents_reach_their_account_planes() {
         let program_id = Pubkey::new_from_array([9; 32]);
         let market = h(1);
         let epoch = canonical_epoch_id(market, 4);
@@ -2523,7 +2741,7 @@ mod tests {
             Err(adapter(ClutchError::AccountCount))
         );
 
-        // The other two reach their account planes too.
+        // The other three reach their account planes too.
         for action in [
             Action::Layout(Intent::PlaceOrder {
                 market,
@@ -2537,6 +2755,11 @@ mod tests {
                 owner: h(0x20),
                 order_id: canonical_order_id(1),
                 generation: 7,
+            }),
+            Action::Layout(Intent::SubmitDirectPage {
+                market,
+                epoch,
+                page_index: 0,
             }),
         ] {
             let request = Request {

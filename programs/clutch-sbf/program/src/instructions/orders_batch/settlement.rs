@@ -14,21 +14,26 @@
 //! single-Egg reservations.  This does not create the missing selection or
 //! entitlement authority; it makes their eventual output consumable without
 //! making an order page authority over assets.
+//!
+//! [`prepare_direct_submission`] also constructs the exact `SUBMITTED`
+//! candidate/feed proposal for that tiny book. It intentionally stops before
+//! relation verification, selection, Epoch phase change, or receipt freeze.
 
 use clutch_solana_layout::{
-    canonical_order_id,
+    canonical_order_id, canonical_order_set_id,
     clearing::{
         fill_at, slice_at, verify_candidate_feed, verify_clear_work, CandidateFeedHeader,
-        ClearWorkHeader, LegRef, CLEAR_WORK_STATUS_COMPLETE,
+        ClearWorkHeader, LegRef, PairingSlice, CANDIDATE_FEED_FLAG_SLICES_DECLARED,
+        CLEAR_WORK_STATUS_COMPLETE,
     },
     reservation::{
         ReservationAccount, ReservationPlan, RESERVATION_STATE_ACTIVE, RESERVATION_STATE_CONSUMED,
     },
     stream, CandidateRecord, CodecError, EpochAccount, Hash32, OrderSlot, PositionAccount,
-    SettlementReceiptAccount, CANDIDATE_STATUS_SELECTED, CANDIDATE_STATUS_SUBMITTED,
-    EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN, MAX_ORDERS_PER_PAGE, MAX_OUTCOMES,
-    RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED, RECEIPT_FLAG_SLICE_EXHAUSTED,
-    RECEIPT_LEG_DIRECT,
+    PriceGridAccount, SettlementReceiptAccount, CANDIDATE_STATUS_SELECTED,
+    CANDIDATE_STATUS_SUBMITTED, EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN, MAX_ORDERS_PER_PAGE,
+    MAX_OUTCOMES, RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED,
+    RECEIPT_FLAG_SLICE_EXHAUSTED, RECEIPT_LEG_DIRECT,
 };
 
 use crate::accounts::{require, Outcome};
@@ -186,6 +191,253 @@ fn bind_checkpoint(
         return Err(CodecError::MismatchedBinding);
     }
     Ok(())
+}
+
+/* ------------------------------------------------------------------------ */
+/* Deterministic narrow candidate submission                                */
+/* ------------------------------------------------------------------------ */
+
+/// The complete bytes, except PDA bumps, of one narrow submitted candidate.
+///
+/// Score fields and the relation's 128-bit digest are deliberately zero.  The
+/// frozen Epoch does not carry the `FrozenPolicyV1` preimage or the specified
+/// Hash32-to-relation-domain mapping needed to recompute them.  Consequently
+/// this is a proposal with status `SUBMITTED`, never a verification result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct DirectSubmissionPlan {
+    /// Candidate record written to the canonical Candidate PDA.
+    pub candidate: CandidateRecord,
+    /// Header written to the canonical CandidateFeed PDA.
+    pub feed: CandidateFeedHeader,
+    /// Fill at live order index zero.
+    pub fill_zero: u64,
+    /// Fill at live order index one.
+    pub fill_one: u64,
+    /// The only explicit direct pairing slice.
+    pub slice: PairingSlice,
+}
+
+impl DirectSubmissionPlan {
+    /// Bind account-local PDA bumps after the content identity has selected
+    /// both addresses. Bumps are outside both content digests.
+    pub fn bind_bumps(&mut self, candidate_bump: u8, feed_bump: u8) {
+        self.candidate.stored_bump = candidate_bump;
+        self.feed.stored_bump = feed_bump;
+    }
+}
+
+/// Immutable inputs to the deterministic two-order submission constructor.
+pub(super) struct DirectSubmissionInput<'a> {
+    pub epoch: &'a EpochAccount,
+    pub grid: &'a PriceGridAccount,
+    pub page_bytes: &'a [u8],
+    pub page_index: u16,
+    pub reservation_zero: &'a ReservationAccount,
+    pub reservation_one: &'a ReservationAccount,
+    pub submitted_slot: u64,
+}
+
+/// Construct one exact, funded direct candidate from an authenticated page.
+///
+/// This accepts only a one-page, two-order, two-outcome book with two distinct
+/// owners, opposite single-Egg sides, equal quantities and equal interior
+/// limits, no minimum-fill/AON condition, no tombstone, no fee headroom, and
+/// two untouched ACTIVE reservations.  Those restrictions make the proposal's
+/// coordinates, fills, and single explicit slice a total function of frozen
+/// state. They do *not* make it the best valid submitted candidate.
+#[inline(never)]
+pub(super) fn prepare_direct_submission(
+    input: &DirectSubmissionInput<'_>,
+) -> Outcome<DirectSubmissionPlan> {
+    input.epoch.validate()?;
+    input.grid.validate()?;
+    require(
+        input.epoch.phase == EPOCH_PHASE_FROZEN
+            && input.epoch.page_count == 1
+            && input.epoch.order_count == 2
+            && input.epoch.owner_count == 2
+            && input.epoch.outcome_count == 2
+            && input.page_index == 0
+            && input.grid.grid == input.epoch.price_grid
+            && input.grid.price_scale == input.epoch.price_scale,
+        ClutchError::MismatchedState,
+    )?;
+
+    let header = stream::verify_page_on_grid(input.page_bytes, input.grid)?;
+    // One page is the complete frozen set in this narrow constructor. The page
+    // digest was just recomputed from every slot; fold that verified digest
+    // directly rather than running the general multi-page verifier a second
+    // time over the same bytes.
+    let recomputed_order_set =
+        canonical_order_set_id(header.market, header.epoch, 1, 2, &[header.page_digest]);
+    require(
+        header.frozen == 1
+            && header.page_index == 0
+            && header.page_count == 1
+            && header.order_count == 2
+            && header.tombstone_count == 0
+            && header.set_order_count == 2
+            && header.market == input.epoch.market
+            && header.epoch == input.epoch.epoch
+            && header.order_set == input.epoch.order_set
+            && recomputed_order_set == input.epoch.order_set
+            && header.first_order_id == input.epoch.first_order_id
+            && header.last_order_id == input.epoch.last_order_id,
+        ClutchError::MismatchedState,
+    )?;
+
+    let mut cursor = stream::OrderSlotCursor::new(input.page_bytes)?;
+    let zero = cursor
+        .next_slot()
+        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))??;
+    let one = cursor
+        .next_slot()
+        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))??;
+    let (order_zero, order_one) = match (zero, one) {
+        (OrderSlot::Single(zero), OrderSlot::Single(one)) => (zero, one),
+        _ => return Err(CodecError::InvalidEnum.into()),
+    };
+    order_zero.validate()?;
+    order_one.validate()?;
+    require(
+        order_zero.side != order_one.side
+            && order_zero.owner != order_one.owner
+            && order_zero.outcome == order_one.outcome
+            && order_zero.quantity == order_one.quantity
+            && order_zero.limit == order_one.limit
+            && order_zero.limit != 0
+            && order_zero.limit < input.epoch.price_scale
+            && order_zero.minimum_fill == 0
+            && order_one.minimum_fill == 0
+            && order_zero.flags == 0
+            && order_one.flags == 0
+            && order_zero.expiry_epoch >= input.epoch.epoch_index
+            && order_one.expiry_epoch >= input.epoch.epoch_index,
+        ClutchError::MismatchedState,
+    )?;
+
+    // Both active outcome prices must be members of the frozen grid. The
+    // traded outcome's price is the common limit; simplex closure determines
+    // the other and leaves no price coordinate to the submitter.
+    let complement = input
+        .epoch
+        .price_scale
+        .checked_sub(order_zero.limit)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    input.grid.tick_of(order_zero.limit)?;
+    input.grid.tick_of(complement)?;
+
+    validate_submission_reservation(
+        input.reservation_zero,
+        input.epoch,
+        input.page_index,
+        &OrderSlot::Single(order_zero),
+    )?;
+    validate_submission_reservation(
+        input.reservation_one,
+        input.epoch,
+        input.page_index,
+        &OrderSlot::Single(order_one),
+    )?;
+
+    let mut prices = [0u64; MAX_OUTCOMES];
+    prices[usize::from(order_zero.outcome)] = order_zero.limit;
+    prices[1usize - usize::from(order_zero.outcome)] = complement;
+    let mut candidate = CandidateRecord {
+        candidate: Hash32::ZERO,
+        epoch: input.epoch.epoch,
+        market: input.epoch.market,
+        prices,
+        virtual_split: 0,
+        virtual_merge: 0,
+        honored_aon_mask: 0,
+        // Unverified claims. See the type-level comment above.
+        weighted_direct_volume: 0,
+        limit_surplus_price_units: 0,
+        churn: 0,
+        submitted_slot: input.submitted_slot,
+        distinct_owners: 0,
+        order_len: 2,
+        outcome_count: 2,
+        status: CANDIDATE_STATUS_SUBMITTED,
+        stored_bump: 0,
+        flags: 0,
+    };
+    candidate.candidate = candidate.recomputed_candidate_digest()?;
+    candidate.validate()?;
+    candidate.binds_epoch(input.epoch)?;
+
+    let feed = CandidateFeedHeader {
+        candidate: candidate.candidate,
+        epoch: candidate.epoch,
+        market: candidate.market,
+        order_set: input.epoch.order_set,
+        prices,
+        virtual_split: 0,
+        virtual_merge: 0,
+        honored_aon_mask: 0,
+        weighted_direct_volume: 0,
+        limit_surplus_price_units: 0,
+        claimed_digest: 0,
+        churn: 0,
+        declared_slices: 1,
+        distinct_owners: 0,
+        order_len: 2,
+        outcome_count: 2,
+        stored_bump: 0,
+        flags: CANDIDATE_FEED_FLAG_SLICES_DECLARED,
+    };
+    feed.validate()?;
+    bind_feed(&feed, &candidate, input.epoch)?;
+
+    let (buy_index, sell_index) = if order_zero.side == 0 { (0, 1) } else { (1, 0) };
+    let slice = PairingSlice {
+        buy_ref: LegRef::Order(buy_index),
+        sell_ref: LegRef::Order(sell_index),
+        outcome: order_zero.outcome,
+        quantity: order_zero.quantity,
+    };
+    slice.validate(2, 2)?;
+    Ok(DirectSubmissionPlan {
+        candidate,
+        feed,
+        fill_zero: order_zero.quantity,
+        fill_one: order_one.quantity,
+        slice,
+    })
+}
+
+#[inline(never)]
+fn validate_submission_reservation(
+    reservation: &ReservationAccount,
+    epoch: &EpochAccount,
+    page_index: u16,
+    order: &OrderSlot,
+) -> Outcome<()> {
+    reservation.validate()?;
+    let plan = ReservationPlan::for_order(order, epoch.outcome_count, epoch.price_scale, 0)?;
+    require(
+        reservation.state == RESERVATION_STATE_ACTIVE
+            && reservation.market == epoch.market
+            && reservation.epoch == epoch.epoch
+            && reservation.owner == order.owner()
+            && reservation.order_id == order.order_id()
+            && reservation.order_generation == order.generation()
+            && reservation.page_index == page_index
+            && reservation.terms == epoch.terms
+            && reservation.price_grid == epoch.price_grid
+            && reservation.policy == epoch.policy
+            && reservation.outcome_count == epoch.outcome_count
+            && reservation.max_fee_atoms == 0
+            && reservation.release_generation == 0
+            && reservation.initial_cash_atoms == plan.cash_atoms
+            && reservation.remaining_cash_atoms == plan.cash_atoms
+            && reservation.initial_internal == plan.internal
+            && reservation.remaining_internal == plan.internal
+            && reservation.order_kind == plan.order_kind
+            && reservation.side == plan.side,
+        ClutchError::MismatchedState,
+    )
 }
 
 /* ------------------------------------------------------------------------ */
@@ -573,7 +825,8 @@ pub(super) fn load_same_page_direct_orders(
 pub(super) enum SettlementBlocker {
     /// Candidate-set closure/selection is not yet an on-chain transition.
     CandidateSelection,
-    /// CandidateFeed/ClearWork have no permissionless authenticated lifecycle.
+    /// General CandidateFeed/ClearWork have no permissionless authenticated lifecycle.
+    /// The exact two-order submitted-feed constructor is the sole exception.
     CandidateFeedInitialization,
     /// Receipts/pot are not created as complete pre-resolution entitlements.
     EntitlementFreeze,
@@ -1189,6 +1442,166 @@ mod tests {
             seller_reservation,
             receipt,
         }
+    }
+
+    struct SubmissionFixture {
+        epoch: EpochAccount,
+        grid: PriceGridAccount,
+        page: [u8; account_len::ORDER_PAGE],
+        reservation_zero: ReservationAccount,
+        reservation_one: ReservationAccount,
+    }
+
+    impl SubmissionFixture {
+        fn input(&self) -> DirectSubmissionInput<'_> {
+            DirectSubmissionInput {
+                epoch: &self.epoch,
+                grid: &self.grid,
+                page_bytes: &self.page,
+                page_index: 0,
+                reservation_zero: &self.reservation_zero,
+                reservation_one: &self.reservation_one,
+                submitted_slot: 77,
+            }
+        }
+    }
+
+    fn submission_fixture() -> SubmissionFixture {
+        let direct = direct_fixture();
+        let mut page = [0; account_len::ORDER_PAGE];
+        init_page(&mut page, direct.epoch.market, direct.epoch.epoch, 0, 1, 5).unwrap();
+        append_slot(&mut page, direct.buy).unwrap();
+        append_slot(&mut page, direct.sell).unwrap();
+        let (order_set, count) = frozen_set_commitment(&[&page]).unwrap();
+        seal_page(&mut page, order_set, count).unwrap();
+
+        let mut ticks = [0; clutch_solana_layout::MAX_GRID_TICKS];
+        ticks[0] = 1_000;
+        ticks[1] = 5_000;
+        let mut grid = PriceGridAccount {
+            grid: Hash32::ZERO,
+            realm: h(0x61),
+            price_scale: direct.epoch.price_scale,
+            tick_count: 2,
+            ticks,
+            stored_bump: 4,
+            flags: 0,
+        };
+        grid.grid = grid.recomputed_grid_id().unwrap();
+        let mut epoch = direct.epoch;
+        epoch.phase = EPOCH_PHASE_FROZEN;
+        epoch.order_set = order_set;
+        epoch.price_grid = grid.grid;
+
+        let zero_plan = ReservationPlan::for_order(&direct.buy, 2, 10_000, 0).unwrap();
+        let one_plan = ReservationPlan::for_order(&direct.sell, 2, 10_000, 0).unwrap();
+        let reservation_zero = ReservationAccount::active(
+            epoch.market,
+            epoch.epoch,
+            direct.buy.owner(),
+            direct.buy.order_id(),
+            grid.grid,
+            epoch.terms,
+            epoch.policy,
+            0,
+            direct.buy.generation(),
+            0,
+            8,
+            zero_plan,
+        )
+        .unwrap();
+        let reservation_one = ReservationAccount::active(
+            epoch.market,
+            epoch.epoch,
+            direct.sell.owner(),
+            direct.sell.order_id(),
+            grid.grid,
+            epoch.terms,
+            epoch.policy,
+            0,
+            direct.sell.generation(),
+            0,
+            9,
+            one_plan,
+        )
+        .unwrap();
+        SubmissionFixture {
+            epoch,
+            grid,
+            page,
+            reservation_zero,
+            reservation_one,
+        }
+    }
+
+    #[test]
+    fn narrow_submission_is_deterministic_funded_and_stays_unverified() {
+        let f = submission_fixture();
+        let first = prepare_direct_submission(&f.input()).unwrap();
+        let second = prepare_direct_submission(&f.input()).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.candidate.status, CANDIDATE_STATUS_SUBMITTED);
+        assert_eq!(first.candidate.weighted_direct_volume, 0);
+        assert_eq!(first.candidate.distinct_owners, 0);
+        assert_eq!(first.feed.claimed_digest, 0);
+        assert_eq!(first.fill_zero, 4);
+        assert_eq!(first.fill_one, 4);
+        assert_eq!(first.slice.buy_ref, LegRef::Order(0));
+        assert_eq!(first.slice.sell_ref, LegRef::Order(1));
+        assert_eq!(first.slice.quantity, 4);
+        assert_eq!(f.epoch.phase, EPOCH_PHASE_FROZEN);
+    }
+
+    #[test]
+    fn submission_refuses_reservation_substitution_and_policy_shaped_orders() {
+        let f = submission_fixture();
+        let swapped = DirectSubmissionInput {
+            reservation_zero: &f.reservation_one,
+            reservation_one: &f.reservation_zero,
+            ..f.input()
+        };
+        assert_eq!(
+            prepare_direct_submission(&swapped),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+
+        let mut page = f.page;
+        let mut cursor = stream::OrderSlotCursor::new(&page).unwrap();
+        let mut first = cursor.next_slot().unwrap().unwrap();
+        if let OrderSlot::Single(ref mut order) = first {
+            order.minimum_fill = order.quantity;
+            order.flags = 1;
+        }
+        // Rebuild a valid frozen set so the refusal is the constructor's
+        // explicit policy stop, not corrupt page framing.
+        init_page(&mut page, f.epoch.market, f.epoch.epoch, 0, 1, 5).unwrap();
+        append_slot(&mut page, first).unwrap();
+        let second = OrderSlot::Single(OrderRecord {
+            owner: h(0x42),
+            order_id: canonical_order_id(2),
+            outcome: 0,
+            side: 1,
+            quantity: 4,
+            limit: 5_000,
+            minimum_fill: 0,
+            flags: 0,
+            generation: 1,
+            expiry_epoch: 7,
+        });
+        append_slot(&mut page, second).unwrap();
+        let (order_set, count) = frozen_set_commitment(&[&page]).unwrap();
+        seal_page(&mut page, order_set, count).unwrap();
+        let mut epoch = f.epoch;
+        epoch.order_set = order_set;
+        let policy_shaped = DirectSubmissionInput {
+            epoch: &epoch,
+            page_bytes: &page,
+            ..f.input()
+        };
+        assert_eq!(
+            prepare_direct_submission(&policy_shaped),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
     }
 
     #[test]
