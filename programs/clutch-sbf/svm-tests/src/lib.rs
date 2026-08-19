@@ -76,6 +76,9 @@ pub const TOKEN_2022: Address = Address::new_from_array(collateral::TOKEN_2022_P
 
 /// Fixture-only reviewed-adapter identity. It is not a production source.
 pub const SOURCE_ADAPTER_ID: [u8; 32] = [0xa1; 32];
+/// One semantic owner for the fixture adapter version across Terms, archive,
+/// parser, and the legacy point-resolution projection.
+const SOURCE_ADAPTER_VERSION: u32 = 7;
 const SOURCE_PROGRAM: [u8; 32] = [0xb2; 32];
 const SOURCE_PROGRAM_OWNER: [u8; 32] = [0xb3; 32];
 const SOURCE_DATA_ACCOUNT: [u8; 32] = [0xc3; 32];
@@ -112,7 +115,7 @@ struct FixturePriceParser;
 
 impl PriceParserV1 for FixturePriceParser {
     const SOURCE_ADAPTER_ID: [u8; 32] = SOURCE_ADAPTER_ID;
-    const SOURCE_ADAPTER_VERSION: u32 = 7;
+    const SOURCE_ADAPTER_VERSION: u32 = crate::SOURCE_ADAPTER_VERSION;
     const PARSER_ID: u16 = 11;
     const PARSER_VERSION: u16 = 3;
 
@@ -293,7 +296,7 @@ fn payout_set() -> PayoutSet {
 fn fixture_source_spec() -> SourceSpecV1 {
     SourceSpecV1::new(SourceSpecFieldsV1 {
         source_adapter_id: Hash32::from_bytes(SOURCE_ADAPTER_ID),
-        source_adapter_version: 7,
+        source_adapter_version: SOURCE_ADAPTER_VERSION,
         parser_id: 11,
         parser_version: 3,
         source_program: SOURCE_PROGRAM,
@@ -454,8 +457,13 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
     let resolution = derive(&[seeds::SEED_RESOLUTION, &market_seed]);
     let feed = derive(&[seeds::SEED_FEED, &feed_id.bytes()]);
     let source_spec = derive(&[seeds::SEED_SOURCE_SPEC, &feed_id.bytes()]);
-    let feed_identity = FeedIdentity::new(SOURCE_ADAPTER_ID, feed_id.bytes(), 7, 1)
-        .expect("fixture source identity");
+    let feed_identity = FeedIdentity::new(
+        SOURCE_ADAPTER_ID,
+        feed_id.bytes(),
+        SOURCE_ADAPTER_VERSION,
+        1,
+    )
+    .expect("fixture source identity");
     let window_domain = WindowDomain::new(
         feed_identity,
         Grid::new(7, 1, 60).expect("fixture grid"),
@@ -845,8 +853,13 @@ pub fn rewrite_plane_source_archive_span(
         ),
     )
     .expect("fixture SourceSpec remains authenticated");
-    let feed_identity = FeedIdentity::new(SOURCE_ADAPTER_ID, plane.feed_id.bytes(), 7, 1)
-        .expect("fixture source identity");
+    let feed_identity = FeedIdentity::new(
+        SOURCE_ADAPTER_ID,
+        plane.feed_id.bytes(),
+        SOURCE_ADAPTER_VERSION,
+        1,
+    )
+    .expect("fixture source identity");
     let window_domain = WindowDomain::new(
         feed_identity,
         Grid::new(7, 1, 60).expect("fixture grid"),
@@ -1128,7 +1141,7 @@ pub fn fixture_terms(realm: Hash32, profile: Hash32, feed: FeedId) -> TermsAccou
         failure_payout_index: 0,
         coverage_policy_parameter: 0,
         repair_generation: 0,
-        source_version: 7,
+        source_version: SOURCE_ADAPTER_VERSION,
         evaluator_version: 1,
         source_adapter_id: Hash32::from_bytes(SOURCE_ADAPTER_ID),
         payout_map,
@@ -1220,7 +1233,7 @@ pub fn source_resolution_evidence_buffer(
     let mut window = vec![0x45_u8, 1];
     window.extend_from_slice(&SOURCE_ADAPTER_ID); // source adapter
     window.extend_from_slice(&feed.bytes()); // feed spec
-    window.extend_from_slice(&1_u32.to_le_bytes()); // source version
+    window.extend_from_slice(&SOURCE_ADAPTER_VERSION.to_le_bytes()); // source version
     window.extend_from_slice(&1_u32.to_le_bytes()); // evaluator version
     window.extend_from_slice(&7_u32.to_le_bytes()); // grid family
     window.extend_from_slice(&1_u16.to_le_bytes()); // grid version
