@@ -582,7 +582,7 @@ def run_capture(args: list[str], cwd: Path) -> tuple[int, str]:
 
 def run_capture_bytes(args: list[str], cwd: Path) -> tuple[int, bytes]:
     proc = subprocess.run(args, cwd=str(cwd), capture_output=True, check=False)
-    return proc.returncode, proc.stdout + proc.stderr
+    return proc.returncode, proc.stdout
 
 
 def git(repo: Path, *args: str) -> str:
@@ -629,7 +629,7 @@ def normalize_line(line: str) -> str:
     return out
 
 
-def extract_key_lines(output: str, patterns: list[str], cap: int = 60) -> list[str]:
+def extract_key_lines(output: str, patterns: list[str], cap: int = 256) -> list[str]:
     compiled = [re.compile(p) for p in patterns]
     seen: list[str] = []
     for raw in output.splitlines():
