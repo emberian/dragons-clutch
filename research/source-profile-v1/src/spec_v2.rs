@@ -218,7 +218,10 @@ impl SourceSpecV2 {
         if fields.bucket_seconds == 0 || fields.bucket_seconds > MODEL_MAX_BUCKET_SECONDS {
             return Err(SpecV2Error::InvalidGrid);
         }
-        if fields.max_staleness_slots == 0 || fields.max_staleness_seconds == 0 {
+        if fields.boundary_grace_seconds == 0
+            || fields.max_staleness_slots == 0
+            || fields.max_staleness_seconds == 0
+        {
             return Err(SpecV2Error::InvalidFreshnessPolicy);
         }
         if fields.max_confidence_atoms == 0
@@ -712,6 +715,12 @@ mod tests {
         case.bucket_seconds = MODEL_MAX_BUCKET_SECONDS + 1;
         assert_eq!(SourceSpecV2::new(case), Err(SpecV2Error::InvalidGrid));
 
+        case = fields();
+        case.boundary_grace_seconds = 0;
+        assert_eq!(
+            SourceSpecV2::new(case),
+            Err(SpecV2Error::InvalidFreshnessPolicy)
+        );
         case = fields();
         case.max_staleness_slots = 0;
         assert_eq!(
