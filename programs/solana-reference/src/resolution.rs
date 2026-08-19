@@ -293,7 +293,8 @@ pub struct ResolutionTerms {
     /// Active knot count `K` under the per-degree count rule.
     pub knot_count: u8,
     /// Uniform-spacing declaration: `s` when every gap is `2^s`, else
-    /// [`UNIFORM_SPACING_NONE`]. The knot array stays the semantic owner.
+    /// [`clutch_bspline::UNIFORM_SPACING_NONE`]. The knot array stays the
+    /// semantic owner.
     pub uniform_log2_spacing: u8,
     /// Knot vector: degree-0 interior boundaries `b_0 .. b_{n-2}` (so
     /// `K = n − 1`), or distinct degree-`d` breakpoints with
