@@ -1,16 +1,15 @@
 //! Host execution of the native occupation preflight over canonical sealed
 //! SourceArchive bytes.
 //!
-//! This is intentionally not a `ProgramTest`: no dispatch route or occupation
-//! Resolution account exists yet.  The test does use the exact `clutch-sbf`
-//! source/archive verifier and occupation adapter that an SBF build compiles,
-//! including account key/owner/content checks.  It therefore supports a
-//! HOST-TESTED preflight claim only and explicitly exercises the live STOP.
+//! These host tests isolate the source/archive capability and occupation fold
+//! from the live ProgramTest campaign.  They prove old receipt replay and the
+//! lifetime-bound one-verification view produce the same candidate, including
+//! every v4 persistence field.
 
 use clutch_sbf::{
     native_window::{
-        preflight_sealed_archive, preflight_verified_archive, require_live_persistence,
-        NativeWindowError, NativeWindowFinalizationV1, STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06,
+        preflight_sealed_archive, preflight_verified_archive, NativeWindowError,
+        NativeWindowFinalizationV1, STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06,
         STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07,
     },
     source::{
@@ -290,7 +289,7 @@ fn receipt<'a>(
 }
 
 #[test]
-fn canonical_archive_drives_exact_candidate_but_live_persistence_refuses() {
+fn canonical_archive_drives_the_exact_v4_candidate() {
     let (spec, spec_account, archive, window) = complete_archive(4, 4, 0);
     let terms = occupation_terms(spec, STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06);
     let (receipt, view) = receipt(&spec_account, &archive, window);
@@ -336,10 +335,8 @@ fn canonical_archive_drives_exact_candidate_but_live_persistence_refuses() {
     assert_eq!(&candidate.vector().weights[..4], &[2, 4, 1, 0]);
     assert_eq!(candidate.basis_evaluator_version(), 1);
     assert_eq!(candidate.occupation_summary_version(), 1);
-    assert_eq!(
-        require_live_persistence(candidate),
-        Err(NativeWindowError::LivePersistenceUnavailable)
-    );
+    assert_eq!(candidate.sealed_feed_cursor(), 103);
+    assert_eq!(candidate.repair_generation(), 6);
 }
 
 #[test]

@@ -181,6 +181,9 @@ use clutch_kernel::{
 use clutch_solana_layout::{
     account_len, canonical_market_id, canonical_outcome_id, collateral,
     native_resolution::{NativeResolutionAccount, NATIVE_RESOLUTION_LEN},
+    occupation_resolution::{
+        is_occupation_statistic, OccupationResolutionAccount, OCCUPATION_RESOLUTION_LEN,
+    },
     Hash32, HoardAccount, Intent, MarketAccount, PositionAccount, ProfileAccount,
     ResolutionAccount, SupplyLedgerAccount, TermsAccount, MAX_OUTCOMES, MAX_PAYOUTS,
     PAYOUT_INDEX_UNRESOLVED, PROFILE_FLAG_POLICY_FROZEN,
@@ -676,24 +679,38 @@ fn read_initial_resolution(
     terms_data: &[u8],
     resolution_data: &[u8],
 ) -> Outcome<InitialResolutionFacts> {
-    if terms_basis_degree(terms_data)? == 0 {
-        let value = ResolutionAccount::decode(resolution_data)?;
-        Ok(InitialResolutionFacts {
-            market: value.market,
-            terms: value.terms,
-            feed: value.feed,
-            resolved: value.is_resolved(),
-            stored_bump: value.stored_bump,
-        })
-    } else {
-        let value = NativeResolutionAccount::decode(resolution_data)?;
-        Ok(InitialResolutionFacts {
-            market: value.market,
-            terms: value.terms,
-            feed: value.feed,
-            resolved: value.is_resolved(),
-            stored_bump: value.stored_bump,
-        })
+    match resolution_account_len(terms_data)? {
+        account_len::RESOLUTION => {
+            let value = ResolutionAccount::decode(resolution_data)?;
+            Ok(InitialResolutionFacts {
+                market: value.market,
+                terms: value.terms,
+                feed: value.feed,
+                resolved: value.is_resolved(),
+                stored_bump: value.stored_bump,
+            })
+        }
+        NATIVE_RESOLUTION_LEN => {
+            let value = NativeResolutionAccount::decode(resolution_data)?;
+            Ok(InitialResolutionFacts {
+                market: value.market,
+                terms: value.terms,
+                feed: value.feed,
+                resolved: value.is_resolved(),
+                stored_bump: value.stored_bump,
+            })
+        }
+        OCCUPATION_RESOLUTION_LEN => {
+            let value = OccupationResolutionAccount::decode(resolution_data)?;
+            Ok(InitialResolutionFacts {
+                market: value.market,
+                terms: value.terms,
+                feed: value.feed,
+                resolved: value.is_resolved(),
+                stored_bump: value.stored_bump,
+            })
+        }
+        _ => Err(ClutchError::WrongDataLength.into()),
     }
 }
 
@@ -808,6 +825,13 @@ fn terms_basis_degree(terms_data: &[u8]) -> Outcome<u8> {
     Ok(terms.basis_degree)
 }
 
+#[inline(never)]
+fn terms_statistic(terms_data: &[u8]) -> Outcome<u16> {
+    let mut terms = TermsAccount::ZEROED;
+    TermsAccount::decode_unchecked_into(terms_data, &mut terms)?;
+    Ok(terms.statistic_id)
+}
+
 fn basis_mode_for_degree(degree: u8) -> BasisMode {
     if degree == 0 {
         BasisMode::FinitePreset
@@ -817,11 +841,15 @@ fn basis_mode_for_degree(degree: u8) -> BasisMode {
 }
 
 fn resolution_account_len(terms_data: &[u8]) -> Outcome<usize> {
-    Ok(if terms_basis_degree(terms_data)? == 0 {
-        account_len::RESOLUTION
+    let degree = terms_basis_degree(terms_data)?;
+    if degree == 0 {
+        return Ok(account_len::RESOLUTION);
+    }
+    if is_occupation_statistic(terms_statistic(terms_data)?) {
+        Ok(OCCUPATION_RESOLUTION_LEN)
     } else {
-        NATIVE_RESOLUTION_LEN
-    })
+        Ok(NATIVE_RESOLUTION_LEN)
+    }
 }
 
 /// Compare an encoded kernel account's payout set against an expected set.
@@ -1086,32 +1114,44 @@ fn write_resolution(
     intent: &CreateMarketIntent,
     bump: u8,
 ) -> Outcome<()> {
-    if terms_basis_degree(terms_data)? == 0 {
-        require(
-            data.len() == account_len::RESOLUTION,
-            ClutchError::WrongDataLength,
-        )?;
-        let account = ResolutionAccount {
-            market,
-            terms: intent.terms,
-            feed: intent.feed,
-            window: Hash32::ZERO,
-            feed_cursor: 0,
-            sealed_end_bucket_exclusive: 0,
-            repair_generation: 0,
-            resolved_slot: 0,
-            payout_index: PAYOUT_INDEX_UNRESOLVED,
-            stored_bump: bump,
-            flags: 0,
-        };
-        account.encode(data)?;
-    } else {
-        require(
-            data.len() == NATIVE_RESOLUTION_LEN,
-            ClutchError::WrongDataLength,
-        )?;
-        NativeResolutionAccount::unresolved(market, intent.terms, intent.feed, bump)
-            .encode(data)?;
+    match resolution_account_len(terms_data)? {
+        account_len::RESOLUTION => {
+            require(
+                data.len() == account_len::RESOLUTION,
+                ClutchError::WrongDataLength,
+            )?;
+            let account = ResolutionAccount {
+                market,
+                terms: intent.terms,
+                feed: intent.feed,
+                window: Hash32::ZERO,
+                feed_cursor: 0,
+                sealed_end_bucket_exclusive: 0,
+                repair_generation: 0,
+                resolved_slot: 0,
+                payout_index: PAYOUT_INDEX_UNRESOLVED,
+                stored_bump: bump,
+                flags: 0,
+            };
+            account.encode(data)?;
+        }
+        NATIVE_RESOLUTION_LEN => {
+            require(
+                data.len() == NATIVE_RESOLUTION_LEN,
+                ClutchError::WrongDataLength,
+            )?;
+            NativeResolutionAccount::unresolved(market, intent.terms, intent.feed, bump)
+                .encode(data)?;
+        }
+        OCCUPATION_RESOLUTION_LEN => {
+            require(
+                data.len() == OCCUPATION_RESOLUTION_LEN,
+                ClutchError::WrongDataLength,
+            )?;
+            OccupationResolutionAccount::unresolved(market, intent.terms, intent.feed, bump)
+                .encode(data)?;
+        }
+        _ => return Err(ClutchError::WrongDataLength.into()),
     }
     Ok(())
 }
@@ -1390,9 +1430,9 @@ pub fn validate_initial_plane(
 /// Create the seven-account state plane with a term-selected resolution width.
 ///
 /// The shared categorical constructor remains the exact v2 path. Native
-/// degree-1..=3 terms need the v3 record's 319 bytes, so this path reuses the
-/// shared address and zero-prestate preflight, creates the first six accounts
-/// with the same seeds and widths, and varies only the final Resolution width.
+/// degree-1..=3 terms select the v3 point or v4 occupation width, so this path
+/// reuses the shared address and zero-prestate preflight, creates the first six
+/// accounts with the same seeds and widths, and varies only Resolution.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn create_native_market_state_plane<'info>(
@@ -1403,6 +1443,7 @@ fn create_native_market_state_plane<'info>(
     targets: &MarketStateTargets<'_, 'info>,
     identity: &MarketStateIdentity,
     bumps: &PlaneBumps,
+    resolution_len: usize,
 ) -> Outcome<()> {
     construction::validate_market_state_addresses(program_id, targets, identity, bumps)?;
     construction::preflight_absent_market_state(targets)?;
@@ -1484,7 +1525,7 @@ fn create_native_market_state_plane<'info>(
         targets.resolution,
         system_program,
         rent,
-        NATIVE_RESOLUTION_LEN,
+        resolution_len,
         &[
             seeds::SEED_RESOLUTION,
             &identity.market,
@@ -1650,6 +1691,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             &targets,
             &state_identity,
             &bumps,
+            resolution_len,
         )?;
     }
 
@@ -2942,6 +2984,36 @@ mod tests {
         for degree in 1..=3 {
             assert_eq!(basis_mode_for_degree(degree), BasisMode::DerivedBasis);
         }
+    }
+
+    #[test]
+    fn occupation_statistics_select_only_the_v4_resolution_width() {
+        let mut terms = terms_account(profile_hash());
+        terms.basis_degree = 1;
+        terms.knot_count = 2;
+        terms.knots = [0; clutch_solana_layout::MAX_KNOTS];
+        terms.knots[1] = 1;
+        terms.payout_map = [clutch_solana_layout::PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
+        for statistic in [
+            clutch_solana_layout::occupation_resolution::STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06,
+            clutch_solana_layout::occupation_resolution::STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07,
+        ] {
+            terms.statistic_id = statistic;
+            terms.terms = Hash32::ZERO;
+            terms.terms = terms.recomputed_terms_digest().unwrap();
+            let mut bytes = vec![0_u8; account_len::TERMS];
+            terms.encode(&mut bytes).unwrap();
+            assert_eq!(
+                resolution_account_len(&bytes),
+                Ok(OCCUPATION_RESOLUTION_LEN)
+            );
+        }
+        terms.statistic_id = 1;
+        terms.terms = Hash32::ZERO;
+        terms.terms = terms.recomputed_terms_digest().unwrap();
+        let mut bytes = vec![0_u8; account_len::TERMS];
+        terms.encode(&mut bytes).unwrap();
+        assert_eq!(resolution_account_len(&bytes), Ok(NATIVE_RESOLUTION_LEN));
     }
 
     #[test]

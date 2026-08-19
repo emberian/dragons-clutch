@@ -483,6 +483,8 @@ pub struct TermsFacts {
     pub payout_count: u8,
     /// Frozen B-spline degree; zero selects finite presets, one through three native basis mode.
     pub basis_degree: u8,
+    /// Digest-bound resolution statistic identity.
+    pub statistic_id: u16,
     /// Per-market collateral cap the terms digest commits to.
     pub collateral_cap: u64,
     /// Stored PDA bump.
@@ -725,6 +727,7 @@ pub fn read_terms(data: &[u8]) -> Outcome<TermsFacts> {
         outcome_count: value.outcome_count,
         payout_count: value.payout_count,
         basis_degree: value.basis_degree,
+        statistic_id: value.statistic_id,
         collateral_cap: value.collateral_cap,
         stored_bump: value.stored_bump,
     })

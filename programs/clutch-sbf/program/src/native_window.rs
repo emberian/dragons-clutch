@@ -1,4 +1,4 @@
-//! Fail-closed native B-spline occupation-resolution preflight.
+//! Fail-closed native B-spline occupation-resolution fold.
 //!
 //! This module defines two statistic identities that are distinct from the
 //! terminal/minimum/maximum point statistics and from TWAP:
@@ -17,17 +17,20 @@
 //! them.  A future archive revision can map an authenticated gap record to that
 //! seam without changing the occupation algebra.
 //!
-//! This is deliberately not routed by `dispatch` and writes no account.  The
-//! live 319-byte native Resolution v3 layout means "derived at one point" and
-//! cannot truthfully persist an occupation result.  Consequently
-//! [`require_live_persistence`] always refuses until the separately specified
-//! occupation Resolution ABI is implemented and selected by immutable Terms.
+//! The live Resolve route selects this fold only when immutable degree-one
+//! through degree-three Terms name statistic 6 or 7.  It then persists the
+//! result in the distinct 383-byte occupation Resolution v4 account.  Point
+//! resolution retains its separate 319-byte v3 wire and caller projection;
+//! neither path infers semantics from vector contents.
 
 use clutch_accumulator::{CoveragePolicy, FeedIdentity, Grid, WindowDomain, MAX_VALUE};
 use clutch_bspline::{BasisSpec, EdgePolicy as BasisEdgePolicy};
 use clutch_bspline_accumulator::{
     BasisDomain, Error as AccumulatorError, FinalWeights, FinalizationMode, Summary,
     BASIS_EVALUATOR_VERSION, OCCUPATION_SUMMARY_VERSION,
+};
+pub use clutch_solana_layout::occupation_resolution::{
+    STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06, STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07,
 };
 use clutch_solana_layout::{CodecError, Hash32, PayoutVectorBytes, TermsAccount};
 use clutch_solana_reference::{
@@ -39,19 +42,6 @@ use crate::source_archive::{
     self, ArchiveAccountViewV1, SealedArchiveReceiptV1, SourceArchiveError,
     VerifiedSealedArchiveViewV1, SOURCE_ARCHIVE_MAX_RECORDS_V1,
 };
-
-/// Quantized native basis occupation with componentwise exact averaging only.
-///
-/// This is a separate statistic identity.  It is not terminal, sampled min or
-/// max, TWAP, evaluate-at-TWAP, or exact-rational basis occupation.
-pub const STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06: u16 = 6;
-
-/// Quantized native basis occupation with canonical largest-remainder average.
-///
-/// Floors are awarded residual atoms by descending remainder, with the lowest
-/// outcome index winning an exact tie.  The rule is owned by
-/// `clutch-bspline-accumulator::FinalizationMode::LargestRemainderV1`.
-pub const STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07: u16 = 7;
 
 /// Maximum canonical buckets consumed by this SourceArchive V1 preflight.
 pub const NATIVE_WINDOW_MAX_BUCKETS_V1: usize = SOURCE_ARCHIVE_MAX_RECORDS_V1;
@@ -99,6 +89,14 @@ impl NativeWindowFinalizationV1 {
             Self::LargestRemainderV1 => FinalizationMode::LargestRemainderV1,
         }
     }
+
+    /// Canonical Resolution-v4 wire discriminator for this finalizer.
+    pub const fn wire_id(self) -> u8 {
+        match self {
+            Self::ExactOnly => 1,
+            Self::LargestRemainderV1 => 2,
+        }
+    }
 }
 
 /// Deterministic refusal from occupation-domain admission or archive preflight.
@@ -128,8 +126,6 @@ pub enum NativeWindowError {
     NonCanonicalBucket,
     /// An observation was a genuine interval, so no canonical point exists.
     NonPointObservation,
-    /// No account codec or routed transition can persist this semantic mode yet.
-    LivePersistenceUnavailable,
 }
 
 impl From<CodecError> for NativeWindowError {
@@ -165,6 +161,8 @@ pub struct NativeWindowPreflightV1 {
     finalization: NativeWindowFinalizationV1,
     start_bucket: u64,
     end_bucket_exclusive: u64,
+    sealed_feed_cursor: u64,
+    repair_generation: u64,
     sample_count: u64,
     coverage_count: u64,
     gap_count: u64,
@@ -212,6 +210,16 @@ impl NativeWindowPreflightV1 {
     /// Exclusive final canonical bucket.
     pub const fn end_bucket_exclusive(self) -> u64 {
         self.end_bucket_exclusive
+    }
+
+    /// Feed cursor authenticated when the canonical archive was sealed.
+    pub const fn sealed_feed_cursor(self) -> u64 {
+        self.sealed_feed_cursor
+    }
+
+    /// Exact repair generation selected by immutable Terms.
+    pub const fn repair_generation(self) -> u64 {
+        self.repair_generation
     }
 
     /// Number of canonical buckets, including explicit gaps.
@@ -381,6 +389,8 @@ fn finalize_preflight(
         finalization,
         start_bucket: summary.start_bucket(),
         end_bucket_exclusive: summary.end_bucket_exclusive(),
+        sealed_feed_cursor: receipt.sealed_feed_cursor(),
+        repair_generation: terms.repair_generation,
         sample_count: summary.sample_count(),
         coverage_count: summary.coverage_count(),
         gap_count: summary.gap_count(),
@@ -388,17 +398,6 @@ fn finalize_preflight(
         occupation_summary_version: OCCUPATION_SUMMARY_VERSION,
         vector,
     })
-}
-
-/// Executable promotion gate for the currently missing persistence/routing ABI.
-///
-/// Returning the candidate does not make it consensus evidence.  This
-/// function remains an unconditional refusal until a non-point Resolution
-/// account mode, retry codec, dispatch route, and consumer audit land together.
-pub const fn require_live_persistence(
-    _candidate: NativeWindowPreflightV1,
-) -> Result<(), NativeWindowError> {
-    Err(NativeWindowError::LivePersistenceUnavailable)
 }
 
 #[inline(never)]

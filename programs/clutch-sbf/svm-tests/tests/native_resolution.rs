@@ -1,12 +1,13 @@
-//! Native degree-one through degree-three resolution against the real SBF ELF.
+//! Native degree-one through degree-three point and occupation resolution
+//! against the real SBF ELF.
 //!
 //! These focused scenarios install a version-three Resolution account at
 //! genesis so hostile resolved and near-resolved prestates can be constructed
-//! directly. Production `CreateMarket` separately selects the 165-byte v2
-//! record for degree zero and the 319-byte v3 record for degrees one through
-//! three. This campaign isolates the resolution claim: the real program
-//! derives the exact vector, persists it once, replays it idempotently, and
-//! reconstructs it ephemerally for an exact fractional internal redemption.
+//! directly. Production `CreateMarket` separately selects v2 categorical, v3
+//! native point, or v4 native occupation by immutable Terms. This campaign
+//! isolates the resolution claim: the real program derives the exact vector,
+//! persists it once, replays it idempotently, and reconstructs it ephemerally
+//! for exact fractional internal and bearer redemption.
 
 use {
     clutch_kernel::{PayoutSet, PayoutVector, MAX_PAYOUTS},
@@ -16,6 +17,13 @@ use {
         native_resolution::{
             NativeResolutionAccount, NATIVE_RESOLUTION_LEN, RESOLUTION_MODE_DERIVED_POINT,
             RESOLUTION_MODE_PRESET,
+        },
+        occupation_resolution::{
+            OccupationResolutionAccount, OCCUPATION_BASIS_EVALUATOR_VERSION,
+            OCCUPATION_FINALIZATION_EXACT_ONLY, OCCUPATION_FINALIZATION_LARGEST_REMAINDER_V1,
+            OCCUPATION_RESOLUTION_LEN, OCCUPATION_SUMMARY_VERSION,
+            RESOLUTION_MODE_DERIVED_QUANTIZED_OCCUPATION, STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06,
+            STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07,
         },
         Hash32, HoardAccount, Intent, MarketAccount, PayoutVectorBytes, PositionAccount,
         SupplyLedgerAccount, TermsAccount, MAX_KNOTS, MAX_OUTCOMES, PAYOUT_INDEX_UNRESOLVED,
@@ -237,6 +245,70 @@ fn smooth_plane_with_external(
     plane
 }
 
+/// Select the distinct occupation statistic and v4 account without changing
+/// the v3 point fixture used by the existing campaign.
+fn occupation_plane_with_external(
+    actor: Address,
+    degree: u8,
+    low: u128,
+    high: u128,
+    external_quantity: u64,
+) -> Plane {
+    occupation_plane_with_statistic(
+        actor,
+        degree,
+        low,
+        high,
+        external_quantity,
+        STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06,
+    )
+}
+
+fn occupation_plane_with_statistic(
+    actor: Address,
+    degree: u8,
+    low: u128,
+    high: u128,
+    external_quantity: u64,
+    statistic: u16,
+) -> Plane {
+    let mut plane = smooth_plane_with_external(actor, degree, low, high, external_quantity);
+    let old_terms_address = plane.terms.address;
+    let market_address = plane.market.address;
+    let resolution_address = plane.resolution.address;
+    let mut terms = TermsAccount::decode(&account_mut(&mut plane, old_terms_address).data)
+        .expect("point terms decode");
+    terms.statistic_id = statistic;
+    terms.terms = Hash32::ZERO;
+    terms.terms = terms
+        .recomputed_terms_digest()
+        .expect("occupation terms digest");
+    let realm = plane.realm_id.bytes();
+    let terms_id = terms.terms.bytes();
+    let terms_pda = derive(&[seeds::SEED_TERMS, &realm, &terms_id]);
+    terms.stored_bump = terms_pda.bump;
+    let terms_account = account_mut(&mut plane, old_terms_address);
+    terms_account.address = terms_pda.address;
+    terms_account.data = encode(account_len::TERMS, |out| terms.encode(out));
+    plane.terms = terms_pda;
+    plane.terms_id = terms.terms;
+
+    let mut market = MarketAccount::decode(&account_mut(&mut plane, market_address).data)
+        .expect("market decodes");
+    market.terms = terms.terms;
+    account_mut(&mut plane, market_address).data =
+        encode(account_len::MARKET, |out| market.encode(out));
+    let unresolved = OccupationResolutionAccount::unresolved(
+        plane.market_id,
+        terms.terms,
+        plane.feed_id,
+        plane.resolution.bump,
+    );
+    account_mut(&mut plane, resolution_address).data =
+        encode(OCCUPATION_RESOLUTION_LEN, |out| unresolved.encode(out));
+    plane
+}
+
 fn collateral_mint_bytes(supply: u64) -> Vec<u8> {
     let mut out = vec![0_u8; 82];
     out[36..44].copy_from_slice(&supply.to_le_bytes());
@@ -268,6 +340,27 @@ impl Scenario {
         let actor = actor_keypair();
         let plane = smooth_plane_with_external(actor.pubkey(), degree, 4, 4, external_quantity);
         Self::start_plane(actor, plane, external_quantity, destination_amount, None).await
+    }
+
+    async fn start_occupation(
+        degree: u8,
+        low: u128,
+        high: u128,
+        external_quantity: u64,
+        destination_amount: u64,
+        hostile_supply: Option<(usize, u64)>,
+    ) -> Self {
+        let actor = actor_keypair();
+        let plane =
+            occupation_plane_with_external(actor.pubkey(), degree, low, high, external_quantity);
+        Self::start_plane(
+            actor,
+            plane,
+            external_quantity,
+            destination_amount,
+            hostile_supply,
+        )
+        .await
     }
 
     async fn start_external_resolved(
@@ -510,6 +603,36 @@ impl Scenario {
         Instruction::new_with_bytes(PROGRAM_ID, &data, metas)
     }
 
+    fn resolve_occupation(&self) -> Instruction {
+        let mut data = vec![0xd1, 1];
+        data.extend_from_slice(&0_u64.to_le_bytes());
+        data.push(1);
+        data.push(PAYOUT_INDEX_UNRESOLVED);
+        let mut metas = vec![
+            AccountMeta::new_readonly(self.actor.pubkey(), true),
+            AccountMeta::new(self.plane.market.address, false),
+            AccountMeta::new_readonly(self.plane.hoard.address, false),
+            AccountMeta::new(self.plane.kernel.address, false),
+            AccountMeta::new(self.plane.supply.address, false),
+            AccountMeta::new_readonly(self.plane.terms.address, false),
+            AccountMeta::new(self.plane.resolution.address, false),
+            AccountMeta::new_readonly(self.plane.feed.address, false),
+            AccountMeta::new_readonly(self.plane.source_spec.address, false),
+            AccountMeta::new_readonly(self.plane.source_archive.address, false),
+        ];
+        metas.extend(
+            self.plane
+                .outcome_mints
+                .iter()
+                .map(|mint| AccountMeta::new_readonly(mint.address, false)),
+        );
+        assert_eq!(
+            metas.len(),
+            observe_resolve::OCCUPATION_RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES)
+        );
+        Instruction::new_with_bytes(PROGRAM_ID, &data, metas)
+    }
+
     fn redeem(&self, sequence: u64, outcome: u8, quantity: u64) -> Instruction {
         let mut data = vec![0xd1, 1];
         data.extend_from_slice(&sequence.to_le_bytes());
@@ -616,12 +739,15 @@ impl Scenario {
     }
 
     async fn data(&mut self, address: Address) -> Vec<u8> {
+        self.account(address).await.data
+    }
+
+    async fn account(&mut self, address: Address) -> Account {
         self.banks
             .get_account(address)
             .await
             .unwrap()
             .expect("account exists")
-            .data
     }
 
     async fn token_amount(&mut self, address: Address) -> u64 {
@@ -680,6 +806,78 @@ fn force_resolved_plane(mut plane: Plane, resolution: Vec<u8>) -> Plane {
         });
     account_mut(&mut plane, resolution_address).data = resolution;
     plane
+}
+
+fn occupation_record(
+    plane: &Plane,
+    degree: u8,
+    archive_commitment: Hash32,
+) -> OccupationResolutionAccount {
+    let terms = TermsAccount::decode(
+        &plane
+            .accounts
+            .iter()
+            .find(|account| account.address == plane.terms.address)
+            .expect("terms account")
+            .data,
+    )
+    .expect("occupation terms decode");
+    let archive = &plane
+        .accounts
+        .iter()
+        .find(|account| account.address == plane.source_archive.address)
+        .expect("source archive account")
+        .data;
+    let u64_at = |offset: usize| {
+        u64::from_le_bytes(
+            archive[offset..offset + 8]
+                .try_into()
+                .expect("archive u64 field"),
+        )
+    };
+    OccupationResolutionAccount {
+        market: plane.market_id,
+        terms: terms.terms,
+        feed: terms.feed,
+        window: plane.window_id,
+        feed_cursor: u64_at(408),
+        sealed_end_bucket_exclusive: u64_at(368),
+        repair_generation: terms.repair_generation,
+        resolved_slot: 0,
+        mode: RESOLUTION_MODE_DERIVED_QUANTIZED_OCCUPATION,
+        payout_index: PAYOUT_INDEX_UNRESOLVED,
+        outcome_count: OUTCOMES,
+        resolved_value: 0,
+        vector: PayoutVectorBytes {
+            denominator: DENOMINATOR,
+            weights: expected_weights(degree),
+        },
+        archive_commitment,
+        statistic: STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06,
+        finalization: OCCUPATION_FINALIZATION_EXACT_ONLY,
+        basis_evaluator_version: OCCUPATION_BASIS_EVALUATOR_VERSION,
+        occupation_summary_version: OCCUPATION_SUMMARY_VERSION,
+        sample_count: terms.expected_span().expect("bounded span"),
+        coverage_count: terms.expected_span().expect("bounded span"),
+        gap_count: 0,
+        stored_bump: plane.resolution.bump,
+        flags: 0,
+        reserved: 0,
+    }
+}
+
+fn source_archive_commitment(plane: &Plane) -> Hash32 {
+    let archive = &plane
+        .accounts
+        .iter()
+        .find(|account| account.address == plane.source_archive.address)
+        .expect("source archive account")
+        .data;
+    Hash32::from_bytes(
+        archive[472..504]
+            .try_into()
+            .expect("source archive commitment field"),
+    )
 }
 
 #[tokio::test]
@@ -1060,4 +1258,318 @@ async fn native_bearer_exit_rejects_hostile_roles_modes_windows_and_mint_vectors
         .await
         .0
         .is_err());
+}
+
+#[tokio::test]
+async fn occupation_degrees_one_through_three_persist_retry_and_redeem_v4() {
+    for degree in 1..=3 {
+        let mut scenario = Scenario::start_occupation(degree, 4, 4, 0, 0, None).await;
+        assert_eq!(
+            scenario.resolve_occupation().accounts.len(),
+            observe_resolve::OCCUPATION_RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES)
+        );
+        let resolution_account = scenario.account(scenario.plane.resolution.address).await;
+        assert_eq!(resolution_account.data.len(), OCCUPATION_RESOLUTION_LEN);
+        assert_eq!(
+            resolution_account.lamports,
+            Rent::default()
+                .minimum_balance(OCCUPATION_RESOLUTION_LEN)
+                .max(1)
+        );
+
+        let (result, resolve_units) = scenario.try_send(scenario.resolve_occupation()).await;
+        result.expect("occupation resolve succeeds");
+        let record_bytes = scenario.data(scenario.plane.resolution.address).await;
+        let record = OccupationResolutionAccount::decode(&record_bytes)
+            .expect("v4 occupation record decodes");
+        assert_eq!(record.mode, RESOLUTION_MODE_DERIVED_QUANTIZED_OCCUPATION);
+        assert_eq!(record.resolved_value, 0);
+        assert_eq!(record.outcome_count, OUTCOMES);
+        assert_eq!(record.vector.denominator, DENOMINATOR);
+        assert_eq!(record.vector.weights, expected_weights(degree));
+        assert_eq!(
+            record.archive_commitment,
+            source_archive_commitment(&scenario.plane)
+        );
+        assert_eq!(record.statistic, STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06);
+        assert_eq!(record.finalization, OCCUPATION_FINALIZATION_EXACT_ONLY);
+        assert_eq!(
+            (record.sample_count, record.coverage_count, record.gap_count),
+            (3, 3, 0)
+        );
+
+        let retry_watched = [
+            scenario.plane.market.address,
+            scenario.plane.kernel.address,
+            scenario.plane.supply.address,
+            scenario.plane.resolution.address,
+        ];
+        let before_retry = snapshot(&mut scenario, &retry_watched).await;
+        let (retry, retry_units) = scenario.try_send(scenario.resolve_occupation()).await;
+        retry.expect("exact occupation retry is idempotent");
+        assert_eq!(snapshot(&mut scenario, &retry_watched).await, before_retry);
+
+        let lot = exact_lot(degree);
+        let watched = [
+            scenario.plane.position.address,
+            scenario.plane.hoard.address,
+            scenario.plane.kernel.address,
+            scenario.plane.supply.address,
+            scenario.plane.replay.address,
+            scenario.plane.resolution.address,
+        ];
+        let before_sub_lot = snapshot(&mut scenario, &watched).await;
+        assert!(scenario
+            .try_send(scenario.redeem(0, 0, lot - 1))
+            .await
+            .0
+            .is_err());
+        assert_eq!(snapshot(&mut scenario, &watched).await, before_sub_lot);
+
+        let (redeemed, redeem_units) = scenario.try_send(scenario.redeem(0, 0, lot)).await;
+        redeemed.expect("occupation vector redeems an exact internal lot");
+        let position =
+            PositionAccount::decode(&scenario.data(scenario.plane.position.address).await)
+                .expect("position decodes");
+        assert_eq!(position.internal[0], SETS - lot);
+        assert_eq!(position.cash_atoms, CASH_ATOMS + 1);
+        assert_eq!(
+            scenario.data(scenario.plane.resolution.address).await,
+            record_bytes
+        );
+        println!(
+            "occupation-v4 d{degree}: accounts={} resolution_bytes={} rent={} resolve={resolve_units} CU retry={retry_units} CU internal={redeem_units} CU",
+            observe_resolve::OCCUPATION_RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES),
+            OCCUPATION_RESOLUTION_LEN,
+            Rent::default().minimum_balance(OCCUPATION_RESOLUTION_LEN),
+        );
+    }
+}
+
+#[tokio::test]
+async fn occupation_statistic_seven_routes_only_its_named_finalizer() {
+    let actor = actor_keypair();
+    let plane = occupation_plane_with_statistic(
+        actor.pubkey(),
+        2,
+        4,
+        4,
+        0,
+        STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07,
+    );
+    let mut scenario = Scenario::start_custom(plane, 0, 0).await;
+    let (result, units) = scenario.try_send(scenario.resolve_occupation()).await;
+    result.expect("statistic seven occupation resolves through v4");
+    let record = OccupationResolutionAccount::decode(
+        &scenario.data(scenario.plane.resolution.address).await,
+    )
+    .expect("v4 statistic-seven record");
+    assert_eq!(
+        record.statistic,
+        STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07
+    );
+    assert_eq!(
+        record.finalization,
+        OCCUPATION_FINALIZATION_LARGEST_REMAINDER_V1
+    );
+    assert_eq!(record.vector.weights, expected_weights(2));
+    println!("occupation-v4 statistic-7 named finalizer: {units} CU");
+}
+
+#[tokio::test]
+async fn occupation_bearer_exit_uses_live_v4_and_exact_lots() {
+    for degree in 1..=3 {
+        let lot = exact_lot(degree);
+        let mut scenario = Scenario::start_occupation(degree, 4, 4, lot, 0, None).await;
+        scenario
+            .try_send(scenario.resolve_occupation())
+            .await
+            .0
+            .expect("occupation resolves before bearer exit");
+        let watched = [
+            scenario.plane.hoard.address,
+            scenario.plane.kernel.address,
+            scenario.plane.supply.address,
+            scenario.plane.resolution.address,
+            scenario.plane.position.address,
+            scenario.plane.hoard_token.address,
+            ACTOR_TOKEN,
+            OUTCOME_SOURCE,
+            scenario.plane.outcome_mints[0].address,
+        ];
+        let before_sub_lot = snapshot(&mut scenario, &watched).await;
+        assert!(scenario
+            .try_send(scenario.external_exit(lot - 1))
+            .await
+            .0
+            .is_err());
+        assert_eq!(snapshot(&mut scenario, &watched).await, before_sub_lot);
+
+        let record_before = scenario.data(scenario.plane.resolution.address).await;
+        let position_before = scenario.data(scenario.plane.position.address).await;
+        let (result, units) = scenario.try_send(scenario.external_exit(lot)).await;
+        result.expect("occupation bearer exit consumes an exact lot");
+        assert_eq!(scenario.token_amount(OUTCOME_SOURCE).await, 0);
+        assert_eq!(scenario.token_amount(ACTOR_TOKEN).await, 1);
+        assert_eq!(
+            scenario.data(scenario.plane.resolution.address).await,
+            record_before
+        );
+        assert_eq!(
+            scenario.data(scenario.plane.position.address).await,
+            position_before,
+            "bearer exit remains positionless"
+        );
+        println!("occupation-v4 d{degree} external exact lot {lot}: {units} CU");
+    }
+}
+
+#[tokio::test]
+async fn occupation_midpoints_gaps_substitution_modes_and_conflicts_refuse_atomically() {
+    for degree in 1..=3 {
+        let mut midpoint = Scenario::start_occupation(degree, 3, 5, 0, 0, None).await;
+        let watched = [
+            midpoint.plane.market.address,
+            midpoint.plane.kernel.address,
+            midpoint.plane.supply.address,
+            midpoint.plane.resolution.address,
+        ];
+        let before = snapshot(&mut midpoint, &watched).await;
+        assert!(midpoint
+            .try_send(midpoint.resolve_occupation())
+            .await
+            .0
+            .is_err());
+        assert_eq!(snapshot(&mut midpoint, &watched).await, before);
+    }
+
+    let mut substituted = Scenario::start_occupation(2, 4, 4, 0, 0, None).await;
+    let watched = [
+        substituted.plane.market.address,
+        substituted.plane.kernel.address,
+        substituted.plane.supply.address,
+        substituted.plane.resolution.address,
+    ];
+    let before = snapshot(&mut substituted, &watched).await;
+    let mut wrong_archive = substituted.resolve_occupation();
+    wrong_archive.accounts[9] = AccountMeta::new_readonly(SUBSTITUTE_ARCHIVE, false);
+    assert!(substituted.try_send(wrong_archive).await.0.is_err());
+    let mut redundant_projection = substituted.resolve_occupation();
+    redundant_projection
+        .accounts
+        .insert(10, AccountMeta::new_readonly(BUFFER_ACCOUNT, false));
+    assert!(substituted.try_send(redundant_projection).await.0.is_err());
+    assert_eq!(snapshot(&mut substituted, &watched).await, before);
+
+    let actor = actor_keypair();
+    let mut missing = occupation_plane_with_external(actor.pubkey(), 2, 4, 4, 0);
+    let archive_address = missing.source_archive.address;
+    account_mut(&mut missing, archive_address).data[3] = 2;
+    let mut missing = Scenario::start_custom(missing, 0, 0).await;
+    let watched = [
+        missing.plane.market.address,
+        missing.plane.kernel.address,
+        missing.plane.supply.address,
+        missing.plane.resolution.address,
+    ];
+    let before = snapshot(&mut missing, &watched).await;
+    assert!(missing
+        .try_send(missing.resolve_occupation())
+        .await
+        .0
+        .is_err());
+    assert_eq!(snapshot(&mut missing, &watched).await, before);
+
+    let actor = actor_keypair();
+    let mut wrong_len = occupation_plane_with_external(actor.pubkey(), 2, 4, 4, 0);
+    let terms = TermsAccount::decode(
+        &wrong_len
+            .accounts
+            .iter()
+            .find(|account| account.address == wrong_len.terms.address)
+            .expect("terms account")
+            .data,
+    )
+    .unwrap();
+    let v3 = NativeResolutionAccount::unresolved(
+        wrong_len.market_id,
+        terms.terms,
+        terms.feed,
+        wrong_len.resolution.bump,
+    );
+    let resolution_address = wrong_len.resolution.address;
+    account_mut(&mut wrong_len, resolution_address).data =
+        encode(NATIVE_RESOLUTION_LEN, |out| v3.encode(out));
+    let mut wrong_len = Scenario::start_custom(wrong_len, 0, 0).await;
+    assert!(wrong_len
+        .try_send(wrong_len.resolve_occupation())
+        .await
+        .0
+        .is_err());
+
+    let actor = actor_keypair();
+    let mut wrong_mode = occupation_plane_with_external(actor.pubkey(), 2, 4, 4, 0);
+    let resolution_address = wrong_mode.resolution.address;
+    account_mut(&mut wrong_mode, resolution_address).data[162] = 2;
+    let mut wrong_mode = Scenario::start_custom(wrong_mode, 0, 0).await;
+    assert!(wrong_mode
+        .try_send(wrong_mode.resolve_occupation())
+        .await
+        .0
+        .is_err());
+
+    let actor = actor_keypair();
+    let plane = occupation_plane_with_external(actor.pubkey(), 2, 4, 4, 0);
+    let conflict = occupation_record(&plane, 2, Hash32::from_bytes([0x92; 32]));
+    let bytes = encode(OCCUPATION_RESOLUTION_LEN, |out| conflict.encode(out));
+    let mut conflict = Scenario::start_custom(force_resolved_plane(plane, bytes), 0, 0).await;
+    let resolution_before = conflict.data(conflict.plane.resolution.address).await;
+    assert!(conflict
+        .try_send(conflict.resolve_occupation())
+        .await
+        .0
+        .is_err());
+    assert_eq!(
+        conflict.data(conflict.plane.resolution.address).await,
+        resolution_before
+    );
+}
+
+#[tokio::test]
+async fn occupation_late_resolve_and_bearer_failures_roll_back() {
+    let mut resolve = Scenario::start_occupation(3, 4, 4, 0, 0, Some((0, u64::MAX))).await;
+    let watched = [
+        resolve.plane.market.address,
+        resolve.plane.kernel.address,
+        resolve.plane.supply.address,
+        resolve.plane.resolution.address,
+    ];
+    let before = snapshot(&mut resolve, &watched).await;
+    assert!(resolve
+        .try_send(resolve.resolve_occupation())
+        .await
+        .0
+        .is_err());
+    assert_eq!(snapshot(&mut resolve, &watched).await, before);
+
+    let lot = exact_lot(3);
+    let mut bearer = Scenario::start_occupation(3, 4, 4, lot, u64::MAX, None).await;
+    bearer
+        .try_send(bearer.resolve_occupation())
+        .await
+        .0
+        .expect("occupation resolves before late bearer failure");
+    let watched = [
+        bearer.plane.hoard.address,
+        bearer.plane.kernel.address,
+        bearer.plane.supply.address,
+        bearer.plane.resolution.address,
+        bearer.plane.hoard_token.address,
+        ACTOR_TOKEN,
+        OUTCOME_SOURCE,
+        bearer.plane.outcome_mints[0].address,
+    ];
+    let before = snapshot(&mut bearer, &watched).await;
+    assert!(bearer.try_send(bearer.external_exit(lot)).await.0.is_err());
+    assert_eq!(snapshot(&mut bearer, &watched).await, before);
 }

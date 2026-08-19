@@ -77,6 +77,9 @@ use clutch_solana_layout::{
     Hash32, MarketAccount, PayoutVectorBytes, TermsAccount, MAX_KNOTS, MAX_OUTCOMES, MAX_PAYOUTS,
 };
 
+pub use clutch_solana_layout::occupation_resolution::{
+    STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06, STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07,
+};
 pub use clutch_solana_layout::PAYOUT_MAP_UNUSED;
 
 /// Registered statistic: the terminal accepted interval of the sealed window.
@@ -435,7 +438,11 @@ impl ResolutionTerms {
     fn validate_degree_zero(&self, cells: usize) -> Result<(), ResolutionRefusal> {
         match self.statistic {
             STAT_TERMINAL_01 | STAT_SAMPLED_MIN_02 | STAT_SAMPLED_MAX_03 | STAT_TWAP_04 => {}
-            STAT_RELATIVE_TERMINAL_TWAP_05 => return Err(ResolutionRefusal::StatisticUnsupported),
+            STAT_RELATIVE_TERMINAL_TWAP_05
+            | STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06
+            | STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07 => {
+                return Err(ResolutionRefusal::StatisticUnsupported)
+            }
             _ => return Err(ResolutionRefusal::TermsMalformed),
         }
         // The §2.2 partition already covers the whole admitted value domain,
@@ -478,7 +485,11 @@ impl ResolutionTerms {
 
     fn validate_derived(&self) -> Result<(), ResolutionRefusal> {
         match self.statistic {
-            STAT_TERMINAL_01 | STAT_SAMPLED_MIN_02 | STAT_SAMPLED_MAX_03 => {}
+            STAT_TERMINAL_01
+            | STAT_SAMPLED_MIN_02
+            | STAT_SAMPLED_MAX_03
+            | STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06
+            | STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07 => {}
             // §2.6: TWAP with degree >= 1 is deferred until an overflow-proof
             // comparison path exists; it stays registered and refused.
             STAT_TWAP_04 | STAT_RELATIVE_TERMINAL_TWAP_05 => {
@@ -617,6 +628,10 @@ impl ResolutionTerms {
                     .sampled_max()
                     .ok_or(ResolutionRefusal::NoAcceptedCoverage)?;
                 Ok((interval.low(), interval.high()))
+            }
+            STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06
+            | STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07 => {
+                Err(ResolutionRefusal::StatisticUnsupported)
             }
             _ => Err(ResolutionRefusal::StatisticUnsupported),
         }
@@ -931,5 +946,36 @@ mod native_bspline_tests {
             nonuniform.validate(),
             Err(ResolutionRefusal::BasisMalformed)
         );
+    }
+
+    #[test]
+    fn occupation_statistics_are_registered_but_never_point_derived() {
+        let point = window(domain(), 2, 2);
+        for statistic in [
+            STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06,
+            STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07,
+        ] {
+            let mut terms = derived_terms(2);
+            terms.statistic = statistic;
+            assert_eq!(terms.validate(), Ok(()));
+            assert_eq!(
+                derive_payout_vector(&terms, &point),
+                Err(ResolutionRefusal::StatisticUnsupported)
+            );
+
+            terms.basis_degree = 0;
+            terms.cell_count = 2;
+            terms.knot_count = 1;
+            terms.knots = [0; MAX_KNOTS];
+            terms.knots[0] = 4;
+            terms.uniform_log2_spacing = clutch_bspline::UNIFORM_SPACING_NONE;
+            terms.payout_map = [PAYOUT_MAP_UNUSED; MAX_CELLS];
+            terms.payout_map[0] = 0;
+            terms.payout_map[1] = 0;
+            assert_eq!(
+                terms.validate(),
+                Err(ResolutionRefusal::StatisticUnsupported)
+            );
+        }
     }
 }

@@ -1,8 +1,8 @@
 # Native quantized-basis occupation resolution V1
 
-Status: **executable host preflight / live persistence and routing STOP**, 2026-08-19.
+Status: **routed Resolution-v4 SBF subset / source ingestion and internal-buffer STOP**, 2026-08-19.
 
-Semantic owner: `crates/clutch-bspline-accumulator`.  Runtime preflight:
+Semantic owner: `crates/clutch-bspline-accumulator`. Runtime fold:
 `programs/clutch-sbf/program/src/native_window.rs`.
 
 ## 1. What is defined
@@ -87,25 +87,25 @@ append, and final conversion with `#[inline(never)]`; this is an engineering
 measure, not SBF frame evidence.  `cargo-build-sbf` must still report no frame
 over 4,096 bytes on the joined source.
 
-The present preflight uses the existing `archived_observation` capability for
-each record.  That function conservatively recomputes the 2,560-byte page
-commitment on each call.  This is bounded but needlessly expensive for a live
-instruction.  The production source/archive seam should return a lifetime-
-bound verified page view after one commitment check and expose indexed record
-reads through that view.  It must not replace the repeated check with an
-unchecked slice or caller assertion.
+The live route obtains `VerifiedSealedArchiveViewV1<'a>` only after one complete
+key/owner/lineage/seal/commitment verification. Its private constructor and
+borrowed lifetime prevent an unchecked slice escape or mutation during the
+fold. Indexed reads remain bounded by the authenticated record count and do
+not rehash the page.
 
-No CU number is claimed.  Host tests do not measure SBF compute, and this
-module is not routed into the bank fixture.
+Final-LTO SBF diagnostics name no `clutch_sbf` function over the 4,096-byte
+frame limit. This is narrower than saying every backend diagnostic is clean:
+known nonresident reference/layout functions still appear before final LTO and
+must be classified by the artifact audit.
 
-## 4. Exact remaining live ABI
+## 4. Live ABI
 
 The existing 319-byte native Resolution v3 record means
 `RESOLUTION_MODE_DERIVED_POINT`: its `resolved_value: u128` is the exact point
 from which the vector must be rederived.  Writing an occupation vector into
 that mode with `resolved_value = 0`, an average coordinate, a midpoint, or a
-sentinel would overload point semantics.  `require_live_persistence` therefore
-returns `LivePersistenceUnavailable` for every preflight candidate.
+sentinel would overload point semantics. The routed statistic-6/7 path instead
+requires the separate v4 shape below.
 
 The required occupation record is Resolution v4, exact length **383 bytes**.
 It preserves the v3 prefix through the vector and adds 64 bytes of occupation
@@ -179,33 +179,52 @@ Occupation folds the canonical archive directly and accepts no duplicate
 caller projection.  The SourceSpec and SourceArchive PDA derivations remain
 the ones already selected by Terms feed and canonical window id.
 
-### Required code joins
+Market construction selects v4 only for digest-bound statistic 6/7 and funds
+its exact 383 bytes from runtime Rent. Resolve accepts the ten-account prefix
+above, verifies the canonical sealed page once, folds it, writes v4, and drives
+the native kernel with the record-owned vector. Exact retry must rederive the
+same record. Internal and external consumers decode v3 or v4 from Terms-selected
+semantics and reconstruct the chosen vector only ephemerally.
 
-Promotion requires one serialized change after the concurrent source/native
-lanes settle:
+## 5. SBF evidence and remaining STOPs
 
-1. add and hostile-test the 383-byte v4 codec;
-2. make market construction choose v4 for statistic 6/7 and use runtime Rent
-   for the exact 64-byte increase over v3;
-3. expose a one-verification, lifetime-bound sealed archive record view;
-4. route statistic 6/7 directly from the ten-account plane to this fold;
-5. persist/retry v4 and resolve the kernel with its vector;
-6. audit every post-resolution consumer for explicit v3/v4 mode handling;
-7. run exact/sub-lot internal and bearer redemption for degrees 1, 2, and 3;
-8. add hostile interval, gap, wrong archive commitment, wrong mode/version,
-   wrong Terms, repeated resolve, and late-failure rollback cases; and
-9. rebuild one SBF ELF and record per-degree resolve/retry/redemption CU,
-   transaction account count, 383-byte rent, frame diagnostics, and ELF digest.
+The real-ELF ProgramTest campaign keeps the existing v3 point cases and adds
+three independent occupation degrees. Each v4 Resolve has 14 transaction
+accounts (ten fixed accounts plus four canonical outcome mints), a 383-byte
+Resolution account, and a runtime rent minimum of 3,556,560 lamports.
 
-## 5. Evidence and STOP
+| degree | Resolve CU | exact retry CU | internal exact-lot CU | bearer exact-lot CU |
+|---:|---:|---:|---:|---:|
+| 1 | 1,256,230 | 1,102,616 | 699,964 | 783,687 |
+| 2 | 1,321,201 | 1,167,587 | 703,364 | 786,987 |
+| 3 | 1,374,893 | 1,221,279 | 701,304 | 784,692 |
 
-The isolated tests exercise statistic separation, no-midpoint refusal,
-explicit-gap retention, associativity, exact-only refusal, canonical largest
-remainder, archive ownership/content capability use, and the unconditional
-live-persistence refusal.  They are **HOST-TESTED** evidence once run.
+A separate degree-two statistic-7 transaction records finalization byte 2 and
+measures 1,319,677 CU. The table's degree sweep uses statistic 6; host algebra
+tests independently exercise a non-exact average where statistic 6 refuses and
+statistic 7 applies the canonical lowest-index-tie largest-remainder rule.
 
-There is currently no routed instruction, v4 codec, bank transaction, CU
-measurement, rent measurement, or SBF ELF evidence for this mode.  It must not
-be described as live resolution, and statistic ids 6/7 must not be used to
-found a value-bearing market until the entire ABI and joined bank gate above
-lands.
+The same real-bank test refuses positive-width observations instead of taking
+a midpoint; refuses an incomplete/gapped V1 page, a same-byte substitute
+archive at the wrong key, a redundant caller projection, the v3 length, a
+wrong v4 mode, and a conflicting archive commitment; and proves late Resolve
+and bearer failures roll back all watched accounts. Exact/sub-lot internal and
+bearer cases run for degrees one through three. Blank-bank construction also
+creates an unresolved statistic-6 v4 account and measures 932,585 CU.
+
+These measurements are close to the 1.4M test ceiling: degree-three Resolve has
+only 25,107 CU of raw margin and no 25% operating headroom. They establish the
+tested three-record fixture, not a liveness claim for every admitted 32-record
+archive. A production admission profile still needs a measured span/degree CU
+policy or further optimization.
+
+Two independent operatorless gaps remain outside this cut:
+
+- provider ingestion and public SourceArchive construction are not routed; the
+  real-bank archive is canonical and verified but installed at genesis, so this
+  is not a provider-ingestion claim; and
+- `RedeemInternal` still requires a Feed and program-owned caller evidence
+  buffer even after v3/v4 Resolution is immutable. The bank fixture installs
+  that empty buffer at genesis because there is no public constructor. Bearer
+  redemption does not have this dependency. A recorded-resolution-only
+  internal account plane remains required.

@@ -8,12 +8,12 @@
 //! registry and construct every account view from `AccountInfo`, never from
 //! instruction bytes.
 //!
-//! The live `FeedAdvance` and `Resolve` instructions do not call this module
-//! yet.  [`verify_sealed_archive`] is the narrow join intended for the latter:
-//! it authenticates the archive account's key and owner, its source/spec/grid/
-//! window lineage, every record link, and its recomputed commitment before it
-//! returns a [`SealedArchiveReceiptV1`].  A same-domain caller buffer at another
-//! key or under another owner therefore cannot produce that receipt.
+//! The live `Resolve` instruction authenticates the canonical account through
+//! [`verify_recorded_sealed_archive_view`] before either projecting point
+//! evidence or folding occupation evidence.  The verifier checks the account
+//! key and owner, source/spec/grid/window lineage, every record link, seal, and
+//! recomputed commitment.  A same-domain caller buffer at another key or under
+//! another owner therefore cannot produce its lifetime-bound capability.
 
 pub use clutch_accumulator::{CoveragePolicy, FeedIdentity, Grid, WindowDomain};
 use clutch_accumulator::{Observation, WINDOW_DOMAIN_BYTES, WINDOW_DOMAIN_TAG};

@@ -3,10 +3,10 @@
 //! The successful cases install no Clutch-owned account at genesis. A wallet
 //! creates a real Token-2022 collateral mint, uploads and seals the canonical
 //! policy/grid/Terms artifacts, creates Realm and Profile, and founds a market.
-//! Degree zero receives the 165-byte v2 resolution record; degree one receives
-//! the 319-byte native v3 record. Predictable state and token PDAs are
-//! deliberately prefunded before construction to prove that SOL donations
-//! cannot squat them.
+//! Degree zero receives the 165-byte v2 resolution record; point degree one
+//! receives the 319-byte native v3 record; occupation degree one receives the
+//! distinct 383-byte v4 record. Predictable state and token PDAs are deliberately
+//! prefunded before construction to prove that SOL donations cannot squat them.
 
 use {
     clutch_sbf::{error::ClutchError, instructions::market_init, seeds},
@@ -16,6 +16,10 @@ use {
         canonical_market_id, canonical_realm_id,
         collateral::ParentProfile,
         native_resolution::{NativeResolutionAccount, NATIVE_RESOLUTION_LEN},
+        occupation_resolution::{
+            OccupationResolutionAccount, OCCUPATION_RESOLUTION_LEN,
+            STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06,
+        },
         Hash32, Intent, PriceGridAccount, ProfileAccount, RealmAccount, ResolutionAccount,
         TermsAccount, MAX_GRID_TICKS, MAX_OUTCOMES, PAYOUT_MAP_UNUSED,
     },
@@ -274,6 +278,7 @@ struct Founding {
     outcome_mints: [Address; 2],
     collateral_mint: Address,
     degree: u8,
+    occupation: bool,
 }
 
 impl Founding {
@@ -388,7 +393,11 @@ async fn create_collateral_mint(bank: &mut ProgramTestContext, mint: &Keypair) {
     .await;
 }
 
-async fn prepare(bank: &mut ProgramTestContext, degree: u8) -> Founding {
+async fn prepare(
+    bank: &mut ProgramTestContext,
+    degree: u8,
+    occupation_statistic: Option<u16>,
+) -> Founding {
     let mint = Keypair::new_from_array([0x42; 32]);
     create_collateral_mint(bank, &mint).await;
 
@@ -504,6 +513,9 @@ async fn prepare(bank: &mut ProgramTestContext, degree: u8) -> Founding {
         terms_value.knots[1] = 20;
         terms_value.payout_map = [PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
     }
+    if let Some(statistic) = occupation_statistic {
+        terms_value.statistic_id = statistic;
+    }
     terms_value.terms = Hash32::ZERO;
     terms_value.terms = terms_value.recomputed_terms_digest().unwrap();
     let terms_id = terms_value.terms;
@@ -550,6 +562,7 @@ async fn prepare(bank: &mut ProgramTestContext, degree: u8) -> Founding {
         outcome_mints,
         collateral_mint: mint.pubkey(),
         degree,
+        occupation: occupation_statistic.is_some(),
     }
 }
 
@@ -565,12 +578,12 @@ async fn assert_sealed_prerequisites(bank: &mut ProgramTestContext, f: &Founding
     assert!(TermsAccount::decode(&get(bank, f.terms).await.unwrap().data).is_ok());
 }
 
-async fn prefund_and_found(degree: u8) {
+async fn prefund_and_found(degree: u8, occupation_statistic: Option<u16>) {
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
     test.add_program("clutch_sbf", PROGRAM_ID, None);
     let mut bank = test.start_with_context().await;
-    let founding = prepare(&mut bank, degree).await;
+    let founding = prepare(&mut bank, degree, occupation_statistic).await;
     assert_sealed_prerequisites(&mut bank, &founding).await;
     for target in founding
         .state_targets()
@@ -584,6 +597,8 @@ async fn prefund_and_found(degree: u8) {
     let rent = bank.banks_client.get_rent().await.unwrap();
     let resolution_len = if degree == 0 {
         account_len::RESOLUTION
+    } else if occupation_statistic.is_some() {
+        OCCUPATION_RESOLUTION_LEN
     } else {
         NATIVE_RESOLUTION_LEN
     };
@@ -630,6 +645,9 @@ async fn prefund_and_found(degree: u8) {
     if degree == 0 {
         let record = ResolutionAccount::decode(&resolution.data).unwrap();
         assert!(!record.is_resolved());
+    } else if occupation_statistic.is_some() {
+        let record = OccupationResolutionAccount::decode(&resolution.data).unwrap();
+        assert!(!record.is_resolved());
     } else {
         let record = NativeResolutionAccount::decode(&resolution.data).unwrap();
         assert!(!record.is_resolved());
@@ -641,15 +659,20 @@ async fn prefund_and_found(degree: u8) {
     assert_eq!(hoard.owner, TOKEN_2022);
     assert_eq!(hoard.lamports, hoard_excess);
     println!(
-        "blank-bank degree={} resolution_bytes={} prefund-safe create_market={} CU",
-        founding.degree, resolution_len, units
+        "blank-bank degree={} occupation={} resolution_bytes={} rent={} prefund-safe create_market={} CU",
+        founding.degree,
+        founding.occupation,
+        resolution_len,
+        rent.minimum_balance(resolution_len),
+        units
     );
 }
 
 #[tokio::test]
 async fn categorical_and_native_markets_construct_from_only_sealed_artifacts() {
-    prefund_and_found(0).await;
-    prefund_and_found(1).await;
+    prefund_and_found(0, None).await;
+    prefund_and_found(1, None).await;
+    prefund_and_found(1, Some(STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06)).await;
 }
 
 #[tokio::test]
@@ -658,7 +681,7 @@ async fn a_late_token_target_refusal_rolls_every_earlier_creation_back() {
     test.prefer_bpf(true);
     test.add_program("clutch_sbf", PROGRAM_ID, None);
     let mut bank = test.start_with_context().await;
-    let founding = prepare(&mut bank, 1).await;
+    let founding = prepare(&mut bank, 1, None).await;
     let blocked = founding.outcome_mints[1];
     bank.set_account(
         &blocked,

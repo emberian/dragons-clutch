@@ -16,8 +16,10 @@ use crate::instructions::split::validate_token_program;
 use crate::{seeds, token};
 use clutch_kernel::{BasisMode, MarketState, PayoutVector, Phase, Position};
 use clutch_solana_layout::{
-    account_len, collateral, native_resolution::NATIVE_RESOLUTION_LEN, Hash32, HoardAccount,
-    Intent, PayoutVectorBytes, ProfileAccount, TermsAccount,
+    account_len, collateral,
+    native_resolution::NATIVE_RESOLUTION_LEN,
+    occupation_resolution::{is_occupation_statistic, OCCUPATION_RESOLUTION_LEN},
+    Hash32, HoardAccount, Intent, PayoutVectorBytes, ProfileAccount, TermsAccount,
 };
 use clutch_solana_reference::{Action, KernelAccount, Request, KERNEL_ACCOUNT_LEN};
 use solana_account_info::AccountInfo;
@@ -195,7 +197,7 @@ fn kernel_redeem(
     Ok(payout)
 }
 
-/// Redeem bearer claims against the v3 record-owned native vector.
+/// Redeem bearer claims against the v3/v4 record-owned native vector.
 ///
 /// The vector exists only in this stack frame. `reconstruct_native_market` is
 /// the same projection used by internal redemption, so bearer exit cannot
@@ -376,6 +378,8 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
     let basis_degree = terms_basis_degree(&accounts[IX_TERMS].data.borrow())?;
     let resolution_len = if basis_degree == 0 {
         account_len::RESOLUTION
+    } else if is_occupation_statistic(terms.statistic_id) {
+        OCCUPATION_RESOLUTION_LEN
     } else {
         NATIVE_RESOLUTION_LEN
     };
