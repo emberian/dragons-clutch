@@ -39,6 +39,9 @@ use clutch_batch::relation_v1::{
 };
 use clutch_batch::{DustPolicy, MAX_ORDERS};
 
+/// Staged, bounded, donation-safe lifecycle model for the direct profile.
+/// It allocates no live Solana tags or instructions.
+pub mod direct_lifecycle_v3;
 /// Fixed-capacity, full-width candidate-window model for the bounded direct
 /// selection profile.  It is an offline account-body and transition model;
 /// it does not allocate live Solana tags or instructions.

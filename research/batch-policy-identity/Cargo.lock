@@ -26,8 +26,13 @@ name = "clutch-batch-policy-identity"
 version = "0.1.0"
 dependencies = [
  "clutch-batch",
+ "clutch-liveness",
  "sha2",
 ]
+
+[[package]]
+name = "clutch-liveness"
+version = "0.1.0"
 
 [[package]]
 name = "cpufeatures"

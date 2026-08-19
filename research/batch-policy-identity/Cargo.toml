@@ -11,6 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 clutch-batch = { path = "../../crates/clutch-batch" }
+clutch-liveness = { path = "../../crates/clutch-liveness" }
 sha2 = { version = "=0.10.9", default-features = false }
 
 [features]
