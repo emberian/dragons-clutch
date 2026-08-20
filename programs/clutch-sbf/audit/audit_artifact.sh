@@ -537,12 +537,26 @@ PY
 # ELF shape and syscall surface.  A new undefined dynamic symbol is a review
 # event, not something this supply-chain gate silently accepts.
 #
-# `sol_sha256` is the one reviewed addition to the 2026-08-18 baseline.  The
+# `sol_sha256` is the first reviewed addition to the 2026-08-18 baseline.  The
 # program calls it only through `solana-sha256-hasher =3.1.0`, whose SBF branch
 # re-exports `solana_define_syscall::definitions::sol_sha256` and whose safe
 # `hashv` wrapper owns the unsafe result buffer.  Pin the exact crates.io
 # archive identity here as well as in Cargo.lock/dependency verification so an
 # unrelated package cannot inherit this syscall admission merely by name.
+#
+# `sol_memmove_` is the second reviewed addition (2026-08-20, the T2-8 wave).
+# It is not called by any first-party source: LLVM lowers the potentially
+# overlapping in-place copies of the portfolio full-pair seam
+# (`clutch_solana_layout::portfolio_settlement::prepare_full_pair` and
+# `orders_batch::entitlement::settle_portfolio_pair` are the only two callers
+# in the final disassembly) to the `memmove` intrinsic, and the resident
+# 4-instruction hidden `memmove` shim is the platform-tools Rust fork's
+# `compiler-builtins` wrapper over the syscall
+# (rustlib/src/rust/library/compiler-builtins/compiler-builtins/src/mem/mod.rs)
+# — the exact provenance of the long-admitted `memcpy`/`memset`/`memcmp`
+# shims, so the trust class of the surface is unchanged and the pin that
+# covers the shim is the platform-tools release identity this script already
+# verifies, not a crates.io archive.
 python3 - "$work/final-readobj.txt" "$work/dependencies.tsv" \
   "$work/elf-summary.txt" <<'PY'
 import pathlib
@@ -597,10 +611,12 @@ baseline_allowed = {
     "sol_panic_",
     "sol_try_find_program_address",
 }
-reviewed_additions = {"sol_sha256"}
+reviewed_additions = {"sol_sha256", "sol_memmove_"}
 allowed = baseline_allowed | reviewed_additions
-if allowed - baseline_allowed != {"sol_sha256"}:
-    raise SystemExit("syscall review widened beyond the single intended sol_sha256 addition")
+if allowed - baseline_allowed != {"sol_sha256", "sol_memmove_"}:
+    raise SystemExit(
+        "syscall review widened beyond the intended sol_sha256 + sol_memmove_ additions"
+    )
 
 def require_exact_surface(observed):
     if observed != allowed:
