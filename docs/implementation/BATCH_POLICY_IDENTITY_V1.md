@@ -259,3 +259,80 @@ LP-range positions may be coefficient programs over native basis Eggs. That
 composition does not turn the B-spline basis into categorical bins, and this
 batch-policy identity work neither changes nor lowers native resolution
 semantics.
+
+## 8. Tier 2 general-clearing profile and the zero-sentinel argument (T2-5)
+
+Status: **PROPOSED policy profile; HOST-TESTED verdict-identity gate.** Added
+by increment T2-5 of
+[TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md](../design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md);
+ember's sign-off is what turns PROPOSED into frozen.
+
+### 8.1 `GENERAL_CLEARING_POLICY_V1`
+
+`src/general_clearing_v1.rs` pins the Tier 2 frozen policy profile v1 as a
+const, sibling to `DIRECT_POLICY_V1`. Plan-pinned selectors: `fee_base: None`
+(0 bps — deliberately not preempting the queued fee-base fork),
+`pairing_witness: ExplicitSlices`, `portfolio_lots: StrictWholeOrder`,
+`self_cross: RefuseOverlap` (two order passes). The plan's ONE pinned dust
+choice is `AssignCanonical`, taken from the relation's own code and tests:
+both relation test suites freeze it in their base policies, the domain's
+`remainder_seed` exists solely as the largest-remainder tie-break seed, and
+under `DustPolicy::Reject` a marginal pro-rata pool with any leftover atom has
+no valid candidate at all (`ErrorV1::DustRejected` from the canonical
+constructor) — generic on many-order books, vacuous only in the two-order
+direct profile where every pool has one member and dust is structurally zero.
+Selectors the plan leaves open follow `DIRECT_POLICY_V1` except
+`rounding: TerminalOwnerFloor`, because `RoundingBoundaryV1::None`
+(exact-or-refuse) refuses any candidate whose per-owner cash conversion leaves
+a remainder — the same general-book liveness hazard as dust rejection.
+
+The canonical artifact bytes and the digest
+
+```text
+7a9ea80b819f853d9523a5e0ed0bb8e5ab4e167ab0c2245316775955c7a2065b
+```
+
+are pinned against an independent third SHA-256 implementation by
+`general_clearing_policy_identity_value_is_pinned`, and
+`every_selector_mutation_moves_the_general_clearing_identity` proves every
+registered alternative of every selector family (and both fee boundaries)
+moves the identity.
+
+### 8.2 Zero-sentinel soundness, as the Tier 2 program will consume it
+
+The program-side domain construction (T2-6) is exactly
+
+```text
+RelationDomainV1 { relation_version, market_id: 0, book_id: 0,
+                   epoch: epoch_index, policy_id: 0, order_set_id: 0,
+                   outcome_count, owner_count, price_scale, remainder_seed,
+                   policy }
+```
+
+and the streaming walk runs `ClearWorkV1::begin(domain, candidate,
+strict_claims = false)`. The zero sentinels are sound because the four u64
+identity tags are read only by the obsolete V9 legacy digest, which under
+`strict_claims = false` is never compared against anything. Authoritative
+identity binding is full-width: `ClearWorkHeader{market, epoch, candidate,
+order_set}` plus `FullRelationDomainV1::digest()` recomputed wherever
+selection needs a total order. Score comparison uses
+`FullScoreV1::total_order` over components recomputed from the streamed
+`SummaryV1` — never the claimed u128 digest, which the full verifier already
+discards and returns as an explicit zero sentinel.
+
+The gate demanded by the plan is
+`streaming_zero_sentinel_verdict_matches_the_full_width_verifier`
+(in `src/general_clearing_v1.rs`, homed here because this crate depends on
+`clutch-batch` and not the reverse): the streaming verdict under the
+zero-sentinel domain equals `verify_submitted_candidate`'s V0–V8 verdict on
+the same coordinates — a plain cross, a marginal pro-rata book with assigned
+dust, a portfolio order clearing against singles, and a forged fill refused
+with the identical relation error on both paths.
+`zero_sentinel_tags_bind_nothing_and_full_width_identity_binds_everything`
+states the argument executably in both directions: junk nonzero u64 tags
+change nothing in the summary except the two legacy digest fields, while a
+one-byte flip of one 32-byte identity is invisible to the zero-sentinel stream
+but moves `FullRelationDomainV1::digest`, the full relation-candidate digest,
+and the `FullScoreV1::total_order` tie. The §3 caveat stands unchanged: if a
+future economic stage starts reading a legacy identity field, this seam must
+be revised before promotion.
