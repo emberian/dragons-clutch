@@ -86,6 +86,13 @@ source_commit="$(git rev-parse HEAD)"
 # Conservative build-input closure.  The harness manifest is included because
 # Cargo reads every workspace-member manifest while resolving the locked
 # workspace, although harness/src is not linked into the program ELF.
+# research/batch-policy-identity is the one first-party path dependency that
+# lives outside programs/ and crates/ (the sol_sha256 policy-identity folds);
+# earlier seals documented it as a closure gap and compensated with a clean
+# detached worktree.  It is declared here so the dirty-tree gate and the
+# source-closure digest cover every first-party package in the linked graph
+# (crates/clutch-batch was already covered by the whole-directory `crates`
+# entry).
 source_paths=(
   programs/clutch-sbf/.cargo
   programs/clutch-sbf/Cargo.toml
@@ -96,6 +103,7 @@ source_paths=(
   programs/solana-layout
   programs/solana-reference
   crates
+  research/batch-policy-identity
 )
 source_dirty="$(git status --porcelain -- "${source_paths[@]}")"
 if [ -n "$source_dirty" ]; then
