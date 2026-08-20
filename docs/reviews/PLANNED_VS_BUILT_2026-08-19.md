@@ -122,9 +122,12 @@ Manifest composition worth knowing: of 100 gates, 61 are
   refusal. The tool built to prevent a cost conclusion being attributed to
   a layout the codec no longer has is currently in exactly that state.
 
-There is also no CI: `.github/` does not exist, so a project operating one
-order of magnitude from the compute ceiling has no automated regression
-defense.
+There is also no CI: `.github/` does not exist, so there is no automated
+regression defense. (This sentence originally said the project operates "one
+order of magnitude from the compute ceiling"; the syscall-hash correction —
+docs/reviews/COMPUTE_CEILING_REATTRIBUTION_2026-08-19.md — moved every
+measured route to 3–27% of the ceiling, which weakens the urgency framing
+and none of the CI point.)
 
 ## What is genuinely excellent
 

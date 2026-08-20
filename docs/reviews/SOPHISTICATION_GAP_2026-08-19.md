@@ -44,17 +44,26 @@ history. Sixteen basis functions is a coarse payoff curve for a system whose
 distinguishing claim is exact smooth semantics. Multi-page archives are
 explicitly refused.
 
-## 3. The compute verdict
+## 3. The compute verdict — CORRECTED 2026-08-19 (same day)
 
-Point resolution — the simplest case, a two-bucket window — measures
-1,071,197 CU against the 1,400,000 ceiling. Monolithic occupation resolution
-misses its admission threshold at best 1,236,364 CU. Direct V2 selection
-reaches exactly 1,400,000 and rolls back.
+**The verdict this section originally drew was wrong.** The measurements
+were right; the generalization was not. The cost was a software SHA-256
+compiled in through one dependency edge
+([COMPUTE_CEILING_REATTRIBUTION_2026-08-19.md](../reviews/COMPUTE_CEILING_REATTRIBUTION_2026-08-19.md)).
+With the `sol_sha256` syscall (merged `6c25df4`, resealed `cfba5bb`) every
+measured instruction is 3–8x cheaper: point resolution 182,425–197,692 CU,
+every monolithic occupation initial row admitted at 172,665–197,766, and
+Direct V2 selection completing and committing at 226,071 CU. On-chain
+re-execution fits with wide margin at measured scale. What survives is the
+scaling argument only: growth in book width still goes through staging (V3)
+or succinct verification — a design preference now, not a measured wall.
 
-This is not a tuning problem. On-chain re-execution of verification does not
-fit, and every axis worth scaling makes it worse. V3's staging buys roughly
-one order of magnitude by splitting work across transactions; it does not
-buy the next one.
+Original text, kept for the record: point resolution measured 1,071,197 CU
+against the 1,400,000 ceiling; monolithic occupation resolution missed its
+admission threshold at best 1,236,364 CU; Direct V2 selection reached
+exactly 1,400,000 and rolled back; "this is not a tuning problem — on-chain
+re-execution of verification does not fit, and every axis worth scaling
+makes it worse."
 
 ## 4. Absent layers
 

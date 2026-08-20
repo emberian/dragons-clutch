@@ -7,6 +7,16 @@ rolls back). This document promotes nothing and wires nothing. It records
 what was verified, what is measured, what is not, and the two conditions
 that gate the direction.
 
+**PREMISE CORRECTED 2026-08-19 (same day):** the compute wall named above
+dissolved. It was a software SHA-256 hasher, not the verification
+architecture
+([COMPUTE_CEILING_REATTRIBUTION_2026-08-19.md](../reviews/COMPUTE_CEILING_REATTRIBUTION_2026-08-19.md));
+on the resealed syscall-hashed artifact, V2 selection completes and commits
+at 226,071 CU. Succinct verification is therefore no longer motivated by
+this measurement. It remains motivated for book widths where even staged
+re-execution outgrows the budget, and every finding below about the
+breadstuffs stack stands unchanged on its own evidence.
+
 **Substrate, stated up front:** AIR / constraint systems are authored in
 Lean, where refinement to spec is a machine-checked theorem over the
 actually-emitted object; Rust only calls into the emitted artifact. Any
