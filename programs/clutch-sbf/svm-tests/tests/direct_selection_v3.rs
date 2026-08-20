@@ -1053,6 +1053,81 @@ fn assert_cu(label: &str, units: u64) {
     );
 }
 
+/// Physical-close evidence.  Each `close_funded_account` route is observed as
+/// three raw numbers in the bank log: what every account it closes held
+/// immediately before the route ran (`CLOSE`), what each recorded recipient
+/// and the frozen neutral sink gained (`REFUND`), and the exact equality
+/// between the two (`CONSERVE`).  Nothing here is estimated: the totals come
+/// from bank reads either side of one transaction, and the equality is
+/// asserted, so a route that leaked or invented a lamport fails the test
+/// rather than printing a pretty number.
+fn note_close(route: &str, label: &str, pre_close: u64) {
+    eprintln!("DirectV3 CLOSE {route} {label}: pre_close {pre_close}");
+}
+
+fn note_refund(route: &str, label: &str, delta: i128) {
+    eprintln!("DirectV3 REFUND {route} {label}: delta {delta}");
+}
+
+fn assert_conserved(route: &str, closed_total: u64, recipient_total: i128) {
+    eprintln!("DirectV3 CONSERVE {route}: closed {closed_total} recipients {recipient_total}");
+    assert_eq!(
+        i128::from(closed_total),
+        recipient_total,
+        "{route}: closed principal did not land exactly on the recorded recipients"
+    );
+}
+
+/// A route that both closes and creates accounts is stated as a closed system
+/// instead: over every account the route can touch, the lamport deltas sum to
+/// zero.  Nothing is created from nowhere and nothing leaves the observed set.
+fn assert_zero_sum(route: &str, net: i128) {
+    eprintln!("DirectV3 CONSERVE {route}: net {net}");
+    assert_eq!(
+        net, 0,
+        "{route}: lamports entered or left the observed account set"
+    );
+}
+
+/// Rent that no handler can reclaim, recorded rather than refunded.
+fn note_strand(route: &str, label: &str, held: u64) {
+    eprintln!("DirectV3 STRAND {route} {label}: {held}");
+}
+
+/// Byte-and-lamport prestate equality after a late-failing transaction.
+fn note_rollback(route: &str, watched: usize) {
+    eprintln!("DirectV3 ROLLBACK {route}: {watched} accounts byte-and-lamport identical");
+}
+
+/// Lamports held by a live program-owned account.  `None` for a PDA that is
+/// only a system-owned prefund slot: nothing there is closable principal, so
+/// it must never be reported as a close.
+async fn live_principal(context: &mut ProgramTestContext, address: Address) -> Option<u64> {
+    account(context, address)
+        .await
+        .filter(|state| state.owner == PROGRAM_ID)
+        .map(|state| state.lamports)
+}
+
+async fn wallets(context: &mut ProgramTestContext, addresses: &[Address]) -> Vec<u64> {
+    let mut out = Vec::with_capacity(addresses.len());
+    for address in addresses {
+        out.push(lamports(context, *address).await);
+    }
+    out
+}
+
+/// Total the deltas across one route's recorded recipients, printing each.
+fn refund_total(route: &str, labels: &[&str], before: &[u64], after: &[u64]) -> i128 {
+    let mut total = 0i128;
+    for (index, label) in labels.iter().enumerate() {
+        let delta = i128::from(after[index]) - i128::from(before[index]);
+        note_refund(route, label, delta);
+        total += delta;
+    }
+    total
+}
+
 /// Rebuild the exact expected Candidate through the same verifier the model
 /// and the program rank with.
 fn expected_candidate(
@@ -1260,6 +1335,7 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
     let refused = send(&mut context, fixture.freeze(fixture.low_funder.pubkey(), plane), Some(&fixture.low_funder)).await;
     assert!(refused.0.is_err());
     assert_eq!(snapshot(&mut context, &watched).await, before);
+    note_rollback("FreezeDirectEpochV4 underfunded", watched.len());
 
     let (result, freeze_cu) = send(
         &mut context,
@@ -1370,6 +1446,7 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
             .await;
             assert!(refused.0.is_err());
             assert_eq!(snapshot(&mut context, &watched).await, before);
+            note_rollback("SubmitDirectCandidateV3 underfunded", watched.len());
         }
         let candidate = score_for(price);
         let candidate_id = candidate_for(price);
@@ -1426,6 +1503,31 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
     );
     let displaced = expected_top[2];
     let submitter_before = lamports(&mut context, fixture.submitter.pubkey()).await;
+    // Close evidence: the displaced candidate's whole balance leaves in the
+    // admitting transaction; the new candidate's principal leaves with it, so
+    // the funding payer is exactly neutral and the sink keeps the donation.
+    let displaced_address = fixture.candidate_address(plane, displaced.0);
+    let admitted_address = fixture.candidate_address(plane, candidate_for(6_000));
+    note_close(
+        "SubmitDirectCandidateV3 displacing",
+        "direct.candidate.v3.displaced",
+        live_principal(&mut context, displaced_address)
+            .await
+            .expect("the displaced candidate is live before the route"),
+    );
+    let displacing_labels = [
+        "direct.candidate.v3.displaced",
+        "direct.candidate.v3.admitted",
+        "submitter",
+        "neutral_sink",
+    ];
+    let displacing_watch = [
+        displaced_address,
+        admitted_address,
+        fixture.submitter.pubkey(),
+        sink_address(),
+    ];
+    let displacing_before = wallets(&mut context, &displacing_watch).await;
     let (result, units) = send(
         &mut context,
         fixture.submit(
@@ -1442,14 +1544,25 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
     result.unwrap();
     assert_cu("SubmitDirectCandidateV3 price=6000 replacement", units);
     max_submit_cu = max_submit_cu.max(units);
-    assert!(account(&mut context, fixture.candidate_address(plane, displaced.0))
-        .await
-        .is_none());
+    assert!(account(&mut context, displaced_address).await.is_none());
     // Replacement is lamport-neutral for the payer that funded both: the
     // displaced principal came back while the new principal went out.
     assert_eq!(
         lamports(&mut context, fixture.submitter.pubkey()).await,
         submitter_before
+    );
+    // Close exactness across the same transaction: everything the displaced
+    // account held reappears on its recorded payer, on the admitted
+    // candidate the same payer funded, or in the neutral sink.
+    let displacing_after = wallets(&mut context, &displacing_watch).await;
+    assert_zero_sum(
+        "SubmitDirectCandidateV3 displacing",
+        refund_total(
+            "SubmitDirectCandidateV3 displacing",
+            &displacing_labels,
+            &displacing_before,
+            &displacing_after,
+        ),
     );
     expected_top.pop();
     expected_top.push((candidate_for(6_000), replacement.score(), 6_000));
@@ -1716,8 +1829,12 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
     assert_eq!(custom(refused.0), ClutchError::Replay as u32);
 
     // Recipient substitution at Finalize refuses: a loser's principal can
-    // return only to its recorded payer.
+    // return only to its recorded payer.  This is close-route rollback
+    // evidence, not merely a refusal code: the two candidate accounts the
+    // route would have closed are byte-and-lamport identical afterwards.
     let wrong_payers = vec![fixture.keeper.pubkey(); 2];
+    let close_watch = [retained[1], retained[2], receipt_address, pot_address];
+    let close_before = snapshot(&mut context, &close_watch).await;
     let refused = send_nonced(
         &mut context,
         fixture.finalize(
@@ -1733,7 +1850,51 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
     )
     .await;
     assert_eq!(custom(refused.0), ClutchError::MismatchedState as u32);
+    assert_eq!(snapshot(&mut context, &close_watch).await, close_before);
+    note_rollback(
+        "FinalizeDirectSelectionV3 wrong close recipient",
+        close_watch.len(),
+    );
 
+    // Close evidence, Finalize: the two unselected candidates close to their
+    // recorded payer while the receipt and pot are created, so the route is
+    // stated as a closed system over every account it can move.
+    for (index, loser) in retained[1..].iter().enumerate() {
+        note_close(
+            "FinalizeDirectSelectionV3",
+            &format!("direct.candidate.v3.loser{index}"),
+            live_principal(&mut context, *loser)
+                .await
+                .expect("a retained loser is live before Finalize"),
+        );
+    }
+    let finalize_labels = [
+        "direct.candidate.v3.loser0",
+        "direct.candidate.v3.loser1",
+        "direct.receipt",
+        "direct.final_pot",
+        "direct.work_budget.v1",
+        "direct.window.v3",
+        "direct.epoch.v4",
+        "submitter",
+        "sponsor",
+        "keeper",
+        "neutral_sink",
+    ];
+    let finalize_watch = [
+        retained[1],
+        retained[2],
+        receipt_address,
+        pot_address,
+        fixture.plane(plane).work,
+        fixture.plane(plane).window,
+        epoch_address,
+        fixture.submitter.pubkey(),
+        fixture.sponsor.pubkey(),
+        fixture.keeper.pubkey(),
+        sink_address(),
+    ];
+    let finalize_before = wallets(&mut context, &finalize_watch).await;
     let (result, finalize_cu) = send_nonced(
         &mut context,
         fixture.finalize(
@@ -1750,6 +1911,16 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
     .await;
     result.unwrap();
     assert_cu("FinalizeDirectSelectionV3", finalize_cu);
+    let finalize_after = wallets(&mut context, &finalize_watch).await;
+    assert_zero_sum(
+        "FinalizeDirectSelectionV3",
+        refund_total(
+            "FinalizeDirectSelectionV3",
+            &finalize_labels,
+            &finalize_before,
+            &finalize_after,
+        ),
+    );
     let epoch_state =
         DirectEpochV4Account::decode(&bytes(&mut context, epoch_address).await).unwrap();
     assert_eq!(epoch_state.lifecycle_phase, DIRECT_LIFECYCLE_PHASE_SELECTED);
@@ -1777,6 +1948,52 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
     let winner_price = expected_top[0].2;
     let consideration = QUANTITY * winner_price / PRICE_SCALE;
     assert_eq!(consideration, winner_price, "quantity == scale anchoring");
+    // Close evidence, Settle: seven transients close in one transaction.
+    // Every lamport they hold must reappear on a recorded payer, on the
+    // keeper as the frozen settle reward, or in the frozen neutral sink.
+    let settle_close_labels = [
+        "direct.window.v3",
+        "direct.work_budget.v1",
+        "direct.reservation.v2.buy",
+        "direct.reservation.v2.sell",
+        "direct.candidate.v3.winner",
+        "direct.receipt",
+        "direct.final_pot",
+    ];
+    let settle_closes = [
+        fixture.plane(plane).window,
+        fixture.plane(plane).work,
+        fixture.plane(plane).buy_reservation,
+        fixture.plane(plane).sell_reservation,
+        retained[0],
+        receipt_address,
+        pot_address,
+    ];
+    let mut settle_closed_total = 0u64;
+    for (index, address) in settle_closes.iter().enumerate() {
+        let held = live_principal(&mut context, *address)
+            .await
+            .unwrap_or_else(|| panic!("{} is live before Settle", settle_close_labels[index]));
+        note_close("SettleDirectV3", settle_close_labels[index], held);
+        settle_closed_total += held;
+    }
+    let settle_labels = [
+        "submitter",
+        "sponsor",
+        "keeper",
+        "buy_owner",
+        "sell_owner",
+        "neutral_sink",
+    ];
+    let settle_watch = [
+        fixture.submitter.pubkey(),
+        fixture.sponsor.pubkey(),
+        fixture.keeper.pubkey(),
+        fixture.buy_owner.pubkey(),
+        fixture.sell_owner.pubkey(),
+        sink_address(),
+    ];
+    let settle_before = wallets(&mut context, &settle_watch).await;
     let (result, settle_cu) = send(
         &mut context,
         fixture.settle(
@@ -1793,6 +2010,12 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
     .await;
     result.unwrap();
     assert_cu("SettleDirectV3", settle_cu);
+    let settle_after = wallets(&mut context, &settle_watch).await;
+    assert_conserved(
+        "SettleDirectV3",
+        settle_closed_total,
+        refund_total("SettleDirectV3", &settle_labels, &settle_before, &settle_after),
+    );
 
     let buyer = PositionAccount::decode(&bytes(&mut context, fixture.buyer_position).await).unwrap();
     assert_eq!(buyer.cash_atoms, BUYER_CASH - consideration);
@@ -1830,6 +2053,22 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
             "transient {closed} must close"
         );
     }
+    // The two families with no close handler at all: recorded, not refunded.
+    note_strand(
+        "SettleDirectV3",
+        "direct.epoch.v4",
+        lamports(&mut context, epoch_address).await,
+    );
+    note_strand(
+        "SettleDirectV3",
+        "artifact.direct_batch_policy_v3.final",
+        lamports(&mut context, fixture.plane(plane).policy).await,
+    );
+    note_strand(
+        "SettleDirectV3",
+        "order.page",
+        lamports(&mut context, fixture.plane(plane).page).await,
+    );
     // Settle replay refuses: the transient authority no longer decodes.
     let refused = send_nonced(
         &mut context,
@@ -2002,9 +2241,42 @@ async fn direct_v3_prefreeze_abort_releases_every_prefix() {
     assert_eq!(custom(refused.0), ClutchError::NotActive as u32);
 
     // Zero-reservation abort: three accounts, durable PREFREEZE_ABORT.
+    let abort_labels = [
+        "direct.epoch.v4",
+        "order.page",
+        "direct.reservation.v2.buy",
+        "direct.reservation.v2.sell",
+        "buy_owner",
+        "sell_owner",
+        "neutral_sink",
+    ];
+    let abort_watch = |plane: usize| {
+        [
+            fixture.plane(plane).epoch,
+            fixture.plane(plane).page,
+            fixture.plane(plane).buy_reservation,
+            fixture.plane(plane).sell_reservation,
+            fixture.buy_owner.pubkey(),
+            fixture.sell_owner.pubkey(),
+            sink_address(),
+        ]
+    };
+    let abort0_watch = abort_watch(0);
+    let abort0_before = wallets(&mut context, &abort0_watch).await;
+    note_close("AbortUnfrozenDirectV4 empty", "reservation_prefix", 0);
     let (result, abort0_cu) = send(&mut context, fixture.abort(0, false, &[], &[], &[]), None).await;
     result.unwrap();
     assert_cu("AbortUnfrozenDirectV4 empty", abort0_cu);
+    let abort0_after = wallets(&mut context, &abort0_watch).await;
+    assert_zero_sum(
+        "AbortUnfrozenDirectV4 empty",
+        refund_total(
+            "AbortUnfrozenDirectV4 empty",
+            &abort_labels,
+            &abort0_before,
+            &abort0_after,
+        ),
+    );
     let epoch_state =
         DirectEpochV4Account::decode(&bytes(&mut context, fixture.plane(0).epoch).await).unwrap();
     assert_eq!(epoch_state.lifecycle_phase, DIRECT_LIFECYCLE_PHASE_TERMINAL);
@@ -2026,6 +2298,15 @@ async fn direct_v3_prefreeze_abort_releases_every_prefix() {
 
     // One-reservation abort restores the buyer Position and refunds exactly.
     let buy_owner_before = lamports(&mut context, fixture.buy_owner.pubkey()).await;
+    let abort1_watch = abort_watch(1);
+    let abort1_before = wallets(&mut context, &abort1_watch).await;
+    note_close(
+        "AbortUnfrozenDirectV4 one",
+        "direct.reservation.v2.buy",
+        live_principal(&mut context, fixture.plane(1).buy_reservation)
+            .await
+            .expect("the one-order prefix is live before the abort"),
+    );
     let (result, abort1_cu) = send(
         &mut context,
         fixture.abort(
@@ -2051,8 +2332,26 @@ async fn direct_v3_prefreeze_abort_releases_every_prefix() {
         lamports(&mut context, fixture.buy_owner.pubkey()).await,
         buy_owner_before + rent_exempt(DIRECT_RESERVATION_V2_BYTES)
     );
+    let abort1_after = wallets(&mut context, &abort1_watch).await;
+    assert_zero_sum(
+        "AbortUnfrozenDirectV4 one",
+        refund_total(
+            "AbortUnfrozenDirectV4 one",
+            &abort_labels,
+            &abort1_before,
+            &abort1_after,
+        ),
+    );
 
-    // Two-reservation abort: recipient substitution refuses first.
+    // Two-reservation abort: recipient substitution refuses first, and the
+    // prefix it would have closed rolls back byte-and-lamport identical.
+    let abort_close_watch = [
+        fixture.plane(2).buy_reservation,
+        fixture.plane(2).sell_reservation,
+        fixture.buyer_position,
+        fixture.seller_position,
+    ];
+    let abort_close_before = snapshot(&mut context, &abort_close_watch).await;
     let refused = send(
         &mut context,
         fixture.abort(
@@ -2069,6 +2368,30 @@ async fn direct_v3_prefreeze_abort_releases_every_prefix() {
     )
     .await;
     assert_eq!(custom(refused.0), ClutchError::MismatchedState as u32);
+    assert_eq!(
+        snapshot(&mut context, &abort_close_watch).await,
+        abort_close_before
+    );
+    note_rollback(
+        "AbortUnfrozenDirectV4 wrong close recipient",
+        abort_close_watch.len(),
+    );
+    let abort2_watch = abort_watch(2);
+    let abort2_before = wallets(&mut context, &abort2_watch).await;
+    let mut abort2_closed = 0u64;
+    for (label, address) in [
+        ("direct.reservation.v2.buy", fixture.plane(2).buy_reservation),
+        (
+            "direct.reservation.v2.sell",
+            fixture.plane(2).sell_reservation,
+        ),
+    ] {
+        let held = live_principal(&mut context, address)
+            .await
+            .unwrap_or_else(|| panic!("{label} is live before the two-order abort"));
+        note_close("AbortUnfrozenDirectV4 two", label, held);
+        abort2_closed += held;
+    }
     let (result, abort2_cu) = send(
         &mut context,
         fixture.abort(
@@ -2086,6 +2409,29 @@ async fn direct_v3_prefreeze_abort_releases_every_prefix() {
     .await;
     result.unwrap();
     assert_cu("AbortUnfrozenDirectV4 two", abort2_cu);
+    let abort2_after = wallets(&mut context, &abort2_watch).await;
+    assert_zero_sum(
+        "AbortUnfrozenDirectV4 two",
+        refund_total(
+            "AbortUnfrozenDirectV4 two",
+            &abort_labels,
+            &abort2_before,
+            &abort2_after,
+        ),
+    );
+    // Both owners recover exactly the frozen reservation principal; the
+    // one-lamport prefund donation is the only lamport that moves elsewhere.
+    assert_eq!(
+        lamports(&mut context, fixture.buy_owner.pubkey()).await
+            + lamports(&mut context, fixture.sell_owner.pubkey()).await
+            - abort2_before[4]
+            - abort2_before[5],
+        2 * rent_exempt(DIRECT_RESERVATION_V2_BYTES)
+    );
+    assert_eq!(
+        abort2_closed,
+        2 * (rent_exempt(DIRECT_RESERVATION_V2_BYTES) + 1)
+    );
     let epoch_state =
         DirectEpochV4Account::decode(&bytes(&mut context, fixture.plane(2).epoch).await).unwrap();
     assert_eq!(epoch_state.terminal.terminal_reservation_count, 2);
@@ -2238,8 +2584,53 @@ async fn direct_v3_lapse_covers_every_frozen_phase() {
     .await;
     result.unwrap();
 
-    // Empty and pre-selection lapses at the selection deadline.
+    // Empty and pre-selection lapses at the selection deadline.  Each lapse
+    // is measured as a closed system: the transients it closes, the exact
+    // deltas on every recorded payer, the keeper's frozen lapse reward, and
+    // the neutral sink, summing to zero.
+    let lapse_wallet_labels = [
+        "submitter",
+        "sponsor",
+        "keeper",
+        "buy_owner",
+        "sell_owner",
+        "neutral_sink",
+    ];
+    let lapse_wallets = [
+        fixture.submitter.pubkey(),
+        fixture.sponsor.pubkey(),
+        fixture.keeper.pubkey(),
+        fixture.buy_owner.pubkey(),
+        fixture.sell_owner.pubkey(),
+        sink_address(),
+    ];
+    let lapse_plane_labels = [
+        "direct.epoch.v4",
+        "order.page",
+        "direct.window.v3",
+        "direct.work_budget.v1",
+        "direct.reservation.v2.buy",
+        "direct.reservation.v2.sell",
+    ];
+
     context.warp_to_slot(SELECTION_DEADLINE).unwrap();
+    let mut empty_labels: Vec<&str> = lapse_plane_labels.to_vec();
+    empty_labels.extend_from_slice(&lapse_wallet_labels);
+    let mut empty_watch = vec![
+        fixture.plane(0).epoch,
+        fixture.plane(0).page,
+        fixture.plane(0).window,
+        fixture.plane(0).work,
+        fixture.plane(0).buy_reservation,
+        fixture.plane(0).sell_reservation,
+    ];
+    empty_watch.extend_from_slice(&lapse_wallets);
+    let empty_before = wallets(&mut context, &empty_watch).await;
+    for (index, label) in lapse_plane_labels.iter().enumerate().skip(2) {
+        if let Some(held) = live_principal(&mut context, empty_watch[index]).await {
+            note_close("LapseEmptyDirectV3", label, held);
+        }
+    }
     let (result, lapse_empty_cu) = send(
         &mut context,
         fixture.lapse_empty(fixture.keeper.pubkey(), 0),
@@ -2248,6 +2639,21 @@ async fn direct_v3_lapse_covers_every_frozen_phase() {
     .await;
     result.unwrap();
     assert_cu("LapseEmptyDirectV3", lapse_empty_cu);
+    let empty_after = wallets(&mut context, &empty_watch).await;
+    assert_zero_sum(
+        "LapseEmptyDirectV3",
+        refund_total(
+            "LapseEmptyDirectV3",
+            &empty_labels,
+            &empty_before,
+            &empty_after,
+        ),
+    );
+    note_strand(
+        "LapseEmptyDirectV3",
+        "direct.epoch.v4",
+        lamports(&mut context, fixture.plane(0).epoch).await,
+    );
     let epoch_state =
         DirectEpochV4Account::decode(&bytes(&mut context, fixture.plane(0).epoch).await).unwrap();
     assert_eq!(
@@ -2256,6 +2662,25 @@ async fn direct_v3_lapse_covers_every_frozen_phase() {
     );
     assert_eq!(epoch_state.direct.common.phase, EPOCH_PHASE_LAPSED);
 
+    let mut unselected_labels: Vec<&str> = lapse_plane_labels.to_vec();
+    unselected_labels.push("direct.candidate.v3");
+    unselected_labels.extend_from_slice(&lapse_wallet_labels);
+    let mut unselected_watch = vec![
+        fixture.plane(1).epoch,
+        fixture.plane(1).page,
+        fixture.plane(1).window,
+        fixture.plane(1).work,
+        fixture.plane(1).buy_reservation,
+        fixture.plane(1).sell_reservation,
+        candidate_addresses[0],
+    ];
+    unselected_watch.extend_from_slice(&lapse_wallets);
+    let unselected_before = wallets(&mut context, &unselected_watch).await;
+    for index in [2usize, 3, 4, 5, 6] {
+        if let Some(held) = live_principal(&mut context, unselected_watch[index]).await {
+            note_close("LapseUnselectedDirectV3", unselected_labels[index], held);
+        }
+    }
     let (result, lapse_unselected_cu) = send(
         &mut context,
         fixture.lapse_unselected(
@@ -2269,6 +2694,16 @@ async fn direct_v3_lapse_covers_every_frozen_phase() {
     .await;
     result.unwrap();
     assert_cu("LapseUnselectedDirectV3", lapse_unselected_cu);
+    let unselected_after = wallets(&mut context, &unselected_watch).await;
+    assert_zero_sum(
+        "LapseUnselectedDirectV3",
+        refund_total(
+            "LapseUnselectedDirectV3",
+            &unselected_labels,
+            &unselected_before,
+            &unselected_after,
+        ),
+    );
     let epoch_state =
         DirectEpochV4Account::decode(&bytes(&mut context, fixture.plane(1).epoch).await).unwrap();
     assert_eq!(
@@ -2293,6 +2728,31 @@ async fn direct_v3_lapse_covers_every_frozen_phase() {
     .await;
     assert_eq!(custom(refused.0), ClutchError::NotActive as u32);
     context.warp_to_slot(SETTLEMENT_DEADLINE).unwrap();
+    let mut selected_labels: Vec<&str> = lapse_plane_labels.to_vec();
+    selected_labels.extend_from_slice(&[
+        "direct.candidate.v3",
+        "direct.receipt",
+        "direct.final_pot",
+    ]);
+    selected_labels.extend_from_slice(&lapse_wallet_labels);
+    let mut selected_watch = vec![
+        fixture.plane(2).epoch,
+        fixture.plane(2).page,
+        fixture.plane(2).window,
+        fixture.plane(2).work,
+        fixture.plane(2).buy_reservation,
+        fixture.plane(2).sell_reservation,
+        candidate_addresses[1],
+        receipt_address,
+        pot_address,
+    ];
+    selected_watch.extend_from_slice(&lapse_wallets);
+    let selected_before = wallets(&mut context, &selected_watch).await;
+    for index in [2usize, 3, 4, 5, 6, 7, 8] {
+        if let Some(held) = live_principal(&mut context, selected_watch[index]).await {
+            note_close("LapseSelectedDirectV3", selected_labels[index], held);
+        }
+    }
     let (result, lapse_selected_cu) = send_nonced(
         &mut context,
         fixture.lapse_selected(
@@ -2310,6 +2770,16 @@ async fn direct_v3_lapse_covers_every_frozen_phase() {
     .await;
     result.unwrap();
     assert_cu("LapseSelectedDirectV3", lapse_selected_cu);
+    let selected_after = wallets(&mut context, &selected_watch).await;
+    assert_zero_sum(
+        "LapseSelectedDirectV3",
+        refund_total(
+            "LapseSelectedDirectV3",
+            &selected_labels,
+            &selected_before,
+            &selected_after,
+        ),
+    );
     let epoch_state =
         DirectEpochV4Account::decode(&bytes(&mut context, fixture.plane(2).epoch).await).unwrap();
     assert_eq!(
@@ -2357,5 +2827,20 @@ async fn direct_v3_lapse_covers_every_frozen_phase() {
         lamports(&mut context, fixture.keeper.pubkey()).await,
         keeper_start + keeper_rewards
     );
+    // Every lapsed epoch strands exactly the two families with no close
+    // handler: the durable Epoch V4 receipt and the epoch-addressed final
+    // policy artifact.  Neither is refundable in this runtime.
+    for plane in 0..3usize {
+        note_strand(
+            "lapse",
+            "direct.epoch.v4",
+            lamports(&mut context, fixture.plane(plane).epoch).await,
+        );
+        note_strand(
+            "lapse",
+            "artifact.direct_batch_policy_v3.final",
+            lamports(&mut context, fixture.plane(plane).policy).await,
+        );
+    }
     let _ = sink_hash;
 }
