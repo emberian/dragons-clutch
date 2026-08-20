@@ -61,6 +61,33 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- SEAL TRACKED-NESS HARDENING LANDED (ecfd552): check_tracked_evidence now
+  asserts every one of the 73 sealed-evidence paths is present, git-tracked,
+  AND byte-equal to its committed blob at HEAD — closing the hole where
+  policy.py read from disk and would have PASSED a half-committed seal. The
+  lane REPRODUCED the actual near-miss out of band (11 of 24 files, the exact
+  ratio) rather than asserting the check works, and git failure raises
+  TrackingUnavailable rather than reading as "tracked". 7 new adversarial
+  tests incl. a bundle-clone test for the Persvati attestation context;
+  suite 38 -> 45. It also caught that a bare digest swap in the docs would
+  have falsely bound the OLD CU table to the NEW ELF, and re-derived all 13
+  rows from the sealed logs.
+- IDENTITY RETIREMENT completed (7ec0f51 + follow-up): CURRENT_TRUTH, both
+  handoffs, the formalization backlog, and two manifest gate notes now cite
+  af6bb79c/1,490,544 sealed at 7931e23, with bd20711b kept as explicitly
+  historical; the hbox rebuild paragraph is scoped as a historical
+  comparison since no independent rebuild of the current identity exists.
+  Gate note corrected 37 -> 45 tests. Emission is now unblocked of stale
+  notes.
+- DRAFT 12 COVER (degg-research 4caeb80): the packet critique landed — the
+  filings are armored, not written, and the "stated once" paragraph I added
+  in Draft 11 fixed the distribution of hedging, not the ratio. Rewrote the
+  cover to lead with the system, three findings, and six concrete asks;
+  surfaced the operatorless-agent question from page 7 into its own section;
+  collapsed the repeated approval/opinion/deployment disclaimers into one
+  short scope paragraph. Awaiting ember's read before running the same
+  inversion through the statement and both joint comments.
+
 - PLANNED-VS-BUILT SCORECARD committed
   (docs/reviews/PLANNED_VS_BUILT_2026-08-19.md): ~14% of originally planned
   commitments are in the sealed runtime, against V1_BACKLOG's self-reported
