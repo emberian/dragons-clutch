@@ -57,6 +57,8 @@ SAME_ELF_MEASUREMENTS = {
     "clear_walk",
     "candidate_selection",
     "entitled_clearing",
+    "direct_v3",
+    "direct_v3_close",
 }
 REQUIRED_EVIDENCE_SUFFIXES = {
     "audit/RUNTIME_ARTIFACT_AUDIT.md",
@@ -91,7 +93,14 @@ REQUIRED_EVIDENCE_SUFFIXES = {
 # T2-7/T2-8 logs seal the selection and entitlement/settlement CU evidence;
 # and the cross-path build log records the relocation probe the 2026-08-20
 # build-path protocol amendment requires
-# (docs/reviews/BUILD_PATH_IDENTITY_2026-08-20.md).
+# (docs/reviews/BUILD_PATH_IDENTITY_2026-08-20.md).  The three
+# ``direct_selection_v3`` logs seal the V1-rung Direct V3 campaign: three
+# independent bank runs of the same suite against this same ELF.  Three and
+# not one because the V3 CU rows are *not* reproducible — the suite's fixture
+# keypairs are freshly random per run and each PDA bump probe costs 1,500 CU,
+# so a row moves in 1,500-CU steps between runs.  Sealing the spread is the
+# honest form; every close, refund, conservation, rollback, and strand number
+# in the logs is byte-identical across all three.
 CURRENT_EVIDENCE_SUFFIXES = REQUIRED_EVIDENCE_SUFFIXES | {
     "logs/bank/resolution_work_batch.log",
     "logs/bank/general_epoch.log",
@@ -99,6 +108,9 @@ CURRENT_EVIDENCE_SUFFIXES = REQUIRED_EVIDENCE_SUFFIXES | {
     "logs/bank/clear_lifecycle.log",
     "logs/bank/candidate_selection.log",
     "logs/bank/entitled_clearing.log",
+    "logs/bank/direct_selection_v3.log",
+    "logs/bank/direct_selection_v3_run2.log",
+    "logs/bank/direct_selection_v3_run3.log",
     "logs/sbf-build-crosspath.log",
 }
 # The Direct V3 account families classified after the sealed v2 probe.  The
@@ -133,6 +145,53 @@ POST_PROBE_T2_8_ROWS = {
     "epoch.final_pot": 262,
     "epoch.receipt": 217,
 }
+# The Direct V3 close campaign (rung V1 of the clearing-plane promotion
+# report).  These four families are the ones ``DIRECT.V3_CLOSE_EVIDENCE_
+# UNSEALED`` blocked, and the id's own text says what retires it: a sealed
+# bank measurement of the close and its rollback, "exactly as
+# DIRECT.TOP3_SELECT_CU_STOP retired".  The measurement now exists, so the
+# rows are REFUNDABLE_TRANSIENT — and the two halves are welded together
+# below.  ``require_v3_close_evidence`` refuses a row classified refundable
+# without a measured close route, refuses sealed close evidence for a row
+# that quietly went back to STOP, refuses a route whose lamports did not
+# conserve exactly, and refuses the retired blocker reappearing.  Neither
+# half can drift without the derivation failing.
+V3_REFUNDABLE_ROWS = {
+    "direct.candidate.v3",
+    "direct.window.v3",
+    "direct.work_budget.v1",
+    "direct.reservation.v2",
+}
+RESOLUTION_REFUNDABLE_ROWS = {"resolution.work.v1", "resolution.reserve.v1"}
+V3_CLOSE_ROUTES = {
+    "SubmitDirectCandidateV3 displacing",
+    "FinalizeDirectSelectionV3",
+    "SettleDirectV3",
+    "LapseEmptyDirectV3",
+    "LapseUnselectedDirectV3",
+    "LapseSelectedDirectV3",
+    "AbortUnfrozenDirectV4 empty",
+    "AbortUnfrozenDirectV4 one",
+    "AbortUnfrozenDirectV4 two",
+}
+V3_ROLLBACK_OBSERVATIONS = {
+    "FreezeDirectEpochV4 underfunded",
+    "SubmitDirectCandidateV3 underfunded",
+    "FinalizeDirectSelectionV3 wrong close recipient",
+    "AbortUnfrozenDirectV4 wrong close recipient",
+}
+EXACT_CONSERVATION = {"EXACT_ZERO_SUM", "EXACT_CLOSED_EQUALS_RECIPIENTS"}
+# What the same campaign measured as unreclaimable, per Direct V3 epoch.  The
+# promotion report's rent story names only the first two (7,127,040 lamports);
+# the sealed run shows the V4 OrderPage is stranded by the same absence of a
+# close handler, which is four times the other two together.  The rows stay
+# UNCLASSIFIED_STOP and the number is published rather than rounded away.
+V3_STRUCTURAL_STRAND_ROWS = {
+    "direct.epoch.v4",
+    "artifact.direct_batch_policy_v3.final",
+    "order.page",
+}
+MINIMUM_V3_BANK_RUNS = 3
 
 
 TRACKING_UNAVAILABLE = "sealed-evidence git tracking UNAVAILABLE"
@@ -241,6 +300,92 @@ def quote_dict(route: RouteQuote) -> dict[str, Any]:
 
 def route_dict(measured_cu: int, policy: QuotePolicy) -> dict[str, Any]:
     return quote_dict(quote_route(measured_cu, policy))
+
+
+def require_v3_close_evidence(
+    close: dict[str, Any], terminal: dict[str, Any]
+) -> int:
+    """Weld the Direct V3 refundable classification to its sealed measurement.
+
+    Returns the per-epoch structural strand in lamports, taken from the
+    terminal rent rows rather than from the measured balances so that a
+    prefund donation can never flatter the published number.
+    """
+
+    if close.get("runs_agree_exactly") is not True:
+        raise CheckError("Direct V3 close evidence does not claim exact run agreement")
+    runs = close.get("bank_runs")
+    if not isinstance(runs, int) or runs < MINIMUM_V3_BANK_RUNS:
+        raise CheckError(
+            f"Direct V3 close evidence needs at least {MINIMUM_V3_BANK_RUNS} bank "
+            f"runs, declares {runs!r}"
+        )
+    routes = close["routes"]
+    require_equal(set(routes), V3_CLOSE_ROUTES, "Direct V3 measured close routes")
+    for name, row in routes.items():
+        if row["conservation"] not in EXACT_CONSERVATION:
+            raise CheckError(
+                f"Direct V3 close route {name} is not exactly conserved: "
+                f"{row['conservation']!r}"
+            )
+        if not row["recipient_deltas"]:
+            raise CheckError(f"Direct V3 close route {name} names no recipient")
+    require_equal(
+        set(close["rollback_observations"]),
+        V3_ROLLBACK_OBSERVATIONS,
+        "Direct V3 measured close/rollback observations",
+    )
+
+    accounts = terminal["accounts"]
+    require_equal(set(close["closed_rows"]), V3_REFUNDABLE_ROWS, "Direct V3 closed rows")
+    for name, covering in close["closed_rows"].items():
+        unknown = set(covering) - V3_CLOSE_ROUTES
+        if unknown or not covering:
+            raise CheckError(
+                f"Direct V3 row {name} cites unmeasured close routes: "
+                + (", ".join(sorted(unknown)) or "none at all")
+            )
+        row = accounts[name]
+        if row["lifecycle_class"] != "REFUNDABLE_TRANSIENT":
+            raise CheckError(
+                f"{name} carries sealed close evidence but is classified "
+                f"{row['lifecycle_class']!r}"
+            )
+        for field in ("close_bank_evidence", "rollback_bank_evidence"):
+            require_equal(row[field], "PASS", f"{name} {field}")
+
+    refundable = {
+        name
+        for name, row in accounts.items()
+        if row["lifecycle_class"] == "REFUNDABLE_TRANSIENT"
+    }
+    require_equal(
+        refundable,
+        V3_REFUNDABLE_ROWS | RESOLUTION_REFUNDABLE_ROWS,
+        "refundable terminal rows",
+    )
+    if "DIRECT.V3_CLOSE_EVIDENCE_UNSEALED" in terminal["blocking_ids"]:
+        raise CheckError(
+            "DIRECT.V3_CLOSE_EVIDENCE_UNSEALED is retired by this seal but is "
+            "still in the terminal blocker set"
+        )
+
+    measured_strand = close["structural_strand_lamports"]
+    require_equal(
+        set(measured_strand), V3_STRUCTURAL_STRAND_ROWS, "Direct V3 stranded rows"
+    )
+    strand = 0
+    for name, observed in measured_strand.items():
+        row = accounts[name]
+        if row["lifecycle_class"] != "UNCLASSIFIED_STOP":
+            raise CheckError(f"{name} strands rent but is not an honest STOP")
+        if observed < row["rent_lamports"]:
+            raise CheckError(
+                f"{name} stranded {observed} lamports, below its own rent floor "
+                f"{row['rent_lamports']}"
+            )
+        strand += row["rent_lamports"]
+    return strand
 
 
 def derive(evidence: dict[str, Any]) -> dict[str, Any]:
@@ -382,10 +527,27 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
                 f"walk measurement family {family} lost its unpromoted "
                 f"declaration: {declared!r}"
             )
+    # Direct V3 (tags 36-46), rung V1: the syscall-era CU rows and the
+    # close/rollback campaign are SBF-executed bank evidence sealed with this
+    # same artifact and deliberately unpromoted.  No V3 admission row, quote,
+    # or reward is derived and ``live_v3`` stays false; what the close family
+    # does move is the terminal classification of the four families whose only
+    # blocker was the absence of exactly this measurement.  The derivation
+    # refuses a V3 family that stops saying it is unpromoted.
+    for family in ("direct_v3", "direct_v3_close"):
+        declared = measurements[family].get("admission")
+        if declared != "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY":
+            raise CheckError(
+                f"Direct V3 measurement family {family} lost its unpromoted "
+                f"declaration: {declared!r}"
+            )
     terminal = build_terminal(evidence["runtime_ref"])
     terminal_status = validate_terminal_admission(
         terminal,
         expected_accounts=EXPECTED_ACCOUNTS,
+    )
+    v3_strand_lamports = require_v3_close_evidence(
+        measurements["direct_v3_close"], terminal
     )
 
     return {
@@ -471,6 +633,21 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
                 if occupation_status == "PASS"
                 else "USE_MEASURED_RESOLUTIONWORK_OR_FAIL_CLOSED"
             ),
+        },
+        "direct_selection_v3": {
+            "status": "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP",
+            "admission_rows_derived": False,
+            "live_flags": "UNTOUCHED",
+            "measured_families": ["direct_v3", "direct_v3_close"],
+            "bank_runs": measurements["direct_v3_close"]["bank_runs"],
+            "cu_rows_reproducible": False,
+            "close_routes_measured": sorted(V3_CLOSE_ROUTES),
+            "close_rollback_observations": sorted(V3_ROLLBACK_OBSERVATIONS),
+            "refundable_rows_sealed": sorted(V3_REFUNDABLE_ROWS),
+            "retired_blocking_id": "DIRECT.V3_CLOSE_EVIDENCE_UNSEALED",
+            "structural_strand_rows": sorted(V3_STRUCTURAL_STRAND_ROWS),
+            "structural_strand_rent_lamports_per_epoch": v3_strand_lamports,
+            "decision_owner": "ember",
         },
         "general_clearing_walk": {
             "status": "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP",

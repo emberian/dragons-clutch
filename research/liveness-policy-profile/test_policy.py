@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 
 from admission_math import AdmissionError, QuotePolicy, quote_route
+from terminal_profile import build_terminal
 import policy
 
 
@@ -235,6 +236,180 @@ class PolicyTests(unittest.TestCase):
             del tampered["measurements"][family]["admission"]
             with self.assertRaises(policy.CheckError):
                 policy.derive(tampered)
+
+    def test_direct_v3_families_are_sealed_evidence_but_never_promoted(self) -> None:
+        """Rung V1: every V3 CU row is sealed and nothing is admitted.
+
+        The Direct V3 two-order venue (tags 36-46) had two unsealed
+        syscall-era figures and no measurement family at all.  It now has
+        both families, bound to this exact artifact by three logs, and the
+        projection derives no admission, quote, or reward row for any V3
+        route; ``live_v3`` stays false.  Dropping either family's unpromoted
+        declaration must refuse, and binding one to a historical artifact
+        must refuse, exactly like the walk's.
+        """
+
+        derived = policy.derive(self.evidence)
+        v3 = derived["direct_selection_v3"]
+        self.assertEqual(v3["status"], "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP")
+        self.assertFalse(v3["admission_rows_derived"])
+        self.assertEqual(v3["live_flags"], "UNTOUCHED")
+        self.assertEqual(v3["decision_owner"], "ember")
+        self.assertEqual(v3["measured_families"], ["direct_v3", "direct_v3_close"])
+        self.assertNotIn("selected_limit_cu", v3)
+        self.assertNotIn("keeper_reward_lamports", v3)
+        # V2's own live flag is untouched by the V3 campaign.
+        self.assertFalse(derived["direct_v2"]["live_v3"])
+        artifact_root = self.evidence["artifact"]["path"].rsplit("/", 1)[0]
+        for log in (
+            "direct_selection_v3",
+            "direct_selection_v3_run2",
+            "direct_selection_v3_run3",
+        ):
+            self.assertIn(
+                f"{artifact_root}/logs/bank/{log}.log", self.evidence["evidence_files"]
+            )
+        rows = self.evidence["measurements"]["direct_v3"]
+        for family in v3["measured_families"]:
+            self.assertEqual(
+                self.evidence["measurements"][family]["admission"],
+                "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+                family,
+            )
+            self.assertIn(family, policy.SAME_ELF_MEASUREMENTS)
+            self.assertEqual(
+                self.evidence["measurements"][family]["bank_runs"],
+                policy.MINIMUM_V3_BANK_RUNS,
+                family,
+            )
+        # Rows the bump search cannot move are pinned exactly; rows it can
+        # move are sealed as the three-run spread rather than one sample.
+        self.assertEqual(rows["init_epoch_cu"], [41_214] * 3)
+        self.assertEqual(rows["init_order_page_cu"], [221_027] * 3)
+        self.assertEqual(rows["begin_verification_cu"], [23_584] * 3)
+        self.assertEqual(rows["verify_candidate_rows"][0]["cu"], [151_346] * 3)
+        self.assertEqual(rows["abort_unfrozen_rows"][0]["cu"], [10_381] * 3)
+        self.assertEqual(max(rows["freeze_epoch_cu"]), 390_272)
+        self.assertEqual(
+            [row["disposition"] for row in rows["submit_candidate_rows"]],
+            [
+                "RETAINED",
+                "RETAINED",
+                "RETAINED",
+                "REPLACEMENT_DISPLACING_THE_WORST",
+                "NONCOMPETITIVE_NO_STATE",
+            ],
+        )
+        self.assertEqual(
+            max(rows["submit_candidate_max_cu"]),
+            max(
+                max(row["cu"]) for row in rows["submit_candidate_rows"]
+            ),
+        )
+        # The whole venue sits under the profile's own raw-CU admission
+        # boundary in every observation, which is a fact about the rows and
+        # not an admission of them.
+        boundary = derived["maximum_raw_cu_with_requested_headroom"]
+        for key, value in rows.items():
+            if key.endswith("_cu") and isinstance(value, list):
+                self.assertLess(max(value), boundary, key)
+        for family in ("direct_v3", "direct_v3_close"):
+            tampered = copy.deepcopy(self.evidence)
+            del tampered["measurements"][family]["admission"]
+            with self.assertRaises(policy.CheckError):
+                policy.derive(tampered)
+            tampered = copy.deepcopy(self.evidence)
+            historical = next(iter(tampered["historical_artifacts"]))
+            tampered["measurements"][family]["artifact_sha256"] = historical
+            with self.assertRaises(policy.CheckError):
+                policy.check_artifact_binding(tampered)
+
+    def test_v3_close_evidence_and_its_refundable_rows_cannot_drift_apart(self) -> None:
+        """The retirement of DIRECT.V3_CLOSE_EVIDENCE_UNSEALED has teeth.
+
+        The blocker's own text said what retires it: a sealed bank
+        measurement of a V3 close and its rollback.  That measurement now
+        exists for every close route the four blocked families have, so the
+        rows are REFUNDABLE_TRANSIENT — and ``require_v3_close_evidence``
+        refuses the classification without the evidence, the evidence
+        without exact conservation, a missing route, a missing rollback
+        observation, fewer than three agreeing bank runs, and any other row
+        claiming refundable.
+        """
+
+        close = self.evidence["measurements"]["direct_v3_close"]
+        self.assertTrue(close["runs_agree_exactly"])
+        self.assertEqual(set(close["routes"]), policy.V3_CLOSE_ROUTES)
+        for name, row in close["routes"].items():
+            self.assertIn(row["conservation"], policy.EXACT_CONSERVATION, name)
+        self.assertEqual(
+            set(close["rollback_observations"]), policy.V3_ROLLBACK_OBSERVATIONS
+        )
+        # Settle's seven closes and their exact landing place.
+        settle = close["routes"]["SettleDirectV3"]
+        self.assertEqual(len(settle["closed_lamports"]), 7)
+        self.assertEqual(sum(settle["closed_lamports"].values()), 27_706_854)
+        self.assertEqual(sum(settle["recipient_deltas"].values()), 27_706_854)
+        self.assertEqual(settle["recipient_deltas"]["buy_owner"], 5_192_160)
+        self.assertEqual(settle["recipient_deltas"]["sell_owner"], 5_192_160)
+        self.assertEqual(settle["recipient_deltas"]["submitter"], 9_576_960)
+        # Exactly the rent-exempt minimum of each closed shape came back:
+        # 618-byte reservation, 632-byte window plus 488-byte candidate.
+        # (The V3 rows are pinned post-probe, so they live in the terminal
+        # inventory rather than in the probed ``accounts`` block.)
+        terminal = build_terminal(self.evidence["runtime_ref"])
+        accounts = terminal["accounts"]
+        self.assertEqual(
+            settle["recipient_deltas"]["buy_owner"],
+            accounts["direct.reservation.v2"]["rent_lamports"],
+        )
+        self.assertEqual(
+            settle["recipient_deltas"]["submitter"],
+            accounts["direct.window.v3"]["rent_lamports"]
+            + accounts["direct.candidate.v3"]["rent_lamports"],
+        )
+        self.assertNotIn(
+            "DIRECT.V3_CLOSE_EVIDENCE_UNSEALED", terminal["blocking_ids"]
+        )
+        for name in policy.V3_REFUNDABLE_ROWS:
+            row = terminal["accounts"][name]
+            self.assertEqual(row["lifecycle_class"], "REFUNDABLE_TRANSIENT", name)
+            self.assertEqual(row["close_bank_evidence"], "PASS", name)
+            self.assertEqual(row["rollback_bank_evidence"], "PASS", name)
+        # The campaign also measured what stays stranded, including the V4
+        # OrderPage the promotion report's rent story omits.
+        derived = policy.derive(self.evidence)
+        self.assertEqual(
+            derived["direct_selection_v3"][
+                "structural_strand_rent_lamports_per_epoch"
+            ],
+            35_941_440,
+        )
+        self.assertIn("order.page", close["structural_strand_lamports"])
+        for name in policy.V3_STRUCTURAL_STRAND_ROWS:
+            self.assertEqual(
+                terminal["accounts"][name]["lifecycle_class"], "UNCLASSIFIED_STOP", name
+            )
+        # Retiring one blocker is not promoting a subsystem.
+        self.assertEqual(derived["terminal_status"], "STOP")
+
+        def refuse(mutate) -> None:
+            tampered = copy.deepcopy(self.evidence)
+            mutate(tampered["measurements"]["direct_v3_close"])
+            with self.assertRaises(policy.CheckError):
+                policy.derive(tampered)
+
+        refuse(lambda row: row["routes"].pop("SettleDirectV3"))
+        refuse(lambda row: row["routes"]["SettleDirectV3"].update(conservation="NEAR"))
+        refuse(lambda row: row["rollback_observations"].popitem())
+        refuse(lambda row: row.update(bank_runs=1))
+        refuse(lambda row: row.update(runs_agree_exactly=False))
+        refuse(lambda row: row["closed_rows"].pop("direct.window.v3"))
+        refuse(lambda row: row["closed_rows"].update({"direct.window.v3": []}))
+        refuse(lambda row: row["structural_strand_lamports"].pop("order.page"))
+        refuse(
+            lambda row: row["structural_strand_lamports"].update({"order.page": 1})
+        )
 
     def test_reproducibility_probes_are_pinned_with_their_dispositions(self) -> None:
         """The build-path amendment's probe rows are sealed exactly.

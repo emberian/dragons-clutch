@@ -4,7 +4,7 @@
   "capture_date": "2026-08-20",
   "runtime_ref": "2dbc9fc7a8dbbc6e20c23e2aa44069d2c180aa0c",
   "runtime_tree": "c5804b307bb48ad48f7e11aa809a0a6b5fd5f523",
-  "evidence_ref": "2dbc9fc7a8dbbc6e20c23e2aa44069d2c180aa0c",
+  "evidence_ref": "ea4b650063958860c2b400026daa66afb4101bac",
   "artifact": {
     "path": "research/liveness-policy-profile/artifacts/e8ba31d582be3939/clutch_sbf.so",
     "sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
@@ -63,7 +63,7 @@
   },
   "capture": {
     "path": "research/liveness-policy-profile/captured-output.txt",
-    "sha256": "9e28cd44dd7065abf663301a6a53e38bb5280b2c306b13342c554ce64a56d5e2"
+    "sha256": "9c5e4b2f37e0504a49d376dfd3c432a878303d483b432ae8fcfd3f75b1f4c85d"
   },
   "source_blobs": {
     "research/liveness-policy-profile/Cargo.toml": "8574e7693c1a85cdb68bf608c5cf4dcde178123b",
@@ -99,6 +99,7 @@
     "programs/clutch-sbf/svm-tests/tests/clear_walk.rs": "1f16bf0dd69eddf6941d521e05812c58ead98828",
     "programs/clutch-sbf/svm-tests/tests/collateral_leg.rs": "10cbc4891eb93cc71e97a931a8f8e6f6a7e99f47",
     "programs/clutch-sbf/svm-tests/tests/direct_selection_v2.rs": "aa7f85138f51beecf27c0f8a4417b77829cb0cc0",
+    "programs/clutch-sbf/svm-tests/tests/direct_selection_v3.rs": "69f064916d913a8b99612aca0ee68d40bd4e0ebc",
     "programs/clutch-sbf/svm-tests/tests/entitled_clearing.rs": "7cefb1c29ba97c2e0397f4467be31c279eb2919e",
     "programs/clutch-sbf/svm-tests/tests/general_epoch.rs": "46709b2eea652931b50f39e665484740e2ef3cdc",
     "programs/clutch-sbf/svm-tests/tests/native_resolution.rs": "1c330494bf68dec713570a740b5dbf730e35d77d",
@@ -111,7 +112,7 @@
   },
   "test_trees": {
     "programs/clutch-sbf/svm-tests/src": "22adee1330173ca734cdb22b433a6a8fd75993c8",
-    "programs/clutch-sbf/svm-tests/tests": "57c6ede2d5e3378bb26a24d953542337648f19a4"
+    "programs/clutch-sbf/svm-tests/tests": "c6053754508e03f47d23c6b7af6a9f03b83089aa"
   },
   "evidence_files": {
     "research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/RUNTIME_ARTIFACT_AUDIT.md": {
@@ -185,6 +186,18 @@
     "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/direct_selection_v2.log": {
       "sha256": "82cf071f890961010ed41416ba55349609a0fcb715c50d2488d0d3110773a887",
       "bytes": 763
+    },
+    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/direct_selection_v3.log": {
+      "sha256": "d935de36b54e481c3d0578b35a0154c58b27d92f0195b9364fa4849337462047",
+      "bytes": 22404
+    },
+    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/direct_selection_v3_run2.log": {
+      "sha256": "5e66663d78831af2aab6d39f866013e930ab46ada26f0d932e17b446b6594697",
+      "bytes": 22257
+    },
+    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/direct_selection_v3_run3.log": {
+      "sha256": "95255c6c5338a2fd84cd31c283165d7b9e5501fc754c4d2db431d80e1e346790",
+      "bytes": 22257
     },
     "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/entitled_clearing.log": {
       "sha256": "a7edfee16f95629cb6b7454c2499ffb3ba3e892b3ba8d55cb42921233a413d54",
@@ -622,6 +635,400 @@
       "select_result": "COMPLETED_SELECTION_COMMITTED",
       "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
       "test_result": "PASS_2_OF_2"
+    },
+    "direct_v3": {
+      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
+      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+      "suites": [
+        "direct_selection_v3.rs"
+      ],
+      "bank_runs": 3,
+      "cu_spread_source": "PDA_BUMP_SEARCH_1500_CU_QUANTUM_OVER_RANDOM_FIXTURE_KEYPAIRS",
+      "init_epoch_cu": [
+        41214,
+        41214,
+        41214
+      ],
+      "init_order_page_cu": [
+        221027,
+        221027,
+        221027
+      ],
+      "place_order_buy_cu": [
+        201659,
+        201659,
+        203159
+      ],
+      "place_order_sell_cu": [
+        205685,
+        207185,
+        201185
+      ],
+      "freeze_epoch_cu": [
+        390272,
+        387272,
+        384272
+      ],
+      "begin_verification_cu": [
+        23584,
+        23584,
+        23584
+      ],
+      "finalize_selection_cu": [
+        213761,
+        210761,
+        207761
+      ],
+      "settle_cu": [
+        176035,
+        177535,
+        173035
+      ],
+      "lapse_empty_cu": [
+        156458,
+        157958,
+        154958
+      ],
+      "lapse_unselected_cu": [
+        163039,
+        164539,
+        164539
+      ],
+      "lapse_selected_cu": [
+        173834,
+        175334,
+        179842
+      ],
+      "submit_candidate_rows": [
+        {
+          "price": 2000,
+          "disposition": "RETAINED",
+          "cu": [
+            181326,
+            178326,
+            175326
+          ]
+        },
+        {
+          "price": 5000,
+          "disposition": "RETAINED",
+          "cu": [
+            186242,
+            183244,
+            180242
+          ]
+        },
+        {
+          "price": 4000,
+          "disposition": "RETAINED",
+          "cu": [
+            204734,
+            201738,
+            198734
+          ]
+        },
+        {
+          "price": 6000,
+          "disposition": "REPLACEMENT_DISPLACING_THE_WORST",
+          "cu": [
+            209440,
+            206440,
+            203585
+          ]
+        },
+        {
+          "price": 3000,
+          "disposition": "NONCOMPETITIVE_NO_STATE",
+          "cu": [
+            196041,
+            193041,
+            190041
+          ]
+        }
+      ],
+      "submit_candidate_max_cu": [
+        209440,
+        206440,
+        203585
+      ],
+      "verify_candidate_rows": [
+        {
+          "index": 0,
+          "cu": [
+            151346,
+            151346,
+            151346
+          ]
+        },
+        {
+          "index": 1,
+          "cu": [
+            161846,
+            161846,
+            149846
+          ]
+        },
+        {
+          "index": 2,
+          "cu": [
+            149846,
+            149846,
+            161846
+          ]
+        }
+      ],
+      "abort_unfrozen_rows": [
+        {
+          "reservations": 0,
+          "cu": [
+            10381,
+            10381,
+            10381
+          ]
+        },
+        {
+          "reservations": 1,
+          "cu": [
+            138616,
+            140116,
+            137116
+          ]
+        },
+        {
+          "reservations": 2,
+          "cu": [
+            154042,
+            151042,
+            160042
+          ]
+        }
+      ],
+      "test_result": "PASS_3_OF_3_IN_EACH_OF_3_BANK_RUNS"
+    },
+    "direct_v3_close": {
+      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
+      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+      "suites": [
+        "direct_selection_v3.rs"
+      ],
+      "bank_runs": 3,
+      "runs_agree_exactly": true,
+      "routes": {
+        "SubmitDirectCandidateV3 displacing": {
+          "closed_lamports": {
+            "direct.candidate.v3.displaced": 4287361
+          },
+          "recipient_deltas": {
+            "direct.candidate.v3.displaced": -4287361,
+            "direct.candidate.v3.admitted": 4287360,
+            "submitter": 0,
+            "neutral_sink": 1
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        },
+        "FinalizeDirectSelectionV3": {
+          "closed_lamports": {
+            "direct.candidate.v3.loser0": 4287361,
+            "direct.candidate.v3.loser1": 4287361
+          },
+          "recipient_deltas": {
+            "direct.candidate.v3.loser0": -4287361,
+            "direct.candidate.v3.loser1": -4287361,
+            "direct.receipt": 2401200,
+            "direct.final_pot": 2714400,
+            "direct.work_budget.v1": -9000,
+            "direct.window.v3": 0,
+            "direct.epoch.v4": 0,
+            "submitter": 8574720,
+            "sponsor": 0,
+            "keeper": -5106600,
+            "neutral_sink": 2
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        },
+        "SettleDirectV3": {
+          "closed_lamports": {
+            "direct.window.v3": 5289608,
+            "direct.work_budget.v1": 2629961,
+            "direct.reservation.v2.buy": 5192161,
+            "direct.reservation.v2.sell": 5192161,
+            "direct.candidate.v3.winner": 4287361,
+            "direct.receipt": 2401201,
+            "direct.final_pot": 2714401
+          },
+          "recipient_deltas": {
+            "submitter": 9576960,
+            "sponsor": 2618960,
+            "keeper": 5126600,
+            "buy_owner": 5192160,
+            "sell_owner": 5192160,
+            "neutral_sink": 14
+          },
+          "conservation": "EXACT_CLOSED_EQUALS_RECIPIENTS"
+        },
+        "LapseEmptyDirectV3": {
+          "closed_lamports": {
+            "direct.work_budget.v1": 2664961,
+            "direct.reservation.v2.buy": 5192161,
+            "direct.reservation.v2.sell": 5192161
+          },
+          "recipient_deltas": {
+            "direct.epoch.v4": 0,
+            "order.page": 0,
+            "direct.window.v3": 0,
+            "direct.work_budget.v1": -2664961,
+            "direct.reservation.v2.buy": -5192161,
+            "direct.reservation.v2.sell": -5192161,
+            "submitter": 0,
+            "sponsor": 2651960,
+            "keeper": 13000,
+            "buy_owner": 5192160,
+            "sell_owner": 5192160,
+            "neutral_sink": 3
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        },
+        "LapseUnselectedDirectV3": {
+          "closed_lamports": {
+            "direct.window.v3": 5289601,
+            "direct.work_budget.v1": 2664961,
+            "direct.reservation.v2.buy": 5192161,
+            "direct.reservation.v2.sell": 5192161,
+            "direct.candidate.v3": 4287361
+          },
+          "recipient_deltas": {
+            "direct.epoch.v4": 0,
+            "order.page": 0,
+            "direct.window.v3": -5289601,
+            "direct.work_budget.v1": -2664961,
+            "direct.reservation.v2.buy": -5192161,
+            "direct.reservation.v2.sell": -5192161,
+            "direct.candidate.v3": -4287361,
+            "submitter": 9576960,
+            "sponsor": 2651960,
+            "keeper": 13000,
+            "buy_owner": 5192160,
+            "sell_owner": 5192160,
+            "neutral_sink": 5
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        },
+        "LapseSelectedDirectV3": {
+          "closed_lamports": {
+            "direct.window.v3": 5289601,
+            "direct.work_budget.v1": 2643961,
+            "direct.reservation.v2.buy": 5192161,
+            "direct.reservation.v2.sell": 5192161,
+            "direct.candidate.v3": 4287361,
+            "direct.receipt": 2401201,
+            "direct.final_pot": 2714401
+          },
+          "recipient_deltas": {
+            "direct.epoch.v4": 0,
+            "order.page": 0,
+            "direct.window.v3": -5289601,
+            "direct.work_budget.v1": -2643961,
+            "direct.reservation.v2.buy": -5192161,
+            "direct.reservation.v2.sell": -5192161,
+            "direct.candidate.v3": -4287361,
+            "direct.receipt": -2401201,
+            "direct.final_pot": -2714401,
+            "submitter": 9576960,
+            "sponsor": 2630960,
+            "keeper": 5128600,
+            "buy_owner": 5192160,
+            "sell_owner": 5192160,
+            "neutral_sink": 7
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        },
+        "AbortUnfrozenDirectV4 empty": {
+          "closed_lamports": {
+            "reservation_prefix": 0
+          },
+          "recipient_deltas": {
+            "direct.epoch.v4": 0,
+            "order.page": 0,
+            "direct.reservation.v2.buy": 0,
+            "direct.reservation.v2.sell": 0,
+            "buy_owner": 0,
+            "sell_owner": 0,
+            "neutral_sink": 0
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        },
+        "AbortUnfrozenDirectV4 one": {
+          "closed_lamports": {
+            "direct.reservation.v2.buy": 5192161
+          },
+          "recipient_deltas": {
+            "direct.epoch.v4": 0,
+            "order.page": 0,
+            "direct.reservation.v2.buy": -5192161,
+            "direct.reservation.v2.sell": 0,
+            "buy_owner": 5192160,
+            "sell_owner": 0,
+            "neutral_sink": 1
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        },
+        "AbortUnfrozenDirectV4 two": {
+          "closed_lamports": {
+            "direct.reservation.v2.buy": 5192161,
+            "direct.reservation.v2.sell": 5192161
+          },
+          "recipient_deltas": {
+            "direct.epoch.v4": 0,
+            "order.page": 0,
+            "direct.reservation.v2.buy": -5192161,
+            "direct.reservation.v2.sell": -5192161,
+            "buy_owner": 5192160,
+            "sell_owner": 5192160,
+            "neutral_sink": 2
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        }
+      },
+      "closed_rows": {
+        "direct.candidate.v3": [
+          "SubmitDirectCandidateV3 displacing",
+          "FinalizeDirectSelectionV3",
+          "SettleDirectV3",
+          "LapseUnselectedDirectV3",
+          "LapseSelectedDirectV3"
+        ],
+        "direct.window.v3": [
+          "SettleDirectV3",
+          "LapseUnselectedDirectV3",
+          "LapseSelectedDirectV3"
+        ],
+        "direct.work_budget.v1": [
+          "SettleDirectV3",
+          "LapseEmptyDirectV3",
+          "LapseUnselectedDirectV3",
+          "LapseSelectedDirectV3"
+        ],
+        "direct.reservation.v2": [
+          "SettleDirectV3",
+          "LapseEmptyDirectV3",
+          "LapseUnselectedDirectV3",
+          "LapseSelectedDirectV3",
+          "AbortUnfrozenDirectV4 one",
+          "AbortUnfrozenDirectV4 two"
+        ]
+      },
+      "rollback_observations": {
+        "FreezeDirectEpochV4 underfunded": 5,
+        "SubmitDirectCandidateV3 underfunded": 4,
+        "FinalizeDirectSelectionV3 wrong close recipient": 4,
+        "AbortUnfrozenDirectV4 wrong close recipient": 4
+      },
+      "structural_strand_lamports": {
+        "direct.epoch.v4": 5568001,
+        "artifact.direct_batch_policy_v3.final": 1559040,
+        "order.page": 28814401
+      },
+      "test_result": "PASS_3_OF_3_IN_EACH_OF_3_BANK_RUNS"
     },
     "source_endow": {
       "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
@@ -1156,6 +1563,48 @@
       ],
       "live_action": "MONOLITHIC_INITIAL_AND_RETRY_ADMITTED"
     },
+    "direct_selection_v3": {
+      "status": "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP",
+      "admission_rows_derived": false,
+      "live_flags": "UNTOUCHED",
+      "measured_families": [
+        "direct_v3",
+        "direct_v3_close"
+      ],
+      "bank_runs": 3,
+      "cu_rows_reproducible": false,
+      "close_routes_measured": [
+        "AbortUnfrozenDirectV4 empty",
+        "AbortUnfrozenDirectV4 one",
+        "AbortUnfrozenDirectV4 two",
+        "FinalizeDirectSelectionV3",
+        "LapseEmptyDirectV3",
+        "LapseSelectedDirectV3",
+        "LapseUnselectedDirectV3",
+        "SettleDirectV3",
+        "SubmitDirectCandidateV3 displacing"
+      ],
+      "close_rollback_observations": [
+        "AbortUnfrozenDirectV4 wrong close recipient",
+        "FinalizeDirectSelectionV3 wrong close recipient",
+        "FreezeDirectEpochV4 underfunded",
+        "SubmitDirectCandidateV3 underfunded"
+      ],
+      "refundable_rows_sealed": [
+        "direct.candidate.v3",
+        "direct.reservation.v2",
+        "direct.window.v3",
+        "direct.work_budget.v1"
+      ],
+      "retired_blocking_id": "DIRECT.V3_CLOSE_EVIDENCE_UNSEALED",
+      "structural_strand_rows": [
+        "artifact.direct_batch_policy_v3.final",
+        "direct.epoch.v4",
+        "order.page"
+      ],
+      "structural_strand_rent_lamports_per_epoch": 35941440,
+      "decision_owner": "ember"
+    },
     "general_clearing_walk": {
       "status": "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP",
       "admission_rows_derived": false,
@@ -1176,7 +1625,6 @@
       "DIRECT.EMPTY_FROZEN_NO_LAPSE",
       "DIRECT.EPOCH_RECEIPT_RENT_PERSISTS",
       "DIRECT.POLICY_ARTIFACT_RENT_PERSISTS",
-      "DIRECT.V3_CLOSE_EVIDENCE_UNSEALED",
       "HOARD.RESIDUAL_DISPOSITION_UNSELECTED",
       "PROFILE.STORAGE_INVENTORY_INCOMPLETE",
       "RENT.ACCOUNT_REFUND_UNOWNED",

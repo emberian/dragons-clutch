@@ -6,7 +6,13 @@ from __future__ import annotations
 import unittest
 
 from terminal_admission import validate_terminal_admission
-from terminal_profile import ACCOUNT_ROWS, EXPECTED_ACCOUNTS, build_terminal
+from terminal_profile import (
+    ACCOUNT_ROWS,
+    EXPECTED_ACCOUNTS,
+    REFUNDABLE_FACTS,
+    _row,
+    build_terminal,
+)
 
 
 class TerminalProfileTests(unittest.TestCase):
@@ -28,20 +34,19 @@ class TerminalProfileTests(unittest.TestCase):
 
         The layout crate defines six persistent program-owned V3 families;
         the policy artifact contributes stage and final rows, giving seven
-        inventory rows.  Every one is UNCLASSIFIED_STOP: the closeable rows
-        stop on the unsealed close evidence, the terminal Epoch V4 and the
-        per-epoch policy final stop on structurally persisting rent, and the
-        stage row keeps the artifact-stage windfall blocker.  Promoting any
-        of them takes sealed bank evidence, not an edit here.
+        inventory rows.  Three still STOP: the terminal Epoch V4 and the
+        per-epoch policy final on structurally persisting rent, the stage
+        row on the artifact-stage windfall.  The other four are
+        REFUNDABLE_TRANSIENT since the e8ba31d5 close campaign sealed every
+        close route they have — and that class is not an edit anyone can
+        make here alone: `_row` refuses a refundable row that names no close
+        mechanism, and policy.py refuses one whose sealed close evidence
+        does not cover it.
         """
 
         terminal = build_terminal()
-        expected = {
+        stopped = {
             "direct.epoch.v4": ["DIRECT.EPOCH_RECEIPT_RENT_PERSISTS"],
-            "direct.candidate.v3": ["DIRECT.V3_CLOSE_EVIDENCE_UNSEALED"],
-            "direct.window.v3": ["DIRECT.V3_CLOSE_EVIDENCE_UNSEALED"],
-            "direct.work_budget.v1": ["DIRECT.V3_CLOSE_EVIDENCE_UNSEALED"],
-            "direct.reservation.v2": ["DIRECT.V3_CLOSE_EVIDENCE_UNSEALED"],
             "artifact.direct_batch_policy_v3.final": [
                 "DIRECT.POLICY_ARTIFACT_RENT_PERSISTS"
             ],
@@ -49,11 +54,38 @@ class TerminalProfileTests(unittest.TestCase):
                 "RENT.ARTIFACT_PREFUND_WINDFALL"
             ],
         }
-        for name, blockers in expected.items():
+        for name, blockers in stopped.items():
             row = terminal["accounts"][name]
             self.assertEqual(row["lifecycle_class"], "UNCLASSIFIED_STOP", name)
             self.assertEqual(row["promotion"], "STOP", name)
             self.assertEqual(row["blocking_ids"], blockers, name)
+        for name in (
+            "direct.candidate.v3",
+            "direct.window.v3",
+            "direct.work_budget.v1",
+            "direct.reservation.v2",
+        ):
+            row = terminal["accounts"][name]
+            self.assertEqual(row["lifecycle_class"], "REFUNDABLE_TRANSIENT", name)
+            self.assertNotIn("blocking_ids", row)
+            self.assertTrue(row["rent_principal_recorded"], name)
+            self.assertTrue(row["rent_principal_owner"].endswith(".funding.payer"), name)
+            self.assertEqual(
+                row["donation_disposition"], "FROZEN_NEUTRAL_SINK", name
+            )
+            self.assertEqual(row["expiry_or_reaper"], "PASS", name)
+            self.assertIn("Lapse", row["expiry_route"] + row["physical_close_route"])
+            self.assertEqual(row["close_bank_evidence"], "PASS", name)
+            self.assertEqual(row["rollback_bank_evidence"], "PASS", name)
+        # The retired blocker is gone from the whole inventory, not merely
+        # from the rows that carried it.
+        self.assertNotIn(
+            "DIRECT.V3_CLOSE_EVIDENCE_UNSEALED", terminal["blocking_ids"]
+        )
+        for row in terminal["accounts"].values():
+            self.assertNotIn(
+                "DIRECT.V3_CLOSE_EVIDENCE_UNSEALED", row.get("blocking_ids", [])
+            )
         # Exact layout-crate byte pins; rent follows from the equation test.
         for name, bytes_ in (
             ("direct.epoch.v4", 672),
@@ -85,7 +117,6 @@ class TerminalProfileTests(unittest.TestCase):
         for blocker in (
             "DIRECT.EPOCH_RECEIPT_RENT_PERSISTS",
             "DIRECT.POLICY_ARTIFACT_RENT_PERSISTS",
-            "DIRECT.V3_CLOSE_EVIDENCE_UNSEALED",
         ):
             self.assertIn(blocker, terminal["blocking_ids"])
 
@@ -166,7 +197,18 @@ class TerminalProfileTests(unittest.TestCase):
         for name, bytes_, rent, *_ in ACCOUNT_ROWS:
             self.assertEqual(rent, (bytes_ + 128) * 6_960, name)
 
-    def test_only_resolution_work_and_reserve_are_refundable(self) -> None:
+    def test_refundable_rows_are_exactly_the_ones_with_sealed_close_evidence(
+        self,
+    ) -> None:
+        """Six refundable rows, each naming its own close mechanism.
+
+        The two ResolutionWork rows and the four Direct V3 families the
+        e8ba31d5 close campaign measured.  A seventh cannot appear by
+        editing the table: `_row` refuses a REFUNDABLE_TRANSIENT row that is
+        absent from REFUNDABLE_FACTS, and policy.py refuses one that the
+        sealed close family does not cover.
+        """
+
         terminal = build_terminal()
         refundable = {
             name
@@ -175,8 +217,35 @@ class TerminalProfileTests(unittest.TestCase):
         }
         self.assertEqual(
             refundable,
-            {"resolution.work.v1", "resolution.reserve.v1"},
+            {
+                "resolution.work.v1",
+                "resolution.reserve.v1",
+                "direct.candidate.v3",
+                "direct.window.v3",
+                "direct.work_budget.v1",
+                "direct.reservation.v2",
+            },
         )
+        self.assertEqual(refundable, set(REFUNDABLE_FACTS))
+        for name in refundable:
+            row = terminal["accounts"][name]
+            self.assertNotEqual(row["physical_close_route"], "NONE", name)
+            self.assertNotIn(
+                row["rent_principal_owner"], {"NONE", "UNRECORDED"}, name
+            )
+            self.assertEqual(row["max_instances"]["kind"], "FIXED", name)
+
+    def test_a_refundable_row_without_a_close_mechanism_refuses(self) -> None:
+        with self.assertRaises(ValueError):
+            _row(
+                "invented.transient",
+                8,
+                946_560,
+                "PER_NOTHING",
+                1,
+                "REFUNDABLE_TRANSIENT",
+                (),
+            )
 
     def test_source_gate_blocks_value_but_does_not_claim_future_liveness(self) -> None:
         source = build_terminal()["source_release"]

@@ -88,13 +88,27 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
     # displaced fourth candidate in the admitting transaction; and
     # AbortUnfrozen closes the 0..2-reservation prefix
     # (programs/clutch-sbf/program/src/instructions/direct_selection_v3/).
-    # Those routes are exercised only by in-repo svm-tests
-    # (programs/clutch-sbf/svm-tests/tests/direct_selection_v3.rs); no
-    # sealed bank capture measures a V3 close or its rollback, so the
-    # closeable rows STOP on DIRECT.V3_CLOSE_EVIDENCE_UNSEALED instead of
-    # claiming REFUNDABLE_TRANSIENT bank evidence they do not have —
-    # retiring that id takes a sealed measurement, exactly as
-    # DIRECT.TOP3_SELECT_CU_STOP retired.  Two families strand rent
+    # DIRECT.V3_CLOSE_EVIDENCE_UNSEALED is RETIRED at the e8ba31d5… seal,
+    # by exactly the measurement its own text named — "a sealed
+    # measurement, exactly as DIRECT.TOP3_SELECT_CU_STOP retired".  Three
+    # independent bank runs of
+    # programs/clutch-sbf/svm-tests/tests/direct_selection_v3.rs against
+    # this artifact (logs/bank/direct_selection_v3{,_run2,_run3}.log) drive
+    # every close route those four families have — the displacing Submit,
+    # Finalize's two unselected closes, Settle's seven, all three Lapse
+    # phases, and the zero/one/two AbortUnfrozen prefixes — and record, per
+    # route, what each account held before it closed, the exact lamport
+    # delta on every recorded payer and on the frozen sink, and an asserted
+    # equality between the two.  Rollback is measured on the same routes:
+    # substituting a close recipient at Finalize or at the two-order Abort
+    # refuses and leaves the accounts byte-and-lamport identical, as does an
+    # underfunded Freeze or Submit.  Every one of those numbers is identical
+    # across all three runs.  The four rows are therefore
+    # REFUNDABLE_TRANSIENT, not STOP; policy.py::require_v3_close_evidence
+    # welds the two halves together so neither the classification nor the
+    # evidence can drift alone.  This retires one blocker; it promotes no
+    # subsystem — live_v3 stays false and no V3 admission row is derived.
+    # Other families strand rent
     # structurally: the terminal Epoch V4 persists forever as the durable
     # receipt — every terminal route (settle, all three lapses, abort)
     # ends in write_epoch_v4, and no handler closes an Epoch V4, so its
@@ -104,7 +118,16 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
     # (seeds::direct_batch_policy_v3_pda binds epoch id and digest), so
     # one permanent copy of identical bytes accrues per epoch with no
     # close route for final artifacts
-    # (DIRECT.POLICY_ARTIFACT_RENT_PERSISTS).  Candidate V3 bounds: at
+    # (DIRECT.POLICY_ARTIFACT_RENT_PERSISTS).  The sealed campaign found a
+    # THIRD stranded family the promotion report's rent story omits: the
+    # 4,012-byte order.page above.  InitOrderPageV4 creates one per V4
+    # epoch and records its principal in the Epoch's page ledger, but no V3
+    # route closes it — the measured post-settle and post-lapse balance is
+    # 28,814,401 lamports, four times the other two together.  The row
+    # already STOPs on its own blockers, so nothing is over-admitted, but
+    # the honest per-epoch V3 strand is 35,941,440 lamports of rent, not
+    # the 7,127,040 the report quotes.
+    # Candidate V3 bounds: at
     # most 3 live per epoch (top-3 retention; the displaced worst closes
     # immediately) and at most 64 ever admitted (one per competitive tick,
     # MAX_DIRECT_TICKS_V3).  Reservation V2: exactly the frozen two-order
@@ -114,14 +137,10 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
     # LapseSelected, so no new persistent family arises from them.
     ("direct.epoch.v4", 672, 5_568_000, "PER_DIRECT_EPOCH", None, S,
      ("DIRECT.EPOCH_RECEIPT_RENT_PERSISTS",)),
-    ("direct.candidate.v3", 488, 4_287_360, "PER_EPOCH_CANDIDATE", 3, S,
-     ("DIRECT.V3_CLOSE_EVIDENCE_UNSEALED",)),
-    ("direct.window.v3", 632, 5_289_600, "PER_DIRECT_EPOCH", 1, S,
-     ("DIRECT.V3_CLOSE_EVIDENCE_UNSEALED",)),
-    ("direct.work_budget.v1", 248, 2_616_960, "PER_DIRECT_EPOCH", 1, S,
-     ("DIRECT.V3_CLOSE_EVIDENCE_UNSEALED",)),
-    ("direct.reservation.v2", 618, 5_192_160, "PER_DIRECT_EPOCH", 2, S,
-     ("DIRECT.V3_CLOSE_EVIDENCE_UNSEALED",)),
+    ("direct.candidate.v3", 488, 4_287_360, "PER_EPOCH_CANDIDATE", 3, R, ()),
+    ("direct.window.v3", 632, 5_289_600, "PER_DIRECT_EPOCH", 1, R, ()),
+    ("direct.work_budget.v1", 248, 2_616_960, "PER_DIRECT_EPOCH", 1, R, ()),
+    ("direct.reservation.v2", 618, 5_192_160, "PER_DIRECT_EPOCH", 2, R, ()),
     ("artifact.direct_batch_policy_v3.final", 96, 1_559_040,
      "PER_EPOCH_CONTENT_DIGEST", 1, S,
      ("DIRECT.POLICY_ARTIFACT_RENT_PERSISTS",)),
@@ -193,6 +212,56 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
 
 EXPECTED_ACCOUNTS = {row[0] for row in ACCOUNT_ROWS}
 
+# Per-row refundable facts: the physical close route, the immutable field
+# that records the principal owner, and the deadline-gated permissionless
+# route that guarantees the account cannot outlive its phase.  A
+# REFUNDABLE_TRANSIENT row must appear here; `_row` refuses one that does
+# not, so the class can never be claimed without naming its mechanism.
+#
+# Every Direct V3 expiry route below is permissionless and bounded only from
+# below: AbortUnfrozenDirectV4 requires `now >= submission_opens_slot` with
+# no upper bound and no privileged signer
+# (instructions/direct_selection_v3/freeze_abort.rs), and the three Lapse
+# phases open at the selection or settlement deadline and never close.  So
+# every phase a transient can be alive in has a route any keeper can call
+# forever afterwards, and the sealed campaign drives all of them.
+REFUNDABLE_FACTS: dict[str, tuple[str, str, str]] = {
+    "resolution.work.v1": (
+        "FinalizeResolutionWorkV1_or_AbortResolutionWorkV1",
+        "ResolutionWork.payer",
+        "AbortResolutionWorkV1_after_expiry",
+    ),
+    "resolution.reserve.v1": (
+        "FinalizeResolutionWorkV1_or_AbortResolutionWorkV1",
+        "ResolutionWork.payer",
+        "AbortResolutionWorkV1_after_expiry",
+    ),
+    "direct.candidate.v3": (
+        "SubmitDirectCandidateV3_displacing_or_FinalizeDirectSelectionV3_or_"
+        "SettleDirectV3_or_LapseUnselectedDirectV3_or_LapseSelectedDirectV3",
+        "DirectCandidateV3.funding.payer",
+        "LapseUnselectedDirectV3_or_LapseSelectedDirectV3_after_deadline",
+    ),
+    "direct.window.v3": (
+        "SettleDirectV3_or_LapseUnselectedDirectV3_or_LapseSelectedDirectV3",
+        "DirectWindowV3.funding.payer",
+        "LapseUnselectedDirectV3_or_LapseSelectedDirectV3_after_deadline",
+    ),
+    "direct.work_budget.v1": (
+        "SettleDirectV3_or_LapseEmptyDirectV3_or_LapseUnselectedDirectV3_or_"
+        "LapseSelectedDirectV3",
+        "DirectWorkBudgetV1.funding.payer",
+        "LapseEmptyDirectV3_or_LapseUnselectedDirectV3_or_"
+        "LapseSelectedDirectV3_after_deadline",
+    ),
+    "direct.reservation.v2": (
+        "SettleDirectV3_or_LapseEmptyDirectV3_or_LapseUnselectedDirectV3_or_"
+        "LapseSelectedDirectV3_or_AbortUnfrozenDirectV4",
+        "DirectReservationV2.funding.payer",
+        "AbortUnfrozenDirectV4_unfrozen_or_any_LapseDirectV3_after_deadline",
+    ),
+}
+
 
 def _row(
     name: str,
@@ -230,12 +299,17 @@ def _row(
             blocking_ids=list(blockers),
         )
     elif lifecycle == R:
+        facts = REFUNDABLE_FACTS.get(name)
+        if facts is None:
+            raise ValueError(f"{name}: refundable row names no close mechanism")
+        close_route, principal_owner, reaper = facts
         common.update(
-            physical_close_route="FinalizeResolutionWorkV1_or_AbortResolutionWorkV1",
+            physical_close_route=close_route,
             rent_principal_recorded=True,
-            rent_principal_owner="ResolutionWork.payer",
+            rent_principal_owner=principal_owner,
             donation_disposition="FROZEN_NEUTRAL_SINK",
             expiry_or_reaper="PASS",
+            expiry_route=reaper,
             close_bank_evidence="PASS",
             rollback_bank_evidence="PASS",
             promotion="PASS",

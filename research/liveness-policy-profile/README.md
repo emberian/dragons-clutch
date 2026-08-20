@@ -102,22 +102,91 @@ families are classified post-probe with layout-crate byte pins —
 `POT_PHASE_CLOSED` with provably zero scalars) and `epoch.receipt` 217
 bytes / 2,401,200 (at most 416 per selected candidate); neither has any
 close path (TerminalClosure stands in the settlement blocker ledger), so
-the terminal inventory grows to 47 rows, same 14 blocking ids. The
+the terminal inventory grows to 47 rows — 13 blocking ids after the Direct
+V3 close campaign below retired `DIRECT.V3_CLOSE_EVIDENCE_UNSEALED`. The
 general-clearing CU evidence now spans four UNPROMOTED measurement
 families (`general_epoch`, `clear_walk`, `candidate_selection`,
-`entitled_clearing`; fourteen same-ELF families in all, fifteen bank
+`entitled_clearing`; sixteen same-ELF families in all, eighteen bank
 logs): no admission, quote, or reward row is derived for any tag-49–59
 route, live flags are untouched, the reference adapter refuses all of
 them, and admission-policy treatment of the plane is ember's decision,
 not this seal's. Direct SelectionV2 Select completes at a measured
 226,445 CU and commits (V2 stays unpromoted on its unimplemented
 empty-frozen lapse), every occupation-v4 monolithic profile clears the
-25%-headroom gate, and Direct V3 remains resident but unmeasured, so no
-V3 CU row enters the projection. The declared source closure grows
+25%-headroom gate, and Direct V3 is measured but unpromoted — its rows are
+sealed as two UNPROMOTED families and no V3 admission row enters the
+projection (see the rung-V1 section below). The declared source closure grows
 106 → 108 files (exactly the two T2-7/T2-8 instruction modules). Native
 full-lifecycle tests are intentionally excluded from the default feature:
 running them requires the distinct non-production mock-source ELF, so
 they are not smuggled into this projection.
+
+## Direct V3, rung V1: the syscall-era campaign (evidence-only)
+
+Commissioned by `docs/decisions/ADOPTED_2026-08-20.md` item 10 (rung V1 of
+`REPORT_clearing-plane-promotion_2026-08-20.md` §2.2). The Direct V3
+two-order venue (tags 36–46) had **no measurement family at all** and two
+unsealed syscall-era headline figures. It now has two families,
+`direct_v3` (all 23 CU rows) and `direct_v3_close` (the close/rollback
+campaign), both `UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY`, both bound to this
+same `e8ba31d5…` ELF. **No program source moved, no admission/quote/reward
+row is derived for any V3 route, `live_v3` stays false**, and the
+`evidence_ref` alone advances (`runtime_ref` and the artifact are frozen) —
+the same evidence-only shape the batched-fold cycle used.
+
+The campaign drove the **sealed** `clutch_sbf.so` from this artifact root,
+staged into `svm-tests/tests/fixtures/` and hash-verified, rather than a
+fresh `cargo-build-sbf`. That is not a shortcut, it is a finding worth
+recording against the build-path protocol
+(`docs/reviews/BUILD_PATH_IDENTITY_2026-08-20.md`): building this same
+source at two paths other than the canonical checkout produced two further
+distinct digests (`7fc8ba9f…` and `47c011d2…`), each exactly 1,914,432
+bytes, each differing from the seal in the same 486 `.text` bytes and 6
+`.rel.dyn` bytes with `.rodata` byte-identical. The
+`PATH_TIED_SYMBOL_ORDER` disposition is real, but the sealed note that the
+one cross-path probe came back byte-identical does not generalize, and the
+divergence is in `.text`, not only in the unstripped symbol table. This is
+an **unsealed campaign observation**, not a new reproducibility row; it is
+recorded here so nobody reads a rebuilt worktree ELF as this artifact.
+
+Three bank logs, not one, because **the V3 CU rows are not reproducible**:
+the suite's fixture keypairs are freshly random per run and each PDA bump
+probe costs 1,500 CU, so a row moves in 1,500-CU steps between runs. Each
+CU row is sealed as its three-run spread. The worst observation in the whole
+venue is `FreezeDirectEpochV4` at **390,272 CU**, comfortably under the
+1,120,000 raw-CU admission boundary — a fact about the rows, not an
+admission of them. The `Submit replacement` row that STOPped on headroom in
+the pre-syscall generation (1,127,892 CU) measures 203,585–209,440 here.
+
+**`DIRECT.V3_CLOSE_EVIDENCE_UNSEALED` is retired**, by exactly the
+measurement its own text named. Every close route the four blocked families
+have is driven and measured: the displacing `Submit`, `Finalize`'s two
+unselected closes, `Settle`'s seven, all three `Lapse` phases, and the
+zero/one/two `AbortUnfrozen` prefixes. Each route logs what every account
+held before it closed, the exact lamport delta on every recorded payer and
+on the frozen neutral sink, and an **asserted** equality between the two —
+`Settle` closes 27,706,854 lamports and every one of them lands on a
+recorded recipient; the reservation owners recover 5,192,160 each, the exact
+rent-exempt minimum of a 618-byte account. Rollback is measured on the close
+routes themselves: substituting a close recipient at `Finalize` or at the
+two-order `Abort` refuses and leaves the accounts byte-and-lamport
+identical, as does an underfunded `Freeze` or `Submit`. Every one of those
+numbers is identical across all three runs. `direct.candidate.v3`,
+`direct.window.v3`, `direct.work_budget.v1`, and `direct.reservation.v2` are
+therefore `REFUNDABLE_TRANSIENT`; the terminal inventory keeps 47 rows and
+drops to 13 blocking ids, and the protocol terminal result is still STOP.
+`policy.py::require_v3_close_evidence` welds the classification to the
+evidence in both directions, so neither can drift alone.
+
+One finding corrects the promotion report's rent story. It names two
+structurally stranded V3 families (Epoch V4 + final policy artifact,
+7,127,040 lamports). The sealed run shows a **third**: `InitOrderPageV4`
+creates one 4,012-byte OrderPage per V4 epoch, records its principal, and no
+V3 route closes it — measured at 28,814,401 lamports still held after both
+settle and lapse. The honest per-epoch structural strand is therefore
+**35,941,440 lamports (~0.0359 SOL)**, five times the published figure. The
+row already STOPs on its own blockers, so nothing was over-admitted, and the
+projection publishes the corrected number rather than the quoted one.
 
 Two blessed policy-plane changes landed earlier on 2026-08-20 as one
 evidence-only cycle (at the `187d5ee1…` seal) and are re-derived at this

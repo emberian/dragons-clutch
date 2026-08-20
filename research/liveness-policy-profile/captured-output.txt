@@ -2,7 +2,7 @@
   "schema": "dragons-clutch/liveness-bank-capture/v2",
   "capture_date": "2026-08-20",
   "runtime_ref": "2dbc9fc7a8dbbc6e20c23e2aa44069d2c180aa0c",
-  "evidence_ref": "2dbc9fc7a8dbbc6e20c23e2aa44069d2c180aa0c",
+  "evidence_ref": "ea4b650063958860c2b400026daa66afb4101bac",
   "artifact": {
     "path": "research/liveness-policy-profile/artifacts/e8ba31d582be3939/clutch_sbf.so",
     "sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
@@ -211,6 +211,400 @@
       "select_result": "COMPLETED_SELECTION_COMMITTED",
       "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
       "test_result": "PASS_2_OF_2"
+    },
+    "direct_v3": {
+      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
+      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+      "suites": [
+        "direct_selection_v3.rs"
+      ],
+      "bank_runs": 3,
+      "cu_spread_source": "PDA_BUMP_SEARCH_1500_CU_QUANTUM_OVER_RANDOM_FIXTURE_KEYPAIRS",
+      "init_epoch_cu": [
+        41214,
+        41214,
+        41214
+      ],
+      "init_order_page_cu": [
+        221027,
+        221027,
+        221027
+      ],
+      "place_order_buy_cu": [
+        201659,
+        201659,
+        203159
+      ],
+      "place_order_sell_cu": [
+        205685,
+        207185,
+        201185
+      ],
+      "freeze_epoch_cu": [
+        390272,
+        387272,
+        384272
+      ],
+      "begin_verification_cu": [
+        23584,
+        23584,
+        23584
+      ],
+      "finalize_selection_cu": [
+        213761,
+        210761,
+        207761
+      ],
+      "settle_cu": [
+        176035,
+        177535,
+        173035
+      ],
+      "lapse_empty_cu": [
+        156458,
+        157958,
+        154958
+      ],
+      "lapse_unselected_cu": [
+        163039,
+        164539,
+        164539
+      ],
+      "lapse_selected_cu": [
+        173834,
+        175334,
+        179842
+      ],
+      "submit_candidate_rows": [
+        {
+          "price": 2000,
+          "disposition": "RETAINED",
+          "cu": [
+            181326,
+            178326,
+            175326
+          ]
+        },
+        {
+          "price": 5000,
+          "disposition": "RETAINED",
+          "cu": [
+            186242,
+            183244,
+            180242
+          ]
+        },
+        {
+          "price": 4000,
+          "disposition": "RETAINED",
+          "cu": [
+            204734,
+            201738,
+            198734
+          ]
+        },
+        {
+          "price": 6000,
+          "disposition": "REPLACEMENT_DISPLACING_THE_WORST",
+          "cu": [
+            209440,
+            206440,
+            203585
+          ]
+        },
+        {
+          "price": 3000,
+          "disposition": "NONCOMPETITIVE_NO_STATE",
+          "cu": [
+            196041,
+            193041,
+            190041
+          ]
+        }
+      ],
+      "submit_candidate_max_cu": [
+        209440,
+        206440,
+        203585
+      ],
+      "verify_candidate_rows": [
+        {
+          "index": 0,
+          "cu": [
+            151346,
+            151346,
+            151346
+          ]
+        },
+        {
+          "index": 1,
+          "cu": [
+            161846,
+            161846,
+            149846
+          ]
+        },
+        {
+          "index": 2,
+          "cu": [
+            149846,
+            149846,
+            161846
+          ]
+        }
+      ],
+      "abort_unfrozen_rows": [
+        {
+          "reservations": 0,
+          "cu": [
+            10381,
+            10381,
+            10381
+          ]
+        },
+        {
+          "reservations": 1,
+          "cu": [
+            138616,
+            140116,
+            137116
+          ]
+        },
+        {
+          "reservations": 2,
+          "cu": [
+            154042,
+            151042,
+            160042
+          ]
+        }
+      ],
+      "test_result": "PASS_3_OF_3_IN_EACH_OF_3_BANK_RUNS"
+    },
+    "direct_v3_close": {
+      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
+      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+      "suites": [
+        "direct_selection_v3.rs"
+      ],
+      "bank_runs": 3,
+      "runs_agree_exactly": true,
+      "routes": {
+        "SubmitDirectCandidateV3 displacing": {
+          "closed_lamports": {
+            "direct.candidate.v3.displaced": 4287361
+          },
+          "recipient_deltas": {
+            "direct.candidate.v3.displaced": -4287361,
+            "direct.candidate.v3.admitted": 4287360,
+            "submitter": 0,
+            "neutral_sink": 1
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        },
+        "FinalizeDirectSelectionV3": {
+          "closed_lamports": {
+            "direct.candidate.v3.loser0": 4287361,
+            "direct.candidate.v3.loser1": 4287361
+          },
+          "recipient_deltas": {
+            "direct.candidate.v3.loser0": -4287361,
+            "direct.candidate.v3.loser1": -4287361,
+            "direct.receipt": 2401200,
+            "direct.final_pot": 2714400,
+            "direct.work_budget.v1": -9000,
+            "direct.window.v3": 0,
+            "direct.epoch.v4": 0,
+            "submitter": 8574720,
+            "sponsor": 0,
+            "keeper": -5106600,
+            "neutral_sink": 2
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        },
+        "SettleDirectV3": {
+          "closed_lamports": {
+            "direct.window.v3": 5289608,
+            "direct.work_budget.v1": 2629961,
+            "direct.reservation.v2.buy": 5192161,
+            "direct.reservation.v2.sell": 5192161,
+            "direct.candidate.v3.winner": 4287361,
+            "direct.receipt": 2401201,
+            "direct.final_pot": 2714401
+          },
+          "recipient_deltas": {
+            "submitter": 9576960,
+            "sponsor": 2618960,
+            "keeper": 5126600,
+            "buy_owner": 5192160,
+            "sell_owner": 5192160,
+            "neutral_sink": 14
+          },
+          "conservation": "EXACT_CLOSED_EQUALS_RECIPIENTS"
+        },
+        "LapseEmptyDirectV3": {
+          "closed_lamports": {
+            "direct.work_budget.v1": 2664961,
+            "direct.reservation.v2.buy": 5192161,
+            "direct.reservation.v2.sell": 5192161
+          },
+          "recipient_deltas": {
+            "direct.epoch.v4": 0,
+            "order.page": 0,
+            "direct.window.v3": 0,
+            "direct.work_budget.v1": -2664961,
+            "direct.reservation.v2.buy": -5192161,
+            "direct.reservation.v2.sell": -5192161,
+            "submitter": 0,
+            "sponsor": 2651960,
+            "keeper": 13000,
+            "buy_owner": 5192160,
+            "sell_owner": 5192160,
+            "neutral_sink": 3
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        },
+        "LapseUnselectedDirectV3": {
+          "closed_lamports": {
+            "direct.window.v3": 5289601,
+            "direct.work_budget.v1": 2664961,
+            "direct.reservation.v2.buy": 5192161,
+            "direct.reservation.v2.sell": 5192161,
+            "direct.candidate.v3": 4287361
+          },
+          "recipient_deltas": {
+            "direct.epoch.v4": 0,
+            "order.page": 0,
+            "direct.window.v3": -5289601,
+            "direct.work_budget.v1": -2664961,
+            "direct.reservation.v2.buy": -5192161,
+            "direct.reservation.v2.sell": -5192161,
+            "direct.candidate.v3": -4287361,
+            "submitter": 9576960,
+            "sponsor": 2651960,
+            "keeper": 13000,
+            "buy_owner": 5192160,
+            "sell_owner": 5192160,
+            "neutral_sink": 5
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        },
+        "LapseSelectedDirectV3": {
+          "closed_lamports": {
+            "direct.window.v3": 5289601,
+            "direct.work_budget.v1": 2643961,
+            "direct.reservation.v2.buy": 5192161,
+            "direct.reservation.v2.sell": 5192161,
+            "direct.candidate.v3": 4287361,
+            "direct.receipt": 2401201,
+            "direct.final_pot": 2714401
+          },
+          "recipient_deltas": {
+            "direct.epoch.v4": 0,
+            "order.page": 0,
+            "direct.window.v3": -5289601,
+            "direct.work_budget.v1": -2643961,
+            "direct.reservation.v2.buy": -5192161,
+            "direct.reservation.v2.sell": -5192161,
+            "direct.candidate.v3": -4287361,
+            "direct.receipt": -2401201,
+            "direct.final_pot": -2714401,
+            "submitter": 9576960,
+            "sponsor": 2630960,
+            "keeper": 5128600,
+            "buy_owner": 5192160,
+            "sell_owner": 5192160,
+            "neutral_sink": 7
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        },
+        "AbortUnfrozenDirectV4 empty": {
+          "closed_lamports": {
+            "reservation_prefix": 0
+          },
+          "recipient_deltas": {
+            "direct.epoch.v4": 0,
+            "order.page": 0,
+            "direct.reservation.v2.buy": 0,
+            "direct.reservation.v2.sell": 0,
+            "buy_owner": 0,
+            "sell_owner": 0,
+            "neutral_sink": 0
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        },
+        "AbortUnfrozenDirectV4 one": {
+          "closed_lamports": {
+            "direct.reservation.v2.buy": 5192161
+          },
+          "recipient_deltas": {
+            "direct.epoch.v4": 0,
+            "order.page": 0,
+            "direct.reservation.v2.buy": -5192161,
+            "direct.reservation.v2.sell": 0,
+            "buy_owner": 5192160,
+            "sell_owner": 0,
+            "neutral_sink": 1
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        },
+        "AbortUnfrozenDirectV4 two": {
+          "closed_lamports": {
+            "direct.reservation.v2.buy": 5192161,
+            "direct.reservation.v2.sell": 5192161
+          },
+          "recipient_deltas": {
+            "direct.epoch.v4": 0,
+            "order.page": 0,
+            "direct.reservation.v2.buy": -5192161,
+            "direct.reservation.v2.sell": -5192161,
+            "buy_owner": 5192160,
+            "sell_owner": 5192160,
+            "neutral_sink": 2
+          },
+          "conservation": "EXACT_ZERO_SUM"
+        }
+      },
+      "closed_rows": {
+        "direct.candidate.v3": [
+          "SubmitDirectCandidateV3 displacing",
+          "FinalizeDirectSelectionV3",
+          "SettleDirectV3",
+          "LapseUnselectedDirectV3",
+          "LapseSelectedDirectV3"
+        ],
+        "direct.window.v3": [
+          "SettleDirectV3",
+          "LapseUnselectedDirectV3",
+          "LapseSelectedDirectV3"
+        ],
+        "direct.work_budget.v1": [
+          "SettleDirectV3",
+          "LapseEmptyDirectV3",
+          "LapseUnselectedDirectV3",
+          "LapseSelectedDirectV3"
+        ],
+        "direct.reservation.v2": [
+          "SettleDirectV3",
+          "LapseEmptyDirectV3",
+          "LapseUnselectedDirectV3",
+          "LapseSelectedDirectV3",
+          "AbortUnfrozenDirectV4 one",
+          "AbortUnfrozenDirectV4 two"
+        ]
+      },
+      "rollback_observations": {
+        "FreezeDirectEpochV4 underfunded": 5,
+        "SubmitDirectCandidateV3 underfunded": 4,
+        "FinalizeDirectSelectionV3 wrong close recipient": 4,
+        "AbortUnfrozenDirectV4 wrong close recipient": 4
+      },
+      "structural_strand_lamports": {
+        "direct.epoch.v4": 5568001,
+        "artifact.direct_batch_policy_v3.final": 1559040,
+        "order.page": 28814401
+      },
+      "test_result": "PASS_3_OF_3_IN_EACH_OF_3_BANK_RUNS"
     },
     "source_endow": {
       "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
