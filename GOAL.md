@@ -72,6 +72,18 @@ in the reseal lane's output) and the postmark doorstep (4 threads).
 
 ## Done log (2026-08-19 session)
 
+- TIER 2 PLAN COMMITTED (5c95b6c, docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md)
+  and WAVE 1 LAUNCHED: route-family decision argued (NEW general-epoch
+  family; V3's one-u64-price candidate wire cannot represent a simplex, so
+  extension is structurally impossible — five load-bearing two-order
+  constraints tabulated with file:line). Eight joins ordered: five parallel
+  (codec T2-1, projection T2-2, creation T2-3, tombstone cardinality T2-4,
+  policy domain T2-5), then the walk (T2-6, tags 47-53 sketched), then
+  selection T2-7 and entitlements T2-8. Lanes running now: T2-1/T2-2/T2-4/
+  T2-5 in isolated worktrees; T2-3 (SVM-heavy) queued for a build slot.
+  Flagged for ember: T2-5 pins GENERAL_CLEARING_POLICY_V1 as PROPOSED
+  (zero-fee, one dust choice, RefuseOverlap) — sign-off freezes it.
+
 - FRAME TIER 1 MERGED (d2858ee): portfolio_settlement::{prepare,apply}_full_pair
   to &mut out-slots — apply 6,784 -> 128 bytes, prepare 4,224 -> 2,688
   (extra ~800 over the plan's estimate is two Result sret temporaries;
