@@ -62,9 +62,9 @@ Source: `programs/solana-layout/src/lib.rs` at `0e4bd51`, one instance of each a
 | final_pot | `account_len::FINAL_POT` | 262 | 2714400 |
 | settlement_receipt | `account_len::SETTLEMENT_RECEIPT` | 217 | 2401200 |
 | resolution | `account_len::RESOLUTION` | 165 | 2039280 |
-| clear_work | `account_len::CLEAR_WORK` | 48750 | 340190880 |
+| clear_work | `account_len::CLEAR_WORK` | 48004 | 334998720 |
 | candidate_feed | `account_len::CANDIDATE_FEED` | 6266 | 44502240 |
-| **one instance of each (17)** | | **64231** | **462192720** |
+| **one instance of each (17)** | | **63485** | **457000560** |
 
 Of that principal, 15144960 lamports is the per-account 128-byte storage overhead, so account count is a first-class capital term.
 
@@ -131,7 +131,7 @@ Payload widths are landed; the account sets are hypotheses and are labeled as su
 | claim_instruction_internal_split | bytes | 11 | 74 | +63 | The landed payload names market and owner by 32-byte identity instead of packing an outcome count and a u64 into 11 bytes. |
 | claim_instruction_materialize_one | bytes | 11 | 107 | +96 | The landed payload adds a 32-byte destination and an outcome index to the market/owner pair, still far inside MAX_INTENT_BYTES. |
 | accumulator_full_summary | bytes | 272 | absent | absent | No accumulator summary account exists in the landed family; FeedHead is a 124-byte cursor plus evidence digest, not a fold summary, so the accumulator arm stays entirely hypothetical. |
-| landed_only_account_family | bytes | absent | 59666 | absent | Realm, Profile, Market, Hoard, FeedHead, Terms, PriceGrid, Epoch, CandidateRecord, FinalPot, SettlementReceipt, Resolution, ClearWork and CandidateFeed were never in the hypothesis arm, so most of the landed rent inventory is not represented by the design sketch. |
+| landed_only_account_family | bytes | absent | 58920 | absent | Realm, Profile, Market, Hoard, FeedHead, Terms, PriceGrid, Epoch, CandidateRecord, FinalPot, SettlementReceipt, Resolution, ClearWork and CandidateFeed were never in the hypothesis arm, so most of the landed rent inventory is not represented by the design sketch. |
 
 ## Interpretation
 

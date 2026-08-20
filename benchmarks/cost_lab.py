@@ -1943,7 +1943,7 @@ def check_artifacts(output: Path, artifacts: dict[str, bytes]) -> None:
 PIN_TABLE = "RUST_IDENTIFIER_VALUES in benchmarks/cost_lab.py"
 
 RUST_IDENTIFIER_VALUES = {
-    "CLEAR_WORK_BODY_BYTES": 48_592,
+    "CLEAR_WORK_BODY_BYTES": 47_846,
     "HASH_BYTES": 32,
     "MAX_EPOCH_ORDERS": 64,
     "MAX_GRID_TICKS": 64,

@@ -108,7 +108,7 @@
       "relation_path": "crates/clutch-batch/src/lib.rs",
       "relation_blob_sha256_at_commit": "f25ce5524a71f9e8ad5200992bb69290444865243f26040906d7aa6798013249",
       "relation_v1_path": "crates/clutch-batch/src/relation_v1.rs",
-      "relation_v1_blob_sha256_at_commit": "f95b4931414386f109ef52b844616f86f11e21121d6f9ef8901f18b77eafc490",
+      "relation_v1_blob_sha256_at_commit": "9d4e3cc0fdfc03a4cd2d08f0257224f79fe4a8f0d1f861a09b75e92755bd30da",
       "note": "One codec owner. Every width below is that file's own account_len, account_version and Intent::encoded_len expression restated term by term, so the harness re-derives each total instead of quoting it, and `abi-audit` re-derives them again from the file on disk. Digests are the blobs at the pinned commit, not a mutable working tree. The relation bounds come from crates/clutch-batch and are not re-derived by the audit: their blob digests are checked instead, so a moved relation blob is drift until someone re-verifies the bounds by hand."
     },
     "bounds": {
@@ -268,10 +268,10 @@
       },
       "clear_work": {
         "rust_const": "account_len::CLEAR_WORK",
-        "bytes": 48750,
+        "bytes": 48004,
         "discriminator_tag": 17,
         "schema_version": 1,
-        "field_terms": [2, 128, 16, 4, 2, 2, 1, 1, 1, 1, 48592],
+        "field_terms": [2, 128, 16, 4, 2, 2, 1, 1, 1, 1, 47846],
         "formula": "2 + (4 * 32) + 16 + 4 + 2 + 2 + 1 + 1 + 1 + 1 + CLEAR_WORK_BODY_BYTES"
       },
       "candidate_feed": {
