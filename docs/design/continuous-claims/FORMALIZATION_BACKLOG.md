@@ -198,8 +198,8 @@ Landed local SBF evidence includes:
   zero-progress Abort. Measured maxima are 810,992 / 815,573 / 1,094,832 /
   587,197 CU; Work/Reserve close atomically with payer/refund, prepaid reward,
   and neutral donation-sink separation. The current sealed default ELF is
-  1,228,192 bytes with SHA-256
-  `bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`
+  1,490,544 bytes with SHA-256
+  `af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b`
   (sealed at `b5700a9`; the preceding `a5725a3d…` seal is historical only);
   its audit reports zero first-party final-LTO diagnostic survivors and direct
   `r10` no greater than 4,096.

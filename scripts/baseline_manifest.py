@@ -726,8 +726,8 @@ def build_gates() -> list[dict[str, Any]]:
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": UNITTEST_PATTERNS,
                 "note": (
-                    "37 deterministic liveness-profile arithmetic and terminal "
-                    "admission tests; they do not promote a global liveness policy"
+                    "45 deterministic liveness-profile arithmetic, terminal, and "
+                    "sealed-evidence tracking tests; they do not promote a global liveness policy"
                 ),
             },
             {
@@ -741,7 +741,7 @@ def build_gates() -> list[dict[str, Any]]:
                     r"^PASS: exact R1 artifact, bank capture, account probe, rewards, and STOPs agree$"
                 ],
                 "note": (
-                    "hashes the sealed 1,228,192-byte default ELF and 23 committed "
+                    "hashes the sealed 1,490,544-byte default ELF and 23 committed "
                     "audit/build/bank files, rederives the profile, and refuses source "
                     "drift; it does not rebuild SBF or establish global liveness"
                 ),

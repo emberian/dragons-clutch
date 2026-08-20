@@ -47,13 +47,15 @@ it changes seven line-location bytes in `.data.rel.ro`, while `.text`,
 disassembly remain identical. Current CU rows were nevertheless remeasured
 against the current artifact rather than relabeled from the historical seal.
 
-The current sealed default ELF is 1,228,192 bytes with SHA-256
-`bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`.
+The current sealed default ELF is 1,490,544 bytes with SHA-256
+`af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b`, sealed at `7931e23` over runtime ancestry `2d530d2` after the Direct V3
+merge. The preceding `bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`
+(1,228,192 bytes) is historical evidence for its own ancestry.
 Two ordinary builds from `83e124d` are byte-identical. The final audit found
 zero diagnostics naming `clutch_sbf`, zero diagnosed symbols surviving final
 LTO, and all 40,389 direct `r10` references at or below 4,096 bytes. The audit
 is archived under
-[`research/liveness-policy-profile/artifacts/bd20711b01828a74`](research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/RUNTIME_ARTIFACT_AUDIT.md);
+[`research/liveness-policy-profile/artifacts/af6bb79cc3766bd0`](research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/RUNTIME_ARTIFACT_AUDIT.md);
 its report SHA-256 is
 `626a299dd879cff5f8c775b82b488c2d6b300a386b6d5f847913b5e14797e038`,
 and the upstream 52-file checksum-ledger SHA-256 is

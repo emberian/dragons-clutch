@@ -19,8 +19,8 @@ rebuilt, remeasured, resealed, and checked after the manifest-only commit.
 The R1 evidence checkpoint is sealed:
 
 - runtime/test ancestry `83e124d` produced two byte-identical ordinary builds
-  of the exact 1,228,192-byte
-  `bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`
+  of the exact 1,490,544-byte
+  `af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b`
   ELF; the committed current audit/log/profile seal is `b5700a9`;
 - its audit report SHA-256 is `626a299d...e038`, its upstream 52-file ledger
   SHA-256 is `dbf55f8e...5f35`, zero diagnosed first-party symbols survive final
@@ -168,8 +168,9 @@ The local SBF adapter has crossed several formerly open value/liveness seams:
 
 The current frozen runtime source and test ancestry is `83e124d`; the current
 profile/artifact evidence is sealed at `b5700a9`. Two ordinary builds are
-byte-identical at 1,228,192 bytes with SHA-256
-`bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`.
+byte-identical at 1,490,544 bytes with SHA-256
+`af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b`, sealed at `7931e23`; the
+1,228,192-byte predecessor is historical.
 The seal reports zero diagnosed first-party final-LTO survivors and no direct
 `r10` reference above 4,096. The preceding `a572...` seal remains historical;
 the current same-ELF bank rows were remeasured rather than borrowed.

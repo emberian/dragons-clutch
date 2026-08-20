@@ -103,8 +103,9 @@ These are **HOST-TESTED**, **MODEL-ONLY**, or **PROVED-MODEL** as named in
 
 The current frozen runtime source and test ancestry is `83e124d`; the current
 liveness/artifact seal is `b5700a9`. Two ordinary builds produced the same
-1,228,192-byte ELF with SHA-256
-`bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`.
+1,490,544-byte ELF with SHA-256
+`af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b` (sealed at `7931e23`); the
+1,228,192-byte `bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60` is historical.
 The sealed audit finds zero first-party final-LTO diagnostic survivors and no
 direct `r10` reference beyond 4,096 bytes. The preceding
 `7e8f6b1`/`b5da74f`/`a572...` seal remains historical evidence only. The two
