@@ -12,6 +12,7 @@ from model import (
     MandatoryJob,
     SharedFeedReserve,
     admit_market,
+    composite_floor_quote,
     fee_quote,
     quote_admission,
 )
@@ -41,13 +42,27 @@ def main() -> None:
         FeePolicy(FeeBasis.PER_EGG_LEG, 4, 1_000),
         FeePolicy(FeeBasis.QUOTIENT_RANGE, 1, 1_000),
     )
+    dispersion_policy = policies[1]
+    quotient_policy = policies[3]
     fee_rows = []
     for price in (0, 1, 10, 50, 90, 99, 100):
-        for policy in policies:
-            quote = fee_quote((10_000, 0), (price, 100 - price), 100, policy)
+        quotes = [
+            fee_quote((10_000, 0), (price, 100 - price), 100, policy)
+            for policy in policies
+        ]
+        quotes.append(
+            composite_floor_quote(
+                (10_000, 0),
+                (price, 100 - price),
+                100,
+                dispersion_policy,
+                quotient_policy,
+            )
+        )
+        for quote in quotes:
             fee_rows.append(
                 {
-                    "basis": policy.basis.value,
+                    "basis": quote.basis.value,
                     "base": ratio(quote.base_numerator, quote.base_denominator),
                     "exact_fee": ratio(
                         quote.exact_numerator, quote.exact_denominator
@@ -58,19 +73,31 @@ def main() -> None:
             )
     # Proposition 9 falsifier row: risk transfer supported entirely on
     # zero-priced outcomes.  Every price-weighted arm charges it zero however
-    # large its model-free range; only the quotient-norm arm charges it.
+    # large its model-free range; only the quotient-norm arm charges it, and
+    # the composite floor arm inherits exactly that charge.
     laundering_payoffs = (10**30, 0, 0)
     laundering_prices = (0, 0, 100)
+    laundering_atoms = {
+        policy.basis.value: fee_quote(
+            laundering_payoffs, laundering_prices, 100, policy
+        ).terminal_ceil_atoms
+        for policy in policies
+    }
+    laundering_composite = composite_floor_quote(
+        laundering_payoffs,
+        laundering_prices,
+        100,
+        dispersion_policy,
+        quotient_policy,
+    )
+    laundering_atoms[laundering_composite.basis.value] = (
+        laundering_composite.terminal_ceil_atoms
+    )
     zero_price_laundering = {
         "payoffs": list(laundering_payoffs),
         "prices": list(laundering_prices),
         "model_free_range": 10**30,
-        "terminal_ceil_atoms": {
-            policy.basis.value: fee_quote(
-                laundering_payoffs, laundering_prices, 100, policy
-            ).terminal_ceil_atoms
-            for policy in policies
-        },
+        "terminal_ceil_atoms": laundering_atoms,
     }
     report = {
         "admission_quote": admission.__dict__,

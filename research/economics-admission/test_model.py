@@ -12,6 +12,7 @@ from model import (
     EndowmentBook,
     FeeBasis,
     FeePolicy,
+    composite_floor_quote,
     JobPayment,
     MaintainerCashflow,
     MandatoryJob,
@@ -569,6 +570,198 @@ class ZeroPriceLaunderingTests(unittest.TestCase):
             fragments, prices, self.SCALE, self.QUOTIENT
         )
         self.assertEqual(quotient_sequence.total_paid, 3 * magnitude // 1_000)
+
+
+class CompositeFloorTests(unittest.TestCase):
+    """Decision-register B1 option 5 made executable: ``kappa*G + kappa'*R``.
+
+    The additive hybrid over one common denominator.  Its kernel, axiom, and
+    calibration behavior is measured against the four pure arms: the floor
+    closes the Proposition 9 zero-price hole at exactly the floor rate, the
+    kernel is the diagonal at every price including the boundary, every
+    seminorm axiom survives, and Proposition 11's layer-cake machinery
+    survives with the binary calibration shifted from ``kappa q(1-q)`` to
+    ``kappa q(1-q) + kappa'``.
+    """
+
+    SCALE = 100
+    DISPERSION = FeeGeometryComparisonTests.DISPERSION
+    QUOTIENT = FeeGeometryComparisonTests.QUOTIENT
+
+    def quote(self, payoffs, prices, scale=None, carry=0):  # type: ignore[no-untyped-def]
+        return composite_floor_quote(
+            payoffs,
+            prices,
+            self.SCALE if scale is None else scale,
+            self.DISPERSION,
+            self.QUOTIENT,
+            carry,
+        )
+
+    def test_single_rate_quote_refuses_the_composite_basis(self) -> None:
+        policy = FeePolicy(FeeBasis.DISPERSION_RANGE_FLOOR, 1, 1_000)
+        with self.assertRaises(ModelError):
+            fee_quote((10, 0), (50, 50), self.SCALE, policy)
+        with self.assertRaises(ModelError):
+            composite_floor_quote(
+                (10, 0), (50, 50), self.SCALE, self.QUOTIENT, self.QUOTIENT
+            )
+        with self.assertRaises(ModelError):
+            composite_floor_quote(
+                (10, 0), (50, 50), self.SCALE, self.DISPERSION, self.DISPERSION
+            )
+
+    def test_floor_closes_the_zero_price_hole_at_exactly_the_floor_rate(
+        self,
+    ) -> None:
+        # The run_lab.py laundering row, re-run under the composite: the
+        # transfer varies only on zero-priced outcomes, dispersion contributes
+        # exactly zero, and the composite charge equals the pure quotient
+        # arm's at every tested scale.
+        prices = (0, 0, self.SCALE)
+        for magnitude in (1, 10**6, 10**18, 10**30):
+            payoffs = (magnitude, 0, 0)
+            composite = self.quote(payoffs, prices)
+            quotient = fee_quote(payoffs, prices, self.SCALE, self.QUOTIENT)
+            self.assertEqual(
+                composite.terminal_ceil_atoms, quotient.terminal_ceil_atoms
+            )
+            self.assertEqual(
+                composite.terminal_ceil_atoms, ceil_div(magnitude, 1_000)
+            )
+        # Fragmentation with a threaded carry cannot dodge the floor.
+        magnitude = 10**30
+        carry = 0
+        paid = 0
+        for fragment in ((magnitude, 0, 0),) * 3:
+            quote = self.quote(fragment, prices, carry=carry)
+            paid += quote.floor_atoms
+            carry = quote.carry
+        paid += 1 if carry else 0
+        self.assertEqual(paid, 3 * magnitude // 1_000)
+
+    def test_composite_kernel_is_exactly_the_diagonal_at_every_price(
+        self,
+    ) -> None:
+        # Bounded exhaustive, boundary prices included: the composite base
+        # vanishes iff the payoff is constant outright -- span(1), with no
+        # zero-price enlargement -- while the dispersion member alone
+        # vanishes on anything constant merely on the priced support.
+        scale = 4
+        for first in range(scale + 1):
+            for second in range(scale + 1 - first):
+                prices = (first, second, scale - first - second)
+                for payoffs in itertools.product(range(4), repeat=3):
+                    quote = self.quote(payoffs, prices, scale=scale)
+                    constant = len(set(payoffs)) <= 1
+                    self.assertEqual(quote.base_numerator == 0, constant)
+
+    def test_composite_layer_cake_additivity_with_shifted_binary_calibration(
+        self,
+    ) -> None:
+        # Proposition 11 machinery for the composite: the exact charge equals
+        # the payoff sliced into digital layers with each layer charged
+        # kappa q(1-q) + kappa' at its own implied probability.  Independent
+        # recomputation, bounded exhaustive.
+        scale = 6
+        disp_rn, disp_rd = 4, 1_000
+        floor_rn, floor_rd = 1, 1_000
+        for first in range(scale + 1):
+            for second in range(scale + 1 - first):
+                prices = (first, second, scale - first - second)
+                for payoffs in itertools.product(range(5), repeat=3):
+                    quote = self.quote(payoffs, prices, scale=scale)
+                    values = sorted(set(payoffs))
+                    expected = 0
+                    for level, value in enumerate(values[:-1]):
+                        height = values[level + 1] - value
+                        q_num = sum(
+                            price
+                            for payoff, price in zip(payoffs, prices)
+                            if payoff > value
+                        )
+                        expected += height * (
+                            disp_rn * q_num * (scale - q_num) * floor_rd
+                            + floor_rn * disp_rd * scale * scale
+                        )
+                    self.assertEqual(quote.base_numerator, expected)
+                    self.assertEqual(
+                        quote.base_denominator,
+                        disp_rd * scale * scale * floor_rd,
+                    )
+
+    def test_composite_satisfies_every_seminorm_axiom(self) -> None:
+        scale = 4
+        prices_grid = [
+            (first, second, scale - first - second)
+            for first in range(scale + 1)
+            for second in range(scale + 1 - first)
+        ]
+        vectors = list(itertools.product(range(3), repeat=3))
+        for prices in prices_grid:
+            for payoffs in vectors:
+                base = self.quote(payoffs, prices, scale=scale)
+                # Complete-set translation invariance.
+                translated = tuple(value + 5 for value in payoffs)
+                self.assertEqual(
+                    self.quote(translated, prices, scale=scale).base_numerator,
+                    base.base_numerator,
+                )
+                # Positive homogeneity.
+                tripled = tuple(value * 3 for value in payoffs)
+                self.assertEqual(
+                    self.quote(tripled, prices, scale=scale).base_numerator,
+                    3 * base.base_numerator,
+                )
+                # Relabeling symmetry.
+                permuted_payoffs = (payoffs[2], payoffs[0], payoffs[1])
+                permuted_prices = (prices[2], prices[0], prices[1])
+                self.assertEqual(
+                    self.quote(
+                        permuted_payoffs, permuted_prices, scale=scale
+                    ).base_numerator,
+                    base.base_numerator,
+                )
+                # Subadditivity (same exact denominator for every vector).
+                for other in vectors:
+                    joint = tuple(
+                        left + right for left, right in zip(payoffs, other)
+                    )
+                    self.assertLessEqual(
+                        self.quote(joint, prices, scale=scale).base_numerator,
+                        base.base_numerator
+                        + self.quote(other, prices, scale=scale).base_numerator,
+                    )
+
+    def test_composite_is_refinement_invariant(self) -> None:
+        payoffs = (0, 7, 20)
+        for prices in ((20, 30, 50), (0, 1, 99), (33, 33, 34)):
+            base = self.quote(payoffs, prices)
+            for index, price in enumerate(prices):
+                for left_price in range(price + 1):
+                    refined_payoffs, refined_prices = split_identical_cell(
+                        payoffs, prices, index, left_price
+                    )
+                    refined = self.quote(refined_payoffs, refined_prices)
+                    self.assertEqual(
+                        refined.base_numerator, base.base_numerator
+                    )
+                    self.assertEqual(
+                        refined.base_denominator, base.base_denominator
+                    )
+
+    def test_composite_interior_grid_matches_dispersion_plus_ten_atoms(
+        self,
+    ) -> None:
+        # The run_lab.py binary grid under the composite at the lab's
+        # comparison rates (dispersion 40 bp, floor 10 bp of range): the
+        # charge is the dispersion arm's plus exactly the constant floor,
+        # because the exact floor term 10^11 / 10^10 contributes 10 atoms on
+        # a 10,000-atom range at every price.
+        expected = {0: 10, 1: 11, 10: 14, 50: 20, 90: 14, 99: 11, 100: 10}
+        for price, atoms in expected.items():
+            quote = self.quote((10_000, 0), (price, self.SCALE - price))
+            self.assertEqual(quote.terminal_ceil_atoms, atoms)
 
 
 if __name__ == "__main__":

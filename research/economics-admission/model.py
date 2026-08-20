@@ -531,6 +531,9 @@ class FeeBasis(str, Enum):
     SIMPLEX_DISPERSION = "simplex_dispersion"
     PER_EGG_LEG = "per_egg_leg"
     QUOTIENT_RANGE = "quotient_range_norm"
+    # Composite arm (decision register B1 option 5): two rates, so it is
+    # quoted by ``composite_floor_quote`` and refused by ``fee_quote``.
+    DISPERSION_RANGE_FLOOR = "dispersion_plus_quotient_range_floor"
 
 
 @dataclass(frozen=True)
@@ -651,6 +654,10 @@ def fee_quote(
         base_numerator, base_denominator = quotient_range_base(
             payoffs, prices, price_scale
         )
+    elif policy.basis is FeeBasis.DISPERSION_RANGE_FLOOR:
+        raise ModelError(
+            "the composite basis carries two rates; use composite_floor_quote"
+        )
     else:  # pragma: no cover - enum makes this unreachable in ordinary Python
         raise ModelError("unknown fee basis")
     denominator = policy.rate_denominator * base_denominator
@@ -663,6 +670,66 @@ def fee_quote(
         basis=policy.basis,
         base_numerator=base_numerator,
         base_denominator=base_denominator,
+        exact_numerator=numerator,
+        exact_denominator=denominator,
+        floor_atoms=paid,
+        terminal_ceil_atoms=ceil_div(numerator, denominator),
+        carry=carry,
+    )
+
+
+def composite_floor_quote(
+    payoffs: Sequence[int],
+    prices: Sequence[int],
+    price_scale: int,
+    dispersion_policy: FeePolicy,
+    floor_policy: FeePolicy,
+    prior_carry: int = 0,
+) -> FeeQuote:
+    """One exact rational for ``kappa*G(a,p) + kappa'*R(a)`` with one carry.
+
+    The additive hybrid the decision register's B1 entry names as option 5:
+    the price-weighted dispersion base plus a price-free quotient-norm floor,
+    combined over one common denominator so one persistent carry and one
+    terminal ceiling close the intent.  Two parallel fee pipelines would pay
+    up to one extra terminal atom per intent; this models the single-rational
+    runtime shape a ``FeeBaseV1`` variant would implement.
+
+    The reported base fraction folds both rates in, because the composite has
+    no single rate to factor out.
+    """
+
+    if dispersion_policy.basis is not FeeBasis.SIMPLEX_DISPERSION:
+        raise ModelError("composite dispersion member must be SIMPLEX_DISPERSION")
+    if floor_policy.basis is not FeeBasis.QUOTIENT_RANGE:
+        raise ModelError("composite floor member must be QUOTIENT_RANGE")
+    dispersion_num, dispersion_den = dispersion_base(payoffs, prices, price_scale)
+    range_num, range_den = quotient_range_base(payoffs, prices, price_scale)
+    denominator = (
+        dispersion_policy.rate_denominator
+        * dispersion_den
+        * floor_policy.rate_denominator
+        * range_den
+    )
+    base_numerator = (
+        dispersion_policy.rate_numerator
+        * dispersion_num
+        * floor_policy.rate_denominator
+        * range_den
+        + floor_policy.rate_numerator
+        * range_num
+        * dispersion_policy.rate_denominator
+        * dispersion_den
+    )
+    _nonnegative(prior_carry, "fee carry")
+    if prior_carry >= denominator:
+        raise ModelError("noncanonical fee carry")
+    numerator = base_numerator + prior_carry
+    paid, carry = divmod(numerator, denominator)
+    return FeeQuote(
+        basis=FeeBasis.DISPERSION_RANGE_FLOOR,
+        base_numerator=base_numerator,
+        base_denominator=denominator,
         exact_numerator=numerator,
         exact_denominator=denominator,
         floor_atoms=paid,
