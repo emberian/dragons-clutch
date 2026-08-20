@@ -72,6 +72,19 @@ in the reseal lane's output) and the postmark doorstep (4 threads).
 
 ## Done log (2026-08-19 session)
 
+- REVENUE POLICY V1 DESIGNED (docs/design/REVENUE_POLICY_V1.md, PROPOSED,
+  485 lines): the missing fee-destination object, two denominations
+  sequenced lamports-first, per-Realm policy record + revenue vault PDAs
+  with day-one terminal identity (no new permanent-rent rows), Plane-C fee
+  atoms credit an ordinary treasury-owned Position (zero new atom-holding
+  families), IntentFeeCarry semantics wired via the next reservation
+  version, 60/0/40 split with executor deferred, the five zero-gates
+  each mapped to exact relaxation requirements, eight falsifiers required
+  before any nonzero charge. Base/rate/promotion explicitly undecided;
+  six ember decisions queued in its section 11. Mail PR #1908 MERGED
+  (03:40Z). SOL collector restarted (pid 26807). T2-6 walk lane resumed
+  after the usage-limit window.
+
 - CYCLE B ATTESTED: Persvati 43/43 portable gates PASS, 0 STOP over exact
   6827749 (grew 41 -> 43 contract-driven: the reseal's own closure expansion
   forced clutch-batch test+clippy gates). ELF fda59705 byte-verified five
