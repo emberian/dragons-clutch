@@ -21,10 +21,10 @@
 //!   entitlement freeze (`NotYetImplemented`: the VirtualPot ranked blocker
 //!   stands) and a partial-fill candidate refuses entitlement (the
 //!   PartialFillLedger row likewise);
-//! * the lapse record — a lapsed epoch's reservations stand ACTIVE: the only
-//!   release path (`CancelOrder`) requires an OPEN epoch and refuses
-//!   honestly, which is the standing expiry/TerminalClosure blocker in the
-//!   settlement ledger, recorded here as an executed refusal.
+//! * the lapse record — a lapsed epoch's reservations stand ACTIVE and the
+//!   cancellation path (`CancelOrder`) keeps requiring an OPEN epoch: the
+//!   post-lapse exit is the owner-signed terminal release (tag 60), driven
+//!   with the whole close family in `terminal_closure.rs`.
 //!
 //! Claim plane: SBF-EXECUTED (bank), no promotion.  The reference adapter
 //! refuses both new intents with `UnsupportedIntent`; the oracle is the
@@ -1705,8 +1705,9 @@ async fn portfolio_order_actually_clears_with_conservation() {
     }
 
     // The unfilled ineligible order's reservation stands ACTIVE, and the
-    // only release path refuses post-clear: the standing expiry /
-    // TerminalClosure blocker, recorded as an executed refusal.
+    // cancellation path refuses post-clear (release requires OPEN): the
+    // owner-signed terminal release is its own intent (tag 60), driven with
+    // full closure evidence in `terminal_closure.rs`.
     let idle = read_reservation(&mut context, res_idle).await;
     assert_eq!(idle.state, RESERVATION_STATE_ACTIVE);
     assert_eq!(idle.remaining_cash_atoms, 1);
@@ -1871,10 +1872,10 @@ async fn lapsed_epoch_reservations_stand_under_the_expiry_blocker() {
         );
         assert_eq!(reservation.remaining_internal, reservation.initial_internal);
     }
-    // ...and the owner-signed release path requires an OPEN epoch and
-    // refuses honestly.  There is deliberately no other path: post-lapse
-    // release and permissionless expiry stand behind the settlement ledger's
-    // open rows, and nothing here pretends otherwise.
+    // ...and the cancellation path requires an OPEN epoch and refuses
+    // honestly.  The post-lapse exit is the owner-signed terminal release
+    // (tag 60), a different intent with its own evidence in
+    // `terminal_closure.rs`; cancellation itself never bends.
     let release = send(
         &mut context,
         &[fixture.cancel(&fixture.owners[0], canonical_order_id(1), 2)],

@@ -1978,6 +1978,126 @@ impl Iterator for SliceCursor<'_> {
     }
 }
 
+/* ------------------------------------------------------------------------ */
+/* The general funding ledger                                                */
+/* ------------------------------------------------------------------------ */
+
+/// Account discriminator of the general plane's funding-ledger sibling.
+pub const GENERAL_FUNDING_LEDGER_TAG: u8 = 26;
+/// First general-funding-ledger schema.
+pub const GENERAL_FUNDING_LEDGER_VERSION: u8 = 1;
+/// Exact fixed length of one general funding ledger.
+pub const GENERAL_FUNDING_LEDGER_BYTES: usize = 2 + 32 + 32 + 8 + 8 + 1 + 1 + 1;
+
+/// The ledger covers the epoch account and its schedule window together.
+pub const FUNDING_COVERS_EPOCH_PAIR: u8 = 1;
+/// The ledger covers one order page.
+pub const FUNDING_COVERS_PAGE: u8 = 2;
+/// The ledger covers one candidate record and its feed together.
+pub const FUNDING_COVERS_CANDIDATE_PAIR: u8 = 3;
+/// The ledger covers one clearing checkpoint.
+pub const FUNDING_COVERS_CLEAR_WORK: u8 = 4;
+/// The ledger covers the epoch's final pot.
+pub const FUNDING_COVERS_FINAL_POT: u8 = 5;
+/// The ledger covers one settlement receipt.
+pub const FUNDING_COVERS_RECEIPT: u8 = 6;
+
+/// The general clearing plane's recorded funding facts for one machinery
+/// account (or same-payer creation group), mirroring `DirectFundingLedgerV3`.
+///
+/// The general plane's account shapes (epoch, window, page, candidate record,
+/// feed, checkpoint, pot, receipt) predate the terminal-lifecycle header and
+/// carry no payer field, so their rent principal was unattributable — the
+/// `RENT.ACCOUNT_REFUND_UNOWNED` shape.  This sibling account closes that gap
+/// **at creation time**: the creating instruction itself writes the ledger in
+/// the same transition that debits the payer, so the recorded payer is the
+/// actual funding wallet and the recorded principal is the payer's exact
+/// outlay after prefund normalization (a hostile prefund of a predictable PDA
+/// never inflates the refund — it stays in the donation floor and burns at
+/// close).  An account created *without* the optional ledger keeps the
+/// unowned-refund blocker: no close route will ever guess its payer.
+///
+/// One ledger may cover a same-payer creation group created by one
+/// instruction (`covered` says which): the group's members close together and
+/// the single recorded principal returns to the single recorded payer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralFundingLedgerV1 {
+    /// The funded account's address (the group's payout anchor), as bytes.
+    pub target: Hash32,
+    /// Exact funding wallet; the sole principal recipient at close.
+    pub payer: Hash32,
+    /// Exact lamports the payer was debited for the covered group plus this
+    /// ledger itself, after prefund normalization.
+    pub payer_principal_lamports: u64,
+    /// Pre-existing lamports observed across the group and this ledger at
+    /// creation; never refunded, always routed to the neutral sink at close.
+    pub donation_floor_lamports: u64,
+    /// Which creation group this ledger covers; see `FUNDING_COVERS_*`.
+    pub covered: u8,
+    /// Stored ledger PDA bump.
+    pub stored_bump: u8,
+    /// Reserved flags; zero in V1.
+    pub flags: u8,
+}
+
+impl GeneralFundingLedgerV1 {
+    /// Validate identities and the covered-group discriminant.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.target)?;
+        check_hash(self.payer)?;
+        if self.covered < FUNDING_COVERS_EPOCH_PAIR || self.covered > FUNDING_COVERS_RECEIPT {
+            return Err(CodecError::InvalidEnum);
+        }
+        if self.flags != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        Ok(())
+    }
+
+    /// Encode exactly [`GENERAL_FUNDING_LEDGER_BYTES`] bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        if out.len() < GENERAL_FUNDING_LEDGER_BYTES {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut w = Writer::new(out);
+        put_header(&mut w, GENERAL_FUNDING_LEDGER_TAG, GENERAL_FUNDING_LEDGER_VERSION)?;
+        w.hash(self.target)?;
+        w.hash(self.payer)?;
+        w.u64(self.payer_principal_lamports)?;
+        w.u64(self.donation_floor_lamports)?;
+        w.u8(self.covered)?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        if w.at != GENERAL_FUNDING_LEDGER_BYTES {
+            return Err(CodecError::OutputTooSmall);
+        }
+        Ok(w.at)
+    }
+
+    /// Parse exactly [`GENERAL_FUNDING_LEDGER_BYTES`] hostile bytes.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        check_header(
+            input,
+            GENERAL_FUNDING_LEDGER_TAG,
+            GENERAL_FUNDING_LEDGER_VERSION,
+            GENERAL_FUNDING_LEDGER_BYTES,
+        )?;
+        let mut r = Reader::at(input, 2);
+        let value = Self {
+            target: r.hash()?,
+            payer: r.hash()?,
+            payer_principal_lamports: r.u64()?,
+            donation_floor_lamports: r.u64()?,
+            covered: r.u8()?,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3292,5 +3412,70 @@ mod tests {
         // refused.
         assert!(open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 10_000, 17, 253).is_err());
         assert!(open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 0, 4, 253).is_err());
+    }
+
+    #[test]
+    fn general_funding_ledger_round_trips_and_hostile_bytes_refuse() {
+        let ledger = GeneralFundingLedgerV1 {
+            target: h(0x71),
+            payer: h(0x72),
+            payer_principal_lamports: 349_266_720,
+            donation_floor_lamports: 7,
+            covered: FUNDING_COVERS_CLEAR_WORK,
+            stored_bump: 254,
+            flags: 0,
+        };
+        let mut bytes = [0u8; GENERAL_FUNDING_LEDGER_BYTES];
+        assert_eq!(ledger.encode(&mut bytes), Ok(GENERAL_FUNDING_LEDGER_BYTES));
+        assert_eq!(GeneralFundingLedgerV1::decode(&bytes), Ok(ledger));
+
+        // Identities are load-bearing: a zero payer or target refuses, so a
+        // close can never pay principal to nobody.
+        let mut no_payer = ledger;
+        no_payer.payer = Hash32::ZERO;
+        assert_eq!(no_payer.validate(), Err(CodecError::ZeroIdentity));
+        let mut no_target = ledger;
+        no_target.target = Hash32::ZERO;
+        assert_eq!(no_target.validate(), Err(CodecError::ZeroIdentity));
+
+        // The covered-group discriminant is closed: zero and past-the-end
+        // both refuse, and every admitted value round-trips.
+        let mut uncovered = ledger;
+        uncovered.covered = 0;
+        assert_eq!(uncovered.validate(), Err(CodecError::InvalidEnum));
+        uncovered.covered = FUNDING_COVERS_RECEIPT + 1;
+        assert_eq!(uncovered.validate(), Err(CodecError::InvalidEnum));
+        for covered in FUNDING_COVERS_EPOCH_PAIR..=FUNDING_COVERS_RECEIPT {
+            let mut member = ledger;
+            member.covered = covered;
+            member.encode(&mut bytes).unwrap();
+            assert_eq!(GeneralFundingLedgerV1::decode(&bytes), Ok(member));
+        }
+
+        // Reserved flags, wrong tag, wrong version, and wrong length refuse.
+        ledger.encode(&mut bytes).unwrap();
+        bytes[GENERAL_FUNDING_LEDGER_BYTES - 1] = 1;
+        assert_eq!(
+            GeneralFundingLedgerV1::decode(&bytes),
+            Err(CodecError::InvalidEnum)
+        );
+        ledger.encode(&mut bytes).unwrap();
+        bytes[0] ^= 1;
+        assert_eq!(
+            GeneralFundingLedgerV1::decode(&bytes),
+            Err(CodecError::WrongTag)
+        );
+        ledger.encode(&mut bytes).unwrap();
+        bytes[1] ^= 1;
+        assert_eq!(
+            GeneralFundingLedgerV1::decode(&bytes),
+            Err(CodecError::WrongVersion)
+        );
+        assert!(GeneralFundingLedgerV1::decode(&bytes[..GENERAL_FUNDING_LEDGER_BYTES - 1]).is_err());
+
+        // The account tag is not any existing family's.
+        assert_eq!(GENERAL_FUNDING_LEDGER_TAG, 26);
+        assert_ne!(GENERAL_FUNDING_LEDGER_TAG, EPOCH_WINDOW_TAG);
+        assert_ne!(GENERAL_FUNDING_LEDGER_TAG, CANDIDATE_FEED_STAGE_TAG);
     }
 }

@@ -91,15 +91,24 @@ use crate::instructions::genesis::{
     transfer_data, RentParameters, SYSTEM_PROGRAM_ID,
 };
 use crate::seeds;
+use super::terminal_closure;
 use clutch_batch::relation_v1_stream::ClearWorkV1;
+use clutch_solana_layout::clearing::FUNDING_COVERS_CLEAR_WORK;
 use clutch_solana_layout::{account_len, clearing, Hash32};
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
-/// Accounts in an `InitClearWork` instruction, exactly.
+/// Accounts in an `InitClearWork` instruction without funding registration.
 pub const INIT_CLEAR_WORK_ACCOUNT_COUNT: usize = 4;
+/// Accounts in an `InitClearWork` instruction that also registers its
+/// funding: one optional trailing `GeneralFundingLedgerV1` PDA, written in
+/// the same transition that debits the payer (TerminalClosure's
+/// exact-principal-to-payer input for the checkpoint's ~0.349 SOL).
+pub const INIT_CLEAR_WORK_LEDGERED_ACCOUNT_COUNT: usize = INIT_CLEAR_WORK_ACCOUNT_COUNT + 1;
+/// The optional funding-ledger PDA.
+pub const IX_CLEAR_WORK_LEDGER: usize = 4;
 /// Authenticated payer funding the full final rent principal.
 pub const IX_CLEAR_WORK_PAYER: usize = 0;
 /// The canonical, not-yet-created checkpoint PDA.
@@ -129,7 +138,11 @@ pub(super) fn init_clear_work(
     epoch: &Hash32,
     candidate: &Hash32,
 ) -> Outcome<()> {
-    require_count(accounts, INIT_CLEAR_WORK_ACCOUNT_COUNT)?;
+    require(
+        accounts.len() == INIT_CLEAR_WORK_ACCOUNT_COUNT
+            || accounts.len() == INIT_CLEAR_WORK_LEDGERED_ACCOUNT_COUNT,
+        ClutchError::AccountCount,
+    )?;
     require_signer(&accounts[IX_CLEAR_WORK_PAYER])?;
     require(
         accounts[IX_CLEAR_WORK_PAYER].is_writable,
@@ -153,6 +166,7 @@ pub(super) fn init_clear_work(
      * final account length moves here, once, so the four grows never touch
      * lamports and a grow can never strand a checkpoint under-funded. */
     let final_principal = rent.minimum_balance(account_len::CLEAR_WORK)?;
+    let prior = accounts[IX_CLEAR_WORK_WORK].lamports();
     let bump_seed = [bump];
     let signer_seeds = [
         seeds::SEED_CLEAR_WORK,
@@ -174,7 +188,24 @@ pub(super) fn init_clear_work(
         *epoch,
         *candidate,
         bump,
-    )
+    )?;
+    if accounts.len() == INIT_CLEAR_WORK_LEDGERED_ACCOUNT_COUNT {
+        /* Full-principal creation: the whole final rent moved regardless of
+         * any prefund, so the payer's outlay is the full principal and the
+         * prefund is the donation floor entire. */
+        terminal_closure::create_funding_ledger(
+            program_id,
+            &accounts[IX_CLEAR_WORK_PAYER],
+            &accounts[IX_CLEAR_WORK_LEDGER],
+            &accounts[IX_CLEAR_WORK_SYSTEM],
+            &rent,
+            accounts[IX_CLEAR_WORK_WORK].key,
+            FUNDING_COVERS_CLEAR_WORK,
+            final_principal,
+            prior,
+        )?;
+    }
+    Ok(())
 }
 
 /// Grow a staged checkpoint by one step; the final step finishes creation.

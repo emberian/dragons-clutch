@@ -5794,6 +5794,47 @@ mod tests {
                 candidate: h(0x3e),
                 slice_index: 0,
             },
+            /* The terminal-closure family (tags 60-67) rides the same rule:
+             * the adapter refuses every close and release, so the SVM oracle
+             * for the lifecycle end is the layout codec plus lamport
+             * conservation on a real bank. */
+            Intent::ReleaseTerminalReservation {
+                market,
+                epoch: h(0x2e),
+            },
+            Intent::CloseGeneralReceipt {
+                market,
+                epoch: h(0x2e),
+                candidate: h(0x3e),
+                slice_index: 0,
+            },
+            Intent::CloseGeneralReservation {
+                market,
+                epoch: h(0x2e),
+            },
+            Intent::CloseGeneralPage {
+                market,
+                epoch: h(0x2e),
+                page_index: 0,
+            },
+            Intent::CloseGeneralPot {
+                market,
+                epoch: h(0x2e),
+            },
+            Intent::CloseGeneralCandidate {
+                market,
+                epoch: h(0x2e),
+                candidate: h(0x3e),
+            },
+            Intent::CloseGeneralClearWork {
+                market,
+                epoch: h(0x2e),
+                candidate: h(0x3e),
+            },
+            Intent::CloseGeneralEpoch {
+                market,
+                epoch: h(0x2e),
+            },
         ] {
             let request = layout_request(0, unsupported);
             assert_eq!(

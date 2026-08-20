@@ -457,8 +457,16 @@ pub const IX_PROFILE_SYSTEM: usize = 4;
 /// The rent sysvar.  `InitProfile`.
 pub const IX_PROFILE_RENT: usize = 5;
 
-/// Accounts in an `InitOrderPage` instruction, exactly.
+/// Accounts in an `InitOrderPage` instruction without funding registration.
 pub const INIT_PAGE_ACCOUNT_COUNT: usize = 6;
+/// Accounts in a general-plane `InitOrderPage` that also registers the
+/// page's funding: one optional trailing `GeneralFundingLedgerV1` PDA,
+/// written in the same transition that debits the payer (TerminalClosure's
+/// exact-principal-to-payer input).  The Direct V4 branch keeps the exact
+/// six-account list — its plane records funding in its own account bytes.
+pub const INIT_PAGE_LEDGERED_ACCOUNT_COUNT: usize = INIT_PAGE_ACCOUNT_COUNT + 1;
+/// The optional funding-ledger PDA.  General `InitOrderPage` only.
+pub const IX_PAGE_LEDGER: usize = 6;
 /// The market the epoch belongs to (read-only, program-owned).
 pub const IX_PAGE_MARKET: usize = 2;
 /// The epoch whose page set this page joins (read-only, program-owned).
@@ -885,7 +893,11 @@ fn init_order_page(
     {
         return init_direct_v4_order_page(program_id, accounts, sequence, intent);
     }
-    require_count(accounts, INIT_PAGE_ACCOUNT_COUNT)?;
+    require(
+        accounts.len() == INIT_PAGE_ACCOUNT_COUNT
+            || accounts.len() == INIT_PAGE_LEDGERED_ACCOUNT_COUNT,
+        ClutchError::AccountCount,
+    )?;
     require_signer(&accounts[IX_PAYER])?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &PAGE_STATE_ROLES)?;
@@ -937,6 +949,7 @@ fn init_order_page(
     let (address, bump) = seeds::page_pda(program_id, &epoch_bytes, intent.page_index);
     expect_pda(accounts[IX_TARGET].key, (address, bump), None)?;
 
+    let page_prior = accounts[IX_TARGET].lamports();
     create_pda_account(
         program_id,
         &accounts[IX_PAYER],
@@ -952,8 +965,28 @@ fn init_order_page(
         ],
     )?;
 
-    let mut data = borrow_mut!(accounts[IX_TARGET])?;
-    write_empty_page(&mut data, intent, bump)
+    {
+        let mut data = borrow_mut!(accounts[IX_TARGET])?;
+        write_empty_page(&mut data, intent, bump)?;
+    }
+    if accounts.len() == INIT_PAGE_LEDGERED_ACCOUNT_COUNT {
+        use crate::instructions::orders_batch::terminal_closure;
+        terminal_closure::create_funding_ledger(
+            program_id,
+            &accounts[IX_PAYER],
+            &accounts[IX_PAGE_LEDGER],
+            &accounts[IX_PAGE_SYSTEM],
+            &rent,
+            accounts[IX_TARGET].key,
+            clutch_solana_layout::clearing::FUNDING_COVERS_PAGE,
+            terminal_closure::creation_shortfall(
+                rent.minimum_balance(account_len::ORDER_PAGE)?,
+                page_prior,
+            ),
+            page_prior,
+        )?;
+    }
+    Ok(())
 }
 
 /// Create the sole page-zero account of a routed Direct V4 Epoch.

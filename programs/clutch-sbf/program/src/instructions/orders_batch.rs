@@ -496,6 +496,7 @@ pub mod general_epoch;
 mod reservation;
 pub mod selection;
 pub(super) mod settlement;
+pub mod terminal_closure;
 
 /// Copy one static value onto the heap without materializing it on a frame.
 ///
@@ -1266,6 +1267,92 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             *slice_index,
         ),
+        Action::Layout(Intent::ReleaseTerminalReservation { market, epoch }) => {
+            terminal_closure::release_terminal_reservation(
+                program_id,
+                accounts,
+                request.sequence,
+                market,
+                epoch,
+            )
+        }
+        Action::Layout(Intent::CloseGeneralReceipt {
+            market,
+            epoch,
+            candidate,
+            slice_index,
+        }) => terminal_closure::close_general_receipt(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            candidate,
+            *slice_index,
+        ),
+        Action::Layout(Intent::CloseGeneralReservation { market, epoch }) => {
+            terminal_closure::close_general_reservation(
+                program_id,
+                accounts,
+                request.sequence,
+                market,
+                epoch,
+            )
+        }
+        Action::Layout(Intent::CloseGeneralPage {
+            market,
+            epoch,
+            page_index,
+        }) => terminal_closure::close_general_page(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            *page_index,
+        ),
+        Action::Layout(Intent::CloseGeneralPot { market, epoch }) => {
+            terminal_closure::close_general_pot(
+                program_id,
+                accounts,
+                request.sequence,
+                market,
+                epoch,
+            )
+        }
+        Action::Layout(Intent::CloseGeneralCandidate {
+            market,
+            epoch,
+            candidate,
+        }) => terminal_closure::close_general_candidate(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            candidate,
+        ),
+        Action::Layout(Intent::CloseGeneralClearWork {
+            market,
+            epoch,
+            candidate,
+        }) => terminal_closure::close_general_clear_work(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            candidate,
+        ),
+        Action::Layout(Intent::CloseGeneralEpoch { market, epoch }) => {
+            terminal_closure::close_general_epoch(
+                program_id,
+                accounts,
+                request.sequence,
+                market,
+                epoch,
+            )
+        }
         /* Every other action belongs to another family module; the router never
          * sends one here, and this arm exists so that adding one to the router
          * is a compile error rather than a silent success. */

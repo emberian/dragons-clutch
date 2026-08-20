@@ -133,6 +133,14 @@ const INTENT_SEAL_CANDIDATE_HINT: u8 = 56;
 const INTENT_FINALIZE_SELECTION_HINT: u8 = 57;
 const INTENT_FREEZE_ENTITLEMENT_HINT: u8 = 58;
 const INTENT_ENTITLE_SLICE_HINT: u8 = 59;
+const INTENT_RELEASE_TERMINAL_RESERVATION_HINT: u8 = 60;
+const INTENT_CLOSE_GENERAL_RECEIPT_HINT: u8 = 61;
+const INTENT_CLOSE_GENERAL_RESERVATION_HINT: u8 = 62;
+const INTENT_CLOSE_GENERAL_PAGE_HINT: u8 = 63;
+const INTENT_CLOSE_GENERAL_POT_HINT: u8 = 64;
+const INTENT_CLOSE_GENERAL_CANDIDATE_HINT: u8 = 65;
+const INTENT_CLOSE_GENERAL_CLEAR_WORK_HINT: u8 = 66;
+const INTENT_CLOSE_GENERAL_EPOCH_HINT: u8 = 67;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
@@ -168,7 +176,15 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_SEAL_CANDIDATE_HINT
                 | INTENT_FINALIZE_SELECTION_HINT
                 | INTENT_FREEZE_ENTITLEMENT_HINT
-                | INTENT_ENTITLE_SLICE_HINT,
+                | INTENT_ENTITLE_SLICE_HINT
+                | INTENT_RELEASE_TERMINAL_RESERVATION_HINT
+                | INTENT_CLOSE_GENERAL_RECEIPT_HINT
+                | INTENT_CLOSE_GENERAL_RESERVATION_HINT
+                | INTENT_CLOSE_GENERAL_PAGE_HINT
+                | INTENT_CLOSE_GENERAL_POT_HINT
+                | INTENT_CLOSE_GENERAL_CANDIDATE_HINT
+                | INTENT_CLOSE_GENERAL_CLEAR_WORK_HINT
+                | INTENT_CLOSE_GENERAL_EPOCH_HINT,
             ) => Route::OrdersBatch,
             Some(
                 INTENT_INIT_REALM_HINT
@@ -388,7 +404,15 @@ fn process_orders_batch(
         | Action::Layout(Intent::SealCandidate { .. })
         | Action::Layout(Intent::FinalizeSelection { .. })
         | Action::Layout(Intent::FreezeEntitlement { .. })
-        | Action::Layout(Intent::EntitleSlice { .. }) => {
+        | Action::Layout(Intent::EntitleSlice { .. })
+        | Action::Layout(Intent::ReleaseTerminalReservation { .. })
+        | Action::Layout(Intent::CloseGeneralReceipt { .. })
+        | Action::Layout(Intent::CloseGeneralReservation { .. })
+        | Action::Layout(Intent::CloseGeneralPage { .. })
+        | Action::Layout(Intent::CloseGeneralPot { .. })
+        | Action::Layout(Intent::CloseGeneralCandidate { .. })
+        | Action::Layout(Intent::CloseGeneralClearWork { .. })
+        | Action::Layout(Intent::CloseGeneralEpoch { .. }) => {
             orders_batch::process(program_id, accounts, &request)
         }
         _ => unexpected_route(),
@@ -889,6 +913,67 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                     slice_index: 4,
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::ReleaseTerminalReservation {
+                    market: hash(1),
+                    epoch: hash(2),
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::CloseGeneralReceipt {
+                    market: hash(1),
+                    epoch: hash(2),
+                    candidate: hash(3),
+                    slice_index: 4,
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::CloseGeneralReservation {
+                    market: hash(1),
+                    epoch: hash(2),
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::CloseGeneralPage {
+                    market: hash(1),
+                    epoch: hash(2),
+                    page_index: 0,
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::CloseGeneralPot {
+                    market: hash(1),
+                    epoch: hash(2),
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::CloseGeneralCandidate {
+                    market: hash(1),
+                    epoch: hash(2),
+                    candidate: hash(3),
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::CloseGeneralClearWork {
+                    market: hash(1),
+                    epoch: hash(2),
+                    candidate: hash(3),
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::CloseGeneralEpoch {
+                    market: hash(1),
+                    epoch: hash(2),
                 },
                 Route::OrdersBatch,
             ),
