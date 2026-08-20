@@ -311,8 +311,8 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
         )
         for pattern in (
             r"^committed_signed_transactions=22$",
-            r"^committed_expected_refusals=1$",
-            r"^committed_compute_exhaustions=1$",
+            r"^committed_expected_refusals=2$",
+            r"^committed_compute_exhaustions=0$",
             r"^committed_watched_accounts=18$",
             r"^genesis_assisted_program_accounts=12$",
             r"^falsifiability=PASS$",

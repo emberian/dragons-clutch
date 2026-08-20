@@ -128,6 +128,7 @@ clutch-lp-mapping-probe	0.1.0	path+research/lp-mapping-probe	-	AGPL-3.0-or-later
 clutch-resolution-work-v1	0.1.0	path+research/resolution-work-v1	-	AGPL-3.0-or-later
 clutch-sbf	0.1.0	path+programs/clutch-sbf/program	-	AGPL-3.0-or-later
 clutch-sbf-committed-harness	0.1.0	path+programs/clutch-sbf/committed-harness	-	AGPL-3.0-or-later
+clutch-sbf-devnet-paces	0.1.0	path+programs/clutch-sbf/devnet-paces	-	AGPL-3.0-or-later
 clutch-sbf-harness	0.1.0	path+programs/clutch-sbf/harness	-	AGPL-3.0-or-later
 clutch-sbf-svm-tests	0.1.0	path+programs/clutch-sbf/svm-tests	-	AGPL-3.0-or-later
 clutch-solana-layout	0.1.0	path+programs/solana-layout	-	AGPL-3.0-or-later

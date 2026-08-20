@@ -4616,7 +4616,10 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
         2,
         repeated_compares,
     );
-    repeated.exhausted = true;
+    /* `resolve-repeat-idempotent` and `resolve-late-conflict-rolls-back`
+     * were marked `exhausted` while two Resolves could not fit one
+     * 1,400,000-unit transaction; the syscall-hash rework dissolved that
+     * measured stop and both run as authored. */
     cases.push(repeated);
 
     let mut late_conflict = Case::refuse(
@@ -4636,7 +4639,6 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             .to_string(),
     );
     late_conflict.instruction_count = 2;
-    late_conflict.exhausted = true;
     late_conflict.identical_to_pre = vec![
         format!("{}.market", f.held.label),
         format!("{}.kernel", f.held.label),
@@ -7271,8 +7273,9 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
     );
     case.instruction_count = 2;
     case.compute_limit = Some(COMPUTE_UNIT_CEILING);
-    case.exhausted = true;
-    case.reference = "MEASURED STOP: the two-instruction late-fault witness reaches the 1,400,000-CU ceiling before its intended duplicate-exit refusal".to_string();
+    /* Marked `exhausted` while the two-instruction witness hit the
+     * 1,400,000-unit ceiling before its intended refusal; the syscall-hash
+     * rework dissolved that stop and the authored refusal is driven. */
     cases.push(case);
 
     /* 20. The independent bearer burns its real Token-2022 claim and receives

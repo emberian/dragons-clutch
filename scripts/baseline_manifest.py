@@ -1240,8 +1240,8 @@ def build_gates() -> list[dict[str, Any]]:
                         r"^  refuse endow\s+Custom\(0x0079\) program_units=",
                         r"^source_campaign NON-PRODUCTION endow=EXPECTED_SUCCESS; lifecycle=EXPECTED_SUCCESS$",
                         r"^  accept endow\s+program_units=",
-                        r"^  UNDRIVABLE resolve-repeat-idempotent consumed [0-9]+ of [0-9]+ granted and was aborted: does not fit one transaction$",
-                        r"^  UNDRIVABLE resolve-late-conflict-rolls-back consumed [0-9]+ of [0-9]+ granted and was aborted: does not fit one transaction$",
+                        r"^  accept resolve-repeat-idempotent\s+program_units=",
+                        r"^  refuse resolve-late-conflict-rolls-back\s+Custom\(0x0057\)",
                     ],
                 },
                 "key_patterns": [
@@ -1257,7 +1257,6 @@ def build_gates() -> list[dict[str, Any]]:
                     r"^[0-9]+ accepting transactions$",
                     r"^  accept ",
                     r"^  refuse ",
-                    r"^  UNDRIVABLE ",
                     r"^\s+[0-9]+\s+walk-",
                     r"^\s+terminal identity:",
                     r"^one byte .* went red:$",
@@ -1291,8 +1290,8 @@ def build_gates() -> list[dict[str, Any]]:
                     r"^== signed, confirmed, committed walk ==$",
                     r"^  red: committed-.*committed bytes differ(?: \(observed .*, expected .*\))?$",
                     r"^committed_signed_transactions=22$",
-                    r"^committed_expected_refusals=1$",
-                    r"^committed_compute_exhaustions=1$",
+                    r"^committed_expected_refusals=2$",
+                    r"^committed_compute_exhaustions=0$",
                     r"^committed_watched_accounts=18$",
                     r"^genesis_assisted_program_accounts=12$",
                     r"^withdraw_cash=DRIVEN_TO_ZERO$",
@@ -1302,8 +1301,10 @@ def build_gates() -> list[dict[str, Any]]:
                 ],
                 "note": (
                     "22 signed, confirmed same-market loopback transactions with "
-                    "one checked semantic refusal, one exact compute-ceiling STOP "
-                    "with rollback, 18 watched accounts, and a required terminal-byte "
+                    "two checked semantic refusals (including the two-instruction "
+                    "late-fault atomicity witness, drivable since the syscall-hash "
+                    "rework dissolved its measured compute stop), 18 watched "
+                    "accounts, and a required terminal-byte "
                     "falsification run. The prestate has 12 "
                     "program-owned genesis-assisted prerequisites; this is local "
                     "runtime evidence against the explicit mock-source ELF, not "

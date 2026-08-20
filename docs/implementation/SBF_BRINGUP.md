@@ -597,6 +597,23 @@ Relative to obligations 1-4 of `SOLANA_REFERENCE_ADAPTER.md`:
     the token plane moved them to 554 929, 555 739 and 857 343. See
     [Resource envelope](#resource-envelope).
 
+15b. **Closed the same way, 2026-08-19: the three cases the ceiling kept
+    undrivable are driven.** `resolve-repeat-idempotent` (two identical
+    Resolves in one transaction; the second consumes no Position or Replay
+    and leaves the resolution fact unchanged),
+    `resolve-late-conflict-rolls-back` (payout one then payout zero in one
+    transaction; the late `0x0057` refusal rolls the whole transaction
+    back), and the committed walk's step 19
+    (`committed-19-external-exit-rollback`: a successful bearer exit
+    followed by a duplicate exit refuses `TOKEN_DELTA_MISMATCH` atomically)
+    were each authored with full oracle expectations and then demoted to
+    `exhausted` because two such instructions could not fit one
+    1,400,000-unit transaction. The syscall-hash rework (`6c25df4`)
+    dissolved that stop; the demotions are removed and the authored
+    semantics execute. The committed walk therefore reports
+    `committed_expected_refusals=2` / `committed_compute_exhaustions=0`,
+    and the bringup campaign reports no undrivable case.
+
 16. **`PlaceOrder` has no SVM leg.** It landed on-chain in commit `5cb4ad1`,
     after these fixtures were regenerated, and the offline reference adapter has
     no `PlaceOrder` transition to be an oracle for one. Driving it needs a
