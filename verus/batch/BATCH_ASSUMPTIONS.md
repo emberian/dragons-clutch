@@ -57,10 +57,15 @@ required expected-red mutants. Against sealed main
 files are byte-identical: scalar `lib.rs`
 `f25ce5524a71f9e8ad5200992bb69290444865243f26040906d7aa6798013249`,
 `relation_v1.rs`
-`f95b4931414386f109ef52b844616f86f11e21121d6f9ef8901f18b77eafc490`,
+`9d4e3cc0fdfc03a4cd2d08f0257224f79fe4a8f0d1f861a09b75e92755bd30da`,
 and `relation_v1_stream.rs`
-`c196c096c75adfb85397eda5e5d905dde89349ab06512e5ad02d345d75fbf358`.
-This is source identity evidence, not a proof of correspondence.
+`53a37049c88a2a2abefec5d3f34f7042a6d546e7469ec543d37583cd49813bf3`.
+This is source identity evidence, not a proof of correspondence. (Excluded-source
+digests re-recorded 2026-08-20 after semantics-preserving stack-hygiene and
+checkpoint-codec changes to the two excluded files — `relation_v1.rs` in-place
+zeroing/out-param normalization, `relation_v1_stream.rs` encode/decode codec.
+Both changes are gated by the relation's own 19,520-comparison equivalence
+suite; the exclusion scope is unchanged and nothing new is claimed proven.)
 
 The `relation_v1` and `relation_v1_stream` digests are recorded as excluded
 sources. These theorems are not proofs of the coupled outcome-conservation,
