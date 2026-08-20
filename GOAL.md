@@ -72,6 +72,21 @@ in the reseal lane's output) and the postmark doorstep (4 threads).
 
 ## Done log (2026-08-19 session)
 
+- PERSVATI ATTESTATION OF THE NEW IDENTITY PASSED: 41/41 portable gates,
+  0 STOP, over exact 98fb070 (prior 40 gates + a new bare policy.py
+  pristine-checkout gate). Archive ac0efaa7/bundle e84da342 identical both
+  hosts; 187d5ee1 ELF byte-verified in FIVE contexts; manifest digest-check
+  green in pristine checkouts both hosts; 45/45 policy tests on the second
+  host; toolchain pinned fail-closed from the start (drifted default never
+  invoked). 1,256 file comparisons run twice, zero mismatches; three
+  historical ELFs byte-verified. Honest wrinkle preserved as a blocker
+  record: the two new TrackedEvidenceTests correctly REFUSE outside a real
+  git repo (failed 2/45 in the extracted-archive context, 45/45 in the
+  bundle checkout) — the hardening working as designed. Durable job:
+  persvati:/home/ember/jobs/dragons-clutch-portable-attest-98fb070-20260819-kCWSaj.
+  CURRENT_TRUTH section 2 updated. Full reseal chain now: seal -> gates ->
+  manifest 100/100 -> post-commit check -> independent portable attestation.
+
 - FEE ECONOMICS PHASE 1 LANDED (9f7c155 docs + a88201d lab, verified and
   pushed): FEE_GEOMETRY/ECONOMICS/OPEN_QUESTIONS corrected per all twelve
   findings (zero-price kernel channel now in the section-5 threat list with

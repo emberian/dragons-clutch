@@ -86,10 +86,18 @@ Runtime evidence is artifact-specific:
 The checked-in `MANIFEST.baseline.json` is schema v2, re-emitted for the
 2026-08-19 syscall-hashed runtime (`187d5ee1…`, sealed at `cfba5bb`) with all
 100 declared gates executed in the emission run, and `check --run-gates`
-passes after the manifest-only commit. The paragraphs below record the R1
-attestation and rebuild lineage of the earlier `bd20711b…` identity and are
-historical; no portable attestation or independent rebuild of the current
-identity has been run yet. Persvati independently attested exact `6743b9d` from a
+passes after the manifest-only commit. Persvati independently attested the
+current identity on 2026-08-20: **41/41 portable gates PASS, 0 STOP** over
+exact `98fb070` — archive `ac0efaa7…` and bundle `e84da342…` byte-identical
+on both hosts, the `187d5ee1…` ELF byte-verified in five contexts (never
+built, loaded, or executed there), the manifest digest-only check green in
+pristine bundle checkouts on both hosts, and the liveness profile's policy
+gates plus 45/45 tests green on the second host under the pinned toolchain
+applied fail-closed from the start. Durable job:
+`persvati:/home/ember/jobs/dragons-clutch-portable-attest-98fb070-20260819-kCWSaj`.
+The paragraphs below record the R1 attestation and rebuild lineage of the
+earlier `bd20711b…` identity and are historical; no independent *rebuild*
+of the current identity has been run. Persvati independently attested exact `6743b9d` from a
 fresh archive (SHA-256 `f9f25afce1a00f277ad1322787bfc1f757cac26535558d9491fb731e543bf277`)
 and minimal hashed Git bundle: 40/40 portable gates PASS, 0 STOP, 528 files
 checked twice with zero mismatches, every test count identical to the prior
