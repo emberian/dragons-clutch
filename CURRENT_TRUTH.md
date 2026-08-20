@@ -84,17 +84,23 @@ Runtime evidence is artifact-specific:
   is [`docs/implementation/COMMITTED_SBF_WALK.md`](docs/implementation/COMMITTED_SBF_WALK.md).
 
 The checked-in `MANIFEST.baseline.json` is schema v2, re-emitted for the
-2026-08-19 syscall-hashed runtime (`187d5ee1…`, sealed at `cfba5bb`) with all
-100 declared gates executed in the emission run, and `check --run-gates`
-passes after the manifest-only commit. Persvati independently attested the
-current identity on 2026-08-20: **41/41 portable gates PASS, 0 STOP** over
-exact `98fb070` — archive `ac0efaa7…` and bundle `e84da342…` byte-identical
-on both hosts, the `187d5ee1…` ELF byte-verified in five contexts (never
-built, loaded, or executed there), the manifest digest-only check green in
-pristine bundle checkouts on both hosts, and the liveness profile's policy
-gates plus 45/45 tests green on the second host under the pinned toolchain
-applied fail-closed from the start. Durable job:
-`persvati:/home/ember/jobs/dragons-clutch-portable-attest-98fb070-20260819-kCWSaj`.
+2026-08-20 Tier-2-complete runtime (`e8ba31d5…`, 1,914,432 bytes, liveness
+seal `3bcdeec`) with all 100 declared gates executed in the emission run,
+and `check --run-gates` passes after the manifest-only commit (`788581c`).
+Persvati independently attested the current identity on 2026-08-20:
+**44/44 portable gates PASS, 0 STOP** over exact `788581c` — archive and
+bundle digests byte-identical on both hosts, the `e8ba31d5…` ELF
+byte-verified in six contexts (never built, loaded, or executed there), all
+six historical roots verified as the exact retained set, the manifest
+digest-only check green in pristine bundle checkouts on both hosts, and the
+liveness profile's policy gates plus 53 tests green on the second host under
+the pinned toolchain applied fail-closed from the start. Durable job:
+`persvati:/home/ember/jobs/dragons-clutch-portable-attest-788581c-20260820-FE7g0W`.
+Same-day predecessors, each fully sealed and attested and now historical:
+`187d5ee1…` (syscall reseal, 41/41 at `98fb070`), `fda59705…` (Tier-2 wave 1,
+43/43 at `6827749`), `d6929549…` (the walk, 44/44 at `7e6066f`). Build-path
+truth: the identity is same-path-reproducible; the canonical build lives at
+the canonical checkout (docs/reviews/BUILD_PATH_IDENTITY_2026-08-20.md).
 The paragraphs below record the R1 attestation and rebuild lineage of the
 earlier `bd20711b…` identity and are historical; no independent *rebuild*
 of the current identity has been run. Persvati independently attested exact `6743b9d` from a
