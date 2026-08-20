@@ -70,6 +70,25 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- GENERAL-PLANE SIGNED VALIDATOR WALK MERGED — the devnet-free evidence
+  ceiling reached: 44 signed, CONFIRMED transactions on a real loopback
+  validator driving the ENTIRE Tier-2 lifecycle (policy artifact staged/
+  sealed on-chain, epoch+window, six placements from four distinct signing
+  owners, cancel tombstone, real-clock deadline freeze, staged ClearWork +
+  feed wire, the walk with the reservation sweep at 333,195 CU under a
+  real 256-KiB heap frame, selection, entitlement, and SettlePage
+  consuming BOTH the single slice and the portfolio full pair at 221,927
+  CU); 38 watched accounts byte-reloaded per step; conservation re-derived
+  from OBSERVED bytes (cash 32+17==49, eggs [17,17], custody 49 — exact);
+  three expected refusals; falsifier RED as required; legacy 22-tx walk +
+  both SVM suites (102/109) still green; canonical identity CONFIRMED
+  e8ba31d5 on merged main. Honest boundary list recorded (genesis-assisted
+  prerequisites, mock-source funding, slot-stamped fields, standing
+  refusals). NEW FOLLOW-UPS: the mock ELF is build-path-sensitive at this
+  HEAD (eBPF code clusters, pre-existing — register-worthy); gate-izing
+  the 950-second walk into the manifest is a cost decision (would slow
+  every emission ~35 min) — left as a next-wave M-item.
+
 - MICROSITE V1 MERGED (site/, 7 pages ~7,600 words, 7 authored SVGs
   dataviz-validated both themes, 122/122 links, zero external resources,
   96 KB total, JS-optional, one scope note): the Friday clutch threads all
