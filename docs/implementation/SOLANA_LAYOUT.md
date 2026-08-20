@@ -84,7 +84,7 @@ All integers are little-endian. The first two bytes are `(tag, version)`.
 | Final pot | 14 | 262 | epoch/market/candidate, 16 pot balances, pot cash, rounding pot, phase |
 | Settlement receipt | 15 | 217 | epoch/market/candidate, buy/sell order ids, slice, quantity, price, consideration, consumed flags |
 | Resolution | 16 | 165 | market/terms/feed, sealed window digest, cursor, repair generation, payout index |
-| Clearing checkpoint | 17 | 48750 | 158-byte header (market/epoch/candidate, order-set binding, consumed fold, walk cursor) + 48,592 opaque body |
+| Clearing checkpoint | 17 | 48004 | 158-byte header (market/epoch/candidate, order-set binding, consumed fold, walk cursor) + 47,846-byte codec body |
 | Candidate feed | 18 | 6266 | 346-byte header (candidate/epoch/market/order-set, prices, sigma/mu, mask, claimed score) + 64 fills + 416 slices |
 
 One order slot is 236 bytes: a one-byte kind discriminator, that kind's exact
@@ -1081,7 +1081,7 @@ ownership, frozen and adversarially tested before the lane that needs it starts.
 
 | account | tag | version | bytes | shape |
 | --- | ---: | ---: | ---: | --- |
-| `ClearWorkAccount` | 17 | 1 | 48,750 | 158-byte header + 48,592-byte opaque body |
+| `ClearWorkAccount` | 17 | 1 | 48,004 | 158-byte header + 47,846-byte codec body |
 | `CandidateFeedAccount` | 18 | 1 | 6,266 | 346-byte header + 64 × 8 fills + 416 × 13 slices |
 
 ### Neither account is ever a value
@@ -1094,29 +1094,25 @@ caller-owned slice. The largest value any function in the module holds is one
 `CandidateFeedHeader` at 346 bytes. `cargo-build-sbf` emits no frame diagnostic
 for anything in `clearing`, which is the measurement rather than the intent.
 
-### The body is opaque, and that is a finding
+### The body is the checkpoint codec's (finding resolved 2026-08-20, T2-1)
 
-`CLEAR_WORK_BODY_BYTES = 48,592` is the pinned `size_of::<ClearWorkV1>()` of
-`clutch_batch::relation_v1_stream`. That struct is `#[derive(Clone, Debug,
-PartialEq, Eq)]` over a plain **`repr(Rust)`** layout, and Rust guarantees
-nothing about `repr(Rust)` field order or padding across compiler versions.
+`CLEAR_WORK_BODY_BYTES = 47,846` is the pinned
+`ClearWorkV1::ENCODED_BYTES` of `clutch_batch::relation_v1_stream`'s explicit
+checkpoint codec (`encode_into` / `decode_into` / `encode_idle_into`, all by
+reference) — option 2 of the original finding, landed by Tier 2 join 5. The
+number is now a **wire fact**: a little-endian field walk in declaration
+order, independent of `repr(Rust)` layout and toolchain, total over hostile
+bytes with typed `CodecFaultV1` refusals, and pinned on both sides
+(`clear_work_encoded_bytes_are_pinned` in clutch-batch,
+`clearing_account_golden_lengths` here). Before the codec landed this
+constant pinned `size_of::<ClearWorkV1>()` = 48,592 and the body was opaque
+bytes; the account total moved 48,750 → 48,004 with the re-pin.
 
-So the number is a measurement of one build, not a wire fact, and this crate
-refuses to give the body any interpretation at all. It owns the length, the
+This crate still gives the region no interpretation: it owns the length, the
 framing, the identity binding, and two window accessors (`clear_work_body`,
-`clear_work_body_mut`) that hand the region to whoever does own it. **Casting
-these bytes to a `&mut ClearWorkV1` is not sanctioned by anything here.** The
-obligation that would sanction it is on `clutch-batch` and is one of:
-
-1. declare `#[repr(C)]` on `ClearWorkV1` and its five nested value types, add a
-   `Pod`/`Zeroable` bound, and re-pin the size — after which a zero-copy cast is
-   defensible and the account body becomes the struct; or
-2. grow an explicit serializer in `clutch-batch`, at which point this crate's
-   length constant follows the serializer's width rather than `size_of`.
-
-Until one of those lands, an integration that byte-casts is unsound, and a
-toolchain bump can silently change the required account length. A codec test
-pins the constant so the change is a red test rather than a mainnet surprise.
+`clear_work_body_mut`) that hand the region to the codec. **Casting these
+bytes to a `&mut ClearWorkV1` remains unsanctioned** — the struct is still
+`repr(Rust)`, and only the codec's field walk relates it to bytes.
 
 ### The consumed-fold binding
 
@@ -1169,20 +1165,20 @@ allocate in one CPI**. (The absolute account ceiling,
 | --- | ---: | --- |
 | every protocol account, order page included | ≤ 4,012 | yes |
 | candidate feed | 6,266 | yes |
-| **clearing checkpoint** | **48,750** | **no** |
+| **clearing checkpoint** | **48,004** | **no** |
 
 The checkpoint is the only account in the inventory that a program cannot
 create. Two paths exist and both are real:
 
 * **Client-signed top-level `CreateAccount`.** A `SystemProgram::CreateAccount`
   submitted as a *top-level* instruction is not subject to the per-instruction
-  growth cap and allocates 48,750 bytes directly. The cost: the checkpoint
+  growth cap and allocates 48,004 bytes directly. The cost: the checkpoint
   becomes a keypair-addressed account, not a PDA, so the program must
   authenticate it by its stored `(market, epoch, candidate)` header rather than
   by derivation — which the header is already shaped to support, but which is a
   strictly weaker authentication than every other account in this program has.
 * **CPI create, then realloc.** Create a PDA at ≤ 10,240 bytes and grow it by at
-  most 10,240 per instruction: `⌈48,750 / 10,240⌉ = 5` instructions, which may
+  most 10,240 per instruction: `⌈48,004 / 10,240⌉ = 5` instructions, which may
   sit in one transaction because the cap is per instruction. This keeps the
   checkpoint a PDA. The cost: the account is *observable in a partially grown
   state* between instructions, so the header must carry a length field the
@@ -1194,10 +1190,10 @@ than ergonomics. A checkpoint at a keypair address can be substituted; a
 checkpoint at `(epoch, candidate)` cannot. The `body_len` field exists precisely
 so a half-grown checkpoint is a refusal and not a short read, and the walk
 cursor's monotonicity means a partially grown account can never be advanced.
-Rent for the whole account at the default parameters is `(128 + 48,750) × 3,480
-× 2 = 340,190,880` lamports, about **0.34 SOL**, which is a real number a
-clearing crank has to fund and is worth quoting before the design is committed
-to.
+Rent for the whole account at the default parameters is `(128 + 48,004) × 3,480
+× 2 = 334,998,720` lamports, about **0.335 SOL** (0.3402 before the T2-1
+codec re-pin), which is a real number a clearing crank has to fund and is
+worth quoting before the design is committed to.
 
 Neither path is implemented. `instructions::genesis` creates no checkpoint, and
 its `create_pda_account` refuses any space above the CPI ceiling outright rather
