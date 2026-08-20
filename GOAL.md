@@ -23,20 +23,31 @@ design track is moving: the R2 successor and Verus dust model are
 research-only, R4 runtime design is proposed, and Draft 10 + John packet are
 ready in degg-research.
 
-## Next 3 moves (per the 17:30 handoff priority order)
+## Next 3 moves
 
-1. Priority 2: pre-cutover R2 promotion plan — bridge PYTH_PULL_PROFILE_R2's
-   frozen contract to the exact runtime deltas (registry entry shape, auth
-   adapter wiring, hostile SVM campaign list, post-2026-08-26 identity-freeze
-   checklist); identity bytes stay unfrozen and Endow keeps refusing 0x79.
-2. Priority 3 support: fable/v3-settle-port (c5d2081) carries the dropped
-   settle Position-transfer semantics onto the successor base, green at
-   231 tests — merge it into codex/r3-direct-v3-successor as part of the
-   atomic Place->Freeze/Abort->verify/finalize->Settle/Lapse/Cancel->cleanup
-   promotion. Never route a partial lifecycle.
-3. Priority 4 staging: terminal/failure models -> versioned Token-2022/SBF
-   authorities is next-runtime-cycle work; TerminalIdentityV1 (eb1215a) and
-   the R4 design are its ingredients, pending ember ratification.
+1. Merge fable/sha-syscall (verified: 1,420,608 bytes, software SHA gone,
+   every instruction 3-8x cheaper) and run the COMBINED reseal it and the V3
+   merge both owe: artifact audit, liveness re-measurement — with the
+   admission policy re-examined, not just re-measured, since thresholds
+   shaped for 1.1M-CU routes may be wrong for 200k — then the 100-gate
+   emission, manifest commit, post-commit check, fresh Persvati attestation.
+   Deploy the post-SHA ELF to devnet the moment the deployer is funded
+   (~10.4 SOL for one program; less if the smaller ELF is deployed alone).
+2. Propagate the compute-ceiling reattribution through CURRENT_TRUTH, the
+   sophistication and succinct-clearing docs, and BOTH filings' operational
+   readiness passages — from the merged measurement, not the branch note.
+3. Fee economics phase 1 (from FEE_ECONOMICS_FINDINGS): correct
+   FEE_GEOMETRY/ECONOMICS (zero-price kernel channel into the section-5
+   threat list, Props 10-12 absorbed, unsupported assertions fixed), add
+   control arms 3 and 6 plus the zero-price laundering falsifier to the
+   Python lab. Destination-before-base remains the design order; the
+   RevenuePolicy object is the missing prerequisite.
+
+In flight: Draft 12 voice inversion (statement + both joint comments),
+frame-budget decision map for portfolio clearing (4 paths: restructure,
+heap, scratch account, CPI — CPI does NOT raise the frame limit), CFTC
+filing-process and forward-calendar research (what happens to statements,
+speaking mechanics, September+ opportunities).
 
 ## Ember decision queue (2026-08-19 morning)
 
