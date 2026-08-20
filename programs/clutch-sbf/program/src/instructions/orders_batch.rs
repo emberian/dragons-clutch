@@ -1283,7 +1283,7 @@ fn settle_page(
         ClutchError::MismatchedState,
     )?;
 
-    let (buy_order, sell_order) = {
+    let (buy_order, sell_order, live_order_count) = {
         let page_data = accounts[IX_SETTLE_PAGE].data.borrow();
         let feed_data = accounts[IX_SETTLE_FEED].data.borrow();
         settlement::load_same_page_direct_orders(
@@ -1300,6 +1300,7 @@ fn settle_page(
             epoch: &epoch,
             candidate: &candidate,
             candidate_feed: &feed_data,
+            live_order_count,
             page_index: intent_page,
             slice_index: receipt.slice_index,
             buy_order: &buy_order,

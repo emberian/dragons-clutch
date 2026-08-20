@@ -43,7 +43,7 @@ These are dependency ordered. None may be bypassed by an adapter convention.
 | rank | prerequisite | current counterexample | required owner/change |
 | ---: | --- | --- | --- |
 | 1 | funded reservations | `PlaceOrder` writes no Position/Hoard reservation; settling its fills would create an unbacked debit | order admission + collateral plane; reserve atomically and release on cancellation/unfilled refund |
-| 2 | live cardinality after cancellation | `EpochAccount.order_count` is populated slots including tombstones; candidate/feed `order_len` is live orders; `CandidateRecord::binds_epoch` requires equality to the former | layout semantic owner: persist or derive one exact live count, then bind candidate once there |
+| 2 | live cardinality after cancellation — **RESOLVED 2026-08-20 (T2-4)** | `EpochAccount.order_count` is populated slots including tombstones; candidate/feed `order_len` is live orders; `CandidateRecord::binds_epoch` required equality to the former | resolved by derivation, no new field: `binds_epoch(&epoch, live_order_count)` binds `order_len` to the live count the caller recomputes from digest-verified page headers after `stream::epoch_binds_page_set`, bounded by the slot count |
 | 3 | frozen policy preimage | epoch stores `policy: Hash32`; `RelationDomainV1` needs every `FrozenPolicyV1` variant and fee parameter | a versioned policy account/codec whose digest is the epoch's policy |
 | 4 | lossless domain identities | onchain market/book/policy/order-set identities are `Hash32`; relation V1 takes four `u64`s | relation revision to carry full identities, or another demonstrably injective representation; truncation is forbidden |
 | 5 | portable checkpoint bytes | `ClearWorkV1` is `repr(Rust)` and contains enums/bools; layout calls its 48,592-byte body opaque | explicit versioned byte codec or a byte-native streaming state; no reference cast into hostile bytes |
@@ -67,6 +67,17 @@ The likely repair is to add `live_order_count` to the epoch freeze result,
 computed from every page's authenticated `tombstone_count`, while retaining the
 existing populated-slot count for page closure. That is only a recommendation;
 the layout owner must freeze the exact field and migration.
+
+**Resolution (2026-08-20, Tier 2 increment T2-4).** The layout owner chose the
+derivation, not a new epoch field: `CandidateRecord::binds_epoch` now takes
+`live_order_count: u16` and requires `order_len as u16 == live_order_count`
+with `live_order_count <= epoch.order_count`. The caller contract is that the
+count is a fold over digest-verified page headers of the complete frozen set
+(after `stream::epoch_binds_page_set`), which `verify_preflight` discharges
+directly; `tombstone_count` sits inside the page-digest preimage, so a header
+cannot restate its retirements without failing the order-set fold. No account
+format changed. The adversarial test above now runs both ways: the live
+candidate binds, the slot-count claim refuses.
 
 ## Pre-resolution freeze, post-resolution consumption (PROPOSED)
 
@@ -105,7 +116,8 @@ The focused tests cover:
 - candidate/feed/checkpoint identity binding;
 - candidate status gating;
 - page, feed-order-set, and checkpoint-order-set tampering;
-- the tombstone cardinality STOP;
+- the tombstone live-cardinality binding (bind at the live count, refuse the
+  slot-count claim);
 - exact-replay idempotence;
 - conflicting-replay refusal atomicity; and
 - relation-phase unreachability while a prerequisite is missing.

@@ -2040,6 +2040,15 @@ impl FeedAccount {
 }
 
 impl OrderPageAccount {
+    /// Live records on this page: populated slots minus retirements.
+    ///
+    /// The typed twin of [`stream::OrderPageHeader::live_count`].  Meaningful
+    /// after [`Self::validate`], which is where `tombstone_count <=
+    /// order_count` is established; the saturation is shape, not a semantic
+    /// claim.
+    pub const fn live_count(&self) -> u8 {
+        self.order_count.saturating_sub(self.tombstone_count)
+    }
     /// Recompute this page's digest from its position and slot bytes.
     ///
     /// The slots are streamed into the hash one at a time instead of being
@@ -3790,16 +3799,32 @@ impl CandidateRecord {
         Ok(())
     }
     /// Check this candidate against the frozen epoch domain it clears.
-    pub fn binds_epoch(&self, epoch: &EpochAccount) -> Result<()> {
+    ///
+    /// `live_order_count` is the exact number of live (non-retired) records in
+    /// the epoch's frozen page set.  The epoch stores only the populated-slot
+    /// count (`order_count`, retirements included), while a candidate's
+    /// `order_len` names the live orders the relation projection feeds, so the
+    /// two agree only on a book nobody cancelled in.  The caller's contract:
+    /// recompute `live_order_count` from digest-verified page headers — after
+    /// [`stream::epoch_binds_page_set`] (or [`EpochAccount::binds_page_set`])
+    /// has bound the complete frozen set to this epoch — never from a
+    /// candidate's or feed's own claim.  `tombstone_count` sits inside the
+    /// page-digest preimage, so a header that lies about its retirements no
+    /// longer matches its own digest and the set binding refuses before this
+    /// check is reached.
+    pub fn binds_epoch(&self, epoch: &EpochAccount, live_order_count: u16) -> Result<()> {
         self.validate()?;
         epoch.validate()?;
         if epoch.phase == EPOCH_PHASE_OPEN {
             return Err(CodecError::MismatchedBinding);
         }
+        // A live count above the populated-slot count is not a value any
+        // digest-verified header fold over this epoch's set can produce.
         if self.epoch != epoch.epoch
             || self.market != epoch.market
             || self.outcome_count != epoch.outcome_count
-            || self.order_len as u16 != epoch.order_count
+            || self.order_len as u16 != live_order_count
+            || live_order_count > epoch.order_count
         {
             return Err(CodecError::MismatchedBinding);
         }
@@ -7907,9 +7932,12 @@ mod tests {
     fn candidate_binds_the_frozen_epoch_simplex() {
         let c = candidate();
         let e = frozen_epoch();
-        assert_eq!(c.binds_epoch(&e), Ok(()));
+        // The fixture set has no retirements, so its live count is the slot
+        // count.
+        let live = e.order_count;
+        assert_eq!(c.binds_epoch(&e, live), Ok(()));
         assert_eq!(
-            c.binds_epoch(&epoch_account()),
+            c.binds_epoch(&epoch_account(), live),
             Err(CodecError::MismatchedBinding)
         );
 
@@ -7917,7 +7945,7 @@ mod tests {
         off_simplex.prices[0] = 9_999;
         off_simplex.candidate = off_simplex.recomputed_candidate_digest().unwrap();
         assert_eq!(
-            off_simplex.binds_epoch(&e),
+            off_simplex.binds_epoch(&e, live),
             Err(CodecError::MismatchedBinding)
         );
 
@@ -7925,7 +7953,7 @@ mod tests {
         over_scale.prices[0] = 10_001;
         over_scale.candidate = over_scale.recomputed_candidate_digest().unwrap();
         assert_eq!(
-            over_scale.binds_epoch(&e),
+            over_scale.binds_epoch(&e, live),
             Err(CodecError::InvalidPriceGrid)
         );
 
@@ -7933,9 +7961,113 @@ mod tests {
         wrong_len.order_len = 18;
         wrong_len.candidate = wrong_len.recomputed_candidate_digest().unwrap();
         assert_eq!(
-            wrong_len.binds_epoch(&e),
+            wrong_len.binds_epoch(&e, live),
             Err(CodecError::MismatchedBinding)
         );
+    }
+    /// The frozen two-page fixture set with one record retired in place, and
+    /// an epoch frozen over that set.  Nineteen populated slots, eighteen live.
+    fn cancelled_set_and_epoch() -> ([OrderPageAccount; 2], EpochAccount) {
+        let mut pages = frozen_pages();
+        let owner = pages[0].orders[2].owner();
+        pages[0].orders[2] = tombstone(3, owner, 1, 2);
+        pages[0].tombstone_count = 1;
+        freeze_set(&mut pages);
+        let mut e = epoch_account();
+        e.phase = EPOCH_PHASE_FROZEN;
+        e.order_set = pages[0].order_set;
+        e.first_order_id = pages[0].first_order_id;
+        e.last_order_id = pages[1].last_order_id;
+        e.page_count = 2;
+        e.order_count = pages[0].set_order_count;
+        (pages, e)
+    }
+    #[test]
+    fn candidate_binds_the_live_cardinality_of_a_cancelled_book() {
+        let (pages, e) = cancelled_set_and_epoch();
+        assert_eq!(e.binds_page_set(&pages), Ok(()));
+        assert_eq!(e.order_count, 19, "the retirement keeps its slot");
+
+        // The caller contract: the live count is a fold over the headers the
+        // set binding just digest-verified, never a candidate's own claim.
+        let live = u16::from(pages[0].live_count()) + u16::from(pages[1].live_count());
+        assert_eq!(live, 18);
+
+        let mut c = candidate();
+        c.order_len = live as u8;
+        c.candidate = c.recomputed_candidate_digest().unwrap();
+        assert_eq!(c.binds_epoch(&e, live), Ok(()));
+    }
+    #[test]
+    fn candidate_claiming_the_slot_count_of_a_cancelled_book_refuses() {
+        let (pages, e) = cancelled_set_and_epoch();
+        assert_eq!(e.binds_page_set(&pages), Ok(()));
+        let live = u16::from(pages[0].live_count()) + u16::from(pages[1].live_count());
+
+        // A candidate claiming the populated-slot count on a cancelled book
+        // claims one more order than the relation will ever be fed.
+        let mut slot_claim = candidate();
+        slot_claim.order_len = e.order_count as u8;
+        slot_claim.candidate = slot_claim.recomputed_candidate_digest().unwrap();
+        assert_eq!(
+            slot_claim.binds_epoch(&e, live),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        // A live count above the slot count is impossible whatever the
+        // candidate claims alongside it.
+        let mut oversold = candidate();
+        oversold.order_len = 20;
+        oversold.candidate = oversold.recomputed_candidate_digest().unwrap();
+        assert_eq!(
+            oversold.binds_epoch(&e, 20),
+            Err(CodecError::MismatchedBinding)
+        );
+    }
+    #[test]
+    fn a_mutated_tombstone_count_is_caught_by_the_page_digest_not_the_binding() {
+        let (pages, e) = cancelled_set_and_epoch();
+
+        // Restating the retirement count alone: the count sits inside the
+        // page-digest preimage, so the stored digest no longer matches, and
+        // the page refuses before any set- or candidate-level check runs.
+        let mut restated = pages[0];
+        restated.tombstone_count = 2;
+        assert_ne!(
+            restated.recomputed_page_digest().unwrap(),
+            pages[0].page_digest
+        );
+        assert_eq!(restated.validate(), Err(CodecError::MismatchedBinding));
+        assert_eq!(
+            e.binds_page_set(&[restated, pages[1]]),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        // A self-consistent post-freeze retirement — extra tombstone, count,
+        // and digest all resealed — validates as a page but changes the page
+        // digest, so the frozen order_set fold refuses the set.
+        let mut retired_late = pages;
+        let owner = retired_late[0].orders[3].owner();
+        retired_late[0].orders[3] = tombstone(4, owner, 1, 2);
+        retired_late[0].tombstone_count = 2;
+        reseal(&mut retired_late[0]);
+        assert_eq!(retired_late[0].validate(), Ok(()));
+        assert_eq!(
+            e.binds_page_set(&retired_late),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        // The candidate binding itself never sees a page: given the forged
+        // set's live count it would bind.  The layer that catches the
+        // mutation is the digest chain that forces an honest caller-supplied
+        // count, exactly as the contract states.
+        let forged_live =
+            u16::from(retired_late[0].live_count()) + u16::from(retired_late[1].live_count());
+        assert_eq!(forged_live, 17);
+        let mut c = candidate();
+        c.order_len = forged_live as u8;
+        c.candidate = c.recomputed_candidate_digest().unwrap();
+        assert_eq!(c.binds_epoch(&e, forged_live), Ok(()));
     }
     #[test]
     fn final_pot_is_pot_phase_only_and_a_closed_pot_is_empty() {
