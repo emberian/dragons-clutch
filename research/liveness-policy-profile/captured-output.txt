@@ -1,8 +1,8 @@
 {
   "schema": "dragons-clutch/liveness-bank-capture/v2",
-  "capture_date": "2026-08-19",
+  "capture_date": "2026-08-20",
   "runtime_ref": "d8c50347556353939d4f5a91af616ba40d70419a",
-  "evidence_ref": "d8c50347556353939d4f5a91af616ba40d70419a",
+  "evidence_ref": "27798d966cbcc5122cfd4b139b1892df4876b671",
   "artifact": {
     "path": "research/liveness-policy-profile/artifacts/187d5ee16f72946a/clutch_sbf.so",
     "sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
@@ -23,6 +23,19 @@
       "abort_cu": [46677],
       "monolithic_v4_cu": [182462],
       "test_result": "PASS_4_OF_4"
+    },
+    "resolution_work_batch": {
+      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
+      "batch_sizes": [2, 4, 8, 12],
+      "begin_cu": [90924, 85792, 86030, 80264],
+      "fold_batch_2_cu": [175781],
+      "fold_batch_4_cu": [331077],
+      "fold_batch_8_cu": [664117, 664117],
+      "fold_batch_12_cu": [926969],
+      "singleton_fold_cu": [87864, 88217, 82732, 83080, 83080, 83085, 82972, 83320, 83320, 83320, 83320, 83320, 83320, 83325, 77203, 77551, 77551, 77551, 77551, 77551, 77551, 77551, 77551, 77551, 77551, 77556],
+      "outcome_equality": "BYTE_IDENTICAL_TO_SINGLETON_TRANSACTIONS",
+      "mid_batch_invalid_fold": "WHOLE_TRANSACTION_REVERTED_BYTE_EXACT",
+      "test_result": "PASS_2_OF_2"
     },
     "native_point_v3": {
       "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",

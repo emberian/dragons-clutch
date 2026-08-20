@@ -159,6 +159,30 @@ class ResolutionPathQuote:
 
 
 @dataclass(frozen=True)
+class BatchedResolutionPathQuote:
+    """Fewest-transaction batched ResolutionWork lifecycle quote.
+
+    Prices the cheapest measured way to drive one complete work item when
+    admitted multi-fold batch transactions exist, next to the per-transaction
+    worst case of :class:`ResolutionPathQuote`.  ``batch_plan`` lists the
+    batch size of every Fold transaction in the plan, largest first.
+    """
+
+    record_count: int
+    batch_plan: tuple[int, ...] | None
+    fold_transactions: int | None
+    fold_path_lamports: int | None
+    success_rewards_lamports: int | None
+    worst_abort_rewards_lamports: int | None
+    spendable_reserve_lamports: int | None
+    rent_principal_lamports: int
+    persistent_reserve_lamports: int | None
+    begin_external_lamports: int | None
+    payer_cold_outlay_lamports: int | None
+    status: str
+
+
+@dataclass(frozen=True)
 class DirectWorkBudgetQuote:
     """Worst accepted staged direct-selection work budget.
 
@@ -317,6 +341,112 @@ def resolution_path_quote(
     )
 
 
+def fewest_transaction_batch_plan(
+    record_count: int,
+    batch_quotes: Mapping[int, RouteQuote],
+) -> tuple[int, ...]:
+    """Return the fewest-transaction batch cover of singleton folds.
+
+    Every key is a measured single-transaction batch of that many singleton
+    Fold(1) instructions (size 1 is the ordinary one-fold transaction).  Only
+    an admitted batch route may appear in the plan; a stopped size simply
+    drops out of the search instead of being clamped into a price.  Equal
+    transaction counts break toward the lexicographically greatest descending
+    plan so the result is reproducible.
+    """
+
+    if record_count < 1:
+        raise AdmissionError("record count must be positive")
+    if any(size < 1 for size in batch_quotes):
+        raise AdmissionError("batch sizes must be positive")
+    sizes = sorted(size for size, quote in batch_quotes.items() if quote.admitted)
+    if not sizes:
+        raise AdmissionError("no admitted fold-batch route")
+    best: list[tuple[int, tuple[int, ...]] | None] = [None] * (record_count + 1)
+    best[0] = (0, ())
+    for end in range(1, record_count + 1):
+        candidates: list[tuple[int, tuple[int, ...]]] = []
+        for size in sizes:
+            start = end - size
+            if start < 0 or best[start] is None:
+                continue
+            count, plan = best[start]
+            candidates.append((count + 1, tuple(sorted((*plan, size), reverse=True))))
+        if candidates:
+            best[end] = min(
+                candidates,
+                key=lambda item: (item[0], tuple(-size for size in item[1])),
+            )
+    if best[record_count] is None:
+        raise AdmissionError("no fold-batch plan reaches the record count")
+    return best[record_count][1]
+
+
+def batched_resolution_path_quote(
+    *,
+    record_count: int,
+    begin: RouteQuote,
+    batch_quotes: Mapping[int, RouteQuote],
+    finalize: RouteQuote,
+    abort: RouteQuote,
+    rent_principal_lamports: int,
+) -> BatchedResolutionPathQuote:
+    """Price the fewest-transaction batched path, propagating every STOP."""
+
+    if not 1 <= record_count <= 32:
+        raise AdmissionError("record count must be in 1..=32")
+    if rent_principal_lamports <= 0:
+        raise AdmissionError("rent principal must be positive")
+
+    def stopped(status: str, begin_external: int | None) -> BatchedResolutionPathQuote:
+        return BatchedResolutionPathQuote(
+            record_count=record_count,
+            batch_plan=None,
+            fold_transactions=None,
+            fold_path_lamports=None,
+            success_rewards_lamports=None,
+            worst_abort_rewards_lamports=None,
+            spendable_reserve_lamports=None,
+            rent_principal_lamports=rent_principal_lamports,
+            persistent_reserve_lamports=None,
+            begin_external_lamports=begin_external,
+            payer_cold_outlay_lamports=None,
+            status=status,
+        )
+
+    if not begin.admitted:
+        return stopped("STOP_BEGIN", None)
+    try:
+        plan = fewest_transaction_batch_plan(record_count, batch_quotes)
+    except AdmissionError:
+        return stopped("STOP_FOLD_BATCH", begin.require_reward())
+    if not finalize.admitted:
+        return stopped("STOP_FINALIZE", begin.require_reward())
+    if not abort.admitted:
+        return stopped("STOP_ABORT", begin.require_reward())
+
+    fold_path = add_many(*(batch_quotes[size].require_reward() for size in plan))
+    success = add_many(fold_path, finalize.require_reward())
+    worst_abort = add_many(fold_path, abort.require_reward())
+    spendable = max(success, worst_abort)
+    persistent = add_many(rent_principal_lamports, spendable)
+    begin_external = begin.require_reward()
+    return BatchedResolutionPathQuote(
+        record_count=record_count,
+        batch_plan=plan,
+        fold_transactions=len(plan),
+        fold_path_lamports=fold_path,
+        success_rewards_lamports=success,
+        worst_abort_rewards_lamports=worst_abort,
+        spendable_reserve_lamports=spendable,
+        rent_principal_lamports=rent_principal_lamports,
+        persistent_reserve_lamports=persistent,
+        begin_external_lamports=begin_external,
+        payer_cold_outlay_lamports=add_many(persistent, begin_external),
+        status="PASS",
+    )
+
+
 def direct_work_budget_quote(
     *,
     max_candidates: int,
@@ -442,6 +572,31 @@ def require_runtime_schedule_covers_policy(
         raise AdmissionError("runtime Finalize reward is under policy")
     if abort_reward < abort_quote.require_reward():
         raise AdmissionError("runtime Abort reward is under policy")
+
+
+def require_runtime_schedule_covers_batches(
+    *,
+    batch_quotes: Mapping[int, RouteQuote],
+    fold_base_reward: int,
+    fold_per_record_reward: int,
+) -> None:
+    """Refuse a runtime schedule below any admitted batch-transaction quote.
+
+    A batch of ``n`` singleton folds pays the runtime Fold schedule ``n``
+    times inside one transaction, so that runtime total must cover the single
+    batched transaction's policy quote.  Stopped batch sizes carry no quote to
+    cover and are skipped rather than clamped.
+    """
+
+    for size, quote in sorted(batch_quotes.items()):
+        if not quote.admitted:
+            continue
+        runtime = checked_mul(
+            runtime_fold_reward(fold_base_reward, fold_per_record_reward, 1),
+            size,
+        )
+        if runtime < quote.require_reward():
+            raise AdmissionError(f"runtime FoldBatch({size}) reward is under policy")
 
 
 def exact_unique_labels(rows: Sequence[int], expected: Sequence[int], label: str) -> None:

@@ -73,3 +73,25 @@ projection. Native full-lifecycle tests are intentionally excluded from the
 default feature: running them requires the
 distinct non-production mock-source ELF, so they are not smuggled into this
 projection.
+
+Two blessed policy-plane changes landed 2026-08-20 as one evidence-only
+cycle against the same `187d5ee1…` ELF (the program did not change). First,
+the CU rounding quantum is 10,000, not 50,000: every selected limit, fee
+cap, and keeper reward is re-derived from `admission_math.py` under the
+finer quantum, and the 5/4-headroom admission bound (measured CU at most
+1,120,000 raw under the 1,400,000-CU ceiling) is unchanged. Second, batched
+folds are measured and admitted: `tests/resolution_work_batch.rs` composes
+N singleton Fold instructions into one transaction for N in {2, 4, 8, 12}
+(`logs/bank/resolution_work_batch.log`), proves the batched final account
+state byte-identical to the same folds driven one per transaction, and
+proves one invalid Fold mid-batch reverts the entire transaction to its
+prestate. Twelve is the largest measured batch and it admits at 926,969 CU
+(selected limit 1,160,000). The `resolution_work_batched` projection prices
+the fewest-transaction plan for a 32-record work item — Begin, then
+FoldBatch(12)+FoldBatch(12)+FoldBatch(8), then Finalize — next to the
+per-transaction worst case; collapsing the per-transaction fixed overhead
+cuts the payer cold outlay from 18,711,920 to 14,841,920 lamports. One
+honest caveat is sealed with the row: the bank harness transports
+transactions in-process, so the cluster wire packet budget (1,232 bytes,
+which a 12-fold message exceeds) is not modeled by these measurements —
+`cluster_packet_budget: UNMODELED_BANK_TRANSPORT_ONLY`.

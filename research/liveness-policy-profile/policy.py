@@ -22,8 +22,11 @@ from typing import Any
 
 from admission_math import (
     QuotePolicy,
+    RouteQuote,
+    batched_resolution_path_quote,
     exact_unique_labels,
     quote_route,
+    require_runtime_schedule_covers_batches,
     require_runtime_schedule_covers_policy,
     resolution_path_quote,
 )
@@ -41,6 +44,7 @@ SEALED_PROBE_PATHS = {
 }
 SAME_ELF_MEASUREMENTS = {
     "resolution_work",
+    "resolution_work_batch",
     "native_point_v3",
     "native_bearer_redeem",
     "occupation_v4",
@@ -74,6 +78,12 @@ REQUIRED_EVIDENCE_SUFFIXES = {
     "logs/bank/prefund_creation.log",
     "logs/bank/resolution_work.log",
     "logs/bank/source_archive.log",
+}
+# Bank logs measured after a superseded seal was retained extend only the
+# current artifact root: a historical seal keeps exactly the evidence set it
+# was sealed with and is never asked for files that postdate it.
+CURRENT_EVIDENCE_SUFFIXES = REQUIRED_EVIDENCE_SUFFIXES | {
+    "logs/bank/resolution_work_batch.log",
 }
 
 
@@ -170,8 +180,7 @@ def quote_policy(evidence: dict[str, Any]) -> QuotePolicy:
     )
 
 
-def route_dict(measured_cu: int, policy: QuotePolicy) -> dict[str, Any]:
-    route = quote_route(measured_cu, policy)
+def quote_dict(route: RouteQuote) -> dict[str, Any]:
     return {
         "measured_cu": route.measured_cu,
         "required_headroom_cu": route.required_headroom_cu,
@@ -182,13 +191,21 @@ def route_dict(measured_cu: int, policy: QuotePolicy) -> dict[str, Any]:
     }
 
 
+def route_dict(measured_cu: int, policy: QuotePolicy) -> dict[str, Any]:
+    return quote_dict(quote_route(measured_cu, policy))
+
+
 def derive(evidence: dict[str, Any]) -> dict[str, Any]:
     """Derive the only promoted subsystem quote and protocol STOP."""
 
     policy = quote_policy(evidence)
     measurements = evidence["measurements"]
     work = measurements["resolution_work"]
+    work_batch = measurements["resolution_work_batch"]
     exact_unique_labels(work["fold_widths"], [1, 2, 3, 4], "ResolutionWork Fold")
+    exact_unique_labels(
+        work_batch["batch_sizes"], [2, 4, 8, 12], "ResolutionWork FoldBatch"
+    )
     exact_unique_labels(
         [row["degree"] for row in measurements["occupation_v4"]["degree_rows"]],
         [1, 2, 3],
@@ -205,10 +222,17 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
         "native bearer degree",
     )
 
-    begin = quote_route(max(work["begin_cu"]), policy)
+    # The batch campaign also measured Begin and singleton Fold(1) rows at
+    # spans past four; each route quote covers every observation of its route.
+    begin = quote_route(max([*work["begin_cu"], *work_batch["begin_cu"]]), policy)
     folds = {
-        width: quote_route(max(work[f"fold_{width}_cu"]), policy)
-        for width in range(1, 5)
+        1: quote_route(
+            max([*work["fold_1_cu"], *work_batch["singleton_fold_cu"]]), policy
+        ),
+        **{
+            width: quote_route(max(work[f"fold_{width}_cu"]), policy)
+            for width in range(2, 5)
+        },
     }
     finalize = quote_route(max(work["finalize_cu"]), policy)
     abort = quote_route(max(work["abort_cu"]), policy)
@@ -233,6 +257,29 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
         finalize_reward=runtime_schedule["finalize_lamports"],
         abort_quote=abort,
         abort_reward=runtime_schedule["abort_lamports"],
+    )
+
+    # A batch of one is the measured singleton Fold(1) transaction itself.
+    batch_quotes = {
+        size: quote_route(max(work_batch[f"fold_batch_{size}_cu"]), policy)
+        for size in work_batch["batch_sizes"]
+    }
+    plan_quotes = {1: folds[1], **batch_quotes}
+    batched = batched_resolution_path_quote(
+        record_count=evidence["resolution_work"]["maximum_records"],
+        begin=begin,
+        batch_quotes=plan_quotes,
+        finalize=finalize,
+        abort=abort,
+        rent_principal_lamports=(
+            evidence["accounts"]["resolution.work.v1"]["rent_lamports"]
+            + evidence["accounts"]["resolution.reserve.v1"]["rent_lamports"]
+        ),
+    )
+    require_runtime_schedule_covers_batches(
+        batch_quotes=plan_quotes,
+        fold_base_reward=runtime_schedule["fold_base_lamports"],
+        fold_per_record_reward=runtime_schedule["fold_per_record_lamports"],
     )
 
     direct = measurements["direct_v2"]
@@ -284,13 +331,10 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
         "resolution_work": {
             "status": path.status,
             "routes": {
-                "begin": route_dict(max(work["begin_cu"]), policy),
-                **{
-                    f"fold_{width}": route_dict(max(work[f"fold_{width}_cu"]), policy)
-                    for width in range(1, 5)
-                },
-                "finalize": route_dict(max(work["finalize_cu"]), policy),
-                "abort": route_dict(max(work["abort_cu"]), policy),
+                "begin": quote_dict(begin),
+                **{f"fold_{width}": quote_dict(folds[width]) for width in range(1, 5)},
+                "finalize": quote_dict(finalize),
+                "abort": quote_dict(abort),
             },
             "maximum_records": path.record_count,
             "fold_path_lamports": path.fold_path_lamports,
@@ -302,6 +346,37 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
             "begin_external_lamports": path.begin_external_lamports,
             "payer_cold_outlay_lamports": path.payer_cold_outlay_lamports,
             "runtime_schedule_matches_policy": True,
+        },
+        "resolution_work_batched": {
+            "status": batched.status,
+            "routes": {
+                f"fold_batch_{size}": quote_dict(batch_quotes[size])
+                for size in work_batch["batch_sizes"]
+            },
+            "maximum_admitted_batch": max(
+                (
+                    size
+                    for size in work_batch["batch_sizes"]
+                    if batch_quotes[size].admitted
+                ),
+                default=None,
+            ),
+            "outcome_equality": work_batch["outcome_equality"],
+            "mid_batch_invalid_fold": work_batch["mid_batch_invalid_fold"],
+            "cluster_packet_budget": "UNMODELED_BANK_TRANSPORT_ONLY",
+            "maximum_records": batched.record_count,
+            "fewest_transaction_plan": (
+                list(batched.batch_plan) if batched.batch_plan is not None else None
+            ),
+            "fold_transactions": batched.fold_transactions,
+            "fold_path_lamports": batched.fold_path_lamports,
+            "success_rewards_lamports": batched.success_rewards_lamports,
+            "worst_abort_rewards_lamports": batched.worst_abort_rewards_lamports,
+            "spendable_reserve_lamports": batched.spendable_reserve_lamports,
+            "rent_principal_lamports": batched.rent_principal_lamports,
+            "persistent_reserve_lamports": batched.persistent_reserve_lamports,
+            "begin_external_lamports": batched.begin_external_lamports,
+            "payer_cold_outlay_lamports": batched.payer_cold_outlay_lamports,
         },
         "source_value_admission": {
             "status": "FAIL_CLOSED_STOP",
@@ -437,7 +512,7 @@ def check_artifact_binding(evidence: dict[str, Any]) -> None:
         )
 
     artifact_root = Path(artifact["path"]).parent
-    expected_files = {str(artifact_root / suffix) for suffix in REQUIRED_EVIDENCE_SUFFIXES}
+    expected_files = {str(artifact_root / suffix) for suffix in CURRENT_EVIDENCE_SUFFIXES}
     require_equal(set(evidence["evidence_files"]), expected_files, "current evidence set")
     for relative in evidence["evidence_files"]:
         try:
