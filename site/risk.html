@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Price of Risk — Dragon&#8217;s Clutch</title>
+<meta name="description" content="Fees and collateral as geometry: a fee base forced to vanish on the risk-free diagonal, a collateral rule that is exactly the worst case, and the honest cost of both.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+  <div class="site-inner">
+    <a class="site-name" href="index.html">Dragon&#8217;s Clutch</a>
+    <nav class="pages" aria-label="Pages">
+      <a href="index.html">The Clutch</a>
+      <a href="shape.html">The Shape of a Claim</a>
+      <a href="clearing.html">The Clearing</a>
+      <a href="ledger.html">The Ledger</a>
+      <a href="risk.html" aria-current="page">The Price of Risk</a>
+      <a href="machines.html">For the Machines</a>
+      <a href="evidence.html">The Evidence</a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+
+<p class="kicker">Fees and collateral as geometry</p>
+<h1>The price of risk</h1>
+
+<h2>What should a venue charge for?</h2>
+
+<p>Not principal. Not redeeming a correct claim. Not carrying a riskless
+complete set. Adding complete sets to any position changes nothing that
+matters — the payoff shifts by a constant, the collateral moves in lockstep,
+no counterparty is involved — so a principled fee must vanish on that
+diagonal, and once you also refuse to let traders cheapen a fee by
+fragmenting one order into many, the fee base is forced to be a seminorm on
+the quotient space where risk actually lives (docs/FEE_GEOMETRY.md &#167;3;
+docs/research/RISK_SUMMED_POSITIONS.md &#167;3.1). This page is about the
+two candidates that survive that forcing — and about the honest twist that
+the mathematics refuses to pick between them.</p>
+
+<h2>The candidate: state-contingent dispersion</h2>
+
+<p>Every binary-market fee you have ever paid is some cousin of
+<code>q&#183;p&#183;(1&#8722;p)</code> — charge the most when the market is
+most uncertain. The corpus generalizes it exactly:
+<code>G(a,p) = &#931;<sub>i&lt;j</sub> p&#7522;p&#11388;|a&#7522; &#8722;
+a&#11388;| / S&#178;</code> — the expected payoff difference between two
+states drawn from the market&#8217;s own implied distribution. It vanishes
+on complete sets, ignores relabeling, scales linearly with quantity, and
+rewards expressing your actual net shape instead of a pile of legs. And it
+is not merely a nice construction: accept the binary calibration and
+additivity over payoff layers, and <code>G</code> is <em>derived</em> —
+provably the unique such extension, twice over.
+<a class="badge" href="evidence.html#paper-proof">paper proof —
+RISK_SUMMED_POSITIONS.md Props 11&#8211;12; FEE_GEOMETRY.md &#167;3</a>
+At the kernel&#8217;s ceiling of 16 outcomes it costs at most 120 exact
+integer pair terms to verify — nested loops and one division, no floating
+point anywhere (FEE_GEOMETRY.md &#167;3;
+crates/clutch-kernel/src/lib.rs:31).</p>
+
+<p>On the Friday clutch&#8217;s cleared prices, Maya&#8217;s tent disperses
+at <code>G = 0.4086</code> collateral units per lot — under the theoretical
+ceiling of <code>R/4 = 0.5</code> for a shape of range 2, as the envelope
+theorem requires. (Checked, like every number in the illustration, by the
+site&#8217;s arithmetic script.)</p>
+
+<h2>The twist the corpus refused to hide</h2>
+
+<p>It would be easy to market <code>G</code> as &#8220;charging for
+risk.&#8221; The corpus proved the opposite. <code>G</code> is bounded by a
+quarter of the model-free range — <code>G(a,p) &#8804; R(a)/4</code>, with
+the bound touched only at maximally uncertain two-point prices — and it
+<em>vanishes</em> as prices go extreme, while the at-risk capital of the
+same position stays fixed. It measures variability under the market&#8217;s
+own belief, not model-free risk moved.
+<a class="badge" href="evidence.html#paper-proof">paper proof —
+RISK_SUMMED_POSITIONS.md Prop 10</a>
+Worse, at boundary prices its kernel grows a hole: risk transfer supported
+entirely on zero-priced outcomes is literally feeless, however large its
+range — a laundering channel the fee&#8217;s own virtue degenerates into at
+extreme prices.
+<a class="badge" href="evidence.html#paper-proof">paper proof —
+RISK_SUMMED_POSITIONS.md Prop 9</a>
+So two candidates survive: <code>G</code>, price-weighted, tails nearly
+free; or the price-free range norm <code>&#954;&#8242;&#183;R(a)</code>,
+manipulation-free but charging a 99-cent claim&#8217;s buyer the same
+absolute fee as a 50-cent claim&#8217;s. The choice is economics, not
+mathematics — the corpus says so in those words — and meanwhile <strong>the
+fee is forced to zero in every configuration currently true in the
+tree</strong>: no fee shape is frozen, and the only settlement that has
+ever executed is zero-fee (docs/ECONOMICS.md &#167;6).
+<a class="badge" href="evidence.html#model-only">MODEL-ONLY / PROPOSED —
+CURRENT_TRUTH.md &#167;4, economics row</a>
+The laboratory even keeps an unflattering fixture on file: under the
+minimum-charge close, a 1-atom fee on 1 atom of consideration is 10,000
+basis points on the smallest fill (<code>FEE-001</code>,
+docs/FEE_GEOMETRY.md &#167;4) — the corpus refusing to let its own fee look
+better than it is.</p>
+
+<aside class="lane lane-scholar"><span class="tag">&#10216;scholar&#10217;</span>
+<code>ker&#8202;&#915;<sub>p</sub> = span(1) &#8853;
+&#8477;<sup>Z(p)</sup></code> — equal to the risk quotient&#8217;s kernel
+iff every price is positive (Prop 9); <code>sup<sub>p</sub>
+&#915;<sub>p</sub>(a) = R(a)/4</code> exactly (Prop 10); uniqueness via
+layer decomposition and the pairwise family (Props 11&#8211;12)
+(RISK_SUMMED_POSITIONS.md &#167;3).</aside>
+
+<h2>Collateral is the other half of the geometry</h2>
+
+<p>The collateral rule is the same geometry read in the other direction:
+reserve the sup-norm — the maximum component of your position vector. At
+degrees zero and one every basis vertex is attained, so this is not a
+conservative bound; it is <em>exactly</em> the supremum of realizable
+payoff. No slack, no model, no oracle in the requirement.
+<a class="badge" href="evidence.html#paper-proof">paper proof —
+RISK_SUMMED_POSITIONS.md Props 1&#8211;2; PROVED-MODEL solvency family,
+CURRENT_TRUTH.md &#167;3</a>
+Two structural consequences follow. Settling one market can never raise the
+requirement on what remains — under SPAN or VaR margining, a hedge leg
+expiring routinely <em>raises</em> margin on the residual book; here that
+is impossible, so &#8220;margin call&#8221; has no referent
+(Prop 8). And no model-free calendar or cross-asset netting exists at all:
+whenever no frozen deterministic linkage relates two markets, the honest
+joint worst case is exactly the sum of the parts — provably, not lazily.
+Any venue giving you calendar relief is asserting a correlation model; this
+one refuses to hold one.
+<a class="badge" href="evidence.html#paper-proof">paper proof —
+RISK_SUMMED_POSITIONS.md Props 6, 8</a></p>
+
+<h2>What that costs, plainly</h2>
+
+<div class="tablewrap">
+<table>
+  <caption style="text-align:left; font-size:0.78rem; color:var(--ink-3); padding-bottom:0.4rem;">Both columns, in the same voice (RISK_SUMMED_POSITIONS.md &#167;2.4, &#167;4.2)</caption>
+  <thead>
+    <tr><th scope="col">What the geometry buys</th><th scope="col">What it charges</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>No liquidation engine, insurance fund, ADL, margin oracle, or procyclical calls — each the corollary of a proposition, not an aspiration</td><td>No leverage, in any form</td></tr>
+    <tr><td>Requirement anyone can recompute exactly from public frozen terms</td><td>Tail writers lock the entire worst case against a small premium; expect wider tail offers than on margined venues</td></tr>
+    <tr><td>Native netting inside a market: a curve margins at its max, never the sum of legs</td><td>No calendar or cross-asset relief — the sum is the honest number (Prop 6)</td></tr>
+    <tr><td>Settlement can only lower requirements (Prop 8)</td><td>Capital is locked to term; exit early only into venue liquidity or via complete sets</td></tr>
+    <tr><td>Defined risk everywhere; a wick through your strike is a resolution input, not a margin event</td><td>Bounded payoffs only — no unbounded upside exists here, by construction</td></tr>
+  </tbody>
+</table>
+</div>
+
+<aside class="lane lane-degen"><span class="tag">&#10216;degen&#10217;</span>
+Selling the wings pays worse here than on a margined venue and can&#8217;t
+blow up — both for the same reason: the worst case is prepaid. Price
+accordingly, and read the fee line knowing today it is exactly
+zero.</aside>
+
+<aside class="lane lane-builder"><span class="tag">&#10216;builder&#10217;</span>
+A dispersion-fee step exists in checked <code>u128</code>
+(programs/solana-layout/src/portfolio_settlement.rs) but no runtime path
+charges it: every executed settlement forces
+<code>max_fee_atoms&nbsp;=&nbsp;0</code>, and the five arithmetic bounds the
+policy needs are explicitly not frozen (FEE_GEOMETRY.md &#167;3&#8211;4;
+CURRENT_TRUTH.md &#167;4).</aside>
+
+<section class="friday">
+<h2>The Friday clutch &#183; stage 5 of 7 &#183; what it cost</h2>
+<p>Maya&#8217;s side: 1,728 atoms paid, worst case zero payout — her maximum
+loss is her consideration, known before she signed, and her position can
+never be force-closed at any price path. Theo&#8217;s side: 3,200 atoms
+locked to term — the full worst case of everything he sold, the honest
+price of a venue with no liquidation engine. The fee line on both tickets:
+zero, because in every configuration currently true in the tree the fee is
+forced to zero. What <code>G</code> would have measured — 0.4086 per lot,
+under its R/4 envelope — is a laboratory quantity today, not a charge.</p>
+<p class="fiction">Illustration — no such market exists; arithmetic checked
+by docs/site-plan/friday_clutch_check.py. Fee policy is unfrozen and every
+executed settlement is zero-fee (docs/ECONOMICS.md &#167;6;
+CURRENT_TRUTH.md &#167;4).</p>
+</section>
+
+</main>
+<footer class="site">
+  <div class="foot-inner">
+    <span><a href="evidence.html#scope">Scope note</a></span>
+    <nav class="pn" aria-label="Page order">
+      <a href="ledger.html">&#8592; The Ledger</a>
+      <a href="machines.html">Next: For the Machines &#8594;</a>
+    </nav>
+  </div>
+</footer>
+<script src="lanes.js" defer></script>
+</body>
+</html>

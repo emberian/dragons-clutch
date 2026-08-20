@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Ledger — Dragon&#8217;s Clutch</title>
+<meta name="description" content="One custody identity, H = L + P + S, asserted to the atom; resolution as a measurement; redemption exact-or-refuse; a walk that ends at zero.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+  <div class="site-inner">
+    <a class="site-name" href="index.html">Dragon&#8217;s Clutch</a>
+    <nav class="pages" aria-label="Pages">
+      <a href="index.html">The Clutch</a>
+      <a href="shape.html">The Shape of a Claim</a>
+      <a href="clearing.html">The Clearing</a>
+      <a href="ledger.html" aria-current="page">The Ledger</a>
+      <a href="risk.html">The Price of Risk</a>
+      <a href="machines.html">For the Machines</a>
+      <a href="evidence.html">The Evidence</a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+
+<p class="kicker">Conservation, resolution, and walking to zero</p>
+<h1>The ledger</h1>
+
+<h2>One identity rules custody</h2>
+
+<p>Everything a market holds obeys one equation. Write <code>H</code> for
+the actual collateral atoms in the market&#8217;s Hoard token account,
+<code>L</code> for retained claim backing, <code>P</code> for the sum of
+every Position&#8217;s cash, and <code>S</code> for unsolicited surplus
+someone donated without being asked. Then:</p>
+
+<pre>H = L + P + S</pre>
+
+<p>Every transition the program can perform has an exact delta against this
+identity — not &#8220;approximately,&#8221; not &#8220;after fees,&#8221;
+but to the atom (CURRENT_TRUTH.md &#167;5). Only two transitions move actual
+tokens across the Hoard&#8217;s edge: <code>Endow</code> inbound and
+<code>WithdrawCash</code> outbound. Everything between — splitting,
+merging, trading, redeeming internally — is pooled-accounting
+reclassification inside the vault.</p>
+
+<div class="tablewrap">
+<table>
+  <caption style="text-align:left; font-size:0.78rem; color:var(--ink-3); padding-bottom:0.4rem;">Per-transition deltas (CURRENT_TRUTH.md &#167;5)</caption>
+  <thead>
+    <tr><th scope="col">Transition</th><th scope="col">Token effect</th><th scope="col">Accounting effect</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Endow(q)</code></td><td>actor &#8722;q, Hoard +q</td><td>owner cash +q</td></tr>
+    <tr><td><code>Split(q)</code></td><td>none</td><td>free cash &#8722;q, locked backing +q, every native claim supply +q</td></tr>
+    <tr><td><code>Merge(q)</code></td><td>none</td><td>every native claim supply &#8722;q, locked backing &#8722;q, free cash +q</td></tr>
+    <tr><td>internal redemption</td><td>none</td><td>claim &#8722;q, locked backing &#8722;p, owner cash +p</td></tr>
+    <tr><td>reserve / release</td><td>none</td><td>exact movement between free and reserved ownership phases</td></tr>
+    <tr><td><code>WithdrawCash(q)</code></td><td>Hoard &#8722;q, owner +q</td><td>unreserved owner cash &#8722;q</td></tr>
+    <tr><td>external redemption</td><td>burn Egg; Hoard &#8722;p, bearer +p</td><td>external liability &#8722;q, locked backing &#8722;p</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Settlement under the identity</h2>
+
+<p>When a cleared epoch settles, the identity is not assumed — it is
+asserted, plane-wide, on the bank&#8217;s actual bytes: cash sums exact to
+the atom, per-outcome position totals exact, the release identity closed
+(buy envelopes = consideration + refunds + pot), and the final Positions
+byte-equal to the verified summary&#8217;s implied allocation. Entitlement
+receipts are the consumption latch: each one frozen from the selected
+candidate before any value moves, and consumed exactly once, which is what
+makes settlement resumable without ever being repeatable.
+<a class="badge" href="evidence.html#sbf-executed">SBF-EXECUTED &#183; bank
+&#183; UNPROMOTED — CURRENT_TRUTH.md &#167;4; GOAL.md T2-8</a></p>
+
+<figure>
+<div class="figwrap">
+<svg viewBox="0 0 640 265" width="640" height="265" role="img"
+     aria-label="Six frames of the Friday clutch ledger: endow, split, trade, resolve, redeem, withdraw. In every frame the Hoard equals locked backing plus position cash plus surplus; the final frame is zero.">
+  <!-- legend -->
+  <g font-family="system-ui, sans-serif" font-size="10.5" fill="var(--ink-2)">
+    <rect x="46" y="8" width="12" height="12" rx="2" fill="var(--chart-l)"/>
+    <text x="63" y="18">L &#183; locked backing</text>
+    <rect x="196" y="8" width="12" height="12" rx="2" fill="var(--chart-p)"/>
+    <text x="213" y="18">P &#183; position cash</text>
+    <rect x="340" y="8" width="12" height="12" rx="2" fill="var(--chart-s)"/>
+    <text x="357" y="18">S &#183; surplus (zero throughout)</text>
+  </g>
+  <!-- frames: baseline y=200; scale 0.03 px per atom (5,200 -> 156px) -->
+  <line x1="20" y1="200" x2="620" y2="200" stroke="var(--border)"/>
+  <!-- endow: P=5200 -->
+  <rect x="46" y="44" width="48" height="156" rx="3" fill="var(--chart-p)"/>
+  <!-- split: L=3200, P=2000 -->
+  <rect x="142" y="104" width="48" height="96" rx="3" fill="var(--chart-l)"/>
+  <rect x="142" y="42" width="48" height="60" rx="3" fill="var(--chart-p)"/>
+  <!-- trade: same totals -->
+  <rect x="238" y="104" width="48" height="96" rx="3" fill="var(--chart-l)"/>
+  <rect x="238" y="42" width="48" height="60" rx="3" fill="var(--chart-p)"/>
+  <!-- resolve: same totals -->
+  <rect x="334" y="104" width="48" height="96" rx="3" fill="var(--chart-l)"/>
+  <rect x="334" y="42" width="48" height="60" rx="3" fill="var(--chart-p)"/>
+  <!-- redeem: P=5200 -->
+  <rect x="430" y="44" width="48" height="156" rx="3" fill="var(--chart-p)"/>
+  <!-- withdraw: zero -->
+  <line x1="526" y1="200" x2="574" y2="200" stroke="var(--ink-3)" stroke-width="3"/>
+  <!-- H labels -->
+  <g font-family="ui-monospace, monospace" font-size="10" fill="var(--ink-2)" text-anchor="middle">
+    <text x="70" y="36">5,200</text>
+    <text x="166" y="34">5,200</text>
+    <text x="262" y="34">5,200</text>
+    <text x="358" y="34">5,200</text>
+    <text x="454" y="36">5,200</text>
+    <text x="550" y="192">0</text>
+  </g>
+  <!-- frame names -->
+  <g font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="var(--ink-2)" text-anchor="middle">
+    <text x="70" y="219">endow</text>
+    <text x="166" y="219">split</text>
+    <text x="262" y="219">trade</text>
+    <text x="358" y="219">resolve</text>
+    <text x="454" y="219">redeem</text>
+    <text x="550" y="219">withdraw</text>
+  </g>
+  <g font-family="system-ui, sans-serif" font-size="9" fill="var(--ink-3)" text-anchor="middle">
+    <text x="70" y="233">2,000 + 3,200 in</text>
+    <text x="166" y="233">Theo locks 3,200</text>
+    <text x="262" y="233">1,728 Maya&#8594;Theo</text>
+    <text x="358" y="233">no atoms move</text>
+    <text x="454" y="233">2,925 + 275 to cash</text>
+    <text x="550" y="233">3,197 + 2,003 out</text>
+    <text x="320" y="256" font-size="10.5">H = L + P + S holds in every frame &#8212; and the last frame is all zeros</text>
+  </g>
+</svg>
+</div>
+<figcaption>The Friday clutch&#8217;s ledger, frame by frame (illustration;
+arithmetic checked by docs/site-plan/friday_clutch_check.py). The identity
+and per-transition deltas are the repository&#8217;s
+(CURRENT_TRUTH.md &#167;5); the whole-plane settlement assertion ran on bank
+bytes.
+<a class="badge" href="evidence.html#sbf-executed">SBF-EXECUTED &#183; bank
+&#183; UNPROMOTED — GOAL.md T2-8</a></figcaption>
+</figure>
+
+<h2>Resolution is a measurement</h2>
+
+<p>Every transition before resolution preserves the structure of risk —
+split, merge, transfer, materialize all move value around without creating
+or destroying any of it. Resolution is the one exception, and the corpus
+treats it with the respect a physicist gives a measurement: the risk space
+collapses to a point, positions that differed in shape become economically
+identical, and the collateral requirement can only fall, never rise
+(docs/research/RISK_SUMMED_POSITIONS.md &#167;1.5). For the Friday clutch
+the admitted statistic lands at $163.40, between the $160 and $180 knots.
+The hats evaluate to exact rationals — 53.12/64 and 10.88/64 — and the one
+deterministic rounding rule, largest remainder with lowest-index ties,
+distributes the last atoms: the payout vector is
+<code>(0,&#8202;0,&#8202;0,&#8202;53,&#8202;11,&#8202;0,&#8202;0,&#8202;0)</code>
+of 64. Same inputs, same vector, every time, on every machine — the rule is
+proved canonical and unique in the Lean model.
+<a class="badge" href="evidence.html#proved-model">PROVED-MODEL —
+CURRENT_TRUTH.md &#167;3; lean/DragonsClutch/BSpline.lean</a></p>
+
+<h2>Redemption is exact-or-refuse</h2>
+
+<p>Fractional resolved weights make some redemptions inexact, and the
+program&#8217;s answer to &#8220;almost&#8221; is no. A lot that does not
+divide exactly returns <code>RemainderRequired</code> before any mutation;
+nothing is silently rounded against you, ever
+(CURRENT_TRUTH.md &#167;3). The balanced exit is always available: a
+complete set redeems at par, exactly.</p>
+
+<aside class="lane lane-degen"><span class="tag">&#10216;degen&#10217;</span>
+No haircut hidden in a rounding step. If your lot doesn&#8217;t divide, the
+venue refuses instead of shaving you — bring a whole lot or merge to a
+complete set and exit at par.</aside>
+
+<aside class="lane lane-builder"><span class="tag">&#10216;builder&#10217;</span>
+Settlement asserts conservation on reloaded account bytes, not on the
+driver&#8217;s bookkeeping: cash sums, per-outcome totals, and final
+Positions are compared byte-for-byte against the verified summary&#8217;s
+implied allocation (GOAL.md T2-8; CURRENT_TRUTH.md &#167;4, clearing
+row).</aside>
+
+<aside class="lane lane-scholar"><span class="tag">&#10216;scholar&#10217;</span>
+Pre-resolution transitions are isometries of a seminormed space with a
+conserved quotient class; resolution composes with the evaluation
+functional — a rank-one projection, the unique non-isometry — and
+requirements degrade monotonically through it
+(RISK_SUMMED_POSITIONS.md &#167;1.4&#8211;1.5, Prop 8).</aside>
+
+<h2>The walk to zero</h2>
+
+<p>The strongest custody evidence in the tree is a story with an ending: 22
+signed, sequential transactions on a local validator — create the market,
+endow, split, materialize, transfer to a bearer, merge, advance the feed,
+resolve, redeem the winners, redeem the losers for zero, and withdraw
+everything — including two <em>expected refusals</em> confirmed on-chain
+that changed not one watched byte. 18 watched accounts were reloaded after
+every step. The 70 deposited atoms closed exactly: 3 to the bearer, 61 to
+the founder, 6 to the second owner, and every terminal balance — Position
+cash, locked backing, the pooled Hoard token account — ended at zero.
+<a class="badge" href="evidence.html#sbf-executed">SBF-EXECUTED —
+docs/implementation/COMMITTED_SBF_WALK.md; CURRENT_TRUTH.md &#167;2</a>
+And after the green run, the harness corrupted one byte of the final
+expected Hoard image and replayed the whole sequence: the gate failed,
+specifically, on committed bytes. A gate that cannot go red proves nothing;
+this one went red on demand, which is what makes its green mean
+something.</p>
+
+<section class="friday">
+<h2>The Friday clutch &#183; stage 4 of 7 &#183; settled and resolved</h2>
+<p>Settlement moves Maya&#8217;s 1,728 atoms to Theo and the tent&#8217;s
+Eggs to Maya, under the asserted identity. The week ends; the TWAP resolves
+at $163.40; the payout vector is
+<code>(0,0,0,53,11,0,0,0)/64</code>. Maya redeems her position — 3,200 Eggs
+at $160 pay 2,650; 1,600 at $180 pay 275 — 2,925 atoms in all, exactly, no
+remainder. Theo&#8217;s complement redeems for 275. Payouts exhaust the
+locked backing to zero: 2,925 + 275 = 3,200. Both withdraw — 3,197 and
+2,003 — and the Hoard token account reads zero. Maya is up 1,197 atoms;
+Theo is down the same 1,197; the ledger neither made nor lost an atom.</p>
+<p class="fiction">Illustration — no such market exists; arithmetic checked
+by docs/site-plan/friday_clutch_check.py. The mirrored end-to-end evidence
+is the 22-step committed walk and the settled bank epoch above.</p>
+</section>
+
+</main>
+<footer class="site">
+  <div class="foot-inner">
+    <span><a href="evidence.html#scope">Scope note</a></span>
+    <nav class="pn" aria-label="Page order">
+      <a href="clearing.html">&#8592; The Clearing</a>
+      <a href="risk.html">Next: The Price of Risk &#8594;</a>
+    </nav>
+  </div>
+</footer>
+<script src="lanes.js" defer></script>
+</body>
+</html>

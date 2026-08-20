@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Clearing — Dragon&#8217;s Clutch</title>
+<meta name="description" content="Verify-not-find: solvers search off-chain, the chain re-verifies every byte, and an accepted clearing is an optimality certificate and a published density.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+  <div class="site-inner">
+    <a class="site-name" href="index.html">Dragon&#8217;s Clutch</a>
+    <nav class="pages" aria-label="Pages">
+      <a href="index.html">The Clutch</a>
+      <a href="shape.html">The Shape of a Claim</a>
+      <a href="clearing.html" aria-current="page">The Clearing</a>
+      <a href="ledger.html">The Ledger</a>
+      <a href="risk.html">The Price of Risk</a>
+      <a href="machines.html">For the Machines</a>
+      <a href="evidence.html">The Evidence</a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+
+<p class="kicker">Why the algorithms are powerful, part 2</p>
+<h1>The clearing</h1>
+
+<h2>Nobody on-chain searches. Anyone off-chain may.</h2>
+
+<p>Most venues run the matching engine themselves and ask you to trust it.
+Here the division of labor is inverted. The chain never searches for a
+clearing; its job is <em>verify-not-find</em>. Anyone — a person, a bot, a
+competitor&#8217;s bot — may compute a clearing of the frozen book off-chain
+and submit it as a <strong>candidate</strong>: a price vector, a
+complete-set imbalance, and the fills. The candidate is trusted for nothing.
+Every derived quantity — eligibility, per-outcome conservation, cash closure,
+the score — is recomputed on-chain and checked for exact equality, and the
+project&#8217;s standing language for the winner is &#8220;best valid
+submitted candidate,&#8221; never &#8220;optimal&#8221; — until a
+certificate says otherwise, which is the punchline below
+(docs/research/DUAL_IS_THE_MEASURE.md &#167;1).</p>
+
+<h2>The walk</h2>
+
+<p>A book does not fit in one transaction, so verification streams. The
+frozen order pages are walked order by order — tombstones of cancelled
+orders skipped, every surviving order&#8217;s funded reservation re-verified
+— then slice by slice through the pairing, with the relation&#8217;s exact
+state checkpointed between transactions in a 48,750-byte program account.
+The checkpoint refuses tampering in three layers: a consumed-fold latch, a
+validated header, and a binding to the exact frozen order set — substitute
+any page, feed, or the checkpoint itself wholesale, and the walk refuses to
+resume (docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md; crates/clutch-batch/src/relation_v1_stream.rs).
+In laboratory bank evidence, a 40-order, three-page, four-outcome book with
+two portfolio buys and three tombstones was placed through the general arm,
+frozen, and walked to VERIFIED across roughly twenty transactions — with the
+on-chain verdict and persisted score byte-equal to the host
+relation&#8217;s.
+<a class="badge" href="evidence.html#sbf-executed">SBF-EXECUTED &#183; bank
+&#183; UNPROMOTED — CURRENT_TRUTH.md &#167;4; GOAL.md T2-6</a></p>
+
+<figure>
+<div class="figwrap">
+<svg viewBox="0 0 1130 270" width="1130" height="270" role="img"
+     aria-label="Comic strip of the clearing lifecycle: place, freeze, walk, verified, select, entitle, settle. Sigma the solver sits outside the panels in an off-chain band; only its candidate crosses the border.">
+  <!-- off-chain band -->
+  <g font-family="system-ui, sans-serif" font-size="11" fill="var(--ink-3)">
+    <text x="18" y="20">off-chain &#8212; anyone may search</text>
+    <text x="18" y="262">on-chain &#8212; the venue only verifies</text>
+  </g>
+  <!-- Sigma -->
+  <g stroke="var(--accent-2)" fill="none" stroke-width="2">
+    <rect x="330" y="14" width="34" height="26" rx="5"/>
+    <line x1="347" y1="14" x2="347" y2="6"/>
+    <circle cx="347" cy="5" r="2" fill="var(--accent-2)"/>
+    <circle cx="340" cy="25" r="2" fill="var(--accent-2)" stroke="none"/>
+    <circle cx="354" cy="25" r="2" fill="var(--accent-2)" stroke="none"/>
+  </g>
+  <text x="372" y="32" font-family="system-ui, sans-serif" font-size="11" fill="var(--accent-2)">Sigma, a solver bot: reads the frozen book, computes a clearing</text>
+  <!-- border -->
+  <line x1="10" y1="58" x2="1120" y2="58" stroke="var(--ink-3)" stroke-dasharray="6 5"/>
+  <!-- candidate crossing -->
+  <path d="M400,42 C420,60 430,70 435,86" fill="none" stroke="var(--accent-2)" stroke-width="2" marker-end="url(#arrow)"/>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 z" fill="var(--accent-2)"/>
+    </marker>
+  </defs>
+  <text x="448" y="78" font-family="system-ui, sans-serif" font-size="10" fill="var(--accent-2)">only the candidate crosses: prices &#183; imbalance &#183; fills</text>
+  <!-- panels -->
+  <g fill="none" stroke="var(--border)">
+    <rect x="10"  y="90" width="150" height="140" rx="6"/>
+    <rect x="170" y="90" width="150" height="140" rx="6"/>
+    <rect x="330" y="90" width="150" height="140" rx="6"/>
+    <rect x="490" y="90" width="150" height="140" rx="6"/>
+    <rect x="650" y="90" width="150" height="140" rx="6"/>
+    <rect x="810" y="90" width="150" height="140" rx="6"/>
+    <rect x="970" y="90" width="150" height="140" rx="6"/>
+  </g>
+  <!-- 1 place: order page with tombstone -->
+  <g stroke="var(--ink-3)" stroke-width="1.5">
+    <rect x="55" y="110" width="60" height="80" rx="3" fill="none"/>
+    <line x1="63" y1="126" x2="107" y2="126"/>
+    <line x1="63" y1="142" x2="107" y2="142"/>
+    <line x1="63" y1="158" x2="107" y2="158" stroke="var(--accent-2)"/>
+    <line x1="63" y1="174" x2="107" y2="174"/>
+  </g>
+  <text x="85" y="205" font-family="system-ui, sans-serif" font-size="9.5" fill="var(--ink-3)" text-anchor="middle">orders + a tombstone</text>
+  <!-- 2 freeze -->
+  <g stroke="var(--ink-3)" stroke-width="1.5">
+    <rect x="215" y="110" width="60" height="80" rx="3" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+    <line x1="223" y1="126" x2="267" y2="126"/>
+    <line x1="223" y1="142" x2="267" y2="142"/>
+    <line x1="223" y1="158" x2="267" y2="158" stroke="var(--accent-2)"/>
+    <line x1="223" y1="174" x2="267" y2="174"/>
+  </g>
+  <circle cx="275" cy="110" r="9" fill="var(--accent)"/>
+  <text x="275" y="113.5" font-family="system-ui, sans-serif" font-size="9" fill="var(--bg)" text-anchor="middle">#</text>
+  <text x="245" y="205" font-family="system-ui, sans-serif" font-size="9.5" fill="var(--ink-3)" text-anchor="middle">book sealed by digest</text>
+  <!-- 3 walk: checkpoint character -->
+  <g stroke="var(--accent)" fill="none" stroke-width="2">
+    <rect x="375" y="120" width="60" height="44" rx="8"/>
+    <circle cx="393" cy="138" r="2.5" fill="var(--accent)" stroke="none"/>
+    <circle cx="417" cy="138" r="2.5" fill="var(--accent)" stroke="none"/>
+    <path d="M393,151 Q405,157 417,151"/>
+  </g>
+  <text x="405" y="178" font-family="ui-monospace, monospace" font-size="9" fill="var(--ink-3)" text-anchor="middle">48,750 B checkpoint</text>
+  <text x="405" y="205" font-family="system-ui, sans-serif" font-size="9.5" fill="var(--ink-3)" text-anchor="middle">order by order, ~20 tx</text>
+  <!-- 4 verified -->
+  <g stroke="var(--accent)" fill="none" stroke-width="2">
+    <rect x="535" y="120" width="60" height="44" rx="8"/>
+    <path d="M552,142 L562,152 L580,130" stroke-width="3"/>
+  </g>
+  <text x="565" y="205" font-family="system-ui, sans-serif" font-size="9.5" fill="var(--ink-3)" text-anchor="middle">verdict = host&#8217;s, byte-equal</text>
+  <!-- 5 select -->
+  <g fill="none" stroke="var(--ink-3)" stroke-width="1.5">
+    <rect x="675" y="122" width="28" height="40" rx="3"/>
+    <rect x="741" y="122" width="28" height="40" rx="3"/>
+  </g>
+  <rect x="708" y="116" width="28" height="46" rx="3" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+  <text x="722" y="205" font-family="system-ui, sans-serif" font-size="9.5" fill="var(--ink-3)" text-anchor="middle">best valid submitted</text>
+  <!-- 6 entitle -->
+  <g fill="none" stroke="var(--ink-3)" stroke-width="1.5">
+    <rect x="838" y="118" width="44" height="22" rx="3"/>
+    <rect x="846" y="146" width="44" height="22" rx="3"/>
+    <line x1="860" y1="129" x2="874" y2="129" stroke-dasharray="2 2"/>
+    <line x1="868" y1="157" x2="882" y2="157" stroke-dasharray="2 2"/>
+  </g>
+  <text x="885" y="205" font-family="system-ui, sans-serif" font-size="9.5" fill="var(--ink-3)" text-anchor="middle">receipts, consumed once</text>
+  <!-- 7 settle -->
+  <g stroke-width="0">
+    <rect x="1005" y="130" width="16" height="34" rx="3" fill="var(--chart-p)"/>
+    <rect x="1027" y="118" width="16" height="46" rx="3" fill="var(--chart-l)"/>
+    <rect x="1049" y="140" width="16" height="24" rx="3" fill="var(--chart-s)"/>
+  </g>
+  <text x="1045" y="205" font-family="system-ui, sans-serif" font-size="9.5" fill="var(--ink-3)" text-anchor="middle">H = L + P + S asserted</text>
+  <!-- panel captions -->
+  <g font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="var(--ink-2)" text-anchor="middle">
+    <text x="85" y="106">1 &#183; place</text>
+    <text x="245" y="106">2 &#183; freeze</text>
+    <text x="405" y="106">3 &#183; walk</text>
+    <text x="565" y="106">4 &#183; VERIFIED</text>
+    <text x="722" y="106">5 &#183; select</text>
+    <text x="885" y="106">6 &#183; entitle</text>
+    <text x="1045" y="106">7 &#183; settle</text>
+  </g>
+</svg>
+</div>
+<figcaption>The clearing walk. Sigma stays outside the panels; only its
+candidate crosses the border, and everything the candidate claims is
+re-derived inside. That is verify-not-find, drawn. The mechanism ran end to
+end in a local bank.
+<a class="badge" href="evidence.html#sbf-executed">SBF-EXECUTED &#183; bank
+&#183; UNPROMOTED — CURRENT_TRUTH.md &#167;4</a></figcaption>
+</figure>
+
+<h2>Acceptance is a certificate</h2>
+
+<p>Here is the theorem the corpus proved on paper this month. Under the
+certificate-demanding policy — strict orders filled fully or refused — an
+accepted candidate carries, inside its own witness, a zero-duality-gap proof
+that no feasible clearing of the same book achieves more surplus in the
+LP relaxation, and the witness price vector is the optimal dual. The
+<code>StrictUnderfill</code> refusal is exactly a positive-gap detector: the
+relation does not merely check a clearing, it demands the certificate and
+rejects anything that cannot produce one.
+<a class="badge" href="evidence.html#paper-proof">paper proof —
+DUAL_IS_THE_MEASURE.md Thm 5.1; falsifiers named in its &#167;11</a>
+And when no admissible certified candidate exists — in the analyzed cases,
+exactly when the LP&#8217;s optimal dual face misses the admissible price
+box — the epoch <em>lapses</em>: it clears nothing rather than publish a
+false number (DUAL_IS_THE_MEASURE.md &#167;6).</p>
+
+<aside class="lane lane-scholar"><span class="tag">&#10216;scholar&#10217;</span>
+Theorem 5.1 is scoped to the policy tuple (allocation A, AON refused at
+admission, whole-lot portfolios, no self-crossing) and is a paper proof over
+the repo&#8217;s integer objects — not machine-checked, with its code-level
+falsifier named (<code>every_accepted_candidate_has_zero_duality_gap</code>)
+before any language upgrade is permitted (DUAL_IS_THE_MEASURE.md &#167;5.1,
+&#167;11).</aside>
+
+<h2>Clearing the batch is publishing the density</h2>
+
+<p>The same accepted object wears a third hat. At degree &#8804; 1, every
+price vector the venue can publish is exactly a probability
+distribution&#8217;s moment vector over the basis — so verifying the
+clearing, certifying its optimality, and publishing the market&#8217;s
+implied density are one act, performed on one object, with no second
+artifact and no post-processing.
+<a class="badge" href="evidence.html#paper-proof">paper proof —
+DUAL_IS_THE_MEASURE.md Thm 7.1</a>
+Within the no-arbitrage band the specific published point is chosen by a
+frozen, deterministic score — a policy choice, and the corpus says so
+plainly rather than calling it a market revelation
+(DUAL_IS_THE_MEASURE.md &#167;5.3, &#167;9.3).</p>
+
+<aside class="lane lane-degen"><span class="tag">&#10216;degen&#10217;</span>
+The venue can&#8217;t quote you a price that isn&#8217;t a coherent
+probability curve — the gate that accepts the batch is the same gate that
+makes the quote board a density. Read it straight off: cheap hat, low
+implied mass.</aside>
+
+<aside class="lane lane-builder"><span class="tag">&#10216;builder&#10217;</span>
+The relation&#8217;s stages V0&#8211;V9 (simplex gate, eligibility
+trichotomy, fill box, per-outcome conservation, pairing, surplus, cash
+closure, score) live in
+<code>crates/clutch-batch/src/relation_v1.rs</code>; the streaming form that
+walks pages and checkpoints between transactions is
+<code>relation_v1_stream.rs</code>.</aside>
+
+<section class="friday">
+<h2>The Friday clutch &#183; stage 3 of 7 &#183; cleared</h2>
+<p>The epoch freezes. Sigma reads the frozen book, computes a clearing, and
+submits its candidate; the walk re-verifies every byte and marks it
+VERIFIED; selection compares candidates by re-derived tie digests — an
+unverified claim can never displace a verified one — and Sigma&#8217;s wins.
+The published price vector is
+<code>p = (100, 400, 1500, 3300, 2700, 1300, 500, 200)</code>, summing
+exactly to <code>S = 10,000</code>. Maya&#8217;s tent fills: 1,600 lots at
+<code>dot(c,&#8202;p)/S = 10,800/10,000</code>, i.e. 1,728 collateral atoms,
+exactly. The same vector, divided by the $20 gap, is the market&#8217;s
+density; the linear portfolio quote says the implied forward is $170.</p>
+<figure>
+<div class="figwrap">
+<svg viewBox="0 0 640 220" width="640" height="220" role="img"
+     aria-label="Histogram of the cleared price vector as an implied density over the eight knots, peaking at 160 dollars, with the implied forward at 170 dollars marked.">
+  <g fill="var(--accent)">
+    <rect x="16"  y="166" width="48" height="4"   rx="2"/>
+    <rect x="96"  y="154" width="48" height="16"  rx="3"/>
+    <rect x="176" y="110" width="48" height="60"  rx="3"/>
+    <rect x="256" y="38"  width="48" height="132" rx="3"/>
+    <rect x="336" y="62"  width="48" height="108" rx="3"/>
+    <rect x="416" y="118" width="48" height="52"  rx="3"/>
+    <rect x="496" y="150" width="48" height="20"  rx="3"/>
+    <rect x="576" y="162" width="48" height="8"   rx="3"/>
+  </g>
+  <line x1="10" y1="170" x2="630" y2="170" stroke="var(--border)"/>
+  <line x1="320" y1="30" x2="320" y2="170" stroke="var(--accent-2)" stroke-dasharray="4 4"/>
+  <g font-family="ui-monospace, monospace" font-size="10" fill="var(--ink-2)" text-anchor="middle">
+    <text x="40"  y="160">100</text>
+    <text x="120" y="148">400</text>
+    <text x="200" y="104">1500</text>
+    <text x="280" y="32">3300</text>
+    <text x="360" y="56">2700</text>
+    <text x="440" y="112">1300</text>
+    <text x="520" y="144">500</text>
+    <text x="600" y="156">200</text>
+  </g>
+  <g font-family="system-ui, sans-serif" font-size="11" fill="var(--ink-3)" text-anchor="middle">
+    <text x="40"  y="186">$100</text>
+    <text x="120" y="186">$120</text>
+    <text x="200" y="186">$140</text>
+    <text x="280" y="186">$160</text>
+    <text x="360" y="186">$180</text>
+    <text x="440" y="186">$200</text>
+    <text x="520" y="186">$220</text>
+    <text x="600" y="186">$240</text>
+    <text x="320" y="210">cleared prices p&#7522; re-read as density p&#7522;/(S&#183;g) &#8212; dashes: implied forward $170, one portfolio quote</text>
+  </g>
+  <text x="328" y="44" font-family="system-ui, sans-serif" font-size="10" fill="var(--accent-2)">$170</text>
+</svg>
+</div>
+<figcaption>The cleared vector, worn as a density. At $160 the density is
+3,300/(10,000&#183;20) = 0.0165 per dollar; the eight bars integrate to one
+exactly. Illustration — the read itself is the theorem, not the numbers.
+<a class="badge" href="evidence.html#paper-proof">paper proof —
+DUAL_IS_THE_MEASURE.md &#167;7.3</a></figcaption>
+</figure>
+<p class="fiction">Illustration — no such market exists; arithmetic checked
+by docs/site-plan/friday_clutch_check.py. The mirrored lifecycle ran in a
+local bank with the on-chain verdict byte-equal to the host
+relation&#8217;s, and is UNPROMOTED.
+<a class="badge" href="evidence.html#sbf-executed">SBF-EXECUTED &#183; bank
+&#183; UNPROMOTED — CURRENT_TRUTH.md &#167;4</a></p>
+</section>
+
+</main>
+<footer class="site">
+  <div class="foot-inner">
+    <span><a href="evidence.html#scope">Scope note</a></span>
+    <nav class="pn" aria-label="Page order">
+      <a href="shape.html">&#8592; The Shape of a Claim</a>
+      <a href="ledger.html">Next: The Ledger &#8594;</a>
+    </nav>
+  </div>
+</footer>
+<script src="lanes.js" defer></script>
+</body>
+</html>

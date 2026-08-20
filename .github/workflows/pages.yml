@@ -1,0 +1,38 @@
+# Publish the hand-authored microsite in site/ to GitHub Pages, verbatim.
+# There is no build step: the directory is uploaded as-is.
+#
+# NOTE (owner console decisions, not encoded here): this workflow only runs
+# usefully after Pages is enabled in the repository settings with
+# "GitHub Actions" as the source, and whether the repository is public is
+# likewise the owner's decision. Nothing in this file deploys anything
+# besides static files from site/.
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+      - id: deployment
+        uses: actions/deploy-pages@v4

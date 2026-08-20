@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Evidence — Dragon&#8217;s Clutch</title>
+<meta name="description" content="How this project says true things: a deliberately nontransitive claim vocabulary, the strongest evidence in the tree, and the one scope note.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+  <div class="site-inner">
+    <a class="site-name" href="index.html">Dragon&#8217;s Clutch</a>
+    <nav class="pages" aria-label="Pages">
+      <a href="index.html">The Clutch</a>
+      <a href="shape.html">The Shape of a Claim</a>
+      <a href="clearing.html">The Clearing</a>
+      <a href="ledger.html">The Ledger</a>
+      <a href="risk.html">The Price of Risk</a>
+      <a href="machines.html">For the Machines</a>
+      <a href="evidence.html" aria-current="page">The Evidence</a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+
+<p class="kicker">How this project says true things</p>
+<h1>The evidence</h1>
+
+<p>Every badge on this site resolves here. The vocabulary below is the
+repository&#8217;s own, verbatim, and it is deliberately
+<strong>nontransitive</strong>: no label ever substitutes for another, a
+green model never impersonates runtime evidence, and a proved theorem
+sitting next to an executed instruction does not make the instruction
+proved (CURRENT_TRUTH.md &#167;1). &#8220;Implemented&#8221; is considered
+too broad a word for this control plane; every promoted claim names its
+plane instead.</p>
+
+<h2 id="vocabulary">The claim vocabulary, verbatim</h2>
+
+<div class="tablewrap">
+<table>
+  <thead>
+    <tr><th scope="col">Label</th><th scope="col">Exact meaning (CURRENT_TRUTH.md &#167;1)</th></tr>
+  </thead>
+  <tbody>
+    <tr id="proved-model"><td><strong>PROVED-MODEL</strong></td><td>A named proof assistant checked a theorem about a named mathematical model. It says nothing about Rust, accounts, CPI, SBF, or runtime unless a separate refinement closes that boundary.</td></tr>
+    <tr id="checked-rust-subset"><td><strong>CHECKED-RUST-SUBSET</strong></td><td>A pinned verifier checked a named Rust source subset under recorded assumptions. It says nothing about code outside that subset.</td></tr>
+    <tr id="checked-finite"><td><strong>CHECKED-FINITE</strong></td><td>Digest-bound model-computed fixtures agree with production execution on a named finite corpus and named source mutants go red. This is not a universal refinement theorem.</td></tr>
+    <tr id="host-tested"><td><strong>HOST-TESTED</strong></td><td>Ordinary host execution, differential testing, or a bounded finite campaign passed. This is executable evidence, not proof or SBF evidence.</td></tr>
+    <tr id="sbf-executed"><td><strong>SBF-EXECUTED</strong></td><td>A compiled SBF program executed in a local Agave bank or loopback validator. This is not deployment, public-cluster, audit, or mainnet evidence.</td></tr>
+    <tr id="profile-admitted"><td><strong>PROFILE-ADMITTED</strong></td><td>An exact measured route clears one selected finite compute/rent/reward policy. This does not extrapolate to unmeasured shapes or imply inclusion, keeper participation, system terminality, or a global liveness policy.</td></tr>
+    <tr id="model-only"><td><strong>MODEL-ONLY</strong></td><td>A design, reference model, research tool, or cost experiment exists but is not the production transition.</td></tr>
+    <tr id="proposed"><td><strong>PROPOSED</strong></td><td>A design or policy has not crossed its promotion gate.</td></tr>
+    <tr id="in-flight"><td><strong>IN-FLIGHT</strong></td><td>Shared dirty-worktree bytes are not an accepted baseline.</td></tr>
+    <tr id="stop"><td><strong>STOP</strong></td><td>The named surface must refuse or remain undescribed as complete until its acceptance gate closes.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p id="paper-proof">One further marker appears on this site:
+<strong>paper proof</strong>. The project&#8217;s research documents prove
+theorems pen-and-paper over the repository&#8217;s exact integer objects
+and label them &#8220;PROVED HERE&#8221; — with the explicit caveat that
+nothing may be called <em>verified</em> until the pinned proof toolchain
+closes it over the actual definitions, and with named falsifiers gating any
+language upgrade (docs/research/DUAL_IS_THE_MEASURE.md &#167;0, &#167;11;
+docs/research/RISK_SUMMED_POSITIONS.md, status note). A paper proof is
+MODEL-or-lower in the vocabulary above, and this site badges it as itself,
+never as a machine-checked result.</p>
+
+<aside class="lane lane-degen"><span class="tag">&#10216;degen&#10217;</span>
+The badge is the trust dial. &#8220;Runs in laboratory bank evidence&#8221;
+is not &#8220;live on mainnet,&#8221; a proved theorem is not a working
+program, and this site is built so it cannot blur that line even where
+blurring would read better.</aside>
+
+<aside class="lane lane-builder"><span class="tag">&#10216;builder&#10217;</span>
+The labels are CURRENT_TRUTH.md &#167;1 verbatim, and they gate commit
+language: promotion means crossing a named gate with artifacts produced by
+the final joined bytes, never relabeling (CURRENT_TRUTH.md &#167;7).</aside>
+
+<aside class="lane lane-scholar"><span class="tag">&#10216;scholar&#10217;</span>
+Nontransitivity is the point: the planes do not compose. PROVED-MODEL plus
+HOST-TESTED does not entail a correct executable — that entailment is a
+refinement theorem, which either exists as its own named object (the
+CHECKED-FINITE bridge, the Verus subset) or does not exist at all
+(CURRENT_TRUTH.md &#167;1, &#167;3).</aside>
+
+<h2>What the strongest evidence looks like</h2>
+
+<p>The proof story is carried by Lean: 184 theorems at zero
+<code>sorry</code>, reporting only Lean&#8217;s three standard axioms
+(<code>propext</code>, <code>Classical.choice</code>,
+<code>Quot.sound</code>); the B-spline file alone holds 159 counted
+declarations, 116 of them theorems — clamped rational constructions, exact
+split distances, constructive and unique largest-remainder selection, local
+support, solvency, and the complete-set results
+(docs/reviews/PLANNED_VS_BUILT_2026-08-19.md; CURRENT_TRUTH.md &#167;3;
+lean/DragonsClutch/).
+<a class="badge" href="#proved-model">PROVED-MODEL</a></p>
+
+<p>The bridge from model to executable is finite and honest about it: eight
+Lean-computed fixtures agree byte-for-byte with the digest-pinned
+production evaluator, five mutations of the actual Rust source compile,
+execute, and go red, and a 34,766-case independent Python differential
+reruns alongside (CURRENT_TRUTH.md &#167;3, campaign <code>be8eba3</code>).
+<a class="badge" href="#checked-finite">CHECKED-FINITE</a>
+The artifact discipline seals exact bytes: repeated ordinary builds of the
+runtime are byte-identical on the sealing host; an independent second-OS
+rebuild diverged and the divergence was <em>exhaustively classified</em> —
+two toolchain CI path strings, one reordered prebuilt intrinsics cluster,
+an eight-byte shift, zero bytes derived from source
+(CURRENT_TRUTH.md &#167;2). The checked evidence manifest executed all 100
+of its declared gates, and the most recent independent second-host
+attestation re-ran the portable evidence from a fresh archive:
+<strong>44/44 gates PASS, 0 STOP</strong>, every file compared twice, the
+sealed ELF byte-verified in six contexts (CURRENT_TRUTH.md &#167;2; GOAL.md
+done-log, Cycle D). None of that is a release, a deployment, or an external
+audit — the tree says so in the same breath, every time.</p>
+
+<h2>What honesty looks like when it hurts</h2>
+
+<p>For weeks the record said on-chain re-verification of a clearing
+&#8220;does not fit&#8221;: the measured route consumed exactly 1,400,000
+compute units — the whole ceiling — and rolled back. The measurement was
+right. The conclusion was wrong, and the corpus caught its own error: the
+cost was one dependency edge compiling in a fully unrolled software
+SHA-256 — a single 53,952-byte symbol. Routing hashing through the
+runtime&#8217;s syscall made every measured instruction 3&#8211;8&#215;
+cheaper, and the same selection route now completes and commits at 226,071
+CU (docs/reviews/COMPUTE_CEILING_REATTRIBUTION_2026-08-19.md).
+<a class="badge" href="#sbf-executed">SBF-EXECUTED &#183; measured</a>
+The part worth pointing at: the wrong verdict was not deleted. It stands in
+the record, labeled, next to its correction, with the list of documents the
+correction invalidates. Sites don&#8217;t usually show you their wrong
+answers; this project&#8217;s correction <em>process</em> is the
+product.</p>
+
+<h2>The two-ELF discipline</h2>
+
+<p>The system is built to make its own incompleteness machine-visible. The
+sealed default artifact refuses deposits with the typed error
+<code>SourceReleaseUnavailable</code> (<code>0x79</code>) because its
+production source registry is empty — no real data source exists yet, so
+the program will not accept value, and that refusal is asserted per degree
+in the joined lifecycle campaigns
+(CURRENT_TRUTH.md &#167;4, &#167;6.1).
+<a class="badge" href="#sbf-executed">SBF-EXECUTED &#183; refusal
+asserted</a>
+Anything that <em>succeeds</em> against mock infrastructure must run on a
+distinct, explicitly non-production ELF; the mock provider&#8217;s account
+body is the literal string <code>MOCK-PROVIDER-V1</code>, and the
+project&#8217;s own assessment names the seam without flinching:
+&#8220;the joins are the fiction&#8221;
+(docs/reviews/SOPHISTICATION_GAP_2026-08-19.md &#167;1). That sentence is
+why the badges on this site mean something — the corpus polices the line
+between what runs and what pretends, harder than any outsider does.</p>
+
+<figure>
+<div class="figwrap">
+<svg viewBox="0 0 700 270" width="700" height="270" role="img"
+     aria-label="Map of four evidence territories: the Lean model, host Rust, the SBF bank, and the sealed artifact. Named bridges connect Lean to host Rust; a dashed ferry marks the unproved compiler boundary; the seal binds bank evidence to exact bytes. Open water is labeled as such.">
+  <!-- water hints -->
+  <g stroke="var(--border)" fill="none" stroke-width="1">
+    <path d="M20,250 q10,-5 20,0 t20,0 t20,0"/>
+    <path d="M320,32 q10,-5 20,0 t20,0"/>
+    <path d="M600,250 q10,-5 20,0 t20,0"/>
+  </g>
+  <!-- islands -->
+  <g font-family="system-ui, sans-serif" text-anchor="middle">
+    <rect x="20" y="70" width="150" height="110" rx="40" fill="none" stroke="var(--lane-scholar)" stroke-width="2"/>
+    <text x="95" y="110" font-size="13" font-weight="700" fill="var(--ink)">Lean model</text>
+    <text x="95" y="130" font-size="10" fill="var(--ink-2)">184 theorems</text>
+    <text x="95" y="144" font-size="10" fill="var(--ink-2)">zero sorry</text>
+
+    <rect x="230" y="70" width="150" height="110" rx="40" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <text x="305" y="110" font-size="13" font-weight="700" fill="var(--ink)">host Rust</text>
+    <text x="305" y="130" font-size="10" fill="var(--ink-2)">tests, differentials,</text>
+    <text x="305" y="144" font-size="10" fill="var(--ink-2)">mutation campaigns</text>
+
+    <rect x="440" y="70" width="120" height="110" rx="40" fill="none" stroke="var(--accent-2)" stroke-width="2"/>
+    <text x="500" y="110" font-size="13" font-weight="700" fill="var(--ink)">SBF bank</text>
+    <text x="500" y="130" font-size="10" fill="var(--ink-2)">walks, campaigns,</text>
+    <text x="500" y="144" font-size="10" fill="var(--ink-2)">byte-equal verdicts</text>
+
+    <rect x="590" y="70" width="100" height="110" rx="36" fill="none" stroke="var(--accent-3)" stroke-width="2"/>
+    <text x="640" y="110" font-size="13" font-weight="700" fill="var(--ink)">sealed</text>
+    <text x="640" y="126" font-size="13" font-weight="700" fill="var(--ink)">artifact</text>
+    <text x="640" y="144" font-size="10" fill="var(--ink-2)">100/100 gates</text>
+  </g>
+  <!-- bridges -->
+  <line x1="170" y1="100" x2="230" y2="100" stroke="var(--ink-2)" stroke-width="4"/>
+  <line x1="170" y1="140" x2="230" y2="140" stroke="var(--ink-2)" stroke-width="2"/>
+  <g font-family="system-ui, sans-serif" font-size="9" fill="var(--ink-3)" text-anchor="middle">
+    <text x="200" y="92">CHECKED-FINITE:</text>
+    <text x="200" y="118">8 fixtures = bytes, 5 mutants red</text>
+    <text x="200" y="156">Verus subset (narrow)</text>
+  </g>
+  <!-- ferry: rust -> sbf -->
+  <line x1="380" y1="120" x2="440" y2="120" stroke="var(--ink-3)" stroke-width="2" stroke-dasharray="5 5"/>
+  <g font-family="system-ui, sans-serif" font-size="9" fill="var(--ink-3)" text-anchor="middle">
+    <text x="410" y="108">compiler + runtime:</text>
+    <text x="410" y="140">no refinement theorem;</text>
+    <text x="410" y="152">measured execution only</text>
+  </g>
+  <!-- seal: sbf -> sealed -->
+  <line x1="560" y1="120" x2="590" y2="120" stroke="var(--accent-3)" stroke-width="4"/>
+  <g font-family="system-ui, sans-serif" font-size="9" fill="var(--ink-3)" text-anchor="middle">
+    <text x="575" y="106">the seal</text>
+  </g>
+  <g font-family="system-ui, sans-serif" font-size="10" fill="var(--ink-3)" text-anchor="middle">
+    <text x="350" y="222">open water: no universal Rust/SBF refinement theorem &#8212; the gaps are drawn because they are real</text>
+    <text x="350" y="244" font-size="9">bridges are named or absent; adjacency never promotes a claim across water (CURRENT_TRUTH.md &#167;1&#8211;&#167;4)</text>
+  </g>
+</svg>
+</div>
+<figcaption>The evidence map. Most protocol sites draw one continent; this
+project&#8217;s claims live on separate territories with named bridges
+where bridges exist — and open water, labeled, where they do not.</figcaption>
+</figure>
+
+<p>One production note in the same spirit: this site is static files with
+no RPC, no wallet, no analytics, and no operator — the posture the
+project&#8217;s own client design mandates, in which any frontend is a
+replaceable lens and never part of consensus (docs/STATIC_CLIENT.md).</p>
+
+<section class="friday">
+<h2>The Friday clutch &#183; stage 7 of 7 &#183; what it was evidence of</h2>
+<p>Now the whole story, re-read as its badges. The basis that held
+Maya&#8217;s tent: machine-checked partition of unity
+(<a href="#proved-model">PROVED-MODEL</a>), with a finite byte-level bridge
+to the production evaluator (<a href="#checked-finite">CHECKED-FINITE</a>).
+The clearing walk and byte-equal verdict, selection, entitlement, and
+conserved settlement: executed end to end in a local bank and sealed
+unpromoted (<a href="#sbf-executed">SBF-EXECUTED</a>, UNPROMOTED). The
+zero-gap certificate and the density reading: paper proofs with named
+falsifiers (<a href="#paper-proof">paper proof</a>). The fee Maya
+didn&#8217;t pay: a policy fork still open, forced to zero everywhere today
+(<a href="#model-only">MODEL-ONLY</a> / <a href="#proposed">PROPOSED</a>).
+The deposit boundary a real market would need: refused, by design, until a
+production source exists (<a href="#stop">STOP</a>, <code>0x79</code>).
+One fictional market; every mechanical step badged to the plane where its
+real evidence lives.</p>
+<p class="fiction">Illustration — no such market exists; arithmetic checked
+by docs/site-plan/friday_clutch_check.py.</p>
+</section>
+
+<h2 id="scope">Scope</h2>
+
+<div class="scope">
+<p><strong>Scope.</strong> Dragon&#8217;s Clutch is a research prototype.
+Nothing is deployed; no market, token, or deployment carries real value,
+and none is offered. The clearing plane and smooth-claim lifecycle you read
+about here executed in local test banks and remain UNPROMOTED in the
+project&#8217;s own liveness profile; fees are forced to zero everywhere;
+the default build refuses deposits (<code>0x79</code>) because no
+production data source exists yet; no external security audit, signed
+release, or legal determination exists. The mathematics pages distinguish
+machine-checked theorems from paper proofs from measured executions —
+follow any badge. Nothing on this site is an offer, a solicitation,
+financial advice, or a statement that any regulator has approved
+anything.</p>
+</div>
+
+<p>That is the entire hedge. The badges carry local truth; this note
+carries global scope; the prose everywhere else is confident because it can
+afford to be.</p>
+
+</main>
+<footer class="site">
+  <div class="foot-inner">
+    <span>Every cite resolves to a file in the Dragon&#8217;s Clutch repository.</span>
+    <nav class="pn" aria-label="Page order">
+      <a href="machines.html">&#8592; For the Machines</a>
+      <a href="index.html">Start over: The Clutch &#8594;</a>
+    </nav>
+  </div>
+</footer>
+<script src="lanes.js" defer></script>
+</body>
+</html>
