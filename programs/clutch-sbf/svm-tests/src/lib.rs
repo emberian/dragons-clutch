@@ -819,8 +819,10 @@ pub fn rewrite_plane_source_archive(plane: &mut Plane, price: u128, confidence: 
 ///
 /// This focused profiling seam also updates the canonical window identity and
 /// SourceArchive PDA. The caller must separately bind its Terms to the same
-/// exclusive end before submitting a transaction. Existing three-record
-/// scenarios use [`rewrite_plane_source_archive`] and remain byte-identical.
+/// exclusive end — and, for a span past four, to the matching
+/// `maturity_horizon_buckets` — before submitting a transaction. Existing
+/// three-record scenarios use [`rewrite_plane_source_archive`] and remain
+/// byte-identical.
 pub fn rewrite_plane_source_archive_span(
     plane: &mut Plane,
     price: u128,
@@ -860,12 +862,17 @@ pub fn rewrite_plane_source_archive_span(
         1,
     )
     .expect("fixture source identity");
+    // The canonical fixture maturity bound stays `START_BUCKET + 4` so every
+    // span up to four keeps its exact historical window identity and archive
+    // bytes; a longer span carries its maturity with its exclusive end, since
+    // a window may not mature before it ends.
+    let maturity_bucket = core::cmp::max(START_BUCKET + 4, end_bucket);
     let window_domain = WindowDomain::new(
         feed_identity,
         Grid::new(7, 1, 60).expect("fixture grid"),
         START_BUCKET,
         end_bucket,
-        START_BUCKET + 4,
+        maturity_bucket,
         0,
         CoveragePolicy::COMPLETE_REQUIRED,
     )
@@ -921,8 +928,13 @@ pub fn rewrite_plane_source_archive_span(
         )
         .expect("fixture authenticated source append");
     }
-    seal_archive::<FixtureDeployment>(&mut archive, verified_spec, window_domain, FEED_CURSOR)
-        .expect("fixture source archive seal");
+    seal_archive::<FixtureDeployment>(
+        &mut archive,
+        verified_spec,
+        window_domain,
+        core::cmp::max(FEED_CURSOR, maturity_bucket),
+    )
+    .expect("fixture source archive seal");
     let archive_account = plane
         .accounts
         .iter_mut()
