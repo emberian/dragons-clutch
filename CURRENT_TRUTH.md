@@ -100,7 +100,8 @@ scope. This is byte-and-reference verification plus portable re-execution of
 host gates — no SBF build, execution, or runtime claim — and it is a checked
 local evidence baseline, not a checked release manifest.
 
-Hbox independently rebuilt the default ELF from the exact `6743b9d` archive
+Hbox independently rebuilt the then-current default ELF from the exact
+`6743b9d` archive
 under the exact pinned toolchain (`cargo-build-sbf 4.0.0`, platform-tools
 v1.53, offline with all 30 locked registry crates checksum-verified): two
 fresh builds are byte-identical at
@@ -110,7 +111,10 @@ fresh builds are byte-identical at
 Anza's per-OS platform-tools artifact — two Rust-stdlib CI path strings
 (macOS vs Linux runner prefixes), a reordered prebuilt compiler-builtins
 intrinsics cluster, and the resulting −8-byte address shift — with zero
-bytes derived from source, dependencies, or either build host's paths.
+bytes derived from source, dependencies, or either build host's paths. That
+comparison is historical: it predates the Direct V3 merge and its
+`af6bb79c…` reseal, and no equivalent independent rebuild of the current
+identity has been run.
 Cross-OS byte-identity is structurally impossible for this pin; byte-level
 reproduction of the seal needs a second macOS host. The durable job is
 `/tank/joshibot/dragons-clutch-sbf-rebuild-6743b9d-dd4727` (REBUILD_REPORT.md
