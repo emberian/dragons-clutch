@@ -61,6 +61,29 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- THE COMPUTE CEILING WAS A HASHER, NOT AN ARCHITECTURE
+  (docs/reviews/COMPUTE_CEILING_REATTRIBUTION_2026-08-19.md; work on
+  fable/sha-syscall, NOT merged). The 53,952-byte sha2::compress256 entered
+  through ONE unconditional dependency edge in batch-policy-identity, not
+  the call sites I briefed; target-gating it (syscall on SBF, portable
+  retained as differential oracle) removes it. I VERIFIED the headline
+  myself by clean rebuild: 1,420,608 bytes, 0 compress256 symbols,
+  U sol_sha256 in the dynamic imports. No digest value changed; identities
+  pinned against independent Python hashlib bytes.
+  EVERY measured instruction got 3-8x cheaper. Tightest row 1,120,392 ->
+  198,483 (80% of ceiling -> 14%). TWO RECORDED STOPS DISSOLVE: Direct V2
+  full selection now COMPLETES at 226,071 CU instead of exhausting 1.4M and
+  rolling back, and all six occupation admission rows now clear the
+  25%-headroom gate. The STOPs were correctly measured; their cause was
+  misattributed to the algorithm.
+  This invalidates the ARCHITECTURAL generalization in
+  SOPHISTICATION_GAP section 3, the premise framing in
+  SUCCINCT_CLEARING_FEASIBILITY, and the "single-transaction re-execution
+  does not scale" passage in BOTH draft filings. V3's staged design still
+  stands on its own merits; V2 completing is NOT a promotion.
+  Measured negative recorded so nobody repeats it: opt-level z/s shrink the
+  binary 21-23% and FAIL tests with 205/139 SBF frame overflows.
+
 - FEE ECONOMICS MAP + CORRECTION RECORD
   (docs/reviews/FEE_ECONOMICS_FINDINGS_2026-08-19.md): twelve places where
   FEE_GEOMETRY/ECONOMICS assert properties the project's own research
