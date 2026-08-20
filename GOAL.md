@@ -70,6 +70,24 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- TERMINALCLOSURE MERGED (966ee2c; 27/27 targets green; canonical identity
+  4fded7a6/1,979,512): intents 60-67 — owner-signed terminal release plus
+  permissionless closes down an enforced dependency DAG, exact recorded
+  principal to exact recorded payers via the new GeneralFundingLedgerV1,
+  surplus only to the frozen incinerator. HEADLINE: a cleared epoch
+  reclaims 531,639,600 of 531,652,377 lamports (residual = exactly the one
+  declared-permanent policy artifact; burns = exactly the injected
+  donations); a lapsed epoch reclaims 47,167,920. One argued DAG deviation
+  (pages before pot — page-absence is the only executable
+  no-pending-proof), recorded residuals honest (unregistered accounts
+  stand; abandoned ACTIVE reservations hold their page at recorded rent).
+  Blocker tail is now exactly PartialFillLedger + VirtualPot. CYCLE-E
+  RESEAL DISPATCHED (Opus): new root 4fded7a67a2d8994, TerminalClosure
+  evidence sealed, walk-plane rows reclassified REFUNDABLE_TRANSIENT where
+  close routes are sealed, the OrderPage blocking id added, the cross-path
+  digest-list convention adopted, and --check-current green again as a
+  required outcome.
+
 - V3 MEASUREMENT CAMPAIGN SEALED (Opus lane; merged at the e8ba31d5
   identity): the full venue CU table across 3 agreeing bank runs (worst
   390,272 vs the pre-syscall 1,127,892 STOP; per-run variance explained
