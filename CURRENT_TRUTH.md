@@ -35,31 +35,20 @@ economics.
 
 ## 2. Snapshot boundary
 
-The accepted local evidence ancestry is `b5700a9`. The current frozen SBF
-runtime source and test ancestry is
-`83e124dda22adc15cb5ebf18ff9e0ab971c551dc`; `b5700a9` seals its measured
-liveness profile, exact ELF, audit, and same-ELF bank/build logs. The preceding
-`7e8f6b1`/`b5da74f`/`a5725a3d...` seal remains valid historical evidence only.
-The sole executable-closure change between those seals is the required
-rustdoc-link qualification in `programs/solana-reference/src/resolution.rs`;
-it changes seven line-location bytes in `.data.rel.ro`, while `.text`,
-`.rodata`, every other stripped section, and normalized instruction
-disassembly remain identical. Current CU rows were nevertheless remeasured
-against the current artifact rather than relabeled from the historical seal.
-
-The current sealed default ELF is 1,490,544 bytes with SHA-256
-`af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b`, sealed at `7931e23` over runtime ancestry `2d530d2` after the Direct V3
-merge. The preceding `bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`
-(1,228,192 bytes) is historical evidence for its own ancestry.
-Two ordinary builds from `83e124d` are byte-identical. The final audit found
-zero diagnostics naming `clutch_sbf`, zero diagnosed symbols surviving final
-LTO, and all 40,389 direct `r10` references at or below 4,096 bytes. The audit
-is archived under
-[`research/liveness-policy-profile/artifacts/af6bb79cc3766bd0`](research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/RUNTIME_ARTIFACT_AUDIT.md);
-its report SHA-256 is
-`626a299dd879cff5f8c775b82b488c2d6b300a386b6d5f847913b5e14797e038`,
-and the upstream 52-file checksum-ledger SHA-256 is
-`dbf55f8e28c1674fc0f76b434049fbc8ef1e906c46db6ac0457410eaebc35f35`.
+The accepted local evidence ancestry is the 2026-08-20 cycle-D chain:
+liveness seal `3bcdeec` over runtime ancestry `2dbc9fc`, manifest `788581c`.
+The current sealed default ELF is **1,914,432 bytes with SHA-256
+`e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc`** — the
+Tier-2-complete runtime, intents 36–59. Its audit is archived under
+[`research/liveness-policy-profile/artifacts/e8ba31d582be3939`](research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/RUNTIME_ARTIFACT_AUDIT.md):
+pass 1 = pass 2 byte-identical from the canonical checkout, zero first-party
+frame diagnostics surviving final LTO, all 58,099 direct `r10` references at
+or below 4,096 bytes, a reviewed ten-symbol import surface (`sol_memmove_`
+admitted at `2dbc9fc` after the nine-symbol pin refused), and the declared
+source closure at 108 files. Six predecessor seals are retained in-tree as
+historical evidence, each with its own attested chain (`d6929549…`,
+`fda59705…`, `187d5ee1…`, `af6bb79c…`, `bd20711b…`, `a5725a3d…`); current CU
+rows are always remeasured against the current artifact, never relabeled.
 This is exact local artifact/stack/bank evidence, not a release, deployment,
 production source-provider, inclusion, audit, or formal-verification claim.
 
