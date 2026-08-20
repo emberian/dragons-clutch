@@ -70,6 +70,24 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- V3 MEASUREMENT CAMPAIGN SEALED (Opus lane; merged at the e8ba31d5
+  identity): the full venue CU table across 3 agreeing bank runs (worst
+  390,272 vs the pre-syscall 1,127,892 STOP; per-run variance explained
+  exactly — 1,500-CU PDA bump probes, all diffs exact multiples), every
+  close route driven with ASSERTED zero-sum conservation (byte-identical
+  across runs), DIRECT.V3_CLOSE_EVIDENCE_UNSEALED honestly RETIRED with
+  two-directional teeth (14 -> 13 blocking ids; four rows now
+  REFUNDABLE_TRANSIENT; live_v3 still false, no admission rows). THREE
+  ESCALATIONS FOR CYCLE E: (1) V3 per-epoch structural strand is 5x the
+  reported figure — OrderPage (28,814,401 lamports) has NO close route;
+  honest total 35,941,440 lamports/epoch, projection corrected, a
+  DIRECT.ORDER_PAGE_RENT_PERSISTS id owed at the next profile wave;
+  (2) cycle-D's cross-path byte-identity was a one-sample coincidence (two
+  more paths, two more digests, same 486 .text bytes) — cycle-E audit
+  absorbs; (3) --check-current red on main since the walk merge's
+  harness-lock lines (ELF-neutral, source_blob drift) — cycle-E reseal
+  closes it. Profile suite 60/60.
+
 - DECISIONS ADOPTED under ember's delegation + weakest-choice principle
   (docs/decisions/ADOPTED_2026-08-20.md; ADR-0005 adopted at docs/adr/,
   ADR-0003 marked superseded): ten adoptions, one principle-inverted
