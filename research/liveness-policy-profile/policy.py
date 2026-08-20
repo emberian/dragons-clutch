@@ -85,6 +85,25 @@ REQUIRED_EVIDENCE_SUFFIXES = {
 CURRENT_EVIDENCE_SUFFIXES = REQUIRED_EVIDENCE_SUFFIXES | {
     "logs/bank/resolution_work_batch.log",
 }
+# The Direct V3 account families classified after the sealed v2 probe.  The
+# probe source archived at ``runtime_ref`` enumerates none of them, so these
+# rows are pinned byte-exactly here and excluded from the probe equality;
+# every other terminal row must still match the probe row-for-row, and a
+# terminal row that is neither probed nor pinned refuses.  Byte pins come
+# from programs/solana-layout/src/direct_selection_v3.rs
+# (DIRECT_EPOCH_V4_BYTES, DIRECT_CANDIDATE_V3_BYTES, DIRECT_WINDOW_V3_BYTES,
+# DIRECT_WORK_BUDGET_BYTES, DIRECT_RESERVATION_V2_BYTES,
+# DIRECT_BATCH_POLICY_V3_BYTES, and the artifact stage header of
+# ARTIFACT_STAGE_HEADER_BYTES = 136 over the 96-byte body).
+POST_PROBE_DIRECT_V3_ROWS = {
+    "direct.epoch.v4": 672,
+    "direct.candidate.v3": 488,
+    "direct.window.v3": 632,
+    "direct.work_budget.v1": 248,
+    "direct.reservation.v2": 618,
+    "artifact.direct_batch_policy_v3.final": 96,
+    "artifact.direct_batch_policy_v3.stage": 232,
+}
 
 
 TRACKING_UNAVAILABLE = "sealed-evidence git tracking UNAVAILABLE"
@@ -662,6 +681,16 @@ def check_rent_and_accounts(evidence: dict[str, Any]) -> None:
         name: {"bytes": bytes_, "rent_lamports": lamports}
         for name, bytes_, lamports, *_ in ACCOUNT_ROWS
     }
+    for name, pinned_bytes in POST_PROBE_DIRECT_V3_ROWS.items():
+        row = terminal_rows.pop(name, None)
+        if row is None:
+            raise CheckError(f"post-probe V3 row missing from terminal inventory: {name}")
+        require_equal(row["bytes"], pinned_bytes, f"post-probe V3 bytes {name}")
+        require_equal(
+            row["rent_lamports"],
+            max(1, (pinned_bytes + rent["account_storage_overhead_bytes"]) * effective),
+            f"post-probe V3 rent {name}",
+        )
     require_equal(evidence["accounts"], terminal_rows, "terminal/probe account inventory")
     output = historical_probe(evidence)
     accounts, metadata = parse_probe(output)
