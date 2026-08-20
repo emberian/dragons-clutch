@@ -1,890 +1,929 @@
 {
-  "schema": "dragons-clutch/liveness-bank-capture/v2",
-  "capture_date": "2026-08-20",
-  "runtime_ref": "2dbc9fc7a8dbbc6e20c23e2aa44069d2c180aa0c",
-  "evidence_ref": "ea4b650063958860c2b400026daa66afb4101bac",
-  "artifact": {
-    "path": "research/liveness-policy-profile/artifacts/e8ba31d582be3939/clutch_sbf.so",
-    "sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-    "bytes": 1914432,
-    "source_ref": "2dbc9fc7a8dbbc6e20c23e2aa44069d2c180aa0c",
-    "profile": "default-empty-registry"
+ "schema": "dragons-clutch/liveness-bank-capture/v2",
+ "capture_date": "2026-08-20",
+ "runtime_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
+ "evidence_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
+ "artifact": {
+  "path": "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/clutch_sbf.so",
+  "sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+  "bytes": 1979512,
+  "source_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
+  "profile": "default-empty-registry"
+ },
+ "measurements": {
+  "resolution_work": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "fold_widths": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "begin_cu": [
+    88041,
+    85673,
+    91357,
+    88039,
+    86225
+   ],
+   "fold_1_cu": [
+    84765,
+    82402
+   ],
+   "fold_2_cu": [
+    89374,
+    92342
+   ],
+   "fold_3_cu": [
+    93277
+   ],
+   "fold_4_cu": [
+    95722
+   ],
+   "finalize_cu": [
+    164731
+   ],
+   "abort_cu": [
+    46900
+   ],
+   "monolithic_v4_cu": [
+    182859
+   ],
+   "test_result": "PASS_4_OF_4"
   },
-  "measurements": {
-    "resolution_work": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "fold_widths": [
-        1,
-        2,
-        3,
-        4
-      ],
-      "begin_cu": [
-        88040,
-        85672,
-        91356,
-        88038,
-        86224
-      ],
-      "fold_1_cu": [
-        84764,
-        82401
-      ],
-      "fold_2_cu": [
-        89373,
-        92341
-      ],
-      "fold_3_cu": [
-        93276
-      ],
-      "fold_4_cu": [
-        95721
-      ],
-      "finalize_cu": [
-        164730
-      ],
-      "abort_cu": [
-        46899
-      ],
-      "monolithic_v4_cu": [
-        182859
-      ],
-      "test_result": "PASS_4_OF_4"
+  "resolution_work_batch": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "batch_sizes": [
+    2,
+    4,
+    8,
+    12
+   ],
+   "begin_cu": [
+    91357,
+    86225,
+    86463,
+    80697
+   ],
+   "fold_batch_2_cu": [
+    176215
+   ],
+   "fold_batch_4_cu": [
+    331945
+   ],
+   "fold_batch_8_cu": [
+    665853,
+    665853
+   ],
+   "fold_batch_12_cu": [
+    929573
+   ],
+   "singleton_fold_cu": [
+    88081,
+    88434,
+    82949,
+    83297,
+    83297,
+    83302,
+    83189,
+    83537,
+    83537,
+    83537,
+    83537,
+    83537,
+    83537,
+    83542,
+    77420,
+    77768,
+    77768,
+    77768,
+    77768,
+    77768,
+    77768,
+    77768,
+    77768,
+    77768,
+    77768,
+    77773
+   ],
+   "outcome_equality": "BYTE_IDENTICAL_TO_SINGLETON_TRANSACTIONS",
+   "mid_batch_invalid_fold": "WHOLE_TRANSACTION_REVERTED_BYTE_EXACT",
+   "test_result": "PASS_2_OF_2"
+  },
+  "native_point_v3": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "degree_rows": [
+    {
+     "degree": 1,
+     "resolve_cu": 182848,
+     "retry_cu": 169579,
+     "internal_redeem_cu": 153041
     },
-    "resolution_work_batch": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "batch_sizes": [
-        2,
-        4,
-        8,
-        12
-      ],
-      "begin_cu": [
-        91356,
-        86224,
-        86462,
-        80696
-      ],
-      "fold_batch_2_cu": [
-        176213
-      ],
-      "fold_batch_4_cu": [
-        331941
-      ],
-      "fold_batch_8_cu": [
-        665845,
-        665845
-      ],
-      "fold_batch_12_cu": [
-        929561
-      ],
-      "singleton_fold_cu": [
-        88080,
-        88433,
-        82948,
-        83296,
-        83296,
-        83301,
-        83188,
-        83536,
-        83536,
-        83536,
-        83536,
-        83536,
-        83536,
-        83541,
-        77419,
-        77767,
-        77767,
-        77767,
-        77767,
-        77767,
-        77767,
-        77767,
-        77767,
-        77767,
-        77767,
-        77772
-      ],
-      "outcome_equality": "BYTE_IDENTICAL_TO_SINGLETON_TRANSACTIONS",
-      "mid_batch_invalid_fold": "WHOLE_TRANSACTION_REVERTED_BYTE_EXACT",
-      "test_result": "PASS_2_OF_2"
+    {
+     "degree": 2,
+     "resolve_cu": 191221,
+     "retry_cu": 177952,
+     "internal_redeem_cu": 155084
     },
-    "native_point_v3": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "degree_rows": [
-        {
-          "degree": 1,
-          "resolve_cu": 182848,
-          "retry_cu": 169579,
-          "internal_redeem_cu": 153041
-        },
-        {
-          "degree": 2,
-          "resolve_cu": 191221,
-          "retry_cu": 177952,
-          "internal_redeem_cu": 155084
-        },
-        {
-          "degree": 3,
-          "resolve_cu": 198115,
-          "retry_cu": 184846,
-          "internal_redeem_cu": 153474
-        }
-      ],
-      "test_result": "PASS"
-    },
-    "native_bearer_redeem": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "degree_rows": [
-        {
-          "degree": 1,
-          "external_redeem_cu": 137279
-        },
-        {
-          "degree": 2,
-          "external_redeem_cu": 139079
-        },
-        {
-          "degree": 3,
-          "external_redeem_cu": 136784
-        }
-      ],
-      "test_result": "PASS"
-    },
-    "occupation_v4": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "degree_rows": [
-        {
-          "degree": 1,
-          "initial_cu": 173062,
-          "retry_cu": 159802,
-          "internal_redeem_cu": 151755,
-          "external_redeem_cu": 135917
-        },
-        {
-          "degree": 2,
-          "initial_cu": 184232,
-          "retry_cu": 170972,
-          "internal_redeem_cu": 153798,
-          "external_redeem_cu": 137717
-        },
-        {
-          "degree": 3,
-          "initial_cu": 198163,
-          "retry_cu": 184903,
-          "internal_redeem_cu": 156688,
-          "external_redeem_cu": 139922
-        }
-      ],
-      "span_1_initial_cu": [
-        180050,
-        173368,
-        177549
-      ],
-      "span_2_initial_cu": [
-        173556,
-        189300,
-        190856
-      ],
-      "statistic_7_initial_cu": 182709,
-      "test_result": "PASS"
-    },
-    "direct_v2": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "init_cu": [
-        35546
-      ],
-      "freeze_cu": [
-        357879
-      ],
-      "submit_cu": [
-        173573,
-        174675,
-        182467,
-        190104,
-        185711
-      ],
-      "select_cu": [
-        226445
-      ],
-      "select_result": "COMPLETED_SELECTION_COMMITTED",
-      "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
-      "test_result": "PASS_2_OF_2"
-    },
-    "direct_v3": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
-      "suites": [
-        "direct_selection_v3.rs"
-      ],
-      "bank_runs": 3,
-      "cu_spread_source": "PDA_BUMP_SEARCH_1500_CU_QUANTUM_OVER_RANDOM_FIXTURE_KEYPAIRS",
-      "init_epoch_cu": [
-        41214,
-        41214,
-        41214
-      ],
-      "init_order_page_cu": [
-        221027,
-        221027,
-        221027
-      ],
-      "place_order_buy_cu": [
-        201659,
-        201659,
-        203159
-      ],
-      "place_order_sell_cu": [
-        205685,
-        207185,
-        201185
-      ],
-      "freeze_epoch_cu": [
-        390272,
-        387272,
-        384272
-      ],
-      "begin_verification_cu": [
-        23584,
-        23584,
-        23584
-      ],
-      "finalize_selection_cu": [
-        213761,
-        210761,
-        207761
-      ],
-      "settle_cu": [
-        176035,
-        177535,
-        173035
-      ],
-      "lapse_empty_cu": [
-        156458,
-        157958,
-        154958
-      ],
-      "lapse_unselected_cu": [
-        163039,
-        164539,
-        164539
-      ],
-      "lapse_selected_cu": [
-        173834,
-        175334,
-        179842
-      ],
-      "submit_candidate_rows": [
-        {
-          "price": 2000,
-          "disposition": "RETAINED",
-          "cu": [
-            181326,
-            178326,
-            175326
-          ]
-        },
-        {
-          "price": 5000,
-          "disposition": "RETAINED",
-          "cu": [
-            186242,
-            183244,
-            180242
-          ]
-        },
-        {
-          "price": 4000,
-          "disposition": "RETAINED",
-          "cu": [
-            204734,
-            201738,
-            198734
-          ]
-        },
-        {
-          "price": 6000,
-          "disposition": "REPLACEMENT_DISPLACING_THE_WORST",
-          "cu": [
-            209440,
-            206440,
-            203585
-          ]
-        },
-        {
-          "price": 3000,
-          "disposition": "NONCOMPETITIVE_NO_STATE",
-          "cu": [
-            196041,
-            193041,
-            190041
-          ]
-        }
-      ],
-      "submit_candidate_max_cu": [
-        209440,
-        206440,
-        203585
-      ],
-      "verify_candidate_rows": [
-        {
-          "index": 0,
-          "cu": [
-            151346,
-            151346,
-            151346
-          ]
-        },
-        {
-          "index": 1,
-          "cu": [
-            161846,
-            161846,
-            149846
-          ]
-        },
-        {
-          "index": 2,
-          "cu": [
-            149846,
-            149846,
-            161846
-          ]
-        }
-      ],
-      "abort_unfrozen_rows": [
-        {
-          "reservations": 0,
-          "cu": [
-            10381,
-            10381,
-            10381
-          ]
-        },
-        {
-          "reservations": 1,
-          "cu": [
-            138616,
-            140116,
-            137116
-          ]
-        },
-        {
-          "reservations": 2,
-          "cu": [
-            154042,
-            151042,
-            160042
-          ]
-        }
-      ],
-      "test_result": "PASS_3_OF_3_IN_EACH_OF_3_BANK_RUNS"
-    },
-    "direct_v3_close": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
-      "suites": [
-        "direct_selection_v3.rs"
-      ],
-      "bank_runs": 3,
-      "runs_agree_exactly": true,
-      "routes": {
-        "SubmitDirectCandidateV3 displacing": {
-          "closed_lamports": {
-            "direct.candidate.v3.displaced": 4287361
-          },
-          "recipient_deltas": {
-            "direct.candidate.v3.displaced": -4287361,
-            "direct.candidate.v3.admitted": 4287360,
-            "submitter": 0,
-            "neutral_sink": 1
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        },
-        "FinalizeDirectSelectionV3": {
-          "closed_lamports": {
-            "direct.candidate.v3.loser0": 4287361,
-            "direct.candidate.v3.loser1": 4287361
-          },
-          "recipient_deltas": {
-            "direct.candidate.v3.loser0": -4287361,
-            "direct.candidate.v3.loser1": -4287361,
-            "direct.receipt": 2401200,
-            "direct.final_pot": 2714400,
-            "direct.work_budget.v1": -9000,
-            "direct.window.v3": 0,
-            "direct.epoch.v4": 0,
-            "submitter": 8574720,
-            "sponsor": 0,
-            "keeper": -5106600,
-            "neutral_sink": 2
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        },
-        "SettleDirectV3": {
-          "closed_lamports": {
-            "direct.window.v3": 5289608,
-            "direct.work_budget.v1": 2629961,
-            "direct.reservation.v2.buy": 5192161,
-            "direct.reservation.v2.sell": 5192161,
-            "direct.candidate.v3.winner": 4287361,
-            "direct.receipt": 2401201,
-            "direct.final_pot": 2714401
-          },
-          "recipient_deltas": {
-            "submitter": 9576960,
-            "sponsor": 2618960,
-            "keeper": 5126600,
-            "buy_owner": 5192160,
-            "sell_owner": 5192160,
-            "neutral_sink": 14
-          },
-          "conservation": "EXACT_CLOSED_EQUALS_RECIPIENTS"
-        },
-        "LapseEmptyDirectV3": {
-          "closed_lamports": {
-            "direct.work_budget.v1": 2664961,
-            "direct.reservation.v2.buy": 5192161,
-            "direct.reservation.v2.sell": 5192161
-          },
-          "recipient_deltas": {
-            "direct.epoch.v4": 0,
-            "order.page": 0,
-            "direct.window.v3": 0,
-            "direct.work_budget.v1": -2664961,
-            "direct.reservation.v2.buy": -5192161,
-            "direct.reservation.v2.sell": -5192161,
-            "submitter": 0,
-            "sponsor": 2651960,
-            "keeper": 13000,
-            "buy_owner": 5192160,
-            "sell_owner": 5192160,
-            "neutral_sink": 3
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        },
-        "LapseUnselectedDirectV3": {
-          "closed_lamports": {
-            "direct.window.v3": 5289601,
-            "direct.work_budget.v1": 2664961,
-            "direct.reservation.v2.buy": 5192161,
-            "direct.reservation.v2.sell": 5192161,
-            "direct.candidate.v3": 4287361
-          },
-          "recipient_deltas": {
-            "direct.epoch.v4": 0,
-            "order.page": 0,
-            "direct.window.v3": -5289601,
-            "direct.work_budget.v1": -2664961,
-            "direct.reservation.v2.buy": -5192161,
-            "direct.reservation.v2.sell": -5192161,
-            "direct.candidate.v3": -4287361,
-            "submitter": 9576960,
-            "sponsor": 2651960,
-            "keeper": 13000,
-            "buy_owner": 5192160,
-            "sell_owner": 5192160,
-            "neutral_sink": 5
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        },
-        "LapseSelectedDirectV3": {
-          "closed_lamports": {
-            "direct.window.v3": 5289601,
-            "direct.work_budget.v1": 2643961,
-            "direct.reservation.v2.buy": 5192161,
-            "direct.reservation.v2.sell": 5192161,
-            "direct.candidate.v3": 4287361,
-            "direct.receipt": 2401201,
-            "direct.final_pot": 2714401
-          },
-          "recipient_deltas": {
-            "direct.epoch.v4": 0,
-            "order.page": 0,
-            "direct.window.v3": -5289601,
-            "direct.work_budget.v1": -2643961,
-            "direct.reservation.v2.buy": -5192161,
-            "direct.reservation.v2.sell": -5192161,
-            "direct.candidate.v3": -4287361,
-            "direct.receipt": -2401201,
-            "direct.final_pot": -2714401,
-            "submitter": 9576960,
-            "sponsor": 2630960,
-            "keeper": 5128600,
-            "buy_owner": 5192160,
-            "sell_owner": 5192160,
-            "neutral_sink": 7
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        },
-        "AbortUnfrozenDirectV4 empty": {
-          "closed_lamports": {
-            "reservation_prefix": 0
-          },
-          "recipient_deltas": {
-            "direct.epoch.v4": 0,
-            "order.page": 0,
-            "direct.reservation.v2.buy": 0,
-            "direct.reservation.v2.sell": 0,
-            "buy_owner": 0,
-            "sell_owner": 0,
-            "neutral_sink": 0
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        },
-        "AbortUnfrozenDirectV4 one": {
-          "closed_lamports": {
-            "direct.reservation.v2.buy": 5192161
-          },
-          "recipient_deltas": {
-            "direct.epoch.v4": 0,
-            "order.page": 0,
-            "direct.reservation.v2.buy": -5192161,
-            "direct.reservation.v2.sell": 0,
-            "buy_owner": 5192160,
-            "sell_owner": 0,
-            "neutral_sink": 1
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        },
-        "AbortUnfrozenDirectV4 two": {
-          "closed_lamports": {
-            "direct.reservation.v2.buy": 5192161,
-            "direct.reservation.v2.sell": 5192161
-          },
-          "recipient_deltas": {
-            "direct.epoch.v4": 0,
-            "order.page": 0,
-            "direct.reservation.v2.buy": -5192161,
-            "direct.reservation.v2.sell": -5192161,
-            "buy_owner": 5192160,
-            "sell_owner": 5192160,
-            "neutral_sink": 2
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        }
-      },
-      "closed_rows": {
-        "direct.candidate.v3": [
-          "SubmitDirectCandidateV3 displacing",
-          "FinalizeDirectSelectionV3",
-          "SettleDirectV3",
-          "LapseUnselectedDirectV3",
-          "LapseSelectedDirectV3"
-        ],
-        "direct.window.v3": [
-          "SettleDirectV3",
-          "LapseUnselectedDirectV3",
-          "LapseSelectedDirectV3"
-        ],
-        "direct.work_budget.v1": [
-          "SettleDirectV3",
-          "LapseEmptyDirectV3",
-          "LapseUnselectedDirectV3",
-          "LapseSelectedDirectV3"
-        ],
-        "direct.reservation.v2": [
-          "SettleDirectV3",
-          "LapseEmptyDirectV3",
-          "LapseUnselectedDirectV3",
-          "LapseSelectedDirectV3",
-          "AbortUnfrozenDirectV4 one",
-          "AbortUnfrozenDirectV4 two"
-        ]
-      },
-      "rollback_observations": {
-        "FreezeDirectEpochV4 underfunded": 5,
-        "SubmitDirectCandidateV3 underfunded": 4,
-        "FinalizeDirectSelectionV3 wrong close recipient": 4,
-        "AbortUnfrozenDirectV4 wrong close recipient": 4
-      },
-      "structural_strand_lamports": {
-        "direct.epoch.v4": 5568001,
-        "artifact.direct_batch_policy_v3.final": 1559040,
-        "order.page": 28814401
-      },
-      "test_result": "PASS_3_OF_3_IN_EACH_OF_3_BANK_RUNS"
-    },
-    "source_endow": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "default_refusal_code": "0x79",
-      "default_release_available": false,
-      "rollback": "BYTE_AND_LAMPORT_EXACT",
-      "test_result": "PASS_EXPECTED_REFUSAL"
-    },
-    "blank_bank_market_creation": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "v2": {
-        "cu": 195057,
-        "bytes": 165,
-        "rent_lamports": 2039280
-      },
-      "v3": {
-        "cu": 214728,
-        "bytes": 319,
-        "rent_lamports": 3111120
-      },
-      "v4": {
-        "cu": 213333,
-        "bytes": 383,
-        "rent_lamports": 3556560
-      },
-      "test_result": "PASS_2_OF_2"
-    },
-    "order_reservation": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "place_cu": [
-        186012,
-        184042
-      ],
-      "cancel_cu": [
-        282998,
-        287671
-      ],
-      "test_result": "PASS_2_OF_2"
-    },
-    "withdraw_cash": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "cu": [
-        52100
-      ],
-      "test_result": "PASS"
-    },
-    "general_epoch": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
-      "suites": [
-        "general_epoch.rs",
-        "clear_lifecycle.rs"
-      ],
-      "init_epoch_cu": [
-        42557
-      ],
-      "place_order_single_cu": [
-        190534
-      ],
-      "place_order_portfolio_cu": [
-        191350
-      ],
-      "freeze_epoch_rows": [
-        {
-          "pages": 1,
-          "orders": 4,
-          "cu": [
-            233568
-          ]
-        },
-        {
-          "pages": 2,
-          "orders": 17,
-          "cu": [
-            478009
-          ]
-        },
-        {
-          "pages": 3,
-          "orders": 40,
-          "cu": [
-            717829,
-            717829
-          ]
-        }
-      ],
-      "test_result": "PASS_3_OF_3"
-    },
-    "clear_walk": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
-      "suites": [
-        "clear_walk.rs",
-        "clear_lifecycle.rs"
-      ],
-      "small_book_pass1_cu": [
-        279925,
-        291798,
-        297878
-      ],
-      "small_book_pass2_cu": [
-        290626
-      ],
-      "forty_order_pass1_cu": [
-        263493,
-        281623,
-        388428,
-        272490,
-        272674,
-        293356,
-        374921,
-        286747,
-        285260,
-        315952,
-        299635,
-        260500,
-        289123,
-        400428,
-        278490,
-        272674,
-        303856,
-        374921,
-        297247,
-        285260,
-        308452,
-        299621
-      ],
-      "forty_order_pass2_cu": [
-        306105,
-        273286,
-        306995,
-        286996,
-        309006,
-        306093,
-        273286,
-        306995,
-        286996,
-        308986
-      ],
-      "advance_slices_cu": [
-        177737,
-        177754,
-        177737,
-        177754
-      ],
-      "complete_cu": [
-        122869,
-        127085
-      ],
-      "request_heap_frame_262144_surcharge_cu": [
-        150
-      ],
-      "host_twin_verdict": "BANK_AND_HOST_BYTE_IDENTICAL_VERDICTS",
-      "test_result": "PASS_3_OF_3_AND_2_OF_2"
-    },
-    "candidate_selection": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
-      "suites": [
-        "candidate_selection.rs"
-      ],
-      "submit_candidate_cu": [
-        34102,
-        32592,
-        34102,
-        32592,
-        34099,
-        31105,
-        35605,
-        34102,
-        34102,
-        32592,
-        34099,
-        34102
-      ],
-      "write_feed_fills_cu": [
-        9653,
-        6653,
-        8153,
-        8153,
-        9653,
-        6653,
-        6653,
-        8153,
-        8153,
-        8153,
-        9653,
-        8153
-      ],
-      "write_feed_slices_cu": [
-        9894,
-        6894,
-        8394,
-        8394,
-        9894,
-        6894,
-        6894,
-        8394,
-        8394,
-        8394,
-        9894,
-        8394
-      ],
-      "seal_candidate_cu": [
-        44926,
-        45356,
-        43426,
-        48356,
-        53294,
-        64170,
-        43426,
-        43426,
-        48356,
-        53294,
-        43426
-      ],
-      "seal_candidate_displacing_cu": [
-        64170
-      ],
-      "finalize_selection_rows": [
-        {
-          "shape": "3_retained_2_verified_selects_winner",
-          "cu": [
-            49230
-          ]
-        },
-        {
-          "shape": "2_verified_beyond_128_bit_digest_tie",
-          "cu": [
-            39462
-          ]
-        },
-        {
-          "shape": "0_verified_honest_lapse",
-          "cu": [
-            20695
-          ]
-        }
-      ],
-      "complete_clear_work_cu": [
-        123431,
-        123431,
-        127931,
-        127931,
-        121931,
-        127931
-      ],
-      "test_result": "PASS_5_OF_5"
-    },
-    "entitled_clearing": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
-      "suites": [
-        "entitled_clearing.rs"
-      ],
-      "freeze_entitlement_cu": [
-        100052
-      ],
-      "entitle_slice_single_cu": [
-        204577
-      ],
-      "entitle_slice_portfolio_pair_cu": [
-        246173
-      ],
-      "settle_page_entitled_direct_slice_cu": [
-        54834
-      ],
-      "settle_page_entitled_portfolio_full_pair_cu": [
-        225739
-      ],
-      "bank_conservation": "POSITIONS_BYTE_EQUAL_IMPLIED_ALLOCATION_TOTAL_CASH_AND_EGGS_EXACT",
-      "reservation_archive": "ACTIVE_TO_ENTITLED_TO_CONSUMED_INITIAL_ENVELOPE_INTACT",
-      "test_result": "PASS_4_OF_4"
-    },
-    "source_archive_host": {
-      "artifact_sha256": null,
-      "tests_passed": 9,
-      "provider_ingestion": "NOT_EXERCISED_BY_DEFAULT_ELF",
-      "source_archive_bytes": 2560,
-      "source_archive_rent_lamports": 18708480
+    {
+     "degree": 3,
+     "resolve_cu": 198115,
+     "retry_cu": 184846,
+     "internal_redeem_cu": 153474
     }
+   ],
+   "test_result": "PASS"
+  },
+  "native_bearer_redeem": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "degree_rows": [
+    {
+     "degree": 1,
+     "external_redeem_cu": 137272
+    },
+    {
+     "degree": 2,
+     "external_redeem_cu": 139072
+    },
+    {
+     "degree": 3,
+     "external_redeem_cu": 136777
+    }
+   ],
+   "test_result": "PASS"
+  },
+  "occupation_v4": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "degree_rows": [
+    {
+     "degree": 1,
+     "initial_cu": 173062,
+     "retry_cu": 159802,
+     "internal_redeem_cu": 151755,
+     "external_redeem_cu": 135910
+    },
+    {
+     "degree": 2,
+     "initial_cu": 184232,
+     "retry_cu": 170972,
+     "internal_redeem_cu": 153798,
+     "external_redeem_cu": 137710
+    },
+    {
+     "degree": 3,
+     "initial_cu": 198163,
+     "retry_cu": 184903,
+     "internal_redeem_cu": 156688,
+     "external_redeem_cu": 139915
+    }
+   ],
+   "span_1_initial_cu": [
+    180050,
+    173368,
+    177549
+   ],
+   "span_2_initial_cu": [
+    173556,
+    189300,
+    190856
+   ],
+   "statistic_7_initial_cu": 182709,
+   "test_result": "PASS"
+  },
+  "direct_v2": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "init_cu": [
+    35543
+   ],
+   "freeze_cu": [
+    357876
+   ],
+   "submit_cu": [
+    173572,
+    174674,
+    182466,
+    190103,
+    185710
+   ],
+   "select_cu": [
+    226444
+   ],
+   "select_result": "COMPLETED_SELECTION_COMMITTED",
+   "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
+   "test_result": "PASS_2_OF_2"
+  },
+  "source_endow": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "default_refusal_code": "0x79",
+   "default_release_available": false,
+   "rollback": "BYTE_AND_LAMPORT_EXACT",
+   "test_result": "PASS_EXPECTED_REFUSAL"
+  },
+  "blank_bank_market_creation": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "v2": {
+    "cu": 192048,
+    "bytes": 165,
+    "rent_lamports": 2039280
+   },
+   "v3": {
+    "cu": 214719,
+    "bytes": 319,
+    "rent_lamports": 3111120
+   },
+   "v4": {
+    "cu": 213324,
+    "bytes": 383,
+    "rent_lamports": 3556560
+   },
+   "test_result": "PASS_2_OF_2"
+  },
+  "order_reservation": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "place_cu": [
+    186007,
+    184037
+   ],
+   "cancel_cu": [
+    282988,
+    287661
+   ],
+   "test_result": "PASS_2_OF_2"
+  },
+  "withdraw_cash": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "cu": [
+    52091
+   ],
+   "test_result": "PASS"
+  },
+  "general_epoch": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "general_epoch.rs",
+    "clear_lifecycle.rs"
+   ],
+   "init_epoch_cu": [
+    42699
+   ],
+   "place_order_single_cu": [
+    192029
+   ],
+   "place_order_portfolio_cu": [
+    194345
+   ],
+   "freeze_epoch_rows": [
+    {
+     "pages": 1,
+     "orders": 4,
+     "cu": [
+      233564
+     ]
+    },
+    {
+     "pages": 2,
+     "orders": 17,
+     "cu": [
+      478005
+     ]
+    },
+    {
+     "pages": 3,
+     "orders": 40,
+     "cu": [
+      717825,
+      717825
+     ]
+    }
+   ],
+   "test_result": "PASS_3_OF_3"
+  },
+  "clear_walk": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "clear_walk.rs",
+    "clear_lifecycle.rs"
+   ],
+   "small_book_pass1_cu": [
+    279925,
+    293298,
+    299378
+   ],
+   "small_book_pass2_cu": [
+    290626
+   ],
+   "forty_order_pass1_cu": [
+    260493,
+    280123,
+    391428,
+    272490,
+    268174,
+    305356,
+    370421,
+    286747,
+    285260,
+    308452,
+    302635,
+    260500,
+    287623,
+    391428,
+    276990,
+    268174,
+    297856,
+    371921,
+    286747,
+    285260,
+    311452,
+    301121
+   ],
+   "forty_order_pass2_cu": [
+    306105,
+    273286,
+    306995,
+    286996,
+    309006,
+    306093,
+    273286,
+    306995,
+    286996,
+    308986
+   ],
+   "advance_slices_cu": [
+    177731,
+    177748,
+    177731,
+    177748
+   ],
+   "complete_cu": [
+    122865,
+    127081
+   ],
+   "request_heap_frame_262144_surcharge_cu": [
+    150
+   ],
+   "host_twin_verdict": "BANK_AND_HOST_BYTE_IDENTICAL_VERDICTS",
+   "test_result": "PASS_3_OF_3_AND_2_OF_2"
+  },
+  "candidate_selection": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "candidate_selection.rs"
+   ],
+   "submit_candidate_cu": [
+    34241,
+    32731,
+    34241,
+    32731,
+    34238,
+    31244,
+    35744,
+    34241,
+    34241,
+    32731,
+    34238,
+    34241
+   ],
+   "write_feed_fills_cu": [
+    9647,
+    6647,
+    8147,
+    8147,
+    9647,
+    6647,
+    6647,
+    8147,
+    8147,
+    8147,
+    9647,
+    8147
+   ],
+   "write_feed_slices_cu": [
+    9888,
+    6888,
+    8388,
+    8388,
+    9888,
+    6888,
+    6888,
+    8388,
+    8388,
+    8388,
+    9888,
+    8388
+   ],
+   "seal_candidate_cu": [
+    44924,
+    45354,
+    43424,
+    48354,
+    53292,
+    64168,
+    43424,
+    43424,
+    48354,
+    53292,
+    43424
+   ],
+   "seal_candidate_displacing_cu": [
+    64168
+   ],
+   "finalize_selection_rows": [
+    {
+     "shape": "3_retained_2_verified_selects_winner",
+     "cu": [
+      49228
+     ]
+    },
+    {
+     "shape": "2_verified_beyond_128_bit_digest_tie",
+     "cu": [
+      39465
+     ]
+    },
+    {
+     "shape": "0_verified_honest_lapse",
+     "cu": [
+      20693
+     ]
+    }
+   ],
+   "complete_clear_work_cu": [
+    123427,
+    123427,
+    127927,
+    127927,
+    121927,
+    127927
+   ],
+   "test_result": "PASS_5_OF_5"
+  },
+  "entitled_clearing": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "entitled_clearing.rs"
+   ],
+   "freeze_entitlement_cu": [
+    100158
+   ],
+   "entitle_slice_single_cu": [
+    210607
+   ],
+   "entitle_slice_portfolio_pair_cu": [
+    243518
+   ],
+   "settle_page_entitled_direct_slice_cu": [
+    53330
+   ],
+   "settle_page_entitled_portfolio_full_pair_cu": [
+    234735
+   ],
+   "bank_conservation": "POSITIONS_BYTE_EQUAL_IMPLIED_ALLOCATION_TOTAL_CASH_AND_EGGS_EXACT",
+   "reservation_archive": "ACTIVE_TO_ENTITLED_TO_CONSUMED_INITIAL_ENVELOPE_INTACT",
+   "test_result": "PASS_4_OF_4"
+  },
+  "direct_v3": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "direct_selection_v3.rs"
+   ],
+   "bank_runs": 3,
+   "cu_spread_source": "PDA_BUMP_SEARCH_1500_CU_QUANTUM_OVER_RANDOM_FIXTURE_KEYPAIRS",
+   "init_epoch_cu": [
+    41226,
+    41226,
+    41226
+   ],
+   "init_order_page_cu": [
+    221020,
+    221020,
+    221020
+   ],
+   "place_order_buy_cu": [
+    200154,
+    198654,
+    198654
+   ],
+   "place_order_sell_cu": [
+    210180,
+    198180,
+    199680
+   ],
+   "freeze_epoch_cu": [
+    382784,
+    379784,
+    379784
+   ],
+   "begin_verification_cu": [
+    23596,
+    23596,
+    23596
+   ],
+   "finalize_selection_cu": [
+    206273,
+    203273,
+    203273
+   ],
+   "settle_cu": [
+    179047,
+    165547,
+    167047
+   ],
+   "lapse_empty_cu": [
+    153470,
+    156470,
+    153470
+   ],
+   "lapse_unselected_cu": [
+    176551,
+    178051,
+    166051
+   ],
+   "lapse_selected_cu": [
+    173846,
+    176846,
+    175346
+   ],
+   "submit_candidate_rows": [
+    {
+     "price": 2000,
+     "disposition": "RETAINED",
+     "cu": [
+      173838,
+      170848,
+      170838
+     ]
+    },
+    {
+     "price": 5000,
+     "disposition": "RETAINED",
+     "cu": [
+      178754,
+      175772,
+      175754
+     ]
+    },
+    {
+     "price": 4000,
+     "disposition": "RETAINED",
+     "cu": [
+      197246,
+      194264,
+      194246
+     ]
+    },
+    {
+     "price": 6000,
+     "disposition": "REPLACEMENT_DISPLACING_THE_WORST",
+     "cu": [
+      202097,
+      198960,
+      199097
+     ]
+    },
+    {
+     "price": 3000,
+     "disposition": "NONCOMPETITIVE_NO_STATE",
+     "cu": [
+      188553,
+      185553,
+      185553
+     ]
+    }
+   ],
+   "submit_candidate_max_cu": [
+    202097,
+    198960,
+    199097
+   ],
+   "verify_candidate_rows": [
+    {
+     "index": 0,
+     "cu": [
+      151358,
+      151358,
+      151358
+     ]
+    },
+    {
+     "index": 1,
+     "cu": [
+      149858,
+      161858,
+      149858
+     ]
+    },
+    {
+     "index": 2,
+     "cu": [
+      161858,
+      149858,
+      161858
+     ]
+    }
+   ],
+   "abort_unfrozen_rows": [
+    {
+     "reservations": 0,
+     "cu": [
+      10393,
+      10393,
+      10393
+     ]
+    },
+    {
+     "reservations": 1,
+     "cu": [
+      140128,
+      138628,
+      138628
+     ]
+    },
+    {
+     "reservations": 2,
+     "cu": [
+      151054,
+      145054,
+      154054
+     ]
+    }
+   ],
+   "test_result": "PASS_3_OF_3_IN_EACH_OF_3_BANK_RUNS"
+  },
+  "terminal_closure": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "terminal_closure.rs"
+   ],
+   "intents": [
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67
+   ],
+   "walks": {
+    "cleared_epoch": {
+     "machinery_inventory_lamports": 531652377,
+     "reclaimed_lamports": 531639600,
+     "burned_at_frozen_sink_lamports": 12777,
+     "residual_lamports": 1336320,
+     "residual_disposition": "DECLARED_PERMANENT_BATCH_POLICY_ARTIFACT",
+     "conservation": "EXACT_INVENTORY_EQUALS_RECLAIMED_PLUS_BURNED"
+    },
+    "lapsed_epoch": {
+     "machinery_inventory_lamports": 47167920,
+     "reclaimed_lamports": 47167920,
+     "burned_at_frozen_sink_lamports": 0,
+     "unregistered_residual_lamports": 47738640,
+     "residual_disposition": "UNLEDGERED_CANDIDATE_PAIR_UNCLOSABLE_BY_DESIGN",
+     "conservation": "EXACT_INVENTORY_EQUALS_RECLAIMED_PLUS_BURNED"
+    }
+   },
+   "per_route_cu": "NOT_LABELLED_BY_SUITE_NO_ROW_DERIVED",
+   "funding_ledger_optional_at_creation": true,
+   "release_is_owner_signed": true,
+   "closes_are_permissionless": true,
+   "test_result": "PASS_2_OF_2"
+  },
+  "source_archive_host": {
+   "artifact_sha256": null,
+   "tests_passed": 9,
+   "provider_ingestion": "NOT_EXERCISED_BY_DEFAULT_ELF",
+   "source_archive_bytes": 2560,
+   "source_archive_rent_lamports": 18708480
+  },
+  "direct_v3_close": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "direct_selection_v3.rs"
+   ],
+   "bank_runs": 3,
+   "runs_agree_exactly": true,
+   "routes": {
+    "SubmitDirectCandidateV3 displacing": {
+     "closed_lamports": {
+      "direct.candidate.v3.displaced": 4287361
+     },
+     "recipient_deltas": {
+      "direct.candidate.v3.displaced": -4287361,
+      "direct.candidate.v3.admitted": 4287360,
+      "submitter": 0,
+      "neutral_sink": 1
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    },
+    "FinalizeDirectSelectionV3": {
+     "closed_lamports": {
+      "direct.candidate.v3.loser0": 4287361,
+      "direct.candidate.v3.loser1": 4287361
+     },
+     "recipient_deltas": {
+      "direct.candidate.v3.loser0": -4287361,
+      "direct.candidate.v3.loser1": -4287361,
+      "direct.receipt": 2401200,
+      "direct.final_pot": 2714400,
+      "direct.work_budget.v1": -9000,
+      "direct.window.v3": 0,
+      "direct.epoch.v4": 0,
+      "submitter": 8574720,
+      "sponsor": 0,
+      "keeper": -5106600,
+      "neutral_sink": 2
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    },
+    "SettleDirectV3": {
+     "closed_lamports": {
+      "direct.window.v3": 5289608,
+      "direct.work_budget.v1": 2629961,
+      "direct.reservation.v2.buy": 5192161,
+      "direct.reservation.v2.sell": 5192161,
+      "direct.candidate.v3.winner": 4287361,
+      "direct.receipt": 2401201,
+      "direct.final_pot": 2714401
+     },
+     "recipient_deltas": {
+      "submitter": 9576960,
+      "sponsor": 2618960,
+      "keeper": 5126600,
+      "buy_owner": 5192160,
+      "sell_owner": 5192160,
+      "neutral_sink": 14
+     },
+     "conservation": "EXACT_CLOSED_EQUALS_RECIPIENTS"
+    },
+    "LapseEmptyDirectV3": {
+     "closed_lamports": {
+      "direct.work_budget.v1": 2664961,
+      "direct.reservation.v2.buy": 5192161,
+      "direct.reservation.v2.sell": 5192161
+     },
+     "recipient_deltas": {
+      "direct.epoch.v4": 0,
+      "order.page": 0,
+      "direct.window.v3": 0,
+      "direct.work_budget.v1": -2664961,
+      "direct.reservation.v2.buy": -5192161,
+      "direct.reservation.v2.sell": -5192161,
+      "submitter": 0,
+      "sponsor": 2651960,
+      "keeper": 13000,
+      "buy_owner": 5192160,
+      "sell_owner": 5192160,
+      "neutral_sink": 3
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    },
+    "LapseUnselectedDirectV3": {
+     "closed_lamports": {
+      "direct.window.v3": 5289601,
+      "direct.work_budget.v1": 2664961,
+      "direct.reservation.v2.buy": 5192161,
+      "direct.reservation.v2.sell": 5192161,
+      "direct.candidate.v3": 4287361
+     },
+     "recipient_deltas": {
+      "direct.epoch.v4": 0,
+      "order.page": 0,
+      "direct.window.v3": -5289601,
+      "direct.work_budget.v1": -2664961,
+      "direct.reservation.v2.buy": -5192161,
+      "direct.reservation.v2.sell": -5192161,
+      "direct.candidate.v3": -4287361,
+      "submitter": 9576960,
+      "sponsor": 2651960,
+      "keeper": 13000,
+      "buy_owner": 5192160,
+      "sell_owner": 5192160,
+      "neutral_sink": 5
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    },
+    "LapseSelectedDirectV3": {
+     "closed_lamports": {
+      "direct.window.v3": 5289601,
+      "direct.work_budget.v1": 2643961,
+      "direct.reservation.v2.buy": 5192161,
+      "direct.reservation.v2.sell": 5192161,
+      "direct.candidate.v3": 4287361,
+      "direct.receipt": 2401201,
+      "direct.final_pot": 2714401
+     },
+     "recipient_deltas": {
+      "direct.epoch.v4": 0,
+      "order.page": 0,
+      "direct.window.v3": -5289601,
+      "direct.work_budget.v1": -2643961,
+      "direct.reservation.v2.buy": -5192161,
+      "direct.reservation.v2.sell": -5192161,
+      "direct.candidate.v3": -4287361,
+      "direct.receipt": -2401201,
+      "direct.final_pot": -2714401,
+      "submitter": 9576960,
+      "sponsor": 2630960,
+      "keeper": 5128600,
+      "buy_owner": 5192160,
+      "sell_owner": 5192160,
+      "neutral_sink": 7
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    },
+    "AbortUnfrozenDirectV4 empty": {
+     "closed_lamports": {
+      "reservation_prefix": 0
+     },
+     "recipient_deltas": {
+      "direct.epoch.v4": 0,
+      "order.page": 0,
+      "direct.reservation.v2.buy": 0,
+      "direct.reservation.v2.sell": 0,
+      "buy_owner": 0,
+      "sell_owner": 0,
+      "neutral_sink": 0
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    },
+    "AbortUnfrozenDirectV4 one": {
+     "closed_lamports": {
+      "direct.reservation.v2.buy": 5192161
+     },
+     "recipient_deltas": {
+      "direct.epoch.v4": 0,
+      "order.page": 0,
+      "direct.reservation.v2.buy": -5192161,
+      "direct.reservation.v2.sell": 0,
+      "buy_owner": 5192160,
+      "sell_owner": 0,
+      "neutral_sink": 1
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    },
+    "AbortUnfrozenDirectV4 two": {
+     "closed_lamports": {
+      "direct.reservation.v2.buy": 5192161,
+      "direct.reservation.v2.sell": 5192161
+     },
+     "recipient_deltas": {
+      "direct.epoch.v4": 0,
+      "order.page": 0,
+      "direct.reservation.v2.buy": -5192161,
+      "direct.reservation.v2.sell": -5192161,
+      "buy_owner": 5192160,
+      "sell_owner": 5192160,
+      "neutral_sink": 2
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    }
+   },
+   "rollback_observations": {
+    "FreezeDirectEpochV4 underfunded": 5,
+    "SubmitDirectCandidateV3 underfunded": 4,
+    "FinalizeDirectSelectionV3 wrong close recipient": 4,
+    "AbortUnfrozenDirectV4 wrong close recipient": 4
+   },
+   "closed_rows": {
+    "direct.candidate.v3": [
+     "SubmitDirectCandidateV3 displacing",
+     "FinalizeDirectSelectionV3",
+     "SettleDirectV3",
+     "LapseUnselectedDirectV3",
+     "LapseSelectedDirectV3"
+    ],
+    "direct.window.v3": [
+     "SettleDirectV3",
+     "LapseUnselectedDirectV3",
+     "LapseSelectedDirectV3"
+    ],
+    "direct.work_budget.v1": [
+     "SettleDirectV3",
+     "LapseEmptyDirectV3",
+     "LapseUnselectedDirectV3",
+     "LapseSelectedDirectV3"
+    ],
+    "direct.reservation.v2": [
+     "SettleDirectV3",
+     "LapseEmptyDirectV3",
+     "LapseUnselectedDirectV3",
+     "LapseSelectedDirectV3",
+     "AbortUnfrozenDirectV4 one",
+     "AbortUnfrozenDirectV4 two"
+    ]
+   },
+   "structural_strand_lamports": {
+    "direct.epoch.v4": 5568001,
+    "artifact.direct_batch_policy_v3.final": 1559040,
+    "order.page": 28814401
+   }
   }
+ }
 }

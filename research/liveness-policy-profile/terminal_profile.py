@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Complete current-runtime account/value terminal classification.
 
-The compact table mirrors the sealed v2 account probe, plus the Direct V3
-account families the probe predates (the probe source archived at the sealed
-``runtime_ref`` enumerates no V3 row; ``policy.py`` pins the post-probe rows
-byte-exactly and keeps the probe equality on everything else).
+The compact table mirrors the sealed v2 account probe, plus the account
+families the probe predates — the Direct V3 rows, the two T2-8 general-plane
+rows, and the TerminalClosure funding ledger (the probe source archived at the
+sealed ``runtime_ref`` enumerates none of them; ``policy.py`` pins the
+post-probe rows byte-exactly and keeps the probe equality on everything else).
 ``build_terminal`` expands each row into the stricter schema checked by
 ``terminal_admission``.  PASS on a permanent row means only that permanent
 capitalization is stated honestly; it does not make the protocol-level
@@ -57,8 +58,26 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
      ("SOURCE.NO_TERMINAL_RELEASE", "RENT.ACCOUNT_REFUND_UNOWNED")),
     ("source.archive", 2_560, 18_708_480, "PER_SOURCE_WINDOW", None, S,
      ("SOURCE.NO_TERMINAL_RELEASE", "RENT.ACCOUNT_REFUND_UNOWNED")),
+    # TerminalClosure (tags 60-67) closes the GENERAL plane's instance of this
+    # 4,012-byte page: CloseGeneralPage (tag 63) pays the recorded principal to
+    # the recorded payer once every live record's reservation is RELEASED or
+    # CONSUMED, and the sealed cleared-epoch walk drives it.  The row still
+    # STOPs, because the row's scope also covers the Direct V4 instance, which
+    # has no close route at all: `init_direct_v4_order_page`
+    # (instructions/genesis.rs) creates it with
+    # `create_pda_account_full_principal` — no funding-ledger sibling, no
+    # recorded payer — and no V3 route closes it.  The sealed V3 campaign
+    # measures 28,814,401 lamports still held on that page after both settle
+    # and lapse (`DirectV3 STRAND ... order.page` in all three bank runs), so
+    # the strand is named as its own blocking id rather than left inside the
+    # generic unowned-refund one.
     ("order.page", 4_012, 28_814_400, "PER_MARKET_EPOCH_PAGE", None, S,
-     ("DIRECT.ACCOUNT_REFUND_UNOWNED", "DIRECT.EMPTY_FROZEN_NO_LAPSE")),
+     ("DIRECT.ACCOUNT_REFUND_UNOWNED", "DIRECT.EMPTY_FROZEN_NO_LAPSE",
+      "DIRECT.ORDER_PAGE_RENT_PERSISTS")),
+    # The general plane's reservations release (tag 60, owner-signed, whole
+    # envelope to the stored owner) and their archives close (tag 62), both
+    # driven in the sealed cleared- and lapsed-epoch walks.  The row keeps its
+    # STOP on the direct-plane instances, which have neither route.
     ("order.reservation.v1", 570, 4_858_080, "PER_ORDER", None, S,
      ("DIRECT.ACCOUNT_REFUND_UNOWNED", "DIRECT.EMPTY_FROZEN_NO_LAPSE")),
     # DIRECT.TOP3_SELECT_CU_STOP was retired with the 187d5ee1… artifact: V2
@@ -164,8 +183,50 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
     # new row: it is the same 6,266-byte account as the feed (tag 18) while
     # its content is being written — a stage prefix instead of a feed header,
     # replaced one-way by SealCandidate — so legacy.candidate_feed covers it.
+    #
+    # TERMINAL CLOSURE (tags 60-67, the 966ee2c merge) gives every row below a
+    # real physical close route, driven end to end on a real bank in
+    # `logs/bank/terminal_closure.log`: a CLEARED epoch's machinery held
+    # 531,652,377 lamports and 531,639,600 of them were reclaimed to the exact
+    # recorded payers, 12,777 burned at the frozen incinerator (exactly the two
+    # injected donations), residual exactly 1,336,320 — the declared-permanent
+    # 64-byte batch-policy artifact.  `PROFILE.STORAGE_INVENTORY_INCOMPLETE` was
+    # attached to these rows because *no close path existed*; that reason is
+    # discharged.  It is replaced, not deleted, by the two residuals that
+    # actually remain — both named, both structural, neither hidden:
+    #
+    #   RENT.ACCOUNT_REFUND_UNOWNED.  The GeneralFundingLedgerV1 sibling is
+    #   OPTIONAL at every creating instruction of the family — each accepts
+    #   `accounts.len() == N || N + 1` (general_epoch.rs:145, selection.rs:196,
+    #   entitlement.rs:262, genesis.rs:897).  Every close runs through
+    #   `close_ledgered_group`, which requires the ledger at its canonical PDA,
+    #   so an account created without it refuses to close forever and no payer
+    #   is ever guessed.  The Landing commit says exactly this ("an account
+    #   created without the ledger keeps the unowned-refund blocker and stands
+    #   forever, by design") and the sealed LAPSED walk *proves the state is
+    #   reachable*: the unregistered candidate pair stands at 47,738,640
+    #   lamports after the root closes.  `rent_principal_recorded` is therefore
+    #   a property of the creating call, not of the family, and no row here may
+    #   claim REFUNDABLE_TRANSIENT, whose contract requires it unconditionally.
+    #
+    #   GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT.  `release_terminal_reservation`
+    #   (tag 60) is the ONLY signer-gated step in the whole DAG — every close,
+    #   tags 61-67, is permissionless.  A zero-fill or lapsed ACTIVE reservation
+    #   can only be released by its owner, and CloseGeneralPage (63) requires
+    #   every live record's reservation RELEASED or CONSUMED, CloseGeneralPot
+    #   (64) requires every page absent, and CloseGeneralEpoch (67) requires
+    #   both.  So owner abandonment holds the page, the pot, and the epoch root
+    #   open at recorded rent cost.  The design declines to invent a sweep right
+    #   ("retirement guaranteed is not a promise"), so `expiry_or_reaper` cannot
+    #   be PASS for any row whose close sits behind that edge.  It does not
+    #   apply to `epoch.receipt`: consumption is permissionless, and tag 61
+    #   gates only on the receipt being exhausted.
+    #
+    # Both halves are welded to the sealed measurement by
+    # policy.py::require_terminal_closure_evidence, in both directions.
     ("epoch.window", 231, 2_498_640, "PER_GENERAL_EPOCH", 1, S,
-     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
+     ("RENT.ACCOUNT_REFUND_UNOWNED",
+      "GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT")),
     # T2-8's entitlement freeze creates two persistent general-plane families
     # at walk-plane PDAs, reusing the direct plane's exact byte shapes
     # (account_len::FINAL_POT / account_len::SETTLEMENT_RECEIPT) at new
@@ -186,25 +247,45 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
     # instances only) and stay UNCLASSIFIED_STOP until a close path and
     # sealed bank evidence exist.
     ("epoch.final_pot", 262, 2_714_400, "PER_GENERAL_EPOCH", 1, S,
-     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
+     ("RENT.ACCOUNT_REFUND_UNOWNED",
+      "GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT")),
     ("epoch.receipt", 217, 2_401_200, "PER_SELECTED_CANDIDATE", 416, S,
-     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
+     ("RENT.ACCOUNT_REFUND_UNOWNED",)),
+    # The general funding ledger itself (account tag 26,
+    # clearing.rs::GENERAL_FUNDING_LEDGER_BYTES = 85): one optional sibling per
+    # created group, written in the same transition that debits the payer, and
+    # closed as a member of its own group by `close_ledgered_group` — its
+    # lamports are inside the group's `observed` total, so the sealed
+    # conservation covers it.  It is post-probe pinned in policy.py (the probe
+    # source archived at runtime_ref predates the family) and STOPs on its
+    # unadmitted cardinality: one per created account of an unbounded family.
+    ("general.funding_ledger", 85, 1_482_480, "PER_LEDGERED_GROUP", None, S,
+     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",
+      "GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT")),
+    # The four legacy/general rows below now have real close routes too
+    # (CloseGeneralEpoch 67, CloseGeneralCandidate 65 for the record/feed pair,
+    # CloseGeneralClearWork 66), all driven in the sealed cleared-epoch walk.
+    # They keep PROFILE.STORAGE_INVENTORY_INCOMPLETE for a reason the closure
+    # wave does not touch: their cardinality is UNADMITTED, and
+    # terminal_admission refuses a REFUNDABLE_TRANSIENT row whose instance count
+    # is unbounded.  The optional-ledger residual is added alongside.
     ("legacy.epoch.v2", 328, 3_173_760, "PER_LEGACY_EPOCH", None, S,
-     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
+     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE", "RENT.ACCOUNT_REFUND_UNOWNED",
+      "GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT")),
     # CandidateRecord v3 (the d6929549… seal): T2-6 appends the 32-byte
     # score_digest that CompleteClearWork stamps at verification, moving the
     # record 305 -> 337 bytes; the row tracks the probe.
     ("legacy.candidate", 337, 3_236_400, "PER_LEGACY_CANDIDATE", None, S,
-     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
+     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE", "RENT.ACCOUNT_REFUND_UNOWNED")),
     ("legacy.candidate_feed", 6_266, 44_502_240, "PER_LEGACY_EPOCH", None, S,
-     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
+     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE", "RENT.ACCOUNT_REFUND_UNOWNED")),
     # T2-1 re-pinned CLEAR_WORK_BODY_BYTES to the checkpoint codec's
     # ENCODED_BYTES (48,592 -> 47,846), so account_len::CLEAR_WORK moved
     # 48,750 -> 48,004 at the fda59705… seal; T2-6 inserts the 2,050-byte
     # owner-interner region between header and body (the d6929549… seal),
     # moving it 48,004 -> 50,054.  The row tracks the probe.
     ("legacy.clear_work", 50_054, 349_266_720, "PER_LEGACY_CLEAR_JOB", None, S,
-     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
+     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE", "RENT.ACCOUNT_REFUND_UNOWNED")),
     ("resolution.work.v1", 1_296, 9_911_040, "PER_ACTIVE_MARKET_WORK", 1, R, ()),
     ("resolution.reserve.v1", 0, 890_880, "PER_ACTIVE_MARKET_WORK", 1, R, ()),
 )
@@ -225,6 +306,17 @@ EXPECTED_ACCOUNTS = {row[0] for row in ACCOUNT_ROWS}
 # phases open at the selection or settlement deadline and never close.  So
 # every phase a transient can be alive in has a route any keeper can call
 # forever afterwards, and the sealed campaign drives all of them.
+#
+# NO general-plane row appears here, deliberately, even though TerminalClosure
+# (tags 60-67) gives every one of them a driven, exactly-conserving close.  A
+# REFUNDABLE_TRANSIENT row must carry `rent_principal_recorded is True` and
+# `expiry_or_reaper == PASS` unconditionally, and the general plane satisfies
+# neither unconditionally: the funding ledger is optional at creation, and the
+# one owner-signed edge of the close DAG (tag 60) lets an abandoned reservation
+# hold the root open.  See the block above `epoch.window` for the exact
+# mechanism and the sealed evidence for each.  The correct successor is a
+# versioned family whose header is embedded rather than a sibling, plus an
+# admitted cardinality bound — recorded, not built.
 REFUNDABLE_FACTS: dict[str, tuple[str, str, str]] = {
     "resolution.work.v1": (
         "FinalizeResolutionWorkV1_or_AbortResolutionWorkV1",
@@ -356,6 +448,21 @@ def build_terminal(runtime_ref: str = "0" * 40) -> dict[str, Any]:
             },
             "direct.empty_frozen": {"reachable": True, "required": True, "status": "STOP"},
             "direct.retained_top_three": {
+                "reachable": True,
+                "required": True,
+                "status": "STOP",
+            },
+            # TerminalClosure makes both general-plane terminal shapes
+            # REACHABLE for the first time — each is driven to the epoch root
+            # on a real bank in `logs/bank/terminal_closure.log`.  Both still
+            # STOP, on the optional-ledger and abandoned-reservation residuals
+            # recorded against the rows above.
+            "general.cleared_epoch_closure": {
+                "reachable": True,
+                "required": True,
+                "status": "STOP",
+            },
+            "general.lapsed_epoch_closure": {
                 "reachable": True,
                 "required": True,
                 "status": "STOP",

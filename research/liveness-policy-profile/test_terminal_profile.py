@@ -19,10 +19,10 @@ class TerminalProfileTests(unittest.TestCase):
     def test_inventory_names_are_unique_and_current_profile_stops(self) -> None:
         self.assertEqual(len(ACCOUNT_ROWS), len(EXPECTED_ACCOUNTS))
         # 38 sealed-probe rows (the T2-6 probe adds epoch.window) plus the
-        # seven Direct V3 rows and the two T2-8 general-plane pot/receipt
-        # rows classified after the probe.  A row added or dropped without
-        # reclassifying here fails.
-        self.assertEqual(len(ACCOUNT_ROWS), 47)
+        # seven Direct V3 rows, the two T2-8 general-plane pot/receipt rows,
+        # and the TerminalClosure funding ledger, all classified after the
+        # probe.  A row added or dropped without reclassifying here fails.
+        self.assertEqual(len(ACCOUNT_ROWS), 48)
         terminal = build_terminal("f" * 40)
         self.assertEqual(
             validate_terminal_admission(terminal, expected_accounts=EXPECTED_ACCOUNTS),
@@ -144,8 +144,15 @@ class TerminalProfileTests(unittest.TestCase):
         self.assertEqual(window["max_instances"], {"kind": "FIXED", "hard_max": 1})
         self.assertEqual(window["lifecycle_class"], "UNCLASSIFIED_STOP")
         self.assertEqual(window["physical_close_route"], "NONE")
+        # TerminalClosure discharges the *reason* this row carried
+        # PROFILE.STORAGE_INVENTORY_INCOMPLETE — no close path existed — and
+        # replaces it with the two residuals that actually remain.
         self.assertEqual(
-            window["blocking_ids"], ["PROFILE.STORAGE_INVENTORY_INCOMPLETE"]
+            window["blocking_ids"],
+            [
+                "RENT.ACCOUNT_REFUND_UNOWNED",
+                "GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT",
+            ],
         )
         for name, bytes_ in (
             ("legacy.clear_work", 50_054),
@@ -187,11 +194,126 @@ class TerminalProfileTests(unittest.TestCase):
             self.assertEqual(row["lifecycle_class"], "UNCLASSIFIED_STOP", name)
             self.assertEqual(row["physical_close_route"], "NONE", name)
             self.assertEqual(row["promotion"], "STOP", name)
-            self.assertEqual(
-                row["blocking_ids"], ["PROFILE.STORAGE_INVENTORY_INCOMPLETE"], name
-            )
+        self.assertEqual(
+            pot["blocking_ids"],
+            [
+                "RENT.ACCOUNT_REFUND_UNOWNED",
+                "GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT",
+            ],
+        )
+        # The receipt close (tag 61) gates only on the receipt being
+        # exhausted by permissionless settlement, so the abandoned-reservation
+        # residual does not reach it; the optional funding ledger still does.
+        self.assertEqual(
+            receipt["blocking_ids"], ["RENT.ACCOUNT_REFUND_UNOWNED"]
+        )
         self.assertNotIn("legacy.candidate_feed_stage", terminal["accounts"])
         self.assertNotIn("epoch.feed_stage", terminal["accounts"])
+
+    def test_terminal_closure_names_its_residuals_and_promotes_nothing(self) -> None:
+        """TerminalClosure gives the general plane a close DAG, not a promotion.
+
+        Tags 60-67 close every general-plane family in dependency order, and
+        the sealed walk drives both a cleared and a lapsed epoch to the root
+        with exact conservation.  That retires the reason these rows carried
+        PROFILE.STORAGE_INVENTORY_INCOMPLETE — *no close path existed* — but
+        it cannot make any of them REFUNDABLE_TRANSIENT, because
+        terminal_admission requires `rent_principal_recorded` and
+        `expiry_or_reaper` unconditionally and the general plane holds neither
+        unconditionally:
+
+        * the GeneralFundingLedgerV1 sibling is OPTIONAL at every creating
+          instruction (`accounts.len() == N || N + 1`), every close runs
+          through `close_ledgered_group`, which requires it, and the sealed
+          LAPSED walk proves the unledgered state is reachable —
+          RENT.ACCOUNT_REFUND_UNOWNED;
+        * `release_terminal_reservation` (60) is the only signer-gated edge in
+          the DAG, so an abandoned zero-fill reservation holds its page, the
+          pot, and the epoch root open —
+          GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT.
+
+        A future edit that flips one of these rows to refundable without
+        closing both gaps fails here and again in
+        policy.py::require_terminal_closure_evidence.
+        """
+
+        terminal = build_terminal()
+        general = (
+            "epoch.window",
+            "epoch.final_pot",
+            "epoch.receipt",
+            "general.funding_ledger",
+            "legacy.epoch.v2",
+            "legacy.candidate",
+            "legacy.candidate_feed",
+            "legacy.clear_work",
+        )
+        residuals = {
+            "RENT.ACCOUNT_REFUND_UNOWNED",
+            "GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT",
+        }
+        for name in general:
+            row = terminal["accounts"][name]
+            self.assertEqual(row["lifecycle_class"], "UNCLASSIFIED_STOP", name)
+            self.assertEqual(row["promotion"], "STOP", name)
+            self.assertEqual(row["physical_close_route"], "NONE", name)
+            self.assertNotIn(name, REFUNDABLE_FACTS, name)
+            self.assertTrue(residuals & set(row["blocking_ids"]), name)
+        for blocker in residuals:
+            self.assertIn(blocker, terminal["blocking_ids"])
+        # The four legacy rows keep the generic inventory blocker for a
+        # reason the closure wave does not touch: their cardinality is
+        # UNADMITTED, and terminal_admission refuses an unbounded refundable.
+        for name in (
+            "legacy.epoch.v2",
+            "legacy.candidate",
+            "legacy.candidate_feed",
+            "legacy.clear_work",
+        ):
+            row = terminal["accounts"][name]
+            self.assertIn("PROFILE.STORAGE_INVENTORY_INCOMPLETE", row["blocking_ids"])
+            self.assertEqual(row["max_instances"]["hard_max"], None, name)
+        # Both general-plane terminal shapes are REACHABLE for the first time
+        # and both still STOP.
+        shapes = terminal["reachable_terminal_shapes"]
+        for name in ("general.cleared_epoch_closure", "general.lapsed_epoch_closure"):
+            self.assertTrue(shapes[name]["reachable"], name)
+            self.assertEqual(shapes[name]["status"], "STOP", name)
+
+    def test_general_funding_ledger_row_is_pinned_to_the_layout_crate(self) -> None:
+        """Account tag 26: 2 + 32 + 32 + 8 + 8 + 1 + 1 + 1 = 85 bytes."""
+
+        row = build_terminal()["accounts"]["general.funding_ledger"]
+        self.assertEqual(row["bytes"], 2 + 32 + 32 + 8 + 8 + 1 + 1 + 1)
+        self.assertEqual(row["bytes"], 85)
+        self.assertEqual(row["rent_lamports"], (85 + 128) * 6_960)
+        self.assertEqual(row["rent_lamports"], 1_482_480)
+        self.assertEqual(row["scope"], "PER_LEDGERED_GROUP")
+
+    def test_v4_order_page_strand_carries_its_own_blocking_id(self) -> None:
+        """The V3 campaign's third stranded family stops hiding in a generic id.
+
+        `init_direct_v4_order_page` creates the 4,012-byte page with
+        `create_pda_account_full_principal` — no ledger, no recorded payer —
+        and no V3 route closes it; all three sealed bank runs re-measure
+        28,814,401 lamports still held after settle and after lapse.  The
+        general plane's instance of the same row *does* close (tag 63), which
+        is exactly why the row stays an honest STOP rather than moving either
+        way.
+        """
+
+        row = build_terminal()["accounts"]["order.page"]
+        self.assertEqual(row["lifecycle_class"], "UNCLASSIFIED_STOP")
+        self.assertEqual(row["bytes"], 4_012)
+        self.assertEqual(row["rent_lamports"], 28_814_400)
+        self.assertEqual(
+            row["blocking_ids"],
+            [
+                "DIRECT.ACCOUNT_REFUND_UNOWNED",
+                "DIRECT.EMPTY_FROZEN_NO_LAPSE",
+                "DIRECT.ORDER_PAGE_RENT_PERSISTS",
+            ],
+        )
 
     def test_pinned_default_rent_equation_covers_every_row(self) -> None:
         for name, bytes_, rent, *_ in ACCOUNT_ROWS:

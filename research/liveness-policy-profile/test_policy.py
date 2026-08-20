@@ -42,9 +42,9 @@ class PolicyTests(unittest.TestCase):
     def test_resolution_work_maximum_path_is_exact(self) -> None:
         row = policy.derive(self.evidence)["resolution_work"]
         self.assertEqual(row["status"], "PASS")
-        # The Fold(1) route covers its widest observation, the 88,433-CU
+        # The Fold(1) route covers its widest observation, the 88,434-CU
         # singleton measured inside the two-fold batch scenario.
-        self.assertEqual(row["routes"]["fold_1"]["measured_cu"], 88_433)
+        self.assertEqual(row["routes"]["fold_1"]["measured_cu"], 88_434)
         self.assertEqual(row["fold_path_lamports"], 7_360_000)
         self.assertEqual(row["success_rewards_lamports"], 7_680_000)
         self.assertEqual(row["worst_abort_rewards_lamports"], 7_530_000)
@@ -57,7 +57,7 @@ class PolicyTests(unittest.TestCase):
         row = derived["resolution_work_batched"]
         self.assertEqual(row["status"], "PASS")
         self.assertEqual(row["maximum_admitted_batch"], 12)
-        self.assertEqual(row["routes"]["fold_batch_12"]["measured_cu"], 929_561)
+        self.assertEqual(row["routes"]["fold_batch_12"]["measured_cu"], 929_573)
         self.assertEqual(row["routes"]["fold_batch_12"]["selected_limit_cu"], 1_170_000)
         self.assertEqual(
             row["routes"]["fold_batch_12"]["keeper_reward_lamports"], 1_280_000
@@ -110,7 +110,7 @@ class PolicyTests(unittest.TestCase):
         derived = policy.derive(self.evidence)
         row = derived["direct_v2"]["select"]
         self.assertEqual(row["status"], "PASS")
-        self.assertEqual(row["measured_cu"], 226_445)
+        self.assertEqual(row["measured_cu"], 226_444)
         self.assertEqual(row["selected_limit_cu"], 290_000)
         self.assertEqual(row["keeper_reward_lamports"], 400_000)
         self.assertEqual(derived["direct_v2"]["status"], "STOP")
@@ -147,7 +147,13 @@ class PolicyTests(unittest.TestCase):
         self.assertNotIn("keeper_reward_lamports", walk)
         self.assertEqual(
             walk["measured_families"],
-            ["general_epoch", "clear_walk", "candidate_selection", "entitled_clearing"],
+            [
+                "general_epoch",
+                "clear_walk",
+                "candidate_selection",
+                "entitled_clearing",
+                "terminal_closure",
+            ],
         )
         for family in walk["measured_families"]:
             row = self.evidence["measurements"][family]
@@ -169,14 +175,14 @@ class PolicyTests(unittest.TestCase):
             )
         # Exact measured pins from those logs.
         epoch = self.evidence["measurements"]["general_epoch"]
-        self.assertEqual(epoch["init_epoch_cu"], [42_557])
+        self.assertEqual(epoch["init_epoch_cu"], [42_699])
         self.assertEqual(
             epoch["freeze_epoch_rows"][2],
-            {"pages": 3, "orders": 40, "cu": [717_829, 717_829]},
+            {"pages": 3, "orders": 40, "cu": [717_825, 717_825]},
         )
         walk_rows = self.evidence["measurements"]["clear_walk"]
-        self.assertEqual(max(walk_rows["forty_order_pass1_cu"]), 400_428)
-        self.assertEqual(walk_rows["complete_cu"], [122_869, 127_085])
+        self.assertEqual(max(walk_rows["forty_order_pass1_cu"]), 391_428)
+        self.assertEqual(walk_rows["complete_cu"], [122_865, 127_081])
         tampered = copy.deepcopy(self.evidence)
         tampered["measurements"]["clear_walk"]["admission"] = "PROMOTED"
         with self.assertRaises(policy.CheckError):
@@ -201,24 +207,24 @@ class PolicyTests(unittest.TestCase):
         """
 
         selection = self.evidence["measurements"]["candidate_selection"]
-        self.assertEqual(max(selection["seal_candidate_cu"]), 64_170)
-        self.assertEqual(selection["seal_candidate_displacing_cu"], [64_170])
+        self.assertEqual(max(selection["seal_candidate_cu"]), 64_168)
+        self.assertEqual(selection["seal_candidate_displacing_cu"], [64_168])
         self.assertEqual(
             {row["shape"]: row["cu"] for row in selection["finalize_selection_rows"]},
             {
-                "3_retained_2_verified_selects_winner": [49_230],
-                "2_verified_beyond_128_bit_digest_tie": [39_462],
-                "0_verified_honest_lapse": [20_695],
+                "3_retained_2_verified_selects_winner": [49_228],
+                "2_verified_beyond_128_bit_digest_tie": [39_465],
+                "0_verified_honest_lapse": [20_693],
             },
         )
         self.assertEqual(selection["test_result"], "PASS_5_OF_5")
         entitled = self.evidence["measurements"]["entitled_clearing"]
-        self.assertEqual(entitled["freeze_entitlement_cu"], [100_052])
-        self.assertEqual(entitled["entitle_slice_single_cu"], [204_577])
-        self.assertEqual(entitled["entitle_slice_portfolio_pair_cu"], [246_173])
-        self.assertEqual(entitled["settle_page_entitled_direct_slice_cu"], [54_834])
+        self.assertEqual(entitled["freeze_entitlement_cu"], [100_158])
+        self.assertEqual(entitled["entitle_slice_single_cu"], [210_607])
+        self.assertEqual(entitled["entitle_slice_portfolio_pair_cu"], [243_518])
+        self.assertEqual(entitled["settle_page_entitled_direct_slice_cu"], [53_330])
         self.assertEqual(
-            entitled["settle_page_entitled_portfolio_full_pair_cu"], [225_739]
+            entitled["settle_page_entitled_portfolio_full_pair_cu"], [234_735]
         )
         self.assertEqual(
             entitled["bank_conservation"],
@@ -284,12 +290,12 @@ class PolicyTests(unittest.TestCase):
             )
         # Rows the bump search cannot move are pinned exactly; rows it can
         # move are sealed as the three-run spread rather than one sample.
-        self.assertEqual(rows["init_epoch_cu"], [41_214] * 3)
-        self.assertEqual(rows["init_order_page_cu"], [221_027] * 3)
-        self.assertEqual(rows["begin_verification_cu"], [23_584] * 3)
-        self.assertEqual(rows["verify_candidate_rows"][0]["cu"], [151_346] * 3)
-        self.assertEqual(rows["abort_unfrozen_rows"][0]["cu"], [10_381] * 3)
-        self.assertEqual(max(rows["freeze_epoch_cu"]), 390_272)
+        self.assertEqual(rows["init_epoch_cu"], [41_226] * 3)
+        self.assertEqual(rows["init_order_page_cu"], [221_020] * 3)
+        self.assertEqual(rows["begin_verification_cu"], [23_596] * 3)
+        self.assertEqual(rows["verify_candidate_rows"][0]["cu"], [151_358] * 3)
+        self.assertEqual(rows["abort_unfrozen_rows"][0]["cu"], [10_393] * 3)
+        self.assertEqual(max(rows["freeze_epoch_cu"]), 382_784)
         self.assertEqual(
             [row["disposition"] for row in rows["submit_candidate_rows"]],
             [
@@ -414,27 +420,222 @@ class PolicyTests(unittest.TestCase):
     def test_reproducibility_probes_are_pinned_with_their_dispositions(self) -> None:
         """The build-path amendment's probe rows are sealed exactly.
 
-        The canonical identity is the in-place double build; the cross-path
-        worktree build is recorded under the PATH_TIED_SYMBOL_ORDER
-        disposition (its observed digest listed, byte-identical at this
-        seal), and the relocated-Cargo-home probe returned byte-identical.
+        The canonical identity is the in-place double build.  The cross-path
+        worktree build is recorded as an observed-digest LIST under the
+        PATH_TIED_SYMBOL_ORDER disposition — never as an equality claim — and
+        the relocated-Cargo-home probe diverged at this artifact, restoring the
+        PATH_SENSITIVE finding the `e8ba31d5…` seal believed superseded.
         """
 
         row = self.evidence["artifact_reproducibility"]
         digest = self.evidence["artifact"]["sha256"]
         self.assertEqual(row["normal_build_1"], digest)
         self.assertEqual(row["normal_build_2"], digest)
-        self.assertEqual(row["cross_path_build"], digest)
+        self.assertNotIn("cross_path_build", row, "scalar equality claim is retired")
+        observed = row["cross_path_builds"]
+        self.assertTrue(observed, "at least one cross-path observation is required")
+        for entry in observed:
+            self.assertEqual(set(entry), {"path", "sha256", "bytes"})
+            self.assertNotEqual(entry["sha256"], digest)
         self.assertEqual(row["cross_path_disposition"], "PATH_TIED_SYMBOL_ORDER")
-        self.assertEqual(row["relocated_cargo_home"], digest)
-        self.assertEqual(
-            row["relocated_disposition"], "INDEPENDENT_BYTE_IDENTICAL_SINGLE_HOST"
-        )
+        self.assertNotEqual(row["relocated_cargo_home"], digest)
+        self.assertTrue(row["relocated_disposition"].startswith("PATH_SENSITIVE"))
         artifact_root = self.evidence["artifact"]["path"].rsplit("/", 1)[0]
         self.assertIn(
             f"{artifact_root}/logs/sbf-build-crosspath.log",
             self.evidence["evidence_files"],
         )
+
+    def test_a_coincidental_cross_path_match_is_refused_as_evidence(self) -> None:
+        """The exact misreading the `e8ba31d5…` seal made must now fail closed.
+
+        That seal observed one cross-path build that happened to come back
+        byte-identical and recorded it as a property.  The V3 campaign then
+        found two other digests at two other paths, and this seal found a
+        third.  A list entry equal to the canonical digest is a coincidence,
+        not a reproducibility claim, and the checker refuses it.
+        """
+
+        digest = self.evidence["artifact"]["sha256"]
+        coincidence = copy.deepcopy(self.evidence)
+        coincidence["artifact_reproducibility"]["cross_path_builds"].append(
+            {"path": "/somewhere/else", "sha256": digest, "bytes": 1}
+        )
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.check_artifact_binding(coincidence)
+        self.assertIn("coincidence", str(caught.exception))
+
+        scalar = copy.deepcopy(self.evidence)
+        scalar["artifact_reproducibility"].pop("cross_path_builds")
+        scalar["artifact_reproducibility"]["cross_path_build"] = digest
+        with self.assertRaises(policy.CheckError):
+            policy.check_artifact_binding(scalar)
+
+    def test_relocated_disposition_cannot_disagree_with_its_own_digest(self) -> None:
+        lying = copy.deepcopy(self.evidence)
+        lying["artifact_reproducibility"]["relocated_disposition"] = (
+            "INDEPENDENT_BYTE_IDENTICAL_SINGLE_HOST"
+        )
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.check_artifact_binding(lying)
+        self.assertIn("disagrees with its own digest", str(caught.exception))
+
+    def test_terminal_closure_family_is_sealed_and_promotes_nothing(self) -> None:
+        """Tags 60-67 seal a close DAG, an exact conservation, and no promotion.
+
+        The cleared walk reclaims 531,639,600 of the 531,652,377 lamports the
+        machinery held, burns exactly the two injected donations, and leaves a
+        residual that is exactly the declared-permanent batch-policy
+        artifact's own rent row.  The lapsed walk reclaims everything it can
+        and leaves the deliberately unledgered candidate pair standing.  No
+        admission row, quote, reward, or CU row is derived for any close
+        route, and the suite prints no per-route CU label, so none is invented.
+        """
+
+        closure = self.evidence["measurements"]["terminal_closure"]
+        self.assertEqual(
+            closure["admission"], "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY"
+        )
+        self.assertEqual(closure["intents"], list(range(60, 68)))
+        self.assertIn("terminal_closure", policy.SAME_ELF_MEASUREMENTS)
+        self.assertEqual(
+            closure["per_route_cu"], "NOT_LABELLED_BY_SUITE_NO_ROW_DERIVED"
+        )
+        cleared = closure["walks"]["cleared_epoch"]
+        self.assertEqual(cleared["machinery_inventory_lamports"], 531_652_377)
+        self.assertEqual(cleared["reclaimed_lamports"], 531_639_600)
+        self.assertEqual(cleared["burned_at_frozen_sink_lamports"], 12_777)
+        self.assertEqual(cleared["residual_lamports"], 1_336_320)
+        self.assertEqual(
+            cleared["machinery_inventory_lamports"],
+            cleared["reclaimed_lamports"] + cleared["burned_at_frozen_sink_lamports"],
+        )
+        lapsed = closure["walks"]["lapsed_epoch"]
+        self.assertEqual(lapsed["machinery_inventory_lamports"], 47_167_920)
+        self.assertEqual(lapsed["reclaimed_lamports"], 47_167_920)
+        self.assertEqual(lapsed["burned_at_frozen_sink_lamports"], 0)
+        self.assertEqual(lapsed["unregistered_residual_lamports"], 47_738_640)
+        # The residual is the permanent artifact's own rent, not a measured
+        # balance a prefund could flatter.
+        self.assertEqual(
+            cleared["residual_lamports"],
+            build_terminal()["accounts"]["artifact.batch_policy.final"][
+                "rent_lamports"
+            ],
+        )
+        derived = policy.derive(self.evidence)
+        row = derived["general_terminal_closure"]
+        self.assertEqual(row["status"], "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP")
+        self.assertFalse(row["admission_rows_derived"])
+        self.assertFalse(row["per_route_cu_rows_derived"])
+        self.assertEqual(row["live_flags"], "UNTOUCHED")
+        self.assertEqual(row["decision_owner"], "ember")
+        self.assertEqual(row["rows_reclassified_refundable"], [])
+        self.assertNotIn("selected_limit_cu", row)
+        self.assertNotIn("keeper_reward_lamports", row)
+        artifact_root = self.evidence["artifact"]["path"].rsplit("/", 1)[0]
+        self.assertIn(
+            f"{artifact_root}/logs/bank/terminal_closure.log",
+            self.evidence["evidence_files"],
+        )
+        for subsystem in derived.values():
+            if isinstance(subsystem, dict) and "routes" in subsystem:
+                for name in subsystem["routes"]:
+                    self.assertNotIn("close", name)
+                    self.assertNotIn("release", name)
+
+    def test_terminal_closure_evidence_and_classification_cannot_drift(self) -> None:
+        """The weld holds in both directions.
+
+        A general-plane row cannot quietly become refundable while the ledger
+        stays optional, the evidence cannot stop declaring the two residuals
+        while the rows still STOP on them, a walk cannot stop conserving, and
+        the residual cannot stop being the permanent artifact's own rent.
+        """
+
+        terminal = build_terminal(self.evidence["runtime_ref"])
+        closure = self.evidence["measurements"]["terminal_closure"]
+
+        # 1. The evidence stops declaring a residual the rows depend on.
+        for field in (
+            "funding_ledger_optional_at_creation",
+            "release_is_owner_signed",
+        ):
+            tampered = copy.deepcopy(closure)
+            tampered[field] = False
+            with self.assertRaises(policy.CheckError) as caught:
+                policy.require_terminal_closure_evidence(tampered, terminal)
+            self.assertIn(field, str(caught.exception))
+
+        # 2. A walk that does not conserve.
+        tampered = copy.deepcopy(closure)
+        tampered["walks"]["cleared_epoch"]["burned_at_frozen_sink_lamports"] += 1
+        with self.assertRaises(policy.CheckError):
+            policy.require_terminal_closure_evidence(tampered, terminal)
+
+        # 3. A residual that is not the permanent artifact's own rent row.
+        tampered = copy.deepcopy(closure)
+        tampered["walks"]["cleared_epoch"]["residual_lamports"] = 1
+        with self.assertRaises(policy.CheckError):
+            policy.require_terminal_closure_evidence(tampered, terminal)
+
+        # 4. A lapsed walk that hides the unledgered residual.
+        tampered = copy.deepcopy(closure)
+        tampered["walks"]["lapsed_epoch"]["unregistered_residual_lamports"] = 0
+        with self.assertRaises(policy.CheckError):
+            policy.require_terminal_closure_evidence(tampered, terminal)
+
+        # 5. A general-plane row promoted to refundable behind the evidence.
+        promoted = copy.deepcopy(terminal)
+        promoted["accounts"]["epoch.receipt"]["lifecycle_class"] = (
+            "REFUNDABLE_TRANSIENT"
+        )
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.require_terminal_closure_evidence(closure, promoted)
+        self.assertIn("optional at creation", str(caught.exception))
+
+        # 6. A residual blocking id deleted from the global set.
+        stripped = copy.deepcopy(terminal)
+        stripped["blocking_ids"] = [
+            b
+            for b in stripped["blocking_ids"]
+            if b != "GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT"
+        ]
+        with self.assertRaises(policy.CheckError):
+            policy.require_terminal_closure_evidence(closure, stripped)
+
+        # 7. The family losing its unpromoted declaration refuses in derive.
+        tampered_evidence = copy.deepcopy(self.evidence)
+        tampered_evidence["measurements"]["terminal_closure"]["admission"] = "PROMOTED"
+        with self.assertRaises(policy.CheckError):
+            policy.derive(tampered_evidence)
+
+    def test_v4_order_page_strand_must_carry_its_own_blocking_id(self) -> None:
+        """The corrected 35,941,440-lamport strand is welded to its ids.
+
+        The sealed campaign measures the V4 OrderPage still holding 28,814,401
+        lamports after both settle and lapse.  A strand row that drops its own
+        blocking id must refuse, so the number and the reason cannot part.
+        """
+
+        close = self.evidence["measurements"]["direct_v3_close"]
+        self.assertEqual(
+            close["structural_strand_lamports"]["order.page"], 28_814_401
+        )
+        derived = policy.derive(self.evidence)["direct_selection_v3"]
+        self.assertEqual(
+            derived["structural_strand_rent_lamports_per_epoch"], 35_941_440
+        )
+        self.assertIn("order.page", derived["structural_strand_rows"])
+        stripped = build_terminal(self.evidence["runtime_ref"])
+        stripped["accounts"]["order.page"]["blocking_ids"] = [
+            b
+            for b in stripped["accounts"]["order.page"]["blocking_ids"]
+            if b != "DIRECT.ORDER_PAGE_RENT_PERSISTS"
+        ]
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.require_v3_close_evidence(close, stripped)
+        self.assertIn("DIRECT.ORDER_PAGE_RENT_PERSISTS", str(caught.exception))
 
     def test_source_refusal_is_not_capitalized_as_success(self) -> None:
         row = policy.derive(self.evidence)["source_value_admission"]

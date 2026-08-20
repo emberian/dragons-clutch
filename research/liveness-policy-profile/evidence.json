@@ -1,1637 +1,1731 @@
 {
-  "schema": "dragons-clutch/liveness-policy-evidence/v2",
-  "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
-  "capture_date": "2026-08-20",
-  "runtime_ref": "2dbc9fc7a8dbbc6e20c23e2aa44069d2c180aa0c",
-  "runtime_tree": "c5804b307bb48ad48f7e11aa809a0a6b5fd5f523",
-  "evidence_ref": "ea4b650063958860c2b400026daa66afb4101bac",
-  "artifact": {
-    "path": "research/liveness-policy-profile/artifacts/e8ba31d582be3939/clutch_sbf.so",
-    "sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-    "bytes": 1914432,
-    "source_ref": "2dbc9fc7a8dbbc6e20c23e2aa44069d2c180aa0c",
-    "profile": "default-empty-registry"
+ "schema": "dragons-clutch/liveness-policy-evidence/v2",
+ "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
+ "capture_date": "2026-08-20",
+ "runtime_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
+ "runtime_tree": "e16817329b73e6ca9bc21124237195a93e7f19f1",
+ "evidence_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
+ "artifact": {
+  "path": "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/clutch_sbf.so",
+  "sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+  "bytes": 1979512,
+  "source_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
+  "profile": "default-empty-registry"
+ },
+ "artifact_reproducibility": {
+  "normal_build_1": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+  "normal_build_2": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+  "cross_path_builds": [
+   {
+    "path": "/Users/ember/jobs/dragons-clutch-r1-d77d670-xpath-worktree",
+    "sha256": "d33bab44e679de5109c078aff2e504df6924a5cc32693f4f426c5321519317a0",
+    "bytes": 1979512
+   }
+  ],
+  "cross_path_disposition": "PATH_TIED_SYMBOL_ORDER",
+  "cross_path_divergence": "FIVE_TEXT_BYTES_AT_FOUR_SITES_NO_OTHER_SECTION",
+  "relocated_cargo_home": "6302d3ee9c98d87550361502be2620103f9edfd8b3517f0fb33c9f488c498ae8",
+  "relocated_disposition": "PATH_SENSITIVE_REGISTRY_PANIC_LOCATION_STRINGS",
+  "relocated_divergence": "RODATA_GROWS_552_BYTES_THREE_ABSOLUTE_REGISTRY_PATHS",
+  "first_party_final_lto_stack_survivors": 0,
+  "direct_r10_references": 60135,
+  "deepest_direct_r10_offset": 4096
+ },
+ "historical_artifacts": {
+  "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1": {
+   "path": "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/clutch_sbf.so",
+   "runtime_ref": "7e8f6b1714c3c97a31a4250ecd19f87041433c2d",
+   "evidence_ref": "316c620c8c618142fc3a21964052bcb42c4336b6",
+   "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
   },
-  "artifact_reproducibility": {
-    "normal_build_1": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-    "normal_build_2": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-    "cross_path_build": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-    "cross_path_disposition": "PATH_TIED_SYMBOL_ORDER",
-    "relocated_cargo_home": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-    "relocated_disposition": "INDEPENDENT_BYTE_IDENTICAL_SINGLE_HOST",
-    "first_party_final_lto_stack_survivors": 0,
-    "direct_r10_references": 58099,
-    "deepest_direct_r10_offset": 4096
+  "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60": {
+   "path": "research/liveness-policy-profile/artifacts/bd20711b01828a74/clutch_sbf.so",
+   "runtime_ref": "83e124dda22adc15cb5ebf18ff9e0ab971c551dc",
+   "evidence_ref": "83e124dda22adc15cb5ebf18ff9e0ab971c551dc",
+   "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
   },
-  "historical_artifacts": {
-    "a5725a3d8e149b2b52605e1785f7ad29fdc6b2db1ed32ca83a31b41822d6b6a1": {
-      "path": "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/clutch_sbf.so",
-      "runtime_ref": "7e8f6b1714c3c97a31a4250ecd19f87041433c2d",
-      "evidence_ref": "316c620c8c618142fc3a21964052bcb42c4336b6",
-      "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
-    },
-    "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60": {
-      "path": "research/liveness-policy-profile/artifacts/bd20711b01828a74/clutch_sbf.so",
-      "runtime_ref": "83e124dda22adc15cb5ebf18ff9e0ab971c551dc",
-      "evidence_ref": "83e124dda22adc15cb5ebf18ff9e0ab971c551dc",
-      "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
-    },
-    "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b": {
-      "path": "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/clutch_sbf.so",
-      "runtime_ref": "2d530d218b470e5e2d1cf52480c4a9d1636c08e1",
-      "evidence_ref": "2d530d218b470e5e2d1cf52480c4a9d1636c08e1",
-      "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
-    },
-    "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd": {
-      "path": "research/liveness-policy-profile/artifacts/187d5ee16f72946a/clutch_sbf.so",
-      "runtime_ref": "59b5ffdc3c8c9e163f55e98b8f699eeb2b07cab5",
-      "evidence_ref": "59b5ffdc3c8c9e163f55e98b8f699eeb2b07cab5",
-      "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
-    },
-    "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec": {
-      "path": "research/liveness-policy-profile/artifacts/fda59705ac1c1869/clutch_sbf.so",
-      "runtime_ref": "e58aef497a17a77d7ca00fc30db2e289a6be42a2",
-      "evidence_ref": "e58aef497a17a77d7ca00fc30db2e289a6be42a2",
-      "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
-    },
-    "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733": {
-      "path": "research/liveness-policy-profile/artifacts/d692954949d57db22/clutch_sbf.so",
-      "runtime_ref": "853fecb7210b324f9701415c0b169e69d9ac71d6",
-      "evidence_ref": "853fecb7210b324f9701415c0b169e69d9ac71d6",
-      "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
-    }
+  "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b": {
+   "path": "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/clutch_sbf.so",
+   "runtime_ref": "2d530d218b470e5e2d1cf52480c4a9d1636c08e1",
+   "evidence_ref": "2d530d218b470e5e2d1cf52480c4a9d1636c08e1",
+   "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
   },
-  "capture": {
-    "path": "research/liveness-policy-profile/captured-output.txt",
-    "sha256": "9c5e4b2f37e0504a49d376dfd3c432a878303d483b432ae8fcfd3f75b1f4c85d"
+  "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd": {
+   "path": "research/liveness-policy-profile/artifacts/187d5ee16f72946a/clutch_sbf.so",
+   "runtime_ref": "59b5ffdc3c8c9e163f55e98b8f699eeb2b07cab5",
+   "evidence_ref": "59b5ffdc3c8c9e163f55e98b8f699eeb2b07cab5",
+   "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
   },
-  "source_blobs": {
-    "research/liveness-policy-profile/Cargo.toml": "8574e7693c1a85cdb68bf608c5cf4dcde178123b",
-    "research/liveness-policy-profile/Cargo.lock": "bec64120e485da3d41d80a034d6c5143545f86eb",
-    "research/liveness-policy-profile/src/main.rs": "4abf18121973fb512b859e62071bd0f978a5c8fa",
-    "programs/clutch-sbf/Cargo.lock": "1a2d1ec35e39737b9dee9f20223d249ea9059eb3",
-    "programs/clutch-sbf/program/Cargo.toml": "c9c3b9340ffe54adcd6bee916b3b445c7ababd63",
-    "programs/clutch-sbf/program/src/instructions/resolution_work.rs": "6c1e176199559a7ae2e47b45aa4695263f19fc1b",
-    "programs/clutch-sbf/program/src/error.rs": "d606efd8fc4d0a95ac3e4987f433a45e8491e66a",
-    "programs/solana-layout/Cargo.toml": "d71e72f38d550d7727ac7fbc5370e4e4baa4f1e5",
-    "programs/solana-layout/Cargo.lock": "dd741afab8b7545564ccdbf128b40c02b7a807b3",
-    "programs/solana-reference/Cargo.toml": "488acf29bbb84ae3ec6717a91b83587c665a7526",
-    "programs/solana-reference/Cargo.lock": "942723d69d118a9e7a868bc569a9a72258d04679",
-    "crates/clutch-liveness/Cargo.toml": "99018c975a433ae05e952b4dd6fd89b2ea5b74d8",
-    "crates/clutch-batch/Cargo.toml": "778aa6e7b30993e4470b0218cb67959477b2b4ec",
-    "research/batch-policy-identity/Cargo.toml": "ff1100e838f9d6ec7f290134e2ad9d9280b3d417"
+  "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec": {
+   "path": "research/liveness-policy-profile/artifacts/fda59705ac1c1869/clutch_sbf.so",
+   "runtime_ref": "e58aef497a17a77d7ca00fc30db2e289a6be42a2",
+   "evidence_ref": "e58aef497a17a77d7ca00fc30db2e289a6be42a2",
+   "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
   },
-  "source_trees": {
-    "programs/clutch-sbf/program/src": "a1aaff0ad51765acf4f2ef1ec8cfdd5cbcc7d251",
-    "programs/solana-layout/src": "439d3713d6645a0873c028d06cb60effdf880dd7",
-    "programs/solana-reference/src": "c9bd6cf2169e209ef5f25a78fb516591608b5ec0",
-    "crates/clutch-liveness/src": "38f21a9a8a931970b261078b996fcf00b68ebd9a",
-    "crates/clutch-batch/src": "c1f3c614630b186a9d13b6536010f8894c09b471",
-    "research/batch-policy-identity/src": "33b070c451434cfee8c24bf23a52d7fae8a4be42"
+  "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733": {
+   "path": "research/liveness-policy-profile/artifacts/d692954949d57db22/clutch_sbf.so",
+   "runtime_ref": "853fecb7210b324f9701415c0b169e69d9ac71d6",
+   "evidence_ref": "853fecb7210b324f9701415c0b169e69d9ac71d6",
+   "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
   },
-  "test_blobs": {
-    "programs/clutch-sbf/svm-tests/Cargo.lock": "2a8392b20ba0e1a23ba471737a0b2196b30fa26d",
-    "programs/clutch-sbf/svm-tests/Cargo.toml": "26e3c16e95890d5e79a67b682e9b6ac5f6556263",
-    "programs/clutch-sbf/svm-tests/tests/artifact_transport.rs": "9c3436d0c3cd8dc28c72e69b393912faab9097e1",
-    "programs/clutch-sbf/svm-tests/tests/blank_bank_lifecycle.rs": "6cb8b99cc1d9b1d542bcccd8372c8afd2808d16b",
-    "programs/clutch-sbf/svm-tests/tests/candidate_selection.rs": "41867ff0daf7365c6c612b3ed9c5ee823239d5a1",
-    "programs/clutch-sbf/svm-tests/tests/clear_lifecycle.rs": "3d1f015e5dbb3ebbf54082062623e69ed1ee5658",
-    "programs/clutch-sbf/svm-tests/tests/clear_walk.rs": "1f16bf0dd69eddf6941d521e05812c58ead98828",
-    "programs/clutch-sbf/svm-tests/tests/collateral_leg.rs": "10cbc4891eb93cc71e97a931a8f8e6f6a7e99f47",
-    "programs/clutch-sbf/svm-tests/tests/direct_selection_v2.rs": "aa7f85138f51beecf27c0f8a4417b77829cb0cc0",
-    "programs/clutch-sbf/svm-tests/tests/direct_selection_v3.rs": "69f064916d913a8b99612aca0ee68d40bd4e0ebc",
-    "programs/clutch-sbf/svm-tests/tests/entitled_clearing.rs": "7cefb1c29ba97c2e0397f4467be31c279eb2919e",
-    "programs/clutch-sbf/svm-tests/tests/general_epoch.rs": "46709b2eea652931b50f39e665484740e2ef3cdc",
-    "programs/clutch-sbf/svm-tests/tests/native_resolution.rs": "1c330494bf68dec713570a740b5dbf730e35d77d",
-    "programs/clutch-sbf/svm-tests/tests/order_reservation.rs": "77658748b3c7777eb181446052f1172024f1cc59",
-    "programs/clutch-sbf/svm-tests/tests/prefund_creation.rs": "528921e972396f37bde27bb5873db51c1f8e6180",
-    "programs/clutch-sbf/svm-tests/tests/resolution_work.rs": "dc7381db6bfa493b8a37ebfe9f77910ea6459eb7",
-    "programs/clutch-sbf/svm-tests/tests/resolution_work_batch.rs": "4a5e6570f0d664c65353c0586f585fed172ad662",
-    "programs/clutch-sbf/svm-tests/tests/resolution_work_common/mod.rs": "e62c0c4ba88fe4a4b31c7b498dcad6850306ea7f",
-    "programs/clutch-sbf/svm-tests/tests/source_archive.rs": "7450f45216a63800478416a93b2738735a71eab5"
-  },
-  "test_trees": {
-    "programs/clutch-sbf/svm-tests/src": "22adee1330173ca734cdb22b433a6a8fd75993c8",
-    "programs/clutch-sbf/svm-tests/tests": "c6053754508e03f47d23c6b7af6a9f03b83089aa"
-  },
-  "evidence_files": {
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/RUNTIME_ARTIFACT_AUDIT.md": {
-      "sha256": "60dcfc6281573f30a407e34ee5e02ec7d025389c96d8ee22b23fba465048044b",
-      "bytes": 17781
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/backend-stack-diagnostics.txt": {
-      "sha256": "4f7219918054d871bf75fe8faa9f29d5005da76a3aadf70e29fbbd4998290895",
-      "bytes": 12914
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/dependencies.tsv": {
-      "sha256": "eed650fb0b93d8d97042c44123264c47e1dc0566a391a3a949a06a3102842b1b",
-      "bytes": 3953
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/elf-summary.txt": {
-      "sha256": "2820b1c1618dda2f168f08ed79b95c2d50857e514dfd78d939020919ecddedec",
-      "bytes": 233
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/frame-summary.txt": {
-      "sha256": "f589fd32f2f26925bd5f4ce7f45fe6f4f60cd2c517231970d760073fb0283e83",
-      "bytes": 284
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/metadata.json": {
-      "sha256": "512141459311e0e8090927ff9d747e4d43b0fb38bf4c0294fd6b983aa5f5766c",
-      "bytes": 128329
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/registry-source-verification.tsv": {
-      "sha256": "c3a8c19b470713e828b08b56f3cedfe4089c0a704c457e15178c24ecd8cfad71",
-      "bytes": 5206
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/source-files.txt": {
-      "sha256": "ff635a64708bce467947d68745070a9d624d6cf6621a7e1a15cf577550c54a82",
-      "bytes": 5279
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/stack-summary.txt": {
-      "sha256": "67e97abca540f499ecff2738cffc0f16988f5f7a3ee23c10afba3b7be91d143b",
-      "bytes": 107
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/upstream-SHA256SUMS": {
-      "sha256": "531fca18e81bc0ef9bc691bb012c17d67a032584a451e51eda57c85e6aafccda",
-      "bytes": 8624
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/vendor.diff": {
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "bytes": 0
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/artifact_transport.log": {
-      "sha256": "d2061fd7ee21d541d494480e381815b7d0ad0f87c0e3f09b872a87800e9b219e",
-      "bytes": 745
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/blank_bank_lifecycle.log": {
-      "sha256": "20c7c9e1e66bde897e1c2f2c3ad5e223c035e1e1406543b3553255fc9ddabedc",
-      "bytes": 764
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/candidate_selection.log": {
-      "sha256": "1ed8a81e4562fcd9ceb9aba927e60a5be0c43f2fad5402163e8b4428deecba87",
-      "bytes": 2653
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/clear_lifecycle.log": {
-      "sha256": "52ddca24a78caff2adba2636e9fd100bdff687922205c619ca19561f6e41b778",
-      "bytes": 2795
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/clear_walk.log": {
-      "sha256": "1ed07d702894350b5afa8625702bfccaf846d45805e39d659d184741e0507cde",
-      "bytes": 768
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/collateral_leg.log": {
-      "sha256": "e300ffbd56b200cbe7d152962b0597b4641343ec008db367d616ca633396d83b",
-      "bytes": 3250
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/direct_selection_v2.log": {
-      "sha256": "82cf071f890961010ed41416ba55349609a0fcb715c50d2488d0d3110773a887",
-      "bytes": 763
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/direct_selection_v3.log": {
-      "sha256": "d935de36b54e481c3d0578b35a0154c58b27d92f0195b9364fa4849337462047",
-      "bytes": 22404
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/direct_selection_v3_run2.log": {
-      "sha256": "5e66663d78831af2aab6d39f866013e930ab46ada26f0d932e17b446b6594697",
-      "bytes": 22257
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/direct_selection_v3_run3.log": {
-      "sha256": "95255c6c5338a2fd84cd31c283165d7b9e5501fc754c4d2db431d80e1e346790",
-      "bytes": 22257
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/entitled_clearing.log": {
-      "sha256": "a7edfee16f95629cb6b7454c2499ffb3ba3e892b3ba8d55cb42921233a413d54",
-      "bytes": 747
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/general_epoch.log": {
-      "sha256": "b2385910d8a5238783cdac8286cd4ae4d6ae7fff65a4c02b42b339925e7d931a",
-      "bytes": 681
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/native_resolution.log": {
-      "sha256": "5f8525c4857ae3da29874d7debc34c613ad5e44a1bd74e46f9ba2fbbf3dc97d7",
-      "bytes": 2580
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/order_reservation.log": {
-      "sha256": "c8b43163e72e5a2364af2ff62769ad93f3c8850cb7af2cf8b9dd120314402348",
-      "bytes": 494
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/prefund_creation.log": {
-      "sha256": "b2caaf97a4b77a6cfe7a429aeda1f132cf686db0a954e0f60b66c1b68670b621",
-      "bytes": 1368
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/resolution_work.log": {
-      "sha256": "c14d9c4832cf6ad99b9d99300406bf67b9f8424ae2e1b640f1ac12704329a1ab",
-      "bytes": 964
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/resolution_work_batch.log": {
-      "sha256": "2c00847ef9af95fa634944939b8948b673039ba7284e81e2e41a9693a7b4e7c5",
-      "bytes": 976
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/bank/source_archive.log": {
-      "sha256": "57064f2c0979121d31e377f246821e4641bcae86784c6dd820880516530b675b",
-      "bytes": 952
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/sbf-build-1.log": {
-      "sha256": "bcae2a6a030228f028301b0cd3471b061bb6bb9f3e5cab56dca682b90c2194c2",
-      "bytes": 30677
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/sbf-build-2.log": {
-      "sha256": "d8a6770e03d3f007f75c7b054b36cb70202a358c8ac340d154c41e37ebe49adb",
-      "bytes": 30677
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/sbf-build-crosspath.log": {
-      "sha256": "bb38a14d46baeea2783f0498b58a417e55555ba768e3f882224baa1636098782",
-      "bytes": 30974
-    },
-    "research/liveness-policy-profile/artifacts/e8ba31d582be3939/logs/sbf-build-relocated.log": {
-      "sha256": "e2d6711e1e4d581c20b175373e0685d08650d33419c2219a1858a1c13ade2155",
-      "bytes": 30677
-    }
-  },
-  "rent": {
-    "lamports_per_byte_year": 3480,
-    "exemption_threshold_numerator": 2,
-    "exemption_threshold_denominator": 1,
-    "effective_lamports_per_byte": 6960,
-    "account_storage_overhead_bytes": 128
-  },
-  "accounts": {
-    "artifact.policy.final": {
-      "bytes": 266,
-      "rent_lamports": 2742240
-    },
-    "artifact.policy.stage": {
-      "bytes": 402,
-      "rent_lamports": 3688800
-    },
-    "artifact.grid.final": {
-      "bytes": 589,
-      "rent_lamports": 4990320
-    },
-    "artifact.grid.stage": {
-      "bytes": 725,
-      "rent_lamports": 5936880
-    },
-    "artifact.terms.final": {
-      "bytes": 1656,
-      "rent_lamports": 12416640
-    },
-    "artifact.terms.stage": {
-      "bytes": 1792,
-      "rent_lamports": 13363200
-    },
-    "artifact.batch_policy.final": {
-      "bytes": 64,
-      "rent_lamports": 1336320
-    },
-    "artifact.batch_policy.stage": {
-      "bytes": 200,
-      "rent_lamports": 2282880
-    },
-    "realm": {
-      "bytes": 70,
-      "rent_lamports": 1378080
-    },
-    "profile": {
-      "bytes": 100,
-      "rent_lamports": 1586880
-    },
-    "market": {
-      "bytes": 726,
-      "rent_lamports": 5943840
-    },
-    "hoard": {
-      "bytes": 108,
-      "rent_lamports": 1642560
-    },
-    "position": {
-      "bytes": 220,
-      "rent_lamports": 2422080
-    },
-    "feed": {
-      "bytes": 124,
-      "rent_lamports": 1753920
-    },
-    "kernel": {
-      "bytes": 1255,
-      "rent_lamports": 9625680
-    },
-    "replay": {
-      "bytes": 84,
-      "rent_lamports": 1475520
-    },
-    "supply_ledger": {
-      "bytes": 333,
-      "rent_lamports": 3208560
-    },
-    "resolution.v2": {
-      "bytes": 165,
-      "rent_lamports": 2039280
-    },
-    "resolution.v3": {
-      "bytes": 319,
-      "rent_lamports": 3111120
-    },
-    "resolution.v4": {
-      "bytes": 383,
-      "rent_lamports": 3556560
-    },
-    "token.outcome_mint": {
-      "bytes": 82,
-      "rent_lamports": 1461600
-    },
-    "token.hoard_immutable_owner": {
-      "bytes": 170,
-      "rent_lamports": 2074080
-    },
-    "order.page": {
-      "bytes": 4012,
-      "rent_lamports": 28814400
-    },
-    "order.reservation.v1": {
-      "bytes": 570,
-      "rent_lamports": 4858080
-    },
-    "epoch.window": {
-      "bytes": 231,
-      "rent_lamports": 2498640
-    },
-    "legacy.epoch.v2": {
-      "bytes": 328,
-      "rent_lamports": 3173760
-    },
-    "legacy.candidate": {
-      "bytes": 337,
-      "rent_lamports": 3236400
-    },
-    "legacy.candidate_feed": {
-      "bytes": 6266,
-      "rent_lamports": 44502240
-    },
-    "legacy.clear_work": {
-      "bytes": 50054,
-      "rent_lamports": 349266720
-    },
-    "direct.epoch.v3": {
-      "bytes": 344,
-      "rent_lamports": 3285120
-    },
-    "direct.candidate.v2": {
-      "bytes": 440,
-      "rent_lamports": 3953280
-    },
-    "direct.window.v1": {
-      "bytes": 456,
-      "rent_lamports": 4064640
-    },
-    "direct.receipt": {
-      "bytes": 217,
-      "rent_lamports": 2401200
-    },
-    "direct.final_pot": {
-      "bytes": 262,
-      "rent_lamports": 2714400
-    },
-    "source.spec": {
-      "bytes": 292,
-      "rent_lamports": 2923200
-    },
-    "source.archive": {
-      "bytes": 2560,
-      "rent_lamports": 18708480
-    },
-    "resolution.work.v1": {
-      "bytes": 1296,
-      "rent_lamports": 9911040
-    },
-    "resolution.reserve.v1": {
-      "bytes": 0,
-      "rent_lamports": 890880
-    }
-  },
-  "policy_inputs": {
-    "cu_headroom_numerator": 5,
-    "cu_headroom_denominator": 4,
-    "cu_rounding_quantum": 10000,
-    "transaction_cu_ceiling": 1400000,
-    "base_transaction_fee_cap_lamports": 10000,
-    "micro_lamports_per_cu_cap": 1000000,
-    "keeper_surplus_lamports": 100000
-  },
-  "resolution_work": {
-    "maximum_records": 32,
-    "maximum_fold_width": 4,
-    "accounts": {
-      "begin": 11,
-      "fold": 8,
-      "finalize_base": 15,
-      "abort": 8
-    },
-    "runtime_reward_schedule": {
-      "fold_base_lamports": 1160000,
-      "fold_per_record_lamports": 0,
-      "finalize_lamports": 1510000,
-      "abort_lamports": 860000
-    }
-  },
-  "measurements": {
-    "resolution_work": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "fold_widths": [
-        1,
-        2,
-        3,
-        4
-      ],
-      "begin_cu": [
-        88040,
-        85672,
-        91356,
-        88038,
-        86224
-      ],
-      "fold_1_cu": [
-        84764,
-        82401
-      ],
-      "fold_2_cu": [
-        89373,
-        92341
-      ],
-      "fold_3_cu": [
-        93276
-      ],
-      "fold_4_cu": [
-        95721
-      ],
-      "finalize_cu": [
-        164730
-      ],
-      "abort_cu": [
-        46899
-      ],
-      "monolithic_v4_cu": [
-        182859
-      ],
-      "test_result": "PASS_4_OF_4"
-    },
-    "resolution_work_batch": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "batch_sizes": [
-        2,
-        4,
-        8,
-        12
-      ],
-      "begin_cu": [
-        91356,
-        86224,
-        86462,
-        80696
-      ],
-      "fold_batch_2_cu": [
-        176213
-      ],
-      "fold_batch_4_cu": [
-        331941
-      ],
-      "fold_batch_8_cu": [
-        665845,
-        665845
-      ],
-      "fold_batch_12_cu": [
-        929561
-      ],
-      "singleton_fold_cu": [
-        88080,
-        88433,
-        82948,
-        83296,
-        83296,
-        83301,
-        83188,
-        83536,
-        83536,
-        83536,
-        83536,
-        83536,
-        83536,
-        83541,
-        77419,
-        77767,
-        77767,
-        77767,
-        77767,
-        77767,
-        77767,
-        77767,
-        77767,
-        77767,
-        77767,
-        77772
-      ],
-      "outcome_equality": "BYTE_IDENTICAL_TO_SINGLETON_TRANSACTIONS",
-      "mid_batch_invalid_fold": "WHOLE_TRANSACTION_REVERTED_BYTE_EXACT",
-      "test_result": "PASS_2_OF_2"
-    },
-    "native_point_v3": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "degree_rows": [
-        {
-          "degree": 1,
-          "resolve_cu": 182848,
-          "retry_cu": 169579,
-          "internal_redeem_cu": 153041
-        },
-        {
-          "degree": 2,
-          "resolve_cu": 191221,
-          "retry_cu": 177952,
-          "internal_redeem_cu": 155084
-        },
-        {
-          "degree": 3,
-          "resolve_cu": 198115,
-          "retry_cu": 184846,
-          "internal_redeem_cu": 153474
-        }
-      ],
-      "test_result": "PASS"
-    },
-    "native_bearer_redeem": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "degree_rows": [
-        {
-          "degree": 1,
-          "external_redeem_cu": 137279
-        },
-        {
-          "degree": 2,
-          "external_redeem_cu": 139079
-        },
-        {
-          "degree": 3,
-          "external_redeem_cu": 136784
-        }
-      ],
-      "test_result": "PASS"
-    },
-    "occupation_v4": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "degree_rows": [
-        {
-          "degree": 1,
-          "initial_cu": 173062,
-          "retry_cu": 159802,
-          "internal_redeem_cu": 151755,
-          "external_redeem_cu": 135917
-        },
-        {
-          "degree": 2,
-          "initial_cu": 184232,
-          "retry_cu": 170972,
-          "internal_redeem_cu": 153798,
-          "external_redeem_cu": 137717
-        },
-        {
-          "degree": 3,
-          "initial_cu": 198163,
-          "retry_cu": 184903,
-          "internal_redeem_cu": 156688,
-          "external_redeem_cu": 139922
-        }
-      ],
-      "span_1_initial_cu": [
-        180050,
-        173368,
-        177549
-      ],
-      "span_2_initial_cu": [
-        173556,
-        189300,
-        190856
-      ],
-      "statistic_7_initial_cu": 182709,
-      "test_result": "PASS"
-    },
-    "direct_v2": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "init_cu": [
-        35546
-      ],
-      "freeze_cu": [
-        357879
-      ],
-      "submit_cu": [
-        173573,
-        174675,
-        182467,
-        190104,
-        185711
-      ],
-      "select_cu": [
-        226445
-      ],
-      "select_result": "COMPLETED_SELECTION_COMMITTED",
-      "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
-      "test_result": "PASS_2_OF_2"
-    },
-    "direct_v3": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
-      "suites": [
-        "direct_selection_v3.rs"
-      ],
-      "bank_runs": 3,
-      "cu_spread_source": "PDA_BUMP_SEARCH_1500_CU_QUANTUM_OVER_RANDOM_FIXTURE_KEYPAIRS",
-      "init_epoch_cu": [
-        41214,
-        41214,
-        41214
-      ],
-      "init_order_page_cu": [
-        221027,
-        221027,
-        221027
-      ],
-      "place_order_buy_cu": [
-        201659,
-        201659,
-        203159
-      ],
-      "place_order_sell_cu": [
-        205685,
-        207185,
-        201185
-      ],
-      "freeze_epoch_cu": [
-        390272,
-        387272,
-        384272
-      ],
-      "begin_verification_cu": [
-        23584,
-        23584,
-        23584
-      ],
-      "finalize_selection_cu": [
-        213761,
-        210761,
-        207761
-      ],
-      "settle_cu": [
-        176035,
-        177535,
-        173035
-      ],
-      "lapse_empty_cu": [
-        156458,
-        157958,
-        154958
-      ],
-      "lapse_unselected_cu": [
-        163039,
-        164539,
-        164539
-      ],
-      "lapse_selected_cu": [
-        173834,
-        175334,
-        179842
-      ],
-      "submit_candidate_rows": [
-        {
-          "price": 2000,
-          "disposition": "RETAINED",
-          "cu": [
-            181326,
-            178326,
-            175326
-          ]
-        },
-        {
-          "price": 5000,
-          "disposition": "RETAINED",
-          "cu": [
-            186242,
-            183244,
-            180242
-          ]
-        },
-        {
-          "price": 4000,
-          "disposition": "RETAINED",
-          "cu": [
-            204734,
-            201738,
-            198734
-          ]
-        },
-        {
-          "price": 6000,
-          "disposition": "REPLACEMENT_DISPLACING_THE_WORST",
-          "cu": [
-            209440,
-            206440,
-            203585
-          ]
-        },
-        {
-          "price": 3000,
-          "disposition": "NONCOMPETITIVE_NO_STATE",
-          "cu": [
-            196041,
-            193041,
-            190041
-          ]
-        }
-      ],
-      "submit_candidate_max_cu": [
-        209440,
-        206440,
-        203585
-      ],
-      "verify_candidate_rows": [
-        {
-          "index": 0,
-          "cu": [
-            151346,
-            151346,
-            151346
-          ]
-        },
-        {
-          "index": 1,
-          "cu": [
-            161846,
-            161846,
-            149846
-          ]
-        },
-        {
-          "index": 2,
-          "cu": [
-            149846,
-            149846,
-            161846
-          ]
-        }
-      ],
-      "abort_unfrozen_rows": [
-        {
-          "reservations": 0,
-          "cu": [
-            10381,
-            10381,
-            10381
-          ]
-        },
-        {
-          "reservations": 1,
-          "cu": [
-            138616,
-            140116,
-            137116
-          ]
-        },
-        {
-          "reservations": 2,
-          "cu": [
-            154042,
-            151042,
-            160042
-          ]
-        }
-      ],
-      "test_result": "PASS_3_OF_3_IN_EACH_OF_3_BANK_RUNS"
-    },
-    "direct_v3_close": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
-      "suites": [
-        "direct_selection_v3.rs"
-      ],
-      "bank_runs": 3,
-      "runs_agree_exactly": true,
-      "routes": {
-        "SubmitDirectCandidateV3 displacing": {
-          "closed_lamports": {
-            "direct.candidate.v3.displaced": 4287361
-          },
-          "recipient_deltas": {
-            "direct.candidate.v3.displaced": -4287361,
-            "direct.candidate.v3.admitted": 4287360,
-            "submitter": 0,
-            "neutral_sink": 1
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        },
-        "FinalizeDirectSelectionV3": {
-          "closed_lamports": {
-            "direct.candidate.v3.loser0": 4287361,
-            "direct.candidate.v3.loser1": 4287361
-          },
-          "recipient_deltas": {
-            "direct.candidate.v3.loser0": -4287361,
-            "direct.candidate.v3.loser1": -4287361,
-            "direct.receipt": 2401200,
-            "direct.final_pot": 2714400,
-            "direct.work_budget.v1": -9000,
-            "direct.window.v3": 0,
-            "direct.epoch.v4": 0,
-            "submitter": 8574720,
-            "sponsor": 0,
-            "keeper": -5106600,
-            "neutral_sink": 2
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        },
-        "SettleDirectV3": {
-          "closed_lamports": {
-            "direct.window.v3": 5289608,
-            "direct.work_budget.v1": 2629961,
-            "direct.reservation.v2.buy": 5192161,
-            "direct.reservation.v2.sell": 5192161,
-            "direct.candidate.v3.winner": 4287361,
-            "direct.receipt": 2401201,
-            "direct.final_pot": 2714401
-          },
-          "recipient_deltas": {
-            "submitter": 9576960,
-            "sponsor": 2618960,
-            "keeper": 5126600,
-            "buy_owner": 5192160,
-            "sell_owner": 5192160,
-            "neutral_sink": 14
-          },
-          "conservation": "EXACT_CLOSED_EQUALS_RECIPIENTS"
-        },
-        "LapseEmptyDirectV3": {
-          "closed_lamports": {
-            "direct.work_budget.v1": 2664961,
-            "direct.reservation.v2.buy": 5192161,
-            "direct.reservation.v2.sell": 5192161
-          },
-          "recipient_deltas": {
-            "direct.epoch.v4": 0,
-            "order.page": 0,
-            "direct.window.v3": 0,
-            "direct.work_budget.v1": -2664961,
-            "direct.reservation.v2.buy": -5192161,
-            "direct.reservation.v2.sell": -5192161,
-            "submitter": 0,
-            "sponsor": 2651960,
-            "keeper": 13000,
-            "buy_owner": 5192160,
-            "sell_owner": 5192160,
-            "neutral_sink": 3
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        },
-        "LapseUnselectedDirectV3": {
-          "closed_lamports": {
-            "direct.window.v3": 5289601,
-            "direct.work_budget.v1": 2664961,
-            "direct.reservation.v2.buy": 5192161,
-            "direct.reservation.v2.sell": 5192161,
-            "direct.candidate.v3": 4287361
-          },
-          "recipient_deltas": {
-            "direct.epoch.v4": 0,
-            "order.page": 0,
-            "direct.window.v3": -5289601,
-            "direct.work_budget.v1": -2664961,
-            "direct.reservation.v2.buy": -5192161,
-            "direct.reservation.v2.sell": -5192161,
-            "direct.candidate.v3": -4287361,
-            "submitter": 9576960,
-            "sponsor": 2651960,
-            "keeper": 13000,
-            "buy_owner": 5192160,
-            "sell_owner": 5192160,
-            "neutral_sink": 5
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        },
-        "LapseSelectedDirectV3": {
-          "closed_lamports": {
-            "direct.window.v3": 5289601,
-            "direct.work_budget.v1": 2643961,
-            "direct.reservation.v2.buy": 5192161,
-            "direct.reservation.v2.sell": 5192161,
-            "direct.candidate.v3": 4287361,
-            "direct.receipt": 2401201,
-            "direct.final_pot": 2714401
-          },
-          "recipient_deltas": {
-            "direct.epoch.v4": 0,
-            "order.page": 0,
-            "direct.window.v3": -5289601,
-            "direct.work_budget.v1": -2643961,
-            "direct.reservation.v2.buy": -5192161,
-            "direct.reservation.v2.sell": -5192161,
-            "direct.candidate.v3": -4287361,
-            "direct.receipt": -2401201,
-            "direct.final_pot": -2714401,
-            "submitter": 9576960,
-            "sponsor": 2630960,
-            "keeper": 5128600,
-            "buy_owner": 5192160,
-            "sell_owner": 5192160,
-            "neutral_sink": 7
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        },
-        "AbortUnfrozenDirectV4 empty": {
-          "closed_lamports": {
-            "reservation_prefix": 0
-          },
-          "recipient_deltas": {
-            "direct.epoch.v4": 0,
-            "order.page": 0,
-            "direct.reservation.v2.buy": 0,
-            "direct.reservation.v2.sell": 0,
-            "buy_owner": 0,
-            "sell_owner": 0,
-            "neutral_sink": 0
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        },
-        "AbortUnfrozenDirectV4 one": {
-          "closed_lamports": {
-            "direct.reservation.v2.buy": 5192161
-          },
-          "recipient_deltas": {
-            "direct.epoch.v4": 0,
-            "order.page": 0,
-            "direct.reservation.v2.buy": -5192161,
-            "direct.reservation.v2.sell": 0,
-            "buy_owner": 5192160,
-            "sell_owner": 0,
-            "neutral_sink": 1
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        },
-        "AbortUnfrozenDirectV4 two": {
-          "closed_lamports": {
-            "direct.reservation.v2.buy": 5192161,
-            "direct.reservation.v2.sell": 5192161
-          },
-          "recipient_deltas": {
-            "direct.epoch.v4": 0,
-            "order.page": 0,
-            "direct.reservation.v2.buy": -5192161,
-            "direct.reservation.v2.sell": -5192161,
-            "buy_owner": 5192160,
-            "sell_owner": 5192160,
-            "neutral_sink": 2
-          },
-          "conservation": "EXACT_ZERO_SUM"
-        }
-      },
-      "closed_rows": {
-        "direct.candidate.v3": [
-          "SubmitDirectCandidateV3 displacing",
-          "FinalizeDirectSelectionV3",
-          "SettleDirectV3",
-          "LapseUnselectedDirectV3",
-          "LapseSelectedDirectV3"
-        ],
-        "direct.window.v3": [
-          "SettleDirectV3",
-          "LapseUnselectedDirectV3",
-          "LapseSelectedDirectV3"
-        ],
-        "direct.work_budget.v1": [
-          "SettleDirectV3",
-          "LapseEmptyDirectV3",
-          "LapseUnselectedDirectV3",
-          "LapseSelectedDirectV3"
-        ],
-        "direct.reservation.v2": [
-          "SettleDirectV3",
-          "LapseEmptyDirectV3",
-          "LapseUnselectedDirectV3",
-          "LapseSelectedDirectV3",
-          "AbortUnfrozenDirectV4 one",
-          "AbortUnfrozenDirectV4 two"
-        ]
-      },
-      "rollback_observations": {
-        "FreezeDirectEpochV4 underfunded": 5,
-        "SubmitDirectCandidateV3 underfunded": 4,
-        "FinalizeDirectSelectionV3 wrong close recipient": 4,
-        "AbortUnfrozenDirectV4 wrong close recipient": 4
-      },
-      "structural_strand_lamports": {
-        "direct.epoch.v4": 5568001,
-        "artifact.direct_batch_policy_v3.final": 1559040,
-        "order.page": 28814401
-      },
-      "test_result": "PASS_3_OF_3_IN_EACH_OF_3_BANK_RUNS"
-    },
-    "source_endow": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "default_refusal_code": "0x79",
-      "default_release_available": false,
-      "rollback": "BYTE_AND_LAMPORT_EXACT",
-      "test_result": "PASS_EXPECTED_REFUSAL"
-    },
-    "blank_bank_market_creation": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "v2": {
-        "cu": 195057,
-        "bytes": 165,
-        "rent_lamports": 2039280
-      },
-      "v3": {
-        "cu": 214728,
-        "bytes": 319,
-        "rent_lamports": 3111120
-      },
-      "v4": {
-        "cu": 213333,
-        "bytes": 383,
-        "rent_lamports": 3556560
-      },
-      "test_result": "PASS_2_OF_2"
-    },
-    "order_reservation": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "place_cu": [
-        186012,
-        184042
-      ],
-      "cancel_cu": [
-        282998,
-        287671
-      ],
-      "test_result": "PASS_2_OF_2"
-    },
-    "withdraw_cash": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "cu": [
-        52100
-      ],
-      "test_result": "PASS"
-    },
-    "general_epoch": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
-      "suites": [
-        "general_epoch.rs",
-        "clear_lifecycle.rs"
-      ],
-      "init_epoch_cu": [
-        42557
-      ],
-      "place_order_single_cu": [
-        190534
-      ],
-      "place_order_portfolio_cu": [
-        191350
-      ],
-      "freeze_epoch_rows": [
-        {
-          "pages": 1,
-          "orders": 4,
-          "cu": [
-            233568
-          ]
-        },
-        {
-          "pages": 2,
-          "orders": 17,
-          "cu": [
-            478009
-          ]
-        },
-        {
-          "pages": 3,
-          "orders": 40,
-          "cu": [
-            717829,
-            717829
-          ]
-        }
-      ],
-      "test_result": "PASS_3_OF_3"
-    },
-    "clear_walk": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
-      "suites": [
-        "clear_walk.rs",
-        "clear_lifecycle.rs"
-      ],
-      "small_book_pass1_cu": [
-        279925,
-        291798,
-        297878
-      ],
-      "small_book_pass2_cu": [
-        290626
-      ],
-      "forty_order_pass1_cu": [
-        263493,
-        281623,
-        388428,
-        272490,
-        272674,
-        293356,
-        374921,
-        286747,
-        285260,
-        315952,
-        299635,
-        260500,
-        289123,
-        400428,
-        278490,
-        272674,
-        303856,
-        374921,
-        297247,
-        285260,
-        308452,
-        299621
-      ],
-      "forty_order_pass2_cu": [
-        306105,
-        273286,
-        306995,
-        286996,
-        309006,
-        306093,
-        273286,
-        306995,
-        286996,
-        308986
-      ],
-      "advance_slices_cu": [
-        177737,
-        177754,
-        177737,
-        177754
-      ],
-      "complete_cu": [
-        122869,
-        127085
-      ],
-      "request_heap_frame_262144_surcharge_cu": [
-        150
-      ],
-      "host_twin_verdict": "BANK_AND_HOST_BYTE_IDENTICAL_VERDICTS",
-      "test_result": "PASS_3_OF_3_AND_2_OF_2"
-    },
-    "candidate_selection": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
-      "suites": [
-        "candidate_selection.rs"
-      ],
-      "submit_candidate_cu": [
-        34102,
-        32592,
-        34102,
-        32592,
-        34099,
-        31105,
-        35605,
-        34102,
-        34102,
-        32592,
-        34099,
-        34102
-      ],
-      "write_feed_fills_cu": [
-        9653,
-        6653,
-        8153,
-        8153,
-        9653,
-        6653,
-        6653,
-        8153,
-        8153,
-        8153,
-        9653,
-        8153
-      ],
-      "write_feed_slices_cu": [
-        9894,
-        6894,
-        8394,
-        8394,
-        9894,
-        6894,
-        6894,
-        8394,
-        8394,
-        8394,
-        9894,
-        8394
-      ],
-      "seal_candidate_cu": [
-        44926,
-        45356,
-        43426,
-        48356,
-        53294,
-        64170,
-        43426,
-        43426,
-        48356,
-        53294,
-        43426
-      ],
-      "seal_candidate_displacing_cu": [
-        64170
-      ],
-      "finalize_selection_rows": [
-        {
-          "shape": "3_retained_2_verified_selects_winner",
-          "cu": [
-            49230
-          ]
-        },
-        {
-          "shape": "2_verified_beyond_128_bit_digest_tie",
-          "cu": [
-            39462
-          ]
-        },
-        {
-          "shape": "0_verified_honest_lapse",
-          "cu": [
-            20695
-          ]
-        }
-      ],
-      "complete_clear_work_cu": [
-        123431,
-        123431,
-        127931,
-        127931,
-        121931,
-        127931
-      ],
-      "test_result": "PASS_5_OF_5"
-    },
-    "entitled_clearing": {
-      "artifact_sha256": "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc",
-      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
-      "suites": [
-        "entitled_clearing.rs"
-      ],
-      "freeze_entitlement_cu": [
-        100052
-      ],
-      "entitle_slice_single_cu": [
-        204577
-      ],
-      "entitle_slice_portfolio_pair_cu": [
-        246173
-      ],
-      "settle_page_entitled_direct_slice_cu": [
-        54834
-      ],
-      "settle_page_entitled_portfolio_full_pair_cu": [
-        225739
-      ],
-      "bank_conservation": "POSITIONS_BYTE_EQUAL_IMPLIED_ALLOCATION_TOTAL_CASH_AND_EGGS_EXACT",
-      "reservation_archive": "ACTIVE_TO_ENTITLED_TO_CONSUMED_INITIAL_ENVELOPE_INTACT",
-      "test_result": "PASS_4_OF_4"
-    },
-    "source_archive_host": {
-      "artifact_sha256": null,
-      "tests_passed": 9,
-      "provider_ingestion": "NOT_EXERCISED_BY_DEFAULT_ELF",
-      "source_archive_bytes": 2560,
-      "source_archive_rent_lamports": 18708480
-    }
-  },
-  "projection": {
-    "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
-    "complete_liveness_policy": "NOT_EMITTED_STOP",
-    "maximum_raw_cu_with_requested_headroom": 1120000,
-    "resolution_work": {
-      "status": "PASS",
-      "routes": {
-        "begin": {
-          "measured_cu": 91356,
-          "required_headroom_cu": 114195,
-          "selected_limit_cu": 120000,
-          "external_fee_cap_lamports": 130000,
-          "keeper_reward_lamports": 230000,
-          "status": "PASS"
-        },
-        "fold_1": {
-          "measured_cu": 88433,
-          "required_headroom_cu": 110542,
-          "selected_limit_cu": 120000,
-          "external_fee_cap_lamports": 130000,
-          "keeper_reward_lamports": 230000,
-          "status": "PASS"
-        },
-        "fold_2": {
-          "measured_cu": 92341,
-          "required_headroom_cu": 115427,
-          "selected_limit_cu": 120000,
-          "external_fee_cap_lamports": 130000,
-          "keeper_reward_lamports": 230000,
-          "status": "PASS"
-        },
-        "fold_3": {
-          "measured_cu": 93276,
-          "required_headroom_cu": 116595,
-          "selected_limit_cu": 120000,
-          "external_fee_cap_lamports": 130000,
-          "keeper_reward_lamports": 230000,
-          "status": "PASS"
-        },
-        "fold_4": {
-          "measured_cu": 95721,
-          "required_headroom_cu": 119652,
-          "selected_limit_cu": 120000,
-          "external_fee_cap_lamports": 130000,
-          "keeper_reward_lamports": 230000,
-          "status": "PASS"
-        },
-        "finalize": {
-          "measured_cu": 164730,
-          "required_headroom_cu": 205913,
-          "selected_limit_cu": 210000,
-          "external_fee_cap_lamports": 220000,
-          "keeper_reward_lamports": 320000,
-          "status": "PASS"
-        },
-        "abort": {
-          "measured_cu": 46899,
-          "required_headroom_cu": 58624,
-          "selected_limit_cu": 60000,
-          "external_fee_cap_lamports": 70000,
-          "keeper_reward_lamports": 170000,
-          "status": "PASS"
-        }
-      },
-      "maximum_records": 32,
-      "fold_path_lamports": 7360000,
-      "success_rewards_lamports": 7680000,
-      "worst_abort_rewards_lamports": 7530000,
-      "spendable_reserve_lamports": 7680000,
-      "rent_principal_lamports": 10801920,
-      "persistent_reserve_lamports": 18481920,
-      "begin_external_lamports": 230000,
-      "payer_cold_outlay_lamports": 18711920,
-      "runtime_schedule_matches_policy": true
-    },
-    "resolution_work_batched": {
-      "status": "PASS",
-      "routes": {
-        "fold_batch_2": {
-          "measured_cu": 176213,
-          "required_headroom_cu": 220267,
-          "selected_limit_cu": 230000,
-          "external_fee_cap_lamports": 240000,
-          "keeper_reward_lamports": 340000,
-          "status": "PASS"
-        },
-        "fold_batch_4": {
-          "measured_cu": 331941,
-          "required_headroom_cu": 414927,
-          "selected_limit_cu": 420000,
-          "external_fee_cap_lamports": 430000,
-          "keeper_reward_lamports": 530000,
-          "status": "PASS"
-        },
-        "fold_batch_8": {
-          "measured_cu": 665845,
-          "required_headroom_cu": 832307,
-          "selected_limit_cu": 840000,
-          "external_fee_cap_lamports": 850000,
-          "keeper_reward_lamports": 950000,
-          "status": "PASS"
-        },
-        "fold_batch_12": {
-          "measured_cu": 929561,
-          "required_headroom_cu": 1161952,
-          "selected_limit_cu": 1170000,
-          "external_fee_cap_lamports": 1180000,
-          "keeper_reward_lamports": 1280000,
-          "status": "PASS"
-        }
-      },
-      "maximum_admitted_batch": 12,
-      "outcome_equality": "BYTE_IDENTICAL_TO_SINGLETON_TRANSACTIONS",
-      "mid_batch_invalid_fold": "WHOLE_TRANSACTION_REVERTED_BYTE_EXACT",
-      "cluster_packet_budget": "UNMODELED_BANK_TRANSPORT_ONLY",
-      "maximum_records": 32,
-      "fewest_transaction_plan": [
-        12,
-        12,
-        8
-      ],
-      "fold_transactions": 3,
-      "fold_path_lamports": 3510000,
-      "success_rewards_lamports": 3830000,
-      "worst_abort_rewards_lamports": 3680000,
-      "spendable_reserve_lamports": 3830000,
-      "rent_principal_lamports": 10801920,
-      "persistent_reserve_lamports": 14631920,
-      "begin_external_lamports": 230000,
-      "payer_cold_outlay_lamports": 14861920
-    },
-    "source_value_admission": {
-      "status": "FAIL_CLOSED_STOP",
-      "default_release_available": false,
-      "endow_refusal_code": "0x79",
-      "refusal_cu_not_priced_as_success": true
-    },
-    "direct_v2": {
-      "status": "STOP",
-      "select": {
-        "measured_cu": 226445,
-        "required_headroom_cu": 283057,
-        "selected_limit_cu": 290000,
-        "external_fee_cap_lamports": 300000,
-        "keeper_reward_lamports": 400000,
-        "status": "PASS"
-      },
-      "select_result": "COMPLETED_SELECTION_COMMITTED",
-      "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
-      "live_v3": false
-    },
-    "native_point_v3": {
-      "status": "PASS",
-      "degree_routes": [
-        {
-          "degree": 1,
-          "resolve": {
-            "measured_cu": 182848,
-            "required_headroom_cu": 228560,
-            "selected_limit_cu": 230000,
-            "external_fee_cap_lamports": 240000,
-            "keeper_reward_lamports": 340000,
-            "status": "PASS"
-          }
-        },
-        {
-          "degree": 2,
-          "resolve": {
-            "measured_cu": 191221,
-            "required_headroom_cu": 239027,
-            "selected_limit_cu": 240000,
-            "external_fee_cap_lamports": 250000,
-            "keeper_reward_lamports": 350000,
-            "status": "PASS"
-          }
-        },
-        {
-          "degree": 3,
-          "resolve": {
-            "measured_cu": 198115,
-            "required_headroom_cu": 247644,
-            "selected_limit_cu": 250000,
-            "external_fee_cap_lamports": 260000,
-            "keeper_reward_lamports": 360000,
-            "status": "PASS"
-          }
-        }
-      ]
-    },
-    "occupation_v4_monolithic": {
-      "status": "PASS",
-      "degree_routes": [
-        {
-          "degree": 1,
-          "initial": {
-            "measured_cu": 173062,
-            "required_headroom_cu": 216328,
-            "selected_limit_cu": 220000,
-            "external_fee_cap_lamports": 230000,
-            "keeper_reward_lamports": 330000,
-            "status": "PASS"
-          },
-          "retry": {
-            "measured_cu": 159802,
-            "required_headroom_cu": 199753,
-            "selected_limit_cu": 200000,
-            "external_fee_cap_lamports": 210000,
-            "keeper_reward_lamports": 310000,
-            "status": "PASS"
-          }
-        },
-        {
-          "degree": 2,
-          "initial": {
-            "measured_cu": 184232,
-            "required_headroom_cu": 230290,
-            "selected_limit_cu": 240000,
-            "external_fee_cap_lamports": 250000,
-            "keeper_reward_lamports": 350000,
-            "status": "PASS"
-          },
-          "retry": {
-            "measured_cu": 170972,
-            "required_headroom_cu": 213715,
-            "selected_limit_cu": 220000,
-            "external_fee_cap_lamports": 230000,
-            "keeper_reward_lamports": 330000,
-            "status": "PASS"
-          }
-        },
-        {
-          "degree": 3,
-          "initial": {
-            "measured_cu": 198163,
-            "required_headroom_cu": 247704,
-            "selected_limit_cu": 250000,
-            "external_fee_cap_lamports": 260000,
-            "keeper_reward_lamports": 360000,
-            "status": "PASS"
-          },
-          "retry": {
-            "measured_cu": 184903,
-            "required_headroom_cu": 231129,
-            "selected_limit_cu": 240000,
-            "external_fee_cap_lamports": 250000,
-            "keeper_reward_lamports": 350000,
-            "status": "PASS"
-          }
-        }
-      ],
-      "live_action": "MONOLITHIC_INITIAL_AND_RETRY_ADMITTED"
-    },
-    "direct_selection_v3": {
-      "status": "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP",
-      "admission_rows_derived": false,
-      "live_flags": "UNTOUCHED",
-      "measured_families": [
-        "direct_v3",
-        "direct_v3_close"
-      ],
-      "bank_runs": 3,
-      "cu_rows_reproducible": false,
-      "close_routes_measured": [
-        "AbortUnfrozenDirectV4 empty",
-        "AbortUnfrozenDirectV4 one",
-        "AbortUnfrozenDirectV4 two",
-        "FinalizeDirectSelectionV3",
-        "LapseEmptyDirectV3",
-        "LapseSelectedDirectV3",
-        "LapseUnselectedDirectV3",
-        "SettleDirectV3",
-        "SubmitDirectCandidateV3 displacing"
-      ],
-      "close_rollback_observations": [
-        "AbortUnfrozenDirectV4 wrong close recipient",
-        "FinalizeDirectSelectionV3 wrong close recipient",
-        "FreezeDirectEpochV4 underfunded",
-        "SubmitDirectCandidateV3 underfunded"
-      ],
-      "refundable_rows_sealed": [
-        "direct.candidate.v3",
-        "direct.reservation.v2",
-        "direct.window.v3",
-        "direct.work_budget.v1"
-      ],
-      "retired_blocking_id": "DIRECT.V3_CLOSE_EVIDENCE_UNSEALED",
-      "structural_strand_rows": [
-        "artifact.direct_batch_policy_v3.final",
-        "direct.epoch.v4",
-        "order.page"
-      ],
-      "structural_strand_rent_lamports_per_epoch": 35941440,
-      "decision_owner": "ember"
-    },
-    "general_clearing_walk": {
-      "status": "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP",
-      "admission_rows_derived": false,
-      "live_flags": "UNTOUCHED",
-      "measured_families": [
-        "general_epoch",
-        "clear_walk",
-        "candidate_selection",
-        "entitled_clearing"
-      ],
-      "decision_owner": "ember"
-    },
-    "terminal_status": "STOP",
-    "terminal_blocking_ids": [
-      "CLAIM.SUBLOT_FRAGMENT_NO_TOTAL_EXIT",
-      "DIRECT.ACCOUNT_REFUND_UNOWNED",
-      "DIRECT.CANDIDATE_RENT_PERSISTS",
-      "DIRECT.EMPTY_FROZEN_NO_LAPSE",
-      "DIRECT.EPOCH_RECEIPT_RENT_PERSISTS",
-      "DIRECT.POLICY_ARTIFACT_RENT_PERSISTS",
-      "HOARD.RESIDUAL_DISPOSITION_UNSELECTED",
-      "PROFILE.STORAGE_INVENTORY_INCOMPLETE",
-      "RENT.ACCOUNT_REFUND_UNOWNED",
-      "RENT.ARTIFACT_PREFUND_WINDFALL",
-      "SOURCE.DEFAULT_REGISTRY_EMPTY",
-      "SOURCE.NO_TERMINAL_RELEASE",
-      "TOKEN.OUTCOME_MINT_PERMANENT"
-    ]
+  "e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc": {
+   "path": "research/liveness-policy-profile/artifacts/e8ba31d582be3939/clutch_sbf.so",
+   "runtime_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
+   "evidence_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
+   "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
   }
+ },
+ "capture": {
+  "path": "research/liveness-policy-profile/captured-output.txt",
+  "sha256": "de357a3968904b84632a2bc016866534e490d189bbf4318b0a59f91b5deea9ab"
+ },
+ "source_blobs": {
+  "research/liveness-policy-profile/Cargo.toml": "8574e7693c1a85cdb68bf608c5cf4dcde178123b",
+  "research/liveness-policy-profile/Cargo.lock": "bec64120e485da3d41d80a034d6c5143545f86eb",
+  "research/liveness-policy-profile/src/main.rs": "4abf18121973fb512b859e62071bd0f978a5c8fa",
+  "programs/clutch-sbf/Cargo.lock": "959aeb4d10ee9717d5de92f3ca5b597ebc1d7e0c",
+  "programs/clutch-sbf/program/Cargo.toml": "c9c3b9340ffe54adcd6bee916b3b445c7ababd63",
+  "programs/clutch-sbf/program/src/instructions/resolution_work.rs": "6c1e176199559a7ae2e47b45aa4695263f19fc1b",
+  "programs/clutch-sbf/program/src/error.rs": "d606efd8fc4d0a95ac3e4987f433a45e8491e66a",
+  "programs/solana-layout/Cargo.toml": "d71e72f38d550d7727ac7fbc5370e4e4baa4f1e5",
+  "programs/solana-layout/Cargo.lock": "dd741afab8b7545564ccdbf128b40c02b7a807b3",
+  "programs/solana-reference/Cargo.toml": "488acf29bbb84ae3ec6717a91b83587c665a7526",
+  "programs/solana-reference/Cargo.lock": "942723d69d118a9e7a868bc569a9a72258d04679",
+  "crates/clutch-liveness/Cargo.toml": "99018c975a433ae05e952b4dd6fd89b2ea5b74d8",
+  "crates/clutch-batch/Cargo.toml": "778aa6e7b30993e4470b0218cb67959477b2b4ec",
+  "research/batch-policy-identity/Cargo.toml": "ff1100e838f9d6ec7f290134e2ad9d9280b3d417"
+ },
+ "source_trees": {
+  "programs/clutch-sbf/program/src": "28a64914d52a049f1408ac6ee4c0f043d63824f8",
+  "programs/solana-layout/src": "465e8dd432ed0dc0b924f8119fd8f4fd07596349",
+  "programs/solana-reference/src": "85d59931579eddc8cd5f3f80a86b8dafc876e85e",
+  "crates/clutch-liveness/src": "38f21a9a8a931970b261078b996fcf00b68ebd9a",
+  "crates/clutch-batch/src": "c1f3c614630b186a9d13b6536010f8894c09b471",
+  "research/batch-policy-identity/src": "33b070c451434cfee8c24bf23a52d7fae8a4be42"
+ },
+ "test_blobs": {
+  "programs/clutch-sbf/svm-tests/Cargo.lock": "2a8392b20ba0e1a23ba471737a0b2196b30fa26d",
+  "programs/clutch-sbf/svm-tests/Cargo.toml": "26e3c16e95890d5e79a67b682e9b6ac5f6556263",
+  "programs/clutch-sbf/svm-tests/tests/artifact_transport.rs": "9c3436d0c3cd8dc28c72e69b393912faab9097e1",
+  "programs/clutch-sbf/svm-tests/tests/blank_bank_lifecycle.rs": "6cb8b99cc1d9b1d542bcccd8372c8afd2808d16b",
+  "programs/clutch-sbf/svm-tests/tests/candidate_selection.rs": "41867ff0daf7365c6c612b3ed9c5ee823239d5a1",
+  "programs/clutch-sbf/svm-tests/tests/clear_lifecycle.rs": "3d1f015e5dbb3ebbf54082062623e69ed1ee5658",
+  "programs/clutch-sbf/svm-tests/tests/clear_walk.rs": "1f16bf0dd69eddf6941d521e05812c58ead98828",
+  "programs/clutch-sbf/svm-tests/tests/collateral_leg.rs": "10cbc4891eb93cc71e97a931a8f8e6f6a7e99f47",
+  "programs/clutch-sbf/svm-tests/tests/direct_selection_v2.rs": "aa7f85138f51beecf27c0f8a4417b77829cb0cc0",
+  "programs/clutch-sbf/svm-tests/tests/direct_selection_v3.rs": "69f064916d913a8b99612aca0ee68d40bd4e0ebc",
+  "programs/clutch-sbf/svm-tests/tests/entitled_clearing.rs": "5e107ae4481e5bd8c7e14ad93f9567d315978965",
+  "programs/clutch-sbf/svm-tests/tests/general_epoch.rs": "46709b2eea652931b50f39e665484740e2ef3cdc",
+  "programs/clutch-sbf/svm-tests/tests/native_resolution.rs": "1c330494bf68dec713570a740b5dbf730e35d77d",
+  "programs/clutch-sbf/svm-tests/tests/order_reservation.rs": "77658748b3c7777eb181446052f1172024f1cc59",
+  "programs/clutch-sbf/svm-tests/tests/prefund_creation.rs": "528921e972396f37bde27bb5873db51c1f8e6180",
+  "programs/clutch-sbf/svm-tests/tests/resolution_work.rs": "dc7381db6bfa493b8a37ebfe9f77910ea6459eb7",
+  "programs/clutch-sbf/svm-tests/tests/resolution_work_batch.rs": "4a5e6570f0d664c65353c0586f585fed172ad662",
+  "programs/clutch-sbf/svm-tests/tests/resolution_work_common/mod.rs": "e62c0c4ba88fe4a4b31c7b498dcad6850306ea7f",
+  "programs/clutch-sbf/svm-tests/tests/source_archive.rs": "7450f45216a63800478416a93b2738735a71eab5",
+  "programs/clutch-sbf/svm-tests/tests/terminal_closure.rs": "0ff62b32ee5d160c771173eadd6ff356164ad2f6"
+ },
+ "test_trees": {
+  "programs/clutch-sbf/svm-tests/src": "22adee1330173ca734cdb22b433a6a8fd75993c8",
+  "programs/clutch-sbf/svm-tests/tests": "c882dfcba288db42c019073eec5767bb19446f9f"
+ },
+ "evidence_files": {
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/RUNTIME_ARTIFACT_AUDIT.md": {
+   "bytes": 24049,
+   "sha256": "1b15a391fa3ca5a6daede515831957dd8f7bec7e99410eb7c42723a8e7a5b005"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/backend-stack-diagnostics.txt": {
+   "bytes": 12914,
+   "sha256": "4f7219918054d871bf75fe8faa9f29d5005da76a3aadf70e29fbbd4998290895"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/dependencies.tsv": {
+   "bytes": 3953,
+   "sha256": "eed650fb0b93d8d97042c44123264c47e1dc0566a391a3a949a06a3102842b1b"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/elf-summary.txt": {
+   "bytes": 233,
+   "sha256": "d49070361ac191190137c8874754dda475df1c98451981f5619592aef1ddf4a4"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/frame-summary.txt": {
+   "bytes": 284,
+   "sha256": "3f886620c37b4ed2c12c0e04b98f4c2f8f88cfcf7ba09ff2c6a75a9601662488"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/metadata.json": {
+   "bytes": 128514,
+   "sha256": "b1bfb4504f4466385e3a15cae72707528301eb85bc173fafbcaa6dca28794545"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/registry-source-verification.tsv": {
+   "bytes": 5206,
+   "sha256": "c3a8c19b470713e828b08b56f3cedfe4089c0a704c457e15178c24ecd8cfad71"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/source-files.txt": {
+   "bytes": 5357,
+   "sha256": "e3d481113b3112cc642c156761dd47ba5ca666fb848b4cf59d41c6b856ca7340"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/stack-summary.txt": {
+   "bytes": 107,
+   "sha256": "67e97abca540f499ecff2738cffc0f16988f5f7a3ee23c10afba3b7be91d143b"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/upstream-SHA256SUMS": {
+   "bytes": 9348,
+   "sha256": "1e77211e5d1080e562ae53d12fccbf616b7a9eb347de22256868d2453da8c913"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/vendor.diff": {
+   "bytes": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/artifact_transport.log": {
+   "bytes": 745,
+   "sha256": "1858e4766cfcb99b4c1b19067e81199a47f5aca65ea4391b35f3565963c216f4"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/blank_bank_lifecycle.log": {
+   "bytes": 764,
+   "sha256": "d11954cf278cd779eb2e61a486060e17b362ad0ba741d963e56fddd9bc92fcec"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/candidate_selection.log": {
+   "bytes": 2653,
+   "sha256": "7124011422ec9aa1748bcae65c52ab01877f2032b67b2a785e969d22eaa905d3"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/clear_lifecycle.log": {
+   "bytes": 2795,
+   "sha256": "5d46f1105c483fb0221f58ed86ad53ac0819f09e5ec79a3d5fc9ff435251df3f"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/clear_walk.log": {
+   "bytes": 768,
+   "sha256": "0a15e81ed2c17642199f6688e28fd5491e2159b9395fb0738f1efc0b71f5d9e2"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/collateral_leg.log": {
+   "bytes": 3250,
+   "sha256": "f172bf999e3c7a0c4bfa01ad494b3103697d3c65c39b01ab37b3f4eaef3356cf"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/direct_selection_v2.log": {
+   "bytes": 763,
+   "sha256": "3b9d9c86922ee76b6586afcbc2a3e19fde8fcb12ff99f10b38931d84942c5585"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/direct_selection_v3.log": {
+   "bytes": 22257,
+   "sha256": "7a61e63bb8bdb6a78200d56157e42ba3dfa54d4417a2817f5ba03de221fdc56c"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/direct_selection_v3_run2.log": {
+   "bytes": 22257,
+   "sha256": "53200a63978519f3d2e62f9edfb6c611a63d95aebbfe6947c3bcfd36609b6036"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/direct_selection_v3_run3.log": {
+   "bytes": 22257,
+   "sha256": "ab75ca16280d2813f1d5e156fe436599b9937d6fd16fa940c207fe282dc73c68"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/entitled_clearing.log": {
+   "bytes": 747,
+   "sha256": "46998795b81e0abc4e7c104c737959c27b735aed1a46db9cc97e614365043122"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/general_epoch.log": {
+   "bytes": 681,
+   "sha256": "ba8d546a8ce4e613c6109c79f3b6d1f7b8601c2706938fd2cc4da811e4a5f76b"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/native_resolution.log": {
+   "bytes": 2580,
+   "sha256": "f04bb778b0bd74d6693838db818f42506b3e8324e3d25202a5cdc1949b901e3e"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/order_reservation.log": {
+   "bytes": 494,
+   "sha256": "d8a5f3c7914f448edced9bde8ed69f7a8108e77992b05ef04b1e73aed87a3ef2"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/prefund_creation.log": {
+   "bytes": 1368,
+   "sha256": "8c6435e194de07ec0701cef552baf85b308863b08ebfbae0da3ed3ea58079871"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/resolution_work.log": {
+   "bytes": 964,
+   "sha256": "5f8540a17a57159cfd2ed2f59d2144471a59516b8826432094535b8b9681ff5f"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/resolution_work_batch.log": {
+   "bytes": 976,
+   "sha256": "4b6b6afcc5905507e55510d73a9c8cb6e68bebc6e9ecc97633c4b32cfca7b108"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/source_archive.log": {
+   "bytes": 952,
+   "sha256": "6dbb2d7a268fa088f9b3b4d6017152c5708e27cea32db6261b0368c1acabbd1f"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/terminal_closure.log": {
+   "bytes": 803,
+   "sha256": "a3f57f61057ef6e8728917edb91c823a6dc6ddf8207b477b7423acb869b09b3c"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/sbf-build-1.log": {
+   "bytes": 30677,
+   "sha256": "dc3ce9689bc117bc20016c41a66b5976915b5afc566b498826b39296a4151c91"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/sbf-build-2.log": {
+   "bytes": 30677,
+   "sha256": "72f6561c2d429b6d2bd772b0e2dac5c07daf806ac66cca64dc80a5f079bc8663"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/sbf-build-crosspath.log": {
+   "bytes": 30974,
+   "sha256": "f875b33d8ced6e430832e262b6d59b55ffb06f81db52a3a3d73c5c1ec9689b8f"
+  },
+  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/sbf-build-relocated.log": {
+   "bytes": 30677,
+   "sha256": "620692fc03ae546b77de38981fde2dccdb6600a1f3ff4de94fcd4024024759a1"
+  }
+ },
+ "rent": {
+  "lamports_per_byte_year": 3480,
+  "exemption_threshold_numerator": 2,
+  "exemption_threshold_denominator": 1,
+  "effective_lamports_per_byte": 6960,
+  "account_storage_overhead_bytes": 128
+ },
+ "accounts": {
+  "artifact.batch_policy.final": {
+   "bytes": 64,
+   "rent_lamports": 1336320
+  },
+  "artifact.batch_policy.stage": {
+   "bytes": 200,
+   "rent_lamports": 2282880
+  },
+  "artifact.grid.final": {
+   "bytes": 589,
+   "rent_lamports": 4990320
+  },
+  "artifact.grid.stage": {
+   "bytes": 725,
+   "rent_lamports": 5936880
+  },
+  "artifact.policy.final": {
+   "bytes": 266,
+   "rent_lamports": 2742240
+  },
+  "artifact.policy.stage": {
+   "bytes": 402,
+   "rent_lamports": 3688800
+  },
+  "artifact.terms.final": {
+   "bytes": 1656,
+   "rent_lamports": 12416640
+  },
+  "artifact.terms.stage": {
+   "bytes": 1792,
+   "rent_lamports": 13363200
+  },
+  "direct.candidate.v2": {
+   "bytes": 440,
+   "rent_lamports": 3953280
+  },
+  "direct.epoch.v3": {
+   "bytes": 344,
+   "rent_lamports": 3285120
+  },
+  "direct.final_pot": {
+   "bytes": 262,
+   "rent_lamports": 2714400
+  },
+  "direct.receipt": {
+   "bytes": 217,
+   "rent_lamports": 2401200
+  },
+  "direct.window.v1": {
+   "bytes": 456,
+   "rent_lamports": 4064640
+  },
+  "epoch.window": {
+   "bytes": 231,
+   "rent_lamports": 2498640
+  },
+  "feed": {
+   "bytes": 124,
+   "rent_lamports": 1753920
+  },
+  "hoard": {
+   "bytes": 108,
+   "rent_lamports": 1642560
+  },
+  "kernel": {
+   "bytes": 1255,
+   "rent_lamports": 9625680
+  },
+  "legacy.candidate": {
+   "bytes": 337,
+   "rent_lamports": 3236400
+  },
+  "legacy.candidate_feed": {
+   "bytes": 6266,
+   "rent_lamports": 44502240
+  },
+  "legacy.clear_work": {
+   "bytes": 50054,
+   "rent_lamports": 349266720
+  },
+  "legacy.epoch.v2": {
+   "bytes": 328,
+   "rent_lamports": 3173760
+  },
+  "market": {
+   "bytes": 726,
+   "rent_lamports": 5943840
+  },
+  "order.page": {
+   "bytes": 4012,
+   "rent_lamports": 28814400
+  },
+  "order.reservation.v1": {
+   "bytes": 570,
+   "rent_lamports": 4858080
+  },
+  "position": {
+   "bytes": 220,
+   "rent_lamports": 2422080
+  },
+  "profile": {
+   "bytes": 100,
+   "rent_lamports": 1586880
+  },
+  "realm": {
+   "bytes": 70,
+   "rent_lamports": 1378080
+  },
+  "replay": {
+   "bytes": 84,
+   "rent_lamports": 1475520
+  },
+  "resolution.reserve.v1": {
+   "bytes": 0,
+   "rent_lamports": 890880
+  },
+  "resolution.v2": {
+   "bytes": 165,
+   "rent_lamports": 2039280
+  },
+  "resolution.v3": {
+   "bytes": 319,
+   "rent_lamports": 3111120
+  },
+  "resolution.v4": {
+   "bytes": 383,
+   "rent_lamports": 3556560
+  },
+  "resolution.work.v1": {
+   "bytes": 1296,
+   "rent_lamports": 9911040
+  },
+  "source.archive": {
+   "bytes": 2560,
+   "rent_lamports": 18708480
+  },
+  "source.spec": {
+   "bytes": 292,
+   "rent_lamports": 2923200
+  },
+  "supply_ledger": {
+   "bytes": 333,
+   "rent_lamports": 3208560
+  },
+  "token.hoard_immutable_owner": {
+   "bytes": 170,
+   "rent_lamports": 2074080
+  },
+  "token.outcome_mint": {
+   "bytes": 82,
+   "rent_lamports": 1461600
+  }
+ },
+ "policy_inputs": {
+  "cu_headroom_numerator": 5,
+  "cu_headroom_denominator": 4,
+  "cu_rounding_quantum": 10000,
+  "transaction_cu_ceiling": 1400000,
+  "base_transaction_fee_cap_lamports": 10000,
+  "micro_lamports_per_cu_cap": 1000000,
+  "keeper_surplus_lamports": 100000
+ },
+ "resolution_work": {
+  "maximum_records": 32,
+  "maximum_fold_width": 4,
+  "accounts": {
+   "begin": 11,
+   "fold": 8,
+   "finalize_base": 15,
+   "abort": 8
+  },
+  "runtime_reward_schedule": {
+   "fold_base_lamports": 1160000,
+   "fold_per_record_lamports": 0,
+   "finalize_lamports": 1510000,
+   "abort_lamports": 860000
+  }
+ },
+ "measurements": {
+  "resolution_work": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "fold_widths": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "begin_cu": [
+    88041,
+    85673,
+    91357,
+    88039,
+    86225
+   ],
+   "fold_1_cu": [
+    84765,
+    82402
+   ],
+   "fold_2_cu": [
+    89374,
+    92342
+   ],
+   "fold_3_cu": [
+    93277
+   ],
+   "fold_4_cu": [
+    95722
+   ],
+   "finalize_cu": [
+    164731
+   ],
+   "abort_cu": [
+    46900
+   ],
+   "monolithic_v4_cu": [
+    182859
+   ],
+   "test_result": "PASS_4_OF_4"
+  },
+  "resolution_work_batch": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "batch_sizes": [
+    2,
+    4,
+    8,
+    12
+   ],
+   "begin_cu": [
+    91357,
+    86225,
+    86463,
+    80697
+   ],
+   "fold_batch_2_cu": [
+    176215
+   ],
+   "fold_batch_4_cu": [
+    331945
+   ],
+   "fold_batch_8_cu": [
+    665853,
+    665853
+   ],
+   "fold_batch_12_cu": [
+    929573
+   ],
+   "singleton_fold_cu": [
+    88081,
+    88434,
+    82949,
+    83297,
+    83297,
+    83302,
+    83189,
+    83537,
+    83537,
+    83537,
+    83537,
+    83537,
+    83537,
+    83542,
+    77420,
+    77768,
+    77768,
+    77768,
+    77768,
+    77768,
+    77768,
+    77768,
+    77768,
+    77768,
+    77768,
+    77773
+   ],
+   "outcome_equality": "BYTE_IDENTICAL_TO_SINGLETON_TRANSACTIONS",
+   "mid_batch_invalid_fold": "WHOLE_TRANSACTION_REVERTED_BYTE_EXACT",
+   "test_result": "PASS_2_OF_2"
+  },
+  "native_point_v3": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "degree_rows": [
+    {
+     "degree": 1,
+     "resolve_cu": 182848,
+     "retry_cu": 169579,
+     "internal_redeem_cu": 153041
+    },
+    {
+     "degree": 2,
+     "resolve_cu": 191221,
+     "retry_cu": 177952,
+     "internal_redeem_cu": 155084
+    },
+    {
+     "degree": 3,
+     "resolve_cu": 198115,
+     "retry_cu": 184846,
+     "internal_redeem_cu": 153474
+    }
+   ],
+   "test_result": "PASS"
+  },
+  "native_bearer_redeem": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "degree_rows": [
+    {
+     "degree": 1,
+     "external_redeem_cu": 137272
+    },
+    {
+     "degree": 2,
+     "external_redeem_cu": 139072
+    },
+    {
+     "degree": 3,
+     "external_redeem_cu": 136777
+    }
+   ],
+   "test_result": "PASS"
+  },
+  "occupation_v4": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "degree_rows": [
+    {
+     "degree": 1,
+     "initial_cu": 173062,
+     "retry_cu": 159802,
+     "internal_redeem_cu": 151755,
+     "external_redeem_cu": 135910
+    },
+    {
+     "degree": 2,
+     "initial_cu": 184232,
+     "retry_cu": 170972,
+     "internal_redeem_cu": 153798,
+     "external_redeem_cu": 137710
+    },
+    {
+     "degree": 3,
+     "initial_cu": 198163,
+     "retry_cu": 184903,
+     "internal_redeem_cu": 156688,
+     "external_redeem_cu": 139915
+    }
+   ],
+   "span_1_initial_cu": [
+    180050,
+    173368,
+    177549
+   ],
+   "span_2_initial_cu": [
+    173556,
+    189300,
+    190856
+   ],
+   "statistic_7_initial_cu": 182709,
+   "test_result": "PASS"
+  },
+  "direct_v2": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "init_cu": [
+    35543
+   ],
+   "freeze_cu": [
+    357876
+   ],
+   "submit_cu": [
+    173572,
+    174674,
+    182466,
+    190103,
+    185710
+   ],
+   "select_cu": [
+    226444
+   ],
+   "select_result": "COMPLETED_SELECTION_COMMITTED",
+   "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
+   "test_result": "PASS_2_OF_2"
+  },
+  "source_endow": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "default_refusal_code": "0x79",
+   "default_release_available": false,
+   "rollback": "BYTE_AND_LAMPORT_EXACT",
+   "test_result": "PASS_EXPECTED_REFUSAL"
+  },
+  "blank_bank_market_creation": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "v2": {
+    "cu": 192048,
+    "bytes": 165,
+    "rent_lamports": 2039280
+   },
+   "v3": {
+    "cu": 214719,
+    "bytes": 319,
+    "rent_lamports": 3111120
+   },
+   "v4": {
+    "cu": 213324,
+    "bytes": 383,
+    "rent_lamports": 3556560
+   },
+   "test_result": "PASS_2_OF_2"
+  },
+  "order_reservation": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "place_cu": [
+    186007,
+    184037
+   ],
+   "cancel_cu": [
+    282988,
+    287661
+   ],
+   "test_result": "PASS_2_OF_2"
+  },
+  "withdraw_cash": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "cu": [
+    52091
+   ],
+   "test_result": "PASS"
+  },
+  "general_epoch": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "general_epoch.rs",
+    "clear_lifecycle.rs"
+   ],
+   "init_epoch_cu": [
+    42699
+   ],
+   "place_order_single_cu": [
+    192029
+   ],
+   "place_order_portfolio_cu": [
+    194345
+   ],
+   "freeze_epoch_rows": [
+    {
+     "pages": 1,
+     "orders": 4,
+     "cu": [
+      233564
+     ]
+    },
+    {
+     "pages": 2,
+     "orders": 17,
+     "cu": [
+      478005
+     ]
+    },
+    {
+     "pages": 3,
+     "orders": 40,
+     "cu": [
+      717825,
+      717825
+     ]
+    }
+   ],
+   "test_result": "PASS_3_OF_3"
+  },
+  "clear_walk": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "clear_walk.rs",
+    "clear_lifecycle.rs"
+   ],
+   "small_book_pass1_cu": [
+    279925,
+    293298,
+    299378
+   ],
+   "small_book_pass2_cu": [
+    290626
+   ],
+   "forty_order_pass1_cu": [
+    260493,
+    280123,
+    391428,
+    272490,
+    268174,
+    305356,
+    370421,
+    286747,
+    285260,
+    308452,
+    302635,
+    260500,
+    287623,
+    391428,
+    276990,
+    268174,
+    297856,
+    371921,
+    286747,
+    285260,
+    311452,
+    301121
+   ],
+   "forty_order_pass2_cu": [
+    306105,
+    273286,
+    306995,
+    286996,
+    309006,
+    306093,
+    273286,
+    306995,
+    286996,
+    308986
+   ],
+   "advance_slices_cu": [
+    177731,
+    177748,
+    177731,
+    177748
+   ],
+   "complete_cu": [
+    122865,
+    127081
+   ],
+   "request_heap_frame_262144_surcharge_cu": [
+    150
+   ],
+   "host_twin_verdict": "BANK_AND_HOST_BYTE_IDENTICAL_VERDICTS",
+   "test_result": "PASS_3_OF_3_AND_2_OF_2"
+  },
+  "candidate_selection": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "candidate_selection.rs"
+   ],
+   "submit_candidate_cu": [
+    34241,
+    32731,
+    34241,
+    32731,
+    34238,
+    31244,
+    35744,
+    34241,
+    34241,
+    32731,
+    34238,
+    34241
+   ],
+   "write_feed_fills_cu": [
+    9647,
+    6647,
+    8147,
+    8147,
+    9647,
+    6647,
+    6647,
+    8147,
+    8147,
+    8147,
+    9647,
+    8147
+   ],
+   "write_feed_slices_cu": [
+    9888,
+    6888,
+    8388,
+    8388,
+    9888,
+    6888,
+    6888,
+    8388,
+    8388,
+    8388,
+    9888,
+    8388
+   ],
+   "seal_candidate_cu": [
+    44924,
+    45354,
+    43424,
+    48354,
+    53292,
+    64168,
+    43424,
+    43424,
+    48354,
+    53292,
+    43424
+   ],
+   "seal_candidate_displacing_cu": [
+    64168
+   ],
+   "finalize_selection_rows": [
+    {
+     "shape": "3_retained_2_verified_selects_winner",
+     "cu": [
+      49228
+     ]
+    },
+    {
+     "shape": "2_verified_beyond_128_bit_digest_tie",
+     "cu": [
+      39465
+     ]
+    },
+    {
+     "shape": "0_verified_honest_lapse",
+     "cu": [
+      20693
+     ]
+    }
+   ],
+   "complete_clear_work_cu": [
+    123427,
+    123427,
+    127927,
+    127927,
+    121927,
+    127927
+   ],
+   "test_result": "PASS_5_OF_5"
+  },
+  "entitled_clearing": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "entitled_clearing.rs"
+   ],
+   "freeze_entitlement_cu": [
+    100158
+   ],
+   "entitle_slice_single_cu": [
+    210607
+   ],
+   "entitle_slice_portfolio_pair_cu": [
+    243518
+   ],
+   "settle_page_entitled_direct_slice_cu": [
+    53330
+   ],
+   "settle_page_entitled_portfolio_full_pair_cu": [
+    234735
+   ],
+   "bank_conservation": "POSITIONS_BYTE_EQUAL_IMPLIED_ALLOCATION_TOTAL_CASH_AND_EGGS_EXACT",
+   "reservation_archive": "ACTIVE_TO_ENTITLED_TO_CONSUMED_INITIAL_ENVELOPE_INTACT",
+   "test_result": "PASS_4_OF_4"
+  },
+  "direct_v3": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "direct_selection_v3.rs"
+   ],
+   "bank_runs": 3,
+   "cu_spread_source": "PDA_BUMP_SEARCH_1500_CU_QUANTUM_OVER_RANDOM_FIXTURE_KEYPAIRS",
+   "init_epoch_cu": [
+    41226,
+    41226,
+    41226
+   ],
+   "init_order_page_cu": [
+    221020,
+    221020,
+    221020
+   ],
+   "place_order_buy_cu": [
+    200154,
+    198654,
+    198654
+   ],
+   "place_order_sell_cu": [
+    210180,
+    198180,
+    199680
+   ],
+   "freeze_epoch_cu": [
+    382784,
+    379784,
+    379784
+   ],
+   "begin_verification_cu": [
+    23596,
+    23596,
+    23596
+   ],
+   "finalize_selection_cu": [
+    206273,
+    203273,
+    203273
+   ],
+   "settle_cu": [
+    179047,
+    165547,
+    167047
+   ],
+   "lapse_empty_cu": [
+    153470,
+    156470,
+    153470
+   ],
+   "lapse_unselected_cu": [
+    176551,
+    178051,
+    166051
+   ],
+   "lapse_selected_cu": [
+    173846,
+    176846,
+    175346
+   ],
+   "submit_candidate_rows": [
+    {
+     "price": 2000,
+     "disposition": "RETAINED",
+     "cu": [
+      173838,
+      170848,
+      170838
+     ]
+    },
+    {
+     "price": 5000,
+     "disposition": "RETAINED",
+     "cu": [
+      178754,
+      175772,
+      175754
+     ]
+    },
+    {
+     "price": 4000,
+     "disposition": "RETAINED",
+     "cu": [
+      197246,
+      194264,
+      194246
+     ]
+    },
+    {
+     "price": 6000,
+     "disposition": "REPLACEMENT_DISPLACING_THE_WORST",
+     "cu": [
+      202097,
+      198960,
+      199097
+     ]
+    },
+    {
+     "price": 3000,
+     "disposition": "NONCOMPETITIVE_NO_STATE",
+     "cu": [
+      188553,
+      185553,
+      185553
+     ]
+    }
+   ],
+   "submit_candidate_max_cu": [
+    202097,
+    198960,
+    199097
+   ],
+   "verify_candidate_rows": [
+    {
+     "index": 0,
+     "cu": [
+      151358,
+      151358,
+      151358
+     ]
+    },
+    {
+     "index": 1,
+     "cu": [
+      149858,
+      161858,
+      149858
+     ]
+    },
+    {
+     "index": 2,
+     "cu": [
+      161858,
+      149858,
+      161858
+     ]
+    }
+   ],
+   "abort_unfrozen_rows": [
+    {
+     "reservations": 0,
+     "cu": [
+      10393,
+      10393,
+      10393
+     ]
+    },
+    {
+     "reservations": 1,
+     "cu": [
+      140128,
+      138628,
+      138628
+     ]
+    },
+    {
+     "reservations": 2,
+     "cu": [
+      151054,
+      145054,
+      154054
+     ]
+    }
+   ],
+   "test_result": "PASS_3_OF_3_IN_EACH_OF_3_BANK_RUNS"
+  },
+  "terminal_closure": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "terminal_closure.rs"
+   ],
+   "intents": [
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67
+   ],
+   "walks": {
+    "cleared_epoch": {
+     "machinery_inventory_lamports": 531652377,
+     "reclaimed_lamports": 531639600,
+     "burned_at_frozen_sink_lamports": 12777,
+     "residual_lamports": 1336320,
+     "residual_disposition": "DECLARED_PERMANENT_BATCH_POLICY_ARTIFACT",
+     "conservation": "EXACT_INVENTORY_EQUALS_RECLAIMED_PLUS_BURNED"
+    },
+    "lapsed_epoch": {
+     "machinery_inventory_lamports": 47167920,
+     "reclaimed_lamports": 47167920,
+     "burned_at_frozen_sink_lamports": 0,
+     "unregistered_residual_lamports": 47738640,
+     "residual_disposition": "UNLEDGERED_CANDIDATE_PAIR_UNCLOSABLE_BY_DESIGN",
+     "conservation": "EXACT_INVENTORY_EQUALS_RECLAIMED_PLUS_BURNED"
+    }
+   },
+   "per_route_cu": "NOT_LABELLED_BY_SUITE_NO_ROW_DERIVED",
+   "funding_ledger_optional_at_creation": true,
+   "release_is_owner_signed": true,
+   "closes_are_permissionless": true,
+   "test_result": "PASS_2_OF_2"
+  },
+  "source_archive_host": {
+   "artifact_sha256": null,
+   "tests_passed": 9,
+   "provider_ingestion": "NOT_EXERCISED_BY_DEFAULT_ELF",
+   "source_archive_bytes": 2560,
+   "source_archive_rent_lamports": 18708480
+  },
+  "direct_v3_close": {
+   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "direct_selection_v3.rs"
+   ],
+   "bank_runs": 3,
+   "runs_agree_exactly": true,
+   "routes": {
+    "SubmitDirectCandidateV3 displacing": {
+     "closed_lamports": {
+      "direct.candidate.v3.displaced": 4287361
+     },
+     "recipient_deltas": {
+      "direct.candidate.v3.displaced": -4287361,
+      "direct.candidate.v3.admitted": 4287360,
+      "submitter": 0,
+      "neutral_sink": 1
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    },
+    "FinalizeDirectSelectionV3": {
+     "closed_lamports": {
+      "direct.candidate.v3.loser0": 4287361,
+      "direct.candidate.v3.loser1": 4287361
+     },
+     "recipient_deltas": {
+      "direct.candidate.v3.loser0": -4287361,
+      "direct.candidate.v3.loser1": -4287361,
+      "direct.receipt": 2401200,
+      "direct.final_pot": 2714400,
+      "direct.work_budget.v1": -9000,
+      "direct.window.v3": 0,
+      "direct.epoch.v4": 0,
+      "submitter": 8574720,
+      "sponsor": 0,
+      "keeper": -5106600,
+      "neutral_sink": 2
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    },
+    "SettleDirectV3": {
+     "closed_lamports": {
+      "direct.window.v3": 5289608,
+      "direct.work_budget.v1": 2629961,
+      "direct.reservation.v2.buy": 5192161,
+      "direct.reservation.v2.sell": 5192161,
+      "direct.candidate.v3.winner": 4287361,
+      "direct.receipt": 2401201,
+      "direct.final_pot": 2714401
+     },
+     "recipient_deltas": {
+      "submitter": 9576960,
+      "sponsor": 2618960,
+      "keeper": 5126600,
+      "buy_owner": 5192160,
+      "sell_owner": 5192160,
+      "neutral_sink": 14
+     },
+     "conservation": "EXACT_CLOSED_EQUALS_RECIPIENTS"
+    },
+    "LapseEmptyDirectV3": {
+     "closed_lamports": {
+      "direct.work_budget.v1": 2664961,
+      "direct.reservation.v2.buy": 5192161,
+      "direct.reservation.v2.sell": 5192161
+     },
+     "recipient_deltas": {
+      "direct.epoch.v4": 0,
+      "order.page": 0,
+      "direct.window.v3": 0,
+      "direct.work_budget.v1": -2664961,
+      "direct.reservation.v2.buy": -5192161,
+      "direct.reservation.v2.sell": -5192161,
+      "submitter": 0,
+      "sponsor": 2651960,
+      "keeper": 13000,
+      "buy_owner": 5192160,
+      "sell_owner": 5192160,
+      "neutral_sink": 3
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    },
+    "LapseUnselectedDirectV3": {
+     "closed_lamports": {
+      "direct.window.v3": 5289601,
+      "direct.work_budget.v1": 2664961,
+      "direct.reservation.v2.buy": 5192161,
+      "direct.reservation.v2.sell": 5192161,
+      "direct.candidate.v3": 4287361
+     },
+     "recipient_deltas": {
+      "direct.epoch.v4": 0,
+      "order.page": 0,
+      "direct.window.v3": -5289601,
+      "direct.work_budget.v1": -2664961,
+      "direct.reservation.v2.buy": -5192161,
+      "direct.reservation.v2.sell": -5192161,
+      "direct.candidate.v3": -4287361,
+      "submitter": 9576960,
+      "sponsor": 2651960,
+      "keeper": 13000,
+      "buy_owner": 5192160,
+      "sell_owner": 5192160,
+      "neutral_sink": 5
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    },
+    "LapseSelectedDirectV3": {
+     "closed_lamports": {
+      "direct.window.v3": 5289601,
+      "direct.work_budget.v1": 2643961,
+      "direct.reservation.v2.buy": 5192161,
+      "direct.reservation.v2.sell": 5192161,
+      "direct.candidate.v3": 4287361,
+      "direct.receipt": 2401201,
+      "direct.final_pot": 2714401
+     },
+     "recipient_deltas": {
+      "direct.epoch.v4": 0,
+      "order.page": 0,
+      "direct.window.v3": -5289601,
+      "direct.work_budget.v1": -2643961,
+      "direct.reservation.v2.buy": -5192161,
+      "direct.reservation.v2.sell": -5192161,
+      "direct.candidate.v3": -4287361,
+      "direct.receipt": -2401201,
+      "direct.final_pot": -2714401,
+      "submitter": 9576960,
+      "sponsor": 2630960,
+      "keeper": 5128600,
+      "buy_owner": 5192160,
+      "sell_owner": 5192160,
+      "neutral_sink": 7
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    },
+    "AbortUnfrozenDirectV4 empty": {
+     "closed_lamports": {
+      "reservation_prefix": 0
+     },
+     "recipient_deltas": {
+      "direct.epoch.v4": 0,
+      "order.page": 0,
+      "direct.reservation.v2.buy": 0,
+      "direct.reservation.v2.sell": 0,
+      "buy_owner": 0,
+      "sell_owner": 0,
+      "neutral_sink": 0
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    },
+    "AbortUnfrozenDirectV4 one": {
+     "closed_lamports": {
+      "direct.reservation.v2.buy": 5192161
+     },
+     "recipient_deltas": {
+      "direct.epoch.v4": 0,
+      "order.page": 0,
+      "direct.reservation.v2.buy": -5192161,
+      "direct.reservation.v2.sell": 0,
+      "buy_owner": 5192160,
+      "sell_owner": 0,
+      "neutral_sink": 1
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    },
+    "AbortUnfrozenDirectV4 two": {
+     "closed_lamports": {
+      "direct.reservation.v2.buy": 5192161,
+      "direct.reservation.v2.sell": 5192161
+     },
+     "recipient_deltas": {
+      "direct.epoch.v4": 0,
+      "order.page": 0,
+      "direct.reservation.v2.buy": -5192161,
+      "direct.reservation.v2.sell": -5192161,
+      "buy_owner": 5192160,
+      "sell_owner": 5192160,
+      "neutral_sink": 2
+     },
+     "conservation": "EXACT_ZERO_SUM"
+    }
+   },
+   "rollback_observations": {
+    "FreezeDirectEpochV4 underfunded": 5,
+    "SubmitDirectCandidateV3 underfunded": 4,
+    "FinalizeDirectSelectionV3 wrong close recipient": 4,
+    "AbortUnfrozenDirectV4 wrong close recipient": 4
+   },
+   "closed_rows": {
+    "direct.candidate.v3": [
+     "SubmitDirectCandidateV3 displacing",
+     "FinalizeDirectSelectionV3",
+     "SettleDirectV3",
+     "LapseUnselectedDirectV3",
+     "LapseSelectedDirectV3"
+    ],
+    "direct.window.v3": [
+     "SettleDirectV3",
+     "LapseUnselectedDirectV3",
+     "LapseSelectedDirectV3"
+    ],
+    "direct.work_budget.v1": [
+     "SettleDirectV3",
+     "LapseEmptyDirectV3",
+     "LapseUnselectedDirectV3",
+     "LapseSelectedDirectV3"
+    ],
+    "direct.reservation.v2": [
+     "SettleDirectV3",
+     "LapseEmptyDirectV3",
+     "LapseUnselectedDirectV3",
+     "LapseSelectedDirectV3",
+     "AbortUnfrozenDirectV4 one",
+     "AbortUnfrozenDirectV4 two"
+    ]
+   },
+   "structural_strand_lamports": {
+    "direct.epoch.v4": 5568001,
+    "artifact.direct_batch_policy_v3.final": 1559040,
+    "order.page": 28814401
+   }
+  }
+ },
+ "projection": {
+  "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
+  "complete_liveness_policy": "NOT_EMITTED_STOP",
+  "maximum_raw_cu_with_requested_headroom": 1120000,
+  "resolution_work": {
+   "status": "PASS",
+   "routes": {
+    "begin": {
+     "measured_cu": 91357,
+     "required_headroom_cu": 114197,
+     "selected_limit_cu": 120000,
+     "external_fee_cap_lamports": 130000,
+     "keeper_reward_lamports": 230000,
+     "status": "PASS"
+    },
+    "fold_1": {
+     "measured_cu": 88434,
+     "required_headroom_cu": 110543,
+     "selected_limit_cu": 120000,
+     "external_fee_cap_lamports": 130000,
+     "keeper_reward_lamports": 230000,
+     "status": "PASS"
+    },
+    "fold_2": {
+     "measured_cu": 92342,
+     "required_headroom_cu": 115428,
+     "selected_limit_cu": 120000,
+     "external_fee_cap_lamports": 130000,
+     "keeper_reward_lamports": 230000,
+     "status": "PASS"
+    },
+    "fold_3": {
+     "measured_cu": 93277,
+     "required_headroom_cu": 116597,
+     "selected_limit_cu": 120000,
+     "external_fee_cap_lamports": 130000,
+     "keeper_reward_lamports": 230000,
+     "status": "PASS"
+    },
+    "fold_4": {
+     "measured_cu": 95722,
+     "required_headroom_cu": 119653,
+     "selected_limit_cu": 120000,
+     "external_fee_cap_lamports": 130000,
+     "keeper_reward_lamports": 230000,
+     "status": "PASS"
+    },
+    "finalize": {
+     "measured_cu": 164731,
+     "required_headroom_cu": 205914,
+     "selected_limit_cu": 210000,
+     "external_fee_cap_lamports": 220000,
+     "keeper_reward_lamports": 320000,
+     "status": "PASS"
+    },
+    "abort": {
+     "measured_cu": 46900,
+     "required_headroom_cu": 58625,
+     "selected_limit_cu": 60000,
+     "external_fee_cap_lamports": 70000,
+     "keeper_reward_lamports": 170000,
+     "status": "PASS"
+    }
+   },
+   "maximum_records": 32,
+   "fold_path_lamports": 7360000,
+   "success_rewards_lamports": 7680000,
+   "worst_abort_rewards_lamports": 7530000,
+   "spendable_reserve_lamports": 7680000,
+   "rent_principal_lamports": 10801920,
+   "persistent_reserve_lamports": 18481920,
+   "begin_external_lamports": 230000,
+   "payer_cold_outlay_lamports": 18711920,
+   "runtime_schedule_matches_policy": true
+  },
+  "resolution_work_batched": {
+   "status": "PASS",
+   "routes": {
+    "fold_batch_2": {
+     "measured_cu": 176215,
+     "required_headroom_cu": 220269,
+     "selected_limit_cu": 230000,
+     "external_fee_cap_lamports": 240000,
+     "keeper_reward_lamports": 340000,
+     "status": "PASS"
+    },
+    "fold_batch_4": {
+     "measured_cu": 331945,
+     "required_headroom_cu": 414932,
+     "selected_limit_cu": 420000,
+     "external_fee_cap_lamports": 430000,
+     "keeper_reward_lamports": 530000,
+     "status": "PASS"
+    },
+    "fold_batch_8": {
+     "measured_cu": 665853,
+     "required_headroom_cu": 832317,
+     "selected_limit_cu": 840000,
+     "external_fee_cap_lamports": 850000,
+     "keeper_reward_lamports": 950000,
+     "status": "PASS"
+    },
+    "fold_batch_12": {
+     "measured_cu": 929573,
+     "required_headroom_cu": 1161967,
+     "selected_limit_cu": 1170000,
+     "external_fee_cap_lamports": 1180000,
+     "keeper_reward_lamports": 1280000,
+     "status": "PASS"
+    }
+   },
+   "maximum_admitted_batch": 12,
+   "outcome_equality": "BYTE_IDENTICAL_TO_SINGLETON_TRANSACTIONS",
+   "mid_batch_invalid_fold": "WHOLE_TRANSACTION_REVERTED_BYTE_EXACT",
+   "cluster_packet_budget": "UNMODELED_BANK_TRANSPORT_ONLY",
+   "maximum_records": 32,
+   "fewest_transaction_plan": [
+    12,
+    12,
+    8
+   ],
+   "fold_transactions": 3,
+   "fold_path_lamports": 3510000,
+   "success_rewards_lamports": 3830000,
+   "worst_abort_rewards_lamports": 3680000,
+   "spendable_reserve_lamports": 3830000,
+   "rent_principal_lamports": 10801920,
+   "persistent_reserve_lamports": 14631920,
+   "begin_external_lamports": 230000,
+   "payer_cold_outlay_lamports": 14861920
+  },
+  "source_value_admission": {
+   "status": "FAIL_CLOSED_STOP",
+   "default_release_available": false,
+   "endow_refusal_code": "0x79",
+   "refusal_cu_not_priced_as_success": true
+  },
+  "direct_v2": {
+   "status": "STOP",
+   "select": {
+    "measured_cu": 226444,
+    "required_headroom_cu": 283055,
+    "selected_limit_cu": 290000,
+    "external_fee_cap_lamports": 300000,
+    "keeper_reward_lamports": 400000,
+    "status": "PASS"
+   },
+   "select_result": "COMPLETED_SELECTION_COMMITTED",
+   "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
+   "live_v3": false
+  },
+  "native_point_v3": {
+   "status": "PASS",
+   "degree_routes": [
+    {
+     "degree": 1,
+     "resolve": {
+      "measured_cu": 182848,
+      "required_headroom_cu": 228560,
+      "selected_limit_cu": 230000,
+      "external_fee_cap_lamports": 240000,
+      "keeper_reward_lamports": 340000,
+      "status": "PASS"
+     }
+    },
+    {
+     "degree": 2,
+     "resolve": {
+      "measured_cu": 191221,
+      "required_headroom_cu": 239027,
+      "selected_limit_cu": 240000,
+      "external_fee_cap_lamports": 250000,
+      "keeper_reward_lamports": 350000,
+      "status": "PASS"
+     }
+    },
+    {
+     "degree": 3,
+     "resolve": {
+      "measured_cu": 198115,
+      "required_headroom_cu": 247644,
+      "selected_limit_cu": 250000,
+      "external_fee_cap_lamports": 260000,
+      "keeper_reward_lamports": 360000,
+      "status": "PASS"
+     }
+    }
+   ]
+  },
+  "occupation_v4_monolithic": {
+   "status": "PASS",
+   "degree_routes": [
+    {
+     "degree": 1,
+     "initial": {
+      "measured_cu": 173062,
+      "required_headroom_cu": 216328,
+      "selected_limit_cu": 220000,
+      "external_fee_cap_lamports": 230000,
+      "keeper_reward_lamports": 330000,
+      "status": "PASS"
+     },
+     "retry": {
+      "measured_cu": 159802,
+      "required_headroom_cu": 199753,
+      "selected_limit_cu": 200000,
+      "external_fee_cap_lamports": 210000,
+      "keeper_reward_lamports": 310000,
+      "status": "PASS"
+     }
+    },
+    {
+     "degree": 2,
+     "initial": {
+      "measured_cu": 184232,
+      "required_headroom_cu": 230290,
+      "selected_limit_cu": 240000,
+      "external_fee_cap_lamports": 250000,
+      "keeper_reward_lamports": 350000,
+      "status": "PASS"
+     },
+     "retry": {
+      "measured_cu": 170972,
+      "required_headroom_cu": 213715,
+      "selected_limit_cu": 220000,
+      "external_fee_cap_lamports": 230000,
+      "keeper_reward_lamports": 330000,
+      "status": "PASS"
+     }
+    },
+    {
+     "degree": 3,
+     "initial": {
+      "measured_cu": 198163,
+      "required_headroom_cu": 247704,
+      "selected_limit_cu": 250000,
+      "external_fee_cap_lamports": 260000,
+      "keeper_reward_lamports": 360000,
+      "status": "PASS"
+     },
+     "retry": {
+      "measured_cu": 184903,
+      "required_headroom_cu": 231129,
+      "selected_limit_cu": 240000,
+      "external_fee_cap_lamports": 250000,
+      "keeper_reward_lamports": 350000,
+      "status": "PASS"
+     }
+    }
+   ],
+   "live_action": "MONOLITHIC_INITIAL_AND_RETRY_ADMITTED"
+  },
+  "direct_selection_v3": {
+   "status": "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP",
+   "admission_rows_derived": false,
+   "live_flags": "UNTOUCHED",
+   "measured_families": [
+    "direct_v3",
+    "direct_v3_close"
+   ],
+   "bank_runs": 3,
+   "cu_rows_reproducible": false,
+   "close_routes_measured": [
+    "AbortUnfrozenDirectV4 empty",
+    "AbortUnfrozenDirectV4 one",
+    "AbortUnfrozenDirectV4 two",
+    "FinalizeDirectSelectionV3",
+    "LapseEmptyDirectV3",
+    "LapseSelectedDirectV3",
+    "LapseUnselectedDirectV3",
+    "SettleDirectV3",
+    "SubmitDirectCandidateV3 displacing"
+   ],
+   "close_rollback_observations": [
+    "AbortUnfrozenDirectV4 wrong close recipient",
+    "FinalizeDirectSelectionV3 wrong close recipient",
+    "FreezeDirectEpochV4 underfunded",
+    "SubmitDirectCandidateV3 underfunded"
+   ],
+   "refundable_rows_sealed": [
+    "direct.candidate.v3",
+    "direct.reservation.v2",
+    "direct.window.v3",
+    "direct.work_budget.v1"
+   ],
+   "retired_blocking_id": "DIRECT.V3_CLOSE_EVIDENCE_UNSEALED",
+   "structural_strand_rows": [
+    "artifact.direct_batch_policy_v3.final",
+    "direct.epoch.v4",
+    "order.page"
+   ],
+   "structural_strand_rent_lamports_per_epoch": 35941440,
+   "decision_owner": "ember"
+  },
+  "general_clearing_walk": {
+   "status": "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP",
+   "admission_rows_derived": false,
+   "live_flags": "UNTOUCHED",
+   "measured_families": [
+    "general_epoch",
+    "clear_walk",
+    "candidate_selection",
+    "entitled_clearing",
+    "terminal_closure"
+   ],
+   "decision_owner": "ember"
+  },
+  "general_terminal_closure": {
+   "status": "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP",
+   "admission_rows_derived": false,
+   "live_flags": "UNTOUCHED",
+   "intents": [
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67
+   ],
+   "close_dag_complete": true,
+   "closes_are_permissionless": true,
+   "release_edge_is_owner_signed": true,
+   "funding_ledger_optional_at_creation": true,
+   "per_route_cu_rows_derived": false,
+   "cleared_epoch_reclaimed_lamports": 531639600,
+   "cleared_epoch_inventory_lamports": 531652377,
+   "cleared_epoch_burned_lamports": 12777,
+   "cleared_epoch_residual_lamports": 1336320,
+   "lapsed_epoch_reclaimed_lamports": 47167920,
+   "lapsed_epoch_unregistered_residual_lamports": 47738640,
+   "rows_reclassified_refundable": [],
+   "residual_blocking_ids": [
+    "GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT",
+    "RENT.ACCOUNT_REFUND_UNOWNED"
+   ],
+   "retired_reason": "PROFILE.STORAGE_INVENTORY_INCOMPLETE_NO_CLOSE_PATH",
+   "decision_owner": "ember"
+  },
+  "terminal_status": "STOP",
+  "terminal_blocking_ids": [
+   "CLAIM.SUBLOT_FRAGMENT_NO_TOTAL_EXIT",
+   "DIRECT.ACCOUNT_REFUND_UNOWNED",
+   "DIRECT.CANDIDATE_RENT_PERSISTS",
+   "DIRECT.EMPTY_FROZEN_NO_LAPSE",
+   "DIRECT.EPOCH_RECEIPT_RENT_PERSISTS",
+   "DIRECT.ORDER_PAGE_RENT_PERSISTS",
+   "DIRECT.POLICY_ARTIFACT_RENT_PERSISTS",
+   "GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT",
+   "HOARD.RESIDUAL_DISPOSITION_UNSELECTED",
+   "PROFILE.STORAGE_INVENTORY_INCOMPLETE",
+   "RENT.ACCOUNT_REFUND_UNOWNED",
+   "RENT.ARTIFACT_PREFUND_WINDFALL",
+   "SOURCE.DEFAULT_REGISTRY_EMPTY",
+   "SOURCE.NO_TERMINAL_RELEASE",
+   "TOKEN.OUTCOME_MINT_PERMANENT"
+  ]
+ }
 }

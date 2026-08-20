@@ -1,0 +1,320 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running tests/direct_selection_v3.rs (target/debug/deps/direct_selection_v3-bca73937de24bb7a)
+
+running 3 tests
+test direct_v3_full_lifecycle_settles_exactly ... LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 25261 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0xb
+DirectV3 CU InitDirectEpochV4: 41226
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 3538 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x1
+DirectV3 CU InitOrderPageV4: 221020
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 135404 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0xb
+DirectV3 CU PlaceOrderV4 buy: 198654
+DirectV3 CU PlaceOrderV4 sell: 198180
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 4529 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x40
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program 11111111111111111111111111111111 invoke [2]
+LOG Transfer: insufficient lamports 2143680, need 2664960
+LOG Program 11111111111111111111111111111111 failed: custom program error: 0x1
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 375015 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x1
+DirectV3 ROLLBACK FreezeDirectEpochV4 underfunded: 5 accounts byte-and-lamport identical
+DirectV3 CU FreezeDirectEpochV4: 379784
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 5126 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x40
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 2468 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x4
+DirectV3 CU SubmitDirectCandidateV3 price=2000: 170848
+DirectV3 CU SubmitDirectCandidateV3 price=5000: 175772
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program 11111111111111111111111111111111 invoke [2]
+LOG Transfer: insufficient lamports 2143680, need 4287360
+LOG Program 11111111111111111111111111111111 failed: custom program error: 0x1
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 188082 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x1
+DirectV3 ROLLBACK SubmitDirectCandidateV3 underfunded: 4 accounts byte-and-lamport identical
+DirectV3 CU SubmitDirectCandidateV3 price=4000: 194264
+DirectV3 CLOSE SubmitDirectCandidateV3 displacing direct.candidate.v3.displaced: pre_close 4287361
+DirectV3 CU SubmitDirectCandidateV3 price=6000 replacement: 198960
+DirectV3 REFUND SubmitDirectCandidateV3 displacing direct.candidate.v3.displaced: delta -4287361
+DirectV3 REFUND SubmitDirectCandidateV3 displacing direct.candidate.v3.admitted: delta 4287360
+DirectV3 REFUND SubmitDirectCandidateV3 displacing submitter: delta 0
+DirectV3 REFUND SubmitDirectCandidateV3 displacing neutral_sink: delta 1
+DirectV3 CONSERVE SubmitDirectCandidateV3 displacing: net 0
+DirectV3 CU SubmitDirectCandidateV3 price=3000 noncompetitive: 185553
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 7623 of 1399849 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x3
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 156330 of 1399848 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0xd
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 179770 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0xb
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 7960 of 1399849 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x16
+DirectV3 CU SubmitDirectCandidateV3 max: 198960
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 13809 of 1399847 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x16
+DirectV3 CU BeginDirectVerificationV3: 23596
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 7958 of 1399849 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x16
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 17860 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0xb
+DirectV3 CU VerifyDirectCandidateV3 index=0: 151358
+DirectV3 CU VerifyDirectCandidateV3 index=1: 161858
+DirectV3 CU VerifyDirectCandidateV3 index=2: 149858
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 12345 of 1399849 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0xd
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 12345 of 1399848 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0xd
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program 11111111111111111111111111111111 invoke [2]
+LOG Program 11111111111111111111111111111111 success
+LOG Program 11111111111111111111111111111111 invoke [2]
+LOG Program 11111111111111111111111111111111 success
+LOG Program 11111111111111111111111111111111 invoke [2]
+LOG Program 11111111111111111111111111111111 success
+LOG Program 11111111111111111111111111111111 invoke [2]
+LOG Program 11111111111111111111111111111111 success
+LOG Program 11111111111111111111111111111111 invoke [2]
+LOG Program 11111111111111111111111111111111 success
+LOG Program 11111111111111111111111111111111 invoke [2]
+LOG Program 11111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 202504 of 1399849 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0xb
+DirectV3 ROLLBACK FinalizeDirectSelectionV3 wrong close recipient: 4 accounts byte-and-lamport identical
+DirectV3 CLOSE FinalizeDirectSelectionV3 direct.candidate.v3.loser0: pre_close 4287361
+DirectV3 CLOSE FinalizeDirectSelectionV3 direct.candidate.v3.loser1: pre_close 4287361
+DirectV3 CU FinalizeDirectSelectionV3: 203273
+DirectV3 REFUND FinalizeDirectSelectionV3 direct.candidate.v3.loser0: delta -4287361
+DirectV3 REFUND FinalizeDirectSelectionV3 direct.candidate.v3.loser1: delta -4287361
+DirectV3 REFUND FinalizeDirectSelectionV3 direct.receipt: delta 2401200
+DirectV3 REFUND FinalizeDirectSelectionV3 direct.final_pot: delta 2714400
+DirectV3 REFUND FinalizeDirectSelectionV3 direct.work_budget.v1: delta -9000
+DirectV3 REFUND FinalizeDirectSelectionV3 direct.window.v3: delta 0
+DirectV3 REFUND FinalizeDirectSelectionV3 direct.epoch.v4: delta 0
+DirectV3 REFUND FinalizeDirectSelectionV3 submitter: delta 8574720
+DirectV3 REFUND FinalizeDirectSelectionV3 sponsor: delta 0
+DirectV3 REFUND FinalizeDirectSelectionV3 keeper: delta -5106600
+DirectV3 REFUND FinalizeDirectSelectionV3 neutral_sink: delta 2
+DirectV3 CONSERVE FinalizeDirectSelectionV3: net 0
+DirectV3 CLOSE SettleDirectV3 direct.window.v3: pre_close 5289608
+DirectV3 CLOSE SettleDirectV3 direct.work_budget.v1: pre_close 2629961
+DirectV3 CLOSE SettleDirectV3 direct.reservation.v2.buy: pre_close 5192161
+DirectV3 CLOSE SettleDirectV3 direct.reservation.v2.sell: pre_close 5192161
+DirectV3 CLOSE SettleDirectV3 direct.candidate.v3.winner: pre_close 4287361
+DirectV3 CLOSE SettleDirectV3 direct.receipt: pre_close 2401201
+DirectV3 CLOSE SettleDirectV3 direct.final_pot: pre_close 2714401
+DirectV3 CU SettleDirectV3: 165547
+DirectV3 REFUND SettleDirectV3 submitter: delta 9576960
+DirectV3 REFUND SettleDirectV3 sponsor: delta 2618960
+DirectV3 REFUND SettleDirectV3 keeper: delta 5126600
+DirectV3 REFUND SettleDirectV3 buy_owner: delta 5192160
+DirectV3 REFUND SettleDirectV3 sell_owner: delta 5192160
+DirectV3 REFUND SettleDirectV3 neutral_sink: delta 14
+DirectV3 CONSERVE SettleDirectV3: closed 27706854 recipients 27706854
+DirectV3 STRAND SettleDirectV3 direct.epoch.v4: 5568001
+DirectV3 STRAND SettleDirectV3 artifact.direct_batch_policy_v3.final: 1559040
+DirectV3 STRAND SettleDirectV3 order.page: 28814401
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 7880 of 1399849 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x4
+ok
+test direct_v3_lapse_covers_every_frozen_phase ... LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 138576 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x16
+DirectV3 CLOSE LapseEmptyDirectV3 direct.work_budget.v1: pre_close 2664961
+DirectV3 CLOSE LapseEmptyDirectV3 direct.reservation.v2.buy: pre_close 5192161
+DirectV3 CLOSE LapseEmptyDirectV3 direct.reservation.v2.sell: pre_close 5192161
+DirectV3 CU LapseEmptyDirectV3: 156470
+DirectV3 REFUND LapseEmptyDirectV3 direct.epoch.v4: delta 0
+DirectV3 REFUND LapseEmptyDirectV3 order.page: delta 0
+DirectV3 REFUND LapseEmptyDirectV3 direct.window.v3: delta 0
+DirectV3 REFUND LapseEmptyDirectV3 direct.work_budget.v1: delta -2664961
+DirectV3 REFUND LapseEmptyDirectV3 direct.reservation.v2.buy: delta -5192161
+DirectV3 REFUND LapseEmptyDirectV3 direct.reservation.v2.sell: delta -5192161
+DirectV3 REFUND LapseEmptyDirectV3 submitter: delta 0
+DirectV3 REFUND LapseEmptyDirectV3 sponsor: delta 2651960
+DirectV3 REFUND LapseEmptyDirectV3 keeper: delta 13000
+DirectV3 REFUND LapseEmptyDirectV3 buy_owner: delta 5192160
+DirectV3 REFUND LapseEmptyDirectV3 sell_owner: delta 5192160
+DirectV3 REFUND LapseEmptyDirectV3 neutral_sink: delta 3
+DirectV3 CONSERVE LapseEmptyDirectV3: net 0
+DirectV3 STRAND LapseEmptyDirectV3 direct.epoch.v4: 5568001
+DirectV3 CLOSE LapseUnselectedDirectV3 direct.window.v3: pre_close 5289601
+DirectV3 CLOSE LapseUnselectedDirectV3 direct.work_budget.v1: pre_close 2664961
+DirectV3 CLOSE LapseUnselectedDirectV3 direct.reservation.v2.buy: pre_close 5192161
+DirectV3 CLOSE LapseUnselectedDirectV3 direct.reservation.v2.sell: pre_close 5192161
+DirectV3 CLOSE LapseUnselectedDirectV3 direct.candidate.v3: pre_close 4287361
+DirectV3 CU LapseUnselectedDirectV3: 178051
+DirectV3 REFUND LapseUnselectedDirectV3 direct.epoch.v4: delta 0
+DirectV3 REFUND LapseUnselectedDirectV3 order.page: delta 0
+DirectV3 REFUND LapseUnselectedDirectV3 direct.window.v3: delta -5289601
+DirectV3 REFUND LapseUnselectedDirectV3 direct.work_budget.v1: delta -2664961
+DirectV3 REFUND LapseUnselectedDirectV3 direct.reservation.v2.buy: delta -5192161
+DirectV3 REFUND LapseUnselectedDirectV3 direct.reservation.v2.sell: delta -5192161
+DirectV3 REFUND LapseUnselectedDirectV3 direct.candidate.v3: delta -4287361
+DirectV3 REFUND LapseUnselectedDirectV3 submitter: delta 9576960
+DirectV3 REFUND LapseUnselectedDirectV3 sponsor: delta 2651960
+DirectV3 REFUND LapseUnselectedDirectV3 keeper: delta 13000
+DirectV3 REFUND LapseUnselectedDirectV3 buy_owner: delta 5192160
+DirectV3 REFUND LapseUnselectedDirectV3 sell_owner: delta 5192160
+DirectV3 REFUND LapseUnselectedDirectV3 neutral_sink: delta 5
+DirectV3 CONSERVE LapseUnselectedDirectV3: net 0
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 139684 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x16
+DirectV3 CLOSE LapseSelectedDirectV3 direct.window.v3: pre_close 5289601
+DirectV3 CLOSE LapseSelectedDirectV3 direct.work_budget.v1: pre_close 2643961
+DirectV3 CLOSE LapseSelectedDirectV3 direct.reservation.v2.buy: pre_close 5192161
+DirectV3 CLOSE LapseSelectedDirectV3 direct.reservation.v2.sell: pre_close 5192161
+DirectV3 CLOSE LapseSelectedDirectV3 direct.candidate.v3: pre_close 4287361
+DirectV3 CLOSE LapseSelectedDirectV3 direct.receipt: pre_close 2401201
+DirectV3 CLOSE LapseSelectedDirectV3 direct.final_pot: pre_close 2714401
+DirectV3 CU LapseSelectedDirectV3: 176846
+DirectV3 REFUND LapseSelectedDirectV3 direct.epoch.v4: delta 0
+DirectV3 REFUND LapseSelectedDirectV3 order.page: delta 0
+DirectV3 REFUND LapseSelectedDirectV3 direct.window.v3: delta -5289601
+DirectV3 REFUND LapseSelectedDirectV3 direct.work_budget.v1: delta -2643961
+DirectV3 REFUND LapseSelectedDirectV3 direct.reservation.v2.buy: delta -5192161
+DirectV3 REFUND LapseSelectedDirectV3 direct.reservation.v2.sell: delta -5192161
+DirectV3 REFUND LapseSelectedDirectV3 direct.candidate.v3: delta -4287361
+DirectV3 REFUND LapseSelectedDirectV3 direct.receipt: delta -2401201
+DirectV3 REFUND LapseSelectedDirectV3 direct.final_pot: delta -2714401
+DirectV3 REFUND LapseSelectedDirectV3 submitter: delta 9576960
+DirectV3 REFUND LapseSelectedDirectV3 sponsor: delta 2630960
+DirectV3 REFUND LapseSelectedDirectV3 keeper: delta 5128600
+DirectV3 REFUND LapseSelectedDirectV3 buy_owner: delta 5192160
+DirectV3 REFUND LapseSelectedDirectV3 sell_owner: delta 5192160
+DirectV3 REFUND LapseSelectedDirectV3 neutral_sink: delta 7
+DirectV3 CONSERVE LapseSelectedDirectV3: net 0
+DirectV3 STRAND lapse direct.epoch.v4: 5568001
+DirectV3 STRAND lapse artifact.direct_batch_policy_v3.final: 1559040
+DirectV3 STRAND lapse direct.epoch.v4: 5568001
+DirectV3 STRAND lapse artifact.direct_batch_policy_v3.final: 1559040
+DirectV3 STRAND lapse direct.epoch.v4: 5568001
+DirectV3 STRAND lapse artifact.direct_batch_policy_v3.final: 1559040
+ok
+test direct_v3_prefreeze_abort_releases_every_prefix ... LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 3833 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x1
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 2580 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x8
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 6954 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x16
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 10627 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x16
+DirectV3 CLOSE AbortUnfrozenDirectV4 empty reservation_prefix: pre_close 0
+DirectV3 CU AbortUnfrozenDirectV4 empty: 10393
+DirectV3 REFUND AbortUnfrozenDirectV4 empty direct.epoch.v4: delta 0
+DirectV3 REFUND AbortUnfrozenDirectV4 empty order.page: delta 0
+DirectV3 REFUND AbortUnfrozenDirectV4 empty direct.reservation.v2.buy: delta 0
+DirectV3 REFUND AbortUnfrozenDirectV4 empty direct.reservation.v2.sell: delta 0
+DirectV3 REFUND AbortUnfrozenDirectV4 empty buy_owner: delta 0
+DirectV3 REFUND AbortUnfrozenDirectV4 empty sell_owner: delta 0
+DirectV3 REFUND AbortUnfrozenDirectV4 empty neutral_sink: delta 0
+DirectV3 CONSERVE AbortUnfrozenDirectV4 empty: net 0
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 6975 of 1399849 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0x16
+DirectV3 CLOSE AbortUnfrozenDirectV4 one direct.reservation.v2.buy: pre_close 5192161
+DirectV3 CU AbortUnfrozenDirectV4 one: 138628
+DirectV3 REFUND AbortUnfrozenDirectV4 one direct.epoch.v4: delta 0
+DirectV3 REFUND AbortUnfrozenDirectV4 one order.page: delta 0
+DirectV3 REFUND AbortUnfrozenDirectV4 one direct.reservation.v2.buy: delta -5192161
+DirectV3 REFUND AbortUnfrozenDirectV4 one direct.reservation.v2.sell: delta 0
+DirectV3 REFUND AbortUnfrozenDirectV4 one buy_owner: delta 5192160
+DirectV3 REFUND AbortUnfrozenDirectV4 one sell_owner: delta 0
+DirectV3 REFUND AbortUnfrozenDirectV4 one neutral_sink: delta 1
+DirectV3 CONSERVE AbortUnfrozenDirectV4 one: net 0
+LOG Program ComputeBudget111111111111111111111111111111 invoke [1]
+LOG Program ComputeBudget111111111111111111111111111111 success
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT invoke [1]
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT consumed 140848 of 1399850 compute units
+LOG Program pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT failed: custom program error: 0xb
+DirectV3 ROLLBACK AbortUnfrozenDirectV4 wrong close recipient: 4 accounts byte-and-lamport identical
+DirectV3 CLOSE AbortUnfrozenDirectV4 two direct.reservation.v2.buy: pre_close 5192161
+DirectV3 CLOSE AbortUnfrozenDirectV4 two direct.reservation.v2.sell: pre_close 5192161
+DirectV3 CU AbortUnfrozenDirectV4 two: 145054
+DirectV3 REFUND AbortUnfrozenDirectV4 two direct.epoch.v4: delta 0
+DirectV3 REFUND AbortUnfrozenDirectV4 two order.page: delta 0
+DirectV3 REFUND AbortUnfrozenDirectV4 two direct.reservation.v2.buy: delta -5192161
+DirectV3 REFUND AbortUnfrozenDirectV4 two direct.reservation.v2.sell: delta -5192161
+DirectV3 REFUND AbortUnfrozenDirectV4 two buy_owner: delta 5192160
+DirectV3 REFUND AbortUnfrozenDirectV4 two sell_owner: delta 5192160
+DirectV3 REFUND AbortUnfrozenDirectV4 two neutral_sink: delta 2
+DirectV3 CONSERVE AbortUnfrozenDirectV4 two: net 0
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.71s
+

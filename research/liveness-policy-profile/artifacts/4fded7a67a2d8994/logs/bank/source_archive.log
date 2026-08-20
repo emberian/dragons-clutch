@@ -1,0 +1,16 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+     Running tests/source_archive.rs (target/debug/deps/source_archive-8ce7c136284dde99)
+
+running 9 tests
+test every_failed_admission_is_a_byte_exact_rollback ... ok
+test exact_layouts_append_seal_and_receipt_are_stable ... ok
+test sealing_requires_an_authenticated_exactly_next_maturity_record ... ok
+test source_spec_construction_authenticates_the_closed_release_before_writing ... ok
+test successor_initialization_derives_exact_lineage_from_a_sealed_receipt ... ok
+test tampering_and_post_seal_append_are_refused_without_state_change ... ok
+test unrelated_same_domain_buffer_cannot_substitute_for_the_archive_account ... ok
+test verified_view_construction_rejects_key_owner_and_mutated_bytes ... ok
+test verified_view_reads_each_record_once_with_receipt_equivalent_results ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

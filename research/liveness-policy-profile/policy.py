@@ -59,6 +59,7 @@ SAME_ELF_MEASUREMENTS = {
     "entitled_clearing",
     "direct_v3",
     "direct_v3_close",
+    "terminal_closure",
 }
 REQUIRED_EVIDENCE_SUFFIXES = {
     "audit/RUNTIME_ARTIFACT_AUDIT.md",
@@ -111,6 +112,7 @@ CURRENT_EVIDENCE_SUFFIXES = REQUIRED_EVIDENCE_SUFFIXES | {
     "logs/bank/direct_selection_v3.log",
     "logs/bank/direct_selection_v3_run2.log",
     "logs/bank/direct_selection_v3_run3.log",
+    "logs/bank/terminal_closure.log",
     "logs/sbf-build-crosspath.log",
 }
 # The Direct V3 account families classified after the sealed v2 probe.  The
@@ -145,6 +147,41 @@ POST_PROBE_T2_8_ROWS = {
     "epoch.final_pot": 262,
     "epoch.receipt": 217,
 }
+# The TerminalClosure family's one new persistent account, classified after the
+# sealed probe for the same reason: the probe source archived at ``runtime_ref``
+# predates it.  The byte pin comes from
+# programs/solana-layout/src/clearing.rs
+# (GENERAL_FUNDING_LEDGER_BYTES = 2 + 32 + 32 + 8 + 8 + 1 + 1 + 1 = 85, account
+# tag GENERAL_FUNDING_LEDGER_TAG = 26); the same probe-equality teeth apply.
+POST_PROBE_TERMINAL_CLOSURE_ROWS = {
+    "general.funding_ledger": 85,
+}
+# What TerminalClosure (tags 60-67) does and does not retire, welded to the
+# sealed bank walk by ``require_terminal_closure_evidence``.  The close DAG is
+# complete, permissionless except for the owner-signed release edge, and
+# exactly conserving; what it does NOT do is make any general-plane row
+# REFUNDABLE_TRANSIENT, because the funding ledger is optional at creation and
+# an abandoned reservation holds the root open.  Both residuals are blocking
+# ids, and the checker refuses either half drifting alone.
+TERMINAL_CLOSURE_INTENTS = list(range(60, 68))
+TERMINAL_CLOSURE_ROWS = {
+    "epoch.window",
+    "epoch.final_pot",
+    "epoch.receipt",
+    "general.funding_ledger",
+    "legacy.epoch.v2",
+    "legacy.candidate",
+    "legacy.candidate_feed",
+    "legacy.clear_work",
+}
+TERMINAL_CLOSURE_BLOCKERS = {
+    "RENT.ACCOUNT_REFUND_UNOWNED",
+    "GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT",
+}
+# The declared-permanent residual a closed CLEARED general epoch leaves behind:
+# exactly the sealed 64-byte batch-policy artifact, whose own row is the
+# authority on the number.
+TERMINAL_CLOSURE_RESIDUAL_ROW = "artifact.batch_policy.final"
 # The Direct V3 close campaign (rung V1 of the clearing-plane promotion
 # report).  These four families are the ones ``DIRECT.V3_CLOSE_EVIDENCE_
 # UNSEALED`` blocked, and the id's own text says what retires it: a sealed
@@ -190,6 +227,15 @@ V3_STRUCTURAL_STRAND_ROWS = {
     "direct.epoch.v4",
     "artifact.direct_batch_policy_v3.final",
     "order.page",
+}
+# The V4 OrderPage strand now carries its own blocking id rather than hiding
+# inside the generic unowned-refund one.  ``require_v3_close_evidence`` requires
+# the id to be present on the row it names, so the corrected 35,941,440-lamport
+# strand figure and its blocker cannot drift apart.
+V3_STRAND_BLOCKING_IDS = {
+    "direct.epoch.v4": "DIRECT.EPOCH_RECEIPT_RENT_PERSISTS",
+    "artifact.direct_batch_policy_v3.final": "DIRECT.POLICY_ARTIFACT_RENT_PERSISTS",
+    "order.page": "DIRECT.ORDER_PAGE_RENT_PERSISTS",
 }
 MINIMUM_V3_BANK_RUNS = 3
 
@@ -384,8 +430,128 @@ def require_v3_close_evidence(
                 f"{name} stranded {observed} lamports, below its own rent floor "
                 f"{row['rent_lamports']}"
             )
+        owed = V3_STRAND_BLOCKING_IDS[name]
+        if owed not in row["blocking_ids"]:
+            raise CheckError(
+                f"{name} strands {observed} lamports in the sealed campaign but "
+                f"does not carry its own blocking id {owed}"
+            )
         strand += row["rent_lamports"]
     return strand
+
+
+def require_terminal_closure_evidence(
+    closure: dict[str, Any], terminal: dict[str, Any]
+) -> dict[str, Any]:
+    """Weld the general-plane terminal classification to its sealed close walk.
+
+    TerminalClosure (tags 60-67) is the first close path the general clearing
+    plane has ever had, and the sealed walk drives it to the epoch root twice.
+    That retires the reason those rows carried
+    ``PROFILE.STORAGE_INVENTORY_INCOMPLETE`` — but it does not make them
+    refundable, and this function refuses the over-claim in both directions:
+
+    * a general-plane row that quietly became ``REFUNDABLE_TRANSIENT`` while the
+      funding ledger is still optional at creation;
+    * sealed evidence that stops declaring the ledger optional or the release
+      edge owner-signed while the rows still STOP on exactly those two ids;
+    * a close walk whose lamports did not conserve exactly;
+    * a cleared-epoch residual that is not exactly the declared-permanent
+      artifact's own rent row;
+    * either residual blocking id vanishing from the global set.
+
+    Returns the two walks' reclaim summary for the projection.
+    """
+
+    if closure.get("admission") != "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY":
+        raise CheckError(
+            "TerminalClosure evidence lost its unpromoted declaration: "
+            f"{closure.get('admission')!r}"
+        )
+    require_equal(
+        closure["intents"], TERMINAL_CLOSURE_INTENTS, "TerminalClosure intent tags"
+    )
+    # The two structural residuals must still be declared by the evidence, or
+    # the rows below are STOPping on something the measurement no longer shows.
+    for field in ("funding_ledger_optional_at_creation", "release_is_owner_signed"):
+        if closure.get(field) is not True:
+            raise CheckError(
+                f"TerminalClosure evidence no longer declares {field}, but the "
+                "general-plane rows still STOP on exactly that residual"
+            )
+    if closure.get("closes_are_permissionless") is not True:
+        raise CheckError("TerminalClosure evidence must declare its closes permissionless")
+
+    accounts = terminal["accounts"]
+    walks = closure["walks"]
+    require_equal(
+        set(walks), {"cleared_epoch", "lapsed_epoch"}, "TerminalClosure sealed walks"
+    )
+    for name, walk in walks.items():
+        if walk["conservation"] != "EXACT_INVENTORY_EQUALS_RECLAIMED_PLUS_BURNED":
+            raise CheckError(f"TerminalClosure walk {name} is not exactly conserved")
+        inventory = walk["machinery_inventory_lamports"]
+        reclaimed = walk["reclaimed_lamports"]
+        burned = walk["burned_at_frozen_sink_lamports"]
+        if inventory != reclaimed + burned:
+            raise CheckError(
+                f"TerminalClosure walk {name}: {inventory} held != {reclaimed} "
+                f"reclaimed + {burned} burned"
+            )
+        if reclaimed <= 0:
+            raise CheckError(f"TerminalClosure walk {name} reclaimed nothing")
+    # The cleared walk's residual is the declared-permanent artifact, taken
+    # from the terminal row rather than from the measured balance so that a
+    # prefund donation can never flatter it.
+    require_equal(
+        walks["cleared_epoch"]["residual_lamports"],
+        accounts[TERMINAL_CLOSURE_RESIDUAL_ROW]["rent_lamports"],
+        "TerminalClosure cleared-epoch residual",
+    )
+    # The lapsed walk proves the unledgered state is reachable, which is what
+    # keeps RENT.ACCOUNT_REFUND_UNOWNED honest on every general-plane row.
+    if walks["lapsed_epoch"]["unregistered_residual_lamports"] <= 0:
+        raise CheckError(
+            "the lapsed walk must exhibit the unledgered residual that keeps "
+            "RENT.ACCOUNT_REFUND_UNOWNED on the general-plane rows"
+        )
+
+    blockers = set(terminal["blocking_ids"])
+    missing = TERMINAL_CLOSURE_BLOCKERS - blockers
+    if missing:
+        raise CheckError(
+            "TerminalClosure residual blocking ids are absent from the terminal "
+            "set: " + ", ".join(sorted(missing))
+        )
+    for name in TERMINAL_CLOSURE_ROWS:
+        row = accounts[name]
+        if row["lifecycle_class"] != "UNCLASSIFIED_STOP":
+            raise CheckError(
+                f"{name} is classified {row['lifecycle_class']!r}, but the "
+                "general plane's funding ledger is optional at creation and its "
+                "release edge is owner-signed — neither "
+                "rent_principal_recorded nor expiry_or_reaper holds "
+                "unconditionally for this family"
+            )
+        if not TERMINAL_CLOSURE_BLOCKERS & set(row["blocking_ids"]):
+            raise CheckError(
+                f"{name} is a general-plane STOP that names neither residual of "
+                "the sealed close walk"
+            )
+    return {
+        "cleared_epoch_reclaimed_lamports": walks["cleared_epoch"]["reclaimed_lamports"],
+        "cleared_epoch_inventory_lamports": walks["cleared_epoch"][
+            "machinery_inventory_lamports"
+        ],
+        "cleared_epoch_burned_lamports": walks["cleared_epoch"][
+            "burned_at_frozen_sink_lamports"
+        ],
+        "cleared_epoch_residual_lamports": walks["cleared_epoch"]["residual_lamports"],
+        "lapsed_epoch_reclaimed_lamports": walks["lapsed_epoch"]["reclaimed_lamports"],
+        "lapsed_epoch_unregistered_residual_lamports": walks["lapsed_epoch"][
+            "unregistered_residual_lamports"
+        ],
+    }
 
 
 def derive(evidence: dict[str, Any]) -> dict[str, Any]:
@@ -520,6 +686,7 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
         "clear_walk",
         "candidate_selection",
         "entitled_clearing",
+        "terminal_closure",
     ):
         declared = measurements[family].get("admission")
         if declared != "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY":
@@ -548,6 +715,9 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
     )
     v3_strand_lamports = require_v3_close_evidence(
         measurements["direct_v3_close"], terminal
+    )
+    closure_summary = require_terminal_closure_evidence(
+        measurements["terminal_closure"], terminal
     )
 
     return {
@@ -658,7 +828,24 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
                 "clear_walk",
                 "candidate_selection",
                 "entitled_clearing",
+                "terminal_closure",
             ],
+            "decision_owner": "ember",
+        },
+        "general_terminal_closure": {
+            "status": "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP",
+            "admission_rows_derived": False,
+            "live_flags": "UNTOUCHED",
+            "intents": TERMINAL_CLOSURE_INTENTS,
+            "close_dag_complete": True,
+            "closes_are_permissionless": True,
+            "release_edge_is_owner_signed": True,
+            "funding_ledger_optional_at_creation": True,
+            "per_route_cu_rows_derived": False,
+            **closure_summary,
+            "rows_reclassified_refundable": [],
+            "residual_blocking_ids": sorted(TERMINAL_CLOSURE_BLOCKERS),
+            "retired_reason": "PROFILE.STORAGE_INVENTORY_INCOMPLETE_NO_CLOSE_PATH",
             "decision_owner": "ember",
         },
         "terminal_status": terminal_status,
@@ -766,6 +953,58 @@ def check_artifact_binding(evidence: dict[str, Any]) -> None:
             evidence["measurements"][name]["artifact_sha256"],
             digest,
             f"measurement artifact {name}",
+        )
+
+    # Cross-path builds are recorded as an observed-digest LIST under the
+    # 2026-08-20 build-path protocol amendment
+    # (docs/reviews/BUILD_PATH_IDENTITY_2026-08-20.md), never as an equality
+    # claim.  The e8ba31d5... seal recorded a single cross-path build that came
+    # back byte-identical and read it as a property; the V3 campaign then
+    # observed two further digests at two further paths, and this seal observes
+    # another.  The checker therefore refuses the shape that made the wrong
+    # reading possible: a scalar field, or a list that silently contains the
+    # canonical digest as if a coincidence were a guarantee.
+    reproducibility = evidence["artifact_reproducibility"]
+    if "cross_path_build" in reproducibility:
+        raise CheckError(
+            "cross_path_build is a scalar equality claim; the protocol requires "
+            "the observed-digest list cross_path_builds"
+        )
+    observed = reproducibility["cross_path_builds"]
+    if not isinstance(observed, list) or not observed:
+        raise CheckError("cross_path_builds must be a non-empty observed-digest list")
+    if len({row["sha256"] for row in observed}) != len(observed):
+        raise CheckError("cross_path_builds lists a digest twice")
+    if len({row["path"] for row in observed}) != len(observed):
+        raise CheckError("cross_path_builds lists a path twice")
+    require_equal(
+        reproducibility["cross_path_disposition"],
+        "PATH_TIED_SYMBOL_ORDER",
+        "cross-path disposition",
+    )
+    for row in observed:
+        require_equal(set(row), {"path", "sha256", "bytes"}, "cross-path observation")
+        if row["sha256"] == digest:
+            raise CheckError(
+                "a cross-path build that happens to equal the canonical digest "
+                "is a coincidence, not a reproducibility claim; record it in the "
+                "audit prose rather than as evidence of path independence"
+            )
+    # The relocated-Cargo-home probe measures, rather than hides, the
+    # registry-path boundary.  Its disposition must agree with its own digest:
+    # a probe that did not reproduce the canonical bytes may never be written
+    # up as INDEPENDENT, and one that did may never be written up as sensitive.
+    relocated_independent = reproducibility["relocated_cargo_home"] == digest
+    disposition = reproducibility["relocated_disposition"]
+    if relocated_independent != disposition.startswith("INDEPENDENT"):
+        raise CheckError(
+            f"relocated-Cargo-home disposition {disposition!r} disagrees with its "
+            f"own digest {reproducibility['relocated_cargo_home'][:16]}"
+        )
+    if not relocated_independent and not disposition.startswith("PATH_SENSITIVE"):
+        raise CheckError(
+            f"a relocated-home probe that diverged must say PATH_SENSITIVE, not "
+            f"{disposition!r}"
         )
 
     artifact_root = Path(artifact["path"]).parent
@@ -919,12 +1158,17 @@ def check_rent_and_accounts(evidence: dict[str, Any]) -> None:
         name: {"bytes": bytes_, "rent_lamports": lamports}
         for name, bytes_, lamports, *_ in ACCOUNT_ROWS
     }
-    if not set(POST_PROBE_DIRECT_V3_ROWS).isdisjoint(POST_PROBE_T2_8_ROWS):
-        raise CheckError("post-probe pin dictionaries overlap")
-    for label, pins in (
+    pin_sets = (
         ("V3", POST_PROBE_DIRECT_V3_ROWS),
         ("T2-8", POST_PROBE_T2_8_ROWS),
-    ):
+        ("TerminalClosure", POST_PROBE_TERMINAL_CLOSURE_ROWS),
+    )
+    seen: set[str] = set()
+    for _, pins in pin_sets:
+        if not seen.isdisjoint(pins):
+            raise CheckError("post-probe pin dictionaries overlap")
+        seen |= set(pins)
+    for label, pins in pin_sets:
         for name, pinned_bytes in pins.items():
             row = terminal_rows.pop(name, None)
             if row is None:

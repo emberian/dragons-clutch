@@ -1,0 +1,69 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s
+     Running tests/candidate_selection.rs (target/debug/deps/candidate_selection-bc0cede02c4586c9)
+
+running 5 tests
+test a_beyond_128_bit_score_tie_resolves_by_the_full_width_digest ... SubmitCandidate CU: 34241
+WriteCandidateFeed (fills x4) CU: 9647
+WriteCandidateFeed (slices x2) CU: 9888
+SealCandidate (0 retained) CU: 44924
+SubmitCandidate CU: 32731
+WriteCandidateFeed (fills x4) CU: 6647
+WriteCandidateFeed (slices x2) CU: 6888
+SealCandidate (1 retained) CU: 45354
+CompleteClearWork CU: 123427
+CompleteClearWork CU: 123427
+FinalizeSelection (2 verified, digest tie) CU: 39465
+ok
+test a_fourth_candidate_displaces_the_worst_and_supersedes_it ... SubmitCandidate CU: 34241
+WriteCandidateFeed (fills x4) CU: 8147
+WriteCandidateFeed (slices x2) CU: 8388
+SealCandidate (0 retained) CU: 43424
+SubmitCandidate CU: 32731
+WriteCandidateFeed (fills x4) CU: 8147
+WriteCandidateFeed (slices x2) CU: 8388
+SealCandidate (1 retained) CU: 48354
+SubmitCandidate CU: 34238
+WriteCandidateFeed (fills x4) CU: 9647
+WriteCandidateFeed (slices x2) CU: 9888
+SealCandidate (2 retained) CU: 53292
+CompleteClearWork CU: 127927
+SubmitCandidate CU: 31244
+WriteCandidateFeed (fills x4) CU: 6647
+WriteCandidateFeed (slices x2) CU: 6888
+SealCandidate (3 retained) CU: 64168
+SealCandidate (displacing) CU: 64168
+SubmitCandidate CU: 35744
+WriteCandidateFeed (fills x4) CU: 6647
+WriteCandidateFeed (slices x2) CU: 6888
+ok
+test an_empty_verified_set_lapses_honestly ... SubmitCandidate CU: 34241
+WriteCandidateFeed (fills x4) CU: 8147
+WriteCandidateFeed (slices x2) CU: 8388
+SealCandidate (0 retained) CU: 43424
+FinalizeSelection (lapse, 0 verified) CU: 20693
+ok
+test selection_picks_the_total_order_winner_and_excludes_the_unverified ... SubmitCandidate CU: 34241
+WriteCandidateFeed (fills x4) CU: 8147
+WriteCandidateFeed (slices x2) CU: 8388
+SealCandidate (0 retained) CU: 43424
+SubmitCandidate CU: 32731
+WriteCandidateFeed (fills x4) CU: 8147
+WriteCandidateFeed (slices x2) CU: 8388
+SealCandidate (1 retained) CU: 48354
+SubmitCandidate CU: 34238
+WriteCandidateFeed (fills x4) CU: 9647
+WriteCandidateFeed (slices x2) CU: 9888
+SealCandidate (2 retained) CU: 53292
+CompleteClearWork CU: 127927
+CompleteClearWork CU: 121927
+FinalizeSelection (3 retained, 2 verified) CU: 49228
+ok
+test tampered_digests_and_stored_regions_refuse_selection ... SubmitCandidate CU: 34241
+WriteCandidateFeed (fills x4) CU: 8147
+WriteCandidateFeed (slices x2) CU: 8388
+SealCandidate (0 retained) CU: 43424
+CompleteClearWork CU: 127927
+ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.63s
+
