@@ -85,6 +85,44 @@ use clutch_solana_reference::{
     GEN_EXACT_01, KERNEL_ACCOUNT_LEN, REPLAY_ACCOUNT_LEN, V1_EVALUATOR_VERSION,
     V1_EXACT_GENERATION,
 };
+/* The general-clearing committed lane's host twins: the same relation body,
+ * candidate constructors, and policy identity the program executes, plus the
+ * layout planes (pages, reservations, clearing accounts, artifact transport,
+ * portfolio settlement) it writes through. */
+use clutch_batch::relation_v1::{
+    canonical_candidate, canonical_pairing, BookV1, LegRefV1, PairingSliceV1 as RelationSliceV1,
+    RelationDomainV1, ScoreV1,
+};
+use clutch_batch::relation_v1_stream::{ClearWorkV1, FeedStatusV1, StreamCandidateV1};
+use clutch_batch_policy_identity::{
+    batch_policy_digest, canonical_batch_policy_bytes, full_relation_candidate_digest_from_regions,
+    general_clearing_v1::GENERAL_CLEARING_POLICY_V1, FullRelationDomainV1, Identity32V1,
+};
+use clutch_solana_layout::artifact::{
+    initialize_stage, ArtifactBinding, ArtifactKind, ArtifactStageHeader, ARTIFACT_CHUNK_BYTES,
+    ARTIFACT_STAGE_HEADER_BYTES,
+};
+use clutch_solana_layout::clearing::{
+    self, canonical_general_book_id, open_general_epoch, CandidateFeedHeader, CandidateFeedStage,
+    EpochWindowAccount, LegRef as LayoutLegRef, PairingSlice as LayoutPairingSlice,
+    CANDIDATE_FEED_FLAG_SLICES_DECLARED, CANDIDATE_WINDOW_SLOTS,
+};
+use clutch_solana_layout::portfolio_settlement::{
+    canonical_portfolio_entitlement_id, exact_portfolio_value_price_units, prepare_full_pair,
+    PortfolioEntitlementV1, PortfolioFundingV1, PortfolioPairInputV1, PortfolioPairPostV1,
+    PORTFOLIO_ENTITLEMENT_ACTIVE,
+};
+use clutch_solana_layout::projection::{project_slot, OwnerInterner};
+use clutch_solana_layout::reservation::{
+    canonical_reservation_id, ReservationAccount, ReservationPlan, RESERVATION_STATE_CONSUMED,
+    RESERVATION_STATE_ENTITLED,
+};
+use clutch_solana_layout::stream;
+use clutch_solana_layout::{
+    CandidateFeedChunk, PortfolioRecord, CANDIDATE_STATUS_SUBMITTED, CANDIDATE_STATUS_VERIFIED,
+    EPOCH_PHASE_FROZEN, FEED_FILLS_PER_CHUNK, FEED_SLICES_PER_CHUNK, POT_PHASE_CLOSED,
+    RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED, RECEIPT_FLAG_SLICE_EXHAUSTED,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -2574,6 +2612,26 @@ struct Genesis {
     data: Vec<u8>,
 }
 
+/// One expected u64 whose value is a committed transaction's actual slot.
+///
+/// The clock is the one input a pregenerated plan cannot know: the freeze
+/// stamps `freeze_slot + CANDIDATE_WINDOW_SLOTS`, a submission stamps its own
+/// slot, and a selection stamps its own.  Rather than masking those bytes, the
+/// plan names them: the committed runner overwrites exactly these eight bytes
+/// of the expected image with `slot(base_step) + delta` — a value it observed
+/// from the bank — and every other byte stays an exact precomputed
+/// expectation.
+struct SlotPatch {
+    /// Byte offset of the little-endian u64 inside the expected image.
+    offset: usize,
+    /// Name of the committed step whose confirmation slot is the base.  A
+    /// step may name itself; the patch is applied after its own confirmation.
+    base: String,
+    /// Added to the base slot (`CANDIDATE_WINDOW_SLOTS` for the selection
+    /// deadline, zero for a stamped slot itself).
+    delta: u64,
+}
+
 /// One writable account the SVM must return byte-identical to the oracle.
 struct Compare {
     role: String,
@@ -2613,6 +2671,14 @@ struct Case {
     /// this red and the evidence in `SBF_BRINGUP.md` has to be re-written
     /// rather than quietly left wrong.
     exhausted: bool,
+    /// Absolute slot the committed runner must reach before submitting this
+    /// transaction (a deadline the plan itself chose, e.g. the epoch freeze).
+    wait_slot: Option<u64>,
+    /// Relative wait: the runner must reach `slot(step) + delta` before
+    /// submitting (the candidate window's length after the actual freeze).
+    wait_after: Option<(String, u64)>,
+    /// Slot-valued expected fields, per compare role; see [`SlotPatch`].
+    slot_patches: Vec<(String, SlotPatch)>,
 }
 
 impl Case {
@@ -2643,6 +2709,9 @@ impl Case {
             reference: String::new(),
             compute_limit: None,
             exhausted: false,
+            wait_slot: None,
+            wait_after: None,
+            slot_patches: Vec::new(),
         }
     }
 
@@ -2667,6 +2736,9 @@ impl Case {
             reference,
             compute_limit: None,
             exhausted: false,
+            wait_slot: None,
+            wait_after: None,
+            slot_patches: Vec::new(),
         }
     }
 }
@@ -7443,6 +7515,3200 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
 }
 
 /* ------------------------------------------------------------------------ */
+/* The general-clearing committed walk (Tier 2, intents 47-59)               */
+/* ------------------------------------------------------------------------ */
+
+/// A market identity reserved for the signed general-clearing lane.
+const NONCE_GENERAL: u64 = 31;
+/// The general epoch's index within its market.
+const GENERAL_EPOCH_INDEX: u64 = 1;
+/// Default freeze deadline, in absolute validator slots.
+///
+/// The plan's one timing choice: `InitEpoch` must land strictly before it and
+/// `FreezeEpoch` at or after it, so the committed runner waits on the real
+/// clock.  Override with `CLUTCH_GENERAL_FREEZE_DEADLINE` when a slower host
+/// needs more room before the deadline.
+const GENERAL_FREEZE_DEADLINE_DEFAULT: u64 = 800;
+/// Expiry slot of the policy-artifact upload.
+///
+/// Absolute, because the plan is pregenerated; inside the program's admitted
+/// lifetime window (`8..=432_000` slots ahead of the begin's clock) for any
+/// begin executed before slot ~368,000, which every fresh-ledger run is.
+const GENERAL_ARTIFACT_EXPIRES_SLOT: u64 = 400_000;
+/// `ComputeBudgetInstruction::RequestHeapFrame` discriminator.
+const REQUEST_HEAP_FRAME: u8 = 1;
+/// The heap frame every clearing-walk transaction requests: the program boxes
+/// the ~48.7 KiB `ClearWorkV1` onto it.
+const HEAP_FRAME_BYTES: u32 = 262_144;
+/// The two exact scaled prices of the one submitted candidate.
+///
+/// They sum to the frozen price scale, price outcome 0 below both buy limits
+/// (a real buyer price-improvement refund) and outcome 1 above the idle buy's
+/// limit (a real ineligible order with a standing reservation).
+const GENERAL_PRICE_0: u64 = 2_500;
+const GENERAL_PRICE_1: u64 = 7_500;
+/// Per-owner backed endowments, in collateral atoms.
+const GENERAL_ENDOW_A: u64 = 12;
+const GENERAL_ENDOW_B: u64 = 15;
+const GENERAL_ENDOW_C: u64 = 12;
+const GENERAL_ENDOW_D: u64 = 10;
+/// Complete-set splits funding the two sellers' Egg envelopes.
+const GENERAL_SPLIT_B: u64 = 11;
+const GENERAL_SPLIT_D: u64 = 6;
+
+/// The freeze deadline this plan bakes into `InitEpoch` and the runner waits
+/// for.
+fn general_freeze_deadline() -> u64 {
+    match std::env::var("CLUTCH_GENERAL_FREEZE_DEADLINE") {
+        Ok(text) => text
+            .parse()
+            .expect("CLUTCH_GENERAL_FREEZE_DEADLINE must be a slot number"),
+        Err(_) => GENERAL_FREEZE_DEADLINE_DEFAULT,
+    }
+}
+
+/// One `RequestHeapFrame` instruction, for the clearing walk's boxed body.
+fn heap_frame_instruction(message: &Message, budget: &[u8; 32], bytes: u32) -> Instruction {
+    let mut data = Vec::with_capacity(5);
+    data.push(REQUEST_HEAP_FRAME);
+    data.extend_from_slice(&bytes.to_le_bytes());
+    Instruction {
+        program_index: message.index(budget),
+        accounts: Vec::new(),
+        data,
+    }
+}
+
+/// One general-plane transaction: message groups, program instruction, and
+/// the compute-budget raise (plus the heap frame where the walk needs it).
+struct GeneralTx<'a> {
+    /// Writable signers after the fee payer (owners funding reservation rent).
+    writable_signers: &'a [[u8; 32]],
+    /// Read-only signers (an owner authorizing a cancellation).
+    readonly_signers: &'a [[u8; 32]],
+    writable: &'a [[u8; 32]],
+    readonly: &'a [[u8; 32]],
+    /// The program instruction's accounts, in the program's exact role order.
+    keys: &'a [[u8; 32]],
+    data: Vec<u8>,
+    /// Request the 256 KiB heap frame.
+    heap: bool,
+}
+
+fn general_transaction(shared: &Shared, tx: GeneralTx<'_>) -> Vec<u8> {
+    let mut writable_signers = vec![shared.payer.bytes];
+    writable_signers.extend_from_slice(tx.writable_signers);
+    let mut readonly = tx.readonly.to_vec();
+    readonly.push(shared.program.bytes);
+    readonly.push(shared.compute_budget);
+    let message = Message::new(&writable_signers, tx.readonly_signers, tx.writable, &readonly);
+    let mut instructions = Vec::new();
+    if tx.heap {
+        instructions.push(heap_frame_instruction(
+            &message,
+            &shared.compute_budget,
+            HEAP_FRAME_BYTES,
+        ));
+    }
+    instructions.push(budget_instruction(
+        &message,
+        &shared.compute_budget,
+        COMPUTE_UNIT_CEILING,
+    ));
+    instructions.push(Instruction {
+        program_index: message.index(&shared.program.bytes),
+        accounts: message.indices(tx.keys),
+        data: tx.data,
+    });
+    transaction(&message, &instructions)
+}
+
+/// A wallet identity supplied by the committed runner, wrapped as a [`Pda`].
+fn wallet_pda(key: [u8; 32]) -> Pda {
+    Pda {
+        address: base58_of(&key),
+        bytes: key,
+        bump: 0,
+    }
+}
+
+/// The two extra signing traders of the general walk and their fresh ordinary
+/// collateral-account identities.
+struct GeneralActors {
+    trader_c: Pda,
+    trader_d: Pda,
+    trader_c_token: Pda,
+    trader_d_token: Pda,
+}
+
+fn build_general_actors() -> GeneralActors {
+    let trader_c = fixture_identity("CLUTCH_COMMITTED_TRADER_C", "clutch-sbf/general/trader-c");
+    let trader_d = fixture_identity("CLUTCH_COMMITTED_TRADER_D", "clutch-sbf/general/trader-d");
+    let trader_c_token = fixture_identity(
+        "CLUTCH_COMMITTED_TRADER_C_COLLATERAL_TOKEN",
+        "clutch-sbf/general/c-collat",
+    );
+    let trader_d_token = fixture_identity(
+        "CLUTCH_COMMITTED_TRADER_D_COLLATERAL_TOKEN",
+        "clutch-sbf/general/d-collat",
+    );
+    assert_ne!(trader_c.bytes, trader_d.bytes, "traders must be distinct");
+    assert_ne!(
+        trader_c_token.bytes, trader_d_token.bytes,
+        "trader token accounts must be distinct"
+    );
+    GeneralActors {
+        trader_c,
+        trader_d,
+        trader_c_token,
+        trader_d_token,
+    }
+}
+
+/// One signing market participant of the general walk and its owner plane.
+struct GeneralOwner {
+    label: &'static str,
+    key: [u8; 32],
+    id: Hash32,
+    position: Pda,
+    replay: Pda,
+    position_bytes: Vec<u8>,
+    replay_bytes: Vec<u8>,
+    token: Pda,
+}
+
+impl GeneralOwner {
+    fn new(shared: &Shared, plane: &Plane, label: &'static str, key: [u8; 32], token: &Pda) -> Self {
+        let (position, replay) = owner_plane(shared, plane, key);
+        Self {
+            label,
+            key,
+            id: Hash32::from_bytes(key),
+            position,
+            replay,
+            position_bytes: Vec::new(),
+            replay_bytes: Vec::new(),
+            token: token.clone(),
+        }
+    }
+
+    fn position_value(&self) -> PositionAccount {
+        PositionAccount::decode(&self.position_bytes).expect("a funded owner position decodes")
+    }
+
+    fn store_position(&mut self, value: &PositionAccount) {
+        let mut bytes = vec![0_u8; account_len::POSITION];
+        value.encode(&mut bytes).expect("owner position encodes");
+        self.position_bytes = bytes;
+    }
+}
+
+/// A view of the shared market plane through one non-founding owner, for the
+/// offline reference adapter's owner-scoped transitions (`Split`).
+fn owner_view_plane(shared: &Shared, plane: &Plane, owner: &GeneralOwner) -> Plane {
+    let mut view = Plane::clone_state(plane, &plane.state);
+    view.owner = owner.id;
+    view.generation = 0;
+    view.position = owner.position.clone();
+    view.replay = owner.replay.clone();
+    view.external = derive(
+        &shared.program.address,
+        &[
+            seeds::SEED_EXTERNAL.to_vec(),
+            plane.market_id.bytes().to_vec(),
+            owner.id.bytes().to_vec(),
+            0_u64.to_le_bytes().to_vec(),
+        ],
+    );
+    view.state.position.copy_from_slice(&owner.position_bytes);
+    view.state.replay.copy_from_slice(&owner.replay_bytes);
+    /* The owner's bearer shadow does not exist on chain and `Split` never
+     * touches it; the oracle still requires a coherent image at the bound
+     * address, so an empty one is synthesized exactly as `CreateMarket`
+     * would found it. */
+    let ghost = ExternalAccount {
+        market: plane.market_id,
+        owner: owner.id,
+        position_generation: 0,
+        balances: [0; MAX_OUTCOMES],
+        stored_bump: view.external.bump,
+        flags: 0,
+    };
+    ghost
+        .encode(&mut view.state.external)
+        .expect("the owner-view ghost shadow encodes");
+    view
+}
+
+/// Fold one owner-view transition back: global roles onto the shared plane,
+/// the owner plane onto its carrier.
+fn absorb_owner_transition(plane: &mut Plane, owner: &mut GeneralOwner, post: &TransitionOutput) {
+    plane.state.market = post.market;
+    plane.state.hoard = post.hoard;
+    plane.state.kernel = post.kernel;
+    plane.state.supply = post.supply;
+    owner.position_bytes = post.position.to_vec();
+    owner.replay_bytes = post.replay.to_vec();
+}
+
+/// Locate the sole differing little-endian u64 between two equal-length
+/// account images: the probe that turns "which bytes hold this field" into a
+/// measured offset instead of a transcribed one.
+fn sole_u64_offset(base: &[u8], probe: &[u8], label: &str) -> usize {
+    assert_eq!(base.len(), probe.len(), "{label}: probe images must align");
+    let offset = base
+        .iter()
+        .zip(probe.iter())
+        .position(|(a, b)| a != b)
+        .unwrap_or_else(|| panic!("{label}: the probes do not differ"));
+    assert!(
+        offset + 8 <= base.len(),
+        "{label}: the differing field must be a whole u64"
+    );
+    assert_eq!(
+        base[..offset],
+        probe[..offset],
+        "{label}: bytes before the field must agree"
+    );
+    assert_eq!(
+        base[offset + 8..],
+        probe[offset + 8..],
+        "{label}: bytes after the field must agree"
+    );
+    offset
+}
+
+/// The pooled Hoard custody token account, as an expected reload.
+fn general_custody_compare(shared: &Shared, plane: &Plane, pre: u64, post: u64) -> Compare {
+    Compare {
+        role: format!("{}.hoard-token", plane.label),
+        address: plane.hoard_token.address.clone(),
+        expected: immutable_owner_account_bytes(
+            shared.collateral_mint.bytes,
+            plane.hoard_authority.bytes,
+            post,
+        ),
+        pre: immutable_owner_account_bytes(
+            shared.collateral_mint.bytes,
+            plane.hoard_authority.bytes,
+            pre,
+        ),
+    }
+}
+
+/// Fund one trader's fresh ordinary collateral account from the founding
+/// actor through an ordinary Token-2022 transfer.
+fn transfer_collateral_to_owner_transaction(
+    shared: &Shared,
+    destination: &Pda,
+    quantity: u64,
+) -> Vec<u8> {
+    let message = Message::new(
+        &[shared.payer.bytes],
+        &[shared.actor.bytes],
+        &[shared.actor_token.bytes, destination.bytes],
+        &[shared.collateral_mint.bytes, shared.token_program],
+    );
+    let mut data = vec![0_u8; 10];
+    data[0] = 12; // TokenInstruction::TransferChecked
+    data[1..9].copy_from_slice(&quantity.to_le_bytes());
+    data[9] = COLLATERAL_DECIMALS;
+    let transfer = Instruction {
+        program_index: message.index(&shared.token_program),
+        accounts: message.indices(&[
+            shared.actor_token.bytes,
+            shared.collateral_mint.bytes,
+            destination.bytes,
+            shared.actor.bytes,
+        ]),
+        data,
+    };
+    transaction(&message, &[transfer])
+}
+
+fn general_funding_compares(
+    shared: &Shared,
+    owner: &GeneralOwner,
+    actor_pre: u64,
+    amount: u64,
+) -> Vec<Compare> {
+    vec![
+        Compare {
+            role: "actor-collateral".to_string(),
+            address: shared.actor_token.address.clone(),
+            expected: with_amount(&shared.actor_token_bytes, actor_pre - amount),
+            pre: with_amount(&shared.actor_token_bytes, actor_pre),
+        },
+        Compare {
+            role: format!("{}.collateral", owner.label),
+            address: owner.token.address.clone(),
+            expected: token_account_bytes(shared.collateral_mint.bytes, owner.key, amount),
+            pre: token_account_bytes(shared.collateral_mint.bytes, owner.key, 0),
+        },
+    ]
+}
+
+/// The compares of one trader's first backed `Endow`: the created Position and
+/// Replay, the drained ordinary account, and the grown pooled custody.
+fn general_first_endow_compares(
+    shared: &Shared,
+    plane: &Plane,
+    owner: &GeneralOwner,
+    amount: u64,
+    custody_pre: u64,
+) -> Vec<Compare> {
+    let (position_bytes, replay_bytes) =
+        first_endow_owner_bytes(plane, owner.key, &owner.position, &owner.replay, amount);
+    vec![
+        Compare {
+            role: format!("{}.position", owner.label),
+            address: owner.position.address.clone(),
+            expected: position_bytes,
+            pre: Vec::new(),
+        },
+        Compare {
+            role: format!("{}.replay", owner.label),
+            address: owner.replay.address.clone(),
+            expected: replay_bytes,
+            pre: Vec::new(),
+        },
+        Compare {
+            role: format!("{}.collateral", owner.label),
+            address: owner.token.address.clone(),
+            expected: token_account_bytes(shared.collateral_mint.bytes, owner.key, 0),
+            pre: token_account_bytes(shared.collateral_mint.bytes, owner.key, amount),
+        },
+        general_custody_compare(shared, plane, custody_pre, custody_pre + amount),
+    ]
+}
+
+/// The T2-5 zero-sentinel relation domain, from the frozen general epoch —
+/// the same construction the program's walk runs.
+fn general_domain(epoch: &EpochAccount) -> RelationDomainV1 {
+    RelationDomainV1 {
+        relation_version: epoch.relation_version,
+        market_id: 0,
+        book_id: 0,
+        epoch: epoch.epoch_index,
+        policy_id: 0,
+        order_set_id: 0,
+        outcome_count: epoch.outcome_count,
+        owner_count: epoch.owner_count,
+        price_scale: epoch.price_scale,
+        remainder_seed: epoch.remainder_seed,
+        policy: GENERAL_CLEARING_POLICY_V1,
+    }
+}
+
+/// The stream candidate the walk feeds, with explicit zero claims.
+fn general_stream_candidate(
+    order_len: u8,
+    prices: [u64; MAX_OUTCOMES],
+    declared: u16,
+) -> StreamCandidateV1 {
+    StreamCandidateV1 {
+        order_len,
+        prices,
+        virtual_split: 0,
+        virtual_merge: 0,
+        honored_aon_mask: 0,
+        claimed_score: ScoreV1::ZERO,
+        canonical_candidate_digest: 0,
+        declared_slices: Some(declared),
+    }
+}
+
+/// Project the frozen page into the relation's book plus the live slots in
+/// walk order — exactly the projection the program's pass-1 walk performs.
+fn project_general_book(page_bytes: &[u8]) -> (Box<BookV1>, Vec<OrderSlot>) {
+    let header = stream::OrderPageHeader::decode(page_bytes).expect("the general page decodes");
+    let mut cursor = stream::OrderSlotCursor::new(page_bytes).expect("the general page walks");
+    let mut owners = OwnerInterner::NEW;
+    let mut book = Box::new(BookV1::empty());
+    let mut live_slots = Vec::new();
+    let mut live: u16 = 0;
+    for _ in 0..header.order_count {
+        let slot = cursor
+            .next_slot()
+            .expect("the populated prefix holds every slot")
+            .expect("every populated slot decodes");
+        if let Some(order) = project_slot(&slot, u64::from(live) + 1, &mut owners)
+            .expect("every live record projects")
+        {
+            book.orders[usize::from(live)] = order;
+            live_slots.push(slot);
+            live += 1;
+        }
+    }
+    book.len = live as u8;
+    (book, live_slots)
+}
+
+/// One relation witness slice as the layout wire/storage slice.
+fn layout_slice(slice: &RelationSliceV1) -> LayoutPairingSlice {
+    fn leg(leg: LegRefV1) -> LayoutLegRef {
+        match leg {
+            LegRefV1::Order(index) => LayoutLegRef::Order(index),
+            LegRefV1::Split => LayoutLegRef::Split,
+            LegRefV1::Merge => LayoutLegRef::Merge,
+        }
+    }
+    LayoutPairingSlice {
+        buy_ref: leg(slice.buy_ref),
+        sell_ref: leg(slice.sell_ref),
+        outcome: slice.outcome,
+        quantity: slice.quantity,
+    }
+}
+
+fn id32(hash: Hash32) -> Identity32V1 {
+    Identity32V1(hash.bytes())
+}
+
+/// Recompute the full-width relation-candidate tie digest over the sealed
+/// feed's stored regions — the same construction `CompleteClearWork` stamps
+/// and `FinalizeSelection` re-derives.
+fn general_tie_digest(
+    epoch: &EpochAccount,
+    feed: &CandidateFeedHeader,
+    feed_bytes: &[u8],
+) -> Hash32 {
+    let full_domain = FullRelationDomainV1 {
+        relation_version: epoch.relation_version,
+        market_id: id32(epoch.market),
+        book_id: id32(epoch.book),
+        epoch_id: id32(epoch.epoch),
+        policy_id: id32(epoch.policy),
+        order_set_id: id32(epoch.order_set),
+        epoch_index: epoch.epoch_index,
+        outcome_count: epoch.outcome_count,
+        owner_count: epoch.owner_count,
+        price_scale: epoch.price_scale,
+        remainder_seed: epoch.remainder_seed,
+        policy: GENERAL_CLEARING_POLICY_V1,
+    };
+    let domain_digest = full_domain.digest().expect("the full domain digests");
+    let fills = clearing::candidate_feed_fill_region(feed_bytes).expect("the fill region borrows");
+    let digest = match feed.declared_slices() {
+        Some(declared) => {
+            let slices = clearing::candidate_feed_slice_region(feed_bytes)
+                .expect("the slice region borrows");
+            full_relation_candidate_digest_from_regions(
+                domain_digest,
+                id32(feed.candidate),
+                fills,
+                feed.honored_aon_mask,
+                Some((declared, slices)),
+            )
+        }
+        None => full_relation_candidate_digest_from_regions(
+            domain_digest,
+            id32(feed.candidate),
+            fills,
+            feed.honored_aon_mask,
+            None,
+        ),
+    }
+    .expect("the tie digest folds");
+    Hash32::from_bytes(digest.0)
+}
+
+/// One per-order reservation of the general walk, tracked across steps.
+struct ReservationSlot {
+    role: String,
+    pda: Pda,
+    value: ReservationAccount,
+}
+
+impl ReservationSlot {
+    fn bytes(&self) -> Vec<u8> {
+        let mut out = vec![0_u8; clutch_solana_layout::reservation::RESERVATION_ACCOUNT_BYTES];
+        self.value.encode(&mut out).expect("a reservation encodes");
+        out
+    }
+
+    fn compare(&self, pre: Option<Vec<u8>>) -> Compare {
+        Compare {
+            role: self.role.clone(),
+            address: self.pda.address.clone(),
+            expected: self.bytes(),
+            pre: pre.unwrap_or_default(),
+        }
+    }
+}
+
+/// Encode one epoch window image (placeholder slot fields included; the
+/// committed runner overwrites the named slot patches with bank facts).
+fn window_bytes(value: &EpochWindowAccount) -> Vec<u8> {
+    let mut out = vec![0_u8; clearing::EPOCH_WINDOW_ACCOUNT_BYTES];
+    value.encode(&mut out).expect("the epoch window encodes");
+    out
+}
+
+fn epoch_bytes_of(value: &EpochAccount) -> Vec<u8> {
+    let mut out = vec![0_u8; account_len::EPOCH];
+    value.encode(&mut out).expect("the general epoch encodes");
+    out
+}
+
+fn record_bytes_of(value: &CandidateRecord) -> Vec<u8> {
+    let mut out = vec![0_u8; account_len::CANDIDATE];
+    value.encode(&mut out).expect("the candidate record encodes");
+    out
+}
+
+/// Probe the window codec for its two slot-stamped field offsets.
+fn window_slot_offsets(template: &EpochWindowAccount) -> (usize, usize) {
+    let base = window_bytes(template);
+    let mut probe_value = *template;
+    probe_value.selection_deadline_slot ^= 0x55;
+    let selection = sole_u64_offset(
+        &base,
+        &window_bytes(&probe_value),
+        "window.selection_deadline_slot",
+    );
+    let mut probe_value = *template;
+    probe_value.selected_slot ^= 0x55;
+    if probe_value.selected_candidate == Hash32::ZERO {
+        /* The pair rule: a selected slot travels with a selected candidate. */
+        probe_value.selected_candidate = Hash32::from_bytes([0x11; 32]);
+        let mut base_value = *template;
+        base_value.selected_candidate = Hash32::from_bytes([0x11; 32]);
+        base_value.selected_slot = template.selected_slot ^ 0xAA;
+        probe_value.selected_slot = base_value.selected_slot ^ 0x55;
+        let selected = sole_u64_offset(
+            &window_bytes(&base_value),
+            &window_bytes(&probe_value),
+            "window.selected_slot",
+        );
+        return (selection, selected);
+    }
+    let selected = sole_u64_offset(&base, &window_bytes(&probe_value), "window.selected_slot");
+    (selection, selected)
+}
+
+/// Probe the candidate-record codec for its submitted-slot offset.
+fn record_submitted_slot_offset(template: &CandidateRecord) -> usize {
+    let base = record_bytes_of(template);
+    let mut probe = *template;
+    probe.submitted_slot ^= 0x55;
+    sole_u64_offset(&base, &record_bytes_of(&probe), "record.submitted_slot")
+}
+
+/// Everything the emitter and the runner script need beyond the cases.
+struct GeneralConservation {
+    endowed_total: u64,
+    split_total: u64,
+    position_cash_offset: usize,
+    position_reserved_offset: usize,
+    position_internal0_offset: usize,
+    position_internal1_offset: usize,
+    hoard_collateral_offset: usize,
+    /// `(step, role)` of each owner's terminal position reload, in owner
+    /// order A, B, C, D.
+    positions: Vec<(String, String)>,
+    /// `(step, role)` of the terminal Hoard ledger reload.
+    hoard: (String, String),
+    /// `(step, role)` of the terminal pooled-custody token reload.
+    hoard_token: (String, String),
+    expected_cash_total: u64,
+    expected_eggs: [u64; 2],
+    expected_locked: u64,
+    expected_custody: u64,
+}
+
+/// Probe the position codec for the conservation fields' offsets.
+fn position_field_offsets(market: Hash32, owner: Hash32) -> (usize, usize, usize, usize) {
+    let base_value = PositionAccount {
+        market,
+        owner,
+        generation: 0,
+        internal: [0; MAX_OUTCOMES],
+        cash_atoms: 100,
+        reserved_cash_atoms: 1,
+        stored_bump: 3,
+        close_state: 0,
+    };
+    let encode = |value: &PositionAccount| {
+        let mut out = vec![0_u8; account_len::POSITION];
+        value.encode(&mut out).expect("the probe position encodes");
+        out
+    };
+    let base = encode(&base_value);
+    let mut probe = base_value;
+    probe.cash_atoms ^= 0x55;
+    let cash = sole_u64_offset(&base, &encode(&probe), "position.cash_atoms");
+    let mut probe = base_value;
+    probe.reserved_cash_atoms ^= 0x14;
+    let reserved = sole_u64_offset(&base, &encode(&probe), "position.reserved_cash_atoms");
+    let mut probe = base_value;
+    probe.internal[0] ^= 0x55;
+    let internal0 = sole_u64_offset(&base, &encode(&probe), "position.internal[0]");
+    let mut probe = base_value;
+    probe.internal[1] ^= 0x55;
+    let internal1 = sole_u64_offset(&base, &encode(&probe), "position.internal[1]");
+    (cash, reserved, internal0, internal1)
+}
+
+/// Probe the hoard codec for the locked-backing offset.
+fn hoard_collateral_offset(shared: &Shared, plane: &Plane) -> usize {
+    let base_value = HoardAccount {
+        market: plane.market_id,
+        realm: shared.realm_hash,
+        authority: Hash32::from_bytes(plane.hoard_authority.bytes),
+        collateral_atoms: 100,
+        stored_bump: plane.hoard.bump,
+        flags: 0,
+    };
+    let encode = |value: &HoardAccount| {
+        let mut out = vec![0_u8; account_len::HOARD];
+        value.encode(&mut out).expect("the probe hoard encodes");
+        out
+    };
+    let mut probe = base_value;
+    probe.collateral_atoms ^= 0x55;
+    sole_u64_offset(
+        &encode(&base_value),
+        &encode(&probe),
+        "hoard.collateral_atoms",
+    )
+}
+
+/// One funded placement: the page append, the owner's encumbrance, and the
+/// created reservation — modeled with the same layout writers and admission
+/// arithmetic the program runs.
+#[allow(clippy::too_many_arguments)]
+fn general_place_case(
+    shared: &Shared,
+    plane: &Plane,
+    epoch_value: &EpochAccount,
+    epoch_pda: &Pda,
+    page_pda: &Pda,
+    page_bytes: &mut [u8],
+    owner: &mut GeneralOwner,
+    rank: u64,
+    slot: OrderSlot,
+    name: &str,
+    note: &str,
+) -> (Case, ReservationSlot) {
+    let plan = ReservationPlan::for_order(
+        &slot,
+        epoch_value.outcome_count,
+        epoch_value.price_scale,
+        0,
+    )
+    .expect("the placement's reservation plan derives");
+    let order_id = slot.order_id();
+    let reservation_id = canonical_reservation_id(
+        epoch_value.market,
+        epoch_value.epoch,
+        owner.id,
+        0,
+        order_id,
+    );
+    let pda = derive(
+        &shared.program.address,
+        &[
+            seeds::SEED_RESERVATION.to_vec(),
+            reservation_id.bytes().to_vec(),
+        ],
+    );
+    let value = ReservationAccount::active(
+        epoch_value.market,
+        epoch_value.epoch,
+        owner.id,
+        order_id,
+        epoch_value.price_grid,
+        epoch_value.terms,
+        epoch_value.policy,
+        0,
+        slot.generation(),
+        0,
+        pda.bump,
+        plan,
+    )
+    .expect("the placement's reservation constructs");
+    let reservation = ReservationSlot {
+        role: format!("general.reservation-{rank}"),
+        pda,
+        value,
+    };
+
+    let mut position = owner.position_value();
+    position.reserved_cash_atoms += plan.cash_atoms;
+    let mut outcome = 0usize;
+    while outcome < MAX_OUTCOMES {
+        position.internal[outcome] = position.internal[outcome]
+            .checked_sub(plan.internal[outcome])
+            .expect("the seller's Egg envelope is funded");
+        outcome += 1;
+    }
+    position
+        .free_cash_atoms()
+        .expect("the buyer's cash envelope is funded");
+    let position_pre = owner.position_bytes.clone();
+    owner.store_position(&position);
+
+    let page_pre = page_bytes.to_vec();
+    stream::append_slot(page_bytes, slot).expect("the placement appends");
+
+    let sequence = rank - 1;
+    let tx = general_transaction(
+        shared,
+        GeneralTx {
+            writable_signers: &[owner.key],
+            readonly_signers: &[],
+            writable: &[page_pda.bytes, owner.position.bytes, reservation.pda.bytes],
+            readonly: &[
+                epoch_pda.bytes,
+                shared.grid.bytes,
+                shared.system_program,
+                shared.rent_sysvar,
+            ],
+            keys: &[
+                owner.key,
+                epoch_pda.bytes,
+                shared.grid.bytes,
+                page_pda.bytes,
+                owner.position.bytes,
+                reservation.pda.bytes,
+                shared.system_program,
+                shared.rent_sysvar,
+            ],
+            data: layout_request(
+                sequence,
+                Intent::PlaceOrder {
+                    market: epoch_value.market,
+                    epoch: epoch_value.epoch,
+                    max_fee_atoms: 0,
+                    slot,
+                },
+            ),
+            heap: false,
+        },
+    );
+    let compares = vec![
+        Compare {
+            role: "general.page".to_string(),
+            address: page_pda.address.clone(),
+            expected: page_bytes.to_vec(),
+            pre: page_pre,
+        },
+        Compare {
+            role: format!("{}.position", owner.label),
+            address: owner.position.address.clone(),
+            expected: owner.position_bytes.clone(),
+            pre: position_pre,
+        },
+        reservation.compare(None),
+    ];
+    let mut case = Case::accept(
+        name,
+        "GeneralClearing",
+        "layout stream writer + reservation admission arithmetic",
+        note,
+        tx,
+        1,
+        compares,
+    );
+    case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+    let _ = plane;
+    (case, reservation)
+}
+
+/// Build the signed general-clearing lane over one actual market address.
+///
+/// Every accepted step mutates the modeled account images exactly as the
+/// program's own writers do; the committed runner then reloads and compares
+/// each one from the bank.
+#[allow(clippy::too_many_lines)]
+fn build_general_committed_cases(
+    f: &Fixture,
+    plane: &mut Plane,
+    actors: &GeneralActors,
+) -> (Vec<Case>, GeneralConservation) {
+    let shared = &f.shared;
+    let pid = shared.program.address.clone();
+    let actor = shared.actor.bytes;
+    let clock = clutch_sbf::instructions::artifact::CLOCK_SYSVAR_ID.to_bytes();
+    let freeze_deadline = general_freeze_deadline();
+    let mut cases = Vec::new();
+
+    /* 1. Create the one market and all seven state PDAs from absent slots. */
+    let create = layout_request(0, create_intent(shared, NONCE_GENERAL));
+    let (founded, founded_resolution) = founding_plane(shared, plane, NONCE_GENERAL);
+    let mut compares: Vec<Compare> = plane
+        .state_roles()
+        .iter()
+        .map(|(role, _)| compare_of(plane, role, output_slice(&founded, role)))
+        .collect();
+    compares.push(compare_of(plane, "resolution", &founded_resolution));
+    let mut founded_plane = Plane::clone_state(plane, &founded);
+    founded_plane.resolution_bytes = founded_resolution;
+    for (role, pda, data) in founded_plane.token_accounts(shared) {
+        if role.contains("holder-token") {
+            continue;
+        }
+        compares.push(Compare {
+            role,
+            address: pda.address,
+            expected: data,
+            pre: Vec::new(),
+        });
+    }
+    let mut case = Case::accept(
+        "general-01-create-market",
+        "GeneralClearing",
+        "layout re-encode + reference::validate_market_init",
+        "create the general market identity and its seven program state PDAs through signed System CPIs",
+        create_transaction(shared, plane, actor, true, create),
+        1,
+        compares,
+    );
+    case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+    cases.push(case);
+    plane.state = founded;
+    plane.resolution_bytes = founded_resolution;
+
+    /* 2. The founding owner's backed deposit. */
+    let endow_a = endow_request(plane, 0, GENERAL_ENDOW_A);
+    cases.push(Case::accept(
+        "general-02-endow-founding-owner",
+        "GeneralClearing",
+        "layout re-encode + exact Token-2022 deltas",
+        "the founding owner's backed Endow funds the position cash its buy orders will encumber",
+        endow_transaction(shared, plane, Signer::own(shared, actor, true), endow_a),
+        1,
+        endow_compares(shared, plane, GENERAL_ENDOW_A),
+    ));
+    let (position, replay) = endow_post(plane, GENERAL_ENDOW_A);
+    plane.state.position.copy_from_slice(&position);
+    plane.state.replay.copy_from_slice(&replay);
+    let mut custody = GENERAL_ENDOW_A;
+    let mut actor_token = ACTOR_COLLATERAL_ATOMS - GENERAL_ENDOW_A;
+
+    /* Owner carriers.  A is the founding owner; B, C, D arrive by first
+     * endow.  Their wallets are runner-supplied fresh test keys. */
+    let mut owner_a = GeneralOwner::new(shared, plane, "general-market", actor, &shared.actor_token);
+    owner_a.position_bytes = plane.state.position.to_vec();
+    owner_a.replay_bytes = plane.state.replay.to_vec();
+    let mut owner_b = GeneralOwner::new(
+        shared,
+        plane,
+        "owner-b",
+        shared.holder.bytes,
+        &shared.holder_collateral_token,
+    );
+    let mut owner_c = GeneralOwner::new(
+        shared,
+        plane,
+        "owner-c",
+        actors.trader_c.bytes,
+        &actors.trader_c_token,
+    );
+    let mut owner_d = GeneralOwner::new(
+        shared,
+        plane,
+        "owner-d",
+        actors.trader_d.bytes,
+        &actors.trader_d_token,
+    );
+
+    /* 3-5. Fresh ordinary collateral accounts for the three traders. */
+    for (name, note, owner) in [
+        (
+            "general-03-create-owner-b-collateral",
+            "create owner B's ordinary collateral account with a fresh test-only account signer",
+            &owner_b,
+        ),
+        (
+            "general-04-create-owner-c-collateral",
+            "create owner C's ordinary collateral account",
+            &owner_c,
+        ),
+        (
+            "general-05-create-owner-d-collateral",
+            "create owner D's ordinary collateral account",
+            &owner_d,
+        ),
+    ] {
+        cases.push(Case::accept(
+            name,
+            "GeneralClearing",
+            "System CreateAccount + Token-2022 InitializeAccount3",
+            note,
+            create_holder_token_transaction(
+                shared,
+                &shared.collateral_mint.bytes,
+                &owner.key,
+                &owner.token.bytes,
+            ),
+            2,
+            vec![constructed_token_compare(
+                &format!("{}.collateral", owner.label),
+                &owner.token,
+                shared.collateral_mint.bytes,
+                owner.key,
+            )],
+        ));
+    }
+
+    /* 6-8. Fund the traders from the founding actor's ordinary account. */
+    for (name, owner, amount) in [
+        ("general-06-fund-owner-b", &owner_b, GENERAL_ENDOW_B),
+        ("general-07-fund-owner-c", &owner_c, GENERAL_ENDOW_C),
+        ("general-08-fund-owner-d", &owner_d, GENERAL_ENDOW_D),
+    ] {
+        cases.push(Case::accept(
+            name,
+            "GeneralClearing",
+            "Token-2022 TransferChecked",
+            "transfer collateral from the founding actor to a distinct signing owner",
+            transfer_collateral_to_owner_transaction(shared, &owner.token, amount),
+            1,
+            general_funding_compares(shared, owner, actor_token, amount),
+        ));
+        actor_token -= amount;
+    }
+
+    /* 9-11. Each trader's first backed Endow creates its Position and Replay
+     * atomically and moves its deposit into pooled custody. */
+    for (name, owner, amount) in [
+        ("general-09-endow-owner-b", &mut owner_b, GENERAL_ENDOW_B),
+        ("general-10-endow-owner-c", &mut owner_c, GENERAL_ENDOW_C),
+        ("general-11-endow-owner-d", &mut owner_d, GENERAL_ENDOW_D),
+    ] {
+        let request = endow_request_for(plane, owner.id, 0, amount);
+        let signer = Signer {
+            key: owner.key,
+            signs: true,
+            collateral: &owner.token,
+        };
+        cases.push(Case::accept(
+            name,
+            "GeneralClearing",
+            "codec expected-state + exact Token-2022 deltas",
+            "a distinct signing owner's first backed Endow creates absent Position and Replay PDAs atomically",
+            endow_transaction_at(shared, plane, &owner.position, &owner.replay, signer, request),
+            1,
+            general_first_endow_compares(shared, plane, owner, amount, custody),
+        ));
+        let (position_bytes, replay_bytes) =
+            first_endow_owner_bytes(plane, owner.key, &owner.position, &owner.replay, amount);
+        owner.position_bytes = position_bytes;
+        owner.replay_bytes = replay_bytes;
+        custody += amount;
+    }
+
+    /* 12-13. The sellers lock complete sets: the Egg envelopes their sell
+     * orders will reserve.  The oracle is the offline reference adapter. */
+    for (name, owner, quantity) in [
+        ("general-12-split-owner-b", &mut owner_b, GENERAL_SPLIT_B),
+        ("general-13-split-owner-d", &mut owner_d, GENERAL_SPLIT_D),
+    ] {
+        let view = owner_view_plane(shared, plane, owner);
+        let request = layout_request(
+            1,
+            Intent::Split {
+                market: plane.market_id,
+                owner: owner.id,
+                quantity,
+            },
+        );
+        let post = view
+            .layout(shared, &request, owner.key, true)
+            .expect("the general walk splits");
+        let signer = Signer {
+            key: owner.key,
+            signs: true,
+            collateral: &owner.token,
+        };
+        let mut compares = vec![
+            compare_of(&view, "market", &post.market),
+            compare_of(&view, "hoard", &post.hoard),
+            compare_of(&view, "kernel", &post.kernel),
+            compare_of(&view, "supply", &post.supply),
+            Compare {
+                role: format!("{}.position", owner.label),
+                address: owner.position.address.clone(),
+                expected: post.position.to_vec(),
+                pre: owner.position_bytes.clone(),
+            },
+            Compare {
+                role: format!("{}.replay", owner.label),
+                address: owner.replay.address.clone(),
+                expected: post.replay.to_vec(),
+                pre: owner.replay_bytes.clone(),
+            },
+            general_custody_compare(shared, plane, custody, custody),
+        ];
+        compares.push(Compare {
+            role: format!("{}.collateral", owner.label),
+            address: owner.token.address.clone(),
+            expected: token_account_bytes(shared.collateral_mint.bytes, owner.key, 0),
+            pre: token_account_bytes(shared.collateral_mint.bytes, owner.key, 0),
+        });
+        cases.push(Case::accept(
+            name,
+            "GeneralClearing",
+            "reference::apply",
+            "lock a distinct owner's position cash into complete sets; pooled custody token balances do not move",
+            seam_transaction(shared, &view, signer, None, Leg::Collateral, request),
+            1,
+            compares,
+        ));
+        absorb_owner_transition(plane, owner, &post);
+    }
+
+    /* The general epoch's canonical addresses. */
+    let market_id = plane.market_id;
+    let epoch_id = canonical_epoch_id(market_id, GENERAL_EPOCH_INDEX);
+    let policy_bytes = canonical_batch_policy_bytes(&GENERAL_CLEARING_POLICY_V1)
+        .expect("the pinned general policy encodes")
+        .to_vec();
+    let policy_digest = Hash32::from_bytes(
+        batch_policy_digest(&GENERAL_CLEARING_POLICY_V1)
+            .expect("the pinned general policy digests")
+            .0,
+    );
+    let policy_stage = derive(
+        &pid,
+        &[
+            seeds::SEED_ARTIFACT_STAGE.to_vec(),
+            shared.payer.bytes.to_vec(),
+            vec![ArtifactKind::BatchPolicy.byte()],
+            epoch_id.bytes().to_vec(),
+            policy_digest.bytes().to_vec(),
+        ],
+    );
+    let policy_final = derive(
+        &pid,
+        &[
+            seeds::SEED_BATCH_POLICY.to_vec(),
+            epoch_id.bytes().to_vec(),
+            policy_digest.bytes().to_vec(),
+        ],
+    );
+    let epoch_pda = derive(
+        &pid,
+        &[
+            seeds::SEED_EPOCH.to_vec(),
+            market_id.bytes().to_vec(),
+            GENERAL_EPOCH_INDEX.to_le_bytes().to_vec(),
+        ],
+    );
+    let window_pda = derive(
+        &pid,
+        &[
+            seeds::SEED_EPOCH_WINDOW.to_vec(),
+            market_id.bytes().to_vec(),
+            GENERAL_EPOCH_INDEX.to_le_bytes().to_vec(),
+        ],
+    );
+    let page_pda = derive(
+        &pid,
+        &[
+            seeds::SEED_PAGE.to_vec(),
+            epoch_id.bytes().to_vec(),
+            0_u16.to_le_bytes().to_vec(),
+        ],
+    );
+    let pot_pda = derive(&pid, &[seeds::SEED_POT.to_vec(), epoch_id.bytes().to_vec()]);
+
+    /* 14-16. Stage, write, and seal the pinned general policy artifact at its
+     * canonical epoch-bound address, through the typed artifact transport. */
+    let binding = ArtifactBinding {
+        kind: ArtifactKind::BatchPolicy,
+        context: epoch_id,
+        digest: policy_digest,
+        exact_len: policy_bytes.len() as u16,
+    };
+    let stage_header = ArtifactStageHeader {
+        binding,
+        funder: shared.payer.bytes,
+        cursor: 0,
+        created_slot: 1,
+        expires_slot: GENERAL_ARTIFACT_EXPIRES_SLOT,
+        stored_bump: policy_stage.bump,
+    };
+    let mut stage_bytes = vec![0_u8; ARTIFACT_STAGE_HEADER_BYTES + policy_bytes.len()];
+    initialize_stage(&mut stage_bytes, &stage_header).expect("the policy stage initializes");
+    let created_slot_offset = {
+        let mut probe_header = stage_header;
+        probe_header.created_slot = 2;
+        let mut probe = vec![0_u8; stage_bytes.len()];
+        initialize_stage(&mut probe, &probe_header).expect("the probe stage initializes");
+        sole_u64_offset(&stage_bytes, &probe, "artifact stage created_slot")
+    };
+    let mut case = Case::accept(
+        "general-14-stage-policy-artifact",
+        "GeneralClearing",
+        "artifact stage codec",
+        "begin the typed upload of the pinned GENERAL_CLEARING_POLICY_V1 artifact for this epoch",
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[policy_stage.bytes],
+                readonly: &[shared.system_program, shared.rent_sysvar, clock],
+                keys: &[
+                    shared.payer.bytes,
+                    policy_stage.bytes,
+                    shared.system_program,
+                    shared.rent_sysvar,
+                    clock,
+                ],
+                data: layout_request(
+                    0,
+                    Intent::BeginArtifact {
+                        kind: ArtifactKind::BatchPolicy,
+                        context: epoch_id,
+                        digest: policy_digest,
+                        exact_len: policy_bytes.len() as u16,
+                        expires_slot: GENERAL_ARTIFACT_EXPIRES_SLOT,
+                    },
+                ),
+                heap: false,
+            },
+        ),
+        1,
+        vec![Compare {
+            role: "general.policy-stage".to_string(),
+            address: policy_stage.address.clone(),
+            expected: stage_bytes.clone(),
+            pre: Vec::new(),
+        }],
+    );
+    case.slot_patches.push((
+        "general.policy-stage".to_string(),
+        SlotPatch {
+            offset: created_slot_offset,
+            base: "general-14-stage-policy-artifact".to_string(),
+            delta: 0,
+        },
+    ));
+    cases.push(case);
+
+    let mut chunk = [0_u8; ARTIFACT_CHUNK_BYTES];
+    chunk[..policy_bytes.len()].copy_from_slice(&policy_bytes);
+    let stage_pre = stage_bytes.clone();
+    clutch_solana_layout::artifact::append_chunk(
+        &mut stage_bytes,
+        binding,
+        0,
+        policy_bytes.len() as u16,
+        &chunk,
+    )
+    .expect("the policy chunk appends");
+    let mut case = Case::accept(
+        "general-15-write-policy-artifact",
+        "GeneralClearing",
+        "artifact stage codec",
+        "write the complete 64-byte policy body in one chunk at the stage's sequential cursor",
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[policy_stage.bytes],
+                readonly: &[clock],
+                keys: &[shared.payer.bytes, policy_stage.bytes, clock],
+                data: layout_request(
+                    0,
+                    Intent::WriteArtifact {
+                        kind: ArtifactKind::BatchPolicy,
+                        context: epoch_id,
+                        digest: policy_digest,
+                        cursor: 0,
+                        chunk_len: policy_bytes.len() as u16,
+                        chunk,
+                    },
+                ),
+                heap: false,
+            },
+        ),
+        1,
+        vec![Compare {
+            role: "general.policy-stage".to_string(),
+            address: policy_stage.address.clone(),
+            expected: stage_bytes.clone(),
+            pre: stage_pre,
+        }],
+    );
+    case.slot_patches.push((
+        "general.policy-stage".to_string(),
+        SlotPatch {
+            offset: created_slot_offset,
+            base: "general-14-stage-policy-artifact".to_string(),
+            delta: 0,
+        },
+    ));
+    cases.push(case);
+
+    cases.push(Case::accept(
+        "general-16-seal-policy-artifact",
+        "GeneralClearing",
+        "batch-policy codec: digest re-derived from the sealed bytes",
+        "seal the staged policy into the canonical immutable artifact the epoch will bind",
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[policy_stage.bytes, policy_final.bytes],
+                readonly: &[shared.system_program, shared.rent_sysvar, clock],
+                keys: &[
+                    shared.payer.bytes,
+                    policy_stage.bytes,
+                    policy_final.bytes,
+                    shared.system_program,
+                    shared.rent_sysvar,
+                    clock,
+                ],
+                data: layout_request(
+                    0,
+                    Intent::SealArtifact {
+                        kind: ArtifactKind::BatchPolicy,
+                        context: epoch_id,
+                        digest: policy_digest,
+                        exact_len: policy_bytes.len() as u16,
+                    },
+                ),
+                heap: false,
+            },
+        ),
+        1,
+        vec![Compare {
+            role: "general.policy".to_string(),
+            address: policy_final.address.clone(),
+            expected: policy_bytes.clone(),
+            pre: Vec::new(),
+        }],
+    ));
+
+    /* 17. Open the general epoch and its schedule window. */
+    let mut epoch_value = open_general_epoch(
+        market_id,
+        shared.terms_digest,
+        grid_of(shared).grid,
+        policy_digest,
+        GENERAL_EPOCH_INDEX,
+        PRICE_SCALE,
+        OUTCOME_COUNT,
+        epoch_pda.bump,
+    )
+    .expect("the general epoch opens");
+    assert_eq!(epoch_value.book, canonical_general_book_id(epoch_id));
+    let mut window_value = EpochWindowAccount {
+        epoch: epoch_id,
+        market: market_id,
+        epoch_index: GENERAL_EPOCH_INDEX,
+        freeze_deadline_slot: freeze_deadline,
+        selection_deadline_slot: 0,
+        selected_slot: 0,
+        selected_candidate: Hash32::ZERO,
+        retained: [Hash32::ZERO; clearing::MAX_RETAINED_CANDIDATES],
+        live_order_count: 0,
+        retained_count: 0,
+        stored_bump: window_pda.bump,
+        flags: 0,
+    };
+    let init_epoch_data = layout_request(
+        0,
+        Intent::InitEpoch {
+            market: market_id,
+            epoch_index: GENERAL_EPOCH_INDEX,
+            policy: policy_digest,
+            freeze_deadline_slot: freeze_deadline,
+        },
+    );
+    let init_epoch_tx = |data: Vec<u8>| {
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[epoch_pda.bytes, window_pda.bytes],
+                readonly: &[
+                    plane.market.bytes,
+                    shared.terms.bytes,
+                    shared.grid.bytes,
+                    policy_final.bytes,
+                    shared.system_program,
+                    shared.rent_sysvar,
+                    clock,
+                ],
+                keys: &[
+                    shared.payer.bytes,
+                    plane.market.bytes,
+                    shared.terms.bytes,
+                    shared.grid.bytes,
+                    policy_final.bytes,
+                    epoch_pda.bytes,
+                    window_pda.bytes,
+                    shared.system_program,
+                    shared.rent_sysvar,
+                    clock,
+                ],
+                data,
+                heap: false,
+            },
+        )
+    };
+    cases.push(Case::accept(
+        "general-17-init-epoch",
+        "GeneralClearing",
+        "layout codec byte-for-byte (open_general_epoch + window)",
+        "create the general epoch bound to the market, terms, grid, and the sealed policy artifact, with its deadline window",
+        init_epoch_tx(init_epoch_data.clone()),
+        1,
+        vec![
+            Compare {
+                role: "general.epoch".to_string(),
+                address: epoch_pda.address.clone(),
+                expected: epoch_bytes_of(&epoch_value),
+                pre: Vec::new(),
+            },
+            Compare {
+                role: "general.window".to_string(),
+                address: window_pda.address.clone(),
+                expected: window_bytes(&window_value),
+                pre: Vec::new(),
+            },
+        ],
+    ));
+
+    /* 18. The duplicate creation refuses on the existing targets. */
+    cases.push(Case::refuse(
+        "general-18-reinit-epoch-refused",
+        "GeneralClearing",
+        "a second InitEpoch against the existing epoch PDA must refuse without touching state",
+        init_epoch_tx(init_epoch_data),
+        code::ALREADY_INITIALIZED,
+        "reference adapter: UnsupportedIntent (no general epoch model)".to_string(),
+    ));
+
+    /* 19. The one order page of the set. */
+    let mut page_bytes = vec![0_u8; account_len::ORDER_PAGE];
+    stream::init_page(&mut page_bytes, market_id, epoch_id, 0, 1, page_pda.bump)
+        .expect("the general page initializes");
+    cases.push(Case::accept(
+        "general-19-init-order-page",
+        "GeneralClearing",
+        "layout stream writer (init_page)",
+        "create the epoch's single order page, empty and open",
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[page_pda.bytes],
+                readonly: &[
+                    plane.market.bytes,
+                    epoch_pda.bytes,
+                    shared.system_program,
+                    shared.rent_sysvar,
+                ],
+                keys: &[
+                    shared.payer.bytes,
+                    page_pda.bytes,
+                    plane.market.bytes,
+                    epoch_pda.bytes,
+                    shared.system_program,
+                    shared.rent_sysvar,
+                ],
+                data: layout_request(
+                    0,
+                    Intent::InitOrderPage {
+                        market: market_id,
+                        epoch: epoch_id,
+                        page_index: 0,
+                        page_count: 1,
+                    },
+                ),
+                heap: false,
+            },
+        ),
+        1,
+        vec![Compare {
+            role: "general.page".to_string(),
+            address: page_pda.address.clone(),
+            expected: page_bytes.clone(),
+            pre: Vec::new(),
+        }],
+    ));
+
+    /* 20. Before the stamped deadline the whole world refuses the freeze. */
+    let freeze_tx = || {
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[epoch_pda.bytes, window_pda.bytes, page_pda.bytes],
+                readonly: &[clock],
+                keys: &[epoch_pda.bytes, window_pda.bytes, clock, page_pda.bytes],
+                data: layout_request(
+                    0,
+                    Intent::FreezeEpoch {
+                        market: market_id,
+                        epoch: epoch_id,
+                    },
+                ),
+                heap: false,
+            },
+        )
+    };
+    cases.push(Case::refuse(
+        "general-20-early-freeze-refused",
+        "GeneralClearing",
+        "a freeze before the window's deadline slot must refuse: the deadline is the whole authority",
+        freeze_tx(),
+        code::NOT_ACTIVE,
+        "reference adapter: UnsupportedIntent (no general epoch model)".to_string(),
+    ));
+
+    /* 21-26. The mixed book: single and portfolio orders from four distinct
+     * signing owners, every one with a real funded reservation. */
+    let doomed_sell = OrderSlot::Single(OrderRecord {
+        owner: owner_b.id,
+        order_id: canonical_order_id(1),
+        outcome: 0,
+        side: 1,
+        quantity: 3,
+        limit: 2_500,
+        minimum_fill: 0,
+        flags: 0,
+        generation: 1,
+        expiry_epoch: GENERAL_EPOCH_INDEX,
+    });
+    let single_buy = OrderSlot::Single(OrderRecord {
+        owner: owner_a.id,
+        order_id: canonical_order_id(2),
+        outcome: 0,
+        side: 0,
+        quantity: 8,
+        limit: 5_000,
+        minimum_fill: 0,
+        flags: 0,
+        generation: 1,
+        expiry_epoch: GENERAL_EPOCH_INDEX,
+    });
+    let single_sell = OrderSlot::Single(OrderRecord {
+        owner: owner_b.id,
+        order_id: canonical_order_id(3),
+        outcome: 0,
+        side: 1,
+        quantity: 8,
+        limit: 0,
+        minimum_fill: 0,
+        flags: 0,
+        generation: 1,
+        expiry_epoch: GENERAL_EPOCH_INDEX,
+    });
+    let mut buy_coefficients = [0_u64; MAX_OUTCOMES];
+    buy_coefficients[0] = 2;
+    buy_coefficients[1] = 2;
+    let portfolio_buy = OrderSlot::Portfolio(PortfolioRecord {
+        owner: owner_c.id,
+        order_id: canonical_order_id(4),
+        side: 0,
+        active_len: 2,
+        flags: 0,
+        coefficients: buy_coefficients,
+        lots: 3,
+        limit_collateral_per_lot: 3,
+        minimum_fill_lots: 0,
+        generation: 1,
+        expiry_epoch: GENERAL_EPOCH_INDEX,
+    });
+    let mut sell_coefficients = [0_u64; MAX_OUTCOMES];
+    sell_coefficients[0] = 6;
+    sell_coefficients[1] = 6;
+    let portfolio_sell = OrderSlot::Portfolio(PortfolioRecord {
+        owner: owner_d.id,
+        order_id: canonical_order_id(5),
+        side: 1,
+        active_len: 2,
+        flags: 0,
+        coefficients: sell_coefficients,
+        lots: 1,
+        limit_collateral_per_lot: 1,
+        minimum_fill_lots: 0,
+        generation: 1,
+        expiry_epoch: GENERAL_EPOCH_INDEX,
+    });
+    let ineligible_buy = OrderSlot::Single(OrderRecord {
+        owner: owner_a.id,
+        order_id: canonical_order_id(6),
+        outcome: 1,
+        side: 0,
+        quantity: 5,
+        limit: 5_000,
+        minimum_fill: 0,
+        flags: 0,
+        generation: 1,
+        expiry_epoch: GENERAL_EPOCH_INDEX,
+    });
+
+    let mut reservations: Vec<ReservationSlot> = Vec::new();
+    let placements: [(&str, &str, OrderSlot); 6] = [
+        (
+            "general-21-place-doomed-sell",
+            "owner B rests a sell that will be retired: the tombstone in the frozen set",
+            doomed_sell,
+        ),
+        (
+            "general-22-place-single-buy",
+            "owner A's single-Egg buy reserves its exact cash envelope",
+            single_buy,
+        ),
+        (
+            "general-23-place-single-sell",
+            "owner B's single-Egg sell reserves its exact Egg envelope",
+            single_sell,
+        ),
+        (
+            "general-24-place-portfolio-buy",
+            "owner C's portfolio buy reserves lots times its per-lot collateral bound",
+            portfolio_buy,
+        ),
+        (
+            "general-25-place-portfolio-sell",
+            "owner D's portfolio sell reserves its exact per-outcome Egg vector",
+            portfolio_sell,
+        ),
+        (
+            "general-26-place-ineligible-buy",
+            "owner A's second buy will not clear at the candidate's prices; its reservation stands",
+            ineligible_buy,
+        ),
+    ];
+    for (index, (name, note, slot)) in placements.into_iter().enumerate() {
+        let owner: &mut GeneralOwner = if slot.owner() == owner_a.id {
+            &mut owner_a
+        } else if slot.owner() == owner_b.id {
+            &mut owner_b
+        } else if slot.owner() == owner_c.id {
+            &mut owner_c
+        } else {
+            &mut owner_d
+        };
+        let (case, reservation) = general_place_case(
+            shared,
+            plane,
+            &epoch_value,
+            &epoch_pda,
+            &page_pda,
+            &mut page_bytes,
+            owner,
+            index as u64 + 1,
+            slot,
+            name,
+            note,
+        );
+        cases.push(case);
+        reservations.push(reservation);
+    }
+
+    /* 27. Retire the doomed sell: a tombstone in the page, the envelope
+     * released to the owner, the reservation RELEASED. */
+    {
+        let page_pre = page_bytes.clone();
+        stream::write_tombstone(&mut page_bytes, canonical_order_id(1), owner_b.id, 2)
+            .expect("the retirement writes");
+        let mut position = owner_b.position_value();
+        position.internal[0] += 3;
+        let position_pre = owner_b.position_bytes.clone();
+        owner_b.store_position(&position);
+        let released_pre = reservations[0].bytes();
+        reservations[0].value = reservations[0]
+            .value
+            .released(2)
+            .expect("the doomed reservation releases");
+        cases.push(Case::accept(
+            "general-27-cancel-doomed-sell",
+            "GeneralClearing",
+            "layout stream writer (write_tombstone) + release arithmetic",
+            "owner B retires its first order; the Egg envelope returns and the reservation is RELEASED",
+            general_transaction(
+                shared,
+                GeneralTx {
+                    writable_signers: &[],
+                    readonly_signers: &[owner_b.key],
+                    writable: &[
+                        page_pda.bytes,
+                        owner_b.position.bytes,
+                        reservations[0].pda.bytes,
+                    ],
+                    readonly: &[epoch_pda.bytes],
+                    keys: &[
+                        owner_b.key,
+                        epoch_pda.bytes,
+                        page_pda.bytes,
+                        owner_b.position.bytes,
+                        reservations[0].pda.bytes,
+                    ],
+                    data: layout_request(
+                        2,
+                        Intent::CancelOrder {
+                            market: market_id,
+                            epoch: epoch_id,
+                            owner: owner_b.id,
+                            order_id: canonical_order_id(1),
+                            generation: 2,
+                        },
+                    ),
+                    heap: false,
+                },
+            ),
+            1,
+            vec![
+                Compare {
+                    role: "general.page".to_string(),
+                    address: page_pda.address.clone(),
+                    expected: page_bytes.clone(),
+                    pre: page_pre,
+                },
+                Compare {
+                    role: "owner-b.position".to_string(),
+                    address: owner_b.position.address.clone(),
+                    expected: owner_b.position_bytes.clone(),
+                    pre: position_pre,
+                },
+                reservations[0].compare(Some(released_pre)),
+            ],
+        ));
+    }
+
+    /* 28. Freeze at the deadline: the set commitment, the sealed page, the
+     * rewritten owner count, and the opened candidate window. */
+    let (order_set, set_order_count) =
+        stream::frozen_set_commitment(&[&page_bytes]).expect("the frozen set commits");
+    {
+        let page_pre = page_bytes.clone();
+        stream::seal_page(&mut page_bytes, order_set, set_order_count).expect("the page seals");
+        let header = stream::OrderPageHeader::decode(&page_bytes).expect("the sealed page decodes");
+        let mut owners = OwnerInterner::NEW;
+        let mut cursor = stream::OrderSlotCursor::new(&page_bytes).expect("the sealed page walks");
+        let mut live: u16 = 0;
+        for _ in 0..header.order_count {
+            let slot = cursor
+                .next_slot()
+                .expect("the populated prefix holds every slot")
+                .expect("every populated slot decodes");
+            match slot {
+                OrderSlot::Single(record) => {
+                    owners.intern(record.owner).expect("the owner interns");
+                    live += 1;
+                }
+                OrderSlot::Portfolio(record) => {
+                    owners.intern(record.owner).expect("the owner interns");
+                    live += 1;
+                }
+                OrderSlot::Tombstone(_) => {}
+                OrderSlot::Empty => panic!("no empty slot inside the populated prefix"),
+            }
+        }
+        epoch_value.phase = EPOCH_PHASE_FROZEN;
+        epoch_value.order_set = order_set;
+        epoch_value.first_order_id = header.first_order_id;
+        epoch_value.last_order_id = header.last_order_id;
+        epoch_value.page_count = 1;
+        epoch_value.order_count = set_order_count;
+        epoch_value.owner_count = owners.count();
+        stream::epoch_binds_page_set(&epoch_value, &[&page_bytes])
+            .expect("the frozen epoch binds its sealed set");
+        window_value.selection_deadline_slot = freeze_deadline + CANDIDATE_WINDOW_SLOTS;
+        window_value.live_order_count = live;
+        assert_eq!(live, 5, "five live orders survive the retirement");
+        assert_eq!(epoch_value.owner_count, 4, "four distinct signing owners");
+
+        let (selection_deadline_offset, _) = window_slot_offsets(&window_value);
+        let mut case = Case::accept(
+            "general-28-freeze-epoch",
+            "GeneralClearing",
+            "layout codec byte-for-byte (frozen_set_commitment + seal_page)",
+            "freeze the complete page set at the deadline; the set commitment, live cardinality, and candidate window are stamped",
+            freeze_tx(),
+            1,
+            vec![
+                Compare {
+                    role: "general.epoch".to_string(),
+                    address: epoch_pda.address.clone(),
+                    expected: epoch_bytes_of(&epoch_value),
+                    pre: Vec::new(),
+                },
+                Compare {
+                    role: "general.window".to_string(),
+                    address: window_pda.address.clone(),
+                    expected: window_bytes(&window_value),
+                    pre: Vec::new(),
+                },
+                Compare {
+                    role: "general.page".to_string(),
+                    address: page_pda.address.clone(),
+                    expected: page_bytes.clone(),
+                    pre: page_pre,
+                },
+            ],
+        );
+        case.wait_slot = Some(freeze_deadline);
+        case.slot_patches.push((
+            "general.window".to_string(),
+            SlotPatch {
+                offset: selection_deadline_offset,
+                base: "general-28-freeze-epoch".to_string(),
+                delta: CANDIDATE_WINDOW_SLOTS,
+            },
+        ));
+        cases.push(case);
+    }
+
+    let conservation = general_second_half(
+        f,
+        plane,
+        GeneralSecondHalf {
+            epoch_pda,
+            window_pda,
+            page_pda,
+            pot_pda,
+            clock,
+            epoch_value,
+            window_value,
+            page_bytes,
+            reservations,
+            owner_a,
+            owner_b,
+            owner_c,
+            owner_d,
+            custody,
+        },
+        &mut cases,
+    );
+    (cases, conservation)
+}
+
+/// Everything the frozen-book half of the lane hands the selection half.
+struct GeneralSecondHalf {
+    epoch_pda: Pda,
+    window_pda: Pda,
+    page_pda: Pda,
+    pot_pda: Pda,
+    clock: [u8; 32],
+    epoch_value: EpochAccount,
+    window_value: EpochWindowAccount,
+    page_bytes: Vec<u8>,
+    reservations: Vec<ReservationSlot>,
+    owner_a: GeneralOwner,
+    owner_b: GeneralOwner,
+    owner_c: GeneralOwner,
+    owner_d: GeneralOwner,
+    custody: u64,
+}
+
+/// Steps 29-44: submission, walk, selection, entitlement, and consumption.
+#[allow(clippy::too_many_lines)]
+fn general_second_half(
+    f: &Fixture,
+    plane: &Plane,
+    state: GeneralSecondHalf,
+    cases: &mut Vec<Case>,
+) -> GeneralConservation {
+    let shared = &f.shared;
+    let pid = shared.program.address.clone();
+    let GeneralSecondHalf {
+        epoch_pda,
+        window_pda,
+        page_pda,
+        pot_pda,
+        clock,
+        mut epoch_value,
+        mut window_value,
+        page_bytes,
+        mut reservations,
+        mut owner_a,
+        mut owner_b,
+        mut owner_c,
+        mut owner_d,
+        custody,
+    } = state;
+    let market_id = epoch_value.market;
+    let epoch_id = epoch_value.epoch;
+
+    /* The one candidate: canonical fills and the canonical explicit witness
+     * over the frozen book, computed by the same relation the program runs. */
+    let (book, live_slots) = project_general_book(&page_bytes);
+    assert_eq!(book.len, 5, "five live orders feed the walk");
+    let mut prices = [0_u64; MAX_OUTCOMES];
+    prices[0] = GENERAL_PRICE_0;
+    prices[1] = GENERAL_PRICE_1;
+    let domain = general_domain(&epoch_value);
+    let candidate_v1 =
+        canonical_candidate(&domain, &book, &prices, 0, 0).expect("the canonical candidate derives");
+    assert_eq!(
+        &candidate_v1.fills[..5],
+        &[8, 8, 3, 1, 0],
+        "full fills on the four eligible orders, zero on the ineligible one"
+    );
+    assert_eq!(candidate_v1.virtual_split, 0);
+    assert_eq!(candidate_v1.virtual_merge, 0);
+    let witness =
+        canonical_pairing(&domain, &book, &candidate_v1).expect("the canonical pairing derives");
+    let declared = witness.len;
+    assert_eq!(declared, 3, "one single crossing and the portfolio pair's two legs");
+    let mut single_slice: Option<u16> = None;
+    let mut pair_slices: Vec<u16> = Vec::new();
+    for index in 0..declared {
+        let slice = witness.slices[usize::from(index)];
+        match (slice.buy_ref, slice.sell_ref) {
+            (LegRefV1::Order(0), LegRefV1::Order(1)) => {
+                assert_eq!(slice.quantity, 8);
+                assert_eq!(slice.outcome, 0);
+                assert!(single_slice.is_none());
+                single_slice = Some(index);
+            }
+            (LegRefV1::Order(2), LegRefV1::Order(3)) => {
+                assert_eq!(slice.quantity, 6);
+                pair_slices.push(index);
+            }
+            other => panic!("unexpected canonical witness slice {other:?}"),
+        }
+    }
+    let single_slice = single_slice.expect("the single crossing has a witness slice");
+    assert_eq!(pair_slices.len(), 2, "the portfolio pair covers both outcomes");
+    pair_slices.sort_unstable();
+
+    /* The SUBMITTED record and the staged feed. */
+    let mut record = CandidateRecord {
+        candidate: Hash32::ZERO,
+        epoch: epoch_id,
+        market: market_id,
+        prices,
+        virtual_split: 0,
+        virtual_merge: 0,
+        honored_aon_mask: 0,
+        weighted_direct_volume: 0,
+        limit_surplus_price_units: 0,
+        score_digest: Hash32::ZERO,
+        churn: 0,
+        submitted_slot: 1,
+        distinct_owners: 0,
+        order_len: 5,
+        outcome_count: OUTCOME_COUNT,
+        status: CANDIDATE_STATUS_SUBMITTED,
+        stored_bump: 0,
+        flags: 0,
+    };
+    record.candidate = record
+        .recomputed_candidate_digest()
+        .expect("the candidate digest derives");
+    let candidate = record.candidate;
+    let record_pda = derive(
+        &pid,
+        &[
+            seeds::SEED_CANDIDATE.to_vec(),
+            epoch_id.bytes().to_vec(),
+            candidate.bytes().to_vec(),
+        ],
+    );
+    let feed_pda = derive(
+        &pid,
+        &[
+            seeds::SEED_CANDIDATE_FEED.to_vec(),
+            epoch_id.bytes().to_vec(),
+            candidate.bytes().to_vec(),
+        ],
+    );
+    let work_pda = derive(
+        &pid,
+        &[
+            seeds::SEED_CLEAR_WORK.to_vec(),
+            epoch_id.bytes().to_vec(),
+            candidate.bytes().to_vec(),
+        ],
+    );
+    record.stored_bump = record_pda.bump;
+    record
+        .binds_epoch(&epoch_value, u16::from(record.order_len))
+        .expect("the submission binds the frozen epoch");
+    let submitted_slot_offset = record_submitted_slot_offset(&record);
+
+    let stage = CandidateFeedStage {
+        candidate,
+        epoch: epoch_id,
+        market: market_id,
+        order_set: epoch_value.order_set,
+        prices,
+        virtual_split: 0,
+        virtual_merge: 0,
+        honored_aon_mask: 0,
+        weighted_direct_volume: 0,
+        limit_surplus_price_units: 0,
+        declared_slices: declared,
+        distinct_owners: 0,
+        fills_written: 0,
+        slices_written: 0,
+        order_len: 5,
+        outcome_count: OUTCOME_COUNT,
+        stored_bump: feed_pda.bump,
+        flags: CANDIDATE_FEED_FLAG_SLICES_DECLARED,
+    };
+    let mut feed_bytes = vec![0_u8; account_len::CANDIDATE_FEED];
+    clearing::init_candidate_feed_stage(&mut feed_bytes, &stage)
+        .expect("the staged feed initializes");
+
+    let mut case = Case::accept(
+        "general-29-submit-candidate",
+        "GeneralClearing",
+        "layout codec byte-for-byte (record + staged feed)",
+        "submit the one candidate: the SUBMITTED record and the staged feed at their canonical PDAs",
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[record_pda.bytes, feed_pda.bytes],
+                readonly: &[
+                    epoch_pda.bytes,
+                    window_pda.bytes,
+                    shared.system_program,
+                    shared.rent_sysvar,
+                    clock,
+                ],
+                keys: &[
+                    shared.payer.bytes,
+                    epoch_pda.bytes,
+                    window_pda.bytes,
+                    record_pda.bytes,
+                    feed_pda.bytes,
+                    shared.system_program,
+                    shared.rent_sysvar,
+                    clock,
+                ],
+                data: layout_request(
+                    0,
+                    Intent::SubmitCandidate {
+                        market: market_id,
+                        epoch: epoch_id,
+                        prices,
+                        virtual_split: 0,
+                        virtual_merge: 0,
+                        honored_aon_mask: 0,
+                        declared_slices: Some(declared),
+                        weighted_direct_volume: 0,
+                        limit_surplus_price_units: 0,
+                        distinct_owners: 0,
+                    },
+                ),
+                heap: false,
+            },
+        ),
+        1,
+        vec![
+            Compare {
+                role: "general.candidate".to_string(),
+                address: record_pda.address.clone(),
+                expected: record_bytes_of(&record),
+                pre: Vec::new(),
+            },
+            Compare {
+                role: "general.feed".to_string(),
+                address: feed_pda.address.clone(),
+                expected: feed_bytes.clone(),
+                pre: Vec::new(),
+            },
+        ],
+    );
+    case.slot_patches.push((
+        "general.candidate".to_string(),
+        SlotPatch {
+            offset: submitted_slot_offset,
+            base: "general-29-submit-candidate".to_string(),
+            delta: 0,
+        },
+    ));
+    cases.push(case);
+
+    /* 30-31. The staged feed wire: fills, then the declared witness. */
+    let fills: Vec<u64> = candidate_v1.fills[..usize::from(book.len)].to_vec();
+    let feed_pre = feed_bytes.clone();
+    clearing::stage_append_fills(&mut feed_bytes, &fills).expect("the fills append");
+    let mut wire_fills = [0_u64; FEED_FILLS_PER_CHUNK];
+    wire_fills[..fills.len()].copy_from_slice(&fills);
+    let write_feed_tx = |sequence: u64, chunk: CandidateFeedChunk| {
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[feed_pda.bytes],
+                readonly: &[],
+                keys: &[feed_pda.bytes],
+                data: layout_request(
+                    sequence,
+                    Intent::WriteCandidateFeed {
+                        market: market_id,
+                        epoch: epoch_id,
+                        candidate,
+                        chunk,
+                    },
+                ),
+                heap: false,
+            },
+        )
+    };
+    cases.push(Case::accept(
+        "general-30-write-feed-fills",
+        "GeneralClearing",
+        "staged feed codec (sequential fill cursor)",
+        "write the five canonical fills at the staged feed's sequential cursor",
+        write_feed_tx(
+            0,
+            CandidateFeedChunk::Fills {
+                count: fills.len() as u8,
+                fills: wire_fills,
+            },
+        ),
+        1,
+        vec![Compare {
+            role: "general.feed".to_string(),
+            address: feed_pda.address.clone(),
+            expected: feed_bytes.clone(),
+            pre: feed_pre,
+        }],
+    ));
+
+    let layout_slices: Vec<LayoutPairingSlice> = (0..declared)
+        .map(|index| layout_slice(&witness.slices[usize::from(index)]))
+        .collect();
+    let feed_pre = feed_bytes.clone();
+    clearing::stage_append_slices(&mut feed_bytes, &layout_slices).expect("the slices append");
+    let mut wire_slices = [LayoutPairingSlice::PADDING; FEED_SLICES_PER_CHUNK];
+    wire_slices[..layout_slices.len()].copy_from_slice(&layout_slices);
+    cases.push(Case::accept(
+        "general-31-write-feed-slices",
+        "GeneralClearing",
+        "staged feed codec (sequential slice cursor)",
+        "write the three canonical pairing-witness slices; the staged content is complete",
+        write_feed_tx(
+            u64::from(book.len),
+            CandidateFeedChunk::Slices {
+                count: layout_slices.len() as u8,
+                slices: wire_slices,
+            },
+        ),
+        1,
+        vec![Compare {
+            role: "general.feed".to_string(),
+            address: feed_pda.address.clone(),
+            expected: feed_bytes.clone(),
+            pre: feed_pre,
+        }],
+    ));
+
+    /* 32. Seal the feed and admit the candidate into the retained registry. */
+    let feed_pre = feed_bytes.clone();
+    let feed_header = clearing::seal_candidate_feed(&mut feed_bytes).expect("the feed seals");
+    window_value.retained[0] = candidate;
+    window_value.retained_count = 1;
+    let (selection_deadline_offset, _) = window_slot_offsets(&window_value);
+    let mut case = Case::accept(
+        "general-32-seal-candidate",
+        "GeneralClearing",
+        "layout codec byte-for-byte (sealed feed + retained registry)",
+        "seal the complete staged feed into the verified-feed format and retain the candidate in the window",
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[window_pda.bytes, feed_pda.bytes],
+                readonly: &[epoch_pda.bytes, clock],
+                keys: &[
+                    epoch_pda.bytes,
+                    window_pda.bytes,
+                    feed_pda.bytes,
+                    clock,
+                ],
+                data: layout_request(
+                    0,
+                    Intent::SealCandidate {
+                        market: market_id,
+                        epoch: epoch_id,
+                        candidate,
+                    },
+                ),
+                heap: false,
+            },
+        ),
+        1,
+        vec![
+            Compare {
+                role: "general.feed".to_string(),
+                address: feed_pda.address.clone(),
+                expected: feed_bytes.clone(),
+                pre: feed_pre,
+            },
+            Compare {
+                role: "general.window".to_string(),
+                address: window_pda.address.clone(),
+                expected: window_bytes(&window_value),
+                pre: Vec::new(),
+            },
+        ],
+    );
+    case.slot_patches.push((
+        "general.window".to_string(),
+        SlotPatch {
+            offset: selection_deadline_offset,
+            base: "general-28-freeze-epoch".to_string(),
+            delta: CANDIDATE_WINDOW_SLOTS,
+        },
+    ));
+    cases.push(case);
+
+    /* 33. Staged creation of the 50,054-byte checkpoint: one transaction,
+     * five instructions (create + four grows; the last grow writes the real
+     * header and the idle body). */
+    let mut work_bytes = vec![0_u8; account_len::CLEAR_WORK];
+    clearing::init_clear_work(&mut work_bytes, market_id, epoch_id, candidate, work_pda.bump)
+        .expect("the checkpoint account initializes");
+    ClearWorkV1::encode_idle_into(
+        clearing::clear_work_body_mut(&mut work_bytes).expect("the checkpoint body borrows"),
+    )
+    .expect("the idle checkpoint encodes");
+    {
+        let message = Message::new(
+            &[shared.payer.bytes],
+            &[],
+            &[work_pda.bytes],
+            &[
+                shared.system_program,
+                shared.rent_sysvar,
+                shared.program.bytes,
+                shared.compute_budget,
+            ],
+        );
+        let mut instructions = vec![budget_instruction(
+            &message,
+            &shared.compute_budget,
+            COMPUTE_UNIT_CEILING,
+        )];
+        instructions.push(Instruction {
+            program_index: message.index(&shared.program.bytes),
+            accounts: message.indices(&[
+                shared.payer.bytes,
+                work_pda.bytes,
+                shared.system_program,
+                shared.rent_sysvar,
+            ]),
+            data: layout_request(
+                0,
+                Intent::InitClearWork {
+                    market: market_id,
+                    epoch: epoch_id,
+                    candidate,
+                },
+            ),
+        });
+        for sequence in 1..=4_u64 {
+            instructions.push(Instruction {
+                program_index: message.index(&shared.program.bytes),
+                accounts: message.indices(&[work_pda.bytes]),
+                data: layout_request(
+                    sequence,
+                    Intent::GrowClearWork {
+                        market: market_id,
+                        epoch: epoch_id,
+                        candidate,
+                    },
+                ),
+            });
+        }
+        let mut case = Case::accept(
+            "general-33-create-clear-work",
+            "GeneralClearing",
+            "layout codec byte-for-byte (grow stages + idle checkpoint)",
+            "create the resumable clearing checkpoint through the five-instruction staged-growth protocol",
+            transaction(&message, &instructions),
+            5,
+            vec![Compare {
+                role: "general.clear-work".to_string(),
+                address: work_pda.address.clone(),
+                expected: work_bytes.clone(),
+                pre: Vec::new(),
+            }],
+        );
+        case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+        cases.push(case);
+    }
+
+    /* 34. Pass 1 in one batch: begin, the reservation sweep over all five
+     * live orders, end-pass, the owner-count gate, and the bind. */
+    let advance_tx = |max_orders: u16, reservation_keys: &[[u8; 32]]| {
+        let mut readonly = vec![epoch_pda.bytes, feed_pda.bytes, page_pda.bytes];
+        readonly.extend_from_slice(reservation_keys);
+        let mut keys = vec![
+            epoch_pda.bytes,
+            feed_pda.bytes,
+            work_pda.bytes,
+            page_pda.bytes,
+        ];
+        keys.extend_from_slice(reservation_keys);
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[work_pda.bytes],
+                readonly: &readonly,
+                keys: &keys,
+                data: layout_request(
+                    0,
+                    Intent::AdvanceClearWork {
+                        market: market_id,
+                        epoch: epoch_id,
+                        candidate,
+                        max_orders,
+                    },
+                ),
+                heap: true,
+            },
+        )
+    };
+    let mut body = Box::new(ClearWorkV1::new());
+    let mut interner = OwnerInterner::NEW;
+    let status = body
+        .begin(
+            &domain,
+            &general_stream_candidate(book.len, prices, declared),
+            false,
+        )
+        .expect("the feed begins");
+    assert_eq!(status, FeedStatusV1::NeedOrders { pass: 1 });
+    for (live, slot) in live_slots.iter().enumerate() {
+        let order = project_slot(slot, live as u64 + 1, &mut interner)
+            .expect("every live record projects")
+            .expect("only live records are fed");
+        let fill = clearing::fill_at(&feed_bytes, &feed_header, live as u8)
+            .expect("every live rank has a fill");
+        let status = body.push_order(&order, fill).expect("pass 1 accepts the order");
+        assert_ne!(status, FeedStatusV1::Complete, "no early verdict");
+    }
+    let status = body.end_pass().expect("pass 1 ends");
+    assert_eq!(status, FeedStatusV1::NeedSlices);
+    assert_eq!(interner.count(), epoch_value.owner_count, "the owner-count gate");
+    body.encode_into(clearing::clear_work_body_mut(&mut work_bytes).expect("body borrows"))
+        .expect("the pass-1 body encodes");
+    clearing::write_owner_interner(&mut work_bytes, &interner).expect("the interner persists");
+    clearing::advance_walk(&mut work_bytes, epoch_value.page_count, 0, u16::from(book.len))
+        .expect("the walk position advances");
+    clearing::bind_order_set(&mut work_bytes, epoch_value.order_set, body.consumed_fold())
+        .expect("pass 1 binds the frozen set");
+    let sweep: Vec<[u8; 32]> = (1..=5).map(|rank| reservations[rank].pda.bytes).collect();
+    let mut case = Case::accept(
+        "general-34-advance-pass-one",
+        "GeneralClearing",
+        "host relation twin byte-for-byte (ClearWorkV1)",
+        "pass 1 in one batch: every live order's exact ACTIVE reservation is swept, the fold is sealed, the set binds",
+        advance_tx(16, &sweep),
+        1,
+        vec![Compare {
+            role: "general.clear-work".to_string(),
+            address: work_pda.address.clone(),
+            expected: work_bytes.clone(),
+            pre: Vec::new(),
+        }],
+    );
+    case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+    cases.push(case);
+
+    /* 35. The declared witness slices, then the rewind to pass 2. */
+    for index in 0..declared {
+        body.push_slice(&witness.slices[usize::from(index)])
+            .expect("the slice pass accepts the slice");
+    }
+    let status = body.end_pass().expect("the slice pass ends");
+    assert_eq!(status, FeedStatusV1::NeedOrders { pass: 2 });
+    body.encode_into(clearing::clear_work_body_mut(&mut work_bytes).expect("body borrows"))
+        .expect("the slice-pass body encodes");
+    clearing::rewind_walk(&mut work_bytes).expect("the walk rewinds for pass 2");
+    let mut case = Case::accept(
+        "general-35-advance-slices",
+        "GeneralClearing",
+        "host relation twin byte-for-byte (ClearWorkV1)",
+        "the slice pass streams the declared pairing witness and rewinds the walk",
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[work_pda.bytes],
+                readonly: &[epoch_pda.bytes, feed_pda.bytes],
+                keys: &[epoch_pda.bytes, feed_pda.bytes, work_pda.bytes],
+                data: layout_request(
+                    0,
+                    Intent::AdvanceClearSlices {
+                        market: market_id,
+                        epoch: epoch_id,
+                        candidate,
+                        max_slices: declared,
+                    },
+                ),
+                heap: true,
+            },
+        ),
+        1,
+        vec![Compare {
+            role: "general.clear-work".to_string(),
+            address: work_pda.address.clone(),
+            expected: work_bytes.clone(),
+            pre: Vec::new(),
+        }],
+    );
+    case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+    cases.push(case);
+
+    /* 36. Pass 2 to the verdict. */
+    for (live, slot) in live_slots.iter().enumerate() {
+        let order = project_slot(slot, live as u64 + 1, &mut interner)
+            .expect("every live record projects")
+            .expect("only live records are fed");
+        let fill = clearing::fill_at(&feed_bytes, &feed_header, live as u8)
+            .expect("every live rank has a fill");
+        body.push_order(&order, fill).expect("pass 2 accepts the order");
+    }
+    let status = body.end_pass().expect("pass 2 ends");
+    assert_eq!(status, FeedStatusV1::Complete);
+    body.encode_into(clearing::clear_work_body_mut(&mut work_bytes).expect("body borrows"))
+        .expect("the pass-2 body encodes");
+    clearing::advance_walk(&mut work_bytes, epoch_value.page_count, 0, u16::from(book.len))
+        .expect("the walk position closes the set");
+    let mut case = Case::accept(
+        "general-36-advance-pass-two",
+        "GeneralClearing",
+        "host relation twin byte-for-byte (ClearWorkV1)",
+        "pass 2 re-walks the frozen set to the feed's verdict",
+        advance_tx(16, &[]),
+        1,
+        vec![Compare {
+            role: "general.clear-work".to_string(),
+            address: work_pda.address.clone(),
+            expected: work_bytes.clone(),
+            pre: Vec::new(),
+        }],
+    );
+    case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+    cases.push(case);
+
+    /* 37. Close the checkpoint and persist the verified score. */
+    {
+        let summary = match body.verdict() {
+            Some(Ok(summary)) => summary,
+            other => panic!("the general candidate must verify, got {other:?}"),
+        };
+        record.status = CANDIDATE_STATUS_VERIFIED;
+        record.weighted_direct_volume = summary.score.weighted_direct_volume;
+        record.limit_surplus_price_units = summary.score.limit_surplus_price_units;
+        record.distinct_owners = summary.score.distinct_owners;
+        record.churn = summary.score.churn;
+    }
+    record.score_digest = general_tie_digest(&epoch_value, &feed_header, &feed_bytes);
+    clearing::complete_clear_work(&mut work_bytes).expect("the checkpoint completes");
+    let mut case = Case::accept(
+        "general-37-complete-clear-work",
+        "GeneralClearing",
+        "host relation twin + full-width tie digest",
+        "the close persists the streamed verdict: VERIFIED status, recomputed score components, and the tie digest",
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[work_pda.bytes, record_pda.bytes],
+                readonly: &[epoch_pda.bytes, feed_pda.bytes],
+                keys: &[
+                    epoch_pda.bytes,
+                    feed_pda.bytes,
+                    work_pda.bytes,
+                    record_pda.bytes,
+                ],
+                data: layout_request(
+                    0,
+                    Intent::CompleteClearWork {
+                        market: market_id,
+                        epoch: epoch_id,
+                        candidate,
+                    },
+                ),
+                heap: true,
+            },
+        ),
+        1,
+        vec![
+            Compare {
+                role: "general.candidate".to_string(),
+                address: record_pda.address.clone(),
+                expected: record_bytes_of(&record),
+                pre: Vec::new(),
+            },
+            Compare {
+                role: "general.clear-work".to_string(),
+                address: work_pda.address.clone(),
+                expected: work_bytes.clone(),
+                pre: Vec::new(),
+            },
+        ],
+    );
+    case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+    case.slot_patches.push((
+        "general.candidate".to_string(),
+        SlotPatch {
+            offset: submitted_slot_offset,
+            base: "general-29-submit-candidate".to_string(),
+            delta: 0,
+        },
+    ));
+    cases.push(case);
+
+    /* 38. Selection at the deadline: the verified candidate wins, the epoch
+     * clears, the window records the winner. */
+    epoch_value.phase = EPOCH_PHASE_CLEARED;
+    record.status = CANDIDATE_STATUS_SELECTED;
+    window_value.selected_candidate = candidate;
+    window_value.selected_slot = window_value.selection_deadline_slot;
+    let (selection_deadline_offset, selected_slot_offset) = window_slot_offsets(&window_value);
+    let mut case = Case::accept(
+        "general-38-finalize-selection",
+        "GeneralClearing",
+        "layout codec byte-for-byte + re-derived tie digest",
+        "finalize selection at the candidate-window deadline: SELECTED record, CLEARED epoch, stamped window",
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[epoch_pda.bytes, window_pda.bytes, record_pda.bytes],
+                readonly: &[clock, feed_pda.bytes],
+                keys: &[
+                    epoch_pda.bytes,
+                    window_pda.bytes,
+                    clock,
+                    record_pda.bytes,
+                    feed_pda.bytes,
+                ],
+                data: layout_request(
+                    0,
+                    Intent::FinalizeSelection {
+                        market: market_id,
+                        epoch: epoch_id,
+                    },
+                ),
+                heap: false,
+            },
+        ),
+        1,
+        vec![
+            Compare {
+                role: "general.epoch".to_string(),
+                address: epoch_pda.address.clone(),
+                expected: epoch_bytes_of(&epoch_value),
+                pre: Vec::new(),
+            },
+            Compare {
+                role: "general.window".to_string(),
+                address: window_pda.address.clone(),
+                expected: window_bytes(&window_value),
+                pre: Vec::new(),
+            },
+            Compare {
+                role: "general.candidate".to_string(),
+                address: record_pda.address.clone(),
+                expected: record_bytes_of(&record),
+                pre: Vec::new(),
+            },
+        ],
+    );
+    case.wait_after = Some(("general-28-freeze-epoch".to_string(), CANDIDATE_WINDOW_SLOTS));
+    case.slot_patches.push((
+        "general.window".to_string(),
+        SlotPatch {
+            offset: selection_deadline_offset,
+            base: "general-28-freeze-epoch".to_string(),
+            delta: CANDIDATE_WINDOW_SLOTS,
+        },
+    ));
+    case.slot_patches.push((
+        "general.window".to_string(),
+        SlotPatch {
+            offset: selected_slot_offset,
+            base: "general-38-finalize-selection".to_string(),
+            delta: 0,
+        },
+    ));
+    case.slot_patches.push((
+        "general.candidate".to_string(),
+        SlotPatch {
+            offset: submitted_slot_offset,
+            base: "general-29-submit-candidate".to_string(),
+            delta: 0,
+        },
+    ));
+    cases.push(case);
+
+    /* 39. The entitlement freeze: the pot from the verified summary, provably
+     * empty and CLOSED. */
+    let pot_value = FinalPotAccount {
+        epoch: epoch_id,
+        market: market_id,
+        candidate,
+        pot_internal: [0; MAX_OUTCOMES],
+        pot_cash_price_units: 0,
+        rounding_pot_price_units: 0,
+        outcome_count: OUTCOME_COUNT,
+        phase: POT_PHASE_CLOSED,
+        stored_bump: pot_pda.bump,
+        flags: 0,
+    };
+    let mut pot_bytes = vec![0_u8; account_len::FINAL_POT];
+    pot_value.encode(&mut pot_bytes).expect("the final pot encodes");
+    let mut case = Case::accept(
+        "general-39-freeze-entitlement",
+        "GeneralClearing",
+        "layout codec byte-for-byte (FinalPot, CLOSED and empty)",
+        "freeze the entitlement: the pot is created from the verified summary's provably zero scalars",
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[pot_pda.bytes],
+                readonly: &[
+                    epoch_pda.bytes,
+                    record_pda.bytes,
+                    work_pda.bytes,
+                    shared.system_program,
+                    shared.rent_sysvar,
+                ],
+                keys: &[
+                    shared.payer.bytes,
+                    epoch_pda.bytes,
+                    record_pda.bytes,
+                    work_pda.bytes,
+                    pot_pda.bytes,
+                    shared.system_program,
+                    shared.rent_sysvar,
+                ],
+                data: layout_request(
+                    0,
+                    Intent::FreezeEntitlement {
+                        market: market_id,
+                        epoch: epoch_id,
+                        candidate,
+                    },
+                ),
+                heap: true,
+            },
+        ),
+        1,
+        vec![Compare {
+            role: "general.pot".to_string(),
+            address: pot_pda.address.clone(),
+            expected: pot_bytes,
+            pre: Vec::new(),
+        }],
+    );
+    case.compute_limit = Some(COMPUTE_UNIT_CEILING);
+    cases.push(case);
+
+    /* 40. Entitle the single-Egg crossing: both reservations ENTITLED and the
+     * receipt minted. */
+    let receipt_pda = |slice_index: u16| {
+        derive(
+            &pid,
+            &[
+                seeds::SEED_RECEIPT.to_vec(),
+                epoch_id.bytes().to_vec(),
+                candidate.bytes().to_vec(),
+                slice_index.to_le_bytes().to_vec(),
+            ],
+        )
+    };
+    let single_receipt_pda = receipt_pda(single_slice);
+    let single_receipt = SettlementReceiptAccount {
+        epoch: epoch_id,
+        market: market_id,
+        candidate,
+        buy_order_id: canonical_order_id(2),
+        sell_order_id: canonical_order_id(3),
+        consideration_price_units: 8_u128 * u128::from(GENERAL_PRICE_0),
+        quantity: 8,
+        settled_quantity: 0,
+        price: GENERAL_PRICE_0,
+        sequence: u64::from(single_slice) + 1,
+        slice_index: single_slice,
+        outcome: 0,
+        leg_kind: RECEIPT_LEG_DIRECT,
+        consumed_flags: 0,
+        stored_bump: single_receipt_pda.bump,
+        flags: 0,
+    };
+    let mut single_receipt_bytes = vec![0_u8; account_len::SETTLEMENT_RECEIPT];
+    single_receipt
+        .encode(&mut single_receipt_bytes)
+        .expect("the single receipt encodes");
+    let res_buy_pre = reservations[1].bytes();
+    let res_sell_pre = reservations[2].bytes();
+    reservations[1].value.state = RESERVATION_STATE_ENTITLED;
+    reservations[2].value.state = RESERVATION_STATE_ENTITLED;
+    cases.push(Case::accept(
+        "general-40-entitle-single-slice",
+        "GeneralClearing",
+        "layout codec byte-for-byte (receipt + ENTITLED reservations)",
+        "entitle the single-Egg crossing: ACTIVE to ENTITLED on both reservations, one consumable receipt",
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[
+                    reservations[1].pda.bytes,
+                    reservations[2].pda.bytes,
+                    single_receipt_pda.bytes,
+                ],
+                readonly: &[
+                    epoch_pda.bytes,
+                    record_pda.bytes,
+                    feed_pda.bytes,
+                    pot_pda.bytes,
+                    shared.system_program,
+                    shared.rent_sysvar,
+                    page_pda.bytes,
+                ],
+                keys: &[
+                    shared.payer.bytes,
+                    epoch_pda.bytes,
+                    record_pda.bytes,
+                    feed_pda.bytes,
+                    pot_pda.bytes,
+                    shared.system_program,
+                    shared.rent_sysvar,
+                    page_pda.bytes,
+                    reservations[1].pda.bytes,
+                    reservations[2].pda.bytes,
+                    single_receipt_pda.bytes,
+                ],
+                data: layout_request(
+                    0,
+                    Intent::EntitleSlice {
+                        market: market_id,
+                        epoch: epoch_id,
+                        candidate,
+                        slice_index: single_slice,
+                    },
+                ),
+                heap: false,
+            },
+        ),
+        1,
+        vec![
+            reservations[1].compare(Some(res_buy_pre)),
+            reservations[2].compare(Some(res_sell_pre)),
+            Compare {
+                role: format!("general.receipt-{single_slice}"),
+                address: single_receipt_pda.address.clone(),
+                expected: single_receipt_bytes,
+                pre: Vec::new(),
+            },
+        ],
+    ));
+
+    /* 41. Entitle the portfolio full pair atomically from its entry slice:
+     * one receipt per pair slice. */
+    let mut pair_receipts: Vec<(u16, Pda, SettlementReceiptAccount)> = Vec::new();
+    for index in &pair_slices {
+        let slice = witness.slices[usize::from(*index)];
+        let pda = receipt_pda(*index);
+        let receipt = SettlementReceiptAccount {
+            epoch: epoch_id,
+            market: market_id,
+            candidate,
+            buy_order_id: canonical_order_id(4),
+            sell_order_id: canonical_order_id(5),
+            consideration_price_units: u128::from(slice.quantity)
+                * u128::from(prices[usize::from(slice.outcome)]),
+            quantity: slice.quantity,
+            settled_quantity: 0,
+            price: prices[usize::from(slice.outcome)],
+            sequence: u64::from(*index) + 1,
+            slice_index: *index,
+            outcome: slice.outcome,
+            leg_kind: RECEIPT_LEG_DIRECT,
+            consumed_flags: 0,
+            stored_bump: pda.bump,
+            flags: 0,
+        };
+        pair_receipts.push((*index, pda, receipt));
+    }
+    let res_buy_pre = reservations[3].bytes();
+    let res_sell_pre = reservations[4].bytes();
+    reservations[3].value.state = RESERVATION_STATE_ENTITLED;
+    reservations[4].value.state = RESERVATION_STATE_ENTITLED;
+    {
+        let mut writable = vec![reservations[3].pda.bytes, reservations[4].pda.bytes];
+        let mut keys = vec![
+            shared.payer.bytes,
+            epoch_pda.bytes,
+            record_pda.bytes,
+            feed_pda.bytes,
+            pot_pda.bytes,
+            shared.system_program,
+            shared.rent_sysvar,
+            page_pda.bytes,
+            shared.terms.bytes,
+            reservations[3].pda.bytes,
+            reservations[4].pda.bytes,
+        ];
+        let mut compares = vec![
+            reservations[3].compare(Some(res_buy_pre)),
+            reservations[4].compare(Some(res_sell_pre)),
+        ];
+        for (index, pda, receipt) in &pair_receipts {
+            writable.push(pda.bytes);
+            keys.push(pda.bytes);
+            let mut bytes = vec![0_u8; account_len::SETTLEMENT_RECEIPT];
+            receipt.encode(&mut bytes).expect("a pair receipt encodes");
+            compares.push(Compare {
+                role: format!("general.receipt-{index}"),
+                address: pda.address.clone(),
+                expected: bytes,
+                pre: Vec::new(),
+            });
+        }
+        cases.push(Case::accept(
+            "general-41-entitle-portfolio-pair",
+            "GeneralClearing",
+            "layout codec byte-for-byte (pair receipts + ENTITLED reservations)",
+            "entitle the portfolio full pair atomically: both reservations ENTITLED, one receipt per pair slice",
+            general_transaction(
+                shared,
+                GeneralTx {
+                    writable_signers: &[],
+                    readonly_signers: &[],
+                    writable: &writable,
+                    readonly: &[
+                        epoch_pda.bytes,
+                        record_pda.bytes,
+                        feed_pda.bytes,
+                        pot_pda.bytes,
+                        shared.system_program,
+                        shared.rent_sysvar,
+                        page_pda.bytes,
+                        shared.terms.bytes,
+                    ],
+                    keys: &keys,
+                    data: layout_request(
+                        0,
+                        Intent::EntitleSlice {
+                            market: market_id,
+                            epoch: epoch_id,
+                            candidate,
+                            slice_index: pair_slices[0],
+                        },
+                    ),
+                    heap: false,
+                },
+            ),
+            1,
+            compares,
+        ));
+    }
+
+    /* 42. Consume the single-Egg crossing.  The identical transaction bytes
+     * are reused by step 44's required refusal: the runner signs each step
+     * against a fresh blockhash, so the replay is the program's to refuse. */
+    let settle_single_tx: Vec<u8> = {
+        general_transaction(
+            shared,
+            GeneralTx {
+                writable_signers: &[],
+                readonly_signers: &[],
+                writable: &[
+                    owner_a.position.bytes,
+                    owner_b.position.bytes,
+                    reservations[1].pda.bytes,
+                    reservations[2].pda.bytes,
+                    single_receipt_pda.bytes,
+                ],
+                readonly: &[epoch_pda.bytes, record_pda.bytes],
+                keys: &[
+                    epoch_pda.bytes,
+                    record_pda.bytes,
+                    owner_a.position.bytes,
+                    owner_b.position.bytes,
+                    reservations[1].pda.bytes,
+                    reservations[2].pda.bytes,
+                    single_receipt_pda.bytes,
+                ],
+                data: layout_request(
+                    single_receipt.sequence,
+                    Intent::SettlePage {
+                        market: market_id,
+                        epoch: epoch_id,
+                        page_index: 0,
+                    },
+                ),
+                heap: false,
+            },
+        )
+    };
+    {
+        let consideration = u64::try_from(
+            single_receipt.consideration_price_units / u128::from(epoch_value.price_scale),
+        )
+        .expect("the single consideration fits");
+        let release = reservations[1].value.remaining_cash_atoms;
+        let remainder = reservations[2].value.remaining_internal[0] - single_receipt.quantity;
+        assert_eq!(remainder, 0, "a full one-to-one fill leaves no seller remainder");
+        let a_pre = owner_a.position_bytes.clone();
+        let b_pre = owner_b.position_bytes.clone();
+        let mut a_position = owner_a.position_value();
+        a_position.cash_atoms -= consideration;
+        a_position.reserved_cash_atoms -= release;
+        a_position.internal[0] += single_receipt.quantity;
+        owner_a.store_position(&a_position);
+        let mut b_position = owner_b.position_value();
+        b_position.cash_atoms += consideration;
+        owner_b.store_position(&b_position);
+        let res_buy_pre = reservations[1].bytes();
+        let res_sell_pre = reservations[2].bytes();
+        for rank in [1_usize, 2] {
+            reservations[rank].value.remaining_cash_atoms = 0;
+            reservations[rank].value.remaining_internal = [0; MAX_OUTCOMES];
+            reservations[rank].value.state = RESERVATION_STATE_CONSUMED;
+        }
+        let mut consumed_receipt = single_receipt;
+        consumed_receipt.settled_quantity = consumed_receipt.quantity;
+        consumed_receipt.consumed_flags =
+            RECEIPT_FLAG_BUY_CONSUMED | RECEIPT_FLAG_SELL_CONSUMED | RECEIPT_FLAG_SLICE_EXHAUSTED;
+        let mut receipt_bytes = vec![0_u8; account_len::SETTLEMENT_RECEIPT];
+        consumed_receipt
+            .encode(&mut receipt_bytes)
+            .expect("the consumed receipt encodes");
+        cases.push(Case::accept(
+            "general-42-settle-single-slice",
+            "GeneralClearing",
+            "entitled direct-slice arithmetic + layout codec byte-for-byte",
+            "consume the entitled single slice: consideration moves, the buy release refunds, both reservations CONSUMED",
+            settle_single_tx.clone(),
+            1,
+            vec![
+                Compare {
+                    role: format!("{}.position", owner_a.label),
+                    address: owner_a.position.address.clone(),
+                    expected: owner_a.position_bytes.clone(),
+                    pre: a_pre,
+                },
+                Compare {
+                    role: format!("{}.position", owner_b.label),
+                    address: owner_b.position.address.clone(),
+                    expected: owner_b.position_bytes.clone(),
+                    pre: b_pre,
+                },
+                reservations[1].compare(Some(res_buy_pre)),
+                reservations[2].compare(Some(res_sell_pre)),
+                Compare {
+                    role: format!("general.receipt-{single_slice}"),
+                    address: single_receipt_pda.address.clone(),
+                    expected: receipt_bytes,
+                    pre: Vec::new(),
+                },
+            ],
+        ));
+    }
+
+    /* 43. THE HEADLINE TRANSACTION: the portfolio full pair actually clears,
+     * through the layout crate's own full-pair seam. */
+    {
+        let OrderSlot::Portfolio(buy_record) = live_slots[2] else {
+            panic!("live rank 2 is the portfolio buy");
+        };
+        let OrderSlot::Portfolio(sell_record) = live_slots[3] else {
+            panic!("live rank 3 is the portfolio sell");
+        };
+        let terms_value = &shared.terms_account;
+        let buy_funding = PortfolioFundingV1::for_order(
+            market_id,
+            terms_value,
+            epoch_value.price_scale,
+            &buy_record,
+            0,
+        )
+        .expect("the buy funding derives");
+        let sell_funding = PortfolioFundingV1::for_order(
+            market_id,
+            terms_value,
+            epoch_value.price_scale,
+            &sell_record,
+            0,
+        )
+        .expect("the sell funding derives");
+        assert_eq!(buy_funding.claim, sell_funding.claim);
+        assert_eq!(buy_funding.primitive_units, sell_funding.primitive_units);
+        assert_eq!(buy_funding.internal, sell_funding.internal);
+        let consideration = exact_portfolio_value_price_units(
+            &buy_funding.internal,
+            &record.prices,
+            terms_value.outcome_count,
+        )
+        .expect("the pair's exact value derives");
+        assert_eq!(
+            consideration % u128::from(epoch_value.price_scale),
+            0,
+            "the pair's value converts to whole atoms"
+        );
+        let mut entitlement = Box::new(PortfolioEntitlementV1 {
+            entitlement: Hash32::ZERO,
+            market: market_id,
+            epoch: epoch_id,
+            candidate,
+            terms: terms_value.terms,
+            price_grid: terms_value.price_grid,
+            policy: epoch_value.policy,
+            claim: buy_funding.claim.claim,
+            buy_order_id: buy_record.order_id,
+            sell_order_id: sell_record.order_id,
+            prices: record.prices,
+            price_scale: epoch_value.price_scale,
+            outcome_count: terms_value.outcome_count,
+            primitive_units: buy_funding.primitive_units,
+            consideration_price_units: consideration,
+            state: PORTFOLIO_ENTITLEMENT_ACTIVE,
+        });
+        entitlement.entitlement = canonical_portfolio_entitlement_id(
+            entitlement.market,
+            entitlement.epoch,
+            entitlement.candidate,
+            entitlement.terms,
+            entitlement.price_grid,
+            entitlement.policy,
+            entitlement.claim,
+            entitlement.buy_order_id,
+            entitlement.sell_order_id,
+            &entitlement.prices,
+            entitlement.price_scale,
+            entitlement.outcome_count,
+            entitlement.primitive_units,
+            entitlement.consideration_price_units,
+        );
+        entitlement.validate().expect("the rebuilt entitlement validates");
+
+        let c_pre = owner_c.position_bytes.clone();
+        let d_pre = owner_d.position_bytes.clone();
+        let c_position = owner_c.position_value();
+        let d_position = owner_d.position_value();
+        let mut staged = Box::new(PortfolioPairPostV1::ZEROED);
+        prepare_full_pair(
+            &PortfolioPairInputV1 {
+                terms: terms_value,
+                buy_order: &buy_record,
+                sell_order: &sell_record,
+                buyer_position: &c_position,
+                seller_position: &d_position,
+                buyer_reservation: &reservations[3].value,
+                seller_reservation: &reservations[4].value,
+                entitlement: &entitlement,
+            },
+            &mut staged,
+        )
+        .expect("the full pair prepares");
+        owner_c.store_position(&staged.buyer_position);
+        owner_d.store_position(&staged.seller_position);
+        let res_buy_pre = reservations[3].bytes();
+        let res_sell_pre = reservations[4].bytes();
+        reservations[3].value = staged.buyer_reservation;
+        reservations[4].value = staged.seller_reservation;
+
+        let mut writable = vec![
+            owner_c.position.bytes,
+            owner_d.position.bytes,
+            reservations[3].pda.bytes,
+            reservations[4].pda.bytes,
+        ];
+        let mut keys = vec![
+            epoch_pda.bytes,
+            record_pda.bytes,
+            shared.terms.bytes,
+            owner_c.position.bytes,
+            owner_d.position.bytes,
+            reservations[3].pda.bytes,
+            reservations[4].pda.bytes,
+            page_pda.bytes,
+        ];
+        let mut compares = vec![
+            Compare {
+                role: format!("{}.position", owner_c.label),
+                address: owner_c.position.address.clone(),
+                expected: owner_c.position_bytes.clone(),
+                pre: c_pre,
+            },
+            Compare {
+                role: format!("{}.position", owner_d.label),
+                address: owner_d.position.address.clone(),
+                expected: owner_d.position_bytes.clone(),
+                pre: d_pre,
+            },
+            reservations[3].compare(Some(res_buy_pre)),
+            reservations[4].compare(Some(res_sell_pre)),
+        ];
+        for (index, pda, receipt) in &pair_receipts {
+            writable.push(pda.bytes);
+            keys.push(pda.bytes);
+            let mut consumed = *receipt;
+            consumed.settled_quantity = consumed.quantity;
+            consumed.consumed_flags = RECEIPT_FLAG_BUY_CONSUMED
+                | RECEIPT_FLAG_SELL_CONSUMED
+                | RECEIPT_FLAG_SLICE_EXHAUSTED;
+            let mut bytes = vec![0_u8; account_len::SETTLEMENT_RECEIPT];
+            consumed.encode(&mut bytes).expect("a consumed pair receipt encodes");
+            compares.push(Compare {
+                role: format!("general.receipt-{index}"),
+                address: pda.address.clone(),
+                expected: bytes,
+                pre: Vec::new(),
+            });
+        }
+        /* Terminal conservation witnesses, byte-identical by construction:
+         * the pooled Hoard ledger and custody token have not moved since the
+         * splits, and the ineligible order's reservation stands ACTIVE. */
+        compares.push(Compare {
+            role: format!("{}.hoard", plane.label),
+            address: plane.hoard.address.clone(),
+            expected: plane.state.hoard.to_vec(),
+            pre: plane.state.hoard.to_vec(),
+        });
+        compares.push(general_custody_compare(shared, plane, custody, custody));
+        let idle = reservations[5].bytes();
+        compares.push(reservations[5].compare(Some(idle)));
+        cases.push(Case::accept(
+            "general-43-settle-portfolio-pair",
+            "GeneralClearing",
+            "layout full-pair seam (prepare_full_pair) byte-for-byte",
+            "the portfolio order actually clears: the full pair consumes atomically with every receipt exhausted",
+            general_transaction(
+                shared,
+                GeneralTx {
+                    writable_signers: &[],
+                    readonly_signers: &[],
+                    writable: &writable,
+                    readonly: &[
+                        epoch_pda.bytes,
+                        record_pda.bytes,
+                        shared.terms.bytes,
+                        page_pda.bytes,
+                    ],
+                    keys: &keys,
+                    data: layout_request(
+                        pair_receipts[0].2.sequence,
+                        Intent::SettlePage {
+                            market: market_id,
+                            epoch: epoch_id,
+                            page_index: 0,
+                        },
+                    ),
+                    heap: false,
+                },
+            ),
+            1,
+            compares,
+        ));
+    }
+
+    /* 44. The replayed consumption refuses on the exhausted receipt and the
+     * CONSUMED reservations, changing nothing. */
+    cases.push(Case::refuse(
+        "general-44-settle-replay-refused",
+        "GeneralClearing",
+        "a second consumption of the exhausted single slice must refuse with no watched byte moved",
+        settle_single_tx.clone(),
+        code::MISMATCHED_STATE,
+        "reference adapter: UnsupportedIntent (no settlement model)".to_string(),
+    ));
+
+    /* The terminal value plane, asserted here from the modeled bytes and
+     * exported so the runner script re-derives it from *reloaded* bytes. */
+    let positions = [
+        (&owner_a, GENERAL_ENDOW_A),
+        (&owner_b, GENERAL_ENDOW_B),
+        (&owner_c, GENERAL_ENDOW_C),
+        (&owner_d, GENERAL_ENDOW_D),
+    ];
+    let mut cash_total = 0_u64;
+    let mut eggs = [0_u64; 2];
+    for (owner, _) in &positions {
+        let value = owner.position_value();
+        cash_total += value.cash_atoms;
+        eggs[0] += value.internal[0];
+        eggs[1] += value.internal[1];
+    }
+    let hoard_value =
+        HoardAccount::decode(&plane.state.hoard).expect("the terminal Hoard decodes");
+    let endowed_total = GENERAL_ENDOW_A + GENERAL_ENDOW_B + GENERAL_ENDOW_C + GENERAL_ENDOW_D;
+    let split_total = GENERAL_SPLIT_B + GENERAL_SPLIT_D;
+    assert_eq!(custody, endowed_total);
+    assert_eq!(hoard_value.collateral_atoms, split_total);
+    assert_eq!(cash_total + split_total, endowed_total);
+    assert_eq!(eggs, [split_total, split_total]);
+    assert_eq!(
+        reservations[5].value.remaining_cash_atoms, 3,
+        "the ineligible order's encumbrance stands"
+    );
+    let (position_cash_offset, position_reserved_offset, position_internal0_offset, position_internal1_offset) =
+        position_field_offsets(market_id, owner_a.id);
+    GeneralConservation {
+        endowed_total,
+        split_total,
+        position_cash_offset,
+        position_reserved_offset,
+        position_internal0_offset,
+        position_internal1_offset,
+        hoard_collateral_offset: hoard_collateral_offset(shared, plane),
+        positions: vec![
+            (
+                "general-42-settle-single-slice".to_string(),
+                format!("{}.position", owner_a.label),
+            ),
+            (
+                "general-42-settle-single-slice".to_string(),
+                format!("{}.position", owner_b.label),
+            ),
+            (
+                "general-43-settle-portfolio-pair".to_string(),
+                format!("{}.position", owner_c.label),
+            ),
+            (
+                "general-43-settle-portfolio-pair".to_string(),
+                format!("{}.position", owner_d.label),
+            ),
+        ],
+        hoard: (
+            "general-43-settle-portfolio-pair".to_string(),
+            format!("{}.hoard", plane.label),
+        ),
+        hoard_token: (
+            "general-43-settle-portfolio-pair".to_string(),
+            format!("{}.hoard-token", plane.label),
+        ),
+        expected_cash_total: cash_total,
+        expected_eggs: eggs,
+        expected_locked: split_total,
+        expected_custody: endowed_total,
+    }
+}
+
+/* ------------------------------------------------------------------------ */
 /* Output                                                                    */
 /* ------------------------------------------------------------------------ */
 
@@ -7597,6 +10863,15 @@ fn emit_cases(out_dir: &Path, cases: &[Case]) -> Vec<String> {
                 None => "\"compute_limit\": null".to_string(),
             },
         ];
+        if let Some(slot) = case.wait_slot {
+            fields.push(format!("\"wait_slot\": {slot}"));
+        }
+        if let Some((step, delta)) = &case.wait_after {
+            fields.push(format!(
+                "\"wait_after\": {{\"step\": {}, \"delta\": {delta}}}",
+                json_string(step)
+            ));
+        }
         let kind = if case.exhausted {
             "exhausted"
         } else {
@@ -7615,8 +10890,26 @@ fn emit_cases(out_dir: &Path, cases: &[Case]) -> Vec<String> {
                     &out_dir.join(&pre_file),
                     &format!("{}\n", hex_encode(&compare.pre)),
                 );
+                let patches: Vec<String> = case
+                    .slot_patches
+                    .iter()
+                    .filter(|(role, _)| *role == compare.role)
+                    .map(|(_, patch)| {
+                        format!(
+                            "{{\"offset\": {}, \"base\": {}, \"delta\": {}}}",
+                            patch.offset,
+                            json_string(&patch.base),
+                            patch.delta
+                        )
+                    })
+                    .collect();
+                let patch_field = if patches.is_empty() {
+                    String::new()
+                } else {
+                    format!(", \"slot_patches\": [{}]", patches.join(", "))
+                };
                 entries.push(format!(
-                    "{{\"role\": {}, \"address\": {}, \"expected\": {}, \"pre\": {}, \"pre_lamports\": {ACCOUNT_LAMPORTS}}}",
+                    "{{\"role\": {}, \"address\": {}, \"expected\": {}, \"pre\": {}, \"pre_lamports\": {ACCOUNT_LAMPORTS}{patch_field}}}",
                     json_string(&compare.role),
                     json_string(&compare.address),
                     json_string(&expected_file),
@@ -7787,17 +11080,185 @@ fn emit_committed_plan(out_dir: &Path, f: &Fixture) {
     println!("terminal     bearer claim paid; both owner cash planes and pooled custody drained");
 }
 
+/// Emit the minimal genesis and ordered cases for the general-clearing
+/// real-signature lane (Tier 2, intents 47-59).
+fn emit_general_committed_plan(out_dir: &Path, f: &Fixture) {
+    let shared = &f.shared;
+    let actors = build_general_actors();
+    let mut plan = Plan {
+        program: shared.program.address.clone(),
+        token_program: base58_of(&shared.token_program),
+        ..Plan::default()
+    };
+
+    /* Frozen Realm prerequisites: honest genesis assistance, exactly the
+     * legacy committed lane's roster plus the frozen price grid the order
+     * plane verifies limits against.  No feed or archive account is
+     * installed: nothing in this lane resolves. */
+    plan.account("realm", &shared.realm, &shared.realm_bytes);
+    plan.account("profile", &shared.profile, &shared.profile_bytes);
+    plan.account("grid", &shared.grid, &shared.grid_bytes);
+    plan.account("terms", &shared.terms, &shared.terms_bytes);
+    plan.account(
+        "mock-source-spec",
+        &shared.source_spec,
+        &shared.source_spec_bytes,
+    );
+    plan.account(
+        "collateral-policy",
+        &shared.policy_account,
+        &shared.policy_bytes,
+    );
+    plan.token_account(
+        "collateral-mint",
+        &shared.collateral_mint,
+        &shared.collateral_mint_bytes,
+    );
+    plan.token_account(
+        "actor-collateral",
+        &shared.actor_token,
+        &shared.actor_token_bytes,
+    );
+    plan.owned("actor-lamports", &shared.actor, SYSTEM_PROGRAM, &[]);
+    /* The three trading wallets fund their own reservation rent, so each is
+     * a System-owned account with lamports at genesis — a wallet, not state. */
+    plan.owned(
+        "owner-b-lamports",
+        &wallet_pda(shared.holder.bytes),
+        SYSTEM_PROGRAM,
+        &[],
+    );
+    plan.owned(
+        "owner-c-lamports",
+        &actors.trader_c.clone(),
+        SYSTEM_PROGRAM,
+        &[],
+    );
+    plan.owned(
+        "owner-d-lamports",
+        &actors.trader_d.clone(),
+        SYSTEM_PROGRAM,
+        &[],
+    );
+
+    let mut market = Plane::build(shared, "general-market", NONCE_GENERAL, 0);
+    let (cases, conservation) = build_general_committed_cases(f, &mut market, &actors);
+    plan.cases = cases;
+
+    let mut genesis_lines = String::new();
+    for account in &plan.genesis {
+        let file = format!("accounts/{}.json", account.role);
+        write(
+            &out_dir.join(&file),
+            &account_json(&account.address, &account.owner, &account.data),
+        );
+        genesis_lines.push_str(&format!("{} {} {}\n", account.role, account.address, file));
+    }
+    write(&out_dir.join("genesis.txt"), &genesis_lines);
+    let cases_json = emit_cases(out_dir, &plan.cases);
+    let precreated: Vec<String> = plan
+        .genesis
+        .iter()
+        .filter(|account| account.owner == plan.program)
+        .map(|account| {
+            format!(
+                "    {}",
+                json_string(&format!("{} {}", account.role, account.address))
+            )
+        })
+        .collect();
+    let position_rows: Vec<String> = conservation
+        .positions
+        .iter()
+        .map(|(step, role)| {
+            format!(
+                "      {{\"step\": {}, \"role\": {}}}",
+                json_string(step),
+                json_string(role)
+            )
+        })
+        .collect();
+    let conservation_json = format!(
+        "{{\n    \"endowed_total\": {},\n    \"split_total\": {},\n    \"offsets\": {{\"position_cash\": {}, \"position_reserved\": {}, \"position_internal0\": {}, \"position_internal1\": {}, \"hoard_collateral\": {}, \"token_amount\": 64}},\n    \"positions\": [\n{}\n    ],\n    \"hoard\": {{\"step\": {}, \"role\": {}}},\n    \"hoard_token\": {{\"step\": {}, \"role\": {}}},\n    \"expected\": {{\"cash_total\": {}, \"eggs_outcome0\": {}, \"eggs_outcome1\": {}, \"locked\": {}, \"custody\": {}}}\n  }}",
+        conservation.endowed_total,
+        conservation.split_total,
+        conservation.position_cash_offset,
+        conservation.position_reserved_offset,
+        conservation.position_internal0_offset,
+        conservation.position_internal1_offset,
+        conservation.hoard_collateral_offset,
+        position_rows.join(",\n"),
+        json_string(&conservation.hoard.0),
+        json_string(&conservation.hoard.1),
+        json_string(&conservation.hoard_token.0),
+        json_string(&conservation.hoard_token.1),
+        conservation.expected_cash_total,
+        conservation.expected_eggs[0],
+        conservation.expected_eggs[1],
+        conservation.expected_locked,
+        conservation.expected_custody,
+    );
+    let committed = format!(
+        "{{\n  \"program_id\": {},\n  \"payer\": {},\n  \"actor\": {},\n  \"holder\": {},\n  \"trader_c\": {},\n  \"trader_d\": {},\n  \"genesis_assisted\": true,\n  \"precreated_program_accounts\": [\n{}\n  ],\n  \"conservation\": {},\n  \"steps\": [\n{}\n  ]\n}}\n",
+        json_string(&shared.program.address),
+        json_string(&shared.payer.address),
+        json_string(&shared.actor.address),
+        json_string(&shared.holder.address),
+        json_string(&actors.trader_c.address),
+        json_string(&actors.trader_d.address),
+        precreated.join(",\n"),
+        conservation_json,
+        cases_json.join(",\n")
+    );
+    write(&out_dir.join("committed.json"), &committed);
+
+    println!("general-clearing committed plan written to {}", out_dir.display());
+    println!("program_id   {}", shared.program.address);
+    println!("payer        {}", shared.payer.address);
+    println!("actor        {}", shared.actor.address);
+    println!("owner_b      {}", shared.holder.address);
+    println!("owner_c      {}", actors.trader_c.address);
+    println!("owner_d      {}", actors.trader_d.address);
+    println!("freeze_deadline_slot {}", general_freeze_deadline());
+    println!("candidate_window_slots {CANDIDATE_WINDOW_SLOTS}");
+    println!(
+        "scope        GENESIS-ASSISTED: {} program-owned prerequisites",
+        precreated.len()
+    );
+    for case in &plan.cases {
+        match case.expect_code {
+            None => println!(
+                "  accept {:<40} {} account reload(s)",
+                case.name,
+                case.compare.as_ref().map_or(0, Vec::len)
+            ),
+            Some(code) => println!("  refuse {:<40} Custom(0x{code:04x})", case.name),
+        }
+    }
+    println!(
+        "conservation cash_total={} + locked={} == endowed={}; eggs=[{}, {}] == split_total={} per outcome; custody={}",
+        conservation.expected_cash_total,
+        conservation.expected_locked,
+        conservation.endowed_total,
+        conservation.expected_eggs[0],
+        conservation.expected_eggs[1],
+        conservation.split_total,
+        conservation.expected_custody,
+    );
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let out_dir = PathBuf::from(
         args.next()
-            .expect("usage: clutch-sbf-harness <out-dir> [--committed|--default-source-refusal]"),
+            .expect("usage: clutch-sbf-harness <out-dir> [--committed|--general-clearing|--default-source-refusal]"),
     );
     let mode = args.next();
     assert!(args.next().is_none(), "too many harness arguments");
     assert!(
         mode.is_none()
             || mode.as_deref() == Some("--committed")
+            || mode.as_deref() == Some("--general-clearing")
             || mode.as_deref() == Some("--default-source-refusal"),
         "unknown harness mode"
     );
@@ -7809,6 +11270,10 @@ fn main() {
     let f = build_fixture();
     if mode.as_deref() == Some("--committed") {
         emit_committed_plan(&out_dir, &f);
+        return;
+    }
+    if mode.as_deref() == Some("--general-clearing") {
+        emit_general_committed_plan(&out_dir, &f);
         return;
     }
     let shared = &f.shared;

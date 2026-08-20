@@ -16,6 +16,13 @@ path = "src/main.rs"
 # `clutch-solana-reference`; naming it here keeps the constant coming from its
 # owner instead of being retyped as a literal.
 clutch-accumulator = { path = "../../../crates/clutch-accumulator" }
+# The host relation twin the general-clearing committed plan drives: the same
+# `ClearWorkV1` body the program persists, the same canonical candidate and
+# pairing constructors, and the same frozen policy identity.  Both crates are
+# already in this workspace's graph through `clutch-sbf` itself, so the
+# program ELF's dependency pins do not move.
+clutch-batch = { path = "../../../crates/clutch-batch" }
+clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-solana-layout = { path = "../../solana-layout" }
 clutch-solana-reference = { path = "../../solana-reference" }
