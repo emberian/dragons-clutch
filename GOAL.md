@@ -43,10 +43,9 @@ ready in degg-research.
    Python lab. Destination-before-base remains the design order; the
    RevenuePolicy object is the missing prerequisite.
 
-In flight: Draft 13 slimming — four Fable lanes compressing the Draft 12
-documents toward maximal brevity with meaning preserved (ember: "lean
-towards the shorter side as possible"); verification diff + number-survival
-check is mine when they land.
+In flight: liveness-profile reseal lane (new artifact root 187d5ee16f72946a,
+all evidence regenerated at 6c25df4, admission-shape re-exam as report-only);
+manifest emission + Persvati attestation follow when it lands.
 
 ## Ember decision queue (2026-08-19 morning)
 
@@ -70,6 +69,22 @@ check is mine when they land.
    Aug 24/24/27, perpetuals RFC Aug 26.
 
 ## Done log (2026-08-19 session)
+
+- DRAFT 13 COMMITTED (degg-research 8f9cfef): all four documents compressed
+  to their content floor with meaning as the hard constraint. IAC 4,228 ->
+  3,602 words / 10pp -> 9pp; definitions 3,341 -> 2,754 / 8pp -> 7pp;
+  data-reporting 4,009 -> 3,188 / 9pp -> 8pp; cover found to be AT its
+  floor (699 words, zero free cuts — four passes, every candidate rejected
+  as meaning-bearing). Packet 29pp -> 26pp, 12,277 -> 10,243 words (-17%).
+  Every doc independently verified by me: builds green, zero numbers lost
+  or invented, citation multisets identical, all requests/positions
+  survive in imperative form. CONVERGENT FINDING from all three body
+  lanes, with arithmetic: Draft 12 was already de-hedged, and protected
+  content (tables, appendix basis rows, measurements, worked examples) is
+  ~2,400-2,500 words in definitions alone / ~27% of data-reporting — the
+  55-65% target is unreachable without deleting claims, which stays
+  ember's editorial call. Each lane's report carries an itemized
+  borderline list (passages compressed hard enough to argue about).
 
 - SHA-SYSCALL MERGED TO MAIN at 6c25df4 (rebased onto main, fast-forward,
   pushed). Both declared gates green on the merged tree: default profile
