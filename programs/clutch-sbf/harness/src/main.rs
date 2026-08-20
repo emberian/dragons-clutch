@@ -2440,6 +2440,8 @@ fn build_batch(shared: &Shared, plane: &Plane) -> Batch {
         honored_aon_mask: 0,
         weighted_direct_volume: 0,
         limit_surplus_price_units: 0,
+        // v3: a SELECTED record carries a verified tie digest.
+        score_digest: Hash32::from_bytes([0x5d; 32]),
         churn: VIRTUAL_SPLIT,
         submitted_slot: 55,
         distinct_owners: 2,

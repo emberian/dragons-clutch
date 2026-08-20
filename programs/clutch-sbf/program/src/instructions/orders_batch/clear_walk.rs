@@ -681,3 +681,250 @@ fn borrow_account_mut<'a, 'info>(
         .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))
 }
+
+/* ------------------------------------------------------------------------ */
+/* The slice pass (tag 52) and the close (tag 53) — T2-6c                    */
+/* ------------------------------------------------------------------------ */
+
+/// Accounts in an `AdvanceClearSlices` instruction, exactly.
+pub const ADVANCE_CLEAR_SLICES_ACCOUNT_COUNT: usize = 3;
+/// Accounts in a `CompleteClearWork` instruction, exactly.
+pub const COMPLETE_CLEAR_WORK_ACCOUNT_COUNT: usize = 4;
+/// The candidate record the close persists the verdict onto (writable).
+pub const IX_COMPLETE_CANDIDATE: usize = 3;
+
+/// One layout pairing slice as the relation's slice type.
+fn relation_slice(slice: &clearing::PairingSlice) -> clutch_batch::relation_v1::PairingSliceV1 {
+    fn leg(leg: clearing::LegRef) -> clutch_batch::relation_v1::LegRefV1 {
+        match leg {
+            clearing::LegRef::Order(index) => {
+                clutch_batch::relation_v1::LegRefV1::Order(index)
+            }
+            clearing::LegRef::Split => clutch_batch::relation_v1::LegRefV1::Split,
+            clearing::LegRef::Merge => clutch_batch::relation_v1::LegRefV1::Merge,
+        }
+    }
+    clutch_batch::relation_v1::PairingSliceV1 {
+        buy_ref: leg(slice.buy_ref),
+        sell_ref: leg(slice.sell_ref),
+        outcome: slice.outcome,
+        quantity: slice.quantity,
+    }
+}
+
+/// Advance the checkpoint's slice pass by up to `max_slices` declared
+/// witness slices, closing the pass when the last one is fed.
+#[inline(never)]
+pub(super) fn advance_clear_slices(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent_market: &Hash32,
+    intent_epoch: &Hash32,
+    intent_candidate: &Hash32,
+    max_slices: u16,
+) -> Outcome<()> {
+    accounts::require_count(accounts, ADVANCE_CLEAR_SLICES_ACCOUNT_COUNT)?;
+    require(sequence == 0, ClutchError::Replay)?;
+    require_distinct(accounts)?;
+    let frame = load_clearing_plane(
+        program_id,
+        &accounts[IX_ADVANCE_EPOCH],
+        &accounts[IX_ADVANCE_FEED],
+        &accounts[IX_ADVANCE_WORK],
+        intent_market,
+        intent_epoch,
+        intent_candidate,
+    )?;
+    // Slices happen strictly after pass 1 bound the frozen set.
+    require(
+        frame.header.status == clearing::CLEAR_WORK_STATUS_BOUND,
+        ClutchError::MismatchedState,
+    )?;
+
+    let mut body = decode_body_boxed(&accounts[IX_ADVANCE_WORK])?;
+    require(
+        body.consumed_fold() == frame.header.consumed_fold,
+        ClutchError::ResumeFoldMismatch,
+    )?;
+    require(
+        body.status() == FeedStatusV1::NeedSlices,
+        ClutchError::FeedProtocolFault,
+    )?;
+    // `NeedSlices` implies a declared witness; stated, not assumed.
+    let declared = frame
+        .feed
+        .declared_slices()
+        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+
+    let mut ended = false;
+    {
+        let feed_data = accounts[IX_ADVANCE_FEED].data.borrow();
+        let mut pushed: u16 = 0;
+        while pushed < max_slices && !ended {
+            let index = body.slices_consumed();
+            let slice = clearing::slice_at(&feed_data, &frame.feed, index)?;
+            body.push_slice(&relation_slice(&slice)).map_err(feed_fault)?;
+            pushed += 1;
+            if body.slices_consumed() == declared {
+                // The pass closes itself: the cursor never rests one past the
+                // declared witness without the pass having ended.
+                body.end_pass().map_err(feed_fault)?;
+                ended = true;
+            }
+        }
+    }
+
+    let mut work_data = borrow_account_mut(&accounts[IX_ADVANCE_WORK])?;
+    body.encode_into(clearing::clear_work_body_mut(&mut work_data)?)
+        .map_err(codec_fault)?;
+    if ended {
+        // The next order pass walks the set from the top.
+        clearing::rewind_walk(&mut work_data)?;
+    }
+    Ok(())
+}
+
+/// Close one complete checkpoint: persist the verdict onto the candidate
+/// record, then complete the checkpoint so no pass may resume it.
+#[inline(never)]
+pub(super) fn complete_clear_work(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent_market: &Hash32,
+    intent_epoch: &Hash32,
+    intent_candidate: &Hash32,
+) -> Outcome<()> {
+    accounts::require_count(accounts, COMPLETE_CLEAR_WORK_ACCOUNT_COUNT)?;
+    require(sequence == 0, ClutchError::Replay)?;
+    require_distinct(accounts)?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[IX_COMPLETE_CANDIDATE],
+        true,
+        &[account_len::CANDIDATE],
+    )?;
+    let frame = load_clearing_plane(
+        program_id,
+        &accounts[IX_ADVANCE_EPOCH],
+        &accounts[IX_ADVANCE_FEED],
+        &accounts[IX_ADVANCE_WORK],
+        intent_market,
+        intent_epoch,
+        intent_candidate,
+    )?;
+    // Only a bound checkpoint closes: an early V0-complete refusal was bound
+    // by the advance that latched it, so an OPEN checkpoint here is a
+    // checkpoint whose walk never ran.
+    require(
+        frame.header.status == clearing::CLEAR_WORK_STATUS_BOUND,
+        ClutchError::MismatchedState,
+    )?;
+
+    let mut record = super::decode_candidate_boxed(&accounts[IX_COMPLETE_CANDIDATE].data.borrow())?;
+    require(
+        record.candidate == *intent_candidate
+            && record.epoch == frame.epoch.epoch
+            && record.market == frame.epoch.market
+            && record.status == clutch_solana_layout::CANDIDATE_STATUS_SUBMITTED,
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        accounts[IX_COMPLETE_CANDIDATE].key,
+        seeds::candidate_pda(
+            program_id,
+            &frame.epoch.epoch.bytes(),
+            &intent_candidate.bytes(),
+        ),
+        Some(record.stored_bump),
+    )?;
+
+    let body = decode_body_boxed(&accounts[IX_ADVANCE_WORK])?;
+    require(
+        body.consumed_fold() == frame.header.consumed_fold,
+        ClutchError::ResumeFoldMismatch,
+    )?;
+    require(
+        body.status() == FeedStatusV1::Complete,
+        ClutchError::FeedProtocolFault,
+    )?;
+    match body.verdict() {
+        Some(Ok(summary)) => {
+            /* Acceptance: the verified score is the streamed summary's
+             * recomputed components plus the full-width relation-candidate
+             * tie digest, recomputed here over the full-width domain and the
+             * verified feed's stored regions.  The claimed u128 digest and
+             * the claimed component fields are never consulted — they are
+             * overwritten. */
+            let full_domain = clutch_batch_policy_identity::FullRelationDomainV1 {
+                relation_version: frame.epoch.relation_version,
+                market_id: identity(frame.epoch.market),
+                book_id: identity(frame.epoch.book),
+                epoch_id: identity(frame.epoch.epoch),
+                policy_id: identity(frame.epoch.policy),
+                order_set_id: identity(frame.epoch.order_set),
+                epoch_index: frame.epoch.epoch_index,
+                outcome_count: frame.epoch.outcome_count,
+                owner_count: frame.epoch.owner_count,
+                price_scale: frame.epoch.price_scale,
+                remainder_seed: frame.epoch.remainder_seed,
+                policy: GENERAL_CLEARING_POLICY_V1,
+            };
+            let domain_digest = full_domain
+                .digest()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+            let tie_digest = {
+                let feed_data = accounts[IX_ADVANCE_FEED].data.borrow();
+                let fills = clearing::candidate_feed_fill_region(&feed_data)?;
+                let digest = match frame.feed.declared_slices() {
+                    Some(declared) => {
+                        let slices = clearing::candidate_feed_slice_region(&feed_data)?;
+                        clutch_batch_policy_identity::full_relation_candidate_digest_from_regions(
+                            domain_digest,
+                            identity(frame.feed.candidate),
+                            fills,
+                            frame.feed.honored_aon_mask,
+                            Some((declared, slices)),
+                        )
+                    }
+                    None => {
+                        clutch_batch_policy_identity::full_relation_candidate_digest_from_regions(
+                            domain_digest,
+                            identity(frame.feed.candidate),
+                            fills,
+                            frame.feed.honored_aon_mask,
+                            None,
+                        )
+                    }
+                };
+                digest.map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            };
+            record.status = clutch_solana_layout::CANDIDATE_STATUS_VERIFIED;
+            record.weighted_direct_volume = summary.score.weighted_direct_volume;
+            record.limit_surplus_price_units = summary.score.limit_surplus_price_units;
+            record.distinct_owners = summary.score.distinct_owners;
+            record.churn = summary.score.churn;
+            record.score_digest = Hash32::from_bytes(tie_digest.0);
+        }
+        Some(Err(_relation_refusal)) => {
+            /* A relation refusal is the verdict, not a fault: the candidate
+             * is marked REFUSED (its claimed components stay the claims they
+             * always were, and its tie digest stays zero — a refused
+             * candidate competes for nothing) and the checkpoint completes
+             * so no pass may relitigate it. */
+            record.status = clutch_solana_layout::CANDIDATE_STATUS_REFUSED;
+        }
+        // A complete feed always holds a verdict; stated, not assumed.
+        None => return Err(Refusal::Adapter(ClutchError::FeedProtocolFault)),
+    }
+
+    record.encode(&mut borrow_account_mut(&accounts[IX_COMPLETE_CANDIDATE])?)?;
+    clearing::complete_clear_work(&mut borrow_account_mut(&accounts[IX_ADVANCE_WORK])?)?;
+    Ok(())
+}
+
+/// A layout identity as the policy crate's full-width identity type.
+fn identity(hash: Hash32) -> clutch_batch_policy_identity::Identity32V1 {
+    clutch_batch_policy_identity::Identity32V1(hash.bytes())
+}

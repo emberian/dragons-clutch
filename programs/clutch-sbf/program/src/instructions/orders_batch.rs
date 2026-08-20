@@ -1153,6 +1153,32 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             *max_orders,
         ),
+        Action::Layout(Intent::AdvanceClearSlices {
+            market,
+            epoch,
+            candidate,
+            max_slices,
+        }) => clear_walk::advance_clear_slices(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            candidate,
+            *max_slices,
+        ),
+        Action::Layout(Intent::CompleteClearWork {
+            market,
+            epoch,
+            candidate,
+        }) => clear_walk::complete_clear_work(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            candidate,
+        ),
         /* Every other action belongs to another family module; the router never
          * sends one here, and this arm exists so that adding one to the router
          * is a compile error rather than a silent success. */

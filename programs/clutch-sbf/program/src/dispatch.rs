@@ -125,6 +125,8 @@ const INTENT_GROW_CLEAR_WORK_HINT: u8 = 48;
 const INTENT_INIT_EPOCH_HINT: u8 = 49;
 const INTENT_FREEZE_EPOCH_HINT: u8 = 50;
 const INTENT_ADVANCE_CLEAR_WORK_HINT: u8 = 51;
+const INTENT_ADVANCE_CLEAR_SLICES_HINT: u8 = 52;
+const INTENT_COMPLETE_CLEAR_WORK_HINT: u8 = 53;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
@@ -152,7 +154,9 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_GROW_CLEAR_WORK_HINT
                 | INTENT_INIT_EPOCH_HINT
                 | INTENT_FREEZE_EPOCH_HINT
-                | INTENT_ADVANCE_CLEAR_WORK_HINT,
+                | INTENT_ADVANCE_CLEAR_WORK_HINT
+                | INTENT_ADVANCE_CLEAR_SLICES_HINT
+                | INTENT_COMPLETE_CLEAR_WORK_HINT,
             ) => Route::OrdersBatch,
             Some(
                 INTENT_INIT_REALM_HINT
@@ -364,7 +368,9 @@ fn process_orders_batch(
         | Action::Layout(Intent::GrowClearWork { .. })
         | Action::Layout(Intent::InitEpoch { .. })
         | Action::Layout(Intent::FreezeEpoch { .. })
-        | Action::Layout(Intent::AdvanceClearWork { .. }) => {
+        | Action::Layout(Intent::AdvanceClearWork { .. })
+        | Action::Layout(Intent::AdvanceClearSlices { .. })
+        | Action::Layout(Intent::CompleteClearWork { .. }) => {
             orders_batch::process(program_id, accounts, &request)
         }
         _ => unexpected_route(),
@@ -779,6 +785,23 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                     max_orders: 16,
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::AdvanceClearSlices {
+                    market: hash(1),
+                    epoch: hash(2),
+                    candidate: hash(3),
+                    max_slices: 16,
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::CompleteClearWork {
+                    market: hash(1),
+                    epoch: hash(2),
+                    candidate: hash(3),
                 },
                 Route::OrdersBatch,
             ),

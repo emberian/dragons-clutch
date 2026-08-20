@@ -1408,6 +1408,33 @@ pub fn write_slice_at(account: &mut [u8], index: u16, slice: &PairingSlice) -> R
     write_slice(account, index as usize, slice)
 }
 
+/// The feed's raw fill-vector region: all 64 fills, as stored little-endian
+/// bytes.
+///
+/// Exactly the bytes the full-width relation-candidate digest folds for its
+/// fill segment — the batch digest covers all [`MAX_EPOCH_ORDERS`] fill slots
+/// and the stored padding is canonical zeros ([`verify_candidate_feed`]) — so
+/// a digest recomputation can borrow this region instead of re-encoding 64
+/// integers it already holds.
+pub fn candidate_feed_fill_region(input: &[u8]) -> Result<&[u8]> {
+    CandidateFeedHeader::decode(input)?;
+    Ok(&input[FILLS_AT..SLICES_AT])
+}
+
+/// The feed's declared pairing-witness region: `declared` stored slices, as
+/// stored bytes.
+///
+/// Each stored slice is `buy(kind, index), sell(kind, index), outcome,
+/// quantity LE` — byte for byte the sequence the full-width
+/// relation-candidate digest folds per witness slice, which is what makes
+/// this region borrowable into that digest.  Refuses when no witness is
+/// declared, exactly as [`slice_at`] refuses.
+pub fn candidate_feed_slice_region(input: &[u8]) -> Result<&[u8]> {
+    let header = CandidateFeedHeader::decode(input)?;
+    let declared = header.declared_slices().ok_or(CodecError::InvalidEnum)? as usize;
+    Ok(&input[SLICES_AT..SLICES_AT + (declared * PAIRING_SLICE_BYTES)])
+}
+
 /// A forward cursor over one feed's live fills.
 ///
 /// The fill-side counterpart of [`crate::stream::OrderSlotCursor`]: one `u64`
@@ -1945,6 +1972,7 @@ mod tests {
             honored_aon_mask: header.honored_aon_mask,
             weighted_direct_volume: header.weighted_direct_volume,
             limit_surplus_price_units: header.limit_surplus_price_units,
+            score_digest: Hash32::ZERO,
             churn: header.churn,
             submitted_slot: 42,
             distinct_owners: header.distinct_owners,

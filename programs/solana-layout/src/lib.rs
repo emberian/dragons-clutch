@@ -794,7 +794,13 @@ pub mod account_version {
     /// Frozen price-grid account.
     pub const PRICE_GRID: u8 = 2;
     /// Candidate record account.
-    pub const CANDIDATE: u8 = 2;
+    ///
+    /// Version 3 is the verified-score revision (T2-6c): it appends the
+    /// 32-byte `score_digest` — the full-width relation-candidate tie
+    /// identity `CompleteClearWork` stamps at verification — to the claimed
+    /// score components.  Version 2 records carried claims only and are
+    /// refused, exactly as version 1's were.
+    pub const CANDIDATE: u8 = 3;
     /// Final-pot account.
     pub const FINAL_POT: u8 = 2;
     /// Settlement receipt account.
@@ -887,8 +893,23 @@ pub mod account_len {
     /// Epoch/book-domain account bytes.
     pub const EPOCH: usize = 2 + (9 * 32) + 8 + 4 + 8 + 8 + 2 + 2 + 2 + 1 + 1 + 1 + 1;
     /// Candidate record account bytes.
-    pub const CANDIDATE: usize =
-        2 + (3 * 32) + (MAX_OUTCOMES * 8) + 8 + 8 + 8 + 16 + 16 + 8 + 8 + 2 + 1 + 1 + 1 + 1 + 1;
+    pub const CANDIDATE: usize = 2
+        + (3 * 32)
+        + (MAX_OUTCOMES * 8)
+        + 8
+        + 8
+        + 8
+        + 16
+        + 16
+        + 32
+        + 8
+        + 8
+        + 2
+        + 1
+        + 1
+        + 1
+        + 1
+        + 1;
     /// Final-pot account bytes.
     pub const FINAL_POT: usize = 2 + (3 * 32) + (MAX_OUTCOMES * 8) + 16 + 16 + 1 + 1 + 1 + 1;
     /// Settlement receipt account bytes.
@@ -3736,6 +3757,18 @@ pub struct CandidateRecord {
     pub weighted_direct_volume: i128,
     /// Score component 3, in exact price units.
     pub limit_surplus_price_units: u128,
+    /// The verified full-width relation-candidate tie digest (`FullScoreV1`'s
+    /// fifth component), stamped by `CompleteClearWork` when the streaming
+    /// verifier accepts this candidate.
+    ///
+    /// Zero exactly while the score is a *claim*: a `SUBMITTED` or `REFUSED`
+    /// (or v3-`SUPERSEDED`) record carries no verified identity, and a
+    /// `VERIFIED` or `SELECTED` one must carry a nonzero digest — the value
+    /// selection's `FullScoreV1::total_order` breaks exact component ties
+    /// with.  Never the claimed u128 the feed carries; recomputed on-chain
+    /// over the full-width domain, the candidate identity, the fills, and
+    /// the declared witness.
+    pub score_digest: Hash32,
     /// Score component 5: `sigma + mu`.
     pub churn: u64,
     /// Slot the candidate was submitted in, as supplied by the adapter.
@@ -3807,6 +3840,21 @@ impl CandidateRecord {
         if self.distinct_owners as usize > MAX_EPOCH_ORDERS {
             return Err(CodecError::InvalidCount);
         }
+        /* The verified tie digest exists exactly when a verification verdict
+         * does: nonzero on VERIFIED and SELECTED, zero everywhere else.  (A
+         * later selection lifecycle superseding a verified record zeroes it;
+         * a superseded record competes for nothing.) */
+        let verified = matches!(
+            self.status,
+            CANDIDATE_STATUS_VERIFIED | CANDIDATE_STATUS_SELECTED
+        );
+        if verified == (self.score_digest == Hash32::ZERO) {
+            return Err(if verified {
+                CodecError::ZeroIdentity
+            } else {
+                CodecError::NonCanonicalPadding
+            });
+        }
         if self.candidate != self.recomputed_candidate_digest()? {
             return Err(CodecError::NonCanonicalIdentity);
         }
@@ -3876,6 +3924,7 @@ impl CandidateRecord {
         w.u64(self.honored_aon_mask)?;
         w.i128(self.weighted_direct_volume)?;
         w.u128(self.limit_surplus_price_units)?;
+        w.hash(self.score_digest)?;
         w.u64(self.churn)?;
         w.u64(self.submitted_slot)?;
         w.u16(self.distinct_owners)?;
@@ -3904,6 +3953,7 @@ impl CandidateRecord {
             honored_aon_mask: r.u64()?,
             weighted_direct_volume: r.i128()?,
             limit_surplus_price_units: r.u128()?,
+            score_digest: r.hash()?,
             churn: r.u64()?,
             submitted_slot: r.u64()?,
             distinct_owners: r.u16()?,
@@ -4710,6 +4760,31 @@ pub enum Intent {
         /// Most live orders this invocation may push; at least one.
         max_orders: u16,
     },
+    /// Advance one clearing checkpoint's slice pass by up to `max_slices`
+    /// declared pairing-witness slices from the feed.
+    ///
+    /// Reachable only on a checkpoint pass 1 has already bound; the slices
+    /// arrive by stored index from the bound feed's declared witness and the
+    /// pass closes itself when the last declared slice is fed.
+    AdvanceClearSlices {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+        /// Most witness slices this invocation may push; at least one.
+        max_slices: u16,
+    },
+    /// Close one complete clearing checkpoint and persist its verdict.
+    ///
+    /// Acceptance persists `VERIFIED` plus the recomputed full-width score —
+    /// components from the streamed summary, the tie digest recomputed over
+    /// the full-width domain and the fed coordinates, never the claimed u128
+    /// — onto the [`CandidateRecord`]; a relation refusal persists `REFUSED`.
+    /// Either way the checkpoint completes and no pass may resume it.
+    CompleteClearWork {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+    },
 }
 
 /// The placement admissibility rule, shared by the encoder and the decoder.
@@ -4820,12 +4895,16 @@ const GROW_CLEAR_WORK_TAG: u8 = 48;
 const INIT_EPOCH_TAG: u8 = 49;
 const FREEZE_EPOCH_TAG: u8 = 50;
 const ADVANCE_CLEAR_WORK_TAG: u8 = 51;
+const ADVANCE_CLEAR_SLICES_TAG: u8 = 52;
+const COMPLETE_CLEAR_WORK_TAG: u8 = 53;
 const _: () = assert!(INIT_CLEAR_WORK_TAG == direct_selection_v3::LAST_DIRECT_V3_INTENT_TAG + 1);
 // The Tier 2 clearing family is tag-contiguous: each intent takes exactly the
 // next tag, so a gap is a compile error rather than a squatting hazard.
 const _: () = assert!(INIT_EPOCH_TAG == GROW_CLEAR_WORK_TAG + 1);
 const _: () = assert!(FREEZE_EPOCH_TAG == INIT_EPOCH_TAG + 1);
 const _: () = assert!(ADVANCE_CLEAR_WORK_TAG == FREEZE_EPOCH_TAG + 1);
+const _: () = assert!(ADVANCE_CLEAR_SLICES_TAG == ADVANCE_CLEAR_WORK_TAG + 1);
+const _: () = assert!(COMPLETE_CLEAR_WORK_TAG == ADVANCE_CLEAR_SLICES_TAG + 1);
 
 fn resolution_work_codec(error: resolution_work::ResolutionWorkCodecError) -> CodecError {
     use resolution_work::ResolutionWorkCodecError as WorkError;
@@ -4890,7 +4969,10 @@ impl Intent {
             Self::InitClearWork { .. } | Self::GrowClearWork { .. } => 2 + 32 + 32 + 32,
             Self::InitEpoch { .. } => 2 + 32 + 8 + 32 + 8,
             Self::FreezeEpoch { .. } => 2 + 32 + 32,
-            Self::AdvanceClearWork { .. } => 2 + 32 + 32 + 32 + 2,
+            Self::AdvanceClearWork { .. } | Self::AdvanceClearSlices { .. } => {
+                2 + 32 + 32 + 32 + 2
+            }
+            Self::CompleteClearWork { .. } => 2 + 32 + 32 + 32,
         }
     }
     /// Validate and encode into a caller-provided buffer.
@@ -5437,6 +5519,39 @@ impl Intent {
                 w.hash(*epoch)?;
                 w.hash(*candidate)?;
                 w.u16(*max_orders)?
+            }
+            Self::AdvanceClearSlices {
+                market,
+                epoch,
+                candidate,
+                max_slices,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                check_hash(*candidate)?;
+                // Same rule at the witness bound: at least one, at most the
+                // feed's own capacity.
+                if *max_slices == 0 || *max_slices as usize > MAX_SLICES {
+                    return Err(CodecError::InvalidCount);
+                }
+                put_header(&mut w, ADVANCE_CLEAR_SLICES_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.hash(*candidate)?;
+                w.u16(*max_slices)?
+            }
+            Self::CompleteClearWork {
+                market,
+                epoch,
+                candidate,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                check_hash(*candidate)?;
+                put_header(&mut w, COMPLETE_CLEAR_WORK_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.hash(*candidate)?
             }
         };
         Ok(w.at)
@@ -5996,6 +6111,39 @@ impl Intent {
                     max_orders,
                 })
             }
+            ADVANCE_CLEAR_SLICES_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let candidate = r.hash()?;
+                let max_slices = r.u16()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                check_hash(candidate)?;
+                if max_slices == 0 || max_slices as usize > MAX_SLICES {
+                    return Err(CodecError::InvalidCount);
+                }
+                Ok(Self::AdvanceClearSlices {
+                    market,
+                    epoch,
+                    candidate,
+                    max_slices,
+                })
+            }
+            COMPLETE_CLEAR_WORK_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let candidate = r.hash()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                check_hash(candidate)?;
+                Ok(Self::CompleteClearWork {
+                    market,
+                    epoch,
+                    candidate,
+                })
+            }
             _ => Err(CodecError::WrongTag),
         }
     }
@@ -6435,6 +6583,8 @@ mod tests {
             honored_aon_mask: 0,
             weighted_direct_volume: -3,
             limit_surplus_price_units: 7,
+            // A VERIFIED record carries its verified tie digest.
+            score_digest: Hash32([0x5c; HASH_BYTES]),
             churn: 5,
             submitted_slot: 42,
             distinct_owners: 3,
@@ -6548,7 +6698,7 @@ mod tests {
         assert_eq!(account_len::TERMS, 1656);
         assert_eq!(account_len::PRICE_GRID, 589);
         assert_eq!(account_len::EPOCH, 328);
-        assert_eq!(account_len::CANDIDATE, 305);
+        assert_eq!(account_len::CANDIDATE, 337);
         assert_eq!(account_len::FINAL_POT, 262);
         assert_eq!(account_len::SETTLEMENT_RECEIPT, 217);
         assert_eq!(account_len::RESOLUTION, 165);
@@ -8123,12 +8273,14 @@ mod tests {
         assert_ne!(masked.recomputed_candidate_digest().unwrap(), c.candidate);
 
         // Score, status, slot, and bump are outside the identity: they are
-        // claims and lifecycle, not coordinates.
+        // claims and lifecycle, not coordinates.  Superseding zeroes the
+        // verified tie digest — a superseded record competes for nothing.
         let mut rescored = c;
         rescored.weighted_direct_volume = i128::MIN;
         rescored.limit_surplus_price_units = u128::MAX;
         rescored.distinct_owners = 1;
         rescored.status = CANDIDATE_STATUS_SUPERSEDED;
+        rescored.score_digest = Hash32::ZERO;
         rescored.submitted_slot = 0;
         rescored.stored_bump = 255;
         assert_eq!(rescored.recomputed_candidate_digest().unwrap(), c.candidate);
@@ -8163,6 +8315,25 @@ mod tests {
         let mut statused = c;
         statused.status = CANDIDATE_STATUS_SUPERSEDED + 1;
         assert_eq!(statused.validate(), Err(CodecError::InvalidEnum));
+
+        /* The verified tie digest and the status are one fact stated twice:
+         * a VERIFIED record without a digest has no verified identity, and a
+         * SUBMITTED record with one is the shape a forged verification would
+         * like to have. */
+        let mut hollow = c;
+        hollow.score_digest = Hash32::ZERO;
+        assert_eq!(hollow.validate(), Err(CodecError::ZeroIdentity));
+        let mut premature = c;
+        premature.status = CANDIDATE_STATUS_SUBMITTED;
+        assert_eq!(
+            premature.validate(),
+            Err(CodecError::NonCanonicalPadding)
+        );
+        let mut refused = c;
+        refused.status = CANDIDATE_STATUS_REFUSED;
+        assert_eq!(refused.validate(), Err(CodecError::NonCanonicalPadding));
+        refused.score_digest = Hash32::ZERO;
+        assert_eq!(refused.validate(), Ok(()));
 
         let mut forged = c;
         forged.prices[0] = 1;
@@ -10631,6 +10802,87 @@ mod tests {
             }
             .encode(&mut [0; MAX_INTENT_BYTES]),
             Err(CodecError::InvalidCount)
+        );
+    }
+
+    #[test]
+    fn the_slice_and_close_intents_have_exact_unambiguous_wires() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 7);
+        let candidate = h(9);
+
+        let slices = Intent::AdvanceClearSlices {
+            market,
+            epoch,
+            candidate,
+            max_slices: 100,
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = slices.encode(&mut bytes).unwrap();
+        assert_eq!(len, 100);
+        assert_eq!(slices.encoded_len(), len);
+        assert_eq!(&bytes[..2], [52, INTENT_VERSION]);
+        assert_eq!(&bytes[98..100], &100u16.to_le_bytes());
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(slices));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+        let mut zero_batch = bytes;
+        zero_batch[98..100].fill(0);
+        assert_eq!(
+            Intent::decode(&zero_batch[..len]),
+            Err(CodecError::InvalidCount)
+        );
+        let mut over_batch = bytes;
+        over_batch[98..100].copy_from_slice(&(MAX_SLICES as u16 + 1).to_le_bytes());
+        assert_eq!(
+            Intent::decode(&over_batch[..len]),
+            Err(CodecError::InvalidCount)
+        );
+        for at in [2, 34, 66] {
+            let mut zeroed = bytes;
+            zeroed[at..at + 32].fill(0);
+            assert_eq!(
+                Intent::decode(&zeroed[..len]),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+
+        let close = Intent::CompleteClearWork {
+            market,
+            epoch,
+            candidate,
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = close.encode(&mut bytes).unwrap();
+        assert_eq!(len, 98);
+        assert_eq!(close.encoded_len(), len);
+        assert_eq!(&bytes[..2], [53, INTENT_VERSION]);
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(close));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+        let mut long = [0; MAX_INTENT_BYTES];
+        long[..len].copy_from_slice(&bytes[..len]);
+        assert_eq!(
+            Intent::decode(&long[..len + 1]),
+            Err(CodecError::TrailingBytes)
+        );
+        for at in [2, 34, 66] {
+            let mut zeroed = bytes;
+            zeroed[at..at + 32].fill(0);
+            assert_eq!(
+                Intent::decode(&zeroed[..len]),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+        let mut wrong_version = bytes;
+        wrong_version[1] = INTENT_VERSION + 1;
+        assert_eq!(
+            Intent::decode(&wrong_version[..len]),
+            Err(CodecError::WrongVersion)
         );
     }
 

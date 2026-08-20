@@ -227,6 +227,13 @@ async fn start(mutation: Mutation) -> (BanksClient, Keypair, Fixture) {
         honored_aon_mask: 0,
         weighted_direct_volume: 8,
         limit_surplus_price_units: 0,
+        // v3: a SELECTED record carries a verified tie digest; the stale
+        // (still-SUBMITTED) mutation carries none.
+        score_digest: if matches!(mutation, Mutation::StaleCandidate) {
+            Hash32::ZERO
+        } else {
+            Hash32::from_bytes([0x5d; 32])
+        },
         churn: 0,
         submitted_slot: 80,
         distinct_owners: 2,

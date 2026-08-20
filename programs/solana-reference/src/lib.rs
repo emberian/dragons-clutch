@@ -5720,6 +5720,23 @@ mod tests {
                 market,
                 epoch: h(0x2e),
             },
+            Intent::AdvanceClearWork {
+                market,
+                epoch: h(0x2e),
+                candidate: h(0x3e),
+                max_orders: 16,
+            },
+            Intent::AdvanceClearSlices {
+                market,
+                epoch: h(0x2e),
+                candidate: h(0x3e),
+                max_slices: 16,
+            },
+            Intent::CompleteClearWork {
+                market,
+                epoch: h(0x2e),
+                candidate: h(0x3e),
+            },
         ] {
             let request = layout_request(0, unsupported);
             assert_eq!(
