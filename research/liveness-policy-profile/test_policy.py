@@ -41,12 +41,52 @@ class PolicyTests(unittest.TestCase):
     def test_resolution_work_maximum_path_is_exact(self) -> None:
         row = policy.derive(self.evidence)["resolution_work"]
         self.assertEqual(row["status"], "PASS")
-        self.assertEqual(row["fold_path_lamports"], 8_320_000)
-        self.assertEqual(row["success_rewards_lamports"], 8_680_000)
-        self.assertEqual(row["worst_abort_rewards_lamports"], 8_530_000)
+        # The Fold(1) route covers its widest observation, the 88,217-CU
+        # singleton measured inside the two-fold batch scenario.
+        self.assertEqual(row["routes"]["fold_1"]["measured_cu"], 88_217)
+        self.assertEqual(row["fold_path_lamports"], 7_360_000)
+        self.assertEqual(row["success_rewards_lamports"], 7_680_000)
+        self.assertEqual(row["worst_abort_rewards_lamports"], 7_530_000)
         self.assertEqual(row["rent_principal_lamports"], 10_801_920)
-        self.assertEqual(row["persistent_reserve_lamports"], 19_481_920)
-        self.assertEqual(row["payer_cold_outlay_lamports"], 19_741_920)
+        self.assertEqual(row["persistent_reserve_lamports"], 18_481_920)
+        self.assertEqual(row["payer_cold_outlay_lamports"], 18_711_920)
+
+    def test_batched_folds_are_admitted_and_collapse_the_cold_outlay(self) -> None:
+        derived = policy.derive(self.evidence)
+        row = derived["resolution_work_batched"]
+        self.assertEqual(row["status"], "PASS")
+        self.assertEqual(row["maximum_admitted_batch"], 12)
+        self.assertEqual(row["routes"]["fold_batch_12"]["measured_cu"], 926_969)
+        self.assertEqual(row["routes"]["fold_batch_12"]["selected_limit_cu"], 1_160_000)
+        self.assertEqual(
+            row["routes"]["fold_batch_12"]["keeper_reward_lamports"], 1_270_000
+        )
+        self.assertEqual(row["fewest_transaction_plan"], [12, 12, 8])
+        self.assertEqual(row["fold_transactions"], 3)
+        self.assertEqual(row["fold_path_lamports"], 3_490_000)
+        self.assertEqual(row["payer_cold_outlay_lamports"], 14_841_920)
+        # Batching collapses the 32-transaction fixed overhead, never the
+        # rent or the terminal quotes: both paths share one Begin and rent.
+        per_transaction = derived["resolution_work"]
+        self.assertLess(
+            row["payer_cold_outlay_lamports"],
+            per_transaction["payer_cold_outlay_lamports"],
+        )
+        self.assertEqual(
+            row["rent_principal_lamports"],
+            per_transaction["rent_principal_lamports"],
+        )
+        # A batch measured over the raw admission bound loses its quote and
+        # drops out of the plan instead of being clamped.
+        tampered = copy.deepcopy(self.evidence)
+        tampered["measurements"]["resolution_work_batch"]["fold_batch_12_cu"] = [
+            1_120_001
+        ]
+        stopped = policy.derive(tampered)["resolution_work_batched"]
+        self.assertEqual(stopped["routes"]["fold_batch_12"]["status"], "STOP_HEADROOM")
+        self.assertIsNone(stopped["routes"]["fold_batch_12"]["keeper_reward_lamports"])
+        self.assertEqual(stopped["maximum_admitted_batch"], 8)
+        self.assertEqual(stopped["fewest_transaction_plan"], [8, 8, 8, 8])
 
     def test_runtime_schedule_underfunding_is_rejected(self) -> None:
         finalize = policy.derive(self.evidence)["resolution_work"]["routes"]["finalize"]
@@ -70,8 +110,8 @@ class PolicyTests(unittest.TestCase):
         row = derived["direct_v2"]["select"]
         self.assertEqual(row["status"], "PASS")
         self.assertEqual(row["measured_cu"], 226_071)
-        self.assertEqual(row["selected_limit_cu"], 300_000)
-        self.assertEqual(row["keeper_reward_lamports"], 410_000)
+        self.assertEqual(row["selected_limit_cu"], 290_000)
+        self.assertEqual(row["keeper_reward_lamports"], 400_000)
         self.assertEqual(derived["direct_v2"]["status"], "STOP")
         self.assertEqual(
             derived["direct_v2"]["empty_frozen_lapse"], "UNIMPLEMENTED_STOP"
