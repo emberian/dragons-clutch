@@ -24,8 +24,9 @@ vectors both evaluate. It is never claimed as proven.
 This promotes Lean from "optional seam" (EVIDENCE_MATRIX §6 as written) to
 **the primary home of semantic-plane theorems**. It does not demote Verus, which
 remains the only tool that can say anything at all about the Rust source, and it
-does not retire the Rocq shadow, which stays as written until someone decides
-otherwise (§9.4).
+no longer keeps the Rocq shadow open: ADR-0005 (adopted 2026-08-20) retired
+the Rocq role, with `rocq/` kept as historical specification (§9.4 is
+superseded by that record).
 
 ### 1.1 The claim shape, verbatim
 
