@@ -61,6 +61,28 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- FEE ECONOMICS MAP + CORRECTION RECORD
+  (docs/reviews/FEE_ECONOMICS_FINDINGS_2026-08-19.md): twelve places where
+  FEE_GEOMETRY/ECONOMICS assert properties the project's own research
+  refutes. Headline: RISK_SUMMED_POSITIONS Prop 9 PROVES that at boundary
+  prices the dispersion kernel is strictly larger than the risk quotient, so
+  risk transfer on zero-priced outcomes is LITERALLY FEELESS however large
+  its range — a proved evasion channel absent from the fee's own §5
+  laundering list, with no zero-price falsifier in the lab. Also: dispersion
+  is NOT the quotient norm (Prop 10 refuted) but G IS characterized, not
+  merely constructed (Props 11-12) — neither correction absorbed. The
+  promotion gate is UNSTARTABLE not pending: the per-Egg control arm the
+  design was built to beat does not exist in any language, a sixth
+  quotient-norm arm is owed, and four of eight measurement axes need a
+  market-quality simulator that exists nowhere. Corrected the earlier
+  scorecard: clutch-liveness IS transitively in the ELF and reached at
+  runtime (DonationLedger on the V3 path), 1 of ~14 types wired.
+  IntentFeeCarry already implements the recommended intent-scoped
+  terminal-ceil design with zero consumers. The layout is already
+  fee-capable; max_fee_atoms is forced zero at FIVE gates and there is
+  nothing to pay a fee TO — RevenuePolicy is four documents of prose and
+  zero code.
+
 - SEAL TRACKED-NESS HARDENING LANDED (ecfd552): check_tracked_evidence now
   asserts every one of the 73 sealed-evidence paths is present, git-tracked,
   AND byte-equal to its committed blob at HEAD — closing the hole where
