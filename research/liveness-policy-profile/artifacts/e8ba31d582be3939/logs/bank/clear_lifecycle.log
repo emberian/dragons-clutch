@@ -1,0 +1,49 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/clear_lifecycle.rs (target/debug/deps/clear_lifecycle-b252369f205bb7fa)
+
+running 2 tests
+test a_forged_fill_is_refused_by_bank_and_host_with_one_error ... FreezeEpoch (3 pages, 40 orders) CU: 717829
+pass-1 advance page 0 slot 0 max 1 (1 reservations) CU: 263493
+pass-1 advance page 0 slot 1 max 3 (3 reservations) CU: 281623
+pass-1 advance page 0 slot 4 max 16 (11 reservations) CU: 388428
+pass-1 advance page 1 slot 0 max 2 (2 reservations) CU: 272490
+pass-1 advance page 1 slot 2 max 1 (1 reservations) CU: 272674
+pass-1 advance page 1 slot 3 max 3 (3 reservations) CU: 293356
+pass-1 advance page 1 slot 7 max 16 (9 reservations) CU: 374921
+pass-1 advance page 2 slot 0 max 2 (2 reservations) CU: 286747
+pass-1 advance page 2 slot 2 max 1 (1 reservations) CU: 285260
+pass-1 advance page 2 slot 4 max 3 (3 reservations) CU: 315952
+pass-1 advance page 2 slot 7 max 16 (1 reservations) CU: 299635
+AdvanceClearSlices (17 of 33 slices) CU: 177737
+AdvanceClearSlices (rest of 33 + end_pass) CU: 177754
+pass-2 advance page 0 slot 0 max 16 (0 reservations) CU: 306105
+pass-2 advance page 1 slot 0 max 5 (0 reservations) CU: 273286
+pass-2 advance page 1 slot 6 max 16 (0 reservations) CU: 306995
+pass-2 advance page 2 slot 0 max 5 (0 reservations) CU: 286996
+pass-2 advance page 2 slot 6 max 16 (0 reservations) CU: 309006
+CompleteClearWork CU: 122869
+ok
+test the_forty_order_book_walks_to_the_host_relations_verdict ... FreezeEpoch (3 pages, 40 orders) CU: 717829
+pass-1 advance page 0 slot 0 max 1 (1 reservations) CU: 260500
+pass-1 advance page 0 slot 1 max 3 (3 reservations) CU: 289123
+pass-1 advance page 0 slot 4 max 16 (11 reservations) CU: 400428
+pass-1 advance page 1 slot 0 max 2 (2 reservations) CU: 278490
+pass-1 advance page 1 slot 2 max 1 (1 reservations) CU: 272674
+pass-1 advance page 1 slot 3 max 3 (3 reservations) CU: 303856
+pass-1 advance page 1 slot 7 max 16 (9 reservations) CU: 374921
+pass-1 advance page 2 slot 0 max 2 (2 reservations) CU: 297247
+pass-1 advance page 2 slot 2 max 1 (1 reservations) CU: 285260
+pass-1 advance page 2 slot 4 max 3 (3 reservations) CU: 308452
+pass-1 advance page 2 slot 7 max 16 (1 reservations) CU: 299621
+AdvanceClearSlices (17 of 33 slices) CU: 177737
+AdvanceClearSlices (rest of 33 + end_pass) CU: 177754
+pass-2 advance page 0 slot 0 max 16 (0 reservations) CU: 306093
+pass-2 advance page 1 slot 0 max 5 (0 reservations) CU: 273286
+pass-2 advance page 1 slot 6 max 16 (0 reservations) CU: 306995
+pass-2 advance page 2 slot 0 max 5 (0 reservations) CU: 286996
+pass-2 advance page 2 slot 6 max 16 (0 reservations) CU: 308986
+CompleteClearWork CU: 127085
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.94s
+

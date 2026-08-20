@@ -12,14 +12,14 @@ This directory contains:
 - `src/main.rs`: exact account-width and pinned-default-rent probe;
 - `policy.py`, `evidence.json`, and the normalized capture: exact artifact,
   bank, source/test identity, rent, reward, and source-drift seal;
-- `artifacts/d692954949d57db22`: the current canonical ELF, build and stack/ELF
+- `artifacts/e8ba31d582be3939`: the current canonical ELF, build and stack/ELF
   audit evidence, and bank logs measured against that exact ELF;
-- `artifacts/fda59705ac1c1869`, `artifacts/187d5ee16f72946a`,
-  `artifacts/af6bb79cc3766bd0`, `artifacts/bd20711b01828a74`, and
-  `artifacts/a5725a3d8e149b2b`: the preceding historical seals, retained in
-  full for audit continuity but excluded from the current projection.
-  `policy.py` refuses a seal that overwrites a superseded artifact root or
-  drops any of its evidence files.
+- `artifacts/d692954949d57db22`, `artifacts/fda59705ac1c1869`,
+  `artifacts/187d5ee16f72946a`, `artifacts/af6bb79cc3766bd0`,
+  `artifacts/bd20711b01828a74`, and `artifacts/a5725a3d8e149b2b`: the
+  preceding historical seals, retained in full for audit continuity but
+  excluded from the current projection. `policy.py` refuses a seal that
+  overwrites a superseded artifact root or drops any of its evidence files.
 
 Every sealed path is checked for repository membership, not merely for
 presence on the running disk. The root `.gitignore` excludes `*.so` and
@@ -58,50 +58,66 @@ cargo clippy --offline --locked \
 ```
 
 The current artifact source and test/evidence ancestry is exact commit
-`853fecb` (the `87fd342` T2-6 general-epoch/streaming-walk merge plus the
-benchmarks-only cost-lab re-pin, one GOAL.md log commit, and one probe-lane
-change adding the `epoch.window` row). The seal covers the T2-6 wave — the
-general epoch lifecycle and on-chain streaming walk (intents 49–53: general
-InitEpoch/FreezeEpoch, AdvanceClearWork with the per-order reservation
-sweep and owner interner, AdvanceClearSlices, CompleteClearWork), the
-default-on custom-heap upward bump allocator, CandidateRecord v3 (337
-bytes, score digest), the 2,050-byte ClearWork interner region, the
-84-byte EpochWindowAccount, and refusal codes `0x0090`–`0x0092`. The
-stripped ELF grows from `1,527,640` to `1,785,904` bytes and no section
-except `.dynstr` and `.shstrtab` is byte-identical, so this is a
-materially different artifact and no old CU row was reused as
-current-artifact evidence; every measured row was rerun against exact
-`d6929549…`. CU drift against `fda59705…` on the measured routes is at
-most +0.8% per route except blank-bank `create_market`
-(+10.1%/+5.0%/+2.1% for v2/v3/v4, noted in the audit); no admission
-flips, and two selected limits move one 10,000-CU quantum (FoldBatch(2)
-220,000 → 230,000, FoldBatch(12) 1,160,000 → 1,170,000, rewards
-following). Three account rows genuinely moved, all re-derived by the
-sealed offline probe: `legacy.clear_work` 50,054 bytes / 349,266,720
-lamports (the interner region), `legacy.candidate` 337 bytes / 3,236,400
-(the v3 score digest), and the new `epoch.window` 84 bytes / 1,475,520
-(created by InitEpoch, closed by no handler; the terminal inventory grows
-to 45 rows, same 14 blocking ids). The walk's own CU evidence is sealed
-as two new UNPROMOTED measurement families (`general_epoch`,
-`clear_walk`, twelve same-ELF families in all, three new bank logs): no
-admission, quote, or reward row is derived for any walk route, live flags
-are untouched, and admission-policy treatment of the walk is ember's
-decision, not this seal's. Direct SelectionV2 Select completes at a
-measured 226,446 CU and commits (V2 stays unpromoted on its unimplemented
+`2dbc9fc` (the `6e4702a` T2-8 entitlement/settlement merge — itself after
+the `8fe5f9e` T2-7 selection merge — plus three closure-neutral commits:
+the build-path root-cause note and protocol amendment, one GOAL.md log
+commit, and the audit-gate `sol_memmove_` review). The seal covers the
+T2-7/T2-8 wave that completes Tier 2 end to end — candidate submission,
+retention, and selection (tags 54–57: SubmitCandidate,
+WriteCandidateFeed, SealCandidate with top-3 displacement,
+FinalizeSelection with the full-width digest tiebreak and the honest
+0-verified lapse), EpochWindow v2 (231 bytes: deadline, live cardinality,
+retained registry, selection result), the CandidateFeedStage staging
+prefix (tag 25, the feed account mid-write, not a new family), and the
+entitlement freeze plus generalized consumption (tags 58–59:
+FreezeEntitlement creating the epoch's FinalPot at `pot_pda`,
+EntitleSlice creating per-(candidate, slice) SettlementReceipt
+entitlements at `receipt_pda`, reservations `ACTIVE → ENTITLED →
+CONSUMED` archive, and SettlePage widened to the entitled direct-slice
+and portfolio full-pair shapes — a portfolio pair settles with exact
+conservation in bank evidence). Per the 2026-08-20 build-path protocol
+amendment (`docs/reviews/BUILD_PATH_IDENTITY_2026-08-20.md`) the
+canonical identity is the in-place double build at the canonical checkout
+path: pass 1/pass 2 are byte-identical `e8ba31d5…` (1,914,432 bytes,
+growing from `1,785,904`), the one cross-path worktree build is recorded
+as the relocation probe under disposition `PATH_TIED_SYMBOL_ORDER`
+(observed byte-identical at this seal — the path-dependence lives in the
+unstripped symbol table and no hash-sorted tie survives stripping here),
+and the relocated-Cargo-home probe returned byte-identical, superseding
+the previous seal's registry-panic-string sensitivity for this artifact.
+The undefined-import surface grows by exactly one reviewed symbol:
+`sol_memmove_`, entered by LLVM lowering the portfolio full-pair copies,
+shimmed by the pinned platform-tools compiler-builtins — the audit gate
+refused it first and the review commit admitted exactly it. CU drift
+against `d6929549…` is within ±0.1% on every promoted route (no admission
+flips, no selected limit moves a quantum); three families exceed the ±1%
+window and are flagged in the audit: blank-bank `create_market`
+(−7.1%/+0.005%/+1.4% for v2/v3/v4, reversing most of the prior seal's
++10.1% v2 rise), the unpromoted general-epoch single placement (−1.5%),
+and unpromoted clear-walk pass-1 slot observations (up to +3.1%). Account
+rows re-derived by the sealed offline probe: `epoch.window` moves 84 →
+231 bytes / 2,498,640 lamports (v2), and the two new T2-8 general-plane
+families are classified post-probe with layout-crate byte pins —
+`epoch.final_pot` 262 bytes / 2,714,400 (one per epoch, created
+`POT_PHASE_CLOSED` with provably zero scalars) and `epoch.receipt` 217
+bytes / 2,401,200 (at most 416 per selected candidate); neither has any
+close path (TerminalClosure stands in the settlement blocker ledger), so
+the terminal inventory grows to 47 rows, same 14 blocking ids. The
+general-clearing CU evidence now spans four UNPROMOTED measurement
+families (`general_epoch`, `clear_walk`, `candidate_selection`,
+`entitled_clearing`; fourteen same-ELF families in all, fifteen bank
+logs): no admission, quote, or reward row is derived for any tag-49–59
+route, live flags are untouched, the reference adapter refuses all of
+them, and admission-policy treatment of the plane is ember's decision,
+not this seal's. Direct SelectionV2 Select completes at a measured
+226,445 CU and commits (V2 stays unpromoted on its unimplemented
 empty-frozen lapse), every occupation-v4 monolithic profile clears the
 25%-headroom gate, and Direct V3 remains resident but unmeasured, so no
-V3 CU row enters the projection. The relocated-Cargo-home probe is
-**path-sensitive at this seal**: three registry-crate panic-location
-strings (solana-address, solana-account-info, solana-program-entrypoint)
-render relative at the canonical home and absolute at a relocated one,
-superseding the two prior seals' relocation byte-identity — the audit
-quantifies the divergence and the recorded workspace-path-length bound;
-ordinary-path rebuilds (including the independently rebuilt bank fixture)
-stay byte-identical. The declared source closure grows 104 → 106 files
-(exactly the two T2-6 instruction modules). Native full-lifecycle tests
-are intentionally excluded from the default feature: running them
-requires the distinct non-production mock-source ELF, so they are not
-smuggled into this projection.
+V3 CU row enters the projection. The declared source closure grows
+106 → 108 files (exactly the two T2-7/T2-8 instruction modules). Native
+full-lifecycle tests are intentionally excluded from the default feature:
+running them requires the distinct non-production mock-source ELF, so
+they are not smuggled into this projection.
 
 Two blessed policy-plane changes landed earlier on 2026-08-20 as one
 evidence-only cycle (at the `187d5ee1…` seal) and are re-derived at this
@@ -115,7 +131,7 @@ composes N singleton Fold instructions into one transaction for N in
 final account state byte-identical to the same folds driven one per
 transaction, and proves one invalid Fold mid-batch reverts the entire
 transaction to its prestate. Twelve is the largest measured batch and it
-admits at 929,105 CU at this seal (selected limit 1,170,000). The
+admits at 929,561 CU at this seal (selected limit 1,170,000). The
 `resolution_work_batched` projection prices the fewest-transaction plan for
 a 32-record work item — Begin, then
 FoldBatch(12)+FoldBatch(12)+FoldBatch(8), then Finalize — next to the

@@ -55,6 +55,8 @@ SAME_ELF_MEASUREMENTS = {
     "withdraw_cash",
     "general_epoch",
     "clear_walk",
+    "candidate_selection",
+    "entitled_clearing",
 }
 REQUIRED_EVIDENCE_SUFFIXES = {
     "audit/RUNTIME_ARTIFACT_AUDIT.md",
@@ -85,12 +87,19 @@ REQUIRED_EVIDENCE_SUFFIXES = {
 # current artifact root: a historical seal keeps exactly the evidence set it
 # was sealed with and is never asked for files that postdate it.  The three
 # T2-6 logs seal the general-epoch lifecycle and streaming-walk CU evidence
-# (the clear_walk measurement family draws on both walk logs).
+# (the clear_walk measurement family draws on both walk logs); the two
+# T2-7/T2-8 logs seal the selection and entitlement/settlement CU evidence;
+# and the cross-path build log records the relocation probe the 2026-08-20
+# build-path protocol amendment requires
+# (docs/reviews/BUILD_PATH_IDENTITY_2026-08-20.md).
 CURRENT_EVIDENCE_SUFFIXES = REQUIRED_EVIDENCE_SUFFIXES | {
     "logs/bank/resolution_work_batch.log",
     "logs/bank/general_epoch.log",
     "logs/bank/clear_walk.log",
     "logs/bank/clear_lifecycle.log",
+    "logs/bank/candidate_selection.log",
+    "logs/bank/entitled_clearing.log",
+    "logs/sbf-build-crosspath.log",
 }
 # The Direct V3 account families classified after the sealed v2 probe.  The
 # probe source archived at ``runtime_ref`` enumerates none of them, so these
@@ -110,6 +119,19 @@ POST_PROBE_DIRECT_V3_ROWS = {
     "direct.reservation.v2": 618,
     "artifact.direct_batch_policy_v3.final": 96,
     "artifact.direct_batch_policy_v3.stage": 232,
+}
+# The two T2-8 general-plane families classified after the sealed probe: the
+# entitlement freeze reuses the direct plane's exact byte shapes at new
+# walk-plane PDAs (FinalPotAccount at seeds::pot_pda per general epoch,
+# SettlementReceiptAccount at seeds::receipt_pda per (candidate, slice)), and
+# the probe archived at ``runtime_ref`` enumerates only the direct-plane
+# instances of those shapes.  Byte pins come from
+# programs/solana-layout/src/lib.rs (account_len::FINAL_POT = 262,
+# account_len::SETTLEMENT_RECEIPT = 217); the same probe-equality teeth as the
+# V3 pins apply.
+POST_PROBE_T2_8_ROWS = {
+    "epoch.final_pot": 262,
+    "epoch.receipt": 217,
 }
 
 
@@ -341,13 +363,19 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
         if select_route["status"] == "PASS" and direct["empty_frozen_lapse"] == "PASS"
         else "STOP"
     )
-    # T2-6: the general epoch lifecycle and streaming walk are SBF-executed
-    # bank evidence sealed with this artifact and deliberately unpromoted —
-    # no admission, quote, or reward row is derived for any walk route
-    # (tags 49-53) and no live flag moves.  Admission-policy treatment of
-    # the walk is ember's decision, not this seal's.  The derivation refuses
-    # a walk family that stops saying so out loud.
-    for family in ("general_epoch", "clear_walk"):
+    # T2-6/T2-7/T2-8: the general epoch lifecycle, streaming walk, candidate
+    # selection, and entitlement/settlement are SBF-executed bank evidence
+    # sealed with this artifact and deliberately unpromoted — no admission,
+    # quote, or reward row is derived for any general-clearing route
+    # (tags 49-59) and no live flag moves.  Admission-policy treatment of
+    # the plane is ember's decision, not this seal's.  The derivation refuses
+    # a family that stops saying so out loud.
+    for family in (
+        "general_epoch",
+        "clear_walk",
+        "candidate_selection",
+        "entitled_clearing",
+    ):
         declared = measurements[family].get("admission")
         if declared != "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY":
             raise CheckError(
@@ -448,7 +476,12 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
             "status": "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP",
             "admission_rows_derived": False,
             "live_flags": "UNTOUCHED",
-            "measured_families": ["general_epoch", "clear_walk"],
+            "measured_families": [
+                "general_epoch",
+                "clear_walk",
+                "candidate_selection",
+                "entitled_clearing",
+            ],
             "decision_owner": "ember",
         },
         "terminal_status": terminal_status,
@@ -709,16 +742,24 @@ def check_rent_and_accounts(evidence: dict[str, Any]) -> None:
         name: {"bytes": bytes_, "rent_lamports": lamports}
         for name, bytes_, lamports, *_ in ACCOUNT_ROWS
     }
-    for name, pinned_bytes in POST_PROBE_DIRECT_V3_ROWS.items():
-        row = terminal_rows.pop(name, None)
-        if row is None:
-            raise CheckError(f"post-probe V3 row missing from terminal inventory: {name}")
-        require_equal(row["bytes"], pinned_bytes, f"post-probe V3 bytes {name}")
-        require_equal(
-            row["rent_lamports"],
-            max(1, (pinned_bytes + rent["account_storage_overhead_bytes"]) * effective),
-            f"post-probe V3 rent {name}",
-        )
+    if not set(POST_PROBE_DIRECT_V3_ROWS).isdisjoint(POST_PROBE_T2_8_ROWS):
+        raise CheckError("post-probe pin dictionaries overlap")
+    for label, pins in (
+        ("V3", POST_PROBE_DIRECT_V3_ROWS),
+        ("T2-8", POST_PROBE_T2_8_ROWS),
+    ):
+        for name, pinned_bytes in pins.items():
+            row = terminal_rows.pop(name, None)
+            if row is None:
+                raise CheckError(
+                    f"post-probe {label} row missing from terminal inventory: {name}"
+                )
+            require_equal(row["bytes"], pinned_bytes, f"post-probe {label} bytes {name}")
+            require_equal(
+                row["rent_lamports"],
+                max(1, (pinned_bytes + rent["account_storage_overhead_bytes"]) * effective),
+                f"post-probe {label} rent {name}",
+            )
     require_equal(evidence["accounts"], terminal_rows, "terminal/probe account inventory")
     output = historical_probe(evidence)
     accounts, metadata = parse_probe(output)

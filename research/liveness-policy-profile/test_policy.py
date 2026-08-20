@@ -41,9 +41,9 @@ class PolicyTests(unittest.TestCase):
     def test_resolution_work_maximum_path_is_exact(self) -> None:
         row = policy.derive(self.evidence)["resolution_work"]
         self.assertEqual(row["status"], "PASS")
-        # The Fold(1) route covers its widest observation, the 88,395-CU
+        # The Fold(1) route covers its widest observation, the 88,433-CU
         # singleton measured inside the two-fold batch scenario.
-        self.assertEqual(row["routes"]["fold_1"]["measured_cu"], 88_395)
+        self.assertEqual(row["routes"]["fold_1"]["measured_cu"], 88_433)
         self.assertEqual(row["fold_path_lamports"], 7_360_000)
         self.assertEqual(row["success_rewards_lamports"], 7_680_000)
         self.assertEqual(row["worst_abort_rewards_lamports"], 7_530_000)
@@ -56,7 +56,7 @@ class PolicyTests(unittest.TestCase):
         row = derived["resolution_work_batched"]
         self.assertEqual(row["status"], "PASS")
         self.assertEqual(row["maximum_admitted_batch"], 12)
-        self.assertEqual(row["routes"]["fold_batch_12"]["measured_cu"], 929_105)
+        self.assertEqual(row["routes"]["fold_batch_12"]["measured_cu"], 929_561)
         self.assertEqual(row["routes"]["fold_batch_12"]["selected_limit_cu"], 1_170_000)
         self.assertEqual(
             row["routes"]["fold_batch_12"]["keeper_reward_lamports"], 1_280_000
@@ -109,7 +109,7 @@ class PolicyTests(unittest.TestCase):
         derived = policy.derive(self.evidence)
         row = derived["direct_v2"]["select"]
         self.assertEqual(row["status"], "PASS")
-        self.assertEqual(row["measured_cu"], 226_446)
+        self.assertEqual(row["measured_cu"], 226_445)
         self.assertEqual(row["selected_limit_cu"], 290_000)
         self.assertEqual(row["keeper_reward_lamports"], 400_000)
         self.assertEqual(derived["direct_v2"]["status"], "STOP")
@@ -144,28 +144,38 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(walk["decision_owner"], "ember")
         self.assertNotIn("selected_limit_cu", walk)
         self.assertNotIn("keeper_reward_lamports", walk)
-        for family in ("general_epoch", "clear_walk"):
+        self.assertEqual(
+            walk["measured_families"],
+            ["general_epoch", "clear_walk", "candidate_selection", "entitled_clearing"],
+        )
+        for family in walk["measured_families"]:
             row = self.evidence["measurements"][family]
             self.assertEqual(
                 row["admission"], "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY", family
             )
             self.assertIn(family, policy.SAME_ELF_MEASUREMENTS)
-        # The three walk logs are sealed with the current artifact root.
+        # The five general-clearing logs are sealed with the current root.
         artifact_root = self.evidence["artifact"]["path"].rsplit("/", 1)[0]
-        for log in ("general_epoch", "clear_walk", "clear_lifecycle"):
+        for log in (
+            "general_epoch",
+            "clear_walk",
+            "clear_lifecycle",
+            "candidate_selection",
+            "entitled_clearing",
+        ):
             self.assertIn(
                 f"{artifact_root}/logs/bank/{log}.log", self.evidence["evidence_files"]
             )
         # Exact measured pins from those logs.
         epoch = self.evidence["measurements"]["general_epoch"]
-        self.assertEqual(epoch["init_epoch_cu"], [42_376])
+        self.assertEqual(epoch["init_epoch_cu"], [42_557])
         self.assertEqual(
             epoch["freeze_epoch_rows"][2],
-            {"pages": 3, "orders": 40, "cu": [716_586, 716_586]},
+            {"pages": 3, "orders": 40, "cu": [717_829, 717_829]},
         )
         walk_rows = self.evidence["measurements"]["clear_walk"]
-        self.assertEqual(max(walk_rows["forty_order_pass1_cu"]), 388_267)
-        self.assertEqual(walk_rows["complete_cu"], [122_888, 127_076])
+        self.assertEqual(max(walk_rows["forty_order_pass1_cu"]), 400_428)
+        self.assertEqual(walk_rows["complete_cu"], [122_869, 127_085])
         tampered = copy.deepcopy(self.evidence)
         tampered["measurements"]["clear_walk"]["admission"] = "PROMOTED"
         with self.assertRaises(policy.CheckError):
@@ -175,6 +185,81 @@ class PolicyTests(unittest.TestCase):
         tampered["measurements"]["general_epoch"]["artifact_sha256"] = historical
         with self.assertRaises(policy.CheckError):
             policy.check_artifact_binding(tampered)
+
+    def test_selection_and_entitlement_families_are_sealed_but_never_promoted(
+        self,
+    ) -> None:
+        """T2-7/T2-8 CU evidence binds to the exact artifact and derives nothing.
+
+        The candidate-selection and entitled-clearing families seal the
+        selection (tags 54-57) and entitlement/settlement (tags 58-59 plus
+        the widened SettlePage) bank evidence with their two logs; the
+        projection stays UNPROMOTED and no admission, quote, or reward row
+        exists for any of their routes.  Dropping either family's unpromoted
+        declaration must refuse, exactly like the walk's.
+        """
+
+        selection = self.evidence["measurements"]["candidate_selection"]
+        self.assertEqual(max(selection["seal_candidate_cu"]), 64_170)
+        self.assertEqual(selection["seal_candidate_displacing_cu"], [64_170])
+        self.assertEqual(
+            {row["shape"]: row["cu"] for row in selection["finalize_selection_rows"]},
+            {
+                "3_retained_2_verified_selects_winner": [49_230],
+                "2_verified_beyond_128_bit_digest_tie": [39_462],
+                "0_verified_honest_lapse": [20_695],
+            },
+        )
+        self.assertEqual(selection["test_result"], "PASS_5_OF_5")
+        entitled = self.evidence["measurements"]["entitled_clearing"]
+        self.assertEqual(entitled["freeze_entitlement_cu"], [100_052])
+        self.assertEqual(entitled["entitle_slice_single_cu"], [204_577])
+        self.assertEqual(entitled["entitle_slice_portfolio_pair_cu"], [246_173])
+        self.assertEqual(entitled["settle_page_entitled_direct_slice_cu"], [54_834])
+        self.assertEqual(
+            entitled["settle_page_entitled_portfolio_full_pair_cu"], [225_739]
+        )
+        self.assertEqual(
+            entitled["bank_conservation"],
+            "POSITIONS_BYTE_EQUAL_IMPLIED_ALLOCATION_TOTAL_CASH_AND_EGGS_EXACT",
+        )
+        self.assertEqual(entitled["test_result"], "PASS_4_OF_4")
+        derived = policy.derive(self.evidence)
+        for subsystem in derived.values():
+            if isinstance(subsystem, dict) and "routes" in subsystem:
+                for name in subsystem["routes"]:
+                    self.assertNotIn("entitle", name)
+                    self.assertNotIn("candidate", name)
+        for family in ("candidate_selection", "entitled_clearing"):
+            tampered = copy.deepcopy(self.evidence)
+            del tampered["measurements"][family]["admission"]
+            with self.assertRaises(policy.CheckError):
+                policy.derive(tampered)
+
+    def test_reproducibility_probes_are_pinned_with_their_dispositions(self) -> None:
+        """The build-path amendment's probe rows are sealed exactly.
+
+        The canonical identity is the in-place double build; the cross-path
+        worktree build is recorded under the PATH_TIED_SYMBOL_ORDER
+        disposition (its observed digest listed, byte-identical at this
+        seal), and the relocated-Cargo-home probe returned byte-identical.
+        """
+
+        row = self.evidence["artifact_reproducibility"]
+        digest = self.evidence["artifact"]["sha256"]
+        self.assertEqual(row["normal_build_1"], digest)
+        self.assertEqual(row["normal_build_2"], digest)
+        self.assertEqual(row["cross_path_build"], digest)
+        self.assertEqual(row["cross_path_disposition"], "PATH_TIED_SYMBOL_ORDER")
+        self.assertEqual(row["relocated_cargo_home"], digest)
+        self.assertEqual(
+            row["relocated_disposition"], "INDEPENDENT_BYTE_IDENTICAL_SINGLE_HOST"
+        )
+        artifact_root = self.evidence["artifact"]["path"].rsplit("/", 1)[0]
+        self.assertIn(
+            f"{artifact_root}/logs/sbf-build-crosspath.log",
+            self.evidence["evidence_files"],
+        )
 
     def test_source_refusal_is_not_capitalized_as_success(self) -> None:
         row = policy.derive(self.evidence)["source_value_admission"]
@@ -262,6 +347,42 @@ class PolicyTests(unittest.TestCase):
         finally:
             policy.POST_PROBE_DIRECT_V3_ROWS.clear()
             policy.POST_PROBE_DIRECT_V3_ROWS.update(pinned)
+
+    def test_post_probe_t2_8_rows_are_pinned_and_never_shadow_the_probe(self) -> None:
+        """The sealed probe enumerates no general-plane pot/receipt row.
+
+        Same teeth as the V3 pins: the T2-8 names must be disjoint from the
+        probe rows and from the V3 pins, a byte-pin drift must refuse, and
+        dropping a pin re-exposes its row to the probe equality, which then
+        refuses the un-probed row.
+        """
+
+        self.assertTrue(
+            set(policy.POST_PROBE_T2_8_ROWS).isdisjoint(self.evidence["accounts"])
+        )
+        self.assertTrue(
+            set(policy.POST_PROBE_T2_8_ROWS).isdisjoint(policy.POST_PROBE_DIRECT_V3_ROWS)
+        )
+        self.assertEqual(
+            policy.POST_PROBE_T2_8_ROWS,
+            {"epoch.final_pot": 262, "epoch.receipt": 217},
+        )
+        pinned = dict(policy.POST_PROBE_T2_8_ROWS)
+        try:
+            policy.POST_PROBE_T2_8_ROWS["epoch.receipt"] = 218
+            with self.assertRaises(policy.CheckError) as caught:
+                policy.check_rent_and_accounts(self.evidence)
+            self.assertIn("post-probe T2-8 bytes epoch.receipt", str(caught.exception))
+
+            policy.POST_PROBE_T2_8_ROWS.clear()
+            policy.POST_PROBE_T2_8_ROWS.update(pinned)
+            del policy.POST_PROBE_T2_8_ROWS["epoch.final_pot"]
+            with self.assertRaises(policy.CheckError) as caught:
+                policy.check_rent_and_accounts(self.evidence)
+            self.assertIn("terminal/probe account inventory", str(caught.exception))
+        finally:
+            policy.POST_PROBE_T2_8_ROWS.clear()
+            policy.POST_PROBE_T2_8_ROWS.update(pinned)
 
     def test_invalid_policy_cannot_sneak_through(self) -> None:
         invalid = QuotePolicy(5, 4, 0, 1_400_000, 10_000, 1_000_000, 100_000)

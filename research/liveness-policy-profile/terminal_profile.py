@@ -132,12 +132,43 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
     # families below at their exact widths (InitEpoch creates the same
     # 328-byte EpochAccount at seeds::epoch_pda; the walk consumes the same
     # feed and checkpoint shapes), so no new row arises from that reuse.  Its
-    # one new persistent family is the 84-byte deadline-window companion:
-    # created by InitEpoch (tag 49) at seeds::epoch_window_pda, exactly one
-    # per general epoch, read by FreezeEpoch, and closed by no handler —
-    # TerminalClosure (rent-reclaim close of ClearWork/feed/receipts) is a
-    # recorded ranked blocker in the Tier 2 plan, deliberately standing.
-    ("epoch.window", 84, 1_475_520, "PER_GENERAL_EPOCH", 1, S,
+    # one new persistent family is the deadline-window companion: created by
+    # InitEpoch (tag 49) at seeds::epoch_window_pda, exactly one per general
+    # epoch, and closed by no handler — TerminalClosure (rent-reclaim close
+    # of ClearWork/feed/receipts/pot) is a recorded ranked blocker in the
+    # Tier 2 plan, deliberately standing.  T2-7 moves the row 84 -> 231:
+    # EpochWindow v2 (EPOCH_WINDOW_ACCOUNT_BYTES, layout clearing.rs) appends
+    # the candidate-window deadline, the frozen live cardinality, the bounded
+    # 3-slot retained-candidate registry, and the selection result — the
+    # promised format revision of the same account, not a second family.
+    # The T2-7 CandidateFeedStage prefix (account tag 25) is likewise NOT a
+    # new row: it is the same 6,266-byte account as the feed (tag 18) while
+    # its content is being written — a stage prefix instead of a feed header,
+    # replaced one-way by SealCandidate — so legacy.candidate_feed covers it.
+    ("epoch.window", 231, 2_498_640, "PER_GENERAL_EPOCH", 1, S,
+     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
+    # T2-8's entitlement freeze creates two persistent general-plane families
+    # at walk-plane PDAs, reusing the direct plane's exact byte shapes
+    # (account_len::FINAL_POT / account_len::SETTLEMENT_RECEIPT) at new
+    # addresses, so each needs its own row with its own scope.  Creation:
+    # FreezeEntitlement (tag 58, orders_batch/entitlement.rs) creates the
+    # epoch's one FinalPotAccount at seeds::pot_pda, POT_PHASE_CLOSED with
+    # provably zero scalars (virtual/rounding summaries refuse); EntitleSlice
+    # (tag 59) creates one SettlementReceiptAccount per (candidate, slice) at
+    # seeds::receipt_pda for the SELECTED candidate — at most MAX_SLICES =
+    # 416 per selected candidate, replay held by the receipt's own
+    # non-existence.  Close: NO handler closes either family — consumption
+    # (the widened SettlePage) stamps the receipt exhausted in place and the
+    # consumed reservations persist as their own archive — the standing
+    # TerminalClosure row of the SETTLEMENT_BLOCKERS ledger
+    # (orders_batch/settlement.rs, which records CandidateWindowClosure and
+    # EntitlementFreeze as T2-7/T2-8's retirements).  Both rows are pinned
+    # post-probe in policy.py (the sealed probe enumerates the direct-plane
+    # instances only) and stay UNCLASSIFIED_STOP until a close path and
+    # sealed bank evidence exist.
+    ("epoch.final_pot", 262, 2_714_400, "PER_GENERAL_EPOCH", 1, S,
+     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
+    ("epoch.receipt", 217, 2_401_200, "PER_SELECTED_CANDIDATE", 416, S,
      ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
     ("legacy.epoch.v2", 328, 3_173_760, "PER_LEGACY_EPOCH", None, S,
      ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),

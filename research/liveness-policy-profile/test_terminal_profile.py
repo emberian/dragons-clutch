@@ -13,9 +13,10 @@ class TerminalProfileTests(unittest.TestCase):
     def test_inventory_names_are_unique_and_current_profile_stops(self) -> None:
         self.assertEqual(len(ACCOUNT_ROWS), len(EXPECTED_ACCOUNTS))
         # 38 sealed-probe rows (the T2-6 probe adds epoch.window) plus the
-        # seven Direct V3 rows classified after the probe.  A row added or
-        # dropped without reclassifying here fails.
-        self.assertEqual(len(ACCOUNT_ROWS), 45)
+        # seven Direct V3 rows and the two T2-8 general-plane pot/receipt
+        # rows classified after the probe.  A row added or dropped without
+        # reclassifying here fails.
+        self.assertEqual(len(ACCOUNT_ROWS), 47)
         terminal = build_terminal("f" * 40)
         self.assertEqual(
             validate_terminal_admission(terminal, expected_accounts=EXPECTED_ACCOUNTS),
@@ -91,20 +92,23 @@ class TerminalProfileTests(unittest.TestCase):
     def test_general_epoch_window_and_clearing_rows_track_the_t2_6_probe(self) -> None:
         """The walk's account movements land in the inventory unpromoted.
 
-        InitEpoch (tag 49) creates exactly one 84-byte deadline-window
-        companion per general epoch at seeds::epoch_window_pda and no handler
-        closes it; the T2-6 owner-interner region moves the checkpoint to
-        50,054 bytes and CandidateRecord v3's score digest moves the record
-        to 337.  All three rows stay UNCLASSIFIED_STOP on the clearing
-        plane's standing blocker — promoting any of them takes a close path
-        (TerminalClosure, a recorded ranked Tier 2 blocker) and sealed bank
-        evidence, not an edit here.
+        InitEpoch (tag 49) creates exactly one deadline-window companion per
+        general epoch at seeds::epoch_window_pda and no handler closes it —
+        T2-7's EpochWindow v2 moves the row 84 -> 231 bytes (the format
+        revision appends the candidate-window deadline, live cardinality,
+        3-slot retained registry, and selection result); the T2-6
+        owner-interner region moves the checkpoint to 50,054 bytes and
+        CandidateRecord v3's score digest moves the record to 337.  All
+        three rows stay UNCLASSIFIED_STOP on the clearing plane's standing
+        blocker — promoting any of them takes a close path (TerminalClosure,
+        a recorded ranked Tier 2 blocker) and sealed bank evidence, not an
+        edit here.
         """
 
         terminal = build_terminal()
         window = terminal["accounts"]["epoch.window"]
-        self.assertEqual(window["bytes"], 84)
-        self.assertEqual(window["rent_lamports"], 1_475_520)
+        self.assertEqual(window["bytes"], 231)
+        self.assertEqual(window["rent_lamports"], 2_498_640)
         self.assertEqual(window["scope"], "PER_GENERAL_EPOCH")
         self.assertEqual(window["max_instances"], {"kind": "FIXED", "hard_max": 1})
         self.assertEqual(window["lifecycle_class"], "UNCLASSIFIED_STOP")
@@ -120,6 +124,43 @@ class TerminalProfileTests(unittest.TestCase):
             self.assertEqual(row["bytes"], bytes_, name)
             self.assertEqual(row["lifecycle_class"], "UNCLASSIFIED_STOP", name)
             self.assertEqual(row["physical_close_route"], "NONE", name)
+
+    def test_t2_8_pot_and_receipt_rows_are_classified_and_never_promoted(self) -> None:
+        """The entitlement freeze's persistent families stay honest STOPs.
+
+        FreezeEntitlement (58) creates one 262-byte FinalPotAccount per
+        general epoch at seeds::pot_pda; EntitleSlice (59) creates one
+        217-byte SettlementReceiptAccount per (candidate, slice) at
+        seeds::receipt_pda, at most MAX_SLICES = 416 per selected candidate.
+        No handler closes either family — consumption stamps the receipt
+        exhausted in place (TerminalClosure stands in the settlement blocker
+        ledger) — so both rows stay UNCLASSIFIED_STOP with no close route,
+        and the CandidateFeedStage prefix deliberately has no row of its own
+        (it is the feed account in its staging state, not a second family).
+        Promoting either row takes a close path and sealed bank evidence,
+        not an edit here.
+        """
+
+        terminal = build_terminal()
+        pot = terminal["accounts"]["epoch.final_pot"]
+        self.assertEqual(pot["bytes"], 262)
+        self.assertEqual(pot["rent_lamports"], 2_714_400)
+        self.assertEqual(pot["scope"], "PER_GENERAL_EPOCH")
+        self.assertEqual(pot["max_instances"], {"kind": "FIXED", "hard_max": 1})
+        receipt = terminal["accounts"]["epoch.receipt"]
+        self.assertEqual(receipt["bytes"], 217)
+        self.assertEqual(receipt["rent_lamports"], 2_401_200)
+        self.assertEqual(receipt["scope"], "PER_SELECTED_CANDIDATE")
+        self.assertEqual(receipt["max_instances"], {"kind": "FIXED", "hard_max": 416})
+        for name, row in (("epoch.final_pot", pot), ("epoch.receipt", receipt)):
+            self.assertEqual(row["lifecycle_class"], "UNCLASSIFIED_STOP", name)
+            self.assertEqual(row["physical_close_route"], "NONE", name)
+            self.assertEqual(row["promotion"], "STOP", name)
+            self.assertEqual(
+                row["blocking_ids"], ["PROFILE.STORAGE_INVENTORY_INCOMPLETE"], name
+            )
+        self.assertNotIn("legacy.candidate_feed_stage", terminal["accounts"])
+        self.assertNotIn("epoch.feed_stage", terminal["accounts"])
 
     def test_pinned_default_rent_equation_covers_every_row(self) -> None:
         for name, bytes_, rent, *_ in ACCOUNT_ROWS:

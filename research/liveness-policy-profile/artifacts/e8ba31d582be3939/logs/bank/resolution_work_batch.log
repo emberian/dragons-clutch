@@ -1,0 +1,14 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/resolution_work_batch.rs (target/debug/deps/resolution_work_batch-7b96542313dc6d0a)
+
+running 2 tests
+test batched_folds_match_singleton_transactions_byte_exactly ... ResolutionWork SBF CU: batch=2 Begin=91356 FoldBatch(2)=176213 SingletonFolds=88080,88433
+ResolutionWork SBF CU: batch=4 Begin=86224 FoldBatch(4)=331941 SingletonFolds=82948,83296,83296,83301
+ResolutionWork SBF CU: batch=8 Begin=86462 FoldBatch(8)=665845 SingletonFolds=83188,83536,83536,83536,83536,83536,83536,83541
+ResolutionWork SBF CU: batch=12 Begin=80696 FoldBatch(12)=929561 SingletonFolds=77419,77767,77767,77767,77767,77767,77767,77767,77767,77767,77767,77772
+ok
+test one_invalid_fold_mid_batch_reverts_every_prior_fold ... ResolutionWork SBF CU: batch=8 MidBatchInvalidFold=REVERTED FoldBatchRetry(8)=665845
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.50s
+
