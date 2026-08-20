@@ -41,9 +41,9 @@ class PolicyTests(unittest.TestCase):
     def test_resolution_work_maximum_path_is_exact(self) -> None:
         row = policy.derive(self.evidence)["resolution_work"]
         self.assertEqual(row["status"], "PASS")
-        # The Fold(1) route covers its widest observation, the 88,217-CU
+        # The Fold(1) route covers its widest observation, the 88,221-CU
         # singleton measured inside the two-fold batch scenario.
-        self.assertEqual(row["routes"]["fold_1"]["measured_cu"], 88_217)
+        self.assertEqual(row["routes"]["fold_1"]["measured_cu"], 88_221)
         self.assertEqual(row["fold_path_lamports"], 7_360_000)
         self.assertEqual(row["success_rewards_lamports"], 7_680_000)
         self.assertEqual(row["worst_abort_rewards_lamports"], 7_530_000)
@@ -56,7 +56,7 @@ class PolicyTests(unittest.TestCase):
         row = derived["resolution_work_batched"]
         self.assertEqual(row["status"], "PASS")
         self.assertEqual(row["maximum_admitted_batch"], 12)
-        self.assertEqual(row["routes"]["fold_batch_12"]["measured_cu"], 926_969)
+        self.assertEqual(row["routes"]["fold_batch_12"]["measured_cu"], 927_017)
         self.assertEqual(row["routes"]["fold_batch_12"]["selected_limit_cu"], 1_160_000)
         self.assertEqual(
             row["routes"]["fold_batch_12"]["keeper_reward_lamports"], 1_270_000
@@ -109,7 +109,7 @@ class PolicyTests(unittest.TestCase):
         derived = policy.derive(self.evidence)
         row = derived["direct_v2"]["select"]
         self.assertEqual(row["status"], "PASS")
-        self.assertEqual(row["measured_cu"], 226_071)
+        self.assertEqual(row["measured_cu"], 225_949)
         self.assertEqual(row["selected_limit_cu"], 290_000)
         self.assertEqual(row["keeper_reward_lamports"], 400_000)
         self.assertEqual(derived["direct_v2"]["status"], "STOP")

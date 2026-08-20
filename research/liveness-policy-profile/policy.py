@@ -323,10 +323,11 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
         else "STOP_HEADROOM"
     )
     # The V2 select route is quoted from its measurement like every other
-    # route: the 187d5ee1… artifact completes it, where the af6bb79c… artifact
-    # exhausted the transaction ceiling (a cost of the software SHA-256, not of
-    # the selection).  A passing select quote does not promote the subsystem:
-    # V2 stays stopped while its empty-frozen lapse is unimplemented.
+    # route: every artifact since 187d5ee1… completes it, where the af6bb79c…
+    # artifact exhausted the transaction ceiling (a cost of the software
+    # SHA-256, not of the selection).  A passing select quote does not promote
+    # the subsystem: V2 stays stopped while its empty-frozen lapse is
+    # unimplemented.
     select_route = route_dict(max(direct["select_cu"]), policy)
     direct_v2_status = (
         "PASS"

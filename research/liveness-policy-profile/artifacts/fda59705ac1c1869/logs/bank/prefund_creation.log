@@ -1,0 +1,24 @@
+warning: unused imports: `PositionAccount` and `clutch_solana_reference::ReplayAccount`
+  --> tests/prefund_creation.rs:19:81
+   |
+19 |         EpochAccount, Hash32, Intent, OrderPageAccount, OrderRecord, OrderSlot, PositionAccount,
+   |                                                                                 ^^^^^^^^^^^^^^^
+...
+22 |     clutch_solana_reference::ReplayAccount,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `clutch-sbf-svm-tests` (test "prefund_creation") generated 1 warning (run `cargo fix --test "prefund_creation" -p clutch-sbf-svm-tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/prefund_creation.rs (target/debug/deps/prefund_creation-f31ad0bbdd3e2250)
+
+running 5 tests
+test a_later_instruction_failure_rolls_reservation_topup_allocate_and_assign_back ... ok
+test a_public_over_rent_market_prefund_is_retained_and_not_charged_again ... ok
+test default_elf_refuses_endow_without_a_registered_source_release ... ok
+test one_lamport_and_public_over_rent_reservation_prefunds_cannot_squat ... ok
+test reservation_owner_data_and_executable_squats_refuse_without_writes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s
+

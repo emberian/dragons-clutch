@@ -1,113 +1,49 @@
 {
   "schema": "dragons-clutch/liveness-bank-capture/v2",
   "capture_date": "2026-08-20",
-  "runtime_ref": "59b5ffdc3c8c9e163f55e98b8f699eeb2b07cab5",
-  "evidence_ref": "59b5ffdc3c8c9e163f55e98b8f699eeb2b07cab5",
+  "runtime_ref": "e58aef497a17a77d7ca00fc30db2e289a6be42a2",
+  "evidence_ref": "e58aef497a17a77d7ca00fc30db2e289a6be42a2",
   "artifact": {
-    "path": "research/liveness-policy-profile/artifacts/187d5ee16f72946a/clutch_sbf.so",
-    "sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
-    "bytes": 1420608,
-    "source_ref": "59b5ffdc3c8c9e163f55e98b8f699eeb2b07cab5",
+    "path": "research/liveness-policy-profile/artifacts/fda59705ac1c1869/clutch_sbf.so",
+    "sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec",
+    "bytes": 1527640,
+    "source_ref": "e58aef497a17a77d7ca00fc30db2e289a6be42a2",
     "profile": "default-empty-registry"
   },
   "measurements": {
-    "resolution_work": {
-      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
-      "fold_widths": [1, 2, 3, 4],
-      "begin_cu": [87608, 85240, 90924, 87606, 85792],
-      "fold_1_cu": [84548, 82185],
-      "fold_2_cu": [89157, 92125],
-      "fold_3_cu": [93060],
-      "fold_4_cu": [95505],
-      "finalize_cu": [164287],
-      "abort_cu": [46677],
-      "monolithic_v4_cu": [182462],
-      "test_result": "PASS_4_OF_4"
-    },
+    "resolution_work": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "fold_widths": [1, 2, 3, 4], "begin_cu": [87612, 85244, 90928, 87610, 85796], "fold_1_cu": [84552, 82189], "fold_2_cu": [89161, 92129], "fold_3_cu": [93064], "fold_4_cu": [95509], "finalize_cu": [164291], "abort_cu": [46681], "monolithic_v4_cu": [182573], "test_result": "PASS_4_OF_4"},
     "resolution_work_batch": {
-      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
+      "artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec",
       "batch_sizes": [2, 4, 8, 12],
-      "begin_cu": [90924, 85792, 86030, 80264],
-      "fold_batch_2_cu": [175781],
-      "fold_batch_4_cu": [331077],
-      "fold_batch_8_cu": [664117, 664117],
-      "fold_batch_12_cu": [926969],
-      "singleton_fold_cu": [87864, 88217, 82732, 83080, 83080, 83085, 82972, 83320, 83320, 83320, 83320, 83320, 83320, 83325, 77203, 77551, 77551, 77551, 77551, 77551, 77551, 77551, 77551, 77551, 77551, 77556],
+      "begin_cu": [90928, 85796, 86034, 80268],
+      "fold_batch_2_cu": [175789],
+      "fold_batch_4_cu": [331093],
+      "fold_batch_8_cu": [664149, 664149],
+      "fold_batch_12_cu": [927017],
+      "singleton_fold_cu": [87868, 88221, 82736, 83084, 83084, 83089, 82976, 83324, 83324, 83324, 83324, 83324, 83324, 83329, 77207, 77555, 77555, 77555, 77555, 77555, 77555, 77555, 77555, 77555, 77555, 77560],
       "outcome_equality": "BYTE_IDENTICAL_TO_SINGLETON_TRANSACTIONS",
       "mid_batch_invalid_fold": "WHOLE_TRANSACTION_REVERTED_BYTE_EXACT",
       "test_result": "PASS_2_OF_2"
     },
-    "native_point_v3": {
-      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
-      "degree_rows": [
-        {"degree": 1, "resolve_cu": 182425, "retry_cu": 169098, "internal_redeem_cu": 152370},
-        {"degree": 2, "resolve_cu": 190798, "retry_cu": 177471, "internal_redeem_cu": 154413},
-        {"degree": 3, "resolve_cu": 197692, "retry_cu": 184365, "internal_redeem_cu": 152803}
-      ],
-      "test_result": "PASS"
-    },
-    "native_bearer_redeem": {
-      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
-      "degree_rows": [
-        {"degree": 1, "external_redeem_cu": 136762},
-        {"degree": 2, "external_redeem_cu": 138562},
-        {"degree": 3, "external_redeem_cu": 136267}
-      ],
-      "test_result": "PASS"
-    },
+    "native_point_v3": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "degree_rows": [{"degree": 1, "resolve_cu": 182540, "retry_cu": 169274, "internal_redeem_cu": 152644}, {"degree": 2, "resolve_cu": 190913, "retry_cu": 177647, "internal_redeem_cu": 154687}, {"degree": 3, "resolve_cu": 197807, "retry_cu": 184541, "internal_redeem_cu": 153077}], "test_result": "PASS"},
+    "native_bearer_redeem": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "degree_rows": [{"degree": 1, "external_redeem_cu": 136835}, {"degree": 2, "external_redeem_cu": 138635}, {"degree": 3, "external_redeem_cu": 136340}], "test_result": "PASS"},
     "occupation_v4": {
-      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
+      "artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec",
       "degree_rows": [
-        {"degree": 1, "initial_cu": 172665, "retry_cu": 159347, "internal_redeem_cu": 151084, "external_redeem_cu": 135400},
-        {"degree": 2, "initial_cu": 183835, "retry_cu": 170517, "internal_redeem_cu": 153127, "external_redeem_cu": 137200},
-        {"degree": 3, "initial_cu": 197766, "retry_cu": 184448, "internal_redeem_cu": 156017, "external_redeem_cu": 139405}
+        {"degree": 1, "initial_cu": 172776, "retry_cu": 159519, "internal_redeem_cu": 151358, "external_redeem_cu": 135473},
+        {"degree": 2, "initial_cu": 183946, "retry_cu": 170689, "internal_redeem_cu": 153401, "external_redeem_cu": 137273},
+        {"degree": 3, "initial_cu": 197877, "retry_cu": 184620, "internal_redeem_cu": 156291, "external_redeem_cu": 139478}
       ],
-      "span_1_initial_cu": [179653, 172971, 177152],
-      "span_2_initial_cu": [173159, 188903, 190459],
-      "statistic_7_initial_cu": 182312,
+      "span_1_initial_cu": [179764, 173082, 177263],
+      "span_2_initial_cu": [173270, 189014, 190570],
+      "statistic_7_initial_cu": 182423,
       "test_result": "PASS"
     },
-    "direct_v2": {
-      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
-      "init_cu": [35265],
-      "freeze_cu": [357720],
-      "submit_cu": [173147, 174314, 182086, 189703, 185310],
-      "select_cu": [226071],
-      "select_result": "COMPLETED_SELECTION_COMMITTED",
-      "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
-      "test_result": "PASS_2_OF_2"
-    },
-    "source_endow": {
-      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
-      "default_refusal_code": "0x79",
-      "default_release_available": false,
-      "rollback": "BYTE_AND_LAMPORT_EXACT",
-      "test_result": "PASS_EXPECTED_REFUSAL"
-    },
-    "blank_bank_market_creation": {
-      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
-      "v2": {"cu": 205752, "bytes": 165, "rent_lamports": 2039280},
-      "v3": {"cu": 207423, "bytes": 319, "rent_lamports": 3111120},
-      "v4": {"cu": 209028, "bytes": 383, "rent_lamports": 3556560},
-      "test_result": "PASS_2_OF_2"
-    },
-    "order_reservation": {
-      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
-      "place_cu": [185807, 183837],
-      "cancel_cu": [282868, 287541],
-      "test_result": "PASS_2_OF_2"
-    },
-    "withdraw_cash": {
-      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
-      "cu": [51804],
-      "test_result": "PASS"
-    },
-    "source_archive_host": {
-      "artifact_sha256": null,
-      "tests_passed": 9,
-      "provider_ingestion": "NOT_EXERCISED_BY_DEFAULT_ELF",
-      "source_archive_bytes": 2560,
-      "source_archive_rent_lamports": 18708480
-    }
+    "direct_v2": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "init_cu": [35266], "freeze_cu": [357725], "submit_cu": [173151, 174318, 182090, 189707, 185314], "select_cu": [225949], "select_result": "COMPLETED_SELECTION_COMMITTED", "empty_frozen_lapse": "UNIMPLEMENTED_STOP", "test_result": "PASS_2_OF_2"},
+    "source_endow": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "default_refusal_code": "0x79", "default_release_available": false, "rollback": "BYTE_AND_LAMPORT_EXACT", "test_result": "PASS_EXPECTED_REFUSAL"},
+    "blank_bank_market_creation": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "v2": {"cu": 190757, "bytes": 165, "rent_lamports": 2039280}, "v3": {"cu": 204428, "bytes": 319, "rent_lamports": 3111120}, "v4": {"cu": 206033, "bytes": 383, "rent_lamports": 3556560}, "test_result": "PASS_2_OF_2"},
+    "order_reservation": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "place_cu": [185735, 183765], "cancel_cu": [282875, 287548], "test_result": "PASS_2_OF_2"},
+    "withdraw_cash": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "cu": [51809], "test_result": "PASS"},
+    "source_archive_host": {"artifact_sha256": null, "tests_passed": 9, "provider_ingestion": "NOT_EXERCISED_BY_DEFAULT_ELF", "source_archive_bytes": 2560, "source_archive_rent_lamports": 18708480}
   }
 }

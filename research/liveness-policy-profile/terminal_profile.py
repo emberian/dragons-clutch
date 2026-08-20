@@ -134,7 +134,10 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
      ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
     ("legacy.candidate_feed", 6_266, 44_502_240, "PER_LEGACY_EPOCH", None, S,
      ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
-    ("legacy.clear_work", 48_750, 340_190_880, "PER_LEGACY_CLEAR_JOB", None, S,
+    # T2-1 re-pinned CLEAR_WORK_BODY_BYTES to the checkpoint codec's
+    # ENCODED_BYTES (48,592 -> 47,846), so account_len::CLEAR_WORK moved
+    # 48,750 -> 48,004 at the fda59705… seal; the row tracks the probe.
+    ("legacy.clear_work", 48_004, 334_998_720, "PER_LEGACY_CLEAR_JOB", None, S,
      ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
     ("resolution.work.v1", 1_296, 9_911_040, "PER_ACTIVE_MARKET_WORK", 1, R, ()),
     ("resolution.reserve.v1", 0, 890_880, "PER_ACTIVE_MARKET_WORK", 1, R, ()),
