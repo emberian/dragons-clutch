@@ -1204,6 +1204,14 @@ fn load_native_resolution(bytes: &[u8], out: &mut NativeResolutionAccount) -> Ga
     Ok(())
 }
 
+/// Boxed [`SupplyLedgerAccount`] decode: the decode temporary lives in this
+/// helper's frame and only a heap pointer crosses back into the caller's
+/// bounded SBF frame (the `direct_selection_v3::common` discipline).
+#[inline(never)]
+fn decode_supply_boxed(bytes: &[u8]) -> Outcome<Box<SupplyLedgerAccount>> {
+    Ok(Box::new(SupplyLedgerAccount::decode(bytes)?))
+}
+
 /* The `_fields` variants run exactly the binding comparisons of
  * `binds_market`/`binds_terms` without re-validating operands this gate has
  * already decoded (and, for the terms, digest-checked) in this transaction;
@@ -1219,6 +1227,31 @@ fn require_terms_binds_market(terms: &TermsAccount, market: &MarketAccount) -> G
 fn require_record_binds_terms(record: &ResolutionAccount, terms: &TermsAccount) -> Gate<()> {
     record
         .binds_terms_fields(terms)
+        .map_err(|_| ReferenceError::ResolutionBindingMismatch)
+}
+
+/* The two `_full_terms` helpers below own the 1.6 KiB `TermsAccount` load in
+ * their own frames; the resolution arms hold only a record reference.  Keeping
+ * the terms copy out of `apply_legacy_market_resolution` and
+ * `apply_native_market_resolution` is what fits those arms in one SBF frame at
+ * every opt level; the checks and refusal classes are exactly the inline
+ * originals'. */
+#[inline(never)]
+fn record_binds_full_terms(record: &ResolutionAccount, terms_bytes: &[u8]) -> Gate<()> {
+    let mut full_terms = ZERO_TERMS;
+    load_terms(terms_bytes, &mut full_terms)?;
+    require_record_binds_terms(record, &full_terms)
+}
+
+#[inline(never)]
+fn native_record_binds_full_terms(
+    record: &NativeResolutionAccount,
+    terms_bytes: &[u8],
+) -> Gate<()> {
+    let mut full_terms = ZERO_TERMS;
+    load_terms(terms_bytes, &mut full_terms)?;
+    record
+        .binds_terms_fields(&full_terms)
         .map_err(|_| ReferenceError::ResolutionBindingMismatch)
 }
 
@@ -2329,9 +2362,7 @@ fn apply_legacy_market_resolution(
     if record.market != market.market {
         return Err(ReferenceError::ResolutionBindingMismatch);
     }
-    let mut full_terms = ZERO_TERMS;
-    load_terms(plane.terms, &mut full_terms)?;
-    require_record_binds_terms(&record, &full_terms)?;
+    record_binds_full_terms(&record, plane.terms)?;
 
     let sealed = derive_from_evidence(
         state.market,
@@ -2479,13 +2510,7 @@ fn apply_native_market_resolution(
     if record.market != market.market {
         return Err(ReferenceError::ResolutionBindingMismatch);
     }
-    {
-        let mut full_terms = ZERO_TERMS;
-        load_terms(plane.terms, &mut full_terms)?;
-        record
-            .binds_terms_fields(&full_terms)
-            .map_err(|_| ReferenceError::ResolutionBindingMismatch)?;
-    }
+    native_record_binds_full_terms(&record, plane.terms)?;
     native_kernel_invariants(
         state.kernel,
         market.outcome_count,
@@ -2525,13 +2550,7 @@ fn apply_native_market_resolution(
         stored_bump: bumps.resolution,
         flags: 0,
     };
-    {
-        let mut full_terms = ZERO_TERMS;
-        load_terms(plane.terms, &mut full_terms)?;
-        expected
-            .binds_terms_fields(&full_terms)
-            .map_err(|_| ReferenceError::ResolutionBindingMismatch)?;
-    }
+    native_record_binds_full_terms(&expected, plane.terms)?;
     let mut resolution_bytes = [0_u8; NATIVE_RESOLUTION_LEN];
     expected.encode(&mut resolution_bytes)?;
 
@@ -3108,7 +3127,7 @@ fn resolve_global(
         ClutchError::MismatchedState,
     )?;
 
-    let observed = claim_truth::observe_outcome_mints(
+    let observed = claim_truth::observe_outcome_mints_boxed(
         program_id,
         accounts,
         resolve_prefix,
@@ -3177,7 +3196,7 @@ fn resolve_global(
                 terms: terms_pda.1,
                 resolution: resolution_pda.1,
             },
-            occupation_candidate.as_ref(),
+            occupation_candidate.as_deref(),
             accounts[IX_RESOLVE_ACTOR].is_signer,
             sequence,
             payout_index,
@@ -3211,7 +3230,7 @@ fn resolve_global(
         /* Exact repeats are observationally idempotent, including the cached
          * external-supply plane. A holder burn after resolution is handled by
          * an actual claim transition, not smuggled into a Resolve replay. */
-        let supply = SupplyLedgerAccount::decode(&accounts[IX_RESOLVE_SUPPLY].data.borrow())?;
+        let supply = decode_supply_boxed(&accounts[IX_RESOLVE_SUPPLY].data.borrow())?;
         let mut outcome = 0_usize;
         while outcome < usize::from(market.outcome_count) {
             require(
@@ -3222,7 +3241,7 @@ fn resolve_global(
         }
     }
 
-    let observed_after = claim_truth::observe_outcome_mints(
+    let observed_after = claim_truth::observe_outcome_mints_boxed(
         program_id,
         accounts,
         resolve_prefix,
@@ -3403,18 +3422,81 @@ pub(crate) fn apply_resumable_occupation_candidate(
     claim_truth::require_exact_mint_vector_delta(&observed, &observed_after, None)
 }
 
+/// One Position decode in its own frame; only the owner identity and the
+/// generation cross back into `recorded_redeem`'s bounded SBF frame.
+#[inline(never)]
+fn position_identity(account: &AccountInfo) -> Outcome<([u8; 32], u64)> {
+    let position = PositionAccount::decode(&account.data.borrow())?;
+    Ok((position.owner.bytes(), position.generation))
+}
+
+/// One Hoard decode in its own frame; only the collateral total crosses back.
+#[inline(never)]
+fn hoard_collateral_atoms(bytes: &[u8]) -> Outcome<u64> {
+    Ok(HoardAccount::decode(bytes)?.collateral_atoms)
+}
+
+/// The seven redemption addresses, derived and compared in their own frame;
+/// only the stored bumps cross back into `recorded_redeem`'s bounded SBF
+/// frame.  The derivation and comparison order is exactly the inline
+/// original's.
+#[inline(never)]
+fn redeem_addresses(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    market: &accounts::MarketFacts,
+    terms: &accounts::TermsFacts,
+    owner: &[u8; 32],
+    generation: u64,
+) -> Outcome<Bumps> {
+    let market_bytes = market.market.bytes();
+    let realm_bytes = market.realm.bytes();
+    let market_pda = seeds::market_pda(program_id, &realm_bytes, &market_bytes);
+    expect_pda(accounts[IX_MARKET].key, market_pda, None)?;
+    let hoard_pda = seeds::hoard_pda(program_id, &market_bytes);
+    expect_pda(accounts[IX_HOARD].key, hoard_pda, None)?;
+    let position_pda = seeds::position_pda(program_id, &market_bytes, owner);
+    expect_pda(accounts[IX_POSITION].key, position_pda, None)?;
+    expect_pda(
+        accounts[IX_KERNEL].key,
+        seeds::kernel_pda(program_id, &market_bytes),
+        None,
+    )?;
+    let replay_pda = seeds::replay_pda(program_id, &market_bytes, owner, generation);
+    expect_pda(accounts[IX_REPLAY].key, replay_pda, None)?;
+    let supply_pda = seeds::supply_pda(program_id, &market_bytes);
+    expect_pda(accounts[IX_SUPPLY].key, supply_pda, None)?;
+    let terms_pda = seeds::terms_pda(program_id, &terms.realm.bytes(), &terms.terms.bytes());
+    expect_pda(accounts[IX_TERMS].key, terms_pda, None)?;
+    let resolution_pda = seeds::resolution_pda(program_id, &market_bytes);
+    expect_pda(accounts[IX_RESOLUTION].key, resolution_pda, None)?;
+    Ok(Bumps {
+        market: market_pda.1,
+        hoard: hoard_pda.1,
+        position: position_pda.1,
+        replay: replay_pda.1,
+        supply: supply_pda.1,
+        terms: terms_pda.1,
+        resolution: resolution_pda.1,
+    })
+}
+
 /// Keep the large hostile Terms decode and bounded occupation summary out of
 /// the account-plane frame.  The no-inline boundary is part of the measured
-/// SBF frame discipline, not a relaxation of any binding check.
+/// SBF frame discipline, not a relaxation of any binding check.  Boxed: the
+/// preflight candidate crosses back into `resolve_global`'s bounded SBF frame
+/// as one heap pointer, and the 1.6 KiB terms copy stays here.
 #[inline(never)]
 fn derive_occupation_candidate(
     terms_data: &[u8],
     verified_archive: VerifiedSealedArchiveViewV1<'_>,
-) -> Gate<NativeWindowPreflightV1> {
+) -> Gate<Box<NativeWindowPreflightV1>> {
     let mut terms = ZERO_TERMS;
     load_terms(terms_data, &mut terms)?;
-    native_window::preflight_verified_archive(&terms, verified_archive)
-        .map_err(|_| ReferenceError::ResolutionEvidenceUnavailable)
+    Ok(Box::new(
+        native_window::preflight_verified_archive(&terms, verified_archive)
+            .map_err(|_| ReferenceError::ResolutionEvidenceUnavailable)?,
+    ))
 }
 
 #[inline(never)]
@@ -3438,7 +3520,7 @@ fn recorded_redeem(
             len: account_len::TERMS,
         }],
     )?;
-    let terms = accounts::read_terms(&accounts[IX_TERMS].data.borrow())?;
+    let terms = accounts::read_terms_boxed(&accounts[IX_TERMS].data.borrow())?;
     let resolution_len = if terms.basis_degree == 0 {
         account_len::RESOLUTION
     } else if is_occupation_statistic(terms.statistic_id) {
@@ -3459,38 +3541,17 @@ fn recorded_redeem(
      * address is recomputed from the frozen seed schema.  The stored bumps are
      * carried into the transition instead of being compared here, so that the
      * comparison still happens at the reference's point in the gate order. */
-    let market = accounts::read_market(&accounts[IX_MARKET].data.borrow())?;
+    let market = accounts::read_market_boxed(&accounts[IX_MARKET].data.borrow())?;
     let mint_prefix = IX_REDEEM_OUTCOME_MINTS;
     require(
         accounts.len() == mint_prefix + usize::from(market.outcome_count),
         ClutchError::AccountCount,
     )?;
-    let (owner, generation) = {
-        let position = PositionAccount::decode(&accounts[IX_POSITION].data.borrow())?;
-        (position.owner.bytes(), position.generation)
-    };
+    let (owner, generation) = position_identity(&accounts[IX_POSITION])?;
     let market_bytes = market.market.bytes();
     let realm_bytes = market.realm.bytes();
 
-    let market_pda = seeds::market_pda(program_id, &realm_bytes, &market_bytes);
-    expect_pda(accounts[IX_MARKET].key, market_pda, None)?;
-    let hoard_pda = seeds::hoard_pda(program_id, &market_bytes);
-    expect_pda(accounts[IX_HOARD].key, hoard_pda, None)?;
-    let position_pda = seeds::position_pda(program_id, &market_bytes, &owner);
-    expect_pda(accounts[IX_POSITION].key, position_pda, None)?;
-    expect_pda(
-        accounts[IX_KERNEL].key,
-        seeds::kernel_pda(program_id, &market_bytes),
-        None,
-    )?;
-    let replay_pda = seeds::replay_pda(program_id, &market_bytes, &owner, generation);
-    expect_pda(accounts[IX_REPLAY].key, replay_pda, None)?;
-    let supply_pda = seeds::supply_pda(program_id, &market_bytes);
-    expect_pda(accounts[IX_SUPPLY].key, supply_pda, None)?;
-    let terms_pda = seeds::terms_pda(program_id, &terms.realm.bytes(), &terms.terms.bytes());
-    expect_pda(accounts[IX_TERMS].key, terms_pda, None)?;
-    let resolution_pda = seeds::resolution_pda(program_id, &market_bytes);
-    expect_pda(accounts[IX_RESOLUTION].key, resolution_pda, None)?;
+    let bumps = redeem_addresses(program_id, accounts, &market, &terms, &owner, generation)?;
 
     /* Steps 1-3 of `TOKEN2022_PLAN.md` §3.3 for the redemption's collateral
      * leg, before anything is written. The snapshot carries zero quantity
@@ -3519,8 +3580,7 @@ fn recorded_redeem(
         profile.realm == market.realm && profile.profile == market.profile,
         ClutchError::MismatchedState,
     )?;
-    let collateral_atoms =
-        HoardAccount::decode(&accounts[IX_HOARD].data.borrow())?.collateral_atoms;
+    let collateral_atoms = hoard_collateral_atoms(&accounts[IX_HOARD].data.borrow())?;
     let leg = split::validate_collateral_leg(
         accounts,
         &REDEEM_COLLATERAL_ROLES,
@@ -3531,7 +3591,7 @@ fn recorded_redeem(
         0,
     )?;
 
-    let observed = claim_truth::observe_outcome_mints(
+    let observed = claim_truth::observe_outcome_mints_boxed(
         program_id,
         accounts,
         mint_prefix,
@@ -3556,15 +3616,6 @@ fn recorded_redeem(
     let actor = Actor {
         key: Hash32::from_bytes(accounts[IX_ACTOR].key.to_bytes()),
         signer: accounts[IX_ACTOR].is_signer,
-    };
-    let bumps = Bumps {
-        market: market_pda.1,
-        hoard: hoard_pda.1,
-        position: position_pda.1,
-        replay: replay_pda.1,
-        supply: supply_pda.1,
-        terms: terms_pda.1,
-        resolution: resolution_pda.1,
     };
 
     let terms_data = accounts[IX_TERMS].data.borrow();
@@ -3608,10 +3659,9 @@ fn recorded_redeem(
     let post_hoard = token::token_amount(&accounts[IX_HOARD_TOKEN])?;
     token::require_exact_credit(leg.actor_amount, post_actor, 0)?;
     token::require_exact_credit(leg.hoard_amount, post_hoard, 0)?;
-    let collateral_atoms =
-        HoardAccount::decode(&accounts[IX_HOARD].data.borrow())?.collateral_atoms;
+    let collateral_atoms = hoard_collateral_atoms(&accounts[IX_HOARD].data.borrow())?;
     token::require_hoard_covers_collateral(collateral_atoms, post_hoard)?;
-    let observed_after = claim_truth::observe_outcome_mints(
+    let observed_after = claim_truth::observe_outcome_mints_boxed(
         program_id,
         accounts,
         mint_prefix,

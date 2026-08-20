@@ -55,6 +55,30 @@ pub fn observe_outcome_mints(
     )
 }
 
+/// Boxed [`observe_outcome_mints`]: the observed vector lives in this helper's
+/// frame and only a heap pointer crosses back into the caller's bounded SBF
+/// frame (the `direct_selection_v3::common` discipline).
+#[inline(never)]
+pub fn observe_outcome_mints_boxed(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    first: usize,
+    market_account_key: Pubkey,
+    market: Hash32,
+    outcome_count: u8,
+    writable_outcome: Option<u8>,
+) -> Outcome<Box<ObservedMintSupplies>> {
+    Ok(Box::new(observe_outcome_mints(
+        program_id,
+        accounts,
+        first,
+        market_account_key,
+        market,
+        outcome_count,
+        writable_outcome,
+    )?))
+}
+
 /// Host-testable core of [`observe_outcome_mints`].
 ///
 /// PDA derivation is a Solana syscall and is deliberately injected here so
@@ -212,6 +236,14 @@ fn write_kernel_totals(
     Ok(())
 }
 
+/// Boxed [`KernelAccount`] decode: the decode temporary lives in this helper's
+/// frame and only a heap pointer crosses back into the caller's bounded SBF
+/// frame (the `direct_selection_v3::common` discipline).
+#[inline(never)]
+fn decode_kernel_boxed(kernel_data: &[u8]) -> Outcome<Box<KernelAccount>> {
+    Ok(Box::new(KernelAccount::decode(kernel_data)?))
+}
+
 /// Persist the exact post-CPI supplies and re-close them against the kernel.
 ///
 /// This never repairs a kernel discrepancy.  The transition has already
@@ -227,7 +259,7 @@ pub fn commit_observed_supplies(
     observed: &ObservedMintSupplies,
 ) -> Outcome<()> {
     let mut supply = SupplyLedgerAccount::decode(supply_data)?;
-    let kernel = KernelAccount::decode(kernel_data)?;
+    let kernel = decode_kernel_boxed(kernel_data)?;
     require(
         supply.market == market
             && supply.realm == realm
