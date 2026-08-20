@@ -524,11 +524,12 @@ Proof obligations and their homes:
   quantities ≤ 4, all `(p, c)`), that the constructor completes iff (H-i-O)
   holds, and that its output is invariant under page/shard order and order-id
   relabeling that preserves canonical rank inputs.
-- **PROPOSED formal shadow:** Rocq statement of the feasibility theorem and
-  the constructor invariant (Rocq is the leading abstract model per
-  `SPECIALIZED_BATCH_RELATION.md` §8; Lean may independently encode the finite
-  relation). BLOCKER: neither toolchain is pinned; no proof claim may be made
-  meanwhile.
+- **PROPOSED formal model:** Lean statement of the feasibility theorem and the
+  constructor invariant (**Lean is the abstract model of record** per
+  `SPECIALIZED_BATCH_RELATION.md` §8 and ADR-0005, adopted 2026-08-20; the Rocq
+  shadow role is retired). BLOCKER: the theorems do not exist — the proof
+  toolchain is pinned (`toolchain/PINNED_PROOF_TOOLS.md`), so pinning is no
+  longer the obstacle. No proof claim may be made meanwhile.
 
 ### 8.5 Refusals from this stage
 
@@ -1007,9 +1008,9 @@ requires.
   pre-clear.
 - No formal-verification claim: the feasibility theorem and constructor
   invariant are design arguments with an exhaustive-oracle falsifier plan;
-  they become theorems only when the pinned Rocq (leading) or Lean (shadow)
-  toolchain closes them over the actual definitions (BLOCKER: toolchain
-  unpinned).
+  they become theorems only when **Lean — the substrate of record** (ADR-0005)
+  closes them over the actual definitions (BLOCKER: the theorems do not exist;
+  the toolchain is pinned).
 - Promotion follows `SPECIALIZED_BATCH_RELATION.md` §10 unchanged: frozen
   domains, tiny exhaustive oracle agreement, proof-tool closure without
   prohibited assumptions, host/SBF vector agreement, mutation tests failing

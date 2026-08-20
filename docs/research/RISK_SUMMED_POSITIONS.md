@@ -758,12 +758,22 @@ comparisons are to listed-options venues and bins-based prediction markets.
    "nothing forecloses it" to "something demands it." This is the largest
    lever in this document: it is the only path to calendar-adjacent netting
    that keeps every Hoard market-local.
-2. **The fee-base fork (changes FEE_GEOMETRY before anything freezes).**
-   `Gamma` vs `R` (§3.4): add the quotient-norm arm and the zero-price /
-   tick-floor laundering falsifier to the fee lab now, while the fee is
-   explicitly hypothesis-grade. The mathematics is closed (Props. 9–12); the
-   remaining question is pure economics and is cheapest to decide before the
-   §7 promotion gate runs.
+2. **The fee-base fork — shape decided 2026-08-20; rates open.**
+   `Gamma` vs `R` (§3.4) was resolved by taking *both*: the selected V1 base
+   **shape** is the additive composite `kappa*Gamma_p(a) + kappa'*R(a)`,
+   dispersion with a price-free quotient-norm floor
+   ([../decisions/ADOPTED_2026-08-20.md](../decisions/ADOPTED_2026-08-20.md)
+   item 9, on
+   [../decisions/REPORT_fee-base-selection_2026-08-20.md](../decisions/REPORT_fee-base-selection_2026-08-20.md)).
+   The recommended lab work landed and decided it: the quotient-norm arm and
+   the zero-price / tick-floor laundering falsifier were added and run, and
+   the floor makes the kernel exactly `span(1)` at every admissible price
+   vector — closing the Proposition-9 channel that all three
+   consideration-proportional bases share. Prop. 11's characterization
+   survives re-parameterized, with the binary calibration shifted to
+   `kappa*q(1-q) + kappa'`. **Both rates remain undecided**, every byte stays
+   `FeeBaseV1::None`, and the selection is reversible until a rate freezes;
+   the §7 promotion gate was rewritten in the same act.
 3. **Failure-policy co-design for multi-market exposure (changes the failure
    gate's evaluation criteria).** §2.3.5: separate evidence paths admit
    one-sided failure, which caps model-free netting and silently degrades any

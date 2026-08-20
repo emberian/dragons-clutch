@@ -30,11 +30,11 @@ payout.
 ## 2. Dependency direction
 
 ```text
-             independent Rocq/Lean shadow models
+                 Lean model — substrate of record
                            |
                     canonical vectors
                            |
-closed compiler --> Verus-first Eggcrate <-- specialized BatchRelationV1
+closed compiler -->     Eggcrate      <-- specialized BatchRelationV1
                            |
                    fixed wire contracts
                            |
@@ -48,6 +48,18 @@ Solana adapter       source adapters      static Glass
 Dependencies point down toward the kernel, never from the kernel toward Solana,
 Token-2022, a source SDK, a wallet, or the client. The hand-written proof models
 consume the same semantic vectors but do not share executable implementation.
+
+Lean is the proof substrate of record
+([adr/0005-lean-proof-substrate-of-record.md](adr/0005-lean-proof-substrate-of-record.md),
+adopted 2026-08-20 —
+[decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) item 2,
+superseding ADR-0003's Verus-first arrangement). Verus is retained only for
+checked-Rust-subset results verifying actual executable bodies under
+digest-pinned contracts — today the transfer-arithmetic refinement plus the
+digest-pinned scalar batch shadow with its named excluded sources; the Rocq
+shadow role is retired. The model's correspondence to the Rust remains manual
+and disclosed: no model theorem is evidence about the Rust, the ELF, or a
+deployment.
 
 ## 3. Semantic ownership
 
@@ -188,8 +200,11 @@ identity.
 
 The intended claim chain is:
 
-1. Rocq or Lean proves a named abstract theorem over a named model digest.
-2. Verus proves a named property of the exact Eggcrate source digest.
+1. Lean proves a named abstract theorem over a named model digest (the
+   substrate of record, ADR-0005).
+2. Verus proves a named property of the exact Eggcrate source digest — its
+   retained checked-Rust-subset role, and the only link in this chain that
+   reaches an executable body.
 3. cross-runtime vectors compare that source under host and pinned SBF builds.
 4. adversarial tests exercise the unverified Solana adapter.
 5. a reproducible manifest binds source, proof artifacts, schemas, and ELF.

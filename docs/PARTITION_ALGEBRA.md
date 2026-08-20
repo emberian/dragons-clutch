@@ -172,7 +172,14 @@ future debt.
 
 ## 8. Proof obligations
 
-Rocq and Verus should cover:
+**Lean should cover the following** — Lean is the proof substrate of record
+([adr/0005-lean-proof-substrate-of-record.md](adr/0005-lean-proof-substrate-of-record.md),
+adopted 2026-08-20 —
+[decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) item 2,
+superseding ADR-0003's Rocq-and-Verus assignment). The obligations keep their
+content; only the substrate moved. Verus is retained solely for
+checked-Rust-subset results verifying actual executable bodies, and the Rocq
+shadow role is retired:
 
 - partition exhaustiveness and disjointness for every compiled preset;
 - deterministic mapping from exact statistic/interval to compatible cells;
