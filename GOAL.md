@@ -67,6 +67,27 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- T2-8 MERGED — TIER 2 COMPLETE END TO END (26/26 targets green on merged
+  main): the eighth join closed. A portfolio pair entitles atomically and
+  SETTLES with exact whole-plane conservation asserted on-bank (cash sums
+  exact to the atom, per-outcome position totals exact, the release
+  identity buy-envelopes == consideration + refunds + pot, final Positions
+  byte-equal to the verified summary's implied allocation). Receipts are
+  the consumption latch (each consumed exactly once); consumed reservations
+  archive with initial state intact; the 0x0017 SettlePage refusal retires
+  for entitled receipts and stands honestly elsewhere. Blocker ledgers
+  split truthfully: 5 SETTLEMENT_BLOCKERS + 6 portfolio blockers retired;
+  PartialFillLedger, VirtualPot, TerminalClosure, FeeCarryAccount stand.
+  ROOT-CAUSED along the way (docs/reviews/BUILD_PATH_IDENTITY_2026-08-20.md):
+  the ELF is same-path-reproducible only — cargo -C metadata embeds the
+  workspace path for path deps, so symbol hashes differ per checkout and
+  hash-sorted layout ties flip (a 5-byte two-function swap, introduced
+  T2-7; prior seals' path-independence was luck, not property). Seal
+  protocol amended: canonical identity builds in place at the canonical
+  path (e8ba31d5/1,914,432); cross-path builds recorded as
+  PATH_TIED_SYMBOL_ORDER probes. CYCLE-D RESEAL DISPATCHED (root
+  e8ba31d582be3939, T2-7/T2-8 evidence families sealed unpromoted).
+
 - T2-7 MERGED AND PUSHED (8fe5f9e; identity 75ba075a/1,843,272 verified on
   merged main, 25/25 targets green): candidate submission is a staged
   four-tag wire (54-57 — a 6,266-byte feed cannot ride one transaction;
