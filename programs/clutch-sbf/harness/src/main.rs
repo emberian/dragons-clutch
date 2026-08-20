@@ -4600,7 +4600,7 @@ fn build_cases(f: &Fixture) -> Vec<Case> {
             .resolution
             .expect("the repeated resolve keeps the canonical record"),
     ));
-    let mut repeated = Case::accept(
+    let repeated = Case::accept(
         "resolve-repeat-idempotent",
         "Resolve",
         "market-global resolution oracle",
