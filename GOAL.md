@@ -72,6 +72,21 @@ in the reseal lane's output) and the postmark doorstep (4 threads).
 
 ## Done log (2026-08-19 session)
 
+- CYCLE A SEALED + MERGE TRAIN LANDED AND PUSHED (through 6bc6628): cycle-A
+  manifest 100/100 at 9d84e55 with post-commit check OK (batched-fold routes
+  + 10k quantum + the Tier 1 source-identity refresh, all bound to the
+  attested 187d5ee1 artifact; a clean detached double-build at the merge
+  commit reproduced the identity byte-exactly on both passes, which is what
+  made the refresh honest). Then the train: T2-5 (general clearing policy,
+  55 tests), T2-2 (projection + interner, 206 layout tests), T2-4
+  (live-cardinality binding), frame Tier 0 (ten overflowers under the line;
+  opt-z suite now FULLY GREEN at a 1,092,928-byte ELF, -23.4%) — all merged
+  clean, full gates on the merged tree: default 80/0, mock 87/0 (+2 batch
+  tests each). NEW IDENTITIES (drift window knowingly open until cycle B):
+  default a982a080/1,426,904, mock 9dba6b26/1,455,376. T2-3 (staged
+  ClearWork creation) launched off merged main; T2-1 (codec) still out;
+  cycle-B reseal runs when both land.
+
 - TIER 2 PLAN COMMITTED (5c95b6c, docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md)
   and WAVE 1 LAUNCHED: route-family decision argued (NEW general-epoch
   family; V3's one-u64-price candidate wire cannot represent a simplex, so
