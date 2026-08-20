@@ -61,9 +61,10 @@ use clutch_batch_policy_identity::{
     batch_policy_digest, decode_batch_policy, general_clearing_v1::GENERAL_CLEARING_POLICY_V1,
     BATCH_POLICY_BYTES,
 };
+use super::terminal_closure;
 use clutch_solana_layout::clearing::{
     canonical_general_book_id, open_general_epoch, EpochWindowAccount, CANDIDATE_WINDOW_SLOTS,
-    EPOCH_WINDOW_ACCOUNT_BYTES, MAX_RETAINED_CANDIDATES,
+    EPOCH_WINDOW_ACCOUNT_BYTES, FUNDING_COVERS_EPOCH_PAIR, MAX_RETAINED_CANDIDATES,
 };
 use clutch_solana_layout::projection::OwnerInterner;
 use clutch_solana_layout::{
@@ -73,8 +74,16 @@ use clutch_solana_layout::{
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
-/// Accounts in an `InitEpoch` instruction, exactly.
+/// Accounts in an `InitEpoch` instruction without funding registration.
 pub const INIT_EPOCH_ACCOUNT_COUNT: usize = 10;
+/// Accounts in an `InitEpoch` instruction that also registers its funding:
+/// one optional trailing `GeneralFundingLedgerV1` PDA covering the epoch and
+/// window together, written in the same transition that debits the payer so
+/// the recorded payer and exact post-prefund outlay are ground truth
+/// (TerminalClosure's exact-principal-to-payer input).
+pub const INIT_EPOCH_LEDGERED_ACCOUNT_COUNT: usize = INIT_EPOCH_ACCOUNT_COUNT + 1;
+/// The optional funding-ledger PDA.
+pub const IX_INIT_EPOCH_LEDGER: usize = 10;
 /// Authenticated payer funding both creations.
 pub const IX_INIT_EPOCH_PAYER: usize = 0;
 /// The market this epoch belongs to (read-only, program-owned).
@@ -132,7 +141,11 @@ pub(super) fn init_epoch(
     intent_policy: &Hash32,
     freeze_deadline_slot: u64,
 ) -> Outcome<()> {
-    accounts::require_count(accounts, INIT_EPOCH_ACCOUNT_COUNT)?;
+    require(
+        accounts.len() == INIT_EPOCH_ACCOUNT_COUNT
+            || accounts.len() == INIT_EPOCH_LEDGERED_ACCOUNT_COUNT,
+        ClutchError::AccountCount,
+    )?;
     require(sequence == 0, ClutchError::Replay)?;
     require_signer(&accounts[IX_INIT_EPOCH_PAYER])?;
     require(
@@ -235,6 +248,12 @@ pub(super) fn init_epoch(
     };
     window.validate()?;
 
+    /* The pre-creation balances, captured before any lamport moves: the
+     * optional funding ledger records the payer's exact post-prefund outlay
+     * across the pair, never the rent minimum a prefund already discounted
+     * (the artifact-prefund-windfall rule). */
+    let epoch_prior = accounts[IX_INIT_EPOCH_EPOCH].lamports();
+    let window_prior = accounts[IX_INIT_EPOCH_WINDOW].lamports();
     create_pda_account(
         program_id,
         &accounts[IX_INIT_EPOCH_PAYER],
@@ -265,6 +284,31 @@ pub(super) fn init_epoch(
     )?;
     epoch.encode(&mut borrow_account_mut(&accounts[IX_INIT_EPOCH_EPOCH])?)?;
     window.encode(&mut borrow_account_mut(&accounts[IX_INIT_EPOCH_WINDOW])?)?;
+    if accounts.len() == INIT_EPOCH_LEDGERED_ACCOUNT_COUNT {
+        let outlay = terminal_closure::creation_shortfall(
+            rent.minimum_balance(account_len::EPOCH)?,
+            epoch_prior,
+        )
+        .checked_add(terminal_closure::creation_shortfall(
+            rent.minimum_balance(EPOCH_WINDOW_ACCOUNT_BYTES)?,
+            window_prior,
+        ))
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        let floor = epoch_prior
+            .checked_add(window_prior)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        terminal_closure::create_funding_ledger(
+            program_id,
+            &accounts[IX_INIT_EPOCH_PAYER],
+            &accounts[IX_INIT_EPOCH_LEDGER],
+            &accounts[IX_INIT_EPOCH_SYSTEM],
+            &rent,
+            accounts[IX_INIT_EPOCH_EPOCH].key,
+            FUNDING_COVERS_EPOCH_PAIR,
+            outlay,
+            floor,
+        )?;
+    }
     Ok(())
 }
 

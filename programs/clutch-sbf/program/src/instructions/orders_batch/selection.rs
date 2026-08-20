@@ -46,9 +46,10 @@
 //! and may legitimately seal later if verification lowers a retained claim.
 //! Displacement, per the V3 `staged.rs` precedent of closing the displaced
 //! worst in the admitting transaction: the displaced candidate's **feed**
-//! closes (its lamports move to its own surviving record — no payer ledger
-//! exists on the general plane, so the rent stays attached to the candidate's
-//! tombstone for the standing TerminalClosure blocker to reclaim), and its
+//! closes (its lamports park on its own surviving record; the candidate's
+//! optional `GeneralFundingLedgerV1` — written at submission — covers the
+//! pair, so `CloseGeneralCandidate` (tag 65) later collects the parked feed
+//! rent and the record's own into one exact-principal payout), and its
 //! **record** takes `CANDIDATE_STATUS_SUPERSEDED` with `score_digest` zeroed
 //! — exactly the documented rule on [`CandidateRecord`]: a superseded record
 //! competes for nothing, so its verified identity is erased.
@@ -68,9 +69,11 @@
 //! `CANDIDATE_STATUS_SELECTED`, the window records it, and the epoch takes
 //! `EPOCH_PHASE_CLEARED`.  With zero verified candidates the epoch **lapses
 //! honestly** to `EPOCH_PHASE_LAPSED` — the V3 pre-selection lapse projected
-//! onto the general plane: nothing selected, retained records left standing
-//! (TerminalClosure and reservation expiry are the standing ranked
-//! blockers), and the second finalize refuses on the phase either way.
+//! onto the general plane: nothing is selected, and either terminal phase is
+//! what admits the whole [`super::terminal_closure`] family (owner-signed
+//! release of every lapsed ACTIVE reservation, then the dependency-ordered
+//! rent closes down to the epoch root).  The second finalize refuses on the
+//! phase either way.
 //!
 //! "Best valid **submitted** candidate" only: `propose_best_valid` stays
 //! host-side, per the frame plan's "Never" tier.
@@ -105,8 +108,15 @@ use core::cmp::Ordering;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
-/// Accounts in a `SubmitCandidate` instruction, exactly.
+/// Accounts in a `SubmitCandidate` instruction without funding registration.
 pub const SUBMIT_CANDIDATE_ACCOUNT_COUNT: usize = 8;
+/// Accounts in a `SubmitCandidate` instruction that also registers its
+/// funding: one optional trailing `GeneralFundingLedgerV1` PDA covering the
+/// record and feed together, written in the same transition that debits the
+/// payer (TerminalClosure's exact-principal-to-payer input).
+pub const SUBMIT_CANDIDATE_LEDGERED_ACCOUNT_COUNT: usize = SUBMIT_CANDIDATE_ACCOUNT_COUNT + 1;
+/// The optional funding-ledger PDA.
+pub const IX_SUBMIT_CAND_LEDGER: usize = 8;
 /// Authenticated payer funding both creations.
 pub const IX_SUBMIT_CAND_PAYER: usize = 0;
 /// The frozen general epoch (read-only, program-owned).
@@ -182,7 +192,11 @@ pub(super) fn submit_candidate(
     limit_surplus_price_units: u128,
     distinct_owners: u16,
 ) -> Outcome<()> {
-    require_count(accounts, SUBMIT_CANDIDATE_ACCOUNT_COUNT)?;
+    require(
+        accounts.len() == SUBMIT_CANDIDATE_ACCOUNT_COUNT
+            || accounts.len() == SUBMIT_CANDIDATE_LEDGERED_ACCOUNT_COUNT,
+        ClutchError::AccountCount,
+    )?;
     /* The real replay guard is both targets' non-existence
      * (`require_creatable` below); the zero sequence states the intent's
      * position in the protocol on the wire, as the other creators do. */
@@ -256,7 +270,12 @@ pub(super) fn submit_candidate(
     )?;
 
     // Both creations, then both writes; a later refusal rolls the whole
-    // transaction — creations included — back at the boundary.
+    // transaction — creations included — back at the boundary.  The
+    // pre-creation balances are captured first: the optional funding ledger
+    // records the payer's exact post-prefund outlay, never a discounted
+    // minimum (the artifact-prefund-windfall rule).
+    let record_prior = accounts[IX_SUBMIT_CAND_RECORD].lamports();
+    let feed_prior = accounts[IX_SUBMIT_CAND_FEED].lamports();
     let record_bump_seed = [record_bump];
     let record_signer = [
         seeds::SEED_CANDIDATE,
@@ -291,7 +310,32 @@ pub(super) fn submit_candidate(
         record_bump,
         feed_bump,
         declared_slices,
-    )
+    )?;
+    if accounts.len() == SUBMIT_CANDIDATE_LEDGERED_ACCOUNT_COUNT {
+        /* The record is shortfall-created; the feed moves its full principal
+         * regardless of prefund (`create_pda_account_full_principal`). */
+        let outlay = super::terminal_closure::creation_shortfall(
+            rent.minimum_balance(account_len::CANDIDATE)?,
+            record_prior,
+        )
+        .checked_add(rent.minimum_balance(account_len::CANDIDATE_FEED)?)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        let floor = record_prior
+            .checked_add(feed_prior)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        super::terminal_closure::create_funding_ledger(
+            program_id,
+            &accounts[IX_SUBMIT_CAND_PAYER],
+            &accounts[IX_SUBMIT_CAND_LEDGER],
+            &accounts[IX_SUBMIT_CAND_SYSTEM],
+            &rent,
+            accounts[IX_SUBMIT_CAND_RECORD].key,
+            clearing::FUNDING_COVERS_CANDIDATE_PAIR,
+            outlay,
+            floor,
+        )?;
+    }
+    Ok(())
 }
 
 /// Append one content chunk to a staging feed at its sequential cursor.
@@ -602,10 +646,10 @@ pub(super) fn finalize_selection(
             /* The honest empty lapse (V3's pre-selection lapse projected
              * onto the general plane): no verified candidate exists at the
              * deadline, so nothing is selected, nothing is invented, and the
-             * epoch's terminal phase says so.  Retained records and feeds
-             * stand as they are — their rent reclaim is the TerminalClosure
-             * blocker, deliberately open — and reservations stay ACTIVE
-             * under the standing expiry blocker. */
+             * epoch's terminal phase says so.  The lapse is exactly what
+             * admits the terminal-closure family: every ACTIVE reservation
+             * becomes owner-releasable (tag 60) and the machinery closes in
+             * dependency order down to the epoch root (tags 61-67). */
             epoch.phase = EPOCH_PHASE_LAPSED;
         }
     }

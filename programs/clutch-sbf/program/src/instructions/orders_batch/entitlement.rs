@@ -91,8 +91,14 @@ use clutch_solana_layout::{
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
-/// Accounts in a `FreezeEntitlement` instruction, exactly.
+/// Accounts in a `FreezeEntitlement` instruction without funding registration.
 pub const FREEZE_ENTITLEMENT_ACCOUNT_COUNT: usize = 7;
+/// Accounts in a `FreezeEntitlement` instruction that also registers the
+/// pot's funding: one optional trailing `GeneralFundingLedgerV1` PDA,
+/// written in the same transition that debits the payer.
+pub const FREEZE_ENTITLEMENT_LEDGERED_ACCOUNT_COUNT: usize = FREEZE_ENTITLEMENT_ACCOUNT_COUNT + 1;
+/// The optional funding-ledger PDA.
+pub const IX_FREEZE_ENT_LEDGER: usize = 7;
 /// Authenticated payer funding the pot's rent.
 pub const IX_FREEZE_ENT_PAYER: usize = 0;
 /// The CLEARED general epoch (read-only, program-owned).
@@ -252,7 +258,11 @@ pub(super) fn freeze_entitlement(
     intent_epoch: &Hash32,
     intent_candidate: &Hash32,
 ) -> Outcome<()> {
-    accounts::require_count(accounts, FREEZE_ENTITLEMENT_ACCOUNT_COUNT)?;
+    require(
+        accounts.len() == FREEZE_ENTITLEMENT_ACCOUNT_COUNT
+            || accounts.len() == FREEZE_ENTITLEMENT_LEDGERED_ACCOUNT_COUNT,
+        ClutchError::AccountCount,
+    )?;
     /* The pot PDA's non-existence is the real replay guard; the zero
      * sequence states the intent's position in the protocol on the wire. */
     require(sequence == 0, ClutchError::Replay)?;
@@ -344,6 +354,7 @@ pub(super) fn freeze_entitlement(
     let epoch_bytes = epoch.epoch.bytes();
     let (pot_address, pot_bump) = seeds::pot_pda(program_id, &epoch_bytes);
     expect_pda(accounts[IX_FREEZE_ENT_POT].key, (pot_address, pot_bump), None)?;
+    let pot_prior = accounts[IX_FREEZE_ENT_POT].lamports();
     let bump_seed = [pot_bump];
     let signer = [seeds::SEED_POT, epoch_bytes.as_ref(), bump_seed.as_ref()];
     create_pda_account(
@@ -368,6 +379,22 @@ pub(super) fn freeze_entitlement(
         flags: 0,
     };
     pot.encode(&mut borrow_account_mut(&accounts[IX_FREEZE_ENT_POT])?)?;
+    if accounts.len() == FREEZE_ENTITLEMENT_LEDGERED_ACCOUNT_COUNT {
+        super::terminal_closure::create_funding_ledger(
+            program_id,
+            &accounts[IX_FREEZE_ENT_PAYER],
+            &accounts[IX_FREEZE_ENT_LEDGER],
+            &accounts[IX_FREEZE_ENT_SYSTEM],
+            &rent,
+            accounts[IX_FREEZE_ENT_POT].key,
+            clearing::FUNDING_COVERS_FINAL_POT,
+            super::terminal_closure::creation_shortfall(
+                rent.minimum_balance(account_len::FINAL_POT)?,
+                pot_prior,
+            ),
+            pot_prior,
+        )?;
+    }
     Ok(())
 }
 
@@ -760,8 +787,10 @@ fn entitle_single_slice<'a>(
     sell: &Located,
     coverage: &PairCoverage,
 ) -> Outcome<()> {
+    // With the optional trailing funding ledger, the tail grows by one.
     require(
-        tail.len() == ENTITLE_SINGLE_TAIL_ACCOUNT_COUNT,
+        tail.len() == ENTITLE_SINGLE_TAIL_ACCOUNT_COUNT
+            || tail.len() == ENTITLE_SINGLE_TAIL_ACCOUNT_COUNT + 1,
         ClutchError::AccountCount,
     )?;
     // Exclusivity: exactly this one slice touches either end, or the order
@@ -811,6 +840,7 @@ fn entitle_single_slice<'a>(
     entitle_reservation(program_id, &tail[0], epoch, buy.page_index, &buy.slot)?;
     entitle_reservation(program_id, &tail[1], epoch, sell.page_index, &sell.slot)?;
 
+    let receipt_prior = tail[2].lamports();
     let receipt = SettlementReceiptAccount {
         epoch: epoch.epoch,
         market: epoch.market,
@@ -831,16 +861,34 @@ fn entitle_single_slice<'a>(
         stored_bump: 0,
         flags: 0,
     };
+    let rent = read_rent(&accounts[IX_ENTITLE_RENT])?;
     create_receipt(
         program_id,
         &accounts[IX_ENTITLE_PAYER],
         &tail[2],
         &accounts[IX_ENTITLE_SYSTEM],
-        &read_rent(&accounts[IX_ENTITLE_RENT])?,
+        &rent,
         epoch.epoch,
         record.candidate,
         &receipt,
-    )
+    )?;
+    if tail.len() == ENTITLE_SINGLE_TAIL_ACCOUNT_COUNT + 1 {
+        super::terminal_closure::create_funding_ledger(
+            program_id,
+            &accounts[IX_ENTITLE_PAYER],
+            &tail[3],
+            &accounts[IX_ENTITLE_SYSTEM],
+            &rent,
+            tail[2].key,
+            clearing::FUNDING_COVERS_RECEIPT,
+            super::terminal_closure::creation_shortfall(
+                rent.minimum_balance(account_len::SETTLEMENT_RECEIPT)?,
+                receipt_prior,
+            ),
+            receipt_prior,
+        )?;
+    }
+    Ok(())
 }
 
 /// The exact pair facts shared by entitlement and consumption.
@@ -915,8 +963,11 @@ fn entitle_portfolio_pair<'a>(
     sell: &Located,
     coverage: &PairCoverage,
 ) -> Outcome<()> {
+    // With the optional funding ledgers, one per receipt follows the
+    // receipts in the same slice order.
+    let ledgered = tail.len() == ENTITLE_PAIR_TAIL_FIXED_ACCOUNT_COUNT + (2 * coverage.count);
     require(
-        tail.len() == ENTITLE_PAIR_TAIL_FIXED_ACCOUNT_COUNT + coverage.count,
+        tail.len() == ENTITLE_PAIR_TAIL_FIXED_ACCOUNT_COUNT + coverage.count || ledgered,
         ClutchError::AccountCount,
     )?;
     // The pair entitles exactly once, from its first slice: any other entry
@@ -1011,18 +1062,34 @@ fn entitle_portfolio_pair<'a>(
     entitle_reservation(program_id, &tail[2], epoch, sell.page_index, &sell.slot)?;
 
     let rent = read_rent(&accounts[IX_ENTITLE_RENT])?;
+    let receipt_minimum = rent.minimum_balance(account_len::SETTLEMENT_RECEIPT)?;
     let mut at = 0usize;
     while at < coverage.count {
+        let target = &tail[ENTITLE_PAIR_TAIL_FIXED_ACCOUNT_COUNT + at];
+        let prior = target.lamports();
         create_receipt(
             program_id,
             &accounts[IX_ENTITLE_PAYER],
-            &tail[ENTITLE_PAIR_TAIL_FIXED_ACCOUNT_COUNT + at],
+            target,
             &accounts[IX_ENTITLE_SYSTEM],
             &rent,
             epoch.epoch,
             record.candidate,
             &prepared[at],
         )?;
+        if ledgered {
+            super::terminal_closure::create_funding_ledger(
+                program_id,
+                &accounts[IX_ENTITLE_PAYER],
+                &tail[ENTITLE_PAIR_TAIL_FIXED_ACCOUNT_COUNT + coverage.count + at],
+                &accounts[IX_ENTITLE_SYSTEM],
+                &rent,
+                target.key,
+                clearing::FUNDING_COVERS_RECEIPT,
+                super::terminal_closure::creation_shortfall(receipt_minimum, prior),
+                prior,
+            )?;
+        }
         at += 1;
     }
     Ok(())

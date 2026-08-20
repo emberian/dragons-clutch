@@ -672,8 +672,8 @@ fn validate_entitled_reservation(
 /// five accounts in one Solana instruction; a runtime refusal therefore rolls
 /// the whole transaction back.  Both consumed reservations keep their
 /// `initial_*` envelope intact — the persisted CONSUMED account *is* the
-/// archive of the exact consumed amounts, standing until the TerminalClosure
-/// blocker retires.
+/// archive of the exact consumed amounts, until `CloseGeneralReservation`
+/// (tag 62) reclaims the archive's rent once its page has closed.
 pub(in crate::instructions) fn apply_entitled_direct_slice(
     buyer_position: &mut PositionAccount,
     seller_position: &mut PositionAccount,
@@ -742,13 +742,26 @@ pub(super) enum SettlementBlocker {
 ///   receipt entitlements, `ACTIVE → ENTITLED`.
 /// * `GeneralReservationSetClosure` — T2-6 join 1: the pass-1 walk sweeps
 ///   every live order's exact ACTIVE reservation before binding.
+/// * `TerminalClosure` — the R4-unlocked close wave (tags 60-67,
+///   [`super::terminal_closure`]): owner-signed post-terminal release for
+///   lapsed and zero-fill reservations, and the dependency-ordered rent
+///   closes — receipt, reservation archive, page, pot, candidate pair,
+///   checkpoint, then the epoch root — each refusing before economic zero,
+///   paying exactly the recorded principal to the exact recorded payer
+///   (general funding ledger; the reservation's stored owner), and burning
+///   every surplus at the frozen incinerator.  Recorded residuals: an
+///   account created without its optional funding ledger keeps the
+///   unowned-refund blocker and stands forever, and an abandoned ACTIVE
+///   reservation holds its page — and so the epoch root — open at recorded
+///   rent cost.
 #[allow(dead_code)] // Executable record; the ledger test pins it.
-pub(super) const RETIRED_SETTLEMENT_BLOCKERS: [SettlementBlocker; 5] = [
+pub(super) const RETIRED_SETTLEMENT_BLOCKERS: [SettlementBlocker; 6] = [
     SettlementBlocker::FrozenPolicyPreimage,
     SettlementBlocker::FullWidthRelationDomain,
     SettlementBlocker::CandidateWindowClosure,
     SettlementBlocker::EntitlementFreeze,
     SettlementBlocker::GeneralReservationSetClosure,
+    SettlementBlocker::TerminalClosure,
 ];
 
 /// The exact dependency order of the remaining settlement work.
@@ -759,16 +772,10 @@ pub(super) const RETIRED_SETTLEMENT_BLOCKERS: [SettlementBlocker; 5] = [
 ///   `virtual_split`/`virtual_merge`, and — same family — any summary whose
 ///   rounding pot is nonzero, because the exact-only consumption seam cannot
 ///   fund one.
-/// * `TerminalClosure` — nothing yet proves every reservation, receipt, and
-///   pot consumed exactly once and reclaims their rent; consumed reservations
-///   persist as their own archive, and a lapsed epoch's ACTIVE reservations
-///   stand under the same open row (release requires OPEN, and no
-///   post-freeze/lapse release or expiry path exists yet).
 #[allow(dead_code)] // Executable record; the ledger test pins it.
-pub(super) const SETTLEMENT_BLOCKERS: [SettlementBlocker; 3] = [
+pub(super) const SETTLEMENT_BLOCKERS: [SettlementBlocker; 2] = [
     SettlementBlocker::PartialFillLedger,
     SettlementBlocker::VirtualPot,
-    SettlementBlocker::TerminalClosure,
 ];
 
 #[cfg(test)]
@@ -1065,20 +1072,24 @@ mod tests {
     #[test]
     fn the_blocker_ledger_records_the_retired_prefix_and_the_standing_tail() {
         // Every original row appears exactly once, retired or standing, and
-        // the standing tail is exactly the honest remainder: partial fills,
-        // virtual pots, and terminal closure.
-        assert_eq!(RETIRED_SETTLEMENT_BLOCKERS.len(), 5);
-        assert_eq!(SETTLEMENT_BLOCKERS.len(), 3);
+        // the standing tail is exactly the honest remainder: partial fills
+        // and virtual pots.  TerminalClosure retired with the tag-60..67
+        // close wave.
+        assert_eq!(RETIRED_SETTLEMENT_BLOCKERS.len(), 6);
+        assert_eq!(SETTLEMENT_BLOCKERS.len(), 2);
         assert_eq!(
             RETIRED_SETTLEMENT_BLOCKERS[3],
             SettlementBlocker::EntitlementFreeze
+        );
+        assert_eq!(
+            RETIRED_SETTLEMENT_BLOCKERS[5],
+            SettlementBlocker::TerminalClosure
         );
         assert_eq!(
             SETTLEMENT_BLOCKERS,
             [
                 SettlementBlocker::PartialFillLedger,
                 SettlementBlocker::VirtualPot,
-                SettlementBlocker::TerminalClosure
             ]
         );
         let all = [

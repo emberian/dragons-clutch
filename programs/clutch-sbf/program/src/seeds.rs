@@ -93,6 +93,9 @@ pub const SEED_EPOCH_WINDOW: &[u8] = b"dragons-clutch:epoch-window:v1";
 pub const SEED_POT: &[u8] = b"dragons-clutch:pot:v1";
 /// Settlement-receipt account seed prefix.
 pub const SEED_RECEIPT: &[u8] = b"dragons-clutch:receipt:v1";
+/// General funding-ledger sibling seed prefix, keyed by the funded account's
+/// own address so one machinery account has exactly one recorded funding.
+pub const SEED_GENERAL_FUNDING: &[u8] = b"dc:gen-funding:v1";
 /// Uploader-keyed typed artifact staging account seed prefix.
 pub const SEED_ARTIFACT_STAGE: &[u8] = b"dragons-clutch:upload:v1";
 /// Canonical raw collateral-policy artifact seed prefix.
@@ -459,6 +462,15 @@ pub fn receipt_pda(
         program_id,
         &[SEED_RECEIPT, epoch, candidate, &slice_index.to_le_bytes()],
     )
+}
+
+/// Canonical general funding-ledger address and bump.
+///
+/// Keyed by the funded account's own address: exactly one recorded funding
+/// per machinery account, and a close route can re-derive its ledger from the
+/// account it is closing with no other input.
+pub fn general_funding_pda(program_id: &Pubkey, target: &Pubkey) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_FUNDING, &target.to_bytes()])
 }
 
 /* ------------------------------------------------------------------------ */
