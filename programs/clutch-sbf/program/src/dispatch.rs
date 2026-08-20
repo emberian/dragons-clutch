@@ -120,6 +120,8 @@ const INTENT_FINALIZE_RESOLUTION_WORK_HINT: u8 = 34;
 const INTENT_ABORT_RESOLUTION_WORK_HINT: u8 = 35;
 const INTENT_INIT_DIRECT_EPOCH_V4_HINT: u8 = 36;
 const INTENT_LAPSE_SELECTED_DIRECT_V3_HINT: u8 = 46;
+const INTENT_INIT_CLEAR_WORK_HINT: u8 = 47;
+const INTENT_GROW_CLEAR_WORK_HINT: u8 = 48;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
@@ -142,7 +144,9 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 INTENT_PLACE_ORDER_HINT
                 | INTENT_CANCEL_ORDER_HINT
                 | INTENT_SETTLE_PAGE_HINT
-                | INTENT_SUBMIT_DIRECT_PAGE_HINT,
+                | INTENT_SUBMIT_DIRECT_PAGE_HINT
+                | INTENT_INIT_CLEAR_WORK_HINT
+                | INTENT_GROW_CLEAR_WORK_HINT,
             ) => Route::OrdersBatch,
             Some(
                 INTENT_INIT_REALM_HINT
@@ -349,7 +353,9 @@ fn process_orders_batch(
         Action::Layout(Intent::PlaceOrder { .. })
         | Action::Layout(Intent::CancelOrder { .. })
         | Action::Layout(Intent::SubmitDirectPage { .. })
-        | Action::Layout(Intent::SettlePage { .. }) => {
+        | Action::Layout(Intent::SettlePage { .. })
+        | Action::Layout(Intent::InitClearWork { .. })
+        | Action::Layout(Intent::GrowClearWork { .. }) => {
             orders_batch::process(program_id, accounts, &request)
         }
         _ => unexpected_route(),
@@ -723,6 +729,22 @@ mod tests {
                     market: hash(1),
                     epoch: hash(2),
                     page_index: 0,
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::InitClearWork {
+                    market: hash(1),
+                    epoch: hash(2),
+                    candidate: hash(3),
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::GrowClearWork {
+                    market: hash(1),
+                    epoch: hash(2),
+                    candidate: hash(3),
                 },
                 Route::OrdersBatch,
             ),

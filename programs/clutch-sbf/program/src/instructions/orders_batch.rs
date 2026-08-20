@@ -1,5 +1,6 @@
 //! `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`,
-//! `Intent::SettlePage`.
+//! `Intent::SettlePage`, and the staged checkpoint creation pair
+//! `Intent::InitClearWork` / `Intent::GrowClearWork` ([`clear_work`]).
 //!
 //! This module owns the batch-auction plane's account lists.  `PlaceOrder` and
 //! `CancelOrder` own the funded order lifecycle.  `SettlePage` now exposes one
@@ -480,6 +481,7 @@ use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
+pub mod clear_work;
 mod reservation;
 pub(super) mod settlement;
 
@@ -1071,6 +1073,30 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             market,
             epoch,
             *page_index,
+        ),
+        Action::Layout(Intent::InitClearWork {
+            market,
+            epoch,
+            candidate,
+        }) => clear_work::init_clear_work(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            candidate,
+        ),
+        Action::Layout(Intent::GrowClearWork {
+            market,
+            epoch,
+            candidate,
+        }) => clear_work::grow_clear_work(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            candidate,
         ),
         /* Every other action belongs to another family module; the router never
          * sends one here, and this arm exists so that adding one to the router

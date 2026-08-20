@@ -20,7 +20,7 @@
 //! | [`merge_materialize`] | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` |
 //! | [`market_init`] | `Intent::CreateMarket` |
 //! | [`observe_resolve`] | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` |
-//! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`, `Intent::SettlePage` |
+//! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`, `Intent::SettlePage`, `Intent::InitClearWork`, `Intent::GrowClearWork` |
 //!
 //! Implemented: genesis (the five account-creating initializers plus `Endow`),
 //! split, merge_materialize (Merge/Materialize/Dematerialize), market_init,
