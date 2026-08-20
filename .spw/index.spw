@@ -1,0 +1,16 @@
+# Index
+#
+#>spw_index
+#:index
+
+^"roots"{
+  @readme: ~"./README.md"
+  @mount: ~"./mount.spw"
+  @workspace: ~"./workspace.spw"
+}
+
+^"dispatch"{
+  readme: @readme
+  mount: @mount
+  workspace: @workspace
+}
