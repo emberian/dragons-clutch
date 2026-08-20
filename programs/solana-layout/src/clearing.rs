@@ -38,6 +38,19 @@
 //! `#[repr(C)]` plus a `Pod` bound, or an explicit serializer in `clutch-batch`
 //! — is recorded in `docs/implementation/SOLANA_LAYOUT.md`.
 //!
+//! # Index vocabulary: order indices are live ranks
+//!
+//! Every order index in this module — the [`CandidateFeedAccount`] fill
+//! vector's index and the payload of [`LegRef::Order`] — is the order's
+//! **zero-based live rank** in the canonical page-set walk: its position among
+//! the records the projection actually feeds ([`crate::projection`]), which
+//! skips retirements.  It is *not* the record's global slot index, and the two
+//! vocabularies coincide exactly when the frozen set has `tombstone_count == 0`
+//! on every page — the narrow settlement slice pins that case explicitly, which
+//! is why it could leave the general reading unstated.  Zero-based, where the
+//! relation's `canonical_order_id` is the same live rank one-based: the id
+//! keeps zero reserved for "no order", an array index does not.
+//!
 //! # The consumed-fold binding
 //!
 //! §10 assigns the cryptographic anchoring of P-BATCH-03 to this crate: SHA-256
@@ -440,6 +453,11 @@ pub const LEG_KIND_MERGE: u8 = 2;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LegRef {
     /// The filled leg of the order at this index, on the slice's outcome.
+    ///
+    /// The index is the order's **zero-based live rank** in the canonical
+    /// page-set walk — the same vocabulary as the fill vector, see the module
+    /// docs — never a global slot index.  [`PairingSlice::validate`] bounds it
+    /// by the feed's `order_len`, which is the frozen set's *live* count.
     Order(u8),
     /// The global virtual split, which serves buy legs on every outcome.
     Split,
@@ -741,8 +759,10 @@ pub enum CandidateFeedAccount {}
 
 /// Read one fill without materializing the fill vector.
 ///
-/// `index` is the relation's order index — a *live* rank, not a slot rank.
-/// Fills at or beyond `order_len` are canonical zero padding and are refused
+/// `index` is the relation's order index — the order's **zero-based live
+/// rank** in the canonical page-set walk (see the module docs), not its global
+/// slot index; on a set with any tombstone the two disagree from the first
+/// retirement on.  Fills at or beyond `order_len` are canonical zero padding and are refused
 /// here rather than returned as zero, because a caller asking for one is
 /// asking about an order the feed does not carry.
 pub fn fill_at(input: &[u8], header: &CandidateFeedHeader, index: u8) -> Result<u64> {

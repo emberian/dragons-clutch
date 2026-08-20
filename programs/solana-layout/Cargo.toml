@@ -13,6 +13,9 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
+# The relation whose order types the page→order projection maps onto.  Both
+# crates live inside the no_alloc boundary: no_std, no heap, fixed arrays only.
+clutch-batch = { path = "../../crates/clutch-batch" }
 clutch-batch-policy-identity = { path = "../../research/batch-policy-identity" }
 
 [target.'cfg(target_os = "solana")'.dependencies]
