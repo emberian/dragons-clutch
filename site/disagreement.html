@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Disagreement — Dragon&#8217;s Clutch</title>
+<meta name="description" content="Two named estimators state precise beliefs as densities; a deterministic book-former lowers their disagreement into a book that clears between them — executed end to end in a laboratory bank, every number re-derived by a checked script.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+  <div class="site-inner">
+    <a class="site-name" href="index.html">Dragon&#8217;s Clutch</a>
+    <nav class="pages" aria-label="Pages">
+      <a href="index.html">The Clutch</a>
+      <a href="shape.html">The Shape of a Claim</a>
+      <a href="clearing.html">The Clearing</a>
+      <a href="ledger.html">The Ledger</a>
+      <a href="risk.html">The Price of Risk</a>
+      <a href="machines.html">For the Machines</a>
+      <a href="disagreement.html" aria-current="page">The Disagreement</a>
+      <a href="evidence.html">The Evidence</a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+
+<p class="kicker">Two machines, one price</p>
+<h1>The disagreement</h1>
+
+<p>The claim under exhibit: <em>an automated trader can state a precise
+belief &#8212; a density rather than a direction &#8212; and the market
+prices disagreement between models instead of only between moods.</em>
+This page is that claim run, not argued: two named textbook estimators
+each emitted a density over the same eight-knot basis, a published
+deterministic function lowered the <em>pair</em> of densities into a
+clearing book, and that book placed, froze, cleared, and settled end to
+end through the general clearing plane of a local laboratory bank, with
+conservation asserted to the atom and the pot provably empty. The cleared
+price vector lies coordinatewise between the two beliefs, is checkably the
+basis-moment vector of an explicit probability measure, and carries a
+recomputable zero duality gap. <strong>No resolution ever occurs: the
+exhibit ends at the settled book, so neither model is ever
+&#8220;right.&#8221;</strong></p>
+
+<h2>Two textbook estimators, pre-registered</h2>
+
+<p>The quantity is the 20-trading-day-ahead level of <strong>SYN-1</strong>,
+a synthetic price series published with the exhibit &#8212; no live data.
+SYN-1 is 120 daily steps from 160.0: each day&#8217;s log-return is drawn
+<code>gauss(0,&#8202;0.01)</code> and, with probability 0.10, a jump of
+&#177;0.06 is added &#8212; all constants published, seed
+<code>20260827</code> chosen by rule (the filing date) before generation.
+The realized terminal level is $156.48, with 4 realized jump days of 120.
+The horizon and grid were pre-registered before looking at output: H = 20;
+the Friday-clutch grid &#8212; knots $100 to $240 step $20, degree 1,
+eight hats, S = 10,000.</p>
+
+<ul>
+<li><strong>Model G, &#8220;the Gaussian&#8221;</strong>: a maximum-likelihood
+normal fit to SYN-1&#8217;s daily log-returns (&#956; = &#8722;0.00019,
+&#963; = 0.01477), projected 20 days as a lognormal over the terminal
+level, integrated against the clamped hats.</li>
+<li><strong>Model E, &#8220;the empiricist&#8221;</strong>: the empirical
+distribution of all 101 overlapping 20-day log-moves in the same history,
+applied to the terminal level, averaged through the clamped hats.</li>
+</ul>
+
+<div class="scope">
+<p><strong>Honesty box.</strong> Each model is a named textbook estimator,
+one screen of code, zero free hyperparameters beyond the pre-registered
+rule. Both ran once on the same published history; neither saw a price or
+the other&#8217;s output; nothing was adjusted after generation. The
+generator&#8217;s jump term is <em>declared design</em>: jump variance
+inflates G&#8217;s fitted &#963; so G spreads mass into the shoulders while
+E keeps the realized peak &#8212; that structural split is what the exhibit
+needs, and it was chosen for exactly that reason. The book-former below is
+a published deterministic function of the two belief vectors and nothing
+else: the exhibit does not simulate order-flow discovery between autonomous
+agents; it lowers a known disagreement into the minimal book that expresses
+it. Estimation is float (disclosed); the two quantized integer vectors are
+pinned in <code>docs/site-plan/disagreement_check.py</code>, regeneration is
+checked against them (a differing platform libm is the named boundary), and
+everything downstream is exact integer arithmetic matching the venue.</p>
+</div>
+
+<p>The beliefs, largest-remainder quantized to the price simplex:</p>
+
+<pre>knot:    100   120    140    160    180   200  220  240
+v_G  = [   0,   98,  2961,  5696,  1213,  32,   0,   0]   (sum 10,000; forward $156.24)
+v_E  = [   0,  127,  2662,  5945,  1266,   0,   0,   0]   (sum 10,000; forward $156.70)
+&#916;    = [   0,  -29,  +299,  -249,   -53, +32,   0,   0]  (v_G - v_E)</pre>
+
+<figure>
+<div class="figwrap">
+<svg viewBox="0 0 680 400" width="680" height="400" role="img"
+     aria-label="Three overlaid grid-resolution densities over the dollar axis from 100 to 240: Model G thin, Model E thin, and the cleared vector bold, with the per-knot disagreement band between the two beliefs shaded. Model E peaks higher at the 160 knot; Model G carries more mass at 140 and a sliver at 200. The cleared curve lies inside the band everywhere. The three implied forwards, 156.24, 156.40 and 156.70 dollars, sit within 46 cents and are shown magnified in an inset.">
+  <!-- y axis: chance per dollar, percent -->
+  <g font-family="system-ui, sans-serif" font-size="10" fill="var(--ink-3)">
+    <text x="10" y="20">chance</text>
+    <text x="10" y="32">per $</text>
+    <text x="40" y="334" text-anchor="end">0%</text>
+    <text x="40" y="240.7" text-anchor="end">1%</text>
+    <text x="40" y="147.3" text-anchor="end">2%</text>
+    <text x="40" y="54" text-anchor="end">3%</text>
+  </g>
+  <g stroke="var(--border)">
+    <line x1="48" y1="330" x2="608" y2="330"/>
+    <line x1="48" y1="236.67" x2="608" y2="236.67" stroke-dasharray="2 5"/>
+    <line x1="48" y1="143.33" x2="608" y2="143.33" stroke-dasharray="2 5"/>
+    <line x1="48" y1="50" x2="608" y2="50" stroke-dasharray="2 5"/>
+  </g>
+  <!-- x axis: the eight knots -->
+  <g font-family="system-ui, sans-serif" font-size="10" fill="var(--ink-3)" text-anchor="middle">
+    <text x="48" y="346">$100</text>
+    <text x="128" y="346">$120</text>
+    <text x="208" y="346">$140</text>
+    <text x="288" y="346">$160</text>
+    <text x="368" y="346">$180</text>
+    <text x="448" y="346">$200</text>
+    <text x="528" y="346">$220</text>
+    <text x="608" y="346">$240</text>
+  </g>
+  <!-- the disagreement band: per-knot (min, max) of the two beliefs -->
+  <path d="M48.0,330.00 L128.0,324.07 L208.0,191.82 L288.0,52.57 L368.0,270.92 L448.0,328.51 L528.0,330.00 L608.0,330.00 L608.0,330.00 L528.0,330.00 L448.0,330.00 L368.0,273.39 L288.0,64.19 L208.0,205.77 L128.0,325.43 L48.0,330.00 Z"
+        fill="var(--accent)" fill-opacity="0.13" stroke="none"/>
+  <!-- Model G: thin -->
+  <path d="M48.0,330.00 L128.0,325.43 L208.0,191.82 L288.0,64.19 L368.0,273.39 L448.0,328.51 L528.0,330.00 L608.0,330.00"
+        fill="none" stroke="var(--accent-2)" stroke-width="1.5"/>
+  <!-- Model E: thin -->
+  <path d="M48.0,330.00 L128.0,324.07 L208.0,205.77 L288.0,52.57 L368.0,270.92 L448.0,330.00 L528.0,330.00 L608.0,330.00"
+        fill="none" stroke="var(--accent-3)" stroke-width="1.5"/>
+  <!-- the cleared vector: bold, inside the band everywhere -->
+  <path d="M48.0,330.00 L128.0,324.40 L208.0,197.47 L288.0,60.27 L368.0,272.13 L448.0,329.07 L528.0,330.00 L608.0,330.00"
+        fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+  <g fill="var(--accent)">
+    <circle cx="128" cy="324.40" r="3"/>
+    <circle cx="208" cy="197.47" r="3"/>
+    <circle cx="288" cy="60.27" r="3"/>
+    <circle cx="368" cy="272.13" r="3"/>
+    <circle cx="448" cy="329.07" r="3"/>
+  </g>
+  <!-- legend, top right where the curves sit at zero -->
+  <g font-family="system-ui, sans-serif" font-size="10">
+    <line x1="440" y1="62" x2="464" y2="62" stroke="var(--accent-2)" stroke-width="1.5"/>
+    <text x="470" y="66" fill="var(--ink-2)">Model G (Gaussian)</text>
+    <line x1="440" y1="80" x2="464" y2="80" stroke="var(--accent-3)" stroke-width="1.5"/>
+    <text x="470" y="84" fill="var(--ink-2)">Model E (empirical)</text>
+    <line x1="440" y1="98" x2="464" y2="98" stroke="var(--accent)" stroke-width="2.5"/>
+    <text x="470" y="102" fill="var(--ink-2)">cleared p</text>
+    <rect x="440" y="110" width="24" height="9" fill="var(--accent)" fill-opacity="0.13"/>
+    <text x="470" y="118" fill="var(--ink-2)">the disagreement band</text>
+  </g>
+  <!-- the three forwards: nearly coincident at this scale; leader to inset -->
+  <line x1="273.6" y1="330" x2="273.6" y2="183" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="273.6" y1="183" x2="452" y2="183" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="3 3"/>
+  <!-- inset: $156..$157, x45 magnification, declared -->
+  <g>
+    <rect x="452" y="150" width="180" height="66" fill="var(--surface)" stroke="var(--border)"/>
+    <line x1="460" y1="196" x2="624" y2="196" stroke="var(--ink-3)"/>
+    <line x1="495.2" y1="188" x2="495.2" y2="204" stroke="var(--accent-2)" stroke-width="1.5"/>
+    <line x1="524.0" y1="186" x2="524.0" y2="206" stroke="var(--accent)" stroke-width="2.5"/>
+    <line x1="578.0" y1="188" x2="578.0" y2="204" stroke="var(--accent-3)" stroke-width="1.5"/>
+    <g font-family="system-ui, sans-serif" font-size="9" fill="var(--ink-3)" text-anchor="middle">
+      <text x="542" y="163">the three forwards, all within 46&#162;</text>
+      <text x="542" y="174">$156&#8211;$157, magnified &#215;45</text>
+      <text x="495" y="186">G</text>
+      <text x="524" y="184">p</text>
+      <text x="578" y="186">E</text>
+      <text x="495" y="214">156.24</text>
+      <text x="540" y="214">.40</text>
+      <text x="578" y="214">.70</text>
+    </g>
+  </g>
+</svg>
+</div>
+<figcaption>The two beliefs and the cleared vector as grid-resolution
+densities p&#7522;/(S&#183;g), joined linearly between knots (the degree-1
+interpolant). The shaded band is the per-knot (min,&#8202;max) of the two
+beliefs; the cleared bold curve lies inside it at every knot, by
+construction of the book. The models disagree about <em>shape</em> far more
+than about the mean: all three implied forwards sit within 46 cents.
+Arithmetic checked by docs/site-plan/disagreement_check.py.</figcaption>
+</figure>
+
+<h2>The book a disagreement writes</h2>
+
+<p>The book-former reads the pair (v_G,&#8202;v_E) and emits three things.
+<strong>Per-knot quotes</strong>: at each knot where the values differ, the
+higher-value model posts a buy of 500 Eggs at its own value and the
+lower-value model posts a sell at its own value (a zero value quotes a
+0-limit sell); knots where they agree get no orders. <strong>The
+disagreement package</strong>: one portfolio pair with coefficients
+c&#8314; = &#916;&#8314; = [0,&#8202;0,&#8202;299,&#8202;0,&#8202;0,&#8202;32,&#8202;0,&#8202;0]
+&#8212; one lot is the per-mille excess of G&#8217;s belief over
+E&#8217;s. G posts the 50-lot buy at
+&#8970;dot(c&#8314;,v_G)/S&#8971; = 88 atoms per lot, E the matching sell
+at &#8968;dot(c&#8314;,v_E)/S&#8969; = 80. The trade window (80,&#8202;88)
+is open <em>because and only because</em> the models disagree:
+dot(c&#8314;,v_G) &#8722; dot(c&#8314;,v_E) = &#8214;&#916;&#8314;&#8214;&#178; = 90,425 &gt; 0
+&#8212; <strong>the room to trade is the squared disagreement</strong>.
+And <strong>one uncrossed quote</strong> for refusal texture: E posts a
+second, lower buy at the $120 knot (limit 98) that ends ineligible and
+stands reserved after the clear.</p>
+
+<p>The cleared candidate
+<code>p = [0,&#8202;120,&#8202;2840,&#8202;5780,&#8202;1240,&#8202;20,&#8202;0,&#8202;0]</code>
+lies strictly inside the band at every traded knot &#8212; between the
+beliefs by construction, so the published point inside each band is the
+submitter&#8217;s selection, not market revelation. The selection rule is
+stated, deterministic, and re-derived by the checked script: maximize
+settlement divisibility (which pins the $140 coordinate uniquely at 2,840
+and sets the 50-lot size), then nearest-to-midpoint for the free knots,
+the widest remaining band absorbing the simplex sum, lowest index on ties.
+One constraint shaped this book and we say so plainly: the settlement seam
+refuses any nonzero rounding pot and any virtual leg
+(<code>entitlement.rs:337&#8211;342</code>), so every consideration had to
+be an exact integer of atoms &#8212; that is why the quotes are 500 Eggs,
+the package is 50 lots, and every p&#7522; is divisible by 20. Of the 77
+exact in-band simplex candidates, all 77 clear the ten single quotes
+strictly and 76 also clear the package pair; the one exception
+(p&#8321;&#8324;&#8320; = 2,960, where dot(c&#8314;,p) = 885,680 exceeds
+the conservatively-inward buy limit 880,000) is named rather than rounded
+away.</p>
+
+<aside class="lane lane-degen"><span class="tag">&#10216;degen&#10217;</span>
+Settled and marked to its own model, G is up 196.115 atoms; marked to its
+own model, E is up 289.11. Both sides think they won, and the two numbers
+sum to exactly the disagreement traded &#8212; 485.225 atoms.
+That&#8217;s not a bug in the exhibit; that <em>is</em> what a priced
+disagreement is. Nobody finds out who was right, because nothing
+resolves.</aside>
+
+<h2>What actually executed</h2>
+
+<p>The whole book &#8212; thirteen orders: ten crossing singles, the
+package pair, the low-ball &#8212; placed through the general clearing
+plane&#8217;s real instruction tags (47&#8211;59) in a local Agave bank,
+froze, walked the candidate to its verdict through the streaming relation,
+selected, entitled per-slice receipts, and settled through
+<strong>Settle&#160;&#215;6</strong>: five entitled single crossings plus
+the portfolio full pair, seven pairing slices in all. Conservation was
+asserted across the whole value plane: final positions byte-equal to the
+allocation the accepted summary implies, total cash and per-outcome Eggs
+exactly the injected genesis, consumed reservations archived at their
+exact envelopes, the ineligible low-ball still standing ACTIVE at its
+5-atom envelope, the rounding pot zero, and the release identity closed to
+the atom: 4,920 = 4,749 + 171 + 0.
+<a class="badge" href="evidence.html#sbf-executed">SBF-EXECUTED &#183; bank
+&#183; UNPROMOTED &#8212; CURRENT_TRUTH.md &#167;4</a></p>
+
+<p>Plane honesty, stated in the same breath: the genesis positions
+(10,000 cash atoms and 16,000 Eggs per outcome per model) are
+<em>injected</em> laboratory bank state &#8212; no deposit or split path
+executes, and the sealed default artifact still refuses deposits
+(<code>0x79</code>) because no production data source exists. Fees are
+forced to zero. The walk is laboratory evidence, unpromoted in the
+project&#8217;s own liveness profile; nothing here is a deployment or an
+offer (<a href="evidence.html#scope">scope note</a>).</p>
+
+<aside class="lane lane-builder"><span class="tag">&#10216;builder&#10217;</span>
+The test is
+<code>programs/clutch-sbf/svm-tests/tests/disagreement_exhibit.rs</code>:
+T0 confirms the general plane admits a degree-1 v3 terms artifact (the
+relation sees the basis only through partition of unity), then the walk
+drives tags 47&#8211;59 &#8212; place &#215;13, freeze, submit/seal, the
+clear-work walk, finalize, FreezeEntitlement, EntitleSlice &#215;6,
+SettlePage &#215;6 &#8212; against the exact sealed runtime
+(SHA-256 <code>4fded7a6&#8230;edf6cb</code>, 1,979,512 bytes),
+byte-checked into the bank fixture before the run. Every step cleared the
+1.4M-CU ceiling with room; the heaviest was the first relation pass at
+421,846 CU.</aside>
+
+<h2>The numbers</h2>
+
+<div class="tablewrap">
+<table>
+  <thead>
+    <tr><th scope="col">row</th><th scope="col">value</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>beliefs</td><td>v_G, v_E above; forwards $156.24 / $156.70</td></tr>
+    <tr><td>cleared</td><td>p = [0, 120, 2840, 5780, 1240, 20, 0, 0]; density p&#7522;/(S&#183;g); forward $156.40, one portfolio quote</td></tr>
+    <tr><td>the band</td><td>per-knot (min,&#8202;max) of the two values; 77 exact in-band candidates, all with every single quote strict; 76 also clear the package (the 2,960 corner is the named exception)</td></tr>
+    <tr><td>trades</td><td>500 Eggs at each of five knots + the 50-lot package (14,950 Eggs @140, 1,600 @200)</td></tr>
+    <tr><td>considerations</td><td>6, 142, 289, 62, 1 atoms on the singles; 4,249 exactly on the package; rounding residue 0</td></tr>
+    <tr><td>what each paid</td><td>G net &#8722;4,035 atoms (paid 4,392, received 357); E net +4,035; fees 0</td></tr>
+    <tr><td>holdings after</td><td>G: +15,450 @140, +2,100 @200, &#8722;500 each @120/160/180; E opposite; byte-compared to the implied allocation</td></tr>
+    <tr><td>self-assessed edges</td><td>by G&#8217;s light +196.115 atoms; by E&#8217;s light +289.11; both think they won; sum = 485.225 = the traded quantity dotted with |v_G &#8722; v_E|/S &#8212; <strong>the disagreement traded is the total perceived gain</strong></td></tr>
+    <tr><td>certified surplus</td><td>433.1 atoms (4,331,000 price units), the LP objective; duality gap 0, term by term</td></tr>
+    <tr><td>conservation</td><td>cash constant at 20,000; per-outcome Eggs constant at 32,000; pot empty; rounding pot 0; release identity 4,920 = 4,749 + 171 + 0</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>The three licenses, each at its true plane</h2>
+
+<p><strong>Normalization is forced, not chosen.</strong> Partition of unity
+&#8212; the hats sum to one at every admissible value &#8212; is a
+machine-checked theorem about the emitted basis.
+<a class="badge" href="evidence.html#proved-model">PROVED-MODEL &#8212;
+CURRENT_TRUTH.md &#167;3; lean/DragonsClutch/BSpline.lean</a>
+Its pricing consequence is Theorem 3.1 of the research corpus:
+&#8220;every dual-feasible &#960; satisfies &#931;&#7522;&#8202;&#960;&#7522; = S
+exactly&#8221; &#8212; the simplex sum is dual feasibility of the
+split/merge columns, a paper proof over the repo&#8217;s exact integer
+objects.
+<a class="badge" href="evidence.html#paper-proof">paper proof &#8212;
+DUAL_IS_THE_MEASURE.md &#167;3.2</a></p>
+
+<p><strong>Measure-hood.</strong> Theorem 7.1: &#8220;at degree &#8804; 1,
+<em>every</em> vector the venue can ever publish (every V1-valid p) is the
+basis-moment vector of a probability measure, exhibited explicitly; and on
+the allocation-A accept set that same vector is a zero-gap optimal dual.
+The certificate and the measure are carried by one object.&#8221; The
+general theorem is a paper proof; this exhibit&#8217;s <em>instance</em> is
+elementary &#8212; degree-1 hats are cardinal, N&#8202;&#11388;(t&#7522;) =
+&#948;&#7522;&#11388;, so Q* = &#931;&#8202;(p&#7522;/S)&#183;&#948;<sub>t&#7522;</sub>
+represents p with E<sub>Q*</sub>[N&#11388;] = p&#11388;/S exactly &#8212;
+and the check script proves the instance by direct arithmetic, all 64
+pairs.
+<a class="badge" href="evidence.html#paper-proof">paper proof &#8212;
+DUAL_IS_THE_MEASURE.md &#167;7.2, Thm 7.1</a>
+<a class="badge" href="evidence.html#disagreement">instance checked &#8212;
+docs/site-plan/disagreement_check.py</a>
+The implied forward $156.40 sits between the two models&#8217; $156.24 and
+$156.70.</p>
+
+<p><strong>The certificate.</strong> Theorem 5.1: under the frozen policy
+tuple, every candidate the relation accepts is, with
+(&#960;,&#8202;s) := (p,&#8202;s(p)), a zero-duality-gap certificate of
+surplus optimality for the clearing LP &#8212; the fills maximize batch
+surplus over the entire real LP polytope, and p is an optimal dual. Paper
+proof; and this exhibit&#8217;s gap is recomputed term by term in the
+script: every strict order fully filled, the ineligible low-ball at zero
+with zero slack, gap exactly 0, certified surplus 4,331,000 price units.
+<a class="badge" href="evidence.html#paper-proof">paper proof &#8212;
+DUAL_IS_THE_MEASURE.md &#167;5.1, Thm 5.1</a></p>
+
+<aside class="lane lane-scholar"><span class="tag">&#10216;scholar&#10217;</span>
+Q* is <em>a</em> representing measure, never <em>the</em> measure: at
+degree 1 the venue pins the measure&#8217;s spline-dual coordinates and
+nothing finer, and within each no-trade band the published point is a
+stated selection rule, drawn shaded above rather than passed off as
+revelation. The zero gap is relative to the frozen tuple
+(DUAL_IS_THE_MEASURE.md &#167;5.1, &#167;7.2, &#167;7.5).</aside>
+
+<h2>What does not carry over</h2>
+
+<p>Said plainly, because the badges only mean something if this list is on
+the same page. The Lean instantiation of the certificate theorems at this
+exact matrix (CertF) is open, so none of the optimality or measure claims
+is machine-checked over these definitions &#8212; they are paper proofs
+with named falsifiers, and this page never upgrades them. The walk is bank
+evidence, unpromoted. The quantity is synthetic and nothing here touches
+value: the deposit boundary refuses by design. At degree &#8805; 2 the
+measure reading is <em>refuted</em> &#8212; there are simplex-valid
+vectors that are no measure&#8217;s moments, with an explicit arbitrage
+(&#167;7.4) &#8212; so this exhibit lives strictly on the proved degree-1
+rung, where those vectors cannot exist. And the exhibit&#8217;s two
+traders are estimators run by the exhibit&#8217;s author, coordinated by a
+published function &#8212; not autonomous agents discovering each other in
+an order flow.</p>
+
+<div class="scope">
+<p><strong>Falsify it.</strong> Run
+<code>python3 docs/site-plan/disagreement_check.py</code> &#8212; it
+re-derives the series from the seed, both estimators, the book, and every
+number on this page in exact arithmetic, and exits nonzero on any drift;
+move any p&#7522; outside its band and the named strict inequality flips.
+Run the bank walk:
+<code>cargo test --locked --test disagreement_exhibit</code> under
+<code>programs/clutch-sbf/svm-tests</code> drives T0 and the full
+thirteen-order clear against the sealed runtime and fails on any broken
+conservation identity. The exhibit is exactly as strong as those two
+commands, and no stronger.</p>
+</div>
+
+</main>
+<footer class="site">
+  <div class="foot-inner">
+    <span><a href="evidence.html#scope">Scope note</a></span>
+    <nav class="pn" aria-label="Page order">
+      <a href="machines.html">&#8592; For the Machines</a>
+      <a href="evidence.html">Next: The Evidence &#8594;</a>
+    </nav>
+  </div>
+</footer>
+<script src="lanes.js" defer></script>
+</body>
+</html>
