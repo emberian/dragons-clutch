@@ -72,6 +72,17 @@ in the reseal lane's output) and the postmark doorstep (4 threads).
 
 ## Done log (2026-08-19 session)
 
+- FRAME TIER 1 MERGED (d2858ee): portfolio_settlement::{prepare,apply}_full_pair
+  to &mut out-slots — apply 6,784 -> 128 bytes, prepare 4,224 -> 2,688
+  (extra ~800 over the plan's estimate is two Result sret temporaries;
+  still 1,408 under the line). Module lives in programs/solana-layout (the
+  no_std layout crate), not clutch-batch as the plan guessed. Six full_pair
+  frame diagnostics vanish from the build log (97 -> 91). ELF IDENTITY
+  PRESERVED — I rebuilt on merged main and got exactly 187d5ee1/1,420,608
+  (zero callers, LTO-eliminated), so NO reseal owed for this merge. 7/7
+  module tests + clippy verified on main. ZEROED placeholders added per the
+  crate idiom for no_alloc callers.
+
 - PERSVATI ATTESTATION OF THE NEW IDENTITY PASSED: 41/41 portable gates,
   0 STOP, over exact 98fb070 (prior 40 gates + a new bare policy.py
   pristine-checkout gate). Archive ac0efaa7/bundle e84da342 identical both
