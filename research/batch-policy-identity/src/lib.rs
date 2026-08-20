@@ -143,6 +143,10 @@ pub mod direct_lifecycle_v3;
 /// selection profile.  It is an offline account-body and transition model;
 /// it does not allocate live Solana tags or instructions.
 pub mod direct_window_v1;
+/// The PROPOSED Tier 2 general portfolio-clearing policy profile and the
+/// streaming/full-width verdict-identity gate (T2-5).  It allocates no live
+/// Solana tags, accounts, or instructions.
+pub mod general_clearing_v1;
 
 /// Exact size of a canonical batch-policy artifact.
 pub const BATCH_POLICY_BYTES: usize = 64;
