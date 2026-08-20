@@ -375,15 +375,59 @@ const fn is_zero(bytes: &[u8; HASH_BYTES]) -> bool {
 /* SHA-256 is included as a tiny portable identity primitive.  It is
  * used only for canonical IDs; this crate makes no claim that a future
  * Solana deployment has selected this primitive until its profile says so. */
-fn digest(domain: &[u8], parts: &[&[u8]]) -> Hash32 {
+
+/// Largest number of `parts` any [`digest`] caller in this crate passes.
+///
+/// The domain string occupies one further slice, so the native preimage array
+/// is one longer.  The bound is checked at compile time inside [`digest`], so a
+/// new call site that exceeds it is a build failure and never a truncated
+/// preimage.
+const MAX_DIGEST_PARTS: usize = 16;
+
+/// Domain-separated SHA-256 over `domain` followed by every element of `parts`.
+///
+/// Host and research builds fold the portable first-party SHA-256.  SBF hands
+/// the identical slice sequence to Solana's safe native-hasher wrapper: the
+/// concatenation `hashv` commits to is byte-for-byte the sequence the portable
+/// path streams, so the two produce the same value and only the compute cost
+/// differs.  Every canonical identity in this crate goes through here, so the
+/// portable path stays as the off-chain oracle the equivalence tests compare
+/// against rather than being deleted.
+#[cfg(not(target_os = "solana"))]
+fn digest<const N: usize>(domain: &[u8], parts: &[&[u8]; N]) -> Hash32 {
+    const { assert!(N <= MAX_DIGEST_PARTS) };
     let mut h = Sha256::new();
     h.update(domain);
     let mut i = 0;
-    while i < parts.len() {
+    while i < N {
         h.update(parts[i]);
         i += 1;
     }
     Hash32(h.finish())
+}
+
+/// Assemble and hash the domain-separated preimage with Solana's native wrapper.
+///
+/// Built on SBF and in host unit tests only.  The test build uses the wrapper's
+/// `sha2` implementation, which is what lets the assembled slice sequence be
+/// checked byte-for-byte against the portable path; production SBF invokes
+/// `sol_sha256`.
+#[cfg(any(target_os = "solana", test))]
+fn native_digest<const N: usize>(domain: &[u8], parts: &[&[u8]; N]) -> Hash32 {
+    const { assert!(N <= MAX_DIGEST_PARTS) };
+    let mut preimage: [&[u8]; MAX_DIGEST_PARTS + 1] = [&[]; MAX_DIGEST_PARTS + 1];
+    preimage[0] = domain;
+    let mut i = 0;
+    while i < N {
+        preimage[1 + i] = parts[i];
+        i += 1;
+    }
+    Hash32(solana_sha256_hasher::hashv(&preimage[..N + 1]).to_bytes())
+}
+
+#[cfg(target_os = "solana")]
+fn digest<const N: usize>(domain: &[u8], parts: &[&[u8]; N]) -> Hash32 {
+    native_digest(domain, parts)
 }
 
 /// Derive a canonical Realm hash from a profile/configuration digest.
@@ -612,11 +656,19 @@ pub fn canonical_page_digest(
     )
 }
 
+/// Domain string of the cross-page order-set commitment.
+const ORDER_SET_DOMAIN: &[u8] = b"dragons-clutch/order-set/v1";
+
 /// Fold every page digest, in page order, into the set-wide order-set identity.
 ///
 /// This is the cross-page commitment: a page cannot be added, dropped,
 /// reordered, or mutated without changing the value every page of the set
 /// stores in [`OrderPageAccount::order_set`].
+///
+/// A set has at most [`MAX_ORDER_PAGES`] pages, which is what sizes the native
+/// preimage array on SBF.  A longer `page_digests` is not a representable order
+/// set; it aborts there rather than committing to a truncated preimage, so no
+/// input produces a digest that disagrees with the portable path.
 pub fn canonical_order_set_id(
     market: MarketId,
     epoch: EpochId,
@@ -624,8 +676,20 @@ pub fn canonical_order_set_id(
     set_order_count: u16,
     page_digests: &[Hash32],
 ) -> Hash32 {
+    fold_order_set_id(market, epoch, page_count, set_order_count, page_digests)
+}
+
+/// Portable first-party fold, retained off-chain as the equivalence oracle.
+#[cfg(not(target_os = "solana"))]
+fn fold_order_set_id(
+    market: MarketId,
+    epoch: EpochId,
+    page_count: u16,
+    set_order_count: u16,
+    page_digests: &[Hash32],
+) -> Hash32 {
     let mut h = Sha256::new();
-    h.update(b"dragons-clutch/order-set/v1");
+    h.update(ORDER_SET_DOMAIN);
     h.update(&market.0);
     h.update(&epoch.0);
     h.update(&page_count.to_le_bytes());
@@ -636,6 +700,45 @@ pub fn canonical_order_set_id(
         i += 1;
     }
     Hash32(h.finish())
+}
+
+/// Assemble the identical preimage for Solana's native hasher wrapper.
+///
+/// Built on SBF and in host unit tests only; the test build proves the slice
+/// assembly equals the portable fold.
+#[cfg(any(target_os = "solana", test))]
+fn native_order_set_id(
+    market: MarketId,
+    epoch: EpochId,
+    page_count: u16,
+    set_order_count: u16,
+    page_digests: &[Hash32],
+) -> Hash32 {
+    let pages = page_count.to_le_bytes();
+    let orders = set_order_count.to_le_bytes();
+    let mut preimage: [&[u8]; 5 + MAX_ORDER_PAGES] = [&[]; 5 + MAX_ORDER_PAGES];
+    preimage[0] = ORDER_SET_DOMAIN;
+    preimage[1] = &market.0;
+    preimage[2] = &epoch.0;
+    preimage[3] = &pages;
+    preimage[4] = &orders;
+    let mut i = 0;
+    while i < page_digests.len() {
+        preimage[5 + i] = &page_digests[i].0;
+        i += 1;
+    }
+    Hash32(solana_sha256_hasher::hashv(&preimage[..5 + page_digests.len()]).to_bytes())
+}
+
+#[cfg(target_os = "solana")]
+fn fold_order_set_id(
+    market: MarketId,
+    epoch: EpochId,
+    page_count: u16,
+    set_order_count: u16,
+    page_digests: &[Hash32],
+) -> Hash32 {
+    native_order_set_id(market, epoch, page_count, set_order_count, page_digests)
 }
 
 /// Check a market/outcome identity pair.
@@ -1944,6 +2047,17 @@ impl OrderPageAccount {
     /// slot rather than a whole page of stack.  The value is identical to
     /// [`canonical_page_digest`] over the concatenated slot bytes and a test
     /// pins that equality.
+    ///
+    /// This one keeps the portable fold on every target, deliberately.  The
+    /// native `hashv` wrapper takes a slice list, so a syscall form would have
+    /// to materialise all [`MAX_ORDERS_PER_PAGE`] re-encoded slots at once —
+    /// `MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES` bytes of frame, which alone
+    /// exceeds Solana's 4 KiB stack frame.  Streaming one slot at a time is the
+    /// only shape that fits, and it is why the on-chain page commitment is
+    /// [`stream::streamed_page_digest`] instead: that path *does* use the
+    /// syscall, over the raw account bytes it never has to re-encode.  Nothing
+    /// on the SBF reach graph calls this method, so the portable implementation
+    /// it folds is link-time dead there.
     pub fn recomputed_page_digest(&self) -> Result<Hash32> {
         let mut h = Sha256::new();
         h.update(ORDER_PAGE_DOMAIN);
@@ -8061,6 +8175,308 @@ mod tests {
                 0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b,
                 0x78, 0x52, 0xb8, 0x55
             ]
+        );
+        assert_eq!(
+            native_digest(b"", &[]).0,
+            got.0,
+            "the native wrapper agrees with the portable path on the empty preimage"
+        );
+    }
+
+    /* --- native-hasher digest equivalence -----------------------------------
+     *
+     * On SBF `digest` and `canonical_order_set_id` hand their preimage to
+     * Solana's native SHA-256 wrapper instead of folding the portable
+     * first-party implementation.  That is a compute change and must never be a
+     * value change: a different digest would silently move every canonical id,
+     * every PDA derived from one, and every page/order-set commitment.
+     *
+     * These tests build both paths in the same host process (the wrapper's
+     * `sha2` backend is a dev-dependency for exactly this) and require
+     * byte-identical output on every shape the crate actually hashes.
+     * ---------------------------------------------------------------------- */
+
+    /// Both digest paths agree on the domain-separated shape, at every part
+    /// count from zero to the compile-time maximum.
+    #[test]
+    fn native_digest_matches_the_portable_digest_on_every_part_count() {
+        // Empty domain, empty parts: the degenerate preimage.
+        assert_eq!(digest(b"", &[]), native_digest(b"", &[]));
+        // Domain only, no parts.
+        let domain = b"dragons-clutch/equivalence/v1";
+        assert_eq!(digest(domain, &[]), native_digest(domain, &[]));
+        // Empty parts inside a non-empty list: `hashv` concatenates, so a
+        // zero-length slice must contribute nothing on either path.
+        assert_eq!(
+            digest(domain, &[&[], &[]]),
+            native_digest(domain, &[&[], &[]])
+        );
+        assert_eq!(
+            digest(domain, &[&[7u8], &[], &[9u8]]),
+            native_digest(domain, &[&[7u8], &[], &[9u8]])
+        );
+        // A single part, and a part that straddles the 64-byte block boundary
+        // the portable implementation buffers against.
+        let long = [0xa5u8; 200];
+        assert_eq!(digest(domain, &[&long]), native_digest(domain, &[&long]));
+        assert_eq!(
+            digest(&long, &[&long, &long]),
+            native_digest(&long, &[&long, &long])
+        );
+        // Ragged widths, so no part length is a multiple of any other.
+        let a = [1u8; 1];
+        let b = [2u8; 31];
+        let c = [3u8; 32];
+        let d = [4u8; 33];
+        let e = [5u8; 64];
+        let f = [6u8; 65];
+        assert_eq!(
+            digest(domain, &[&a, &b, &c, &d, &e, &f]),
+            native_digest(domain, &[&a, &b, &c, &d, &e, &f])
+        );
+        // The widest shape any call site uses: `MAX_DIGEST_PARTS` parts.
+        let parts: [&[u8]; MAX_DIGEST_PARTS] = [
+            &a, &b, &c, &d, &e, &f, &a, &b, &c, &d, &e, &f, &a, &b, &c, &d,
+        ];
+        assert_eq!(digest(domain, &parts), native_digest(domain, &parts));
+        // Concatenation is what both paths commit to, so a re-split of the same
+        // bytes is the same digest and a re-ordering is not.
+        assert_eq!(digest(domain, &[&c, &d]), native_digest(domain, &[&c, &d]));
+        assert_ne!(digest(domain, &[&c, &d]), digest(domain, &[&d, &c]));
+    }
+
+    /// Every public identity constructor that routes through `digest` produces
+    /// the same value on both paths, including the widest one (14 parts).
+    #[test]
+    fn native_digest_matches_the_portable_digest_at_every_call_site() {
+        // Each pair below is the constructor's own preimage, spelled out again
+        // through `native_digest` so a domain string or a part order that drifts
+        // in one place and not the other is a failure here.
+        let market = h(3);
+        let epoch = h(4);
+        let profile = h(5);
+        let realm = h(6);
+
+        assert_eq!(
+            canonical_realm_id(profile, 7),
+            native_digest(
+                b"dragons-clutch/realm/v1",
+                &[&profile.0, &7u64.to_le_bytes()]
+            )
+        );
+        assert_eq!(
+            canonical_market_id(realm, profile, 8),
+            native_digest(
+                b"dragons-clutch/market/v1",
+                &[&realm.0, &profile.0, &8u64.to_le_bytes()]
+            )
+        );
+        assert_eq!(
+            canonical_outcome_id(market, 2),
+            native_digest(b"dragons-clutch/outcome/v1", &[&market.0, &[2u8]])
+        );
+        assert_eq!(
+            canonical_epoch_id(market, 9),
+            native_digest(
+                b"dragons-clutch/epoch/v1",
+                &[&market.0, &9u64.to_le_bytes()]
+            )
+        );
+        assert_eq!(
+            canonical_feed_id(&[0xfe; 40]),
+            native_digest(b"dragons-clutch/feed/v1", &[&[0xfeu8; 40]])
+        );
+        assert_eq!(
+            canonical_terms_digest(&[0x11; 64]),
+            native_digest(b"dragons-clutch/terms/v2", &[&[0x11u8; 64]])
+        );
+        assert_eq!(
+            canonical_price_grid_id(&[0x22; 96]),
+            native_digest(b"dragons-clutch/price-grid/v1", &[&[0x22u8; 96]])
+        );
+        assert_eq!(
+            canonical_candidate_digest(&[0x33; 128]),
+            native_digest(b"dragons-clutch/candidate/v1", &[&[0x33u8; 128]])
+        );
+
+        // The variable-length page preimage: header fields plus a record blob.
+        let records = [0x44u8; 300];
+        assert_eq!(
+            canonical_page_digest(market, epoch, 1, 5, 2, &records),
+            native_digest(
+                ORDER_PAGE_DOMAIN,
+                &[
+                    &market.0,
+                    &epoch.0,
+                    &1u16.to_le_bytes(),
+                    &[5u8, 2u8],
+                    &records,
+                ]
+            )
+        );
+        // Same call, empty record blob: an empty part must vanish identically.
+        assert_eq!(
+            canonical_page_digest(market, epoch, 0, 0, 0, &[]),
+            native_digest(
+                ORDER_PAGE_DOMAIN,
+                &[&market.0, &epoch.0, &0u16.to_le_bytes(), &[0u8, 0u8], &[],]
+            )
+        );
+
+        // The 14-part shape, which is the widest preimage in the crate.
+        let mut prices = [0u64; MAX_OUTCOMES];
+        prices[0] = 1;
+        prices[1] = 2;
+        let mut packed = [0u8; MAX_OUTCOMES * 8];
+        let mut i = 0usize;
+        while i < MAX_OUTCOMES {
+            packed[i * 8..(i + 1) * 8].copy_from_slice(&prices[i].to_le_bytes());
+            i += 1;
+        }
+        let widest = portfolio_settlement::canonical_portfolio_entitlement_id(
+            h(3),
+            h(4),
+            h(5),
+            h(6),
+            h(7),
+            h(8),
+            h(9),
+            h(10),
+            h(11),
+            &prices,
+            1_000,
+            2,
+            5,
+            77,
+        );
+        assert_eq!(
+            widest,
+            native_digest(
+                b"dragons-clutch/portfolio-entitlement/v1",
+                &[
+                    &h(3).0,
+                    &h(4).0,
+                    &h(5).0,
+                    &h(6).0,
+                    &h(7).0,
+                    &h(8).0,
+                    &h(9).0,
+                    &h(10).0,
+                    &h(11).0,
+                    &packed,
+                    &1_000u64.to_le_bytes(),
+                    &[2u8],
+                    &5u64.to_le_bytes(),
+                    &77u128.to_le_bytes(),
+                ]
+            ),
+            "the widest preimage in the crate diverges between the two paths"
+        );
+    }
+
+    /// The cross-page order-set commitment agrees on both paths at every page
+    /// count a set can have, including the empty set.
+    #[test]
+    fn native_order_set_id_matches_the_portable_fold() {
+        let market = h(11);
+        let epoch = h(12);
+        let pages = [h(21), h(22), h(23), h(24)];
+        let mut count = 0;
+        while count <= MAX_ORDER_PAGES {
+            let slice = &pages[..count.min(pages.len())];
+            assert_eq!(
+                canonical_order_set_id(market, epoch, count as u16, 7, slice),
+                native_order_set_id(market, epoch, count as u16, 7, slice),
+                "order-set fold diverges at {count} page digests"
+            );
+            count += 1;
+        }
+        // The header fields are inside the preimage, not just the page list.
+        assert_ne!(
+            canonical_order_set_id(market, epoch, 2, 7, &pages[..2]),
+            canonical_order_set_id(market, epoch, 2, 8, &pages[..2])
+        );
+        assert_ne!(
+            canonical_order_set_id(market, epoch, 2, 7, &pages[..2]),
+            canonical_order_set_id(market, epoch, 3, 7, &pages[..2])
+        );
+        // Page order is committed.
+        let swapped = [pages[1], pages[0]];
+        assert_ne!(
+            canonical_order_set_id(market, epoch, 2, 7, &pages[..2]),
+            canonical_order_set_id(market, epoch, 2, 7, &swapped)
+        );
+    }
+
+    /// The identity values themselves are frozen.
+    ///
+    /// These are the digests the deployed program, every PDA seed, and every
+    /// stored commitment already use.  The expected bytes are not read back
+    /// from either path: they are plain SHA-256 over the documented preimage,
+    /// computed independently, so this pins the *value* and not merely the
+    /// agreement of two implementations that could both have moved.
+    #[test]
+    fn canonical_identity_values_are_frozen() {
+        let realm = canonical_realm_id(h(1), 1);
+        assert_eq!(
+            realm.0,
+            [
+                0xd8, 0xe1, 0x2b, 0x33, 0x24, 0x0e, 0x86, 0x6a, 0xdf, 0xac, 0xae, 0xf3, 0x93, 0x6c,
+                0x94, 0x7d, 0xd1, 0x7c, 0x93, 0x4e, 0xaa, 0xc2, 0xe2, 0xb9, 0xb9, 0xe2, 0xe0, 0x01,
+                0xc4, 0x26, 0x3a, 0x30
+            ],
+            "SHA-256(\"dragons-clutch/realm/v1\" || [0x01; 32] || 1u64le) moved"
+        );
+
+        let page = canonical_page_digest(h(3), h(4), 1, 5, 2, &[0x44; 300]);
+        assert_eq!(
+            page.0,
+            [
+                0xbf, 0x24, 0x44, 0x8c, 0xae, 0xbd, 0xc5, 0xb2, 0x13, 0xa8, 0x9d, 0x78, 0x49, 0x4b,
+                0x9e, 0xe0, 0x98, 0xd5, 0xea, 0xb7, 0xf7, 0x41, 0xef, 0xb8, 0x07, 0x8d, 0x89, 0x09,
+                0x7b, 0xee, 0x0e, 0x39
+            ],
+            "the order-page commitment moved"
+        );
+
+        let set = canonical_order_set_id(h(3), h(4), 2, 7, &[h(21), h(22)]);
+        assert_eq!(
+            set.0,
+            [
+                0x1f, 0x23, 0x1d, 0xd7, 0x5f, 0x5a, 0x06, 0x3f, 0xed, 0x43, 0x59, 0x5f, 0x11, 0x3b,
+                0x8c, 0xc9, 0x78, 0x8a, 0x09, 0x3b, 0x30, 0x72, 0x3f, 0xae, 0x2e, 0x32, 0x9a, 0x8d,
+                0x15, 0x04, 0x7d, 0x89
+            ],
+            "the cross-page order-set commitment moved"
+        );
+
+        let mut prices = [0u64; MAX_OUTCOMES];
+        prices[0] = 1;
+        prices[1] = 2;
+        let entitlement = portfolio_settlement::canonical_portfolio_entitlement_id(
+            h(3),
+            h(4),
+            h(5),
+            h(6),
+            h(7),
+            h(8),
+            h(9),
+            h(10),
+            h(11),
+            &prices,
+            1_000,
+            2,
+            5,
+            77,
+        );
+        assert_eq!(
+            entitlement.0,
+            [
+                0x39, 0xbc, 0xc7, 0xae, 0x59, 0x88, 0xf7, 0x4e, 0x44, 0x71, 0x5f, 0xc4, 0xa3, 0x53,
+                0x2f, 0x3d, 0x95, 0x00, 0x07, 0xd6, 0x4f, 0xf0, 0xb4, 0xf1, 0x1c, 0x3c, 0xbe, 0xa6,
+                0xb5, 0x8f, 0x4a, 0x9e
+            ],
+            "the portfolio-entitlement identity moved"
         );
     }
 
