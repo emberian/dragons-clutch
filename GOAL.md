@@ -31,23 +31,18 @@ ready in degg-research.
 
 ## Next 3 moves
 
-1. Wave 1 (running): batch-fold measurement + quantum 10k as reseal-cycle A
-   on the CURRENT ELF identity (evidence-only, no program change); frame
-   Tier 0 (ten opt-z overflowers) and Tier 1 (portfolio_settlement
-   out-params) on isolated worktree branches; Tier 2 portfolio-clearing
-   design (the eight joins onto relation_v1_stream + clearing.rs) planned
-   read-only in parallel. Persvati attestation + fee-econ phase 1 lanes
-   still converging.
-2. Wave 2: merge Tier 0/1 after gates, implement Tier 2 joins, classify the
-   six V3 terminal families, then ONE combined reseal-cycle B for whatever
-   changed the program.
-3. Deploy to devnet the moment the deployer is funded (~9.9 SOL); keep the
-   collector polling.
-
-In flight: final 100-gate manifest emission for the syscall reseal, then
-Persvati attestation of the new identity. Owed to ember: the admission-shape
-proposal (quantum 50k -> 10k saves 6.8% cold outlay per work item, report-only
-in the reseal lane's output) and the postmark doorstep (4 threads).
+1. Take ember's morning decisions: the T2-5 GENERAL_CLEARING_POLICY_V1
+   freeze, the RevenuePolicy V1 design (six queued decisions in its
+   section 11), the walk's admission treatment (sealed evidence-only,
+   decision_owner: ember), and the R2 runtime-capabilities branch merge
+   (parked, needs rebase + a reseal ride-along).
+2. Tier 2 wave 3 when blessed: T2-7 selection (candidate window closure,
+   FinalizeSelection over VERIFIED candidates) then T2-8 entitlements
+   (receipts, FinalPot, generalized SettlePage consumption — Tier 1's
+   out-params are the prerequisite and are merged).
+3. Deploy to devnet the moment the deployer is funded (collector polling;
+   the walk-era default ELF needs ~13.3 SOL at 1,785,904 B — or the opt-z
+   option at ~-23% if CU economics are accepted).
 
 ## Ember decision queue (2026-08-19 morning)
 
@@ -71,6 +66,23 @@ in the reseal lane's output) and the postmark doorstep (4 threads).
    Aug 24/24/27, perpetuals RFC Aug 26.
 
 ## Done log (2026-08-19 session)
+
+- CYCLE C SEALED (liveness be24ded, manifest 7e6066f at 100/100,
+  post-commit check OK, pushed; attestation lane running): root
+  d692954949d57db22, 28 files, 12 measurement families — the walk's own CU
+  evidence sealed as UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY with derive()
+  refusing any walk family that loses the declaration, decision_owner:
+  ember. Terminal 45 rows (new: epoch.window 84 B, closed by no handler —
+  TerminalClosure stays the ranked blocker). Existing-family drift <=0.8%
+  except blank-bank creation (+2-10%, noted honestly, no quote derives).
+  Two batch quotes moved one quantum. NEW RELOCATION FINDING, mechanism
+  pinned exactly: relocated-Cargo-home is PATH_SENSITIVE again via THREE
+  registry-crate panic-Location strings (solana-address/account-info/
+  program-entrypoint) — relative at ~/.cargo, absolute when relocated; the
+  canonical artifact embeds zero registry paths; supersedes the two prior
+  seals' unqualified byte-identity, alongside the workspace path-length
+  bound. Verus stream excluded-source digest re-recorded once more (T2-6
+  driver cursors; scope unchanged).
 
 - T2-6 MERGED — PORTFOLIO ORDERS CLEAR ON-CHAIN (87fd342): the general
   epoch lifecycle + streaming walk, tags 49-53. THE HEADLINE: a 40-order,
