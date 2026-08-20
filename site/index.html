@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Clutch — Dragon&#8217;s Clutch</title>
+<meta name="description" content="Dragon's Clutch is a machine-native language for beliefs about bounded quantities: typed outcome claims, exact integer clearing, conservation to the atom.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+  <div class="site-inner">
+    <a class="site-name" href="index.html">Dragon&#8217;s Clutch</a>
+    <nav class="pages" aria-label="Pages">
+      <a href="index.html" aria-current="page">The Clutch</a>
+      <a href="shape.html">The Shape of a Claim</a>
+      <a href="clearing.html">The Clearing</a>
+      <a href="ledger.html">The Ledger</a>
+      <a href="risk.html">The Price of Risk</a>
+      <a href="machines.html">For the Machines</a>
+      <a href="evidence.html">The Evidence</a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+
+<p class="kicker">What this is</p>
+<h1>A market that can hold a shape</h1>
+
+<p>Dragon&#8217;s Clutch is a machine-native language for beliefs about bounded
+quantities. A market here is not a yes/no question with a referee; it is a
+frozen basis of claims — from binary bins up through degree-three smooth
+splines — cleared by an exact integer batch relation, settled under
+conservation identities that hold to the atom, on a substrate that refuses
+rather than approximates. This site explains what that means, why the
+algorithms are powerful, and why it matters more as the traders get more
+mechanical. It never argues &#8220;use this.&#8221; It argues &#8220;understand
+this.&#8221;</p>
+
+<h2>A question with a frozen answer procedure</h2>
+
+<p>Every market freezes its entire answer procedure at creation: which data
+series counts, over what window, under which statistic, with which arithmetic
+and rounding rule, and what happens when the evidence is bad. No reporter
+chooses the value. No committee interprets. A resolution transaction either
+carries uniquely qualifying authenticated evidence or it is rejected — and
+when the frozen conditions cannot be met, the market follows its frozen
+failure rule rather than granting anyone discretion (PROJECT.md &#167;6).
+Refusal over discretion is the design default at every boundary of this
+system: hostile bytes, fractional lots, ambiguous evidence, and unadmitted
+data sources are refused with typed errors before anything mutates.</p>
+
+<h2>Deposit once, hold everything: the Clutch</h2>
+
+<p>To enter a market you deposit its collateral into that market&#8217;s
+<strong>Hoard</strong> — a vault whose principal pays claimants and nobody
+else — and receive claims called <strong>Eggs</strong>. A
+<strong>Clutch</strong> — one of every Egg — is worth exactly one collateral
+unit no matter how the market resolves, because the basis weights sum to one
+at every admissible value. That makes complete sets money: mint them by
+depositing, melt them by merging, park cash in them without taking a
+view.</p>
+
+<aside class="lane lane-degen"><span class="tag">&#10216;degen&#10217;</span>
+The complete set is your risk-free exit and your inventory. Hold
+&#8220;everything except my view&#8221; and you&#8217;re flat — no funding
+rate, no liquidation price, redeemable at par before or after
+resolution.</aside>
+
+<aside class="lane lane-builder"><span class="tag">&#10216;builder&#10217;</span>
+<code>split</code> adds <code>+q</code> to every outcome balance and debits
+<code>q</code> cash; <code>merge</code> is its exact inverse; both are pure
+reclassifications inside the pooled Hoard — no token moves
+(<code>crates/clutch-kernel</code>; accounting table, CURRENT_TRUTH.md
+&#167;5).</aside>
+
+<aside class="lane lane-scholar"><span class="tag">&#10216;scholar&#10217;</span>
+This is unitality of the payoff operator: <code>&#934;(1) = 1</code> under
+H2, so <code>span(1)</code> is the risk-free direction and required
+collateral moves in lockstep along it — Proposition 4 characterizes these as
+<em>exactly</em> the counterparty-free value-preserving moves
+(docs/research/RISK_SUMMED_POSITIONS.md &#167;1.1, &#167;1.4).</aside>
+
+<h2>The one promise</h2>
+
+<p>The protocol is not a leveraged exchange. Its central promise is stated in
+the project brief, and it is stronger and narrower than the promises trading
+venues usually make:</p>
+
+<blockquote><p>For every reachable protocol state, the market-local Hoard
+covers the maximum payout allowed by the market&#8217;s immutable terms.
+(PROJECT.md &#167;1)</p></blockquote>
+
+<p>No debt, no margin call, no liquidation order, no insurance deficit, no
+socialized loss — not as a risk policy that a committee tunes, but as
+geometry: every claim is prepaid at its worst case, so the states in which a
+venue would need those machines are unreachable. The pages that follow show
+what that geometry costs and what it buys.
+<a class="badge" href="evidence.html#host-tested">HOST-TESTED + PROVED-MODEL
+— CURRENT_TRUTH.md &#167;4, core claim kernel row</a></p>
+
+<section class="friday">
+<h2>The Friday clutch &#183; stage 1 of 7 &#183; born</h2>
+<p>One market, followed across every page of this site: <strong>a degree-one
+smooth claim market on the time-weighted average price of SOL/USD over one
+frozen week.</strong> Eight knots from $100 to $240, twenty dollars apart;
+denominator <code>D&nbsp;=&nbsp;64</code>; price scale
+<code>S&nbsp;=&nbsp;10,000</code>. Eight Eggs — eight hat-shaped claims,
+each paying in proportion to how close the week&#8217;s TWAP lands to its
+knot.</p>
+<figure>
+<div class="figwrap">
+<svg viewBox="0 0 640 150" width="640" height="150" role="img"
+     aria-label="Eight overlapping triangular hat functions on knots from 100 to 240 dollars; the hat at 160 dollars is highlighted.">
+  <g fill="none" stroke="var(--ink-3)" stroke-width="1.5">
+    <path d="M40,30 L120,100"/>
+    <path d="M40,100 L120,30 L200,100"/>
+    <path d="M120,100 L200,30 L280,100"/>
+    <path d="M280,100 L360,30 L440,100"/>
+    <path d="M360,100 L440,30 L520,100"/>
+    <path d="M440,100 L520,30 L600,100"/>
+    <path d="M520,100 L600,30"/>
+  </g>
+  <path d="M200,100 L280,30 L360,100" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+  <line x1="40" y1="100" x2="600" y2="100" stroke="var(--border)" stroke-width="1"/>
+  <g font-family="system-ui, sans-serif" font-size="11" fill="var(--ink-3)" text-anchor="middle">
+    <text x="40" y="118">$100</text>
+    <text x="120" y="118">$120</text>
+    <text x="200" y="118">$140</text>
+    <text x="280" y="118" fill="var(--accent)" font-weight="700">$160</text>
+    <text x="360" y="118">$180</text>
+    <text x="440" y="118">$200</text>
+    <text x="520" y="118">$220</text>
+    <text x="600" y="118">$240</text>
+    <text x="320" y="140">the eight Eggs of the Friday clutch &#8212; at every price they sum to exactly one</text>
+  </g>
+</svg>
+</div>
+<figcaption>The Friday clutch&#8217;s basis. Each hat pays its full weight if
+the TWAP lands exactly on its knot and fades linearly to zero at the
+neighbors. The $160 Egg is the one Maya cares about.</figcaption>
+</figure>
+<p><strong>Maya</strong> (a person) thinks SOL ends the week near $160. She
+does not want a side; she wants that <em>shape</em>, and this market can
+hold it. <strong>Theo</strong> (a person) will take the other side.
+<strong>Sigma</strong> (a solver bot — deliberately an AI) will do the heavy
+computing when the clearing comes. Their story advances one lifecycle stage
+per page.</p>
+<p class="fiction">The Friday clutch is an illustration. No such market
+exists anywhere. Its arithmetic is real — every number is generated by a
+checked script against the repository&#8217;s own constants
+(docs/site-plan/friday_clutch_check.py) — but its existence is fiction, and
+each stage carries the evidence badge of the mechanism it mirrors.</p>
+</section>
+
+<h2>Where you are</h2>
+
+<p>What you are reading about is a local research prototype with an unusual
+honesty apparatus. Throughout this site, load-bearing claims carry a small
+capsule naming the exact kind of evidence behind them, in the
+project&#8217;s own deliberately nontransitive vocabulary — a
+machine-checked theorem is never allowed to impersonate runtime evidence,
+and a green test bench is never allowed to impersonate a deployment. Follow
+any badge to <a href="evidence.html">The Evidence</a>, where the vocabulary
+is defined and the single <a href="evidence.html#scope">scope note</a>
+lives. The corpus is unusually honest about what does not exist; this
+site&#8217;s charisma comes from that honesty, not despite it.</p>
+
+</main>
+<footer class="site">
+  <div class="foot-inner">
+    <span>Dragon&#8217;s Clutch — a literate explanation of a research prototype</span>
+    <nav class="pn" aria-label="Page order">
+      <a href="shape.html">Next: The Shape of a Claim &#8594;</a>
+    </nav>
+  </div>
+</footer>
+<script src="lanes.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>For the Machines — Dragon&#8217;s Clutch</title>
+<meta name="description" content="As AIs trade, the precision ceiling of what a market can say becomes the binding constraint. A typed claim language raises it, in a form agents can consume without trusting an operator.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+  <div class="site-inner">
+    <a class="site-name" href="index.html">Dragon&#8217;s Clutch</a>
+    <nav class="pages" aria-label="Pages">
+      <a href="index.html">The Clutch</a>
+      <a href="shape.html">The Shape of a Claim</a>
+      <a href="clearing.html">The Clearing</a>
+      <a href="ledger.html">The Ledger</a>
+      <a href="risk.html">The Price of Risk</a>
+      <a href="machines.html" aria-current="page">For the Machines</a>
+      <a href="evidence.html">The Evidence</a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+
+<p class="kicker">The AI thesis</p>
+<h1>For the machines</h1>
+
+<h2>A market is a channel, and the instrument is its bandwidth</h2>
+
+<p>Markets are how agents with different information reach one number. What
+bounds the <em>resolution</em> of that number is not the agents — it is the
+instrument language. A binary market lets a trading model that has computed
+an entire probability distribution say exactly one bit of it. Every
+sophistication upgrade on the agent&#8217;s side — better data, better
+calibration, a real density instead of a hunch — hits the same ceiling: the
+market cannot hold the belief the agent actually has. As more of the
+participants become machines that genuinely have such beliefs, the
+precision ceiling of what a market can <em>say</em> becomes the binding
+constraint on what the market can <em>know</em>.</p>
+
+<h2>Here, the language is typed</h2>
+
+<p>In Dragon&#8217;s Clutch a belief is a coefficient vector over a frozen
+basis, and the basis has a degree — a precision order. Degree zero says
+&#8220;which cell.&#8221; Degree one says &#8220;this piecewise-linear
+shape.&#8221; An agent that upgrades its model from above/below to a full
+density upgrades its <em>order</em> — same substrate, same custody
+identity, same conservation laws, no new venue and no new trust
+assumptions. The vector is not an approximation bolted onto a binary
+market; it is the native word (PROJECT.md &#167;1;
+CURRENT_TRUTH.md &#167;3).</p>
+
+<h2>The read side is native too</h2>
+
+<p>What an agent gets back is as typed as what it says. The cleared price
+vector <em>is</em> the market&#8217;s implied density at grid resolution —
+<code>p&#7522;/(S&#183;g)</code>, read directly, because hat claims are
+butterflies and Breeden&#8211;Litzenberger arrives pre-inverted. The
+implied forward is one portfolio quote. There is no smile to fit, no
+inversion step, no indexer of record whose database you must trust: the
+authoritative market state is the on-chain vector itself, and any client —
+human or machine — recomputes every derived read from public bytes.
+<a class="badge" href="evidence.html#paper-proof">paper proof —
+DUAL_IS_THE_MEASURE.md &#167;7.3, &#167;9.1</a></p>
+
+<aside class="lane lane-degen"><span class="tag">&#10216;degen&#10217;</span>
+Your bot doesn&#8217;t scrape a dashboard or reverse-engineer a smile. The
+chain state <em>is</em> the density. If its model disagrees with the curve,
+the disagreement is already denominated in tradable units.</aside>
+
+<h2>The work is permissionless, and verified rather than trusted</h2>
+
+<p>Sigma — the solver in this site&#8217;s story — is not an operator, an
+oracle, or a privileged matcher. It is one competitor in an open job:
+anyone may compute a clearing and submit it, and the chain re-verifies
+every byte of every candidate exactly, keeping the best valid submitted
+one. Observation, repair, finalization, and cleanup are likewise paid
+public instructions; nothing requires trusting an operator because there
+is not one to trust (PROJECT.md &#167;8). For an autonomous agent this is
+the difference between integrating a venue and auditing a counterparty:
+the venue&#8217;s promises are checkable computations, not a terms-of-service
+page.</p>
+
+<aside class="lane lane-builder"><span class="tag">&#10216;builder&#10217;</span>
+The solver&#8217;s interface is the candidate wire format plus the frozen
+book; the verifier&#8217;s is the staged relation
+(crates/clutch-batch/src/relation_v1.rs, relation_v1_stream.rs). A better
+solver wins by scoring, never by access.</aside>
+
+<h2>Refusal-first is what makes it agent-safe</h2>
+
+<p>Before you point an autonomous trader at a venue, you want to know what
+happens at the edges. Here the edges refuse: exact integer arithmetic with
+no silent rounding, hostile-byte parsing at every boundary, fractional
+lots returned untouched with a typed error, and a clearing that
+<em>lapses</em> — clears nothing — rather than publish a number without a
+certificate. A system that fails by refusing is a system an agent can
+reason about; a system that fails by improvising is not. Even the
+project&#8217;s honesty is machine-consumable: the claim-plane vocabulary
+this site&#8217;s badges use is itself a typed, checkable structure — an
+agent can read what plane a claim lives on the same way you are about to
+on <a href="evidence.html">the Evidence page</a>.</p>
+
+<aside class="lane lane-scholar"><span class="tag">&#10216;scholar&#10217;</span>
+The two failure modes of the clearing — refusal of an uncertified
+candidate and lapse of an uncertifiable book — jointly guarantee the venue
+never publishes a non-measure at degree &#8804; 1: what policy changes is
+only whether the published measure also certifies optimality
+(DUAL_IS_THE_MEASURE.md &#167;7.5).</aside>
+
+<section class="friday">
+<h2>The Friday clutch &#183; stage 6 of 7 &#183; who traded it</h2>
+<p>Two humans and a machine, each doing what they are best at. Maya had a
+shaped belief and a market that could hold it. Theo made the other side.
+Sigma did the search — the one job the chain refuses to do — and was paid
+in nothing but the right to have its work verified and selected. Notice
+what Sigma never needed: an API key, an operator&#8217;s blessing, or
+anyone&#8217;s trust. And notice what Maya never needed: to know or care
+that her counterparty&#8217;s clearing was computed by an AI, because the
+verdict was recomputed from bytes either way.</p>
+<p class="fiction">Illustration — no such market exists. The mirrored
+mechanism: permissionless candidate submission with full on-chain
+re-verification, in laboratory bank evidence.
+<a class="badge" href="evidence.html#sbf-executed">SBF-EXECUTED &#183; bank
+&#183; UNPROMOTED — CURRENT_TRUTH.md &#167;4</a></p>
+</section>
+
+</main>
+<footer class="site">
+  <div class="foot-inner">
+    <span><a href="evidence.html#scope">Scope note</a></span>
+    <nav class="pn" aria-label="Page order">
+      <a href="risk.html">&#8592; The Price of Risk</a>
+      <a href="evidence.html">Next: The Evidence &#8594;</a>
+    </nav>
+  </div>
+</footer>
+<script src="lanes.js" defer></script>
+</body>
+</html>

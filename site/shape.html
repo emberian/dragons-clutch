@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Shape of a Claim — Dragon&#8217;s Clutch</title>
+<meta name="description" content="From binary bins to smooth spline claims: why a coefficient vector over a partition-of-unity basis is a better sentence than yes/no.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+  <div class="site-inner">
+    <a class="site-name" href="index.html">Dragon&#8217;s Clutch</a>
+    <nav class="pages" aria-label="Pages">
+      <a href="index.html">The Clutch</a>
+      <a href="shape.html" aria-current="page">The Shape of a Claim</a>
+      <a href="clearing.html">The Clearing</a>
+      <a href="ledger.html">The Ledger</a>
+      <a href="risk.html">The Price of Risk</a>
+      <a href="machines.html">For the Machines</a>
+      <a href="evidence.html">The Evidence</a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+
+<p class="kicker">Why the algorithms are powerful, part 1</p>
+<h1>The shape of a claim</h1>
+
+<h2>Degree zero: every prediction market you already know</h2>
+
+<p>A degree-zero market divides its question into exhaustive, disjoint,
+ordered bins. Exactly one bin wins. This is every prediction market you have
+ever used, and for elections it is the right shape — the world really does
+pick one cell. For prices it is a lie with good manners: the world resolves
+to a number on a continuum, and the bin structure converts your belief about
+that number into a bet on which side of an arbitrary boundary it lands. Hold
+the &#8220;$140&#8211;160&#8221; bin and a resolution at $159.90 pays you in
+full; at $160.10 you get nothing. Your P&amp;L cliff-edges at a line somebody
+drew when they created the market.</p>
+
+<h2>Climb the ladder</h2>
+
+<p>Degrees one through three replace the bins with open-clamped B-spline
+Eggs: overlapping claims with local support, never negative, summing exactly
+to one at every admissible value. That last property — partition of unity —
+is not a design intention; it is a machine-checked theorem about the emitted
+basis.
+<a class="badge" href="evidence.html#proved-model">PROVED-MODEL —
+CURRENT_TRUTH.md &#167;3; lean/DragonsClutch/BSpline.lean</a>
+Payout now degrades <em>continuously</em> in the resolved value. That
+changes the manipulation economics too: nudging the feed near a boundary
+buys the manipulator value proportional to the nudge — not a full unit per
+straddled holder, which is what the same nudge is worth on any bins venue
+(docs/research/RISK_SUMMED_POSITIONS.md &#167;4.1).</p>
+
+<figure>
+<div class="figwrap">
+<svg viewBox="0 0 640 350" width="640" height="350" role="img"
+     aria-label="Three rows: a degree-zero bin claim with a payoff cliff at 160 dollars; a degree-one hat claim whose payoff degrades continuously; sketched degree two and three bumps labeled proved but refused at admission.">
+  <g font-family="system-ui, sans-serif" font-size="11" fill="var(--ink-3)">
+    <text x="40" y="16" font-weight="700" fill="var(--ink-2)">degree 0 &#8212; one winner, cliff edges</text>
+    <text x="40" y="136" font-weight="700" fill="var(--ink-2)">degree 1 &#8212; hats, continuous payout</text>
+    <text x="40" y="256" font-weight="700" fill="var(--ink-2)">degrees 2&#8211;3 &#8212; proved as exact constructions; refuse at terms admission</text>
+  </g>
+  <!-- row 1: degree 0 bin [140,160] -->
+  <line x1="40" y1="100" x2="600" y2="100" stroke="var(--border)"/>
+  <path d="M40,100 L200,100 L200,40 L280,40 L280,100 L600,100" fill="none" stroke="var(--accent)" stroke-width="2"/>
+  <circle cx="278" cy="40" r="3" fill="var(--accent)"/>
+  <circle cx="282" cy="100" r="3" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+  <g font-family="system-ui, sans-serif" font-size="10" fill="var(--ink-3)">
+    <text x="240" y="34" text-anchor="middle">the $140&#8211;160 bin</text>
+    <text x="292" y="86">$160.10 pays zero</text>
+    <text x="200" y="114" text-anchor="middle">$140</text>
+    <text x="280" y="114" text-anchor="middle">$160</text>
+  </g>
+  <!-- row 2: degree 1 hat at 160 -->
+  <line x1="40" y1="220" x2="600" y2="220" stroke="var(--border)"/>
+  <path d="M200,220 L280,160 L360,220" fill="none" stroke="var(--accent)" stroke-width="2"/>
+  <line x1="293.6" y1="220" x2="293.6" y2="170.2" stroke="var(--ink-3)" stroke-dasharray="3 3"/>
+  <circle cx="293.6" cy="170.2" r="3" fill="var(--accent)"/>
+  <g font-family="system-ui, sans-serif" font-size="10" fill="var(--ink-3)">
+    <text x="240" y="154" text-anchor="middle">the $160 Egg</text>
+    <text x="302" y="180">TWAP $163.40 &#8594; weight 53/64</text>
+    <text x="200" y="234" text-anchor="middle">$140</text>
+    <text x="280" y="234" text-anchor="middle">$160</text>
+    <text x="360" y="234" text-anchor="middle">$180</text>
+  </g>
+  <!-- row 3: degree 2/3 sketch -->
+  <line x1="40" y1="330" x2="600" y2="330" stroke="var(--border)"/>
+  <path d="M180,330 Q280,250 380,330" fill="none" stroke="var(--ink-3)" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <path d="M260,330 Q380,264 500,330" fill="none" stroke="var(--ink-3)" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <g font-family="system-ui, sans-serif" font-size="10" fill="var(--ink-3)">
+    <text x="320" y="286" text-anchor="middle">smooth bumps; interior peaks below 1</text>
+  </g>
+</svg>
+</div>
+<figcaption>The degree ladder on the same question. Degree zero pays a cliff;
+degree one pays a slope; degrees two and three exist as machine-checked basis
+constructions and currently refuse at terms admission — the honesty is part
+of the diagram.
+<a class="badge" href="evidence.html#proved-model">PROVED-MODEL —
+CURRENT_TRUTH.md &#167;3</a></figcaption>
+</figure>
+
+<aside class="lane lane-scholar"><span class="tag">&#10216;scholar&#10217;</span>
+H1/H2: every basis weight is nonnegative and bounded by the denominator, and
+the weights sum exactly to it at every admissible value. Solvency,
+complete-set par value, and price normalization all descend from these two
+hypotheses (docs/research/RISK_SUMMED_POSITIONS.md &#167;1.1;
+lean/DragonsClutch/BSpline.lean).</aside>
+
+<h2>Buy the density</h2>
+
+<p>A prediction market asks you a yes/no question. A perp asks you a
+direction. Both throw away almost everything you actually believe. If you
+think SOL ends the week <em>near</em> $160 — probably between $140 and $180,
+almost certainly not above $220 — a binary market makes you round that
+belief to one bit, and a perp makes you convert it into a leverage number
+and a liquidation price you didn&#8217;t want.</p>
+
+<p>Dragon&#8217;s Clutch asks a better question: <em>what shape is your
+belief?</em></p>
+
+<p>The Friday clutch has eight Eggs — eight hat-shaped claims, one per knot
+from $100 to $240. Each hat pays its full weight if the week&#8217;s
+time-weighted average price lands exactly on its knot, and fades linearly to
+zero at the neighbors. The hats overlap, none is ever negative, and at every
+admissible price they sum to exactly one — which is why one of each, a
+complete set, is worth exactly one collateral unit no matter what happens.
+That &#8220;sums to exactly one&#8221; is one of 184 theorems the project
+maintains at zero <code>sorry</code>.
+<a class="badge" href="evidence.html#proved-model">PROVED-MODEL —
+CURRENT_TRUTH.md &#167;3; lean/DragonsClutch/BSpline.lean</a></p>
+
+<p>Maya&#8217;s belief is a tent: nothing below $120, rising to a peak at
+$160, gone by $200. She writes it as a vector —
+<code>(0,&#8202;0,&#8202;1,&#8202;2,&#8202;1,&#8202;0,&#8202;0,&#8202;0)</code>
+— and that vector <em>is</em> her order. One asset, one atomic fill, one
+price. No legging into three strikes, no leg risk, no margin rule to trust:
+the collateral her tent requires is its worst-case payout, read directly off
+the vector, and settling one leg of anything can never spring a margin call
+on the rest, because there are no legs and there are no margin calls.</p>
+
+<p>Here is the part that should make the academics sit up. On an options
+venue, the market&#8217;s implied probability density is something you
+<em>reconstruct</em>: fit a smile, differentiate twice, pray. Here the
+reconstruction is pre-inverted. A hat claim&#8217;s payoff is algebraically
+identical to a butterfly spread, so the cleared price of the $160 Egg
+already <em>is</em> the second difference of call prices — the
+market&#8217;s probability mass near $160, quoted directly, tradable
+directly. When the batch clears at prices <code>p</code>, dividing by the
+knot gap hands you the density histogram. Nobody computes the market&#8217;s
+belief after the fact; the clearing <em>publishes</em> it, exactly, as a
+side effect of being verified.
+<a class="badge" href="evidence.html#paper-proof">paper proof —
+docs/research/DUAL_IS_THE_MEASURE.md &#167;7.3</a></p>
+
+<figure>
+<div class="figwrap">
+<svg viewBox="0 0 640 200" width="640" height="200" role="img"
+     aria-label="A hat basis function drawn as a butterfly spread across strikes at 140, 160 and 180 dollars, with the second-difference identity annotated.">
+  <line x1="40" y1="150" x2="600" y2="150" stroke="var(--border)"/>
+  <path d="M120,150 L200,150 L320,60 L440,150 L520,150" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+  <g font-family="system-ui, sans-serif" font-size="10" fill="var(--ink-3)">
+    <text x="200" y="166" text-anchor="middle">$140 &#183; long 1 call</text>
+    <text x="320" y="166" text-anchor="middle">$160 &#183; short 2 calls</text>
+    <text x="440" y="166" text-anchor="middle">$180 &#183; long 1 call</text>
+    <text x="320" y="46" text-anchor="middle" fill="var(--accent)" font-weight="700">the $160 Egg &#8801; the $140/160/180 butterfly &#247; g</text>
+  </g>
+  <g font-family="ui-monospace, monospace" font-size="12" fill="var(--ink-2)">
+    <text x="320" y="192" text-anchor="middle">p&#8321;&#8326;&#8320;/S = [C($140) &#8722; 2&#183;C($160) + C($180)] / g</text>
+  </g>
+  <circle cx="200" cy="150" r="3" fill="var(--ink-3)"/>
+  <circle cx="320" cy="60" r="3" fill="var(--accent)"/>
+  <circle cx="440" cy="150" r="3" fill="var(--ink-3)"/>
+</svg>
+</div>
+<figcaption>Breeden&#8211;Litzenberger, pre-inverted: the hat basis is the
+butterfly basis, so the claim&#8217;s cleared price is already the discrete
+second difference of call prices. No inversion step exists in the pipeline
+because none is needed.
+<a class="badge" href="evidence.html#paper-proof">paper proof —
+DUAL_IS_THE_MEASURE.md &#167;7.3</a></figcaption>
+</figure>
+
+<aside class="lane lane-degen"><span class="tag">&#10216;degen&#10217;</span>
+You can finally own &#8220;it pins $160&#8221; as one position with defined
+risk and no liquidation price. The whole curve is a quote board: cheap hats
+are where the market thinks it won&#8217;t land. Disagree? That&#8217;s the
+trade.</aside>
+
+<aside class="lane lane-builder"><span class="tag">&#10216;builder&#10217;</span>
+The tent order travels as a coefficient array over the frozen basis; the
+evaluator is safe, <code>no_std</code>, allocation-free, float-free
+exact-rational Rust, and eight Lean-computed fixtures match its production
+bytes while five deliberately broken variants fail
+(crates/clutch-bspline; CURRENT_TRUTH.md &#167;3).</aside>
+
+<aside class="lane lane-scholar"><span class="tag">&#10216;scholar&#10217;</span>
+Prices of a complete basis live on the scaled simplex; at degree &#8804; 1
+every simplex point is the moment vector of an explicit representing measure
+<code>Q* = &#931; (p&#7522;/S)&#183;&#948;<sub>t&#7522;</sub></code>, so
+&#8220;implied density at grid resolution&#8221; is exact language, not
+metaphor (DUAL_IS_THE_MEASURE.md &#167;7.2, Thm 7.1).</aside>
+
+<h2>The truth about the top rungs</h2>
+
+<p>Degrees two and three are real: the clamped rational constructions are
+machine-checked in the same Lean development, exact split distances, local
+support, solvency and all.
+<a class="badge" href="evidence.html#proved-model">PROVED-MODEL —
+CURRENT_TRUTH.md &#167;3</a>
+They also currently refuse at terms admission, and the refusal is not
+bureaucratic caution — at degree &#8805; 2 the mathematics genuinely
+changes. Interior quadratic basis functions peak at 3/4 (cubics at 2/3), so
+there are price vectors that pass the simplex gate yet are no probability
+measure&#8217;s moments, and the corpus exhibits the explicit, executable
+arbitrage against one: split four complete sets, sell four units of the
+peaked claim at its limit, keep the complement — zero net outlay, at least
+one collateral unit at every resolution. At degree &#8804; 1 the same
+position can pay exactly zero, so no arbitrage exists — which is precisely
+why the simplex gate <em>is</em> the no-arbitrage condition on the tradable
+span at degrees zero and one, and strictly weaker than it above.
+<a class="badge" href="evidence.html#paper-proof">paper proof —
+DUAL_IS_THE_MEASURE.md &#167;7.4</a>
+The ladder is honest about where it ends.</p>
+
+<p>One honest edge: eight knots is a coarse curve, the grid is frozen at
+creation, and payoffs are bounded at the edges — no unbounded upside exists
+here, by construction. What you get for that is a market that can tell you,
+to the atom, what it believes.</p>
+
+<section class="friday">
+<h2>The Friday clutch &#183; stage 2 of 7 &#183; shaped</h2>
+<p>Maya submits her tent —
+<code>(0,&#8202;0,&#8202;1,&#8202;2,&#8202;1,&#8202;0,&#8202;0,&#8202;0)</code>,
+1,600 lots — as one atomic portfolio order. Theo deposits, splits 3,200
+complete sets, and posts the matching sells into the same epoch. Nobody has
+traded yet; the epoch is gathering its book. The portfolio-order mechanism
+this mirrors placed, froze, and cleared real coefficient-vector orders in
+laboratory bank evidence.
+<a class="badge" href="evidence.html#sbf-executed">SBF-EXECUTED &#183; bank
+&#183; UNPROMOTED — CURRENT_TRUTH.md &#167;4; GOAL.md T2-6</a></p>
+<p class="fiction">Illustration — no such market exists; arithmetic checked
+by docs/site-plan/friday_clutch_check.py.</p>
+</section>
+
+</main>
+<footer class="site">
+  <div class="foot-inner">
+    <span><a href="evidence.html#scope">Scope note</a></span>
+    <nav class="pn" aria-label="Page order">
+      <a href="index.html">&#8592; The Clutch</a>
+      <a href="clearing.html">Next: The Clearing &#8594;</a>
+    </nav>
+  </div>
+</footer>
+<script src="lanes.js" defer></script>
+</body>
+</html>
