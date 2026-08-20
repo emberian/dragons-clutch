@@ -2514,8 +2514,8 @@ fn build_batch(shared: &Shared, plane: &Plane) -> Batch {
         .binds_page_set(&[page_account])
         .expect("epoch binds its frozen page set");
     candidate_account
-        .binds_epoch(&epoch_account)
-        .expect("candidate binds the frozen epoch simplex");
+        .binds_epoch(&epoch_account, u16::from(page_account.live_count()))
+        .expect("candidate binds the frozen epoch simplex at its live count");
     pot_account
         .binds_candidate(&candidate_account)
         .expect("pot binds the selected candidate");

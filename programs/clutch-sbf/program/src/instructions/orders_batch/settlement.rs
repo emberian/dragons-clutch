@@ -52,9 +52,9 @@ pub(super) struct PreflightFacts {
     pub order_set: Hash32,
     /// Total populated slots, including retirements.
     pub slot_count: u16,
-    /// Live relation orders.  Today this necessarily equals `slot_count`:
-    /// [`CandidateRecord::binds_epoch`] still owns the unresolved tombstone
-    /// cardinality join and refuses every other value.
+    /// Live relation orders: a fold over the digest-verified page headers of
+    /// the complete frozen set, which [`CandidateRecord::binds_epoch`] binds
+    /// exactly to the candidate's `order_len`.
     pub live_order_count: u16,
     /// Complete frozen page count.
     pub page_count: u16,
@@ -100,6 +100,9 @@ pub(super) fn verify_preflight(input: &PreflightInput<'_>) -> Result<PreflightFa
     // Every page is present, verified, and folded into that identity here.
     stream::epoch_binds_page_set(&epoch, input.pages)?;
 
+    // These are the exact bytes the set binding above just digest-verified,
+    // so the header fold below is [`CandidateRecord::binds_epoch`]'s caller
+    // contract for `live_order_count` discharged, not a claim re-read.
     let mut live_order_count = 0u16;
     let mut page_index = 0usize;
     while page_index < input.pages.len() {
@@ -114,14 +117,7 @@ pub(super) fn verify_preflight(input: &PreflightInput<'_>) -> Result<PreflightFa
     if candidate.status != CANDIDATE_STATUS_SUBMITTED {
         return Err(CodecError::MismatchedBinding);
     }
-    /* This intentionally calls the semantic owner's current binding rather
-     * than weakening it locally.  Since `epoch.order_count` includes
-     * tombstones and a candidate feed skips them, a cancelled book stops here
-     * until the layout schema owns an exact live cardinality. */
-    candidate.binds_epoch(&epoch)?;
-    if u16::from(candidate.order_len) != live_order_count {
-        return Err(CodecError::MismatchedBinding);
-    }
+    candidate.binds_epoch(&epoch, live_order_count)?;
 
     let feed = verify_candidate_feed(input.feed_bytes)?;
     bind_feed(&feed, &candidate, &epoch)?;
@@ -365,7 +361,9 @@ pub(super) fn prepare_direct_submission(
     };
     candidate.candidate = candidate.recomputed_candidate_digest()?;
     candidate.validate()?;
-    candidate.binds_epoch(input.epoch)?;
+    // `header` was digest-verified above and its recomputed one-page order-set
+    // fold is the epoch's, so its live count is the whole frozen set's.
+    candidate.binds_epoch(input.epoch, u16::from(header.live_count()))?;
 
     let feed = CandidateFeedHeader {
         candidate: candidate.candidate,
@@ -473,6 +471,12 @@ pub(super) struct DirectFullSliceInput<'a> {
     pub epoch: &'a EpochAccount,
     pub candidate: &'a CandidateRecord,
     pub candidate_feed: &'a [u8],
+    /// Live orders across the complete frozen set, recomputed from
+    /// digest-verified page headers — [`CandidateRecord::binds_epoch`]'s
+    /// caller contract.  The account-plane wrapper discharges it with the
+    /// count [`load_same_page_direct_orders`] derives; it is never a
+    /// candidate or feed claim.
+    pub live_order_count: u16,
     pub page_index: u16,
     pub slice_index: u16,
     pub buy_order: &'a OrderSlot,
@@ -497,7 +501,9 @@ pub(super) fn prepare_direct_full_slice(
 ) -> Outcome<DirectFullSlicePlan> {
     input.epoch.validate()?;
     input.candidate.validate()?;
-    input.candidate.binds_epoch(input.epoch)?;
+    input
+        .candidate
+        .binds_epoch(input.epoch, input.live_order_count)?;
     require(
         input.epoch.phase == EPOCH_PHASE_CLEARED
             && input.candidate.status == CANDIDATE_STATUS_SELECTED,
@@ -748,13 +754,17 @@ pub(in crate::instructions) fn apply_direct_full_slice(
 }
 
 /// Read the two order definitions named by one direct slice from one frozen
-/// page.
+/// page, and derive the set's live order count from its digest-verified
+/// header.
 ///
-/// V1 deliberately refuses tombstones and cross-page pairs.  The first rule
-/// keeps relation indices identical to positional page slots; the second keeps
-/// the account list fixed.  The page is checked against the selected epoch but
-/// remains evidence only: the candidate slice and reservations authorize the
-/// transfer.
+/// V1 deliberately refuses tombstones, cross-page pairs, and multi-page
+/// books.  The first rule keeps relation indices identical to positional page
+/// slots; the second keeps the account list fixed; the third is what makes
+/// the returned live count the *complete* set's — one page in view can state
+/// a set-wide cardinality only when it is the whole set, which the recomputed
+/// one-page order-set fold proves rather than trusts from the header's own
+/// `order_set` claim.  The page otherwise remains evidence only: the
+/// candidate slice and reservations authorize the transfer.
 #[inline(never)]
 pub(super) fn load_same_page_direct_orders(
     page_bytes: &[u8],
@@ -762,19 +772,29 @@ pub(super) fn load_same_page_direct_orders(
     epoch: &EpochAccount,
     page_index: u16,
     slice_index: u16,
-) -> Outcome<(OrderSlot, OrderSlot)> {
+) -> Outcome<(OrderSlot, OrderSlot, u16)> {
     let header = stream::verify_page(page_bytes)?;
+    let recomputed_order_set = canonical_order_set_id(
+        header.market,
+        header.epoch,
+        1,
+        header.set_order_count,
+        &[header.page_digest],
+    );
     require(
         header.frozen == 1
             && header.tombstone_count == 0
+            && header.page_count == 1
             && header.market == epoch.market
             && header.epoch == epoch.epoch
             && header.order_set == epoch.order_set
+            && recomputed_order_set == epoch.order_set
             && header.set_order_count == epoch.order_count
             && header.page_count == epoch.page_count
             && header.page_index == page_index,
         ClutchError::MismatchedState,
     )?;
+    let live_order_count = u16::from(header.live_count());
     let feed = CandidateFeedHeader::decode(feed_bytes)?;
     let slice = slice_at(feed_bytes, &feed, slice_index)?;
     let (buy_index, sell_index) = match (slice.buy_ref, slice.sell_ref) {
@@ -813,7 +833,7 @@ pub(super) fn load_same_page_direct_orders(
         buy.is_live() && sell.is_live(),
         ClutchError::MismatchedState,
     )?;
-    Ok((buy, sell))
+    Ok((buy, sell, live_order_count))
 }
 
 /// Ranked prerequisites which keep the on-chain relation transition closed.
@@ -1143,7 +1163,7 @@ mod tests {
     }
 
     #[test]
-    fn tombstone_cardinality_stays_a_fail_closed_semantic_owner_stop() {
+    fn a_cancelled_book_binds_its_live_count_and_refuses_the_slot_claim() {
         let mut f = fixture();
         // The frozen page is rebuilt with one retirement.  Epoch order_count is
         // still two populated slots; the relation feed has one live order.
@@ -1162,13 +1182,18 @@ mod tests {
         epoch.order_set = order_set;
         epoch.encode(&mut f.epoch).unwrap();
 
+        // The untouched fixture candidate claims the populated-slot count.
+        // On the cancelled book that is one more order than the relation is
+        // ever fed, and the layout binding refuses it.
+        assert_eq!(preflight(&f), Err(CodecError::MismatchedBinding));
+
+        // The candidate naming the exact live cardinality binds; preflight
+        // recomputes that count from the digest-verified page header rather
+        // than reading any claim.
         let mut candidate = CandidateRecord::decode(&f.candidate).unwrap();
         candidate.order_len = 1;
         candidate.candidate = candidate.recomputed_candidate_digest().unwrap();
         candidate.encode(&mut f.candidate).unwrap();
-        // Rebind otherwise-valid feed/work to the live candidate; the epoch's
-        // semantic owner still refuses `1 != 2`, before an adapter can invent a
-        // cardinality convention.
         let mut feed = CandidateFeedHeader::decode(&f.feed).unwrap();
         feed.order_len = 1;
         feed.order_set = order_set;
@@ -1176,7 +1201,9 @@ mod tests {
         init_candidate_feed(&mut f.feed, &feed).unwrap();
         init_clear_work(&mut f.work, f.market, f.epoch_id, feed.candidate, 9).unwrap();
 
-        assert_eq!(preflight(&f), Err(CodecError::MismatchedBinding));
+        let facts = preflight(&f).unwrap();
+        assert_eq!(facts.slot_count, 2);
+        assert_eq!(facts.live_order_count, 1);
     }
 
     #[test]
@@ -1240,6 +1267,10 @@ mod tests {
                 epoch: &self.epoch,
                 candidate: &self.candidate,
                 candidate_feed: &self.feed,
+                // The fixture book has two live orders and no retirement;
+                // the account-plane wrapper derives this from the settled
+                // page's digest-verified header.
+                live_order_count: 2,
                 page_index: 0,
                 slice_index: 0,
                 buy_order: &self.buy,
