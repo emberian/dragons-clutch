@@ -45,6 +45,10 @@ non-production-mock-source = ["clutch-sbf/non-production-mock-source"]
 # genesis come from the *same* encoders the program decodes with.  A hand-rolled
 # second copy would test the copy.
 clutch-sbf = { path = "../program" }
+# The checkpoint's owning crate: the idle body the final grow writes on-chain
+# is compared byte-for-byte against `ClearWorkV1::encode_idle_into` here, so
+# the account image and the host image share one writer.
+clutch-batch = { path = "../../../crates/clutch-batch" }
 clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-solana-layout = { path = "../../solana-layout" }

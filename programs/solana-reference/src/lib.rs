@@ -5691,6 +5691,21 @@ mod tests {
                 epoch: h(0x2e),
                 page_index: 0,
             },
+            /* The Tier 2 staged-creation pair (tags 47, 48) lands in the
+             * layout wire ahead of any reference model of the clearing
+             * plane, exactly as the genesis initializers did: the adapter
+             * refuses both, so the SVM oracle for this family is the layout
+             * codec byte-for-byte, never a comparison against this refusal. */
+            Intent::InitClearWork {
+                market,
+                epoch: h(0x2e),
+                candidate: h(0x3e),
+            },
+            Intent::GrowClearWork {
+                market,
+                epoch: h(0x2e),
+                candidate: h(0x3e),
+            },
         ] {
             let request = layout_request(0, unsupported);
             assert_eq!(

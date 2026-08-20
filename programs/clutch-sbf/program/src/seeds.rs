@@ -84,6 +84,9 @@ pub const SEED_CANDIDATE: &[u8] = b"dragons-clutch:candidate:v1";
 /// slices.  Content equality alone is not account authority, so settlement
 /// authenticates exactly one feed address per `(epoch, candidate)`.
 pub const SEED_CANDIDATE_FEED: &[u8] = b"dragons-clutch:cand-feed:v1";
+
+/// Clearing-checkpoint (`ClearWorkAccount`) seed prefix; 28 bytes.
+pub const SEED_CLEAR_WORK: &[u8] = b"dragons-clutch:clear-work:v1";
 /// Final-pot account seed prefix.
 pub const SEED_POT: &[u8] = b"dragons-clutch:pot:v1";
 /// Settlement-receipt account seed prefix.
@@ -407,6 +410,20 @@ pub fn candidate_feed_pda(
     find(program_id, &[SEED_CANDIDATE_FEED, epoch, candidate])
 }
 
+/// Canonical clearing-checkpoint address and bump.
+///
+/// Exactly one resumable checkpoint per `(epoch, candidate)` — the same tuple
+/// that addresses the candidate record and its feed, because the checkpoint
+/// verifies exactly one candidate against one frozen epoch.  The market is
+/// bound through the epoch identity rather than repeated, matching
+/// [`candidate_pda`].  A PDA rather than a keypair address is the design
+/// decision of `docs/implementation/SOLANA_LAYOUT.md`'s staged-creation
+/// analysis: a keypair-addressed checkpoint is substitutable, a PDA at this
+/// tuple is not.
+pub fn clear_work_pda(program_id: &Pubkey, epoch: &[u8; 32], candidate: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_CLEAR_WORK, epoch, candidate])
+}
+
 /// Canonical final-pot address and bump.
 ///
 /// One pot per epoch.  The pot names the selected candidate in its bytes rather
@@ -494,7 +511,7 @@ mod tests {
     /// `hoard-authority` prefix was caught at 33 bytes.
     #[test]
     fn every_seed_prefix_fits_one_seed() {
-        const PREFIXES: [&[u8]; 40] = [
+        const PREFIXES: [&[u8]; 41] = [
             SEED_REALM,
             SEED_PROFILE,
             SEED_MARKET,
@@ -513,6 +530,7 @@ mod tests {
             SEED_RESERVATION,
             SEED_CANDIDATE,
             SEED_CANDIDATE_FEED,
+            SEED_CLEAR_WORK,
             SEED_POT,
             SEED_RECEIPT,
             SEED_ARTIFACT_STAGE,
@@ -558,6 +576,7 @@ mod tests {
         assert_eq!(SEED_DIRECT_WORK_V3.len(), 17);
         assert_eq!(SEED_DIRECT_RECEIPT_V3.len(), 20);
         assert_eq!(SEED_DIRECT_POT_V3.len(), 16);
+        assert_eq!(SEED_CLEAR_WORK.len(), 28);
         // The plan's own proposal, kept here as the falsifier: it does not fit.
         assert_eq!(b"dragons-clutch:hoard-authority:v1".len(), 33);
     }
@@ -660,6 +679,60 @@ mod tests {
             for later in DIRECT_V3.iter().skip(index + 1) {
                 assert_ne!(*added, *later);
             }
+        }
+    }
+
+    /// The clearing-checkpoint prefix shares an address space with nothing.
+    ///
+    /// `SEED_CANDIDATE_FEED` and `SEED_CANDIDATE` take the *same* seed tuple
+    /// `(epoch, candidate)` that `SEED_CLEAR_WORK` takes, so prefix
+    /// distinctness is exactly what keeps the three accounts three addresses.
+    #[test]
+    fn the_clear_work_prefix_collides_with_nothing() {
+        const REGISTRY: [&[u8]; 40] = [
+            SEED_REALM,
+            SEED_PROFILE,
+            SEED_MARKET,
+            SEED_HOARD,
+            SEED_POSITION,
+            SEED_KERNEL,
+            SEED_EXTERNAL,
+            SEED_REPLAY,
+            SEED_SUPPLY,
+            SEED_FEED,
+            SEED_TERMS,
+            SEED_GRID,
+            SEED_RESOLUTION,
+            SEED_EPOCH,
+            SEED_PAGE,
+            SEED_RESERVATION,
+            SEED_CANDIDATE,
+            SEED_CANDIDATE_FEED,
+            SEED_POT,
+            SEED_RECEIPT,
+            SEED_ARTIFACT_STAGE,
+            SEED_POLICY,
+            SEED_BATCH_POLICY,
+            SEED_DIRECT_BATCH_POLICY_V3,
+            SEED_DIRECT_WINDOW,
+            SEED_DIRECT_CANDIDATE,
+            SEED_DIRECT_RECEIPT,
+            SEED_DIRECT_POT,
+            SEED_DIRECT_WINDOW_V3,
+            SEED_DIRECT_CANDIDATE_V3,
+            SEED_DIRECT_WORK_V3,
+            SEED_DIRECT_RECEIPT_V3,
+            SEED_DIRECT_POT_V3,
+            SEED_SOURCE_SPEC,
+            SEED_SOURCE_ARCHIVE,
+            SEED_RESOLUTION_WORK,
+            SEED_RESOLUTION_RESERVE,
+            SEED_OUTCOME_MINT,
+            SEED_HOARD_AUTHORITY,
+            SEED_HOARD_TOKEN,
+        ];
+        for old in REGISTRY {
+            assert_ne!(SEED_CLEAR_WORK, old);
         }
     }
 }

@@ -4630,6 +4630,32 @@ pub enum Intent {
         context: Hash32,
         digest: Hash32,
     },
+    /// Begin staged creation of one clearing checkpoint ([`ClearWorkAccount`]).
+    ///
+    /// The checkpoint is the one account in the inventory above the runtime's
+    /// 10,240-byte per-instruction growth ceiling (see [`clearing`]), so its
+    /// creation is a five-instruction sequence: this intent transfers the
+    /// **full final rent principal**, allocates the first
+    /// [`clearing::CLEAR_WORK_GROW_STEP`] bytes under the canonical
+    /// `(epoch, candidate)` PDA, and writes the resumable grow-stage prefix
+    /// ([`clearing::ClearWorkGrowStage`]).  A growing account refuses every
+    /// checkpoint reader by exact length until the final
+    /// [`Intent::GrowClearWork`] writes the real header and idle body.
+    InitClearWork {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+    },
+    /// Grow a staged checkpoint by one step; the final step finishes creation.
+    ///
+    /// Four of these follow one [`Intent::InitClearWork`]; the growth cap is
+    /// per *instruction*, so all five may share one transaction but nothing
+    /// requires it.  Rent never tops up — the full principal moved at init.
+    GrowClearWork {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+    },
 }
 
 /// The placement admissibility rule, shared by the encoder and the decoder.
@@ -4730,6 +4756,14 @@ const FREEZE_DIRECT_EPOCH_V3_TAG: u8 = 28;
 const SUBMIT_DIRECT_CANDIDATE_V2_TAG: u8 = 29;
 const SELECT_DIRECT_WINDOW_V1_TAG: u8 = 30;
 const SETTLE_DIRECT_V2_TAG: u8 = 31;
+/* Tags 32-35 are the resolution-work family (its own codec, dispatched above
+ * `Reader::new` in `Intent::decode`); tags 36-46 are the Direct V3 family,
+ * decoded only by the dedicated `DirectV3Request` envelope and refused here
+ * (`direct_selection_v3::LAST_DIRECT_V3_INTENT_TAG`).  The Tier 2 clearing
+ * family begins immediately after it. */
+const INIT_CLEAR_WORK_TAG: u8 = 47;
+const GROW_CLEAR_WORK_TAG: u8 = 48;
+const _: () = assert!(INIT_CLEAR_WORK_TAG == direct_selection_v3::LAST_DIRECT_V3_INTENT_TAG + 1);
 
 fn resolution_work_codec(error: resolution_work::ResolutionWorkCodecError) -> CodecError {
     use resolution_work::ResolutionWorkCodecError as WorkError;
@@ -4791,6 +4825,7 @@ impl Intent {
             Self::WriteArtifact { .. } => 2 + 1 + 32 + 32 + 2 + 2 + artifact::ARTIFACT_CHUNK_BYTES,
             Self::SealArtifact { .. } => 2 + 1 + 32 + 32 + 2,
             Self::AbortArtifact { .. } => 2 + 1 + 32 + 32,
+            Self::InitClearWork { .. } | Self::GrowClearWork { .. } => 2 + 32 + 32 + 32,
         }
     }
     /// Validate and encode into a caller-provided buffer.
@@ -5265,6 +5300,32 @@ impl Intent {
                 w.u8(kind.byte())?;
                 w.hash(*context)?;
                 w.hash(*digest)?
+            }
+            Self::InitClearWork {
+                market,
+                epoch,
+                candidate,
+            }
+            | Self::GrowClearWork {
+                market,
+                epoch,
+                candidate,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                check_hash(*candidate)?;
+                put_header(
+                    &mut w,
+                    if matches!(self, Self::InitClearWork { .. }) {
+                        INIT_CLEAR_WORK_TAG
+                    } else {
+                        GROW_CLEAR_WORK_TAG
+                    },
+                    INTENT_VERSION,
+                )?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.hash(*candidate)?
             }
         };
         Ok(w.at)
@@ -5755,6 +5816,28 @@ impl Intent {
                     kind,
                     context,
                     digest,
+                })
+            }
+            INIT_CLEAR_WORK_TAG | GROW_CLEAR_WORK_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let candidate = r.hash()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                check_hash(candidate)?;
+                Ok(if tag == INIT_CLEAR_WORK_TAG {
+                    Self::InitClearWork {
+                        market,
+                        epoch,
+                        candidate,
+                    }
+                } else {
+                    Self::GrowClearWork {
+                        market,
+                        epoch,
+                        candidate,
+                    }
                 })
             }
             _ => Err(CodecError::WrongTag),
@@ -10165,6 +10248,77 @@ mod tests {
 
         bytes[2..34].fill(0);
         assert_eq!(Intent::decode(&bytes[..len]), Err(CodecError::ZeroIdentity));
+    }
+
+    #[test]
+    fn clear_work_creation_intents_have_exact_unambiguous_wires() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 7);
+        let candidate = h(9);
+        let intents = [
+            Intent::InitClearWork {
+                market,
+                epoch,
+                candidate,
+            },
+            Intent::GrowClearWork {
+                market,
+                epoch,
+                candidate,
+            },
+        ];
+        // The Tier 2 clearing family starts exactly one past the Direct V3
+        // family's last tag, which its own decoder refuses below.
+        let expected_tags = [
+            direct_selection_v3::LAST_DIRECT_V3_INTENT_TAG + 1,
+            direct_selection_v3::LAST_DIRECT_V3_INTENT_TAG + 2,
+        ];
+        assert_eq!(expected_tags, [47, 48]);
+        for (intent, tag) in intents.into_iter().zip(expected_tags) {
+            let mut bytes = [0; MAX_INTENT_BYTES];
+            let len = intent.encode(&mut bytes).unwrap();
+            assert_eq!(len, 98);
+            assert_eq!(intent.encoded_len(), len);
+            assert_eq!(&bytes[..2], [tag, INTENT_VERSION]);
+            assert_eq!(&bytes[2..34], &market.bytes());
+            assert_eq!(&bytes[34..66], &epoch.bytes());
+            assert_eq!(&bytes[66..98], &candidate.bytes());
+            assert_eq!(Intent::decode(&bytes[..len]), Ok(intent));
+            assert_eq!(
+                Intent::decode(&bytes[..len - 1]),
+                Err(CodecError::Truncated)
+            );
+            let mut long = [0; MAX_INTENT_BYTES];
+            long[..len].copy_from_slice(&bytes[..len]);
+            assert_eq!(
+                Intent::decode(&long[..len + 1]),
+                Err(CodecError::TrailingBytes)
+            );
+            // A zero identity anywhere in the triple, both directions.
+            for at in [2, 34, 66] {
+                let mut zeroed = bytes;
+                zeroed[at..at + 32].fill(0);
+                assert_eq!(
+                    Intent::decode(&zeroed[..len]),
+                    Err(CodecError::ZeroIdentity)
+                );
+            }
+            let mut wrong_version = bytes;
+            wrong_version[1] = INTENT_VERSION + 1;
+            assert_eq!(
+                Intent::decode(&wrong_version[..len]),
+                Err(CodecError::WrongVersion)
+            );
+        }
+        assert_eq!(
+            Intent::InitClearWork {
+                market: Hash32::ZERO,
+                epoch,
+                candidate,
+            }
+            .encode(&mut [0; MAX_INTENT_BYTES]),
+            Err(CodecError::ZeroIdentity)
+        );
     }
 
     #[test]
