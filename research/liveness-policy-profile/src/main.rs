@@ -12,6 +12,7 @@ use clutch_batch_policy_identity::{
 use clutch_solana_layout::{
     account_len,
     artifact::{ARTIFACT_STAGE_HEADER_BYTES, MAX_ARTIFACT_BYTES},
+    clearing::EPOCH_WINDOW_ACCOUNT_BYTES,
     collateral::COLLATERAL_POLICY_BYTES,
     direct_selection::DIRECT_EPOCH_BYTES,
     native_resolution::NATIVE_RESOLUTION_LEN,
@@ -91,6 +92,11 @@ fn main() {
 
     row("order.page", account_len::ORDER_PAGE, &rent);
     row("order.reservation.v1", RESERVATION_ACCOUNT_BYTES, &rent);
+    // The general epoch plane (T2-6) reuses the epoch/candidate/feed/
+    // clear-work account families below at their exact widths; its one new
+    // persistent family is the deadline-window companion created by
+    // InitEpoch (tag 49) at seeds::epoch_window_pda.  No handler closes it.
+    row("epoch.window", EPOCH_WINDOW_ACCOUNT_BYTES, &rent);
     row("legacy.epoch.v2", account_len::EPOCH, &rent);
     row("legacy.candidate", account_len::CANDIDATE, &rent);
     row("legacy.candidate_feed", account_len::CANDIDATE_FEED, &rent);
