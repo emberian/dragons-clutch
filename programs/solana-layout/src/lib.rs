@@ -4860,6 +4860,37 @@ pub enum Intent {
     /// `EPOCH_PHASE_CLEARED`.  With zero verified candidates the epoch
     /// lapses honestly to `EPOCH_PHASE_LAPSED` and nothing is selected.
     FinalizeSelection { market: MarketId, epoch: EpochId },
+    /// Create the epoch's [`FinalPotAccount`] from the selected candidate's
+    /// **verified** relation summary — the entitlement freeze's opening move.
+    ///
+    /// Reads the completed clearing checkpoint (its body holds the streamed
+    /// verdict) and funds the pot from the summary's rounding/refund scalars.
+    /// The first cut refuses any summary carrying `virtual_split`/`virtual_merge`
+    /// (the VirtualPot ranked blocker stands) or a nonzero rounding pot (the
+    /// exact-only consumption seam cannot fund one) — refusals stated in code,
+    /// never silently zeroed.
+    FreezeEntitlement {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+    },
+    /// Create the [`SettlementReceiptAccount`] entitlements for one witness
+    /// slice of the selected candidate — resumable, one slice per invocation.
+    ///
+    /// A single-Egg pair slice freezes one receipt; a portfolio pair slice
+    /// freezes the receipts of **every** slice of that pair at once (the pair
+    /// consumes atomically, so its entitlement freezes atomically).  Both
+    /// referenced reservations transition `ACTIVE → ENTITLED` in the same
+    /// instruction.  Non-full-fill shapes (PartialFillLedger), mixed
+    /// single/portfolio pairs, and virtual legs refuse honestly.
+    EntitleSlice {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+        /// Index of the frozen witness slice being entitled; for a portfolio
+        /// pair this must be the pair's first slice index.
+        slice_index: u16,
+    },
 }
 
 /// Most fills one [`Intent::WriteCandidateFeed`] chunk may carry.
@@ -5096,6 +5127,8 @@ const SUBMIT_CANDIDATE_TAG: u8 = 54;
 const WRITE_CANDIDATE_FEED_TAG: u8 = 55;
 const SEAL_CANDIDATE_TAG: u8 = 56;
 const FINALIZE_SELECTION_TAG: u8 = 57;
+const FREEZE_ENTITLEMENT_TAG: u8 = 58;
+const ENTITLE_SLICE_TAG: u8 = 59;
 const _: () = assert!(INIT_CLEAR_WORK_TAG == direct_selection_v3::LAST_DIRECT_V3_INTENT_TAG + 1);
 // The Tier 2 clearing family is tag-contiguous: each intent takes exactly the
 // next tag, so a gap is a compile error rather than a squatting hazard.
@@ -5108,6 +5141,8 @@ const _: () = assert!(SUBMIT_CANDIDATE_TAG == COMPLETE_CLEAR_WORK_TAG + 1);
 const _: () = assert!(WRITE_CANDIDATE_FEED_TAG == SUBMIT_CANDIDATE_TAG + 1);
 const _: () = assert!(SEAL_CANDIDATE_TAG == WRITE_CANDIDATE_FEED_TAG + 1);
 const _: () = assert!(FINALIZE_SELECTION_TAG == SEAL_CANDIDATE_TAG + 1);
+const _: () = assert!(FREEZE_ENTITLEMENT_TAG == FINALIZE_SELECTION_TAG + 1);
+const _: () = assert!(ENTITLE_SLICE_TAG == FREEZE_ENTITLEMENT_TAG + 1);
 // The widest chunked write stays inside the frozen intent bound; the slices
 // shape is the widest at 308 of 310 bytes.
 const _: () = assert!(
@@ -5203,6 +5238,8 @@ impl Intent {
             }
             Self::SealCandidate { .. } => 2 + 32 + 32 + 32,
             Self::FinalizeSelection { .. } => 2 + 32 + 32,
+            Self::FreezeEntitlement { .. } => 2 + 32 + 32 + 32,
+            Self::EntitleSlice { .. } => 2 + 32 + 32 + 32 + 2,
         }
     }
     /// Validate and encode into a caller-provided buffer.
@@ -5879,6 +5916,34 @@ impl Intent {
                 put_header(&mut w, FINALIZE_SELECTION_TAG, INTENT_VERSION)?;
                 w.hash(*market)?;
                 w.hash(*epoch)?
+            }
+            Self::FreezeEntitlement {
+                market,
+                epoch,
+                candidate,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                check_hash(*candidate)?;
+                put_header(&mut w, FREEZE_ENTITLEMENT_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.hash(*candidate)?
+            }
+            Self::EntitleSlice {
+                market,
+                epoch,
+                candidate,
+                slice_index,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                check_hash(*candidate)?;
+                put_header(&mut w, ENTITLE_SLICE_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.hash(*candidate)?;
+                w.u16(*slice_index)?
             }
         };
         Ok(w.at)
@@ -6594,6 +6659,36 @@ impl Intent {
                 check_hash(market)?;
                 check_hash(epoch)?;
                 Ok(Self::FinalizeSelection { market, epoch })
+            }
+            FREEZE_ENTITLEMENT_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let candidate = r.hash()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                check_hash(candidate)?;
+                Ok(Self::FreezeEntitlement {
+                    market,
+                    epoch,
+                    candidate,
+                })
+            }
+            ENTITLE_SLICE_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let candidate = r.hash()?;
+                let slice_index = r.u16()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                check_hash(candidate)?;
+                Ok(Self::EntitleSlice {
+                    market,
+                    epoch,
+                    candidate,
+                    slice_index,
+                })
             }
             _ => Err(CodecError::WrongTag),
         }
@@ -11644,6 +11739,69 @@ mod tests {
     }
 
     #[test]
+    fn the_entitlement_intents_have_exact_unambiguous_wires() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 7);
+        let candidate = h(9);
+
+        let freeze = Intent::FreezeEntitlement {
+            market,
+            epoch,
+            candidate,
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = freeze.encode(&mut bytes).unwrap();
+        assert_eq!(len, 98);
+        assert_eq!(freeze.encoded_len(), len);
+        assert_eq!(&bytes[..2], [58, INTENT_VERSION]);
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(freeze));
+        for at in [2, 34, 66] {
+            let mut zeroed = bytes;
+            zeroed[at..at + 32].fill(0);
+            assert_eq!(
+                Intent::decode(&zeroed[..len]),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+
+        let entitle = Intent::EntitleSlice {
+            market,
+            epoch,
+            candidate,
+            slice_index: 3,
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = entitle.encode(&mut bytes).unwrap();
+        assert_eq!(len, 100);
+        assert_eq!(entitle.encoded_len(), len);
+        assert_eq!(&bytes[..2], [59, INTENT_VERSION]);
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(entitle));
+        let mut long = [0; MAX_INTENT_BYTES];
+        long[..len].copy_from_slice(&bytes[..len]);
+        assert_eq!(
+            Intent::decode(&long[..len + 1]),
+            Err(CodecError::TrailingBytes)
+        );
+        let mut wrong_version = bytes;
+        wrong_version[1] = INTENT_VERSION + 1;
+        assert_eq!(
+            Intent::decode(&wrong_version[..len]),
+            Err(CodecError::WrongVersion)
+        );
+        // Tag continuity: the entitlement pair takes exactly the next two
+        // tags after the selection family's close.
+        assert_eq!(
+            [FREEZE_ENTITLEMENT_TAG, ENTITLE_SLICE_TAG],
+            [FINALIZE_SELECTION_TAG + 1, FINALIZE_SELECTION_TAG + 2]
+        );
+        assert_eq!([FREEZE_ENTITLEMENT_TAG, ENTITLE_SLICE_TAG], [58, 59]);
+    }
+
+    #[test]
     fn direct_v3_authority_intents_have_exact_wires() {
         let market = h(1);
         let epoch = canonical_epoch_id(market, 7);
@@ -11751,6 +11909,17 @@ mod tests {
                 market,
                 owner: h(8),
                 amount: 12,
+            },
+            Intent::FreezeEntitlement {
+                market,
+                epoch,
+                candidate: h(9),
+            },
+            Intent::EntitleSlice {
+                market,
+                epoch,
+                candidate: h(9),
+                slice_index: 1,
             },
         ];
         assert_eq!(INTENT_VERSION, 3);

@@ -20,16 +20,18 @@
 //! | [`merge_materialize`] | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` |
 //! | [`market_init`] | `Intent::CreateMarket` |
 //! | [`observe_resolve`] | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` |
-//! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`, `Intent::SettlePage`, `Intent::InitClearWork`, `Intent::GrowClearWork`, `Intent::InitEpoch`, `Intent::FreezeEpoch`, `Intent::AdvanceClearWork`, `Intent::AdvanceClearSlices`, `Intent::CompleteClearWork` |
+//! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`, `Intent::SettlePage`, `Intent::InitClearWork`, `Intent::GrowClearWork`, `Intent::InitEpoch`, `Intent::FreezeEpoch`, `Intent::AdvanceClearWork`, `Intent::AdvanceClearSlices`, `Intent::CompleteClearWork`, `Intent::SubmitCandidate`, `Intent::WriteCandidateFeed`, `Intent::SealCandidate`, `Intent::FinalizeSelection`, `Intent::FreezeEntitlement`, `Intent::EntitleSlice` |
 //!
 //! Implemented: genesis (the five account-creating initializers plus `Endow`),
 //! split, merge_materialize (Merge/Materialize/Dematerialize), market_init,
-//! observe_resolve (FeedAdvance/Resolve/RedeemInternal), and orders_batch's
-//! PlaceOrder and CancelOrder (page-v4 tombstone retirement), one deterministic
-//! two-order `SUBMITTED` Candidate/CandidateFeed constructor, plus one narrow
-//! `SettlePage` consumption seam for a preselected, pre-entitled, same-page
-//! direct full slice. Candidate verification/selection and entitlement creation
-//! remain explicit lifecycle STOPs.
+//! observe_resolve (FeedAdvance/Resolve/RedeemInternal), and the whole Tier 2
+//! general clearing lifecycle in orders_batch: funded placement and
+//! cancellation, the general epoch open/freeze, the on-chain streaming walk
+//! to a verified verdict, candidate submission/selection, the entitlement
+//! freeze (verified-summary pot + per-slice receipts, `ACTIVE → ENTITLED`),
+//! and entitled `SettlePage` consumption for single-Egg direct slices and
+//! portfolio full pairs.  The standing refusals — partial fills, virtual
+//! pots, terminal closure — live in `orders_batch::settlement`'s ledger.
 //!
 //! [`genesis`] owns namespace construction; [`orders_batch`] reuses its shared
 //! prefund-safe System-CPI helper for the two content-addressed submission

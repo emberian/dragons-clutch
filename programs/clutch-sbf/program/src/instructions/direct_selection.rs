@@ -14,7 +14,9 @@ use crate::instructions::artifact::read_clock_slot;
 use crate::instructions::genesis::{
     create_pda_account, read_rent, require_creatable, require_system_program,
 };
-use crate::instructions::orders_batch::settlement::{apply_direct_full_slice, DirectFullSlicePlan};
+use crate::instructions::orders_batch::settlement::{
+    apply_entitled_direct_slice, EntitledDirectSlicePlan,
+};
 use crate::seeds;
 use clutch_batch::relation_v1::FrozenPolicyV1;
 use clutch_batch_policy_identity::{
@@ -925,18 +927,20 @@ fn execute_settlement(
         .checked_add(facts.consideration_atoms)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
     let buyer_reserved_release = buy_reservation.remaining_cash_atoms;
-    apply_direct_full_slice(
+    apply_entitled_direct_slice(
         &mut buyer,
         &mut seller,
         &mut buy_reservation,
         &mut sell_reservation,
         &mut receipt,
-        DirectFullSlicePlan {
-            slice_index: 0,
+        EntitledDirectSlicePlan {
             outcome: facts.outcome,
             quantity: facts.quantity,
             consideration_atoms: facts.consideration_atoms,
             buyer_reserved_release,
+            // The V2 sell envelope holds exactly the transferred quantity,
+            // so the seller-remainder leg is structurally zero here.
+            seller_remainder: 0,
         },
     );
     buyer.validate()?;

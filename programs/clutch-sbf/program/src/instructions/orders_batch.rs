@@ -2,21 +2,26 @@
 //! `Intent::SettlePage`, the staged checkpoint creation pair
 //! `Intent::InitClearWork` / `Intent::GrowClearWork` ([`clear_work`]), the
 //! general epoch lifecycle ([`general_epoch`]), the on-chain streaming walk
-//! ([`clear_walk`]), and the candidate submission and selection lifecycle
-//! ([`selection`]).
+//! ([`clear_walk`]), the candidate submission and selection lifecycle
+//! ([`selection`]), and the entitlement freeze ([`entitlement`]).
 //!
 //! This module owns the batch-auction plane's account lists.  `PlaceOrder` and
-//! `CancelOrder` own the funded order lifecycle.  `SettlePage` now exposes one
-//! deliberately narrow consumption seam: a selected, pre-entitled, same-page,
-//! full-fill direct pair of single-Egg orders with zero fees and an exactly
-//! divisible price-unit conversion.  Every broader shape still refuses.
+//! `CancelOrder` own the funded order lifecycle.  Since T2-8, `SettlePage`
+//! consumes the entitled receipts the freeze (tags 58-59) creates from the
+//! SELECTED candidate's verified allocation: single-Egg direct slices through
+//! the generalized entitled seam, portfolio full pairs through the layout
+//! crate's `{prepare,apply}_full_pair`.  Unentitled and general shapes —
+//! partial fills, virtual legs, mixed pairs, inexact conversions — keep
+//! refusing honestly (`NotYetImplemented`, the standing ledger rows in
+//! [`settlement`]).
 //!
 //! | intent | this wave |
 //! | --- | --- |
 //! | `PlaceOrder` | **implemented**, both order families: the v3 wire carries an `OrderSlot` and signed fee cap; Position assets move into one reservation |
 //! | `CancelOrder` | **implemented**: the v4 page retires an order in place and returns only its unused reservation (§ *Cancellation*) |
 //! | `SubmitDirectPage` | **narrow constructor**: creates one deterministic `SUBMITTED` Candidate and exact feed from a funded two-order frozen page; it does not verify/select or create a receipt |
-//! | `SettlePage` | **conditional consumption seam**: consumes two exact ACTIVE reservations and one frozen receipt; candidate selection/receipt freeze remain unreachable (§ *Settlement*) |
+//! | `SettlePage` | **entitled consumption**: consumes one entitled direct slice (7 accounts) or one entitled portfolio full pair (variable list); every receipt consumes exactly once and every consumed reservation persists as its own archive |
+//! | `FreezeEntitlement` / `EntitleSlice` | **entitlement freeze** ([`entitlement`]): pot from the verified summary, resumable per-slice receipts, reservations `ACTIVE → ENTITLED` |
 //!
 //! Nothing here computes a clearing price or selects a candidate. A placement
 //! atomically writes one order record, encumbers exact free cash or moves exact
@@ -486,6 +491,7 @@ use solana_pubkey::Pubkey;
 
 pub mod clear_walk;
 pub mod clear_work;
+pub mod entitlement;
 pub mod general_epoch;
 mod reservation;
 pub mod selection;
@@ -540,8 +546,10 @@ pub const DIRECT_V4_PLACE_ORDER_ACCOUNT_COUNT: usize = 9;
 /// frozen price grid is not in the list at all.
 pub const CANCEL_ORDER_ACCOUNT_COUNT: usize = 5;
 
-/// Accounts in the narrow V1 `SettlePage` consumption seam, exactly.
-pub const SETTLE_PAGE_ACCOUNT_COUNT: usize = 9;
+/// Accounts in the generalized entitled direct-slice `SettlePage` shape,
+/// exactly; any longer list dispatches to the portfolio full-pair shape
+/// ([`entitlement::settle_portfolio_pair`]).
+pub const SETTLE_PAGE_ACCOUNT_COUNT: usize = 7;
 
 /// Accounts in the narrow `SubmitDirectPage` constructor, exactly.
 pub const SUBMIT_DIRECT_PAGE_ACCOUNT_COUNT: usize = 11;
@@ -570,24 +578,20 @@ pub const IX_CANCEL_PAGE: usize = 2;
 pub const IX_CANCEL_POSITION: usize = 3;
 /// Existing per-order reservation released by cancellation. `CancelOrder`.
 pub const IX_CANCEL_RESERVATION: usize = 4;
-/// Frozen Epoch. `SettlePage`.
+/// Cleared Epoch. `SettlePage`.
 pub const IX_SETTLE_EPOCH: usize = 0;
 /// Selected candidate record. `SettlePage`.
 pub const IX_SETTLE_CANDIDATE: usize = 1;
-/// Canonical candidate feed holding fills and pairing slices. `SettlePage`.
-pub const IX_SETTLE_FEED: usize = 2;
-/// Frozen page containing both direct single-Egg orders. `SettlePage`.
-pub const IX_SETTLE_PAGE: usize = 3;
 /// Buyer Position. `SettlePage`.
-pub const IX_SETTLE_BUY_POSITION: usize = 4;
+pub const IX_SETTLE_BUY_POSITION: usize = 2;
 /// Seller Position. `SettlePage`.
-pub const IX_SETTLE_SELL_POSITION: usize = 5;
-/// Buy order's exact ACTIVE reservation. `SettlePage`.
-pub const IX_SETTLE_BUY_RESERVATION: usize = 6;
-/// Sell order's exact ACTIVE reservation. `SettlePage`.
-pub const IX_SETTLE_SELL_RESERVATION: usize = 7;
-/// Pre-frozen receipt entitlement for exactly one candidate slice. `SettlePage`.
-pub const IX_SETTLE_RECEIPT: usize = 8;
+pub const IX_SETTLE_SELL_POSITION: usize = 3;
+/// Buy order's exact ENTITLED reservation. `SettlePage`.
+pub const IX_SETTLE_BUY_RESERVATION: usize = 4;
+/// Sell order's exact ENTITLED reservation. `SettlePage`.
+pub const IX_SETTLE_SELL_RESERVATION: usize = 5;
+/// The entitled receipt of exactly one candidate slice. `SettlePage`.
+pub const IX_SETTLE_RECEIPT: usize = 6;
 /// Permissionless rent payer and authenticated transaction signer.
 pub const IX_SUBMIT_PAYER: usize = 0;
 /// Frozen Epoch owning the submitted candidate.
@@ -631,12 +635,10 @@ const CANCEL_ORDER_STATE_ROLES: [StateRole; 3] = [
     StateRole::writable(IX_CANCEL_RESERVATION, RESERVATION_ACCOUNT_BYTES),
 ];
 
-/// Program-owned roles of the narrow direct-slice settlement seam.
+/// Program-owned roles of the entitled direct-slice settlement shape.
 const SETTLE_PAGE_STATE_ROLES: [StateRole; SETTLE_PAGE_ACCOUNT_COUNT] = [
     StateRole::read_only(IX_SETTLE_EPOCH, account_len::EPOCH),
     StateRole::read_only(IX_SETTLE_CANDIDATE, account_len::CANDIDATE),
-    StateRole::read_only(IX_SETTLE_FEED, account_len::CANDIDATE_FEED),
-    StateRole::read_only(IX_SETTLE_PAGE, account_len::ORDER_PAGE),
     StateRole::writable(IX_SETTLE_BUY_POSITION, account_len::POSITION),
     StateRole::writable(IX_SETTLE_SELL_POSITION, account_len::POSITION),
     StateRole::writable(IX_SETTLE_BUY_RESERVATION, RESERVATION_ACCOUNT_BYTES),
@@ -1238,6 +1240,32 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         Action::Layout(Intent::FinalizeSelection { market, epoch }) => {
             selection::finalize_selection(program_id, accounts, request.sequence, market, epoch)
         }
+        Action::Layout(Intent::FreezeEntitlement {
+            market,
+            epoch,
+            candidate,
+        }) => entitlement::freeze_entitlement(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            candidate,
+        ),
+        Action::Layout(Intent::EntitleSlice {
+            market,
+            epoch,
+            candidate,
+            slice_index,
+        }) => entitlement::entitle_slice(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            candidate,
+            *slice_index,
+        ),
         /* Every other action belongs to another family module; the router never
          * sends one here, and this arm exists so that adding one to the router
          * is a compile error rather than a silent success. */
@@ -1410,12 +1438,16 @@ fn validate_direct_submission_source_addresses(
     validate_reservation_address(program_id, &accounts[IX_SUBMIT_RESERVATION_ONE])
 }
 
-/// Consume one pre-frozen, same-page, direct full-fill entitlement.
+/// Consume one entitled receipt of the selected candidate.
 ///
-/// This does not verify/select a candidate or create a receipt.  Those missing
-/// lifecycle transitions are intentional reachability STOPs.  Given their
-/// authenticated outputs, this function consumes both exact ACTIVE
-/// reservations and transfers one coupled cash/claim pair atomically.
+/// The T2-8 supersession of the narrow coupled seam: receipts are created by
+/// the entitlement freeze (tags 58-59) against the complete digest-verified
+/// frozen page set, so consumption presents no page and no feed — the receipt
+/// is the one-shot latch and both `ENTITLED` reservations carry the exact
+/// frozen envelope.  The seven-account shape consumes one single-Egg direct
+/// slice; a longer list is the portfolio full-pair shape and dispatches to
+/// [`entitlement::settle_portfolio_pair`].  Unentitled and general paths keep
+/// refusing honestly.
 #[inline(never)]
 fn settle_page(
     program_id: &Pubkey,
@@ -1425,7 +1457,16 @@ fn settle_page(
     intent_epoch: &Hash32,
     intent_page: u16,
 ) -> Outcome<()> {
-    require_count(accounts, SETTLE_PAGE_ACCOUNT_COUNT)?;
+    if accounts.len() != SETTLE_PAGE_ACCOUNT_COUNT {
+        return entitlement::settle_portfolio_pair(
+            program_id,
+            accounts,
+            sequence,
+            intent_market,
+            intent_epoch,
+            intent_page,
+        );
+    }
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &SETTLE_PAGE_STATE_ROLES)?;
     validate_settle_addresses(program_id, accounts)?;
@@ -1448,37 +1489,22 @@ fn settle_page(
             && sequence == receipt.sequence,
         ClutchError::MismatchedState,
     )?;
+    // The wire's page coordinate names the buy end's page, honestly consumed.
+    require(
+        buyer_reservation.page_index == intent_page,
+        ClutchError::MismatchedState,
+    )?;
 
-    let (buy_order, sell_order, live_order_count) = {
-        let page_data = accounts[IX_SETTLE_PAGE].data.borrow();
-        let feed_data = accounts[IX_SETTLE_FEED].data.borrow();
-        settlement::load_same_page_direct_orders(
-            &page_data,
-            &feed_data,
-            &epoch,
-            intent_page,
-            receipt.slice_index,
-        )?
-    };
-    let plan = {
-        let feed_data = accounts[IX_SETTLE_FEED].data.borrow();
-        settlement::prepare_direct_full_slice(&settlement::DirectFullSliceInput {
-            epoch: &epoch,
-            candidate: &candidate,
-            candidate_feed: &feed_data,
-            live_order_count,
-            page_index: intent_page,
-            slice_index: receipt.slice_index,
-            buy_order: &buy_order,
-            sell_order: &sell_order,
-            buyer_position: &buyer_position,
-            seller_position: &seller_position,
-            buyer_reservation: &buyer_reservation,
-            seller_reservation: &seller_reservation,
-            receipt: &receipt,
-        })?
-    };
-    settlement::apply_direct_full_slice(
+    let plan = settlement::prepare_entitled_direct_slice(&settlement::EntitledDirectSliceInput {
+        epoch: &epoch,
+        candidate: &candidate,
+        buyer_position: &buyer_position,
+        seller_position: &seller_position,
+        buyer_reservation: &buyer_reservation,
+        seller_reservation: &seller_reservation,
+        receipt: &receipt,
+    })?;
+    settlement::apply_entitled_direct_slice(
         &mut buyer_position,
         &mut seller_position,
         &mut buyer_reservation,
@@ -1502,7 +1528,7 @@ fn settle_page(
 }
 
 /// Authenticate every settlement address while holding at most one decoded
-/// value at a time. This shape is load-bearing on SBF: keeping all nine
+/// value at a time. This shape is load-bearing on SBF: keeping all the
 /// decoded address facts in `settle_page` exceeded the 4 KiB frame.
 #[inline(never)]
 fn validate_settle_addresses(program_id: &Pubkey, accounts: &[AccountInfo]) -> Outcome<()> {
@@ -1519,24 +1545,6 @@ fn validate_settle_addresses(program_id: &Pubkey, accounts: &[AccountInfo]) -> O
         expect_pda(
             accounts[IX_SETTLE_CANDIDATE].key,
             seeds::candidate_pda(program_id, &value.epoch.bytes(), &value.candidate.bytes()),
-            Some(value.stored_bump),
-        )?;
-    }
-    {
-        let value = clutch_solana_layout::clearing::CandidateFeedHeader::decode(
-            &accounts[IX_SETTLE_FEED].data.borrow(),
-        )?;
-        expect_pda(
-            accounts[IX_SETTLE_FEED].key,
-            seeds::candidate_feed_pda(program_id, &value.epoch.bytes(), &value.candidate.bytes()),
-            Some(value.stored_bump),
-        )?;
-    }
-    {
-        let value = stream::OrderPageHeader::decode(&accounts[IX_SETTLE_PAGE].data.borrow())?;
-        expect_pda(
-            accounts[IX_SETTLE_PAGE].key,
-            seeds::page_pda(program_id, &value.epoch.bytes(), value.page_index),
             Some(value.stored_bump),
         )?;
     }
@@ -1608,6 +1616,11 @@ fn decode_reservation_boxed(bytes: &[u8]) -> Outcome<Box<ReservationAccount>> {
 #[inline(never)]
 fn decode_receipt_boxed(bytes: &[u8]) -> Outcome<Box<SettlementReceiptAccount>> {
     Ok(Box::new(SettlementReceiptAccount::decode(bytes)?))
+}
+
+#[inline(never)]
+fn decode_terms_boxed(bytes: &[u8]) -> Outcome<Box<clutch_solana_layout::TermsAccount>> {
+    Ok(Box::new(clutch_solana_layout::TermsAccount::decode(bytes)?))
 }
 
 /// Boxed [`load_grid`]: one tick vector in this helper's frame, one heap

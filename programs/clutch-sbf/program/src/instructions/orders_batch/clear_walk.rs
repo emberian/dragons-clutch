@@ -317,8 +317,11 @@ fn read_interner_boxed(work_account: &AccountInfo) -> Outcome<Box<OwnerInterner>
 }
 
 /// Verify one pushed order's canonical reservation: join 1's per-order step.
+///
+/// `pub(super)` because the entitlement freeze (T2-8) re-runs exactly this
+/// validation before flipping a reservation `ACTIVE → ENTITLED`.
 #[inline(never)]
-fn validate_walk_reservation(
+pub(super) fn validate_walk_reservation(
     program_id: &Pubkey,
     account: &AccountInfo,
     epoch: &EpochAccount,
