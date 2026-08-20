@@ -72,6 +72,21 @@ in the reseal lane's output) and the postmark doorstep (4 threads).
 
 ## Done log (2026-08-19 session)
 
+- FEE ECONOMICS PHASE 1 LANDED (9f7c155 docs + a88201d lab, verified and
+  pushed): FEE_GEOMETRY/ECONOMICS/OPEN_QUESTIONS corrected per all twelve
+  findings (zero-price kernel channel now in the section-5 threat list with
+  Prop 9 cited; Prop 10 refutation + Props 11-12 characterization absorbed;
+  the eight unsupported assertions fixed; two decided OPEN_QUESTIONS rows
+  retired). Lab: FeeBasis grew PER_EGG_LEG (arm 3) and QUOTIENT_RANGE
+  (arm 6); tests 25 -> 33 OK. DECISION-RELEVANT SURPRISE from the executable
+  Prop-9 falsifier: on risk transfer supported entirely on zero-priced
+  outcomes, THREE of four arms charge exactly zero (dispersion, flat-cash,
+  AND per-Egg all share the hole — zero-priced legs have zero consideration);
+  only the quotient-norm arm charges (exactly M/1000 at every tested scale
+  up to 10^30). The evasion channel is not dispersion-specific; it is a
+  property of every consideration-proportional base. Ember's fee-base
+  decision should weigh this.
+
 - MANIFEST RESEALED AT 100/100 EXECUTED GATES (98fb070; emission provenance
   400bcbf; post-commit check --run-gates fully green: digests, toolchain,
   declarations, exit codes, key lines all match). The combined reseal the
