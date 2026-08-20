@@ -1,6 +1,9 @@
 //! `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`,
-//! `Intent::SettlePage`, and the staged checkpoint creation pair
-//! `Intent::InitClearWork` / `Intent::GrowClearWork` ([`clear_work`]).
+//! `Intent::SettlePage`, the staged checkpoint creation pair
+//! `Intent::InitClearWork` / `Intent::GrowClearWork` ([`clear_work`]), the
+//! general epoch lifecycle ([`general_epoch`]), the on-chain streaming walk
+//! ([`clear_walk`]), and the candidate submission and selection lifecycle
+//! ([`selection`]).
 //!
 //! This module owns the batch-auction plane's account lists.  `PlaceOrder` and
 //! `CancelOrder` own the funded order lifecycle.  `SettlePage` now exposes one
@@ -485,6 +488,7 @@ pub mod clear_walk;
 pub mod clear_work;
 pub mod general_epoch;
 mod reservation;
+pub mod selection;
 pub(super) mod settlement;
 
 /// Copy one static value onto the heap without materializing it on a frame.
@@ -1179,6 +1183,61 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
+        Action::Layout(Intent::SubmitCandidate {
+            market,
+            epoch,
+            prices,
+            virtual_split,
+            virtual_merge,
+            honored_aon_mask,
+            declared_slices,
+            weighted_direct_volume,
+            limit_surplus_price_units,
+            distinct_owners,
+        }) => selection::submit_candidate(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            prices,
+            *virtual_split,
+            *virtual_merge,
+            *honored_aon_mask,
+            *declared_slices,
+            *weighted_direct_volume,
+            *limit_surplus_price_units,
+            *distinct_owners,
+        ),
+        Action::Layout(Intent::WriteCandidateFeed {
+            market,
+            epoch,
+            candidate,
+            chunk,
+        }) => selection::write_candidate_feed(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            candidate,
+            chunk,
+        ),
+        Action::Layout(Intent::SealCandidate {
+            market,
+            epoch,
+            candidate,
+        }) => selection::seal_candidate(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            candidate,
+        ),
+        Action::Layout(Intent::FinalizeSelection { market, epoch }) => {
+            selection::finalize_selection(program_id, accounts, request.sequence, market, epoch)
+        }
         /* Every other action belongs to another family module; the router never
          * sends one here, and this arm exists so that adding one to the router
          * is a compile error rather than a silent success. */

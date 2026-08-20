@@ -328,7 +328,7 @@ impl Fixture {
     fn freeze(&self) -> Instruction {
         let mut metas = vec![
             AccountMeta::new(self.epoch_account, false),
-            AccountMeta::new_readonly(self.window_account, false),
+            AccountMeta::new(self.window_account, false),
             AccountMeta::new_readonly(clock_address(), false),
         ];
         for page in &self.pages {

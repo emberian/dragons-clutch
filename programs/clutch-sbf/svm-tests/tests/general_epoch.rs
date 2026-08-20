@@ -30,7 +30,10 @@ use {
     },
     clutch_solana_layout::{
         account_len, canonical_epoch_id, canonical_order_id, canonical_outcome_id,
-        clearing::{open_general_epoch, EpochWindowAccount, EPOCH_WINDOW_ACCOUNT_BYTES},
+        clearing::{
+            open_general_epoch, EpochWindowAccount, CANDIDATE_WINDOW_SLOTS,
+            EPOCH_WINDOW_ACCOUNT_BYTES, MAX_RETAINED_CANDIDATES,
+        },
         reservation::canonical_reservation_id,
         stream, EpochAccount, Hash32, MarketAccount, OrderPageAccount, OrderRecord, OrderSlot,
         PortfolioRecord, PositionAccount, PriceGridAccount, TermsAccount, EPOCH_PHASE_FROZEN,
@@ -287,9 +290,11 @@ impl Fixture {
     }
 
     fn freeze(&self, pages: &[Address]) -> Instruction {
+        // The window is writable from the T2-7 revision on: the freeze
+        // stamps the candidate-window schedule and the live cardinality.
         let mut metas = vec![
             AccountMeta::new(self.epoch_account, false),
-            AccountMeta::new_readonly(self.window_account, false),
+            AccountMeta::new(self.window_account, false),
             AccountMeta::new_readonly(clock_address(), false),
         ];
         assert_eq!(metas.len(), FREEZE_EPOCH_FIXED_ACCOUNT_COUNT);
@@ -626,6 +631,12 @@ async fn the_general_lifecycle_initializes_places_cancels_and_freezes() {
         market: fixture.market,
         epoch_index: EPOCH_INDEX,
         freeze_deadline_slot: FREEZE_DEADLINE,
+        selection_deadline_slot: 0,
+        selected_slot: 0,
+        selected_candidate: Hash32::ZERO,
+        retained: [Hash32::ZERO; MAX_RETAINED_CANDIDATES],
+        live_order_count: 0,
+        retained_count: 0,
         stored_bump: window_bump,
         flags: 0,
     };
@@ -748,6 +759,20 @@ async fn the_general_lifecycle_initializes_places_cancels_and_freezes() {
     // The frozen epoch binds its sealed set: the post-state check, re-run
     // host-side over the exact bank bytes.
     stream::epoch_binds_page_set(&frozen, &[&frozen_page]).unwrap();
+    // The freeze opened the candidate window: the schedule is the pinned
+    // span from the freeze slot, and the stamped live cardinality is the
+    // slot count minus the one retirement.
+    let stamped = EpochWindowAccount::decode(
+        &account(&mut context, fixture.window_account).await.unwrap().data,
+    )
+    .unwrap();
+    assert_eq!(
+        stamped.selection_deadline_slot,
+        FREEZE_DEADLINE + CANDIDATE_WINDOW_SLOTS
+    );
+    assert_eq!(stamped.live_order_count, 3);
+    assert_eq!(stamped.retained_count, 0);
+    assert_eq!(stamped.selected_candidate, Hash32::ZERO);
 
     // Double freeze refuses; the frozen book takes no placement and releases
     // no ACTIVE reservation (cancellation requires OPEN).
