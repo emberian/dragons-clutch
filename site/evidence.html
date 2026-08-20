@@ -258,7 +258,20 @@ whose result refuted a claim in an earlier draft of the author&#8217;s own
 regulatory comment before any human read it. The header of the file
 describes its own columns. A computable design can be wrong in public, and
 corrected; this file is that argument&#8217;s exhibit, correction scar and
-all.</p>
+all. Its sequel, the
+<a href="artifacts/manipulation-cost-v2-offhours.txt">off-hours sweep
+(v2)</a>, adds a session-thinness dimension &#8212; 8,640 rows asking how
+each settlement-window design&#8217;s manipulation cost survives a thin
+overnight session. The finding: a window contained in the thin session
+loses its cost linearly with depth; the widest clawback any surveyed
+design achieves is sixfold; no design in the grid holds its daylight cost
+at a tenth of normal depth. Two honesty rails ride in the file&#8217;s own
+header: a ratio above par never means the thin session is <em>more</em>
+protected (the cheapest attack is the minimum across sessions), and the
+model deliberately forbids carrying inventory across liquidity&#8217;s
+return &#8212; a strategy that, if allowed, can make the attack profitable
+&#8212; so these rows must never be read as proving straddling windows
+protective.</p>
 
 <p>A second checkable claim from the same laboratory banks: <strong>terminal
 closure repays recorded principal exactly.</strong> Every program account in
