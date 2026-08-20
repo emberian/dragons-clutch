@@ -72,6 +72,28 @@ in the reseal lane's output) and the postmark doorstep (4 threads).
 
 ## Done log (2026-08-19 session)
 
+- TIER 2 WAVE 1 COMPLETE, ALL FIVE JOINS MERGED (through the T2-3 merge):
+  T2-1 codec (ENCODED_BYTES 47,846; 210/210 resume points on real
+  encode/decode; 106k-flip hostile battery; 35-region tamper boundary with
+  the 29 residual regions explicitly assigned to the anchor comparison),
+  T2-2 projection (phantom-tag falsifier), T2-4 live-cardinality binding,
+  T2-5 policy profile, T2-3 staged creation (tags 47/48 LIVE, five-in-one
+  creation at 87,090 CU total after reconciling onto the real codec — the
+  provisional-vs-canonical collision was forced visible by the pin test
+  exactly as designed, and the real codec made the final grow 3x cheaper).
+  Also merged: Tier 3 host hygiene (participation_from_fills 24,704 -> 320;
+  ELF byte-identical) and the V3 terminal classification (37 -> 44 rows,
+  11 -> 14 blocking ids; NEW FINDINGS: Epoch V4 receipts and final policy
+  artifacts have NO close route — permanent rent by design, recorded as
+  DIRECT.EPOCH_RECEIPT_RENT_PERSISTS / DIRECT.POLICY_ARTIFACT_RENT_PERSISTS;
+  V3 close evidence exists in tests but is unsealed —
+  DIRECT.V3_CLOSE_EVIDENCE_UNSEALED). Full gates on final main: default
+  85/0, mock 92/0. New identities: default fda59705/1,527,640, mock
+  17d031c4/1,556,112. CYCLE-B RESEAL LANE DISPATCHED (new root, all 11
+  measurement families re-derived, audit closure gap closing with
+  batch-policy-identity added to declared source_paths). Next after seal:
+  manifest emission, attestation, then T2-6 (the walk).
+
 - CYCLE A SEALED + MERGE TRAIN LANDED AND PUSHED (through 6bc6628): cycle-A
   manifest 100/100 at 9d84e55 with post-commit check OK (batched-fold routes
   + 10k quantum + the Tier 1 source-identity refresh, all bound to the
