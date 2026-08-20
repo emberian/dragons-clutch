@@ -424,7 +424,11 @@ check("G pays (142 + 1 + 4,249)", g_paid, 4_392)
 g_received = considerations[1] + considerations[3] + considerations[4]
 check("G receives (6 + 289 + 62)", g_received, 357)
 check("G net (atoms)", g_paid - g_received, 4_035)
-check("E net = -G net (fees zero, zero-sum)", (g_received - g_paid) + (g_paid - g_received), 0)
+# E's net, recomputed from E's own legs (sells received, buys paid):
+e_received = considerations[2] + considerations[5] + package_consideration
+e_paid = considerations[1] + considerations[3] + considerations[4]
+check("E net from E's own legs (atoms)", e_received - e_paid, 4_035)
+check("zero-sum at zero fees", (g_paid - g_received) - (e_received - e_paid), 0)
 g_refunds = [
     buy_encumbrance(Z, 2961) - considerations[2],
     buy_encumbrance(Z, 32) - considerations[5],
