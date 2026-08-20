@@ -1906,6 +1906,30 @@ async fn cleared_epoch_closes_to_the_declared_permanent_set() {
     )
     .await;
     assert_eq!(custom(archive_early.0), ClutchError::MismatchedState as u32);
+    // An ACTIVE reservation refuses its rent close outright: the envelope
+    // still owns value — economic close precedes rent close.
+    let still_active = send(
+        &mut context,
+        &[fixture.close_reservation(res_idle, fixture.owners[a].key.pubkey())],
+        None,
+        390,
+    )
+    .await;
+    assert_eq!(custom(still_active.0), ClutchError::MismatchedState as u32);
+    // Wrong payer refuses on the page path too: the ledger recorded the
+    // keeper, not an order owner.
+    let page_wrong_payer = send(
+        &mut context,
+        &[{
+            let mut wrong = fixture.close_page(&[res_a, res_b, res_c, res_d, res_idle]);
+            wrong.accounts[3] = AccountMeta::new(fixture.owners[a].key.pubkey(), false);
+            wrong
+        }],
+        None,
+        391,
+    )
+    .await;
+    assert_eq!(custom(page_wrong_payer.0), ClutchError::MismatchedState as u32);
 
     // A non-owner cannot release someone else's reservation.
     let not_owner = send(
@@ -2064,6 +2088,23 @@ async fn cleared_epoch_closes_to_the_declared_permanent_set() {
         376,
     )
     .await;
+
+    // Every close path refuses its double: the accounts no longer exist, so
+    // each attempt dies on the vanished target's role.
+    for (instruction, nonce) in [
+        (fixture.close_page(&live_order), 392u32),
+        (fixture.close_pot(), 393),
+        (fixture.close_candidate(beta.id, false), 394),
+        (fixture.close_clear_work(alpha.id, false), 395),
+        (fixture.close_epoch(&retained), 396),
+        (
+            fixture.close_reservation(res_a, fixture.owners[a].key.pubkey()),
+            397,
+        ),
+    ] {
+        let twice = send(&mut context, &[instruction], None, nonce).await;
+        assert_eq!(custom(twice.0), ClutchError::WrongProgramOwner as u32);
+    }
 
     /* ------------------------------------------------------------------ */
     /* The residual is exactly the declared-permanent set.                 */
