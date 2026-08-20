@@ -1,5 +1,18 @@
 # Fee geometry on the state simplex
 
+Status: **the base SHAPE is selected; no rate is decided and no byte moves.**
+On 2026-08-20 ember adopted the additive composite
+`kappa*G(a,p) + kappa'*R(a)` — the §2 simplex-dispersion base with a
+price-free quotient-norm floor — as the selected V1 fee base *shape*
+([decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) item 9,
+on the evidence of
+[decisions/REPORT_fee-base-selection_2026-08-20.md](decisions/REPORT_fee-base-selection_2026-08-20.md)
+§6). **Both rates remain undecided**, every consensus byte stays
+`FeeBaseV1::None` until the RevenuePolicy destination lands, and the
+selection is reversible until a rate freezes. Selecting a shape promotes
+nothing: §7's criteria still gate the base, and the same adoption rewrote
+them.
+
 ## 1. Objective
 
 The venue should charge for transferring contingent risk, not for moving claimant
@@ -17,8 +30,15 @@ facts are proved in
 [research/RISK_SUMMED_POSITIONS.md](research/RISK_SUMMED_POSITIONS.md) §3 and
 stated below.
 
-This document defines an experimental fee base. It is not canonical until it beats
-flat-notional and per-Egg controls under the economic laboratory.
+This document defines the fee base. Its *shape* is selected (see Status above);
+it is not canonical until §7's promotion criteria close. The flat-notional and
+per-Egg controls have since been run against it in the economics lab and lost on
+every measured axis while retaining the one defect they were supposed to lack —
+both tax risk-free complete sets, both are complement-asymmetric, per-Egg is
+refinement-sensitive, and all three consideration-proportional bases share the
+§5 zero-price channel
+([decisions/REPORT_fee-base-selection_2026-08-20.md](decisions/REPORT_fee-base-selection_2026-08-20.md)
+§3.2-§3.3).
 
 ## 2. State-contingent dispersion
 
@@ -147,6 +167,18 @@ fee     = floor(fee_num / (kappa_den * S^2))
 carry   = fee_num mod   (kappa_den * S^2)
 ```
 
+The selected shape adds the price-free floor term to the same numerator:
+`kappa * lots * G_num(a,p) * kappa'_den + kappa' * lots * R(a) * kappa_den * S^2`
+over the common denominator `kappa_den * S^2 * kappa'_den`, with one carry and
+one checked final rounding — one `FeeBaseV1` variant carrying two rate fields,
+not two parallel pipelines, and `IntentFeeCarry` unchanged. Its
+admission-computable worst-case bound is `kappa * R(a) / 4 + kappa' * R(a)` by
+Proposition 10. **Both rates stay undecided**, and the §3 intermediate-width
+freeze is still owed — under the composite the five bounds gain a sixth, the
+floor rate
+([decisions/REPORT_fee-base-selection_2026-08-20.md](decisions/REPORT_fee-base-selection_2026-08-20.md)
+§5.1, §5.4).
+
 The carry belongs to the same Position/policy domain and prevents economically
 equivalent repeated small fills from rounding to zero. Fee is paid in Realm
 collateral on top of buy consideration or withheld from sell proceeds. It never
@@ -183,9 +215,26 @@ Candidate construction must prevent fee laundering through:
   supported on the zero-priced outcomes `Z(p)` is feeless however large its
   model-free range. The same kernel invariance §3 presents as the fee's
   central virtue degenerates into this evasion channel at extreme prices.
-  Whether the batch relation can clear fills at price zero — and what the
-  one-tick floor bounds the hole at — is a named zero-price laundering
-  falsifier the laboratory must exercise before any base is selected.
+  **This is the channel the selected composite shape closes.** The laboratory
+  exercised the falsifier before selection
+  ([decisions/REPORT_fee-base-selection_2026-08-20.md](decisions/REPORT_fee-base-selection_2026-08-20.md)
+  §3.2-§3.3): the channel is live at the byte plane — the relation's
+  `validate_prices` (`crates/clutch-batch/src/relation_v1.rs`) refuses only
+  `price > price_scale` and a broken simplex sum, so a clearing price of
+  exactly 0 is an admissible candidate coordinate and no tick floor exists;
+  a tick floor would not fix it either, bounding the leak at roughly 0.004
+  basis points of range. On the executable fixture (payoffs `(10^30,0,0)`,
+  prices `(0,0,100)`) flat cash-notional, per-Egg, and bare dispersion each
+  charge exactly **zero**, while the price-free arms charge `kappa'*R` — the
+  composite charged `10^27` atoms at the floor. Adding the floor makes the
+  kernel exactly `span(1)` at every admissible price vector, boundary
+  included (verified exhaustively), so the composite is the only candidate
+  that is a norm on the risk quotient unconditionally. The base *shape*
+  adopted 2026-08-20 is that composite
+  ([decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) item 9);
+  the frozen zero-price regression fixture therefore proves a charge rather
+  than documenting an accepted feeless channel, and it is owed before any
+  rate freezes.
 
 The simplest V1 rule is to compute the fee per filled signed intent, using the
 canonical vector committed by that intent. A more efficient netting rule across
@@ -205,13 +254,24 @@ Compare at least:
    ([research/RISK_SUMMED_POSITIONS.md](research/RISK_SUMMED_POSITIONS.md)
    §3.4), with incidence measured by implied probability — the two bases
    differ most exactly where the burden-by-probability axis below already
-   demands data.
+   demands data;
+7. the additive composite `kappa * G(a,p) + kappa' * R(a)` — **the selected
+   V1 shape** ([decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md)
+   item 9). Arms 1-6 keep their role as controls the selected shape is
+   measured against; arms 2 and 3 are already eliminated on the run evidence
+   cited in §1.
 
 Measure:
 
 - total and net protocol contribution;
 - all-in cost for single Eggs and standard payoff portfolios;
-- depth, participation, fill rate, and route leakage;
+- ~~depth, participation, fill rate, and route leakage~~ — **explicitly out
+  of scope for V1 fee-base selection**, descope RATIFIED 2026-08-20
+  ([decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) item 9,
+  ratifying register B3). These four axes require an order-flow generator, an
+  elasticity model, and a counterparty model; none exists in the tree and
+  building one is a research program, not a lane. See §7 for what the descope
+  costs;
 - complete-set and simplex coherence;
 - whether atomic portfolios gain legitimate price improvement or merely enable
   fee avoidance;
@@ -227,20 +287,64 @@ remains open. What exists today: bounded exhaustive Python
 (`research/economics/experiments.py` `exp_fee_g1`, `n <= 5`, `S <= 12`) plus the
 admission lab's bounded sweeps, and three unit tests in
 `portfolio_settlement.rs` — a file no runtime path calls. Nothing is closed in
-Verus or Rocq; Rocq currently contains zero theorems.
+Lean, which ADR-0005 makes the proof substrate of record
+([adr/0005-lean-proof-substrate-of-record.md](adr/0005-lean-proof-substrate-of-record.md),
+[decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) item 2); no
+Verus artifact carries a fee result, and the Rocq shadow role is retired.
 
 ## 7. Promotion criteria
 
-Promote the simplex-dispersion fee only if:
+Rewritten 2026-08-20 per ADR-0005 and the ratified market-quality descope
+([decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) items 2
+and 9; the replacement is specified by
+[decisions/REPORT_fee-base-selection_2026-08-20.md](decisions/REPORT_fee-base-selection_2026-08-20.md)
+§5.3 and
+[decisions/REPORT_adr-0003-supersession_2026-08-20.md](decisions/REPORT_adr-0003-supersession_2026-08-20.md)
+§3.1). What changed and why is recorded at the end of this section.
 
-- Verus and Rocq close translation, homogeneity, complete-set invariance, bounded
-  arithmetic, carry conservation, and partition-refinement invariance;
+Promote the selected composite base only if:
+
+- **Lean closes translation, homogeneity, complete-set invariance, bounded
+  arithmetic, carry conservation, and partition-refinement invariance.** The
+  six properties keep their content; only the prover changes. Lean is the
+  proof substrate of record
+  ([adr/0005-lean-proof-substrate-of-record.md](adr/0005-lean-proof-substrate-of-record.md)),
+  so these are PROVED-MODEL results over Lean-authored objects, never claims
+  about the Rust, the ELF, or a deployment.
+- **The correspondence between those Lean results and the executable arm is
+  disclosed under the digest-pinned correspondence-review model** the tree
+  already uses (`verus/batch/BATCH_ASSUMPTIONS.md` is the shape): the
+  production sources SHA-256-pinned, the excluded sources named, and the
+  review stated plainly as a review that does *not* turn into a
+  machine-checked refinement. A Verus result counts here only in its retained
+  role — a checked-Rust-subset proof of an actual executable body under
+  digest-pinned contracts.
+- **The executable lab gates close**: the bounded-exhaustive economics lab
+  (`research/economics-admission/`) exercises the arithmetic invariants and
+  the kernel behavior of §3 against the selected shape, and the §5 zero-price
+  laundering fixture is frozen as a regression proving the composite's
+  **charge at the floor** — not documenting a feeless channel.
 - adversarial simulation finds no cheaper equivalent encoding or fragmentation;
-- user costs are no worse than the lowest sustainable control on the primary
-  payoff families;
-- the protocol contribution remains positive under conservative route elasticity;
 - executor and maker rewards never depend on future volume for liveness; and
-- the explanation remains comprehensible in the signing UI.
+- the explanation remains comprehensible in the signing UI — including the
+  floor's second sentence ("plus at most `kappa'` per unit of maximum
+  payoff"), which is the composite's own cost against the one-base story.
 
 Otherwise use the simplest control that meets the product floors. Novelty is not a
 license to impose an opaque tax.
+
+**What this section used to demand, and why it no longer does.** Until
+2026-08-20 the first criterion read "Verus and Rocq close translation,
+homogeneity, complete-set invariance, bounded arithmetic, carry conservation,
+and partition-refinement invariance." That clause was unsatisfiable as
+written, not pending: Rocq holds zero theorems and its shadow role is now
+retired, and Verus covers roughly 1.5 of the eleven properties
+`docs/VERIFICATION.md` assigned it. Two further criteria — "user costs no
+worse than the lowest sustainable control on the primary payoff families" and
+"the protocol contribution remains positive under conservative route
+elasticity" — read the four market-quality axes §6 now records as out of V1
+scope, and are **retired with that descope**. The cost of retiring them,
+stated plainly rather than hidden: nothing in the V1 selection can say
+whether any nonzero fee at any rate loses more volume than it earns. That
+question returns with the rate decision, where it is measurable on a live
+venue rather than in a simulator the tree does not have.

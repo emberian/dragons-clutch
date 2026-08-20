@@ -1,7 +1,28 @@
 # RevenuePolicy V1 — the authenticated fee destination
 
-Status: **PROPOSED / DESIGN-ONLY** — no runtime code, no ABI change, no gate
-is relaxed, and no fee becomes chargeable by this document. Written
+Status: **DESIGN-ONLY, with its six queued decisions returned 2026-08-20** —
+still no runtime code, no ABI change, no gate relaxed, and no fee chargeable by
+this document. Ember's adoption record
+([../decisions/ADOPTED_2026-08-20.md](../decisions/ADOPTED_2026-08-20.md)
+item 8, with item 6 for Plane L, on
+[../decisions/REPORT_revenue-policy-v1_2026-08-20.md](../decisions/REPORT_revenue-policy-v1_2026-08-20.md))
+closes §11's queue as follows; the design below is **unedited**:
+
+| §11 queue item | section | outcome |
+| --- | --- | --- |
+| 1. treasury key | §3, §5 | **DECIDED** (B4a): custody requirements adopted; the **pubkey itself is DEFERRED to the first fee-bearing Realm** and stays reserved to ember |
+| 2. Plane C shape | §5 | **DECIDED** (B4b): treasury Position (D6), with the mid-epoch-close grief rider joining the hostile walk (§10) |
+| 3. Plane L disposition | §4 | **DECIDED** (item 6 / B4c): the five ResolutionWork charges are a **permanent zero as frozen policy**; L1-over-L0 is the disposition of record for any future nonzero lamport charge, and **neither vault nor record is built now** |
+| 4. sequencing | §2, §4-§5 | **DECIDED** (B4d): per B4c |
+| 5. V1 split vector | §7 | **DECIDED** (B4e): 60/0/40 + `AllRestingMakers`; constrains nothing until a fee-bearing Realm exists |
+| 6. terminal classification | §3, §4 | **DECIDED** (B4f): both Realm-lifetime rows accepted, under item 7's R4 ratification |
+
+Still **not decided** here and unchanged by that record: the fee **rate** (the
+base *shape* is selected elsewhere — [FEE_GEOMETRY.md](../FEE_GEOMETRY.md) —
+with both rates open), promotion, and real-money activation. Every §9 gate
+stays closed and the §10 falsifiers stay owed.
+
+Written
 2026-08-20 for ember's morning review, executing step 3 of
 `docs/reviews/FEE_ECONOMICS_FINDINGS_2026-08-19.md` §6: *decide the
 destination before the base*. The claim vocabulary of `CURRENT_TRUTH.md` §1
@@ -138,6 +159,21 @@ stored_bump:      u8
   look like after the fact.
 
 ## 4. Plane L: the lamport destination
+
+**Decided 2026-08-20 (B4c,
+[../decisions/ADOPTED_2026-08-20.md](../decisions/ADOPTED_2026-08-20.md)
+item 6): all five ResolutionWork charges are permanently zero as frozen
+policy — zero as policy, not as placeholder. No vault is built.** L1 below is
+ratified as the disposition *of record* for any future nonzero lamport charge
+on an optional service flow, and the `lamport_sink` member of the §3 const
+stays, documented as reserved. The rationale of record is the protected-pools
+row plus the anti-liveness argument — not the source comment's "V1 has no
+authenticated fee sink", which stops being true the moment any sink exists.
+This is the **weak form** of permanence: a `RESOLUTION_WORK_COST_VERSION_V2`
+sibling const (§4.1 below) may introduce a charge for **new** Works without
+breaking any in-flight promise, because Begin freezes the schedule digest per
+Work. The two dispositions below therefore read as the design record behind
+that choice, not as an open fork.
 
 Two admissible dispositions for a nonzero protocol charge, one recommended:
 
@@ -445,6 +481,14 @@ design rather than the test:
    findings §4.1 corrected) measured on the byte plane, not the lab.
 
 ## 11. What this design does not decide, and the queue for ember
+
+**The six-item queue below returned decided on 2026-08-20** — outcomes in the
+status table at the head of this document
+([../decisions/ADOPTED_2026-08-20.md](../decisions/ADOPTED_2026-08-20.md)
+items 6 and 8). The queue text is kept as written so the decisions stay
+readable against the question they answered. The "not decided here" list
+immediately below stands, with one amendment: the fee base *shape* has since
+been selected ([FEE_GEOMETRY.md](../FEE_GEOMETRY.md)) while the rate has not.
 
 Not decided here, deliberately:
 

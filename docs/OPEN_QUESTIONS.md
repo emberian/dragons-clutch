@@ -3,9 +3,20 @@
 These are intentionally unresolved. Implementations must not silently select an
 answer merely because a convenient code path exists.
 
+Rows retired by ember's adoption record of 2026-08-20 are marked in place with
+a pointer, not deleted — [decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md)
+is the record and the reports it cites carry the counterarguments. A row marked
+**Deferred** is a decision ember took *not* to decide yet, with the tension
+named; it is not an open question that nobody has reached.
+
 ## P0: before kernel semantics freeze
 
 ### Failure payout and sabotage
+
+**Ratified 2026-08-20** ([decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md)
+item 7): the failure-payout decision is ratified as part of the R4 terminal
+ratification. Ratification closes the decision, not the runtime promotion
+falsifiers, which remain open where the decision document records them.
 
 **Decided 2026-08-19:** `EvidenceOnlyRecoveryV1` — there is no numeric
 data-failure payout, because no fixed fallback vector is distribution-neutral
@@ -27,6 +38,15 @@ nonzero credit numerator is a terminal STOP, not sweepable dust. See
 
 ### Upgrade posture
 
+**Deferred 2026-08-20, with the tension named**
+([decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md), "Deferred
+with the tension named"): the report recommended
+immutable-at-first-deployment; ember's weakest-choice principle favors
+upgradeable-then-burn, because burn is always available and un-burn never is.
+Mainnet is gated regardless, and the **devnet** posture is settled by item 5 —
+deployments use the sealed opt-3 identity only, with the devnet beta authority
+ratified as recorded in the deploy job. The mainnet posture stays open:
+
 Decide whether the reference deployment has a time-bounded audited beta authority
 followed by irrevocable removal, or is immutable at first deployment. Source code
 must support either deployment without pretending the former is the latter.
@@ -39,7 +59,19 @@ program. A separate venue must never write Position bytes directly.
 
 ### Realm admission
 
-Freeze the V1 collateral-profile allowlist. Plain SPL Token and narrowly profiled
+**Retired 2026-08-20** ([decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md)
+item 4, on
+[decisions/REPORT_realm-admission-and-token2022_2026-08-20.md](decisions/REPORT_realm-admission-and-token2022_2026-08-20.md)):
+the V1 allowlist is **FROZEN as built** — Token-2022 base mints, extension
+ceiling zero, ImmutableOwner required on the Hoard, and unknown discriminants
+fail closed. Fail-closed admission is the deliberate strong choice: it preserves
+future options where admission-then-exploitation would foreclose them. The
+record states plainly that the DREGG dogfood mint has no executable V1 profile.
+Still open and *not* covered by that item: pinning the exact Token-2022 program
+artifact (register F5), and the two-synthetic-Realm demonstration below.
+
+The original row, for reference: freeze the V1 collateral-profile allowlist.
+Plain SPL Token and narrowly profiled
 Token-2022 collateral may have different parsing/CPI requirements. Decide whether
 transfer-fee, transfer-hook, interest-bearing, confidential, rebase-like, or
 freezable collateral is rejected categorically. Demonstrate generic semantics with
@@ -62,12 +94,26 @@ audited product subset. Prove that human labels cannot change semantic identity.
 - Security tiers, per-feed exposure limits, and multi-source aggregation.
 - Supported monoidal feature family and what is explicitly not derivable.
 - Archive page size, retention horizon, recycling proof, and Window cache identity.
+  Still open. Note that the R4 §8 reference-ownership fork that would consume a
+  retention horizon is **explicitly deferred** until the provider-horizon
+  evidence exists
+  ([decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) item 7),
+  so this row is not blocking a decided design.
 - Reverse-Dutch bounty step count and measured SOL cost quantiles.
 - Whether any historical provider dependency is acceptable for repair.
 
 ## P2: before simplex-auction freeze
 
-- Uncertainty-shaped versus flat-notional fee policy and allowed immutable tiers.
+- ~~Uncertainty-shaped versus flat-notional fee policy~~ — **retired
+  2026-08-20**: the fee-base fork is decided at the level of *shape*. The
+  selected V1 base shape is the additive composite `kappa*G(a,p) + kappa'*R(a)`
+  — uncertainty-shaped dispersion with a price-free quotient-norm floor; flat
+  and per-leg are eliminated
+  ([decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) item 9,
+  on [decisions/REPORT_fee-base-selection_2026-08-20.md](decisions/REPORT_fee-base-selection_2026-08-20.md);
+  presented in [FEE_GEOMETRY.md](FEE_GEOMETRY.md)). **Both rates remain open**,
+  as do the allowed immutable tiers and the bounds freeze, and every byte stays
+  `FeeBaseV1::None`. The selection is reversible until a rate freezes.
 - Definition of standing maker: at least one full frozen Epoch is the leading
   candidate.
 - Treatment of same-Epoch crossings and self-crosses.

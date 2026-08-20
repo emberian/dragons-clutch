@@ -262,16 +262,38 @@ semantics.
 
 ## 8. Tier 2 general-clearing profile and the zero-sentinel argument (T2-5)
 
-Status: **PROPOSED policy profile; HOST-TESTED verdict-identity gate.** Added
-by increment T2-5 of
+Status: **`GENERAL_CLEARING_POLICY_V1` and `CANDIDATE_WINDOW_SLOTS = 1_000` are
+FROZEN 2026-08-20** (were PROPOSED); the verdict-identity gate remains
+**HOST-TESTED**. Added by increment T2-5 of
 [TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md](../design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md);
-ember's sign-off is what turns PROPOSED into frozen.
+ember's sign-off was what turned PROPOSED into frozen, and it is recorded in
+[../decisions/ADOPTED_2026-08-20.md](../decisions/ADOPTED_2026-08-20.md) item 1
+on
+[../decisions/REPORT_general-clearing-policy-freeze_2026-08-20.md](../decisions/REPORT_general-clearing-policy-freeze_2026-08-20.md).
+Both are frozen **as pinned** — the selectors below and the 1,000-slot window
+are unchanged by the freeze, and a future profile is a sibling const with a new
+digest, never an amendment of the frozen one.
+
+The in-source doc comments still say PROPOSED. That is deliberate: the
+`general_clearing_v1.rs` and `clearing.rs` comment updates **ride the next
+reseal-bearing wave** rather than opening a drift window for a comment (the
+adoption record says so in the same item). Until that wave lands, this document
+and the adoption record are the freeze of record and the source comments are
+known-stale.
+
+Freezing the policy does **not** promote the plane: the Tier-2 evidence stays
+`UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY`, and the walk plane's separately
+adopted advance is to rung W1 only — CU/quote rows, no live flags (adoption
+item 10).
 
 ### 8.1 `GENERAL_CLEARING_POLICY_V1`
 
 `src/general_clearing_v1.rs` pins the Tier 2 frozen policy profile v1 as a
 const, sibling to `DIRECT_POLICY_V1`. Plan-pinned selectors: `fee_base: None`
-(0 bps — deliberately not preempting the queued fee-base fork),
+(0 bps — deliberately not preempting the fee-base fork, whose *shape* was
+selected 2026-08-20 with both rates open and every byte still
+`FeeBaseV1::None`; this pin is untouched by that selection, and a fee-bearing
+profile would be a sibling const with a new digest),
 `pairing_witness: ExplicitSlices`, `portfolio_lots: StrictWholeOrder`,
 `self_cross: RefuseOverlap` (two order passes). The plan's ONE pinned dust
 choice is `AssignCanonical`, taken from the relation's own code and tests:
