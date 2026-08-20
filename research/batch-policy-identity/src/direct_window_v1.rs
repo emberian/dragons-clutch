@@ -24,12 +24,13 @@ use clutch_batch::relation_v1::{
     SelfCrossPolicyV1, TransferPhaseV1, MAX_OUTCOMES,
 };
 use clutch_batch::{DustPolicy, MAX_ORDERS};
-use sha2::{Digest, Sha256};
+
+use crate::hasher::{Chosen, Sha256Like};
 
 use super::{
     FullRelationDomainV1, FullScoreV1, FullSubmittedCandidateV1, Identity32V1,
     PolicyIdentityErrorV1, VerifiedSubmittedCandidateV1, ACCOUNT_CANDIDATE_DIGEST_DOMAIN,
-    FULL_RELATION_CANDIDATE_DIGEST_DOMAIN,
+    ACCOUNT_CANDIDATE_PREIMAGE, FULL_RELATION_CANDIDATE_DIGEST_DOMAIN,
 };
 
 /// Maximum number of candidate accounts retained for final re-verification.
@@ -156,7 +157,15 @@ pub fn canonical_account_candidate_id(
     market: Identity32V1,
     prices: &[u64; MAX_OUTCOMES],
 ) -> Identity32V1 {
-    let mut h = Sha256::new();
+    account_candidate_id_with::<Chosen<ACCOUNT_CANDIDATE_PREIMAGE>>(epoch, market, prices)
+}
+
+fn account_candidate_id_with<H: Sha256Like>(
+    epoch: Identity32V1,
+    market: Identity32V1,
+    prices: &[u64; MAX_OUTCOMES],
+) -> Identity32V1 {
+    let mut h = H::new();
     h.update(ACCOUNT_CANDIDATE_DIGEST_DOMAIN);
     h.update(epoch.0);
     h.update(market.0);
@@ -171,7 +180,7 @@ pub fn canonical_account_candidate_id(
     h.update(0u64.to_le_bytes());
     h.update(0u64.to_le_bytes());
     h.update(0u64.to_le_bytes());
-    Identity32V1(h.finalize().into())
+    Identity32V1(h.finalize())
 }
 
 /// Exact retained identity pair.  Score coordinates live in the referenced
@@ -450,12 +459,32 @@ fn verify_direct_two_order_candidate_cached(
     Ok(value)
 }
 
+/// Exact preimage width of the direct relation-candidate identity: domain, the
+/// relation-domain digest, the candidate identity, every fill under
+/// [`MAX_ORDERS`], the honoured-AON mask, and the absent-witness discriminant.
+/// The direct profile never carries an explicit pairing witness, which is what
+/// keeps this preimage fixed.
+const DIRECT_RELATION_CANDIDATE_PREIMAGE: usize =
+    FULL_RELATION_CANDIDATE_DIGEST_DOMAIN.len() + 32 + 32 + (MAX_ORDERS * 8) + 8 + 1;
+
 fn direct_relation_candidate_digest(
     domain_digest: Identity32V1,
     candidate_id: Identity32V1,
     quantity: u64,
 ) -> Identity32V1 {
-    let mut h = Sha256::new();
+    direct_relation_candidate_digest_with::<Chosen<DIRECT_RELATION_CANDIDATE_PREIMAGE>>(
+        domain_digest,
+        candidate_id,
+        quantity,
+    )
+}
+
+fn direct_relation_candidate_digest_with<H: Sha256Like>(
+    domain_digest: Identity32V1,
+    candidate_id: Identity32V1,
+    quantity: u64,
+) -> Identity32V1 {
+    let mut h = H::new();
     h.update(FULL_RELATION_CANDIDATE_DIGEST_DOMAIN);
     h.update(domain_digest.0);
     h.update(candidate_id.0);
@@ -468,7 +497,7 @@ fn direct_relation_candidate_digest(
     }
     h.update(0u64.to_le_bytes()); // honored AON mask
     h.update([0]); // no explicit pairing witness under DIRECT_POLICY_V1
-    Identity32V1(h.finalize().into())
+    Identity32V1(h.finalize())
 }
 
 /// Compact, fixed-layout verified candidate for the bounded direct profile.
@@ -1322,13 +1351,30 @@ fn validate_retained_registry(
     Ok(())
 }
 
+/// Exact preimage width of the admission transcript fold: domain, four 32-byte
+/// window identities, the two slot bounds and the running count, the previous
+/// transcript, and the admitted identity pair.
+const DIRECT_ADMISSION_TRANSCRIPT_PREIMAGE: usize =
+    DIRECT_ADMISSION_TRANSCRIPT_DOMAIN.len() + (4 * 32) + (3 * 8) + 32 + 32 + 32;
+
 fn next_transcript(
     previous: Identity32V1,
     window: &DirectCandidateWindowV1,
     next_count: u64,
     admitted: DirectCandidateEntryV1,
 ) -> Identity32V1 {
-    let mut h = Sha256::new();
+    next_transcript_with::<Chosen<DIRECT_ADMISSION_TRANSCRIPT_PREIMAGE>>(
+        previous, window, next_count, admitted,
+    )
+}
+
+fn next_transcript_with<H: Sha256Like>(
+    previous: Identity32V1,
+    window: &DirectCandidateWindowV1,
+    next_count: u64,
+    admitted: DirectCandidateEntryV1,
+) -> Identity32V1 {
+    let mut h = H::new();
     h.update(DIRECT_ADMISSION_TRANSCRIPT_DOMAIN);
     h.update(window.epoch_id.0);
     h.update(window.order_set_id.0);
@@ -1340,7 +1386,7 @@ fn next_transcript(
     h.update(previous.0);
     h.update(admitted.candidate_id.0);
     h.update(admitted.relation_candidate_digest.0);
-    Identity32V1(h.finalize().into())
+    Identity32V1(h.finalize())
 }
 
 struct Writer<'a> {
@@ -2095,5 +2141,101 @@ mod tests {
                 }
             }
         }
+    }
+
+    /* --- native-hasher equivalence ------------------------------------------
+     *
+     * These three folds are on the SBF reach graph: the candidate identity and
+     * the relation-candidate digest are recomputed on every direct submission,
+     * and the transcript is folded on every admission.  On SBF each buffers its
+     * preimage and calls the runtime SHA-256 syscall; off-chain each folds the
+     * portable implementation.  The values must be identical, because they are
+     * a PDA seed, the final score coordinate, and a chained commitment.
+     * ---------------------------------------------------------------------- */
+
+    /// Every fold in this module agrees across both hashers, and the declared
+    /// preimage widths hold the widest shape each admits.
+    #[test]
+    fn native_hasher_matches_the_portable_hasher_on_every_direct_window_fold() {
+        use crate::hasher::Native;
+
+        let domain = domain();
+        let domain_digest = domain.digest().unwrap();
+
+        // The account-plane candidate identity, over the full simplex.
+        let mut prices = [0u64; MAX_OUTCOMES];
+        prices[0] = 2_500;
+        prices[1] = PRICE_SCALE - 2_500;
+        assert_eq!(
+            canonical_account_candidate_id(domain.epoch_id, domain.market_id, &prices),
+            account_candidate_id_with::<Native<ACCOUNT_CANDIDATE_PREIMAGE>>(
+                domain.epoch_id,
+                domain.market_id,
+                &prices,
+            ),
+            "the direct account-plane candidate identity differs between hashers"
+        );
+        // A saturated simplex, so no price word is zero and every one of the
+        // MAX_OUTCOMES words is written.
+        let saturated = [u64::MAX; MAX_OUTCOMES];
+        assert_eq!(
+            canonical_account_candidate_id(domain.epoch_id, domain.market_id, &saturated),
+            account_candidate_id_with::<Native<ACCOUNT_CANDIDATE_PREIMAGE>>(
+                domain.epoch_id,
+                domain.market_id,
+                &saturated,
+            ),
+        );
+
+        // The relation-candidate digest, including at a saturating quantity so
+        // the fill words are full width.
+        for quantity in [0u64, 4, u64::MAX] {
+            assert_eq!(
+                direct_relation_candidate_digest(domain_digest, id(9), quantity),
+                direct_relation_candidate_digest_with::<Native<DIRECT_RELATION_CANDIDATE_PREIMAGE>>(
+                    domain_digest,
+                    id(9),
+                    quantity,
+                ),
+                "the direct relation-candidate digest differs between hashers at {quantity}"
+            );
+        }
+
+        // The admission transcript, folded over a real window.
+        let candidate = verified_at(2_500, 100);
+        let window = DirectCandidateWindowV1::first(binding(), &candidate, 100, 8).unwrap();
+        for count in [1u64, 2, u64::MAX] {
+            assert_eq!(
+                next_transcript(Identity32V1::ZERO, &window, count, candidate.entry()),
+                next_transcript_with::<Native<DIRECT_ADMISSION_TRANSCRIPT_PREIMAGE>>(
+                    Identity32V1::ZERO,
+                    &window,
+                    count,
+                    candidate.entry(),
+                ),
+                "the admission transcript differs between hashers at count {count}"
+            );
+            assert_eq!(
+                next_transcript(id(200), &window, count, candidate.entry()),
+                next_transcript_with::<Native<DIRECT_ADMISSION_TRANSCRIPT_PREIMAGE>>(
+                    id(200),
+                    &window,
+                    count,
+                    candidate.entry(),
+                ),
+            );
+        }
+
+        // The stored transcript the window actually built is the syscall value
+        // too, so the chained commitment is unchanged end to end.
+        assert_eq!(
+            window.admission_transcript,
+            next_transcript_with::<Native<DIRECT_ADMISSION_TRANSCRIPT_PREIMAGE>>(
+                Identity32V1::ZERO,
+                &window,
+                1,
+                candidate.entry(),
+            ),
+        );
     }
 }

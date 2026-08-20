@@ -12,7 +12,31 @@ path = "src/lib.rs"
 [dependencies]
 clutch-batch = { path = "../../crates/clutch-batch" }
 clutch-liveness = { path = "../../crates/clutch-liveness" }
+
+[target.'cfg(not(target_os = "solana"))'.dependencies]
+# The portable software SHA-256 every identity here is defined against.  It is
+# the off-chain implementation and the oracle the on-chain path is tested
+# against; it is deliberately absent from the SBF graph, where its fully
+# unrolled `compress256` was 53,952 bytes -- the largest single symbol in the
+# deployable program -- and every block it folded was charged compute.
 sha2 = { version = "=0.10.9", default-features = false }
+
+[target.'cfg(target_os = "solana")'.dependencies]
+# Safe wrapper around Solana's native SHA-256 syscall, used for exactly the same
+# canonical preimages the portable path folds.
+solana-sha256-hasher = { version = "=3.1.0", default-features = false }
+
+[dev-dependencies]
+# The host implementation is test-only and is what lets one process hash a
+# preimage both ways and require the two digests to be byte-identical.
+solana-sha256-hasher = { version = "=3.1.0", default-features = false, features = [
+    "sha2",
+] }
 
 [features]
 default = []
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+priority = 0
+check-cfg = ['cfg(target_os, values("solana"))']

@@ -29,7 +29,7 @@
 
 use core::cmp::Ordering;
 
-use sha2::{Digest, Sha256};
+use crate::hasher::{Chosen, Sha256Like};
 
 use clutch_batch::relation_v1::{
     self, AllocationPolicyV1, AonPolicyV1, BookV1, CandidateV1, ErrorV1, FeeBaseV1, FrozenPolicyV1,
@@ -38,6 +38,103 @@ use clutch_batch::relation_v1::{
     TransferPhaseV1, FEE_BPS_DENOMINATOR, MAX_OUTCOMES, MAX_PRICE_SCALE, RELATION_VERSION_V1,
 };
 use clutch_batch::{DustPolicy, MAX_ORDERS};
+
+/// SHA-256 in the shape each target can afford.
+///
+/// Every identity in this crate is SHA-256 over one canonical, domain-separated
+/// preimage.  Off-chain that preimage is folded by the portable `sha2`
+/// implementation, unchanged.  Under `cfg(target_os = "solana")` `sha2` is not
+/// in the dependency graph at all: its fully unrolled `compress256` was 53,952
+/// bytes of the deployable program ELF — its single largest symbol — and every
+/// 64-byte block it folded was compute the runtime charged for, while that same
+/// runtime already exposes SHA-256 as one syscall.
+///
+/// The syscall wrapper consumes a whole preimage at once and has no incremental
+/// form, so [`Native`] buffers the identical `update` sequence into a frame of
+/// exactly the width its call site declares and hashes it in one call.  The two
+/// forms therefore commit to the same byte string and produce the same value;
+/// only the cost differs.  Every hashing function below is written once, generic
+/// over [`Sha256Like`], and instantiated at both — which is what lets the tests
+/// require byte-identical output rather than assume it.
+pub(crate) mod hasher {
+    /// The incremental surface every identity in this crate is written against.
+    ///
+    /// This is deliberately not `sha2::Digest`: the on-chain form is not a
+    /// compression function at all, it is a preimage buffer in front of a
+    /// syscall, and only these three operations have a meaning on both.
+    pub(crate) trait Sha256Like {
+        /// Start an empty preimage.
+        fn new() -> Self;
+        /// Append bytes to the preimage.
+        fn update(&mut self, data: impl AsRef<[u8]>);
+        /// Consume the preimage and return its SHA-256.
+        fn finalize(self) -> [u8; 32];
+    }
+
+    /// Portable `sha2` fold.  `N` is the declared preimage width, which this
+    /// form does not need and carries only so both share one signature.
+    #[cfg(not(target_os = "solana"))]
+    #[derive(Clone, Debug, Default)]
+    pub(crate) struct Portable<const N: usize>(sha2::Sha256);
+
+    #[cfg(not(target_os = "solana"))]
+    impl<const N: usize> Sha256Like for Portable<N> {
+        fn new() -> Self {
+            Self(<sha2::Sha256 as sha2::Digest>::new())
+        }
+        fn update(&mut self, data: impl AsRef<[u8]>) {
+            sha2::Digest::update(&mut self.0, data);
+        }
+        fn finalize(self) -> [u8; 32] {
+            sha2::Digest::finalize(self.0).into()
+        }
+    }
+
+    /// Solana's native SHA-256 syscall over a buffered preimage of exactly `N`
+    /// bytes.
+    ///
+    /// Built on SBF and in host unit tests.  The host build resolves the
+    /// wrapper's `sha2` backend, which is what lets a test hash the same
+    /// sequence both ways in one process and compare the bytes.
+    #[cfg(any(target_os = "solana", test))]
+    #[derive(Clone, Debug)]
+    pub(crate) struct Native<const N: usize> {
+        preimage: [u8; N],
+        at: usize,
+    }
+
+    #[cfg(any(target_os = "solana", test))]
+    impl<const N: usize> Sha256Like for Native<N> {
+        fn new() -> Self {
+            Self {
+                preimage: [0; N],
+                at: 0,
+            }
+        }
+        /// A call site whose declared `N` is smaller than the preimage it
+        /// actually writes halts here on the slice bound.  That is deliberate:
+        /// a short buffer must never silently commit to a truncated preimage,
+        /// because a truncated preimage is a different — and forgeable —
+        /// identity.  The equivalence tests write every site at its widest
+        /// shape, so an undersized `N` fails on the host before it can ship.
+        fn update(&mut self, data: impl AsRef<[u8]>) {
+            let data = data.as_ref();
+            let end = self.at + data.len();
+            self.preimage[self.at..end].copy_from_slice(data);
+            self.at = end;
+        }
+        fn finalize(self) -> [u8; 32] {
+            solana_sha256_hasher::hashv(&[&self.preimage[..self.at]]).to_bytes()
+        }
+    }
+
+    /// The form this target actually ships.
+    #[cfg(not(target_os = "solana"))]
+    pub(crate) type Chosen<const N: usize> = Portable<N>;
+    /// The form this target actually ships.
+    #[cfg(target_os = "solana")]
+    pub(crate) type Chosen<const N: usize> = Native<N>;
+}
 
 /// Staged, bounded, donation-safe lifecycle model for the direct profile.
 /// It allocates no live Solana tags or instructions.
@@ -138,15 +235,48 @@ impl From<ErrorV1> for PolicyIdentityErrorV1 {
     }
 }
 
-fn sha256(domain: &[u8], parts: &[&[u8]]) -> Identity32V1 {
-    let mut h = Sha256::new();
+/// Exact preimage width of the batch-policy identity: domain plus one
+/// [`BATCH_POLICY_BYTES`] canonical artifact.
+const BATCH_POLICY_PREIMAGE: usize = BATCH_POLICY_DIGEST_DOMAIN.len() + BATCH_POLICY_BYTES;
+/// Exact preimage width of the full-relation-domain identity.
+const FULL_RELATION_DOMAIN_PREIMAGE: usize =
+    FULL_RELATION_DOMAIN_DIGEST_DOMAIN.len() + FULL_RELATION_DOMAIN_BYTES;
+/// Exact preimage width of the account-plane candidate identity: domain, two
+/// 32-byte parents, the order length and outcome count, the full simplex, and
+/// the virtual pair and honoured-AON mask.
+const ACCOUNT_CANDIDATE_PREIMAGE: usize =
+    ACCOUNT_CANDIDATE_DIGEST_DOMAIN.len() + 32 + 32 + 1 + 1 + (MAX_OUTCOMES * 8) + 8 + 8 + 8;
+/// Widest preimage of the full relation-candidate identity: domain, the domain
+/// digest, the candidate identity, every fill, the honoured-AON mask, the
+/// witness discriminant, and — when a witness is present — its length and every
+/// slice at [`relation_v1::MAX_SLICES`].
+///
+/// This one is several kilobytes because an explicit pairing witness is
+/// unbounded in practice, and it is why [`full_relation_candidate_digest`] is
+/// off-chain code.  The bound is the *type's*, not any caller's, so it cannot be
+/// tightened without turning a long witness into a refusal — which would be a
+/// semantic change, not an optimisation.  The direct profile carries no witness
+/// at all and folds the fixed 615-byte
+/// [`direct_window_v1`] preimage instead, which is the shape the program
+/// actually reaches.
+const FULL_RELATION_CANDIDATE_PREIMAGE: usize = FULL_RELATION_CANDIDATE_DIGEST_DOMAIN.len()
+    + 32
+    + 32
+    + (MAX_ORDERS * 8)
+    + 8
+    + 1
+    + 2
+    + (relation_v1::MAX_SLICES * (2 + 2 + 1 + 8));
+
+fn sha256<H: Sha256Like>(domain: &[u8], parts: &[&[u8]]) -> Identity32V1 {
+    let mut h = H::new();
     h.update(domain);
     let mut i = 0usize;
     while i < parts.len() {
         h.update(parts[i]);
         i += 1;
     }
-    Identity32V1(h.finalize().into())
+    Identity32V1(h.finalize())
 }
 
 fn allocation_byte(value: AllocationPolicyV1) -> u8 {
@@ -432,7 +562,10 @@ pub fn decode_batch_policy(input: &[u8]) -> Result<FrozenPolicyV1, PolicyIdentit
 /// Compute the canonical immutable identity of one registered policy.
 pub fn batch_policy_digest(policy: &FrozenPolicyV1) -> Result<Identity32V1, PolicyIdentityErrorV1> {
     let bytes = canonical_batch_policy_bytes(policy)?;
-    Ok(sha256(BATCH_POLICY_DIGEST_DOMAIN, &[&bytes]))
+    Ok(sha256::<Chosen<BATCH_POLICY_PREIMAGE>>(
+        BATCH_POLICY_DIGEST_DOMAIN,
+        &[&bytes],
+    ))
 }
 
 /// A relation domain with no lossy identity projection.
@@ -548,7 +681,10 @@ impl FullRelationDomainV1 {
     /// SHA-256 identity over the exact full-width domain preimage.
     pub fn digest(&self) -> Result<Identity32V1, PolicyIdentityErrorV1> {
         let bytes = self.canonical_bytes()?;
-        Ok(sha256(FULL_RELATION_DOMAIN_DIGEST_DOMAIN, &[&bytes]))
+        Ok(sha256::<Chosen<FULL_RELATION_DOMAIN_PREIMAGE>>(
+            FULL_RELATION_DOMAIN_DIGEST_DOMAIN,
+            &[&bytes],
+        ))
     }
 
     /// Identity-free arithmetic projection used only to reuse V0--V8.
@@ -682,7 +818,14 @@ impl FullSubmittedCandidateV1 {
     /// Recompute the existing account-plane Candidate identity exactly: epoch,
     /// market, order length, outcome width, all prices, virtual pair, and mask.
     pub fn recomputed_account_candidate_id(&self, domain: &FullRelationDomainV1) -> Identity32V1 {
-        let mut h = Sha256::new();
+        self.account_candidate_id_with::<Chosen<ACCOUNT_CANDIDATE_PREIMAGE>>(domain)
+    }
+
+    fn account_candidate_id_with<H: Sha256Like>(
+        &self,
+        domain: &FullRelationDomainV1,
+    ) -> Identity32V1 {
+        let mut h = H::new();
         h.update(ACCOUNT_CANDIDATE_DIGEST_DOMAIN);
         h.update(domain.epoch_id.0);
         h.update(domain.market_id.0);
@@ -696,7 +839,7 @@ impl FullSubmittedCandidateV1 {
         h.update(self.virtual_split.to_le_bytes());
         h.update(self.virtual_merge.to_le_bytes());
         h.update(self.honored_aon_mask.to_le_bytes());
-        Identity32V1(h.finalize().into())
+        Identity32V1(h.finalize())
     }
 
     fn as_unclaimed_relation_candidate(&self) -> CandidateV1 {
@@ -747,7 +890,7 @@ impl FullCandidateFeedBindingV1 {
     }
 }
 
-fn feed_leg(h: &mut Sha256, leg: LegRefV1) {
+fn feed_leg<H: Sha256Like>(h: &mut H, leg: LegRefV1) {
     match leg {
         LegRefV1::Order(index) => {
             h.update([0, index]);
@@ -761,13 +904,29 @@ fn feed_leg(h: &mut Sha256, leg: LegRefV1) {
 /// account candidate, every fill, and (when selected by policy) every explicit
 /// pairing slice.  The policy itself is already included byte-for-byte in the
 /// full-domain digest.
+///
+/// This is off-chain code.  Its widest preimage is
+/// [`FULL_RELATION_CANDIDATE_PREIMAGE`] bytes, so the on-chain form does not fit
+/// a 4 KiB SBF frame and the SBF backend says so; nothing on the program's reach
+/// graph calls it, and link-time optimisation drops it from the deployable ELF.
+/// The bounded direct profile's own fixed-width fold is what ships.
 pub fn full_relation_candidate_digest(
     domain: &FullRelationDomainV1,
     candidate: &FullSubmittedCandidateV1,
     pairing: Option<&PairingWitnessV1>,
 ) -> Result<Identity32V1, PolicyIdentityErrorV1> {
+    full_relation_candidate_digest_with::<Chosen<FULL_RELATION_CANDIDATE_PREIMAGE>>(
+        domain, candidate, pairing,
+    )
+}
+
+fn full_relation_candidate_digest_with<H: Sha256Like>(
+    domain: &FullRelationDomainV1,
+    candidate: &FullSubmittedCandidateV1,
+    pairing: Option<&PairingWitnessV1>,
+) -> Result<Identity32V1, PolicyIdentityErrorV1> {
     let domain_digest = domain.digest()?;
-    let mut h = Sha256::new();
+    let mut h = H::new();
     h.update(FULL_RELATION_CANDIDATE_DIGEST_DOMAIN);
     h.update(domain_digest.0);
     h.update(candidate.candidate_id.0);
@@ -793,7 +952,7 @@ pub fn full_relation_candidate_digest(
             }
         }
     }
-    Ok(Identity32V1(h.finalize().into()))
+    Ok(Identity32V1(h.finalize()))
 }
 
 fn recompute(
@@ -1242,5 +1401,148 @@ mod tests {
         lower.digest.0[20] = 1;
         higher.digest.0[20] = 2;
         assert!(lower.is_better_than(&higher));
+    }
+
+    /* --- native-hasher equivalence ------------------------------------------
+     *
+     * On SBF every fold below buffers its preimage and hands it to the runtime
+     * SHA-256 syscall instead of compiling a software compression function.
+     * That is a size and compute change and must never be a value change: these
+     * identities are PDA seeds, stored account commitments, and the final score
+     * coordinate of candidate selection.
+     *
+     * Each test instantiates the *same* fold twice -- once at the portable
+     * `sha2` state, once at the on-chain preimage buffer -- and requires
+     * byte-identical output.  There is one body, so a preimage that drifts
+     * drifts on both sides; what is being checked is that buffering the update
+     * sequence and folding it incrementally commit to the same byte string, and
+     * that every declared buffer width is wide enough for the widest shape its
+     * call site can produce (a short buffer halts inside `Native::update`).
+     * ---------------------------------------------------------------------- */
+
+    /// The domain-separated helper and the account-plane candidate identity.
+    #[test]
+    fn native_hasher_matches_the_portable_hasher_on_policy_and_domain_identities() {
+        let policy = base_policy();
+        let bytes = canonical_batch_policy_bytes(&policy).unwrap();
+        assert_eq!(
+            batch_policy_digest(&policy).unwrap(),
+            sha256::<hasher::Native<BATCH_POLICY_PREIMAGE>>(BATCH_POLICY_DIGEST_DOMAIN, &[&bytes]),
+            "the batch-policy identity differs between the two hashers"
+        );
+
+        let domain = domain_with(policy);
+        let domain_bytes = domain.canonical_bytes().unwrap();
+        assert_eq!(
+            domain.digest().unwrap(),
+            sha256::<hasher::Native<FULL_RELATION_DOMAIN_PREIMAGE>>(
+                FULL_RELATION_DOMAIN_DIGEST_DOMAIN,
+                &[&domain_bytes],
+            ),
+            "the full-relation-domain identity differs between the two hashers"
+        );
+
+        // The helper is also exercised directly on the degenerate shapes: no
+        // parts at all, and empty parts inside a non-empty list.
+        assert_eq!(
+            sha256::<Chosen<64>>(b"", &[]),
+            sha256::<hasher::Native<64>>(b"", &[])
+        );
+        assert_eq!(
+            sha256::<Chosen<64>>(b"domain", &[&[], &[1, 2, 3], &[]]),
+            sha256::<hasher::Native<64>>(b"domain", &[&[], &[1, 2, 3], &[]])
+        );
+    }
+
+    /// The candidate identity and the relation-candidate digest, at both the
+    /// witness-free shape and the widest explicit-witness shape.
+    #[test]
+    fn native_hasher_matches_the_portable_hasher_on_candidate_identities() {
+        let mut policy = base_policy();
+        policy.pairing_witness = PairingWitnessPolicyV1::ExplicitSlices;
+        let domain = domain_with(policy);
+        let book = crossing_book();
+        let mut prices = [0u64; MAX_OUTCOMES];
+        prices[0] = PRICE_SCALE / 2;
+        prices[1] = PRICE_SCALE / 2;
+        let legacy = canonical_candidate(&arithmetic(&domain), &book, &prices, 0, 0).unwrap();
+        let witness = relation_v1::canonical_pairing(&arithmetic(&domain), &book, &legacy).unwrap();
+        let raw = FullSubmittedCandidateV1::from_relation_candidate(&domain, &legacy).unwrap();
+
+        assert_eq!(
+            raw.recomputed_account_candidate_id(&domain),
+            raw.account_candidate_id_with::<hasher::Native<ACCOUNT_CANDIDATE_PREIMAGE>>(&domain),
+            "the account-plane candidate identity differs between the two hashers"
+        );
+
+        assert_eq!(
+            full_relation_candidate_digest(&domain, &raw, None).unwrap(),
+            full_relation_candidate_digest_with::<
+                hasher::Native<FULL_RELATION_CANDIDATE_PREIMAGE>,
+            >(&domain, &raw, None)
+            .unwrap(),
+            "the witness-free relation-candidate digest differs between the two hashers"
+        );
+        assert_eq!(
+            full_relation_candidate_digest(&domain, &raw, Some(&witness)).unwrap(),
+            full_relation_candidate_digest_with::<
+                hasher::Native<FULL_RELATION_CANDIDATE_PREIMAGE>,
+            >(&domain, &raw, Some(&witness))
+            .unwrap(),
+            "the witnessed relation-candidate digest differs between the two hashers"
+        );
+
+        // The declared buffer must hold the widest witness the type admits, not
+        // merely the small one this fixture produces.  Every slice is fed, so a
+        // width computed from a smaller bound halts here.
+        let mut widest = witness;
+        widest.len = relation_v1::MAX_SLICES as u16;
+        assert_eq!(
+            full_relation_candidate_digest(&domain, &raw, Some(&widest)).unwrap(),
+            full_relation_candidate_digest_with::<
+                hasher::Native<FULL_RELATION_CANDIDATE_PREIMAGE>,
+            >(&domain, &raw, Some(&widest))
+            .unwrap(),
+            "the widest admissible pairing witness overflows the declared preimage"
+        );
+    }
+
+    /// The identity values themselves are frozen.  The expected bytes are plain
+    /// SHA-256 over the documented preimage, computed independently of both
+    /// implementations, so this pins the value rather than the agreement of two
+    /// paths that could have moved together.
+    #[test]
+    fn canonical_policy_identity_value_is_frozen() {
+        // `DIRECT_POLICY_V1` is the shipped policy: its digest is a live PDA
+        // seed and the `policy_id` every candidate binds to.
+        let policy = direct_window_v1::DIRECT_POLICY_V1;
+        let bytes = canonical_batch_policy_bytes(&policy).unwrap();
+        assert_eq!(
+            bytes,
+            [
+                0x44, 0x43, 0x42, 0x41, 0x54, 0x50, 0x31, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02,
+                0x00, 0x00, 0x03, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+            ],
+            "the canonical policy artifact bytes moved"
+        );
+        // SHA-256("dragons-clutch/batch-policy/v1\0" || those 64 bytes), taken
+        // from a third SHA-256 implementation rather than from either path here.
+        assert_eq!(
+            batch_policy_digest(&policy).unwrap().0,
+            [
+                0xcc, 0xc7, 0x08, 0x3a, 0x80, 0x1f, 0x08, 0xd1, 0xf1, 0xd4, 0x27, 0x8c, 0x8a, 0x44,
+                0xd2, 0x1d, 0x59, 0xc2, 0x10, 0x5b, 0xec, 0x54, 0x9d, 0x86, 0x98, 0x2b, 0x59, 0x02,
+                0x59, 0x31, 0x81, 0x9b
+            ],
+            "the canonical batch-policy identity moved"
+        );
+        assert_eq!(
+            batch_policy_digest(&policy).unwrap(),
+            sha256::<hasher::Native<BATCH_POLICY_PREIMAGE>>(BATCH_POLICY_DIGEST_DOMAIN, &[&bytes]),
+            "the on-chain hasher disagrees with the frozen value"
+        );
     }
 }

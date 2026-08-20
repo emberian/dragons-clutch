@@ -9,8 +9,8 @@
 
 use clutch_batch::relation_v1::MAX_OUTCOMES;
 use clutch_liveness::{DonationLedger, Id as LivenessId};
-use sha2::{Digest, Sha256};
 
+use crate::hasher::{Chosen, Sha256Like};
 use crate::{
     batch_policy_digest, canonical_batch_policy_bytes,
     direct_window_v1::{
@@ -50,6 +50,39 @@ const DIRECT_ORDER_SLOT_BYTES_V3: usize = 236;
 /// live page fold.
 const DIRECT_ORDER_BODY_BYTES_V3: usize = 107;
 const DIRECT_PAGE_SLOT_COUNT_V3: usize = 16;
+
+/* Exact preimage widths of this model's identities.  Each mirrors the `update`
+ * sequence of the fold immediately below it; the on-chain hasher buffers
+ * exactly this many bytes before the one syscall, and a fold that outgrows its
+ * declared width halts on the host tests rather than committing to a truncated
+ * preimage. */
+/// Domain, realm, price scale, tick count, and every admitted tick.
+const PRICE_GRID_PREIMAGE_V3: usize =
+    PRICE_GRID_DOMAIN_V1.len() + 32 + 8 + 1 + (MAX_DIRECT_TICKS_V3 as usize * 8);
+/// Domain, epoch, canonical policy bytes, and verifier release.
+const DIRECT_BATCH_POLICY_PREIMAGE_V3: usize =
+    DIRECT_BATCH_POLICY_V3_DOMAIN.len() + 32 + crate::BATCH_POLICY_BYTES + 32;
+/// Domain, market, epoch, page index, the two counts, and every slot.
+///
+/// A whole page is 3,776 slot bytes, so this fold's on-chain form does not fit a
+/// 4 KiB SBF frame and the backend reports it.  That is a statement about where
+/// the fold runs, not a defect: `DirectPrefreezePageV3` is the offline page
+/// model, nothing on the program's reach graph calls it, and link-time
+/// optimisation drops it from the deployable ELF.  The live on-chain page
+/// commitment is `clutch_solana_layout::stream::streamed_page_digest`, which
+/// hashes raw account bytes it never has to re-encode.
+const ORDER_PAGE_PREIMAGE_V3: usize = ORDER_PAGE_DOMAIN_V3.len()
+    + 32
+    + 32
+    + 2
+    + 2
+    + (DIRECT_PAGE_SLOT_COUNT_V3 * DIRECT_ORDER_SLOT_BYTES_V3);
+/// Domain, market, epoch, page count, set order count, and the one page digest.
+const ORDER_SET_PREIMAGE_V1: usize = ORDER_SET_DOMAIN_V1.len() + 32 + 32 + 2 + 2 + 32;
+/// Domain, market, epoch, owner, position generation, and order id.
+const RESERVATION_PREIMAGE_V1: usize = RESERVATION_DOMAIN_V1.len() + 32 + 32 + 32 + 8 + 32;
+/// Domain, previous transcript, count, tick, and the admitted identity pair.
+const TRANSCRIPT_PREIMAGE_V3: usize = TRANSCRIPT_DOMAIN_V3.len() + 32 + 1 + 1 + 32 + 32;
 
 /// Lifecycle phase of one successfully frozen direct epoch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -317,7 +350,11 @@ impl DirectGridV3 {
     /// Recompute the exact live PriceGrid body identity without an adapter
     /// projection or variable-width preimage.
     pub fn recomputed_grid_id(&self) -> Identity32V1 {
-        let mut hasher = Sha256::new();
+        self.grid_id_with::<Chosen<PRICE_GRID_PREIMAGE_V3>>()
+    }
+
+    fn grid_id_with<H: Sha256Like>(&self) -> Identity32V1 {
+        let mut hasher = H::new();
         hasher.update(PRICE_GRID_DOMAIN_V1);
         hasher.update(self.realm_id.0);
         hasher.update(self.price_scale.to_le_bytes());
@@ -327,7 +364,7 @@ impl DirectGridV3 {
             hasher.update(self.ticks[index].to_le_bytes());
             index += 1;
         }
-        Identity32V1(hasher.finalize().into())
+        Identity32V1(hasher.finalize())
     }
 
     fn tick_of(&self, price: u64) -> Result<u8, DirectLifecycleErrorV3> {
@@ -664,17 +701,27 @@ pub fn direct_policy_v3_digest(
     epoch_id: Identity32V1,
     verifier_release_id: Identity32V1,
 ) -> Result<Identity32V1, DirectLifecycleErrorV3> {
+    direct_policy_v3_digest_with::<Chosen<DIRECT_BATCH_POLICY_PREIMAGE_V3>>(
+        epoch_id,
+        verifier_release_id,
+    )
+}
+
+fn direct_policy_v3_digest_with<H: Sha256Like>(
+    epoch_id: Identity32V1,
+    verifier_release_id: Identity32V1,
+) -> Result<Identity32V1, DirectLifecycleErrorV3> {
     if epoch_id.is_zero() || verifier_release_id.is_zero() {
         return Err(DirectLifecycleErrorV3::NonCanonical);
     }
     let policy_bytes = canonical_batch_policy_bytes(&DIRECT_POLICY_V1)
         .map_err(|_| DirectLifecycleErrorV3::MismatchedBinding)?;
-    let mut hasher = Sha256::new();
+    let mut hasher = H::new();
     hasher.update(DIRECT_BATCH_POLICY_V3_DOMAIN);
     hasher.update(epoch_id.0);
     hasher.update(policy_bytes);
     hasher.update(verifier_release_id.0);
-    Ok(Identity32V1(hasher.finalize().into()))
+    Ok(Identity32V1(hasher.finalize()))
 }
 
 /// Slot and verifier release identifier supplied to a semantics-bearing transition.
@@ -1041,7 +1088,11 @@ impl DirectPrefreezePageV3 {
     }
 
     fn recomputed_page_digest(&self) -> Identity32V1 {
-        let mut hasher = Sha256::new();
+        self.page_digest_with::<Chosen<ORDER_PAGE_PREIMAGE_V3>>()
+    }
+
+    fn page_digest_with<H: Sha256Like>(&self) -> Identity32V1 {
+        let mut hasher = H::new();
         hasher.update(ORDER_PAGE_DOMAIN_V3);
         hasher.update(self.market_id.0);
         hasher.update(self.epoch_id.0);
@@ -1052,22 +1103,26 @@ impl DirectPrefreezePageV3 {
             hash_direct_slot(&mut hasher, self.slot_kinds[index], self.orders[index]);
             index += 1;
         }
-        Identity32V1(hasher.finalize().into())
+        Identity32V1(hasher.finalize())
     }
 
     fn recomputed_order_set_id(&self) -> Identity32V1 {
-        let mut hasher = Sha256::new();
+        self.order_set_id_with::<Chosen<ORDER_SET_PREIMAGE_V1>>()
+    }
+
+    fn order_set_id_with<H: Sha256Like>(&self) -> Identity32V1 {
+        let mut hasher = H::new();
         hasher.update(ORDER_SET_DOMAIN_V1);
         hasher.update(self.market_id.0);
         hasher.update(self.epoch_id.0);
         hasher.update(self.page_count.to_le_bytes());
         hasher.update(self.set_order_count.to_le_bytes());
         hasher.update(self.page_digest.0);
-        Identity32V1(hasher.finalize().into())
+        Identity32V1(hasher.finalize())
     }
 }
 
-fn hash_direct_slot(hasher: &mut Sha256, kind: u8, order: DirectPrefreezeOrderV3) {
+fn hash_direct_slot<H: Sha256Like>(hasher: &mut H, kind: u8, order: DirectPrefreezeOrderV3) {
     hasher.update([kind]);
     if kind == 1 {
         hasher.update(order.owner.0);
@@ -3241,14 +3296,30 @@ fn canonical_direct_reservation_id(
     position_generation: u64,
     order_id: Identity32V1,
 ) -> Identity32V1 {
-    let mut hasher = Sha256::new();
+    reservation_id_with::<Chosen<RESERVATION_PREIMAGE_V1>>(
+        market,
+        epoch,
+        owner,
+        position_generation,
+        order_id,
+    )
+}
+
+fn reservation_id_with<H: Sha256Like>(
+    market: Identity32V1,
+    epoch: Identity32V1,
+    owner: Identity32V1,
+    position_generation: u64,
+    order_id: Identity32V1,
+) -> Identity32V1 {
+    let mut hasher = H::new();
     hasher.update(RESERVATION_DOMAIN_V1);
     hasher.update(market.0);
     hasher.update(epoch.0);
     hasher.update(owner.0);
     hasher.update(position_generation.to_le_bytes());
     hasher.update(order_id.0);
-    Identity32V1(hasher.finalize().into())
+    Identity32V1(hasher.finalize())
 }
 
 fn direct_reservation_envelope(
@@ -3692,12 +3763,7 @@ fn next_transcript(
     count: u8,
     candidate: &DirectCandidateLeaseV3,
 ) -> Identity32V1 {
-    admission_transcript_v3(
-        previous,
-        count,
-        candidate.tick,
-        candidate.candidate.entry(),
-    )
+    admission_transcript_v3(previous, count, candidate.tick, candidate.candidate.entry())
 }
 
 /// Canonical V3 competitive-admission transcript fold.
@@ -3712,14 +3778,23 @@ pub fn admission_transcript_v3(
     tick: u8,
     admitted: DirectCandidateEntryV1,
 ) -> Identity32V1 {
-    let mut hasher = Sha256::new();
+    admission_transcript_with::<Chosen<TRANSCRIPT_PREIMAGE_V3>>(previous, count, tick, admitted)
+}
+
+fn admission_transcript_with<H: Sha256Like>(
+    previous: Identity32V1,
+    count: u8,
+    tick: u8,
+    admitted: DirectCandidateEntryV1,
+) -> Identity32V1 {
+    let mut hasher = H::new();
     hasher.update(TRANSCRIPT_DOMAIN_V3);
     hasher.update(previous.0);
     hasher.update([count]);
     hasher.update([tick]);
     hasher.update(admitted.candidate_id.0);
     hasher.update(admitted.relation_candidate_digest.0);
-    Identity32V1(hasher.finalize().into())
+    Identity32V1(hasher.finalize())
 }
 
 #[cfg(test)]
@@ -5901,5 +5976,96 @@ mod tests {
             two.competitive_admission_transcript,
             admission_transcript_v3(expected_one, 2, second.tick.wrapping_add(1), second.entry())
         );
+    }
+
+    /* --- native-hasher equivalence ------------------------------------------
+     *
+     * Every identity this model folds is SHA-256 over one canonical preimage.
+     * On SBF the fold buffers that preimage and calls the runtime syscall; the
+     * portable implementation is not in the program at all.  The values are PDA
+     * seeds, stored account commitments, and a chained admission transcript, so
+     * the two forms must agree byte for byte.
+     * ---------------------------------------------------------------------- */
+
+    /// Every fold in this module agrees across both hashers, at the widest
+    /// shape each declared preimage width must hold.
+    #[test]
+    fn native_hasher_matches_the_portable_hasher_on_every_lifecycle_fold() {
+        use crate::hasher::Native;
+
+        // Price grid: a sparse grid and a fully populated one, so every one of
+        // the MAX_DIRECT_TICKS_V3 tick words is written.
+        let sparse = grid();
+        assert_eq!(
+            sparse.recomputed_grid_id(),
+            sparse.grid_id_with::<Native<PRICE_GRID_PREIMAGE_V3>>(),
+            "the price-grid identity differs between hashers"
+        );
+        let mut full = sparse;
+        full.tick_count = MAX_DIRECT_TICKS_V3;
+        full.ticks = [u64::MAX; MAX_DIRECT_TICKS_V3 as usize];
+        assert_eq!(
+            full.recomputed_grid_id(),
+            full.grid_id_with::<Native<PRICE_GRID_PREIMAGE_V3>>(),
+            "a saturated price grid overflows the declared preimage"
+        );
+
+        // The direct BatchPolicy V3 digest, which is a live PDA seed.
+        assert_eq!(
+            direct_policy_v3_digest(id(3), id(4)).unwrap(),
+            direct_policy_v3_digest_with::<Native<DIRECT_BATCH_POLICY_PREIMAGE_V3>>(id(3), id(4))
+                .unwrap(),
+            "the direct BatchPolicy V3 digest differs between hashers"
+        );
+
+        // The order page and its one-page set fold, on a real frozen page: both
+        // the populated prefix and the all-empty suffix slots are committed.
+        let frozen = frozen_plan(schedule()).post;
+        let page = frozen.frozen_page;
+        assert_eq!(
+            page.recomputed_page_digest(),
+            page.page_digest_with::<Native<ORDER_PAGE_PREIMAGE_V3>>(),
+            "the frozen page digest differs between hashers"
+        );
+        assert_eq!(
+            page.recomputed_order_set_id(),
+            page.order_set_id_with::<Native<ORDER_SET_PREIMAGE_V1>>(),
+            "the one-page order-set identity differs between hashers"
+        );
+        // The same page with every physical slot live, which is the widest
+        // preimage the page fold can produce.
+        let mut saturated = page;
+        saturated.slot_kinds = [1; DIRECT_PAGE_SLOT_COUNT_V3];
+        assert_eq!(
+            saturated.recomputed_page_digest(),
+            saturated.page_digest_with::<Native<ORDER_PAGE_PREIMAGE_V3>>(),
+            "a fully populated page overflows the declared preimage"
+        );
+
+        // The reservation identity.
+        assert_eq!(
+            canonical_direct_reservation_id(id(1), id(2), id(3), 9, id(4)),
+            reservation_id_with::<Native<RESERVATION_PREIMAGE_V1>>(id(1), id(2), id(3), 9, id(4)),
+            "the direct reservation identity differs between hashers"
+        );
+
+        // The chained admission transcript.
+        let admitted = DirectCandidateEntryV1 {
+            candidate_id: id(21),
+            relation_candidate_digest: id(22),
+        };
+        for (previous, count, tick) in [
+            (Identity32V1::ZERO, 0u8, 0u8),
+            (id(30), 1, 5),
+            (id(31), u8::MAX, MAX_DIRECT_TICKS_V3),
+        ] {
+            assert_eq!(
+                admission_transcript_v3(previous, count, tick, admitted),
+                admission_transcript_with::<Native<TRANSCRIPT_PREIMAGE_V3>>(
+                    previous, count, tick, admitted
+                ),
+                "the V3 admission transcript differs between hashers"
+            );
+        }
     }
 }
