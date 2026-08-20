@@ -121,6 +121,40 @@ impl OwnerInterner {
         None
     }
 
+    /// Crate-internal raw access for the in-place region reader.
+    ///
+    /// `clutch-solana-layout`'s clearing plane restores a persisted table
+    /// without materializing a second 2,050-byte value on any call frame
+    /// (`read_owner_interner_into`); the rules it must uphold are exactly
+    /// [`OwnerInterner::restore`]'s, which stays the by-value oracle.
+    pub(crate) fn raw_parts_mut(&mut self) -> (&mut [OwnerId; MAX_EPOCH_ORDERS], &mut u16) {
+        (&mut self.owners, &mut self.count)
+    }
+
+    /// Reassemble a persisted table from its raw region image.
+    ///
+    /// The read half of the checkpoint's layout-owned interning region
+    /// ([`crate::clearing::read_owner_interner`]): a bounded count, no zero
+    /// owner below it, canonical zero padding at and beyond it.  Distinctness
+    /// below the count is by construction of [`OwnerInterner::intern`] — the
+    /// only writer of the region — and is deliberately not an all-pairs
+    /// re-verification here; see the region's own documentation.
+    pub fn restore(owners: [OwnerId; MAX_EPOCH_ORDERS], count: u16) -> Result<Self> {
+        if count as usize > MAX_EPOCH_ORDERS {
+            return Err(CodecError::InvalidCount);
+        }
+        let mut i = 0usize;
+        while i < MAX_EPOCH_ORDERS {
+            if i < count as usize {
+                check_hash(owners[i])?;
+            } else if owners[i] != Hash32::ZERO {
+                return Err(CodecError::NonCanonicalPadding);
+            }
+            i += 1;
+        }
+        Ok(Self { owners, count })
+    }
+
     /// Tag `owner`, interning it on first appearance.
     ///
     /// Idempotent: a later pass over the same walk reproduces the same tags

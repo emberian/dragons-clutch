@@ -347,6 +347,8 @@ pub(super) fn prepare_direct_submission(
         virtual_split: 0,
         virtual_merge: 0,
         honored_aon_mask: 0,
+        // A submission carries no verified tie digest.
+        score_digest: Hash32::ZERO,
         // Unverified claims. See the type-level comment above.
         weighted_direct_volume: 0,
         limit_surplus_price_units: 0,
@@ -1011,6 +1013,7 @@ mod tests {
             honored_aon_mask: 0,
             weighted_direct_volume: 20,
             limit_surplus_price_units: 0,
+            score_digest: Hash32::ZERO,
             churn: 0,
             submitted_slot: 99,
             distinct_owners: 2,
@@ -1158,6 +1161,8 @@ mod tests {
         let mut f = fixture();
         let mut candidate = CandidateRecord::decode(&f.candidate).unwrap();
         candidate.status = CANDIDATE_STATUS_SELECTED;
+        // v3: selection carries the verified tie digest with it.
+        candidate.score_digest = Hash32([0x5d; 32]);
         candidate.encode(&mut f.candidate).unwrap();
         assert_eq!(preflight(&f), Err(CodecError::MismatchedBinding));
     }
@@ -1352,6 +1357,8 @@ mod tests {
             honored_aon_mask: 0,
             weighted_direct_volume: 8,
             limit_surplus_price_units: 0,
+            // v3: a SELECTED record carries a verified tie digest.
+            score_digest: Hash32([0x5d; 32]),
             churn: 0,
             submitted_slot: 80,
             distinct_owners: 2,
@@ -1690,6 +1697,8 @@ mod tests {
     fn stale_partial_cross_outcome_and_fee_cases_refuse_without_a_write() {
         let mut stale = direct_fixture();
         stale.candidate.status = CANDIDATE_STATUS_SUBMITTED;
+        // v3: an unselected record carries no verified tie digest.
+        stale.candidate.score_digest = Hash32::ZERO;
         let before = stale.buyer_position;
         assert_eq!(
             prepare_direct_full_slice(&stale.input()),

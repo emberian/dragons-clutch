@@ -15,6 +15,7 @@
 //! | `0x0050..=0x005f` | the evidence gate's numeric projection (see below) |
 //! | `0x0070..=0x007f` | construction and typed-artifact appends ([`ClutchError::WrongSystemProgram`] .. [`ClutchError::ArtifactRefundMismatch`]) |
 //! | `0x0080..=0x008d` | resumable ResolutionWork semantic refusals |
+//! | `0x0090..=0x009f` | the clearing walk's checkpoint/feed seam ([`ClutchError::CheckpointCodecFault`] .. [`ClutchError::ResumeFoldMismatch`]) |
 //! | `0x1000 + n` | [`clutch_solana_layout::CodecError`] variant `n` |
 //! | `0x2000 + n` | [`clutch_kernel::Error`] variant `n` |
 //! | `0x3000 + n` | [`clutch_solana_reference::Error`] variant `n` |
@@ -233,6 +234,23 @@ pub enum ClutchError {
     /// A registered source release refused provider deployment, source bytes,
     /// freshness, lineage, confidence, window, or archive provenance.
     SourceAdmissionFailed = 0x007a,
+    /// The checkpoint account's body bytes are not a `ClearWorkV1` encoding.
+    ///
+    /// `clutch_batch::relation_v1_stream::CodecFaultV1`, collapsed: the bytes
+    /// are not a checkpoint, so there is no feed to have a protocol fault in
+    /// and no relation verdict.  The typed sub-fault stays exactly
+    /// distinguishable in the host suites; minting one number per variant
+    /// would be a parallel truth, not a diagnostic.
+    CheckpointCodecFault = 0x0090,
+    /// The feed protocol refused a push or a pass boundary
+    /// (`clutch_batch::relation_v1_stream::FeedErrorV1`, minus the resumption
+    /// mismatch, which has its own code below).
+    FeedProtocolFault = 0x0091,
+    /// A resumed pass is not the continuation of the pass-1 sequence: the
+    /// codec's own fold seal refused (`FeedErrorV1::ResumeFoldMismatch`), or
+    /// the program's anchor comparison `body.consumed_fold() !=
+    /// header.consumed_fold` caught a substituted checkpoint body.
+    ResumeFoldMismatch = 0x0092,
 }
 
 impl From<ClutchError> for ProgramError {

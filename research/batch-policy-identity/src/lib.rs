@@ -924,6 +924,84 @@ pub fn full_relation_candidate_digest(
     )
 }
 
+/// [`full_relation_candidate_digest`], recomputed from stored feed regions —
+/// the on-chain form.
+///
+/// The candidate-feed account already stores the digest's fill and witness
+/// segments byte for byte: all [`MAX_ORDERS`] fills as little-endian `u64`s
+/// with canonical zero padding (exactly what the digest folds), and each
+/// declared slice as `buy(kind, index), sell(kind, index), outcome, quantity
+/// LE` — the exact sequence [`feed_leg`] and the quantity fold produce.  So
+/// the whole preimage can be committed by *borrowing* those regions plus a
+/// few small locals, and no frame ever holds the multi-kilobyte preimage the
+/// buffered [`full_relation_candidate_digest`] needs (the reason that form is
+/// off-chain only).
+///
+/// `fill_region` must be exactly `MAX_ORDERS * 8` bytes; a declared witness
+/// travels as `(declared_len, region)` with the region exactly thirteen bytes
+/// per declared slice.  The caller owns the regions' authenticity — on-chain they
+/// are borrowed from a `verify_candidate_feed`-verified account, whose codec
+/// enforces the canonical padding and virtual-leg zero bytes this preimage
+/// equality rests on.  The host and syscall forms commit to the same byte
+/// string; the equality test in `general_clearing_v1` compares all three
+/// paths on the same coordinates.
+pub fn full_relation_candidate_digest_from_regions(
+    domain_digest: Identity32V1,
+    candidate_id: Identity32V1,
+    fill_region: &[u8],
+    honored_aon_mask: u64,
+    witness_region: Option<(u16, &[u8])>,
+) -> Result<Identity32V1, PolicyIdentityErrorV1> {
+    if fill_region.len() != MAX_ORDERS * 8 {
+        return Err(PolicyIdentityErrorV1::InvalidDomain);
+    }
+    let mask_bytes = honored_aon_mask.to_le_bytes();
+    let (flag, length_bytes, slices): (&[u8], [u8; 2], &[u8]) = match witness_region {
+        None => (&[0u8], [0; 2], &[]),
+        Some((declared, region)) => {
+            if region.len() != declared as usize * 13 {
+                return Err(PolicyIdentityErrorV1::InvalidDomain);
+            }
+            (&[1u8], declared.to_le_bytes(), region)
+        }
+    };
+    let parts: [&[u8]; 8] = [
+        FULL_RELATION_CANDIDATE_DIGEST_DOMAIN,
+        &domain_digest.0,
+        &candidate_id.0,
+        fill_region,
+        &mask_bytes,
+        flag,
+        &length_bytes[..if witness_region.is_some() { 2 } else { 0 }],
+        slices,
+    ];
+    Ok(region_sha256(&parts))
+}
+
+/// SHA-256 over a borrowed slice sequence: the syscall on-chain, the portable
+/// implementation off-chain.  Both commit to the concatenation, which is what
+/// lets the host equality test require byte-identical output.
+#[cfg(target_os = "solana")]
+fn region_sha256(parts: &[&[u8]]) -> Identity32V1 {
+    Identity32V1(solana_sha256_hasher::hashv(parts).to_bytes())
+}
+
+#[cfg(not(target_os = "solana"))]
+fn region_sha256(parts: &[&[u8]]) -> Identity32V1 {
+    let mut h = <sha2::Sha256 as sha2::Digest>::new();
+    for part in parts {
+        sha2::Digest::update(&mut h, part);
+    }
+    Identity32V1(sha2::Digest::finalize(h).into())
+}
+
+/// The syscall wrapper's own fold over the same sequence, compiled for host
+/// tests only, so one process can require the two paths byte-identical.
+#[cfg(test)]
+pub(crate) fn region_sha256_native(parts: &[&[u8]]) -> Identity32V1 {
+    Identity32V1(solana_sha256_hasher::hashv(parts).to_bytes())
+}
+
 fn full_relation_candidate_digest_with<H: Sha256Like>(
     domain: &FullRelationDomainV1,
     candidate: &FullSubmittedCandidateV1,

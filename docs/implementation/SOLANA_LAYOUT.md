@@ -1081,7 +1081,7 @@ ownership, frozen and adversarially tested before the lane that needs it starts.
 
 | account | tag | version | bytes | shape |
 | --- | ---: | ---: | ---: | --- |
-| `ClearWorkAccount` | 17 | 1 | 48,004 | 158-byte header + 47,846-byte codec body |
+| `ClearWorkAccount` | 17 | 1 | 50,054 | 158-byte header + 2,050-byte owner-interning region + 47,846-byte codec body |
 | `CandidateFeedAccount` | 18 | 1 | 6,266 | 346-byte header + 64 × 8 fills + 416 × 13 slices |
 
 ### Neither account is ever a value
@@ -1106,7 +1106,9 @@ bytes with typed `CodecFaultV1` refusals, and pinned on both sides
 (`clear_work_encoded_bytes_are_pinned` in clutch-batch,
 `clearing_account_golden_lengths` here). Before the codec landed this
 constant pinned `size_of::<ClearWorkV1>()` = 48,592 and the body was opaque
-bytes; the account total moved 48,750 → 48,004 with the re-pin.
+bytes; the account total moved 48,750 → 48,004 with the re-pin, then 48,004 →
+50,054 when T2-6b added the 2,050-byte layout-owned owner-interning region
+between the header and the body.
 
 This crate still gives the region no interpretation: it owns the length, the
 framing, the identity binding, and two window accessors (`clear_work_body`,
@@ -1165,20 +1167,20 @@ allocate in one CPI**. (The absolute account ceiling,
 | --- | ---: | --- |
 | every protocol account, order page included | ≤ 4,012 | yes |
 | candidate feed | 6,266 | yes |
-| **clearing checkpoint** | **48,004** | **no** |
+| **clearing checkpoint** | **50,054** | **no** |
 
 The checkpoint is the only account in the inventory that a program cannot
 create. Two paths exist and both are real:
 
 * **Client-signed top-level `CreateAccount`.** A `SystemProgram::CreateAccount`
   submitted as a *top-level* instruction is not subject to the per-instruction
-  growth cap and allocates 48,004 bytes directly. The cost: the checkpoint
+  growth cap and allocates 50,054 bytes directly. The cost: the checkpoint
   becomes a keypair-addressed account, not a PDA, so the program must
   authenticate it by its stored `(market, epoch, candidate)` header rather than
   by derivation — which the header is already shaped to support, but which is a
   strictly weaker authentication than every other account in this program has.
 * **CPI create, then realloc.** Create a PDA at ≤ 10,240 bytes and grow it by at
-  most 10,240 per instruction: `⌈48,004 / 10,240⌉ = 5` instructions, which may
+  most 10,240 per instruction: `⌈50,054 / 10,240⌉ = 5` instructions, which may
   sit in one transaction because the cap is per instruction. This keeps the
   checkpoint a PDA. The cost: the account is *observable in a partially grown
   state* between instructions, so the header must carry a length field the
@@ -1190,8 +1192,8 @@ than ergonomics. A checkpoint at a keypair address can be substituted; a
 checkpoint at `(epoch, candidate)` cannot. The `body_len` field exists precisely
 so a half-grown checkpoint is a refusal and not a short read, and the walk
 cursor's monotonicity means a partially grown account can never be advanced.
-Rent for the whole account at the default parameters is `(128 + 48,004) × 3,480
-× 2 = 334,998,720` lamports, about **0.335 SOL** (0.3402 before the T2-1
+Rent for the whole account at the default parameters is `(128 + 50,054) × 3,480
+× 2 = 349,266,720` lamports, about **0.349 SOL** (0.3402 before the T2-1
 codec re-pin), which is a real number a clearing crank has to fund and is
 worth quoting before the design is committed to.
 

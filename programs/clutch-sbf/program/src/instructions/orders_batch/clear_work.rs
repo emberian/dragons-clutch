@@ -2,7 +2,7 @@
 //!
 //! `Intent::InitClearWork` (tag 47) and `Intent::GrowClearWork` (tag 48).
 //!
-//! The [`clutch_solana_layout::clearing::ClearWorkAccount`] is 48,004 bytes —
+//! The [`clutch_solana_layout::clearing::ClearWorkAccount`] is 50,054 bytes —
 //! the one account in the inventory above the runtime's 10,240-byte
 //! per-instruction growth ceiling, so no single system-program CPI can
 //! allocate it (`SOLANA_LAYOUT.md`'s staged-creation analysis; the layout
@@ -16,7 +16,7 @@
 //!
 //! 1. `InitClearWork { market, epoch, candidate }` — the ResolutionWork
 //!    creation shape verbatim ([`create_first_stage`]): refuse a non-creatable
-//!    target, transfer the **full final rent principal** for all 48,004 bytes
+//!    target, transfer the **full final rent principal** for all 50,054 bytes
 //!    (so no later grow ever tops up), `Allocate` the first
 //!    [`clearing::CLEAR_WORK_GROW_STEP`] bytes and `Assign` under the PDA
 //!    seeds, post-checked.  Then write the resumable grow-stage prefix
@@ -56,7 +56,7 @@
 //!
 //! ## Rent
 //!
-//! `(128 + 48,004) × 6,960 = 334,998,720` lamports (~0.335 SOL) moves once, at
+//! `(128 + 50,054) × 6,960 = 349,266,720` lamports (~0.349 SOL) moves once, at
 //! init, on top of any prefund.  Prefund-safe per the repo's constructor
 //! rule: anyone may transfer SOL to the predictable PDA first; a donation
 //! never discounts the payer's principal and never blocks creation

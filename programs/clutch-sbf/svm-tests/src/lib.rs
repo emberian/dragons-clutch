@@ -1437,3 +1437,14 @@ pub fn compute_unit_limit_data(units: u32) -> Vec<u8> {
     data.extend_from_slice(&units.to_le_bytes());
     data
 }
+
+/// `RequestHeapFrame(bytes)` instruction data.
+///
+/// The clearing walk boxes the ~48.7 KiB `ClearWorkV1` onto the heap, so its
+/// transactions request the frame explicitly; 32 KiB-multiples up to 262,144
+/// are the runtime's admitted values, at 8 CU per extra 32 KiB.
+pub fn request_heap_frame_data(bytes: u32) -> Vec<u8> {
+    let mut data = vec![0x01_u8];
+    data.extend_from_slice(&bytes.to_le_bytes());
+    data
+}

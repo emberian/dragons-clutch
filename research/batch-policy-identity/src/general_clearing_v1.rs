@@ -512,6 +512,122 @@ mod tests {
         );
     }
 
+    /// The region-borrowing digest is the buffered digest, byte for byte, on
+    /// the same coordinates — with and without a witness — and its portable
+    /// fold equals the syscall wrapper's fold over the same slice sequence.
+    /// This is what lets `CompleteClearWork` recompute the full-width tie
+    /// identity by borrowing the verified feed account's stored regions
+    /// instead of assembling a multi-kilobyte preimage on an SBF frame.
+    #[test]
+    fn the_region_digest_is_the_buffered_digest() {
+        use crate::{
+            full_relation_candidate_digest_from_regions, region_sha256_native,
+            FULL_RELATION_CANDIDATE_DIGEST_DOMAIN,
+        };
+        use clutch_batch::relation_v1::LegRefV1;
+        use clutch_batch::MAX_ORDERS;
+
+        let book = book_of(&[
+            single(1, 0, 0, Side::Buy, 4, SCALE),
+            single(2, 1, 0, Side::Sell, 4, 0),
+        ]);
+        let vector = prices(&[SCALE / 2, SCALE / 2]);
+        let full = full_domain_with(GENERAL_CLEARING_POLICY_V1, 2, 2);
+        let zero = zero_sentinel_domain(&full);
+        let candidate = canonical_candidate(&zero, &book, &vector, 0, 0).unwrap();
+        let witness = canonical_pairing(&zero, &book, &candidate).unwrap();
+        assert!(witness.len > 0);
+        let raw = FullSubmittedCandidateV1::from_relation_candidate(&full, &candidate).unwrap();
+        let (completed, _) =
+            complete_submitted_candidate(&full, &book, &raw, Some(&witness)).unwrap();
+
+        // The regions exactly as the candidate-feed account stores them.
+        let mut fills = [0u8; MAX_ORDERS * 8];
+        let mut i = 0usize;
+        while i < MAX_ORDERS {
+            fills[i * 8..(i + 1) * 8].copy_from_slice(&completed.fills[i].to_le_bytes());
+            i += 1;
+        }
+        let mut slices = std::vec::Vec::new();
+        let mut k = 0usize;
+        while k < witness.len as usize {
+            let slice = witness.slices[k];
+            for leg in [slice.buy_ref, slice.sell_ref] {
+                match leg {
+                    LegRefV1::Order(index) => slices.extend_from_slice(&[0, index]),
+                    LegRefV1::Split => slices.extend_from_slice(&[1, 0]),
+                    LegRefV1::Merge => slices.extend_from_slice(&[2, 0]),
+                }
+            }
+            slices.push(slice.outcome);
+            slices.extend_from_slice(&slice.quantity.to_le_bytes());
+            k += 1;
+        }
+        let domain_digest = full.digest().unwrap();
+
+        // With the witness: regions == buffered.
+        assert_eq!(
+            full_relation_candidate_digest_from_regions(
+                domain_digest,
+                completed.candidate_id,
+                &fills,
+                completed.honored_aon_mask,
+                Some((witness.len, &slices)),
+            )
+            .unwrap(),
+            full_relation_candidate_digest(&full, &completed, Some(&witness)).unwrap()
+        );
+        // Without: same statement over the no-witness discriminant.
+        assert_eq!(
+            full_relation_candidate_digest_from_regions(
+                domain_digest,
+                completed.candidate_id,
+                &fills,
+                completed.honored_aon_mask,
+                None,
+            )
+            .unwrap(),
+            full_relation_candidate_digest(&full, &completed, None).unwrap()
+        );
+        // The syscall wrapper's fold over the identical slice sequence.
+        let mask_bytes = completed.honored_aon_mask.to_le_bytes();
+        let length_bytes = witness.len.to_le_bytes();
+        assert_eq!(
+            region_sha256_native(&[
+                FULL_RELATION_CANDIDATE_DIGEST_DOMAIN,
+                &domain_digest.0,
+                &completed.candidate_id.0,
+                &fills,
+                &mask_bytes,
+                &[1u8],
+                &length_bytes,
+                &slices,
+            ]),
+            full_relation_candidate_digest(&full, &completed, Some(&witness)).unwrap()
+        );
+        // Region-length lies refuse rather than commit to a different string.
+        assert_eq!(
+            full_relation_candidate_digest_from_regions(
+                domain_digest,
+                completed.candidate_id,
+                &fills[..8],
+                completed.honored_aon_mask,
+                None,
+            ),
+            Err(PolicyIdentityErrorV1::InvalidDomain)
+        );
+        assert_eq!(
+            full_relation_candidate_digest_from_regions(
+                domain_digest,
+                completed.candidate_id,
+                &fills,
+                completed.honored_aon_mask,
+                Some((witness.len, &slices[..slices.len() - 1])),
+            ),
+            Err(PolicyIdentityErrorV1::InvalidDomain)
+        );
+    }
+
     /// The zero-sentinel soundness statement, executable.  (a) The four u64
     /// identity tags feed only the obsolete legacy digest: two arithmetic
     /// domains differing ONLY in those tags produce summaries identical in

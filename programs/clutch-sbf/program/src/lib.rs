@@ -64,9 +64,10 @@
 //!
 //! ## `unsafe`
 //!
-//! First-party code in this crate is safe.  The only `unsafe` reaching this
-//! crate is the expansion of the Anza `entrypoint!` macro, which is confined to
-//! the `bpf` module below and compiled only for `target_os = "solana"`.
+//! First-party `unsafe` in this crate is confined to two places, both in the
+//! `bpf` module below and both compiled only for `target_os = "solana"`: the
+//! expansion of the Anza `entrypoint!` macro, and the requestable-heap bump
+//! allocator that replaces the macro's 32-KiB default (see [`bpf`]).
 
 pub mod accounts;
 pub mod claim_truth;
@@ -82,10 +83,65 @@ pub mod token;
 #[cfg(target_os = "solana")]
 mod bpf {
     use solana_account_info::AccountInfo;
-    use solana_program_entrypoint::{entrypoint, ProgramResult};
+    use solana_program_entrypoint::{entrypoint, ProgramResult, HEAP_START_ADDRESS};
     use solana_pubkey::Pubkey;
 
     entrypoint!(process_instruction);
+
+    /// The widest heap a transaction can request with
+    /// `ComputeBudgetInstruction::request_heap_frame`.
+    const HEAP_CEILING: usize = 256 * 1024;
+
+    /// An upward bump allocator over the whole requestable heap region.
+    ///
+    /// The `entrypoint!` default (suppressed by this crate's `custom-heap`
+    /// feature) allocates *downward* from `HEAP_START + 32 KiB`, so a
+    /// transaction-requested larger frame is unreachable: the clearing walk's
+    /// boxed `ClearWorkV1` (~48.7 KiB) needs the requestable region.  This
+    /// allocator bumps *upward* from the region's base instead — small
+    /// allocations land in the always-mapped first 32 KiB exactly as before,
+    /// and an allocation past the mapped frame is only reachable by an
+    /// instruction whose transaction requested one (without the request, the
+    /// first write beyond the mapping is an access violation that aborts the
+    /// transaction — a refusal, not a corruption).  Like the default, it
+    /// never frees: per-instruction heaps die with the instruction.
+    struct GrowableBump;
+
+    // The first 8 bytes of the heap region hold the bump cursor, exactly as
+    // the Anza default uses them for its own position.
+    unsafe impl std::alloc::GlobalAlloc for GrowableBump {
+        #[inline]
+        unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+            let start = HEAP_START_ADDRESS as usize;
+            let cursor = start as *mut usize;
+            let mut position = *cursor;
+            if position == 0 {
+                position = start + core::mem::size_of::<usize>();
+            }
+            let align = layout.align().max(core::mem::size_of::<usize>());
+            let aligned = match position.checked_add(align - 1) {
+                Some(bumped) => bumped & !(align - 1),
+                None => return core::ptr::null_mut(),
+            };
+            let end = match aligned.checked_add(layout.size()) {
+                Some(end) => end,
+                None => return core::ptr::null_mut(),
+            };
+            if end > start + HEAP_CEILING {
+                return core::ptr::null_mut();
+            }
+            *cursor = end;
+            aligned as *mut u8
+        }
+        #[inline]
+        unsafe fn dealloc(&self, _: *mut u8, _: std::alloc::Layout) {
+            // A bump allocator frees nothing; the region dies with the
+            // instruction.
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: GrowableBump = GrowableBump;
 
     fn process_instruction(
         program_id: &Pubkey,

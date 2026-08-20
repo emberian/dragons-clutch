@@ -794,7 +794,13 @@ pub mod account_version {
     /// Frozen price-grid account.
     pub const PRICE_GRID: u8 = 2;
     /// Candidate record account.
-    pub const CANDIDATE: u8 = 2;
+    ///
+    /// Version 3 is the verified-score revision (T2-6c): it appends the
+    /// 32-byte `score_digest` — the full-width relation-candidate tie
+    /// identity `CompleteClearWork` stamps at verification — to the claimed
+    /// score components.  Version 2 records carried claims only and are
+    /// refused, exactly as version 1's were.
+    pub const CANDIDATE: u8 = 3;
     /// Final-pot account.
     pub const FINAL_POT: u8 = 2;
     /// Settlement receipt account.
@@ -887,23 +893,51 @@ pub mod account_len {
     /// Epoch/book-domain account bytes.
     pub const EPOCH: usize = 2 + (9 * 32) + 8 + 4 + 8 + 8 + 2 + 2 + 2 + 1 + 1 + 1 + 1;
     /// Candidate record account bytes.
-    pub const CANDIDATE: usize =
-        2 + (3 * 32) + (MAX_OUTCOMES * 8) + 8 + 8 + 8 + 16 + 16 + 8 + 8 + 2 + 1 + 1 + 1 + 1 + 1;
+    pub const CANDIDATE: usize = 2
+        + (3 * 32)
+        + (MAX_OUTCOMES * 8)
+        + 8
+        + 8
+        + 8
+        + 16
+        + 16
+        + 32
+        + 8
+        + 8
+        + 2
+        + 1
+        + 1
+        + 1
+        + 1
+        + 1;
     /// Final-pot account bytes.
     pub const FINAL_POT: usize = 2 + (3 * 32) + (MAX_OUTCOMES * 8) + 16 + 16 + 1 + 1 + 1 + 1;
     /// Settlement receipt account bytes.
     pub const SETTLEMENT_RECEIPT: usize = 2 + (5 * 32) + 16 + 8 + 8 + 8 + 8 + 2 + 1 + 1 + 1 + 1 + 1;
     /// Resolution account bytes.
     pub const RESOLUTION: usize = 2 + (4 * 32) + 8 + 8 + 8 + 8 + 1 + 1 + 1;
-    /// Streaming-checkpoint account bytes: the header, then the opaque body.
+    /// Streaming-checkpoint account bytes: the header, the layout-owned
+    /// owner-interning region, then the opaque body.
     ///
-    /// [`super::clearing::CLEAR_WORK_HEADER_BYTES`] of layout-owned framing
-    /// plus exactly [`super::CLEAR_WORK_BODY_BYTES`] the layout never reads.
-    /// This is by far the largest account in the inventory and it is the one
-    /// that does not fit a single system-program creation via CPI; the
-    /// creation path is analyzed in `docs/implementation/SOLANA_LAYOUT.md`.
-    pub const CLEAR_WORK: usize =
-        2 + (4 * 32) + 16 + 4 + 2 + 2 + 1 + 1 + 1 + 1 + CLEAR_WORK_BODY_BYTES;
+    /// [`super::clearing::CLEAR_WORK_HEADER_BYTES`] of layout-owned framing,
+    /// then [`super::clearing::CLEAR_WORK_INTERNER_BYTES`] persisting the
+    /// projection's owner↔tag table across walk transactions, then exactly
+    /// [`super::CLEAR_WORK_BODY_BYTES`] the layout never reads.  This is by
+    /// far the largest account in the inventory and it is the one that does
+    /// not fit a single system-program creation via CPI; the creation path is
+    /// analyzed in `docs/implementation/SOLANA_LAYOUT.md`.
+    pub const CLEAR_WORK: usize = 2
+        + (4 * 32)
+        + 16
+        + 4
+        + 2
+        + 2
+        + 1
+        + 1
+        + 1
+        + 1
+        + super::clearing::CLEAR_WORK_INTERNER_BYTES
+        + CLEAR_WORK_BODY_BYTES;
     /// Candidate feed account bytes: header, fill vector, slice vector.
     pub const CANDIDATE_FEED: usize = 2
         + (4 * 32)
@@ -3723,6 +3757,18 @@ pub struct CandidateRecord {
     pub weighted_direct_volume: i128,
     /// Score component 3, in exact price units.
     pub limit_surplus_price_units: u128,
+    /// The verified full-width relation-candidate tie digest (`FullScoreV1`'s
+    /// fifth component), stamped by `CompleteClearWork` when the streaming
+    /// verifier accepts this candidate.
+    ///
+    /// Zero exactly while the score is a *claim*: a `SUBMITTED` or `REFUSED`
+    /// (or v3-`SUPERSEDED`) record carries no verified identity, and a
+    /// `VERIFIED` or `SELECTED` one must carry a nonzero digest — the value
+    /// selection's `FullScoreV1::total_order` breaks exact component ties
+    /// with.  Never the claimed u128 the feed carries; recomputed on-chain
+    /// over the full-width domain, the candidate identity, the fills, and
+    /// the declared witness.
+    pub score_digest: Hash32,
     /// Score component 5: `sigma + mu`.
     pub churn: u64,
     /// Slot the candidate was submitted in, as supplied by the adapter.
@@ -3794,6 +3840,21 @@ impl CandidateRecord {
         if self.distinct_owners as usize > MAX_EPOCH_ORDERS {
             return Err(CodecError::InvalidCount);
         }
+        /* The verified tie digest exists exactly when a verification verdict
+         * does: nonzero on VERIFIED and SELECTED, zero everywhere else.  (A
+         * later selection lifecycle superseding a verified record zeroes it;
+         * a superseded record competes for nothing.) */
+        let verified = matches!(
+            self.status,
+            CANDIDATE_STATUS_VERIFIED | CANDIDATE_STATUS_SELECTED
+        );
+        if verified == (self.score_digest == Hash32::ZERO) {
+            return Err(if verified {
+                CodecError::ZeroIdentity
+            } else {
+                CodecError::NonCanonicalPadding
+            });
+        }
         if self.candidate != self.recomputed_candidate_digest()? {
             return Err(CodecError::NonCanonicalIdentity);
         }
@@ -3863,6 +3924,7 @@ impl CandidateRecord {
         w.u64(self.honored_aon_mask)?;
         w.i128(self.weighted_direct_volume)?;
         w.u128(self.limit_surplus_price_units)?;
+        w.hash(self.score_digest)?;
         w.u64(self.churn)?;
         w.u64(self.submitted_slot)?;
         w.u16(self.distinct_owners)?;
@@ -3891,6 +3953,7 @@ impl CandidateRecord {
             honored_aon_mask: r.u64()?,
             weighted_direct_volume: r.i128()?,
             limit_surplus_price_units: r.u128()?,
+            score_digest: r.hash()?,
             churn: r.u64()?,
             submitted_slot: r.u64()?,
             distinct_owners: r.u16()?,
@@ -4656,6 +4719,72 @@ pub enum Intent {
         epoch: EpochId,
         candidate: Hash32,
     },
+    /// Construct one general (portfolio-clearing) [`EpochAccount`] and its
+    /// deadline-window companion ([`clearing::EpochWindowAccount`]).
+    ///
+    /// The general sibling of [`Intent::InitDirectEpochV3`], minus every
+    /// `== 2` gate: outcome width and price scale come from the bound terms
+    /// and grid, so neither travels on the wire.  `policy` is the immutable
+    /// batch-policy identity the epoch clears under; the presented policy
+    /// artifact must re-derive it exactly.  The epoch identity is not carried
+    /// — [`canonical_epoch_id`] derives it from `(market, epoch_index)`.
+    InitEpoch {
+        market: MarketId,
+        epoch_index: u64,
+        policy: Hash32,
+        freeze_deadline_slot: u64,
+    },
+    /// Freeze one general epoch's complete page set, at or after its deadline.
+    ///
+    /// Permissionless keeper work: the deadline in the epoch's window account
+    /// is the authority, not a signer.  Every page of the set rides the same
+    /// instruction; the freeze seals each page, stamps the set commitment
+    /// into the epoch, and rewrites `owner_count` with the exact
+    /// distinct-owner count of the frozen set.
+    FreezeEpoch { market: MarketId, epoch: EpochId },
+    /// Advance one clearing checkpoint's order pass by up to `max_orders`
+    /// live orders from its monotone `(page_cursor, slot_cursor)` position.
+    ///
+    /// The on-chain streaming walk: each invocation names the one
+    /// digest-verified page the cursor sits on, projects its live records
+    /// through [`projection`], and feeds them — with their candidate fills
+    /// from the bound [`clearing::CandidateFeedAccount`] — into the
+    /// checkpoint codec.  On pass 1 every pushed order also presents its
+    /// exact ACTIVE reservation, which is what makes pass-1 completion the
+    /// reservation-set sweep.  Permissionless keeper work: every authority is
+    /// account state.
+    AdvanceClearWork {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+        /// Most live orders this invocation may push; at least one.
+        max_orders: u16,
+    },
+    /// Advance one clearing checkpoint's slice pass by up to `max_slices`
+    /// declared pairing-witness slices from the feed.
+    ///
+    /// Reachable only on a checkpoint pass 1 has already bound; the slices
+    /// arrive by stored index from the bound feed's declared witness and the
+    /// pass closes itself when the last declared slice is fed.
+    AdvanceClearSlices {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+        /// Most witness slices this invocation may push; at least one.
+        max_slices: u16,
+    },
+    /// Close one complete clearing checkpoint and persist its verdict.
+    ///
+    /// Acceptance persists `VERIFIED` plus the recomputed full-width score —
+    /// components from the streamed summary, the tie digest recomputed over
+    /// the full-width domain and the fed coordinates, never the claimed u128
+    /// — onto the [`CandidateRecord`]; a relation refusal persists `REFUSED`.
+    /// Either way the checkpoint completes and no pass may resume it.
+    CompleteClearWork {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+    },
 }
 
 /// The placement admissibility rule, shared by the encoder and the decoder.
@@ -4763,7 +4892,19 @@ const SETTLE_DIRECT_V2_TAG: u8 = 31;
  * family begins immediately after it. */
 const INIT_CLEAR_WORK_TAG: u8 = 47;
 const GROW_CLEAR_WORK_TAG: u8 = 48;
+const INIT_EPOCH_TAG: u8 = 49;
+const FREEZE_EPOCH_TAG: u8 = 50;
+const ADVANCE_CLEAR_WORK_TAG: u8 = 51;
+const ADVANCE_CLEAR_SLICES_TAG: u8 = 52;
+const COMPLETE_CLEAR_WORK_TAG: u8 = 53;
 const _: () = assert!(INIT_CLEAR_WORK_TAG == direct_selection_v3::LAST_DIRECT_V3_INTENT_TAG + 1);
+// The Tier 2 clearing family is tag-contiguous: each intent takes exactly the
+// next tag, so a gap is a compile error rather than a squatting hazard.
+const _: () = assert!(INIT_EPOCH_TAG == GROW_CLEAR_WORK_TAG + 1);
+const _: () = assert!(FREEZE_EPOCH_TAG == INIT_EPOCH_TAG + 1);
+const _: () = assert!(ADVANCE_CLEAR_WORK_TAG == FREEZE_EPOCH_TAG + 1);
+const _: () = assert!(ADVANCE_CLEAR_SLICES_TAG == ADVANCE_CLEAR_WORK_TAG + 1);
+const _: () = assert!(COMPLETE_CLEAR_WORK_TAG == ADVANCE_CLEAR_SLICES_TAG + 1);
 
 fn resolution_work_codec(error: resolution_work::ResolutionWorkCodecError) -> CodecError {
     use resolution_work::ResolutionWorkCodecError as WorkError;
@@ -4826,6 +4967,12 @@ impl Intent {
             Self::SealArtifact { .. } => 2 + 1 + 32 + 32 + 2,
             Self::AbortArtifact { .. } => 2 + 1 + 32 + 32,
             Self::InitClearWork { .. } | Self::GrowClearWork { .. } => 2 + 32 + 32 + 32,
+            Self::InitEpoch { .. } => 2 + 32 + 8 + 32 + 8,
+            Self::FreezeEpoch { .. } => 2 + 32 + 32,
+            Self::AdvanceClearWork { .. } | Self::AdvanceClearSlices { .. } => {
+                2 + 32 + 32 + 32 + 2
+            }
+            Self::CompleteClearWork { .. } => 2 + 32 + 32 + 32,
         }
     }
     /// Validate and encode into a caller-provided buffer.
@@ -5323,6 +5470,85 @@ impl Intent {
                     },
                     INTENT_VERSION,
                 )?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.hash(*candidate)?
+            }
+            Self::InitEpoch {
+                market,
+                epoch_index,
+                policy,
+                freeze_deadline_slot,
+            } => {
+                check_hash(*market)?;
+                check_hash(*policy)?;
+                // A window with no deadline is not a window; the account codec
+                // refuses the same zero (`EpochWindowAccount::validate`).
+                if *freeze_deadline_slot == 0 {
+                    return Err(CodecError::ZeroValue);
+                }
+                put_header(&mut w, INIT_EPOCH_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.u64(*epoch_index)?;
+                w.hash(*policy)?;
+                w.u64(*freeze_deadline_slot)?
+            }
+            Self::FreezeEpoch { market, epoch } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                put_header(&mut w, FREEZE_EPOCH_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?
+            }
+            Self::AdvanceClearWork {
+                market,
+                epoch,
+                candidate,
+                max_orders,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                check_hash(*candidate)?;
+                // A walk that may push nothing is not a walk, and a bound
+                // above the book is a bound the book already imposes.
+                if *max_orders == 0 || *max_orders as usize > MAX_EPOCH_ORDERS {
+                    return Err(CodecError::InvalidCount);
+                }
+                put_header(&mut w, ADVANCE_CLEAR_WORK_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.hash(*candidate)?;
+                w.u16(*max_orders)?
+            }
+            Self::AdvanceClearSlices {
+                market,
+                epoch,
+                candidate,
+                max_slices,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                check_hash(*candidate)?;
+                // Same rule at the witness bound: at least one, at most the
+                // feed's own capacity.
+                if *max_slices == 0 || *max_slices as usize > MAX_SLICES {
+                    return Err(CodecError::InvalidCount);
+                }
+                put_header(&mut w, ADVANCE_CLEAR_SLICES_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.hash(*candidate)?;
+                w.u16(*max_slices)?
+            }
+            Self::CompleteClearWork {
+                market,
+                epoch,
+                candidate,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                check_hash(*candidate)?;
+                put_header(&mut w, COMPLETE_CLEAR_WORK_TAG, INTENT_VERSION)?;
                 w.hash(*market)?;
                 w.hash(*epoch)?;
                 w.hash(*candidate)?
@@ -5840,6 +6066,84 @@ impl Intent {
                     }
                 })
             }
+            INIT_EPOCH_TAG => {
+                let market = r.hash()?;
+                let epoch_index = r.u64()?;
+                let policy = r.hash()?;
+                let freeze_deadline_slot = r.u64()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(policy)?;
+                if freeze_deadline_slot == 0 {
+                    return Err(CodecError::ZeroValue);
+                }
+                Ok(Self::InitEpoch {
+                    market,
+                    epoch_index,
+                    policy,
+                    freeze_deadline_slot,
+                })
+            }
+            FREEZE_EPOCH_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                Ok(Self::FreezeEpoch { market, epoch })
+            }
+            ADVANCE_CLEAR_WORK_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let candidate = r.hash()?;
+                let max_orders = r.u16()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                check_hash(candidate)?;
+                if max_orders == 0 || max_orders as usize > MAX_EPOCH_ORDERS {
+                    return Err(CodecError::InvalidCount);
+                }
+                Ok(Self::AdvanceClearWork {
+                    market,
+                    epoch,
+                    candidate,
+                    max_orders,
+                })
+            }
+            ADVANCE_CLEAR_SLICES_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let candidate = r.hash()?;
+                let max_slices = r.u16()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                check_hash(candidate)?;
+                if max_slices == 0 || max_slices as usize > MAX_SLICES {
+                    return Err(CodecError::InvalidCount);
+                }
+                Ok(Self::AdvanceClearSlices {
+                    market,
+                    epoch,
+                    candidate,
+                    max_slices,
+                })
+            }
+            COMPLETE_CLEAR_WORK_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let candidate = r.hash()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                check_hash(candidate)?;
+                Ok(Self::CompleteClearWork {
+                    market,
+                    epoch,
+                    candidate,
+                })
+            }
             _ => Err(CodecError::WrongTag),
         }
     }
@@ -6279,6 +6583,8 @@ mod tests {
             honored_aon_mask: 0,
             weighted_direct_volume: -3,
             limit_surplus_price_units: 7,
+            // A VERIFIED record carries its verified tie digest.
+            score_digest: Hash32([0x5c; HASH_BYTES]),
             churn: 5,
             submitted_slot: 42,
             distinct_owners: 3,
@@ -6392,7 +6698,7 @@ mod tests {
         assert_eq!(account_len::TERMS, 1656);
         assert_eq!(account_len::PRICE_GRID, 589);
         assert_eq!(account_len::EPOCH, 328);
-        assert_eq!(account_len::CANDIDATE, 305);
+        assert_eq!(account_len::CANDIDATE, 337);
         assert_eq!(account_len::FINAL_POT, 262);
         assert_eq!(account_len::SETTLEMENT_RECEIPT, 217);
         assert_eq!(account_len::RESOLUTION, 165);
@@ -7967,12 +8273,14 @@ mod tests {
         assert_ne!(masked.recomputed_candidate_digest().unwrap(), c.candidate);
 
         // Score, status, slot, and bump are outside the identity: they are
-        // claims and lifecycle, not coordinates.
+        // claims and lifecycle, not coordinates.  Superseding zeroes the
+        // verified tie digest — a superseded record competes for nothing.
         let mut rescored = c;
         rescored.weighted_direct_volume = i128::MIN;
         rescored.limit_surplus_price_units = u128::MAX;
         rescored.distinct_owners = 1;
         rescored.status = CANDIDATE_STATUS_SUPERSEDED;
+        rescored.score_digest = Hash32::ZERO;
         rescored.submitted_slot = 0;
         rescored.stored_bump = 255;
         assert_eq!(rescored.recomputed_candidate_digest().unwrap(), c.candidate);
@@ -8007,6 +8315,25 @@ mod tests {
         let mut statused = c;
         statused.status = CANDIDATE_STATUS_SUPERSEDED + 1;
         assert_eq!(statused.validate(), Err(CodecError::InvalidEnum));
+
+        /* The verified tie digest and the status are one fact stated twice:
+         * a VERIFIED record without a digest has no verified identity, and a
+         * SUBMITTED record with one is the shape a forged verification would
+         * like to have. */
+        let mut hollow = c;
+        hollow.score_digest = Hash32::ZERO;
+        assert_eq!(hollow.validate(), Err(CodecError::ZeroIdentity));
+        let mut premature = c;
+        premature.status = CANDIDATE_STATUS_SUBMITTED;
+        assert_eq!(
+            premature.validate(),
+            Err(CodecError::NonCanonicalPadding)
+        );
+        let mut refused = c;
+        refused.status = CANDIDATE_STATUS_REFUSED;
+        assert_eq!(refused.validate(), Err(CodecError::NonCanonicalPadding));
+        refused.score_digest = Hash32::ZERO;
+        assert_eq!(refused.validate(), Ok(()));
 
         let mut forged = c;
         forged.prices[0] = 1;
@@ -10318,6 +10645,244 @@ mod tests {
             }
             .encode(&mut [0; MAX_INTENT_BYTES]),
             Err(CodecError::ZeroIdentity)
+        );
+    }
+
+    #[test]
+    fn general_epoch_intents_have_exact_unambiguous_wires() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 7);
+        let policy = h(0x66);
+
+        // Tag continuity: the lifecycle pair takes exactly the next two tags
+        // after the staged-creation pair.
+        let init = Intent::InitEpoch {
+            market,
+            epoch_index: 7,
+            policy,
+            freeze_deadline_slot: 900,
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = init.encode(&mut bytes).unwrap();
+        assert_eq!(len, 82);
+        assert_eq!(init.encoded_len(), len);
+        assert_eq!(&bytes[..2], [49, INTENT_VERSION]);
+        assert_eq!(&bytes[2..34], &market.bytes());
+        assert_eq!(&bytes[34..42], &7u64.to_le_bytes());
+        assert_eq!(&bytes[42..74], &policy.bytes());
+        assert_eq!(&bytes[74..82], &900u64.to_le_bytes());
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(init));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+        let mut long = [0; MAX_INTENT_BYTES];
+        long[..len].copy_from_slice(&bytes[..len]);
+        assert_eq!(
+            Intent::decode(&long[..len + 1]),
+            Err(CodecError::TrailingBytes)
+        );
+        let mut zero_market = bytes;
+        zero_market[2..34].fill(0);
+        assert_eq!(
+            Intent::decode(&zero_market[..len]),
+            Err(CodecError::ZeroIdentity)
+        );
+        let mut zero_policy = bytes;
+        zero_policy[42..74].fill(0);
+        assert_eq!(
+            Intent::decode(&zero_policy[..len]),
+            Err(CodecError::ZeroIdentity)
+        );
+        // No deadline is not a window, in both directions.
+        let mut zero_deadline = bytes;
+        zero_deadline[74..82].fill(0);
+        assert_eq!(
+            Intent::decode(&zero_deadline[..len]),
+            Err(CodecError::ZeroValue)
+        );
+        assert_eq!(
+            Intent::InitEpoch {
+                market,
+                epoch_index: 7,
+                policy,
+                freeze_deadline_slot: 0,
+            }
+            .encode(&mut [0; MAX_INTENT_BYTES]),
+            Err(CodecError::ZeroValue)
+        );
+
+        let freeze = Intent::FreezeEpoch { market, epoch };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = freeze.encode(&mut bytes).unwrap();
+        assert_eq!(len, 66);
+        assert_eq!(freeze.encoded_len(), len);
+        assert_eq!(&bytes[..2], [50, INTENT_VERSION]);
+        assert_eq!(&bytes[2..34], &market.bytes());
+        assert_eq!(&bytes[34..66], &epoch.bytes());
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(freeze));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+        for at in [2, 34] {
+            let mut zeroed = bytes;
+            zeroed[at..at + 32].fill(0);
+            assert_eq!(
+                Intent::decode(&zeroed[..len]),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+        let mut wrong_version = bytes;
+        wrong_version[1] = INTENT_VERSION + 1;
+        assert_eq!(
+            Intent::decode(&wrong_version[..len]),
+            Err(CodecError::WrongVersion)
+        );
+    }
+
+    #[test]
+    fn the_walk_intent_has_an_exact_unambiguous_wire() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 7);
+        let candidate = h(9);
+        let walk = Intent::AdvanceClearWork {
+            market,
+            epoch,
+            candidate,
+            max_orders: 16,
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = walk.encode(&mut bytes).unwrap();
+        assert_eq!(len, 100);
+        assert_eq!(walk.encoded_len(), len);
+        assert_eq!(&bytes[..2], [51, INTENT_VERSION]);
+        assert_eq!(&bytes[2..34], &market.bytes());
+        assert_eq!(&bytes[34..66], &epoch.bytes());
+        assert_eq!(&bytes[66..98], &candidate.bytes());
+        assert_eq!(&bytes[98..100], &16u16.to_le_bytes());
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(walk));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+        let mut long = [0; MAX_INTENT_BYTES];
+        long[..len].copy_from_slice(&bytes[..len]);
+        assert_eq!(
+            Intent::decode(&long[..len + 1]),
+            Err(CodecError::TrailingBytes)
+        );
+        for at in [2, 34, 66] {
+            let mut zeroed = bytes;
+            zeroed[at..at + 32].fill(0);
+            assert_eq!(
+                Intent::decode(&zeroed[..len]),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+        // A walk that may push nothing, and a bound past the book, both ways.
+        let mut zero_batch = bytes;
+        zero_batch[98..100].fill(0);
+        assert_eq!(
+            Intent::decode(&zero_batch[..len]),
+            Err(CodecError::InvalidCount)
+        );
+        let mut over_batch = bytes;
+        over_batch[98..100].copy_from_slice(&(MAX_EPOCH_ORDERS as u16 + 1).to_le_bytes());
+        assert_eq!(
+            Intent::decode(&over_batch[..len]),
+            Err(CodecError::InvalidCount)
+        );
+        assert_eq!(
+            Intent::AdvanceClearWork {
+                market,
+                epoch,
+                candidate,
+                max_orders: 0,
+            }
+            .encode(&mut [0; MAX_INTENT_BYTES]),
+            Err(CodecError::InvalidCount)
+        );
+    }
+
+    #[test]
+    fn the_slice_and_close_intents_have_exact_unambiguous_wires() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 7);
+        let candidate = h(9);
+
+        let slices = Intent::AdvanceClearSlices {
+            market,
+            epoch,
+            candidate,
+            max_slices: 100,
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = slices.encode(&mut bytes).unwrap();
+        assert_eq!(len, 100);
+        assert_eq!(slices.encoded_len(), len);
+        assert_eq!(&bytes[..2], [52, INTENT_VERSION]);
+        assert_eq!(&bytes[98..100], &100u16.to_le_bytes());
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(slices));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+        let mut zero_batch = bytes;
+        zero_batch[98..100].fill(0);
+        assert_eq!(
+            Intent::decode(&zero_batch[..len]),
+            Err(CodecError::InvalidCount)
+        );
+        let mut over_batch = bytes;
+        over_batch[98..100].copy_from_slice(&(MAX_SLICES as u16 + 1).to_le_bytes());
+        assert_eq!(
+            Intent::decode(&over_batch[..len]),
+            Err(CodecError::InvalidCount)
+        );
+        for at in [2, 34, 66] {
+            let mut zeroed = bytes;
+            zeroed[at..at + 32].fill(0);
+            assert_eq!(
+                Intent::decode(&zeroed[..len]),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+
+        let close = Intent::CompleteClearWork {
+            market,
+            epoch,
+            candidate,
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = close.encode(&mut bytes).unwrap();
+        assert_eq!(len, 98);
+        assert_eq!(close.encoded_len(), len);
+        assert_eq!(&bytes[..2], [53, INTENT_VERSION]);
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(close));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+        let mut long = [0; MAX_INTENT_BYTES];
+        long[..len].copy_from_slice(&bytes[..len]);
+        assert_eq!(
+            Intent::decode(&long[..len + 1]),
+            Err(CodecError::TrailingBytes)
+        );
+        for at in [2, 34, 66] {
+            let mut zeroed = bytes;
+            zeroed[at..at + 32].fill(0);
+            assert_eq!(
+                Intent::decode(&zeroed[..len]),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+        let mut wrong_version = bytes;
+        wrong_version[1] = INTENT_VERSION + 1;
+        assert_eq!(
+            Intent::decode(&wrong_version[..len]),
+            Err(CodecError::WrongVersion)
         );
     }
 

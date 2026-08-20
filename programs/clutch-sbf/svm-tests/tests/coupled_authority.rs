@@ -215,6 +215,7 @@ fn candidate_for(epoch: &EpochAccount, outcome: u8, limit: u64) -> CandidateReco
         honored_aon_mask: 0,
         weighted_direct_volume: 0,
         limit_surplus_price_units: 0,
+        score_digest: Hash32::ZERO,
         churn: 0,
         submitted_slot: 0,
         distinct_owners: 0,

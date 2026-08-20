@@ -1285,3 +1285,57 @@ fn policy_codec_round_trips_every_registered_family() {
     encode_policy_v1(&over, &mut bytes).unwrap();
     assert_eq!(decode_policy_v1(&bytes), Ok(over));
 }
+
+/// The resumable driver's public cursors: idle/poisoned discrimination, the
+/// per-pass order cursor, and the slice cursor, all surviving encode/decode.
+#[test]
+fn driver_cursors_report_the_exact_resume_position() {
+    let idle = Box::new(ClearWorkV1::new());
+    assert!(idle.is_idle());
+    assert!(!idle.is_poisoned());
+    assert_eq!(idle.orders_consumed(), 0);
+    assert_eq!(idle.slices_consumed(), 0);
+
+    let domain = domain_with(base_policy(), 2, 3);
+    let book = four_book();
+    let vector = prices(&[SCALE / 2, SCALE / 2]);
+    let candidate = canonical_candidate(&domain, &book, &vector, 0, 0).unwrap();
+    let mut work = Box::new(ClearWorkV1::new());
+    work.begin(&domain, &header_of(&candidate, None), true)
+        .unwrap();
+    assert!(!work.is_idle());
+    let mut fed = 0u16;
+    while fed < book.len as u16 {
+        assert_eq!(work.orders_consumed(), fed);
+        // The cursor is exactly what a resumed driver reads back off bytes.
+        let mut out = buffer();
+        work.encode_into(&mut out).unwrap();
+        let mut resumed = Box::new(ClearWorkV1::new());
+        resumed.decode_into(&out).unwrap();
+        assert_eq!(resumed.orders_consumed(), fed);
+        assert!(!resumed.is_idle());
+        work.push_order(&book.orders[fed as usize], candidate.fills[fed as usize])
+            .unwrap();
+        fed += 1;
+    }
+    work.end_pass().unwrap();
+    // A fresh pass restarts the order cursor.
+    assert_eq!(work.orders_consumed(), 0);
+
+    // A mismatched resumption poisons, and the poison round-trips.
+    work.push_order(&book.orders[0], candidate.fills[0] + 1)
+        .unwrap();
+    let mut i = 1;
+    while i < book.len as usize {
+        work.push_order(&book.orders[i], candidate.fills[i]).unwrap();
+        i += 1;
+    }
+    assert_eq!(work.end_pass(), Err(FeedErrorV1::ResumeFoldMismatch));
+    assert!(work.is_poisoned());
+    let mut out = buffer();
+    work.encode_into(&mut out).unwrap();
+    let mut resumed = Box::new(ClearWorkV1::new());
+    resumed.decode_into(&out).unwrap();
+    assert!(resumed.is_poisoned());
+    assert!(!resumed.is_idle());
+}

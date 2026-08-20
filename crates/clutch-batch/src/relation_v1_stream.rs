@@ -657,6 +657,39 @@ impl ClearWorkV1 {
         self.sealed_fold.digest()
     }
 
+    /// Whether this checkpoint is the idle object — `begin` never ran.
+    ///
+    /// [`ClearWorkV1::status`] deliberately reports the idle phase as
+    /// `Complete` (there is nothing to feed), so a resumable driver that must
+    /// distinguish "never begun" from "verdict reached" asks this instead.
+    pub fn is_idle(&self) -> bool {
+        self.phase == PHASE_IDLE
+    }
+
+    /// Whether a mismatched resumption poisoned this checkpoint.
+    ///
+    /// A poisoned checkpoint yields no verdict and accepts no push; the only
+    /// way forward is a fresh `begin`.
+    pub fn is_poisoned(&self) -> bool {
+        self.phase == PHASE_POISONED
+    }
+
+    /// Orders consumed by the pass in progress.
+    ///
+    /// The resumable driver's cursor: on a checkpoint decoded mid-pass this is
+    /// exactly how many `(order, fill)` pairs the current pass has already
+    /// folded, i.e. the index of the next order to push.
+    pub fn orders_consumed(&self) -> u16 {
+        self.cursor
+    }
+
+    /// Slices consumed by the slice pass so far.
+    ///
+    /// The witness-side cursor: the index of the next slice to push.
+    pub fn slices_consumed(&self) -> u16 {
+        self.slice_cursor
+    }
+
     // -----------------------------------------------------------------------
     // push_order
     // -----------------------------------------------------------------------

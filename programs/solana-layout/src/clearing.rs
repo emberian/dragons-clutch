@@ -10,8 +10,9 @@
 //!
 //! | account | tag | bytes | what it holds |
 //! | --- | ---: | ---: | --- |
-//! | [`ClearWorkAccount`] | 17 | 48,004 | the resumable checkpoint: a layout-owned header and a `ClearWorkV1` codec body |
+//! | [`ClearWorkAccount`] | 17 | 50,054 | the resumable checkpoint: a layout-owned header, the layout-owned owner-interning region, and a `ClearWorkV1` codec body |
 //! | [`CandidateFeedAccount`] | 18 | 6,266 | the solver-written feed: candidate header, fill vector, optional pairing witness |
+//! | [`EpochWindowAccount`] | 24 | 84 | the general epoch's deadline-window companion |
 //!
 //! # Neither account is ever a value
 //!
@@ -61,24 +62,48 @@
 //! shows a different `order_set`.  Neither function verifies a fold; the fold is
 //! `clutch-batch`'s, and saying so is the point.
 
+use super::projection::OwnerInterner;
 use super::{
-    account_len, account_version, canonical_candidate_digest, check_count, check_hash,
-    check_header, check_padded_amounts, put_header, CodecError, Hash32, Reader, Result, Writer,
-    CANDIDATE_FEED_TAG, CLEAR_WORK_BODY_BYTES, CLEAR_WORK_TAG, HASH_BYTES, MAX_EPOCH_ORDERS,
-    MAX_ORDERS_PER_PAGE, MAX_ORDER_PAGES, MAX_OUTCOMES, MAX_SLICES,
+    account_len, account_version, canonical_candidate_digest, canonical_epoch_id, check_count,
+    check_hash, check_header, check_padded_amounts, digest, put_header, CodecError, EpochAccount,
+    EpochId, Hash32, MarketId, Reader, Result, Writer, CANDIDATE_FEED_TAG, CLEAR_WORK_BODY_BYTES,
+    CLEAR_WORK_TAG, EPOCH_PHASE_OPEN, HASH_BYTES, MAX_EPOCH_ORDERS, MAX_ORDERS_PER_PAGE,
+    MAX_ORDER_PAGES, MAX_OUTCOMES, MAX_SLICES, RELATION_VERSION,
 };
 
 /* ------------------------------------------------------------------------ */
 /* The streaming checkpoint                                                  */
 /* ------------------------------------------------------------------------ */
 
-/// Bytes of a [`ClearWorkAccount`] before its opaque body.
+/// Bytes of a [`ClearWorkAccount`] before its owner-interning region.
 ///
-/// The only part of a checkpoint this crate ever materializes.
-pub const CLEAR_WORK_HEADER_BYTES: usize = account_len::CLEAR_WORK - CLEAR_WORK_BODY_BYTES;
+/// The only part of a checkpoint this crate ever materializes by value.
+pub const CLEAR_WORK_HEADER_BYTES: usize =
+    account_len::CLEAR_WORK - CLEAR_WORK_INTERNER_BYTES - CLEAR_WORK_BODY_BYTES;
+
+/// Bytes of the layout-owned owner-interning region between the header and
+/// the opaque body: the interned count, then all 64 owner slots.
+///
+/// The region persists the projection's [`OwnerInterner`] across walk
+/// transactions — the `owner: u16` coordinate every projected order carries
+/// is the index of its 32-byte owner's first appearance in the canonical
+/// walk, and a resumed pass must reproduce exactly the tags pass 1 minted.
+/// The relation checkpoint cannot carry it (its owner table is the *u16 tag*
+/// side), so the mapping is layout state, framed here and written only
+/// through [`write_owner_interner`].
+pub const CLEAR_WORK_INTERNER_BYTES: usize = 2 + (MAX_EPOCH_ORDERS * HASH_BYTES);
+
+/// Byte offset of the owner-interning region inside a checkpoint account.
+const CLEAR_WORK_INTERNER_AT: usize = CLEAR_WORK_HEADER_BYTES;
+/// Byte offset of the opaque codec body inside a checkpoint account.
+const CLEAR_WORK_BODY_AT: usize = CLEAR_WORK_HEADER_BYTES + CLEAR_WORK_INTERNER_BYTES;
 
 const _: () = assert!(CLEAR_WORK_HEADER_BYTES == 158);
-const _: () = assert!(CLEAR_WORK_HEADER_BYTES + CLEAR_WORK_BODY_BYTES == account_len::CLEAR_WORK);
+const _: () = assert!(CLEAR_WORK_INTERNER_BYTES == 2_050);
+const _: () = assert!(
+    CLEAR_WORK_HEADER_BYTES + CLEAR_WORK_INTERNER_BYTES + CLEAR_WORK_BODY_BYTES
+        == account_len::CLEAR_WORK
+);
 
 /// [`ClearWorkHeader::status`]: pass one is walking; nothing is bound yet.
 pub const CLEAR_WORK_STATUS_OPEN: u8 = 0;
@@ -252,7 +277,7 @@ impl ClearWorkHeader {
 /// The whole checkpoint account, named for the doc table.
 ///
 /// It is a *type-level* name only: there is deliberately no value of this type,
-/// because a value of it would be 48,004 bytes on a call frame.  A caller reads
+/// because a value of it would be 50,054 bytes on a call frame.  A caller reads
 /// [`verify_clear_work`] and walks the body through [`clear_work_body`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClearWorkAccount {}
@@ -272,7 +297,7 @@ pub fn verify_clear_work(input: &[u8]) -> Result<ClearWorkHeader> {
 /// The opaque body region of a checkpoint account, borrowed in place.
 pub fn clear_work_body(input: &[u8]) -> Result<&[u8]> {
     ClearWorkHeader::decode(input)?;
-    Ok(&input[CLEAR_WORK_HEADER_BYTES..])
+    Ok(&input[CLEAR_WORK_BODY_AT..])
 }
 
 /// The opaque body region of a checkpoint account, borrowed mutably in place.
@@ -282,7 +307,110 @@ pub fn clear_work_body(input: &[u8]) -> Result<&[u8]> {
 /// comes back.  Nothing is copied, so no frame ever holds the body.
 pub fn clear_work_body_mut(input: &mut [u8]) -> Result<&mut [u8]> {
     ClearWorkHeader::decode(input)?;
-    Ok(&mut input[CLEAR_WORK_HEADER_BYTES..])
+    Ok(&mut input[CLEAR_WORK_BODY_AT..])
+}
+
+/// Read the persisted owner-interning table of a checkpoint account.
+///
+/// The framing refusals are the header decoder's; the region's own rules are
+/// [`OwnerInterner::restore`]'s — a bounded count, no zero owner below it,
+/// canonical zero padding at and beyond it.  Distinctness below the count is
+/// **by construction**, not re-verified here: the table is written only
+/// through [`write_owner_interner`] from a table [`OwnerInterner::intern`]
+/// built, the account is program-owned, and an all-pairs comparison on every
+/// resume would price the walk out of its compute budget for a fact no
+/// program path can break.
+pub fn read_owner_interner(input: &[u8]) -> Result<OwnerInterner> {
+    let mut owners = OwnerInterner::NEW;
+    read_owner_interner_into(input, &mut owners)?;
+    Ok(owners)
+}
+
+/// Read the persisted owner-interning table into a caller-owned table.
+///
+/// The in-place form of [`read_owner_interner`], for callers whose frames
+/// must never hold a second 2,050-byte table — the on-chain walk reads into a
+/// heap-boxed table through this.  Same rules, same refusals; on any refusal
+/// the output table is reset to empty rather than left half-written.
+pub fn read_owner_interner_into(input: &[u8], out: &mut OwnerInterner) -> Result<()> {
+    ClearWorkHeader::decode(input)?;
+    let mut r = Reader::at(input, CLEAR_WORK_INTERNER_AT);
+    let count = r.u16()?;
+    if count as usize > MAX_EPOCH_ORDERS {
+        return Err(CodecError::InvalidCount);
+    }
+    let (owners, stored_count) = out.raw_parts_mut();
+    *stored_count = 0;
+    let mut i = 0usize;
+    while i < MAX_EPOCH_ORDERS {
+        let owner = match r.hash() {
+            Ok(owner) => owner,
+            Err(error) => {
+                owners[..i].fill(Hash32::ZERO);
+                return Err(error);
+            }
+        };
+        let fault = if i < count as usize {
+            check_hash(owner).err()
+        } else if owner != Hash32::ZERO {
+            Some(CodecError::NonCanonicalPadding)
+        } else {
+            None
+        };
+        if let Some(error) = fault {
+            owners[..i].fill(Hash32::ZERO);
+            return Err(error);
+        }
+        owners[i] = owner;
+        i += 1;
+    }
+    *stored_count = count;
+    Ok(())
+}
+
+/// Persist one owner-interning table into a checkpoint account.
+///
+/// All 64 slots are written — the live prefix verbatim, canonical zeros
+/// beyond it — so the region can never drift from the exact image
+/// [`read_owner_interner`] reproduces.
+pub fn write_owner_interner(account: &mut [u8], owners: &OwnerInterner) -> Result<()> {
+    ClearWorkHeader::decode(account)?;
+    let end = CLEAR_WORK_INTERNER_AT + CLEAR_WORK_INTERNER_BYTES;
+    let mut w = Writer::new(&mut account[CLEAR_WORK_INTERNER_AT..end]);
+    w.u16(owners.count())?;
+    let live = owners.owners();
+    let mut i = 0usize;
+    while i < MAX_EPOCH_ORDERS {
+        w.hash(if i < live.len() { live[i] } else { Hash32::ZERO })?;
+        i += 1;
+    }
+    if w.at != CLEAR_WORK_INTERNER_BYTES {
+        return Err(CodecError::OutputTooSmall);
+    }
+    Ok(())
+}
+
+/// Rewind the page-set walk position to the top of the set, for the next pass.
+///
+/// The one sanctioned exception to [`advance_walk`]'s monotone rule: the feed
+/// protocol re-walks the same frozen set once per pass, so at a pass boundary
+/// — and only there — the cursor legitimately returns to `(0, 0)`.  Requiring
+/// [`CLEAR_WORK_STATUS_BOUND`] is what pins "at a pass boundary": binding
+/// happens exactly at pass-1 completion, every later pass starts from a bound
+/// checkpoint, and a completed one refuses.  Double-counting within a pass
+/// stays impossible: a re-fed prefix changes the pass's running fold, and the
+/// checkpoint codec refuses the pass at its end (`ResumeFoldMismatch`) rather
+/// than folding an order twice into a verdict.
+pub fn rewind_walk(account: &mut [u8]) -> Result<ClearWorkHeader> {
+    let mut header = ClearWorkHeader::decode(account)?;
+    if header.status != CLEAR_WORK_STATUS_BOUND {
+        return Err(CodecError::MismatchedBinding);
+    }
+    header.page_cursor = 0;
+    header.slot_cursor = 0;
+    header.live_rank = 0;
+    header.encode(account)?;
+    Ok(header)
 }
 
 /// Write an open checkpoint over a fresh account, and return its header.
@@ -293,7 +421,9 @@ pub fn clear_work_body_mut(input: &mut [u8]) -> Result<&mut [u8]> {
 /// in place — `ClearWorkV1::NEW` is not all-zero in every field, so the caller
 /// must still write the idle checkpoint through its owning crate; this
 /// establishes the *account*, not the checkpoint's initial value, and saying so
-/// is the difference between a framing and a lie.
+/// is the difference between a framing and a lie.  The zero fill also covers
+/// the owner-interning region, whose all-zero image is exactly the empty
+/// table ([`OwnerInterner::NEW`]).
 pub fn init_clear_work(
     account: &mut [u8],
     market: Hash32,
@@ -585,6 +715,175 @@ pub fn init_clear_work_grow_stage(
     stage.encode(account)?;
     account[CLEAR_WORK_GROW_PREFIX_BYTES..].fill(0);
     Ok(stage)
+}
+
+/* ------------------------------------------------------------------------ */
+/* The general epoch lifecycle                                               */
+/* ------------------------------------------------------------------------ */
+
+/// Account tag of the general epoch's deadline-window companion.
+pub const EPOCH_WINDOW_TAG: u8 = 24;
+/// Account version of the general epoch's deadline-window companion.
+pub const EPOCH_WINDOW_VERSION: u8 = 1;
+/// Exact byte length of one [`EpochWindowAccount`].
+pub const EPOCH_WINDOW_ACCOUNT_BYTES: usize = 2 + 32 + 32 + 8 + 8 + 1 + 1;
+
+const _: () = assert!(EPOCH_WINDOW_ACCOUNT_BYTES == 84);
+
+/// Derive the one book identity admitted by the general clearing plane.
+///
+/// The general sibling of `canonical_direct_book_id`: one epoch clears exactly
+/// one book, so the book identity is a total function of the epoch identity,
+/// under its own domain separator so a general book and a direct book of the
+/// same epoch can never collide.
+pub fn canonical_general_book_id(epoch: Hash32) -> Hash32 {
+    digest(b"dragons-clutch:general-book:v1", &[&epoch.0])
+}
+
+/// Derive the deterministic relation remainder seed for the general plane.
+///
+/// The same construction as the direct profile's: the epoch identity's first
+/// eight bytes, little-endian.  The seed's only consumer is the relation's
+/// frozen largest-remainder permutation; determinism from the epoch identity
+/// is what matters, unpredictability is not a goal it could meet anyway.
+pub const fn canonical_general_remainder_seed(epoch: Hash32) -> u64 {
+    u64::from_le_bytes([
+        epoch.0[0], epoch.0[1], epoch.0[2], epoch.0[3], epoch.0[4], epoch.0[5], epoch.0[6],
+        epoch.0[7],
+    ])
+}
+
+/// Construct the canonical open general [`EpochAccount`].
+///
+/// The general sibling of `DirectEpochV3Account::open`, minus the `== 2`
+/// gates: outcome width and price scale arrive from the terms and grid the
+/// caller has already bound, the book identity and the remainder seed are
+/// derived from the epoch identity, and every frozen-set field starts at its
+/// canonical open zero.  `owner_count` opens at [`MAX_EPOCH_ORDERS`] — the
+/// widest owner space a 64-slot book can carry — and the freeze rewrites it
+/// with the exact distinct-owner count interned over the frozen set, which is
+/// the value the pass-1 walk is later compared against.
+#[allow(clippy::too_many_arguments)] // one argument per bound account fact
+pub fn open_general_epoch(
+    market: MarketId,
+    terms: Hash32,
+    price_grid: Hash32,
+    policy: Hash32,
+    epoch_index: u64,
+    price_scale: u64,
+    outcome_count: u8,
+    stored_bump: u8,
+) -> Result<EpochAccount> {
+    let epoch = canonical_epoch_id(market, epoch_index);
+    let value = EpochAccount {
+        epoch,
+        market,
+        book: canonical_general_book_id(epoch),
+        terms,
+        price_grid,
+        policy,
+        order_set: Hash32::ZERO,
+        first_order_id: Hash32::ZERO,
+        last_order_id: Hash32::ZERO,
+        epoch_index,
+        relation_version: RELATION_VERSION,
+        price_scale,
+        remainder_seed: canonical_general_remainder_seed(epoch),
+        owner_count: MAX_EPOCH_ORDERS as u16,
+        page_count: 0,
+        order_count: 0,
+        outcome_count,
+        phase: EPOCH_PHASE_OPEN,
+        stored_bump,
+        flags: 0,
+    };
+    value.validate()?;
+    Ok(value)
+}
+
+/// The deadline-slot companion of one general epoch.
+///
+/// The V3 window precedent applied to the general plane: deadline slots ride a
+/// small dedicated account instead of an [`EpochAccount`] format bump, so the
+/// epoch codec every existing consumer decodes stays byte-stable.  V1 carries
+/// exactly one deadline — the slot at or after which the permissionless
+/// freeze is admitted; placements and cancellations gate on the epoch phase,
+/// not on this slot.  The candidate-window deadlines of the selection
+/// lifecycle (T2-7) are a later format revision of this account, not a second
+/// account family.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EpochWindowAccount {
+    /// Epoch identity; must equal `canonical_epoch_id(market, epoch_index)`.
+    pub epoch: EpochId,
+    /// Market identity.
+    pub market: MarketId,
+    /// Epoch index within the market.
+    pub epoch_index: u64,
+    /// First slot at which [`FreezeEpoch`](crate::Intent::FreezeEpoch) is
+    /// admitted; zero is refused — a window with no deadline is not a window.
+    pub freeze_deadline_slot: u64,
+    /// Stored PDA bump.
+    pub stored_bump: u8,
+    /// Reserved flags; currently zero.
+    pub flags: u8,
+}
+
+impl EpochWindowAccount {
+    /// Validate identities, the canonical epoch derivation, and the deadline.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.market)?;
+        if self.epoch != canonical_epoch_id(self.market, self.epoch_index) {
+            return Err(CodecError::NonCanonicalIdentity);
+        }
+        if self.freeze_deadline_slot == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        if self.flags != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        Ok(())
+    }
+
+    /// Encode exactly [`EPOCH_WINDOW_ACCOUNT_BYTES`] bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        if out.len() < EPOCH_WINDOW_ACCOUNT_BYTES {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut w = Writer::new(out);
+        put_header(&mut w, EPOCH_WINDOW_TAG, EPOCH_WINDOW_VERSION)?;
+        w.hash(self.epoch)?;
+        w.hash(self.market)?;
+        w.u64(self.epoch_index)?;
+        w.u64(self.freeze_deadline_slot)?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        if w.at != EPOCH_WINDOW_ACCOUNT_BYTES {
+            return Err(CodecError::OutputTooSmall);
+        }
+        Ok(w.at)
+    }
+
+    /// Parse exactly [`EPOCH_WINDOW_ACCOUNT_BYTES`] bytes.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        check_header(
+            input,
+            EPOCH_WINDOW_TAG,
+            EPOCH_WINDOW_VERSION,
+            EPOCH_WINDOW_ACCOUNT_BYTES,
+        )?;
+        let mut r = Reader::at(input, 2);
+        let value = Self {
+            epoch: r.hash()?,
+            market: r.hash()?,
+            epoch_index: r.u64()?,
+            freeze_deadline_slot: r.u64()?,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1109,6 +1408,33 @@ pub fn write_slice_at(account: &mut [u8], index: u16, slice: &PairingSlice) -> R
     write_slice(account, index as usize, slice)
 }
 
+/// The feed's raw fill-vector region: all 64 fills, as stored little-endian
+/// bytes.
+///
+/// Exactly the bytes the full-width relation-candidate digest folds for its
+/// fill segment — the batch digest covers all [`MAX_EPOCH_ORDERS`] fill slots
+/// and the stored padding is canonical zeros ([`verify_candidate_feed`]) — so
+/// a digest recomputation can borrow this region instead of re-encoding 64
+/// integers it already holds.
+pub fn candidate_feed_fill_region(input: &[u8]) -> Result<&[u8]> {
+    CandidateFeedHeader::decode(input)?;
+    Ok(&input[FILLS_AT..SLICES_AT])
+}
+
+/// The feed's declared pairing-witness region: `declared` stored slices, as
+/// stored bytes.
+///
+/// Each stored slice is `buy(kind, index), sell(kind, index), outcome,
+/// quantity LE` — byte for byte the sequence the full-width
+/// relation-candidate digest folds per witness slice, which is what makes
+/// this region borrowable into that digest.  Refuses when no witness is
+/// declared, exactly as [`slice_at`] refuses.
+pub fn candidate_feed_slice_region(input: &[u8]) -> Result<&[u8]> {
+    let header = CandidateFeedHeader::decode(input)?;
+    let declared = header.declared_slices().ok_or(CodecError::InvalidEnum)? as usize;
+    Ok(&input[SLICES_AT..SLICES_AT + (declared * PAIRING_SLICE_BYTES)])
+}
+
 /// A forward cursor over one feed's live fills.
 ///
 /// The fill-side counterpart of [`crate::stream::OrderSlotCursor`]: one `u64`
@@ -1249,7 +1575,9 @@ mod tests {
             clutch_batch::relation_v1_stream::ClearWorkV1::ENCODED_BYTES
         );
         assert_eq!(CLEAR_WORK_HEADER_BYTES, 158);
-        assert_eq!(account_len::CLEAR_WORK, 48_004);
+        // The owner-interning region: count plus 64 owners of 32 bytes.
+        assert_eq!(CLEAR_WORK_INTERNER_BYTES, 2 + 64 * 32);
+        assert_eq!(account_len::CLEAR_WORK, 50_054);
         assert_eq!(CANDIDATE_FEED_HEADER_BYTES, 346);
         assert_eq!(PAIRING_SLICE_BYTES, 13);
         assert_eq!(MAX_SLICES, 416);
@@ -1261,11 +1589,13 @@ mod tests {
                 + (MAX_EPOCH_ORDERS * 8)
                 + (MAX_SLICES * PAIRING_SLICE_BYTES)
         );
-        // The checkpoint is exactly its header and the opaque body.
+        // The checkpoint is exactly its header, the interning region, and
+        // the opaque body.
         assert_eq!(
             account_len::CLEAR_WORK,
-            CLEAR_WORK_HEADER_BYTES + CLEAR_WORK_BODY_BYTES
+            CLEAR_WORK_HEADER_BYTES + CLEAR_WORK_INTERNER_BYTES + CLEAR_WORK_BODY_BYTES
         );
+        assert_eq!(EPOCH_WINDOW_ACCOUNT_BYTES, 84);
     }
 
     /// The one account in the inventory that no single system-program creation
@@ -1642,6 +1972,7 @@ mod tests {
             honored_aon_mask: header.honored_aon_mask,
             weighted_direct_volume: header.weighted_direct_volume,
             limit_surplus_price_units: header.limit_surplus_price_units,
+            score_digest: Hash32::ZERO,
             churn: header.churn,
             submitted_slot: 42,
             distinct_owners: header.distinct_owners,
@@ -1998,5 +2329,189 @@ mod tests {
             init_clear_work(&mut small_work, h(1), h(2), h(3), 0),
             Err(CodecError::OutputTooSmall)
         );
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* The owner-interning region and the pass-boundary rewind             */
+    /* ------------------------------------------------------------------ */
+
+    #[test]
+    fn the_interner_region_round_trips_and_starts_empty() {
+        let mut account = work();
+        // A fresh checkpoint's zeroed region is exactly the empty table.
+        let empty = read_owner_interner(&account).unwrap();
+        assert_eq!(empty.count(), 0);
+        assert_eq!(empty.owners(), &[]);
+
+        let mut owners = OwnerInterner::new();
+        assert_eq!(owners.intern(h(0xA1)).unwrap(), 0);
+        assert_eq!(owners.intern(h(0xA2)).unwrap(), 1);
+        assert_eq!(owners.intern(h(0xA1)).unwrap(), 0);
+        write_owner_interner(&mut account, &owners).unwrap();
+        let restored = read_owner_interner(&account).unwrap();
+        assert_eq!(restored, owners);
+        // A resumed pass reproduces pass-1's exact tags from the region.
+        let mut resumed = restored;
+        assert_eq!(resumed.intern(h(0xA2)).unwrap(), 1);
+        assert_eq!(resumed.intern(h(0xA3)).unwrap(), 2);
+        // The region write moved neither the header nor the body.
+        let header = verify_clear_work(&account).unwrap();
+        assert_eq!(header.market, h(1));
+        assert!(clear_work_body(&account).unwrap().iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn the_interner_region_refuses_hostile_images() {
+        let mut account = work();
+        let mut owners = OwnerInterner::new();
+        owners.intern(h(0xB1)).unwrap();
+        write_owner_interner(&mut account, &owners).unwrap();
+
+        // A count past the table refuses.
+        let at = CLEAR_WORK_INTERNER_AT;
+        let mut over = account;
+        over[at..at + 2].copy_from_slice(&(MAX_EPOCH_ORDERS as u16 + 1).to_le_bytes());
+        assert_eq!(read_owner_interner(&over), Err(CodecError::InvalidCount));
+
+        // A zero owner below the count is no identity.
+        let mut hollow = account;
+        hollow[at + 2..at + 2 + HASH_BYTES].fill(0);
+        assert_eq!(read_owner_interner(&hollow), Err(CodecError::ZeroIdentity));
+
+        // A nonzero owner at or beyond the count is a leak, not padding.
+        let mut leaked = account;
+        leaked[at + 2 + HASH_BYTES] = 0xEE;
+        assert_eq!(
+            read_owner_interner(&leaked),
+            Err(CodecError::NonCanonicalPadding)
+        );
+
+        // A region on a half-grown account has no framing to live in.
+        let mut short = [0u8; CLEAR_WORK_GROW_STEP];
+        assert_eq!(
+            read_owner_interner(&short[..]),
+            Err(CodecError::Truncated)
+        );
+        assert_eq!(
+            write_owner_interner(&mut short[..], &owners),
+            Err(CodecError::Truncated)
+        );
+    }
+
+    #[test]
+    fn the_rewind_is_admitted_exactly_at_a_bound_pass_boundary() {
+        let mut account = work();
+        advance_walk(&mut account, 1, 3, 7).unwrap();
+        // An open checkpoint has no pass boundary to rewind at.
+        assert_eq!(rewind_walk(&mut account), Err(CodecError::MismatchedBinding));
+
+        bind_order_set(&mut account, h(9), 0xF01D).unwrap();
+        let rewound = rewind_walk(&mut account).unwrap();
+        assert_eq!(rewound.page_cursor, 0);
+        assert_eq!(rewound.slot_cursor, 0);
+        assert_eq!(rewound.live_rank, 0);
+        assert_eq!(rewound.status, CLEAR_WORK_STATUS_BOUND);
+        assert_eq!(rewound.order_set, h(9));
+        assert_eq!(rewound.consumed_fold, 0xF01D);
+        // The next pass walks forward again from the top.
+        assert_eq!(advance_walk(&mut account, 0, 1, 1).unwrap().slot_cursor, 1);
+
+        // A completed checkpoint rewinds nowhere.
+        complete_clear_work(&mut account).unwrap();
+        assert_eq!(rewind_walk(&mut account), Err(CodecError::MismatchedBinding));
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* General epoch lifecycle                                             */
+    /* ------------------------------------------------------------------ */
+
+    fn window() -> EpochWindowAccount {
+        let market = h(0x51);
+        EpochWindowAccount {
+            epoch: canonical_epoch_id(market, 7),
+            market,
+            epoch_index: 7,
+            freeze_deadline_slot: 900,
+            stored_bump: 254,
+            flags: 0,
+        }
+    }
+
+    #[test]
+    fn the_epoch_window_round_trips_and_refuses_hostile_frames() {
+        let value = window();
+        let mut bytes = [0; EPOCH_WINDOW_ACCOUNT_BYTES];
+        assert_eq!(value.encode(&mut bytes).unwrap(), EPOCH_WINDOW_ACCOUNT_BYTES);
+        assert_eq!(bytes[0], EPOCH_WINDOW_TAG);
+        assert_eq!(bytes[1], EPOCH_WINDOW_VERSION);
+        assert_eq!(EpochWindowAccount::decode(&bytes), Ok(value));
+
+        assert_eq!(
+            EpochWindowAccount::decode(&bytes[..EPOCH_WINDOW_ACCOUNT_BYTES - 1]),
+            Err(CodecError::Truncated)
+        );
+        let mut wrong_tag = bytes;
+        wrong_tag[0] = CLEAR_WORK_TAG;
+        assert_eq!(
+            EpochWindowAccount::decode(&wrong_tag),
+            Err(CodecError::WrongTag)
+        );
+        let mut wrong_version = bytes;
+        wrong_version[1] = EPOCH_WINDOW_VERSION + 1;
+        assert_eq!(
+            EpochWindowAccount::decode(&wrong_version),
+            Err(CodecError::WrongVersion)
+        );
+
+        // A window whose epoch identity is not the canonical derivation of
+        // its own (market, index) names an epoch that cannot exist.
+        let mut wrong_epoch = value;
+        wrong_epoch.epoch = h(0x52);
+        assert_eq!(
+            wrong_epoch.validate(),
+            Err(CodecError::NonCanonicalIdentity)
+        );
+        let mut wrong_index = value;
+        wrong_index.epoch_index = 8;
+        assert_eq!(
+            wrong_index.validate(),
+            Err(CodecError::NonCanonicalIdentity)
+        );
+        // No deadline is not a window, and reserved flags stay zero.
+        let mut no_deadline = value;
+        no_deadline.freeze_deadline_slot = 0;
+        assert_eq!(no_deadline.validate(), Err(CodecError::ZeroValue));
+        let mut flagged = value;
+        flagged.flags = 1;
+        assert_eq!(flagged.validate(), Err(CodecError::InvalidEnum));
+    }
+
+    #[test]
+    fn the_open_general_epoch_is_canonical_and_wide() {
+        let market = h(0x53);
+        let epoch = open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 10_000, 16, 253)
+            .unwrap();
+        assert_eq!(epoch.epoch, canonical_epoch_id(market, 7));
+        assert_eq!(epoch.book, canonical_general_book_id(epoch.epoch));
+        assert_eq!(
+            epoch.remainder_seed,
+            canonical_general_remainder_seed(epoch.epoch)
+        );
+        assert_eq!(epoch.phase, EPOCH_PHASE_OPEN);
+        assert_eq!(epoch.owner_count, MAX_EPOCH_ORDERS as u16);
+        assert_eq!(epoch.page_count, 0);
+        assert_eq!(epoch.order_count, 0);
+        assert_eq!(epoch.order_set, Hash32::ZERO);
+        assert_eq!(epoch.outcome_count, 16);
+        // The general book identity never collides with the direct one.
+        assert_ne!(
+            canonical_general_book_id(epoch.epoch),
+            crate::direct_selection::canonical_direct_book_id(epoch.epoch)
+        );
+        // The full 16-outcome width the direct plane's `== 2` gates refuse is
+        // exactly what this constructor admits; outside the codec bound stays
+        // refused.
+        assert!(open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 10_000, 17, 253).is_err());
+        assert!(open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 0, 4, 253).is_err());
     }
 }

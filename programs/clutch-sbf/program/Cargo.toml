@@ -12,7 +12,12 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "lib"]
 
 [features]
-default = []
+default = ["custom-heap"]
+# Suppresses the Anza `entrypoint!` macro's 32-KiB downward bump allocator so
+# the `bpf` module can install the upward allocator that reaches a
+# transaction-requested heap frame (up to 256 KiB).  A feature only because
+# that is the macro's suppression mechanism; it is always on.
+custom-heap = []
 # Changes the program ELF by registering one deterministic laboratory source
 # parser/deployment pair. Never use for a production deployment or attribute
 # its SVM evidence to the default artifact.

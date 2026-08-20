@@ -1305,6 +1305,8 @@ mod tests {
             honored_aon_mask: 0,
             weighted_direct_volume: -3,
             limit_surplus_price_units: 7,
+            // v3: a VERIFIED record carries its verified tie digest.
+            score_digest: Hash32([0x5c; 32]),
             churn: 5,
             submitted_slot: 42,
             distinct_owners: 3,
