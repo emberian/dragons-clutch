@@ -38,6 +38,8 @@ def main() -> None:
     policies = (
         FeePolicy(FeeBasis.FLAT_CASH, 2, 1_000),
         FeePolicy(FeeBasis.SIMPLEX_DISPERSION, 4, 1_000),
+        FeePolicy(FeeBasis.PER_EGG_LEG, 4, 1_000),
+        FeePolicy(FeeBasis.QUOTIENT_RANGE, 1, 1_000),
     )
     fee_rows = []
     for price in (0, 1, 10, 50, 90, 99, 100):
@@ -54,9 +56,26 @@ def main() -> None:
                     "terminal_ceil_atoms": quote.terminal_ceil_atoms,
                 }
             )
+    # Proposition 9 falsifier row: risk transfer supported entirely on
+    # zero-priced outcomes.  Every price-weighted arm charges it zero however
+    # large its model-free range; only the quotient-norm arm charges it.
+    laundering_payoffs = (10**30, 0, 0)
+    laundering_prices = (0, 0, 100)
+    zero_price_laundering = {
+        "payoffs": list(laundering_payoffs),
+        "prices": list(laundering_prices),
+        "model_free_range": 10**30,
+        "terminal_ceil_atoms": {
+            policy.basis.value: fee_quote(
+                laundering_payoffs, laundering_prices, 100, policy
+            ).terminal_ceil_atoms
+            for policy in policies
+        },
+    }
     report = {
         "admission_quote": admission.__dict__,
         "fee_rows": fee_rows,
+        "zero_price_laundering": zero_price_laundering,
         "feed": {
             "capital_shares": list(admitted.feed.capital_shares),
             "reserve_balance": admitted.feed.reserve_balance,

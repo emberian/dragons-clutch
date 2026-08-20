@@ -529,6 +529,8 @@ def admit_market(
 class FeeBasis(str, Enum):
     FLAT_CASH = "flat_cash_notional"
     SIMPLEX_DISPERSION = "simplex_dispersion"
+    PER_EGG_LEG = "per_egg_leg"
+    QUOTIENT_RANGE = "quotient_range_norm"
 
 
 @dataclass(frozen=True)
@@ -594,6 +596,38 @@ def dispersion_base(
     return numerator, price_scale * price_scale
 
 
+def per_egg_leg_base(
+    payoffs: Sequence[int], prices: Sequence[int], price_scale: int
+) -> tuple[int, int]:
+    """Per-Egg control: every leg charged ``a_i * p_i * (S - p_i) / S^2``.
+
+    This is the leg-by-leg benchmark the dispersion base was built to beat
+    (FEE_GEOMETRY section 6 arm 3).  It ignores netting, so a risk-free
+    complete set is charged as if each leg were a separate single-Egg trade.
+    """
+
+    validate_payoff_price_vectors(payoffs, prices, price_scale)
+    numerator = sum(
+        payoff * price * (price_scale - price)
+        for payoff, price in zip(payoffs, prices)
+    )
+    return numerator, price_scale * price_scale
+
+
+def quotient_range_base(
+    payoffs: Sequence[int], prices: Sequence[int], price_scale: int
+) -> tuple[int, int]:
+    """Price-free quotient-norm control ``R(a) = max(a) - min(a)``.
+
+    RISK_SUMMED_POSITIONS.md section 3.4 demands this arm: the model-free
+    range is the unique price-free quotient-seminorm member and has no
+    zero-price kernel hole.  Prices are validated but deliberately unused.
+    """
+
+    validate_payoff_price_vectors(payoffs, prices, price_scale)
+    return max(payoffs) - min(payoffs), 1
+
+
 def fee_quote(
     payoffs: Sequence[int],
     prices: Sequence[int],
@@ -607,6 +641,14 @@ def fee_quote(
         )
     elif policy.basis is FeeBasis.SIMPLEX_DISPERSION:
         base_numerator, base_denominator = dispersion_base(
+            payoffs, prices, price_scale
+        )
+    elif policy.basis is FeeBasis.PER_EGG_LEG:
+        base_numerator, base_denominator = per_egg_leg_base(
+            payoffs, prices, price_scale
+        )
+    elif policy.basis is FeeBasis.QUOTIENT_RANGE:
+        base_numerator, base_denominator = quotient_range_base(
             payoffs, prices, price_scale
         )
     else:  # pragma: no cover - enum makes this unreachable in ordinary Python

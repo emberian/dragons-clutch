@@ -19,12 +19,15 @@ from model import (
     SharedFeedReserve,
     admit_market,
     allocate_fee,
+    ceil_div,
     dispersion_base,
     fee_quote,
     fee_sequence,
     flat_cash_base,
     maximum_binary_single_egg_fee,
+    per_egg_leg_base,
     quote_admission,
+    quotient_range_base,
     split_identical_cell,
     wash_result,
 )
@@ -208,9 +211,13 @@ class SharedFeedTests(unittest.TestCase):
 
 class FeeGeometryComparisonTests(unittest.TestCase):
     SCALE = 100
-    # Midpoint-equivalent controls: flat 20 bp; dispersion kappa 40 bp.
+    # Midpoint-equivalent controls: flat 20 bp; dispersion and per-Egg
+    # kappa 40 bp; quotient-norm kappa' 10 bp of range.
     FLAT = FeePolicy(FeeBasis.FLAT_CASH, 2, 1_000)
     DISPERSION = FeePolicy(FeeBasis.SIMPLEX_DISPERSION, 4, 1_000)
+    PER_EGG = FeePolicy(FeeBasis.PER_EGG_LEG, 4, 1_000)
+    QUOTIENT = FeePolicy(FeeBasis.QUOTIENT_RANGE, 1, 1_000)
+    ALL_ARMS = (FLAT, DISPERSION, PER_EGG, QUOTIENT)
 
     def assert_same_ratio(self, left, right) -> None:  # type: ignore[no-untyped-def]
         self.assertEqual(
@@ -219,14 +226,16 @@ class FeeGeometryComparisonTests(unittest.TestCase):
         )
 
     def test_midpoint_rates_are_exactly_calibrated(self) -> None:
-        flat = fee_quote((1_000, 0), (50, 50), self.SCALE, self.FLAT)
-        dispersion = fee_quote(
-            (1_000, 0), (50, 50), self.SCALE, self.DISPERSION
+        quotes = tuple(
+            fee_quote((1_000, 0), (50, 50), self.SCALE, policy)
+            for policy in self.ALL_ARMS
         )
-        self.assertEqual(
-            flat.exact_numerator * dispersion.exact_denominator,
-            dispersion.exact_numerator * flat.exact_denominator,
-        )
+        for left in quotes:
+            for right in quotes:
+                self.assertEqual(
+                    left.exact_numerator * right.exact_denominator,
+                    right.exact_numerator * left.exact_denominator,
+                )
 
     def test_zero_and_certain_price_boundary_is_explicit(self) -> None:
         for price in (0, self.SCALE):
@@ -311,6 +320,106 @@ class FeeGeometryComparisonTests(unittest.TestCase):
                         ),
                     )
 
+    def test_per_egg_leg_reduces_to_dispersion_on_every_single_egg(self) -> None:
+        # Arm 3 is calibrated: on one Egg the benchmark and the candidate are
+        # the same exact rational at every price composition.
+        scale = 10
+        for quantity in range(4):
+            for first in range(scale + 1):
+                for second in range(scale + 1 - first):
+                    prices = (first, second, scale - first - second)
+                    for index in range(3):
+                        payoffs = tuple(
+                            quantity if position == index else 0
+                            for position in range(3)
+                        )
+                        self.assertEqual(
+                            per_egg_leg_base(payoffs, prices, scale),
+                            dispersion_base(payoffs, prices, scale),
+                        )
+
+    def test_dispersion_never_exceeds_per_egg_and_complete_sets_show_the_gap(
+        self,
+    ) -> None:
+        # The benchmark the dispersion base was built to beat: charging leg by
+        # leg ignores netting, so dispersion is never dearer and a risk-free
+        # complete set displays the strict gap at interior prices.
+        scale = 10
+        for first in range(scale + 1):
+            for second in range(scale + 1 - first):
+                prices = (first, second, scale - first - second)
+                for payoffs in itertools.product(range(4), repeat=3):
+                    dispersion = dispersion_base(payoffs, prices, scale)
+                    per_egg = per_egg_leg_base(payoffs, prices, scale)
+                    self.assertEqual(dispersion[1], per_egg[1])
+                    self.assertLessEqual(dispersion[0], per_egg[0])
+        interior = (20, 30, 50)
+        complete_set = (7, 7, 7)
+        self.assertEqual(
+            dispersion_base(complete_set, interior, self.SCALE)[0], 0
+        )
+        self.assertGreater(
+            per_egg_leg_base(complete_set, interior, self.SCALE)[0], 0
+        )
+
+    def test_per_egg_is_refinement_sensitive_and_quotient_range_is_not(self) -> None:
+        # Identical-payoff refinement preserves dispersion, flat cash, and the
+        # range norm exactly; the per-Egg benchmark changes with the binning.
+        payoffs = (0, 7, 20)
+        prices = (2, 30, 68)
+        refined_payoffs, refined_prices = split_identical_cell(
+            payoffs, prices, 2, 1
+        )
+        self.assertEqual(
+            quotient_range_base(payoffs, prices, self.SCALE),
+            quotient_range_base(refined_payoffs, refined_prices, self.SCALE),
+        )
+        self.assertNotEqual(
+            per_egg_leg_base(payoffs, prices, self.SCALE),
+            per_egg_leg_base(refined_payoffs, refined_prices, self.SCALE),
+        )
+
+    def test_quotient_range_is_price_free_and_satisfies_every_seminorm_axiom(
+        self,
+    ) -> None:
+        payoffs = (0, 7, 20)
+        for prices in ((20, 30, 50), (0, 1, 99), (100, 0, 0), (33, 33, 34)):
+            self.assertEqual(
+                quotient_range_base(payoffs, prices, self.SCALE), (20, 1)
+            )
+        prices = (20, 30, 50)
+        translated = tuple(value + 11 for value in payoffs)
+        self.assertEqual(
+            quotient_range_base(translated, prices, self.SCALE), (20, 1)
+        )
+        relabeled = (20, 0, 7)
+        relabeled_prices = (50, 20, 30)
+        self.assertEqual(
+            quotient_range_base(relabeled, relabeled_prices, self.SCALE),
+            quotient_range_base(payoffs, prices, self.SCALE),
+        )
+        tripled = tuple(value * 3 for value in payoffs)
+        self.assertEqual(
+            quotient_range_base(tripled, prices, self.SCALE), (60, 1)
+        )
+
+    def test_dispersion_is_bounded_by_a_quarter_of_the_range(self) -> None:
+        # Proposition 10 (RISK_SUMMED_POSITIONS.md), bounded exhaustive:
+        # 4 * G_num <= R(a) * S^2, with equality exactly at half mass on
+        # argmax and half mass on argmin outcomes.
+        scale = 10
+        for first in range(scale + 1):
+            for second in range(scale + 1 - first):
+                prices = (first, second, scale - first - second)
+                for payoffs in itertools.product(range(4), repeat=3):
+                    numerator, _ = dispersion_base(payoffs, prices, scale)
+                    range_norm = max(payoffs) - min(payoffs)
+                    self.assertLessEqual(
+                        4 * numerator, range_norm * scale * scale
+                    )
+        attained, _ = dispersion_base((4, 0, 2), (5, 5, 0), scale)
+        self.assertEqual(4 * attained, 4 * scale * scale)
+
     def test_per_leg_terminal_rounding_is_a_partition_attack(self) -> None:
         payoffs = (100, 0)
         prices = (2, 98)
@@ -332,7 +441,7 @@ class FeeGeometryComparisonTests(unittest.TestCase):
         )
 
     def test_persistent_intent_carry_is_fragmentation_invariant(self) -> None:
-        for policy in (self.FLAT, self.DISPERSION):
+        for policy in self.ALL_ARMS:
             for price in range(self.SCALE + 1):
                 whole = fee_sequence(
                     ((31, 0),),
@@ -355,7 +464,7 @@ class FeeGeometryComparisonTests(unittest.TestCase):
                         )
 
     def test_order_fee_headroom_covers_every_binary_price(self) -> None:
-        for policy in (self.FLAT, self.DISPERSION):
+        for policy in self.ALL_ARMS:
             maximum = maximum_binary_single_egg_fee(1_001, self.SCALE, policy)
             for price in range(self.SCALE + 1):
                 quote = fee_quote(
@@ -367,7 +476,7 @@ class FeeGeometryComparisonTests(unittest.TestCase):
                 self.assertLessEqual(quote.terminal_ceil_atoms, maximum)
 
     def test_sybil_wash_never_recovers_treasury_and_zero_fee_pays_nobody(self) -> None:
-        for basis in (self.FLAT, self.DISPERSION):
+        for basis in self.ALL_ARMS:
             for price in range(self.SCALE + 1):
                 quote = fee_quote(
                     (10_000, 0),
@@ -381,6 +490,85 @@ class FeeGeometryComparisonTests(unittest.TestCase):
                     self.assertEqual(result["recovered"], 0)
                 else:
                     self.assertGreater(result["treasury"], 0)
+
+
+class ZeroPriceLaunderingTests(unittest.TestCase):
+    """Proposition 9 (RISK_SUMMED_POSITIONS.md) made executable.
+
+    At boundary prices the dispersion kernel is every vector constant on the
+    priced support, strictly larger than the risk quotient, so risk transfer
+    supported entirely on zero-priced outcomes is feeless however large its
+    model-free range.  This is the named zero-price laundering falsifier of
+    FEE_GEOMETRY section 5.
+    """
+
+    SCALE = 100
+    FLAT = FeeGeometryComparisonTests.FLAT
+    DISPERSION = FeeGeometryComparisonTests.DISPERSION
+    PER_EGG = FeeGeometryComparisonTests.PER_EGG
+    QUOTIENT = FeeGeometryComparisonTests.QUOTIENT
+
+    def test_boundary_kernel_is_exactly_constancy_on_the_priced_support(
+        self,
+    ) -> None:
+        # Both directions of Proposition 9, bounded exhaustive: the dispersion
+        # base vanishes if and only if the payoff is constant wherever the
+        # price is positive, at boundary and interior prices alike.
+        scale = 4
+        for first in range(scale + 1):
+            for second in range(scale + 1 - first):
+                prices = (first, second, scale - first - second)
+                for payoffs in itertools.product(range(4), repeat=3):
+                    numerator, _ = dispersion_base(payoffs, prices, scale)
+                    support = tuple(
+                        payoff
+                        for payoff, price in zip(payoffs, prices)
+                        if price > 0
+                    )
+                    constant_on_support = len(set(support)) <= 1
+                    self.assertEqual(numerator == 0, constant_on_support)
+
+    def test_zero_price_supported_transfer_is_feeless_however_large(self) -> None:
+        # The transfer varies only on zero-priced outcomes; its model-free
+        # range is unbounded while every price-weighted arm charges exactly
+        # zero -- flat cash and per-Egg share the hole because a zero-priced
+        # leg has zero consideration.  Only the price-free quotient-norm arm
+        # charges it, at exactly kappa' * R(a).
+        prices = (0, 0, self.SCALE)
+        for magnitude in (1, 10**6, 10**18, 10**30):
+            payoffs = (magnitude, 0, 0)
+            self.assertEqual(
+                quotient_range_base(payoffs, prices, self.SCALE),
+                (magnitude, 1),
+            )
+            for policy in (self.FLAT, self.DISPERSION, self.PER_EGG):
+                quote = fee_quote(payoffs, prices, self.SCALE, policy)
+                self.assertEqual(quote.base_numerator, 0)
+                self.assertEqual(quote.exact_numerator, 0)
+                self.assertEqual(quote.floor_atoms, 0)
+                self.assertEqual(quote.terminal_ceil_atoms, 0)
+                self.assertEqual(quote.carry, 0)
+            quotient = fee_quote(payoffs, prices, self.SCALE, self.QUOTIENT)
+            self.assertEqual(quotient.floor_atoms, magnitude // 1_000)
+            self.assertEqual(
+                quotient.terminal_ceil_atoms, ceil_div(magnitude, 1_000)
+            )
+
+    def test_terminal_ceil_cannot_rescue_the_dispersion_hole(self) -> None:
+        # Fragmenting the transfer and closing the intent still pays zero
+        # under dispersion: the carry never becomes nonzero, so the terminal
+        # ceiling has nothing to round up.
+        prices = (0, 0, self.SCALE)
+        magnitude = 10**30
+        fragments = ((magnitude, 0, 0),) * 3
+        sequence = fee_sequence(fragments, prices, self.SCALE, self.DISPERSION)
+        self.assertEqual(sequence.total_paid, 0)
+        self.assertEqual(sequence.final_carry, 0)
+        self.assertEqual(sequence.exact_numerator, 0)
+        quotient_sequence = fee_sequence(
+            fragments, prices, self.SCALE, self.QUOTIENT
+        )
+        self.assertEqual(quotient_sequence.total_paid, 3 * magnitude // 1_000)
 
 
 if __name__ == "__main__":
