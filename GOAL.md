@@ -72,6 +72,17 @@ in the reseal lane's output) and the postmark doorstep (4 threads).
 
 ## Done log (2026-08-19 session)
 
+- CYCLE B ATTESTED: Persvati 43/43 portable gates PASS, 0 STOP over exact
+  6827749 (grew 41 -> 43 contract-driven: the reseal's own closure expansion
+  forced clutch-batch test+clippy gates). ELF fda59705 byte-verified five
+  contexts; all four historical roots verified with the set asserted
+  exactly; manifest digest-check green both hosts pristine; 1,326 file
+  comparisons x2, zero mismatches. Job:
+  persvati:/home/ember/jobs/dragons-clutch-portable-attest-6827749-20260820-VwFoCv.
+  The overnight runtime is now sealed, manifested at 100/100, and
+  independently attested — same chain depth as the morning baseline, four
+  hours after the code stopped being the same code.
+
 - CYCLE B SEALED END TO END (manifest 6827749 at 100/100, post-commit
   check OK, pushed; attestation lane dispatched): liveness profile resealed
   at fda59705/1,527,640 (new 25-file root, all 11 measurement families
