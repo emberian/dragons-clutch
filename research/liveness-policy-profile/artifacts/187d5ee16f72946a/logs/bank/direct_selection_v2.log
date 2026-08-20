@@ -1,0 +1,15 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running tests/direct_selection_v2.rs (/Users/ember/jobs/dragons-clutch-r1-6c25df4-stack-audit-evidence/bank-target/debug/deps/direct_selection_v2-6152da730756462f)
+
+running 2 tests
+test cross_outcome_freeze_refuses_without_mutation ... ok
+test direct_selection_v2_is_a_measured_select_stop_with_rollback ... DirectSelectionV2 submit index=0 price=2500 cu=173147
+DirectSelectionV2 submit index=1 price=3000 cu=174314
+DirectSelectionV2 submit index=2 price=7000 cu=182086
+DirectSelectionV2 submit index=3 price=5000 cu=189703
+DirectSelectionV2 submit index=4 price=7500 cu=185310
+DirectSelectionV2 CU init=35265 freeze=357720 submit_max=189703 select=226071
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+

@@ -41,24 +41,49 @@ class PolicyTests(unittest.TestCase):
     def test_resolution_work_maximum_path_is_exact(self) -> None:
         row = policy.derive(self.evidence)["resolution_work"]
         self.assertEqual(row["status"], "PASS")
-        self.assertEqual(row["fold_path_lamports"], 37_120_000)
-        self.assertEqual(row["success_rewards_lamports"], 38_630_000)
-        self.assertEqual(row["worst_abort_rewards_lamports"], 37_980_000)
+        self.assertEqual(row["fold_path_lamports"], 8_320_000)
+        self.assertEqual(row["success_rewards_lamports"], 8_680_000)
+        self.assertEqual(row["worst_abort_rewards_lamports"], 8_530_000)
         self.assertEqual(row["rent_principal_lamports"], 10_801_920)
-        self.assertEqual(row["persistent_reserve_lamports"], 49_431_920)
-        self.assertEqual(row["payer_cold_outlay_lamports"], 50_591_920)
+        self.assertEqual(row["persistent_reserve_lamports"], 19_481_920)
+        self.assertEqual(row["payer_cold_outlay_lamports"], 19_741_920)
 
     def test_runtime_schedule_underfunding_is_rejected(self) -> None:
+        finalize = policy.derive(self.evidence)["resolution_work"]["routes"]["finalize"]
         tampered = copy.deepcopy(self.evidence)
-        tampered["resolution_work"]["runtime_reward_schedule"]["finalize_lamports"] -= 1
+        tampered["resolution_work"]["runtime_reward_schedule"]["finalize_lamports"] = (
+            finalize["keeper_reward_lamports"] - 1
+        )
         with self.assertRaises(AdmissionError):
             policy.derive(tampered)
 
-    def test_direct_select_stop_has_no_fabricated_quote(self) -> None:
-        row = policy.derive(self.evidence)["direct_v2"]["select"]
-        self.assertEqual(row["status"], "STOP_HEADROOM")
-        self.assertIsNone(row["selected_limit_cu"])
-        self.assertIsNone(row["keeper_reward_lamports"])
+    def test_direct_select_completes_but_v2_is_not_promoted(self) -> None:
+        """The select CU-exhaustion STOP dissolved with the syscall hasher.
+
+        The measured route now quotes normally, and the occupation-v4
+        monolithic profile clears its headroom gate.  Neither is a promotion:
+        V2 still stops on its unimplemented empty-frozen lapse, and a stopped
+        headroom is still refused a lamport quote rather than clamped.
+        """
+
+        derived = policy.derive(self.evidence)
+        row = derived["direct_v2"]["select"]
+        self.assertEqual(row["status"], "PASS")
+        self.assertEqual(row["measured_cu"], 226_071)
+        self.assertEqual(row["selected_limit_cu"], 300_000)
+        self.assertEqual(row["keeper_reward_lamports"], 410_000)
+        self.assertEqual(derived["direct_v2"]["status"], "STOP")
+        self.assertEqual(
+            derived["direct_v2"]["empty_frozen_lapse"], "UNIMPLEMENTED_STOP"
+        )
+        self.assertEqual(derived["occupation_v4_monolithic"]["status"], "PASS")
+        tampered = copy.deepcopy(self.evidence)
+        tampered["measurements"]["direct_v2"]["select_cu"] = [1_400_000]
+        stopped = policy.derive(tampered)["direct_v2"]
+        self.assertEqual(stopped["status"], "STOP")
+        self.assertEqual(stopped["select"]["status"], "STOP_HEADROOM")
+        self.assertIsNone(stopped["select"]["selected_limit_cu"])
+        self.assertIsNone(stopped["select"]["keeper_reward_lamports"])
 
     def test_source_refusal_is_not_capitalized_as_success(self) -> None:
         row = policy.derive(self.evidence)["source_value_admission"]

@@ -1,0 +1,3 @@
+backend_stack_diagnostic_lines=42
+backend_stack_diagnostic_symbols=33
+backend_stack_diagnostic_survivors=0

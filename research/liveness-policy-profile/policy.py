@@ -248,6 +248,25 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
         }
         for row in measurements["occupation_v4"]["degree_rows"]
     ]
+    occupation_status = (
+        "PASS"
+        if all(
+            row["initial"]["status"] == "PASS" and row["retry"]["status"] == "PASS"
+            for row in occupation_routes
+        )
+        else "STOP_HEADROOM"
+    )
+    # The V2 select route is quoted from its measurement like every other
+    # route: the 187d5ee1… artifact completes it, where the af6bb79c… artifact
+    # exhausted the transaction ceiling (a cost of the software SHA-256, not of
+    # the selection).  A passing select quote does not promote the subsystem:
+    # V2 stays stopped while its empty-frozen lapse is unimplemented.
+    select_route = route_dict(max(direct["select_cu"]), policy)
+    direct_v2_status = (
+        "PASS"
+        if select_route["status"] == "PASS" and direct["empty_frozen_lapse"] == "PASS"
+        else "STOP"
+    )
     terminal = build_terminal(evidence["runtime_ref"])
     terminal_status = validate_terminal_admission(
         terminal,
@@ -291,8 +310,8 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
             "refusal_cu_not_priced_as_success": True,
         },
         "direct_v2": {
-            "status": "STOP",
-            "select": route_dict(max(direct["select_cu"]), policy),
+            "status": direct_v2_status,
+            "select": select_route,
             "select_result": direct["select_result"],
             "empty_frozen_lapse": direct["empty_frozen_lapse"],
             "live_v3": False,
@@ -302,9 +321,13 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
             "degree_routes": native_point_routes,
         },
         "occupation_v4_monolithic": {
-            "status": "STOP_HEADROOM",
+            "status": occupation_status,
             "degree_routes": occupation_routes,
-            "live_action": "USE_MEASURED_RESOLUTIONWORK_OR_FAIL_CLOSED",
+            "live_action": (
+                "MONOLITHIC_INITIAL_AND_RETRY_ADMITTED"
+                if occupation_status == "PASS"
+                else "USE_MEASURED_RESOLUTIONWORK_OR_FAIL_CLOSED"
+            ),
         },
         "terminal_status": terminal_status,
         "terminal_blocking_ids": terminal["blocking_ids"],

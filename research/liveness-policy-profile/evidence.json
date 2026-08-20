@@ -2,23 +2,23 @@
   "schema": "dragons-clutch/liveness-policy-evidence/v2",
   "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
   "capture_date": "2026-08-19",
-  "runtime_ref": "2d530d218b470e5e2d1cf52480c4a9d1636c08e1",
-  "runtime_tree": "4f09196b232497ab37b7babc30690778adc0fa8a",
-  "evidence_ref": "2d530d218b470e5e2d1cf52480c4a9d1636c08e1",
+  "runtime_ref": "d8c50347556353939d4f5a91af616ba40d70419a",
+  "runtime_tree": "451baac9953fd083bebc2bcf44c7a9ea08c1763a",
+  "evidence_ref": "d8c50347556353939d4f5a91af616ba40d70419a",
   "artifact": {
-    "path": "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/clutch_sbf.so",
-    "sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
-    "bytes": 1490544,
-    "source_ref": "2d530d218b470e5e2d1cf52480c4a9d1636c08e1",
+    "path": "research/liveness-policy-profile/artifacts/187d5ee16f72946a/clutch_sbf.so",
+    "sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
+    "bytes": 1420608,
+    "source_ref": "d8c50347556353939d4f5a91af616ba40d70419a",
     "profile": "default-empty-registry"
   },
   "artifact_reproducibility": {
-    "normal_build_1": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
-    "normal_build_2": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
-    "relocated_cargo_home": "241a01ef056a135d3d2601d485a28b1f7f0631cb0981d22456911d5a8bde353a",
-    "relocated_disposition": "PATH_SENSITIVE_NOT_CANONICAL",
+    "normal_build_1": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
+    "normal_build_2": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
+    "relocated_cargo_home": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
+    "relocated_disposition": "BYTE_IDENTICAL_SINGLE_HOST_NOT_CROSS_HOST",
     "first_party_final_lto_stack_survivors": 0,
-    "direct_r10_references": 49521,
+    "direct_r10_references": 48272,
     "deepest_direct_r10_offset": 4096
   },
   "historical_artifacts": {
@@ -33,38 +33,44 @@
       "runtime_ref": "83e124dda22adc15cb5ebf18ff9e0ab971c551dc",
       "evidence_ref": "83e124dda22adc15cb5ebf18ff9e0ab971c551dc",
       "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
+    },
+    "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b": {
+      "path": "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/clutch_sbf.so",
+      "runtime_ref": "2d530d218b470e5e2d1cf52480c4a9d1636c08e1",
+      "evidence_ref": "2d530d218b470e5e2d1cf52480c4a9d1636c08e1",
+      "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
     }
   },
   "capture": {
     "path": "research/liveness-policy-profile/captured-output.txt",
-    "sha256": "dfc1a0fc73276905900dece5663e6a3cbd5ba1d9f58e9890425006017e82010a"
+    "sha256": "1edf145f522f58dbdd73f056ece6600d05b2ffa21f316a6879dc053e80f33bd6"
   },
   "source_blobs": {
     "research/liveness-policy-profile/Cargo.toml": "8574e7693c1a85cdb68bf608c5cf4dcde178123b",
-    "research/liveness-policy-profile/Cargo.lock": "e6f277e80a2ef7af31e54f8f9eb26272084141b4",
+    "research/liveness-policy-profile/Cargo.lock": "64c8b036157966c10a3b4dd85891ca0e6559f276",
     "research/liveness-policy-profile/src/main.rs": "b466ce85f8d4f5f7a42e720a4c342af1283423f8",
-    "programs/clutch-sbf/Cargo.lock": "96f3373bd1ee1c0acdd1b073e1894b389866e0d3",
+    "programs/clutch-sbf/Cargo.lock": "06880f91c14ca4f918e1a697269dbba1a4b88894",
     "programs/clutch-sbf/program/Cargo.toml": "e0c249437a827f5e51af7436ef388149b6eb0b08",
     "programs/clutch-sbf/program/src/instructions/resolution_work.rs": "6c1e176199559a7ae2e47b45aa4695263f19fc1b",
     "programs/clutch-sbf/program/src/error.rs": "f18ac224821959c9e7a5ab67725c05c3d7c57e96",
     "programs/solana-layout/Cargo.toml": "1949b6f902fbecf4a29107172cd58c12e305e51a",
-    "programs/solana-layout/Cargo.lock": "0293a117d8f11403b57a8766c9341dd3ec83566a",
+    "programs/solana-layout/Cargo.lock": "2fec00d25fe02238720047b32b565836fe33504f",
     "programs/solana-reference/Cargo.toml": "488acf29bbb84ae3ec6717a91b83587c665a7526",
-    "programs/solana-reference/Cargo.lock": "cca3bea2362f5752a750c76dca82b4ca12c8c38d",
+    "programs/solana-reference/Cargo.lock": "9fb4c8f37f8de75ae0b992a1c6b922afde6d2a06",
     "crates/clutch-liveness/Cargo.toml": "99018c975a433ae05e952b4dd6fd89b2ea5b74d8"
   },
   "source_trees": {
     "programs/clutch-sbf/program/src": "22f04a8916e6ea756cd515277bc4dcb5d7e845d3",
-    "programs/solana-layout/src": "1759f4e69a99bc525d1620b71754b22603630a48",
+    "programs/solana-layout/src": "21126666ad31155932021eebfbf6a32528ea0483",
     "programs/solana-reference/src": "e995f0536bcc3ef2fc34602f445de4f214a4f150",
     "crates/clutch-liveness/src": "38f21a9a8a931970b261078b996fcf00b68ebd9a"
   },
   "test_blobs": {
     "programs/clutch-sbf/svm-tests/Cargo.toml": "08e241a922a2fced791f6cafe6367a6999abf9cf",
-    "programs/clutch-sbf/svm-tests/Cargo.lock": "cd492388f1372cbb3ec72fab9523e2e13d4fb125",
+    "programs/clutch-sbf/svm-tests/Cargo.lock": "7fc91029ce6849b94e495ffa57f68305902531c2",
     "programs/clutch-sbf/svm-tests/tests/resolution_work.rs": "a521fb840fada5a856803be01a06e940eebf7912",
-    "programs/clutch-sbf/svm-tests/tests/native_resolution.rs": "5a9ba81d206ce255fcbb29be9012bf450c0f2a00",
-    "programs/clutch-sbf/svm-tests/tests/direct_selection_v2.rs": "12444899c9098f9386ca40b6f74b6f3fb4752bcd",
+    "programs/clutch-sbf/svm-tests/tests/native_resolution.rs": "1c330494bf68dec713570a740b5dbf730e35d77d",
+    "programs/clutch-sbf/svm-tests/tests/direct_selection_v2.rs": "aa7f85138f51beecf27c0f8a4417b77829cb0cc0",
     "programs/clutch-sbf/svm-tests/tests/prefund_creation.rs": "528921e972396f37bde27bb5873db51c1f8e6180",
     "programs/clutch-sbf/svm-tests/tests/blank_bank_lifecycle.rs": "6cb8b99cc1d9b1d542bcccd8372c8afd2808d16b",
     "programs/clutch-sbf/svm-tests/tests/order_reservation.rs": "77658748b3c7777eb181446052f1172024f1cc59",
@@ -74,32 +80,32 @@
   },
   "test_trees": {
     "programs/clutch-sbf/svm-tests/src": "4b2f5c9aff5f1738265eb1e535534c596f503b1f",
-    "programs/clutch-sbf/svm-tests/tests": "d99fe998797e5647038a0510436c0b2dc954d9d5"
+    "programs/clutch-sbf/svm-tests/tests": "9b9ab9ef5731779ab23e3d046234b2a493b2a4f7"
   },
   "evidence_files": {
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/RUNTIME_ARTIFACT_AUDIT.md": {"sha256": "39a8b19cae23a2a02f7ba870b18b5a4b9a07af6876c05443d6dd28e8bb89ccfb", "bytes": 8232},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/backend-stack-diagnostics.txt": {"sha256": "9e718e75126b2a8e13a5c007d55767f5b07ebe7ed3cc46210cf2a09a57931dfd", "bytes": 14258},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/dependencies.tsv": {"sha256": "eed650fb0b93d8d97042c44123264c47e1dc0566a391a3a949a06a3102842b1b", "bytes": 3953},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/elf-summary.txt": {"sha256": "33fa932c55a07899587852ae8784b55dbffc351cdc1dfa91d65958002205d46f", "bytes": 220},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/frame-summary.txt": {"sha256": "012d57027d2019007ed673318fa382a93dbaaab48351e0ae2d398dfbf38fb579", "bytes": 284},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/metadata.json": {"sha256": "d714b8a7110d29cc0f48b33cedc9811afa2ef8e406a487b897ee712ef8a947ab", "bytes": 130142},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/registry-source-verification.tsv": {"sha256": "c3a8c19b470713e828b08b56f3cedfe4089c0a704c457e15178c24ecd8cfad71", "bytes": 5206},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/source-files.txt": {"sha256": "79e83fb0bfec86a15d0a4ebcbaf43d115a5390c04ddf281d393c25beb6264b9c", "bytes": 4470},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/stack-summary.txt": {"sha256": "cb1bc999e749e9b675cde5dc949f9873a1acea8cb9aa8ce84997eaa7cfd1513f", "bytes": 107},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/vendor.diff": {"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "bytes": 0},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/upstream-SHA256SUMS": {"sha256": "e433c17d4be57463e78eb47554cc6e84d22aab5c1a27a53e297f83a7a21304e0", "bytes": 11947},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/logs/sbf-build-1.log": {"sha256": "226523d6ee6a3759786cbf676d852dfb1cafab8b05228f66a7f818aa82653b73", "bytes": 33484},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/logs/sbf-build-2.log": {"sha256": "2261e050f178b7e20f76433eabba8cc7ad75f4d435d3b76eb190e1c99424ed77", "bytes": 33484},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/logs/sbf-build-relocated.log": {"sha256": "5cead945121b53fb11ae21295ea505a9b253ab6838fa688e652b489b1cbb31fa", "bytes": 33484},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/logs/bank/artifact_transport.log": {"sha256": "609bef3c6b70628e59d888eef61016d460ec01d15f4307d1019c9f5f02d1db2e", "bytes": 23832},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/logs/bank/blank_bank_lifecycle.log": {"sha256": "14e908d2e81c8b20d58f2c8d182cdca10471779b31274c3e8c69ab26e250296f", "bytes": 927},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/logs/bank/collateral_leg.log": {"sha256": "6115a9aa3fb364241f65c363704823da9048f8491a3027da5f114a6999080027", "bytes": 3420},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/logs/bank/direct_selection_v2.log": {"sha256": "6acc568d43a7148f0decb0f37ee9c3882efa365e258f1d78247de6c0eecb320a", "bytes": 943},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/logs/bank/native_resolution.log": {"sha256": "5d5e6302f1dd6fc8124414282937eb99c17a55efa37f4dad5501b01b9dc7a258", "bytes": 2760},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/logs/bank/order_reservation.log": {"sha256": "1ed0702dbad71bcb7765d0819c9317e96880d1aae2c55dcd0b13a635cea29dc2", "bytes": 657},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/logs/bank/prefund_creation.log": {"sha256": "97730dfaee2f4c96430ca99e011884527b4b94d8a17689eb09e06aa4db9fe22f", "bytes": 1531},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/logs/bank/resolution_work.log": {"sha256": "4dd3bcfa6c1f0dbfb4ce9ded4bb5a6ba063e9ea9dab35be0e890d497637f15d3", "bytes": 1143},
-    "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/logs/bank/source_archive.log": {"sha256": "b8b818e67dd33582585fc7d78032b5a5b59ca0a96a23b8ce927ff9885cd8f1f5", "bytes": 1115}
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/audit/RUNTIME_ARTIFACT_AUDIT.md": {"sha256": "5f58a12fb615c9863cdbe7ad505f91dc9f8d1870d0141b65fae652acbe9773ab", "bytes": 9964},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/audit/backend-stack-diagnostics.txt": {"sha256": "3df91fd8127328148b2c2ab00cbc54cecce3b271f3dcf7953e9ecdc07d2d48c1", "bytes": 15050},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/audit/dependencies.tsv": {"sha256": "eed650fb0b93d8d97042c44123264c47e1dc0566a391a3a949a06a3102842b1b", "bytes": 3953},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/audit/elf-summary.txt": {"sha256": "ffb87ed8eeb93b01107c90cbe78ca954019c4d958737cee81f36887e1696d3be", "bytes": 220},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/audit/frame-summary.txt": {"sha256": "6a01803bb25cad682be00810bec194ccd8feb22b054ac55b313cbae8178f2cac", "bytes": 284},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/audit/metadata.json": {"sha256": "ac6412e04bea371085072cf9af9f2300db777834a085a8344e232dbf52880a85", "bytes": 132193},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/audit/registry-source-verification.tsv": {"sha256": "c3a8c19b470713e828b08b56f3cedfe4089c0a704c457e15178c24ecd8cfad71", "bytes": 5206},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/audit/source-files.txt": {"sha256": "79e83fb0bfec86a15d0a4ebcbaf43d115a5390c04ddf281d393c25beb6264b9c", "bytes": 4470},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/audit/stack-summary.txt": {"sha256": "688e5a6ca5117454e1b9b90f87d80c4b83369e66623b260bc99694d57a30fa35", "bytes": 107},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/audit/upstream-SHA256SUMS": {"sha256": "829d7a94bc73f7c2c48541e292fb850015c126b25060d4ebf0964bd676125d4c", "bytes": 12883},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/audit/vendor.diff": {"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "bytes": 0},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/logs/bank/artifact_transport.log": {"sha256": "ec21a8b0aef1cdbcdd2df8de7f3781c34f896972a260fc23f16d50fd8aefb995", "bytes": 815},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/logs/bank/blank_bank_lifecycle.log": {"sha256": "27ce3950ca22b57d7a8fc4b7c56dd90a02122e0fd9d78cde38fb83cedfac31ff", "bytes": 834},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/logs/bank/collateral_leg.log": {"sha256": "53b0dc6d3fa130b2ee9341ee1c84b167000d3bf49adba1061149bfd57c6f6207", "bytes": 3320},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/logs/bank/direct_selection_v2.log": {"sha256": "2694243a4c4c84d97d985ef0a06455e40f5a48b4cccf4e75b8f86af7e7128631", "bytes": 833},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/logs/bank/native_resolution.log": {"sha256": "60420dd52331ddb611d34be20d73bf824e0547f22546183cb4ef6ff61358e695", "bytes": 2650},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/logs/bank/order_reservation.log": {"sha256": "8c4f363dbcd983e656657ab1fa54c9138e8de7d356f7aa30fd3b6fb02a94e01e", "bytes": 564},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/logs/bank/prefund_creation.log": {"sha256": "2aa4458e0452a59984977b946525958159988d3d64eed780527f7a4119625275", "bytes": 1438},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/logs/bank/resolution_work.log": {"sha256": "fd829ef64b80e39f54c97129c13bde3d733167290ce2264235259a84c02faad0", "bytes": 1034},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/logs/bank/source_archive.log": {"sha256": "50905ca9f4b19a1692b0ce4a63a337e7ecda50b9a8a7e02c8d970d0a9fce6d77", "bytes": 1022},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/logs/sbf-build-1.log": {"sha256": "7586ee91cd9d86708932c27e8365c85ae6516d35d355114bdf1d8039f178d776", "bytes": 34031},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/logs/sbf-build-2.log": {"sha256": "b97491d5776350b9e3d1c3d65e22e38ab7e875a323c553db94959dc7cde57818", "bytes": 34031},
+    "research/liveness-policy-profile/artifacts/187d5ee16f72946a/logs/sbf-build-relocated.log": {"sha256": "00331597a2812da491299ab73c94ae78045d4c8d87c28c0546fd722dbe9cd4a0", "bytes": 34031}
   },
   "rent": {
     "lamports_per_byte_year": 3480,
@@ -169,81 +175,81 @@
   },
   "measurements": {
     "resolution_work": {
-      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
+      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
       "fold_widths": [1, 2, 3, 4],
-      "begin_cu": [807677, 805309, 810993, 807675, 805861],
-      "fold_1_cu": [804617, 802254],
-      "fold_2_cu": [809226, 812194],
-      "fold_3_cu": [813129],
-      "fold_4_cu": [815574],
-      "finalize_cu": [1094833],
-      "abort_cu": [587198],
-      "monolithic_v4_cu": [1253326],
+      "begin_cu": [87608, 85240, 90924, 87606, 85792],
+      "fold_1_cu": [84548, 82185],
+      "fold_2_cu": [89157, 92125],
+      "fold_3_cu": [93060],
+      "fold_4_cu": [95505],
+      "finalize_cu": [164287],
+      "abort_cu": [46677],
+      "monolithic_v4_cu": [182462],
       "test_result": "PASS_4_OF_4"
     },
     "native_point_v3": {
-      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
+      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
       "degree_rows": [
-        {"degree": 1, "resolve_cu": 1088267, "retry_cu": 934622, "internal_redeem_cu": 775978},
-        {"degree": 2, "resolve_cu": 1096640, "retry_cu": 942995, "internal_redeem_cu": 778021},
-        {"degree": 3, "resolve_cu": 1103534, "retry_cu": 949889, "internal_redeem_cu": 776411}
+        {"degree": 1, "resolve_cu": 182425, "retry_cu": 169098, "internal_redeem_cu": 152370},
+        {"degree": 2, "resolve_cu": 190798, "retry_cu": 177471, "internal_redeem_cu": 154413},
+        {"degree": 3, "resolve_cu": 197692, "retry_cu": 184365, "internal_redeem_cu": 152803}
       ],
       "test_result": "PASS"
     },
     "native_bearer_redeem": {
-      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
+      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
       "degree_rows": [
-        {"degree": 1, "external_redeem_cu": 785074},
-        {"degree": 2, "external_redeem_cu": 786874},
-        {"degree": 3, "external_redeem_cu": 784579}
+        {"degree": 1, "external_redeem_cu": 136762},
+        {"degree": 2, "external_redeem_cu": 138562},
+        {"degree": 3, "external_redeem_cu": 136267}
       ],
       "test_result": "PASS"
     },
     "occupation_v4": {
-      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
+      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
       "degree_rows": [
-        {"degree": 1, "initial_cu": 1243529, "retry_cu": 1089893, "internal_redeem_cu": 774692, "external_redeem_cu": 783712},
-        {"degree": 2, "initial_cu": 1254699, "retry_cu": 1101063, "internal_redeem_cu": 776735, "external_redeem_cu": 785512},
-        {"degree": 3, "initial_cu": 1268630, "retry_cu": 1114994, "internal_redeem_cu": 779625, "external_redeem_cu": 787717}
+        {"degree": 1, "initial_cu": 172665, "retry_cu": 159347, "internal_redeem_cu": 151084, "external_redeem_cu": 135400},
+        {"degree": 2, "initial_cu": 183835, "retry_cu": 170517, "internal_redeem_cu": 153127, "external_redeem_cu": 137200},
+        {"degree": 3, "initial_cu": 197766, "retry_cu": 184448, "internal_redeem_cu": 156017, "external_redeem_cu": 139405}
       ],
-      "span_1_initial_cu": [1250517, 1243835, 1248016],
-      "span_2_initial_cu": [1244023, 1259767, 1261323],
-      "statistic_7_initial_cu": 1253176,
-      "test_result": "PASS_BUT_MONOLITHIC_HEADROOM_STOP"
+      "span_1_initial_cu": [179653, 172971, 177152],
+      "span_2_initial_cu": [173159, 188903, 190459],
+      "statistic_7_initial_cu": 182312,
+      "test_result": "PASS"
     },
     "direct_v2": {
-      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
-      "init_cu": [532150],
-      "freeze_cu": [935109],
-      "submit_cu": [986766, 1015185, 1050209, 1194086, 1080685],
-      "select_cu": [1400000],
-      "select_result": "ROLLBACK_PROGRAM_FAILED_TO_COMPLETE",
+      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
+      "init_cu": [35265],
+      "freeze_cu": [357720],
+      "submit_cu": [173147, 174314, 182086, 189703, 185310],
+      "select_cu": [226071],
+      "select_result": "COMPLETED_SELECTION_COMMITTED",
       "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
-      "test_result": "PASS_EXPECTED_STOP"
+      "test_result": "PASS_2_OF_2"
     },
     "source_endow": {
-      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
+      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
       "default_refusal_code": "0x79",
       "default_release_available": false,
       "rollback": "BYTE_AND_LAMPORT_EXACT",
       "test_result": "PASS_EXPECTED_REFUSAL"
     },
     "blank_bank_market_creation": {
-      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
-      "v2": {"cu": 912791, "bytes": 165, "rent_lamports": 2039280},
-      "v3": {"cu": 929462, "bytes": 319, "rent_lamports": 3111120},
-      "v4": {"cu": 922067, "bytes": 383, "rent_lamports": 3556560},
+      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
+      "v2": {"cu": 205752, "bytes": 165, "rent_lamports": 2039280},
+      "v3": {"cu": 207423, "bytes": 319, "rent_lamports": 3111120},
+      "v4": {"cu": 209028, "bytes": 383, "rent_lamports": 3556560},
       "test_result": "PASS_2_OF_2"
     },
     "order_reservation": {
-      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
-      "place_cu": [598894, 596924],
-      "cancel_cu": [470318, 474991],
+      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
+      "place_cu": [185807, 183837],
+      "cancel_cu": [282868, 287541],
       "test_result": "PASS_2_OF_2"
     },
     "withdraw_cash": {
-      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
-      "cu": [229757],
+      "artifact_sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
+      "cu": [51804],
       "test_result": "PASS"
     },
     "source_archive_host": {
@@ -254,13 +260,6 @@
       "source_archive_rent_lamports": 18708480
     }
   },
-  "auxiliary_nonproduction_provider": {
-    "status": "AUXILIARY_DIFFERENT_ELF_NOT_USED_IN_PROJECTION",
-    "artifact_sha256": "201f4d7d898d60033b241cc1e68b1e7197f09313c1a2215cf17a6341686f75cd",
-    "artifact_bytes": 1256656,
-    "successful_endow_cu": 615953,
-    "terminal_release": "UNIMPLEMENTED_STOP"
-  },
   "projection": {
     "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
     "complete_liveness_policy": "NOT_EMITTED_STOP",
@@ -268,23 +267,23 @@
     "resolution_work": {
       "status": "PASS",
       "routes": {
-        "begin": {"measured_cu": 810993, "required_headroom_cu": 1013742, "selected_limit_cu": 1050000, "external_fee_cap_lamports": 1060000, "keeper_reward_lamports": 1160000, "status": "PASS"},
-        "fold_1": {"measured_cu": 804617, "required_headroom_cu": 1005772, "selected_limit_cu": 1050000, "external_fee_cap_lamports": 1060000, "keeper_reward_lamports": 1160000, "status": "PASS"},
-        "fold_2": {"measured_cu": 812194, "required_headroom_cu": 1015243, "selected_limit_cu": 1050000, "external_fee_cap_lamports": 1060000, "keeper_reward_lamports": 1160000, "status": "PASS"},
-        "fold_3": {"measured_cu": 813129, "required_headroom_cu": 1016412, "selected_limit_cu": 1050000, "external_fee_cap_lamports": 1060000, "keeper_reward_lamports": 1160000, "status": "PASS"},
-        "fold_4": {"measured_cu": 815574, "required_headroom_cu": 1019468, "selected_limit_cu": 1050000, "external_fee_cap_lamports": 1060000, "keeper_reward_lamports": 1160000, "status": "PASS"},
-        "finalize": {"measured_cu": 1094833, "required_headroom_cu": 1368542, "selected_limit_cu": 1400000, "external_fee_cap_lamports": 1410000, "keeper_reward_lamports": 1510000, "status": "PASS"},
-        "abort": {"measured_cu": 587198, "required_headroom_cu": 733998, "selected_limit_cu": 750000, "external_fee_cap_lamports": 760000, "keeper_reward_lamports": 860000, "status": "PASS"}
+        "begin": {"measured_cu": 90924, "required_headroom_cu": 113655, "selected_limit_cu": 150000, "external_fee_cap_lamports": 160000, "keeper_reward_lamports": 260000, "status": "PASS"},
+        "fold_1": {"measured_cu": 84548, "required_headroom_cu": 105685, "selected_limit_cu": 150000, "external_fee_cap_lamports": 160000, "keeper_reward_lamports": 260000, "status": "PASS"},
+        "fold_2": {"measured_cu": 92125, "required_headroom_cu": 115157, "selected_limit_cu": 150000, "external_fee_cap_lamports": 160000, "keeper_reward_lamports": 260000, "status": "PASS"},
+        "fold_3": {"measured_cu": 93060, "required_headroom_cu": 116325, "selected_limit_cu": 150000, "external_fee_cap_lamports": 160000, "keeper_reward_lamports": 260000, "status": "PASS"},
+        "fold_4": {"measured_cu": 95505, "required_headroom_cu": 119382, "selected_limit_cu": 150000, "external_fee_cap_lamports": 160000, "keeper_reward_lamports": 260000, "status": "PASS"},
+        "finalize": {"measured_cu": 164287, "required_headroom_cu": 205359, "selected_limit_cu": 250000, "external_fee_cap_lamports": 260000, "keeper_reward_lamports": 360000, "status": "PASS"},
+        "abort": {"measured_cu": 46677, "required_headroom_cu": 58347, "selected_limit_cu": 100000, "external_fee_cap_lamports": 110000, "keeper_reward_lamports": 210000, "status": "PASS"}
       },
       "maximum_records": 32,
-      "fold_path_lamports": 37120000,
-      "success_rewards_lamports": 38630000,
-      "worst_abort_rewards_lamports": 37980000,
-      "spendable_reserve_lamports": 38630000,
+      "fold_path_lamports": 8320000,
+      "success_rewards_lamports": 8680000,
+      "worst_abort_rewards_lamports": 8530000,
+      "spendable_reserve_lamports": 8680000,
       "rent_principal_lamports": 10801920,
-      "persistent_reserve_lamports": 49431920,
-      "begin_external_lamports": 1160000,
-      "payer_cold_outlay_lamports": 50591920,
+      "persistent_reserve_lamports": 19481920,
+      "begin_external_lamports": 260000,
+      "payer_cold_outlay_lamports": 19741920,
       "runtime_schedule_matches_policy": true
     },
     "source_value_admission": {
@@ -295,27 +294,27 @@
     },
     "direct_v2": {
       "status": "STOP",
-      "select": {"measured_cu": 1400000, "required_headroom_cu": 1750000, "selected_limit_cu": null, "external_fee_cap_lamports": null, "keeper_reward_lamports": null, "status": "STOP_HEADROOM"},
-      "select_result": "ROLLBACK_PROGRAM_FAILED_TO_COMPLETE",
+      "select": {"measured_cu": 226071, "required_headroom_cu": 282589, "selected_limit_cu": 300000, "external_fee_cap_lamports": 310000, "keeper_reward_lamports": 410000, "status": "PASS"},
+      "select_result": "COMPLETED_SELECTION_COMMITTED",
       "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
       "live_v3": false
     },
     "native_point_v3": {
       "status": "PASS",
       "degree_routes": [
-        {"degree": 1, "resolve": {"measured_cu": 1088267, "required_headroom_cu": 1360334, "selected_limit_cu": 1400000, "external_fee_cap_lamports": 1410000, "keeper_reward_lamports": 1510000, "status": "PASS"}},
-        {"degree": 2, "resolve": {"measured_cu": 1096640, "required_headroom_cu": 1370800, "selected_limit_cu": 1400000, "external_fee_cap_lamports": 1410000, "keeper_reward_lamports": 1510000, "status": "PASS"}},
-        {"degree": 3, "resolve": {"measured_cu": 1103534, "required_headroom_cu": 1379418, "selected_limit_cu": 1400000, "external_fee_cap_lamports": 1410000, "keeper_reward_lamports": 1510000, "status": "PASS"}}
+        {"degree": 1, "resolve": {"measured_cu": 182425, "required_headroom_cu": 228032, "selected_limit_cu": 250000, "external_fee_cap_lamports": 260000, "keeper_reward_lamports": 360000, "status": "PASS"}},
+        {"degree": 2, "resolve": {"measured_cu": 190798, "required_headroom_cu": 238498, "selected_limit_cu": 250000, "external_fee_cap_lamports": 260000, "keeper_reward_lamports": 360000, "status": "PASS"}},
+        {"degree": 3, "resolve": {"measured_cu": 197692, "required_headroom_cu": 247115, "selected_limit_cu": 250000, "external_fee_cap_lamports": 260000, "keeper_reward_lamports": 360000, "status": "PASS"}}
       ]
     },
     "occupation_v4_monolithic": {
-      "status": "STOP_HEADROOM",
+      "status": "PASS",
       "degree_routes": [
-        {"degree": 1, "initial": {"measured_cu": 1243529, "required_headroom_cu": 1554412, "selected_limit_cu": null, "external_fee_cap_lamports": null, "keeper_reward_lamports": null, "status": "STOP_HEADROOM"}, "retry": {"measured_cu": 1089893, "required_headroom_cu": 1362367, "selected_limit_cu": 1400000, "external_fee_cap_lamports": 1410000, "keeper_reward_lamports": 1510000, "status": "PASS"}},
-        {"degree": 2, "initial": {"measured_cu": 1254699, "required_headroom_cu": 1568374, "selected_limit_cu": null, "external_fee_cap_lamports": null, "keeper_reward_lamports": null, "status": "STOP_HEADROOM"}, "retry": {"measured_cu": 1101063, "required_headroom_cu": 1376329, "selected_limit_cu": 1400000, "external_fee_cap_lamports": 1410000, "keeper_reward_lamports": 1510000, "status": "PASS"}},
-        {"degree": 3, "initial": {"measured_cu": 1268630, "required_headroom_cu": 1585788, "selected_limit_cu": null, "external_fee_cap_lamports": null, "keeper_reward_lamports": null, "status": "STOP_HEADROOM"}, "retry": {"measured_cu": 1114994, "required_headroom_cu": 1393743, "selected_limit_cu": 1400000, "external_fee_cap_lamports": 1410000, "keeper_reward_lamports": 1510000, "status": "PASS"}}
+        {"degree": 1, "initial": {"measured_cu": 172665, "required_headroom_cu": 215832, "selected_limit_cu": 250000, "external_fee_cap_lamports": 260000, "keeper_reward_lamports": 360000, "status": "PASS"}, "retry": {"measured_cu": 159347, "required_headroom_cu": 199184, "selected_limit_cu": 200000, "external_fee_cap_lamports": 210000, "keeper_reward_lamports": 310000, "status": "PASS"}},
+        {"degree": 2, "initial": {"measured_cu": 183835, "required_headroom_cu": 229794, "selected_limit_cu": 250000, "external_fee_cap_lamports": 260000, "keeper_reward_lamports": 360000, "status": "PASS"}, "retry": {"measured_cu": 170517, "required_headroom_cu": 213147, "selected_limit_cu": 250000, "external_fee_cap_lamports": 260000, "keeper_reward_lamports": 360000, "status": "PASS"}},
+        {"degree": 3, "initial": {"measured_cu": 197766, "required_headroom_cu": 247208, "selected_limit_cu": 250000, "external_fee_cap_lamports": 260000, "keeper_reward_lamports": 360000, "status": "PASS"}, "retry": {"measured_cu": 184448, "required_headroom_cu": 230560, "selected_limit_cu": 250000, "external_fee_cap_lamports": 260000, "keeper_reward_lamports": 360000, "status": "PASS"}}
       ],
-      "live_action": "USE_MEASURED_RESOLUTIONWORK_OR_FAIL_CLOSED"
+      "live_action": "MONOLITHIC_INITIAL_AND_RETRY_ADMITTED"
     },
     "terminal_status": "STOP",
     "terminal_blocking_ids": [
@@ -323,7 +322,6 @@
       "DIRECT.ACCOUNT_REFUND_UNOWNED",
       "DIRECT.CANDIDATE_RENT_PERSISTS",
       "DIRECT.EMPTY_FROZEN_NO_LAPSE",
-      "DIRECT.TOP3_SELECT_CU_STOP",
       "HOARD.RESIDUAL_DISPOSITION_UNSELECTED",
       "PROFILE.STORAGE_INVENTORY_INCOMPLETE",
       "RENT.ACCOUNT_REFUND_UNOWNED",

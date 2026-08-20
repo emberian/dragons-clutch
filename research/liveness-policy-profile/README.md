@@ -12,12 +12,13 @@ This directory contains:
 - `src/main.rs`: exact account-width and pinned-default-rent probe;
 - `policy.py`, `evidence.json`, and the normalized capture: exact artifact,
   bank, source/test identity, rent, reward, and source-drift seal;
-- `artifacts/af6bb79cc3766bd0`: the current canonical ELF, build and stack/ELF
+- `artifacts/187d5ee16f72946a`: the current canonical ELF, build and stack/ELF
   audit evidence, and bank logs measured against that exact ELF;
-- `artifacts/bd20711b01828a74` and `artifacts/a5725a3d8e149b2b`: the preceding
-  historical seals, retained in full for audit continuity but excluded from the
-  current projection. `policy.py` refuses a seal that overwrites a superseded
-  artifact root or drops any of its evidence files.
+- `artifacts/af6bb79cc3766bd0`, `artifacts/bd20711b01828a74`, and
+  `artifacts/a5725a3d8e149b2b`: the preceding historical seals, retained in
+  full for audit continuity but excluded from the current projection.
+  `policy.py` refuses a seal that overwrites a superseded artifact root or
+  drops any of its evidence files.
 
 Every sealed path is checked for repository membership, not merely for
 presence on the running disk. The root `.gitignore` excludes `*.so` and
@@ -56,13 +57,18 @@ cargo clippy --offline --locked \
 ```
 
 The current artifact source and test/evidence ancestry is exact commit
-`2d530d2`. The preceding `bd20711b…` artifact remains historical only: the
-Direct V3 selection lifecycle merge grows the declared runtime closure from 88
-to 94 files and the stripped ELF from `1,228,192` to `1,490,544` bytes. Exact
-ELF comparison finds no byte-identical section except `.dynstr` and
-`.shstrtab`, so this is a materially different artifact and no old CU row was
-reused as current-artifact evidence; every measured row was rerun against exact
-`af6bb79c…`. Direct V3 is resident but unmeasured here, so no V3 row enters the
+`d8c5034` (the `6c25df4` SHA-256-syscall conversion merge plus one probe
+lock line). The preceding `af6bb79c…` artifact remains historical only:
+replacing the software SHA-256 with the `sol_sha256` syscall shrinks the
+stripped ELF from `1,490,544` to `1,420,608` bytes and moves every measured
+CU row by roughly 3x-8x. Exact ELF comparison finds no byte-identical section
+except `.dynstr` and `.shstrtab`, so this is a materially different artifact
+and no old CU row was reused as current-artifact evidence; every measured row
+was rerun against exact `187d5ee1…`. Two prior measured STOPs dissolve as
+measurements, not promotions: Direct SelectionV2 Select completes at 226,071
+CU and commits (V2 stays unpromoted on its unimplemented empty-frozen lapse),
+and every occupation-v4 monolithic profile now clears the 25%-headroom gate.
+Direct V3 is resident but unmeasured here, so no V3 row enters the
 projection. Native full-lifecycle tests are intentionally excluded from the
 default feature: running them requires the
 distinct non-production mock-source ELF, so they are not smuggled into this

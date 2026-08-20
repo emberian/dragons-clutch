@@ -57,12 +57,16 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
      ("DIRECT.ACCOUNT_REFUND_UNOWNED", "DIRECT.EMPTY_FROZEN_NO_LAPSE")),
     ("order.reservation.v1", 570, 4_858_080, "PER_ORDER", None, S,
      ("DIRECT.ACCOUNT_REFUND_UNOWNED", "DIRECT.EMPTY_FROZEN_NO_LAPSE")),
+    # DIRECT.TOP3_SELECT_CU_STOP was retired with the 187d5ee1… artifact: V2
+    # top-three selection, which exhausted the 1.4m-CU ceiling on every prior
+    # seal, now completes at a measured 226,071 CU.  The rows below still STOP
+    # on their remaining blockers (no lapse, unowned refunds, persistent rent).
     ("direct.epoch.v3", 344, 3_285_120, "PER_DIRECT_EPOCH", None, S,
-     ("DIRECT.EMPTY_FROZEN_NO_LAPSE", "DIRECT.TOP3_SELECT_CU_STOP")),
+     ("DIRECT.EMPTY_FROZEN_NO_LAPSE",)),
     ("direct.candidate.v2", 440, 3_953_280, "PER_EPOCH_CANDIDATE", 64, S,
      ("DIRECT.CANDIDATE_RENT_PERSISTS", "DIRECT.ACCOUNT_REFUND_UNOWNED")),
     ("direct.window.v1", 456, 4_064_640, "PER_DIRECT_EPOCH", 1, S,
-     ("DIRECT.TOP3_SELECT_CU_STOP", "DIRECT.ACCOUNT_REFUND_UNOWNED")),
+     ("DIRECT.ACCOUNT_REFUND_UNOWNED",)),
     ("direct.receipt", 217, 2_401_200, "PER_SELECTED_CANDIDATE", 1, S,
      ("DIRECT.ACCOUNT_REFUND_UNOWNED",)),
     ("direct.final_pot", 262, 2_714_400, "PER_SELECTED_CANDIDATE", 1, S,
