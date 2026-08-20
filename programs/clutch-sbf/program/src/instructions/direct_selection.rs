@@ -681,6 +681,20 @@ fn settle(
     execute_settlement(program_id, accounts, facts)
 }
 
+/* Boxed decodes, the `direct_selection_v3::common` discipline: each decoded
+ * value lives in its helper's frame and only a heap pointer crosses back into
+ * the caller's bounded SBF frame.  The checks and refusal classes are exactly
+ * the direct decodes'. */
+#[inline(never)]
+fn decode_direct_window_boxed(bytes: &[u8]) -> Outcome<Box<DirectCandidateWindowV1>> {
+    Ok(Box::new(decode_direct_window(bytes)?))
+}
+
+#[inline(never)]
+fn decode_direct_candidate_boxed(bytes: &[u8]) -> Outcome<Box<DirectCandidateV2>> {
+    Ok(Box::new(decode_direct_candidate(bytes)?))
+}
+
 #[inline(never)]
 fn authenticate_settlement(
     program_id: &Pubkey,
@@ -689,7 +703,7 @@ fn authenticate_settlement(
     intent_market: Hash32,
     intent_epoch: Hash32,
 ) -> Outcome<SettleFacts> {
-    let epoch = accounts::read_direct_epoch(&accounts[IX_SETTLE_EPOCH].data.borrow())?;
+    let epoch = accounts::read_direct_epoch_boxed(&accounts[IX_SETTLE_EPOCH].data.borrow())?;
     require(
         epoch.common.market == intent_market
             && epoch.common.epoch == intent_epoch
@@ -697,7 +711,7 @@ fn authenticate_settlement(
         ClutchError::NotActive,
     )?;
     validate_epoch_address(program_id, &accounts[IX_SETTLE_EPOCH], &epoch)?;
-    let window = decode_direct_window(&accounts[IX_SETTLE_WINDOW].data.borrow())?;
+    let window = decode_direct_window_boxed(&accounts[IX_SETTLE_WINDOW].data.borrow())?;
     expect_pda(
         accounts[IX_SETTLE_WINDOW].key,
         seeds::direct_window_pda(program_id, &epoch.common.epoch.bytes()),
@@ -711,7 +725,7 @@ fn authenticate_settlement(
             && window.policy_id.0 == epoch.common.policy.bytes(),
         ClutchError::NotActive,
     )?;
-    let candidate = decode_direct_candidate(&accounts[IX_SETTLE_CANDIDATE].data.borrow())?;
+    let candidate = decode_direct_candidate_boxed(&accounts[IX_SETTLE_CANDIDATE].data.borrow())?;
     validate_direct_candidate_address(program_id, &accounts[IX_SETTLE_CANDIDATE], &candidate)?;
     require(
         window.selected_candidate == candidate.candidate_id
@@ -1300,6 +1314,23 @@ fn authenticate_selection_source(
     Ok(SelectionSource { epoch, orders })
 }
 
+/// Boxed [`authenticate_selection_source`] for the same SBF frame discipline
+/// as the boxed decodes above: only a heap pointer enters the preparer frame.
+#[inline(never)]
+fn authenticate_selection_source_boxed(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    intent_market: Hash32,
+    intent_epoch: Hash32,
+) -> Outcome<Box<SelectionSource>> {
+    Ok(Box::new(authenticate_selection_source(
+        program_id,
+        accounts,
+        intent_market,
+        intent_epoch,
+    )?))
+}
+
 #[inline(never)]
 fn inspect_selected_window(
     program_id: &Pubkey,
@@ -1399,6 +1430,21 @@ fn prepare_verified_selected_window(
     )
 }
 
+/// Boxed [`prepare_verified_selected_window`] for the same SBF frame
+/// discipline.
+#[inline(never)]
+fn prepare_verified_selected_window_boxed(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    source: &SelectionSource,
+    top_count: usize,
+    now: u64,
+) -> Outcome<Box<DirectCandidateWindowV1>> {
+    Ok(Box::new(prepare_verified_selected_window(
+        program_id, accounts, source, top_count, now,
+    )?))
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn prepare_selection_commit(
@@ -1411,8 +1457,10 @@ fn prepare_selection_commit(
     receipt_index: usize,
     pot_index: usize,
 ) -> Outcome<SelectionCommit> {
-    let source = authenticate_selection_source(program_id, accounts, intent_market, intent_epoch)?;
-    let window = prepare_verified_selected_window(program_id, accounts, &source, top_count, now)?;
+    let source =
+        authenticate_selection_source_boxed(program_id, accounts, intent_market, intent_epoch)?;
+    let window =
+        prepare_verified_selected_window_boxed(program_id, accounts, &source, top_count, now)?;
     let selected = selected_facts(program_id, &accounts[IX_SELECT_TOP_START])?;
     require(
         selected.candidate_id == window.selected_candidate
@@ -1481,7 +1529,7 @@ fn prepare_selection_commit(
     epoch.validate()?;
     Ok(SelectionCommit {
         epoch,
-        window,
+        window: *window,
         candidate_id: selected.candidate_id,
         receipt,
         pot,

@@ -1264,17 +1264,17 @@ fn settle_page(
     accounts::validate_state_roles(program_id, accounts, &SETTLE_PAGE_STATE_ROLES)?;
     validate_settle_addresses(program_id, accounts)?;
 
-    let epoch = EpochAccount::decode(&accounts[IX_SETTLE_EPOCH].data.borrow())?;
-    let candidate = CandidateRecord::decode(&accounts[IX_SETTLE_CANDIDATE].data.borrow())?;
+    let epoch = decode_epoch_boxed(&accounts[IX_SETTLE_EPOCH].data.borrow())?;
+    let candidate = decode_candidate_boxed(&accounts[IX_SETTLE_CANDIDATE].data.borrow())?;
     let mut buyer_position =
-        PositionAccount::decode(&accounts[IX_SETTLE_BUY_POSITION].data.borrow())?;
+        decode_position_boxed(&accounts[IX_SETTLE_BUY_POSITION].data.borrow())?;
     let mut seller_position =
-        PositionAccount::decode(&accounts[IX_SETTLE_SELL_POSITION].data.borrow())?;
+        decode_position_boxed(&accounts[IX_SETTLE_SELL_POSITION].data.borrow())?;
     let mut buyer_reservation =
-        ReservationAccount::decode(&accounts[IX_SETTLE_BUY_RESERVATION].data.borrow())?;
+        decode_reservation_boxed(&accounts[IX_SETTLE_BUY_RESERVATION].data.borrow())?;
     let mut seller_reservation =
-        ReservationAccount::decode(&accounts[IX_SETTLE_SELL_RESERVATION].data.borrow())?;
-    let mut receipt = SettlementReceiptAccount::decode(&accounts[IX_SETTLE_RECEIPT].data.borrow())?;
+        decode_reservation_boxed(&accounts[IX_SETTLE_SELL_RESERVATION].data.borrow())?;
+    let mut receipt = decode_receipt_boxed(&accounts[IX_SETTLE_RECEIPT].data.borrow())?;
 
     require(
         epoch.market == *intent_market
@@ -1414,6 +1414,55 @@ fn validate_reservation_address(program_id: &Pubkey, account: &AccountInfo) -> O
     )
 }
 
+/* Boxed decodes, the `direct_selection_v3::common` discipline: each large
+ * decoded value is hoisted into exactly one boxed decode inside an
+ * `#[inline(never)]` helper, so sibling locals never co-reside in one
+ * handler's bounded SBF frame — only a heap pointer crosses back.  The checks
+ * and refusal classes are exactly the direct decodes'. */
+#[inline(never)]
+fn decode_epoch_boxed(bytes: &[u8]) -> Outcome<Box<EpochAccount>> {
+    Ok(Box::new(EpochAccount::decode(bytes)?))
+}
+
+#[inline(never)]
+fn decode_candidate_boxed(bytes: &[u8]) -> Outcome<Box<CandidateRecord>> {
+    Ok(Box::new(CandidateRecord::decode(bytes)?))
+}
+
+#[inline(never)]
+fn decode_position_boxed(bytes: &[u8]) -> Outcome<Box<PositionAccount>> {
+    Ok(Box::new(PositionAccount::decode(bytes)?))
+}
+
+#[inline(never)]
+fn decode_reservation_boxed(bytes: &[u8]) -> Outcome<Box<ReservationAccount>> {
+    Ok(Box::new(ReservationAccount::decode(bytes)?))
+}
+
+#[inline(never)]
+fn decode_receipt_boxed(bytes: &[u8]) -> Outcome<Box<SettlementReceiptAccount>> {
+    Ok(Box::new(SettlementReceiptAccount::decode(bytes)?))
+}
+
+/// Boxed [`load_grid`]: one tick vector in this helper's frame, one heap
+/// pointer in the caller's.
+#[inline(never)]
+fn read_grid_boxed(bytes: &[u8]) -> Outcome<Box<PriceGridAccount>> {
+    let mut grid = Box::new(ZERO_GRID);
+    load_grid(bytes, &mut grid)?;
+    Ok(grid)
+}
+
+/// Boxed [`reservation::prepare_placement`]: the staged Position/Reservation
+/// pair lives on the heap rather than beside the handler's other locals.
+#[inline(never)]
+fn prepare_placement_boxed(
+    position: &PositionAccount,
+    input: &reservation::PlacementInput,
+) -> Outcome<Box<(PositionAccount, ReservationAccount)>> {
+    Ok(Box::new(reservation::prepare_placement(position, input)?))
+}
+
 /// The `PlaceOrder` account plane.
 #[inline(never)]
 fn place_order(
@@ -1465,7 +1514,7 @@ fn place_order(
         let data = accounts[IX_PAGE].data.borrow();
         stream::OrderPageHeader::decode(&data)?
     };
-    let position = PositionAccount::decode(&accounts[IX_POSITION].data.borrow())?;
+    let position = decode_position_boxed(&accounts[IX_POSITION].data.borrow())?;
     expect_pda(
         accounts[IX_EPOCH].key,
         seeds::epoch_pda(program_id, &epoch.market.bytes(), epoch.epoch_index),
@@ -1512,7 +1561,7 @@ fn place_order(
     )?;
 
     let actor = Hash32::from_bytes(accounts[IX_ACTOR].key.to_bytes());
-    let (next_position, reservation) = {
+    let staged = {
         let epoch_data = accounts[IX_EPOCH].data.borrow();
         let grid_data = accounts[IX_GRID].data.borrow();
         let page_data = accounts[IX_PAGE].data.borrow();
@@ -1526,7 +1575,7 @@ fn place_order(
             slot: *slot,
         };
         validate_place_order(&page_data, &placement)?;
-        reservation::prepare_placement(
+        prepare_placement_boxed(
             &position,
             &reservation::PlacementInput {
                 actor,
@@ -1537,6 +1586,7 @@ fn place_order(
             },
         )?
     };
+    let (next_position, reservation) = &*staged;
 
     create_pda_account(
         program_id,
@@ -1662,8 +1712,7 @@ fn prepare_direct_v4_economics(
     max_fee_atoms: u64,
     slot: OrderSlot,
 ) -> Outcome<DirectV4EconomicCommit> {
-    let mut grid = ZERO_GRID;
-    load_grid(&accounts[IX_GRID].data.borrow(), &mut grid)?;
+    let grid = read_grid_boxed(&accounts[IX_GRID].data.borrow())?;
     expect_pda(
         accounts[IX_GRID].key,
         seeds::grid_pda(program_id, &grid.realm.bytes(), &grid.grid.bytes()),
@@ -1679,7 +1728,7 @@ fn prepare_direct_v4_economics(
         ),
         Some(page_header.stored_bump),
     )?;
-    let position = PositionAccount::decode(&accounts[IX_POSITION].data.borrow())?;
+    let position = decode_position_boxed(&accounts[IX_POSITION].data.borrow())?;
     expect_pda(
         accounts[IX_POSITION].key,
         seeds::position_pda(
@@ -1713,7 +1762,7 @@ fn prepare_direct_v4_economics(
         DIRECT_RESERVATION_V2_BYTES,
         DIRECT_NEUTRAL_SINK_V3,
     )?;
-    let (next_position, reservation) = {
+    let staged = {
         let page_data = accounts[IX_PAGE].data.borrow();
         validate_direct_v4_place(
             &page_data,
@@ -1727,7 +1776,7 @@ fn prepare_direct_v4_economics(
             slot,
         )?;
         let common = epoch.direct.common;
-        reservation::prepare_placement(
+        prepare_placement_boxed(
             &position,
             &reservation::PlacementInput {
                 actor,
@@ -1750,9 +1799,9 @@ fn prepare_direct_v4_economics(
         )?
     };
     Ok(DirectV4EconomicCommit {
-        position: next_position,
+        position: staged.0,
         reservation: DirectReservationV2Account {
-            reservation,
+            reservation: staged.1,
             funding: reservation_funding,
         },
         reservation_id,

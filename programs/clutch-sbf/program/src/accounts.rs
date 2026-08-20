@@ -733,6 +733,20 @@ pub fn read_supply(data: &[u8]) -> Outcome<SupplyFacts> {
     })
 }
 
+/// Boxed [`read_market`]: the facts live in this helper's frame and only a
+/// heap pointer crosses back into the caller's bounded SBF frame (the
+/// `direct_selection_v3::common` discipline).
+#[inline(never)]
+pub fn read_market_boxed(data: &[u8]) -> Outcome<Box<MarketFacts>> {
+    Ok(Box::new(read_market(data)?))
+}
+
+/// Boxed [`read_terms`] for the same SBF frame discipline.
+#[inline(never)]
+pub fn read_terms_boxed(data: &[u8]) -> Outcome<Box<TermsFacts>> {
+    Ok(Box::new(read_terms(data)?))
+}
+
 /// Decode an immutable-terms account.
 #[inline(never)]
 pub fn read_terms(data: &[u8]) -> Outcome<TermsFacts> {
@@ -821,6 +835,14 @@ fn epoch_facts(value: &EpochAccount) -> EpochFacts {
 #[inline(never)]
 pub fn read_direct_epoch(data: &[u8]) -> Outcome<DirectEpochV3Account> {
     Ok(DirectEpochV3Account::decode(data)?)
+}
+
+/// Boxed [`read_direct_epoch`]: the decoded Epoch lives in this helper's
+/// frame and only a heap pointer crosses back into the caller's bounded SBF
+/// frame (the `direct_selection_v3::common` discipline).
+#[inline(never)]
+pub fn read_direct_epoch_boxed(data: &[u8]) -> Outcome<Box<DirectEpochV3Account>> {
+    Ok(Box::new(read_direct_epoch(data)?))
 }
 
 /* The generic Epoch reader above intentionally returns only the common facts
