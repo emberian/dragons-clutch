@@ -29,20 +29,23 @@ ready in degg-research.
 ## directions blessed. Human gates unchanged (mainnet, real value, real-user
 ## markets, registry flip, filings, L0).
 
-## Next 3 moves
+## Next 3 moves (ember directives, 2026-08-20 ~10:50: no devnet SOL coming —
+## maximize local validation; implement everything possible BEFORE design
+## complection or finishing formal verification; enumerate ALL decisions and
+## produce decision reports)
 
-1. Take ember's morning decisions: the T2-5 GENERAL_CLEARING_POLICY_V1
-   freeze, the RevenuePolicy V1 design (six queued decisions in its
-   section 11), the walk's admission treatment (sealed evidence-only,
-   decision_owner: ember), and the R2 runtime-capabilities branch merge
-   (parked, needs rebase + a reseal ride-along).
-2. Tier 2 wave 3 when blessed: T2-7 selection (candidate window closure,
-   FinalizeSelection over VERIFIED candidates) then T2-8 entitlements
-   (receipts, FinalPot, generalized SettlePage consumption — Tier 1's
-   out-params are the prerequisite and are merged).
-3. Deploy to devnet the moment the deployer is funded (collector polling;
-   the walk-era default ELF needs ~13.3 SOL at 1,785,904 B — or the opt-z
-   option at ~-23% if CU economics are accepted).
+1. Wave running: DECISION CENSUS (every open decision in the tree -> one
+   register -> per-decision analysis fan-out) + GENERAL-PLANE SIGNED
+   VALIDATOR WALK (the Tier-2 lifecycle on a real loopback validator with
+   real signatures + required-red falsifier — the maximum devnet-free
+   evidence class, mirroring the legacy 22-transaction walk).
+2. After census: fan out decision-analysis reports (fee/revenue cluster,
+   policy freezes, terminal/closure + R4, promotion/admission, R2 cutover,
+   deployment economics, formal-methods substrate) + write the next-wave
+   roadmap (maturation -> sophistication -> optimization -> assurance,
+   formal verification deliberately last).
+3. Merge the walk evidence when green; reseal only at the next meaningful
+   checkpoint (evidence-only unless program source moves).
 
 ## Ember decision queue (2026-08-19 morning)
 
