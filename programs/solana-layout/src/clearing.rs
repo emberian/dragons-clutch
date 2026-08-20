@@ -408,6 +408,186 @@ pub fn complete_clear_work(account: &mut [u8]) -> Result<ClearWorkHeader> {
 }
 
 /* ------------------------------------------------------------------------ */
+/* The staged-creation grow prefix                                           */
+/* ------------------------------------------------------------------------ */
+
+/// The staged-creation grow step, in bytes.
+///
+/// This is the runtime's per-instruction data-growth ceiling
+/// (`solana_program_entrypoint::MAX_PERMITTED_DATA_INCREASE`), restated here
+/// because the checkpoint's creation protocol is *defined* by it: the one
+/// account above the ceiling (the test
+/// `only_the_checkpoint_exceeds_the_cpi_creation_ceiling` pins which) is
+/// created at this length and grown by at most this much per instruction,
+/// five instructions in all.  The cap is per instruction, not per
+/// transaction, so the five may share one transaction — and nothing here
+/// requires that.
+pub const CLEAR_WORK_GROW_STEP: usize = 10 * 1024;
+
+/// Marker byte at offset 2 of a *growing* checkpoint account.
+///
+/// In a finished checkpoint the same offset holds `market[0]`, which this
+/// byte cannot be relied upon to differ from; the load-bearing separation is
+/// the **length rule**: a growing account's length is a positive multiple of
+/// [`CLEAR_WORK_GROW_STEP`] strictly below [`account_len::CLEAR_WORK`], a
+/// finished checkpoint's length is exactly [`account_len::CLEAR_WORK`], and
+/// the two sets are disjoint by the `const` assertion below.  The marker is
+/// what makes the prefix un-repurposable — no other account family writes
+/// this shape — and human-legible in a hex dump.
+pub const CLEAR_WORK_GROWING_MARKER: u8 = b'G';
+
+/// Exact bytes of the grow-stage prefix: tag, version, marker, `target_len`,
+/// the identity triple, and the stored bump.
+pub const CLEAR_WORK_GROW_PREFIX_BYTES: usize = 2 + 1 + 4 + (3 * HASH_BYTES) + 1;
+
+const _: () = assert!(CLEAR_WORK_GROW_PREFIX_BYTES == 104);
+const _: () = assert!(CLEAR_WORK_GROW_PREFIX_BYTES <= CLEAR_WORK_GROW_STEP);
+// Five stages: create at one step, grow four times, the last one short.
+const _: () = assert!(account_len::CLEAR_WORK > 4 * CLEAR_WORK_GROW_STEP);
+const _: () = assert!(account_len::CLEAR_WORK < 5 * CLEAR_WORK_GROW_STEP);
+// The length-rule disjointness the marker doc relies on: no growing length
+// can equal the finished length.
+const _: () = assert!(!account_len::CLEAR_WORK.is_multiple_of(CLEAR_WORK_GROW_STEP));
+
+/// The resumable prefix of a checkpoint account that is still being grown.
+///
+/// Written once by the creating instruction and preserved verbatim by every
+/// grow (a realloc keeps existing bytes), it makes a half-grown account
+/// *resumable* — the grower re-derives the PDA from the stored triple — and
+/// *inert*: [`ClearWorkHeader::decode`]'s exact-length rule refuses the
+/// account outright, so no checkpoint consumer can read one, and the final
+/// grow overwrites this prefix with the real header in the same instruction
+/// that reaches the target length.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClearWorkGrowStage {
+    /// Market identity, as the eventual [`ClearWorkHeader::market`].
+    pub market: Hash32,
+    /// Epoch identity, as the eventual [`ClearWorkHeader::epoch`].
+    pub epoch: Hash32,
+    /// Candidate identity, as the eventual [`ClearWorkHeader::candidate`].
+    pub candidate: Hash32,
+    /// The finished account length; must equal [`account_len::CLEAR_WORK`].
+    ///
+    /// Stored rather than implied for the same reason
+    /// [`ClearWorkHeader::body_len`] is: a stage written by a build with a
+    /// different checkpoint size must refuse here, not misread later.
+    pub target_len: u32,
+    /// Stored PDA bump, as the eventual [`ClearWorkHeader::stored_bump`].
+    pub stored_bump: u8,
+}
+
+impl ClearWorkGrowStage {
+    /// Validate the identity triple and the target length.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.market)?;
+        check_hash(self.epoch)?;
+        check_hash(self.candidate)?;
+        if self.target_len as usize != account_len::CLEAR_WORK {
+            return Err(CodecError::InvalidCount);
+        }
+        Ok(())
+    }
+
+    /// Encode exactly [`CLEAR_WORK_GROW_PREFIX_BYTES`] bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        if out.len() < CLEAR_WORK_GROW_PREFIX_BYTES {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut w = Writer::new(out);
+        put_header(&mut w, CLEAR_WORK_TAG, account_version::CLEAR_WORK)?;
+        w.u8(CLEAR_WORK_GROWING_MARKER)?;
+        w.u32(self.target_len)?;
+        w.hash(self.market)?;
+        w.hash(self.epoch)?;
+        w.hash(self.candidate)?;
+        w.u8(self.stored_bump)?;
+        if w.at != CLEAR_WORK_GROW_PREFIX_BYTES {
+            return Err(CodecError::OutputTooSmall);
+        }
+        Ok(w.at)
+    }
+
+    /// Parse the prefix of a whole *growing* checkpoint account.
+    ///
+    /// The input must be the whole account, and its length must satisfy the
+    /// staged-length rule ([`clear_work_grow_stage_len`]) — which a finished
+    /// checkpoint's exact length never does, so the two decoders can never
+    /// accept the same bytes.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        clear_work_grow_stage_len(input.len())?;
+        if input[0] != CLEAR_WORK_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != account_version::CLEAR_WORK {
+            return Err(CodecError::WrongVersion);
+        }
+        if input[2] != CLEAR_WORK_GROWING_MARKER {
+            return Err(CodecError::InvalidEnum);
+        }
+        let mut r = Reader::at(input, 3);
+        let value = Self {
+            target_len: r.u32()?,
+            market: r.hash()?,
+            epoch: r.hash()?,
+            candidate: r.hash()?,
+            stored_bump: r.u8()?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+/// The staged-length rule: a growing account is a positive multiple of
+/// [`CLEAR_WORK_GROW_STEP`] strictly below [`account_len::CLEAR_WORK`].
+pub fn clear_work_grow_stage_len(len: usize) -> Result<()> {
+    if (CLEAR_WORK_GROW_STEP..account_len::CLEAR_WORK).contains(&len)
+        && len.is_multiple_of(CLEAR_WORK_GROW_STEP)
+    {
+        Ok(())
+    } else {
+        Err(CodecError::InvalidCount)
+    }
+}
+
+/// The length one grow reaches from `len`: one step, capped at the target.
+pub const fn clear_work_grown_len(len: usize) -> usize {
+    let grown = len + CLEAR_WORK_GROW_STEP;
+    if grown > account_len::CLEAR_WORK {
+        account_len::CLEAR_WORK
+    } else {
+        grown
+    }
+}
+
+/// Write the grow-stage prefix over a freshly allocated first-stage account.
+///
+/// The account must be exactly one [`CLEAR_WORK_GROW_STEP`] long — the length
+/// the creating instruction allocates.  Everything after the prefix is
+/// zeroed; those bytes are scratch the final grow overwrites entirely.
+pub fn init_clear_work_grow_stage(
+    account: &mut [u8],
+    market: Hash32,
+    epoch: Hash32,
+    candidate: Hash32,
+    stored_bump: u8,
+) -> Result<ClearWorkGrowStage> {
+    if account.len() != CLEAR_WORK_GROW_STEP {
+        return Err(CodecError::OutputTooSmall);
+    }
+    let stage = ClearWorkGrowStage {
+        market,
+        epoch,
+        candidate,
+        target_len: account_len::CLEAR_WORK as u32,
+        stored_bump,
+    };
+    stage.encode(account)?;
+    account[CLEAR_WORK_GROW_PREFIX_BYTES..].fill(0);
+    Ok(stage)
+}
+
+/* ------------------------------------------------------------------------ */
 /* The candidate feed                                                        */
 /* ------------------------------------------------------------------------ */
 
@@ -1060,8 +1240,14 @@ mod tests {
     #[test]
     fn clearing_account_golden_lengths() {
         // 47,846 is `ClearWorkV1::ENCODED_BYTES`, pinned on the other side by
-        // clutch-batch's `clear_work_encoded_bytes_are_pinned`.
+        // clutch-batch's `clear_work_encoded_bytes_are_pinned` — and asserted
+        // against the symbol itself, not only restated, so the two crates
+        // cannot drift silently.
         assert_eq!(CLEAR_WORK_BODY_BYTES, 47_846);
+        assert_eq!(
+            CLEAR_WORK_BODY_BYTES,
+            clutch_batch::relation_v1_stream::ClearWorkV1::ENCODED_BYTES
+        );
         assert_eq!(CLEAR_WORK_HEADER_BYTES, 158);
         assert_eq!(account_len::CLEAR_WORK, 48_004);
         assert_eq!(CANDIDATE_FEED_HEADER_BYTES, 346);
@@ -1270,6 +1456,163 @@ mod tests {
                 .iter()
                 .all(|b| *b == pattern));
         }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Grow stage                                                          */
+    /* ------------------------------------------------------------------ */
+
+    fn grow_stage_account() -> [u8; CLEAR_WORK_GROW_STEP] {
+        let mut account = [0; CLEAR_WORK_GROW_STEP];
+        init_clear_work_grow_stage(&mut account, h(1), h(2), h(3), 253).unwrap();
+        account
+    }
+
+    #[test]
+    fn the_grow_stage_walks_exactly_five_lengths_to_the_target() {
+        let mut len = CLEAR_WORK_GROW_STEP;
+        let mut stages = 1;
+        while len < account_len::CLEAR_WORK {
+            assert_eq!(clear_work_grow_stage_len(len), Ok(()));
+            len = clear_work_grown_len(len);
+            stages += 1;
+        }
+        assert_eq!(len, account_len::CLEAR_WORK);
+        assert_eq!(stages, 5);
+        // The finished length is not a stage, and one more grow is a no-op cap.
+        assert_eq!(
+            clear_work_grow_stage_len(len),
+            Err(CodecError::InvalidCount)
+        );
+        assert_eq!(clear_work_grown_len(len), account_len::CLEAR_WORK);
+    }
+
+    #[test]
+    fn a_grow_stage_round_trips_at_every_length_and_every_checkpoint_reader_refuses_it() {
+        let first = grow_stage_account();
+        let stage = ClearWorkGrowStage::decode(&first).unwrap();
+        assert_eq!(stage.market, h(1));
+        assert_eq!(stage.epoch, h(2));
+        assert_eq!(stage.candidate, h(3));
+        assert_eq!(stage.target_len as usize, account_len::CLEAR_WORK);
+        assert_eq!(stage.stored_bump, 253);
+        assert!(first[CLEAR_WORK_GROW_PREFIX_BYTES..]
+            .iter()
+            .all(|b| *b == 0));
+
+        // Simulate every realloc: a longer account carrying the same prefix.
+        let mut grown = [0u8; 4 * CLEAR_WORK_GROW_STEP];
+        grown[..CLEAR_WORK_GROW_STEP].copy_from_slice(&first);
+        let mut len = CLEAR_WORK_GROW_STEP;
+        loop {
+            // The stage decodes, and the half-grown account is inert: every
+            // checkpoint reader and writer refuses it on the exact-length
+            // rule before interpreting one byte.
+            assert_eq!(ClearWorkGrowStage::decode(&grown[..len]), Ok(stage));
+            assert_eq!(
+                verify_clear_work(&grown[..len]),
+                Err(CodecError::Truncated)
+            );
+            assert_eq!(clear_work_body(&grown[..len]), Err(CodecError::Truncated));
+            assert_eq!(
+                clear_work_body_mut(&mut grown[..len]),
+                Err(CodecError::Truncated)
+            );
+            assert_eq!(
+                bind_order_set(&mut grown[..len], h(9), 1),
+                Err(CodecError::Truncated)
+            );
+            assert_eq!(
+                advance_walk(&mut grown[..len], 0, 1, 1),
+                Err(CodecError::Truncated)
+            );
+            assert_eq!(
+                complete_clear_work(&mut grown[..len]),
+                Err(CodecError::Truncated)
+            );
+            if len == 4 * CLEAR_WORK_GROW_STEP {
+                break;
+            }
+            len = clear_work_grown_len(len);
+        }
+    }
+
+    #[test]
+    fn the_grow_stage_refuses_every_hostile_frame() {
+        // A finished checkpoint never decodes as a stage: its exact length
+        // fails the staged-length rule before any byte is read.
+        let finished = work();
+        assert_eq!(
+            ClearWorkGrowStage::decode(&finished),
+            Err(CodecError::InvalidCount)
+        );
+        // Off-multiple and out-of-range lengths refuse.
+        let good = grow_stage_account();
+        assert_eq!(
+            ClearWorkGrowStage::decode(&good[..CLEAR_WORK_GROW_STEP - 1]),
+            Err(CodecError::InvalidCount)
+        );
+        let mut long = [0u8; CLEAR_WORK_GROW_STEP + 1];
+        long[..CLEAR_WORK_GROW_STEP].copy_from_slice(&good);
+        assert_eq!(
+            ClearWorkGrowStage::decode(&long),
+            Err(CodecError::InvalidCount)
+        );
+        assert_eq!(
+            ClearWorkGrowStage::decode(&[0u8; 0]),
+            Err(CodecError::InvalidCount)
+        );
+
+        let mut wrong_tag = good;
+        wrong_tag[0] = CANDIDATE_FEED_TAG;
+        assert_eq!(
+            ClearWorkGrowStage::decode(&wrong_tag),
+            Err(CodecError::WrongTag)
+        );
+        let mut wrong_version = good;
+        wrong_version[1] = account_version::CLEAR_WORK + 1;
+        assert_eq!(
+            ClearWorkGrowStage::decode(&wrong_version),
+            Err(CodecError::WrongVersion)
+        );
+        let mut wrong_marker = good;
+        wrong_marker[2] = 0;
+        assert_eq!(
+            ClearWorkGrowStage::decode(&wrong_marker),
+            Err(CodecError::InvalidEnum)
+        );
+        let mut wrong_target = good;
+        wrong_target[3..7].copy_from_slice(&(account_len::CLEAR_WORK as u32 - 1).to_le_bytes());
+        assert_eq!(
+            ClearWorkGrowStage::decode(&wrong_target),
+            Err(CodecError::InvalidCount)
+        );
+        // A zero identity anywhere in the triple.
+        for at in [3 + 4, 3 + 4 + HASH_BYTES, 3 + 4 + (2 * HASH_BYTES)] {
+            let mut zeroed = good;
+            zeroed[at..at + HASH_BYTES].fill(0);
+            assert_eq!(
+                ClearWorkGrowStage::decode(&zeroed),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+
+        // The initializer only writes the exact first stage.
+        let mut short = [0u8; CLEAR_WORK_GROW_STEP - 1];
+        assert_eq!(
+            init_clear_work_grow_stage(&mut short, h(1), h(2), h(3), 253),
+            Err(CodecError::OutputTooSmall)
+        );
+        let mut wide = [0u8; CLEAR_WORK_GROW_STEP + 1];
+        assert_eq!(
+            init_clear_work_grow_stage(&mut wide, h(1), h(2), h(3), 253),
+            Err(CodecError::OutputTooSmall)
+        );
+        let mut zero_identity = [0u8; CLEAR_WORK_GROW_STEP];
+        assert_eq!(
+            init_clear_work_grow_stage(&mut zero_identity, Hash32::ZERO, h(2), h(3), 253),
+            Err(CodecError::ZeroIdentity)
+        );
     }
 
     /* ------------------------------------------------------------------ */
