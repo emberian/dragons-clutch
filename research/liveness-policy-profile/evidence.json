@@ -2,14 +2,14 @@
   "schema": "dragons-clutch/liveness-policy-evidence/v2",
   "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
   "capture_date": "2026-08-20",
-  "runtime_ref": "d8c50347556353939d4f5a91af616ba40d70419a",
+  "runtime_ref": "59b5ffdc3c8c9e163f55e98b8f699eeb2b07cab5",
   "runtime_tree": "451baac9953fd083bebc2bcf44c7a9ea08c1763a",
-  "evidence_ref": "27798d966cbcc5122cfd4b139b1892df4876b671",
+  "evidence_ref": "59b5ffdc3c8c9e163f55e98b8f699eeb2b07cab5",
   "artifact": {
     "path": "research/liveness-policy-profile/artifacts/187d5ee16f72946a/clutch_sbf.so",
     "sha256": "187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
     "bytes": 1420608,
-    "source_ref": "d8c50347556353939d4f5a91af616ba40d70419a",
+    "source_ref": "59b5ffdc3c8c9e163f55e98b8f699eeb2b07cab5",
     "profile": "default-empty-registry"
   },
   "artifact_reproducibility": {
@@ -43,7 +43,7 @@
   },
   "capture": {
     "path": "research/liveness-policy-profile/captured-output.txt",
-    "sha256": "c32a244e43e7ed023821a34b0f1d91b36204eb7190ab1e2c76710e8d546cb635"
+    "sha256": "995130465d9d9d4c9d06cec5ec50c9654e2a8f5778bc99833465c40b2548adf8"
   },
   "source_blobs": {
     "research/liveness-policy-profile/Cargo.toml": "8574e7693c1a85cdb68bf608c5cf4dcde178123b",
@@ -61,7 +61,7 @@
   },
   "source_trees": {
     "programs/clutch-sbf/program/src": "22f04a8916e6ea756cd515277bc4dcb5d7e845d3",
-    "programs/solana-layout/src": "21126666ad31155932021eebfbf6a32528ea0483",
+    "programs/solana-layout/src": "f5a20536c3b3bfd8d1aa74ea2ec7a2d661e706af",
     "programs/solana-reference/src": "e995f0536bcc3ef2fc34602f445de4f214a4f150",
     "crates/clutch-liveness/src": "38f21a9a8a931970b261078b996fcf00b68ebd9a"
   },
