@@ -497,13 +497,112 @@ pub struct PortfolioPairPostV1 {
     pub entitlement: PortfolioEntitlementV1,
 }
 
+/// All-zero Position placeholder for [`PortfolioPairPostV1::ZEROED`].
+const ZEROED_POSITION: PositionAccount = PositionAccount {
+    market: Hash32::ZERO,
+    owner: Hash32::ZERO,
+    generation: 0,
+    internal: [0; MAX_OUTCOMES],
+    cash_atoms: 0,
+    reserved_cash_atoms: 0,
+    stored_bump: 0,
+    close_state: 0,
+};
+
+/// All-zero reservation placeholder for [`PortfolioPairPostV1::ZEROED`].
+const ZEROED_RESERVATION: ReservationAccount = ReservationAccount {
+    reservation: Hash32::ZERO,
+    market: Hash32::ZERO,
+    epoch: Hash32::ZERO,
+    owner: Hash32::ZERO,
+    order_id: Hash32::ZERO,
+    price_grid: Hash32::ZERO,
+    terms: Hash32::ZERO,
+    policy: Hash32::ZERO,
+    position_generation: 0,
+    order_generation: 0,
+    initial_cash_atoms: 0,
+    remaining_cash_atoms: 0,
+    max_fee_atoms: 0,
+    release_generation: 0,
+    page_index: 0,
+    outcome_count: 0,
+    order_kind: 0,
+    side: 0,
+    state: 0,
+    stored_bump: 0,
+    flags: 0,
+    initial_internal: [0; MAX_OUTCOMES],
+    remaining_internal: [0; MAX_OUTCOMES],
+};
+
+impl PortfolioPairPlanV1 {
+    /// The all-zero placeholder a successful [`prepare_full_pair`] overwrites
+    /// completely.
+    ///
+    /// Not a valid plan; it exists so a caller can initialize the out-slot
+    /// without a struct-sized temporary.
+    pub const ZEROED: Self = Self {
+        claim: Hash32::ZERO,
+        primitive_units: 0,
+        internal: [0; MAX_OUTCOMES],
+        simplex_worst_case_payout_atoms: 0,
+        consideration_price_units: 0,
+        consideration_atoms: 0,
+        buyer_reserved_release: 0,
+    };
+}
+
+impl PortfolioPairPostV1 {
+    /// The all-zero placeholder a successful [`prepare_full_pair`] overwrites
+    /// completely.
+    ///
+    /// Not a valid post-state (every owner inside refuses `validate`); it
+    /// exists so a caller can initialize the out-slot without a second
+    /// post-state-sized temporary.
+    pub const ZEROED: Self = Self {
+        plan: PortfolioPairPlanV1::ZEROED,
+        buyer_position: ZEROED_POSITION,
+        seller_position: ZEROED_POSITION,
+        buyer_reservation: ZEROED_RESERVATION,
+        seller_reservation: ZEROED_RESERVATION,
+        entitlement: PortfolioEntitlementV1 {
+            entitlement: Hash32::ZERO,
+            market: Hash32::ZERO,
+            epoch: Hash32::ZERO,
+            candidate: Hash32::ZERO,
+            terms: Hash32::ZERO,
+            price_grid: Hash32::ZERO,
+            policy: Hash32::ZERO,
+            claim: Hash32::ZERO,
+            buy_order_id: Hash32::ZERO,
+            sell_order_id: Hash32::ZERO,
+            prices: [0; MAX_OUTCOMES],
+            price_scale: 0,
+            outcome_count: 0,
+            primitive_units: 0,
+            consideration_price_units: 0,
+            state: 0,
+        },
+    };
+}
+
 /// Validate and stage one full paired coefficient-vector transfer.
 ///
 /// Both raw order representations may differ by a positive scalar, but their
 /// canonical claim and filled primitive units must match.  Both orders fill in
 /// full.  Exact divisibility is required; partial lots, nonzero fee envelopes,
 /// and any already-consumed owner refuse.  No input is mutated.
-pub fn prepare_full_pair(input: &PortfolioPairInputV1<'_>) -> PortfolioResult<PortfolioPairPostV1> {
+///
+/// `out` is a caller-provided staging slot, initialized from
+/// [`PortfolioPairPostV1::ZEROED`]; the post-state is written through it
+/// rather than returned by value so the function fits one SBF stack frame.
+/// On success every field of `out` has been overwritten.  After a refusal the
+/// slot holds unspecified partially staged bytes and must not be read.
+pub fn prepare_full_pair(
+    input: &PortfolioPairInputV1<'_>,
+    out: &mut PortfolioPairPostV1,
+) -> PortfolioResult<()> {
     input.terms.validate()?;
     input.entitlement.validate()?;
     if input.entitlement.state != PORTFOLIO_ENTITLEMENT_ACTIVE {
@@ -604,56 +703,51 @@ pub fn prepare_full_pair(input: &PortfolioPairInputV1<'_>) -> PortfolioResult<Po
         &sell,
     )?;
 
-    let mut buyer_position = *input.buyer_position;
-    let mut seller_position = *input.seller_position;
-    buyer_position.cash_atoms = buyer_position
+    out.buyer_position = *input.buyer_position;
+    out.seller_position = *input.seller_position;
+    out.buyer_position.cash_atoms = out
+        .buyer_position
         .cash_atoms
         .checked_sub(consideration_atoms)
         .ok_or(PortfolioSettlementError::InsufficientFunding)?;
-    buyer_position.reserved_cash_atoms = buyer_position
+    out.buyer_position.reserved_cash_atoms = out
+        .buyer_position
         .reserved_cash_atoms
         .checked_sub(input.buyer_reservation.remaining_cash_atoms)
         .ok_or(PortfolioSettlementError::InsufficientFunding)?;
-    seller_position.cash_atoms = seller_position
+    out.seller_position.cash_atoms = out
+        .seller_position
         .cash_atoms
         .checked_add(consideration_atoms)
         .ok_or(PortfolioSettlementError::ArithmeticOverflow)?;
     let mut i = 0usize;
     while i < MAX_OUTCOMES {
-        buyer_position.internal[i] = buyer_position.internal[i]
+        out.buyer_position.internal[i] = out.buyer_position.internal[i]
             .checked_add(buy.internal[i])
             .ok_or(PortfolioSettlementError::ArithmeticOverflow)?;
         i += 1;
     }
-    buyer_position.validate()?;
-    seller_position.validate()?;
+    out.buyer_position.validate()?;
+    out.seller_position.validate()?;
 
-    let mut buyer_reservation = *input.buyer_reservation;
-    let mut seller_reservation = *input.seller_reservation;
-    consume_reservation(&mut buyer_reservation);
-    consume_reservation(&mut seller_reservation);
-    buyer_reservation.validate()?;
-    seller_reservation.validate()?;
-    let mut entitlement = *input.entitlement;
-    entitlement.state = PORTFOLIO_ENTITLEMENT_CONSUMED;
-    entitlement.validate()?;
+    out.buyer_reservation = *input.buyer_reservation;
+    out.seller_reservation = *input.seller_reservation;
+    consume_reservation(&mut out.buyer_reservation);
+    consume_reservation(&mut out.seller_reservation);
+    out.buyer_reservation.validate()?;
+    out.seller_reservation.validate()?;
+    out.entitlement = *input.entitlement;
+    out.entitlement.state = PORTFOLIO_ENTITLEMENT_CONSUMED;
+    out.entitlement.validate()?;
 
-    Ok(PortfolioPairPostV1 {
-        plan: PortfolioPairPlanV1 {
-            claim: buy.claim.claim,
-            primitive_units: buy.primitive_units,
-            internal: buy.internal,
-            simplex_worst_case_payout_atoms: buy.simplex_worst_case_payout_atoms,
-            consideration_price_units,
-            consideration_atoms,
-            buyer_reserved_release: input.buyer_reservation.remaining_cash_atoms,
-        },
-        buyer_position,
-        seller_position,
-        buyer_reservation,
-        seller_reservation,
-        entitlement,
-    })
+    out.plan.claim = buy.claim.claim;
+    out.plan.primitive_units = buy.primitive_units;
+    out.plan.internal = buy.internal;
+    out.plan.simplex_worst_case_payout_atoms = buy.simplex_worst_case_payout_atoms;
+    out.plan.consideration_price_units = consideration_price_units;
+    out.plan.consideration_atoms = consideration_atoms;
+    out.plan.buyer_reserved_release = input.buyer_reservation.remaining_cash_atoms;
+    Ok(())
 }
 
 /// Apply the pure staged transition after every fallible check succeeds.
@@ -661,6 +755,12 @@ pub fn prepare_full_pair(input: &PortfolioPairInputV1<'_>) -> PortfolioResult<Po
 /// This helper does not make the proposed entitlement authoritative.  It is an
 /// offline/reference state-machine operation.  The live program must remain
 /// disconnected until [`PORTFOLIO_RUNTIME_BLOCKERS_V1`] is empty.
+///
+/// `staged` is the same caller-provided slot [`prepare_full_pair`] takes,
+/// initialized from [`PortfolioPairPostV1::ZEROED`].  On success it holds the
+/// exact committed post-state and `staged.plan` carries the transition audit
+/// scalars.  After a refusal the five account arguments are untouched and
+/// `staged` holds unspecified partially staged bytes.
 #[allow(clippy::too_many_arguments)]
 pub fn apply_full_pair(
     terms: &TermsAccount,
@@ -671,23 +771,27 @@ pub fn apply_full_pair(
     buyer_reservation: &mut ReservationAccount,
     seller_reservation: &mut ReservationAccount,
     entitlement: &mut PortfolioEntitlementV1,
-) -> PortfolioResult<PortfolioPairPlanV1> {
-    let post = prepare_full_pair(&PortfolioPairInputV1 {
-        terms,
-        buy_order,
-        sell_order,
-        buyer_position,
-        seller_position,
-        buyer_reservation,
-        seller_reservation,
-        entitlement,
-    })?;
-    *buyer_position = post.buyer_position;
-    *seller_position = post.seller_position;
-    *buyer_reservation = post.buyer_reservation;
-    *seller_reservation = post.seller_reservation;
-    *entitlement = post.entitlement;
-    Ok(post.plan)
+    staged: &mut PortfolioPairPostV1,
+) -> PortfolioResult<()> {
+    prepare_full_pair(
+        &PortfolioPairInputV1 {
+            terms,
+            buy_order,
+            sell_order,
+            buyer_position,
+            seller_position,
+            buyer_reservation,
+            seller_reservation,
+            entitlement,
+        },
+        staged,
+    )?;
+    *buyer_position = staged.buyer_position;
+    *seller_position = staged.seller_position;
+    *buyer_reservation = staged.buyer_reservation;
+    *seller_reservation = staged.seller_reservation;
+    *entitlement = staged.entitlement;
+    Ok(())
 }
 
 /// Recompute exact full-vector value with one sum and no intermediate division.
@@ -1258,6 +1362,7 @@ mod tests {
         }
 
         fn apply(&mut self) -> PortfolioResult<PortfolioPairPlanV1> {
+            let mut staged = PortfolioPairPostV1::ZEROED;
             apply_full_pair(
                 &self.terms,
                 &self.buy,
@@ -1267,7 +1372,9 @@ mod tests {
                 &mut self.buyer_reservation,
                 &mut self.seller_reservation,
                 &mut self.entitlement,
-            )
+                &mut staged,
+            )?;
+            Ok(staged.plan)
         }
     }
 
