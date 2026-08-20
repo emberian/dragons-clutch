@@ -1,34 +1,33 @@
-//! Real-SBF evidence for the entitlement freeze and generalized consumption
-//! (T2-8) — the Tier 2 headline: **the portfolio order actually clears**.
-//!
-//! `Intent::FreezeEntitlement` (tag 58), `Intent::EntitleSlice` (59), and the
-//! widened `Intent::SettlePage`, driven end to end on one bank against a real
-//! frozen general book: place portfolio + single orders → freeze → submit →
-//! walk to `VERIFIED` through the real tags 51-53 → select → entitle →
-//! consume → conservation assertions across the whole value plane.
+//! Real-SBF evidence for TerminalClosure (tags 60-67) — the general clearing
+//! plane's lifecycle end: the full T2-8 lifecycle driven to CLEARED, then
+//! **everything closeable closed**, in dependency order, down to the epoch
+//! root, with every lamport accounted; and the lapsed twin (freeze, no
+//! verified candidate, lapse) released and closed the same way.
 //!
 //! The gates:
-//! * the headline walk — a five-live-order book (one retirement, so live
-//!   ranks and stored ranks differ) with a single-Egg crossing, a portfolio
-//!   full pair, and one ineligible order: every collateral atom and every
-//!   position unit accounted, positions byte-compared against the verified
-//!   summary's implied allocation, the pot provably empty;
-//! * every refusal the plan names — entitle before CLEARED, entitle of a
-//!   non-selected candidate, double-entitle, consume of an unentitled
-//!   receipt, double-consume, a partial pair presentation, and a tampered
-//!   receipt — each with full rollback;
-//! * the honest stubs — a verified virtual-split candidate refuses the
-//!   entitlement freeze (`NotYetImplemented`: the VirtualPot ranked blocker
-//!   stands) and a partial-fill candidate refuses entitlement (the
-//!   PartialFillLedger row likewise);
-//! * the lapse record — a lapsed epoch's reservations stand ACTIVE and the
-//!   cancellation path (`CancelOrder`) keeps requiring an OPEN epoch: the
-//!   post-lapse exit is the owner-signed terminal release (tag 60), driven
-//!   with the whole close family in `terminal_closure.rs`.
+//! * the hostile terminal walk — for every close path: double-close refuses,
+//!   close-before-economic-zero refuses, wrong-payer refuses, wrong sink
+//!   refuses, wrong-order-in-the-DAG refuses, release of a filled or
+//!   already-consumed reservation refuses, a non-owner release refuses —
+//!   each an executed refusal on the same bank;
+//! * exact conservation — every close credits **exactly the recorded
+//!   principal to the exact recorded payer** (the general funding ledger's
+//!   payer; the reservation's stored owner), every surplus (two injected
+//!   donations here) lands at the frozen incinerator and is measured, and
+//!   the machinery's whole pre-close rent inventory equals reclaimed plus
+//!   burned to the lamport;
+//! * the residual — after the root closes, the epoch's on-chain footprint is
+//!   exactly the declared-permanent set: the sealed 64-byte batch-policy
+//!   artifact (plus owner Positions and market infrastructure, which are not
+//!   epoch machinery); the reclaimed total is printed as the headline;
+//! * the recorded tolerance — a candidate submitted **without** its optional
+//!   funding ledger is unclosable by design (its close refuses, no payer is
+//!   guessed) and the epoch root closes past it, leaving its pair standing
+//!   as the recorded residual.
 //!
 //! Claim plane: SBF-EXECUTED (bank), no promotion.  The reference adapter
-//! refuses both new intents with `UnsupportedIntent`; the oracle is the
-//! layout codec plus the frozen receipt/pot codecs and the host relation.
+//! refuses every tag of the family with `UnsupportedIntent`; the oracle is
+//! the layout codec plus lamport conservation on this real bank.
 
 use {
     clutch_batch::relation_v1::{
@@ -41,42 +40,33 @@ use {
     clutch_sbf::{
         error::ClutchError,
         instructions::artifact::CLOCK_SYSVAR_ID,
-        instructions::orders_batch::{
-            self,
-            clear_walk::{
-                ADVANCE_CLEAR_SLICES_ACCOUNT_COUNT, ADVANCE_CLEAR_WORK_FIXED_ACCOUNT_COUNT,
-                COMPLETE_CLEAR_WORK_ACCOUNT_COUNT,
-            },
-            entitlement::{
-                ENTITLE_SLICE_FIXED_ACCOUNT_COUNT, FREEZE_ENTITLEMENT_ACCOUNT_COUNT,
-                SETTLE_PAIR_FIXED_ACCOUNT_COUNT,
-            },
-            selection::{SEAL_CANDIDATE_FIXED_ACCOUNT_COUNT, SUBMIT_CANDIDATE_ACCOUNT_COUNT},
+        instructions::orders_batch::terminal_closure::{
+            CLOSE_CANDIDATE_FIXED_ACCOUNT_COUNT, CLOSE_CLEAR_WORK_FIXED_ACCOUNT_COUNT,
+            CLOSE_EPOCH_FIXED_ACCOUNT_COUNT, CLOSE_PAGE_FIXED_ACCOUNT_COUNT,
+            CLOSE_POT_FIXED_ACCOUNT_COUNT, CLOSE_RECEIPT_ACCOUNT_COUNT,
+            CLOSE_RESERVATION_ACCOUNT_COUNT, GENERAL_NEUTRAL_SINK_V1,
+            RELEASE_CLEARED_FIXED_ACCOUNT_COUNT, RELEASE_LAPSED_ACCOUNT_COUNT,
         },
         seeds,
     },
     clutch_solana_layout::{
         account_len, canonical_epoch_id, canonical_order_id, canonical_outcome_id,
-        clearing::{
-            CandidateFeedHeader, LegRef, PairingSlice, CANDIDATE_WINDOW_SLOTS,
-        },
+        clearing::{CandidateFeedHeader, GeneralFundingLedgerV1, CANDIDATE_WINDOW_SLOTS},
         projection::{project_slot, OwnerInterner},
         reservation::{
-            canonical_reservation_id, ReservationAccount, RESERVATION_STATE_ACTIVE,
-            RESERVATION_STATE_CONSUMED, RESERVATION_STATE_ENTITLED,
+            ReservationAccount, RESERVATION_ACCOUNT_BYTES, RESERVATION_STATE_ACTIVE,
+            RESERVATION_STATE_RELEASED,
         },
-        stream, CandidateFeedChunk, CandidateRecord, EpochAccount, FinalPotAccount, Hash32,
-        MarketAccount, OrderRecord, OrderSlot, PortfolioRecord, PositionAccount, PriceGridAccount,
-        SettlementReceiptAccount, CANDIDATE_STATUS_SELECTED, EPOCH_PHASE_CLEARED,
+        stream, CandidateFeedChunk, EpochAccount, Hash32, MarketAccount, OrderRecord, OrderSlot,
+        PortfolioRecord, PositionAccount, PriceGridAccount, EPOCH_PHASE_CLEARED,
         EPOCH_PHASE_FROZEN, EPOCH_PHASE_LAPSED, FEED_FILLS_PER_CHUNK, FEED_SLICES_PER_CHUNK,
-        MAX_GRID_TICKS, MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_MAP_UNUSED, POT_PHASE_CLOSED,
-        RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED, RECEIPT_FLAG_SLICE_EXHAUSTED,
+        MAX_GRID_TICKS, MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_MAP_UNUSED,
     },
     clutch_svm_fixture::{
         compute_unit_limit_data, fixture_terms, layout_request, request_heap_frame_data,
         COMPUTE_BUDGET, PROGRAM_ID, RENT_SYSVAR, SYSTEM_PROGRAM,
     },
-    solana_account::{Account, AccountSharedData},
+    solana_account::Account,
     solana_address::Address,
     solana_instruction::{error::InstructionError, AccountMeta, Instruction},
     solana_keypair::Keypair,
@@ -93,9 +83,12 @@ const CU_LIMIT: u32 = 1_400_000;
 const HEAP_FRAME: u32 = 262_144;
 const WALLET: u64 = 5_000_000_000;
 const OUTCOMES: u8 = 4;
-/// Every position starts with this much cash and this many Eggs per outcome.
 const START_CASH: u64 = 1_000_000;
 const START_EGGS: u64 = 1_000;
+/// Post-creation donations injected to prove the surplus route: one onto a
+/// consumed reservation archive, one onto an exhausted receipt.
+const RESERVATION_DONATION: u64 = 7_777;
+const RECEIPT_DONATION: u64 = 5_000;
 
 fn h(byte: u8) -> Hash32 {
     Hash32::from_bytes([byte; 32])
@@ -114,6 +107,10 @@ fn rent_exempt(len: usize) -> u64 {
 
 fn clock_address() -> Address {
     Address::new_from_array(CLOCK_SYSVAR_ID.to_bytes())
+}
+
+fn sink_address() -> Address {
+    Address::new_from_array(GENERAL_NEUTRAL_SINK_V1.to_bytes())
 }
 
 fn encode<F>(len: usize, writer: F) -> Vec<u8>
@@ -182,10 +179,12 @@ struct Fixture {
     epoch_account: Address,
     window_account: Address,
     page: Address,
+    /// The dedicated machinery funder: signs and funds every ledgered
+    /// creation, so every ledgered close must pay exactly this wallet.
+    keeper: Keypair,
     owners: Vec<Owner>,
 }
 
-/// One candidate's host-computed coordinates and its account addresses.
 struct Submission {
     id: Hash32,
     prices: [u64; MAX_OUTCOMES],
@@ -199,8 +198,18 @@ struct Submission {
 
 impl Fixture {
     fn reservation(&self, owner: Hash32, order_id: Hash32) -> Address {
-        let id = canonical_reservation_id(self.market, self.epoch_id, owner, 0, order_id);
+        let id = clutch_solana_layout::reservation::canonical_reservation_id(
+            self.market,
+            self.epoch_id,
+            owner,
+            0,
+            order_id,
+        );
         pda(seeds::SEED_RESERVATION, &[&id.bytes()]).0
+    }
+
+    fn ledger(&self, target: Address) -> Address {
+        pda(seeds::SEED_GENERAL_FUNDING, &[&target.to_bytes()]).0
     }
 
     fn candidate_feed(&self, candidate: Hash32) -> Address {
@@ -243,7 +252,8 @@ impl Fixture {
         .0
     }
 
-    fn init_epoch(&self, payer: Address) -> Instruction {
+    /// `InitEpoch` with the trailing funding ledger (the keeper funds).
+    fn init_epoch(&self) -> Instruction {
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -256,7 +266,7 @@ impl Fixture {
                 },
             ),
             vec![
-                AccountMeta::new(payer, true),
+                AccountMeta::new(self.keeper.pubkey(), true),
                 AccountMeta::new_readonly(self.market_account, false),
                 AccountMeta::new_readonly(self.terms_account, false),
                 AccountMeta::new_readonly(self.grid_account, false),
@@ -266,11 +276,13 @@ impl Fixture {
                 AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
                 AccountMeta::new_readonly(RENT_SYSVAR, false),
                 AccountMeta::new_readonly(clock_address(), false),
+                AccountMeta::new(self.ledger(self.epoch_account), false),
             ],
         )
     }
 
-    fn init_page(&self, payer: Address) -> Instruction {
+    /// `InitOrderPage` with the trailing funding ledger (the keeper funds).
+    fn init_page(&self) -> Instruction {
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -283,12 +295,13 @@ impl Fixture {
                 },
             ),
             vec![
-                AccountMeta::new(payer, true),
+                AccountMeta::new(self.keeper.pubkey(), true),
                 AccountMeta::new(self.page, false),
                 AccountMeta::new_readonly(self.market_account, false),
                 AccountMeta::new_readonly(self.epoch_account, false),
                 AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
                 AccountMeta::new_readonly(RENT_SYSVAR, false),
+                AccountMeta::new(self.ledger(self.page), false),
             ],
         )
     }
@@ -362,14 +375,15 @@ impl Fixture {
         )
     }
 
+    /// `SubmitCandidate`, with or without the trailing funding ledger.
     fn submit(
         &self,
-        payer: Address,
         submission: &Submission,
         declared_slices: Option<u16>,
+        ledgered: bool,
     ) -> Instruction {
-        let metas = vec![
-            AccountMeta::new(payer, true),
+        let mut metas = vec![
+            AccountMeta::new(self.keeper.pubkey(), true),
             AccountMeta::new_readonly(self.epoch_account, false),
             AccountMeta::new_readonly(self.window_account, false),
             AccountMeta::new(submission.record, false),
@@ -378,7 +392,9 @@ impl Fixture {
             AccountMeta::new_readonly(RENT_SYSVAR, false),
             AccountMeta::new_readonly(clock_address(), false),
         ];
-        assert_eq!(metas.len(), SUBMIT_CANDIDATE_ACCOUNT_COUNT);
+        if ledgered {
+            metas.push(AccountMeta::new(self.ledger(submission.record), false));
+        }
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -428,7 +444,6 @@ impl Fixture {
             AccountMeta::new(submission.feed, false),
             AccountMeta::new_readonly(clock_address(), false),
         ];
-        assert_eq!(metas.len(), SEAL_CANDIDATE_FIXED_ACCOUNT_COUNT);
         for candidate in retained {
             metas.push(AccountMeta::new(self.candidate_record(*candidate), false));
         }
@@ -469,7 +484,8 @@ impl Fixture {
         )
     }
 
-    fn init_clear_work(&self, payer: Address, candidate: Hash32) -> Instruction {
+    /// `InitClearWork` with the trailing funding ledger (the keeper funds).
+    fn init_clear_work(&self, candidate: Hash32) -> Instruction {
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -481,10 +497,11 @@ impl Fixture {
                 },
             ),
             vec![
-                AccountMeta::new(payer, true),
+                AccountMeta::new(self.keeper.pubkey(), true),
                 AccountMeta::new(self.clear_work(candidate), false),
                 AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
                 AccountMeta::new_readonly(RENT_SYSVAR, false),
+                AccountMeta::new(self.ledger(self.clear_work(candidate)), false),
             ],
         )
     }
@@ -516,7 +533,6 @@ impl Fixture {
             AccountMeta::new(self.clear_work(candidate), false),
             AccountMeta::new_readonly(self.page, false),
         ];
-        assert_eq!(metas.len(), ADVANCE_CLEAR_WORK_FIXED_ACCOUNT_COUNT);
         for reservation in reservations {
             metas.push(AccountMeta::new_readonly(*reservation, false));
         }
@@ -536,12 +552,6 @@ impl Fixture {
     }
 
     fn advance_slices(&self, candidate: Hash32, max_slices: u16) -> Instruction {
-        let metas = vec![
-            AccountMeta::new_readonly(self.epoch_account, false),
-            AccountMeta::new_readonly(self.candidate_feed(candidate), false),
-            AccountMeta::new(self.clear_work(candidate), false),
-        ];
-        assert_eq!(metas.len(), ADVANCE_CLEAR_SLICES_ACCOUNT_COUNT);
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -553,18 +563,15 @@ impl Fixture {
                     max_slices,
                 },
             ),
-            metas,
+            vec![
+                AccountMeta::new_readonly(self.epoch_account, false),
+                AccountMeta::new_readonly(self.candidate_feed(candidate), false),
+                AccountMeta::new(self.clear_work(candidate), false),
+            ],
         )
     }
 
     fn complete(&self, candidate: Hash32) -> Instruction {
-        let metas = vec![
-            AccountMeta::new_readonly(self.epoch_account, false),
-            AccountMeta::new_readonly(self.candidate_feed(candidate), false),
-            AccountMeta::new(self.clear_work(candidate), false),
-            AccountMeta::new(self.candidate_record(candidate), false),
-        ];
-        assert_eq!(metas.len(), COMPLETE_CLEAR_WORK_ACCOUNT_COUNT);
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -575,21 +582,17 @@ impl Fixture {
                     candidate,
                 },
             ),
-            metas,
+            vec![
+                AccountMeta::new_readonly(self.epoch_account, false),
+                AccountMeta::new_readonly(self.candidate_feed(candidate), false),
+                AccountMeta::new(self.clear_work(candidate), false),
+                AccountMeta::new(self.candidate_record(candidate), false),
+            ],
         )
     }
 
-    fn freeze_entitlement(&self, payer: Address, candidate: Hash32) -> Instruction {
-        let metas = vec![
-            AccountMeta::new(payer, true),
-            AccountMeta::new_readonly(self.epoch_account, false),
-            AccountMeta::new_readonly(self.candidate_record(candidate), false),
-            AccountMeta::new_readonly(self.clear_work(candidate), false),
-            AccountMeta::new(self.pot(), false),
-            AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
-            AccountMeta::new_readonly(RENT_SYSVAR, false),
-        ];
-        assert_eq!(metas.len(), FREEZE_ENTITLEMENT_ACCOUNT_COUNT);
+    /// `FreezeEntitlement` with the trailing funding ledger.
+    fn freeze_entitlement(&self, candidate: Hash32) -> Instruction {
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -600,39 +603,42 @@ impl Fixture {
                     candidate,
                 },
             ),
-            metas,
+            vec![
+                AccountMeta::new(self.keeper.pubkey(), true),
+                AccountMeta::new_readonly(self.epoch_account, false),
+                AccountMeta::new_readonly(self.candidate_record(candidate), false),
+                AccountMeta::new_readonly(self.clear_work(candidate), false),
+                AccountMeta::new(self.pot(), false),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+                AccountMeta::new_readonly(RENT_SYSVAR, false),
+                AccountMeta::new(self.ledger(self.pot()), false),
+            ],
         )
     }
 
-    /// The fixed prefix every `EntitleSlice` shares: payer, plane, and the
-    /// one-page frozen set.
-    fn entitle_prefix(&self, payer: Address, candidate: Hash32) -> Vec<AccountMeta> {
+    /// `EntitleSlice`, single shape, with the receipt's funding ledger.
+    fn entitle_single(
+        &self,
+        candidate: Hash32,
+        slice_index: u16,
+        buy_reservation: Address,
+        sell_reservation: Address,
+    ) -> Instruction {
+        let receipt = self.receipt(candidate, slice_index);
         let metas = vec![
-            AccountMeta::new(payer, true),
+            AccountMeta::new(self.keeper.pubkey(), true),
             AccountMeta::new_readonly(self.epoch_account, false),
             AccountMeta::new_readonly(self.candidate_record(candidate), false),
             AccountMeta::new_readonly(self.candidate_feed(candidate), false),
             AccountMeta::new_readonly(self.pot(), false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
             AccountMeta::new_readonly(RENT_SYSVAR, false),
+            AccountMeta::new_readonly(self.page, false),
+            AccountMeta::new(buy_reservation, false),
+            AccountMeta::new(sell_reservation, false),
+            AccountMeta::new(receipt, false),
+            AccountMeta::new(self.ledger(receipt), false),
         ];
-        assert_eq!(metas.len(), ENTITLE_SLICE_FIXED_ACCOUNT_COUNT);
-        metas
-    }
-
-    fn entitle_single(
-        &self,
-        payer: Address,
-        candidate: Hash32,
-        slice_index: u16,
-        buy_reservation: Address,
-        sell_reservation: Address,
-    ) -> Instruction {
-        let mut metas = self.entitle_prefix(payer, candidate);
-        metas.push(AccountMeta::new_readonly(self.page, false));
-        metas.push(AccountMeta::new(buy_reservation, false));
-        metas.push(AccountMeta::new(sell_reservation, false));
-        metas.push(AccountMeta::new(self.receipt(candidate, slice_index), false));
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -648,22 +654,36 @@ impl Fixture {
         )
     }
 
+    /// `EntitleSlice`, portfolio-pair shape, with per-receipt ledgers.
     fn entitle_pair(
         &self,
-        payer: Address,
         candidate: Hash32,
         slice_index: u16,
         buy_reservation: Address,
         sell_reservation: Address,
         receipt_slices: &[u16],
     ) -> Instruction {
-        let mut metas = self.entitle_prefix(payer, candidate);
-        metas.push(AccountMeta::new_readonly(self.page, false));
-        metas.push(AccountMeta::new_readonly(self.terms_account, false));
-        metas.push(AccountMeta::new(buy_reservation, false));
-        metas.push(AccountMeta::new(sell_reservation, false));
+        let mut metas = vec![
+            AccountMeta::new(self.keeper.pubkey(), true),
+            AccountMeta::new_readonly(self.epoch_account, false),
+            AccountMeta::new_readonly(self.candidate_record(candidate), false),
+            AccountMeta::new_readonly(self.candidate_feed(candidate), false),
+            AccountMeta::new_readonly(self.pot(), false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+            AccountMeta::new_readonly(RENT_SYSVAR, false),
+            AccountMeta::new_readonly(self.page, false),
+            AccountMeta::new_readonly(self.terms_account, false),
+            AccountMeta::new(buy_reservation, false),
+            AccountMeta::new(sell_reservation, false),
+        ];
         for slice in receipt_slices {
             metas.push(AccountMeta::new(self.receipt(candidate, *slice), false));
+        }
+        for slice in receipt_slices {
+            metas.push(AccountMeta::new(
+                self.ledger(self.receipt(candidate, *slice)),
+                false,
+            ));
         }
         Instruction::new_with_bytes(
             PROGRAM_ID,
@@ -680,7 +700,7 @@ impl Fixture {
         )
     }
 
-    #[allow(clippy::too_many_arguments)] // one argument per account role
+    #[allow(clippy::too_many_arguments)]
     fn settle_single(
         &self,
         candidate: Hash32,
@@ -691,16 +711,6 @@ impl Fixture {
         sell_reservation: Address,
         slice_index: u16,
     ) -> Instruction {
-        let metas = vec![
-            AccountMeta::new_readonly(self.epoch_account, false),
-            AccountMeta::new_readonly(self.candidate_record(candidate), false),
-            AccountMeta::new(buyer_position, false),
-            AccountMeta::new(seller_position, false),
-            AccountMeta::new(buy_reservation, false),
-            AccountMeta::new(sell_reservation, false),
-            AccountMeta::new(self.receipt(candidate, slice_index), false),
-        ];
-        assert_eq!(metas.len(), orders_batch::SETTLE_PAGE_ACCOUNT_COUNT);
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -711,11 +721,19 @@ impl Fixture {
                     page_index: 0,
                 },
             ),
-            metas,
+            vec![
+                AccountMeta::new_readonly(self.epoch_account, false),
+                AccountMeta::new_readonly(self.candidate_record(candidate), false),
+                AccountMeta::new(buyer_position, false),
+                AccountMeta::new(seller_position, false),
+                AccountMeta::new(buy_reservation, false),
+                AccountMeta::new(sell_reservation, false),
+                AccountMeta::new(self.receipt(candidate, slice_index), false),
+            ],
         )
     }
 
-    #[allow(clippy::too_many_arguments)] // one argument per account role
+    #[allow(clippy::too_many_arguments)]
     fn settle_pair(
         &self,
         candidate: Hash32,
@@ -734,9 +752,8 @@ impl Fixture {
             AccountMeta::new(seller_position, false),
             AccountMeta::new(buy_reservation, false),
             AccountMeta::new(sell_reservation, false),
+            AccountMeta::new_readonly(self.page, false),
         ];
-        assert_eq!(metas.len(), SETTLE_PAIR_FIXED_ACCOUNT_COUNT);
-        metas.push(AccountMeta::new_readonly(self.page, false));
         for slice in receipt_slices {
             metas.push(AccountMeta::new(self.receipt(candidate, *slice), false));
         }
@@ -748,6 +765,250 @@ impl Fixture {
                     market: self.market,
                     epoch: self.epoch_id,
                     page_index: 0,
+                },
+            ),
+            metas,
+        )
+    }
+
+    /* ------------------------- TerminalClosure ------------------------- */
+
+    /// Owner-signed release on a LAPSED epoch: the four-account shape.
+    fn release_lapsed(&self, owner: &Owner, reservation: Address, sequence: u64) -> Instruction {
+        let metas = vec![
+            AccountMeta::new_readonly(owner.key.pubkey(), true),
+            AccountMeta::new_readonly(self.epoch_account, false),
+            AccountMeta::new(reservation, false),
+            AccountMeta::new(owner.position, false),
+        ];
+        assert_eq!(metas.len(), RELEASE_LAPSED_ACCOUNT_COUNT);
+        Instruction::new_with_bytes(
+            PROGRAM_ID,
+            &layout_request(
+                sequence,
+                clutch_solana_layout::Intent::ReleaseTerminalReservation {
+                    market: self.market,
+                    epoch: self.epoch_id,
+                },
+            ),
+            metas,
+        )
+    }
+
+    /// Owner-signed release on a CLEARED epoch: the zero-fill proof shape.
+    fn release_cleared(
+        &self,
+        owner: &Owner,
+        reservation: Address,
+        selected: Hash32,
+        sequence: u64,
+    ) -> Instruction {
+        let metas = vec![
+            AccountMeta::new_readonly(owner.key.pubkey(), true),
+            AccountMeta::new_readonly(self.epoch_account, false),
+            AccountMeta::new(reservation, false),
+            AccountMeta::new(owner.position, false),
+            AccountMeta::new_readonly(self.candidate_record(selected), false),
+            AccountMeta::new_readonly(self.candidate_feed(selected), false),
+            AccountMeta::new_readonly(self.page, false),
+        ];
+        assert_eq!(metas.len(), RELEASE_CLEARED_FIXED_ACCOUNT_COUNT + 1);
+        Instruction::new_with_bytes(
+            PROGRAM_ID,
+            &layout_request(
+                sequence,
+                clutch_solana_layout::Intent::ReleaseTerminalReservation {
+                    market: self.market,
+                    epoch: self.epoch_id,
+                },
+            ),
+            metas,
+        )
+    }
+
+    fn close_receipt(
+        &self,
+        candidate: Hash32,
+        slice_index: u16,
+        recipient: Address,
+        sink: Address,
+    ) -> Instruction {
+        let receipt = self.receipt(candidate, slice_index);
+        let metas = vec![
+            AccountMeta::new_readonly(self.epoch_account, false),
+            AccountMeta::new(receipt, false),
+            AccountMeta::new(self.ledger(receipt), false),
+            AccountMeta::new(recipient, false),
+            AccountMeta::new(sink, false),
+        ];
+        assert_eq!(metas.len(), CLOSE_RECEIPT_ACCOUNT_COUNT);
+        Instruction::new_with_bytes(
+            PROGRAM_ID,
+            &layout_request(
+                0,
+                clutch_solana_layout::Intent::CloseGeneralReceipt {
+                    market: self.market,
+                    epoch: self.epoch_id,
+                    candidate,
+                    slice_index,
+                },
+            ),
+            metas,
+        )
+    }
+
+    fn close_reservation(&self, reservation: Address, recipient: Address) -> Instruction {
+        let metas = vec![
+            AccountMeta::new_readonly(self.epoch_account, false),
+            AccountMeta::new(reservation, false),
+            AccountMeta::new_readonly(self.page, false),
+            AccountMeta::new(recipient, false),
+            AccountMeta::new(sink_address(), false),
+            AccountMeta::new_readonly(RENT_SYSVAR, false),
+        ];
+        assert_eq!(metas.len(), CLOSE_RESERVATION_ACCOUNT_COUNT);
+        Instruction::new_with_bytes(
+            PROGRAM_ID,
+            &layout_request(
+                0,
+                clutch_solana_layout::Intent::CloseGeneralReservation {
+                    market: self.market,
+                    epoch: self.epoch_id,
+                },
+            ),
+            metas,
+        )
+    }
+
+    fn close_page(&self, live_reservations: &[Address]) -> Instruction {
+        let mut metas = vec![
+            AccountMeta::new_readonly(self.epoch_account, false),
+            AccountMeta::new(self.page, false),
+            AccountMeta::new(self.ledger(self.page), false),
+            AccountMeta::new(self.keeper.pubkey(), false),
+            AccountMeta::new(sink_address(), false),
+        ];
+        assert_eq!(metas.len(), CLOSE_PAGE_FIXED_ACCOUNT_COUNT);
+        for reservation in live_reservations {
+            metas.push(AccountMeta::new_readonly(*reservation, false));
+        }
+        Instruction::new_with_bytes(
+            PROGRAM_ID,
+            &layout_request(
+                0,
+                clutch_solana_layout::Intent::CloseGeneralPage {
+                    market: self.market,
+                    epoch: self.epoch_id,
+                    page_index: 0,
+                },
+            ),
+            metas,
+        )
+    }
+
+    fn close_pot(&self) -> Instruction {
+        let metas = vec![
+            AccountMeta::new_readonly(self.epoch_account, false),
+            AccountMeta::new(self.pot(), false),
+            AccountMeta::new(self.ledger(self.pot()), false),
+            AccountMeta::new(self.keeper.pubkey(), false),
+            AccountMeta::new(sink_address(), false),
+            AccountMeta::new_readonly(self.page, false),
+        ];
+        assert_eq!(metas.len(), CLOSE_POT_FIXED_ACCOUNT_COUNT + 1);
+        Instruction::new_with_bytes(
+            PROGRAM_ID,
+            &layout_request(
+                0,
+                clutch_solana_layout::Intent::CloseGeneralPot {
+                    market: self.market,
+                    epoch: self.epoch_id,
+                },
+            ),
+            metas,
+        )
+    }
+
+    fn close_candidate(&self, candidate: Hash32, selected: bool) -> Instruction {
+        let mut metas = vec![
+            AccountMeta::new_readonly(self.epoch_account, false),
+            AccountMeta::new(self.candidate_record(candidate), false),
+            AccountMeta::new(self.candidate_feed(candidate), false),
+            AccountMeta::new(self.ledger(self.candidate_record(candidate)), false),
+            AccountMeta::new(self.keeper.pubkey(), false),
+            AccountMeta::new(sink_address(), false),
+        ];
+        assert_eq!(metas.len(), CLOSE_CANDIDATE_FIXED_ACCOUNT_COUNT);
+        if selected {
+            metas.push(AccountMeta::new_readonly(self.pot(), false));
+            metas.push(AccountMeta::new_readonly(self.page, false));
+        }
+        Instruction::new_with_bytes(
+            PROGRAM_ID,
+            &layout_request(
+                0,
+                clutch_solana_layout::Intent::CloseGeneralCandidate {
+                    market: self.market,
+                    epoch: self.epoch_id,
+                    candidate,
+                },
+            ),
+            metas,
+        )
+    }
+
+    /// `CloseGeneralClearWork`; `pot_proof` presents the live pot, and a
+    /// closed-record checkpoint needs no tail at all.
+    fn close_clear_work(&self, candidate: Hash32, pot_proof: bool) -> Instruction {
+        let mut metas = vec![
+            AccountMeta::new_readonly(self.epoch_account, false),
+            AccountMeta::new(self.clear_work(candidate), false),
+            AccountMeta::new_readonly(self.candidate_record(candidate), false),
+            AccountMeta::new(self.ledger(self.clear_work(candidate)), false),
+            AccountMeta::new(self.keeper.pubkey(), false),
+            AccountMeta::new(sink_address(), false),
+        ];
+        assert_eq!(metas.len(), CLOSE_CLEAR_WORK_FIXED_ACCOUNT_COUNT);
+        if pot_proof {
+            metas.push(AccountMeta::new_readonly(self.pot(), false));
+        }
+        Instruction::new_with_bytes(
+            PROGRAM_ID,
+            &layout_request(
+                0,
+                clutch_solana_layout::Intent::CloseGeneralClearWork {
+                    market: self.market,
+                    epoch: self.epoch_id,
+                    candidate,
+                },
+            ),
+            metas,
+        )
+    }
+
+    fn close_epoch(&self, retained: &[Hash32]) -> Instruction {
+        let mut metas = vec![
+            AccountMeta::new(self.epoch_account, false),
+            AccountMeta::new(self.window_account, false),
+            AccountMeta::new(self.ledger(self.epoch_account), false),
+            AccountMeta::new(self.keeper.pubkey(), false),
+            AccountMeta::new(sink_address(), false),
+            AccountMeta::new_readonly(self.pot(), false),
+        ];
+        assert_eq!(metas.len(), CLOSE_EPOCH_FIXED_ACCOUNT_COUNT);
+        metas.push(AccountMeta::new_readonly(self.page, false));
+        for candidate in retained {
+            let record = self.candidate_record(*candidate);
+            metas.push(AccountMeta::new_readonly(record, false));
+            metas.push(AccountMeta::new_readonly(self.ledger(record), false));
+        }
+        Instruction::new_with_bytes(
+            PROGRAM_ID,
+            &layout_request(
+                0,
+                clutch_solana_layout::Intent::CloseGeneralEpoch {
+                    market: self.market,
+                    epoch: self.epoch_id,
                 },
             ),
             metas,
@@ -804,7 +1065,7 @@ impl Fixture {
     }
 }
 
-/// A four-outcome terms artifact (see `general_epoch.rs` for the shape).
+/// A four-outcome terms artifact (the `entitled_clearing` shape).
 fn general_terms(
     realm: Hash32,
     profile: Hash32,
@@ -938,9 +1199,9 @@ async fn start() -> (ProgramTestContext, Fixture) {
             .to_vec(),
     );
 
-    // Egg balances live only on the market's active outcomes: the
-    // portfolio seam's canonical-padding rule refuses nonzero balances
-    // beyond `outcome_count`.
+    let keeper = Keypair::new();
+    test.add_account(keeper.pubkey(), system_slot(WALLET));
+
     let mut start_eggs = [0u64; MAX_OUTCOMES];
     start_eggs[..OUTCOMES as usize].fill(START_EGGS);
     let mut owners = Vec::new();
@@ -983,6 +1244,7 @@ async fn start() -> (ProgramTestContext, Fixture) {
         epoch_account: epoch_address,
         window_account: window_address,
         page: page_address,
+        keeper,
         owners,
     };
     (test.start_with_context().await, fixture)
@@ -1027,6 +1289,7 @@ async fn send(
 async fn send_walk(
     context: &mut ProgramTestContext,
     instruction: Instruction,
+    extra_signer: Option<&Keypair>,
     nonce: u32,
 ) -> (Result<(), TransactionError>, u64) {
     let blockhash = context.banks_client.get_latest_blockhash().await.unwrap();
@@ -1040,10 +1303,14 @@ async fn send_walk(
         &compute_unit_limit_data(CU_LIMIT - nonce),
         Vec::new(),
     );
+    let mut signers = vec![&context.payer];
+    if let Some(signer) = extra_signer {
+        signers.push(signer);
+    }
     let transaction = Transaction::new_signed_with_payer(
         &[heap, budget, instruction],
         Some(&context.payer.pubkey()),
-        &[&context.payer],
+        &signers,
         blockhash,
     );
     let outcome = context
@@ -1066,12 +1333,11 @@ async fn bytes_of(context: &mut ProgramTestContext, address: Address) -> Vec<u8>
     account(context, address).await.unwrap().data
 }
 
-async fn snapshot(context: &mut ProgramTestContext, addresses: &[Address]) -> Vec<Vec<u8>> {
-    let mut all = Vec::with_capacity(addresses.len());
-    for address in addresses {
-        all.push(bytes_of(context, *address).await);
-    }
-    all
+async fn lamports_of(context: &mut ProgramTestContext, address: Address) -> u64 {
+    account(context, address)
+        .await
+        .map(|value| value.lamports)
+        .unwrap_or(0)
 }
 
 fn custom(result: Result<(), TransactionError>) -> u32 {
@@ -1081,18 +1347,28 @@ fn custom(result: Result<(), TransactionError>) -> u32 {
     }
 }
 
-/// Place one book plan (with optional retirements), then freeze at the
-/// deadline.
+/// Transfer lamports into an arbitrary account (a hostile donation), built
+/// byte-for-byte so no interface-crate type dance is needed.
+fn donate(from: Address, to: Address, lamports: u64) -> Instruction {
+    let mut data = [0u8; 12];
+    data[0..4].copy_from_slice(&2u32.to_le_bytes());
+    data[4..12].copy_from_slice(&lamports.to_le_bytes());
+    Instruction::new_with_bytes(
+        SYSTEM_PROGRAM,
+        &data,
+        vec![AccountMeta::new(from, true), AccountMeta::new(to, false)],
+    )
+}
+
 async fn build_frozen_book(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
     orders: &[(usize, OrderSlot)],
     cancels: &[(usize, Hash32)],
 ) {
-    let payer = context.payer.pubkey();
-    let (result, _) = send(context, &[fixture.init_epoch(payer)], None, 0).await;
+    let (result, _) = send(context, &[fixture.init_epoch()], Some(&fixture.keeper), 0).await;
     result.unwrap();
-    let (result, _) = send(context, &[fixture.init_page(payer)], None, 1).await;
+    let (result, _) = send(context, &[fixture.init_page()], Some(&fixture.keeper), 1).await;
     result.unwrap();
     for (sequence, (owner_index, slot)) in orders.iter().enumerate() {
         let owner = &fixture.owners[*owner_index];
@@ -1121,14 +1397,11 @@ async fn build_frozen_book(
     result.unwrap();
 }
 
-/// The frozen epoch, the projected host book, and the walk-order reservation
-/// list of the live orders.
 async fn frozen_state(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
 ) -> (EpochAccount, clutch_batch::relation_v1::BookV1, Vec<Address>) {
-    let epoch =
-        EpochAccount::decode(&bytes_of(context, fixture.epoch_account).await).unwrap();
+    let epoch = EpochAccount::decode(&bytes_of(context, fixture.epoch_account).await).unwrap();
     assert_eq!(epoch.phase, EPOCH_PHASE_FROZEN);
     let page = bytes_of(context, fixture.page).await;
     let mut book = clutch_batch::relation_v1::BookV1::empty();
@@ -1151,8 +1424,6 @@ async fn frozen_state(
     (epoch, book, reservations)
 }
 
-/// Compute one candidate's canonical coordinates host-side, with an explicit
-/// witness.
 fn plan_submission(
     fixture: &Fixture,
     epoch: &EpochAccount,
@@ -1197,21 +1468,19 @@ fn plan_submission(
     }
 }
 
-/// Drive one submission through the staged wire: create, chunked content,
-/// seal against the current registry.
 async fn submit_seal(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
     submission: &Submission,
     declared: Option<u16>,
     retained: &[Hash32],
+    ledgered: bool,
     nonce: u32,
 ) {
-    let payer = context.payer.pubkey();
     let (result, _) = send(
         context,
-        &[fixture.submit(payer, submission, declared)],
-        None,
+        &[fixture.submit(submission, declared, ledgered)],
+        Some(&fixture.keeper),
         nonce,
     )
     .await;
@@ -1239,14 +1508,15 @@ async fn submit_seal(
         written += chunk_fills.len() as u64;
     }
     let leg = |leg: LegRefV1| match leg {
-        LegRefV1::Order(index) => LegRef::Order(index),
-        LegRefV1::Split => LegRef::Split,
-        LegRefV1::Merge => LegRef::Merge,
+        LegRefV1::Order(index) => clutch_solana_layout::clearing::LegRef::Order(index),
+        LegRefV1::Split => clutch_solana_layout::clearing::LegRef::Split,
+        LegRefV1::Merge => clutch_solana_layout::clearing::LegRef::Merge,
     };
-    let all_slices: Vec<PairingSlice> = (0..submission.witness.len as usize)
+    let all_slices: Vec<clutch_solana_layout::clearing::PairingSlice> = (0..submission.witness.len
+        as usize)
         .map(|k| {
             let slice = submission.witness.slices[k];
-            PairingSlice {
+            clutch_solana_layout::clearing::PairingSlice {
                 buy_ref: leg(slice.buy_ref),
                 sell_ref: leg(slice.sell_ref),
                 outcome: slice.outcome,
@@ -1255,7 +1525,8 @@ async fn submit_seal(
         })
         .collect();
     for chunk_slices in all_slices.chunks(FEED_SLICES_PER_CHUNK) {
-        let mut slices = [PairingSlice::PADDING; FEED_SLICES_PER_CHUNK];
+        let mut slices =
+            [clutch_solana_layout::clearing::PairingSlice::PADDING; FEED_SLICES_PER_CHUNK];
         slices[..chunk_slices.len()].copy_from_slice(chunk_slices);
         let (result, _) = send(
             context,
@@ -1279,7 +1550,6 @@ async fn submit_seal(
     result.unwrap();
 }
 
-/// Walk one sealed candidate to its verdict through the real tags 51-53.
 async fn walk_to_verdict(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
@@ -1287,19 +1557,19 @@ async fn walk_to_verdict(
     reservations: &[Address],
     nonce: u32,
 ) {
-    let payer = context.payer.pubkey();
     let creation = [
-        fixture.init_clear_work(payer, submission.id),
+        fixture.init_clear_work(submission.id),
         fixture.grow_clear_work(submission.id, 1),
         fixture.grow_clear_work(submission.id, 2),
         fixture.grow_clear_work(submission.id, 3),
         fixture.grow_clear_work(submission.id, 4),
     ];
-    let (result, _) = send(context, &creation, None, nonce).await;
+    let (result, _) = send(context, &creation, Some(&fixture.keeper), nonce).await;
     result.unwrap();
     let (result, _) = send_walk(
         context,
         fixture.advance(submission.id, 16, reservations),
+        None,
         nonce + 1,
     )
     .await;
@@ -1307,17 +1577,18 @@ async fn walk_to_verdict(
     let (result, _) = send_walk(
         context,
         fixture.advance_slices(submission.id, submission.witness.len),
+        None,
         nonce + 2,
     )
     .await;
     result.unwrap();
-    let (result, _) = send_walk(context, fixture.advance(submission.id, 16, &[]), nonce + 3).await;
+    let (result, _) =
+        send_walk(context, fixture.advance(submission.id, 16, &[]), None, nonce + 3).await;
     result.unwrap();
-    let (result, _) = send_walk(context, fixture.complete(submission.id), nonce + 4).await;
+    let (result, _) = send_walk(context, fixture.complete(submission.id), None, nonce + 4).await;
     result.unwrap();
 }
 
-/// One explicit witness slice.
 fn slice(buy: u8, sell_ref: LegRefV1, outcome: u8, quantity: u64) -> PairingSliceV1 {
     PairingSliceV1 {
         buy_ref: LegRefV1::Order(buy),
@@ -1327,7 +1598,6 @@ fn slice(buy: u8, sell_ref: LegRefV1, outcome: u8, quantity: u64) -> PairingSlic
     }
 }
 
-/// Pack explicit slices into a canonical-padded witness.
 fn witness_of(slices: &[PairingSliceV1]) -> PairingWitnessV1 {
     let mut witness = PairingWitnessV1::empty();
     witness.slices[..slices.len()].copy_from_slice(slices);
@@ -1346,22 +1616,47 @@ async fn read_position(context: &mut ProgramTestContext, address: Address) -> Po
     PositionAccount::decode(&bytes_of(context, address).await).unwrap()
 }
 
-/// The Tier 2 headline gate: the portfolio order actually clears, with the
-/// whole value plane accounted, plus the plan's refusal battery on the same
-/// bank.
-#[tokio::test]
-async fn portfolio_order_actually_clears_with_conservation() {
-    let (mut context, fixture) = start().await;
-    let payer = context.payer.pubkey();
-    let a = 0usize; // single buyer (and the unfilled ineligible buy)
-    let b = 1usize; // single seller (and the retired order)
-    let c = 2usize; // portfolio buyer
-    let d = 3usize; // portfolio seller
+/// The recorded principal of one ledgered close: what the ledger says the
+/// payer is owed, read from the live account before the close runs.
+async fn recorded_principal(context: &mut ProgramTestContext, ledger: Address) -> u64 {
+    GeneralFundingLedgerV1::decode(&bytes_of(context, ledger).await)
+        .unwrap()
+        .payer_principal_lamports
+}
 
-    // Stored ranks: 1 = B's retired sell, 2 = A buy o0 q8@3000,
-    // 3 = B sell o0 q8@2000, 4 = C portfolio buy [2,2]x3 @ 2/lot,
-    // 5 = D portfolio sell [6,6]x1 @ 1/lot, 6 = A ineligible buy o0 q5@1000.
-    // Live ranks after the retirement: 0..=4 map onto stored 2..=6.
+/// Run one close, asserting the recipient is credited exactly `expected`.
+async fn close_exact(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    recipient: Address,
+    expected: u64,
+    nonce: u32,
+) -> u64 {
+    let before = lamports_of(context, recipient).await;
+    let (result, _) = send(context, &[instruction], None, nonce).await;
+    result.unwrap();
+    let after = lamports_of(context, recipient).await;
+    assert_eq!(
+        after - before,
+        expected,
+        "the close credits exactly the recorded principal"
+    );
+    expected
+}
+
+/// THE HEADLINE: the full general lifecycle to CLEARED, the hostile terminal
+/// walk, then everything closeable closed — and the residual is exactly the
+/// declared-permanent set, with the reclaimed lamports printed.
+#[tokio::test]
+async fn cleared_epoch_closes_to_the_declared_permanent_set() {
+    let (mut context, fixture) = start().await;
+    let a = 0usize;
+    let b = 1usize;
+    let c = 2usize;
+    let d = 3usize;
+
+    // The T2-8 headline book: one retirement, a single-Egg crossing, a
+    // portfolio full pair, and one ineligible (zero-fill) order.
     let orders = [
         (b, fixture.single(&fixture.owners[b], 1, 0, 1, 3, 2_500)),
         (a, fixture.single(&fixture.owners[a], 2, 0, 0, 8, 3_000)),
@@ -1380,9 +1675,6 @@ async fn portfolio_order_actually_clears_with_conservation() {
     let (epoch, book, reservations) = frozen_state(&mut context, &fixture).await;
     assert_eq!(book.len, 5);
 
-    // The candidate: even prices, no imbalance, and a hand-aligned witness
-    // whose slices are exactly the pairings T2-8 consumes — one single-Egg
-    // crossing and the portfolio pair's two per-outcome legs.
     let witness = witness_of(&[
         slice(0, LegRefV1::Order(1), 0, 8),
         slice(2, LegRefV1::Order(3), 0, 6),
@@ -1392,7 +1684,6 @@ async fn portfolio_order_actually_clears_with_conservation() {
     prices[..4].copy_from_slice(&[2_500, 2_500, 2_500, 2_500]);
     let alpha = plan_submission(&fixture, &epoch, &book, prices, 0, witness);
     assert_eq!(alpha.fills, vec![8, 8, 3, 1, 0]);
-    // A second, never-verified candidate: its entitlement must refuse.
     let mut beta_prices = [0u64; MAX_OUTCOMES];
     beta_prices[..4].copy_from_slice(&[3_000, 3_000, 2_000, 2_000]);
     let beta = plan_submission(
@@ -1404,14 +1695,15 @@ async fn portfolio_order_actually_clears_with_conservation() {
         PairingWitnessV1::empty(),
     );
 
-    submit_seal(&mut context, &fixture, &alpha, Some(3), &[], 100).await;
-    submit_seal(&mut context, &fixture, &beta, None, &[alpha.id], 160).await;
+    submit_seal(&mut context, &fixture, &alpha, Some(3), &[], true, 100).await;
+    submit_seal(&mut context, &fixture, &beta, None, &[alpha.id], true, 160).await;
     walk_to_verdict(&mut context, &fixture, &alpha, &reservations, 300).await;
 
-    // Entitle before CLEARED refuses: the epoch is still FROZEN.
-    let early = send_walk(
+    // No close is admitted before terminality: the epoch is still FROZEN.
+    let early = send(
         &mut context,
-        fixture.freeze_entitlement(payer, alpha.id),
+        &[fixture.close_candidate(beta.id, false)],
+        None,
         330,
     )
     .await;
@@ -1423,48 +1715,10 @@ async fn portfolio_order_actually_clears_with_conservation() {
     let retained = [alpha.id, beta.id];
     let (result, _) = send(&mut context, &[fixture.finalize(&retained)], None, 340).await;
     result.unwrap();
-    let record =
-        CandidateRecord::decode(&bytes_of(&mut context, fixture.candidate_record(alpha.id)).await)
-            .unwrap();
-    assert_eq!(record.status, CANDIDATE_STATUS_SELECTED);
     let epoch_now =
         EpochAccount::decode(&bytes_of(&mut context, fixture.epoch_account).await).unwrap();
     assert_eq!(epoch_now.phase, EPOCH_PHASE_CLEARED);
 
-    // Entitle of a non-selected candidate refuses.
-    let unselected = send_walk(
-        &mut context,
-        fixture.freeze_entitlement(payer, beta.id),
-        341,
-    )
-    .await;
-    assert_eq!(custom(unselected.0), ClutchError::MismatchedState as u32);
-
-    // The entitlement freeze: pot from the verified summary, provably empty.
-    let (result, units) = send_walk(
-        &mut context,
-        fixture.freeze_entitlement(payer, alpha.id),
-        342,
-    )
-    .await;
-    result.unwrap();
-    eprintln!("FreezeEntitlement CU: {units}");
-    let pot = FinalPotAccount::decode(&bytes_of(&mut context, fixture.pot()).await).unwrap();
-    assert_eq!(pot.candidate, alpha.id);
-    assert_eq!(pot.phase, POT_PHASE_CLOSED);
-    assert_eq!(pot.pot_internal, [0; MAX_OUTCOMES]);
-    assert_eq!(pot.pot_cash_price_units, 0);
-    assert_eq!(pot.rounding_pot_price_units, 0);
-    // The pot PDA's existence is the freeze's replay guard.
-    let replay = send_walk(
-        &mut context,
-        fixture.freeze_entitlement(payer, alpha.id),
-        343,
-    )
-    .await;
-    assert_eq!(custom(replay.0), ClutchError::AlreadyInitialized as u32);
-
-    // The walk-order reservation list: [A#2, B#3, C#4, D#5, A#6].
     let (res_a, res_b, res_c, res_d, res_idle) = (
         reservations[0],
         reservations[1],
@@ -1472,417 +1726,530 @@ async fn portfolio_order_actually_clears_with_conservation() {
         reservations[3],
         reservations[4],
     );
+    let res_cancelled = fixture.reservation(fixture.owners[b].id, canonical_order_id(1));
     let position = |index: usize| fixture.owners[index].position;
 
-    // Consume before entitle refuses: the receipt account does not exist.
-    let unentitled = send(
+    // A filled order's ACTIVE reservation is NOT releasable on a CLEARED
+    // epoch: the verified allocation owns its envelope.
+    let filled = send(
         &mut context,
-        &[fixture.settle_single(alpha.id, 1, position(a), position(b), res_a, res_b, 0)],
-        None,
+        &[fixture.release_cleared(&fixture.owners[a], res_a, alpha.id, 2)],
+        Some(&fixture.owners[a].key),
+        341,
+    )
+    .await;
+    assert_eq!(custom(filled.0), ClutchError::MismatchedState as u32);
+
+    // Freeze, entitle, and consume the whole verified allocation.
+    let (result, _) = send_walk(
+        &mut context,
+        fixture.freeze_entitlement(alpha.id),
+        Some(&fixture.keeper),
+        342,
+    )
+    .await;
+    result.unwrap();
+    let (result, _) = send(
+        &mut context,
+        &[fixture.entitle_single(alpha.id, 0, res_a, res_b)],
+        Some(&fixture.keeper),
+        343,
+    )
+    .await;
+    result.unwrap();
+    let (result, _) = send(
+        &mut context,
+        &[fixture.entitle_pair(alpha.id, 1, res_c, res_d, &[1, 2])],
+        Some(&fixture.keeper),
         344,
     )
     .await;
-    assert_eq!(custom(unentitled.0), ClutchError::WrongProgramOwner as u32);
-
-    // Entitle the single-Egg crossing (slice 0).
-    let (result, units) = send(
+    result.unwrap();
+    let (result, _) = send(
         &mut context,
-        &[fixture.entitle_single(payer, alpha.id, 0, res_a, res_b)],
+        &[fixture.settle_single(alpha.id, 1, position(a), position(b), res_a, res_b, 0)],
         None,
         345,
     )
     .await;
     result.unwrap();
-    eprintln!("EntitleSlice (single) CU: {units}");
-    assert_eq!(
-        read_reservation(&mut context, res_a).await.state,
-        RESERVATION_STATE_ENTITLED
-    );
-    assert_eq!(
-        read_reservation(&mut context, res_b).await.state,
-        RESERVATION_STATE_ENTITLED
-    );
-    // Double-entitle refuses: the reservations are no longer ACTIVE.
-    let again = send(
+
+    // Close-before-economic-zero refuses: receipt 1 is entitled, unconsumed.
+    let unconsumed = send(
         &mut context,
-        &[fixture.entitle_single(payer, alpha.id, 0, res_a, res_b)],
+        &[fixture.close_receipt(alpha.id, 1, fixture.keeper.pubkey(), sink_address())],
         None,
         346,
     )
     .await;
-    assert_eq!(custom(again.0), ClutchError::MismatchedState as u32);
+    assert_eq!(custom(unconsumed.0), ClutchError::MismatchedState as u32);
 
-    // Entitle the portfolio pair atomically from its first slice.
-    let (result, units) = send(
+    let (result, _) = send(
         &mut context,
-        &[fixture.entitle_pair(payer, alpha.id, 1, res_c, res_d, &[1, 2])],
+        &[fixture.settle_pair(alpha.id, 2, position(c), position(d), res_c, res_d, &[1, 2])],
         None,
         347,
     )
     .await;
     result.unwrap();
-    eprintln!("EntitleSlice (portfolio pair, 2 receipts) CU: {units}");
-    // A non-entry pair slice is not an entitlement point.
-    let wrong_entry = send(
+
+    /* ------------------------------------------------------------------ */
+    /* The machinery inventory, complete, before any close.                */
+    /* ------------------------------------------------------------------ */
+    let machinery = vec![
+        fixture.epoch_account,
+        fixture.window_account,
+        fixture.page,
+        fixture.pot(),
+        fixture.clear_work(alpha.id),
+        alpha.record,
+        alpha.feed,
+        beta.record,
+        beta.feed,
+        fixture.receipt(alpha.id, 0),
+        fixture.receipt(alpha.id, 1),
+        fixture.receipt(alpha.id, 2),
+        res_a,
+        res_b,
+        res_c,
+        res_d,
+        res_idle,
+        res_cancelled,
+        fixture.ledger(fixture.epoch_account),
+        fixture.ledger(fixture.page),
+        fixture.ledger(fixture.clear_work(alpha.id)),
+        fixture.ledger(alpha.record),
+        fixture.ledger(beta.record),
+        fixture.ledger(fixture.pot()),
+        fixture.ledger(fixture.receipt(alpha.id, 0)),
+        fixture.ledger(fixture.receipt(alpha.id, 1)),
+        fixture.ledger(fixture.receipt(alpha.id, 2)),
+    ];
+
+    // Two hostile donations, injected after creation: their only exit is the
+    // incinerator.
+    let donor = context.payer.pubkey();
+    let (result, _) = send(
         &mut context,
-        &[fixture.entitle_pair(payer, alpha.id, 2, res_c, res_d, &[1, 2])],
+        &[
+            donate(donor, res_b, RESERVATION_DONATION),
+            donate(donor, fixture.receipt(alpha.id, 0), RECEIPT_DONATION),
+        ],
         None,
         348,
     )
     .await;
-    assert_eq!(custom(wrong_entry.0), ClutchError::MismatchedState as u32);
+    result.unwrap();
 
-    // Tamper on a receipt refuses: a codec-consistent quantity forgery still
-    // breaks against the entitled envelope, and the refusal rolls back.
-    let receipt0_address = fixture.receipt(alpha.id, 0);
-    let honest_receipt = account(&mut context, receipt0_address).await.unwrap();
-    let mut forged =
-        SettlementReceiptAccount::decode(&honest_receipt.data).unwrap();
-    forged.quantity = 12;
-    forged.consideration_price_units = 12 * 2_500;
-    let mut forged_account = honest_receipt.clone();
-    forged_account.data = encode(account_len::SETTLEMENT_RECEIPT, |out| forged.encode(out));
-    context.set_account(&receipt0_address, &AccountSharedData::from(forged_account));
-    let watched = [
-        position(a),
-        position(b),
-        res_a,
-        res_b,
-    ];
-    let before = snapshot(&mut context, &watched).await;
-    let tampered = send(
+    let mut inventory = 0u64;
+    for address in &machinery {
+        inventory += lamports_of(&mut context, *address).await;
+    }
+    let sink_before = lamports_of(&mut context, sink_address()).await;
+    let mut reclaimed = 0u64;
+
+    /* ------------------------------------------------------------------ */
+    /* The hostile walk, then the closes, in dependency order.             */
+    /* ------------------------------------------------------------------ */
+
+    // Wrong payer refuses: the recipient must be the exact recorded payer.
+    let wrong_payer = send(
         &mut context,
-        &[fixture.settle_single(alpha.id, 1, position(a), position(b), res_a, res_b, 0)],
+        &[fixture.close_receipt(alpha.id, 0, fixture.owners[a].key.pubkey(), sink_address())],
         None,
         349,
     )
     .await;
-    assert_eq!(custom(tampered.0), ClutchError::MismatchedState as u32);
-    assert_eq!(snapshot(&mut context, &watched).await, before);
-    context.set_account(&receipt0_address, &AccountSharedData::from(honest_receipt));
-
-    // Consume the single-Egg crossing.
-    let (result, units) = send(
+    assert_eq!(custom(wrong_payer.0), ClutchError::MismatchedState as u32);
+    // Wrong sink refuses: only the frozen incinerator receives surplus.
+    let wrong_sink = send(
         &mut context,
-        &[fixture.settle_single(alpha.id, 1, position(a), position(b), res_a, res_b, 0)],
+        &[fixture.close_receipt(alpha.id, 0, fixture.keeper.pubkey(), fixture.owners[a].key.pubkey())],
         None,
         350,
     )
     .await;
-    result.unwrap();
-    eprintln!("SettlePage (entitled direct slice) CU: {units}");
-    // Double-consume refuses on the exhausted receipt and CONSUMED
-    // reservations alike.
-    let twice = send(
-        &mut context,
-        &[fixture.settle_single(alpha.id, 1, position(a), position(b), res_a, res_b, 0)],
-        None,
-        351,
-    )
-    .await;
-    assert_eq!(custom(twice.0), ClutchError::MismatchedState as u32);
+    assert_eq!(custom(wrong_sink.0), ClutchError::MismatchedState as u32);
 
-    // A partial pair presentation undersums and refuses.
-    let partial = send(
+    // Wrong DAG order refuses, top to bottom: page before the idle release,
+    // pot before the page, the selected pair before the pot, the root before
+    // everything.
+    let live_order = [res_a, res_b, res_c, res_d, res_idle];
+    let page_early = send(&mut context, &[fixture.close_page(&live_order)], None, 351).await;
+    assert_eq!(custom(page_early.0), ClutchError::MismatchedState as u32);
+    let pot_early = send(&mut context, &[fixture.close_pot()], None, 352).await;
+    assert_eq!(custom(pot_early.0), ClutchError::MismatchedState as u32);
+    let selected_early = send(
         &mut context,
-        &[fixture.settle_pair(alpha.id, 2, position(c), position(d), res_c, res_d, &[1])],
-        None,
-        352,
-    )
-    .await;
-    assert_eq!(custom(partial.0), ClutchError::MismatchedState as u32);
-
-    // THE HEADLINE TRANSACTION: the portfolio order actually clears.
-    let (result, units) = send(
-        &mut context,
-        &[fixture.settle_pair(alpha.id, 2, position(c), position(d), res_c, res_d, &[1, 2])],
+        &[fixture.close_candidate(alpha.id, true)],
         None,
         353,
     )
     .await;
-    result.unwrap();
-    eprintln!("SettlePage (entitled portfolio full pair) CU: {units}");
-    let pair_twice = send(
+    assert_eq!(custom(selected_early.0), ClutchError::MismatchedState as u32);
+    let work_early = send(
         &mut context,
-        &[fixture.settle_pair(alpha.id, 2, position(c), position(d), res_c, res_d, &[1, 2])],
+        &[fixture.close_clear_work(alpha.id, false)],
         None,
         354,
     )
     .await;
-    assert_eq!(custom(pair_twice.0), ClutchError::MismatchedState as u32);
-
-    /* -------------------------------------------------------------------- */
-    /* Conservation across the whole value plane.                            */
-    /* -------------------------------------------------------------------- */
-
-    // The verified summary's implied allocation, byte-compared: every
-    // position is the exact post-state the frozen prices and full fills
-    // imply.  A pays 2 atoms for 8 Eggs of outcome 0 and keeps the standing
-    // ineligible-order encumbrance; B is its mirror plus the returned
-    // retirement; C pays 3 atoms for the [6,6] vector; D is its mirror.
-    let expected = [
-        // (owner index, cash, reserved, egg deltas per outcome)
-        (a, START_CASH - 2, 1u64, [8i64, 0, 0, 0]),
-        (b, START_CASH + 2, 0, [-8, 0, 0, 0]),
-        (c, START_CASH - 3, 0, [6, 6, 0, 0]),
-        (d, START_CASH + 3, 0, [-6, -6, 0, 0]),
-    ];
-    for (index, cash, reserved, deltas) in expected {
-        let owner = &fixture.owners[index];
-        let observed = read_position(&mut context, owner.position).await;
-        let mut start_eggs = [0u64; MAX_OUTCOMES];
-        start_eggs[..OUTCOMES as usize].fill(START_EGGS);
-        let mut implied = PositionAccount {
-            market: fixture.market,
-            owner: owner.id,
-            generation: 0,
-            internal: start_eggs,
-            cash_atoms: cash,
-            reserved_cash_atoms: reserved,
-            stored_bump: observed.stored_bump,
-            close_state: 0,
-        };
-        for (outcome, delta) in deltas.iter().enumerate() {
-            implied.internal[outcome] = (START_EGGS as i64 + delta) as u64;
-        }
-        assert_eq!(
-            bytes_of(&mut context, owner.position).await,
-            encode(account_len::POSITION, |out| implied.encode(out)),
-            "owner {index} position bytes equal the implied allocation"
-        );
-    }
-
-    // Cash conservation: buyer debits equal seller credits, so total
-    // position cash is exactly the genesis total.
-    let mut total_cash = 0u64;
-    let mut egg_totals = [0u64; MAX_OUTCOMES];
-    for owner in &fixture.owners {
-        let position = read_position(&mut context, owner.position).await;
-        total_cash += position.cash_atoms;
-        for (outcome, total) in egg_totals.iter_mut().enumerate() {
-            *total += position.internal[outcome];
-        }
-    }
-    assert_eq!(total_cash, 4 * START_CASH);
-    // Egg conservation: every position unit accounted — consumed sell
-    // reservations moved their whole envelope to the buyers, and no Egg
-    // remains encumbered anywhere.
-    for total in egg_totals.iter().take(OUTCOMES as usize) {
-        assert_eq!(*total, 4 * START_EGGS);
-    }
-
-    // The consumed reservations are their own archive: CONSUMED, remaining
-    // zero, the exact initial envelope intact.
-    for (address, initial_cash, initial_egg) in [
-        (res_a, 3u64, [0u64, 0, 0, 0]),
-        (res_b, 0, [8, 0, 0, 0]),
-        (res_c, 6, [0, 0, 0, 0]),
-        (res_d, 0, [6, 6, 0, 0]),
-    ] {
-        let reservation = read_reservation(&mut context, address).await;
-        assert_eq!(reservation.state, RESERVATION_STATE_CONSUMED);
-        assert!(reservation.remaining_is_zero());
-        assert_eq!(reservation.initial_cash_atoms, initial_cash);
-        assert_eq!(&reservation.initial_internal[..4], &initial_egg);
-    }
-    // Released reservations + refunds sum exactly: the buy envelopes (3 + 6)
-    // released; consideration moved (2 + 3); the rest (1 + 3) is the buyers'
-    // implicit price-improvement refund into free cash.  With the pot's
-    // scalars zero, the identity closes: 9 == 5 + 4 + 0.
-    assert_eq!(3 + 6, (2 + 3) + (1 + 3) + pot.pot_cash_price_units as u64);
-
-    // The receipts are exhausted, exactly once each.
-    for (slice_index, quantity) in [(0u16, 8u64), (1, 6), (2, 6)] {
-        let receipt = SettlementReceiptAccount::decode(
-            &bytes_of(&mut context, fixture.receipt(alpha.id, slice_index)).await,
-        )
-        .unwrap();
-        assert_eq!(receipt.settled_quantity, quantity);
-        assert_eq!(
-            receipt.consumed_flags,
-            RECEIPT_FLAG_BUY_CONSUMED | RECEIPT_FLAG_SELL_CONSUMED | RECEIPT_FLAG_SLICE_EXHAUSTED
-        );
-    }
-
-    // The unfilled ineligible order's reservation stands ACTIVE, and the
-    // cancellation path refuses post-clear (release requires OPEN): the
-    // owner-signed terminal release is its own intent (tag 60), driven with
-    // full closure evidence in `terminal_closure.rs`.
-    let idle = read_reservation(&mut context, res_idle).await;
-    assert_eq!(idle.state, RESERVATION_STATE_ACTIVE);
-    assert_eq!(idle.remaining_cash_atoms, 1);
-    let release = send(
+    assert_eq!(custom(work_early.0), ClutchError::AccountCount as u32);
+    let root_early = send(&mut context, &[fixture.close_epoch(&retained)], None, 355).await;
+    assert_eq!(custom(root_early.0), ClutchError::MismatchedState as u32);
+    // Reservation archives close only after their page.
+    let archive_early = send(
         &mut context,
-        &[fixture.cancel(&fixture.owners[a], canonical_order_id(6), 2)],
+        &[fixture.close_reservation(res_a, fixture.owners[a].key.pubkey())],
+        None,
+        356,
+    )
+    .await;
+    assert_eq!(custom(archive_early.0), ClutchError::MismatchedState as u32);
+
+    // A non-owner cannot release someone else's reservation.
+    let not_owner = send(
+        &mut context,
+        &[fixture.release_cleared(&fixture.owners[b], res_idle, alpha.id, 2)],
+        Some(&fixture.owners[b].key),
+        357,
+    )
+    .await;
+    assert_eq!(custom(not_owner.0), ClutchError::UnauthorizedActor as u32);
+    // A consumed reservation cannot release.
+    let consumed = send(
+        &mut context,
+        &[fixture.release_cleared(&fixture.owners[a], res_a, alpha.id, 2)],
+        Some(&fixture.owners[a].key),
+        358,
+    )
+    .await;
+    assert_eq!(custom(consumed.0), ClutchError::MismatchedState as u32);
+
+    // The one legitimate release: the ineligible zero-fill order's envelope
+    // returns to its owner's Position, owner-signed, fill proven zero.
+    let before = read_position(&mut context, position(a)).await;
+    assert_eq!(before.reserved_cash_atoms, 1);
+    let (result, _) = send(
+        &mut context,
+        &[fixture.release_cleared(&fixture.owners[a], res_idle, alpha.id, 2)],
+        Some(&fixture.owners[a].key),
+        359,
+    )
+    .await;
+    result.unwrap();
+    let after = read_position(&mut context, position(a)).await;
+    assert_eq!(after.reserved_cash_atoms, 0);
+    assert_eq!(after.cash_atoms, before.cash_atoms);
+    assert_eq!(
+        read_reservation(&mut context, res_idle).await.state,
+        RESERVATION_STATE_RELEASED
+    );
+    // Release replays refuse on state: the reservation is no longer ACTIVE.
+    let replay = send(
+        &mut context,
+        &[fixture.release_cleared(&fixture.owners[a], res_idle, alpha.id, 3)],
         Some(&fixture.owners[a].key),
         360,
     )
     .await;
-    assert_eq!(custom(release.0), ClutchError::NotActive as u32);
-}
+    assert_eq!(custom(replay.0), ClutchError::MismatchedState as u32);
 
-/// A verified virtual-split candidate refuses the entitlement freeze: the
-/// VirtualPot ranked blocker stands, stated on the honest-stub code.
-#[tokio::test]
-async fn virtual_split_candidate_refuses_the_entitlement_freeze() {
-    let (mut context, fixture) = start().await;
-    let payer = context.payer.pubkey();
-    // Four buys, one per outcome, all strict at even prices: the canonical
-    // candidate at imbalance +4 fills them from the global virtual split.
-    let orders = [
-        (0, fixture.single(&fixture.owners[0], 1, 0, 0, 4, 3_000)),
-        (1, fixture.single(&fixture.owners[1], 2, 1, 0, 4, 3_000)),
-        (2, fixture.single(&fixture.owners[2], 3, 2, 0, 4, 3_000)),
-        (3, fixture.single(&fixture.owners[3], 4, 3, 0, 4, 3_000)),
-    ];
-    build_frozen_book(&mut context, &fixture, &orders, &[]).await;
-    let (epoch, book, reservations) = frozen_state(&mut context, &fixture).await;
-
-    let witness = witness_of(&[
-        slice(0, LegRefV1::Split, 0, 4),
-        slice(1, LegRefV1::Split, 1, 4),
-        slice(2, LegRefV1::Split, 2, 4),
-        slice(3, LegRefV1::Split, 3, 4),
-    ]);
-    let mut prices = [0u64; MAX_OUTCOMES];
-    prices[..4].copy_from_slice(&[2_500, 2_500, 2_500, 2_500]);
-    let split = plan_submission(&fixture, &epoch, &book, prices, 4, witness);
-    assert_eq!(split.virtual_split, 4);
-    assert_eq!(split.virtual_merge, 0);
-
-    submit_seal(&mut context, &fixture, &split, Some(4), &[], 100).await;
-    walk_to_verdict(&mut context, &fixture, &split, &reservations, 300).await;
-    context
-        .warp_to_slot(FREEZE_DEADLINE + CANDIDATE_WINDOW_SLOTS)
-        .unwrap();
-    let (result, _) = send(&mut context, &[fixture.finalize(&[split.id])], None, 340).await;
-    result.unwrap();
-    let epoch_now =
-        EpochAccount::decode(&bytes_of(&mut context, fixture.epoch_account).await).unwrap();
-    assert_eq!(epoch_now.phase, EPOCH_PHASE_CLEARED);
-
-    // The freeze refuses the verified virtual legs with the honest stub, and
-    // no pot is created.
-    let refused = send_walk(
-        &mut context,
-        fixture.freeze_entitlement(payer, split.id),
-        342,
-    )
-    .await;
-    assert_eq!(custom(refused.0), ClutchError::NotYetImplemented as u32);
-    assert!(account(&mut context, fixture.pot()).await.is_none());
-}
-
-/// A verified partial-fill candidate freezes its pot but refuses per-slice
-/// entitlement: the PartialFillLedger ranked blocker stands.
-#[tokio::test]
-async fn partial_fill_candidate_refuses_entitlement() {
-    let (mut context, fixture) = start().await;
-    let payer = context.payer.pubkey();
-    // One strict buy against two marginal sells: canonical fills are
-    // [8, 4, 4] — both sells fill partially, pro rata.
-    let orders = [
-        (0, fixture.single(&fixture.owners[0], 1, 0, 0, 8, 3_000)),
-        (1, fixture.single(&fixture.owners[1], 2, 0, 1, 6, 2_500)),
-        (2, fixture.single(&fixture.owners[2], 3, 0, 1, 6, 2_500)),
-    ];
-    build_frozen_book(&mut context, &fixture, &orders, &[]).await;
-    let (epoch, book, reservations) = frozen_state(&mut context, &fixture).await;
-
-    let witness = witness_of(&[
-        slice(0, LegRefV1::Order(1), 0, 4),
-        slice(0, LegRefV1::Order(2), 0, 4),
-    ]);
-    let mut prices = [0u64; MAX_OUTCOMES];
-    prices[..4].copy_from_slice(&[2_500, 2_500, 2_500, 2_500]);
-    let partial = plan_submission(&fixture, &epoch, &book, prices, 0, witness);
-    assert_eq!(partial.fills, vec![8, 4, 4]);
-
-    submit_seal(&mut context, &fixture, &partial, Some(2), &[], 100).await;
-    walk_to_verdict(&mut context, &fixture, &partial, &reservations, 300).await;
-    context
-        .warp_to_slot(FREEZE_DEADLINE + CANDIDATE_WINDOW_SLOTS)
-        .unwrap();
-    let (result, _) = send(&mut context, &[fixture.finalize(&[partial.id])], None, 340).await;
-    result.unwrap();
-
-    // The exact per-owner conversions here happen to be whole atoms, so the
-    // freeze itself passes and the pot is provably empty...
-    let (result, _) = send_walk(
-        &mut context,
-        fixture.freeze_entitlement(payer, partial.id),
-        342,
-    )
-    .await;
-    result.unwrap();
-    // ...but every slice of a split order refuses entitlement with the
-    // honest stub, and no receipt is minted.
-    for slice_index in [0u16, 1] {
-        let refused = send(
+    // Receipts close (economic zero proven), each paying the keeper exactly
+    // its recorded principal; the injected receipt donation burns.
+    for (slice_index, nonce) in [(0u16, 361u32), (1, 362), (2, 363)] {
+        let receipt = fixture.receipt(alpha.id, slice_index);
+        let owed = recorded_principal(&mut context, fixture.ledger(receipt)).await;
+        reclaimed += close_exact(
             &mut context,
-            &[fixture.entitle_single(
-                payer,
-                partial.id,
-                slice_index,
-                reservations[0],
-                reservations[1 + slice_index as usize],
-            )],
-            None,
-            343 + slice_index as u32,
+            fixture.close_receipt(alpha.id, slice_index, fixture.keeper.pubkey(), sink_address()),
+            fixture.keeper.pubkey(),
+            owed,
+            nonce,
         )
         .await;
-        assert_eq!(custom(refused.0), ClutchError::NotYetImplemented as u32);
-        assert!(account(&mut context, fixture.receipt(partial.id, slice_index))
-            .await
-            .is_none());
     }
+    // Double-close refuses: the receipt account no longer exists.
+    let twice = send(
+        &mut context,
+        &[fixture.close_receipt(alpha.id, 0, fixture.keeper.pubkey(), sink_address())],
+        None,
+        364,
+    )
+    .await;
+    assert_eq!(custom(twice.0), ClutchError::WrongProgramOwner as u32);
+
+    // The page closes: every live record's reservation proven settled or
+    // released, in slot order.
+    let owed = recorded_principal(&mut context, fixture.ledger(fixture.page)).await;
+    reclaimed += close_exact(
+        &mut context,
+        fixture.close_page(&live_order),
+        fixture.keeper.pubkey(),
+        owed,
+        365,
+    )
+    .await;
+
+    // The reservation archives close, each paying its stored owner exactly
+    // the rent-exempt principal; the injected donation on B's burns.
+    for (address, owner_index, nonce) in [
+        (res_a, a, 366u32),
+        (res_b, b, 367),
+        (res_c, c, 368),
+        (res_d, d, 369),
+        (res_idle, a, 370),
+        (res_cancelled, b, 371),
+    ] {
+        reclaimed += close_exact(
+            &mut context,
+            fixture.close_reservation(address, fixture.owners[owner_index].key.pubkey()),
+            fixture.owners[owner_index].key.pubkey(),
+            rent_exempt(RESERVATION_ACCOUNT_BYTES),
+            nonce,
+        )
+        .await;
+    }
+
+    // The pot closes behind the pages.
+    let owed = recorded_principal(&mut context, fixture.ledger(fixture.pot())).await;
+    reclaimed += close_exact(
+        &mut context,
+        fixture.close_pot(),
+        fixture.keeper.pubkey(),
+        owed,
+        372,
+    )
+    .await;
+
+    // Both candidate pairs close: the loser freely, the SELECTED pair only
+    // now that the pot and pages are absent.
+    let owed = recorded_principal(&mut context, fixture.ledger(beta.record)).await;
+    reclaimed += close_exact(
+        &mut context,
+        fixture.close_candidate(beta.id, false),
+        fixture.keeper.pubkey(),
+        owed,
+        373,
+    )
+    .await;
+    let owed = recorded_principal(&mut context, fixture.ledger(alpha.record)).await;
+    reclaimed += close_exact(
+        &mut context,
+        fixture.close_candidate(alpha.id, true),
+        fixture.keeper.pubkey(),
+        owed,
+        374,
+    )
+    .await;
+
+    // The checkpoint closes (its record is gone, so no tail is needed), then
+    // the root: epoch and window together, against the emptied registry.
+    let owed =
+        recorded_principal(&mut context, fixture.ledger(fixture.clear_work(alpha.id))).await;
+    reclaimed += close_exact(
+        &mut context,
+        fixture.close_clear_work(alpha.id, false),
+        fixture.keeper.pubkey(),
+        owed,
+        375,
+    )
+    .await;
+    let owed = recorded_principal(&mut context, fixture.ledger(fixture.epoch_account)).await;
+    reclaimed += close_exact(
+        &mut context,
+        fixture.close_epoch(&retained),
+        fixture.keeper.pubkey(),
+        owed,
+        376,
+    )
+    .await;
+
+    /* ------------------------------------------------------------------ */
+    /* The residual is exactly the declared-permanent set.                 */
+    /* ------------------------------------------------------------------ */
+    for address in &machinery {
+        assert!(
+            account(&mut context, *address).await.is_none(),
+            "{address} is closed"
+        );
+    }
+    // The declared-permanent residual: the sealed batch-policy artifact.
+    let residual = lamports_of(&mut context, fixture.policy_account).await;
+    assert_eq!(residual, rent_exempt(64));
+    // Owner state and market infrastructure stand untouched.
+    for owner in &fixture.owners {
+        assert!(account(&mut context, owner.position).await.is_some());
+    }
+    assert!(account(&mut context, fixture.market_account).await.is_some());
+
+    // Conservation to the lamport: everything the machinery held is either
+    // reclaimed principal or measured burn — and the burn is exactly the two
+    // injected donations.
+    let burned = lamports_of(&mut context, sink_address()).await - sink_before;
+    assert_eq!(inventory, reclaimed + burned);
+    assert_eq!(burned, RESERVATION_DONATION + RECEIPT_DONATION);
+
+    eprintln!(
+        "TerminalClosure headline (CLEARED epoch): machinery held {inventory} lamports; \
+         reclaimed {reclaimed} to the exact recorded payers; burned {burned} at the incinerator; \
+         residual (declared-permanent policy artifact) {residual}"
+    );
 }
 
-/// A lapsed epoch's reservations stand ACTIVE and the only release path
-/// refuses honestly: no post-lapse release or expiry path exists yet, which
-/// is the standing blocker the settlement ledger records.
+/// The lapsed twin: freeze, no verified candidate, lapse — then release every
+/// reservation, close all machinery, and tolerate exactly the unregistered
+/// candidate the design says is unclosable.
 #[tokio::test]
-async fn lapsed_epoch_reservations_stand_under_the_expiry_blocker() {
+async fn lapsed_epoch_releases_and_closes_with_the_unregistered_residual() {
     let (mut context, fixture) = start().await;
-    let payer = context.payer.pubkey();
+    let a = 0usize;
+    let b = 1usize;
     let orders = [
-        (0, fixture.single(&fixture.owners[0], 1, 0, 0, 8, 3_000)),
-        (1, fixture.single(&fixture.owners[1], 2, 0, 1, 8, 2_000)),
+        (a, fixture.single(&fixture.owners[a], 1, 0, 0, 8, 3_000)),
+        (b, fixture.single(&fixture.owners[b], 2, 0, 1, 8, 2_000)),
     ];
     build_frozen_book(&mut context, &fixture, &orders, &[]).await;
-    let (_, _, reservations) = frozen_state(&mut context, &fixture).await;
+    let (epoch, book, reservations) = frozen_state(&mut context, &fixture).await;
+    assert_eq!(book.len, 2);
 
-    // Nothing submitted: the deadline lapses the epoch honestly.
+    // One candidate, submitted WITHOUT its funding ledger and never walked:
+    // the unregistered, unverified specimen.
+    let mut prices = [0u64; MAX_OUTCOMES];
+    prices[..4].copy_from_slice(&[2_500, 2_500, 2_500, 2_500]);
+    let gamma = plan_submission(
+        &fixture,
+        &epoch,
+        &book,
+        prices,
+        0,
+        PairingWitnessV1::empty(),
+    );
+    submit_seal(&mut context, &fixture, &gamma, None, &[], false, 100).await;
+
+    // Release before terminality refuses: the epoch is FROZEN, not lapsed.
+    let early = send(
+        &mut context,
+        &[fixture.release_lapsed(&fixture.owners[a], reservations[0], 2)],
+        Some(&fixture.owners[a].key),
+        150,
+    )
+    .await;
+    assert_eq!(custom(early.0), ClutchError::NotActive as u32);
+
     context
         .warp_to_slot(FREEZE_DEADLINE + CANDIDATE_WINDOW_SLOTS)
         .unwrap();
-    let (result, _) = send(&mut context, &[fixture.finalize(&[])], None, 100).await;
+    let (result, _) = send(&mut context, &[fixture.finalize(&[gamma.id])], None, 160).await;
     result.unwrap();
     let epoch_now =
         EpochAccount::decode(&bytes_of(&mut context, fixture.epoch_account).await).unwrap();
     assert_eq!(epoch_now.phase, EPOCH_PHASE_LAPSED);
 
-    // The reservations stand ACTIVE with their whole envelopes...
-    for address in &reservations {
-        let reservation = read_reservation(&mut context, *address).await;
-        assert_eq!(reservation.state, RESERVATION_STATE_ACTIVE);
-        assert_eq!(
-            reservation.remaining_cash_atoms,
-            reservation.initial_cash_atoms
-        );
-        assert_eq!(reservation.remaining_internal, reservation.initial_internal);
+    let machinery = vec![
+        fixture.epoch_account,
+        fixture.window_account,
+        fixture.page,
+        reservations[0],
+        reservations[1],
+        fixture.ledger(fixture.epoch_account),
+        fixture.ledger(fixture.page),
+    ];
+    let mut inventory = 0u64;
+    for address in &machinery {
+        inventory += lamports_of(&mut context, *address).await;
     }
-    // ...and the cancellation path requires an OPEN epoch and refuses
-    // honestly.  The post-lapse exit is the owner-signed terminal release
-    // (tag 60), a different intent with its own evidence in
-    // `terminal_closure.rs`; cancellation itself never bends.
-    let release = send(
+    let stranded = lamports_of(&mut context, gamma.record).await
+        + lamports_of(&mut context, gamma.feed).await;
+    let sink_before = lamports_of(&mut context, sink_address()).await;
+    let mut reclaimed = 0u64;
+
+    // Every lapsed ACTIVE reservation releases, owner-signed, whole envelope.
+    for (index, owner_index) in [(0usize, a), (1, b)] {
+        let owner = &fixture.owners[owner_index];
+        let before = read_position(&mut context, owner.position).await;
+        let held = read_reservation(&mut context, reservations[index]).await;
+        assert_eq!(held.state, RESERVATION_STATE_ACTIVE);
+        let (result, _) = send(
+            &mut context,
+            &[fixture.release_lapsed(owner, reservations[index], 2)],
+            Some(&owner.key),
+            170 + index as u32,
+        )
+        .await;
+        result.unwrap();
+        let after = read_position(&mut context, owner.position).await;
+        assert_eq!(
+            after.reserved_cash_atoms,
+            before.reserved_cash_atoms - held.remaining_cash_atoms
+        );
+        for outcome in 0..MAX_OUTCOMES {
+            assert_eq!(
+                after.internal[outcome],
+                before.internal[outcome] + held.remaining_internal[outcome]
+            );
+        }
+    }
+
+    // The unregistered candidate is unclosable by design: no ledger exists,
+    // no payer is guessed, the close refuses.
+    let unregistered = send(
         &mut context,
-        &[fixture.cancel(&fixture.owners[0], canonical_order_id(1), 2)],
-        Some(&fixture.owners[0].key),
-        101,
+        &[fixture.close_candidate(gamma.id, false)],
+        None,
+        180,
     )
     .await;
-    assert_eq!(custom(release.0), ClutchError::NotActive as u32);
-    let _ = payer;
+    assert_eq!(custom(unregistered.0), ClutchError::WrongProgramOwner as u32);
+
+    // Page, reservation archives, and the root close in dependency order —
+    // the root tolerating exactly the unregistered registry member.
+    let owed = recorded_principal(&mut context, fixture.ledger(fixture.page)).await;
+    reclaimed += close_exact(
+        &mut context,
+        fixture.close_page(&[reservations[0], reservations[1]]),
+        fixture.keeper.pubkey(),
+        owed,
+        181,
+    )
+    .await;
+    for (index, owner_index) in [(0usize, a), (1, b)] {
+        reclaimed += close_exact(
+            &mut context,
+            fixture.close_reservation(
+                reservations[index],
+                fixture.owners[owner_index].key.pubkey(),
+            ),
+            fixture.owners[owner_index].key.pubkey(),
+            rent_exempt(RESERVATION_ACCOUNT_BYTES),
+            182 + index as u32,
+        )
+        .await;
+    }
+    let owed = recorded_principal(&mut context, fixture.ledger(fixture.epoch_account)).await;
+    reclaimed += close_exact(
+        &mut context,
+        fixture.close_epoch(&[gamma.id]),
+        fixture.keeper.pubkey(),
+        owed,
+        184,
+    )
+    .await;
+
+    // The residual: the declared-permanent policy artifact, plus exactly the
+    // unregistered candidate pair the design records as unclosable.
+    for address in &machinery {
+        assert!(account(&mut context, *address).await.is_none());
+    }
+    assert!(account(&mut context, gamma.record).await.is_some());
+    assert!(account(&mut context, gamma.feed).await.is_some());
+    let burned = lamports_of(&mut context, sink_address()).await - sink_before;
+    assert_eq!(inventory, reclaimed + burned);
+    assert_eq!(burned, 0);
+
+    eprintln!(
+        "TerminalClosure headline (LAPSED epoch): machinery held {inventory} lamports; \
+         reclaimed {reclaimed}; burned {burned}; unregistered candidate pair stands at \
+         {stranded} lamports by design"
+    );
 }
