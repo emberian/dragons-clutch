@@ -40,13 +40,13 @@ liveness seal `934bdd6` over runtime ancestry `d77d670`, manifest `cb94c27`.
 The current sealed default ELF is **1,979,512 bytes with SHA-256
 `4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb`** — the
 TerminalClosure runtime, intents 36–67. Its audit is archived under
-[`research/liveness-policy-profile/artifacts/e8ba31d582be3939`](research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/RUNTIME_ARTIFACT_AUDIT.md):
+[`research/liveness-policy-profile/artifacts/4fded7a67a2d8994`](research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/RUNTIME_ARTIFACT_AUDIT.md):
 pass 1 = pass 2 byte-identical from the canonical checkout, zero first-party
-frame diagnostics surviving final LTO, all 58,099 direct `r10` references at
+frame diagnostics surviving final LTO, all 60,135 direct `r10` references at
 or below 4,096 bytes, a reviewed ten-symbol import surface (`sol_memmove_`
 admitted at `2dbc9fc` after the nine-symbol pin refused), and the declared
-source closure at 108 files. Six predecessor seals are retained in-tree as
-historical evidence, each with its own attested chain (`d6929549…`,
+source closure at 109 files. Seven predecessor seals are retained in-tree as
+historical evidence, each with its own chain (`e8ba31d5…`, `d6929549…`,
 `fda59705…`, `187d5ee1…`, `af6bb79c…`, `bd20711b…`, `a5725a3d…`); current CU
 rows are always remeasured against the current artifact, never relabeled.
 This is exact local artifact/stack/bank evidence, not a release, deployment,
