@@ -86,7 +86,10 @@ For a feed epoch with maximum reserve `B`, the first subscriber capitalizes `B`.
 When subscriber `k` joins, it deposits `B/k`; each of the previous `k-1`
 subscribers accrues reimbursement `B/[k(k-1)]`. After the update all `k`
 subscribers have equal net at-risk capital `B/k`, while the reserve still contains
-`B`. A cumulative reimbursement index makes joining and later claiming O(1).
+`B`. A cumulative reimbursement index could make joining and later claiming O(1);
+the executable model (`research/economics-admission/model.py`) instead recomputes
+canonical shares in O(k) per join and says so. No O(1) index is implemented
+anywhere.
 
 Subscriptions become irrevocable once committed. Otherwise departure would
 retroactively increase other Markets' frozen obligations. At successful epoch
@@ -122,20 +125,42 @@ G_num(a,p) = sum_{i<j} p_i * p_j * abs(a_i - a_j)
 
 with exact scale and one final carry-aware division. This is invariant to adding a
 risk-free complete set, symmetric under outcome relabeling, and reduces exactly to
-`q*p*(1-p)` for one Egg. See [FEE_GEOMETRY.md](FEE_GEOMETRY.md). It remains an
-experimental arm against flat-notional and per-leg controls.
+`q*p*(1-p)` for one Egg. See [FEE_GEOMETRY.md](FEE_GEOMETRY.md).
+[research/RISK_SUMMED_POSITIONS.md](research/RISK_SUMMED_POSITIONS.md) §3 pins
+the base exactly: it is the *unique* positively 1-homogeneous functional that
+charges each digital layer its own `q(1-q)` and adds over layer-cake
+decompositions (Propositions 11-12), and it is **not** the model-free risk
+norm — `G(a,p) <= R(a)/4` with the ratio `2p(1-p)` vanishing at extreme prices
+(Proposition 10), and at boundary prices its kernel strictly exceeds the risk
+quotient (Proposition 9), so risk transfer supported on zero-priced outcomes is
+feeless. It remains an experimental arm against flat-notional, per-leg, and
+price-free quotient-norm `kappa'*R(a)` controls.
 
-All values use exact scaled integer arithmetic. At `p = 0.5`, the candidate fee is
-20 basis points of cash consideration. Tentative distribution:
+All values use exact scaled integer arithmetic. At `p = 0.5`, the candidate fee
+is exactly 20 basis points of cash consideration as a rational — at size only.
+The terminal-ceil close charges a minimum of one atom per fee-bearing intent,
+and the laboratory's own fee vector (`FEE-001`,
+`research/economics/fixtures.py`) records a 1-atom fee on 1 atom of
+consideration: 10,000 basis points on the smallest fill. Tentative distribution:
 
 - 60% standing-maker rebate;
 - at most 15% batch executor, capped by that batch's collected fees;
 - at least 25% protocol treasury.
 
 For the single-Egg midpoint example these correspond to approximately 12, 3, and
-5 basis points. Empty batches and zero-fee fills pay no executor subsidy. Obvious
-same-authority self-crosses are rejected. A Sybil controlling taker, maker, and
-executor recovers at most 75% before network costs, leaving wash volume negative.
+5 basis points. This split is design prose: no Rust implements it. The only
+Rust fee allocator in the tree (`research/liquidity-policy-model`) distributes
+by LP capital-time weight — a different mechanism — and has no consumers; the
+Python laboratory's `allocate_fee` is the split's sole executable form. Empty
+batches and zero-fee fills pay no executor subsidy. Obvious same-authority
+self-crosses are rejected. A Sybil controlling taker, maker, and executor
+recovers at most 75% of fees paid, which leaves its collateral-domain net
+non-positive, not strictly negative: exactly zero on zero-fee fills when carry
+is dropped, and strictly negative only under the terminal-ceil close, which
+charges at least one atom per fee-bearing intent. Network costs are an
+additional loss in SOL, a separate asset with no conversion assumed. The
+terminal-ceil close, not the split alone, is what makes wash cycling strictly
+costly.
 
 Taker fees round upward; rebates round downward; residual atoms follow a frozen
 allocation. Order splitting must not erase fees. The fee schedule is immutable per
@@ -165,10 +190,13 @@ Then maintenance break-even is:
 a * kappa * W * x_floor + P_SOL >= O_SOL
 ```
 
-This is a business measurement, not an admission invariant. At a five-basis-point
-net take, each dollar of uncovered cost requires roughly $2,000 of volume. If
-volume does not arrive, the team is not funded—but already accepted Markets still
-settle from prepaid resources.
+This is a business measurement, not an admission invariant. In every
+configuration currently true in the tree, the fee is forced to zero, so the
+inequality returns unbounded required volume: no volume covers any cost. The
+"$2,000 of volume per dollar of cost" figure is arithmetic on an assumed
+five-basis-point net take, not a measurement of anything. If volume does not
+arrive, the team is not funded—but already accepted Markets still settle from
+prepaid resources.
 
 No emissions, points, wash rebates, or fee-share staking is required to
 manufacture activity. A DREGG Realm may create organic DREGG demand, and a Realm
@@ -176,8 +204,10 @@ may nominate DREGG as an optional keeper reward, but Eggcrate never privileges
 that mint and no other Realm must touch it.
 
 Fee destinations are an immutable deployment/Realm `RevenuePolicy`, not Eggcrate
-solvency law. Every destination must be separately disclosed, conflict-reviewed,
-and unable to spend Hoard principal or booked liveness funds. See
+solvency law. `RevenuePolicy` is currently prose: it is named as an architectural
+boundary in four documents and implemented in zero lines of code. Every
+destination must be separately disclosed, conflict-reviewed, and unable to spend
+Hoard principal or booked liveness funds. See
 [DEPLOYMENT_REVENUE_BOUNDARY.md](DEPLOYMENT_REVENUE_BOUNDARY.md).
 
 ## 7. Data-failure incentives

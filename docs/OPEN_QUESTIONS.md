@@ -7,23 +7,23 @@ answer merely because a convenient code path exists.
 
 ### Failure payout and sabotage
 
-How should a Market settle when authenticated evidence is incomplete after the
-repair window?
-
-- Separate invalid-data Egg makes the failure incentive directly tradeable.
-- Equal payout over all outcomes can transfer nearly the full Hoard to cheap tails.
-- Compatible-outcome payout preserves partial authenticated information but
-  requires a precise monotone compatibility algebra.
-- Delayed refund is not neutral once individual Eggs have circulated.
-
-Required result: finite payout-vector set, exact divisibility/remainder behavior,
-common-mode exposure cap, and adversarial payoff analysis.
+**Decided 2026-08-19:** `EvidenceOnlyRecoveryV1` — there is no numeric
+data-failure payout, because no fixed fallback vector is distribution-neutral
+(the equal-sum argument: any fallback unequal to a still-possible completion
+has both a gainer and a loser). A market without evidence-selected weights
+degrades to recoverable dormancy; failure residue goes to the canonical SDK
+incinerator, never to an interested party. See
+[implementation/FAILURE_PAYOUT_DECISION_V1.md](implementation/FAILURE_PAYOUT_DECISION_V1.md).
+Model-only; its runtime promotion falsifiers remain open there.
 
 ### Payout rationality and dust
 
-Choose between redemption lots and persistent remainder credits. Prove that every
-collateral atom remains attributable and no treasury dust rule silently changes
-the payoff.
+**Decided 2026-08-19:** lot-scaled bearer units, not persistent remainder
+credits — one outcome-token atom represents a creation-time raw-claim lot `L`
+with `D | L` (first conservative profile `L = D`), every claim-separating path
+preserves the lot, and the profile creates no fractional credits: an imported
+nonzero credit numerator is a terminal STOP, not sweepable dust. See
+[implementation/FAILURE_PAYOUT_DECISION_V1.md](implementation/FAILURE_PAYOUT_DECISION_V1.md).
 
 ### Upgrade posture
 

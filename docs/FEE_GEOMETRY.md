@@ -11,7 +11,11 @@ space. The binary candidate
 q * p * (1 - p)
 ```
 
-has a useful exact generalization to any payoff vector on the simplex.
+has an exact generalization to any payoff vector on the simplex — provably the
+unique one, given two axioms, and provably not the model-free risk norm. Both
+facts are proved in
+[research/RISK_SUMMED_POSITIONS.md](research/RISK_SUMMED_POSITIONS.md) §3 and
+stated below.
 
 This document defines an experimental fee base. It is not canonical until it beats
 flat-notional and per-Egg controls under the economic laboratory.
@@ -99,7 +103,39 @@ and makes adding an offsetting complete-set component neutral.
 At `MAX_OUTCOMES=16`, at most 120 unordered pairs contribute. Fixed nested loops,
 checked wide intermediates, and one division are practical to verify and benchmark.
 The exact maximum coefficient, price scale, lot count, fee coefficient, and
-intermediate width must be frozen before implementation.
+intermediate width were to be frozen before implementation. That ordering has
+already been violated: `dispersion_fee_step`
+(`programs/solana-layout/src/portfolio_settlement.rs`) implements §4 in checked
+`u128`, and none of the five bounds is frozen. The checked arithmetic makes the
+implementation safe but changes the claim — its domain is "whatever does not
+overflow", not an audited envelope. Freezing the five bounds is still owed.
+
+### Exact relation to the risk quotient (proved, not assumed)
+
+[research/RISK_SUMMED_POSITIONS.md](research/RISK_SUMMED_POSITIONS.md) §3 pins
+this base exactly, in both directions.
+
+- **`G` is not the quotient (range) norm — refuted (Proposition 10).** For the
+  model-free range `R(a) = max_i a_i - min_i a_i`,
+
+  ```text
+  G(a,p) <= R(a)/4
+  ```
+
+  with equality only when the implied measure puts mass `1/2` on argmax and
+  `1/2` on argmin outcomes, and the bound is the exact envelope:
+  `sup_p G(a,p) = R(a)/4`. The single-Egg case displays the whole gap: the
+  ratio `2p(1-p)` tends to zero at extreme prices while the model-free at-risk
+  capital stays fixed. `G` measures expected payoff variability under the
+  market's own implied measure; it does not measure model-free risk moved.
+- **`G` is characterized, not merely constructed (Propositions 11-12).** It is
+  the *unique* positively 1-homogeneous functional that reduces to `q(1-q)` on
+  digitals and is additive over layer-cake decompositions; and within the
+  pairwise family `sum p_i p_j phi(a_i - a_j)`, relabeling symmetry plus
+  homogeneity force `phi(t) = c|t|`. Accept the binary calibration and layer
+  additivity, and `G` is derived — uniquely. What is not derivable is the
+  binary calibration itself: the price-free quotient-norm base `kappa' * R(a)`
+  satisfies every axiom in this section and is a mandatory control arm (§6).
 
 ## 4. Fee equation
 
@@ -117,8 +153,13 @@ collateral on top of buy consideration or withheld from sell proceeds. It never
 comes from the Hoard.
 
 The initial comparative arm corresponding to the previous single-Egg hypothesis
-is `kappa=0.004`. For one Egg at `p=0.5`, this is 20 basis points of cash
-consideration. This number is an experiment, not a natural constant.
+is `kappa=0.004`. For one Egg at `p=0.5`, this is exactly 20 basis points of
+cash consideration as a rational — and only at size. Under the terminal-ceil
+close the minimum charge per fee-bearing intent is one atom, which dominates
+small intents: the laboratory's own fee vector (`FEE-001`,
+`research/economics/fixtures.py`) records a 1-atom fee on 1 atom of
+consideration — 10,000 basis points on the smallest fill. This number is an
+experiment, not a natural constant.
 
 ## 5. Portfolio semantics that must be frozen
 
@@ -134,7 +175,17 @@ Candidate construction must prevent fee laundering through:
 - self-crossing or Sybil loops that recover maker/executor rebates;
 - resetting fractional carry across Positions, Epochs, or order fragmentation;
 - separately rounding vector components or page fragments;
-- including a complete-set component in quantity/reservation inconsistently.
+- including a complete-set component in quantity/reservation inconsistently;
+- clearing risk transfer entirely on zero-priced outcomes. At boundary prices
+  the kernel of the dispersion base is `span(1) ⊕ R^{Z(p)}`
+  ([research/RISK_SUMMED_POSITIONS.md](research/RISK_SUMMED_POSITIONS.md)
+  Proposition 9), strictly larger than the risk quotient, so a transfer
+  supported on the zero-priced outcomes `Z(p)` is feeless however large its
+  model-free range. The same kernel invariance §3 presents as the fee's
+  central virtue degenerates into this evasion channel at extreme prices.
+  Whether the batch relation can clear fills at price zero — and what the
+  one-tick floor bounds the hole at — is a named zero-price laundering
+  falsifier the laboratory must exercise before any base is selected.
 
 The simplest V1 rule is to compute the fee per filled signed intent, using the
 canonical vector committed by that intent. A more efficient netting rule across
@@ -149,7 +200,12 @@ Compare at least:
 2. flat cash-consideration basis points;
 3. per-Egg `q*p_i*(1-p_i)` charged leg by leg;
 4. atomic portfolio `G(a,p)`;
-5. the same bases with several maker/executor/treasury allocations.
+5. the same bases with several maker/executor/treasury allocations;
+6. the price-free quotient-norm base `kappa' * R(a)`
+   ([research/RISK_SUMMED_POSITIONS.md](research/RISK_SUMMED_POSITIONS.md)
+   §3.4), with incidence measured by implied probability — the two bases
+   differ most exactly where the burden-by-probability axis below already
+   demands data.
 
 Measure:
 
@@ -166,7 +222,12 @@ Measure:
 
 The partition-refinement test is especially important. `G` is invariant to
 splitting a state into identical-payoff subcells when their prices add exactly, a
-strong advantage over naïve per-token fees. Verify that property formally.
+strong advantage over naïve per-token fees. Formal verification of that property
+remains open. What exists today: bounded exhaustive Python
+(`research/economics/experiments.py` `exp_fee_g1`, `n <= 5`, `S <= 12`) plus the
+admission lab's bounded sweeps, and three unit tests in
+`portfolio_settlement.rs` — a file no runtime path calls. Nothing is closed in
+Verus or Rocq; Rocq currently contains zero theorems.
 
 ## 7. Promotion criteria
 
