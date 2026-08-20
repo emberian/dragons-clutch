@@ -1,0 +1,71 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+warning: function `second_actor_keypair` is never used
+  --> tests/collateral_leg.rs:94:4
+   |
+94 | fn second_actor_keypair() -> Keypair {
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `fund_signer`, `transfer_collateral`, `endow_for`, and `endow` are never used
+   --> tests/collateral_leg.rs:281:14
+    |
+111 | impl Scenario {
+    | ------------- methods in this implementation
+...
+281 |     async fn fund_signer(&mut self, signer: Address, lamports: u64) {
+    |              ^^^^^^^^^^^
+...
+290 |     async fn transfer_collateral(
+    |              ^^^^^^^^^^^^^^^^^^^
+...
+503 |     fn endow_for(
+    |        ^^^^^^^^^
+...
+541 |     fn endow(&self, sequence: u64, amount: u64) -> Instruction {
+    |        ^^^^^
+
+warning: constant `ENDOW_UNITS` is never used
+   --> tests/collateral_leg.rs:758:7
+    |
+758 | const ENDOW_UNITS: u32 = 700_000;
+    |       ^^^^^^^^^^^
+
+warning: constant `FIRST_ENDOW_UNITS` is never used
+   --> tests/collateral_leg.rs:765:7
+    |
+765 | const FIRST_ENDOW_UNITS: u32 = 900_000;
+    |       ^^^^^^^^^^^^^^^^^
+
+warning: `clutch-sbf-svm-tests` (test "collateral_leg") generated 4 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.97s
+     Running tests/collateral_leg.rs (/Users/ember/jobs/dragons-clutch-r1-2d530d2-evidence/bank-target/debug/deps/collateral_leg-f77cc5af63c9c401)
+
+running 13 tests
+test a_stranger_cannot_fund_a_split_from_an_account_they_do_not_own ... SVM collateral holder: a stranger's account refused with Custom(27) (0x001b)
+ok
+test create_market_founds_seven_state_pdas_and_the_token_plane_from_absence ... SVM create_market: 20 accounts, 7 state PDAs + 2 outcome mints + hoard token, 948053 CU
+ok
+test duplicate_withdrawal_transaction_rolls_back_the_first_token_cpi ... SVM WithdrawCash rollback: first CPI restored after duplicate replay refusal
+ok
+test founding_a_market_twice_refuses ... SVM create_market idempotence: second founding refused with Custom(64) (0x0040)
+ok
+test late_create_market_refusal_rolls_back_state_and_token_construction ... ok
+test no_wallet_signature_can_take_collateral_out_of_the_hoard ... SVM hoard outflow: wallet withdrawal refused with Custom(4); donated surplus did not block Split
+ok
+test redeem_reclassifies_locked_collateral_into_position_cash ... SVM redeem: 18 accounts, payout=6 atoms, 606399 CU
+SVM redeem (losing claim): payout=0 atoms, 606399 CU
+ok
+test retired_feed_and_buffer_redeem_plane_is_refused_atomically ... ok
+test split_and_merge_reclassify_without_a_second_token_transfer ... SVM collateral leg: split=231410 CU  merge=231441 CU
+ok
+test the_shadow_only_plane_is_gone ... SVM mandatory leg: the ten-account Split refused with Custom(1) (0x0001)
+ok
+test the_whole_cycle_survives_a_holder_who_is_not_the_actor ... SVM full cycle: split=231410 CU  materialize=112756 CU  dematerialize=112745 CU  merge=231441 CU  (3 outcome tokens left with a third party and the aggregate still reconciles)
+ok
+test withdraw_pays_only_unreserved_cash_and_preserves_locked_backing ... SVM WithdrawCash: paid 73 unreserved atoms, 229757 CU
+ok
+test withdraw_refuses_destination_substitution_and_foreign_authority ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.17s
+

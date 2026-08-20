@@ -37,19 +37,27 @@ Accordingly the profile publishes measured route quotes and bounded capital
 requirements, but it does **not** emit a complete promoted `LivenessPolicy`
 tuple. A STOP is not converted into a finite placeholder.
 
-The sealed default ELF is `bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`
-(`1,228,192` bytes), built from runtime source and test/evidence ancestry
-`83e124d`. Two ordinary clean builds are byte-identical. A relocated Cargo-home
+The sealed default ELF is `af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b`
+(`1,490,544` bytes), built from runtime source and test/evidence ancestry
+`2d530d2`. Two ordinary clean builds are byte-identical. A relocated Cargo-home
 build is explicitly path-sensitive and therefore is not substituted as the
 canonical artifact.
 
-The preceding `a5725a3d…` seal is retained as historical evidence only. The
-declared closure refreshes the isolated Solana-reference lock and qualifies a
-rustdoc link in `programs/solana-reference/src/resolution.rs`. Exact artifact
-comparison finds identical instructions and only seven changed line-record
-bytes, but the ELF digest still changes. Consequently every current CU row
-below was remeasured against exact `bd20711b…`; no `a5725a3d…` CU was relabeled
-as current evidence.
+The preceding `bd20711b…` and `a5725a3d…` seals are retained as historical
+evidence only; neither is retracted and both keep their complete artifact
+directories. Unlike the `a5725a3d…` → `bd20711b…` step, this is a materially
+different artifact: the Direct V3 selection lifecycle merge grows the declared
+runtime closure from 88 to 94 files, grows the stripped ELF by `262,352` bytes,
+and leaves no section byte-identical except `.dynstr` and `.shstrtab` — so the
+undefined-syscall surface is unchanged while the code is not. Consequently
+every current CU row below was remeasured against exact `af6bb79c…`; no
+`bd20711b…` or `a5725a3d…` CU was relabeled as current evidence. The measured
+ResolutionWork routes each moved by exactly one CU, the cost of the one added
+dispatcher arm, and every route still clears its 25%-headroom admission.
+
+Direct V3 itself is resident in this artifact but is **not** promoted by this
+profile: it carries no measured CU row, no rent/refund/close row, and no
+terminal-admission row here, so the Direct STOPs below remain the V2 ones.
 
 ## Policy inputs, not measurements
 
@@ -88,13 +96,13 @@ same `1,000,000` micro-lamport/CU price used by the quote:
 
 | route/shape | largest observed CU | selected limit | policy reward |
 | --- | ---: | ---: | ---: |
-| Begin | `810,992` | `1,050,000` | caller-paid `1,160,000` |
-| Fold(1) | `804,616` | `1,050,000` | `1,160,000` |
-| Fold(2) | `812,193` | `1,050,000` | `1,160,000` |
-| Fold(3) | `813,128` | `1,050,000` | `1,160,000` |
-| Fold(4) | `815,573` | `1,050,000` | `1,160,000` |
-| Finalize | `1,094,832` | `1,400,000` | `1,510,000` |
-| expired Abort | `587,197` | `750,000` | `860,000` |
+| Begin | `810,993` | `1,050,000` | caller-paid `1,160,000` |
+| Fold(1) | `804,617` | `1,050,000` | `1,160,000` |
+| Fold(2) | `812,194` | `1,050,000` | `1,160,000` |
+| Fold(3) | `813,129` | `1,050,000` | `1,160,000` |
+| Fold(4) | `815,574` | `1,050,000` | `1,160,000` |
+| Finalize | `1,094,833` | `1,400,000` | `1,510,000` |
+| expired Abort | `587,198` | `750,000` | `860,000` |
 
 Begin has `11` accounts, Fold `8`, Abort `8`, and Finalize `15 +
 outcome_count`. The Work account is `1,296` bytes and the zero-data Reserve is
@@ -165,9 +173,9 @@ sample-headroom policy:
 
 | degree | Resolve CU | retry CU | internal redeem CU | bearer redeem CU |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | `1,088,267` | `934,622` | `775,978` | `785,073` |
-| 2 | `1,096,640` | `942,995` | `778,021` | `786,873` |
-| 3 | `1,103,534` | `949,889` | `776,411` | `784,578` |
+| 1 | `1,088,267` | `934,622` | `775,978` | `785,074` |
+| 2 | `1,096,640` | `942,995` | `778,021` | `786,874` |
+| 3 | `1,103,534` | `949,889` | `776,411` | `784,579` |
 
 Each point-v3 Resolve rounds to the `1,400,000`-CU policy limit and a
 `1,510,000`-lamport keeper quote. The old fixture run's `Custom(80)` refusals
@@ -248,12 +256,12 @@ ref; test fixtures are pinned separately at the release/evidence ref. It never
 copies a later probe into an older runtime tree. Any source, ABI, test, probe,
 artifact, or capture drift requires a new profile.
 
-The current artifact report and upstream 52-file checksum ledger are themselves
+The current artifact report and upstream 50-file checksum ledger are themselves
 copied into the profile. Their SHA-256 digests are
-`626a299dd879cff5f8c775b82b488c2d6b300a386b6d5f847913b5e14797e038`
-and `dbf55f8e28c1674fc0f76b434049fbc8ef1e906c46db6ac0457410eaebc35f35`.
+`39a8b19cae23a2a02f7ba870b18b5a4b9a07af6876c05443d6dd28e8bb89ccfb`
+and `e433c17d4be57463e78eb47554cc6e84d22aab5c1a27a53e297f83a7a21304e0`.
 The audit found zero diagnosed first-party final-LTO stack survivors; all
-`40,389` direct `r10` references are at or below `4,096` bytes.
+`49,521` direct `r10` references are at or below `4,096` bytes.
 
 ## Promotion state
 

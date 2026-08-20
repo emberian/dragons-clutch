@@ -82,10 +82,21 @@ class PolicyTests(unittest.TestCase):
         tampered = copy.deepcopy(self.evidence)
         relative, row = tampered["evidence_files"].popitem()
         tampered["evidence_files"][
-            "research/liveness-policy-profile/artifacts/a5725a3d8e149b2b/" + relative
+            "research/liveness-policy-profile/artifacts/bd20711b01828a74/" + relative
         ] = row
         with self.assertRaises(policy.CheckError):
             policy.check_artifact_binding(tampered)
+
+    def test_superseded_seal_evidence_cannot_be_dropped(self) -> None:
+        policy.check_artifact_binding(self.evidence)
+        for missing in ("artifacts/never-sealed", "artifacts/af6bb79cc3766bd0"):
+            tampered = copy.deepcopy(self.evidence)
+            digest = next(iter(tampered["historical_artifacts"]))
+            tampered["historical_artifacts"][digest]["path"] = (
+                f"research/liveness-policy-profile/{missing}/clutch_sbf.so"
+            )
+            with self.assertRaises(policy.CheckError):
+                policy.check_artifact_binding(tampered)
 
     def test_rent_drift_is_rejected(self) -> None:
         tampered = copy.deepcopy(self.evidence)

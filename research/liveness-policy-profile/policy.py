@@ -350,7 +350,12 @@ def check_files(evidence: dict[str, Any]) -> None:
 
 
 def check_artifact_binding(evidence: dict[str, Any]) -> None:
-    """Refuse historical/mixed-ELF rows in the current measurement plane."""
+    """Refuse historical/mixed-ELF rows in the current measurement plane.
+
+    A reseal supersedes the previous artifact; it never retracts it.  Every
+    superseded seal therefore keeps its own artifact root and its own complete
+    evidence set on disk, and the current seal may not be written over it.
+    """
 
     artifact = evidence["artifact"]
     digest = artifact["sha256"]
@@ -382,7 +387,16 @@ def check_artifact_binding(evidence: dict[str, Any]) -> None:
             raise CheckError("current artifact cannot also be historical")
         if row["disposition"] != "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION":
             raise CheckError(f"historical artifact disposition is not fail-closed: {old_digest}")
+        historical_root = Path(row["path"]).parent
+        if historical_root == artifact_root:
+            raise CheckError(f"historical seal shares the current artifact root: {old_digest}")
+        for suffix in sorted(REQUIRED_EVIDENCE_SUFFIXES):
+            retained = REPO / historical_root / suffix
+            if not retained.is_file():
+                raise CheckError(f"superseded seal evidence was removed: {historical_root / suffix}")
         old_path = REPO / row["path"]
+        if not old_path.is_file():
+            raise CheckError(f"superseded seal artifact was removed: {row['path']}")
         require_equal(sha256(old_path), old_digest, f"historical artifact {old_digest}")
 
 

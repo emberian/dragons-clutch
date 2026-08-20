@@ -1,31 +1,31 @@
 {
   "schema": "dragons-clutch/liveness-bank-capture/v2",
   "capture_date": "2026-08-19",
-  "runtime_ref": "83e124dda22adc15cb5ebf18ff9e0ab971c551dc",
-  "evidence_ref": "83e124dda22adc15cb5ebf18ff9e0ab971c551dc",
+  "runtime_ref": "2d530d218b470e5e2d1cf52480c4a9d1636c08e1",
+  "evidence_ref": "2d530d218b470e5e2d1cf52480c4a9d1636c08e1",
   "artifact": {
-    "path": "research/liveness-policy-profile/artifacts/bd20711b01828a74/clutch_sbf.so",
-    "sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
-    "bytes": 1228192,
-    "source_ref": "83e124dda22adc15cb5ebf18ff9e0ab971c551dc",
+    "path": "research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/clutch_sbf.so",
+    "sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
+    "bytes": 1490544,
+    "source_ref": "2d530d218b470e5e2d1cf52480c4a9d1636c08e1",
     "profile": "default-empty-registry"
   },
   "measurements": {
     "resolution_work": {
-      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
+      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
       "fold_widths": [1, 2, 3, 4],
-      "begin_cu": [807676, 805308, 810992, 807674, 805860],
-      "fold_1_cu": [804616, 802253],
-      "fold_2_cu": [809225, 812193],
-      "fold_3_cu": [813128],
-      "fold_4_cu": [815573],
-      "finalize_cu": [1094832],
-      "abort_cu": [587197],
+      "begin_cu": [807677, 805309, 810993, 807675, 805861],
+      "fold_1_cu": [804617, 802254],
+      "fold_2_cu": [809226, 812194],
+      "fold_3_cu": [813129],
+      "fold_4_cu": [815574],
+      "finalize_cu": [1094833],
+      "abort_cu": [587198],
       "monolithic_v4_cu": [1253326],
       "test_result": "PASS_4_OF_4"
     },
     "native_point_v3": {
-      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
+      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
       "degree_rows": [
         {"degree": 1, "resolve_cu": 1088267, "retry_cu": 934622, "internal_redeem_cu": 775978},
         {"degree": 2, "resolve_cu": 1096640, "retry_cu": 942995, "internal_redeem_cu": 778021},
@@ -34,20 +34,20 @@
       "test_result": "PASS"
     },
     "native_bearer_redeem": {
-      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
+      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
       "degree_rows": [
-        {"degree": 1, "external_redeem_cu": 785073},
-        {"degree": 2, "external_redeem_cu": 786873},
-        {"degree": 3, "external_redeem_cu": 784578}
+        {"degree": 1, "external_redeem_cu": 785074},
+        {"degree": 2, "external_redeem_cu": 786874},
+        {"degree": 3, "external_redeem_cu": 784579}
       ],
       "test_result": "PASS"
     },
     "occupation_v4": {
-      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
+      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
       "degree_rows": [
-        {"degree": 1, "initial_cu": 1243529, "retry_cu": 1089893, "internal_redeem_cu": 774692, "external_redeem_cu": 783711},
-        {"degree": 2, "initial_cu": 1254699, "retry_cu": 1101063, "internal_redeem_cu": 776735, "external_redeem_cu": 785511},
-        {"degree": 3, "initial_cu": 1268630, "retry_cu": 1114994, "internal_redeem_cu": 779625, "external_redeem_cu": 787716}
+        {"degree": 1, "initial_cu": 1243529, "retry_cu": 1089893, "internal_redeem_cu": 774692, "external_redeem_cu": 783712},
+        {"degree": 2, "initial_cu": 1254699, "retry_cu": 1101063, "internal_redeem_cu": 776735, "external_redeem_cu": 785512},
+        {"degree": 3, "initial_cu": 1268630, "retry_cu": 1114994, "internal_redeem_cu": 779625, "external_redeem_cu": 787717}
       ],
       "span_1_initial_cu": [1250517, 1243835, 1248016],
       "span_2_initial_cu": [1244023, 1259767, 1261323],
@@ -55,38 +55,38 @@
       "test_result": "PASS_BUT_MONOLITHIC_HEADROOM_STOP"
     },
     "direct_v2": {
-      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
-      "init_cu": [532149],
-      "freeze_cu": [935108],
-      "submit_cu": [986765, 1015184, 1050208, 1194085, 1080684],
+      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
+      "init_cu": [532150],
+      "freeze_cu": [935109],
+      "submit_cu": [986766, 1015185, 1050209, 1194086, 1080685],
       "select_cu": [1400000],
       "select_result": "ROLLBACK_PROGRAM_FAILED_TO_COMPLETE",
       "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
       "test_result": "PASS_EXPECTED_STOP"
     },
     "source_endow": {
-      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
+      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
       "default_refusal_code": "0x79",
       "default_release_available": false,
       "rollback": "BYTE_AND_LAMPORT_EXACT",
       "test_result": "PASS_EXPECTED_REFUSAL"
     },
     "blank_bank_market_creation": {
-      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
-      "v2": {"cu": 921790, "bytes": 165, "rent_lamports": 2039280},
-      "v3": {"cu": 932461, "bytes": 319, "rent_lamports": 3111120},
-      "v4": {"cu": 925066, "bytes": 383, "rent_lamports": 3556560},
+      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
+      "v2": {"cu": 912791, "bytes": 165, "rent_lamports": 2039280},
+      "v3": {"cu": 929462, "bytes": 319, "rent_lamports": 3111120},
+      "v4": {"cu": 922067, "bytes": 383, "rent_lamports": 3556560},
       "test_result": "PASS_2_OF_2"
     },
     "order_reservation": {
-      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
-      "place_cu": [598879, 596909],
+      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
+      "place_cu": [598894, 596924],
       "cancel_cu": [470318, 474991],
       "test_result": "PASS_2_OF_2"
     },
     "withdraw_cash": {
-      "artifact_sha256": "bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60",
-      "cu": [229756],
+      "artifact_sha256": "af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b",
+      "cu": [229757],
       "test_result": "PASS"
     },
     "source_archive_host": {

@@ -12,10 +12,12 @@ This directory contains:
 - `src/main.rs`: exact account-width and pinned-default-rent probe;
 - `policy.py`, `evidence.json`, and the normalized capture: exact artifact,
   bank, source/test identity, rent, reward, and source-drift seal;
-- `artifacts/bd20711b01828a74`: the current canonical ELF, build and stack/ELF
+- `artifacts/af6bb79cc3766bd0`: the current canonical ELF, build and stack/ELF
   audit evidence, and bank logs measured against that exact ELF;
-- `artifacts/a5725a3d8e149b2b`: the preceding historical seal, retained for
-  audit continuity but excluded from the current projection.
+- `artifacts/bd20711b01828a74` and `artifacts/a5725a3d8e149b2b`: the preceding
+  historical seals, retained in full for audit continuity but excluded from the
+  current projection. `policy.py` refuses a seal that overwrites a superseded
+  artifact root or drops any of its evidence files.
 
 The profile never treats Hoard principal, fees, future volume, a future
 subscriber, a token price, or a token-to-SOL conversion as liveness funding.
@@ -43,12 +45,14 @@ cargo clippy --offline --locked \
 ```
 
 The current artifact source and test/evidence ancestry is exact commit
-`83e124d`. The preceding `a5725a3d…` artifact remains historical only: the
-declared closure refreshes the isolated Solana-reference lock and qualifies a
-rustdoc link in `programs/solana-reference/src/resolution.rs`. Exact ELF
-comparison finds identical instructions and seven changed line-record bytes,
-but the digest still changes, so no old CU row was reused as current-artifact
-evidence. Native full-lifecycle tests are intentionally excluded from the
+`2d530d2`. The preceding `bd20711b…` artifact remains historical only: the
+Direct V3 selection lifecycle merge grows the declared runtime closure from 88
+to 94 files and the stripped ELF from `1,228,192` to `1,490,544` bytes. Exact
+ELF comparison finds no byte-identical section except `.dynstr` and
+`.shstrtab`, so this is a materially different artifact and no old CU row was
+reused as current-artifact evidence; every measured row was rerun against exact
+`af6bb79c…`. Direct V3 is resident but unmeasured here, so no V3 row enters the
+projection. Native full-lifecycle tests are intentionally excluded from the
 default feature: running them requires the
 distinct non-production mock-source ELF, so they are not smuggled into this
 projection.

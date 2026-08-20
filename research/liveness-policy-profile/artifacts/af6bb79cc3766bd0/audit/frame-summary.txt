@@ -1,0 +1,7 @@
+final_text_function_symbols=810
+final_text_function_addresses=808
+disassembled_function_regions=808
+direct_r10_references=49521
+deepest_direct_r10_offset=4096
+deepest_direct_r10_function=_ZN10clutch_sbf11claim_truth21observe_outcome_mints17hb324e9b266907a25E
+direct_frame_bounds=PASS
