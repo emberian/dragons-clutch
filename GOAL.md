@@ -72,6 +72,21 @@ in the reseal lane's output) and the postmark doorstep (4 threads).
 
 ## Done log (2026-08-19 session)
 
+- CYCLE B SEALED END TO END (manifest 6827749 at 100/100, post-commit
+  check OK, pushed; attestation lane dispatched): liveness profile resealed
+  at fda59705/1,527,640 (new 25-file root, all 11 measurement families
+  re-derived from fresh logs — drift +4 CU on folds, worst +274 = Tier 0's
+  measured cost, blank-bank creation FELL 7.3%; relocation byte-identity
+  PERSISTS; audit closure gap closed, declared+digested 94 -> 104). The
+  emission's drift refusals all did their jobs and were repaired honestly:
+  four more stale locks from the T2-2 dep edge, the Verus EXCLUDED-source
+  digests re-recorded (exclusion scope unchanged, nothing new claimed
+  proven), and the cost-lab abi-audit refusing the codec width drift it
+  exists to refuse — every downstream pin moved by exactly the 746-byte
+  packing saving, goldens regenerated. Three emissions total (8 then 2
+  then 0 contradictions). T2-6 (the walk, tags 49-53) building in its
+  worktree meanwhile.
+
 - TIER 2 WAVE 1 COMPLETE, ALL FIVE JOINS MERGED (through the T2-3 merge):
   T2-1 codec (ENCODED_BYTES 47,846; 210/210 resume points on real
   encode/decode; 106k-flip hostile battery; 35-region tamper boundary with
