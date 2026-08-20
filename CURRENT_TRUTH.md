@@ -35,11 +35,11 @@ economics.
 
 ## 2. Snapshot boundary
 
-The accepted local evidence ancestry is the 2026-08-20 cycle-D chain:
-liveness seal `3bcdeec` over runtime ancestry `2dbc9fc`, manifest `788581c`.
-The current sealed default ELF is **1,914,432 bytes with SHA-256
-`e8ba31d582be3939c7ee41db3372af0068df7dafead1c779c9de1cfefdd2d9dc`** — the
-Tier-2-complete runtime, intents 36–59. Its audit is archived under
+The accepted local evidence ancestry is the 2026-08-20 cycle-E chain:
+liveness seal `934bdd6` over runtime ancestry `d77d670`, manifest `cb94c27`.
+The current sealed default ELF is **1,979,512 bytes with SHA-256
+`4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb`** — the
+TerminalClosure runtime, intents 36–67. Its audit is archived under
 [`research/liveness-policy-profile/artifacts/e8ba31d582be3939`](research/liveness-policy-profile/artifacts/e8ba31d582be3939/audit/RUNTIME_ARTIFACT_AUDIT.md):
 pass 1 = pass 2 byte-identical from the canonical checkout, zero first-party
 frame diagnostics surviving final LTO, all 58,099 direct `r10` references at
@@ -73,11 +73,13 @@ Runtime evidence is artifact-specific:
   is [`docs/implementation/COMMITTED_SBF_WALK.md`](docs/implementation/COMMITTED_SBF_WALK.md).
 
 The checked-in `MANIFEST.baseline.json` is schema v2, re-emitted for the
-2026-08-20 Tier-2-complete runtime (`e8ba31d5…`, 1,914,432 bytes, liveness
-seal `3bcdeec`) with all 100 declared gates executed in the emission run,
-and `check --run-gates` passes after the manifest-only commit (`788581c`).
-Persvati independently attested the current identity on 2026-08-20:
-**44/44 portable gates PASS, 0 STOP** over exact `788581c` — archive and
+2026-08-20 TerminalClosure runtime (`4fded7a6…`, 1,979,512 bytes, liveness
+seal `934bdd6`, cycle E) with all 100 declared gates executed in the
+emission run, and `check --run-gates` passes after the manifest-only
+commit (`cb94c27`). The cycle-E portable attestation is pending; the most
+recent completed attestation covers the same-day predecessor chain:
+Persvati attested `788581c` (the `e8ba31d5…` Tier-2-complete seal) with
+**44/44 portable gates PASS, 0 STOP** — archive and
 bundle digests byte-identical on both hosts, the `e8ba31d5…` ELF
 byte-verified in six contexts (never built, loaded, or executed there), all
 six historical roots verified as the exact retained set, the manifest
