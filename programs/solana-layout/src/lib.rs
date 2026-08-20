@@ -4656,6 +4656,29 @@ pub enum Intent {
         epoch: EpochId,
         candidate: Hash32,
     },
+    /// Construct one general (portfolio-clearing) [`EpochAccount`] and its
+    /// deadline-window companion ([`clearing::EpochWindowAccount`]).
+    ///
+    /// The general sibling of [`Intent::InitDirectEpochV3`], minus every
+    /// `== 2` gate: outcome width and price scale come from the bound terms
+    /// and grid, so neither travels on the wire.  `policy` is the immutable
+    /// batch-policy identity the epoch clears under; the presented policy
+    /// artifact must re-derive it exactly.  The epoch identity is not carried
+    /// — [`canonical_epoch_id`] derives it from `(market, epoch_index)`.
+    InitEpoch {
+        market: MarketId,
+        epoch_index: u64,
+        policy: Hash32,
+        freeze_deadline_slot: u64,
+    },
+    /// Freeze one general epoch's complete page set, at or after its deadline.
+    ///
+    /// Permissionless keeper work: the deadline in the epoch's window account
+    /// is the authority, not a signer.  Every page of the set rides the same
+    /// instruction; the freeze seals each page, stamps the set commitment
+    /// into the epoch, and rewrites `owner_count` with the exact
+    /// distinct-owner count of the frozen set.
+    FreezeEpoch { market: MarketId, epoch: EpochId },
 }
 
 /// The placement admissibility rule, shared by the encoder and the decoder.
@@ -4763,7 +4786,13 @@ const SETTLE_DIRECT_V2_TAG: u8 = 31;
  * family begins immediately after it. */
 const INIT_CLEAR_WORK_TAG: u8 = 47;
 const GROW_CLEAR_WORK_TAG: u8 = 48;
+const INIT_EPOCH_TAG: u8 = 49;
+const FREEZE_EPOCH_TAG: u8 = 50;
 const _: () = assert!(INIT_CLEAR_WORK_TAG == direct_selection_v3::LAST_DIRECT_V3_INTENT_TAG + 1);
+// The Tier 2 clearing family is tag-contiguous: each intent takes exactly the
+// next tag, so a gap is a compile error rather than a squatting hazard.
+const _: () = assert!(INIT_EPOCH_TAG == GROW_CLEAR_WORK_TAG + 1);
+const _: () = assert!(FREEZE_EPOCH_TAG == INIT_EPOCH_TAG + 1);
 
 fn resolution_work_codec(error: resolution_work::ResolutionWorkCodecError) -> CodecError {
     use resolution_work::ResolutionWorkCodecError as WorkError;
@@ -4826,6 +4855,8 @@ impl Intent {
             Self::SealArtifact { .. } => 2 + 1 + 32 + 32 + 2,
             Self::AbortArtifact { .. } => 2 + 1 + 32 + 32,
             Self::InitClearWork { .. } | Self::GrowClearWork { .. } => 2 + 32 + 32 + 32,
+            Self::InitEpoch { .. } => 2 + 32 + 8 + 32 + 8,
+            Self::FreezeEpoch { .. } => 2 + 32 + 32,
         }
     }
     /// Validate and encode into a caller-provided buffer.
@@ -5326,6 +5357,32 @@ impl Intent {
                 w.hash(*market)?;
                 w.hash(*epoch)?;
                 w.hash(*candidate)?
+            }
+            Self::InitEpoch {
+                market,
+                epoch_index,
+                policy,
+                freeze_deadline_slot,
+            } => {
+                check_hash(*market)?;
+                check_hash(*policy)?;
+                // A window with no deadline is not a window; the account codec
+                // refuses the same zero (`EpochWindowAccount::validate`).
+                if *freeze_deadline_slot == 0 {
+                    return Err(CodecError::ZeroValue);
+                }
+                put_header(&mut w, INIT_EPOCH_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.u64(*epoch_index)?;
+                w.hash(*policy)?;
+                w.u64(*freeze_deadline_slot)?
+            }
+            Self::FreezeEpoch { market, epoch } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                put_header(&mut w, FREEZE_EPOCH_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?
             }
         };
         Ok(w.at)
@@ -5839,6 +5896,32 @@ impl Intent {
                         candidate,
                     }
                 })
+            }
+            INIT_EPOCH_TAG => {
+                let market = r.hash()?;
+                let epoch_index = r.u64()?;
+                let policy = r.hash()?;
+                let freeze_deadline_slot = r.u64()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(policy)?;
+                if freeze_deadline_slot == 0 {
+                    return Err(CodecError::ZeroValue);
+                }
+                Ok(Self::InitEpoch {
+                    market,
+                    epoch_index,
+                    policy,
+                    freeze_deadline_slot,
+                })
+            }
+            FREEZE_EPOCH_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                Ok(Self::FreezeEpoch { market, epoch })
             }
             _ => Err(CodecError::WrongTag),
         }
@@ -10318,6 +10401,99 @@ mod tests {
             }
             .encode(&mut [0; MAX_INTENT_BYTES]),
             Err(CodecError::ZeroIdentity)
+        );
+    }
+
+    #[test]
+    fn general_epoch_intents_have_exact_unambiguous_wires() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 7);
+        let policy = h(0x66);
+
+        // Tag continuity: the lifecycle pair takes exactly the next two tags
+        // after the staged-creation pair.
+        let init = Intent::InitEpoch {
+            market,
+            epoch_index: 7,
+            policy,
+            freeze_deadline_slot: 900,
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = init.encode(&mut bytes).unwrap();
+        assert_eq!(len, 82);
+        assert_eq!(init.encoded_len(), len);
+        assert_eq!(&bytes[..2], [49, INTENT_VERSION]);
+        assert_eq!(&bytes[2..34], &market.bytes());
+        assert_eq!(&bytes[34..42], &7u64.to_le_bytes());
+        assert_eq!(&bytes[42..74], &policy.bytes());
+        assert_eq!(&bytes[74..82], &900u64.to_le_bytes());
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(init));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+        let mut long = [0; MAX_INTENT_BYTES];
+        long[..len].copy_from_slice(&bytes[..len]);
+        assert_eq!(
+            Intent::decode(&long[..len + 1]),
+            Err(CodecError::TrailingBytes)
+        );
+        let mut zero_market = bytes;
+        zero_market[2..34].fill(0);
+        assert_eq!(
+            Intent::decode(&zero_market[..len]),
+            Err(CodecError::ZeroIdentity)
+        );
+        let mut zero_policy = bytes;
+        zero_policy[42..74].fill(0);
+        assert_eq!(
+            Intent::decode(&zero_policy[..len]),
+            Err(CodecError::ZeroIdentity)
+        );
+        // No deadline is not a window, in both directions.
+        let mut zero_deadline = bytes;
+        zero_deadline[74..82].fill(0);
+        assert_eq!(
+            Intent::decode(&zero_deadline[..len]),
+            Err(CodecError::ZeroValue)
+        );
+        assert_eq!(
+            Intent::InitEpoch {
+                market,
+                epoch_index: 7,
+                policy,
+                freeze_deadline_slot: 0,
+            }
+            .encode(&mut [0; MAX_INTENT_BYTES]),
+            Err(CodecError::ZeroValue)
+        );
+
+        let freeze = Intent::FreezeEpoch { market, epoch };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = freeze.encode(&mut bytes).unwrap();
+        assert_eq!(len, 66);
+        assert_eq!(freeze.encoded_len(), len);
+        assert_eq!(&bytes[..2], [50, INTENT_VERSION]);
+        assert_eq!(&bytes[2..34], &market.bytes());
+        assert_eq!(&bytes[34..66], &epoch.bytes());
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(freeze));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+        for at in [2, 34] {
+            let mut zeroed = bytes;
+            zeroed[at..at + 32].fill(0);
+            assert_eq!(
+                Intent::decode(&zeroed[..len]),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+        let mut wrong_version = bytes;
+        wrong_version[1] = INTENT_VERSION + 1;
+        assert_eq!(
+            Intent::decode(&wrong_version[..len]),
+            Err(CodecError::WrongVersion)
         );
     }
 

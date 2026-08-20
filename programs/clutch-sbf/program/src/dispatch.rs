@@ -122,6 +122,8 @@ const INTENT_INIT_DIRECT_EPOCH_V4_HINT: u8 = 36;
 const INTENT_LAPSE_SELECTED_DIRECT_V3_HINT: u8 = 46;
 const INTENT_INIT_CLEAR_WORK_HINT: u8 = 47;
 const INTENT_GROW_CLEAR_WORK_HINT: u8 = 48;
+const INTENT_INIT_EPOCH_HINT: u8 = 49;
+const INTENT_FREEZE_EPOCH_HINT: u8 = 50;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
@@ -146,7 +148,9 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_SETTLE_PAGE_HINT
                 | INTENT_SUBMIT_DIRECT_PAGE_HINT
                 | INTENT_INIT_CLEAR_WORK_HINT
-                | INTENT_GROW_CLEAR_WORK_HINT,
+                | INTENT_GROW_CLEAR_WORK_HINT
+                | INTENT_INIT_EPOCH_HINT
+                | INTENT_FREEZE_EPOCH_HINT,
             ) => Route::OrdersBatch,
             Some(
                 INTENT_INIT_REALM_HINT
@@ -355,7 +359,9 @@ fn process_orders_batch(
         | Action::Layout(Intent::SubmitDirectPage { .. })
         | Action::Layout(Intent::SettlePage { .. })
         | Action::Layout(Intent::InitClearWork { .. })
-        | Action::Layout(Intent::GrowClearWork { .. }) => {
+        | Action::Layout(Intent::GrowClearWork { .. })
+        | Action::Layout(Intent::InitEpoch { .. })
+        | Action::Layout(Intent::FreezeEpoch { .. }) => {
             orders_batch::process(program_id, accounts, &request)
         }
         _ => unexpected_route(),
@@ -745,6 +751,22 @@ mod tests {
                     market: hash(1),
                     epoch: hash(2),
                     candidate: hash(3),
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::InitEpoch {
+                    market: hash(1),
+                    epoch_index: 7,
+                    policy: hash(2),
+                    freeze_deadline_slot: 900,
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::FreezeEpoch {
+                    market: hash(1),
+                    epoch: hash(2),
                 },
                 Route::OrdersBatch,
             ),

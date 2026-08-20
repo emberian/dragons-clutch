@@ -482,6 +482,7 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 pub mod clear_work;
+pub mod general_epoch;
 mod reservation;
 pub(super) mod settlement;
 
@@ -1098,6 +1099,23 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
+        Action::Layout(Intent::InitEpoch {
+            market,
+            epoch_index,
+            policy,
+            freeze_deadline_slot,
+        }) => general_epoch::init_epoch(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            *epoch_index,
+            policy,
+            *freeze_deadline_slot,
+        ),
+        Action::Layout(Intent::FreezeEpoch { market, epoch }) => {
+            general_epoch::freeze_epoch(program_id, accounts, request.sequence, market, epoch)
+        }
         /* Every other action belongs to another family module; the router never
          * sends one here, and this arm exists so that adding one to the router
          * is a compile error rather than a silent success. */

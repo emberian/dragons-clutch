@@ -62,10 +62,11 @@
 //! `clutch-batch`'s, and saying so is the point.
 
 use super::{
-    account_len, account_version, canonical_candidate_digest, check_count, check_hash,
-    check_header, check_padded_amounts, put_header, CodecError, Hash32, Reader, Result, Writer,
-    CANDIDATE_FEED_TAG, CLEAR_WORK_BODY_BYTES, CLEAR_WORK_TAG, HASH_BYTES, MAX_EPOCH_ORDERS,
-    MAX_ORDERS_PER_PAGE, MAX_ORDER_PAGES, MAX_OUTCOMES, MAX_SLICES,
+    account_len, account_version, canonical_candidate_digest, canonical_epoch_id, check_count,
+    check_hash, check_header, check_padded_amounts, digest, put_header, CodecError, EpochAccount,
+    EpochId, Hash32, MarketId, Reader, Result, Writer, CANDIDATE_FEED_TAG, CLEAR_WORK_BODY_BYTES,
+    CLEAR_WORK_TAG, EPOCH_PHASE_OPEN, HASH_BYTES, MAX_EPOCH_ORDERS, MAX_ORDERS_PER_PAGE,
+    MAX_ORDER_PAGES, MAX_OUTCOMES, MAX_SLICES, RELATION_VERSION,
 };
 
 /* ------------------------------------------------------------------------ */
@@ -585,6 +586,175 @@ pub fn init_clear_work_grow_stage(
     stage.encode(account)?;
     account[CLEAR_WORK_GROW_PREFIX_BYTES..].fill(0);
     Ok(stage)
+}
+
+/* ------------------------------------------------------------------------ */
+/* The general epoch lifecycle                                               */
+/* ------------------------------------------------------------------------ */
+
+/// Account tag of the general epoch's deadline-window companion.
+pub const EPOCH_WINDOW_TAG: u8 = 24;
+/// Account version of the general epoch's deadline-window companion.
+pub const EPOCH_WINDOW_VERSION: u8 = 1;
+/// Exact byte length of one [`EpochWindowAccount`].
+pub const EPOCH_WINDOW_ACCOUNT_BYTES: usize = 2 + 32 + 32 + 8 + 8 + 1 + 1;
+
+const _: () = assert!(EPOCH_WINDOW_ACCOUNT_BYTES == 84);
+
+/// Derive the one book identity admitted by the general clearing plane.
+///
+/// The general sibling of `canonical_direct_book_id`: one epoch clears exactly
+/// one book, so the book identity is a total function of the epoch identity,
+/// under its own domain separator so a general book and a direct book of the
+/// same epoch can never collide.
+pub fn canonical_general_book_id(epoch: Hash32) -> Hash32 {
+    digest(b"dragons-clutch:general-book:v1", &[&epoch.0])
+}
+
+/// Derive the deterministic relation remainder seed for the general plane.
+///
+/// The same construction as the direct profile's: the epoch identity's first
+/// eight bytes, little-endian.  The seed's only consumer is the relation's
+/// frozen largest-remainder permutation; determinism from the epoch identity
+/// is what matters, unpredictability is not a goal it could meet anyway.
+pub const fn canonical_general_remainder_seed(epoch: Hash32) -> u64 {
+    u64::from_le_bytes([
+        epoch.0[0], epoch.0[1], epoch.0[2], epoch.0[3], epoch.0[4], epoch.0[5], epoch.0[6],
+        epoch.0[7],
+    ])
+}
+
+/// Construct the canonical open general [`EpochAccount`].
+///
+/// The general sibling of `DirectEpochV3Account::open`, minus the `== 2`
+/// gates: outcome width and price scale arrive from the terms and grid the
+/// caller has already bound, the book identity and the remainder seed are
+/// derived from the epoch identity, and every frozen-set field starts at its
+/// canonical open zero.  `owner_count` opens at [`MAX_EPOCH_ORDERS`] — the
+/// widest owner space a 64-slot book can carry — and the freeze rewrites it
+/// with the exact distinct-owner count interned over the frozen set, which is
+/// the value the pass-1 walk is later compared against.
+#[allow(clippy::too_many_arguments)] // one argument per bound account fact
+pub fn open_general_epoch(
+    market: MarketId,
+    terms: Hash32,
+    price_grid: Hash32,
+    policy: Hash32,
+    epoch_index: u64,
+    price_scale: u64,
+    outcome_count: u8,
+    stored_bump: u8,
+) -> Result<EpochAccount> {
+    let epoch = canonical_epoch_id(market, epoch_index);
+    let value = EpochAccount {
+        epoch,
+        market,
+        book: canonical_general_book_id(epoch),
+        terms,
+        price_grid,
+        policy,
+        order_set: Hash32::ZERO,
+        first_order_id: Hash32::ZERO,
+        last_order_id: Hash32::ZERO,
+        epoch_index,
+        relation_version: RELATION_VERSION,
+        price_scale,
+        remainder_seed: canonical_general_remainder_seed(epoch),
+        owner_count: MAX_EPOCH_ORDERS as u16,
+        page_count: 0,
+        order_count: 0,
+        outcome_count,
+        phase: EPOCH_PHASE_OPEN,
+        stored_bump,
+        flags: 0,
+    };
+    value.validate()?;
+    Ok(value)
+}
+
+/// The deadline-slot companion of one general epoch.
+///
+/// The V3 window precedent applied to the general plane: deadline slots ride a
+/// small dedicated account instead of an [`EpochAccount`] format bump, so the
+/// epoch codec every existing consumer decodes stays byte-stable.  V1 carries
+/// exactly one deadline — the slot at or after which the permissionless
+/// freeze is admitted; placements and cancellations gate on the epoch phase,
+/// not on this slot.  The candidate-window deadlines of the selection
+/// lifecycle (T2-7) are a later format revision of this account, not a second
+/// account family.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EpochWindowAccount {
+    /// Epoch identity; must equal `canonical_epoch_id(market, epoch_index)`.
+    pub epoch: EpochId,
+    /// Market identity.
+    pub market: MarketId,
+    /// Epoch index within the market.
+    pub epoch_index: u64,
+    /// First slot at which [`FreezeEpoch`](crate::Intent::FreezeEpoch) is
+    /// admitted; zero is refused — a window with no deadline is not a window.
+    pub freeze_deadline_slot: u64,
+    /// Stored PDA bump.
+    pub stored_bump: u8,
+    /// Reserved flags; currently zero.
+    pub flags: u8,
+}
+
+impl EpochWindowAccount {
+    /// Validate identities, the canonical epoch derivation, and the deadline.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.market)?;
+        if self.epoch != canonical_epoch_id(self.market, self.epoch_index) {
+            return Err(CodecError::NonCanonicalIdentity);
+        }
+        if self.freeze_deadline_slot == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        if self.flags != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        Ok(())
+    }
+
+    /// Encode exactly [`EPOCH_WINDOW_ACCOUNT_BYTES`] bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        if out.len() < EPOCH_WINDOW_ACCOUNT_BYTES {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut w = Writer::new(out);
+        put_header(&mut w, EPOCH_WINDOW_TAG, EPOCH_WINDOW_VERSION)?;
+        w.hash(self.epoch)?;
+        w.hash(self.market)?;
+        w.u64(self.epoch_index)?;
+        w.u64(self.freeze_deadline_slot)?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        if w.at != EPOCH_WINDOW_ACCOUNT_BYTES {
+            return Err(CodecError::OutputTooSmall);
+        }
+        Ok(w.at)
+    }
+
+    /// Parse exactly [`EPOCH_WINDOW_ACCOUNT_BYTES`] bytes.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        check_header(
+            input,
+            EPOCH_WINDOW_TAG,
+            EPOCH_WINDOW_VERSION,
+            EPOCH_WINDOW_ACCOUNT_BYTES,
+        )?;
+        let mut r = Reader::at(input, 2);
+        let value = Self {
+            epoch: r.hash()?,
+            market: r.hash()?,
+            epoch_index: r.u64()?,
+            freeze_deadline_slot: r.u64()?,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1998,5 +2168,99 @@ mod tests {
             init_clear_work(&mut small_work, h(1), h(2), h(3), 0),
             Err(CodecError::OutputTooSmall)
         );
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* General epoch lifecycle                                             */
+    /* ------------------------------------------------------------------ */
+
+    fn window() -> EpochWindowAccount {
+        let market = h(0x51);
+        EpochWindowAccount {
+            epoch: canonical_epoch_id(market, 7),
+            market,
+            epoch_index: 7,
+            freeze_deadline_slot: 900,
+            stored_bump: 254,
+            flags: 0,
+        }
+    }
+
+    #[test]
+    fn the_epoch_window_round_trips_and_refuses_hostile_frames() {
+        let value = window();
+        let mut bytes = [0; EPOCH_WINDOW_ACCOUNT_BYTES];
+        assert_eq!(value.encode(&mut bytes).unwrap(), EPOCH_WINDOW_ACCOUNT_BYTES);
+        assert_eq!(bytes[0], EPOCH_WINDOW_TAG);
+        assert_eq!(bytes[1], EPOCH_WINDOW_VERSION);
+        assert_eq!(EpochWindowAccount::decode(&bytes), Ok(value));
+
+        assert_eq!(
+            EpochWindowAccount::decode(&bytes[..EPOCH_WINDOW_ACCOUNT_BYTES - 1]),
+            Err(CodecError::Truncated)
+        );
+        let mut wrong_tag = bytes;
+        wrong_tag[0] = CLEAR_WORK_TAG;
+        assert_eq!(
+            EpochWindowAccount::decode(&wrong_tag),
+            Err(CodecError::WrongTag)
+        );
+        let mut wrong_version = bytes;
+        wrong_version[1] = EPOCH_WINDOW_VERSION + 1;
+        assert_eq!(
+            EpochWindowAccount::decode(&wrong_version),
+            Err(CodecError::WrongVersion)
+        );
+
+        // A window whose epoch identity is not the canonical derivation of
+        // its own (market, index) names an epoch that cannot exist.
+        let mut wrong_epoch = value;
+        wrong_epoch.epoch = h(0x52);
+        assert_eq!(
+            wrong_epoch.validate(),
+            Err(CodecError::NonCanonicalIdentity)
+        );
+        let mut wrong_index = value;
+        wrong_index.epoch_index = 8;
+        assert_eq!(
+            wrong_index.validate(),
+            Err(CodecError::NonCanonicalIdentity)
+        );
+        // No deadline is not a window, and reserved flags stay zero.
+        let mut no_deadline = value;
+        no_deadline.freeze_deadline_slot = 0;
+        assert_eq!(no_deadline.validate(), Err(CodecError::ZeroValue));
+        let mut flagged = value;
+        flagged.flags = 1;
+        assert_eq!(flagged.validate(), Err(CodecError::InvalidEnum));
+    }
+
+    #[test]
+    fn the_open_general_epoch_is_canonical_and_wide() {
+        let market = h(0x53);
+        let epoch = open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 10_000, 16, 253)
+            .unwrap();
+        assert_eq!(epoch.epoch, canonical_epoch_id(market, 7));
+        assert_eq!(epoch.book, canonical_general_book_id(epoch.epoch));
+        assert_eq!(
+            epoch.remainder_seed,
+            canonical_general_remainder_seed(epoch.epoch)
+        );
+        assert_eq!(epoch.phase, EPOCH_PHASE_OPEN);
+        assert_eq!(epoch.owner_count, MAX_EPOCH_ORDERS as u16);
+        assert_eq!(epoch.page_count, 0);
+        assert_eq!(epoch.order_count, 0);
+        assert_eq!(epoch.order_set, Hash32::ZERO);
+        assert_eq!(epoch.outcome_count, 16);
+        // The general book identity never collides with the direct one.
+        assert_ne!(
+            canonical_general_book_id(epoch.epoch),
+            crate::direct_selection::canonical_direct_book_id(epoch.epoch)
+        );
+        // The full 16-outcome width the direct plane's `== 2` gates refuse is
+        // exactly what this constructor admits; outside the codec bound stays
+        // refused.
+        assert!(open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 10_000, 17, 253).is_err());
+        assert!(open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 0, 4, 253).is_err());
     }
 }

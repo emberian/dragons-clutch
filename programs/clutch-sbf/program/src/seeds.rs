@@ -87,6 +87,8 @@ pub const SEED_CANDIDATE_FEED: &[u8] = b"dragons-clutch:cand-feed:v1";
 
 /// Clearing-checkpoint (`ClearWorkAccount`) seed prefix; 28 bytes.
 pub const SEED_CLEAR_WORK: &[u8] = b"dragons-clutch:clear-work:v1";
+/// General-epoch deadline-window (`EpochWindowAccount`) seed prefix; 30 bytes.
+pub const SEED_EPOCH_WINDOW: &[u8] = b"dragons-clutch:epoch-window:v1";
 /// Final-pot account seed prefix.
 pub const SEED_POT: &[u8] = b"dragons-clutch:pot:v1";
 /// Settlement-receipt account seed prefix.
@@ -384,6 +386,17 @@ pub fn page_pda(program_id: &Pubkey, epoch: &[u8; 32], page_index: u16) -> (Pubk
     find(program_id, &[SEED_PAGE, epoch, &page_index.to_le_bytes()])
 }
 
+/// Canonical general-epoch deadline-window address and bump.
+///
+/// The same seed tuple as [`epoch_pda`] under its own prefix: one window per
+/// epoch, derivable by a caller that has not yet fetched either account.
+pub fn epoch_window_pda(program_id: &Pubkey, market: &[u8; 32], epoch_index: u64) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_EPOCH_WINDOW, market, &epoch_index.to_le_bytes()],
+    )
+}
+
 /// Canonical per-order reservation address and bump.
 ///
 /// The layout-owned reservation digest already commits to market, epoch,
@@ -511,7 +524,8 @@ mod tests {
     /// `hoard-authority` prefix was caught at 33 bytes.
     #[test]
     fn every_seed_prefix_fits_one_seed() {
-        const PREFIXES: [&[u8]; 41] = [
+        const PREFIXES: [&[u8]; 42] = [
+            SEED_EPOCH_WINDOW,
             SEED_REALM,
             SEED_PROFILE,
             SEED_MARKET,
@@ -577,6 +591,7 @@ mod tests {
         assert_eq!(SEED_DIRECT_RECEIPT_V3.len(), 20);
         assert_eq!(SEED_DIRECT_POT_V3.len(), 16);
         assert_eq!(SEED_CLEAR_WORK.len(), 28);
+        assert_eq!(SEED_EPOCH_WINDOW.len(), 30);
         // The plan's own proposal, kept here as the falsifier: it does not fit.
         assert_eq!(b"dragons-clutch:hoard-authority:v1".len(), 33);
     }
@@ -733,6 +748,61 @@ mod tests {
         ];
         for old in REGISTRY {
             assert_ne!(SEED_CLEAR_WORK, old);
+        }
+    }
+
+    /// The window prefix shares an address space with nothing.
+    ///
+    /// `SEED_EPOCH` takes the *same* seed tuple `(market, epoch_index)` the
+    /// window takes, so prefix distinctness is exactly what keeps the epoch
+    /// and its deadline window two addresses.
+    #[test]
+    fn the_epoch_window_prefix_collides_with_nothing() {
+        const REGISTRY: [&[u8]; 41] = [
+            SEED_REALM,
+            SEED_PROFILE,
+            SEED_MARKET,
+            SEED_HOARD,
+            SEED_POSITION,
+            SEED_KERNEL,
+            SEED_EXTERNAL,
+            SEED_REPLAY,
+            SEED_SUPPLY,
+            SEED_FEED,
+            SEED_TERMS,
+            SEED_GRID,
+            SEED_RESOLUTION,
+            SEED_EPOCH,
+            SEED_PAGE,
+            SEED_RESERVATION,
+            SEED_CANDIDATE,
+            SEED_CANDIDATE_FEED,
+            SEED_CLEAR_WORK,
+            SEED_POT,
+            SEED_RECEIPT,
+            SEED_ARTIFACT_STAGE,
+            SEED_POLICY,
+            SEED_BATCH_POLICY,
+            SEED_DIRECT_BATCH_POLICY_V3,
+            SEED_DIRECT_WINDOW,
+            SEED_DIRECT_CANDIDATE,
+            SEED_DIRECT_RECEIPT,
+            SEED_DIRECT_POT,
+            SEED_DIRECT_WINDOW_V3,
+            SEED_DIRECT_CANDIDATE_V3,
+            SEED_DIRECT_WORK_V3,
+            SEED_DIRECT_RECEIPT_V3,
+            SEED_DIRECT_POT_V3,
+            SEED_SOURCE_SPEC,
+            SEED_SOURCE_ARCHIVE,
+            SEED_RESOLUTION_WORK,
+            SEED_RESOLUTION_RESERVE,
+            SEED_OUTCOME_MINT,
+            SEED_HOARD_AUTHORITY,
+            SEED_HOARD_TOKEN,
+        ];
+        for old in REGISTRY {
+            assert_ne!(SEED_EPOCH_WINDOW, old);
         }
     }
 }
