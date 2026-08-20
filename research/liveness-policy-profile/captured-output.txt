@@ -1,49 +1,377 @@
 {
   "schema": "dragons-clutch/liveness-bank-capture/v2",
   "capture_date": "2026-08-20",
-  "runtime_ref": "e58aef497a17a77d7ca00fc30db2e289a6be42a2",
-  "evidence_ref": "e58aef497a17a77d7ca00fc30db2e289a6be42a2",
+  "runtime_ref": "853fecb7210b324f9701415c0b169e69d9ac71d6",
+  "evidence_ref": "853fecb7210b324f9701415c0b169e69d9ac71d6",
   "artifact": {
-    "path": "research/liveness-policy-profile/artifacts/fda59705ac1c1869/clutch_sbf.so",
-    "sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec",
-    "bytes": 1527640,
-    "source_ref": "e58aef497a17a77d7ca00fc30db2e289a6be42a2",
+    "path": "research/liveness-policy-profile/artifacts/d692954949d57db22/clutch_sbf.so",
+    "sha256": "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733",
+    "bytes": 1785904,
+    "source_ref": "853fecb7210b324f9701415c0b169e69d9ac71d6",
     "profile": "default-empty-registry"
   },
   "measurements": {
-    "resolution_work": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "fold_widths": [1, 2, 3, 4], "begin_cu": [87612, 85244, 90928, 87610, 85796], "fold_1_cu": [84552, 82189], "fold_2_cu": [89161, 92129], "fold_3_cu": [93064], "fold_4_cu": [95509], "finalize_cu": [164291], "abort_cu": [46681], "monolithic_v4_cu": [182573], "test_result": "PASS_4_OF_4"},
+    "resolution_work": {
+      "artifact_sha256": "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733",
+      "fold_widths": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "begin_cu": [
+        88003,
+        85635,
+        91319,
+        88001,
+        86187
+      ],
+      "fold_1_cu": [
+        84726,
+        82363
+      ],
+      "fold_2_cu": [
+        89335,
+        92303
+      ],
+      "fold_3_cu": [
+        93238
+      ],
+      "fold_4_cu": [
+        95683
+      ],
+      "finalize_cu": [
+        164686
+      ],
+      "abort_cu": [
+        46855
+      ],
+      "monolithic_v4_cu": [
+        182857
+      ],
+      "test_result": "PASS_4_OF_4"
+    },
     "resolution_work_batch": {
-      "artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec",
-      "batch_sizes": [2, 4, 8, 12],
-      "begin_cu": [90928, 85796, 86034, 80268],
-      "fold_batch_2_cu": [175789],
-      "fold_batch_4_cu": [331093],
-      "fold_batch_8_cu": [664149, 664149],
-      "fold_batch_12_cu": [927017],
-      "singleton_fold_cu": [87868, 88221, 82736, 83084, 83084, 83089, 82976, 83324, 83324, 83324, 83324, 83324, 83324, 83329, 77207, 77555, 77555, 77555, 77555, 77555, 77555, 77555, 77555, 77555, 77555, 77560],
+      "artifact_sha256": "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733",
+      "batch_sizes": [
+        2,
+        4,
+        8,
+        12
+      ],
+      "begin_cu": [
+        91319,
+        86187,
+        86425,
+        80659
+      ],
+      "fold_batch_2_cu": [
+        176137
+      ],
+      "fold_batch_4_cu": [
+        331789
+      ],
+      "fold_batch_8_cu": [
+        665541,
+        665541
+      ],
+      "fold_batch_12_cu": [
+        929105
+      ],
+      "singleton_fold_cu": [
+        88042,
+        88395,
+        82910,
+        83258,
+        83258,
+        83263,
+        83150,
+        83498,
+        83498,
+        83498,
+        83498,
+        83498,
+        83498,
+        83503,
+        77381,
+        77729,
+        77729,
+        77729,
+        77729,
+        77729,
+        77729,
+        77729,
+        77729,
+        77729,
+        77729,
+        77734
+      ],
       "outcome_equality": "BYTE_IDENTICAL_TO_SINGLETON_TRANSACTIONS",
       "mid_batch_invalid_fold": "WHOLE_TRANSACTION_REVERTED_BYTE_EXACT",
       "test_result": "PASS_2_OF_2"
     },
-    "native_point_v3": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "degree_rows": [{"degree": 1, "resolve_cu": 182540, "retry_cu": 169274, "internal_redeem_cu": 152644}, {"degree": 2, "resolve_cu": 190913, "retry_cu": 177647, "internal_redeem_cu": 154687}, {"degree": 3, "resolve_cu": 197807, "retry_cu": 184541, "internal_redeem_cu": 153077}], "test_result": "PASS"},
-    "native_bearer_redeem": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "degree_rows": [{"degree": 1, "external_redeem_cu": 136835}, {"degree": 2, "external_redeem_cu": 138635}, {"degree": 3, "external_redeem_cu": 136340}], "test_result": "PASS"},
-    "occupation_v4": {
-      "artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec",
+    "native_point_v3": {
+      "artifact_sha256": "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733",
       "degree_rows": [
-        {"degree": 1, "initial_cu": 172776, "retry_cu": 159519, "internal_redeem_cu": 151358, "external_redeem_cu": 135473},
-        {"degree": 2, "initial_cu": 183946, "retry_cu": 170689, "internal_redeem_cu": 153401, "external_redeem_cu": 137273},
-        {"degree": 3, "initial_cu": 197877, "retry_cu": 184620, "internal_redeem_cu": 156291, "external_redeem_cu": 139478}
+        {
+          "degree": 1,
+          "resolve_cu": 182846,
+          "retry_cu": 169577,
+          "internal_redeem_cu": 153041
+        },
+        {
+          "degree": 2,
+          "resolve_cu": 191219,
+          "retry_cu": 177950,
+          "internal_redeem_cu": 155084
+        },
+        {
+          "degree": 3,
+          "resolve_cu": 198113,
+          "retry_cu": 184844,
+          "internal_redeem_cu": 153474
+        }
       ],
-      "span_1_initial_cu": [179764, 173082, 177263],
-      "span_2_initial_cu": [173270, 189014, 190570],
-      "statistic_7_initial_cu": 182423,
       "test_result": "PASS"
     },
-    "direct_v2": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "init_cu": [35266], "freeze_cu": [357725], "submit_cu": [173151, 174318, 182090, 189707, 185314], "select_cu": [225949], "select_result": "COMPLETED_SELECTION_COMMITTED", "empty_frozen_lapse": "UNIMPLEMENTED_STOP", "test_result": "PASS_2_OF_2"},
-    "source_endow": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "default_refusal_code": "0x79", "default_release_available": false, "rollback": "BYTE_AND_LAMPORT_EXACT", "test_result": "PASS_EXPECTED_REFUSAL"},
-    "blank_bank_market_creation": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "v2": {"cu": 190757, "bytes": 165, "rent_lamports": 2039280}, "v3": {"cu": 204428, "bytes": 319, "rent_lamports": 3111120}, "v4": {"cu": 206033, "bytes": 383, "rent_lamports": 3556560}, "test_result": "PASS_2_OF_2"},
-    "order_reservation": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "place_cu": [185735, 183765], "cancel_cu": [282875, 287548], "test_result": "PASS_2_OF_2"},
-    "withdraw_cash": {"artifact_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec", "cu": [51809], "test_result": "PASS"},
-    "source_archive_host": {"artifact_sha256": null, "tests_passed": 9, "provider_ingestion": "NOT_EXERCISED_BY_DEFAULT_ELF", "source_archive_bytes": 2560, "source_archive_rent_lamports": 18708480}
+    "native_bearer_redeem": {
+      "artifact_sha256": "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733",
+      "degree_rows": [
+        {
+          "degree": 1,
+          "external_redeem_cu": 137280
+        },
+        {
+          "degree": 2,
+          "external_redeem_cu": 139080
+        },
+        {
+          "degree": 3,
+          "external_redeem_cu": 136785
+        }
+      ],
+      "test_result": "PASS"
+    },
+    "occupation_v4": {
+      "artifact_sha256": "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733",
+      "degree_rows": [
+        {
+          "degree": 1,
+          "initial_cu": 173060,
+          "retry_cu": 159800,
+          "internal_redeem_cu": 151755,
+          "external_redeem_cu": 135918
+        },
+        {
+          "degree": 2,
+          "initial_cu": 184230,
+          "retry_cu": 170970,
+          "internal_redeem_cu": 153798,
+          "external_redeem_cu": 137718
+        },
+        {
+          "degree": 3,
+          "initial_cu": 198161,
+          "retry_cu": 184901,
+          "internal_redeem_cu": 156688,
+          "external_redeem_cu": 139923
+        }
+      ],
+      "span_1_initial_cu": [
+        180048,
+        173366,
+        177547
+      ],
+      "span_2_initial_cu": [
+        173554,
+        189298,
+        190854
+      ],
+      "statistic_7_initial_cu": 182707,
+      "test_result": "PASS"
+    },
+    "direct_v2": {
+      "artifact_sha256": "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733",
+      "init_cu": [
+        35548
+      ],
+      "freeze_cu": [
+        357881
+      ],
+      "submit_cu": [
+        173577,
+        174679,
+        182471,
+        190108,
+        185715
+      ],
+      "select_cu": [
+        226446
+      ],
+      "select_result": "COMPLETED_SELECTION_COMMITTED",
+      "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
+      "test_result": "PASS_2_OF_2"
+    },
+    "source_endow": {
+      "artifact_sha256": "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733",
+      "default_refusal_code": "0x79",
+      "default_release_available": false,
+      "rollback": "BYTE_AND_LAMPORT_EXACT",
+      "test_result": "PASS_EXPECTED_REFUSAL"
+    },
+    "blank_bank_market_creation": {
+      "artifact_sha256": "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733",
+      "v2": {
+        "cu": 210047,
+        "bytes": 165,
+        "rent_lamports": 2039280
+      },
+      "v3": {
+        "cu": 214718,
+        "bytes": 319,
+        "rent_lamports": 3111120
+      },
+      "v4": {
+        "cu": 210323,
+        "bytes": 383,
+        "rent_lamports": 3556560
+      },
+      "test_result": "PASS_2_OF_2"
+    },
+    "order_reservation": {
+      "artifact_sha256": "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733",
+      "place_cu": [
+        185991,
+        184021
+      ],
+      "cancel_cu": [
+        282996,
+        287669
+      ],
+      "test_result": "PASS_2_OF_2"
+    },
+    "withdraw_cash": {
+      "artifact_sha256": "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733",
+      "cu": [
+        52101
+      ],
+      "test_result": "PASS"
+    },
+    "general_epoch": {
+      "artifact_sha256": "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733",
+      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+      "suites": [
+        "general_epoch.rs",
+        "clear_lifecycle.rs"
+      ],
+      "init_epoch_cu": [
+        42376
+      ],
+      "place_order_single_cu": [
+        193513
+      ],
+      "place_order_portfolio_cu": [
+        189829
+      ],
+      "freeze_epoch_rows": [
+        {
+          "pages": 1,
+          "orders": 4,
+          "cu": [
+            232670
+          ]
+        },
+        {
+          "pages": 2,
+          "orders": 17,
+          "cu": [
+            476973
+          ]
+        },
+        {
+          "pages": 3,
+          "orders": 40,
+          "cu": [
+            716586,
+            716586
+          ]
+        }
+      ],
+      "test_result": "PASS_3_OF_3"
+    },
+    "clear_walk": {
+      "artifact_sha256": "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733",
+      "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+      "suites": [
+        "clear_walk.rs",
+        "clear_lifecycle.rs"
+      ],
+      "small_book_pass1_cu": [
+        279914,
+        297772,
+        293367
+      ],
+      "small_book_pass2_cu": [
+        290630
+      ],
+      "forty_order_pass1_cu": [
+        260482,
+        280082,
+        382267,
+        273964,
+        274163,
+        296315,
+        377790,
+        288221,
+        285249,
+        308411,
+        302624,
+        260489,
+        281582,
+        388267,
+        272464,
+        272663,
+        293315,
+        373290,
+        286721,
+        285249,
+        312911,
+        301110
+      ],
+      "forty_order_pass2_cu": [
+        306109,
+        273290,
+        306999,
+        287000,
+        309010,
+        306097,
+        273290,
+        306999,
+        287000,
+        308990
+      ],
+      "advance_slices_cu": [
+        177739,
+        177756,
+        177739,
+        177756
+      ],
+      "complete_cu": [
+        122888,
+        127076
+      ],
+      "request_heap_frame_262144_surcharge_cu": [
+        150
+      ],
+      "host_twin_verdict": "BANK_AND_HOST_BYTE_IDENTICAL_VERDICTS",
+      "test_result": "PASS_3_OF_3_AND_2_OF_2"
+    },
+    "source_archive_host": {
+      "artifact_sha256": null,
+      "tests_passed": 9,
+      "provider_ingestion": "NOT_EXERCISED_BY_DEFAULT_ELF",
+      "source_archive_bytes": 2560,
+      "source_archive_rent_lamports": 18708480
+    }
   }
 }

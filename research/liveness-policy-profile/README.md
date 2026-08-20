@@ -12,11 +12,11 @@ This directory contains:
 - `src/main.rs`: exact account-width and pinned-default-rent probe;
 - `policy.py`, `evidence.json`, and the normalized capture: exact artifact,
   bank, source/test identity, rent, reward, and source-drift seal;
-- `artifacts/fda59705ac1c1869`: the current canonical ELF, build and stack/ELF
+- `artifacts/d692954949d57db22`: the current canonical ELF, build and stack/ELF
   audit evidence, and bank logs measured against that exact ELF;
-- `artifacts/187d5ee16f72946a`, `artifacts/af6bb79cc3766bd0`,
-  `artifacts/bd20711b01828a74`, and `artifacts/a5725a3d8e149b2b`: the
-  preceding historical seals, retained in
+- `artifacts/fda59705ac1c1869`, `artifacts/187d5ee16f72946a`,
+  `artifacts/af6bb79cc3766bd0`, `artifacts/bd20711b01828a74`, and
+  `artifacts/a5725a3d8e149b2b`: the preceding historical seals, retained in
   full for audit continuity but excluded from the current projection.
   `policy.py` refuses a seal that overwrites a superseded artifact root or
   drops any of its evidence files.
@@ -58,38 +58,50 @@ cargo clippy --offline --locked \
 ```
 
 The current artifact source and test/evidence ancestry is exact commit
-`e58aef4` (the `b1b4369` T2-3 staged-ClearWork merge plus the audit-closure
-declaration and one probe lock line). The seal covers the 2026-08-20 wave —
-frame Tier 0 (ten opt-z overflowers restructured with boxed-decode helpers,
-all measured at or under the 4,096-byte line in this exact ELF), Tiers 1/3
-(host-only), the T2-1 ClearWork checkpoint codec, T2-2 projection, T2-4
-live-cardinality binding, T2-5 policy profile, T2-3 staged creation
-(intents 47/48), and the Direct V3 terminal classification (44 rows, 14
-blocking ids, unchanged here). The stripped ELF grows from `1,420,608` to
-`1,527,640` bytes and no section except `.dynstr` and `.shstrtab` is
-byte-identical, so this is a materially different artifact and no old CU
-row was reused as current-artifact evidence; every measured row was rerun
-against exact `fda59705…`. CU drift against `187d5ee1…` is at most ±0.2%
-per route except blank-bank `create_market` (-7.3%/-1.4%/-1.4% for
-v2/v3/v4, noted in the audit); no admission, limit, or reward quote flips.
-The one account row that genuinely moved is `legacy.clear_work`:
-T2-1 re-pins its body to the codec's `ENCODED_BYTES`, so the probe
-re-derives 48,004 bytes / 334,998,720 lamports. Direct SelectionV2 Select
-completes at a measured 225,949 CU and commits (V2 stays unpromoted on its
-unimplemented empty-frozen lapse), and every occupation-v4 monolithic
-profile clears the 25%-headroom gate. Direct V3 is resident but unmeasured
-here, so no V3 CU row enters the projection. The relocated-Cargo-home
-probe stays byte-identical to the canonical artifact (single host, no
-cross-host claim). This seal also closes the recorded closure gap:
-`research/batch-policy-identity` is now inside `audit_artifact.sh`'s
-declared source closure (94 files at the prior seal's commit; 98 under the
-old declaration at `e58aef4`; 104 declared and digested now), and the
-evidence drift gate pins `crates/clutch-batch/src` and
-`research/batch-policy-identity/src` alongside the other runtime sources.
-Native full-lifecycle tests are intentionally excluded from the
-default feature: running them requires the
-distinct non-production mock-source ELF, so they are not smuggled into this
-projection.
+`853fecb` (the `87fd342` T2-6 general-epoch/streaming-walk merge plus the
+benchmarks-only cost-lab re-pin, one GOAL.md log commit, and one probe-lane
+change adding the `epoch.window` row). The seal covers the T2-6 wave — the
+general epoch lifecycle and on-chain streaming walk (intents 49–53: general
+InitEpoch/FreezeEpoch, AdvanceClearWork with the per-order reservation
+sweep and owner interner, AdvanceClearSlices, CompleteClearWork), the
+default-on custom-heap upward bump allocator, CandidateRecord v3 (337
+bytes, score digest), the 2,050-byte ClearWork interner region, the
+84-byte EpochWindowAccount, and refusal codes `0x0090`–`0x0092`. The
+stripped ELF grows from `1,527,640` to `1,785,904` bytes and no section
+except `.dynstr` and `.shstrtab` is byte-identical, so this is a
+materially different artifact and no old CU row was reused as
+current-artifact evidence; every measured row was rerun against exact
+`d6929549…`. CU drift against `fda59705…` on the measured routes is at
+most +0.8% per route except blank-bank `create_market`
+(+10.1%/+5.0%/+2.1% for v2/v3/v4, noted in the audit); no admission
+flips, and two selected limits move one 10,000-CU quantum (FoldBatch(2)
+220,000 → 230,000, FoldBatch(12) 1,160,000 → 1,170,000, rewards
+following). Three account rows genuinely moved, all re-derived by the
+sealed offline probe: `legacy.clear_work` 50,054 bytes / 349,266,720
+lamports (the interner region), `legacy.candidate` 337 bytes / 3,236,400
+(the v3 score digest), and the new `epoch.window` 84 bytes / 1,475,520
+(created by InitEpoch, closed by no handler; the terminal inventory grows
+to 45 rows, same 14 blocking ids). The walk's own CU evidence is sealed
+as two new UNPROMOTED measurement families (`general_epoch`,
+`clear_walk`, twelve same-ELF families in all, three new bank logs): no
+admission, quote, or reward row is derived for any walk route, live flags
+are untouched, and admission-policy treatment of the walk is ember's
+decision, not this seal's. Direct SelectionV2 Select completes at a
+measured 226,446 CU and commits (V2 stays unpromoted on its unimplemented
+empty-frozen lapse), every occupation-v4 monolithic profile clears the
+25%-headroom gate, and Direct V3 remains resident but unmeasured, so no
+V3 CU row enters the projection. The relocated-Cargo-home probe is
+**path-sensitive at this seal**: three registry-crate panic-location
+strings (solana-address, solana-account-info, solana-program-entrypoint)
+render relative at the canonical home and absolute at a relocated one,
+superseding the two prior seals' relocation byte-identity — the audit
+quantifies the divergence and the recorded workspace-path-length bound;
+ordinary-path rebuilds (including the independently rebuilt bank fixture)
+stay byte-identical. The declared source closure grows 104 → 106 files
+(exactly the two T2-6 instruction modules). Native full-lifecycle tests
+are intentionally excluded from the default feature: running them
+requires the distinct non-production mock-source ELF, so they are not
+smuggled into this projection.
 
 Two blessed policy-plane changes landed earlier on 2026-08-20 as one
 evidence-only cycle (at the `187d5ee1…` seal) and are re-derived at this
@@ -103,12 +115,12 @@ composes N singleton Fold instructions into one transaction for N in
 final account state byte-identical to the same folds driven one per
 transaction, and proves one invalid Fold mid-batch reverts the entire
 transaction to its prestate. Twelve is the largest measured batch and it
-admits at 927,017 CU at this seal (selected limit 1,160,000). The
+admits at 929,105 CU at this seal (selected limit 1,170,000). The
 `resolution_work_batched` projection prices the fewest-transaction plan for
 a 32-record work item — Begin, then
 FoldBatch(12)+FoldBatch(12)+FoldBatch(8), then Finalize — next to the
 per-transaction worst case; collapsing the per-transaction fixed overhead
-cuts the payer cold outlay from 18,711,920 to 14,841,920 lamports. One
+cuts the payer cold outlay from 18,711,920 to 14,861,920 lamports. One
 honest caveat is sealed with the row: the bank harness transports
 transactions in-process, so the cluster wire packet budget (1,232 bytes,
 which a 12-fold message exceeds) is not modeled by these measurements —

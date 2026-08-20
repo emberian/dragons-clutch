@@ -1,0 +1,17 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s
+     Running tests/resolution_work.rs (target/debug/deps/resolution_work-d989fb60e7c65dfd)
+
+running 4 tests
+test begin_fold_finalize_is_prefund_safe_replay_safe_and_byte_exact ... ResolutionWork SBF CU: Begin=88003 Fold1=84726 Fold2=89335 Finalize=164686 monolithic=182857
+ok
+test every_bounded_fold_size_has_a_real_sbf_cost_row ... ResolutionWork SBF CU: span=1 Begin=85635 Fold(1)=82363
+ResolutionWork SBF CU: span=2 Begin=91319 Fold(2)=92303
+ResolutionWork SBF CU: span=3 Begin=88001 Fold(3)=93238
+ResolutionWork SBF CU: span=4 Begin=86187 Fold(4)=95683
+ok
+test expiry_keeper_abort_releases_lock_without_capturing_donations ... ResolutionWork SBF CU: BeginAbort=88003 AbortExpired=46855 BeginReopen=88003
+ok
+test source_spec_bump_and_same_domain_archive_substitution_refuse_atomically ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+

@@ -41,9 +41,9 @@ class PolicyTests(unittest.TestCase):
     def test_resolution_work_maximum_path_is_exact(self) -> None:
         row = policy.derive(self.evidence)["resolution_work"]
         self.assertEqual(row["status"], "PASS")
-        # The Fold(1) route covers its widest observation, the 88,221-CU
+        # The Fold(1) route covers its widest observation, the 88,395-CU
         # singleton measured inside the two-fold batch scenario.
-        self.assertEqual(row["routes"]["fold_1"]["measured_cu"], 88_221)
+        self.assertEqual(row["routes"]["fold_1"]["measured_cu"], 88_395)
         self.assertEqual(row["fold_path_lamports"], 7_360_000)
         self.assertEqual(row["success_rewards_lamports"], 7_680_000)
         self.assertEqual(row["worst_abort_rewards_lamports"], 7_530_000)
@@ -56,15 +56,15 @@ class PolicyTests(unittest.TestCase):
         row = derived["resolution_work_batched"]
         self.assertEqual(row["status"], "PASS")
         self.assertEqual(row["maximum_admitted_batch"], 12)
-        self.assertEqual(row["routes"]["fold_batch_12"]["measured_cu"], 927_017)
-        self.assertEqual(row["routes"]["fold_batch_12"]["selected_limit_cu"], 1_160_000)
+        self.assertEqual(row["routes"]["fold_batch_12"]["measured_cu"], 929_105)
+        self.assertEqual(row["routes"]["fold_batch_12"]["selected_limit_cu"], 1_170_000)
         self.assertEqual(
-            row["routes"]["fold_batch_12"]["keeper_reward_lamports"], 1_270_000
+            row["routes"]["fold_batch_12"]["keeper_reward_lamports"], 1_280_000
         )
         self.assertEqual(row["fewest_transaction_plan"], [12, 12, 8])
         self.assertEqual(row["fold_transactions"], 3)
-        self.assertEqual(row["fold_path_lamports"], 3_490_000)
-        self.assertEqual(row["payer_cold_outlay_lamports"], 14_841_920)
+        self.assertEqual(row["fold_path_lamports"], 3_510_000)
+        self.assertEqual(row["payer_cold_outlay_lamports"], 14_861_920)
         # Batching collapses the 32-transaction fixed overhead, never the
         # rent or the terminal quotes: both paths share one Begin and rent.
         per_transaction = derived["resolution_work"]
@@ -109,7 +109,7 @@ class PolicyTests(unittest.TestCase):
         derived = policy.derive(self.evidence)
         row = derived["direct_v2"]["select"]
         self.assertEqual(row["status"], "PASS")
-        self.assertEqual(row["measured_cu"], 225_949)
+        self.assertEqual(row["measured_cu"], 226_446)
         self.assertEqual(row["selected_limit_cu"], 290_000)
         self.assertEqual(row["keeper_reward_lamports"], 400_000)
         self.assertEqual(derived["direct_v2"]["status"], "STOP")
@@ -124,6 +124,57 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(stopped["select"]["status"], "STOP_HEADROOM")
         self.assertIsNone(stopped["select"]["selected_limit_cu"])
         self.assertIsNone(stopped["select"]["keeper_reward_lamports"])
+
+    def test_walk_families_are_sealed_evidence_but_never_promoted(self) -> None:
+        """T2-6 walk CU evidence binds to the exact artifact and derives nothing.
+
+        The general-epoch and clear-walk families are SBF-executed bank
+        evidence for tags 49-53, sealed with their three logs; the projection
+        records them as UNPROMOTED and derives no admission, quote, or reward
+        row for any walk route — live flags untouched, the admission decision
+        stays with ember.  Dropping the unpromoted declaration must refuse,
+        and binding a walk family to a historical artifact must refuse.
+        """
+
+        derived = policy.derive(self.evidence)
+        walk = derived["general_clearing_walk"]
+        self.assertEqual(walk["status"], "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP")
+        self.assertFalse(walk["admission_rows_derived"])
+        self.assertEqual(walk["live_flags"], "UNTOUCHED")
+        self.assertEqual(walk["decision_owner"], "ember")
+        self.assertNotIn("selected_limit_cu", walk)
+        self.assertNotIn("keeper_reward_lamports", walk)
+        for family in ("general_epoch", "clear_walk"):
+            row = self.evidence["measurements"][family]
+            self.assertEqual(
+                row["admission"], "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY", family
+            )
+            self.assertIn(family, policy.SAME_ELF_MEASUREMENTS)
+        # The three walk logs are sealed with the current artifact root.
+        artifact_root = self.evidence["artifact"]["path"].rsplit("/", 1)[0]
+        for log in ("general_epoch", "clear_walk", "clear_lifecycle"):
+            self.assertIn(
+                f"{artifact_root}/logs/bank/{log}.log", self.evidence["evidence_files"]
+            )
+        # Exact measured pins from those logs.
+        epoch = self.evidence["measurements"]["general_epoch"]
+        self.assertEqual(epoch["init_epoch_cu"], [42_376])
+        self.assertEqual(
+            epoch["freeze_epoch_rows"][2],
+            {"pages": 3, "orders": 40, "cu": [716_586, 716_586]},
+        )
+        walk_rows = self.evidence["measurements"]["clear_walk"]
+        self.assertEqual(max(walk_rows["forty_order_pass1_cu"]), 388_267)
+        self.assertEqual(walk_rows["complete_cu"], [122_888, 127_076])
+        tampered = copy.deepcopy(self.evidence)
+        tampered["measurements"]["clear_walk"]["admission"] = "PROMOTED"
+        with self.assertRaises(policy.CheckError):
+            policy.derive(tampered)
+        tampered = copy.deepcopy(self.evidence)
+        historical = next(iter(tampered["historical_artifacts"]))
+        tampered["measurements"]["general_epoch"]["artifact_sha256"] = historical
+        with self.assertRaises(policy.CheckError):
+            policy.check_artifact_binding(tampered)
 
     def test_source_refusal_is_not_capitalized_as_success(self) -> None:
         row = policy.derive(self.evidence)["source_value_admission"]

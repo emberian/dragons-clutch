@@ -53,6 +53,8 @@ SAME_ELF_MEASUREMENTS = {
     "blank_bank_market_creation",
     "order_reservation",
     "withdraw_cash",
+    "general_epoch",
+    "clear_walk",
 }
 REQUIRED_EVIDENCE_SUFFIXES = {
     "audit/RUNTIME_ARTIFACT_AUDIT.md",
@@ -81,9 +83,14 @@ REQUIRED_EVIDENCE_SUFFIXES = {
 }
 # Bank logs measured after a superseded seal was retained extend only the
 # current artifact root: a historical seal keeps exactly the evidence set it
-# was sealed with and is never asked for files that postdate it.
+# was sealed with and is never asked for files that postdate it.  The three
+# T2-6 logs seal the general-epoch lifecycle and streaming-walk CU evidence
+# (the clear_walk measurement family draws on both walk logs).
 CURRENT_EVIDENCE_SUFFIXES = REQUIRED_EVIDENCE_SUFFIXES | {
     "logs/bank/resolution_work_batch.log",
+    "logs/bank/general_epoch.log",
+    "logs/bank/clear_walk.log",
+    "logs/bank/clear_lifecycle.log",
 }
 # The Direct V3 account families classified after the sealed v2 probe.  The
 # probe source archived at ``runtime_ref`` enumerates none of them, so these
@@ -334,6 +341,19 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
         if select_route["status"] == "PASS" and direct["empty_frozen_lapse"] == "PASS"
         else "STOP"
     )
+    # T2-6: the general epoch lifecycle and streaming walk are SBF-executed
+    # bank evidence sealed with this artifact and deliberately unpromoted —
+    # no admission, quote, or reward row is derived for any walk route
+    # (tags 49-53) and no live flag moves.  Admission-policy treatment of
+    # the walk is ember's decision, not this seal's.  The derivation refuses
+    # a walk family that stops saying so out loud.
+    for family in ("general_epoch", "clear_walk"):
+        declared = measurements[family].get("admission")
+        if declared != "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY":
+            raise CheckError(
+                f"walk measurement family {family} lost its unpromoted "
+                f"declaration: {declared!r}"
+            )
     terminal = build_terminal(evidence["runtime_ref"])
     terminal_status = validate_terminal_admission(
         terminal,
@@ -423,6 +443,13 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
                 if occupation_status == "PASS"
                 else "USE_MEASURED_RESOLUTIONWORK_OR_FAIL_CLOSED"
             ),
+        },
+        "general_clearing_walk": {
+            "status": "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP",
+            "admission_rows_derived": False,
+            "live_flags": "UNTOUCHED",
+            "measured_families": ["general_epoch", "clear_walk"],
+            "decision_owner": "ember",
         },
         "terminal_status": terminal_status,
         "terminal_blocking_ids": terminal["blocking_ids"],

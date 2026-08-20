@@ -128,16 +128,32 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
     ("artifact.direct_batch_policy_v3.stage", 232, 2_505_600,
      "PER_EPOCH_CONTENT_DIGEST", 1, S,
      ("RENT.ARTIFACT_PREFUND_WINDFALL",)),
+    # The T2-6 general epoch plane reuses the epoch/candidate/feed/clear-work
+    # families below at their exact widths (InitEpoch creates the same
+    # 328-byte EpochAccount at seeds::epoch_pda; the walk consumes the same
+    # feed and checkpoint shapes), so no new row arises from that reuse.  Its
+    # one new persistent family is the 84-byte deadline-window companion:
+    # created by InitEpoch (tag 49) at seeds::epoch_window_pda, exactly one
+    # per general epoch, read by FreezeEpoch, and closed by no handler —
+    # TerminalClosure (rent-reclaim close of ClearWork/feed/receipts) is a
+    # recorded ranked blocker in the Tier 2 plan, deliberately standing.
+    ("epoch.window", 84, 1_475_520, "PER_GENERAL_EPOCH", 1, S,
+     ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
     ("legacy.epoch.v2", 328, 3_173_760, "PER_LEGACY_EPOCH", None, S,
      ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
-    ("legacy.candidate", 305, 3_013_680, "PER_LEGACY_CANDIDATE", None, S,
+    # CandidateRecord v3 (the d6929549… seal): T2-6 appends the 32-byte
+    # score_digest that CompleteClearWork stamps at verification, moving the
+    # record 305 -> 337 bytes; the row tracks the probe.
+    ("legacy.candidate", 337, 3_236_400, "PER_LEGACY_CANDIDATE", None, S,
      ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
     ("legacy.candidate_feed", 6_266, 44_502_240, "PER_LEGACY_EPOCH", None, S,
      ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
     # T2-1 re-pinned CLEAR_WORK_BODY_BYTES to the checkpoint codec's
     # ENCODED_BYTES (48,592 -> 47,846), so account_len::CLEAR_WORK moved
-    # 48,750 -> 48,004 at the fda59705… seal; the row tracks the probe.
-    ("legacy.clear_work", 48_004, 334_998_720, "PER_LEGACY_CLEAR_JOB", None, S,
+    # 48,750 -> 48,004 at the fda59705… seal; T2-6 inserts the 2,050-byte
+    # owner-interner region between header and body (the d6929549… seal),
+    # moving it 48,004 -> 50,054.  The row tracks the probe.
+    ("legacy.clear_work", 50_054, 349_266_720, "PER_LEGACY_CLEAR_JOB", None, S,
      ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
     ("resolution.work.v1", 1_296, 9_911_040, "PER_ACTIVE_MARKET_WORK", 1, R, ()),
     ("resolution.reserve.v1", 0, 890_880, "PER_ACTIVE_MARKET_WORK", 1, R, ()),

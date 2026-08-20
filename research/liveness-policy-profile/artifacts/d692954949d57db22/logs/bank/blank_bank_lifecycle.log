@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/blank_bank_lifecycle.rs (target/debug/deps/blank_bank_lifecycle-2e3f400b80c6f1c9)
+
+running 2 tests
+test a_late_token_target_refusal_rolls_every_earlier_creation_back ... ok
+test categorical_and_native_markets_construct_from_only_sealed_artifacts ... blank-bank degree=0 occupation=false resolution_bytes=165 rent=2039280 prefund-safe create_market=210047 CU
+blank-bank degree=1 occupation=false resolution_bytes=319 rent=3111120 prefund-safe create_market=214718 CU
+blank-bank degree=1 occupation=true resolution_bytes=383 rent=3556560 prefund-safe create_market=210323 CU
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+

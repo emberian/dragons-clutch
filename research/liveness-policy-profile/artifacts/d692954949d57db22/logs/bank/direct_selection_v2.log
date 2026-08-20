@@ -1,0 +1,15 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/direct_selection_v2.rs (target/debug/deps/direct_selection_v2-b5a74419f4bbf0ed)
+
+running 2 tests
+test cross_outcome_freeze_refuses_without_mutation ... ok
+test direct_selection_v2_is_a_measured_select_stop_with_rollback ... DirectSelectionV2 submit index=0 price=2500 cu=173577
+DirectSelectionV2 submit index=1 price=3000 cu=174679
+DirectSelectionV2 submit index=2 price=7000 cu=182471
+DirectSelectionV2 submit index=3 price=5000 cu=190108
+DirectSelectionV2 submit index=4 price=7500 cu=185715
+DirectSelectionV2 CU init=35548 freeze=357881 submit_max=190108 select=226446
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
