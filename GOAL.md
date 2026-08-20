@@ -71,6 +71,16 @@ check is mine when they land.
 
 ## Done log (2026-08-19 session)
 
+- SHA-SYSCALL MERGED TO MAIN at 6c25df4 (rebased onto main, fast-forward,
+  pushed). Both declared gates green on the merged tree: default profile
+  78 passed / 0 failed, mock 85 / 0, all targets. Default ELF reproduces
+  the verified post-SHA identity EXACTLY: 187d5ee1..., 1,420,608 bytes
+  (mock: 9c8a86e1..., 1,449,080). RESEAL LANE DISPATCHED: new artifact
+  root 187d5ee16f72946a regenerated from scratch (audit + 9 bank logs +
+  evidence.json re-derived, never transcribed), old root retained
+  historical, admission-shape re-examination as report-only. Manifest
+  emission + Persvati attestation remain mine after it lands.
+
 - FILING PROCESS + FORWARD CALENDAR memo landed (degg-research 3f021fe,
   FILING_PROCESS_AND_CALENDAR.md, 47 verified primary sources): the IAC
   MEETING IS AUG 20 (tomorrow), 1-4pm EDT, public access listen-only; the
