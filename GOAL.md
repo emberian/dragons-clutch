@@ -67,6 +67,19 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- T2-7 MERGED AND PUSHED (8fe5f9e; identity 75ba075a/1,843,272 verified on
+  merged main, 25/25 targets green): candidate submission is a staged
+  four-tag wire (54-57 — a 6,266-byte feed cannot ride one transaction;
+  stage-built feeds proven byte-identical to direct-writer feeds), EpochWindow
+  v2 carries the selection deadline + retained registry (bound 3, displacement
+  by verified components only — an unverified claim can NEVER displace a
+  verified candidate), FinalizeSelection re-derives every tie digest and
+  refuses mismatch, zero-verified lapses honestly. Selection CU tiny
+  (~49k worst). PROPOSED pin flagged for ember: CANDIDATE_WINDOW_SLOTS=1000
+  freeze-stamped (operator-chosen variant needs a tag-49 wire revision).
+  T2-8 LAUNCHED — the final join: entitlements, FinalPot, generalized
+  SettlePage consumption with whole-plane conservation.
+
 - CYCLE C ATTESTED: Persvati 44/44 PASS, 0 STOP over exact 7e6066f (+1
   contract-driven gate: audit_internal_consistency, born from the
   relocation-finding evidence shape; the relocated-equality assert honestly
