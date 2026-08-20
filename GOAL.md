@@ -72,6 +72,28 @@ in the reseal lane's output) and the postmark doorstep (4 threads).
 
 ## Done log (2026-08-19 session)
 
+- T2-6 MERGED — PORTFOLIO ORDERS CLEAR ON-CHAIN (87fd342): the general
+  epoch lifecycle + streaming walk, tags 49-53. THE HEADLINE: a 40-order,
+  3-page, 4-outcome book with 2 portfolio buys and 3 tombstones placed
+  through the general arm, frozen, and walked to VERIFIED across ~20
+  transactions with the on-chain verdict AND persisted FullScoreV1 + tie
+  digest byte-equal to the host relation's — the crown-jewel basis is no
+  longer inert as a shape (SBF-EXECUTED in bank, UNPROMOTED, fees zero).
+  Full tamper battery green incl. the anchor comparison catching wholesale
+  checkpoint substitution (the codec's 29 residual regions closed).
+  custom-heap upward bump allocator (default-on) makes the requestable
+  256-KiB region reachable; walk fixed floor ~250k CU/advance
+  (decode+encode), everything under the ceiling, Pod fallback unneeded.
+  Both suites 93/0 + 100/0 on the branch; 24/24 targets green both
+  profiles on merged main. Deviations documented: 64-byte policy artifact
+  (not the 96-byte wrapper), freeze grid re-verification dropped with the
+  4-page-breach arithmetic stated. Cost lab re-pinned (interner +2,050,
+  CandidateRecord v3 +32; abi-audit refused the drift as designed).
+  NEW BOUNDED FINDING: a ~110-char workspace path produces a 492-byte
+  codegen divergence; ordinary paths byte-identical — canonical identity
+  d6929549/1,785,904 verified at three paths. CYCLE-C RESEAL DISPATCHED
+  (root d692954949d57db22, walk CU families sealed as evidence-only).
+
 - REVENUE POLICY V1 DESIGNED (docs/design/REVENUE_POLICY_V1.md, PROPOSED,
   485 lines): the missing fee-destination object, two denominations
   sequenced lamports-first, per-Realm policy record + revenue vault PDAs
