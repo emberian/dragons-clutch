@@ -662,6 +662,18 @@ pub struct NormalizedBookV1 {
 }
 
 impl NormalizedBookV1 {
+    /// The empty normalized book: the placeholder every [`normalize_into`]
+    /// call overwrites completely, so a caller can initialize its out-slot
+    /// without a second book-sized temporary.  It is also exactly the valid
+    /// normalization of [`BookV1::empty`].
+    pub const EMPTY: Self = Self {
+        orders: [empty_order_v1(); MAX_ORDERS],
+        len: 0,
+        cancelled: [0u64; MAX_ORDERS],
+        owner_slot: [0u16; MAX_ORDERS],
+        owner_slot_count: 0,
+    };
+
     /// Quantity that can still clear, in order units.
     pub fn effective_quantity(&self, index: usize) -> u64 {
         self.orders[index]
@@ -682,20 +694,38 @@ impl NormalizedBookV1 {
 }
 
 /// V0: admit, intern owners, and apply the frozen self-cross normalization.
+///
+/// A thin by-value convenience over [`normalize_into`].  The
+/// [`NormalizedBookV1`] is 11,912 bytes, so this form costs a book-sized
+/// callee frame plus the return copy; a caller on a bounded stack should hold
+/// its own slot and call [`normalize_into`] directly.
 pub fn normalize(domain: &RelationDomainV1, book: &BookV1) -> Result<NormalizedBookV1, ErrorV1> {
+    let mut normalized = NormalizedBookV1::EMPTY;
+    normalize_into(domain, book, &mut normalized)?;
+    Ok(normalized)
+}
+
+/// [`normalize`] into a caller-owned slot.
+///
+/// The normalization writes fields directly into `out`, so this entry point
+/// adds no book-sized temporary to any frame.  On `Err`, `out` holds an
+/// unspecified partial normalization and must not be read.
+pub fn normalize_into(
+    domain: &RelationDomainV1,
+    book: &BookV1,
+    out: &mut NormalizedBookV1,
+) -> Result<(), ErrorV1> {
     book.validate(domain)?;
-    let mut normalized = NormalizedBookV1 {
-        orders: book.orders,
-        len: book.len,
-        cancelled: [0u64; MAX_ORDERS],
-        owner_slot: [0u16; MAX_ORDERS],
-        owner_slot_count: 0,
-    };
+    out.orders = book.orders;
+    out.len = book.len;
+    out.cancelled = [0u64; MAX_ORDERS];
+    out.owner_slot = [0u16; MAX_ORDERS];
+    out.owner_slot_count = 0;
     let mut owners = [0u16; MAX_OWNER_SLOTS];
     let mut owner_count = 0usize;
     let mut i = 0usize;
-    while i < normalized.len as usize {
-        let owner = normalized.orders[i].owner();
+    while i < out.len as usize {
+        let owner = out.orders[i].owner();
         let mut slot = usize::MAX;
         let mut j = 0usize;
         while j < owner_count {
@@ -713,21 +743,15 @@ pub fn normalize(domain: &RelationDomainV1, book: &BookV1) -> Result<NormalizedB
             slot = owner_count;
             owner_count += 1;
         }
-        normalized.owner_slot[i] = slot as u16;
+        out.owner_slot[i] = slot as u16;
         i += 1;
     }
-    normalized.owner_slot_count = owner_count as u16;
+    out.owner_slot_count = owner_count as u16;
 
     match domain.policy.self_cross {
-        SelfCrossPolicyV1::AllowGateAtPairing => Ok(normalized),
-        SelfCrossPolicyV1::RefuseOverlap => {
-            refuse_self_cross(domain, &normalized)?;
-            Ok(normalized)
-        }
-        SelfCrossPolicyV1::NetAtAdmission => {
-            net_self_cross(domain, &mut normalized)?;
-            Ok(normalized)
-        }
+        SelfCrossPolicyV1::AllowGateAtPairing => Ok(()),
+        SelfCrossPolicyV1::RefuseOverlap => refuse_self_cross(domain, out),
+        SelfCrossPolicyV1::NetAtAdmission => net_self_cross(domain, out),
     }
 }
 
@@ -1327,6 +1351,26 @@ impl ParticipationV1 {
         }
     }
 
+    /// Zero every cell in place, through the reference.
+    ///
+    /// `*table = ParticipationV1::zeroed()` materializes the whole 16 KiB
+    /// table on the callee's frame before copying it out (measured 24,704
+    /// bytes on the SBF probe — six times the 4,096-byte frame).  Writing
+    /// the zeros element by element keeps the frame flat; the loop lowers
+    /// to a plain in-place fill.
+    fn zero_in_place(&mut self) {
+        let mut slot = 0usize;
+        while slot < MAX_OWNER_SLOTS {
+            let mut outcome = 0usize;
+            while outcome < MAX_OUTCOMES {
+                self.buy[slot][outcome] = 0;
+                self.sell[slot][outcome] = 0;
+                outcome += 1;
+            }
+            slot += 1;
+        }
+    }
+
     /// `part_i(O) = buyfill_i(O) + sellfill_i(O)`.
     pub fn participation(&self, slot: usize, outcome: usize) -> Result<u64, ErrorV1> {
         self.buy[slot][outcome]
@@ -1375,7 +1419,7 @@ pub fn participation_from_fills(
     fills: &[u64; MAX_ORDERS],
     table: &mut ParticipationV1,
 ) -> Result<(), ErrorV1> {
-    *table = ParticipationV1::zeroed();
+    table.zero_in_place();
     let mut i = 0usize;
     while i < normalized.len as usize {
         let order = normalized.orders[i];
@@ -2463,7 +2507,8 @@ pub fn verify_pairing_witness(
     candidate: &CandidateV1,
     witness: &PairingWitnessV1,
 ) -> Result<(), ErrorV1> {
-    let normalized = normalize(domain, book)?;
+    let mut normalized = NormalizedBookV1::EMPTY;
+    normalize_into(domain, book, &mut normalized)?;
     if candidate.order_len != normalized.len {
         return Err(ErrorV1::CandidateMismatch);
     }
@@ -2478,7 +2523,8 @@ fn verify_inner(
     check_claims: bool,
 ) -> Result<SummaryV1, ErrorV1> {
     // V0
-    let normalized = normalize(domain, book)?;
+    let mut normalized = NormalizedBookV1::EMPTY;
+    normalize_into(domain, book, &mut normalized)?;
     if candidate.order_len != normalized.len {
         return Err(ErrorV1::CandidateMismatch);
     }
@@ -2591,7 +2637,8 @@ pub fn canonical_candidate(
     imbalance: i64,
     mask: u64,
 ) -> Result<CandidateV1, ErrorV1> {
-    let normalized = normalize(domain, book)?;
+    let mut normalized = NormalizedBookV1::EMPTY;
+    normalize_into(domain, book, &mut normalized)?;
     validate_prices(domain, prices)?;
     let classes = classify_all(domain, &normalized, prices)?;
     let canonical = derive_canonical(domain, &normalized, &classes, imbalance as i128, mask)?;
@@ -2749,7 +2796,8 @@ pub fn canonical_pairing(
     book: &BookV1,
     candidate: &CandidateV1,
 ) -> Result<PairingWitnessV1, ErrorV1> {
-    let normalized = normalize(domain, book)?;
+    let mut normalized = NormalizedBookV1::EMPTY;
+    normalize_into(domain, book, &mut normalized)?;
     if candidate.order_len != normalized.len {
         return Err(ErrorV1::CandidateMismatch);
     }
@@ -3091,7 +3139,8 @@ pub fn propose_best_valid(
     {
         return Err(ErrorV1::SearchBudgetExceeded);
     }
-    let normalized = normalize(domain, book)?;
+    let mut normalized = NormalizedBookV1::EMPTY;
+    normalize_into(domain, book, &mut normalized)?;
     let mut mask_indices = [0usize; 16];
     let mut mask_count = 0usize;
     if domain.policy.aon == AonPolicyV1::WitnessedHonoredMask {

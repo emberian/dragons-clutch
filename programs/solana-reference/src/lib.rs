@@ -1016,7 +1016,8 @@ pub fn validate_market_init(
     validate_metadata(metadata, bindings, false)?;
     let realm = RealmAccount::decode(realm_bytes)?;
     let profile = ProfileAccount::decode(profile_bytes)?;
-    let terms_account = TermsAccount::decode(terms_bytes)?;
+    let mut terms_account = TermsAccount::ZEROED;
+    TermsAccount::decode_into(terms_bytes, &mut terms_account)?;
     let decoded = DecodedState::decode(state)?;
     let DecodedState {
         market,
@@ -1026,7 +1027,7 @@ pub fn validate_market_init(
         external,
         replay,
         supply,
-    } = decoded;
+    } = &decoded;
     validate_links(&decoded, bindings)?;
     let policy = require_collateral_binding(policy_bytes, &profile)?;
     let intent = Intent::decode(create_intent_bytes)?;
@@ -1071,14 +1072,14 @@ pub fn validate_market_init(
         return Err(Error::MismatchedState);
     }
     supply
-        .binds_market(&market)
+        .binds_market(market)
         .map_err(|_| Error::MismatchedState)?;
     /* The presented terms artifact must be the one this market's digest
      * binds; the artifact is self-certifying inside the codec, so digest
      * equality plus these field comparisons is equality of the whole
      * artifact. */
     terms_account
-        .binds_market(&market)
+        .binds_market(market)
         .map_err(|_| Error::TermsBindingMismatch)?;
     /* The cap flow: the founding market's immutable collateral cap is the
      * terms' own — a digest-committed decision, never a writer's choice —
@@ -1109,7 +1110,7 @@ pub fn validate_market_init(
     /* A market whose kernel pays something its own terms digest does not
      * commit to can never resolve; the binding is checked at creation, not
      * merely at resolution. */
-    require_payout_set_binding(&kernel, &terms_account)?;
+    require_payout_set_binding(kernel, &terms_account)?;
     validate_padding(&decoded)?;
     validate_aggregate_closure(&decoded)?;
     Ok(())
@@ -1335,7 +1336,8 @@ pub fn apply_market_resolution_with_evidence(
     if !metadata.actor.signer {
         return Err(Error::MissingSignature);
     }
-    let terms = TermsAccount::decode(evidence.bytes.terms)?;
+    let mut terms = TermsAccount::ZEROED;
+    TermsAccount::decode_into(evidence.bytes.terms, &mut terms)?;
     if terms.stored_bump != evidence.bindings.terms_bump {
         return Err(Error::WrongBump);
     }
@@ -1832,20 +1834,25 @@ fn require_payout_set_binding(kernel: &KernelAccount, terms: &TermsAccount) -> R
 }
 
 /// Decode and bind the immutable terms artifact for one market.
+///
+/// Writes into a caller-owned slot (`TermsAccount::decode_into` discipline):
+/// the account is over 1.6 KiB, so the by-value form cost every evidence
+/// gate two account-sized frame copies.  On `Err`, `out` holds an
+/// unspecified partial decode and must not be read.
 fn bind_terms(
     market: &MarketAccount,
     kernel: &KernelAccount,
     evidence: &ResolutionEvidence<'_>,
-) -> Result<TermsAccount> {
-    let terms = TermsAccount::decode(evidence.bytes.terms)?;
-    if terms.stored_bump != evidence.bindings.terms_bump {
+    out: &mut TermsAccount,
+) -> Result<()> {
+    TermsAccount::decode_into(evidence.bytes.terms, out)?;
+    if out.stored_bump != evidence.bindings.terms_bump {
         return Err(Error::WrongBump);
     }
-    terms
-        .binds_market(market)
+    out.binds_market(market)
         .map_err(|_| Error::TermsBindingMismatch)?;
-    require_payout_set_binding(kernel, &terms)?;
-    Ok(terms)
+    require_payout_set_binding(kernel, out)?;
+    Ok(())
 }
 
 /// Decode and bind the resolution record for one market's immutable terms.
@@ -1886,7 +1893,8 @@ fn resolve_from_evidence(
     if market.lifecycle != 0 || state.kernel.phase != 0 {
         return Err(Error::Resolution(ResolutionRefusal::MarketNotActive));
     }
-    let terms = bind_terms(market, &state.kernel, evidence)?;
+    let mut terms = TermsAccount::ZEROED;
+    bind_terms(market, &state.kernel, evidence, &mut terms)?;
     let record = bind_resolution(market, &terms, evidence)?;
     if record.is_resolved() {
         return Err(Error::ResolutionAlreadyRecorded);
@@ -1931,7 +1939,8 @@ fn redeem_from_evidence(
         return Err(Error::UnexpectedEvidence);
     }
     let market = &state.market;
-    let terms = bind_terms(market, &state.kernel, evidence)?;
+    let mut terms = TermsAccount::ZEROED;
+    bind_terms(market, &state.kernel, evidence, &mut terms)?;
     let record = bind_resolution(market, &terms, evidence)?;
     if !record.is_resolved() {
         return Err(Error::ResolutionNotRecorded);
