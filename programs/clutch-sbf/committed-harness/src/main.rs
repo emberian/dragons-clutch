@@ -52,6 +52,20 @@ struct Step {
     compare: Vec<Compare>,
     #[serde(default)]
     identical_to_pre: Vec<String>,
+    /// Absolute slot this step must not be submitted before (a deadline the
+    /// plan chose; the general epoch freeze).
+    #[serde(default)]
+    wait_slot: Option<u64>,
+    /// Relative wait: `slot(step) + delta` must be reached first (the
+    /// candidate window's fixed length after the actual freeze slot).
+    #[serde(default)]
+    wait_after: Option<WaitAfter>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WaitAfter {
+    step: String,
+    delta: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,6 +73,20 @@ struct Compare {
     role: String,
     address: String,
     expected: String,
+    /// Slot-valued u64 fields of the expected image, filled from observed
+    /// confirmation slots: `expected[offset..offset+8] = slot(base) + delta`.
+    /// The bank's clock is the one plan input a pregenerated expectation
+    /// cannot carry; every patched value is printed so the log shows exactly
+    /// which bytes were supplied by observation rather than precomputation.
+    #[serde(default)]
+    slot_patches: Vec<SlotPatch>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SlotPatch {
+    offset: usize,
+    base: String,
+    delta: u64,
 }
 
 fn usage() -> ! {
@@ -240,6 +268,47 @@ fn computational_budget_exhausted(error: &Value) -> bool {
         == Some("ComputationalBudgetExceeded")
 }
 
+/// The bank's current confirmed slot.
+fn current_slot(url: &str) -> Result<u64> {
+    rpc(url, "getSlot", &json!([{"commitment": "confirmed"}]))?
+        .as_u64()
+        .ok_or_else(|| "getSlot returned no slot".into())
+}
+
+/// Block until the bank reaches `target`; the deadline transitions of the
+/// general plane are clock-gated by the program, so the runner must actually
+/// wait on the real validator's clock rather than warp it.
+fn wait_for_slot(url: &str, target: u64, reason: &str) -> Result<()> {
+    let mut now = current_slot(url)?;
+    if now >= target {
+        return Ok(());
+    }
+    println!("   waiting for slot {target} ({reason}); now at {now}");
+    while now < target {
+        thread::sleep(Duration::from_millis(250));
+        now = current_slot(url)?;
+    }
+    Ok(())
+}
+
+/// Compute units the bank charged one committed transaction, when reported.
+fn compute_units(url: &str, signature: &str) -> Option<u64> {
+    let result = rpc(
+        url,
+        "getTransaction",
+        &json!([signature, {
+            "encoding": "base64",
+            "commitment": "confirmed",
+            "maxSupportedTransactionVersion": 0
+        }]),
+    )
+    .ok()?;
+    result
+        .get("meta")?
+        .get("computeUnitsConsumed")?
+        .as_u64()
+}
+
 fn latest_blockhash(url: &str) -> Result<[u8; 32]> {
     let result = rpc(
         url,
@@ -315,6 +384,74 @@ fn account_bytes(url: &str, address: &str) -> Result<Option<Vec<u8>>> {
         .and_then(Value::as_str)
         .ok_or_else(|| format!("account {address} returned no base64 data"))?;
     Ok(Some(BASE64.decode(encoded)?))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(out, "{byte:02x}").expect("writing hex into a String cannot fail");
+    }
+    out
+}
+
+/// Reload and compare every declared account of one committed step, applying
+/// the step's slot patches and mirroring observed bytes when requested.
+fn verify_reloads(
+    url: &str,
+    plan_dir: &Path,
+    step: &Step,
+    step_slots: &BTreeMap<String, u64>,
+    observed_dir: Option<&String>,
+) -> Result<()> {
+    for entry in &step.compare {
+        let observed = account_bytes(url, &entry.address)?
+            .ok_or_else(|| format!("{} / {}: account is absent", step.name, entry.role))?;
+        let mut expected = hex_decode(&fs::read_to_string(plan_dir.join(&entry.expected))?)?;
+        for patch in &entry.slot_patches {
+            let base = step_slots.get(&patch.base).copied().ok_or_else(|| {
+                format!(
+                    "{} / {}: slot patch names unknown step {}",
+                    step.name, entry.role, patch.base
+                )
+            })?;
+            let value = base
+                .checked_add(patch.delta)
+                .ok_or("slot patch value overflow")?;
+            let end = patch
+                .offset
+                .checked_add(8)
+                .filter(|end| *end <= expected.len())
+                .ok_or_else(|| {
+                    format!(
+                        "{} / {}: slot patch offset {} exceeds the expected image",
+                        step.name, entry.role, patch.offset
+                    )
+                })?;
+            expected[patch.offset..end].copy_from_slice(&value.to_le_bytes());
+            println!(
+                "   slot-patch {} offset {} = {value} (slot of {} + {})",
+                entry.role, patch.offset, patch.base, patch.delta
+            );
+        }
+        if let Some(dir) = observed_dir {
+            fs::write(
+                Path::new(dir).join(format!("{}.{}.hex", step.name, entry.role)),
+                format!("{}\n", hex_encode(&observed)),
+            )?;
+        }
+        if observed != expected {
+            return Err(format!(
+                "{} / {}: committed bytes differ (observed {}, expected {})",
+                step.name,
+                entry.role,
+                observed.len(),
+                expected.len()
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 fn hex_decode(text: &str) -> Result<Vec<u8>> {
@@ -475,8 +612,27 @@ fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
     let (watched, role_addresses) = watch_index(&plan)?;
     let keypair_refs: Vec<&Keypair> = keypairs.iter().collect();
     report_scope(&plan, watched.len());
+    let mut step_slots: BTreeMap<String, u64> = BTreeMap::new();
+    let observed_dir = env::var("CLUTCH_COMMITTED_OBSERVED_DIR").ok();
+    if let Some(dir) = &observed_dir {
+        fs::create_dir_all(dir)?;
+    }
 
     for (ordinal, step) in plan.steps.iter().enumerate() {
+        if let Some(target) = step.wait_slot {
+            wait_for_slot(url, target, "plan deadline")?;
+        }
+        if let Some(after) = &step.wait_after {
+            let base = step_slots.get(&after.step).copied().ok_or_else(|| {
+                format!("{}: wait_after names unknown step {}", step.name, after.step)
+            })?;
+            wait_for_slot(
+                url,
+                base.checked_add(after.delta)
+                    .ok_or("wait_after slot overflow")?,
+                &format!("{} + {}", after.step, after.delta),
+            )?;
+        }
         let unsigned = BASE64.decode(fs::read_to_string(plan_dir.join(&step.tx))?.trim())?;
         let before = if matches!(step.kind.as_str(), "refuse" | "exhausted") {
             Some(snapshot(url, &watched)?)
@@ -489,6 +645,11 @@ fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
         let signature = submit(url, &signed)?;
         let status = await_confirmation(url, &signature)?;
         let error = status.get("err").cloned().unwrap_or(Value::Null);
+        let slot = status
+            .get("slot")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("{}: confirmation carries no slot", step.name))?;
+        step_slots.insert(step.name.clone(), slot);
 
         match step.kind.as_str() {
             "accept" if error.is_null() => {}
@@ -496,21 +657,7 @@ fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
             _ => verify_nonaccepting_step(url, step, &error, &watched, before.as_ref())?,
         }
 
-        for entry in &step.compare {
-            let observed = account_bytes(url, &entry.address)?
-                .ok_or_else(|| format!("{} / {}: account is absent", step.name, entry.role))?;
-            let expected = hex_decode(&fs::read_to_string(plan_dir.join(&entry.expected))?)?;
-            if observed != expected {
-                return Err(format!(
-                    "{} / {}: committed bytes differ (observed {}, expected {})",
-                    step.name,
-                    entry.role,
-                    observed.len(),
-                    expected.len()
-                )
-                .into());
-            }
-        }
+        verify_reloads(url, plan_dir, step, &step_slots, observed_dir.as_ref())?;
         let unchanged_after = snapshot(url, &unchanged_addresses)?;
         if unchanged_before != unchanged_after {
             return Err(format!(
@@ -521,7 +668,7 @@ fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
             .into());
         }
         println!(
-            "{:>2} {:<34} {:<7} confirmed={} reloads={} signature={}",
+            "{:>2} {:<34} {:<7} confirmed={} slot={} cu={} reloads={} signature={}",
             ordinal + 1,
             step.name,
             step.kind,
@@ -529,6 +676,9 @@ fn run(url: &str, plan_dir: &Path, keypair_paths: &[String]) -> Result<()> {
                 .get("confirmationStatus")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown"),
+            slot,
+            compute_units(url, &signature)
+                .map_or_else(|| "-".to_string(), |units| units.to_string()),
             step.compare.len() + step.identical_to_pre.len(),
             signature
         );
