@@ -895,15 +895,28 @@ pub mod account_len {
     pub const SETTLEMENT_RECEIPT: usize = 2 + (5 * 32) + 16 + 8 + 8 + 8 + 8 + 2 + 1 + 1 + 1 + 1 + 1;
     /// Resolution account bytes.
     pub const RESOLUTION: usize = 2 + (4 * 32) + 8 + 8 + 8 + 8 + 1 + 1 + 1;
-    /// Streaming-checkpoint account bytes: the header, then the opaque body.
+    /// Streaming-checkpoint account bytes: the header, the layout-owned
+    /// owner-interning region, then the opaque body.
     ///
-    /// [`super::clearing::CLEAR_WORK_HEADER_BYTES`] of layout-owned framing
-    /// plus exactly [`super::CLEAR_WORK_BODY_BYTES`] the layout never reads.
-    /// This is by far the largest account in the inventory and it is the one
-    /// that does not fit a single system-program creation via CPI; the
-    /// creation path is analyzed in `docs/implementation/SOLANA_LAYOUT.md`.
-    pub const CLEAR_WORK: usize =
-        2 + (4 * 32) + 16 + 4 + 2 + 2 + 1 + 1 + 1 + 1 + CLEAR_WORK_BODY_BYTES;
+    /// [`super::clearing::CLEAR_WORK_HEADER_BYTES`] of layout-owned framing,
+    /// then [`super::clearing::CLEAR_WORK_INTERNER_BYTES`] persisting the
+    /// projection's owner↔tag table across walk transactions, then exactly
+    /// [`super::CLEAR_WORK_BODY_BYTES`] the layout never reads.  This is by
+    /// far the largest account in the inventory and it is the one that does
+    /// not fit a single system-program creation via CPI; the creation path is
+    /// analyzed in `docs/implementation/SOLANA_LAYOUT.md`.
+    pub const CLEAR_WORK: usize = 2
+        + (4 * 32)
+        + 16
+        + 4
+        + 2
+        + 2
+        + 1
+        + 1
+        + 1
+        + 1
+        + super::clearing::CLEAR_WORK_INTERNER_BYTES
+        + CLEAR_WORK_BODY_BYTES;
     /// Candidate feed account bytes: header, fill vector, slice vector.
     pub const CANDIDATE_FEED: usize = 2
         + (4 * 32)
@@ -4679,6 +4692,24 @@ pub enum Intent {
     /// into the epoch, and rewrites `owner_count` with the exact
     /// distinct-owner count of the frozen set.
     FreezeEpoch { market: MarketId, epoch: EpochId },
+    /// Advance one clearing checkpoint's order pass by up to `max_orders`
+    /// live orders from its monotone `(page_cursor, slot_cursor)` position.
+    ///
+    /// The on-chain streaming walk: each invocation names the one
+    /// digest-verified page the cursor sits on, projects its live records
+    /// through [`projection`], and feeds them — with their candidate fills
+    /// from the bound [`clearing::CandidateFeedAccount`] — into the
+    /// checkpoint codec.  On pass 1 every pushed order also presents its
+    /// exact ACTIVE reservation, which is what makes pass-1 completion the
+    /// reservation-set sweep.  Permissionless keeper work: every authority is
+    /// account state.
+    AdvanceClearWork {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+        /// Most live orders this invocation may push; at least one.
+        max_orders: u16,
+    },
 }
 
 /// The placement admissibility rule, shared by the encoder and the decoder.
@@ -4788,11 +4819,13 @@ const INIT_CLEAR_WORK_TAG: u8 = 47;
 const GROW_CLEAR_WORK_TAG: u8 = 48;
 const INIT_EPOCH_TAG: u8 = 49;
 const FREEZE_EPOCH_TAG: u8 = 50;
+const ADVANCE_CLEAR_WORK_TAG: u8 = 51;
 const _: () = assert!(INIT_CLEAR_WORK_TAG == direct_selection_v3::LAST_DIRECT_V3_INTENT_TAG + 1);
 // The Tier 2 clearing family is tag-contiguous: each intent takes exactly the
 // next tag, so a gap is a compile error rather than a squatting hazard.
 const _: () = assert!(INIT_EPOCH_TAG == GROW_CLEAR_WORK_TAG + 1);
 const _: () = assert!(FREEZE_EPOCH_TAG == INIT_EPOCH_TAG + 1);
+const _: () = assert!(ADVANCE_CLEAR_WORK_TAG == FREEZE_EPOCH_TAG + 1);
 
 fn resolution_work_codec(error: resolution_work::ResolutionWorkCodecError) -> CodecError {
     use resolution_work::ResolutionWorkCodecError as WorkError;
@@ -4857,6 +4890,7 @@ impl Intent {
             Self::InitClearWork { .. } | Self::GrowClearWork { .. } => 2 + 32 + 32 + 32,
             Self::InitEpoch { .. } => 2 + 32 + 8 + 32 + 8,
             Self::FreezeEpoch { .. } => 2 + 32 + 32,
+            Self::AdvanceClearWork { .. } => 2 + 32 + 32 + 32 + 2,
         }
     }
     /// Validate and encode into a caller-provided buffer.
@@ -5383,6 +5417,26 @@ impl Intent {
                 put_header(&mut w, FREEZE_EPOCH_TAG, INTENT_VERSION)?;
                 w.hash(*market)?;
                 w.hash(*epoch)?
+            }
+            Self::AdvanceClearWork {
+                market,
+                epoch,
+                candidate,
+                max_orders,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                check_hash(*candidate)?;
+                // A walk that may push nothing is not a walk, and a bound
+                // above the book is a bound the book already imposes.
+                if *max_orders == 0 || *max_orders as usize > MAX_EPOCH_ORDERS {
+                    return Err(CodecError::InvalidCount);
+                }
+                put_header(&mut w, ADVANCE_CLEAR_WORK_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.hash(*candidate)?;
+                w.u16(*max_orders)?
             }
         };
         Ok(w.at)
@@ -5922,6 +5976,25 @@ impl Intent {
                 check_hash(market)?;
                 check_hash(epoch)?;
                 Ok(Self::FreezeEpoch { market, epoch })
+            }
+            ADVANCE_CLEAR_WORK_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let candidate = r.hash()?;
+                let max_orders = r.u16()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                check_hash(candidate)?;
+                if max_orders == 0 || max_orders as usize > MAX_EPOCH_ORDERS {
+                    return Err(CodecError::InvalidCount);
+                }
+                Ok(Self::AdvanceClearWork {
+                    market,
+                    epoch,
+                    candidate,
+                    max_orders,
+                })
             }
             _ => Err(CodecError::WrongTag),
         }
@@ -10494,6 +10567,70 @@ mod tests {
         assert_eq!(
             Intent::decode(&wrong_version[..len]),
             Err(CodecError::WrongVersion)
+        );
+    }
+
+    #[test]
+    fn the_walk_intent_has_an_exact_unambiguous_wire() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 7);
+        let candidate = h(9);
+        let walk = Intent::AdvanceClearWork {
+            market,
+            epoch,
+            candidate,
+            max_orders: 16,
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = walk.encode(&mut bytes).unwrap();
+        assert_eq!(len, 100);
+        assert_eq!(walk.encoded_len(), len);
+        assert_eq!(&bytes[..2], [51, INTENT_VERSION]);
+        assert_eq!(&bytes[2..34], &market.bytes());
+        assert_eq!(&bytes[34..66], &epoch.bytes());
+        assert_eq!(&bytes[66..98], &candidate.bytes());
+        assert_eq!(&bytes[98..100], &16u16.to_le_bytes());
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(walk));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+        let mut long = [0; MAX_INTENT_BYTES];
+        long[..len].copy_from_slice(&bytes[..len]);
+        assert_eq!(
+            Intent::decode(&long[..len + 1]),
+            Err(CodecError::TrailingBytes)
+        );
+        for at in [2, 34, 66] {
+            let mut zeroed = bytes;
+            zeroed[at..at + 32].fill(0);
+            assert_eq!(
+                Intent::decode(&zeroed[..len]),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+        // A walk that may push nothing, and a bound past the book, both ways.
+        let mut zero_batch = bytes;
+        zero_batch[98..100].fill(0);
+        assert_eq!(
+            Intent::decode(&zero_batch[..len]),
+            Err(CodecError::InvalidCount)
+        );
+        let mut over_batch = bytes;
+        over_batch[98..100].copy_from_slice(&(MAX_EPOCH_ORDERS as u16 + 1).to_le_bytes());
+        assert_eq!(
+            Intent::decode(&over_batch[..len]),
+            Err(CodecError::InvalidCount)
+        );
+        assert_eq!(
+            Intent::AdvanceClearWork {
+                market,
+                epoch,
+                candidate,
+                max_orders: 0,
+            }
+            .encode(&mut [0; MAX_INTENT_BYTES]),
+            Err(CodecError::InvalidCount)
         );
     }
 

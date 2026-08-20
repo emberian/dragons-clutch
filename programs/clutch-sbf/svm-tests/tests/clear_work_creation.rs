@@ -70,7 +70,7 @@ fn final_principal() -> u64 {
     let principal = solana_rent::Rent::default().minimum_balance(account_len::CLEAR_WORK);
     // The envelope pin: rent = (128 + bytes) x 6,960 at default parameters.
     assert_eq!(principal, (128 + account_len::CLEAR_WORK as u64) * 6_960);
-    assert_eq!(principal, 334_998_720);
+    assert_eq!(principal, 349_266_720);
     principal
 }
 

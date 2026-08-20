@@ -468,21 +468,5 @@ fn decode_epoch_boxed(bytes: &[u8]) -> Outcome<Box<EpochAccount>> {
 #[inline(never)]
 fn boxed_empty_interner() -> Outcome<Box<OwnerInterner>> {
     static EMPTY: OwnerInterner = OwnerInterner::NEW;
-    boxed_copy_of(&EMPTY)
-}
-
-/// Copy one static value onto the heap without materializing it on a frame.
-fn boxed_copy_of<T: Copy>(source: &'static T) -> Outcome<Box<T>> {
-    let layout = core::alloc::Layout::new::<T>();
-    // SAFETY: `T: Copy` has no drop obligations and no interior references;
-    // a byte copy of a valid static value is a valid value, and the pointer
-    // is freshly allocated for exactly `T`'s layout.
-    unsafe {
-        let pointer = std::alloc::alloc(layout) as *mut T;
-        if pointer.is_null() {
-            return Err(Refusal::Adapter(ClutchError::AccountCreationFailed));
-        }
-        core::ptr::copy_nonoverlapping(source as *const T, pointer, 1);
-        Ok(Box::from_raw(pointer))
-    }
+    super::boxed_copy_of(&EMPTY)
 }

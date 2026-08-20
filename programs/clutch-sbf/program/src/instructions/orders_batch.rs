@@ -481,10 +481,33 @@ use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
+pub mod clear_walk;
 pub mod clear_work;
 pub mod general_epoch;
 mod reservation;
 pub(super) mod settlement;
+
+/// Copy one static value onto the heap without materializing it on a frame.
+///
+/// The clearing plane's boxed-decode idiom for values near or past the 4-KiB
+/// frame bound (`ClearWorkV1` ~48.7 KiB, `OwnerInterner` 2,050 B): the source
+/// lives in static storage, the copy is a straight `memcpy` into a fresh
+/// allocation, and no call frame ever holds the value.
+///
+/// SAFETY inside: `T: Copy` has no drop obligations and no interior
+/// references, so a byte copy of a valid static value is a valid value, and
+/// the pointer is freshly allocated for exactly `T`'s layout.
+pub(in crate::instructions) fn boxed_copy_of<T: Copy>(source: &'static T) -> Outcome<Box<T>> {
+    let layout = core::alloc::Layout::new::<T>();
+    unsafe {
+        let pointer = std::alloc::alloc(layout) as *mut T;
+        if pointer.is_null() {
+            return Err(Refusal::Adapter(ClutchError::AccountCreationFailed));
+        }
+        core::ptr::copy_nonoverlapping(source as *const T, pointer, 1);
+        Ok(Box::from_raw(pointer))
+    }
+}
 
 /// Borrow one account's data mutably, or refuse.
 ///
@@ -1116,6 +1139,20 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         Action::Layout(Intent::FreezeEpoch { market, epoch }) => {
             general_epoch::freeze_epoch(program_id, accounts, request.sequence, market, epoch)
         }
+        Action::Layout(Intent::AdvanceClearWork {
+            market,
+            epoch,
+            candidate,
+            max_orders,
+        }) => clear_walk::advance_clear_work(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            epoch,
+            candidate,
+            *max_orders,
+        ),
         /* Every other action belongs to another family module; the router never
          * sends one here, and this arm exists so that adding one to the router
          * is a compile error rather than a silent success. */

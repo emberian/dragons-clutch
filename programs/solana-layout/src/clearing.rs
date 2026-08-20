@@ -10,8 +10,9 @@
 //!
 //! | account | tag | bytes | what it holds |
 //! | --- | ---: | ---: | --- |
-//! | [`ClearWorkAccount`] | 17 | 48,004 | the resumable checkpoint: a layout-owned header and a `ClearWorkV1` codec body |
+//! | [`ClearWorkAccount`] | 17 | 50,054 | the resumable checkpoint: a layout-owned header, the layout-owned owner-interning region, and a `ClearWorkV1` codec body |
 //! | [`CandidateFeedAccount`] | 18 | 6,266 | the solver-written feed: candidate header, fill vector, optional pairing witness |
+//! | [`EpochWindowAccount`] | 24 | 84 | the general epoch's deadline-window companion |
 //!
 //! # Neither account is ever a value
 //!
@@ -61,6 +62,7 @@
 //! shows a different `order_set`.  Neither function verifies a fold; the fold is
 //! `clutch-batch`'s, and saying so is the point.
 
+use super::projection::OwnerInterner;
 use super::{
     account_len, account_version, canonical_candidate_digest, canonical_epoch_id, check_count,
     check_hash, check_header, check_padded_amounts, digest, put_header, CodecError, EpochAccount,
@@ -73,13 +75,35 @@ use super::{
 /* The streaming checkpoint                                                  */
 /* ------------------------------------------------------------------------ */
 
-/// Bytes of a [`ClearWorkAccount`] before its opaque body.
+/// Bytes of a [`ClearWorkAccount`] before its owner-interning region.
 ///
-/// The only part of a checkpoint this crate ever materializes.
-pub const CLEAR_WORK_HEADER_BYTES: usize = account_len::CLEAR_WORK - CLEAR_WORK_BODY_BYTES;
+/// The only part of a checkpoint this crate ever materializes by value.
+pub const CLEAR_WORK_HEADER_BYTES: usize =
+    account_len::CLEAR_WORK - CLEAR_WORK_INTERNER_BYTES - CLEAR_WORK_BODY_BYTES;
+
+/// Bytes of the layout-owned owner-interning region between the header and
+/// the opaque body: the interned count, then all 64 owner slots.
+///
+/// The region persists the projection's [`OwnerInterner`] across walk
+/// transactions — the `owner: u16` coordinate every projected order carries
+/// is the index of its 32-byte owner's first appearance in the canonical
+/// walk, and a resumed pass must reproduce exactly the tags pass 1 minted.
+/// The relation checkpoint cannot carry it (its owner table is the *u16 tag*
+/// side), so the mapping is layout state, framed here and written only
+/// through [`write_owner_interner`].
+pub const CLEAR_WORK_INTERNER_BYTES: usize = 2 + (MAX_EPOCH_ORDERS * HASH_BYTES);
+
+/// Byte offset of the owner-interning region inside a checkpoint account.
+const CLEAR_WORK_INTERNER_AT: usize = CLEAR_WORK_HEADER_BYTES;
+/// Byte offset of the opaque codec body inside a checkpoint account.
+const CLEAR_WORK_BODY_AT: usize = CLEAR_WORK_HEADER_BYTES + CLEAR_WORK_INTERNER_BYTES;
 
 const _: () = assert!(CLEAR_WORK_HEADER_BYTES == 158);
-const _: () = assert!(CLEAR_WORK_HEADER_BYTES + CLEAR_WORK_BODY_BYTES == account_len::CLEAR_WORK);
+const _: () = assert!(CLEAR_WORK_INTERNER_BYTES == 2_050);
+const _: () = assert!(
+    CLEAR_WORK_HEADER_BYTES + CLEAR_WORK_INTERNER_BYTES + CLEAR_WORK_BODY_BYTES
+        == account_len::CLEAR_WORK
+);
 
 /// [`ClearWorkHeader::status`]: pass one is walking; nothing is bound yet.
 pub const CLEAR_WORK_STATUS_OPEN: u8 = 0;
@@ -253,7 +277,7 @@ impl ClearWorkHeader {
 /// The whole checkpoint account, named for the doc table.
 ///
 /// It is a *type-level* name only: there is deliberately no value of this type,
-/// because a value of it would be 48,004 bytes on a call frame.  A caller reads
+/// because a value of it would be 50,054 bytes on a call frame.  A caller reads
 /// [`verify_clear_work`] and walks the body through [`clear_work_body`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClearWorkAccount {}
@@ -273,7 +297,7 @@ pub fn verify_clear_work(input: &[u8]) -> Result<ClearWorkHeader> {
 /// The opaque body region of a checkpoint account, borrowed in place.
 pub fn clear_work_body(input: &[u8]) -> Result<&[u8]> {
     ClearWorkHeader::decode(input)?;
-    Ok(&input[CLEAR_WORK_HEADER_BYTES..])
+    Ok(&input[CLEAR_WORK_BODY_AT..])
 }
 
 /// The opaque body region of a checkpoint account, borrowed mutably in place.
@@ -283,7 +307,110 @@ pub fn clear_work_body(input: &[u8]) -> Result<&[u8]> {
 /// comes back.  Nothing is copied, so no frame ever holds the body.
 pub fn clear_work_body_mut(input: &mut [u8]) -> Result<&mut [u8]> {
     ClearWorkHeader::decode(input)?;
-    Ok(&mut input[CLEAR_WORK_HEADER_BYTES..])
+    Ok(&mut input[CLEAR_WORK_BODY_AT..])
+}
+
+/// Read the persisted owner-interning table of a checkpoint account.
+///
+/// The framing refusals are the header decoder's; the region's own rules are
+/// [`OwnerInterner::restore`]'s — a bounded count, no zero owner below it,
+/// canonical zero padding at and beyond it.  Distinctness below the count is
+/// **by construction**, not re-verified here: the table is written only
+/// through [`write_owner_interner`] from a table [`OwnerInterner::intern`]
+/// built, the account is program-owned, and an all-pairs comparison on every
+/// resume would price the walk out of its compute budget for a fact no
+/// program path can break.
+pub fn read_owner_interner(input: &[u8]) -> Result<OwnerInterner> {
+    let mut owners = OwnerInterner::NEW;
+    read_owner_interner_into(input, &mut owners)?;
+    Ok(owners)
+}
+
+/// Read the persisted owner-interning table into a caller-owned table.
+///
+/// The in-place form of [`read_owner_interner`], for callers whose frames
+/// must never hold a second 2,050-byte table — the on-chain walk reads into a
+/// heap-boxed table through this.  Same rules, same refusals; on any refusal
+/// the output table is reset to empty rather than left half-written.
+pub fn read_owner_interner_into(input: &[u8], out: &mut OwnerInterner) -> Result<()> {
+    ClearWorkHeader::decode(input)?;
+    let mut r = Reader::at(input, CLEAR_WORK_INTERNER_AT);
+    let count = r.u16()?;
+    if count as usize > MAX_EPOCH_ORDERS {
+        return Err(CodecError::InvalidCount);
+    }
+    let (owners, stored_count) = out.raw_parts_mut();
+    *stored_count = 0;
+    let mut i = 0usize;
+    while i < MAX_EPOCH_ORDERS {
+        let owner = match r.hash() {
+            Ok(owner) => owner,
+            Err(error) => {
+                owners[..i].fill(Hash32::ZERO);
+                return Err(error);
+            }
+        };
+        let fault = if i < count as usize {
+            check_hash(owner).err()
+        } else if owner != Hash32::ZERO {
+            Some(CodecError::NonCanonicalPadding)
+        } else {
+            None
+        };
+        if let Some(error) = fault {
+            owners[..i].fill(Hash32::ZERO);
+            return Err(error);
+        }
+        owners[i] = owner;
+        i += 1;
+    }
+    *stored_count = count;
+    Ok(())
+}
+
+/// Persist one owner-interning table into a checkpoint account.
+///
+/// All 64 slots are written — the live prefix verbatim, canonical zeros
+/// beyond it — so the region can never drift from the exact image
+/// [`read_owner_interner`] reproduces.
+pub fn write_owner_interner(account: &mut [u8], owners: &OwnerInterner) -> Result<()> {
+    ClearWorkHeader::decode(account)?;
+    let end = CLEAR_WORK_INTERNER_AT + CLEAR_WORK_INTERNER_BYTES;
+    let mut w = Writer::new(&mut account[CLEAR_WORK_INTERNER_AT..end]);
+    w.u16(owners.count())?;
+    let live = owners.owners();
+    let mut i = 0usize;
+    while i < MAX_EPOCH_ORDERS {
+        w.hash(if i < live.len() { live[i] } else { Hash32::ZERO })?;
+        i += 1;
+    }
+    if w.at != CLEAR_WORK_INTERNER_BYTES {
+        return Err(CodecError::OutputTooSmall);
+    }
+    Ok(())
+}
+
+/// Rewind the page-set walk position to the top of the set, for the next pass.
+///
+/// The one sanctioned exception to [`advance_walk`]'s monotone rule: the feed
+/// protocol re-walks the same frozen set once per pass, so at a pass boundary
+/// — and only there — the cursor legitimately returns to `(0, 0)`.  Requiring
+/// [`CLEAR_WORK_STATUS_BOUND`] is what pins "at a pass boundary": binding
+/// happens exactly at pass-1 completion, every later pass starts from a bound
+/// checkpoint, and a completed one refuses.  Double-counting within a pass
+/// stays impossible: a re-fed prefix changes the pass's running fold, and the
+/// checkpoint codec refuses the pass at its end (`ResumeFoldMismatch`) rather
+/// than folding an order twice into a verdict.
+pub fn rewind_walk(account: &mut [u8]) -> Result<ClearWorkHeader> {
+    let mut header = ClearWorkHeader::decode(account)?;
+    if header.status != CLEAR_WORK_STATUS_BOUND {
+        return Err(CodecError::MismatchedBinding);
+    }
+    header.page_cursor = 0;
+    header.slot_cursor = 0;
+    header.live_rank = 0;
+    header.encode(account)?;
+    Ok(header)
 }
 
 /// Write an open checkpoint over a fresh account, and return its header.
@@ -294,7 +421,9 @@ pub fn clear_work_body_mut(input: &mut [u8]) -> Result<&mut [u8]> {
 /// in place — `ClearWorkV1::NEW` is not all-zero in every field, so the caller
 /// must still write the idle checkpoint through its owning crate; this
 /// establishes the *account*, not the checkpoint's initial value, and saying so
-/// is the difference between a framing and a lie.
+/// is the difference between a framing and a lie.  The zero fill also covers
+/// the owner-interning region, whose all-zero image is exactly the empty
+/// table ([`OwnerInterner::NEW`]).
 pub fn init_clear_work(
     account: &mut [u8],
     market: Hash32,
@@ -1419,7 +1548,9 @@ mod tests {
             clutch_batch::relation_v1_stream::ClearWorkV1::ENCODED_BYTES
         );
         assert_eq!(CLEAR_WORK_HEADER_BYTES, 158);
-        assert_eq!(account_len::CLEAR_WORK, 48_004);
+        // The owner-interning region: count plus 64 owners of 32 bytes.
+        assert_eq!(CLEAR_WORK_INTERNER_BYTES, 2 + 64 * 32);
+        assert_eq!(account_len::CLEAR_WORK, 50_054);
         assert_eq!(CANDIDATE_FEED_HEADER_BYTES, 346);
         assert_eq!(PAIRING_SLICE_BYTES, 13);
         assert_eq!(MAX_SLICES, 416);
@@ -1431,11 +1562,13 @@ mod tests {
                 + (MAX_EPOCH_ORDERS * 8)
                 + (MAX_SLICES * PAIRING_SLICE_BYTES)
         );
-        // The checkpoint is exactly its header and the opaque body.
+        // The checkpoint is exactly its header, the interning region, and
+        // the opaque body.
         assert_eq!(
             account_len::CLEAR_WORK,
-            CLEAR_WORK_HEADER_BYTES + CLEAR_WORK_BODY_BYTES
+            CLEAR_WORK_HEADER_BYTES + CLEAR_WORK_INTERNER_BYTES + CLEAR_WORK_BODY_BYTES
         );
+        assert_eq!(EPOCH_WINDOW_ACCOUNT_BYTES, 84);
     }
 
     /// The one account in the inventory that no single system-program creation
@@ -2168,6 +2301,96 @@ mod tests {
             init_clear_work(&mut small_work, h(1), h(2), h(3), 0),
             Err(CodecError::OutputTooSmall)
         );
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* The owner-interning region and the pass-boundary rewind             */
+    /* ------------------------------------------------------------------ */
+
+    #[test]
+    fn the_interner_region_round_trips_and_starts_empty() {
+        let mut account = work();
+        // A fresh checkpoint's zeroed region is exactly the empty table.
+        let empty = read_owner_interner(&account).unwrap();
+        assert_eq!(empty.count(), 0);
+        assert_eq!(empty.owners(), &[]);
+
+        let mut owners = OwnerInterner::new();
+        assert_eq!(owners.intern(h(0xA1)).unwrap(), 0);
+        assert_eq!(owners.intern(h(0xA2)).unwrap(), 1);
+        assert_eq!(owners.intern(h(0xA1)).unwrap(), 0);
+        write_owner_interner(&mut account, &owners).unwrap();
+        let restored = read_owner_interner(&account).unwrap();
+        assert_eq!(restored, owners);
+        // A resumed pass reproduces pass-1's exact tags from the region.
+        let mut resumed = restored;
+        assert_eq!(resumed.intern(h(0xA2)).unwrap(), 1);
+        assert_eq!(resumed.intern(h(0xA3)).unwrap(), 2);
+        // The region write moved neither the header nor the body.
+        let header = verify_clear_work(&account).unwrap();
+        assert_eq!(header.market, h(1));
+        assert!(clear_work_body(&account).unwrap().iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn the_interner_region_refuses_hostile_images() {
+        let mut account = work();
+        let mut owners = OwnerInterner::new();
+        owners.intern(h(0xB1)).unwrap();
+        write_owner_interner(&mut account, &owners).unwrap();
+
+        // A count past the table refuses.
+        let at = CLEAR_WORK_INTERNER_AT;
+        let mut over = account;
+        over[at..at + 2].copy_from_slice(&(MAX_EPOCH_ORDERS as u16 + 1).to_le_bytes());
+        assert_eq!(read_owner_interner(&over), Err(CodecError::InvalidCount));
+
+        // A zero owner below the count is no identity.
+        let mut hollow = account;
+        hollow[at + 2..at + 2 + HASH_BYTES].fill(0);
+        assert_eq!(read_owner_interner(&hollow), Err(CodecError::ZeroIdentity));
+
+        // A nonzero owner at or beyond the count is a leak, not padding.
+        let mut leaked = account;
+        leaked[at + 2 + HASH_BYTES] = 0xEE;
+        assert_eq!(
+            read_owner_interner(&leaked),
+            Err(CodecError::NonCanonicalPadding)
+        );
+
+        // A region on a half-grown account has no framing to live in.
+        let mut short = [0u8; CLEAR_WORK_GROW_STEP];
+        assert_eq!(
+            read_owner_interner(&short[..]),
+            Err(CodecError::Truncated)
+        );
+        assert_eq!(
+            write_owner_interner(&mut short[..], &owners),
+            Err(CodecError::Truncated)
+        );
+    }
+
+    #[test]
+    fn the_rewind_is_admitted_exactly_at_a_bound_pass_boundary() {
+        let mut account = work();
+        advance_walk(&mut account, 1, 3, 7).unwrap();
+        // An open checkpoint has no pass boundary to rewind at.
+        assert_eq!(rewind_walk(&mut account), Err(CodecError::MismatchedBinding));
+
+        bind_order_set(&mut account, h(9), 0xF01D).unwrap();
+        let rewound = rewind_walk(&mut account).unwrap();
+        assert_eq!(rewound.page_cursor, 0);
+        assert_eq!(rewound.slot_cursor, 0);
+        assert_eq!(rewound.live_rank, 0);
+        assert_eq!(rewound.status, CLEAR_WORK_STATUS_BOUND);
+        assert_eq!(rewound.order_set, h(9));
+        assert_eq!(rewound.consumed_fold, 0xF01D);
+        // The next pass walks forward again from the top.
+        assert_eq!(advance_walk(&mut account, 0, 1, 1).unwrap().slot_cursor, 1);
+
+        // A completed checkpoint rewinds nowhere.
+        complete_clear_work(&mut account).unwrap();
+        assert_eq!(rewind_walk(&mut account), Err(CodecError::MismatchedBinding));
     }
 
     /* ------------------------------------------------------------------ */

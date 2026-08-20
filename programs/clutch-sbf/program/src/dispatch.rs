@@ -124,6 +124,7 @@ const INTENT_INIT_CLEAR_WORK_HINT: u8 = 47;
 const INTENT_GROW_CLEAR_WORK_HINT: u8 = 48;
 const INTENT_INIT_EPOCH_HINT: u8 = 49;
 const INTENT_FREEZE_EPOCH_HINT: u8 = 50;
+const INTENT_ADVANCE_CLEAR_WORK_HINT: u8 = 51;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
@@ -150,7 +151,8 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_INIT_CLEAR_WORK_HINT
                 | INTENT_GROW_CLEAR_WORK_HINT
                 | INTENT_INIT_EPOCH_HINT
-                | INTENT_FREEZE_EPOCH_HINT,
+                | INTENT_FREEZE_EPOCH_HINT
+                | INTENT_ADVANCE_CLEAR_WORK_HINT,
             ) => Route::OrdersBatch,
             Some(
                 INTENT_INIT_REALM_HINT
@@ -361,7 +363,8 @@ fn process_orders_batch(
         | Action::Layout(Intent::InitClearWork { .. })
         | Action::Layout(Intent::GrowClearWork { .. })
         | Action::Layout(Intent::InitEpoch { .. })
-        | Action::Layout(Intent::FreezeEpoch { .. }) => {
+        | Action::Layout(Intent::FreezeEpoch { .. })
+        | Action::Layout(Intent::AdvanceClearWork { .. }) => {
             orders_batch::process(program_id, accounts, &request)
         }
         _ => unexpected_route(),
@@ -767,6 +770,15 @@ mod tests {
                 Intent::FreezeEpoch {
                     market: hash(1),
                     epoch: hash(2),
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::AdvanceClearWork {
+                    market: hash(1),
+                    epoch: hash(2),
+                    candidate: hash(3),
+                    max_orders: 16,
                 },
                 Route::OrdersBatch,
             ),
