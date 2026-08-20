@@ -61,6 +61,18 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- V3 CLAIM PROMOTION propagated: CURRENT_TRUTH capability matrix rewritten
+  for the routed staged lifecycle (8162bae) with its exact boundaries —
+  one bank profile, unpromoted in the liveness profile with live_v3 false,
+  epoch-atomic with no per-order cancellation, V2 still a measured STOP.
+  Draft 11 IAC + data-reporting updated in degg-research (9ceab9b): the
+  "successor selection design exists as model and design only" sentence is
+  now false and is replaced by the stop-and-the-redesign-that-answers-it
+  passage, keeping the one-bank-profile and unpromoted caveats explicit and
+  preserving the best-valid-submitted-candidate ceiling. IAC 11pp.
+- Hardening lane dispatched for the seal tracked-ness hole plus the three
+  docs still citing the superseded bd20711b identity.
+
 - LIVENESS PROFILE RESEALED to the V3 runtime at 7931e23: new artifact root
   af6bb79cc3766bd0 (24 files, all regenerated not copied; report
   39a8b19c..., 50-file ledger e433c17d... verified by shasum -c). Identity
