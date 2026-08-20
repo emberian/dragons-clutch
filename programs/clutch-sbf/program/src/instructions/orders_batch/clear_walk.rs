@@ -319,7 +319,8 @@ fn read_interner_boxed(work_account: &AccountInfo) -> Outcome<Box<OwnerInterner>
 /// Verify one pushed order's canonical reservation: join 1's per-order step.
 ///
 /// `pub(super)` because the entitlement freeze (T2-8) re-runs exactly this
-/// validation before flipping a reservation `ACTIVE → ENTITLED`.
+/// validation — with a writable role, since it then flips the reservation
+/// `ACTIVE → ENTITLED` — while the walk itself presents read-only roles.
 #[inline(never)]
 pub(super) fn validate_walk_reservation(
     program_id: &Pubkey,
@@ -327,8 +328,14 @@ pub(super) fn validate_walk_reservation(
     epoch: &EpochAccount,
     page_index: u16,
     slot: &OrderSlot,
+    writable: bool,
 ) -> Outcome<()> {
-    accounts::validate_state_role_lengths(program_id, account, false, &[RESERVATION_ACCOUNT_BYTES])?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        account,
+        writable,
+        &[RESERVATION_ACCOUNT_BYTES],
+    )?;
     let reservation = super::decode_reservation_boxed(&account.data.borrow())?;
     // The envelope, re-derived from the projected record at the walk's own
     // frozen coordinates and zero fee, must match the stored one exactly and
@@ -657,6 +664,7 @@ fn walk_batch(
                 epoch,
                 page_header.page_index,
                 &slot,
+                false,
             )?;
             next_reservation += 1;
         }

@@ -554,11 +554,12 @@ fn entitle_reservation(
     page_index: u16,
     slot: &OrderSlot,
 ) -> Outcome<()> {
-    require(account.is_writable, ClutchError::NotWritable)?;
-    // Exactly the pass-1 walk's reservation validation: ACTIVE state, the
+    // Exactly the pass-1 walk's reservation validation — ACTIVE state, the
     // untouched exact envelope, and the canonical address re-derived from
-    // this instruction's own facts.
-    super::clear_walk::validate_walk_reservation(program_id, account, epoch, page_index, slot)?;
+    // this instruction's own facts — under a writable role.
+    super::clear_walk::validate_walk_reservation(
+        program_id, account, epoch, page_index, slot, true,
+    )?;
     let mut reservation = super::decode_reservation_boxed(&account.data.borrow())?;
     reservation.state = RESERVATION_STATE_ENTITLED;
     reservation.validate()?;
