@@ -72,6 +72,21 @@ speaking mechanics, September+ opportunities).
 
 ## Done log (2026-08-19 session)
 
+- DRAFT 12 COMPLETE, all four documents (degg-research e4429c9 + 4caeb80):
+  IAC 10pp, definitions 8pp, data-reporting 9pp, cover 2pp. The
+  triple-statement pattern (summary + argument + requests saying the same
+  thing three times) collapsed to asks-first-argued-once; compute
+  measurements got their own led section; every scope caveat kept verbatim
+  and enumerated in the report as scope-not-fear. HONEST FLAG from the
+  lane: the 6-8pp target is NOT reachable without cutting real content —
+  per-page density is unchanged since draft 6 (484 -> 509 w/pp); what grew
+  is the compute measurements, fourth negative, operatorless section, and
+  leakage table. At 10/8/9 the packet sits at corpus median. Which
+  addition leaves, if any, is ember's editorial call. Note: data-reporting
+  positions renumbered (6 positions -> 5 requests); any external "Position
+  N" citation into that document is stale — John packet pointer update
+  belongs at ember's filing freeze.
+
 - THE COMPUTE CEILING WAS A HASHER, NOT AN ARCHITECTURE
   (docs/reviews/COMPUTE_CEILING_REATTRIBUTION_2026-08-19.md; work on
   fable/sha-syscall, NOT merged). The 53,952-byte sha2::compress256 entered
