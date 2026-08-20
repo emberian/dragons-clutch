@@ -61,6 +61,34 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- LIVENESS PROFILE RESEALED to the V3 runtime at 7931e23: new artifact root
+  af6bb79cc3766bd0 (24 files, all regenerated not copied; report
+  39a8b19c..., 50-file ledger e433c17d... verified by shasum -c). Identity
+  reproduced independently in a fresh detached worktree, confirming it is
+  source-path-independent. EVERY ResolutionWork route moved by exactly
+  +1 CU — the precise cost of one added dispatcher arm — so no measured
+  STOP and all routes still clear 25% headroom. Blank-bank market creation
+  actually FELL (~9k CU each). Source closure grew 88 -> 94 files.
+  WATCH ITEM: Finalize at 1,094,833 is only 25,167 CU below its 1,120,000
+  admission boundary — the tightest row in the profile, and one more
+  dispatcher arm's drift is not a large budget.
+  EVIDENCE-INTEGRITY FINDING: the repo root ignores *.so and *.log, so a
+  plain `git add <artifact-dir>` silently committed 11 of 24 files; caught
+  and amended with -f, now verified 24 tracked == 24 on disk. The hazard is
+  that policy.py reads from DISK, so a half-committed seal would still have
+  PASSED its gate. Worth a tracked-ness check in a later hardening pass.
+  policy.py was strengthened to fail closed on overwriting a superseded
+  artifact root or dropping files from a superseded seal.
+  Honest scoping: Direct V3 is resident but UNPROMOTED in the profile — no
+  CU, rent, or terminal-admission rows, live_v3 stays false, and the Direct
+  STOPs remain the V2 ones.
+- DECISION: holding the 100-gate emission for ONE combined cycle with the
+  SHA-syscall size/CU work rather than resealing twice. Rationale: the
+  deploy is faucet-blocked so there is no deadline pressure, and I adopted
+  "reseal at meaningful checkpoints, not after every wave". The tree is
+  knowingly unsealed meanwhile (manifest drift 554 -> 599 entries recorded
+  above), which is honest rather than hidden.
+
 - DIRECT V3 MERGED TO MAIN at fb72b34 (15,074 insertions, 23 files). The
   venue exists: staged clearing routed for tags 36-46 behind one dispatcher
   arm. Rebase (not cherry-pick) was directed and paid for itself twice —
