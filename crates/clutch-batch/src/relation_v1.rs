@@ -2216,6 +2216,19 @@ impl DigestFoldV1 {
     pub(crate) fn digest(&self) -> u128 {
         ((self.high as u128) << 64) | (self.low as u128)
     }
+
+    /// The two fold words, `(high, low)`, for the checkpoint codec's encode
+    /// side (`relation_v1_stream`, design §7).
+    pub(crate) const fn words(self) -> (u64, u64) {
+        (self.high, self.low)
+    }
+
+    /// Rebuild a fold from its two words, for the codec's decode side.  Every
+    /// `(high, low)` pair is a reachable mid-stream fold state, so there is
+    /// deliberately nothing to validate here.
+    pub(crate) const fn from_words(high: u64, low: u64) -> Self {
+        Self { high, low }
+    }
 }
 
 /// The canonical candidate digest: a deterministic, non-cryptographic identity

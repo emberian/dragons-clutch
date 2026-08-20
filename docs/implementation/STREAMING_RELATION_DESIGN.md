@@ -235,9 +235,11 @@ frozen bounds refuses (`TooManyOrders` at push 65; `SliceSumMismatch` past
 ## 7. The checkpoint object
 
 `ClearWorkV1` is one flat struct — measured `size_of` = **48,592 bytes**,
-pinned by `clear_work_size_is_pinned` — every field fixed-size, `no_std`, no
-allocation, `Clone + PartialEq` (which is what makes P-BATCH-03 *testable*:
-save = copy, resume = keep using the copy).  Inventory:
+pinned by `clear_work_size_is_pinned`; canonical *serialized* length
+`ENCODED_BYTES` = **47,846 bytes** (codec, below) — every field fixed-size,
+`no_std`, no allocation, `Clone + PartialEq` (which is what makes P-BATCH-03
+*testable*: save = encode, resume = decode into fresh storage, equality
+asserted at the boundary).  Inventory:
 
 | region | contents | bytes (≈) |
 | --- | --- | --- |
@@ -253,10 +255,24 @@ save = copy, resume = keep using the copy).  Inventory:
 | summary | the recomputed `SummaryV1` | 1.2 KiB |
 
 The struct is the resumable `ClearWork` account body the P1-C list wanted.
-Its serialization (zero-copy layout, versioning, rent) is the layout lane's;
-this crate's contract is only that every entry point takes `&mut ClearWorkV1`
-and never holds more than one order, one slice, or one scalar row on the
-frame.
+Every entry point takes `&mut ClearWorkV1` and never holds more than one
+order, one slice, or one scalar row on the frame.
+
+**Serialization (Tier 2 join 5, landed).** The struct stays `repr(Rust)`;
+the account body is the explicit codec `encode_into`/`decode_into` — a
+little-endian field walk in declaration order, enums/bools/`Option` as single
+canonical bytes, the policy as `clutch-batch-policy-identity`'s selector
+bytes (restated; byte-for-byte equality gated in that crate), `ErrorV1` as a
+registered code byte plus the one `PairingInfeasible { outcome, owner }`
+payload, `DigestFoldV1` as two u64 words.  Canonical serialized length
+`ClearWorkV1::ENCODED_BYTES` = **47,846 bytes**, pinned by
+`clear_work_encoded_bytes_are_pinned` and mirrored by the layout's
+`CLEAR_WORK_BODY_BYTES` (which pinned the 48,592 `size_of` before the codec
+landed).  `decode_into` is total over hostile bytes — typed
+`CodecFaultV1` refusals, reset-on-refusal, accepted set closed under
+re-encoding — and `encode_idle_into` writes the idle body from static
+storage for the staged account creation.  Both by reference: no checkpoint
+value ever crosses a call frame (§9 for the measured codec frames).
 
 ## 8. Equivalence gate (IMPLEMENTED — results in §9)
 
@@ -341,6 +357,37 @@ Numbers from the gate run and the SBF probe on the pinned toolchain
   build reproduce the orders lane's 39,104-byte measurement exactly — the
   positive control that proves the zero is meaningful.
 
+### 9.1 Checkpoint codec addendum (2026-08-20, Tier 2 join 5)
+
+* `ClearWorkV1::ENCODED_BYTES` = **47,846 bytes** (§7), pinned in both crates
+  (`clear_work_encoded_bytes_are_pinned` here, `clearing_account_golden_lengths`
+  in the layout); `account_len::CLEAR_WORK` re-pinned 48,750 → **48,004**.
+* clutch-batch suite: **74 tests green** (62 pre-codec + 12 codec).  P-BATCH-03
+  upgraded from `save = clone` to `save = encode / resume = decode`: the same
+  210 resume points (now pinned exactly), round-trip identity
+  `decode(encode(w)) == w` asserted at every one, final verdict, state, and
+  `consumed_fold` bit-identical to the uninterrupted fold.  Hostile-byte
+  totality: 106,092 single-byte flips over two encoded states (every byte
+  inverted on both, the control plane additionally low-bit-flipped), each
+  either refused with a typed `CodecFaultV1` (reset-on-refusal checked) or
+  accepted and re-encoded byte-identically; 256-value sweeps over every
+  control field; 10,368 policy selector products byte-equal to
+  `clutch-batch-policy-identity`'s artifact.  The three-layer tamper stack is
+  pinned region by region (fold seal / anchor / layout header), residual
+  regions named explicitly.
+* SBF frames, same probe method, same toolchain, batch controls firing
+  identically (verify_inner 39,104) in the same build:
+
+  | function | frame bytes |
+  | --- | --- |
+  | `ClearWorkV1::encode_into` | 64 |
+  | `ClearWorkV1::decode_into` (field walk + validation inlined) | 1,280 |
+  | `ClearWorkV1::encode_idle_into` (static source) | 0 |
+  | codec probe entrypoint | 1,216 |
+
+  Zero frame diagnostics for either codec function; both are under the
+  ~1,500-byte obligation and under a third of the 4,096-byte maximum.
+
 ## 10. Page→order projection (PROPOSED — a spec for the layout lane)
 
 The streaming verifier consumes `(OrderV1, fill)` pairs plus a candidate
@@ -366,7 +413,8 @@ layout lane — nothing here edits `programs/**`.
   (≤ 512 B) read in step with the page walk, plus, under `ExplicitSlices`,
   up to 416 slices (≈ 7.5 KiB).  The relation refuses fills the pages cannot
   justify; the account only has to deliver them in walk order.
-* **ClearWork account**: the §7 object (48,592-byte body; rent-funded by the
+* **ClearWork account**: the §7 object (47,846-byte codec body since the
+  T2-1 re-pin; rent-funded by the
   clearing crank; one per (market, epoch, candidate) — reusable across
   candidates only via `begin`, which resets it).  `consumed_fold` must be
   bound to the layout's `order_set` digest at pass-1 finalize: record

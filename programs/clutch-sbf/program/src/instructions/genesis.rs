@@ -100,7 +100,7 @@
 //!   accounts landed as codecs this wave
 //!   ([`clutch_solana_layout::clearing`]) and are consumed by nothing.  The
 //!   checkpoint is also the one account in the inventory that a single
-//!   system-program CPI **cannot** allocate — 48,750 bytes against the
+//!   system-program CPI **cannot** allocate — 48,004 bytes against the
 //!   runtime's 10,240-byte per-instruction growth ceiling — so its creation is
 //!   a five-instruction sequence or a top-level client-signed
 //!   `CreateAccount`, analyzed in `docs/implementation/SOLANA_LAYOUT.md`.
@@ -1531,10 +1531,11 @@ mod tests {
             assert_eq!(rent.minimum_balance(space).unwrap(), lamports, "{space}");
         }
         /* And the one this module deliberately cannot create: the streaming
-         * checkpoint at 48,750 bytes, quoted in `SOLANA_LAYOUT.md`. */
+         * checkpoint at 48,004 bytes (the T2-1 codec re-pin), quoted in
+         * `SOLANA_LAYOUT.md`. */
         assert_eq!(
             rent.minimum_balance(account_len::CLEAR_WORK).unwrap(),
-            340_190_880
+            334_998_720
         );
         // A rate that would overflow the integer half refuses rather than wraps.
         let absurd = RentParameters {
@@ -1559,7 +1560,7 @@ mod tests {
             ("order page", account_len::ORDER_PAGE, true),
             /* The one account in the whole inventory that a single CPI
              * cannot allocate, and the reason no instruction here creates
-             * one: the streaming checkpoint is 48,750 bytes. */
+             * one: the streaming checkpoint is 48,004 bytes. */
             ("clear work", account_len::CLEAR_WORK, false),
         ] {
             assert_eq!(len <= MAX_PERMITTED_DATA_INCREASE, fits, "{label}");

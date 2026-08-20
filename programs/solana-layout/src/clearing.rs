@@ -10,7 +10,7 @@
 //!
 //! | account | tag | bytes | what it holds |
 //! | --- | ---: | ---: | --- |
-//! | [`ClearWorkAccount`] | 17 | 48,750 | the resumable checkpoint: a layout-owned header and an opaque `ClearWorkV1` body |
+//! | [`ClearWorkAccount`] | 17 | 48,004 | the resumable checkpoint: a layout-owned header and a `ClearWorkV1` codec body |
 //! | [`CandidateFeedAccount`] | 18 | 6,266 | the solver-written feed: candidate header, fill vector, optional pairing witness |
 //!
 //! # Neither account is ever a value
@@ -25,18 +25,18 @@
 //! from `cargo-build-sbf` for anything in this module would be a defect, not a
 //! documented host-only path.
 //!
-//! # The body is opaque, and that is a statement, not a shrug
+//! # The body is the codec's, and that is a statement, not a shrug
 //!
-//! [`crate::CLEAR_WORK_BODY_BYTES`] is the pinned `size_of` of
-//! `clutch_batch::relation_v1_stream::ClearWorkV1`, a `repr(Rust)` struct.
-//! Rust guarantees nothing about that layout, so this crate refuses to give the
-//! body any interpretation at all: it owns the length, the framing around it,
-//! the identity binding, and the two window accessors
-//! ([`clear_work_body`], [`clear_work_body_mut`]) that hand the region to
-//! whoever does own it.  Casting these bytes to a `&mut ClearWorkV1` is
-//! **not** sanctioned by anything here; the obligation that would sanction it —
-//! `#[repr(C)]` plus a `Pod` bound, or an explicit serializer in `clutch-batch`
-//! — is recorded in `docs/implementation/SOLANA_LAYOUT.md`.
+//! [`crate::CLEAR_WORK_BODY_BYTES`] is the pinned `ENCODED_BYTES` of the
+//! checkpoint codec in `clutch_batch::relation_v1_stream` — an explicit
+//! little-endian serializer (`encode_into`/`decode_into`, Tier 2 join 5) —
+//! so the body is a wire format with exactly one owner, and it is not this
+//! crate.  This crate still gives the region no interpretation: it owns the
+//! length, the framing around it, the identity binding, and the two window
+//! accessors ([`clear_work_body`], [`clear_work_body_mut`]) that hand the
+//! region to the codec.  Casting these bytes to a `&mut ClearWorkV1` remains
+//! **unsanctioned**: the struct is `repr(Rust)` and only the codec's field
+//! walk relates it to bytes.
 //!
 //! # Index vocabulary: order indices are live ranks
 //!
@@ -252,7 +252,7 @@ impl ClearWorkHeader {
 /// The whole checkpoint account, named for the doc table.
 ///
 /// It is a *type-level* name only: there is deliberately no value of this type,
-/// because a value of it would be 48,750 bytes on a call frame.  A caller reads
+/// because a value of it would be 48,004 bytes on a call frame.  A caller reads
 /// [`verify_clear_work`] and walks the body through [`clear_work_body`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClearWorkAccount {}
@@ -262,9 +262,9 @@ pub enum ClearWorkAccount {}
 /// Everything this crate can decide about a checkpoint: the tag, the version,
 /// the exact account length, and every header rule of
 /// [`ClearWorkHeader::validate`].  It decides **nothing** about the body, and
-/// a body of any 48,592 bytes at all passes here — that is what "opaque" means
-/// and it is why this function's name is `verify_clear_work` and not
-/// `verify_checkpoint`.
+/// a body of any 47,846 bytes at all passes here — the body's own validity is
+/// the checkpoint codec's (`ClearWorkV1::decode_into`), which is why this
+/// function's name is `verify_clear_work` and not `verify_checkpoint`.
 pub fn verify_clear_work(input: &[u8]) -> Result<ClearWorkHeader> {
     ClearWorkHeader::decode(input)
 }
@@ -1059,9 +1059,11 @@ mod tests {
 
     #[test]
     fn clearing_account_golden_lengths() {
-        assert_eq!(CLEAR_WORK_BODY_BYTES, 48_592);
+        // 47,846 is `ClearWorkV1::ENCODED_BYTES`, pinned on the other side by
+        // clutch-batch's `clear_work_encoded_bytes_are_pinned`.
+        assert_eq!(CLEAR_WORK_BODY_BYTES, 47_846);
         assert_eq!(CLEAR_WORK_HEADER_BYTES, 158);
-        assert_eq!(account_len::CLEAR_WORK, 48_750);
+        assert_eq!(account_len::CLEAR_WORK, 48_004);
         assert_eq!(CANDIDATE_FEED_HEADER_BYTES, 346);
         assert_eq!(PAIRING_SLICE_BYTES, 13);
         assert_eq!(MAX_SLICES, 416);

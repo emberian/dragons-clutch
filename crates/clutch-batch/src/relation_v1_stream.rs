@@ -50,6 +50,16 @@
 //! device, not a cryptographic commitment; on-chain anchoring belongs to the
 //! layout's SHA-256 page digests (design §10).
 //!
+//! # Checkpoint bytes
+//!
+//! The struct is `repr(Rust)`; its in-memory bytes are one build's accident.
+//! The wire form is [`ClearWorkV1::encode_into`] / [`ClearWorkV1::decode_into`]
+//! — an explicit little-endian field walk of exactly
+//! [`ClearWorkV1::ENCODED_BYTES`] bytes, total over hostile input, by
+//! reference on both sides so no checkpoint value ever crosses a call frame.
+//! `save = encode / resume = decode` is the on-chain shape of the P-BATCH-03
+//! obligation, and the resumption gate drives it at every push boundary.
+//!
 //! # Refusal identity
 //!
 //! `verify_inner` reports the refusal of the first stage that fails, at the
@@ -63,8 +73,9 @@
 
 use crate::relation_v1::{
     mask_bit, scaled_reservation, AllocationPolicyV1, AonPolicyV1, DigestFoldV1, EligibilityV1,
-    ErrorV1, FeeBaseV1, LegRefV1, OrderV1, PairingSliceV1, PairingWitnessPolicyV1,
-    RelationDomainV1, RoundingBoundaryV1, ScoreV1, SelfCrossPolicyV1, SummaryV1, MAX_OUTCOMES,
+    ErrorV1, FeeBaseV1, FrozenPolicyV1, LegRefV1, OrderV1, PairingSliceV1, PairingWitnessPolicyV1,
+    PortfolioLotPolicyV1, RelationDomainV1, ResidualSettlementV1, RoundingBoundaryV1,
+    ScorePolicyV1, ScoreV1, SelfCrossPolicyV1, SummaryV1, TransferPhaseV1, MAX_OUTCOMES,
     MAX_OWNER_SLOTS, MAX_SLICES,
 };
 use crate::{seeded_rank, DustPolicy, PartialPolicy, Side, MAX_ORDERS};
@@ -2345,6 +2356,1209 @@ impl Default for ClearWorkV1 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The checkpoint codec (Tier 2 join 5).
+//
+// `ClearWorkV1` is `repr(Rust)`: its in-memory bytes are a fact about one
+// build, never a wire format.  The codec below is the wire format — an
+// explicit field-by-field little-endian serialization in declaration order,
+// with every enum, bool, and `Option` given one canonical byte encoding.  The
+// layout plane (`clutch-solana-layout`) pins `CLEAR_WORK_BODY_BYTES` to
+// [`ClearWorkV1::ENCODED_BYTES`] and treats the region as this codec's.
+//
+// Everything is by reference: no 48 KB value ever crosses a call frame, the
+// same discipline as the feed entry points.  `decode_into` is total over
+// arbitrary bytes — it never panics, and it either refuses with a typed
+// [`CodecFaultV1`] (resetting the checkpoint to idle) or yields a checkpoint
+// whose every field is within its representable range.  The codec claims
+// *validity*, not tamper-proofing: refusal of a tampered resumption belongs to
+// the fold seal (`ResumeFoldMismatch`), the layout header
+// (`ClearWorkHeader::validate` / `require_continuation`), and the
+// `(order_set, consumed_fold)` anchor stamped by `bind_order_set` — the codec
+// must not weaken those layers, and the codec test battery pins exactly which
+// mutations each layer catches.
+// ---------------------------------------------------------------------------
+
+/// Checkpoint-codec refusals.  These are deliberately neither [`ErrorV1`] nor
+/// [`FeedErrorV1`]: a codec fault means the *bytes* are not a checkpoint, so
+/// there is no feed to have a protocol fault in and no relation verdict.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CodecFaultV1 {
+    /// The buffer is not exactly [`ClearWorkV1::ENCODED_BYTES`] long.
+    WrongLength,
+    /// A phase byte outside the feed lifecycle.
+    InvalidPhase,
+    /// A boolean byte that is not exactly 0 or 1.
+    InvalidBool,
+    /// An eligibility class byte outside the registered classes.
+    InvalidClass,
+    /// An order-flag byte with unregistered bits set.
+    InvalidFlags,
+    /// A latch-error code outside the registered refusals, or a nonzero
+    /// payload on a refusal that carries none.
+    InvalidErrorCode,
+    /// A policy selector or fee discriminant outside the registered families,
+    /// or a fee payload behind the no-fee discriminant.
+    InvalidPolicy,
+    /// A cursor, count, or bound field outside its reachable range.
+    InvalidCount,
+    /// An owner-slot or pool index outside its table.
+    InvalidSlot,
+    /// A declared-slices flag that is not 0/1, or a count behind a clear flag.
+    InvalidSliceDeclaration,
+}
+
+/// Exact serialized length of one [`FrozenPolicyV1`] inside the checkpoint
+/// encoding: the ten family selector bytes in
+/// `clutch-batch-policy-identity`'s canonical wire order, then the fee
+/// discriminant and its exact-basis-points parameter.  The byte values are
+/// restated from that crate (this crate cannot depend on it — the dependency
+/// points the other way), and a cross-crate equality test there compares the
+/// two encoders byte for byte over every registered selector product.
+pub const POLICY_ENCODED_BYTES: usize = 10 + 1 + 4;
+
+/// Encode one policy selection into exactly [`POLICY_ENCODED_BYTES`] bytes.
+pub fn encode_policy_v1(policy: &FrozenPolicyV1, out: &mut [u8]) -> Result<(), CodecFaultV1> {
+    if out.len() != POLICY_ENCODED_BYTES {
+        return Err(CodecFaultV1::WrongLength);
+    }
+    let mut at = 0usize;
+    put_policy(out, &mut at, policy);
+    Ok(())
+}
+
+/// Decode exactly [`POLICY_ENCODED_BYTES`] policy bytes.
+///
+/// The accepted set is the *representable* set, not the relation-executable
+/// set: registered-but-refused selections (`MarginalProRataLots`, an
+/// over-denominator fee) decode, because a checkpoint that latched their
+/// refusal at `begin` still carries them and must round-trip.  The relation's
+/// own `FrozenPolicyV1::validate` stays the execution gate.
+pub fn decode_policy_v1(input: &[u8]) -> Result<FrozenPolicyV1, CodecFaultV1> {
+    if input.len() != POLICY_ENCODED_BYTES {
+        return Err(CodecFaultV1::WrongLength);
+    }
+    let mut at = 0usize;
+    get_policy(input, &mut at)
+}
+
+impl ClearWorkV1 {
+    /// Exact canonical serialized length of one checkpoint: every field of
+    /// the §7 object in declaration order, little-endian, enums and bools as
+    /// single canonical bytes, `declared_slices` as flag byte plus `u16`.
+    ///
+    /// This is the number `clutch-solana-layout` pins as
+    /// `CLEAR_WORK_BODY_BYTES`; the two crates assert the same literal in
+    /// their own suites (`clear_work_encoded_bytes_are_pinned` here,
+    /// `clearing_account_golden_lengths` there).
+    pub const ENCODED_BYTES: usize = {
+        // --- control ---
+        let control = 1 // phase
+            + 1 // pass
+            + 1 // order_passes
+            + 1 // slices_after_pass
+            + 1 // slices_expected
+            + 1 // check_claims
+            + 2 // cursor
+            + 2 // slice_cursor
+            + 2 // order_count
+            + 1 // latch_set
+            + 8 // latch_position
+            + 4 // latch_error: code, outcome, owner
+            + 16 // fold
+            + 16 // sealed_fold
+            + 16 // digest
+            + 8 // previous_id
+            + 1; // portfolio_count
+                 // --- frozen coordinates ---
+        let domain = 4 + (5 * 8) + 1 + 2 + 8 + 8 + POLICY_ENCODED_BYTES;
+        let score = 16 + 16 + 2 + 8 + 16;
+        let cand = 1 + (MAX_OUTCOMES * 8) + 8 + 8 + 8 + score + 16 + 3;
+        // --- owner interning ---
+        let owners = (MAX_OWNER_SLOTS * 2) + 2;
+        // --- per-order bytes ---
+        let pool_row = 16 + 8 + 8 + 8 + 8 + 8 + 1 + 1 + 1;
+        let per_order = (MAX_ORDERS * 2) // owner_slot
+            + 8 // side_buy_bits
+            + (MAX_ORDERS * 2) // touch
+            + MAX_ORDERS // classes
+            + MAX_ORDERS // flags
+            + (MAX_ORDERS * 8) // cancelled
+            + (MAX_ORDERS * pool_row); // keys
+                                       // --- self-cross scratch ---
+        let scratch = (2 * MAX_ORDERS * MAX_OUTCOMES * 8) + (MAX_OWNER_SLOTS * 2);
+        // --- flows and participation ---
+        let flows = (2 * MAX_OUTCOMES * 16) + (2 * MAX_OWNER_SLOTS * MAX_OUTCOMES * 8);
+        // --- V3 aggregates and pools ---
+        let pool = 16 + 2 + 8 + 8 + 1 + 1;
+        let v3 = (MAX_OUTCOMES * 8 * 16) + (2 * MAX_OUTCOMES * pool);
+        // --- V6-V8 ledger ---
+        let ledger = (4 * MAX_OWNER_SLOTS * 16) + (3 * MAX_OUTCOMES * 8) + (8 * 16);
+        // --- explicit slices ---
+        let slices = 2 * MAX_OUTCOMES * 8;
+        // --- output ---
+        let summary = 1
+            + (4 * MAX_OUTCOMES * 8)
+            + 16
+            + (3 * MAX_OUTCOMES * 8)
+            + (11 * 16)
+            + 2
+            + 8
+            + score
+            + 16;
+        control
+            + domain
+            + cand
+            + owners
+            + per_order
+            + scratch
+            + flows
+            + v3
+            + ledger
+            + slices
+            + summary
+            + 1 // summary_valid
+    };
+
+    /// Serialize this checkpoint into exactly [`Self::ENCODED_BYTES`] bytes.
+    ///
+    /// Total over every in-memory checkpoint value; the only refusal is a
+    /// buffer of the wrong length.  By reference throughout — the largest
+    /// value on the frame is one scalar.
+    pub fn encode_into(&self, out: &mut [u8]) -> Result<(), CodecFaultV1> {
+        if out.len() != Self::ENCODED_BYTES {
+            return Err(CodecFaultV1::WrongLength);
+        }
+        let mut at = 0usize;
+        // --- control ---
+        put_u8(out, &mut at, self.phase);
+        put_u8(out, &mut at, self.pass);
+        put_u8(out, &mut at, self.order_passes);
+        put_u8(out, &mut at, self.slices_after_pass);
+        put_bool(out, &mut at, self.slices_expected);
+        put_bool(out, &mut at, self.check_claims);
+        put_u16(out, &mut at, self.cursor);
+        put_u16(out, &mut at, self.slice_cursor);
+        put_u16(out, &mut at, self.order_count);
+        put_bool(out, &mut at, self.latch_set);
+        put_u64(out, &mut at, self.latch_position);
+        put_error(out, &mut at, self.latch_error);
+        put_fold(out, &mut at, self.fold);
+        put_fold(out, &mut at, self.sealed_fold);
+        put_fold(out, &mut at, self.digest);
+        put_u64(out, &mut at, self.previous_id);
+        put_u8(out, &mut at, self.portfolio_count);
+        // --- frozen coordinates ---
+        put_u32(out, &mut at, self.domain.relation_version);
+        put_u64(out, &mut at, self.domain.market_id);
+        put_u64(out, &mut at, self.domain.book_id);
+        put_u64(out, &mut at, self.domain.epoch);
+        put_u64(out, &mut at, self.domain.policy_id);
+        put_u64(out, &mut at, self.domain.order_set_id);
+        put_u8(out, &mut at, self.domain.outcome_count);
+        put_u16(out, &mut at, self.domain.owner_count);
+        put_u64(out, &mut at, self.domain.price_scale);
+        put_u64(out, &mut at, self.domain.remainder_seed);
+        put_policy(out, &mut at, &self.domain.policy);
+        put_u8(out, &mut at, self.cand.order_len);
+        let mut i = 0usize;
+        while i < MAX_OUTCOMES {
+            put_u64(out, &mut at, self.cand.prices[i]);
+            i += 1;
+        }
+        put_u64(out, &mut at, self.cand.virtual_split);
+        put_u64(out, &mut at, self.cand.virtual_merge);
+        put_u64(out, &mut at, self.cand.honored_aon_mask);
+        put_score(out, &mut at, &self.cand.claimed_score);
+        put_u128(out, &mut at, self.cand.canonical_candidate_digest);
+        match self.cand.declared_slices {
+            None => {
+                put_u8(out, &mut at, 0);
+                put_u16(out, &mut at, 0);
+            }
+            Some(declared) => {
+                put_u8(out, &mut at, 1);
+                put_u16(out, &mut at, declared);
+            }
+        }
+        // --- owner interning ---
+        let mut i = 0usize;
+        while i < MAX_OWNER_SLOTS {
+            put_u16(out, &mut at, self.owners[i]);
+            i += 1;
+        }
+        put_u16(out, &mut at, self.owner_slots);
+        // --- per-order bytes ---
+        let mut i = 0usize;
+        while i < MAX_ORDERS {
+            put_u16(out, &mut at, self.owner_slot[i]);
+            i += 1;
+        }
+        put_u64(out, &mut at, self.side_buy_bits);
+        let mut i = 0usize;
+        while i < MAX_ORDERS {
+            put_u16(out, &mut at, self.touch[i]);
+            i += 1;
+        }
+        let mut i = 0usize;
+        while i < MAX_ORDERS {
+            put_u8(out, &mut at, self.classes[i]);
+            i += 1;
+        }
+        let mut i = 0usize;
+        while i < MAX_ORDERS {
+            put_u8(out, &mut at, self.flags[i]);
+            i += 1;
+        }
+        let mut i = 0usize;
+        while i < MAX_ORDERS {
+            put_u64(out, &mut at, self.cancelled[i]);
+            i += 1;
+        }
+        let mut i = 0usize;
+        while i < MAX_ORDERS {
+            let row = &self.keys[i];
+            put_u128(out, &mut at, row.remainder);
+            put_u64(out, &mut at, row.rank);
+            put_u64(out, &mut at, row.id);
+            put_u64(out, &mut at, row.floor);
+            put_u64(out, &mut at, row.effective);
+            put_u64(out, &mut at, row.minimum);
+            put_u8(out, &mut at, row.pool);
+            put_bool(out, &mut at, row.extra);
+            put_bool(out, &mut at, row.aon);
+            i += 1;
+        }
+        // --- self-cross scratch ---
+        put_cells_64(out, &mut at, &self.scratch_buy);
+        put_cells_64(out, &mut at, &self.scratch_sell);
+        let mut i = 0usize;
+        while i < MAX_OWNER_SLOTS {
+            put_u16(out, &mut at, self.cell_portfolio[i]);
+            i += 1;
+        }
+        // --- flows and participation ---
+        let mut i = 0usize;
+        while i < MAX_OUTCOMES {
+            put_u128(out, &mut at, self.flow_buy[i]);
+            i += 1;
+        }
+        let mut i = 0usize;
+        while i < MAX_OUTCOMES {
+            put_u128(out, &mut at, self.flow_sell[i]);
+            i += 1;
+        }
+        put_cells_64(out, &mut at, &self.part_buy);
+        put_cells_64(out, &mut at, &self.part_sell);
+        // --- V3 aggregates and pools ---
+        let mut i = 0usize;
+        while i < MAX_OUTCOMES {
+            let agg = &self.agg[i];
+            put_u128(out, &mut at, agg.demand);
+            put_u128(out, &mut at, agg.supply);
+            put_u128(out, &mut at, agg.forced_buy);
+            put_u128(out, &mut at, agg.forced_sell);
+            put_u128(out, &mut at, agg.forced_aon_buy);
+            put_u128(out, &mut at, agg.forced_aon_sell);
+            put_u128(out, &mut at, agg.strict_buy);
+            put_u128(out, &mut at, agg.strict_sell);
+            i += 1;
+        }
+        let mut i = 0usize;
+        while i < 2 * MAX_OUTCOMES {
+            let pool = &self.pools[i];
+            put_u128(out, &mut at, pool.total);
+            put_u16(out, &mut at, pool.count);
+            put_u64(out, &mut at, pool.target);
+            put_u64(out, &mut at, pool.floor_sum);
+            put_bool(out, &mut at, pool.ready);
+            put_bool(out, &mut at, pool.dust_rejected);
+            i += 1;
+        }
+        // --- V6-V8 ledger ---
+        put_units_64(out, &mut at, &self.reserved_units);
+        put_units_64(out, &mut at, &self.debit_units);
+        put_units_64(out, &mut at, &self.credit_units);
+        put_units_64(out, &mut at, &self.fee_bps_units);
+        put_egg_16(out, &mut at, &self.opening_reserved_egg);
+        put_egg_16(out, &mut at, &self.netting_cancelled_egg);
+        put_egg_16(out, &mut at, &self.seller_filled_egg);
+        put_u128(out, &mut at, self.opening_reserved_cash);
+        put_u128(out, &mut at, self.netting_cancelled_cash);
+        put_u128(out, &mut at, self.consideration);
+        put_u128(out, &mut at, self.seller_credit);
+        put_u128(out, &mut at, self.limit_surplus);
+        put_u128(out, &mut at, self.debit_atoms);
+        put_u128(out, &mut at, self.credit_atoms);
+        put_u128(out, &mut at, self.rounding_pot);
+        // --- explicit slices ---
+        put_egg_16(out, &mut at, &self.split_used);
+        put_egg_16(out, &mut at, &self.merge_used);
+        // --- output ---
+        put_u8(out, &mut at, self.summary.outcome_count);
+        put_egg_16(out, &mut at, &self.summary.buy_flow);
+        put_egg_16(out, &mut at, &self.summary.sell_flow);
+        put_egg_16(out, &mut at, &self.summary.total_flow);
+        put_egg_16(out, &mut at, &self.summary.direct_flow);
+        put_u64(out, &mut at, self.summary.virtual_split);
+        put_u64(out, &mut at, self.summary.virtual_merge);
+        put_egg_16(out, &mut at, &self.summary.opening_reserved_egg);
+        put_egg_16(out, &mut at, &self.summary.unfilled_refund_egg);
+        put_egg_16(out, &mut at, &self.summary.netting_cancelled_egg);
+        put_u128(out, &mut at, self.summary.opening_reserved_cash_price_units);
+        put_u128(out, &mut at, self.summary.buyer_consideration_price_units);
+        put_u128(out, &mut at, self.summary.seller_credit_price_units);
+        put_u128(out, &mut at, self.summary.split_cost_price_units);
+        put_u128(out, &mut at, self.summary.merge_proceeds_price_units);
+        put_u128(out, &mut at, self.summary.fee_price_units);
+        put_u128(out, &mut at, self.summary.fee_carry_bps_units);
+        put_u128(out, &mut at, self.summary.cash_refund_price_units);
+        put_u128(out, &mut at, self.summary.rounding_pot_price_units);
+        put_u128(out, &mut at, self.summary.debit_atoms);
+        put_u128(out, &mut at, self.summary.credit_atoms);
+        put_u16(out, &mut at, self.summary.distinct_participating_owners);
+        put_u64(out, &mut at, self.summary.self_overlap_volume);
+        put_score(out, &mut at, &self.summary.score);
+        put_u128(out, &mut at, self.summary.candidate_digest);
+        put_bool(out, &mut at, self.summary_valid);
+        if at != Self::ENCODED_BYTES {
+            return Err(CodecFaultV1::WrongLength);
+        }
+        Ok(())
+    }
+
+    /// Deserialize exactly [`Self::ENCODED_BYTES`] bytes into this checkpoint.
+    ///
+    /// Total over arbitrary bytes: no input can panic or overflow it.  On any
+    /// refusal the checkpoint is reset to the idle value, so a failed decode
+    /// never leaves a half-written state behind.  The accepted set is closed
+    /// under re-encoding: whatever decodes also re-encodes to the identical
+    /// bytes.
+    pub fn decode_into(&mut self, input: &[u8]) -> Result<(), CodecFaultV1> {
+        if input.len() != Self::ENCODED_BYTES {
+            return Err(CodecFaultV1::WrongLength);
+        }
+        match self.decode_fields(input) {
+            Ok(()) => Ok(()),
+            Err(fault) => {
+                self.reset();
+                Err(fault)
+            }
+        }
+    }
+
+    /// Serialize the idle checkpoint — [`Self::NEW`] — without ever holding a
+    /// checkpoint value on a call frame: the source is static storage.  This
+    /// is the body writer the staged account creation uses at its final grow.
+    pub fn encode_idle_into(out: &mut [u8]) -> Result<(), CodecFaultV1> {
+        static IDLE: ClearWorkV1 = ClearWorkV1::NEW;
+        IDLE.encode_into(out)
+    }
+
+    /// The field walk of [`Self::decode_into`]; on `Err` the caller resets.
+    fn decode_fields(&mut self, input: &[u8]) -> Result<(), CodecFaultV1> {
+        let mut at = 0usize;
+        // --- control ---
+        let phase = get_u8(input, &mut at);
+        if phase > PHASE_POISONED {
+            return Err(CodecFaultV1::InvalidPhase);
+        }
+        self.phase = phase;
+        /* Bounds below are phase-sensitive where reachability is: a feed that
+         * `begin` refused at the domain gate is COMPLETE and legitimately
+         * carries the refused domain, while an ACTIVE phase implies `begin`
+         * validated the domain, so out-of-range active coordinates are exactly
+         * the states whose next push would index out of a table. */
+        let active = phase == PHASE_ORDERS || phase == PHASE_SLICES;
+        self.pass = get_u8(input, &mut at);
+        self.order_passes = get_u8(input, &mut at);
+        self.slices_after_pass = get_u8(input, &mut at);
+        self.slices_expected = get_bool(input, &mut at)?;
+        self.check_claims = get_bool(input, &mut at)?;
+        let cursor = get_u16(input, &mut at);
+        if cursor as usize > MAX_ORDERS {
+            return Err(CodecFaultV1::InvalidCount);
+        }
+        self.cursor = cursor;
+        let slice_cursor = get_u16(input, &mut at);
+        if slice_cursor as usize > MAX_SLICES {
+            return Err(CodecFaultV1::InvalidCount);
+        }
+        self.slice_cursor = slice_cursor;
+        let order_count = get_u16(input, &mut at);
+        if order_count as usize > MAX_ORDERS {
+            return Err(CodecFaultV1::InvalidCount);
+        }
+        self.order_count = order_count;
+        self.latch_set = get_bool(input, &mut at)?;
+        self.latch_position = get_u64(input, &mut at);
+        self.latch_error = get_error(input, &mut at)?;
+        self.fold = get_fold(input, &mut at);
+        self.sealed_fold = get_fold(input, &mut at);
+        self.digest = get_fold(input, &mut at);
+        self.previous_id = get_u64(input, &mut at);
+        self.portfolio_count = get_u8(input, &mut at);
+        // --- frozen coordinates ---
+        self.domain.relation_version = get_u32(input, &mut at);
+        self.domain.market_id = get_u64(input, &mut at);
+        self.domain.book_id = get_u64(input, &mut at);
+        self.domain.epoch = get_u64(input, &mut at);
+        self.domain.policy_id = get_u64(input, &mut at);
+        self.domain.order_set_id = get_u64(input, &mut at);
+        let outcome_count = get_u8(input, &mut at);
+        if active && outcome_count as usize > MAX_OUTCOMES {
+            return Err(CodecFaultV1::InvalidCount);
+        }
+        self.domain.outcome_count = outcome_count;
+        self.domain.owner_count = get_u16(input, &mut at);
+        let price_scale = get_u64(input, &mut at);
+        if active && price_scale == 0 {
+            // An active feed divides by the scale; `begin` completes a
+            // zero-scale domain before any push, so zero here is unreachable.
+            return Err(CodecFaultV1::InvalidCount);
+        }
+        self.domain.price_scale = price_scale;
+        self.domain.remainder_seed = get_u64(input, &mut at);
+        self.domain.policy = get_policy(input, &mut at)?;
+        self.cand.order_len = get_u8(input, &mut at);
+        let mut i = 0usize;
+        while i < MAX_OUTCOMES {
+            self.cand.prices[i] = get_u64(input, &mut at);
+            i += 1;
+        }
+        self.cand.virtual_split = get_u64(input, &mut at);
+        self.cand.virtual_merge = get_u64(input, &mut at);
+        self.cand.honored_aon_mask = get_u64(input, &mut at);
+        self.cand.claimed_score = get_score(input, &mut at);
+        self.cand.canonical_candidate_digest = get_u128(input, &mut at);
+        let declared_flag = get_u8(input, &mut at);
+        let declared = get_u16(input, &mut at);
+        self.cand.declared_slices = match declared_flag {
+            0 if declared == 0 => None,
+            0 => return Err(CodecFaultV1::InvalidSliceDeclaration),
+            1 => Some(declared),
+            _ => return Err(CodecFaultV1::InvalidSliceDeclaration),
+        };
+        // --- owner interning ---
+        let mut i = 0usize;
+        while i < MAX_OWNER_SLOTS {
+            self.owners[i] = get_u16(input, &mut at);
+            i += 1;
+        }
+        let owner_slots = get_u16(input, &mut at);
+        if owner_slots as usize > MAX_OWNER_SLOTS {
+            return Err(CodecFaultV1::InvalidCount);
+        }
+        if active {
+            /* Interning appends at `owner_slots` during pass-1 pushes, so an
+             * active checkpoint claiming more interned owners than consumed
+             * orders is both unreachable and one push from an out-of-bounds
+             * append. */
+            let consumed = if phase == PHASE_ORDERS && self.pass <= 1 {
+                self.cursor
+            } else {
+                self.order_count
+            };
+            if owner_slots > consumed {
+                return Err(CodecFaultV1::InvalidCount);
+            }
+        }
+        self.owner_slots = owner_slots;
+        // --- per-order bytes ---
+        let mut i = 0usize;
+        while i < MAX_ORDERS {
+            let slot = get_u16(input, &mut at);
+            if slot as usize >= MAX_OWNER_SLOTS {
+                return Err(CodecFaultV1::InvalidSlot);
+            }
+            self.owner_slot[i] = slot;
+            i += 1;
+        }
+        self.side_buy_bits = get_u64(input, &mut at);
+        let mut i = 0usize;
+        while i < MAX_ORDERS {
+            self.touch[i] = get_u16(input, &mut at);
+            i += 1;
+        }
+        let mut i = 0usize;
+        while i < MAX_ORDERS {
+            let class = get_u8(input, &mut at);
+            if class > CLASS_INELIGIBLE {
+                return Err(CodecFaultV1::InvalidClass);
+            }
+            self.classes[i] = class;
+            i += 1;
+        }
+        let mut i = 0usize;
+        while i < MAX_ORDERS {
+            let flags = get_u8(input, &mut at);
+            if flags & !FLAG_ALL != 0 {
+                return Err(CodecFaultV1::InvalidFlags);
+            }
+            self.flags[i] = flags;
+            i += 1;
+        }
+        let mut i = 0usize;
+        while i < MAX_ORDERS {
+            self.cancelled[i] = get_u64(input, &mut at);
+            i += 1;
+        }
+        let mut i = 0usize;
+        while i < MAX_ORDERS {
+            let row = &mut self.keys[i];
+            row.remainder = get_u128(input, &mut at);
+            row.rank = get_u64(input, &mut at);
+            row.id = get_u64(input, &mut at);
+            row.floor = get_u64(input, &mut at);
+            row.effective = get_u64(input, &mut at);
+            row.minimum = get_u64(input, &mut at);
+            let pool = get_u8(input, &mut at);
+            if pool != POOL_NONE && pool as usize >= 2 * MAX_OUTCOMES {
+                return Err(CodecFaultV1::InvalidSlot);
+            }
+            row.pool = pool;
+            row.extra = get_bool(input, &mut at)?;
+            row.aon = get_bool(input, &mut at)?;
+            i += 1;
+        }
+        // --- self-cross scratch ---
+        get_cells_64(input, &mut at, &mut self.scratch_buy);
+        get_cells_64(input, &mut at, &mut self.scratch_sell);
+        let mut i = 0usize;
+        while i < MAX_OWNER_SLOTS {
+            self.cell_portfolio[i] = get_u16(input, &mut at);
+            i += 1;
+        }
+        // --- flows and participation ---
+        let mut i = 0usize;
+        while i < MAX_OUTCOMES {
+            self.flow_buy[i] = get_u128(input, &mut at);
+            i += 1;
+        }
+        let mut i = 0usize;
+        while i < MAX_OUTCOMES {
+            self.flow_sell[i] = get_u128(input, &mut at);
+            i += 1;
+        }
+        get_cells_64(input, &mut at, &mut self.part_buy);
+        get_cells_64(input, &mut at, &mut self.part_sell);
+        // --- V3 aggregates and pools ---
+        let mut i = 0usize;
+        while i < MAX_OUTCOMES {
+            let agg = &mut self.agg[i];
+            agg.demand = get_u128(input, &mut at);
+            agg.supply = get_u128(input, &mut at);
+            agg.forced_buy = get_u128(input, &mut at);
+            agg.forced_sell = get_u128(input, &mut at);
+            agg.forced_aon_buy = get_u128(input, &mut at);
+            agg.forced_aon_sell = get_u128(input, &mut at);
+            agg.strict_buy = get_u128(input, &mut at);
+            agg.strict_sell = get_u128(input, &mut at);
+            i += 1;
+        }
+        let mut i = 0usize;
+        while i < 2 * MAX_OUTCOMES {
+            let total = get_u128(input, &mut at);
+            let count = get_u16(input, &mut at);
+            let target = get_u64(input, &mut at);
+            let floor_sum = get_u64(input, &mut at);
+            let ready = get_bool(input, &mut at)?;
+            let dust_rejected = get_bool(input, &mut at)?;
+            if ready && target != 0 && total == 0 {
+                /* The floor step divides members by `total` whenever a ready
+                 * pool has a target; `fix_pool_target` only readies a nonzero
+                 * target when `total >= target`, so this shape is unreachable
+                 * and would be a division by zero. */
+                return Err(CodecFaultV1::InvalidCount);
+            }
+            self.pools[i] = PoolV1 {
+                total,
+                count,
+                target,
+                floor_sum,
+                ready,
+                dust_rejected,
+            };
+            i += 1;
+        }
+        // --- V6-V8 ledger ---
+        get_units_64(input, &mut at, &mut self.reserved_units);
+        get_units_64(input, &mut at, &mut self.debit_units);
+        get_units_64(input, &mut at, &mut self.credit_units);
+        get_units_64(input, &mut at, &mut self.fee_bps_units);
+        get_egg_16(input, &mut at, &mut self.opening_reserved_egg);
+        get_egg_16(input, &mut at, &mut self.netting_cancelled_egg);
+        get_egg_16(input, &mut at, &mut self.seller_filled_egg);
+        self.opening_reserved_cash = get_u128(input, &mut at);
+        self.netting_cancelled_cash = get_u128(input, &mut at);
+        self.consideration = get_u128(input, &mut at);
+        self.seller_credit = get_u128(input, &mut at);
+        self.limit_surplus = get_u128(input, &mut at);
+        self.debit_atoms = get_u128(input, &mut at);
+        self.credit_atoms = get_u128(input, &mut at);
+        self.rounding_pot = get_u128(input, &mut at);
+        // --- explicit slices ---
+        get_egg_16(input, &mut at, &mut self.split_used);
+        get_egg_16(input, &mut at, &mut self.merge_used);
+        // --- output ---
+        self.summary.outcome_count = get_u8(input, &mut at);
+        get_egg_16(input, &mut at, &mut self.summary.buy_flow);
+        get_egg_16(input, &mut at, &mut self.summary.sell_flow);
+        get_egg_16(input, &mut at, &mut self.summary.total_flow);
+        get_egg_16(input, &mut at, &mut self.summary.direct_flow);
+        self.summary.virtual_split = get_u64(input, &mut at);
+        self.summary.virtual_merge = get_u64(input, &mut at);
+        get_egg_16(input, &mut at, &mut self.summary.opening_reserved_egg);
+        get_egg_16(input, &mut at, &mut self.summary.unfilled_refund_egg);
+        get_egg_16(input, &mut at, &mut self.summary.netting_cancelled_egg);
+        self.summary.opening_reserved_cash_price_units = get_u128(input, &mut at);
+        self.summary.buyer_consideration_price_units = get_u128(input, &mut at);
+        self.summary.seller_credit_price_units = get_u128(input, &mut at);
+        self.summary.split_cost_price_units = get_u128(input, &mut at);
+        self.summary.merge_proceeds_price_units = get_u128(input, &mut at);
+        self.summary.fee_price_units = get_u128(input, &mut at);
+        self.summary.fee_carry_bps_units = get_u128(input, &mut at);
+        self.summary.cash_refund_price_units = get_u128(input, &mut at);
+        self.summary.rounding_pot_price_units = get_u128(input, &mut at);
+        self.summary.debit_atoms = get_u128(input, &mut at);
+        self.summary.credit_atoms = get_u128(input, &mut at);
+        self.summary.distinct_participating_owners = get_u16(input, &mut at);
+        self.summary.self_overlap_volume = get_u64(input, &mut at);
+        self.summary.score = get_score(input, &mut at);
+        self.summary.candidate_digest = get_u128(input, &mut at);
+        self.summary_valid = get_bool(input, &mut at)?;
+        if at != Self::ENCODED_BYTES {
+            return Err(CodecFaultV1::WrongLength);
+        }
+        Ok(())
+    }
+}
+
+/// Every registered order-flag bit; a decoded flag byte may carry no others.
+const FLAG_ALL: u8 = FLAG_ACTIVE | FLAG_FORCED | FLAG_HONORED | FLAG_POOL | FLAG_STRICT_FULL;
+
+/// The registered code of the one payload-bearing refusal.
+const ERROR_CODE_PAIRING_INFEASIBLE: u8 = 30;
+
+// --- primitive writers -------------------------------------------------------
+
+fn put_u8(out: &mut [u8], at: &mut usize, value: u8) {
+    out[*at] = value;
+    *at += 1;
+}
+
+fn put_bool(out: &mut [u8], at: &mut usize, value: bool) {
+    put_u8(out, at, value as u8);
+}
+
+fn put_u16(out: &mut [u8], at: &mut usize, value: u16) {
+    out[*at..*at + 2].copy_from_slice(&value.to_le_bytes());
+    *at += 2;
+}
+
+fn put_u32(out: &mut [u8], at: &mut usize, value: u32) {
+    out[*at..*at + 4].copy_from_slice(&value.to_le_bytes());
+    *at += 4;
+}
+
+fn put_u64(out: &mut [u8], at: &mut usize, value: u64) {
+    out[*at..*at + 8].copy_from_slice(&value.to_le_bytes());
+    *at += 8;
+}
+
+fn put_u128(out: &mut [u8], at: &mut usize, value: u128) {
+    out[*at..*at + 16].copy_from_slice(&value.to_le_bytes());
+    *at += 16;
+}
+
+fn put_i128(out: &mut [u8], at: &mut usize, value: i128) {
+    out[*at..*at + 16].copy_from_slice(&value.to_le_bytes());
+    *at += 16;
+}
+
+fn put_fold(out: &mut [u8], at: &mut usize, fold: DigestFoldV1) {
+    let (high, low) = fold.words();
+    put_u64(out, at, high);
+    put_u64(out, at, low);
+}
+
+fn put_score(out: &mut [u8], at: &mut usize, score: &ScoreV1) {
+    put_i128(out, at, score.weighted_direct_volume);
+    put_u128(out, at, score.limit_surplus_price_units);
+    put_u16(out, at, score.distinct_owners);
+    put_u64(out, at, score.churn);
+    put_u128(out, at, score.digest);
+}
+
+fn put_cells_64(out: &mut [u8], at: &mut usize, cells: &[[u64; MAX_OUTCOMES]; MAX_ORDERS]) {
+    let mut i = 0usize;
+    while i < MAX_ORDERS {
+        let mut j = 0usize;
+        while j < MAX_OUTCOMES {
+            put_u64(out, at, cells[i][j]);
+            j += 1;
+        }
+        i += 1;
+    }
+}
+
+fn put_units_64(out: &mut [u8], at: &mut usize, units: &[u128; MAX_OWNER_SLOTS]) {
+    let mut i = 0usize;
+    while i < MAX_OWNER_SLOTS {
+        put_u128(out, at, units[i]);
+        i += 1;
+    }
+}
+
+fn put_egg_16(out: &mut [u8], at: &mut usize, egg: &[u64; MAX_OUTCOMES]) {
+    let mut i = 0usize;
+    while i < MAX_OUTCOMES {
+        put_u64(out, at, egg[i]);
+        i += 1;
+    }
+}
+
+fn put_error(out: &mut [u8], at: &mut usize, error: ErrorV1) {
+    put_u8(out, at, error_code(error));
+    let (outcome, owner) = match error {
+        ErrorV1::PairingInfeasible { outcome, owner } => (outcome, owner),
+        _ => (0, 0),
+    };
+    put_u8(out, at, outcome);
+    put_u16(out, at, owner);
+}
+
+fn put_policy(out: &mut [u8], at: &mut usize, policy: &FrozenPolicyV1) {
+    put_u8(
+        out,
+        at,
+        match policy.allocation {
+            AllocationPolicyV1::PricePriorityMarginalProRata => 0,
+            AllocationPolicyV1::FullProRata => 1,
+        },
+    );
+    put_u8(
+        out,
+        at,
+        match policy.self_cross {
+            SelfCrossPolicyV1::RefuseOverlap => 0,
+            SelfCrossPolicyV1::NetAtAdmission => 1,
+            SelfCrossPolicyV1::AllowGateAtPairing => 2,
+        },
+    );
+    put_u8(
+        out,
+        at,
+        match policy.aon {
+            AonPolicyV1::RefuseAdmission => 0,
+            AonPolicyV1::WitnessedHonoredMask => 1,
+            AonPolicyV1::FullSizeCounting => 2,
+        },
+    );
+    put_u8(
+        out,
+        at,
+        match policy.rounding {
+            RoundingBoundaryV1::None => 0,
+            RoundingBoundaryV1::TerminalOwnerFloor => 1,
+            RoundingBoundaryV1::ReceiptFloor => 2,
+        },
+    );
+    put_u8(
+        out,
+        at,
+        match policy.residual_settlement {
+            ResidualSettlementV1::FullPairOnly => 0,
+            ResidualSettlementV1::CumulativePairCanonical => 1,
+            ResidualSettlementV1::CumulativePairFree => 2,
+            ResidualSettlementV1::UniqueSliceReceipts => 3,
+        },
+    );
+    put_u8(
+        out,
+        at,
+        match policy.transfer_phase {
+            TransferPhaseV1::ActiveOnly => 0,
+            TransferPhaseV1::ActiveOrResolved => 1,
+        },
+    );
+    put_u8(
+        out,
+        at,
+        match policy.portfolio_lots {
+            PortfolioLotPolicyV1::StrictWholeOrder => 0,
+            PortfolioLotPolicyV1::MarginalProRataLots => 1,
+        },
+    );
+    put_u8(
+        out,
+        at,
+        match policy.pairing_witness {
+            PairingWitnessPolicyV1::RecomputedConstructor => 0,
+            PairingWitnessPolicyV1::ExplicitSlices => 1,
+        },
+    );
+    put_u8(
+        out,
+        at,
+        match policy.dust {
+            DustPolicy::AssignCanonical => 0,
+            DustPolicy::Reject => 1,
+        },
+    );
+    put_u8(
+        out,
+        at,
+        match policy.score {
+            ScorePolicyV1::LexicographicDispersionV1 => 0,
+        },
+    );
+    let (fee_tag, fee_bps) = match policy.fee_base {
+        FeeBaseV1::None => (0u8, 0u32),
+        FeeBaseV1::FlatNotional { bps } => (1, bps),
+    };
+    put_u8(out, at, fee_tag);
+    put_u32(out, at, fee_bps);
+}
+
+// --- primitive readers -------------------------------------------------------
+
+fn get_u8(input: &[u8], at: &mut usize) -> u8 {
+    let value = input[*at];
+    *at += 1;
+    value
+}
+
+fn get_bool(input: &[u8], at: &mut usize) -> Result<bool, CodecFaultV1> {
+    match get_u8(input, at) {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(CodecFaultV1::InvalidBool),
+    }
+}
+
+fn get_u16(input: &[u8], at: &mut usize) -> u16 {
+    let value = u16::from_le_bytes([input[*at], input[*at + 1]]);
+    *at += 2;
+    value
+}
+
+fn get_u32(input: &[u8], at: &mut usize) -> u32 {
+    let value = u32::from_le_bytes([input[*at], input[*at + 1], input[*at + 2], input[*at + 3]]);
+    *at += 4;
+    value
+}
+
+fn get_u64(input: &[u8], at: &mut usize) -> u64 {
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&input[*at..*at + 8]);
+    *at += 8;
+    u64::from_le_bytes(bytes)
+}
+
+fn get_u128(input: &[u8], at: &mut usize) -> u128 {
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&input[*at..*at + 16]);
+    *at += 16;
+    u128::from_le_bytes(bytes)
+}
+
+fn get_i128(input: &[u8], at: &mut usize) -> i128 {
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&input[*at..*at + 16]);
+    *at += 16;
+    i128::from_le_bytes(bytes)
+}
+
+fn get_fold(input: &[u8], at: &mut usize) -> DigestFoldV1 {
+    let high = get_u64(input, at);
+    let low = get_u64(input, at);
+    DigestFoldV1::from_words(high, low)
+}
+
+fn get_score(input: &[u8], at: &mut usize) -> ScoreV1 {
+    ScoreV1 {
+        weighted_direct_volume: get_i128(input, at),
+        limit_surplus_price_units: get_u128(input, at),
+        distinct_owners: get_u16(input, at),
+        churn: get_u64(input, at),
+        digest: get_u128(input, at),
+    }
+}
+
+fn get_cells_64(input: &[u8], at: &mut usize, cells: &mut [[u64; MAX_OUTCOMES]; MAX_ORDERS]) {
+    let mut i = 0usize;
+    while i < MAX_ORDERS {
+        let mut j = 0usize;
+        while j < MAX_OUTCOMES {
+            cells[i][j] = get_u64(input, at);
+            j += 1;
+        }
+        i += 1;
+    }
+}
+
+fn get_units_64(input: &[u8], at: &mut usize, units: &mut [u128; MAX_OWNER_SLOTS]) {
+    let mut i = 0usize;
+    while i < MAX_OWNER_SLOTS {
+        units[i] = get_u128(input, at);
+        i += 1;
+    }
+}
+
+fn get_egg_16(input: &[u8], at: &mut usize, egg: &mut [u64; MAX_OUTCOMES]) {
+    let mut i = 0usize;
+    while i < MAX_OUTCOMES {
+        egg[i] = get_u64(input, at);
+        i += 1;
+    }
+}
+
+fn get_error(input: &[u8], at: &mut usize) -> Result<ErrorV1, CodecFaultV1> {
+    let code = get_u8(input, at);
+    let outcome = get_u8(input, at);
+    let owner = get_u16(input, at);
+    if code != ERROR_CODE_PAIRING_INFEASIBLE && (outcome != 0 || owner != 0) {
+        return Err(CodecFaultV1::InvalidErrorCode);
+    }
+    Ok(match code {
+        0 => ErrorV1::UnknownRelationVersion,
+        1 => ErrorV1::InvalidPriceScale,
+        2 => ErrorV1::PolicyVariantUnimplemented,
+        3 => ErrorV1::InvalidOwner,
+        4 => ErrorV1::InvalidOutcome,
+        5 => ErrorV1::InvalidQuantity,
+        6 => ErrorV1::InvalidMinimumFill,
+        7 => ErrorV1::NonCanonicalOrderOrder,
+        8 => ErrorV1::NonCanonicalPadding,
+        9 => ErrorV1::AonNotAdmitted,
+        10 => ErrorV1::MinimumFillNotAdmitted,
+        11 => ErrorV1::SelfCrossRefused,
+        12 => ErrorV1::ExpiredOrder,
+        13 => ErrorV1::TooManyOrders,
+        14 => ErrorV1::TooManyPortfolios,
+        15 => ErrorV1::SimplexSumMismatch,
+        16 => ErrorV1::PriceOutOfRange,
+        17 => ErrorV1::IneligibleFill,
+        18 => ErrorV1::CandidateMismatch,
+        19 => ErrorV1::StrictUnderfill,
+        20 => ErrorV1::FillExceedsQuantity,
+        21 => ErrorV1::MinimumFillViolation,
+        22 => ErrorV1::AllOrNoneViolation,
+        23 => ErrorV1::AonMaskDishonored,
+        24 => ErrorV1::AonMaskLeak,
+        25 => ErrorV1::AonMaskNotApplicable,
+        26 => ErrorV1::DustRejected,
+        27 => ErrorV1::OutcomeConservationMismatch,
+        28 => ErrorV1::ChurnNotCanonical,
+        29 => ErrorV1::InfeasibleVirtualLeg,
+        30 => ErrorV1::PairingInfeasible { outcome, owner },
+        31 => ErrorV1::SliceNotExecutable,
+        32 => ErrorV1::SliceSumMismatch,
+        33 => ErrorV1::PairingWitnessNotAdmitted,
+        34 => ErrorV1::PairingWitnessMissing,
+        35 => ErrorV1::ConstructorStalled,
+        36 => ErrorV1::SliceCapacityExceeded,
+        37 => ErrorV1::ConsiderationMismatch,
+        38 => ErrorV1::RemainderRequired,
+        39 => ErrorV1::FeeMismatch,
+        40 => ErrorV1::FeePayerUnfunded,
+        41 => ErrorV1::ConservationFailure,
+        42 => ErrorV1::ScoreMismatch,
+        43 => ErrorV1::DigestMismatch,
+        44 => ErrorV1::ArithmeticOverflow,
+        45 => ErrorV1::NoValidCandidate,
+        46 => ErrorV1::SearchBudgetExceeded,
+        _ => return Err(CodecFaultV1::InvalidErrorCode),
+    })
+}
+
+fn error_code(error: ErrorV1) -> u8 {
+    match error {
+        ErrorV1::UnknownRelationVersion => 0,
+        ErrorV1::InvalidPriceScale => 1,
+        ErrorV1::PolicyVariantUnimplemented => 2,
+        ErrorV1::InvalidOwner => 3,
+        ErrorV1::InvalidOutcome => 4,
+        ErrorV1::InvalidQuantity => 5,
+        ErrorV1::InvalidMinimumFill => 6,
+        ErrorV1::NonCanonicalOrderOrder => 7,
+        ErrorV1::NonCanonicalPadding => 8,
+        ErrorV1::AonNotAdmitted => 9,
+        ErrorV1::MinimumFillNotAdmitted => 10,
+        ErrorV1::SelfCrossRefused => 11,
+        ErrorV1::ExpiredOrder => 12,
+        ErrorV1::TooManyOrders => 13,
+        ErrorV1::TooManyPortfolios => 14,
+        ErrorV1::SimplexSumMismatch => 15,
+        ErrorV1::PriceOutOfRange => 16,
+        ErrorV1::IneligibleFill => 17,
+        ErrorV1::CandidateMismatch => 18,
+        ErrorV1::StrictUnderfill => 19,
+        ErrorV1::FillExceedsQuantity => 20,
+        ErrorV1::MinimumFillViolation => 21,
+        ErrorV1::AllOrNoneViolation => 22,
+        ErrorV1::AonMaskDishonored => 23,
+        ErrorV1::AonMaskLeak => 24,
+        ErrorV1::AonMaskNotApplicable => 25,
+        ErrorV1::DustRejected => 26,
+        ErrorV1::OutcomeConservationMismatch => 27,
+        ErrorV1::ChurnNotCanonical => 28,
+        ErrorV1::InfeasibleVirtualLeg => 29,
+        ErrorV1::PairingInfeasible { .. } => ERROR_CODE_PAIRING_INFEASIBLE,
+        ErrorV1::SliceNotExecutable => 31,
+        ErrorV1::SliceSumMismatch => 32,
+        ErrorV1::PairingWitnessNotAdmitted => 33,
+        ErrorV1::PairingWitnessMissing => 34,
+        ErrorV1::ConstructorStalled => 35,
+        ErrorV1::SliceCapacityExceeded => 36,
+        ErrorV1::ConsiderationMismatch => 37,
+        ErrorV1::RemainderRequired => 38,
+        ErrorV1::FeeMismatch => 39,
+        ErrorV1::FeePayerUnfunded => 40,
+        ErrorV1::ConservationFailure => 41,
+        ErrorV1::ScoreMismatch => 42,
+        ErrorV1::DigestMismatch => 43,
+        ErrorV1::ArithmeticOverflow => 44,
+        ErrorV1::NoValidCandidate => 45,
+        ErrorV1::SearchBudgetExceeded => 46,
+    }
+}
+
+fn get_policy(input: &[u8], at: &mut usize) -> Result<FrozenPolicyV1, CodecFaultV1> {
+    let allocation = match get_u8(input, at) {
+        0 => AllocationPolicyV1::PricePriorityMarginalProRata,
+        1 => AllocationPolicyV1::FullProRata,
+        _ => return Err(CodecFaultV1::InvalidPolicy),
+    };
+    let self_cross = match get_u8(input, at) {
+        0 => SelfCrossPolicyV1::RefuseOverlap,
+        1 => SelfCrossPolicyV1::NetAtAdmission,
+        2 => SelfCrossPolicyV1::AllowGateAtPairing,
+        _ => return Err(CodecFaultV1::InvalidPolicy),
+    };
+    let aon = match get_u8(input, at) {
+        0 => AonPolicyV1::RefuseAdmission,
+        1 => AonPolicyV1::WitnessedHonoredMask,
+        2 => AonPolicyV1::FullSizeCounting,
+        _ => return Err(CodecFaultV1::InvalidPolicy),
+    };
+    let rounding = match get_u8(input, at) {
+        0 => RoundingBoundaryV1::None,
+        1 => RoundingBoundaryV1::TerminalOwnerFloor,
+        2 => RoundingBoundaryV1::ReceiptFloor,
+        _ => return Err(CodecFaultV1::InvalidPolicy),
+    };
+    let residual_settlement = match get_u8(input, at) {
+        0 => ResidualSettlementV1::FullPairOnly,
+        1 => ResidualSettlementV1::CumulativePairCanonical,
+        2 => ResidualSettlementV1::CumulativePairFree,
+        3 => ResidualSettlementV1::UniqueSliceReceipts,
+        _ => return Err(CodecFaultV1::InvalidPolicy),
+    };
+    let transfer_phase = match get_u8(input, at) {
+        0 => TransferPhaseV1::ActiveOnly,
+        1 => TransferPhaseV1::ActiveOrResolved,
+        _ => return Err(CodecFaultV1::InvalidPolicy),
+    };
+    let portfolio_lots = match get_u8(input, at) {
+        0 => PortfolioLotPolicyV1::StrictWholeOrder,
+        1 => PortfolioLotPolicyV1::MarginalProRataLots,
+        _ => return Err(CodecFaultV1::InvalidPolicy),
+    };
+    let pairing_witness = match get_u8(input, at) {
+        0 => PairingWitnessPolicyV1::RecomputedConstructor,
+        1 => PairingWitnessPolicyV1::ExplicitSlices,
+        _ => return Err(CodecFaultV1::InvalidPolicy),
+    };
+    let dust = match get_u8(input, at) {
+        0 => DustPolicy::AssignCanonical,
+        1 => DustPolicy::Reject,
+        _ => return Err(CodecFaultV1::InvalidPolicy),
+    };
+    let score = match get_u8(input, at) {
+        0 => ScorePolicyV1::LexicographicDispersionV1,
+        _ => return Err(CodecFaultV1::InvalidPolicy),
+    };
+    let fee_tag = get_u8(input, at);
+    let fee_bps = get_u32(input, at);
+    let fee_base = match fee_tag {
+        0 if fee_bps == 0 => FeeBaseV1::None,
+        0 => return Err(CodecFaultV1::InvalidPolicy),
+        1 => FeeBaseV1::FlatNotional { bps: fee_bps },
+        _ => return Err(CodecFaultV1::InvalidPolicy),
+    };
+    Ok(FrozenPolicyV1 {
+        allocation,
+        self_cross,
+        aon,
+        rounding,
+        residual_settlement,
+        transfer_phase,
+        portfolio_lots,
+        pairing_witness,
+        dust,
+        score,
+        fee_base,
+    })
+}
+
+/// Named byte offsets into the encoding, for the codec test battery: field
+/// mutation and control-field sweeps address regions by name, never by magic
+/// number.  Test-only so production code cannot grow an offset dependence.
+#[cfg(test)]
+pub(crate) mod codec_offsets {
+    use super::{MAX_ORDERS, MAX_OUTCOMES, MAX_OWNER_SLOTS, POLICY_ENCODED_BYTES};
+
+    pub const PHASE: usize = 0;
+    pub const PASS: usize = 1;
+    pub const SLICES_EXPECTED: usize = 4;
+    pub const CHECK_CLAIMS: usize = 5;
+    pub const CURSOR: usize = 6;
+    pub const SLICE_CURSOR: usize = 8;
+    pub const ORDER_COUNT: usize = 10;
+    pub const LATCH_SET: usize = 12;
+    pub const LATCH_ERROR: usize = 21;
+    pub const FOLD: usize = 25;
+    pub const SEALED_FOLD: usize = 41;
+    pub const DIGEST: usize = 57;
+    pub const PREVIOUS_ID: usize = 73;
+    pub const DOMAIN: usize = 82;
+    pub const DOMAIN_OUTCOME_COUNT: usize = DOMAIN + 44;
+    pub const DOMAIN_PRICE_SCALE: usize = DOMAIN + 47;
+    pub const DOMAIN_POLICY: usize = DOMAIN + 63;
+    pub const CAND: usize = DOMAIN + 63 + POLICY_ENCODED_BYTES;
+    pub const CAND_DECLARED: usize = CAND + 227;
+    pub const OWNERS: usize = CAND + 230;
+    pub const OWNER_SLOTS: usize = OWNERS + MAX_OWNER_SLOTS * 2;
+    pub const OWNER_SLOT: usize = OWNER_SLOTS + 2;
+    pub const SIDE_BUY_BITS: usize = OWNER_SLOT + MAX_ORDERS * 2;
+    pub const TOUCH: usize = SIDE_BUY_BITS + 8;
+    pub const CLASSES: usize = TOUCH + MAX_ORDERS * 2;
+    pub const FLAGS: usize = CLASSES + MAX_ORDERS;
+    pub const CANCELLED: usize = FLAGS + MAX_ORDERS;
+    pub const KEYS: usize = CANCELLED + MAX_ORDERS * 8;
+    pub const KEYS_POOL: usize = KEYS + 56;
+    pub const KEYS_EXTRA: usize = KEYS + 57;
+    pub const SCRATCH_BUY: usize = KEYS + MAX_ORDERS * 59;
+    pub const SCRATCH_SELL: usize = SCRATCH_BUY + MAX_ORDERS * MAX_OUTCOMES * 8;
+    pub const CELL_PORTFOLIO: usize = SCRATCH_SELL + MAX_ORDERS * MAX_OUTCOMES * 8;
+    pub const FLOW_BUY: usize = CELL_PORTFOLIO + MAX_OWNER_SLOTS * 2;
+    pub const FLOW_SELL: usize = FLOW_BUY + MAX_OUTCOMES * 16;
+    pub const PART_BUY: usize = FLOW_SELL + MAX_OUTCOMES * 16;
+    pub const PART_SELL: usize = PART_BUY + MAX_OWNER_SLOTS * MAX_OUTCOMES * 8;
+    pub const AGG: usize = PART_SELL + MAX_OWNER_SLOTS * MAX_OUTCOMES * 8;
+    pub const POOLS: usize = AGG + MAX_OUTCOMES * 8 * 16;
+    pub const POOLS_READY: usize = POOLS + 34;
+    pub const RESERVED_UNITS: usize = POOLS + 2 * MAX_OUTCOMES * 36;
+    pub const LEDGER_EGG: usize = RESERVED_UNITS + 4 * MAX_OWNER_SLOTS * 16;
+    pub const CASH_SCALARS: usize = LEDGER_EGG + 3 * MAX_OUTCOMES * 8;
+    pub const SPLIT_USED: usize = CASH_SCALARS + 8 * 16;
+    pub const SUMMARY: usize = SPLIT_USED + 2 * MAX_OUTCOMES * 8;
+    pub const SUMMARY_VALID: usize = SUMMARY + 1173;
+    pub const END: usize = SUMMARY_VALID + 1;
+}
+
 /// The work items of one order pass.  Under `N-b`, pass 1 additionally
 /// accumulates the netting totals inside the admission step itself.
 struct PassSteps {
@@ -2376,3 +3590,7 @@ fn key_beats(a: &PoolRowV1, b: &PoolRowV1) -> bool {
 #[cfg(test)]
 #[path = "relation_v1_stream_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "relation_v1_stream_codec_tests.rs"]
+mod codec_tests;

@@ -1011,15 +1011,27 @@ fn stream_matches_batch_on_admission_and_domain_refusals() {
     assert_stream_matches(&mut work, &domain, &empty_book, &lapse, None);
 }
 
+/// The on-chain-shaped save/resume step: serialize through the codec into a
+/// body-sized byte buffer, deserialize into *fresh* storage, and require
+/// exact round-trip identity — `decode_into(encode_into(w)) == w` at this
+/// push boundary — before continuing on the decoded object and discarding
+/// the original.
+fn save_and_resume(work: Box<ClearWorkV1>, body: &mut [u8]) -> Box<ClearWorkV1> {
+    work.encode_into(body).unwrap();
+    let mut resumed = Box::new(ClearWorkV1::new());
+    resumed.decode_into(body).unwrap();
+    assert_eq!(*resumed, *work, "decode(encode(w)) != w at a push boundary");
+    resumed
+}
+
 #[test]
-// The fresh `Box` per split is the point: resumption must depend only on the
-// checkpoint *value*, so every split moves it to new storage.
-#[allow(clippy::replace_box)]
 fn stream_resumption_equals_one_ordered_fold() {
     // P-BATCH-03: for every split of the feed, saving and restoring the
     // checkpoint object between chunks yields the identical verdict and the
-    // identical final state as the uninterrupted fold.  Save = clone; resume =
-    // continue on the clone, discarding the original.
+    // identical final state as the uninterrupted fold.  Save = encode through
+    // the checkpoint codec; resume = decode into fresh storage (upgraded from
+    // save = clone when the codec landed), so every split is also a
+    // round-trip-identity assertion at that boundary.
     let vector = prices(&[SCALE / 2, SCALE / 2]);
     let explicit = domain_with(
         FrozenPolicyV1 {
@@ -1076,25 +1088,27 @@ fn stream_resumption_equals_one_ordered_fold() {
     cases.push((explicit, cross, sliced, Some(short)));
 
     let mut splits_exercised = 0u32;
+    let mut body = std::vec![0u8; ClearWorkV1::ENCODED_BYTES];
     for (domain, book, candidate, pairing) in &cases {
         let pairing = pairing.as_ref();
         // The uninterrupted fold.
         let mut whole = Box::new(ClearWorkV1::new());
         let whole_verdict = drive(&mut whole, domain, book, candidate, pairing);
         assert_eq!(whole_verdict, verify(domain, book, candidate, pairing));
-        // The maximally interrupted fold: a checkpoint copy before every step.
+        // The maximally interrupted fold: an encode/decode step before every
+        // push and every pass boundary.
         let header = header_of(candidate, pairing);
         let mut work = Box::new(ClearWorkV1::new());
         work.begin(domain, &header, true).unwrap();
         loop {
-            work = Box::new((*work).clone());
+            work = save_and_resume(work, &mut body);
             splits_exercised += 1;
             match work.status() {
                 FeedStatusV1::NeedOrders { .. } => {
                     let mut done = false;
                     let mut j = 0usize;
                     while j < book.len as usize {
-                        work = Box::new((*work).clone());
+                        work = save_and_resume(work, &mut body);
                         splits_exercised += 1;
                         if work.status() == FeedStatusV1::Complete {
                             done = true;
@@ -1112,7 +1126,7 @@ fn stream_resumption_equals_one_ordered_fold() {
                     let witness = pairing.unwrap();
                     let mut k = 0usize;
                     while k < witness.len as usize {
-                        work = Box::new((*work).clone());
+                        work = save_and_resume(work, &mut body);
                         splits_exercised += 1;
                         work.push_slice(&witness.slices[k]).unwrap();
                         k += 1;
@@ -1125,11 +1139,15 @@ fn stream_resumption_equals_one_ordered_fold() {
         let split_verdict = work.verdict().unwrap().copied();
         assert_eq!(split_verdict, whole_verdict, "a split changed the verdict");
         assert_eq!(*work, *whole, "a split changed the checkpoint state");
+        assert_eq!(
+            work.consumed_fold(),
+            whole.consumed_fold(),
+            "a split changed the continuation digest"
+        );
     }
-    assert!(
-        splits_exercised > 100,
-        "the splits must be exercised: {}",
-        splits_exercised
+    assert_eq!(
+        splits_exercised, 210,
+        "the resume-point corpus moved; re-count and re-pin"
     );
     assert!(cases.len() >= 18, "the case set collapsed: {}", cases.len());
 }
