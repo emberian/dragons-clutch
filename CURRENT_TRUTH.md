@@ -83,9 +83,13 @@ Runtime evidence is artifact-specific:
   not a blank-bank venue or the complete schema-v2 baseline. The exact record
   is [`docs/implementation/COMMITTED_SBF_WALK.md`](docs/implementation/COMMITTED_SBF_WALK.md).
 
-The checked-in `MANIFEST.baseline.json` is now schema v2. Its clean emission
-records 94/94 declared gate outcomes, and `check --run-gates` passes after the
-manifest-only commit. Persvati independently attested exact `6743b9d` from a
+The checked-in `MANIFEST.baseline.json` is schema v2, re-emitted for the
+2026-08-19 syscall-hashed runtime (`187d5ee1…`, sealed at `cfba5bb`) with all
+100 declared gates executed in the emission run, and `check --run-gates`
+passes after the manifest-only commit. The paragraphs below record the R1
+attestation and rebuild lineage of the earlier `bd20711b…` identity and are
+historical; no portable attestation or independent rebuild of the current
+identity has been run yet. Persvati independently attested exact `6743b9d` from a
 fresh archive (SHA-256 `f9f25afce1a00f277ad1322787bfc1f757cac26535558d9491fb731e543bf277`)
 and minimal hashed Git bundle: 40/40 portable gates PASS, 0 STOP, 528 files
 checked twice with zero mismatches, every test count identical to the prior
@@ -112,9 +116,9 @@ Anza's per-OS platform-tools artifact — two Rust-stdlib CI path strings
 (macOS vs Linux runner prefixes), a reordered prebuilt compiler-builtins
 intrinsics cluster, and the resulting −8-byte address shift — with zero
 bytes derived from source, dependencies, or either build host's paths. That
-comparison is historical: it predates the Direct V3 merge and its
-`af6bb79c…` reseal, and no equivalent independent rebuild of the current
-identity has been run.
+comparison is historical: it predates the Direct V3 merge, the `af6bb79c…`
+reseal, and the 2026-08-19 `187d5ee1…` syscall reseal, and no equivalent
+independent rebuild of the current identity has been run.
 Cross-OS byte-identity is structurally impossible for this pin; byte-level
 reproduction of the seal needs a second macOS host. The durable job is
 `/tank/joshibot/dragons-clutch-sbf-rebuild-6743b9d-dd4727` (REBUILD_REPORT.md
@@ -299,7 +303,7 @@ public `derive_payout` to be degree-zero-only; smooth callers must use
 | Terminal lifecycle V2 | internal-only **MODEL-ONLY / HOST-TESTED** | A hostile-prestate model enforces per-role rent identity, once-only refunds, a separately retained replay tombstone, internal claim/supply/mint equality, exact per-Position lots, ordered close dependencies, and an immutable neutral surplus sink. External bearer issuance fails closed in this profile. | No live account ABI, signer/PDA authority, rent funding, Token-2022 CPI/post-state, SBF route, legacy migration, external-bearer terminal path, or fractional credit/carry closure exists. It is not a protocol terminality or no-stranding result. |
 | Terminal economics R4 | **MODEL-ONLY / HOST-TESTED** | A bounded creation-only model distinguishes internal `I`, registered external `E`, and authoritative Token-2022 `A` supply planes, requires `E=A` after authenticated transitions, and retains a segregated CreditVault/CreditRoot and every nonzero claimant credit. It proves why arbitrary raw bearer units plus indivisible collateral cannot generally end in tombstone-only closure. | No live ABI/PDA/authority, persistent supply ledger, Token-2022 post-CPI authentication, CPI/close router, rent/keeper funding, migration, or SBF terminal walk exists. Legacy mints without creation-time close authority remain permanent infrastructure or STOPs. |
 | Economics and fees | **MODEL-ONLY / PROPOSED** | Synthetic solvency, cost, fee, manipulation, and allocation experiments exist. `EvidenceOnlyRecoveryV1` is a decided new-research policy: it rejects every numeric data-failure fallback, enters recoverable dormancy after finite independently prepaid repair, selects lot-scaled bearer units for new native markets, and permits only terminal collateral burn after authoritative zero. | No failure-policy ABI, source-specific evidence theorem, lot-scaled mint, repair route, or terminal burn executes. Fee base/rate/split and recipient policy remain unfrozen. Existing raw-unit bearer mints and fractional credits remain terminal STOPs. Hoard principal is never available. |
-| Artifact/release evidence | exact current artifact/stack/bank seal plus checked schema-v2 local baseline; release **STOP** | Runtime source/test ancestry `83e124d` produced two byte-identical ordinary builds of `bd207...16b60`; final-LTO/stack audit and same-ELF bank campaigns are sealed at `b5700a9`. The old `a572...d6b6a1` seal is historical only. The checked manifest records 94/94 and passes its post-commit full check. | The Cargo-home-relocated build is path-sensitive. Hbox reproduced the ELF from the same source/toolchain pin at `5e840bb0…` with the seal divergence exhaustively classified as per-OS platform-tools bytes; byte-level seal reproduction needs a second macOS host. No complete release SBOM/license closure, external security review, signed tag, or deployment. |
+| Artifact/release evidence | exact current artifact/stack/bank seal plus checked schema-v2 local baseline; release **STOP** | Runtime source/test ancestry `d8c5034` produced three byte-identical builds of `187d5ee1...16bd` (pass 1, pass 2, and — for the first time — the relocated-Cargo-home probe; single-host evidence, not cross-host closure); final-LTO/stack audit and same-ELF bank campaigns are sealed at `cfba5bb`. The `bd20711b…` and `af6bb79c…` seals are historical only. The checked manifest records all 100 gates executed and passes its post-commit full check. | Cargo-home relocation became byte-identical on this seal — the path sensitivity every prior seal measured left with the software `sha2` crate — but that is single-host evidence only. The hbox rebuild comparison (per-OS platform-tools divergence, exhaustively classified) is historical to `6743b9d`; byte-level seal reproduction still needs a second macOS host, and no independent rebuild of the current identity exists. No complete release SBOM/license closure, external security review, signed tag, or deployment. |
 
 ## 5. Accounting truth
 

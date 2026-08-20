@@ -43,9 +43,10 @@ ready in degg-research.
    Python lab. Destination-before-base remains the design order; the
    RevenuePolicy object is the missing prerequisite.
 
-In flight: liveness-profile reseal lane (new artifact root 187d5ee16f72946a,
-all evidence regenerated at 6c25df4, admission-shape re-exam as report-only);
-manifest emission + Persvati attestation follow when it lands.
+In flight: final 100-gate manifest emission for the syscall reseal, then
+Persvati attestation of the new identity. Owed to ember: the admission-shape
+proposal (quantum 50k -> 10k saves 6.8% cold outlay per work item, report-only
+in the reseal lane's output) and the postmark doorstep (4 threads).
 
 ## Ember decision queue (2026-08-19 morning)
 
@@ -69,6 +70,38 @@ manifest emission + Persvati attestation follow when it lands.
    Aug 24/24/27, perpetuals RFC Aug 26.
 
 ## Done log (2026-08-19 session)
+
+- LIVENESS PROFILE RESEALED to the syscall-hashed runtime (d8c5034 enabling
+  lock + cfba5bb seal): new root 187d5ee16f72946a, 24 files all regenerated,
+  every CU row re-derived from fresh bank logs (5-13x cheaper across all 10
+  families). BOTH RECORDED STOPS DISSOLVED IN SEALED EVIDENCE: V2 select
+  completes at 226,071 CU (derive() still keeps V2 STOP on the
+  empty-frozen-lapse blocker, live_v3 stays false), all six occupation rows
+  clear admission. NEW: the relocated-Cargo-home build is byte-identical for
+  the first time — the path sensitivity left with the software sha2 crate.
+  I re-verified the gates myself (45/45, 24/24 tracked, policy.py both
+  modes). Inversion found: cancel now costs MORE than place (282,868 vs
+  185,807) — no policy reads it, but it is a real fee/UX fact.
+
+- THE CEILING'S LAST TENANTS EVICTED (2196111): the 9 gate contradictions
+  from the first 100-gate emission were diagnosed — 4 stale Cargo.locks
+  (same solana-sha256-hasher edge), 1 SBOM row (devnet-paces), and the good
+  one: THREE test cases authored with full oracle expectations had been
+  demoted to `exhausted` because two instructions could not fit 1.4M CU.
+  Undemoted, all three EXECUTE AS AUTHORED FOR THE FIRST TIME: Resolve
+  repeat-idempotency ACCEPTED (263,317 CU, 7 accounts oracle-compared),
+  late-conflict payout refusal 0x0057 with whole-transaction rollback, and
+  the committed walk's duplicate-bearer-exit atomicity witness. Bringup and
+  committed gates green at the same ELF identities; walk now declares
+  refusals=2 / exhaustions=0.
+
+- REATTRIBUTION PROPAGATED (e6d477e + degg ef10f29): CURRENT_TRUTH rows and
+  STOP ledger, sophistication section 3, succinct-clearing premise, and
+  planned-vs-built each carry a same-day dated correction with original
+  text preserved; BOTH Draft 13 filings rewritten from the sealed merged
+  measurement — the IAC ceiling section now leads with the misattribution
+  as a committee-relevant finding ("a measured stop is evidence about an
+  artifact, not an architecture"), pages held at 9/8.
 
 - DRAFT 13 COMMITTED (degg-research 8f9cfef): all four documents compressed
   to their content floor with meaning as the hard constraint. IAC 4,228 ->
