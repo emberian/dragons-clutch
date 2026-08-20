@@ -23,23 +23,26 @@ design track is moving: the R2 successor and Verus dust model are
 research-only, R4 runtime design is proposed, and Draft 10 + John packet are
 ready in degg-research.
 
+## Overnight mandate (ember, 2026-08-19 ~23:00): "authorized and deputized to
+## work all night iterating on the system implementing everything we had
+## planned." Quantum 10k + batched-fold routes BOTH BLESSED; other planned
+## directions blessed. Human gates unchanged (mainnet, real value, real-user
+## markets, registry flip, filings, L0).
+
 ## Next 3 moves
 
-1. Persvati portable attestation of the new sealed identity (manifest commit
-   98fb070, ELF 187d5ee1/1,420,608): fresh job dir, prior methodology
-   (~/jobs/dragons-clutch-final-portable-attest-6743b9d-20260819-TChWnu on
-   persvati), artifact checks against the new digests. Deploy the post-SHA
-   ELF to devnet the moment the deployer is funded (~9.9 SOL for the
-   smaller ELF).
-2. Fee economics phase 1 (from FEE_ECONOMICS_FINDINGS): correct
-   FEE_GEOMETRY/ECONOMICS (zero-price kernel channel into the section-5
-   threat list, Props 10-12 absorbed, unsupported assertions fixed), add
-   control arms 3 and 6 plus the zero-price laundering falsifier to the
-   Python lab. Destination-before-base remains the design order; the
-   RevenuePolicy object is the missing prerequisite.
-3. Classify the six V3 persistent account families in the 37-row terminal
-   inventory (the regression the V3 merge introduced), and take ember's
-   answer on the admission-shape quantum proposal (50k -> 10k).
+1. Wave 1 (running): batch-fold measurement + quantum 10k as reseal-cycle A
+   on the CURRENT ELF identity (evidence-only, no program change); frame
+   Tier 0 (ten opt-z overflowers) and Tier 1 (portfolio_settlement
+   out-params) on isolated worktree branches; Tier 2 portfolio-clearing
+   design (the eight joins onto relation_v1_stream + clearing.rs) planned
+   read-only in parallel. Persvati attestation + fee-econ phase 1 lanes
+   still converging.
+2. Wave 2: merge Tier 0/1 after gates, implement Tier 2 joins, classify the
+   six V3 terminal families, then ONE combined reseal-cycle B for whatever
+   changed the program.
+3. Deploy to devnet the moment the deployer is funded (~9.9 SOL); keep the
+   collector polling.
 
 In flight: final 100-gate manifest emission for the syscall reseal, then
 Persvati attestation of the new identity. Owed to ember: the admission-shape
