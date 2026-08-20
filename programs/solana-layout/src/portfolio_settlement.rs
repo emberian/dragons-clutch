@@ -8,12 +8,20 @@
 //! against both ENTITLED reservations, and every post-state is staged before a
 //! caller can mutate anything.
 //!
-//! It is **not** a live entitlement authority.  [`PortfolioEntitlementV1`] has
-//! no account codec, PDA, initializer, instruction, or selection transition.
-//! [`prepare_full_pair`] is suitable for an offline/reference adapter only
-//! until every item in [`PORTFOLIO_RUNTIME_BLOCKERS_V1`] is discharged.  A
-//! caller-created value with internally consistent fields proves content
-//! consistency, not that the protocol selected or funded it.
+//! Live consumption (Tier 2, T2-8): the program's generalized `SettlePage`
+//! consumes [`prepare_full_pair`]/[`apply_full_pair`] for a selected
+//! candidate's full portfolio pair.  [`PortfolioEntitlementV1`] still has no
+//! account codec of its own — the program *rebuilds* it deterministically
+//! from program-authenticated accounts (the CLEARED epoch, the SELECTED
+//! candidate record, the bound Terms, and the digest-verified frozen page
+//! records), and the one-shot consumption latches are the per-slice
+//! `SettlementReceiptAccount`s plus the `ENTITLED → CONSUMED` reservation
+//! transition.  A caller-created value with internally consistent fields
+//! still proves content consistency only; outside that program path nothing
+//! may treat a struct literal or digest match as selection evidence.  The
+//! remaining gaps are [`PORTFOLIO_RUNTIME_BLOCKERS_V1`] (standing) with the
+//! discharged prefix recorded in
+//! [`DISCHARGED_PORTFOLIO_RUNTIME_BLOCKERS_V1`].
 //!
 //! The coefficient vector is over the Market's native degree-zero through
 //! degree-three B-spline Eggs.  The claim identity binds the exact Terms
@@ -752,9 +760,11 @@ pub fn prepare_full_pair(
 
 /// Apply the pure staged transition after every fallible check succeeds.
 ///
-/// This helper does not make the proposed entitlement authoritative.  It is an
-/// offline/reference state-machine operation.  The live program must remain
-/// disconnected until [`PORTFOLIO_RUNTIME_BLOCKERS_V1`] is empty.
+/// This helper does not make a caller-proposed entitlement authoritative.
+/// The one live caller is the program's generalized `SettlePage` (T2-8),
+/// which rebuilds the entitlement from program-authenticated state and holds
+/// the one-shot receipt latches; every other caller is an offline/reference
+/// state machine.
 ///
 /// `staged` is the same caller-provided slot [`prepare_full_pair`] takes,
 /// initialized from [`PortfolioPairPostV1::ZEROED`].  On success it holds the
@@ -921,7 +931,7 @@ pub fn canonical_portfolio_entitlement_id(
     )
 }
 
-/// Ranked missing live-runtime obligations.
+/// Ranked live-runtime obligations of the original promotion ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PortfolioRuntimeBlockerV1 {
     /// Candidate verification and best-valid-submitted selection must be live.
@@ -942,14 +952,37 @@ pub enum PortfolioRuntimeBlockerV1 {
     TerminalClosure,
 }
 
-/// Dependency order for promoting this pure seam into a live instruction.
-pub const PORTFOLIO_RUNTIME_BLOCKERS_V1: [PortfolioRuntimeBlockerV1; 8] = [
+/// The discharged prefix of the original ledger, in the order it retired.
+///
+/// * `CandidateSelection` — T2-6b/c walk (tags 51-53) + T2-7 selection (54-57).
+/// * `ReservationSetClosure` — T2-6b join 1: pass-1 completion proves every
+///   live order holds exactly one ACTIVE, exactly-funded reservation.
+/// * `VectorReceiptCodec` — T2-8: per-slice `SettlementReceiptAccount`s bind
+///   quantity and frozen price per outcome, and the pair's claim, primitive
+///   units, and exact value are recomputed at consumption from the frozen
+///   records and verified prices — never carried as claims.
+/// * `EntitlementInitialization` — T2-8's `FreezeEntitlement`/`EntitleSlice`:
+///   receipts exist only for the SELECTED candidate of a CLEARED epoch, and
+///   the referenced reservations take `ENTITLED` in the same instruction.
+/// * `FrozenPageProvenance` — T2-8's generalized `SettlePage` loads both
+///   Portfolio records by exact order id from digest-verified frozen pages.
+/// * `FrozenPolicyPreimage` — T2-5/T2-6: the pinned
+///   `GENERAL_CLEARING_POLICY_V1` artifact, digest-bound to `epoch.policy`.
+pub const DISCHARGED_PORTFOLIO_RUNTIME_BLOCKERS_V1: [PortfolioRuntimeBlockerV1; 6] = [
     PortfolioRuntimeBlockerV1::CandidateSelection,
     PortfolioRuntimeBlockerV1::ReservationSetClosure,
     PortfolioRuntimeBlockerV1::VectorReceiptCodec,
     PortfolioRuntimeBlockerV1::EntitlementInitialization,
     PortfolioRuntimeBlockerV1::FrozenPageProvenance,
     PortfolioRuntimeBlockerV1::FrozenPolicyPreimage,
+];
+
+/// The obligations still standing, in dependency order.
+///
+/// Fees stay forced zero at every gate (`FeeCarryAccount`), and nothing yet
+/// proves every reservation, receipt, and pot is consumed exactly once and
+/// reclaims their rent (`TerminalClosure`).
+pub const PORTFOLIO_RUNTIME_BLOCKERS_V1: [PortfolioRuntimeBlockerV1; 2] = [
     PortfolioRuntimeBlockerV1::FeeCarryAccount,
     PortfolioRuntimeBlockerV1::TerminalClosure,
 ];
@@ -1472,15 +1505,36 @@ mod tests {
     }
 
     #[test]
-    fn live_promotion_stays_explicitly_blocked() {
-        assert_eq!(PORTFOLIO_RUNTIME_BLOCKERS_V1.len(), 8);
+    fn the_promotion_ledger_records_the_discharged_prefix_and_the_standing_tail() {
+        // Every original obligation appears exactly once, discharged or
+        // standing; the standing tail keeps fees and terminal closure honest.
+        assert_eq!(DISCHARGED_PORTFOLIO_RUNTIME_BLOCKERS_V1.len(), 6);
+        assert_eq!(PORTFOLIO_RUNTIME_BLOCKERS_V1.len(), 2);
         assert_eq!(
-            PORTFOLIO_RUNTIME_BLOCKERS_V1[0],
+            DISCHARGED_PORTFOLIO_RUNTIME_BLOCKERS_V1[0],
             PortfolioRuntimeBlockerV1::CandidateSelection
         );
         assert_eq!(
-            PORTFOLIO_RUNTIME_BLOCKERS_V1[7],
-            PortfolioRuntimeBlockerV1::TerminalClosure
+            PORTFOLIO_RUNTIME_BLOCKERS_V1,
+            [
+                PortfolioRuntimeBlockerV1::FeeCarryAccount,
+                PortfolioRuntimeBlockerV1::TerminalClosure
+            ]
         );
+        let all: [PortfolioRuntimeBlockerV1; 8] = [
+            PortfolioRuntimeBlockerV1::CandidateSelection,
+            PortfolioRuntimeBlockerV1::ReservationSetClosure,
+            PortfolioRuntimeBlockerV1::VectorReceiptCodec,
+            PortfolioRuntimeBlockerV1::EntitlementInitialization,
+            PortfolioRuntimeBlockerV1::FrozenPageProvenance,
+            PortfolioRuntimeBlockerV1::FrozenPolicyPreimage,
+            PortfolioRuntimeBlockerV1::FeeCarryAccount,
+            PortfolioRuntimeBlockerV1::TerminalClosure,
+        ];
+        for blocker in all {
+            let discharged = DISCHARGED_PORTFOLIO_RUNTIME_BLOCKERS_V1.contains(&blocker);
+            let standing = PORTFOLIO_RUNTIME_BLOCKERS_V1.contains(&blocker);
+            assert!(discharged != standing, "{blocker:?} must be exactly one");
+        }
     }
 }

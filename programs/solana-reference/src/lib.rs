@@ -5780,6 +5780,20 @@ mod tests {
                 market,
                 epoch: h(0x2e),
             },
+            /* The entitlement pair (tags 58-59) rides the same rule: the
+             * adapter refuses both, so the SVM oracle for the entitlement
+             * freeze is the layout codec plus the frozen receipt/pot codecs. */
+            Intent::FreezeEntitlement {
+                market,
+                epoch: h(0x2e),
+                candidate: h(0x3e),
+            },
+            Intent::EntitleSlice {
+                market,
+                epoch: h(0x2e),
+                candidate: h(0x3e),
+                slice_index: 0,
+            },
         ] {
             let request = layout_request(0, unsupported);
             assert_eq!(

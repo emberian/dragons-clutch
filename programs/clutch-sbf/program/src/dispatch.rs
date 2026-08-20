@@ -131,6 +131,8 @@ const INTENT_SUBMIT_CANDIDATE_HINT: u8 = 54;
 const INTENT_WRITE_CANDIDATE_FEED_HINT: u8 = 55;
 const INTENT_SEAL_CANDIDATE_HINT: u8 = 56;
 const INTENT_FINALIZE_SELECTION_HINT: u8 = 57;
+const INTENT_FREEZE_ENTITLEMENT_HINT: u8 = 58;
+const INTENT_ENTITLE_SLICE_HINT: u8 = 59;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
@@ -164,7 +166,9 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_SUBMIT_CANDIDATE_HINT
                 | INTENT_WRITE_CANDIDATE_FEED_HINT
                 | INTENT_SEAL_CANDIDATE_HINT
-                | INTENT_FINALIZE_SELECTION_HINT,
+                | INTENT_FINALIZE_SELECTION_HINT
+                | INTENT_FREEZE_ENTITLEMENT_HINT
+                | INTENT_ENTITLE_SLICE_HINT,
             ) => Route::OrdersBatch,
             Some(
                 INTENT_INIT_REALM_HINT
@@ -382,7 +386,9 @@ fn process_orders_batch(
         | Action::Layout(Intent::SubmitCandidate { .. })
         | Action::Layout(Intent::WriteCandidateFeed { .. })
         | Action::Layout(Intent::SealCandidate { .. })
-        | Action::Layout(Intent::FinalizeSelection { .. }) => {
+        | Action::Layout(Intent::FinalizeSelection { .. })
+        | Action::Layout(Intent::FreezeEntitlement { .. })
+        | Action::Layout(Intent::EntitleSlice { .. }) => {
             orders_batch::process(program_id, accounts, &request)
         }
         _ => unexpected_route(),
@@ -866,6 +872,23 @@ mod tests {
                 Intent::FinalizeSelection {
                     market: hash(1),
                     epoch: hash(2),
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::FreezeEntitlement {
+                    market: hash(1),
+                    epoch: hash(2),
+                    candidate: hash(3),
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::EntitleSlice {
+                    market: hash(1),
+                    epoch: hash(2),
+                    candidate: hash(3),
+                    slice_index: 4,
                 },
                 Route::OrdersBatch,
             ),

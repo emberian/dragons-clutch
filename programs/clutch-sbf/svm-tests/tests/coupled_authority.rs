@@ -159,11 +159,11 @@ impl Fixture {
     }
 
     fn settle_instruction(&self) -> Instruction {
+        // The T2-8 entitled shape: no feed and no page in the consumption
+        // list — the receipt and reservations carry the frozen facts.
         let metas = vec![
             AccountMeta::new_readonly(self.epoch, false),
             AccountMeta::new_readonly(self.candidate, false),
-            AccountMeta::new_readonly(self.feed, false),
-            AccountMeta::new_readonly(self.page, false),
             AccountMeta::new(self.buyer_position, false),
             AccountMeta::new(self.seller_position, false),
             AccountMeta::new(self.reservation_zero, false),

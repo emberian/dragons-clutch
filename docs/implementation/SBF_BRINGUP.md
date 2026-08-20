@@ -47,7 +47,10 @@ executes at **554 929** program units and `RedeemInternal` at **555 739**
 `PlaceOrder` and `CancelOrder` landed on-chain after these fixtures were
 regenerated and have **no SVM leg** and no offline oracle (the reference
 adapter models no order family); batch settlement (`SettlePage`) remains
-the one honest stub. Not a complete program, not audited, not a deployment
+the one honest stub.  *(Retired 2026-08-20, T2-8: `SettlePage` now consumes
+entitled receipts — single-Egg direct slices and portfolio full pairs —
+created by the entitlement freeze, tags 58-59; unentitled and general
+shapes keep refusing `0x0017`.)* Not a complete program, not audited, not a deployment
 authorization, and not mainnet, devnet, or testnet evidence. A stub
 reads no account, writes no byte, and reports no success.
 
@@ -190,7 +193,7 @@ two lanes editing one file. Every path below is under
 | `instructions/merge_materialize.rs` | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` | **implemented** — all three, through the `split.rs` seam plane |
 | `instructions/market_init.rs` | `Intent::CreateMarket` | **implemented** — validated initialization-write over pre-created state accounts, **plus** the creation of every outcome mint and the Hoard token account by CPI |
 | `instructions/observe_resolve.rs` | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` | **implemented** — `Resolve` fits a transaction again (554 929 CU) since the terms revision; deferred check 15 is closed; `RedeemInternal` carries the mandatory collateral leg |
-| `instructions/orders_batch.rs` | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SettlePage` | `PlaceOrder` and `CancelOrder` **implemented**; `SettlePage` **blocked**, see below |
+| `instructions/orders_batch.rs` | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SettlePage` | `PlaceOrder` and `CancelOrder` **implemented**; `SettlePage` **implemented for entitled receipts** since T2-8 (2026-08-20); general shapes still refuse |
 
 A lane owns its `instructions/*.rs` file outright. It touches the shared files
 only to *append*: a new refusal code at the end of `error.rs`, a new seed
@@ -233,7 +236,7 @@ history of that discipline and where each family stands now:
 | `FeedAdvance` | `NotYetImplemented` `0x0017` | **implemented** behind the PROPOSED `0x48` feed page |
 | `PlaceOrder` | `NotYetImplemented` `0x0017` | **implemented**; no SVM evidence yet (deferred check 16) |
 | `CancelOrder` | `NotYetImplemented` `0x0017` | **implemented** (v4 tombstone retirement, landed with the orders-on-v4 integration); like `PlaceOrder`, no offline adapter and no SVM evidence |
-| `SettlePage` | `NotYetImplemented` `0x0017` | still refused: the relation does not fit an SBF frame and the page-to-book projection has not landed (see `STREAMING_RELATION_DESIGN.md`) |
+| `SettlePage` | `NotYetImplemented` `0x0017` | **retired for entitled receipts** (T2-8, 2026-08-20): the streaming walk verified the relation on-chain, the entitlement freeze (tags 58-59) creates the receipts, and `SettlePage` consumes them; partial fills, virtual legs, mixed pairs, and inexact conversions keep refusing `0x0017` honestly |
 
 `Merge`, `Materialize`, and `Dematerialize` previously refused
 `UnsupportedInstruction` (`0x000e`), then `NotYetImplemented` (`0x0017`). All
