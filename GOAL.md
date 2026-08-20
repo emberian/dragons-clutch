@@ -70,6 +70,22 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- ALL TEN DECISION REPORTS COMPLETE + THE PACKET SYNTHESIZED
+  (docs/decisions/: register + 9 report files + DECISION_PACKET). The
+  packet orders everything: six decide-now items (policy freeze as-pinned,
+  ADR-0005 adopt-ready, E1 ratify, Realm allowlist freeze, deploy at
+  sealed opt-3 with immutable-at-first-deployment posture, Plane-L charges
+  permanent zero), four wave-unlocking items (R4 with the legacy-permanent
+  scope amendment BOTH reports independently caught, RevenuePolicy
+  remainder, composite fee base kappa*G + kappa'*R proven in the lab,
+  promotion at rung W1/V3-campaign), and the Aug-24/26 calendar spine with
+  E3 last-and-never-pre-authorized. CONVERGENCE: three lanes independently
+  identified TerminalClosure as the highest-leverage unlocked wave. Also:
+  opt-z is RED again on the current tree (stale premise caught by
+  measurement); the deploy script's four-seals-stale artifact pointer was
+  caught and repointed to e8ba31d5; the R2 caps branch rebased CLEAN
+  across 153 commits (r2-caps-rebase-trial seeds Phase 0).
+
 - CYCLE D ATTESTED: Persvati 44/44 PASS, 0 STOP over exact 788581c —
   identical gate roster to cycle C (contract found zero manifest changes),
   ELF six contexts, all SIX historical roots verified as the exact set,
