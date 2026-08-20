@@ -72,6 +72,22 @@ speaking mechanics, September+ opportunities).
 
 ## Done log (2026-08-19 session)
 
+- FRAME BUDGET PLAN committed (docs/design/FRAME_BUDGET_PLAN_2026-08-19.md):
+  the frame blocker for the general relation is ALREADY SOLVED in-repo and
+  unconsumed — relation_v1_stream verifies one order at a time (push_order
+  frame 1,280 B vs verify_inner's 39,104, measured in the same build) with
+  Portfolio support and 19,520-verdict equivalence, plus the clearing.rs
+  checkpoint codecs. Portfolio clearing is JOIN-blocked (8 named joins), not
+  frame-blocked. Impossibility recorded: verify_inner/canonical_candidate
+  need 28 KB co-live state (7x frame, N<=3 at K=16 if reduced);
+  propose_best_valid is a host solver by construction. INVERSION: binary
+  size is gated by the frame ceiling — opt-z saves 23% (~2.3 SOL rent) and
+  fails only because TEN reachable functions go 64-896 bytes over; ~12
+  resident handlers sit at exactly 4,096. Tier 0 (the ten overflowers) +
+  Tier 1 (portfolio_settlement out-params) dispatched on the sha-syscall
+  branch; Tier 2 (consume the streaming relation) is the real portfolio
+  unblock, next cycle.
+
 - DRAFT 12 COMPLETE, all four documents (degg-research e4429c9 + 4caeb80):
   IAC 10pp, definitions 8pp, data-reporting 9pp, cover 2pp. The
   triple-statement pattern (summary + argument + requests saying the same
