@@ -462,9 +462,9 @@ authentication, full-byte monolithic v4 equivalence, late rollback, donation
 segregation, and real-SBF Begin/Fold/Finalize/Abort rows documented in
 `RESOLUTION_WORK_SBF.md`. The current sealed default artifact's first-party
 final-LTO stack audit passes for exact ELF
-`bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60`
-(sealed at `b5700a9`; the preceding `a5725a3d…` seal remains valid historical
-evidence only).
+`af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b`
+(sealed at `7931e23`; the preceding `bd20711b…` and `a5725a3d…` seals remain
+valid historical evidence only and keep their complete artifact directories).
 The following remain explicit stops or scope limits:
 
 - route-level evidence is not permission to call the program or deployment

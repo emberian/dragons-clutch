@@ -19,6 +19,17 @@ This directory contains:
   current projection. `policy.py` refuses a seal that overwrites a superseded
   artifact root or drops any of its evidence files.
 
+Every sealed path is checked for repository membership, not merely for
+presence on the running disk. The root `.gitignore` excludes `*.so` and
+`*.log`, so a plain `git add` of a new artifact root silently commits a
+fraction of it while every hash of a working-tree file keeps passing;
+`check_tracked_evidence` therefore requires each current and retained
+historical evidence path to be tracked and to equal its committed blob at
+`HEAD`, refusing an ignored, staged-but-uncommitted, or
+modified-after-commit file. If git cannot answer that question the checker
+reports `UNAVAILABLE` with the exact git failure and exits nonzero; an
+unanswerable question is never reported as tracked.
+
 The profile never treats Hoard principal, fees, future volume, a future
 subscriber, a token price, or a token-to-SOL conversion as liveness funding.
 It publishes no finite work quote when the requested CU headroom fails and no

@@ -162,48 +162,57 @@ V1 charges are zero, so no nonzero charge-disposition claim is made.
 ## Real-SBF evidence
 
 The current sealed default artifact was built twice from exact runtime source
-`83e124dda22adc15cb5ebf18ff9e0ab971c551dc`. Both ordinary builds are
+`2d530d218b470e5e2d1cf52480c4a9d1636c08e1`. Both ordinary builds are
 byte-identical. The measured liveness profile, exact ELF, audit, and same-ELF
-bank/build logs are sealed at `b5700a9`. The preceding
-`7e8f6b1`/`b5da74f`/`a5725a3d…` seal remains valid historical evidence only;
-the sole executable-closure change between the seals is the required
-rustdoc-link qualification in `programs/solana-reference/src/resolution.rs`,
-which changes seven line-location bytes in `.data.rel.ro` while `.text`,
-`.rodata`, every other stripped section, and normalized instruction
-disassembly remain identical. The CU rows below were remeasured against the
-current artifact rather than relabeled from the historical seal.
+bank/build logs are sealed at `7931e23`. The preceding
+`83e124d`/`b5700a9`/`bd20711b…` seal, and the `7e8f6b1`/`b5da74f`/`a5725a3d…`
+seal before it, remain valid historical evidence only; neither is retracted and
+both keep their complete artifact directories. Unlike the `a5725a3d…` →
+`bd20711b…` step, this is a materially different artifact: the Direct V3
+selection lifecycle merge grows the declared runtime closure from 88 to 94
+files and the stripped ELF from `1,228,192` to `1,490,544` bytes, and no
+stripped section except `.dynstr` and `.shstrtab` stays byte-identical. Every
+CU row below was therefore remeasured against exact `af6bb79c…` rather than
+relabeled from a historical seal. Each measured ResolutionWork route moved by
+exactly one CU, the cost of the one added dispatcher arm, while the monolithic
+comparison row is unchanged.
 
 ```text
-SHA256: bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60
-bytes:  1,228,192
-audit:  research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/
-logs:   research/liveness-policy-profile/artifacts/bd20711b01828a74/logs/
+SHA256: af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b
+bytes:  1,490,544
+audit:  research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/
+logs:   research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/logs/
 ```
 
 The audit report has SHA-256
-`626a299dd879cff5f8c775b82b488c2d6b300a386b6d5f847913b5e14797e038`
-and the upstream 52-file checksum ledger has SHA-256
-`dbf55f8e28c1674fc0f76b434049fbc8ef1e906c46db6ac0457410eaebc35f35`.
+`39a8b19cae23a2a02f7ba870b18b5a4b9a07af6876c05443d6dd28e8bb89ccfb`
+and the upstream 50-file checksum ledger has SHA-256
+`e433c17d4be57463e78eb47554cc6e84d22aab5c1a27a53e297f83a7a21304e0`.
 The complete source/toolchain/dependency and same-ELF account is
-[`RUNTIME_ARTIFACT_AUDIT.md`](../../research/liveness-policy-profile/artifacts/bd20711b01828a74/audit/RUNTIME_ARTIFACT_AUDIT.md).
+[`RUNTIME_ARTIFACT_AUDIT.md`](../../research/liveness-policy-profile/artifacts/af6bb79cc3766bd0/audit/RUNTIME_ARTIFACT_AUDIT.md).
+The superseded `bd20711b…` seal keeps its own report
+`626a299dd879cff5f8c775b82b488c2d6b300a386b6d5f847913b5e14797e038` and
+52-file ledger
+`dbf55f8e28c1674fc0f76b434049fbc8ef1e906c46db6ac0457410eaebc35f35` under
+`research/liveness-policy-profile/artifacts/bd20711b01828a74/`.
 
 The sealed same-ELF ProgramTest measurements (degree 2, real program ELF) were
 collected with the selected CU limit and the maximum V1 priority-price input:
 
 | Transition | Records/span | CU consumed | Selected limit | Accounts |
 |---|---:|---:|---:|---:|
-| Begin | 1 | 805,308 | 1,050,000 | 11 |
-| Fold | 1 | 802,253 | 1,050,000 | 8 |
-| Begin | 2 | 810,992 | 1,050,000 | 11 |
-| Fold | 2 | 812,193 | 1,050,000 | 8 |
-| Begin | 3 | 807,674–807,676 | 1,050,000 | 11 |
-| Fold | 1, partitioned span 3 | 804,616 | 1,050,000 | 8 |
-| Fold | 2, partitioned span 3 | 809,225 | 1,050,000 | 8 |
-| Fold | 3 | 813,128 | 1,050,000 | 8 |
-| Begin | 4 | 805,860 | 1,050,000 | 11 |
-| Fold | 4 | 815,573 | 1,050,000 | 8 |
-| Finalize | span 3 | 1,094,832 | 1,400,000 | 19 (`15 + 4`) |
-| expired Abort | zero progress | 587,197 | 750,000 | 8 |
+| Begin | 1 | 805,309 | 1,050,000 | 11 |
+| Fold | 1 | 802,254 | 1,050,000 | 8 |
+| Begin | 2 | 810,993 | 1,050,000 | 11 |
+| Fold | 2 | 812,194 | 1,050,000 | 8 |
+| Begin | 3 | 807,675–807,677 | 1,050,000 | 11 |
+| Fold | 1, partitioned span 3 | 804,617 | 1,050,000 | 8 |
+| Fold | 2, partitioned span 3 | 809,226 | 1,050,000 | 8 |
+| Fold | 3 | 813,129 | 1,050,000 | 8 |
+| Begin | 4 | 805,861 | 1,050,000 | 11 |
+| Fold | 4 | 815,574 | 1,050,000 | 8 |
+| Finalize | span 3 | 1,094,833 | 1,400,000 | 19 (`15 + 4`) |
+| expired Abort | zero progress | 587,198 | 750,000 | 8 |
 | monolithic comparison | span 3 | 1,253,326 | 1,400,000 | 14 |
 
 The largest measured Finalize now clears the exact 1,120,000-CU 25%-headroom
@@ -240,7 +249,7 @@ equivalence.
 ## Stack and remaining scope
 
 The exact sealed ELF's final audit found zero diagnostics naming `clutch_sbf`,
-zero diagnosed symbols surviving final LTO, and all 40,389 direct `r10`
+zero diagnosed symbols surviving final LTO, and all 49,521 direct `r10`
 references at or below 4,096 bytes. Begin, Fold, Finalize, Abort, and the shared
 occupation apply seam each have a maximum direct frame of 4,096 bytes. This
 closes the first-party stack diagnostic gate for this ELF only; it is not a
@@ -252,7 +261,10 @@ before owner-plane allocation or Token-2022 CPI, with rollback. A successful
 mock-source Endow requires the distinct `non-production-mock-source` ELF and
 is not evidence for this default artifact. Live Direct V2 at `e874db1` also
 remains a functional compute STOP: its full top-three Select reaches exactly
-1,400,000 CU and rolls back. Direct V3 at `ef32495` is MODEL/DESIGN only.
+1,400,000 CU and rolls back. The staged Direct V3 successor merged at `fb72b34`
+is routed and resident in this sealed ELF, but it is unpromoted here: it
+carries no measured CU, rent/refund/close, or terminal-admission row in this
+profile, so the Direct stops above remain V2's.
 
 No global `LivenessPolicy` or no-stranding theorem has been promoted. The
 profile still stops on production source/archive work, direct lifecycle,

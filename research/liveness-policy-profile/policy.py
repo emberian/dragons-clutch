@@ -77,8 +77,21 @@ REQUIRED_EVIDENCE_SUFFIXES = {
 }
 
 
+TRACKING_UNAVAILABLE = "sealed-evidence git tracking UNAVAILABLE"
+
+
 class CheckError(RuntimeError):
     """A pinned identity or arithmetic check failed."""
+
+
+class TrackingUnavailable(CheckError):
+    """Git could not answer whether the sealed evidence is in the repository.
+
+    This is a refusal, never a pass: an unanswerable tracking question must not
+    be reported as "tracked".  It subclasses :class:`CheckError` so every caller
+    that already fails closed on a check error also fails closed here, while the
+    distinct type lets a caller name the degraded case exactly.
+    """
 
 
 def sha256(path: Path) -> str:
@@ -101,6 +114,33 @@ def run(argv: list[str], *, cwd: Path = REPO, env: dict[str, str] | None = None)
     )
     if result.returncode != 0:
         raise CheckError(f"command failed ({result.returncode}): {' '.join(argv)}\n{result.stdout}")
+    return result.stdout
+
+
+def git_tracking(argv: list[str], *, repo: Path, stdin: str | None = None) -> str:
+    """Run a git query whose failure must never be read as "tracked"."""
+
+    try:
+        result = subprocess.run(
+            ["git", *argv],
+            cwd=repo,
+            input=stdin,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError as error:
+        raise TrackingUnavailable(
+            f"{TRACKING_UNAVAILABLE}: cannot run 'git {argv[0]}' in {repo}: {error}"
+        ) from error
+    if result.returncode != 0:
+        diagnostic = (result.stderr or result.stdout).strip().splitlines()
+        raise TrackingUnavailable(
+            f"{TRACKING_UNAVAILABLE}: 'git {' '.join(argv[:2])}' failed "
+            f"({result.returncode}) in {repo}: "
+            + (diagnostic[-1] if diagnostic else "no diagnostic output")
+        )
     return result.stdout
 
 
@@ -400,6 +440,105 @@ def check_artifact_binding(evidence: dict[str, Any]) -> None:
         require_equal(sha256(old_path), old_digest, f"historical artifact {old_digest}")
 
 
+def sealed_disk_paths(evidence: dict[str, Any]) -> list[str]:
+    """Every repository path whose bytes this checker reads from the disk.
+
+    ``check_files``, ``check_capture``, and ``check_artifact_binding`` all hash
+    working-tree files, so each of them is satisfied by bytes that merely happen
+    to sit in a working directory.  This is exactly the set that has to exist in
+    the repository as well, current seal and retained superseded seals alike.
+    """
+
+    paths = {evidence["artifact"]["path"], evidence["capture"]["path"]}
+    paths.update(evidence["evidence_files"])
+    for row in evidence["historical_artifacts"].values():
+        paths.add(row["path"])
+        historical_root = Path(row["path"]).parent
+        paths.update(str(historical_root / suffix) for suffix in REQUIRED_EVIDENCE_SUFFIXES)
+    return sorted(paths)
+
+
+def check_tracked_evidence(evidence: dict[str, Any], *, repo: Path = REPO) -> None:
+    """Refuse sealed evidence that is on this disk but not in this repository.
+
+    ``.gitignore`` excludes ``*.so`` and ``*.log``, so a plain ``git add`` of a
+    new artifact root silently commits only a fraction of it while every
+    disk-reading check above keeps passing.  A seal like that is green for
+    whoever built it and unverifiable for whoever clones it.
+
+    Each sealed path must therefore be tracked *and* resolve to a committed blob
+    whose hash equals the hash of the file on disk, which refuses an
+    ignored-but-present file, a staged-but-never-committed file, and a committed
+    file whose working-tree bytes were changed afterwards.  When git cannot
+    answer the question at all this raises :class:`TrackingUnavailable` naming
+    the exact reason; it never degrades into a pass.
+    """
+
+    paths = sealed_disk_paths(evidence)
+    for relative in paths:
+        if not relative or relative.startswith("/") or "\n" in relative:
+            raise CheckError(f"sealed evidence path is not a plain repository path: {relative!r}")
+
+    toplevel = git_tracking(["rev-parse", "--show-toplevel"], repo=repo).strip()
+    if Path(toplevel).resolve() != Path(repo).resolve():
+        raise TrackingUnavailable(
+            f"{TRACKING_UNAVAILABLE}: {repo} is not its own git work tree "
+            f"(git reports {toplevel})"
+        )
+    head = git_tracking(["rev-parse", "--verify", "HEAD^{commit}"], repo=repo).strip()
+
+    absent = [relative for relative in paths if not (Path(repo) / relative).is_file()]
+    if absent:
+        raise CheckError("sealed evidence file is absent: " + ", ".join(absent))
+
+    listed = set(git_tracking(["ls-files", "-z", "--", *paths], repo=repo).split("\0"))
+    untracked = [relative for relative in paths if relative not in listed]
+    if untracked:
+        raise CheckError(
+            "sealed evidence is on disk but untracked by git (ignored or never added): "
+            + ", ".join(untracked)
+        )
+
+    committed = git_tracking(
+        ["cat-file", "--batch-check"],
+        repo=repo,
+        stdin="".join(f"{head}:{relative}\n" for relative in paths),
+    ).splitlines()
+    on_disk = git_tracking(
+        ["hash-object", "--stdin-paths"],
+        repo=repo,
+        stdin="".join(f"{relative}\n" for relative in paths),
+    ).splitlines()
+    if len(committed) != len(paths) or len(on_disk) != len(paths):
+        raise TrackingUnavailable(
+            f"{TRACKING_UNAVAILABLE}: git answered for {len(committed)}/{len(on_disk)} of "
+            f"{len(paths)} sealed paths"
+        )
+
+    uncommitted: list[str] = []
+    divergent: list[str] = []
+    for relative, row, disk_blob in zip(paths, committed, on_disk):
+        if row.endswith(" missing") or row.endswith(" ambiguous"):
+            uncommitted.append(relative)
+            continue
+        fields = row.split()
+        if len(fields) != 3 or fields[1] != "blob":
+            raise TrackingUnavailable(
+                f"{TRACKING_UNAVAILABLE}: unreadable git object row for {relative}: {row!r}"
+            )
+        if fields[0] != disk_blob:
+            divergent.append(f"{relative} (committed {fields[0][:12]}, on disk {disk_blob[:12]})")
+    if uncommitted:
+        raise CheckError(
+            f"sealed evidence is not committed at HEAD {head[:12]}: " + ", ".join(uncommitted)
+        )
+    if divergent:
+        raise CheckError(
+            f"sealed evidence differs from its committed blob at HEAD {head[:12]}: "
+            + ", ".join(divergent)
+        )
+
+
 def check_capture(evidence: dict[str, Any]) -> None:
     path = REPO / evidence["capture"]["path"]
     require_equal(sha256(path), evidence["capture"]["sha256"], "capture sha256")
@@ -448,6 +587,7 @@ def check(evidence: dict[str, Any]) -> None:
     check_files(evidence)
     check_artifact_binding(evidence)
     check_capture(evidence)
+    check_tracked_evidence(evidence)
     check_rent_and_accounts(evidence)
     require_equal(derive(evidence), evidence["projection"], "policy projection")
 
