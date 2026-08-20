@@ -25,23 +25,21 @@ ready in degg-research.
 
 ## Next 3 moves
 
-1. Merge fable/sha-syscall (verified: 1,420,608 bytes, software SHA gone,
-   every instruction 3-8x cheaper) and run the COMBINED reseal it and the V3
-   merge both owe: artifact audit, liveness re-measurement — with the
-   admission policy re-examined, not just re-measured, since thresholds
-   shaped for 1.1M-CU routes may be wrong for 200k — then the 100-gate
-   emission, manifest commit, post-commit check, fresh Persvati attestation.
-   Deploy the post-SHA ELF to devnet the moment the deployer is funded
-   (~10.4 SOL for one program; less if the smaller ELF is deployed alone).
-2. Propagate the compute-ceiling reattribution through CURRENT_TRUTH, the
-   sophistication and succinct-clearing docs, and BOTH filings' operational
-   readiness passages — from the merged measurement, not the branch note.
-3. Fee economics phase 1 (from FEE_ECONOMICS_FINDINGS): correct
+1. Persvati portable attestation of the new sealed identity (manifest commit
+   98fb070, ELF 187d5ee1/1,420,608): fresh job dir, prior methodology
+   (~/jobs/dragons-clutch-final-portable-attest-6743b9d-20260819-TChWnu on
+   persvati), artifact checks against the new digests. Deploy the post-SHA
+   ELF to devnet the moment the deployer is funded (~9.9 SOL for the
+   smaller ELF).
+2. Fee economics phase 1 (from FEE_ECONOMICS_FINDINGS): correct
    FEE_GEOMETRY/ECONOMICS (zero-price kernel channel into the section-5
    threat list, Props 10-12 absorbed, unsupported assertions fixed), add
    control arms 3 and 6 plus the zero-price laundering falsifier to the
    Python lab. Destination-before-base remains the design order; the
    RevenuePolicy object is the missing prerequisite.
+3. Classify the six V3 persistent account families in the 37-row terminal
+   inventory (the regression the V3 merge introduced), and take ember's
+   answer on the admission-shape quantum proposal (50k -> 10k).
 
 In flight: final 100-gate manifest emission for the syscall reseal, then
 Persvati attestation of the new identity. Owed to ember: the admission-shape
@@ -70,6 +68,15 @@ in the reseal lane's output) and the postmark doorstep (4 threads).
    Aug 24/24/27, perpetuals RFC Aug 26.
 
 ## Done log (2026-08-19 session)
+
+- MANIFEST RESEALED AT 100/100 EXECUTED GATES (98fb070; emission provenance
+  400bcbf; post-commit check --run-gates fully green: digests, toolchain,
+  declarations, exit codes, key lines all match). The combined reseal the
+  sha-syscall and V3 merges owed is COMPLETE: seal cfba5bb + gate repairs
+  2196111 + reattribution e6d477e + truth binding 400bcbf + manifest
+  98fb070, all pushed. First 100-gate emission found 9 contradictions; all
+  diagnosed and repaired (4 stale locks, 1 SBOM row, 3 undemotions, 1
+  unused-mut); second emission 99/100, third 100/100.
 
 - LIVENESS PROFILE RESEALED to the syscall-hashed runtime (d8c5034 enabling
   lock + cfba5bb seal): new root 187d5ee16f72946a, 24 files all regenerated,
