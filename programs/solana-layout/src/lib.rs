@@ -4891,6 +4891,73 @@ pub enum Intent {
         /// pair this must be the pair's first slice index.
         slice_index: u16,
     },
+    /// Release one still-ACTIVE reservation of a terminal (CLEARED or LAPSED)
+    /// general epoch back into its owner's Position — TerminalClosure's
+    /// economic half, owner-signed.
+    ///
+    /// On a LAPSED epoch every ACTIVE reservation is releasable.  On a
+    /// CLEARED epoch only an order the selected candidate's verified feed
+    /// gives a zero fill is releasable — a filled order's envelope is spoken
+    /// for by entitlement and consumption, never by release.
+    ReleaseTerminalReservation { market: MarketId, epoch: EpochId },
+    /// Close one exhausted settlement receipt of a CLEARED general epoch and
+    /// return its recorded principal to its recorded payer.
+    ///
+    /// Economic zero first: an unconsumed receipt refuses.  The recorded
+    /// principal comes from the receipt's general funding ledger; surplus
+    /// routes to the frozen neutral sink.
+    CloseGeneralReceipt {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+        slice_index: u16,
+    },
+    /// Close one RELEASED or CONSUMED reservation archive of a terminal
+    /// general epoch and return its rent to its recorded owner-payer.
+    ///
+    /// The reservation's own bytes record the payer (`owner` — the placement
+    /// actor funds the reservation), so no sibling ledger exists for this
+    /// family.  Requires the reservation's page already closed, which is what
+    /// keeps the page's reservation sweep provable.
+    CloseGeneralReservation { market: MarketId, epoch: EpochId },
+    /// Close one frozen order page of a terminal general epoch after proving
+    /// every live record's reservation is no longer ACTIVE or ENTITLED.
+    CloseGeneralPage {
+        market: MarketId,
+        epoch: EpochId,
+        page_index: u16,
+    },
+    /// Close the CLEARED epoch's provably empty final pot after every page is
+    /// closed (page closure is the executable proof that no entitlement or
+    /// consumption remains pending).
+    CloseGeneralPot { market: MarketId, epoch: EpochId },
+    /// Close one candidate record (and its feed, when still present) of a
+    /// terminal general epoch.
+    ///
+    /// A non-selected candidate closes at terminality.  The SELECTED
+    /// candidate's pair closes only after the pot and every page are closed:
+    /// its feed carries the fill proofs post-clear releases consume.
+    CloseGeneralCandidate {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+    },
+    /// Close one clearing checkpoint (complete, refused, or half-grown) of a
+    /// terminal general epoch.
+    ///
+    /// While the SELECTED candidate's record still stands, its checkpoint
+    /// closes only once the pot exists (the entitlement freeze consumed the
+    /// verdict) or every page is closed — never out from under a pending
+    /// freeze.
+    CloseGeneralClearWork {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+    },
+    /// Close the terminal general epoch and its schedule window together —
+    /// the root of the close DAG, admitted only after the pot and every page
+    /// are absent and every retained candidate is closed or unclosable.
+    CloseGeneralEpoch { market: MarketId, epoch: EpochId },
 }
 
 /// Most fills one [`Intent::WriteCandidateFeed`] chunk may carry.
@@ -5143,6 +5210,25 @@ const _: () = assert!(SEAL_CANDIDATE_TAG == WRITE_CANDIDATE_FEED_TAG + 1);
 const _: () = assert!(FINALIZE_SELECTION_TAG == SEAL_CANDIDATE_TAG + 1);
 const _: () = assert!(FREEZE_ENTITLEMENT_TAG == FINALIZE_SELECTION_TAG + 1);
 const _: () = assert!(ENTITLE_SLICE_TAG == FREEZE_ENTITLEMENT_TAG + 1);
+/* The TerminalClosure family (release + dependency-ordered rent closes for
+ * the general clearing plane) continues the same contiguous ladder: each
+ * intent takes exactly the next tag after the entitlement freeze pair. */
+const RELEASE_TERMINAL_RESERVATION_TAG: u8 = 60;
+const CLOSE_GENERAL_RECEIPT_TAG: u8 = 61;
+const CLOSE_GENERAL_RESERVATION_TAG: u8 = 62;
+const CLOSE_GENERAL_PAGE_TAG: u8 = 63;
+const CLOSE_GENERAL_POT_TAG: u8 = 64;
+const CLOSE_GENERAL_CANDIDATE_TAG: u8 = 65;
+const CLOSE_GENERAL_CLEAR_WORK_TAG: u8 = 66;
+const CLOSE_GENERAL_EPOCH_TAG: u8 = 67;
+const _: () = assert!(RELEASE_TERMINAL_RESERVATION_TAG == ENTITLE_SLICE_TAG + 1);
+const _: () = assert!(CLOSE_GENERAL_RECEIPT_TAG == RELEASE_TERMINAL_RESERVATION_TAG + 1);
+const _: () = assert!(CLOSE_GENERAL_RESERVATION_TAG == CLOSE_GENERAL_RECEIPT_TAG + 1);
+const _: () = assert!(CLOSE_GENERAL_PAGE_TAG == CLOSE_GENERAL_RESERVATION_TAG + 1);
+const _: () = assert!(CLOSE_GENERAL_POT_TAG == CLOSE_GENERAL_PAGE_TAG + 1);
+const _: () = assert!(CLOSE_GENERAL_CANDIDATE_TAG == CLOSE_GENERAL_POT_TAG + 1);
+const _: () = assert!(CLOSE_GENERAL_CLEAR_WORK_TAG == CLOSE_GENERAL_CANDIDATE_TAG + 1);
+const _: () = assert!(CLOSE_GENERAL_EPOCH_TAG == CLOSE_GENERAL_CLEAR_WORK_TAG + 1);
 // The widest chunked write stays inside the frozen intent bound; the slices
 // shape is the widest at 308 of 310 bytes.
 const _: () = assert!(
@@ -5240,6 +5326,15 @@ impl Intent {
             Self::FinalizeSelection { .. } => 2 + 32 + 32,
             Self::FreezeEntitlement { .. } => 2 + 32 + 32 + 32,
             Self::EntitleSlice { .. } => 2 + 32 + 32 + 32 + 2,
+            Self::ReleaseTerminalReservation { .. }
+            | Self::CloseGeneralReservation { .. }
+            | Self::CloseGeneralPot { .. }
+            | Self::CloseGeneralEpoch { .. } => 2 + 32 + 32,
+            Self::CloseGeneralPage { .. } => 2 + 32 + 32 + 2,
+            Self::CloseGeneralCandidate { .. } | Self::CloseGeneralClearWork { .. } => {
+                2 + 32 + 32 + 32
+            }
+            Self::CloseGeneralReceipt { .. } => 2 + 32 + 32 + 32 + 2,
         }
     }
     /// Validate and encode into a caller-provided buffer.
@@ -5940,6 +6035,72 @@ impl Intent {
                 check_hash(*epoch)?;
                 check_hash(*candidate)?;
                 put_header(&mut w, ENTITLE_SLICE_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.hash(*candidate)?;
+                w.u16(*slice_index)?
+            }
+            Self::ReleaseTerminalReservation { market, epoch }
+            | Self::CloseGeneralReservation { market, epoch }
+            | Self::CloseGeneralPot { market, epoch }
+            | Self::CloseGeneralEpoch { market, epoch } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                let tag = match self {
+                    Self::ReleaseTerminalReservation { .. } => RELEASE_TERMINAL_RESERVATION_TAG,
+                    Self::CloseGeneralReservation { .. } => CLOSE_GENERAL_RESERVATION_TAG,
+                    Self::CloseGeneralPot { .. } => CLOSE_GENERAL_POT_TAG,
+                    _ => CLOSE_GENERAL_EPOCH_TAG,
+                };
+                put_header(&mut w, tag, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?
+            }
+            Self::CloseGeneralPage {
+                market,
+                epoch,
+                page_index,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                put_header(&mut w, CLOSE_GENERAL_PAGE_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.u16(*page_index)?
+            }
+            Self::CloseGeneralCandidate {
+                market,
+                epoch,
+                candidate,
+            }
+            | Self::CloseGeneralClearWork {
+                market,
+                epoch,
+                candidate,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                check_hash(*candidate)?;
+                let tag = if matches!(self, Self::CloseGeneralCandidate { .. }) {
+                    CLOSE_GENERAL_CANDIDATE_TAG
+                } else {
+                    CLOSE_GENERAL_CLEAR_WORK_TAG
+                };
+                put_header(&mut w, tag, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.hash(*candidate)?
+            }
+            Self::CloseGeneralReceipt {
+                market,
+                epoch,
+                candidate,
+                slice_index,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                check_hash(*candidate)?;
+                put_header(&mut w, CLOSE_GENERAL_RECEIPT_TAG, INTENT_VERSION)?;
                 w.hash(*market)?;
                 w.hash(*epoch)?;
                 w.hash(*candidate)?;
@@ -6684,6 +6845,75 @@ impl Intent {
                 check_hash(epoch)?;
                 check_hash(candidate)?;
                 Ok(Self::EntitleSlice {
+                    market,
+                    epoch,
+                    candidate,
+                    slice_index,
+                })
+            }
+            RELEASE_TERMINAL_RESERVATION_TAG
+            | CLOSE_GENERAL_RESERVATION_TAG
+            | CLOSE_GENERAL_POT_TAG
+            | CLOSE_GENERAL_EPOCH_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                Ok(match tag {
+                    RELEASE_TERMINAL_RESERVATION_TAG => {
+                        Self::ReleaseTerminalReservation { market, epoch }
+                    }
+                    CLOSE_GENERAL_RESERVATION_TAG => Self::CloseGeneralReservation { market, epoch },
+                    CLOSE_GENERAL_POT_TAG => Self::CloseGeneralPot { market, epoch },
+                    _ => Self::CloseGeneralEpoch { market, epoch },
+                })
+            }
+            CLOSE_GENERAL_PAGE_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let page_index = r.u16()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                Ok(Self::CloseGeneralPage {
+                    market,
+                    epoch,
+                    page_index,
+                })
+            }
+            CLOSE_GENERAL_CANDIDATE_TAG | CLOSE_GENERAL_CLEAR_WORK_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let candidate = r.hash()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                check_hash(candidate)?;
+                Ok(if tag == CLOSE_GENERAL_CANDIDATE_TAG {
+                    Self::CloseGeneralCandidate {
+                        market,
+                        epoch,
+                        candidate,
+                    }
+                } else {
+                    Self::CloseGeneralClearWork {
+                        market,
+                        epoch,
+                        candidate,
+                    }
+                })
+            }
+            CLOSE_GENERAL_RECEIPT_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let candidate = r.hash()?;
+                let slice_index = r.u16()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                check_hash(candidate)?;
+                Ok(Self::CloseGeneralReceipt {
                     market,
                     epoch,
                     candidate,
@@ -9198,6 +9428,95 @@ mod tests {
         assert_eq!(Intent::decode(&b[..n]), Ok(i));
         assert_eq!(Intent::decode(&b[..n - 1]), Err(CodecError::Truncated));
     }
+    #[test]
+    fn terminal_closure_intents_round_trip_and_stay_tag_contiguous() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 4);
+        let candidate = h(3);
+        let mut b = [0; MAX_INTENT_BYTES];
+        let cases = [
+            (
+                Intent::ReleaseTerminalReservation { market, epoch },
+                RELEASE_TERMINAL_RESERVATION_TAG,
+                66usize,
+            ),
+            (
+                Intent::CloseGeneralReceipt {
+                    market,
+                    epoch,
+                    candidate,
+                    slice_index: 7,
+                },
+                CLOSE_GENERAL_RECEIPT_TAG,
+                100,
+            ),
+            (
+                Intent::CloseGeneralReservation { market, epoch },
+                CLOSE_GENERAL_RESERVATION_TAG,
+                66,
+            ),
+            (
+                Intent::CloseGeneralPage {
+                    market,
+                    epoch,
+                    page_index: 2,
+                },
+                CLOSE_GENERAL_PAGE_TAG,
+                68,
+            ),
+            (
+                Intent::CloseGeneralPot { market, epoch },
+                CLOSE_GENERAL_POT_TAG,
+                66,
+            ),
+            (
+                Intent::CloseGeneralCandidate {
+                    market,
+                    epoch,
+                    candidate,
+                },
+                CLOSE_GENERAL_CANDIDATE_TAG,
+                98,
+            ),
+            (
+                Intent::CloseGeneralClearWork {
+                    market,
+                    epoch,
+                    candidate,
+                },
+                CLOSE_GENERAL_CLEAR_WORK_TAG,
+                98,
+            ),
+            (
+                Intent::CloseGeneralEpoch { market, epoch },
+                CLOSE_GENERAL_EPOCH_TAG,
+                66,
+            ),
+        ];
+        for (index, (intent, tag, len)) in cases.iter().enumerate() {
+            let n = intent.encode(&mut b).unwrap();
+            assert_eq!(n, intent.encoded_len(), "{intent:?}");
+            assert_eq!(n, *len, "{intent:?}");
+            assert_eq!(&b[..2], [*tag, INTENT_VERSION], "{intent:?}");
+            assert_eq!(Intent::decode(&b[..n]), Ok(*intent));
+            assert_eq!(Intent::decode(&b[..n - 1]), Err(CodecError::Truncated));
+            // The family is tag-contiguous from the entitlement pair on.
+            assert_eq!(*tag, ENTITLE_SLICE_TAG + 1 + index as u8);
+        }
+
+        // Zero identities refuse on both sides of the wire.
+        let zero = Intent::CloseGeneralCandidate {
+            market,
+            epoch,
+            candidate: Hash32::ZERO,
+        };
+        assert_eq!(zero.encode(&mut b), Err(CodecError::ZeroIdentity));
+        let good = Intent::CloseGeneralEpoch { market, epoch };
+        let n = good.encode(&mut b).unwrap();
+        b[2..34].fill(0);
+        assert_eq!(Intent::decode(&b[..n]), Err(CodecError::ZeroIdentity));
+    }
+
     #[test]
     fn intent_zero_identity_refuses() {
         let i = Intent::Split {
