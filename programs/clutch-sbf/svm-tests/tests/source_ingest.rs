@@ -69,7 +69,14 @@ async fn send(
     bank: &mut ProgramTestContext,
     instructions: &[Instruction],
 ) -> (Result<(), TransactionError>, u64) {
-    let blockhash = bank.banks_client.get_latest_blockhash().await.unwrap();
+    // A transaction is deduplicated by its signature, which covers the message
+    // and the blockhash but nothing off-chain.  Two scenarios below are
+    // byte-identical transactions that differ only in the mock source account
+    // set between them -- a refused seal and the seal that then succeeds -- so
+    // reusing one blockhash makes the runtime answer `AlreadyProcessed` and the
+    // program never runs at all.  Demanding a blockhash the previous
+    // transaction did not use is what keeps the answer the program's.
+    let blockhash = bank.get_new_latest_blockhash().await.unwrap();
     let transaction = Transaction::new_signed_with_payer(
         instructions,
         Some(&bank.payer.pubkey()),

@@ -1,12 +1,19 @@
-//! Real-SBF evidence for the bounded V2 authority chain and its measured STOP.
+//! Real-SBF evidence for the bounded V2 authority chain and its measured cost.
 //!
 //! Candidate, Window, receipt, pot, and Epoch accounts start as predictable
 //! one-lamport System accounts. The real program initializes/freezes the Epoch
 //! and admits a streaming candidate set without genesis-injected selection
-//! authority. Full top-three selection deliberately remains non-promotable:
-//! complete cached-domain re-execution exceeds the 1.4m-CU transaction cap and
-//! rolls back every authority mutation. V3 must stage verification and bound
-//! persistent candidate rent before this path may be called live.
+//! authority.
+//!
+//! Full top-three selection used to be a measured STOP here: complete
+//! cached-domain re-execution exceeded the 1.4m-CU transaction cap and rolled
+//! back every authority mutation. That was a cost of the software SHA-256 the
+//! program used to carry, not of the selection itself, and it no longer holds
+//! now that identities are hashed with the runtime syscall. The measurement
+//! below records the new cost. It is not a promotion decision: V3 still stages
+//! verification and bounds persistent candidate rent, and whether this path may
+//! be called live is a question about rent and staging that this file does not
+//! answer.
 
 use {
     clutch_batch_policy_identity::{
@@ -854,26 +861,36 @@ async fn direct_selection_v2_is_a_measured_select_stop_with_rollback() {
         rollback_before
     );
 
+    // Until the program hashed with the SHA-256 syscall, this select exhausted
+    // the whole 1.4m-CU cap and rolled back: the software compression function
+    // it carried made complete cached-domain re-execution unaffordable, and
+    // that measurement is the stated reason V3 stages verification instead.
+    // With the syscall the same instruction now completes with room to spare.
+    // This is a *measurement*, not a promotion: nothing here says V2 selection
+    // should be called live, and the staged V3 path remains the shipped one.
+    // What the assertion holds down is that the cost moved and that the
+    // instruction now has an effect instead of stopping mid-flight.
     let select = fixture
         .select(&mut context, payer, fixture.policy, false)
         .await;
-    let stopped_before = snapshot(&mut context, &replay_watch).await;
+    let before_select = snapshot(&mut context, &replay_watch).await;
     let (result, select_cu) = send(&mut context, select, None).await;
-    assert_eq!(
-        result,
-        Err(TransactionError::InstructionError(
-            1,
-            InstructionError::ProgramFailedToComplete
-        ))
+    result.expect("V2 select completes once the program hashes with the syscall");
+    assert!(
+        select_cu < u64::from(CU_LIMIT),
+        "select consumed {select_cu} of a {CU_LIMIT} cap"
     );
-    assert_eq!(snapshot(&mut context, &replay_watch).await, stopped_before);
-    assert_eq!(select_cu, u64::from(CU_LIMIT));
+    assert_ne!(
+        snapshot(&mut context, &replay_watch).await,
+        before_select,
+        "a completed select must have committed the selection it computed"
+    );
 
-    for units in [init_cu, freeze_cu, max_submit_cu] {
+    for units in [init_cu, freeze_cu, max_submit_cu, select_cu] {
         assert!(units < u64::from(CU_LIMIT));
     }
     eprintln!(
-        "DirectSelectionV2 STOP CU init={init_cu} freeze={freeze_cu} submit_max={max_submit_cu} select_stop={select_cu}"
+        "DirectSelectionV2 CU init={init_cu} freeze={freeze_cu} submit_max={max_submit_cu} select={select_cu}"
     );
 }
 

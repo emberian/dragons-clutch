@@ -1225,6 +1225,7 @@ dependencies = [
  "clutch-batch",
  "clutch-liveness",
  "sha2 0.10.9",
+ "solana-sha256-hasher",
 ]
 
 [[package]]

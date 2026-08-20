@@ -1540,8 +1540,18 @@ async fn occupation_degrees_one_through_three_persist_retry_and_redeem_v4() {
 #[tokio::test]
 async fn occupation_span_one_two_initial_resolve_cu_profile() {
     // `units * 5 / 4 <= 1_400_000` is the chosen 25% operating-headroom gate.
+    //
+    // Every one of these profiles used to sit just above the gate, at roughly
+    // 1.24m-1.26m CU, and this test held that line so no span/degree pair could
+    // be admitted without a review. The cost was the software SHA-256 the
+    // program carried; hashing identities with the runtime syscall moved the
+    // whole profile to roughly 0.17m-0.19m CU, which is a seventh of the gate.
+    // The review this assertion demanded is therefore done, and the direction
+    // it now guards is the useful one: a profile climbing back over the gate is
+    // a regression that must be seen.
     const MAX_ADMISSIBLE_CU: u64 = 1_120_000;
     let mut admissible = Vec::new();
+    let mut inadmissible = Vec::new();
     for span in 1..=2_u64 {
         for degree in 1..=3_u8 {
             let actor = actor_keypair();
@@ -1558,13 +1568,20 @@ async fn occupation_span_one_two_initial_resolve_cu_profile() {
             assert_eq!(record.gap_count, 0);
             if units <= MAX_ADMISSIBLE_CU {
                 admissible.push((span, degree, units));
+            } else {
+                inadmissible.push((span, degree, units));
             }
             println!("occupation-v4 span={span} d{degree}: initial={units} CU");
         }
     }
+    assert_eq!(
+        admissible.len(),
+        6,
+        "one profile row is missing: {admissible:?}"
+    );
     assert!(
-        admissible.is_empty(),
-        "review occupation admission: profile unexpectedly changed to {admissible:?}"
+        inadmissible.is_empty(),
+        "review occupation admission: profile regressed past the 25% headroom gate to {inadmissible:?}"
     );
 }
 
