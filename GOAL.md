@@ -67,6 +67,18 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- CYCLE C ATTESTED: Persvati 44/44 PASS, 0 STOP over exact 7e6066f (+1
+  contract-driven gate: audit_internal_consistency, born from the
+  relocation-finding evidence shape; the relocated-equality assert honestly
+  FLIPPED to the recorded PATH_SENSITIVE disposition — asserting equality
+  would now be a false claim). ELF d6929549 five contexts; all FIVE
+  historical roots byte-verified with the set asserted exactly; 1,394 file
+  comparisons x2 zero mismatches. Job:
+  persvati:/home/ember/jobs/dragons-clutch-portable-attest-7e6066f-20260820-JY7Zte.
+  Memory updated to the walk-era baseline. T2-7 SELECTION LANE LAUNCHED
+  (tags 54-55, total-order over verified components only, displaced-close
+  and tie-digest gates).
+
 - CYCLE C SEALED (liveness be24ded, manifest 7e6066f at 100/100,
   post-commit check OK, pushed; attestation lane running): root
   d692954949d57db22, 28 files, 12 measurement families — the walk's own CU
