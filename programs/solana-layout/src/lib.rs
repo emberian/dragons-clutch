@@ -4785,6 +4785,201 @@ pub enum Intent {
         epoch: EpochId,
         candidate: Hash32,
     },
+    /// Begin one general candidate submission: create the `SUBMITTED`
+    /// [`CandidateRecord`] and the staging [`clearing::CandidateFeedStage`]
+    /// at their canonical `(epoch, candidate)` PDAs.
+    ///
+    /// The candidate identity does not travel — the program recomputes it
+    /// from the free coordinates carried here, exactly as both accounts'
+    /// codecs recompute it, and `order_len` comes from the frozen window's
+    /// exact live cardinality rather than from any claim.  The score
+    /// components carried here are **claims**: they seed the record and the
+    /// feed header, they order registry admission at seal time, and
+    /// verification overwrites them; selection never reads an unverified one.
+    ///
+    /// The feed's content — up to 64 fills and 416 witness slices, 6,266
+    /// bytes in all — cannot ride one transaction, which is what the wire
+    /// demands the staged shape for: content arrives through
+    /// [`Intent::WriteCandidateFeed`] chunks and [`Intent::SealCandidate`]
+    /// is the one-way door into a consumable feed.
+    SubmitCandidate {
+        market: MarketId,
+        epoch: EpochId,
+        /// Exact scaled prices on the simplex; inactive outcomes are zero.
+        prices: [u64; MAX_OUTCOMES],
+        /// `sigma`: complete sets created by the single global virtual split.
+        virtual_split: u64,
+        /// `mu`: complete sets destroyed by the single global virtual merge.
+        virtual_merge: u64,
+        /// Honored minimum-fill subset, one bit per order.
+        honored_aon_mask: u64,
+        /// Declared explicit pairing-witness length, if one is declared.
+        declared_slices: Option<u16>,
+        /// Claimed score component 1, net of the self-overlap term.
+        weighted_direct_volume: i128,
+        /// Claimed score component 3, in exact price units.
+        limit_surplus_price_units: u128,
+        /// Claimed score component 4: distinct participating owners.
+        distinct_owners: u16,
+    },
+    /// Append one content chunk to a staging candidate feed at its
+    /// sequential cursor.
+    ///
+    /// Fills first, then witness slices — one cursor, one sequence, replay
+    /// held by state: the envelope sequence must equal the stage's
+    /// elements-written count.  Writes are only possible while the account
+    /// carries the stage tag; a sealed feed refuses every one of these by
+    /// tag, which is what keeps the streamed bytes and the digest-folded
+    /// bytes identical.
+    WriteCandidateFeed {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+        chunk: CandidateFeedChunk,
+    },
+    /// Seal one complete staging feed and admit the candidate into the
+    /// window's bounded retained registry.
+    ///
+    /// The one-way door: the stage prefix becomes the real feed header, the
+    /// whole account re-verifies, and the candidate takes a registry slot —
+    /// displacing the worst retained candidate when the registry is full,
+    /// which closes the displaced candidate's feed in this same transaction
+    /// and marks its record `SUPERSEDED` with a zeroed verified digest, or
+    /// refusing when the incoming claim cannot beat the worst.
+    SealCandidate {
+        market: MarketId,
+        epoch: EpochId,
+        candidate: Hash32,
+    },
+    /// Close one general epoch's candidate window and select the winner.
+    ///
+    /// Permissionless at or after the window's selection deadline: compares
+    /// **only** `VERIFIED` retained candidates by `FullScoreV1::total_order`
+    /// over their persisted verified components and re-derived tie digests —
+    /// never a claimed score — stamping the winner `SELECTED` and the epoch
+    /// `EPOCH_PHASE_CLEARED`.  With zero verified candidates the epoch
+    /// lapses honestly to `EPOCH_PHASE_LAPSED` and nothing is selected.
+    FinalizeSelection { market: MarketId, epoch: EpochId },
+}
+
+/// Most fills one [`Intent::WriteCandidateFeed`] chunk may carry.
+///
+/// Sized so the widest chunked-write intent stays inside [`MAX_INTENT_BYTES`]:
+/// a full 64-fill vector is three chunks.
+pub const FEED_FILLS_PER_CHUNK: usize = 24;
+/// Most witness slices one [`Intent::WriteCandidateFeed`] chunk may carry.
+///
+/// The full 416-slice witness is twenty-six chunks; the canonical witnesses
+/// of small books are one.
+pub const FEED_SLICES_PER_CHUNK: usize = 16;
+
+/// One content chunk of a staged candidate-feed submission.
+///
+/// The array is fixed-width storage for a variable count: elements at and
+/// beyond `count` are canonical zero padding in memory and do not travel on
+/// the wire.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CandidateFeedChunk {
+    /// The next `count` fills, in live-rank order at the stage cursor.
+    Fills {
+        /// Live fills in this chunk; `1..=FEED_FILLS_PER_CHUNK`.
+        count: u8,
+        /// The fills; entries at and beyond `count` are canonical zero.
+        fills: [u64; FEED_FILLS_PER_CHUNK],
+    },
+    /// The next `count` declared witness slices at the stage cursor.
+    Slices {
+        /// Live slices in this chunk; `1..=FEED_SLICES_PER_CHUNK`.
+        count: u8,
+        /// The slices; entries at and beyond `count` are canonical padding.
+        slices: [clearing::PairingSlice; FEED_SLICES_PER_CHUNK],
+    },
+}
+
+/// Wire discriminant of a fills chunk.
+const FEED_CHUNK_FILLS: u8 = 0;
+/// Wire discriminant of a slices chunk.
+const FEED_CHUNK_SLICES: u8 = 1;
+
+/// The chunk admissibility rule, shared by the encoder and the decoder.
+///
+/// What the wire can decide alone: a chunk moves at least one element and at
+/// most its width, in-memory padding beyond the count is canonical zero, a
+/// live slice is representationally a slice (virtual legs on their admitted
+/// sides, a nonzero quantity).  Order-index bounds belong to the staged
+/// account and are checked there.
+fn check_feed_chunk(chunk: &CandidateFeedChunk) -> Result<()> {
+    match chunk {
+        CandidateFeedChunk::Fills { count, fills } => {
+            if *count == 0 || *count as usize > FEED_FILLS_PER_CHUNK {
+                return Err(CodecError::InvalidCount);
+            }
+            let mut i = *count as usize;
+            while i < FEED_FILLS_PER_CHUNK {
+                if fills[i] != 0 {
+                    return Err(CodecError::NonCanonicalPadding);
+                }
+                i += 1;
+            }
+        }
+        CandidateFeedChunk::Slices { count, slices } => {
+            if *count == 0 || *count as usize > FEED_SLICES_PER_CHUNK {
+                return Err(CodecError::InvalidCount);
+            }
+            let mut i = 0;
+            while i < FEED_SLICES_PER_CHUNK {
+                let slice = &slices[i];
+                if i < *count as usize {
+                    if matches!(slice.buy_ref, clearing::LegRef::Split)
+                        || matches!(slice.sell_ref, clearing::LegRef::Merge)
+                    {
+                        return Err(CodecError::InvalidEnum);
+                    }
+                    if slice.quantity == 0 {
+                        return Err(CodecError::ZeroValue);
+                    }
+                } else if *slice != clearing::PairingSlice::PADDING {
+                    return Err(CodecError::NonCanonicalPadding);
+                }
+                i += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The submission-coordinate admissibility rule, shared by both directions.
+///
+/// Exactly the coordinate rules a wire without the frozen domain can decide:
+/// nonzero identities, canonical churn (never split and merge at once, sum in
+/// range), a declared witness inside [`MAX_SLICES`], and a distinct-owner
+/// claim inside the book bound.  Simplex membership and mask width need the
+/// frozen epoch and are the account plane's.
+fn check_submit_candidate_shape(
+    market: MarketId,
+    epoch: EpochId,
+    virtual_split: u64,
+    virtual_merge: u64,
+    declared_slices: Option<u16>,
+    distinct_owners: u16,
+) -> Result<()> {
+    check_hash(market)?;
+    check_hash(epoch)?;
+    if virtual_split != 0 && virtual_merge != 0 {
+        return Err(CodecError::InvalidEnum);
+    }
+    virtual_split
+        .checked_add(virtual_merge)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    if let Some(declared) = declared_slices {
+        if declared as usize > MAX_SLICES {
+            return Err(CodecError::InvalidCount);
+        }
+    }
+    if distinct_owners as usize > MAX_EPOCH_ORDERS {
+        return Err(CodecError::InvalidCount);
+    }
+    Ok(())
 }
 
 /// The placement admissibility rule, shared by the encoder and the decoder.
@@ -4897,6 +5092,10 @@ const FREEZE_EPOCH_TAG: u8 = 50;
 const ADVANCE_CLEAR_WORK_TAG: u8 = 51;
 const ADVANCE_CLEAR_SLICES_TAG: u8 = 52;
 const COMPLETE_CLEAR_WORK_TAG: u8 = 53;
+const SUBMIT_CANDIDATE_TAG: u8 = 54;
+const WRITE_CANDIDATE_FEED_TAG: u8 = 55;
+const SEAL_CANDIDATE_TAG: u8 = 56;
+const FINALIZE_SELECTION_TAG: u8 = 57;
 const _: () = assert!(INIT_CLEAR_WORK_TAG == direct_selection_v3::LAST_DIRECT_V3_INTENT_TAG + 1);
 // The Tier 2 clearing family is tag-contiguous: each intent takes exactly the
 // next tag, so a gap is a compile error rather than a squatting hazard.
@@ -4905,6 +5104,19 @@ const _: () = assert!(FREEZE_EPOCH_TAG == INIT_EPOCH_TAG + 1);
 const _: () = assert!(ADVANCE_CLEAR_WORK_TAG == FREEZE_EPOCH_TAG + 1);
 const _: () = assert!(ADVANCE_CLEAR_SLICES_TAG == ADVANCE_CLEAR_WORK_TAG + 1);
 const _: () = assert!(COMPLETE_CLEAR_WORK_TAG == ADVANCE_CLEAR_SLICES_TAG + 1);
+const _: () = assert!(SUBMIT_CANDIDATE_TAG == COMPLETE_CLEAR_WORK_TAG + 1);
+const _: () = assert!(WRITE_CANDIDATE_FEED_TAG == SUBMIT_CANDIDATE_TAG + 1);
+const _: () = assert!(SEAL_CANDIDATE_TAG == WRITE_CANDIDATE_FEED_TAG + 1);
+const _: () = assert!(FINALIZE_SELECTION_TAG == SEAL_CANDIDATE_TAG + 1);
+// The widest chunked write stays inside the frozen intent bound; the slices
+// shape is the widest at 308 of 310 bytes.
+const _: () = assert!(
+    2 + (3 * HASH_BYTES) + 1 + 1 + (FEED_SLICES_PER_CHUNK * clearing::PAIRING_SLICE_BYTES)
+        <= MAX_INTENT_BYTES
+);
+const _: () = assert!(
+    2 + (3 * HASH_BYTES) + 1 + 1 + (FEED_FILLS_PER_CHUNK * 8) <= MAX_INTENT_BYTES
+);
 
 fn resolution_work_codec(error: resolution_work::ResolutionWorkCodecError) -> CodecError {
     use resolution_work::ResolutionWorkCodecError as WorkError;
@@ -4973,6 +5185,24 @@ impl Intent {
                 2 + 32 + 32 + 32 + 2
             }
             Self::CompleteClearWork { .. } => 2 + 32 + 32 + 32,
+            Self::SubmitCandidate { .. } => {
+                2 + 32 + 32 + (MAX_OUTCOMES * 8) + 8 + 8 + 8 + 1 + 2 + 16 + 16 + 2
+            }
+            Self::WriteCandidateFeed { chunk, .. } => {
+                2 + 32
+                    + 32
+                    + 32
+                    + 1
+                    + 1
+                    + match chunk {
+                        CandidateFeedChunk::Fills { count, .. } => *count as usize * 8,
+                        CandidateFeedChunk::Slices { count, .. } => {
+                            *count as usize * clearing::PAIRING_SLICE_BYTES
+                        }
+                    }
+            }
+            Self::SealCandidate { .. } => 2 + 32 + 32 + 32,
+            Self::FinalizeSelection { .. } => 2 + 32 + 32,
         }
     }
     /// Validate and encode into a caller-provided buffer.
@@ -5552,6 +5782,103 @@ impl Intent {
                 w.hash(*market)?;
                 w.hash(*epoch)?;
                 w.hash(*candidate)?
+            }
+            Self::SubmitCandidate {
+                market,
+                epoch,
+                prices,
+                virtual_split,
+                virtual_merge,
+                honored_aon_mask,
+                declared_slices,
+                weighted_direct_volume,
+                limit_surplus_price_units,
+                distinct_owners,
+            } => {
+                check_submit_candidate_shape(
+                    *market,
+                    *epoch,
+                    *virtual_split,
+                    *virtual_merge,
+                    *declared_slices,
+                    *distinct_owners,
+                )?;
+                put_header(&mut w, SUBMIT_CANDIDATE_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.amounts(prices)?;
+                w.u64(*virtual_split)?;
+                w.u64(*virtual_merge)?;
+                w.u64(*honored_aon_mask)?;
+                // The witness declaration mirrors the feed's flag-plus-count:
+                // "no witness" and "a witness of zero slices" are different
+                // candidates and both are representable.
+                w.u8(u8::from(declared_slices.is_some()))?;
+                w.u16(declared_slices.unwrap_or(0))?;
+                w.i128(*weighted_direct_volume)?;
+                w.u128(*limit_surplus_price_units)?;
+                w.u16(*distinct_owners)?
+            }
+            Self::WriteCandidateFeed {
+                market,
+                epoch,
+                candidate,
+                chunk,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                check_hash(*candidate)?;
+                check_feed_chunk(chunk)?;
+                put_header(&mut w, WRITE_CANDIDATE_FEED_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.hash(*candidate)?;
+                match chunk {
+                    CandidateFeedChunk::Fills { count, fills } => {
+                        w.u8(FEED_CHUNK_FILLS)?;
+                        w.u8(*count)?;
+                        let mut i = 0;
+                        while i < *count as usize {
+                            w.u64(fills[i])?;
+                            i += 1;
+                        }
+                    }
+                    CandidateFeedChunk::Slices { count, slices } => {
+                        w.u8(FEED_CHUNK_SLICES)?;
+                        w.u8(*count)?;
+                        let mut i = 0;
+                        while i < *count as usize {
+                            let slice = &slices[i];
+                            w.u8(slice.buy_ref.kind())?;
+                            w.u8(slice.buy_ref.index())?;
+                            w.u8(slice.sell_ref.kind())?;
+                            w.u8(slice.sell_ref.index())?;
+                            w.u8(slice.outcome)?;
+                            w.u64(slice.quantity)?;
+                            i += 1;
+                        }
+                    }
+                }
+            }
+            Self::SealCandidate {
+                market,
+                epoch,
+                candidate,
+            } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                check_hash(*candidate)?;
+                put_header(&mut w, SEAL_CANDIDATE_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?;
+                w.hash(*candidate)?
+            }
+            Self::FinalizeSelection { market, epoch } => {
+                check_hash(*market)?;
+                check_hash(*epoch)?;
+                put_header(&mut w, FINALIZE_SELECTION_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*epoch)?
             }
         };
         Ok(w.at)
@@ -6143,6 +6470,130 @@ impl Intent {
                     epoch,
                     candidate,
                 })
+            }
+            SUBMIT_CANDIDATE_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let prices = r.amounts()?;
+                let virtual_split = r.u64()?;
+                let virtual_merge = r.u64()?;
+                let honored_aon_mask = r.u64()?;
+                let witness_flag = r.u8()?;
+                let declared = r.u16()?;
+                let weighted_direct_volume = r.i128()?;
+                let limit_surplus_price_units = r.u128()?;
+                let distinct_owners = r.u16()?;
+                r.done()?;
+                let declared_slices = match witness_flag {
+                    0 => {
+                        // An undeclared witness has no length; the count byte
+                        // pair is padding and padding is canonical zero.
+                        if declared != 0 {
+                            return Err(CodecError::NonCanonicalPadding);
+                        }
+                        None
+                    }
+                    1 => Some(declared),
+                    _ => return Err(CodecError::InvalidEnum),
+                };
+                check_submit_candidate_shape(
+                    market,
+                    epoch,
+                    virtual_split,
+                    virtual_merge,
+                    declared_slices,
+                    distinct_owners,
+                )?;
+                Ok(Self::SubmitCandidate {
+                    market,
+                    epoch,
+                    prices,
+                    virtual_split,
+                    virtual_merge,
+                    honored_aon_mask,
+                    declared_slices,
+                    weighted_direct_volume,
+                    limit_surplus_price_units,
+                    distinct_owners,
+                })
+            }
+            WRITE_CANDIDATE_FEED_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let candidate = r.hash()?;
+                let kind = r.u8()?;
+                let count = r.u8()?;
+                let chunk = match kind {
+                    FEED_CHUNK_FILLS => {
+                        if count == 0 || count as usize > FEED_FILLS_PER_CHUNK {
+                            return Err(CodecError::InvalidCount);
+                        }
+                        let mut fills = [0u64; FEED_FILLS_PER_CHUNK];
+                        let mut i = 0;
+                        while i < count as usize {
+                            fills[i] = r.u64()?;
+                            i += 1;
+                        }
+                        CandidateFeedChunk::Fills { count, fills }
+                    }
+                    FEED_CHUNK_SLICES => {
+                        if count == 0 || count as usize > FEED_SLICES_PER_CHUNK {
+                            return Err(CodecError::InvalidCount);
+                        }
+                        let mut slices = [clearing::PairingSlice::PADDING; FEED_SLICES_PER_CHUNK];
+                        let mut i = 0;
+                        while i < count as usize {
+                            let buy_kind = r.u8()?;
+                            let buy_index = r.u8()?;
+                            let sell_kind = r.u8()?;
+                            let sell_index = r.u8()?;
+                            let outcome = r.u8()?;
+                            let quantity = r.u64()?;
+                            slices[i] = clearing::PairingSlice {
+                                buy_ref: clearing::decode_leg(buy_kind, buy_index)?,
+                                sell_ref: clearing::decode_leg(sell_kind, sell_index)?,
+                                outcome,
+                                quantity,
+                            };
+                            i += 1;
+                        }
+                        CandidateFeedChunk::Slices { count, slices }
+                    }
+                    _ => return Err(CodecError::InvalidEnum),
+                };
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                check_hash(candidate)?;
+                check_feed_chunk(&chunk)?;
+                Ok(Self::WriteCandidateFeed {
+                    market,
+                    epoch,
+                    candidate,
+                    chunk,
+                })
+            }
+            SEAL_CANDIDATE_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                let candidate = r.hash()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                check_hash(candidate)?;
+                Ok(Self::SealCandidate {
+                    market,
+                    epoch,
+                    candidate,
+                })
+            }
+            FINALIZE_SELECTION_TAG => {
+                let market = r.hash()?;
+                let epoch = r.hash()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(epoch)?;
+                Ok(Self::FinalizeSelection { market, epoch })
             }
             _ => Err(CodecError::WrongTag),
         }
@@ -10883,6 +11334,312 @@ mod tests {
         assert_eq!(
             Intent::decode(&wrong_version[..len]),
             Err(CodecError::WrongVersion)
+        );
+    }
+
+    fn submit_candidate_intent() -> Intent {
+        let market = h(1);
+        let mut prices = [0u64; MAX_OUTCOMES];
+        prices[0] = 4_000;
+        prices[1] = 6_000;
+        Intent::SubmitCandidate {
+            market,
+            epoch: canonical_epoch_id(market, 7),
+            prices,
+            virtual_split: 5,
+            virtual_merge: 0,
+            honored_aon_mask: 0b11,
+            declared_slices: Some(9),
+            weighted_direct_volume: -3,
+            limit_surplus_price_units: 11,
+            distinct_owners: 4,
+        }
+    }
+
+    #[test]
+    fn the_submission_intent_has_an_exact_unambiguous_wire() {
+        let submit = submit_candidate_intent();
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = submit.encode(&mut bytes).unwrap();
+        assert_eq!(len, 255);
+        assert_eq!(submit.encoded_len(), len);
+        assert_eq!(&bytes[..2], [54, INTENT_VERSION]);
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(submit));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+        let mut long = [0; MAX_INTENT_BYTES];
+        long[..len].copy_from_slice(&bytes[..len]);
+        assert_eq!(
+            Intent::decode(&long[..len + 1]),
+            Err(CodecError::TrailingBytes)
+        );
+        for at in [2, 34] {
+            let mut zeroed = bytes;
+            zeroed[at..at + 32].fill(0);
+            assert_eq!(
+                Intent::decode(&zeroed[..len]),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+        // The witness declaration: flag byte at 218, count at 219..221.
+        assert_eq!(bytes[218], 1);
+        assert_eq!(&bytes[219..221], &9u16.to_le_bytes());
+        let mut bad_flag = bytes;
+        bad_flag[218] = 2;
+        assert_eq!(
+            Intent::decode(&bad_flag[..len]),
+            Err(CodecError::InvalidEnum)
+        );
+        // An undeclared witness carries no length: the count is padding.
+        let mut undeclared = bytes;
+        undeclared[218] = 0;
+        assert_eq!(
+            Intent::decode(&undeclared[..len]),
+            Err(CodecError::NonCanonicalPadding)
+        );
+        undeclared[219..221].fill(0);
+        assert!(matches!(
+            Intent::decode(&undeclared[..len]),
+            Ok(Intent::SubmitCandidate {
+                declared_slices: None,
+                ..
+            })
+        ));
+        // An over-wide declared witness refuses, both directions.
+        let mut wide = bytes;
+        wide[219..221].copy_from_slice(&(MAX_SLICES as u16 + 1).to_le_bytes());
+        assert_eq!(
+            Intent::decode(&wide[..len]),
+            Err(CodecError::InvalidCount)
+        );
+        // Canonical churn: never split and merge at once (the fixture's
+        // split is 5; forging a nonzero merge at 202..210 makes both live).
+        let mut churned = bytes;
+        churned[202..210].copy_from_slice(&7u64.to_le_bytes());
+        assert_eq!(
+            Intent::decode(&churned[..len]),
+            Err(CodecError::InvalidEnum)
+        );
+        let mut over_owners = submit_candidate_intent();
+        if let Intent::SubmitCandidate {
+            distinct_owners, ..
+        } = &mut over_owners
+        {
+            *distinct_owners = MAX_EPOCH_ORDERS as u16 + 1;
+        }
+        assert_eq!(
+            over_owners.encode(&mut [0; MAX_INTENT_BYTES]),
+            Err(CodecError::InvalidCount)
+        );
+    }
+
+    #[test]
+    fn the_chunked_write_intent_has_an_exact_unambiguous_wire() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 7);
+        let candidate = h(9);
+
+        let mut fills = [0u64; FEED_FILLS_PER_CHUNK];
+        fills[0] = 12;
+        fills[1] = 0;
+        fills[2] = 7;
+        let fills_chunk = Intent::WriteCandidateFeed {
+            market,
+            epoch,
+            candidate,
+            chunk: CandidateFeedChunk::Fills { count: 3, fills },
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = fills_chunk.encode(&mut bytes).unwrap();
+        assert_eq!(len, 2 + 96 + 1 + 1 + 24);
+        assert_eq!(fills_chunk.encoded_len(), len);
+        assert_eq!(&bytes[..2], [55, INTENT_VERSION]);
+        assert_eq!(bytes[98], 0, "fills kind");
+        assert_eq!(bytes[99], 3, "count");
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(fills_chunk));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+        let mut long = [0; MAX_INTENT_BYTES];
+        long[..len].copy_from_slice(&bytes[..len]);
+        assert_eq!(
+            Intent::decode(&long[..len + 1]),
+            Err(CodecError::TrailingBytes)
+        );
+        // A chunk that moves nothing, an over-wide one, and an unknown kind.
+        let mut empty = bytes;
+        empty[99] = 0;
+        assert_eq!(
+            Intent::decode(&empty[..2 + 96 + 1 + 1]),
+            Err(CodecError::InvalidCount)
+        );
+        let mut wrong_kind = bytes;
+        wrong_kind[98] = 2;
+        assert_eq!(
+            Intent::decode(&wrong_kind[..len]),
+            Err(CodecError::InvalidEnum)
+        );
+        // Dirty in-memory padding refuses at encode.
+        let mut dirty = fills;
+        dirty[3] = 1;
+        assert_eq!(
+            Intent::WriteCandidateFeed {
+                market,
+                epoch,
+                candidate,
+                chunk: CandidateFeedChunk::Fills {
+                    count: 3,
+                    fills: dirty
+                },
+            }
+            .encode(&mut [0; MAX_INTENT_BYTES]),
+            Err(CodecError::NonCanonicalPadding)
+        );
+
+        let mut slices = [clearing::PairingSlice::PADDING; FEED_SLICES_PER_CHUNK];
+        slices[0] = clearing::PairingSlice {
+            buy_ref: clearing::LegRef::Order(2),
+            sell_ref: clearing::LegRef::Split,
+            outcome: 1,
+            quantity: 5,
+        };
+        slices[1] = clearing::PairingSlice {
+            buy_ref: clearing::LegRef::Merge,
+            sell_ref: clearing::LegRef::Order(0),
+            outcome: 0,
+            quantity: 2,
+        };
+        let slices_chunk = Intent::WriteCandidateFeed {
+            market,
+            epoch,
+            candidate,
+            chunk: CandidateFeedChunk::Slices { count: 2, slices },
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = slices_chunk.encode(&mut bytes).unwrap();
+        assert_eq!(len, 2 + 96 + 1 + 1 + 26);
+        assert_eq!(slices_chunk.encoded_len(), len);
+        assert_eq!(bytes[98], 1, "slices kind");
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(slices_chunk));
+        // The widest slices chunk is the widest intent this family emits and
+        // it stays inside the frozen bound.
+        let full = Intent::WriteCandidateFeed {
+            market,
+            epoch,
+            candidate,
+            chunk: CandidateFeedChunk::Slices {
+                count: FEED_SLICES_PER_CHUNK as u8,
+                slices: [slices[0]; FEED_SLICES_PER_CHUNK],
+            },
+        };
+        assert_eq!(full.encoded_len(), 308);
+        assert!(full.encoded_len() <= MAX_INTENT_BYTES);
+        let mut widest = [0; MAX_INTENT_BYTES];
+        let len = full.encode(&mut widest).unwrap();
+        assert_eq!(Intent::decode(&widest[..len]), Ok(full));
+        // A virtual leg on its refused side and a zero-quantity slice refuse.
+        let mut backwards = slices;
+        backwards[0].buy_ref = clearing::LegRef::Split;
+        assert_eq!(
+            Intent::WriteCandidateFeed {
+                market,
+                epoch,
+                candidate,
+                chunk: CandidateFeedChunk::Slices {
+                    count: 2,
+                    slices: backwards
+                },
+            }
+            .encode(&mut [0; MAX_INTENT_BYTES]),
+            Err(CodecError::InvalidEnum)
+        );
+        let mut still = slices;
+        still[1].quantity = 0;
+        assert_eq!(
+            Intent::WriteCandidateFeed {
+                market,
+                epoch,
+                candidate,
+                chunk: CandidateFeedChunk::Slices {
+                    count: 2,
+                    slices: still
+                },
+            }
+            .encode(&mut [0; MAX_INTENT_BYTES]),
+            Err(CodecError::ZeroValue)
+        );
+    }
+
+    #[test]
+    fn the_seal_and_selection_intents_have_exact_unambiguous_wires() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 7);
+        let candidate = h(9);
+
+        let seal = Intent::SealCandidate {
+            market,
+            epoch,
+            candidate,
+        };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = seal.encode(&mut bytes).unwrap();
+        assert_eq!(len, 98);
+        assert_eq!(seal.encoded_len(), len);
+        assert_eq!(&bytes[..2], [56, INTENT_VERSION]);
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(seal));
+        for at in [2, 34, 66] {
+            let mut zeroed = bytes;
+            zeroed[at..at + 32].fill(0);
+            assert_eq!(
+                Intent::decode(&zeroed[..len]),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+
+        let finalize = Intent::FinalizeSelection { market, epoch };
+        let mut bytes = [0; MAX_INTENT_BYTES];
+        let len = finalize.encode(&mut bytes).unwrap();
+        assert_eq!(len, 66);
+        assert_eq!(finalize.encoded_len(), len);
+        assert_eq!(&bytes[..2], [57, INTENT_VERSION]);
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(finalize));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+        let mut long = [0; MAX_INTENT_BYTES];
+        long[..len].copy_from_slice(&bytes[..len]);
+        assert_eq!(
+            Intent::decode(&long[..len + 1]),
+            Err(CodecError::TrailingBytes)
+        );
+        for at in [2, 34] {
+            let mut zeroed = bytes;
+            zeroed[at..at + 32].fill(0);
+            assert_eq!(
+                Intent::decode(&zeroed[..len]),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+        let mut wrong_version = bytes;
+        wrong_version[1] = INTENT_VERSION + 1;
+        assert_eq!(
+            Intent::decode(&wrong_version[..len]),
+            Err(CodecError::WrongVersion)
+        );
+        // Tag continuity: the selection family takes exactly the next four
+        // tags after the walk family's close.
+        assert_eq!(
+            [
+                SUBMIT_CANDIDATE_TAG,
+                WRITE_CANDIDATE_FEED_TAG,
+                SEAL_CANDIDATE_TAG,
+                FINALIZE_SELECTION_TAG
+            ],
+            [54, 55, 56, 57]
         );
     }
 

@@ -127,6 +127,10 @@ const INTENT_FREEZE_EPOCH_HINT: u8 = 50;
 const INTENT_ADVANCE_CLEAR_WORK_HINT: u8 = 51;
 const INTENT_ADVANCE_CLEAR_SLICES_HINT: u8 = 52;
 const INTENT_COMPLETE_CLEAR_WORK_HINT: u8 = 53;
+const INTENT_SUBMIT_CANDIDATE_HINT: u8 = 54;
+const INTENT_WRITE_CANDIDATE_FEED_HINT: u8 = 55;
+const INTENT_SEAL_CANDIDATE_HINT: u8 = 56;
+const INTENT_FINALIZE_SELECTION_HINT: u8 = 57;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
@@ -156,7 +160,11 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_FREEZE_EPOCH_HINT
                 | INTENT_ADVANCE_CLEAR_WORK_HINT
                 | INTENT_ADVANCE_CLEAR_SLICES_HINT
-                | INTENT_COMPLETE_CLEAR_WORK_HINT,
+                | INTENT_COMPLETE_CLEAR_WORK_HINT
+                | INTENT_SUBMIT_CANDIDATE_HINT
+                | INTENT_WRITE_CANDIDATE_FEED_HINT
+                | INTENT_SEAL_CANDIDATE_HINT
+                | INTENT_FINALIZE_SELECTION_HINT,
             ) => Route::OrdersBatch,
             Some(
                 INTENT_INIT_REALM_HINT
@@ -370,7 +378,11 @@ fn process_orders_batch(
         | Action::Layout(Intent::FreezeEpoch { .. })
         | Action::Layout(Intent::AdvanceClearWork { .. })
         | Action::Layout(Intent::AdvanceClearSlices { .. })
-        | Action::Layout(Intent::CompleteClearWork { .. }) => {
+        | Action::Layout(Intent::CompleteClearWork { .. })
+        | Action::Layout(Intent::SubmitCandidate { .. })
+        | Action::Layout(Intent::WriteCandidateFeed { .. })
+        | Action::Layout(Intent::SealCandidate { .. })
+        | Action::Layout(Intent::FinalizeSelection { .. }) => {
             orders_batch::process(program_id, accounts, &request)
         }
         _ => unexpected_route(),
@@ -802,6 +814,58 @@ mod tests {
                     market: hash(1),
                     epoch: hash(2),
                     candidate: hash(3),
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::SubmitCandidate {
+                    market: hash(1),
+                    epoch: hash(2),
+                    prices: {
+                        let mut prices = [0u64; MAX_OUTCOMES];
+                        prices[0] = 4_000;
+                        prices[1] = 6_000;
+                        prices
+                    },
+                    virtual_split: 0,
+                    virtual_merge: 0,
+                    honored_aon_mask: 0,
+                    declared_slices: Some(3),
+                    weighted_direct_volume: 0,
+                    limit_surplus_price_units: 0,
+                    distinct_owners: 2,
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::WriteCandidateFeed {
+                    market: hash(1),
+                    epoch: hash(2),
+                    candidate: hash(3),
+                    chunk: clutch_solana_layout::CandidateFeedChunk::Fills {
+                        count: 1,
+                        fills: {
+                            let mut fills =
+                                [0u64; clutch_solana_layout::FEED_FILLS_PER_CHUNK];
+                            fills[0] = 9;
+                            fills
+                        },
+                    },
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::SealCandidate {
+                    market: hash(1),
+                    epoch: hash(2),
+                    candidate: hash(3),
+                },
+                Route::OrdersBatch,
+            ),
+            (
+                Intent::FinalizeSelection {
+                    market: hash(1),
+                    epoch: hash(2),
                 },
                 Route::OrdersBatch,
             ),

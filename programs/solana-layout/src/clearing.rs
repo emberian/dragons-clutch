@@ -12,7 +12,8 @@
 //! | --- | ---: | ---: | --- |
 //! | [`ClearWorkAccount`] | 17 | 50,054 | the resumable checkpoint: a layout-owned header, the layout-owned owner-interning region, and a `ClearWorkV1` codec body |
 //! | [`CandidateFeedAccount`] | 18 | 6,266 | the solver-written feed: candidate header, fill vector, optional pairing witness |
-//! | [`EpochWindowAccount`] | 24 | 84 | the general epoch's deadline-window companion |
+//! | [`EpochWindowAccount`] | 24 | 231 | the general epoch's schedule-and-registry companion: deadlines, the bounded retained-candidate registry, and the selection result |
+//! | [`CandidateFeedStage`] | 25 | 6,266 | the same account as tag 18, while its content is still being written: a stage prefix instead of a feed header, so every feed consumer refuses it by tag |
 //!
 //! # Neither account is ever a value
 //!
@@ -721,14 +722,41 @@ pub fn init_clear_work_grow_stage(
 /* The general epoch lifecycle                                               */
 /* ------------------------------------------------------------------------ */
 
-/// Account tag of the general epoch's deadline-window companion.
+/// Account tag of the general epoch's schedule-and-registry companion.
 pub const EPOCH_WINDOW_TAG: u8 = 24;
-/// Account version of the general epoch's deadline-window companion.
-pub const EPOCH_WINDOW_VERSION: u8 = 1;
+/// Account version of the general epoch's schedule-and-registry companion.
+///
+/// Version 2 is the T2-7 format revision the v1 doc promised ("the
+/// candidate-window deadlines of the selection lifecycle are a later format
+/// revision of this account, not a second account family"): it appends the
+/// candidate-window deadline, the frozen set's exact live cardinality, the
+/// bounded retained-candidate registry, and the selection result.  Nothing
+/// decodes v1 frames any more; no deployment ever wrote one.
+pub const EPOCH_WINDOW_VERSION: u8 = 2;
+/// Most candidates the general selection window retains at once.
+///
+/// The V3 window precedent (`MAX_DIRECT_CANDIDATES`), kept at the same bound:
+/// a fourth submission must displace a retained one or be refused, which is
+/// what keeps both the window account and the `FinalizeSelection` account
+/// list statically bounded.
+pub const MAX_RETAINED_CANDIDATES: usize = 3;
+/// Length of the general candidate window, in slots after the freeze.
+///
+/// `FreezeEpoch` stamps `selection_deadline_slot = freeze_slot +
+/// CANDIDATE_WINDOW_SLOTS` into the window it closes placement on: the freeze
+/// that seals the book is the event that opens candidate submission, and the
+/// deadline is a fixed schedule pin of the v1 selection lifecycle rather than
+/// any caller's choice — the epoch has no stored authority who could choose
+/// one after init, and `Intent::InitEpoch`'s wire (tag 49) is sealed at the
+/// attested baseline.  **PROPOSED schedule pin**, exactly like the frozen
+/// policy profile: freezing the value (or moving it onto a revised InitEpoch
+/// wire) is ember's sign-off, and nothing else consumes it.
+pub const CANDIDATE_WINDOW_SLOTS: u64 = 1_000;
 /// Exact byte length of one [`EpochWindowAccount`].
-pub const EPOCH_WINDOW_ACCOUNT_BYTES: usize = 2 + 32 + 32 + 8 + 8 + 1 + 1;
+pub const EPOCH_WINDOW_ACCOUNT_BYTES: usize =
+    2 + 32 + 32 + 8 + 8 + 8 + 8 + 32 + (MAX_RETAINED_CANDIDATES * 32) + 2 + 1 + 1 + 1;
 
-const _: () = assert!(EPOCH_WINDOW_ACCOUNT_BYTES == 84);
+const _: () = assert!(EPOCH_WINDOW_ACCOUNT_BYTES == 231);
 
 /// Derive the one book identity admitted by the general clearing plane.
 ///
@@ -801,16 +829,24 @@ pub fn open_general_epoch(
     Ok(value)
 }
 
-/// The deadline-slot companion of one general epoch.
+/// The schedule-and-registry companion of one general epoch.
 ///
-/// The V3 window precedent applied to the general plane: deadline slots ride a
-/// small dedicated account instead of an [`EpochAccount`] format bump, so the
-/// epoch codec every existing consumer decodes stays byte-stable.  V1 carries
-/// exactly one deadline — the slot at or after which the permissionless
-/// freeze is admitted; placements and cancellations gate on the epoch phase,
-/// not on this slot.  The candidate-window deadlines of the selection
-/// lifecycle (T2-7) are a later format revision of this account, not a second
-/// account family.
+/// The V3 window precedent applied to the general plane: schedule and
+/// registry state ride a small dedicated account instead of an
+/// [`EpochAccount`] format bump, so the epoch codec every existing consumer
+/// decodes stays byte-stable.  V2 (the T2-7 revision the v1 doc promised)
+/// carries:
+///
+/// * the freeze deadline — the slot at or after which the permissionless
+///   freeze is admitted; placements and cancellations gate on the epoch
+///   phase, not on this slot;
+/// * the candidate-window deadline and the frozen set's exact live
+///   cardinality, both zero until `FreezeEpoch` stamps them — the freeze that
+///   closes placement is the event that opens candidate submission;
+/// * the bounded retained-candidate registry ([`MAX_RETAINED_CANDIDATES`]):
+///   the only candidates `FinalizeSelection` will ever compare, admitted and
+///   displaced at seal time; and
+/// * the selection result, zero until `FinalizeSelection` stamps a winner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EpochWindowAccount {
     /// Epoch identity; must equal `canonical_epoch_id(market, epoch_index)`.
@@ -822,6 +858,24 @@ pub struct EpochWindowAccount {
     /// First slot at which [`FreezeEpoch`](crate::Intent::FreezeEpoch) is
     /// admitted; zero is refused — a window with no deadline is not a window.
     pub freeze_deadline_slot: u64,
+    /// First slot at which `FinalizeSelection` is admitted and the first at
+    /// which `SubmitCandidate`/`SealCandidate` refuse.  Zero exactly until
+    /// the freeze stamps `freeze_slot + `[`CANDIDATE_WINDOW_SLOTS`].
+    pub selection_deadline_slot: u64,
+    /// Slot the selection was finalized in; zero exactly while
+    /// `selected_candidate` is zero.
+    pub selected_slot: u64,
+    /// The selected candidate's identity; zero until selection.
+    pub selected_candidate: Hash32,
+    /// The retained-candidate registry: the first `retained_count` entries
+    /// are live candidate identities, the rest canonical zero padding.
+    pub retained: [Hash32; MAX_RETAINED_CANDIDATES],
+    /// Exact live (non-retired) records in the frozen page set — the
+    /// `order_len` every admitted candidate must bind.  Zero until the freeze
+    /// stamps it.
+    pub live_order_count: u16,
+    /// Live entries in `retained`.
+    pub retained_count: u8,
     /// Stored PDA bump.
     pub stored_bump: u8,
     /// Reserved flags; currently zero.
@@ -829,7 +883,8 @@ pub struct EpochWindowAccount {
 }
 
 impl EpochWindowAccount {
-    /// Validate identities, the canonical epoch derivation, and the deadline.
+    /// Validate identities, the canonical epoch derivation, the deadlines,
+    /// and the registry's shape.
     pub fn validate(&self) -> Result<()> {
         check_hash(self.market)?;
         if self.epoch != canonical_epoch_id(self.market, self.epoch_index) {
@@ -840,6 +895,47 @@ impl EpochWindowAccount {
         }
         if self.flags != 0 {
             return Err(CodecError::InvalidEnum);
+        }
+        // The candidate-window deadline exists from the freeze on; a stamped
+        // one is strictly after the freeze deadline by construction.
+        if self.selection_deadline_slot != 0
+            && self.selection_deadline_slot <= self.freeze_deadline_slot
+        {
+            return Err(CodecError::InvalidCount);
+        }
+        if self.live_order_count as usize > MAX_EPOCH_ORDERS {
+            return Err(CodecError::InvalidCount);
+        }
+        if self.retained_count as usize > MAX_RETAINED_CANDIDATES {
+            return Err(CodecError::InvalidCount);
+        }
+        // Registry shape: live entries are nonzero and pairwise distinct,
+        // padding is canonical zero, and nothing is retained or selected
+        // before the freeze stamped a candidate window at all.
+        let mut i = 0;
+        while i < MAX_RETAINED_CANDIDATES {
+            if i < self.retained_count as usize {
+                check_hash(self.retained[i])?;
+                let mut j = i + 1;
+                while j < self.retained_count as usize {
+                    if self.retained[i] == self.retained[j] {
+                        return Err(CodecError::MismatchedBinding);
+                    }
+                    j += 1;
+                }
+            } else if self.retained[i] != Hash32::ZERO {
+                return Err(CodecError::NonCanonicalPadding);
+            }
+            i += 1;
+        }
+        if (self.retained_count != 0 || self.selected_candidate != Hash32::ZERO)
+            && self.selection_deadline_slot == 0
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        // The selection result is one fact: candidate and slot together.
+        if (self.selected_candidate == Hash32::ZERO) != (self.selected_slot == 0) {
+            return Err(CodecError::MismatchedBinding);
         }
         Ok(())
     }
@@ -856,6 +952,16 @@ impl EpochWindowAccount {
         w.hash(self.market)?;
         w.u64(self.epoch_index)?;
         w.u64(self.freeze_deadline_slot)?;
+        w.u64(self.selection_deadline_slot)?;
+        w.u64(self.selected_slot)?;
+        w.hash(self.selected_candidate)?;
+        let mut i = 0;
+        while i < MAX_RETAINED_CANDIDATES {
+            w.hash(self.retained[i])?;
+            i += 1;
+        }
+        w.u16(self.live_order_count)?;
+        w.u8(self.retained_count)?;
         w.u8(self.stored_bump)?;
         w.u8(self.flags)?;
         if w.at != EPOCH_WINDOW_ACCOUNT_BYTES {
@@ -873,11 +979,30 @@ impl EpochWindowAccount {
             EPOCH_WINDOW_ACCOUNT_BYTES,
         )?;
         let mut r = Reader::at(input, 2);
+        let epoch = r.hash()?;
+        let market = r.hash()?;
+        let epoch_index = r.u64()?;
+        let freeze_deadline_slot = r.u64()?;
+        let selection_deadline_slot = r.u64()?;
+        let selected_slot = r.u64()?;
+        let selected_candidate = r.hash()?;
+        let mut retained = [Hash32::ZERO; MAX_RETAINED_CANDIDATES];
+        let mut i = 0;
+        while i < MAX_RETAINED_CANDIDATES {
+            retained[i] = r.hash()?;
+            i += 1;
+        }
         let value = Self {
-            epoch: r.hash()?,
-            market: r.hash()?,
-            epoch_index: r.u64()?,
-            freeze_deadline_slot: r.u64()?,
+            epoch,
+            market,
+            epoch_index,
+            freeze_deadline_slot,
+            selection_deadline_slot,
+            selected_slot,
+            selected_candidate,
+            retained,
+            live_order_count: r.u16()?,
+            retained_count: r.u8()?,
             stored_bump: r.u8()?,
             flags: r.u8()?,
         };
@@ -1088,20 +1213,16 @@ impl CandidateFeedHeader {
     /// [`crate::CandidateRecord::recomputed_candidate_digest`] uses: one
     /// candidate has one identity whichever account states it.
     pub fn recomputed_candidate_digest(&self) -> Result<Hash32> {
-        let mut body = [0; CANDIDATE_FEED_DIGEST_BODY_BYTES];
-        let mut w = Writer::new(&mut body);
-        w.hash(self.epoch)?;
-        w.hash(self.market)?;
-        w.u8(self.order_len)?;
-        w.u8(self.outcome_count)?;
-        w.amounts(&self.prices)?;
-        w.u64(self.virtual_split)?;
-        w.u64(self.virtual_merge)?;
-        w.u64(self.honored_aon_mask)?;
-        if w.at != CANDIDATE_FEED_DIGEST_BODY_BYTES {
-            return Err(CodecError::OutputTooSmall);
-        }
-        Ok(canonical_candidate_digest(&body))
+        candidate_coordinate_digest(
+            self.epoch,
+            self.market,
+            self.order_len,
+            self.outcome_count,
+            &self.prices,
+            self.virtual_split,
+            self.virtual_merge,
+            self.honored_aon_mask,
+        )
     }
 
     /// Validate coordinates, mask width, canonical churn, and the identity.
@@ -1228,6 +1349,39 @@ impl CandidateFeedHeader {
 const CANDIDATE_FEED_DIGEST_BODY_BYTES: usize =
     (2 * HASH_BYTES) + 1 + 1 + (MAX_OUTCOMES * 8) + 8 + 8 + 8;
 
+/// The candidate identity of one free-coordinate set.
+///
+/// The single preimage all three carriers of the identity share — the
+/// [`crate::CandidateRecord`], the [`CandidateFeedHeader`], and the
+/// [`CandidateFeedStage`] — so a submission's identity is fixed before its
+/// content exists and never restated.
+#[allow(clippy::too_many_arguments)] // one argument per free coordinate
+fn candidate_coordinate_digest(
+    epoch: Hash32,
+    market: Hash32,
+    order_len: u8,
+    outcome_count: u8,
+    prices: &[u64; MAX_OUTCOMES],
+    virtual_split: u64,
+    virtual_merge: u64,
+    honored_aon_mask: u64,
+) -> Result<Hash32> {
+    let mut body = [0; CANDIDATE_FEED_DIGEST_BODY_BYTES];
+    let mut w = Writer::new(&mut body);
+    w.hash(epoch)?;
+    w.hash(market)?;
+    w.u8(order_len)?;
+    w.u8(outcome_count)?;
+    w.amounts(prices)?;
+    w.u64(virtual_split)?;
+    w.u64(virtual_merge)?;
+    w.u64(honored_aon_mask)?;
+    if w.at != CANDIDATE_FEED_DIGEST_BODY_BYTES {
+        return Err(CodecError::OutputTooSmall);
+    }
+    Ok(canonical_candidate_digest(&body))
+}
+
 /// The whole candidate feed account, named for the doc table.
 ///
 /// Like [`ClearWorkAccount`], a type-level name with no values: 6,266 bytes is
@@ -1288,7 +1442,10 @@ fn decode_slice(input: &[u8], index: usize) -> Result<PairingSlice> {
 }
 
 /// Decode one leg reference; a virtual leg's index byte must be zero.
-fn decode_leg(kind: u8, index: u8) -> Result<LegRef> {
+///
+/// Crate-visible: the chunked-write intent's wire carries slices in exactly
+/// the stored 13-byte form, so its decoder shares this rule.
+pub(crate) fn decode_leg(kind: u8, index: u8) -> Result<LegRef> {
     match kind {
         LEG_KIND_ORDER => Ok(LegRef::Order(index)),
         LEG_KIND_SPLIT | LEG_KIND_MERGE => {
@@ -1433,6 +1590,327 @@ pub fn candidate_feed_slice_region(input: &[u8]) -> Result<&[u8]> {
     let header = CandidateFeedHeader::decode(input)?;
     let declared = header.declared_slices().ok_or(CodecError::InvalidEnum)? as usize;
     Ok(&input[SLICES_AT..SLICES_AT + (declared * PAIRING_SLICE_BYTES)])
+}
+
+/* ------------------------------------------------------------------------ */
+/* The staged candidate submission                                           */
+/* ------------------------------------------------------------------------ */
+
+/// Account tag of a candidate feed whose content is still being written.
+///
+/// The staged-creation discipline of the checkpoint (`ClearWorkGrowStage`),
+/// carried by **tag** instead of by length: a staging feed is full-length from
+/// creation, but its first byte is this tag rather than [`CANDIDATE_FEED_TAG`],
+/// so [`CandidateFeedHeader::decode`] — and therefore every feed consumer,
+/// the on-chain walk included — refuses it with `WrongTag` and zero new code.
+/// [`seal_candidate_feed`] is the one-way door that replaces the stage prefix
+/// with the real header; after it, no stage write can ever land again, which
+/// is what makes "the bytes the walk streamed" and "the bytes the tie digest
+/// folds" the same bytes.
+pub const CANDIDATE_FEED_STAGE_TAG: u8 = 25;
+/// Account version of the candidate-feed stage prefix.
+pub const CANDIDATE_FEED_STAGE_VERSION: u8 = 1;
+/// Exact byte length of the stage prefix at the head of a staging feed.
+pub const CANDIDATE_FEED_STAGE_PREFIX_BYTES: usize =
+    2 + (4 * HASH_BYTES) + (MAX_OUTCOMES * 8) + (3 * 8) + 16 + 16 + 2 + 2 + 1 + 2 + 1 + 1 + 1 + 1;
+
+const _: () = assert!(CANDIDATE_FEED_STAGE_PREFIX_BYTES == 325);
+// The stage prefix must fit strictly inside the region the real header will
+// overwrite, so sealing can never leave a stage byte behind.
+const _: () = assert!(CANDIDATE_FEED_STAGE_PREFIX_BYTES <= CANDIDATE_FEED_HEADER_BYTES);
+
+/// The stage prefix of one staging candidate feed.
+///
+/// Everything the seal needs to write the real [`CandidateFeedHeader`] —
+/// identity, free coordinates, claims, declared witness, and the feed bump —
+/// plus the two sequential write cursors.  The claimed relation digest
+/// (`CandidateFeedHeader::claimed_digest`) is deliberately not staged: nothing
+/// on the general plane ever reads it, so the seal writes it as zero.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateFeedStage {
+    /// Candidate identity; the canonical digest of the free coordinates.
+    pub candidate: Hash32,
+    /// Epoch identity.
+    pub epoch: Hash32,
+    /// Market identity.
+    pub market: Hash32,
+    /// The frozen order-set digest the fills are computed against.
+    pub order_set: Hash32,
+    /// Exact scaled prices on the simplex; inactive outcomes are zero.
+    pub prices: [u64; MAX_OUTCOMES],
+    /// `sigma`: complete sets created by the single global virtual split.
+    pub virtual_split: u64,
+    /// `mu`: complete sets destroyed by the single global virtual merge.
+    pub virtual_merge: u64,
+    /// Honored minimum-fill subset, one bit per order.
+    pub honored_aon_mask: u64,
+    /// Claimed score component 1, net of the self-overlap term.
+    pub weighted_direct_volume: i128,
+    /// Claimed score component 3, in exact price units.
+    pub limit_surplus_price_units: u128,
+    /// Declared explicit-witness length; meaningful only when
+    /// [`CANDIDATE_FEED_FLAG_SLICES_DECLARED`] is set in `flags`.
+    pub declared_slices: u16,
+    /// Claimed score component 4: distinct participating owners.
+    pub distinct_owners: u16,
+    /// Fills written so far; complete at `order_len`.
+    pub fills_written: u8,
+    /// Witness slices written so far; complete at the declared length.
+    pub slices_written: u16,
+    /// Orders this candidate binds; the frozen set's exact live count.
+    pub order_len: u8,
+    /// Active outcome count, in `2..=MAX_OUTCOMES`.
+    pub outcome_count: u8,
+    /// Stored feed-PDA bump.
+    pub stored_bump: u8,
+    /// Flags; bit 0 is [`CANDIDATE_FEED_FLAG_SLICES_DECLARED`].
+    pub flags: u8,
+}
+
+impl CandidateFeedStage {
+    /// Whether an explicit pairing witness is declared, and how long it is.
+    pub const fn declared_slices(&self) -> Option<u16> {
+        if self.flags & CANDIDATE_FEED_FLAG_SLICES_DECLARED != 0 {
+            Some(self.declared_slices)
+        } else {
+            None
+        }
+    }
+
+    /// Total content elements written so far — the replay-by-state counter
+    /// the chunked write intent compares its sequence against.
+    pub const fn written(&self) -> u64 {
+        self.fills_written as u64 + self.slices_written as u64
+    }
+
+    /// Validate coordinates, claims, cursors, and the identity — every rule
+    /// [`CandidateFeedHeader::validate`] applies to the shared fields, so a
+    /// stage that would seal into a refused header is refused as a stage.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.epoch)?;
+        check_hash(self.market)?;
+        check_hash(self.order_set)?;
+        check_count(self.outcome_count)?;
+        if self.order_len == 0 || self.order_len as usize > MAX_EPOCH_ORDERS {
+            return Err(CodecError::InvalidCount);
+        }
+        if self.flags & !CANDIDATE_FEED_FLAG_SLICES_DECLARED != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        check_padded_amounts(&self.prices, self.outcome_count as usize)?;
+        if self.order_len < 64 && self.honored_aon_mask >> self.order_len != 0 {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        if self.virtual_split != 0 && self.virtual_merge != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        self.virtual_split
+            .checked_add(self.virtual_merge)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        if self.distinct_owners as usize > MAX_EPOCH_ORDERS {
+            return Err(CodecError::InvalidCount);
+        }
+        match self.declared_slices() {
+            Some(len) if len as usize > MAX_SLICES => return Err(CodecError::InvalidCount),
+            None if self.declared_slices != 0 => return Err(CodecError::NonCanonicalPadding),
+            _ => {}
+        }
+        // The cursors never pass their totals, and fills come first: a slice
+        // cursor moves only once every fill is written.
+        if self.fills_written > self.order_len
+            || self.slices_written > self.declared_slices().unwrap_or(0)
+        {
+            return Err(CodecError::InvalidCount);
+        }
+        if self.slices_written != 0 && self.fills_written != self.order_len {
+            return Err(CodecError::InvalidCount);
+        }
+        if self.candidate != self.recomputed_candidate_digest()? {
+            return Err(CodecError::NonCanonicalIdentity);
+        }
+        Ok(())
+    }
+
+    /// Recompute the candidate identity from the staged free coordinates.
+    pub fn recomputed_candidate_digest(&self) -> Result<Hash32> {
+        candidate_coordinate_digest(
+            self.epoch,
+            self.market,
+            self.order_len,
+            self.outcome_count,
+            &self.prices,
+            self.virtual_split,
+            self.virtual_merge,
+            self.honored_aon_mask,
+        )
+    }
+
+    /// Encode the stage prefix at the head of a full-length feed account.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        if out.len() < CANDIDATE_FEED_STAGE_PREFIX_BYTES {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut w = Writer::new(out);
+        put_header(&mut w, CANDIDATE_FEED_STAGE_TAG, CANDIDATE_FEED_STAGE_VERSION)?;
+        w.hash(self.candidate)?;
+        w.hash(self.epoch)?;
+        w.hash(self.market)?;
+        w.hash(self.order_set)?;
+        w.amounts(&self.prices)?;
+        w.u64(self.virtual_split)?;
+        w.u64(self.virtual_merge)?;
+        w.u64(self.honored_aon_mask)?;
+        w.i128(self.weighted_direct_volume)?;
+        w.u128(self.limit_surplus_price_units)?;
+        w.u16(self.declared_slices)?;
+        w.u16(self.distinct_owners)?;
+        w.u8(self.fills_written)?;
+        w.u16(self.slices_written)?;
+        w.u8(self.order_len)?;
+        w.u8(self.outcome_count)?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        if w.at != CANDIDATE_FEED_STAGE_PREFIX_BYTES {
+            return Err(CodecError::OutputTooSmall);
+        }
+        Ok(w.at)
+    }
+
+    /// Parse the stage prefix of a whole staging feed account.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        check_header(
+            input,
+            CANDIDATE_FEED_STAGE_TAG,
+            CANDIDATE_FEED_STAGE_VERSION,
+            account_len::CANDIDATE_FEED,
+        )?;
+        let mut r = Reader::at(input, 2);
+        let value = Self {
+            candidate: r.hash()?,
+            epoch: r.hash()?,
+            market: r.hash()?,
+            order_set: r.hash()?,
+            prices: r.amounts()?,
+            virtual_split: r.u64()?,
+            virtual_merge: r.u64()?,
+            honored_aon_mask: r.u64()?,
+            weighted_direct_volume: r.i128()?,
+            limit_surplus_price_units: r.u128()?,
+            declared_slices: r.u16()?,
+            distinct_owners: r.u16()?,
+            fills_written: r.u8()?,
+            slices_written: r.u16()?,
+            order_len: r.u8()?,
+            outcome_count: r.u8()?,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+/// Write a fresh staging feed: the stage prefix at zero cursors, zero content.
+pub fn init_candidate_feed_stage(account: &mut [u8], stage: &CandidateFeedStage) -> Result<()> {
+    if account.len() != account_len::CANDIDATE_FEED {
+        return Err(CodecError::OutputTooSmall);
+    }
+    if stage.fills_written != 0 || stage.slices_written != 0 {
+        return Err(CodecError::InvalidCount);
+    }
+    stage.encode(account)?;
+    account[CANDIDATE_FEED_STAGE_PREFIX_BYTES..].fill(0);
+    Ok(())
+}
+
+/// Append fills to a staging feed at its sequential cursor.
+///
+/// Content lands at the exact offsets the sealed feed will read it from, so
+/// the seal moves no bytes.  Returns the advanced stage.
+pub fn stage_append_fills(account: &mut [u8], fills: &[u64]) -> Result<CandidateFeedStage> {
+    let mut stage = CandidateFeedStage::decode(account)?;
+    if fills.is_empty() || fills.len() > (stage.order_len - stage.fills_written) as usize {
+        return Err(CodecError::InvalidCount);
+    }
+    let at = FILLS_AT + (stage.fills_written as usize * 8);
+    let mut w = Writer::new(&mut account[at..at + (fills.len() * 8)]);
+    for fill in fills {
+        w.u64(*fill)?;
+    }
+    stage.fills_written += fills.len() as u8;
+    stage.encode(account)?;
+    Ok(stage)
+}
+
+/// Append witness slices to a staging feed at its sequential cursor.
+///
+/// Admitted only once every fill is written (the cursor is one sequence) and
+/// only under a declared witness; each slice is validated against the staged
+/// coordinates before a byte lands, exactly as [`write_slice_at`] validates.
+pub fn stage_append_slices(
+    account: &mut [u8],
+    slices: &[PairingSlice],
+) -> Result<CandidateFeedStage> {
+    let mut stage = CandidateFeedStage::decode(account)?;
+    if stage.fills_written != stage.order_len {
+        return Err(CodecError::InvalidCount);
+    }
+    let declared = stage.declared_slices().ok_or(CodecError::InvalidEnum)?;
+    if slices.is_empty() || slices.len() > (declared - stage.slices_written) as usize {
+        return Err(CodecError::InvalidCount);
+    }
+    for (offset, slice) in slices.iter().enumerate() {
+        slice.validate(stage.order_len, stage.outcome_count)?;
+        write_slice(account, stage.slices_written as usize + offset, slice)?;
+    }
+    stage.slices_written += slices.len() as u16;
+    stage.encode(account)?;
+    Ok(stage)
+}
+
+/// Seal one complete staging feed: the one-way door from stage to feed.
+///
+/// Refuses unless both cursors sit exactly at their totals, writes the real
+/// [`CandidateFeedHeader`] over the stage prefix (content is already in
+/// place), and re-verifies the whole account through
+/// [`verify_candidate_feed`], so a sealed feed is a verified feed by
+/// construction.  The claimed relation digest is written as zero — nothing on
+/// the general plane may read it.
+pub fn seal_candidate_feed(account: &mut [u8]) -> Result<CandidateFeedHeader> {
+    let stage = CandidateFeedStage::decode(account)?;
+    if stage.fills_written != stage.order_len
+        || stage.slices_written != stage.declared_slices().unwrap_or(0)
+    {
+        return Err(CodecError::InvalidCount);
+    }
+    let churn = stage
+        .virtual_split
+        .checked_add(stage.virtual_merge)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let header = CandidateFeedHeader {
+        candidate: stage.candidate,
+        epoch: stage.epoch,
+        market: stage.market,
+        order_set: stage.order_set,
+        prices: stage.prices,
+        virtual_split: stage.virtual_split,
+        virtual_merge: stage.virtual_merge,
+        honored_aon_mask: stage.honored_aon_mask,
+        weighted_direct_volume: stage.weighted_direct_volume,
+        limit_surplus_price_units: stage.limit_surplus_price_units,
+        claimed_digest: 0,
+        churn,
+        declared_slices: stage.declared_slices,
+        distinct_owners: stage.distinct_owners,
+        order_len: stage.order_len,
+        outcome_count: stage.outcome_count,
+        stored_bump: stage.stored_bump,
+        flags: stage.flags,
+    };
+    header.encode(account)?;
+    verify_candidate_feed(account)?;
+    Ok(header)
 }
 
 /// A forward cursor over one feed's live fills.
@@ -1595,7 +2073,8 @@ mod tests {
             account_len::CLEAR_WORK,
             CLEAR_WORK_HEADER_BYTES + CLEAR_WORK_INTERNER_BYTES + CLEAR_WORK_BODY_BYTES
         );
-        assert_eq!(EPOCH_WINDOW_ACCOUNT_BYTES, 84);
+        assert_eq!(EPOCH_WINDOW_ACCOUNT_BYTES, 231);
+        assert_eq!(CANDIDATE_FEED_STAGE_PREFIX_BYTES, 325);
     }
 
     /// The one account in the inventory that no single system-program creation
@@ -2432,37 +2911,55 @@ mod tests {
             market,
             epoch_index: 7,
             freeze_deadline_slot: 900,
+            selection_deadline_slot: 0,
+            selected_slot: 0,
+            selected_candidate: Hash32::ZERO,
+            retained: [Hash32::ZERO; MAX_RETAINED_CANDIDATES],
+            live_order_count: 0,
+            retained_count: 0,
             stored_bump: 254,
             flags: 0,
         }
     }
 
+    /// The window as the freeze stamps it: schedule open, registry filling.
+    fn stamped_window() -> EpochWindowAccount {
+        let mut value = window();
+        value.selection_deadline_slot = 900 + CANDIDATE_WINDOW_SLOTS;
+        value.live_order_count = 4;
+        value.retained = [h(0x71), h(0x72), Hash32::ZERO];
+        value.retained_count = 2;
+        value
+    }
+
     #[test]
     fn the_epoch_window_round_trips_and_refuses_hostile_frames() {
+        for value in [window(), stamped_window()] {
+            let mut bytes = [0; EPOCH_WINDOW_ACCOUNT_BYTES];
+            assert_eq!(value.encode(&mut bytes).unwrap(), EPOCH_WINDOW_ACCOUNT_BYTES);
+            assert_eq!(bytes[0], EPOCH_WINDOW_TAG);
+            assert_eq!(bytes[1], EPOCH_WINDOW_VERSION);
+            assert_eq!(EpochWindowAccount::decode(&bytes), Ok(value));
+
+            assert_eq!(
+                EpochWindowAccount::decode(&bytes[..EPOCH_WINDOW_ACCOUNT_BYTES - 1]),
+                Err(CodecError::Truncated)
+            );
+            let mut wrong_tag = bytes;
+            wrong_tag[0] = CLEAR_WORK_TAG;
+            assert_eq!(
+                EpochWindowAccount::decode(&wrong_tag),
+                Err(CodecError::WrongTag)
+            );
+            let mut wrong_version = bytes;
+            wrong_version[1] = EPOCH_WINDOW_VERSION + 1;
+            assert_eq!(
+                EpochWindowAccount::decode(&wrong_version),
+                Err(CodecError::WrongVersion)
+            );
+        }
+
         let value = window();
-        let mut bytes = [0; EPOCH_WINDOW_ACCOUNT_BYTES];
-        assert_eq!(value.encode(&mut bytes).unwrap(), EPOCH_WINDOW_ACCOUNT_BYTES);
-        assert_eq!(bytes[0], EPOCH_WINDOW_TAG);
-        assert_eq!(bytes[1], EPOCH_WINDOW_VERSION);
-        assert_eq!(EpochWindowAccount::decode(&bytes), Ok(value));
-
-        assert_eq!(
-            EpochWindowAccount::decode(&bytes[..EPOCH_WINDOW_ACCOUNT_BYTES - 1]),
-            Err(CodecError::Truncated)
-        );
-        let mut wrong_tag = bytes;
-        wrong_tag[0] = CLEAR_WORK_TAG;
-        assert_eq!(
-            EpochWindowAccount::decode(&wrong_tag),
-            Err(CodecError::WrongTag)
-        );
-        let mut wrong_version = bytes;
-        wrong_version[1] = EPOCH_WINDOW_VERSION + 1;
-        assert_eq!(
-            EpochWindowAccount::decode(&wrong_version),
-            Err(CodecError::WrongVersion)
-        );
-
         // A window whose epoch identity is not the canonical derivation of
         // its own (market, index) names an epoch that cannot exist.
         let mut wrong_epoch = value;
@@ -2484,6 +2981,288 @@ mod tests {
         let mut flagged = value;
         flagged.flags = 1;
         assert_eq!(flagged.validate(), Err(CodecError::InvalidEnum));
+    }
+
+    #[test]
+    fn the_window_registry_and_selection_shapes_are_exact() {
+        // A stamped candidate-window deadline is strictly after the freeze
+        // deadline, always, because the freeze runs at or after it.
+        let mut early = stamped_window();
+        early.selection_deadline_slot = early.freeze_deadline_slot;
+        assert_eq!(early.validate(), Err(CodecError::InvalidCount));
+
+        // Registry entries: live ones are nonzero and pairwise distinct,
+        // padding is canonical zero, the count is bounded.
+        let mut zero_entry = stamped_window();
+        zero_entry.retained[1] = Hash32::ZERO;
+        assert_eq!(zero_entry.validate(), Err(CodecError::ZeroIdentity));
+        let mut duplicate = stamped_window();
+        duplicate.retained[1] = duplicate.retained[0];
+        assert_eq!(duplicate.validate(), Err(CodecError::MismatchedBinding));
+        let mut dirty_padding = stamped_window();
+        dirty_padding.retained[2] = h(0x73);
+        assert_eq!(
+            dirty_padding.validate(),
+            Err(CodecError::NonCanonicalPadding)
+        );
+        let mut over = stamped_window();
+        over.retained_count = MAX_RETAINED_CANDIDATES as u8 + 1;
+        assert_eq!(over.validate(), Err(CodecError::InvalidCount));
+        let mut wide = stamped_window();
+        wide.live_order_count = MAX_EPOCH_ORDERS as u16 + 1;
+        assert_eq!(wide.validate(), Err(CodecError::InvalidCount));
+
+        // Nothing is retained or selected before the freeze opened a window.
+        let mut unstamped = window();
+        unstamped.retained[0] = h(0x71);
+        unstamped.retained_count = 1;
+        assert_eq!(unstamped.validate(), Err(CodecError::MismatchedBinding));
+
+        // The selection result is one fact: candidate and slot together.
+        let mut selected = stamped_window();
+        selected.selected_candidate = selected.retained[0];
+        assert_eq!(selected.validate(), Err(CodecError::MismatchedBinding));
+        selected.selected_slot = selected.selection_deadline_slot;
+        selected.validate().unwrap();
+        let mut slot_only = stamped_window();
+        slot_only.selected_slot = 5;
+        assert_eq!(slot_only.validate(), Err(CodecError::MismatchedBinding));
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* The staged candidate submission                                     */
+    /* ------------------------------------------------------------------ */
+
+    /// A witness-declaring header and the stage that seals into it.
+    fn witnessed_pair() -> (CandidateFeedHeader, CandidateFeedStage) {
+        let mut header = feed_header();
+        header.declared_slices = 3;
+        header.flags = CANDIDATE_FEED_FLAG_SLICES_DECLARED;
+        // The seal writes the claimed relation digest as zero, always.
+        header.claimed_digest = 0;
+        header.candidate = header.recomputed_candidate_digest().unwrap();
+        let stage = CandidateFeedStage {
+            candidate: header.candidate,
+            epoch: header.epoch,
+            market: header.market,
+            order_set: header.order_set,
+            prices: header.prices,
+            virtual_split: header.virtual_split,
+            virtual_merge: header.virtual_merge,
+            honored_aon_mask: header.honored_aon_mask,
+            weighted_direct_volume: header.weighted_direct_volume,
+            limit_surplus_price_units: header.limit_surplus_price_units,
+            declared_slices: header.declared_slices,
+            distinct_owners: header.distinct_owners,
+            fills_written: 0,
+            slices_written: 0,
+            order_len: header.order_len,
+            outcome_count: header.outcome_count,
+            stored_bump: header.stored_bump,
+            flags: header.flags,
+        };
+        (header, stage)
+    }
+
+    fn witness_slices() -> [PairingSlice; 3] {
+        [
+            PairingSlice {
+                buy_ref: LegRef::Order(0),
+                sell_ref: LegRef::Order(1),
+                outcome: 0,
+                quantity: 5,
+            },
+            PairingSlice {
+                buy_ref: LegRef::Order(2),
+                sell_ref: LegRef::Split,
+                outcome: 1,
+                quantity: 2,
+            },
+            PairingSlice {
+                buy_ref: LegRef::Merge,
+                sell_ref: LegRef::Order(4),
+                outcome: 3,
+                quantity: 1,
+            },
+        ]
+    }
+
+    /// The load-bearing identity: a feed written through the stage protocol
+    /// is byte-for-byte the feed the direct writers produce, so T2-6's
+    /// fabricated feeds and T2-7's submitted ones are one format.
+    #[test]
+    fn a_staged_feed_seals_into_the_directly_built_bytes() {
+        let (header, stage) = witnessed_pair();
+        let fills = [3u64, 0, 9, 1, 2];
+        let slices = witness_slices();
+
+        let mut direct = [0u8; account_len::CANDIDATE_FEED];
+        init_candidate_feed(&mut direct, &header).unwrap();
+        for (index, fill) in fills.iter().enumerate() {
+            write_fill(&mut direct, index as u8, *fill).unwrap();
+        }
+        for (index, slice) in slices.iter().enumerate() {
+            write_slice_at(&mut direct, index as u16, slice).unwrap();
+        }
+
+        let mut staged = [0u8; account_len::CANDIDATE_FEED];
+        init_candidate_feed_stage(&mut staged, &stage).unwrap();
+        assert_eq!(staged[0], CANDIDATE_FEED_STAGE_TAG);
+        // A staging feed refuses every feed consumer by tag.
+        assert_eq!(
+            CandidateFeedHeader::decode(&staged),
+            Err(CodecError::WrongTag)
+        );
+        assert_eq!(verify_candidate_feed(&staged), Err(CodecError::WrongTag));
+        assert_eq!(
+            fill_at(&staged, &header, 0),
+            Ok(0),
+            "fill_at trusts its caller's header; the header decode above is \
+             what a consumer runs first"
+        );
+
+        // Ragged chunking, exactly at the cursor.
+        let after = stage_append_fills(&mut staged, &fills[..2]).unwrap();
+        assert_eq!(after.fills_written, 2);
+        assert_eq!(after.written(), 2);
+        let after = stage_append_fills(&mut staged, &fills[2..]).unwrap();
+        assert_eq!(after.fills_written, 5);
+        let after = stage_append_slices(&mut staged, &slices[..1]).unwrap();
+        assert_eq!(after.slices_written, 1);
+        assert_eq!(after.written(), 6);
+        stage_append_slices(&mut staged, &slices[1..]).unwrap();
+
+        let sealed = seal_candidate_feed(&mut staged).unwrap();
+        assert_eq!(sealed, header);
+        assert_eq!(staged, direct);
+        // The door is one-way: no stage write ever lands again.
+        assert_eq!(
+            stage_append_fills(&mut staged, &fills[..1]),
+            Err(CodecError::WrongTag)
+        );
+        assert_eq!(seal_candidate_feed(&mut staged), Err(CodecError::WrongTag));
+    }
+
+    #[test]
+    fn the_stage_protocol_refuses_out_of_order_and_incomplete_writes() {
+        let (_, stage) = witnessed_pair();
+        let mut account = [0u8; account_len::CANDIDATE_FEED];
+        init_candidate_feed_stage(&mut account, &stage).unwrap();
+
+        // Slices before fills: the cursor is one sequence.
+        assert_eq!(
+            stage_append_slices(&mut account, &witness_slices()[..1]),
+            Err(CodecError::InvalidCount)
+        );
+        // Overfill and empty chunks refuse.
+        assert_eq!(
+            stage_append_fills(&mut account, &[0u64; 6]),
+            Err(CodecError::InvalidCount)
+        );
+        assert_eq!(
+            stage_append_fills(&mut account, &[]),
+            Err(CodecError::InvalidCount)
+        );
+        // A premature seal refuses at every stage of incompleteness.
+        assert_eq!(seal_candidate_feed(&mut account), Err(CodecError::InvalidCount));
+        stage_append_fills(&mut account, &[1, 2, 3, 4, 5]).unwrap();
+        assert_eq!(seal_candidate_feed(&mut account), Err(CodecError::InvalidCount));
+        // A slice the staged coordinates cannot admit refuses before writing.
+        let mut bad = witness_slices()[0];
+        bad.buy_ref = LegRef::Order(5);
+        assert_eq!(
+            stage_append_slices(&mut account, &[bad]),
+            Err(CodecError::InvalidCount)
+        );
+        // Over-long slice chunks refuse too.
+        let four = [
+            witness_slices()[0],
+            witness_slices()[1],
+            witness_slices()[2],
+            witness_slices()[0],
+        ];
+        assert_eq!(
+            stage_append_slices(&mut account, &four),
+            Err(CodecError::InvalidCount)
+        );
+        stage_append_slices(&mut account, &witness_slices()).unwrap();
+        seal_candidate_feed(&mut account).unwrap();
+        verify_candidate_feed(&account).unwrap();
+    }
+
+    #[test]
+    fn a_witness_free_stage_seals_after_its_fills_alone() {
+        let header = feed_header();
+        let stage = CandidateFeedStage {
+            candidate: header.candidate,
+            epoch: header.epoch,
+            market: header.market,
+            order_set: header.order_set,
+            prices: header.prices,
+            virtual_split: header.virtual_split,
+            virtual_merge: header.virtual_merge,
+            honored_aon_mask: header.honored_aon_mask,
+            weighted_direct_volume: header.weighted_direct_volume,
+            limit_surplus_price_units: header.limit_surplus_price_units,
+            declared_slices: 0,
+            distinct_owners: header.distinct_owners,
+            fills_written: 0,
+            slices_written: 0,
+            order_len: header.order_len,
+            outcome_count: header.outcome_count,
+            stored_bump: header.stored_bump,
+            flags: 0,
+        };
+        let mut account = [0u8; account_len::CANDIDATE_FEED];
+        init_candidate_feed_stage(&mut account, &stage).unwrap();
+        // No declared witness admits no slice writes at all.
+        stage_append_fills(&mut account, &[0, 0, 0, 0, 0]).unwrap();
+        assert_eq!(
+            stage_append_slices(&mut account, &witness_slices()[..1]),
+            Err(CodecError::InvalidEnum)
+        );
+        let sealed = seal_candidate_feed(&mut account).unwrap();
+        // The sealed header carries the claims with a zero relation digest.
+        let mut expected = header;
+        expected.claimed_digest = 0;
+        assert_eq!(sealed, expected);
+        verify_candidate_feed(&account).unwrap();
+    }
+
+    #[test]
+    fn the_stage_prefix_round_trips_and_refuses_hostile_coordinates() {
+        let (_, stage) = witnessed_pair();
+        let mut account = [0u8; account_len::CANDIDATE_FEED];
+        init_candidate_feed_stage(&mut account, &stage).unwrap();
+        assert_eq!(CandidateFeedStage::decode(&account), Ok(stage));
+
+        // A forged identity refuses exactly as the header's does.
+        let mut forged = stage;
+        forged.candidate = h(0x5f);
+        assert_eq!(forged.validate(), Err(CodecError::NonCanonicalIdentity));
+        // Cursors never pass their totals, and fills come first.
+        let mut over = stage;
+        over.fills_written = stage.order_len + 1;
+        assert_eq!(over.validate(), Err(CodecError::InvalidCount));
+        let mut early = stage;
+        early.slices_written = 1;
+        assert_eq!(early.validate(), Err(CodecError::InvalidCount));
+        // A nonzero declared length without the flag is padding dressed as a
+        // witness, and an unknown flag bit is refused.
+        let mut undeclared = stage;
+        undeclared.flags = 0;
+        assert_eq!(undeclared.validate(), Err(CodecError::NonCanonicalPadding));
+        let mut flagged = stage;
+        flagged.flags |= 2;
+        assert_eq!(flagged.validate(), Err(CodecError::InvalidEnum));
+        // A stage never starts with a nonzero cursor.
+        let mut running = stage;
+        running.fills_written = 1;
+        let mut fresh = [0u8; account_len::CANDIDATE_FEED];
+        assert_eq!(
+            init_candidate_feed_stage(&mut fresh, &running),
+            Err(CodecError::InvalidCount)
+        );
     }
 
     #[test]

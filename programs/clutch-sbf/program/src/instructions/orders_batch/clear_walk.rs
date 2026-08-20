@@ -857,55 +857,16 @@ pub(super) fn complete_clear_work(
              * verified feed's stored regions.  The claimed u128 digest and
              * the claimed component fields are never consulted — they are
              * overwritten. */
-            let full_domain = clutch_batch_policy_identity::FullRelationDomainV1 {
-                relation_version: frame.epoch.relation_version,
-                market_id: identity(frame.epoch.market),
-                book_id: identity(frame.epoch.book),
-                epoch_id: identity(frame.epoch.epoch),
-                policy_id: identity(frame.epoch.policy),
-                order_set_id: identity(frame.epoch.order_set),
-                epoch_index: frame.epoch.epoch_index,
-                outcome_count: frame.epoch.outcome_count,
-                owner_count: frame.epoch.owner_count,
-                price_scale: frame.epoch.price_scale,
-                remainder_seed: frame.epoch.remainder_seed,
-                policy: GENERAL_CLEARING_POLICY_V1,
-            };
-            let domain_digest = full_domain
-                .digest()
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
             let tie_digest = {
                 let feed_data = accounts[IX_ADVANCE_FEED].data.borrow();
-                let fills = clearing::candidate_feed_fill_region(&feed_data)?;
-                let digest = match frame.feed.declared_slices() {
-                    Some(declared) => {
-                        let slices = clearing::candidate_feed_slice_region(&feed_data)?;
-                        clutch_batch_policy_identity::full_relation_candidate_digest_from_regions(
-                            domain_digest,
-                            identity(frame.feed.candidate),
-                            fills,
-                            frame.feed.honored_aon_mask,
-                            Some((declared, slices)),
-                        )
-                    }
-                    None => {
-                        clutch_batch_policy_identity::full_relation_candidate_digest_from_regions(
-                            domain_digest,
-                            identity(frame.feed.candidate),
-                            fills,
-                            frame.feed.honored_aon_mask,
-                            None,
-                        )
-                    }
-                };
-                digest.map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                recompute_tie_digest(&frame.epoch, &frame.feed, &feed_data)?
             };
             record.status = clutch_solana_layout::CANDIDATE_STATUS_VERIFIED;
             record.weighted_direct_volume = summary.score.weighted_direct_volume;
             record.limit_surplus_price_units = summary.score.limit_surplus_price_units;
             record.distinct_owners = summary.score.distinct_owners;
             record.churn = summary.score.churn;
-            record.score_digest = Hash32::from_bytes(tie_digest.0);
+            record.score_digest = tie_digest;
         }
         Some(Err(_relation_refusal)) => {
             /* A relation refusal is the verdict, not a fault: the candidate
@@ -927,4 +888,59 @@ pub(super) fn complete_clear_work(
 /// A layout identity as the policy crate's full-width identity type.
 fn identity(hash: Hash32) -> clutch_batch_policy_identity::Identity32V1 {
     clutch_batch_policy_identity::Identity32V1(hash.bytes())
+}
+
+/// Recompute the full-width relation-candidate tie digest of one feed's
+/// stored regions under the epoch's full-width domain.
+///
+/// The one construction of the verified tie identity, shared by the two
+/// consumers with opposite duties: `complete_clear_work` *stamps* its result
+/// onto the accepted record, and `FinalizeSelection` *refuses* any record
+/// whose stored digest a fresh recomputation over the presented feed bytes
+/// does not reproduce.  Never the claimed u128, in either place.
+#[inline(never)]
+pub(super) fn recompute_tie_digest(
+    epoch: &EpochAccount,
+    feed: &CandidateFeedHeader,
+    feed_data: &[u8],
+) -> Outcome<Hash32> {
+    let full_domain = clutch_batch_policy_identity::FullRelationDomainV1 {
+        relation_version: epoch.relation_version,
+        market_id: identity(epoch.market),
+        book_id: identity(epoch.book),
+        epoch_id: identity(epoch.epoch),
+        policy_id: identity(epoch.policy),
+        order_set_id: identity(epoch.order_set),
+        epoch_index: epoch.epoch_index,
+        outcome_count: epoch.outcome_count,
+        owner_count: epoch.owner_count,
+        price_scale: epoch.price_scale,
+        remainder_seed: epoch.remainder_seed,
+        policy: GENERAL_CLEARING_POLICY_V1,
+    };
+    let domain_digest = full_domain
+        .digest()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let fills = clearing::candidate_feed_fill_region(feed_data)?;
+    let digest = match feed.declared_slices() {
+        Some(declared) => {
+            let slices = clearing::candidate_feed_slice_region(feed_data)?;
+            clutch_batch_policy_identity::full_relation_candidate_digest_from_regions(
+                domain_digest,
+                identity(feed.candidate),
+                fills,
+                feed.honored_aon_mask,
+                Some((declared, slices)),
+            )
+        }
+        None => clutch_batch_policy_identity::full_relation_candidate_digest_from_regions(
+            domain_digest,
+            identity(feed.candidate),
+            fills,
+            feed.honored_aon_mask,
+            None,
+        ),
+    };
+    let digest = digest.map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(Hash32::from_bytes(digest.0))
 }

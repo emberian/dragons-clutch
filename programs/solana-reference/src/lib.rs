@@ -5737,6 +5737,49 @@ mod tests {
                 epoch: h(0x2e),
                 candidate: h(0x3e),
             },
+            /* The selection family (tags 54-57) lands ahead of any reference
+             * model of the general clearing plane, exactly like the walk
+             * family above: the adapter refuses all four, so the SVM oracle
+             * for this family is the layout codec byte-for-byte. */
+            Intent::SubmitCandidate {
+                market,
+                epoch: h(0x2e),
+                prices: {
+                    let mut prices = [0u64; clutch_solana_layout::MAX_OUTCOMES];
+                    prices[0] = 4_000;
+                    prices[1] = 6_000;
+                    prices
+                },
+                virtual_split: 0,
+                virtual_merge: 0,
+                honored_aon_mask: 0,
+                declared_slices: None,
+                weighted_direct_volume: 0,
+                limit_surplus_price_units: 0,
+                distinct_owners: 2,
+            },
+            Intent::WriteCandidateFeed {
+                market,
+                epoch: h(0x2e),
+                candidate: h(0x3e),
+                chunk: clutch_solana_layout::CandidateFeedChunk::Fills {
+                    count: 1,
+                    fills: {
+                        let mut fills = [0u64; clutch_solana_layout::FEED_FILLS_PER_CHUNK];
+                        fills[0] = 3;
+                        fills
+                    },
+                },
+            },
+            Intent::SealCandidate {
+                market,
+                epoch: h(0x2e),
+                candidate: h(0x3e),
+            },
+            Intent::FinalizeSelection {
+                market,
+                epoch: h(0x2e),
+            },
         ] {
             let request = layout_request(0, unsupported);
             assert_eq!(

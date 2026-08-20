@@ -251,6 +251,22 @@ pub enum ClutchError {
     /// the program's anchor comparison `body.consumed_fold() !=
     /// header.consumed_fold` caught a substituted checkpoint body.
     ResumeFoldMismatch = 0x0092,
+    /// A sealing candidate cannot beat the worst retained candidate's stored
+    /// score, so the full registry admits no displacement for it.
+    ///
+    /// Deliberately its own code rather than a `MismatchedState`: nothing is
+    /// inconsistent — the registry is simply better on its components — and
+    /// the staged pair survives, so the same seal may legitimately succeed
+    /// later if verification lowers a retained claim below this one.
+    CandidateNotCompetitive = 0x00a0,
+    /// A verified candidate's stored tie digest does not equal the digest
+    /// re-derived from the full-width domain and its feed's stored regions.
+    ///
+    /// Selection's tamper gate: a forged `score_digest` on the record, or a
+    /// post-verification edit of the feed's fills or declared witness, both
+    /// land here — the digest is recomputed from the presented bytes, never
+    /// compared claim-to-claim.
+    ScoreDigestMismatch = 0x00a1,
 }
 
 impl From<ClutchError> for ProgramError {

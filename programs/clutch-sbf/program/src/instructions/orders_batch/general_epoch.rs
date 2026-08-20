@@ -23,6 +23,11 @@
 //!   (T2-6b) is later refused against.  [`stream::epoch_binds_page_set`] runs
 //!   over the sealed set as the post-state check, so a set the binding would
 //!   refuse (an expired live record, a non-dense page) is never frozen.
+//!   The freeze also **opens the candidate window** (T2-7): it stamps
+//!   `selection_deadline_slot = freeze_slot + CANDIDATE_WINDOW_SLOTS` and the
+//!   frozen set's exact live cardinality into the window — the `order_len`
+//!   every submitted candidate must bind — which is why the window account
+//!   is writable here from this revision on.
 //!
 //! ## The policy account
 //!
@@ -57,8 +62,8 @@ use clutch_batch_policy_identity::{
     BATCH_POLICY_BYTES,
 };
 use clutch_solana_layout::clearing::{
-    canonical_general_book_id, open_general_epoch, EpochWindowAccount,
-    EPOCH_WINDOW_ACCOUNT_BYTES,
+    canonical_general_book_id, open_general_epoch, EpochWindowAccount, CANDIDATE_WINDOW_SLOTS,
+    EPOCH_WINDOW_ACCOUNT_BYTES, MAX_RETAINED_CANDIDATES,
 };
 use clutch_solana_layout::projection::OwnerInterner;
 use clutch_solana_layout::{
@@ -101,7 +106,8 @@ pub const IX_INIT_EPOCH_CLOCK: usize = 9;
 pub const FREEZE_EPOCH_FIXED_ACCOUNT_COUNT: usize = 3;
 /// The open epoch being frozen (writable, program-owned).
 pub const IX_FREEZE_EPOCH_EPOCH: usize = 0;
-/// The epoch's deadline window (read-only, program-owned).
+/// The epoch's schedule window (writable, program-owned): the freeze stamps
+/// the candidate-window deadline and the frozen set's live cardinality.
 pub const IX_FREEZE_EPOCH_WINDOW: usize = 1;
 /// Clock sysvar.
 pub const IX_FREEZE_EPOCH_CLOCK: usize = 2;
@@ -210,13 +216,22 @@ pub(super) fn init_epoch(
         terms.outcome_count,
         epoch_bump,
     )?;
+    // The candidate-window fields open at their unstamped zeros: the freeze
+    // that seals the book is what stamps the selection schedule and the
+    // frozen set's live cardinality.
     let window = EpochWindowAccount {
         epoch: epoch_id,
         market: *intent_market,
         epoch_index,
         freeze_deadline_slot,
+        selection_deadline_slot: 0,
+        selected_slot: 0,
+        selected_candidate: Hash32::ZERO,
+        retained: [Hash32::ZERO; MAX_RETAINED_CANDIDATES],
+        live_order_count: 0,
+        retained_count: 0,
         stored_bump: window_bump,
-    flags: 0,
+        flags: 0,
     };
     window.validate()?;
 
@@ -279,7 +294,7 @@ pub(super) fn freeze_epoch(
     accounts::validate_state_role_lengths(
         program_id,
         &accounts[IX_FREEZE_EPOCH_WINDOW],
-        false,
+        true,
         &[EPOCH_WINDOW_ACCOUNT_BYTES],
     )?;
     for page in &accounts[IX_FREEZE_EPOCH_PAGES..] {
@@ -306,11 +321,17 @@ pub(super) fn freeze_epoch(
         Some(epoch.stored_bump),
     )?;
 
-    let window = EpochWindowAccount::decode(&accounts[IX_FREEZE_EPOCH_WINDOW].data.borrow())?;
+    let mut window = EpochWindowAccount::decode(&accounts[IX_FREEZE_EPOCH_WINDOW].data.borrow())?;
     require(
         window.epoch == epoch.epoch
             && window.market == epoch.market
             && window.epoch_index == epoch.epoch_index,
+        ClutchError::MismatchedState,
+    )?;
+    // An OPEN epoch's window is unstamped by construction; stated so a
+    // fabricated pre-stamped window cannot smuggle a schedule past the freeze.
+    require(
+        window.selection_deadline_slot == 0 && window.live_order_count == 0,
         ClutchError::MismatchedState,
     )?;
     expect_pda(
@@ -347,13 +368,18 @@ pub(super) fn freeze_epoch(
     // digest and density; the interning walk mints tags over live records
     // only, exactly as the projection will during the pass-1 walk.
     let mut owners = boxed_empty_interner()?;
-    let (order_set, set_order_count, head_first, tail_last) = {
+    let (order_set, set_order_count, live_order_count, head_first, tail_last) = {
         let borrows: Vec<core::cell::Ref<'_, &mut [u8]>> = accounts[IX_FREEZE_EPOCH_PAGES..]
             .iter()
             .map(|page| page.data.borrow())
             .collect();
         let refs: Vec<&[u8]> = borrows.iter().map(|data| &***data as &[u8]).collect();
         let (order_set, set_order_count) = stream::frozen_set_commitment(&refs)?;
+        // Live records are counted in the same walk that interns owners: the
+        // count the window stamps is the exact number of orders the pass-1
+        // walk will feed, which is the `order_len` every admitted candidate
+        // must bind (T2-4's live-cardinality rule).
+        let mut live_order_count: u16 = 0;
         for page in &refs {
             let header = stream::OrderPageHeader::decode(page)?;
             let mut cursor = stream::OrderSlotCursor::new(page)?;
@@ -366,9 +392,11 @@ pub(super) fn freeze_epoch(
                 match slot {
                     OrderSlot::Single(record) => {
                         owners.intern(record.owner)?;
+                        live_order_count += 1;
                     }
                     OrderSlot::Portfolio(record) => {
                         owners.intern(record.owner)?;
+                        live_order_count += 1;
                     }
                     // A retired record is never fed, so it mints no tag.
                     OrderSlot::Tombstone(_) => {}
@@ -384,6 +412,7 @@ pub(super) fn freeze_epoch(
         (
             order_set,
             set_order_count,
+            live_order_count,
             head.first_order_id,
             tail.last_order_id,
         )
@@ -415,7 +444,19 @@ pub(super) fn freeze_epoch(
         stream::epoch_binds_page_set(&epoch, &refs)?;
     }
 
+    // The freeze that closed placement opens the candidate window: the
+    // selection deadline is the pinned schedule span from *this* slot (the
+    // freeze may legitimately run after its deadline; the window's length is
+    // fixed, its position rides the freeze), and the exact live cardinality
+    // is what every submitted candidate's `order_len` must equal.
+    window.selection_deadline_slot = now
+        .checked_add(CANDIDATE_WINDOW_SLOTS)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    window.live_order_count = live_order_count;
+    window.validate()?;
+
     epoch.encode(&mut borrow_account_mut(&accounts[IX_FREEZE_EPOCH_EPOCH])?)?;
+    window.encode(&mut borrow_account_mut(&accounts[IX_FREEZE_EPOCH_WINDOW])?)?;
     Ok(())
 }
 

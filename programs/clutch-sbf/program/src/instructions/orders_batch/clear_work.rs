@@ -355,12 +355,10 @@ fn finish_creation(account: &AccountInfo, stage: &clearing::ClearWorkGrowStage) 
 /// feed's content is [`clutch_solana_layout::clearing::init_candidate_feed`]
 /// plus the fill/slice writers, which need the solver's coordinates.
 ///
-/// T2-7 COORDINATION: the general `SubmitCandidate` lane is the intended
-/// caller; no shipped instruction calls this yet, and the returned bump is
-/// what that caller stamps into the feed header.
-// Landed with T2-3 for T2-7 (the general SubmitCandidate lane); dead until
-// that lane wires it, and the allow is what that lane deletes.
-#[allow(dead_code)]
+/// Wired by T2-7 exactly as coordinated: the general
+/// [`super::selection::submit_candidate`] is the caller, and the returned
+/// bump is what it stamps into the feed's stage prefix (and, through the
+/// seal, into the feed header).
 pub(crate) fn create_candidate_feed_account<'a>(
     program_id: &Pubkey,
     payer: &AccountInfo<'a>,
