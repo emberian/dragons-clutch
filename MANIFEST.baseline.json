@@ -17,8 +17,8 @@
     "content_identity": {
       "schema": "dragons-clutch/tracked-working-tree/v1",
       "algorithm": "sha256",
-      "sha256": "7c42c3c92b28f181d646ecedbbd1e8de132efa91e1065f7e21c980f8f54cbf73",
-      "entry_count": 662,
+      "sha256": "36f0f69b107ed08672417f01395f0c7ac63ca57804c574d369fe14a20453d138",
+      "entry_count": 696,
       "excluded_paths": [
         "MANIFEST.baseline.json"
       ],
@@ -28,9 +28,9 @@
       "rule": "enumerate stage-0 entries from `git ls-files --stage -z`, sort by raw path bytes, exclude only excluded_paths, and hash the schema tag followed by length-delimited (observed Git mode/type, kind, raw path, sha256(payload), payload length) records. Payload is working-tree bytes for regular files, link-target bytes for symlinks, and the index object id for gitlinks. Strict cleanliness makes this a complete identity of all checked-in gate/source bytes other than the generated manifest itself."
     },
     "provenance": {
-      "emitted_from_commit": "32f811913991803e2fa83c0a2d8513bc62e07498",
-      "emitted_from_tree_hash": "489ad9bf6fed948ac8116ac51a2a4757bd22bd6b",
-      "commit_subject": "Re-pin the cost lab to the landed ClearWork codec width",
+      "emitted_from_commit": "c40c61afc1d84e46036a2505c1cfb0aa383401a0",
+      "emitted_from_tree_hash": "2c7a50d023601589b8f33725ef4d216466379ae4",
+      "commit_subject": "Re-record the streaming excluded-source digest for the T2-6 driver cursors",
       "remotes": [
         {
           "name": "origin",
@@ -1909,7 +1909,7 @@
     "benchmarks.golden_checksums": {
       "path": "benchmarks/golden/checksums.sha256",
       "kind": "file-sha256",
-      "sha256": "0ed068ea81d14528452fabb70427a472ceac6d8c145cd65de4429d8d78264c07",
+      "sha256": "dccedf038b08c82a90d8fc095d408e0240459a2be008b7cd527e815b719d101b",
       "bytes": 232,
       "status": "present",
       "handoff_reference": "benchmarks/golden/checksums.sha256"
@@ -1917,29 +1917,29 @@
     "benchmarks.golden_summary": {
       "path": "benchmarks/golden/SUMMARY.md",
       "kind": "file-sha256",
-      "sha256": "58bd4562c06efb21ce543902bf5e9d2969fd2f65d74f48c006235f6f178663b4",
+      "sha256": "a423d863b53c07aed2ffea0a2e5e06c7dba6994a00261c1a8af8cbf03ff507cf",
       "bytes": 10422,
       "status": "present"
     },
     "benchmarks.golden_matrix_csv": {
       "path": "benchmarks/golden/matrix.csv",
       "kind": "file-sha256",
-      "sha256": "cf21678ed1a75d2e8f27672c2c3adf2c15e2693039942f3433a21855bafd69aa",
+      "sha256": "9f91c9e80113b5904cf796fc16f154c3ba1fb0f5abaee057eb16b753b82d3cf1",
       "bytes": 33451,
       "status": "present"
     },
     "benchmarks.golden_matrix_json": {
       "path": "benchmarks/golden/matrix.json",
       "kind": "file-sha256",
-      "sha256": "ae5ef4054550eabeb38ad437d61e691b450c3b08c1914c1b1abf538c63549c0c",
-      "bytes": 418608,
+      "sha256": "6b24d987048e7b041c5fa08a375a38e03f3c3f94c9d99818c89ea117df03c3e1",
+      "bytes": 418658,
       "status": "present"
     },
     "benchmarks.constants": {
       "path": "benchmarks/constants.json",
       "kind": "file-sha256",
-      "sha256": "01a45b68426350794168ad39aa6a14871c3e8c98622204c81076fa38942931f6",
-      "bytes": 17819,
+      "sha256": "40258aa7d5e55d845eda797d108e9ea794f820015e09a698ec28f371a371f3e2",
+      "bytes": 17879,
       "status": "present"
     },
     "fixtures.economics_admission": {
@@ -2148,7 +2148,7 @@
     "proof_shadow.verus_batch_runner": {
       "path": "verus/batch/run_batch_proofs.sh",
       "kind": "file-sha256",
-      "sha256": "d0fe093fecb0893cfb3e88ffaacf7eed0e48d1cfdb260dfb0bb7ecd4c1919b72",
+      "sha256": "6264b2a234f1db916d5ad19aee423fda82632a9c655777aadcbfeb9bbc7fc76e",
       "bytes": 8991,
       "status": "present"
     },
@@ -2182,7 +2182,7 @@
       "produced_by_output_key": "default_sbf_elf_sha256",
       "note": "default empty-production-source-registry ELF built twice into fresh target directories on one machine; byte identity is not independent reproducible-build closure and says nothing about deployment",
       "status": "not-a-repository-file",
-      "observed_sha256": "fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec"
+      "observed_sha256": "d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733"
     },
     "clutch_sbf.non_production_mock_program_elf": {
       "kind": "declared-build-output",
@@ -2192,7 +2192,7 @@
       "produced_by_output_key": "non_production_mock_sbf_elf_sha256",
       "note": "explicit non-production mock-source ELF built twice into fresh target directories on one machine; it is local test evidence only and is not a production-provider, deployment, or release identity",
       "status": "not-a-repository-file",
-      "observed_sha256": "17d031c4ac9a64827c0b8370006483ff3fdd9b3a1e0b4b4a8d2ea909c9daeeb5"
+      "observed_sha256": "77aaa74f6af3143b579791a2f47943ccf1ed537efcbe4b2ed3d269bbb36accbc"
     }
   },
   "toolchain": {
@@ -2292,8 +2292,8 @@
     ]
   },
   "run": {
-    "started_at_utc": "2026-08-20T06:38:46Z",
-    "finished_at_utc": "2026-08-20T06:46:13Z",
+    "started_at_utc": "2026-08-20T09:57:50Z",
+    "finished_at_utc": "2026-08-20T10:05:22Z",
     "gate_timeout_seconds": 1800,
     "note": "timestamps here are the only nondeterministic fields in this manifest; `check` ignores them"
   },
@@ -2323,10 +2323,10 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 74 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 75 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "6183df4784fd2df8818604cfd96ac0b919a12ea6d1dd5d471126dade1a75c568"
+      "key_lines_sha256": "83a8d7e6c1cf2a04290be1349860e55c26e7979d4a70ee727a9ab2cb27240ec4"
     },
     "cargo_test.clutch_bspline": {
       "exit_code": 0,
@@ -2363,12 +2363,12 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 194 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 202 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "62bc00e85113c97a1eb51f9f1e0f6d41edb9e4f0c23e6e0308c1d3412bc5b51b"
+      "key_lines_sha256": "e0b624488743eb2e34c5d72e1261cbc12ad1e3e30aed66701e8442f68918309a"
     },
     "cargo_test.solana_reference": {
       "exit_code": 0,
@@ -2395,11 +2395,11 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 168 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 169 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "30deef0fa2b36fc44957e2bcf0eeec244f187ea5a957e3e475d3f9a3406a96de"
+      "key_lines_sha256": "ac02d2a6d0195355cf7fa0c9f87072d103a30e4eb435e6fd2680deae2de869c1"
     },
     "cargo_clippy.clutch_kernel": {
       "exit_code": 0,
@@ -2535,16 +2535,18 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
+        "warning: unresolved link to `bpf`",
         "warning: public documentation for `direct_selection_v3` links to private item `freeze_abort`",
         "warning: public documentation for `direct_selection_v3` links to private item `staged`",
         "warning: public documentation for `direct_selection_v3` links to private item `terminal`",
         "warning: public documentation for `observe_resolve` links to private item `apply_recorded_redemption`",
+        "warning: unresolved link to `ReservationAccount`",
         "warning: public documentation for `clear_work` links to private item `create_first_stage`",
         "warning: public documentation for `clear_work` links to private item `create_candidate_feed_account`",
         "warning: public documentation for `split` links to private item `require_internal_bound`",
-        "warning: `clutch-sbf` (lib doc) generated 7 warnings"
+        "warning: `clutch-sbf` (lib doc) generated 9 warnings"
       ],
-      "key_lines_sha256": "3806c3cf9a96159121a29495fe0767a83c6f7db8fd80f75db49964ee35a8b59f"
+      "key_lines_sha256": "eec73e53df8464fe7ccd755d92dae16ab63549410fc8e5260c3d66e305c2fa37"
     },
     "vertical_model.golden_basic_trace": {
       "exit_code": 0,
@@ -2639,9 +2641,9 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+        "test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "300171c1ebeff34b87f11f6202a1085a3dcb0f1a7332361fce1b01bb673a7414"
+      "key_lines_sha256": "4a46ebb5dcf2c7ebb0de8012a513dacafc7f7506a12e050d897406cb96fffc5c"
     },
     "cargo_clippy.batch_policy_identity": {
       "exit_code": 0,
@@ -2772,10 +2774,10 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "Ran 51 tests",
+        "Ran 53 tests",
         "OK"
       ],
-      "key_lines_sha256": "4060a15ccf2402c277cb7c9c339b46841ef1caf633541a614994b0e7fbd1bb91"
+      "key_lines_sha256": "fd52f76131b9b8940738f851af4ac86a9519a1a7e1352dca948b9fa83e7ec601"
     },
     "python.liveness_policy_profile_current_seal": {
       "exit_code": 0,
@@ -3144,10 +3146,10 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "default pass 1  sha256=fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec  bytes=1527640",
-        "default pass 2  sha256=fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec  bytes=1527640",
-        "NON-PRODUCTION mock pass 1  sha256=17d031c4ac9a64827c0b8370006483ff3fdd9b3a1e0b4b4a8d2ea909c9daeeb5  bytes=1556112",
-        "NON-PRODUCTION mock pass 2  sha256=17d031c4ac9a64827c0b8370006483ff3fdd9b3a1e0b4b4a8d2ea909c9daeeb5  bytes=1556112",
+        "default pass 1  sha256=d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733  bytes=1785904",
+        "default pass 2  sha256=d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733  bytes=1785904",
+        "NON-PRODUCTION mock pass 1  sha256=77aaa74f6af3143b579791a2f47943ccf1ed537efcbe4b2ed3d269bbb36accbc  bytes=1814368",
+        "NON-PRODUCTION mock pass 2  sha256=77aaa74f6af3143b579791a2f47943ccf1ed537efcbe4b2ed3d269bbb36accbc  bytes=1814368",
         "default_reproducibility=PASS",
         "mock_reproducibility=PASS",
         "profile_separation=PASS",
@@ -3190,69 +3192,69 @@
         "source_campaign NON-PRODUCTION endow=EXPECTED_SUCCESS; lifecycle=EXPECTED_SUCCESS",
         "  accept endow                          1 instruction(s), 4 account(s) compared, oracle layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
         "  refuse endow-skipped-sequence         expect Custom(0x000d)  offline reference: n/a (the offline adapter has no Endow)",
-        "  accept split                        program_units=80034 tx_units=80184 limit=1400000 bytes=921 oracle=reference::apply",
-        "  refuse split-unsigned               Custom(0x0002) program_units=5810 tx_units=5960  offline reference: MissingSignature",
-        "  refuse split-stranger               Custom(0x0011) program_units=44961 tx_units=45111  offline reference: UnauthorizedActor",
-        "  refuse split-imposter               Custom(0x0009) program_units=43744 tx_units=43894  offline reference: WrongAccountKey",
-        "  refuse split-foreign-collateral     Custom(0x001b) program_units=63043 tx_units=63193  offline reference: n/a (the offline adapter has no collateral leg)",
-        "  accept roundtrip                    program_units=160099 per-instruction [80034, 80065] tx_units=160249 limit=1400000 bytes=1028 oracle=reference::apply",
-        "  accept merge                        program_units=87565 tx_units=87715 limit=1400000 bytes=921 oracle=reference::apply",
-        "  refuse merge-unsigned               Custom(0x0002) program_units=5841 tx_units=5991  offline reference: MissingSignature",
-        "  refuse merge-overdraw               Custom(0x2009) program_units=73180 tx_units=73330  offline reference: Kernel(InsufficientCollateral)",
-        "  accept materialize                  program_units=73103 tx_units=73253 limit=1400000 bytes=822 oracle=reference::apply",
-        "  refuse materialize-unsigned         Custom(0x0002) program_units=4643 tx_units=4793  offline reference: MissingSignature",
-        "  refuse materialize-wrong-destination Custom(0x000b) program_units=38881 tx_units=39031  offline reference: WrongAccountKey",
-        "  accept dematerialize                program_units=77592 tx_units=77742 limit=1400000 bytes=822 oracle=reference::apply",
-        "  refuse dematerialize-unsigned       Custom(0x0002) program_units=4646 tx_units=4796  offline reference: MissingSignature",
-        "  refuse dematerialize-overdraw       Custom(0x0001) program_units=62072 tx_units=62222  offline reference: Token-2022 burn CPI: InsufficientFunds; offline internal-release oracle would refuse Kernel(InsufficientBalance)",
-        "  accept resolve                      program_units=138982 tx_units=139132 limit=1400000 bytes=714 oracle=reference::apply_market_resolution_with_evidence",
-        "  accept resolve-repeat-idempotent    program_units=263572 per-instruction [138982, 124590] tx_units=263722 limit=1400000 bytes=742 oracle=market-global resolution oracle",
-        "  refuse resolve-late-conflict-rolls-back Custom(0x0057) program_units=116464 tx_units=255596  offline reference: market-global oracle: conflicting payout does not equal the evidence-derived payout",
-        "  refuse resolve-unsigned             Custom(0x3009) program_units=87353 tx_units=87503  offline reference: MissingSignature",
-        "  refuse resolve-wrong-payout         Custom(0x0057) program_units=116817 tx_units=116967  offline reference: PayoutIndexMismatch",
-        "  accept redeem                       program_units=114803 tx_units=114953 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
-        "  refuse redeem-unsigned              Custom(0x3009) program_units=78281 tx_units=78431  offline reference: MissingSignature",
-        "  refuse redeem-stranger              Custom(0x300a) program_units=78283 tx_units=78433  offline reference: UnauthorizedActor",
-        "  refuse redeem-foreign-collateral    Custom(0x001b) program_units=61963 tx_units=62113  offline reference: n/a (the offline adapter has no collateral leg)",
-        "  refuse endow                        Custom(0x0079) program_units=35463 tx_units=35613  offline reference: source release unavailable in this exact ELF",
-        "  refuse endow-unsigned               Custom(0x0002) program_units=5172 tx_units=5322  offline reference: n/a (the offline adapter has no Endow)",
-        "  refuse endow-stranger               Custom(0x0011) program_units=6396 tx_units=6546  offline reference: n/a (the offline adapter has no Endow)",
-        "  refuse endow-skipped-sequence       Custom(0x0079) program_units=35463 tx_units=35613  offline reference: source release unavailable in this exact ELF",
-        "  accept feed-advance                 program_units=7692 tx_units=7692 bytes=419 oracle=accumulator fold + FeedAccount codec",
-        "  refuse feed-advance-unsigned        Custom(0x0002) program_units=1400 tx_units=1400  offline reference: n/a (the offline adapter has no FeedAdvance)",
-        "  refuse feed-advance-replay          Custom(0x3011) program_units=3579 tx_units=3579  offline reference: n/a (the offline adapter has no FeedAdvance)",
-        "  accept create-market                program_units=202437 tx_units=202587 limit=1400000 bytes=1086 oracle=layout re-encode + reference::validate_market_init",
-        "  refuse create-unsigned              Custom(0x0002) program_units=6960 tx_units=7110  offline reference: n/a (validate_market_init models no signer)",
-        "  refuse create-already-initialized   Custom(0x0040) program_units=81769 tx_units=81919  offline reference: runtime account-plane refusal before economic-state validation",
+        "  accept split                        program_units=80382 tx_units=80532 limit=1400000 bytes=921 oracle=reference::apply",
+        "  refuse split-unsigned               Custom(0x0002) program_units=6161 tx_units=6311  offline reference: MissingSignature",
+        "  refuse split-stranger               Custom(0x0011) program_units=45312 tx_units=45462  offline reference: UnauthorizedActor",
+        "  refuse split-imposter               Custom(0x0009) program_units=44095 tx_units=44245  offline reference: WrongAccountKey",
+        "  refuse split-foreign-collateral     Custom(0x001b) program_units=63394 tx_units=63544  offline reference: n/a (the offline adapter has no collateral leg)",
+        "  accept roundtrip                    program_units=160797 per-instruction [80382, 80415] tx_units=160947 limit=1400000 bytes=1028 oracle=reference::apply",
+        "  accept merge                        program_units=87915 tx_units=88065 limit=1400000 bytes=921 oracle=reference::apply",
+        "  refuse merge-unsigned               Custom(0x0002) program_units=6194 tx_units=6344  offline reference: MissingSignature",
+        "  refuse merge-overdraw               Custom(0x2009) program_units=73533 tx_units=73683  offline reference: Kernel(InsufficientCollateral)",
+        "  accept materialize                  program_units=73411 tx_units=73561 limit=1400000 bytes=822 oracle=reference::apply",
+        "  refuse materialize-unsigned         Custom(0x0002) program_units=4923 tx_units=5073  offline reference: MissingSignature",
+        "  refuse materialize-wrong-destination Custom(0x000b) program_units=39161 tx_units=39311  offline reference: WrongAccountKey",
+        "  accept dematerialize                program_units=77895 tx_units=78045 limit=1400000 bytes=822 oracle=reference::apply",
+        "  refuse dematerialize-unsigned       Custom(0x0002) program_units=4926 tx_units=5076  offline reference: MissingSignature",
+        "  refuse dematerialize-overdraw       Custom(0x0001) program_units=62378 tx_units=62528  offline reference: Token-2022 burn CPI: InsufficientFunds; offline internal-release oracle would refuse Kernel(InsufficientBalance)",
+        "  accept resolve                      program_units=139248 tx_units=139398 limit=1400000 bytes=714 oracle=reference::apply_market_resolution_with_evidence",
+        "  accept resolve-repeat-idempotent    program_units=264101 per-instruction [139248, 124853] tx_units=264251 limit=1400000 bytes=742 oracle=market-global resolution oracle",
+        "  refuse resolve-late-conflict-rolls-back Custom(0x0057) program_units=116733 tx_units=256131  offline reference: market-global oracle: conflicting payout does not equal the evidence-derived payout",
+        "  refuse resolve-unsigned             Custom(0x3009) program_units=87622 tx_units=87772  offline reference: MissingSignature",
+        "  refuse resolve-wrong-payout         Custom(0x0057) program_units=117086 tx_units=117236  offline reference: PayoutIndexMismatch",
+        "  accept redeem                       program_units=115160 tx_units=115310 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
+        "  refuse redeem-unsigned              Custom(0x3009) program_units=78644 tx_units=78794  offline reference: MissingSignature",
+        "  refuse redeem-stranger              Custom(0x300a) program_units=78646 tx_units=78796  offline reference: UnauthorizedActor",
+        "  refuse redeem-foreign-collateral    Custom(0x001b) program_units=62329 tx_units=62479  offline reference: n/a (the offline adapter has no collateral leg)",
+        "  refuse endow                        Custom(0x0079) program_units=35780 tx_units=35930  offline reference: source release unavailable in this exact ELF",
+        "  refuse endow-unsigned               Custom(0x0002) program_units=5489 tx_units=5639  offline reference: n/a (the offline adapter has no Endow)",
+        "  refuse endow-stranger               Custom(0x0011) program_units=6713 tx_units=6863  offline reference: n/a (the offline adapter has no Endow)",
+        "  refuse endow-skipped-sequence       Custom(0x0079) program_units=35780 tx_units=35930  offline reference: source release unavailable in this exact ELF",
+        "  accept feed-advance                 program_units=7766 tx_units=7766 bytes=419 oracle=accumulator fold + FeedAccount codec",
+        "  refuse feed-advance-unsigned        Custom(0x0002) program_units=1474 tx_units=1474  offline reference: n/a (the offline adapter has no FeedAdvance)",
+        "  refuse feed-advance-replay          Custom(0x3011) program_units=3653 tx_units=3653  offline reference: n/a (the offline adapter has no FeedAdvance)",
+        "  accept create-market                program_units=203808 tx_units=203958 limit=1400000 bytes=1086 oracle=layout re-encode + reference::validate_market_init",
+        "  refuse create-unsigned              Custom(0x0002) program_units=7374 tx_units=7524  offline reference: n/a (validate_market_init models no signer)",
+        "  refuse create-already-initialized   Custom(0x0040) program_units=82183 tx_units=82333  offline reference: runtime account-plane refusal before economic-state validation",
         "PASS",
-        "  accept endow                        program_units=64083 tx_units=64233 limit=1400000 bytes=855 oracle=layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
-        "  refuse endow-skipped-sequence       Custom(0x000d) program_units=59575 tx_units=59725  offline reference: n/a (the offline adapter has no Endow)",
-        "  accept walk-01-create-market        program_units=194937 tx_units=195087 limit=1400000 bytes=1086 oracle=layout re-encode + reference::validate_market_init",
-        "  accept walk-02-endow                program_units=56583 tx_units=56733 bytes=855 oracle=layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
-        "  accept walk-03-split                program_units=69534 tx_units=69684 bytes=921 oracle=reference::apply",
-        "  accept walk-04-materialize          program_units=62603 tx_units=62753 bytes=822 oracle=reference::apply",
-        "  accept walk-05-dematerialize        program_units=74592 tx_units=74742 bytes=822 oracle=reference::apply",
-        "  accept walk-06-merge                program_units=77065 tx_units=77215 bytes=921 oracle=reference::apply",
-        "  accept walk-07-feed-advance         program_units=15681 per-instruction [6213, 4734, 4734] tx_units=15681 bytes=669 oracle=accumulator fold + FeedAccount codec",
-        "  accept walk-08-resolve              program_units=134482 tx_units=134632 limit=1400000 bytes=714 oracle=reference::apply_market_resolution_with_evidence",
-        "  refuse walk-09-merge-after-resolve  Custom(0x0016) program_units=40535 tx_units=40685  offline reference: MismatchedState",
-        "  accept walk-10-redeem-winning       program_units=137303 tx_units=137453 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
-        "  accept walk-11-redeem-losing        program_units=122303 tx_units=122453 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
-        "   1  walk-01-create-market            194937      1086        7  MATCH",
-        "   2  walk-02-endow                     56583       855        4  MATCH",
-        "   3  walk-03-split                     69534       921        5  MATCH",
-        "   4  walk-04-materialize               62603       822        5  MATCH",
-        "   5  walk-05-dematerialize             74592       822        5  MATCH",
-        "   6  walk-06-merge                     77065       921        5  MATCH",
-        "   7  walk-07-feed-advance         15681 [6213, 4734, 4734]       669        1  MATCH",
-        "   8  walk-08-resolve                  134482       714        3  MATCH",
-        "   9  walk-09-merge-after-resolve       40535       921        0  REFUSED Custom(0x0016)",
-        "  10  walk-10-redeem-winning           137303       887        5  MATCH",
-        "  11  walk-11-redeem-losing            122303       887        4  MATCH",
-        "default_sbf_elf_sha256=fda59705ac1c18692faed454fb7588a32851028eea5ecc17e00f9d3f6af309ec",
-        "non_production_mock_sbf_elf_sha256=17d031c4ac9a64827c0b8370006483ff3fdd9b3a1e0b4b4a8d2ea909c9daeeb5"
+        "  accept endow                        program_units=64426 tx_units=64576 limit=1400000 bytes=855 oracle=layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
+        "  refuse endow-skipped-sequence       Custom(0x000d) program_units=59892 tx_units=60042  offline reference: n/a (the offline adapter has no Endow)",
+        "  accept walk-01-create-market        program_units=196308 tx_units=196458 limit=1400000 bytes=1086 oracle=layout re-encode + reference::validate_market_init",
+        "  accept walk-02-endow                program_units=56926 tx_units=57076 bytes=855 oracle=layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
+        "  accept walk-03-split                program_units=69882 tx_units=70032 bytes=921 oracle=reference::apply",
+        "  accept walk-04-materialize          program_units=62911 tx_units=63061 bytes=822 oracle=reference::apply",
+        "  accept walk-05-dematerialize        program_units=74895 tx_units=75045 bytes=822 oracle=reference::apply",
+        "  accept walk-06-merge                program_units=77415 tx_units=77565 bytes=921 oracle=reference::apply",
+        "  accept walk-07-feed-advance         program_units=15903 per-instruction [6287, 4808, 4808] tx_units=15903 bytes=669 oracle=accumulator fold + FeedAccount codec",
+        "  accept walk-08-resolve              program_units=134748 tx_units=134898 limit=1400000 bytes=714 oracle=reference::apply_market_resolution_with_evidence",
+        "  refuse walk-09-merge-after-resolve  Custom(0x0016) program_units=40888 tx_units=41038  offline reference: MismatchedState",
+        "  accept walk-10-redeem-winning       program_units=137660 tx_units=137810 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
+        "  accept walk-11-redeem-losing        program_units=122660 tx_units=122810 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
+        "   1  walk-01-create-market            196308      1086        7  MATCH",
+        "   2  walk-02-endow                     56926       855        4  MATCH",
+        "   3  walk-03-split                     69882       921        5  MATCH",
+        "   4  walk-04-materialize               62911       822        5  MATCH",
+        "   5  walk-05-dematerialize             74895       822        5  MATCH",
+        "   6  walk-06-merge                     77415       921        5  MATCH",
+        "   7  walk-07-feed-advance         15903 [6287, 4808, 4808]       669        1  MATCH",
+        "   8  walk-08-resolve                  134748       714        3  MATCH",
+        "   9  walk-09-merge-after-resolve       40888       921        0  REFUSED Custom(0x0016)",
+        "  10  walk-10-redeem-winning           137660       887        5  MATCH",
+        "  11  walk-11-redeem-losing            122660       887        4  MATCH",
+        "default_sbf_elf_sha256=d692954949d57db22a22daec4ff62f1eeccbe61618a33833e46310f790dd4733",
+        "non_production_mock_sbf_elf_sha256=77aaa74f6af3143b579791a2f47943ccf1ed537efcbe4b2ed3d269bbb36accbc"
       ],
-      "key_lines_sha256": "f0ce42463810cd214e63da8d4c1b0f5cc0117d69fba082b49af8fb27fb83f51c"
+      "key_lines_sha256": "ed78a596be1980729c6cd255ad5e483d66a33bcd8eb31bf4b266cc44790961cd"
     },
     "sbf.committed_signed_walk": {
       "exit_code": 0,
@@ -3260,7 +3262,7 @@
       "matches_expectation": true,
       "key_lines": [
         "source_profile=NON-PRODUCTION-non-production-mock-source",
-        "sbf_elf_sha256=17d031c4ac9a64827c0b8370006483ff3fdd9b3a1e0b4b4a8d2ea909c9daeeb5",
+        "sbf_elf_sha256=77aaa74f6af3143b579791a2f47943ccf1ed537efcbe4b2ed3d269bbb36accbc",
         "== signed, confirmed, committed walk ==",
         "committed_signed_transactions=22",
         "committed_expected_refusals=2",
@@ -3271,7 +3273,7 @@
         "redeem_external=DRIVEN",
         "falsifiability=PASS"
       ],
-      "key_lines_sha256": "cb3c1ea8f0ea519d2561b0d207bcab5cbf3e1dac19554a0d67749e6d75588912"
+      "key_lines_sha256": "8d54ee4c588bf33b19693010c30488943044dfd7fecd16b93933f6676497ddc6"
     },
     "sbf.token2022_program_test": {
       "exit_code": 0,
@@ -3285,12 +3287,12 @@
         "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 2 tests",
         "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 3 tests",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 5 tests",
         "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 13 tests",
         "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
-        "running 3 tests",
-        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 15 tests",
         "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 4 tests",
@@ -3299,7 +3301,7 @@
         "running 9 tests",
         "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "20405053e49af3113144a93afa908a38c5bb100f235a6f9adbbb6198f1d92e8d"
+      "key_lines_sha256": "ac297e7ebf2800c87e584412da1a8dfb03866ad6a5d42c1579f27ba80ff5b001"
     },
     "sbf.token2022_program_test_non_production_mock": {
       "exit_code": 0,
@@ -3308,20 +3310,20 @@
       "key_lines": [
         "== SVM profile: NON-PRODUCTION-non-production-mock-source ==",
         "source_profile=NON-PRODUCTION-non-production-mock-source",
-        "elf_sha256=17d031c4ac9a64827c0b8370006483ff3fdd9b3a1e0b4b4a8d2ea909c9daeeb5",
-        "elf_bytes=1556112",
+        "elf_sha256=77aaa74f6af3143b579791a2f47943ccf1ed537efcbe4b2ed3d269bbb36accbc",
+        "elf_bytes=1814368",
         "running 0 tests",
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 6 tests",
         "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 2 tests",
         "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 3 tests",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 5 tests",
         "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 17 tests",
         "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
-        "running 3 tests",
-        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 1 test",
         "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 15 tests",
@@ -3332,7 +3334,7 @@
         "running 9 tests",
         "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "296a27d2f1eb81c749aed2279c3ae313872fdcd09691786a4033a9e37fc3c3f2"
+      "key_lines_sha256": "f9dd6464a0b799955615eea1cb0b5b3c4d6121a6131cf7c3742ae7bf7e28fa8a"
     },
     "static_client.npm": {
       "exit_code": 0,
