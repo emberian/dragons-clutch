@@ -19,3 +19,4 @@ Initial records:
   independent Rocq and optional Lean shadow seam.
 - [0004](0004-offline-first-mainnet-gate.md): offline-first engineering and the
   separate regulatory/deployment gate.
+- [ADR-0005](0005-lean-proof-substrate-of-record.md) — Lean is the proof substrate of record (supersedes ADR-0003)

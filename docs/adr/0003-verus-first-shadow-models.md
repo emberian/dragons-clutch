@@ -1,6 +1,6 @@
 # ADR-0003: Verus-first kernel with independent shadow models
 
-Status: experimental
+Status: superseded by [ADR-0005](0005-lean-proof-substrate-of-record.md) (2026-08-20)
 
 ## Context
 
