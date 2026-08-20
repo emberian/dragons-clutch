@@ -70,6 +70,20 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- DECISIONS ADOPTED under ember's delegation + weakest-choice principle
+  (docs/decisions/ADOPTED_2026-08-20.md; ADR-0005 adopted at docs/adr/,
+  ADR-0003 marked superseded): ten adoptions, one principle-inverted
+  deferral (upgrade posture — immutable-at-first-deployment loses to
+  upgradeable-then-burn under the principle; mainnet-gated anyway), section
+  8 explicitly deferred, ember-reserved list unchanged (submissions, E2/E3
+  acts, treasury key, counsel, mainnet, L0). UNLOCKED WAVE LAUNCHED:
+  TerminalClosure (Fable — close paths + dependency DAG + hostile walk
+  extension + the headline reclaimed-lamports number), the V3 syscall-era
+  measurement campaign (Opus, evidence-only at e8ba31d5 — MERGE BEFORE
+  TerminalClosure forks the identity), and decision-doc propagation (Opus).
+  Also: Pages ENABLED via gh — the site is LIVE and public at
+  https://emberian.github.io/dragons-clutch/ (deploy green, 200 OK).
+
 - GENERAL-PLANE SIGNED VALIDATOR WALK MERGED — the devnet-free evidence
   ceiling reached: 44 signed, CONFIRMED transactions on a real loopback
   validator driving the ENTIRE Tier-2 lifecycle (policy artifact staged/
