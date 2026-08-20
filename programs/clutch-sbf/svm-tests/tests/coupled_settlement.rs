@@ -1,23 +1,21 @@
-//! Real-SBF evidence for the narrow coupled settlement consumption seam.
+//! Real-SBF evidence for the entitled direct-slice settlement consumption.
 //!
-//! The candidate, CandidateFeed, and receipt are installed as already-selected
-//! genesis fixtures because their permissionless creation/freeze lifecycle is
-//! still a STOP.  The transition under test is nevertheless the real program
-//! ELF: it authenticates every canonical PDA, consumes two exact ACTIVE
-//! reservations, transfers cash and one Egg atom family together, releases the
-//! buyer's unused envelope, and exhausts the receipt once.
+//! The candidate and receipt are installed as already-selected,
+//! already-entitled genesis fixtures so this file isolates *consumption*; the
+//! live freeze path that creates them (tags 58-59) is driven end to end in
+//! `entitled_clearing.rs`.  The transition under test is the real program
+//! ELF: it authenticates every canonical PDA, consumes two exact `ENTITLED`
+//! reservations, transfers cash and one Egg atom family together, releases
+//! the buyer's unused envelope, and exhausts the receipt once — the T2-8
+//! seven-account `SettlePage` shape, no page and no feed in the list.
 
 use {
     clutch_sbf::{error::ClutchError, instructions::orders_batch, seeds},
     clutch_solana_layout::{
         account_len, canonical_epoch_id, canonical_order_id,
-        clearing::{
-            init_candidate_feed, write_fill, write_slice_at, CandidateFeedHeader, LegRef,
-            PairingSlice, CANDIDATE_FEED_FLAG_SLICES_DECLARED,
-        },
         reservation::{
             canonical_reservation_id, ReservationAccount, ReservationPlan,
-            RESERVATION_ACCOUNT_BYTES,
+            RESERVATION_ACCOUNT_BYTES, RESERVATION_STATE_ENTITLED,
         },
         stream, CandidateRecord, EpochAccount, Hash32, Intent, OrderRecord, OrderSlot,
         PositionAccount, SettlementReceiptAccount, CANDIDATE_STATUS_SELECTED,
@@ -73,8 +71,6 @@ enum Mutation {
 struct Fixture {
     epoch: Address,
     candidate: Address,
-    feed: Address,
-    page: Address,
     buyer_position: Address,
     seller_position: Address,
     buyer_reservation: Address,
@@ -94,8 +90,6 @@ impl Fixture {
         let metas = vec![
             AccountMeta::new_readonly(self.epoch, false),
             AccountMeta::new_readonly(self.candidate, false),
-            AccountMeta::new_readonly(self.feed, false),
-            AccountMeta::new_readonly(self.page, false),
             AccountMeta::new(buyer, false),
             AccountMeta::new(seller, false),
             AccountMeta::new(self.buyer_reservation, false),
@@ -179,8 +173,10 @@ async fn start(mutation: Mutation) -> (BanksClient, Keypair, Fixture) {
         expiry_epoch: EPOCH_INDEX,
     });
 
+    // The page is built host-side only to derive a real frozen `order_set`;
+    // the entitled consumption shape presents no page account.
     let page_index_bytes = 0u16.to_le_bytes();
-    let (page_address, page_bump) = pda(seeds::SEED_PAGE, &[&epoch_id.bytes(), &page_index_bytes]);
+    let (_, page_bump) = pda(seeds::SEED_PAGE, &[&epoch_id.bytes(), &page_index_bytes]);
     let mut page = vec![0; account_len::ORDER_PAGE];
     stream::init_page(&mut page, market, epoch_id, 0, 1, page_bump).unwrap();
     stream::append_slot(&mut page, buy).unwrap();
@@ -253,45 +249,6 @@ async fn start(mutation: Mutation) -> (BanksClient, Keypair, Fixture) {
         &[&epoch_id.bytes(), &candidate.candidate.bytes()],
     );
     candidate.stored_bump = candidate_bump;
-    let (feed_address, feed_bump) = pda(
-        seeds::SEED_CANDIDATE_FEED,
-        &[&epoch_id.bytes(), &candidate.candidate.bytes()],
-    );
-    let feed_header = CandidateFeedHeader {
-        candidate: candidate.candidate,
-        epoch: epoch_id,
-        market,
-        order_set,
-        prices,
-        virtual_split: 0,
-        virtual_merge: 0,
-        honored_aon_mask: 0,
-        weighted_direct_volume: 8,
-        limit_surplus_price_units: 0,
-        claimed_digest: 11,
-        churn: 0,
-        declared_slices: 1,
-        distinct_owners: 2,
-        order_len: 2,
-        outcome_count: 2,
-        stored_bump: feed_bump,
-        flags: CANDIDATE_FEED_FLAG_SLICES_DECLARED,
-    };
-    let mut feed = vec![0; account_len::CANDIDATE_FEED];
-    init_candidate_feed(&mut feed, &feed_header).unwrap();
-    write_fill(&mut feed, 0, 4).unwrap();
-    write_fill(&mut feed, 1, 4).unwrap();
-    write_slice_at(
-        &mut feed,
-        0,
-        &PairingSlice {
-            buy_ref: LegRef::Order(0),
-            sell_ref: LegRef::Order(1),
-            outcome: 0,
-            quantity: 4,
-        },
-    )
-    .unwrap();
 
     let (buyer_position_address, buyer_position_bump) =
         pda(seeds::SEED_POSITION, &[&market.bytes(), &buy_owner.bytes()]);
@@ -325,7 +282,7 @@ async fn start(mutation: Mutation) -> (BanksClient, Keypair, Fixture) {
         canonical_reservation_id(market, epoch_id, buy_owner, 0, buy.order_id());
     let (buyer_reservation_address, buyer_reservation_bump) =
         pda(seeds::SEED_RESERVATION, &[&buy_reservation_id.bytes()]);
-    let buyer_reservation = ReservationAccount::active(
+    let mut buyer_reservation = ReservationAccount::active(
         market,
         epoch_id,
         buy_owner,
@@ -345,7 +302,7 @@ async fn start(mutation: Mutation) -> (BanksClient, Keypair, Fixture) {
         canonical_reservation_id(market, epoch_id, sell_owner, 0, sell.order_id());
     let (seller_reservation_address, seller_reservation_bump) =
         pda(seeds::SEED_RESERVATION, &[&sell_reservation_id.bytes()]);
-    let seller_reservation = ReservationAccount::active(
+    let mut seller_reservation = ReservationAccount::active(
         market,
         epoch_id,
         sell_owner,
@@ -360,6 +317,11 @@ async fn start(mutation: Mutation) -> (BanksClient, Keypair, Fixture) {
         sell_plan,
     )
     .unwrap();
+    // The entitlement freeze's poststate: the untouched envelope, ENTITLED.
+    buyer_reservation.state = RESERVATION_STATE_ENTITLED;
+    seller_reservation.state = RESERVATION_STATE_ENTITLED;
+    buyer_reservation.validate().unwrap();
+    seller_reservation.validate().unwrap();
 
     let slice_bytes = 0u16.to_le_bytes();
     let (receipt_address, receipt_bump) = pda(
@@ -402,8 +364,6 @@ async fn start(mutation: Mutation) -> (BanksClient, Keypair, Fixture) {
         candidate_address,
         encode(account_len::CANDIDATE, |out| candidate.encode(out)),
     );
-    add_state(&mut test, feed_address, feed);
-    add_state(&mut test, page_address, page);
     add_state(
         &mut test,
         buyer_position_address,
@@ -436,8 +396,6 @@ async fn start(mutation: Mutation) -> (BanksClient, Keypair, Fixture) {
     let fixture = Fixture {
         epoch: epoch_address,
         candidate: candidate_address,
-        feed: feed_address,
-        page: page_address,
         buyer_position: buyer_position_address,
         seller_position: seller_position_address,
         buyer_reservation: buyer_reservation_address,
