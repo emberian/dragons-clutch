@@ -1234,6 +1234,64 @@ mod tests {
     }
 
     #[test]
+    fn stream_checkpoint_policy_bytes_equal_the_artifact_selector_bytes() {
+        // The Tier 2 checkpoint codec (`clutch_batch::relation_v1_stream`)
+        // cannot depend on this crate — the dependency points the other way —
+        // so it *restates* the selector byte values.  This is the cross-crate
+        // equality gate the restatement is conditioned on: over every
+        // registered selector product and the three fee shapes, the
+        // checkpoint codec's 15 policy bytes must equal this artifact's
+        // selector region (bytes 12..22), fee discriminant (byte 22), and fee
+        // parameter (bytes 24..28) exactly, and its decoder must return the
+        // identical `FrozenPolicyV1`.
+        use clutch_batch::relation_v1_stream::{
+            decode_policy_v1, encode_policy_v1, POLICY_ENCODED_BYTES,
+        };
+        assert_eq!(POLICY_ENCODED_BYTES, 15);
+        let radices = [2u8, 3, 3, 3, 4, 2, 2, 2, 2, 1];
+        let selector_products = radices
+            .iter()
+            .fold(1usize, |product, radix| product * *radix as usize);
+        let base = canonical_batch_policy_bytes(&base_policy()).unwrap();
+        let mut compared = 0usize;
+        for code in 0..selector_products {
+            let mut quotient = code;
+            let mut selectors = [0u8; 10];
+            for (selector, radix) in selectors.iter_mut().zip(radices) {
+                *selector = (quotient % radix as usize) as u8;
+                quotient /= radix as usize;
+            }
+            for fee_case in 0..3 {
+                let mut bytes = base;
+                bytes[12..22].copy_from_slice(&selectors);
+                match fee_case {
+                    0 => {
+                        bytes[22] = 0;
+                        bytes[24..28].copy_from_slice(&0u32.to_le_bytes());
+                    }
+                    1 => {
+                        bytes[22] = 1;
+                        bytes[24..28].copy_from_slice(&0u32.to_le_bytes());
+                    }
+                    _ => {
+                        bytes[22] = 1;
+                        bytes[24..28].copy_from_slice(&(FEE_BPS_DENOMINATOR as u32).to_le_bytes());
+                    }
+                }
+                let policy = decode_batch_policy(&bytes).unwrap();
+                let mut stream_bytes = [0u8; 15];
+                encode_policy_v1(&policy, &mut stream_bytes).unwrap();
+                assert_eq!(&stream_bytes[..10], &bytes[12..22], "selector bytes");
+                assert_eq!(stream_bytes[10], bytes[22], "fee discriminant");
+                assert_eq!(&stream_bytes[11..15], &bytes[24..28], "fee parameter");
+                assert_eq!(decode_policy_v1(&stream_bytes), Ok(policy));
+                compared += 1;
+            }
+        }
+        assert_eq!(compared, 10_368);
+    }
+
+    #[test]
     fn policy_codec_refuses_unknowns_noncanonical_fee_and_reserved_mutations() {
         let bytes = canonical_batch_policy_bytes(&base_policy()).unwrap();
         assert_eq!(

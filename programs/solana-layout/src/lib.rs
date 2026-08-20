@@ -118,22 +118,22 @@ pub const RELATION_VERSION: u32 = 1;
 pub const MAX_SLICES: usize = 416;
 /// Exact byte length of the streaming-checkpoint body.
 ///
-/// Mirrors the pinned `core::mem::size_of::<ClearWorkV1>()` of
-/// `clutch_batch::relation_v1_stream`
-/// (`docs/implementation/STREAMING_RELATION_DESIGN.md` §7, pinned there by
-/// `clear_work_size_is_pinned`).
+/// Mirrors the pinned `clutch_batch::relation_v1_stream::ClearWorkV1::
+/// ENCODED_BYTES` — the checkpoint codec's canonical serialized length
+/// (Tier 2 join 5), pinned there by `clear_work_encoded_bytes_are_pinned`.
+/// This is a **wire fact**, not a `size_of` measurement: the codec is an
+/// explicit little-endian field walk (`encode_into`/`decode_into`, both by
+/// reference), independent of any `repr(Rust)` layout accident.  Before the
+/// codec landed, this constant pinned `size_of::<ClearWorkV1>()` = 48,592 and
+/// the body was opaque bytes.
 ///
-/// **This crate owns the length and nothing inside it.**  `ClearWorkV1` is
-/// `#[derive(Clone, Debug, PartialEq, Eq)]` over a plain `repr(Rust)` struct,
-/// so the number above is a *measurement of one build*, not a wire fact: Rust
-/// makes no layout guarantee, and no code anywhere may reinterpret these bytes
-/// as a `ClearWorkV1`.  Until `clutch-batch` either declares `#[repr(C)]` with
-/// a `Pod` bound or grows an explicit serializer, the body region of
-/// [`clearing::ClearWorkAccount`] is **opaque bytes of exactly this length**,
-/// and this crate's contract is the framing, the identity binding, and the
-/// streaming window accessors — never an interpretation.  See
-/// `docs/implementation/SOLANA_LAYOUT.md`, "The clearing plane".
-pub const CLEAR_WORK_BODY_BYTES: usize = 48_592;
+/// **This crate still owns the length and nothing inside it.**  The body
+/// region of [`clearing::ClearWorkAccount`] is written and read only by the
+/// checkpoint codec in `clutch-batch`; this crate's contract remains the
+/// framing, the identity binding, and the streaming window accessors — never
+/// an interpretation.  See `docs/implementation/SOLANA_LAYOUT.md`, "The
+/// clearing plane".
+pub const CLEAR_WORK_BODY_BYTES: usize = 47_846;
 /// Largest admitted observation bucket duration, in seconds.
 ///
 /// Mirrors `clutch_accumulator::MAX_BUCKET_SECONDS`.
