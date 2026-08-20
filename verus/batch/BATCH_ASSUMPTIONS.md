@@ -59,7 +59,7 @@ files are byte-identical: scalar `lib.rs`
 `relation_v1.rs`
 `9d4e3cc0fdfc03a4cd2d08f0257224f79fe4a8f0d1f861a09b75e92755bd30da`,
 and `relation_v1_stream.rs`
-`53a37049c88a2a2abefec5d3f34f7042a6d546e7469ec543d37583cd49813bf3`.
+`1b03f5a53e56e92f37a913abb2858e44b9b3711756ad954474ad33158c92a340`.
 This is source identity evidence, not a proof of correspondence. (Excluded-source
 digests re-recorded 2026-08-20 after semantics-preserving stack-hygiene and
 checkpoint-codec changes to the two excluded files — `relation_v1.rs` in-place
