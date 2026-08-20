@@ -70,6 +70,28 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- THE WEEKEND WITNESS WAVE LANDED, BOTH BUILDS: (1) the OFF-HOURS SWEEP
+  (8,640 rows, v1-anchored two independent ways, hand-verified row,
+  monotonicity clean): windows inside a thin session lose manipulation
+  cost linearly with depth, max clawback sixfold, nothing survives
+  tenth-depth — published beside v1 with BOTH honesty rails
+  (min-across-sessions; inventory-carry excluded and named), and the
+  perps filing now FILES the computation it demands. (2) the
+  DISAGREEMENT EXHIBIT: two named estimators (Gaussian fit vs empirical
+  resample, pre-registered rules, seed 20260827) state densities over the
+  Friday-clutch basis; the general plane clears and settles their
+  disagreement in the bank ON THE SEALED CYCLE-E ELF (T0: degree-1 terms
+  ADMIT through the general plane — new evidence), conservation exact,
+  126-check script green, and the headline identity holds: both models
+  think they won and the sum of self-assessed edges IS the disagreement
+  traded (196.115 + 289.11 = 485.225 atoms). The design's one universal
+  claim was REFUTED by the build's independent derivation (76/77 in-band
+  candidates clear; exception named on the page) — the honesty apparatus
+  eating its own cooking. site/disagreement.html live; Position 3's
+  witness clause landed in the FILING statement. CURRENT_TRUTH advanced
+  to cycle E (caught stale again by an exhibit lane); cycle-E attestation
+  dispatched (was interrupted by the filings pivot).
+
 - TERMINALCLOSURE MERGED (966ee2c; 27/27 targets green; canonical identity
   4fded7a6/1,979,512): intents 60-67 — owner-signed terminal release plus
   permissionless closes down an enforced dependency DAG, exact recorded
