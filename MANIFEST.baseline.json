@@ -17,8 +17,8 @@
     "content_identity": {
       "schema": "dragons-clutch/tracked-working-tree/v1",
       "algorithm": "sha256",
-      "sha256": "59b5cd1e7431cd29979f89ccc0d43206849fe41f916fe42e228bd4a4001b3f01",
-      "entry_count": 627,
+      "sha256": "3b0a3a8e62d74a62e6cfca70f01d2089e088a76fa24184f9a0306a4e43017e25",
+      "entry_count": 631,
       "excluded_paths": [
         "MANIFEST.baseline.json"
       ],
@@ -28,9 +28,9 @@
       "rule": "enumerate stage-0 entries from `git ls-files --stage -z`, sort by raw path bytes, exclude only excluded_paths, and hash the schema tag followed by length-delimited (observed Git mode/type, kind, raw path, sha256(payload), payload length) records. Payload is working-tree bytes for regular files, link-target bytes for symlinks, and the index object id for gitlinks. Strict cleanliness makes this a complete identity of all checked-in gate/source bytes other than the generated manifest itself."
     },
     "provenance": {
-      "emitted_from_commit": "400bcbf72c6dbd496e2385f2fb5ea64447d383cc",
-      "emitted_from_tree_hash": "266da853df6084ce11ebfe5c6e9c46223be79dff",
-      "commit_subject": "Drop the mut the undemotion left behind",
+      "emitted_from_commit": "74110a3b7c3186e1015a81c1410bc401dd041c41",
+      "emitted_from_tree_hash": "50e0dd61e820a60d39aedde7e8ac4df6cb5f1811",
+      "commit_subject": "Refresh the seal source identity to the merged tree",
       "remotes": [
         {
           "name": "origin",
@@ -2292,8 +2292,8 @@
     ]
   },
   "run": {
-    "started_at_utc": "2026-08-20T02:46:08Z",
-    "finished_at_utc": "2026-08-20T02:53:12Z",
+    "started_at_utc": "2026-08-20T04:25:44Z",
+    "finished_at_utc": "2026-08-20T04:33:25Z",
     "gate_timeout_seconds": 1800,
     "note": "timestamps here are the only nondeterministic fields in this manifest; `check` ignores them"
   },
@@ -2766,10 +2766,10 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "Ran 45 tests",
+        "Ran 49 tests",
         "OK"
       ],
-      "key_lines_sha256": "9e1c540587346ed5b156c60f308d6388a5e9391992ffa2e058c65f7e6fa6f970"
+      "key_lines_sha256": "34359f417a1cd8d78a05eceaae7b18252b023e0b8681d323899a13810b040275"
     },
     "python.liveness_policy_profile_current_seal": {
       "exit_code": 0,
@@ -2931,19 +2931,19 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "Ran 25 tests",
+        "Ran 33 tests",
         "OK"
       ],
-      "key_lines_sha256": "c1ad26ee283bfeeddc6c6b1980c36cf2a209316251fef4a7a77624763086985e"
+      "key_lines_sha256": "1bb628d7cefd42e15296654feeb74e587f29bba09413a061a5a4b6dcc773e18f"
     },
     "python.economics_admission_lab": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "  \"status\": \"MODEL_ONLY_PROPOSED_POLICY\""
+        "  \"status\": \"MODEL_ONLY_PROPOSED_POLICY\","
       ],
-      "key_lines_sha256": "1d6c39b12ff124c63b0d6cd13f63949349993866939df27afb992f6fb60dd1b4"
+      "key_lines_sha256": "dd6d3d0c2270d11141d3c604754ffa7413551007fd3bc629a41c3359d25053d7"
     },
     "python.structured_claim_wrapper_unittest": {
       "exit_code": 0,
@@ -3145,7 +3145,7 @@
         "default_reproducibility=PASS",
         "mock_reproducibility=PASS",
         "profile_separation=PASS",
-        "final_elf_stack_diagnostic_symbols=ABSENT (33 dependency symbols removed by LTO)",
+        "final_elf_stack_diagnostic_symbols=ABSENT (31 dependency symbols removed by LTO)",
         "source_campaign default-endow=REFUSE Custom(0x0079); lifecycle=NOT_DECLARED",
         "  accept split                          1 instruction(s), 8 account(s) compared, oracle reference::apply",
         "  accept roundtrip                      2 instruction(s), 8 account(s) compared, oracle reference::apply",
@@ -3246,7 +3246,7 @@
         "default_sbf_elf_sha256=187d5ee16f72946ae81eb928e127347c1e17aaf0a0ad7d837be5c4186dde16bd",
         "non_production_mock_sbf_elf_sha256=9c8a86e1178d39428e4c7e48ac7892ed7e38c3f8721f98dcabb20fe361046cae"
       ],
-      "key_lines_sha256": "d9a95642332ce0c5fc5ea2dfa339b9876ace09ec4ce3cb2dc206ae7383691364"
+      "key_lines_sha256": "c0ed2c20d78201169339eeeaf334ad1ec4bc4eb4a1b9ebc2053f92ccc64d97c2"
     },
     "sbf.committed_signed_walk": {
       "exit_code": 0,
