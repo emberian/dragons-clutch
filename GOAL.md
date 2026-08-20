@@ -67,6 +67,19 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- CYCLE D SEALED (liveness 3bcdeec, manifest 788581c at 100/100 FIRST TRY,
+  post-commit check OK, pushed; attestation running): root e8ba31d582be3939,
+  31 files, 15 bank suites / 77 tests, T2-7 selection + T2-8 entitlement
+  evidence sealed unpromoted. The audit's nine-symbol import pin REFUSED
+  the artifact — T2-8's portfolio copies lower to sol_memmove_ — reviewed,
+  provenance matched to the admitted memcpy/memset shims, admitted as its
+  own commit 2dbc9fc with the refusing console retained. Twist worth
+  savoring: the FINAL artifact carries no surviving hash-sorted tie, so
+  stripped cross-path builds are byte-identical again AND Cargo-home
+  relocation is back to INDEPENDENT — the amended protocol keeps it honest
+  either way. Terminal 47 rows (epoch.final_pot 262 B, epoch.receipt 217 B,
+  no close paths, TerminalClosure standing). 57/57 profile tests.
+
 - T2-8 MERGED — TIER 2 COMPLETE END TO END (26/26 targets green on merged
   main): the eighth join closed. A portfolio pair entitles atomically and
   SETTLES with exact whole-plane conservation asserted on-bank (cash sums
