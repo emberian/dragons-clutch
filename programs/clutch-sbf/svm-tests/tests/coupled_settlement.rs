@@ -412,11 +412,14 @@ async fn send(
     banks: &mut BanksClient,
     payer: &Keypair,
     instruction: Instruction,
+    nonce: u32,
 ) -> (Result<(), TransactionError>, u64) {
     let blockhash = banks.get_latest_blockhash().await.unwrap();
+    // The nonce keeps a replayed instruction's transaction bytes distinct,
+    // so the bank refuses it in the program rather than as a duplicate.
     let budget = Instruction::new_with_bytes(
         COMPUTE_BUDGET,
-        &compute_unit_limit_data(1_400_000),
+        &compute_unit_limit_data(1_400_000 - nonce),
         Vec::new(),
     );
     let transaction = Transaction::new_signed_with_payer(
@@ -467,11 +470,11 @@ async fn direct_full_slice_settles_once_and_substitution_rolls_back() {
     let (mut banks, payer, fixture) = start(Mutation::None).await;
     let watched = fixture.writable();
     let before = snapshot(&mut banks, watched).await;
-    let swapped = send(&mut banks, &payer, fixture.instruction(true)).await;
+    let swapped = send(&mut banks, &payer, fixture.instruction(true), 0).await;
     assert_eq!(custom(swapped.0), ClutchError::MismatchedState as u32);
     assert_eq!(snapshot(&mut banks, watched).await, before);
 
-    let (result, units) = send(&mut banks, &payer, fixture.instruction(false)).await;
+    let (result, units) = send(&mut banks, &payer, fixture.instruction(false), 1).await;
     result.unwrap();
     assert!(units < 1_400_000);
     eprintln!("SettlePage direct full-slice CU: {units}");
@@ -496,7 +499,7 @@ async fn direct_full_slice_settles_once_and_substitution_rolls_back() {
     );
 
     let after = snapshot(&mut banks, watched).await;
-    let replay = send(&mut banks, &payer, fixture.instruction(false)).await;
+    let replay = send(&mut banks, &payer, fixture.instruction(false), 2).await;
     assert_eq!(custom(replay.0), ClutchError::MismatchedState as u32);
     assert_eq!(snapshot(&mut banks, watched).await, after);
 }
@@ -507,7 +510,7 @@ async fn stale_candidate_and_cross_outcome_refuse_with_full_rollback() {
         let (mut banks, payer, fixture) = start(mutation).await;
         let watched = fixture.writable();
         let before = snapshot(&mut banks, watched).await;
-        let result = send(&mut banks, &payer, fixture.instruction(false)).await;
+        let result = send(&mut banks, &payer, fixture.instruction(false), 3).await;
         let code = custom(result.0);
         assert!(
             code == ClutchError::NotActive as u32 || code == ClutchError::MismatchedState as u32
