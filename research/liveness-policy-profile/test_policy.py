@@ -174,6 +174,44 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(policy.CheckError):
             policy.check_rent_and_accounts(tampered)
 
+    def test_post_probe_v3_rows_are_pinned_and_never_shadow_the_probe(self) -> None:
+        """The sealed v2 probe enumerates no Direct V3 row; the pin has teeth.
+
+        The pinned post-probe names must be disjoint from the probe rows, a
+        byte-pin drift must refuse, a pinned name absent from the terminal
+        inventory must refuse, and dropping a pin re-exposes its row to the
+        probe equality, which then refuses the un-probed row.  Every refusal
+        here fires before the historical probe executes.
+        """
+
+        self.assertTrue(
+            set(policy.POST_PROBE_DIRECT_V3_ROWS).isdisjoint(self.evidence["accounts"])
+        )
+        pinned = dict(policy.POST_PROBE_DIRECT_V3_ROWS)
+        try:
+            policy.POST_PROBE_DIRECT_V3_ROWS["direct.epoch.v4"] = 671
+            with self.assertRaises(policy.CheckError) as caught:
+                policy.check_rent_and_accounts(self.evidence)
+            self.assertIn("post-probe V3 bytes direct.epoch.v4", str(caught.exception))
+
+            policy.POST_PROBE_DIRECT_V3_ROWS.clear()
+            policy.POST_PROBE_DIRECT_V3_ROWS.update(
+                pinned, **{"direct.never_built.v9": 100}
+            )
+            with self.assertRaises(policy.CheckError) as caught:
+                policy.check_rent_and_accounts(self.evidence)
+            self.assertIn("direct.never_built.v9", str(caught.exception))
+
+            policy.POST_PROBE_DIRECT_V3_ROWS.clear()
+            policy.POST_PROBE_DIRECT_V3_ROWS.update(pinned)
+            del policy.POST_PROBE_DIRECT_V3_ROWS["direct.window.v3"]
+            with self.assertRaises(policy.CheckError) as caught:
+                policy.check_rent_and_accounts(self.evidence)
+            self.assertIn("terminal/probe account inventory", str(caught.exception))
+        finally:
+            policy.POST_PROBE_DIRECT_V3_ROWS.clear()
+            policy.POST_PROBE_DIRECT_V3_ROWS.update(pinned)
+
     def test_invalid_policy_cannot_sneak_through(self) -> None:
         invalid = QuotePolicy(5, 4, 0, 1_400_000, 10_000, 1_000_000, 100_000)
         with self.assertRaises(AdmissionError):

@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Complete current-runtime account/value terminal classification.
 
-The compact table mirrors the sealed v2 account probe.  ``build_terminal``
-expands each row into the stricter schema checked by ``terminal_admission``.
-PASS on a permanent row means only that permanent capitalization is stated
-honestly; it does not make the protocol-level terminal result pass.
+The compact table mirrors the sealed v2 account probe, plus the Direct V3
+account families the probe predates (the probe source archived at the sealed
+``runtime_ref`` enumerates no V3 row; ``policy.py`` pins the post-probe rows
+byte-exactly and keeps the probe equality on everything else).
+``build_terminal`` expands each row into the stricter schema checked by
+``terminal_admission``.  PASS on a permanent row means only that permanent
+capitalization is stated honestly; it does not make the protocol-level
+terminal result pass.
 """
 
 from __future__ import annotations
@@ -71,6 +75,59 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
      ("DIRECT.ACCOUNT_REFUND_UNOWNED",)),
     ("direct.final_pot", 262, 2_714_400, "PER_SELECTED_CANDIDATE", 1, S,
      ("DIRECT.ACCOUNT_REFUND_UNOWNED",)),
+    # The Direct V3 merge introduced six persistent program-owned families
+    # (programs/solana-layout/src/direct_selection_v3.rs).  Unlike V1/V2,
+    # every transient V3 account records its exact payer principal and a
+    # monotone donation floor in a DirectFundingLedgerV3, and every phase
+    # has a terminal exit that physically closes it via
+    # close_funded_account (principal to the exact stored payer, all
+    # surplus to the frozen incinerator sink, resize 0, reassign):
+    # SettleDirectV3 closes candidate, window, receipt, pot, WorkBudget,
+    # and both reservations; LapseEmpty / LapseUnselected / LapseSelected
+    # close every transient live in their phase; SubmitCandidate closes a
+    # displaced fourth candidate in the admitting transaction; and
+    # AbortUnfrozen closes the 0..2-reservation prefix
+    # (programs/clutch-sbf/program/src/instructions/direct_selection_v3/).
+    # Those routes are exercised only by in-repo svm-tests
+    # (programs/clutch-sbf/svm-tests/tests/direct_selection_v3.rs); no
+    # sealed bank capture measures a V3 close or its rollback, so the
+    # closeable rows STOP on DIRECT.V3_CLOSE_EVIDENCE_UNSEALED instead of
+    # claiming REFUNDABLE_TRANSIENT bank evidence they do not have —
+    # retiring that id takes a sealed measurement, exactly as
+    # DIRECT.TOP3_SELECT_CU_STOP retired.  Two families strand rent
+    # structurally: the terminal Epoch V4 persists forever as the durable
+    # receipt — every terminal route (settle, all three lapses, abort)
+    # ends in write_epoch_v4, and no handler closes an Epoch V4, so its
+    # recorded principal is unreclaimable
+    # (DIRECT.EPOCH_RECEIPT_RENT_PERSISTS) — and the 96-byte
+    # DirectBatchPolicy V3 final artifact is epoch-context-addressed
+    # (seeds::direct_batch_policy_v3_pda binds epoch id and digest), so
+    # one permanent copy of identical bytes accrues per epoch with no
+    # close route for final artifacts
+    # (DIRECT.POLICY_ARTIFACT_RENT_PERSISTS).  Candidate V3 bounds: at
+    # most 3 live per epoch (top-3 retention; the displaced worst closes
+    # immediately) and at most 64 ever admitted (one per competitive tick,
+    # MAX_DIRECT_TICKS_V3).  Reservation V2: exactly the frozen two-order
+    # pair per V4 epoch.  The V3 flow also creates receipt/pot instances
+    # of the already-inventoried 217/262-byte shapes at v3 PDAs with
+    # funding recorded in the Window; both close at Settle or
+    # LapseSelected, so no new persistent family arises from them.
+    ("direct.epoch.v4", 672, 5_568_000, "PER_DIRECT_EPOCH", None, S,
+     ("DIRECT.EPOCH_RECEIPT_RENT_PERSISTS",)),
+    ("direct.candidate.v3", 488, 4_287_360, "PER_EPOCH_CANDIDATE", 3, S,
+     ("DIRECT.V3_CLOSE_EVIDENCE_UNSEALED",)),
+    ("direct.window.v3", 632, 5_289_600, "PER_DIRECT_EPOCH", 1, S,
+     ("DIRECT.V3_CLOSE_EVIDENCE_UNSEALED",)),
+    ("direct.work_budget.v1", 248, 2_616_960, "PER_DIRECT_EPOCH", 1, S,
+     ("DIRECT.V3_CLOSE_EVIDENCE_UNSEALED",)),
+    ("direct.reservation.v2", 618, 5_192_160, "PER_DIRECT_EPOCH", 2, S,
+     ("DIRECT.V3_CLOSE_EVIDENCE_UNSEALED",)),
+    ("artifact.direct_batch_policy_v3.final", 96, 1_559_040,
+     "PER_EPOCH_CONTENT_DIGEST", 1, S,
+     ("DIRECT.POLICY_ARTIFACT_RENT_PERSISTS",)),
+    ("artifact.direct_batch_policy_v3.stage", 232, 2_505_600,
+     "PER_EPOCH_CONTENT_DIGEST", 1, S,
+     ("RENT.ARTIFACT_PREFUND_WINDFALL",)),
     ("legacy.epoch.v2", 328, 3_173_760, "PER_LEGACY_EPOCH", None, S,
      ("PROFILE.STORAGE_INVENTORY_INCOMPLETE",)),
     ("legacy.candidate", 305, 3_013_680, "PER_LEGACY_CANDIDATE", None, S,
