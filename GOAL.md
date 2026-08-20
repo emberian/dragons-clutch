@@ -70,6 +70,22 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- MICROSITE V1 MERGED (site/, 7 pages ~7,600 words, 7 authored SVGs
+  dataviz-validated both themes, 122/122 links, zero external resources,
+  96 KB total, JS-optional, one scope note): the Friday clutch threads all
+  seven pages with its arithmetic backed by a CHECKED script
+  (docs/site-plan/friday_clutch_check.py — all exact); braided
+  degen/builder/scholar callouts that re-say and never smuggle; every
+  number cite-verified with five deviations recorded as plan errata.
+  Pages workflow added (.github/workflows/pages.yml — the repo's first;
+  enabling Pages + visibility are ember's console decisions). BONUS CATCH:
+  the site's verification pass found CURRENT_TRUTH section 2 three seals
+  stale (still 41/41-era) — now advanced to the cycle-D chain.
+  NEXT-WAVE ROADMAP committed (docs/design/NEXT_WAVE_ROADMAP_2026-08-20.md):
+  M (TerminalClosure first) -> S (partial fills, VirtualPot, fee plumbing
+  to the boundary) -> O (measured only) -> A (ADR-0005 first, formal
+  verification last per directive).
+
 - ALL TEN DECISION REPORTS COMPLETE + THE PACKET SYNTHESIZED
   (docs/decisions/: register + 9 report files + DECISION_PACKET). The
   packet orders everything: six decide-now items (policy freeze as-pinned,
