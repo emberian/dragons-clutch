@@ -389,7 +389,7 @@ the sealed default ELF has no registered release and therefore refuses it with
    zero suspects, four recorded asymmetries:
    docs/reviews/POST_RESOLUTION_CONSUMER_AUDIT_2026-08-19.md). Freeze the
    fragment/credit policy promised to bearers (Arm A live-until-aggregated is
-   PROPOSED in the R4 design, pending ratification). Monolithic occupation-v4 initial Resolve now clears the
+   RATIFIED 2026-08-20 per docs/decisions/ADOPTED_2026-08-20.md item 7). Monolithic occupation-v4 initial Resolve now clears the
    selected headroom on every measured row (172,665–197,766 CU on the
    syscall-hashed runtime; the former overage was the software hasher), and
    both it and the exact measured staged ResolutionWork route are
