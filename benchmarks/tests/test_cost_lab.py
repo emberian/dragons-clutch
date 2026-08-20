@@ -140,11 +140,11 @@ class LandedAbiTests(unittest.TestCase):
             "terms": 1656,
             "price_grid": 589,
             "epoch": 328,
-            "candidate_record": 305,
+            "candidate_record": 337,
             "final_pot": 262,
             "settlement_receipt": 217,
             "resolution": 165,
-            "clear_work": 48_004,
+            "clear_work": 50_054,
             "candidate_feed": 6_266,
         }
         self.assertEqual(set(expected), set(cost_lab.LANDED_ACCOUNT_ORDER))
@@ -234,8 +234,8 @@ class LandedAbiTests(unittest.TestCase):
 
     def test_one_instance_inventory_totals(self) -> None:
         row = cost_lab.find_row(self.rows, "landed-account-inventory-one-instance")
-        self.assertEqual(row["outputs"]["data_bytes"], 63_485)
-        self.assertEqual(row["outputs"]["rent_principal_lamports"], 457_000_560)
+        self.assertEqual(row["outputs"]["data_bytes"], 65_567)
+        self.assertEqual(row["outputs"]["rent_principal_lamports"], 471_491_280)
         self.assertEqual(row["outputs"]["rent_overhead_component_lamports"], 15_144_960)
         self.assertEqual(row["outputs"]["largest_account"], "clear_work")
         self.assertEqual(row["outputs"]["smallest_account"], "realm")
@@ -336,7 +336,7 @@ class LandedAbiTests(unittest.TestCase):
             self.assertIsNone(output["delta"], scenario_id)
         landed_only = cost_lab.find_row(self.rows, "diff-landed-only-account-family")["outputs"]
         self.assertIsNone(landed_only["hypothesis_value"])
-        self.assertEqual(landed_only["landed_value"], 58_920)
+        self.assertEqual(landed_only["landed_value"], 61_002)
 
     def test_position_rent_delta_is_reported(self) -> None:
         output = cost_lab.find_row(self.rows, "diff-position-account")["outputs"]
@@ -539,7 +539,7 @@ class AbiAuditHardeningTests(unittest.TestCase):
     def test_cross_module_widths_use_only_explicitly_pinned_paths(self) -> None:
         source = self.codec_source()
         lengths = cost_lab.derive_account_lengths_from_source(source)
-        self.assertEqual(lengths["CLEAR_WORK"], 48_004)
+        self.assertEqual(lengths["CLEAR_WORK"], 50_054)
         self.assertEqual(lengths["CANDIDATE_FEED"], 6_266)
         arms = cost_lab.derive_intent_lengths_from_source(source)
         self.assertEqual(

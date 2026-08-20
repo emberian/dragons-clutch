@@ -236,11 +236,11 @@
       },
       "candidate_record": {
         "rust_const": "account_len::CANDIDATE",
-        "bytes": 305,
+        "bytes": 337,
         "discriminator_tag": 13,
-        "schema_version": 2,
-        "field_terms": [2, 96, 128, 8, 8, 8, 16, 16, 8, 8, 2, 1, 1, 1, 1, 1],
-        "formula": "2 + (3 * 32) + (MAX_OUTCOMES * 8) + 8 + 8 + 8 + 16 + 16 + 8 + 8 + 2 + 1 + 1 + 1 + 1 + 1"
+        "schema_version": 3,
+        "field_terms": [2, 96, 128, 8, 8, 8, 16, 16, 32, 8, 8, 2, 1, 1, 1, 1, 1],
+        "formula": "2 + (3 * 32) + (MAX_OUTCOMES * 8) + 8 + 8 + 8 + 16 + 16 + 32 + 8 + 8 + 2 + 1 + 1 + 1 + 1 + 1"
       },
       "final_pot": {
         "rust_const": "account_len::FINAL_POT",
@@ -268,11 +268,11 @@
       },
       "clear_work": {
         "rust_const": "account_len::CLEAR_WORK",
-        "bytes": 48004,
+        "bytes": 50054,
         "discriminator_tag": 17,
         "schema_version": 1,
-        "field_terms": [2, 128, 16, 4, 2, 2, 1, 1, 1, 1, 47846],
-        "formula": "2 + (4 * 32) + 16 + 4 + 2 + 2 + 1 + 1 + 1 + 1 + CLEAR_WORK_BODY_BYTES"
+        "field_terms": [2, 128, 16, 4, 2, 2, 1, 1, 1, 1, 2050, 47846],
+        "formula": "2 + (4 * 32) + 16 + 4 + 2 + 2 + 1 + 1 + 1 + 1 + super::clearing::CLEAR_WORK_INTERNER_BYTES + CLEAR_WORK_BODY_BYTES"
       },
       "candidate_feed": {
         "rust_const": "account_len::CANDIDATE_FEED",
