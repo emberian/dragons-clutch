@@ -133,22 +133,42 @@ decompositions (Propositions 11-12), and it is **not** the model-free risk
 norm — `G(a,p) <= R(a)/4` with the ratio `2p(1-p)` vanishing at extreme prices
 (Proposition 10), and at boundary prices its kernel strictly exceeds the risk
 quotient (Proposition 9), so risk transfer supported on zero-priced outcomes is
-feeless. It remains an experimental arm against flat-notional, per-leg, and
-price-free quotient-norm `kappa'*R(a)` controls.
+feeless.
+
+**Selected shape, 2026-08-20.** The adopted V1 fee base *shape* is the additive
+composite `kappa*G(a,p) + kappa'*R(a)` — the dispersion base above with a
+price-free quotient-norm floor, which closes the zero-price channel by making
+the kernel exactly `span(1)` at every admissible price vector
+([decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) item 9, on
+[decisions/REPORT_fee-base-selection_2026-08-20.md](decisions/REPORT_fee-base-selection_2026-08-20.md)).
+**Both rates remain undecided**, every consensus byte stays `FeeBaseV1::None`
+until the RevenuePolicy destination lands, and the selection is reversible until
+a rate freezes. Flat-notional and per-leg were run against it and eliminated;
+the price-free arm remains a control. The market-quality axes are ratified out
+of V1 scope for this selection — see
+[FEE_GEOMETRY.md](FEE_GEOMETRY.md) §6/§7.
 
 All values use exact scaled integer arithmetic. At `p = 0.5`, the candidate fee
 is exactly 20 basis points of cash consideration as a rational — at size only.
 The terminal-ceil close charges a minimum of one atom per fee-bearing intent,
 and the laboratory's own fee vector (`FEE-001`,
 `research/economics/fixtures.py`) records a 1-atom fee on 1 atom of
-consideration: 10,000 basis points on the smallest fill. Tentative distribution:
+consideration: 10,000 basis points on the smallest fill. Distribution envelope:
 
 - 60% standing-maker rebate;
 - at most 15% batch executor, capped by that batch's collected fees;
 - at least 25% protocol treasury.
 
-For the single-Egg midpoint example these correspond to approximately 12, 3, and
-5 basis points. This split is design prose: no Rust implements it. The only
+**Adopted V1 vector, 2026-08-20:** 60/0/40 with the executor share deferred and
+the trivially-true `AllRestingMakers` standing-maker predicate
+([decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) item 8, on
+[decisions/REPORT_revenue-policy-v1_2026-08-20.md](decisions/REPORT_revenue-policy-v1_2026-08-20.md)
+B4e). The envelope above becomes a structural `validate()` refusal rather than
+prose. The vector constrains nothing until a fee-bearing Realm exists.
+
+For the single-Egg midpoint example the envelope's shares correspond to
+approximately 12, 3, and 5 basis points. The split is still design prose: no
+Rust implements it. The only
 Rust fee allocator in the tree (`research/liquidity-policy-model`) distributes
 by LP capital-time weight — a different mechanism — and has no consumers; the
 Python laboratory's `allocate_fee` is the split's sole executable form. Empty
@@ -169,7 +189,13 @@ Market and selected only from audited policies under a protocol hard cap.
 The curve and portfolio generalization are hypotheses, not revenue entitlements.
 Test them against flat-notional and decomposed-leg controls over midpoint-
 equivalent rates of 0, 5, 10, 20, 35, and 50 basis points. Choose the lowest rate
-satisfying market-quality and positive-contribution floors. Liveness reliability
+satisfying market-quality and positive-contribution floors. That instruction is
+not executable in the tree today: the market-quality axes it reads have no
+simulator, and the 2026-08-20 descope ratified them out of scope for V1 *base*
+selection ([decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md)
+item 9). It stands as the standard for the **rate** decision, whose own record
+is that the question returns there — measurable on a live venue rather than in a
+simulator the tree does not have. Liveness reliability
 is independently prepaid and therefore cannot justify raising the trading fee.
 
 ## 6. Maintainer break-even
@@ -209,6 +235,31 @@ boundary in four documents and implemented in zero lines of code. Every
 destination must be separately disclosed, conflict-reviewed, and unable to spend
 Hoard principal or booked liveness funds. See
 [DEPLOYMENT_REVENUE_BOUNDARY.md](DEPLOYMENT_REVENUE_BOUNDARY.md).
+
+**Destination decisions adopted 2026-08-20**
+([decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) items 6 and
+8, on
+[decisions/REPORT_revenue-policy-v1_2026-08-20.md](decisions/REPORT_revenue-policy-v1_2026-08-20.md);
+design at [design/REVENUE_POLICY_V1.md](design/REVENUE_POLICY_V1.md)):
+
+- **Plane L — the five `ResolutionWork` charges are permanently zero as frozen
+  policy, not as a placeholder** (item 6, B4c). No vault is built and no record
+  is built for the lamport plane; the `lamport_sink` member stays reserved. The
+  reason of record is the protected-pools row plus the anti-liveness argument —
+  *not* the source comment's "V1 has no authenticated fee sink", which stops
+  being the true rationale the moment any sink exists. This is the weak form of
+  permanence: a V2 cost schedule is a sibling const with its own digest and may
+  reintroduce charges for **new** Works, breaking no in-flight promise, because
+  Begin freezes the schedule digest per Work.
+- **Plane C** — fee atoms are credited to a treasury `PositionAccount`, with the
+  mid-epoch-close grief rider joining the hostile walk (item 8, B4b); sequencing
+  is Plane L before Plane C per B4c (item 8, B4d); the B4a custody requirements
+  are adopted with the **treasury pubkey deferred to the first fee-bearing
+  Realm** and reserved to ember.
+
+None of this makes any charge nonzero. Every `max_fee_atoms == 0` gate stays
+closed, and the break-even inequality above keeps returning unbounded until a
+rate is decided and a destination is built.
 
 ## 7. Data-failure incentives
 

@@ -1,7 +1,27 @@
 # Terminal lifecycle runtime design V1
 
-Status: **PROPOSED / MODEL-ONLY** — no ABI change, no migration, no runtime
-transition is made by this document. Written 2026-08-19 by the R4 semantic
+Status: **RATIFIED 2026-08-20 / MODEL-ONLY** (was PROPOSED) — ratified by
+ember per [../decisions/ADOPTED_2026-08-20.md](../decisions/ADOPTED_2026-08-20.md)
+item 7, on
+[../decisions/REPORT_r4-terminal-ratification_2026-08-20.md](../decisions/REPORT_r4-terminal-ratification_2026-08-20.md).
+Ratification is of the *design*: it still makes no ABI change, no migration,
+and no runtime transition, and it promotes no surface. Two qualifications ride
+the ratification and govern the body below, which is **unedited**:
+
+- **Scope amendment on the legacy-permanent disposition (§2).**
+  Legacy-rows-permanent is ratified **ONLY** for legacy mints and prototype
+  instances. The live general plane is **explicitly NOT declared permanent**.
+  The permanent-rent rows stand PERMANENT_TOMBSTONE for V1 with the shrink
+  successor recorded.
+- **§8 is EXPLICITLY DEFERRED.** The source/artifact reference-ownership
+  variant (maturity-horizon reap vs per-archive reference counting) is *not*
+  selected — deferred until the provider-horizon evidence exists, the weakest
+  of its options. Read §8 as an open fork, not as a ratified choice.
+
+Ratified alongside, per the same item: the frozen program-wide incinerator
+sink, fractional Arm A (§5), and the failure-payout decision.
+
+Written 2026-08-19 by the R4 semantic
 owner from the ground-truth map of `research/terminal-lifecycle-v2` (model at
 `6dbe618`), the 37-row machine inventory
 (`research/liveness-policy-profile/terminal_profile.py` /

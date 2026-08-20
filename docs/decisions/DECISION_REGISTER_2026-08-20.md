@@ -26,6 +26,18 @@ Owner vocabulary:
 Entry fields: statement / owner / surfaces / options / evidence / blocked-on-it
 / urgency / interactions.
 
+**Status pass, 2026-08-20** (added after ember's adoption record,
+[ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md)). Entries the adoption record
+covers now carry a `**Status:** DECIDED` line naming the adoption item; the two
+explicitly deferred decisions carry `**Status:** DEFERRED` with the reason as
+the record states it. **No analysis below was rewritten** — the options,
+evidence, and counterarguments stand as swept, and the reports the adoption
+cites carry the counterarguments as part of the record. Entries reserved to
+ember by that record (the filing submissions, E2, E3, the treasury pubkey,
+counsel/security/license engagements, mainnet, L0) are deliberately left
+**unchanged**, as are the entries the record does not reach — those remain open
+and unmarked, which is the honest reading: an unmarked entry is not decided.
+
 Known hard dates in this register: **Aug 24** (two CFTC filings + John-packet
 prerequisites), **Aug 26** (perpetuals RFC due; Pyth receiver cutover
 16:00 UTC), **Aug 27** (IAC written-statement "should submit by"), **Oct 5**
@@ -38,6 +50,11 @@ prerequisites), **Aug 26** (perpetuals RFC due; Pyth receiver cutover
 
 ### A1. `general-clearing-policy-freeze`
 
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 1.**
+  Frozen as pinned (option 1). The pins are the enabling choices; a future
+  profile is a sibling const with a new digest, so the freeze forecloses no
+  dynamics. The in-source doc-comment status updates ride the next
+  reseal-bearing wave rather than opening a drift window for a comment.
 - **Decision:** freeze `GENERAL_CLEARING_POLICY_V1` (the Tier-2 general
   portfolio-clearing `FrozenPolicyV1` profile) as pinned, or amend selectors
   before freezing. Sign-off is what turns PROPOSED into frozen.
@@ -76,6 +93,8 @@ prerequisites), **Aug 26** (perpetuals RFC due; Pyth receiver cutover
 
 ### A2. `candidate-window-slots-pin`
 
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 1.**
+  Frozen at 1,000 slots in the same act as A1 (option 1; no wire change).
 - **Decision:** freeze `CANDIDATE_WINDOW_SLOTS = 1_000` as a fixed schedule
   pin, or move the window length onto a revised `InitEpoch` (tag-49) wire as
   an operator-chosen parameter.
@@ -194,6 +213,13 @@ prerequisites), **Aug 26** (perpetuals RFC due; Pyth receiver cutover
 
 ### A8. `realm-admission-allowlist-freeze`
 
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 4.**
+  FROZEN as built: Token-2022 base mints, extension ceiling zero,
+  ImmutableOwner required on the Hoard, unknown discriminants fail closed. The
+  deliberate strong choice — fail-closed admission preserves future options;
+  admission-then-exploitation would foreclose them. The record states plainly
+  that the DREGG dogfood mint has no executable V1 profile. (The F5 ELF pin is
+  not covered by that item and remains open.)
 - **Decision:** freeze the V1 collateral-profile allowlist — whether
   transfer-fee, transfer-hook, interest-bearing, confidential, rebase-like,
   or freezable Token-2022 collateral is rejected categorically; demonstrate
@@ -218,6 +244,11 @@ prerequisites), **Aug 26** (perpetuals RFC due; Pyth receiver cutover
 
 ### B1. `fee-base-selection`
 
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 9.**
+  The composite `kappa*G + kappa'*R` **SHAPE** is selected (the register's
+  option 5, modeled by the report). **Both rates remain undecided**; every byte
+  stays `FeeBaseV1::None` until the destination lands; reversible until a rate
+  freezes. The FEE_GEOMETRY promotion criteria are rewritten per ADR-0005.
 - **Decision:** select the fee base (the "fee-base fork"): flat-notional,
   per-Egg leg, atomic simplex-dispersion `G(a,p)`, or price-free
   quotient-norm `kappa'·R(a)` — or decide the comparison protocol that will
@@ -280,6 +311,10 @@ prerequisites), **Aug 26** (perpetuals RFC due; Pyth receiver cutover
 
 ### B3. `market-quality-axes-scope`
 
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 9.**
+  The market-quality descope is RATIFIED (option 1): the four axes move from
+  promotion-blocking to explicitly out of scope for V1, and FEE_GEOMETRY §6/§7
+  now say so along with what the descope costs.
 - **Decision:** declare the four unmeasurable market-quality axes (depth,
   participation, fill rate, route leakage) out of scope for V1 fee-base
   selection — so the base is chosen on arithmetic invariants and laundering
@@ -300,6 +335,22 @@ prerequisites), **Aug 26** (perpetuals RFC due; Pyth receiver cutover
 - **Interactions:** B1.
 
 ### B4. `revenue-policy-v1-queue` (six sub-decisions)
+
+**Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) items 6 and
+8.** All six sub-decisions returned, with two carve-outs inside them:
+
+- **B4a — DECIDED (item 8):** custody requirements adopted; the **treasury
+  pubkey is deferred to the first fee-bearing Realm** and stays reserved to
+  ember.
+- **B4b — DECIDED (item 8):** treasury Position (D6) adopted, with the
+  mid-epoch-close grief rider joining the hostile walk.
+- **B4c — DECIDED (item 6):** all five ResolutionWork charges are
+  **permanently zero as frozen policy**. No vault is built. A V2 cost schedule
+  may reintroduce charges for new Works — the weak form.
+- **B4d — DECIDED (item 8):** sequencing per B4c.
+- **B4e — DECIDED (item 8):** 60/0/40 + `AllRestingMakers` adopted as the V1
+  vector; it constrains nothing until a fee-bearing Realm exists.
+- **B4f — DECIDED (item 8):** both terminal rows accepted under item 7.
 
 The RevenuePolicy V1 design (PROPOSED / DESIGN-ONLY,
 `docs/design/REVENUE_POLICY_V1.md`, queue at `:447-485`) exists precisely to
@@ -357,6 +408,12 @@ be decided; its §11 names the smallest sufficient set. One entry each:
 
 ### C1. `r4-terminal-ratification`
 
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 7.**
+  RATIFIED: incinerator sink and the failure-payout decision stand as designed;
+  **legacy-rows-permanent is ratified ONLY under the scope amendment** (legacy
+  mints + prototype instances; the live general plane is explicitly NOT
+  declared permanent). The permanent-rent rows stand PERMANENT_TOMBSTONE for V1
+  with the shrink successor recorded. The §8 variant is deferred — see C3.
 - **Decision:** ratify the R4 terminal-lifecycle runtime design
   (TerminalIdentityV1 header everywhere; **the frozen program-wide
   incinerator as the one neutral sink** with burn-only surplus disposal; the
@@ -391,6 +448,8 @@ be decided; its §11 names the smallest sufficient set. One entry each:
 
 ### C2. `r4-fractional-arm-a`
 
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 7.**
+  Fractional Arm A is RATIFIED (option 1).
 - **Decision:** ratify Arm A ("live-until-aggregated"): one atom = one raw
   claim, redemption-boundary enforcement only, post-resolution exact lot
   `L(w_i) = D/gcd(D,w_i)` exposed, voluntary aggregation, **no credit
@@ -418,6 +477,11 @@ be decided; its §11 names the smallest sufficient set. One entry each:
 
 ### C3. `r4-section8-reference-ownership`
 
+- **Status: DEFERRED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 7.**
+  The §8 reference-ownership variant is **EXPLICITLY DEFERRED** until the
+  provider-horizon evidence exists — the weakest of its options. Neither A nor
+  B is selected; the archive close routes and `SOURCE.NO_TERMINAL_RELEASE` stay
+  blocked, by choice rather than by omission.
 - **Decision:** pick the source/artifact reference-ownership variant the R4
   design deliberately leaves open: **A. maturity-horizon reap** (archive
   closes after a frozen horizon beyond its window's maturity bucket —
@@ -441,6 +505,10 @@ be decided; its §11 names the smallest sufficient set. One entry each:
 
 ### C4. `failure-payout-ratification`
 
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 7.**
+  The failure-payout decision is RATIFIED (option 1). Ratification closes the
+  decision, not the runtime promotion falsifiers, which remain open in
+  FAILURE_PAYOUT_DECISION_V1.
 - **Decision:** ratify (or veto) the two already-recorded decisions taken by
   agent lanes on 2026-08-19: `EvidenceOnlyRecoveryV1` (no numeric
   data-failure payout; recoverable dormancy; residue to the incinerator) and
@@ -536,6 +604,10 @@ be decided; its §11 names the smallest sufficient set. One entry each:
 
 ### D1. `walk-plane-admission-treatment`
 
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 10.**
+  The walk plane **advances to rung W1** — CU/quote rows, **no live flags** —
+  now that item 1 holds. This authorizes the rung; the rows are not yet
+  derived, and W2 is not granted.
 - **Decision:** decide the admission-policy treatment of the general
   clearing plane (tags 47–59): the entire Tier-2 evidence set is sealed as
   `UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY` with `decision_owner: ember`, and
@@ -564,6 +636,10 @@ be decided; its §11 names the smallest sufficient set. One entry each:
 
 ### D2. `v3-promotion`
 
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 10.**
+  The **V3 syscall-era sealed measurement campaign is commissioned** (option 1's
+  first half). V3 is **not** promoted on current evidence; `live_v3` stays
+  false until the campaign's rows seal.
 - **Decision:** promote Direct V3 in the liveness profile (`live_v3` is
   false: no measured CU, rent/refund/close, or terminal-admission rows; the
   Direct STOPs in the profile remain V2's), or leave it resident-unpromoted.
@@ -591,6 +667,9 @@ be decided; its §11 names the smallest sufficient set. One entry each:
 
 ### D3. `v3-findings-bc-signoff`
 
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 10.**
+  The B/C closures are **ratified as content**, with the process note recorded:
+  an ember-pending finding was closed without ember, and the record says so.
 - **Decision:** sign off (or refuse) the two V3 findings closed unilaterally
   by the codex lane while their status was ember-pending: finding B
   (verify_lease tautology) and finding C (FROZEN_EMPTY admission-field
@@ -619,6 +698,9 @@ be decided; its §11 names the smallest sufficient set. One entry each:
 
 ### E1. `r2-model-close-ratification`
 
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 3.**
+  The R2 model close is ratified (option 1). Research-only; it authorizes
+  nothing, and the standing double-witness falsifier survives ratification.
 - **Decision:** ratify the R2 successor model close taken by the codex
   convergence wave — closing-boundary `CROSSING_V1` rule id 2 only,
   368-byte SourceSpecV2, exact ProgramData/config pins, zero grid origin,
@@ -751,6 +833,11 @@ be decided; its §11 names the smallest sufficient set. One entry each:
 
 ### F1. `opt-z-deploy-economics`
 
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 5.**
+  Deployments use the **sealed opt-3 identity only**; opt-z is **refused**
+  until re-greened and gate-campaigned at its own identity (option 1, with
+  option 3 left available on that condition). The devnet beta authority is
+  ratified as recorded in the deploy job.
 - **Decision:** deploy the devnet ELF at the default `opt-level=3` identity
   (1,785,904 B at the walk-era seal, ~13.3 SOL deploy rent) or the opt-z
   option (~−23%, ~2.3 SOL saved; suite FULLY GREEN since the Tier-0 frame
@@ -774,6 +861,12 @@ be decided; its §11 names the smallest sufficient set. One entry each:
 
 ### F2. `upgrade-posture`
 
+- **Status: DEFERRED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md),
+  "Deferred with the tension named".** The report recommended
+  immutable-at-first-deployment; ember's weakest-choice principle favors
+  upgradeable-then-burn (burn is always available; un-burn never is). Deferred
+  on that tension: mainnet is gated regardless, and the devnet posture is
+  settled by item 5.
 - **Decision:** the P0 row no queue currently carries: does the reference
   deployment have a time-bounded audited beta upgrade authority followed by
   irrevocable removal, or is it immutable at first deployment? Source must
@@ -960,6 +1053,12 @@ in-tree surface for each.
 
 ### H1. `adr-0003-supersession`
 
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 2.**
+  Option 1: **ADR-0005 — Lean is the proof substrate of record** (adopted text
+  at `docs/adr/0005-lean-proof-substrate-of-record.md`). Verus retained for
+  checked-executable-body results; the Rocq role retired with `rocq/` kept as a
+  historical specification; the native_decide ban codified. FEE_GEOMETRY §7 is
+  rewritten; the rest of the report's §3 cleanup inventory is still owed.
 - **Decision:** the standing formal-methods substrate decision: ADR-0003
   designated Verus the executable-kernel gate and Rocq the independent
   shadow, and warned against Lean "becoming mandatory by inertia." Reality
@@ -1000,6 +1099,10 @@ in-tree surface for each.
   Owner: ember. Urgency: rank 5. Decide or retire each explicitly.
 
 ### H3. `native-decide-rule` (context, effectively closed)
+
+- **Status: DECIDED — [ADOPTED_2026-08-20.md](ADOPTED_2026-08-20.md) item 2.**
+  The native_decide ban is **codified** — written into ADR-0005 as a rule of
+  the record rather than an audit convention.
 
 - The historic "house rule to add: ban native_decide" (`GOAL.md:995-996`) is
   effectively enforced: the Lean audit greps for
