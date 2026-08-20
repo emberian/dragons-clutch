@@ -67,6 +67,18 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- CYCLE D ATTESTED: Persvati 44/44 PASS, 0 STOP over exact 788581c —
+  identical gate roster to cycle C (contract found zero manifest changes),
+  ELF six contexts, all SIX historical roots verified as the exact set,
+  1,466 comparisons x2 zero mismatches. Job:
+  persvati:/home/ember/jobs/dragons-clutch-portable-attest-788581c-20260820-FE7g0W.
+  CURRENT_TRUTH capability matrix now records the complete general clearing
+  plane; memory moved to the Tier-2-complete baseline. THE OVERNIGHT
+  MANDATE'S IMPLEMENTABLE SURFACE IS DONE: every planned engineering unit
+  that did not require ember's decision or devnet SOL is merged, sealed,
+  manifested at 100/100, and independently attested. Standing waits:
+  ember's decision queue (below) and the faucet.
+
 - CYCLE D SEALED (liveness 3bcdeec, manifest 788581c at 100/100 FIRST TRY,
   post-commit check OK, pushed; attestation running): root e8ba31d582be3939,
   31 files, 15 bank suites / 77 tests, T2-7 selection + T2-8 entitlement
