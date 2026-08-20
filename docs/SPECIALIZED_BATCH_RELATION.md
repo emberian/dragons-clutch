@@ -284,7 +284,19 @@ the relation; arrival order does not turn an invalid witness into a transition.
 
 ## 8. Verification and refinement targets
 
-### Verus-first executable claims
+### Executable claims
+
+Lean is the proof substrate of record
+([adr/0005-lean-proof-substrate-of-record.md](adr/0005-lean-proof-substrate-of-record.md),
+adopted 2026-08-20 —
+[decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) item 2). The
+claims below keep their content and become Lean obligations; Verus is retained
+only where a result verifies an actual executable body under a digest-pinned
+contract. Note the standing exclusion that bears directly on this document:
+`verus/batch/BATCH_ASSUMPTIONS.md` records `relation_v1` and
+`relation_v1_stream` as **excluded sources** — the scalar batch shadow's 28
+obligations are "not proofs of the coupled outcome-conservation, owner-pairing,
+AON-mask, portfolio, or streaming relations bearing those names."
 
 - every successful stage is total and memory safe;
 - active indices, widths, products, sums, and divisions are bounded;
@@ -295,11 +307,12 @@ the relation; arrival order does not turn an invalid witness into a transition.
 - final settlement pots cannot also be interpreted as reservations;
 - repeated settlement is idempotent.
 
-### Abstract shadow claims
+### Abstract model claims
 
-Rocq is the leading abstract model. Lean may independently encode the finite
-relation or check generated theorem/vector artifacts, but is not a second
-production implementation. Shadow targets are:
+**Lean is the abstract model** (ADR-0005, superseding ADR-0003's Rocq-leading
+assignment; the Rocq shadow role is retired). Lean encodes the finite relation
+and checks generated theorem/vector artifacts, and it is not a second production
+implementation. Model targets are:
 
 - relation acceptance implies feasibility and conservation;
 - simplex normalization and complete-set equivalence;

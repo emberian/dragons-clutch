@@ -200,7 +200,15 @@ because its name is familiar or because a client API returns a price.
 
 ## 10. Proof and test obligations
 
-Verus-first targets:
+Proof targets — **Lean is the proof substrate of record**
+([adr/0005-lean-proof-substrate-of-record.md](adr/0005-lean-proof-substrate-of-record.md),
+adopted 2026-08-20 —
+[decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) item 2,
+superseding ADR-0003). The targets keep their content; only the substrate moved.
+Verus is retained here only if a result verifies an actual executable body — and
+note that the Verus accumulator shadow is a **recorded failure** (four `E0308`;
+no proof log records a pass), which is exactly the kind of claim this record
+refuses to launder:
 
 - `append` and `combine` are total within admitted bounds;
 - accepted intervals advance monotonically and never overlap;
@@ -211,8 +219,8 @@ Verus-first targets:
 - uncertainty can only stay equal or become more conservative through a fold;
 - duplicate work cannot earn twice.
 
-Rocq/Lean shadow targets encode the interval monoid and its correspondence to
-closed statistic semantics. Host/SBF differential tests cover boundary values,
+Lean model targets encode the interval monoid and its correspondence to
+closed statistic semantics (the Rocq shadow role is retired per ADR-0005). Host/SBF differential tests cover boundary values,
 page splits, repair order, source refusal, and maximum-width arithmetic.
 
 ## 11. Falsifiers and gates

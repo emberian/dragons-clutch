@@ -5,16 +5,46 @@ the theorem, implementation, or build presently exists.
 
 ## 1. Evidence policy
 
-V1 is Verus-first for the executable kernel. Rocq is the leading independent
-mathematical shadow. Lean is a compatible secondary shadow seam for small finite
-relations, generated vectors, or independent reproduction; it does not create a
-requirement to maintain three executable semantic implementations.
+**Lean is the proof substrate of record**
+([adr/0005-lean-proof-substrate-of-record.md](adr/0005-lean-proof-substrate-of-record.md),
+adopted 2026-08-20 —
+[decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) item 2,
+superseding ADR-0003's Verus-first assignment). New theorem obligations,
+promotion criteria, and verification-facing design language name Lean unless a
+named exception applies. Lean remains a hand-written model: correspondence to
+Rust is manual, disclosed, and bounded by shared vectors until a mechanical
+arrow exists, and no Lean theorem is ever cited as verification of the Rust, the
+ELF, or a deployment — PROVED-MODEL and CHECKED-RUST-SUBSET stay distinct
+claims. `native_decide` is banned in the Lean tree.
+
+**Verus is retained solely for checked-Rust-subset results** verifying actual
+executable bodies under digest-pinned contracts; its mathematical-shadow mode is
+deprecated in favor of Lean. Stated honestly, what Verus holds here is two live
+artifacts: the transfer-arithmetic refinement of the checked-in body of
+`crates/clutch-kernel/src/transfer_arithmetic.rs` (conservation and overflow
+postconditions, two required-red mutants) — the repo's only production-Rust
+proof — and the scalar batch shadow (`verus/batch/batch.rs`, 28 verified
+obligations, five required red mutants), whose correspondence is a
+**digest-pinned human review with named excluded sources**:
+`verus/batch/BATCH_ASSUMPTIONS.md` states plainly that the digests make the
+review stable but do not turn it into a machine-checked refinement.
+
+**The Rocq shadow role is retired.** `rocq/ClutchKernel.v` remains a historical
+specification, and its manifest typecheck gate stays labeled non-proof-content.
 
 No artifact earns the phrase “formally verified” by itself. A release statement
 must name the property ID, source/model digest, toolchain digest, result, trusted
 assumptions, and every unclosed adapter/refinement boundary.
 
 ## 2. Property inventory
+
+The three substrate columns below are the **pre-ADR-0005 assignment**, kept so
+each promised artifact shape stays readable against the plan that promised it.
+Read them under the current record: the *Rocq shadow* column is retired and
+holds nothing; the *Lean seam* column names the substrate of record and is where
+a new obligation now lands; the *Verus executable* column is honest only for
+rows that would verify an actual executable body. Every row remains a promised
+shape, not evidence.
 
 | ID | Property | Verus executable | Rocq shadow | Lean seam | Host/SBF falsifier |
 |---|---|---|---|---|---|

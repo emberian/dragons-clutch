@@ -236,8 +236,13 @@ tests incl. all 10,368 selector/fee products). Tier 2's work is consumption:
   pinned as a const (like `DIRECT_POLICY_V1`): `fee_base: None`, 0 bps; ONE
   pinned dust choice; `pairing_witness: ExplicitSlices`; `portfolio_lots:
   StrictWholeOrder`; `self_cross: RefuseOverlap` (2 passes, not 3).
-  **PROPOSED → frozen is ember's sign-off; pins zero-fee and does not
-  preempt the fee-base fork.**
+  **FROZEN as pinned 2026-08-20** by ember's sign-off
+  ([../decisions/ADOPTED_2026-08-20.md](../decisions/ADOPTED_2026-08-20.md)
+  item 1). It pins zero-fee and does not preempt the fee-base fork, whose
+  **shape** was separately decided the same day — the composite
+  `kappa*G + kappa'*R`, with **both rates open** and every byte still
+  `FeeBaseV1::None` (item 9). A fee-bearing profile would be a sibling const
+  with a new digest, never an amendment of this frozen one.
 - Domain construction (program side, in T2-6):
   `RelationDomainV1 { relation_version, market_id: 0, book_id: 0, epoch:
   epoch_index, policy_id: 0, order_set_id: 0, outcome_count, owner_count,
@@ -361,7 +366,13 @@ clears" transaction that is the whole point. Claim: **SBF-EXECUTED**.
 
 - **Fees stay forced zero** at all five gates (orders_batch.rs:878,
   settlement.rs:431/:592, direct_selection.rs:892-893/:1707); Tier 2 policy
-  pins `FeeBaseV1::None`/0 bps. The fee-base fork remains ember's decision.
+  pins `FeeBaseV1::None`/0 bps. The fee-base fork's **shape is decided** —
+  the composite `kappa*G(a,p) + kappa'*R(a)`, dispersion with a price-free
+  quotient-norm floor
+  ([../decisions/ADOPTED_2026-08-20.md](../decisions/ADOPTED_2026-08-20.md)
+  item 9) — while **both rates remain open** and remain ember's decision.
+  Nothing about that selection reaches this plane: every byte stays
+  `FeeBaseV1::None` and all five gates stay closed.
 - **`propose_best_valid` stays host-side** — "Never" tier in the frame plan.
 - **No promotion claims:** no liveness rows, no `live_*` flags, no
   deployment; every increment labeled HOST-TESTED or SBF-EXECUTED exactly.

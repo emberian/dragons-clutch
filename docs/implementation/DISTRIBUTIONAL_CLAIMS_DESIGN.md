@@ -763,16 +763,28 @@ kernel/lab alignment fixtures (§3.4 of the policy analysis) gain a
 `basis` fixture family: `(degree, knots, D, x̂) → weights` vectors both
 languages must reproduce byte-identically.
 
-### 10.4 Rocq / Verus shadows
+### 10.4 Proof obligations
 
-`rocq/ClutchKernel.v` models finite indexed `resolve` only. It needs
-`resolve_with_vector` plus hypotheses (H1)/(H2) as the vector-admission
-predicate, and the §3.2 theorem joins the open-obligation list (its Rocq
-statement is *simpler* than the preset max — a sum bound — but it is new
-work). The weight-map construction lemma (§2.3) belongs beside it as a
-separate obligation over the pane polynomials. The Verus-first shadow policy
-(ADR-0003) applies unchanged; none of this is claimed proved, and the
-BLOCKER remains the unpinned proof toolchain.
+**Substrate updated 2026-08-20: Lean is the proof substrate of record**
+([../adr/0005-lean-proof-substrate-of-record.md](../adr/0005-lean-proof-substrate-of-record.md),
+adopted per
+[../decisions/ADOPTED_2026-08-20.md](../decisions/ADOPTED_2026-08-20.md)
+item 2). The obligations below keep their content and land in Lean; ADR-0003's
+Verus-first shadow policy no longer applies, and the Rocq shadow role is retired
+with `rocq/ClutchKernel.v` kept as a historical specification. Verus is retained
+only for checked-Rust-subset results verifying actual executable bodies, which
+none of these are.
+
+The historical Rocq framing, for reference: `rocq/ClutchKernel.v` models finite
+indexed `resolve` only. The obligation is `resolve_with_vector` plus hypotheses
+(H1)/(H2) as the vector-admission predicate, with the §3.2 theorem joining the
+open-obligation list (its statement is *simpler* than the preset max — a sum
+bound — but it is new work). The weight-map construction lemma (§2.3) belongs
+beside it as a separate obligation over the pane polynomials. **None of this is
+claimed proved in any substrate.** The unpinned-proof-toolchain BLOCKER as
+written no longer names the live gap — the proof toolchain is pinned
+(`toolchain/PINNED_PROOF_TOOLS.md`) — and the honest blocker is now simply that
+these theorems do not exist in Lean yet.
 
 ### 10.5 The regulatory story — a sentence-level plan
 

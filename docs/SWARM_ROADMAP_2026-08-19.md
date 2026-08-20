@@ -252,9 +252,16 @@ Formal work:
   completion/`left`/`assigned` invariants, validation-to-padding, and
   source-level correspondence rather than relabeling the model as full
   allocation or relation conservation.
-- Install/pin Rocq in an isolated environment and prove the currently named
-  kernel properties.  The present Rocq file is a specification with zero
-  checked properties.
+- ~~Install/pin Rocq in an isolated environment and prove the currently named
+  kernel properties.~~ **Retired 2026-08-20**: ADR-0005 retires the Rocq shadow
+  role rather than re-staffing it
+  ([adr/0005-lean-proof-substrate-of-record.md](adr/0005-lean-proof-substrate-of-record.md),
+  [decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md) item 2).
+  Rocq is in fact installed and pinned (9.2.0) and still produced nothing; the
+  file remains a specification with zero checked properties and stays in-tree as
+  a historical specification, with its manifest typecheck gate labeled
+  non-proof-content. **The named kernel properties are Lean's to prove**, which
+  is where the substrate's 212 checked declarations already are.
 - Extend the finite B-spline bridge only with explicit source digests and
   adversarial mutants; do not call finite agreement universal verification.
 - Target the useful end-to-end theorem boundary: canonical Terms/account bytes

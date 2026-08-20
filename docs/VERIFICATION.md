@@ -1,5 +1,18 @@
 # Verification architecture
 
+Substrate of record, 2026-08-20: **Lean**
+([adr/0005-lean-proof-substrate-of-record.md](adr/0005-lean-proof-substrate-of-record.md),
+adopted per [decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md)
+item 2, superseding ADR-0003). This document was written against ADR-0003's
+assignment — Verus as the executable-kernel gate, Rocq as the independent
+shadow — and its §2 and §7 describe a Rocq track whose role is now **retired**.
+Those sections are kept as the historical specification of what was planned,
+not as live obligations; `rocq/ClutchKernel.v` stays in-tree on the same basis,
+and its manifest typecheck gate stays labeled non-proof-content. Read §3's
+target list as Lean's, with Verus retained only where a result verifies an
+actual executable body. What each substrate holds today is stated in
+[EVIDENCE_MATRIX.md](EVIDENCE_MATRIX.md) §1.
+
 ## 1. Claim discipline
 
 Dragon's Clutch does not use “formally verified” as a binary marketing adjective.
@@ -38,6 +51,13 @@ first correspondence arrow. It is not a V1 release blocker.
 
 ## 2. Hand-written Rocq model
 
+**Retired role, kept as historical specification** (ADR-0005). Rocq holds zero
+theorems — its obligations are `Definition … : Prop`, never `Theorem` — and one
+conjunct of `successful_transition_is_well_formed` is machine-checked vacuous.
+The mathematical-model role described below is Lean's now; the property content
+carries over unchanged, only the substrate moves. Nothing in this section is a
+live obligation.
+
 The Rocq specification should be mathematical rather than Rust-shaped. It defines:
 
 - Realm/Market lifecycle;
@@ -69,11 +89,17 @@ Target theorems include:
 
 Extract the executable Rocq model to an independent test oracle. Canonical vectors
 and randomized traces should produce identical outputs in Rocq, ordinary host
-Rust, Verus-checked Rust, and SBF integration tests.
+Rust, Verus-checked Rust, and SBF integration tests. *(The Rocq extraction
+oracle was never built and is not planned; under ADR-0005 the shared-vector
+discipline is Lean's — `lean/README.md` records the correspondence as manual,
+unproved, and bounded by the semantic vectors both sides evaluate.)*
 
-## 3. Verus Eggcrate kernel
+## 3. The Eggcrate kernel gate
 
-Verus is the V1 executable-kernel gate. The kernel should be:
+**Lean is the proof substrate of record for this kernel's obligations**
+(ADR-0005); **Verus is retained solely for checked-Rust-subset results
+verifying actual executable bodies** under digest-pinned contracts, which is
+where the one production-bound result below lives. The kernel should be:
 
 - `no_std`, `no_alloc`, safe Rust;
 - edition 2021 for the shared Verus/SBF subset;
@@ -93,7 +119,12 @@ pub fn apply(state: State, input: Input) -> Result<Transition, Error>
 Every untrusted condition is checked by executable code. Exported functions have
 no proof-only precondition that the unverified adapter must remember.
 
-Verus is expected to prove:
+The eleven properties below are the kernel's proof obligations. Under ADR-0005
+they are **Lean's to close**, as PROVED-MODEL results with the Rust
+correspondence disclosed; the property content is unchanged and only the prover
+moved. Measured against this list, Verus covers roughly **1.5 of the 11** — the
+transfer-arithmetic result recorded below, plus part of the arithmetic-safety
+bullet — and that is the honest coverage number, not a pending one:
 
 - successful transitions preserve all local invariants;
 - arithmetic cannot overflow, underflow, divide by zero, or silently truncate;
@@ -206,6 +237,15 @@ Token-2022 and source-program behavior are external assumptions. Proving that th
 adapter constructs the intended CPI does not prove the callee or Solana runtime.
 
 ## 7. rocq-of-rust role
+
+**Retired with the Rocq role** (ADR-0005). The model-to-source arrow this
+section describes is now carried by the **Aeneas/Charon spike** — one pure
+kernel function, bounded, with a kill criterion — which the ADR names as the
+test of whether Lean can acquire the refinement arrow, alongside solanalib sBPF
+scoping as the runtime-plane road. The recorded fallback stands: if the spike
+fails, checked-executable-body growth continues in Verus, never by relabeling
+model theorems. The description below is kept as the historical assessment of a
+route not taken.
 
 [`rocq-of-rust`](https://github.com/formal-land/rocq-of-rust) translates Rust
 compiler representations into a Rocq shallow embedding, after which types/traits

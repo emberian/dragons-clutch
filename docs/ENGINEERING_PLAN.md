@@ -486,7 +486,15 @@ evidence requirements are tracked in [EVIDENCE_MATRIX.md](EVIDENCE_MATRIX.md).
 ### Required closure
 
 - Full offline readiness from a fresh clone.
-- Clean Verus and Rocq proof gates and theorem inventory.
+- Clean Lean proof gate and theorem inventory — Lean is the proof substrate of
+  record ([adr/0005-lean-proof-substrate-of-record.md](adr/0005-lean-proof-substrate-of-record.md),
+  adopted per [decisions/ADOPTED_2026-08-20.md](decisions/ADOPTED_2026-08-20.md)
+  item 2): offline `lake build`, zero `sorry`, zero project axioms, no
+  `native_decide`, and the axiom set held to `propext`/`Classical.choice`/
+  `Quot.sound`. Verus rides along only for its retained checked-Rust-subset
+  results over actual executable bodies (the transfer-arithmetic refinement, the
+  digest-pinned scalar batch shadow with its named excluded sources); the Rocq
+  shadow role is retired and its typecheck gate stays labeled non-proof-content.
 - Trust/assumption audit.
 - Canonical cross-runtime vectors and mutation tests.
 - Reproducible SBF ELF and static bundle hashes.
