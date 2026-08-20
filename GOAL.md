@@ -43,11 +43,10 @@ ready in degg-research.
    Python lab. Destination-before-base remains the design order; the
    RevenuePolicy object is the missing prerequisite.
 
-In flight: Draft 12 voice inversion (statement + both joint comments),
-frame-budget decision map for portfolio clearing (4 paths: restructure,
-heap, scratch account, CPI — CPI does NOT raise the frame limit), CFTC
-filing-process and forward-calendar research (what happens to statements,
-speaking mechanics, September+ opportunities).
+In flight: Draft 13 slimming — four Fable lanes compressing the Draft 12
+documents toward maximal brevity with meaning preserved (ember: "lean
+towards the shorter side as possible"); verification diff + number-survival
+check is mine when they land.
 
 ## Ember decision queue (2026-08-19 morning)
 
@@ -71,6 +70,25 @@ speaking mechanics, September+ opportunities).
    Aug 24/24/27, perpetuals RFC Aug 26.
 
 ## Done log (2026-08-19 session)
+
+- FILING PROCESS + FORWARD CALENDAR memo landed (degg-research 3f021fe,
+  FILING_PROCESS_AND_CALENDAR.md, 47 verified primary sources): the IAC
+  MEETING IS AUG 20 (tomorrow), 1-4pm EDT, public access listen-only; the
+  Aug 27 date is the written-statement "should submit by" deadline (modal
+  is "should", the FR structured close date is null). NO speaking channel
+  exists or ever did across 8 CFTC advisory-committee notices 2023-2026 —
+  nothing was missed. Statements land on the regulations.gov docket
+  unreviewed and are NEVER surfaced on event pages (live test: AAC met
+  Jul 29, zero statements posted). Only NPRM comments and part-13
+  petitions create agency obligations; all four of our matters are RFCs/
+  advisory statements. FORWARD HEADLINE: Compute Derivatives RFC (RIN
+  3038-AF77) issued TODAY, 60 days from FR publication, asking about
+  unobservable/unsurveillable reference prices and perpetual compute
+  futures — squarely our material. Eight corrections to companion memos,
+  two big: SEC comment lists DO exist (7 filers + 5 ex parte memos the
+  CFTC dockets don't show; sec.gov wants a declared-identity UA), and
+  ISDA/SIFMA filed 2026-05-20 via the SEC-CFTC Harmonization Initiative
+  log — a joint channel the earlier memos didn't know existed.
 
 - FRAME BUDGET PLAN committed (docs/design/FRAME_BUDGET_PLAN_2026-08-19.md):
   the frame blocker for the general relation is ALREADY SOLVED in-repo and
