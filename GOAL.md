@@ -61,6 +61,24 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- PLANNED-VS-BUILT SCORECARD committed
+  (docs/reviews/PLANNED_VS_BUILT_2026-08-19.md): ~14% of originally planned
+  commitments are in the sealed runtime, against V1_BACKLOG's self-reported
+  53%. CORRECTION I OWE: the merged venue is a TWO-ORDER crossing engine
+  (common.rs:510 forces order_count==2, same outcome, equal quantity,
+  opposite sides, different owners, zero fee), roughly 12 transactions and
+  ~7M CU per trade — narrower than "the venue exists", which is what I said.
+  Portfolio/coefficient orders are placeable but structurally unclearable
+  (orders_batch.rs:888), so the crown-jewel basis is inert as a shape.
+  ADR-0003 is inverted with no superseding record: Rocq has ZERO theorems,
+  Verus ~1.5 of 11, and Lean — explicitly warned against becoming mandatory
+  — carries 184 theorems with zero sorry. NEW REGRESSION: the V3 merge added
+  six persistent account families, none classified in the 37-row terminal
+  inventory; the terminal ledger regressed the moment the venue landed.
+  Also: no CI exists at all (.github/ absent); benchmarks/constants.json is
+  pinned 3,109 layout lines stale and only soft-notes the drift it exists to
+  refuse; of 100 manifest gates only 4 are SBF runtime gates.
+
 - V3 CLAIM PROMOTION propagated: CURRENT_TRUTH capability matrix rewritten
   for the routed staged lifecycle (8162bae) with its exact boundaries —
   one bank profile, unpromoted in the liveness profile with live_v3 false,
