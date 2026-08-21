@@ -419,9 +419,9 @@ gap), coarse scales where the residual is maximal, and odd scales coprime to
 every pane denominator. -/
 def corpusDenominators : List Nat := [1, 2, 3, 7, 8, 16, 63, 1000]
 
-/-- Observed values: every integer from two below the low endpoint to two
-above the high one, so each row set contains both clamped exteriors, both
-closed endpoints, every internal knot, and every interior point. -/
+/-- Observed values: every integer in `[origin - 2, last + 4]`, clamped at zero
+from below, so each row set contains both clamped exteriors, both closed
+endpoints, every internal knot, and every interior point. -/
 def corpusValues (g : CorpusGrid) : List Nat :=
   (List.range (g.last + 5)).filter (fun x => g.origin ≤ x + 2)
 

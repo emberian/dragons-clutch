@@ -57,8 +57,8 @@ hand-derived theorem in `BSpline.lean` untouched.
 ## The corpus
 
 3,360 rows: six uniform grids × degrees {1, 2, 3} × eight scales
-`D ∈ {1, 2, 3, 7, 8, 16, 63, 1000}` × every integer observed value from two
-below the low endpoint to two above the high one. 1,120 rows per degree.
+`D ∈ {1, 2, 3, 7, 8, 16, 63, 1000}` × every integer observed value in
+`[origin − 2, last + 4]` (clamped at zero from below). 1,120 rows per degree.
 
 The grids reach every structural case: a single-pane grid where both clamped
 end effects overlap (`count = 2`), short grids where the end panes still touch,
