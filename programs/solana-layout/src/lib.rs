@@ -4694,7 +4694,8 @@ pub enum Intent {
         context: Hash32,
         digest: Hash32,
     },
-    /// Begin staged creation of one clearing checkpoint ([`ClearWorkAccount`]).
+    /// Begin staged creation of one clearing checkpoint
+    /// ([`clearing::ClearWorkAccount`]).
     ///
     /// The checkpoint is the one account in the inventory above the runtime's
     /// 10,240-byte per-instruction growth ceiling (see [`clearing`]), so its

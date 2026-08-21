@@ -119,6 +119,44 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
             5,
         )
 
+    def test_strict_doc_gates_actually_deny_rustdoc_warnings(self) -> None:
+        # A doc gate that does not carry RUSTDOCFLAGS='-D warnings' asserts
+        # nothing about link health, so the strictness has to be checked on the
+        # command string, not trusted to the declaration site.
+        gates = {gate["id"]: gate for gate in baseline_manifest.build_gates()}
+        strict_doc_gates = {
+            "cargo_doc.clutch_sbf",
+            "cargo_doc.solana_layout",
+            "cargo_doc.batch_policy_identity",
+            "cargo_doc.claim_algebra_model",
+            "cargo_doc.liquidity_policy_model",
+            "cargo_doc.source_profile_v1",
+        }
+        observed = {
+            gate["id"]
+            for gate in baseline_manifest.build_gates()
+            if gate["id"].startswith("cargo_doc.")
+            and gate["command"].startswith("RUSTDOCFLAGS='-D warnings' ")
+        }
+        # Exact, both directions: a gate silently losing its strictness fails
+        # here, and so does one acquiring it without this list being reviewed.
+        self.assertEqual(observed, strict_doc_gates)
+        for name in baseline_manifest.STRICT_DOC_CRATES:
+            self.assertIn(f"cargo_doc.{name}", strict_doc_gates)
+        self.assertEqual(
+            gates["cargo_doc.batch_policy_identity"]["command"],
+            "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path "
+            "research/batch-policy-identity/Cargo.toml --offline --locked --no-deps",
+        )
+        self.assertEqual(
+            gates["cargo_doc.batch_policy_identity"]["section"], "current-research"
+        )
+        self.assertEqual(
+            gates["cargo_doc.solana_layout"]["command"],
+            "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path "
+            "programs/solana-layout/Cargo.toml --offline --locked --no-deps",
+        )
+
     def test_gate_records_are_cache_and_path_stable(self) -> None:
         cold_doc = " Documenting clutch-kernel v0.1.0 (/private/tmp/cold/target/doc)\n"
         warm_doc = ""
@@ -257,7 +295,7 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
 
     def test_current_runtime_and_terms_authorities_are_declared(self) -> None:
         gates = {gate["id"]: gate for gate in baseline_manifest.build_gates()}
-        self.assertEqual(len(gates), 100)
+        self.assertEqual(len(gates), 101)
         bringup_patterns = gates["sbf.runtime_bringup"]["key_patterns"]
         for pattern in (
             r"^default pass [12]  sha256=[0-9a-f]{64}  bytes=[0-9]+$",

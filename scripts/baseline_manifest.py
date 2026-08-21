@@ -372,11 +372,15 @@ CARGO_MANIFESTS = [
 ]
 
 # Workspace crates whose `cargo_doc` gate denies rustdoc warnings outright,
-# the same discipline the three research-crate doc gates below already carry.
+# the same discipline the strict research-crate doc gates below already carry.
 # A crate joins this set once its doc surface is warning-free at a reseal
 # boundary: a doc-comment byte inside the SBF source closure forks the ELF
 # identity, so the repair and the strictening ride one identity wave.
-STRICT_DOC_CRATES = {"clutch_sbf"}
+# `solana_layout` joined after its two carried-over links were repaired
+# (`CANDIDATE_FEED_TAG`, `ClearWorkAccount`); its research sibling
+# `clutch-batch-policy-identity` takes the same strictness through its own
+# explicitly declared `cargo_doc` gate below, which had not existed at all.
+STRICT_DOC_CRATES = {"clutch_sbf", "solana_layout"}
 
 TEST_RESULT_PATTERNS = [r"^test result: "]
 CLIPPY_PATTERNS = [r"^error(\[|:)", r"^warning(\[|:)"]
@@ -573,6 +577,22 @@ def build_gates() -> list[dict[str, Any]]:
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": CLIPPY_PATTERNS,
                 "note": "strict lint for the bounded direct-selection host model",
+            },
+            {
+                "id": "cargo_doc.batch_policy_identity",
+                "section": "current-research",
+                "command": (
+                    "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path "
+                    "research/batch-policy-identity/Cargo.toml --offline --locked --no-deps"
+                ),
+                "expected": {"mode": "zero", "exit": 0},
+                "key_patterns": DOC_PATTERNS,
+                "note": (
+                    "documentation build with rustdoc warnings denied; a broken "
+                    "or private intra-doc link fails the gate. This crate had no "
+                    "doc gate at all, which is how six fresh warnings landed here "
+                    "unseen in the fee wave"
+                ),
             },
             {
                 "id": "cargo_test.bspline_shape_compiler",

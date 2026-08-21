@@ -1602,9 +1602,10 @@ pub fn candidate_feed_slice_region(input: &[u8]) -> Result<&[u8]> {
 ///
 /// The staged-creation discipline of the checkpoint (`ClearWorkGrowStage`),
 /// carried by **tag** instead of by length: a staging feed is full-length from
-/// creation, but its first byte is this tag rather than [`CANDIDATE_FEED_TAG`],
-/// so [`CandidateFeedHeader::decode`] — and therefore every feed consumer,
-/// the on-chain walk included — refuses it with `WrongTag` and zero new code.
+/// creation, but its first byte is this tag rather than the private
+/// `CANDIDATE_FEED_TAG`, so [`CandidateFeedHeader::decode`] — and therefore
+/// every feed consumer, the on-chain walk included — refuses it with
+/// `WrongTag` and zero new code.
 /// [`seal_candidate_feed`] is the one-way door that replaces the stage prefix
 /// with the real header; after it, no stage write can ever land again, which
 /// is what makes "the bytes the walk streamed" and "the bytes the tie digest

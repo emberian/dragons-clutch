@@ -973,8 +973,8 @@ fn feed_leg<H: Sha256Like>(h: &mut H, leg: LegRefV1) {
 /// pairing slice.  The policy itself is already included byte-for-byte in the
 /// full-domain digest.
 ///
-/// This is off-chain code.  Its widest preimage is
-/// [`FULL_RELATION_CANDIDATE_PREIMAGE`] bytes, so the on-chain form does not fit
+/// This is off-chain code.  Its widest preimage is the private
+/// `FULL_RELATION_CANDIDATE_PREIMAGE` bytes, so the on-chain form does not fit
 /// a 4 KiB SBF frame and the SBF backend says so; nothing on the program's reach
 /// graph calls it, and link-time optimisation drops it from the deployable ELF.
 /// The bounded direct profile's own fixed-width fold is what ships.
@@ -995,11 +995,11 @@ pub fn full_relation_candidate_digest(
 /// segments byte for byte: all [`MAX_ORDERS`] fills as little-endian `u64`s
 /// with canonical zero padding (exactly what the digest folds), and each
 /// declared slice as `buy(kind, index), sell(kind, index), outcome, quantity
-/// LE` — the exact sequence [`feed_leg`] and the quantity fold produce.  So
-/// the whole preimage can be committed by *borrowing* those regions plus a
-/// few small locals, and no frame ever holds the multi-kilobyte preimage the
-/// buffered [`full_relation_candidate_digest`] needs (the reason that form is
-/// off-chain only).
+/// LE` — the exact sequence the private `feed_leg` and the quantity fold
+/// produce.  So the whole preimage can be committed by *borrowing* those
+/// regions plus a few small locals, and no frame ever holds the multi-kilobyte
+/// preimage the buffered [`full_relation_candidate_digest`] needs (the reason
+/// that form is off-chain only).
 ///
 /// `fill_region` must be exactly `MAX_ORDERS * 8` bytes; a declared witness
 /// travels as `(declared_len, region)` with the region exactly thirteen bytes
