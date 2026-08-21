@@ -207,6 +207,23 @@ actual Rust source compile, execute, and go red. The campaign also reruns the
 no Verus theorem and does not prove the whole evaluator, parser/refusal order,
 overflow behavior, compiler, SBF, or runtime.
 
+A second, wider campaign sits beside it. `DragonsClutch.BSplineCorpus` assembles
+the already-proved pieces into one total computable evaluator for uniform
+stored grids and proves `uniformSmoothBasis?_exact`: at every positive uniform
+grid, every degree one through three, and *every* observed value including both
+closed endpoints and everything the edge policy clamps, the evaluation succeeds
+and is an exact partition of unity — the interior case chaining
+`refineOne_exact` into `refineTwo_exact` into `refineThree_exact`, so no column
+assumes the conclusion. Five `decide` theorems check it against the hand-derived
+witness vectors it never sees. `verus/bspline/run_degree_corpus.sh` then drives
+3,360 generated rows (six grids × three degrees × eight scales × every integer
+value across each grid) through the same digest-pinned driver: all 3,360 agree
+byte-for-byte, and eight source mutants — including a wrong cubic denominator
+and a wrong clamped-endpoint repeat — compile, execute, and go red. Also
+**CHECKED-FINITE**, and narrower than the eight-row campaign in one respect: it
+covers uniform stored grids only, so nonuniform degree-one panes and degree zero
+remain outside it. See `verus/bspline/DEGREE_CORPUS.md`.
+
 The surrounding layers have different status:
 
 - `research/bspline-shape-compiler` is a host-tested exact-rational research
@@ -262,6 +279,23 @@ remains. The exact sealed ELF closes its first-party final-LTO stack diagnostic
 gate, but that does not close these semantic, source, or terminal gates. No path
 may lower a smooth market to categorical portfolios.
 
+One consequence of the smooth rungs having landed is now live rather than
+design-ahead, and is recorded here because the research note that raised it
+assumed the opposite. `DUAL_IS_THE_MEASURE.md` §7.4 proves that at degree ≥ 2
+the exact simplex gate is **strictly weaker** than no-arbitrage on the tradable
+span — interior quadratic basis functions peak at `3/4` (cubics at `2/3`), so
+`e_j` is a V1-valid price vector that is no measure's moment vector, and the
+split-and-sell position against it is executable in the admitted order
+language. That note called it "a design-ahead warning, not a live defect"
+because degrees 2–3 could not be created; they now can. The clearing sees a
+basis only through partition of unity — `programs/solana-layout/src/clearing.rs`
+and `crates/clutch-batch` contain no occurrence of `degree` — and no gate in
+front of the relation restricts a market's degree, so nothing currently
+distinguishes the two cases. The moment-body admission test is **OPEN**, not
+built. The one enforced degree-≥2 restriction is on evidence rather than price:
+`ResolutionRefusal::NonPointEvidence` refuses a conservative interval that is
+not a point.
+
 The selected R2 Pyth pull profile also has an integrated research-only model:
 `SourceSpecV2` is a distinct-domain, 368-byte proposed body that binds the
 receiver Config key and full-byte digest, provider feed id, exact ProgramData
@@ -298,7 +332,7 @@ public `derive_payout` to be degree-zero-only; smooth callers must use
 | Product and Realm model | **PROPOSED** | The product is collateral-generic; DREGG is one optional dogfood profile. Native degree-zero through degree-three claim semantics are the intended ceiling. | No real Realm profile is authenticated, frozen, or released. The V1 admission allowlist is FROZEN as built (Token-2022 base mints, extension ceiling zero, ImmutableOwner required on the Hoard, unknown discriminants fail closed — docs/decisions/ADOPTED_2026-08-20.md item 4), which authenticates no Realm; the DREGG dogfood mint has no executable V1 profile. |
 | Core claim kernel | **HOST-TESTED** plus separate **PROVED-MODEL** results | Safe fixed-layout Rust executes split, merge, materialize, dematerialize, resolution, and redemption fragments. Lean checks named model properties. | Lean/Rust correspondence is manual; the full kernel is not verifier-checked. |
 | Verus evidence | narrow **CHECKED-RUST-SUBSET** plus separate **PROVED-MODEL** | Pinned Verus checked exact debit/credit conservation and overflow refusal for `prepare_internal_transfer`. The scalar batch shadow reports 28 verified obligations and five required red mutants; it proves one-shot dust-choice positivity/progress in its mathematical projection, allocation decomposition/per-fill bounds, unique tick selection, a whole-fill partition conditional on accepted side equalities, and a zero-suffix fold identity. | The scalar shadow does not verify the executable dust loop or its `left`/`assigned` invariants, accepted side equality, production zero-padding validation, checked-arithmetic/source correspondence, coupled V1, or any account/SBF behavior. ADR-0005 (adopted 2026-08-20, docs/decisions/ADOPTED_2026-08-20.md item 2) makes Lean the proof substrate of record and retains Verus solely for checked-Rust-subset results verifying actual executable bodies; it changes no evidence identity in this row. |
-| B-spline model/executable bridge | **CHECKED-FINITE** | Eight Lean-computed vectors match digest-bound production evaluator outputs; five actual-source semantic mutants compile/execute and disagree. | No Verus invocation or universal Rust/SBF refinement; finite adapter association remains reviewed. |
+| B-spline model/executable bridge | **CHECKED-FINITE** | Eight hand-derived plus 3,360 generated Lean-computed vectors match digest-bound production evaluator outputs across degrees one, two and three; five and eight actual-source semantic mutants respectively compile/execute and disagree. The generated corpus rests on `uniformSmoothBasis?_exact`, so no row is a vacuous comparison. | No Verus invocation or universal Rust/SBF refinement; the generated corpus covers uniform stored grids only, and the finite association of Lean control flow with Rust control flow remains reviewed, not proved. |
 | General accumulator | **HOST-TESTED** | Source-neutral adjacent summaries, coverage, interval, TWAP, and terminal calculations have bounded tests. | It authenticates no source, clock, archive, or deployment generation. |
 | Native spline stack | point Resolve/exits **SBF-EXECUTED** and measured-profile admitted; broader mixed, see §3 | Degree-selected v2/v3 creation, source-joined exact d1–3 point resolution, sole-vector persistence/replay, and exact-lot internal and bearer redemption execute. The corrected `161f530` fixture passes 15/15 against the sealed default ELF; point-v3 initial Resolve samples clear the selected 25%-headroom policy. | Kernel v2 immutable mode binding is repaired and host-tested inside the sealed runtime; per-degree blank-bank joined lifecycle evidence landed at `896a1cc` (mock-ELF funded segment with four named injections; default ELF asserts the `0x79` boundary). Production source ingestion, other consumer audit, non-point semantics, and a total fragment policy remain open. Monolithic occupation-v4 initial Resolve does not clear that policy; the routed staged lane below is the admitted alternative. |
 | Coupled batch relation | **HOST-TESTED** plus a narrow scalar **PROVED-MODEL** shadow | Exact witness checks, bounded candidate comparison, pairing, conservation, and a bounded streaming verifier have finite/adversarial campaigns. The separate Verus shadow proves only the named scalar model statements above. | It supports “best valid submitted candidate,” not globally optimal search. The Verus shadow excludes the coupled relation, streaming verifier, production loops, accounts, and SBF. |
