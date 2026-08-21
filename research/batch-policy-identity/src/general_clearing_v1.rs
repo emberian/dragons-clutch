@@ -138,9 +138,9 @@ mod tests {
         Identity32V1, PolicyIdentityErrorV1, BATCH_POLICY_DIGEST_DOMAIN,
     };
     use clutch_batch::relation_v1::{
-        canonical_candidate, canonical_pairing, BookV1, CandidateV1, ErrorV1, OrderV1,
-        PairingWitnessV1, PortfolioOrderV1, RelationDomainV1, ScoreV1, SingleEggOrderV1, SummaryV1,
-        MAX_OUTCOMES, PRICE_SCALE, RELATION_VERSION_V1,
+        canonical_candidate, canonical_pairing, verify_ignoring_claimed_aggregates, BookV1, CandidateV1, ErrorV1, LegRefV1,
+        OrderV1, PairingSliceV1, PairingWitnessV1, PortfolioOrderV1, RelationDomainV1, ScoreV1,
+        SingleEggOrderV1, SummaryV1, MAX_OUTCOMES, PRICE_SCALE, RELATION_VERSION_V1,
     };
     use clutch_batch::relation_v1_stream::{ClearWorkV1, FeedStatusV1, StreamCandidateV1};
     use clutch_batch::{PartialPolicy, Side};
@@ -150,6 +150,9 @@ mod tests {
     use std::boxed::Box;
 
     const SCALE: u64 = PRICE_SCALE;
+    /// Owner slots the per-slice arithmetic helper tabulates; the partial
+    /// fixture family never names more.
+    const OWNER_SLOTS: usize = 8;
 
     fn id(seed: u8) -> Identity32V1 {
         let mut bytes = [seed; 32];
@@ -950,5 +953,275 @@ mod tests {
         );
         // The economic verdict itself is identity-free on both planes.
         assert_eq!(other_verified.economics, verified.economics);
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* The per-slice exactness theorem and its partial-fill fixture family    */
+    /* --------------------------------------------------------------------- */
+
+    /// What one witness says about value, recomputed outside the relation.
+    struct SliceArithmetic {
+        /// Whether every slice's `quantity * price` is a whole multiple of the
+        /// price scale — the runtime's per-slice divisibility discipline.
+        every_slice_exact: bool,
+        /// Collateral atoms the slices move, summed slice by slice.
+        ///
+        /// Only meaningful when `every_slice_exact`; otherwise a per-slice
+        /// receipt could not be minted at all.
+        slice_atom_sum: u128,
+        /// Price units each owner pays, summed over the slices it buys on.
+        debit_units: [u128; OWNER_SLOTS],
+        /// Price units each owner receives, summed over the slices it sells on.
+        credit_units: [u128; OWNER_SLOTS],
+    }
+
+    /// Recompute the witness's value arithmetic per slice and per owner.
+    ///
+    /// Deliberately independent of `settle_cash`: the point of the theorem is
+    /// that two separately computed things agree.
+    fn slice_arithmetic(
+        book: &BookV1,
+        candidate: &CandidateV1,
+        witness: &PairingWitnessV1,
+        scale: u64,
+    ) -> SliceArithmetic {
+        let mut value = SliceArithmetic {
+            every_slice_exact: true,
+            slice_atom_sum: 0,
+            debit_units: [0; OWNER_SLOTS],
+            credit_units: [0; OWNER_SLOTS],
+        };
+        let owner_of = |index: u8| book.orders[index as usize].owner() as usize;
+        let mut at = 0usize;
+        while at < witness.len as usize {
+            let slice = witness.slices[at];
+            let units = slice.quantity as u128 * candidate.prices[slice.outcome as usize] as u128;
+            if units.is_multiple_of(scale as u128) {
+                value.slice_atom_sum += units / scale as u128;
+            } else {
+                value.every_slice_exact = false;
+            }
+            match slice.buy_ref {
+                LegRefV1::Order(index) => value.debit_units[owner_of(index)] += units,
+                _ => panic!("the fixture family declares no virtual legs"),
+            }
+            match slice.sell_ref {
+                LegRefV1::Order(index) => value.credit_units[owner_of(index)] += units,
+                _ => panic!("the fixture family declares no virtual legs"),
+            }
+            at += 1;
+        }
+        value
+    }
+
+    /// One partial-fill fixture: a book, a price vector, and the fills the
+    /// canonical constructor is required to produce.
+    struct PartialFixture {
+        name: &'static str,
+        book: BookV1,
+        vector: [u64; MAX_OUTCOMES],
+        outcomes: u8,
+        owners: u16,
+        fills: &'static [u64],
+    }
+
+    /// The partial-fill fixture family the runtime's per-slice seam serves.
+    ///
+    /// Every one of these is a book the frozen `GENERAL_CLEARING_POLICY_V1`
+    /// already admits and whose canonical candidate partially fills or
+    /// fragments at least one order — the shapes that used to refuse at the
+    /// entitlement seam.
+    fn partial_fixture_family() -> [PartialFixture; 4] {
+        // p = SCALE / 2 on the traded outcome, so every even quantity is an
+        // exact number of collateral atoms.
+        let half = prices(&[SCALE / 2, SCALE / 2]);
+        [
+            PartialFixture {
+                name: "fragmentation: one sell of ten against buys of six and four",
+                book: book_of(&[
+                    single(1, 0, 0, Side::Sell, 10, 0),
+                    single(2, 1, 0, Side::Buy, 6, SCALE),
+                    single(3, 2, 0, Side::Buy, 4, SCALE),
+                ]),
+                vector: half,
+                outcomes: 2,
+                owners: 3,
+                fills: &[10, 6, 4],
+            },
+            PartialFixture {
+                name: "partial sell: twelve offered, ten filled, two returned",
+                book: book_of(&[
+                    single(1, 0, 0, Side::Sell, 12, SCALE / 2),
+                    single(2, 1, 0, Side::Buy, 6, SCALE),
+                    single(3, 2, 0, Side::Buy, 4, SCALE),
+                ]),
+                vector: half,
+                outcomes: 2,
+                owners: 3,
+                fills: &[10, 6, 4],
+            },
+            PartialFixture {
+                name: "marginal pro rata: one strict buy against two marginal sells",
+                book: book_of(&[
+                    single(1, 0, 0, Side::Buy, 8, SCALE),
+                    single(2, 1, 0, Side::Sell, 6, SCALE / 2),
+                    single(3, 2, 0, Side::Sell, 6, SCALE / 2),
+                ]),
+                vector: half,
+                outcomes: 2,
+                owners: 3,
+                fills: &[8, 4, 4],
+            },
+            PartialFixture {
+                name: "mixed: a portfolio sell against one single buy per outcome",
+                book: book_of(&[
+                    portfolio(1, 0, Side::Sell, &[4, 4], 1, 1),
+                    single(2, 1, 0, Side::Buy, 4, SCALE),
+                    single(3, 2, 1, Side::Buy, 4, SCALE),
+                ]),
+                vector: half,
+                outcomes: 2,
+                owners: 3,
+                fills: &[1, 4, 4],
+            },
+        ]
+    }
+
+    /// **The exactness theorem.**  Under `TerminalOwnerFloor`, when every
+    /// slice of the canonical witness converts exactly, the per-slice path
+    /// realizes the frozen rounding boundary exactly.
+    ///
+    /// Concretely, for every fixture in the partial-fill family:
+    ///
+    /// * every per-owner sum is a whole multiple of the price scale, so both
+    ///   of the model's conversions — the payers' `div_ceil` and the payees'
+    ///   floor — are identities;
+    /// * the verified `rounding_pot_price_units` is therefore zero, which is
+    ///   what lets the entitlement freeze open at all; and
+    /// * the slice-by-slice atom sum equals the model's own aggregate debit
+    ///   and credit atoms, so a per-slice receipt path moves exactly the
+    ///   atoms the whole-plane verdict says moved — no more, no fewer.
+    ///
+    /// The fee scalars are pinned zero alongside, so the aggregates are the
+    /// considerations and nothing else.
+    #[test]
+    fn exact_slices_make_the_terminal_owner_floor_an_identity() {
+        let mut work = Box::new(ClearWorkV1::new());
+        for fixture in partial_fixture_family() {
+            let full =
+                full_domain_with(GENERAL_CLEARING_POLICY_V1, fixture.outcomes, fixture.owners);
+            assert_eq!(full.policy.rounding, RoundingBoundaryV1::TerminalOwnerFloor);
+            let zero = zero_sentinel_domain(&full);
+            let candidate =
+                canonical_candidate(&zero, &fixture.book, &fixture.vector, 0, 0).unwrap();
+            assert_eq!(
+                &candidate.fills[..fixture.book.len as usize],
+                fixture.fills,
+                "{}",
+                fixture.name
+            );
+            let witness = canonical_pairing(&zero, &fixture.book, &candidate).unwrap();
+            assert!(witness.len >= 2, "{}", fixture.name);
+
+            // The streaming verdict and the full-width verdict agree on this
+            // partial book, exactly as they do on a full-fill one.
+            assert_verdict_identity(&mut work, &full, &fixture.book, &candidate);
+            let summary =
+                drive_stream(&mut work, &zero, &fixture.book, &candidate, Some(&witness)).unwrap();
+            assert_eq!(summary.virtual_split, 0, "{}", fixture.name);
+            assert_eq!(summary.virtual_merge, 0, "{}", fixture.name);
+            assert_eq!(summary.fee_price_units, 0, "{}", fixture.name);
+            assert_eq!(summary.fee_carry_bps_units, 0, "{}", fixture.name);
+
+            let arithmetic = slice_arithmetic(&fixture.book, &candidate, &witness, SCALE);
+            assert!(arithmetic.every_slice_exact, "{}", fixture.name);
+
+            // Both model conversions are identities, per owner.
+            let mut owner = 0usize;
+            while owner < OWNER_SLOTS {
+                assert_eq!(
+                    arithmetic.debit_units[owner] % SCALE as u128,
+                    0,
+                    "{} debit owner {owner}",
+                    fixture.name
+                );
+                assert_eq!(
+                    arithmetic.credit_units[owner] % SCALE as u128,
+                    0,
+                    "{} credit owner {owner}",
+                    fixture.name
+                );
+                owner += 1;
+            }
+
+            // No remainder atom exists to fund a pot with.
+            assert_eq!(summary.rounding_pot_price_units, 0, "{}", fixture.name);
+            // And the per-slice atoms are the whole plane's atoms.
+            assert_eq!(summary.debit_atoms, arithmetic.slice_atom_sum, "{}", fixture.name);
+            assert_eq!(
+                summary.credit_atoms,
+                arithmetic.slice_atom_sum,
+                "{}",
+                fixture.name
+            );
+        }
+    }
+
+    /// The honest residue, kept red-tested: a witness whose *slices* are
+    /// inexact while every *owner* sum is exact.
+    ///
+    /// Two buyers of eight against two sellers of eight, paired six-and-two
+    /// crosswise.  Every owner moves twenty thousand price units — two whole
+    /// atoms — so the model's rounding pot is zero and the entitlement freeze
+    /// opens; but no single slice converts, so the runtime's per-slice
+    /// divisibility rule refuses every one of them and mints no receipt.
+    ///
+    /// That gap is deliberate and re-filed under the VirtualPot/rounding
+    /// family: realizing it needs a funded pot, not a wider seam.
+    #[test]
+    fn inexact_slices_with_cancelling_fractions_stay_outside_the_exact_seam() {
+        let book = book_of(&[
+            single(1, 0, 0, Side::Buy, 8, SCALE),
+            single(2, 1, 0, Side::Buy, 8, SCALE),
+            single(3, 2, 0, Side::Sell, 8, 0),
+            single(4, 3, 0, Side::Sell, 8, 0),
+        ]);
+        let vector = prices(&[SCALE / 4, 3 * SCALE / 4]);
+        let full = full_domain_with(GENERAL_CLEARING_POLICY_V1, 2, 4);
+        let zero = zero_sentinel_domain(&full);
+        let candidate = canonical_candidate(&zero, &book, &vector, 0, 0).unwrap();
+        assert_eq!(&candidate.fills[..4], &[8, 8, 8, 8]);
+
+        // The crosswise witness the canonical constructor is free to emit and
+        // a solver is free to declare: 6 + 2 on each end.
+        let mut witness = PairingWitnessV1::empty();
+        for (at, (buy, sell, quantity)) in
+            [(0u8, 2u8, 6u64), (0, 3, 2), (1, 2, 2), (1, 3, 6)].iter().enumerate()
+        {
+            witness.slices[at] = PairingSliceV1 {
+                buy_ref: LegRefV1::Order(*buy),
+                sell_ref: LegRefV1::Order(*sell),
+                outcome: 0,
+                quantity: *quantity,
+            };
+        }
+        witness.len = 4;
+
+        let summary =
+            verify_ignoring_claimed_aggregates(&zero, &book, &candidate, Some(&witness)).unwrap();
+        let arithmetic = slice_arithmetic(&book, &candidate, &witness, SCALE);
+
+        // Per owner: exact, so the model's pot is empty and the freeze opens.
+        assert_eq!(summary.rounding_pot_price_units, 0);
+        let mut owner = 0usize;
+        while owner < 4 {
+            let moved = arithmetic.debit_units[owner] + arithmetic.credit_units[owner];
+            assert_eq!(moved, 8 * (SCALE / 4) as u128);
+            assert_eq!(moved % SCALE as u128, 0);
+            owner += 1;
+        }
+        // Per slice: two of the four are inexact, so the runtime's per-slice
+        // seam refuses this witness and no receipt is minted.
+        assert!(!arithmetic.every_slice_exact);
     }
 }
