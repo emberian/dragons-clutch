@@ -70,6 +70,18 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- CYCLE E ATTESTED: Persvati 45/45 PASS, 0 STOP over exact cb94c27 — the
+  4fded7a6 ELF in seven contexts, seven historical roots asserted exact,
+  and a NEW CONTRACT-DRIVEN GATE the lane invented because the seal's
+  central retraction claim had no checker: build_path_mechanism_crossref
+  verifies the relocation-mechanism ATTRIBUTION itself (88 symbol sites:
+  pass1 == pass2 == relocated-home, != crosspath at all 88) — cycle-D's
+  inverted reading would now FAIL the assert. Bonus: the sealed account
+  probe reproduces byte-identical cross-architecture. Truth and memory
+  advanced. EVERY CHAIN IS NOW CLOSED. Holding on: ember's filing reads +
+  submissions (Fri pair / Sun-Mon perps / Tue statement), the api.data.gov
+  key, the IAC transcript, the faucet.
+
 - THE WEEKEND WITNESS WAVE LANDED, BOTH BUILDS: (1) the OFF-HOURS SWEEP
   (8,640 rows, v1-anchored two independent ways, hand-verified row,
   monotonicity clean): windows inside a thin session lose manipulation
