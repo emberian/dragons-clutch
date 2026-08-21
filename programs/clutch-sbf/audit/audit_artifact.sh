@@ -6,7 +6,8 @@
 # SBF ELF twice into fresh target directories from a checksum-verified Cargo
 # cache, then audits the linked artifact, backend stack diagnostics, dependency
 # pins, licenses, and loader-v3 account sizing.  A third build relocates the
-# Cargo home to measure (rather than hide) the path-sensitive boundary.
+# Cargo home — to a symlink-resolved path, per the cycle-F amendment at that
+# probe — to measure (rather than hide) the path-sensitive boundary.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -387,10 +388,35 @@ done
 # Relocation probe.  It is deliberately not the attested artifact: it measures
 # whether dependency source paths embedded by rustc make the recipe sensitive
 # to Cargo-home location.  The result narrows the reproducibility claim.
-relocated_home="$work/cargo-home-relocated"
+#
+# CYCLE-F AMENDMENT.  The probe home is symlink-RESOLVED before it becomes
+# CARGO_HOME.  Cycle F ran two controls with this same recipe and the same
+# fresh extraction, differing only in where the relocated home sat, and both
+# reproduced the canonical bytes exactly — including one inside this very
+# temporary filesystem in resolved /private/var form.  So the divergence this
+# probe used to report tracks *a CARGO_HOME whose path contains an unresolved
+# symlink component* (which defeats the relative-path computation Cargo
+# otherwise performs, handing rustc absolute crate-root paths that land in
+# core::panic::Location strings in .rodata) and NOT relocation as such.  On
+# macOS $TMPDIR is always reached through the /var -> /private/var symlink, so
+# the unamended probe reported PATH_SENSITIVE on any macOS host by
+# construction — measuring the harness rather than the recipe.  Recorded at
+# research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/
+# RUNTIME_ARTIFACT_AUDIT.md ("Owed, not done here").
+#
+# Only CARGO_HOME is resolved, because only CARGO_HOME is what the controls
+# varied.  The target and out directories keep their raw $TMPDIR form: the
+# first-party crate roots stay at the canonical checkout either way, and
+# widening the amendment past the evidence would be a guess.  Both forms of
+# the home are printed, so a reader can tell an amended run from a legacy one
+# and can reproduce the old reading by hand.
+relocated_home_raw="$work/cargo-home-relocated"
 relocated_target="$work/target-relocated"
 relocated_out="$work/out-relocated"
-mkdir -p "$relocated_home/registry" "$relocated_out"
+mkdir -p "$relocated_home_raw/registry" "$relocated_out"
+relocated_home="$(cd "$relocated_home_raw" && pwd -P)"
+[ -d "$relocated_home/registry" ] || \
+  fail "resolved relocated Cargo home is not the raw one: $relocated_home"
 ln -s "$HOME/.cargo/registry/index" "$relocated_home/registry/index"
 ln -s "$HOME/.cargo/registry/cache" "$relocated_home/registry/cache"
 (
@@ -404,6 +430,10 @@ ln -s "$HOME/.cargo/registry/cache" "$relocated_home/registry/cache"
   fail "relocated-Cargo-home SBF probe failed"
 }
 relocated_hash="$(sha256 "$relocated_out/clutch_sbf.so")"
+# Post-amendment, PATH_SENSITIVE here means the recipe is sensitive to the
+# Cargo home *moving*, which is the claim the disposition was always meant to
+# carry.  A pre-amendment PATH_SENSITIVE on macOS carried the symlink
+# component instead; the two readings are not comparable.
 if [ "$relocated_hash" = "${hashes[0]}" ]; then
   cargo_home_relocation="INDEPENDENT"
 else
@@ -695,6 +725,8 @@ echo "vendored_tree_sha256=$vendor_digest"
 echo "elf_pass_1_sha256=${hashes[0]}"
 echo "elf_pass_2_sha256=${hashes[1]}"
 echo "elf_relocated_cargo_home_sha256=$relocated_hash"
+echo "relocated_cargo_home_raw=$relocated_home_raw"
+echo "relocated_cargo_home_resolved=$relocated_home"
 echo "cargo_home_relocation=$cargo_home_relocation"
 echo "elf_bytes=$elf_bytes"
 cat "$work/stack-summary.txt"
