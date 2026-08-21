@@ -57,10 +57,15 @@ use crate::instructions::genesis::{
     create_pda_account, read_rent, require_creatable, require_system_program,
 };
 use crate::seeds;
+use clutch_batch_policy_identity::revenue_policy_v1::{
+    revenue_policy_digest, treasury_admits_fee_bearing, REVENUE_POLICY_V1,
+};
 use clutch_batch_policy_identity::{
-    batch_policy_digest, decode_batch_policy, general_clearing_v1::GENERAL_CLEARING_POLICY_V1,
+    batch_policy_digest, decode_batch_policy,
+    general_clearing_v1::{GENERAL_CLEARING_FEE_SHAPE_V1, GENERAL_CLEARING_POLICY_V1},
     BATCH_POLICY_BYTES,
 };
+use clutch_solana_layout::revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES};
 use super::terminal_closure;
 use clutch_solana_layout::clearing::{
     canonical_general_book_id, open_general_epoch, EpochWindowAccount, CANDIDATE_WINDOW_SLOTS,
@@ -68,8 +73,8 @@ use clutch_solana_layout::clearing::{
 };
 use clutch_solana_layout::projection::OwnerInterner;
 use clutch_solana_layout::{
-    account_len, canonical_epoch_id, stream, EpochAccount, Hash32, OrderSlot, EPOCH_PHASE_FROZEN,
-    EPOCH_PHASE_OPEN, MAX_ORDER_PAGES,
+    account_len, canonical_epoch_id, stream, EpochAccount, Hash32, OrderSlot, PositionAccount,
+    EPOCH_PHASE_FROZEN, EPOCH_PHASE_OPEN, MAX_ORDER_PAGES,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -82,8 +87,24 @@ pub const INIT_EPOCH_ACCOUNT_COUNT: usize = 10;
 /// the recorded payer and exact post-prefund outlay are ground truth
 /// (TerminalClosure's exact-principal-to-payer input).
 pub const INIT_EPOCH_LEDGERED_ACCOUNT_COUNT: usize = INIT_EPOCH_ACCOUNT_COUNT + 1;
-/// The optional funding-ledger PDA.
+/// The optional funding-ledger PDA (zero-fee shape; the fee-bearing shape
+/// carries it at [`IX_INIT_EPOCH_FEE_LEDGER`]).
 pub const IX_INIT_EPOCH_LEDGER: usize = 10;
+/// Accounts in a FEE-BEARING `InitEpoch` — one whose sealed policy artifact
+/// wraps [`GENERAL_CLEARING_FEE_SHAPE_V1`]: the base list plus the Realm's
+/// revenue-policy record and the Market's treasury Position, both read-only
+/// (`docs/design/REVENUE_POLICY_V1.md` §5/§8; the admission seam of
+/// `ADOPTED_2026-08-20.md` item 8).
+pub const INIT_EPOCH_FEE_ACCOUNT_COUNT: usize = INIT_EPOCH_ACCOUNT_COUNT + 2;
+/// A fee-bearing `InitEpoch` that also registers the pair's funding.
+pub const INIT_EPOCH_FEE_LEDGERED_ACCOUNT_COUNT: usize = INIT_EPOCH_FEE_ACCOUNT_COUNT + 1;
+/// The Realm's revenue-policy record (read-only, program-owned).  Fee shape.
+pub const IX_INIT_EPOCH_REVENUE_RECORD: usize = 10;
+/// The Market's treasury-owned Position (read-only, program-owned).  Fee
+/// shape.
+pub const IX_INIT_EPOCH_TREASURY_POSITION: usize = 11;
+/// The optional funding-ledger PDA of the fee-bearing shape.
+pub const IX_INIT_EPOCH_FEE_LEDGER: usize = 12;
 /// Authenticated payer funding both creations.
 pub const IX_INIT_EPOCH_PAYER: usize = 0;
 /// The market this epoch belongs to (read-only, program-owned).
@@ -143,7 +164,9 @@ pub(super) fn init_epoch(
 ) -> Outcome<()> {
     require(
         accounts.len() == INIT_EPOCH_ACCOUNT_COUNT
-            || accounts.len() == INIT_EPOCH_LEDGERED_ACCOUNT_COUNT,
+            || accounts.len() == INIT_EPOCH_LEDGERED_ACCOUNT_COUNT
+            || accounts.len() == INIT_EPOCH_FEE_ACCOUNT_COUNT
+            || accounts.len() == INIT_EPOCH_FEE_LEDGERED_ACCOUNT_COUNT,
         ClutchError::AccountCount,
     )?;
     require(sequence == 0, ClutchError::Replay)?;
@@ -196,12 +219,47 @@ pub(super) fn init_epoch(
     )?;
 
     let epoch_id = canonical_epoch_id(*intent_market, epoch_index);
-    read_general_batch_policy(
+    let fee_bearing = read_general_batch_policy(
         program_id,
         &accounts[IX_INIT_EPOCH_POLICY],
         epoch_id,
         *intent_policy,
     )?;
+    /* The revenue admission seam (REVENUE_POLICY_V1.md §5/§8): a fee-bearing
+     * epoch refuses unless the Realm's revenue record names a real treasury
+     * and a treasury-owned Position exists for this Market.  Under the one
+     * pinned V1 const the treasury is the structural UNSET sentinel, so this
+     * walk ALWAYS stops at RevenueTreasuryUnset today — the B4a deferral as
+     * a refusal, not a comment.  A zero-fee epoch must not smuggle the fee
+     * shape's account tail. */
+    if fee_bearing {
+        require(
+            accounts.len() >= INIT_EPOCH_FEE_ACCOUNT_COUNT,
+            ClutchError::AccountCount,
+        )?;
+        require_fee_bearing_admission(
+            program_id,
+            &accounts[IX_INIT_EPOCH_REVENUE_RECORD],
+            &accounts[IX_INIT_EPOCH_TREASURY_POSITION],
+            market.realm,
+            intent_market,
+        )?;
+    } else {
+        require(
+            accounts.len() <= INIT_EPOCH_LEDGERED_ACCOUNT_COUNT,
+            ClutchError::AccountCount,
+        )?;
+    }
+    let ledgered = if fee_bearing {
+        accounts.len() == INIT_EPOCH_FEE_LEDGERED_ACCOUNT_COUNT
+    } else {
+        accounts.len() == INIT_EPOCH_LEDGERED_ACCOUNT_COUNT
+    };
+    let ledger_index = if fee_bearing {
+        IX_INIT_EPOCH_FEE_LEDGER
+    } else {
+        IX_INIT_EPOCH_LEDGER
+    };
 
     let market_bytes = intent_market.bytes();
     let index_bytes = epoch_index.to_le_bytes();
@@ -284,7 +342,7 @@ pub(super) fn init_epoch(
     )?;
     epoch.encode(&mut borrow_account_mut(&accounts[IX_INIT_EPOCH_EPOCH])?)?;
     window.encode(&mut borrow_account_mut(&accounts[IX_INIT_EPOCH_WINDOW])?)?;
-    if accounts.len() == INIT_EPOCH_LEDGERED_ACCOUNT_COUNT {
+    if ledgered {
         let outlay = terminal_closure::creation_shortfall(
             rent.minimum_balance(account_len::EPOCH)?,
             epoch_prior,
@@ -300,7 +358,7 @@ pub(super) fn init_epoch(
         terminal_closure::create_funding_ledger(
             program_id,
             &accounts[IX_INIT_EPOCH_PAYER],
-            &accounts[IX_INIT_EPOCH_LEDGER],
+            &accounts[ledger_index],
             &accounts[IX_INIT_EPOCH_SYSTEM],
             &rent,
             accounts[IX_INIT_EPOCH_EPOCH].key,
@@ -309,6 +367,81 @@ pub(super) fn init_epoch(
             floor,
         )?;
     }
+    Ok(())
+}
+
+/// The fee-bearing admission requirements of `REVENUE_POLICY_V1.md` §5/§8,
+/// checked before any byte is created.
+///
+/// In dependency order, each with its own refusal:
+///
+/// 1. **The record exists.**  Its absence is the zero-take state (D4) and
+///    refuses with [`ClutchError::RevenuePolicyRecordMissing`] — permanently,
+///    for every Realm created without the election.
+/// 2. **The record binds this Realm and pins the frozen const's digest.**
+/// 3. **The treasury is real.**  The pinned V1 const defers the key as the
+///    structural UNSET sentinel, so this refusal
+///    ([`ClutchError::RevenueTreasuryUnset`]) fires on every fee-bearing
+///    admission until ember binds a key in a new const.
+/// 4. **The named recipient exists as a live Position of this Market** —
+///    treasury-owned, generation-live, `close_state == 0` — so the first
+///    chargeable intent can never be admitted toward an absent or closing
+///    destination (the mid-epoch-close grief discipline's admission half).
+#[inline(never)]
+fn require_fee_bearing_admission(
+    program_id: &Pubkey,
+    record_account: &AccountInfo,
+    position_account: &AccountInfo,
+    realm: Hash32,
+    intent_market: &Hash32,
+) -> Outcome<()> {
+    require(
+        *record_account.owner == *program_id && record_account.data_len() != 0,
+        ClutchError::RevenuePolicyRecordMissing,
+    )?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        record_account,
+        false,
+        &[REVENUE_POLICY_RECORD_BYTES],
+    )?;
+    let record = RevenuePolicyRecordV1::decode(&record_account.data.borrow())?;
+    require(record.realm == realm, ClutchError::MismatchedState)?;
+    expect_pda(
+        record_account.key,
+        seeds::revenue_policy_pda(program_id, &realm.bytes()),
+        Some(record.stored_bump),
+    )?;
+    let digest = revenue_policy_digest(&REVENUE_POLICY_V1)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        record.policy_digest.bytes() == digest.0,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        treasury_admits_fee_bearing(&record.treasury.bytes()),
+        ClutchError::RevenueTreasuryUnset,
+    )?;
+    /* Unreachable until a const binds a real treasury; the seam is complete
+     * so that binding one is a const + digest decision, not new plumbing. */
+    accounts::validate_state_role_lengths(
+        program_id,
+        position_account,
+        false,
+        &[account_len::POSITION],
+    )?;
+    let position = PositionAccount::decode(&position_account.data.borrow())?;
+    require(
+        position.market == *intent_market
+            && position.owner == record.treasury
+            && position.close_state == 0,
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        position_account.key,
+        seeds::position_pda(program_id, &intent_market.bytes(), &record.treasury.bytes()),
+        Some(position.stored_bump),
+    )?;
     Ok(())
 }
 
@@ -507,28 +640,35 @@ pub(super) fn freeze_epoch(
 /// Read and authenticate the general 64-byte batch-policy artifact.
 ///
 /// The general sibling of `direct_selection::read_batch_policy`: the account
-/// at `seeds::batch_policy_pda(epoch, digest)` must decode to exactly
-/// [`GENERAL_CLEARING_POLICY_V1`] and re-derive the expected digest.
+/// at `seeds::batch_policy_pda(epoch, digest)` must decode to exactly one of
+/// the two enumerated consts — the frozen zero-fee
+/// [`GENERAL_CLEARING_POLICY_V1`] or its fee-bearing sibling
+/// [`GENERAL_CLEARING_FEE_SHAPE_V1`] (shape only, both rates zero) — and
+/// re-derive the expected digest.  Nothing dynamic is ever admitted.
+/// Returns whether the epoch is fee-bearing, which is what obliges the
+/// revenue admission seam.
 #[inline(never)]
 fn read_general_batch_policy(
     program_id: &Pubkey,
     account: &AccountInfo,
     epoch: Hash32,
     expected_digest: Hash32,
-) -> Outcome<()> {
+) -> Outcome<bool> {
     let policy = decode_batch_policy(&account.data.borrow())
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let digest =
         batch_policy_digest(&policy).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        policy == GENERAL_CLEARING_POLICY_V1 && digest.0 == expected_digest.bytes(),
+        (policy == GENERAL_CLEARING_POLICY_V1 || policy == GENERAL_CLEARING_FEE_SHAPE_V1)
+            && digest.0 == expected_digest.bytes(),
         ClutchError::AuthorizationUnavailable,
     )?;
     expect_pda(
         account.key,
         seeds::batch_policy_pda(program_id, &epoch.bytes(), &expected_digest.bytes()),
         None,
-    )
+    )?;
+    Ok(policy == GENERAL_CLEARING_FEE_SHAPE_V1)
 }
 
 /// Borrow one account's data mutably, or refuse.

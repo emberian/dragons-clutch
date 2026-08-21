@@ -144,6 +144,11 @@ use crate::{seeds, token};
 use clutch_solana_layout::direct_selection_v3::{
     DirectEpochV4Account, DirectFundingLedgerV3, DIRECT_EPOCH_V4_BYTES,
 };
+use clutch_batch_policy_identity::revenue_policy_v1::{
+    revenue_policy_digest, REVENUE_POLICY_V1, REVENUE_TREASURY_UNSET_V1,
+};
+use clutch_solana_layout::clearing::FUNDING_COVERS_REVENUE_RECORD;
+use clutch_solana_layout::revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES};
 use clutch_solana_layout::{
     account_len, canonical_realm_id, collateral, stream, Hash32, HoardAccount, Intent,
     MarketAccount, PositionAccount, ProfileAccount, RealmAccount, EPOCH_PHASE_OPEN,
@@ -445,6 +450,25 @@ pub const IX_REALM_POLICY: usize = 2;
 pub const IX_REALM_SYSTEM: usize = 3;
 /// The rent sysvar (read-only).  `InitRealm`.
 pub const IX_REALM_RENT: usize = 4;
+/// Accounts in an `InitRealm` that also elects the frozen revenue policy:
+/// the per-Realm `RevenuePolicyRecordV1` PDA and its **mandatory**
+/// `GeneralFundingLedgerV1` sibling ride the same transition that creates
+/// the Realm.  Presenting the pair IS the election — the intent carries no
+/// new field, because the closed set has exactly one member
+/// (`REVENUE_POLICY_V1`, treasury deferred).  D4 is the shape of this list:
+/// a Realm created without the pair is zero-take forever, since no other
+/// instruction can ever create the record.
+pub const INIT_REALM_REVENUE_ACCOUNT_COUNT: usize = INIT_REALM_ACCOUNT_COUNT + 2;
+/// The not-yet-created revenue-policy record PDA (writable).
+pub const IX_REALM_REVENUE_RECORD: usize = 5;
+/// The not-yet-created funding-ledger sibling PDA (writable).  Mandatory for
+/// this family — the record must never carry the unowned-refund residual.
+pub const IX_REALM_REVENUE_LEDGER: usize = 6;
+
+/// Accounts in a `CloseRevenuePolicyRecord` instruction, exactly: the Realm
+/// PDA slot (whose **absence** is the close precondition), the record, its
+/// funding ledger, the recorded payer, and the frozen sink.
+pub const CLOSE_REVENUE_RECORD_ACCOUNT_COUNT: usize = 5;
 
 /// Accounts in an `InitProfile` instruction, exactly.
 pub const INIT_PROFILE_ACCOUNT_COUNT: usize = 6;
@@ -695,6 +719,9 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 amount,
             },
         ),
+        Action::Layout(Intent::CloseRevenuePolicyRecord { realm }) => {
+            close_revenue_policy_record(program_id, accounts, request.sequence, &realm)
+        }
         /* Every other action belongs to another family module; the router
          * never sends one here, and this arm exists so that adding one to the
          * router is a compile error rather than a silent success. */
@@ -725,7 +752,11 @@ fn init_realm(
     sequence: u64,
     intent: &RealmInit,
 ) -> Outcome<()> {
-    require_count(accounts, INIT_REALM_ACCOUNT_COUNT)?;
+    require(
+        accounts.len() == INIT_REALM_ACCOUNT_COUNT
+            || accounts.len() == INIT_REALM_REVENUE_ACCOUNT_COUNT,
+        ClutchError::AccountCount,
+    )?;
     require_signer(&accounts[IX_PAYER])?;
     require_distinct(accounts)?;
     require_creation_sequence(sequence)?;
@@ -766,8 +797,153 @@ fn init_realm(
         stored_bump: bump,
         flags: 0,
     };
-    let mut data = borrow_mut!(accounts[IX_TARGET])?;
-    write_realm(&mut data, &value)
+    {
+        let mut data = borrow_mut!(accounts[IX_TARGET])?;
+        write_realm(&mut data, &value)?;
+    }
+    if accounts.len() == INIT_REALM_REVENUE_ACCOUNT_COUNT {
+        init_revenue_policy_record(program_id, accounts, &rent, realm)?;
+    }
+    Ok(())
+}
+
+/// Create and pin one Realm's `RevenuePolicyRecordV1` inside the Realm's own
+/// creation transition — the only place it can ever be created (D4).
+///
+/// The record pins the digest of the one frozen const, copies out its
+/// treasury (the structural UNSET sentinel while B4a's key stays deferred),
+/// and embeds the TerminalIdentityV1 header.  Creation is full-principal
+/// (the V3 anti-windfall shape): the payer is debited the whole rent
+/// minimum, so a hostile prefund of the predictable PDA can never zero the
+/// recorded principal — it stays in the donation floor and burns at close.
+/// The mandatory `GeneralFundingLedgerV1` sibling is written in the same
+/// transition, so the close route is the standard ledgered-group split.
+#[inline(never)]
+fn init_revenue_policy_record(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    rent: &RentParameters,
+    realm: Hash32,
+) -> Outcome<()> {
+    let record_account = &accounts[IX_REALM_REVENUE_RECORD];
+    let realm_bytes = realm.bytes();
+    let (record_address, record_bump) = seeds::revenue_policy_pda(program_id, &realm_bytes);
+    expect_pda(record_account.key, (record_address, record_bump), None)?;
+
+    let digest = revenue_policy_digest(&REVENUE_POLICY_V1)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding = direct_creation_funding(
+        &accounts[IX_PAYER],
+        record_account,
+        rent,
+        REVENUE_POLICY_RECORD_BYTES,
+        DIRECT_NEUTRAL_SINK_V3,
+    )?;
+    let record = RevenuePolicyRecordV1 {
+        realm,
+        policy_digest: Hash32::from_bytes(digest.0),
+        treasury: Hash32::from_bytes(REVENUE_TREASURY_UNSET_V1),
+        terminal_payer: funding.payer,
+        terminal_payer_principal: funding.payer_principal_lamports,
+        terminal_donation_floor: funding.prior_donation_lamports,
+        terminal_generation: 1,
+        stored_bump: record_bump,
+        flags: 0,
+    };
+    record.validate()?;
+    create_pda_account_full_principal(
+        program_id,
+        &accounts[IX_PAYER],
+        record_account,
+        &accounts[IX_REALM_SYSTEM],
+        rent,
+        REVENUE_POLICY_RECORD_BYTES,
+        funding,
+        0,
+        &[seeds::SEED_REVENUE_POLICY, &realm_bytes, &[record_bump]],
+    )?;
+    {
+        let mut data = borrow_mut!(record_account)?;
+        record.encode(&mut data)?;
+        let written = RevenuePolicyRecordV1::decode(&data)?;
+        require(written == record, ClutchError::MismatchedState)?;
+    }
+    super::orders_batch::terminal_closure::create_funding_ledger(
+        program_id,
+        &accounts[IX_PAYER],
+        &accounts[IX_REALM_REVENUE_LEDGER],
+        &accounts[IX_REALM_SYSTEM],
+        rent,
+        record_account.key,
+        FUNDING_COVERS_REVENUE_RECORD,
+        funding.payer_principal_lamports,
+        funding.prior_donation_lamports,
+    )
+}
+
+/// Close one Realm's revenue-policy record: the TerminalClosure conventions
+/// (exact recorded principal to the exact recorded payer, everything else to
+/// the frozen sink), gated on the **Realm account's absence**.
+///
+/// The Realm family has no close route, so this refusal stands for the
+/// Realm's whole life — the record is Realm-lifetime honestly, and this
+/// route is what keeps its close *admissible* rather than unrepresentable
+/// (B4f).  Permissionless like every rent close: value flows only to the
+/// recorded payer and the sink.
+#[inline(never)]
+fn close_revenue_policy_record(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    realm: &Hash32,
+) -> Outcome<()> {
+    require_count(accounts, CLOSE_REVENUE_RECORD_ACCOUNT_COUNT)?;
+    require(sequence == 0, ClutchError::Replay)?;
+    require_distinct(accounts)?;
+    let realm_bytes = realm.bytes();
+    let (realm_address, _) = seeds::realm_pda(program_id, &realm_bytes);
+    require(*accounts[0].key == realm_address, ClutchError::WrongPda)?;
+    /* Economic close strictly precedes rent close, Realm edition: the record
+     * serves its Realm for the Realm's whole life, so its rent closes only
+     * once the Realm account itself is absent (zero data, System-owned).
+     * No route closes a Realm today, so this refusal is expected to stand —
+     * the hostile walk drives it. */
+    require(
+        accounts[0].data_len() == 0 && *accounts[0].owner == SYSTEM_PROGRAM_ID,
+        ClutchError::MismatchedState,
+    )?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[1],
+        true,
+        &[REVENUE_POLICY_RECORD_BYTES],
+    )?;
+    let record = RevenuePolicyRecordV1::decode(&accounts[1].data.borrow())?;
+    require(record.realm == *realm, ClutchError::MismatchedState)?;
+    expect_pda(
+        accounts[1].key,
+        seeds::revenue_policy_pda(program_id, &realm_bytes),
+        Some(record.stored_bump),
+    )?;
+    let ledger = super::orders_batch::terminal_closure::read_funding_ledger(
+        program_id,
+        &accounts[2],
+        accounts[1].key,
+        FUNDING_COVERS_REVENUE_RECORD,
+    )?;
+    /* The embedded header and the sibling ledger were written in one
+     * transition and must still agree on the payer. */
+    require(
+        ledger.payer == record.terminal_payer,
+        ClutchError::MismatchedState,
+    )?;
+    super::orders_batch::terminal_closure::close_ledgered_group(
+        &[&accounts[1]],
+        &accounts[2],
+        &ledger,
+        &accounts[3],
+        &accounts[4],
+    )
 }
 
 /* ------------------------------------------------------------------------ */

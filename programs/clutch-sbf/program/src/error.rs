@@ -15,7 +15,7 @@
 //! | `0x0050..=0x005f` | the evidence gate's numeric projection (see below) |
 //! | `0x0070..=0x007f` | construction and typed-artifact appends ([`ClutchError::WrongSystemProgram`] .. [`ClutchError::ArtifactRefundMismatch`]) |
 //! | `0x0080..=0x008d` | resumable ResolutionWork semantic refusals |
-//! | `0x0090..=0x009f` | the clearing walk's checkpoint/feed seam ([`ClutchError::CheckpointCodecFault`] .. [`ClutchError::ResumeFoldMismatch`]) |
+//! | `0x0090..=0x009f` | the clearing walk's checkpoint/feed seam and the revenue admission boundary ([`ClutchError::CheckpointCodecFault`] .. [`ClutchError::RevenuePolicyRecordMissing`]) |
 //! | `0x1000 + n` | [`clutch_solana_layout::CodecError`] variant `n` |
 //! | `0x2000 + n` | [`clutch_kernel::Error`] variant `n` |
 //! | `0x3000 + n` | [`clutch_solana_reference::Error`] variant `n` |
@@ -251,6 +251,17 @@ pub enum ClutchError {
     /// the program's anchor comparison `body.consumed_fold() !=
     /// header.consumed_fold` caught a substituted checkpoint body.
     ResumeFoldMismatch = 0x0092,
+    /// Fee-bearing epoch admission refused: the Realm's pinned revenue
+    /// policy carries the structural treasury-UNSET sentinel — the B4a
+    /// deferral (`ADOPTED_2026-08-20.md` item 8).  No fee-bearing epoch can
+    /// open until a frozen const naming a real treasury exists, and binding
+    /// that key is reserved to ember.
+    RevenueTreasuryUnset = 0x0093,
+    /// Fee-bearing epoch admission refused: the Realm has no revenue-policy
+    /// record.  The record's absence IS the zero-take state (D4), and a
+    /// record is creatable only inside the Realm-creation transition, so
+    /// this refusal is permanent for every existing Realm.
+    RevenuePolicyRecordMissing = 0x0094,
     /// A sealing candidate cannot beat the worst retained candidate's stored
     /// score, so the full registry admits no displacement for it.
     ///

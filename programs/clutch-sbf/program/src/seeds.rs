@@ -126,6 +126,9 @@ pub const SEED_DIRECT_POT_V3: &[u8] = b"dc:direct-pot:v3";
 pub const SEED_SOURCE_SPEC: &[u8] = crate::source_archive::SOURCE_SPEC_SEED_V1;
 /// Per-window authenticated source-archive account seed prefix.
 pub const SEED_SOURCE_ARCHIVE: &[u8] = crate::source_archive::SOURCE_ARCHIVE_SEED_V1;
+/// Per-Realm revenue-policy record seed prefix; exactly 32 bytes (the seed
+/// cap), the string `docs/design/REVENUE_POLICY_V1.md` §3 names.
+pub const SEED_REVENUE_POLICY: &[u8] = b"dragons-clutch:revenue-policy:v1";
 /// One deterministic active ResolutionWork lock per Market.
 pub const SEED_RESOLUTION_WORK: &[u8] = b"resolution-work-v1";
 /// Program-owned prepaid Reserve bound to one deterministic Work PDA.
@@ -473,6 +476,15 @@ pub fn general_funding_pda(program_id: &Pubkey, target: &Pubkey) -> (Pubkey, u8)
     find(program_id, &[SEED_GENERAL_FUNDING, &target.to_bytes()])
 }
 
+/// Canonical per-Realm revenue-policy record address and bump.
+///
+/// Exactly one record per Realm, ever: the record is created only inside the
+/// same `InitRealm` transition that creates the Realm (D4 — no retrofit),
+/// and its absence is the zero-take state.
+pub fn revenue_policy_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_REVENUE_POLICY, realm])
+}
+
 /* ------------------------------------------------------------------------ */
 /* Token plane — PROPOSED appends                                            */
 /* ------------------------------------------------------------------------ */
@@ -536,7 +548,8 @@ mod tests {
     /// `hoard-authority` prefix was caught at 33 bytes.
     #[test]
     fn every_seed_prefix_fits_one_seed() {
-        const PREFIXES: [&[u8]; 42] = [
+        const PREFIXES: [&[u8]; 43] = [
+            SEED_REVENUE_POLICY,
             SEED_EPOCH_WINDOW,
             SEED_REALM,
             SEED_PROFILE,
@@ -604,8 +617,67 @@ mod tests {
         assert_eq!(SEED_DIRECT_POT_V3.len(), 16);
         assert_eq!(SEED_CLEAR_WORK.len(), 28);
         assert_eq!(SEED_EPOCH_WINDOW.len(), 30);
+        // The design-named revenue-policy prefix sits exactly at the cap.
+        assert_eq!(SEED_REVENUE_POLICY.len(), 32);
         // The plan's own proposal, kept here as the falsifier: it does not fit.
         assert_eq!(b"dragons-clutch:hoard-authority:v1".len(), 33);
+    }
+
+    /// The revenue-policy prefix shares an address space with nothing.
+    ///
+    /// `SEED_REALM` takes the *same* single-`realm` seed tuple, so prefix
+    /// distinctness is exactly what keeps the Realm and its revenue record
+    /// two addresses.
+    #[test]
+    fn the_revenue_policy_prefix_collides_with_nothing() {
+        const REGISTRY: [&[u8]; 42] = [
+            SEED_REALM,
+            SEED_PROFILE,
+            SEED_MARKET,
+            SEED_HOARD,
+            SEED_POSITION,
+            SEED_KERNEL,
+            SEED_EXTERNAL,
+            SEED_REPLAY,
+            SEED_SUPPLY,
+            SEED_FEED,
+            SEED_TERMS,
+            SEED_GRID,
+            SEED_RESOLUTION,
+            SEED_EPOCH,
+            SEED_PAGE,
+            SEED_RESERVATION,
+            SEED_CANDIDATE,
+            SEED_CANDIDATE_FEED,
+            SEED_CLEAR_WORK,
+            SEED_EPOCH_WINDOW,
+            SEED_POT,
+            SEED_RECEIPT,
+            SEED_GENERAL_FUNDING,
+            SEED_ARTIFACT_STAGE,
+            SEED_POLICY,
+            SEED_BATCH_POLICY,
+            SEED_DIRECT_BATCH_POLICY_V3,
+            SEED_DIRECT_WINDOW,
+            SEED_DIRECT_CANDIDATE,
+            SEED_DIRECT_RECEIPT,
+            SEED_DIRECT_POT,
+            SEED_DIRECT_WINDOW_V3,
+            SEED_DIRECT_CANDIDATE_V3,
+            SEED_DIRECT_WORK_V3,
+            SEED_DIRECT_RECEIPT_V3,
+            SEED_DIRECT_POT_V3,
+            SEED_SOURCE_SPEC,
+            SEED_SOURCE_ARCHIVE,
+            SEED_RESOLUTION_WORK,
+            SEED_RESOLUTION_RESERVE,
+            SEED_OUTCOME_MINT,
+            SEED_HOARD_AUTHORITY,
+        ];
+        for old in REGISTRY {
+            assert_ne!(SEED_REVENUE_POLICY, old);
+        }
+        assert_ne!(SEED_REVENUE_POLICY, SEED_HOARD_TOKEN);
     }
 
     /// The three token prefixes are distinct from each other and from every

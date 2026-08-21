@@ -2001,6 +2001,9 @@ pub const FUNDING_COVERS_CLEAR_WORK: u8 = 4;
 pub const FUNDING_COVERS_FINAL_POT: u8 = 5;
 /// The ledger covers one settlement receipt.
 pub const FUNDING_COVERS_RECEIPT: u8 = 6;
+/// The ledger covers one per-Realm revenue-policy record
+/// ([`crate::revenue::RevenuePolicyRecordV1`]).
+pub const FUNDING_COVERS_REVENUE_RECORD: u8 = 7;
 
 /// The general clearing plane's recorded funding facts for one machinery
 /// account (or same-payer creation group), mirroring `DirectFundingLedgerV3`.
@@ -2045,7 +2048,8 @@ impl GeneralFundingLedgerV1 {
     pub fn validate(&self) -> Result<()> {
         check_hash(self.target)?;
         check_hash(self.payer)?;
-        if self.covered < FUNDING_COVERS_EPOCH_PAIR || self.covered > FUNDING_COVERS_RECEIPT {
+        if self.covered < FUNDING_COVERS_EPOCH_PAIR || self.covered > FUNDING_COVERS_REVENUE_RECORD
+        {
             return Err(CodecError::InvalidEnum);
         }
         if self.flags != 0 {
@@ -3443,9 +3447,9 @@ mod tests {
         let mut uncovered = ledger;
         uncovered.covered = 0;
         assert_eq!(uncovered.validate(), Err(CodecError::InvalidEnum));
-        uncovered.covered = FUNDING_COVERS_RECEIPT + 1;
+        uncovered.covered = FUNDING_COVERS_REVENUE_RECORD + 1;
         assert_eq!(uncovered.validate(), Err(CodecError::InvalidEnum));
-        for covered in FUNDING_COVERS_EPOCH_PAIR..=FUNDING_COVERS_RECEIPT {
+        for covered in FUNDING_COVERS_EPOCH_PAIR..=FUNDING_COVERS_REVENUE_RECORD {
             let mut member = ledger;
             member.covered = covered;
             member.encode(&mut bytes).unwrap();

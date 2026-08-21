@@ -235,7 +235,7 @@ fn require_pages_absent(
 
 /// Decode and bind one funding ledger to the exact account it must cover.
 #[inline(never)]
-fn read_funding_ledger(
+pub(in crate::instructions) fn read_funding_ledger(
     program_id: &Pubkey,
     account: &AccountInfo,
     target: &Pubkey,
@@ -299,7 +299,7 @@ fn release_bytes(account: &AccountInfo) -> Outcome<()> {
 /// member zeroed, resized, and reassigned.  A live total below principal
 /// plus the recorded donation floor refuses before any byte moves.
 #[inline(never)]
-fn close_ledgered_group(
+pub(in crate::instructions) fn close_ledgered_group(
     targets: &[&AccountInfo],
     ledger_account: &AccountInfo,
     ledger: &GeneralFundingLedgerV1,

@@ -4959,6 +4959,17 @@ pub enum Intent {
     /// the root of the close DAG, admitted only after the pot and every page
     /// are absent and every retained candidate is closed or unclosable.
     CloseGeneralEpoch { market: MarketId, epoch: EpochId },
+    /// Close one Realm's revenue-policy record
+    /// ([`revenue::RevenuePolicyRecordV1`]) — a TerminalClosure-convention
+    /// close (recorded principal to the exact recorded payer, surplus to the
+    /// frozen sink), gated on the **Realm account's absence**.
+    ///
+    /// The Realm row has no close route, so this refusal stands for the
+    /// Realm's whole life: the record is Realm-lifetime by construction, and
+    /// this intent is what keeps its close *admissible* rather than
+    /// unrepresentable (B4f).  There is deliberately no mutate or re-pin
+    /// intent beside it — the no-silent-redirect rule (§10.7).
+    CloseRevenuePolicyRecord { realm: RealmHash },
 }
 
 /// Most fills one [`Intent::WriteCandidateFeed`] chunk may carry.
@@ -5230,6 +5241,9 @@ const _: () = assert!(CLOSE_GENERAL_POT_TAG == CLOSE_GENERAL_PAGE_TAG + 1);
 const _: () = assert!(CLOSE_GENERAL_CANDIDATE_TAG == CLOSE_GENERAL_POT_TAG + 1);
 const _: () = assert!(CLOSE_GENERAL_CLEAR_WORK_TAG == CLOSE_GENERAL_CANDIDATE_TAG + 1);
 const _: () = assert!(CLOSE_GENERAL_EPOCH_TAG == CLOSE_GENERAL_CLEAR_WORK_TAG + 1);
+/* The revenue plane's one close continues the ladder. */
+const CLOSE_REVENUE_POLICY_RECORD_TAG: u8 = 68;
+const _: () = assert!(CLOSE_REVENUE_POLICY_RECORD_TAG == CLOSE_GENERAL_EPOCH_TAG + 1);
 // The widest chunked write stays inside the frozen intent bound; the slices
 // shape is the widest at 308 of 310 bytes.
 const _: () = assert!(
@@ -5336,6 +5350,7 @@ impl Intent {
                 2 + 32 + 32 + 32
             }
             Self::CloseGeneralReceipt { .. } => 2 + 32 + 32 + 32 + 2,
+            Self::CloseRevenuePolicyRecord { .. } => 2 + 32,
         }
     }
     /// Validate and encode into a caller-provided buffer.
@@ -6106,6 +6121,11 @@ impl Intent {
                 w.hash(*epoch)?;
                 w.hash(*candidate)?;
                 w.u16(*slice_index)?
+            }
+            Self::CloseRevenuePolicyRecord { realm } => {
+                check_hash(*realm)?;
+                put_header(&mut w, CLOSE_REVENUE_POLICY_RECORD_TAG, INTENT_VERSION)?;
+                w.hash(*realm)?
             }
         };
         Ok(w.at)
@@ -6920,6 +6940,12 @@ impl Intent {
                     candidate,
                     slice_index,
                 })
+            }
+            CLOSE_REVENUE_POLICY_RECORD_TAG => {
+                let realm = r.hash()?;
+                r.done()?;
+                check_hash(realm)?;
+                Ok(Self::CloseRevenuePolicyRecord { realm })
             }
             _ => Err(CodecError::WrongTag),
         }

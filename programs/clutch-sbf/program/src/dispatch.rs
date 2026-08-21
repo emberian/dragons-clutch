@@ -141,6 +141,7 @@ const INTENT_CLOSE_GENERAL_POT_HINT: u8 = 64;
 const INTENT_CLOSE_GENERAL_CANDIDATE_HINT: u8 = 65;
 const INTENT_CLOSE_GENERAL_CLEAR_WORK_HINT: u8 = 66;
 const INTENT_CLOSE_GENERAL_EPOCH_HINT: u8 = 67;
+const INTENT_CLOSE_REVENUE_POLICY_RECORD_HINT: u8 = 68;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
@@ -192,7 +193,8 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_INIT_PRICE_GRID_HINT
                 | INTENT_INIT_TERMS_HINT
                 | INTENT_INIT_ORDER_PAGE_HINT
-                | INTENT_ENDOW_HINT,
+                | INTENT_ENDOW_HINT
+                | INTENT_CLOSE_REVENUE_POLICY_RECORD_HINT,
             ) => Route::Genesis,
             Some(
                 INTENT_INIT_SOURCE_SPEC_HINT
@@ -432,7 +434,10 @@ fn process_genesis(
         | Action::Layout(Intent::InitPriceGrid { .. })
         | Action::Layout(Intent::InitTerms { .. })
         | Action::Layout(Intent::InitOrderPage { .. })
-        | Action::Layout(Intent::Endow { .. }) => genesis::process(program_id, accounts, &request),
+        | Action::Layout(Intent::Endow { .. })
+        | Action::Layout(Intent::CloseRevenuePolicyRecord { .. }) => {
+            genesis::process(program_id, accounts, &request)
+        }
         _ => unexpected_route(),
     }
 }

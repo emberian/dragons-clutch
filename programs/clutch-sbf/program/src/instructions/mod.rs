@@ -15,7 +15,7 @@
 //! | --- | --- |
 //! | [`construction`] | shared System-CPI construction of the seven-account market state plane |
 //! | [`cash_exit`] | `Intent::WithdrawCash` |
-//! | [`genesis`] | `Intent::InitRealm`, `Intent::InitProfile`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::Endow` |
+//! | [`genesis`] | `Intent::InitRealm`, `Intent::InitProfile`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::Endow`, `Intent::CloseRevenuePolicyRecord` |
 //! | [`split`] | `Intent::Split` |
 //! | [`merge_materialize`] | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` |
 //! | [`market_init`] | `Intent::CreateMarket` |

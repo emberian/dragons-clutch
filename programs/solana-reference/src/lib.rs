@@ -5835,6 +5835,7 @@ mod tests {
                 market,
                 epoch: h(0x2e),
             },
+            Intent::CloseRevenuePolicyRecord { realm: h(0x4e) },
         ] {
             let request = layout_request(0, unsupported);
             assert_eq!(
