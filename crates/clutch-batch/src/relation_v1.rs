@@ -383,7 +383,7 @@ pub fn composite_fee_quote(
     floor_range_bps: u32,
     prior_carry: u128,
 ) -> Result<FeeQuoteV1, ErrorV1> {
-    if outcomes < 2 || outcomes > MAX_OUTCOMES {
+    if !(2..=MAX_OUTCOMES).contains(&outcomes) {
         return Err(ErrorV1::InvalidOutcome);
     }
     if price_scale == 0 || price_scale > MAX_COMPOSITE_PRICE_SCALE {
@@ -3667,3 +3667,7 @@ pub fn propose_best_valid(
 #[cfg(test)]
 #[path = "relation_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "relation_v1_fee_tests.rs"]
+mod fee_tests;

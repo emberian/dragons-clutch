@@ -1372,7 +1372,8 @@ fn driver_cursors_report_the_exact_resume_position() {
         .unwrap();
     let mut i = 1;
     while i < book.len as usize {
-        work.push_order(&book.orders[i], candidate.fills[i]).unwrap();
+        work.push_order(&book.orders[i], candidate.fills[i])
+            .unwrap();
         i += 1;
     }
     assert_eq!(work.end_pass(), Err(FeedErrorV1::ResumeFoldMismatch));
