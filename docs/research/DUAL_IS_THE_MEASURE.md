@@ -1087,9 +1087,10 @@ Then:
 
 1. **Sound refusal.** If `V1b(p)` fails then `p/S ∉ M_d`, and the violated
    member is an explicit portfolio with nonnegative payoff and negative price —
-   executable in the admitted order language, with sure profit at least
-   `(a_j S − b_j p_j)/S` resp. `k_j(p_{j−1}+p_{j+1}) − p_j` price units per
-   unit position.
+   executable in the admitted order language.  The violated member is bought
+   for a negative outlay, so the sure profit is at least
+   `b_j p_j − a_j S > 0` resp. `p_j − k_j(p_{j−1}+p_{j+1}) > 0` price units per
+   unit position, on top of a payoff that is never negative.
 2. **Off below degree two.** At `d ≤ 1`, (G1) is `p_j ≤ S` (Lemma 7.6.2 and
    `max N_j = 1` for hats and indicators — a hat attains 1 at its own knot),
    which V1 already enforces; (G2) is **empty**, because at a point where a
