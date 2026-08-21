@@ -182,6 +182,238 @@ TERMINAL_CLOSURE_BLOCKERS = {
 # exactly the sealed 64-byte batch-policy artifact, whose own row is the
 # authority on the number.
 TERMINAL_CLOSURE_RESIDUAL_ROW = "artifact.batch_policy.final"
+# ---------------------------------------------------------------------------
+# Walk plane, promotion rung W1 (D1 of
+# docs/decisions/REPORT_clearing-plane-promotion_2026-08-20.md, adopted in
+# docs/decisions/ADOPTED_2026-08-20.md item 10, unblocked by item 1's freeze of
+# GENERAL_CLEARING_POLICY_V1 and CANDIDATE_WINDOW_SLOTS = 1,000).
+#
+# W1 is QUOTES WITHOUT LIVE FLAGS and nothing else.  ``derive`` computes the
+# selected compute limit, external fee cap, and keeper reward for every general
+# clearing route whose CU maximum this seal actually carries, by the same
+# ``quote_route`` arithmetic every promoted family uses.  What W1 does NOT do,
+# each welded below rather than merely written down:
+#
+#   * no live flag moves — the four families keep
+#     ``UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY`` and the projection keeps
+#     ``live_flags: UNTOUCHED``.  A walk family that acquires a live flag
+#     refuses, because W2's evidence does not exist;
+#   * no keeper program consumes these quotes.  There is no runtime reward
+#     schedule for the plane to cover (contrast
+#     ``require_runtime_schedule_covers_policy``), so a quote here is a policy
+#     row, not an operational promise;
+#   * the rent side is NOT quoted.  TerminalClosure gave the plane real close
+#     routes, and every general-plane row still STOPs on the two residuals of
+#     the cycle-E reclassification; W1 publishes which rows those are and
+#     prices none of them;
+#   * tags 60-67 get no row at all.  The ``terminal_closure`` family declares
+#     ``per_route_cu: NOT_LABELLED_BY_SUITE_NO_ROW_DERIVED`` and the suite
+#     prints no per-route CU label, so there is nothing to quote and nothing is
+#     invented;
+#   * W2 — live flags, lifecycle path quotes, operational keeper promises —
+#     stays blocked on ``WALK_PLANE_W2_BLOCKING_IDS`` and the evidence gaps in
+#     ``WALK_PLANE_W2_EVIDENCE_GAPS``.
+#
+# The shape is not new to this profile: V2's Select route is quoted PASS inside
+# a family-level STOP, with the comment that a passing select quote does not
+# promote the subsystem.  W1 is that shape, applied to twenty-five routes.
+WALK_PLANE_W1_ADMISSION = "W1_QUOTED_NO_LIVE_FLAG"
+WALK_PLANE_W1_STOPPED_ADMISSION = "W1_STOP_HEADROOM_NO_QUOTE"
+WALK_PLANE_W1_FAMILIES = (
+    "general_epoch",
+    "clear_walk",
+    "candidate_selection",
+    "entitled_clearing",
+)
+WALK_PLANE_FAMILIES = (*WALK_PLANE_W1_FAMILIES, "terminal_closure")
+# How a route's measured maximum relates to the shapes the suite drove.  The
+# vocabulary is closed and every row must use one of these three, so a
+# genuinely variable route can never be published as if one number bounded it.
+W1_FIXED_SHAPE = "FIXED_SHAPE"
+W1_SHAPE_LABELLED = "SHAPE_LABELLED_BY_THE_ROUTE_KEY"
+W1_BATCH_VARIABLE = "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY"
+WALK_PLANE_W1_VARIABILITY = {W1_FIXED_SHAPE, W1_SHAPE_LABELLED, W1_BATCH_VARIABLE}
+# route key, measurement family, the evidence fields whose union the route
+# maximum covers, variability class.  A source is either a flat CU-list field
+# name or ``(row-table field, shape label)``.  ``AdvanceClearWork`` and
+# ``AdvanceClearSlices`` are the genuinely variable routes: the driver chooses
+# how many orders, reservations, or slices ride in one transaction, and the
+# sealed suite drove eleven distinct pass-1 slot shapes on the forty-order
+# book alone (1 to 16 records, 0 to 11 reservations).  Their rows quote the
+# observed maximum and say so; they bound no unmeasured batch composition.
+WALK_PLANE_W1_ROUTES: tuple[tuple[str, str, tuple[Any, ...], str], ...] = (
+    ("init_epoch", "general_epoch", ("init_epoch_cu",), W1_FIXED_SHAPE),
+    (
+        "place_order_single",
+        "general_epoch",
+        ("place_order_single_cu",),
+        W1_FIXED_SHAPE,
+    ),
+    (
+        "place_order_portfolio",
+        "general_epoch",
+        ("place_order_portfolio_cu",),
+        W1_FIXED_SHAPE,
+    ),
+    (
+        "freeze_epoch_1page_4orders",
+        "general_epoch",
+        (("freeze_epoch_rows", (1, 4)),),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "freeze_epoch_2pages_17orders",
+        "general_epoch",
+        (("freeze_epoch_rows", (2, 17)),),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "freeze_epoch_3pages_40orders",
+        "general_epoch",
+        (("freeze_epoch_rows", (3, 40)),),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "advance_clear_work_pass1_small_book",
+        "clear_walk",
+        ("small_book_pass1_cu",),
+        W1_BATCH_VARIABLE,
+    ),
+    (
+        "advance_clear_work_pass2_small_book",
+        "clear_walk",
+        ("small_book_pass2_cu",),
+        W1_BATCH_VARIABLE,
+    ),
+    (
+        "advance_clear_work_pass1_forty_order",
+        "clear_walk",
+        ("forty_order_pass1_cu",),
+        W1_BATCH_VARIABLE,
+    ),
+    (
+        "advance_clear_work_pass2_forty_order",
+        "clear_walk",
+        ("forty_order_pass2_cu",),
+        W1_BATCH_VARIABLE,
+    ),
+    (
+        "advance_clear_slices",
+        "clear_walk",
+        ("advance_slices_cu",),
+        W1_BATCH_VARIABLE,
+    ),
+    ("complete_clear_work_walk", "clear_walk", ("complete_cu",), W1_FIXED_SHAPE),
+    (
+        "submit_candidate",
+        "candidate_selection",
+        ("submit_candidate_cu",),
+        W1_FIXED_SHAPE,
+    ),
+    (
+        "write_candidate_feed_fills",
+        "candidate_selection",
+        ("write_feed_fills_cu",),
+        W1_FIXED_SHAPE,
+    ),
+    (
+        "write_candidate_feed_slices",
+        "candidate_selection",
+        ("write_feed_slices_cu",),
+        W1_FIXED_SHAPE,
+    ),
+    (
+        "seal_candidate_including_displacing",
+        "candidate_selection",
+        ("seal_candidate_cu", "seal_candidate_displacing_cu"),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "finalize_selection_3_retained_winner",
+        "candidate_selection",
+        (("finalize_selection_rows", "3_retained_2_verified_selects_winner"),),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "finalize_selection_digest_tie",
+        "candidate_selection",
+        (("finalize_selection_rows", "2_verified_beyond_128_bit_digest_tie"),),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "finalize_selection_honest_lapse",
+        "candidate_selection",
+        (("finalize_selection_rows", "0_verified_honest_lapse"),),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "complete_clear_work_selection",
+        "candidate_selection",
+        ("complete_clear_work_cu",),
+        W1_FIXED_SHAPE,
+    ),
+    (
+        "freeze_entitlement",
+        "entitled_clearing",
+        ("freeze_entitlement_cu",),
+        W1_FIXED_SHAPE,
+    ),
+    (
+        "entitle_slice_single",
+        "entitled_clearing",
+        ("entitle_slice_single_cu",),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "entitle_slice_portfolio_pair",
+        "entitled_clearing",
+        ("entitle_slice_portfolio_pair_cu",),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "settle_page_entitled_direct_slice",
+        "entitled_clearing",
+        ("settle_page_entitled_direct_slice_cu",),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "settle_page_entitled_portfolio_full_pair",
+        "entitled_clearing",
+        ("settle_page_entitled_portfolio_full_pair_cu",),
+        W1_SHAPE_LABELLED,
+    ),
+)
+# Measured CU fields that are deliberately NOT routes.  The walk suite prices
+# the ComputeBudget ``request_heap_frame(262144)`` instruction itself at 150 CU
+# (450 with it, 300 without); it rides inside the same transaction as an
+# AdvanceClearWork route, so ``require_walk_plane_w1_quotes`` refuses any
+# clear_walk row whose selected limit would not still cover the route plus the
+# surcharge.  It is published as a declared surcharge rather than dropped.
+WALK_PLANE_W1_SURCHARGE_FIELDS = {
+    "clear_walk": "request_heap_frame_262144_surcharge_cu",
+}
+# Shape labels the row tables must carry exactly.  A new freeze shape or a new
+# finalize shape appearing in the evidence refuses rather than going unquoted.
+WALK_PLANE_W1_ROW_TABLES = {
+    "freeze_epoch_rows": "general_epoch",
+    "finalize_selection_rows": "candidate_selection",
+}
+# What full admission (W2) is still blocked on.  The three ids are the ones the
+# walk plane's own terminal rows carry; the gaps are section 3 of the promotion
+# report.  W1 publishes the intersection that is still live and refuses to keep
+# calling W2 blocked once every named id has retired.
+WALK_PLANE_W2_BLOCKING_IDS = {
+    "RENT.ACCOUNT_REFUND_UNOWNED",
+    "GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT",
+    "PROFILE.STORAGE_INVENTORY_INCOMPLETE",
+}
+WALK_PLANE_W2_EVIDENCE_GAPS = (
+    "WIDER_PAGE_ORDER_AND_CANDIDATE_GRIDS",
+    "FULL_WIDTH_TIE_AND_DISPLACEMENT_CAMPAIGNS",
+    "SECOND_INDEPENDENT_BANK_PROFILE",
+    "RENT_AND_CLOSE_ROWS_UNDER_A_RATIFIED_R4_CARVE_OUT",
+    "FREEZE_TO_SETTLE_PATH_QUOTE_MODEL",
+)
 # The Direct V3 close campaign (rung V1 of the clearing-plane promotion
 # report).  These four families are the ones ``DIRECT.V3_CLOSE_EVIDENCE_
 # UNSEALED`` blocked, and the id's own text says what retires it: a sealed
@@ -554,6 +786,247 @@ def require_terminal_closure_evidence(
     }
 
 
+def walk_plane_row_label(field: str, row: dict[str, Any]) -> Any:
+    """Return the shape label of one measured row-table entry."""
+
+    if field == "freeze_epoch_rows":
+        return (row["pages"], row["orders"])
+    if field == "finalize_selection_rows":
+        return row["shape"]
+    raise CheckError(f"unknown walk-plane row table: {field}")
+
+
+def walk_plane_route_observations(
+    measurements: dict[str, Any], family: str, sources: tuple[Any, ...]
+) -> list[int]:
+    """Collect every sealed CU observation one W1 route quote must cover."""
+
+    row = measurements[family]
+    observations: list[int] = []
+    for source in sources:
+        if isinstance(source, str):
+            values = row[source]
+        else:
+            field, label = source
+            table = row[field]
+            matches = [
+                entry["cu"]
+                for entry in table
+                if walk_plane_row_label(field, entry) == label
+            ]
+            if len(matches) != 1:
+                raise CheckError(
+                    f"walk-plane row table {family}.{field} carries "
+                    f"{len(matches)} rows labelled {label!r}, expected exactly one"
+                )
+            values = matches[0]
+        if not isinstance(values, list) or not values:
+            raise CheckError(
+                f"walk-plane W1 source {family}.{source!r} carries no observation"
+            )
+        for value in values:
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise CheckError(
+                    f"walk-plane W1 source {family}.{source!r} carries a "
+                    f"non-CU observation: {value!r}"
+                )
+        observations.extend(values)
+    return observations
+
+
+def require_walk_plane_w1_quotes(
+    measurements: dict[str, Any],
+    terminal: dict[str, Any],
+    policy: QuotePolicy,
+) -> dict[str, Any]:
+    """Derive rung W1: CU/quote/reward rows for the walk plane, no live flags.
+
+    Every refusal here is one half of a weld that cannot drift alone:
+
+    * a quoted family that stops declaring itself unpromoted, or that acquires
+      a live flag, refuses — W2's evidence does not exist, and this rung is
+      explicitly the one that does not move a flag;
+    * a measured CU field in a quoted family that no W1 route consumes refuses,
+      so a newly measured route cannot be silently left unquoted while the
+      block still says it prices the plane;
+    * a route whose selected limit would exceed the transaction ceiling is
+      published as a STOP with **no lamport quote** and drops the whole block
+      to STOP_HEADROOM — impossible envelopes are never clamped into prices;
+    * a ``clear_walk`` row whose limit would not still cover the route plus the
+      measured heap-frame surcharge refuses;
+    * a general-plane terminal row that stopped being an honest STOP refuses,
+      because W1 declares the rent side unquoted and those rows STOPped;
+    * the ``terminal_closure`` family labelling per-route CU refuses, because
+      W1 declares tags 60-67 unquotable for exactly that reason;
+    * every W2 blocking id retiring refuses, because the block would then be
+      publishing a "W2 is blocked" declaration that is no longer true.
+
+    The row values themselves are re-derived from the sealed maxima on every
+    run, so a CU maximum that drifts re-derives its limit and reward and the
+    projection equality in :func:`check` catches a stale published row.
+    """
+
+    for family in WALK_PLANE_FAMILIES:
+        declared = measurements[family].get("admission")
+        if declared != "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY":
+            raise CheckError(
+                f"walk measurement family {family} lost its unpromoted "
+                f"declaration: {declared!r}"
+            )
+
+    # 1. Live flags.  W1 is the rung that quotes and moves nothing.
+    outstanding = sorted(WALK_PLANE_W2_BLOCKING_IDS & set(terminal["blocking_ids"]))
+    for family in WALK_PLANE_FAMILIES:
+        claimed = sorted(
+            name
+            for name, value in measurements[family].items()
+            if name.startswith("live") and value is not False
+        )
+        if claimed:
+            raise CheckError(
+                f"walk family {family} claims live flag(s) {', '.join(claimed)}, "
+                "but this is rung W1 (quotes, no live flags); a live flag needs "
+                "rung W2, whose evidence does not exist — still outstanding: "
+                + (", ".join(outstanding) or "no blocking id, but the W2 gaps "
+                   + ", ".join(WALK_PLANE_W2_EVIDENCE_GAPS) + " remain")
+            )
+
+    # 2. Tags 60-67 are unquotable, and the reason must still be declared.
+    closure = measurements["terminal_closure"]
+    require_equal(
+        closure.get("per_route_cu"),
+        "NOT_LABELLED_BY_SUITE_NO_ROW_DERIVED",
+        "TerminalClosure per-route CU declaration",
+    )
+
+    # 3. Every measured CU field of a quoted family is either a W1 route source
+    #    or a declared non-route surcharge.  Nothing measured goes unpublished.
+    consumed: dict[str, set[str]] = {family: set() for family in WALK_PLANE_W1_FAMILIES}
+    labels: dict[str, set[Any]] = {field: set() for field in WALK_PLANE_W1_ROW_TABLES}
+    for _, family, sources, variability in WALK_PLANE_W1_ROUTES:
+        if family not in consumed:
+            raise CheckError(f"W1 route names a family it may not quote: {family}")
+        if variability not in WALK_PLANE_W1_VARIABILITY:
+            raise CheckError(f"W1 route declares an unknown variability: {variability!r}")
+        for source in sources:
+            if isinstance(source, str):
+                consumed[family].add(source)
+                continue
+            field, label = source
+            consumed[family].add(field)
+            if field not in labels:
+                raise CheckError(f"W1 route reads an undeclared row table: {field}")
+            labels[field].add(label)
+    # A row table is quoted shape by shape, so a shape the suite starts
+    # measuring must be quoted too rather than disappearing under a field name
+    # that is already covered.
+    for field, family in WALK_PLANE_W1_ROW_TABLES.items():
+        if field not in consumed[family]:
+            raise CheckError(f"W1 quotes no row of the {family}.{field} table")
+        measured_labels = [
+            walk_plane_row_label(field, entry) for entry in measurements[family][field]
+        ]
+        if len(set(measured_labels)) != len(measured_labels):
+            raise CheckError(f"{family}.{field} labels a shape twice")
+        require_equal(
+            set(measured_labels), labels[field], f"W1 shape coverage of {family}.{field}"
+        )
+    for family in WALK_PLANE_W1_FAMILIES:
+        measured = {
+            name
+            for name in measurements[family]
+            if name.endswith("_cu") or name.endswith("_rows")
+        }
+        surcharge = WALK_PLANE_W1_SURCHARGE_FIELDS.get(family)
+        expected = consumed[family] | ({surcharge} if surcharge else set())
+        require_equal(measured, expected, f"W1 route coverage of family {family}")
+
+    # 4. The rows themselves, re-derived from the sealed maxima every run.
+    routes: dict[str, Any] = {}
+    for key, family, sources, variability in WALK_PLANE_W1_ROUTES:
+        observations = walk_plane_route_observations(measurements, family, sources)
+        quote = quote_route(max(observations), policy)
+        routes[key] = {
+            "family": family,
+            "observations": len(observations),
+            "shape_variability": variability,
+            "admission": (
+                WALK_PLANE_W1_ADMISSION
+                if quote.admitted
+                else WALK_PLANE_W1_STOPPED_ADMISSION
+            ),
+            **quote_dict(quote),
+        }
+    if len(routes) != len(WALK_PLANE_W1_ROUTES):
+        raise CheckError("W1 route keys are not unique")
+
+    # 5. The heap-frame request is a measured 150-CU rider on the same
+    #    transaction as an AdvanceClearWork route; a limit that would not cover
+    #    route + surcharge may not be published as that route's limit.
+    surcharge_field = WALK_PLANE_W1_SURCHARGE_FIELDS["clear_walk"]
+    surcharge = max(measurements["clear_walk"][surcharge_field])
+    for key, row in routes.items():
+        if row["family"] != "clear_walk" or row["selected_limit_cu"] is None:
+            continue
+        with_rider = quote_route(row["measured_cu"] + surcharge, policy)
+        if (
+            not with_rider.admitted
+            or with_rider.selected_limit_cu > row["selected_limit_cu"]
+        ):
+            raise CheckError(
+                f"W1 row {key} selects {row['selected_limit_cu']} CU, which does "
+                f"not cover its own measured {surcharge}-CU heap-frame request"
+            )
+
+    # 6. The rent side is declared unquoted, and the rows it names must still
+    #    be the honest STOPs the cycle-E reclassification left them as.
+    accounts = terminal["accounts"]
+    for name in sorted(TERMINAL_CLOSURE_ROWS):
+        if accounts[name]["lifecycle_class"] != "UNCLASSIFIED_STOP":
+            raise CheckError(
+                f"W1 publishes {name} as an unquoted general-plane STOP, but it "
+                f"is classified {accounts[name]['lifecycle_class']!r}"
+            )
+
+    # 7. W2 must still be blocked for the block's own declaration to be true.
+    if not outstanding:
+        raise CheckError(
+            "rung W1 declares W2 blocked, but every id in "
+            + ", ".join(sorted(WALK_PLANE_W2_BLOCKING_IDS))
+            + " has retired; the rung must be re-decided, not silently upgraded"
+        )
+
+    stopped = sorted(key for key, row in routes.items() if row["status"] != "PASS")
+    worst = max(routes.items(), key=lambda item: item[1]["measured_cu"])
+    return {
+        "rung": "W1",
+        "decision": "ADOPTED_2026-08-20 item 10 (REPORT_clearing-plane-promotion D1)",
+        "enabled_by": "GENERAL_CLEARING_POLICY_V1_AND_CANDIDATE_WINDOW_SLOTS_FROZEN",
+        "row_admission": WALK_PLANE_W1_ADMISSION,
+        "status": "PASS" if not stopped else "STOP_HEADROOM",
+        "quoted_families": list(WALK_PLANE_W1_FAMILIES),
+        "quoted_route_count": len(routes),
+        "stopped_routes": stopped,
+        "worst_route": worst[0],
+        "worst_measured_cu": worst[1]["measured_cu"],
+        "routes": routes,
+        "live_flags": "UNTOUCHED",
+        "keeper_program_consumes_quotes": False,
+        "runtime_reward_schedule": "NONE_NO_KEEPER_PROGRAM_READS_THESE_QUOTES",
+        "path_quote": "NOT_DESIGNED_NO_BOUNDED_TRANSACTION_PLAN",
+        "rent_side": "NOT_QUOTED_GENERAL_PLANE_ROWS_KEEP_THEIR_STOPS",
+        "unquoted_rent_rows": sorted(TERMINAL_CLOSURE_ROWS),
+        "excluded_families": ["terminal_closure"],
+        "excluded_intents": TERMINAL_CLOSURE_INTENTS,
+        "exclusion_reason": closure["per_route_cu"],
+        "heap_frame_request_surcharge_cu": surcharge,
+        "surcharge_absorbed_by_selected_limits": True,
+        "w2_status": "BLOCKED",
+        "w2_blocking_ids": outstanding,
+        "w2_evidence_gaps": list(WALK_PLANE_W2_EVIDENCE_GAPS),
+    }
+
+
 def derive(evidence: dict[str, Any]) -> dict[str, Any]:
     """Derive the only promoted subsystem quote and protocol STOP."""
 
@@ -676,18 +1149,15 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
     )
     # T2-6/T2-7/T2-8: the general epoch lifecycle, streaming walk, candidate
     # selection, and entitlement/settlement are SBF-executed bank evidence
-    # sealed with this artifact and deliberately unpromoted — no admission,
-    # quote, or reward row is derived for any general-clearing route
-    # (tags 49-59) and no live flag moves.  Admission-policy treatment of
-    # the plane is ember's decision, not this seal's.  The derivation refuses
-    # a family that stops saying so out loud.
-    for family in (
-        "general_epoch",
-        "clear_walk",
-        "candidate_selection",
-        "entitled_clearing",
-        "terminal_closure",
-    ):
+    # sealed with this artifact.  At rung W1 (adopted 2026-08-20 item 10) the
+    # four measured families are QUOTED — selected compute limit and keeper
+    # reward per route, by the same arithmetic every promoted family uses — and
+    # nothing else moves: the families keep their unpromoted declaration, the
+    # family status stays a STOP, no live flag moves, no keeper program reads
+    # the quotes, the rent side is unquoted, and tags 60-67 get no row.  Full
+    # admission (W2) stays ember's decision and stays blocked.  The derivation
+    # refuses a family that stops saying it is unpromoted.
+    for family in WALK_PLANE_FAMILIES:
         declared = measurements[family].get("admission")
         if declared != "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY":
             raise CheckError(
@@ -719,6 +1189,7 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
     closure_summary = require_terminal_closure_evidence(
         measurements["terminal_closure"], terminal
     )
+    walk_w1 = require_walk_plane_w1_quotes(measurements, terminal, policy)
 
     return {
         "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
@@ -821,15 +1292,12 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
         },
         "general_clearing_walk": {
             "status": "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP",
-            "admission_rows_derived": False,
+            "promotion_rung": "W1",
+            "admission_declaration": "ADMISSION_ROWS_NO_LIVE_FLAGS",
+            "admission_rows_derived": True,
             "live_flags": "UNTOUCHED",
-            "measured_families": [
-                "general_epoch",
-                "clear_walk",
-                "candidate_selection",
-                "entitled_clearing",
-                "terminal_closure",
-            ],
+            "measured_families": list(WALK_PLANE_FAMILIES),
+            "w1": walk_w1,
             "decision_owner": "ember",
         },
         "general_terminal_closure": {

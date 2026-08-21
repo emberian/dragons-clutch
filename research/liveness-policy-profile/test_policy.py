@@ -16,6 +16,23 @@ from terminal_profile import build_terminal
 import policy
 
 
+def _route_tables(node, path=()):
+    """Yield every ``routes`` table in a projection, however deeply nested.
+
+    The scans below assert that a route name appears in no subsystem it does
+    not belong to.  Recursing is what gives them teeth: a route table nested
+    one level down would otherwise slip past a top-level-only scan.
+    """
+
+    if not isinstance(node, dict):
+        return
+    for key, value in node.items():
+        if key == "routes" and isinstance(value, dict):
+            yield path, value
+        elif isinstance(value, dict):
+            yield from _route_tables(value, (*path, key))
+
+
 class PolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -126,21 +143,28 @@ class PolicyTests(unittest.TestCase):
         self.assertIsNone(stopped["select"]["selected_limit_cu"])
         self.assertIsNone(stopped["select"]["keeper_reward_lamports"])
 
-    def test_walk_families_are_sealed_evidence_but_never_promoted(self) -> None:
-        """T2-6 walk CU evidence binds to the exact artifact and derives nothing.
+    def test_walk_families_are_sealed_evidence_and_quoted_without_promotion(
+        self,
+    ) -> None:
+        """T2-6 walk CU evidence binds to the exact artifact; W1 quotes it only.
 
         The general-epoch and clear-walk families are SBF-executed bank
-        evidence for tags 49-53, sealed with their three logs; the projection
-        records them as UNPROMOTED and derives no admission, quote, or reward
-        row for any walk route — live flags untouched, the admission decision
-        stays with ember.  Dropping the unpromoted declaration must refuse,
-        and binding a walk family to a historical artifact must refuse.
+        evidence for tags 49-53, sealed with their three logs.  At rung W1 the
+        projection derives CU/quote/reward rows for them under
+        ``ADMISSION_ROWS_NO_LIVE_FLAGS`` and does nothing else: the family
+        status is still a STOP, live flags are still untouched, and the
+        admission decision still belongs to ember.  The family block itself
+        carries no quote — every lamport lives in a named W1 route row.
+        Dropping the unpromoted declaration must refuse, and binding a walk
+        family to a historical artifact must refuse.
         """
 
         derived = policy.derive(self.evidence)
         walk = derived["general_clearing_walk"]
         self.assertEqual(walk["status"], "SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP")
-        self.assertFalse(walk["admission_rows_derived"])
+        self.assertEqual(walk["promotion_rung"], "W1")
+        self.assertEqual(walk["admission_declaration"], "ADMISSION_ROWS_NO_LIVE_FLAGS")
+        self.assertTrue(walk["admission_rows_derived"])
         self.assertEqual(walk["live_flags"], "UNTOUCHED")
         self.assertEqual(walk["decision_owner"], "ember")
         self.assertNotIn("selected_limit_cu", walk)
@@ -232,16 +256,407 @@ class PolicyTests(unittest.TestCase):
         )
         self.assertEqual(entitled["test_result"], "PASS_4_OF_4")
         derived = policy.derive(self.evidence)
-        for subsystem in derived.values():
-            if isinstance(subsystem, dict) and "routes" in subsystem:
-                for name in subsystem["routes"]:
-                    self.assertNotIn("entitle", name)
-                    self.assertNotIn("candidate", name)
+        # Selection and entitlement routes exist in exactly one place: the W1
+        # block, each carrying W1_QUOTED_NO_LIVE_FLAG.  No promoted subsystem
+        # quotes one.  The scan recurses, so nesting a route table cannot hide
+        # it from this check.
+        w1_routes = set(derived["general_clearing_walk"]["w1"]["routes"])
+        elsewhere = {
+            name
+            for path, table in _route_tables(derived)
+            if path != ("general_clearing_walk", "w1")
+            for name in table
+        }
+        for name in w1_routes:
+            self.assertEqual(
+                derived["general_clearing_walk"]["w1"]["routes"][name]["admission"],
+                policy.WALK_PLANE_W1_ADMISSION,
+                name,
+            )
+        for name in elsewhere:
+            self.assertNotIn("entitle", name)
+            self.assertNotIn("candidate", name)
+        self.assertTrue(any("entitle" in name for name in w1_routes))
+        self.assertTrue(any("candidate" in name for name in w1_routes))
         for family in ("candidate_selection", "entitled_clearing"):
             tampered = copy.deepcopy(self.evidence)
             del tampered["measurements"][family]["admission"]
             with self.assertRaises(policy.CheckError):
                 policy.derive(tampered)
+
+    def test_walk_plane_w1_quote_table_is_exactly_rederived(self) -> None:
+        """Rung W1's twenty-five rows are the sealed maxima, quoted exactly.
+
+        Every row is ``ceil(measured * 5/4)`` rounded up to the 10,000-CU
+        quantum, priced at 10,000 lamports base cap + 1 lamport/CU + the
+        100,000-lamport keeper tip — the same arithmetic every promoted family
+        uses, run against this seal's own tables rather than transcribed from
+        the promotion report — which was compiled against the superseded
+        e8ba31d5… root, where 23 of the 25 measured maxima and 5 of the 25
+        selected limits differ from these.  The pins below are the route
+        maxima, and a maximum that drifts re-derives its limit and its reward,
+        which the projection equality then catches.
+        """
+
+        w1 = policy.derive(self.evidence)["general_clearing_walk"]["w1"]
+        self.assertEqual(w1["rung"], "W1")
+        self.assertEqual(w1["status"], "PASS")
+        self.assertEqual(w1["stopped_routes"], [])
+        self.assertEqual(w1["quoted_route_count"], 25)
+        self.assertEqual(len(w1["routes"]), 25)
+        self.assertEqual(
+            w1["quoted_families"],
+            ["general_epoch", "clear_walk", "candidate_selection", "entitled_clearing"],
+        )
+        self.assertEqual(w1["worst_route"], "freeze_epoch_3pages_40orders")
+        self.assertEqual(w1["worst_measured_cu"], 717_825)
+        expected = {
+            "init_epoch": (42_699, 60_000, 170_000),
+            "place_order_single": (192_029, 250_000, 360_000),
+            "place_order_portfolio": (194_345, 250_000, 360_000),
+            "freeze_epoch_1page_4orders": (233_564, 300_000, 410_000),
+            "freeze_epoch_2pages_17orders": (478_005, 600_000, 710_000),
+            "freeze_epoch_3pages_40orders": (717_825, 900_000, 1_010_000),
+            "advance_clear_work_pass1_small_book": (299_378, 380_000, 490_000),
+            "advance_clear_work_pass2_small_book": (290_626, 370_000, 480_000),
+            "advance_clear_work_pass1_forty_order": (391_428, 490_000, 600_000),
+            "advance_clear_work_pass2_forty_order": (309_006, 390_000, 500_000),
+            "advance_clear_slices": (177_748, 230_000, 340_000),
+            "complete_clear_work_walk": (127_081, 160_000, 270_000),
+            "submit_candidate": (35_744, 50_000, 160_000),
+            "write_candidate_feed_fills": (9_647, 20_000, 130_000),
+            "write_candidate_feed_slices": (9_888, 20_000, 130_000),
+            "seal_candidate_including_displacing": (64_168, 90_000, 200_000),
+            "finalize_selection_3_retained_winner": (49_228, 70_000, 180_000),
+            "finalize_selection_digest_tie": (39_465, 50_000, 160_000),
+            "finalize_selection_honest_lapse": (20_693, 30_000, 140_000),
+            "complete_clear_work_selection": (127_927, 160_000, 270_000),
+            "freeze_entitlement": (100_158, 130_000, 240_000),
+            "entitle_slice_single": (210_607, 270_000, 380_000),
+            "entitle_slice_portfolio_pair": (243_518, 310_000, 420_000),
+            "settle_page_entitled_direct_slice": (53_330, 70_000, 180_000),
+            "settle_page_entitled_portfolio_full_pair": (234_735, 300_000, 410_000),
+        }
+        self.assertEqual(set(w1["routes"]), set(expected))
+        boundary = policy.derive(self.evidence)[
+            "maximum_raw_cu_with_requested_headroom"
+        ]
+        for name, (measured, limit, reward) in expected.items():
+            row = w1["routes"][name]
+            self.assertEqual(row["measured_cu"], measured, name)
+            self.assertEqual(row["selected_limit_cu"], limit, name)
+            self.assertEqual(row["keeper_reward_lamports"], reward, name)
+            self.assertEqual(row["status"], "PASS", name)
+            self.assertEqual(row["admission"], policy.WALK_PLANE_W1_ADMISSION, name)
+            self.assertIn(row["shape_variability"], policy.WALK_PLANE_W1_VARIABILITY)
+            self.assertGreaterEqual(row["observations"], 1, name)
+            # The rule itself, not a transcription of it.
+            self.assertEqual(row["required_headroom_cu"], -(-measured * 5 // 4), name)
+            self.assertEqual(limit % 10_000, 0, name)
+            self.assertGreaterEqual(limit, row["required_headroom_cu"], name)
+            self.assertLess(limit - row["required_headroom_cu"], 10_000, name)
+            self.assertEqual(row["external_fee_cap_lamports"], 10_000 + limit, name)
+            self.assertEqual(reward, row["external_fee_cap_lamports"] + 100_000, name)
+            self.assertLessEqual(measured, boundary, name)
+        # The five genuinely variable routes say so: the driver picks the batch
+        # composition, so the quote bounds the measured compositions only.
+        self.assertEqual(
+            sorted(
+                name
+                for name, row in w1["routes"].items()
+                if row["shape_variability"] == policy.W1_BATCH_VARIABLE
+            ),
+            [
+                "advance_clear_slices",
+                "advance_clear_work_pass1_forty_order",
+                "advance_clear_work_pass1_small_book",
+                "advance_clear_work_pass2_forty_order",
+                "advance_clear_work_pass2_small_book",
+            ],
+        )
+        self.assertEqual(w1["routes"]["advance_clear_work_pass1_forty_order"][
+            "observations"
+        ], 22)
+        # A drifted maximum re-derives, and the sealed projection then refuses.
+        drifted = copy.deepcopy(self.evidence)
+        drifted["measurements"]["general_epoch"]["init_epoch_cu"].append(63_000)
+        row = policy.derive(drifted)["general_clearing_walk"]["w1"]["routes"][
+            "init_epoch"
+        ]
+        self.assertEqual(row["measured_cu"], 63_000)
+        self.assertEqual(row["selected_limit_cu"], 80_000)
+        self.assertEqual(row["keeper_reward_lamports"], 190_000)
+        with self.assertRaises(policy.CheckError):
+            policy.require_equal(
+                policy.derive(drifted), drifted["projection"], "policy projection"
+            )
+
+    def test_w1_refuses_a_live_flag_on_any_walk_family(self) -> None:
+        """W1 is the rung that quotes and moves nothing.
+
+        A live flag on any of the five walk families must refuse while W2's
+        evidence does not exist, and the refusal must name what is still
+        outstanding.  Every other subsystem's live flag is untouched by the
+        rung.
+        """
+
+        derived = policy.derive(self.evidence)
+        w1 = derived["general_clearing_walk"]["w1"]
+        self.assertEqual(w1["live_flags"], "UNTOUCHED")
+        self.assertFalse(w1["keeper_program_consumes_quotes"])
+        self.assertEqual(
+            w1["runtime_reward_schedule"], "NONE_NO_KEEPER_PROGRAM_READS_THESE_QUOTES"
+        )
+        self.assertFalse(derived["direct_v2"]["live_v3"])
+        self.assertEqual(derived["direct_selection_v3"]["live_flags"], "UNTOUCHED")
+        self.assertEqual(derived["general_terminal_closure"]["live_flags"], "UNTOUCHED")
+        self.assertEqual(
+            derived["occupation_v4_monolithic"]["live_action"],
+            "MONOLITHIC_INITIAL_AND_RETRY_ADMITTED",
+        )
+        for family in policy.WALK_PLANE_FAMILIES:
+            for flag in ("live_action", "live_walk", "live_clearing"):
+                self.assertNotIn(flag, self.evidence["measurements"][family], family)
+                tampered = copy.deepcopy(self.evidence)
+                tampered["measurements"][family][flag] = True
+                with self.assertRaises(policy.CheckError) as caught:
+                    policy.derive(tampered)
+                self.assertIn(flag, str(caught.exception))
+                self.assertIn("rung W2", str(caught.exception))
+
+    def test_w1_quotes_no_rent_row_and_the_general_plane_still_stops(self) -> None:
+        """The rent side is declared unquoted and the rows it names still STOP.
+
+        TerminalClosure gave the plane real close routes; the cycle-E
+        reclassification still leaves every general-plane row an honest STOP on
+        the optional funding ledger and the owner-signed release edge.  W1
+        publishes which rows those are and prices none of them, and it
+        publishes no lifecycle or path total that could be read as one.
+        """
+
+        derived = policy.derive(self.evidence)
+        w1 = derived["general_clearing_walk"]["w1"]
+        self.assertEqual(w1["rent_side"], "NOT_QUOTED_GENERAL_PLANE_ROWS_KEEP_THEIR_STOPS")
+        self.assertEqual(w1["unquoted_rent_rows"], sorted(policy.TERMINAL_CLOSURE_ROWS))
+        self.assertEqual(w1["path_quote"], "NOT_DESIGNED_NO_BOUNDED_TRANSACTION_PLAN")
+        accounts = build_terminal(self.evidence["runtime_ref"])["accounts"]
+        for name in w1["unquoted_rent_rows"]:
+            self.assertEqual(accounts[name]["lifecycle_class"], "UNCLASSIFIED_STOP", name)
+        self.assertEqual(derived["general_terminal_closure"][
+            "rows_reclassified_refundable"
+        ], [])
+        # No rent, principal, reserve, or cold-outlay lamport anywhere in the
+        # block: the only lamport fields are the per-route fee cap and reward.
+        lamport_fields = {
+            key
+            for key in w1
+            if isinstance(key, str) and key.endswith("lamports")
+        }
+        self.assertEqual(lamport_fields, set())
+        for name, row in w1["routes"].items():
+            self.assertEqual(
+                {key for key in row if key.endswith("lamports")},
+                {"external_fee_cap_lamports", "keeper_reward_lamports"},
+                name,
+            )
+        # A general-plane row that quietly became refundable refuses.
+        promoted = build_terminal(self.evidence["runtime_ref"])
+        promoted["accounts"]["legacy.clear_work"]["lifecycle_class"] = (
+            "REFUNDABLE_TRANSIENT"
+        )
+        with self.assertRaises(policy.CheckError):
+            policy.require_walk_plane_w1_quotes(
+                self.evidence["measurements"], promoted, policy.quote_policy(self.evidence)
+            )
+
+    def test_w1_refuses_a_measured_route_it_does_not_quote(self) -> None:
+        """Nothing the suite measures may go unpublished behind the block.
+
+        A new CU field, a dropped CU field, a new freeze or finalize shape, and
+        a duplicated shape label each refuse, so the block can never claim to
+        price the plane while a measured route sits outside it.
+        """
+
+        measurements = self.evidence["measurements"]
+        terminal = build_terminal(self.evidence["runtime_ref"])
+        inputs = policy.quote_policy(self.evidence)
+        policy.require_walk_plane_w1_quotes(measurements, terminal, inputs)
+
+        def refuses(mutate) -> str:
+            tampered = copy.deepcopy(measurements)
+            mutate(tampered)
+            with self.assertRaises(policy.CheckError) as caught:
+                policy.require_walk_plane_w1_quotes(tampered, terminal, inputs)
+            return str(caught.exception)
+
+        self.assertIn(
+            "coverage",
+            refuses(
+                lambda rows: rows["entitled_clearing"].update(
+                    {"cancel_entitlement_cu": [123]}
+                )
+            ),
+        )
+        self.assertIn(
+            "coverage", refuses(lambda rows: rows["general_epoch"].pop("init_epoch_cu"))
+        )
+        self.assertIn(
+            "shape coverage",
+            refuses(
+                lambda rows: rows["general_epoch"]["freeze_epoch_rows"].append(
+                    {"pages": 4, "orders": 80, "cu": [900_000]}
+                )
+            ),
+        )
+        self.assertIn(
+            "shape coverage",
+            refuses(
+                lambda rows: rows["candidate_selection"][
+                    "finalize_selection_rows"
+                ].append({"shape": "4_verified_full_width_tie", "cu": [60_000]})
+            ),
+        )
+        self.assertIn(
+            "shape coverage",
+            refuses(
+                lambda rows: rows["candidate_selection"][
+                    "finalize_selection_rows"
+                ].pop()
+            ),
+        )
+        self.assertIn(
+            "twice",
+            refuses(
+                lambda rows: rows["general_epoch"]["freeze_epoch_rows"].append(
+                    {"pages": 1, "orders": 4, "cu": [1]}
+                )
+            ),
+        )
+        # The declared surcharge is a non-route by name, not by omission.
+        self.assertEqual(
+            policy.WALK_PLANE_W1_SURCHARGE_FIELDS["clear_walk"],
+            "request_heap_frame_262144_surcharge_cu",
+        )
+        self.assertIn(
+            "coverage",
+            refuses(
+                lambda rows: rows["clear_walk"].pop(
+                    "request_heap_frame_262144_surcharge_cu"
+                )
+            ),
+        )
+
+    def test_w1_stops_an_impossible_envelope_instead_of_pricing_it(self) -> None:
+        """A route past the admission boundary is a STOP with no lamports.
+
+        The whole plane sits at 64% of the 1,120,000 raw-CU boundary today, so
+        this is the falsifier rather than an observed row: one CU past the
+        boundary must publish no limit, no fee cap, and no keeper reward, and
+        must drop the block itself to STOP_HEADROOM.
+        """
+
+        terminal = build_terminal(self.evidence["runtime_ref"])
+        inputs = policy.quote_policy(self.evidence)
+        boundary = 1_120_000
+        at_gate = copy.deepcopy(self.evidence["measurements"])
+        at_gate["entitled_clearing"]["entitle_slice_single_cu"] = [boundary]
+        row = policy.require_walk_plane_w1_quotes(at_gate, terminal, inputs)["routes"][
+            "entitle_slice_single"
+        ]
+        self.assertEqual(row["status"], "PASS")
+        self.assertEqual(row["selected_limit_cu"], 1_400_000)
+        self.assertEqual(row["admission"], policy.WALK_PLANE_W1_ADMISSION)
+
+        over = copy.deepcopy(self.evidence["measurements"])
+        over["entitled_clearing"]["entitle_slice_single_cu"] = [boundary + 1]
+        block = policy.require_walk_plane_w1_quotes(over, terminal, inputs)
+        stopped = block["routes"]["entitle_slice_single"]
+        self.assertEqual(block["status"], "STOP_HEADROOM")
+        self.assertEqual(block["stopped_routes"], ["entitle_slice_single"])
+        self.assertEqual(stopped["status"], "STOP_HEADROOM")
+        self.assertEqual(stopped["admission"], policy.WALK_PLANE_W1_STOPPED_ADMISSION)
+        self.assertIsNone(stopped["selected_limit_cu"])
+        self.assertIsNone(stopped["external_fee_cap_lamports"])
+        self.assertIsNone(stopped["keeper_reward_lamports"])
+
+    def test_w1_limits_cover_the_measured_heap_frame_request(self) -> None:
+        """The 150-CU ComputeBudget rider is published, not dropped.
+
+        The walk suite measures `request_heap_frame(262144)` at 150 CU, and it
+        rides in the same transaction as an AdvanceClearWork route.  The
+        quantum absorbs it at every current row, which is a fact to check
+        rather than assume: a surcharge that stopped fitting must refuse.
+        """
+
+        derived = policy.derive(self.evidence)
+        w1 = derived["general_clearing_walk"]["w1"]
+        self.assertEqual(w1["heap_frame_request_surcharge_cu"], 150)
+        self.assertTrue(w1["surcharge_absorbed_by_selected_limits"])
+        self.assertEqual(
+            self.evidence["measurements"]["clear_walk"][
+                "request_heap_frame_262144_surcharge_cu"
+            ],
+            [150],
+        )
+        inputs = policy.quote_policy(self.evidence)
+        for name, row in w1["routes"].items():
+            if row["family"] != "clear_walk":
+                continue
+            with_rider = quote_route(row["measured_cu"] + 150, inputs)
+            self.assertEqual(with_rider.selected_limit_cu, row["selected_limit_cu"], name)
+        tampered = copy.deepcopy(self.evidence)
+        tampered["measurements"]["clear_walk"][
+            "request_heap_frame_262144_surcharge_cu"
+        ] = [10_000]
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.derive(tampered)
+        self.assertIn("heap-frame request", str(caught.exception))
+
+    def test_w2_stays_blocked_on_the_ids_and_gaps_the_report_named(self) -> None:
+        """W1 publishes what full admission is still missing, and it has teeth.
+
+        The three blocking ids are the ones the walk plane's own terminal rows
+        carry; the five gaps are section 3 of the promotion report.  If every
+        named id retired, the block's "W2 is blocked" declaration would stop
+        being true, so the derivation refuses rather than silently upgrading.
+        """
+
+        derived = policy.derive(self.evidence)
+        w1 = derived["general_clearing_walk"]["w1"]
+        self.assertEqual(w1["w2_status"], "BLOCKED")
+        self.assertEqual(
+            w1["w2_blocking_ids"],
+            [
+                "GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT",
+                "PROFILE.STORAGE_INVENTORY_INCOMPLETE",
+                "RENT.ACCOUNT_REFUND_UNOWNED",
+            ],
+        )
+        self.assertEqual(
+            w1["w2_evidence_gaps"],
+            [
+                "WIDER_PAGE_ORDER_AND_CANDIDATE_GRIDS",
+                "FULL_WIDTH_TIE_AND_DISPLACEMENT_CAMPAIGNS",
+                "SECOND_INDEPENDENT_BANK_PROFILE",
+                "RENT_AND_CLOSE_ROWS_UNDER_A_RATIFIED_R4_CARVE_OUT",
+                "FREEZE_TO_SETTLE_PATH_QUOTE_MODEL",
+            ],
+        )
+        for blocker in w1["w2_blocking_ids"]:
+            self.assertIn(blocker, derived["terminal_blocking_ids"])
+        retired = build_terminal(self.evidence["runtime_ref"])
+        retired["blocking_ids"] = [
+            b
+            for b in retired["blocking_ids"]
+            if b not in policy.WALK_PLANE_W2_BLOCKING_IDS
+        ]
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.require_walk_plane_w1_quotes(
+                self.evidence["measurements"],
+                retired,
+                policy.quote_policy(self.evidence),
+            )
+        self.assertIn("re-decided", str(caught.exception))
 
     def test_direct_v3_families_are_sealed_evidence_but_never_promoted(self) -> None:
         """Rung V1: every V3 CU row is sealed and nothing is admitted.
@@ -538,11 +953,20 @@ class PolicyTests(unittest.TestCase):
             f"{artifact_root}/logs/bank/terminal_closure.log",
             self.evidence["evidence_files"],
         )
-        for subsystem in derived.values():
-            if isinstance(subsystem, dict) and "routes" in subsystem:
-                for name in subsystem["routes"]:
-                    self.assertNotIn("close", name)
-                    self.assertNotIn("release", name)
+        # No route table anywhere in the projection — including the walk
+        # plane's W1 rows — names a close or release route, and no W1 row
+        # draws on the terminal_closure family.
+        for _, table in _route_tables(derived):
+            for name in table:
+                self.assertNotIn("close", name)
+                self.assertNotIn("release", name)
+        w1 = derived["general_clearing_walk"]["w1"]
+        self.assertEqual(w1["excluded_families"], ["terminal_closure"])
+        self.assertEqual(w1["excluded_intents"], list(range(60, 68)))
+        self.assertEqual(w1["exclusion_reason"], closure["per_route_cu"])
+        self.assertNotIn("terminal_closure", w1["quoted_families"])
+        for name, route in w1["routes"].items():
+            self.assertNotEqual(route["family"], "terminal_closure", name)
 
     def test_terminal_closure_evidence_and_classification_cannot_drift(self) -> None:
         """The weld holds in both directions.

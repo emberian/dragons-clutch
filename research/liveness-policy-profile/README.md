@@ -175,10 +175,10 @@ the corrected per-epoch V3 structural strand is unchanged at
 The general-clearing CU evidence now spans five UNPROMOTED measurement
 families (`general_epoch`, `clear_walk`, `candidate_selection`,
 `entitled_clearing`, `terminal_closure`; eighteen same-ELF families in all,
-nineteen bank logs): no admission, quote, or reward row is derived for any
-tag-49–67 route, live flags are untouched, the reference adapter refuses all
-of them, and admission-policy treatment of the plane is ember's decision,
-not this seal's. Direct SelectionV2 Select completes at a measured 226,444
+nineteen bank logs). Four of them are **quoted at rung W1** (below); no live
+flag moves for any of them, the reference adapter refuses all of them, and
+full admission of the plane remains ember's decision, not this seal's.
+Direct SelectionV2 Select completes at a measured 226,444
 CU and commits (V2 stays unpromoted on its unimplemented empty-frozen
 lapse), every occupation-v4 monolithic profile clears the 25%-headroom
 gate, and Direct V3 is measured but unpromoted (see the rung-V1 section
@@ -187,6 +187,80 @@ below). The declared source closure grows 108 → 109 files (exactly
 intentionally excluded from the default feature: running them requires the
 distinct non-production mock-source ELF, so they are not smuggled into this
 projection.
+
+## Walk plane, rung W1: quotes without live flags
+
+Adopted by `docs/decisions/ADOPTED_2026-08-20.md` item 10 (rung W1 of
+`REPORT_clearing-plane-promotion_2026-08-20.md` §2.1), unblocked by item 1's
+freeze of `GENERAL_CLEARING_POLICY_V1` and `CANDIDATE_WINDOW_SLOTS = 1,000` —
+a quote against a PROPOSED window pin would have been a quote against an
+unfrozen lifecycle schedule.
+
+`derive()` now computes, for **twenty-five** general-clearing routes across
+the four measured families, the selected compute limit and keeper reward by
+exactly the arithmetic every promoted family uses: `ceil(measured x 5/4)`
+rounded up to the 10,000-CU quantum, priced at the 10,000-lamport base-fee cap
+plus 1 lamport/CU plus the 100,000-lamport keeper tip. Rows are re-derived
+from this seal's own tables on every run — the promotion report's table was
+compiled against the superseded `e8ba31d5…` root, where 23 of the 25 measured
+maxima and **5 of the 25 selected limits** differ from this seal's
+(`PlaceOrder` single and portfolio, the forty-order pass-1 walk,
+`EntitleSlice` single, and the full-pair `SettlePage`).
+**All 25 clear the 25%-headroom rule** at the 10,000-CU quantum; the worst is
+`FreezeEpoch` at 3 pages / 40 orders, **717,825 CU** (limit 900,000, reward
+1,010,000 lamports), which is 64% of the 1,120,000 raw-CU admission boundary.
+Compute is not this plane's problem.
+
+W1 is *quotes and nothing else*, and each half of that is welded in
+`require_walk_plane_w1_quotes` rather than merely written down:
+
+- **live flags stay false.** The four families keep
+  `UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY`, `general_clearing_walk.status`
+  stays `SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP`, and `live_flags` stays
+  `UNTOUCHED`. A walk family that acquires any `live*` field refuses, naming
+  the W2 ids and evidence gaps that are still outstanding.
+- **no keeper program consumes these quotes.** There is no runtime reward
+  schedule for the plane to cover, so a W1 row is a policy row, not an
+  operational promise; the block says so (`runtime_reward_schedule:
+  NONE_NO_KEEPER_PROGRAM_READS_THESE_QUOTES`), and it publishes **no** path or
+  lifecycle total (`path_quote: NOT_DESIGNED_NO_BOUNDED_TRANSACTION_PLAN` —
+  W2 item 5).
+- **the rent side is NOT quoted.** TerminalClosure gave the plane real close
+  routes; the cycle-E reclassification still leaves all eight general-plane
+  rows honest STOPs on the optional funding ledger and the owner-signed
+  release edge. W1 names those rows and prices none of them, and refuses if
+  one stops being a STOP.
+- **tags 60–67 get no row at all.** The `terminal_closure` family declares
+  `per_route_cu: NOT_LABELLED_BY_SUITE_NO_ROW_DERIVED` and the suite prints no
+  per-route CU label; the block records that string as its own exclusion
+  reason, so an invented close quote and a drifted declaration cannot part.
+- **W2 stays blocked** on `RENT.ACCOUNT_REFUND_UNOWNED`,
+  `GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT`, and
+  `PROFILE.STORAGE_INVENTORY_INCOMPLETE`, plus the five section-3 evidence
+  gaps (wider grids, full-width tie/displacement campaigns, a second
+  independent bank profile, rent/close rows under a ratified R4 carve-out, and
+  a freeze-to-settle path-quote model). Every named id retiring refuses, so
+  the rung is re-decided rather than silently upgraded.
+
+Two honesty rules the block enforces on its own rows. **Variability is
+declared**: five routes are `BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY` —
+`AdvanceClearWork` in both passes on both books and `AdvanceClearSlices` — because
+the driver chooses how many orders, reservations, or slices ride in one
+transaction, and the sealed suite drove eleven distinct pass-1 slot shapes on
+the forty-order book alone (1–16 records, 0–11 reservations). Those quotes
+bound the measured compositions and no others. **Nothing measured goes
+unpublished**: every `_cu`/`_rows` field of a quoted family must be consumed by
+a W1 route or be the one declared non-route — the walk's
+`request_heap_frame(262144)` rider, measured at 150 CU, which every
+`clear_walk` limit must still cover with the route. A new field, a dropped
+field, a new `FreezeEpoch` or `FinalizeSelection` shape, or a duplicated shape
+label each refuse.
+
+An over-boundary route is never clamped into a price: it publishes
+`W1_STOP_HEADROOM_NO_QUOTE` with null limit, null fee cap, and null reward,
+and drops the whole block to `STOP_HEADROOM`. The profile already had this
+exact shape once — V2's Select is quoted PASS inside a family-level STOP — and
+W1 is that shape applied to twenty-five routes.
 
 ## Direct V3, rung V1: the syscall-era campaign (evidence-only)
 
