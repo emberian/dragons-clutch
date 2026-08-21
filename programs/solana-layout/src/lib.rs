@@ -8272,6 +8272,182 @@ mod tests {
         inside.terms = inside.recomputed_terms_digest().unwrap();
         assert_eq!(inside.validate(), Ok(()));
     }
+    /// A valid smooth (degree 2 or 3) terms fixture on a uniform power-of-two
+    /// grid: five claims, `K = n + 1 − d` anchors spaced `2^spacing`, no payout
+    /// map, and one payout vector carrying the weight denominator `D = 8`.
+    fn smooth_terms(basis_degree: u8, spacing: u8) -> TermsAccount {
+        let claims = 5u8;
+        let knot_count = claims + 1 - basis_degree;
+        let mut weights = [0u64; MAX_OUTCOMES];
+        weights[0] = 8;
+        let mut payouts = [PayoutVectorBytes::ZERO; MAX_PAYOUTS];
+        payouts[0] = PayoutVectorBytes {
+            denominator: 8,
+            weights,
+        };
+        let mut knots = [0u128; MAX_KNOTS];
+        let gap: u128 = 1 << spacing;
+        let mut i = 0usize;
+        while i < usize::from(knot_count) {
+            knots[i] = (i as u128) * gap;
+            i += 1;
+        }
+        let mut t = terms();
+        t.outcome_count = claims;
+        t.payout_count = 1;
+        t.payouts = payouts;
+        t.failure_payout_index = 0;
+        t.payout_map = [PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
+        t.basis_degree = basis_degree;
+        t.knot_count = knot_count;
+        t.uniform_log2_spacing = spacing;
+        t.knots = knots;
+        t.terms = t.recomputed_terms_digest().unwrap();
+        t
+    }
+    #[test]
+    fn terms_admit_valid_smooth_degree_two_and_three() {
+        /* The smooth rungs are not refused at admission and never were in this
+         * codec: `validate` implements the §2.1 count rule for every degree in
+         * `0..=MAX_BASIS_DEGREE`, and `programs/solana-reference` plus
+         * `crates/clutch-bspline` evaluate them.  This test pins that, and the
+         * byte round trip, so a future "tighten the ladder" edit has to break a
+         * named assertion rather than a comment. */
+        for degree in [2u8, 3] {
+            let t = smooth_terms(degree, 4);
+            assert_eq!(t.validate(), Ok(()), "degree {degree} must be admitted");
+            let mut bytes = [0; account_len::TERMS];
+            assert_eq!(t.encode(&mut bytes), Ok(account_len::TERMS));
+            assert_eq!(TermsAccount::decode(&bytes), Ok(t));
+            /* The count rule is the one thing that differs between the two. */
+            assert_eq!(usize::from(t.knot_count), 5 + 1 - usize::from(degree));
+        }
+        /* Distinct degrees over the same fields are distinct terms. */
+        assert_ne!(smooth_terms(2, 4).terms, smooth_terms(3, 4).terms);
+    }
+    #[test]
+    fn terms_refuse_malformed_smooth_degree_two_and_three() {
+        /* Every refusal below is a *side condition of a Lean theorem* about the
+         * construction this codec is admitting, not a taste judgement.  The
+         * anchors are in `lean/DragonsClutch/BSpline.lean`:
+         *
+         *  (a) `degree ≤ 3` — `RustExpandedKnotLinkage`'s second conjunct and
+         *      `uniform_rust_expanded_knot_linkage`'s `hdegreeHigh`.  Above it
+         *      no construction exists at all.
+         *  (b) `K = n + 1 − d` — the local block has arity `d + 1`
+         *      (`clampedDegreeTwo_length`, `clampedDegreeThree_length`,
+         *      `refineTwo/refineThree`'s three- and four-element numerator
+         *      lists) and `pad_length` places it inside the `n`-vector.
+         *  (c) `2 ≤ K` — `uniform_rust_expanded_knot_linkage`'s `hcount`, also
+         *      the hypothesis of `expandOpenClamped_uniform` and
+         *      `expandedKnotAt_uniform`.  One anchor is not a pane.
+         *  (d) strictly increasing anchors — `RustExpandedKnotLinkage`'s fourth
+         *      conjunct, discharged from `hgap : 0 < gap`.  A flat pair makes
+         *      `BasisFunsCell.distinct` false and the recurrence divides by zero.
+         *  (e) uniform power-of-two spacing, mandatory at `d ≥ 2` — every
+         *      linkage theorem is stated over `uniformStoredKnots origin gap
+         *      count`; there is no nonuniform counterpart at any degree above
+         *      one, so a sentinel declaration has no model to refine.
+         *  (f) a truthful declaration — the array is the single semantic owner;
+         *      a declaration the array refutes would name a different Lean grid
+         *      than the one stored.
+         *  (g) canonical zero padding and an entirely unused payout map —
+         *      derived-basis markets have no cell-to-preset map.
+         *  (h) the freeze-time bound `D·2h² < 2^127` / `D·6h³ < 2^127`
+         *      (RECURRENCE-BOUND-01, design §2.5).  In Lean the column
+         *      denominators are the products `q·z₀·z₁` and `q·z₀·z₁·z₂`
+         *      (`refineTwo`, `refineThree`) and `Exact.bounded` bounds every
+         *      numerator by them, so this is the width those products need. */
+
+        /* (a) */
+        let mut too_high = smooth_terms(2, 4);
+        too_high.basis_degree = MAX_BASIS_DEGREE + 1;
+        too_high.terms = too_high.recomputed_terms_digest().unwrap();
+        assert_eq!(too_high.validate(), Err(CodecError::InvalidEnum));
+
+        for degree in [2u8, 3] {
+            /* (b) the neighbouring degree's knot count is refused, which is
+             * exactly the "degree flip alone cannot manufacture a basis" claim
+             * the reference crate asserts from the other side. */
+            let mut flipped = smooth_terms(degree, 4);
+            flipped.basis_degree = if degree == 2 { 3 } else { 2 };
+            flipped.terms = flipped.recomputed_terms_digest().unwrap();
+            assert_eq!(flipped.validate(), Err(CodecError::InvalidCount));
+
+            let mut miscounted = smooth_terms(degree, 4);
+            miscounted.knot_count += 1;
+            miscounted.knots[usize::from(miscounted.knot_count) - 1] =
+                miscounted.knots[usize::from(miscounted.knot_count) - 2] + (1 << 4);
+            miscounted.terms = miscounted.recomputed_terms_digest().unwrap();
+            assert_eq!(miscounted.validate(), Err(CodecError::InvalidCount));
+
+            /* (c) a one-anchor grid: reachable only at degree 3 without also
+             * breaking (b), so it is checked where the count rule allows it. */
+            if degree == 3 {
+                let mut lone = smooth_terms(3, 4);
+                lone.outcome_count = 3;
+                lone.knot_count = 1;
+                lone.knots[1] = 0;
+                lone.knots[2] = 0;
+                lone.terms = lone.recomputed_terms_digest().unwrap();
+                assert_eq!(lone.validate(), Err(CodecError::InvalidCount));
+            }
+
+            /* (d) */
+            let mut flat = smooth_terms(degree, 4);
+            flat.knots[1] = flat.knots[0];
+            flat.terms = flat.recomputed_terms_digest().unwrap();
+            assert_eq!(flat.validate(), Err(CodecError::InvalidCount));
+
+            let mut reversed = smooth_terms(degree, 4);
+            reversed.knots[1] = reversed.knots[0];
+            reversed.knots[0] = reversed.knots[2];
+            reversed.terms = reversed.recomputed_terms_digest().unwrap();
+            assert_eq!(reversed.validate(), Err(CodecError::InvalidCount));
+
+            /* (e) the sentinel is admitted at degree ≤ 1 and refused here. */
+            let mut nonuniform = smooth_terms(degree, 4);
+            nonuniform.uniform_log2_spacing = UNIFORM_SPACING_NONE;
+            nonuniform.terms = nonuniform.recomputed_terms_digest().unwrap();
+            assert_eq!(nonuniform.validate(), Err(CodecError::InvalidEnum));
+
+            /* (f) */
+            let mut lying = smooth_terms(degree, 4);
+            lying.uniform_log2_spacing = 5;
+            lying.terms = lying.recomputed_terms_digest().unwrap();
+            assert_eq!(lying.validate(), Err(CodecError::InvalidEnum));
+
+            let mut overshift = smooth_terms(degree, 4);
+            overshift.uniform_log2_spacing = 128;
+            overshift.terms = overshift.recomputed_terms_digest().unwrap();
+            assert_eq!(overshift.validate(), Err(CodecError::InvalidEnum));
+
+            /* (g) */
+            let mut padded = smooth_terms(degree, 4);
+            padded.knots[MAX_KNOTS - 1] = u128::MAX;
+            padded.terms = padded.recomputed_terms_digest().unwrap();
+            assert_eq!(padded.validate(), Err(CodecError::NonCanonicalPadding));
+
+            let mut mapped = smooth_terms(degree, 4);
+            mapped.payout_map[0] = 0;
+            mapped.terms = mapped.recomputed_terms_digest().unwrap();
+            assert_eq!(mapped.validate(), Err(CodecError::NonCanonicalPadding));
+        }
+
+        /* (h) The two smooth bounds differ, so each degree gets its own pair.
+         * Degree 2 with D = 2^3: 2^3 · 2 · 2^(2s) < 2^127 iff s ≤ 61. */
+        assert_eq!(smooth_terms(2, 61).validate(), Ok(()));
+        assert_eq!(
+            smooth_terms(2, 62).validate(),
+            Err(CodecError::ArithmeticOverflow)
+        );
+        /* Degree 3 with D = 2^3: 3 · 2^(4 + 3s) < 2^127 iff s ≤ 40. */
+        assert_eq!(smooth_terms(3, 40).validate(), Ok(()));
+        assert_eq!(
+            smooth_terms(3, 41).validate(),
+            Err(CodecError::ArithmeticOverflow)
+        );
+    }
     #[test]
     fn terms_reserved_bytes_must_be_zero() {
         let t = terms();
