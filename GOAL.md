@@ -84,6 +84,24 @@ J. SMALL-FIX BATCH (stale blocker row, mock path-sensitivity, queued
 
 ## Done log (2026-08-19 session)
 
+- SWARM SET 1+2 LANDING: A PARTIAL FILLS COMPLETE (9 commits — reservation
+  v2 at version byte 3 catching a tag collision, both seam
+  generalizations, five bank walks, mutation falsifiers incl. one that
+  survived its first pass and exposed a real fixture hole, blocker ledger
+  down to [VirtualPot]; suites 113/116 green; honest gaps named). C FEE
+  ARITHMETIC COMPLETE (composite computable, lab-differential exact 38/41
+  with 3 named out-of-domain, conservation closes with fees, boundary
+  REFUSES rather than under-charges, ENCODED_BYTES unchanged, digests
+  untouched, resume corpus 210->322). F OPERATOR BENCH LANDED (design doc,
+  harness lib split byte-identical across 294 plan files, operatord +
+  zero-dep bench, replay falsifier green with corrupt-byte red, M0 39/44
+  steps + M1 screens; three real bugs found and fixed; operatord as a
+  SIBLING workspace protecting the sealed lock — argued). FIRST CROSS-LANE
+  INTEGRATION BREAK found by the bench at step 40 (harness expectations
+  pre-date reservation v2) — A resumed for the weld. B (VirtualPot — the
+  LAST blocker) and J (small fixes) launched; E keeper, D R2, G degrees
+  still running.
+
 - W1 PROMOTION EXECUTED (396e11d, evidence-only, identity unmoved at
   4fded7a6): 25/25 walk-plane routes quoted at the CURRENT seal — the
   lane re-derived rather than transcribed and caught that 5 of the
