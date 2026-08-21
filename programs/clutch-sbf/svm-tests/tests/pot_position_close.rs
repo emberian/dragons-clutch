@@ -128,8 +128,25 @@ struct Fixture {
 
 impl Fixture {
     fn close(&self, position: Address, owner: Hash32, record: Address) -> Instruction {
+        self.close_as(
+            Address::new_from_array(owner.bytes()),
+            position,
+            owner,
+            record,
+        )
+    }
+
+    /// The same list with the signer chosen independently of the intent's
+    /// claimed owner, so a transposition is expressible on the wire.
+    fn close_as(
+        &self,
+        signer: Address,
+        position: Address,
+        owner: Hash32,
+        record: Address,
+    ) -> Instruction {
         let metas = vec![
-            AccountMeta::new(Address::new_from_array(owner.bytes()), true),
+            AccountMeta::new(signer, true),
             AccountMeta::new_readonly(self.market_account, false),
             AccountMeta::new(position, false),
             AccountMeta::new_readonly(record, false),
@@ -476,28 +493,40 @@ async fn a_substituted_record_and_a_stranger_signature_refuse() {
     assert_eq!(custom(refused), ClutchError::WrongPda as u32);
     assert!(account(&mut context, fixture.position).await.is_some());
 
-    // A stranger signing for the owner's Position refuses: the signer *is*
-    // the owner identity, and the intent's owner must be that signer.
+    // A stranger signing while the intent claims the owner refuses: the
+    // signer *is* the owner identity, so the claim must be the signer's.
+    let stranger_id = Hash32::from_bytes(fixture.stranger.pubkey().to_bytes());
     let refused = send(
         &mut context,
-        fixture.close(fixture.position, owner_id, fixture.record_account),
+        fixture.close_as(
+            fixture.stranger.pubkey(),
+            fixture.position,
+            owner_id,
+            fixture.record_account,
+        ),
         &fixture.stranger,
         7,
     )
     .await;
-    assert!(refused.is_err());
+    assert_eq!(custom(refused), ClutchError::UnauthorizedActor as u32);
+    assert!(account(&mut context, fixture.position).await.is_some());
 
-    // A stranger closing their *own* Position while naming the owner's
-    // Position refuses at the address binding.
-    let stranger_id = Hash32::from_bytes(fixture.stranger.pubkey().to_bytes());
+    // ...and a stranger claiming their own identity while presenting somebody
+    // else's Position refuses at the Position's own owner binding.
     let refused = send(
         &mut context,
-        fixture.close(fixture.position, stranger_id, fixture.record_account),
+        fixture.close_as(
+            fixture.stranger.pubkey(),
+            fixture.position,
+            stranger_id,
+            fixture.record_account,
+        ),
         &fixture.stranger,
         8,
     )
     .await;
-    assert_eq!(custom(refused), ClutchError::WrongPda as u32);
+    assert_eq!(custom(refused), ClutchError::MismatchedState as u32);
+    assert!(account(&mut context, fixture.position).await.is_some());
     assert!(account(&mut context, fixture.stranger_position)
         .await
         .is_some());
