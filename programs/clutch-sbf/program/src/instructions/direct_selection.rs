@@ -15,7 +15,7 @@ use crate::instructions::genesis::{
     create_pda_account, read_rent, require_creatable, require_system_program,
 };
 use crate::instructions::orders_batch::settlement::{
-    apply_entitled_direct_slice, EntitledDirectSlicePlan,
+    apply_entitled_slice_consumption, EntitledSliceConsumptionPlan,
 };
 use crate::seeds;
 use clutch_batch::relation_v1::FrozenPolicyV1;
@@ -926,18 +926,27 @@ fn execute_settlement(
         .cash_atoms
         .checked_add(facts.consideration_atoms)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    let buyer_reserved_release = buy_reservation.remaining_cash_atoms;
-    apply_entitled_direct_slice(
+    /* The V2 direct settle is one whole fill of both ends in one instruction,
+     * so its per-order ledger is the degenerate one: each end is entitled to
+     * exactly this quantity and this slice completes it.  Stamping it here
+     * keeps the shared apply's `initial = consumed + remaining + released`
+     * invariant exact on this plane too. */
+    let buyer_release_atoms = buy_reservation.remaining_cash_atoms - facts.consideration_atoms;
+    buy_reservation.entitled_units = facts.quantity;
+    sell_reservation.entitled_units = facts.quantity;
+    apply_entitled_slice_consumption(
         &mut buyer,
         &mut seller,
         &mut buy_reservation,
         &mut sell_reservation,
         &mut receipt,
-        EntitledDirectSlicePlan {
+        EntitledSliceConsumptionPlan {
             outcome: facts.outcome,
             quantity: facts.quantity,
             consideration_atoms: facts.consideration_atoms,
-            buyer_reserved_release,
+            buyer_completes: true,
+            buyer_release_atoms,
+            seller_completes: true,
             // The V2 sell envelope holds exactly the transferred quantity,
             // so the seller-remainder leg is structurally zero here.
             seller_remainder: 0,

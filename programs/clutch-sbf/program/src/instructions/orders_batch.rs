@@ -1531,10 +1531,12 @@ fn validate_direct_submission_source_addresses(
 /// the entitlement freeze (tags 58-59) against the complete digest-verified
 /// frozen page set, so consumption presents no page and no feed — the receipt
 /// is the one-shot latch and both `ENTITLED` reservations carry the exact
-/// frozen envelope.  The seven-account shape consumes one single-Egg direct
-/// slice; a longer list is the portfolio full-pair shape and dispatches to
-/// [`entitlement::settle_portfolio_pair`].  Unentitled and general paths keep
-/// refusing honestly.
+/// frozen envelope and the cumulative per-order ledger.  The seven-account
+/// shape is now the **universal per-slice consumer**: one slice of any
+/// entitled pair, single or portfolio, completing either end independently
+/// when its stamped total is reached.  A longer list is the atomic portfolio
+/// full-pair shape and dispatches to [`entitlement::settle_portfolio_pair`].
+/// Unentitled and general paths keep refusing honestly.
 #[inline(never)]
 fn settle_page(
     program_id: &Pubkey,
@@ -1582,7 +1584,7 @@ fn settle_page(
         ClutchError::MismatchedState,
     )?;
 
-    let plan = settlement::prepare_entitled_direct_slice(&settlement::EntitledDirectSliceInput {
+    let plan = settlement::prepare_entitled_slice_consumption(&settlement::EntitledSliceConsumptionInput {
         epoch: &epoch,
         candidate: &candidate,
         buyer_position: &buyer_position,
@@ -1591,7 +1593,7 @@ fn settle_page(
         seller_reservation: &seller_reservation,
         receipt: &receipt,
     })?;
-    settlement::apply_entitled_direct_slice(
+    settlement::apply_entitled_slice_consumption(
         &mut buyer_position,
         &mut seller_position,
         &mut buyer_reservation,

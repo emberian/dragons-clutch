@@ -6,15 +6,19 @@
 //! entitlement freeze (58-59) creates the per-slice
 //! [`SettlementReceiptAccount`] entitlements from the SELECTED candidate's
 //! feed against the complete digest-verified page set, flipping both
-//! referenced reservations `ACTIVE → ENTITLED`.  Consumption therefore no
-//! longer re-derives page provenance: [`prepare_entitled_direct_slice`]
-//! consumes one entitled receipt against its two `ENTITLED` single-Egg
-//! reservations — the receipt is the one-shot latch, the reservations carry
-//! the exact frozen envelope, and every economic move is the V2 seam's exact
-//! math (full fill, zero fee, exactly divisible consideration) generalized to
-//! any frozen general book.  Portfolio full pairs consume through
+//! referenced reservations `ACTIVE → ENTITLED` and stamping each with its
+//! whole order's entitled total.  Consumption therefore no longer re-derives
+//! page provenance: [`prepare_entitled_slice_consumption`] consumes one
+//! entitled receipt against its two stamped `ENTITLED` reservations — the
+//! receipt is the one-shot latch, the reservations carry the exact frozen
+//! envelope *and* the cumulative per-order ledger, and every economic move is
+//! the V2 seam's exact math (zero fee, exactly divisible consideration)
+//! generalized from "full one-to-one fills only" to per-slice consumption with
+//! per-order completion.  A full fill is now the one-slice special case.
+//! Exclusive portfolio full pairs keep consuming atomically through
 //! `clutch_solana_layout::portfolio_settlement::{prepare,apply}_full_pair` in
-//! the account-plane wrapper, not here.
+//! the account-plane wrapper, not here; their reservations carry no ledger and
+//! this seam refuses them.
 //!
 //! [`verify_preflight`] is the historical byte-level preflight kept compiled
 //! and tested: it binds one submitted candidate feed, one checkpoint header,
@@ -448,42 +452,50 @@ fn validate_submission_reservation(
 /* Generalized entitled consumption seam (T2-8)                              */
 /* ------------------------------------------------------------------------ */
 
-/// The exact post-state scalars for one entitled direct slice.
+/// The exact post-state scalars for consuming one entitled slice.
 ///
-/// This deliberately represents only a full, direct, one-to-one fill between
-/// two single-Egg orders.  No field can describe a partial slice, a portfolio
-/// leg (those consume through the layout crate's full-pair seam), a virtual
-/// leg, a fee, or a rounded consideration, so those cases cannot drift into
-/// the implementation by an unchecked branch.
+/// One slice, not one order: both ends carry a cumulative per-order ledger, so
+/// a slice moves its own quantity and *completes* an end only when that end's
+/// `consumed_units` reaches its stamped `entitled_units`.  Completion is
+/// decided independently per end, which is what lets a buy finish while its
+/// counterparty still has slices outstanding.  No field can describe a virtual
+/// leg, a fee, or a rounded consideration, so those cannot drift in by an
+/// unchecked branch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::instructions) struct EntitledDirectSlicePlan {
+pub(in crate::instructions) struct EntitledSliceConsumptionPlan {
     /// Shared Egg outcome.
     pub(in crate::instructions) outcome: u8,
     /// Exact Egg quantity transferred from the sell reservation to the buyer.
     pub(in crate::instructions) quantity: u64,
     /// Exact collateral atoms transferred from buyer cash to seller cash.
     pub(in crate::instructions) consideration_atoms: u64,
-    /// Buy reservation envelope released from the Position's reserved subset.
+    /// Whether this slice is the buy end's last: `consumed + quantity` reaches
+    /// the stamped total.
+    pub(in crate::instructions) buyer_completes: bool,
+    /// Buy envelope released *above* the consideration, at completion only.
     ///
-    /// The buyer's unspent `release - consideration` turns back into free
-    /// cash implicitly, which is the buyer-side price-improvement refund.
-    pub(in crate::instructions) buyer_reserved_release: u64,
+    /// The buyer's unspent remainder turns back into free cash implicitly:
+    /// price improvement and the unfilled refund in one number, paid once.
+    pub(in crate::instructions) buyer_release_atoms: u64,
+    /// Whether this slice is the sell end's last.
+    pub(in crate::instructions) seller_completes: bool,
     /// Seller Egg atoms above the transferred quantity, refunded to the
-    /// seller's Position — the V3 Settle precedent's seller-remainder leg
-    /// (structurally zero for a full-fill single, stated as the formula).
+    /// seller's Position at completion — the V3 Settle precedent's
+    /// seller-remainder leg, now the unfilled refund of a partial sell.
     pub(in crate::instructions) seller_remainder: u64,
 }
 
-/// Immutable inputs to one entitled direct-slice settlement.
+/// Immutable inputs to one entitled slice consumption.
 ///
 /// No page and no feed: the entitlement freeze (tags 58-59) already verified
 /// this receipt's slice against the complete digest-verified frozen page set
-/// — full fills, one slice per single order, price inside both limits, exact
-/// divisibility — and stamped both reservations `ENTITLED`.  What remains
-/// here is the exact one-shot consumption: the receipt is the latch, the
-/// reservations carry the frozen envelope, and every economic move is
-/// checked against them.
-pub(super) struct EntitledDirectSliceInput<'a> {
+/// — real orders on both ends, the per-order totals equal to the verified
+/// fills, price inside the per-outcome limits, exact divisibility — and
+/// stamped both reservations `ENTITLED` with their whole orders' totals.  What
+/// remains here is the exact one-shot consumption of this one slice: the
+/// receipt is the latch, the reservations carry the frozen envelope and the
+/// cumulative ledger, and every economic move is checked against them.
+pub(super) struct EntitledSliceConsumptionInput<'a> {
     pub epoch: &'a EpochAccount,
     pub candidate: &'a CandidateRecord,
     pub buyer_position: &'a PositionAccount,
@@ -493,16 +505,17 @@ pub(super) struct EntitledDirectSliceInput<'a> {
     pub receipt: &'a SettlementReceiptAccount,
 }
 
-/// Verify one already-selected, already-entitled direct slice.
+/// Verify one already-selected, already-entitled slice consumption.
 ///
 /// The authority chain is CLEARED epoch -> SELECTED candidate -> entitled
-/// receipt -> two exact `ENTITLED` reservations.  This function writes
+/// receipt -> two stamped `ENTITLED` reservations.  This function writes
 /// nothing and is therefore the atomic precondition for
-/// [`apply_entitled_direct_slice`].
+/// [`apply_entitled_slice_consumption`].  Every fallible step happens here;
+/// the apply is total.
 #[inline(never)]
-pub(super) fn prepare_entitled_direct_slice(
-    input: &EntitledDirectSliceInput<'_>,
-) -> Outcome<EntitledDirectSlicePlan> {
+pub(super) fn prepare_entitled_slice_consumption(
+    input: &EntitledSliceConsumptionInput<'_>,
+) -> Outcome<EntitledSliceConsumptionPlan> {
     input.epoch.validate()?;
     input.candidate.validate()?;
     /* The exact live-cardinality half of `binds_epoch` was discharged at the
@@ -575,29 +588,69 @@ pub(super) fn prepare_entitled_direct_slice(
         ClutchError::AuthorizationUnavailable,
     )?;
 
+    /* The per-order ledger bound, both ends: this slice's quantity must fit
+     * inside what is left of each end's stamped entitled total, and reaching
+     * that total is exactly completion. */
+    let buyer_consumed = input
+        .buyer_reservation
+        .consumed_units
+        .checked_add(input.receipt.quantity)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let seller_consumed = input
+        .seller_reservation
+        .consumed_units
+        .checked_add(input.receipt.quantity)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        buyer_consumed <= input.buyer_reservation.entitled_units
+            && seller_consumed <= input.seller_reservation.entitled_units,
+        ClutchError::AggregateClosureMismatch,
+    )?;
+    let buyer_completes = buyer_consumed == input.buyer_reservation.entitled_units;
+    let seller_completes = seller_consumed == input.seller_reservation.entitled_units;
+
     // The buy envelope is cash-only and must cover the consideration; the
-    // sell envelope holds Egg on exactly the receipt's outcome and nothing
-    // stray, and its atoms above the transferred quantity refund to the
-    // seller (the V3 Settle precedent's remainder leg).
+    // sell envelope must hold at least the transferred quantity on this
+    // receipt's outcome.
     require(
         input.buyer_reservation.remaining_internal == [0; MAX_OUTCOMES]
             && input.buyer_reservation.remaining_cash_atoms >= consideration_atoms
-            && input.seller_reservation.remaining_cash_atoms == 0,
+            && input.seller_reservation.remaining_cash_atoms == 0
+            && input.seller_reservation.remaining_internal[outcome] >= input.receipt.quantity,
         ClutchError::MismatchedState,
     )?;
-    let mut stray = 0usize;
-    while stray < MAX_OUTCOMES {
-        require(
-            stray == outcome || input.seller_reservation.remaining_internal[stray] == 0,
-            ClutchError::MismatchedState,
-        )?;
-        stray += 1;
+    /* A single-Egg sell holds exactly one compartment, and a completing sell
+     * of any family must have drained every *other* compartment already: the
+     * refund this slice pays is the whole remaining envelope, and it is paid
+     * on this receipt's outcome.  A residue on another compartment at
+     * completion is refused rather than stranded — under the frozen
+     * `StrictWholeOrder` portfolio policy it cannot arise, and stating it is
+     * how it stays that way. */
+    if input.seller_reservation.order_kind == ORDER_KIND_SINGLE || seller_completes {
+        let mut stray = 0usize;
+        while stray < MAX_OUTCOMES {
+            require(
+                stray == outcome || input.seller_reservation.remaining_internal[stray] == 0,
+                ClutchError::MismatchedState,
+            )?;
+            stray += 1;
+        }
     }
-    let seller_remainder = input.seller_reservation.remaining_internal[outcome]
-        .checked_sub(input.receipt.quantity)
-        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+    let seller_remainder = if seller_completes {
+        input.seller_reservation.remaining_internal[outcome] - input.receipt.quantity
+    } else {
+        0
+    };
+    let buyer_release_atoms = if buyer_completes {
+        input.buyer_reservation.remaining_cash_atoms - consideration_atoms
+    } else {
+        0
+    };
 
     // Decide every post-state arithmetic operation before any caller writes.
+    let buyer_reserved_release = consideration_atoms
+        .checked_add(buyer_release_atoms)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
     input
         .buyer_position
         .cash_atoms
@@ -606,7 +659,7 @@ pub(super) fn prepare_entitled_direct_slice(
     input
         .buyer_position
         .reserved_cash_atoms
-        .checked_sub(input.buyer_reservation.remaining_cash_atoms)
+        .checked_sub(buyer_reserved_release)
         .ok_or(Refusal::Adapter(ClutchError::AggregateClosureMismatch))?;
     input.buyer_position.internal[outcome]
         .checked_add(input.receipt.quantity)
@@ -620,18 +673,26 @@ pub(super) fn prepare_entitled_direct_slice(
         .checked_add(seller_remainder)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
 
-    Ok(EntitledDirectSlicePlan {
+    Ok(EntitledSliceConsumptionPlan {
         outcome: input.receipt.outcome,
         quantity: input.receipt.quantity,
         consideration_atoms,
-        buyer_reserved_release: input.buyer_reservation.remaining_cash_atoms,
+        buyer_completes,
+        buyer_release_atoms,
+        seller_completes,
         seller_remainder,
     })
 }
 
-/// One `ENTITLED` single-Egg reservation, bound to its Position, the epoch's
-/// frozen coordinates, and the receipt's order id — untouched envelope and
-/// zero fee, exactly as the entitlement freeze left it.
+/// One stamped `ENTITLED` reservation, bound to its Position, the epoch's
+/// frozen coordinates, and the receipt's order id — zero fee, exactly as the
+/// entitlement freeze left it.
+///
+/// The envelope is deliberately *not* required untouched: an earlier slice of
+/// the same order may already have been consumed, which is the whole point of
+/// the cumulative ledger.  A nonzero `entitled_units` is what marks this a
+/// per-slice entitlement; an unstamped reservation is the atomic portfolio
+/// full pair's, and it consumes through its own seam or not at all.
 #[inline(never)]
 fn validate_entitled_reservation(
     reservation: &ReservationAccount,
@@ -644,7 +705,7 @@ fn validate_entitled_reservation(
     position.validate()?;
     require(
         reservation.state == RESERVATION_STATE_ENTITLED
-            && reservation.order_kind == ORDER_KIND_SINGLE
+            && reservation.entitled_units != 0
             && reservation.side == side
             && reservation.market == epoch.market
             && reservation.epoch == epoch.epoch
@@ -656,45 +717,58 @@ fn validate_entitled_reservation(
             && reservation.policy == epoch.policy
             && reservation.outcome_count == epoch.outcome_count
             && reservation.release_generation == 0
-            && reservation.remaining_cash_atoms == reservation.initial_cash_atoms
-            && reservation.remaining_internal == reservation.initial_internal
             && position.close_state == 0
             && position.market == epoch.market,
         ClutchError::MismatchedState,
     )
 }
 
-/// Commit an already-verified entitled direct slice with no remaining
-/// fallible operation.
+/// Commit an already-verified slice consumption with no remaining fallible
+/// operation.
 ///
-/// Callers must obtain `plan` from [`prepare_entitled_direct_slice`] over
+/// Callers must obtain `plan` from [`prepare_entitled_slice_consumption`] over
 /// these exact prestates.  The account-plane wrapper does that and writes all
 /// five accounts in one Solana instruction; a runtime refusal therefore rolls
-/// the whole transaction back.  Both consumed reservations keep their
-/// `initial_*` envelope intact — the persisted CONSUMED account *is* the
-/// archive of the exact consumed amounts, until `CloseGeneralReservation`
-/// (tag 62) reclaims the archive's rent once its page has closed.
-pub(in crate::instructions) fn apply_entitled_direct_slice(
+/// the whole transaction back.
+///
+/// The invariant this holds, per cash and per outcome, at every transaction
+/// boundary: `initial = consumed-so-far + remaining + released`, with
+/// `released` zero until that end completes.  A completing end pays out its
+/// exact remainder — the buy end's price improvement and unfilled refund in
+/// one number, the sell end's unfilled Egg vector — and takes `CONSUMED`,
+/// which is exactly `consumed_units == entitled_units`.  A consumed
+/// reservation keeps its `initial_*` envelope intact: the persisted account
+/// *is* the archive of the exact consumed amounts, until
+/// `CloseGeneralReservation` (tag 62) reclaims its rent once the page closed.
+pub(in crate::instructions) fn apply_entitled_slice_consumption(
     buyer_position: &mut PositionAccount,
     seller_position: &mut PositionAccount,
     buyer_reservation: &mut ReservationAccount,
     seller_reservation: &mut ReservationAccount,
     receipt: &mut SettlementReceiptAccount,
-    plan: EntitledDirectSlicePlan,
+    plan: EntitledSliceConsumptionPlan,
 ) {
     let outcome = usize::from(plan.outcome);
     buyer_position.cash_atoms -= plan.consideration_atoms;
-    buyer_position.reserved_cash_atoms -= plan.buyer_reserved_release;
+    buyer_position.reserved_cash_atoms -= plan.consideration_atoms + plan.buyer_release_atoms;
     buyer_position.internal[outcome] += plan.quantity;
     seller_position.cash_atoms += plan.consideration_atoms;
     seller_position.internal[outcome] += plan.seller_remainder;
 
-    for reservation in [buyer_reservation, seller_reservation] {
-        reservation.remaining_cash_atoms = 0;
-        reservation.remaining_internal = [0; MAX_OUTCOMES];
-        reservation.release_generation = 0;
-        reservation.state = RESERVATION_STATE_CONSUMED;
+    buyer_reservation.consumed_units += plan.quantity;
+    buyer_reservation.remaining_cash_atoms -=
+        plan.consideration_atoms + plan.buyer_release_atoms;
+    if plan.buyer_completes {
+        buyer_reservation.state = RESERVATION_STATE_CONSUMED;
     }
+
+    seller_reservation.consumed_units += plan.quantity;
+    seller_reservation.remaining_internal[outcome] -= plan.quantity;
+    if plan.seller_completes {
+        seller_reservation.remaining_internal[outcome] -= plan.seller_remainder;
+        seller_reservation.state = RESERVATION_STATE_CONSUMED;
+    }
+
     receipt.settled_quantity = receipt.quantity;
     receipt.consumed_flags =
         RECEIPT_FLAG_BUY_CONSUMED | RECEIPT_FLAG_SELL_CONSUMED | RECEIPT_FLAG_SLICE_EXHAUSTED;
@@ -1122,8 +1196,8 @@ mod tests {
     }
 
     impl DirectFixture {
-        fn input(&self) -> EntitledDirectSliceInput<'_> {
-            EntitledDirectSliceInput {
+        fn input(&self) -> EntitledSliceConsumptionInput<'_> {
+            EntitledSliceConsumptionInput {
                 epoch: &self.epoch,
                 candidate: &self.candidate,
                 buyer_position: &self.buyer_position,
@@ -1268,11 +1342,12 @@ mod tests {
             sell_plan,
         )
         .unwrap();
-        // The entitlement freeze's poststate: the untouched envelope, ENTITLED.
-        buyer_reservation.state = RESERVATION_STATE_ENTITLED;
-        seller_reservation.state = RESERVATION_STATE_ENTITLED;
-        buyer_reservation.validate().unwrap();
-        seller_reservation.validate().unwrap();
+        // The entitlement freeze's poststate: the untouched envelope,
+        // ENTITLED, each end stamped with its whole order's entitled total.
+        // Both orders are wholly filled by one slice here, so the total is
+        // the slice quantity and this one slice completes both ends.
+        buyer_reservation = buyer_reservation.entitled(4).unwrap();
+        seller_reservation = seller_reservation.entitled(4).unwrap();
         let receipt = SettlementReceiptAccount {
             epoch: epoch_id,
             market,
@@ -1467,7 +1542,7 @@ mod tests {
     #[test]
     fn entitled_direct_slice_couples_both_assets_and_releases_residual_once() {
         let mut f = direct_fixture();
-        let plan = prepare_entitled_direct_slice(&f.input()).unwrap();
+        let plan = prepare_entitled_slice_consumption(&f.input()).unwrap();
         assert_eq!(plan.consideration_atoms, 2);
         assert_eq!(plan.seller_remainder, 0);
         let cash_before = f.buyer_position.cash_atoms + f.seller_position.cash_atoms;
@@ -1475,7 +1550,7 @@ mod tests {
             + f.seller_position.internal[0]
             + f.seller_reservation.remaining_internal[0];
         let buyer_initial = f.buyer_reservation.initial_cash_atoms;
-        apply_entitled_direct_slice(
+        apply_entitled_slice_consumption(
             &mut f.buyer_position,
             &mut f.seller_position,
             &mut f.buyer_reservation,
@@ -1511,9 +1586,322 @@ mod tests {
         // Double consumption refuses on the exhausted receipt and the
         // CONSUMED reservations alike.
         assert_eq!(
-            prepare_entitled_direct_slice(&f.input()),
+            prepare_entitled_slice_consumption(&f.input()),
             Err(Refusal::Adapter(ClutchError::MismatchedState))
         );
+    }
+
+    /// A seller of twelve, filled ten across two buyers of six and four.
+    ///
+    /// The whole point of the ledger in one fixture: the sell end survives the
+    /// first consumption `ENTITLED` with a drawn-down envelope, completes on
+    /// the second, and returns its exact two-Egg remainder once.
+    struct PartialFixture {
+        epoch: EpochAccount,
+        candidate: CandidateRecord,
+        seller_position: PositionAccount,
+        seller_reservation: ReservationAccount,
+        buyers: [PositionAccount; 2],
+        buyer_reservations: [ReservationAccount; 2],
+        receipts: [SettlementReceiptAccount; 2],
+    }
+
+    fn partial_fixture() -> PartialFixture {
+        let base = direct_fixture();
+        let epoch = base.epoch;
+        let candidate = base.candidate;
+        let market = epoch.market;
+        let sell_owner = h(0x42);
+
+        let sell = OrderSlot::Single(OrderRecord {
+            owner: sell_owner,
+            order_id: canonical_order_id(3),
+            outcome: 0,
+            side: 1,
+            quantity: 12,
+            limit: 5_000,
+            minimum_fill: 0,
+            flags: 0,
+            generation: 1,
+            expiry_epoch: 7,
+        });
+        let seller_position = PositionAccount {
+            market,
+            owner: sell_owner,
+            generation: 0,
+            internal: [0; MAX_OUTCOMES],
+            cash_atoms: 0,
+            reserved_cash_atoms: 0,
+            stored_bump: 7,
+            close_state: 0,
+        };
+        let seller_reservation = ReservationAccount::active(
+            market,
+            epoch.epoch,
+            sell_owner,
+            sell.order_id(),
+            epoch.price_grid,
+            epoch.terms,
+            epoch.policy,
+            0,
+            sell.generation(),
+            0,
+            9,
+            ReservationPlan::for_order(&sell, 2, 10_000, 0).unwrap(),
+        )
+        .unwrap()
+        // Filled ten of twelve: the stamp is the fill, not the order size.
+        .entitled(10)
+        .unwrap();
+
+        let mut buyers = [seller_position; 2];
+        let mut buyer_reservations = [seller_reservation; 2];
+        let mut receipts = [base.receipt; 2];
+        for (at, quantity) in [(0usize, 6u64), (1, 4)] {
+            let owner = h(0x50 + at as u8);
+            let buy = OrderSlot::Single(OrderRecord {
+                owner,
+                order_id: canonical_order_id(1 + at as u64),
+                outcome: 0,
+                side: 0,
+                quantity,
+                limit: 5_000,
+                minimum_fill: 0,
+                flags: 0,
+                generation: 1,
+                expiry_epoch: 7,
+            });
+            let plan = ReservationPlan::for_order(&buy, 2, 10_000, 0).unwrap();
+            buyers[at] = PositionAccount {
+                market,
+                owner,
+                generation: 0,
+                internal: [0; MAX_OUTCOMES],
+                cash_atoms: 100,
+                reserved_cash_atoms: plan.cash_atoms,
+                stored_bump: 6,
+                close_state: 0,
+            };
+            buyer_reservations[at] = ReservationAccount::active(
+                market,
+                epoch.epoch,
+                owner,
+                buy.order_id(),
+                epoch.price_grid,
+                epoch.terms,
+                epoch.policy,
+                0,
+                buy.generation(),
+                0,
+                8,
+                plan,
+            )
+            .unwrap()
+            .entitled(quantity)
+            .unwrap();
+            receipts[at] = SettlementReceiptAccount {
+                buy_order_id: buy.order_id(),
+                sell_order_id: sell.order_id(),
+                consideration_price_units: u128::from(quantity) * 5_000,
+                quantity,
+                sequence: at as u64 + 1,
+                slice_index: at as u16,
+                ..base.receipt
+            };
+        }
+        PartialFixture {
+            epoch,
+            candidate,
+            seller_position,
+            seller_reservation,
+            buyers,
+            buyer_reservations,
+            receipts,
+        }
+    }
+
+    #[test]
+    fn a_partial_sell_consumes_slice_by_slice_and_returns_its_remainder_once() {
+        let mut f = partial_fixture();
+        let initial_internal = f.seller_reservation.initial_internal[0];
+        let initial_cash: u64 = f.buyer_reservations.iter().map(|r| r.initial_cash_atoms).sum();
+        let mut consumed_atoms = 0u64;
+        let mut consumed_units = 0u64;
+
+        for at in 0..2usize {
+            let plan = prepare_entitled_slice_consumption(&EntitledSliceConsumptionInput {
+                epoch: &f.epoch,
+                candidate: &f.candidate,
+                buyer_position: &f.buyers[at],
+                seller_position: &f.seller_position,
+                buyer_reservation: &f.buyer_reservations[at],
+                seller_reservation: &f.seller_reservation,
+                receipt: &f.receipts[at],
+            })
+            .unwrap();
+            // Every buy end completes on its own single slice; the sell end
+            // only on the second.
+            assert!(plan.buyer_completes);
+            assert_eq!(plan.seller_completes, at == 1);
+            assert_eq!(plan.seller_remainder, if at == 1 { 2 } else { 0 });
+            assert_eq!(plan.buyer_release_atoms, 0);
+            apply_entitled_slice_consumption(
+                &mut f.buyers[at],
+                &mut f.seller_position,
+                &mut f.buyer_reservations[at],
+                &mut f.seller_reservation,
+                &mut f.receipts[at],
+                plan,
+            );
+            f.buyers[at].validate().unwrap();
+            f.seller_position.validate().unwrap();
+            f.buyer_reservations[at].validate().unwrap();
+            f.seller_reservation.validate().unwrap();
+            consumed_atoms += plan.consideration_atoms;
+            consumed_units += plan.quantity;
+
+            // The pinned invariant at this transaction boundary, per outcome:
+            // initial = consumed-so-far + remaining + released.
+            let released = if plan.seller_completes { 2 } else { 0 };
+            assert_eq!(
+                initial_internal,
+                consumed_units + f.seller_reservation.remaining_internal[0] + released
+            );
+            assert_eq!(f.seller_reservation.consumed_units, consumed_units);
+            assert_eq!(
+                f.seller_reservation.state,
+                if at == 1 {
+                    RESERVATION_STATE_CONSUMED
+                } else {
+                    RESERVATION_STATE_ENTITLED
+                }
+            );
+            assert_eq!(
+                f.buyer_reservations[at].state,
+                RESERVATION_STATE_CONSUMED
+            );
+        }
+
+        // Ten Eggs went to the buyers, two came back, twelve are accounted
+        // for; the seller's cash is exactly the two considerations.
+        assert_eq!(f.buyers[0].internal[0], 6);
+        assert_eq!(f.buyers[1].internal[0], 4);
+        assert_eq!(f.seller_position.internal[0], 2);
+        assert_eq!(consumed_units, 10);
+        assert_eq!(consumed_atoms, 5);
+        assert_eq!(f.seller_position.cash_atoms, 5);
+        assert_eq!(f.buyers[0].cash_atoms + f.buyers[1].cash_atoms, 195);
+        assert_eq!(initial_cash, 5);
+        assert!(f.seller_reservation.remaining_is_zero());
+        for buyer in &f.buyers {
+            assert_eq!(buyer.reserved_cash_atoms, 0);
+        }
+        // Replay on the exhausted receipts refuses.
+        assert_eq!(
+            prepare_entitled_slice_consumption(&EntitledSliceConsumptionInput {
+                epoch: &f.epoch,
+                candidate: &f.candidate,
+                buyer_position: &f.buyers[0],
+                seller_position: &f.seller_position,
+                buyer_reservation: &f.buyer_reservations[0],
+                seller_reservation: &f.seller_reservation,
+                receipt: &f.receipts[0],
+            }),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+    }
+
+    #[test]
+    fn a_forged_stamp_cannot_widen_a_partial_orders_admission() {
+        // The sell end is stamped ten.  A forged stamp of twelve — the order
+        // size rather than the fill — would let the two receipts consume the
+        // whole envelope with no remainder returned.  Both the codec and the
+        // seam refuse the ledger it would need.
+        let mut f = partial_fixture();
+        let mut forged = f.seller_reservation;
+        forged.entitled_units = 12;
+        // The forgery is internally consistent bytes; what refuses it is the
+        // entitlement seam's recomputation, and here the closure: consuming
+        // the two entitled slices can never reach the forged total, so the
+        // sell end can never complete and its remainder never returns.
+        assert_eq!(forged.validate(), Ok(()));
+        f.seller_reservation = forged;
+        for at in 0..2usize {
+            let plan = prepare_entitled_slice_consumption(&EntitledSliceConsumptionInput {
+                epoch: &f.epoch,
+                candidate: &f.candidate,
+                buyer_position: &f.buyers[at],
+                seller_position: &f.seller_position,
+                buyer_reservation: &f.buyer_reservations[at],
+                seller_reservation: &f.seller_reservation,
+                receipt: &f.receipts[at],
+            })
+            .unwrap();
+            assert!(!plan.seller_completes);
+            assert_eq!(plan.seller_remainder, 0);
+            apply_entitled_slice_consumption(
+                &mut f.buyers[at],
+                &mut f.seller_position,
+                &mut f.buyer_reservations[at],
+                &mut f.seller_reservation,
+                &mut f.receipts[at],
+                plan,
+            );
+        }
+        // The forged stamp strands the remainder inside the reservation
+        // rather than paying it out: the invariant holds, and the account is
+        // still ENTITLED with two Eggs it can never release.
+        assert_eq!(f.seller_reservation.state, RESERVATION_STATE_ENTITLED);
+        assert_eq!(f.seller_reservation.remaining_internal[0], 2);
+        assert_eq!(f.seller_position.internal[0], 0);
+        assert_eq!(f.seller_reservation.consumed_units, 10);
+    }
+
+    #[test]
+    fn a_slice_consumed_before_its_sibling_is_entitled_leaves_the_sibling_consumable() {
+        // Out-of-order: slice one is consumed while slice two has no receipt
+        // yet.  The sell end's envelope is drawn down, so the later
+        // entitlement touch must not require an untouched envelope — and the
+        // later consumption must still work off the same stamp.
+        let mut f = partial_fixture();
+        let plan = prepare_entitled_slice_consumption(&EntitledSliceConsumptionInput {
+            epoch: &f.epoch,
+            candidate: &f.candidate,
+            buyer_position: &f.buyers[0],
+            seller_position: &f.seller_position,
+            buyer_reservation: &f.buyer_reservations[0],
+            seller_reservation: &f.seller_reservation,
+            receipt: &f.receipts[0],
+        })
+        .unwrap();
+        apply_entitled_slice_consumption(
+            &mut f.buyers[0],
+            &mut f.seller_position,
+            &mut f.buyer_reservations[0],
+            &mut f.seller_reservation,
+            &mut f.receipts[0],
+            plan,
+        );
+        assert_ne!(
+            f.seller_reservation.remaining_internal,
+            f.seller_reservation.initial_internal
+        );
+        // The stamp is unchanged, so the later slice's entitlement touch
+        // re-derives it and agrees.
+        assert_eq!(f.seller_reservation.requires_stamp(10), Ok(()));
+        // ...and the later slice consumes off the drawn-down envelope.
+        let plan = prepare_entitled_slice_consumption(&EntitledSliceConsumptionInput {
+            epoch: &f.epoch,
+            candidate: &f.candidate,
+            buyer_position: &f.buyers[1],
+            seller_position: &f.seller_position,
+            buyer_reservation: &f.buyer_reservations[1],
+            seller_reservation: &f.seller_reservation,
+            receipt: &f.receipts[1],
+        })
+        .unwrap();
+        assert!(plan.seller_completes);
+        assert_eq!(plan.seller_remainder, 2);
     }
 
     #[test]
@@ -1524,20 +1912,33 @@ mod tests {
         stale.candidate.score_digest = Hash32::ZERO;
         let before = stale.buyer_position;
         assert_eq!(
-            prepare_entitled_direct_slice(&stale.input()),
+            prepare_entitled_slice_consumption(&stale.input()),
             Err(Refusal::Adapter(ClutchError::NotActive))
         );
         assert_eq!(stale.buyer_position, before);
 
-        // A reservation the freeze never entitled cannot be consumed.
+        // A reservation the freeze never entitled cannot be consumed: it
+        // carries no stamp, so it is ACTIVE and the seam refuses it.
         let mut unentitled = direct_fixture();
         unentitled.buyer_reservation.state = RESERVATION_STATE_ACTIVE;
+        unentitled.buyer_reservation.entitled_units = 0;
+        unentitled.buyer_reservation.validate().unwrap();
         let before = unentitled.buyer_reservation;
         assert_eq!(
-            prepare_entitled_direct_slice(&unentitled.input()),
+            prepare_entitled_slice_consumption(&unentitled.input()),
             Err(Refusal::Adapter(ClutchError::MismatchedState))
         );
         assert_eq!(unentitled.buyer_reservation, before);
+
+        // An ENTITLED reservation with no stamp is the atomic portfolio full
+        // pair's; this seam is not its consumer.
+        let mut unstamped = direct_fixture();
+        unstamped.buyer_reservation.entitled_units = 0;
+        unstamped.buyer_reservation.validate().unwrap();
+        assert_eq!(
+            prepare_entitled_slice_consumption(&unstamped.input()),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
 
         // A receipt naming an outcome the sell envelope does not hold refuses
         // on the stray-compartment sweep.
@@ -1545,19 +1946,20 @@ mod tests {
         cross.receipt.outcome = 1;
         let before = cross.seller_reservation;
         assert_eq!(
-            prepare_entitled_direct_slice(&cross.input()),
+            prepare_entitled_slice_consumption(&cross.input()),
             Err(Refusal::Adapter(ClutchError::MismatchedState))
         );
         assert_eq!(cross.seller_reservation, before);
 
-        // A receipt claiming more than the entitled envelope refuses.
+        // A receipt claiming more than the stamped total refuses on the
+        // ledger bound, before any envelope is touched.
         let mut over = direct_fixture();
         over.receipt.quantity = 6;
         over.receipt.consideration_price_units = 30_000;
         let before = over.receipt;
         assert_eq!(
-            prepare_entitled_direct_slice(&over.input()),
-            Err(Refusal::Adapter(ClutchError::MismatchedState))
+            prepare_entitled_slice_consumption(&over.input()),
+            Err(Refusal::Adapter(ClutchError::AggregateClosureMismatch))
         );
         assert_eq!(over.receipt, before);
 
@@ -1568,7 +1970,7 @@ mod tests {
         fee.buyer_position.reserved_cash_atoms = 3;
         fee.buyer_reservation.validate().unwrap();
         assert_eq!(
-            prepare_entitled_direct_slice(&fee.input()),
+            prepare_entitled_slice_consumption(&fee.input()),
             Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
         );
     }
