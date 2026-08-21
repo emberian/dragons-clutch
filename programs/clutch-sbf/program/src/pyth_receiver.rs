@@ -91,7 +91,7 @@ const _: () = assert!(OFFSET_POSTED_SLOT + 8 == OFFSET_TRAILING_PAD);
 /// Deliberately a module-local vocabulary in the style of
 /// [`crate::source::SourceError`] and [`crate::loader_state::LoaderStateError`].
 /// Projection onto stable numeric codes is
-/// [`crate::instructions::source_ingest_v2`]'s job, and the R2 plan's P0.8
+/// `instructions::source_ingest`'s job, and the R2 plan's P0.8
 /// error-granularity decision owns how coarse that projection is allowed to be.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PythReceiverError {

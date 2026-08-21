@@ -102,15 +102,16 @@ pub struct PullReleaseV2 {
 /// ## Why it admits nothing anywhere
 ///
 /// Value admission through this release requires an executable, loader-owned
-/// account to exist at [`RECEIVER_PROGRAM`]. That address is
+/// account to exist at [`fixture::RECEIVER_PROGRAM`]. That address is
 /// `find_program_address(&[b"dc-r2-fixture-receiver"], &UPGRADEABLE_LOADER_ID)`
 /// — a program-derived address, hence off the ed25519 curve, hence no private
 /// key exists for it. Deploying a program requires the program account to sign
 /// its own `DeployWithMaxDataLen`, so no party — including us — can create an
 /// executable account there on any cluster. The remaining two addresses follow
 /// the *real* derivations a genuine deployment would use
-/// ([`RECEIVER_PROGRAMDATA`] is the loader's own ProgramData derivation,
-/// [`RECEIVER_CONFIG`] the receiver-owned `config` PDA), so the fixture is
+/// ([`fixture::RECEIVER_PROGRAMDATA`] is the loader's own ProgramData
+/// derivation, [`fixture::RECEIVER_CONFIG`] the receiver-owned `config` PDA), so
+/// the fixture is
 /// structurally a deployment rather than a stand-in for one.
 ///
 /// A local bank and a local validator can place arbitrary accounts at
