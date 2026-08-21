@@ -1034,8 +1034,11 @@ index. Its payoff `a − b N_j(x) ≥ 0` everywhere; so its price
 ```
 
 The exact maxima of the open-clamped uniform basis, computed exactly (rational
-arithmetic over the per-span polynomials of every admitted `(d, n)`; the tool
-is reproduced in the falsifier corpus):
+arithmetic over the per-span polynomials of every admitted `(d, n)`; the
+generator is committed at
+`crates/clutch-batch/fixtures/generate_moment_cone_tables.py`, and the entries
+are decide-checked against the model basis at every integer resolved value of
+two grids in `lean/DragonsClutch/MomentCone.lean`):
 
 ```text
 d = 2:  n = 3:      [1, 1/2, 1]

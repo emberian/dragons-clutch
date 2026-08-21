@@ -1324,7 +1324,8 @@ impl BasisDescriptorV1 {
 /// `max_x N_j(x)` for the open-clamped uniform basis, as an exact rational
 /// `(num, den)` upper bound in lowest terms with `num/den >= max N_j`.
 ///
-/// Derivation and the exact maxima are `DUAL_IS_THE_MEASURE.md` §7.6.5.  At
+/// Derivation and the exact maxima are `DUAL_IS_THE_MEASURE.md` §7.6.5; the
+/// generator is `fixtures/generate_moment_cone_tables.py`.  At
 /// degree two every maximum is rational and this is exact.  At degree three the
 /// two positions next to a clamped end have irrational maxima
 /// `(18 + 8*sqrt 2)/49` and `(33 + 18*sqrt 2)/98`; `3/5` bounds both, by
