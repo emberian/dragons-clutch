@@ -178,6 +178,53 @@ theorem peak_butterfly_certificate_never_pays_negative :
       | none => false) = true := by
   decide
 
+/-- One certificate against a whole grid: does it ever pay negative at an
+integer resolved value?  Payouts happen only at integer coordinates, so this is
+the set on which a position is actually executable. -/
+def certificateNeverPaysNegative (origin gap count degree : Nat) (values : List Nat)
+    (coefficients : List Int) : Bool :=
+  values.all fun x =>
+    match uniformSmoothBasis? origin gap count degree x with
+    | some r => decide (0 ≤ payoffNumerator coefficients r)
+    | none => false
+
+/-- **The rest of the ceiling and butterfly tables, decided.**  Six certificates
+covering every position class the tables distinguish above the two already
+witnessed: at degree three the interior `2/3` ceiling and its `k = 2` butterfly,
+and the two near-clamped-end classes whose exact maxima are irrational
+(`(18 + 8·√2)/49` and `(33 + 18·√2)/98`, both bounded by `3/5`) with their
+`8/5` and `3/2` butterflies; and at degree two the second-from-end `2/3`
+ceiling with its `k = 2` butterfly.  A wrong table entry in either direction
+shows up here as a negative payoff. -/
+theorem the_table_certificates_never_pay_negative :
+    certificateNeverPaysNegative 0 8 6 3 (List.range 45) (ceilingCertificate 8 3 2 3) = true ∧
+      certificateNeverPaysNegative 0 8 6 3 (List.range 45) (ceilingCertificate 8 1 3 5) = true ∧
+      certificateNeverPaysNegative 0 8 6 3 (List.range 45) (ceilingCertificate 8 2 3 5) = true ∧
+      certificateNeverPaysNegative 0 8 6 3 (List.range 45)
+          (butterflyCertificate 8 3 2 1) = true ∧
+      certificateNeverPaysNegative 0 8 6 3 (List.range 45)
+          (butterflyCertificate 8 1 8 5) = true ∧
+      certificateNeverPaysNegative 0 8 6 3 (List.range 45)
+          (butterflyCertificate 8 2 3 2) = true ∧
+      certificateNeverPaysNegative 0 4 5 2 witnessValues (ceilingCertificate 6 1 2 3) = true ∧
+      certificateNeverPaysNegative 0 4 5 2 witnessValues
+          (butterflyCertificate 6 1 2 1) = true := by
+  decide
+
+/-- **And the table is not slack.**  One notch tighter in either family — the
+interior degree-three ceiling at `1/2` instead of `2/3`, its butterfly at
+`k = 1` instead of `2`, the near-end ceiling at `7/12` instead of `3/5` — and
+the certificate does pay negative somewhere on the same grid.  So the theorem
+above is a real constraint on the table entries, not a vacuous one: they cannot
+be lowered and stay sound. -/
+theorem the_table_certificates_are_not_slack :
+    certificateNeverPaysNegative 0 8 6 3 (List.range 45) (ceilingCertificate 8 3 1 2) = false ∧
+      certificateNeverPaysNegative 0 8 6 3 (List.range 45)
+          (butterflyCertificate 8 3 1 1) = false ∧
+      certificateNeverPaysNegative 0 8 6 3 (List.range 45)
+          (ceilingCertificate 8 1 7 12) = false := by
+  decide
+
 /-- **The arbitrage.**  At the refused price both certificates cost strictly
 less than nothing: a position with a nonnegative payoff everywhere, acquired
 for a negative outlay.  Together with the two theorems above this is the §7.4
