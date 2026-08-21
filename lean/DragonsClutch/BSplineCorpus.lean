@@ -331,8 +331,13 @@ restatement — a wrong `span`, pane, or expansion would show up here while
 leaving every hand-derived theorem in `BSpline.lean` untouched. -/
 
 /-- Scale a common-denominator vector without changing the rational value.
-Floors and remainders both scale, so `refinementCanonicalWeights` is invariant
-under this; it is used below only to state agreement, never to compute. -/
+
+Used only to *state* the degree-three agreement below, never to compute: the
+generic evaluator and the hand derivation reach the same rational vector over
+different common denominators, and this names the relation between the two
+representations.  That `refinementCanonicalWeights` is invariant under it is
+believed and observed on the corpus rows, but is not proved here and nothing in
+this file depends on it. -/
 def RationalBasis.scale (k : Nat) (r : RationalBasis) : RationalBasis :=
   { denominator := k * r.denominator, numerators := r.numerators.map (k * ·) }
 
