@@ -106,6 +106,8 @@ stop_validator() {
 
 cleanup() {
   stop_keeper
+  # Belt and braces: never leave a keeper behind for the next run to trip over.
+  pkill -9 -f "clutch-keeper run --url $url" 2>/dev/null || true
   stop_validator
   # The only secrets this gate creates are these exact files in the
   # mktemp-owned directory.  Unlink them rather than moving them to Trash.
@@ -390,7 +392,11 @@ keeper prime --url "$url" --plan "$plan" "${owner_keys[@]}" --steps 21-27 \
 
 echo
 echo "== keeper #1: the only driver from here (freeze onward) =="
-keeper run "${keeper_common[@]}" --owner "$keys/actor.json" --poll-ms 700 \
+# Launched as the binary itself, not through the `keeper` shell function: a
+# function invoked in the background costs a subshell, `$!` would be that
+# subshell, and the SIGKILL would orphan the keeper underneath it -- the same
+# class of mistake as running it through `cargo run`, one level down.
+"$keeper_bin" run "${keeper_common[@]}" --owner "$keys/actor.json" --poll-ms 700 \
   >"$log/keeper-1.log" 2>&1 &
 keeper_pid=$!
 
@@ -437,7 +443,7 @@ echo "  clear-work status at the kill: $clear_work_status (2 would mean COMPLETE
 
 echo
 echo "== keeper #2: a fresh process, no state but the chain =="
-keeper run "${keeper_common[@]}" --owner "$keys/actor.json" --poll-ms 700 \
+"$keeper_bin" run "${keeper_common[@]}" --owner "$keys/actor.json" --poll-ms 700 \
   --exit-when-blocked >"$log/keeper-2.log" 2>&1 &
 keeper_pid=$!
 wait_for_log "$log/keeper-2.log" 'keeper stop reason=lifecycle-complete' \
@@ -458,9 +464,14 @@ echo "== the action set: every permissionless step must appear =="
 # funding ledger, so it records no payer and its close refuses forever.  That
 # is the ratified `RENT.ACCOUNT_REFUND_UNOWNED` tolerance, and it is asserted
 # as a recorded residual below rather than papered over here.
+# `CompleteClearWork` is deliberately NOT here either, and for a reason worth
+# stating: the SIGKILL can land between a transaction's confirmation and the
+# keeper's log line for it.  That IS the crash this gate injects, so demanding
+# a log line for the step nearest the kill would be demanding that the crash
+# not happen.  Its evidence is asserted on chain below instead.
 required=(
   FreezeEpoch InitClearWork+Grow AdvanceClearWork AdvanceClearSlices
-  CompleteClearWork FinalizeSelection FreezeEntitlement EntitleSlice
+  FinalizeSelection FreezeEntitlement EntitleSlice
   SettlePage ReleaseTerminalReservation CloseGeneralReceipt
   CloseGeneralPage CloseGeneralReservation CloseGeneralPot
   CloseGeneralClearWork CloseGeneralEpoch
@@ -500,6 +511,26 @@ done
 for rank in 1 2 3 4 5 6; do
   require_absent "reservation $rank" "$(role_address "general.reservation-$rank")"
 done
+
+echo
+echo "== CompleteClearWork, evidenced on chain rather than in a log =="
+# `CandidateRecord::status` is the third byte from the end of its 337-byte
+# image.  Only `CompleteClearWork` ever writes VERIFIED, and only
+# `FinalizeSelection` promotes VERIFIED to SELECTED (2), so a SELECTED record
+# is proof both ran -- whichever keeper process happened to emit them, and
+# whether or not the kill ate the log line.
+candidate_status="$(account_field "$(role_address general.candidate)" 334 1 u8)"
+if [ "$candidate_status" != "2" ]; then
+  echo "FAIL: the candidate record is status $candidate_status, not SELECTED(2);"
+  echo "      CompleteClearWork and FinalizeSelection did not both land"
+  exit 1
+fi
+echo "  candidate record is SELECTED(2): CompleteClearWork ran and selection promoted it"
+if grep -q 'action=CompleteClearWork ' "$log/keeper-all.log"; then
+  echo "  (its log line survived the kill this run)"
+else
+  echo "  (its log line did not survive the kill this run, which is the crash itself)"
+fi
 
 echo
 echo "== the recorded residual: the unledgered candidate pair =="

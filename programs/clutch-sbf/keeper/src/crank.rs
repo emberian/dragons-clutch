@@ -625,8 +625,26 @@ impl Keeper {
         let selected = window.selected_candidate;
         let cleared = epoch.phase == EPOCH_PHASE_CLEARED && selected != Hash32::ZERO;
 
+        // The entitlement phase is open exactly while some reservation still
+        // owns its envelope: entitlement is the ACTIVE to ENTITLED move and
+        // consumption is the ENTITLED to CONSUMED one, so once no reservation
+        // is in either state there is nothing left to freeze a pot for.
+        //
+        // Without this the pot's own close reopens the question: the DAG
+        // removes the pot, the next poll finds it absent, and a keeper that
+        // read absence as "the entitlement freeze is due" would recreate it
+        // forever.  A page cannot close while any reservation is ACTIVE or
+        // ENTITLED, and the pot cannot close before every page, so this
+        // condition is false by the time the pot is ever removed.
+        let entitlement_open = self.reservation_archives()?.iter().any(|(_, value)| {
+            matches!(
+                value.state,
+                RESERVATION_STATE_ACTIVE | RESERVATION_STATE_ENTITLED
+            )
+        });
+
         // --- economic close: entitle, then consume -----------------------
-        if cleared {
+        if cleared && entitlement_open {
             if !view.pot_present {
                 return self.freeze_entitlement(selected).map(Step::Act);
             }
@@ -1624,7 +1642,7 @@ impl Keeper {
             order.push(selected);
         }
         for candidate in order {
-            if let Some(act) = self.close_clear_work(candidate, epoch_key, selected)? {
+            if let Some(act) = self.close_clear_work(candidate, epoch_key, selected, epoch)? {
                 return Ok(Some(Step::Act(act)));
             }
             if let Some(act) = self.close_candidate(candidate, epoch_key, selected, epoch)? {
@@ -1944,6 +1962,7 @@ impl Keeper {
         candidate: Hash32,
         epoch_key: [u8; 32],
         selected: Hash32,
+        epoch: &EpochAccount,
     ) -> Result<Option<Box<Act>>, String> {
         let work = self.deriver.clear_work(self.epoch_id, candidate)?;
         if self.rpc.account(&work.address)?.is_none() {
@@ -1954,9 +1973,13 @@ impl Keeper {
         let pot = self.deriver.pot(self.epoch_id)?;
         let record_standing = self.rpc.account(&record.address)?.is_some();
         let pot_present = self.rpc.account(&pot.address)?.is_some();
-        // A standing SELECTED record demands the pot present or every page
-        // absent; presenting the live pot is the cheap proof when it exists.
-        let pot_proof = record_standing && candidate == selected && pot_present;
+        // A standing SELECTED record demands one of two proofs that no
+        // entitlement freeze can still want this checkpoint's verdict: the
+        // live pot (the freeze already ran), or one absence slot per page
+        // (no freeze is reachable at all).  An empty tail is neither, and the
+        // program counts the absence slots, so it earns `AccountCount`.
+        let selected_standing = record_standing && candidate == selected;
+        let pot_proof = selected_standing && pot_present;
         let mut keys = vec![
             epoch_key,
             work.bytes,
@@ -1969,6 +1992,12 @@ impl Keeper {
         if pot_proof {
             keys.push(pot.bytes);
             readonly.push(pot.bytes);
+        } else if selected_standing {
+            for index in 0..epoch.page_count.max(1) {
+                let page = self.deriver.page(self.epoch_id, index)?;
+                keys.push(page.bytes);
+                readonly.push(page.bytes);
+            }
         }
         let spec = TxSpec {
             writable_signers: vec![self.payer],
@@ -1991,7 +2020,11 @@ impl Keeper {
         };
         self.act(
             "CloseGeneralClearWork",
-            format!("candidate={} pot_proof={pot_proof}", short(candidate)),
+            format!(
+                "candidate={} pot_proof={pot_proof} page_absence={}",
+                short(candidate),
+                usize::from(!pot_proof && selected_standing) * usize::from(epoch.page_count.max(1))
+            ),
             quotes::CLOSE_CLEAR_WORK,
             vec![WRONG_PROGRAM_OWNER],
             true,

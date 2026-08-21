@@ -212,24 +212,14 @@ fn run(flags: &Flags) -> Res<()> {
     );
 
     let mut taken = 0_u64;
-    let mut repeats = 0_u32;
-    let mut previous = String::new();
+    let mut recent: Vec<String> = Vec::new();
     let mut idle_reason = String::new();
     let mut blocked_reason = String::new();
 
     // The one action that is not part of the poll ladder: opening the epoch
     // and its page, which only happens when the operator asked for it.
     while let Some(act) = keeper.open_if_absent()? {
-        let key = format!("{}|{}", act.name, act.detail);
-        if key == previous {
-            repeats += 1;
-            if repeats > 3 {
-                return Err(format!("{} made no progress after four attempts", act.name));
-            }
-        } else {
-            repeats = 0;
-            previous = key;
-        }
+        guard_progress(&mut recent, &act)?;
         take(&rpc, &act)?;
         taken += 1;
     }
@@ -272,25 +262,40 @@ fn run(flags: &Flags) -> Res<()> {
                 thread::sleep(poll);
             }
             Step::Act(act) => {
-                let key = format!("{}|{}", act.name, act.detail);
-                if key == previous {
-                    repeats += 1;
-                    if repeats > 3 {
-                        return Err(format!(
-                            "{} ({}) made no progress after four attempts; the keeper refuses to \
-                             spin",
-                            act.name, act.detail
-                        ));
-                    }
-                } else {
-                    repeats = 0;
-                    previous = key;
-                }
+                guard_progress(&mut recent, &act)?;
                 take(&rpc, &act)?;
                 taken += 1;
             }
         }
     }
+}
+
+/// How many recent actions the cycle guard remembers.
+const PROGRESS_WINDOW: usize = 8;
+
+/// Refuse to keep going when the ladder stops making progress.
+///
+/// A repeat counter is not enough: the failure this catches in practice was
+/// two *different* actions alternating -- `FreezeEntitlement` recreating the
+/// pot that `CloseGeneralPot` had just removed -- which never repeats the
+/// same action twice in a row and would spin forever under an equality
+/// check.  Seeing one action twice inside a short window is the signal.
+fn guard_progress(recent: &mut Vec<String>, act: &crank::Act) -> Res<()> {
+    let key = format!("{}|{}", act.name, act.detail);
+    if recent.iter().filter(|seen| **seen == key).count() >= 2 {
+        return Err(format!(
+            "{} ({}) came round for the third time in {PROGRESS_WINDOW} actions; the ladder is \
+             cycling rather than progressing and the keeper refuses to spin. Recent: {}",
+            act.name,
+            act.detail,
+            recent.join(" -> ")
+        ));
+    }
+    recent.push(key);
+    if recent.len() > PROGRESS_WINDOW {
+        recent.remove(0);
+    }
+    Ok(())
 }
 
 /// The program's own log lines, folded into one diagnosable string.
