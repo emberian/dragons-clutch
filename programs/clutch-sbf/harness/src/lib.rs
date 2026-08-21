@@ -8013,6 +8013,32 @@ fn general_tie_digest(
     Hash32::from_bytes(digest.0)
 }
 
+/// One live order's entitled total in Egg atoms.
+///
+/// Exactly what the program's per-slice entitlement seam re-derives from the
+/// digest-verified feed and stamps into `ReservationAccount::entitled_units`:
+/// a single-Egg order's fill is already Egg atoms, and a portfolio order's
+/// fill is lots, whose Egg content is its coefficient sum times the lots.
+/// The expectation model has to agree with that seam byte for byte, so it
+/// computes the total the same way rather than restating a constant.
+fn entitled_total(slot: &OrderSlot, fill: u64) -> u64 {
+    match slot {
+        OrderSlot::Single(_) => fill,
+        OrderSlot::Portfolio(order) => {
+            let mut sum = 0_u64;
+            let mut index = 0_usize;
+            while index < usize::from(order.active_len) {
+                sum += order.coefficients[index];
+                index += 1;
+            }
+            fill * sum
+        }
+        OrderSlot::Empty | OrderSlot::Tombstone(_) => {
+            panic!("an entitled slice's ends are live orders")
+        }
+    }
+}
+
 /// One per-order reservation of the general walk, tracked across steps.
 struct ReservationSlot {
     role: String,
@@ -10161,8 +10187,20 @@ fn general_second_half(
         .expect("the single receipt encodes");
     let res_buy_pre = reservations[1].bytes();
     let res_sell_pre = reservations[2].bytes();
+    /* The single-Egg crossing takes the generalized per-slice route, which
+     * stamps each end with its *whole order's* entitled total rather than
+     * this slice's quantity.  Here the two coincide — the crossing is a full
+     * one-to-one fill of live ranks 0 and 1, so one consumption will complete
+     * both ends — but the model derives the stamp from the verified fills, as
+     * the seam does, so a book whose ends fragment would still agree. */
+    let single_buy_entitled = entitled_total(&live_slots[0], fills[0]);
+    let single_sell_entitled = entitled_total(&live_slots[1], fills[1]);
+    assert_eq!(single_buy_entitled, single_receipt.quantity);
+    assert_eq!(single_sell_entitled, single_receipt.quantity);
     reservations[1].value.state = RESERVATION_STATE_ENTITLED;
+    reservations[1].value.entitled_units = single_buy_entitled;
     reservations[2].value.state = RESERVATION_STATE_ENTITLED;
+    reservations[2].value.entitled_units = single_sell_entitled;
     cases.push(Case::accept(
         "general-40-entitle-single-slice",
         "GeneralClearing",
@@ -10254,8 +10292,17 @@ fn general_second_half(
     }
     let res_buy_pre = reservations[3].bytes();
     let res_sell_pre = reservations[4].bytes();
+    /* The exclusive portfolio pair keeps the atomic full-pair route, which
+     * consumes both whole envelopes in one later instruction and therefore
+     * carries no per-order ledger at all: its reservations stay unstamped,
+     * and the per-slice consumption seam refuses a stamped one.  Stated as an
+     * assertion so a future route change cannot pass silently here. */
     reservations[3].value.state = RESERVATION_STATE_ENTITLED;
     reservations[4].value.state = RESERVATION_STATE_ENTITLED;
+    assert_eq!(reservations[3].value.entitled_units, 0);
+    assert_eq!(reservations[3].value.consumed_units, 0);
+    assert_eq!(reservations[4].value.entitled_units, 0);
+    assert_eq!(reservations[4].value.consumed_units, 0);
     {
         let mut writable = vec![reservations[3].pda.bytes, reservations[4].pda.bytes];
         let mut keys = vec![
@@ -10385,6 +10432,15 @@ fn general_second_half(
         let res_buy_pre = reservations[1].bytes();
         let res_sell_pre = reservations[2].bytes();
         for rank in [1_usize, 2] {
+            /* The ledger advances by this slice's quantity, and reaching the
+             * stamped total is completion: the same transition releases the
+             * remainder and takes CONSUMED, which is what CONSUMED means. */
+            reservations[rank].value.consumed_units += single_receipt.quantity;
+            assert_eq!(
+                reservations[rank].value.consumed_units,
+                reservations[rank].value.entitled_units,
+                "this one slice completes both ends of a full one-to-one fill"
+            );
             reservations[rank].value.remaining_cash_atoms = 0;
             reservations[rank].value.remaining_internal = [0; MAX_OUTCOMES];
             reservations[rank].value.state = RESERVATION_STATE_CONSUMED;
