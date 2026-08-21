@@ -282,7 +282,7 @@ async fn start(mutation: Mutation) -> (BanksClient, Keypair, Fixture) {
         canonical_reservation_id(market, epoch_id, buy_owner, 0, buy.order_id());
     let (buyer_reservation_address, buyer_reservation_bump) =
         pda(seeds::SEED_RESERVATION, &[&buy_reservation_id.bytes()]);
-    let mut buyer_reservation = ReservationAccount::active(
+    let buyer_reservation = ReservationAccount::active(
         market,
         epoch_id,
         buy_owner,
@@ -302,7 +302,7 @@ async fn start(mutation: Mutation) -> (BanksClient, Keypair, Fixture) {
         canonical_reservation_id(market, epoch_id, sell_owner, 0, sell.order_id());
     let (seller_reservation_address, seller_reservation_bump) =
         pda(seeds::SEED_RESERVATION, &[&sell_reservation_id.bytes()]);
-    let mut seller_reservation = ReservationAccount::active(
+    let seller_reservation = ReservationAccount::active(
         market,
         epoch_id,
         sell_owner,

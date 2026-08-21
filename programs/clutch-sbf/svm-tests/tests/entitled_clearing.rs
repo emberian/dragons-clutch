@@ -39,7 +39,7 @@ use {
         general_clearing_v1::GENERAL_CLEARING_POLICY_V1,
     },
     clutch_sbf::{
-        error::ClutchError,
+        error::{codec_code, ClutchError},
         instructions::artifact::CLOCK_SYSVAR_ID,
         instructions::orders_batch::{
             self,
@@ -62,7 +62,8 @@ use {
         },
         projection::{project_slot, OwnerInterner},
         reservation::{
-            canonical_reservation_id, ReservationAccount, RESERVATION_STATE_ACTIVE,
+            canonical_reservation_id, ReservationAccount, RESERVATION_ACCOUNT_BYTES,
+            RESERVATION_STATE_ACTIVE,
             RESERVATION_STATE_CONSUMED, RESERVATION_STATE_ENTITLED,
         },
         stream, CandidateFeedChunk, CandidateRecord, EpochAccount, FinalPotAccount, Hash32,
@@ -1965,13 +1966,42 @@ async fn partial_fill_candidate_clears_slice_by_slice_and_returns_every_remainde
     .await;
     assert_eq!(custom(refused.0), ClutchError::MismatchedState as u32);
 
+    /* A forged stamp cannot survive recomputation.  The buyer's ledger is
+     * rewritten in place to claim twelve entitled Egg atoms instead of eight
+     * — internally consistent bytes, four consumed of twelve — and the next
+     * slice of that same order re-derives the total from the digest-verified
+     * feed and refuses the mismatch before minting anything. */
+    let buyer_address = reservations[0];
+    let honest_buyer = account(&mut context, buyer_address).await.unwrap();
+    let mut forged = ReservationAccount::decode(&honest_buyer.data).unwrap();
+    forged.entitled_units = 12;
+    forged.validate().unwrap();
+    let mut forged_account = honest_buyer.clone();
+    forged_account.data = encode(RESERVATION_ACCOUNT_BYTES, |out| forged.encode(out));
+    context.set_account(&buyer_address, &AccountSharedData::from(forged_account));
+    let refused = send(
+        &mut context,
+        &[fixture.entitle_single(payer, partial.id, 1, reservations[0], reservations[2])],
+        None,
+        346,
+    )
+    .await;
+    assert_eq!(
+        custom(refused.0),
+        codec_code(clutch_solana_layout::CodecError::MismatchedBinding)
+    );
+    assert!(account(&mut context, fixture.receipt(partial.id, 1))
+        .await
+        .is_none());
+    context.set_account(&buyer_address, &AccountSharedData::from(honest_buyer));
+
     // Slice 1: the buyer is already ENTITLED and drawn down; its stamp is
     // re-derived and required equal, and the second seller stamps its own.
     let (result, _) = send(
         &mut context,
         &[fixture.entitle_single(payer, partial.id, 1, reservations[0], reservations[2])],
         None,
-        346,
+        347,
     )
     .await;
     result.unwrap();
@@ -1981,6 +2011,26 @@ async fn partial_fill_candidate_clears_slice_by_slice_and_returns_every_remainde
             .entitled_units,
         8
     );
+
+    /* A receipt may only be consumed against its own pair.  Slice 1's receipt
+     * names the second seller; presenting the first seller's reservation — a
+     * completed one from the same fragmented buy — refuses. */
+    let crossed = send(
+        &mut context,
+        &[fixture.settle_single(
+            partial.id,
+            2,
+            position(0),
+            position(1),
+            reservations[0],
+            reservations[1],
+            1,
+        )],
+        None,
+        348,
+    )
+    .await;
+    assert_eq!(custom(crossed.0), ClutchError::MismatchedState as u32);
 
     // Consuming it completes the buy end: the remaining cash — price
     // improvement and unfilled refund in one number — is released once.
@@ -1996,7 +2046,7 @@ async fn partial_fill_candidate_clears_slice_by_slice_and_returns_every_remainde
             1,
         )],
         None,
-        347,
+        349,
     )
     .await;
     result.unwrap();
@@ -2049,7 +2099,7 @@ async fn partial_fill_candidate_clears_slice_by_slice_and_returns_every_remainde
             1,
         )],
         None,
-        348,
+        350,
     )
     .await;
     assert_eq!(custom(replay.0), ClutchError::MismatchedState as u32);
@@ -2061,7 +2111,7 @@ async fn partial_fill_candidate_clears_slice_by_slice_and_returns_every_remainde
         &mut context,
         &[fixture.entitle_single(payer, partial.id, 1, reservations[0], reservations[2])],
         None,
-        349,
+        351,
     )
     .await;
     assert_eq!(custom(replay.0), ClutchError::MismatchedState as u32);
