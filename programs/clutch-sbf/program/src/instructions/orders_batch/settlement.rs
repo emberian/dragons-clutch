@@ -796,6 +796,8 @@ pub(super) enum SettlementBlocker {
     /// exact one-page/two-live-order submission discharges this locally only.
     GeneralReservationSetClosure,
     /// Partial/multi-slice orders need cumulative per-order consumption state.
+    ///
+    /// Retired: `ReservationAccount` v2 *is* that state.
     PartialFillLedger,
     /// Virtual split/merge legs need a funded FinalPot transition.
     VirtualPot,
@@ -828,29 +830,43 @@ pub(super) enum SettlementBlocker {
 ///   unowned-refund blocker and stands forever, and an abandoned ACTIVE
 ///   reservation holds its page — and so the epoch root — open at recorded
 ///   rent cost.
+/// * `PartialFillLedger` — the PartialFillLedger wave: `ReservationAccount`
+///   schema v2 carries the per-order cumulative ledger (`entitled_units`
+///   stamped once from the digest-verified feed, monotone `consumed_units`),
+///   `EntitleSlice` routes by shape instead of refusing — per-slice for a
+///   fragmented or partially filled single pair, a mixed single/portfolio
+///   pair, and a portfolio end with several counterparties; atomic, verbatim,
+///   for an exclusive portfolio full pair — and `SettlePage`'s seven-account
+///   shape consumes one slice at a time, completing each end independently
+///   when its stamped total is reached and releasing its exact remainder
+///   once.  No new account family, no sibling policy profile, and the frozen
+///   `GENERAL_CLEARING_POLICY_V1` digest unchanged: the model plane already
+///   admitted partial fills and the runtime seams were the only refusal
+///   sites.  Recorded residual: a witness whose *slices* do not convert while
+///   every *owner* sum does stays refused and re-files under `VirtualPot`.
 #[allow(dead_code)] // Executable record; the ledger test pins it.
-pub(super) const RETIRED_SETTLEMENT_BLOCKERS: [SettlementBlocker; 6] = [
+pub(super) const RETIRED_SETTLEMENT_BLOCKERS: [SettlementBlocker; 7] = [
     SettlementBlocker::FrozenPolicyPreimage,
     SettlementBlocker::FullWidthRelationDomain,
     SettlementBlocker::CandidateWindowClosure,
     SettlementBlocker::EntitlementFreeze,
     SettlementBlocker::GeneralReservationSetClosure,
     SettlementBlocker::TerminalClosure,
+    SettlementBlocker::PartialFillLedger,
 ];
 
 /// The exact dependency order of the remaining settlement work.
 ///
-/// * `PartialFillLedger` — the entitlement freeze refuses any slice that is
-///   not a full one-to-one fill of both its ends (`NotYetImplemented`).
 /// * `VirtualPot` — the freeze refuses any verified summary carrying
 ///   `virtual_split`/`virtual_merge`, and — same family — any summary whose
 ///   rounding pot is nonzero, because the exact-only consumption seam cannot
-///   fund one.
+///   fund one.  Since the PartialFillLedger wave this row also carries the
+///   per-slice rounding residue: a witness whose slices do not convert
+///   exactly refuses at `EntitleSlice`, even when every per-owner sum is
+///   whole, because realizing it needs a funded pot rather than a wider seam.
 #[allow(dead_code)] // Executable record; the ledger test pins it.
-pub(super) const SETTLEMENT_BLOCKERS: [SettlementBlocker; 2] = [
-    SettlementBlocker::PartialFillLedger,
-    SettlementBlocker::VirtualPot,
-];
+pub(super) const SETTLEMENT_BLOCKERS: [SettlementBlocker; 1] =
+    [SettlementBlocker::VirtualPot];
 
 #[cfg(test)]
 mod tests {
@@ -1146,11 +1162,12 @@ mod tests {
     #[test]
     fn the_blocker_ledger_records_the_retired_prefix_and_the_standing_tail() {
         // Every original row appears exactly once, retired or standing, and
-        // the standing tail is exactly the honest remainder: partial fills
-        // and virtual pots.  TerminalClosure retired with the tag-60..67
-        // close wave.
-        assert_eq!(RETIRED_SETTLEMENT_BLOCKERS.len(), 6);
-        assert_eq!(SETTLEMENT_BLOCKERS.len(), 2);
+        // the standing tail is exactly the honest remainder: virtual pots and
+        // the per-slice rounding residue re-filed under them.  TerminalClosure
+        // retired with the tag-60..67 close wave; PartialFillLedger retired
+        // with the reservation-v2 ledger and the per-slice seams.
+        assert_eq!(RETIRED_SETTLEMENT_BLOCKERS.len(), 7);
+        assert_eq!(SETTLEMENT_BLOCKERS.len(), 1);
         assert_eq!(
             RETIRED_SETTLEMENT_BLOCKERS[3],
             SettlementBlocker::EntitlementFreeze
@@ -1160,12 +1177,10 @@ mod tests {
             SettlementBlocker::TerminalClosure
         );
         assert_eq!(
-            SETTLEMENT_BLOCKERS,
-            [
-                SettlementBlocker::PartialFillLedger,
-                SettlementBlocker::VirtualPot,
-            ]
+            RETIRED_SETTLEMENT_BLOCKERS[6],
+            SettlementBlocker::PartialFillLedger
         );
+        assert_eq!(SETTLEMENT_BLOCKERS, [SettlementBlocker::VirtualPot]);
         let all = [
             SettlementBlocker::FrozenPolicyPreimage,
             SettlementBlocker::FullWidthRelationDomain,
