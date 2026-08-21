@@ -62,6 +62,7 @@
 //! | [`pyth_receiver`] | pinned Pyth `PriceUpdateV2` decode and conservative price normalization |
 //! | [`source_identity`] | **the one-const boundary**: every identity byte the R2 pull profile pins |
 //! | [`source_v2`] | the R2 pull source plane: spec generation 2, the crossing rule, the authentication join |
+//! | [`source_archive_v2`] | the v2 source-spec account and the v2 sealed archive page |
 //! | [`token`] | Token-2022 observation, admission, and CPI construction |
 //!
 //! The per-lane ownership boundaries are tabulated in
@@ -88,6 +89,7 @@ pub mod pyth_receiver;
 pub mod seeds;
 pub mod source;
 pub mod source_archive;
+pub mod source_archive_v2;
 pub mod source_identity;
 pub mod source_v2;
 pub mod token;

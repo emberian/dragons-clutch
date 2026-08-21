@@ -41,4 +41,6 @@
 
 pub mod auth;
 pub mod crossing;
+#[cfg(test)]
+pub mod fixtures;
 pub mod spec;

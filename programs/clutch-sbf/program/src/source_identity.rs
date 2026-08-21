@@ -348,6 +348,43 @@ pub mod mainnet {
     pub const POST_ABI: Option<PostAbiPositionsV1> = None;
 }
 
+/// Select the compiled release a v2 spec names, if this ELF carries one.
+///
+/// **This is the `0x79` decision.** `SourceReleaseUnavailable` is what a caller
+/// sees when this returns `None`, and the whole content of "the registry is
+/// closed" is that the match below is byte equality against inert compiled
+/// data. Nothing is negotiated, nothing is derived from caller bytes, and no
+/// field is matched loosely:
+///
+/// * `source_adapter_id` / `source_adapter_version` — which reviewed adapter;
+/// * `parser_id` / `parser_version` — which reviewed parser release;
+/// * `receiver_program` — which provider deployment.
+///
+/// The remaining pins (ProgramData key, deployment slot, `Config` digest,
+/// provider feed id) are **not** matched here on purpose: they live in the
+/// immutable spec and are enforced against the presented accounts by
+/// [`crate::source_v2::auth::authenticate_pull_update_v2`], which is where
+/// evidence exists. Matching them twice would create a second owner of the same
+/// fact, and matching them *only* here would accept a spec whose accounts say
+/// something else.
+///
+/// A `Some` here narrows the refusal boundary; it never removes it. Every spec
+/// that is not this exact release still refuses, which is the shape
+/// `R2_PULL_PROMOTION_PLAN.md` §4 item 2 requires of the flip.
+pub fn select_release(spec: crate::source_v2::spec::SourceSpecV2) -> Option<PullReleaseV2> {
+    let fields = spec.fields();
+    REGISTERED_RELEASES
+        .iter()
+        .find(|release| {
+            release.source_adapter_id == fields.source_adapter_id
+                && release.source_adapter_version == fields.source_adapter_version
+                && release.parser_id == fields.parser_id
+                && release.parser_version == fields.parser_version
+                && release.receiver_program == fields.receiver_program
+        })
+        .copied()
+}
+
 /// Every release compiled into this ELF, in registry order.
 ///
 /// The registry is inert data matched by byte equality, never a negotiation:
@@ -412,6 +449,89 @@ mod tests {
             for right in &identities[at + 1..] {
                 assert_ne!(left, right);
             }
+        }
+    }
+
+    /// A spec naming the fixture release exactly.
+    fn fixture_spec_fields() -> crate::source_v2::spec::SourceSpecFieldsV2 {
+        use crate::source_v2::crossing::SELECTION_CROSSING_V1;
+        use crate::source_v2::spec::{
+            SourceSpecFieldsV2, GRID_ORIGIN_UNIX_SECONDS_V1, ORIENTATION_QUOTE_PER_BASE,
+        };
+        SourceSpecFieldsV2 {
+            source_adapter_id: fixture::SOURCE_ADAPTER_ID,
+            source_adapter_version: fixture::SOURCE_ADAPTER_VERSION,
+            parser_id: fixture::PARSER_ID,
+            parser_version: fixture::PARSER_VERSION,
+            receiver_program: fixture::RECEIVER_PROGRAM,
+            receiver_programdata: fixture::RECEIVER_PROGRAMDATA,
+            receiver_config: fixture::RECEIVER_CONFIG,
+            config_digest: [0x7c; 32],
+            provider_feed_id: fixture::PROVIDER_FEED_ID,
+            programdata_deployment_slot: fixture::PROGRAMDATA_DEPLOYMENT_SLOT,
+            base_asset_id: fixture::BASE_ASSET_ID,
+            quote_asset_id: fixture::QUOTE_ASSET_ID,
+            orientation: ORIENTATION_QUOTE_PER_BASE,
+            normalized_decimals: 8,
+            grid_family_id: 4,
+            grid_version: 9,
+            grid_origin_unix_seconds: GRID_ORIGIN_UNIX_SECONDS_V1,
+            bucket_seconds: 10,
+            boundary_grace_seconds: 5,
+            max_staleness_slots: 500,
+            max_staleness_seconds: 600,
+            max_future_seconds: 15,
+            max_confidence_atoms: 1_000_000_000_000,
+            max_confidence_bps: 500,
+            confidence_multiplier: 3,
+            selection_rule: SELECTION_CROSSING_V1,
+        }
+    }
+
+    #[test]
+    fn the_registry_admits_exactly_the_compiled_release() {
+        use crate::source_v2::spec::{SourceSpecFieldsV2, SourceSpecV2};
+
+        let admitted = SourceSpecV2::new(fixture_spec_fields()).expect("valid spec");
+        assert_eq!(select_release(admitted), Some(fixture::RELEASE));
+
+        // Every matched field is load-bearing: change any one and the spec
+        // names a release this ELF does not carry, so `0x79` stands.
+        for mutate in [
+            (|c: &mut SourceSpecFieldsV2| c.source_adapter_id[0] ^= 1)
+                as fn(&mut SourceSpecFieldsV2),
+            |c| c.source_adapter_version += 1,
+            |c| c.parser_id += 1,
+            |c| c.parser_version += 1,
+            |c| c.receiver_program[0] ^= 1,
+        ] {
+            let mut case = fixture_spec_fields();
+            mutate(&mut case);
+            let spec = SourceSpecV2::new(case).expect("still structurally valid");
+            assert_eq!(select_release(spec), None);
+        }
+    }
+
+    #[test]
+    fn the_registry_does_not_second_guess_the_account_level_pins() {
+        use crate::source_v2::spec::{SourceSpecFieldsV2, SourceSpecV2};
+
+        // ProgramData key, deployment slot, config digest, and provider feed
+        // id are enforced against the presented accounts by the authentication
+        // join, which is the only place evidence for them exists.  The registry
+        // deliberately does not re-decide them, so these specs still select the
+        // release -- and then fail at the join if their accounts disagree.
+        for mutate in [
+            (|c: &mut SourceSpecFieldsV2| c.receiver_programdata[0] ^= 1)
+                as fn(&mut SourceSpecFieldsV2),
+            |c| c.programdata_deployment_slot += 1,
+            |c| c.config_digest[0] ^= 1,
+            |c| c.provider_feed_id[0] ^= 1,
+        ] {
+            let mut case = fixture_spec_fields();
+            mutate(&mut case);
+            let spec = SourceSpecV2::new(case).expect("still structurally valid");
+            assert_eq!(select_release(spec), Some(fixture::RELEASE));
         }
     }
 
