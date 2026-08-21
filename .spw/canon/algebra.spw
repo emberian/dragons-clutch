@@ -1,0 +1,145 @@
+# Canon I — The Claim Algebra
+#
+# Concepts 1-7 of the Dragon's Clutch conceptual canon: what a claim is,
+# what a complete set is, and the exact arithmetic that binds them.
+#
+# Definitions are transcribed from the inventory, not re-derived here.
+# Relation entries follow the vocabulary declared in ~"./index.spw".
+
+#>spw_dragons_clutch_canon_algebra
+#:canon #!concept
+#:layer #!semantics
+#:status #!active
+
+^"roots"{
+  @index: ~"./index.spw"
+  @inventory: ~"../../docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
+  @project: ~"../../PROJECT.md"
+  @truth: ~"../../CURRENT_TRUTH.md"
+  @risk: ~"../../docs/research/RISK_SUMMED_POSITIONS.md"
+  @bspline: ~"../../lean/DragonsClutch/BSpline.lean"
+  @tier2: ~"../../docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md"
+}
+
+^"intent"{
+  ~#layer: "I. The claim algebra"
+  ~#span: "concepts 1-7"
+  ~#goal: "Hold the basis-level vocabulary exactly: Egg, Clutch, degree, partition of unity, coefficient vector, compatibility lowering, largest remainder."
+}
+
+^"concepts"{
+
+  egg: .{
+    n = 1
+    label = "Egg (claim)"
+    define = "One native basis claim — categorical at degree zero, an open-clamped B-spline basis function at degrees one through three — that redeems according to its exact integer weight at the resolved value."
+    cite = "PROJECT.md §1–2"
+    source = ~"../../PROJECT.md"
+    teaches = "P1"
+    recurs = "P2"
+    uses = #[ partition_of_unity, degree ][reg=set]
+    measured_by = #[ sup_norm_collateral ][reg=set]
+    binds = #[
+      "composes into -> clutch"
+      "composes into -> coefficient_vector"
+    ][reg=set]
+  }[reg=concept]
+
+  clutch: .{
+    n = 2
+    label = "Clutch (complete set)"
+    define = "One unit of every Egg of a market — the constant payoff, worth exactly one collateral unit at every admissible resolved value, mintable and meltable at par."
+    cite = "PROJECT.md §2; RISK_SUMMED_POSITIONS.md §1.1 (unitality)"
+    source = ~"../../PROJECT.md"
+    corroborant = ~"../../docs/research/RISK_SUMMED_POSITIONS.md"
+    teaches = "P1"
+    hub = true
+    uses = #[ egg, partition_of_unity ][reg=set]
+    binds = #[
+      "is the kernel of -> dispersion"
+      "is the free direction of -> diagonal_motion"
+      "anchors -> conservation"
+    ][reg=set]
+  }[reg=concept]
+
+  degree: .{
+    n = 3
+    label = "degree (the ladder)"
+    define = "The precision order of a market's basis: 0 is an exhaustive disjoint ordered partition; 1–3 are native smooth B-spline semantics that must never be silently lowered to one-hot bins."
+    cite = "PROJECT.md §1; CURRENT_TRUTH.md §3"
+    source = ~"../../PROJECT.md"
+    corroborant = ~"../../CURRENT_TRUTH.md"
+    teaches = "P2"
+    refines = #[ ][reg=set]
+    refines_external = #[ "binary markets" ][reg=set]
+    refuses = #[ "as a definition -> compatibility_lowering" ][reg=set]
+    binds = #[
+      "sets where implied-measure-hood holds (≤1) and breaks (≥2) -> implied_measure"
+    ][reg=set]
+    adjacent = #[ "knot grid", "open-clamped", "span" ][reg=set]
+  }[reg=concept]
+
+  partition_of_unity: .{
+    n = 4
+    label = "partition of unity"
+    define = "The frozen basis property H1/H2 — every weight nonnegative and bounded, all weights summing exactly to the denominator at every admissible value — from which solvency, complete-set par value, and price normalization all descend."
+    cite = "RISK_SUMMED_POSITIONS.md §1.1; lean/DragonsClutch/BSpline.lean"
+    source = ~"../../docs/research/RISK_SUMMED_POSITIONS.md"
+    corroborant = ~"../../lean/DragonsClutch/BSpline.lean"
+    teaches = "P2"
+    used_by = #[ egg, clutch, simplex_prices ][reg=set]
+    plane = "machine-checked in the Lean model (P7)"
+  }[reg=concept]
+
+  coefficient_vector: .{
+    n = 5
+    label = "coefficient vector (portfolio)"
+    define = "A payoff shape written exactly as integer coefficients over the native basis — one atomic asset, one order, one fill; a vector is not automatically an approximation."
+    cite = "PROJECT.md §1; docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md"
+    source = ~"../../PROJECT.md"
+    corroborant = ~"../../docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md"
+    teaches = "P2"
+    recurs = "P3"
+    uses = #[ egg ][reg=set]
+    binds = #[
+      "carried as OrderSlot::Portfolio by -> book"
+      "valued at dot(c, p) against -> simplex_prices"
+      "charged by -> dispersion"
+    ][reg=set]
+  }[reg=concept]
+
+  compatibility_lowering: .{
+    n = 6
+    label = "compatibility lowering"
+    define = "The explicitly-labeled adapter that samples a shaped payoff onto degree-zero bins — always disclosed, always carrying an error statement when inexact, never a redefinition of the smooth product."
+    cite = "CURRENT_TRUTH.md §3 item 3; PROJECT.md §1"
+    source = ~"../../CURRENT_TRUTH.md"
+    corroborant = ~"../../PROJECT.md"
+    teaches = "P2"
+    refuses = #[ "silent substitution for -> degree" ][reg=set]
+    binds = #[ "guarded by -> refusal" ][reg=set]
+  }[reg=concept]
+
+  largest_remainder: .{
+    n = 7
+    label = "largest remainder"
+    define = "The single deterministic rounding rule — canonical largest-remainder quantization with lowest-index ties — applied once at each named boundary so exactness is preserved or the discrepancy is named."
+    cite = "PROJECT.md §6; CURRENT_TRUTH.md §3; lean/DragonsClutch/BSpline.lean (constructive uniqueness)"
+    source = ~"../../PROJECT.md"
+    corroborant = ~"../../lean/DragonsClutch/BSpline.lean"
+    teaches = "P4"
+    used_by = #[ hatch ][reg=set]
+    used_by_external = #[ "fee close" ][reg=set]
+    plane = "proved canonical in the Lean model"
+  }[reg=concept]
+}
+
+^"holes"{
+  # Relation targets the inventory names that are not themselves canon concepts.
+  # Recorded, not promoted to edges.
+  degree_refines: "binary markets — named at entry 3, no canon entry"
+  largest_remainder_used_by: "fee close — named at entry 7, no canon entry"
+}
+
+~<./index.spw>
+~<./custody.spw>

@@ -7,10 +7,23 @@
   @readme: ~"./README.md"
   @mount: ~"./mount.spw"
   @workspace: ~"./workspace.spw"
+  @canon: ~"./canon/index.spw"
 }
 
 ^"dispatch"{
   readme: @readme
   mount: @mount
   workspace: @workspace
+  canon: @canon
+}
+
+^"canon"{
+  ~#subject: "The Dragon's Clutch conceptual canon — 40 concepts in six layers."
+  ~#seed: ~"../docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
+  @algebra: ~"./canon/algebra.spw"
+  @custody: ~"./canon/custody.spw"
+  @clearing: ~"./canon/clearing.spw"
+  @refusal: ~"./canon/refusal.spw"
+  @evidence: ~"./canon/evidence.spw"
+  @frame: ~"./canon/frame.spw"
 }

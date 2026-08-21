@@ -1,0 +1,88 @@
+# Canon V — The Evidence Culture
+#
+# Concepts 36-38: how a claim is bound to exact bytes, how incompleteness
+# is made machine-visible, and what independent re-execution does and
+# does not buy.
+#
+# Definitions are transcribed from the inventory, not re-derived here.
+# Relation entries follow the vocabulary declared in ~"./index.spw".
+
+#>spw_dragons_clutch_canon_evidence
+#:canon #!concept
+#:layer #!pragmatics
+#:status #!active
+
+^"roots"{
+  @index: ~"./index.spw"
+  @inventory: ~"../../docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
+  @truth: ~"../../CURRENT_TRUTH.md"
+  @goal: ~"../../GOAL.md"
+  @planned_vs_built: ~"../../docs/reviews/PLANNED_VS_BUILT_2026-08-19.md"
+}
+
+^"intent"{
+  ~#layer: "V. The evidence culture"
+  ~#span: "concepts 36-38"
+  ~#goal: "Hold the evidence vocabulary exactly: seal, the two-ELF discipline, attestation."
+}
+
+^"concepts"{
+
+  seal: .{
+    n = 36
+    label = "seal"
+    define = "Binding a claim to exact bytes: a named commit fixes the ELF identity (SHA-256, byte length), its audit, and its measured behavior, so later statements are about *that artifact* and drift is machine-refused — byte-identical rebuilds are part of the seal."
+    cite = "CURRENT_TRUTH.md §2"
+    source = ~"../../CURRENT_TRUTH.md"
+    teaches = "P7"
+    binds = #[
+      "is consumed by the manifest and by -> attestation"
+      "any closure-byte change forks the identity and forces a reseal"
+    ][reg=set]
+    adjacent = #[
+      "manifest (schema-v2, 100/100 executed gates)"
+      "baseline"
+      "runtime ancestry"
+    ][reg=set]
+  }[reg=concept]
+
+  two_elf_discipline: .{
+    n = 37
+    label = "two-ELF discipline (the mock boundary)"
+    define = "Success against mock infrastructure requires a distinct, explicitly non-production artifact; the default sealed program refuses value with `SourceReleaseUnavailable` (`0x79`) because its source registry is empty — incompleteness made machine-visible rather than papered over."
+    cite = "CURRENT_TRUTH.md §4 (pooled custody row), §6.3; docs/reviews/PLANNED_VS_BUILT_2026-08-19.md"
+    source = ~"../../CURRENT_TRUTH.md"
+    corroborant = ~"../../docs/reviews/PLANNED_VS_BUILT_2026-08-19.md"
+    teaches = "P7"
+    refines = #[ "into release engineering -> refusal" ][reg=set]
+    binds = #[
+      "guards -> custody_boundary"
+      "the named injections of every walk are inventoried in-tree"
+    ][reg=set]
+  }[reg=concept]
+
+  attestation: .{
+    n = 38
+    label = "attestation"
+    define = "Independent re-execution of the portable evidence on a second host from a fresh archive — gates PASS/STOP counted, files compared twice, the sealed ELF byte-verified in multiple contexts — recorded as a durable job, never as a release claim."
+    cite = "CURRENT_TRUTH.md §2 (Persvati 41/41, 44/44 PASS 0 STOP); GOAL.md done-log Cycles B–D"
+    source = ~"../../CURRENT_TRUTH.md"
+    corroborant = ~"../../GOAL.md"
+    teaches = "P7"
+    uses = #[ seal ][reg=set]
+    uses_external = #[ "the manifest" ][reg=set]
+    plane = "feeds no promotion by itself -> claim_plane"
+    binds = #[
+      "distinct from rebuild (cross-OS divergence exhaustively classified)"
+    ][reg=set]
+  }[reg=concept]
+}
+
+^"holes"{
+  # Relation targets the inventory names that are not themselves canon concepts.
+  attestation_uses: "the manifest — listed as adjacent under seal (36), no canon entry of its own"
+}
+
+~<./index.spw>
+~<./refusal.spw>
+~<./frame.spw>

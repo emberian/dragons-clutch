@@ -1,0 +1,73 @@
+# Canon VI — Frame Concepts
+#
+# Concepts 39-40: the namespace and vault a market lives in, and the pure
+# kernel that owns the semantics every adapter merely transports for.
+#
+# Definitions are transcribed from the inventory, not re-derived here.
+# Relation entries follow the vocabulary declared in ~"./index.spw".
+
+#>spw_dragons_clutch_canon_frame
+#:canon #!concept
+#:layer #!semantics
+#:status #!active
+
+^"roots"{
+  @index: ~"./index.spw"
+  @inventory: ~"../../docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
+  @project: ~"../../PROJECT.md"
+  @agents: ~"../../AGENTS.md"
+  @economics: ~"../../docs/ECONOMICS.md"
+}
+
+^"intent"{
+  ~#layer: "VI. Frame concepts"
+  ~#span: "concepts 39-40"
+  ~#goal: "Hold the frame vocabulary exactly: Realm and Hoard, and the Eggcrate kernel."
+}
+
+^"concepts"{
+
+  realm_hoard: .{
+    n = 39
+    label = "Realm & Hoard"
+    define = "A Realm is the immutable collateral profile and version namespace a market lives in; its Hoard is the market-local vault whose principal pays only claimants — never keepers, rent, fees, or treasury — with liveness work independently prepaid at admission."
+    cite = "PROJECT.md §2–3; ECONOMICS.md §1–2; AGENTS.md"
+    source = ~"../../PROJECT.md"
+    corroborant = ~"../../docs/ECONOMICS.md"
+    teaches = "P1"
+    recurs = "P4"
+    used_by = #[ custody_boundary ][reg=set]
+    binds = #[
+      "the custody boundary crosses the Hoard's edge -> custody_boundary"
+      "conservation is stated over it -> conservation"
+      "prepaid liveness is the separate second proposition (ECONOMICS.md §1)"
+    ][reg=set]
+    adjacent = #[
+      "prepaid liveness"
+      "protected pools"
+      "DREGG (one optional dogfood profile, never a privileged branch)"
+    ][reg=set]
+  }[reg=concept]
+
+  eggcrate: .{
+    n = 40
+    label = "Eggcrate (kernel)"
+    define = "The pure deterministic verification-target transition kernel: `no_std`, no-alloc, safe, fixed-layout, total Rust with no Solana SDK, oracle SDK, or CPI — the semantic owner every adapter merely transports for."
+    cite = "PROJECT.md §2, §4; AGENTS.md (kernel policy)"
+    source = ~"../../PROJECT.md"
+    corroborant = ~"../../AGENTS.md"
+    teaches = "P1"
+    recurs = "P7"
+    binds = #[
+      "owns the transition -> diagonal_motion"
+      "owns the transition -> materialize"
+      "owns the transition -> hatch"
+      "everything runtime is adapter, not kernel"
+    ][reg=set]
+    plane = "shadowed by the Lean model and the Verus subset -> claim_plane"
+  }[reg=concept]
+}
+
+~<./index.spw>
+~<./evidence.spw>
+~<./algebra.spw>
