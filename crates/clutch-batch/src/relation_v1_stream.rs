@@ -2071,6 +2071,45 @@ impl ClearWorkV1 {
     /// `settle_cash`'s post-walk blocks (M13 blocks 1..=6): the per-outcome
     /// Egg conservation, the fee join, the rounding boundary, and the
     /// closures.  Also fills the summary's ledger fields.
+    /// One composite fee numerator per owner slot, over the common denominator
+    /// `kappa_den * S^2 * kappa'_den`, formed from that owner's whole filled buy
+    /// vector — `settle_cash`'s composite block, site for site.
+    ///
+    /// `part_buy` is complete here: the accumulate pass closed before this
+    /// finalize ran.  Deliberately **not inlined**: the pairwise loop's locals
+    /// would otherwise join `end_pass`'s frame, and the SBF frame budget of
+    /// STREAMING_RELATION_DESIGN §9 is measured on `end_pass` with every
+    /// finalize inlined into it.
+    #[inline(never)]
+    fn finalize_composite_numerators(&mut self, outcomes: usize) {
+        let FeeBaseV1::CompositeDispersionFloor {
+            dispersion_bps,
+            floor_range_bps,
+        } = self.domain.policy.fee_base
+        else {
+            return;
+        };
+        if dispersion_bps == 0 && floor_range_bps == 0 {
+            return;
+        }
+        let mut slot = 0usize;
+        while slot < self.owner_slots as usize {
+            match crate::relation_v1::composite_fee_quote(
+                &self.part_buy[slot],
+                &self.cand.prices,
+                outcomes,
+                self.domain.price_scale,
+                dispersion_bps,
+                floor_range_bps,
+                0,
+            ) {
+                Ok(quote) => self.fee_bps_units[slot] = quote.exact_numerator,
+                Err(error) => self.latch(pos(M13_SETTLE, 3, slot as u16, 0, 4), error),
+            }
+            slot += 1;
+        }
+    }
+
     fn finalize_settle(&mut self) {
         let outcomes = self.outcomes();
         let scale = self.domain.price_scale as u128;
@@ -2146,34 +2185,8 @@ impl ClearWorkV1 {
             self.latch(pos(M13_SETTLE, 2, 0, 0, 0), ErrorV1::ConsiderationMismatch);
         }
 
-        // V7 composite: one numerator per owner over `kappa_den*S^2*kappa'_den`,
-        // formed from that owner's whole filled buy vector — `settle_cash`'s
-        // composite block, site for site.  `part_buy` is complete here: the
-        // accumulate pass closed before this finalize ran.
-        if let FeeBaseV1::CompositeDispersionFloor {
-            dispersion_bps,
-            floor_range_bps,
-        } = self.domain.policy.fee_base
-        {
-            if dispersion_bps != 0 || floor_range_bps != 0 {
-                let mut slot = 0usize;
-                while slot < self.owner_slots as usize {
-                    match crate::relation_v1::composite_fee_quote(
-                        &self.part_buy[slot],
-                        &self.cand.prices,
-                        outcomes,
-                        self.domain.price_scale,
-                        dispersion_bps,
-                        floor_range_bps,
-                        0,
-                    ) {
-                        Ok(quote) => self.fee_bps_units[slot] = quote.exact_numerator,
-                        Err(error) => self.latch(pos(M13_SETTLE, 3, slot as u16, 0, 4), error),
-                    }
-                    slot += 1;
-                }
-            }
-        }
+        // V7 composite: one numerator per owner, formed before the join.
+        self.finalize_composite_numerators(outcomes);
 
         // V7: the fee join, per owner slot ascending.
         let denominator = match crate::relation_v1::fee_denominator_of(&self.domain) {
