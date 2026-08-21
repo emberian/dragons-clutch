@@ -104,6 +104,47 @@ no-op, because the interior branch then computes `knots[degree - degree] =
 knots[0]` anyway. It is recorded here so a reader does not mistake its absence
 for an oversight.
 
+## Registration — OWED
+
+This campaign is **not** yet a `MANIFEST.baseline.json` gate. It was written
+and left unregistered deliberately: `scripts/test_baseline_manifest.py` pins
+the gate count (`assertEqual(len(gates), 100)`), so adding the entry without
+regenerating the manifest in the same commit makes
+`scripts/baseline_manifest.py check` fail for every other lane, and
+regenerating requires a clean tree plus a full `--run-gates` pass. That is the
+reseal cadence's job, not a shared-tree edit.
+
+The block to add to `scripts/baseline_manifest.py`, immediately after
+`proof.bspline_finite_refinement`, together with bumping the pinned gate count
+to 101:
+
+```python
+{
+    "id": "proof.bspline_degree_corpus",
+    "section": "current-proof-boundary",
+    "command": "sh verus/bspline/run_degree_corpus.sh",
+    "expected": {"mode": "zero", "exit": 0},
+    "proof_content": "checked-finite",
+    "key_patterns": [
+        r"^lean_version=",
+        r"^production_source_sha256=",
+        r"^degree_1_rows=1120$",
+        r"^degree_2_rows=1120$",
+        r"^degree_3_rows=1120$",
+        r"^baseline=PASS rows=3360 seam=BasisSpec::evaluate$",
+        r"^mutation=.* status=EXPECTED_RED rows_disagreeing=",
+        r"^status=PASS$",
+        r"^boundary=",
+    ],
+    "note": (
+        "digest-bound 3,360-row Lean/Rust comparison generated from the "
+        "checked generic evaluator, plus eight source mutants; uniform "
+        "stored grids only, and no universal source, SBF, or runtime "
+        "refinement is claimed"
+    ),
+},
+```
+
 ## Assumptions
 
 Everything in `BSPLINE_REFINEMENT_ASSUMPTIONS.md` applies, with item 2 replaced
