@@ -38,6 +38,30 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
     ("artifact.batch_policy.stage", 200, 2_282_880, "PER_CONTENT_DIGEST", 1, S,
      ("RENT.ARTIFACT_PREFUND_WINDFALL",)),
     ("realm", 70, 1_378_080, "PER_REALM_ID", 1, P, ()),
+    # The per-Realm revenue-policy record (B4f, ADOPTED_2026-08-20 item 8;
+    # docs/design/REVENUE_POLICY_V1.md section 3), classified beside the Realm
+    # row it serves and landed here BEFORE its implementation lane per the
+    # rows-first rule.  Bound: exactly one per Realm, ever -- creatable only
+    # inside the Realm's own InitRealm transition (D4: absence IS the
+    # zero-take state; no retrofit route exists).  Byte pin:
+    # programs/solana-layout/src/revenue.rs REVENUE_POLICY_RECORD_BYTES =
+    # 2 + 32 + 32 + 32 + 56 + 1 + 1 = 156, tag 27.  Unlike every legacy
+    # general-plane family, the record embeds the TerminalIdentityV1 header
+    # AND its GeneralFundingLedgerV1 sibling is MANDATORY at creation, so the
+    # unowned-refund residual cannot arise; CloseRevenuePolicyRecord (tag 68)
+    # is the standing close route, paying the exact recorded principal to the
+    # exact recorded payer with the surplus burned.  The row still STOPs, on
+    # the one honest residual: the close is gated on the Realm account's
+    # absence, and the realm row above is PERMANENT_INFRA with no close route,
+    # so the record's principal is capitalized for the Realm's whole life --
+    # "Realm-lifetime" means permanent in practice, and the admissible close
+    # is what lets this classification tighten later without an ABI change.
+    ("revenue.policy_record.v1", 156, 1_976_640, "PER_REALM_ID", 1, S,
+     ("REVENUE.REALM_PERMANENCE_HOLDS_RECORD",)),
+    # The RevenueVaultV1 row of the design's section 4 is deliberately NOT
+    # here: B4c froze all five ResolutionWork charges at zero as policy and
+    # NO VAULT IS BUILT.  The row lands, contingent, only if a future
+    # optional-service charge decision revives L1.
     ("profile", 100, 1_586_880, "PER_PROFILE_ID", 1, P, ()),
     ("market", 726, 5_943_840, "PER_MARKET_ID", 1, P, ()),
     ("hoard", 108, 1_642_560, "PER_MARKET_ID", 1, P, ()),
