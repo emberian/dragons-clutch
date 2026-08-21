@@ -70,6 +70,18 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- THE SPW CONCEPTUAL CANON AUTHORED AND MERGED (.spw/canon/, six layer
+  files + index): 40/40 inventory concepts, zero stubs, typed relations
+  mapped onto the workbench's sigil vocabulary (uses ~, refines ^,
+  refuses =, measures %), unmappable verbs kept verbatim in binds rather
+  than coerced, four hub roots declared, 164/164 transcribed strings
+  byte-faithful to the inventory (the check caught and fixed nine en-dash
+  slips), four seed discrepancies RECORDED not repaired, all workbench
+  gates green (strict lint 10/10, doctor ok, 86/86 path refs, 95/95
+  edges). Flagged: the .gitignore trailing slash means a symlinked
+  workbench is not ignored (worktree trap); spw mount's fail is
+  workbench-shaped-root checking, not a consumer failure.
+
 - CYCLE E ATTESTED: Persvati 45/45 PASS, 0 STOP over exact cb94c27 — the
   4fded7a6 ELF in seven contexts, seven historical roots asserted exact,
   and a NEW CONTRACT-DRIVEN GATE the lane invented because the seal's
