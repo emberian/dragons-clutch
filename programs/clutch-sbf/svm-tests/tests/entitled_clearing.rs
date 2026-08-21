@@ -754,6 +754,37 @@ impl Fixture {
         )
     }
 
+    /// Owner-signed post-terminal release on a CLEARED epoch: the zero-fill
+    /// proof shape (tag 60), one page prefix wide.
+    fn release_cleared(
+        &self,
+        owner: &Owner,
+        reservation: Address,
+        selected: Hash32,
+        sequence: u64,
+    ) -> Instruction {
+        let metas = vec![
+            AccountMeta::new_readonly(owner.key.pubkey(), true),
+            AccountMeta::new_readonly(self.epoch_account, false),
+            AccountMeta::new(reservation, false),
+            AccountMeta::new(owner.position, false),
+            AccountMeta::new_readonly(self.candidate_record(selected), false),
+            AccountMeta::new_readonly(self.candidate_feed(selected), false),
+            AccountMeta::new_readonly(self.page, false),
+        ];
+        Instruction::new_with_bytes(
+            PROGRAM_ID,
+            &layout_request(
+                sequence,
+                clutch_solana_layout::Intent::ReleaseTerminalReservation {
+                    market: self.market,
+                    epoch: self.epoch_id,
+                },
+            ),
+            metas,
+        )
+    }
+
     fn single(
         &self,
         owner: &Owner,
@@ -1342,6 +1373,37 @@ async fn read_reservation(
     ReservationAccount::decode(&bytes_of(context, address).await).unwrap()
 }
 
+/// Every owner's free-plus-reserved cash, summed across the book.
+async fn owner_cash(context: &mut ProgramTestContext, fixture: &Fixture) -> u64 {
+    let mut total = 0u64;
+    for owner in &fixture.owners {
+        total += read_position(context, owner.position).await.cash_atoms;
+    }
+    total
+}
+
+/// Every Egg on one outcome the book can account for: what the Positions
+/// hold plus what the reservations still own.
+///
+/// Admission moves a sell's Eggs *out* of its Position and into its
+/// reservation, so only this sum is conserved at every transaction boundary —
+/// which is exactly the claim a partial clearing has to make good on.
+async fn book_eggs(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    reservations: &[Address],
+    outcome: usize,
+) -> u64 {
+    let mut total = 0u64;
+    for owner in &fixture.owners {
+        total += read_position(context, owner.position).await.internal[outcome];
+    }
+    for address in reservations {
+        total += read_reservation(context, *address).await.remaining_internal[outcome];
+    }
+    total
+}
+
 async fn read_position(context: &mut ProgramTestContext, address: Address) -> PositionAccount {
     PositionAccount::decode(&bytes_of(context, address).await).unwrap()
 }
@@ -1502,7 +1564,9 @@ async fn portfolio_order_actually_clears_with_conservation() {
         read_reservation(&mut context, res_b).await.state,
         RESERVATION_STATE_ENTITLED
     );
-    // Double-entitle refuses: the reservations are no longer ACTIVE.
+    // Double-entitle refuses on the receipt's own non-existence: the ends'
+    // stamps re-derive and agree — they must, or a later slice of the same
+    // order could never be entitled — so the one-shot guard is the PDA.
     let again = send(
         &mut context,
         &[fixture.entitle_single(payer, alpha.id, 0, res_a, res_b)],
@@ -1510,7 +1574,7 @@ async fn portfolio_order_actually_clears_with_conservation() {
         346,
     )
     .await;
-    assert_eq!(custom(again.0), ClutchError::MismatchedState as u32);
+    assert_eq!(custom(again.0), ClutchError::AlreadyInitialized as u32);
 
     // Entitle the portfolio pair atomically from its first slice.
     let (result, units) = send(
@@ -1533,7 +1597,8 @@ async fn portfolio_order_actually_clears_with_conservation() {
     assert_eq!(custom(wrong_entry.0), ClutchError::MismatchedState as u32);
 
     // Tamper on a receipt refuses: a codec-consistent quantity forgery still
-    // breaks against the entitled envelope, and the refusal rolls back.
+    // breaks against the per-order ledger — twelve Egg atoms cannot fit in an
+    // eight-atom entitled total — and the refusal rolls back.
     let receipt0_address = fixture.receipt(alpha.id, 0);
     let honest_receipt = account(&mut context, receipt0_address).await.unwrap();
     let mut forged =
@@ -1557,7 +1622,10 @@ async fn portfolio_order_actually_clears_with_conservation() {
         349,
     )
     .await;
-    assert_eq!(custom(tampered.0), ClutchError::MismatchedState as u32);
+    assert_eq!(
+        custom(tampered.0),
+        ClutchError::AggregateClosureMismatch as u32
+    );
     assert_eq!(snapshot(&mut context, &watched).await, before);
     context.set_account(&receipt0_address, &AccountSharedData::from(honest_receipt));
 
@@ -1773,14 +1841,17 @@ async fn virtual_split_candidate_refuses_the_entitlement_freeze() {
     assert!(account(&mut context, fixture.pot()).await.is_none());
 }
 
-/// A verified partial-fill candidate freezes its pot but refuses per-slice
-/// entitlement: the PartialFillLedger ranked blocker stands.
+/// A verified partial-fill candidate clears slice by slice, and every
+/// remainder comes back exactly once.
 ///
-/// The first executable gap exhibit of the PartialFillLedger wave — a
-/// marginal-pro-rata book driven all the way to SELECTED, whose every slice
-/// then refuses.  The wave flips this expectation.
+/// The first gap exhibit of the PartialFillLedger wave, flipped: a
+/// marginal-pro-rata book — one strict buy of eight against two marginal
+/// sells of six, canonical fills `[8, 4, 4]` — driven all the way from
+/// admission to two consumed receipts.  The buy end fragments across two
+/// counterparties and completes on its second slice; each sell end fills
+/// partially and returns its two unfilled Eggs on completion.
 #[tokio::test]
-async fn partial_fill_candidate_refuses_entitlement() {
+async fn partial_fill_candidate_clears_slice_by_slice_and_returns_every_remainder() {
     let (mut context, fixture) = start().await;
     let payer = context.payer.pubkey();
     // One strict buy against two marginal sells: canonical fills are
@@ -1810,8 +1881,7 @@ async fn partial_fill_candidate_refuses_entitlement() {
     let (result, _) = send(&mut context, &[fixture.finalize(&[partial.id])], None, 340).await;
     result.unwrap();
 
-    // The exact per-owner conversions here happen to be whole atoms, so the
-    // freeze itself passes and the pot is provably empty...
+    // Every per-owner conversion is a whole atom, so the pot freezes empty.
     let (result, _) = send_walk(
         &mut context,
         fixture.freeze_entitlement(payer, partial.id),
@@ -1819,39 +1889,193 @@ async fn partial_fill_candidate_refuses_entitlement() {
     )
     .await;
     result.unwrap();
-    // ...but every slice of a split order refuses entitlement with the
-    // honest stub, and no receipt is minted.
-    for slice_index in [0u16, 1] {
-        let refused = send(
-            &mut context,
-            &[fixture.entitle_single(
-                payer,
-                partial.id,
-                slice_index,
-                reservations[0],
-                reservations[1 + slice_index as usize],
-            )],
-            None,
-            343 + slice_index as u32,
-        )
-        .await;
-        assert_eq!(custom(refused.0), ClutchError::NotYetImplemented as u32);
-        assert!(account(&mut context, fixture.receipt(partial.id, slice_index))
+
+    let position = |index: usize| fixture.owners[index].position;
+    let cash_before = owner_cash(&mut context, &fixture).await;
+    let eggs_before = book_eggs(&mut context, &fixture, &reservations, 0).await;
+
+    /* Slice 0: the buyer's first touch stamps its *whole order's* eight Egg
+     * atoms, not this slice's four, and the seller's stamps its four. */
+    let (result, units) = send(
+        &mut context,
+        &[fixture.entitle_single(payer, partial.id, 0, reservations[0], reservations[1])],
+        None,
+        343,
+    )
+    .await;
+    result.unwrap();
+    eprintln!("EntitleSlice (fragmented buy) CU: {units}");
+    let buyer = read_reservation(&mut context, reservations[0]).await;
+    assert_eq!(buyer.state, RESERVATION_STATE_ENTITLED);
+    assert_eq!(buyer.entitled_units, 8);
+    assert_eq!(buyer.consumed_units, 0);
+    let seller_one = read_reservation(&mut context, reservations[1]).await;
+    assert_eq!(seller_one.entitled_units, 4);
+    assert_eq!(seller_one.initial_internal[0], 6);
+
+    /* Out of order on purpose: slice 0 is consumed before slice 1 is even
+     * entitled, so the later entitlement touch meets a drawn-down envelope. */
+    let (result, units) = send(
+        &mut context,
+        &[fixture.settle_single(
+            partial.id,
+            1,
+            position(0),
+            position(1),
+            reservations[0],
+            reservations[1],
+            0,
+        )],
+        None,
+        344,
+    )
+    .await;
+    result.unwrap();
+    eprintln!("SettlePage (partial slice) CU: {units}");
+    let buyer = read_reservation(&mut context, reservations[0]).await;
+    assert_eq!(buyer.state, RESERVATION_STATE_ENTITLED);
+    assert_eq!(buyer.consumed_units, 4);
+    // initial = consumed + remaining + released, per cash: 3 = 1 + 2 + 0.
+    assert_eq!(buyer.initial_cash_atoms, 3);
+    assert_eq!(buyer.remaining_cash_atoms, 2);
+    // The first seller reached its stamped total, so it completed: CONSUMED,
+    // empty envelope, and its two unfilled Eggs are back in its Position.
+    let seller_one = read_reservation(&mut context, reservations[1]).await;
+    assert_eq!(seller_one.state, RESERVATION_STATE_CONSUMED);
+    assert_eq!(seller_one.consumed_units, seller_one.entitled_units);
+    assert!(seller_one.remaining_is_zero());
+    assert_eq!(
+        read_position(&mut context, position(1)).await.internal[0],
+        START_EGGS - 6 + 2
+    );
+
+    /* A filled order's remainder returns only through completion: the
+     * owner-signed terminal release keeps refusing a nonzero fill. */
+    let refused = send(
+        &mut context,
+        &[fixture.release_cleared(
+            &fixture.owners[2],
+            reservations[2],
+            partial.id,
+            2,
+        )],
+        Some(&fixture.owners[2].key),
+        345,
+    )
+    .await;
+    assert_eq!(custom(refused.0), ClutchError::MismatchedState as u32);
+
+    // Slice 1: the buyer is already ENTITLED and drawn down; its stamp is
+    // re-derived and required equal, and the second seller stamps its own.
+    let (result, _) = send(
+        &mut context,
+        &[fixture.entitle_single(payer, partial.id, 1, reservations[0], reservations[2])],
+        None,
+        346,
+    )
+    .await;
+    result.unwrap();
+    assert_eq!(
+        read_reservation(&mut context, reservations[0])
             .await
-            .is_none());
+            .entitled_units,
+        8
+    );
+
+    // Consuming it completes the buy end: the remaining cash — price
+    // improvement and unfilled refund in one number — is released once.
+    let (result, _) = send(
+        &mut context,
+        &[fixture.settle_single(
+            partial.id,
+            2,
+            position(0),
+            position(2),
+            reservations[0],
+            reservations[2],
+            1,
+        )],
+        None,
+        347,
+    )
+    .await;
+    result.unwrap();
+
+    for (at, address) in reservations.iter().enumerate() {
+        let reservation = read_reservation(&mut context, *address).await;
+        assert_eq!(
+            reservation.state,
+            RESERVATION_STATE_CONSUMED,
+            "reservation {at}"
+        );
+        assert_eq!(reservation.consumed_units, reservation.entitled_units);
+        assert!(reservation.remaining_is_zero());
+        assert_eq!(reservation.fee_debited_atoms, 0);
+        assert_eq!(reservation.fee_carry_numerator, 0);
     }
+
+    // The exact per-owner numbers: the buyer paid two atoms for eight Eggs
+    // and got its whole reserve back above that; each seller took one atom
+    // and its two unfilled Eggs.
+    let buyer_position = read_position(&mut context, position(0)).await;
+    assert_eq!(buyer_position.cash_atoms, START_CASH - 2);
+    assert_eq!(buyer_position.reserved_cash_atoms, 0);
+    assert_eq!(buyer_position.internal[0], START_EGGS + 8);
+    for seller in [1usize, 2] {
+        let account = read_position(&mut context, position(seller)).await;
+        assert_eq!(account.cash_atoms, START_CASH + 1);
+        assert_eq!(account.reserved_cash_atoms, 0);
+        assert_eq!(account.internal[0], START_EGGS - 6 + 2);
+    }
+    // Whole-plane closure: cash and Eggs are conserved across the book.
+    assert_eq!(owner_cash(&mut context, &fixture).await, cash_before);
+    assert_eq!(
+        book_eggs(&mut context, &fixture, &reservations, 0).await,
+        eggs_before
+    );
+
+    // Replay on an exhausted receipt refuses and moves nothing.
+    let watched = [position(0), position(2), reservations[0], reservations[2]];
+    let before = snapshot(&mut context, &watched).await;
+    let replay = send(
+        &mut context,
+        &[fixture.settle_single(
+            partial.id,
+            2,
+            position(0),
+            position(2),
+            reservations[0],
+            reservations[2],
+            1,
+        )],
+        None,
+        348,
+    )
+    .await;
+    assert_eq!(custom(replay.0), ClutchError::MismatchedState as u32);
+    assert_eq!(snapshot(&mut context, &watched).await, before);
+
+    // Re-entitling a slice whose ends are already CONSUMED refuses before any
+    // write: a terminal reservation cannot take a new slice.
+    let replay = send(
+        &mut context,
+        &[fixture.entitle_single(payer, partial.id, 1, reservations[0], reservations[2])],
+        None,
+        349,
+    )
+    .await;
+    assert_eq!(custom(replay.0), ClutchError::MismatchedState as u32);
 }
 
-/// A verified book whose slices pair a portfolio sell against single-Egg
-/// buys freezes its pot but refuses per-slice entitlement: the mixed shape
-/// needs the per-leg consumption state the full-pair seam does not model, and
-/// stands with the PartialFillLedger family.
+/// A book whose slices pair a portfolio sell against single-Egg buys clears
+/// through the per-slice seam, one leg at a time.
 ///
-/// The second executable gap exhibit of the PartialFillLedger wave, beside
-/// [`partial_fill_candidate_refuses_entitlement`].  Both assert the standing
-/// refusal; the wave flips both expectations.
+/// The second gap exhibit of the wave, flipped.  The portfolio end is
+/// entitled once, stamped with its whole basket's eight Egg atoms — its
+/// filled lots times its coefficient sum — and completes only when both of
+/// its legs have been consumed by different counterparties.
 #[tokio::test]
-async fn mixed_portfolio_and_single_book_refuses_entitlement() {
+async fn mixed_portfolio_and_single_book_clears_leg_by_leg() {
     let (mut context, fixture) = start().await;
     let payer = context.payer.pubkey();
     // One portfolio sell of one lot of [4, 4] — four Eggs on outcome 0 and
@@ -1882,7 +2106,7 @@ async fn mixed_portfolio_and_single_book_refuses_entitlement() {
     let (result, _) = send(&mut context, &[fixture.finalize(&[mixed.id])], None, 340).await;
     result.unwrap();
 
-    // Every per-owner conversion is whole, so the pot freezes empty...
+    // Every per-owner conversion is whole, so the pot freezes empty.
     let (result, _) = send_walk(
         &mut context,
         fixture.freeze_entitlement(payer, mixed.id),
@@ -1890,26 +2114,173 @@ async fn mixed_portfolio_and_single_book_refuses_entitlement() {
     )
     .await;
     result.unwrap();
-    // ...but a mixed single/portfolio slice refuses with the honest stub, and
-    // no receipt is minted.
+
+    let position = |index: usize| fixture.owners[index].position;
+    let cash_before = owner_cash(&mut context, &fixture).await;
+    let eggs_before = [
+        book_eggs(&mut context, &fixture, &reservations, 0).await,
+        book_eggs(&mut context, &fixture, &reservations, 1).await,
+    ];
+
+    // Both legs entitle and consume, in slice order.  The buy ends are
+    // single-Egg and complete immediately; the portfolio sell completes only
+    // on the second leg.
     for slice_index in [0u16, 1] {
-        let refused = send(
+        let buyer = 1 + slice_index as usize;
+        let (result, units) = send(
             &mut context,
             &[fixture.entitle_single(
                 payer,
                 mixed.id,
                 slice_index,
-                reservations[1 + slice_index as usize],
+                reservations[buyer],
                 reservations[0],
             )],
             None,
             343 + slice_index as u32,
         )
         .await;
+        result.unwrap();
+        eprintln!("EntitleSlice (mixed leg {slice_index}) CU: {units}");
+        // The basket's stamp is its filled lots times its coefficient sum,
+        // and it is written once: the second touch re-derives and agrees.
+        let seller = read_reservation(&mut context, reservations[0]).await;
+        assert_eq!(seller.entitled_units, 8);
+        assert_eq!(seller.order_kind, clutch_solana_layout::ORDER_KIND_PORTFOLIO);
+
+        let (result, units) = send(
+            &mut context,
+            &[fixture.settle_single(
+                mixed.id,
+                u64::from(slice_index) + 1,
+                position(buyer - 1),
+                position(3),
+                reservations[buyer],
+                reservations[0],
+                slice_index,
+            )],
+            None,
+            345 + slice_index as u32,
+        )
+        .await;
+        result.unwrap();
+        eprintln!("SettlePage (mixed leg {slice_index}) CU: {units}");
+        let seller = read_reservation(&mut context, reservations[0]).await;
+        assert_eq!(seller.consumed_units, 4 * (u64::from(slice_index) + 1));
+        assert_eq!(
+            seller.state,
+            if slice_index == 1 {
+                RESERVATION_STATE_CONSUMED
+            } else {
+                RESERVATION_STATE_ENTITLED
+            }
+        );
+        assert_eq!(
+            read_reservation(&mut context, reservations[buyer]).await.state,
+            RESERVATION_STATE_CONSUMED
+        );
+    }
+
+    // The basket sold whole, so nothing came back to it; each buyer holds its
+    // leg and paid one atom of the two it reserved.
+    let seller_position = read_position(&mut context, position(3)).await;
+    assert_eq!(seller_position.cash_atoms, START_CASH + 2);
+    assert_eq!(seller_position.internal[0], START_EGGS - 4);
+    assert_eq!(seller_position.internal[1], START_EGGS - 4);
+    for (buyer, outcome) in [(0usize, 0usize), (1, 1)] {
+        let account = read_position(&mut context, position(buyer)).await;
+        assert_eq!(account.cash_atoms, START_CASH - 1);
+        assert_eq!(account.reserved_cash_atoms, 0);
+        assert_eq!(account.internal[outcome], START_EGGS + 4);
+    }
+    assert_eq!(owner_cash(&mut context, &fixture).await, cash_before);
+    for outcome in [0usize, 1] {
+        assert_eq!(
+            book_eggs(&mut context, &fixture, &reservations, outcome).await,
+            eggs_before[outcome]
+        );
+    }
+}
+
+/// A witness whose slices do not convert refuses at the entitlement seam,
+/// even when every *owner* sum does.
+///
+/// Two buyers of eight against two sellers of eight, paired six-and-two
+/// crosswise at a quarter-scale price.  Every owner moves twenty thousand
+/// price units — two whole atoms — so the model's rounding pot is empty and
+/// the freeze opens; but no single slice converts, and the divisibility rule
+/// that keeps every minted receipt consumable refuses all four.
+///
+/// The rounding-boundary realization this needs is re-filed under the
+/// VirtualPot/rounding family, and this fixture keeps that refusal red.
+#[tokio::test]
+async fn slices_that_do_not_convert_refuse_even_with_exact_owner_sums() {
+    let (mut context, fixture) = start().await;
+    let payer = context.payer.pubkey();
+    let orders = [
+        (0, fixture.single(&fixture.owners[0], 1, 0, 0, 8, 3_000)),
+        (1, fixture.single(&fixture.owners[1], 2, 0, 0, 8, 3_000)),
+        (2, fixture.single(&fixture.owners[2], 3, 0, 1, 8, 2_000)),
+        (3, fixture.single(&fixture.owners[3], 4, 0, 1, 8, 2_000)),
+    ];
+    build_frozen_book(&mut context, &fixture, &orders, &[]).await;
+    let (epoch, book, reservations) = frozen_state(&mut context, &fixture).await;
+
+    // Crosswise six-and-two: every owner totals eight, no slice is a whole
+    // number of atoms at 2_500 per Egg.
+    let witness = witness_of(&[
+        slice(0, LegRefV1::Order(2), 0, 6),
+        slice(0, LegRefV1::Order(3), 0, 2),
+        slice(1, LegRefV1::Order(2), 0, 2),
+        slice(1, LegRefV1::Order(3), 0, 6),
+    ]);
+    let mut prices = [0u64; MAX_OUTCOMES];
+    prices[..4].copy_from_slice(&[2_500, 2_500, 2_500, 2_500]);
+    let strand = plan_submission(&fixture, &epoch, &book, prices, 0, witness);
+    assert_eq!(strand.fills, vec![8, 8, 8, 8]);
+
+    submit_seal(&mut context, &fixture, &strand, Some(4), &[], 100).await;
+    walk_to_verdict(&mut context, &fixture, &strand, &reservations, 300).await;
+    context
+        .warp_to_slot(FREEZE_DEADLINE + CANDIDATE_WINDOW_SLOTS)
+        .unwrap();
+    let (result, _) = send(&mut context, &[fixture.finalize(&[strand.id])], None, 340).await;
+    result.unwrap();
+
+    // The per-owner conversions are exact, so the pot freezes empty...
+    let (result, _) = send_walk(
+        &mut context,
+        fixture.freeze_entitlement(payer, strand.id),
+        342,
+    )
+    .await;
+    result.unwrap();
+    // ...and every per-slice conversion is inexact, so every slice refuses
+    // and no receipt is minted.
+    for (slice_index, buyer, seller) in [(0u16, 0usize, 2usize), (1, 0, 3), (2, 1, 2), (3, 1, 3)] {
+        let refused = send(
+            &mut context,
+            &[fixture.entitle_single(
+                payer,
+                strand.id,
+                slice_index,
+                reservations[buyer],
+                reservations[seller],
+            )],
+            None,
+            343 + slice_index as u32,
+        )
+        .await;
         assert_eq!(custom(refused.0), ClutchError::NotYetImplemented as u32);
-        assert!(account(&mut context, fixture.receipt(mixed.id, slice_index))
+        assert!(account(&mut context, fixture.receipt(strand.id, slice_index))
             .await
             .is_none());
+    }
+    // Nothing was stamped: every reservation is still ACTIVE and whole.
+    for address in &reservations {
+        let reservation = read_reservation(&mut context, *address).await;
+        assert_eq!(reservation.state, RESERVATION_STATE_ACTIVE);
+        assert_eq!(reservation.entitled_units, 0);
     }
 }
 

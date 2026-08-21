@@ -15,7 +15,7 @@ use {
         account_len, canonical_epoch_id, canonical_order_id,
         reservation::{
             canonical_reservation_id, ReservationAccount, ReservationPlan,
-            RESERVATION_ACCOUNT_BYTES, RESERVATION_STATE_ENTITLED,
+            RESERVATION_ACCOUNT_BYTES,
         },
         stream, CandidateRecord, EpochAccount, Hash32, Intent, OrderRecord, OrderSlot,
         PositionAccount, SettlementReceiptAccount, CANDIDATE_STATUS_SELECTED,
@@ -317,11 +317,12 @@ async fn start(mutation: Mutation) -> (BanksClient, Keypair, Fixture) {
         sell_plan,
     )
     .unwrap();
-    // The entitlement freeze's poststate: the untouched envelope, ENTITLED.
-    buyer_reservation.state = RESERVATION_STATE_ENTITLED;
-    seller_reservation.state = RESERVATION_STATE_ENTITLED;
-    buyer_reservation.validate().unwrap();
-    seller_reservation.validate().unwrap();
+    // The entitlement freeze's poststate: the untouched envelope, ENTITLED,
+    // each end stamped with its whole order's entitled total.  Both orders
+    // are wholly filled by this one slice, so the total is its quantity and
+    // this one consumption completes both ends.
+    let buyer_reservation = buyer_reservation.entitled(4).unwrap();
+    let seller_reservation = seller_reservation.entitled(4).unwrap();
 
     let slice_bytes = 0u16.to_le_bytes();
     let (receipt_address, receipt_bump) = pda(
