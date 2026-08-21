@@ -76,10 +76,19 @@ The checked-in `MANIFEST.baseline.json` is schema v2, re-emitted for the
 2026-08-20 TerminalClosure runtime (`4fded7a6…`, 1,979,512 bytes, liveness
 seal `934bdd6`, cycle E) with all 100 declared gates executed in the
 emission run, and `check --run-gates` passes after the manifest-only
-commit (`cb94c27`). The cycle-E portable attestation is pending; the most
-recent completed attestation covers the same-day predecessor chain:
-Persvati attested `788581c` (the `e8ba31d5…` Tier-2-complete seal) with
-**44/44 portable gates PASS, 0 STOP** — archive and
+commit (`cb94c27`). Persvati independently attested the current identity
+on 2026-08-20: **45/45 portable gates PASS, 0 STOP** over exact `cb94c27`
+— the `4fded7a6…` ELF byte-verified in seven contexts, all seven
+historical roots verified as the exact retained set, and a new
+contract-driven gate (`build_path_mechanism_crossref`) verifying the
+seal's relocation-mechanism attribution itself: 88 mangled-symbol sites
+identical across pass 1, pass 2, and the relocated-Cargo-home build, and
+different at all 88 in the cross-path build — the recorded
+`PATH_TIED_SYMBOL_ORDER` and `PATH_SENSITIVE` dispositions checked, not
+narrated. Durable job:
+`persvati:/home/ember/jobs/dragons-clutch-portable-attest-cb94c27-20260820-xiVNcu`.
+The predecessor attestation: Persvati attested `788581c` (the `e8ba31d5…`
+Tier-2-complete seal) with **44/44 portable gates PASS, 0 STOP** — archive and
 bundle digests byte-identical on both hosts, the `e8ba31d5…` ELF
 byte-verified in six contexts (never built, loaded, or executed there), all
 six historical roots verified as the exact retained set, the manifest
