@@ -1,0 +1,206 @@
+//! Observed account bytes, read through the frozen layout codecs.
+//!
+//! The browser is shown decoded state so that it never needs a parser of its
+//! own.  Every field below comes out of `clutch_solana_layout`, the same
+//! codecs the program writes through — there is no second reading of the wire
+//! format anywhere in this project's frontend.
+//!
+//! A role this daemon has no codec for is reported as `{"kind": "opaque"}`
+//! with its length and leading bytes.  That is deliberately a visible gap and
+//! not a silent one: an undecoded account must look undecoded.
+
+use clutch_solana_layout::clearing::EpochWindowAccount;
+use clutch_solana_layout::reservation::ReservationAccount;
+use clutch_solana_layout::{
+    CandidateRecord, EpochAccount, FinalPotAccount, HoardAccount, MarketAccount, OrderPageAccount,
+    PositionAccount, SettlementReceiptAccount, SupplyLedgerAccount,
+};
+use serde_json::{json, Value};
+
+/// Token-2022 base account: `amount` is a little-endian u64 at byte 64.
+const TOKEN_AMOUNT_OFFSET: usize = 64;
+/// Token-2022 base mint: `supply` is a little-endian u64 at byte 36.
+const MINT_SUPPLY_OFFSET: usize = 36;
+
+fn u64_at(bytes: &[u8], offset: usize) -> Option<u64> {
+    let slice = bytes.get(offset..offset.checked_add(8)?)?;
+    Some(u64::from_le_bytes(slice.try_into().ok()?))
+}
+
+fn short(bytes: &[u8]) -> String {
+    clutch_sbf_harness::hex_encode(&bytes[..bytes.len().min(8)])
+}
+
+fn position(bytes: &[u8]) -> Option<Value> {
+    let value = PositionAccount::decode(bytes).ok()?;
+    Some(json!({
+        "kind": "position",
+        "generation": value.generation,
+        "cash_atoms": value.cash_atoms,
+        "reserved_cash_atoms": value.reserved_cash_atoms,
+        "free_cash_atoms": value.cash_atoms.saturating_sub(value.reserved_cash_atoms),
+        "internal": [value.internal[0], value.internal[1]],
+        "close_state": value.close_state,
+    }))
+}
+
+fn hoard(bytes: &[u8]) -> Option<Value> {
+    let value = HoardAccount::decode(bytes).ok()?;
+    Some(json!({"kind": "hoard", "collateral_atoms": value.collateral_atoms, "flags": value.flags}))
+}
+
+fn market(bytes: &[u8]) -> Option<Value> {
+    let value = MarketAccount::decode(bytes).ok()?;
+    Some(json!({
+        "kind": "market",
+        "outcome_count": value.outcome_count,
+        "lifecycle": value.lifecycle,
+        "collateral_cap": value.collateral_cap,
+        "created_slot": value.created_slot,
+    }))
+}
+
+fn supply(bytes: &[u8]) -> Option<Value> {
+    let value = SupplyLedgerAccount::decode(bytes).ok()?;
+    Some(json!({
+        "kind": "supply",
+        "generation": value.generation,
+        "internal_supply": [value.internal_supply[0], value.internal_supply[1]],
+        "external_supply": [value.external_supply[0], value.external_supply[1]],
+    }))
+}
+
+fn epoch(bytes: &[u8]) -> Option<Value> {
+    let value = EpochAccount::decode(bytes).ok()?;
+    Some(json!({
+        "kind": "epoch",
+        "epoch_index": value.epoch_index,
+        "phase": value.phase,
+        "order_count": value.order_count,
+        "owner_count": value.owner_count,
+        "page_count": value.page_count,
+        "price_scale": value.price_scale,
+    }))
+}
+
+fn window(bytes: &[u8]) -> Option<Value> {
+    let value = EpochWindowAccount::decode(bytes).ok()?;
+    Some(json!({
+        "kind": "window",
+        "freeze_deadline_slot": value.freeze_deadline_slot,
+        "selection_deadline_slot": value.selection_deadline_slot,
+        "selected_slot": value.selected_slot,
+        "live_order_count": value.live_order_count,
+        "retained_count": value.retained_count,
+    }))
+}
+
+fn page(bytes: &[u8]) -> Option<Value> {
+    let value = OrderPageAccount::decode(bytes).ok()?;
+    Some(json!({
+        "kind": "page",
+        "page_index": value.page_index,
+        "order_count": value.order_count,
+        "tombstone_count": value.tombstone_count,
+        "set_order_count": value.set_order_count,
+        "frozen": value.frozen,
+    }))
+}
+
+fn reservation(bytes: &[u8]) -> Option<Value> {
+    let value = ReservationAccount::decode(bytes).ok()?;
+    Some(json!({
+        "kind": "reservation",
+        "state": value.state,
+        "side": value.side,
+        "order_kind": value.order_kind,
+        "initial_cash_atoms": value.initial_cash_atoms,
+        "remaining_cash_atoms": value.remaining_cash_atoms,
+        "initial_internal": [value.initial_internal[0], value.initial_internal[1]],
+        "remaining_internal": [value.remaining_internal[0], value.remaining_internal[1]],
+    }))
+}
+
+fn candidate(bytes: &[u8]) -> Option<Value> {
+    let value = CandidateRecord::decode(bytes).ok()?;
+    Some(json!({
+        "kind": "candidate",
+        "status": value.status,
+        "prices": [value.prices[0], value.prices[1]],
+        "virtual_split": value.virtual_split,
+        "virtual_merge": value.virtual_merge,
+        "distinct_owners": value.distinct_owners,
+        "order_len": value.order_len,
+        "submitted_slot": value.submitted_slot,
+    }))
+}
+
+fn receipt(bytes: &[u8]) -> Option<Value> {
+    let value = SettlementReceiptAccount::decode(bytes).ok()?;
+    Some(json!({"kind": "receipt", "flags": value.flags}))
+}
+
+fn pot(bytes: &[u8]) -> Option<Value> {
+    let value = FinalPotAccount::decode(bytes).ok()?;
+    Some(json!({"kind": "pot", "phase": value.phase}))
+}
+
+fn token(bytes: &[u8]) -> Option<Value> {
+    Some(json!({"kind": "token", "amount": u64_at(bytes, TOKEN_AMOUNT_OFFSET)?}))
+}
+
+fn mint(bytes: &[u8]) -> Option<Value> {
+    Some(json!({"kind": "mint", "supply": u64_at(bytes, MINT_SUPPLY_OFFSET)?}))
+}
+
+/// Decode one reloaded account by the plan role it was compared under.
+///
+/// Roles are the plan's own vocabulary (`owner-b.position`,
+/// `general.reservation-3`, `general-market.hoard-token`), so the match is on
+/// the role suffix rather than on a guessed discriminator byte.
+pub fn by_role(role: &str, bytes: &[u8]) -> Value {
+    let tail = role.rsplit('.').next().unwrap_or(role);
+    let decoded = match tail {
+        "position" => position(bytes),
+        "hoard" => hoard(bytes),
+        "market" => market(bytes),
+        "supply" => supply(bytes),
+        "epoch" => epoch(bytes),
+        "window" => window(bytes),
+        "page" => page(bytes),
+        "candidate" => candidate(bytes),
+        "pot" => pot(bytes),
+        "hoard-token" | "collateral" | "actor-collateral" => token(bytes),
+        _ if tail.starts_with("reservation-") => reservation(bytes),
+        _ if tail.starts_with("receipt-") => receipt(bytes),
+        _ if tail.starts_with("outcome-mint-") => mint(bytes),
+        _ => None,
+    };
+    decoded.unwrap_or_else(|| json!({"kind": "opaque", "head": short(bytes)}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_account_with_no_codec_is_visibly_opaque() {
+        let value = by_role("general.clear-work", &[1, 2, 3, 4]);
+        assert_eq!(value["kind"], "opaque");
+        assert_eq!(value["head"], "01020304");
+    }
+
+    #[test]
+    fn a_token_amount_is_read_at_the_frozen_offset() {
+        let mut bytes = vec![0_u8; 165];
+        bytes[TOKEN_AMOUNT_OFFSET..TOKEN_AMOUNT_OFFSET + 8].copy_from_slice(&49_u64.to_le_bytes());
+        let value = by_role("general-market.hoard-token", &bytes);
+        assert_eq!(value["kind"], "token");
+        assert_eq!(value["amount"], 49);
+    }
+
+    #[test]
+    fn a_truncated_position_does_not_decode_into_a_lie() {
+        assert_eq!(by_role("owner-b.position", &[0_u8; 4])["kind"], "opaque");
+    }
+}

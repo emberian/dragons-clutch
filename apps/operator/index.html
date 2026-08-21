@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Operator Bench — Dragon's Clutch</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<!-- The honesty strip is markup, not a component decision: it exists in the
+     document before any script runs, and nothing on this page removes it. -->
+<div id="honesty" class="honesty">
+  <span class="honesty-flag">NON-PRODUCTION</span>
+  <span>mock-source ELF</span>
+  <span class="honesty-sep">·</span>
+  <code class="digest">sha256 pending</code>
+  <span class="honesty-sep">·</span>
+  <span>LOCAL 127.0.0.1 ONLY</span>
+  <span class="honesty-sep">·</span>
+  <span>no value</span>
+  <span class="honesty-sep">·</span>
+  <span>evidence scope</span>
+  <span class="evidence-chip">SBF-EXECUTED</span>
+  <span class="honesty-note">unpromoted</span>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-name">Operator Bench</span>
+    <span class="brand-sub">general clearing, committed, local</span>
+  </div>
+  <nav id="nav" class="nav"></nav>
+  <div id="status" class="status"></div>
+</header>
+
+<main id="screen" class="screen">
+  <section class="card">
+    <h2>Attaching to the daemon</h2>
+    <p class="muted">
+      This page has no RPC client, no wallet, no transaction serializer, and no
+      key material. It reads one event stream from the local daemon and
+      renders it. Every transaction the bank sees was built by the
+      repository's own harness library.
+    </p>
+  </section>
+</main>
+
+<footer class="footer">
+  <p>
+    Signed, confirmed, committed sequential execution on a local
+    solana-test-validator from a genesis-assisted prestate, against an ELF
+    built with the non-production mock-source feature. Not a deployment, not
+    devnet evidence, not mainnet evidence, not a wallet, not an operatorless
+    venue.
+  </p>
+</footer>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

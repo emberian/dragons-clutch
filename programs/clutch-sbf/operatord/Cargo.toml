@@ -1,0 +1,44 @@
+[package]
+name = "clutch-sbf-operatord"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "Loopback-only daemon serving the Operator Bench over the repository's own transaction builders"
+
+# Intentionally NOT a member of the SBF build workspace, for the reason
+# `../committed-harness/README.md` already records: the program ELF must not
+# acquire host signing or JSON dependencies merely because a local evidence
+# daemon needs them.  That workspace's lock is what the sealed baseline
+# resolves the deployable artifact from.  This crate path-depends across the
+# boundary so it still calls the one true builder.
+[workspace]
+
+# Same offline build plumbing as the SBF workspace, and for the same reason:
+# this host has the `solana-define-syscall 5.1.0` source but not its `.crate`
+# archive.  The patched source is byte-identical to the published crate.
+[patch.crates-io]
+solana-define-syscall = { path = "../vendor/solana-define-syscall-5.1.0" }
+
+[dependencies]
+base64 = "=0.22.1"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.151"
+solana-keypair = "=3.1.2"
+# The one true builder.  Every byte this daemon submits, and every byte it
+# rebuilds in `replay`, comes from here.
+clutch-sbf-harness = { path = "../harness" }
+# The frozen account codecs the daemon decodes observed bytes through, so the
+# browser is shown decoded state rather than a second hand-written parser.
+clutch-solana-layout = { path = "../../solana-layout" }
+# Hashing the ELF the validator is actually about to load, in process, so the
+# banner cannot show a digest a stale manifest remembers.  Same pin and same
+# host-only `sha2` selection the harness uses.
+solana-sha256-hasher = { version = "=3.1.0", features = ["sha2"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
