@@ -16,14 +16,18 @@ use clutch_batch::relation_v1::{
 };
 use clutch_batch::DustPolicy;
 
-/// **Tier 2 frozen policy profile v1 — PROPOSED, not yet frozen.**
+/// **Tier 2 frozen policy profile v1 — FROZEN 2026-08-20.**
 ///
 /// The general portfolio-clearing profile named by
-/// `docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md` (T2-5).  Ember's
-/// sign-off is what freezes it; until then every selector below is a proposal
-/// pinned for review.  Pinning `fee_base: None` at 0 basis points deliberately
-/// does **not** preempt the queued fee-base fork — fees stay forced zero at
-/// every Tier 2 gate until that fork is decided separately.
+/// `docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md` (T2-5), frozen as
+/// pinned by `docs/decisions/ADOPTED_2026-08-20.md` item 1
+/// (`REPORT_general-clearing-policy-freeze`).  Every selector below is now a
+/// freeze, not a proposal: a future profile is a **sibling const with a new
+/// digest**, never an edit here, so the freeze forecloses no dynamics.
+/// Pinning `fee_base: None` at 0 basis points deliberately does **not** preempt
+/// the fee-base fork — that is item 9's separate decision, whose shape-only
+/// sibling is [`GENERAL_CLEARING_FEE_SHAPE_V1`] below, and fees stay forced
+/// zero at every Tier 2 gate regardless.
 ///
 /// Plan-pinned selectors:
 ///
@@ -81,8 +85,9 @@ pub const GENERAL_CLEARING_POLICY_V1: FrozenPolicyV1 = FrozenPolicyV1 {
     fee_base: FeeBaseV1::None,
 };
 
-/// **The fee-bearing SIBLING of [`GENERAL_CLEARING_POLICY_V1`] — SHAPE ONLY,
-/// both rates an explicit zero, PROPOSED and unused by every settling path.**
+/// **The fee-bearing SIBLING of [`GENERAL_CLEARING_POLICY_V1`] — SHAPE
+/// ADOPTED 2026-08-20, both rates UNDECIDED and pinned to an explicit zero,
+/// and unused by every settling path.**
 ///
 /// The composite fee base selected 2026-08-20 (`ADOPTED_2026-08-20.md` item 9
 /// on `REPORT_fee-base-selection`): `kappa*G(a,p) + kappa'*R(a)` — atomic

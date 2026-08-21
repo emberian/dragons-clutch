@@ -63,7 +63,8 @@
 //! claimed score, and never trusting the stored digest either: for every
 //! verified candidate the tie digest is **re-derived** from the full-width
 //! domain and the presented feed's stored regions
-//! ([`super::clear_walk::recompute_tie_digest`], the same construction the
+//! (`super::clear_walk::recompute_tie_digest`, `pub(super)`; the same
+//! construction the
 //! close stamped), and a mismatch refuses with
 //! [`ClutchError::ScoreDigestMismatch`].  The winner takes
 //! `CANDIDATE_STATUS_SELECTED`, the window records it, and the epoch takes

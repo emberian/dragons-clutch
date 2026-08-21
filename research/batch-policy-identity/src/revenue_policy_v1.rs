@@ -5,22 +5,29 @@
 //! same machinery, executing the decisions of
 //! `docs/decisions/ADOPTED_2026-08-20.md` items 6 and 8:
 //!
+//! Every intra-doc link below is `crate::`-qualified on purpose: this module's
+//! own header is merged with the outer doc comment on `pub mod
+//! revenue_policy_v1;` in `lib.rs`, and the merged text resolves in the crate
+//! root's scope, where a bare module-local name is not in scope.
+//!
 //! * **B4a** — custody requirements adopted, **treasury pubkey DEFERRED** to
 //!   the first fee-bearing Realm.  The deferral is structural, not prose:
-//!   [`REVENUE_POLICY_V1`] pins [`REVENUE_TREASURY_UNSET_V1`], a
-//!   distinguished sentinel that [`treasury_admits_fee_bearing`] refuses, so
-//!   fee-bearing epoch admission fails closed at the treasury byte until a
-//!   const naming a real key exists — a new sibling const with a new digest,
-//!   behind ember's reserved decision.
+//!   [`crate::revenue_policy_v1::REVENUE_POLICY_V1`] pins
+//!   [`crate::revenue_policy_v1::REVENUE_TREASURY_UNSET_V1`], a distinguished
+//!   sentinel that [`crate::revenue_policy_v1::treasury_admits_fee_bearing`]
+//!   refuses, so fee-bearing epoch admission fails closed at the treasury byte
+//!   until a const naming a real key exists — a new sibling const with a new
+//!   digest, behind ember's reserved decision.
 //! * **B4b** — Plane C's destination is an ordinary treasury-owned Position
 //!   (D6); nothing here allocates any pot family.
 //! * **B4c** — Plane L charges are a permanent zero as frozen policy; **no
-//!   vault is built**, and [`LamportSinkV1::None`] documents the reserved
-//!   member.
+//!   vault is built**, and [`crate::revenue_policy_v1::LamportSinkV1::None`]
+//!   documents the reserved member.
 //! * **B4e** — the V1 split vector is **60 / 0 / 40 over 100** with
-//!   [`StandingMakerV1::AllRestingMakers`] and residual atoms to the
-//!   treasury; the published envelope (executor ≤ 15%, treasury ≥ 25%,
-//!   `docs/ECONOMICS.md`) is a [`RevenuePolicyV1::validate`] refusal, not
+//!   [`crate::revenue_policy_v1::StandingMakerV1::AllRestingMakers`] and
+//!   residual atoms to the treasury; the published envelope (executor ≤ 15%,
+//!   treasury ≥ 25%, `docs/ECONOMICS.md`) is a
+//!   [`crate::revenue_policy_v1::RevenuePolicyV1::validate`] refusal, not
 //!   prose.
 //! * **D3/D4** — a policy is a frozen const plus digest pinned per Realm at
 //!   creation; existing Realms are zero-take forever, and **the absence of a

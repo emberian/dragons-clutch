@@ -748,9 +748,11 @@ pub const MAX_RETAINED_CANDIDATES: usize = 3;
 /// deadline is a fixed schedule pin of the v1 selection lifecycle rather than
 /// any caller's choice — the epoch has no stored authority who could choose
 /// one after init, and `Intent::InitEpoch`'s wire (tag 49) is sealed at the
-/// attested baseline.  **PROPOSED schedule pin**, exactly like the frozen
-/// policy profile: freezing the value (or moving it onto a revised InitEpoch
-/// wire) is ember's sign-off, and nothing else consumes it.
+/// attested baseline.  **FROZEN schedule pin 2026-08-20**
+/// (`docs/decisions/ADOPTED_2026-08-20.md` item 1, which freezes this value
+/// alongside `GENERAL_CLEARING_POLICY_V1`): moving the schedule means a
+/// revised `InitEpoch` wire under a fresh ember decision, never an edit here,
+/// and nothing else consumes it.
 pub const CANDIDATE_WINDOW_SLOTS: u64 = 1_000;
 /// Exact byte length of one [`EpochWindowAccount`].
 pub const EPOCH_WINDOW_ACCOUNT_BYTES: usize =

@@ -67,7 +67,9 @@
 //! First-party `unsafe` in this crate is confined to two places, both in the
 //! `bpf` module below and both compiled only for `target_os = "solana"`: the
 //! expansion of the Anza `entrypoint!` macro, and the requestable-heap bump
-//! allocator that replaces the macro's 32-KiB default (see [`bpf`]).
+//! allocator that replaces the macro's 32-KiB default (`bpf::GrowableBump`).
+//! Neither has a rustdoc page: `bpf` is private and compiled only under
+//! `target_os = "solana"`, so no host doc build sees it.
 
 pub mod accounts;
 pub mod claim_truth;

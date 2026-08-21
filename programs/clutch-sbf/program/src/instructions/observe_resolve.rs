@@ -49,7 +49,8 @@
 //! `clutch_solana_reference::apply_with_evidence` remains an offline semantic
 //! oracle for the categorical owner transition, run against the record that
 //! Resolve produced. It is not the production account ABI: every owner check
-//! is rebuilt by [`apply_recorded_redemption`] from immutable Terms and the
+//! is rebuilt by the private `apply_recorded_redemption` from immutable Terms
+//! and the
 //! persisted record in `#[inline(never)]` frames because the composed adapter
 //! exceeds SBF's 4 KiB frame. Native point/occupation redemption composes the
 //! record-owned vector with the unchanged kernel redemption seam.

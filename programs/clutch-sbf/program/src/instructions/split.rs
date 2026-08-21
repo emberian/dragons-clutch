@@ -51,7 +51,7 @@
 //! | obligation | where |
 //! | --- | --- |
 //! | C1 two-term closure against the kernel aggregate | [`accounts::require_two_term_closure`], pre-state and post-state |
-//! | C2 position-owned internal balances do not exceed the market aggregate | [`require_internal_bound`], pre-state and post-state |
+//! | C2 position-owned internal balances do not exceed the market aggregate | `require_internal_bound` (private, this module), pre-state and post-state |
 //! | C3 ledger moved by exactly the position delta | [`accounts::apply_ledger_delta`], once per ledger term |
 //!
 //! A market holding a second position is therefore representable here, which is

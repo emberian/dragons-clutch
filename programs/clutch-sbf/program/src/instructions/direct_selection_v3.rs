@@ -1,7 +1,7 @@
 //! Complete Direct V3 lifecycle adapter.
 //!
 //! Every V3 lifecycle intent has exactly one handler here: Init and the
-//! [`freeze_abort`], [`staged`], and [`terminal`] submodules cover tags 36
+//! private `freeze_abort`, `staged`, and `terminal` submodules cover tags 36
 //! through 46 with no unimplemented arm, so [`crate::dispatch`] can route the
 //! family all-or-nothing. Page creation and funded Reservation V2 placement
 //! remain branches of the existing `InitOrderPage`/`PlaceOrder` wires,

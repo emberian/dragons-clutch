@@ -371,6 +371,13 @@ CARGO_MANIFESTS = [
     ("clutch_sbf", "programs/clutch-sbf/Cargo.toml", True),  # host-side crate checks
 ]
 
+# Workspace crates whose `cargo_doc` gate denies rustdoc warnings outright,
+# the same discipline the three research-crate doc gates below already carry.
+# A crate joins this set once its doc surface is warning-free at a reseal
+# boundary: a doc-comment byte inside the SBF source closure forks the ELF
+# identity, so the repair and the strictening ride one identity wave.
+STRICT_DOC_CRATES = {"clutch_sbf"}
+
 TEST_RESULT_PATTERNS = [r"^test result: "]
 CLIPPY_PATTERNS = [r"^error(\[|:)", r"^warning(\[|:)"]
 # Cargo's `Documenting ...` progress contains target paths and differs between
@@ -422,16 +429,24 @@ def build_gates() -> list[dict[str, Any]]:
     for name, manifest, has_doc in CARGO_MANIFESTS:
         if not has_doc:
             continue
+        strict = name in STRICT_DOC_CRATES
+        prefix = "RUSTDOCFLAGS='-D warnings' " if strict else ""
         gates.append(
             {
                 "id": f"cargo_doc.{name}",
                 "section": "current-baseline",
                 "command": (
-                    f"cargo doc --manifest-path {manifest} --offline --locked --no-deps"
+                    f"{prefix}cargo doc --manifest-path {manifest} "
+                    "--offline --locked --no-deps"
                 ),
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": DOC_PATTERNS,
-                "note": "documentation build; asserts nothing about content",
+                "note": (
+                    "documentation build with rustdoc warnings denied; a broken "
+                    "or private intra-doc link fails the gate"
+                    if strict
+                    else "documentation build; asserts nothing about content"
+                ),
             }
         )
 
@@ -1325,8 +1340,16 @@ def build_gates() -> list[dict[str, Any]]:
                     ],
                 },
                 "key_patterns": [
+                    r"^== SVM profile: default-empty-registry ==$",
                     r"^source_profile=default-empty-registry$",
-                    r"^[0-9a-f]{64}\s+.*clutch_sbf\.so$",
+                    # `run_svm_tests.sh` prints the staged ELF identity as
+                    # `elf_sha256=`/`elf_bytes=` lines, exactly as the mock gate
+                    # below captures them. The former `<hex>  ...clutch_sbf.so`
+                    # shasum-transcript pattern matched no line the runner emits,
+                    # so the default profile's ELF identity reached no manifest
+                    # key line at all.
+                    r"^elf_sha256=[0-9a-f]{64}$",
+                    r"^elf_bytes=[0-9]+$",
                     r"^running [0-9]+ tests?$",
                     r"^test default_elf_refuses_endow_without_a_registered_source_release \.\.\. ok$",
                     r"^test result: ",

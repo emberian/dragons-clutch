@@ -12,8 +12,8 @@
 //! the generalized entitled seam, portfolio full pairs through the layout
 //! crate's `{prepare,apply}_full_pair`.  Unentitled and general shapes —
 //! partial fills, virtual legs, mixed pairs, inexact conversions — keep
-//! refusing honestly (`NotYetImplemented`, the standing ledger rows in
-//! [`settlement`]).
+//! refusing honestly (`NotYetImplemented`, the standing ledger rows in the
+//! `pub(super)` `settlement` submodule).
 //!
 //! | intent | this wave |
 //! | --- | --- |
@@ -549,7 +549,7 @@ pub const CANCEL_ORDER_ACCOUNT_COUNT: usize = 5;
 
 /// Accounts in the generalized entitled direct-slice `SettlePage` shape,
 /// exactly; any longer list dispatches to the portfolio full-pair shape
-/// ([`entitlement::settle_portfolio_pair`]).
+/// (`entitlement::settle_portfolio_pair`, `pub(super)`).
 pub const SETTLE_PAGE_ACCOUNT_COUNT: usize = 7;
 
 /// Accounts in the narrow `SubmitDirectPage` constructor, exactly.

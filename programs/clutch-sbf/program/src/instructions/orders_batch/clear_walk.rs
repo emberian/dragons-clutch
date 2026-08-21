@@ -18,8 +18,9 @@
 //! ## The reservation sweep (join 1)
 //!
 //! On pass 1 — and exactly there — every pushed order presents its canonical
-//! [`ReservationAccount`]: the PDA is re-derived through
-//! [`canonical_reservation_id`] from this walk's own facts (only the position
+//! [`clutch_solana_layout::reservation::ReservationAccount`]: the PDA is
+//! re-derived through [`canonical_reservation_id`] from this walk's own facts
+//! (only the position
 //! generation is read off the account, whose decoder already binds it into
 //! the stored identity), the state must be `RESERVATION_STATE_ACTIVE`, the
 //! stored envelope must equal [`ReservationPlan::for_order`] re-derived from

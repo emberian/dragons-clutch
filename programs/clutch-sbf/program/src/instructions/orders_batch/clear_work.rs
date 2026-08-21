@@ -15,7 +15,7 @@
 //! ## The five-instruction protocol
 //!
 //! 1. `InitClearWork { market, epoch, candidate }` — the ResolutionWork
-//!    creation shape verbatim ([`create_first_stage`]): refuse a non-creatable
+//!    creation shape verbatim (private `create_first_stage`): refuse a non-creatable
 //!    target, transfer the **full final rent principal** for all 50,054 bytes
 //!    (so no later grow ever tops up), `Allocate` the first
 //!    [`clearing::CLEAR_WORK_GROW_STEP`] bytes and `Assign` under the PDA
@@ -64,7 +64,8 @@
 //!
 //! ## The candidate feed mirror
 //!
-//! [`create_candidate_feed_account`] is the same creation discipline for the
+//! The `pub(crate)` `create_candidate_feed_account` is the same creation
+//! discipline for the
 //! 6,266-byte [`clutch_solana_layout::clearing::CandidateFeedAccount`], which
 //! fits one allocation, so it is exactly the `SubmitDirectPage`/Direct-V4
 //! full-principal constructor pointed at the feed PDA.  T2-7's general

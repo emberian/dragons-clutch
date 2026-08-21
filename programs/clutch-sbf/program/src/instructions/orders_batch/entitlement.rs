@@ -45,7 +45,8 @@
 //!
 //! ## Consumption (the portfolio half of `SettlePage`)
 //!
-//! [`settle_portfolio_pair`] consumes one entitled full pair: every presented
+//! The `pub(super)` `settle_portfolio_pair` consumes one entitled full pair:
+//! every presented
 //! receipt binds this exact `(candidate, buy, sell)` pair and is unconsumed,
 //! their per-outcome quantities must sum to **exactly** the pair's full Egg
 //! vector (recomputed from the frozen records — so a strict subset undersums

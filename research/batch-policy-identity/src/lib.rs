@@ -143,7 +143,8 @@ pub mod direct_lifecycle_v3;
 /// selection profile.  It is an offline account-body and transition model;
 /// it does not allocate live Solana tags or instructions.
 pub mod direct_window_v1;
-/// The PROPOSED Tier 2 general portfolio-clearing policy profile and the
+/// The Tier 2 general portfolio-clearing policy profile — FROZEN 2026-08-20
+/// (`docs/decisions/ADOPTED_2026-08-20.md` item 1) — and the
 /// streaming/full-width verdict-identity gate (T2-5).  It allocates no live
 /// Solana tags, accounts, or instructions.
 pub mod general_clearing_v1;
