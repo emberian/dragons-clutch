@@ -287,14 +287,46 @@ span — interior quadratic basis functions peak at `3/4` (cubics at `2/3`), so
 `e_j` is a V1-valid price vector that is no measure's moment vector, and the
 split-and-sell position against it is executable in the admitted order
 language. That note called it "a design-ahead warning, not a live defect"
-because degrees 2–3 could not be created; they now can. The clearing sees a
-basis only through partition of unity — `programs/solana-layout/src/clearing.rs`
-and `crates/clutch-batch` contain no occurrence of `degree` — and no gate in
-front of the relation restricts a market's degree, so nothing currently
-distinguishes the two cases. The moment-body admission test is **OPEN**, not
-built. The one enforced degree-≥2 restriction is on evidence rather than price:
+because degrees 2–3 could not be created; they now can. The one enforced
+degree-≥2 restriction elsewhere is on evidence rather than price:
 `ResolutionRefusal::NonPointEvidence` refuses a conservative interval that is
 not a point.
+
+That hole is now **gated in the relation, and open at the program seam**
+(2026-08-21). `DUAL_IS_THE_MEASURE.md` §7.6 derives the exact membership
+condition for the moment cone of the admitted open-clamped uniform basis — a
+per-span Hausdorff system in exact integers (Theorem 7.6.5), which reduces
+*exactly* to the existing simplex gate at degrees 0–1 (Corollary 7.6.7) and is
+quantifier-free and exact on the single-span grids (Corollary 7.6.6) — and
+proves that no finite family of *linear* price inequalities can decide it
+(Theorem 7.6.8, the cone has a strictly convex boundary arc). The relation
+carries the finite certified family that follows: `relation_v1.rs`'s **V1b**
+stage `validate_price_moment_cone`, mirrored latch-for-latch in the streaming
+twin, refusing `PriceOutsideMomentCone { outcome }` when a claim is priced
+above its ceiling (`a` complete sets short `b` units of that claim), when a
+neighbour butterfly is priced negative, or when a single-span Hankel quadric
+fails. **Every refusal exhibits an executable arbitrage**; the stage is the
+constant true at degrees 0–1, so every landed verdict is unchanged, and it is
+reached only through the new `verify_with_basis` / `begin_with_basis` entry
+points — `verify` and `begin` pass `BasisDescriptorV1::UNGATED`. Lemma 7.6.1
+is why one byte suffices: on admitted grids the cone depends only on
+`(degree, outcome_count)`.
+
+Two things are **not** closed. (1) The **program seam**: nothing on chain binds
+a degree yet. `clear_walk.rs:476` still calls `body.begin(..)`, and
+`EpochAccount` carries `terms: Hash32` but not `basis_degree` —
+`general_epoch.rs` reads `TermsAccount::basis_degree` at InitEpoch and drops
+it. Until that seam passes a real descriptor, a degree-2 or degree-3 market
+clears with V1b off, exactly as before. (2) The **wide-support residual**
+(§7.6.7): the landed family is a sound outer approximation, not a decision
+procedure, so a price vector can be outside the cone and still pass. Both are
+named in `DUAL_IS_THE_MEASURE.md` §11.4. The model plane states the same
+condition in `lean/DragonsClutch/MomentCone.lean` with `decide`-checked
+witnesses against the exact model basis — the certificates never pay negative
+at any integer resolved value of a witnessed grid, the refused price buys them
+for `-S`, every point mass's own moment vector is admitted, and the
+degree-≤1 collapse is a `∀` theorem — but that is a model statement, not a
+proof about the Rust stage.
 
 The selected R2 Pyth pull profile also has an integrated research-only model:
 `SourceSpecV2` is a distinct-domain, 368-byte proposed body that binds the
