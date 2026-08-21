@@ -147,6 +147,10 @@ pub mod direct_window_v1;
 /// streaming/full-width verdict-identity gate (T2-5).  It allocates no live
 /// Solana tags, accounts, or instructions.
 pub mod general_clearing_v1;
+/// The frozen RevenuePolicyV1 const family (ADOPTED 2026-08-20 items 6/8):
+/// the 60/0/40 + AllRestingMakers vector, the structural treasury deferral,
+/// the split arithmetic, and the digest machinery the per-Realm record pins.
+pub mod revenue_policy_v1;
 
 /// Exact size of a canonical batch-policy artifact.
 pub const BATCH_POLICY_BYTES: usize = 64;
