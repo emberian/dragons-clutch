@@ -68,6 +68,19 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- W1 PROMOTION EXECUTED (396e11d, evidence-only, identity unmoved at
+  4fded7a6): 25/25 walk-plane routes quoted at the CURRENT seal — the
+  lane re-derived rather than transcribed and caught that 5 of the
+  promotion report's limits were stale against the superseded root.
+  Worst route sits at 64% of the admission boundary; compute is not this
+  plane's problem. Batch-variable advance routes quoted as
+  BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY (bounding no unmeasured
+  composition, said out loud); tags 60-67 honorably unquoted; live flags
+  welded UNTOUCHED with refusal teeth; rent rows keep their STOPs; W2
+  blocked on the named ids. 75/75 profile tests; both policy gates green
+  post-commit. The fee-plumbing lane is the last out; its merge opens
+  cycle F.
+
 - R2 RUNBOOK + HOUSEKEEPING MERGED (doc-only, seal untouched): the
   Phase-0 runbook (490 lines; r2-caps-rebase-trial re-measured CLEAN
   against current main, zero closure commits in the 60 behind), the
