@@ -22,6 +22,26 @@ base *shape* is selected elsewhere — [FEE_GEOMETRY.md](../FEE_GEOMETRY.md) —
 with both rates open), promotion, and real-money activation. Every §9 gate
 stays closed and the §10 falsifiers stay owed.
 
+**Boundary landing, 2026-08-21** (the fee-plumbing lane; SBF-EXECUTED on a
+bank, unpromoted, no gate relaxed): the §3 policy object exists as
+`research/batch-policy-identity/src/revenue_policy_v1.rs` (`REVENUE_POLICY_V1`
+— 60/0/40 + AllRestingMakers, treasury pinned to a structural UNSET sentinel
+per B4a, digest + `validate()` envelope refusals + split arithmetic); the
+per-Realm `RevenuePolicyRecordV1` family exists (layout tag 27, the design's
+seed, TerminalIdentityV1 header embedded, mandatory funding-ledger sibling),
+creatable **only inside `InitRealm`** — the record's absence IS the D4
+zero-take state — with `CloseRevenuePolicyRecord` (tag 68) keeping close
+admissible behind the Realm's absence; the fee-bearing sibling const
+`GENERAL_CLEARING_FEE_SHAPE_V1` exists (composite shape, **both rates
+explicit zeros**; any nonzero rate is a new const + digest + ember decision);
+and general epoch admission enforces the §5 seam — a fee-bearing epoch
+refuses `RevenuePolicyRecordMissing` / `RevenueTreasuryUnset` today, always,
+because the treasury byte stays deferred.  The §6 carry and the B4b grief
+rider live as host kernels (`EnvelopedIntentFeeCarry`,
+`TreasuryServiceLedger` in `crates/clutch-liveness`) ahead of their byte
+hosts; the reservation format is deliberately unbumped.  The §10 falsifiers
+run at zero rates only; every nonzero-rate obligation stays owed.
+
 Written
 2026-08-20 for ember's morning review, executing step 3 of
 `docs/reviews/FEE_ECONOMICS_FINDINGS_2026-08-19.md` §6: *decide the
