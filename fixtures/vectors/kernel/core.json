@@ -1,7 +1,7 @@
 {
   "digests": {
     "manifest": "ae64d0f1ac71dacbf128bd8cace3425201b8919cbc9c309c7853891ebf4caccb",
-    "taxonomy": "1025002bef00f599a188f52bd68465cf5782f88ded63fbdc1bc8f470d0a20af4"
+    "taxonomy": "93ffde3daecf75593db335c795eef90ba013b00842b0ed67a0ddf24a316616ad"
   },
   "family": "kernel",
   "notes": "The kernel family: complete-set split and merge, finite resolution, exact and refused redemption, transfer conservation, the phase gate, and the two landed check-order facts R1 and R8.",

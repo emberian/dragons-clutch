@@ -55,6 +55,7 @@ pub fn relation_code(error: v1::ErrorV1) -> Refusal {
         v1::ErrorV1::TooManyPortfolios => (8005, "TooManyPortfolios"),
         v1::ErrorV1::SimplexSumMismatch => (2058, "SimplexSumMismatch"),
         v1::ErrorV1::PriceOutOfRange => (2059, "PriceOutOfRange"),
+        v1::ErrorV1::PriceOutsideMomentCone { .. } => (2080, "PriceOutsideMomentCone"),
         v1::ErrorV1::IneligibleFill => (5006, "IneligibleFill"),
         v1::ErrorV1::CandidateMismatch => (5009, "CandidateMismatch"),
         v1::ErrorV1::StrictUnderfill => (5023, "StrictUnderfill"),

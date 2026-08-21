@@ -548,6 +548,16 @@
     },
     {
       "by_design": false,
+      "code": 2080,
+      "domain": "shape",
+      "fact": "a candidate price vector is outside the payout basis's moment cone, so a nonnegative-payoff portfolio is priced negative",
+      "granularity": "exact",
+      "name": "shape.price-outside-moment-cone",
+      "origin": "extension",
+      "status": "proposed"
+    },
+    {
+      "by_design": false,
       "code": 3001,
       "domain": "phase",
       "fact": "the market is not Active where Active is required",
@@ -1650,6 +1660,7 @@
       2077,
       2078,
       2079,
+      2080,
       3011,
       3012,
       3013,

@@ -1,7 +1,7 @@
 {
   "digests": {
     "manifest": "0dba55df7c2ef9a525b0ebfb31a695dfb022e0ae130d85c3163c3109b574eb5c",
-    "taxonomy": "1025002bef00f599a188f52bd68465cf5782f88ded63fbdc1bc8f470d0a20af4"
+    "taxonomy": "93ffde3daecf75593db335c795eef90ba013b00842b0ed67a0ddf24a316616ad"
   },
   "family": "batch",
   "notes": "The scalar clearing lab of the crate root, retained as a regression lab. Its known P1-B defect is the subject of batch/relation-v1.json.",
