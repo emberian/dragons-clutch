@@ -1068,11 +1068,15 @@ degree one:
 (G2)     p_j  ≤  k_j · (p_{j−1} + p_{j+1}),      k_j ≥ sup_x N_j/(N_{j−1}+N_{j+1}).
 ```
 
-The exact suprema, same computation:
+The suprema, same computation — exact at degree two, where they are integers,
+and reported numerically at degree three, where they are algebraic numbers of
+higher degree that the gate does not need to name (each one is *certified* by
+checking a rational upper bound against the exact per-span polynomials, which
+is what soundness requires):
 
 ```text
 d = 2:  n = 3: 1        n ≥ 4: [–, 2, 3, 3, …, 3, 2, –]           (exact integers)
-d = 3:  n = 4: √3/2 ≈ 0.86603
+d = 3:  n = 4: ≈0.86603
         n = 5: [–, ≈1.58875, 1, ≈1.58875, –]
         n ≥ 6: [–, ≈1.55213, ≈1.47917, 2, …, 2, ≈1.47917, ≈1.55213, –]
 ```
