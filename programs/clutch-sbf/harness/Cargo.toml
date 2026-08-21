@@ -11,6 +11,9 @@ description = "Host-side differential harness driving the bring-up SBF program u
 # Bench daemon in `../operatord` -- drives byte-identical transactions instead
 # of reconstructing them.  The binary below is a thin argument forwarder.
 [lib]
+# No doc examples exist; the doctest target otherwise fails to resolve the
+# clutch_sbf dependency under the doctest harness (split artifact, 90298ca).
+doctest = false
 name = "clutch_sbf_harness"
 path = "src/lib.rs"
 
