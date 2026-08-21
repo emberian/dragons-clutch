@@ -29,6 +29,10 @@ use crate::source_archive::{
 };
 #[cfg(feature = "non-production-mock-source")]
 use crate::source_archive::{DeploymentAuthenticatorV1, RuntimeAccountViewV1};
+use crate::source_archive_v2::{
+    self, AccountViewV2 as SourceSpecV2AccountView, VerifiedSourceSpecV2,
+};
+use crate::source_v2::spec::SourceSpecV2;
 use clutch_accumulator::{CoveragePolicy, FeedIdentity, Grid, WindowDomain};
 use clutch_solana_layout::{
     account_len, FeedAccount, Hash32, Intent, TermsAccount, SOURCE_SPEC_BODY_V1_BYTES,
@@ -254,18 +258,36 @@ fn verify_spec(
 /// market's Terms and selects a release compiled into this exact ELF.
 ///
 /// This is deliberately a result-returning capability check, not a caller
-/// supplied availability bit.  The same private [`release_registered`]
-/// registry that dispatches every source-ingest operation is the sole owner of
-/// the decision.  In the default artifact that registry is empty, so a valid
-/// Terms/SourceSpec pair still refuses with
-/// [`ClutchError::SourceReleaseUnavailable`].
+/// supplied availability bit.  The same closed registry that dispatches every
+/// source-ingest operation is the sole owner of the decision.
 ///
-/// A SourceSpec PDA can be constructed onchain only by [`init_source_spec`],
+/// ## The two spec generations
+///
+/// The presented account's **length** selects its generation, and the two are
+/// disjoint by construction — different tag byte, different digest domain,
+/// different body length — so neither can be read as the other:
+///
+/// * V1 (292 bytes) asks the compiled [`release_registered`] predicate.  In the
+///   default artifact it is empty, so a valid V1 Terms/SourceSpec pair still
+///   refuses with [`ClutchError::SourceReleaseUnavailable`].
+/// * v2 (404 bytes) asks [`crate::source_identity::select_release`].  The
+///   default artifact carries exactly one entry — the fabricated laboratory
+///   identity of [`crate::source_identity::fixture`], whose receiver program is
+///   a program-derived address that no party can deploy to — so exactly one spec
+///   is admitted and every other still refuses.
+///
+/// **The refusal boundary narrows here; it does not disappear.** That is the
+/// shape `R2_PULL_PROMOTION_PLAN.md` §4 item 2 requires of any registry flip,
+/// and it is why this function still exists at all.
+///
+/// A V1 SourceSpec PDA can be constructed onchain only by [`init_source_spec`],
 /// which authenticates the compiled parser and deployment release before
-/// atomically creating both SourceSpec and Feed.  Re-authenticating its owner,
-/// address, body, digest, bump, Terms binding, and current registry membership
-/// here prevents an old or fixture-injected market from bypassing the empty
-/// default registry at the collateral boundary.
+/// atomically creating both SourceSpec and Feed.  A v2 SourceSpec has no public
+/// construction route yet — its intent is the open half of P0.5 — so a v2
+/// account reaches this gate only by fixture injection today.  Either way this
+/// re-authenticates owner, address, body, digest, bump, Terms binding, and
+/// current registry membership, so neither an old market nor an injected one
+/// can bypass the registry at the collateral boundary.
 #[inline(never)]
 pub(crate) fn require_registered_source_for_market(
     program_id: &Pubkey,
@@ -280,10 +302,72 @@ pub(crate) fn require_registered_source_for_market(
         terms.realm == expected_realm && terms.feed == expected_feed,
         ClutchError::MismatchedState,
     )?;
-    let verified = verify_spec(program_id, source_spec_account, terms)?;
+    if source_spec_account.data_len() == SOURCE_SPEC_ACCOUNT_V1_BYTES {
+        let verified = verify_spec(program_id, source_spec_account, terms)?;
+        return require(
+            release_registered(verified.spec()),
+            ClutchError::SourceReleaseUnavailable,
+        );
+    }
+    let verified = verify_spec_v2(program_id, source_spec_account, terms)?;
     require(
-        release_registered(verified.spec()),
+        crate::source_identity::select_release(verified.spec()).is_some(),
         ClutchError::SourceReleaseUnavailable,
+    )
+}
+
+/// Authenticate one v2 SourceSpec account against the market's frozen Terms.
+///
+/// The V1 counterpart is [`verify_spec`]; the two differ only in the codec they
+/// hand the bytes to and in the digest domain that codec recomputes.  Both
+/// derive the address from Terms rather than accepting it, so a caller cannot
+/// present a spec belonging to another feed.
+#[inline(never)]
+fn verify_spec_v2(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+    terms: FrozenSourceTerms,
+) -> Outcome<VerifiedSourceSpecV2> {
+    require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+    let (address, bump) = seeds::source_spec_pda(program_id, &terms.feed.bytes());
+    expect_pda(account.key, (address, bump), None)?;
+    let data = account.data.borrow();
+    let verified = source_archive_v2::verify_source_spec_v2_account(
+        program_id.to_bytes(),
+        address.to_bytes(),
+        SourceSpecV2AccountView::new(
+            account.key.to_bytes(),
+            account.owner.to_bytes(),
+            account.executable,
+            &data,
+        ),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::SourceAdmissionFailed))?;
+    require(
+        verified.feed() == terms.feed && verified.stored_bump() == bump,
+        ClutchError::MismatchedState,
+    )?;
+    bind_spec_v2(verified.spec(), terms)?;
+    Ok(verified)
+}
+
+/// The v2 counterpart of [`bind_spec`].
+///
+/// Terms name a feed identity, an adapter, and an adapter version. Because the
+/// two generations hash their bodies under disjoint domains, a Terms account
+/// naming a V1 feed can never bind a v2 spec and the reverse holds too — the
+/// generations fail closed against each other without a version field to
+/// compare.
+fn bind_spec_v2(spec: SourceSpecV2, terms: FrozenSourceTerms) -> Outcome<()> {
+    let fields = spec.fields();
+    require(
+        terms.feed.bytes() == spec.feed_id(),
+        ClutchError::SourceAdmissionFailed,
+    )?;
+    require(
+        terms.source_adapter_id.bytes() == fields.source_adapter_id
+            && terms.source_version == fields.source_adapter_version,
+        ClutchError::SourceAdmissionFailed,
     )
 }
 

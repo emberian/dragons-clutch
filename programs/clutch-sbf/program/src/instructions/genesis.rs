@@ -548,12 +548,25 @@ const PROFILE_STATE_ROLES: [StateRole; 1] =
 const PAGE_STATE_ROLES: [StateRole; 1] =
     [StateRole::read_only(IX_PAGE_MARKET, account_len::MARKET)];
 /// Existing market-global roles of `Endow`.
-const ENDOW_COMMON_STATE_ROLES: [StateRole; 5] = [
+///
+/// The canonical SourceSpec is deliberately **not** in this table. Its length
+/// selects its spec generation (292 bytes for V1, 404 for v2), and a fixed-length
+/// role would hard-pin one generation at the collateral boundary — the exact
+/// coupling `R2_PULL_PROMOTION_PLAN.md` P0.5 flags. It is authenticated
+/// immediately below by [`accounts::validate_state_role_lengths`], which applies
+/// the identical owner, executability, and writability refusals in the identical
+/// order, so no refusal code moves.
+const ENDOW_COMMON_STATE_ROLES: [StateRole; 4] = [
     StateRole::read_only(IX_ENDOW_MARKET, account_len::MARKET),
     StateRole::read_only(IX_ENDOW_HOARD, account_len::HOARD),
     StateRole::read_only(IX_ENDOW_PROFILE, account_len::PROFILE),
     StateRole::read_only(IX_ENDOW_TERMS, account_len::TERMS),
-    StateRole::read_only(IX_ENDOW_SOURCE_SPEC, SOURCE_SPEC_ACCOUNT_V1_BYTES),
+];
+
+/// The SourceSpec account lengths `Endow` admits, one per spec generation.
+const ENDOW_SOURCE_SPEC_LENGTHS: [usize; 2] = [
+    SOURCE_SPEC_ACCOUNT_V1_BYTES,
+    crate::source_archive_v2::SOURCE_SPEC_ACCOUNT_V2_BYTES,
 ];
 /// Existing owner-plane roles, when this is not the first deposit.
 const ENDOW_OWNER_STATE_ROLES: [StateRole; 2] = [
@@ -1393,6 +1406,12 @@ fn endow(program_id: &Pubkey, accounts: &[AccountInfo], request: &EndowRequest) 
     require(accounts[IX_PAYER].is_writable, ClutchError::NotWritable)?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &ENDOW_COMMON_STATE_ROLES)?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[IX_ENDOW_SOURCE_SPEC],
+        false,
+        &ENDOW_SOURCE_SPEC_LENGTHS,
+    )?;
     require_system_program(&accounts[IX_ENDOW_SYSTEM])?;
     let rent = read_rent(&accounts[IX_ENDOW_RENT])?;
 
