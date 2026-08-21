@@ -1,10 +1,21 @@
 # The dual is the measure — a mathematical investigation of the clearing LP
 
-Status: **RESEARCH document** (2026-08-18). This is a thinking deliverable: a
-mathematical investigation of a conjecture, not a design, not an implementation
-record, and not an evidence claim about any landed code path. Nothing here is
-machine-checked over this repository's definitions. No code changes accompany
-this document.
+Status: **RESEARCH document** (2026-08-18; §7.6 added 2026-08-21). This is a
+thinking deliverable: a mathematical investigation of a conjecture, not a
+design, not an implementation record, and not an evidence claim about any
+landed code path. Nothing here is machine-checked over this repository's
+definitions.
+
+*Amendment 2026-08-21.* The original document carried the line "No code changes
+accompany this document." That is no longer true of §7.6: the moment-cone
+admission condition derived there **is** implemented, as the relation's V1b
+stage (`crates/clutch-batch/src/relation_v1.rs::validate_price_moment_cone`,
+mirrored in the streaming twin), and stated over the model basis in
+`lean/DragonsClutch/MomentCone.lean`. Every other section remains
+implementation-free. The plane labels below are unchanged: §7.6's theorems are
+[PROVED HERE] (paper, over the repo's exact integer objects), the Lean file is
+model-plane with decide-checked witnesses, and neither makes the Rust stage
+"verified" in any proof-assistant sense.
 
 **The conjecture under attack.** In a batch-clearing LP over a
 partition-of-unity basis, the dual variables on the per-outcome conservation
@@ -802,11 +813,13 @@ Consequences, stated carefully:
   `crates/clutch-batch` contain no occurrence of `degree`. The one live
   degree-≥2 restriction is on *evidence*, not price:
   `ResolutionRefusal::NonPointEvidence` refuses a conservative interval that
-  is not a point. The exact price test is
-  `p/S ∈ M_d` = the convex hull of a piecewise-polynomial moment curve; for
-  `d = 2` each pane contributes a conic arc, so hull membership reduces to
-  finitely many per-pane quadratic (discriminant) conditions — plausibly
-  checkable in exact integer arithmetic, but not designed here. [OPEN, §11.]
+  is not a point. *(Superseded 2026-08-21 by §7.6: the exact price test
+  `p/S ∈ M_d` is now derived — Theorem 7.6.5, exact integers, a per-span
+  Hausdorff system — the finite certified family that approximates it from
+  outside is landed as the relation's V1b stage
+  (`relation_v1.rs::validate_price_moment_cone`), and the price vector above
+  is refused by it. The stage is off, and provably so, at `d ≤ 1`; the
+  wide-support residual it does not catch is §7.6.7, still [OPEN].)*
 
 ### 7.5 The measure question, answered as asked
 
@@ -829,6 +842,326 @@ Consequences, stated carefully:
   resolution honesty), and the point chosen on the optimal dual face is a
   score-policy selection (§5.3). Both indeterminacies are intrinsic, not
   implementation gaps.
+
+### 7.6 The moment cone at degrees two and three, and the admission condition
+
+*(Added 2026-08-21, with the landed V1b stage. §7.4 refuted the measure half
+above degree one and left "the exact price test" as open question §11.4. This
+subsection closes the mathematics of that question — the exact membership
+condition, in exact integers, for every admitted grid — proves that no finite
+family of linear price inequalities can decide it, and derives the finite
+certified family that the relation now enforces.)*
+
+#### 7.6.1 What the admitted basis actually is, and why the cone is `(d, n)`
+
+The frozen representation (`crates/clutch-bspline`, and
+`DISTRIBUTIONAL_CLAIMS_DESIGN.md`) admits exactly one shape above degree zero:
+`K` distinct stored breakpoints `t_0 < … < t_{K−1}`, expanded to the **open
+clamped** knot vector by repeating each endpoint `d + 1` times and keeping each
+interior breakpoint once; `n = K − 1 + d` claims; `X = [t_0, t_{K−1}]` with the
+edge policy mapping everything outside to the endpoints; and — **mandatory at
+`d ≥ 2`** (`Error::UniformSpacingRequired`) — uniform spacing `2^s`. Bounds:
+`n ≤ 16`, `K ≤ 16`, `d ≤ 3`.
+
+Two consequences, both used below.
+
+**Lemma 7.6.1 (the cone is a function of `(d, n)` alone). [PROVED HERE]** For
+`d ≥ 2` the moment body `M_d` depends only on the degree and the outcome count
+— not on the knot values, the spacing exponent, the payout denominator, or the
+edge policy. *Proof.* Uniform spacing makes the affine map `φ(x) = t_0 + h·x`
+carry the standard grid `0, 1, …, K−1` onto the stored one, and B-splines are
+defined by their knot vector, so `N_i = N_i^{std} ∘ φ^{−1}`. For any
+probability measure `Q` on `X`, `∫ N_i dQ = ∫ N_i^{std} d(φ^{−1}_* Q)`, and
+`φ^{−1}_*` is a bijection between probability measures on `X` and on
+`[0, K−1]`; hence the two moment bodies coincide. `K = n + 1 − d`. The edge
+policy only decides whether an out-of-span value is refused or clamped to an
+endpoint of `X`, which changes no integral over `X`. ∎
+
+*This is the wiring theorem.* An admission test for prices needs the degree and
+the outcome count and **nothing else** — one byte, not a knot vector. That is
+what makes V1b implementable without widening the relation's domain.
+
+**Lemma 7.6.2 (clamped ends attain 1). [PROVED HERE]** `N_0(t_0) = 1` and
+`N_{n−1}(t_{K−1}) = 1` at every degree, by endpoint multiplicity `d + 1`
+(equivalently: `evaluate_point` returns `one_hot` at and beyond each endpoint).
+So `e_0` and `e_{n−1}` **are** moment vectors at every degree — the §7.4 failure
+is interior-only, and any admission condition must leave the two end claims
+alone. ∎
+
+#### 7.6.2 Membership is exactly no-arbitrage (the dual form)
+
+Write `C_d := cone{ N(x) : x ∈ X }` and `K_d := { c ∈ R^n : g_c := Σ_i c_i N_i
+≥ 0 on X }` — the coefficient vectors of the **nonnegative splines**.
+
+**Theorem 7.6.3. [PROVED HERE]** For `p ∈ Δ_S` the following are equivalent:
+
+1. `p/S ∈ M_d` (some probability measure has `p/S` as its basis moments);
+2. `⟨c, p⟩ ≥ 0` for every `c ∈ K_d`;
+3. no portfolio in the admitted order language has a payoff that is
+   nonnegative at every resolved value and a strictly negative price at `p`.
+
+*Proof.* `{N(x) : x ∈ X}` is compact (continuity, `X` compact) and lies in the
+hyperplane `Σ = 1` by PoU, so `conv{N(x)} = M_d` is compact, `0 ∉ M_d`, and
+`C_d = R_{≥0}·M_d` is a closed convex cone whose dual is exactly `K_d`
+(`⟨c, N(x)⟩ ≥ 0 ∀x` is `g_c ≥ 0`). The bipolar theorem gives `C_d = K_d^*`,
+which is (1)⇔(2); PoU turns cone membership into body membership by scaling.
+For (3): a position that buys `b ∈ Z_{≥0}^n`, sells `s ∈ Z_{≥0}^n`, splits `σ`
+and merges `μ` has claim-space coefficient `c = b − s + (σ − μ)·1` and cost
+`⟨c, p⟩` (§2.4), and every integer vector arises this way, so the executable
+directions span `K_d ∩ Z^n`; density gives the rest. ∎
+
+So the admission question is not decorative: **outside the cone, a
+nonnegative-payoff portfolio is priced negative, and the venue's own order
+language executes it.** §7.4's `c = 3·1 − 4 e_j` at `p = S e_j` is one such `c`.
+
+#### 7.6.3 The exact condition, in exact integers
+
+Let the spans be `S_k = [t_k, t_{k+1}]`, `k = 0 … K−2`. On `S_k` exactly the
+`d + 1` functions `N_k, …, N_{k+d}` are nonzero; let `T_k` be the (invertible)
+matrix writing their restrictions in the Bernstein basis `β_0..β_d` of `S_k`.
+Write `H_d ⊂ R^{d+1}` for the truncated **Hausdorff moment cone in Bernstein
+coordinates**: the vectors `(∫ β_r dν)_r` over nonnegative measures `ν` on the
+span.
+
+**Lemma 7.6.4 (`H_d` explicitly, `d ≤ 3`). [PROVED HERE; STANDARD input:
+Hausdorff's truncated moment theorem]**
+
+```text
+H_0 = { m ≥ 0 },      H_1 = { m ≥ 0 },
+H_2 = { m ≥ 0 :  m_1^2 ≤ 4 m_0 m_2 },
+H_3 = { m ≥ 0 :  m_1^2 ≤ 3 m_0 m_2  and  m_2^2 ≤ 3 m_1 m_3 },
+```
+
+i.e. `r(d−r)·m_r^2 ≤ (r+1)(d−r+1)·m_{r−1} m_{r+1}` for `1 ≤ r ≤ d−1`.
+*Proof.* Hausdorff: `(μ_0..μ_d)` are the ordinary moments of a nonnegative
+measure on `[0,1]` iff the two Hankel forms are PSD — for `d = 2`,
+`[[μ_0,μ_1],[μ_1,μ_2]] ⪰ 0` and `μ_1 ≥ μ_2`; for `d = 3`,
+`[[μ_1,μ_2],[μ_2,μ_3]] ⪰ 0` and `[[μ_0−μ_1, μ_1−μ_2],[μ_1−μ_2, μ_2−μ_3]] ⪰ 0`.
+Substituting the Bernstein change of variables (`d = 2`: `μ_2 = m_2`,
+`μ_1 = m_1/2 + m_2`, `μ_0 = Σm`; `d = 3`: `μ_3 = m_3`, `μ_2 = m_2/3 + m_3`,
+`μ_1 = m_1/3 + 2m_2/3 + m_3`, `μ_0 = Σm`) turns `μ_1 − μ_2` into `m_1/2`
+resp. `m_2/3`, the linear conditions into `m ≥ 0`, and the two determinants
+into exactly the displayed quadrics — the cross terms cancel identically. Every
+step is a rational identity. ∎
+
+**Theorem 7.6.5 (exact membership). [PROVED HERE]**
+
+```text
+p/S ∈ M_d   ⟺   ∃ m^0, …, m^{K−2} ∈ H_d  with   p/S = Σ_k E_k T_k m^k,
+```
+
+where `E_k` embeds `R^{d+1}` into coordinates `k … k+d`. *Proof.* (⇒) Split a
+representing `Q` across the spans (`Q_k := Q|_{S_k}`, shared endpoints assigned
+to the lower span) and take `m^k` to be `Q_k`'s Bernstein moments; the
+restriction of `N_i` to `S_k` is `Σ_r (T_k)_{(i−k) r} β_r`, so summing
+reproduces `p/S`. (⇐) Given `m^k ∈ H_d`, Hausdorff supplies a nonnegative
+measure `ν_k` on each span with those Bernstein moments; `Q := Σ ν_k` has total
+mass `Σ_i p_i/S = 1` by PoU and the right moments. ∎
+
+This **is** the explicit finite condition: `(d+1)(K−1) ≤ 60` rational unknowns,
+`n ≤ 16` linear equations with integer coefficients, and at most `2(K−1)`
+integer quadratic inequalities — a decidable, exactly-integer system, and one a
+witness makes checkable in linear time. What it is *not* is quantifier-free:
+the existential over the span moments does not eliminate in closed form for
+`K > 2`, which §7.6.4 shows is not an accident of presentation.
+
+**Corollary 7.6.6 (single-span grids: quantifier-free and exact). [PROVED
+HERE]** When `K = 2` — i.e. `n = d + 1`, the shortest admitted grid at each
+degree — the basis *is* the Bernstein basis of one span, `T_0 = I`, and
+membership is exactly
+
+```text
+d = 2 (n = 3):   p ≥ 0,  Σp = S,   p_1^2 ≤ 4 p_0 p_2
+d = 3 (n = 4):   p ≥ 0,  Σp = S,   p_1^2 ≤ 3 p_0 p_2,   p_2^2 ≤ 3 p_1 p_3
+```
+
+Both quadrics are tight at every point mass (`p = S·β(u)`), which is the
+statement that the moment curve is the exposed boundary. ∎
+
+**Corollary 7.6.7 (the reduction at `d ≤ 1`). [PROVED HERE]** At `d ∈ {0,1}`,
+`H_d` is the nonnegative orthant, and `M_d = Δ`: the exact condition of Theorem
+7.6.5 is `p ≥ 0, Σp = S` — **exactly the V1 simplex gate**, with nothing added.
+*Proof.* For `d ≤ 1` Lemma 7.6.4 gives `H_d = {m ≥ 0}` (no quadric exists: the
+range `1 ≤ r ≤ d−1` is empty), so the system is solvable for any `p ≥ 0` — and
+constructively so, which is §7.1/§7.2's explicit `Q*` again: cell masses at
+`d = 0`, knot atoms `Q* = Σ (p_i/S) δ_{t_i}` at `d = 1`. ∎
+
+*This is the regression anchor.* Any admission stage that implements the
+condition of Theorem 7.6.5, or any sound approximation of it that is exact at
+`d ≤ 1`, is **the constant true** on every degree-0 and degree-1 market, so no
+landed verdict moves.
+
+#### 7.6.4 No finite family of linear price inequalities decides membership
+
+**Theorem 7.6.8. [PROVED HERE]** For `d ≥ 2` and every admitted `n`, `M_d` is
+not a polytope: its boundary contains a strictly convex arc, so `C_d` has
+uncountably many exposed extreme rays and `K_d` is not finitely generated.
+*Proof.* Take the single-span case first (Corollary 7.6.6): the boundary piece
+`{p ≥ 0, Σp = S, p_1^2 = 4 p_0 p_2}` is the image of `u ↦ S·β(u)`, and
+`p_1^2 − 4p_0p_2` is an irreducible quadratic form of signature `(1, 2)`, so
+every point of the arc is an exposed extreme point (the tangent at `u` supports
+`M_2` and touches only there). For `K > 2` restrict to measures supported in
+one interior span: the same arc appears as a face of `M_d`. Extreme points of a
+face are extreme points of the body. ∎
+
+The design consequence is sharp and worth stating as a design fact rather than
+a limitation discovered later:
+
+> **An admission stage that is a finite conjunction of linear price
+> inequalities can be *sound* (every refusal exhibits an executable arbitrage)
+> or *complete* (every non-measure is refused), but never both.** A stage that
+> is exactly `M_d` needs either the quadrics — available quantifier-free only
+> on the single-span grids — or a witness in the candidate.
+
+The relation takes **soundness of refusal**: it enforces a finite family of
+exact *necessary* conditions, each of which is the no-arbitrage inequality of a
+named portfolio. That is the same discipline the rest of the repository
+enforces on rounding — a refusal must be attributable — and it costs no
+lapses: a candidate refused by V1b is one against which a concrete admitted
+position is a sure profit.
+
+#### 7.6.5 The implemented family: ceiling, butterfly, single-span quadrics
+
+**(G1) Ceiling certificates (window one).** The projection of `M_d` onto
+coordinate `j` is `[0, max_x N_j(x)]`, and the separating certificate for a
+violation is `c = a·1 − b·e_j` with `a/b ≥ max N_j`: **`a` complete sets short
+`b` units of claim `j`** — the §7.4 split-and-sell position, at its general
+index. Its payoff `a − b N_j(x) ≥ 0` everywhere; so its price
+`(a·S − b·p_j)/S` must be nonnegative:
+
+```text
+(G1)     b_j · p_j  ≤  a_j · S,        a_j/b_j  ≥  max_x N_j(x).
+```
+
+The exact maxima of the open-clamped uniform basis, computed exactly (rational
+arithmetic over the per-span polynomials of every admitted `(d, n)`; the tool
+is reproduced in the falsifier corpus):
+
+```text
+d = 2:  n = 3:      [1, 1/2, 1]
+        n ≥ 4:      [1, 2/3, 3/4, 3/4, …, 3/4, 2/3, 1]
+d = 3:  n = 4:      [1, 4/9, 4/9, 1]
+        n = 5:      [1,  α , 1/2,  α , 1]
+        n ≥ 6:      [1,  α ,  β , 2/3, …, 2/3,  β ,  α , 1]
+        α = (18 + 8√2)/49 ≈ 0.5982390,   β = (33 + 18√2)/98 ≈ 0.5964879
+```
+
+`3/4` and `2/3` are the familiar interior peaks of §7.4; `1` at both ends is
+Lemma 7.6.2. The two degree-three near-edge classes are irrational, so the
+implemented bound uses `3/5` for both — sound because a *larger* ceiling only
+weakens the certificate, and `3/5 ≥ α` ⟺ `57 ≥ 40√2` ⟺ `3249 ≥ 3200`, and
+`3/5 ≥ β` ⟺ `129 ≥ 90√2` ⟺ `16641 ≥ 16200`. Everything else in the table is
+exact, so at degree two `(G1)` is the exact window-one condition.
+
+**(G2) Butterfly certificates (window three).** For an interior `j`, `k ≥ 0`
+with `k(N_{j−1} + N_{j+1}) − N_j ≥ 0` on `X` gives the certificate
+`c = k e_{j−1} − e_j + k e_{j+1}` — the **neighbour spread**, the exact analogue
+of the classical butterfly no-arbitrage condition on option prices, and the
+reason §7.3's "the hat claims *are* the butterflies" stops being trivial above
+degree one:
+
+```text
+(G2)     p_j  ≤  k_j · (p_{j−1} + p_{j+1}),      k_j ≥ sup_x N_j/(N_{j−1}+N_{j+1}).
+```
+
+The exact suprema, same computation:
+
+```text
+d = 2:  n = 3: 1        n ≥ 4: [–, 2, 3, 3, …, 3, 2, –]           (exact integers)
+d = 3:  n = 4: √3/2 ≈ 0.86603
+        n = 5: [–, ≈1.58875, 1, ≈1.58875, –]
+        n ≥ 6: [–, ≈1.55213, ≈1.47917, 2, …, 2, ≈1.47917, ≈1.55213, –]
+```
+
+The implemented weights are `1, 2, 3` at degree two (exact) and
+`7/8, 8/5, 3/2, 2` at degree three (each a certified rational upper bound of
+the class it covers; larger `k` is sound).
+
+**(G3) Single-span quadrics.** On `n = d + 1` grids the two Hankel quadrics of
+Corollary 7.6.6 are added, and there the stage is **exactly** moment-cone
+membership.
+
+**Theorem 7.6.9 (what the stage is). [PROVED HERE]** Let `V1b(p)` be the
+conjunction of (G1), (G2) over all interior `j`, and (G3) where it applies.
+Then:
+
+1. **Sound refusal.** If `V1b(p)` fails then `p/S ∉ M_d`, and the violated
+   member is an explicit portfolio with nonnegative payoff and negative price —
+   executable in the admitted order language, with sure profit at least
+   `(a_j S − b_j p_j)/S` resp. `k_j(p_{j−1}+p_{j+1}) − p_j` price units per
+   unit position.
+2. **Off below degree two.** At `d ≤ 1`, (G1) is `p_j ≤ S` (Lemma 7.6.2 and
+   `max N_j = 1` for hats and indicators — a hat attains 1 at its own knot),
+   which V1 already enforces; (G2) is **empty**, because at a point where a
+   hat or an indicator equals its maximum both neighbours vanish, so no finite
+   `k` exists; (G3) does not apply. Hence `V1b ≡ true` and, by Corollary 7.6.7,
+   it is also *exact* there.
+3. **Strictly stronger than V1 above degree one.** `p = S e_j` for interior `j`
+   fails (G1) at every admitted `(d, n)`, `d ≥ 2`.
+4. **Exact on the single-span grids** (`n = d + 1`), by Corollary 7.6.6.
+5. **Convex.** Each member is a convex constraint, so the admitted price set is
+   a convex subset of `Δ_S` containing `M_d`. ∎
+
+Sanity, and the reason the two families are worth having together: at the
+degree-two interior peak the *true* moment vector `S·(⅛, ¾, ⅛)` sits on the
+boundary of **both** — `4·(3/4)S = 3S` and `3·(⅛+⅛)S = ¾S` — so (G1) and (G2)
+are simultaneously tight exactly where the moment curve touches, and a single
+price atom moved onto the peak leaves the cone. The same holds at the
+degree-three knot vector `S·(⅙, ⅔, ⅙)`.
+
+#### 7.6.6 The exact window-three condition at degree two
+
+The implemented (G2) is the *tangent* of a curved exact condition, and it is
+worth recording what the exact one is, since it is the first available
+tightening.
+
+**Theorem 7.6.10. [PROVED HERE]** Let `j` be an index whose window
+`{j−1, j, j+1}` sits in the interior-uniform region (all three functions of
+full interior shape). The projection of `M_2` onto that window is exactly
+
+```text
+p_j ≤ p_{j−1} + p_{j+1} + 4·√(p_{j−1} p_{j+1}),
+```
+
+equivalently, in exact integers: `p_j ≤ p_{j−1} + p_{j+1}`, or
+`(p_j − p_{j−1} − p_{j+1})^2 ≤ 16 p_{j−1} p_{j+1}`.
+
+*Proof.* Certificates supported on the window are `c = (a, −b, a')`; writing
+each span's restriction in that span's Bernstein basis, the binding span is the
+one carrying all three functions, where the Bernstein coefficients are
+`((a−b)/2, −b, (a'−b)/2)`, and the neighbouring spans give `a, a' ≥ 0`,
+`a ≥ b`, `a' ≥ b`. A quadratic with nonnegative end coefficients and negative
+middle is nonnegative on the span iff `B^2 ≤ AC`, i.e. `4b^2 ≤ (a−b)(a'−b)`.
+Normalising `b = 1` and minimising `a p_{j−1} + a' p_{j+1}` over
+`{(a−1)(a'−1) ≥ 4}` gives `p_{j−1} + p_{j+1} + 2·2√(p_{j−1}p_{j+1})` by AM–GM.
+∎
+
+At the peak `(⅛, ¾, ⅛)`: `¾ = ⅛ + ⅛ + 4·⅛`, equality — the linear `k = 3` is
+its tangent at the symmetric point, and the two agree exactly there and
+nowhere else. The condition is *not* implemented: its validity depends on the
+window being interior-uniform, and the position-exact linear family covers
+every window at both degrees with one uniform mechanism. Named as the first
+tightening in §11.
+
+#### 7.6.7 The residual, stated exactly
+
+What the family does **not** catch: by Theorem 7.6.8 no finite linear family
+can be complete, and the concrete gap is the certificates of **wide support**.
+For `d = 2` and `n ≥ 5` there are extreme rays of `K_2` given by nonnegative
+quadratic splines with `⌊(n−1)/2⌋` interior double zeros, positive elsewhere;
+these have full support and are not nonnegative combinations of window-one and
+window-three certificates. A price vector may therefore violate one of them —
+be outside `M_d`, and carry an executable arbitrage — while passing V1b. The
+arbitrage such a residual price admits is a *wide* position (it touches most
+claims at once), and by the tightness computation above the residual region is
+strictly inside the "obvious" violations; but nothing here bounds its size, and
+this document does not claim it is small. It is [OPEN], with the falsifier
+named in §11.
+
+The honest one-line status: **at degrees two and three the venue no longer
+admits the §7.4 counterexample family, every V1b refusal exhibits an executable
+arbitrage, the stage is exact at `d ≤ 1` and on the single-span grids, and the
+wide-support residual is open.**
 
 ---
 
@@ -983,6 +1316,12 @@ The two documents meet at PoU and nowhere else.
 | 13 | Quadrature: `dot(c,p)/S = E_Q[interpolant]`, exact on the spline span; BL pre-inverted; forward = one quote | [PROVED HERE] |
 | 14 | `M_d ⊊ Δ` for `d ≥ 2`; explicit executable arbitrage at `p = S·e_j`; V1 insufficient as no-arb gate | [PROVED HERE] / [REFUTED: the measure half at `d ≥ 2`] |
 | 15 | "The dual is the measure," unconditionally, all degrees, all policies | [REFUTED] as stated; TRUE in the factored, scoped form of §0/§7.5 |
+| 16 | `M_d` depends only on `(degree, outcome_count)` on admitted grids | [PROVED HERE] §7.6.1 |
+| 17 | `p/S ∈ M_d` ⟺ no nonnegative-payoff portfolio is priced negative | [PROVED HERE] §7.6.2 |
+| 18 | Exact membership = a per-span Hausdorff system, exact integers, `d ≤ 3` | [PROVED HERE] §7.6.3 |
+| 19 | Exact and quantifier-free on single-span grids (`n = d+1`); reduces to the simplex gate at `d ≤ 1` | [PROVED HERE] §7.6.6, §7.6.7 |
+| 20 | No finite family of linear price inequalities decides membership at `d ≥ 2` | [PROVED HERE] §7.6.8 |
+| 21 | The landed V1b family: every refusal exhibits an executable arbitrage; off at `d ≤ 1`; incomplete above | [PROVED HERE] §7.6.9, residual §7.6.7 [OPEN] |
 
 ---
 
@@ -1001,9 +1340,21 @@ Open questions:
 3. **Off-grid dual face** (Conjecture 6.3): complete the pinning instance to
    a full refusing book, or prove portfolio books always admit a grid
    optimal dual (the subdeterminant evidence says they should not).
-4. **`d = 2` admission gate:** is `p/S ∈ M_2` decidable by per-pane integer
+4. ~~**`d = 2` admission gate:** is `p/S ∈ M_2` decidable by per-pane integer
    discriminant conditions, and cheap enough to be a V1 extension if degree
-   2 ever lands?
+   2 ever lands?~~ **Answered 2026-08-21, §7.6.** Yes to decidability (Theorem
+   7.6.5: a per-span Hausdorff system in exact integers, `(d+1)(K−1) ≤ 60`
+   unknowns), no to a quantifier-free *linear* form (Theorem 7.6.8: the cone
+   has a strictly convex boundary arc). Landed as the V1b certified-refusal
+   family (§7.6.5). Three successors remain open:
+   **(4a)** the wide-support residual (§7.6.7) — construct a price vector that
+   passes V1b, fails `M_d`, and carries an executable arbitrage, or prove the
+   window families are complete on the admitted grids;
+   **(4b)** the exact window-three condition (Theorem 7.6.10) as an
+   implemented tightening, including its edge-window variants;
+   **(4c)** the witness route — a candidate that *carries* the per-span
+   moments of Theorem 7.6.5, making V1b exact at every grid in exchange for a
+   wider candidate domain and a moved digest.
 5. **Score-as-selection:** characterize which point of the optimal dual face
    the dispersion component selects; is it a recognizable center?
 6. **Fee-inclusive dual** (§9.4): does the measure reading survive a fee
@@ -1022,6 +1373,11 @@ lapse_iff_no_boxed_optimal_dual_single_egg             # Theorem 6.2 both direct
 dual_face_off_grid_book                                # Conjecture 6.3: construct or refute
 simplex_vector_is_hat_moment_vector_deg01              # Q* atoms reproduce p exactly, incl. quantized w(t_i) = D e_i
 deg2_simplex_vector_with_executable_arbitrage          # §7.4: split-and-sell realizes sure profit at p = S·e_j
+                                                       #   LANDED as the relation's discriminating pair, clutch-batch
+                                                       #   relation_v1_moment_cone_tests.rs
+moment_cone_gate_is_the_constant_true_below_degree_two # §7.6.9(2)/Cor 7.6.7: the regression anchor — LANDED
+single_span_gate_is_the_exact_hankel_condition         # §7.6.6: exactness at n = d+1 — LANDED
+wide_support_certificate_passes_the_window_gate        # §7.6.7: the residual — OPEN, unbuilt
 butterfly_identity_prices_match_hat_claims             # §7.3 second-difference identity on uniform grids, exact integers
 v8_cash_identity_equals_price_dot_conservation         # §4.1: the two computations coincide on random valid candidates
 limit_surplus_equals_lp_objective                      # Prop 4.2 over random valid candidates
