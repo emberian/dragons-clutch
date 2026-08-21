@@ -81,6 +81,43 @@ pub const GENERAL_CLEARING_POLICY_V1: FrozenPolicyV1 = FrozenPolicyV1 {
     fee_base: FeeBaseV1::None,
 };
 
+/// **The fee-bearing SIBLING of [`GENERAL_CLEARING_POLICY_V1`] — SHAPE ONLY,
+/// both rates an explicit zero, PROPOSED and unused by every settling path.**
+///
+/// The composite fee base selected 2026-08-20 (`ADOPTED_2026-08-20.md` item 9
+/// on `REPORT_fee-base-selection`): `kappa*G(a,p) + kappa'*R(a)` — atomic
+/// simplex dispersion with a price-free quotient-norm floor.  Every selector
+/// besides `fee_base` is byte-identical to the frozen zero-fee profile, so
+/// the two digests differ in exactly the fee member.
+///
+/// **Both rates are UNDECIDED and pinned zero here.**  Any nonzero rate is a
+/// **new sibling const with a new digest behind its own ember decision**,
+/// plus the relation-side composite arithmetic (unimplemented; the relation
+/// refuses nonzero composite rates as `PolicyVariantUnimplemented`) and B2's
+/// frozen bounds.  Nothing about this const relaxes any of the five
+/// `max_fee_atoms == 0` gates: the GENERAL plane keeps clearing under the
+/// frozen zero-fee const, and a fee-bearing epoch admission additionally
+/// requires the Realm's revenue-policy record to name a real treasury and a
+/// treasury-owned Position to exist (`REVENUE_POLICY_V1.md` §5, §8) — a
+/// boundary that refuses structurally while the treasury pubkey stays
+/// deferred (B4a).
+pub const GENERAL_CLEARING_FEE_SHAPE_V1: FrozenPolicyV1 = FrozenPolicyV1 {
+    allocation: AllocationPolicyV1::PricePriorityMarginalProRata,
+    self_cross: SelfCrossPolicyV1::RefuseOverlap,
+    aon: AonPolicyV1::RefuseAdmission,
+    rounding: RoundingBoundaryV1::TerminalOwnerFloor,
+    residual_settlement: ResidualSettlementV1::UniqueSliceReceipts,
+    transfer_phase: TransferPhaseV1::ActiveOrResolved,
+    portfolio_lots: PortfolioLotPolicyV1::StrictWholeOrder,
+    pairing_witness: PairingWitnessPolicyV1::ExplicitSlices,
+    dust: DustPolicy::AssignCanonical,
+    score: ScorePolicyV1::LexicographicDispersionV1,
+    fee_base: FeeBaseV1::CompositeDispersionFloor {
+        dispersion_bps: 0,
+        floor_range_bps: 0,
+    },
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,6 +445,16 @@ mod tests {
                 fee_base: FeeBaseV1::FlatNotional { bps: 10_000 },
                 ..GENERAL_CLEARING_POLICY_V1
             },
+            // The composite fee-base SHAPE (zero rates) — exactly the
+            // fee-bearing sibling const, which must never share the frozen
+            // zero-fee identity.
+            FrozenPolicyV1 {
+                fee_base: FeeBaseV1::CompositeDispersionFloor {
+                    dispersion_bps: 0,
+                    floor_range_bps: 0,
+                },
+                ..GENERAL_CLEARING_POLICY_V1
+            },
         ];
         let pinned = batch_policy_digest(&GENERAL_CLEARING_POLICY_V1).unwrap();
         for policy in variants {
@@ -418,6 +465,169 @@ mod tests {
                 "a selector mutation left the pinned identity unchanged: {policy:?}"
             );
         }
+    }
+
+    /// The fee-bearing sibling's identity, pinned byte-for-byte and by an
+    /// independently computed SHA-256.  The artifact differs from the frozen
+    /// zero-fee profile in exactly the fee discriminant (byte 22 = 0x02, the
+    /// composite tag, both rate words zero), so the frozen digest is
+    /// untouched by this const's existence.
+    #[test]
+    fn general_clearing_fee_shape_identity_is_pinned() {
+        let policy = GENERAL_CLEARING_FEE_SHAPE_V1;
+        let bytes = canonical_batch_policy_bytes(&policy).unwrap();
+        let mut expected = canonical_batch_policy_bytes(&GENERAL_CLEARING_POLICY_V1).unwrap();
+        expected[22] = 0x02;
+        assert_eq!(bytes, expected, "the fee-shape artifact bytes moved");
+        assert_eq!(decode_batch_policy(&bytes), Ok(policy));
+        // SHA-256("dragons-clutch/batch-policy/v1\0" || those 64 bytes), taken
+        // from a third SHA-256 implementation rather than from either path here.
+        assert_eq!(
+            batch_policy_digest(&policy).unwrap().0,
+            [
+                0xac, 0xf9, 0x74, 0x7c, 0xf8, 0x45, 0x52, 0xea, 0x3c, 0x17, 0x7a, 0x16, 0x71, 0x03,
+                0x33, 0xc9, 0x2f, 0x01, 0x83, 0xd9, 0x46, 0xa1, 0x21, 0x96, 0xf0, 0xd8, 0x6f, 0xc3,
+                0x71, 0x34, 0xeb, 0x06
+            ],
+            "the fee-shape identity moved"
+        );
+        assert_eq!(
+            batch_policy_digest(&policy).unwrap(),
+            sha256::<hasher::Native<{ BATCH_POLICY_DIGEST_DOMAIN.len() + 64 }>>(
+                BATCH_POLICY_DIGEST_DOMAIN,
+                &[&bytes],
+            ),
+            "the on-chain hasher disagrees with the pinned value"
+        );
+        // The sibling never shares an identity with either frozen profile.
+        assert_ne!(
+            batch_policy_digest(&policy).unwrap(),
+            batch_policy_digest(&GENERAL_CLEARING_POLICY_V1).unwrap()
+        );
+        assert_ne!(
+            batch_policy_digest(&policy).unwrap(),
+            batch_policy_digest(&DIRECT_POLICY_V1).unwrap()
+        );
+    }
+
+    /// The domain validator admits the fee shape as a valid member — and
+    /// refuses every nonzero rate pair: rates are undecided, and any nonzero
+    /// rate is a new const + digest + ember decision plus the relation-side
+    /// composite arithmetic, which deliberately does not exist yet.
+    #[test]
+    fn the_fee_shape_is_domain_valid_and_nonzero_rates_refuse() {
+        let full = full_domain_with(GENERAL_CLEARING_FEE_SHAPE_V1, 2, 2);
+        assert_eq!(zero_sentinel_domain(&full).validate(), Ok(()));
+        assert_eq!(GENERAL_CLEARING_FEE_SHAPE_V1.validate(), Ok(()));
+        for (dispersion_bps, floor_range_bps) in [(1u32, 0u32), (0, 1), (40, 10), (10_000, 10_000)]
+        {
+            let rated = FrozenPolicyV1 {
+                fee_base: clutch_batch::relation_v1::FeeBaseV1::CompositeDispersionFloor {
+                    dispersion_bps,
+                    floor_range_bps,
+                },
+                ..GENERAL_CLEARING_FEE_SHAPE_V1
+            };
+            assert_eq!(
+                rated.validate(),
+                Err(ErrorV1::PolicyVariantUnimplemented),
+                "a nonzero composite rate must refuse validation"
+            );
+            // A nonzero rate has no canonical artifact bytes at all.
+            assert!(canonical_batch_policy_bytes(&rated).is_err());
+        }
+    }
+
+    /// REVENUE_POLICY_V1 §10 falsifiers 1/5/8 at zero rates, host plane: on a
+    /// plain cross, on a wash-shaped two-owner round trip, and on a candidate
+    /// clearing at a ZERO price coordinate, the fee-shape sibling's streamed
+    /// verdict equals the frozen zero-fee verdict in every field except the
+    /// two obsolete legacy digests, with the fee terms exactly zero.  The
+    /// relation's own V7/V8 closes enforce conservation with that zero fee
+    /// term on both drives, so a fee term appearing from nowhere — or a
+    /// missing one — refuses rather than passes.
+    #[test]
+    fn the_fee_shape_at_zero_rates_is_economically_identical_to_zero_fee() {
+        let mut work = Box::new(ClearWorkV1::new());
+
+        // (a) a plain cross; (b) a wash-shaped round trip: the same two
+        // owners take both sides in opposite directions across two outcomes;
+        // (c) a zero-price clearing coordinate (the §10.5 channel fixture:
+        // price 0 is an admissible coordinate, and at zero rates the
+        // composite charges exactly zero on it — the runtime disposition is
+        // "zeroes consistently", proved rather than assumed).
+        let cross = book_of(&[
+            single(1, 0, 0, Side::Buy, 4, SCALE),
+            single(2, 1, 0, Side::Sell, 4, 0),
+        ]);
+        let wash = book_of(&[
+            single(1, 0, 0, Side::Buy, 4, SCALE),
+            single(2, 1, 0, Side::Sell, 4, 0),
+            single(3, 1, 1, Side::Buy, 4, SCALE),
+            single(4, 0, 1, Side::Sell, 4, 0),
+        ]);
+        let zero_price = book_of(&[
+            single(1, 0, 0, Side::Buy, 4, SCALE / 2),
+            single(2, 1, 0, Side::Sell, 4, 0),
+        ]);
+        let cases: [(&BookV1, [u64; MAX_OUTCOMES], u16); 3] = [
+            (&cross, prices(&[SCALE / 2, SCALE / 2]), 2),
+            (&wash, prices(&[SCALE / 2, SCALE / 2]), 2),
+            (&zero_price, prices(&[0, SCALE]), 2),
+        ];
+        for (book, vector, owners) in cases {
+            let zero_fee = zero_sentinel_domain(&full_domain_with(
+                GENERAL_CLEARING_POLICY_V1,
+                2,
+                owners,
+            ));
+            let fee_shape = zero_sentinel_domain(&full_domain_with(
+                GENERAL_CLEARING_FEE_SHAPE_V1,
+                2,
+                owners,
+            ));
+            let candidate = canonical_candidate(&zero_fee, book, &vector, 0, 0).unwrap();
+            assert!(
+                candidate.fills.iter().any(|fill| *fill != 0),
+                "a vacuously empty candidate would prove nothing"
+            );
+            let witness = canonical_pairing(&zero_fee, book, &candidate).unwrap();
+            let under_zero =
+                drive_stream(&mut work, &zero_fee, book, &candidate, Some(&witness)).unwrap();
+            let under_shape =
+                drive_stream(&mut work, &fee_shape, book, &candidate, Some(&witness)).unwrap();
+            // The zero fee term, stated: nothing was charged and nothing was
+            // carried under the fee-bearing shape at zero rates.
+            assert_eq!(under_shape.fee_price_units, 0);
+            assert_eq!(under_shape.fee_carry_bps_units, 0);
+            // Bit-identical economics: only the legacy digest fields (which
+            // fold the policy tag) may differ between the two policy consts.
+            let mut scrubbed_zero = under_zero;
+            scrubbed_zero.score.digest = 0;
+            scrubbed_zero.candidate_digest = 0;
+            let mut scrubbed_shape = under_shape;
+            scrubbed_shape.score.digest = 0;
+            scrubbed_shape.candidate_digest = 0;
+            assert_eq!(scrubbed_zero, scrubbed_shape);
+        }
+
+        // The full-width verifier reaches the identical verdict under the
+        // fee-shape const — the whole T2-5 identity gate holds for the
+        // sibling, so admitting the shape perturbs no pipeline.
+        let candidate = canonical_candidate(
+            &zero_sentinel_domain(&full_domain_with(GENERAL_CLEARING_FEE_SHAPE_V1, 2, 2)),
+            &cross,
+            &prices(&[SCALE / 2, SCALE / 2]),
+            0,
+            0,
+        )
+        .unwrap();
+        assert_verdict_identity(
+            &mut work,
+            &full_domain_with(GENERAL_CLEARING_FEE_SHAPE_V1, 2, 2),
+            &cross,
+            &candidate,
+        );
     }
 
     /// The dust-choice justification, executable.  A three-order marginal

@@ -1394,13 +1394,21 @@ impl ClearWorkV1 {
                         return;
                     }
                     settle_add_u128!(self, self.limit_surplus, limit - order_value);
-                    if let FeeBaseV1::FlatNotional { bps } = domain.policy.fee_base {
-                        match order_value.checked_mul(bps as u128) {
-                            Some(term) => {
-                                settle_add_u128!(self, self.fee_bps_units[slot], term);
+                    match domain.policy.fee_base {
+                        FeeBaseV1::None => {}
+                        FeeBaseV1::FlatNotional { bps } => {
+                            match order_value.checked_mul(bps as u128) {
+                                Some(term) => {
+                                    settle_add_u128!(self, self.fee_bps_units[slot], term);
+                                }
+                                None => settle_latch!(self, ErrorV1::ArithmeticOverflow),
                             }
-                            None => settle_latch!(self, ErrorV1::ArithmeticOverflow),
                         }
+                        // Both rates are validated zero (shape-only member):
+                        // the composite charge is exactly zero.  The composite
+                        // arithmetic lands only with a nonzero-rate const, as
+                        // its own relation change.
+                        FeeBaseV1::CompositeDispersionFloor { .. } => {}
                     }
                 }
                 Side::Sell => {
@@ -3249,6 +3257,11 @@ fn put_policy(out: &mut [u8], at: &mut usize, policy: &FrozenPolicyV1) {
     let (fee_tag, fee_bps) = match policy.fee_base {
         FeeBaseV1::None => (0u8, 0u32),
         FeeBaseV1::FlatNotional { bps } => (1, bps),
+        // The composite rides the same single rate slot with tag 2.  Only the
+        // zero rate pair is registered (rates undecided; `validate()` refuses
+        // nonzero), so the floor rate needs no slot of its own: a nonzero
+        // floor is a checkpoint-codec revision behind its own decision.
+        FeeBaseV1::CompositeDispersionFloor { dispersion_bps, .. } => (2, dispersion_bps),
     };
     put_u8(out, at, fee_tag);
     put_u32(out, at, fee_bps);
@@ -3519,6 +3532,12 @@ fn get_policy(input: &[u8], at: &mut usize) -> Result<FrozenPolicyV1, CodecFault
         0 if fee_bps == 0 => FeeBaseV1::None,
         0 => return Err(CodecFaultV1::InvalidPolicy),
         1 => FeeBaseV1::FlatNotional { bps: fee_bps },
+        // Only the zero-rate composite shape is registered; a checkpoint
+        // claiming a nonzero rate is fail-closed corruption, never a policy.
+        2 if fee_bps == 0 => FeeBaseV1::CompositeDispersionFloor {
+            dispersion_bps: 0,
+            floor_range_bps: 0,
+        },
         _ => return Err(CodecFaultV1::InvalidPolicy),
     };
     Ok(FrozenPolicyV1 {

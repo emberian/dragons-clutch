@@ -222,6 +222,28 @@ pub enum FeeBaseV1 {
         /// Exact basis points over [`FEE_BPS_DENOMINATOR`].
         bps: u32,
     },
+    /// The composite fee-base SHAPE selected 2026-08-20 (ADOPTED item 9 on
+    /// `docs/decisions/REPORT_fee-base-selection_2026-08-20.md`):
+    /// `kappa*G(a,p) + kappa'*R(a)` — atomic simplex dispersion with a
+    /// price-free quotient-norm floor.
+    ///
+    /// **Both rates are explicit zero placeholders.**  The shape is selected;
+    /// the rates are UNDECIDED; and any nonzero rate is a **new frozen const
+    /// with a new digest behind its own ember decision**, together with the
+    /// relation-side composite arithmetic, which this crate deliberately does
+    /// not implement.  [`FrozenPolicyV1::validate`] therefore refuses any
+    /// nonzero rate pair as `PolicyVariantUnimplemented`: at zero rates the
+    /// composite charge is exactly zero on every admitted shape, and the
+    /// settlement paths treat the variant as the zero fee it is.
+    CompositeDispersionFloor {
+        /// Dispersion rate `kappa` numerator over [`FEE_BPS_DENOMINATOR`].
+        /// Zero until a rate freezes; nonzero refuses `validate()`.
+        dispersion_bps: u32,
+        /// Quotient-norm floor rate `kappa'` numerator over
+        /// [`FEE_BPS_DENOMINATOR`] per unit of model-free range.  Zero until
+        /// a rate freezes; nonzero refuses `validate()`.
+        floor_range_bps: u32,
+    },
 }
 
 /// Every variant selection named explicitly.
@@ -261,9 +283,24 @@ impl FrozenPolicyV1 {
         if self.portfolio_lots == PortfolioLotPolicyV1::MarginalProRataLots {
             return Err(ErrorV1::PolicyVariantUnimplemented);
         }
-        if let FeeBaseV1::FlatNotional { bps } = self.fee_base {
-            if bps as u64 > FEE_BPS_DENOMINATOR {
-                return Err(ErrorV1::PolicyVariantUnimplemented);
+        match self.fee_base {
+            FeeBaseV1::None => {}
+            FeeBaseV1::FlatNotional { bps } => {
+                if bps as u64 > FEE_BPS_DENOMINATOR {
+                    return Err(ErrorV1::PolicyVariantUnimplemented);
+                }
+            }
+            // The composite is admitted as a SHAPE only: both rates are
+            // undecided and this relation implements no composite arithmetic,
+            // so any nonzero rate refuses as unimplemented rather than
+            // silently charging nothing.
+            FeeBaseV1::CompositeDispersionFloor {
+                dispersion_bps,
+                floor_range_bps,
+            } => {
+                if dispersion_bps != 0 || floor_range_bps != 0 {
+                    return Err(ErrorV1::PolicyVariantUnimplemented);
+                }
             }
         }
         Ok(())
@@ -285,6 +322,21 @@ impl FrozenPolicyV1 {
         match self.fee_base {
             FeeBaseV1::None => code * 65_536,
             FeeBaseV1::FlatNotional { bps } => code * 65_536 + 1 + bps as u64,
+            // Offset past the whole admissible FlatNotional band
+            // (`1..=1 + FEE_BPS_DENOMINATOR`).  Only the all-zero rate pair
+            // survives `validate()`, so admissible policies keep distinct
+            // legacy tags; the cryptographic identity is the canonical-bytes
+            // digest, never this fold.
+            FeeBaseV1::CompositeDispersionFloor {
+                dispersion_bps,
+                floor_range_bps,
+            } => {
+                code * 65_536
+                    + 2
+                    + FEE_BPS_DENOMINATOR
+                    + dispersion_bps as u64
+                    + floor_range_bps as u64
+            }
         }
     }
 }
@@ -2005,13 +2057,22 @@ fn settle_cash(
                         return Err(ErrorV1::ConsiderationMismatch);
                     }
                     add(&mut ledger.limit_surplus, limit - order_value)?;
-                    if let FeeBaseV1::FlatNotional { bps } = domain.policy.fee_base {
-                        add(
-                            &mut fee_bps_units[slot],
-                            order_value
-                                .checked_mul(bps as u128)
-                                .ok_or(ErrorV1::ArithmeticOverflow)?,
-                        )?;
+                    match domain.policy.fee_base {
+                        FeeBaseV1::None => {}
+                        FeeBaseV1::FlatNotional { bps } => {
+                            add(
+                                &mut fee_bps_units[slot],
+                                order_value
+                                    .checked_mul(bps as u128)
+                                    .ok_or(ErrorV1::ArithmeticOverflow)?,
+                            )?;
+                        }
+                        // Both rates are validated zero (shape-only member):
+                        // the composite charge is exactly zero, accrued as
+                        // nothing rather than as a zero-valued term.  The
+                        // composite arithmetic itself lands only with a
+                        // nonzero-rate const, as its own relation change.
+                        FeeBaseV1::CompositeDispersionFloor { .. } => {}
                     }
                 }
                 Side::Sell => {

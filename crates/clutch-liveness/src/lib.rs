@@ -63,6 +63,9 @@ pub enum Error {
     NoncanonicalFeeCarry,
     FundingDeltaMismatch,
     AccountBalanceShortfall,
+    FeeEnvelopeExceeded,
+    TreasuryServiceOutstanding,
+    NoServingEpoch,
 }
 
 fn add(left: u64, right: u64) -> Result<u64, Error> {
@@ -1244,6 +1247,200 @@ impl IntentFeeCarry {
     }
 }
 
+/// The (D8) owner-signed fee envelope enforced over one [`IntentFeeCarry`]:
+/// the carry arithmetic of `docs/design/REVENUE_POLICY_V1.md` §6, host-side,
+/// ahead of its reservation-vNext byte home (the reservation format bump is
+/// deliberately NOT taken here — it lands once, later, carrying this and the
+/// partial-fill design's answer together).
+///
+/// Invariant, maintained at every transition: `paid_atoms` **plus the
+/// terminal-ceil atom the open remainder already commits to** never exceeds
+/// the owner-signed `max_fee_atoms`.  Because the commitment is checked at
+/// each fragment, the close can always land inside the envelope — an intent
+/// can never be marooned with a remainder its envelope cannot pay.  A zero
+/// envelope therefore refuses the very first nonzero numerator: under the
+/// zero-fee policy (and under the fee shape's zero rates) no charge path can
+/// touch the carry with anything but exact zeros.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EnvelopedIntentFeeCarry {
+    carry: IntentFeeCarry,
+    max_fee_atoms: u64,
+}
+
+impl EnvelopedIntentFeeCarry {
+    /// Admit one intent's carry under its owner-signed envelope.
+    ///
+    /// `worst_case_fee_atoms` is the admission-time quote of the largest
+    /// total the policy can charge this intent, **terminal-ceil atom
+    /// included** (design §8.3 requires every admissible base to supply it);
+    /// admission refuses an envelope below it, so a signer's bound is
+    /// checked before any fill exists.  At zero rates the worst case is
+    /// exactly zero and the signed zero envelope admits.
+    pub fn admit(
+        owner: Id,
+        intent_id: Id,
+        denominator: u64,
+        worst_case_fee_atoms: u64,
+        max_fee_atoms: u64,
+    ) -> Result<Self, Error> {
+        if worst_case_fee_atoms > max_fee_atoms {
+            return Err(Error::FeeEnvelopeExceeded);
+        }
+        Ok(Self {
+            carry: IntentFeeCarry::admit(owner, intent_id, denominator)?,
+            max_fee_atoms,
+        })
+    }
+
+    /// The wrapped carry state.
+    pub const fn carry(self) -> IntentFeeCarry {
+        self.carry
+    }
+
+    /// The owner-signed envelope.
+    pub const fn max_fee_atoms(self) -> u64 {
+        self.max_fee_atoms
+    }
+
+    /// Atoms already paid plus the ceil atom the open remainder commits to.
+    pub fn committed_atoms(self) -> Result<u64, Error> {
+        add(
+            self.carry.paid_atoms(),
+            u64::from(!self.carry.is_closed() && self.carry.remainder() != 0),
+        )
+    }
+
+    /// Charge one exact fragment numerator, refusing any charge whose
+    /// committed total (terminal ceil included) would exceed the envelope.
+    /// A refused charge leaves the caller's copy exactly as it was.
+    pub fn charge_fragment(
+        self,
+        owner: Id,
+        intent_id: Id,
+        exact_numerator: u64,
+    ) -> Result<(Self, FeeCharge), Error> {
+        let (carry, charge) = self.carry.charge_fragment(owner, intent_id, exact_numerator)?;
+        let next = Self {
+            carry,
+            max_fee_atoms: self.max_fee_atoms,
+        };
+        if next.committed_atoms()? > self.max_fee_atoms {
+            return Err(Error::FeeEnvelopeExceeded);
+        }
+        Ok((next, charge))
+    }
+
+    /// Close once; the ceiling atom is inside the envelope by the fragment
+    /// invariant, and that is asserted rather than assumed.
+    pub fn close(self, owner: Id, intent_id: Id) -> Result<(Self, FeeCharge), Error> {
+        let (carry, charge) = self.carry.close(owner, intent_id)?;
+        if carry.paid_atoms() > self.max_fee_atoms {
+            return Err(Error::FeeEnvelopeExceeded);
+        }
+        Ok((
+            Self {
+                carry,
+                max_fee_atoms: self.max_fee_atoms,
+            },
+            charge,
+        ))
+    }
+}
+
+/// The B4b mid-epoch-close grief rider, as fixed-memory bookkeeping: **a
+/// treasury Position serving an unsettled fee-bearing epoch refuses close.**
+///
+/// Adopted 2026-08-20 (item 8 on `REPORT_revenue-policy-v1` §2, stress point
+/// 1): the treasury Position is owner-closable like any Position, and a
+/// mid-epoch close would let the fee recipient halt *other parties'*
+/// settlement.  No Position close route exists in the program today
+/// (`close_state` is written by no handler), so this kernel is the rider's
+/// executable form ahead of its byte home — exactly as [`IntentFeeCarry`]
+/// preceded its reservation host.  Any future Position close route MUST
+/// consult a ledger with these semantics:
+///
+/// * fee-bearing epoch admission calls [`Self::begin_service`] for the
+///   Market's treasury Position;
+/// * the epoch's terminal settlement (its root close) calls
+///   [`Self::settle_service`] — never more times than services began;
+/// * [`Self::close`] refuses while any service is outstanding, and closes
+///   exactly once.
+///
+/// The ledger is a counter, deliberately: this crate holds no account
+/// memory, and *which* epoch settles is authenticated by the adapter against
+/// the epoch account itself.  The counter enforces the arithmetic invariant
+/// the refusal set needs — close only after every begun service settled.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TreasuryServiceLedger {
+    treasury_position: Id,
+    outstanding: u64,
+    closed: bool,
+}
+
+impl TreasuryServiceLedger {
+    /// Open the ledger for one treasury Position identity.
+    pub fn admit(treasury_position: Id) -> Result<Self, Error> {
+        live_id(treasury_position)?;
+        Ok(Self {
+            treasury_position,
+            outstanding: 0,
+            closed: false,
+        })
+    }
+
+    /// The treasury Position this ledger guards.
+    pub const fn treasury_position(self) -> Id {
+        self.treasury_position
+    }
+
+    /// Fee-bearing epochs admitted and not yet settled.
+    pub const fn outstanding(self) -> u64 {
+        self.outstanding
+    }
+
+    /// Whether the guarded Position has closed.
+    pub const fn is_closed(self) -> bool {
+        self.closed
+    }
+
+    fn live(self) -> Result<(), Error> {
+        if self.closed {
+            return Err(Error::AlreadyTerminal);
+        }
+        Ok(())
+    }
+
+    /// One fee-bearing epoch admitted against this treasury Position.
+    pub fn begin_service(mut self) -> Result<Self, Error> {
+        self.live()?;
+        self.outstanding = add(self.outstanding, 1)?;
+        Ok(self)
+    }
+
+    /// One served fee-bearing epoch fully settled.  Refuses a settlement
+    /// nobody began: the counter can never go negative, so a hostile
+    /// pre-settle cannot bank free closes.
+    pub fn settle_service(mut self) -> Result<Self, Error> {
+        self.live()?;
+        if self.outstanding == 0 {
+            return Err(Error::NoServingEpoch);
+        }
+        self.outstanding -= 1;
+        Ok(self)
+    }
+
+    /// The rider itself: close refuses while any served epoch is unsettled,
+    /// and lands exactly once.
+    pub fn close(mut self) -> Result<Self, Error> {
+        self.live()?;
+        if self.outstanding != 0 {
+            return Err(Error::TreasuryServiceOutstanding);
+        }
+        self.closed = true;
+        Ok(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1606,5 +1803,137 @@ mod tests {
             Err(Error::AlreadyTerminal)
         );
         assert_eq!(closed.close(id(1), id(2)), Err(Error::AlreadyTerminal));
+    }
+
+    /// A zero denominator is a refusal, not a divide fault (previously
+    /// unexercised).
+    #[test]
+    fn zero_fee_denominator_refuses_admission() {
+        assert_eq!(
+            IntentFeeCarry::admit(id(1), id(2), 0),
+            Err(Error::ZeroFeeDenominator)
+        );
+        assert_eq!(
+            EnvelopedIntentFeeCarry::admit(id(1), id(2), 0, 0, 0),
+            Err(Error::ZeroFeeDenominator)
+        );
+    }
+
+    /// REVENUE_POLICY_V1 §10.4 at zero rates: **carry of zero is zero,
+    /// exactly, through every path.**  For every denominator and every
+    /// fragmentation (one to five zero fragments), the enveloped carry under
+    /// the signed ZERO envelope admits, accumulates nothing, closes with a
+    /// terminal charge of exactly zero atoms, and refuses reopen — so the
+    /// terminal ceil never mints an atom from a zero-rate intent, and the
+    /// zero envelope's meaning ("no fee, ever") is bit-exact.
+    #[test]
+    fn zero_rate_carry_is_exactly_zero_through_every_path() {
+        for denominator in 1..=17u64 {
+            for fragments in 1..=5usize {
+                let mut carry =
+                    EnvelopedIntentFeeCarry::admit(id(1), id(2), denominator, 0, 0).unwrap();
+                for _ in 0..fragments {
+                    let (next, charge) = carry.charge_fragment(id(1), id(2), 0).unwrap();
+                    assert_eq!(charge.atoms, 0);
+                    assert_eq!(charge.remainder, 0);
+                    assert!(!charge.terminal);
+                    carry = next;
+                }
+                assert_eq!(carry.committed_atoms(), Ok(0));
+                let (closed, terminal) = carry.close(id(1), id(2)).unwrap();
+                assert_eq!(terminal.atoms, 0, "the ceil atom must not exist at zero");
+                assert_eq!(terminal.remainder, 0);
+                assert!(terminal.terminal);
+                assert_eq!(closed.carry().paid_atoms(), 0);
+                assert_eq!(closed.carry().remainder(), 0);
+                assert!(closed.carry().is_closed());
+                assert_eq!(
+                    closed.charge_fragment(id(1), id(2), 0),
+                    Err(Error::AlreadyTerminal),
+                    "reopen refused even for a zero charge"
+                );
+                assert_eq!(closed.close(id(1), id(2)), Err(Error::AlreadyTerminal));
+            }
+        }
+    }
+
+    /// §10.2's host half: a zero envelope provably never pays an atom or
+    /// accrues a remainder — the FIRST nonzero numerator refuses (its ceil
+    /// commitment already exceeds zero) and the refused copy is unchanged —
+    /// and a nonzero envelope is a hard bound with the terminal ceil atom
+    /// counted, so a charge that would maroon the close outside the envelope
+    /// refuses at the fragment, never at the close.
+    #[test]
+    fn the_envelope_bounds_every_charge_including_the_terminal_ceil() {
+        // Admission quotes above the signed envelope refuse outright.
+        assert_eq!(
+            EnvelopedIntentFeeCarry::admit(id(1), id(2), 10, 1, 0),
+            Err(Error::FeeEnvelopeExceeded)
+        );
+
+        // The zero envelope: sub-atom numerators refuse too, because the
+        // remainder they would leave commits a ceil atom the envelope
+        // cannot pay.
+        let zero = EnvelopedIntentFeeCarry::admit(id(1), id(2), 10, 0, 0).unwrap();
+        for numerator in [1u64, 5, 9, 10, 11, 1_000] {
+            assert_eq!(
+                zero.charge_fragment(id(1), id(2), numerator),
+                Err(Error::FeeEnvelopeExceeded),
+                "a zero envelope must never be touched by numerator {numerator}"
+            );
+        }
+        // The refused value is untouched and still closes at exactly zero.
+        let (closed, terminal) = zero.close(id(1), id(2)).unwrap();
+        assert_eq!(terminal.atoms, 0);
+        assert_eq!(closed.carry().paid_atoms(), 0);
+
+        // A one-atom envelope admits a sub-atom remainder (ceil commitment
+        // exactly 1) and the close pays exactly that committed atom.
+        let one = EnvelopedIntentFeeCarry::admit(id(1), id(2), 10, 1, 1).unwrap();
+        let (one, charge) = one.charge_fragment(id(1), id(2), 5).unwrap();
+        assert_eq!(charge.atoms, 0);
+        assert_eq!(charge.remainder, 5);
+        assert_eq!(one.committed_atoms(), Ok(1));
+        // A second fragment that would commit a second atom refuses here,
+        // not at the close.
+        assert_eq!(
+            one.charge_fragment(id(1), id(2), 10),
+            Err(Error::FeeEnvelopeExceeded)
+        );
+        let (closed, terminal) = one.close(id(1), id(2)).unwrap();
+        assert_eq!(terminal.atoms, 1);
+        assert_eq!(closed.carry().paid_atoms(), 1);
+        assert_eq!(closed.max_fee_atoms(), 1);
+    }
+
+    /// The B4b grief rider's arithmetic: close refuses while any served
+    /// fee-bearing epoch is unsettled, settles never go negative, and close
+    /// lands exactly once.
+    #[test]
+    fn treasury_service_ledger_refuses_mid_epoch_close() {
+        assert_eq!(
+            TreasuryServiceLedger::admit(Id::ZERO),
+            Err(Error::ZeroIdentity)
+        );
+        let ledger = TreasuryServiceLedger::admit(id(9)).unwrap();
+        assert_eq!(ledger.outstanding(), 0);
+        // Settling a service nobody began refuses: no banked free closes.
+        assert_eq!(ledger.settle_service(), Err(Error::NoServingEpoch));
+
+        // Two epochs admitted against the treasury; close refuses until the
+        // exact number settled.
+        let ledger = ledger.begin_service().unwrap().begin_service().unwrap();
+        assert_eq!(ledger.outstanding(), 2);
+        assert_eq!(ledger.close(), Err(Error::TreasuryServiceOutstanding));
+        let ledger = ledger.settle_service().unwrap();
+        assert_eq!(ledger.close(), Err(Error::TreasuryServiceOutstanding));
+        let ledger = ledger.settle_service().unwrap();
+        let closed = ledger.close().unwrap();
+        assert!(closed.is_closed());
+
+        // Close happens once, ever; a closed ledger serves nothing.
+        assert_eq!(closed.close(), Err(Error::AlreadyTerminal));
+        assert_eq!(closed.begin_service(), Err(Error::AlreadyTerminal));
+        assert_eq!(closed.settle_service(), Err(Error::AlreadyTerminal));
     }
 }

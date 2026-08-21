@@ -156,6 +156,17 @@ POST_PROBE_T2_8_ROWS = {
 POST_PROBE_TERMINAL_CLOSURE_ROWS = {
     "general.funding_ledger": 85,
 }
+# The revenue plane's one account family, classified after the sealed probe
+# for the same reason (the probe source archived at ``runtime_ref`` predates
+# it) and landed in the inventory BEFORE its implementation lane per the B4f
+# rows-first rule.  Byte pin comes from
+# programs/solana-layout/src/revenue.rs (REVENUE_POLICY_RECORD_BYTES =
+# 2 + 32 + 32 + 32 + 56 + 1 + 1 = 156, tag REVENUE_POLICY_RECORD_TAG = 27);
+# the same probe-equality teeth apply.  The design's RevenueVaultV1 row is
+# deliberately absent: B4c builds no vault.
+POST_PROBE_REVENUE_ROWS = {
+    "revenue.policy_record.v1": 156,
+}
 # What TerminalClosure (tags 60-67) does and does not retire, welded to the
 # sealed bank walk by ``require_terminal_closure_evidence``.  The close DAG is
 # complete, permissionless except for the owner-signed release edge, and
@@ -1630,6 +1641,7 @@ def check_rent_and_accounts(evidence: dict[str, Any]) -> None:
         ("V3", POST_PROBE_DIRECT_V3_ROWS),
         ("T2-8", POST_PROBE_T2_8_ROWS),
         ("TerminalClosure", POST_PROBE_TERMINAL_CLOSURE_ROWS),
+        ("Revenue", POST_PROBE_REVENUE_ROWS),
     )
     seen: set[str] = set()
     for _, pins in pin_sets:

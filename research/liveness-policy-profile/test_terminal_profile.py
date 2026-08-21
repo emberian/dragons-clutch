@@ -20,9 +20,10 @@ class TerminalProfileTests(unittest.TestCase):
         self.assertEqual(len(ACCOUNT_ROWS), len(EXPECTED_ACCOUNTS))
         # 38 sealed-probe rows (the T2-6 probe adds epoch.window) plus the
         # seven Direct V3 rows, the two T2-8 general-plane pot/receipt rows,
-        # and the TerminalClosure funding ledger, all classified after the
-        # probe.  A row added or dropped without reclassifying here fails.
-        self.assertEqual(len(ACCOUNT_ROWS), 48)
+        # the TerminalClosure funding ledger, and the B4f revenue-policy
+        # record, all classified after the probe.  A row added or dropped
+        # without reclassifying here fails.
+        self.assertEqual(len(ACCOUNT_ROWS), 49)
         terminal = build_terminal("f" * 40)
         self.assertEqual(
             validate_terminal_admission(terminal, expected_accounts=EXPECTED_ACCOUNTS),

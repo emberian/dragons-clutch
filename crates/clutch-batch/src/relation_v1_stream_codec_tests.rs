@@ -728,11 +728,12 @@ fn control_field_sweeps_refuse_with_typed_faults() {
         );
     }
     // The fee discriminant; a fee payload behind the no-fee tag refuses.
+    // Tag 2 (the composite shape) decodes only with the rate word zero.
     sweep(
         &mut target,
         &mut active_bytes,
         off::DOMAIN_POLICY + 10,
-        &|v| v <= 1,
+        &|v| v <= 2,
         CodecFaultV1::InvalidPolicy,
         "fee tag",
     );
@@ -750,8 +751,24 @@ fn control_field_sweeps_refuse_with_typed_faults() {
             target.domain.policy.fee_base,
             FeeBaseV1::FlatNotional { bps: 1 }
         );
-        active_bytes[off::DOMAIN_POLICY + 10] = 0;
+        // A composite checkpoint claiming a nonzero rate is fail-closed
+        // corruption: only the zero rate pair is registered.
+        active_bytes[off::DOMAIN_POLICY + 10] = 2;
+        assert_eq!(
+            target.decode_into(&active_bytes),
+            Err(CodecFaultV1::InvalidPolicy),
+            "rate behind the composite shape tag"
+        );
         active_bytes[at] = 0;
+        target.decode_into(&active_bytes).unwrap();
+        assert_eq!(
+            target.domain.policy.fee_base,
+            FeeBaseV1::CompositeDispersionFloor {
+                dispersion_bps: 0,
+                floor_range_bps: 0,
+            }
+        );
+        active_bytes[off::DOMAIN_POLICY + 10] = 0;
     }
     // The declared-slices flag; a count behind a clear flag refuses.
     sweep(
