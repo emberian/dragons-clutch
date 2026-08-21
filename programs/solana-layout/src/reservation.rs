@@ -5,6 +5,26 @@
 //! `(market, epoch, owner, position generation, order id)` identity.  The
 //! Solana adapter must additionally authenticate its PDA and apply the
 //! Position deltas atomically with the page write.
+//!
+//! ## Schema v2: the partial-fill ledger
+//!
+//! Since the PartialFillLedger wave the account also *is* the per-order
+//! cumulative consumption ledger: `entitled_units` (the whole order's entitled
+//! Egg atoms, stamped once at its first entitled slice), `consumed_units`
+//! (monotone, bounded by it), and the reserved-zero fee landing zone
+//! `fee_debited_atoms` / `fee_carry_numerator`.  The pinned invariant, held at
+//! every transaction boundary and per cash and per outcome, is
+//!
+//! ```text
+//! initial = consumed-so-far + remaining + released
+//! ```
+//!
+//! with `released` zero until completion; `CONSUMED` is exactly
+//! `consumed_units == entitled_units`, which is exactly an empty remaining
+//! envelope, because the completing consumption releases the remainder in the
+//! same transition.  This is not a new account family and not a policy fork:
+//! the frozen `GENERAL_CLEARING_POLICY_V1` digest is unchanged and already
+//! admits partial fills.
 
 use super::{
     check_hash, check_padded_amounts, digest, order_id_rank, put_header, CodecError, Hash32,
@@ -12,13 +32,27 @@ use super::{
     ORDER_KIND_SINGLE,
 };
 
-/// First reservation-account schema.
-pub const RESERVATION_ACCOUNT_VERSION: u8 = 1;
+/// The general clearing plane's reservation schema carrying the per-order
+/// partial-fill ledger.
+///
+/// This is schema **v2** of the general reservation: v1's 570 bytes plus the
+/// four ledger fields appended after `remaining_internal`.  The version *byte*
+/// is 3 rather than 2 because version 2 under [`RESERVATION_ACCOUNT_TAG`] is
+/// already claimed by
+/// [`crate::direct_selection_v3::DIRECT_RESERVATION_V2_VERSION`], a different
+/// 618-byte schema on the direct plane; two schemas must not share one
+/// `(tag, version)` pair.  V1 bytes refuse at the decoder — `Truncated` on the
+/// old length, `WrongVersion` on the old version byte — with no migration
+/// owed, the `KernelAccount` v2 precedent.
+pub const RESERVATION_ACCOUNT_VERSION: u8 = 3;
 /// Reservation-account discriminator.
 pub const RESERVATION_ACCOUNT_TAG: u8 = 19;
 /// Exact fixed length of one reservation account.
+///
+/// V1's 570 bytes plus `entitled_units` (8), `consumed_units` (8),
+/// `fee_debited_atoms` (8), and `fee_carry_numerator` (16): 610.
 pub const RESERVATION_ACCOUNT_BYTES: usize =
-    2 + (8 * 32) + (6 * 8) + 2 + 6 + (2 * MAX_OUTCOMES * 8);
+    2 + (8 * 32) + (6 * 8) + 2 + 6 + (2 * MAX_OUTCOMES * 8) + 8 + 8 + 8 + 16;
 
 /// Reservation owns an open order's entire admitted asset envelope.
 pub const RESERVATION_STATE_ACTIVE: u8 = 0;
@@ -26,11 +60,15 @@ pub const RESERVATION_STATE_ACTIVE: u8 = 0;
 pub const RESERVATION_STATE_RELEASED: u8 = 1;
 /// Reservation moved into a complete immutable settlement entitlement set.
 ///
-/// No production transition writes this state yet.
+/// Entered at the order's *first* entitled slice, which stamps
+/// [`ReservationAccount::entitled_units`]; every later slice of the same order
+/// re-derives that total and requires it equal.
 pub const RESERVATION_STATE_ENTITLED: u8 = 2;
 /// The entitlement consumed or refunded every remaining asset.
 ///
-/// No production transition writes this state yet.
+/// Entered exactly when `consumed_units == entitled_units`, which is also
+/// exactly when the remaining envelope is empty: the completing consumption
+/// releases the remainder in the same transition.
 pub const RESERVATION_STATE_CONSUMED: u8 = 3;
 
 /// Exact asset envelope an order must reserve at admission.
@@ -191,6 +229,31 @@ pub struct ReservationAccount {
     pub initial_internal: [u64; MAX_OUTCOMES],
     /// Eggs still owned by this reservation.
     pub remaining_internal: [u64; MAX_OUTCOMES],
+    /// Relation units this order is entitled to consume across *every* slice
+    /// of the selected candidate's witness.
+    ///
+    /// Egg atoms for a single-Egg order, and — for a portfolio order — the
+    /// filled lots times the sum of its coefficients, which is the same Egg
+    /// atoms.  Zero until the order's first entitled slice stamps it from the
+    /// digest-verified feed; every later slice of the same order re-derives
+    /// the total and requires it equal, so a forged stamp cannot survive
+    /// recomputation.
+    pub entitled_units: u64,
+    /// Relation units consumed so far, in the same Egg-atom unit.
+    ///
+    /// Monotone and bounded by `entitled_units`; reaching it is exactly
+    /// completion, which releases the remainder and takes `CONSUMED`.
+    pub consumed_units: u64,
+    /// Fee atoms already debited from this envelope.
+    ///
+    /// RESERVED for the adopted composite fee base.  V2 semantics validate it
+    /// zero: the five-plus-one zero gates stand and no seam writes a fee.
+    pub fee_debited_atoms: u64,
+    /// Sub-atom fee carry numerator held for this owner identity.
+    ///
+    /// RESERVED for the adopted composite fee base, alongside
+    /// [`Self::fee_debited_atoms`], and validated zero in v2 semantics.
+    pub fee_carry_numerator: u128,
 }
 
 impl ReservationAccount {
@@ -240,6 +303,10 @@ impl ReservationAccount {
             flags: 0,
             initial_internal: plan.internal,
             remaining_internal: plan.internal,
+            entitled_units: 0,
+            consumed_units: 0,
+            fee_debited_atoms: 0,
+            fee_carry_numerator: 0,
         };
         value.validate()?;
         Ok(value)
@@ -286,6 +353,15 @@ impl ReservationAccount {
         }
         check_padded_amounts(&self.initial_internal, usize::from(self.outcome_count))?;
         check_padded_amounts(&self.remaining_internal, usize::from(self.outcome_count))?;
+        /* The fee landing zone is reserved, not live: v2 semantics validate
+         * both fields zero, so no byte of a fee can be persisted here until a
+         * frozen fee base and a named recipient exist. */
+        if self.fee_debited_atoms != 0 || self.fee_carry_numerator != 0 {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        if self.consumed_units > self.entitled_units {
+            return Err(CodecError::AggregateClosureMismatch);
+        }
         if self.remaining_cash_atoms > self.initial_cash_atoms {
             return Err(CodecError::AggregateClosureMismatch);
         }
@@ -314,17 +390,29 @@ impl ReservationAccount {
             }
             _ => return Err(CodecError::InvalidEnum),
         }
+        /* The ledger's phase coherence.  An *unstamped* ledger — both counters
+         * zero — is the pre-ledger body: it is what an untouched reservation
+         * carries, what a release returns, and what the atomic portfolio
+         * full-pair route consumes, which never partially fills and so never
+         * stamps.  A *stamped* ledger (`entitled_units != 0`) is the general
+         * per-slice plane's, where CONSUMED is exactly completion. */
         match self.state {
             RESERVATION_STATE_ACTIVE => {
                 if self.release_generation != 0
                     || self.remaining_cash_atoms != self.initial_cash_atoms
                     || self.remaining_internal != self.initial_internal
+                    || self.entitled_units != 0
+                    || self.consumed_units != 0
                 {
                     return Err(CodecError::AggregateClosureMismatch);
                 }
             }
             RESERVATION_STATE_RELEASED => {
-                if self.release_generation <= self.order_generation || !self.remaining_is_zero() {
+                if self.release_generation <= self.order_generation
+                    || !self.remaining_is_zero()
+                    || self.entitled_units != 0
+                    || self.consumed_units != 0
+                {
                     return Err(CodecError::AggregateClosureMismatch);
                 }
             }
@@ -332,9 +420,17 @@ impl ReservationAccount {
                 if self.release_generation != 0 {
                     return Err(CodecError::NonCanonicalPadding);
                 }
+                // Reaching the stamped total is completion, which is CONSUMED;
+                // an ENTITLED account that claims it is an unclosed remainder.
+                if self.entitled_units != 0 && self.consumed_units == self.entitled_units {
+                    return Err(CodecError::AggregateClosureMismatch);
+                }
             }
             RESERVATION_STATE_CONSUMED => {
-                if self.release_generation != 0 || !self.remaining_is_zero() {
+                if self.release_generation != 0
+                    || !self.remaining_is_zero()
+                    || self.consumed_units != self.entitled_units
+                {
                     return Err(CodecError::AggregateClosureMismatch);
                 }
             }
@@ -373,6 +469,39 @@ impl ReservationAccount {
         Ok(next)
     }
 
+    /// Return the first-touch entitled post-state without mutating the
+    /// original: `ACTIVE → ENTITLED` with the order's whole entitled total
+    /// stamped once.
+    ///
+    /// The total is the *order's*, not the slice's: every later slice of the
+    /// same order re-derives it from the digest-verified feed and requires
+    /// [`Self::requires_stamp`], so no caller can widen an order's admission
+    /// by entering through a different slice.
+    pub fn entitled(&self, entitled_units: u64) -> Result<Self> {
+        self.validate()?;
+        if self.state != RESERVATION_STATE_ACTIVE || entitled_units == 0 {
+            return Err(CodecError::MismatchedBinding);
+        }
+        let mut next = *self;
+        next.entitled_units = entitled_units;
+        next.state = RESERVATION_STATE_ENTITLED;
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Require an already-entitled account to carry exactly this stamp.
+    pub fn requires_stamp(&self, entitled_units: u64) -> Result<()> {
+        if self.state != RESERVATION_STATE_ENTITLED || self.entitled_units != entitled_units {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(())
+    }
+
+    /// Relation units this reservation may still consume.
+    pub fn unconsumed_units(&self) -> u64 {
+        self.entitled_units - self.consumed_units
+    }
+
     /// Encode exactly [`RESERVATION_ACCOUNT_BYTES`] bytes.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
         self.validate()?;
@@ -408,6 +537,10 @@ impl ReservationAccount {
         w.u8(self.flags)?;
         w.amounts(&self.initial_internal)?;
         w.amounts(&self.remaining_internal)?;
+        w.u64(self.entitled_units)?;
+        w.u64(self.consumed_units)?;
+        w.u64(self.fee_debited_atoms)?;
+        w.u128(self.fee_carry_numerator)?;
         Ok(w.at)
     }
 
@@ -443,6 +576,10 @@ impl ReservationAccount {
             flags: r.u8()?,
             initial_internal: r.amounts()?,
             remaining_internal: r.amounts()?,
+            entitled_units: r.u64()?,
+            consumed_units: r.u64()?,
+            fee_debited_atoms: r.u64()?,
+            fee_carry_numerator: r.u128()?,
         };
         r.done()?;
         value.validate()?;
@@ -604,6 +741,120 @@ mod tests {
         assert_eq!(released.state, RESERVATION_STATE_RELEASED);
         assert_eq!(released.released(6), Err(CodecError::MismatchedBinding));
         assert_eq!(value.released(4), Err(CodecError::MismatchedBinding));
+    }
+
+    #[test]
+    fn the_v2_body_is_exactly_six_hundred_ten_bytes_and_v1_bytes_refuse() {
+        assert_eq!(RESERVATION_ACCOUNT_BYTES, 610);
+        assert_eq!(RESERVATION_ACCOUNT_VERSION, 3);
+        let value =
+            account(ReservationPlan::for_order(&single(1, 7, 2_500), 3, 10_000, 9).unwrap());
+        let mut bytes = [0u8; RESERVATION_ACCOUNT_BYTES];
+        assert_eq!(value.encode(&mut bytes), Ok(RESERVATION_ACCOUNT_BYTES));
+        // The four ledger words are the appended tail, all zero on an ACTIVE
+        // reservation, and nothing before them moved.
+        assert_eq!(&bytes[570..610], &[0u8; 40]);
+
+        // V1 bytes: the old 570-byte length refuses on length alone, and a
+        // full-length body still carrying the old version byte refuses on the
+        // version.  No migration is owed and none is offered.
+        assert_eq!(
+            ReservationAccount::decode(&bytes[..570]),
+            Err(CodecError::Truncated)
+        );
+        let mut v1_version = bytes;
+        v1_version[1] = 1;
+        assert_eq!(
+            ReservationAccount::decode(&v1_version),
+            Err(CodecError::WrongVersion)
+        );
+    }
+
+    #[test]
+    fn the_ledger_counters_bind_every_phase_and_the_fee_zone_stays_zero() {
+        let value =
+            account(ReservationPlan::for_order(&single(1, 7, 2_500), 3, 10_000, 9).unwrap());
+
+        // The reserved fee landing zone is validated zero in v2 semantics.
+        for mut hostile in [value, value] {
+            hostile.fee_debited_atoms = 1;
+            assert_eq!(hostile.validate(), Err(CodecError::NonCanonicalPadding));
+        }
+        let mut carry = value;
+        carry.fee_carry_numerator = 1;
+        assert_eq!(carry.validate(), Err(CodecError::NonCanonicalPadding));
+
+        // An ACTIVE reservation carries no stamp at all.
+        let mut stamped_active = value;
+        stamped_active.entitled_units = 7;
+        assert_eq!(
+            stamped_active.validate(),
+            Err(CodecError::AggregateClosureMismatch)
+        );
+
+        // The first touch stamps once; a second stamp, a zero stamp, and a
+        // stamp on a non-ACTIVE account all refuse.
+        let entitled = value.entitled(7).unwrap();
+        assert_eq!(entitled.state, RESERVATION_STATE_ENTITLED);
+        assert_eq!(entitled.entitled_units, 7);
+        assert_eq!(entitled.consumed_units, 0);
+        assert_eq!(entitled.unconsumed_units(), 7);
+        assert_eq!(entitled.requires_stamp(7), Ok(()));
+        assert_eq!(
+            entitled.requires_stamp(6),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(entitled.entitled(7), Err(CodecError::MismatchedBinding));
+        assert_eq!(value.entitled(0), Err(CodecError::MismatchedBinding));
+        assert_eq!(value.requires_stamp(7), Err(CodecError::MismatchedBinding));
+
+        // Consumption beyond the stamp refuses, and reaching it while still
+        // ENTITLED refuses too: reaching the total *is* completion.
+        let mut over = entitled;
+        over.consumed_units = 8;
+        assert_eq!(over.validate(), Err(CodecError::AggregateClosureMismatch));
+        let mut complete_but_entitled = entitled;
+        complete_but_entitled.consumed_units = 7;
+        assert_eq!(
+            complete_but_entitled.validate(),
+            Err(CodecError::AggregateClosureMismatch)
+        );
+        let mut partway = entitled;
+        partway.consumed_units = 3;
+        partway.remaining_internal[1] = 4;
+        assert_eq!(partway.validate(), Ok(()));
+
+        // CONSUMED is exactly `consumed == entitled` and an empty envelope.
+        let mut consumed = entitled;
+        consumed.consumed_units = 7;
+        consumed.remaining_internal = [0; MAX_OUTCOMES];
+        consumed.state = RESERVATION_STATE_CONSUMED;
+        assert_eq!(consumed.validate(), Ok(()));
+        let mut short = consumed;
+        short.consumed_units = 6;
+        assert_eq!(short.validate(), Err(CodecError::AggregateClosureMismatch));
+
+        // A release never carries a ledger: it is the never-entitled exit.
+        let mut released = value.released(5).unwrap();
+        assert_eq!(released.entitled_units, 0);
+        released.entitled_units = 7;
+        assert_eq!(
+            released.validate(),
+            Err(CodecError::AggregateClosureMismatch)
+        );
+
+        // The counters survive the codec byte for byte.
+        let mut bytes = [0u8; RESERVATION_ACCOUNT_BYTES];
+        partway.encode(&mut bytes).unwrap();
+        assert_eq!(ReservationAccount::decode(&bytes), Ok(partway));
+        assert_eq!(&bytes[570..578], &7u64.to_le_bytes());
+        assert_eq!(&bytes[578..586], &3u64.to_le_bytes());
+        // A hostile nonzero fee word in the reserved tail refuses at decode.
+        bytes[586] = 1;
+        assert_eq!(
+            ReservationAccount::decode(&bytes),
+            Err(CodecError::NonCanonicalPadding)
+        );
     }
 
     #[test]

@@ -28,7 +28,10 @@ use clutch_batch_policy_identity::{
 
 use super::{
     digest, put_header,
-    reservation::{ReservationAccount, RESERVATION_ACCOUNT_BYTES, RESERVATION_ACCOUNT_TAG},
+    reservation::{
+        ReservationAccount, RESERVATION_ACCOUNT_BYTES, RESERVATION_ACCOUNT_TAG,
+        RESERVATION_ACCOUNT_VERSION,
+    },
     CodecError, Hash32, Reader, Result, Writer, EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN,
     EPOCH_PHASE_LAPSED, EPOCH_PHASE_OPEN, EPOCH_PHASE_SETTLED, EPOCH_TAG, MAX_OUTCOMES,
 };
@@ -57,8 +60,15 @@ pub const DIRECT_WORK_BUDGET_VERSION: u8 = 1;
 pub const DIRECT_WORK_BUDGET_BYTES: usize = 248;
 /// Reservation schema with exact payer principal and neutral donation fields.
 pub const DIRECT_RESERVATION_V2_VERSION: u8 = 2;
-/// Exact Reservation V2 byte length, derived from the live 16-outcome account.
-pub const DIRECT_RESERVATION_V2_BYTES: usize = RESERVATION_ACCOUNT_BYTES + 32 + 8 + 8;
+/// Exact Reservation V2 byte length: the direct plane's frozen 570-byte
+/// reservation body plus its 48-byte funding ownership tail.
+///
+/// Deliberately a literal, *not* derived from [`RESERVATION_ACCOUNT_BYTES`].
+/// The general clearing plane's reservation grew to 610 bytes when it took on
+/// the per-order partial-fill ledger; the direct plane fills whole orders in
+/// one shot, carries no ledger, and stays byte-frozen at 618.  The two
+/// schemas share the tag and are separated by version and length.
+pub const DIRECT_RESERVATION_V2_BYTES: usize = 570 + 32 + 8 + 8;
 /// Exact DirectBatchPolicy V3 artifact body length.
 pub const DIRECT_BATCH_POLICY_V3_BYTES: usize = BATCH_POLICY_BYTES + 32;
 
@@ -167,8 +177,9 @@ const WINDOW_EXTENSION_OFFSET: usize = DIRECT_WINDOW_ACCOUNT_BYTES;
 const _: () = assert!(DIRECT_EPOCH_V4_BYTES == DIRECT_EPOCH_BYTES + 328);
 const _: () = assert!(DIRECT_CANDIDATE_V3_BYTES == DIRECT_CANDIDATE_ACCOUNT_BYTES + 48);
 const _: () = assert!(DIRECT_WINDOW_V3_BYTES == DIRECT_WINDOW_ACCOUNT_BYTES + 176);
-const _: () = assert!(RESERVATION_ACCOUNT_BYTES == 570);
+const _: () = assert!(RESERVATION_ACCOUNT_BYTES == 610);
 const _: () = assert!(DIRECT_RESERVATION_V2_BYTES == 618);
+const _: () = assert!(DIRECT_RESERVATION_V2_VERSION != RESERVATION_ACCOUNT_VERSION);
 const _: () = assert!(DIRECT_BATCH_POLICY_V3_BYTES == 96);
 
 fn map_direct_error(error: DirectWindowErrorV1) -> CodecError {
@@ -1297,7 +1308,19 @@ fn write_reservation_body(writer: &mut Writer<'_>, value: &ReservationAccount) -
     writer.u8(value.stored_bump)?;
     writer.u8(value.flags)?;
     writer.amounts(&value.initial_internal)?;
-    writer.amounts(&value.remaining_internal)
+    writer.amounts(&value.remaining_internal)?;
+    /* The direct plane's body is the frozen 570-byte v1 shape.  It carries no
+     * partial-fill ledger — a direct order fills whole or not at all — so a
+     * stamped or consumed ledger cannot be persisted through this writer, and
+     * a caller holding one is refused rather than silently truncated. */
+    if value.entitled_units != 0
+        || value.consumed_units != 0
+        || value.fee_debited_atoms != 0
+        || value.fee_carry_numerator != 0
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    Ok(())
 }
 
 fn read_reservation_body(reader: &mut Reader<'_>) -> Result<ReservationAccount> {
@@ -1325,6 +1348,11 @@ fn read_reservation_body(reader: &mut Reader<'_>) -> Result<ReservationAccount> 
         flags: reader.u8()?,
         initial_internal: reader.amounts()?,
         remaining_internal: reader.amounts()?,
+        // Unstamped: the frozen direct body has no ledger words to read.
+        entitled_units: 0,
+        consumed_units: 0,
+        fee_debited_atoms: 0,
+        fee_carry_numerator: 0,
     })
 }
 
@@ -2049,9 +2077,13 @@ mod tests {
         assert_eq!(DIRECT_CANDIDATE_V3_BYTES, 488);
         assert_eq!(DIRECT_WINDOW_V3_BYTES, 632);
         assert_eq!(DIRECT_WORK_BUDGET_BYTES, 248);
-        assert_eq!(RESERVATION_ACCOUNT_BYTES, 570);
-        assert_eq!(DIRECT_RESERVATION_V2_BYTES, RESERVATION_ACCOUNT_BYTES + 48);
+        // The general reservation grew to 610 with the partial-fill ledger;
+        // the direct plane's own body stays byte-frozen at 618 and is told
+        // apart from it by both version and length.
+        assert_eq!(RESERVATION_ACCOUNT_BYTES, 610);
         assert_eq!(DIRECT_RESERVATION_V2_BYTES, 618);
+        assert_ne!(DIRECT_RESERVATION_V2_BYTES, RESERVATION_ACCOUNT_BYTES);
+        assert_ne!(DIRECT_RESERVATION_V2_VERSION, RESERVATION_ACCOUNT_VERSION);
         assert_eq!(DIRECT_BATCH_POLICY_V3_BYTES, 96);
         assert_eq!(DIRECT_WORK_BUDGET_TAG, 23);
         assert_ne!(DIRECT_WORK_BUDGET_TAG, DIRECT_CANDIDATE_TAG);

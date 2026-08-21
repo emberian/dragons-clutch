@@ -542,6 +542,10 @@ const ZEROED_RESERVATION: ReservationAccount = ReservationAccount {
     flags: 0,
     initial_internal: [0; MAX_OUTCOMES],
     remaining_internal: [0; MAX_OUTCOMES],
+    entitled_units: 0,
+    consumed_units: 0,
+    fee_debited_atoms: 0,
+    fee_carry_numerator: 0,
 };
 
 impl PortfolioPairPlanV1 {
