@@ -751,15 +751,43 @@ fn control_field_sweeps_refuse_with_typed_faults() {
             target.domain.policy.fee_base,
             FeeBaseV1::FlatNotional { bps: 1 }
         );
-        // A composite checkpoint claiming a nonzero rate is fail-closed
-        // corruption: only the zero rate pair is registered.
+        // The composite packs both rates into the one rate word: dispersion
+        // low, floor high.
         active_bytes[off::DOMAIN_POLICY + 10] = 2;
+        target.decode_into(&active_bytes).unwrap();
         assert_eq!(
-            target.decode_into(&active_bytes),
-            Err(CodecFaultV1::InvalidPolicy),
-            "rate behind the composite shape tag"
+            target.domain.policy.fee_base,
+            FeeBaseV1::CompositeDispersionFloor {
+                dispersion_bps: 1,
+                floor_range_bps: 0,
+            },
+            "the dispersion rate rides the low half"
         );
         active_bytes[at] = 0;
+        active_bytes[at + 2] = 1;
+        target.decode_into(&active_bytes).unwrap();
+        assert_eq!(
+            target.domain.policy.fee_base,
+            FeeBaseV1::CompositeDispersionFloor {
+                dispersion_bps: 0,
+                floor_range_bps: 1,
+            },
+            "the floor rate rides the high half"
+        );
+        // A rate past `FEE_BPS_DENOMINATOR` in either half is fail-closed
+        // corruption, never a policy.
+        active_bytes[at + 2] = 0;
+        for half in [0usize, 2] {
+            active_bytes[at + half] = 0x11;
+            active_bytes[at + half + 1] = 0x27;
+            assert_eq!(
+                target.decode_into(&active_bytes),
+                Err(CodecFaultV1::InvalidPolicy),
+                "an over-denominator composite rate must refuse"
+            );
+            active_bytes[at + half] = 0;
+            active_bytes[at + half + 1] = 0;
+        }
         target.decode_into(&active_bytes).unwrap();
         assert_eq!(
             target.domain.policy.fee_base,

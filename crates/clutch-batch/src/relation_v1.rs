@@ -102,6 +102,16 @@ pub const PRICE_SCALE: u64 = 10_000;
 pub const FEE_BPS_DENOMINATOR: u64 = 10_000;
 /// Largest price scale whose simplex sum cannot overflow a `u64` accumulator.
 pub const MAX_PRICE_SCALE: u64 = u64::MAX / (MAX_OUTCOMES as u64);
+/// Largest price scale at which the composite fee base's common denominator
+/// `kappa_den * S^2 * kappa'_den` is representable in `u128`.
+///
+/// A round bound, deliberately far inside the exact one
+/// (`floor(sqrt(u128::MAX / FEE_BPS_DENOMINATOR^2))`, about `1.844e15`):
+/// `10^8 * (10^15)^2 = 10^38 < u128::MAX`.  It bounds the **denominator**
+/// only.  The numerator stays checked arithmetic, not an audited envelope —
+/// freezing the five (now six) width bounds is `FEE_GEOMETRY.md` §3's still
+/// unpaid debt, and this constant does not discharge it.
+pub const MAX_COMPOSITE_PRICE_SCALE: u64 = 1_000_000_000_000_000;
 
 // Compile-time accumulator width bounds (§5 of the design).
 const _: () = assert!(PRICE_SCALE <= MAX_PRICE_SCALE);
@@ -109,6 +119,19 @@ const _: () = assert!((MAX_OUTCOMES as u64).checked_mul(PRICE_SCALE).is_some());
 const _: () = assert!(MAX_LEGS == 192);
 const _: () = assert!(MAX_SLICES == 416);
 const _: () = assert!(MAX_ORDERS <= 64, "the honored-AON mask is a u64 bitmask");
+const _: () = assert!(MAX_COMPOSITE_PRICE_SCALE <= MAX_PRICE_SCALE);
+const _: () = assert!(
+    (FEE_BPS_DENOMINATOR as u128)
+        .pow(2)
+        .checked_mul((MAX_COMPOSITE_PRICE_SCALE as u128).pow(2))
+        .is_some(),
+    "the composite common denominator must fit u128 at every admitted price scale"
+);
+// Both composite rates ride one `u32` wire slot in both policy codecs
+// (`relation_v1_stream::put_policy` and `clutch-batch-policy-identity`), the
+// floor rate shifted into the high half.  That packing is only lossless while
+// each rate fits 16 bits.
+const _: () = assert!(FEE_BPS_DENOMINATOR < 0x1_0000);
 
 /// Canonical fill allocation family (§7.3).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -227,23 +250,242 @@ pub enum FeeBaseV1 {
     /// `kappa*G(a,p) + kappa'*R(a)` — atomic simplex dispersion with a
     /// price-free quotient-norm floor.
     ///
-    /// **Both rates are explicit zero placeholders.**  The shape is selected;
-    /// the rates are UNDECIDED; and any nonzero rate is a **new frozen const
-    /// with a new digest behind its own ember decision**, together with the
-    /// relation-side composite arithmetic, which this crate deliberately does
-    /// not implement.  [`FrozenPolicyV1::validate`] therefore refuses any
-    /// nonzero rate pair as `PolicyVariantUnimplemented`: at zero rates the
-    /// composite charge is exactly zero on every admitted shape, and the
-    /// settlement paths treat the variant as the zero fee it is.
+    /// The arithmetic is **implemented** ([`composite_fee_quote`]): one exact
+    /// rational over the common denominator `kappa_den * S^2 * kappa'_den`,
+    /// one carry, one terminal ceiling, quoted owner-level over the filled
+    /// payoff vector.  Nonzero rates therefore verify rather than refuse.
+    ///
+    /// **The production rates remain UNDECIDED and are ember's alone.**  Every
+    /// frozen production const in this tree still pins `(0, 0)`; the only
+    /// nonzero rates that exist are the `TEST_COMPOSITE_*` laboratory pairs
+    /// below, which are never frozen and never digested as production.  A
+    /// production rate is a new frozen const with a new digest behind its own
+    /// ember decision, plus `FEE_GEOMETRY.md` §3's still-owed width bounds.
     CompositeDispersionFloor {
         /// Dispersion rate `kappa` numerator over [`FEE_BPS_DENOMINATOR`].
-        /// Zero until a rate freezes; nonzero refuses `validate()`.
         dispersion_bps: u32,
         /// Quotient-norm floor rate `kappa'` numerator over
-        /// [`FEE_BPS_DENOMINATOR`] per unit of model-free range.  Zero until
-        /// a rate freezes; nonzero refuses `validate()`.
+        /// [`FEE_BPS_DENOMINATOR`] per unit of model-free range.
         floor_range_bps: u32,
     },
+}
+
+/// The zero-rate composite shape: the regression anchor.  Every byte and every
+/// verdict under this pair is identical to [`FeeBaseV1::None`]'s economics.
+pub const TEST_COMPOSITE_ZERO: FeeBaseV1 = FeeBaseV1::CompositeDispersionFloor {
+    dispersion_bps: 0,
+    floor_range_bps: 0,
+};
+/// The laboratory comparison calibration of the selection report §3.1 —
+/// `kappa = 40 bp`, `kappa' = 10 bp of range`.  **A comparison arm, never a
+/// proposed production rate** (report §1: "every rate in this report is a lab
+/// comparison calibration, not a proposal").
+pub const TEST_COMPOSITE_LAB: FeeBaseV1 = FeeBaseV1::CompositeDispersionFloor {
+    dispersion_bps: 40,
+    floor_range_bps: 10,
+};
+/// The smallest nonzero rate pair: one basis point on each term.  Exercises
+/// the sub-atom regime the carry exists for.
+pub const TEST_COMPOSITE_SMALL: FeeBaseV1 = FeeBaseV1::CompositeDispersionFloor {
+    dispersion_bps: 1,
+    floor_range_bps: 1,
+};
+/// The admissible-rate boundary: both rates at [`FEE_BPS_DENOMINATOR`].
+pub const TEST_COMPOSITE_BOUNDARY: FeeBaseV1 = FeeBaseV1::CompositeDispersionFloor {
+    dispersion_bps: FEE_BPS_DENOMINATOR as u32,
+    floor_range_bps: FEE_BPS_DENOMINATOR as u32,
+};
+/// Dispersion only — the pure-`G` arm, which is feeless on the zero-price
+/// channel (`FEE_GEOMETRY.md` §5).
+pub const TEST_COMPOSITE_DISPERSION_ONLY: FeeBaseV1 = FeeBaseV1::CompositeDispersionFloor {
+    dispersion_bps: 40,
+    floor_range_bps: 0,
+};
+/// Floor only — the pure-`R` arm, which charges the zero-price channel.
+pub const TEST_COMPOSITE_FLOOR_ONLY: FeeBaseV1 = FeeBaseV1::CompositeDispersionFloor {
+    dispersion_bps: 0,
+    floor_range_bps: 10,
+};
+
+/// One exact composite fee quote, field for field the laboratory's `FeeQuote`
+/// (`research/economics-admission/model.py`).
+///
+/// `floor_atoms` and `terminal_ceil_atoms` are **collateral atoms**, not price
+/// units: `G_num` already carries the `S^2` the denominator divides out, so the
+/// quotient is the charge in the same units a complete set is counted in
+/// (`FEE_GEOMETRY.md` §4).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeeQuoteV1 {
+    /// `kappa_num*G_num*kappa'_den + kappa'_num*R*kappa_den*S^2`, before the
+    /// prior carry is folded in.  Both rates are folded into the base fraction
+    /// because the composite has no single rate to factor out.
+    pub base_numerator: u128,
+    /// `kappa_den * S^2 * kappa'_den`.
+    pub base_denominator: u128,
+    /// `base_numerator + prior_carry`.
+    pub exact_numerator: u128,
+    /// Equal to [`Self::base_denominator`]; carried so the quote is the whole
+    /// rational and a reader never has to know they coincide.
+    pub exact_denominator: u128,
+    /// `floor(exact_numerator / exact_denominator)` — what a non-terminal fill
+    /// pays now.
+    pub floor_atoms: u128,
+    /// `ceil(exact_numerator / exact_denominator)` — the terminal-ceil close.
+    pub terminal_ceil_atoms: u128,
+    /// `exact_numerator mod exact_denominator`, the remainder that persists in
+    /// the owner's carry so fragmentation cannot round a fee to nothing.
+    pub carry: u128,
+}
+
+/// The composite fee base in exact integer arithmetic.
+///
+/// `kappa*G(a,p) + kappa'*R(a)` over one common denominator with one carry, the
+/// single-`FeeBaseV1`-variant runtime shape the selection report costed (§3.5:
+/// "two parallel pipelines would pay up to one extra terminal atom per
+/// intent").  With
+///
+/// ```text
+/// G_num(a,p) = sum_{i<j} p_i * p_j * abs(a_i - a_j)
+/// R(a)       = max_i a_i - min_i a_i
+/// ```
+///
+/// the quote is
+///
+/// ```text
+/// numerator   = kappa_num*G_num*kappa'_den + kappa'_num*R*kappa_den*S^2 + carry_in
+/// denominator = kappa_den * S^2 * kappa'_den
+/// ```
+///
+/// The common-denominator form is kept unreduced on purpose: it is the form the
+/// laboratory quotes, so the carry — which is only meaningful against its own
+/// denominator — is directly comparable across the two implementations.
+///
+/// `payoffs` is the **owner-level filled payoff vector**, not one order's: `G`
+/// is subadditive, so quoting per order would overcharge a netted portfolio and
+/// hand fragmentation a discount.
+///
+/// Every step is checked; nothing wraps.  Refusals:
+///
+/// - [`ErrorV1::InvalidOutcome`] — width outside `2 ..= MAX_OUTCOMES`;
+/// - [`ErrorV1::InvalidPriceScale`] — zero, or past
+///   [`MAX_COMPOSITE_PRICE_SCALE`];
+/// - [`ErrorV1::PriceOutOfRange`] / [`ErrorV1::SimplexSumMismatch`] — the
+///   prices are off the exact simplex;
+/// - [`ErrorV1::FeeMismatch`] — a prior carry that is not canonical
+///   (`>= denominator`), which no honest carry ledger can produce;
+/// - [`ErrorV1::ArithmeticOverflow`] — the exact rational does not fit `u128`.
+pub fn composite_fee_quote(
+    payoffs: &[u64; MAX_OUTCOMES],
+    prices: &[u64; MAX_OUTCOMES],
+    outcomes: usize,
+    price_scale: u64,
+    dispersion_bps: u32,
+    floor_range_bps: u32,
+    prior_carry: u128,
+) -> Result<FeeQuoteV1, ErrorV1> {
+    if outcomes < 2 || outcomes > MAX_OUTCOMES {
+        return Err(ErrorV1::InvalidOutcome);
+    }
+    if price_scale == 0 || price_scale > MAX_COMPOSITE_PRICE_SCALE {
+        return Err(ErrorV1::InvalidPriceScale);
+    }
+    let scale = price_scale as u128;
+    let mut price_sum = 0u128;
+    let mut i = 0usize;
+    while i < outcomes {
+        if prices[i] > price_scale {
+            return Err(ErrorV1::PriceOutOfRange);
+        }
+        price_sum += prices[i] as u128;
+        i += 1;
+    }
+    if price_sum != scale {
+        return Err(ErrorV1::SimplexSumMismatch);
+    }
+
+    // The dispersion numerator: the fixed pairwise loop of FEE_GEOMETRY §2,
+    // with no intermediate truncation anywhere.
+    let mut dispersion_numerator = 0u128;
+    let mut left = 0usize;
+    while left < outcomes {
+        let mut right = left + 1;
+        while right < outcomes {
+            let gap = if payoffs[left] >= payoffs[right] {
+                (payoffs[left] - payoffs[right]) as u128
+            } else {
+                (payoffs[right] - payoffs[left]) as u128
+            };
+            let term = (prices[left] as u128)
+                .checked_mul(prices[right] as u128)
+                .and_then(|value| value.checked_mul(gap))
+                .ok_or(ErrorV1::ArithmeticOverflow)?;
+            dispersion_numerator = dispersion_numerator
+                .checked_add(term)
+                .ok_or(ErrorV1::ArithmeticOverflow)?;
+            right += 1;
+        }
+        left += 1;
+    }
+
+    // The price-free quotient norm: two comparisons per outcome.
+    let mut lowest = payoffs[0];
+    let mut highest = payoffs[0];
+    let mut i = 1usize;
+    while i < outcomes {
+        if payoffs[i] < lowest {
+            lowest = payoffs[i];
+        }
+        if payoffs[i] > highest {
+            highest = payoffs[i];
+        }
+        i += 1;
+    }
+    let range = (highest - lowest) as u128;
+
+    let rate_denominator = FEE_BPS_DENOMINATOR as u128;
+    let scale_squared = scale
+        .checked_mul(scale)
+        .ok_or(ErrorV1::ArithmeticOverflow)?;
+    let base_denominator = rate_denominator
+        .checked_mul(scale_squared)
+        .and_then(|value| value.checked_mul(rate_denominator))
+        .ok_or(ErrorV1::ArithmeticOverflow)?;
+    let dispersion_term = (dispersion_bps as u128)
+        .checked_mul(dispersion_numerator)
+        .and_then(|value| value.checked_mul(rate_denominator))
+        .ok_or(ErrorV1::ArithmeticOverflow)?;
+    let floor_term = (floor_range_bps as u128)
+        .checked_mul(range)
+        .and_then(|value| value.checked_mul(rate_denominator))
+        .and_then(|value| value.checked_mul(scale_squared))
+        .ok_or(ErrorV1::ArithmeticOverflow)?;
+    let base_numerator = dispersion_term
+        .checked_add(floor_term)
+        .ok_or(ErrorV1::ArithmeticOverflow)?;
+    if prior_carry >= base_denominator {
+        return Err(ErrorV1::FeeMismatch);
+    }
+    let exact_numerator = base_numerator
+        .checked_add(prior_carry)
+        .ok_or(ErrorV1::ArithmeticOverflow)?;
+    let floor_atoms = exact_numerator / base_denominator;
+    let carry = exact_numerator % base_denominator;
+    let terminal_ceil_atoms = if carry == 0 {
+        floor_atoms
+    } else {
+        floor_atoms
+            .checked_add(1)
+            .ok_or(ErrorV1::ArithmeticOverflow)?
+    };
+    Ok(FeeQuoteV1 {
+        base_numerator,
+        base_denominator,
+        exact_numerator,
+        exact_denominator: base_denominator,
+        floor_atoms,
+        terminal_ceil_atoms,
+        carry,
+    })
 }
 
 /// Every variant selection named explicitly.
@@ -290,15 +532,18 @@ impl FrozenPolicyV1 {
                     return Err(ErrorV1::PolicyVariantUnimplemented);
                 }
             }
-            // The composite is admitted as a SHAPE only: both rates are
-            // undecided and this relation implements no composite arithmetic,
-            // so any nonzero rate refuses as unimplemented rather than
-            // silently charging nothing.
+            // The composite arithmetic is implemented, so a rate pair is
+            // refused only for being unrepresentable, never for being nonzero.
+            // Each rate is exact basis points over `FEE_BPS_DENOMINATOR`, the
+            // same admissible band `FlatNotional` uses and the same band both
+            // policy codecs pack into one `u32` wire slot.
             FeeBaseV1::CompositeDispersionFloor {
                 dispersion_bps,
                 floor_range_bps,
             } => {
-                if dispersion_bps != 0 || floor_range_bps != 0 {
+                if dispersion_bps as u64 > FEE_BPS_DENOMINATOR
+                    || floor_range_bps as u64 > FEE_BPS_DENOMINATOR
+                {
                     return Err(ErrorV1::PolicyVariantUnimplemented);
                 }
             }
@@ -323,10 +568,18 @@ impl FrozenPolicyV1 {
             FeeBaseV1::None => code * 65_536,
             FeeBaseV1::FlatNotional { bps } => code * 65_536 + 1 + bps as u64,
             // Offset past the whole admissible FlatNotional band
-            // (`1..=1 + FEE_BPS_DENOMINATOR`).  Only the all-zero rate pair
-            // survives `validate()`, so admissible policies keep distinct
-            // legacy tags; the cryptographic identity is the canonical-bytes
-            // digest, never this fold.
+            // (`1..=1 + FEE_BPS_DENOMINATOR`).
+            //
+            // This legacy fold is **not injective over composite rate pairs**:
+            // the band is 65,536 wide and the admissible pairs number
+            // `10_001^2`, so `(1, 0)` and `(0, 1)` share a tag.  That is stated
+            // rather than fixed because widening the band would move every
+            // policy's tag and therefore every frozen candidate digest in the
+            // tree.  Nothing rests on it: the cryptographic policy identity is
+            // the canonical-bytes SHA-256
+            // (`clutch-batch-policy-identity::batch_policy_digest`), which
+            // carries both rates exactly, and the candidate digest separately
+            // folds the domain's own `policy_id`.
             FeeBaseV1::CompositeDispersionFloor {
                 dispersion_bps,
                 floor_range_bps,
@@ -382,6 +635,23 @@ impl RelationDomainV1 {
         }
         if self.price_scale == 0 || self.price_scale > MAX_PRICE_SCALE {
             return Err(ErrorV1::InvalidPriceScale);
+        }
+        // The composite's common denominator is `kappa_den * S^2 * kappa'_den`,
+        // so a fee-bearing composite domain carries a tighter price-scale bound
+        // than the relation at large.  At zero rates the charge is identically
+        // zero and no denominator is ever formed, so the bound does not apply —
+        // keeping the zero-rate shape admissible at exactly the price scales
+        // `FeeBaseV1::None` is.
+        if let FeeBaseV1::CompositeDispersionFloor {
+            dispersion_bps,
+            floor_range_bps,
+        } = self.policy.fee_base
+        {
+            if (dispersion_bps != 0 || floor_range_bps != 0)
+                && self.price_scale > MAX_COMPOSITE_PRICE_SCALE
+            {
+                return Err(ErrorV1::InvalidPriceScale);
+            }
         }
         self.policy.validate()
     }
@@ -1963,6 +2233,7 @@ fn settle_cash(
     normalized: &NormalizedBookV1,
     candidate: &CandidateV1,
     flows: &FlowsV1,
+    table: &ParticipationV1,
 ) -> Result<CashLedgerV1, ErrorV1> {
     let scale = domain.price_scale as u128;
     let mut ledger = CashLedgerV1 {
@@ -2067,11 +2338,11 @@ fn settle_cash(
                                     .ok_or(ErrorV1::ArithmeticOverflow)?,
                             )?;
                         }
-                        // Both rates are validated zero (shape-only member):
-                        // the composite charge is exactly zero, accrued as
-                        // nothing rather than as a zero-valued term.  The
-                        // composite arithmetic itself lands only with a
-                        // nonzero-rate const, as its own relation change.
+                        // `G` is subadditive and quoted owner-level over the
+                        // whole filled payoff vector, so the composite has no
+                        // per-order term to accrue here: its numerator is
+                        // formed once per owner at the V7 join below, from the
+                        // participation table the same candidate produced.
                         FeeBaseV1::CompositeDispersionFloor { .. } => {}
                     }
                 }
@@ -2128,16 +2399,45 @@ fn settle_cash(
         return Err(ErrorV1::ConsiderationMismatch);
     }
 
+    // V7 composite: one numerator per owner over the common denominator
+    // `kappa_den * S^2 * kappa'_den`, formed from that owner's whole filled buy
+    // vector.  Quoting per order instead would overcharge a netted portfolio
+    // (`G` is subadditive) and hand fragmentation a discount.
+    if let FeeBaseV1::CompositeDispersionFloor {
+        dispersion_bps,
+        floor_range_bps,
+    } = domain.policy.fee_base
+    {
+        if dispersion_bps != 0 || floor_range_bps != 0 {
+            let mut slot = 0usize;
+            while slot < normalized.owner_slot_count as usize {
+                fee_bps_units[slot] = composite_fee_quote(
+                    &table.buy[slot],
+                    &candidate.prices,
+                    domain.outcomes(),
+                    domain.price_scale,
+                    dispersion_bps,
+                    floor_range_bps,
+                    0,
+                )?
+                .exact_numerator;
+                slot += 1;
+            }
+        }
+    }
+
     // V7: the payer is debited; the fee is never created from nothing, and the
-    // sub-basis-point remainder is carried per canonical owner identity, so
+    // sub-denominator remainder is carried per canonical owner identity, so
     // order fragmentation cannot reset it.
+    let fee_denominator = fee_denominator_of(domain)?;
+    let fee_quotient_is_atoms = fee_quotient_is_atoms(domain);
+    let mut fee_quotient_total = 0u128;
     let mut slot = 0usize;
     while slot < normalized.owner_slot_count as usize {
-        let owed = fee_bps_units[slot] / (FEE_BPS_DENOMINATOR as u128);
-        add(
-            &mut ledger.fee_carry,
-            fee_bps_units[slot] % (FEE_BPS_DENOMINATOR as u128),
-        )?;
+        let quotient = fee_bps_units[slot] / fee_denominator;
+        let owed = fee_owed_price_units(quotient, fee_quotient_is_atoms, scale)?;
+        add(&mut ledger.fee_carry, fee_bps_units[slot] % fee_denominator)?;
+        add(&mut fee_quotient_total, quotient)?;
         add(&mut ledger.fee_total, owed)?;
         add(&mut debit_units[slot], owed)?;
         if debit_units[slot] > reserved_units[slot] {
@@ -2149,7 +2449,10 @@ fn settle_cash(
         )?;
         slot += 1;
     }
-    if ledger.fee_total * (FEE_BPS_DENOMINATOR as u128) + ledger.fee_carry
+    if fee_quotient_total
+        .checked_mul(fee_denominator)
+        .and_then(|value| value.checked_add(ledger.fee_carry))
+        .ok_or(ErrorV1::ArithmeticOverflow)?
         != fee_total_bps_units(&fee_bps_units, normalized.owner_slot_count as usize)?
     {
         return Err(ErrorV1::FeeMismatch);
@@ -2163,7 +2466,11 @@ fn settle_cash(
             // Leg conversions already happened; the fee still converts per owner.
             let mut slot = 0usize;
             while slot < normalized.owner_slot_count as usize {
-                let fee_units = fee_bps_units[slot] / (FEE_BPS_DENOMINATOR as u128);
+                let fee_units = fee_owed_price_units(
+                    fee_bps_units[slot] / fee_denominator,
+                    fee_quotient_is_atoms,
+                    scale,
+                )?;
                 if fee_units != 0 {
                     let atoms = fee_units.div_ceil(scale);
                     add(&mut ledger.debit_atoms, atoms)?;
@@ -2212,6 +2519,68 @@ fn settle_cash(
         return Err(ErrorV1::ConservationFailure);
     }
     Ok(ledger)
+}
+
+/// The denominator every accumulated fee numerator is read against.
+///
+/// `FlatNotional` accrues price units scaled by [`FEE_BPS_DENOMINATOR`]; the
+/// composite accrues collateral atoms scaled by `kappa_den * S^2 * kappa'_den`.
+/// Both bases therefore share one join, one carry, and one identity check —
+/// only this divisor and [`fee_quotient_is_atoms`] differ.
+pub(crate) fn fee_denominator_of(domain: &RelationDomainV1) -> Result<u128, ErrorV1> {
+    match domain.policy.fee_base {
+        FeeBaseV1::None | FeeBaseV1::FlatNotional { .. } => Ok(FEE_BPS_DENOMINATOR as u128),
+        FeeBaseV1::CompositeDispersionFloor {
+            dispersion_bps,
+            floor_range_bps,
+        } => {
+            if dispersion_bps == 0 && floor_range_bps == 0 {
+                // No numerator is ever accrued at zero rates, so the divisor is
+                // only ever applied to zero.  Keeping the basis-point value
+                // holds the zero-rate composite bit-identical to `None`.
+                return Ok(FEE_BPS_DENOMINATOR as u128);
+            }
+            let scale = domain.price_scale as u128;
+            (FEE_BPS_DENOMINATOR as u128)
+                .checked_mul(scale)
+                .and_then(|value| value.checked_mul(scale))
+                .and_then(|value| value.checked_mul(FEE_BPS_DENOMINATOR as u128))
+                .ok_or(ErrorV1::ArithmeticOverflow)
+        }
+    }
+}
+
+/// Whether the fee quotient is collateral atoms (composite) rather than price
+/// units (flat notional).
+pub(crate) fn fee_quotient_is_atoms(domain: &RelationDomainV1) -> bool {
+    match domain.policy.fee_base {
+        FeeBaseV1::None | FeeBaseV1::FlatNotional { .. } => false,
+        FeeBaseV1::CompositeDispersionFloor {
+            dispersion_bps,
+            floor_range_bps,
+        } => dispersion_bps != 0 || floor_range_bps != 0,
+    }
+}
+
+/// One owner's fee in price units.
+///
+/// The composite quotient is atoms — `G_num` already carries the `S^2` its
+/// denominator divides out — so it converts back to the ledger's price units by
+/// one exact multiplication.  Nothing rounds here: the only rounding the
+/// composite does is the single floor that produced `quotient`, and its
+/// remainder is already in the carry.
+pub(crate) fn fee_owed_price_units(
+    quotient: u128,
+    quotient_is_atoms: bool,
+    scale: u128,
+) -> Result<u128, ErrorV1> {
+    if quotient_is_atoms {
+        quotient
+            .checked_mul(scale)
+            .ok_or(ErrorV1::ArithmeticOverflow)
+    } else {
+        Ok(quotient)
+    }
 }
 
 fn fee_total_bps_units(
@@ -2631,7 +3000,7 @@ fn verify_inner(
         }
     }
     // V6, V7, V8
-    let ledger = settle_cash(domain, &normalized, candidate, &flows)?;
+    let ledger = settle_cash(domain, &normalized, candidate, &flows, &table)?;
     // V9
     let (mut score, owners, overlap) = score_of(domain, &normalized, candidate, &flows, &table)?;
     score.limit_surplus_price_units = ledger.limit_surplus;

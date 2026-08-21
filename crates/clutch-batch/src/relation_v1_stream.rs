@@ -1404,10 +1404,9 @@ impl ClearWorkV1 {
                                 None => settle_latch!(self, ErrorV1::ArithmeticOverflow),
                             }
                         }
-                        // Both rates are validated zero (shape-only member):
-                        // the composite charge is exactly zero.  The composite
-                        // arithmetic lands only with a nonzero-rate const, as
-                        // its own relation change.
+                        // Owner-level, not per order: the composite numerator
+                        // is formed once per owner in `finalize_settle`, from
+                        // the completed participation table.
                         FeeBaseV1::CompositeDispersionFloor { .. } => {}
                     }
                 }
@@ -2147,13 +2146,62 @@ impl ClearWorkV1 {
             self.latch(pos(M13_SETTLE, 2, 0, 0, 0), ErrorV1::ConsiderationMismatch);
         }
 
+        // V7 composite: one numerator per owner over `kappa_den*S^2*kappa'_den`,
+        // formed from that owner's whole filled buy vector — `settle_cash`'s
+        // composite block, site for site.  `part_buy` is complete here: the
+        // accumulate pass closed before this finalize ran.
+        if let FeeBaseV1::CompositeDispersionFloor {
+            dispersion_bps,
+            floor_range_bps,
+        } = self.domain.policy.fee_base
+        {
+            if dispersion_bps != 0 || floor_range_bps != 0 {
+                let mut slot = 0usize;
+                while slot < self.owner_slots as usize {
+                    match crate::relation_v1::composite_fee_quote(
+                        &self.part_buy[slot],
+                        &self.cand.prices,
+                        outcomes,
+                        self.domain.price_scale,
+                        dispersion_bps,
+                        floor_range_bps,
+                        0,
+                    ) {
+                        Ok(quote) => self.fee_bps_units[slot] = quote.exact_numerator,
+                        Err(error) => self.latch(pos(M13_SETTLE, 3, slot as u16, 0, 4), error),
+                    }
+                    slot += 1;
+                }
+            }
+        }
+
         // V7: the fee join, per owner slot ascending.
-        let denominator = crate::relation_v1::FEE_BPS_DENOMINATOR as u128;
+        let denominator = match crate::relation_v1::fee_denominator_of(&self.domain) {
+            Ok(value) => value,
+            Err(error) => {
+                self.latch(pos(M13_SETTLE, 3, u16::MAX, 0, 1), error);
+                crate::relation_v1::FEE_BPS_DENOMINATOR as u128
+            }
+        };
+        let quotient_is_atoms = crate::relation_v1::fee_quotient_is_atoms(&self.domain);
+        let mut fee_quotient_total = 0u128;
         let mut fee_bps_total = 0u128;
         let mut slot = 0usize;
         while slot < self.owner_slots as usize {
-            let owed = self.fee_bps_units[slot] / denominator;
+            let quotient = self.fee_bps_units[slot] / denominator;
+            let owed = match crate::relation_v1::fee_owed_price_units(
+                quotient,
+                quotient_is_atoms,
+                scale,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.latch(pos(M13_SETTLE, 3, slot as u16, 0, 5), error);
+                    0
+                }
+            };
             fee_carry += self.fee_bps_units[slot] % denominator;
+            fee_quotient_total += quotient;
             match fee_total.checked_add(owed) {
                 Some(sum) => fee_total = sum,
                 None => self.latch(
@@ -2184,7 +2232,7 @@ impl ClearWorkV1 {
             }
             slot += 1;
         }
-        if fee_total * denominator + fee_carry != fee_bps_total {
+        if fee_quotient_total * denominator + fee_carry != fee_bps_total {
             self.latch(pos(M13_SETTLE, 3, u16::MAX, 0, 0), ErrorV1::FeeMismatch);
         }
 
@@ -2193,7 +2241,17 @@ impl ClearWorkV1 {
             RoundingBoundaryV1::ReceiptFloor => {
                 let mut slot = 0usize;
                 while slot < self.owner_slots as usize {
-                    let fee_units = self.fee_bps_units[slot] / denominator;
+                    let fee_units = match crate::relation_v1::fee_owed_price_units(
+                        self.fee_bps_units[slot] / denominator,
+                        quotient_is_atoms,
+                        scale,
+                    ) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            self.latch(pos(M13_SETTLE, 4, slot as u16, 0, 0), error);
+                            0
+                        }
+                    };
                     if fee_units != 0 {
                         let atoms = fee_units.div_ceil(scale);
                         self.debit_atoms += atoms;
@@ -3257,14 +3315,37 @@ fn put_policy(out: &mut [u8], at: &mut usize, policy: &FrozenPolicyV1) {
     let (fee_tag, fee_bps) = match policy.fee_base {
         FeeBaseV1::None => (0u8, 0u32),
         FeeBaseV1::FlatNotional { bps } => (1, bps),
-        // The composite rides the same single rate slot with tag 2.  Only the
-        // zero rate pair is registered (rates undecided; `validate()` refuses
-        // nonzero), so the floor rate needs no slot of its own: a nonzero
-        // floor is a checkpoint-codec revision behind its own decision.
-        FeeBaseV1::CompositeDispersionFloor { dispersion_bps, .. } => (2, dispersion_bps),
+        FeeBaseV1::CompositeDispersionFloor {
+            dispersion_bps,
+            floor_range_bps,
+        } => (2, pack_composite_rates(dispersion_bps, floor_range_bps)),
     };
     put_u8(out, at, fee_tag);
     put_u32(out, at, fee_bps);
+}
+
+/// Pack the composite's two rates into the one `u32` rate word: dispersion low,
+/// floor high.
+///
+/// Both rates are bounded by `FEE_BPS_DENOMINATOR` (10,000, a 14-bit value), so
+/// the pair fits one word with room to spare and the checkpoint gains no bytes.
+/// The zero-rate composite still encodes as the word `0`, so the shape's
+/// artifact bytes — and every digest over them — are exactly what they were
+/// before rates existed.  `clutch-batch-policy-identity` packs identically; the
+/// cross-crate byte-equality test compares the two encoders.
+pub(crate) fn pack_composite_rates(dispersion_bps: u32, floor_range_bps: u32) -> u32 {
+    (dispersion_bps & 0xFFFF) | ((floor_range_bps & 0xFFFF) << 16)
+}
+
+/// Unpack a composite rate word, refusing anything outside the admissible band.
+pub(crate) fn unpack_composite_rates(word: u32) -> Option<(u32, u32)> {
+    let dispersion_bps = word & 0xFFFF;
+    let floor_range_bps = word >> 16;
+    let bound = crate::relation_v1::FEE_BPS_DENOMINATOR as u32;
+    if dispersion_bps > bound || floor_range_bps > bound {
+        return None;
+    }
+    Some((dispersion_bps, floor_range_bps))
 }
 
 // --- primitive readers -------------------------------------------------------
@@ -3532,11 +3613,16 @@ fn get_policy(input: &[u8], at: &mut usize) -> Result<FrozenPolicyV1, CodecFault
         0 if fee_bps == 0 => FeeBaseV1::None,
         0 => return Err(CodecFaultV1::InvalidPolicy),
         1 => FeeBaseV1::FlatNotional { bps: fee_bps },
-        // Only the zero-rate composite shape is registered; a checkpoint
-        // claiming a nonzero rate is fail-closed corruption, never a policy.
-        2 if fee_bps == 0 => FeeBaseV1::CompositeDispersionFloor {
-            dispersion_bps: 0,
-            floor_range_bps: 0,
+        // The composite's two rates are packed low/high into the one rate word
+        // (`unpack_composite_rates`).  Every rate is bounded by
+        // `FEE_BPS_DENOMINATOR`, so a word outside the packing is fail-closed
+        // corruption, never a policy.
+        2 => match unpack_composite_rates(fee_bps) {
+            Some((dispersion_bps, floor_range_bps)) => FeeBaseV1::CompositeDispersionFloor {
+                dispersion_bps,
+                floor_range_bps,
+            },
+            None => return Err(CodecFaultV1::InvalidPolicy),
         },
         _ => return Err(CodecFaultV1::InvalidPolicy),
     };

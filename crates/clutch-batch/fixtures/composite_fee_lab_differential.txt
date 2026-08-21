@@ -1,0 +1,652 @@
+# Composite fee-base lab differential.
+#
+# GENERATED — do not hand-edit.  Regenerate with
+#   python3 crates/clutch-batch/fixtures/generate_composite_fee_differential.py \
+#     > crates/clutch-batch/fixtures/composite_fee_lab_differential.txt
+#
+# Every expected value comes from research/economics-admission/model.py's
+# composite_floor_quote at rate denominator 10_000, the only denominator
+# FeeBaseV1 carries.  relation_v1::composite_fee_quote must agree on every
+# `expect ok` row and refuse for the stated reason on every other one.
+#
+# expect ok                        -> quote equals the listed fields exactly
+# expect overflow                  -> Err(ArithmeticOverflow): the exact
+#                                     rational does not fit u128
+# expect price_scale_out_of_domain -> Err(InvalidPriceScale)
+# expect payoff_not_u64            -> the vector is outside the relation's
+#                                     payoff domain and is not quotable
+
+row report_grid_price_0
+payoffs 10000 0
+prices 0 100
+price_scale 100
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 10000000000000
+base_denominator 1000000000000
+exact_numerator 10000000000000
+exact_denominator 1000000000000
+floor_atoms 10
+terminal_ceil_atoms 10
+carry 0
+
+row report_grid_price_1
+payoffs 10000 0
+prices 1 99
+price_scale 100
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 10396000000000
+base_denominator 1000000000000
+exact_numerator 10396000000000
+exact_denominator 1000000000000
+floor_atoms 10
+terminal_ceil_atoms 11
+carry 396000000000
+
+row report_grid_price_10
+payoffs 10000 0
+prices 10 90
+price_scale 100
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 13600000000000
+base_denominator 1000000000000
+exact_numerator 13600000000000
+exact_denominator 1000000000000
+floor_atoms 13
+terminal_ceil_atoms 14
+carry 600000000000
+
+row report_grid_price_50
+payoffs 10000 0
+prices 50 50
+price_scale 100
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 20000000000000
+base_denominator 1000000000000
+exact_numerator 20000000000000
+exact_denominator 1000000000000
+floor_atoms 20
+terminal_ceil_atoms 20
+carry 0
+
+row report_grid_price_90
+payoffs 10000 0
+prices 90 10
+price_scale 100
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 13600000000000
+base_denominator 1000000000000
+exact_numerator 13600000000000
+exact_denominator 1000000000000
+floor_atoms 13
+terminal_ceil_atoms 14
+carry 600000000000
+
+row report_grid_price_99
+payoffs 10000 0
+prices 99 1
+price_scale 100
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 10396000000000
+base_denominator 1000000000000
+exact_numerator 10396000000000
+exact_denominator 1000000000000
+floor_atoms 10
+terminal_ceil_atoms 11
+carry 396000000000
+
+row report_grid_price_100
+payoffs 10000 0
+prices 100 0
+price_scale 100
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 10000000000000
+base_denominator 1000000000000
+exact_numerator 10000000000000
+exact_denominator 1000000000000
+floor_atoms 10
+terminal_ceil_atoms 10
+carry 0
+
+row zero_rates_midpoint
+payoffs 10000 0
+prices 5000 5000
+price_scale 10000
+dispersion_bps 0
+floor_range_bps 0
+prior_carry 0
+expect ok
+base_numerator 0
+base_denominator 10000000000000000
+exact_numerator 0
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 0
+carry 0
+
+row zero_rates_zero_price
+payoffs 1000000000000000000 0 0
+prices 0 0 10000
+price_scale 10000
+dispersion_bps 0
+floor_range_bps 0
+prior_carry 0
+expect ok
+base_numerator 0
+base_denominator 10000000000000000
+exact_numerator 0
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 0
+carry 0
+
+row zero_rates_complete_set
+payoffs 7 7 7
+prices 3000 3000 4000
+price_scale 10000
+dispersion_bps 0
+floor_range_bps 0
+prior_carry 0
+expect ok
+base_numerator 0
+base_denominator 10000000000000000
+exact_numerator 0
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 0
+carry 0
+
+row zero_price_channel_1000000
+payoffs 1000000 0 0
+prices 0 0 10000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 10000000000000000000
+base_denominator 10000000000000000
+exact_numerator 10000000000000000000
+exact_denominator 10000000000000000
+floor_atoms 1000
+terminal_ceil_atoms 1000
+carry 0
+
+row zero_price_channel_1000000000000
+payoffs 1000000000000 0 0
+prices 0 0 10000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 10000000000000000000000000
+base_denominator 10000000000000000
+exact_numerator 10000000000000000000000000
+exact_denominator 10000000000000000
+floor_atoms 1000000000
+terminal_ceil_atoms 1000000000
+carry 0
+
+row zero_price_channel_1000000000000000000
+payoffs 1000000000000000000 0 0
+prices 0 0 10000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 10000000000000000000000000000000
+base_denominator 10000000000000000
+exact_numerator 10000000000000000000000000000000
+exact_denominator 10000000000000000
+floor_atoms 1000000000000000
+terminal_ceil_atoms 1000000000000000
+carry 0
+
+row zero_price_channel_18446744073709551615
+payoffs 18446744073709551615 0 0
+prices 0 0 10000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 184467440737095516150000000000000
+base_denominator 10000000000000000
+exact_numerator 184467440737095516150000000000000
+exact_denominator 10000000000000000
+floor_atoms 18446744073709551
+terminal_ceil_atoms 18446744073709552
+carry 6150000000000000
+
+row zero_price_channel_lab_scale
+payoffs 1000000000000000000 0 0
+prices 0 0 100
+price_scale 100
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 1000000000000000000000000000
+base_denominator 1000000000000
+exact_numerator 1000000000000000000000000000
+exact_denominator 1000000000000
+floor_atoms 1000000000000000
+terminal_ceil_atoms 1000000000000000
+carry 0
+
+row one_tick_price
+payoffs 100000000 0
+prices 1 9999
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 1000399960000000000000
+base_denominator 10000000000000000
+exact_numerator 1000399960000000000000
+exact_denominator 10000000000000000
+floor_atoms 100039
+terminal_ceil_atoms 100040
+carry 9960000000000000
+
+row kernel_complete_set_interior
+payoffs 9 9 9
+prices 2500 2500 5000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 0
+base_denominator 10000000000000000
+exact_numerator 0
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 0
+carry 0
+
+row kernel_complete_set_boundary
+payoffs 9 9 9
+prices 0 0 10000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 0
+base_denominator 10000000000000000
+exact_numerator 0
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 0
+carry 0
+
+row kernel_zero_vector
+payoffs 0 0
+prices 5000 5000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 0
+base_denominator 10000000000000000
+exact_numerator 0
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 0
+carry 0
+
+row wash_leg_a
+payoffs 4 0
+prices 5000 5000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 80000000000000
+base_denominator 10000000000000000
+exact_numerator 80000000000000
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 1
+carry 80000000000000
+
+row wash_leg_b
+payoffs 0 4
+prices 5000 5000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 80000000000000
+base_denominator 10000000000000000
+exact_numerator 80000000000000
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 1
+carry 80000000000000
+
+row wash_netted_complete_set
+payoffs 4 4
+prices 5000 5000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 0
+base_denominator 10000000000000000
+exact_numerator 0
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 0
+carry 0
+
+row rate_boundary_both_max
+payoffs 10000 3 0
+prices 4000 1000 5000
+price_scale 10000
+dispersion_bps 10000
+floor_range_bps 10000
+prior_carry 0
+expect ok
+base_numerator 124000300000000000000
+base_denominator 10000000000000000
+exact_numerator 124000300000000000000
+exact_denominator 10000000000000000
+floor_atoms 12400
+terminal_ceil_atoms 12401
+carry 300000000000000
+
+row rate_dispersion_only_max
+payoffs 10000 3 0
+prices 4000 1000 5000
+price_scale 10000
+dispersion_bps 10000
+floor_range_bps 0
+prior_carry 0
+expect ok
+base_numerator 24000300000000000000
+base_denominator 10000000000000000
+exact_numerator 24000300000000000000
+exact_denominator 10000000000000000
+floor_atoms 2400
+terminal_ceil_atoms 2401
+carry 300000000000000
+
+row rate_floor_only_max
+payoffs 10000 3 0
+prices 4000 1000 5000
+price_scale 10000
+dispersion_bps 0
+floor_range_bps 10000
+prior_carry 0
+expect ok
+base_numerator 100000000000000000000
+base_denominator 10000000000000000
+exact_numerator 100000000000000000000
+exact_denominator 10000000000000000
+floor_atoms 10000
+terminal_ceil_atoms 10000
+carry 0
+
+row rate_smallest_nonzero
+payoffs 10000 3 0
+prices 4000 1000 5000
+price_scale 10000
+dispersion_bps 1
+floor_range_bps 1
+prior_carry 0
+expect ok
+base_numerator 12400030000000000
+base_denominator 10000000000000000
+exact_numerator 12400030000000000
+exact_denominator 10000000000000000
+floor_atoms 1
+terminal_ceil_atoms 2
+carry 2400030000000000
+
+row rate_dispersion_only_one
+payoffs 10000 3 0
+prices 4000 1000 5000
+price_scale 10000
+dispersion_bps 1
+floor_range_bps 0
+prior_carry 0
+expect ok
+base_numerator 2400030000000000
+base_denominator 10000000000000000
+exact_numerator 2400030000000000
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 1
+carry 2400030000000000
+
+row rate_floor_only_one
+payoffs 10000 3 0
+prices 4000 1000 5000
+price_scale 10000
+dispersion_bps 0
+floor_range_bps 1
+prior_carry 0
+expect ok
+base_numerator 10000000000000000
+base_denominator 10000000000000000
+exact_numerator 10000000000000000
+exact_denominator 10000000000000000
+floor_atoms 1
+terminal_ceil_atoms 1
+carry 0
+
+row dust_fill_1
+payoffs 1 0
+prices 5000 5000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 20000000000000
+base_denominator 10000000000000000
+exact_numerator 20000000000000
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 1
+carry 20000000000000
+
+row dust_fill_2
+payoffs 2 0
+prices 5000 5000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 40000000000000
+base_denominator 10000000000000000
+exact_numerator 40000000000000
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 1
+carry 40000000000000
+
+row dust_fill_3
+payoffs 3 0
+prices 5000 5000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 60000000000000
+base_denominator 10000000000000000
+exact_numerator 60000000000000
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 1
+carry 60000000000000
+
+row prior_carry_1
+payoffs 5 0
+prices 5000 5000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 1
+expect ok
+base_numerator 100000000000000
+base_denominator 10000000000000000
+exact_numerator 100000000000001
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 1
+carry 100000000000001
+
+row prior_carry_3333333333333333
+payoffs 5 0
+prices 5000 5000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 3333333333333333
+expect ok
+base_numerator 100000000000000
+base_denominator 10000000000000000
+exact_numerator 3433333333333333
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 1
+carry 3433333333333333
+
+row prior_carry_9999999999999999
+payoffs 5 0
+prices 5000 5000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 9999999999999999
+expect ok
+base_numerator 100000000000000
+base_denominator 10000000000000000
+exact_numerator 10099999999999999
+exact_denominator 10000000000000000
+floor_atoms 1
+terminal_ceil_atoms 2
+carry 99999999999999
+
+row four_outcome_portfolio
+payoffs 11 4 0 7
+prices 1000 2500 500 6000
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 157200000000000
+base_denominator 10000000000000000
+exact_numerator 157200000000000
+exact_denominator 10000000000000000
+floor_atoms 0
+terminal_ceil_atoms 1
+carry 157200000000000
+
+row sixteen_outcome_ramp
+payoffs 0 1000 2000 3000 4000 5000 6000 7000 8000 9000 10000 11000 12000 13000 14000 15000
+prices 625 625 625 625 625 625 625 625 625 625 625 625 625 625 625 625
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 256250000000000000
+base_denominator 10000000000000000
+exact_numerator 256250000000000000
+exact_denominator 10000000000000000
+floor_atoms 25
+terminal_ceil_atoms 26
+carry 6250000000000000
+
+row sixteen_outcome_near_boundary
+payoffs 0 1000 2000 3000 4000 5000 6000 7000 8000 9000 10000 11000 12000 13000 14000 15000
+prices 9985 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+price_scale 10000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect ok
+base_numerator 150479504000000000
+base_denominator 10000000000000000
+exact_numerator 150479504000000000
+exact_denominator 10000000000000000
+floor_atoms 15
+terminal_ceil_atoms 16
+carry 479504000000000
+
+row u64_max_payoff_at_price_scale
+payoffs 18446744073709551615 0
+prices 5000 5000
+price_scale 10000
+dispersion_bps 10000
+floor_range_bps 10000
+prior_carry 0
+expect ok
+base_numerator 230584300921369395187500000000000000
+base_denominator 10000000000000000
+exact_numerator 230584300921369395187500000000000000
+exact_denominator 10000000000000000
+floor_atoms 23058430092136939518
+terminal_ceil_atoms 23058430092136939519
+carry 7500000000000000
+
+row numerator_overflows_u128
+payoffs 18446744073709551615 0
+prices 500000000000000 500000000000000
+price_scale 1000000000000000
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect overflow
+
+row price_scale_past_composite_bound
+payoffs 4 0
+prices 500000000000001 500000000000000
+price_scale 1000000000000001
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect price_scale_out_of_domain
+
+row lab_falsifier_10e30
+payoffs 1000000000000000000000000000000 0 0
+prices 0 0 100
+price_scale 100
+dispersion_bps 40
+floor_range_bps 10
+prior_carry 0
+expect payoff_not_u64
