@@ -29,23 +29,21 @@ ready in degg-research.
 ## directions blessed. Human gates unchanged (mainnet, real value, real-user
 ## markets, registry flip, filings, L0).
 
-## Next 3 moves (ember directives, 2026-08-20 ~10:50: no devnet SOL coming —
-## maximize local validation; implement everything possible BEFORE design
-## complection or finishing formal verification; enumerate ALL decisions and
-## produce decision reports)
+## Next 3 moves (technical work resumed 2026-08-21 ~05:40 on ember's word;
+## filing folder stays self-serve at degg-research/filing/2026-08-cftc/)
 
-1. Wave running: DECISION CENSUS (every open decision in the tree -> one
-   register -> per-decision analysis fan-out) + GENERAL-PLANE SIGNED
-   VALIDATOR WALK (the Tier-2 lifecycle on a real loopback validator with
-   real signatures + required-red falsifier — the maximum devnet-free
-   evidence class, mirroring the legacy 22-transaction walk).
-2. After census: fan out decision-analysis reports (fee/revenue cluster,
-   policy freezes, terminal/closure + R4, promotion/admission, R2 cutover,
-   deployment economics, formal-methods substrate) + write the next-wave
-   roadmap (maturation -> sophistication -> optimization -> assurance,
-   formal verification deliberately last).
-3. Merge the walk evidence when green; reseal only at the next meaningful
-   checkpoint (evidence-only unless program source moves).
+1. Wave launching: W1 PROMOTION (walk-plane CU/quote rows, evidence-only at
+   the cb94c27 seal — lands FIRST, before any identity fork), the
+   PARTIALFILLLEDGER DESIGN (the largest product gap; relation
+   partial_policy plumbing + receipts generalization), FEE PLUMBING TO THE
+   BOUNDARY (RevenuePolicy adopted: policy object + record family +
+   treasury-Position path + carry fields + fee-bearing sibling const +
+   the eight falsifiers, rates stay zero), and R2 Phase-0 seeding +
+   housekeeping (small, Opus).
+2. Merge order: W1 -> then the program-forking merges (fee plumbing,
+   eventually partial fills) into ONE cycle-F reseal.
+3. Filing week continues on ember's clock: pair by Mon 8/24, perps by
+   Wed 8/26, statement Thu 8/27; daily transcript check from Saturday.
 
 ## Ember decision queue (2026-08-19 morning)
 
