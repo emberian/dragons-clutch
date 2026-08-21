@@ -15,7 +15,8 @@ use crate::relation_v1::{
     PairingWitnessPolicyV1, PairingWitnessV1, PortfolioLotPolicyV1, PortfolioOrderV1,
     RelationDomainV1, ResidualSettlementV1, RoundingBoundaryV1, ScorePolicyV1, ScoreV1,
     SelfCrossPolicyV1, SingleEggOrderV1, SummaryV1, TransferPhaseV1, MAX_OUTCOMES, PRICE_SCALE,
-    RELATION_VERSION_V1,
+    RELATION_VERSION_V1, TEST_COMPOSITE_BOUNDARY, TEST_COMPOSITE_DISPERSION_ONLY,
+    TEST_COMPOSITE_FLOOR_ONLY, TEST_COMPOSITE_LAB, TEST_COMPOSITE_SMALL, TEST_COMPOSITE_ZERO,
 };
 use crate::{DustPolicy, PartialPolicy, Side, MAX_ORDERS};
 
@@ -869,6 +870,16 @@ fn stream_matches_batch_on_portfolio_books() {
     assert_stream_matches(&mut work, &domain, &book, &forged, None);
 }
 
+/// A cross large enough that the composite charges whole atoms rather than
+/// living entirely in the carry: the equivalence gate has to compare a fee that
+/// is actually nonzero, or it compares two zeroes.
+fn fee_bearing_book() -> BookV1 {
+    book_of(&[
+        single(1, 0, 0, Side::Buy, 40_000, SCALE),
+        single(2, 1, 0, Side::Sell, 40_000, 0),
+    ])
+}
+
 #[test]
 fn stream_matches_batch_on_fee_and_rounding_variants() {
     let book = crossing_book();
@@ -879,7 +890,20 @@ fn stream_matches_batch_on_fee_and_rounding_variants() {
         RoundingBoundaryV1::TerminalOwnerFloor,
         RoundingBoundaryV1::ReceiptFloor,
     ] {
-        for fee_base in [FeeBaseV1::None, FeeBaseV1::FlatNotional { bps: 30 }] {
+        for fee_base in [
+            FeeBaseV1::None,
+            FeeBaseV1::FlatNotional { bps: 30 },
+            // The composite: the zero-rate anchor plus the laboratory
+            // calibration and each pure arm.  The composite forms its numerator
+            // owner-level at the V7 join instead of per order, so it is the one
+            // fee base whose two drives could diverge on ordering alone.
+            TEST_COMPOSITE_ZERO,
+            TEST_COMPOSITE_SMALL,
+            TEST_COMPOSITE_LAB,
+            TEST_COMPOSITE_DISPERSION_ONLY,
+            TEST_COMPOSITE_FLOOR_ONLY,
+            TEST_COMPOSITE_BOUNDARY,
+        ] {
             let domain = domain_with(
                 FrozenPolicyV1 {
                     rounding,
@@ -905,6 +929,85 @@ fn stream_matches_batch_on_fee_and_rounding_variants() {
             }
         }
     }
+}
+
+#[test]
+fn stream_matches_batch_on_fee_bearing_composite_books() {
+    // The same gate where the fee is *nonzero*: a cross large enough to charge
+    // whole atoms, a two-owner wash round trip, an owner-level netted complete
+    // set (which the composite must charge nothing for), and a candidate
+    // clearing at a ZERO price coordinate — the laundering channel the floor
+    // exists to close.  Every case is driven under both rounding boundaries
+    // that admit a remainder, with the seven mutation families on top.
+    let mut work = Box::new(ClearWorkV1::new());
+    let midpoint = prices(&[SCALE / 2, SCALE / 2]);
+    let boundary = prices(&[0, SCALE]);
+    let cross = fee_bearing_book();
+    let wash = book_of(&[
+        single(1, 0, 0, Side::Buy, 40_000, SCALE),
+        single(2, 1, 0, Side::Sell, 40_000, 0),
+        single(3, 1, 1, Side::Buy, 40_000, SCALE),
+        single(4, 0, 1, Side::Sell, 40_000, 0),
+    ]);
+    let netted = book_of(&[
+        single(1, 0, 0, Side::Buy, 40_000, SCALE),
+        single(2, 0, 1, Side::Buy, 40_000, SCALE),
+        single(3, 1, 0, Side::Sell, 40_000, 0),
+        single(4, 2, 1, Side::Sell, 40_000, 0),
+    ]);
+    let laundering = book_of(&[
+        single(1, 0, 1, Side::Buy, 100, SCALE),
+        single(2, 1, 1, Side::Sell, 100, 0),
+        single(3, 2, 0, Side::Buy, 1_000_000, SCALE),
+        single(4, 3, 0, Side::Sell, 1_000_000, 0),
+    ]);
+    let cases: [(&BookV1, [u64; MAX_OUTCOMES], u16); 4] = [
+        (&cross, midpoint, 2),
+        (&wash, midpoint, 2),
+        (&netted, midpoint, 3),
+        (&laundering, boundary, 4),
+    ];
+    let mut charged = 0u32;
+    for (book, vector, owners) in cases {
+        for rounding in [
+            RoundingBoundaryV1::TerminalOwnerFloor,
+            RoundingBoundaryV1::ReceiptFloor,
+        ] {
+            for fee_base in [
+                TEST_COMPOSITE_ZERO,
+                TEST_COMPOSITE_SMALL,
+                TEST_COMPOSITE_LAB,
+                TEST_COMPOSITE_DISPERSION_ONLY,
+                TEST_COMPOSITE_FLOOR_ONLY,
+            ] {
+                let domain = domain_with(
+                    FrozenPolicyV1 {
+                        rounding,
+                        fee_base,
+                        ..base_policy()
+                    },
+                    2,
+                    owners,
+                );
+                let Ok(candidate) = canonical_candidate(&domain, book, &vector, 0, 0) else {
+                    continue;
+                };
+                assert_stream_matches(&mut work, &domain, book, &candidate, None);
+                if let Ok(summary) = verify(&domain, book, &candidate, None) {
+                    if summary.fee_price_units != 0 {
+                        charged += 1;
+                    }
+                }
+                for mutated in mutations(&candidate) {
+                    assert_stream_matches(&mut work, &domain, book, &mutated, None);
+                }
+            }
+        }
+    }
+    assert!(
+        charged >= 8,
+        "the fee-bearing corpus stopped charging: {charged} cases with a nonzero fee"
+    );
 }
 
 #[test]
@@ -1087,6 +1190,39 @@ fn stream_resumption_equals_one_ordered_fold() {
     short.slices[0].quantity = 3;
     cases.push((explicit, cross, sliced, Some(short)));
 
+    // Fee-bearing composite epochs.  The composite forms its numerator at the
+    // V7 join out of the participation table, so a split that failed to carry
+    // `part_buy` — or that re-ran the join — would change the *fee*, not merely
+    // the verdict.  Both rounding boundaries, because they read the fee back
+    // differently.
+    let fee_book = fee_bearing_book();
+    for rounding in [
+        RoundingBoundaryV1::TerminalOwnerFloor,
+        RoundingBoundaryV1::ReceiptFloor,
+    ] {
+        let fee_domain = domain_with(
+            FrozenPolicyV1 {
+                rounding,
+                fee_base: TEST_COMPOSITE_LAB,
+                ..base_policy()
+            },
+            2,
+            2,
+        );
+        let fee_candidate = canonical_candidate(&fee_domain, &fee_book, &vector, 0, 0).unwrap();
+        assert!(
+            verify(&fee_domain, &fee_book, &fee_candidate, None)
+                .unwrap()
+                .fee_price_units
+                > 0,
+            "the resume corpus must resume something that actually charges"
+        );
+        cases.push((fee_domain, fee_book, fee_candidate, None));
+        for mutated in mutations(&fee_candidate) {
+            cases.push((fee_domain, fee_book, mutated, None));
+        }
+    }
+
     let mut splits_exercised = 0u32;
     let mut body = std::vec![0u8; ClearWorkV1::ENCODED_BYTES];
     for (domain, book, candidate, pairing) in &cases {
@@ -1146,10 +1282,10 @@ fn stream_resumption_equals_one_ordered_fold() {
         );
     }
     assert_eq!(
-        splits_exercised, 210,
+        splits_exercised, 322,
         "the resume-point corpus moved; re-count and re-pin"
     );
-    assert!(cases.len() >= 18, "the case set collapsed: {}", cases.len());
+    assert!(cases.len() >= 34, "the case set collapsed: {}", cases.len());
 }
 
 #[test]
