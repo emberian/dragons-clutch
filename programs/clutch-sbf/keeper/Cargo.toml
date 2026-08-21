@@ -1,0 +1,40 @@
+[package]
+name = "clutch-keeper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Permissionless cranker for the Dragon's Clutch general clearing plane"
+
+[[bin]]
+name = "clutch-keeper"
+path = "src/main.rs"
+
+[dependencies]
+# The checkpoint body the keeper decodes to learn which pass a clearing
+# walk is in.  The layout header deliberately does not restate the feed
+# phase, so `ClearWorkV1::status` is the only truth about it.
+clutch-batch = { path = "../../../crates/clutch-batch" }
+# The frozen general-clearing policy identity the keeper's own `InitEpoch`
+# names.  Taking it from its owner keeps one source of truth for the digest.
+clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
+# The `SEED_*` byte constants.  `seeds::find` is `unimplemented!()` off-chain,
+# so the keeper derives out of process (see `src/pda.rs`) from these exact
+# bytes rather than from a retyped copy of them.
+clutch-sbf = { path = "../program" }
+clutch-solana-layout = { path = "../../solana-layout" }
+# The request envelope's real decoder.  `wire::request` round-trips every
+# envelope it emits through it, so a wrong constant is a panic here rather
+# than a mysterious refusal on chain.
+clutch-solana-reference = { path = "../../solana-reference" }
+base64 = "=0.22.1"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.151"
+solana-keypair = "=3.1.2"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"

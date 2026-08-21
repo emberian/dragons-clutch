@@ -5,7 +5,7 @@
 # is permitted to depend on Anza SDK crates.
 [workspace]
 resolver = "2"
-members = ["program", "harness"]
+members = ["program", "harness", "keeper"]
 
 [workspace.package]
 version = "0.1.0"
