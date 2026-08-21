@@ -974,7 +974,16 @@ except for fixture field additions, which is the §12
 `deg0_v3_derivation_matches_v2_pinned_derivation` differential in
 landed-test form.
 
-**Degree 1 landed to the §5.1 seam shape; degrees 2-3 refuse.**
+**Degree 1 landed to the §5.1 seam shape; degrees 2-3 refuse.** *(Superseded
+2026-08-19, recorded here 2026-08-21: degrees two and three no longer refuse
+anywhere. `TermsAccount::validate` admits `basis_degree` 0..=3 with the
+per-degree count rule and the mandatory uniform declaration,
+`derive_payout_vector` owns degrees one through three through
+`crates/clutch-bspline`, and `blank_bank_joined_lifecycle_degree_two` /
+`_degree_three` execute a whole create/split/resolve/redeem walk in a local
+bank. What survives from this paragraph is the narrower `R-15
+NonPointEvidence`: at degree ≥ 2 a conservative interval that is not a point
+still refuses, which is the §10.6 residue. See `CURRENT_TRUTH.md` §3.)*
 `derive_payout_vector : (ResolutionTerms, WindowResult) -> Result<PayoutVectorBytes, R>`
 is pure, checked, allocation-free: edge policy (`EDGE-CLAMP-01` /
 `EDGE-REFUSE-02` — deg-0 markets must freeze CLAMP, whose §2.2 partition it is

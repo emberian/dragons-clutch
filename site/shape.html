@@ -59,11 +59,11 @@ straddled holder, which is what the same nudge is worth on any bins venue
 <figure>
 <div class="figwrap">
 <svg viewBox="0 0 640 350" width="640" height="350" role="img"
-     aria-label="Three rows: a degree-zero bin claim with a payoff cliff at 160 dollars; a degree-one hat claim whose payoff degrades continuously; sketched degree two and three bumps labeled proved but refused at admission.">
+     aria-label="Three rows: a degree-zero bin claim with a payoff cliff at 160 dollars; a degree-one hat claim whose payoff degrades continuously; degree two and three bumps whose interior peaks stay below one.">
   <g font-family="system-ui, sans-serif" font-size="11" fill="var(--ink-3)">
     <text x="40" y="16" font-weight="700" fill="var(--ink-2)">degree 0 &#8212; one winner, cliff edges</text>
     <text x="40" y="136" font-weight="700" fill="var(--ink-2)">degree 1 &#8212; hats, continuous payout</text>
-    <text x="40" y="256" font-weight="700" fill="var(--ink-2)">degrees 2&#8211;3 &#8212; proved as exact constructions; refuse at terms admission</text>
+    <text x="40" y="256" font-weight="700" fill="var(--ink-2)">degrees 2&#8211;3 &#8212; smoother still; admitted, resolved and redeemed in a bank</text>
   </g>
   <!-- row 1: degree 0 bin [140,160] -->
   <line x1="40" y1="100" x2="600" y2="100" stroke="var(--border)"/>
@@ -90,19 +90,23 @@ straddled holder, which is what the same nudge is worth on any bins venue
   </g>
   <!-- row 3: degree 2/3 sketch -->
   <line x1="40" y1="330" x2="600" y2="330" stroke="var(--border)"/>
-  <path d="M180,330 Q280,250 380,330" fill="none" stroke="var(--ink-3)" stroke-width="1.5" stroke-dasharray="5 4"/>
-  <path d="M260,330 Q380,264 500,330" fill="none" stroke="var(--ink-3)" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <path d="M180,330 Q280,250 380,330" fill="none" stroke="var(--accent)" stroke-width="2"/>
+  <path d="M260,330 Q380,264 500,330" fill="none" stroke="var(--accent)" stroke-width="2"/>
+  <line x1="180" y1="290" x2="500" y2="290" stroke="var(--ink-3)" stroke-dasharray="3 3"/>
   <g font-family="system-ui, sans-serif" font-size="10" fill="var(--ink-3)">
     <text x="320" y="286" text-anchor="middle">smooth bumps; interior peaks below 1</text>
   </g>
 </svg>
 </div>
 <figcaption>The degree ladder on the same question. Degree zero pays a cliff;
-degree one pays a slope; degrees two and three exist as machine-checked basis
-constructions and currently refuse at terms admission — the honesty is part
-of the diagram.
+degree one pays a slope; degrees two and three are smoother still and run the
+whole walk — create, split, resolve, redeem — against a real bank.
 <a class="badge" href="evidence.html#proved-model">PROVED-MODEL —
-CURRENT_TRUTH.md &#167;3</a></figcaption>
+CURRENT_TRUTH.md &#167;3</a>
+<a class="badge" href="evidence.html#sbf-executed">SBF-EXECUTED &#183; bank
+&#183; UNPROMOTED — CURRENT_TRUTH.md &#167;3</a>
+The dashed line is where the interior peaks stop: below one, which is what
+the last section is about.</figcaption>
 </figure>
 
 <aside class="lane lane-scholar"><span class="tag">&#10216;scholar&#10217;</span>
@@ -208,25 +212,45 @@ metaphor (DUAL_IS_THE_MEASURE.md &#167;7.2, Thm 7.1).</aside>
 
 <h2>The truth about the top rungs</h2>
 
-<p>Degrees two and three are real: the clamped rational constructions are
-machine-checked in the same Lean development, exact split distances, local
-support, solvency and all.
+<p>Degrees two and three are real twice over. The clamped rational
+constructions are machine-checked in the same Lean development — exact split
+distances, local support, solvency and all
 <a class="badge" href="evidence.html#proved-model">PROVED-MODEL —
 CURRENT_TRUTH.md &#167;3</a>
-They also currently refuse at terms admission, and the refusal is not
-bureaucratic caution — at degree &#8805; 2 the mathematics genuinely
-changes. Interior quadratic basis functions peak at 3/4 (cubics at 2/3), so
-there are price vectors that pass the simplex gate yet are no probability
-measure&#8217;s moments, and the corpus exhibits the explicit, executable
-arbitrage against one: split four complete sets, sell four units of the
-peaked claim at its limit, keep the complement — zero net outlay, at least
-one collateral unit at every resolution. At degree &#8804; 1 the same
+— and they also <em>run</em>: a degree-2 and a degree-3 market are founded
+from a bank holding no Clutch account at all, then split, resolved from a
+sealed source window, and redeemed both internally and by a bearer, with
+every weight derived in exact <code>u128</code> integer arithmetic and no
+floating point anywhere on the path.
+<a class="badge" href="evidence.html#sbf-executed">SBF-EXECUTED &#183; bank
+&#183; UNPROMOTED — CURRENT_TRUTH.md &#167;3</a></p>
+
+<p>What is genuinely open at degree &#8805; 2 is not the claim plane; it is
+the <em>price</em> plane, and the difference is not bureaucratic caution.
+Interior quadratic basis functions peak at 3/4 (cubics at 2/3), so there are
+price vectors that pass the simplex gate yet are no probability
+measure&#8217;s moments, and the explicit arbitrage against one is executable
+in the admitted order language: split four complete sets, sell four units of
+the peaked claim at its limit, keep the complement — zero net outlay, at
+least one collateral unit at every resolution. At degree &#8804; 1 the same
 position can pay exactly zero, so no arbitrage exists — which is precisely
 why the simplex gate <em>is</em> the no-arbitrage condition on the tradable
 span at degrees zero and one, and strictly weaker than it above.
 <a class="badge" href="evidence.html#paper-proof">paper proof —
 DUAL_IS_THE_MEASURE.md &#167;7.4</a>
-The ladder is honest about where it ends.</p>
+The clearing sees a basis only through partition of unity, so it cannot tell
+the two cases apart, and no gate in front of it currently does either. The
+exact test is convex-hull membership in a piecewise-polynomial moment body —
+plausibly checkable in exact integers, and not built.</p>
+
+<p>One more restriction is deliberate and enforced: at degree &#8805; 2 only
+<em>point</em> evidence resolves. A conservative interval that is not a
+single value refuses rather than picking a representative, because the
+interval rule for a smooth basis is an open question and guessing it would be
+a silent choice about somebody&#8217;s payout. So the honest ladder is: the
+top rungs are built, proved, and executed; a market on them resolves only
+from an exact observation; and the auction in front of them still admits
+prices on the simplex, which above degree one is the weaker condition.</p>
 
 <p>One honest edge: eight knots is a coarse curve, the grid is frozen at
 creation, and payoffs are bounded at the edges — no unbounded upside exists

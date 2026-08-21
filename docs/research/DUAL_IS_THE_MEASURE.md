@@ -786,9 +786,23 @@ Consequences, stated carefully:
 - Nothing forces the LP dual into `M_d` either: the dual is constrained by
   the *order* structure, so it lands in the moment body only if the book
   itself contains the arbitrage orders that would punish an exterior price.
-- This is a design-ahead warning, not a live defect: degrees 2–3 currently
-  refuse at terms admission (implementation addendum §15). If they land, the
-  admission story for prices needs more than the simplex. The exact test is
+- **This warning is now live, not design-ahead.** *(Corrected 2026-08-21.
+  The bullet previously read "a design-ahead warning, not a live defect:
+  degrees 2–3 currently refuse at terms admission (implementation addendum
+  §15)". That sentence was written against `DISTRIBUTIONAL_CLAIMS_DESIGN.md`
+  §15 (2026-08-18) and stopped being true on 2026-08-19: `TermsAccount`
+  admits `basis_degree` 0 through 3, `derive_payout_vector` owns degrees one
+  through three, and `blank_bank_joined_lifecycle_degree_two` /
+  `_degree_three` run a full create/split/resolve/redeem walk against a
+  local bank. See `CURRENT_TRUTH.md` §3.)* The claim plane landed; the
+  admission story for prices did not move with it. The clearing knows the
+  basis only through PoU, so nothing in the relation distinguishes
+  `M_d` from `Δ`, and no gate in front of the relation restricts a market's
+  degree either — `programs/solana-layout/src/clearing.rs` and
+  `crates/clutch-batch` contain no occurrence of `degree`. The one live
+  degree-≥2 restriction is on *evidence*, not price:
+  `ResolutionRefusal::NonPointEvidence` refuses a conservative interval that
+  is not a point. The exact price test is
   `p/S ∈ M_d` = the convex hull of a piecewise-polynomial moment curve; for
   `d = 2` each pane contributes a conic arc, so hull membership reduces to
   finitely many per-pane quadratic (discriminant) conditions — plausibly
