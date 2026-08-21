@@ -5836,6 +5836,20 @@ mod tests {
                 epoch: h(0x2e),
             },
             Intent::CloseRevenuePolicyRecord { realm: h(0x4e) },
+            /* The v2 authenticated-source family (tags 70-73) lands on the
+             * layout wire with no reference model behind it, exactly as its V1
+             * twin at tags 23-26 did and as the genesis initializers did before
+             * that.  The adapter refuses all four, so the SVM oracle for this
+             * family is the layout codec byte-for-byte plus the program's own
+             * account-plane refusals — never a comparison against this
+             * refusal. */
+            Intent::InitSourceSpecV2 {
+                terms: h(0x5e),
+                spec_body: [0x11; clutch_solana_layout::SOURCE_SPEC_BODY_V2_BYTES],
+            },
+            Intent::InitSourceArchiveV2 { terms: h(0x5e) },
+            Intent::AppendSourceArchiveV2 { terms: h(0x5e) },
+            Intent::SealSourceArchiveV2 { terms: h(0x5e) },
         ] {
             let request = layout_request(0, unsupported);
             assert_eq!(

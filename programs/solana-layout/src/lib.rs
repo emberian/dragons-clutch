@@ -206,10 +206,15 @@ pub const ORDER_KIND_PORTFOLIO: u8 = 2;
 pub const ORDER_KIND_TOMBSTONE: u8 = 3;
 /// Maximum encoded instruction length.
 ///
-/// This is exactly the widest admitted intent — a portfolio placement, which
-/// carries a whole [`PortfolioRecord`] body behind its slot kind byte — not a
-/// round number with slack in it.  A test pins every variant against it.
-pub const MAX_INTENT_BYTES: usize = 2 + (2 * HASH_BYTES) + 8 + 1 + PORTFOLIO_RECORD_BYTES;
+/// This is exactly the widest admitted intent — a v2 source-spec construction,
+/// which carries the whole 368-byte canonical pull body behind its Terms
+/// binding — not a round number with slack in it.  A test pins every variant
+/// against it.
+///
+/// It was the portfolio placement (310 bytes) until the v2 source family
+/// landed; the placement remains the widest *order* intent and the constant
+/// still names one exact variant rather than a budget.
+pub const MAX_INTENT_BYTES: usize = 2 + HASH_BYTES + SOURCE_SPEC_BODY_V2_BYTES;
 /// Exact signed-wire width of one V1 source-spec body.
 ///
 /// The source admission crate owns the meaning of these bytes.  The layout
@@ -218,6 +223,19 @@ pub const MAX_INTENT_BYTES: usize = 2 + (2 * HASH_BYTES) + 8 + 1 + PORTFOLIO_REC
 /// owner.  `clutch-sbf` compile-time asserts this equals its reviewed
 /// `SourceSpecV1` codec width before admitting the intent.
 pub const SOURCE_SPEC_BODY_V1_BYTES: usize = 256;
+/// Exact signed-wire width of one v2 (pull-profile) source-spec body.
+///
+/// Same division of labour as [`SOURCE_SPEC_BODY_V1_BYTES`]: the admission
+/// crate owns the meaning, the layout owns the fixed width, and `clutch-sbf`
+/// compile-time asserts this equals its reviewed `SourceSpecV2` codec width
+/// before admitting [`Intent::InitSourceSpecV2`].
+///
+/// The body is wider than V1's because a pull spec pins a *deployment* rather
+/// than a data account: the receiver program, its ProgramData account, its
+/// governance `Config` key and that config's digest, the provider feed id, and
+/// the ProgramData deployment slot all travel where V1 carried one immutable
+/// price-account key.
+pub const SOURCE_SPEC_BODY_V2_BYTES: usize = 368;
 
 const _: () = assert!(MAX_EPOCH_ORDERS == 64);
 const _: () = assert!(MAX_PRICE_SCALE > 0);
@@ -4990,6 +5008,37 @@ pub enum Intent {
     /// lamport burned — pays nothing and burns the whole balance at the frozen
     /// neutral sink.
     ClosePosition { market: MarketId, owner: OwnerId },
+    /// Construct one immutable **v2** (pull-profile) source spec and its feed
+    /// head.
+    ///
+    /// The v2 twin of [`Intent::InitSourceSpec`], and deliberately its exact
+    /// shape: `terms` names the canonical sealed Terms account that supplies
+    /// the Realm, feed, window and source-release bindings, and `spec_body` is
+    /// the canonical 368-byte pull body that must hash — under the *v2* feed
+    /// domain, never V1's — to that Terms feed identity.
+    ///
+    /// A separate tag rather than a version field inside the body is what makes
+    /// the generations fail closed against each other: a V1 body presented here
+    /// does not decode, and a v2 body presented to
+    /// [`Intent::InitSourceSpec`] does not fit.
+    InitSourceSpecV2 {
+        terms: Hash32,
+        spec_body: [u8; SOURCE_SPEC_BODY_V2_BYTES],
+    },
+    /// Construct the canonical **v2** archive for the exact Terms window.
+    InitSourceArchiveV2 { terms: Hash32 },
+    /// Append the uniquely admitted next pull record to that v2 archive.
+    ///
+    /// Nothing about the record travels in this intent — not the price, not the
+    /// confidence, not the bucket.  The bucket comes from the archive's own
+    /// cursor and the value comes from an ephemeral price-update account that
+    /// the *immediately preceding* instruction in this same transaction posted
+    /// through the pinned receiver program.  That adjacency is read from the
+    /// Instructions sysvar, so this intent's whole wire content is which Terms
+    /// window is being extended.
+    AppendSourceArchiveV2 { terms: Hash32 },
+    /// Authenticate maturity, seal the v2 archive and advance its feed head.
+    SealSourceArchiveV2 { terms: Hash32 },
 }
 
 /// Most fills one [`Intent::WriteCandidateFeed`] chunk may carry.
@@ -5264,6 +5313,26 @@ const _: () = assert!(CLOSE_GENERAL_EPOCH_TAG == CLOSE_GENERAL_CLEAR_WORK_TAG + 
 /* The revenue plane's one close continues the ladder. */
 const CLOSE_REVENUE_POLICY_RECORD_TAG: u8 = 68;
 const CLOSE_POSITION_TAG: u8 = 69;
+/* The v2 authenticated-source family continues the ladder, in the same order
+ * its V1 twin took at tags 23-26: construct the spec, construct the archive,
+ * append, seal.  Four tags rather than one nested step byte, because that is
+ * what makes each step's *account plane* a property of the wire tag — the
+ * append's eleven-account pull plane and the construction's payer/System plane
+ * are not the same instruction wearing a discriminant. */
+const INIT_SOURCE_SPEC_V2_TAG: u8 = 70;
+const INIT_SOURCE_ARCHIVE_V2_TAG: u8 = 71;
+const APPEND_SOURCE_ARCHIVE_V2_TAG: u8 = 72;
+const SEAL_SOURCE_ARCHIVE_V2_TAG: u8 = 73;
+const _: () = assert!(INIT_SOURCE_SPEC_V2_TAG == CLOSE_POSITION_TAG + 1);
+const _: () = assert!(INIT_SOURCE_ARCHIVE_V2_TAG == INIT_SOURCE_SPEC_V2_TAG + 1);
+const _: () = assert!(APPEND_SOURCE_ARCHIVE_V2_TAG == INIT_SOURCE_ARCHIVE_V2_TAG + 1);
+const _: () = assert!(SEAL_SOURCE_ARCHIVE_V2_TAG == APPEND_SOURCE_ARCHIVE_V2_TAG + 1);
+/* The v2 spec construction is the widest admitted intent; the portfolio
+ * placement it displaced is still checked against the bound rather than
+ * assumed to fit under it. */
+const _: () = assert!(2 + HASH_BYTES + SOURCE_SPEC_BODY_V2_BYTES == MAX_INTENT_BYTES);
+const _: () = assert!(2 + (2 * HASH_BYTES) + 8 + 1 + PORTFOLIO_RECORD_BYTES <= MAX_INTENT_BYTES);
+const _: () = assert!(2 + HASH_BYTES + SOURCE_SPEC_BODY_V1_BYTES <= MAX_INTENT_BYTES);
 const _: () = assert!(CLOSE_REVENUE_POLICY_RECORD_TAG == CLOSE_GENERAL_EPOCH_TAG + 1);
 // The widest chunked write stays inside the frozen intent bound; the slices
 // shape is the widest at 308 of 310 bytes.
@@ -5370,6 +5439,10 @@ impl Intent {
             Self::CloseGeneralReceipt { .. } => 2 + 32 + 32 + 32 + 2,
             Self::CloseRevenuePolicyRecord { .. } => 2 + 32,
             Self::ClosePosition { .. } => 2 + 32 + 32,
+            Self::InitSourceSpecV2 { .. } => 2 + 32 + SOURCE_SPEC_BODY_V2_BYTES,
+            Self::InitSourceArchiveV2 { .. }
+            | Self::AppendSourceArchiveV2 { .. }
+            | Self::SealSourceArchiveV2 { .. } => 2 + 32,
         }
     }
     /// Validate and encode into a caller-provided buffer.
@@ -6153,6 +6226,25 @@ impl Intent {
                 w.hash(*market)?;
                 w.hash(*owner)?
             }
+            Self::InitSourceSpecV2 { terms, spec_body } => {
+                check_hash(*terms)?;
+                put_header(&mut w, INIT_SOURCE_SPEC_V2_TAG, INTENT_VERSION)?;
+                w.hash(*terms)?;
+                w.bytes(spec_body)?
+            }
+            Self::InitSourceArchiveV2 { terms }
+            | Self::AppendSourceArchiveV2 { terms }
+            | Self::SealSourceArchiveV2 { terms } => {
+                check_hash(*terms)?;
+                let tag = match self {
+                    Self::InitSourceArchiveV2 { .. } => INIT_SOURCE_ARCHIVE_V2_TAG,
+                    Self::AppendSourceArchiveV2 { .. } => APPEND_SOURCE_ARCHIVE_V2_TAG,
+                    Self::SealSourceArchiveV2 { .. } => SEAL_SOURCE_ARCHIVE_V2_TAG,
+                    _ => return Err(CodecError::InvalidEnum),
+                };
+                put_header(&mut w, tag, INTENT_VERSION)?;
+                w.hash(*terms)?
+            }
         };
         Ok(w.at)
     }
@@ -6315,6 +6407,26 @@ impl Intent {
                     INIT_SOURCE_ARCHIVE_TAG => Self::InitSourceArchive { terms },
                     APPEND_SOURCE_ARCHIVE_TAG => Self::AppendSourceArchive { terms },
                     SEAL_SOURCE_ARCHIVE_TAG => Self::SealSourceArchive { terms },
+                    _ => return Err(CodecError::InvalidEnum),
+                })
+            }
+            INIT_SOURCE_SPEC_V2_TAG => {
+                let terms = r.hash()?;
+                let spec_body = r.bytes::<SOURCE_SPEC_BODY_V2_BYTES>()?;
+                r.done()?;
+                check_hash(terms)?;
+                Ok(Self::InitSourceSpecV2 { terms, spec_body })
+            }
+            INIT_SOURCE_ARCHIVE_V2_TAG
+            | APPEND_SOURCE_ARCHIVE_V2_TAG
+            | SEAL_SOURCE_ARCHIVE_V2_TAG => {
+                let terms = r.hash()?;
+                r.done()?;
+                check_hash(terms)?;
+                Ok(match tag {
+                    INIT_SOURCE_ARCHIVE_V2_TAG => Self::InitSourceArchiveV2 { terms },
+                    APPEND_SOURCE_ARCHIVE_V2_TAG => Self::AppendSourceArchiveV2 { terms },
+                    SEAL_SOURCE_ARCHIVE_V2_TAG => Self::SealSourceArchiveV2 { terms },
                     _ => return Err(CodecError::InvalidEnum),
                 })
             }
@@ -7536,7 +7648,7 @@ mod tests {
         assert_eq!(account_len::SUPPLY_LEDGER, 333);
         assert_eq!(account_len::TERMS, 1656);
         assert_eq!(account_len::PRICE_GRID, 589);
-        assert_eq!(account_len::EPOCH, 328);
+        assert_eq!(account_len::EPOCH, 329);
         assert_eq!(account_len::CANDIDATE, 337);
         assert_eq!(account_len::FINAL_POT, 262);
         assert_eq!(account_len::SETTLEMENT_RECEIPT, 217);
@@ -7550,8 +7662,13 @@ mod tests {
             account_len::ORDER_PAGE,
             236 + MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES
         );
-        // The widest admitted intent is a portfolio placement, exactly.
-        assert_eq!(MAX_INTENT_BYTES, 310);
+        // The widest admitted intent is a v2 source-spec construction, exactly:
+        // header, Terms binding, canonical pull body.  The portfolio placement
+        // it displaced (310) is pinned beside it so a regression in either is
+        // visible as a moved number rather than as slack.
+        assert_eq!(MAX_INTENT_BYTES, 402);
+        assert_eq!(2 + HASH_BYTES + SOURCE_SPEC_BODY_V2_BYTES, MAX_INTENT_BYTES);
+        assert_eq!(2 + (2 * HASH_BYTES) + 8 + 1 + PORTFOLIO_RECORD_BYTES, 310);
     }
     #[test]
     fn mirrored_bounds_match_their_owning_crates() {
@@ -12705,8 +12822,8 @@ mod tests {
             );
             i += 1;
         }
-        /* Not one of them widens the wire: the budget is still exactly a
-         * portfolio placement, which is what makes `MAX_INTENT_BYTES` a
+        /* Not one of them widens the wire: the budget is exactly the v2
+         * source-spec construction, which is what makes `MAX_INTENT_BYTES` a
          * measurement rather than a reservation. */
         let mut widest = 0;
         let mut i = 0;
@@ -12717,7 +12834,7 @@ mod tests {
             i += 1;
         }
         assert!(widest < MAX_INTENT_BYTES);
-        assert_eq!(MAX_INTENT_BYTES, 310);
+        assert_eq!(MAX_INTENT_BYTES, 402);
     }
 
     #[test]
@@ -13163,5 +13280,79 @@ mod tests {
             );
         }
         assert!(intents[0].encoded_len() <= MAX_INTENT_BYTES);
+    }
+
+    #[test]
+    fn authenticated_source_v2_intents_have_exact_unambiguous_wires() {
+        let mut body = [0_u8; SOURCE_SPEC_BODY_V2_BYTES];
+        for (index, byte) in body.iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        let intents = [
+            Intent::InitSourceSpecV2 {
+                terms: h(1),
+                spec_body: body,
+            },
+            Intent::InitSourceArchiveV2 { terms: h(1) },
+            Intent::AppendSourceArchiveV2 { terms: h(1) },
+            Intent::SealSourceArchiveV2 { terms: h(1) },
+        ];
+        let lengths = [402, 34, 34, 34];
+        let tags = [
+            INIT_SOURCE_SPEC_V2_TAG,
+            INIT_SOURCE_ARCHIVE_V2_TAG,
+            APPEND_SOURCE_ARCHIVE_V2_TAG,
+            SEAL_SOURCE_ARCHIVE_V2_TAG,
+        ];
+        assert_eq!(tags, [70_u8, 71, 72, 73]);
+        for ((intent, expected_len), expected_tag) in intents.into_iter().zip(lengths).zip(tags) {
+            let mut encoded = [0_u8; MAX_INTENT_BYTES];
+            let len = intent.encode(&mut encoded).unwrap();
+            assert_eq!(len, expected_len);
+            assert_eq!(len, intent.encoded_len());
+            assert_eq!(&encoded[..2], &[expected_tag, INTENT_VERSION]);
+            assert_eq!(Intent::decode(&encoded[..len]), Ok(intent));
+            assert_eq!(
+                Intent::decode(&encoded[..len - 1]),
+                Err(CodecError::Truncated)
+            );
+            let mut longer = [0_u8; MAX_INTENT_BYTES + 1];
+            longer[..len].copy_from_slice(&encoded[..len]);
+            assert_eq!(
+                Intent::decode(&longer[..len + 1]),
+                Err(CodecError::TrailingBytes)
+            );
+            encoded[2..34].fill(0);
+            assert_eq!(
+                Intent::decode(&encoded[..len]),
+                Err(CodecError::ZeroIdentity)
+            );
+        }
+
+        /* The two generations are disjoint on the wire, not merely different:
+         * a V1 spec body carried under the v2 tag is short by 112 bytes and a
+         * v2 body under the V1 tag is long by the same, so neither can be read
+         * as the other even with an otherwise valid Terms binding. */
+        let v1 = Intent::InitSourceSpec {
+            terms: h(1),
+            spec_body: [7_u8; SOURCE_SPEC_BODY_V1_BYTES],
+        };
+        let mut v1_bytes = [0_u8; MAX_INTENT_BYTES];
+        let v1_len = v1.encode(&mut v1_bytes).unwrap();
+        v1_bytes[0] = INIT_SOURCE_SPEC_V2_TAG;
+        assert_eq!(
+            Intent::decode(&v1_bytes[..v1_len]),
+            Err(CodecError::Truncated)
+        );
+        let mut v2_bytes = [0_u8; MAX_INTENT_BYTES];
+        let v2_len = intents[0].encode(&mut v2_bytes).unwrap();
+        v2_bytes[0] = INIT_SOURCE_SPEC_TAG;
+        assert_eq!(
+            Intent::decode(&v2_bytes[..v2_len]),
+            Err(CodecError::TrailingBytes)
+        );
+
+        // The widest admitted intent is exactly this one.
+        assert_eq!(intents[0].encoded_len(), MAX_INTENT_BYTES);
     }
 }

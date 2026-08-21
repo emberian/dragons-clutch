@@ -607,6 +607,71 @@ pub fn verify_recorded_sealed_archive_v2(
     })
 }
 
+/// Lifetime-bound read capability for one fully verified sealed v2 page.
+///
+/// The v2 twin of [`crate::source_archive::VerifiedSealedArchiveViewV1`], and
+/// it exists for the same reason: [`verify_recorded_sealed_archive_v2`] has
+/// already run the key, owner, executable, spec, release, window, lineage,
+/// seal, and page-commitment checks over these exact bytes, and the immutable
+/// borrow prevents the page from changing under a fold.  Indexed reads
+/// therefore check only their bounded index instead of rehashing the
+/// 2,560-byte page once per bucket.
+///
+/// No raw slice accessor exists.  A consumer can read checked records and the
+/// authenticated receipt, and nothing else.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedSealedArchiveViewV2<'a> {
+    receipt: SealedArchiveReceiptV2,
+    data: &'a [u8],
+}
+
+impl VerifiedSealedArchiveViewV2<'_> {
+    /// Return the authenticated archive/window provenance.
+    pub const fn receipt(self) -> SealedArchiveReceiptV2 {
+        self.receipt
+    }
+
+    /// Read one bounded record from the immutable page verified at
+    /// construction.
+    ///
+    /// The index remains hostile and is checked against the committed record
+    /// count; page bytes and metadata are not caller-selectable once this
+    /// capability exists.
+    pub fn archived_record(self, index: usize) -> Result<ArchiveRecordV2, ArchiveV2Error> {
+        if index >= usize::from(self.receipt.record_count) {
+            return Err(ArchiveV2Error::MalformedRecord);
+        }
+        Ok(record_at(self.data, index))
+    }
+}
+
+/// Authenticate one recorded sealed v2 page and retain its immutable bytes.
+///
+/// The live-fold form of [`verify_recorded_sealed_archive_v2`].  It does not
+/// weaken that receipt API: it runs it first on the exact same account view,
+/// then binds the resulting receipt to the lifetime of those verified bytes.
+pub fn verify_recorded_sealed_archive_v2_view(
+    clutch_program: [u8; 32],
+    expected_archive_key: [u8; 32],
+    account: AccountViewV2<'_>,
+    verified_spec: VerifiedSourceSpecV2,
+    release: PullReleaseV2,
+    window: WindowDomain,
+) -> Result<VerifiedSealedArchiveViewV2<'_>, ArchiveV2Error> {
+    let receipt = verify_recorded_sealed_archive_v2(
+        clutch_program,
+        expected_archive_key,
+        account,
+        verified_spec,
+        release,
+        window,
+    )?;
+    Ok(VerifiedSealedArchiveViewV2 {
+        receipt,
+        data: account.data,
+    })
+}
+
 /// Read one record back from the exact page that produced `receipt`.
 ///
 /// The key, owner, executability, length, and recomputed commitment are all

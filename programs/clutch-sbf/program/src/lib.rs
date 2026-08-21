@@ -90,6 +90,7 @@ pub mod seeds;
 pub mod source;
 pub mod source_archive;
 pub mod source_archive_v2;
+pub mod source_generation;
 pub mod source_identity;
 pub mod source_v2;
 pub mod token;

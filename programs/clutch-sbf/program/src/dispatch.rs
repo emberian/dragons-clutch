@@ -43,7 +43,7 @@ use crate::error::ClutchError;
 use crate::instructions::{
     artifact, cash_exit, direct_selection, direct_selection_v3, external_exit, genesis,
     market_init, merge_materialize, observe_resolve, orders_batch, resolution_work, source_ingest,
-    split,
+    source_ingest_v2, split,
 };
 use clutch_solana_layout::Intent;
 use clutch_solana_reference::{Action, DirectV3Request, Request};
@@ -70,6 +70,7 @@ enum Route {
     OrdersBatch,
     Genesis,
     SourceIngest,
+    SourceIngestV2,
     DirectSelection,
     DirectSelectionV3,
     ResolutionWork,
@@ -143,6 +144,10 @@ const INTENT_CLOSE_GENERAL_CLEAR_WORK_HINT: u8 = 66;
 const INTENT_CLOSE_GENERAL_EPOCH_HINT: u8 = 67;
 const INTENT_CLOSE_REVENUE_POLICY_RECORD_HINT: u8 = 68;
 const INTENT_CLOSE_POSITION_HINT: u8 = 69;
+const INTENT_INIT_SOURCE_SPEC_V2_HINT: u8 = 70;
+const INTENT_INIT_SOURCE_ARCHIVE_V2_HINT: u8 = 71;
+const INTENT_APPEND_SOURCE_ARCHIVE_V2_HINT: u8 = 72;
+const INTENT_SEAL_SOURCE_ARCHIVE_V2_HINT: u8 = 73;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
@@ -204,6 +209,16 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_APPEND_SOURCE_ARCHIVE_HINT
                 | INTENT_SEAL_SOURCE_ARCHIVE_HINT,
             ) => Route::SourceIngest,
+            /* The v2 family gets its own hint arm rather than joining V1's.
+             * The two never share a frame: V1's append holds three provider
+             * account views and v2's holds six, and the pull authentication
+             * join below it is the deepest call in either family. */
+            Some(
+                INTENT_INIT_SOURCE_SPEC_V2_HINT
+                | INTENT_INIT_SOURCE_ARCHIVE_V2_HINT
+                | INTENT_APPEND_SOURCE_ARCHIVE_V2_HINT
+                | INTENT_SEAL_SOURCE_ARCHIVE_V2_HINT,
+            ) => Route::SourceIngestV2,
             Some(
                 INTENT_INIT_DIRECT_EPOCH_V3_HINT
                 | INTENT_FREEZE_DIRECT_EPOCH_V3_HINT
@@ -254,6 +269,7 @@ pub fn process(
         Route::OrdersBatch => process_orders_batch(program_id, accounts, instruction_data),
         Route::Genesis => process_genesis(program_id, accounts, instruction_data),
         Route::SourceIngest => process_source_ingest(program_id, accounts, instruction_data),
+        Route::SourceIngestV2 => process_source_ingest_v2(program_id, accounts, instruction_data),
         Route::DirectSelection => process_direct_selection(program_id, accounts, instruction_data),
         Route::DirectSelectionV3 => {
             process_direct_selection_v3(program_id, accounts, instruction_data)
@@ -458,6 +474,24 @@ fn process_source_ingest(
         | Action::Layout(Intent::AppendSourceArchive { .. })
         | Action::Layout(Intent::SealSourceArchive { .. }) => {
             source_ingest::process(program_id, accounts, &request)
+        }
+        _ => unexpected_route(),
+    }
+}
+
+#[inline(never)]
+fn process_source_ingest_v2(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request = Request::decode(instruction_data)?;
+    match request.action {
+        Action::Layout(Intent::InitSourceSpecV2 { .. })
+        | Action::Layout(Intent::InitSourceArchiveV2 { .. })
+        | Action::Layout(Intent::AppendSourceArchiveV2 { .. })
+        | Action::Layout(Intent::SealSourceArchiveV2 { .. }) => {
+            source_ingest_v2::process(program_id, accounts, &request)
         }
         _ => unexpected_route(),
     }
@@ -1002,6 +1036,25 @@ mod tests {
             (
                 Intent::SealSourceArchive { terms: hash(1) },
                 Route::SourceIngest,
+            ),
+            (
+                Intent::InitSourceSpecV2 {
+                    terms: hash(1),
+                    spec_body: [4; clutch_solana_layout::SOURCE_SPEC_BODY_V2_BYTES],
+                },
+                Route::SourceIngestV2,
+            ),
+            (
+                Intent::InitSourceArchiveV2 { terms: hash(1) },
+                Route::SourceIngestV2,
+            ),
+            (
+                Intent::AppendSourceArchiveV2 { terms: hash(1) },
+                Route::SourceIngestV2,
+            ),
+            (
+                Intent::SealSourceArchiveV2 { terms: hash(1) },
+                Route::SourceIngestV2,
             ),
             (
                 Intent::InitDirectEpochV3 {

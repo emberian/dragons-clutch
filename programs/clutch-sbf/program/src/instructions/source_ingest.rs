@@ -82,14 +82,20 @@ const IX_MUTATE_CLOCK: usize = 7;
 
 const INITIAL_FEED_SUMMARY_DOMAIN: &[u8] = b"dragons-clutch/source-feed-empty/v1";
 
+/// The exact facts one sealed Terms account fixes for its source plane.
+///
+/// Shared with [`super::source_ingest_v2`]: Terms are generation-neutral by
+/// construction — they name a feed identity, an adapter and an observation
+/// window, and it is the *spec* that is domain-separated — so both families
+/// read them through this one reader rather than through two.
 #[derive(Clone, Copy)]
-struct FrozenSourceTerms {
-    terms: Hash32,
-    realm: Hash32,
-    feed: Hash32,
-    source_adapter_id: Hash32,
-    source_version: u32,
-    window: WindowDomain,
+pub(crate) struct FrozenSourceTerms {
+    pub(crate) terms: Hash32,
+    pub(crate) realm: Hash32,
+    pub(crate) feed: Hash32,
+    pub(crate) source_adapter_id: Hash32,
+    pub(crate) source_version: u32,
+    pub(crate) window: WindowDomain,
 }
 
 /// Route exactly the four authenticated-source intents.
@@ -113,7 +119,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
 }
 
 #[inline(never)]
-fn read_frozen_terms(
+pub(crate) fn read_frozen_terms(
     program_id: &Pubkey,
     account: &AccountInfo,
     expected_terms: Hash32,
@@ -199,7 +205,7 @@ fn bind_spec(spec: SourceSpecV1, terms: FrozenSourceTerms) -> Outcome<()> {
     .map_err(|_| Refusal::Adapter(ClutchError::SourceAdmissionFailed))
 }
 
-fn initial_feed_summary(terms: FrozenSourceTerms) -> Hash32 {
+pub(crate) fn initial_feed_summary(terms: FrozenSourceTerms) -> Hash32 {
     Hash32::from_bytes(
         solana_sha256_hasher::hashv(&[
             INITIAL_FEED_SUMMARY_DOMAIN,
@@ -210,7 +216,7 @@ fn initial_feed_summary(terms: FrozenSourceTerms) -> Hash32 {
     )
 }
 
-fn require_readonly(account: &AccountInfo) -> Outcome<()> {
+pub(crate) fn require_readonly(account: &AccountInfo) -> Outcome<()> {
     require(!account.is_writable, ClutchError::UnexpectedWritable)
 }
 
@@ -323,7 +329,7 @@ pub(crate) fn require_registered_source_for_market(
 /// derive the address from Terms rather than accepting it, so a caller cannot
 /// present a spec belonging to another feed.
 #[inline(never)]
-fn verify_spec_v2(
+pub(crate) fn verify_spec_v2(
     program_id: &Pubkey,
     account: &AccountInfo,
     terms: FrozenSourceTerms,
@@ -371,7 +377,7 @@ fn bind_spec_v2(spec: SourceSpecV2, terms: FrozenSourceTerms) -> Outcome<()> {
     )
 }
 
-fn read_initial_feed(
+pub(crate) fn read_initial_feed(
     program_id: &Pubkey,
     account: &AccountInfo,
     terms: FrozenSourceTerms,
