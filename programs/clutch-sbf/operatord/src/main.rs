@@ -16,6 +16,7 @@
 //! and the bench says so in a header strip that cannot be dismissed.
 
 mod bus;
+mod crank;
 mod decode;
 mod http;
 mod plan;
@@ -195,16 +196,28 @@ fn serve(options: Options) -> Result<()> {
     keys.export();
 
     let bus = Bus::new();
+    let handle = crank::Crank::new();
     let action_bus = Arc::clone(&bus);
+    let action_crank = Arc::clone(&handle);
+    /* The only thing an action can change is pacing.  There is deliberately
+     * no verb here that builds, reorders, or skips a transaction: the plan is
+     * the plan, and a reading surface must not become an authoring one. */
     let action: http::Action = Arc::new(move |request: &Value| {
         let name = request.get("action").and_then(Value::as_str).unwrap_or("");
         match name {
-            "ping" => json!({"ok": true, "events": action_bus.len()}),
-            other => json!({
-                "ok": false,
-                "detail": format!("M0 watch mode accepts no action named {other:?}"),
-            }),
+            "pause" => action_crank.set_auto(false),
+            "resume" => action_crank.set_auto(true),
+            "crank" => action_crank.grant(),
+            "ping" => {}
+            other => {
+                return json!({
+                    "ok": false,
+                    "detail": format!("the bench has no action named {other:?}"),
+                })
+            }
         }
+        let (auto, granted) = action_crank.snapshot();
+        json!({"ok": true, "auto": auto, "granted": granted, "events": action_bus.len()})
     });
     let server = http::Server::bind(options.port, Arc::clone(&bus), options.statics, action)?;
     let port = server.port()?;
@@ -246,6 +259,7 @@ fn serve(options: Options) -> Result<()> {
         plan_dir: &plan_dir,
         plan: &parsed,
         bus: &bus,
+        crank: &handle,
         observed_dir: work.join("observed"),
     };
     let outcome = walker.run(&keypairs);

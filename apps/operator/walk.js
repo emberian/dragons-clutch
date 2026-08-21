@@ -6,10 +6,43 @@
  * throwing away the half of the walk that shows the boundaries hold. */
 
 import { el, fields, digest, numeric, row } from "./dom.js";
+import { act } from "./action.js";
 
 /* The per-transaction compute ceiling the plan measures against.  Overridden
  * by the daemon's own value as soon as the plan event arrives. */
 const DEFAULT_CEILING = 1400000;
+
+/* Pacing, and only pacing.  These buttons ask the daemon to stop between
+ * steps, take exactly one, or run again.  There is no control on this page
+ * that composes, reorders, or skips a transaction, because there is no such
+ * verb behind the endpoint. */
+const crankControls = (state) => {
+  if (state.done) return null;
+  const card = el("section", "card crank");
+  const heading = el("div", "card-heading");
+  heading.append(el("h2", null, "Crank"));
+  const status = state.crank;
+  if (status) {
+    heading.append(el("span", "count", status.state === "paused" ? `paused before step ${status.next}` : `running (${status.turn})`));
+  }
+  card.append(heading);
+  card.append(
+    el("p", "muted", "The crank decides when the next step happens and nothing about what it is.")
+  );
+  const bar = el("div", "crank-bar");
+  [
+    ["Pause", "pause"],
+    ["Step once", "crank"],
+    ["Resume", "resume"]
+  ].forEach(([label, action]) => {
+    const button = el("button", "tab", label);
+    button.type = "button";
+    button.addEventListener("click", () => act(action));
+    bar.append(button);
+  });
+  card.append(bar);
+  return card;
+};
 
 const clockBanner = (state) => {
   if (!state.clock || state.done) return null;
@@ -204,6 +237,8 @@ export const renderWalk = (state) => {
   const cards = [];
   const verdict = verdictCard(state);
   if (verdict) cards.push(verdict);
+  const crank = crankControls(state);
+  if (crank) cards.push(crank);
   const clock = clockBanner(state);
   if (clock) cards.push(clock);
   cards.push(conservationStrip(state));

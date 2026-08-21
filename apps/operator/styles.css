@@ -277,3 +277,8 @@ td.role { color: var(--ink-2); }
   .rail-state, .rail-code { display: none; }
   .decoded-role, .identity-label { min-width: 0; }
 }
+
+.owner-bar { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-top: 0.35rem; font-family: var(--mono); font-size: 0.72rem; }
+.owner-bar .decoded-role { min-width: 9rem; color: var(--ink-2); }
+
+.crank-bar { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.4rem; }

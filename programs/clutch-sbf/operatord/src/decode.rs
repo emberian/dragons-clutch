@@ -9,11 +9,13 @@
 //! with its length and leading bytes.  That is deliberately a visible gap and
 //! not a silent one: an undecoded account must look undecoded.
 
+use clutch_solana_layout::artifact::decode_stage;
 use clutch_solana_layout::clearing::EpochWindowAccount;
 use clutch_solana_layout::reservation::ReservationAccount;
 use clutch_solana_layout::{
-    CandidateRecord, EpochAccount, FinalPotAccount, HoardAccount, MarketAccount, OrderPageAccount,
-    PositionAccount, SettlementReceiptAccount, SupplyLedgerAccount,
+    CandidateRecord, EpochAccount, FinalPotAccount, Hash32, HoardAccount, MarketAccount,
+    OrderPageAccount, OrderSlot, PositionAccount, ResolutionAccount, SettlementReceiptAccount,
+    SupplyLedgerAccount,
 };
 use serde_json::{json, Value};
 
@@ -95,8 +97,56 @@ fn window(bytes: &[u8]) -> Option<Value> {
     }))
 }
 
+/// `side` is a one-byte discriminator in the frozen record; 0 is the buy end.
+fn side(value: u8) -> &'static str {
+    if value == 0 {
+        "buy"
+    } else {
+        "sell"
+    }
+}
+
+/// A 32-byte identity, abbreviated for a table cell.
+///
+/// The full identity is still available in the raw image; this is a label, and
+/// it is spelled short enough that nobody mistakes it for the identity itself.
+fn tag(value: Hash32) -> String {
+    clutch_sbf_harness::hex_encode(&value.bytes()[..6])
+}
+
+/// One occupied slot of an order page, as the book actually holds it.
+fn slot(index: usize, entry: OrderSlot) -> Option<Value> {
+    match entry {
+        OrderSlot::Empty => None,
+        OrderSlot::Single(order) => Some(json!({
+            "slot": index, "kind": "single", "order_id": tag(order.order_id),
+            "owner": tag(order.owner), "outcome": order.outcome, "side": side(order.side),
+            "quantity": order.quantity, "limit": order.limit,
+            "minimum_fill": order.minimum_fill, "generation": order.generation,
+        })),
+        OrderSlot::Portfolio(order) => Some(json!({
+            "slot": index, "kind": "portfolio", "order_id": tag(order.order_id),
+            "owner": tag(order.owner), "side": side(order.side),
+            "active_len": order.active_len,
+            "coefficients": &order.coefficients[..usize::from(order.active_len).min(order.coefficients.len())],
+            "lots": order.lots, "limit_collateral_per_lot": order.limit_collateral_per_lot,
+            "minimum_fill_lots": order.minimum_fill_lots, "generation": order.generation,
+        })),
+        OrderSlot::Tombstone(retired) => Some(json!({
+            "slot": index, "kind": "tombstone", "order_id": tag(retired.order_id),
+            "owner": tag(retired.owner), "retired_generation": retired.retired_generation,
+        })),
+    }
+}
+
 fn page(bytes: &[u8]) -> Option<Value> {
     let value = OrderPageAccount::decode(bytes).ok()?;
+    let orders: Vec<Value> = value
+        .orders
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| slot(index, *entry))
+        .collect();
     Some(json!({
         "kind": "page",
         "page_index": value.page_index,
@@ -104,6 +154,7 @@ fn page(bytes: &[u8]) -> Option<Value> {
         "tombstone_count": value.tombstone_count,
         "set_order_count": value.set_order_count,
         "frozen": value.frozen,
+        "orders": orders,
     }))
 }
 
@@ -112,7 +163,9 @@ fn reservation(bytes: &[u8]) -> Option<Value> {
     Some(json!({
         "kind": "reservation",
         "state": value.state,
-        "side": value.side,
+        "order_id": tag(value.order_id),
+        "owner": tag(value.owner),
+        "side": side(value.side),
         "order_kind": value.order_kind,
         "initial_cash_atoms": value.initial_cash_atoms,
         "remaining_cash_atoms": value.remaining_cash_atoms,
@@ -145,6 +198,31 @@ fn pot(bytes: &[u8]) -> Option<Value> {
     Some(json!({"kind": "pot", "phase": value.phase}))
 }
 
+fn resolution(bytes: &[u8]) -> Option<Value> {
+    let value = ResolutionAccount::decode(bytes).ok()?;
+    Some(json!({
+        "kind": "resolution",
+        "payout_index": value.payout_index,
+        "resolved_slot": value.resolved_slot,
+        "feed_cursor": value.feed_cursor,
+        "sealed_end_bucket_exclusive": value.sealed_end_bucket_exclusive,
+        "repair_generation": value.repair_generation,
+    }))
+}
+
+/// The artifact transport's staging header: how much of a chunked policy
+/// artifact has landed, and when the stage lapses.
+fn stage(bytes: &[u8]) -> Option<Value> {
+    let value = decode_stage(bytes).ok()?;
+    Some(json!({
+        "kind": "artifact-stage",
+        "cursor": value.cursor,
+        "created_slot": value.created_slot,
+        "expires_slot": value.expires_slot,
+        "staged_bytes": bytes.len(),
+    }))
+}
+
 fn token(bytes: &[u8]) -> Option<Value> {
     Some(json!({"kind": "token", "amount": u64_at(bytes, TOKEN_AMOUNT_OFFSET)?}))
 }
@@ -170,6 +248,8 @@ pub fn by_role(role: &str, bytes: &[u8]) -> Value {
         "page" => page(bytes),
         "candidate" => candidate(bytes),
         "pot" => pot(bytes),
+        "resolution" => resolution(bytes),
+        "policy-stage" => stage(bytes),
         "hoard-token" | "collateral" | "actor-collateral" => token(bytes),
         _ if tail.starts_with("reservation-") => reservation(bytes),
         _ if tail.starts_with("receipt-") => receipt(bytes),

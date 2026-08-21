@@ -19,10 +19,21 @@ export const fill = (node, ...children) => {
 
 export const row = (className, ...children) => fill(el("div", className), ...children);
 
-/* A term/value pair, the bench's unit of readout. */
+/* A term/value pair, the bench's unit of readout.
+ *
+ * `value` may be a string or an already-built node (a digest, say). A node is
+ * appended rather than stringified: coercing one would print
+ * "[object Object]" where an identity belongs, which is exactly the kind of
+ * quiet wrongness this bench must not have. */
 export const field = (term, value, valueClass) => {
   const pair = el("div", "field");
-  pair.append(el("dt", null, term), el("dd", valueClass || null, value));
+  const cell = el("dd", valueClass || null);
+  if (value && typeof value === "object" && "nodeType" in value) {
+    cell.append(value);
+  } else {
+    cell.textContent = value === null || value === undefined ? "—" : String(value);
+  }
+  pair.append(el("dt", null, term), cell);
   return pair;
 };
 

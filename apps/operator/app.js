@@ -10,10 +10,14 @@ import { chip } from "./evidence.js";
 import { createStore } from "./stream.js";
 import { renderBench } from "./bench.js";
 import { renderWalk } from "./walk.js";
+import { renderFunding, renderTicket, renderBook } from "./market.js";
 
 const SCREENS = Object.freeze([
   { id: "bench", label: "Bench", render: renderBench },
-  { id: "walk", label: "Walk", render: renderWalk }
+  { id: "walk", label: "Walk", render: renderWalk },
+  { id: "funding", label: "Funding", render: renderFunding },
+  { id: "ticket", label: "Ticket", render: renderTicket },
+  { id: "book", label: "Book", render: renderBook }
 ]);
 
 const store = createStore();

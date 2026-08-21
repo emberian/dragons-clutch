@@ -7,6 +7,7 @@
 //! for the same reason.
 
 use crate::bus::Bus;
+use crate::crank::Crank;
 use crate::decode;
 use crate::plan::{Compare, Plan, Step};
 use crate::rpc;
@@ -27,6 +28,9 @@ pub struct Walker<'a> {
     pub plan_dir: &'a Path,
     pub plan: &'a Plan,
     pub bus: &'a Arc<Bus>,
+    /// Pacing only.  The crank decides *when* the next step happens and
+    /// nothing about *what* it is.
+    pub crank: &'a Arc<Crank>,
     pub observed_dir: PathBuf,
 }
 
@@ -76,6 +80,16 @@ impl Walker<'_> {
 
         for (ordinal, step) in self.plan.steps.iter().enumerate() {
             let ordinal = ordinal + 1;
+            let (auto, _) = self.crank.snapshot();
+            if !auto {
+                self.publish(&json!({
+                    "type": "crank", "state": "paused", "next": ordinal, "name": step.name,
+                }));
+            }
+            let turn = self.crank.await_turn();
+            self.publish(&json!({
+                "type": "crank", "state": "running", "next": ordinal, "turn": turn.as_str(),
+            }));
             self.honour_waits(step, &slots)?;
             self.publish(&json!({"type": "step", "ordinal": ordinal, "state": "inflight"}));
 

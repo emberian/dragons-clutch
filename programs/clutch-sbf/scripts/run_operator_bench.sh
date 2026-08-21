@@ -24,7 +24,7 @@ rpc_port="${CLUTCH_OPERATOR_RPC_PORT:-9137}"
 faucet_port="${CLUTCH_OPERATOR_FAUCET_PORT:-9138}"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/clutch-operator-bench.XXXXXX")"
-events="$work/events.ndjson"
+events="$work/events.sse"
 daemon_pid=""
 watcher_pid=""
 
@@ -54,7 +54,7 @@ for _ in $(seq 1 900); do
   if ! kill -0 "$daemon_pid" 2>/dev/null; then
     break
   fi
-  if curl -fsS -m 2 -o /dev/null "127.0.0.1:$http_port/"; then
+  if curl -fsS -m 2 -o /dev/null "127.0.0.1:$http_port/" 2>/dev/null; then
     ready=1
     break
   fi
@@ -67,8 +67,10 @@ if [ "$ready" -ne 1 ]; then
 fi
 echo "  bench is serving; attaching to /api/events as a client"
 
-curl -sN -m 1800 "127.0.0.1:$http_port/api/events" \
-  | sed -u -n 's/^data: //p' >"$events" &
+# The raw stream is captured verbatim and the `data:` frames are unwrapped by
+# the reader below.  No line-buffered filter in the pipeline, so nothing the
+# daemon published can be lost to a stalled buffer when the watcher is cut.
+curl -sN -m 3600 "127.0.0.1:$http_port/api/events" >"$events" &
 watcher_pid=$!
 
 set +e
@@ -87,11 +89,10 @@ import json, sys
 
 events = []
 for line in open(sys.argv[1]):
-    line = line.strip()
-    if not line:
+    if not line.startswith("data: "):
         continue
     try:
-        events.append(json.loads(line))
+        events.append(json.loads(line[6:].strip()))
     except json.JSONDecodeError:
         pass
 

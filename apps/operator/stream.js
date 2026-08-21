@@ -14,7 +14,9 @@ const EMPTY = Object.freeze({
   plan: null,
   steps: new Map(),
   states: new Map(),
+  latest: new Map(),
   clock: null,
+  crank: null,
   conservation: null,
   boot: [],
   fault: null,
@@ -28,6 +30,7 @@ export const createStore = () => {
     ...EMPTY,
     steps: new Map(),
     states: new Map(),
+    latest: new Map(),
     boot: [],
     listeners: new Set()
   };
@@ -58,10 +61,17 @@ export const createStore = () => {
         const bucket = state.states.get(event.ordinal) || [];
         bucket.push(event);
         state.states.set(event.ordinal, bucket);
+        /* The most recent image of each role, which is what the market
+         * screens read.  Roles are the plan's own vocabulary, so this map is
+         * keyed the same way the conservation table is. */
+        state.latest.set(event.role, event);
         break;
       }
       case "clock":
         state.clock = event;
+        break;
+      case "crank":
+        state.crank = event;
         break;
       case "conservation":
         state.conservation = event;
