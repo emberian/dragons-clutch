@@ -40,6 +40,7 @@
 //! ```text
 //! V0 domain + admission + normalization      (orders -> bound legs)
 //! V1 simplex validation                      (prices exact on the scaled simplex)
+//! V1b moment-cone admission                  (only when a caller binds a basis)
 //! V2 eligibility classification              (strict / marginal / ineligible)
 //! V3 canonical fill derivation + exact equality
 //! V4 virtual complete-set conservation       (per-outcome closure, sigma/mu)
