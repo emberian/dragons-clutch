@@ -1775,6 +1775,10 @@ async fn virtual_split_candidate_refuses_the_entitlement_freeze() {
 
 /// A verified partial-fill candidate freezes its pot but refuses per-slice
 /// entitlement: the PartialFillLedger ranked blocker stands.
+///
+/// The first executable gap exhibit of the PartialFillLedger wave — a
+/// marginal-pro-rata book driven all the way to SELECTED, whose every slice
+/// then refuses.  The wave flips this expectation.
 #[tokio::test]
 async fn partial_fill_candidate_refuses_entitlement() {
     let (mut context, fixture) = start().await;
@@ -1833,6 +1837,77 @@ async fn partial_fill_candidate_refuses_entitlement() {
         .await;
         assert_eq!(custom(refused.0), ClutchError::NotYetImplemented as u32);
         assert!(account(&mut context, fixture.receipt(partial.id, slice_index))
+            .await
+            .is_none());
+    }
+}
+
+/// A verified book whose slices pair a portfolio sell against single-Egg
+/// buys freezes its pot but refuses per-slice entitlement: the mixed shape
+/// needs the per-leg consumption state the full-pair seam does not model, and
+/// stands with the PartialFillLedger family.
+///
+/// The second executable gap exhibit of the PartialFillLedger wave, beside
+/// [`partial_fill_candidate_refuses_entitlement`].  Both assert the standing
+/// refusal; the wave flips both expectations.
+#[tokio::test]
+async fn mixed_portfolio_and_single_book_refuses_entitlement() {
+    let (mut context, fixture) = start().await;
+    let payer = context.payer.pubkey();
+    // One portfolio sell of one lot of [4, 4] — four Eggs on outcome 0 and
+    // four on outcome 1 — against one single buy per outcome.  Every slice
+    // converts exactly: 4 * 2_500 is a whole collateral atom.
+    let orders = [
+        (3, fixture.portfolio(&fixture.owners[3], 1, 1, [4, 4], 1, 1)),
+        (0, fixture.single(&fixture.owners[0], 2, 0, 0, 4, 3_000)),
+        (1, fixture.single(&fixture.owners[1], 3, 1, 0, 4, 3_000)),
+    ];
+    build_frozen_book(&mut context, &fixture, &orders, &[]).await;
+    let (epoch, book, reservations) = frozen_state(&mut context, &fixture).await;
+
+    let witness = witness_of(&[
+        slice(1, LegRefV1::Order(0), 0, 4),
+        slice(2, LegRefV1::Order(0), 1, 4),
+    ]);
+    let mut prices = [0u64; MAX_OUTCOMES];
+    prices[..4].copy_from_slice(&[2_500, 2_500, 2_500, 2_500]);
+    let mixed = plan_submission(&fixture, &epoch, &book, prices, 0, witness);
+    assert_eq!(mixed.fills, vec![1, 4, 4]);
+
+    submit_seal(&mut context, &fixture, &mixed, Some(2), &[], 100).await;
+    walk_to_verdict(&mut context, &fixture, &mixed, &reservations, 300).await;
+    context
+        .warp_to_slot(FREEZE_DEADLINE + CANDIDATE_WINDOW_SLOTS)
+        .unwrap();
+    let (result, _) = send(&mut context, &[fixture.finalize(&[mixed.id])], None, 340).await;
+    result.unwrap();
+
+    // Every per-owner conversion is whole, so the pot freezes empty...
+    let (result, _) = send_walk(
+        &mut context,
+        fixture.freeze_entitlement(payer, mixed.id),
+        342,
+    )
+    .await;
+    result.unwrap();
+    // ...but a mixed single/portfolio slice refuses with the honest stub, and
+    // no receipt is minted.
+    for slice_index in [0u16, 1] {
+        let refused = send(
+            &mut context,
+            &[fixture.entitle_single(
+                payer,
+                mixed.id,
+                slice_index,
+                reservations[1 + slice_index as usize],
+                reservations[0],
+            )],
+            None,
+            343 + slice_index as u32,
+        )
+        .await;
+        assert_eq!(custom(refused.0), ClutchError::NotYetImplemented as u32);
+        assert!(account(&mut context, fixture.receipt(mixed.id, slice_index))
             .await
             .is_none());
     }
