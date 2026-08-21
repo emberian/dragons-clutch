@@ -36,6 +36,8 @@ ready in degg-research.
 ## per-wave reseals: ONE batched cycle-G reseal when the swarm lands.
 
 ## The swarm (all Opus, SHARED MAIN TREE — no worktrees per ember. Rules:
+## ADDENDUM (paid for): cargo fmt formats the whole crate — format NAMED
+## FILES ONLY (rustfmt <file>), never -p, in a shared tree.
 ## commit only named files, small and often; retry on index lock; never
 ## stash/add -A/branch-switch; serialize full-suite runs behind the
 ## mkdir-spinlock /tmp/claude-501/suite.lock; hbox (swarm-build, co-tenant
@@ -83,6 +85,24 @@ J. SMALL-FIX BATCH (stale blocker row, mock path-sensitivity, queued
    Aug 24/24/27, perpetuals RFC Aug 26.
 
 ## Done log (2026-08-19 session)
+
+- J SMALL FIXES LANDED (4 commits: blocker row truthful at
+  [FeeCarryAccount], 4 rustdoc links fixed + two new strict doc gates
+  making 101, the macOS relocation-probe symlink amendment, the mock-ELF
+  disposition addendum). A's WELD CLOSED: the committed walk's expectation
+  model learned reservation v2 (six expectation files changed, zero
+  transaction bytes), run_general_committed.sh back to 44/44 GREEN with
+  the falsifier red on demand; the empty doctest target the split left red
+  is disabled. D R2 COMPLETE: **the default ELF took custody for the
+  first time** — 0x79 retired for a registered pull release (real bank,
+  real Token-2022, no mock), the full v2 append/authentication kernel
+  with a 12-shape hostile battery (every refusal byte-identical
+  rollback), four-bucket ingestion sealed and read back, the one-const
+  identity module with 11 TODO-ember mainnet pins and red-on-pin tests.
+  Deliberate remainders queued: the v2 Intent tag (layout ABI) + the
+  generation-agnostic resolution join + a real-validator v2 walk. Suites
+  at D's head: 119/122 zero failures. Confessed: a cargo-fmt rewrap
+  crossed lane territories (verified pure formatting) — rule added above.
 
 - SWARM SET 1+2 LANDING: A PARTIAL FILLS COMPLETE (9 commits — reservation
   v2 at version byte 3 catching a tag collision, both seam
