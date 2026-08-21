@@ -24,6 +24,7 @@ pub mod portfolio_settlement;
 pub mod projection;
 pub mod reservation;
 pub mod resolution_work;
+pub mod revenue;
 pub mod stream;
 
 /// Highest account schema version this build understands.
