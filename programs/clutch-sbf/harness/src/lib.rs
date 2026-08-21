@@ -156,9 +156,9 @@ const GENERATION: u64 = 2;
 const CASH_ATOMS: u64 = 100;
 const RESERVED_CASH_ATOMS: u64 = 7;
 const COLLATERAL_CAP: u64 = 1_000;
-const OUTCOME_COUNT: u8 = 2;
+pub const OUTCOME_COUNT: u8 = 2;
 /// Comfortably above the rent-exempt minimum for every account in the fixture.
-const ACCOUNT_LAMPORTS: u64 = 100_000_000;
+pub const ACCOUNT_LAMPORTS: u64 = 100_000_000;
 
 /// Market nonces.  One market per distinct genesis pre-state.
 const NONCE_SEAM: u64 = 9;
@@ -348,7 +348,7 @@ mod code {
 
 const B58: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
+pub const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
 /// The runtime's compute-budget program.
 ///
 /// Three of the eight families do not fit the 200 000-unit default: the
@@ -357,17 +357,17 @@ const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
 /// caller raises the limit the same way, so the plan raises it rather than
 /// declaring those families undrivable -- and the raised number is itself the
 /// measurement, recorded in `docs/implementation/SBF_BRINGUP.md`.
-const COMPUTE_BUDGET_PROGRAM: &str = "ComputeBudget111111111111111111111111111111";
+pub const COMPUTE_BUDGET_PROGRAM: &str = "ComputeBudget111111111111111111111111111111";
 /// `SetComputeUnitLimit` discriminator.
-const SET_COMPUTE_UNIT_LIMIT: u8 = 2;
+pub const SET_COMPUTE_UNIT_LIMIT: u8 = 2;
 /// The per-transaction ceiling the runtime will grant.
-const COMPUTE_UNIT_CEILING: u32 = 1_400_000;
+pub const COMPUTE_UNIT_CEILING: u32 = 1_400_000;
 
 /* ------------------------------------------------------------------------ */
 /* Encodings                                                                 */
 /* ------------------------------------------------------------------------ */
 
-fn b58_decode32(text: &str) -> [u8; 32] {
+pub fn b58_decode32(text: &str) -> [u8; 32] {
     let mut out = [0_u8; 32];
     for character in text.bytes() {
         let value = B58
@@ -391,7 +391,7 @@ fn b58_decode32(text: &str) -> [u8; 32] {
 /// harness encodes is decoded straight back and required to be the same
 /// thirty-two bytes, so a carry bug here is a panic rather than a genesis
 /// account installed at the wrong address.
-fn base58_of(bytes: &[u8; 32]) -> String {
+pub fn base58_of(bytes: &[u8; 32]) -> String {
     let mut digits: Vec<u8> = Vec::with_capacity(45);
     for byte in bytes {
         let mut carry = u32::from(*byte);
@@ -423,7 +423,7 @@ fn base58_of(bytes: &[u8; 32]) -> String {
     out
 }
 
-fn b64_encode(bytes: &[u8]) -> String {
+pub fn b64_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = u32::from(chunk[0]);
@@ -446,7 +446,7 @@ fn b64_encode(bytes: &[u8]) -> String {
     out
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
+pub fn hex_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         out.push_str(&format!("{byte:02x}"));
@@ -492,10 +492,10 @@ fn json_u64_field(text: &str, key: &str) -> u64 {
 
 /// One program-derived address, kept in both the forms the pipeline needs.
 #[derive(Clone, Debug)]
-struct Pda {
-    address: String,
-    bytes: [u8; 32],
-    bump: u8,
+pub struct Pda {
+    pub address: String,
+    pub bytes: [u8; 32],
+    pub bump: u8,
 }
 
 /// Derive a program address with the pinned `solana` CLI.
@@ -504,7 +504,7 @@ struct Pda {
 /// backend needed for off-chain derivation is unavailable in this host's
 /// offline crate cache.  Using the same CLI that ships with the pinned
 /// validator keeps one implementation of the derivation on the host side.
-fn derive(program_id: &str, seeds: &[Vec<u8>]) -> Pda {
+pub fn derive(program_id: &str, seeds: &[Vec<u8>]) -> Pda {
     let mut args = vec![
         "find-program-derived-address".to_string(),
         program_id.to_string(),
@@ -539,7 +539,7 @@ fn derive(program_id: &str, seeds: &[Vec<u8>]) -> Pda {
 /// Using a derived address rather than a generated keypair keeps the fixture
 /// reproducible and keeps every kind of secret out of this lane.  Seeds must
 /// stay within the 32-byte single-seed limit.
-fn fixed_address(label: &str) -> Pda {
+pub fn fixed_address(label: &str) -> Pda {
     assert!(label.len() <= 32, "seed longer than 32 bytes: {label}");
     derive(SYSTEM_PROGRAM, &[label.as_bytes().to_vec()])
 }
@@ -550,7 +550,7 @@ fn fixed_address(label: &str) -> Pda {
 /// Only the public key crosses this boundary.  The committed runner retains
 /// the ephemeral secret long enough to sign and never passes it to this plan
 /// generator.  `bump` is meaningless for a wallet identity and is never read.
-fn fixture_identity(variable: &str, fallback: &str) -> Pda {
+pub fn fixture_identity(variable: &str, fallback: &str) -> Pda {
     match std::env::var(variable) {
         Ok(address) => Pda {
             bytes: b58_decode32(&address),
@@ -660,7 +660,7 @@ fn assert_admitted_token_account(data: &[u8], policy: &token::TokenAccountPolicy
 }
 
 /// The `solana_pubkey::Pubkey` the program's admission functions take.
-fn solana_pubkey_of(bytes: [u8; 32]) -> solana_pubkey::Pubkey {
+pub fn solana_pubkey_of(bytes: [u8; 32]) -> solana_pubkey::Pubkey {
     solana_pubkey::Pubkey::new_from_array(bytes)
 }
 
@@ -669,7 +669,7 @@ fn solana_pubkey_of(bytes: [u8; 32]) -> solana_pubkey::Pubkey {
 /* ------------------------------------------------------------------------ */
 
 /// Build the reference request envelope around one frozen layout intent.
-fn layout_request(sequence: u64, intent: Intent) -> Vec<u8> {
+pub fn layout_request(sequence: u64, intent: Intent) -> Vec<u8> {
     let mut intent_bytes = [0_u8; MAX_INTENT_BYTES];
     let len = intent.encode(&mut intent_bytes).expect("intent encodes");
     let mut out = Vec::with_capacity(13 + len);
@@ -683,7 +683,7 @@ fn layout_request(sequence: u64, intent: Intent) -> Vec<u8> {
 }
 
 /// Build the reference request envelope for `Action::Resolve`.
-fn resolve_request(sequence: u64, payout_index: u8) -> Vec<u8> {
+pub fn resolve_request(sequence: u64, payout_index: u8) -> Vec<u8> {
     let mut out = Vec::with_capacity(12);
     out.push(REQUEST_TAG);
     out.push(REFERENCE_VERSION);
@@ -694,7 +694,7 @@ fn resolve_request(sequence: u64, payout_index: u8) -> Vec<u8> {
 }
 
 /// Build the reference request envelope for `Action::RedeemInternal`.
-fn redeem_request(sequence: u64, outcome: u8, quantity: u64) -> Vec<u8> {
+pub fn redeem_request(sequence: u64, outcome: u8, quantity: u64) -> Vec<u8> {
     let mut out = Vec::with_capacity(20);
     out.push(REQUEST_TAG);
     out.push(REFERENCE_VERSION);
@@ -706,7 +706,7 @@ fn redeem_request(sequence: u64, outcome: u8, quantity: u64) -> Vec<u8> {
 }
 
 /// Build the canonical sequence-zero bearer redemption envelope.
-fn redeem_external_request(shared: &Shared, plane: &Plane, quantity: u64) -> Vec<u8> {
+pub fn redeem_external_request(shared: &Shared, plane: &Plane, quantity: u64) -> Vec<u8> {
     layout_request(
         0,
         Intent::RedeemExternal {
@@ -798,7 +798,7 @@ fn encode_feed_page(feed: Hash32, start: u64, end: u64, records: &[Record]) -> V
 /* Transaction assembly                                                      */
 /* ------------------------------------------------------------------------ */
 
-fn compact_u16(value: usize, out: &mut Vec<u8>) {
+pub fn compact_u16(value: usize, out: &mut Vec<u8>) {
     let mut remaining = value;
     loop {
         let mut byte = (remaining & 0x7f) as u8;
@@ -821,11 +821,11 @@ fn compact_u16(value: usize, out: &mut Vec<u8>) {
 /// instruction account list needs.  Computing those indices by hand is how an
 /// account list silently points at the wrong account, so it is not done here.
 #[derive(Clone, Debug)]
-struct Message {
-    keys: Vec<[u8; 32]>,
-    required_signatures: u8,
-    readonly_signed: u8,
-    readonly_unsigned: u8,
+pub struct Message {
+    pub keys: Vec<[u8; 32]>,
+    pub required_signatures: u8,
+    pub readonly_signed: u8,
+    pub readonly_unsigned: u8,
 }
 
 impl Message {
@@ -868,14 +868,14 @@ impl Message {
 
 /// One instruction: a program index plus already-resolved account indices.
 #[derive(Clone, Debug)]
-struct Instruction {
-    program_index: u8,
-    accounts: Vec<u8>,
-    data: Vec<u8>,
+pub struct Instruction {
+    pub program_index: u8,
+    pub accounts: Vec<u8>,
+    pub data: Vec<u8>,
 }
 
 /// One `SetComputeUnitLimit` instruction, for a family the default cannot run.
-fn budget_instruction(message: &Message, budget: &[u8; 32], units: u32) -> Instruction {
+pub fn budget_instruction(message: &Message, budget: &[u8; 32], units: u32) -> Instruction {
     let mut data = Vec::with_capacity(5);
     data.push(SET_COMPUTE_UNIT_LIMIT);
     data.extend_from_slice(&units.to_le_bytes());
@@ -893,7 +893,7 @@ fn budget_instruction(message: &Message, budget: &[u8; 32], units: u32) -> Instr
 /// instructions without authenticating the signature bytes.  The `is_signer`
 /// bits the program sees still come from the message header, which is the fact
 /// under test.
-fn transaction(message: &Message, instructions: &[Instruction]) -> Vec<u8> {
+pub fn transaction(message: &Message, instructions: &[Instruction]) -> Vec<u8> {
     let mut out = Vec::new();
     compact_u16(usize::from(message.required_signatures), &mut out);
     for _ in 0..message.required_signatures {
@@ -930,7 +930,7 @@ fn transaction(message: &Message, instructions: &[Instruction]) -> Vec<u8> {
 /// `CreateAccount`; Token-2022 `InitializeAccount3` then binds the resulting
 /// account to the requested mint and bearer authority in the same atomic
 /// transaction.
-fn create_holder_token_transaction(
+pub fn create_holder_token_transaction(
     shared: &Shared,
     mint: &[u8; 32],
     holder: &[u8; 32],
@@ -973,7 +973,7 @@ fn create_holder_token_transaction(
 /// sign a Token-2022 transfer, which is why this transaction needs only the
 /// payer and the original actor even though the next committed step is driven
 /// by the new holder.
-fn transfer_outcome_transaction(
+pub fn transfer_outcome_transaction(
     shared: &Shared,
     source: &[u8; 32],
     mint: &[u8; 32],
@@ -1000,7 +1000,7 @@ fn transfer_outcome_transaction(
 
 /// Fund the fee payer's freshly created collateral account from the founding
 /// actor through an ordinary Token-2022 transfer.
-fn transfer_second_owner_collateral_transaction(shared: &Shared, quantity: u64) -> Vec<u8> {
+pub fn transfer_second_owner_collateral_transaction(shared: &Shared, quantity: u64) -> Vec<u8> {
     let message = Message::new(
         &[shared.payer.bytes],
         &[shared.actor.bytes],
@@ -1029,7 +1029,7 @@ fn transfer_second_owner_collateral_transaction(shared: &Shared, quantity: u64) 
 
 /// Burn a bearer Egg and pay its resolved collateral value directly to the
 /// independent claimant, without a Position or Replay account.
-fn redeem_external_transaction(
+pub fn redeem_external_transaction(
     shared: &Shared,
     plane: &Plane,
     outcome: u8,
@@ -1158,68 +1158,68 @@ fn payout_vector_bytes() -> [PayoutVectorBytes; MAX_PAYOUTS] {
 /// serve every market here, because none of those four codecs binds a market
 /// identity: `TermsAccount::binds_market` compares realm, profile, feed, and
 /// outcome count, and this plan varies only the market nonce.
-struct Shared {
-    program: Pda,
-    compute_budget: [u8; 32],
-    payer: Pda,
-    actor: Pda,
+pub struct Shared {
+    pub program: Pda,
+    pub compute_budget: [u8; 32],
+    pub payer: Pda,
+    pub actor: Pda,
     /// Fresh ordinary Token-2022 account identity for the actor's materialized
     /// winning Egg in the committed-bank walk.
-    actor_outcome_token: Pda,
+    pub actor_outcome_token: Pda,
     /// Fresh ordinary collateral account identity for the fee payer acting as
     /// a second market participant in the committed-bank walk.
-    payer_collateral_token: Pda,
+    pub payer_collateral_token: Pda,
     /// Independent bearer claimant used only by the committed-bank walk.
-    holder: Pda,
+    pub holder: Pda,
     /// Fresh ordinary account identity used to construct that claimant's
     /// Token-2022 outcome account through public System + Token instructions.
-    holder_outcome_token: Pda,
+    pub holder_outcome_token: Pda,
     /// Fresh ordinary account identity for that claim holder's collateral
     /// destination, created through the same public System + Token path.
-    holder_collateral_token: Pda,
-    stranger: Pda,
-    imposter: Pda,
-    realm_hash: Hash32,
-    profile_hash: Hash32,
-    feed: FeedId,
-    advance_feed: FeedId,
-    realm: Pda,
-    profile: Pda,
-    grid: Pda,
-    terms: Pda,
-    feed_head: Pda,
+    pub holder_collateral_token: Pda,
+    pub stranger: Pda,
+    pub imposter: Pda,
+    pub realm_hash: Hash32,
+    pub profile_hash: Hash32,
+    pub feed: FeedId,
+    pub advance_feed: FeedId,
+    pub realm: Pda,
+    pub profile: Pda,
+    pub grid: Pda,
+    pub terms: Pda,
+    pub feed_head: Pda,
     /// Canonical local-fixture SourceSpec account used by Resolve.
-    source_spec: Pda,
+    pub source_spec: Pda,
     /// Canonical sealed local-fixture SourceArchive account used by Resolve.
-    source_archive: Pda,
+    pub source_archive: Pda,
     /// Canonical identity of the immutable settlement window.
-    window_id: Hash32,
-    advance_feed_head: Pda,
-    terms_digest: Hash32,
-    terms_account: TermsAccount,
-    realm_bytes: [u8; account_len::REALM],
-    profile_bytes: [u8; account_len::PROFILE],
-    grid_bytes: [u8; account_len::PRICE_GRID],
-    terms_bytes: [u8; account_len::TERMS],
-    policy_bytes: [u8; collateral::COLLATERAL_POLICY_BYTES],
-    feed_bytes: [u8; account_len::FEED],
-    source_spec_bytes: Vec<u8>,
-    source_archive_bytes: Vec<u8>,
-    advance_feed_bytes: [u8; account_len::FEED],
+    pub window_id: Hash32,
+    pub advance_feed_head: Pda,
+    pub terms_digest: Hash32,
+    pub terms_account: TermsAccount,
+    pub realm_bytes: [u8; account_len::REALM],
+    pub profile_bytes: [u8; account_len::PROFILE],
+    pub grid_bytes: [u8; account_len::PRICE_GRID],
+    pub terms_bytes: [u8; account_len::TERMS],
+    pub policy_bytes: [u8; collateral::COLLATERAL_POLICY_BYTES],
+    pub feed_bytes: [u8; account_len::FEED],
+    pub source_spec_bytes: Vec<u8>,
+    pub source_archive_bytes: Vec<u8>,
+    pub advance_feed_bytes: [u8; account_len::FEED],
     /// The decoded Realm collateral policy every token leg reads.
-    policy: collateral::CollateralPolicy,
+    pub policy: collateral::CollateralPolicy,
     /// The account the 266 policy bytes are presented from.
     ///
     /// Deliberately **not** derived: the policy is content-authenticated by
     /// recomputed digest against the Profile, so binding its address would
     /// suggest the address is what makes it the Realm's policy.
-    policy_account: Pda,
+    pub policy_account: Pda,
     /// The Token-2022 collateral mint the policy names.
-    collateral_mint: Pda,
-    collateral_mint_bytes: Vec<u8>,
+    pub collateral_mint: Pda,
+    pub collateral_mint_bytes: Vec<u8>,
     /// The actor's own Token-2022 collateral account, shared by every plane.
-    actor_token: Pda,
-    actor_token_bytes: Vec<u8>,
+    pub actor_token: Pda,
+    pub actor_token_bytes: Vec<u8>,
     /// The stranger's own collateral account.
     ///
     /// It exists so that the two "a different authenticated signer" refusals
@@ -1228,14 +1228,14 @@ struct Shared {
     /// `TokenAccountNotAdmitted` for owning the wrong token account, which is
     /// a true refusal about a different question.  Both questions are asked
     /// here, one case each.
-    stranger_token: Pda,
-    stranger_token_bytes: Vec<u8>,
+    pub stranger_token: Pda,
+    pub stranger_token_bytes: Vec<u8>,
     /// The pinned Token-2022 program's address.
-    token_program: [u8; 32],
+    pub token_program: [u8; 32],
     /// The System program's address.
-    system_program: [u8; 32],
+    pub system_program: [u8; 32],
     /// The Rent sysvar's address.
-    rent_sysvar: [u8; 32],
+    pub rent_sysvar: [u8; 32],
 }
 
 /// The Realm's frozen collateral policy: a real, decodable 266-byte policy
@@ -1321,7 +1321,7 @@ fn harness_source_record(bucket: u64, sequence: u64, slot: u64) -> [u8; SOURCE_R
     out
 }
 
-fn build_shared() -> Shared {
+pub fn build_shared() -> Shared {
     let program = fixed_address("clutch-sbf/bringup/program/v1");
     let payer = fixture_identity("CLUTCH_COMMITTED_PAYER", "clutch-sbf/bringup/payer/v1");
     let actor = fixture_identity("CLUTCH_COMMITTED_ACTOR", "clutch-sbf/bringup/actor/v1");
@@ -1725,33 +1725,33 @@ fn build_shared() -> Shared {
 /* ------------------------------------------------------------------------ */
 
 /// Every account of one market, plus the state bytes its genesis carries.
-struct Plane {
-    label: &'static str,
-    market_id: Hash32,
-    owner: Hash32,
-    generation: u64,
-    market: Pda,
-    hoard: Pda,
-    position: Pda,
-    kernel: Pda,
-    external: Pda,
-    replay: Pda,
-    supply: Pda,
-    resolution: Pda,
+pub struct Plane {
+    pub label: &'static str,
+    pub market_id: Hash32,
+    pub owner: Hash32,
+    pub generation: u64,
+    pub market: Pda,
+    pub hoard: Pda,
+    pub position: Pda,
+    pub kernel: Pda,
+    pub external: Pda,
+    pub replay: Pda,
+    pub supply: Pda,
+    pub resolution: Pda,
     /// The Hoard's signing authority; holds no data and is never written.
-    hoard_authority: Pda,
+    pub hoard_authority: Pda,
     /// The Hoard's Token-2022 collateral account.
-    hoard_token: Pda,
+    pub hoard_token: Pda,
     /// One outcome mint per active outcome, in index order.
-    outcome_mints: Vec<Pda>,
+    pub outcome_mints: Vec<Pda>,
     /// The actor's own Token-2022 account for each outcome mint.
     ///
     /// Not derived and not required to be: `TokenAccountPolicy::holder`
     /// authenticates a holder account by mint and owner authority and
     /// deliberately does not require an associated token account.
-    holder_tokens: Vec<Pda>,
-    state: TransitionOutput,
-    resolution_bytes: [u8; account_len::RESOLUTION],
+    pub holder_tokens: Vec<Pda>,
+    pub state: TransitionOutput,
+    pub resolution_bytes: [u8; account_len::RESOLUTION],
 }
 
 fn state_bytes(state: &TransitionOutput) -> StateBytes<'_> {
@@ -2341,17 +2341,17 @@ fn output_slice<'a>(output: &'a TransitionOutput, role: &str) -> &'a [u8] {
 /// bound, canonically addressed plane instead of inventing one.  Every identity
 /// binding the layout crate can decide is asserted while they are built; no
 /// economic coherence is claimed and none should be read in.
-struct Batch {
-    epoch: Pda,
-    page: Pda,
-    candidate: Pda,
-    pot: Pda,
-    receipt: Pda,
-    epoch_bytes: [u8; account_len::EPOCH],
-    page_bytes: [u8; account_len::ORDER_PAGE],
-    candidate_bytes: [u8; account_len::CANDIDATE],
-    pot_bytes: [u8; account_len::FINAL_POT],
-    receipt_bytes: [u8; account_len::SETTLEMENT_RECEIPT],
+pub struct Batch {
+    pub epoch: Pda,
+    pub page: Pda,
+    pub candidate: Pda,
+    pub pot: Pda,
+    pub receipt: Pda,
+    pub epoch_bytes: [u8; account_len::EPOCH],
+    pub page_bytes: [u8; account_len::ORDER_PAGE],
+    pub candidate_bytes: [u8; account_len::CANDIDATE],
+    pub pot_bytes: [u8; account_len::FINAL_POT],
+    pub receipt_bytes: [u8; account_len::SETTLEMENT_RECEIPT],
 }
 
 fn build_batch(shared: &Shared, plane: &Plane) -> Batch {
@@ -2590,7 +2590,7 @@ fn build_batch(shared: &Shared, plane: &Plane) -> Batch {
     }
 }
 
-fn grid_of(shared: &Shared) -> PriceGridAccount {
+pub fn grid_of(shared: &Shared) -> PriceGridAccount {
     PriceGridAccount::decode(&shared.grid_bytes).expect("the fixture grid decodes")
 }
 
@@ -2599,17 +2599,17 @@ fn grid_of(shared: &Shared) -> PriceGridAccount {
 /* ------------------------------------------------------------------------ */
 
 /// One genesis account dump.
-struct Genesis {
-    role: String,
-    address: String,
+pub struct Genesis {
+    pub role: String,
+    pub address: String,
     /// Base58 address of the program that owns the account.
     ///
     /// Not a constant any more: this plan installs Token-2022 mints and token
     /// accounts, which the token program must own for
     /// `token::check_mint`/`check_token_account` to admit them, and one
     /// System-owned account holding the creator's lamports.
-    owner: String,
-    data: Vec<u8>,
+    pub owner: String,
+    pub data: Vec<u8>,
 }
 
 /// One expected u64 whose value is a committed transaction's actual slot.
@@ -2621,46 +2621,46 @@ struct Genesis {
 /// of the expected image with `slot(base_step) + delta` — a value it observed
 /// from the bank — and every other byte stays an exact precomputed
 /// expectation.
-struct SlotPatch {
+pub struct SlotPatch {
     /// Byte offset of the little-endian u64 inside the expected image.
-    offset: usize,
+    pub offset: usize,
     /// Name of the committed step whose confirmation slot is the base.  A
     /// step may name itself; the patch is applied after its own confirmation.
-    base: String,
+    pub base: String,
     /// Added to the base slot (`CANDIDATE_WINDOW_SLOTS` for the selection
     /// deadline, zero for a stamped slot itself).
-    delta: u64,
+    pub delta: u64,
 }
 
 /// One writable account the SVM must return byte-identical to the oracle.
-struct Compare {
-    role: String,
-    address: String,
-    expected: Vec<u8>,
-    pre: Vec<u8>,
+pub struct Compare {
+    pub role: String,
+    pub address: String,
+    pub expected: Vec<u8>,
+    pub pre: Vec<u8>,
 }
 
 /// One transaction in the plan.
-struct Case {
-    name: String,
-    family: &'static str,
-    oracle: &'static str,
-    note: String,
-    tx: Vec<u8>,
-    instruction_count: usize,
+pub struct Case {
+    pub name: String,
+    pub family: &'static str,
+    pub oracle: &'static str,
+    pub note: String,
+    pub tx: Vec<u8>,
+    pub instruction_count: usize,
     /// Writable post-state witnesses. Most refusal cases need no returned
     /// accounts; a refusal at a value boundary may carry these same rows as
     /// explicit rollback witnesses.
-    compare: Option<Vec<Compare>>,
+    pub compare: Option<Vec<Compare>>,
     /// Roles that must come back byte-identical to the genesis pre-state.
-    identical_to_pre: Vec<String>,
+    pub identical_to_pre: Vec<String>,
     /// Expected `ProgramError::Custom` code, for a refusal case.
-    expect_code: Option<u32>,
+    pub expect_code: Option<u32>,
     /// The offline reference adapter's own refusal for the same situation.
-    reference: String,
+    pub reference: String,
     /// Compute-unit limit this transaction asks the runtime for, when the
     /// 200 000-unit default is not enough.
-    compute_limit: Option<u32>,
+    pub compute_limit: Option<u32>,
     /// This transaction exhausts the runtime's per-transaction compute ceiling
     /// before the program reaches a decision.
     ///
@@ -2670,15 +2670,15 @@ struct Case {
     /// the exhaustion, so a program that became cheap enough to finish turns
     /// this red and the evidence in `SBF_BRINGUP.md` has to be re-written
     /// rather than quietly left wrong.
-    exhausted: bool,
+    pub exhausted: bool,
     /// Absolute slot the committed runner must reach before submitting this
     /// transaction (a deadline the plan itself chose, e.g. the epoch freeze).
-    wait_slot: Option<u64>,
+    pub wait_slot: Option<u64>,
     /// Relative wait: the runner must reach `slot(step) + delta` before
     /// submitting (the candidate window's length after the actual freeze).
-    wait_after: Option<(String, u64)>,
+    pub wait_after: Option<(String, u64)>,
     /// Slot-valued expected fields, per compare role; see [`SlotPatch`].
-    slot_patches: Vec<(String, SlotPatch)>,
+    pub slot_patches: Vec<(String, SlotPatch)>,
 }
 
 impl Case {
@@ -2745,13 +2745,13 @@ impl Case {
 
 /// Everything the plan writer needs, accumulated as the fixture is built.
 #[derive(Default)]
-struct Plan {
-    genesis: Vec<Genesis>,
-    cases: Vec<Case>,
+pub struct Plan {
+    pub genesis: Vec<Genesis>,
+    pub cases: Vec<Case>,
     /// Base58 address of this program, the default genesis owner.
-    program: String,
+    pub program: String,
     /// Base58 address of the Token-2022 program.
-    token_program: String,
+    pub token_program: String,
 }
 
 impl Plan {
@@ -2936,13 +2936,13 @@ fn seam_compares(
 /// exactly what a hostile caller would try, and
 /// [`Signer::presenting`] is how this plan drives that attempt.
 #[derive(Clone, Copy, Debug)]
-struct Signer<'a> {
+pub struct Signer<'a> {
     /// The address at the actor role.
-    key: [u8; 32],
+    pub key: [u8; 32],
     /// Whether the message header authenticates it.
-    signs: bool,
+    pub signs: bool,
     /// The collateral token account this transaction presents.
-    collateral: &'a Pda,
+    pub collateral: &'a Pda,
 }
 
 impl<'a> Signer<'a> {
@@ -2976,7 +2976,7 @@ impl<'a> Signer<'a> {
 /// which plane it is building, and the assertion in [`Leg::account_count`] pins
 /// it to the program's own constants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Leg {
+pub enum Leg {
     /// `Split` and `Merge`: collateral moves between the actor and the Hoard.
     Collateral,
     /// `Materialize` and `Dematerialize`: one outcome token is minted or burned.
@@ -3002,7 +3002,7 @@ impl Leg {
 }
 
 /// The token accounts one seam leg appends, in the program's list order.
-fn seam_leg_accounts(
+pub fn seam_leg_accounts(
     shared: &Shared,
     plane: &Plane,
     signer: Signer<'_>,
@@ -3033,7 +3033,7 @@ fn seam_leg_accounts(
 }
 
 /// Build the seam plane's instruction against a message.
-fn seam_instruction(
+pub fn seam_instruction(
     message: &Message,
     shared: &Shared,
     plane: &Plane,
@@ -3076,7 +3076,7 @@ fn seam_instruction(
 /// token program is read-only.  The program checks every one of those bits
 /// (`NotWritable`, `UnexpectedWritable`), so the message header is part of what
 /// is under test rather than plumbing.
-fn seam_message(
+pub fn seam_message(
     shared: &Shared,
     plane: &Plane,
     signer: Signer<'_>,
@@ -3137,7 +3137,7 @@ fn seam_message(
 /// `TransferChecked` CPI, which does not fit the runtime's 200 000-unit
 /// default.  A real caller raises the limit the same way; the raised number is
 /// itself the measurement, recorded in `docs/implementation/SBF_BRINGUP.md`.
-fn seam_transaction(
+pub fn seam_transaction(
     shared: &Shared,
     plane: &Plane,
     signer: Signer<'_>,
@@ -3164,7 +3164,7 @@ fn seam_transaction(
 /// immutable Terms plus the persisted Resolution record: the `buffer`
 /// argument is Resolve-only and is deliberately absent from its account list.
 #[allow(clippy::too_many_arguments)]
-fn gate_transaction(
+pub fn gate_transaction(
     shared: &Shared,
     plane: &Plane,
     buffer: Option<&Pda>,
@@ -3297,7 +3297,7 @@ fn gate_transaction(
 /// The second instruction observes the first instruction's committed-bank
 /// writes inside the same transaction. Acceptance therefore proves runtime
 /// idempotence, not two simulations against the same pre-state.
-fn paired_resolve_transaction(
+pub fn paired_resolve_transaction(
     shared: &Shared,
     plane: &Plane,
     buffer: &Pda,
@@ -3375,11 +3375,11 @@ fn paired_resolve_transaction(
 /// into pooled custody. Canonical Terms and SourceSpec are trailing read-only
 /// release evidence; every historical role keeps its index. The owner is a
 /// writable signer because it funds that owner plane when absent.
-fn endow_transaction(shared: &Shared, plane: &Plane, signer: Signer<'_>, data: Vec<u8>) -> Vec<u8> {
+pub fn endow_transaction(shared: &Shared, plane: &Plane, signer: Signer<'_>, data: Vec<u8>) -> Vec<u8> {
     endow_transaction_at(shared, plane, &plane.position, &plane.replay, signer, data)
 }
 
-fn endow_transaction_at(
+pub fn endow_transaction_at(
     shared: &Shared,
     plane: &Plane,
     position: &Pda,
@@ -3455,11 +3455,11 @@ fn endow_transaction_at(
 }
 
 /// The `Endow` intent one credit carries.
-fn endow_request(plane: &Plane, sequence: u64, amount: u64) -> Vec<u8> {
+pub fn endow_request(plane: &Plane, sequence: u64, amount: u64) -> Vec<u8> {
     endow_request_for(plane, plane.owner, sequence, amount)
 }
 
-fn endow_request_for(plane: &Plane, owner: Hash32, sequence: u64, amount: u64) -> Vec<u8> {
+pub fn endow_request_for(plane: &Plane, owner: Hash32, sequence: u64, amount: u64) -> Vec<u8> {
     layout_request(
         sequence,
         Intent::Endow {
@@ -3475,7 +3475,7 @@ fn endow_request_for(plane: &Plane, owner: Hash32, sequence: u64, amount: u64) -
 /// The account plane is intentionally the production `cash_exit` plane rather
 /// than the wider historical seam plane: no kernel, SupplyLedger, resolution,
 /// or outcome mint participates in moving already-free cash.
-fn withdraw_cash_transaction(
+pub fn withdraw_cash_transaction(
     shared: &Shared,
     plane: &Plane,
     position: &Pda,
@@ -3539,7 +3539,7 @@ fn withdraw_cash_transaction(
     )
 }
 
-fn withdraw_cash_request(
+pub fn withdraw_cash_request(
     plane: &Plane,
     owner: [u8; 32],
     destination: [u8; 32],
@@ -3557,7 +3557,7 @@ fn withdraw_cash_request(
     )
 }
 
-fn owner_plane(shared: &Shared, plane: &Plane, owner: [u8; 32]) -> (Pda, Pda) {
+pub fn owner_plane(shared: &Shared, plane: &Plane, owner: [u8; 32]) -> (Pda, Pda) {
     let pid = shared.program.address.clone();
     let market = plane.market_id.bytes().to_vec();
     let owner = owner.to_vec();
@@ -3676,7 +3676,7 @@ fn endow_compares(shared: &Shared, plane: &Plane, amount: u64) -> Vec<Compare> {
 }
 
 /// The message and instruction of one `FeedAdvance` transaction.
-fn advance_transaction(
+pub fn advance_transaction(
     shared: &Shared,
     buffer: &Pda,
     actor: [u8; 32],
@@ -3723,7 +3723,7 @@ fn advance_transaction(
 /// 3. **the System program and the Rent sysvar are in the list**, because the
 ///    creation CPI needs the first and the rent-exempt minimum is read off the
 ///    second rather than pinned as a constant.
-fn create_transaction(
+pub fn create_transaction(
     shared: &Shared,
     plane: &Plane,
     creator: [u8; 32],
@@ -3808,28 +3808,28 @@ fn create_transaction(
 /* ------------------------------------------------------------------------ */
 
 /// Everything the plan needs, built once.
-struct Fixture {
-    shared: Shared,
-    seam: Plane,
-    held: Plane,
-    shadow: Plane,
-    redeem: Plane,
-    create: Plane,
-    batch: Batch,
-    resolve_buffer: Pda,
-    resolve_buffer_bytes: Vec<u8>,
-    page_buffer: Pda,
-    page_buffer_bytes: Vec<u8>,
+pub struct Fixture {
+    pub shared: Shared,
+    pub seam: Plane,
+    pub held: Plane,
+    pub shadow: Plane,
+    pub redeem: Plane,
+    pub create: Plane,
+    pub batch: Batch,
+    pub resolve_buffer: Pda,
+    pub resolve_buffer_bytes: Vec<u8>,
+    pub page_buffer: Pda,
+    pub page_buffer_bytes: Vec<u8>,
     /// The `FeedAdvance` post-state, folded by the accumulator here.
-    advanced_feed_bytes: [u8; account_len::FEED],
+    pub advanced_feed_bytes: [u8; account_len::FEED],
     /// The eight founding account images `CreateMarket` must write.
-    created: TransitionOutput,
-    created_resolution: [u8; account_len::RESOLUTION],
+    pub created: TransitionOutput,
+    pub created_resolution: [u8; account_len::RESOLUTION],
     /// The lifecycle walk: one market, one ordered narrative, one gate.
-    walk: Walk,
+    pub walk: Walk,
 }
 
-fn build_fixture() -> Fixture {
+pub fn build_fixture() -> Fixture {
     let shared = build_shared();
 
     /* The seam market: an empty, active market at replay sequence zero. */
@@ -3990,7 +3990,7 @@ fn fold_feed_page(shared: &Shared, records: &[Record]) -> [u8; account_len::FEED
 /// resolution record.  It is then required to satisfy the reference adapter's
 /// own `validate_market_init`, which is what makes it an oracle rather than a
 /// restatement.
-fn founding_plane(
+pub fn founding_plane(
     shared: &Shared,
     plane: &Plane,
     nonce: u64,
@@ -4120,7 +4120,7 @@ fn founding_plane(
 }
 
 /// The frozen `CreateMarket` intent bytes for one market nonce.
-fn create_intent(shared: &Shared, nonce: u64) -> Intent {
+pub fn create_intent(shared: &Shared, nonce: u64) -> Intent {
     Intent::CreateMarket {
         realm: shared.realm_hash,
         profile: shared.profile_hash,
@@ -4132,7 +4132,7 @@ fn create_intent(shared: &Shared, nonce: u64) -> Intent {
 }
 
 /// The bare frozen intent encoding `validate_market_init` reads.
-fn create_intent_bytes(shared: &Shared, nonce: u64) -> Vec<u8> {
+pub fn create_intent_bytes(shared: &Shared, nonce: u64) -> Vec<u8> {
     let mut bytes = [0_u8; MAX_INTENT_BYTES];
     let len = create_intent(shared, nonce)
         .encode(&mut bytes)
@@ -4160,7 +4160,7 @@ fn shared_class_code(error: clutch_solana_reference::Error) -> u32 {
     clutch_sbf::error::reference_code(error)
 }
 
-fn build_cases(f: &Fixture) -> Vec<Case> {
+pub fn build_cases(f: &Fixture) -> Vec<Case> {
     let shared = &f.shared;
     let actor = shared.actor.bytes;
     let mut cases = Vec::new();
@@ -5192,19 +5192,19 @@ const WALK_PAGE_BOUNDS: [(u64, u64); 3] = [
 const WALK_PAGE_EVIDENCE: [u8; 3] = [0x71, 0x72, 0x73];
 
 /// One step of the walk as it is reported.
-struct WalkStep {
-    ordinal: u32,
-    case: String,
-    title: String,
-    project_item: &'static str,
-    narrative: String,
+pub struct WalkStep {
+    pub ordinal: u32,
+    pub case: String,
+    pub title: String,
+    pub project_item: &'static str,
+    pub narrative: String,
 }
 
 /// One PROJECT.md section-10 item the walk cannot drive, and why.
-struct WalkSkip {
-    project_item: &'static str,
-    title: &'static str,
-    reason: String,
+pub struct WalkSkip {
+    pub project_item: &'static str,
+    pub title: &'static str,
+    pub reason: String,
 }
 
 /// One scalar the terminal accounting identity reads out of on-chain bytes.
@@ -5243,25 +5243,25 @@ struct Lifecycle {
 }
 
 /// Every plane and buffer the walk needs.
-struct Walk {
-    found: Plane,
-    open: Plane,
-    endowed: Plane,
-    split: Plane,
-    materialized: Plane,
-    dematerialized: Plane,
-    merged: Plane,
-    resolved: Plane,
-    redeemed: Plane,
+pub struct Walk {
+    pub found: Plane,
+    pub open: Plane,
+    pub endowed: Plane,
+    pub split: Plane,
+    pub materialized: Plane,
+    pub dematerialized: Plane,
+    pub merged: Plane,
+    pub resolved: Plane,
+    pub redeemed: Plane,
     /// `CreateMarket`'s own post-state for the founding plane.
-    founded: TransitionOutput,
-    founded_resolution: [u8; account_len::RESOLUTION],
-    pages: Vec<Pda>,
-    page_bytes: Vec<Vec<u8>>,
+    pub founded: TransitionOutput,
+    pub founded_resolution: [u8; account_len::RESOLUTION],
+    pub pages: Vec<Pda>,
+    pub page_bytes: Vec<Vec<u8>>,
     /// The feed head after all three advances, folded by the accumulator.
-    advanced_feed_bytes: [u8; account_len::FEED],
+    pub advanced_feed_bytes: [u8; account_len::FEED],
     /// The reference post-state after the last step of the walk.
-    terminal: TransitionOutput,
+    pub terminal: TransitionOutput,
 }
 
 impl Walk {
@@ -5474,7 +5474,7 @@ fn walk_page_bytes(shared: &Shared, index: usize) -> Vec<u8> {
 /// sequences them, so the second page is read against the first page's writes
 /// and the third against the second's.  A chain the harness sequenced would
 /// prove nothing about ordering; this one does.
-fn walk_advance_transaction(shared: &Shared, walk: &Walk, actor: [u8; 32]) -> Vec<u8> {
+pub fn walk_advance_transaction(shared: &Shared, walk: &Walk, actor: [u8; 32]) -> Vec<u8> {
     let writable = [shared.advance_feed_head.bytes];
     let mut readonly: Vec<[u8; 32]> = walk.pages.iter().map(|page| page.bytes).collect();
     readonly.push(shared.program.bytes);
@@ -6878,7 +6878,7 @@ fn withdraw_cash_compares(
 /// offline transition and emits the next transaction against the same keys.
 /// The local runner supplies a fresh blockhash and real signatures, commits
 /// each transaction, and reloads these expectations in order.
-fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
+pub fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
     let shared = &f.shared;
     let actor = shared.actor.bytes;
     let mut cases = Vec::new();
@@ -7519,27 +7519,27 @@ fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {
 /* ------------------------------------------------------------------------ */
 
 /// A market identity reserved for the signed general-clearing lane.
-const NONCE_GENERAL: u64 = 31;
+pub const NONCE_GENERAL: u64 = 31;
 /// The general epoch's index within its market.
-const GENERAL_EPOCH_INDEX: u64 = 1;
+pub const GENERAL_EPOCH_INDEX: u64 = 1;
 /// Default freeze deadline, in absolute validator slots.
 ///
 /// The plan's one timing choice: `InitEpoch` must land strictly before it and
 /// `FreezeEpoch` at or after it, so the committed runner waits on the real
 /// clock.  Override with `CLUTCH_GENERAL_FREEZE_DEADLINE` when a slower host
 /// needs more room before the deadline.
-const GENERAL_FREEZE_DEADLINE_DEFAULT: u64 = 800;
+pub const GENERAL_FREEZE_DEADLINE_DEFAULT: u64 = 800;
 /// Expiry slot of the policy-artifact upload.
 ///
 /// Absolute, because the plan is pregenerated; inside the program's admitted
 /// lifetime window (`8..=432_000` slots ahead of the begin's clock) for any
 /// begin executed before slot ~368,000, which every fresh-ledger run is.
-const GENERAL_ARTIFACT_EXPIRES_SLOT: u64 = 400_000;
+pub const GENERAL_ARTIFACT_EXPIRES_SLOT: u64 = 400_000;
 /// `ComputeBudgetInstruction::RequestHeapFrame` discriminator.
-const REQUEST_HEAP_FRAME: u8 = 1;
+pub const REQUEST_HEAP_FRAME: u8 = 1;
 /// The heap frame every clearing-walk transaction requests: the program boxes
 /// the ~48.7 KiB `ClearWorkV1` onto it.
-const HEAP_FRAME_BYTES: u32 = 262_144;
+pub const HEAP_FRAME_BYTES: u32 = 262_144;
 /// The two exact scaled prices of the one submitted candidate.
 ///
 /// They sum to the frozen price scale, price outcome 0 below both buy limits
@@ -7558,7 +7558,7 @@ const GENERAL_SPLIT_D: u64 = 6;
 
 /// The freeze deadline this plan bakes into `InitEpoch` and the runner waits
 /// for.
-fn general_freeze_deadline() -> u64 {
+pub fn general_freeze_deadline() -> u64 {
     match std::env::var("CLUTCH_GENERAL_FREEZE_DEADLINE") {
         Ok(text) => text
             .parse()
@@ -7568,7 +7568,7 @@ fn general_freeze_deadline() -> u64 {
 }
 
 /// One `RequestHeapFrame` instruction, for the clearing walk's boxed body.
-fn heap_frame_instruction(message: &Message, budget: &[u8; 32], bytes: u32) -> Instruction {
+pub fn heap_frame_instruction(message: &Message, budget: &[u8; 32], bytes: u32) -> Instruction {
     let mut data = Vec::with_capacity(5);
     data.push(REQUEST_HEAP_FRAME);
     data.extend_from_slice(&bytes.to_le_bytes());
@@ -7581,21 +7581,21 @@ fn heap_frame_instruction(message: &Message, budget: &[u8; 32], bytes: u32) -> I
 
 /// One general-plane transaction: message groups, program instruction, and
 /// the compute-budget raise (plus the heap frame where the walk needs it).
-struct GeneralTx<'a> {
+pub struct GeneralTx<'a> {
     /// Writable signers after the fee payer (owners funding reservation rent).
-    writable_signers: &'a [[u8; 32]],
+    pub writable_signers: &'a [[u8; 32]],
     /// Read-only signers (an owner authorizing a cancellation).
-    readonly_signers: &'a [[u8; 32]],
-    writable: &'a [[u8; 32]],
-    readonly: &'a [[u8; 32]],
+    pub readonly_signers: &'a [[u8; 32]],
+    pub writable: &'a [[u8; 32]],
+    pub readonly: &'a [[u8; 32]],
     /// The program instruction's accounts, in the program's exact role order.
-    keys: &'a [[u8; 32]],
-    data: Vec<u8>,
+    pub keys: &'a [[u8; 32]],
+    pub data: Vec<u8>,
     /// Request the 256 KiB heap frame.
-    heap: bool,
+    pub heap: bool,
 }
 
-fn general_transaction(shared: &Shared, tx: GeneralTx<'_>) -> Vec<u8> {
+pub fn general_transaction(shared: &Shared, tx: GeneralTx<'_>) -> Vec<u8> {
     let mut writable_signers = vec![shared.payer.bytes];
     writable_signers.extend_from_slice(tx.writable_signers);
     let mut readonly = tx.readonly.to_vec();
@@ -7624,7 +7624,7 @@ fn general_transaction(shared: &Shared, tx: GeneralTx<'_>) -> Vec<u8> {
 }
 
 /// A wallet identity supplied by the committed runner, wrapped as a [`Pda`].
-fn wallet_pda(key: [u8; 32]) -> Pda {
+pub fn wallet_pda(key: [u8; 32]) -> Pda {
     Pda {
         address: base58_of(&key),
         bytes: key,
@@ -7634,14 +7634,14 @@ fn wallet_pda(key: [u8; 32]) -> Pda {
 
 /// The two extra signing traders of the general walk and their fresh ordinary
 /// collateral-account identities.
-struct GeneralActors {
-    trader_c: Pda,
-    trader_d: Pda,
-    trader_c_token: Pda,
-    trader_d_token: Pda,
+pub struct GeneralActors {
+    pub trader_c: Pda,
+    pub trader_d: Pda,
+    pub trader_c_token: Pda,
+    pub trader_d_token: Pda,
 }
 
-fn build_general_actors() -> GeneralActors {
+pub fn build_general_actors() -> GeneralActors {
     let trader_c = fixture_identity("CLUTCH_COMMITTED_TRADER_C", "clutch-sbf/general/trader-c");
     let trader_d = fixture_identity("CLUTCH_COMMITTED_TRADER_D", "clutch-sbf/general/trader-d");
     let trader_c_token = fixture_identity(
@@ -7666,15 +7666,15 @@ fn build_general_actors() -> GeneralActors {
 }
 
 /// One signing market participant of the general walk and its owner plane.
-struct GeneralOwner {
-    label: &'static str,
-    key: [u8; 32],
-    id: Hash32,
-    position: Pda,
-    replay: Pda,
-    position_bytes: Vec<u8>,
-    replay_bytes: Vec<u8>,
-    token: Pda,
+pub struct GeneralOwner {
+    pub label: &'static str,
+    pub key: [u8; 32],
+    pub id: Hash32,
+    pub position: Pda,
+    pub replay: Pda,
+    pub position_bytes: Vec<u8>,
+    pub replay_bytes: Vec<u8>,
+    pub token: Pda,
 }
 
 impl GeneralOwner {
@@ -7705,7 +7705,7 @@ impl GeneralOwner {
 
 /// A view of the shared market plane through one non-founding owner, for the
 /// offline reference adapter's owner-scoped transitions (`Split`).
-fn owner_view_plane(shared: &Shared, plane: &Plane, owner: &GeneralOwner) -> Plane {
+pub fn owner_view_plane(shared: &Shared, plane: &Plane, owner: &GeneralOwner) -> Plane {
     let mut view = Plane::clone_state(plane, &plane.state);
     view.owner = owner.id;
     view.generation = 0;
@@ -7754,7 +7754,7 @@ fn absorb_owner_transition(plane: &mut Plane, owner: &mut GeneralOwner, post: &T
 /// Locate the sole differing little-endian u64 between two equal-length
 /// account images: the probe that turns "which bytes hold this field" into a
 /// measured offset instead of a transcribed one.
-fn sole_u64_offset(base: &[u8], probe: &[u8], label: &str) -> usize {
+pub fn sole_u64_offset(base: &[u8], probe: &[u8], label: &str) -> usize {
     assert_eq!(base.len(), probe.len(), "{label}: probe images must align");
     let offset = base
         .iter()
@@ -7798,7 +7798,7 @@ fn general_custody_compare(shared: &Shared, plane: &Plane, pre: u64, post: u64) 
 
 /// Fund one trader's fresh ordinary collateral account from the founding
 /// actor through an ordinary Token-2022 transfer.
-fn transfer_collateral_to_owner_transaction(
+pub fn transfer_collateral_to_owner_transaction(
     shared: &Shared,
     destination: &Pda,
     quantity: u64,
@@ -8096,29 +8096,29 @@ fn record_submitted_slot_offset(template: &CandidateRecord) -> usize {
 }
 
 /// Everything the emitter and the runner script need beyond the cases.
-struct GeneralConservation {
-    endowed_total: u64,
-    split_total: u64,
-    position_cash_offset: usize,
-    position_reserved_offset: usize,
-    position_internal0_offset: usize,
-    position_internal1_offset: usize,
-    hoard_collateral_offset: usize,
+pub struct GeneralConservation {
+    pub endowed_total: u64,
+    pub split_total: u64,
+    pub position_cash_offset: usize,
+    pub position_reserved_offset: usize,
+    pub position_internal0_offset: usize,
+    pub position_internal1_offset: usize,
+    pub hoard_collateral_offset: usize,
     /// `(step, role)` of each owner's terminal position reload, in owner
     /// order A, B, C, D.
-    positions: Vec<(String, String)>,
+    pub positions: Vec<(String, String)>,
     /// `(step, role)` of the terminal Hoard ledger reload.
-    hoard: (String, String),
+    pub hoard: (String, String),
     /// `(step, role)` of the terminal pooled-custody token reload.
-    hoard_token: (String, String),
-    expected_cash_total: u64,
-    expected_eggs: [u64; 2],
-    expected_locked: u64,
-    expected_custody: u64,
+    pub hoard_token: (String, String),
+    pub expected_cash_total: u64,
+    pub expected_eggs: [u64; 2],
+    pub expected_locked: u64,
+    pub expected_custody: u64,
 }
 
 /// Probe the position codec for the conservation fields' offsets.
-fn position_field_offsets(market: Hash32, owner: Hash32) -> (usize, usize, usize, usize) {
+pub fn position_field_offsets(market: Hash32, owner: Hash32) -> (usize, usize, usize, usize) {
     let base_value = PositionAccount {
         market,
         owner,
@@ -8151,7 +8151,7 @@ fn position_field_offsets(market: Hash32, owner: Hash32) -> (usize, usize, usize
 }
 
 /// Probe the hoard codec for the locked-backing offset.
-fn hoard_collateral_offset(shared: &Shared, plane: &Plane) -> usize {
+pub fn hoard_collateral_offset(shared: &Shared, plane: &Plane) -> usize {
     let base_value = HoardAccount {
         market: plane.market_id,
         realm: shared.realm_hash,
@@ -8322,7 +8322,7 @@ fn general_place_case(
 /// program's own writers do; the committed runner then reloads and compares
 /// each one from the bank.
 #[allow(clippy::too_many_lines)]
-fn build_general_committed_cases(
+pub fn build_general_committed_cases(
     f: &Fixture,
     plane: &mut Plane,
     actors: &GeneralActors,
@@ -10842,7 +10842,7 @@ fn lifecycle_json(walk: &Lifecycle, cases: &[String]) -> String {
 
 /// Write every transaction and expectation of one case list, and return the
 /// JSON object each case emits into the plan.
-fn emit_cases(out_dir: &Path, cases: &[Case]) -> Vec<String> {
+pub fn emit_cases(out_dir: &Path, cases: &[Case]) -> Vec<String> {
     let mut case_json = Vec::new();
     for case in cases {
         let tx_file = format!("tx/{}.b64", case.name);
@@ -10956,7 +10956,7 @@ fn emit_cases(out_dir: &Path, cases: &[Case]) -> Vec<String> {
 }
 
 /// Emit the minimal genesis and ordered cases for the real-signature lane.
-fn emit_committed_plan(out_dir: &Path, f: &Fixture) {
+pub fn emit_committed_plan(out_dir: &Path, f: &Fixture) {
     let shared = &f.shared;
     let mut plan = Plan {
         program: shared.program.address.clone(),
@@ -11082,7 +11082,7 @@ fn emit_committed_plan(out_dir: &Path, f: &Fixture) {
 
 /// Emit the minimal genesis and ordered cases for the general-clearing
 /// real-signature lane (Tier 2, intents 47-59).
-fn emit_general_committed_plan(out_dir: &Path, f: &Fixture) {
+pub fn emit_general_committed_plan(out_dir: &Path, f: &Fixture) {
     let shared = &f.shared;
     let actors = build_general_actors();
     let mut plan = Plan {
@@ -11247,7 +11247,13 @@ fn emit_general_committed_plan(out_dir: &Path, f: &Fixture) {
     );
 }
 
-fn main() {
+/// Run the plan-emitting command line: `<out-dir> [mode]`.
+///
+/// This is the whole of what the `clutch-sbf-harness` binary does.  It lives
+/// in the library so that the emitted plan has exactly one implementation:
+/// the Operator Bench daemon calls the same fixture, the same builders, and
+/// the same emitters rather than re-deriving them.
+pub fn run_cli() {
     let mut args = std::env::args().skip(1);
     let out_dir = PathBuf::from(
         args.next()

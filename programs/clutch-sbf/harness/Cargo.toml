@@ -6,6 +6,14 @@ license.workspace = true
 publish = false
 description = "Host-side differential harness driving the bring-up SBF program under a local SVM"
 
+# The fixture, the address derivations, the per-family transaction builders,
+# and the plan emitters are a library so that a second caller -- the Operator
+# Bench daemon in `../operatord` -- drives byte-identical transactions instead
+# of reconstructing them.  The binary below is a thin argument forwarder.
+[lib]
+name = "clutch_sbf_harness"
+path = "src/lib.rs"
+
 [[bin]]
 name = "clutch-sbf-harness"
 path = "src/main.rs"
