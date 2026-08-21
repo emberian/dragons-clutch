@@ -809,9 +809,10 @@ Consequences, stated carefully:
   admission story for prices did not move with it. The clearing knows the
   basis only through PoU, so nothing in the relation distinguishes
   `M_d` from `Δ`, and no gate in front of the relation restricts a market's
-  degree either — `programs/solana-layout/src/clearing.rs` and
-  `crates/clutch-batch` contain no occurrence of `degree`. The one live
-  degree-≥2 restriction is on *evidence*, not price:
+  degree either — as of 2026-08-20 `programs/solana-layout/src/clearing.rs`
+  and `crates/clutch-batch` contained no occurrence of `degree`; the second
+  half of that stopped being true with V1b, and the first half has not. The
+  one live degree-≥2 restriction is on *evidence*, not price:
   `ResolutionRefusal::NonPointEvidence` refuses a conservative interval that
   is not a point. *(Superseded 2026-08-21 by §7.6: the exact price test
   `p/S ∈ M_d` is now derived — Theorem 7.6.5, exact integers, a per-span
