@@ -86,8 +86,7 @@ use clutch_batch_policy_identity::{
 use clutch_solana_layout::clearing::{self, canonical_general_book_id, CandidateFeedHeader};
 use clutch_solana_layout::projection::{self, OwnerInterner};
 use clutch_solana_layout::reservation::{
-    canonical_reservation_id, ReservationPlan, RESERVATION_ACCOUNT_BYTES,
-    RESERVATION_STATE_ACTIVE,
+    canonical_reservation_id, ReservationPlan, RESERVATION_ACCOUNT_BYTES, RESERVATION_STATE_ACTIVE,
 };
 use clutch_solana_layout::{
     account_len, stream, EpochAccount, Hash32, OrderSlot, EPOCH_PHASE_FROZEN,
@@ -709,9 +708,7 @@ pub const IX_COMPLETE_CANDIDATE: usize = 3;
 fn relation_slice(slice: &clearing::PairingSlice) -> clutch_batch::relation_v1::PairingSliceV1 {
     fn leg(leg: clearing::LegRef) -> clutch_batch::relation_v1::LegRefV1 {
         match leg {
-            clearing::LegRef::Order(index) => {
-                clutch_batch::relation_v1::LegRefV1::Order(index)
-            }
+            clearing::LegRef::Order(index) => clutch_batch::relation_v1::LegRefV1::Order(index),
             clearing::LegRef::Split => clutch_batch::relation_v1::LegRefV1::Split,
             clearing::LegRef::Merge => clutch_batch::relation_v1::LegRefV1::Merge,
         }
@@ -776,7 +773,8 @@ pub(super) fn advance_clear_slices(
         while pushed < max_slices && !ended {
             let index = body.slices_consumed();
             let slice = clearing::slice_at(&feed_data, &frame.feed, index)?;
-            body.push_slice(&relation_slice(&slice)).map_err(feed_fault)?;
+            body.push_slice(&relation_slice(&slice))
+                .map_err(feed_fault)?;
             pushed += 1;
             if body.slices_consumed() == declared {
                 // The pass closes itself: the cursor never rests one past the

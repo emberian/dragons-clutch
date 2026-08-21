@@ -34,8 +34,8 @@ use clutch_solana_layout::{
         PairingSlice, CANDIDATE_FEED_FLAG_SLICES_DECLARED, CLEAR_WORK_STATUS_COMPLETE,
     },
     reservation::{
-        ReservationAccount, ReservationPlan, RESERVATION_STATE_ACTIVE,
-        RESERVATION_STATE_CONSUMED, RESERVATION_STATE_ENTITLED,
+        ReservationAccount, ReservationPlan, RESERVATION_STATE_ACTIVE, RESERVATION_STATE_CONSUMED,
+        RESERVATION_STATE_ENTITLED,
     },
     stream, CandidateRecord, CodecError, EpochAccount, Hash32, OrderSlot, PositionAccount,
     PriceGridAccount, SettlementReceiptAccount, CANDIDATE_STATUS_SELECTED,
@@ -557,7 +557,10 @@ pub(super) fn prepare_entitled_slice_consumption(
     require(input.epoch.price_scale != 0, ClutchError::MismatchedState)?;
     let scale = u128::from(input.epoch.price_scale);
     require(
-        input.receipt.consideration_price_units.is_multiple_of(scale),
+        input
+            .receipt
+            .consideration_price_units
+            .is_multiple_of(scale),
         ClutchError::MismatchedState,
     )?;
     let consideration_atoms = u64::try_from(input.receipt.consideration_price_units / scale)
@@ -756,8 +759,7 @@ pub(in crate::instructions) fn apply_entitled_slice_consumption(
     seller_position.internal[outcome] += plan.seller_remainder;
 
     buyer_reservation.consumed_units += plan.quantity;
-    buyer_reservation.remaining_cash_atoms -=
-        plan.consideration_atoms + plan.buyer_release_atoms;
+    buyer_reservation.remaining_cash_atoms -= plan.consideration_atoms + plan.buyer_release_atoms;
     if plan.buyer_completes {
         buyer_reservation.state = RESERVATION_STATE_CONSUMED;
     }
@@ -865,8 +867,7 @@ pub(super) const RETIRED_SETTLEMENT_BLOCKERS: [SettlementBlocker; 7] = [
 ///   exactly refuses at `EntitleSlice`, even when every per-owner sum is
 ///   whole, because realizing it needs a funded pot rather than a wider seam.
 #[allow(dead_code)] // Executable record; the ledger test pins it.
-pub(super) const SETTLEMENT_BLOCKERS: [SettlementBlocker; 1] =
-    [SettlementBlocker::VirtualPot];
+pub(super) const SETTLEMENT_BLOCKERS: [SettlementBlocker; 1] = [SettlementBlocker::VirtualPot];
 
 #[cfg(test)]
 mod tests {
@@ -1741,7 +1742,11 @@ mod tests {
     fn a_partial_sell_consumes_slice_by_slice_and_returns_its_remainder_once() {
         let mut f = partial_fixture();
         let initial_internal = f.seller_reservation.initial_internal[0];
-        let initial_cash: u64 = f.buyer_reservations.iter().map(|r| r.initial_cash_atoms).sum();
+        let initial_cash: u64 = f
+            .buyer_reservations
+            .iter()
+            .map(|r| r.initial_cash_atoms)
+            .sum();
         let mut consumed_atoms = 0u64;
         let mut consumed_units = 0u64;
 
@@ -1795,10 +1800,7 @@ mod tests {
                     RESERVATION_STATE_ENTITLED
                 }
             );
-            assert_eq!(
-                f.buyer_reservations[at].state,
-                RESERVATION_STATE_CONSUMED
-            );
+            assert_eq!(f.buyer_reservations[at].state, RESERVATION_STATE_CONSUMED);
         }
 
         // Ten Eggs went to the buyers, two came back, twelve are accounted

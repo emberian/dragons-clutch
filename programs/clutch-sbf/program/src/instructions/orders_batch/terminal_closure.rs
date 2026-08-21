@@ -422,7 +422,12 @@ fn load_bound_frozen_page(
     expected_index: u16,
     writable: bool,
 ) -> Outcome<stream::OrderPageHeader> {
-    accounts::validate_state_role_lengths(program_id, account, writable, &[account_len::ORDER_PAGE])?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        account,
+        writable,
+        &[account_len::ORDER_PAGE],
+    )?;
     let data = account.data.borrow();
     let header = stream::verify_page(&data)?;
     require(
@@ -526,11 +531,7 @@ fn load_selected_feed(
     )?;
     expect_pda(
         feed_account.key,
-        seeds::candidate_feed_pda(
-            program_id,
-            &epoch.epoch.bytes(),
-            &record.candidate.bytes(),
-        ),
+        seeds::candidate_feed_pda(program_id, &epoch.epoch.bytes(), &record.candidate.bytes()),
         Some(feed.stored_bump),
     )?;
     Ok(feed)
@@ -580,7 +581,12 @@ pub(super) fn release_terminal_reservation(
     let actor = Hash32::from_bytes(accounts[0].key.to_bytes());
     require(actor == reservation.owner, ClutchError::UnauthorizedActor)?;
 
-    accounts::validate_state_role_lengths(program_id, &accounts[3], true, &[account_len::POSITION])?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[3],
+        true,
+        &[account_len::POSITION],
+    )?;
     let mut position = super::decode_position_boxed(&accounts[3].data.borrow())?;
     require(
         position.owner == actor
@@ -591,7 +597,11 @@ pub(super) fn release_terminal_reservation(
     )?;
     expect_pda(
         accounts[3].key,
-        seeds::position_pda(program_id, &position.market.bytes(), &position.owner.bytes()),
+        seeds::position_pda(
+            program_id,
+            &position.market.bytes(),
+            &position.owner.bytes(),
+        ),
         Some(position.stored_bump),
     )?;
 
@@ -599,19 +609,13 @@ pub(super) fn release_terminal_reservation(
      * cancellation rule; the codec's `released` transition re-refuses any
      * value at or below the order generation, and the ACTIVE -> RELEASED
      * flip is what makes a replay refuse on state. */
-    require(
-        sequence > reservation.order_generation,
-        ClutchError::Replay,
-    )?;
+    require(sequence > reservation.order_generation, ClutchError::Replay)?;
 
     if epoch.phase == EPOCH_PHASE_CLEARED {
         /* The zero-fill proof: the selected candidate's sealed feed, plus the
          * digest-verified page prefix that recovers this order's live rank. */
         let pages_needed = usize::from(reservation.page_index) + 1;
-        require_count(
-            accounts,
-            RELEASE_CLEARED_FIXED_ACCOUNT_COUNT + pages_needed,
-        )?;
+        require_count(accounts, RELEASE_CLEARED_FIXED_ACCOUNT_COUNT + pages_needed)?;
         let feed = load_selected_feed(program_id, &accounts[4], &accounts[5], &epoch)?;
         let rank = live_rank_of_order(
             program_id,
@@ -911,7 +915,12 @@ pub(super) fn close_general_pot(
     let epoch = load_terminal_epoch(program_id, &accounts[0], intent_market, intent_epoch)?;
     require(epoch.phase == EPOCH_PHASE_CLEARED, ClutchError::NotActive)?;
 
-    accounts::validate_state_role_lengths(program_id, &accounts[1], true, &[account_len::FINAL_POT])?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[1],
+        true,
+        &[account_len::FINAL_POT],
+    )?;
     {
         let pot = FinalPotAccount::decode(&accounts[1].data.borrow())?;
         require(
@@ -981,7 +990,12 @@ pub(super) fn close_general_candidate(
     require_distinct(accounts)?;
     let epoch = load_terminal_epoch(program_id, &accounts[0], intent_market, intent_epoch)?;
 
-    accounts::validate_state_role_lengths(program_id, &accounts[1], true, &[account_len::CANDIDATE])?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[1],
+        true,
+        &[account_len::CANDIDATE],
+    )?;
     let status = {
         let record = super::decode_candidate_boxed(&accounts[1].data.borrow())?;
         require(
@@ -1001,11 +1015,8 @@ pub(super) fn close_general_candidate(
     /* The feed slot: the canonical feed PDA, either still program-owned at
      * the feed length (sealed or staged — both close here) or already absent
      * (closed at displacement, lamports parked on the record). */
-    let (feed_address, _) = seeds::candidate_feed_pda(
-        program_id,
-        &epoch.epoch.bytes(),
-        &intent_candidate.bytes(),
-    );
+    let (feed_address, _) =
+        seeds::candidate_feed_pda(program_id, &epoch.epoch.bytes(), &intent_candidate.bytes());
     require(*accounts[2].key == feed_address, ClutchError::WrongPda)?;
     let feed_present = *accounts[2].owner == *program_id;
     if feed_present {
@@ -1131,11 +1142,8 @@ pub(super) fn close_general_clear_work(
 
     /* The record slot: the canonical record PDA, absent (its own close
      * already discharged the selected gating) or present. */
-    let (record_address, _) = seeds::candidate_pda(
-        program_id,
-        &epoch.epoch.bytes(),
-        &intent_candidate.bytes(),
-    );
+    let (record_address, _) =
+        seeds::candidate_pda(program_id, &epoch.epoch.bytes(), &intent_candidate.bytes());
     require(*accounts[2].key == record_address, ClutchError::WrongPda)?;
     let tail = &accounts[CLOSE_CLEAR_WORK_FIXED_ACCOUNT_COUNT..];
     let selected = if *accounts[2].owner == *program_id {

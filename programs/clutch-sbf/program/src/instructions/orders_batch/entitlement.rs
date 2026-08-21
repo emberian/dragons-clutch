@@ -91,10 +91,10 @@ use clutch_solana_layout::reservation::{
 };
 use clutch_solana_layout::{
     account_len, stream, CandidateRecord, EpochAccount, FinalPotAccount, Hash32, OrderSlot,
-    PortfolioRecord, SettlementReceiptAccount, TermsAccount,
-    CANDIDATE_STATUS_SELECTED, EPOCH_PHASE_CLEARED, MAX_OUTCOMES, ORDER_KIND_PORTFOLIO,
-    POT_PHASE_CLOSED, RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED,
-    RECEIPT_FLAG_SLICE_EXHAUSTED, RECEIPT_LEG_DIRECT,
+    PortfolioRecord, SettlementReceiptAccount, TermsAccount, CANDIDATE_STATUS_SELECTED,
+    EPOCH_PHASE_CLEARED, MAX_OUTCOMES, ORDER_KIND_PORTFOLIO, POT_PHASE_CLOSED,
+    RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED, RECEIPT_FLAG_SLICE_EXHAUSTED,
+    RECEIPT_LEG_DIRECT,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -362,7 +362,11 @@ pub(super) fn freeze_entitlement(
     // codec invariant enforces the emptiness (the V3 pot precedent).
     let epoch_bytes = epoch.epoch.bytes();
     let (pot_address, pot_bump) = seeds::pot_pda(program_id, &epoch_bytes);
-    expect_pda(accounts[IX_FREEZE_ENT_POT].key, (pot_address, pot_bump), None)?;
+    expect_pda(
+        accounts[IX_FREEZE_ENT_POT].key,
+        (pot_address, pot_bump),
+        None,
+    )?;
     let pot_prior = accounts[IX_FREEZE_ENT_POT].lamports();
     let bump_seed = [pot_bump];
     let signer = [seeds::SEED_POT, epoch_bytes.as_ref(), bump_seed.as_ref()];
@@ -512,7 +516,12 @@ fn require_frozen_pot(
     epoch: &EpochAccount,
     record: &CandidateRecord,
 ) -> Outcome<()> {
-    accounts::validate_state_role_lengths(program_id, pot_account, false, &[account_len::FINAL_POT])?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        pot_account,
+        false,
+        &[account_len::FINAL_POT],
+    )?;
     let pot = FinalPotAccount::decode(&pot_account.data.borrow())?;
     pot.binds_candidate(record)?;
     expect_pda(
@@ -739,12 +748,7 @@ fn stamp_reservation(
     slot: &OrderSlot,
     entitled_units: u64,
 ) -> Outcome<()> {
-    accounts::validate_state_role_lengths(
-        program_id,
-        account,
-        true,
-        &[RESERVATION_ACCOUNT_BYTES],
-    )?;
+    accounts::validate_state_role_lengths(program_id, account, true, &[RESERVATION_ACCOUNT_BYTES])?;
     let reservation = super::decode_reservation_boxed(&account.data.borrow())?;
     match reservation.state {
         RESERVATION_STATE_ACTIVE => {
@@ -969,27 +973,23 @@ fn validate_slice_end(
     outcome_count: u8,
 ) -> Outcome<()> {
     match slot {
-        OrderSlot::Single(order) => {
-            require(
-                order.side == side
-                    && order.outcome == outcome
-                    && if side == 0 {
-                        price <= order.limit
-                    } else {
-                        price >= order.limit
-                    },
-                ClutchError::MismatchedState,
-            )
-        }
-        OrderSlot::Portfolio(order) => {
-            require(
-                order.side == side
-                    && outcome < order.active_len
-                    && order.active_len <= outcome_count
-                    && order.coefficients[usize::from(outcome)] != 0,
-                ClutchError::MismatchedState,
-            )
-        }
+        OrderSlot::Single(order) => require(
+            order.side == side
+                && order.outcome == outcome
+                && if side == 0 {
+                    price <= order.limit
+                } else {
+                    price >= order.limit
+                },
+            ClutchError::MismatchedState,
+        ),
+        OrderSlot::Portfolio(order) => require(
+            order.side == side
+                && outcome < order.active_len
+                && order.active_len <= outcome_count
+                && order.coefficients[usize::from(outcome)] != 0,
+            ClutchError::MismatchedState,
+        ),
         OrderSlot::Empty | OrderSlot::Tombstone(_) => {
             Err(Refusal::Adapter(ClutchError::MismatchedState))
         }
@@ -1131,8 +1131,8 @@ fn pair_funding(
     buy: &PortfolioRecord,
     sell: &PortfolioRecord,
 ) -> Outcome<PairFunding> {
-    let buy_funding =
-        PortfolioFundingV1::for_order(market, terms, price_scale, buy, 0).map_err(portfolio_fault)?;
+    let buy_funding = PortfolioFundingV1::for_order(market, terms, price_scale, buy, 0)
+        .map_err(portfolio_fault)?;
     let sell_funding = PortfolioFundingV1::for_order(market, terms, price_scale, sell, 0)
         .map_err(portfolio_fault)?;
     require(
@@ -1268,12 +1268,9 @@ fn entitle_portfolio_pair<'a>(
     require(sums == funding.internal, ClutchError::MismatchedState)?;
     // The pair's exact value must convert to whole collateral atoms, or the
     // rounding-pot gap stands and no unconsumable receipt is minted.
-    let consideration = exact_portfolio_value_price_units(
-        &funding.internal,
-        &record.prices,
-        terms.outcome_count,
-    )
-    .map_err(portfolio_fault)?;
+    let consideration =
+        exact_portfolio_value_price_units(&funding.internal, &record.prices, terms.outcome_count)
+            .map_err(portfolio_fault)?;
     require(epoch.price_scale != 0, ClutchError::MismatchedState)?;
     require(
         consideration % u128::from(epoch.price_scale) == 0,
@@ -1341,8 +1338,7 @@ const ZERO_RECEIPT: SettlementReceiptAccount = SettlementReceiptAccount {
 /// A fresh all-zero staged-receipt table on the heap.
 #[inline(never)]
 fn boxed_zero_receipts() -> Outcome<Box<[SettlementReceiptAccount; MAX_PAIR_RECEIPTS]>> {
-    static ZERO: [SettlementReceiptAccount; MAX_PAIR_RECEIPTS] =
-        [ZERO_RECEIPT; MAX_PAIR_RECEIPTS];
+    static ZERO: [SettlementReceiptAccount; MAX_PAIR_RECEIPTS] = [ZERO_RECEIPT; MAX_PAIR_RECEIPTS];
     super::boxed_copy_of(&ZERO)
 }
 
@@ -1698,9 +1694,9 @@ pub(super) fn settle_portfolio_pair(
     staged
         .buyer_reservation
         .encode(&mut borrow_account_mut(&accounts[IX_PAIR_BUY_RESERVATION])?)?;
-    staged
-        .seller_reservation
-        .encode(&mut borrow_account_mut(&accounts[IX_PAIR_SELL_RESERVATION])?)?;
+    staged.seller_reservation.encode(&mut borrow_account_mut(
+        &accounts[IX_PAIR_SELL_RESERVATION],
+    )?)?;
     for account in receipts {
         let mut receipt = super::decode_receipt_boxed(&account.data.borrow())?;
         receipt.settled_quantity = receipt.quantity;

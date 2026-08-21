@@ -1584,15 +1584,17 @@ fn settle_page(
         ClutchError::MismatchedState,
     )?;
 
-    let plan = settlement::prepare_entitled_slice_consumption(&settlement::EntitledSliceConsumptionInput {
-        epoch: &epoch,
-        candidate: &candidate,
-        buyer_position: &buyer_position,
-        seller_position: &seller_position,
-        buyer_reservation: &buyer_reservation,
-        seller_reservation: &seller_reservation,
-        receipt: &receipt,
-    })?;
+    let plan = settlement::prepare_entitled_slice_consumption(
+        &settlement::EntitledSliceConsumptionInput {
+            epoch: &epoch,
+            candidate: &candidate,
+            buyer_position: &buyer_position,
+            seller_position: &seller_position,
+            buyer_reservation: &buyer_reservation,
+            seller_reservation: &seller_reservation,
+            receipt: &receipt,
+        },
+    )?;
     settlement::apply_entitled_slice_consumption(
         &mut buyer_position,
         &mut seller_position,

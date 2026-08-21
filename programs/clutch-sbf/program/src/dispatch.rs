@@ -880,8 +880,7 @@ mod tests {
                     chunk: clutch_solana_layout::CandidateFeedChunk::Fills {
                         count: 1,
                         fills: {
-                            let mut fills =
-                                [0u64; clutch_solana_layout::FEED_FILLS_PER_CHUNK];
+                            let mut fills = [0u64; clutch_solana_layout::FEED_FILLS_PER_CHUNK];
                             fills[0] = 9;
                             fills
                         },

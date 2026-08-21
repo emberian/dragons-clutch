@@ -80,6 +80,7 @@
 //! for this family is the layout codec byte-for-byte, per the genesis
 //! precedent.
 
+use super::terminal_closure;
 use crate::accounts::{
     expect_pda, require, require_count, require_distinct, require_signer, Outcome,
 };
@@ -92,7 +93,6 @@ use crate::instructions::genesis::{
     transfer_data, RentParameters, SYSTEM_PROGRAM_ID,
 };
 use crate::seeds;
-use super::terminal_closure;
 use clutch_batch::relation_v1_stream::ClearWorkV1;
 use clutch_solana_layout::clearing::FUNDING_COVERS_CLEAR_WORK;
 use clutch_solana_layout::{account_len, clearing, Hash32};

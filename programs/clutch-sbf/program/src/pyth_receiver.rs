@@ -303,9 +303,8 @@ pub fn normalize_interval(
         .checked_add(i32::from(target_decimals))
         .ok_or(PythReceiverError::ArithmeticOverflow)?;
     let (low, high) = if shift >= 0 {
-        let factor = pow10_i128(
-            u32::try_from(shift).map_err(|_| PythReceiverError::UnsupportedExponent)?,
-        )?;
+        let factor =
+            pow10_i128(u32::try_from(shift).map_err(|_| PythReceiverError::UnsupportedExponent)?)?;
         (
             low_source
                 .checked_mul(factor)

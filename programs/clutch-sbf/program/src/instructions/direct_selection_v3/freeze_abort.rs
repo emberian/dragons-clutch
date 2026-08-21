@@ -157,7 +157,11 @@ pub(super) fn freeze(
     // the complete reward-only deposit from the same authenticated sponsor.
     let (work_address, work_bump) =
         seeds::direct_work_v3_pda(program_id, &epoch.direct.common.epoch.bytes());
-    expect_pda(accounts[IX_FREEZE_WORK].key, (work_address, work_bump), None)?;
+    expect_pda(
+        accounts[IX_FREEZE_WORK].key,
+        (work_address, work_bump),
+        None,
+    )?;
     let work_funding = direct_creation_funding(
         &accounts[IX_FREEZE_SPONSOR],
         &accounts[IX_FREEZE_WORK],
@@ -235,7 +239,10 @@ fn freeze_page_facts(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
     epoch: &clutch_solana_layout::direct_selection_v3::DirectEpochV4Account,
-) -> Outcome<(crate::instructions::direct_selection::DirectOrders, PageSealFacts)> {
+) -> Outcome<(
+    crate::instructions::direct_selection::DirectOrders,
+    PageSealFacts,
+)> {
     let grid = PriceGridAccount::decode(&accounts[IX_FREEZE_GRID].data.borrow())?;
     expect_pda(
         accounts[IX_FREEZE_GRID].key,
@@ -352,10 +359,7 @@ pub(super) fn abort(
     let mut reservation_count = 0usize;
     let page_present = epoch.direct.common.page_count == 1;
     if page_present {
-        require(
-            accounts.len() > IX_ABORT_PAGE,
-            ClutchError::AccountCount,
-        )?;
+        require(accounts.len() > IX_ABORT_PAGE, ClutchError::AccountCount)?;
         accounts::validate_state_role_lengths(
             program_id,
             &accounts[IX_ABORT_PAGE],

@@ -29,8 +29,8 @@ use clutch_solana_layout::{
     account_len,
     direct_selection_v3::{
         DirectCandidateV3Account, DirectEpochV4Account, DirectFundingLedgerV3,
-        DirectWindowV3Account, DIRECT_CANDIDATE_STATUS_REVERIFIED,
-        DIRECT_CANDIDATE_V3_BYTES, DIRECT_EPOCH_V4_BYTES, DIRECT_LIFECYCLE_PHASE_FROZEN_EMPTY,
+        DirectWindowV3Account, DIRECT_CANDIDATE_STATUS_REVERIFIED, DIRECT_CANDIDATE_V3_BYTES,
+        DIRECT_EPOCH_V4_BYTES, DIRECT_LIFECYCLE_PHASE_FROZEN_EMPTY,
         DIRECT_LIFECYCLE_PHASE_SELECTED, DIRECT_LIFECYCLE_PHASE_TERMINAL,
         DIRECT_LIFECYCLE_PHASE_VERIFYING, DIRECT_LIFECYCLE_PHASE_WINDOW_OPEN,
         DIRECT_RESERVATION_V2_BYTES, DIRECT_TERMINAL_REASON_EMPTY_LAPSE,
@@ -47,8 +47,7 @@ use solana_pubkey::Pubkey;
 
 use super::common::{
     close_funded_account, frozen_pair, move_lamports, observe_funding, pay_reward,
-    read_epoch_v4_boxed,
-    read_reservation_v2_boxed, read_window_v3_boxed, read_work_budget,
+    read_epoch_v4_boxed, read_reservation_v2_boxed, read_window_v3_boxed, read_work_budget,
     release_reservations_into_positions, require_neutral_sink, sink_hash, write_epoch_v4,
     write_reservation_v2, write_window_v3,
 };
@@ -190,7 +189,11 @@ pub(super) fn finalize(
         ClutchError::MismatchedState,
     )?;
 
-    let orders = frozen_pair(program_id, &accounts[IX_FINALIZE_PAGE], &epoch.direct.common)?;
+    let orders = frozen_pair(
+        program_id,
+        &accounts[IX_FINALIZE_PAGE],
+        &epoch.direct.common,
+    )?;
 
     // Every retained Candidate must hold exact REVERIFIED status.
     let mut fundings = [DirectFundingLedgerV3::ZERO; MAX_DIRECT_CANDIDATES];
@@ -418,7 +421,11 @@ pub(super) fn settle(
         (IX_SETTLE_BUY_POSITION, account_len::POSITION, true),
         (IX_SETTLE_SELL_POSITION, account_len::POSITION, true),
         (IX_SETTLE_BUY_RESERVATION, DIRECT_RESERVATION_V2_BYTES, true),
-        (IX_SETTLE_SELL_RESERVATION, DIRECT_RESERVATION_V2_BYTES, true),
+        (
+            IX_SETTLE_SELL_RESERVATION,
+            DIRECT_RESERVATION_V2_BYTES,
+            true,
+        ),
         (IX_SETTLE_RECEIPT, account_len::SETTLEMENT_RECEIPT, true),
         (IX_SETTLE_POT, account_len::FINAL_POT, true),
         (IX_SETTLE_WORK, DIRECT_WORK_BUDGET_BYTES, true),

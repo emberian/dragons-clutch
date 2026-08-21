@@ -24,9 +24,9 @@ use clutch_batch_policy_identity::{
     direct_lifecycle_v3::admission_transcript_v3,
     direct_window_v1::{
         canonical_account_candidate_id, verify_direct_two_order_candidate, DirectCandidateEntryV1,
-        DirectCandidateV2, DirectCandidateWindowV1, DirectTwoOrderInputV1,
-        ValidatedDirectDomainV1, DIRECT_CANDIDATE_STATUS_VERIFIED, DIRECT_POLICY_V1,
-        DIRECT_WINDOW_PHASE_OPEN, MAX_DIRECT_CANDIDATES,
+        DirectCandidateV2, DirectCandidateWindowV1, DirectTwoOrderInputV1, ValidatedDirectDomainV1,
+        DIRECT_CANDIDATE_STATUS_VERIFIED, DIRECT_POLICY_V1, DIRECT_WINDOW_PHASE_OPEN,
+        MAX_DIRECT_CANDIDATES,
     },
     FullRelationDomainV1, FullScoreV1, Identity32V1,
 };
@@ -394,7 +394,11 @@ pub(super) fn submit(
             &[candidate_bump],
         ],
     )?;
-    write_new_candidate(&accounts[IX_SUBMIT_CANDIDATE], &candidate, candidate_funding)?;
+    write_new_candidate(
+        &accounts[IX_SUBMIT_CANDIDATE],
+        &candidate,
+        candidate_funding,
+    )?;
 
     if !existing_window {
         window.funding = create_first_window(
@@ -655,10 +659,9 @@ fn authenticate_policy_artifact(
     account: &AccountInfo,
     epoch: &DirectEpochV4Account,
 ) -> Outcome<()> {
-    let supplied_policy =
-        clutch_solana_layout::direct_selection_v3::DirectBatchPolicyV3::decode(
-            &account.data.borrow(),
-        )?;
+    let supplied_policy = clutch_solana_layout::direct_selection_v3::DirectBatchPolicyV3::decode(
+        &account.data.borrow(),
+    )?;
     require_exact_direct_policy(
         epoch.direct.common.epoch,
         epoch.direct_policy_v3_id,
@@ -942,10 +945,7 @@ fn require_submit_observations_unchanged(
     Ok(())
 }
 
-fn require_funding_unchanged(
-    funding: DirectFundingLedgerV3,
-    account: &AccountInfo,
-) -> Outcome<()> {
+fn require_funding_unchanged(funding: DirectFundingLedgerV3, account: &AccountInfo) -> Outcome<()> {
     let accounted = funding
         .payer_principal_lamports
         .checked_add(funding.prior_donation_lamports)

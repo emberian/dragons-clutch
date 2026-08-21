@@ -432,9 +432,11 @@ pub(super) fn release_reservations_into_positions(
 
     index = 0;
     while index < reservation_accounts.len() {
-        let reservation =
-            DirectReservationV2Account::decode(&reservation_accounts[index].data.borrow(), sink_hash())?
-                .reservation;
+        let reservation = DirectReservationV2Account::decode(
+            &reservation_accounts[index].data.borrow(),
+            sink_hash(),
+        )?
+        .reservation;
         let reservation = &reservation;
         let mut found = None;
         let mut position_index = 0usize;

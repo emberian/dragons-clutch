@@ -141,13 +141,13 @@ use crate::accounts::{
 use crate::error::{ClutchError, Refusal};
 use crate::source_archive::SOURCE_SPEC_ACCOUNT_V1_BYTES;
 use crate::{seeds, token};
-use clutch_solana_layout::direct_selection_v3::{
-    DirectEpochV4Account, DirectFundingLedgerV3, DIRECT_EPOCH_V4_BYTES,
-};
 use clutch_batch_policy_identity::revenue_policy_v1::{
     revenue_policy_digest, REVENUE_POLICY_V1, REVENUE_TREASURY_UNSET_V1,
 };
 use clutch_solana_layout::clearing::FUNDING_COVERS_REVENUE_RECORD;
+use clutch_solana_layout::direct_selection_v3::{
+    DirectEpochV4Account, DirectFundingLedgerV3, DIRECT_EPOCH_V4_BYTES,
+};
 use clutch_solana_layout::revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES};
 use clutch_solana_layout::{
     account_len, canonical_realm_id, collateral, stream, Hash32, HoardAccount, Intent,

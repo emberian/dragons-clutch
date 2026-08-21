@@ -48,6 +48,7 @@
 //! intents with `UnsupportedIntent`, so the SVM oracle for this family is the
 //! layout codec byte-for-byte, per the genesis precedent.
 
+use super::terminal_closure;
 use crate::accounts::{
     self, expect_pda, require, require_distinct, require_signer, Outcome, StateRole,
 };
@@ -65,13 +66,12 @@ use clutch_batch_policy_identity::{
     general_clearing_v1::{GENERAL_CLEARING_FEE_SHAPE_V1, GENERAL_CLEARING_POLICY_V1},
     BATCH_POLICY_BYTES,
 };
-use clutch_solana_layout::revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES};
-use super::terminal_closure;
 use clutch_solana_layout::clearing::{
     canonical_general_book_id, open_general_epoch, EpochWindowAccount, CANDIDATE_WINDOW_SLOTS,
     EPOCH_WINDOW_ACCOUNT_BYTES, FUNDING_COVERS_EPOCH_PAIR, MAX_RETAINED_CANDIDATES,
 };
 use clutch_solana_layout::projection::OwnerInterner;
+use clutch_solana_layout::revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES};
 use clutch_solana_layout::{
     account_len, canonical_epoch_id, stream, EpochAccount, Hash32, OrderSlot, PositionAccount,
     EPOCH_PHASE_FROZEN, EPOCH_PHASE_OPEN, MAX_ORDER_PAGES,
@@ -577,9 +577,11 @@ pub(super) fn freeze_epoch(
                     }
                     // A retired record is never fed, so it mints no tag.
                     OrderSlot::Tombstone(_) => {}
-                    OrderSlot::Empty => return Err(Refusal::Codec(
-                        clutch_solana_layout::CodecError::ZeroIdentity,
-                    )),
+                    OrderSlot::Empty => {
+                        return Err(Refusal::Codec(
+                            clutch_solana_layout::CodecError::ZeroIdentity,
+                        ))
+                    }
                 }
                 index += 1;
             }

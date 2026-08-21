@@ -363,7 +363,10 @@ mod tests {
 
     #[test]
     fn clock_sysvar_matches_the_runtime_pin() {
-        assert_eq!(CLOCK_SYSVAR_ID, crate::instructions::artifact::CLOCK_SYSVAR_ID.to_bytes());
+        assert_eq!(
+            CLOCK_SYSVAR_ID,
+            crate::instructions::artifact::CLOCK_SYSVAR_ID.to_bytes()
+        );
     }
 
     #[test]

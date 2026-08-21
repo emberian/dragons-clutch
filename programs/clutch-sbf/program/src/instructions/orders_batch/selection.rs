@@ -674,7 +674,10 @@ pub(super) fn finalize_selection(
 fn component_order(a: &FullScoreV1, b: &FullScoreV1) -> Ordering {
     a.weighted_direct_volume
         .cmp(&b.weighted_direct_volume)
-        .then(a.limit_surplus_price_units.cmp(&b.limit_surplus_price_units))
+        .then(
+            a.limit_surplus_price_units
+                .cmp(&b.limit_surplus_price_units),
+        )
         .then(a.distinct_owners.cmp(&b.distinct_owners))
         .then(b.churn.cmp(&a.churn))
 }
@@ -809,8 +812,7 @@ fn write_submitted_pair(
         order_len: record.order_len,
         outcome_count: record.outcome_count,
         stored_bump: feed_bump,
-        flags: u8::from(declared_slices.is_some())
-            * clearing::CANDIDATE_FEED_FLAG_SLICES_DECLARED,
+        flags: u8::from(declared_slices.is_some()) * clearing::CANDIDATE_FEED_FLAG_SLICES_DECLARED,
     };
     let mut data = borrow_account_mut(feed_account)?;
     clearing::init_candidate_feed_stage(&mut data, &stage)?;
