@@ -446,6 +446,26 @@ fn score_from(byte: u8) -> Result<ScorePolicyV1, PolicyIdentityErrorV1> {
     }
 }
 
+/// Pack the composite's two rates into one `u32`: dispersion low, floor high.
+///
+/// This mirrors `clutch_batch::relation_v1_stream`'s packing exactly — the two
+/// codecs are compared byte for byte over every registered selector product by
+/// `policy_encodings_agree_across_crates`, so the mirror cannot drift silently.
+pub fn pack_composite_rates(dispersion_bps: u32, floor_range_bps: u32) -> u32 {
+    (dispersion_bps & 0xFFFF) | ((floor_range_bps & 0xFFFF) << 16)
+}
+
+/// Unpack a composite rate word, refusing anything outside the exact
+/// basis-points band.
+pub fn unpack_composite_rates(word: u32) -> Option<(u32, u32)> {
+    let dispersion_bps = word & 0xFFFF;
+    let floor_range_bps = word >> 16;
+    if dispersion_bps as u64 > FEE_BPS_DENOMINATOR || floor_range_bps as u64 > FEE_BPS_DENOMINATOR {
+        return None;
+    }
+    Some((dispersion_bps, floor_range_bps))
+}
+
 fn validate_registered_policy(policy: &FrozenPolicyV1) -> Result<(), PolicyIdentityErrorV1> {
     match policy.fee_base {
         FeeBaseV1::None => {}
@@ -454,15 +474,19 @@ fn validate_registered_policy(policy: &FrozenPolicyV1) -> Result<(), PolicyIdent
                 return Err(PolicyIdentityErrorV1::InvalidEnum);
             }
         }
-        // Only the zero-rate composite SHAPE is registered.  Both rates are
-        // undecided (ADOPTED 2026-08-20 item 9): a nonzero rate is a new
-        // frozen const + digest behind its own ember decision, and until one
-        // exists this codec deliberately cannot express it.
+        // Both composite rates are registered across the exact-basis-points
+        // band, since the relation implements the arithmetic
+        // (`clutch_batch::relation_v1::composite_fee_quote`).  Registering a
+        // rate is not proposing one: every frozen const in this crate still
+        // pins the zero pair, and a production rate remains a new sibling const
+        // with a new digest behind its own ember decision.
         FeeBaseV1::CompositeDispersionFloor {
             dispersion_bps,
             floor_range_bps,
         } => {
-            if dispersion_bps != 0 || floor_range_bps != 0 {
+            if dispersion_bps as u64 > FEE_BPS_DENOMINATOR
+                || floor_range_bps as u64 > FEE_BPS_DENOMINATOR
+            {
                 return Err(PolicyIdentityErrorV1::InvalidEnum);
             }
         }
@@ -506,11 +530,17 @@ pub fn encode_batch_policy(
     let (fee_tag, fee_bps) = match policy.fee_base {
         FeeBaseV1::None => (0u8, 0u32),
         FeeBaseV1::FlatNotional { bps } => (1u8, bps),
-        // Tag 2 with the single rate slot carrying the dispersion rate; the
-        // floor rate has NO wire slot.  Only the zero rate pair is registered
-        // (`validate_registered_policy`), so nothing is lost: a nonzero floor
-        // is a schema revision behind its own decision, not a hidden byte.
-        FeeBaseV1::CompositeDispersionFloor { dispersion_bps, .. } => (2u8, dispersion_bps),
+        // Tag 2 with both rates packed into the one rate slot: dispersion in
+        // the low half, floor in the high half.  Every rate is bounded by
+        // `FEE_BPS_DENOMINATOR` (10,000, a 14-bit value), so the pair fits with
+        // room to spare and the artifact keeps its 64-byte shape and its
+        // 36 zero reserved bytes.  The zero rate pair still encodes as the word
+        // `0`, so `GENERAL_CLEARING_FEE_SHAPE_V1`'s bytes — and the SHA-256
+        // pinned over them — are exactly what they were before rates existed.
+        FeeBaseV1::CompositeDispersionFloor {
+            dispersion_bps,
+            floor_range_bps,
+        } => (2u8, pack_composite_rates(dispersion_bps, floor_range_bps)),
     };
     out[at] = fee_tag;
     at += 1;
@@ -566,14 +596,15 @@ pub fn decode_batch_policy(input: &[u8]) -> Result<FrozenPolicyV1, PolicyIdentit
         0 => return Err(PolicyIdentityErrorV1::NonCanonicalPadding),
         1 if fee_bps as u64 <= FEE_BPS_DENOMINATOR => FeeBaseV1::FlatNotional { bps: fee_bps },
         1 => return Err(PolicyIdentityErrorV1::InvalidEnum),
-        // The composite shape decodes only at its registered zero rate pair;
-        // a nonzero rate is unexpressed until a rate decision revises the
-        // codec (see `validate_registered_policy`).
-        2 if fee_bps == 0 => FeeBaseV1::CompositeDispersionFloor {
-            dispersion_bps: 0,
-            floor_range_bps: 0,
+        // The composite's two rates unpack from the one rate word; a word
+        // outside the admissible band is not a policy.
+        2 => match unpack_composite_rates(fee_bps) {
+            Some((dispersion_bps, floor_range_bps)) => FeeBaseV1::CompositeDispersionFloor {
+                dispersion_bps,
+                floor_range_bps,
+            },
+            None => return Err(PolicyIdentityErrorV1::InvalidEnum),
         },
-        2 => return Err(PolicyIdentityErrorV1::InvalidEnum),
         _ => return Err(PolicyIdentityErrorV1::InvalidEnum),
     };
     let value = FrozenPolicyV1 {
@@ -1323,7 +1354,7 @@ mod tests {
                 *selector = (quotient % radix as usize) as u8;
                 quotient /= radix as usize;
             }
-            for fee_case in 0..4 {
+            for fee_case in 0..6 {
                 let mut bytes = base;
                 bytes[12..22].copy_from_slice(&selectors);
                 match fee_case {
@@ -1339,11 +1370,28 @@ mod tests {
                         bytes[22] = 1;
                         bytes[24..28].copy_from_slice(&(FEE_BPS_DENOMINATOR as u32).to_le_bytes());
                     }
-                    _ => {
-                        // The composite shape's one registered rate pair:
-                        // both rates zero (rates undecided).
+                    3 => {
+                        // The composite shape at the zero rate pair: the one
+                        // pair any frozen const carries.
                         bytes[22] = 2;
                         bytes[24..28].copy_from_slice(&0u32.to_le_bytes());
+                    }
+                    4 => {
+                        // Both composite rates nonzero and distinct, so a
+                        // codec that dropped or swapped a half would fail here.
+                        bytes[22] = 2;
+                        bytes[24..28].copy_from_slice(&pack_composite_rates(40, 10).to_le_bytes());
+                    }
+                    _ => {
+                        // The band boundary in both halves.
+                        bytes[22] = 2;
+                        bytes[24..28].copy_from_slice(
+                            &pack_composite_rates(
+                                FEE_BPS_DENOMINATOR as u32,
+                                FEE_BPS_DENOMINATOR as u32,
+                            )
+                            .to_le_bytes(),
+                        );
                     }
                 }
                 let decoded = decode_batch_policy(&bytes).unwrap();
@@ -1351,7 +1399,7 @@ mod tests {
                 admitted += 1;
             }
         }
-        assert_eq!(admitted, 13_824);
+        assert_eq!(admitted, 20_736);
     }
 
     #[test]
@@ -1360,7 +1408,7 @@ mod tests {
         // cannot depend on this crate — the dependency points the other way —
         // so it *restates* the selector byte values.  This is the cross-crate
         // equality gate the restatement is conditioned on: over every
-        // registered selector product and the four fee shapes, the
+        // registered selector product and the six fee shapes, the
         // checkpoint codec's 15 policy bytes must equal this artifact's
         // selector region (bytes 12..22), fee discriminant (byte 22), and fee
         // parameter (bytes 24..28) exactly, and its decoder must return the
@@ -1382,7 +1430,7 @@ mod tests {
                 *selector = (quotient % radix as usize) as u8;
                 quotient /= radix as usize;
             }
-            for fee_case in 0..4 {
+            for fee_case in 0..6 {
                 let mut bytes = base;
                 bytes[12..22].copy_from_slice(&selectors);
                 match fee_case {
@@ -1398,9 +1446,23 @@ mod tests {
                         bytes[22] = 1;
                         bytes[24..28].copy_from_slice(&(FEE_BPS_DENOMINATOR as u32).to_le_bytes());
                     }
-                    _ => {
+                    3 => {
                         bytes[22] = 2;
                         bytes[24..28].copy_from_slice(&0u32.to_le_bytes());
+                    }
+                    4 => {
+                        bytes[22] = 2;
+                        bytes[24..28].copy_from_slice(&pack_composite_rates(40, 10).to_le_bytes());
+                    }
+                    _ => {
+                        bytes[22] = 2;
+                        bytes[24..28].copy_from_slice(
+                            &pack_composite_rates(
+                                FEE_BPS_DENOMINATOR as u32,
+                                FEE_BPS_DENOMINATOR as u32,
+                            )
+                            .to_le_bytes(),
+                        );
                     }
                 }
                 let policy = decode_batch_policy(&bytes).unwrap();
@@ -1413,7 +1475,7 @@ mod tests {
                 compared += 1;
             }
         }
-        assert_eq!(compared, 13_824);
+        assert_eq!(compared, 20_736);
     }
 
     #[test]
@@ -1443,15 +1505,38 @@ mod tests {
             decode_batch_policy(&inactive_fee),
             Err(PolicyIdentityErrorV1::NonCanonicalPadding)
         );
-        // A composite artifact claiming a nonzero rate refuses: both rates
-        // are undecided and the codec deliberately cannot express one.
+        // A composite artifact's rate word carries both rates: dispersion in
+        // bytes 24-25, floor in bytes 26-27.
         let mut composite_rate = bytes;
         composite_rate[22] = 2;
         composite_rate[24] = 1;
         assert_eq!(
-            decode_batch_policy(&composite_rate),
-            Err(PolicyIdentityErrorV1::InvalidEnum)
+            decode_batch_policy(&composite_rate).unwrap().fee_base,
+            FeeBaseV1::CompositeDispersionFloor {
+                dispersion_bps: 1,
+                floor_range_bps: 0,
+            }
         );
+        composite_rate[24] = 0;
+        composite_rate[26] = 1;
+        assert_eq!(
+            decode_batch_policy(&composite_rate).unwrap().fee_base,
+            FeeBaseV1::CompositeDispersionFloor {
+                dispersion_bps: 0,
+                floor_range_bps: 1,
+            }
+        );
+        // A rate past `FEE_BPS_DENOMINATOR` in either half is not a policy.
+        composite_rate[26] = 0;
+        for half in [24usize, 26] {
+            let mut over = composite_rate;
+            over[half] = 0x11;
+            over[half + 1] = 0x27;
+            assert_eq!(
+                decode_batch_policy(&over),
+                Err(PolicyIdentityErrorV1::InvalidEnum)
+            );
+        }
         let mut reserved = bytes;
         reserved[63] = 1;
         assert_eq!(

@@ -96,10 +96,13 @@ pub const GENERAL_CLEARING_POLICY_V1: FrozenPolicyV1 = FrozenPolicyV1 {
 /// the two digests differ in exactly the fee member.
 ///
 /// **Both rates are UNDECIDED and pinned zero here.**  Any nonzero rate is a
-/// **new sibling const with a new digest behind its own ember decision**,
-/// plus the relation-side composite arithmetic (unimplemented; the relation
-/// refuses nonzero composite rates as `PolicyVariantUnimplemented`) and B2's
-/// frozen bounds.  Nothing about this const relaxes any of the five
+/// **new sibling const with a new digest behind its own ember decision**, plus
+/// B2's still-frozen bounds.  The relation-side composite arithmetic now
+/// exists (`clutch_batch::relation_v1::composite_fee_quote`) and this codec can
+/// express any rate in the exact-basis-points band, so a rated profile is a
+/// decision away rather than an implementation away — which changes nothing
+/// about *this* const's bytes, its digest, or its zero rates.  Nothing about
+/// this const relaxes any of the five
 /// `max_fee_atoms == 0` gates: the GENERAL plane keeps clearing under the
 /// frozen zero-fee const, and a fee-bearing epoch admission additionally
 /// requires the Realm's revenue-policy record to name a real treasury and a
@@ -136,8 +139,8 @@ mod tests {
     };
     use clutch_batch::relation_v1::{
         canonical_candidate, canonical_pairing, BookV1, CandidateV1, ErrorV1, OrderV1,
-        PairingWitnessV1, PortfolioOrderV1, RelationDomainV1, ScoreV1, SingleEggOrderV1,
-        SummaryV1, MAX_OUTCOMES, PRICE_SCALE, RELATION_VERSION_V1,
+        PairingWitnessV1, PortfolioOrderV1, RelationDomainV1, ScoreV1, SingleEggOrderV1, SummaryV1,
+        MAX_OUTCOMES, PRICE_SCALE, RELATION_VERSION_V1,
     };
     use clutch_batch::relation_v1_stream::{ClearWorkV1, FeedStatusV1, StreamCandidateV1};
     use clutch_batch::{PartialPolicy, Side};
@@ -269,7 +272,8 @@ mod tests {
                         if work.status() == FeedStatusV1::Complete {
                             break;
                         }
-                        work.push_order(&book.orders[j], candidate.fills[j]).unwrap();
+                        work.push_order(&book.orders[j], candidate.fills[j])
+                            .unwrap();
                         j += 1;
                     }
                     if work.status() != FeedStatusV1::Complete {
@@ -515,16 +519,26 @@ mod tests {
         );
     }
 
-    /// The domain validator admits the fee shape as a valid member — and
-    /// refuses every nonzero rate pair: rates are undecided, and any nonzero
-    /// rate is a new const + digest + ember decision plus the relation-side
-    /// composite arithmetic, which deliberately does not exist yet.
+    /// The domain validator admits the fee shape and every rate pair inside
+    /// the exact-basis-points band, and refuses every pair outside it.
+    ///
+    /// Representable is not decided: the frozen consts in this crate all keep
+    /// the zero pair, and a production rate is still a new sibling const with a
+    /// new digest behind its own ember decision.  What changed is only that a
+    /// rate can now be *expressed and verified* — the relation implements the
+    /// arithmetic, so refusing to encode a rate would refuse a policy the
+    /// verifier can actually run.
     #[test]
-    fn the_fee_shape_is_domain_valid_and_nonzero_rates_refuse() {
+    fn the_fee_shape_is_domain_valid_and_rates_are_representable() {
         let full = full_domain_with(GENERAL_CLEARING_FEE_SHAPE_V1, 2, 2);
         assert_eq!(zero_sentinel_domain(&full).validate(), Ok(()));
         assert_eq!(GENERAL_CLEARING_FEE_SHAPE_V1.validate(), Ok(()));
-        for (dispersion_bps, floor_range_bps) in [(1u32, 0u32), (0, 1), (40, 10), (10_000, 10_000)]
+        let pinned = batch_policy_digest(&GENERAL_CLEARING_FEE_SHAPE_V1).unwrap();
+        let mut seen: [Identity32V1; 4] = [Identity32V1([0u8; 32]); 4];
+        for (seen_len, (dispersion_bps, floor_range_bps)) in
+            [(1u32, 0u32), (0, 1), (40, 10), (10_000, 10_000)]
+                .into_iter()
+                .enumerate()
         {
             let rated = FrozenPolicyV1 {
                 fee_base: clutch_batch::relation_v1::FeeBaseV1::CompositeDispersionFloor {
@@ -533,13 +547,36 @@ mod tests {
                 },
                 ..GENERAL_CLEARING_FEE_SHAPE_V1
             };
+            assert_eq!(rated.validate(), Ok(()));
+            let bytes = canonical_batch_policy_bytes(&rated).unwrap();
             assert_eq!(
-                rated.validate(),
-                Err(ErrorV1::PolicyVariantUnimplemented),
-                "a nonzero composite rate must refuse validation"
+                decode_batch_policy(&bytes),
+                Ok(rated),
+                "the rate lost a bit"
             );
-            // A nonzero rate has no canonical artifact bytes at all.
-            assert!(canonical_batch_policy_bytes(&rated).is_err());
+            // Every rate pair is its own identity, and none of them is the
+            // frozen zero-rate shape's.
+            let digest = batch_policy_digest(&rated).unwrap();
+            assert_ne!(digest, pinned, "a rated sibling took the frozen identity");
+            assert!(
+                !seen[..seen_len].contains(&digest),
+                "two distinct rate pairs collided on one identity"
+            );
+            seen[seen_len] = digest;
+        }
+        // Outside the band there is no artifact at all.
+        for (dispersion_bps, floor_range_bps) in
+            [(10_001u32, 0u32), (0, 10_001), (u32::MAX, u32::MAX)]
+        {
+            let over = FrozenPolicyV1 {
+                fee_base: clutch_batch::relation_v1::FeeBaseV1::CompositeDispersionFloor {
+                    dispersion_bps,
+                    floor_range_bps,
+                },
+                ..GENERAL_CLEARING_FEE_SHAPE_V1
+            };
+            assert_eq!(over.validate(), Err(ErrorV1::PolicyVariantUnimplemented));
+            assert!(canonical_batch_policy_bytes(&over).is_err());
         }
     }
 
@@ -581,16 +618,10 @@ mod tests {
             (&zero_price, prices(&[0, SCALE]), 2),
         ];
         for (book, vector, owners) in cases {
-            let zero_fee = zero_sentinel_domain(&full_domain_with(
-                GENERAL_CLEARING_POLICY_V1,
-                2,
-                owners,
-            ));
-            let fee_shape = zero_sentinel_domain(&full_domain_with(
-                GENERAL_CLEARING_FEE_SHAPE_V1,
-                2,
-                owners,
-            ));
+            let zero_fee =
+                zero_sentinel_domain(&full_domain_with(GENERAL_CLEARING_POLICY_V1, 2, owners));
+            let fee_shape =
+                zero_sentinel_domain(&full_domain_with(GENERAL_CLEARING_FEE_SHAPE_V1, 2, owners));
             let candidate = canonical_candidate(&zero_fee, book, &vector, 0, 0).unwrap();
             assert!(
                 candidate.fills.iter().any(|fill| *fill != 0),
@@ -701,10 +732,14 @@ mod tests {
         let portfolio_full = full_domain_with(GENERAL_CLEARING_POLICY_V1, 3, 3);
         let portfolio_zero = zero_sentinel_domain(&portfolio_full);
         let portfolio_candidate =
-            canonical_candidate(&portfolio_zero, &portfolio_book, &portfolio_prices, 0, 0)
-                .unwrap();
+            canonical_candidate(&portfolio_zero, &portfolio_book, &portfolio_prices, 0, 0).unwrap();
         assert!(portfolio_candidate.fills.iter().any(|fill| *fill != 0));
-        assert_verdict_identity(&mut work, &portfolio_full, &portfolio_book, &portfolio_candidate);
+        assert_verdict_identity(
+            &mut work,
+            &portfolio_full,
+            &portfolio_book,
+            &portfolio_candidate,
+        );
 
         // Refusal identity: a forged fill refuses both paths with the same
         // relation error.
@@ -900,9 +935,14 @@ mod tests {
             FullSubmittedCandidateV1::from_relation_candidate(&other, &candidate).unwrap();
         let (other_completed, other_feed) =
             complete_submitted_candidate(&other, &book, &other_raw, Some(&witness)).unwrap();
-        let other_verified =
-            verify_submitted_candidate(&other, &book, &other_completed, &other_feed, Some(&witness))
-                .unwrap();
+        let other_verified = verify_submitted_candidate(
+            &other,
+            &book,
+            &other_completed,
+            &other_feed,
+            Some(&witness),
+        )
+        .unwrap();
         assert_ne!(other_verified.score.digest, verified.score.digest);
         assert_ne!(
             other_verified.score.total_order(&verified.score),
