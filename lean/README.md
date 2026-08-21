@@ -30,6 +30,9 @@ DragonsClutch/Solvency.lean     the liability functionals and the central theore
 DragonsClutch/Kernel.lean       market state, position, the ten transitions
 DragonsClutch/Transitions.lean  the transition-level theorems
 DragonsClutch/Vectors.lean      two canonical semantic vectors, evaluated and checked by `#guard`
+DragonsClutch/BSpline.lean      exact rational open-clamped B-spline weights and the rounding rule
+DragonsClutch/BSplineCorpus.lean  the total evaluator, its exactness, and the differential corpus
+DragonsClutch/MomentCone.lean   the price moment cone above degree one, and the admission stage
 ```
 
 The headline theorems, by property ID:
