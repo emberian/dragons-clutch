@@ -1,0 +1,178 @@
+# Dragon's Clutch — Conceptual Canon
+#
+# The forty concepts of the project, in six layers, each with the
+# definition it carries in the project's own vocabulary, its authoritative
+# in-tree source, and its typed relations to the other concepts.
+#
+# Seeded from docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md. Definitions
+# are transcribed, never re-derived. Where the inventory names a relation
+# whose target is not itself a canon concept, the edge is recorded in a
+# `holes` frame rather than improvised into an edge.
+
+#>spw_dragons_clutch_canon_index
+#:canon #!index
+#:layer #!semantics
+#:status #!active
+
+^"roots"{
+  @algebra: ~"./algebra.spw"
+  @custody: ~"./custody.spw"
+  @clearing: ~"./clearing.spw"
+  @refusal: ~"./refusal.spw"
+  @evidence: ~"./evidence.spw"
+  @frame: ~"./frame.spw"
+  @inventory: ~"../../docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
+  @site_map: ~"../../docs/site-plan/SITE_CONTENT_MAP_2026-08-20.md"
+  @spw_index: ~"../index.spw"
+}
+
+^"intent"{
+  ~#goal: "Give the project one canonical, machine-navigable statement of what its words mean and how they depend on each other."
+  ~#seed: "docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md (40 concepts, six layers)"
+  ~#taste: "Precision over coverage. A relation that cannot be stated exactly from the inventory plus its cite is recorded as a hole, not guessed."
+  ~#granularity: "One file per inventory layer, not per concept — .spw/_workbench/.spw/conventions/naming.spw asks for folder composition, short stable names, and one #>spw_* anchor per canonical file."
+}
+
+^"dispatch"{
+  algebra: @algebra
+  custody: @custody
+  clearing: @clearing
+  refusal: @refusal
+  evidence: @evidence
+  frame: @frame
+}
+
+^"layers"{
+  I: .{
+    title = "The claim algebra"
+    span = "1-7"
+    file = ~"./algebra.spw"
+  }[reg=facet]
+  II: .{
+    title = "Custody and conservation"
+    span = "8-13"
+    file = ~"./custody.spw"
+  }[reg=facet]
+  III: .{
+    title = "The book and the clearing"
+    span = "14-31"
+    file = ~"./clearing.spw"
+  }[reg=facet]
+  IV: .{
+    title = "Resolution and refusal"
+    span = "32-35"
+    file = ~"./refusal.spw"
+  }[reg=facet]
+  V: .{
+    title = "The evidence culture"
+    span = "36-38"
+    file = ~"./evidence.spw"
+  }[reg=facet]
+  VI: .{
+    title = "Frame concepts"
+    span = "39-40"
+    file = ~"./frame.spw"
+  }[reg=facet]
+}
+
+# ── Relation vocabulary ────────────────────────────────────────
+
+^"verbs"{
+  # The four typed edges the inventory declares, read through the Spw sigils.
+  ~uses: "builds on — the concept draws on another's potential"
+  ^refines: "is a sharper form of — integration into a tighter frame"
+  =refuses: "is defined by what it rejects — a constraint stated by exclusion"
+  %measures: "quantifies"
+}
+
+^"edge_form"{
+  bare: "a set entry that is a bare concept id is an unqualified edge to that concept"
+  qualified: "a set entry of the form \"<qualifier> -> <concept id>\" carries the inventory's own qualifying words on the edge"
+  inverse: "used_by / measured_by / anchored_by carry an edge the inventory states from the object's side"
+  external: "uses_external / refines_external / refuses_external / measures_external / used_by_external carry a stated relation whose target is not a canon concept"
+  binds: "a stated relation whose verb is not one of the four typed verbs, kept verbatim rather than coerced into one"
+  adjacent: "the inventory's satellite terms — named, deliberately not promoted to entries"
+}
+
+^"fields"{
+  n: "inventory entry number, 1-40"
+  label: "the inventory's own heading for the concept"
+  define: "the inventory's one-sentence definition, transcribed"
+  cite: "the inventory's source line, verbatim"
+  source: "path ref to the authoritative in-tree source"
+  corroborant: "path ref to the second source the cite names, when there is one"
+  teaches: "the microsite page that teaches the concept (first page listed in the inventory)"
+  recurs: "further pages the inventory lists for the concept"
+  plane: "claim-plane statement, only where the inventory carries one"
+  status: "in-tree status note, only where the inventory carries one"
+  hub: "true for the four densest hubs the inventory names as the canon's roots"
+}
+
+# ── Hub roots ──────────────────────────────────────────────────
+
+^"hubs"{
+  # "the densest hubs — Clutch (2), conservation (11), refusal (32),
+  #  claim plane (33) — are the canon's natural roots" (inventory, coverage map)
+  clutch: .{ n = 2, file = ~"./algebra.spw" }[reg=facet]
+  conservation: .{ n = 11, file = ~"./custody.spw" }[reg=facet]
+  refusal: .{ n = 32, file = ~"./refusal.spw" }[reg=facet]
+  claim_plane: .{ n = 33, file = ~"./refusal.spw" }[reg=facet]
+}
+
+# ── Concept register ───────────────────────────────────────────
+
+^"register"{
+  # Every inventory entry, by id, to the file that carries it.
+  algebra: #[
+    egg, clutch, degree, partition_of_unity,
+    coefficient_vector, compatibility_lowering, largest_remainder
+  ][reg=set]
+  custody: #[
+    diagonal_motion, materialize, custody_boundary,
+    conservation, sup_norm_collateral, risk_quotient
+  ][reg=set]
+  clearing: #[
+    book, tombstone, live_rank, owner_tag, reservation, candidate,
+    relation, the_walk, verdict, entitlement, selection, simplex_prices,
+    implied_measure, zero_gap_certificate, checkpoint, verify_not_find,
+    dispersion, quotient_norm
+  ][reg=set]
+  refusal: #[ refusal, claim_plane, lapse, hatch ][reg=set]
+  evidence: #[ seal, two_elf_discipline, attestation ][reg=set]
+  frame: #[ realm_hoard, eggcrate ][reg=set]
+}
+
+^"coverage"{
+  authored: 40
+  stubbed: 0
+  total: 40
+  note: "Every inventory entry carries a full one-sentence definition, so no concept is a definition stub. Unresolvable relation targets are recorded per-file in `holes`, not as concept stubs."
+}
+
+# ── Seed discrepancies ─────────────────────────────────────────
+
+^"discrepancies"{
+  # Noted, not repaired: the canon transcribes the seed rather than
+  # correcting it. Each is a question for the inventory's author.
+
+  hoard_number: "Entry 10 writes \"uses Hoard (22)\", but entry 22 is verdict and Realm & Hoard is entry 39. The canon binds custody_boundary to realm_hoard on the text, not the number."
+
+  solana_layout_path: "Entry 14 cites \"programs/solana-layout (SOLANA_LAYOUT.md)\". The directory programs/solana-layout exists; SOLANA_LAYOUT.md is at docs/implementation/SOLANA_LAYOUT.md. Both are carried."
+
+  coverage_map_transpose: "The coverage map is not a strict transpose of the per-entry page fields: 8 and 39 list P4 but are absent from the P4 row, 5 and 26 list P3 but are absent from the P3 row, and 32 lists P1-P7 but appears only in the P1 row."
+
+  teaching_page_uniqueness: "The map states every concept has exactly one teaching page, yet 34 appears in both the P3 and P5 rows and 18 in both P3 and P4. The canon takes the first page listed on the entry as `teaches` and the rest as `recurs`, per the map's stated rule."
+}
+
+^"invariant"{
+  "A definition here is the inventory's sentence, not a paraphrase.",
+  "A typed edge names a canon concept; anything else is a hole, an external, or a bind.",
+  "Evidence status for a concept is whatever its source's claim plane says; `plane` appears only where the inventory states one.",
+}
+
+~<./algebra.spw>
+~<./custody.spw>
+~<./clearing.spw>
+~<./refusal.spw>
+~<./evidence.spw>
+~<./frame.spw>
