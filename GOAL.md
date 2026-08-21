@@ -29,21 +29,31 @@ ready in degg-research.
 ## directions blessed. Human gates unchanged (mainnet, real value, real-user
 ## markets, registry flip, filings, L0).
 
-## Next 3 moves (technical work resumed 2026-08-21 ~05:40 on ember's word;
-## filing folder stays self-serve at degg-research/filing/2026-08-cftc/)
+## Standing directive (ember, 2026-08-21 ~07:30): NO MORE HOLES. Do it all,
+## systematically, in parallel, Opus swarms. Local sim tests ARE complete
+## testing. Stop deferring to external calendars (the Pyth cutover matters
+## only for pinning a live mainnet identity — one const, later). Stop
+## per-wave reseals: ONE batched cycle-G reseal when the swarm lands.
 
-1. Wave launching: W1 PROMOTION (walk-plane CU/quote rows, evidence-only at
-   the cb94c27 seal — lands FIRST, before any identity fork), the
-   PARTIALFILLLEDGER DESIGN (the largest product gap; relation
-   partial_policy plumbing + receipts generalization), FEE PLUMBING TO THE
-   BOUNDARY (RevenuePolicy adopted: policy object + record family +
-   treasury-Position path + carry fields + fee-bearing sibling const +
-   the eight falsifiers, rates stay zero), and R2 Phase-0 seeding +
-   housekeeping (small, Opus).
-2. Merge order: W1 -> then the program-forking merges (fee plumbing,
-   eventually partial fills) into ONE cycle-F reseal.
-3. Filing week continues on ember's clock: pair by Mon 8/24, perps by
-   Wed 8/26, statement Thu 8/27; daily transcript check from Saturday.
+## The swarm (all Opus, parallel worktrees, territory-partitioned)
+
+A. PARTIAL FILLS (reservation v2 + seam generalization + campaigns) — then
+   chains: B. VIRTUALPOT + rounding-pot realization + Position close, and
+   H. AON/min-fill sibling profile machinery.
+C. FEE RELATION ARITHMETIC (composite base in the relation, rates
+   parameterized, nonzero TEST consts; frozen consts stay zero).
+D. R2/PYTH FULL LOCAL INTEGRATION (decoders merged, ingestion wired,
+   fabricated Pyth-shaped accounts, Endow-with-real-source end to end,
+   registry machinery tested — the live-identity pin is one const later).
+E. KEEPER BINARY (the cranker, real validator, fold-batch composition —
+   discharges the packet caveat).
+F. FRONTEND (operator bench M0-M1 per the design: harness lib split,
+   operatord, watch mode, trade mode).
+G. DEGREE 2-3 SMOOTH CLAIMS (admission + payout, differential vs Lean).
+I. CAMPAIGNS AT SCALE (64-tick, max books, exact-tie scale, second
+   profile, multi-market epochs — the W2/V2 evidence).
+J. SMALL-FIX BATCH (stale blocker row, mock path-sensitivity, queued
+   rustdoc + doc gates, the macOS relocation-probe protocol amendment).
 
 ## Ember decision queue (2026-08-19 morning)
 
