@@ -56,6 +56,8 @@
 //! | [`accounts`] | hostile-metadata authentication, address comparison, and every account decoder |
 //! | [`dispatch`] | request decoding and routing to exactly one instruction family |
 //! | [`instructions`] | one module per instruction family; see each module's status |
+//! | [`instructions_sysvar`] | pinned Instructions-sysvar decode for the R2 immediate-post join; routed by nothing |
+//! | [`loader_state`] | pinned Upgradeable Loader ProgramData decode for the R2 deployment-slot pin; routed by nothing |
 //! | [`native_window`] | bounded sealed-archive occupation fold persisted only by Resolution v4 |
 //! | [`token`] | Token-2022 observation, admission, and CPI construction |
 //!
@@ -76,6 +78,8 @@ pub mod claim_truth;
 pub mod dispatch;
 pub mod error;
 pub mod instructions;
+pub mod instructions_sysvar;
+pub mod loader_state;
 pub mod native_window;
 pub mod seeds;
 pub mod source;
