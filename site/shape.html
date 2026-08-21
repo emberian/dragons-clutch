@@ -219,11 +219,20 @@ distances, local support, solvency and all
 CURRENT_TRUTH.md &#167;3</a>
 — and they also <em>run</em>: a degree-2 and a degree-3 market are founded
 from a bank holding no Clutch account at all, then split, resolved from a
-sealed source window, and redeemed both internally and by a bearer, with
-every weight derived in exact <code>u128</code> integer arithmetic and no
-floating point anywhere on the path.
+sealed source window, and redeemed both internally and by a bearer with the
+collateral conserved to the atom, every weight derived in exact
+<code>u128</code> integer arithmetic and no floating point anywhere on the
+path. The source under that walk is the laboratory mock adapter on the
+explicitly non-production ELF, as every succeeding source claim on this site
+must be; the claim, weight and redemption semantics above it are the real
+ones.
 <a class="badge" href="evidence.html#sbf-executed">SBF-EXECUTED &#183; bank
-&#183; UNPROMOTED — CURRENT_TRUTH.md &#167;3</a></p>
+&#183; UNPROMOTED — CURRENT_TRUTH.md &#167;3</a>
+Separately, 3,360 Lean-computed weight vectors across all three smooth
+degrees match the production evaluator byte for byte, and eight deliberately
+broken variants of it fail.
+<a class="badge" href="evidence.html#checked-finite">CHECKED-FINITE —
+verus/bspline/DEGREE_CORPUS.md</a></p>
 
 <p>What is genuinely open at degree &#8805; 2 is not the claim plane; it is
 the <em>price</em> plane, and the difference is not bureaucratic caution.
