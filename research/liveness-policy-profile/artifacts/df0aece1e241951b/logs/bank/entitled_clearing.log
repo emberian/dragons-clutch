@@ -1,0 +1,17 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.24s
+     Running tests/entitled_clearing.rs (target/debug/deps/entitled_clearing-fe2533658b41d2ce)
+
+running 4 tests
+test lapsed_epoch_reservations_stand_under_the_expiry_blocker ... ok
+test partial_fill_candidate_refuses_entitlement ... ok
+test portfolio_order_actually_clears_with_conservation ... FreezeEntitlement CU: 98411
+EntitleSlice (single) CU: 203097
+EntitleSlice (portfolio pair, 2 receipts) CU: 243508
+SettlePage (entitled direct slice) CU: 47328
+SettlePage (entitled portfolio full pair) CU: 224233
+ok
+test virtual_split_candidate_refuses_the_entitlement_freeze ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.96s
+

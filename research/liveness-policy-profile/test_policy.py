@@ -59,9 +59,9 @@ class PolicyTests(unittest.TestCase):
     def test_resolution_work_maximum_path_is_exact(self) -> None:
         row = policy.derive(self.evidence)["resolution_work"]
         self.assertEqual(row["status"], "PASS")
-        # The Fold(1) route covers its widest observation, the 88,434-CU
+        # The Fold(1) route covers its widest observation, the 88,422-CU
         # singleton measured inside the two-fold batch scenario.
-        self.assertEqual(row["routes"]["fold_1"]["measured_cu"], 88_434)
+        self.assertEqual(row["routes"]["fold_1"]["measured_cu"], 88_422)
         self.assertEqual(row["fold_path_lamports"], 7_360_000)
         self.assertEqual(row["success_rewards_lamports"], 7_680_000)
         self.assertEqual(row["worst_abort_rewards_lamports"], 7_530_000)
@@ -74,7 +74,7 @@ class PolicyTests(unittest.TestCase):
         row = derived["resolution_work_batched"]
         self.assertEqual(row["status"], "PASS")
         self.assertEqual(row["maximum_admitted_batch"], 12)
-        self.assertEqual(row["routes"]["fold_batch_12"]["measured_cu"], 929_573)
+        self.assertEqual(row["routes"]["fold_batch_12"]["measured_cu"], 929_429)
         self.assertEqual(row["routes"]["fold_batch_12"]["selected_limit_cu"], 1_170_000)
         self.assertEqual(
             row["routes"]["fold_batch_12"]["keeper_reward_lamports"], 1_280_000
@@ -127,7 +127,7 @@ class PolicyTests(unittest.TestCase):
         derived = policy.derive(self.evidence)
         row = derived["direct_v2"]["select"]
         self.assertEqual(row["status"], "PASS")
-        self.assertEqual(row["measured_cu"], 226_444)
+        self.assertEqual(row["measured_cu"], 226_522)
         self.assertEqual(row["selected_limit_cu"], 290_000)
         self.assertEqual(row["keeper_reward_lamports"], 400_000)
         self.assertEqual(derived["direct_v2"]["status"], "STOP")
@@ -176,6 +176,7 @@ class PolicyTests(unittest.TestCase):
                 "clear_walk",
                 "candidate_selection",
                 "entitled_clearing",
+                "disagreement_exhibit",
                 "terminal_closure",
             ],
         )
@@ -185,7 +186,7 @@ class PolicyTests(unittest.TestCase):
                 row["admission"], "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY", family
             )
             self.assertIn(family, policy.SAME_ELF_MEASUREMENTS)
-        # The five general-clearing logs are sealed with the current root.
+        # The six general-clearing logs are sealed with the current root.
         artifact_root = self.evidence["artifact"]["path"].rsplit("/", 1)[0]
         for log in (
             "general_epoch",
@@ -193,20 +194,29 @@ class PolicyTests(unittest.TestCase):
             "clear_lifecycle",
             "candidate_selection",
             "entitled_clearing",
+            "disagreement_exhibit",
         ):
             self.assertIn(
                 f"{artifact_root}/logs/bank/{log}.log", self.evidence["evidence_files"]
             )
         # Exact measured pins from those logs.
         epoch = self.evidence["measurements"]["general_epoch"]
-        self.assertEqual(epoch["init_epoch_cu"], [42_699])
+        self.assertEqual(epoch["init_epoch_cu"], [42_743])
         self.assertEqual(
             epoch["freeze_epoch_rows"][2],
-            {"pages": 3, "orders": 40, "cu": [717_825, 717_825]},
+            {"pages": 3, "orders": 40, "cu": [717_815, 717_815]},
         )
         walk_rows = self.evidence["measurements"]["clear_walk"]
-        self.assertEqual(max(walk_rows["forty_order_pass1_cu"]), 391_428)
-        self.assertEqual(walk_rows["complete_cu"], [122_865, 127_081])
+        self.assertEqual(max(walk_rows["forty_order_pass1_cu"]), 393_207)
+        self.assertEqual(walk_rows["complete_cu"], [121_123, 125_369])
+        # The exhibit's third book composition, sealed from its own log.
+        exhibit = self.evidence["measurements"]["disagreement_exhibit"]
+        self.assertEqual(exhibit["exhibit_pass1_cu"], [411_611])
+        self.assertEqual(exhibit["exhibit_pass2_cu"], [301_177])
+        self.assertEqual(exhibit["init_clear_work_cu"], [70_613])
+        self.assertEqual(len(exhibit["entitle_slice_single_cu"]), 5)
+        self.assertEqual(len(exhibit["settle_page_entitled_direct_slice_cu"]), 5)
+        self.assertEqual(exhibit["test_result"], "PASS_2_OF_2")
         tampered = copy.deepcopy(self.evidence)
         tampered["measurements"]["clear_walk"]["admission"] = "PROMOTED"
         with self.assertRaises(policy.CheckError):
@@ -231,24 +241,24 @@ class PolicyTests(unittest.TestCase):
         """
 
         selection = self.evidence["measurements"]["candidate_selection"]
-        self.assertEqual(max(selection["seal_candidate_cu"]), 64_168)
-        self.assertEqual(selection["seal_candidate_displacing_cu"], [64_168])
+        self.assertEqual(max(selection["seal_candidate_cu"]), 64_155)
+        self.assertEqual(selection["seal_candidate_displacing_cu"], [64_155])
         self.assertEqual(
             {row["shape"]: row["cu"] for row in selection["finalize_selection_rows"]},
             {
-                "3_retained_2_verified_selects_winner": [49_228],
-                "2_verified_beyond_128_bit_digest_tie": [39_465],
-                "0_verified_honest_lapse": [20_693],
+                "3_retained_2_verified_selects_winner": [49_280],
+                "2_verified_beyond_128_bit_digest_tie": [39_512],
+                "0_verified_honest_lapse": [20_685],
             },
         )
         self.assertEqual(selection["test_result"], "PASS_5_OF_5")
         entitled = self.evidence["measurements"]["entitled_clearing"]
-        self.assertEqual(entitled["freeze_entitlement_cu"], [100_158])
-        self.assertEqual(entitled["entitle_slice_single_cu"], [210_607])
-        self.assertEqual(entitled["entitle_slice_portfolio_pair_cu"], [243_518])
-        self.assertEqual(entitled["settle_page_entitled_direct_slice_cu"], [53_330])
+        self.assertEqual(entitled["freeze_entitlement_cu"], [98_411])
+        self.assertEqual(entitled["entitle_slice_single_cu"], [203_097])
+        self.assertEqual(entitled["entitle_slice_portfolio_pair_cu"], [243_508])
+        self.assertEqual(entitled["settle_page_entitled_direct_slice_cu"], [47_328])
         self.assertEqual(
-            entitled["settle_page_entitled_portfolio_full_pair_cu"], [234_735]
+            entitled["settle_page_entitled_portfolio_full_pair_cu"], [224_233]
         )
         self.assertEqual(
             entitled["bank_conservation"],
@@ -285,57 +295,91 @@ class PolicyTests(unittest.TestCase):
                 policy.derive(tampered)
 
     def test_walk_plane_w1_quote_table_is_exactly_rederived(self) -> None:
-        """Rung W1's twenty-five rows are the sealed maxima, quoted exactly.
+        """Rung W1's thirty-five rows are the sealed maxima, quoted exactly.
 
         Every row is ``ceil(measured * 5/4)`` rounded up to the 10,000-CU
         quantum, priced at 10,000 lamports base cap + 1 lamport/CU + the
         100,000-lamport keeper tip — the same arithmetic every promoted family
         uses, run against this seal's own tables rather than transcribed from
         the promotion report — which was compiled against the superseded
-        e8ba31d5… root, where 23 of the 25 measured maxima and 5 of the 25
-        selected limits differ from these.  The pins below are the route
-        maxima, and a maximum that drifts re-derives its limit and its reward,
-        which the projection equality then catches.
+        superseded root of its own cycle.  Seven of the 25 routes carried over
+        from the 4fded7a6… seal move a selected limit by one quantum here, and
+        ten further routes join with the disagreement exhibit's third book
+        composition.  The pins below are the route maxima, and a maximum that
+        drifts re-derives its limit and its reward, which the projection
+        equality then catches.
         """
 
         w1 = policy.derive(self.evidence)["general_clearing_walk"]["w1"]
         self.assertEqual(w1["rung"], "W1")
         self.assertEqual(w1["status"], "PASS")
         self.assertEqual(w1["stopped_routes"], [])
-        self.assertEqual(w1["quoted_route_count"], 25)
-        self.assertEqual(len(w1["routes"]), 25)
+        self.assertEqual(w1["quoted_route_count"], 35)
+        self.assertEqual(len(w1["routes"]), 35)
         self.assertEqual(
             w1["quoted_families"],
-            ["general_epoch", "clear_walk", "candidate_selection", "entitled_clearing"],
+            [
+                "general_epoch",
+                "clear_walk",
+                "candidate_selection",
+                "entitled_clearing",
+                "disagreement_exhibit",
+            ],
         )
         self.assertEqual(w1["worst_route"], "freeze_epoch_3pages_40orders")
-        self.assertEqual(w1["worst_measured_cu"], 717_825)
+        self.assertEqual(w1["worst_measured_cu"], 717_815)
+        # The exhibit's book measures three quoted routes HOTTER than the
+        # two-suite books do; that is the whole reason it is quoted.
+        self.assertGreater(
+            w1["routes"]["advance_clear_work_pass1_exhibit_book"]["measured_cu"],
+            w1["routes"]["advance_clear_work_pass1_forty_order"]["measured_cu"],
+        )
+        self.assertGreater(
+            w1["routes"]["entitle_slice_single_exhibit_book"]["measured_cu"],
+            w1["routes"]["entitle_slice_single"]["measured_cu"],
+        )
+        self.assertGreater(
+            w1["routes"][
+                "settle_page_entitled_portfolio_full_pair_exhibit_book"
+            ]["measured_cu"],
+            w1["routes"]["settle_page_entitled_portfolio_full_pair"]["measured_cu"],
+        )
         expected = {
-            "init_epoch": (42_699, 60_000, 170_000),
-            "place_order_single": (192_029, 250_000, 360_000),
-            "place_order_portfolio": (194_345, 250_000, 360_000),
-            "freeze_epoch_1page_4orders": (233_564, 300_000, 410_000),
-            "freeze_epoch_2pages_17orders": (478_005, 600_000, 710_000),
-            "freeze_epoch_3pages_40orders": (717_825, 900_000, 1_010_000),
-            "advance_clear_work_pass1_small_book": (299_378, 380_000, 490_000),
-            "advance_clear_work_pass2_small_book": (290_626, 370_000, 480_000),
-            "advance_clear_work_pass1_forty_order": (391_428, 490_000, 600_000),
-            "advance_clear_work_pass2_forty_order": (309_006, 390_000, 500_000),
-            "advance_clear_slices": (177_748, 230_000, 340_000),
-            "complete_clear_work_walk": (127_081, 160_000, 270_000),
-            "submit_candidate": (35_744, 50_000, 160_000),
-            "write_candidate_feed_fills": (9_647, 20_000, 130_000),
-            "write_candidate_feed_slices": (9_888, 20_000, 130_000),
-            "seal_candidate_including_displacing": (64_168, 90_000, 200_000),
-            "finalize_selection_3_retained_winner": (49_228, 70_000, 180_000),
-            "finalize_selection_digest_tie": (39_465, 50_000, 160_000),
-            "finalize_selection_honest_lapse": (20_693, 30_000, 140_000),
-            "complete_clear_work_selection": (127_927, 160_000, 270_000),
-            "freeze_entitlement": (100_158, 130_000, 240_000),
-            "entitle_slice_single": (210_607, 270_000, 380_000),
-            "entitle_slice_portfolio_pair": (243_518, 310_000, 420_000),
-            "settle_page_entitled_direct_slice": (53_330, 70_000, 180_000),
-            "settle_page_entitled_portfolio_full_pair": (234_735, 300_000, 410_000),
+            "complete_clear_work_selection": (126_213, 160_000, 270_000),
+            "finalize_selection_3_retained_winner": (49_280, 70_000, 180_000),
+            "finalize_selection_digest_tie": (39_512, 50_000, 160_000),
+            "finalize_selection_honest_lapse": (20_685, 30_000, 140_000),
+            "seal_candidate_including_displacing": (64_155, 90_000, 200_000),
+            "submit_candidate": (35_734, 50_000, 160_000),
+            "write_candidate_feed_fills": (9_641, 20_000, 130_000),
+            "write_candidate_feed_slices": (9_882, 20_000, 130_000),
+            "advance_clear_slices": (173_859, 220_000, 330_000),
+            "advance_clear_work_pass1_forty_order": (393_207, 500_000, 610_000),
+            "advance_clear_work_pass1_small_book": (288_078, 370_000, 480_000),
+            "advance_clear_work_pass2_forty_order": (305_527, 390_000, 500_000),
+            "advance_clear_work_pass2_small_book": (286_935, 360_000, 470_000),
+            "complete_clear_work_walk": (125_369, 160_000, 270_000),
+            "advance_clear_slices_exhibit_book": (163_296, 210_000, 320_000),
+            "advance_clear_work_pass1_exhibit_book": (411_611, 520_000, 630_000),
+            "advance_clear_work_pass2_exhibit_book": (301_177, 380_000, 490_000),
+            "complete_clear_work_exhibit_book": (118_706, 150_000, 260_000),
+            "entitle_slice_portfolio_pair_exhibit_book": (270_660, 340_000, 450_000),
+            "entitle_slice_single_exhibit_book": (224_645, 290_000, 400_000),
+            "freeze_entitlement_exhibit_book": (98_407, 130_000, 240_000),
+            "init_clear_work_exhibit_book": (70_613, 90_000, 200_000),
+            "settle_page_entitled_direct_slice_exhibit_book": (42_374, 60_000, 170_000),
+            "settle_page_entitled_portfolio_full_pair_exhibit_book": (250_584, 320_000, 430_000),
+            "entitle_slice_portfolio_pair": (243_508, 310_000, 420_000),
+            "entitle_slice_single": (203_097, 260_000, 370_000),
+            "freeze_entitlement": (98_411, 130_000, 240_000),
+            "settle_page_entitled_direct_slice": (47_328, 60_000, 170_000),
+            "settle_page_entitled_portfolio_full_pair": (224_233, 290_000, 400_000),
+            "freeze_epoch_1page_4orders": (233_554, 300_000, 410_000),
+            "freeze_epoch_2pages_17orders": (477_995, 600_000, 710_000),
+            "freeze_epoch_3pages_40orders": (717_815, 900_000, 1_010_000),
+            "init_epoch": (42_743, 60_000, 170_000),
+            "place_order_portfolio": (194_344, 250_000, 360_000),
+            "place_order_single": (192_028, 250_000, 360_000),
         }
         self.assertEqual(set(w1["routes"]), set(expected))
         boundary = policy.derive(self.evidence)[
@@ -358,8 +402,8 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(row["external_fee_cap_lamports"], 10_000 + limit, name)
             self.assertEqual(reward, row["external_fee_cap_lamports"] + 100_000, name)
             self.assertLessEqual(measured, boundary, name)
-        # The five genuinely variable routes say so: the driver picks the batch
-        # composition, so the quote bounds the measured compositions only.
+        # The eight genuinely variable routes say so: the driver picks the
+        # batch composition, so the quote bounds the measured compositions only.
         self.assertEqual(
             sorted(
                 name
@@ -368,8 +412,11 @@ class PolicyTests(unittest.TestCase):
             ),
             [
                 "advance_clear_slices",
+                "advance_clear_slices_exhibit_book",
+                "advance_clear_work_pass1_exhibit_book",
                 "advance_clear_work_pass1_forty_order",
                 "advance_clear_work_pass1_small_book",
+                "advance_clear_work_pass2_exhibit_book",
                 "advance_clear_work_pass2_forty_order",
                 "advance_clear_work_pass2_small_book",
             ],
@@ -705,12 +752,12 @@ class PolicyTests(unittest.TestCase):
             )
         # Rows the bump search cannot move are pinned exactly; rows it can
         # move are sealed as the three-run spread rather than one sample.
-        self.assertEqual(rows["init_epoch_cu"], [41_226] * 3)
-        self.assertEqual(rows["init_order_page_cu"], [221_020] * 3)
-        self.assertEqual(rows["begin_verification_cu"], [23_596] * 3)
-        self.assertEqual(rows["verify_candidate_rows"][0]["cu"], [151_358] * 3)
-        self.assertEqual(rows["abort_unfrozen_rows"][0]["cu"], [10_393] * 3)
-        self.assertEqual(max(rows["freeze_epoch_cu"]), 382_784)
+        self.assertEqual(rows["init_epoch_cu"], [41_238] * 3)
+        self.assertEqual(rows["init_order_page_cu"], [221_040] * 3)
+        self.assertEqual(rows["begin_verification_cu"], [23_598] * 3)
+        self.assertEqual(rows["verify_candidate_rows"][0]["cu"], [151_409] * 3)
+        self.assertEqual(rows["abort_unfrozen_rows"][0]["cu"], [10_395] * 3)
+        self.assertEqual(max(rows["freeze_epoch_cu"]), 382_795)
         self.assertEqual(
             [row["disposition"] for row in rows["submit_candidate_rows"]],
             [
@@ -894,6 +941,175 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(policy.CheckError) as caught:
             policy.check_artifact_binding(lying)
         self.assertIn("disagrees with its own digest", str(caught.exception))
+
+    def test_a_diverged_relocation_must_carry_the_controls_that_locate_it(
+        self,
+    ) -> None:
+        """PATH_SENSITIVE is a measurement; its attribution is a claim.
+
+        The protocol probe builds its relocated Cargo home under ``$TMPDIR``,
+        which on macOS is reached through the ``/var`` -> ``/private/var``
+        symlink.  Two controls at ordinary paths — one outside the temporary
+        filesystem entirely, one inside it in resolved form — reproduced the
+        canonical bytes exactly, which narrows the finding from "the Cargo home
+        moved" to "the Cargo home's path contains an unresolved symlink".  A
+        narrower claim has to carry the observations that earned it, so the
+        checker refuses a bare disposition, a control whose stated disposition
+        disagrees with its own digest, an all-diverged control set (which would
+        support the WIDER claim, not this one), and a missing attribution.
+        """
+
+        row = self.evidence["artifact_reproducibility"]
+        controls = row["relocated_controls"]
+        self.assertGreaterEqual(len(controls), 2)
+        digest = self.evidence["artifact"]["sha256"]
+        reproduced = [c for c in controls if c["sha256"] == digest]
+        self.assertTrue(reproduced, "the attribution needs a reproducing control")
+        for control in controls:
+            self.assertEqual(set(control), {"path", "sha256", "bytes", "disposition"})
+        self.assertIn("SYMLINK", row["relocated_attribution"])
+
+        stripped = copy.deepcopy(self.evidence)
+        stripped["artifact_reproducibility"].pop("relocated_controls")
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.check_artifact_binding(stripped)
+        self.assertIn("control builds", str(caught.exception))
+
+        mislabelled = copy.deepcopy(self.evidence)
+        mislabelled["artifact_reproducibility"]["relocated_controls"][0][
+            "disposition"
+        ] = "DIVERGED_FROM_CANONICAL"
+        with self.assertRaises(policy.CheckError):
+            policy.check_artifact_binding(mislabelled)
+
+        all_diverged = copy.deepcopy(self.evidence)
+        for control in all_diverged["artifact_reproducibility"]["relocated_controls"]:
+            control["sha256"] = "0" * 64
+            control["disposition"] = "DIVERGED_FROM_CANONICAL"
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.check_artifact_binding(all_diverged)
+        self.assertIn("widened", str(caught.exception))
+
+        unattributed = copy.deepcopy(self.evidence)
+        unattributed["artifact_reproducibility"].pop("relocated_attribution")
+        with self.assertRaises(policy.CheckError):
+            policy.check_artifact_binding(unattributed)
+
+    def test_revenue_boundary_is_sealed_and_derives_no_compute_row(self) -> None:
+        """The fee-bearing boundary is driven, refused, and never quoted.
+
+        ``revenue_policy.rs`` prints no CU label and no headline row, so the
+        seal derives no compute row, no quote, and no refusal code from it —
+        the codes it asserts live in the suite source, and a number transcribed
+        out of source is not evidence.  What it does weld is the funding story:
+        both rates zero, the treasury a sentinel that refuses structurally, and
+        the record row an honest STOP carrying its own residual id.
+        """
+
+        family = self.evidence["measurements"]["revenue_boundary"]
+        self.assertEqual(family["admission"], "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY")
+        self.assertEqual(family["suites"], ["revenue_policy.rs"])
+        self.assertEqual(family["per_route_cu"], "NOT_LABELLED_BY_SUITE_NO_ROW_DERIVED")
+        self.assertEqual(
+            family["refusal_codes"], "NOT_PRINTED_BY_SUITE_ASSERTED_IN_SOURCE_ONLY"
+        )
+        self.assertEqual(family["test_result"], "PASS_1_OF_1")
+        self.assertIn("revenue_boundary", policy.SAME_ELF_MEASUREMENTS)
+
+        derived = policy.derive(self.evidence)["revenue_boundary"]
+        self.assertFalse(derived["admission_rows_derived"])
+        self.assertFalse(derived["cu_rows_derived"])
+        self.assertFalse(derived["quote_rows_derived"])
+        self.assertFalse(derived["fee_bearing_epoch_admits"])
+        self.assertFalse(derived["vault_built"])
+        self.assertEqual(derived["live_flags"], "UNTOUCHED")
+        self.assertEqual(derived["record_row"], "revenue.policy_record.v1")
+        self.assertEqual(derived["record_bytes"], 156)
+        self.assertEqual(derived["record_rent_lamports"], 1_976_640)
+        self.assertEqual(
+            derived["residual_blocking_id"], "REVENUE.REALM_PERMANENCE_HOLDS_RECORD"
+        )
+        self.assertEqual(derived["fees_as_liveness_funding"], "NEVER_NOT_AT_ANY_RATE")
+
+        terminal = policy.build_terminal(self.evidence["runtime_ref"])
+
+        invented = copy.deepcopy(family)
+        invented["close_record_cu"] = [12_345]
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.require_revenue_boundary_evidence(invented, terminal)
+        self.assertIn("no CU label", str(caught.exception))
+
+        for field in ("rates", "treasury", "per_route_cu", "refusal_codes"):
+            drifted = copy.deepcopy(family)
+            drifted[field] = "SOMETHING_ELSE"
+            with self.assertRaises(policy.CheckError):
+                policy.require_revenue_boundary_evidence(drifted, terminal)
+
+        refundable = copy.deepcopy(terminal)
+        refundable["accounts"]["revenue.policy_record.v1"]["lifecycle_class"] = (
+            "REFUNDABLE_TRANSIENT"
+        )
+        with self.assertRaises(policy.CheckError):
+            policy.require_revenue_boundary_evidence(family, refundable)
+
+        unnamed = copy.deepcopy(terminal)
+        unnamed["accounts"]["revenue.policy_record.v1"]["blocking_ids"] = []
+        with self.assertRaises(policy.CheckError):
+            policy.require_revenue_boundary_evidence(family, unnamed)
+
+    def test_w1_charges_the_exhibit_its_borrowed_heap_frame_rider(self) -> None:
+        """A borrowed measurement may not become a silent one.
+
+        Every walk transaction the disagreement exhibit measures carries the
+        same ``request_heap_frame(262144)`` instruction the ``clear_walk`` suite
+        prices at 150 CU, and the exhibit never re-prices it.  Its routes are
+        therefore charged the ``clear_walk`` figure — which is honest only while
+        the family says out loud that it is borrowing one.
+        """
+
+        exhibit = self.evidence["measurements"]["disagreement_exhibit"]
+        self.assertEqual(
+            exhibit["heap_frame_rider"],
+            policy.WALK_PLANE_W1_BORROWED_SURCHARGE_DECLARATION[
+                "disagreement_exhibit"
+            ],
+        )
+        self.assertIn("disagreement_exhibit", policy.WALK_PLANE_W1_SURCHARGE_BEARING_FAMILIES)
+        w1 = policy.derive(self.evidence)["general_clearing_walk"]["w1"]
+        surcharge = w1["heap_frame_request_surcharge_cu"]
+        self.assertEqual(surcharge, 150)
+        for name, row in w1["routes"].items():
+            if row["family"] != "disagreement_exhibit":
+                continue
+            self.assertGreaterEqual(
+                row["selected_limit_cu"],
+                -(-(row["measured_cu"] + surcharge) * 5 // 4),
+                name,
+            )
+
+        silent = copy.deepcopy(self.evidence)
+        silent["measurements"]["disagreement_exhibit"].pop("heap_frame_rider")
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.derive(silent)
+        self.assertIn("heap-frame rider", str(caught.exception))
+
+    def test_w1_refuses_an_unquoted_measured_field_in_the_exhibit_family(self) -> None:
+        """Nothing measured goes unpublished — in the new family too.
+
+        The exhibit joined rung W1 precisely because a family outside the
+        quoted list escapes this rule; the rule has to bite on it now.
+        """
+
+        extra = copy.deepcopy(self.evidence)
+        extra["measurements"]["disagreement_exhibit"]["some_new_route_cu"] = [1_000]
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.derive(extra)
+        self.assertIn("W1 route coverage of family disagreement_exhibit", str(caught.exception))
+
+        dropped = copy.deepcopy(self.evidence)
+        dropped["measurements"]["disagreement_exhibit"].pop("exhibit_pass1_cu")
+        with self.assertRaises(policy.CheckError):
+            policy.derive(dropped)
 
     def test_terminal_closure_family_is_sealed_and_promotes_nothing(self) -> None:
         """Tags 60-67 seal a close DAG, an exact conservation, and no promotion.

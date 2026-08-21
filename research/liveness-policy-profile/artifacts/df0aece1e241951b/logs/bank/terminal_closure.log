@@ -1,0 +1,12 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.05s
+     Running tests/terminal_closure.rs (target/debug/deps/terminal_closure-02fa4595f4707568)
+
+running 2 tests
+test cleared_epoch_closes_to_the_declared_permanent_set ... TerminalClosure headline (CLEARED epoch): machinery held 531652377 lamports; reclaimed 531639600 to the exact recorded payers; burned 12777 at the incinerator; residual (declared-permanent policy artifact) 1336320
+ok
+test lapsed_epoch_releases_and_closes_with_the_unregistered_residual ... TerminalClosure headline (LAPSED epoch): machinery held 47167920 lamports; reclaimed 47167920; burned 0; unregistered candidate pair stands at 47738640 lamports by design
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+

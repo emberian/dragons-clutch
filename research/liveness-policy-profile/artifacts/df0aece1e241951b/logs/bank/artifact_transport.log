@@ -1,0 +1,20 @@
+   Compiling clutch-batch v0.1.0 (/Users/ember/dev/dragons-clutch/crates/clutch-batch)
+   Compiling clutch-liveness v0.1.0 (/Users/ember/dev/dragons-clutch/crates/clutch-liveness)
+   Compiling clutch-batch-policy-identity v0.1.0 (/Users/ember/dev/dragons-clutch/research/batch-policy-identity)
+   Compiling clutch-solana-layout v0.1.0 (/Users/ember/dev/dragons-clutch/programs/solana-layout)
+   Compiling clutch-solana-reference v0.1.0 (/Users/ember/dev/dragons-clutch/programs/solana-reference)
+   Compiling clutch-sbf v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/program)
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.41s
+     Running tests/artifact_transport.rs (target/debug/deps/artifact_transport-0e6694b4bf670d8a)
+
+running 6 tests
+test every_admitted_artifact_kind_lands_as_its_exact_raw_codec ... ok
+test excess_prefunds_are_donations_and_never_squatting_authority ... ok
+test expired_public_abort_refunds_the_recorded_funder_not_the_reaper ... ok
+test native_terms_hash_rejects_a_semantically_valid_body_with_a_stale_digest ... ok
+test one_lamport_stage_and_final_prefunds_are_topped_up_by_exact_shortfalls ... ok
+test terms_upload_resumes_after_bank_rehydration_and_seals_atomically ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.86s
+

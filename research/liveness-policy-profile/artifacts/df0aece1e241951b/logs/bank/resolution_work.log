@@ -1,0 +1,18 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.12s
+     Running tests/resolution_work.rs (target/debug/deps/resolution_work-d989fb60e7c65dfd)
+
+running 4 tests
+test begin_fold_finalize_is_prefund_safe_replay_safe_and_byte_exact ... ResolutionWork SBF CU: Begin=88029 Fold1=84753 Fold2=89362 Finalize=164718 monolithic=182857
+ok
+test every_bounded_fold_size_has_a_real_sbf_cost_row ... ResolutionWork SBF CU: span=1 Begin=85661 Fold(1)=82390
+ResolutionWork SBF CU: span=2 Begin=91345 Fold(2)=92330
+ResolutionWork SBF CU: span=3 Begin=88027 Fold(3)=93265
+ResolutionWork SBF CU: span=4 Begin=86213 Fold(4)=95710
+ok
+test expiry_keeper_abort_releases_lock_without_capturing_donations ... ResolutionWork SBF CU: BeginAbort=88029 AbortExpired=46888 BeginReopen=88029
+ok
+test source_spec_bump_and_same_domain_archive_substitution_refuse_atomically ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+

@@ -1,34 +1,49 @@
 {
  "schema": "dragons-clutch/liveness-policy-evidence/v2",
  "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
- "capture_date": "2026-08-20",
- "runtime_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
- "runtime_tree": "e16817329b73e6ca9bc21124237195a93e7f19f1",
- "evidence_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
+ "capture_date": "2026-08-21",
+ "runtime_ref": "04acf6165376d3abfb3bc16877e2a0ba2bb47931",
+ "runtime_tree": "c50353b19b27c0a0f5611c3e6cae75291e8cd671",
+ "evidence_ref": "04acf6165376d3abfb3bc16877e2a0ba2bb47931",
  "artifact": {
-  "path": "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/clutch_sbf.so",
-  "sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
-  "bytes": 1979512,
-  "source_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
+  "path": "research/liveness-policy-profile/artifacts/df0aece1e241951b/clutch_sbf.so",
+  "sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+  "bytes": 1986104,
+  "source_ref": "04acf6165376d3abfb3bc16877e2a0ba2bb47931",
   "profile": "default-empty-registry"
  },
  "artifact_reproducibility": {
-  "normal_build_1": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
-  "normal_build_2": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+  "normal_build_1": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+  "normal_build_2": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
   "cross_path_builds": [
    {
-    "path": "/Users/ember/jobs/dragons-clutch-r1-d77d670-xpath-worktree",
-    "sha256": "d33bab44e679de5109c078aff2e504df6924a5cc32693f4f426c5321519317a0",
-    "bytes": 1979512
+    "path": "/Users/ember/jobs/dragons-clutch-r1-04acf61-xpath-worktree",
+    "sha256": "7cd3beb84aa973f81822aa292eaefb66b7299e49f718218cd453be22d378adb5",
+    "bytes": 1986104
    }
   ],
   "cross_path_disposition": "PATH_TIED_SYMBOL_ORDER",
-  "cross_path_divergence": "FIVE_TEXT_BYTES_AT_FOUR_SITES_NO_OTHER_SECTION",
-  "relocated_cargo_home": "6302d3ee9c98d87550361502be2620103f9edfd8b3517f0fb33c9f488c498ae8",
+  "cross_path_divergence": "481_TEXT_BYTES_AT_195_SITES_AND_6_REL_DYN_BYTES_AT_3_SITES_NO_OTHER_SECTION",
+  "relocated_cargo_home": "dd20707f5d61bbfe2e697d60506d08d55b385c859172694f2c4bd3e11c52a562",
   "relocated_disposition": "PATH_SENSITIVE_REGISTRY_PANIC_LOCATION_STRINGS",
   "relocated_divergence": "RODATA_GROWS_552_BYTES_THREE_ABSOLUTE_REGISTRY_PATHS",
+  "relocated_controls": [
+   {
+    "path": "/Users/ember/jobs/dragons-clutch-r1-04acf61-reloc-probe-B",
+    "sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+    "bytes": 1986104,
+    "disposition": "REPRODUCED_CANONICAL_BYTES"
+   },
+   {
+    "path": "/private/var/folders/r8/kfrtq04d5dq_f50zm3tx3phw0000gn/T/clutch-reloc-probe-C.7Io2J5/cargo-home",
+    "sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+    "bytes": 1986104,
+    "disposition": "REPRODUCED_CANONICAL_BYTES"
+   }
+  ],
+  "relocated_attribution": "SYMLINKED_CARGO_HOME_PATH_COMPONENT_NOT_RELOCATION_ITSELF_PROTOCOL_PROBE_RUNS_UNDER_TMPDIR_VAR_TO_PRIVATE_VAR",
   "first_party_final_lto_stack_survivors": 0,
-  "direct_r10_references": 60135,
+  "direct_r10_references": 60441,
   "deepest_direct_r10_offset": 4096
  },
  "historical_artifacts": {
@@ -73,11 +88,17 @@
    "runtime_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
    "evidence_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
    "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
+  },
+  "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb": {
+   "path": "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/clutch_sbf.so",
+   "runtime_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
+   "evidence_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
+   "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
   }
  },
  "capture": {
   "path": "research/liveness-policy-profile/captured-output.txt",
-  "sha256": "de357a3968904b84632a2bc016866534e490d189bbf4318b0a59f91b5deea9ab"
+  "sha256": "8c46975c87414764afa0492ed2bc91a819de6326718a9f80c4253f1eae253da5"
  },
  "source_blobs": {
   "research/liveness-policy-profile/Cargo.toml": "8574e7693c1a85cdb68bf608c5cf4dcde178123b",
@@ -86,7 +107,7 @@
   "programs/clutch-sbf/Cargo.lock": "959aeb4d10ee9717d5de92f3ca5b597ebc1d7e0c",
   "programs/clutch-sbf/program/Cargo.toml": "c9c3b9340ffe54adcd6bee916b3b445c7ababd63",
   "programs/clutch-sbf/program/src/instructions/resolution_work.rs": "6c1e176199559a7ae2e47b45aa4695263f19fc1b",
-  "programs/clutch-sbf/program/src/error.rs": "d606efd8fc4d0a95ac3e4987f433a45e8491e66a",
+  "programs/clutch-sbf/program/src/error.rs": "a0a21f18ca67e79a91e90a4e91ee6f8dac3b0535",
   "programs/solana-layout/Cargo.toml": "d71e72f38d550d7727ac7fbc5370e4e4baa4f1e5",
   "programs/solana-layout/Cargo.lock": "dd741afab8b7545564ccdbf128b40c02b7a807b3",
   "programs/solana-reference/Cargo.toml": "488acf29bbb84ae3ec6717a91b83587c665a7526",
@@ -96,12 +117,12 @@
   "research/batch-policy-identity/Cargo.toml": "ff1100e838f9d6ec7f290134e2ad9d9280b3d417"
  },
  "source_trees": {
-  "programs/clutch-sbf/program/src": "28a64914d52a049f1408ac6ee4c0f043d63824f8",
-  "programs/solana-layout/src": "465e8dd432ed0dc0b924f8119fd8f4fd07596349",
-  "programs/solana-reference/src": "85d59931579eddc8cd5f3f80a86b8dafc876e85e",
-  "crates/clutch-liveness/src": "38f21a9a8a931970b261078b996fcf00b68ebd9a",
-  "crates/clutch-batch/src": "c1f3c614630b186a9d13b6536010f8894c09b471",
-  "research/batch-policy-identity/src": "33b070c451434cfee8c24bf23a52d7fae8a4be42"
+  "programs/clutch-sbf/program/src": "afadbb309681bff60f13c62d60cb42a790034ff8",
+  "programs/solana-layout/src": "81b4ac00306847ba01fd68f5987f412f124149ae",
+  "programs/solana-reference/src": "66be36bb10a2ad02fcb4f219fad03a539a28cee1",
+  "crates/clutch-liveness/src": "9cdad671b72b23caf00931f14b235a20a1e767af",
+  "crates/clutch-batch/src": "0984df200f93b103cadea3278487347c6757f278",
+  "research/batch-policy-identity/src": "41b41d77e2ed6d8c3d517dc90f2b70db8fada82b"
  },
  "test_blobs": {
   "programs/clutch-sbf/svm-tests/Cargo.lock": "2a8392b20ba0e1a23ba471737a0b2196b30fa26d",
@@ -114,6 +135,7 @@
   "programs/clutch-sbf/svm-tests/tests/collateral_leg.rs": "10cbc4891eb93cc71e97a931a8f8e6f6a7e99f47",
   "programs/clutch-sbf/svm-tests/tests/direct_selection_v2.rs": "aa7f85138f51beecf27c0f8a4417b77829cb0cc0",
   "programs/clutch-sbf/svm-tests/tests/direct_selection_v3.rs": "69f064916d913a8b99612aca0ee68d40bd4e0ebc",
+  "programs/clutch-sbf/svm-tests/tests/disagreement_exhibit.rs": "e12300c48de6bad026c13d4e643b8bcc08244e84",
   "programs/clutch-sbf/svm-tests/tests/entitled_clearing.rs": "5e107ae4481e5bd8c7e14ad93f9567d315978965",
   "programs/clutch-sbf/svm-tests/tests/general_epoch.rs": "46709b2eea652931b50f39e665484740e2ef3cdc",
   "programs/clutch-sbf/svm-tests/tests/native_resolution.rs": "1c330494bf68dec713570a740b5dbf730e35d77d",
@@ -122,149 +144,158 @@
   "programs/clutch-sbf/svm-tests/tests/resolution_work.rs": "dc7381db6bfa493b8a37ebfe9f77910ea6459eb7",
   "programs/clutch-sbf/svm-tests/tests/resolution_work_batch.rs": "4a5e6570f0d664c65353c0586f585fed172ad662",
   "programs/clutch-sbf/svm-tests/tests/resolution_work_common/mod.rs": "e62c0c4ba88fe4a4b31c7b498dcad6850306ea7f",
+  "programs/clutch-sbf/svm-tests/tests/revenue_policy.rs": "fa54be42e68e97e35e4b42ea008f718cf513d622",
   "programs/clutch-sbf/svm-tests/tests/source_archive.rs": "7450f45216a63800478416a93b2738735a71eab5",
   "programs/clutch-sbf/svm-tests/tests/terminal_closure.rs": "0ff62b32ee5d160c771173eadd6ff356164ad2f6"
  },
  "test_trees": {
   "programs/clutch-sbf/svm-tests/src": "22adee1330173ca734cdb22b433a6a8fd75993c8",
-  "programs/clutch-sbf/svm-tests/tests": "c882dfcba288db42c019073eec5767bb19446f9f"
+  "programs/clutch-sbf/svm-tests/tests": "a53c3f7d46549a1c5b1863b79e2acbab22f2ec91"
  },
  "evidence_files": {
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/RUNTIME_ARTIFACT_AUDIT.md": {
-   "bytes": 24049,
-   "sha256": "1b15a391fa3ca5a6daede515831957dd8f7bec7e99410eb7c42723a8e7a5b005"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/RUNTIME_ARTIFACT_AUDIT.md": {
+   "bytes": 26537,
+   "sha256": "81aaf5203a89627fa5224d98347c27db0da500e73c673afcee09242dfe15398e"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/backend-stack-diagnostics.txt": {
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/backend-stack-diagnostics.txt": {
    "bytes": 12914,
    "sha256": "4f7219918054d871bf75fe8faa9f29d5005da76a3aadf70e29fbbd4998290895"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/dependencies.tsv": {
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/dependencies.tsv": {
    "bytes": 3953,
    "sha256": "eed650fb0b93d8d97042c44123264c47e1dc0566a391a3a949a06a3102842b1b"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/elf-summary.txt": {
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/elf-summary.txt": {
    "bytes": 233,
-   "sha256": "d49070361ac191190137c8874754dda475df1c98451981f5619592aef1ddf4a4"
+   "sha256": "822e27f41f0186699bb05d1a261107669be34f4662da90ce60bcbcb05c48a386"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/frame-summary.txt": {
-   "bytes": 284,
-   "sha256": "3f886620c37b4ed2c12c0e04b98f4c2f8f88cfcf7ba09ff2c6a75a9601662488"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/frame-summary.txt": {
+   "bytes": 287,
+   "sha256": "078677a37bc93f5bb560e483bb75ae114d77a1f8ce049da9dd2e6822bdcac75b"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/metadata.json": {
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/metadata.json": {
    "bytes": 128514,
-   "sha256": "b1bfb4504f4466385e3a15cae72707528301eb85bc173fafbcaa6dca28794545"
+   "sha256": "e42dc7f788d8847c91e6b37950340619aea6cd586adc01153f5bf9afe67987a9"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/registry-source-verification.tsv": {
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/registry-source-verification.tsv": {
    "bytes": 5206,
    "sha256": "c3a8c19b470713e828b08b56f3cedfe4089c0a704c457e15178c24ecd8cfad71"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/source-files.txt": {
-   "bytes": 5357,
-   "sha256": "e3d481113b3112cc642c156761dd47ba5ca666fb848b4cf59d41c6b856ca7340"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/source-files.txt": {
+   "bytes": 5451,
+   "sha256": "11a276bcc41300d070479abb330871ae1feb00ec1fbc53f4ff1685de9da11b86"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/stack-summary.txt": {
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/stack-summary.txt": {
    "bytes": 107,
    "sha256": "67e97abca540f499ecff2738cffc0f16988f5f7a3ee23c10afba3b7be91d143b"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/upstream-SHA256SUMS": {
-   "bytes": 9348,
-   "sha256": "1e77211e5d1080e562ae53d12fccbf616b7a9eb347de22256868d2453da8c913"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/upstream-SHA256SUMS": {
+   "bytes": 22206,
+   "sha256": "0d64f61b99dc6843f5ec326205bf98b61cdbdcbc66ce198b396747c4ccc7d2f6"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/vendor.diff": {
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/vendor.diff": {
    "bytes": 0,
    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/artifact_transport.log": {
-   "bytes": 745,
-   "sha256": "1858e4766cfcb99b4c1b19067e81199a47f5aca65ea4391b35f3565963c216f4"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/artifact_transport.log": {
+   "bytes": 1440,
+   "sha256": "0d171d2002ca73b9a0d472b03e017d710d4ea6eadc2515372d1fc6e155c69b26"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/blank_bank_lifecycle.log": {
-   "bytes": 764,
-   "sha256": "d11954cf278cd779eb2e61a486060e17b362ad0ba741d963e56fddd9bc92fcec"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/blank_bank_lifecycle.log": {
+   "bytes": 869,
+   "sha256": "44de7dece396f7a8817a74c2ac5f2f140eda9125eac84c326424d1b814ed1018"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/candidate_selection.log": {
-   "bytes": 2653,
-   "sha256": "7124011422ec9aa1748bcae65c52ab01877f2032b67b2a785e969d22eaa905d3"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/candidate_selection.log": {
+   "bytes": 2758,
+   "sha256": "8a03f5f33a9d12dbeaa526eea6e22cb744c74fe6a318150a0d92adc57b51f187"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/clear_lifecycle.log": {
-   "bytes": 2795,
-   "sha256": "5d46f1105c483fb0221f58ed86ad53ac0819f09e5ec79a3d5fc9ff435251df3f"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/clear_lifecycle.log": {
+   "bytes": 2900,
+   "sha256": "dff72abca6b1faf03b4ae43c2189efd9f75844ce4589847649966a867785db6c"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/clear_walk.log": {
-   "bytes": 768,
-   "sha256": "0a15e81ed2c17642199f6688e28fd5491e2159b9395fb0738f1efc0b71f5d9e2"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/clear_walk.log": {
+   "bytes": 873,
+   "sha256": "3c238db3cfce3fc88c33774fb9cbe013c1e4d4c62551a693d8ebccaf141c1975"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/collateral_leg.log": {
-   "bytes": 3250,
-   "sha256": "f172bf999e3c7a0c4bfa01ad494b3103697d3c65c39b01ab37b3f4eaef3356cf"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/collateral_leg.log": {
+   "bytes": 3355,
+   "sha256": "ceca6b98a56ca00d6b0a56f8d41ffd4548791222822c2f48ac95e8841bae1822"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/direct_selection_v2.log": {
-   "bytes": 763,
-   "sha256": "3b9d9c86922ee76b6586afcbc2a3e19fde8fcb12ff99f10b38931d84942c5585"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/direct_selection_v2.log": {
+   "bytes": 868,
+   "sha256": "2248021ad57178eb2a7b97b5eac0a676c177223c53adb16c4609811b009e211c"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/direct_selection_v3.log": {
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/direct_selection_v3.log": {
+   "bytes": 22362,
+   "sha256": "0f75307f1756202a94f07d39afbf2f3300cd55dcd4616b528a54401169064504"
+  },
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/direct_selection_v3_run2.log": {
    "bytes": 22257,
-   "sha256": "7a61e63bb8bdb6a78200d56157e42ba3dfa54d4417a2817f5ba03de221fdc56c"
+   "sha256": "3c6950e5335c8fb324916cffba59d7d65d331ee7c1cb7c23bdee60c49cab48e6"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/direct_selection_v3_run2.log": {
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/direct_selection_v3_run3.log": {
    "bytes": 22257,
-   "sha256": "53200a63978519f3d2e62f9edfb6c611a63d95aebbfe6947c3bcfd36609b6036"
+   "sha256": "6cd4d6a0c78575b9d61ee3c566819c39d5bfdbde5e8cfd90025bb64768b5b534"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/direct_selection_v3_run3.log": {
-   "bytes": 22257,
-   "sha256": "ab75ca16280d2813f1d5e156fe436599b9937d6fd16fa940c207fe282dc73c68"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/disagreement_exhibit.log": {
+   "bytes": 1338,
+   "sha256": "877b97fee7e63aa0d5343029b04d77b414353678ad1f9058147150f1a7ec405c"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/entitled_clearing.log": {
-   "bytes": 747,
-   "sha256": "46998795b81e0abc4e7c104c737959c27b735aed1a46db9cc97e614365043122"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/entitled_clearing.log": {
+   "bytes": 851,
+   "sha256": "6f04f8ba065d9e49014ff8b469235d714d43478eb26dd0a0f37a504e9aa4f880"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/general_epoch.log": {
-   "bytes": 681,
-   "sha256": "ba8d546a8ce4e613c6109c79f3b6d1f7b8601c2706938fd2cc4da811e4a5f76b"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/general_epoch.log": {
+   "bytes": 786,
+   "sha256": "d1ec8a93e2940310283511bb2565321361b5478de0aac69414327cd0246a2716"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/native_resolution.log": {
-   "bytes": 2580,
-   "sha256": "f04bb778b0bd74d6693838db818f42506b3e8324e3d25202a5cdc1949b901e3e"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/native_resolution.log": {
+   "bytes": 2685,
+   "sha256": "0ebf504d65cf24ec07a6e19e6f4aa96765bc46bc71973964fffc6d1ad2d78c29"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/order_reservation.log": {
-   "bytes": 494,
-   "sha256": "d8a5f3c7914f448edced9bde8ed69f7a8108e77992b05ef04b1e73aed87a3ef2"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/order_reservation.log": {
+   "bytes": 599,
+   "sha256": "b88ec5c9283930516896ef1bd79b865fbbd9365c5a6f874b70653517f492cb56"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/prefund_creation.log": {
-   "bytes": 1368,
-   "sha256": "8c6435e194de07ec0701cef552baf85b308863b08ebfbae0da3ed3ea58079871"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/prefund_creation.log": {
+   "bytes": 1473,
+   "sha256": "d32c210cb4468ef4b90bb5abe0ce8e2992585543938e2842afb49eeccdc8ff75"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/resolution_work.log": {
-   "bytes": 964,
-   "sha256": "5f8540a17a57159cfd2ed2f59d2144471a59516b8826432094535b8b9681ff5f"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/resolution_work.log": {
+   "bytes": 1069,
+   "sha256": "c80d0b14992911b4e33df85fbc06d4a77ed99605b22d873cf8fbb7c6cf9e09e8"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/resolution_work_batch.log": {
-   "bytes": 976,
-   "sha256": "4b6b6afcc5905507e55510d73a9c8cb6e68bebc6e9ecc97633c4b32cfca7b108"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/resolution_work_batch.log": {
+   "bytes": 1081,
+   "sha256": "32ccfe6d793ad77004b8155c1067ddeffb7aa7f7e4be48d4790c3cc5e74a55e3"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/source_archive.log": {
-   "bytes": 952,
-   "sha256": "6dbb2d7a268fa088f9b3b4d6017152c5708e27cea32db6261b0368c1acabbd1f"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/revenue_policy.log": {
+   "bytes": 462,
+   "sha256": "b48ecba77d91e650de56b2be624d97c079e1b64916786fac31129e2ffeb81918"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/bank/terminal_closure.log": {
-   "bytes": 803,
-   "sha256": "a3f57f61057ef6e8728917edb91c823a6dc6ddf8207b477b7423acb869b09b3c"
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/source_archive.log": {
+   "bytes": 1057,
+   "sha256": "55db2bec06338df4d6d2f97d182c99286b37098f2869bdf7dc171a9f5c285fb6"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/sbf-build-1.log": {
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/terminal_closure.log": {
+   "bytes": 908,
+   "sha256": "3d0d83b768d51a4ea2556b6c8904dcedb89311e72c3aebe0357c2b10d6539eeb"
+  },
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/sbf-build-1.log": {
    "bytes": 30677,
-   "sha256": "dc3ce9689bc117bc20016c41a66b5976915b5afc566b498826b39296a4151c91"
+   "sha256": "60f9e833b12c291ce741b9e8741426781aa80a9f4af42d8454aa0a703a06813a"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/sbf-build-2.log": {
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/sbf-build-2.log": {
    "bytes": 30677,
-   "sha256": "72f6561c2d429b6d2bd772b0e2dac5c07daf806ac66cca64dc80a5f079bc8663"
+   "sha256": "de8e9e46e78c1c53cf63e201b49c21c2773ef02c2cc78c678f7494e150e5b05b"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/sbf-build-crosspath.log": {
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/sbf-build-crosspath.log": {
    "bytes": 30974,
-   "sha256": "f875b33d8ced6e430832e262b6d59b55ffb06f81db52a3a3d73c5c1ec9689b8f"
+   "sha256": "de020888285bb3604cc0713cce9299d02fef50b7b2624361f8c3a4966574db8b"
   },
-  "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/logs/sbf-build-relocated.log": {
+  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/sbf-build-relocated.log": {
    "bytes": 30677,
-   "sha256": "620692fc03ae546b77de38981fde2dccdb6600a1f3ff4de94fcd4024024759a1"
+   "sha256": "e59e6570e01aa30dbcd18764bea4ccb60438ce577a74589494a372be4ead2d59"
   }
  },
  "rent": {
@@ -455,7 +486,7 @@
  },
  "measurements": {
   "resolution_work": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "fold_widths": [
     1,
     2,
@@ -463,39 +494,39 @@
     4
    ],
    "begin_cu": [
-    88041,
-    85673,
-    91357,
-    88039,
-    86225
+    88029,
+    85661,
+    91345,
+    88027,
+    86213
    ],
    "fold_1_cu": [
-    84765,
-    82402
+    84753,
+    82390
    ],
    "fold_2_cu": [
-    89374,
-    92342
+    89362,
+    92330
    ],
    "fold_3_cu": [
-    93277
+    93265
    ],
    "fold_4_cu": [
-    95722
+    95710
    ],
    "finalize_cu": [
-    164731
+    164718
    ],
    "abort_cu": [
-    46900
+    46888
    ],
    "monolithic_v4_cu": [
-    182859
+    182857
    ],
    "test_result": "PASS_4_OF_4"
   },
   "resolution_work_batch": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "batch_sizes": [
     2,
     4,
@@ -503,305 +534,305 @@
     12
    ],
    "begin_cu": [
-    91357,
-    86225,
-    86463,
-    80697
+    91345,
+    86213,
+    86451,
+    80685
    ],
    "fold_batch_2_cu": [
-    176215
+    176191
    ],
    "fold_batch_4_cu": [
-    331945
+    331897
    ],
    "fold_batch_8_cu": [
-    665853,
-    665853
+    665757,
+    665757
    ],
    "fold_batch_12_cu": [
-    929573
+    929429
    ],
    "singleton_fold_cu": [
-    88081,
-    88434,
-    82949,
-    83297,
-    83297,
-    83302,
-    83189,
-    83537,
-    83537,
-    83537,
-    83537,
-    83537,
-    83537,
-    83542,
-    77420,
-    77768,
-    77768,
-    77768,
-    77768,
-    77768,
-    77768,
-    77768,
-    77768,
-    77768,
-    77768,
-    77773
+    88069,
+    88422,
+    82937,
+    83285,
+    83285,
+    83290,
+    83177,
+    83525,
+    83525,
+    83525,
+    83525,
+    83525,
+    83525,
+    83530,
+    77408,
+    77756,
+    77756,
+    77756,
+    77756,
+    77756,
+    77756,
+    77756,
+    77756,
+    77756,
+    77756,
+    77761
    ],
    "outcome_equality": "BYTE_IDENTICAL_TO_SINGLETON_TRANSACTIONS",
    "mid_batch_invalid_fold": "WHOLE_TRANSACTION_REVERTED_BYTE_EXACT",
    "test_result": "PASS_2_OF_2"
   },
   "native_point_v3": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "degree_rows": [
     {
      "degree": 1,
-     "resolve_cu": 182848,
-     "retry_cu": 169579,
-     "internal_redeem_cu": 153041
+     "resolve_cu": 182846,
+     "retry_cu": 169577,
+     "internal_redeem_cu": 153039
     },
     {
      "degree": 2,
-     "resolve_cu": 191221,
-     "retry_cu": 177952,
-     "internal_redeem_cu": 155084
+     "resolve_cu": 191219,
+     "retry_cu": 177950,
+     "internal_redeem_cu": 155082
     },
     {
      "degree": 3,
-     "resolve_cu": 198115,
-     "retry_cu": 184846,
-     "internal_redeem_cu": 153474
+     "resolve_cu": 198113,
+     "retry_cu": 184844,
+     "internal_redeem_cu": 153472
     }
    ],
    "test_result": "PASS"
   },
   "native_bearer_redeem": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "degree_rows": [
     {
      "degree": 1,
-     "external_redeem_cu": 137272
+     "external_redeem_cu": 137267
     },
     {
      "degree": 2,
-     "external_redeem_cu": 139072
+     "external_redeem_cu": 139067
     },
     {
      "degree": 3,
-     "external_redeem_cu": 136777
+     "external_redeem_cu": 136772
     }
    ],
    "test_result": "PASS"
   },
   "occupation_v4": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "degree_rows": [
     {
      "degree": 1,
-     "initial_cu": 173062,
-     "retry_cu": 159802,
-     "internal_redeem_cu": 151755,
-     "external_redeem_cu": 135910
+     "initial_cu": 173060,
+     "retry_cu": 159800,
+     "internal_redeem_cu": 151753,
+     "external_redeem_cu": 135905
     },
     {
      "degree": 2,
-     "initial_cu": 184232,
-     "retry_cu": 170972,
-     "internal_redeem_cu": 153798,
-     "external_redeem_cu": 137710
+     "initial_cu": 184230,
+     "retry_cu": 170970,
+     "internal_redeem_cu": 153796,
+     "external_redeem_cu": 137705
     },
     {
      "degree": 3,
-     "initial_cu": 198163,
-     "retry_cu": 184903,
-     "internal_redeem_cu": 156688,
-     "external_redeem_cu": 139915
+     "initial_cu": 198161,
+     "retry_cu": 184901,
+     "internal_redeem_cu": 156686,
+     "external_redeem_cu": 139910
     }
    ],
    "span_1_initial_cu": [
-    180050,
-    173368,
-    177549
+    180048,
+    173366,
+    177547
    ],
    "span_2_initial_cu": [
-    173556,
-    189300,
-    190856
+    173554,
+    189298,
+    190854
    ],
-   "statistic_7_initial_cu": 182709,
+   "statistic_7_initial_cu": 182707,
    "test_result": "PASS"
   },
   "direct_v2": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "init_cu": [
-    35543
+    35538
    ],
    "freeze_cu": [
-    357876
+    357868
    ],
    "submit_cu": [
-    173572,
-    174674,
-    182466,
-    190103,
-    185710
+    173613,
+    174715,
+    182507,
+    190144,
+    185751
    ],
    "select_cu": [
-    226444
+    226522
    ],
    "select_result": "COMPLETED_SELECTION_COMMITTED",
    "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
    "test_result": "PASS_2_OF_2"
   },
   "source_endow": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "default_refusal_code": "0x79",
    "default_release_available": false,
    "rollback": "BYTE_AND_LAMPORT_EXACT",
    "test_result": "PASS_EXPECTED_REFUSAL"
   },
   "blank_bank_market_creation": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "v2": {
-    "cu": 192048,
+    "cu": 207044,
     "bytes": 165,
     "rent_lamports": 2039280
    },
    "v3": {
-    "cu": 214719,
+    "cu": 211715,
     "bytes": 319,
     "rent_lamports": 3111120
    },
    "v4": {
-    "cu": 213324,
+    "cu": 210320,
     "bytes": 383,
     "rent_lamports": 3556560
    },
    "test_result": "PASS_2_OF_2"
   },
   "order_reservation": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "place_cu": [
-    186007,
-    184037
+    186006,
+    184036
    ],
    "cancel_cu": [
-    282988,
-    287661
+    282987,
+    287660
    ],
    "test_result": "PASS_2_OF_2"
   },
   "withdraw_cash": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "cu": [
-    52091
+    52089
    ],
    "test_result": "PASS"
   },
   "general_epoch": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "general_epoch.rs",
     "clear_lifecycle.rs"
    ],
    "init_epoch_cu": [
-    42699
+    42743
    ],
    "place_order_single_cu": [
-    192029
+    192028
    ],
    "place_order_portfolio_cu": [
-    194345
+    194344
    ],
    "freeze_epoch_rows": [
     {
      "pages": 1,
      "orders": 4,
      "cu": [
-      233564
+      233554
      ]
     },
     {
      "pages": 2,
      "orders": 17,
      "cu": [
-      478005
+      477995
      ]
     },
     {
      "pages": 3,
      "orders": 40,
      "cu": [
-      717825,
-      717825
+      717815,
+      717815
      ]
     }
    ],
    "test_result": "PASS_3_OF_3"
   },
   "clear_walk": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "clear_walk.rs",
     "clear_lifecycle.rs"
    ],
    "small_book_pass1_cu": [
-    279925,
-    293298,
-    299378
+    279157,
+    287991,
+    288078
    ],
    "small_book_pass2_cu": [
-    290626
+    286935
    ],
    "forty_order_pass1_cu": [
-    260493,
-    280123,
-    391428,
-    272490,
-    268174,
-    305356,
-    370421,
-    286747,
-    285260,
-    308452,
-    302635,
-    260500,
-    287623,
-    391428,
-    276990,
-    268174,
-    297856,
-    371921,
-    286747,
-    285260,
-    311452,
-    301121
+    258220,
+    279275,
+    393207,
+    268695,
+    264422,
+    298520,
+    385825,
+    297955,
+    281508,
+    306116,
+    295798,
+    256727,
+    285275,
+    388707,
+    268695,
+    264422,
+    292520,
+    382825,
+    282955,
+    281508,
+    310616,
+    306285
    ],
    "forty_order_pass2_cu": [
-    306105,
-    273286,
-    306995,
-    286996,
-    309006,
-    306093,
-    273286,
-    306995,
-    286996,
-    308986
+    302045,
+    269468,
+    302975,
+    283202,
+    305527,
+    302034,
+    269468,
+    302975,
+    283202,
+    305511
    ],
    "advance_slices_cu": [
-    177731,
-    177748,
-    177731,
-    177748
+    173835,
+    173859,
+    173835,
+    173859
    ],
    "complete_cu": [
-    122865,
-    127081
+    121123,
+    125369
    ],
    "request_heap_frame_262144_surcharge_cu": [
     150
@@ -810,126 +841,126 @@
    "test_result": "PASS_3_OF_3_AND_2_OF_2"
   },
   "candidate_selection": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "candidate_selection.rs"
    ],
    "submit_candidate_cu": [
-    34241,
-    32731,
-    34241,
-    32731,
-    34238,
-    31244,
-    35744,
-    34241,
-    34241,
-    32731,
-    34238,
-    34241
+    34231,
+    32721,
+    34231,
+    32721,
+    34228,
+    31234,
+    35734,
+    34231,
+    34231,
+    32721,
+    34228,
+    34231
    ],
    "write_feed_fills_cu": [
-    9647,
-    6647,
-    8147,
-    8147,
-    9647,
-    6647,
-    6647,
-    8147,
-    8147,
-    8147,
-    9647,
-    8147
+    9641,
+    6641,
+    8141,
+    8141,
+    9641,
+    6641,
+    6641,
+    8141,
+    8141,
+    8141,
+    9641,
+    8141
    ],
    "write_feed_slices_cu": [
-    9888,
-    6888,
-    8388,
-    8388,
-    9888,
-    6888,
-    6888,
-    8388,
-    8388,
-    8388,
-    9888,
-    8388
+    9882,
+    6882,
+    8382,
+    8382,
+    9882,
+    6882,
+    6882,
+    8382,
+    8382,
+    8382,
+    9882,
+    8382
    ],
    "seal_candidate_cu": [
-    44924,
-    45354,
-    43424,
-    48354,
-    53292,
-    64168,
-    43424,
-    43424,
-    48354,
-    53292,
-    43424
+    44911,
+    45341,
+    43411,
+    48341,
+    53279,
+    64155,
+    43411,
+    43411,
+    48341,
+    53279,
+    43411
    ],
    "seal_candidate_displacing_cu": [
-    64168
+    64155
    ],
    "finalize_selection_rows": [
     {
      "shape": "3_retained_2_verified_selects_winner",
      "cu": [
-      49228
+      49280
      ]
     },
     {
      "shape": "2_verified_beyond_128_bit_digest_tie",
      "cu": [
-      39465
+      39512
      ]
     },
     {
      "shape": "0_verified_honest_lapse",
      "cu": [
-      20693
+      20685
      ]
     }
    ],
    "complete_clear_work_cu": [
-    123427,
-    123427,
-    127927,
-    127927,
-    121927,
-    127927
+    121713,
+    121713,
+    126213,
+    126213,
+    120213,
+    126213
    ],
    "test_result": "PASS_5_OF_5"
   },
   "entitled_clearing": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "entitled_clearing.rs"
    ],
    "freeze_entitlement_cu": [
-    100158
+    98411
    ],
    "entitle_slice_single_cu": [
-    210607
+    203097
    ],
    "entitle_slice_portfolio_pair_cu": [
-    243518
+    243508
    ],
    "settle_page_entitled_direct_slice_cu": [
-    53330
+    47328
    ],
    "settle_page_entitled_portfolio_full_pair_cu": [
-    234735
+    224233
    ],
    "bank_conservation": "POSITIONS_BYTE_EQUAL_IMPLIED_ALLOCATION_TOTAL_CASH_AND_EGGS_EXACT",
    "reservation_archive": "ACTIVE_TO_ENTITLED_TO_CONSUMED_INITIAL_ENVELOPE_INTACT",
    "test_result": "PASS_4_OF_4"
   },
   "direct_v3": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "direct_selection_v3.rs"
@@ -937,135 +968,135 @@
    "bank_runs": 3,
    "cu_spread_source": "PDA_BUMP_SEARCH_1500_CU_QUANTUM_OVER_RANDOM_FIXTURE_KEYPAIRS",
    "init_epoch_cu": [
-    41226,
-    41226,
-    41226
+    41238,
+    41238,
+    41238
    ],
    "init_order_page_cu": [
-    221020,
-    221020,
-    221020
+    221040,
+    221040,
+    221040
    ],
    "place_order_buy_cu": [
-    200154,
-    198654,
-    198654
+    204676,
+    201676,
+    204676
    ],
    "place_order_sell_cu": [
-    210180,
-    198180,
-    199680
+    199702,
+    202702,
+    204202
    ],
    "freeze_epoch_cu": [
-    382784,
-    379784,
-    379784
+    379795,
+    379795,
+    382795
    ],
    "begin_verification_cu": [
-    23596,
-    23596,
-    23596
+    23598,
+    23598,
+    23598
    ],
    "finalize_selection_cu": [
-    206273,
-    203273,
-    203273
+    203275,
+    203275,
+    206275
    ],
    "settle_cu": [
-    179047,
-    165547,
-    167047
+    173049,
+    173049,
+    177549
    ],
    "lapse_empty_cu": [
-    153470,
-    156470,
-    153470
+    156472,
+    154972,
+    157972
    ],
    "lapse_unselected_cu": [
-    176551,
-    178051,
-    166051
+    170553,
+    166053,
+    169053
    ],
    "lapse_selected_cu": [
-    173846,
-    176846,
-    175346
+    179848,
+    176848,
+    179848
    ],
    "submit_candidate_rows": [
     {
      "price": 2000,
      "disposition": "RETAINED",
      "cu": [
-      173838,
-      170848,
-      170838
+      170904,
+      170904,
+      173914
      ]
     },
     {
      "price": 5000,
      "disposition": "RETAINED",
      "cu": [
-      178754,
-      175772,
-      175754
+      175820,
+      175820,
+      178838
      ]
     },
     {
      "price": 4000,
      "disposition": "RETAINED",
      "cu": [
-      197246,
-      194264,
-      194246
+      194312,
+      194312,
+      197330
      ]
     },
     {
      "price": 6000,
      "disposition": "REPLACEMENT_DISPLACING_THE_WORST",
      "cu": [
-      202097,
-      198960,
-      199097
+      199018,
+      199163,
+      202171
      ]
     },
     {
      "price": 3000,
      "disposition": "NONCOMPETITIVE_NO_STATE",
      "cu": [
-      188553,
-      185553,
-      185553
+      185612,
+      185612,
+      188612
      ]
     }
    ],
    "submit_candidate_max_cu": [
-    202097,
-    198960,
-    199097
+    199018,
+    199163,
+    202171
    ],
    "verify_candidate_rows": [
     {
      "index": 0,
      "cu": [
-      151358,
-      151358,
-      151358
+      151409,
+      151409,
+      151409
      ]
     },
     {
      "index": 1,
      "cu": [
-      149858,
-      161858,
-      149858
+      161909,
+      149909,
+      149909
      ]
     },
     {
      "index": 2,
      "cu": [
-      161858,
-      149858,
-      161858
+      149909,
+      161909,
+      161909
      ]
     }
    ],
@@ -1073,32 +1104,32 @@
     {
      "reservations": 0,
      "cu": [
-      10393,
-      10393,
-      10393
+      10395,
+      10395,
+      10395
      ]
     },
     {
      "reservations": 1,
      "cu": [
-      140128,
-      138628,
-      138628
+      147630,
+      137130,
+      140130
      ]
     },
     {
      "reservations": 2,
      "cu": [
-      151054,
-      145054,
-      154054
+      151056,
+      148056,
+      149556
      ]
     }
    ],
    "test_result": "PASS_3_OF_3_IN_EACH_OF_3_BANK_RUNS"
   },
   "terminal_closure": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "terminal_closure.rs"
@@ -1137,6 +1168,72 @@
    "closes_are_permissionless": true,
    "test_result": "PASS_2_OF_2"
   },
+  "disagreement_exhibit": {
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "disagreement_exhibit.rs"
+   ],
+   "book_shape": "THIRTEEN_ORDER_TWO_MODEL_BOOK_SEVEN_SLICES_FIVE_SINGLE_CROSSINGS_ONE_PAIR",
+   "init_clear_work_cu": [
+    70613
+   ],
+   "exhibit_pass1_cu": [
+    411611
+   ],
+   "exhibit_pass2_cu": [
+    301177
+   ],
+   "advance_slices_cu": [
+    163296
+   ],
+   "complete_cu": [
+    118706
+   ],
+   "freeze_entitlement_cu": [
+    98407
+   ],
+   "entitle_slice_single_cu": [
+    223145,
+    220145,
+    224645,
+    224645,
+    220153
+   ],
+   "entitle_slice_portfolio_pair_cu": [
+    270660
+   ],
+   "settle_page_entitled_direct_slice_cu": [
+    40874,
+    37873,
+    42374,
+    42372,
+    37882
+   ],
+   "settle_page_entitled_portfolio_full_pair_cu": [
+    250584
+   ],
+   "heap_frame_rider": "REQUEST_HEAP_FRAME_262144_ON_EVERY_WALK_TRANSACTION_SURCHARGE_FROM_CLEAR_WALK",
+   "degree_1_terms_admission": "ADMITTED_BY_THE_GENERAL_PLANE_NO_DEGREE_0_SUBSTITUTION",
+   "conservation": "VALUE_PLANE_CONSERVED_POT_PROVABLY_EMPTY_ASSERTED_IN_SUITE",
+   "genesis_positions": "INJECTED_LABORATORY_BANK_STATE_DEPOSIT_BOUNDARY_STILL_REFUSED_0x79",
+   "test_result": "PASS_2_OF_2"
+  },
+  "revenue_boundary": {
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "revenue_policy.rs"
+   ],
+   "executed_tests": [
+    "the_revenue_boundary_pins_the_record_and_refuses_fee_bearing_admission"
+   ],
+   "per_route_cu": "NOT_LABELLED_BY_SUITE_NO_ROW_DERIVED",
+   "refusal_codes": "NOT_PRINTED_BY_SUITE_ASSERTED_IN_SOURCE_ONLY",
+   "rates": "BOTH_ZERO_NO_FEE_BEARING_EPOCH_ADMITS",
+   "treasury": "REVENUE_TREASURY_UNSET_V1_SENTINEL_REFUSES_STRUCTURALLY",
+   "test_result": "PASS_1_OF_1"
+  },
   "source_archive_host": {
    "artifact_sha256": null,
    "tests_passed": 9,
@@ -1145,7 +1242,7 @@
    "source_archive_rent_lamports": 18708480
   },
   "direct_v3_close": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "direct_selection_v3.rs"
@@ -1377,56 +1474,56 @@
    "status": "PASS",
    "routes": {
     "begin": {
-     "measured_cu": 91357,
-     "required_headroom_cu": 114197,
+     "measured_cu": 91345,
+     "required_headroom_cu": 114182,
      "selected_limit_cu": 120000,
      "external_fee_cap_lamports": 130000,
      "keeper_reward_lamports": 230000,
      "status": "PASS"
     },
     "fold_1": {
-     "measured_cu": 88434,
-     "required_headroom_cu": 110543,
+     "measured_cu": 88422,
+     "required_headroom_cu": 110528,
      "selected_limit_cu": 120000,
      "external_fee_cap_lamports": 130000,
      "keeper_reward_lamports": 230000,
      "status": "PASS"
     },
     "fold_2": {
-     "measured_cu": 92342,
-     "required_headroom_cu": 115428,
+     "measured_cu": 92330,
+     "required_headroom_cu": 115413,
      "selected_limit_cu": 120000,
      "external_fee_cap_lamports": 130000,
      "keeper_reward_lamports": 230000,
      "status": "PASS"
     },
     "fold_3": {
-     "measured_cu": 93277,
-     "required_headroom_cu": 116597,
+     "measured_cu": 93265,
+     "required_headroom_cu": 116582,
      "selected_limit_cu": 120000,
      "external_fee_cap_lamports": 130000,
      "keeper_reward_lamports": 230000,
      "status": "PASS"
     },
     "fold_4": {
-     "measured_cu": 95722,
-     "required_headroom_cu": 119653,
+     "measured_cu": 95710,
+     "required_headroom_cu": 119638,
      "selected_limit_cu": 120000,
      "external_fee_cap_lamports": 130000,
      "keeper_reward_lamports": 230000,
      "status": "PASS"
     },
     "finalize": {
-     "measured_cu": 164731,
-     "required_headroom_cu": 205914,
+     "measured_cu": 164718,
+     "required_headroom_cu": 205898,
      "selected_limit_cu": 210000,
      "external_fee_cap_lamports": 220000,
      "keeper_reward_lamports": 320000,
      "status": "PASS"
     },
     "abort": {
-     "measured_cu": 46900,
-     "required_headroom_cu": 58625,
+     "measured_cu": 46888,
+     "required_headroom_cu": 58610,
      "selected_limit_cu": 60000,
      "external_fee_cap_lamports": 70000,
      "keeper_reward_lamports": 170000,
@@ -1448,32 +1545,32 @@
    "status": "PASS",
    "routes": {
     "fold_batch_2": {
-     "measured_cu": 176215,
-     "required_headroom_cu": 220269,
+     "measured_cu": 176191,
+     "required_headroom_cu": 220239,
      "selected_limit_cu": 230000,
      "external_fee_cap_lamports": 240000,
      "keeper_reward_lamports": 340000,
      "status": "PASS"
     },
     "fold_batch_4": {
-     "measured_cu": 331945,
-     "required_headroom_cu": 414932,
+     "measured_cu": 331897,
+     "required_headroom_cu": 414872,
      "selected_limit_cu": 420000,
      "external_fee_cap_lamports": 430000,
      "keeper_reward_lamports": 530000,
      "status": "PASS"
     },
     "fold_batch_8": {
-     "measured_cu": 665853,
-     "required_headroom_cu": 832317,
+     "measured_cu": 665757,
+     "required_headroom_cu": 832197,
      "selected_limit_cu": 840000,
      "external_fee_cap_lamports": 850000,
      "keeper_reward_lamports": 950000,
      "status": "PASS"
     },
     "fold_batch_12": {
-     "measured_cu": 929573,
-     "required_headroom_cu": 1161967,
+     "measured_cu": 929429,
+     "required_headroom_cu": 1161787,
      "selected_limit_cu": 1170000,
      "external_fee_cap_lamports": 1180000,
      "keeper_reward_lamports": 1280000,
@@ -1509,8 +1606,8 @@
   "direct_v2": {
    "status": "STOP",
    "select": {
-    "measured_cu": 226444,
-    "required_headroom_cu": 283055,
+    "measured_cu": 226522,
+    "required_headroom_cu": 283153,
     "selected_limit_cu": 290000,
     "external_fee_cap_lamports": 300000,
     "keeper_reward_lamports": 400000,
@@ -1526,8 +1623,8 @@
     {
      "degree": 1,
      "resolve": {
-      "measured_cu": 182848,
-      "required_headroom_cu": 228560,
+      "measured_cu": 182846,
+      "required_headroom_cu": 228558,
       "selected_limit_cu": 230000,
       "external_fee_cap_lamports": 240000,
       "keeper_reward_lamports": 340000,
@@ -1537,8 +1634,8 @@
     {
      "degree": 2,
      "resolve": {
-      "measured_cu": 191221,
-      "required_headroom_cu": 239027,
+      "measured_cu": 191219,
+      "required_headroom_cu": 239024,
       "selected_limit_cu": 240000,
       "external_fee_cap_lamports": 250000,
       "keeper_reward_lamports": 350000,
@@ -1548,8 +1645,8 @@
     {
      "degree": 3,
      "resolve": {
-      "measured_cu": 198115,
-      "required_headroom_cu": 247644,
+      "measured_cu": 198113,
+      "required_headroom_cu": 247642,
       "selected_limit_cu": 250000,
       "external_fee_cap_lamports": 260000,
       "keeper_reward_lamports": 360000,
@@ -1564,16 +1661,16 @@
     {
      "degree": 1,
      "initial": {
-      "measured_cu": 173062,
-      "required_headroom_cu": 216328,
+      "measured_cu": 173060,
+      "required_headroom_cu": 216325,
       "selected_limit_cu": 220000,
       "external_fee_cap_lamports": 230000,
       "keeper_reward_lamports": 330000,
       "status": "PASS"
      },
      "retry": {
-      "measured_cu": 159802,
-      "required_headroom_cu": 199753,
+      "measured_cu": 159800,
+      "required_headroom_cu": 199750,
       "selected_limit_cu": 200000,
       "external_fee_cap_lamports": 210000,
       "keeper_reward_lamports": 310000,
@@ -1583,16 +1680,16 @@
     {
      "degree": 2,
      "initial": {
-      "measured_cu": 184232,
-      "required_headroom_cu": 230290,
+      "measured_cu": 184230,
+      "required_headroom_cu": 230288,
       "selected_limit_cu": 240000,
       "external_fee_cap_lamports": 250000,
       "keeper_reward_lamports": 350000,
       "status": "PASS"
      },
      "retry": {
-      "measured_cu": 170972,
-      "required_headroom_cu": 213715,
+      "measured_cu": 170970,
+      "required_headroom_cu": 213713,
       "selected_limit_cu": 220000,
       "external_fee_cap_lamports": 230000,
       "keeper_reward_lamports": 330000,
@@ -1602,16 +1699,16 @@
     {
      "degree": 3,
      "initial": {
-      "measured_cu": 198163,
-      "required_headroom_cu": 247704,
+      "measured_cu": 198161,
+      "required_headroom_cu": 247702,
       "selected_limit_cu": 250000,
       "external_fee_cap_lamports": 260000,
       "keeper_reward_lamports": 360000,
       "status": "PASS"
      },
      "retry": {
-      "measured_cu": 184903,
-      "required_headroom_cu": 231129,
+      "measured_cu": 184901,
+      "required_headroom_cu": 231127,
       "selected_limit_cu": 240000,
       "external_fee_cap_lamports": 250000,
       "keeper_reward_lamports": 350000,
@@ -1674,6 +1771,7 @@
     "clear_walk",
     "candidate_selection",
     "entitled_clearing",
+    "disagreement_exhibit",
     "terminal_closure"
    ],
    "w1": {
@@ -1686,20 +1784,21 @@
      "general_epoch",
      "clear_walk",
      "candidate_selection",
-     "entitled_clearing"
+     "entitled_clearing",
+     "disagreement_exhibit"
     ],
-    "quoted_route_count": 25,
+    "quoted_route_count": 35,
     "stopped_routes": [],
     "worst_route": "freeze_epoch_3pages_40orders",
-    "worst_measured_cu": 717825,
+    "worst_measured_cu": 717815,
     "routes": {
      "init_epoch": {
       "family": "general_epoch",
       "observations": 1,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 42699,
-      "required_headroom_cu": 53374,
+      "measured_cu": 42743,
+      "required_headroom_cu": 53429,
       "selected_limit_cu": 60000,
       "external_fee_cap_lamports": 70000,
       "keeper_reward_lamports": 170000,
@@ -1710,8 +1809,8 @@
       "observations": 1,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 192029,
-      "required_headroom_cu": 240037,
+      "measured_cu": 192028,
+      "required_headroom_cu": 240035,
       "selected_limit_cu": 250000,
       "external_fee_cap_lamports": 260000,
       "keeper_reward_lamports": 360000,
@@ -1722,8 +1821,8 @@
       "observations": 1,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 194345,
-      "required_headroom_cu": 242932,
+      "measured_cu": 194344,
+      "required_headroom_cu": 242930,
       "selected_limit_cu": 250000,
       "external_fee_cap_lamports": 260000,
       "keeper_reward_lamports": 360000,
@@ -1734,8 +1833,8 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 233564,
-      "required_headroom_cu": 291955,
+      "measured_cu": 233554,
+      "required_headroom_cu": 291943,
       "selected_limit_cu": 300000,
       "external_fee_cap_lamports": 310000,
       "keeper_reward_lamports": 410000,
@@ -1746,8 +1845,8 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 478005,
-      "required_headroom_cu": 597507,
+      "measured_cu": 477995,
+      "required_headroom_cu": 597494,
       "selected_limit_cu": 600000,
       "external_fee_cap_lamports": 610000,
       "keeper_reward_lamports": 710000,
@@ -1758,8 +1857,8 @@
       "observations": 2,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 717825,
-      "required_headroom_cu": 897282,
+      "measured_cu": 717815,
+      "required_headroom_cu": 897269,
       "selected_limit_cu": 900000,
       "external_fee_cap_lamports": 910000,
       "keeper_reward_lamports": 1010000,
@@ -1770,11 +1869,11 @@
       "observations": 3,
       "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 299378,
-      "required_headroom_cu": 374223,
-      "selected_limit_cu": 380000,
-      "external_fee_cap_lamports": 390000,
-      "keeper_reward_lamports": 490000,
+      "measured_cu": 288078,
+      "required_headroom_cu": 360098,
+      "selected_limit_cu": 370000,
+      "external_fee_cap_lamports": 380000,
+      "keeper_reward_lamports": 480000,
       "status": "PASS"
      },
      "advance_clear_work_pass2_small_book": {
@@ -1782,11 +1881,11 @@
       "observations": 1,
       "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 290626,
-      "required_headroom_cu": 363283,
-      "selected_limit_cu": 370000,
-      "external_fee_cap_lamports": 380000,
-      "keeper_reward_lamports": 480000,
+      "measured_cu": 286935,
+      "required_headroom_cu": 358669,
+      "selected_limit_cu": 360000,
+      "external_fee_cap_lamports": 370000,
+      "keeper_reward_lamports": 470000,
       "status": "PASS"
      },
      "advance_clear_work_pass1_forty_order": {
@@ -1794,11 +1893,11 @@
       "observations": 22,
       "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 391428,
-      "required_headroom_cu": 489285,
-      "selected_limit_cu": 490000,
-      "external_fee_cap_lamports": 500000,
-      "keeper_reward_lamports": 600000,
+      "measured_cu": 393207,
+      "required_headroom_cu": 491509,
+      "selected_limit_cu": 500000,
+      "external_fee_cap_lamports": 510000,
+      "keeper_reward_lamports": 610000,
       "status": "PASS"
      },
      "advance_clear_work_pass2_forty_order": {
@@ -1806,8 +1905,8 @@
       "observations": 10,
       "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 309006,
-      "required_headroom_cu": 386258,
+      "measured_cu": 305527,
+      "required_headroom_cu": 381909,
       "selected_limit_cu": 390000,
       "external_fee_cap_lamports": 400000,
       "keeper_reward_lamports": 500000,
@@ -1818,11 +1917,11 @@
       "observations": 4,
       "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 177748,
-      "required_headroom_cu": 222185,
-      "selected_limit_cu": 230000,
-      "external_fee_cap_lamports": 240000,
-      "keeper_reward_lamports": 340000,
+      "measured_cu": 173859,
+      "required_headroom_cu": 217324,
+      "selected_limit_cu": 220000,
+      "external_fee_cap_lamports": 230000,
+      "keeper_reward_lamports": 330000,
       "status": "PASS"
      },
      "complete_clear_work_walk": {
@@ -1830,8 +1929,8 @@
       "observations": 2,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 127081,
-      "required_headroom_cu": 158852,
+      "measured_cu": 125369,
+      "required_headroom_cu": 156712,
       "selected_limit_cu": 160000,
       "external_fee_cap_lamports": 170000,
       "keeper_reward_lamports": 270000,
@@ -1842,8 +1941,8 @@
       "observations": 12,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 35744,
-      "required_headroom_cu": 44680,
+      "measured_cu": 35734,
+      "required_headroom_cu": 44668,
       "selected_limit_cu": 50000,
       "external_fee_cap_lamports": 60000,
       "keeper_reward_lamports": 160000,
@@ -1854,8 +1953,8 @@
       "observations": 12,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 9647,
-      "required_headroom_cu": 12059,
+      "measured_cu": 9641,
+      "required_headroom_cu": 12052,
       "selected_limit_cu": 20000,
       "external_fee_cap_lamports": 30000,
       "keeper_reward_lamports": 130000,
@@ -1866,8 +1965,8 @@
       "observations": 12,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 9888,
-      "required_headroom_cu": 12360,
+      "measured_cu": 9882,
+      "required_headroom_cu": 12353,
       "selected_limit_cu": 20000,
       "external_fee_cap_lamports": 30000,
       "keeper_reward_lamports": 130000,
@@ -1878,8 +1977,8 @@
       "observations": 12,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 64168,
-      "required_headroom_cu": 80210,
+      "measured_cu": 64155,
+      "required_headroom_cu": 80194,
       "selected_limit_cu": 90000,
       "external_fee_cap_lamports": 100000,
       "keeper_reward_lamports": 200000,
@@ -1890,8 +1989,8 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 49228,
-      "required_headroom_cu": 61535,
+      "measured_cu": 49280,
+      "required_headroom_cu": 61600,
       "selected_limit_cu": 70000,
       "external_fee_cap_lamports": 80000,
       "keeper_reward_lamports": 180000,
@@ -1902,8 +2001,8 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 39465,
-      "required_headroom_cu": 49332,
+      "measured_cu": 39512,
+      "required_headroom_cu": 49390,
       "selected_limit_cu": 50000,
       "external_fee_cap_lamports": 60000,
       "keeper_reward_lamports": 160000,
@@ -1914,8 +2013,8 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 20693,
-      "required_headroom_cu": 25867,
+      "measured_cu": 20685,
+      "required_headroom_cu": 25857,
       "selected_limit_cu": 30000,
       "external_fee_cap_lamports": 40000,
       "keeper_reward_lamports": 140000,
@@ -1926,8 +2025,8 @@
       "observations": 6,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 127927,
-      "required_headroom_cu": 159909,
+      "measured_cu": 126213,
+      "required_headroom_cu": 157767,
       "selected_limit_cu": 160000,
       "external_fee_cap_lamports": 170000,
       "keeper_reward_lamports": 270000,
@@ -1938,8 +2037,8 @@
       "observations": 1,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 100158,
-      "required_headroom_cu": 125198,
+      "measured_cu": 98411,
+      "required_headroom_cu": 123014,
       "selected_limit_cu": 130000,
       "external_fee_cap_lamports": 140000,
       "keeper_reward_lamports": 240000,
@@ -1950,11 +2049,11 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 210607,
-      "required_headroom_cu": 263259,
-      "selected_limit_cu": 270000,
-      "external_fee_cap_lamports": 280000,
-      "keeper_reward_lamports": 380000,
+      "measured_cu": 203097,
+      "required_headroom_cu": 253872,
+      "selected_limit_cu": 260000,
+      "external_fee_cap_lamports": 270000,
+      "keeper_reward_lamports": 370000,
       "status": "PASS"
      },
      "entitle_slice_portfolio_pair": {
@@ -1962,8 +2061,8 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 243518,
-      "required_headroom_cu": 304398,
+      "measured_cu": 243508,
+      "required_headroom_cu": 304385,
       "selected_limit_cu": 310000,
       "external_fee_cap_lamports": 320000,
       "keeper_reward_lamports": 420000,
@@ -1974,11 +2073,11 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 53330,
-      "required_headroom_cu": 66663,
-      "selected_limit_cu": 70000,
-      "external_fee_cap_lamports": 80000,
-      "keeper_reward_lamports": 180000,
+      "measured_cu": 47328,
+      "required_headroom_cu": 59160,
+      "selected_limit_cu": 60000,
+      "external_fee_cap_lamports": 70000,
+      "keeper_reward_lamports": 170000,
       "status": "PASS"
      },
      "settle_page_entitled_portfolio_full_pair": {
@@ -1986,11 +2085,131 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 234735,
-      "required_headroom_cu": 293419,
-      "selected_limit_cu": 300000,
-      "external_fee_cap_lamports": 310000,
-      "keeper_reward_lamports": 410000,
+      "measured_cu": 224233,
+      "required_headroom_cu": 280292,
+      "selected_limit_cu": 290000,
+      "external_fee_cap_lamports": 300000,
+      "keeper_reward_lamports": 400000,
+      "status": "PASS"
+     },
+     "init_clear_work_exhibit_book": {
+      "family": "disagreement_exhibit",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "measured_cu": 70613,
+      "required_headroom_cu": 88267,
+      "selected_limit_cu": 90000,
+      "external_fee_cap_lamports": 100000,
+      "keeper_reward_lamports": 200000,
+      "status": "PASS"
+     },
+     "advance_clear_work_pass1_exhibit_book": {
+      "family": "disagreement_exhibit",
+      "observations": 1,
+      "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "measured_cu": 411611,
+      "required_headroom_cu": 514514,
+      "selected_limit_cu": 520000,
+      "external_fee_cap_lamports": 530000,
+      "keeper_reward_lamports": 630000,
+      "status": "PASS"
+     },
+     "advance_clear_work_pass2_exhibit_book": {
+      "family": "disagreement_exhibit",
+      "observations": 1,
+      "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "measured_cu": 301177,
+      "required_headroom_cu": 376472,
+      "selected_limit_cu": 380000,
+      "external_fee_cap_lamports": 390000,
+      "keeper_reward_lamports": 490000,
+      "status": "PASS"
+     },
+     "advance_clear_slices_exhibit_book": {
+      "family": "disagreement_exhibit",
+      "observations": 1,
+      "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "measured_cu": 163296,
+      "required_headroom_cu": 204120,
+      "selected_limit_cu": 210000,
+      "external_fee_cap_lamports": 220000,
+      "keeper_reward_lamports": 320000,
+      "status": "PASS"
+     },
+     "complete_clear_work_exhibit_book": {
+      "family": "disagreement_exhibit",
+      "observations": 1,
+      "shape_variability": "FIXED_SHAPE",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "measured_cu": 118706,
+      "required_headroom_cu": 148383,
+      "selected_limit_cu": 150000,
+      "external_fee_cap_lamports": 160000,
+      "keeper_reward_lamports": 260000,
+      "status": "PASS"
+     },
+     "freeze_entitlement_exhibit_book": {
+      "family": "disagreement_exhibit",
+      "observations": 1,
+      "shape_variability": "FIXED_SHAPE",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "measured_cu": 98407,
+      "required_headroom_cu": 123009,
+      "selected_limit_cu": 130000,
+      "external_fee_cap_lamports": 140000,
+      "keeper_reward_lamports": 240000,
+      "status": "PASS"
+     },
+     "entitle_slice_single_exhibit_book": {
+      "family": "disagreement_exhibit",
+      "observations": 5,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "measured_cu": 224645,
+      "required_headroom_cu": 280807,
+      "selected_limit_cu": 290000,
+      "external_fee_cap_lamports": 300000,
+      "keeper_reward_lamports": 400000,
+      "status": "PASS"
+     },
+     "entitle_slice_portfolio_pair_exhibit_book": {
+      "family": "disagreement_exhibit",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "measured_cu": 270660,
+      "required_headroom_cu": 338325,
+      "selected_limit_cu": 340000,
+      "external_fee_cap_lamports": 350000,
+      "keeper_reward_lamports": 450000,
+      "status": "PASS"
+     },
+     "settle_page_entitled_direct_slice_exhibit_book": {
+      "family": "disagreement_exhibit",
+      "observations": 5,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "measured_cu": 42374,
+      "required_headroom_cu": 52968,
+      "selected_limit_cu": 60000,
+      "external_fee_cap_lamports": 70000,
+      "keeper_reward_lamports": 170000,
+      "status": "PASS"
+     },
+     "settle_page_entitled_portfolio_full_pair_exhibit_book": {
+      "family": "disagreement_exhibit",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "measured_cu": 250584,
+      "required_headroom_cu": 313230,
+      "selected_limit_cu": 320000,
+      "external_fee_cap_lamports": 330000,
+      "keeper_reward_lamports": 430000,
       "status": "PASS"
      }
     },
@@ -2072,6 +2291,26 @@
     "RENT.ACCOUNT_REFUND_UNOWNED"
    ],
    "retired_reason": "PROFILE.STORAGE_INVENTORY_INCOMPLETE_NO_CLOSE_PATH",
+   "decision_owner": "ember"
+  },
+  "revenue_boundary": {
+   "status": "SBF_EXECUTED_REFUSAL_BOUNDARY_UNPROMOTED_STOP",
+   "admission_rows_derived": false,
+   "live_flags": "UNTOUCHED",
+   "fee_rates": "BOTH_ZERO_UNDECIDED",
+   "fee_bearing_epoch_admits": false,
+   "treasury": "DEFERRED_UNSET_SENTINEL",
+   "vault_built": false,
+   "fees_as_liveness_funding": "NEVER_NOT_AT_ANY_RATE",
+   "record_row": "revenue.policy_record.v1",
+   "record_bytes": 156,
+   "record_rent_lamports": 1976640,
+   "residual_blocking_id": "REVENUE.REALM_PERMANENCE_HOLDS_RECORD",
+   "executed_tests": [
+    "the_revenue_boundary_pins_the_record_and_refuses_fee_bearing_admission"
+   ],
+   "cu_rows_derived": false,
+   "quote_rows_derived": false,
    "decision_owner": "ember"
   },
   "terminal_status": "STOP",

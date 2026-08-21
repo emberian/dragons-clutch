@@ -1,18 +1,18 @@
 {
  "schema": "dragons-clutch/liveness-bank-capture/v2",
- "capture_date": "2026-08-20",
- "runtime_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
- "evidence_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
+ "capture_date": "2026-08-21",
+ "runtime_ref": "04acf6165376d3abfb3bc16877e2a0ba2bb47931",
+ "evidence_ref": "04acf6165376d3abfb3bc16877e2a0ba2bb47931",
  "artifact": {
-  "path": "research/liveness-policy-profile/artifacts/4fded7a67a2d8994/clutch_sbf.so",
-  "sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
-  "bytes": 1979512,
-  "source_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
+  "path": "research/liveness-policy-profile/artifacts/df0aece1e241951b/clutch_sbf.so",
+  "sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+  "bytes": 1986104,
+  "source_ref": "04acf6165376d3abfb3bc16877e2a0ba2bb47931",
   "profile": "default-empty-registry"
  },
  "measurements": {
   "resolution_work": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "fold_widths": [
     1,
     2,
@@ -20,39 +20,39 @@
     4
    ],
    "begin_cu": [
-    88041,
-    85673,
-    91357,
-    88039,
-    86225
+    88029,
+    85661,
+    91345,
+    88027,
+    86213
    ],
    "fold_1_cu": [
-    84765,
-    82402
+    84753,
+    82390
    ],
    "fold_2_cu": [
-    89374,
-    92342
+    89362,
+    92330
    ],
    "fold_3_cu": [
-    93277
+    93265
    ],
    "fold_4_cu": [
-    95722
+    95710
    ],
    "finalize_cu": [
-    164731
+    164718
    ],
    "abort_cu": [
-    46900
+    46888
    ],
    "monolithic_v4_cu": [
-    182859
+    182857
    ],
    "test_result": "PASS_4_OF_4"
   },
   "resolution_work_batch": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "batch_sizes": [
     2,
     4,
@@ -60,305 +60,305 @@
     12
    ],
    "begin_cu": [
-    91357,
-    86225,
-    86463,
-    80697
+    91345,
+    86213,
+    86451,
+    80685
    ],
    "fold_batch_2_cu": [
-    176215
+    176191
    ],
    "fold_batch_4_cu": [
-    331945
+    331897
    ],
    "fold_batch_8_cu": [
-    665853,
-    665853
+    665757,
+    665757
    ],
    "fold_batch_12_cu": [
-    929573
+    929429
    ],
    "singleton_fold_cu": [
-    88081,
-    88434,
-    82949,
-    83297,
-    83297,
-    83302,
-    83189,
-    83537,
-    83537,
-    83537,
-    83537,
-    83537,
-    83537,
-    83542,
-    77420,
-    77768,
-    77768,
-    77768,
-    77768,
-    77768,
-    77768,
-    77768,
-    77768,
-    77768,
-    77768,
-    77773
+    88069,
+    88422,
+    82937,
+    83285,
+    83285,
+    83290,
+    83177,
+    83525,
+    83525,
+    83525,
+    83525,
+    83525,
+    83525,
+    83530,
+    77408,
+    77756,
+    77756,
+    77756,
+    77756,
+    77756,
+    77756,
+    77756,
+    77756,
+    77756,
+    77756,
+    77761
    ],
    "outcome_equality": "BYTE_IDENTICAL_TO_SINGLETON_TRANSACTIONS",
    "mid_batch_invalid_fold": "WHOLE_TRANSACTION_REVERTED_BYTE_EXACT",
    "test_result": "PASS_2_OF_2"
   },
   "native_point_v3": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "degree_rows": [
     {
      "degree": 1,
-     "resolve_cu": 182848,
-     "retry_cu": 169579,
-     "internal_redeem_cu": 153041
+     "resolve_cu": 182846,
+     "retry_cu": 169577,
+     "internal_redeem_cu": 153039
     },
     {
      "degree": 2,
-     "resolve_cu": 191221,
-     "retry_cu": 177952,
-     "internal_redeem_cu": 155084
+     "resolve_cu": 191219,
+     "retry_cu": 177950,
+     "internal_redeem_cu": 155082
     },
     {
      "degree": 3,
-     "resolve_cu": 198115,
-     "retry_cu": 184846,
-     "internal_redeem_cu": 153474
+     "resolve_cu": 198113,
+     "retry_cu": 184844,
+     "internal_redeem_cu": 153472
     }
    ],
    "test_result": "PASS"
   },
   "native_bearer_redeem": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "degree_rows": [
     {
      "degree": 1,
-     "external_redeem_cu": 137272
+     "external_redeem_cu": 137267
     },
     {
      "degree": 2,
-     "external_redeem_cu": 139072
+     "external_redeem_cu": 139067
     },
     {
      "degree": 3,
-     "external_redeem_cu": 136777
+     "external_redeem_cu": 136772
     }
    ],
    "test_result": "PASS"
   },
   "occupation_v4": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "degree_rows": [
     {
      "degree": 1,
-     "initial_cu": 173062,
-     "retry_cu": 159802,
-     "internal_redeem_cu": 151755,
-     "external_redeem_cu": 135910
+     "initial_cu": 173060,
+     "retry_cu": 159800,
+     "internal_redeem_cu": 151753,
+     "external_redeem_cu": 135905
     },
     {
      "degree": 2,
-     "initial_cu": 184232,
-     "retry_cu": 170972,
-     "internal_redeem_cu": 153798,
-     "external_redeem_cu": 137710
+     "initial_cu": 184230,
+     "retry_cu": 170970,
+     "internal_redeem_cu": 153796,
+     "external_redeem_cu": 137705
     },
     {
      "degree": 3,
-     "initial_cu": 198163,
-     "retry_cu": 184903,
-     "internal_redeem_cu": 156688,
-     "external_redeem_cu": 139915
+     "initial_cu": 198161,
+     "retry_cu": 184901,
+     "internal_redeem_cu": 156686,
+     "external_redeem_cu": 139910
     }
    ],
    "span_1_initial_cu": [
-    180050,
-    173368,
-    177549
+    180048,
+    173366,
+    177547
    ],
    "span_2_initial_cu": [
-    173556,
-    189300,
-    190856
+    173554,
+    189298,
+    190854
    ],
-   "statistic_7_initial_cu": 182709,
+   "statistic_7_initial_cu": 182707,
    "test_result": "PASS"
   },
   "direct_v2": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "init_cu": [
-    35543
+    35538
    ],
    "freeze_cu": [
-    357876
+    357868
    ],
    "submit_cu": [
-    173572,
-    174674,
-    182466,
-    190103,
-    185710
+    173613,
+    174715,
+    182507,
+    190144,
+    185751
    ],
    "select_cu": [
-    226444
+    226522
    ],
    "select_result": "COMPLETED_SELECTION_COMMITTED",
    "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
    "test_result": "PASS_2_OF_2"
   },
   "source_endow": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "default_refusal_code": "0x79",
    "default_release_available": false,
    "rollback": "BYTE_AND_LAMPORT_EXACT",
    "test_result": "PASS_EXPECTED_REFUSAL"
   },
   "blank_bank_market_creation": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "v2": {
-    "cu": 192048,
+    "cu": 207044,
     "bytes": 165,
     "rent_lamports": 2039280
    },
    "v3": {
-    "cu": 214719,
+    "cu": 211715,
     "bytes": 319,
     "rent_lamports": 3111120
    },
    "v4": {
-    "cu": 213324,
+    "cu": 210320,
     "bytes": 383,
     "rent_lamports": 3556560
    },
    "test_result": "PASS_2_OF_2"
   },
   "order_reservation": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "place_cu": [
-    186007,
-    184037
+    186006,
+    184036
    ],
    "cancel_cu": [
-    282988,
-    287661
+    282987,
+    287660
    ],
    "test_result": "PASS_2_OF_2"
   },
   "withdraw_cash": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "cu": [
-    52091
+    52089
    ],
    "test_result": "PASS"
   },
   "general_epoch": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "general_epoch.rs",
     "clear_lifecycle.rs"
    ],
    "init_epoch_cu": [
-    42699
+    42743
    ],
    "place_order_single_cu": [
-    192029
+    192028
    ],
    "place_order_portfolio_cu": [
-    194345
+    194344
    ],
    "freeze_epoch_rows": [
     {
      "pages": 1,
      "orders": 4,
      "cu": [
-      233564
+      233554
      ]
     },
     {
      "pages": 2,
      "orders": 17,
      "cu": [
-      478005
+      477995
      ]
     },
     {
      "pages": 3,
      "orders": 40,
      "cu": [
-      717825,
-      717825
+      717815,
+      717815
      ]
     }
    ],
    "test_result": "PASS_3_OF_3"
   },
   "clear_walk": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "clear_walk.rs",
     "clear_lifecycle.rs"
    ],
    "small_book_pass1_cu": [
-    279925,
-    293298,
-    299378
+    279157,
+    287991,
+    288078
    ],
    "small_book_pass2_cu": [
-    290626
+    286935
    ],
    "forty_order_pass1_cu": [
-    260493,
-    280123,
-    391428,
-    272490,
-    268174,
-    305356,
-    370421,
-    286747,
-    285260,
-    308452,
-    302635,
-    260500,
-    287623,
-    391428,
-    276990,
-    268174,
-    297856,
-    371921,
-    286747,
-    285260,
-    311452,
-    301121
+    258220,
+    279275,
+    393207,
+    268695,
+    264422,
+    298520,
+    385825,
+    297955,
+    281508,
+    306116,
+    295798,
+    256727,
+    285275,
+    388707,
+    268695,
+    264422,
+    292520,
+    382825,
+    282955,
+    281508,
+    310616,
+    306285
    ],
    "forty_order_pass2_cu": [
-    306105,
-    273286,
-    306995,
-    286996,
-    309006,
-    306093,
-    273286,
-    306995,
-    286996,
-    308986
+    302045,
+    269468,
+    302975,
+    283202,
+    305527,
+    302034,
+    269468,
+    302975,
+    283202,
+    305511
    ],
    "advance_slices_cu": [
-    177731,
-    177748,
-    177731,
-    177748
+    173835,
+    173859,
+    173835,
+    173859
    ],
    "complete_cu": [
-    122865,
-    127081
+    121123,
+    125369
    ],
    "request_heap_frame_262144_surcharge_cu": [
     150
@@ -367,126 +367,126 @@
    "test_result": "PASS_3_OF_3_AND_2_OF_2"
   },
   "candidate_selection": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "candidate_selection.rs"
    ],
    "submit_candidate_cu": [
-    34241,
-    32731,
-    34241,
-    32731,
-    34238,
-    31244,
-    35744,
-    34241,
-    34241,
-    32731,
-    34238,
-    34241
+    34231,
+    32721,
+    34231,
+    32721,
+    34228,
+    31234,
+    35734,
+    34231,
+    34231,
+    32721,
+    34228,
+    34231
    ],
    "write_feed_fills_cu": [
-    9647,
-    6647,
-    8147,
-    8147,
-    9647,
-    6647,
-    6647,
-    8147,
-    8147,
-    8147,
-    9647,
-    8147
+    9641,
+    6641,
+    8141,
+    8141,
+    9641,
+    6641,
+    6641,
+    8141,
+    8141,
+    8141,
+    9641,
+    8141
    ],
    "write_feed_slices_cu": [
-    9888,
-    6888,
-    8388,
-    8388,
-    9888,
-    6888,
-    6888,
-    8388,
-    8388,
-    8388,
-    9888,
-    8388
+    9882,
+    6882,
+    8382,
+    8382,
+    9882,
+    6882,
+    6882,
+    8382,
+    8382,
+    8382,
+    9882,
+    8382
    ],
    "seal_candidate_cu": [
-    44924,
-    45354,
-    43424,
-    48354,
-    53292,
-    64168,
-    43424,
-    43424,
-    48354,
-    53292,
-    43424
+    44911,
+    45341,
+    43411,
+    48341,
+    53279,
+    64155,
+    43411,
+    43411,
+    48341,
+    53279,
+    43411
    ],
    "seal_candidate_displacing_cu": [
-    64168
+    64155
    ],
    "finalize_selection_rows": [
     {
      "shape": "3_retained_2_verified_selects_winner",
      "cu": [
-      49228
+      49280
      ]
     },
     {
      "shape": "2_verified_beyond_128_bit_digest_tie",
      "cu": [
-      39465
+      39512
      ]
     },
     {
      "shape": "0_verified_honest_lapse",
      "cu": [
-      20693
+      20685
      ]
     }
    ],
    "complete_clear_work_cu": [
-    123427,
-    123427,
-    127927,
-    127927,
-    121927,
-    127927
+    121713,
+    121713,
+    126213,
+    126213,
+    120213,
+    126213
    ],
    "test_result": "PASS_5_OF_5"
   },
   "entitled_clearing": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "entitled_clearing.rs"
    ],
    "freeze_entitlement_cu": [
-    100158
+    98411
    ],
    "entitle_slice_single_cu": [
-    210607
+    203097
    ],
    "entitle_slice_portfolio_pair_cu": [
-    243518
+    243508
    ],
    "settle_page_entitled_direct_slice_cu": [
-    53330
+    47328
    ],
    "settle_page_entitled_portfolio_full_pair_cu": [
-    234735
+    224233
    ],
    "bank_conservation": "POSITIONS_BYTE_EQUAL_IMPLIED_ALLOCATION_TOTAL_CASH_AND_EGGS_EXACT",
    "reservation_archive": "ACTIVE_TO_ENTITLED_TO_CONSUMED_INITIAL_ENVELOPE_INTACT",
    "test_result": "PASS_4_OF_4"
   },
   "direct_v3": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "direct_selection_v3.rs"
@@ -494,135 +494,135 @@
    "bank_runs": 3,
    "cu_spread_source": "PDA_BUMP_SEARCH_1500_CU_QUANTUM_OVER_RANDOM_FIXTURE_KEYPAIRS",
    "init_epoch_cu": [
-    41226,
-    41226,
-    41226
+    41238,
+    41238,
+    41238
    ],
    "init_order_page_cu": [
-    221020,
-    221020,
-    221020
+    221040,
+    221040,
+    221040
    ],
    "place_order_buy_cu": [
-    200154,
-    198654,
-    198654
+    204676,
+    201676,
+    204676
    ],
    "place_order_sell_cu": [
-    210180,
-    198180,
-    199680
+    199702,
+    202702,
+    204202
    ],
    "freeze_epoch_cu": [
-    382784,
-    379784,
-    379784
+    379795,
+    379795,
+    382795
    ],
    "begin_verification_cu": [
-    23596,
-    23596,
-    23596
+    23598,
+    23598,
+    23598
    ],
    "finalize_selection_cu": [
-    206273,
-    203273,
-    203273
+    203275,
+    203275,
+    206275
    ],
    "settle_cu": [
-    179047,
-    165547,
-    167047
+    173049,
+    173049,
+    177549
    ],
    "lapse_empty_cu": [
-    153470,
-    156470,
-    153470
+    156472,
+    154972,
+    157972
    ],
    "lapse_unselected_cu": [
-    176551,
-    178051,
-    166051
+    170553,
+    166053,
+    169053
    ],
    "lapse_selected_cu": [
-    173846,
-    176846,
-    175346
+    179848,
+    176848,
+    179848
    ],
    "submit_candidate_rows": [
     {
      "price": 2000,
      "disposition": "RETAINED",
      "cu": [
-      173838,
-      170848,
-      170838
+      170904,
+      170904,
+      173914
      ]
     },
     {
      "price": 5000,
      "disposition": "RETAINED",
      "cu": [
-      178754,
-      175772,
-      175754
+      175820,
+      175820,
+      178838
      ]
     },
     {
      "price": 4000,
      "disposition": "RETAINED",
      "cu": [
-      197246,
-      194264,
-      194246
+      194312,
+      194312,
+      197330
      ]
     },
     {
      "price": 6000,
      "disposition": "REPLACEMENT_DISPLACING_THE_WORST",
      "cu": [
-      202097,
-      198960,
-      199097
+      199018,
+      199163,
+      202171
      ]
     },
     {
      "price": 3000,
      "disposition": "NONCOMPETITIVE_NO_STATE",
      "cu": [
-      188553,
-      185553,
-      185553
+      185612,
+      185612,
+      188612
      ]
     }
    ],
    "submit_candidate_max_cu": [
-    202097,
-    198960,
-    199097
+    199018,
+    199163,
+    202171
    ],
    "verify_candidate_rows": [
     {
      "index": 0,
      "cu": [
-      151358,
-      151358,
-      151358
+      151409,
+      151409,
+      151409
      ]
     },
     {
      "index": 1,
      "cu": [
-      149858,
-      161858,
-      149858
+      161909,
+      149909,
+      149909
      ]
     },
     {
      "index": 2,
      "cu": [
-      161858,
-      149858,
-      161858
+      149909,
+      161909,
+      161909
      ]
     }
    ],
@@ -630,32 +630,32 @@
     {
      "reservations": 0,
      "cu": [
-      10393,
-      10393,
-      10393
+      10395,
+      10395,
+      10395
      ]
     },
     {
      "reservations": 1,
      "cu": [
-      140128,
-      138628,
-      138628
+      147630,
+      137130,
+      140130
      ]
     },
     {
      "reservations": 2,
      "cu": [
-      151054,
-      145054,
-      154054
+      151056,
+      148056,
+      149556
      ]
     }
    ],
    "test_result": "PASS_3_OF_3_IN_EACH_OF_3_BANK_RUNS"
   },
   "terminal_closure": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "terminal_closure.rs"
@@ -694,6 +694,72 @@
    "closes_are_permissionless": true,
    "test_result": "PASS_2_OF_2"
   },
+  "disagreement_exhibit": {
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "disagreement_exhibit.rs"
+   ],
+   "book_shape": "THIRTEEN_ORDER_TWO_MODEL_BOOK_SEVEN_SLICES_FIVE_SINGLE_CROSSINGS_ONE_PAIR",
+   "init_clear_work_cu": [
+    70613
+   ],
+   "exhibit_pass1_cu": [
+    411611
+   ],
+   "exhibit_pass2_cu": [
+    301177
+   ],
+   "advance_slices_cu": [
+    163296
+   ],
+   "complete_cu": [
+    118706
+   ],
+   "freeze_entitlement_cu": [
+    98407
+   ],
+   "entitle_slice_single_cu": [
+    223145,
+    220145,
+    224645,
+    224645,
+    220153
+   ],
+   "entitle_slice_portfolio_pair_cu": [
+    270660
+   ],
+   "settle_page_entitled_direct_slice_cu": [
+    40874,
+    37873,
+    42374,
+    42372,
+    37882
+   ],
+   "settle_page_entitled_portfolio_full_pair_cu": [
+    250584
+   ],
+   "heap_frame_rider": "REQUEST_HEAP_FRAME_262144_ON_EVERY_WALK_TRANSACTION_SURCHARGE_FROM_CLEAR_WALK",
+   "degree_1_terms_admission": "ADMITTED_BY_THE_GENERAL_PLANE_NO_DEGREE_0_SUBSTITUTION",
+   "conservation": "VALUE_PLANE_CONSERVED_POT_PROVABLY_EMPTY_ASSERTED_IN_SUITE",
+   "genesis_positions": "INJECTED_LABORATORY_BANK_STATE_DEPOSIT_BOUNDARY_STILL_REFUSED_0x79",
+   "test_result": "PASS_2_OF_2"
+  },
+  "revenue_boundary": {
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "revenue_policy.rs"
+   ],
+   "executed_tests": [
+    "the_revenue_boundary_pins_the_record_and_refuses_fee_bearing_admission"
+   ],
+   "per_route_cu": "NOT_LABELLED_BY_SUITE_NO_ROW_DERIVED",
+   "refusal_codes": "NOT_PRINTED_BY_SUITE_ASSERTED_IN_SOURCE_ONLY",
+   "rates": "BOTH_ZERO_NO_FEE_BEARING_EPOCH_ADMITS",
+   "treasury": "REVENUE_TREASURY_UNSET_V1_SENTINEL_REFUSES_STRUCTURALLY",
+   "test_result": "PASS_1_OF_1"
+  },
   "source_archive_host": {
    "artifact_sha256": null,
    "tests_passed": 9,
@@ -702,7 +768,7 @@
    "source_archive_rent_lamports": 18708480
   },
   "direct_v3_close": {
-   "artifact_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
+   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "direct_selection_v3.rs"

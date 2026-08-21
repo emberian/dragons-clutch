@@ -60,6 +60,8 @@ SAME_ELF_MEASUREMENTS = {
     "direct_v3",
     "direct_v3_close",
     "terminal_closure",
+    "disagreement_exhibit",
+    "revenue_boundary",
 }
 REQUIRED_EVIDENCE_SUFFIXES = {
     "audit/RUNTIME_ARTIFACT_AUDIT.md",
@@ -113,6 +115,8 @@ CURRENT_EVIDENCE_SUFFIXES = REQUIRED_EVIDENCE_SUFFIXES | {
     "logs/bank/direct_selection_v3_run2.log",
     "logs/bank/direct_selection_v3_run3.log",
     "logs/bank/terminal_closure.log",
+    "logs/bank/disagreement_exhibit.log",
+    "logs/bank/revenue_policy.log",
     "logs/sbf-build-crosspath.log",
 }
 # The Direct V3 account families classified after the sealed v2 probe.  The
@@ -167,6 +171,12 @@ POST_PROBE_TERMINAL_CLOSURE_ROWS = {
 POST_PROBE_REVENUE_ROWS = {
     "revenue.policy_record.v1": 156,
 }
+# The inventory row the driven fee-bearing boundary creates, and the one
+# residual it honestly stops on: CloseRevenuePolicyRecord (tag 68) exists and
+# pays the exact recorded payer, but it is gated on the Realm account being
+# gone, and the ``realm`` row is PERMANENT_INFRA with no close route at all.
+REVENUE_RECORD_ROW = "revenue.policy_record.v1"
+REVENUE_RECORD_BLOCKER = "REVENUE.REALM_PERMANENCE_HOLDS_RECORD"
 # What TerminalClosure (tags 60-67) does and does not retire, welded to the
 # sealed bank walk by ``require_terminal_closure_evidence``.  The close DAG is
 # complete, permissionless except for the owner-signed release edge, and
@@ -235,6 +245,18 @@ WALK_PLANE_W1_FAMILIES = (
     "clear_walk",
     "candidate_selection",
     "entitled_clearing",
+    # The L2 disagreement exhibit joined the rung at the df0aece1… seal.  It is
+    # not a new plane: it drives the SAME general-plane routes against the SAME
+    # ELF under the SAME frozen policy, at a third book composition (13 orders,
+    # 7 slices, five entitled single crossings plus one portfolio full pair),
+    # and it prints its labels.  A quoted route measured hotter by a suite the
+    # rung does not read would be an understated quote, which is exactly the
+    # failure the "nothing measured goes unpublished" rule exists to prevent —
+    # and a family outside this tuple escapes that rule entirely.  Its rows
+    # quote only its own observations; the four original families' rows are
+    # unchanged, because each row already bounds its own measured composition
+    # and no other.
+    "disagreement_exhibit",
 )
 WALK_PLANE_FAMILIES = (*WALK_PLANE_W1_FAMILIES, "terminal_closure")
 # How a route's measured maximum relates to the shapes the suite drove.  The
@@ -393,6 +415,70 @@ WALK_PLANE_W1_ROUTES: tuple[tuple[str, str, tuple[Any, ...], str], ...] = (
         ("settle_page_entitled_portfolio_full_pair_cu",),
         W1_SHAPE_LABELLED,
     ),
+    # The disagreement exhibit's third book composition.  Each route is its own
+    # quote over its own observations; the exhibit measures several of these
+    # routes HOTTER than the two-suite books do, which is precisely why it is
+    # quoted rather than filed as prose.
+    (
+        "init_clear_work_exhibit_book",
+        "disagreement_exhibit",
+        ("init_clear_work_cu",),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "advance_clear_work_pass1_exhibit_book",
+        "disagreement_exhibit",
+        ("exhibit_pass1_cu",),
+        W1_BATCH_VARIABLE,
+    ),
+    (
+        "advance_clear_work_pass2_exhibit_book",
+        "disagreement_exhibit",
+        ("exhibit_pass2_cu",),
+        W1_BATCH_VARIABLE,
+    ),
+    (
+        "advance_clear_slices_exhibit_book",
+        "disagreement_exhibit",
+        ("advance_slices_cu",),
+        W1_BATCH_VARIABLE,
+    ),
+    (
+        "complete_clear_work_exhibit_book",
+        "disagreement_exhibit",
+        ("complete_cu",),
+        W1_FIXED_SHAPE,
+    ),
+    (
+        "freeze_entitlement_exhibit_book",
+        "disagreement_exhibit",
+        ("freeze_entitlement_cu",),
+        W1_FIXED_SHAPE,
+    ),
+    (
+        "entitle_slice_single_exhibit_book",
+        "disagreement_exhibit",
+        ("entitle_slice_single_cu",),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "entitle_slice_portfolio_pair_exhibit_book",
+        "disagreement_exhibit",
+        ("entitle_slice_portfolio_pair_cu",),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "settle_page_entitled_direct_slice_exhibit_book",
+        "disagreement_exhibit",
+        ("settle_page_entitled_direct_slice_cu",),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "settle_page_entitled_portfolio_full_pair_exhibit_book",
+        "disagreement_exhibit",
+        ("settle_page_entitled_portfolio_full_pair_cu",),
+        W1_SHAPE_LABELLED,
+    ),
 )
 # Measured CU fields that are deliberately NOT routes.  The walk suite prices
 # the ComputeBudget ``request_heap_frame(262144)`` instruction itself at 150 CU
@@ -402,6 +488,19 @@ WALK_PLANE_W1_ROUTES: tuple[tuple[str, str, tuple[Any, ...], str], ...] = (
 # surcharge.  It is published as a declared surcharge rather than dropped.
 WALK_PLANE_W1_SURCHARGE_FIELDS = {
     "clear_walk": "request_heap_frame_262144_surcharge_cu",
+}
+# Families whose quoted routes must still cover that measured rider.  The
+# disagreement exhibit's own walk sender attaches the identical
+# ``request_heap_frame(262144)`` instruction to EVERY transaction it measures
+# but never re-prices it, so its routes are charged the ``clear_walk`` figure
+# rather than a figure invented for them; the declaration below is welded so
+# the borrowing cannot become silent.
+WALK_PLANE_W1_SURCHARGE_BEARING_FAMILIES = ("clear_walk", "disagreement_exhibit")
+WALK_PLANE_W1_BORROWED_SURCHARGE_DECLARATION = {
+    "disagreement_exhibit": (
+        "REQUEST_HEAP_FRAME_262144_ON_EVERY_WALK_TRANSACTION_"
+        "SURCHARGE_FROM_CLEAR_WALK"
+    ),
 }
 # Shape labels the row tables must carry exactly.  A new freeze shape or a new
 # finalize shape appearing in the evidence refuses rather than going unquoted.
@@ -797,6 +896,90 @@ def require_terminal_closure_evidence(
     }
 
 
+def require_revenue_boundary_evidence(
+    family: dict[str, Any], terminal: dict[str, Any]
+) -> dict[str, Any]:
+    """Weld the driven fee-bearing boundary to the row it created.
+
+    The revenue suite is a refusal battery, not a measurement: it prints no CU
+    label and no headline, so this seal derives **no** CU row, no quote, and no
+    refusal code from it — the codes it asserts live in the suite source, and a
+    number transcribed out of source is not evidence.  What the family may
+    carry is exactly what its log supports, and the three claims that would
+    change this profile's funding story if either half drifted:
+
+    * both fee rates are zero and no fee-bearing epoch admits.  The profile
+      never treats a fee as liveness funding; the day a fee-bearing epoch can
+      open, that rule is a decision, not a derivation, and this refuses first;
+    * the treasury is the distinguished unset sentinel, so the refusal is
+      structural rather than a policy value someone could set;
+    * the record row it creates is in the inventory as an honest STOP carrying
+      its own residual id.  A row that quietly became refundable while its
+      close stays gated on a PERMANENT_INFRA Realm would be an over-admission.
+    """
+
+    invented = sorted(
+        name
+        for name, value in family.items()
+        if (name.endswith("_cu") or name.endswith("_rows"))
+        and not (isinstance(value, str) and value.startswith("NOT_"))
+    )
+    if invented:
+        raise CheckError(
+            "the revenue suite prints no CU label, so no compute row may be "
+            f"derived from it: {', '.join(invented)}"
+        )
+    require_equal(
+        family.get("per_route_cu"),
+        "NOT_LABELLED_BY_SUITE_NO_ROW_DERIVED",
+        "revenue per-route CU declaration",
+    )
+    require_equal(
+        family.get("refusal_codes"),
+        "NOT_PRINTED_BY_SUITE_ASSERTED_IN_SOURCE_ONLY",
+        "revenue refusal-code declaration",
+    )
+    require_equal(
+        family.get("rates"),
+        "BOTH_ZERO_NO_FEE_BEARING_EPOCH_ADMITS",
+        "revenue rate declaration",
+    )
+    require_equal(
+        family.get("treasury"),
+        "REVENUE_TREASURY_UNSET_V1_SENTINEL_REFUSES_STRUCTURALLY",
+        "revenue treasury declaration",
+    )
+    executed = family.get("executed_tests")
+    if not isinstance(executed, list) or not executed:
+        raise CheckError("the revenue boundary family names no executed test")
+    if not str(family.get("test_result", "")).startswith("PASS_"):
+        raise CheckError(
+            f"revenue boundary evidence is not a pass: {family.get('test_result')!r}"
+        )
+
+    row = terminal["accounts"][REVENUE_RECORD_ROW]
+    if row["lifecycle_class"] != "UNCLASSIFIED_STOP":
+        raise CheckError(
+            f"{REVENUE_RECORD_ROW} is classified {row['lifecycle_class']!r}, but "
+            "its close is gated on the absence of a PERMANENT_INFRA Realm, so "
+            "its principal is capitalized for the Realm's whole life"
+        )
+    if REVENUE_RECORD_BLOCKER not in set(row["blocking_ids"]):
+        raise CheckError(
+            f"{REVENUE_RECORD_ROW} is a STOP that does not name its own "
+            f"residual {REVENUE_RECORD_BLOCKER}"
+        )
+    return {
+        "record_row": REVENUE_RECORD_ROW,
+        "record_bytes": row["bytes"],
+        "record_rent_lamports": row["rent_lamports"],
+        "residual_blocking_id": REVENUE_RECORD_BLOCKER,
+        "executed_tests": list(executed),
+        "cu_rows_derived": False,
+        "quote_rows_derived": False,
+    }
+
+
 def walk_plane_row_label(field: str, row: dict[str, Any]) -> Any:
     """Return the shape label of one measured row-table entry."""
 
@@ -976,8 +1159,17 @@ def require_walk_plane_w1_quotes(
     #    route + surcharge may not be published as that route's limit.
     surcharge_field = WALK_PLANE_W1_SURCHARGE_FIELDS["clear_walk"]
     surcharge = max(measurements["clear_walk"][surcharge_field])
+    for family, declaration in WALK_PLANE_W1_BORROWED_SURCHARGE_DECLARATION.items():
+        require_equal(
+            measurements[family].get("heap_frame_rider"),
+            declaration,
+            f"{family} borrowed heap-frame rider declaration",
+        )
     for key, row in routes.items():
-        if row["family"] != "clear_walk" or row["selected_limit_cu"] is None:
+        if (
+            row["family"] not in WALK_PLANE_W1_SURCHARGE_BEARING_FAMILIES
+            or row["selected_limit_cu"] is None
+        ):
             continue
         with_rider = quote_route(row["measured_cu"] + surcharge, policy)
         if (
@@ -1201,6 +1393,9 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
         measurements["terminal_closure"], terminal
     )
     walk_w1 = require_walk_plane_w1_quotes(measurements, terminal, policy)
+    revenue_summary = require_revenue_boundary_evidence(
+        measurements["revenue_boundary"], terminal
+    )
 
     return {
         "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
@@ -1325,6 +1520,18 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
             "rows_reclassified_refundable": [],
             "residual_blocking_ids": sorted(TERMINAL_CLOSURE_BLOCKERS),
             "retired_reason": "PROFILE.STORAGE_INVENTORY_INCOMPLETE_NO_CLOSE_PATH",
+            "decision_owner": "ember",
+        },
+        "revenue_boundary": {
+            "status": "SBF_EXECUTED_REFUSAL_BOUNDARY_UNPROMOTED_STOP",
+            "admission_rows_derived": False,
+            "live_flags": "UNTOUCHED",
+            "fee_rates": "BOTH_ZERO_UNDECIDED",
+            "fee_bearing_epoch_admits": False,
+            "treasury": "DEFERRED_UNSET_SENTINEL",
+            "vault_built": False,
+            "fees_as_liveness_funding": "NEVER_NOT_AT_ANY_RATE",
+            **revenue_summary,
             "decision_owner": "ember",
         },
         "terminal_status": terminal_status,
@@ -1485,6 +1692,53 @@ def check_artifact_binding(evidence: dict[str, Any]) -> None:
             f"a relocated-home probe that diverged must say PATH_SENSITIVE, not "
             f"{disposition!r}"
         )
+    # A diverged probe says WHICH relocation the divergence tracks, and it may
+    # only say so with controls.  The protocol probe
+    # (programs/clutch-sbf/audit/audit_artifact.sh) builds its relocated home
+    # under $TMPDIR, which on this host is reached through the `/var` ->
+    # `/private/var` symlink; two independent controls at ordinary paths
+    # reproduced the canonical bytes exactly.  The attribution is therefore
+    # narrower than "the Cargo home moved", and the narrower claim has to carry
+    # the observations that earned it: at least one control that reproduced the
+    # canonical bytes, none of them at the protocol probe's own path, and every
+    # control's disposition agreeing with its own digest.  Without a
+    # reproducing control the attribution field is a story, and refuses.
+    if not relocated_independent:
+        controls = reproducibility.get("relocated_controls")
+        if not isinstance(controls, list) or not controls:
+            raise CheckError(
+                "a PATH_SENSITIVE relocated-home probe must carry the control "
+                "builds that locate its cause, not a bare disposition"
+            )
+        reproduced = 0
+        for row in controls:
+            require_equal(
+                set(row),
+                {"path", "sha256", "bytes", "disposition"},
+                "relocated control observation",
+            )
+            matches = row["sha256"] == digest
+            expected = (
+                "REPRODUCED_CANONICAL_BYTES" if matches else "DIVERGED_FROM_CANONICAL"
+            )
+            require_equal(
+                row["disposition"], expected, f"relocated control {row['path']}"
+            )
+            reproduced += matches
+        if len({row["path"] for row in controls}) != len(controls):
+            raise CheckError("relocated_controls lists a path twice")
+        if not reproduced:
+            raise CheckError(
+                "every relocated-home control diverged, so the divergence is not "
+                "attributable to the protocol probe's own path; the attribution "
+                "must be widened rather than kept"
+            )
+        attribution = reproducibility.get("relocated_attribution")
+        if not isinstance(attribution, str) or not attribution:
+            raise CheckError(
+                "a PATH_SENSITIVE probe with a reproducing control must name "
+                "what the divergence actually tracks"
+            )
 
     artifact_root = Path(artifact["path"]).parent
     expected_files = {str(artifact_root / suffix) for suffix in CURRENT_EVIDENCE_SUFFIXES}

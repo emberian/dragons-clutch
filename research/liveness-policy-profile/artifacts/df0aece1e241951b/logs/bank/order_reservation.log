@@ -1,0 +1,12 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.32s
+     Running tests/order_reservation.rs (target/debug/deps/order_reservation-ef3a2f90febe9534)
+
+running 2 tests
+test funded_orders_reserve_release_and_isolate_owners ... PlaceOrder CU: buy=186006, sell=184036
+CancelOrder CU: buy=282987, sell=287660
+ok
+test unfunded_place_refuses_without_creating_or_mutating_anything ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+

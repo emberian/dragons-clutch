@@ -1,0 +1,16 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.20s
+     Running tests/general_epoch.rs (target/debug/deps/general_epoch-2ebd2779c0adca4f)
+
+running 3 tests
+test freeze_refuses_a_missing_page_and_an_expired_record ... FreezeEpoch (2 pages, 17 orders) CU: 477995
+ok
+test init_refuses_wrong_policy_stale_deadline_and_wrong_window ... ok
+test the_general_lifecycle_initializes_places_cancels_and_freezes ... InitEpoch CU: 42743
+PlaceOrder (single, general epoch) CU: 192028
+PlaceOrder (portfolio, general epoch) CU: 194344
+FreezeEpoch (1 page, 4 orders) CU: 233554
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+
