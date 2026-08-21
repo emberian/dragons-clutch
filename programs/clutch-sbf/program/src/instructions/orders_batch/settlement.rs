@@ -1665,7 +1665,9 @@ mod tests {
                 outcome: 0,
                 side: 0,
                 quantity,
-                limit: 5_000,
+                // Above the clearing price on purpose: a completing buy then
+                // has a real price-improvement refund to release.
+                limit: 6_000,
                 minimum_fill: 0,
                 flags: 0,
                 generation: 1,
@@ -1744,7 +1746,9 @@ mod tests {
             assert!(plan.buyer_completes);
             assert_eq!(plan.seller_completes, at == 1);
             assert_eq!(plan.seller_remainder, if at == 1 { 2 } else { 0 });
-            assert_eq!(plan.buyer_release_atoms, 0);
+            // Reserved four (six) atoms, paid three (two): the completing buy
+            // releases the one-atom difference back into free cash.
+            assert_eq!(plan.buyer_release_atoms, 1);
             apply_entitled_slice_consumption(
                 &mut f.buyers[at],
                 &mut f.seller_position,
@@ -1791,12 +1795,35 @@ mod tests {
         assert_eq!(consumed_atoms, 5);
         assert_eq!(f.seller_position.cash_atoms, 5);
         assert_eq!(f.buyers[0].cash_atoms + f.buyers[1].cash_atoms, 195);
-        assert_eq!(initial_cash, 5);
+        assert_eq!(initial_cash, 7);
         assert!(f.seller_reservation.remaining_is_zero());
         for buyer in &f.buyers {
             assert_eq!(buyer.reserved_cash_atoms, 0);
         }
         // Replay on the exhausted receipts refuses.
+        assert_eq!(
+            prepare_entitled_slice_consumption(&EntitledSliceConsumptionInput {
+                epoch: &f.epoch,
+                candidate: &f.candidate,
+                buyer_position: &f.buyers[0],
+                seller_position: &f.seller_position,
+                buyer_reservation: &f.buyer_reservations[0],
+                seller_reservation: &f.seller_reservation,
+                receipt: &f.receipts[0],
+            }),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+    }
+
+    #[test]
+    fn a_receipt_whose_consideration_does_not_convert_refuses_at_consumption() {
+        // The entitlement seam already refuses an inexact slice, so a receipt
+        // like this cannot be minted; the consumption seam re-requires it
+        // anyway, because this is where the atoms actually move.
+        let mut f = partial_fixture();
+        f.receipts[0].quantity = 5;
+        f.receipts[0].consideration_price_units = 5 * 5_000;
+        f.receipts[0].validate().unwrap();
         assert_eq!(
             prepare_entitled_slice_consumption(&EntitledSliceConsumptionInput {
                 epoch: &f.epoch,
