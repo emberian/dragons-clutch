@@ -300,8 +300,7 @@ theorem the_interior_peak_is_the_model_basis :
 
 At `outcome_count = degree + 1` the basis is the Bernstein basis of one span and
 the two Hankel quadrics of Corollary 7.6.6 are *exactly* moment-cone
-membership.  Both
-are tight at every point mass. -/
+membership.  Both are tight at every point mass. -/
 
 theorem single_span_quadrics_are_tight_at_the_point_masses :
     momentConeAdmits 2 4096 [1024, 2048, 1024] = true ∧
