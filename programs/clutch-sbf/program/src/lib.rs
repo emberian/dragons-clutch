@@ -59,6 +59,8 @@
 //! | [`instructions_sysvar`] | pinned Instructions-sysvar decode for the R2 immediate-post join; routed by nothing |
 //! | [`loader_state`] | pinned Upgradeable Loader ProgramData decode for the R2 deployment-slot pin; routed by nothing |
 //! | [`native_window`] | bounded sealed-archive occupation fold persisted only by Resolution v4 |
+//! | [`pyth_receiver`] | pinned Pyth `PriceUpdateV2` decode and conservative price normalization |
+//! | [`source_identity`] | **the one-const boundary**: every identity byte the R2 pull profile pins |
 //! | [`token`] | Token-2022 observation, admission, and CPI construction |
 //!
 //! The per-lane ownership boundaries are tabulated in
@@ -81,9 +83,11 @@ pub mod instructions;
 pub mod instructions_sysvar;
 pub mod loader_state;
 pub mod native_window;
+pub mod pyth_receiver;
 pub mod seeds;
 pub mod source;
 pub mod source_archive;
+pub mod source_identity;
 pub mod token;
 
 #[cfg(target_os = "solana")]
