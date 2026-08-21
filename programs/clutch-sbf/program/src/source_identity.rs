@@ -211,10 +211,12 @@ pub mod fixture {
 
     /// Earliest Clock time at which the fixture release may be consumed.
     ///
-    /// 2023-11-14T22:13:20Z. Bank tests and the validator walk drive the Clock
-    /// well past it; the constant exists so the activation gate is exercised
-    /// rather than trivially true, and
-    /// `r2_pull_hostile.rs::pre_activation_clock_refuses` drives it backwards.
+    /// 2023-11-14T22:13:20Z. The archive campaign drives the Clock well past
+    /// it; the constant exists so the activation gate is exercised rather than
+    /// trivially true, and
+    /// `source_v2::auth`'s
+    /// `clock_identity_activation_and_both_freshness_envelopes_fail_closed`
+    /// drives it forward until the release has not yet activated.
     pub const ACTIVATION_UNIX_TIMESTAMP: i64 = 1_700_000_000;
 
     /// Account-meta positions the fixture receiver's post instruction uses.
