@@ -26,22 +26,28 @@
 //! `EntitleSlice` is the resumable per-slice half: one witness slice per
 //! invocation, receipt PDA per `(candidate, slice_index)`, replay held by the
 //! receipt's own non-existence.  Against the complete digest-verified frozen
-//! page set it re-derives the slice's two live orders, requires **full
-//! fills** on both ends (the PartialFillLedger blocker stands: a slice that
-//! does not cover its ends' whole legs, or an order split across slices,
-//! refuses `NotYetImplemented`), re-validates both reservations exactly as
-//! the pass-1 walk did, flips them `ACTIVE → ENTITLED`, and creates the
-//! receipt(s):
+//! page set it re-derives the slice's two live orders, scans the whole
+//! declared witness once to total each end's Egg atoms *per order*, requires
+//! those totals to equal the verified fills, and routes on shape:
 //!
-//! * a **single-Egg pair** slice freezes one receipt, with the exact
-//!   consideration's divisibility required up front so no unconsumable
-//!   receipt is ever minted;
-//! * a **portfolio pair** slice freezes the receipts of *every* slice of
-//!   that pair atomically — the pair consumes atomically through the
-//!   full-pair seam, so its entitlement freezes atomically — with the two
-//!   fundings' canonical claims and primitive units required equal;
-//! * a **mixed** single/portfolio slice refuses `NotYetImplemented` — a
-//!   standing shape of the same partial-fill family.
+//! * an **exclusive portfolio pair** — no slice touching either end names a
+//!   different counterparty — freezes the receipts of *every* slice of that
+//!   pair atomically, with the two fundings' canonical claims and primitive
+//!   units required equal.  It consumes atomically through the full-pair
+//!   seam, so it freezes atomically, and its reservations carry no per-order
+//!   ledger because nothing else has a claim on either envelope.
+//! * **everything else** — a fragmented or partially filled single-Egg pair,
+//!   a mixed single/portfolio pair, a portfolio end pairing with more than
+//!   one counterparty — takes the generalized per-slice route: one receipt at
+//!   this slice's canonical PDA, and each end's reservation stamped with its
+//!   *whole order's* entitled total.  The first touch flips
+//!   `ACTIVE → ENTITLED` and writes the stamp; every later touch re-derives
+//!   the same total and requires equality, so a forged stamp cannot survive
+//!   recomputation.  A full one-to-one fill is the one-slice special case.
+//!
+//! Both routes require the exact consideration's divisibility up front, so no
+//! unconsumable receipt is ever minted, and both refuse a virtual leg: the
+//! VirtualPot ranked blocker stands.
 //!
 //! ## Consumption (the portfolio half of `SettlePage`)
 //!
@@ -80,7 +86,8 @@ use clutch_solana_layout::portfolio_settlement::{
     PortfolioSettlementError, PORTFOLIO_ENTITLEMENT_ACTIVE,
 };
 use clutch_solana_layout::reservation::{
-    ReservationAccount, RESERVATION_ACCOUNT_BYTES, RESERVATION_STATE_ENTITLED,
+    canonical_reservation_id, ReservationAccount, ReservationPlan, RESERVATION_ACCOUNT_BYTES,
+    RESERVATION_STATE_ACTIVE, RESERVATION_STATE_ENTITLED,
 };
 use clutch_solana_layout::{
     account_len, stream, CandidateRecord, EpochAccount, FinalPotAccount, Hash32, OrderSlot,
@@ -136,8 +143,9 @@ pub const IX_ENTITLE_RENT: usize = 6;
 /// then the per-shape tail.
 pub const IX_ENTITLE_PAGES: usize = ENTITLE_SLICE_FIXED_ACCOUNT_COUNT;
 
-/// Tail of a single-Egg pair entitlement: buy reservation, sell reservation,
-/// and the one creatable receipt.
+/// Tail of one per-slice entitlement: buy reservation, sell reservation, and
+/// the one creatable receipt.  The universal shape — every route but the
+/// atomic portfolio full pair presents exactly this.
 pub const ENTITLE_SINGLE_TAIL_ACCOUNT_COUNT: usize = 3;
 /// Fixed tail prefix of a portfolio pair entitlement: the Terms account and
 /// both reservations, then one creatable receipt per pair slice.
@@ -515,21 +523,45 @@ fn require_frozen_pot(
     Ok(())
 }
 
-/// What the whole-witness scan concluded about one slice's pair.
+/// What the whole-witness scan concluded about one slice's two ends.
 struct PairCoverage {
-    /// Indices of every slice referencing exactly this (buy, sell) pair,
-    /// ascending; the entry slice is `indices[0]`.
+    /// Indices of slices referencing exactly this (buy, sell) pair, ascending.
+    ///
+    /// Filled only up to [`MAX_PAIR_RECEIPTS`]; `stored < pair_count` means
+    /// the pair fragments past the atomic route's own bound and only the
+    /// per-slice route can serve it.
     indices: [u16; MAX_PAIR_RECEIPTS],
-    count: usize,
+    stored: usize,
+    /// How many slices reference exactly this pair, whether stored or not.
+    pair_count: u16,
+    /// Egg atoms the whole witness moves through the buy end.
+    buy_total: u64,
+    /// Egg atoms the whole witness moves through the sell end.
+    sell_total: u64,
+    /// Whether the buy end also pairs with a different counterparty.
+    buy_elsewhere: bool,
+    /// Whether the sell end also pairs with a different counterparty.
+    sell_elsewhere: bool,
 }
 
-/// Scan every declared witness slice once.
+impl PairCoverage {
+    /// Whether every slice touching either end references exactly this pair.
+    ///
+    /// The atomic portfolio full-pair route is admissible only here: it
+    /// consumes both whole envelopes in one instruction, which is sound
+    /// exactly when nothing else has a claim on either end.
+    fn exclusive(&self) -> bool {
+        !self.buy_elsewhere && !self.sell_elsewhere && self.stored == usize::from(self.pair_count)
+    }
+}
+
+/// Scan every declared witness slice once, totalling per *order*.
 ///
-/// For a single-Egg pair the rule is exclusivity: any *other* slice touching
-/// either rank is a split order, which stands behind the PartialFillLedger
-/// blocker.  For a portfolio pair the rule is completeness: every slice
-/// touching either rank must reference exactly this pair, and all of them are
-/// collected for atomic entitlement.
+/// Two facts come out of one pass: which slices reference exactly this
+/// (buy, sell) pair — the atomic route's receipt set — and how many Egg atoms
+/// the whole witness moves through each end, which is what the per-order
+/// entitlement stamp is checked against.  Fragmentation is no longer a
+/// refusal; it is a route.
 #[inline(never)]
 fn scan_witness(
     feed_data: &[u8],
@@ -542,7 +574,12 @@ fn scan_witness(
         .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
     let mut coverage = PairCoverage {
         indices: [0; MAX_PAIR_RECEIPTS],
-        count: 0,
+        stored: 0,
+        pair_count: 0,
+        buy_total: 0,
+        sell_total: 0,
+        buy_elsewhere: false,
+        sell_elsewhere: false,
     };
     let mut index = 0u16;
     while index < declared {
@@ -554,26 +591,68 @@ fn scan_witness(
         // An end appearing on its opposite side elsewhere would have refused
         // at verification (`SliceNotExecutable`); stated, not assumed.
         require(!touches_other, ClutchError::MismatchedState)?;
+        if buys {
+            coverage.buy_total = coverage
+                .buy_total
+                .checked_add(slice.quantity)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        }
+        if sells {
+            coverage.sell_total = coverage
+                .sell_total
+                .checked_add(slice.quantity)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        }
         if buys && sells {
-            require(
-                coverage.count < MAX_PAIR_RECEIPTS,
-                ClutchError::NotYetImplemented,
-            )?;
-            coverage.indices[coverage.count] = index;
-            coverage.count += 1;
-        } else if buys || sells {
-            // The pair's ends may not fragment across counterparties in this
-            // cut: cumulative per-order consumption state is the standing
-            // PartialFillLedger blocker.
-            return Err(Refusal::Adapter(ClutchError::NotYetImplemented));
+            coverage.pair_count = coverage
+                .pair_count
+                .checked_add(1)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+            if coverage.stored < MAX_PAIR_RECEIPTS {
+                coverage.indices[coverage.stored] = index;
+                coverage.stored += 1;
+            }
+        } else {
+            coverage.buy_elsewhere |= buys;
+            coverage.sell_elsewhere |= sells;
         }
         index += 1;
     }
-    require(coverage.count >= 1, ClutchError::MismatchedState)?;
+    require(coverage.pair_count >= 1, ClutchError::MismatchedState)?;
     Ok(coverage)
 }
 
+/// One live order's entitled total in Egg atoms, from its verified fill.
+///
+/// A single-Egg order's fill is already Egg atoms; a portfolio order's fill is
+/// lots, whose Egg content is the coefficient sum times the lots.  Both ends
+/// of every slice, and therefore the per-order ledger, speak this one unit.
+fn entitled_total(slot: &OrderSlot, fill: u64) -> Outcome<u64> {
+    match slot {
+        OrderSlot::Single(_) => Ok(fill),
+        OrderSlot::Portfolio(order) => {
+            let mut sum = 0u64;
+            let mut i = 0usize;
+            while i < usize::from(order.active_len) {
+                sum = sum
+                    .checked_add(order.coefficients[i])
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+                i += 1;
+            }
+            fill.checked_mul(sum)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))
+        }
+        OrderSlot::Empty | OrderSlot::Tombstone(_) => {
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        }
+    }
+}
+
 /// Flip one walk-validated reservation `ACTIVE → ENTITLED` and persist it.
+///
+/// The atomic portfolio full-pair route's entry: it consumes both whole
+/// envelopes in one later instruction and so carries no per-order ledger, and
+/// its reservations stay unstamped.
 #[inline(never)]
 fn entitle_reservation(
     program_id: &Pubkey,
@@ -593,6 +672,104 @@ fn entitle_reservation(
     reservation.validate()?;
     reservation.encode(&mut borrow_account_mut(account)?)?;
     Ok(())
+}
+
+/// Re-bind one already-`ENTITLED` reservation to this instruction's own facts.
+///
+/// Deliberately *not* `validate_walk_reservation`: a later slice of the same
+/// order may arrive after an earlier slice of it was already consumed, so the
+/// remaining envelope is not required untouched.  Everything that identifies
+/// the account — owner, order, generation, page, the frozen coordinates, the
+/// zero fee, the *initial* envelope, and the canonical address — is rebound.
+#[inline(never)]
+fn validate_entitled_touch(
+    program_id: &Pubkey,
+    epoch: &EpochAccount,
+    page_index: u16,
+    slot: &OrderSlot,
+    account_key: &Pubkey,
+    reservation: &ReservationAccount,
+) -> Outcome<()> {
+    let plan = ReservationPlan::for_order(slot, epoch.outcome_count, epoch.price_scale, 0)?;
+    require(
+        reservation.market == epoch.market
+            && reservation.epoch == epoch.epoch
+            && reservation.owner == slot.owner()
+            && reservation.order_id == slot.order_id()
+            && reservation.order_generation == slot.generation()
+            && reservation.page_index == page_index
+            && reservation.terms == epoch.terms
+            && reservation.price_grid == epoch.price_grid
+            && reservation.policy == epoch.policy
+            && reservation.outcome_count == epoch.outcome_count
+            && reservation.max_fee_atoms == 0
+            && reservation.release_generation == 0
+            && reservation.initial_cash_atoms == plan.cash_atoms
+            && reservation.initial_internal == plan.internal
+            && reservation.order_kind == plan.order_kind
+            && reservation.side == plan.side,
+        ClutchError::MismatchedState,
+    )?;
+    let reservation_id = canonical_reservation_id(
+        epoch.market,
+        epoch.epoch,
+        slot.owner(),
+        reservation.position_generation,
+        slot.order_id(),
+    );
+    expect_pda(
+        account_key,
+        seeds::reservation_pda(program_id, &reservation_id.bytes()),
+        Some(reservation.stored_bump),
+    )
+}
+
+/// Stamp one end of a per-slice entitlement with its whole order's total.
+///
+/// First touch flips `ACTIVE → ENTITLED` and writes the stamp; every later
+/// touch re-derives the same total from the digest-verified feed and requires
+/// equality, so a forged stamp cannot survive recomputation and no entry slice
+/// can widen the order's admission.
+#[inline(never)]
+fn stamp_reservation(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+    epoch: &EpochAccount,
+    page_index: u16,
+    slot: &OrderSlot,
+    entitled_units: u64,
+) -> Outcome<()> {
+    accounts::validate_state_role_lengths(
+        program_id,
+        account,
+        true,
+        &[RESERVATION_ACCOUNT_BYTES],
+    )?;
+    let reservation = super::decode_reservation_boxed(&account.data.borrow())?;
+    match reservation.state {
+        RESERVATION_STATE_ACTIVE => {
+            super::clear_walk::validate_walk_reservation(
+                program_id, account, epoch, page_index, slot, true,
+            )?;
+            let next = reservation.entitled(entitled_units)?;
+            next.encode(&mut borrow_account_mut(account)?)?;
+            Ok(())
+        }
+        RESERVATION_STATE_ENTITLED => {
+            validate_entitled_touch(
+                program_id,
+                epoch,
+                page_index,
+                slot,
+                account.key,
+                &reservation,
+            )?;
+            reservation.requires_stamp(entitled_units)?;
+            Ok(())
+        }
+        // RELEASED and CONSUMED are terminal; neither can take a new slice.
+        _ => Err(Refusal::Adapter(ClutchError::MismatchedState)),
+    }
 }
 
 /// Create and write one receipt at its canonical PDA.
@@ -715,23 +892,53 @@ pub(super) fn entitle_slice(
     // digest-verified set this instruction just walked.
     record.binds_epoch(&epoch, live_order_count)?;
 
-    // Full fills on both ends, or the PartialFillLedger blocker stands.
-    {
-        let data = accounts[IX_ENTITLE_FEED].data.borrow();
-        let buy_fill = clearing::fill_at(&data, &feed, buy_rank)?;
-        let sell_fill = clearing::fill_at(&data, &feed, sell_rank)?;
-        require(
-            buy_fill == order_full_size(&buy.slot)? && sell_fill == order_full_size(&sell.slot)?,
-            ClutchError::NotYetImplemented,
-        )?;
-    }
+    // One pass over the whole declared witness: the pair's own slices, and
+    // each end's per-order Egg total.
     let coverage = {
         let data = accounts[IX_ENTITLE_FEED].data.borrow();
         scan_witness(&data, &feed, buy_rank, sell_rank)?
     };
+    /* The per-order entitlement totals, re-derived from the verified fills
+     * rather than read off the witness: the witness says how the fills are
+     * paired, the fill vector says how much each order is entitled to, and
+     * requiring the two to agree is what makes a stamp unforgeable. */
+    let (buy_entitled, sell_entitled) = {
+        let data = accounts[IX_ENTITLE_FEED].data.borrow();
+        let buy_fill = clearing::fill_at(&data, &feed, buy_rank)?;
+        let sell_fill = clearing::fill_at(&data, &feed, sell_rank)?;
+        (
+            entitled_total(&buy.slot, buy_fill)?,
+            entitled_total(&sell.slot, sell_fill)?,
+        )
+    };
+    require(
+        buy_entitled != 0
+            && sell_entitled != 0
+            && coverage.buy_total == buy_entitled
+            && coverage.sell_total == sell_entitled,
+        ClutchError::MismatchedState,
+    )?;
 
+    /* Four shapes, one seam.  The exclusive portfolio pair keeps the atomic
+     * full-pair route verbatim — moving it per-slice would narrow admission —
+     * and everything else is the generalized per-slice route: a fragmented or
+     * partially filled single pair, a mixed single/portfolio pair, and a
+     * portfolio end that pairs with more than one counterparty. */
     match (buy.slot, sell.slot) {
-        (OrderSlot::Single(_), OrderSlot::Single(_)) => entitle_single_slice(
+        (OrderSlot::Portfolio(_), OrderSlot::Portfolio(_)) if coverage.exclusive() => {
+            entitle_portfolio_pair(
+                program_id,
+                accounts,
+                tail,
+                &epoch,
+                &record,
+                slice_index,
+                &buy,
+                &sell,
+                &coverage,
+            )
+        }
+        _ => entitle_per_slice(
             program_id,
             accounts,
             tail,
@@ -741,42 +948,64 @@ pub(super) fn entitle_slice(
             slice_index,
             &buy,
             &sell,
-            &coverage,
+            buy_entitled,
+            sell_entitled,
         ),
-        (OrderSlot::Portfolio(_), OrderSlot::Portfolio(_)) => entitle_portfolio_pair(
-            program_id,
-            accounts,
-            tail,
-            &epoch,
-            &record,
-            slice_index,
-            &buy,
-            &sell,
-            &coverage,
-        ),
-        /* A mixed single/portfolio pair needs per-leg consumption state the
-         * full-pair seam does not model; it stands with the partial-fill
-         * family. */
-        _ => Err(Refusal::Adapter(ClutchError::NotYetImplemented)),
     }
 }
 
-/// One live order's full size in relation units: Egg atoms for singles,
-/// lots for portfolios.
-fn order_full_size(slot: &OrderSlot) -> Outcome<u64> {
+/// One end's shape check against the slice it is being entitled for.
+///
+/// A single-Egg end must sit on the slice's own outcome; a portfolio end must
+/// carry a nonzero coefficient there, which is what makes the outcome one of
+/// its legs.  Limits are re-checked where they are per-outcome — a portfolio's
+/// limit is collateral per whole lot, which the relation verified against the
+/// basket, not against one leg.
+fn validate_slice_end(
+    slot: &OrderSlot,
+    side: u8,
+    outcome: u8,
+    price: u64,
+    outcome_count: u8,
+) -> Outcome<()> {
     match slot {
-        OrderSlot::Single(order) => Ok(order.quantity),
-        OrderSlot::Portfolio(order) => Ok(order.lots),
+        OrderSlot::Single(order) => {
+            require(
+                order.side == side
+                    && order.outcome == outcome
+                    && if side == 0 {
+                        price <= order.limit
+                    } else {
+                        price >= order.limit
+                    },
+                ClutchError::MismatchedState,
+            )
+        }
+        OrderSlot::Portfolio(order) => {
+            require(
+                order.side == side
+                    && outcome < order.active_len
+                    && order.active_len <= outcome_count
+                    && order.coefficients[usize::from(outcome)] != 0,
+                ClutchError::MismatchedState,
+            )
+        }
         OrderSlot::Empty | OrderSlot::Tombstone(_) => {
             Err(Refusal::Adapter(ClutchError::MismatchedState))
         }
     }
 }
 
-/// The single-Egg pair half of `EntitleSlice`.
+/// The generalized per-slice half of `EntitleSlice`.
+///
+/// One witness slice, one receipt, and the per-order stamp on each end.  This
+/// is the universal route: a fragmented or partially filled single-Egg pair, a
+/// mixed single/portfolio pair, and a portfolio order that pairs with more
+/// than one counterparty all arrive here, and a full one-to-one fill is simply
+/// its one-slice special case.
 #[allow(clippy::too_many_arguments)] // one argument per authenticated fact
 #[inline(never)]
-fn entitle_single_slice<'a>(
+fn entitle_per_slice<'a>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'a>],
     tail: &[AccountInfo<'a>],
@@ -786,7 +1015,8 @@ fn entitle_single_slice<'a>(
     slice_index: u16,
     buy: &Located,
     sell: &Located,
-    coverage: &PairCoverage,
+    buy_entitled: u64,
+    sell_entitled: u64,
 ) -> Outcome<()> {
     // With the optional trailing funding ledger, the tail grows by one.
     require(
@@ -794,37 +1024,15 @@ fn entitle_single_slice<'a>(
             || tail.len() == ENTITLE_SINGLE_TAIL_ACCOUNT_COUNT + 1,
         ClutchError::AccountCount,
     )?;
-    // Exclusivity: exactly this one slice touches either end, or the order
-    // is split across slices and the PartialFillLedger blocker stands.
-    require(
-        coverage.count == 1 && coverage.indices[0] == slice_index,
-        ClutchError::NotYetImplemented,
-    )?;
-    let (buy_order, sell_order) = match (&buy.slot, &sell.slot) {
-        (OrderSlot::Single(buy_order), OrderSlot::Single(sell_order)) => (buy_order, sell_order),
-        _ => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
-    };
-    require(
-        buy_order.side == 0
-            && sell_order.side == 1
-            && buy_order.owner != sell_order.owner
-            && buy_order.outcome == sell_order.outcome
-            && buy_order.outcome == slice.outcome,
-        ClutchError::MismatchedState,
-    )?;
-    // Full one-to-one: the slice covers both whole legs, or the
-    // PartialFillLedger blocker stands.
     require(
         slice.quantity != 0
-            && slice.quantity == buy_order.quantity
-            && slice.quantity == sell_order.quantity,
-        ClutchError::NotYetImplemented,
-    )?;
-    let price = record.prices[usize::from(slice.outcome)];
-    require(
-        price <= buy_order.limit && price >= sell_order.limit,
+            && slice.outcome < epoch.outcome_count
+            && buy.slot.owner() != sell.slot.owner(),
         ClutchError::MismatchedState,
     )?;
+    let price = record.prices[usize::from(slice.outcome)];
+    validate_slice_end(&buy.slot, 0, slice.outcome, price, epoch.outcome_count)?;
+    validate_slice_end(&sell.slot, 1, slice.outcome, price, epoch.outcome_count)?;
     let consideration_price_units = u128::from(slice.quantity)
         .checked_mul(u128::from(price))
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
@@ -838,16 +1046,30 @@ fn entitle_single_slice<'a>(
     )?;
 
     // State writes before the creation CPI (the terminal.rs ordering rule).
-    entitle_reservation(program_id, &tail[0], epoch, buy.page_index, &buy.slot)?;
-    entitle_reservation(program_id, &tail[1], epoch, sell.page_index, &sell.slot)?;
+    stamp_reservation(
+        program_id,
+        &tail[0],
+        epoch,
+        buy.page_index,
+        &buy.slot,
+        buy_entitled,
+    )?;
+    stamp_reservation(
+        program_id,
+        &tail[1],
+        epoch,
+        sell.page_index,
+        &sell.slot,
+        sell_entitled,
+    )?;
 
     let receipt_prior = tail[2].lamports();
     let receipt = SettlementReceiptAccount {
         epoch: epoch.epoch,
         market: epoch.market,
         candidate: record.candidate,
-        buy_order_id: buy_order.order_id,
-        sell_order_id: sell_order.order_id,
+        buy_order_id: buy.slot.order_id(),
+        sell_order_id: sell.slot.order_id(),
         consideration_price_units,
         quantity: slice.quantity,
         settled_quantity: 0,
@@ -966,9 +1188,9 @@ fn entitle_portfolio_pair<'a>(
 ) -> Outcome<()> {
     // With the optional funding ledgers, one per receipt follows the
     // receipts in the same slice order.
-    let ledgered = tail.len() == ENTITLE_PAIR_TAIL_FIXED_ACCOUNT_COUNT + (2 * coverage.count);
+    let ledgered = tail.len() == ENTITLE_PAIR_TAIL_FIXED_ACCOUNT_COUNT + (2 * coverage.stored);
     require(
-        tail.len() == ENTITLE_PAIR_TAIL_FIXED_ACCOUNT_COUNT + coverage.count || ledgered,
+        tail.len() == ENTITLE_PAIR_TAIL_FIXED_ACCOUNT_COUNT + coverage.stored || ledgered,
         ClutchError::AccountCount,
     )?;
     // The pair entitles exactly once, from its first slice: any other entry
@@ -1006,7 +1228,7 @@ fn entitle_portfolio_pair<'a>(
         let data = accounts[IX_ENTITLE_FEED].data.borrow();
         let feed = clearing::CandidateFeedHeader::decode(&data)?;
         let mut at = 0usize;
-        while at < coverage.count {
+        while at < coverage.stored {
             let index = coverage.indices[at];
             let pair_slice = clearing::slice_at(&data, &feed, index)?;
             let outcome = usize::from(pair_slice.outcome);
@@ -1065,7 +1287,7 @@ fn entitle_portfolio_pair<'a>(
     let rent = read_rent(&accounts[IX_ENTITLE_RENT])?;
     let receipt_minimum = rent.minimum_balance(account_len::SETTLEMENT_RECEIPT)?;
     let mut at = 0usize;
-    while at < coverage.count {
+    while at < coverage.stored {
         let target = &tail[ENTITLE_PAIR_TAIL_FIXED_ACCOUNT_COUNT + at];
         let prior = target.lamports();
         create_receipt(
@@ -1082,7 +1304,7 @@ fn entitle_portfolio_pair<'a>(
             super::terminal_closure::create_funding_ledger(
                 program_id,
                 &accounts[IX_ENTITLE_PAYER],
-                &tail[ENTITLE_PAIR_TAIL_FIXED_ACCOUNT_COUNT + coverage.count + at],
+                &tail[ENTITLE_PAIR_TAIL_FIXED_ACCOUNT_COUNT + coverage.stored + at],
                 &accounts[IX_ENTITLE_SYSTEM],
                 &rent,
                 target.key,
@@ -1160,7 +1382,14 @@ fn load_pair_reservation(
             && reservation.outcome_count == epoch.outcome_count
             && reservation.release_generation == 0
             && reservation.remaining_cash_atoms == reservation.initial_cash_atoms
-            && reservation.remaining_internal == reservation.initial_internal,
+            && reservation.remaining_internal == reservation.initial_internal
+            /* Unstamped, and therefore atomically entitled: a reservation
+             * carrying a per-order ledger has slices with other
+             * counterparties outstanding and may only be consumed one slice
+             * at a time, or this seam would hand away an envelope other
+             * receipts still have a claim on. */
+            && reservation.entitled_units == 0
+            && reservation.consumed_units == 0,
         ClutchError::MismatchedState,
     )?;
     expect_pda(
