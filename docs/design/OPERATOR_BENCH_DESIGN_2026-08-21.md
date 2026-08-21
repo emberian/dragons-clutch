@@ -167,8 +167,10 @@ appears anywhere under `apps/operator/` — grep is the gate.
 through the daemon's own builders — i.e. through `clutch_sbf_harness` —
 and byte-diffs each against the `tx/*.b64` file the harness emitted. It
 then corrupts one byte of one rebuilt transaction and requires the
-comparison to go red. `scripts/run_operator_replay.sh` runs both halves
-and fails if either verdict is wrong.
+comparison to go red. `programs/clutch-sbf/scripts/run_operator_replay.sh` runs both halves and
+fails if either verdict is wrong — it lives beside `run_general_committed.sh`
+rather than in the repository-root `scripts/`, which holds the Python
+manifest tooling and no shell gates.
 
 This is the gate that makes the "one builder" claim checkable rather than
 asserted. It is *not* a proof about the wire format; it is a byte
@@ -192,9 +194,60 @@ that resolution.
 
 1. Split gate — the emitted `--general-clearing` plan is byte-identical
    before and after the library split.
-2. `scripts/run_operator_replay.sh` green, and red on a corrupted byte.
-3. M0 end to end under the suite lock: the full forty-four-step walk
-   watched through the API, conservation epilogue green.
+2. `programs/clutch-sbf/scripts/run_operator_replay.sh` green, and red on a
+   corrupted byte.
+3. M0 end to end under the suite lock, by
+   `programs/clutch-sbf/scripts/run_operator_bench.sh`: the full
+   forty-four-step walk watched through the API as a client, conservation
+   epilogue green.
 4. `cargo clippy --all-targets -- -D warnings` on `clutch-sbf-harness`
    and `clutch-sbf-operatord`.
 5. Zero external dependencies in `apps/operator/`, by grep.
+
+## Delivered
+
+Built 2026-08-21 by the implementing lane, in the shared tree on `main`.
+
+**Step 1, the library split** — `harness/src/main.rs` (11 836 lines) is now
+`src/lib.rs` plus a nine-line `src/main.rs` forwarding to `run_cli`. The
+split gate passed: the `--general-clearing` plan emitted before and after
+was byte-identical across all 294 files (tree digest
+`79452e9ef4215562fd040d38aba829aa51c49380de29b0d2cc69c09033e83d11`), with
+the emitter's stdout matching line for line. The plan's bytes have since
+moved with the partial-fill lane's `ReservationAccount` v2 (570 → 610); the
+gate above was taken with both emissions at one tree state and is unaffected.
+
+**Step 2, `operatord` M0** — `programs/clutch-sbf/operatord/`, its own
+workspace, path-depending on `../harness` and `../../solana-layout`. No
+member line was added to `programs/clutch-sbf/Cargo.toml`. `serve` mints the
+eight ephemeral signers, builds and hashes the mock-source ELF, emits the
+plan in process, starts a fresh ledger, probes readiness, and drives the
+forty-four steps, publishing `boot` / `roster` / `identity` / `plan` /
+`step` / `state` / `clock` / `crank` / `conservation` / `done` events.
+
+**Step 3, the replay falsifier** — `operatord replay` plus
+`run_operator_replay.sh`. Verdicts: the library plan and the CLI plan are
+byte-identical (294 files, 44 transactions); every file rebuilds
+byte-identically through the builders; a single corrupted transaction byte
+turns the replay red at exactly the corrupted file.
+
+**Step 4, M1** — the live conservation strip (re-derived from observed bytes
+on every tick, with unobserved roles named rather than zeroed), the Funding,
+Ticket and Book screens, and the crank. **Not built:** interactive Endow /
+Split / PlaceOrder builders, the Friday-clutch eight-outcome degree-1
+fixture, and the density painter. The crank is pacing only — pause between
+steps, take exactly one, resume — and `POST /api` deliberately has no verb
+that composes, reorders, or skips a transaction, so the reading surface
+cannot become an authoring surface.
+
+### One deviation from the brief, and why
+
+The brief allotted one member line in `programs/clutch-sbf/Cargo.toml`. It
+was not used. `committed-harness/README.md` already records the rule — *the
+program ELF must not acquire host signing or JSON dependencies merely because
+a local evidence runner needs them* — and that workspace's 42-package lock is
+what the sealed baseline resolves the deployable artifact from.
+`solana-keypair`'s signing graph has no business in it. `operatord` is
+therefore a sibling workspace, exactly as `committed-harness` is, and the
+path dependency across the boundary still gives it the one true builder.
+This also removed the anticipated conflict with the keeper lane.

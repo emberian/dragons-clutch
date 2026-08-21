@@ -60,6 +60,41 @@ pub fn load_keypairs(plan: &Plan, paths: &[PathBuf]) -> Result<Vec<Keypair>> {
     Ok(keypairs)
 }
 
+/// Say *where* two account images disagree, not merely that they do.
+///
+/// The committed runner reports only the two lengths, which is no help at all
+/// when they are equal — the usual case, because an account schema that grew
+/// makes every image the new length and only the appended field disagrees.
+/// Naming the first differing offset and the two bytes there turns "somewhere
+/// in 610 bytes" into a pointer at the exact field that moved.
+fn disagreement(observed: &[u8], expected: &[u8]) -> String {
+    if observed.len() != expected.len() {
+        return format!(
+            "observed {} bytes, expected {}",
+            observed.len(),
+            expected.len()
+        );
+    }
+    let first = observed
+        .iter()
+        .zip(expected)
+        .position(|(left, right)| left != right);
+    let count = observed
+        .iter()
+        .zip(expected)
+        .filter(|(left, right)| left != right)
+        .count();
+    match first {
+        Some(offset) => format!(
+            "{count} of {} bytes differ; first at offset {offset}: observed 0x{:02x}, expected 0x{:02x}",
+            observed.len(),
+            observed[offset],
+            expected[offset]
+        ),
+        None => "images are equal".to_string(),
+    }
+}
+
 fn u64_at(bytes: &[u8], offset: usize) -> u64 {
     bytes
         .get(offset..offset + 8)
@@ -233,11 +268,10 @@ impl Walker<'_> {
             )?;
             if observed != expected {
                 return Err(format!(
-                    "{} / {}: committed bytes differ (observed {}, expected {})",
+                    "{} / {}: committed bytes differ ({})",
                     step.name,
                     entry.role,
-                    observed.len(),
-                    expected.len()
+                    disagreement(&observed, &expected)
                 )
                 .into());
             }
@@ -428,4 +462,33 @@ pub fn conservation_epilogue(plan: &Plan, terminal: &Terminal) -> (Value, bool) 
         }),
         green,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::disagreement;
+
+    #[test]
+    fn a_length_change_is_reported_as_a_length_change() {
+        assert_eq!(
+            disagreement(&[1, 2, 3], &[1, 2]),
+            "observed 3 bytes, expected 2"
+        );
+    }
+
+    #[test]
+    fn an_appended_field_is_pointed_at_by_offset() {
+        let mut observed = vec![0_u8; 610];
+        let expected = vec![0_u8; 610];
+        observed[570] = 8;
+        assert_eq!(
+            disagreement(&observed, &expected),
+            "1 of 610 bytes differ; first at offset 570: observed 0x08, expected 0x00"
+        );
+    }
+
+    #[test]
+    fn equal_images_never_reach_the_report() {
+        assert_eq!(disagreement(&[7, 7], &[7, 7]), "images are equal");
+    }
 }
