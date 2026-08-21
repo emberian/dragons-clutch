@@ -256,9 +256,24 @@ impl Validator {
 
     /// Wait for slot one **and** an executable program account, exactly the
     /// readiness the committed script requires before it submits anything.
-    pub fn await_ready(&self, program_id: &str) -> Result<()> {
+    ///
+    /// The liveness check on our own child is load-bearing, not defensive
+    /// tidiness: if this validator could not bind its port because *another*
+    /// bank is already there, the child exits and the two probes below start
+    /// answering for a stranger's ledger.  A walk driven against someone
+    /// else's bank produces confident, meaningless evidence, so a dead child
+    /// is a hard failure rather than a reason to keep polling.
+    pub fn await_ready(&mut self, program_id: &str) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(60);
         while Instant::now() < deadline {
+            if let Some(status) = self.child.try_wait()? {
+                return Err(format!(
+                    "the local validator exited before it was ready ({status}); \
+                     something else may already hold {}",
+                    self.url
+                )
+                .into());
+            }
             let slot = crate::rpc::current_slot(&self.url).unwrap_or(0);
             let executable = crate::rpc::rpc(
                 &self.url,

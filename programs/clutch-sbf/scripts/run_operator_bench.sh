@@ -30,7 +30,14 @@ watcher_pid=""
 
 cleanup() {
   [ -n "$watcher_pid" ] && kill "$watcher_pid" 2>/dev/null || true
-  [ -n "$daemon_pid" ] && kill "$daemon_pid" 2>/dev/null || true
+  if [ -n "$daemon_pid" ]; then
+    kill "$daemon_pid" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      kill -0 "$daemon_pid" 2>/dev/null || break
+      sleep 0.5
+    done
+    kill -9 "$daemon_pid" 2>/dev/null || true
+  fi
   wait 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -42,9 +49,20 @@ echo "operator_rpc_port=$rpc_port"
 echo "operator_faucet_port=$faucet_port"
 
 echo
+echo "== build =="
+CARGO_NET_OFFLINE=true cargo build --offline --quiet \
+  --manifest-path "$root/operatord/Cargo.toml"
+daemon="$root/operatord/target/debug/clutch-sbf-operatord"
+[ -x "$daemon" ] || { echo "FAIL: $daemon is not executable"; exit 1; }
+
+echo
 echo "== operatord serve (M0 watch mode) =="
-CARGO_NET_OFFLINE=true cargo run --offline --quiet \
-  --manifest-path "$root/operatord/Cargo.toml" -- serve \
+# Exec the daemon directly rather than through `cargo run`.  With `cargo run`,
+# $! is cargo's pid and the daemon is its *child*, so the cleanup trap kills
+# the wrapper and leaves a live daemon holding the RPC port -- which then
+# silently answers the next run's readiness probe.  Measured, once, the hard
+# way.
+"$daemon" serve \
   --port "$http_port" --rpc-port "$rpc_port" --faucet-port "$faucet_port" \
   --work "$work/bench" --exit-when-done >"$work/daemon.log" 2>&1 &
 daemon_pid=$!

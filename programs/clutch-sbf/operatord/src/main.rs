@@ -240,7 +240,7 @@ fn serve(options: Options) -> Result<()> {
     bus.publish(&plan_event(&parsed));
 
     stage(&bus, "validator", "starting a fresh local ledger");
-    let validator = toolchain::Validator::start(
+    let mut validator = toolchain::Validator::start(
         &work,
         &plan_dir,
         &artifact,
