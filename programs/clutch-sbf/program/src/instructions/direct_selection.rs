@@ -940,10 +940,16 @@ fn execute_settlement(
         &mut buy_reservation,
         &mut sell_reservation,
         &mut receipt,
+        // The V2 direct plane admits only an exactly convertible
+        // consideration, so it realizes no rounding residue and presents no
+        // pot.
+        None,
         EntitledSliceConsumptionPlan {
             outcome: facts.outcome,
             quantity: facts.quantity,
-            consideration_atoms: facts.consideration_atoms,
+            buyer_debit_atoms: facts.consideration_atoms,
+            seller_credit_atoms: facts.consideration_atoms,
+            residue_price_units: 0,
             buyer_completes: true,
             buyer_release_atoms,
             seller_completes: true,

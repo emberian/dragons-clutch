@@ -37,8 +37,8 @@ use clutch_solana_layout::{
         ReservationAccount, ReservationPlan, RESERVATION_STATE_ACTIVE, RESERVATION_STATE_CONSUMED,
         RESERVATION_STATE_ENTITLED,
     },
-    stream, CandidateRecord, CodecError, EpochAccount, Hash32, OrderSlot, PositionAccount,
-    PriceGridAccount, SettlementReceiptAccount, CANDIDATE_STATUS_SELECTED,
+    stream, CandidateRecord, CodecError, EpochAccount, FinalPotAccount, Hash32, OrderSlot,
+    PositionAccount, PriceGridAccount, SettlementReceiptAccount, CANDIDATE_STATUS_SELECTED,
     CANDIDATE_STATUS_SUBMITTED, EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN, MAX_OUTCOMES,
     ORDER_KIND_SINGLE, RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED,
     RECEIPT_FLAG_SLICE_EXHAUSTED, RECEIPT_LEG_DIRECT,
@@ -459,16 +459,33 @@ fn validate_submission_reservation(
 /// `consumed_units` reaches its stamped `entitled_units`.  Completion is
 /// decided independently per end, which is what lets a buy finish while its
 /// counterparty still has slices outstanding.  No field can describe a virtual
-/// leg, a fee, or a rounded consideration, so those cannot drift in by an
-/// unchecked branch.
+/// leg or a fee, so those cannot drift in by an unchecked branch.
+///
+/// The two atom legs are **separate numbers**.  Under the frozen
+/// `TerminalOwnerFloor` boundary a payer's whole-order value rounds *up* to
+/// collateral atoms and a payee's rounds *down*, so a book whose order values
+/// are not multiples of the price scale debits strictly more than it credits.
+/// The difference is [`Self::residue_price_units`], and it is not a fee, not a
+/// transfer, and not held by any account: it is the conversion slack the
+/// relation names `rounding_pot`, realized here by simply never crediting it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::instructions) struct EntitledSliceConsumptionPlan {
     /// Shared Egg outcome.
     pub(in crate::instructions) outcome: u8,
     /// Exact Egg quantity transferred from the sell reservation to the buyer.
     pub(in crate::instructions) quantity: u64,
-    /// Exact collateral atoms transferred from buyer cash to seller cash.
-    pub(in crate::instructions) consideration_atoms: u64,
+    /// Collateral atoms debited from the buy end on this slice.
+    pub(in crate::instructions) buyer_debit_atoms: u64,
+    /// Collateral atoms credited to the sell end on this slice.
+    pub(in crate::instructions) seller_credit_atoms: u64,
+    /// Price units this slice leaves unallocated, drawn from the epoch pot's
+    /// verified expectation.
+    ///
+    /// Nonzero only on a *completing* end whose whole-order value is not a
+    /// multiple of the price scale: the payer's round-up excess and the
+    /// payee's round-down shortfall, each realized exactly once, at the one
+    /// slice that finishes that order.
+    pub(in crate::instructions) residue_price_units: u128,
     /// Whether this slice is the buy end's last: `consumed + quantity` reaches
     /// the stamped total.
     pub(in crate::instructions) buyer_completes: bool,
@@ -495,6 +512,13 @@ pub(in crate::instructions) struct EntitledSliceConsumptionPlan {
 /// remains here is the exact one-shot consumption of this one slice: the
 /// receipt is the latch, the reservations carry the frozen envelope and the
 /// cumulative ledger, and every economic move is checked against them.
+///
+/// `pot` is the epoch's [`FinalPotAccount`], present exactly when the slice
+/// may realize rounding residue.  It is never a source or a sink of value: it
+/// carries the *verified* residue expectation the relation computed, and each
+/// completing end draws its own share down.  The pot reaching zero when the
+/// last receipt consumes is the whole-plane statement that the runtime's
+/// per-order conversions summed to the relation's per-owner `rounding_pot`.
 pub(super) struct EntitledSliceConsumptionInput<'a> {
     pub epoch: &'a EpochAccount,
     pub candidate: &'a CandidateRecord,
@@ -503,6 +527,24 @@ pub(super) struct EntitledSliceConsumptionInput<'a> {
     pub buyer_reservation: &'a ReservationAccount,
     pub seller_reservation: &'a ReservationAccount,
     pub receipt: &'a SettlementReceiptAccount,
+    pub pot: Option<&'a FinalPotAccount>,
+}
+
+/// One single-Egg order's cumulative value in price units.
+///
+/// A single-Egg order lives on exactly one outcome at one frozen price, so
+/// `units * price` is a total function of its consumed ledger and the whole
+/// per-slice conversion telescopes through it: the atoms a slice moves are the
+/// difference of two conversions of *cumulative* values, never a conversion of
+/// the slice's own value.  That is what makes the sum over an order's slices
+/// equal the single conversion the relation performs, exactly.
+///
+/// A portfolio order spans several prices, so its value is not a function of
+/// `units` alone; this seam keeps requiring per-slice exactness for those ends,
+/// which makes the telescoping vacuous and the residue zero.
+fn cumulative_value_price_units(units: u64, price: u64) -> u128 {
+    // Two `u64` factors always fit a `u128` product.
+    u128::from(units) * u128::from(price)
 }
 
 /// Verify one already-selected, already-entitled slice consumption.
@@ -551,20 +593,17 @@ pub(super) fn prepare_entitled_slice_consumption(
     )?;
 
     // The exact consideration: the codec already pins
-    // `consideration_price_units == quantity * price`; the seam adds the
-    // exact-divisibility rule (verified once at the freeze, re-required here
-    // because the atoms move here).
+    // `consideration_price_units == quantity * price`.  Whether that value
+    // converts to whole collateral atoms is *not* required here any more —
+    // the conversion is per order, not per slice (see
+    // [`cumulative_value_price_units`]) — but a portfolio end still needs it,
+    // because its cumulative value is not a function of its consumed units.
     require(input.epoch.price_scale != 0, ClutchError::MismatchedState)?;
     let scale = u128::from(input.epoch.price_scale);
-    require(
-        input
-            .receipt
-            .consideration_price_units
-            .is_multiple_of(scale),
-        ClutchError::MismatchedState,
-    )?;
-    let consideration_atoms = u64::try_from(input.receipt.consideration_price_units / scale)
-        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let slice_is_exact = input
+        .receipt
+        .consideration_price_units
+        .is_multiple_of(scale);
 
     validate_entitled_reservation(
         input.buyer_reservation,
@@ -612,12 +651,63 @@ pub(super) fn prepare_entitled_slice_consumption(
     let buyer_completes = buyer_consumed == input.buyer_reservation.entitled_units;
     let seller_completes = seller_consumed == input.seller_reservation.entitled_units;
 
-    // The buy envelope is cash-only and must cover the consideration; the
+    /* The terminal-owner conversion, realized per end.  Each end's atoms are
+     * the difference of two conversions of *cumulative* order value, so an
+     * order's slices sum to exactly one conversion of its whole value: the
+     * payer's rounds up, the payee's rounds down, and the gap is the residue
+     * the completing slice hands to the pot. */
+    let price = input.receipt.price;
+    let (buyer_debit_atoms, buyer_residue) = convert_leg(LegConversion {
+        side: ConversionSide::Payer,
+        order_kind: input.buyer_reservation.order_kind,
+        consumed_before: input.buyer_reservation.consumed_units,
+        consumed_after: buyer_consumed,
+        entitled_units: input.buyer_reservation.entitled_units,
+        completes: buyer_completes,
+        price,
+        scale,
+        slice_is_exact,
+        slice_price_units: input.receipt.consideration_price_units,
+    })?;
+    let (seller_credit_atoms, seller_residue) = convert_leg(LegConversion {
+        side: ConversionSide::Payee,
+        order_kind: input.seller_reservation.order_kind,
+        consumed_before: input.seller_reservation.consumed_units,
+        consumed_after: seller_consumed,
+        entitled_units: input.seller_reservation.entitled_units,
+        completes: seller_completes,
+        price,
+        scale,
+        slice_is_exact,
+        slice_price_units: input.receipt.consideration_price_units,
+    })?;
+    let residue_price_units = buyer_residue
+        .checked_add(seller_residue)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+
+    /* The residue is drawn from the epoch pot's *verified* expectation, so a
+     * runtime conversion the relation did not predict cannot land: the pot
+     * refuses to go negative, and reaching zero exactly once every receipt has
+     * consumed is the whole-plane closure. */
+    if residue_price_units != 0 {
+        let pot = input
+            .pot
+            .ok_or(Refusal::Adapter(ClutchError::AccountCount))?;
+        pot.binds_candidate(input.candidate)?;
+        require(
+            pot.rounding_pot_price_units >= residue_price_units,
+            ClutchError::AggregateClosureMismatch,
+        )?;
+    } else if let Some(pot) = input.pot {
+        pot.binds_candidate(input.candidate)?;
+    }
+
+    // The buy envelope is cash-only and must cover this slice's debit; the
     // sell envelope must hold at least the transferred quantity on this
     // receipt's outcome.
     require(
         input.buyer_reservation.remaining_internal == [0; MAX_OUTCOMES]
-            && input.buyer_reservation.remaining_cash_atoms >= consideration_atoms
+            && input.buyer_reservation.remaining_cash_atoms >= buyer_debit_atoms
             && input.seller_reservation.remaining_cash_atoms == 0
             && input.seller_reservation.remaining_internal[outcome] >= input.receipt.quantity,
         ClutchError::MismatchedState,
@@ -645,19 +735,19 @@ pub(super) fn prepare_entitled_slice_consumption(
         0
     };
     let buyer_release_atoms = if buyer_completes {
-        input.buyer_reservation.remaining_cash_atoms - consideration_atoms
+        input.buyer_reservation.remaining_cash_atoms - buyer_debit_atoms
     } else {
         0
     };
 
     // Decide every post-state arithmetic operation before any caller writes.
-    let buyer_reserved_release = consideration_atoms
+    let buyer_reserved_release = buyer_debit_atoms
         .checked_add(buyer_release_atoms)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
     input
         .buyer_position
         .cash_atoms
-        .checked_sub(consideration_atoms)
+        .checked_sub(buyer_debit_atoms)
         .ok_or(Refusal::Adapter(ClutchError::AggregateClosureMismatch))?;
     input
         .buyer_position
@@ -670,7 +760,7 @@ pub(super) fn prepare_entitled_slice_consumption(
     input
         .seller_position
         .cash_atoms
-        .checked_add(consideration_atoms)
+        .checked_add(seller_credit_atoms)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
     input.seller_position.internal[outcome]
         .checked_add(seller_remainder)
@@ -679,12 +769,95 @@ pub(super) fn prepare_entitled_slice_consumption(
     Ok(EntitledSliceConsumptionPlan {
         outcome: input.receipt.outcome,
         quantity: input.receipt.quantity,
-        consideration_atoms,
+        buyer_debit_atoms,
+        seller_credit_atoms,
+        residue_price_units,
         buyer_completes,
         buyer_release_atoms,
         seller_completes,
         seller_remainder,
     })
+}
+
+/// Which way one end's whole-order value converts to collateral atoms.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConversionSide {
+    /// A buy end: the relation rounds a payer's owed value **up**, so the
+    /// excess above the exact value is what the payer leaves behind.
+    Payer,
+    /// A sell end: the relation rounds a payee's owed value **down**, so the
+    /// shortfall below the exact value is what the payee never receives.
+    Payee,
+}
+
+/// One end's conversion coordinates for a single slice.
+struct LegConversion {
+    side: ConversionSide,
+    order_kind: u8,
+    consumed_before: u64,
+    consumed_after: u64,
+    entitled_units: u64,
+    completes: bool,
+    price: u64,
+    scale: u128,
+    slice_is_exact: bool,
+    slice_price_units: u128,
+}
+
+/// Convert one end's slice into collateral atoms, plus the residue it realizes.
+///
+/// The realization of `RoundingBoundaryV1::TerminalOwnerFloor`
+/// (`crates/clutch-batch/src/relation_v1.rs:2482-2497`): a payer's atoms are
+/// `debit_units.div_ceil(scale)` and the pot takes `atoms * scale -
+/// debit_units`; a payee's are `credit_units / scale` and the pot takes
+/// `credit_units - atoms * scale`.  Both are conversions of the **whole
+/// order's** value, so the per-slice numbers here are differences of
+/// cumulative conversions and telescope to exactly that one conversion.
+///
+/// A portfolio end keeps the older per-slice rule — its cumulative value is
+/// not a function of its consumed units — which forces per-slice exactness and
+/// therefore zero residue.
+#[inline(never)]
+fn convert_leg(leg: LegConversion) -> Outcome<(u64, u128)> {
+    if leg.order_kind != ORDER_KIND_SINGLE {
+        require(leg.slice_is_exact, ClutchError::MismatchedState)?;
+        let atoms = u64::try_from(leg.slice_price_units / leg.scale)
+            .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+        return Ok((atoms, 0));
+    }
+    let before = cumulative_value_price_units(leg.consumed_before, leg.price);
+    let after = cumulative_value_price_units(leg.consumed_after, leg.price);
+    let (converted_before, converted_after) = match leg.side {
+        ConversionSide::Payer => (before.div_ceil(leg.scale), after.div_ceil(leg.scale)),
+        ConversionSide::Payee => (before / leg.scale, after / leg.scale),
+    };
+    let atoms = u64::try_from(
+        converted_after
+            .checked_sub(converted_before)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    if !leg.completes {
+        return Ok((atoms, 0));
+    }
+    /* Completion: `after` is the whole order's value, so the residue is this
+     * end's entire contribution to the epoch's rounding pot, realized once. */
+    let total = cumulative_value_price_units(leg.entitled_units, leg.price);
+    require(total == after, ClutchError::AggregateClosureMismatch)?;
+    let residue = match leg.side {
+        ConversionSide::Payer => converted_after
+            .checked_mul(leg.scale)
+            .and_then(|value| value.checked_sub(total))
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+        ConversionSide::Payee => total
+            .checked_sub(
+                converted_after
+                    .checked_mul(leg.scale)
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+            )
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+    };
+    Ok((atoms, residue))
 }
 
 /// One stamped `ENTITLED` reservation, bound to its Position, the epoch's
@@ -743,23 +916,36 @@ fn validate_entitled_reservation(
 /// reservation keeps its `initial_*` envelope intact: the persisted account
 /// *is* the archive of the exact consumed amounts, until
 /// `CloseGeneralReservation` (tag 62) reclaims its rent once the page closed.
+///
+/// The cash halves of that invariant are two numbers, not one, whenever the
+/// terminal-owner conversion is inexact: the buy end is debited its
+/// round-*up* and the sell end credited its round-*down*, and the difference
+/// is drawn from the pot's verified residue expectation.  Nothing custodies
+/// it — the atoms are simply never credited, so they stay unallocated in the
+/// market's collateral pool — and the pot's field is the record of how much
+/// the epoch is still expected to leave there.
+#[allow(clippy::too_many_arguments)] // one argument per written account
 pub(in crate::instructions) fn apply_entitled_slice_consumption(
     buyer_position: &mut PositionAccount,
     seller_position: &mut PositionAccount,
     buyer_reservation: &mut ReservationAccount,
     seller_reservation: &mut ReservationAccount,
     receipt: &mut SettlementReceiptAccount,
+    pot: Option<&mut FinalPotAccount>,
     plan: EntitledSliceConsumptionPlan,
 ) {
     let outcome = usize::from(plan.outcome);
-    buyer_position.cash_atoms -= plan.consideration_atoms;
-    buyer_position.reserved_cash_atoms -= plan.consideration_atoms + plan.buyer_release_atoms;
+    buyer_position.cash_atoms -= plan.buyer_debit_atoms;
+    buyer_position.reserved_cash_atoms -= plan.buyer_debit_atoms + plan.buyer_release_atoms;
     buyer_position.internal[outcome] += plan.quantity;
-    seller_position.cash_atoms += plan.consideration_atoms;
+    seller_position.cash_atoms += plan.seller_credit_atoms;
     seller_position.internal[outcome] += plan.seller_remainder;
+    if let Some(pot) = pot {
+        pot.rounding_pot_price_units -= plan.residue_price_units;
+    }
 
     buyer_reservation.consumed_units += plan.quantity;
-    buyer_reservation.remaining_cash_atoms -= plan.consideration_atoms + plan.buyer_release_atoms;
+    buyer_reservation.remaining_cash_atoms -= plan.buyer_debit_atoms + plan.buyer_release_atoms;
     if plan.buyer_completes {
         buyer_reservation.state = RESERVATION_STATE_CONSUMED;
     }
@@ -801,6 +987,12 @@ pub(super) enum SettlementBlocker {
     ///
     /// Retired: `ReservationAccount` v2 *is* that state.
     PartialFillLedger,
+    /// A verified summary carrying a nonzero `rounding_pot` needs a
+    /// consumption path that realizes remainder atoms.
+    ///
+    /// Retired: the pot carries the verified expectation and each completing
+    /// order draws its own share down.
+    RoundingPotRealization,
     /// Virtual split/merge legs need a funded FinalPot transition.
     VirtualPot,
     /// No terminal sweep proves every reservation/receipt/pot is empty once.
@@ -845,9 +1037,30 @@ pub(super) enum SettlementBlocker {
 ///   `GENERAL_CLEARING_POLICY_V1` digest unchanged: the model plane already
 ///   admitted partial fills and the runtime seams were the only refusal
 ///   sites.  Recorded residual: a witness whose *slices* do not convert while
-///   every *owner* sum does stays refused and re-files under `VirtualPot`.
+///   every *owner* sum does stayed refused and re-filed under the rounding
+///   family — retired by the row below.
+/// * `RoundingPotRealization` — the VirtualPot wave's rounding half: the
+///   freeze no longer refuses a nonzero verified `rounding_pot`, it *records*
+///   it.  Under `TerminalOwnerFloor` (`relation_v1.rs:2482-2497`) the pot is
+///   funded by nobody outside the book — it is the payers' round-up excess
+///   plus the payees' round-down shortfall — so the runtime realizes it by
+///   converting each end's *cumulative* order value (up for a payer, down for
+///   a payee) and simply never crediting the gap, which leaves exactly
+///   `rounding_pot / price_scale` collateral atoms unallocated in the market's
+///   pool.  The pot account holds no value; it holds the verified
+///   expectation, every completing order draws its own share down, and its
+///   reaching zero when the last receipt consumes is the whole-plane closure
+///   `CloseGeneralPot` already requires.  Slices need no longer convert at
+///   all, retiring the partial-fill wave's recorded residual.  Recorded
+///   residual of *this* row: the relation converts per **owner**, summing an
+///   owner's orders before rounding, while a reservation can only carry its
+///   own order — so an epoch in which any participating owner holds two
+///   filled orders *and* any order value is inexact refuses at `EntitleSlice`
+///   rather than minting receipts whose residues could not sum to the
+///   verified pot.  The coincidence is checked, not assumed:
+///   `distinct_owners == filled_order_count`.
 #[allow(dead_code)] // Executable record; the ledger test pins it.
-pub(super) const RETIRED_SETTLEMENT_BLOCKERS: [SettlementBlocker; 7] = [
+pub(super) const RETIRED_SETTLEMENT_BLOCKERS: [SettlementBlocker; 8] = [
     SettlementBlocker::FrozenPolicyPreimage,
     SettlementBlocker::FullWidthRelationDomain,
     SettlementBlocker::CandidateWindowClosure,
@@ -855,17 +1068,27 @@ pub(super) const RETIRED_SETTLEMENT_BLOCKERS: [SettlementBlocker; 7] = [
     SettlementBlocker::GeneralReservationSetClosure,
     SettlementBlocker::TerminalClosure,
     SettlementBlocker::PartialFillLedger,
+    SettlementBlocker::RoundingPotRealization,
 ];
 
 /// The exact dependency order of the remaining settlement work.
 ///
 /// * `VirtualPot` — the freeze refuses any verified summary carrying
-///   `virtual_split`/`virtual_merge`, and — same family — any summary whose
-///   rounding pot is nonzero, because the exact-only consumption seam cannot
-///   fund one.  Since the PartialFillLedger wave this row also carries the
-///   per-slice rounding residue: a witness whose slices do not convert
-///   exactly refuses at `EntitleSlice`, even when every per-owner sum is
-///   whole, because realizing it needs a funded pot rather than a wider seam.
+///   `virtual_split`/`virtual_merge`, and the root cause is **not** a
+///   settlement-seam width.  `relation_v1.rs:3529-3531` requires the split to
+///   serve `sigma` Egg atoms on *every* outcome and the merge to absorb `mu`
+///   on every outcome, and `relation_v1.rs:2504-2512` prices that at
+///   `sigma * price_scale` / `mu * price_scale` — one collateral atom per
+///   complete set, because prices lie on the scaled simplex
+///   (`relation_v1.rs:1224-1246`).  A virtual leg therefore **creates or
+///   destroys claims**, which changes the market's outstanding supply and the
+///   collateral backing it: `HoardAccount::collateral_atoms`, the kernel
+///   aggregate, and the two-term supply ledger, all owned by
+///   `instructions::split`.  Ordinary settlement moves claims between owners
+///   and conserves their sum, so no clearing-plane account list reaches that
+///   state, and widening this seam would mint unbacked claims the seam plane
+///   would then refuse to move.  Realizing it is a seam-plane join — the pot
+///   as a mint authority for one epoch — and it is ranked as one.
 #[allow(dead_code)] // Executable record; the ledger test pins it.
 pub(super) const SETTLEMENT_BLOCKERS: [SettlementBlocker; 1] = [SettlementBlocker::VirtualPot];
 
@@ -878,8 +1101,8 @@ mod tests {
         reservation::ReservationPlan,
         stream::{append_slot, frozen_set_commitment, init_page, seal_page},
         CandidateRecord, OrderRecord, OrderSlot, PositionAccount, SettlementReceiptAccount,
-        CANDIDATE_STATUS_SELECTED, EPOCH_PHASE_CLEARED, MAX_OUTCOMES, RECEIPT_LEG_DIRECT,
-        RELATION_VERSION,
+        CANDIDATE_STATUS_SELECTED, EPOCH_PHASE_CLEARED, MAX_OUTCOMES, POT_PHASE_OPEN,
+        RECEIPT_LEG_DIRECT, RELATION_VERSION,
     };
 
     fn h(byte: u8) -> Hash32 {
@@ -1163,11 +1386,14 @@ mod tests {
     #[test]
     fn the_blocker_ledger_records_the_retired_prefix_and_the_standing_tail() {
         // Every original row appears exactly once, retired or standing, and
-        // the standing tail is exactly the honest remainder: virtual pots and
-        // the per-slice rounding residue re-filed under them.  TerminalClosure
-        // retired with the tag-60..67 close wave; PartialFillLedger retired
-        // with the reservation-v2 ledger and the per-slice seams.
-        assert_eq!(RETIRED_SETTLEMENT_BLOCKERS.len(), 7);
+        // the standing tail is exactly the honest remainder: the virtual
+        // split/merge, whose realization is a *seam-plane* mint join and not a
+        // settlement-seam widening.  TerminalClosure retired with the
+        // tag-60..67 close wave; PartialFillLedger with the reservation-v2
+        // ledger and the per-slice seams; RoundingPotRealization with the
+        // cumulative per-order conversion and the pot's drawn-down
+        // expectation.
+        assert_eq!(RETIRED_SETTLEMENT_BLOCKERS.len(), 8);
         assert_eq!(SETTLEMENT_BLOCKERS.len(), 1);
         assert_eq!(
             RETIRED_SETTLEMENT_BLOCKERS[3],
@@ -1189,6 +1415,7 @@ mod tests {
             SettlementBlocker::EntitlementFreeze,
             SettlementBlocker::GeneralReservationSetClosure,
             SettlementBlocker::PartialFillLedger,
+            SettlementBlocker::RoundingPotRealization,
             SettlementBlocker::VirtualPot,
             SettlementBlocker::TerminalClosure,
         ];
@@ -1221,6 +1448,7 @@ mod tests {
                 buyer_reservation: &self.buyer_reservation,
                 seller_reservation: &self.seller_reservation,
                 receipt: &self.receipt,
+                pot: None,
             }
         }
     }
@@ -1559,7 +1787,9 @@ mod tests {
     fn entitled_direct_slice_couples_both_assets_and_releases_residual_once() {
         let mut f = direct_fixture();
         let plan = prepare_entitled_slice_consumption(&f.input()).unwrap();
-        assert_eq!(plan.consideration_atoms, 2);
+        assert_eq!(plan.buyer_debit_atoms, 2);
+        assert_eq!(plan.seller_credit_atoms, 2);
+        assert_eq!(plan.residue_price_units, 0);
         assert_eq!(plan.seller_remainder, 0);
         let cash_before = f.buyer_position.cash_atoms + f.seller_position.cash_atoms;
         let claims_before = f.buyer_position.internal[0]
@@ -1572,6 +1802,7 @@ mod tests {
             &mut f.buyer_reservation,
             &mut f.seller_reservation,
             &mut f.receipt,
+            None,
             plan,
         );
         assert_eq!(f.buyer_position.cash_atoms, 8);
@@ -1759,6 +1990,7 @@ mod tests {
                 buyer_reservation: &f.buyer_reservations[at],
                 seller_reservation: &f.seller_reservation,
                 receipt: &f.receipts[at],
+                pot: None,
             })
             .unwrap();
             // Every buy end completes on its own single slice; the sell end
@@ -1775,13 +2007,16 @@ mod tests {
                 &mut f.buyer_reservations[at],
                 &mut f.seller_reservation,
                 &mut f.receipts[at],
+                None,
                 plan,
             );
             f.buyers[at].validate().unwrap();
             f.seller_position.validate().unwrap();
             f.buyer_reservations[at].validate().unwrap();
             f.seller_reservation.validate().unwrap();
-            consumed_atoms += plan.consideration_atoms;
+            consumed_atoms += plan.buyer_debit_atoms;
+            assert_eq!(plan.seller_credit_atoms, plan.buyer_debit_atoms);
+            assert_eq!(plan.residue_price_units, 0);
             consumed_units += plan.quantity;
 
             // The pinned invariant at this transaction boundary, per outcome:
@@ -1827,32 +2062,187 @@ mod tests {
                 buyer_reservation: &f.buyer_reservations[0],
                 seller_reservation: &f.seller_reservation,
                 receipt: &f.receipts[0],
+                pot: None,
             }),
             Err(Refusal::Adapter(ClutchError::MismatchedState))
         );
     }
 
+    /// One inexactly convertible pair: five Eggs at half the price scale, so
+    /// each end's whole-order value is `25_000` price units against a scale of
+    /// `10_000`.  The payer converts up to three atoms, the payee down to two,
+    /// and the epoch leaves exactly one atom — `10_000` price units — where no
+    /// owner is entitled to it.
+    fn inexact_fixture() -> (DirectFixture, FinalPotAccount) {
+        let mut f = direct_fixture();
+        for slot in [&mut f.buy, &mut f.sell] {
+            if let OrderSlot::Single(order) = slot {
+                order.quantity = 5;
+            }
+        }
+        let buy_plan = ReservationPlan::for_order(&f.buy, 2, 10_000, 0).unwrap();
+        let sell_plan = ReservationPlan::for_order(&f.sell, 2, 10_000, 0).unwrap();
+        // The buy reserves the round-up of its whole limit value, which is
+        // exactly what its round-up consideration costs: no release remains.
+        assert_eq!(buy_plan.cash_atoms, 3);
+        f.buyer_position.reserved_cash_atoms = buy_plan.cash_atoms;
+        f.buyer_reservation = ReservationAccount::active(
+            f.epoch.market,
+            f.epoch.epoch,
+            f.buyer_position.owner,
+            f.buy.order_id(),
+            f.epoch.price_grid,
+            f.epoch.terms,
+            f.epoch.policy,
+            0,
+            f.buy.generation(),
+            0,
+            8,
+            buy_plan,
+        )
+        .unwrap()
+        .entitled(5)
+        .unwrap();
+        f.seller_reservation = ReservationAccount::active(
+            f.epoch.market,
+            f.epoch.epoch,
+            f.seller_position.owner,
+            f.sell.order_id(),
+            f.epoch.price_grid,
+            f.epoch.terms,
+            f.epoch.policy,
+            0,
+            f.sell.generation(),
+            0,
+            9,
+            sell_plan,
+        )
+        .unwrap()
+        .entitled(5)
+        .unwrap();
+        f.receipt.quantity = 5;
+        f.receipt.consideration_price_units = 5 * 5_000;
+        f.receipt.validate().unwrap();
+        let pot = FinalPotAccount {
+            epoch: f.epoch.epoch,
+            market: f.epoch.market,
+            candidate: f.candidate.candidate,
+            pot_internal: [0; MAX_OUTCOMES],
+            pot_cash_price_units: 0,
+            rounding_pot_price_units: 10_000,
+            outcome_count: f.epoch.outcome_count,
+            phase: POT_PHASE_OPEN,
+            stored_bump: 5,
+            flags: 0,
+        };
+        pot.validate().unwrap();
+        (f, pot)
+    }
+
     #[test]
-    fn a_receipt_whose_consideration_does_not_convert_refuses_at_consumption() {
-        // The entitlement seam already refuses an inexact slice, so a receipt
-        // like this cannot be minted; the consumption seam re-requires it
-        // anyway, because this is where the atoms actually move.
+    fn an_inexact_pair_converts_per_order_and_drains_the_pot_to_empty() {
+        let (mut f, mut pot) = inexact_fixture();
+        let cash_before = f.buyer_position.cash_atoms + f.seller_position.cash_atoms;
+        let plan = prepare_entitled_slice_consumption(&EntitledSliceConsumptionInput {
+            pot: Some(&pot),
+            ..f.input()
+        })
+        .unwrap();
+        // The frozen boundary, realized: the payer rounds up, the payee rounds
+        // down, and the gap is the pot's whole expectation.
+        assert_eq!(plan.buyer_debit_atoms, 3);
+        assert_eq!(plan.seller_credit_atoms, 2);
+        assert_eq!(plan.residue_price_units, 10_000);
+        assert!(plan.buyer_completes && plan.seller_completes);
+        assert_eq!(plan.buyer_release_atoms, 0);
+
+        apply_entitled_slice_consumption(
+            &mut f.buyer_position,
+            &mut f.seller_position,
+            &mut f.buyer_reservation,
+            &mut f.seller_reservation,
+            &mut f.receipt,
+            Some(&mut pot),
+            plan,
+        );
+        f.buyer_position.validate().unwrap();
+        f.seller_position.validate().unwrap();
+        f.buyer_reservation.validate().unwrap();
+        f.seller_reservation.validate().unwrap();
+        f.receipt.validate().unwrap();
+        pot.validate().unwrap();
+
+        // The pot is empty, so the epoch's pot can close.
+        assert_eq!(pot.rounding_pot_price_units, 0);
+        assert_eq!(pot.pot_cash_price_units, 0);
+        assert_eq!(pot.pot_internal, [0; MAX_OUTCOMES]);
+        // Nothing custodies the residue: the epoch's owners simply hold one
+        // atom less than they started with, which is `rounding_pot / scale`.
+        let cash_after = f.buyer_position.cash_atoms + f.seller_position.cash_atoms;
+        assert_eq!(cash_before - cash_after, 1);
+        assert_eq!(u128::from(cash_before - cash_after) * 10_000, 10_000);
+        assert_eq!(f.buyer_position.internal[0], 5);
+        assert_eq!(f.buyer_reservation.state, RESERVATION_STATE_CONSUMED);
+        assert_eq!(f.seller_reservation.state, RESERVATION_STATE_CONSUMED);
+        assert!(f.seller_reservation.remaining_is_zero());
+    }
+
+    #[test]
+    fn realizing_residue_without_a_pot_or_beyond_its_expectation_refuses() {
+        let (f, pot) = inexact_fixture();
+        // No pot presented: the seam will not realize residue it cannot draw.
+        assert_eq!(
+            prepare_entitled_slice_consumption(&f.input()),
+            Err(Refusal::Adapter(ClutchError::AccountCount))
+        );
+        // A pot whose verified expectation is short of what this slice would
+        // realize refuses rather than going negative.
+        let mut short = pot;
+        short.rounding_pot_price_units = 9_999;
+        assert_eq!(
+            prepare_entitled_slice_consumption(&EntitledSliceConsumptionInput {
+                pot: Some(&short),
+                ..f.input()
+            }),
+            Err(Refusal::Adapter(ClutchError::AggregateClosureMismatch))
+        );
+        // A stranger's pot refuses at the binding, not at the arithmetic.
+        let mut stranger = pot;
+        stranger.candidate = h(0x77);
+        assert!(
+            prepare_entitled_slice_consumption(&EntitledSliceConsumptionInput {
+                pot: Some(&stranger),
+                ..f.input()
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn an_inexact_slice_of_an_exactly_convertible_order_realizes_no_residue() {
+        // The residue the partial-fill wave recorded as a standing refusal:
+        // slices that do not convert while every order sum does.  The
+        // conversion is cumulative, so the atoms telescope and the pot is
+        // never touched.
         let mut f = partial_fixture();
         f.receipts[0].quantity = 5;
         f.receipts[0].consideration_price_units = 5 * 5_000;
         f.receipts[0].validate().unwrap();
-        assert_eq!(
-            prepare_entitled_slice_consumption(&EntitledSliceConsumptionInput {
-                epoch: &f.epoch,
-                candidate: &f.candidate,
-                buyer_position: &f.buyers[0],
-                seller_position: &f.seller_position,
-                buyer_reservation: &f.buyer_reservations[0],
-                seller_reservation: &f.seller_reservation,
-                receipt: &f.receipts[0],
-            }),
-            Err(Refusal::Adapter(ClutchError::MismatchedState))
-        );
+        let plan = prepare_entitled_slice_consumption(&EntitledSliceConsumptionInput {
+            epoch: &f.epoch,
+            candidate: &f.candidate,
+            buyer_position: &f.buyers[0],
+            seller_position: &f.seller_position,
+            buyer_reservation: &f.buyer_reservations[0],
+            seller_reservation: &f.seller_reservation,
+            receipt: &f.receipts[0],
+            pot: None,
+        })
+        .unwrap();
+        assert_eq!(plan.buyer_debit_atoms, 3);
+        assert_eq!(plan.seller_credit_atoms, 2);
+        assert_eq!(plan.residue_price_units, 0);
+        assert!(!plan.buyer_completes && !plan.seller_completes);
     }
 
     #[test]
@@ -1879,6 +2269,7 @@ mod tests {
                 buyer_reservation: &f.buyer_reservations[at],
                 seller_reservation: &f.seller_reservation,
                 receipt: &f.receipts[at],
+                pot: None,
             })
             .unwrap();
             assert!(!plan.seller_completes);
@@ -1889,6 +2280,7 @@ mod tests {
                 &mut f.buyer_reservations[at],
                 &mut f.seller_reservation,
                 &mut f.receipts[at],
+                None,
                 plan,
             );
         }
@@ -1916,6 +2308,7 @@ mod tests {
             buyer_reservation: &f.buyer_reservations[0],
             seller_reservation: &f.seller_reservation,
             receipt: &f.receipts[0],
+            pot: None,
         })
         .unwrap();
         apply_entitled_slice_consumption(
@@ -1924,6 +2317,7 @@ mod tests {
             &mut f.buyer_reservations[0],
             &mut f.seller_reservation,
             &mut f.receipts[0],
+            None,
             plan,
         );
         assert_ne!(
@@ -1942,6 +2336,7 @@ mod tests {
             buyer_reservation: &f.buyer_reservations[1],
             seller_reservation: &f.seller_reservation,
             receipt: &f.receipts[1],
+            pot: None,
         })
         .unwrap();
         assert!(plan.seller_completes);

@@ -548,9 +548,16 @@ pub const DIRECT_V4_PLACE_ORDER_ACCOUNT_COUNT: usize = 9;
 pub const CANCEL_ORDER_ACCOUNT_COUNT: usize = 5;
 
 /// Accounts in the generalized entitled direct-slice `SettlePage` shape,
-/// exactly; any longer list dispatches to the portfolio full-pair shape
+/// exactly; any other list dispatches to the portfolio full-pair shape
 /// (`entitlement::settle_portfolio_pair`, `pub(super)`).
 pub const SETTLE_PAGE_ACCOUNT_COUNT: usize = 7;
+
+/// Accounts in the direct-slice `SettlePage` shape that also presents the
+/// epoch's [`FinalPotAccount`] — required exactly when a slice completes an
+/// end whose whole-order value does not convert to whole collateral atoms,
+/// because the pot's verified residue expectation is what that completion
+/// draws down.
+pub const SETTLE_PAGE_POTTED_ACCOUNT_COUNT: usize = SETTLE_PAGE_ACCOUNT_COUNT + 1;
 
 /// Accounts in the narrow `SubmitDirectPage` constructor, exactly.
 pub const SUBMIT_DIRECT_PAGE_ACCOUNT_COUNT: usize = 11;
@@ -593,6 +600,8 @@ pub const IX_SETTLE_BUY_RESERVATION: usize = 4;
 pub const IX_SETTLE_SELL_RESERVATION: usize = 5;
 /// The entitled receipt of exactly one candidate slice. `SettlePage`.
 pub const IX_SETTLE_RECEIPT: usize = 6;
+/// The epoch's final pot, on the potted `SettlePage` shape only.
+pub const IX_SETTLE_POT: usize = 7;
 /// Permissionless rent payer and authenticated transaction signer.
 pub const IX_SUBMIT_PAYER: usize = 0;
 /// Frozen Epoch owning the submitted candidate.
@@ -645,6 +654,18 @@ const SETTLE_PAGE_STATE_ROLES: [StateRole; SETTLE_PAGE_ACCOUNT_COUNT] = [
     StateRole::writable(IX_SETTLE_BUY_RESERVATION, RESERVATION_ACCOUNT_BYTES),
     StateRole::writable(IX_SETTLE_SELL_RESERVATION, RESERVATION_ACCOUNT_BYTES),
     StateRole::writable(IX_SETTLE_RECEIPT, account_len::SETTLEMENT_RECEIPT),
+];
+
+/// Program-owned roles of the potted direct-slice settlement shape.
+const SETTLE_PAGE_POTTED_STATE_ROLES: [StateRole; SETTLE_PAGE_POTTED_ACCOUNT_COUNT] = [
+    StateRole::read_only(IX_SETTLE_EPOCH, account_len::EPOCH),
+    StateRole::read_only(IX_SETTLE_CANDIDATE, account_len::CANDIDATE),
+    StateRole::writable(IX_SETTLE_BUY_POSITION, account_len::POSITION),
+    StateRole::writable(IX_SETTLE_SELL_POSITION, account_len::POSITION),
+    StateRole::writable(IX_SETTLE_BUY_RESERVATION, RESERVATION_ACCOUNT_BYTES),
+    StateRole::writable(IX_SETTLE_SELL_RESERVATION, RESERVATION_ACCOUNT_BYTES),
+    StateRole::writable(IX_SETTLE_RECEIPT, account_len::SETTLEMENT_RECEIPT),
+    StateRole::writable(IX_SETTLE_POT, account_len::FINAL_POT),
 ];
 
 /// Program-owned frozen inputs to deterministic direct submission.
@@ -1546,7 +1567,8 @@ fn settle_page(
     intent_epoch: &Hash32,
     intent_page: u16,
 ) -> Outcome<()> {
-    if accounts.len() != SETTLE_PAGE_ACCOUNT_COUNT {
+    let potted = accounts.len() == SETTLE_PAGE_POTTED_ACCOUNT_COUNT;
+    if accounts.len() != SETTLE_PAGE_ACCOUNT_COUNT && !potted {
         return entitlement::settle_portfolio_pair(
             program_id,
             accounts,
@@ -1557,7 +1579,11 @@ fn settle_page(
         );
     }
     require_distinct(accounts)?;
-    accounts::validate_state_roles(program_id, accounts, &SETTLE_PAGE_STATE_ROLES)?;
+    if potted {
+        accounts::validate_state_roles(program_id, accounts, &SETTLE_PAGE_POTTED_STATE_ROLES)?;
+    } else {
+        accounts::validate_state_roles(program_id, accounts, &SETTLE_PAGE_STATE_ROLES)?;
+    }
     validate_settle_addresses(program_id, accounts)?;
 
     let epoch = decode_epoch_boxed(&accounts[IX_SETTLE_EPOCH].data.borrow())?;
@@ -1571,6 +1597,17 @@ fn settle_page(
     let mut seller_reservation =
         decode_reservation_boxed(&accounts[IX_SETTLE_SELL_RESERVATION].data.borrow())?;
     let mut receipt = decode_receipt_boxed(&accounts[IX_SETTLE_RECEIPT].data.borrow())?;
+    let mut pot = if potted {
+        let value = decode_final_pot_boxed(&accounts[IX_SETTLE_POT].data.borrow())?;
+        expect_pda(
+            accounts[IX_SETTLE_POT].key,
+            seeds::pot_pda(program_id, &value.epoch.bytes()),
+            Some(value.stored_bump),
+        )?;
+        Some(value)
+    } else {
+        None
+    };
 
     require(
         epoch.market == *intent_market
@@ -1593,6 +1630,7 @@ fn settle_page(
             buyer_reservation: &buyer_reservation,
             seller_reservation: &seller_reservation,
             receipt: &receipt,
+            pot: pot.as_deref(),
         },
     )?;
     settlement::apply_entitled_slice_consumption(
@@ -1601,6 +1639,7 @@ fn settle_page(
         &mut buyer_reservation,
         &mut seller_reservation,
         &mut receipt,
+        pot.as_deref_mut(),
         plan,
     );
     // All validation remains over staged values.  No account byte has moved.
@@ -1609,12 +1648,18 @@ fn settle_page(
     buyer_reservation.validate()?;
     seller_reservation.validate()?;
     receipt.validate()?;
+    if let Some(pot) = pot.as_ref() {
+        pot.validate()?;
+    }
 
     buyer_position.encode(&mut borrow_mut!(accounts[IX_SETTLE_BUY_POSITION])?)?;
     seller_position.encode(&mut borrow_mut!(accounts[IX_SETTLE_SELL_POSITION])?)?;
     buyer_reservation.encode(&mut borrow_mut!(accounts[IX_SETTLE_BUY_RESERVATION])?)?;
     seller_reservation.encode(&mut borrow_mut!(accounts[IX_SETTLE_SELL_RESERVATION])?)?;
     receipt.encode(&mut borrow_mut!(accounts[IX_SETTLE_RECEIPT])?)?;
+    if let Some(pot) = pot.as_ref() {
+        pot.encode(&mut borrow_mut!(accounts[IX_SETTLE_POT])?)?;
+    }
     Ok(())
 }
 
@@ -1707,6 +1752,13 @@ fn decode_reservation_boxed(bytes: &[u8]) -> Outcome<Box<ReservationAccount>> {
 #[inline(never)]
 fn decode_receipt_boxed(bytes: &[u8]) -> Outcome<Box<SettlementReceiptAccount>> {
     Ok(Box::new(SettlementReceiptAccount::decode(bytes)?))
+}
+
+#[inline(never)]
+fn decode_final_pot_boxed(bytes: &[u8]) -> Outcome<Box<clutch_solana_layout::FinalPotAccount>> {
+    Ok(Box::new(clutch_solana_layout::FinalPotAccount::decode(
+        bytes,
+    )?))
 }
 
 #[inline(never)]

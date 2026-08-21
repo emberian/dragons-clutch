@@ -92,7 +92,7 @@ use clutch_solana_layout::reservation::{
 use clutch_solana_layout::{
     account_len, stream, CandidateRecord, EpochAccount, FinalPotAccount, Hash32, OrderSlot,
     PortfolioRecord, SettlementReceiptAccount, TermsAccount, CANDIDATE_STATUS_SELECTED,
-    EPOCH_PHASE_CLEARED, MAX_OUTCOMES, ORDER_KIND_PORTFOLIO, POT_PHASE_CLOSED,
+    EPOCH_PHASE_CLEARED, MAX_OUTCOMES, ORDER_KIND_PORTFOLIO, POT_PHASE_CLOSED, POT_PHASE_OPEN,
     RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED, RECEIPT_FLAG_SLICE_EXHAUSTED,
     RECEIPT_LEG_DIRECT,
 };
@@ -338,16 +338,20 @@ pub(super) fn freeze_entitlement(
         _ => return Err(Refusal::Adapter(ClutchError::FeedProtocolFault)),
     };
 
-    /* The stated first-cut refusals, on the honest-stub code:
-     * virtual legs need the funded VirtualPot transition (standing ranked
-     * blocker), and a nonzero rounding pot needs a consumption path that can
-     * realize remainder atoms, which the exact-only seam cannot. */
+    /* The one standing refusal, on the honest-stub code.  A virtual leg is a
+     * complete-set **mint or burn**: `relation_v1.rs:3529-3531` requires the
+     * split to serve `sigma` Egg atoms on *every* outcome and the merge to
+     * absorb `mu` on every outcome, and `relation_v1.rs:2504-2512` prices that
+     * at `sigma * price_scale` / `mu * price_scale` — exactly one collateral
+     * atom per complete set, because prices lie on the scaled simplex
+     * (`relation_v1.rs:1224-1246`).  Creating or destroying claims is the seam
+     * plane's authority over `HoardAccount::collateral_atoms` and the supply
+     * ledger (`instructions::split`), which no clearing-plane account list
+     * reaches: settlement moves claims between owners and conserves their sum,
+     * and a virtual leg does not.  The VirtualPot row therefore stands as a
+     * seam-plane join, not as a settlement-seam widening. */
     require(
         summary.virtual_split == 0 && summary.virtual_merge == 0,
-        ClutchError::NotYetImplemented,
-    )?;
-    require(
-        summary.rounding_pot_price_units == 0,
         ClutchError::NotYetImplemented,
     )?;
     // The pinned policy is fee-free; a nonzero verified fee scalar would be
@@ -356,10 +360,32 @@ pub(super) fn freeze_entitlement(
         summary.fee_price_units == 0 && summary.fee_carry_bps_units == 0,
         ClutchError::AuthorizationUnavailable,
     )?;
+    /* The rounding pot, funded.  Under `TerminalOwnerFloor`
+     * (`relation_v1.rs:2482-2497`) a payer's owed price units convert *up* to
+     * collateral atoms and a payee's convert *down*, and every remainder atom
+     * lands in one non-negative pot — so the pot is funded by nobody outside
+     * the book: it is exactly the payers' round-up excess plus the payees'
+     * round-down shortfall, value the floor-side owners did not receive.
+     *
+     * With no virtual legs `relation_v1.rs:2510` collapses to `consideration
+     * == seller_credit`, so the atoms debited less the atoms credited is
+     * `rounding_pot / price_scale` — a whole number.  Requiring it here is a
+     * real cross-check of the streamed verdict, and it is what lets the
+     * consumption seam realize the residue by simply never crediting it. */
+    require(epoch.price_scale != 0, ClutchError::MismatchedState)?;
+    let rounding_pot_price_units = summary.rounding_pot_price_units;
+    require(
+        rounding_pot_price_units.is_multiple_of(u128::from(epoch.price_scale)),
+        ClutchError::AggregateClosureMismatch,
+    )?;
 
-    // The pot, funded from the verified summary's rounding/refund scalars —
-    // all provably zero after the refusals above — and created CLOSED, whose
-    // codec invariant enforces the emptiness (the V3 pot precedent).
+    /* The pot carries the verified residue expectation and nothing else: no
+     * claim is minted and no cash is custodied, so its Egg vector and cash
+     * field stay canonically zero.  An epoch that expects no residue is
+     * created CLOSED, whose codec invariant *enforces* the emptiness (the V3
+     * pot precedent); an epoch that expects some is created OPEN and each
+     * completing order draws its own share down, so the pot reaching zero when
+     * the last receipt consumes is the whole-plane closure. */
     let epoch_bytes = epoch.epoch.bytes();
     let (pot_address, pot_bump) = seeds::pot_pda(program_id, &epoch_bytes);
     expect_pda(
@@ -385,9 +411,13 @@ pub(super) fn freeze_entitlement(
         candidate: record.candidate,
         pot_internal: [0; MAX_OUTCOMES],
         pot_cash_price_units: 0,
-        rounding_pot_price_units: summary.rounding_pot_price_units,
+        rounding_pot_price_units,
         outcome_count: epoch.outcome_count,
-        phase: POT_PHASE_CLOSED,
+        phase: if rounding_pot_price_units == 0 {
+            POT_PHASE_CLOSED
+        } else {
+            POT_PHASE_OPEN
+        },
         stored_bump: pot_bump,
         flags: 0,
     };
@@ -509,13 +539,17 @@ fn load_bound_feed(
 
 /// Require the epoch's pot to exist for this candidate: proof the entitlement
 /// freeze ran, with its summary refusals discharged.
+///
+/// Returns the pot's verified residue expectation, which is what decides
+/// whether this epoch's conversions are exact and therefore whether the
+/// per-order realization needs the per-owner coincidence below.
 #[inline(never)]
 fn require_frozen_pot(
     program_id: &Pubkey,
     pot_account: &AccountInfo,
     epoch: &EpochAccount,
     record: &CandidateRecord,
-) -> Outcome<()> {
+) -> Outcome<u128> {
     accounts::validate_state_role_lengths(
         program_id,
         pot_account,
@@ -529,7 +563,36 @@ fn require_frozen_pot(
         seeds::pot_pda(program_id, &epoch.epoch.bytes()),
         Some(pot.stored_bump),
     )?;
-    Ok(())
+    Ok(pot.rounding_pot_price_units)
+}
+
+/// Count the selected candidate's filled orders, from the digest-verified feed.
+///
+/// One number, compared against the relation's recomputed
+/// `distinct_participating_owners`: equality says every participating owner
+/// holds exactly **one** filled order, which is exactly when the frozen
+/// `TerminalOwnerFloor` boundary's per-owner conversion
+/// (`relation_v1.rs:2482-2497`, which sums an owner's orders into
+/// `debit_units[slot]`/`credit_units[slot]` *before* converting) coincides
+/// with the per-order conversion the consumption seam can realize from a
+/// reservation's own ledger.  Without that equality an owner's two inexact
+/// orders would each round on their own and the epoch would leave more
+/// unallocated than the relation verified, so the receipts refuse to exist.
+#[inline(never)]
+fn filled_order_count(feed_data: &[u8], feed: &CandidateFeedHeader) -> Outcome<u16> {
+    let mut count = 0u16;
+    let mut rank = 0u8;
+    while rank < feed.order_len {
+        if clearing::fill_at(feed_data, feed, rank)? != 0 {
+            count = count
+                .checked_add(1)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        }
+        rank = rank
+            .checked_add(1)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    }
+    Ok(count)
 }
 
 /// What the whole-witness scan concluded about one slice's two ends.
@@ -865,7 +928,8 @@ pub(super) fn entitle_slice(
         &epoch,
         record.candidate,
     )?;
-    require_frozen_pot(program_id, &accounts[IX_ENTITLE_POT], &epoch, &record)?;
+    let expected_residue =
+        require_frozen_pot(program_id, &accounts[IX_ENTITLE_POT], &epoch, &record)?;
 
     let page_count = usize::from(epoch.page_count);
     require(
@@ -948,14 +1012,32 @@ pub(super) fn entitle_slice(
             tail,
             &epoch,
             &record,
-            &slice,
-            slice_index,
-            &buy,
-            &sell,
-            buy_entitled,
-            sell_entitled,
+            &PerSliceEnds {
+                slice,
+                slice_index,
+                buy: &buy,
+                sell: &sell,
+                buy_entitled,
+                sell_entitled,
+                expected_residue,
+                feed: &feed,
+            },
         ),
     }
+}
+
+/// Everything the per-slice route knows about the slice it is entitling.
+#[derive(Clone, Copy)]
+struct PerSliceEnds<'a> {
+    slice: clearing::PairingSlice,
+    slice_index: u16,
+    buy: &'a Located,
+    sell: &'a Located,
+    buy_entitled: u64,
+    sell_entitled: u64,
+    /// The pot's verified residue expectation for this epoch.
+    expected_residue: u128,
+    feed: &'a CandidateFeedHeader,
 }
 
 /// One end's shape check against the slice it is being entitled for.
@@ -1003,7 +1085,72 @@ fn validate_slice_end(
 /// mixed single/portfolio pair, and a portfolio order that pairs with more
 /// than one counterparty all arrive here, and a full one-to-one fill is simply
 /// its one-slice special case.
-#[allow(clippy::too_many_arguments)] // one argument per authenticated fact
+/// One per-slice pair's conversion coordinates.
+struct ConvertibleEnds<'a> {
+    buy_slot: &'a OrderSlot,
+    sell_slot: &'a OrderSlot,
+    buy_entitled: u64,
+    sell_entitled: u64,
+    price: u64,
+    consideration_price_units: u128,
+    expected_residue: u128,
+}
+
+/// Refuse any pair whose collateral conversion the consumption seam cannot
+/// realize — before a receipt exists, so no unconsumable receipt is minted.
+///
+/// Two rules, and only two.
+///
+/// * A **portfolio** end spans several frozen prices, so its whole-order value
+///   is not a function of its consumed units and the seam converts its slices
+///   one at a time: those must be exact, as they always were.
+/// * A **single-Egg** end lives on one outcome at one price, so the seam
+///   converts its *cumulative* value and its slices need not be exact at all.
+///   What it does need is that the frozen boundary's per-owner conversion be
+///   the per-order conversion: `relation_v1.rs:2482-2497` sums an owner's
+///   orders into `debit_units[slot]`/`credit_units[slot]` and converts once,
+///   which coincides with converting each order once exactly when every
+///   participating owner holds one filled order.  The relation recomputes that
+///   owner count (`SummaryV1::distinct_participating_owners`), so requiring it
+///   equal to the feed's filled-order count is a checked coincidence, never an
+///   assumption.
+#[inline(never)]
+fn require_convertible_ends(
+    feed_account: &AccountInfo,
+    feed: &CandidateFeedHeader,
+    record: &CandidateRecord,
+    price_scale: u64,
+    ends: ConvertibleEnds<'_>,
+) -> Outcome<()> {
+    let scale = u128::from(price_scale);
+    let buy_single = matches!(ends.buy_slot, OrderSlot::Single(_));
+    let sell_single = matches!(ends.sell_slot, OrderSlot::Single(_));
+    if !buy_single || !sell_single {
+        require(
+            ends.consideration_price_units.is_multiple_of(scale),
+            ClutchError::NotYetImplemented,
+        )?;
+    }
+    let order_value = |units: u64| -> Outcome<u128> {
+        u128::from(units)
+            .checked_mul(u128::from(ends.price))
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))
+    };
+    let buy_inexact = buy_single && !order_value(ends.buy_entitled)?.is_multiple_of(scale);
+    let sell_inexact = sell_single && !order_value(ends.sell_entitled)?.is_multiple_of(scale);
+    if !buy_inexact && !sell_inexact && ends.expected_residue == 0 {
+        return Ok(());
+    }
+    let filled = {
+        let data = feed_account.data.borrow();
+        filled_order_count(&data, feed)?
+    };
+    require(
+        record.distinct_owners == filled,
+        ClutchError::NotYetImplemented,
+    )
+}
+
 #[inline(never)]
 fn entitle_per_slice<'a>(
     program_id: &Pubkey,
@@ -1011,13 +1158,18 @@ fn entitle_per_slice<'a>(
     tail: &[AccountInfo<'a>],
     epoch: &EpochAccount,
     record: &CandidateRecord,
-    slice: &clearing::PairingSlice,
-    slice_index: u16,
-    buy: &Located,
-    sell: &Located,
-    buy_entitled: u64,
-    sell_entitled: u64,
+    ends: &PerSliceEnds<'_>,
 ) -> Outcome<()> {
+    let PerSliceEnds {
+        slice,
+        slice_index,
+        buy,
+        sell,
+        buy_entitled,
+        sell_entitled,
+        expected_residue,
+        feed,
+    } = *ends;
     // With the optional trailing funding ledger, the tail grows by one.
     require(
         tail.len() == ENTITLE_SINGLE_TAIL_ACCOUNT_COUNT
@@ -1037,12 +1189,20 @@ fn entitle_per_slice<'a>(
         .checked_mul(u128::from(price))
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
     require(epoch.price_scale != 0, ClutchError::MismatchedState)?;
-    /* Exact-or-stand: an inexact per-slice conversion needs the rounding
-     * boundary's pot flow, which the exact-only seam cannot fund yet.  The
-     * refusal here is what keeps every minted receipt consumable. */
-    require(
-        consideration_price_units % u128::from(epoch.price_scale) == 0,
-        ClutchError::NotYetImplemented,
+    require_convertible_ends(
+        &accounts[IX_ENTITLE_FEED],
+        feed,
+        record,
+        epoch.price_scale,
+        ConvertibleEnds {
+            buy_slot: &buy.slot,
+            sell_slot: &sell.slot,
+            buy_entitled,
+            sell_entitled,
+            price,
+            consideration_price_units,
+            expected_residue,
+        },
     )?;
 
     // State writes before the creation CPI (the terminal.rs ordering rule).
