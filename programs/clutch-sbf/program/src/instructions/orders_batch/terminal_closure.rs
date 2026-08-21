@@ -804,6 +804,173 @@ pub(super) fn close_general_reservation(
 }
 
 /* ------------------------------------------------------------------------ */
+/* Tag 69 — ClosePosition, and the revenue plane's grief rider               */
+/* ------------------------------------------------------------------------ */
+
+/// Accounts in a `ClosePosition` instruction, exactly.
+///
+/// Owner (signer, writable), Market (read-only), the Position (writable), the
+/// Realm's revenue-policy-record PDA (present **or provably absent**), and the
+/// frozen neutral sink.
+pub const CLOSE_POSITION_ACCOUNT_COUNT: usize = 5;
+
+/// Map a liveness-kernel refusal onto the program's refusal plane.
+fn treasury_fault(error: clutch_liveness::Error) -> Refusal {
+    match error {
+        clutch_liveness::Error::TreasuryServiceOutstanding => {
+            Refusal::Adapter(ClutchError::TreasuryServiceOutstanding)
+        }
+        clutch_liveness::Error::ArithmeticOverflow => Refusal::Adapter(ClutchError::Arithmetic),
+        _ => Refusal::Adapter(ClutchError::MismatchedState),
+    }
+}
+
+/// The B4b mid-epoch-close grief rider, decided by the liveness kernel.
+///
+/// The rider (`ADOPTED_2026-08-20.md` item 8, stress point 1): a treasury
+/// Position serving an unsettled fee-bearing epoch refuses close, because
+/// closing it mid-epoch would let the fee recipient halt *other parties'*
+/// settlement.  `clutch_liveness::TreasuryServiceLedger` is that rule as
+/// fixed-memory bookkeeping, and this is where its transitions are wired:
+///
+/// * **begin_service** — one per fee-bearing epoch admitted against this
+///   treasury.  A Realm's revenue-policy record naming this Position *is* the
+///   standing election, so it counts as one begun service.
+/// * **settle_service** — one per served epoch fully settled.  It has no
+///   caller and cannot have one yet: fee-bearing admission refuses at
+///   `RevenueTreasuryUnset`, so no fee-bearing epoch can open, let alone
+///   settle.  The counter therefore cannot come back down and the refusal
+///   below is the boundary itself, not a placeholder standing in for it.
+/// * **close** — refuses while any service is outstanding, and lands once.
+///
+/// The record is presented at its canonical address and is either *absent* —
+/// a record's absence IS the zero-take state (D4), so no treasury exists and
+/// no service can be outstanding — or decoded and compared against this
+/// Position's owner.
+#[inline(never)]
+fn require_no_treasury_service(
+    program_id: &Pubkey,
+    record_account: &AccountInfo,
+    realm: Hash32,
+    owner: Hash32,
+) -> Outcome<()> {
+    let (record_address, _) = seeds::revenue_policy_pda(program_id, &realm.bytes());
+    require(*record_account.key == record_address, ClutchError::WrongPda)?;
+    let serving = if record_account.data_len() == 0 && *record_account.owner == SYSTEM_PROGRAM_ID {
+        false
+    } else {
+        accounts::validate_state_role_lengths(
+            program_id,
+            record_account,
+            false,
+            &[clutch_solana_layout::revenue::REVENUE_POLICY_RECORD_BYTES],
+        )?;
+        let record = clutch_solana_layout::revenue::RevenuePolicyRecordV1::decode(
+            &record_account.data.borrow(),
+        )?;
+        require(record.realm == realm, ClutchError::MismatchedState)?;
+        record.names_treasury(owner)
+    };
+    let ledger = clutch_liveness::TreasuryServiceLedger::admit(clutch_liveness::Id::from_bytes(
+        owner.bytes(),
+    ))
+    .map_err(treasury_fault)?;
+    let ledger = if serving {
+        ledger.begin_service().map_err(treasury_fault)?
+    } else {
+        ledger
+    };
+    ledger.close().map_err(treasury_fault)?;
+    Ok(())
+}
+
+/// Close one owner's Position: economic zero, the grief rider, then the
+/// ratified lamport disposition.
+///
+/// The Position family has **no creation-side funding ledger** — a Position is
+/// created by `market_init` for a market's founder and by the first `Endow`
+/// for everyone else, and neither writes one — so no payer is recorded and no
+/// principal is owed to anyone.  The ratified convention then pays nothing and
+/// burns the whole live balance at the frozen neutral sink, which is also the
+/// only disposition a public prefund permits: `PREFUND_SAFE_CREATION.md`
+/// records excess lamports on a created account as an *unowned donation*, and
+/// inventing an owner for one here would be exactly the refund this family
+/// refuses to fabricate elsewhere.  A Position funding ledger is the recorded
+/// residual that would make the principal payable.
+#[inline(never)]
+pub(super) fn close_position(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent_market: &Hash32,
+    intent_owner: &Hash32,
+) -> Outcome<()> {
+    require_count(accounts, CLOSE_POSITION_ACCOUNT_COUNT)?;
+    /* The Position's own disappearance is the replay guard. */
+    require(sequence == 0, ClutchError::Replay)?;
+    require_distinct(accounts)?;
+    require_signer(&accounts[0])?;
+    require(accounts[0].is_writable, ClutchError::NotWritable)?;
+    // The signer *is* the owner identity: a Position is owner-seeded, so no
+    // separate authority claim exists to be transposed.
+    let owner = Hash32::from_bytes(accounts[0].key.to_bytes());
+    require(owner == *intent_owner, ClutchError::UnauthorizedActor)?;
+
+    accounts::validate_state_role_lengths(program_id, &accounts[1], false, &[account_len::MARKET])?;
+    let realm = {
+        let market = clutch_solana_layout::MarketAccount::decode(&accounts[1].data.borrow())?;
+        require(
+            market.market == *intent_market,
+            ClutchError::MismatchedState,
+        )?;
+        expect_pda(
+            accounts[1].key,
+            seeds::market_pda(program_id, &market.realm.bytes(), &market.market.bytes()),
+            Some(market.stored_bump),
+        )?;
+        market.realm
+    };
+
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[2],
+        true,
+        &[account_len::POSITION],
+    )?;
+    {
+        let position = super::decode_position_boxed(&accounts[2].data.borrow())?;
+        require(
+            position.market == *intent_market && position.owner == owner,
+            ClutchError::MismatchedState,
+        )?;
+        /* Economic zero first, as everywhere in this family: a Position
+         * holding cash, encumbered cash, or any claim is not closable, and
+         * the padding beyond the market's width is refused by the codec. */
+        require(
+            position.cash_atoms == 0
+                && position.reserved_cash_atoms == 0
+                && position.internal == [0; MAX_OUTCOMES],
+            ClutchError::AggregateClosureMismatch,
+        )?;
+        require(position.close_state == 0, ClutchError::NotActive)?;
+        expect_pda(
+            accounts[2].key,
+            seeds::position_pda(program_id, &intent_market.bytes(), &owner.bytes()),
+            Some(position.stored_bump),
+        )?;
+    }
+
+    require_no_treasury_service(program_id, &accounts[3], realm, owner)?;
+    require_sink(&accounts[4])?;
+
+    let observed = accounts[2].lamports();
+    drain(&accounts[2])?;
+    release_bytes(&accounts[2])?;
+    credit(&accounts[4], observed)?;
+    Ok(())
+}
+
+/* ------------------------------------------------------------------------ */
 /* Tag 63 — CloseGeneralPage                                                 */
 /* ------------------------------------------------------------------------ */
 

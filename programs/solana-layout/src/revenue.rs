@@ -101,6 +101,19 @@ impl RevenuePolicyRecordV1 {
         Ok(())
     }
 
+    /// Whether this record names `owner` as the Realm's revenue treasury.
+    ///
+    /// The B4b mid-epoch-close grief rider's one predicate: a Position the
+    /// record points at is *serving* every fee-bearing epoch of that Realm,
+    /// and a close route must consult
+    /// `clutch_liveness::TreasuryServiceLedger` before retiring it.  V1 pins
+    /// the treasury at the structural UNSET sentinel, so this is false for
+    /// every Position that can exist today — which is the fact the rider's
+    /// falsifier pins, not an accident it relies on.
+    pub fn names_treasury(&self, owner: Hash32) -> bool {
+        self.treasury == owner
+    }
+
     /// Encode exactly [`REVENUE_POLICY_RECORD_BYTES`] bytes.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
         self.validate()?;
@@ -108,7 +121,11 @@ impl RevenuePolicyRecordV1 {
             return Err(CodecError::OutputTooSmall);
         }
         let mut w = Writer::new(out);
-        put_header(&mut w, REVENUE_POLICY_RECORD_TAG, REVENUE_POLICY_RECORD_VERSION)?;
+        put_header(
+            &mut w,
+            REVENUE_POLICY_RECORD_TAG,
+            REVENUE_POLICY_RECORD_VERSION,
+        )?;
         w.hash(self.realm)?;
         w.hash(self.policy_digest)?;
         w.hash(self.treasury)?;
@@ -212,10 +229,7 @@ mod tests {
                 terminal_generation: 2,
                 ..value
             },
-            RevenuePolicyRecordV1 {
-                flags: 1,
-                ..value
-            },
+            RevenuePolicyRecordV1 { flags: 1, ..value },
         ] {
             assert!(broken.validate().is_err());
             let mut out = [0u8; REVENUE_POLICY_RECORD_BYTES];

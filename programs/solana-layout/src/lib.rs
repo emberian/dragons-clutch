@@ -4971,6 +4971,25 @@ pub enum Intent {
     /// unrepresentable (B4f).  There is deliberately no mutate or re-pin
     /// intent beside it — the no-silent-redirect rule (§10.7).
     CloseRevenuePolicyRecord { realm: RealmHash },
+    /// Close one owner's [`PositionAccount`] — the owner-signed end of the
+    /// position lifecycle, and the byte host of the revenue plane's
+    /// mid-epoch-close grief rider.
+    ///
+    /// Economic zero first: a position holding cash, reserved cash, or any
+    /// claim refuses.  Then the rider — a Position the Realm's revenue-policy
+    /// record names as its **treasury** is serving fee-bearing epochs, and
+    /// closing it mid-epoch would let the fee recipient halt other parties'
+    /// settlement, so it refuses while any service is outstanding.  The
+    /// Realm's record is presented at its canonical address and is either
+    /// absent (the Realm is zero-take by construction, so no treasury exists)
+    /// or decoded and compared.
+    ///
+    /// No principal is paid: the Position family has no creation-side funding
+    /// ledger, so no payer is recorded and the ratified convention — exactly
+    /// the recorded principal to the exact recorded payer, every other live
+    /// lamport burned — pays nothing and burns the whole balance at the frozen
+    /// neutral sink.
+    ClosePosition { market: MarketId, owner: OwnerId },
 }
 
 /// Most fills one [`Intent::WriteCandidateFeed`] chunk may carry.
@@ -5244,6 +5263,7 @@ const _: () = assert!(CLOSE_GENERAL_CLEAR_WORK_TAG == CLOSE_GENERAL_CANDIDATE_TA
 const _: () = assert!(CLOSE_GENERAL_EPOCH_TAG == CLOSE_GENERAL_CLEAR_WORK_TAG + 1);
 /* The revenue plane's one close continues the ladder. */
 const CLOSE_REVENUE_POLICY_RECORD_TAG: u8 = 68;
+const CLOSE_POSITION_TAG: u8 = 69;
 const _: () = assert!(CLOSE_REVENUE_POLICY_RECORD_TAG == CLOSE_GENERAL_EPOCH_TAG + 1);
 // The widest chunked write stays inside the frozen intent bound; the slices
 // shape is the widest at 308 of 310 bytes.
@@ -5251,9 +5271,8 @@ const _: () = assert!(
     2 + (3 * HASH_BYTES) + 1 + 1 + (FEED_SLICES_PER_CHUNK * clearing::PAIRING_SLICE_BYTES)
         <= MAX_INTENT_BYTES
 );
-const _: () = assert!(
-    2 + (3 * HASH_BYTES) + 1 + 1 + (FEED_FILLS_PER_CHUNK * 8) <= MAX_INTENT_BYTES
-);
+const _: () =
+    assert!(2 + (3 * HASH_BYTES) + 1 + 1 + (FEED_FILLS_PER_CHUNK * 8) <= MAX_INTENT_BYTES);
 
 fn resolution_work_codec(error: resolution_work::ResolutionWorkCodecError) -> CodecError {
     use resolution_work::ResolutionWorkCodecError as WorkError;
@@ -5318,9 +5337,7 @@ impl Intent {
             Self::InitClearWork { .. } | Self::GrowClearWork { .. } => 2 + 32 + 32 + 32,
             Self::InitEpoch { .. } => 2 + 32 + 8 + 32 + 8,
             Self::FreezeEpoch { .. } => 2 + 32 + 32,
-            Self::AdvanceClearWork { .. } | Self::AdvanceClearSlices { .. } => {
-                2 + 32 + 32 + 32 + 2
-            }
+            Self::AdvanceClearWork { .. } | Self::AdvanceClearSlices { .. } => 2 + 32 + 32 + 32 + 2,
             Self::CompleteClearWork { .. } => 2 + 32 + 32 + 32,
             Self::SubmitCandidate { .. } => {
                 2 + 32 + 32 + (MAX_OUTCOMES * 8) + 8 + 8 + 8 + 1 + 2 + 16 + 16 + 2
@@ -5352,6 +5369,7 @@ impl Intent {
             }
             Self::CloseGeneralReceipt { .. } => 2 + 32 + 32 + 32 + 2,
             Self::CloseRevenuePolicyRecord { .. } => 2 + 32,
+            Self::ClosePosition { .. } => 2 + 32 + 32,
         }
     }
     /// Validate and encode into a caller-provided buffer.
@@ -6128,6 +6146,13 @@ impl Intent {
                 put_header(&mut w, CLOSE_REVENUE_POLICY_RECORD_TAG, INTENT_VERSION)?;
                 w.hash(*realm)?
             }
+            Self::ClosePosition { market, owner } => {
+                check_hash(*market)?;
+                check_hash(*owner)?;
+                put_header(&mut w, CLOSE_POSITION_TAG, INTENT_VERSION)?;
+                w.hash(*market)?;
+                w.hash(*owner)?
+            }
         };
         Ok(w.at)
     }
@@ -6886,7 +6911,9 @@ impl Intent {
                     RELEASE_TERMINAL_RESERVATION_TAG => {
                         Self::ReleaseTerminalReservation { market, epoch }
                     }
-                    CLOSE_GENERAL_RESERVATION_TAG => Self::CloseGeneralReservation { market, epoch },
+                    CLOSE_GENERAL_RESERVATION_TAG => {
+                        Self::CloseGeneralReservation { market, epoch }
+                    }
                     CLOSE_GENERAL_POT_TAG => Self::CloseGeneralPot { market, epoch },
                     _ => Self::CloseGeneralEpoch { market, epoch },
                 })
@@ -6947,6 +6974,14 @@ impl Intent {
                 r.done()?;
                 check_hash(realm)?;
                 Ok(Self::CloseRevenuePolicyRecord { realm })
+            }
+            CLOSE_POSITION_TAG => {
+                let market = r.hash()?;
+                let owner = r.hash()?;
+                r.done()?;
+                check_hash(market)?;
+                check_hash(owner)?;
+                Ok(Self::ClosePosition { market, owner })
             }
             _ => Err(CodecError::WrongTag),
         }
@@ -9305,10 +9340,7 @@ mod tests {
         assert_eq!(hollow.validate(), Err(CodecError::ZeroIdentity));
         let mut premature = c;
         premature.status = CANDIDATE_STATUS_SUBMITTED;
-        assert_eq!(
-            premature.validate(),
-            Err(CodecError::NonCanonicalPadding)
-        );
+        assert_eq!(premature.validate(), Err(CodecError::NonCanonicalPadding));
         let mut refused = c;
         refused.status = CANDIDATE_STATUS_REFUSED;
         assert_eq!(refused.validate(), Err(CodecError::NonCanonicalPadding));
@@ -9719,6 +9751,70 @@ mod tests {
         let n = good.encode(&mut b).unwrap();
         b[2..34].fill(0);
         assert_eq!(Intent::decode(&b[..n]), Err(CodecError::ZeroIdentity));
+    }
+
+    /// The Position close route's wire: owner-signed, two identities, and its
+    /// own tag past the revenue record's.
+    ///
+    /// It is deliberately *not* part of the epoch-terminal contiguity above —
+    /// a Position outlives every epoch — and it carries no epoch coordinate at
+    /// all, so no caller can aim it at one epoch's state.
+    #[test]
+    fn the_position_close_intent_has_an_exact_unambiguous_wire() {
+        let market = h(1);
+        let owner = h(9);
+        let mut b = [0; MAX_INTENT_BYTES];
+        let intent = Intent::ClosePosition { market, owner };
+        let n = intent.encode(&mut b).unwrap();
+        assert_eq!(n, intent.encoded_len());
+        assert_eq!(n, 66);
+        assert_eq!(&b[..2], [CLOSE_POSITION_TAG, INTENT_VERSION]);
+        assert_eq!(CLOSE_POSITION_TAG, CLOSE_REVENUE_POLICY_RECORD_TAG + 1);
+        assert_eq!(Intent::decode(&b[..n]), Ok(intent));
+        assert_eq!(Intent::decode(&b[..n - 1]), Err(CodecError::Truncated));
+        let mut long = [0u8; MAX_INTENT_BYTES];
+        long[..n].copy_from_slice(&b[..n]);
+        assert_eq!(
+            Intent::decode(&long[..n + 1]),
+            Err(CodecError::TrailingBytes)
+        );
+        for zeroed in [
+            Intent::ClosePosition {
+                market: Hash32::ZERO,
+                owner,
+            },
+            Intent::ClosePosition {
+                market,
+                owner: Hash32::ZERO,
+            },
+        ] {
+            assert_eq!(zeroed.encode(&mut b), Err(CodecError::ZeroIdentity));
+        }
+        let n = intent.encode(&mut b).unwrap();
+        b[34..66].fill(0);
+        assert_eq!(Intent::decode(&b[..n]), Err(CodecError::ZeroIdentity));
+    }
+
+    /// The grief rider's one predicate, over real record bytes.
+    #[test]
+    fn a_revenue_record_names_only_its_own_treasury() {
+        let record = revenue::RevenuePolicyRecordV1 {
+            realm: h(1),
+            policy_digest: h(2),
+            treasury: h(3),
+            terminal_payer: h(4),
+            terminal_payer_principal: 1,
+            terminal_donation_floor: 0,
+            terminal_generation: 1,
+            stored_bump: 254,
+            flags: 0,
+        };
+        let mut bytes = [0u8; revenue::REVENUE_POLICY_RECORD_BYTES];
+        record.encode(&mut bytes).unwrap();
+        let decoded = revenue::RevenuePolicyRecordV1::decode(&bytes).unwrap();
+        assert!(decoded.names_treasury(h(3)));
+        assert!(!decoded.names_treasury(h(4)));
+        assert!(!decoded.names_treasury(Hash32::ZERO));
     }
 
     #[test]
@@ -12028,10 +12124,7 @@ mod tests {
         // An over-wide declared witness refuses, both directions.
         let mut wide = bytes;
         wide[219..221].copy_from_slice(&(MAX_SLICES as u16 + 1).to_le_bytes());
-        assert_eq!(
-            Intent::decode(&wide[..len]),
-            Err(CodecError::InvalidCount)
-        );
+        assert_eq!(Intent::decode(&wide[..len]), Err(CodecError::InvalidCount));
         // Canonical churn: never split and merge at once (the fixture's
         // split is 5; forging a nonzero merge at 202..210 makes both live).
         let mut churned = bytes;

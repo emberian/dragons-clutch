@@ -35,6 +35,12 @@ clutch-bspline = { path = "../../../crates/clutch-bspline" }
 clutch-bspline-accumulator = { path = "../../../crates/clutch-bspline-accumulator" }
 clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
+# The liveness kernel's `TreasuryServiceLedger` — the B4b mid-epoch-close
+# grief rider as fixed-memory bookkeeping.  Already in the graph through
+# `clutch-batch-policy-identity`; naming it here is what lets
+# `orders_batch::terminal_closure` drive the ledger's begin/settle/close
+# transitions from the Position close route instead of restating them.
+clutch-liveness = { path = "../../../crates/clutch-liveness" }
 clutch-solana-layout = { path = "../../solana-layout" }
 clutch-solana-reference = { path = "../../solana-reference" }
 solana-account-info = "=3.1.1"

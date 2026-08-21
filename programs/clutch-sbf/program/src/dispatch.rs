@@ -142,6 +142,7 @@ const INTENT_CLOSE_GENERAL_CANDIDATE_HINT: u8 = 65;
 const INTENT_CLOSE_GENERAL_CLEAR_WORK_HINT: u8 = 66;
 const INTENT_CLOSE_GENERAL_EPOCH_HINT: u8 = 67;
 const INTENT_CLOSE_REVENUE_POLICY_RECORD_HINT: u8 = 68;
+const INTENT_CLOSE_POSITION_HINT: u8 = 69;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
@@ -185,7 +186,8 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_CLOSE_GENERAL_POT_HINT
                 | INTENT_CLOSE_GENERAL_CANDIDATE_HINT
                 | INTENT_CLOSE_GENERAL_CLEAR_WORK_HINT
-                | INTENT_CLOSE_GENERAL_EPOCH_HINT,
+                | INTENT_CLOSE_GENERAL_EPOCH_HINT
+                | INTENT_CLOSE_POSITION_HINT,
             ) => Route::OrdersBatch,
             Some(
                 INTENT_INIT_REALM_HINT
@@ -414,7 +416,8 @@ fn process_orders_batch(
         | Action::Layout(Intent::CloseGeneralPot { .. })
         | Action::Layout(Intent::CloseGeneralCandidate { .. })
         | Action::Layout(Intent::CloseGeneralClearWork { .. })
-        | Action::Layout(Intent::CloseGeneralEpoch { .. }) => {
+        | Action::Layout(Intent::CloseGeneralEpoch { .. })
+        | Action::Layout(Intent::ClosePosition { .. }) => {
             orders_batch::process(program_id, accounts, &request)
         }
         _ => unexpected_route(),

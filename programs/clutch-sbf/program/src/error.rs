@@ -262,6 +262,18 @@ pub enum ClutchError {
     /// record is creatable only inside the Realm-creation transition, so
     /// this refusal is permanent for every existing Realm.
     RevenuePolicyRecordMissing = 0x0094,
+    /// `ClosePosition` refused: the Position is the Realm's revenue treasury
+    /// and a fee-bearing epoch it serves has not settled — the B4b
+    /// mid-epoch-close grief rider (`ADOPTED_2026-08-20.md` item 8, stress
+    /// point 1), decided by `clutch_liveness::TreasuryServiceLedger`.
+    ///
+    /// Closing a treasury mid-epoch would let the fee recipient halt other
+    /// parties' settlement, so the ledger counts every begun service and
+    /// `close` refuses while any is outstanding.  No fee-bearing epoch can
+    /// settle yet — admission refuses one at `RevenueTreasuryUnset` — so a
+    /// named treasury's count can never come back down, and the refusal is
+    /// the boundary rather than a stand-in for it.
+    TreasuryServiceOutstanding = 0x0095,
     /// A sealing candidate cannot beat the worst retained candidate's stored
     /// score, so the full registry admits no displacement for it.
     ///

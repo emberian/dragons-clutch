@@ -1320,6 +1320,9 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 epoch,
             )
         }
+        Action::Layout(Intent::ClosePosition { market, owner }) => {
+            terminal_closure::close_position(program_id, accounts, request.sequence, market, owner)
+        }
         Action::Layout(Intent::CloseGeneralPage {
             market,
             epoch,
