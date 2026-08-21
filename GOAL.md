@@ -68,6 +68,21 @@ ready in degg-research.
 
 ## Done log (2026-08-19 session)
 
+- R2 RUNBOOK + HOUSEKEEPING MERGED (doc-only, seal untouched): the
+  Phase-0 runbook (490 lines; r2-caps-rebase-trial re-measured CLEAN
+  against current main, zero closure commits in the 60 behind), the
+  svm-tests README staleness repaired. TWO ITEMS CORRECTLY REFUSED AS
+  TRAPS: svm_run.txt regeneration (a worktree build can never produce the
+  canonical identity — a fork-identity capture is worse than a stale one)
+  and the rustdoc fixes (the "two warnings" are actually 13 across NINE
+  in-closure files; precedent 9c371fe forked the ELF for one such fix —
+  rides the cycle-F reseal). NEW GAPS QUEUED: (1) the default SVM gate's
+  manifest key pattern matches nothing the runner emits — the default
+  ELF identity is in NO manifest key line (fix the declaration at cycle
+  F's emission); (2) the Pyth receiver id + Config PDA are not
+  transcribed in-tree (E2-trigger prep item); (3) rustdoc -D warnings
+  parity for clutch_sbf after the cycle-F doc fixes.
+
 - THE SPW CONCEPTUAL CANON AUTHORED AND MERGED (.spw/canon/, six layer
   files + index): 40/40 inventory concepts, zero stubs, typed relations
   mapped onto the workbench's sigil vocabulary (uses ~, refines ^,
