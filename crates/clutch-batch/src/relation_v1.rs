@@ -1306,6 +1306,12 @@ pub enum BasisDescriptorV1 {
     /// existed.  A caller that cannot yet name the market's degree passes this.
     Ungated,
     /// The market's frozen open-clamped basis of this degree.
+    ///
+    /// It must be the degree the market's terms actually froze.  Binding a
+    /// different one is a caller error, not a hostile-input case the relation
+    /// can catch: the outcome count alone cannot distinguish the degrees, and
+    /// a wrong degree names a different cone, which can refuse a price vector
+    /// that carries no arbitrage on the real basis.
     ClampedUniform(BasisDegreeV1),
 }
 
