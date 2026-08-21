@@ -951,6 +951,10 @@ pub enum PortfolioRuntimeBlockerV1 {
     /// An immutable policy preimage must authorize fee and rounding families.
     FrozenPolicyPreimage,
     /// Nonzero fee support needs one authenticated per-Position/policy carry.
+    ///
+    /// The revenue plane's *policy* side landed (`revenue::RevenuePolicyRecordV1`,
+    /// tag 27, and the fee-bearing `InitEpoch` admission seam); the per-owner
+    /// carry account did not, so this row still stands.
     FeeCarryAccount,
     /// Final closure must prove every reservation and receipt is consumed once.
     TerminalClosure,
@@ -972,24 +976,41 @@ pub enum PortfolioRuntimeBlockerV1 {
 ///   Portfolio records by exact order id from digest-verified frozen pages.
 /// * `FrozenPolicyPreimage` — T2-5/T2-6: the pinned
 ///   `GENERAL_CLEARING_POLICY_V1` artifact, digest-bound to `epoch.policy`.
-pub const DISCHARGED_PORTFOLIO_RUNTIME_BLOCKERS_V1: [PortfolioRuntimeBlockerV1; 6] = [
+/// * `TerminalClosure` — the TerminalClosure merge (`966ee2c`, intents 60-67):
+///   owner-signed post-terminal release plus permissionless closes down an
+///   enforced dependency DAG — receipt, reservation archive, page, pot,
+///   candidate pair, checkpoint, then the epoch root — each refusing before
+///   economic zero and paying exactly the recorded principal to the exact
+///   recorded payer, with every surplus burned at the frozen incinerator. The
+///   same wave retired the sibling `SettlementBlocker::TerminalClosure` row in
+///   `clutch-sbf`'s `orders_batch::settlement` ledger, which carries the
+///   recorded residuals verbatim: an account created without its optional
+///   funding ledger keeps the unowned-refund blocker and stands forever, and an
+///   abandoned ACTIVE reservation holds its page — and so the epoch root — open
+///   at recorded rent cost.
+pub const DISCHARGED_PORTFOLIO_RUNTIME_BLOCKERS_V1: [PortfolioRuntimeBlockerV1; 7] = [
     PortfolioRuntimeBlockerV1::CandidateSelection,
     PortfolioRuntimeBlockerV1::ReservationSetClosure,
     PortfolioRuntimeBlockerV1::VectorReceiptCodec,
     PortfolioRuntimeBlockerV1::EntitlementInitialization,
     PortfolioRuntimeBlockerV1::FrozenPageProvenance,
     PortfolioRuntimeBlockerV1::FrozenPolicyPreimage,
+    PortfolioRuntimeBlockerV1::TerminalClosure,
 ];
 
 /// The obligations still standing, in dependency order.
 ///
-/// Fees stay forced zero at every gate (`FeeCarryAccount`), and nothing yet
-/// proves every reservation, receipt, and pot is consumed exactly once and
-/// reclaims their rent (`TerminalClosure`).
-pub const PORTFOLIO_RUNTIME_BLOCKERS_V1: [PortfolioRuntimeBlockerV1; 2] = [
-    PortfolioRuntimeBlockerV1::FeeCarryAccount,
-    PortfolioRuntimeBlockerV1::TerminalClosure,
-];
+/// * `FeeCarryAccount` — fees stay forced zero at every gate on this seam:
+///   [`prepare_full_pair`] refuses any reservation carrying a nonzero
+///   `max_fee_atoms` with [`PortfolioSettlementError::FeeCarryAuthorityUnavailable`],
+///   and [`dispersion_fee_step`]'s exact arithmetic authorizes no live fee
+///   because Position bytes carry no authenticated carry field. The revenue
+///   wave landed the *policy* family around this row — the per-Realm
+///   [`crate::revenue::RevenuePolicyRecordV1`] (tag 27) and the fee-bearing
+///   `InitEpoch` admission seam, itself still stopping at an unset treasury —
+///   but no per-owner carry account, which is what this row names.
+pub const PORTFOLIO_RUNTIME_BLOCKERS_V1: [PortfolioRuntimeBlockerV1; 1] =
+    [PortfolioRuntimeBlockerV1::FeeCarryAccount];
 
 fn validate_position(
     position: &PositionAccount,
@@ -1511,19 +1532,21 @@ mod tests {
     #[test]
     fn the_promotion_ledger_records_the_discharged_prefix_and_the_standing_tail() {
         // Every original obligation appears exactly once, discharged or
-        // standing; the standing tail keeps fees and terminal closure honest.
-        assert_eq!(DISCHARGED_PORTFOLIO_RUNTIME_BLOCKERS_V1.len(), 6);
-        assert_eq!(PORTFOLIO_RUNTIME_BLOCKERS_V1.len(), 2);
+        // standing; the standing tail keeps fees honest.
+        assert_eq!(DISCHARGED_PORTFOLIO_RUNTIME_BLOCKERS_V1.len(), 7);
+        assert_eq!(PORTFOLIO_RUNTIME_BLOCKERS_V1.len(), 1);
         assert_eq!(
             DISCHARGED_PORTFOLIO_RUNTIME_BLOCKERS_V1[0],
             PortfolioRuntimeBlockerV1::CandidateSelection
         );
+        // TerminalClosure retired last, at the tail of the discharged order.
+        assert_eq!(
+            DISCHARGED_PORTFOLIO_RUNTIME_BLOCKERS_V1[6],
+            PortfolioRuntimeBlockerV1::TerminalClosure
+        );
         assert_eq!(
             PORTFOLIO_RUNTIME_BLOCKERS_V1,
-            [
-                PortfolioRuntimeBlockerV1::FeeCarryAccount,
-                PortfolioRuntimeBlockerV1::TerminalClosure
-            ]
+            [PortfolioRuntimeBlockerV1::FeeCarryAccount]
         );
         let all: [PortfolioRuntimeBlockerV1; 8] = [
             PortfolioRuntimeBlockerV1::CandidateSelection,
