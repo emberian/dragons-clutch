@@ -251,3 +251,47 @@ what the sealed baseline resolves the deployable artifact from.
 therefore a sibling workspace, exactly as `committed-harness` is, and the
 path dependency across the boundary still gives it the one true builder.
 This also removed the anticipated conflict with the keeper lane.
+
+### Gate results
+
+| gate | result |
+| --- | --- |
+| split byte-diff | **PASS** — 294 files identical, digest `79452e9e…83d11`, stdout identical |
+| library plan == CLI plan (current tree) | **PASS** — 294 files, 44 transactions, byte identical |
+| `run_operator_replay.sh` | **PASS** — 0 differing; a corrupted transaction byte goes red at exactly that file |
+| clippy `-D warnings`, both crates | **PASS** |
+| unit tests (`operatord`) | **PASS** — 20 |
+| no external reference in `apps/operator` | **PASS** — grep finds nothing |
+| manifest-license / dependency-license audits | **PASS** with the new crate in the tree |
+| **M0 end to end** | **FAIL at step 40, on an inherited tree break** |
+
+The M0 walk (run at `24428fc`, under the suite lock, RPC 9137 / faucet 9138 /
+bench 9130) drove **39 of 44 steps**: 37 accepted, 2 refused with their exact
+codes, 97 account reloads compared byte for byte, 77 of them decoded through
+the layout codecs, both real-clock waits honoured (`plan deadline` to slot 800
+and `general-28-freeze-epoch + 1000`), 3 587 clock ticks and 39 live
+conservation strips published, peak 331 100 CU at
+`general-34-advance-pass-one` against the 1 400 000 ceiling.
+
+It then stopped, correctly, at:
+
+```
+general-40-entitle-single-slice / general.reservation-2: committed bytes differ
+(1 of 610 bytes differ; first at offset 570: observed 0x08, expected 0x00)
+```
+
+Offset 570 is exactly the boundary between `ReservationAccount` v1 (570 bytes)
+and the partial-fill lane's v2. The program stamps the appended field —
+`direct_selection.rs:935-936`, `buy_reservation.entitled_units =
+facts.quantity` — and the harness's host-side expectation does not:
+`harness/src/lib.rs` contains no occurrence of `entitled_units`, and lines
+10164-10165 / 10257-10258 set `state = RESERVATION_STATE_ENTITLED` without
+stamping it.
+
+This is **not** an Operator Bench defect and it is not caused by the library
+split. `run_general_committed.sh` drives the same plan against the same ELF
+through the same byte comparison, so the sealed lane is red at the same step
+for the same reason. The daemon detected it and refused, which is the
+machinery working. Fixing it means deciding what `entitled_units` and
+`consumed_units` are at each entitlement and consumption step — the
+partial-fill lane's semantics, deliberately not patched from here.

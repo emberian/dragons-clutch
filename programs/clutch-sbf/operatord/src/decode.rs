@@ -14,8 +14,8 @@ use clutch_solana_layout::clearing::EpochWindowAccount;
 use clutch_solana_layout::reservation::ReservationAccount;
 use clutch_solana_layout::{
     CandidateRecord, EpochAccount, FinalPotAccount, Hash32, HoardAccount, MarketAccount,
-    OrderPageAccount, OrderSlot, PositionAccount, ResolutionAccount, SettlementReceiptAccount,
-    SupplyLedgerAccount,
+    order_id_rank, OrderPageAccount, OrderSlot, PositionAccount, ResolutionAccount,
+    SettlementReceiptAccount, SupplyLedgerAccount,
 };
 use serde_json::{json, Value};
 
@@ -114,18 +114,33 @@ fn tag(value: Hash32) -> String {
     clutch_sbf_harness::hex_encode(&value.bytes()[..6])
 }
 
+/// An order identity, read the one way the layout crate admits reading one.
+///
+/// A canonical order id is a one-based *rank* in the trailing eight bytes with
+/// every leading byte zero, so abbreviating it the way [`tag`] abbreviates an
+/// owner prints `000000000000` for every order in the book — structurally
+/// true and completely useless.  `order_id_rank` is documented as the only
+/// admitted reading, so use it, and say so plainly when an id is not canonical
+/// rather than printing a prefix that looks like one.
+fn order_tag(value: Hash32) -> String {
+    match order_id_rank(value) {
+        Ok(rank) => format!("#{rank}"),
+        Err(_) => format!("non-canonical {}", tag(value)),
+    }
+}
+
 /// One occupied slot of an order page, as the book actually holds it.
 fn slot(index: usize, entry: OrderSlot) -> Option<Value> {
     match entry {
         OrderSlot::Empty => None,
         OrderSlot::Single(order) => Some(json!({
-            "slot": index, "kind": "single", "order_id": tag(order.order_id),
+            "slot": index, "kind": "single", "order_id": order_tag(order.order_id),
             "owner": tag(order.owner), "outcome": order.outcome, "side": side(order.side),
             "quantity": order.quantity, "limit": order.limit,
             "minimum_fill": order.minimum_fill, "generation": order.generation,
         })),
         OrderSlot::Portfolio(order) => Some(json!({
-            "slot": index, "kind": "portfolio", "order_id": tag(order.order_id),
+            "slot": index, "kind": "portfolio", "order_id": order_tag(order.order_id),
             "owner": tag(order.owner), "side": side(order.side),
             "active_len": order.active_len,
             "coefficients": &order.coefficients[..usize::from(order.active_len).min(order.coefficients.len())],
@@ -133,7 +148,7 @@ fn slot(index: usize, entry: OrderSlot) -> Option<Value> {
             "minimum_fill_lots": order.minimum_fill_lots, "generation": order.generation,
         })),
         OrderSlot::Tombstone(retired) => Some(json!({
-            "slot": index, "kind": "tombstone", "order_id": tag(retired.order_id),
+            "slot": index, "kind": "tombstone", "order_id": order_tag(retired.order_id),
             "owner": tag(retired.owner), "retired_generation": retired.retired_generation,
         })),
     }
@@ -163,7 +178,7 @@ fn reservation(bytes: &[u8]) -> Option<Value> {
     Some(json!({
         "kind": "reservation",
         "state": value.state,
-        "order_id": tag(value.order_id),
+        "order_id": order_tag(value.order_id),
         "owner": tag(value.owner),
         "side": side(value.side),
         "order_kind": value.order_kind,
@@ -277,6 +292,15 @@ mod tests {
         let value = by_role("general-market.hoard-token", &bytes);
         assert_eq!(value["kind"], "token");
         assert_eq!(value["amount"], 49);
+    }
+
+    #[test]
+    fn an_order_id_reads_as_its_canonical_rank() {
+        assert_eq!(
+            order_tag(clutch_solana_layout::canonical_order_id(3)),
+            "#3"
+        );
+        assert!(order_tag(Hash32::from_bytes([9_u8; 32])).starts_with("non-canonical"));
     }
 
     #[test]
