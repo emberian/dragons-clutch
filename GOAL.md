@@ -35,7 +35,13 @@ ready in degg-research.
 ## only for pinning a live mainnet identity — one const, later). Stop
 ## per-wave reseals: ONE batched cycle-G reseal when the swarm lands.
 
-## The swarm (all Opus, parallel worktrees, territory-partitioned)
+## The swarm (all Opus, SHARED MAIN TREE — no worktrees per ember. Rules:
+## commit only named files, small and often; retry on index lock; never
+## stash/add -A/branch-switch; serialize full-suite runs behind the
+## mkdir-spinlock /tmp/claude-501/suite.lock; hbox (swarm-build, co-tenant
+## with codex) and persvati (nice, shared) absorb heavy overflow runs.
+## Concurrency set 1: A, C, E, F (disjoint territories). Set 2 on slots:
+## D, G, I, J. Chained after A: B, H.)
 
 A. PARTIAL FILLS (reservation v2 + seam generalization + campaigns) — then
    chains: B. VIRTUALPOT + rounding-pot realization + Position close, and
