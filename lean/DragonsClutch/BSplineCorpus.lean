@@ -371,6 +371,29 @@ theorem corpus_matches_degreeThreeBoundary :
     uniformSmoothBasis? 0 4 3 3 4 = some refinementDegreeThreeBoundary := by
   decide
 
+/-! `BSpline.lean`'s header names two levels with the boundary explicit: the
+one-span `clampedDegree*` Bernstein weights, and the generic `refine*` columns.
+The two theorems below close the gap between them from the evaluator's side —
+on a two-anchor grid, where both clamped end effects overlap and every expanded
+interior knot is a repeat, the generic recurrence reproduces the Bernstein
+weights exactly. That is the case a `BasisFuns` implementation is most likely
+to get wrong by substituting an interior formula, and `clampedDegreeTwo_exact`
+/ `clampedDegreeThree_exact` are what it must agree with. -/
+
+/-- Single-pane degree two at the midpoint: `clampedDegreeTwo 4 2` is
+`(4,8,4)/16`, and the generic evaluator reaches `(16,32,16)/64`. -/
+theorem corpus_single_pane_is_bernstein_two :
+    uniformSmoothBasis? 0 4 2 2 2 =
+      some (RationalBasis.scale 4 (clampedDegreeTwo 4 2)) := by
+  decide
+
+/-- Single-pane degree three at the midpoint: `clampedDegreeThree 4 2` is
+`(8,24,24,8)/64`, the cubic Bernstein `(1,3,3,1)/8`. -/
+theorem corpus_single_pane_is_bernstein_three :
+    uniformSmoothBasis? 0 4 2 3 2 =
+      some (RationalBasis.scale 64 (clampedDegreeThree 4 2)) := by
+  decide
+
 /-- Both closed endpoints of a degree-three grid take the open-clamped branch
 rather than a degenerate interior evaluation, and the edge policy carries
 every exterior value onto them. -/

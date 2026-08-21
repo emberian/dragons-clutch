@@ -40,8 +40,21 @@ nothing.
 
 ## Cross-check against the hand-derived rows
 
-Five `decide` theorems in `BSplineCorpus.lean` check that the generic evaluator
-reproduces the hand-derived witness vectors it never saw:
+Seven `decide` theorems in `BSplineCorpus.lean` check that the generic
+evaluator reproduces vectors it never saw. Two of them close the gap between
+the two levels `BSpline.lean`'s header names — the one-span `clampedDegree*`
+Bernstein weights and the generic `refine*` columns — by requiring the
+recurrence to reproduce the Bernstein weights on a two-anchor grid, where both
+clamped end effects overlap and every expanded interior knot is a repeat. That
+is precisely the case a `BasisFuns` implementation is most likely to get wrong
+by substituting an interior formula:
+
+| theorem | row |
+| --- | --- |
+| `corpus_single_pane_is_bernstein_two` | equals `4 ×` `clampedDegreeTwo 4 2`, the quadratic `(1,2,1)/4` |
+| `corpus_single_pane_is_bernstein_three` | equals `64 ×` `clampedDegreeThree 4 2`, the cubic `(1,3,3,1)/8` |
+
+The other five check it against the hand-derived witness vectors:
 
 | theorem | row |
 | --- | --- |
