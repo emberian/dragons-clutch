@@ -72,11 +72,11 @@
 //! else, in the same per-order sequence.
 
 use crate::relation_v1::{
-    mask_bit, scaled_reservation, AllocationPolicyV1, AonPolicyV1, DigestFoldV1, EligibilityV1,
-    ErrorV1, FeeBaseV1, FrozenPolicyV1, LegRefV1, OrderV1, PairingSliceV1, PairingWitnessPolicyV1,
-    PortfolioLotPolicyV1, RelationDomainV1, ResidualSettlementV1, RoundingBoundaryV1,
-    ScorePolicyV1, ScoreV1, SelfCrossPolicyV1, SummaryV1, TransferPhaseV1, MAX_OUTCOMES,
-    MAX_OWNER_SLOTS, MAX_SLICES,
+    mask_bit, scaled_reservation, AllocationPolicyV1, AonPolicyV1, BasisDescriptorV1, DigestFoldV1,
+    EligibilityV1, ErrorV1, FeeBaseV1, FrozenPolicyV1, LegRefV1, OrderV1, PairingSliceV1,
+    PairingWitnessPolicyV1, PortfolioLotPolicyV1, RelationDomainV1, ResidualSettlementV1,
+    RoundingBoundaryV1, ScorePolicyV1, ScoreV1, SelfCrossPolicyV1, SummaryV1, TransferPhaseV1,
+    MAX_OUTCOMES, MAX_OWNER_SLOTS, MAX_SLICES,
 };
 use crate::{seeded_rank, DustPolicy, PartialPolicy, Side, MAX_ORDERS};
 
@@ -561,6 +561,23 @@ impl ClearWorkV1 {
         candidate: &StreamCandidateV1,
         strict_claims: bool,
     ) -> Result<FeedStatusV1, FeedErrorV1> {
+        self.begin_with_basis(domain, candidate, strict_claims, BasisDescriptorV1::UNGATED)
+    }
+
+    /// [`Self::begin`], with the market's payout basis bound so that V1b
+    /// (moment-cone admission) can run.
+    ///
+    /// Mirrors [`crate::relation_v1::verify_with_basis`].  The stage is a pure
+    /// function of `(domain, candidate.prices, basis)`, so it is decided here
+    /// and latched; nothing about the basis enters the checkpoint state, and
+    /// `ClearWorkV1::ENCODED_BYTES` is unchanged.
+    pub fn begin_with_basis(
+        &mut self,
+        domain: &RelationDomainV1,
+        candidate: &StreamCandidateV1,
+        strict_claims: bool,
+        basis: BasisDescriptorV1,
+    ) -> Result<FeedStatusV1, FeedErrorV1> {
         self.reset();
         self.check_claims = strict_claims;
         self.domain = *domain;
@@ -582,6 +599,14 @@ impl ClearWorkV1 {
         // book-length mismatch first, and the length is a feed-end fact).
         if let Err(error) = crate::relation_v1::validate_prices(domain, &candidate.prices) {
             self.latch(pos(M05_PRICES, 0, 0, 0, 0), error);
+        }
+        // M05 minor 1: moment-cone admission, after the simplex checks in the
+        // batch's own order (a candidate failing both reports the simplex
+        // refusal in both verifiers).
+        if let Err(error) =
+            crate::relation_v1::validate_price_moment_cone(domain, basis, &candidate.prices)
+        {
+            self.latch(pos(M05_PRICES, 1, 0, 0, 0), error);
         }
         // M07 head: a mask under a policy that has no mask.
         let witnessed = domain.policy.aon == AonPolicyV1::WitnessedHonoredMask;
@@ -3149,8 +3174,14 @@ impl ClearWorkV1 {
 /// Every registered order-flag bit; a decoded flag byte may carry no others.
 const FLAG_ALL: u8 = FLAG_ACTIVE | FLAG_FORCED | FLAG_HONORED | FLAG_POOL | FLAG_STRICT_FULL;
 
-/// The registered code of the one payload-bearing refusal.
+/// The registered code of the payload-bearing pairing refusal.
 const ERROR_CODE_PAIRING_INFEASIBLE: u8 = 30;
+
+/// The registered code of the moment-cone refusal.  Codes are append-only, so
+/// this sits at the end of the table rather than beside the other V1 codes;
+/// renumbering would move every checkpoint encoding.  It carries the offending
+/// claim in the `outcome` lane and leaves `owner` zero.
+const ERROR_CODE_PRICE_OUTSIDE_MOMENT_CONE: u8 = 47;
 
 // --- primitive writers -------------------------------------------------------
 
@@ -3234,6 +3265,7 @@ fn put_error(out: &mut [u8], at: &mut usize, error: ErrorV1) {
     put_u8(out, at, error_code(error));
     let (outcome, owner) = match error {
         ErrorV1::PairingInfeasible { outcome, owner } => (outcome, owner),
+        ErrorV1::PriceOutsideMomentCone { outcome } => (outcome, 0),
         _ => (0, 0),
     };
     put_u8(out, at, outcome);
@@ -3458,7 +3490,14 @@ fn get_error(input: &[u8], at: &mut usize) -> Result<ErrorV1, CodecFaultV1> {
     let code = get_u8(input, at);
     let outcome = get_u8(input, at);
     let owner = get_u16(input, at);
-    if code != ERROR_CODE_PAIRING_INFEASIBLE && (outcome != 0 || owner != 0) {
+    // Each code owns exactly the payload lanes its variant carries; every
+    // other lane must be canonical zero.
+    let lanes_canonical = match code {
+        ERROR_CODE_PAIRING_INFEASIBLE => true,
+        ERROR_CODE_PRICE_OUTSIDE_MOMENT_CONE => owner == 0,
+        _ => outcome == 0 && owner == 0,
+    };
+    if !lanes_canonical {
         return Err(CodecFaultV1::InvalidErrorCode);
     }
     Ok(match code {
@@ -3509,6 +3548,7 @@ fn get_error(input: &[u8], at: &mut usize) -> Result<ErrorV1, CodecFaultV1> {
         44 => ErrorV1::ArithmeticOverflow,
         45 => ErrorV1::NoValidCandidate,
         46 => ErrorV1::SearchBudgetExceeded,
+        ERROR_CODE_PRICE_OUTSIDE_MOMENT_CONE => ErrorV1::PriceOutsideMomentCone { outcome },
         _ => return Err(CodecFaultV1::InvalidErrorCode),
     })
 }
@@ -3546,6 +3586,7 @@ fn error_code(error: ErrorV1) -> u8 {
         ErrorV1::ChurnNotCanonical => 28,
         ErrorV1::InfeasibleVirtualLeg => 29,
         ErrorV1::PairingInfeasible { .. } => ERROR_CODE_PAIRING_INFEASIBLE,
+        ErrorV1::PriceOutsideMomentCone { .. } => ERROR_CODE_PRICE_OUTSIDE_MOMENT_CONE,
         ErrorV1::SliceNotExecutable => 31,
         ErrorV1::SliceSumMismatch => 32,
         ErrorV1::PairingWitnessNotAdmitted => 33,

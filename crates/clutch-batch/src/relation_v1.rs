@@ -1249,6 +1249,231 @@ pub fn validate_prices(
     Ok(())
 }
 
+/// The frozen degree of a market's payout basis, as the price plane needs it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BasisDegreeV1 {
+    /// Cell indicators.
+    Zero,
+    /// Hats.
+    One,
+    /// Quadratics.
+    Two,
+    /// Cubics.
+    Three,
+}
+
+impl BasisDegreeV1 {
+    /// Total map from a stored `basis_degree` byte; `None` above the largest
+    /// implemented degree, which basis admission (`clutch-bspline`) refuses at
+    /// its own seam.
+    pub const fn from_u8(degree: u8) -> Option<Self> {
+        match degree {
+            0 => Some(Self::Zero),
+            1 => Some(Self::One),
+            2 => Some(Self::Two),
+            3 => Some(Self::Three),
+            _ => None,
+        }
+    }
+
+    const fn as_u8(self) -> u8 {
+        match self {
+            Self::Zero => 0,
+            Self::One => 1,
+            Self::Two => 2,
+            Self::Three => 3,
+        }
+    }
+}
+
+/// The basis geometry the price plane needs, supplied by the caller.
+///
+/// A market's payout basis is admitted in exactly one frozen representation
+/// (`crates/clutch-bspline`): open-clamped knots — each endpoint repeated
+/// `degree + 1` times, each interior breakpoint once — and, mandatory at degree
+/// at least two, uniform power-of-two spacing.  So `outcome_count = K - 1 +
+/// degree` recovers the breakpoint count `K`, and the knot *positions* are an
+/// affine reparameterization of `0 .. K-1`.  Measures push forward along an
+/// affine reparameterization, so the basis moment cone depends on the degree
+/// and the outcome count and on **nothing else**: not the knot values, not the
+/// spacing exponent, not the payout denominator.  That is why binding a basis
+/// here costs one enum and not a knot vector.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BasisDescriptorV1 {
+    /// No basis bound.  The moment-cone stage is the constant true, so the
+    /// verdict is exactly the one this relation produced before the stage
+    /// existed.  A caller that cannot yet name the market's degree passes this.
+    Ungated,
+    /// The market's frozen open-clamped basis of this degree.
+    ClampedUniform(BasisDegreeV1),
+}
+
+impl BasisDescriptorV1 {
+    /// The descriptor whose moment-cone stage is the constant true.
+    pub const UNGATED: Self = Self::Ungated;
+
+    const fn gated_degree(self) -> u8 {
+        match self {
+            Self::Ungated => 0,
+            Self::ClampedUniform(degree) => degree.as_u8(),
+        }
+    }
+}
+
+/// `max_x N_j(x)` for the open-clamped uniform basis, as an exact rational
+/// `(num, den)` upper bound in lowest terms with `num/den >= max N_j`.
+///
+/// Derivation and the exact maxima are `DUAL_IS_THE_MEASURE.md` §7.6.5.  At
+/// degree two every maximum is rational and this is exact.  At degree three the
+/// two positions next to a clamped end have irrational maxima
+/// `(18 + 8*sqrt 2)/49` and `(33 + 18*sqrt 2)/98`; `3/5` bounds both, by
+/// `57 >= 40*sqrt 2` (`3249 >= 3200`) and `129 >= 90*sqrt 2`
+/// (`16641 >= 16200`).  A larger bound is always sound — it only weakens the
+/// certificate — and is never larger than the simplex bound `1`.
+const fn claim_ceiling(degree: u8, outcomes: usize, claim: usize) -> (u64, u64) {
+    if claim == 0 || claim + 1 == outcomes {
+        // Open-clamped end claims attain 1: no condition beyond V1.
+        return (1, 1);
+    }
+    match degree {
+        2 => {
+            if outcomes == 3 {
+                (1, 2)
+            } else if claim == 1 || claim + 2 == outcomes {
+                (2, 3)
+            } else {
+                (3, 4)
+            }
+        }
+        _ => {
+            if outcomes == 4 {
+                (4, 9)
+            } else if outcomes == 5 && claim == 2 {
+                (1, 2)
+            } else if claim <= 2 || claim + 3 >= outcomes {
+                (3, 5)
+            } else {
+                (2, 3)
+            }
+        }
+    }
+}
+
+/// The butterfly weight `k` with `k*(N_{j-1} + N_{j+1}) - N_j >= 0` everywhere,
+/// as an exact rational `(num, den)` upper bound of
+/// `sup_x N_j(x)/(N_{j-1}(x) + N_{j+1}(x))`.
+///
+/// `None` where no finite weight exists — at degree at most one a hat attains
+/// `1` where both neighbours vanish, so the butterfly family is empty and this
+/// stage collapses to V1 (`DUAL_IS_THE_MEASURE.md` §7.6.5, Theorem 7.6.9(2)).
+const fn butterfly_weight(degree: u8, outcomes: usize, claim: usize) -> Option<(u64, u64)> {
+    if claim == 0 || claim + 1 == outcomes {
+        return None;
+    }
+    match degree {
+        2 => Some(if outcomes == 3 {
+            (1, 1)
+        } else if claim == 1 || claim + 2 == outcomes {
+            (2, 1)
+        } else {
+            (3, 1)
+        }),
+        _ => Some(if outcomes == 4 {
+            (7, 8)
+        } else if claim == 1 || claim + 2 == outcomes {
+            (8, 5)
+        } else if claim == 2 || claim + 3 == outcomes {
+            (3, 2)
+        } else {
+            (2, 1)
+        }),
+    }
+}
+
+/// V1b: moment-cone admission of the candidate price vector.
+///
+/// V1 (simplex membership) is exactly the no-static-arbitrage condition on the
+/// tradable span at degrees zero and one, and **strictly weaker** than it above
+/// (`DUAL_IS_THE_MEASURE.md` §7.4): at degree two an interior claim peaks at
+/// `3/4`, so `S*e_j` passes V1 while no probability measure has it as a moment
+/// vector, and the split-and-sell position against it is executable in the
+/// admitted order language.  This stage refuses such a candidate.
+///
+/// It is a **certified-refusal** gate, not a decision procedure: it checks a
+/// finite family of exact necessary conditions, each one the no-arbitrage
+/// inequality of an explicit portfolio whose payoff is nonnegative at every
+/// resolved value.  Every refusal therefore exhibits an executable arbitrage.
+/// The converse does not hold above the single-pane grids: the moment cone has
+/// a curved boundary (§7.6.4), so no finite family of linear price inequalities
+/// decides membership, and prices outside the cone that violate no member of
+/// the family still pass.  §7.6.7 names that residual.
+///
+/// The three families, all in exact integers:
+///
+/// * **ceiling** (`a*1 - b*e_j`: `a` complete sets short `b` units of claim
+///   `j`) — a claim may not cost more than the most it can ever pay;
+/// * **butterfly** (`k*e_{j-1} - e_j + k*e_{j+1}`) — the neighbour spread has a
+///   nonnegative payoff, so it may not be priced negative;
+/// * **single-pane Hankel quadrics**, on the shortest grids
+///   (`outcome_count == degree + 1`), where the basis is the Bernstein basis of
+///   one span and these conditions are *exactly* moment-cone membership.
+///
+/// Assumes V1 already passed: prices are nonnegative and sum to
+/// `domain.price_scale`.
+pub fn validate_price_moment_cone(
+    domain: &RelationDomainV1,
+    basis: BasisDescriptorV1,
+    prices: &[u64; MAX_OUTCOMES],
+) -> Result<(), ErrorV1> {
+    let degree = basis.gated_degree();
+    if degree <= 1 {
+        return Ok(());
+    }
+    let outcomes = domain.outcomes();
+    let scale = domain.price_scale as u128;
+    let mut claim = 1usize;
+    while claim + 1 < outcomes {
+        let price = prices[claim] as u128;
+        let (ceiling_num, ceiling_den) = claim_ceiling(degree, outcomes, claim);
+        if price * (ceiling_den as u128) > scale * (ceiling_num as u128) {
+            return Err(ErrorV1::PriceOutsideMomentCone {
+                outcome: claim as u8,
+            });
+        }
+        if let Some((weight_num, weight_den)) = butterfly_weight(degree, outcomes, claim) {
+            let wings = (prices[claim - 1] as u128) + (prices[claim + 1] as u128);
+            if price * (weight_den as u128) > wings * (weight_num as u128) {
+                return Err(ErrorV1::PriceOutsideMomentCone {
+                    outcome: claim as u8,
+                });
+            }
+        }
+        claim += 1;
+    }
+    if outcomes == degree as usize + 1 {
+        // One span: the basis is the Bernstein basis and the Hausdorff Hankel
+        // conditions are exactly moment-cone membership (§7.6.3, Corollary
+        // 7.6.6).
+        let p0 = prices[0] as u128;
+        let p1 = prices[1] as u128;
+        let p2 = prices[2] as u128;
+        if degree == 2 {
+            if p1 * p1 > 4 * p0 * p2 {
+                return Err(ErrorV1::PriceOutsideMomentCone { outcome: 1 });
+            }
+        } else {
+            let p3 = prices[3] as u128;
+            if p1 * p1 > 3 * p0 * p2 {
+                return Err(ErrorV1::PriceOutsideMomentCone { outcome: 1 });
+            }
+            if p2 * p2 > 3 * p1 * p3 {
+                return Err(ErrorV1::PriceOutsideMomentCone { outcome: 2 });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// V2: classify one order exactly, with no division and no rounding.
 pub fn classify_order(
     domain: &RelationDomainV1,
@@ -1566,6 +1791,18 @@ pub enum ErrorV1 {
     SimplexSumMismatch,
     /// A price or limit is above the price scale.
     PriceOutOfRange,
+    /// The price vector prices a nonnegative-payoff portfolio negatively: it is
+    /// outside the payout basis's moment cone, so no probability measure has it
+    /// as a moment vector and the named claim's ceiling or butterfly
+    /// certificate is an executable arbitrage.  Only reachable when a caller
+    /// binds a degree-two or degree-three basis descriptor.
+    ///
+    /// Its wire code is allocated at the end of the code table, not at this
+    /// declaration position: codes are append-only.
+    PriceOutsideMomentCone {
+        /// The claim whose certificate the price vector violates.
+        outcome: u8,
+    },
     // V2
     /// An ineligible order carries a nonzero fill.
     IneligibleFill,
@@ -2907,7 +3144,32 @@ pub fn verify(
     candidate: &CandidateV1,
     pairing: Option<&PairingWitnessV1>,
 ) -> Result<SummaryV1, ErrorV1> {
-    verify_inner(domain, book, candidate, pairing, true)
+    verify_inner(
+        domain,
+        book,
+        candidate,
+        pairing,
+        true,
+        BasisDescriptorV1::UNGATED,
+    )
+}
+
+/// [`verify`], with the market's payout basis bound so that V1b (moment-cone
+/// admission, [`validate_price_moment_cone`]) can run.
+///
+/// `verify(..) == verify_with_basis(.., BasisDescriptorV1::UNGATED)` and
+/// [`BasisDescriptorV1::ClampedUniform`] at degree zero or one is the same
+/// constant-true stage, so binding a basis changes a verdict only at degrees
+/// two and three, and only for a price vector that carries an executable
+/// arbitrage.
+pub fn verify_with_basis(
+    domain: &RelationDomainV1,
+    book: &BookV1,
+    candidate: &CandidateV1,
+    pairing: Option<&PairingWitnessV1>,
+    basis: BasisDescriptorV1,
+) -> Result<SummaryV1, ErrorV1> {
+    verify_inner(domain, book, candidate, pairing, true, basis)
 }
 
 /// Run every stage of [`verify`] except the V9 comparison of the candidate's
@@ -2924,7 +3186,25 @@ pub fn verify_ignoring_claimed_aggregates(
     candidate: &CandidateV1,
     pairing: Option<&PairingWitnessV1>,
 ) -> Result<SummaryV1, ErrorV1> {
-    verify_inner(domain, book, candidate, pairing, false)
+    verify_inner(
+        domain,
+        book,
+        candidate,
+        pairing,
+        false,
+        BasisDescriptorV1::UNGATED,
+    )
+}
+
+/// [`verify_ignoring_claimed_aggregates`] with the market's payout basis bound.
+pub fn verify_ignoring_claimed_aggregates_with_basis(
+    domain: &RelationDomainV1,
+    book: &BookV1,
+    candidate: &CandidateV1,
+    pairing: Option<&PairingWitnessV1>,
+    basis: BasisDescriptorV1,
+) -> Result<SummaryV1, ErrorV1> {
+    verify_inner(domain, book, candidate, pairing, false, basis)
 }
 
 /// Check that a submitted decomposition is a complete executable pairing of the
@@ -2951,6 +3231,7 @@ fn verify_inner(
     candidate: &CandidateV1,
     pairing: Option<&PairingWitnessV1>,
     check_claims: bool,
+    basis: BasisDescriptorV1,
 ) -> Result<SummaryV1, ErrorV1> {
     // V0
     let mut normalized = NormalizedBookV1::EMPTY;
@@ -2960,6 +3241,8 @@ fn verify_inner(
     }
     // V1
     validate_prices(domain, &candidate.prices)?;
+    // V1b (constant true unless the caller bound a degree-two or -three basis)
+    validate_price_moment_cone(domain, basis, &candidate.prices)?;
     // V2
     let classes = classify_all(domain, &normalized, &candidate.prices)?;
     validate_witness_fills(domain, &normalized, &classes, candidate)?;
@@ -3105,7 +3388,17 @@ pub fn canonical_candidate(
             Some(canonical_pairing(domain, book, &candidate)?)
         }
     };
-    let summary = verify_inner(domain, book, &candidate, pairing.as_ref(), false)?;
+    // The constructor takes the price vector as an input coordinate, so it does
+    // not own the price plane: it derives the candidate at whatever `(p, c)` it
+    // was handed and leaves V1b to the verifier the caller runs.
+    let summary = verify_inner(
+        domain,
+        book,
+        &candidate,
+        pairing.as_ref(),
+        false,
+        BasisDescriptorV1::UNGATED,
+    )?;
     candidate.claimed_score = summary.score;
     candidate.canonical_candidate_digest = summary.candidate_digest;
     verify(domain, book, &candidate, pairing.as_ref())?;
@@ -3671,3 +3964,7 @@ mod tests;
 #[cfg(test)]
 #[path = "relation_v1_fee_tests.rs"]
 mod fee_tests;
+
+#[cfg(test)]
+#[path = "relation_v1_moment_cone_tests.rs"]
+mod moment_cone_tests;

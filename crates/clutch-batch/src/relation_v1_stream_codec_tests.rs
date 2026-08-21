@@ -674,12 +674,13 @@ fn control_field_sweeps_refuse_with_typed_faults() {
             label,
         );
     }
-    // The latch-error registry: 47 registered refusals.
+    // The latch-error registry: 48 registered refusals, the last of them V1b's
+    // `PriceOutsideMomentCone` at the append-only code 47.
     sweep(
         &mut target,
         &mut active_bytes,
         off::LATCH_ERROR,
-        &|v| v < 47,
+        &|v| v < 48,
         CodecFaultV1::InvalidErrorCode,
         "latch_error code",
     );
@@ -691,7 +692,7 @@ fn control_field_sweeps_refuse_with_typed_faults() {
             target.decode_into(&active_bytes),
             Err(CodecFaultV1::InvalidErrorCode)
         );
-        // The same payload under the one payload-bearing code decodes.
+        // The same payload under either payload-bearing code decodes.
         let code = active_bytes[off::LATCH_ERROR];
         active_bytes[off::LATCH_ERROR] = 30;
         target.decode_into(&active_bytes).unwrap();
@@ -702,6 +703,21 @@ fn control_field_sweeps_refuse_with_typed_faults() {
                 owner: 0
             }
         );
+        active_bytes[off::LATCH_ERROR] = 47;
+        target.decode_into(&active_bytes).unwrap();
+        assert_eq!(
+            target.latch_error,
+            ErrorV1::PriceOutsideMomentCone { outcome: 3 }
+        );
+        // V1b's refusal owns the outcome lane only: an owner behind it is
+        // still non-canonical.
+        let owner_lane = active_bytes[off::LATCH_ERROR + 2];
+        active_bytes[off::LATCH_ERROR + 2] = 1;
+        assert_eq!(
+            target.decode_into(&active_bytes),
+            Err(CodecFaultV1::InvalidErrorCode)
+        );
+        active_bytes[off::LATCH_ERROR + 2] = owner_lane;
         active_bytes[off::LATCH_ERROR] = code;
         active_bytes[off::LATCH_ERROR + 1] = original;
     }
