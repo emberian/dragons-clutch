@@ -86,6 +86,28 @@ J. SMALL-FIX BATCH (stale blocker row, mock path-sensitivity, queued
 
 ## Done log (2026-08-19 session)
 
+- B POT REALIZATION LANDED: the rounding pot funds from the payers'
+  round-up excess + payees' round-down shortfall (relation :2482-2519
+  cited), drains to exactly zero at the completing slice, walks A/B with
+  atom-exact numbers, 5 mutants red; Position close (tag 69) + grief
+  rider wired; NEW red fixture (multi-order-per-owner inexact refuses
+  before minting); VirtualPot HONESTLY NOT RETIRED — re-ranked as a
+  seam-plane MINT join (virtual legs create/destroy claims = Hoard/supply
+  territory). E KEEPER LANDED: full permissionless lifecycle driven by a
+  fresh process (24 actions + 1 owner-signed), restart-after-SIGKILL
+  falsifier PASS; HEADLINE: the sealed [12,12,8] fold plan CANNOT BE SENT
+  — 6 folds/packet is the real wire limit, and the corrected 2-tx plan
+  BEATS the sealed 3-tx plan; 8 defects only the real bank could show
+  (livelock, double-keeper); W1 creation rows don't price the ledgered
+  shape a keeper must send (ledgered InitEpoch died at its own row's
+  limit) — cycle-G profile item. PRICE-PLANE GATE LANDED IN THE RELATION:
+  the moment-cone condition derived (doc 7.6, exact integers, no finite
+  linear family suffices — sound refusal chosen), V1b in batch+stream
+  with the discriminating pair green, Lean certificates BOTH directions
+  incl. three tighter-mutant refutations; PROGRAM SEAM STILL OPEN (3
+  exact edits: EpochAccount basis_degree byte, general_epoch stores it,
+  clear_walk begins with basis) — the gate is OFF on-chain until wired.
+
 - J SMALL FIXES LANDED (4 commits: blocker row truthful at
   [FeeCarryAccount], 4 rustdoc links fixed + two new strict doc gates
   making 101, the macOS relocation-probe symlink amendment, the mock-ELF
