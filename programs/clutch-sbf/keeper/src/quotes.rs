@@ -39,15 +39,32 @@ pub const MAX_ADMITTED_RAW_CU: u64 = 1_120_000;
 /// `quote=UNQUOTED` and the observed CU is reported so a row can be derived.
 pub const UNQUOTED_CLOSE_LIMIT: u32 = 400_000;
 
+/// Compute allowance for one funding-ledger sibling, per sibling.
+///
+/// **Stated, not measured.**  Every W1 creation row was captured against a
+/// transaction that creates its machinery *without* the optional
+/// `GeneralFundingLedgerV1` sibling.  A keeper must create that sibling --
+/// an account made without one records no payer and can never be closed --
+/// so it is running a shape the profile has not priced.  Rather than spend a
+/// row it does not fit, such a route is reported UNQUOTED at the row's
+/// measurement plus this allowance per ledger, and the observed CU is logged
+/// so the missing row can be derived from a real bank.
+///
+/// The gap is not hypothetical: at the row's own selected limit of 60,000 the
+/// ledgered `InitEpoch` exhausted its meter at 59,850 on a real validator.
+pub const LEDGER_ALLOWANCE_CU: u32 = 60_000;
+
 /// One quoted route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Quote {
     /// The profile's route key, for the log line.
     pub route: &'static str,
-    /// `measured_cu` of that row, or `None` for an unquoted route.
+    /// `measured_cu` of that row, or `None` for a route with no row at all.
     pub measured_cu: Option<u32>,
     /// The compute-unit limit the keeper requests.
     pub limit_cu: u32,
+    /// Funding-ledger siblings this shape creates that the row did not.
+    pub ledgers: u32,
 }
 
 impl Quote {
@@ -58,13 +75,36 @@ impl Quote {
             route,
             measured_cu: None,
             limit_cu,
+            ledgers: 0,
         }
     }
 
-    /// Whether a W1 row backs this quote.
+    /// Whether a W1 row backs this quote *for the shape being sent*.
+    ///
+    /// A row plus an unmeasured ledger allowance is not a quoted route: the
+    /// number it produces is partly stated, and saying otherwise would put a
+    /// seal on an allowance nobody measured.
     #[must_use]
     pub const fn quoted(&self) -> bool {
-        self.measured_cu.is_some()
+        self.measured_cu.is_some() && self.ledgers == 0
+    }
+}
+
+/// The same route, with `ledgers` funding-ledger siblings added.
+///
+/// # Panics
+/// Panics when the allowance pushes the route past the transaction ceiling,
+/// which would be a shape no keeper may send at all.
+#[must_use]
+pub fn ledgered(base: Quote, ledgers: u32) -> Quote {
+    let measured = base.measured_cu.unwrap_or(base.limit_cu);
+    let padded = u64::from(measured) + u64::from(LEDGER_ALLOWANCE_CU) * u64::from(ledgers);
+    Quote {
+        route: base.route,
+        measured_cu: base.measured_cu,
+        limit_cu: selected_limit(padded)
+            .unwrap_or_else(|| panic!("{} with {ledgers} ledger(s) exceeds the ceiling", base.route)),
+        ledgers,
     }
 }
 
@@ -96,10 +136,16 @@ const fn row(route: &'static str, measured_cu: u32, limit_cu: u32) -> Quote {
         route,
         measured_cu: Some(measured_cu),
         limit_cu,
+        ledgers: 0,
     }
 }
 
 // --- general_epoch -------------------------------------------------------
+
+/// `init_epoch` -- measured on the UNLEDGERED shape; see [`ledgered`].
+pub const INIT_EPOCH: Quote = row("init_epoch", 42_743, 60_000);
+/// `InitOrderPage` has no W1 row in the profile at all.
+pub const INIT_ORDER_PAGE: Quote = Quote::unquoted("general_epoch.init_order_page", 150_000);
 
 /// `freeze_epoch_1page_4orders`.
 pub const FREEZE_EPOCH_1PAGE: Quote = row("freeze_epoch_1page_4orders", 233_554, 300_000);
@@ -246,6 +292,7 @@ pub fn fold_batch(n: u8) -> Quote {
                 route: "fold_batch_measured",
                 measured_cu: Some(measured),
                 limit_cu: limit,
+                ledgers: 0,
             };
         }
     }
@@ -320,6 +367,20 @@ mod tests {
     fn the_headroom_bound_is_the_profiles() {
         assert_eq!(selected_limit(MAX_ADMITTED_RAW_CU), Some(1_400_000));
         assert_eq!(selected_limit(MAX_ADMITTED_RAW_CU + 1), None);
+    }
+
+    #[test]
+    fn a_ledgered_creation_is_never_reported_as_a_quoted_route() {
+        // The row's own limit was not enough on a real bank: at 60,000 the
+        // ledgered InitEpoch exhausted its meter at 59,850.
+        let bare = INIT_EPOCH;
+        assert!(bare.quoted());
+        assert_eq!(bare.limit_cu, 60_000);
+        let with_ledger = ledgered(INIT_EPOCH, 1);
+        assert!(!with_ledger.quoted(), "an allowance is not a measurement");
+        assert!(with_ledger.limit_cu > 59_850);
+        assert_eq!(with_ledger.measured_cu, Some(42_743), "the row is still named");
+        assert!(ledgered(INIT_EPOCH, 2).limit_cu > with_ledger.limit_cu);
     }
 
     #[test]

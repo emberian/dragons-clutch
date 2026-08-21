@@ -199,24 +199,7 @@ fn run(flags: &Flags) -> Res<()> {
     let exit_when_idle = flags.present("exit-when-idle");
     let exit_when_blocked = flags.present("exit-when-blocked");
 
-    if !rpc.healthy() {
-        return Err("the loopback endpoint is not answering getHealth".to_string());
-    }
-    // A cranker that cannot pay rent is not a cranker.  The floor is asked
-    // for explicitly (`--fund`) so a keeper never quietly drains a faucet.
-    if let Some(floor) = flags.optional("fund") {
-        let floor: u64 = floor
-            .parse()
-            .map_err(|_| "--fund must be a lamport amount".to_string())?;
-        let held = rpc.lamports(&keeper.payer_address())?;
-        if held < floor {
-            rpc.airdrop(&keeper.payer_address(), floor - held)?;
-            println!(
-                "keeper funded payer={} from={held} to={floor}",
-                keeper.payer_address()
-            );
-        }
-    }
+    ensure_ready(&rpc, &keeper, flags)?;
 
     println!(
         "keeper start payer={} program={} market={} epoch_index={} epoch={} open={}",
@@ -231,6 +214,8 @@ fn run(flags: &Flags) -> Res<()> {
     let mut taken = 0_u64;
     let mut repeats = 0_u32;
     let mut previous = String::new();
+    let mut idle_reason = String::new();
+    let mut blocked_reason = String::new();
 
     // The one action that is not part of the poll ladder: opening the epoch
     // and its page, which only happens when the operator asked for it.
@@ -260,18 +245,27 @@ fn run(flags: &Flags) -> Res<()> {
                 return Ok(());
             }
             Step::Blocked { reason } => {
-                println!("keeper blocked actions={taken} reason=\"{reason}\"");
+                if reason != blocked_reason {
+                    println!("keeper blocked actions={taken} reason=\"{reason}\"");
+                    blocked_reason = reason;
+                }
                 if exit_when_blocked {
                     return Ok(());
                 }
                 thread::sleep(poll);
             }
             Step::Idle { reason, wait_until } => {
-                println!(
-                    "keeper idle slot={} actions={taken} wait_until={} reason=\"{reason}\"",
-                    rpc.slot()?,
-                    wait_until.map_or_else(|| "-".to_string(), |slot| slot.to_string())
-                );
+                // A keeper waiting out a thousand-slot candidate window would
+                // otherwise print a line every poll for several minutes; the
+                // reason is what carries information, so only a change does.
+                if reason != idle_reason {
+                    println!(
+                        "keeper idle slot={} actions={taken} wait_until={} reason=\"{reason}\"",
+                        rpc.slot()?,
+                        wait_until.map_or_else(|| "-".to_string(), |slot| slot.to_string())
+                    );
+                    idle_reason = reason;
+                }
                 if exit_when_idle {
                     return Ok(());
                 }
@@ -299,6 +293,45 @@ fn run(flags: &Flags) -> Res<()> {
     }
 }
 
+/// The program's own log lines, folded into one diagnosable string.
+fn program_logs(rpc: &Rpc, signature: &str) -> String {
+    let lines = rpc.logs(signature);
+    if lines.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n  program log:");
+    for line in lines {
+        out.push_str("\n    ");
+        out.push_str(&line);
+    }
+    out
+}
+
+/// Check the endpoint answers, and top the payer up when asked to.
+///
+/// A cranker that cannot pay rent is not a cranker.  The floor is asked for
+/// explicitly (`--fund`) so a keeper never quietly drains a faucet.
+fn ensure_ready(rpc: &Rpc, keeper: &Keeper, flags: &Flags) -> Res<()> {
+    if !rpc.healthy() {
+        return Err("the loopback endpoint is not answering getHealth".to_string());
+    }
+    let Some(floor) = flags.optional("fund") else {
+        return Ok(());
+    };
+    let floor: u64 = floor
+        .parse()
+        .map_err(|_| "--fund must be a lamport amount".to_string())?;
+    let held = rpc.lamports(&keeper.payer_address())?;
+    if held < floor {
+        rpc.airdrop(&keeper.payer_address(), floor - held)?;
+        println!(
+            "keeper funded payer={} from={held} to={floor}",
+            keeper.payer_address()
+        );
+    }
+    Ok(())
+}
+
 /// Submit one action, classify its outcome, and print the one honest line.
 fn take(rpc: &Rpc, act: &crank::Act) -> Res<()> {
     let confirmation = rpc.submit_and_confirm(&act.transaction)?;
@@ -318,19 +351,25 @@ fn take(rpc: &Rpc, act: &crank::Act) -> Res<()> {
             )
         } else {
             return Err(format!(
-                "{} ({}) refused with an unclassified code 0x{code:04x}: {}",
-                act.name, act.detail, confirmation.error
+                "{} ({}) refused with an unclassified code 0x{code:04x}: {}{}",
+                act.name,
+                act.detail,
+                confirmation.error,
+                program_logs(rpc, &confirmation.signature)
             ));
         }
     } else {
         return Err(format!(
-            "{} ({}) failed without a custom code: {}",
-            act.name, act.detail, confirmation.error
+            "{} ({}) failed without a custom code: {}{}",
+            act.name,
+            act.detail,
+            confirmation.error,
+            program_logs(rpc, &confirmation.signature)
         ));
     };
     println!(
         "slot={} action={} {} authority={} quote={} route={} limit_cu={} cu={} headroom_cu={} \
-         bytes={} result={}{} sig={}",
+         ledgers={} bytes={} result={}{} sig={}",
         confirmation.slot,
         act.name,
         act.detail,
@@ -344,6 +383,7 @@ fn take(rpc: &Rpc, act: &crank::Act) -> Res<()> {
         quote.limit_cu,
         charged.map_or_else(|| "-".to_string(), |used| used.to_string()),
         headroom.map_or_else(|| "-".to_string(), |value| value.to_string()),
+        quote.ledgers,
         act.transaction.len(),
         result,
         note,

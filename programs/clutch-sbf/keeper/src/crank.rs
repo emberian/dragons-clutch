@@ -700,16 +700,12 @@ impl Keeper {
                 data,
             )],
             heap: false,
-            limit: quotes::selected_limit(42_743).expect("the init_epoch row admits"),
+            limit: quotes::ledgered(quotes::INIT_EPOCH, 1).limit_cu,
         };
         self.act(
             "InitEpoch",
             format!("epoch_index={} freeze_deadline={deadline}", self.cfg.epoch_index),
-            Quote {
-                route: "init_epoch",
-                measured_cu: Some(42_743),
-                limit_cu: 60_000,
-            },
+            quotes::ledgered(quotes::INIT_EPOCH, 1),
             vec![ALREADY_INITIALIZED],
             true,
             &spec,
@@ -752,12 +748,12 @@ impl Keeper {
                 data,
             )],
             heap: false,
-            limit: 90_000,
+            limit: quotes::ledgered(quotes::INIT_ORDER_PAGE, 1).limit_cu,
         };
         self.act(
             "InitOrderPage",
             "page_index=0 page_count=1".to_string(),
-            Quote::unquoted("general_epoch.init_order_page", 90_000),
+            quotes::ledgered(quotes::INIT_ORDER_PAGE, 1),
             vec![ALREADY_INITIALIZED],
             true,
             &spec,
@@ -833,12 +829,12 @@ impl Keeper {
             readonly: vec![self.system_program, self.rent_sysvar],
             program,
             heap: false,
-            limit: quotes::INIT_CLEAR_WORK.limit_cu,
+            limit: quotes::ledgered(quotes::INIT_CLEAR_WORK, 1).limit_cu,
         };
         self.act(
             "InitClearWork+Grow",
             format!("candidate={}", short(candidate)),
-            quotes::INIT_CLEAR_WORK,
+            quotes::ledgered(quotes::INIT_CLEAR_WORK, 1),
             vec![ALREADY_INITIALIZED],
             true,
             &spec,
@@ -1180,12 +1176,12 @@ impl Keeper {
                 ),
             )],
             heap: true,
-            limit: quotes::FREEZE_ENTITLEMENT.limit_cu,
+            limit: quotes::ledgered(quotes::FREEZE_ENTITLEMENT, 1).limit_cu,
         };
         self.act(
             "FreezeEntitlement",
             format!("candidate={}", short(selected)),
-            quotes::FREEZE_ENTITLEMENT,
+            quotes::ledgered(quotes::FREEZE_ENTITLEMENT, 1),
             vec![ALREADY_INITIALIZED],
             true,
             &spec,
@@ -1200,6 +1196,14 @@ impl Keeper {
         epoch: &EpochAccount,
         selected: Hash32,
     ) -> Result<Option<Box<Act>>, String> {
+        if view.live.is_empty() {
+            // The frozen page set is gone, so there is no walk-rank index to
+            // resolve a slice's ends against.  A page can only close once
+            // every one of its live records' reservations is past ACTIVE,
+            // which is exactly the condition under which nothing remains to
+            // entitle or to consume.
+            return Ok(None);
+        }
         let feed_pda = self.deriver.candidate_feed(self.epoch_id, selected)?;
         let Some(feed_bytes) = self.rpc.account(&feed_pda.address)? else {
             // The selected feed is gone, which only happens after its close;
@@ -1229,6 +1233,18 @@ impl Keeper {
             let receipt_bytes = self.rpc.account(&receipt.address)?;
             match receipt_bytes {
                 None => {
+                    // A receipt's absence is not evidence that its slice is
+                    // due: the close DAG removes exhausted receipts while the
+                    // pot is still present, and re-entitling one of those
+                    // would mint an entitlement over an already-consumed
+                    // envelope.  The reservations are the authority — the
+                    // entitlement is exactly the ACTIVE to ENTITLED move.
+                    let (buy_end, sell_end) = pair_ends(view, &slices, index)?;
+                    if buy_end.state != Some(RESERVATION_STATE_ACTIVE)
+                        || sell_end.state != Some(RESERVATION_STATE_ACTIVE)
+                    {
+                        continue;
+                    }
                     return self
                         .entitle_slice(view, epoch, selected, &feed_pda, &record_pda, &coverage,
                                        &slices)
@@ -1316,11 +1332,15 @@ impl Keeper {
             readonly.push(terms_key);
         }
 
-        let quote = if portfolio {
+        let base = if portfolio {
             quotes::ENTITLE_SLICE_PAIR
         } else {
             quotes::ENTITLE_SLICE_SINGLE
         };
+        let quote = quotes::ledgered(
+            base,
+            u32::try_from(coverage.len()).map_err(|_| "impossible group size".to_string())?,
+        );
         let spec = TxSpec {
             writable_signers: vec![self.payer],
             readonly_signers: Vec::new(),
@@ -1691,18 +1711,23 @@ impl Keeper {
             if self.rpc.account(&page.address)?.is_some() {
                 continue;
             }
-            let owner_position = self.deriver.position(self.cfg.market, value.owner)?;
+            // The recipient is the reservation's stored `owner` **wallet**,
+            // not that owner's Position PDA: the placement actor funded the
+            // reservation's rent in the same transition that recorded it, so
+            // the close pays the exact wallet the program re-derives from the
+            // reservation's own bytes.
+            let recipient = value.owner.bytes();
             let spec = TxSpec {
                 writable_signers: vec![self.payer],
                 readonly_signers: Vec::new(),
-                writable: vec![reservation, owner_position.bytes, self.sink],
+                writable: vec![reservation, recipient, self.sink],
                 readonly: vec![epoch_key, page.bytes, self.rent_sysvar],
                 program: vec![(
                     vec![
                         epoch_key,
                         reservation,
                         page.bytes,
-                        owner_position.bytes,
+                        recipient,
                         self.sink,
                         self.rent_sysvar,
                     ],

@@ -325,6 +325,37 @@ impl Rpc {
         self.await_confirmation(&signature)
     }
 
+    /// The program's own log lines for one committed transaction.
+    ///
+    /// A bare `ProgramFailedToComplete` says nothing a caller can act on; the
+    /// program's messages say which check refused and at what cost, so a
+    /// keeper that stops carries them into its error.
+    #[must_use]
+    pub fn logs(&self, signature: &str) -> Vec<String> {
+        let Ok(result) = self.call(
+            "getTransaction",
+            &json!([signature, {
+                "encoding": "base64",
+                "commitment": "confirmed",
+                "maxSupportedTransactionVersion": 0
+            }]),
+        ) else {
+            return Vec::new();
+        };
+        result
+            .get("meta")
+            .and_then(|meta| meta.get("logMessages"))
+            .and_then(Value::as_array)
+            .map(|lines| {
+                lines
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn compute_units(&self, signature: &str) -> Option<u64> {
         let result = self
             .call(
