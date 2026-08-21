@@ -23,11 +23,36 @@ Assurance is deliberately last and is a phase, not an afterthought.
    already passes.
 4. **R2 Phase 0→2 on the calendar spine** (seeded from
    `r2-caps-rebase-trial`); E2 freeze on its evidence trigger; E3 held for
-   ember's go against the 12-gate table.
+   ember's go against the 12-gate table. The pre-cutover half is now written
+   up as [`R2_PHASE0_RUNBOOK.md`](../implementation/R2_PHASE0_RUNBOOK.md);
+   the rebase was re-measured clean against `a310df2` on 2026-08-21.
 5. **Housekeeping with teeth**: the stale `svm_run.txt` regeneration, the
    two rustdoc private-intra-doc warnings, CI adoption (register F8 — the
    manifest gates are the CI; wiring them into an Actions matrix is now
    cheap and the Pages workflow broke the no-workflows seal).
+   **Amended 2026-08-21 — the first two are not free-standing:**
+   * `svm_run.txt` is a same-ELF, same-path evidence seal. It regenerates
+     only at the canonical checkout, in the cycle that emits the manifest
+     (`sbf.token2022_program_test` runs the same script). The staleness is
+     now enumerated in `programs/clutch-sbf/svm-tests/README.md`, along with
+     the finding that the default profile's ELF identity matches no manifest
+     key pattern.
+   * "the two rustdoc warnings" is itself stale. The cycle-E manifest run of
+     `cargo_doc.clutch_sbf` captured **13** warnings, not two — 11
+     private-intra-doc links plus two unresolved links (`bpf`,
+     `ReservationAccount`) — across 12 doc sites in **9 files**: `lib.rs:70`,
+     `instructions/direct_selection_v3.rs:4` (three links),
+     `instructions/observe_resolve.rs:52`, `instructions/split.rs:54`,
+     `instructions/orders_batch.rs:16,552,1536`,
+     `instructions/orders_batch/entitlement.rs:48`,
+     `.../selection.rs:66`, `.../clear_walk.rs:21`,
+     `.../clear_work.rs:18,67`. **Every one of the nine is inside the sealed
+     109-file source closure** (`source-files.txt` lines 46, 56–60, 63, 68,
+     69), so a doc-comment byte forks the ELF identity (precedent: `9c371fe`,
+     `GOAL.md:980-984`). They ride a reseal wave — the natural one is the E4
+     merge's (runbook §1.5) — and until then `cargo_doc.clutch_sbf` cannot
+     take the `RUSTDOCFLAGS='-D warnings'` the three research-crate doc gates
+     already carry.
 
 ## Phase S — sophistication (new capability, still fee-less)
 
