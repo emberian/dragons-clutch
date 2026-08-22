@@ -445,6 +445,44 @@ It also greps every file the daemon is allowed to serve for an off-machine
 address. Even the SVG namespace is read off a node in the document rather than
 written as a URL literal, so that grep needs no exception.
 
+### Gate results
+
+Taken under the suite lock on 2026-08-21, at `f3628d0`.
+
+| gate | result |
+| --- | --- |
+| `run_operator_trade.sh` | **PASS** — 54 transactions, 54 accepted, 0 refused; 15 orders placed; 1 177 account reloads, every one decoded through the layout codecs; peak 429 459 CU at `friday-advance-pass-one`; all six conservation identities hold |
+| `run_operator_bench.sh` (M0, still green) | **PASS** — 44 of 44 steps resolved, 41 accepted, 3 refused with their exact codes, 118 reloads, both real-clock waits honoured, conservation epilogue green |
+| `run_operator_replay.sh` | **PASS** — 294 files byte-identical between the library and CLI plans, 44 transactions rebuilt identically, a corrupted byte goes red at exactly that file |
+| `cargo clippy --all-targets -- -D warnings`, `operatord` | **PASS** |
+| `operatord` unit tests | **PASS** — 38 |
+| no external reference in anything the bench serves | **PASS** — grep finds nothing |
+
+The scripted flow the trade gate drives, and what the bank did with it:
+
+- founding: `CreateMarket`, `Endow` x2 at 20 000 atoms, `Split` x2 at 4 000
+  sets, `InitEpoch`, `InitOrderPage`, then the automaton's eight opening
+  quotes;
+- funding posted as intents: `endow` 5 000, `split` 1 000;
+- three ticket orders — sell 500 at the $160 hat limit 5 800, buy 500 at $120
+  limit 400, buy 500 at $200 limit 200;
+- a painted belief `[200, 400, 1500, 3300, 2700, 1300, 400, 200]`, quantized
+  onto the ladder as `[200, 400, 1600, 3400, 2600, 1200, 400, 200]`, which
+  proposed four orders — the knots the person was already resting on were
+  skipped, and the $180 hat implied no crossing;
+- freeze at the deadline, then the clearing walk.
+
+The midpoint coordinate `[100, 300, 2100, 4700, 1900, 600, 200, 100]` was
+refused `StrictUnderfill`: the person's $160 ticket at 5 800 is priced out
+there, which leaves the automaton's 6 000 bid eligible, strict, and unpaired.
+The automaton's own belief `[0, 200, 2600, 6000, 1200, 0, 0, 0]` was taken —
+every one of its quotes is exactly marginal at it — and paired seven slices.
+
+Terminal, re-derived from observed bytes: position cash 36 000, locked backing
+9 000, pooled custody 45 000 against 45 000 endowed; 9 000 Eggs on every one of
+the eight outcomes across positions and reservations, and the SupplyLedger
+agreeing.
+
 ### Not built
 
 Multi-page epochs. A trade session opens one order page, so the book holds
