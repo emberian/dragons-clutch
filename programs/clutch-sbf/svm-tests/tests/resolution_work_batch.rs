@@ -18,11 +18,22 @@ use {
     solana_signer::Signer,
 };
 
-/// Measured batch sizes.  Twelve is the largest probe: at the measured
-/// ~82-96k CU per Fold instruction, twelve folds stay under the 1,120,000-CU
-/// raw admission bound implied by the 1,400,000-CU transaction ceiling with
-/// 5/4 headroom, while thirteen worst-case folds would not.
-const BATCH_SIZES: [u8; 4] = [2, 4, 8, 12];
+/// Measured batch sizes.  Twelve is the largest probe the *compute* bound
+/// admits: at the measured ~82-96k CU per Fold instruction, twelve folds stay
+/// under the 1,120,000-CU raw admission bound implied by the 1,400,000-CU
+/// transaction ceiling with 5/4 headroom, while thirteen worst-case folds
+/// would not.
+///
+/// Compute is not the binding constraint on the wire, though, and six is here
+/// because of the other one.  The keeper's `fold-wire-probe` measured the
+/// serialized message at every width and had a real validator's
+/// `sendTransaction` agree: six Fold instructions frame at 1,216 bytes and
+/// seven do not, at 1,347 against the 1,232-byte packet budget.  A
+/// twelve-fold message is 2,002 bytes and cannot be sent at all, so a batch
+/// row at width twelve prices a transaction no keeper can submit.  Six is
+/// measured so the largest *sendable* batch is a measured row rather than an
+/// interpolation between two widths that bracket it.
+const BATCH_SIZES: [u8; 5] = [2, 4, 6, 8, 12];
 
 fn singleton_folds(
     scenario: &Scenario,
