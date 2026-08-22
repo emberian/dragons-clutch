@@ -256,10 +256,22 @@ const singleTicket = (state) => {
       "Pick a hat, take a side, name a size and a limit. The limit must be an exact member of the frozen tick ladder — the program refuses anything else, and so does this form, with the same reason."
     )
   );
-  card.append(hatRow(state, (knot) => {
-    ticket.knot = knot;
-    repaint();
-  }));
+  /* Picking a hat also points the ticket at the automaton's resting quote
+   * there: the other side, at its limit. That is the order that crosses, so
+   * it is the useful default — and it is still only a default, sitting in
+   * editable fields, not a recommendation. */
+  card.append(
+    hatRow(state, (knot) => {
+      ticket.knot = knot;
+      const quote = restingAt(state, knot).find((order) => order.owner === "bot");
+      if (quote) {
+        ticket.side = quote.side === "buy" ? "sell" : "buy";
+        ticket.limit = quote.limit;
+        ticket.quantity = quote.quantity;
+      }
+      repaint();
+    })
+  );
 
   const form = el("div", "ticket-form");
   const sides = el("div", "controls");
