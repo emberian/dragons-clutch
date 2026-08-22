@@ -2,14 +2,14 @@
  "schema": "dragons-clutch/liveness-policy-evidence/v2",
  "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
  "capture_date": "2026-08-21",
- "runtime_ref": "846afabf0e87c2069d57e8800874115b71d72521",
+ "runtime_ref": "9cbc835532c1769132420e10e45a5e319457dfbf",
  "runtime_tree": "c50353b19b27c0a0f5611c3e6cae75291e8cd671",
- "evidence_ref": "846afabf0e87c2069d57e8800874115b71d72521",
+ "evidence_ref": "9cbc835532c1769132420e10e45a5e319457dfbf",
  "artifact": {
   "path": "research/liveness-policy-profile/artifacts/0d52c561909cedef/clutch_sbf.so",
   "sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
   "bytes": 2149672,
-  "source_ref": "846afabf0e87c2069d57e8800874115b71d72521",
+  "source_ref": "9cbc835532c1769132420e10e45a5e319457dfbf",
   "profile": "default-empty-registry"
  },
  "artifact_reproducibility": {
@@ -98,7 +98,7 @@
  },
  "capture": {
   "path": "research/liveness-policy-profile/captured-output.txt",
-  "sha256": "cafd219c1f738ddae6240c6fb1785ebc3efb4bcec7cf49fc4557f3320d4158f7"
+  "sha256": "221e8903845ec5d2a61c7b5f31c45ac6251642c844f7f07d8a592ca0b19aaead"
  },
  "source_blobs": {
   "research/liveness-policy-profile/Cargo.toml": "8574e7693c1a85cdb68bf608c5cf4dcde178123b",
@@ -561,10 +561,6 @@
   "token.outcome_mint": {
    "bytes": 82,
    "rent_lamports": 1461600
-  },
-  "artifact.maximum.stage": {
-   "bytes": 1792,
-   "rent_lamports": 13363200
   }
  },
  "policy_inputs": {
@@ -1072,7 +1068,7 @@
    ],
    "bank_conservation": "POSITIONS_BYTE_EQUAL_IMPLIED_ALLOCATION_TOTAL_CASH_AND_EGGS_EXACT",
    "reservation_archive": "ACTIVE_TO_ENTITLED_TO_CONSUMED_INITIAL_ENVELOPE_INTACT",
-   "test_result": "PASS_4_OF_4",
+   "test_result": "PASS_8_OF_8",
    "entitle_slice_inexact_cu": [
     192833
    ],

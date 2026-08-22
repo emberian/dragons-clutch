@@ -102,13 +102,19 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
     # envelope to the stored owner) and their archives close (tag 62), both
     # driven in the sealed cleared- and lapsed-epoch walks.  The row keeps its
     # STOP on the direct-plane instances, which have neither route.
-    ("order.reservation.v1", 570, 4_858_080, "PER_ORDER", None, S,
+    # Reservation schema generation v3 (version byte 4) at the 0d52c561… seal:
+    # the PartialFillLedger wave made the account the cumulative consumption
+    # ledger (entitled_units/consumed_units plus the reserved fee zone) and the
+    # VirtualMergeCredit wave split quantity from cash (paid_units), 570 -> 618
+    # bytes.  Same family, same tag, no new row.
+    ("order.reservation.v1", 618, 5_192_160, "PER_ORDER", None, S,
      ("DIRECT.ACCOUNT_REFUND_UNOWNED", "DIRECT.EMPTY_FROZEN_NO_LAPSE")),
     # DIRECT.TOP3_SELECT_CU_STOP was retired with the 187d5ee1… artifact: V2
     # top-three selection, which exhausted the 1.4m-CU ceiling on every prior
     # seal, now completes at a measured 226,071 CU.  The rows below still STOP
     # on their remaining blockers (no lapse, unowned refunds, persistent rent).
-    ("direct.epoch.v3", 344, 3_285_120, "PER_DIRECT_EPOCH", None, S,
+    # +1 byte for basis_degree, the moment cone bound on chain (0d52c561…).
+    ("direct.epoch.v3", 345, 3_292_080, "PER_DIRECT_EPOCH", None, S,
      ("DIRECT.EMPTY_FROZEN_NO_LAPSE",)),
     ("direct.candidate.v2", 440, 3_953_280, "PER_EPOCH_CANDIDATE", 64, S,
      ("DIRECT.CANDIDATE_RENT_PERSISTS", "DIRECT.ACCOUNT_REFUND_UNOWNED")),
@@ -293,7 +299,8 @@ ACCOUNT_ROWS: tuple[tuple[str, int, int, str, int | None, str, tuple[str, ...]],
     # wave does not touch: their cardinality is UNADMITTED, and
     # terminal_admission refuses a REFUNDABLE_TRANSIENT row whose instance count
     # is unbounded.  The optional-ledger residual is added alongside.
-    ("legacy.epoch.v2", 328, 3_173_760, "PER_LEGACY_EPOCH", None, S,
+    # +1 byte for basis_degree, the moment cone bound on chain (0d52c561…).
+    ("legacy.epoch.v2", 329, 3_180_720, "PER_LEGACY_EPOCH", None, S,
      ("PROFILE.STORAGE_INVENTORY_INCOMPLETE", "RENT.ACCOUNT_REFUND_UNOWNED",
       "GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT")),
     # CandidateRecord v3 (the d6929549… seal): T2-6 appends the 32-byte
