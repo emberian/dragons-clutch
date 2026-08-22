@@ -62,6 +62,7 @@ SAME_ELF_MEASUREMENTS = {
     "terminal_closure",
     "disagreement_exhibit",
     "revenue_boundary",
+    "scale_clearing",
 }
 REQUIRED_EVIDENCE_SUFFIXES = {
     "audit/RUNTIME_ARTIFACT_AUDIT.md",

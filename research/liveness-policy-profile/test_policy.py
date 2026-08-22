@@ -59,9 +59,9 @@ class PolicyTests(unittest.TestCase):
     def test_resolution_work_maximum_path_is_exact(self) -> None:
         row = policy.derive(self.evidence)["resolution_work"]
         self.assertEqual(row["status"], "PASS")
-        # The Fold(1) route covers its widest observation, the 88,422-CU
+        # The Fold(1) route covers its widest observation, the 88,641-CU
         # singleton measured inside the two-fold batch scenario.
-        self.assertEqual(row["routes"]["fold_1"]["measured_cu"], 88_422)
+        self.assertEqual(row["routes"]["fold_1"]["measured_cu"], 88_641)
         self.assertEqual(row["fold_path_lamports"], 7_360_000)
         self.assertEqual(row["success_rewards_lamports"], 7_680_000)
         self.assertEqual(row["worst_abort_rewards_lamports"], 7_530_000)
@@ -70,41 +70,54 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(row["payer_cold_outlay_lamports"], 18_711_920)
 
     def test_batched_folds_are_admitted_and_collapse_the_cold_outlay(self) -> None:
+        """The plan may only use widths that fit in a packet.
+
+        The sealed ``[12, 12, 8]`` plan was chosen on compute alone and cannot
+        be sent: the keeper's wire probe measured six Fold instructions at
+        1,216 bytes and twelve at 2,002, against a 1,232-byte packet budget.
+        Width 6 is measured rather than interpolated, widths 8 and 12 keep
+        their rows because they are real bank measurements, and the plan is
+        composed only of sendable widths.
+        """
+
         derived = policy.derive(self.evidence)
         row = derived["resolution_work_batched"]
         self.assertEqual(row["status"], "PASS")
+        # Compute still admits twelve; the wire does not.
         self.assertEqual(row["maximum_admitted_batch"], 12)
-        self.assertEqual(row["routes"]["fold_batch_12"]["measured_cu"], 929_429)
+        self.assertEqual(row["maximum_sendable_batch"], 6)
+        self.assertEqual(row["cluster_packet_budget_bytes"], 1232)
+        self.assertEqual(row["measured_but_unsendable_batches"], [8, 12])
+        self.assertEqual(row["superseded_plan"], [12, 12, 8])
+        self.assertNotIn("cluster_packet_budget", row, "the caveat is discharged")
+
+        # The unsendable rows survive, labelled, rather than being deleted.
+        self.assertEqual(row["routes"]["fold_batch_12"]["measured_cu"], 932_057)
         self.assertEqual(row["routes"]["fold_batch_12"]["selected_limit_cu"], 1_170_000)
         self.assertEqual(
             row["routes"]["fold_batch_12"]["keeper_reward_lamports"], 1_280_000
         )
-        self.assertEqual(row["fewest_transaction_plan"], [12, 12, 8])
-        self.assertEqual(row["fold_transactions"], 3)
-        self.assertEqual(row["fold_path_lamports"], 3_510_000)
-        self.assertEqual(row["payer_cold_outlay_lamports"], 14_861_920)
-        # Batching collapses the 32-transaction fixed overhead, never the
-        # rent or the terminal quotes: both paths share one Begin and rent.
+        # The widest sendable batch, measured at this seal and not interpolated
+        # between the four and eight that bracket it.
+        self.assertEqual(row["routes"]["fold_batch_6"]["measured_cu"], 486_413)
+        self.assertEqual(row["routes"]["fold_batch_6"]["selected_limit_cu"], 610_000)
+
+        self.assertEqual(row["fewest_transaction_plan"], [6, 6, 6, 6, 6, 2])
+        self.assertEqual(row["fold_transactions"], 6)
+        self.assertEqual(row["plan_batches"], [1, 2, 4, 6])
+        self.assertNotIn(
+            8, row["plan_batches"], "an unsendable width may not compose a plan"
+        )
+        self.assertNotIn(12, row["plan_batches"])
+        self.assertEqual(row["fold_path_lamports"], 3_940_000)
+        self.assertEqual(row["payer_cold_outlay_lamports"], 15_291_920)
+        # Batching still collapses the 32-transaction fixed overhead — by less
+        # than the unsendable plan claimed, which is the honest figure.
         per_transaction = derived["resolution_work"]
         self.assertLess(
             row["payer_cold_outlay_lamports"],
             per_transaction["payer_cold_outlay_lamports"],
         )
-        self.assertEqual(
-            row["rent_principal_lamports"],
-            per_transaction["rent_principal_lamports"],
-        )
-        # A batch measured over the raw admission bound loses its quote and
-        # drops out of the plan instead of being clamped.
-        tampered = copy.deepcopy(self.evidence)
-        tampered["measurements"]["resolution_work_batch"]["fold_batch_12_cu"] = [
-            1_120_001
-        ]
-        stopped = policy.derive(tampered)["resolution_work_batched"]
-        self.assertEqual(stopped["routes"]["fold_batch_12"]["status"], "STOP_HEADROOM")
-        self.assertIsNone(stopped["routes"]["fold_batch_12"]["keeper_reward_lamports"])
-        self.assertEqual(stopped["maximum_admitted_batch"], 8)
-        self.assertEqual(stopped["fewest_transaction_plan"], [8, 8, 8, 8])
 
     def test_runtime_schedule_underfunding_is_rejected(self) -> None:
         finalize = policy.derive(self.evidence)["resolution_work"]["routes"]["finalize"]
@@ -127,7 +140,7 @@ class PolicyTests(unittest.TestCase):
         derived = policy.derive(self.evidence)
         row = derived["direct_v2"]["select"]
         self.assertEqual(row["status"], "PASS")
-        self.assertEqual(row["measured_cu"], 226_522)
+        self.assertEqual(row["measured_cu"], 227_464)
         self.assertEqual(row["selected_limit_cu"], 290_000)
         self.assertEqual(row["keeper_reward_lamports"], 400_000)
         self.assertEqual(derived["direct_v2"]["status"], "STOP")
@@ -177,6 +190,7 @@ class PolicyTests(unittest.TestCase):
                 "candidate_selection",
                 "entitled_clearing",
                 "disagreement_exhibit",
+                "scale_clearing",
                 "terminal_closure",
             ],
         )
@@ -201,19 +215,19 @@ class PolicyTests(unittest.TestCase):
             )
         # Exact measured pins from those logs.
         epoch = self.evidence["measurements"]["general_epoch"]
-        self.assertEqual(epoch["init_epoch_cu"], [42_743])
+        self.assertEqual(epoch["init_epoch_cu"], [42_766])
         self.assertEqual(
             epoch["freeze_epoch_rows"][2],
-            {"pages": 3, "orders": 40, "cu": [717_815, 717_815]},
+            {"pages": 3, "orders": 40, "cu": [717_842]},
         )
         walk_rows = self.evidence["measurements"]["clear_walk"]
-        self.assertEqual(max(walk_rows["forty_order_pass1_cu"]), 393_207)
-        self.assertEqual(walk_rows["complete_cu"], [121_123, 125_369])
+        self.assertEqual(max(walk_rows["forty_order_pass1_cu"]), 385_439)
+        self.assertEqual(walk_rows["complete_cu"], [121_149, 125_397])
         # The exhibit's third book composition, sealed from its own log.
         exhibit = self.evidence["measurements"]["disagreement_exhibit"]
-        self.assertEqual(exhibit["exhibit_pass1_cu"], [411_611])
-        self.assertEqual(exhibit["exhibit_pass2_cu"], [301_177])
-        self.assertEqual(exhibit["init_clear_work_cu"], [70_613])
+        self.assertEqual(exhibit["exhibit_pass1_cu"], [414_566])
+        self.assertEqual(exhibit["exhibit_pass2_cu"], [301_278])
+        self.assertEqual(exhibit["init_clear_work_cu"], [70_635])
         self.assertEqual(len(exhibit["entitle_slice_single_cu"]), 5)
         self.assertEqual(len(exhibit["settle_page_entitled_direct_slice_cu"]), 5)
         self.assertEqual(exhibit["test_result"], "PASS_2_OF_2")
@@ -241,30 +255,35 @@ class PolicyTests(unittest.TestCase):
         """
 
         selection = self.evidence["measurements"]["candidate_selection"]
-        self.assertEqual(max(selection["seal_candidate_cu"]), 64_155)
-        self.assertEqual(selection["seal_candidate_displacing_cu"], [64_155])
+        self.assertEqual(max(selection["seal_candidate_cu"]), 64_174)
+        self.assertEqual(selection["seal_candidate_displacing_cu"], [64_174])
         self.assertEqual(
             {row["shape"]: row["cu"] for row in selection["finalize_selection_rows"]},
             {
-                "3_retained_2_verified_selects_winner": [49_280],
-                "2_verified_beyond_128_bit_digest_tie": [39_512],
-                "0_verified_honest_lapse": [20_685],
+                "3_retained_2_verified_selects_winner": [49_307],
+                "2_verified_beyond_128_bit_digest_tie": [39_539],
+                "0_verified_honest_lapse": [20_708],
             },
         )
         self.assertEqual(selection["test_result"], "PASS_5_OF_5")
         entitled = self.evidence["measurements"]["entitled_clearing"]
-        self.assertEqual(entitled["freeze_entitlement_cu"], [98_411])
-        self.assertEqual(entitled["entitle_slice_single_cu"], [203_097])
-        self.assertEqual(entitled["entitle_slice_portfolio_pair_cu"], [243_508])
-        self.assertEqual(entitled["settle_page_entitled_direct_slice_cu"], [47_328])
+        # Two sends now: the partial-fill wave added an inexact book that
+        # funds the rounding pot, and it freezes more cheaply.
+        self.assertEqual(entitled["freeze_entitlement_cu"], [92_560, 98_579])
+        # ONE PAGE.  The same instruction measures 416,385 CU at two pages
+        # and 759,892 at four; those are scale_clearing rows with the page
+        # count in the key, not a widening of this one.
+        self.assertEqual(entitled["entitle_slice_single_cu"], [207_315])
+        self.assertEqual(entitled["entitle_slice_portfolio_pair_cu"], [245_842])
+        self.assertEqual(entitled["settle_page_entitled_direct_slice_cu"], [51_479])
         self.assertEqual(
-            entitled["settle_page_entitled_portfolio_full_pair_cu"], [224_233]
+            entitled["settle_page_entitled_portfolio_full_pair_cu"], [226_212]
         )
         self.assertEqual(
             entitled["bank_conservation"],
             "POSITIONS_BYTE_EQUAL_IMPLIED_ALLOCATION_TOTAL_CASH_AND_EGGS_EXACT",
         )
-        self.assertEqual(entitled["test_result"], "PASS_4_OF_4")
+        self.assertEqual(entitled["test_result"], "PASS_8_OF_8")
         derived = policy.derive(self.evidence)
         # Selection and entitlement routes exist in exactly one place: the W1
         # block, each carrying W1_QUOTED_NO_LIVE_FLAG.  No promoted subsystem
@@ -314,8 +333,12 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(w1["rung"], "W1")
         self.assertEqual(w1["status"], "PASS")
         self.assertEqual(w1["stopped_routes"], [])
-        self.assertEqual(w1["quoted_route_count"], 35)
-        self.assertEqual(len(w1["routes"]), 35)
+        # 35 at the df0aece1… seal; 107 here.  The six scale campaigns joined
+        # as 64 (route, shape) groups and the partial-fill wave's eight new
+        # measured fields in entitled_clearing had to be quoted before the
+        # coverage rule would pass.
+        self.assertEqual(w1["quoted_route_count"], 107)
+        self.assertEqual(len(w1["routes"]), 107)
         self.assertEqual(
             w1["quoted_families"],
             [
@@ -324,10 +347,14 @@ class PolicyTests(unittest.TestCase):
                 "candidate_selection",
                 "entitled_clearing",
                 "disagreement_exhibit",
+                "scale_clearing",
             ],
         )
-        self.assertEqual(w1["worst_route"], "freeze_epoch_3pages_40orders")
-        self.assertEqual(w1["worst_measured_cu"], 717_815)
+        # The worst route is no longer the three-page book.  The maximum
+        # 64-order book across four dense pages is 988,469 CU, and it still
+        # admits — 1,240,000 selected against the 1,400,000 ceiling.
+        self.assertEqual(w1["worst_route"], "scale_freeze_epoch_4pages_64orders")
+        self.assertEqual(w1["worst_measured_cu"], 988_469)
         # The exhibit's book measures three quoted routes HOTTER than the
         # two-suite books do; that is the whole reason it is quoted.
         self.assertGreater(
@@ -345,41 +372,113 @@ class PolicyTests(unittest.TestCase):
             w1["routes"]["settle_page_entitled_portfolio_full_pair"]["measured_cu"],
         )
         expected = {
-            "complete_clear_work_selection": (126_213, 160_000, 270_000),
-            "finalize_selection_3_retained_winner": (49_280, 70_000, 180_000),
-            "finalize_selection_digest_tie": (39_512, 50_000, 160_000),
-            "finalize_selection_honest_lapse": (20_685, 30_000, 140_000),
-            "seal_candidate_including_displacing": (64_155, 90_000, 200_000),
+            "advance_clear_slices": (173_890, 220_000, 330_000),
+            "advance_clear_slices_exhibit_book": (163_327, 210_000, 320_000),
+            "advance_clear_work_pass1_exhibit_book": (414_566, 520_000, 630_000),
+            "advance_clear_work_pass1_forty_order": (385_439, 490_000, 600_000),
+            "advance_clear_work_pass1_small_book": (292_742, 370_000, 480_000),
+            "advance_clear_work_pass2_exhibit_book": (301_278, 380_000, 490_000),
+            "advance_clear_work_pass2_forty_order": (306_043, 390_000, 500_000),
+            "advance_clear_work_pass2_small_book": (287_224, 360_000, 470_000),
+            "complete_clear_work_exhibit_book": (118_734, 150_000, 260_000),
+            "complete_clear_work_selection": (126_241, 160_000, 270_000),
+            "complete_clear_work_walk": (125_397, 160_000, 270_000),
+            "entitle_slice_fragmented_buy": (194_906, 250_000, 360_000),
+            "entitle_slice_inexact_pot_funding": (192_833, 250_000, 360_000),
+            "entitle_slice_mixed_leg": (191_238, 240_000, 350_000),
+            "entitle_slice_portfolio_pair": (245_842, 310_000, 420_000),
+            "entitle_slice_portfolio_pair_exhibit_book": (270_118, 340_000, 450_000),
+            "entitle_slice_single": (207_315, 260_000, 370_000),
+            "entitle_slice_single_exhibit_book": (227_343, 290_000, 400_000),
+            "entitle_slice_strand": (201_659, 260_000, 370_000),
+            "finalize_selection_3_retained_winner": (49_307, 70_000, 180_000),
+            "finalize_selection_digest_tie": (39_539, 50_000, 160_000),
+            "finalize_selection_honest_lapse": (20_708, 30_000, 140_000),
+            "freeze_entitlement": (98_579, 130_000, 240_000),
+            "freeze_entitlement_exhibit_book": (98_575, 130_000, 240_000),
+            "freeze_epoch_1page_4orders": (233_581, 300_000, 410_000),
+            "freeze_epoch_2pages_17orders": (478_022, 600_000, 710_000),
+            "freeze_epoch_3pages_40orders": (717_842, 900_000, 1_010_000),
+            "init_clear_work_exhibit_book": (70_635, 90_000, 200_000),
+            "init_epoch": (42_766, 60_000, 170_000),
+            "place_order_portfolio": (194_452, 250_000, 360_000),
+            "place_order_single": (195_136, 250_000, 360_000),
+            "scale_advance_pass1_14orders": (414_367, 520_000, 630_000),
+            "scale_advance_pass1_16orders": (434_705, 550_000, 660_000),
+            "scale_advance_pass1_4orders": (340_959, 430_000, 540_000),
+            "scale_advance_pass1_8orders": (346_451, 440_000, 550_000),
+            "scale_advance_pass2_1page": (298_741, 380_000, 490_000),
+            "scale_advance_pass2_2pages": (355_518, 450_000, 560_000),
+            "scale_advance_pass2_4pages": (309_977, 390_000, 500_000),
+            "scale_advance_slices_batch1": (169_983, 220_000, 330_000),
+            "scale_advance_slices_batch12": (168_703, 220_000, 330_000),
+            "scale_advance_slices_batch2": (166_983, 210_000, 320_000),
+            "scale_advance_slices_batch8": (167_062, 210_000, 320_000),
+            "scale_complete_clear_work_1page": (127_743, 160_000, 270_000),
+            "scale_complete_clear_work_2pages": (124_918, 160_000, 270_000),
+            "scale_complete_clear_work_4pages": (117_758, 150_000, 260_000),
+            "scale_entitle_slice_single_1page": (217_235, 280_000, 390_000),
+            "scale_entitle_slice_single_2pages": (416_385, 530_000, 640_000),
+            "scale_entitle_slice_single_4pages": (759_892, 950_000, 1_060_000),
+            "scale_entitle_slice_single_inexact_2pages": (394_397, 500_000, 610_000),
+            "scale_finalize_selection_1retained": (31_630, 40_000, 150_000),
+            "scale_finalize_selection_digest_tie_3retained": (53_470, 70_000, 180_000),
+            "scale_freeze_entitlement_1page": (112_898, 150_000, 260_000),
+            "scale_freeze_entitlement_2pages": (108_397, 140_000, 250_000),
+            "scale_freeze_entitlement_4pages": (105_394, 140_000, 250_000),
+            "scale_freeze_entitlement_inexact_2pages": (114_371, 150_000, 260_000),
+            "scale_freeze_epoch_1page_4orders": (250_407, 320_000, 430_000),
+            "scale_freeze_epoch_2pages_24orders": (488_317, 620_000, 730_000),
+            "scale_freeze_epoch_2pages_30orders": (506_611, 640_000, 750_000),
+            "scale_freeze_epoch_4pages_64orders": (988_469, 1_240_000, 1_350_000),
+            "scale_init_clear_work_plus_4_grows_1page": (123_619, 160_000, 270_000),
+            "scale_init_clear_work_plus_4_grows_2pages": (108_619, 140_000, 250_000),
+            "scale_init_clear_work_plus_4_grows_4pages": (86_119, 110_000, 220_000),
+            "scale_init_epoch_11ticks": (52_878, 70_000, 180_000),
+            "scale_init_epoch_64ticks": (66_484, 90_000, 200_000),
+            "scale_init_order_page_1page": (236_760, 300_000, 410_000),
+            "scale_init_order_page_2pages": (227_760, 290_000, 400_000),
+            "scale_init_order_page_4pages": (221_760, 280_000, 390_000),
+            "scale_place_order_single_64ticks": (209_302, 270_000, 380_000),
+            "scale_place_order_tick_probe_11ticks": (196_666, 250_000, 360_000),
+            "scale_place_order_tick_probe_64ticks": (209_302, 270_000, 380_000),
+            "scale_place_order_worst_rank_rank1": (201_724, 260_000, 370_000),
+            "scale_place_order_worst_rank_rank26": (203_893, 260_000, 370_000),
+            "scale_place_order_worst_rank_rank3": (210_726, 270_000, 380_000),
+            "scale_place_order_worst_rank_rank6": (201_786, 260_000, 370_000),
+            "scale_seal_candidate_0retained": (44_930, 60_000, 170_000),
+            "scale_seal_candidate_1retained": (49_860, 70_000, 180_000),
+            "scale_seal_candidate_2retained": (51_798, 70_000, 180_000),
+            "scale_seal_candidate_3retained": (68_738, 90_000, 200_000),
+            "scale_seal_candidate_displacing_3retained": (68_738, 90_000, 200_000),
+            "scale_seal_candidate_refused_tied_3retained": (32_988, 50_000, 160_000),
+            "scale_settle_page_direct_1page": (57_479, 80_000, 190_000),
+            "scale_settle_page_direct_2pages": (61_995, 80_000, 190_000),
+            "scale_settle_page_direct_4pages": (55_991, 70_000, 180_000),
+            "scale_settle_page_potted_2pages": (58_386, 80_000, 190_000),
+            "scale_submit_candidate_1page": (48_883, 70_000, 180_000),
+            "scale_submit_candidate_2pages": (41_380, 60_000, 170_000),
+            "scale_submit_candidate_4pages": (36_868, 50_000, 160_000),
+            "scale_write_feed_fills_x16": (6_941, 10_000, 120_000),
+            "scale_write_feed_fills_x24": (7_141, 10_000, 120_000),
+            "scale_write_feed_fills_x4": (12_665, 20_000, 130_000),
+            "scale_write_feed_fills_x6": (6_713, 10_000, 120_000),
+            "scale_write_feed_slices_x12": (7_816, 10_000, 120_000),
+            "scale_write_feed_slices_x16": (8_180, 20_000, 130_000),
+            "scale_write_feed_slices_x2": (12_906, 20_000, 130_000),
+            "scale_write_feed_slices_x8": (7_452, 10_000, 120_000),
+            "seal_candidate_including_displacing": (64_174, 90_000, 200_000),
+            "settle_page_entitled_direct_slice": (51_479, 70_000, 180_000),
+            "settle_page_entitled_direct_slice_exhibit_book": (48_056, 70_000, 180_000),
+            "settle_page_entitled_portfolio_full_pair": (226_212, 290_000, 400_000),
+            "settle_page_entitled_portfolio_full_pair_exhibit_book": (252_563, 320_000, 430_000),
+            "settle_page_mixed_leg": (50_986, 70_000, 180_000),
+            "settle_page_partial_slice": (46_662, 60_000, 170_000),
+            "settle_page_potted": (46_386, 60_000, 170_000),
+            "settle_page_strand": (52_988, 70_000, 180_000),
             "submit_candidate": (35_734, 50_000, 160_000),
-            "write_candidate_feed_fills": (9_641, 20_000, 130_000),
-            "write_candidate_feed_slices": (9_882, 20_000, 130_000),
-            "advance_clear_slices": (173_859, 220_000, 330_000),
-            "advance_clear_work_pass1_forty_order": (393_207, 500_000, 610_000),
-            "advance_clear_work_pass1_small_book": (288_078, 370_000, 480_000),
-            "advance_clear_work_pass2_forty_order": (305_527, 390_000, 500_000),
-            "advance_clear_work_pass2_small_book": (286_935, 360_000, 470_000),
-            "complete_clear_work_walk": (125_369, 160_000, 270_000),
-            "advance_clear_slices_exhibit_book": (163_296, 210_000, 320_000),
-            "advance_clear_work_pass1_exhibit_book": (411_611, 520_000, 630_000),
-            "advance_clear_work_pass2_exhibit_book": (301_177, 380_000, 490_000),
-            "complete_clear_work_exhibit_book": (118_706, 150_000, 260_000),
-            "entitle_slice_portfolio_pair_exhibit_book": (270_660, 340_000, 450_000),
-            "entitle_slice_single_exhibit_book": (224_645, 290_000, 400_000),
-            "freeze_entitlement_exhibit_book": (98_407, 130_000, 240_000),
-            "init_clear_work_exhibit_book": (70_613, 90_000, 200_000),
-            "settle_page_entitled_direct_slice_exhibit_book": (42_374, 60_000, 170_000),
-            "settle_page_entitled_portfolio_full_pair_exhibit_book": (250_584, 320_000, 430_000),
-            "entitle_slice_portfolio_pair": (243_508, 310_000, 420_000),
-            "entitle_slice_single": (203_097, 260_000, 370_000),
-            "freeze_entitlement": (98_411, 130_000, 240_000),
-            "settle_page_entitled_direct_slice": (47_328, 60_000, 170_000),
-            "settle_page_entitled_portfolio_full_pair": (224_233, 290_000, 400_000),
-            "freeze_epoch_1page_4orders": (233_554, 300_000, 410_000),
-            "freeze_epoch_2pages_17orders": (477_995, 600_000, 710_000),
-            "freeze_epoch_3pages_40orders": (717_815, 900_000, 1_010_000),
-            "init_epoch": (42_743, 60_000, 170_000),
-            "place_order_portfolio": (194_344, 250_000, 360_000),
-            "place_order_single": (192_028, 250_000, 360_000),
+            "write_candidate_feed_fills": (9_665, 20_000, 130_000),
+            "write_candidate_feed_slices": (9_906, 20_000, 130_000),
         }
         self.assertEqual(set(w1["routes"]), set(expected))
         boundary = policy.derive(self.evidence)[
@@ -402,7 +501,7 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(row["external_fee_cap_lamports"], 10_000 + limit, name)
             self.assertEqual(reward, row["external_fee_cap_lamports"] + 100_000, name)
             self.assertLessEqual(measured, boundary, name)
-        # The eight genuinely variable routes say so: the driver picks the
+        # The ten genuinely variable routes say so: the driver picks the
         # batch composition, so the quote bounds the measured compositions only.
         self.assertEqual(
             sorted(
@@ -419,6 +518,8 @@ class PolicyTests(unittest.TestCase):
                 "advance_clear_work_pass2_exhibit_book",
                 "advance_clear_work_pass2_forty_order",
                 "advance_clear_work_pass2_small_book",
+                "entitle_slice_strand",
+                "settle_page_strand",
             ],
         )
         self.assertEqual(w1["routes"]["advance_clear_work_pass1_forty_order"][
@@ -900,8 +1001,14 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(set(entry), {"path", "sha256", "bytes"})
             self.assertNotEqual(entry["sha256"], digest)
         self.assertEqual(row["cross_path_disposition"], "PATH_TIED_SYMBOL_ORDER")
-        self.assertNotEqual(row["relocated_cargo_home"], digest)
-        self.assertTrue(row["relocated_disposition"].startswith("PATH_SENSITIVE"))
+        # The amended probe (cycle F recorded the amendment as owed; it has
+        # since landed) resolves its relocated CARGO_HOME symlink before using
+        # it, and with that component gone the relocated build reproduces the
+        # canonical bytes exactly.  Three seals reported PATH_SENSITIVE here on
+        # the unamended probe; this one reports INDEPENDENT, which is the
+        # reading cycle F's two hand-run controls predicted.
+        self.assertEqual(row["relocated_cargo_home"], digest)
+        self.assertTrue(row["relocated_disposition"].startswith("INDEPENDENT"))
         artifact_root = self.evidence["artifact"]["path"].rsplit("/", 1)[0]
         self.assertIn(
             f"{artifact_root}/logs/sbf-build-crosspath.log",
@@ -934,12 +1041,36 @@ class PolicyTests(unittest.TestCase):
             policy.check_artifact_binding(scalar)
 
     def test_relocated_disposition_cannot_disagree_with_its_own_digest(self) -> None:
+        """The weld holds in BOTH directions, which is the point of it.
+
+        Until this seal the probe diverged and the lie worth refusing was a
+        claim of INDEPENDENT over diverged bytes.  The probe now reproduces the
+        canonical bytes, so the lie available is the opposite one — claiming
+        PATH_SENSITIVE, and with it the whole controls-and-attribution
+        apparatus, over a digest that plainly matches.  Both are refused by the
+        same equality, and both are exercised here so that neither direction
+        can rot while the other is the live case.
+        """
+
+        digest = self.evidence["artifact"]["sha256"]
+        self.assertEqual(
+            self.evidence["artifact_reproducibility"]["relocated_cargo_home"], digest
+        )
+
         lying = copy.deepcopy(self.evidence)
         lying["artifact_reproducibility"]["relocated_disposition"] = (
-            "INDEPENDENT_BYTE_IDENTICAL_SINGLE_HOST"
+            "PATH_SENSITIVE_REGISTRY_PANIC_LOCATION_STRINGS"
         )
         with self.assertRaises(policy.CheckError) as caught:
             policy.check_artifact_binding(lying)
+        self.assertIn("disagrees with its own digest", str(caught.exception))
+
+        # And the direction the earlier seals exercised: diverged bytes may not
+        # be published as INDEPENDENT.
+        other = copy.deepcopy(self.evidence)
+        other["artifact_reproducibility"]["relocated_cargo_home"] = "0" * 64
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.check_artifact_binding(other)
         self.assertIn("disagrees with its own digest", str(caught.exception))
 
     def test_a_diverged_relocation_must_carry_the_controls_that_locate_it(
@@ -947,42 +1078,69 @@ class PolicyTests(unittest.TestCase):
     ) -> None:
         """PATH_SENSITIVE is a measurement; its attribution is a claim.
 
-        The protocol probe builds its relocated Cargo home under ``$TMPDIR``,
-        which on macOS is reached through the ``/var`` -> ``/private/var``
-        symlink.  Two controls at ordinary paths — one outside the temporary
-        filesystem entirely, one inside it in resolved form — reproduced the
-        canonical bytes exactly, which narrows the finding from "the Cargo home
-        moved" to "the Cargo home's path contains an unresolved symlink".  A
-        narrower claim has to carry the observations that earned it, so the
-        checker refuses a bare disposition, a control whose stated disposition
-        disagrees with its own digest, an all-diverged control set (which would
-        support the WIDER claim, not this one), and a missing attribution.
+        This seal's probe is INDEPENDENT, so the controls apparatus does not
+        run on the live evidence at all.  That is exactly when a gate rots, so
+        the teeth are exercised here against a SYNTHETIC diverged probe: a
+        future artifact that diverges again must still carry the observations
+        that locate the cause, and must not be able to publish a bare
+        disposition, a mislabelled control, an all-diverged control set (which
+        would support the WIDER claim, not a narrow one), or an attribution
+        with nothing behind it.
+
+        The narrow claim these teeth protect is cycle F's: the divergence
+        tracked a ``CARGO_HOME`` whose path contained an unresolved symlink
+        component, not relocation as such.  The amended probe resolving that
+        component and reproducing the canonical bytes is what turned that
+        attribution from a hypothesis into a measurement.
         """
 
-        row = self.evidence["artifact_reproducibility"]
-        controls = row["relocated_controls"]
-        self.assertGreaterEqual(len(controls), 2)
         digest = self.evidence["artifact"]["sha256"]
-        reproduced = [c for c in controls if c["sha256"] == digest]
-        self.assertTrue(reproduced, "the attribution needs a reproducing control")
-        for control in controls:
-            self.assertEqual(set(control), {"path", "sha256", "bytes", "disposition"})
-        self.assertIn("SYMLINK", row["relocated_attribution"])
 
-        stripped = copy.deepcopy(self.evidence)
-        stripped["artifact_reproducibility"].pop("relocated_controls")
+        def diverged() -> dict:
+            """The live evidence, rewound to a probe that diverged."""
+
+            fixture = copy.deepcopy(self.evidence)
+            row = fixture["artifact_reproducibility"]
+            row["relocated_cargo_home"] = "d" * 64
+            row["relocated_disposition"] = "PATH_SENSITIVE_REGISTRY_PANIC_LOCATION_STRINGS"
+            row["relocated_divergence"] = "RODATA_GROWS_552_BYTES_THREE_ABSOLUTE_REGISTRY_PATHS"
+            row["relocated_controls"] = [
+                {
+                    "path": "/Users/ember/jobs/reloc-probe-B",
+                    "sha256": digest,
+                    "bytes": self.evidence["artifact"]["bytes"],
+                    "disposition": "REPRODUCED_CANONICAL_BYTES",
+                },
+                {
+                    "path": "/private/var/folders/T/reloc-probe-C/cargo-home",
+                    "sha256": digest,
+                    "bytes": self.evidence["artifact"]["bytes"],
+                    "disposition": "REPRODUCED_CANONICAL_BYTES",
+                },
+            ]
+            row["relocated_attribution"] = (
+                "SYMLINKED_CARGO_HOME_PATH_COMPONENT_NOT_RELOCATION_ITSELF"
+            )
+            return fixture
+
+        # The well-formed diverged seal passes, so the refusals below are about
+        # the missing evidence and not about the fixture being malformed.
+        policy.check_artifact_binding(diverged())
+
+        bare = diverged()
+        bare["artifact_reproducibility"].pop("relocated_controls")
         with self.assertRaises(policy.CheckError) as caught:
-            policy.check_artifact_binding(stripped)
+            policy.check_artifact_binding(bare)
         self.assertIn("control builds", str(caught.exception))
 
-        mislabelled = copy.deepcopy(self.evidence)
+        mislabelled = diverged()
         mislabelled["artifact_reproducibility"]["relocated_controls"][0][
             "disposition"
         ] = "DIVERGED_FROM_CANONICAL"
         with self.assertRaises(policy.CheckError):
             policy.check_artifact_binding(mislabelled)
 
-        all_diverged = copy.deepcopy(self.evidence)
+        all_diverged = diverged()
         for control in all_diverged["artifact_reproducibility"]["relocated_controls"]:
             control["sha256"] = "0" * 64
             control["disposition"] = "DIVERGED_FROM_CANONICAL"
@@ -990,10 +1148,192 @@ class PolicyTests(unittest.TestCase):
             policy.check_artifact_binding(all_diverged)
         self.assertIn("widened", str(caught.exception))
 
-        unattributed = copy.deepcopy(self.evidence)
+        duplicated = diverged()
+        controls = duplicated["artifact_reproducibility"]["relocated_controls"]
+        controls[1]["path"] = controls[0]["path"]
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.check_artifact_binding(duplicated)
+        self.assertIn("twice", str(caught.exception))
+
+        unattributed = diverged()
         unattributed["artifact_reproducibility"].pop("relocated_attribution")
         with self.assertRaises(policy.CheckError):
             policy.check_artifact_binding(unattributed)
+
+    def test_entitle_slice_is_quoted_per_page_count_and_never_flat(self) -> None:
+        """The correction the scale campaigns forced.
+
+        ``EntitleSlice`` must be presented with the whole bound page set and
+        re-derives the live orders by walking every page in it, so its cost is
+        a function of the page count.  The sealed one-page row is 207,315 CU;
+        the same instruction is 416,385 at two pages and 759,892 at four.  A
+        flat row is not a stale number, it is a quote for a different
+        transaction understating the real one by a factor.
+
+        So the coordinate is in the route key, and this test refuses any
+        arrangement that would let one page count vouch for another.
+        """
+
+        derived = policy.derive(self.evidence)
+        routes = derived["general_clearing_walk"]["w1"]["routes"]
+        measured = {
+            1: routes["scale_entitle_slice_single_1page"]["measured_cu"],
+            2: routes["scale_entitle_slice_single_2pages"]["measured_cu"],
+            4: routes["scale_entitle_slice_single_4pages"]["measured_cu"],
+        }
+        self.assertEqual(measured, {1: 217_235, 2: 416_385, 4: 759_892})
+        # Monotone in the page count, and steeply so: the four-page send is
+        # more than 3.4x the one-page row this profile used to publish alone.
+        self.assertLess(measured[1], measured[2])
+        self.assertLess(measured[2], measured[4])
+        self.assertGreater(
+            measured[4], 3.4 * routes["entitle_slice_single"]["measured_cu"]
+        )
+        # Each page count carries its OWN limit; no shared row exists.
+        limits = {
+            page: routes[f"scale_entitle_slice_single_{page}page"
+                         f"{'s' if page != 1 else ''}"]["selected_limit_cu"]
+            for page in (1, 2, 4)
+        }
+        self.assertEqual(len(set(limits.values())), 3)
+        self.assertNotIn("scale_entitle_slice_single", routes)
+        # Every scale route declares its shape in the key, so none of them can
+        # be read as a general statement about the instruction.
+        for name, row in routes.items():
+            if name.startswith("scale_"):
+                self.assertEqual(row["shape_variability"], policy.W1_SHAPE_LABELLED)
+                self.assertEqual(row["family"], "scale_clearing")
+        # The coordinates the family publishes are the ones it is keyed on.
+        coordinates = derived["general_clearing_walk"]["w1"]["scale_shape_coordinates"]
+        self.assertEqual(coordinates["entitle_slice_single_rows"], ["pages"])
+        self.assertEqual(coordinates["freeze_epoch_rows"], ["pages", "orders"])
+
+    def test_a_scale_shape_may_not_go_unquoted_or_be_stated_twice(self) -> None:
+        """The teeth on the generated routes.
+
+        The scale routes are derived from the tables rather than hand-listed,
+        so the failure mode is not a forgotten route — it is a table that stops
+        declaring its shape, or declares one twice, or appears with no
+        coordinate at all.  Each refuses.
+        """
+
+        measurements = copy.deepcopy(self.evidence["measurements"])
+        # A row that drops its coordinate cannot be quoted shape by shape.
+        stripped = copy.deepcopy(measurements)
+        del stripped["scale_clearing"]["entitle_slice_single_rows"][0]["pages"]
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.scale_clearing_routes(stripped)
+        self.assertIn("shape coordinate", str(caught.exception))
+
+        # Two rows at the same shape would make one of them invisible.
+        duplicated = copy.deepcopy(measurements)
+        table = duplicated["scale_clearing"]["entitle_slice_single_rows"]
+        table.append(copy.deepcopy(table[0]))
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.scale_clearing_routes(duplicated)
+        self.assertIn("twice", str(caught.exception))
+
+        # A table nobody declared may not reach the projection.
+        undeclared = copy.deepcopy(measurements)
+        undeclared["scale_clearing"]["some_new_route_rows"] = [
+            {"pages": 1, "observations": 1, "cu": [1]}
+        ]
+        with self.assertRaises(policy.CheckError) as caught:
+            policy.scale_clearing_routes(undeclared)
+        self.assertIn("no declared row table covers", str(caught.exception))
+
+    def test_single_observation_rows_carry_the_pda_attempt_quantum(self) -> None:
+        """A one-send row says what its maximum is known to.
+
+        ``find_program_address`` pays one ``create_program_address`` per failed
+        attempt at 1,500 CU, and the fixture's genesis keys are freshly random
+        per run, so a route sealed from a single send cannot separate its shape
+        term from its bump term.  The row publishes that instead of presenting
+        one observation as exact.  It does NOT widen the quote: the limit is
+        still the ordinary 5/4 rule over the observed maximum.
+        """
+
+        w1 = policy.derive(self.evidence)["general_clearing_walk"]["w1"]
+        self.assertEqual(w1["pda_attempt_quantum_cu"], 1_500)
+        self.assertEqual(policy.PDA_ATTEMPT_QUANTUM_CU, 1_500)
+        quantum_term = (
+            "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM"
+        )
+        for name, row in w1["routes"].items():
+            if row["observations"] == 1:
+                self.assertTrue(row["single_observation"], name)
+                self.assertEqual(row["measured_cu_known_to_within"], quantum_term, name)
+            else:
+                self.assertFalse(row["single_observation"], name)
+                self.assertEqual(
+                    row["measured_cu_known_to_within"],
+                    "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+                    name,
+                )
+            # The caveat is about the measurement, not the arithmetic.
+            self.assertEqual(
+                row["required_headroom_cu"], -(-row["measured_cu"] * 5 // 4), name
+            )
+        self.assertEqual(
+            w1["single_observation_routes"],
+            sorted(n for n, r in w1["routes"].items() if r["observations"] == 1),
+        )
+        # The exhibit's five sends are the evidence that the term is real, and
+        # they show its exact shape: the gaps sit ON the 1,500-CU lattice, with
+        # a small genuine residual on top.  At this seal three of the four
+        # consecutive gaps are exactly one quantum or zero, and the fourth is
+        # 16 CU — real per-slice work, not a bump.  That is why one observation
+        # cannot separate the two terms, and why the row says so.
+        sends = sorted(
+            self.evidence["measurements"]["disagreement_exhibit"][
+                "entitle_slice_single_cu"
+            ]
+        )
+        residuals = [
+            min((b - a) % 1_500, -(b - a) % 1_500) for a, b in zip(sends, sends[1:])
+        ]
+        self.assertTrue(all(r < 100 for r in residuals), (sends, residuals))
+        self.assertIn(0, residuals, (sends, residuals))
+
+    def test_the_quoted_scale_shapes_are_the_ledgered_ones(self) -> None:
+        """An account created without its funding ledger can never be closed.
+
+        Every W1 creation row in the four original families was measured on
+        machinery created WITHOUT the optional ``GeneralFundingLedgerV1``
+        sibling, which records no payer — so no close route will ever guess it.
+        The campaigns pass a ledger everywhere, which is why their rows are the
+        ones a keeper can actually drive to a close, and the family has to say
+        so.  Dropping the declaration refuses.
+        """
+
+        family = self.evidence["measurements"]["scale_clearing"]
+        self.assertEqual(
+            family["funding_ledger"], policy.SCALE_CLEARING_LEDGER_DECLARATION
+        )
+        self.assertIn("LEDGER", family["funding_ledger"])
+        self.assertEqual(family["admission"], "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY")
+        self.assertEqual(
+            policy.derive(self.evidence)["general_clearing_walk"]["w1"][
+                "scale_funding_ledger"
+            ],
+            policy.SCALE_CLEARING_LEDGER_DECLARATION,
+        )
+
+        silent = copy.deepcopy(self.evidence)
+        silent["measurements"]["scale_clearing"].pop("funding_ledger")
+        with self.assertRaises(policy.CheckError):
+            policy.derive(silent)
+
+        # The unledgered rows are KEPT rather than deleted — they are what the
+        # older suites measured — and they are a different route from the
+        # ledgered one at the same nominal shape.
+        routes = policy.derive(self.evidence)["general_clearing_walk"]["w1"]["routes"]
+        self.assertIn("init_epoch", routes)
+        self.assertIn("scale_init_epoch_64ticks", routes)
+        self.assertGreater(
+            routes["scale_init_epoch_64ticks"]["measured_cu"],
+            routes["init_epoch"]["measured_cu"],
+        )
 
     def test_revenue_boundary_is_sealed_and_derives_no_compute_row(self) -> None:
         """The fee-bearing boundary is driven, refused, and never quoted.
