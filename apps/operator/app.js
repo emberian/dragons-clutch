@@ -3,7 +3,13 @@
  * Zero dependencies, no build step, no bundler. Hand-authored ES modules
  * loaded directly by the browser, which is the point: a page that exists to
  * make a trust boundary legible should not ask you to trust a dependency tree
- * to read it. */
+ * to read it.
+ *
+ * Two modes share this page. In *watch* mode the daemon replays the sealed
+ * lane's forty-four-step plan and the screens are read-only. In *trade* mode
+ * it founds the Friday clutch and the screens become a ticket. The page does
+ * not choose: it renders whichever screen set the daemon's own stream implies,
+ * because a `market` event only ever arrives from a trade session. */
 
 import { el, fill } from "./dom.js";
 import { chip } from "./evidence.js";
@@ -11,8 +17,15 @@ import { createStore } from "./stream.js";
 import { renderBench } from "./bench.js";
 import { renderWalk } from "./walk.js";
 import { renderFunding, renderTicket, renderBook } from "./market.js";
+import {
+  bindRepaint,
+  renderBook as renderTradeBook,
+  renderClutch,
+  renderSettlement,
+  renderTicket as renderTradeTicket
+} from "./trade.js";
 
-const SCREENS = Object.freeze([
+const WATCH_SCREENS = Object.freeze([
   { id: "bench", label: "Bench", render: renderBench },
   { id: "walk", label: "Walk", render: renderWalk },
   { id: "funding", label: "Funding", render: renderFunding },
@@ -20,8 +33,19 @@ const SCREENS = Object.freeze([
   { id: "book", label: "Book", render: renderBook }
 ]);
 
+const TRADE_SCREENS = Object.freeze([
+  { id: "clutch", label: "Clutch", render: renderClutch },
+  { id: "ticket", label: "Ticket", render: renderTradeTicket },
+  { id: "book", label: "Book", render: renderTradeBook },
+  { id: "settlement", label: "Settlement", render: renderSettlement },
+  { id: "walk", label: "Steps", render: renderWalk },
+  { id: "bench", label: "Bench", render: renderBench }
+]);
+
 const store = createStore();
-let current = "bench";
+let current = null;
+
+const screensFor = (state) => (state.market ? TRADE_SCREENS : WATCH_SCREENS);
 
 /* The honesty strip. Permanent, non-dismissible, and rendered before any
  * state can arrive — there is no code path on this page that removes it, and
@@ -47,11 +71,11 @@ const renderBanner = (state) => {
   fill(strip, ...parts);
 };
 
-const renderNav = () => {
+const renderNav = (state) => {
   const nav = document.getElementById("nav");
   fill(
     nav,
-    ...SCREENS.map((screen) => {
+    ...screensFor(state).map((screen) => {
       const button = el("button", screen.id === current ? "tab tab-on" : "tab", screen.label);
       button.type = "button";
       button.addEventListener("click", () => {
@@ -64,20 +88,43 @@ const renderNav = () => {
 };
 
 const render = (state) => {
+  const screens = screensFor(state);
+  if (!current || !screens.some((screen) => screen.id === current)) {
+    current = screens[0].id;
+  }
   renderBanner(state);
-  renderNav();
-  const screen = SCREENS.find((candidate) => candidate.id === current) || SCREENS[0];
+  renderNav(state);
+  const screen = screens.find((candidate) => candidate.id === current) || screens[0];
   fill(document.getElementById("screen"), ...screen.render(state));
+
+  const brand = document.getElementById("brand-sub");
+  if (brand) {
+    brand.textContent = state.market
+      ? "Friday clutch — trade mode, committed, local"
+      : "general clearing, committed, local";
+  }
+
   const status = document.getElementById("status");
-  const label = state.done
-    ? `walk ${state.done.verdict}`
-    : state.fault
-      ? "faulted"
-      : state.plan
-        ? "walking"
-        : "starting";
-  fill(status, el("span", state.connected ? "live" : "dead", state.connected ? "stream attached" : "stream detached"), el("span", null, label));
+  const label = state.fault
+    ? "faulted"
+    : state.session
+      ? `clutch ${state.session.phase}`
+      : state.done
+        ? `walk ${state.done.verdict}`
+        : state.plan
+          ? "walking"
+          : "starting";
+  fill(
+    status,
+    el("span", state.connected ? "live" : "dead", state.connected ? "stream attached" : "stream detached"),
+    el("span", null, label)
+  );
 };
+
+/* The ticket keeps a little local state — which knot is selected, what the
+ * painter's sliders read — and needs to redraw when a button changes it, not
+ * only when the daemon speaks. */
+bindRepaint(() => render(store.state));
 
 store.subscribe(render);
 store.connect();

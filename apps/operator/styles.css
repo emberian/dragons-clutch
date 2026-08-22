@@ -282,3 +282,127 @@ td.role { color: var(--ink-2); }
 .owner-bar .decoded-role { min-width: 9rem; color: var(--ink-2); }
 
 .crank-bar { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.4rem; }
+
+/* ------------------------------------------------------------------ */
+/* Trade mode                                                          */
+/* ------------------------------------------------------------------ */
+
+/* The hat row: eight knots, one per basis function, and the same eight
+   columns the painter drags and the Book overlays.  One object, three views. */
+.hat-row {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 0.3rem;
+  margin: 0.7rem 0;
+}
+.hat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.45rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  text-align: left;
+  cursor: pointer;
+}
+.hat:hover { border-color: var(--accent); }
+.hat-on { border-color: var(--accent); background: var(--surface); color: var(--ink); }
+.hat-knot { font-weight: 700; color: var(--ink); font-size: 0.74rem; }
+.hat-quote { color: var(--accent); }
+.hat-mine { color: var(--ink-3); }
+.hat-cleared { color: var(--accent-3); }
+
+.ticket-form {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 0.8rem;
+  align-items: center;
+  margin: 0.6rem 0;
+  max-width: 34rem;
+}
+.ticket-label { font-size: 0.75rem; color: var(--ink-2); }
+.ticket-form input {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  padding: 0.3rem 0.4rem;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  width: 100%;
+}
+.ticket-form input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The density painter: eight vertical drags, one per knot.  The numbers under
+   the sliders are the raw drag, not the quantized belief — the daemon owns the
+   rounding and the preview says so. */
+.painter {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 0.3rem;
+  align-items: end;
+  margin: 0.8rem 0;
+  min-height: 9rem;
+}
+.painter-knot { display: flex; flex-direction: column; align-items: center; gap: 0.2rem; }
+.painter-slider {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  height: 7rem;
+  accent-color: var(--accent);
+}
+.painter-value { font-family: var(--mono); font-size: 0.66rem; color: var(--ink-2); }
+.painter-knot-label { font-family: var(--mono); font-size: 0.66rem; color: var(--ink-3); }
+
+/* Two beliefs and one price, in the disagreement exhibit's idiom: the stated
+   vectors as outlines, the cleared vector as the solid bars between them. */
+.overlay { width: 100%; height: auto; display: block; margin: 0.5rem 0; }
+.overlay .axis { stroke: var(--border); stroke-width: 1; }
+.overlay .axis-label {
+  fill: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-anchor: middle;
+}
+.overlay .cleared-bar { fill: var(--chart-s); opacity: 0.35; }
+.overlay .belief-them {
+  fill: none;
+  stroke: var(--accent-2);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.overlay .belief-you {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 5 3;
+  stroke-linejoin: round;
+}
+.legend {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  padding-left: 1.1rem;
+  position: relative;
+  color: var(--ink-2);
+}
+.legend::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.45em;
+  width: 0.85rem;
+  height: 3px;
+  border-radius: 2px;
+}
+.legend-them::before { background: var(--accent-2); }
+.legend-you::before { background: var(--accent); }
+.legend-cleared::before { background: var(--chart-s); opacity: 0.6; }
+
+@media (max-width: 720px) {
+  .hat-row, .painter { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .ticket-form { grid-template-columns: 1fr; }
+}

@@ -596,7 +596,12 @@ fn mint_bytes(authority: Option<[u8; 32]>, decimals: u8, supply: u64) -> Vec<u8>
 }
 
 /// A base Token-2022 token account, exactly as the token program writes one.
-fn token_account_bytes(mint: [u8; 32], owner: [u8; 32], amount: u64) -> Vec<u8> {
+///
+/// Published because the Operator Bench's trade session installs the two
+/// traders' ordinary collateral accounts at genesis and must write the same
+/// image this harness writes: a second encoder of the same 165 bytes would be
+/// a second description of what the token program does.
+pub fn token_account_bytes(mint: [u8; 32], owner: [u8; 32], amount: u64) -> Vec<u8> {
     let mut data = vec![0_u8; token::BASE_TOKEN_ACCOUNT_LEN];
     data[0..32].copy_from_slice(&mint);
     data[32..64].copy_from_slice(&owner);

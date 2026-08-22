@@ -116,6 +116,9 @@ name = "clutch-sbf-operatord"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "clutch-batch",
+ "clutch-batch-policy-identity",
+ "clutch-sbf",
  "clutch-sbf-harness",
  "clutch-solana-layout",
  "serde",

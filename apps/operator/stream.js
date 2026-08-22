@@ -18,6 +18,15 @@ const EMPTY = Object.freeze({
   clock: null,
   crank: null,
   conservation: null,
+  /* Trade mode only: the founded market, the automaton's own disclosure, the
+   * session's phase and book, the last painted belief, and the cleared
+   * vector.  All null in watch mode, which is how the page knows which set of
+   * screens it is looking at. */
+  market: null,
+  bot: null,
+  session: null,
+  belief: null,
+  clearing: null,
   boot: [],
   fault: null,
   done: null,
@@ -75,6 +84,21 @@ export const createStore = () => {
         break;
       case "conservation":
         state.conservation = event;
+        break;
+      case "market":
+        state.market = event.identity;
+        break;
+      case "bot":
+        state.bot = event.disclosure;
+        break;
+      case "session":
+        state.session = event;
+        break;
+      case "belief":
+        state.belief = event;
+        break;
+      case "clearing":
+        state.clearing = event;
         break;
       case "fault":
         state.fault = event;

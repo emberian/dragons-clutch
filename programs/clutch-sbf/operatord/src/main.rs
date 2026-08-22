@@ -15,14 +15,20 @@
 //! mainnet.  The ELF it builds carries `--features non-production-mock-source`
 //! and the bench says so in a header strip that cannot be dismissed.
 
+mod bot;
+mod builders;
 mod bus;
 mod crank;
 mod decode;
+mod friday;
 mod http;
 mod plan;
+mod quantize;
 mod replay;
 mod rpc;
+mod session;
 mod toolchain;
+mod trade;
 mod walk;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -42,15 +48,15 @@ pub(crate) fn b64_decode(text: &str) -> Result<Vec<u8>> {
     Ok(BASE64.decode(text)?)
 }
 
-fn repo_path(relative: &str) -> PathBuf {
+pub(crate) fn repo_path(relative: &str) -> PathBuf {
     Path::new(CRATE_DIR).join("../../..").join(relative)
 }
 
 fn usage() -> ! {
     eprintln!(
         "usage:\n  \
-         operatord serve [--port N] [--rpc-port N] [--faucet-port N] [--work DIR] \
-         [--static DIR] [--exit-when-done]\n  \
+         operatord serve [--mode watch|trade] [--port N] [--rpc-port N] [--faucet-port N] \
+         [--work DIR] [--static DIR] [--freeze-window SLOTS] [--exit-when-done]\n  \
          operatord emit <plan-dir>\n  \
          operatord replay <plan-dir>"
     );
@@ -58,22 +64,26 @@ fn usage() -> ! {
 }
 
 struct Options {
+    mode: String,
     port: u16,
     rpc_port: u16,
     faucet_port: u16,
     work: Option<PathBuf>,
     statics: PathBuf,
+    freeze_window: u64,
     exit_when_done: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Self {
+            mode: "watch".to_string(),
             port: 9130,
             rpc_port: 9137,
             faucet_port: 9138,
             work: None,
             statics: repo_path("apps/operator"),
+            freeze_window: session::FREEZE_WINDOW_SLOTS_DEFAULT,
             exit_when_done: false,
         }
     }
@@ -84,16 +94,36 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options> {
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
         match flag.as_str() {
+            "--mode" => options.mode = value()?,
             "--port" => options.port = value()?.parse()?,
             "--rpc-port" => options.rpc_port = value()?.parse()?,
             "--faucet-port" => options.faucet_port = value()?.parse()?,
             "--work" => options.work = Some(PathBuf::from(value()?)),
             "--static" => options.statics = PathBuf::from(value()?),
+            "--freeze-window" => options.freeze_window = value()?.parse()?,
             "--exit-when-done" => options.exit_when_done = true,
             other => return Err(format!("unknown flag {other}").into()),
         }
     }
     Ok(options)
+}
+
+/// Dispatch on the session mode: watch the sealed lane's plan, or trade the
+/// Friday clutch.  The two share the prologue and nothing else.
+fn dispatch(options: Options) -> Result<()> {
+    match options.mode.as_str() {
+        "watch" => serve(options),
+        "trade" => trade::serve(trade::Options {
+            port: options.port,
+            rpc_port: options.rpc_port,
+            faucet_port: options.faucet_port,
+            work: scratch_dir(options.work)?,
+            statics: options.statics,
+            freeze_window: options.freeze_window,
+            exit_when_settled: options.exit_when_done,
+        }),
+        other => Err(format!("unknown session mode {other}; try watch or trade").into()),
+    }
 }
 
 fn scratch_dir(requested: Option<PathBuf>) -> Result<PathBuf> {
@@ -324,7 +354,7 @@ fn main() {
     let mut args = env::args().skip(1);
     let Some(command) = args.next() else { usage() };
     let outcome = match command.as_str() {
-        "serve" => parse(args).and_then(serve),
+        "serve" => parse(args).and_then(dispatch),
         "emit" => match args.next() {
             Some(dir) => replay::emit(Path::new(&dir)),
             None => usage(),

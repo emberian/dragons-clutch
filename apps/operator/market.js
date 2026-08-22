@@ -6,9 +6,12 @@
  * has actually been read back from the bank, and a role that has not been
  * touched yet says so.
  *
- * These are read-only views of the committed walk.  Interactive Endow, Split,
- * and PlaceOrder builders remain unbuilt; the daemon's action endpoint refuses
- * every write, so nothing here can pretend to be a control it is not. */
+ * These are read-only views of *the committed walk*, and they stay read-only:
+ * a watch session replays a pregenerated plan, and its action endpoint has no
+ * verb that composes, reorders, or skips a transaction.  The interactive
+ * builders live in `trade.js`, behind a different session mode with a
+ * different fixture, so a reading surface never quietly becomes an authoring
+ * one. */
 
 import { el, fields, numeric, row } from "./dom.js";
 

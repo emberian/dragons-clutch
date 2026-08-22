@@ -28,11 +28,18 @@
 <header class="topbar">
   <div class="brand">
     <span class="brand-name">Operator Bench</span>
-    <span class="brand-sub">general clearing, committed, local</span>
+    <span class="brand-sub" id="brand-sub">general clearing, committed, local</span>
   </div>
   <nav id="nav" class="nav"></nav>
   <div id="status" class="status"></div>
 </header>
+
+<!-- An empty inline SVG, present only so the scripts can read the SVG
+     namespace off a real node (`namespaceURI`) instead of restating it as a
+     URL literal. Nothing under apps/operator/ names an off-machine address,
+     and the grep that gates that stays exact rather than carrying an
+     exception. -->
+<svg id="svg-namespace" width="0" height="0" aria-hidden="true" focusable="false"></svg>
 
 <main id="screen" class="screen">
   <section class="card">

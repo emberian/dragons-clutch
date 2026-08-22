@@ -19,6 +19,15 @@ use clutch_solana_layout::{
 };
 use serde_json::{json, Value};
 
+/// How many outcome-indexed entries the bench renders.
+///
+/// The frozen arrays are `MAX_OUTCOMES` wide and every market this bench can
+/// open is narrower.  Two was the general lane's width and reading exactly two
+/// made an eight-outcome market render as a two-outcome one; eight is the
+/// widest market the bench founds, and a narrower market's tail is zero
+/// because the codecs require canonical padding.
+const WIDE: usize = 8;
+
 /// Token-2022 base account: `amount` is a little-endian u64 at byte 64.
 const TOKEN_AMOUNT_OFFSET: usize = 64;
 /// Token-2022 base mint: `supply` is a little-endian u64 at byte 36.
@@ -41,7 +50,7 @@ fn position(bytes: &[u8]) -> Option<Value> {
         "cash_atoms": value.cash_atoms,
         "reserved_cash_atoms": value.reserved_cash_atoms,
         "free_cash_atoms": value.cash_atoms.saturating_sub(value.reserved_cash_atoms),
-        "internal": [value.internal[0], value.internal[1]],
+        "internal": &value.internal[..WIDE],
         "close_state": value.close_state,
     }))
 }
@@ -67,11 +76,18 @@ fn supply(bytes: &[u8]) -> Option<Value> {
     Some(json!({
         "kind": "supply",
         "generation": value.generation,
-        "internal_supply": [value.internal_supply[0], value.internal_supply[1]],
-        "external_supply": [value.external_supply[0], value.external_supply[1]],
+        "internal_supply": &value.internal_supply[..WIDE],
+        "external_supply": &value.external_supply[..WIDE],
     }))
 }
 
+/// The frozen epoch, including the basis width it binds.
+///
+/// `basis_degree` is stamped by `InitEpoch` from the terms artifact and is
+/// what tells a reader whether this epoch is a degree-0 two-outcome lane or a
+/// degree-1 eight-knot clutch.  Leaving it and `outcome_count` out of the
+/// decode made two very different markets render identically, which is the
+/// kind of gap a bench exists to close.
 fn epoch(bytes: &[u8]) -> Option<Value> {
     let value = EpochAccount::decode(bytes).ok()?;
     Some(json!({
@@ -82,6 +98,9 @@ fn epoch(bytes: &[u8]) -> Option<Value> {
         "owner_count": value.owner_count,
         "page_count": value.page_count,
         "price_scale": value.price_scale,
+        "outcome_count": value.outcome_count,
+        "basis_degree": value.basis_degree,
+        "relation_version": value.relation_version,
     }))
 }
 
@@ -173,8 +192,17 @@ fn page(bytes: &[u8]) -> Option<Value> {
     }))
 }
 
+/// One reservation, including the partial-fill lane's entitlement counters.
+///
+/// `entitled_units` and `consumed_units` are the v3 fields the entitlement
+/// seam stamps and every later slice re-derives; without them a partially
+/// consumed order and a fully consumed one look the same in the bench, which
+/// is precisely the distinction partial fill introduced.  The Egg envelopes
+/// are shown across the whole active width rather than the first two outcomes,
+/// because an eight-outcome market has eight of them.
 fn reservation(bytes: &[u8]) -> Option<Value> {
     let value = ReservationAccount::decode(bytes).ok()?;
+    let width = usize::from(value.outcome_count).min(value.initial_internal.len());
     Some(json!({
         "kind": "reservation",
         "state": value.state,
@@ -182,10 +210,13 @@ fn reservation(bytes: &[u8]) -> Option<Value> {
         "owner": tag(value.owner),
         "side": side(value.side),
         "order_kind": value.order_kind,
+        "outcome_count": value.outcome_count,
         "initial_cash_atoms": value.initial_cash_atoms,
         "remaining_cash_atoms": value.remaining_cash_atoms,
-        "initial_internal": [value.initial_internal[0], value.initial_internal[1]],
-        "remaining_internal": [value.remaining_internal[0], value.remaining_internal[1]],
+        "initial_internal": &value.initial_internal[..width],
+        "remaining_internal": &value.remaining_internal[..width],
+        "entitled_units": value.entitled_units,
+        "consumed_units": value.consumed_units,
     }))
 }
 
@@ -194,7 +225,7 @@ fn candidate(bytes: &[u8]) -> Option<Value> {
     Some(json!({
         "kind": "candidate",
         "status": value.status,
-        "prices": [value.prices[0], value.prices[1]],
+        "prices": &value.prices[..WIDE],
         "virtual_split": value.virtual_split,
         "virtual_merge": value.virtual_merge,
         "distinct_owners": value.distinct_owners,

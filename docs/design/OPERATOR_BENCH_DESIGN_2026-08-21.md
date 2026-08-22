@@ -231,14 +231,15 @@ byte-identical (294 files, 44 transactions); every file rebuilds
 byte-identically through the builders; a single corrupted transaction byte
 turns the replay red at exactly the corrupted file.
 
-**Step 4, M1** — the live conservation strip (re-derived from observed bytes
-on every tick, with unobserved roles named rather than zeroed), the Funding,
-Ticket and Book screens, and the crank. **Not built:** interactive Endow /
-Split / PlaceOrder builders, the Friday-clutch eight-outcome degree-1
-fixture, and the density painter. The crank is pacing only — pause between
-steps, take exactly one, resume — and `POST /api` deliberately has no verb
-that composes, reorders, or skips a transaction, so the reading surface
-cannot become an authoring surface.
+**Step 4, M1 watch half** — the live conservation strip (re-derived from
+observed bytes on every tick, with unobserved roles named rather than zeroed),
+the Funding, Ticket and Book screens, and the crank. The crank is pacing only
+— pause between steps, take exactly one, resume — and *watch mode's* `POST
+/api` deliberately has no verb that composes, reorders, or skips a
+transaction, so the reading surface cannot become an authoring surface.
+
+**Step 5, M1 trade mode** — the Friday clutch, founded and traded. See
+[Trade mode](#trade-mode) below.
 
 ### One deviation from the brief, and why
 
@@ -295,3 +296,158 @@ for the same reason. The daemon detected it and refused, which is the
 machinery working. Fixing it means deciding what `entitled_units` and
 `consumed_units` are at each entitlement and consumption step — the
 partial-fill lane's semantics, deliberately not patched from here.
+
+## Trade mode
+
+Built 2026-08-21 by the trade lane, in the shared tree on `main`. The vision
+gap M0 left open was the whole point of the bench: *a person creates the Friday
+clutch and trades it against an opponent in a browser*. This closes it.
+
+`operatord serve --mode trade` shares watch mode's prologue exactly — ephemeral
+keys, the NON-PRODUCTION mock-source ELF hashed in process, a fresh ledger with
+genesis rows installed, the same readiness probe — and then diverges
+completely: there is no plan.
+
+### The fixture
+
+`friday.rs` derives an eight-outcome, `basis_degree` 1 market whose terms
+artifact is the disagreement exhibit's T0 construction
+(`svm-tests/tests/disagreement_exhibit.rs::degree1_terms`): `knot_count` 8, u128
+cent knots $100–$240 step $20, general spacing (`UNIFORM_SPACING_NONE`,
+admitted at degree 1), STAT-TERMINAL-01, EDGE-CLAMP-01, payout map entirely
+unused, one uniform 8/64 failure-refund preset.
+
+Where the exhibit **injects** its market, its positions and its Egg balances as
+laboratory bank state, trade mode does not. The market is created by a signed
+`CreateMarket`, the cash arrives by a signed `Endow`, the Eggs by a signed
+`Split` — because the thing being demonstrated is a person driving those
+transitions. Genesis assistance is exactly the frozen Realm prerequisites an
+ordinary wallet cannot author: Realm, Profile, collateral policy, the
+Token-2022 collateral mint, the two traders' ordinary collateral accounts, this
+market's price grid and terms, the epoch's frozen batch policy, and the
+non-mint trader's lamports. Eleven rows, enumerated on the banner.
+
+**The price ladder.** A single-Egg limit is admitted only when it is an exact
+member of the frozen tick vector. The Friday grid is therefore *uniform* —
+fifty-one ticks, every multiple of 200 from zero to the price scale — so any
+belief quantized in ladder units is quotable and the midpoint of two such
+beliefs is itself a price vector on the simplex. A grid carrying only the
+exhibit's ten limits would admit the exhibit's book and nothing a person
+painted.
+
+**One size decision, recorded because it changed the roster.** An eight-outcome
+`CreateMarket` carries twenty-six accounts; a second writable signer — one more
+64-byte signature and one more 32-byte key — puts the message 52 bytes past the
+1232-byte legacy packet limit. The person is therefore the fee payer as well as
+the market's creator, which removes exactly that and also reads correctly: at
+this bench you are the operator.
+
+### The opponent
+
+A **fixed-belief automaton**, and the bench calls it that in those words
+wherever it appears. It is not a model, not a strategy, and not an AI; model
+theater would make the demonstration worthless, because what is being
+demonstrated is that a disagreement between two *stated* beliefs is what
+clears. It holds the exhibit's Model E vector `[0, 127, 2662, 5945, 1266, 0, 0,
+0]`, published on the Book screen beside the ladder-quantized vector it can
+actually quote and the two rules it quotes by:
+
+- **Opening** — the exhibit's book-former, with the flat prior standing in for
+  the counterparty belief that does not exist yet at session open: one quote
+  per knot where the belief differs from the prior, buy at its own value where
+  it is higher, sell where it is lower.
+- **Response** — an order that crosses its value is answered on the other side
+  at that same value, when it is not already resting there.
+
+Everything it will ever place can be worked out before it places one.
+
+### The interactive plane
+
+`POST /api` in a trade session takes *intents*, never transactions: `place`,
+`place-portfolio`, `cancel`, `propose`, `paint`, `weights`, `freeze`, `status`,
+`bot`. Each names a knot, a side, a size and a limit; `builders.rs` decides
+which accounts in which roles that needs and hands the result to
+`clutch_sbf_harness::general_transaction` — the same serializer the sealed
+lane's plan emitter calls, asserted against the program's own exported account
+counts. The browser still never learns the wire format, so it still cannot
+drift from it.
+
+Every submission publishes a `step` row with its compute units and a full
+decoded-state sweep; a refusal is reported with the bank's exact
+`Custom(0x….)` and is not a fault.
+
+### The density painter
+
+The Ticket's belief tab drags eight numbers. The daemon quantizes them with the
+canonical largest-remainder rule, lowest-index ties — a port of
+`docs/site-plan/friday_clutch_check.py` into `quantize.rs`, with a unit test
+pinning that script's own printed vectors (the $163.40 weight vector `[0, 0, 0,
+53, 11, 0, 0, 0]` over denominator 64) — then inverts the automaton's
+book-former against its resting quotes to propose the orders that belief
+implies. Every number in the preview carries a MODEL-ONLY chip until a step row
+says the bank took it. One button places the list.
+
+The painter proposes only on knots the person is **not** already resting on,
+and that is not tidiness: see below.
+
+### The cleared price, and why it is a ladder and not a solver
+
+The frozen allocation policy is `PricePriorityMarginalProRata`, which fills
+every *strict* order in full. An eligible order with no counterparty is
+therefore not a partial fill — it refuses the whole candidate with
+`StrictUnderfill`. Finding a price vector that satisfies this for an arbitrary
+book is the clearing problem, and this project has no solver.
+
+So the auto-crank does not search. It tries four **stated** coordinates in a
+fixed published order and reports which the relation admitted and exactly how
+it refused each earlier one:
+
+1. **the midpoint of the two published beliefs** — both are on the ladder and
+   each sums to the scale, so the midpoint does too; at a knot the two disagree
+   on it sits strictly between the two limits, and at a knot only one side
+   quoted it sits on the far side of that quote's limit, which makes an
+   unanswered quote *ineligible* rather than a strict order nobody can fill;
+2. **the automaton's belief** — every one of its quotes is then exactly
+   marginal, so a book of quotes nobody answered still clears;
+3. **the person's painted belief**, symmetrically;
+4. **the flat prior**.
+
+`session.rs` pins both halves of the argument as unit tests that need no
+validator: the gate's exact book clears at coordinate 2, and doubling up two
+500-Egg buys against one 500-Egg offer refuses the candidate with
+`StrictUnderfill`. That second test is why the painter skips knots the person
+already rests on.
+
+Once a coordinate is admitted, `canonical_candidate` and `canonical_pairing`
+produce the fills and the witness, and the session drives `SubmitCandidate`,
+the chunked feed, `SealCandidate`, the five-transaction clear-work creation,
+both advance passes, the slice pass, `CompleteClearWork`, the real-clock wait
+to `freeze_slot + CANDIDATE_WINDOW_SLOTS`, `FinalizeSelection`,
+`FreezeEntitlement`, and one `EntitleSlice` + `SettlePage` per pairing group.
+
+### Gate
+
+`scripts/run_operator_trade.sh`, under the suite lock. It is a *client*: it
+never reads the daemon's console, never touches the ledger, and never builds a
+transaction. It waits for the session to open, posts three ticket orders and a
+painted belief, previews the resolution weights, posts `freeze`, and then reads
+the event stream and requires: the mock-source banner with the unpromoted
+SBF-EXECUTED scope, an eight-outcome degree-1 market, the automaton disclosed
+as a fixed-belief automaton with a belief that is a price vector, a MODEL-ONLY
+painted belief, every submitted transaction accepted and carrying its compute
+units, a cleared vector on the simplex pairing at least one slice, the epoch
+reaching `settled`, and every conservation identity holding on bytes the
+session observed.
+
+It also greps every file the daemon is allowed to serve for an off-machine
+address. Even the SVG namespace is read off a node in the document rather than
+written as a URL literal, so that grep needs no exception.
+
+### Not built
+
+Multi-page epochs. A trade session opens one order page, so the book holds
+`MAX_ORDERS_PER_PAGE` orders; the ticket says so before it builds anything,
+naming the frozen constant, rather than letting the bank refuse the
+seventeenth. Resolution and redemption: the Friday clutch never resolves, so
+the weight preview is a MODEL-ONLY reading of what a terminal statistic would
+carry, not a payout the bank has made.
