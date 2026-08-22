@@ -44,7 +44,7 @@ non-production-mock-source = ["clutch-sbf/non-production-mock-source"]
 # nothing and — this is the point — the account bytes this harness writes at
 # genesis come from the *same* encoders the program decodes with.  A hand-rolled
 # second copy would test the copy.
-clutch-sbf = { path = "../program" }
+clutch-sbf = { path = "../program", features = ["laboratory-fixtures"] }
 # The checkpoint's owning crate: the idle body the final grow writes on-chain
 # is compared byte-for-byte against `ClearWorkV1::encode_idle_into` here, so
 # the account image and the host image share one writer.

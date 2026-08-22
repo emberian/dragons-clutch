@@ -256,9 +256,29 @@ impl OccupationResolutionAccount {
                 .checked_add(terms.maturity_horizon_buckets)
                 .ok_or(CodecError::ArithmeticOverflow)?;
             let span = terms.expected_span()?;
+            /* The feed cursor lies in the window's closing interval, and both
+             * ends of that interval are real.
+             *
+             * A V1 source seals to the **maturity bucket**, because it proves
+             * the window closed by recording a reading that selects bucket
+             * `end` — one past the window — and advances the head past it. A v2
+             * pull source seals to the **window end**: its crossing rule admits
+             * the record for bucket `b` only once the chain has passed that
+             * bucket's closing boundary plus a grace delay, so a complete
+             * sealed page carries the same proof in the admission of its last
+             * record, with no bucket-`end` reading to take.
+             *
+             * So the admitted set is exactly `{end, maturity}` and this is
+             * stated as the two-sided bound rather than as V1's lower one. It
+             * is not the primary maturity gate — `native_window` asks the
+             * verified archive its own generation's question before a record
+             * exists at all — it is the persisted record's own consistency
+             * against immutable Terms, and a cursor outside this interval
+             * belongs to no generation. */
             if self.sealed_end_bucket_exclusive != terms.expected_end_bucket_exclusive
                 || self.repair_generation != terms.repair_generation
-                || self.feed_cursor < maturity
+                || self.feed_cursor < terms.expected_end_bucket_exclusive
+                || self.feed_cursor > maturity
                 || self.outcome_count != terms.outcome_count
                 || self.vector.denominator != terms.payouts[0].denominator
                 || self.statistic != terms.statistic_id

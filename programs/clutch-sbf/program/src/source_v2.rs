@@ -41,6 +41,12 @@
 
 pub mod auth;
 pub mod crossing;
-#[cfg(test)]
+/// Byte-accurate fabricated provider accounts, for tests and bank campaigns.
+///
+/// Behind `laboratory-fixtures` rather than plain `cfg(test)` so the bank
+/// campaign in `svm-tests` can drive the real decoders with the real layouts.
+/// The deployed ELF never enables it — see that feature's note in
+/// `program/Cargo.toml`.
+#[cfg(any(test, feature = "laboratory-fixtures"))]
 pub mod fixtures;
 pub mod spec;

@@ -22,6 +22,14 @@ custom-heap = []
 # parser/deployment pair. Never use for a production deployment or attribute
 # its SVM evidence to the default artifact.
 non-production-mock-source = []
+# Exposes `source_v2::fixtures`, the byte-accurate builders for the fabricated
+# provider accounts (receiver program, ProgramData, `Config`, `PriceUpdateV2`,
+# Instructions sysvar). Host-only by construction and never enabled for a
+# deployed artifact: `run_svm_tests.sh` builds the ELF without it, and an ELF
+# that could *write* a provider account would be a different artifact from one
+# that can only read one. The builders exist so a bank campaign exercises the
+# real decoders at the real offsets instead of a convenient parallel encoding.
+laboratory-fixtures = []
 
 [dependencies]
 # The window/summary algebra the observation and resolution plane folds
