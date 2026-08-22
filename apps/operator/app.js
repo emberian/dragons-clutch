@@ -22,6 +22,7 @@ import {
   renderBook as renderTradeBook,
   renderClutch,
   renderSettlement,
+  renderSteps,
   renderTicket as renderTradeTicket
 } from "./trade.js";
 
@@ -38,7 +39,7 @@ const TRADE_SCREENS = Object.freeze([
   { id: "ticket", label: "Ticket", render: renderTradeTicket },
   { id: "book", label: "Book", render: renderTradeBook },
   { id: "settlement", label: "Settlement", render: renderSettlement },
-  { id: "walk", label: "Steps", render: renderWalk },
+  { id: "steps", label: "Steps", render: renderSteps },
   { id: "bench", label: "Bench", render: renderBench }
 ]);
 

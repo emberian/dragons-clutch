@@ -148,10 +148,11 @@ const rail = (state) => {
   heading.append(el("h2", null, "Lifecycle rail"));
   if (state.plan) heading.append(el("span", "count", `${state.plan.steps.length} steps`));
   section.append(heading);
-  if (!state.plan) {
-    section.append(el("p", "muted", "The plan is emitted in process by the repository's own builders."));
-    return section;
-  }
+  /* A trade session has no plan and never will: its book is authored at the
+   * keyboard.  `fill` drops falsy children, so returning nothing here is how
+   * the rail simply is not on that screen, rather than being a card that
+   * explains its own absence. */
+  if (!state.plan) return null;
   const spine = el("ol", "rail");
   state.plan.steps.forEach((step) => {
     const current = stepState(state, step.ordinal);

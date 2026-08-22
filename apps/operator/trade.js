@@ -718,6 +718,87 @@ export const renderBook = (state) => {
 };
 
 /* ------------------------------------------------------------------ */
+/* Steps                                                               */
+/* ------------------------------------------------------------------ */
+
+/* The transaction ceiling every compute-unit bar is measured against. The
+ * daemon publishes it with a plan in watch mode; a trade session has no plan,
+ * so this is the frozen constant `clutch_sbf_harness::COMPUTE_UNIT_CEILING`
+ * carries, restated here and nowhere else on this screen. */
+const COMPUTE_UNIT_CEILING = 1_400_000;
+
+const computeBar = (units) => {
+  const cell = el("div", "cu");
+  const track = el("div", "cu-track");
+  const bar = el("div", "cu-bar");
+  const share = Math.min(1, (units || 0) / COMPUTE_UNIT_CEILING);
+  bar.style.width = `${(share * 100).toFixed(2)}%`;
+  if (share > 0.5) bar.classList.add("cu-hot");
+  track.append(bar);
+  cell.append(track, el("span", "cu-value", `${numeric(units)} CU`));
+  return cell;
+};
+
+/* Every transaction this session submitted, in the order it submitted them.
+ *
+ * There is no plan to render against, so this is not a rail with pending rows
+ * — it is a log of what actually happened, and a row exists only because a
+ * transaction was built, signed and confirmed. A refusal is a first-class
+ * row with the bank's own code, not an error. */
+export const renderSteps = (state) => {
+  const card = el("section", "card");
+  const heading = el("div", "card-heading");
+  heading.append(el("h2", null, "Submitted transactions"));
+  const rows = [...state.steps.values()]
+    .filter((step) => step.state === "accepted" || step.state === "refused")
+    .sort((left, right) => left.ordinal - right.ordinal);
+  heading.append(el("span", "count", `${rows.length} confirmed`));
+  card.append(heading);
+  card.append(
+    el(
+      "p",
+      "muted",
+      `Each row is one signed, submitted, confirmed transaction, built by the repository's own harness builders. Compute units are measured against the ${numeric(COMPUTE_UNIT_CEILING)}-unit transaction ceiling.`
+    )
+  );
+  if (!rows.length) {
+    card.append(pending("any submission"));
+    return [card];
+  }
+  rows.forEach((step) => {
+    const item = el("article", `step kind-${step.state === "accepted" ? "accept" : "refuse"}`);
+    const head = el("header", "step-head");
+    head.append(
+      el("span", "step-ordinal", String(step.ordinal).padStart(2, "0")),
+      el("span", "step-name", step.name),
+      el("span", `step-badge badge-${step.state === "accepted" ? "accept" : "refuse"}`, step.family),
+      el("span", "step-status", step.state)
+    );
+    item.append(head);
+    item.append(computeBar(step.cu));
+    item.append(
+      fields("step-fields", [
+        ["slot", numeric(step.slot)],
+        ["confirmation", step.confirmation],
+        ["bytes", numeric(step.bytes)],
+        ["signature", digest(step.signature)]
+      ])
+    );
+    if (step.state === "refused") {
+      item.append(
+        row(
+          "refusal",
+          el("strong", null, step.refusal_code || "refused"),
+          el("span", null, JSON.stringify(step.error))
+        )
+      );
+    }
+    card.append(item);
+  });
+  return [card];
+};
+
+/* ------------------------------------------------------------------ */
 /* Settlement                                                          */
 /* ------------------------------------------------------------------ */
 

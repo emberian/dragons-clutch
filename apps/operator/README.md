@@ -56,7 +56,8 @@ the harness CLI's own output, and requires a single corrupted byte to go red.
 | **Ticket** | three tabs. *Single hat*: the hat row, a side, a size and a ladder limit. *Belief*: eight sliders, quantized by the daemon, previewing the orders that belief implies against the automaton's resting quotes, with one button to place them all. *Portfolio*: a coefficient vector, lots, and a per-lot collateral bound. Below them, your resting orders with their reservations and a retire button |
 | **Book** | the automaton's own disclosure — what it believes, what it can quote, and the two rules it quotes by — the two beliefs and the cleared vector drawn over the eight hats, and the order page slot by slot |
 | **Settlement** | positions across all eight outcomes, the value plane's identities re-derived from observed bytes, and every reservation's entitled/consumed counters |
-| **Steps** / **Bench** | the same step log and validator health as watch mode |
+| **Steps** | one row per transaction the session actually submitted, with its family, its confirmed slot, its compute units against the 1 400 000-unit ceiling, and its signature. Not a rail with pending rows: a trade session has no plan, so a row exists only because something was built, signed and confirmed. A refusal is a first-class row carrying the bank's own `Custom(0x….)` |
+| **Bench** | validator health, the ELF identity block, the roster, and the genesis-assistance disclosure — the same cards as watch mode, minus the lifecycle rail, which a session with no plan simply does not have |
 
 Every cell is the latest account image the daemon reloaded from the bank,
 decoded through the frozen `clutch_solana_layout` codecs. A role that has not
@@ -134,8 +135,8 @@ rather than written as a URL literal, so the grep needs no exception.
 | `dom.js` | six DOM helpers, which is the whole rendering library |
 | `evidence.js` | the frozen claim vocabulary, copied verbatim |
 | `action.js` | the one write: a JSON intent |
-| `bench.js`, `walk.js`, `market.js` | the watch-mode screens |
-| `trade.js` | the trade-mode screens: Clutch, Ticket, Book, Settlement |
+| `bench.js`, `walk.js`, `market.js` | the watch-mode screens; `bench.js` is shared |
+| `trade.js` | the trade-mode screens: Clutch, Ticket, Book, Settlement, Steps |
 
 ## Not built
 
