@@ -859,6 +859,82 @@ fn composite_is_quoted_owner_level_not_per_order() {
 }
 
 #[test]
+fn score_v1_known_defect_sybil_complete_set_wash_is_free_scored_volume() {
+    // KNOWN SCOREV1 DEFECT, not a desired invariant.  Two owner tags controlled
+    // by one actor can cross a complete set.  Each side's filled payoff vector
+    // is constant, their joint signed exposure is zero, and the composite
+    // correctly charges zero.  But ScoreV1 only removes same-owner/same-outcome
+    // overlap, so the two tags turn the wash into positive primary score.
+    // A successor score must quotient constant complete-set directions (and
+    // state its identity/Sybil assumption) before rewarding executed risk mass.
+    let vector = prices(&[SCALE / 2, SCALE / 2]);
+    let wash = book_of(&[
+        single(1, 0, 0, Side::Buy, FUNDED_QUANTITY, SCALE),
+        single(2, 0, 1, Side::Buy, FUNDED_QUANTITY, SCALE),
+        single(3, 1, 0, Side::Sell, FUNDED_QUANTITY, 0),
+        single(4, 1, 1, Side::Sell, FUNDED_QUANTITY, 0),
+    ]);
+    let domain = fee_domain(TEST_COMPOSITE_LAB, 2, 2);
+    let candidate = canonical_candidate(&domain, &wash, &vector, 0, 0).unwrap();
+    let summary = verify(&domain, &wash, &candidate, None).unwrap();
+
+    // Derive the exposure rows from the relation's admitted book and actual
+    // fills; these are not hand-written proxy payoff vectors.
+    let normalized = normalize(&domain, &wash).unwrap();
+    let mut participation = ParticipationV1::zeroed();
+    participation_from_fills(&domain, &normalized, &candidate.fills, &mut participation).unwrap();
+    assert_eq!(
+        &participation.buy[0][..2],
+        &[FUNDED_QUANTITY, FUNDED_QUANTITY]
+    );
+    assert_eq!(
+        &participation.sell[1][..2],
+        &[FUNDED_QUANTITY, FUNDED_QUANTITY]
+    );
+    assert_eq!(
+        participation.buy[0][0].abs_diff(participation.buy[0][1]),
+        0,
+        "the buyer's state-dependent payoff range must be zero"
+    );
+    assert_eq!(
+        participation.sell[1][0].abs_diff(participation.sell[1][1]),
+        0,
+        "the seller's state-dependent liability range must be zero"
+    );
+    for outcome in 0..2 {
+        assert_eq!(
+            participation.buy[0][outcome], participation.sell[1][outcome],
+            "the Sybil pair's joint signed exposure must net to zero"
+        );
+    }
+
+    assert_eq!(summary.virtual_split, 0);
+    assert_eq!(summary.virtual_merge, 0);
+    assert_eq!(summary.self_overlap_volume, 0);
+    assert_eq!(
+        &summary.direct_flow[..2],
+        &[FUNDED_QUANTITY, FUNDED_QUANTITY]
+    );
+    assert_eq!(
+        summary.fee_price_units, 0,
+        "constant complete-set exposure is in the composite fee kernel"
+    );
+    assert_eq!(summary.fee_carry_bps_units, 0);
+
+    let expected_weighted_direct_volume =
+        2 * (FUNDED_QUANTITY as i128) * (SCALE as i128 / 2) * (SCALE as i128 / 2);
+    assert_eq!(
+        summary.score.weighted_direct_volume,
+        expected_weighted_direct_volume
+    );
+    assert!(summary.score.weighted_direct_volume > 0);
+    assert!(
+        summary.score.is_better_than(&ScoreV1::ZERO),
+        "the positive first component dominates the zero score"
+    );
+}
+
+#[test]
 fn composite_rate_admissibility_is_the_basis_point_band() {
     for (dispersion_bps, floor_range_bps, admitted) in [
         (0u32, 0u32, true),
