@@ -337,8 +337,18 @@ fn init_source_archive_v2(
     Ok(())
 }
 
+/// What the shared prefix of both mutating routes establishes.
+struct MutatePrefix {
+    terms: FrozenSourceTerms,
+    verified_spec: VerifiedSourceSpecV2,
+    release: PullReleaseV2,
+    window_id: Hash32,
+    archive_address: [u8; 32],
+    archive_bump: u8,
+}
+
 /// Authenticate the shared Terms/spec/feed/archive prefix both mutating routes
-/// carry, and return the archive's canonical bump.
+/// carry.
 ///
 /// Kept out of each caller's frame on purpose: the Terms decode is 1,656 bytes
 /// of hostile input and the append's own frame already holds ten account views.
@@ -347,13 +357,7 @@ fn mutate_prefix(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
     intent_terms: Hash32,
-) -> Outcome<(
-    FrozenSourceTerms,
-    VerifiedSourceSpecV2,
-    PullReleaseV2,
-    Hash32,
-    u8,
-)> {
+) -> Outcome<MutatePrefix> {
     let terms = read_frozen_terms(program_id, &accounts[IX_MUTATE_TERMS], intent_terms)?;
     let verified_spec = verify_spec_v2(program_id, &accounts[IX_MUTATE_SPEC], terms)?;
     let release = registered_release(verified_spec.spec())?;
@@ -381,7 +385,14 @@ fn mutate_prefix(
         accounts[IX_MUTATE_ARCHIVE].data_len() == SOURCE_ARCHIVE_ACCOUNT_V2_BYTES,
         ClutchError::WrongDataLength,
     )?;
-    Ok((terms, verified_spec, release, window_id, archive_bump))
+    Ok(MutatePrefix {
+        terms,
+        verified_spec,
+        release,
+        window_id,
+        archive_address: archive_address.to_bytes(),
+        archive_bump,
+    })
 }
 
 #[inline(never)]
@@ -399,10 +410,15 @@ fn append_source_archive_v2(
     require_readonly(&accounts[IX_APPEND_UPDATE])?;
     require_readonly(&accounts[IX_APPEND_INSTRUCTIONS])?;
     require_readonly(&accounts[IX_APPEND_CLOCK])?;
-    let (terms, verified_spec, release, _window_id, _bump) =
-        mutate_prefix(program_id, accounts, intent_terms)?;
-    read_initial_feed(program_id, &accounts[IX_MUTATE_FEED], terms, false)?;
-    append_authenticated(accounts, sequence, verified_spec, release, terms)
+    let prefix = mutate_prefix(program_id, accounts, intent_terms)?;
+    read_initial_feed(program_id, &accounts[IX_MUTATE_FEED], prefix.terms, false)?;
+    append_authenticated(
+        accounts,
+        sequence,
+        prefix.verified_spec,
+        prefix.release,
+        prefix.terms,
+    )
 }
 
 /// Assemble the pull-authentication plane and hand it to the kernel.
@@ -503,8 +519,14 @@ fn seal_source_archive_v2(
 ) -> Outcome<()> {
     require_count(accounts, SEAL_SOURCE_ARCHIVE_V2_ACCOUNT_COUNT)?;
     require_distinct(accounts)?;
-    let (terms, verified_spec, release, window_id, archive_bump) =
-        mutate_prefix(program_id, accounts, intent_terms)?;
+    let MutatePrefix {
+        terms,
+        verified_spec,
+        release,
+        window_id,
+        archive_address,
+        archive_bump,
+    } = mutate_prefix(program_id, accounts, intent_terms)?;
     let mut feed = read_initial_feed(program_id, &accounts[IX_MUTATE_FEED], terms, true)?;
 
     {
@@ -531,7 +553,10 @@ fn seal_source_archive_v2(
     let archive_data = accounts[IX_MUTATE_ARCHIVE].data.borrow();
     let receipt = source_archive_v2::verify_recorded_sealed_archive_v2(
         program_id.to_bytes(),
-        accounts[IX_MUTATE_ARCHIVE].key.to_bytes(),
+        /* The derived address, not the presented key.  `mutate_prefix` has
+         * already proved they are equal; passing the derivation is what keeps
+         * that true if the order ever changes. */
+        archive_address,
         AccountViewV2::new(
             accounts[IX_MUTATE_ARCHIVE].key.to_bytes(),
             accounts[IX_MUTATE_ARCHIVE].owner.to_bytes(),
