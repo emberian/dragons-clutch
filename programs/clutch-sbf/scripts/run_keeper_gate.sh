@@ -3,9 +3,12 @@
 #
 # A local validator, the non-production mock-source ELF, a real market and a
 # real mixed book -- and then `clutch-keeper` as the ONLY driver of every
-# permissionless step from the epoch freeze through settlement and the whole
-# TerminalClosure DAG.  Nothing here replays a pregenerated crank: the keeper
-# decides each action from committed account bytes it reads back off the bank.
+# permissionless step from the epoch freeze through settlement and every
+# currently safe TerminalClosure leaf.  The epoch/window root is deliberately
+# retained: tag 67 is fail-closed until durable epoch replay prevention and
+# exhaustive dependent accounting exist.  Nothing here replays a pregenerated
+# crank: the keeper decides each action from committed account bytes it reads
+# back off the bank.
 #
 # What the plan generator is still used for, and why:
 #
@@ -21,13 +24,19 @@
 # Everything else -- InitEpoch, InitOrderPage, FreezeEpoch, InitClearWork and
 # its four staged grows, both order passes, the slice pass, CompleteClearWork,
 # FinalizeSelection, FreezeEntitlement, every EntitleSlice and SettlePage, and
-# tags 60-67 -- is the keeper, from state, with its own keypair.
+# applicable routes among tags 60-66 -- is the keeper, from state, with its
+# own keypair.  Tag 67 must not be attempted by this gate.
+#
+# This is local mechanics evidence under the explicitly non-production mock
+# source profile below; it does not promote that source to production evidence.
 #
 # The three gates:
 #
-#   1. the walk       -- the keeper alone drives the lifecycle to settled and
-#                        closed, and the terminal conservation identities are
-#                        re-derived from the FINAL committed bytes;
+#   1. the walk       -- the keeper alone drives the lifecycle to settled,
+#                        reclaims every safely closable leaf, then stops
+#                        Blocked with the replay anchor retained; terminal
+#                        conservation identities are re-derived from the FINAL
+#                        committed bytes;
 #   2. the falsifier  -- the keeper is SIGKILLed mid-clearing-walk and started
 #                        again with no state but the chain, and must finish;
 #   3. the wire       -- the batched-fold packet answer, measured by
@@ -74,7 +83,9 @@ test_validator="${SOLANA_TEST_VALIDATOR:-$solana_home/solana-test-validator}"
 # Ports are picked from the 9000-9099 lane range so this gate can run beside
 # the other committed walks without either stealing the other's endpoint.
 rpc_port="${CLUTCH_KEEPER_RPC_PORT:-9011}"
-faucet_port="${CLUTCH_KEEPER_FAUCET_PORT:-9012}"
+faucet_port="${CLUTCH_KEEPER_FAUCET_PORT:-9013}"
+gossip_port="${CLUTCH_KEEPER_GOSSIP_PORT:-9014}"
+dynamic_port_range="${CLUTCH_KEEPER_DYNAMIC_PORT_RANGE:-9020-9099}"
 url="http://127.0.0.1:${rpc_port}"
 validator_pid=""
 keeper_pid=""
@@ -209,7 +220,10 @@ cat >"$work/account_field.py" <<'PY'
 import base64, json, sys
 
 offset, length, mode = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
-value = json.load(sys.stdin).get("result", {}).get("value")
+response = json.load(sys.stdin)
+if "error" in response or "result" not in response:
+    raise SystemExit(f"getAccountInfo failed: {response}")
+value = response["result"].get("value")
 if value is None:
     print("ABSENT")
     raise SystemExit(0)
@@ -239,7 +253,7 @@ account_field() {
 
 account_present() {
   local value
-  value="$(account_field "$1" 0 1 hex)"
+  value="$(account_field "$1" 0 1 hex)" || return 2
   [ "$value" != "ABSENT" ]
 }
 
@@ -247,15 +261,65 @@ require_absent() {
   if account_present "$2"; then
     echo "FAIL: $1 is still present at $2"
     exit 1
+  else
+    status=$?
+    if [ "$status" -ne 1 ]; then
+      echo "FAIL: could not determine whether $1 is absent at $2"
+      exit 1
+    fi
   fi
   echo "  closed: $1"
 }
 
+require_present() {
+  if account_present "$2"; then
+    echo "  retained: $1"
+  else
+    status=$?
+    if [ "$status" -ne 1 ]; then
+      echo "FAIL: could not determine whether $1 is present at $2"
+      exit 1
+    fi
+    echo "FAIL: $1 is absent at $2"
+    exit 1
+  fi
+}
+
+# `GeneralFundingLedgerV1` is canonically keyed by the raw 32 bytes of the
+# account it funded.  Derive it from the same program seed used by the keeper;
+# do not trust a static index to tell the gate whether a ledger exists.
+funding_ledger_address() {
+  local target="$1" target_hex
+  target_hex="$(python3 - "$target" <<'PY'
+import sys
+
+alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+text = sys.argv[1]
+number = 0
+for character in text:
+    if character not in alphabet:
+        raise SystemExit(f"invalid base58 address: {text}")
+    number = number * 58 + alphabet.index(character)
+try:
+    raw = number.to_bytes(32, "big")
+except OverflowError:
+    raise SystemExit(f"address is wider than 32 bytes: {text}")
+print(raw.hex())
+PY
+)"
+  "$solana_bin" find-program-derived-address "$program_id" \
+    hex:64633a67656e2d66756e64696e673a7631 "hex:$target_hex" \
+    --output json-compact \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["address"])'
+}
+
 wait_for_epoch_phase() {
-  # EpochAccount phase lives at byte 325 of its exact 328-byte image.
+  # EpochAccount phase lives at byte 326 of its exact 329-byte image.  Keep
+  # this projection aligned with the canonical layout codec rather than the
+  # pre-basis-degree V1 offset.
   local target="$1" reason="$2" seen
   for _ in $(seq 1 2400); do
-    seen="$(account_field "$epoch_account" 325 1 u8)"
+    seen="$(account_field "$epoch_account" 326 1 u8)"
     if [ "$seen" = "$target" ]; then
       return 0
     fi
@@ -287,6 +351,7 @@ start_validator() {
   local validator_args=(
     --ledger "$work/ledger" --reset --quiet
     --rpc-port "$rpc_port" --faucet-port "$faucet_port" --mint "${pub[payer]}"
+    --gossip-port "$gossip_port" --dynamic-port-range "$dynamic_port_range"
     --bpf-program "$program_id" "$elf"
   )
   while read -r role address file; do
@@ -321,7 +386,7 @@ trap 'release_lock; cleanup' EXIT
 
 gate_started=$SECONDS
 echo
-echo "== validator (rpc $rpc_port, faucet $faucet_port) =="
+echo "== validator (rpc $rpc_port, faucet $faucet_port, gossip $gossip_port, dynamic $dynamic_port_range) =="
 start_validator
 
 owner_keys=()
@@ -351,6 +416,26 @@ window_account="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["windo
 page_account="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["page0"])' <<<"$addresses")"
 pot_account="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["pot"])' <<<"$addresses")"
 policy_artifact="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["policy_artifact"])' <<<"$addresses")"
+clear_work_account="$(role_address general.clear-work)"
+candidate_record="$(role_address general.candidate)"
+candidate_feed="$(role_address general.feed)"
+
+# Capture every canonical terminal funding sibling before cleanup.  The
+# ledger for an account that closes safely must disappear with it; the epoch's
+# ledger must remain with the deliberately retained root.  This plan's
+# candidate pair is intentionally unledgered and is asserted separately.
+epoch_funding_ledger="$(funding_ledger_address "$epoch_account")"
+page_funding_ledger="$(funding_ledger_address "$page_account")"
+pot_funding_ledger="$(funding_ledger_address "$pot_account")"
+clear_work_funding_ledger="$(funding_ledger_address "$clear_work_account")"
+candidate_funding_ledger="$(funding_ledger_address "$candidate_record")"
+receipt_accounts=()
+receipt_funding_ledgers=()
+for slice in 0 1 2; do
+  receipt="$(role_address "general.receipt-$slice")"
+  receipt_accounts+=("$receipt")
+  receipt_funding_ledgers+=("$(funding_ledger_address "$receipt")")
+done
 
 # The keeper derived these from the program's own SEED_* constants and the
 # frozen policy identity.  If they disagree with the plan's, one of the two is
@@ -446,15 +531,63 @@ echo "== keeper #2: a fresh process, no state but the chain =="
 "$keeper_bin" run "${keeper_common[@]}" --owner "$keys/actor.json" --poll-ms 700 \
   --exit-when-blocked >"$log/keeper-2.log" 2>&1 &
 keeper_pid=$!
-wait_for_log "$log/keeper-2.log" 'keeper stop reason=lifecycle-complete' \
-  "the restarted keeper finishing the lifecycle"
-wait "$keeper_pid" 2>/dev/null || true
+wait_for_log "$log/keeper-2.log" \
+  'reason="root retained: CloseGeneralEpoch is disabled' \
+  "the restarted keeper reaching the fail-closed terminal state"
+if wait "$keeper_pid"; then
+  :
+else
+  status=$?
+  echo "FAIL: the restarted keeper exited nonzero after reporting Blocked ($status)"
+  tail -30 "$log/keeper-2.log"
+  exit 1
+fi
 keeper_pid=""
+blocked_reason="$(sed -n 's/^keeper blocked actions=[0-9][0-9]* reason="\(.*\)"$/\1/p' \
+  "$log/keeper-2.log" | tail -1)"
+if [ -z "$blocked_reason" ]; then
+  echo "FAIL: keeper #2 did not emit a parseable Blocked reason"
+  tail -30 "$log/keeper-2.log"
+  exit 1
+fi
+
+echo
+echo "== keeper #3: terminal Blocked is stable across another fresh process =="
+"$keeper_bin" run "${keeper_common[@]}" --poll-ms 700 --exit-when-blocked \
+  >"$log/keeper-blocked-restart.log" 2>&1 &
+keeper_pid=$!
+wait_for_log "$log/keeper-blocked-restart.log" \
+  'reason="root retained: CloseGeneralEpoch is disabled' \
+  "a second fresh keeper reporting the same fail-closed terminal state"
+if wait "$keeper_pid"; then
+  :
+else
+  status=$?
+  echo "FAIL: the terminal-state probe exited nonzero after reporting Blocked ($status)"
+  tail -30 "$log/keeper-blocked-restart.log"
+  exit 1
+fi
+keeper_pid=""
+restart_blocked_reason="$(sed -n 's/^keeper blocked actions=[0-9][0-9]* reason="\(.*\)"$/\1/p' \
+  "$log/keeper-blocked-restart.log" | tail -1)"
+if [ "$restart_blocked_reason" != "$blocked_reason" ]; then
+  echo "FAIL: Blocked reason changed across a clean keeper restart"
+  echo "  first:  $blocked_reason"
+  echo "  second: $restart_blocked_reason"
+  exit 1
+fi
+if grep -q 'action=' "$log/keeper-blocked-restart.log"; then
+  echo "FAIL: a fresh keeper attempted an action from the terminal Blocked state"
+  grep 'action=' "$log/keeper-blocked-restart.log"
+  exit 1
+fi
+echo "  stable Blocked reason: $blocked_reason"
 walk_seconds=$((SECONDS - gate_started))
 
 echo
-echo "== what the two keeper processes actually drove =="
-cat "$log/keeper-1.log" "$log/keeper-2.log" >"$log/keeper-all.log"
+echo "== what the keeper processes actually drove =="
+cat "$log/keeper-1.log" "$log/keeper-2.log" \
+  "$log/keeper-blocked-restart.log" >"$log/keeper-all.log"
 grep 'result=' "$log/keeper-all.log" | sed 's/^/  /'
 
 echo
@@ -474,7 +607,7 @@ required=(
   FinalizeSelection FreezeEntitlement EntitleSlice
   SettlePage ReleaseTerminalReservation CloseGeneralReceipt
   CloseGeneralPage CloseGeneralReservation CloseGeneralPot
-  CloseGeneralClearWork CloseGeneralEpoch
+  CloseGeneralClearWork
 )
 missing=0
 for action in "${required[@]}"; do
@@ -489,6 +622,11 @@ if [ "$missing" -ne 0 ]; then
   echo "FAIL: the keeper did not drive every permissionless step"
   exit 1
 fi
+if grep -q 'action=CloseGeneralEpoch ' "$log/keeper-all.log"; then
+  echo "FAIL: the keeper attempted disabled tag 67 CloseGeneralEpoch"
+  exit 1
+fi
+echo "  did not attempt CloseGeneralEpoch (tag 67 is fail-closed)"
 # Exactly one route in the family is owner-signed, and it must be the only one
 # the keeper claims as such.
 owner_signed="$(grep -c 'authority=owner-signed' "$log/keeper-all.log" || true)"
@@ -499,18 +637,32 @@ fi
 echo "  authority split: 1 owner-signed (tag 60), the rest permissionless"
 
 echo
-echo "== the epoch's machinery is closed =="
-require_absent "epoch" "$epoch_account"
-require_absent "window" "$window_account"
+echo "== every safely closable terminal leaf is absent =="
 require_absent "order page" "$page_account"
+require_absent "order-page funding ledger" "$page_funding_ledger"
 require_absent "final pot" "$pot_account"
-require_absent "clear work" "$(role_address general.clear-work)"
+require_absent "final-pot funding ledger" "$pot_funding_ledger"
+require_absent "clear work" "$clear_work_account"
+require_absent "clear-work funding ledger" "$clear_work_funding_ledger"
 for slice in 0 1 2; do
-  require_absent "receipt $slice" "$(role_address "general.receipt-$slice")"
+  require_absent "receipt $slice" "${receipt_accounts[$slice]}"
+  require_absent "receipt $slice funding ledger" "${receipt_funding_ledgers[$slice]}"
 done
 for rank in 1 2 3 4 5 6; do
   require_absent "reservation $rank" "$(role_address "general.reservation-$rank")"
 done
+
+echo
+echo "== the replay anchor is deliberately retained =="
+require_present "CLEARED epoch/replay anchor" "$epoch_account"
+require_present "epoch window" "$window_account"
+require_present "epoch funding ledger" "$epoch_funding_ledger"
+terminal_epoch_phase="$(account_field "$epoch_account" 326 1 u8)"
+if [ "$terminal_epoch_phase" != "2" ]; then
+  echo "FAIL: retained epoch phase is $terminal_epoch_phase, not CLEARED(2)"
+  exit 1
+fi
+echo "  retained epoch phase is CLEARED(2)"
 
 echo
 echo "== CompleteClearWork, evidenced on chain rather than in a log =="
@@ -519,7 +671,7 @@ echo "== CompleteClearWork, evidenced on chain rather than in a log =="
 # `FinalizeSelection` promotes VERIFIED to SELECTED (2), so a SELECTED record
 # is proof both ran -- whichever keeper process happened to emit them, and
 # whether or not the kill ate the log line.
-candidate_status="$(account_field "$(role_address general.candidate)" 334 1 u8)"
+candidate_status="$(account_field "$candidate_record" 334 1 u8)"
 if [ "$candidate_status" != "2" ]; then
   echo "FAIL: the candidate record is status $candidate_status, not SELECTED(2);"
   echo "      CompleteClearWork and FinalizeSelection did not both land"
@@ -536,19 +688,17 @@ echo
 echo "== the recorded residual: the unledgered candidate pair =="
 # The plan's SubmitCandidate created the record and feed without the optional
 # funding ledger, so no payer is recorded and no payer is ever guessed.  The
-# keeper must leave the pair standing AND the root must still have closed past
-# it.  Both halves are the assertion; either one alone would be worthless.
-candidate_record="$(role_address general.candidate)"
-if ! account_present "$candidate_record"; then
-  echo "FAIL: the unledgered candidate record was closed; no payer could have been known"
-  exit 1
-fi
+# keeper must leave both pair members standing and the root occupied.
+require_present "unledgered candidate record" "$candidate_record"
+require_present "unledgered candidate feed" "$candidate_feed"
+require_absent "candidate funding ledger (never created)" "$candidate_funding_ledger"
 if grep -q 'action=CloseGeneralCandidate' "$log/keeper-all.log"; then
   echo "FAIL: the keeper attempted a close that records no payer"
   exit 1
 fi
 echo "  candidate record stands at $candidate_record (RENT.ACCOUNT_REFUND_UNOWNED)"
-echo "  the epoch root closed past it, which is the recorded tolerance"
+echo "  candidate feed stands at $candidate_feed as the other unledgered pair member"
+echo "  no CloseGeneralCandidate was attempted; the root remains occupied around this residual"
 
 echo
 echo "== conservation, re-derived from the FINAL committed bytes =="
@@ -672,11 +822,15 @@ echo "driver=CLUTCH_KEEPER_ONLY"
 echo "permissionless_actions=$(grep -c 'authority=permissionless' "$log/keeper-all.log")"
 echo "owner_signed_actions=$owner_signed"
 echo "restart_falsifier=PASS_KILLED_AFTER_${before_actions}_ACTIONS_RESUMED_FROM_CHAIN"
+echo "terminal_keeper_state=BLOCKED_STABLE_ACROSS_FRESH_RESTART"
 echo "conservation=RE-DERIVED-FROM-FINAL-COMMITTED-BYTES"
-echo "close_dag=EPOCH_WINDOW_PAGE_POT_CLEARWORK_ALL_ABSENT"
+echo "terminal_cleanup=SAFE_LEAVES_AND_THEIR_FUNDING_LEDGERS_ABSENT"
+echo "replay_anchor=EPOCH_WINDOW_AND_EPOCH_FUNDING_LEDGER_RETAINED"
+echo "root_close=DISABLED_NOT_ATTEMPTED"
+echo "terminal_residual=UNLEDGERED_CANDIDATE_RECORD_AND_FEED_RETAINED"
 echo "fold_wire_largest_fitting_folds=$fitting"
-echo "$(grep -m1 'fold_wire_plan' "$log/fold-wire.log")"
+grep -m1 'fold_wire_plan' "$log/fold-wire.log" || true
 echo "sbf_elf_sha256=$elf_sha256"
 echo "gate_wall_seconds=$walk_seconds"
-echo "rpc_port=$rpc_port faucet_port=$faucet_port"
+echo "rpc_port=$rpc_port faucet_port=$faucet_port gossip_port=$gossip_port dynamic_port_range=$dynamic_port_range"
 echo "work_dir=$work"
