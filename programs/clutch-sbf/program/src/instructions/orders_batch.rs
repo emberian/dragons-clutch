@@ -473,6 +473,7 @@ use crate::instructions::genesis::RentParameters;
 use crate::instructions::genesis::{
     create_pda_account, read_rent, require_creatable, require_system_program,
 };
+use crate::instructions::split;
 use crate::seeds;
 use clutch_solana_layout::direct_selection_v3::{
     DirectBatchPolicyV3, DirectEpochV4Account, DirectReservationV2Account,
@@ -558,6 +559,43 @@ pub const SETTLE_PAGE_ACCOUNT_COUNT: usize = 7;
 /// because the pot's verified residue expectation is what that completion
 /// draws down.
 pub const SETTLE_PAGE_POTTED_ACCOUNT_COUNT: usize = SETTLE_PAGE_ACCOUNT_COUNT + 1;
+
+/// Accounts in the **virtual-leg** `SettlePage` shape, exactly.
+///
+/// One real end instead of two, plus the epoch pot it trades against, plus
+/// the five accounts one pooled complete-set mint authenticates
+/// (`split::PooledSetRoles`).  It is longer than either direct shape because
+/// a virtual leg is the one settlement that changes the market's outstanding
+/// supply, and every account that truth lives in has to be in the list.
+///
+/// The count alone does not select it: the portfolio full-pair shape is
+/// variable-length and can also be eleven accounts long, so the pot's exact
+/// data length at [`IX_VSETTLE_POT`] is the discriminator, checked before
+/// anything is decoded.
+pub const SETTLE_VIRTUAL_ACCOUNT_COUNT: usize = 11;
+
+/// Cleared Epoch.  Virtual `SettlePage`.
+pub const IX_VSETTLE_EPOCH: usize = 0;
+/// Selected candidate record; its `virtual_split` sizes the mint.
+pub const IX_VSETTLE_CANDIDATE: usize = 1;
+/// The one real end's Position (writable).
+pub const IX_VSETTLE_POSITION: usize = 2;
+/// The one real end's stamped reservation (writable).
+pub const IX_VSETTLE_RESERVATION: usize = 3;
+/// The entitled virtual receipt of exactly one candidate slice (writable).
+pub const IX_VSETTLE_RECEIPT: usize = 4;
+/// The epoch's final pot: the virtual leg's counterparty (writable).
+pub const IX_VSETTLE_POT: usize = 5;
+/// The market account (read-only).
+pub const IX_VSETTLE_MARKET: usize = 6;
+/// The Hoard collateral account (writable).
+pub const IX_VSETTLE_HOARD: usize = 7;
+/// The reference-only kernel aggregate (writable).
+pub const IX_VSETTLE_KERNEL: usize = 8;
+/// The market-wide two-term supply ledger (writable).
+pub const IX_VSETTLE_SUPPLY: usize = 9;
+/// The Hoard's Token-2022 collateral account, mirrored and never moved.
+pub const IX_VSETTLE_HOARD_TOKEN: usize = 10;
 
 /// Accounts in the narrow `SubmitDirectPage` constructor, exactly.
 pub const SUBMIT_DIRECT_PAGE_ACCOUNT_COUNT: usize = 11;
@@ -667,6 +705,29 @@ const SETTLE_PAGE_POTTED_STATE_ROLES: [StateRole; SETTLE_PAGE_POTTED_ACCOUNT_COU
     StateRole::writable(IX_SETTLE_RECEIPT, account_len::SETTLEMENT_RECEIPT),
     StateRole::writable(IX_SETTLE_POT, account_len::FINAL_POT),
 ];
+
+/// Program-owned roles of the virtual-leg settlement shape's own half.
+///
+/// The five pooled-mint accounts are validated by
+/// [`split::pooled_set_transition`] against the same role table the seam
+/// plane uses, so they are deliberately absent here rather than checked
+/// twice from two places that could drift.
+const SETTLE_VIRTUAL_STATE_ROLES: [StateRole; 5] = [
+    StateRole::read_only(IX_VSETTLE_EPOCH, account_len::EPOCH),
+    StateRole::read_only(IX_VSETTLE_CANDIDATE, account_len::CANDIDATE),
+    StateRole::writable(IX_VSETTLE_POSITION, account_len::POSITION),
+    StateRole::writable(IX_VSETTLE_RESERVATION, RESERVATION_ACCOUNT_BYTES),
+    StateRole::writable(IX_VSETTLE_RECEIPT, account_len::SETTLEMENT_RECEIPT),
+];
+
+/// Where the virtual shape presents the five pooled complete-set accounts.
+const SETTLE_VIRTUAL_POOLED_ROLES: split::PooledSetRoles = split::PooledSetRoles {
+    market: IX_VSETTLE_MARKET,
+    hoard: IX_VSETTLE_HOARD,
+    kernel: IX_VSETTLE_KERNEL,
+    supply: IX_VSETTLE_SUPPLY,
+    hoard_token: IX_VSETTLE_HOARD_TOKEN,
+};
 
 /// Program-owned frozen inputs to deterministic direct submission.
 const SUBMIT_DIRECT_PAGE_STATE_ROLES: [StateRole; 5] = [
@@ -1572,6 +1633,23 @@ fn settle_page(
 ) -> Outcome<()> {
     let potted = accounts.len() == SETTLE_PAGE_POTTED_ACCOUNT_COUNT;
     if accounts.len() != SETTLE_PAGE_ACCOUNT_COUNT && !potted {
+        /* The virtual-leg shape, selected by its exact length *and* by the
+         * pot's exact data length at its fixed index.  The portfolio pair's
+         * variable list can also be eleven accounts long but never carries a
+         * `FinalPotAccount` at index five, so the two never overlap; a list
+         * that satisfies neither refuses inside whichever it falls into. */
+        if accounts.len() == SETTLE_VIRTUAL_ACCOUNT_COUNT
+            && accounts[IX_VSETTLE_POT].data_len() == account_len::FINAL_POT
+        {
+            return settle_virtual_slice(
+                program_id,
+                accounts,
+                sequence,
+                intent_market,
+                intent_epoch,
+                intent_page,
+            );
+        }
         return entitlement::settle_portfolio_pair(
             program_id,
             accounts,
@@ -1663,6 +1741,141 @@ fn settle_page(
     if let Some(pot) = pot.as_ref() {
         pot.encode(&mut borrow_mut!(accounts[IX_SETTLE_POT])?)?;
     }
+    Ok(())
+}
+
+/// Consume one entitled **virtual** slice: the buy end pays into the epoch
+/// pot, or the pot mints and delivers.
+///
+/// The two phases are read off the receipt's own consumption flags, so which
+/// one this is comes from persisted state rather than from the caller.  The
+/// mint, when it happens, goes through [`split::pooled_set_transition`] — the
+/// same kernel step, ledger delta, internal bound, two-term closure,
+/// collateral cap and Hoard mirror `Intent::Split` runs — because there is no
+/// second route to the market's outstanding supply and there must not be.
+#[inline(never)]
+fn settle_virtual_slice(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent_market: &Hash32,
+    intent_epoch: &Hash32,
+    intent_page: u16,
+) -> Outcome<()> {
+    require_distinct(accounts)?;
+    accounts::validate_state_roles(program_id, accounts, &SETTLE_VIRTUAL_STATE_ROLES)?;
+
+    let epoch = decode_epoch_boxed(&accounts[IX_VSETTLE_EPOCH].data.borrow())?;
+    let candidate = decode_candidate_boxed(&accounts[IX_VSETTLE_CANDIDATE].data.borrow())?;
+    let mut position = decode_position_boxed(&accounts[IX_VSETTLE_POSITION].data.borrow())?;
+    let mut reservation =
+        decode_reservation_boxed(&accounts[IX_VSETTLE_RESERVATION].data.borrow())?;
+    let mut receipt = decode_receipt_boxed(&accounts[IX_VSETTLE_RECEIPT].data.borrow())?;
+    let mut pot = decode_final_pot_boxed(&accounts[IX_VSETTLE_POT].data.borrow())?;
+
+    expect_pda(
+        accounts[IX_VSETTLE_EPOCH].key,
+        seeds::epoch_pda(program_id, &epoch.market.bytes(), epoch.epoch_index),
+        Some(epoch.stored_bump),
+    )?;
+    expect_pda(
+        accounts[IX_VSETTLE_CANDIDATE].key,
+        seeds::candidate_pda(
+            program_id,
+            &candidate.epoch.bytes(),
+            &candidate.candidate.bytes(),
+        ),
+        Some(candidate.stored_bump),
+    )?;
+    validate_position_address(program_id, &accounts[IX_VSETTLE_POSITION])?;
+    expect_pda(
+        accounts[IX_VSETTLE_RESERVATION].key,
+        seeds::reservation_pda(program_id, &reservation.reservation.bytes()),
+        Some(reservation.stored_bump),
+    )?;
+    expect_pda(
+        accounts[IX_VSETTLE_RECEIPT].key,
+        seeds::receipt_pda(
+            program_id,
+            &receipt.epoch.bytes(),
+            &receipt.candidate.bytes(),
+            receipt.slice_index,
+        ),
+        Some(receipt.stored_bump),
+    )?;
+    expect_pda(
+        accounts[IX_VSETTLE_POT].key,
+        seeds::pot_pda(program_id, &pot.epoch.bytes()),
+        Some(pot.stored_bump),
+    )?;
+
+    require(
+        epoch.market == *intent_market
+            && epoch.epoch == *intent_epoch
+            && sequence == receipt.sequence
+            && reservation.page_index == intent_page,
+        ClutchError::MismatchedState,
+    )?;
+
+    let plan =
+        settlement::prepare_virtual_slice_consumption(&settlement::VirtualSliceConsumptionInput {
+            epoch: &epoch,
+            candidate: &candidate,
+            position: &position,
+            reservation: &reservation,
+            receipt: &receipt,
+            pot: &pot,
+        })?;
+
+    /* The mint, before the delivery it funds and before any other write.  It
+     * takes the pot's own claim vector as the holder, so the claims it
+     * creates are bounded by `require_internal_bound` against the very
+     * ledger term it just moved -- there is no window in which the pot holds
+     * a claim the supply ledger has not accounted. */
+    if plan.mint_sets != 0 {
+        split::pooled_set_transition(
+            program_id,
+            accounts,
+            &SETTLE_VIRTUAL_POOLED_ROLES,
+            epoch.market,
+            &mut pot.pot_internal,
+            split::PooledSetChange {
+                quantity: plan.mint_sets,
+                mint: true,
+            },
+        )?;
+    } else {
+        /* No transition, but the same two closure obligations: a delivery
+         * hands claims out of the pot's inventory, and the inventory has to
+         * be one the supply ledger accounts for.  The pay phase runs it too,
+         * over an inventory that is still zero, so every virtual instruction
+         * authenticates the five pooled accounts it presents. */
+        split::require_pooled_holder_bound(
+            program_id,
+            accounts,
+            &SETTLE_VIRTUAL_POOLED_ROLES,
+            epoch.market,
+            &pot.pot_internal,
+        )?;
+    }
+
+    settlement::apply_virtual_slice_consumption(
+        &mut position,
+        &mut reservation,
+        &mut receipt,
+        &mut pot,
+        plan,
+    );
+    // All validation remains over staged values.  No account byte has moved.
+    position.validate()?;
+    reservation.validate()?;
+    receipt.validate()?;
+    pot.validate()?;
+
+    position.encode(&mut borrow_mut!(accounts[IX_VSETTLE_POSITION])?)?;
+    reservation.encode(&mut borrow_mut!(accounts[IX_VSETTLE_RESERVATION])?)?;
+    receipt.encode(&mut borrow_mut!(accounts[IX_VSETTLE_RECEIPT])?)?;
+    pot.encode(&mut borrow_mut!(accounts[IX_VSETTLE_POT])?)?;
     Ok(())
 }
 

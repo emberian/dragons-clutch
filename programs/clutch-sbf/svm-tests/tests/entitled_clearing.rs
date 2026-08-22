@@ -17,10 +17,10 @@
 //!   non-selected candidate, double-entitle, consume of an unentitled
 //!   receipt, double-consume, a partial pair presentation, and a tampered
 //!   receipt — each with full rollback;
-//! * the honest stubs — a verified virtual-split candidate refuses the
-//!   entitlement freeze (`NotYetImplemented`: the VirtualPot ranked blocker
-//!   stands) and a partial-fill candidate refuses entitlement (the
-//!   PartialFillLedger row likewise);
+//! * the retired rows, at this file's boundary — a verified virtual-split
+//!   candidate now freezes and opens its pot (the `VirtualPot` row retired;
+//!   the mint itself is driven in `vpot_split.rs`) and a partial-fill
+//!   candidate clears slice by slice;
 //! * the lapse record — a lapsed epoch's reservations stand ACTIVE and the
 //!   cancellation path (`CancelOrder`) keeps requiring an OPEN epoch: the
 //!   post-lapse exit is the owner-signed terminal release (tag 60), driven
@@ -68,6 +68,7 @@ use {
         SettlementReceiptAccount, CANDIDATE_STATUS_SELECTED, EPOCH_PHASE_CLEARED,
         EPOCH_PHASE_FROZEN, EPOCH_PHASE_LAPSED, FEED_FILLS_PER_CHUNK, FEED_SLICES_PER_CHUNK,
         MAX_GRID_TICKS, MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_MAP_UNUSED, POT_PHASE_CLOSED,
+        POT_PHASE_OPEN,
         RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED, RECEIPT_FLAG_SLICE_EXHAUSTED,
     },
     clutch_svm_fixture::{
@@ -1835,10 +1836,15 @@ async fn portfolio_order_actually_clears_with_conservation() {
     assert_eq!(custom(release.0), ClutchError::NotActive as u32);
 }
 
-/// A verified virtual-split candidate refuses the entitlement freeze: the
-/// VirtualPot ranked blocker stands, stated on the honest-stub code.
+/// A verified virtual-split candidate now *freezes*: the `VirtualPot` row is
+/// retired, and the pot opens carrying the churn expectation.
+///
+/// The mint itself is a `SettlePage` concern and is driven end to end in
+/// `vpot_split.rs`; what this pins is the boundary this file used to hold —
+/// the freeze no longer refuses, it records, and it opens the pot even on a
+/// book that realizes no rounding residue at all.
 #[tokio::test]
-async fn virtual_split_candidate_refuses_the_entitlement_freeze() {
+async fn virtual_split_candidate_freezes_and_opens_the_pot() {
     let (mut context, fixture) = start().await;
     let payer = context.payer.pubkey();
     // Four buys, one per outcome, all strict at even prices: the canonical
@@ -1875,16 +1881,22 @@ async fn virtual_split_candidate_refuses_the_entitlement_freeze() {
         EpochAccount::decode(&bytes_of(&mut context, fixture.epoch_account).await).unwrap();
     assert_eq!(epoch_now.phase, EPOCH_PHASE_CLEARED);
 
-    // The freeze refuses the verified virtual legs with the honest stub, and
-    // no pot is created.
-    let refused = send_walk(
+    // The freeze records the verified virtual legs and opens the pot, whose
+    // scalars all start at economic zero: nothing has been collected yet, and
+    // `SettlePage` is what fills and drains them.
+    let (result, _) = send_walk(
         &mut context,
         fixture.freeze_entitlement(payer, split.id),
         342,
     )
     .await;
-    assert_eq!(custom(refused.0), ClutchError::NotYetImplemented as u32);
-    assert!(account(&mut context, fixture.pot()).await.is_none());
+    result.unwrap();
+    let pot = FinalPotAccount::decode(&bytes_of(&mut context, fixture.pot()).await).unwrap();
+    assert_eq!(pot.candidate, split.id);
+    assert_eq!(pot.phase, POT_PHASE_OPEN);
+    assert_eq!(pot.pot_internal, [0; MAX_OUTCOMES]);
+    assert_eq!(pot.pot_cash_price_units, 0);
+    assert_eq!(pot.rounding_pot_price_units, 0);
 }
 
 /// A verified partial-fill candidate clears slice by slice, and every

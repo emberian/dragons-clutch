@@ -534,6 +534,58 @@ struct KernelPost {
     resolved_payout: u8,
 }
 
+/// Exactly the four [`clutch_kernel::MarketState`] transitions this plane runs,
+/// with their coordinates and nothing else.
+///
+/// [`SeamOp`] additionally carries the *authorization* names — the market and
+/// owner identities the intent binds — which the kernel step has no use for.
+/// Splitting them is what lets a caller that is not an owner-signed seam
+/// request (the clearing plane's pooled mint, [`pooled_set_transition`]) reach
+/// the same kernel step without inventing an owner identity it does not have.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum KernelOp {
+    /// Create `quantity` complete internal sets.
+    Split(u64),
+    /// Destroy `quantity` complete internal sets.
+    Merge(u64),
+    /// Move `quantity` of one outcome from internal to the external shadow.
+    Materialize {
+        /// Outcome index.
+        outcome: u8,
+        /// Claim atoms.
+        quantity: u64,
+    },
+    /// Move `quantity` of one outcome from the external shadow to internal.
+    Dematerialize {
+        /// Outcome index.
+        outcome: u8,
+        /// Claim atoms.
+        quantity: u64,
+    },
+}
+
+impl SeamOp {
+    /// The kernel transition this seam intent runs, without its bound names.
+    const fn kernel_op(&self) -> KernelOp {
+        match self {
+            Self::Split { quantity, .. } => KernelOp::Split(*quantity),
+            Self::Merge { quantity, .. } => KernelOp::Merge(*quantity),
+            Self::Materialize {
+                outcome, quantity, ..
+            } => KernelOp::Materialize {
+                outcome: *outcome,
+                quantity: *quantity,
+            },
+            Self::Dematerialize {
+                outcome, quantity, ..
+            } => KernelOp::Dematerialize {
+                outcome: *outcome,
+                quantity: *quantity,
+            },
+        }
+    }
+}
+
 /// Run one seam transition on the pure kernel and re-encode the aggregate.
 ///
 /// The whole `KernelAccount`/`MarketState` working set lives in this frame and
@@ -547,7 +599,7 @@ fn kernel_step(
     outcome_count: u8,
     collateral_before: u64,
     position: &mut Position,
-    op: &SeamOp,
+    op: KernelOp,
 ) -> Outcome<KernelPost> {
     let mut account = KernelAccount::decode(kernel_data)?;
     if usize::from(outcome_count) > KERNEL_MAX_OUTCOMES || account.payouts.outcomes != outcome_count
@@ -571,14 +623,14 @@ fn kernel_step(
     };
     market.check_invariants()?;
     match op {
-        SeamOp::Split { quantity, .. } => market.split(position, *quantity)?,
-        SeamOp::Merge { quantity, .. } => market.merge(position, *quantity)?,
-        SeamOp::Materialize {
-            outcome, quantity, ..
-        } => market.materialize(position, *outcome, *quantity)?,
-        SeamOp::Dematerialize {
-            outcome, quantity, ..
-        } => market.dematerialize(position, *outcome, *quantity)?,
+        KernelOp::Split(quantity) => market.split(position, quantity)?,
+        KernelOp::Merge(quantity) => market.merge(position, quantity)?,
+        KernelOp::Materialize { outcome, quantity } => {
+            market.materialize(position, outcome, quantity)?
+        }
+        KernelOp::Dematerialize { outcome, quantity } => {
+            market.dematerialize(position, outcome, quantity)?
+        }
     }
     account.phase = match market.phase {
         Phase::Active => 0,
@@ -639,7 +691,8 @@ mod basis_mode_tests {
                 owner: Hash32::from_bytes([7; 32]),
                 quantity: 12,
             };
-            let split_post = kernel_step(&mut bytes, 2, 0, &mut position, &split).unwrap();
+            let split_post =
+                kernel_step(&mut bytes, 2, 0, &mut position, split.kernel_op()).unwrap();
             assert_eq!(split_post.collateral, 12, "degree {degree}");
             assert_eq!(split_post.total_supply[..2], [12, 12], "degree {degree}");
 
@@ -651,7 +704,7 @@ mod basis_mode_tests {
                 quantity: 5,
             };
             let materialize_post =
-                kernel_step(&mut bytes, 2, 12, &mut position, &materialize).unwrap();
+                kernel_step(&mut bytes, 2, 12, &mut position, materialize.kernel_op()).unwrap();
             assert_eq!(materialize_post.collateral, 12, "degree {degree}");
             assert_eq!(
                 materialize_post.total_supply[..2],
@@ -679,7 +732,7 @@ mod basis_mode_tests {
             quantity: 1,
         };
         assert_eq!(
-            kernel_step(&mut bytes, 2, 0, &mut position, &op),
+            kernel_step(&mut bytes, 2, 0, &mut position, op.kernel_op()),
             Err(Refusal::Kernel(KernelError::NotActive))
         );
         assert_eq!(bytes, before_bytes);
@@ -699,7 +752,7 @@ mod basis_mode_tests {
             quantity: 1,
         };
         assert_eq!(
-            kernel_step(&mut bytes, 2, 5, &mut position, &op),
+            kernel_step(&mut bytes, 2, 5, &mut position, op.kernel_op()),
             Err(Refusal::Kernel(KernelError::InvariantViolation))
         );
         assert_eq!(bytes, before_bytes);
@@ -749,6 +802,302 @@ fn require_internal_bound(
         outcome += 1;
     }
     Ok(())
+}
+
+/* --------------------------------------------------------------------- */
+/* The pooled complete-set primitive the clearing plane's mint join calls */
+/* --------------------------------------------------------------------- */
+
+/// Where one pooled complete-set mint or burn finds the five accounts it
+/// authenticates, in the calling instruction's own account list.
+///
+/// The seam plane fixes these at [`IX_MARKET`]/[`IX_HOARD`]/[`IX_KERNEL`]/
+/// [`IX_SUPPLY`]/[`IX_HOARD_TOKEN`]; the clearing plane's virtual-leg
+/// consumption appends them after its own prefix.  Parameterizing the
+/// positions is what keeps the decision procedure one copy rather than two
+/// that drift.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PooledSetRoles {
+    /// The market account (read-only).
+    pub market: usize,
+    /// The Hoard collateral account (writable).
+    pub hoard: usize,
+    /// The reference-only kernel aggregate (writable).
+    pub kernel: usize,
+    /// The market-wide two-term supply ledger (writable).
+    pub supply: usize,
+    /// The Hoard's Token-2022 collateral account (read-only here: a pooled
+    /// set change moves no Token-2022 atoms, exactly as `Split`/`Merge` do
+    /// not, so this account is present only to be *mirrored against*).
+    pub hoard_token: usize,
+}
+
+/// One pooled complete-set change, and everything its caller must already
+/// have decided.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PooledSetChange {
+    /// Complete sets created (`mint`) or destroyed.
+    pub quantity: u64,
+    /// True to create, false to destroy.
+    pub mint: bool,
+}
+
+/// Move `quantity` complete sets into or out of a **pooled holder** that is
+/// not an owner Position, with every CLO-DELTA-V1 obligation intact.
+///
+/// This is [`seam`]'s economic core with its *authorization* half removed and
+/// nothing else: the caller has already decided who may do this and why, and
+/// what it gets here is the identical kernel step ([`kernel_step`]), the
+/// identical ledger delta and internal bound ([`ledger_step`], which calls
+/// [`require_internal_bound`]), the identical two-term closure over both
+/// pre- and post-state, the identical collateral cap on the mint side and the
+/// identical *absence* of one on the burn side, and the identical Hoard mirror
+/// over the Token-2022 balance.  Nothing is relaxed for the pooled caller.
+///
+/// `holder_internal` is the pooled holder's claim vector — for the clearing
+/// plane, `FinalPotAccount::pot_internal`.  It is updated in place only after
+/// every check has passed.
+///
+/// **What backs a mint here.** A complete set is worth exactly one collateral
+/// atom (`crates/clutch-batch/src/relation_v1.rs:2749-2757` prices the virtual
+/// split at `sigma * price_scale` price units, and prices lie on the scaled
+/// simplex, `relation_v1.rs:1218-1250`).  This primitive does not create that
+/// atom: it *reclassifies* one that is already inside the Hoard's token
+/// account but attributed to nobody, and the mirror below is the check that
+/// says so.  The clearing plane's caller must therefore have collected the
+/// atom first — see the pay-then-mint order documented in
+/// `orders_batch::settlement`.
+#[inline(never)]
+pub(crate) fn pooled_set_transition(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    roles: &PooledSetRoles,
+    market_id: Hash32,
+    holder_internal: &mut [u64; MAX_OUTCOMES],
+    change: PooledSetChange,
+) -> Outcome<u64> {
+    require(change.quantity != 0, ClutchError::NonCanonical)?;
+    let (market, mut hoard, hoard_token_amount) =
+        pooled_set_preflight(program_id, accounts, roles, market_id, holder_internal)?;
+
+    if change.mint {
+        /* The collateral cap, checked before the kernel runs, exactly as
+         * `Split` checks it.  A burn has none, for the reason the `Merge` arm
+         * of `seam` states: it lowers the backing and must always stay open. */
+        let next_collateral = hoard
+            .collateral_atoms
+            .checked_add(change.quantity)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        require(
+            next_collateral <= market.collateral_cap,
+            ClutchError::CollateralCap,
+        )?;
+    }
+
+    let pre_internal = *holder_internal;
+    let mut moved = Position {
+        internal: pre_internal,
+        external: [0_u64; MAX_OUTCOMES],
+    };
+    let kernel_post = {
+        let mut kernel_data = accounts[roles.kernel]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        kernel_step(
+            &mut kernel_data,
+            market.outcome_count,
+            hoard.collateral_atoms,
+            &mut moved,
+            if change.mint {
+                KernelOp::Split(change.quantity)
+            } else {
+                KernelOp::Merge(change.quantity)
+            },
+        )?
+    };
+
+    {
+        let mut supply_data = accounts[roles.supply]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        ledger_step(
+            &mut supply_data,
+            market.outcome_count,
+            &pre_internal,
+            &moved,
+        )?;
+    }
+
+    /* The mirror over the post-state, and the load-bearing one: the value
+     * about to be written into `HoardAccount::collateral_atoms` is the
+     * kernel's, and the Token-2022 balance must cover it.  A mint that
+     * reclassified an atom the pool does not hold refuses here. */
+    token::require_hoard_covers_collateral(kernel_post.collateral, hoard_token_amount)?;
+
+    /* C1 again, over the post-state the two writes above just produced. */
+    {
+        let supply_post = accounts::read_supply(&accounts[roles.supply].data.borrow())?;
+        let kernel_facts = accounts::read_kernel(&accounts[roles.kernel].data.borrow())?;
+        require_two_term_closure(&supply_post, &kernel_facts, market.outcome_count)?;
+        require(
+            kernel_facts.total_supply == kernel_post.total_supply,
+            ClutchError::AggregateClosureMismatch,
+        )?;
+    }
+
+    hoard.collateral_atoms = kernel_post.collateral;
+    hoard.encode(
+        &mut accounts[roles.hoard]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+    )?;
+    *holder_internal = moved.internal;
+    Ok(kernel_post.collateral)
+}
+
+/// Prove a pooled holder's claim vector is one the market's ledgers account
+/// for, without moving anything.
+///
+/// The clearing plane's virtual delivery hands claims out of the pot's
+/// inventory into a Position, which changes no aggregate — so it runs no
+/// transition.  It still has to know the inventory it is handing out is
+/// *real*, and this is that check: the same C1 two-term closure and the same
+/// C2 internal bound the mint runs, over the same authenticated accounts.  A
+/// pot whose inventory the supply ledger does not cover refuses before a
+/// single claim moves.
+#[inline(never)]
+pub(crate) fn require_pooled_holder_bound(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    roles: &PooledSetRoles,
+    market_id: Hash32,
+    holder_internal: &[u64; MAX_OUTCOMES],
+) -> Outcome<()> {
+    pooled_set_preflight(program_id, accounts, roles, market_id, holder_internal)?;
+    Ok(())
+}
+
+/// Authenticate the five pooled-set accounts and discharge both CLO-DELTA-V1
+/// obligations over the pre-state.
+#[inline(never)]
+fn pooled_set_preflight(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    roles: &PooledSetRoles,
+    market_id: Hash32,
+    holder_internal: &[u64; MAX_OUTCOMES],
+) -> Outcome<(MarketFacts, HoardAccount, u64)> {
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[roles.market],
+        false,
+        &[account_len::MARKET],
+    )?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[roles.hoard],
+        true,
+        &[account_len::HOARD],
+    )?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[roles.kernel],
+        true,
+        &[KERNEL_ACCOUNT_LEN],
+    )?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[roles.supply],
+        true,
+        &[account_len::SUPPLY_LEDGER],
+    )?;
+
+    let market = accounts::read_market(&accounts[roles.market].data.borrow())?;
+    let hoard = HoardAccount::decode(&accounts[roles.hoard].data.borrow())?;
+    let kernel = accounts::read_kernel(&accounts[roles.kernel].data.borrow())?;
+    let supply = accounts::read_supply(&accounts[roles.supply].data.borrow())?;
+
+    /* Every address recomputed from the frozen seed schema, and every stored
+     * bump compared against the canonical one -- the seam plane's rule, and
+     * the reason a caller cannot present a different market's Hoard. */
+    let market_bytes = market.market.bytes();
+    expect_pda(
+        accounts[roles.market].key,
+        seeds::market_pda(program_id, &market.realm.bytes(), &market_bytes),
+        Some(market.stored_bump),
+    )?;
+    let hoard_derived = seeds::hoard_pda(program_id, &market_bytes);
+    expect_pda(
+        accounts[roles.hoard].key,
+        hoard_derived,
+        Some(hoard.stored_bump),
+    )?;
+    expect_pda(
+        accounts[roles.kernel].key,
+        seeds::kernel_pda(program_id, &market_bytes),
+        None,
+    )?;
+    expect_pda(
+        accounts[roles.supply].key,
+        seeds::supply_pda(program_id, &market_bytes),
+        Some(supply.stored_bump),
+    )?;
+
+    require(
+        market.market == market_id
+            && market.market == hoard.market
+            && market.realm == hoard.realm
+            && market.market == kernel.market
+            && market.market == supply.market
+            && market.realm == supply.realm
+            && market.outcome_count == supply.outcome_count
+            && market.hoard_bump == hoard_derived.1
+            && market.lifecycle == 0
+            && kernel.phase == 0
+            && kernel.payout_outcomes == market.outcome_count
+            && usize::from(market.outcome_count) <= KERNEL_MAX_OUTCOMES,
+        ClutchError::MismatchedState,
+    )?;
+
+    /* Padding beyond the active outcome count is canonically zero in every
+     * balance vector this transition reads or writes. */
+    let count = usize::from(market.outcome_count);
+    let mut padding = count;
+    while padding < MAX_OUTCOMES {
+        require(
+            holder_internal[padding] == 0 && kernel.total_supply[padding] == 0,
+            ClutchError::NonCanonical,
+        )?;
+        padding += 1;
+    }
+
+    /* CLO-DELTA-V1 C1 and C2 over the pre-state, before any write. */
+    require_two_term_closure(&supply, &kernel, market.outcome_count)?;
+    require_internal_bound(
+        &SupplyLedgerAccount::decode(&accounts[roles.supply].data.borrow())?,
+        holder_internal,
+        market.outcome_count,
+    )?;
+
+    /* The Hoard mirror over the *pre*-state.  A market whose two collateral
+     * truths already disagree refuses here, before anything moves. */
+    let hoard_token_derived = seeds::hoard_token_pda(program_id, &market_bytes);
+    expect_pda(accounts[roles.hoard_token].key, hoard_token_derived, None)?;
+    require(
+        !accounts[roles.hoard_token].executable,
+        ClutchError::ExecutableAccount,
+    )?;
+    /* The mirror reads a balance, so the account has to be one the token
+     * program owns; a program-owned account with token-shaped bytes at this
+     * address would otherwise report whatever balance its author chose. */
+    require(
+        *accounts[roles.hoard_token].owner == token::TOKEN_2022_PROGRAM_ID,
+        ClutchError::WrongTokenProgram,
+    )?;
+    let hoard_token_amount = token::token_amount(&accounts[roles.hoard_token])?;
+    token::require_hoard_covers_collateral(hoard.collateral_atoms, hoard_token_amount)?;
+
+    Ok((market, hoard, hoard_token_amount))
 }
 
 /// Authenticate the shared half of any token leg: the token program itself.
@@ -1403,7 +1752,7 @@ where
             market.outcome_count,
             hoard.collateral_atoms,
             &mut moved,
-            op,
+            op.kernel_op(),
         )?
     };
 

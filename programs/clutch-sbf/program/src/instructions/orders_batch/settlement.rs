@@ -40,8 +40,8 @@ use clutch_solana_layout::{
     stream, CandidateRecord, CodecError, EpochAccount, FinalPotAccount, Hash32, OrderSlot,
     PositionAccount, PriceGridAccount, SettlementReceiptAccount, CANDIDATE_STATUS_SELECTED,
     CANDIDATE_STATUS_SUBMITTED, EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN, MAX_OUTCOMES,
-    ORDER_KIND_SINGLE, RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED,
-    RECEIPT_FLAG_SLICE_EXHAUSTED, RECEIPT_LEG_DIRECT,
+    ORDER_KIND_SINGLE, POT_PHASE_OPEN, RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED,
+    RECEIPT_FLAG_SLICE_EXHAUSTED, RECEIPT_LEG_DIRECT, RECEIPT_LEG_SPLIT,
 };
 
 use crate::accounts::{require, Outcome};
@@ -500,6 +500,17 @@ pub(in crate::instructions) struct EntitledSliceConsumptionPlan {
     /// seller's Position at completion — the V3 Settle precedent's
     /// seller-remainder leg, now the unfilled refund of a partial sell.
     pub(in crate::instructions) seller_remainder: u64,
+    /// The pot's exact cash after this slice, in price units, on an epoch
+    /// whose selected candidate carries a virtual split; `None` leaves the
+    /// field untouched, which is every churn-free epoch.
+    ///
+    /// The pot's cash is not a custody account and not a fee: it is the
+    /// running total of collateral this epoch has debited but not credited,
+    /// which sits unallocated in the market's Hoard pool exactly as the
+    /// rounding residue does.  Its closed form is derived in
+    /// [`pot_cash_after`], and its terminal value is `sigma * price_scale` —
+    /// the collateral that backs the virtual split's mint.
+    pub(in crate::instructions) pot_cash_after: Option<u128>,
 }
 
 /// Immutable inputs to one entitled slice consumption.
@@ -545,6 +556,61 @@ pub(super) struct EntitledSliceConsumptionInput<'a> {
 fn cumulative_value_price_units(units: u64, price: u64) -> u128 {
     // Two `u64` factors always fit a `u128` product.
     u128::from(units) * u128::from(price)
+}
+
+/// The pot's cash after one slice moved `debit` atoms in and `credit` atoms
+/// out and realized `residue` price units — the closed form the whole virtual
+/// join rests on.
+///
+/// Write `V_e` for one end's *cumulative* exact consumed value in price units
+/// and `S` for the price scale.  Every consumed slice adds `q * p` to its buy
+/// end and the same `q * p` to its sell end; a virtual-split slice has no sell
+/// end, so summing over the slices consumed so far,
+///
+/// ```text
+///   sum_buys V  -  sum_sells V  =  split value consumed so far.
+/// ```
+///
+/// [`convert_leg`] debits a payer `ceil(V/S)` atoms and credits a payee
+/// `floor(V/S)`, realizing the gap `r_e` exactly once, at the slice that
+/// completes that end.  Therefore
+///
+/// ```text
+///   pot_cash  =  sum (debit*S - credit*S - residue)
+///             =  (sum_buys V - sum_sells V)  +  sum over still-open ends r_e
+/// ```
+///
+/// and three facts follow, each of which this seam relies on:
+///
+/// * **Non-negative at every step**, because both terms are — so the pot is
+///   never asked to pay out value it does not hold, and no float is needed.
+/// * **Exactly `sigma * S` when the last receipt consumes**, because every
+///   still-open end has closed and every split slice has paid: the split
+///   serves `sigma` on every outcome (`relation_v1.rs:3830-3832`) and prices
+///   lie on the scaled simplex, so `sum_i sigma * p_i = sigma * S`.
+/// * **Zero at the freeze**, which is why the freeze cannot mint and this
+///   seam can.
+///
+/// The individual step may still be negative — a slice whose payer crosses no
+/// atom boundary while its payee does — so the arithmetic is checked and an
+/// underflow refuses rather than wrapping.
+fn pot_cash_after(
+    pot_cash_price_units: u128,
+    debit_atoms: u64,
+    credit_atoms: u64,
+    residue_price_units: u128,
+    scale: u128,
+) -> Outcome<u128> {
+    let credited = u128::from(credit_atoms)
+        .checked_mul(scale)
+        .and_then(|value| value.checked_add(residue_price_units))
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    u128::from(debit_atoms)
+        .checked_mul(scale)
+        .and_then(|value| pot_cash_price_units.checked_add(value))
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+        .checked_sub(credited)
+        .ok_or(Refusal::Adapter(ClutchError::AggregateClosureMismatch))
 }
 
 /// Verify one already-selected, already-entitled slice consumption.
@@ -688,8 +754,16 @@ pub(super) fn prepare_entitled_slice_consumption(
     /* The residue is drawn from the epoch pot's *verified* expectation, so a
      * runtime conversion the relation did not predict cannot land: the pot
      * refuses to go negative, and reaching zero exactly once every receipt has
-     * consumed is the whole-plane closure. */
-    if residue_price_units != 0 {
+     * consumed is the whole-plane closure.
+     *
+     * On an epoch whose selected candidate carries a virtual split the pot is
+     * mandatory on *every* slice, direct ones included, because its cash
+     * ledger only closes at `sigma * price_scale` when every slice has fed it
+     * — see [`pot_cash_after`].  A churn-free epoch keeps the sealed rule
+     * exactly: the pot is presented only when this slice realizes residue,
+     * and its cash field is never written. */
+    let churned = input.candidate.virtual_split != 0;
+    let pot_cash_after = if churned || residue_price_units != 0 {
         let pot = input
             .pot
             .ok_or(Refusal::Adapter(ClutchError::AccountCount))?;
@@ -698,9 +772,23 @@ pub(super) fn prepare_entitled_slice_consumption(
             pot.rounding_pot_price_units >= residue_price_units,
             ClutchError::AggregateClosureMismatch,
         )?;
-    } else if let Some(pot) = input.pot {
-        pot.binds_candidate(input.candidate)?;
-    }
+        if churned {
+            Some(pot_cash_after(
+                pot.pot_cash_price_units,
+                buyer_debit_atoms,
+                seller_credit_atoms,
+                residue_price_units,
+                scale,
+            )?)
+        } else {
+            None
+        }
+    } else {
+        if let Some(pot) = input.pot {
+            pot.binds_candidate(input.candidate)?;
+        }
+        None
+    };
 
     // The buy envelope is cash-only and must cover this slice's debit; the
     // sell envelope must hold at least the transferred quantity on this
@@ -776,6 +864,7 @@ pub(super) fn prepare_entitled_slice_consumption(
         buyer_release_atoms,
         seller_completes,
         seller_remainder,
+        pot_cash_after,
     })
 }
 
@@ -942,6 +1031,9 @@ pub(in crate::instructions) fn apply_entitled_slice_consumption(
     seller_position.internal[outcome] += plan.seller_remainder;
     if let Some(pot) = pot {
         pot.rounding_pot_price_units -= plan.residue_price_units;
+        if let Some(cash) = plan.pot_cash_after {
+            pot.pot_cash_price_units = cash;
+        }
     }
 
     buyer_reservation.consumed_units += plan.quantity;
@@ -960,6 +1052,357 @@ pub(in crate::instructions) fn apply_entitled_slice_consumption(
     receipt.settled_quantity = receipt.quantity;
     receipt.consumed_flags =
         RECEIPT_FLAG_BUY_CONSUMED | RECEIPT_FLAG_SELL_CONSUMED | RECEIPT_FLAG_SLICE_EXHAUSTED;
+}
+
+/* ------------------------------------------------------------------------ */
+/* The virtual join: one real end, the epoch pot on the other                */
+/* ------------------------------------------------------------------------ */
+
+/// Which half of one virtual slice this consumption is.
+///
+/// A virtual-split receipt consumes in **two** phases and the order is not a
+/// convention: it is the only order in which the pot is never short.
+///
+/// * [`VirtualPhase::Pay`] moves the buy end's cumulative debit exactly as an
+///   ordinary slice does, but there is no seller — so the whole
+///   `debit * S - residue` lands in the pot's cash and the buyer receives
+///   nothing yet.
+/// * [`VirtualPhase::Deliver`] moves `quantity` Egg atoms out of the pot's
+///   inventory into the buy end's Position, minting the inventory first when
+///   the pot does not yet hold any.
+///
+/// The `SettlementReceiptAccount` consumption flags have always been three
+/// separate bits; this is the first seam that sets them at two different
+/// times, and it is why they are separate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::instructions) enum VirtualPhase {
+    /// The buy end pays; the pot's cash rises.
+    Pay,
+    /// The pot mints if it must, then delivers.
+    Deliver,
+}
+
+/// Immutable inputs to one virtual slice consumption.
+pub(super) struct VirtualSliceConsumptionInput<'a> {
+    pub epoch: &'a EpochAccount,
+    pub candidate: &'a CandidateRecord,
+    pub position: &'a PositionAccount,
+    pub reservation: &'a ReservationAccount,
+    pub receipt: &'a SettlementReceiptAccount,
+    pub pot: &'a FinalPotAccount,
+}
+
+/// The exact post-state scalars for consuming one virtual slice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::instructions) struct VirtualSliceConsumptionPlan {
+    /// Which half this is.
+    pub(in crate::instructions) phase: VirtualPhase,
+    /// Shared Egg outcome.
+    pub(in crate::instructions) outcome: u8,
+    /// Egg atoms this slice moves.
+    pub(in crate::instructions) quantity: u64,
+    /// Collateral atoms debited from the buy end; `Pay` only.
+    pub(in crate::instructions) debit_atoms: u64,
+    /// Buy envelope released above the consideration, at completion only.
+    pub(in crate::instructions) release_atoms: u64,
+    /// Whether this slice is the buy end's last.
+    pub(in crate::instructions) completes: bool,
+    /// Price units this slice leaves unallocated; `Pay` only.
+    pub(in crate::instructions) residue_price_units: u128,
+    /// The pot's rounding expectation after this slice.
+    pub(in crate::instructions) rounding_after: u128,
+    /// The pot's cash after this slice, *before* any mint is paid for.
+    pub(in crate::instructions) pot_cash_after: u128,
+    /// Complete sets this consumption must mint before it can deliver; zero
+    /// unless this is the one `Deliver` that finds the pot with no inventory.
+    ///
+    /// The caller pays for it by calling `split::pooled_set_transition`, which
+    /// is the only route to `HoardAccount::collateral_atoms`, the kernel
+    /// aggregate and the supply ledger, with every CLO-DELTA-V1 obligation
+    /// intact.
+    pub(in crate::instructions) mint_sets: u64,
+    /// The pot's cash once the mint above has been paid for.
+    pub(in crate::instructions) pot_cash_after_mint: u128,
+}
+
+/// Verify one already-entitled virtual slice consumption.
+///
+/// Writes nothing, and is therefore the atomic precondition for
+/// [`apply_virtual_slice_consumption`] plus — on the one minting `Deliver` —
+/// the `split::pooled_set_transition` call the account plane makes between
+/// them.
+#[inline(never)]
+pub(super) fn prepare_virtual_slice_consumption(
+    input: &VirtualSliceConsumptionInput<'_>,
+) -> Outcome<VirtualSliceConsumptionPlan> {
+    input.epoch.validate()?;
+    input.candidate.validate()?;
+    input
+        .candidate
+        .binds_epoch(input.epoch, u16::from(input.candidate.order_len))?;
+    require(
+        input.epoch.phase == EPOCH_PHASE_CLEARED
+            && input.candidate.status == CANDIDATE_STATUS_SELECTED,
+        ClutchError::NotActive,
+    )?;
+    /* The one direction the pot can fund.  A merge would have refused at the
+     * entitlement freeze; restating it here is what keeps a hand-built
+     * account list from reaching the burn half through this seam. */
+    let sigma = input.candidate.virtual_split;
+    require(
+        sigma != 0 && input.candidate.virtual_merge == 0,
+        ClutchError::NotYetImplemented,
+    )?;
+
+    input.receipt.validate()?;
+    input.receipt.binds_candidate(input.candidate)?;
+    let expected_sequence = u64::from(input.receipt.slice_index)
+        .checked_add(1)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        input.receipt.leg_kind == RECEIPT_LEG_SPLIT
+            && input.receipt.sell_order_id == Hash32::ZERO
+            && input.receipt.sequence == expected_sequence
+            && input.receipt.quantity != 0,
+        ClutchError::MismatchedState,
+    )?;
+    let outcome = usize::from(input.receipt.outcome);
+    require(
+        input.receipt.outcome < input.epoch.outcome_count,
+        ClutchError::MismatchedState,
+    )?;
+    require(input.epoch.price_scale != 0, ClutchError::MismatchedState)?;
+    let scale = u128::from(input.epoch.price_scale);
+
+    input.pot.binds_candidate(input.candidate)?;
+    require(
+        input.pot.phase == POT_PHASE_OPEN,
+        ClutchError::MismatchedState,
+    )?;
+
+    /* The phase is read off the receipt's own flags, so it is a fact of
+     * persisted state and never a caller's claim, and each flag latches
+     * exactly once. */
+    let phase = match input.receipt.consumed_flags {
+        0 => VirtualPhase::Pay,
+        RECEIPT_FLAG_BUY_CONSUMED => VirtualPhase::Deliver,
+        _ => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
+    };
+
+    match phase {
+        VirtualPhase::Pay => {
+            require(
+                input.receipt.settled_quantity == 0,
+                ClutchError::MismatchedState,
+            )?;
+            validate_entitled_reservation(
+                input.reservation,
+                input.epoch,
+                input.position,
+                input.receipt.buy_order_id,
+                0,
+            )?;
+            require(
+                input.reservation.max_fee_atoms == 0,
+                ClutchError::AuthorizationUnavailable,
+            )?;
+            let consumed = input
+                .reservation
+                .consumed_units
+                .checked_add(input.receipt.quantity)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+            require(
+                consumed <= input.reservation.entitled_units,
+                ClutchError::AggregateClosureMismatch,
+            )?;
+            let completes = consumed == input.reservation.entitled_units;
+            let (debit_atoms, residue_price_units) = convert_leg(LegConversion {
+                side: ConversionSide::Payer,
+                order_kind: input.reservation.order_kind,
+                consumed_before: input.reservation.consumed_units,
+                consumed_after: consumed,
+                entitled_units: input.reservation.entitled_units,
+                completes,
+                price: input.receipt.price,
+                scale,
+                slice_is_exact: input
+                    .receipt
+                    .consideration_price_units
+                    .is_multiple_of(scale),
+                slice_price_units: input.receipt.consideration_price_units,
+            })?;
+            require(
+                input.reservation.remaining_internal == [0; MAX_OUTCOMES]
+                    && input.reservation.remaining_cash_atoms >= debit_atoms,
+                ClutchError::MismatchedState,
+            )?;
+            require(
+                input.pot.rounding_pot_price_units >= residue_price_units,
+                ClutchError::AggregateClosureMismatch,
+            )?;
+            let release_atoms = if completes {
+                input.reservation.remaining_cash_atoms - debit_atoms
+            } else {
+                0
+            };
+            let reserved_release = debit_atoms
+                .checked_add(release_atoms)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+            input
+                .position
+                .cash_atoms
+                .checked_sub(debit_atoms)
+                .ok_or(Refusal::Adapter(ClutchError::AggregateClosureMismatch))?;
+            input
+                .position
+                .reserved_cash_atoms
+                .checked_sub(reserved_release)
+                .ok_or(Refusal::Adapter(ClutchError::AggregateClosureMismatch))?;
+            /* The pot's cash rises by the whole debit less the realized
+             * residue: with no seller there is nothing to credit, which is
+             * exactly the `credit = 0` case of [`pot_cash_after`]. */
+            let cash = pot_cash_after(
+                input.pot.pot_cash_price_units,
+                debit_atoms,
+                0,
+                residue_price_units,
+                scale,
+            )?;
+            Ok(VirtualSliceConsumptionPlan {
+                phase,
+                outcome: input.receipt.outcome,
+                quantity: input.receipt.quantity,
+                debit_atoms,
+                release_atoms,
+                completes,
+                residue_price_units,
+                rounding_after: input.pot.rounding_pot_price_units - residue_price_units,
+                pot_cash_after: cash,
+                mint_sets: 0,
+                pot_cash_after_mint: cash,
+            })
+        }
+        VirtualPhase::Deliver => {
+            require(
+                input.receipt.settled_quantity == 0,
+                ClutchError::MismatchedState,
+            )?;
+            /* The delivery's destination is bound the only way it can be:
+             * through the reservation that names both this receipt's buy
+             * order and this Position's owner.  The reservation is CONSUMED
+             * once its last slice has paid, so both live states are admitted
+             * — nothing is written to it here. */
+            require(
+                (input.reservation.state == RESERVATION_STATE_ENTITLED
+                    || input.reservation.state == RESERVATION_STATE_CONSUMED)
+                    && input.reservation.side == 0
+                    && input.reservation.entitled_units != 0
+                    && input.reservation.market == input.epoch.market
+                    && input.reservation.epoch == input.epoch.epoch
+                    && input.reservation.owner == input.position.owner
+                    && input.reservation.order_id == input.receipt.buy_order_id
+                    && input.reservation.position_generation == input.position.generation
+                    && input.reservation.outcome_count == input.epoch.outcome_count
+                    && input.position.close_state == 0
+                    && input.position.market == input.epoch.market,
+                ClutchError::MismatchedState,
+            )?;
+            input.reservation.validate()?;
+            input.position.validate()?;
+
+            /* The mint, and the exact condition under which it happens.
+             *
+             * The pot's inventory is all zero in exactly two reachable
+             * states: before the mint, and after every split slice has been
+             * delivered.  The split serves `sigma` on every outcome
+             * (`relation_v1.rs:3830-3832`), so deliveries total `sigma` per
+             * outcome and an all-zero inventory after the mint means every
+             * split receipt is already exhausted — no `Deliver` can run.  A
+             * second mint is therefore unreachable, and the cash test below
+             * is a funding requirement rather than the uniqueness argument.
+             *
+             * `sigma * price_scale` is what the pot must hold: one collateral
+             * atom per complete set, because prices lie on the scaled simplex
+             * and the split's cost is `sigma * price_scale`
+             * (`relation_v1.rs:2749-2757`).  Those atoms are already inside
+             * the Hoard's token account, debited from the buyers and credited
+             * to nobody, which is what makes the mint *backed* rather than
+             * created. */
+            let empty = input.pot.pot_internal == [0; MAX_OUTCOMES];
+            let mint_sets = if empty { sigma } else { 0 };
+            let cost = u128::from(mint_sets)
+                .checked_mul(scale)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+            let pot_cash_after_mint = input
+                .pot
+                .pot_cash_price_units
+                .checked_sub(cost)
+                .ok_or(Refusal::Adapter(ClutchError::AggregateClosureMismatch))?;
+            let held = if empty {
+                sigma
+            } else {
+                input.pot.pot_internal[outcome]
+            };
+            require(
+                held >= input.receipt.quantity,
+                ClutchError::AggregateClosureMismatch,
+            )?;
+            input.position.internal[outcome]
+                .checked_add(input.receipt.quantity)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+            Ok(VirtualSliceConsumptionPlan {
+                phase,
+                outcome: input.receipt.outcome,
+                quantity: input.receipt.quantity,
+                debit_atoms: 0,
+                release_atoms: 0,
+                completes: false,
+                residue_price_units: 0,
+                rounding_after: input.pot.rounding_pot_price_units,
+                pot_cash_after: input.pot.pot_cash_price_units,
+                mint_sets,
+                pot_cash_after_mint,
+            })
+        }
+    }
+}
+
+/// Commit an already-verified virtual slice consumption.
+///
+/// On a minting `Deliver` the caller must have run
+/// `split::pooled_set_transition` over `pot.pot_internal` *before* this, so
+/// the inventory this moves out of already exists and is already backed.
+pub(in crate::instructions) fn apply_virtual_slice_consumption(
+    position: &mut PositionAccount,
+    reservation: &mut ReservationAccount,
+    receipt: &mut SettlementReceiptAccount,
+    pot: &mut FinalPotAccount,
+    plan: VirtualSliceConsumptionPlan,
+) {
+    let outcome = usize::from(plan.outcome);
+    match plan.phase {
+        VirtualPhase::Pay => {
+            position.cash_atoms -= plan.debit_atoms;
+            position.reserved_cash_atoms -= plan.debit_atoms + plan.release_atoms;
+            reservation.consumed_units += plan.quantity;
+            reservation.remaining_cash_atoms -= plan.debit_atoms + plan.release_atoms;
+            if plan.completes {
+                reservation.state = RESERVATION_STATE_CONSUMED;
+            }
+            pot.rounding_pot_price_units = plan.rounding_after;
+            pot.pot_cash_price_units = plan.pot_cash_after;
+            receipt.consumed_flags = RECEIPT_FLAG_BUY_CONSUMED;
+        }
+        VirtualPhase::Deliver => {
+            position.internal[outcome] += plan.quantity;
+            pot.pot_internal[outcome] -= plan.quantity;
+            pot.pot_cash_price_units = plan.pot_cash_after_mint;
+            receipt.settled_quantity = receipt.quantity;
+            receipt.consumed_flags = RECEIPT_FLAG_BUY_CONSUMED
+                | RECEIPT_FLAG_SELL_CONSUMED
+                | RECEIPT_FLAG_SLICE_EXHAUSTED;
+        }
+    }
 }
 
 /// The full-lifecycle prerequisite ledger, kept truthful as rows retire.
@@ -994,9 +1437,23 @@ pub(super) enum SettlementBlocker {
     /// order draws its own share down.
     RoundingPotRealization,
     /// Virtual split/merge legs need a funded FinalPot transition.
+    ///
+    /// Retired in the split direction: the pot pays, then mints, then
+    /// delivers.
     VirtualPot,
     /// No terminal sweep proves every reservation/receipt/pot is empty once.
     TerminalClosure,
+    /// A verified summary carrying `mu` needs a payee credit that can be
+    /// deferred past its own Egg delivery.
+    ///
+    /// The pot's cash identity (`pot_cash_after`) is `-(merge value
+    /// consumed) + pending gaps` before the burn: strictly negative once a
+    /// merge slice pays, because the pot must credit a payee before it holds
+    /// the complete sets whose burn would fund the credit.  The order that
+    /// works is deliver-every-leg, burn, then pay — and that separates a
+    /// sell end's Egg delivery from its ledger advance, which needs a
+    /// `paid_units` term the v2 `ReservationAccount` schema does not carry.
+    VirtualMergeCredit,
 }
 
 /// The retired rows, in the order Tier 2 discharged them.
@@ -1059,8 +1516,38 @@ pub(super) enum SettlementBlocker {
 ///   rather than minting receipts whose residues could not sum to the
 ///   verified pot.  The coincidence is checked, not assumed:
 ///   `distinct_owners == filled_order_count`.
+/// * `VirtualPot` — this wave, in the one direction the pot can fund without
+///   ever holding an unbacked claim.  The derivation, because it *refutes*
+///   the shape the row was filed under.  Write `V_e` for one end's cumulative
+///   exact consumed value in price units: every slice adds `q * p` to its buy
+///   end and the same to its sell end, and a split slice has no sell end, so
+///   `sum_buys V - sum_sells V` is the split value consumed so far.  With
+///   [`convert_leg`] debiting `ceil(V/S)` and crediting `floor(V/S)`, the
+///   pot's cash is identically `(sum_buys V - sum_sells V) + sum of the
+///   pending gaps of still-open ends` ([`pot_cash_after`]).  **At the freeze
+///   that is zero**, so the freeze cannot mint: raising
+///   `HoardAccount::collateral_atoms` by `sigma` there would attribute the
+///   same Hoard token atoms twice, once as complete-set backing and once as
+///   the buyers' `reserved_cash_atoms` — the unbacked mint the join must not
+///   perform.  A lazy per-slice mint deadlocks for a second reason: the
+///   kernel mints *complete sets* (`clutch_kernel::MarketState::split`, and
+///   `required_collateral_for` is `max_i total_supply[i]`), so delivering `q`
+///   atoms of one outcome costs `q * S` and earns only `q * p_i < q * S`.
+///   The realizable order is therefore **pay, then mint, then deliver**: a
+///   virtual receipt latches `BUY_CONSUMED` when its buy end pays, and
+///   `SELL_CONSUMED | SLICE_EXHAUSTED` when the pot delivers.  Once every
+///   split slice has paid the pot holds exactly `sigma * price_scale` price
+///   units — `sum_i sigma * p_i` on the scaled simplex — of collateral that
+///   is already inside the Hoard's token account and attributed to nobody, so
+///   `split::pooled_set_transition` *reclassifies* it rather than creating
+///   it, under the identical kernel step, ledger delta, internal bound,
+///   two-term closure, collateral cap and Hoard mirror `Intent::Split` runs.
+///   Deliveries total `sigma` per outcome (`relation_v1.rs:3830-3832`), so
+///   the pot ends exactly empty on both terms and `CloseGeneralPot` is
+///   unchanged.  Recorded residual: the merge direction, re-filed as the row
+///   below rather than left inside this one.
 #[allow(dead_code)] // Executable record; the ledger test pins it.
-pub(super) const RETIRED_SETTLEMENT_BLOCKERS: [SettlementBlocker; 8] = [
+pub(super) const RETIRED_SETTLEMENT_BLOCKERS: [SettlementBlocker; 9] = [
     SettlementBlocker::FrozenPolicyPreimage,
     SettlementBlocker::FullWidthRelationDomain,
     SettlementBlocker::CandidateWindowClosure,
@@ -1069,28 +1556,37 @@ pub(super) const RETIRED_SETTLEMENT_BLOCKERS: [SettlementBlocker; 8] = [
     SettlementBlocker::TerminalClosure,
     SettlementBlocker::PartialFillLedger,
     SettlementBlocker::RoundingPotRealization,
+    SettlementBlocker::VirtualPot,
 ];
 
 /// The exact dependency order of the remaining settlement work.
 ///
-/// * `VirtualPot` — the freeze refuses any verified summary carrying
-///   `virtual_split`/`virtual_merge`, and the root cause is **not** a
-///   settlement-seam width.  `relation_v1.rs:3529-3531` requires the split to
-///   serve `sigma` Egg atoms on *every* outcome and the merge to absorb `mu`
-///   on every outcome, and `relation_v1.rs:2504-2512` prices that at
-///   `sigma * price_scale` / `mu * price_scale` — one collateral atom per
-///   complete set, because prices lie on the scaled simplex
-///   (`relation_v1.rs:1224-1246`).  A virtual leg therefore **creates or
-///   destroys claims**, which changes the market's outstanding supply and the
-///   collateral backing it: `HoardAccount::collateral_atoms`, the kernel
-///   aggregate, and the two-term supply ledger, all owned by
-///   `instructions::split`.  Ordinary settlement moves claims between owners
-///   and conserves their sum, so no clearing-plane account list reaches that
-///   state, and widening this seam would mint unbacked claims the seam plane
-///   would then refuse to move.  Realizing it is a seam-plane join — the pot
-///   as a mint authority for one epoch — and it is ranked as one.
+/// * `VirtualMergeCredit` — the freeze accepts a verified summary carrying
+///   `sigma` and still refuses one carrying `mu`, and the root cause is
+///   **not** a settlement-seam width nor the mint authority the retired
+///   `VirtualPot` row named.  The mint authority now exists
+///   (`split::pooled_set_transition`, reached by the virtual `SettlePage`
+///   shape) and the burn would use the same primitive in the other
+///   direction.  What is missing is a *cash order*.  The pot's cash identity
+///   ([`pot_cash_after`]) is `(sum_buys V - sum_sells V) + pending gaps`, and
+///   a merge slice adds to `sum_sells V` alone — so the moment a merge slice
+///   is credited the first term is negative, and it is negative by exactly
+///   the value of the sets the pot has not burned yet.  The pot would have to
+///   pay a payee before it holds the complete sets whose burn funds the
+///   payment, which is the unbacked case in the other direction: releasing
+///   `mu` collateral atoms the market has not yet burned claims for.
+///   The order that closes is deliver-every-merge-leg, burn `mu`, then pay —
+///   `merge_used[i] == mu` on every outcome (`relation_v1.rs:3830-3832`)
+///   guarantees the pot reaches a whole `mu` complete sets — but it separates
+///   a sell end's Egg delivery from its ledger advance, and
+///   [`convert_leg`]'s payee credit is a difference of conversions of
+///   `consumed_units`.  Splitting those needs a `paid_units` term the v2
+///   `ReservationAccount` schema does not carry, and adding one is a
+///   reservation-codec change rather than a settlement-seam change.  Ranked
+///   as the schema change it is.
 #[allow(dead_code)] // Executable record; the ledger test pins it.
-pub(super) const SETTLEMENT_BLOCKERS: [SettlementBlocker; 1] = [SettlementBlocker::VirtualPot];
+pub(super) const SETTLEMENT_BLOCKERS: [SettlementBlocker; 1] =
+    [SettlementBlocker::VirtualMergeCredit];
 
 #[cfg(test)]
 mod tests {
@@ -1387,15 +1883,20 @@ mod tests {
     #[test]
     fn the_blocker_ledger_records_the_retired_prefix_and_the_standing_tail() {
         // Every original row appears exactly once, retired or standing, and
-        // the standing tail is exactly the honest remainder: the virtual
-        // split/merge, whose realization is a *seam-plane* mint join and not a
-        // settlement-seam widening.  TerminalClosure retired with the
-        // tag-60..67 close wave; PartialFillLedger with the reservation-v2
-        // ledger and the per-slice seams; RoundingPotRealization with the
-        // cumulative per-order conversion and the pot's drawn-down
-        // expectation.
-        assert_eq!(RETIRED_SETTLEMENT_BLOCKERS.len(), 8);
+        // the standing tail is exactly the honest remainder.  TerminalClosure
+        // retired with the tag-60..67 close wave; PartialFillLedger with the
+        // reservation-v2 ledger and the per-slice seams; RoundingPotRealization
+        // with the cumulative per-order conversion and the pot's drawn-down
+        // expectation; VirtualPot with the pay-then-mint-then-deliver order,
+        // whose mint runs through `split::pooled_set_transition`.  What stands
+        // is narrower than the row it came out of and is *not* the mint
+        // authority: `VirtualMergeCredit` is a reservation-schema change.
+        assert_eq!(RETIRED_SETTLEMENT_BLOCKERS.len(), 9);
         assert_eq!(SETTLEMENT_BLOCKERS.len(), 1);
+        assert_eq!(
+            RETIRED_SETTLEMENT_BLOCKERS[8],
+            SettlementBlocker::VirtualPot
+        );
         assert_eq!(
             RETIRED_SETTLEMENT_BLOCKERS[3],
             SettlementBlocker::EntitlementFreeze
@@ -1408,7 +1909,7 @@ mod tests {
             RETIRED_SETTLEMENT_BLOCKERS[6],
             SettlementBlocker::PartialFillLedger
         );
-        assert_eq!(SETTLEMENT_BLOCKERS, [SettlementBlocker::VirtualPot]);
+        assert_eq!(SETTLEMENT_BLOCKERS, [SettlementBlocker::VirtualMergeCredit]);
         let all = [
             SettlementBlocker::FrozenPolicyPreimage,
             SettlementBlocker::FullWidthRelationDomain,
@@ -1419,6 +1920,7 @@ mod tests {
             SettlementBlocker::RoundingPotRealization,
             SettlementBlocker::VirtualPot,
             SettlementBlocker::TerminalClosure,
+            SettlementBlocker::VirtualMergeCredit,
         ];
         for blocker in all {
             let retired = RETIRED_SETTLEMENT_BLOCKERS.contains(&blocker);
@@ -1623,6 +2125,423 @@ mod tests {
             seller_reservation,
             receipt,
         }
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* The virtual join, on the relation's own verified sigma = 1 book       */
+    /* -------------------------------------------------------------------- */
+
+    /// The book `relation_v1_tests.rs:439-457` verifies, at this seam's scale.
+    ///
+    /// Two outcomes at `price_scale` 10 000, prices `[5000, 5000]`; buys `A`
+    /// and `B` for two atoms each on outcomes 0 and 1 at limit 10 000; sells
+    /// `C` and `D` for two atoms each at limit 5000, filled one each.  The
+    /// canonical candidate is `sigma = 1` with fills `[2, 2, 1, 1]`, and the
+    /// relation's own numbers are
+    ///
+    /// ```text
+    ///   consideration  20 000 = seller_credit 10 000 + split_cost 10 000
+    ///   debit_atoms 2, credit_atoms 0, rounding_pot 10 000
+    ///   (2 - 0) * 10 000  ==  sigma * 10 000 + 10 000        (V8 closure)
+    /// ```
+    ///
+    /// The fixture is the state **mid-walk**: `A`'s direct slice against `C`
+    /// has consumed, so the pot already holds `C`'s round-down of 5000 as
+    /// cash and half its rounding expectation is discharged.
+    struct VirtualFixture {
+        epoch: EpochAccount,
+        candidate: CandidateRecord,
+        position: PositionAccount,
+        reservation: ReservationAccount,
+        receipt: SettlementReceiptAccount,
+        pot: FinalPotAccount,
+    }
+
+    impl VirtualFixture {
+        fn input(&self) -> VirtualSliceConsumptionInput<'_> {
+            VirtualSliceConsumptionInput {
+                epoch: &self.epoch,
+                candidate: &self.candidate,
+                position: &self.position,
+                reservation: &self.reservation,
+                receipt: &self.receipt,
+                pot: &self.pot,
+            }
+        }
+    }
+
+    fn virtual_fixture() -> VirtualFixture {
+        let market = h(0x31);
+        let epoch_id = canonical_epoch_id(market, 7);
+        let buy_owner = h(0x41);
+        let terms = h(0x51);
+        let grid = h(0x52);
+        let policy = h(0x53);
+        let buy = OrderSlot::Single(OrderRecord {
+            owner: buy_owner,
+            order_id: canonical_order_id(1),
+            outcome: 0,
+            side: 0,
+            quantity: 2,
+            limit: 10_000,
+            minimum_fill: 0,
+            flags: 0,
+            generation: 1,
+            expiry_epoch: 7,
+        });
+        let epoch = EpochAccount {
+            epoch: epoch_id,
+            market,
+            book: h(0x55),
+            terms,
+            price_grid: grid,
+            policy,
+            order_set: h(0x54),
+            first_order_id: canonical_order_id(1),
+            last_order_id: canonical_order_id(4),
+            epoch_index: 7,
+            relation_version: RELATION_VERSION,
+            price_scale: 10_000,
+            remainder_seed: 9,
+            owner_count: 4,
+            page_count: 1,
+            order_count: 4,
+            outcome_count: 2,
+            basis_degree: 1,
+            phase: EPOCH_PHASE_CLEARED,
+            stored_bump: 3,
+            flags: 0,
+        };
+        let mut prices = [0; MAX_OUTCOMES];
+        prices[0] = 5_000;
+        prices[1] = 5_000;
+        let mut candidate = CandidateRecord {
+            candidate: Hash32::ZERO,
+            epoch: epoch_id,
+            market,
+            prices,
+            virtual_split: 1,
+            virtual_merge: 0,
+            honored_aon_mask: 0,
+            weighted_direct_volume: 4,
+            limit_surplus_price_units: 0,
+            score_digest: Hash32([0x5d; 32]),
+            churn: 1,
+            submitted_slot: 80,
+            distinct_owners: 4,
+            order_len: 4,
+            outcome_count: 2,
+            status: CANDIDATE_STATUS_SELECTED,
+            stored_bump: 4,
+            flags: 0,
+        };
+        candidate.candidate = candidate.recomputed_candidate_digest().unwrap();
+
+        // `A` reserved two atoms at its limit and has already paid one on its
+        // direct slice against `C`; one atom of price improvement is left.
+        let position = PositionAccount {
+            market,
+            owner: buy_owner,
+            generation: 0,
+            internal: [0; MAX_OUTCOMES],
+            cash_atoms: 9,
+            reserved_cash_atoms: 1,
+            stored_bump: 6,
+            close_state: 0,
+        };
+        let plan = ReservationPlan::for_order(&buy, 2, 10_000, 0).unwrap();
+        assert_eq!(plan.cash_atoms, 2);
+        let mut reservation = ReservationAccount::active(
+            market,
+            epoch_id,
+            buy_owner,
+            buy.order_id(),
+            grid,
+            terms,
+            policy,
+            0,
+            buy.generation(),
+            0,
+            8,
+            plan,
+        )
+        .unwrap();
+        reservation = reservation.entitled(2).unwrap();
+        reservation.consumed_units = 1;
+        reservation.remaining_cash_atoms = 1;
+
+        let receipt = SettlementReceiptAccount {
+            epoch: epoch_id,
+            market,
+            candidate: candidate.candidate,
+            buy_order_id: buy.order_id(),
+            sell_order_id: Hash32::ZERO,
+            consideration_price_units: 5_000,
+            quantity: 1,
+            settled_quantity: 0,
+            price: 5_000,
+            sequence: 2,
+            slice_index: 1,
+            outcome: 0,
+            leg_kind: RECEIPT_LEG_SPLIT,
+            consumed_flags: 0,
+            stored_bump: 10,
+            flags: 0,
+        };
+        let pot = FinalPotAccount {
+            epoch: epoch_id,
+            market,
+            candidate: candidate.candidate,
+            pot_internal: [0; MAX_OUTCOMES],
+            // `C`'s completing direct slice paid one whole atom in and
+            // realized 5000 of the 10 000 the relation expects.
+            pot_cash_price_units: 5_000,
+            rounding_pot_price_units: 5_000,
+            outcome_count: 2,
+            phase: POT_PHASE_OPEN,
+            stored_bump: 11,
+            flags: 0,
+        };
+        VirtualFixture {
+            epoch,
+            candidate,
+            position,
+            reservation,
+            receipt,
+            pot,
+        }
+    }
+
+    #[test]
+    fn the_pot_cash_closed_form_is_debit_less_credit_less_residue() {
+        // The identity every other virtual test rests on, stated directly.
+        assert_eq!(pot_cash_after(5_000, 1, 0, 5_000, 10_000).unwrap(), 10_000);
+        assert_eq!(pot_cash_after(0, 0, 0, 0, 10_000).unwrap(), 0);
+        // A slice whose payer crosses no atom boundary while its payee does
+        // takes value *out* of the pot, which is legal while it stays solvent
+        // and refuses the moment it would not.
+        assert_eq!(pot_cash_after(10_000, 0, 1, 0, 10_000).unwrap(), 0);
+        assert_eq!(
+            pot_cash_after(0, 0, 1, 0, 10_000),
+            Err(Refusal::Adapter(ClutchError::AggregateClosureMismatch))
+        );
+    }
+
+    #[test]
+    fn a_virtual_pay_moves_the_buy_end_alone_and_never_delivers() {
+        let fixture = virtual_fixture();
+        let plan = prepare_virtual_slice_consumption(&fixture.input()).unwrap();
+        assert_eq!(plan.phase, VirtualPhase::Pay);
+        // `A`'s whole order is worth exactly one atom and it paid that atom on
+        // its direct slice, so this slice debits nothing and releases the
+        // price improvement.
+        assert_eq!(plan.debit_atoms, 0);
+        assert_eq!(plan.release_atoms, 1);
+        assert!(plan.completes);
+        assert_eq!(plan.residue_price_units, 0);
+        assert_eq!(plan.pot_cash_after, 5_000);
+        assert_eq!(plan.mint_sets, 0);
+
+        let mut position = fixture.position;
+        let mut reservation = fixture.reservation;
+        let mut receipt = fixture.receipt;
+        let mut pot = fixture.pot;
+        apply_virtual_slice_consumption(
+            &mut position,
+            &mut reservation,
+            &mut receipt,
+            &mut pot,
+            plan,
+        );
+        // Paid, not delivered: the buy end holds no new claim yet, and the
+        // receipt latches exactly one of its three consumption bits.
+        assert_eq!(position.internal, [0; MAX_OUTCOMES]);
+        assert_eq!(position.reserved_cash_atoms, 0);
+        assert_eq!(position.cash_atoms, 9);
+        assert_eq!(reservation.state, RESERVATION_STATE_CONSUMED);
+        assert_eq!(receipt.consumed_flags, RECEIPT_FLAG_BUY_CONSUMED);
+        assert_eq!(receipt.settled_quantity, 0);
+        assert_eq!(pot.pot_internal, [0; MAX_OUTCOMES]);
+        position.validate().unwrap();
+        reservation.validate().unwrap();
+        receipt.validate().unwrap();
+        pot.validate().unwrap();
+    }
+
+    #[test]
+    fn a_virtual_deliver_mints_exactly_the_candidates_sigma_once_the_pot_is_funded() {
+        let mut fixture = virtual_fixture();
+        fixture.receipt.consumed_flags = RECEIPT_FLAG_BUY_CONSUMED;
+        // Every split slice has paid: the pot holds `sigma * price_scale`.
+        fixture.pot.pot_cash_price_units = 10_000;
+        fixture.pot.rounding_pot_price_units = 0;
+        fixture.reservation.state = RESERVATION_STATE_CONSUMED;
+        fixture.reservation.consumed_units = 2;
+        fixture.reservation.remaining_cash_atoms = 0;
+        fixture.position.reserved_cash_atoms = 0;
+
+        let plan = prepare_virtual_slice_consumption(&fixture.input()).unwrap();
+        assert_eq!(plan.phase, VirtualPhase::Deliver);
+        assert_eq!(plan.mint_sets, fixture.candidate.virtual_split);
+        // The mint is paid for out of collateral the pot already holds.
+        assert_eq!(plan.pot_cash_after_mint, 0);
+
+        let mut position = fixture.position;
+        let mut reservation = fixture.reservation;
+        let mut receipt = fixture.receipt;
+        let mut pot = fixture.pot;
+        // Stand in for `split::pooled_set_transition`, which is the only
+        // thing allowed to write this vector on a real account plane.
+        pot.pot_internal[0] = 1;
+        pot.pot_internal[1] = 1;
+        apply_virtual_slice_consumption(
+            &mut position,
+            &mut reservation,
+            &mut receipt,
+            &mut pot,
+            plan,
+        );
+        assert_eq!(position.internal[0], 1);
+        assert_eq!(pot.pot_internal[0], 0);
+        assert_eq!(pot.pot_internal[1], 1);
+        assert_eq!(pot.pot_cash_price_units, 0);
+        assert_eq!(
+            receipt.consumed_flags,
+            RECEIPT_FLAG_BUY_CONSUMED | RECEIPT_FLAG_SELL_CONSUMED | RECEIPT_FLAG_SLICE_EXHAUSTED
+        );
+        assert_eq!(receipt.settled_quantity, receipt.quantity);
+        pot.validate().unwrap();
+    }
+
+    #[test]
+    fn a_virtual_deliver_before_the_whole_book_has_paid_refuses() {
+        let mut fixture = virtual_fixture();
+        fixture.receipt.consumed_flags = RECEIPT_FLAG_BUY_CONSUMED;
+        fixture.reservation.state = RESERVATION_STATE_CONSUMED;
+        fixture.reservation.consumed_units = 2;
+        fixture.reservation.remaining_cash_atoms = 0;
+        fixture.position.reserved_cash_atoms = 0;
+        // The pot holds 5000 of the 10 000 the mint costs: the seam refuses
+        // rather than minting a set the market has not been paid for.
+        assert_eq!(
+            prepare_virtual_slice_consumption(&fixture.input()),
+            Err(Refusal::Adapter(ClutchError::AggregateClosureMismatch))
+        );
+    }
+
+    #[test]
+    fn a_second_mint_is_unreachable_because_a_drained_pot_holds_no_cash() {
+        // The state after the last delivery: inventory empty again, and the
+        // cash spent on the one mint.  Any further `Deliver` would have to
+        // re-mint, and cannot.
+        let mut fixture = virtual_fixture();
+        fixture.receipt.consumed_flags = RECEIPT_FLAG_BUY_CONSUMED;
+        fixture.reservation.state = RESERVATION_STATE_CONSUMED;
+        fixture.reservation.consumed_units = 2;
+        fixture.reservation.remaining_cash_atoms = 0;
+        fixture.position.reserved_cash_atoms = 0;
+        fixture.pot.pot_cash_price_units = 0;
+        fixture.pot.rounding_pot_price_units = 0;
+        assert_eq!(
+            prepare_virtual_slice_consumption(&fixture.input()),
+            Err(Refusal::Adapter(ClutchError::AggregateClosureMismatch))
+        );
+    }
+
+    #[test]
+    fn the_virtual_seam_refuses_a_merge_candidate_and_a_churn_free_one() {
+        let mut fixture = virtual_fixture();
+        fixture.candidate.virtual_split = 0;
+        fixture.candidate.virtual_merge = 1;
+        fixture.candidate.churn = 1;
+        fixture.candidate.candidate = fixture.candidate.recomputed_candidate_digest().unwrap();
+        fixture.receipt.candidate = fixture.candidate.candidate;
+        fixture.pot.candidate = fixture.candidate.candidate;
+        assert_eq!(
+            prepare_virtual_slice_consumption(&fixture.input()),
+            Err(Refusal::Adapter(ClutchError::NotYetImplemented))
+        );
+
+        let mut zero = virtual_fixture();
+        zero.candidate.virtual_split = 0;
+        zero.candidate.churn = 0;
+        zero.candidate.candidate = zero.candidate.recomputed_candidate_digest().unwrap();
+        zero.receipt.candidate = zero.candidate.candidate;
+        zero.pot.candidate = zero.candidate.candidate;
+        assert_eq!(
+            prepare_virtual_slice_consumption(&zero.input()),
+            Err(Refusal::Adapter(ClutchError::NotYetImplemented))
+        );
+    }
+
+    #[test]
+    fn a_forged_consumption_flag_has_no_phase_and_refuses() {
+        // Only two forgeries are reachable at all: the frozen receipt codec
+        // ties `SLICE_EXHAUSTED` to `settled_quantity == quantity`, so every
+        // flag word carrying it over an unsettled receipt is already a codec
+        // fault.  That tie is also what makes the two-phase latch legal —
+        // `Pay` leaves the quantity unsettled and sets only `BUY_CONSUMED`.
+        for flags in [
+            RECEIPT_FLAG_SELL_CONSUMED,
+            RECEIPT_FLAG_BUY_CONSUMED | RECEIPT_FLAG_SELL_CONSUMED,
+        ] {
+            let mut fixture = virtual_fixture();
+            fixture.receipt.consumed_flags = flags;
+            assert_eq!(
+                prepare_virtual_slice_consumption(&fixture.input()),
+                Err(Refusal::Adapter(ClutchError::MismatchedState)),
+                "flags {flags}"
+            );
+        }
+        for flags in [
+            RECEIPT_FLAG_SLICE_EXHAUSTED,
+            RECEIPT_FLAG_BUY_CONSUMED | RECEIPT_FLAG_SLICE_EXHAUSTED,
+        ] {
+            let mut fixture = virtual_fixture();
+            fixture.receipt.consumed_flags = flags;
+            assert_eq!(
+                prepare_virtual_slice_consumption(&fixture.input()),
+                Err(Refusal::Codec(CodecError::InvalidEnum)),
+                "flags {flags}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_direct_receipt_never_crosses_the_virtual_seam_and_the_reverse() {
+        let mut fixture = virtual_fixture();
+        fixture.receipt.leg_kind = RECEIPT_LEG_DIRECT;
+        fixture.receipt.sell_order_id = canonical_order_id(3);
+        assert_eq!(
+            prepare_virtual_slice_consumption(&fixture.input()),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+
+        // And the direct seam refuses a split receipt: its `leg_kind` gate
+        // was already there, and this pins that the two seams stay disjoint.
+        let mut direct = direct_fixture();
+        direct.receipt.leg_kind = RECEIPT_LEG_SPLIT;
+        direct.receipt.sell_order_id = Hash32::ZERO;
+        assert_eq!(
+            prepare_entitled_slice_consumption(&direct.input()),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+    }
+
+    #[test]
+    fn a_churned_epoch_makes_the_pot_mandatory_on_every_direct_slice() {
+        // The pot's cash only closes at `sigma * price_scale` when every
+        // slice feeds it, so a churned epoch may not settle a direct slice
+        // with the seven-account shape.
+        let mut fixture = direct_fixture();
+        fixture.candidate.virtual_split = 1;
+        fixture.candidate.churn = 1;
+        fixture.candidate.candidate = fixture.candidate.recomputed_candidate_digest().unwrap();
+        fixture.receipt.candidate = fixture.candidate.candidate;
+        assert_eq!(
+            prepare_entitled_slice_consumption(&fixture.input()),
+            Err(Refusal::Adapter(ClutchError::AccountCount))
+        );
     }
 
     struct SubmissionFixture {
