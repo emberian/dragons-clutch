@@ -806,7 +806,10 @@ def build_gates() -> list[dict[str, Any]]:
                 ),
                 "expected": {"mode": "zero", "exit": 0},
                 "key_patterns": [
-                    r"^SUMMARY manifests=\d+ unique_rows=\d+ failures=0 status=PASS$"
+                    # The checker emits tab-separated records, so a space here
+                    # matched nothing and the gate recorded no evidence at all
+                    # while reporting green.
+                    r"^SUMMARY\tmanifests=\d+\tunique_rows=\d+\tfailures=0\tstatus=PASS$"
                 ],
                 "note": (
                     "complete-scope offline dependency/license closure over every "
