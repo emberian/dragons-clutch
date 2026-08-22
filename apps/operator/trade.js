@@ -33,7 +33,11 @@ const table = (labels, lines) => {
   const grid = el("table");
   const head = el("thead");
   const header = el("tr");
-  labels.forEach((label) => header.append(el("th", null, label)));
+  labels.forEach((label) => {
+    const cell = el("th", null, label);
+    cell.scope = "col";
+    header.append(cell);
+  });
   head.append(header);
   const body = el("tbody");
   lines.forEach((line) => body.append(line));
@@ -209,11 +213,11 @@ export const renderClutch = (state) => {
   );
   const controls = el("div", "controls");
   const open = state.session && state.session.phase === "open";
-  controls.append(
-    button("Freeze the book, then settle", open ? "tab tab-on" : "tab", () => {
+  const freeze = button("Freeze the book, then settle", open ? "tab tab-on" : "tab", () => {
       post({ action: "freeze" }, "freeze");
-    })
-  );
+    });
+  freeze.disabled = !open;
+  controls.append(freeze);
   if (!open) {
     controls.append(
       el(
@@ -236,14 +240,17 @@ const noticeRow = () => {
   if (!ticket.notice) return null;
   if (ticket.notice.pending) {
     const strip = el("div", "callout");
+    strip.setAttribute("role", "status");
     strip.append(chip("IN_FLIGHT"), el("span", null, `${ticket.notice.text} — submitted, waiting on the bank`));
     return strip;
   }
-  return row(
+  const strip = row(
     ticket.notice.ok ? "callout" : "refusal",
     el("strong", null, ticket.notice.ok ? "ACCEPTED" : "REFUSED"),
     el("span", null, ticket.notice.text)
   );
+  strip.setAttribute("role", ticket.notice.ok ? "status" : "alert");
+  return strip;
 };
 
 const singleTicket = (state) => {
@@ -356,13 +363,16 @@ const painter = (state) => {
     input.step = "50";
     input.value = String(value);
     input.className = "painter-slider";
+    input.setAttribute("aria-label", `Belief weight at ${KNOT_LABEL[index]}`);
+    const valueNode = el("span", "painter-value", numeric(value));
     input.addEventListener("input", () => {
       ticket.belief[index] = Number(input.value) || 0;
       ticket.proposal = null;
-      repaint();
+      valueNode.textContent = numeric(ticket.belief[index]);
     });
+    input.addEventListener("change", repaint);
     column.append(input);
-    column.append(el("span", "painter-value", numeric(value)));
+    column.append(valueNode);
     column.append(el("span", "painter-knot-label", KNOT_LABEL[index]));
     sliders.append(column);
   });
@@ -599,12 +609,12 @@ export const renderTicket = (state) => {
     ["portfolio", "Portfolio"],
     ["funding", "Funding"]
   ].forEach(([id, label]) => {
-    tabs.append(
-      button(label, ticket.tab === id ? "tab tab-on" : "tab", () => {
+    const tab = button(label, ticket.tab === id ? "tab tab-on" : "tab", () => {
         ticket.tab = id;
         repaint();
-      })
-    );
+      });
+    tab.setAttribute("aria-pressed", ticket.tab === id ? "true" : "false");
+    tabs.append(tab);
   });
   const header = el("section", "card");
   header.append(el("h2", null, "Ticket"));
@@ -641,6 +651,7 @@ const overlay = (state) => {
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.setAttribute("class", "overlay");
   svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Automaton belief, user belief, and bank-stamped cleared prices by outcome");
   const theirs = state.bot ? state.bot.quoted_belief : null;
   const mine = state.belief ? state.belief.belief : null;
   const cleared = state.clearing ? state.clearing.prices : null;

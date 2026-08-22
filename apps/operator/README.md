@@ -2,6 +2,17 @@
 
 The first frontend, in two modes.
 
+Run its dependency-free source/mechanical checks with:
+
+```sh
+cd apps/operator
+npm test
+npm run check
+```
+
+These checks cover exact integer formatting and persistent accessibility/
+interaction invariants. They are not browser execution or visual QA.
+
 **Watch** is a window onto the general-clearing committed walk — the same
 forty-four signed transactions `run_general_committed.sh` drives, watched
 instead of tailed.
@@ -15,12 +26,30 @@ against a fixed-belief automaton. The market is created by a signed
 
 ```sh
 # watch mode: the sealed lane's plan, step by step
-cargo run --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- serve
+CARGO_NET_OFFLINE=true cargo run --offline \
+  --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- serve
 # trade mode: found the Friday clutch and trade it
-cargo run --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
+CARGO_NET_OFFLINE=true cargo run --offline \
+  --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
   serve --mode trade
 # then open 127.0.0.1:9130 in a browser
 ```
+
+Runtime prerequisites are Rust/Cargo, `cargo-build-sbf`, `solana-keygen`, and
+`solana-test-validator`; the scripted gate also uses `curl` and Python. Node
+and npm are required only for the source/mechanical browser checks. Override
+the scripted ports with `CLUTCH_OPERATOR_TRADE_PORT`,
+`CLUTCH_OPERATOR_TRADE_RPC_PORT`, and `CLUTCH_OPERATOR_TRADE_FAUCET_PORT`.
+The wrapper stops its daemon/validator and the daemon removes orderly-run
+ephemeral signer files; a force-killed standalone daemon may leave its printed
+temporary work directory for manual inspection and cleanup.
+
+Trade mode follows the program's real local clock. The default session waits
+for its short 260-slot freeze window and then the protocol's fixed 1,000-slot
+candidate window, so freeze-to-settled normally takes several minutes. The
+Epoch card shows the current slot, target, reason, and remaining slots; the
+daemon log now names the selection wait separately from the completed relation
+walk.
 
 ## The rule that makes it honest
 
@@ -37,6 +66,12 @@ sealed lane's plan generator is.
 `programs/clutch-sbf/scripts/run_operator_replay.sh` rebuilds every plan
 transaction through those builders, byte-diffs all 294 emitted files against
 the harness CLI's own output, and requires a single corrupted byte to go red.
+
+The daemon binds only to IPv4 loopback. It also rejects DNS-rebound `Host`
+values, requires same-origin JSON from browsers, and gives each process a fresh
+HttpOnly, SameSite capability cookie before either `/api` or `/api/events` is
+usable. The scripted local gate acquires that session cookie from the index in
+the same way a browser does.
 
 ## What is on screen
 
@@ -131,14 +166,16 @@ The header strip carrying that scope is markup in `index.html`, present before
 any script runs, and no code path on this page removes it. The claim
 vocabulary in `evidence.js` is a verbatim copy of the frozen `EVIDENCE` map in
 `../static-client/app.js`; a new claim is added there first and copied here
-second. The word "verified" does not appear in this bench's prose, because
-nothing it shows is.
+second. A candidate may be labeled `verified` only when that exact status was
+decoded from the bank-written record; it is never presented as verification of
+the client, adapter, runtime, or protocol as a whole.
 
 ## No dependencies
 
-Hand-authored ES modules, loaded directly by the browser. No build step, no
-bundler, no transpile, no package manifest, and no external reference of any
-kind. The gate lives in `scripts/run_operator_trade.sh` and greps every file
+Hand-authored ES modules, loaded directly by the browser. No build step,
+bundler, transpiler, runtime dependency, or external reference of any kind.
+The tiny package manifest names only dependency-free test/check commands. The
+gate lives in `scripts/run_operator_trade.sh` and greps every file
 the daemon is allowed to serve — `.html`, `.css`, `.js`, `.svg`, `.json` — for
 an off-machine address. This README is prose about that gate and is
 deliberately not one of the served extensions.

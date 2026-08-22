@@ -4,6 +4,11 @@ This is the dependency-free, offline-first client skeleton for Dragon's Clutch.
 It is an untrusted projection: static-hostable, inspect-only, and with no chain
 capability at all.
 
+> **Historical snapshot:** the bundled capability/evidence ledger predates the
+> 2026-08-22 architecture review. Its offline fixtures and byte compiler remain
+> testable, but its lifecycle-status prose is not current repository truth. See
+> the root `CURRENT_TRUTH.md` and `docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md`.
+
 - `manifest.json` names clusters, programs, profiles, and unpublished release
   identity.
 - `terms.json` contains the canonical display fixture and its SHA-256 digest.

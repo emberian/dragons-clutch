@@ -51,5 +51,14 @@ export const digest = (value) => {
   return node;
 };
 
-export const numeric = (value) =>
-  value === null || value === undefined ? "—" : Number(value).toLocaleString("en-US");
+export const numeric = (value) => {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "bigint") return value.toLocaleString("en-US");
+  if (typeof value === "string" && /^-?\d+$/.test(value)) {
+    return BigInt(value).toLocaleString("en-US");
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value.toLocaleString("en-US");
+  }
+  return String(value);
+};

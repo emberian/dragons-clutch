@@ -79,6 +79,7 @@ const renderNav = (state) => {
     ...screensFor(state).map((screen) => {
       const button = el("button", screen.id === current ? "tab tab-on" : "tab", screen.label);
       button.type = "button";
+      button.setAttribute("aria-current", screen.id === current ? "page" : "false");
       button.addEventListener("click", () => {
         current = screen.id;
         render(store.state);

@@ -29,6 +29,7 @@ freeze_window="${CLUTCH_OPERATOR_FREEZE_WINDOW:-260}"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/clutch-operator-trade.XXXXXX")"
 events="$work/events.sse"
+cookie_jar="$work/operator.cookies"
 daemon_pid=""
 watcher_pid=""
 
@@ -49,7 +50,7 @@ trap cleanup EXIT
 
 # One action, posted the way the page posts it.
 api() {
-  curl -fsS -m 120 -H 'Content-Type: application/json' \
+  curl -fsS -m 120 -b "$cookie_jar" -H 'Content-Type: application/json' \
     --data-binary "$1" "127.0.0.1:$http_port/api"
 }
 
@@ -96,7 +97,8 @@ daemon_pid=$!
 ready=0
 for _ in $(seq 1 900); do
   kill -0 "$daemon_pid" 2>/dev/null || break
-  if curl -fsS -m 2 -o /dev/null "127.0.0.1:$http_port/" 2>/dev/null; then
+  if curl -fsS -m 2 -c "$cookie_jar" -o /dev/null \
+    "127.0.0.1:$http_port/" 2>/dev/null; then
     ready=1
     break
   fi
@@ -108,7 +110,8 @@ if [ "$ready" -ne 1 ]; then
   exit 1
 fi
 echo "  bench is serving; attaching to /api/events as a client"
-curl -sN -m 3600 "127.0.0.1:$http_port/api/events" >"$events" &
+curl -sN -m 3600 -b "$cookie_jar" \
+  "127.0.0.1:$http_port/api/events" >"$events" &
 watcher_pid=$!
 
 # The market has to be founded and the automaton's book rested before a person
