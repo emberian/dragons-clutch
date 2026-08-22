@@ -600,6 +600,25 @@ impl Plane {
         pda(seeds::SEED_RESERVATION, &[&id.bytes()]).0
     }
 
+    /// The extra `create_program_address` attempts `find_program_address` pays
+    /// across every address one placement derives — the reservation, the
+    /// target page, and the owner's Position — each `255 - bump`.
+    pub fn placement_derivation_attempts(&self, owner: Hash32, order_id: Hash32) -> u32 {
+        let id = canonical_reservation_id(self.market, self.epoch_id, owner, 0, order_id);
+        let reservation = pda(seeds::SEED_RESERVATION, &[&id.bytes()]).1;
+        let page = pda(
+            seeds::SEED_PAGE,
+            &[&self.epoch_id.bytes(), &0u16.to_le_bytes()],
+        )
+        .1;
+        let position = pda(
+            seeds::SEED_POSITION,
+            &[&self.market.bytes(), &owner.bytes()],
+        )
+        .1;
+        u32::from(255 - reservation) + u32::from(255 - page) + u32::from(255 - position)
+    }
+
     pub fn candidate_feed(&self, candidate: Hash32) -> Address {
         pda(
             seeds::SEED_CANDIDATE_FEED,
