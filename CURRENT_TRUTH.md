@@ -1,6 +1,6 @@
 # Dragon's Clutch: current truth and control plane
 
-Status date: 2026-08-19. This is the operational entry point for engineering
+Status date: 2026-08-21. This is the operational entry point for engineering
 handoffs. [`PROJECT.md`](PROJECT.md) is the canonical product brief,
 [`AGENTS.md`](AGENTS.md) is the authority and correctness policy, and
 [`docs/V1_BACKLOG.md`](docs/V1_BACKLOG.md) is the dependency-ordered queue.
@@ -35,18 +35,26 @@ economics.
 
 ## 2. Snapshot boundary
 
-The accepted local evidence ancestry is the 2026-08-20 cycle-E chain:
-liveness seal `934bdd6` over runtime ancestry `d77d670`, manifest `cb94c27`.
-The current sealed default ELF is **1,979,512 bytes with SHA-256
-`4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb`** — the
-TerminalClosure runtime, intents 36–67. Its audit is archived under
-[`research/liveness-policy-profile/artifacts/4fded7a67a2d8994`](research/liveness-policy-profile/artifacts/4fded7a67a2d8994/audit/RUNTIME_ARTIFACT_AUDIT.md):
-pass 1 = pass 2 byte-identical from the canonical checkout, zero first-party
-frame diagnostics surviving final LTO, all 60,135 direct `r10` references at
-or below 4,096 bytes, a reviewed ten-symbol import surface (`sol_memmove_`
-admitted at `2dbc9fc` after the nine-symbol pin refused), and the declared
-source closure at 109 files. Seven predecessor seals are retained in-tree as
-historical evidence, each with its own chain (`e8ba31d5…`, `d6929549…`,
+The accepted local evidence ancestry is the 2026-08-21 **cycle-G** chain:
+liveness seal at commit `846afab` over the same runtime ancestry, superseding
+the cycle-E chain (`934bdd6` / `d77d670` / manifest `cb94c27`) and the cycle-F
+chain (`04acf61`). The current sealed default ELF is **2,149,672 bytes with
+SHA-256
+`0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7`** — the
+runtime carrying intents **36–73** (the highest is `SealSourceArchiveV2`, tag
+73). Its audit is archived under
+[`research/liveness-policy-profile/artifacts/0d52c561909cedef`](research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/RUNTIME_ARTIFACT_AUDIT.md):
+pass 1 = pass 2 byte-identical from the canonical checkout and confirmed at two
+commits, zero first-party frame diagnostics surviving final LTO, all **66,106**
+direct `r10` references at or below 4,096 bytes, the same reviewed ten-symbol
+import surface with `.dynstr` byte-identical to the previous seal, and the
+declared source closure at **129 files**. **The relocated-Cargo-home probe
+reports `INDEPENDENT`**: this is the first seal to run the cycle-F amendment,
+which resolves the probe's `CARGO_HOME` symlink before using it, and the
+divergence three seals reported as `PATH_SENSITIVE` is gone — confirming cycle
+F's attribution of it to an unresolved path component rather than to relocation.
+Nine predecessor seals are retained in-tree as historical evidence, each with
+its own chain (`df0aece1…`, `4fded7a6…`, `e8ba31d5…`, `d6929549…`,
 `fda59705…`, `187d5ee1…`, `af6bb79c…`, `bd20711b…`, `a5725a3d…`); current CU
 rows are always remeasured against the current artifact, never relabeled.
 This is exact local artifact/stack/bank evidence, not a release, deployment,
@@ -72,11 +80,19 @@ Runtime evidence is artifact-specific:
   not a blank-bank venue or the complete schema-v2 baseline. The exact record
   is [`docs/implementation/COMMITTED_SBF_WALK.md`](docs/implementation/COMMITTED_SBF_WALK.md).
 
-The checked-in `MANIFEST.baseline.json` is schema v2, re-emitted for the
-2026-08-20 TerminalClosure runtime (`4fded7a6…`, 1,979,512 bytes, liveness
-seal `934bdd6`, cycle E) with all 100 declared gates executed in the
-emission run, and `check --run-gates` passes after the manifest-only
-commit (`cb94c27`). Persvati independently attested the current identity
+**The manifest and the portable attestation both lag the seal, and neither has
+been re-run for `0d52c561…`.** The checked-in `MANIFEST.baseline.json` is
+schema v2, re-emitted for the 2026-08-20 TerminalClosure runtime (`4fded7a6…`,
+1,979,512 bytes, liveness seal `934bdd6`, cycle E) with all 100 declared gates
+executed in the emission run, and `check --run-gates` passes after the
+manifest-only commit (`cb94c27`) — for **that** identity. Re-emitting it for the
+cycle-G identity and obtaining a fresh portable attestation are both owed and
+neither is done here; the cycle-G reseal deliberately emitted no manifest. Until
+they are re-run, everything in the rest of this subsection is a statement about
+a **superseded** artifact, retained because the attestation chain is itself
+evidence.
+
+Persvati independently attested the then-current identity
 on 2026-08-20: **45/45 portable gates PASS, 0 STOP** over exact `cb94c27`
 — the `4fded7a6…` ELF byte-verified in seven contexts, all seven
 historical roots verified as the exact retained set, and a new
@@ -336,16 +352,29 @@ for `-S`, every point mass's own moment vector is admitted, and the
 degree-≤1 collapse is a `∀` theorem — but that is a model statement, not a
 proof about the Rust stage.
 
-The selected R2 Pyth pull profile also has an integrated research-only model:
-`SourceSpecV2` is a distinct-domain, 368-byte proposed body that binds the
-receiver Config key and full-byte digest, provider feed id, exact ProgramData
-key/deployment slot, zero-origin grid, and only closing-boundary
-`CROSSING_V1` rule id 2. Its start-aware archive cursor and atomic
-receiver/loader/Instructions/Clock join are model checks. No post-cutover
-receiver/config identity, production registry entry, runtime codec/parser, or
-SBF route exists; official loader, Instructions-sysvar, and Clock projections
-cannot be caller assertions. The default registry remains empty and the sealed
-default ELF remains on `0x79`.
+**The selected R2 Pyth pull profile is no longer research-only — it has a wire,
+and the default artifact took custody through it on 2026-08-21.**
+`SourceSpecV2` is a distinct-domain **368-byte body** (the account it sits in is
+404 bytes) binding the receiver Config key and full-byte digest, provider feed
+id, exact ProgramData key/deployment slot, zero-origin grid, and only
+closing-boundary `CROSSING_V1` rule id 2. The v2 generation is routed at intent
+tags **70–73** (`InitSourceSpecV2`, `InitSourceArchiveV2`,
+`AppendSourceArchiveV2`, `SealSourceArchiveV2`), and
+`svm-tests/tests/r2_pull_endow.rs` drives the seam on a real bank against the
+sealed default ELF: a market whose immutable Terms bind a v2 feed identity is
+endowed against a **registered** pull release and collateral moves into the
+Hoard.
+
+That is a **narrowing, not an opening**, and the boundary must be stated at that
+resolution. The same suite proves, on the same harness, that the **V1 registry
+is still empty** and that an **unregistered** pull release still refuses
+`SourceReleaseUnavailable` (`0x79`) and writes nothing. So the sealed default
+ELF still refuses `0x79` on the stock V1 plane and on any v2 spec naming a
+release it does not carry; what changed is that a structurally complete,
+registered v2 identity now has a route that ends in custody rather than in a
+model check. No post-cutover receiver/config identity or production registry
+entry exists, and official loader, Instructions-sysvar, and Clock projections
+still cannot be caller assertions.
 
 The v4 lifecycle audit found a P1 active-mode representation gap — the
 mode-less persisted Kernel was reconstructed as `FinitePreset` on Split-family
@@ -384,14 +413,14 @@ public `derive_payout` to be degree-zero-only; smooth callers must use
 | Resolution replay | focused **SBF-EXECUTED** | Market-global resolution no longer consumes an owner's replay sequence; exact retry is idempotent and conflicting retry refuses. The subsequent owner redemptions/withdrawal retain their own sequence. The current native Resolve also authenticates the sealed archive described below. | Replay separation alone does not establish production source ingestion or a joined blank-bank lifecycle. |
 | Source admission and archive | Resolve join **SBF-EXECUTED**; production/value admission **STOP** | A 292-byte content-addressed SourceSpec and 2,560-byte one-window archive bind provider/parser/deployment/spec/grid/window/lineage and a sealed receipt. Resolve derives and authenticates their canonical PDAs and requires the compatibility projection to equal the sealed archive. Separately, the R2 Pyth pull model specifies a 368-byte distinct-domain SourceSpecV2 and closing `CROSSING_V1` id 2 authentication contract. The default source-release registry is empty and Endow fails closed with `0x79`. | The Pyth cut is model-only: post-cutover identities remain unfrozen, and no registry entry, runtime codec, official loader/Instructions parser, Clock decoder, SBF route, or source account create/append/seal path exists. Focused Resolve evidence injects mock source state; successful Endow requires the distinct non-production mock ELF. |
 | ResolutionWork V1 | measured route **SBF-EXECUTED / PROFILE-ADMITTED** | Routed Begin/Fold/Finalize/Abort at account tag 22 and intents 32–35 operate on sealed archive bytes, preserve monolithic-v4 output equality, segregate prefunds/donations, and close/refund Work and Reserve. Same-ELF CU maxima include Begin 810,992, Fold(4) 815,573, Finalize 1,094,832, and Abort 587,197; all measured rows clear the selected 25%-headroom profile. | Admission is only for the measured route and selected zero-charge policy. That zero is now frozen policy rather than a placeholder: all five ResolutionWork charges are permanently zero and no vault is built (docs/decisions/ADOPTED_2026-08-20.md item 6) — the weak form, since a V2 cost schedule may reintroduce charges for new Works under its own digest. It is not system release, deployment, production source, extrapolated shape, terminal-closure, inclusion, or no-stranding evidence. The live archive has no authenticated gap-record encoding. |
-| Onchain clearing/settlement | Direct V3 staged lifecycle routed and **SBF-EXECUTED** on a branch campaign, merged at `fb72b34`; profile admission **STOP** | The complete staged lifecycle — InitEpoch, InitOrderPage, Place, Freeze, Abort, Submit/admit with full re-verification, staged Verify, Finalize/Select, Settle with exact Position-transfer legs, and three Lapse phases — routes for intent tags 36–46 through one dispatcher arm with an exhaustive handler match and no fallback. On the syscall-hashed runtime every measured row clears the 1,400,000-CU ceiling with wide margin: worst row FreezeDirectEpochV4 at 383,909 CU (72.6% headroom), candidate replacement 203,128. Both SVM profiles pass (78 default, 85 mock). Legacy and V3 decoders refuse each other in both directions. | The V3 campaign is one bank profile: five candidates on an 11-tick grid, so 64-tick, exact-tie, and reordered-retained-account behavior stay model plus host evidence. V3 is resident in the sealed ELF but **UNPROMOTED in the liveness profile**: it carries no measured CU, rent/refund/close, or terminal-admission row, `live_v3` is false, and the Direct STOPs in that profile remain V2's; the V3 syscall-era sealed measurement campaign is commissioned (docs/decisions/ADOPTED_2026-08-20.md item 10) and V3 stays unpromoted until its rows seal. V3 is an epoch-atomic two-order book by design — no per-order cancellation exists; a placed order's only pre-Freeze exit is the permissionless `AbortUnfrozenDirectV4`, so placement-to-submission-open is a committed window. Direct V2 selection now completes and commits at 226,071 CU (the former exact-1,400,000 exhaustion was the software hasher, not the algorithm — see docs/reviews/COMPUTE_CEILING_REATTRIBUTION_2026-08-19.md); V2 remains STOP in the liveness profile for its unimplemented empty-frozen lapse and stays superseded by V3's lifecycle. No fee shape, no partial fills, and no universal no-stranding claim follows. **Separately, the GENERAL clearing plane (Tier 2, 2026-08-20) is complete end to end in bank evidence**: a multi-page book with portfolio orders and tombstones places through the general arm (tags 47–59), freezes, walks to VERIFIED via the streaming relation with the on-chain verdict byte-equal to the host relation's, selects among retained candidates by re-derived full-width tie digests, entitles per-slice receipts, and settles — including a portfolio full pair through the out-param settlement kernels — with exact whole-plane conservation asserted (cash, per-outcome positions, and the release identity, final Positions byte-equal to the verified summary's implied allocation). All of it is **SBF-EXECUTED (bank) and UNPROMOTED**: sealed in the liveness profile as `UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY` with `decision_owner: ember`, fees forced zero at every gate, PartialFillLedger/VirtualPot/TerminalClosure standing as recorded blockers, and the general-plane policy (`GENERAL_CLEARING_POLICY_V1`) plus `CANDIDATE_WINDOW_SLOTS = 1,000` **FROZEN as pinned 2026-08-20** (docs/decisions/ADOPTED_2026-08-20.md item 1; the in-source doc comments still read PROPOSED and ride the next reseal-bearing wave). The freeze promotes nothing on its own: the walk plane is adopted to advance to **rung W1 only** — CU/quote rows, no live flags (item 10) — and those rows are now derived. **Rung W1 is executed**: the liveness profile derives a selected compute limit and keeper reward for 25 general-clearing routes across the four measured families by the same 25%-headroom/10,000-CU-quantum arithmetic every promoted family uses, all 25 PASS, worst `FreezeEpoch` 3 pages/40 orders at 717,825 CU (limit 900,000, reward 1,010,000 lamports) — 64% of the 1,120,000 raw-CU admission boundary. W1 is quotes and nothing else, welded in `require_walk_plane_w1_quotes`: the families keep `UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY`, `general_clearing_walk.status` stays `SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP`, `live_flags` stays `UNTOUCHED` (any walk family acquiring a live flag refuses), no keeper program consumes the quotes and no path/lifecycle total is published, the rent side is NOT quoted (all eight general-plane rows keep their cycle-E STOPs), and tags 60–67 get no row at all because the `terminal_closure` suite labels no per-route CU. Full admission (W2) stays blocked on `RENT.ACCOUNT_REFUND_UNOWNED`, `GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT`, and `PROFILE.STORAGE_INVENTORY_INCOMPLETE` plus five named evidence gaps. Portfolio orders are no longer structurally unclearable; the old orders_batch.rs:888 refusal survives only on the Direct V4 branch where it is correct for its two-order profile. |
+| Onchain clearing/settlement | Direct V3 staged lifecycle routed and **SBF-EXECUTED** on a branch campaign, merged at `fb72b34`; profile admission **STOP** | The complete staged lifecycle — InitEpoch, InitOrderPage, Place, Freeze, Abort, Submit/admit with full re-verification, staged Verify, Finalize/Select, Settle with exact Position-transfer legs, and three Lapse phases — routes for intent tags 36–46 through one dispatcher arm with an exhaustive handler match and no fallback. On the syscall-hashed runtime every measured row clears the 1,400,000-CU ceiling with wide margin: worst row FreezeDirectEpochV4 at 383,909 CU (72.6% headroom), candidate replacement 203,128. Both SVM profiles pass (78 default, 85 mock). Legacy and V3 decoders refuse each other in both directions. | The V3 campaign is one bank profile: five candidates on an 11-tick grid, so 64-tick, exact-tie, and reordered-retained-account behavior stay model plus host evidence. V3 is resident in the sealed ELF but **UNPROMOTED in the liveness profile**: it carries no measured CU, rent/refund/close, or terminal-admission row, `live_v3` is false, and the Direct STOPs in that profile remain V2's; the V3 syscall-era sealed measurement campaign is commissioned (docs/decisions/ADOPTED_2026-08-20.md item 10) and V3 stays unpromoted until its rows seal. V3 is an epoch-atomic two-order book by design — no per-order cancellation exists; a placed order's only pre-Freeze exit is the permissionless `AbortUnfrozenDirectV4`, so placement-to-submission-open is a committed window. Direct V2 selection now completes and commits at 226,071 CU (the former exact-1,400,000 exhaustion was the software hasher, not the algorithm — see docs/reviews/COMPUTE_CEILING_REATTRIBUTION_2026-08-19.md); V2 remains STOP in the liveness profile for its unimplemented empty-frozen lapse and stays superseded by V3's lifecycle. No fee shape, no partial fills, and no universal no-stranding claim follows. **Separately, the GENERAL clearing plane (Tier 2, 2026-08-20) is complete end to end in bank evidence**: a multi-page book with portfolio orders and tombstones places through the general arm (tags 47–59), freezes, walks to VERIFIED via the streaming relation with the on-chain verdict byte-equal to the host relation's, selects among retained candidates by re-derived full-width tie digests, entitles per-slice receipts, and settles — including a portfolio full pair through the out-param settlement kernels — with exact whole-plane conservation asserted (cash, per-outcome positions, and the release identity, final Positions byte-equal to the verified summary's implied allocation). All of it is **SBF-EXECUTED (bank) and UNPROMOTED**: sealed in the liveness profile as `UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY` with `decision_owner: ember`, fees forced zero at every gate, **`SETTLEMENT_BLOCKERS` now empty** (ten retired; what remains are *recorded residuals* of implemented joins, not missing settlement facts), and the general-plane policy (`GENERAL_CLEARING_POLICY_V1`) plus `CANDIDATE_WINDOW_SLOTS = 1,000` **FROZEN as pinned 2026-08-20** (docs/decisions/ADOPTED_2026-08-20.md item 1; the in-source doc comments now read FROZEN). The freeze promotes nothing on its own: the walk plane is adopted to advance to **rung W1 only** — CU/quote rows, no live flags (item 10) — and those rows are now derived. **Rung W1 is executed**: the liveness profile derives a selected compute limit and keeper reward for **107** general-clearing routes across **six** measured families by the same 25%-headroom/10,000-CU-quantum arithmetic every promoted family uses, all 107 PASS. The worst route is `scale_freeze_epoch_4pages_64orders` — the maximum 64-order book across four dense pages — at **988,469 CU** (limit 1,240,000, reward 1,350,000 lamports), 88% of the 1,120,000 raw-CU admission boundary; the old worst, `FreezeEpoch` 3 pages/40 orders, re-measures at 717,842. The cycle-G seal added the six scale campaigns as a quoted family and put the **page count into the route key**: `EntitleSlice` measures 207,315 CU at one page and **759,892 at four**, because it must be presented with the whole bound page set, so a flat row was a quote for a different transaction. Every W1 row also publishes whether it rests on a single observation and, if so, that its maximum is known only to within `k * 1,500` CU — the PDA-attempt quantum. W1 is quotes and nothing else, welded in `require_walk_plane_w1_quotes`: the families keep `UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY`, `general_clearing_walk.status` stays `SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP`, `live_flags` stays `UNTOUCHED` (any walk family acquiring a live flag refuses), no on-chain reward schedule reads these rows and no path/lifecycle total is published — a keeper binary now exists (`programs/clutch-sbf/keeper`) and quotes *itself* against this table, logging the route it spends against and forcing any shape with an unmeasured ledger allowance to UNQUOTED, but it is a client and takes no runtime reward — the rent side is NOT quoted (all eight general-plane rows keep their STOPs), and tags 60–67 get no row at all because the `terminal_closure` suite labels no per-route CU. Full admission (W2) stays blocked on `RENT.ACCOUNT_REFUND_UNOWNED`, `GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT`, and `PROFILE.STORAGE_INVENTORY_INCOMPLETE` plus five named evidence gaps. The cycle-G scale campaigns substantially cover two of those five — wider page/order/candidate grids (to the layout maximum of 4 pages / 64 orders) and full-width tie and displacement campaigns (a sixteen-deep tied field against three retained) — with the **portfolio form** named as the hole that remains, since no campaign places a portfolio slot. That is recorded as input to a promotion decision, not taken: no live flag moved and no blocking id retired. Portfolio orders are no longer structurally unclearable; the old orders_batch.rs:888 refusal survives only on the Direct V4 branch where it is correct for its two-order profile. |
 | Signed committed walk | 22-step **SBF-EXECUTED** at `c05fe84` | Fresh local keys signed 22 confirmed sequential transactions through global resolution, internal/bearer redemption, and both owners withdrawing all free cash; 18 watched accounts were reloaded and the corrupted terminal expectation went red. | It is genesis-assisted by 11 prerequisites and omits clearing/settlement. It is not a blank-bank lifecycle or release baseline. |
 | Static Glass | **HOST-TESTED** inspect-only prototype | A static client can render local terms and unsigned intent material without owning truth. | No frozen release manifest, complete wallet path, browser/accessibility audit, or official hosted instance. |
-| Liveness accounting | one routed path **SBF-EXECUTED / PROFILE-ADMITTED**; system policy **STOP** | `clutch-liveness` remains a host-tested pure kernel. Separately, the current sealed liveness profile binds exact ResolutionWork compute, rent, rewards, refund, donation, and close behavior to the `187d5ee1...16bd` ELF; mixed historical/current measurement identities are machine-refused. | No complete global `LivenessPolicy` is emitted. Direct selection, production source work, most rent ownership/close routes, terminal asset disposition, and inclusion/keeper assumptions remain open. Hoard principal and future fees are never liveness capital. |
+| Liveness accounting | one routed path **SBF-EXECUTED / PROFILE-ADMITTED**; system policy **STOP** | `clutch-liveness` remains a host-tested pure kernel. Separately, the current sealed liveness profile binds exact ResolutionWork compute, rent, rewards, refund, donation, and close behavior to the `0d52c561…` ELF; mixed historical/current measurement identities are machine-refused. | No complete global `LivenessPolicy` is emitted. Direct selection, production source work, most rent ownership/close routes, terminal asset disposition, and inclusion/keeper assumptions remain open. Hoard principal and future fees are never liveness capital. |
 | Terminal lifecycle V2 | internal-only **MODEL-ONLY / HOST-TESTED** | A hostile-prestate model enforces per-role rent identity, once-only refunds, a separately retained replay tombstone, internal claim/supply/mint equality, exact per-Position lots, ordered close dependencies, and an immutable neutral surplus sink. External bearer issuance fails closed in this profile. | No live account ABI, signer/PDA authority, rent funding, Token-2022 CPI/post-state, SBF route, legacy migration, external-bearer terminal path, or fractional credit/carry closure exists. It is not a protocol terminality or no-stranding result. |
 | Terminal economics R4 | **MODEL-ONLY / HOST-TESTED** | A bounded creation-only model distinguishes internal `I`, registered external `E`, and authoritative Token-2022 `A` supply planes, requires `E=A` after authenticated transitions, and retains a segregated CreditVault/CreditRoot and every nonzero claimant credit. It proves why arbitrary raw bearer units plus indivisible collateral cannot generally end in tombstone-only closure. | No live ABI/PDA/authority, persistent supply ledger, Token-2022 post-CPI authentication, CPI/close router, rent/keeper funding, migration, or SBF terminal walk exists. Legacy mints without creation-time close authority remain permanent infrastructure or STOPs. The R4 design is RATIFIED 2026-08-20 (docs/decisions/ADOPTED_2026-08-20.md item 7) with a scope amendment: legacy-rows-permanent holds ONLY for legacy mints and prototype instances, the live general plane is explicitly NOT declared permanent, and the §8 reference-ownership variant is EXPLICITLY DEFERRED. Ratifying a MODEL-ONLY design builds no ABI and promotes no surface. |
 | Economics and fees | **MODEL-ONLY / PROPOSED** | Synthetic solvency, cost, fee, manipulation, and allocation experiments exist. `EvidenceOnlyRecoveryV1` is a decided new-research policy: it rejects every numeric data-failure fallback, enters recoverable dormancy after finite independently prepaid repair, selects lot-scaled bearer units for new native markets, and permits only terminal collateral burn after authoritative zero. | No failure-policy ABI, source-specific evidence theorem, lot-scaled mint, repair route, or terminal burn executes. The fee base *shape* is selected — the additive composite `kappa*G(a,p) + kappa'*R(a)` (docs/decisions/ADOPTED_2026-08-20.md item 9) — but **both rates remain undecided**, the bounds freeze is still owed, and every consensus byte stays `FeeBaseV1::None`; the selection is reversible until a rate freezes. The V1 split vector 60/0/40 with `AllRestingMakers` is adopted (item 8) and constrains nothing until a fee-bearing Realm exists; the treasury pubkey is deferred to the first such Realm and reserved to ember. Existing raw-unit bearer mints and fractional credits remain terminal STOPs. Hoard principal is never available. |
-| Artifact/release evidence | exact current artifact/stack/bank seal plus checked schema-v2 local baseline; release **STOP** | Runtime source/test ancestry `d8c5034` produced three byte-identical builds of `187d5ee1...16bd` (pass 1, pass 2, and — for the first time — the relocated-Cargo-home probe; single-host evidence, not cross-host closure); final-LTO/stack audit and same-ELF bank campaigns are sealed at `cfba5bb`. The `bd20711b…` and `af6bb79c…` seals are historical only. The checked manifest records all 100 gates executed and passes its post-commit full check. | Cargo-home relocation became byte-identical on this seal — the path sensitivity every prior seal measured left with the software `sha2` crate — but that is single-host evidence only. The hbox rebuild comparison (per-OS platform-tools divergence, exhaustively classified) is historical to `6743b9d`; byte-level seal reproduction still needs a second macOS host, and no independent rebuild of the current identity exists. No complete release SBOM/license closure, external security review, signed tag, or deployment. |
+| Artifact/release evidence | exact current artifact/stack/bank seal plus checked schema-v2 local baseline; release **STOP** | Runtime source/test ancestry `846afab` produced three byte-identical builds of `0d52c561…` (pass 1, pass 2, and the relocated-Cargo-home probe, which reports INDEPENDENT under the landed cycle-F amendment; single-host evidence, not cross-host closure), confirmed by a second full audit run at `42948f4`; final-LTO/stack audit and same-ELF bank campaigns (41 targets, 156 tests) are sealed in the same root. All nine earlier seals are historical only. The checked manifest records all 100 gates executed and passes its post-commit full check. | Cargo-home relocation became byte-identical on this seal — the path sensitivity every prior seal measured left with the software `sha2` crate — but that is single-host evidence only. The hbox rebuild comparison (per-OS platform-tools divergence, exhaustively classified) is historical to `6743b9d`; byte-level seal reproduction still needs a second macOS host, and no independent rebuild of the current identity exists. No complete release SBOM/license closure, external security review, signed tag, or deployment. |
 
 ## 5. Accounting truth
 
@@ -472,9 +501,12 @@ the sealed default ELF has no registered release and therefore refuses it with
    parser, and deployment profile; publicly create, append, and seal its
    canonical history; authenticate the immediate provider/config state and
    Clock admission; and remove genesis-injected mock source prerequisites.
-   Until then the default registry remains empty and Endow must keep refusing
-   `SourceReleaseUnavailable` (`0x79`); the non-production mock ELF is not a
-   substitute.
+   The v2 generation (tags 70–73) now has a real SBF route and the default ELF
+   takes custody against a **registered** pull release on a real bank. What is
+   still owed is the production half: no post-cutover receiver/config identity
+   and no production registry entry exist, the V1 registry is still empty, and
+   an unregistered release must keep refusing `SourceReleaseUnavailable`
+   (`0x79`); the non-production mock ELF is not a substitute for either.
 4. **Complete blank-bank lifecycle:** typed artifacts, Realm/Profile, the
    initial degree-selected market plane, Reservation, and later-owner state now
    tolerate admitted pre-funding with focused real-bank rollback evidence. Add

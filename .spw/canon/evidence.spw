@@ -53,8 +53,8 @@
       "baseline"
       "runtime ancestry"
     ][reg=set]
-    status = "The accepted seal is the cycle-E chain over `4fded7a6…` (1,979,512 bytes). The 2026-08-21 wave deliberately took no per-wave reseal — one batched cycle-G reseal is owed for the settled tree — so every seal-side statement in this canon is about an artifact that predates the wave. See the index's `seal_lag`."
-    revised = "2026-08-21 — no seal moved. Recording that is the point: the tree advanced and the identity did not, which is exactly the condition the seal exists to make visible rather than a drift to be smoothed."
+    status = "The accepted seal is the cycle-G chain over `0d52c561…` (2,149,672 bytes), sealed 2026-08-21 at commit `846afab`. It is the batched reseal the wave deferred to: eleven landings sat between it and `df0aece1…` without moving the identity, and every seal-side statement in this canon is now about the settled tree rather than one that predates it. The `seal_lag` discrepancy this field pointed at is closed."
+    revised = "2026-08-21 — twice. First to record that no seal had moved, which was the point: the tree advanced and the identity did not, which is the condition the seal exists to make visible rather than a drift to be smoothed. Then to record cycle G landing and closing it. The gap was carried openly for eleven landings and shut by a reseal, not by a rewording — which is what the concept is for."
   }[reg=concept]
 
   two_elf_discipline: .{
@@ -110,7 +110,7 @@
       "the rows it retired this wave are -> virtual_mint_join"
       "what emptiness does not mean is -> residual"
     ][reg=set]
-    plane = "the tree's ledger and the sealed artifact's disagree, and the seal is the one behind -> seal"
+    plane = "the tree's ledger and the sealed artifact's now agree: cycle G sealed the empty ledger, and the disagreement this field recorded is discharged rather than restated -> seal"
   }[reg=concept]
 
   residual: .{
