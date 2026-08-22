@@ -29,10 +29,11 @@ covered through the vendoring workspace's rows; the disposition is printed as
 an explicit ``MANIFEST … VENDORED covered-by=…`` record, and it is a
 ``FAILURE`` if the covering workspace is not itself in the checked scope.
 
-The complete mode is deliberately NOT a declared baseline-manifest gate yet:
-the sealed MANIFEST.baseline.json gate outputs must stay byte-stable, so
-folding ``--complete`` into the declared gate inventory happens at the next
-manifest emission cycle, not now.
+The complete mode is a declared baseline-manifest gate
+(``python.dependency_license_complete``): it runs ``--complete`` and then
+requires byte-equality against the committed catalog, so a crate added without
+regenerating the catalog goes red. The attested twelve-manifest default mode
+above is a separate byte-stable surface and is deliberately not that gate.
 """
 
 from __future__ import annotations

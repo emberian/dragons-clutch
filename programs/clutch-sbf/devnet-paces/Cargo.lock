@@ -198,6 +198,7 @@ dependencies = [
  "clutch-bspline",
  "clutch-bspline-accumulator",
  "clutch-kernel",
+ "clutch-liveness",
  "clutch-solana-layout",
  "clutch-solana-reference",
  "solana-account-info",

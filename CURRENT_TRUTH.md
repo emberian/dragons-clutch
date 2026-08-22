@@ -552,12 +552,13 @@ the sealed default ELF has no registered release and therefore refuses it with
    independent same-source rebuild (internally byte-reproducible; divergence
    from the macOS seal exhaustively classified as per-OS toolchain bytes)
    are retained, and the complete-scope dependency/license closure is now a
-   committed artifact (32 manifests, 1,788 unique rows, 0 failures;
+   committed artifact (36 manifests, 2,129 unique rows, 0 failures;
    `research/liveness-policy-profile/dependency_license_complete.tsv`, tool
    at `scripts/dependency_license_check.py` with the attested 12-manifest
-   default mode byte-stable). Still required before a release claim:
-   byte-level seal reproduction on a second macOS host, folding the
-   complete-scope closure into a declared gate at the next emission cycle,
+   default mode byte-stable) and is a declared gate
+   (`python.dependency_license_complete`), so a crate added without
+   regenerating the catalog goes red. Still required before a release claim:
+   byte-level seal reproduction on a second macOS host,
    human review of the flagged license rows (MPL-2.0 family, CDLA roots,
    one license-file-only crate), external security review, and a signed
    tag.

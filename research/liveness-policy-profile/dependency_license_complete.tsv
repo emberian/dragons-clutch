@@ -120,7 +120,9 @@ clutch-claim-neutral-resolution	0.1.0	path+research/claim-neutral-resolution	-	A
 clutch-failure-payout-v1	0.1.0	path+research/failure-payout-v1	-	AGPL-3.0-or-later
 clutch-fractional-redemption	0.1.0	path+research/fractional-redemption	-	AGPL-3.0-or-later
 clutch-invariant-campaign	0.1.0	path+tools/invariant-campaign	-	AGPL-3.0-or-later
+clutch-keeper	0.1.0	path+programs/clutch-sbf/keeper	-	AGPL-3.0-or-later
 clutch-kernel	0.1.0	path+crates/clutch-kernel	-	AGPL-3.0-or-later
+clutch-lab-receiver	0.1.0	path+programs/clutch-sbf/svm-tests/lab-receiver	-	AGPL-3.0-or-later
 clutch-liquidity-policy-model	0.1.0	path+research/liquidity-policy-model	-	AGPL-3.0-or-later
 clutch-liveness	0.1.0	path+crates/clutch-liveness	-	AGPL-3.0-or-later
 clutch-liveness-account-probe	0.1.0	path+research/liveness-policy-profile	-	AGPL-3.0-or-later
@@ -130,6 +132,7 @@ clutch-sbf	0.1.0	path+programs/clutch-sbf/program	-	AGPL-3.0-or-later
 clutch-sbf-committed-harness	0.1.0	path+programs/clutch-sbf/committed-harness	-	AGPL-3.0-or-later
 clutch-sbf-devnet-paces	0.1.0	path+programs/clutch-sbf/devnet-paces	-	AGPL-3.0-or-later
 clutch-sbf-harness	0.1.0	path+programs/clutch-sbf/harness	-	AGPL-3.0-or-later
+clutch-sbf-operatord	0.1.0	path+programs/clutch-sbf/operatord	-	AGPL-3.0-or-later
 clutch-sbf-svm-tests	0.1.0	path+programs/clutch-sbf/svm-tests	-	AGPL-3.0-or-later
 clutch-solana-layout	0.1.0	path+programs/solana-layout	-	AGPL-3.0-or-later
 clutch-solana-reference	0.1.0	path+programs/solana-reference	-	AGPL-3.0-or-later
