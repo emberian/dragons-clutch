@@ -565,7 +565,10 @@ impl Plane {
         self.pages.len() as u16
     }
 
-    /// The canonical bumps of the three accounts `InitEpoch` derives.
+    /// The extra derivation attempts of the three accounts `InitEpoch` names.
+    ///
+    /// A **lower bound**: the instruction derives at least these three, and
+    /// may derive more this harness cannot enumerate.
     ///
     /// `find_program_address` counts a bump down from 255 and pays one
     /// `create_program_address` (≈1,500 CU) per attempt, so a route's cost

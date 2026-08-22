@@ -23,19 +23,21 @@
 //! `find_program_address`, which pays one `create_program_address` per failed
 //! attempt — measured here at roughly 1,200 CU — so a route's cost carries a
 //! term proportional to `255 - bump` for every address it derives.  Between
-//! two otherwise identical `InitEpoch` transactions on the same market, five
-//! extra attempts are 6,000 CU.  Every row here prints its attempt count
-//! beside its CU so a quote model can carry the quantum instead of averaging
-//! it into a shape it does not belong to.
+//! two otherwise identical `InitEpoch` transactions on the same market differ
+//! by exactly 6,000 CU — four times the quantum.  Every row here prints an
+//! attempt count beside its CU so a quote model can carry the quantum instead
+//! of averaging it into a shape it does not belong to.  (The printed counts
+//! are lower bounds: they enumerate the addresses this harness can name, and
+//! an instruction may derive more.)
 //!
-//! Read that way — netting the printed attempt counts at roughly 1,500 CU
-//! each — the two placement deltas resolve to about **+318 CU for fifty-three
-//! extra ticks of scan** (six CU a tick) and about **+3,300 CU for the wider
-//! table at equal depth**.  Both are noise against a 1.4 M ceiling, and both
-//! are smaller than the bump term the same transactions carry, which is why
-//! the deltas are printed and not asserted: a single-observation difference
-//! between two planes is a shape term plus a bump term and the two are not
-//! separable from one run.
+//! Read that way — netting the placement rows' attempt counts at 1,500 CU
+//! each — the two placement deltas resolve to **+318 CU for fifty-three extra
+//! ticks of scan** (six CU a tick) and **+3,318 CU for the wider table at
+//! equal depth**, and both figures reproduce across runs whose random genesis
+//! keys give every plane different bumps.  Both are noise against a 1.4 M
+//! ceiling, and both are smaller than the bump term the same transactions
+//! carry, which is why the deltas are printed and not asserted: one
+//! observation cannot separate a shape term from a bump term.
 //!
 //! Every created account carries its `GeneralFundingLedgerV1` sibling: an
 //! unledgered creation is unclosable by design, so the ledgered shape is the
