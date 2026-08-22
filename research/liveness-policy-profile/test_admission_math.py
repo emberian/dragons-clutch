@@ -8,14 +8,17 @@ import unittest
 from admission_math import (
     AdmissionError,
     QuotePolicy,
-    batched_resolution_path_quote,
+    RuntimeCostSchedule,
+    batched_external_resolution_budget_quote,
     direct_work_budget_quote,
     exact_unique_labels,
+    external_resolution_budget_quote,
     fewest_transaction_batch_plan,
+    protocol_resolution_prefund,
     quote_route,
     require_runtime_schedule_covers_batches,
     require_runtime_schedule_covers_policy,
-    resolution_path_quote,
+    runtime_execution_plan,
     worst_fold_partition,
 )
 
@@ -32,6 +35,20 @@ POLICY = QuotePolicy(
 
 WORK_RENT = 9_911_040
 RESERVE_RENT = 890_880
+
+RUNTIME_SCHEDULE = RuntimeCostSchedule(
+    maximum_records=32,
+    maximum_fold_width=4,
+    begin_charge_lamports=0,
+    fold_base_charge_lamports=0,
+    fold_per_record_charge_lamports=0,
+    fold_base_reward_lamports=1_160_000,
+    fold_per_record_reward_lamports=0,
+    finalize_charge_lamports=0,
+    finalize_reward_lamports=1_510_000,
+    abort_charge_lamports=0,
+    abort_reward_lamports=860_000,
+)
 
 
 class AdmissionMathTests(unittest.TestCase):
@@ -65,39 +82,36 @@ class AdmissionMathTests(unittest.TestCase):
             width: quote_route(cu, POLICY)
             for width, cu in {1: 804_616, 2: 812_193, 3: 813_128, 4: 815_573}.items()
         }
-        result = resolution_path_quote(
+        result = external_resolution_budget_quote(
             record_count=32,
             begin=quote_route(810_992, POLICY),
             fold_quotes=folds,
             finalize=quote_route(1_170_549, POLICY),
             abort=quote_route(587_047, POLICY),
-            rent_principal_lamports=WORK_RENT + RESERVE_RENT,
         )
         self.assertEqual(result.status, "STOP_FINALIZE")
-        self.assertIsNone(result.spendable_reserve_lamports)
-        self.assertIsNone(result.persistent_reserve_lamports)
-        self.assertIsNone(result.payer_cold_outlay_lamports)
+        self.assertIsNone(result.success_post_begin_budget_lamports)
+        self.assertIsNone(result.success_total_budget_lamports)
 
     def test_max32_policy_cap_and_abort_alternative(self) -> None:
         folds = {
             width: quote_route(cu, POLICY)
             for width, cu in {1: 804_616, 2: 812_193, 3: 813_128, 4: 815_573}.items()
         }
-        result = resolution_path_quote(
+        result = external_resolution_budget_quote(
             record_count=32,
             begin=quote_route(810_992, POLICY),
             fold_quotes=folds,
             finalize=quote_route(1_094_832, POLICY),
             abort=quote_route(587_197, POLICY),
-            rent_principal_lamports=WORK_RENT + RESERVE_RENT,
         )
         self.assertEqual(result.status, "PASS")
-        self.assertEqual(result.success_rewards_lamports, 37_320_000)
-        self.assertEqual(result.worst_abort_rewards_lamports, 36_690_000)
-        self.assertEqual(result.spendable_reserve_lamports, 37_320_000)
-        self.assertEqual(result.persistent_reserve_lamports, 48_121_920)
-        self.assertEqual(result.begin_external_lamports, 1_130_000)
-        self.assertEqual(result.payer_cold_outlay_lamports, 49_251_920)
+        self.assertEqual(result.success_post_begin_budget_lamports, 37_320_000)
+        self.assertEqual(result.worst_abort_post_begin_budget_lamports, 36_690_000)
+        self.assertEqual(result.begin_transaction_budget_lamports, 1_130_000)
+        self.assertEqual(result.success_total_budget_lamports, 38_450_000)
+        self.assertEqual(result.worst_abort_total_budget_lamports, 37_820_000)
+        self.assertFalse(hasattr(result, "rent_principal_lamports"))
 
     def test_runtime_schedule_must_cover_every_width_and_terminal(self) -> None:
         folds = {
@@ -204,50 +218,46 @@ class AdmissionMathTests(unittest.TestCase):
         begin = quote_route(90_924, POLICY)
         finalize = quote_route(164_287, POLICY)
         abort = quote_route(46_677, POLICY)
-        result = batched_resolution_path_quote(
+        result = batched_external_resolution_budget_quote(
             record_count=32,
             begin=begin,
             batch_quotes=quotes,
             finalize=finalize,
             abort=abort,
-            rent_principal_lamports=WORK_RENT + RESERVE_RENT,
         )
         self.assertEqual(result.status, "PASS")
-        self.assertEqual(result.batch_plan, (12, 12, 8))
+        self.assertEqual(result.transaction_plan, (12, 12, 8))
         self.assertEqual(result.fold_transactions, 3)
-        self.assertEqual(result.fold_path_lamports, 3_490_000)
-        self.assertEqual(result.success_rewards_lamports, 3_810_000)
-        self.assertEqual(result.worst_abort_rewards_lamports, 3_660_000)
-        self.assertEqual(result.spendable_reserve_lamports, 3_810_000)
-        self.assertEqual(result.persistent_reserve_lamports, 14_611_920)
-        self.assertEqual(result.begin_external_lamports, 230_000)
-        self.assertEqual(result.payer_cold_outlay_lamports, 14_841_920)
+        self.assertEqual(result.fold_transactions_budget_lamports, 3_490_000)
+        self.assertEqual(result.success_post_begin_budget_lamports, 3_810_000)
+        self.assertEqual(result.worst_abort_post_begin_budget_lamports, 3_660_000)
+        self.assertEqual(result.begin_transaction_budget_lamports, 230_000)
+        self.assertEqual(result.success_total_budget_lamports, 4_040_000)
+        self.assertEqual(result.worst_abort_total_budget_lamports, 3_890_000)
+        self.assertFalse(hasattr(result, "rent_principal_lamports"))
 
-        stopped_finalize = batched_resolution_path_quote(
+        stopped_finalize = batched_external_resolution_budget_quote(
             record_count=32,
             begin=begin,
             batch_quotes=quotes,
             finalize=quote_route(1_120_001, POLICY),
             abort=abort,
-            rent_principal_lamports=WORK_RENT + RESERVE_RENT,
         )
         self.assertEqual(stopped_finalize.status, "STOP_FINALIZE")
-        self.assertIsNone(stopped_finalize.batch_plan)
-        self.assertIsNone(stopped_finalize.spendable_reserve_lamports)
-        self.assertIsNone(stopped_finalize.payer_cold_outlay_lamports)
+        self.assertIsNone(stopped_finalize.transaction_plan)
+        self.assertIsNone(stopped_finalize.success_total_budget_lamports)
 
         all_stopped = {size: quote_route(1_120_001, POLICY) for size in quotes}
-        no_batches = batched_resolution_path_quote(
+        no_batches = batched_external_resolution_budget_quote(
             record_count=32,
             begin=begin,
             batch_quotes=all_stopped,
             finalize=finalize,
             abort=abort,
-            rent_principal_lamports=WORK_RENT + RESERVE_RENT,
         )
         self.assertEqual(no_batches.status, "STOP_FOLD_BATCH")
-        self.assertIsNone(no_batches.fold_path_lamports)
-        self.assertIsNone(no_batches.payer_cold_outlay_lamports)
+        self.assertIsNone(no_batches.fold_transactions_budget_lamports)
+        self.assertIsNone(no_batches.success_total_budget_lamports)
 
     def test_runtime_schedule_must_cover_every_admitted_batch(self) -> None:
         measured = {2: 175_781, 4: 331_077, 8: 664_117, 12: 926_969}
@@ -273,6 +283,65 @@ class AdmissionMathTests(unittest.TestCase):
             fold_base_reward=165_000,
             fold_per_record_reward=0,
         )
+
+    def test_protocol_prefund_uses_worst_case_successful_fold_call_count(self) -> None:
+        prefund = protocol_resolution_prefund(
+            record_count=32,
+            rent_principal_lamports=WORK_RENT + RESERVE_RENT,
+            schedule=RUNTIME_SCHEDULE,
+        )
+        self.assertEqual(prefund.worst_case_fold_calls, 32)
+        self.assertEqual(prefund.worst_case_fold_outflow_lamports, 37_120_000)
+        self.assertEqual(prefund.terminal_outflow_lamports, 1_510_000)
+        self.assertEqual(prefund.spendable_reserve_lamports, 38_630_000)
+        self.assertEqual(prefund.rent_principal_lamports, 10_801_920)
+        self.assertEqual(prefund.minimum_prefund_lamports, 49_431_920)
+
+    def test_fold4_plan_derives_per_call_payout_and_terminal_refund(self) -> None:
+        prefund = protocol_resolution_prefund(
+            record_count=32,
+            rent_principal_lamports=WORK_RENT + RESERVE_RENT,
+            schedule=RUNTIME_SCHEDULE,
+        )
+        plan = runtime_execution_plan(
+            name="EIGHT_FOLD4_CALLS_IN_SIX_PLUS_TWO_TRANSACTIONS",
+            fold_call_widths=(4,) * 8,
+            transaction_fold_call_counts=(6, 2),
+            prefund=prefund,
+            schedule=RUNTIME_SCHEDULE,
+        )
+        self.assertEqual(plan.fold_calls, 8)
+        self.assertEqual(plan.fold_transactions, 2)
+        self.assertEqual(plan.fold_rewards_lamports, 9_280_000)
+        self.assertEqual(plan.success_payout_lamports, 10_790_000)
+        self.assertEqual(plan.success_unused_prepaid_lamports, 27_840_000)
+        self.assertEqual(plan.success_rent_principal_refund_lamports, 10_801_920)
+        self.assertEqual(plan.success_payer_refund_lamports, 38_641_920)
+        self.assertEqual(plan.abort_payout_lamports, 10_140_000)
+        self.assertEqual(plan.abort_payer_refund_lamports, 39_291_920)
+
+    def test_runtime_plan_refuses_nonpartition_and_prefund_is_batch_invariant(self) -> None:
+        prefund = protocol_resolution_prefund(
+            record_count=32,
+            rent_principal_lamports=WORK_RENT + RESERVE_RENT,
+            schedule=RUNTIME_SCHEDULE,
+        )
+        with self.assertRaises(AdmissionError):
+            runtime_execution_plan(
+                name="MISSING_ONE_RECORD",
+                fold_call_widths=(4,) * 7 + (3,),
+                transaction_fold_call_counts=(6, 2),
+                prefund=prefund,
+                schedule=RUNTIME_SCHEDULE,
+            )
+        with self.assertRaises(AdmissionError):
+            runtime_execution_plan(
+                name="MISSING_ONE_CALL_FROM_TRANSACTION_PARTITION",
+                fold_call_widths=(4,) * 8,
+                transaction_fold_call_counts=(6, 1),
+                prefund=prefund,
+                schedule=RUNTIME_SCHEDULE,
+            )
 
     def test_direct_budget_rejects_unmeasured_shape_and_u64_overflow(self) -> None:
         with self.assertRaises(AdmissionError):

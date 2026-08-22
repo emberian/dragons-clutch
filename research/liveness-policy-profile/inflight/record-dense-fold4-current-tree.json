@@ -1,0 +1,87 @@
+{
+ "schema": "dragons-clutch/current-tree-resolution-work-fold4-measurement/v1",
+ "identity": {
+  "admission": "UNSEALED_CURRENT_TREE",
+  "runtime_source_head": "ba580c64ca2b2125771391d7184afc3f67ce8227",
+  "source_profile": "default-empty-registry",
+  "elf_path": "programs/clutch-sbf/svm-tests/tests/fixtures/clutch_sbf.so",
+  "elf_sha256": "a6381fbe211e400788615e1c588938266bed14bc8f0fc12babf76350bc24cbe2",
+  "elf_bytes": 2160072,
+  "source_scope_definition": "programs/clutch-sbf/audit/audit_artifact.sh:conservative-build-input-closure",
+  "source_scope_files": 129,
+  "source_scope_sha256": "2012201b8937fec50afd08a1e075a276d965ced56c3922df5e47b1c33e122438",
+  "test_source_sha256": {
+   "programs/clutch-sbf/svm-tests/tests/resolution_work_batch.rs": "f0cc9ba8555f71e51b3332757a235aa26407882429383360055008e0ca4ec91f",
+   "programs/clutch-sbf/svm-tests/tests/resolution_work_common/mod.rs": "3e84d4337ed631a4798461614db912a1781e0cdd5d6f5bc45d3634b5620267ce"
+  }
+ },
+ "campaign": {
+  "record_count": 32,
+  "fold_call_widths": [4, 4, 4, 4, 4, 4, 4, 4],
+  "transaction_fold_call_counts": [6, 2],
+  "transaction_cu_limit": 1400000,
+  "packet_budget_bytes": 1232
+ },
+ "measurements": {
+  "begin": {
+   "admission": "UNSEALED_CURRENT_TREE",
+   "elf_sha256": "a6381fbe211e400788615e1c588938266bed14bc8f0fc12babf76350bc24cbe2",
+   "source_scope_sha256": "2012201b8937fec50afd08a1e075a276d965ced56c3922df5e47b1c33e122438",
+   "compute_units": 76064
+  },
+  "fold_transactions": [
+   {
+    "admission": "UNSEALED_CURRENT_TREE",
+    "elf_sha256": "a6381fbe211e400788615e1c588938266bed14bc8f0fc12babf76350bc24cbe2",
+    "source_scope_sha256": "2012201b8937fec50afd08a1e075a276d965ced56c3922df5e47b1c33e122438",
+    "fold_calls": 6,
+    "fold_width": 4,
+    "compute_units": 514332,
+    "packet_bytes": 1228
+   },
+   {
+    "admission": "UNSEALED_CURRENT_TREE",
+    "elf_sha256": "a6381fbe211e400788615e1c588938266bed14bc8f0fc12babf76350bc24cbe2",
+    "source_scope_sha256": "2012201b8937fec50afd08a1e075a276d965ced56c3922df5e47b1c33e122438",
+    "fold_calls": 2,
+    "fold_width": 4,
+    "compute_units": 171765,
+    "packet_bytes": 704
+   }
+  ],
+  "finalize": {
+   "admission": "UNSEALED_CURRENT_TREE",
+   "elf_sha256": "a6381fbe211e400788615e1c588938266bed14bc8f0fc12babf76350bc24cbe2",
+   "source_scope_sha256": "2012201b8937fec50afd08a1e075a276d965ced56c3922df5e47b1c33e122438",
+   "compute_units": 152730
+  },
+  "reference_singleton_fold4": {
+   "admission": "UNSEALED_CURRENT_TREE",
+   "elf_sha256": "a6381fbe211e400788615e1c588938266bed14bc8f0fc12babf76350bc24cbe2",
+   "source_scope_sha256": "2012201b8937fec50afd08a1e075a276d965ced56c3922df5e47b1c33e122438",
+   "compute_units": [85682, 86030, 86030, 86030, 86030, 86030, 86030, 86035]
+  },
+  "invalid_middle_fold4": {
+   "admission": "UNSEALED_CURRENT_TREE",
+   "elf_sha256": "a6381fbe211e400788615e1c588938266bed14bc8f0fc12babf76350bc24cbe2",
+   "source_scope_sha256": "2012201b8937fec50afd08a1e075a276d965ced56c3922df5e47b1c33e122438",
+   "invalid_call_index": 3,
+   "failure_compute_units": 318814,
+   "retry_compute_units": 514332,
+   "whole_transaction_reverted": true
+  }
+ },
+ "semantic_checks": {
+  "pre_finalize_work_reserve_resolution_bytes_equal_reference": true,
+  "post_finalize_work_closed": true,
+  "post_finalize_reserve_closed": true,
+  "post_finalize_resolution_bytes_equal_reference": true,
+  "invalid_middle_instruction_preserved_program_prestate": true
+ },
+ "runtime_economics": {
+  "fold_reward_lamports_each": [1160000, 1160000, 1160000, 1160000, 1160000, 1160000, 1160000, 1160000],
+  "fold_rewards_lamports": 9280000,
+  "finalize_reward_lamports": 1510000,
+  "payer_refund_lamports": 38641920
+ }
+}

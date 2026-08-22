@@ -22,9 +22,9 @@ use {
             FoldResolutionWorkV1, ResolutionWorkAccountV1, FINALIZATION_LARGEST_REMAINDER_V1,
             RESOLUTION_WORK_ACCOUNT_BYTES,
         },
-        Hash32, HoardAccount, Intent, MarketAccount, PayoutVectorBytes, PositionAccount,
-        SupplyLedgerAccount, TermsAccount, MAX_KNOTS, MAX_OUTCOMES, PAYOUT_INDEX_UNRESOLVED,
-        PAYOUT_MAP_UNUSED,
+        FeedAccount, Hash32, HoardAccount, Intent, MarketAccount, PayoutVectorBytes,
+        PositionAccount, SupplyLedgerAccount, TermsAccount, MAX_KNOTS, MAX_OUTCOMES,
+        PAYOUT_INDEX_UNRESOLVED, PAYOUT_MAP_UNUSED,
     },
     clutch_solana_reference::KernelAccount,
     clutch_svm_fixture::{
@@ -225,6 +225,13 @@ pub fn occupation_plane(actor: Address, degree: u8, span: u64) -> Plane {
     account_mut(&mut plane, resolution_address).data =
         encode(OCCUPATION_RESOLUTION_LEN, |out| unresolved.encode(out));
     rewrite_plane_source_archive_span(&mut plane, 4, 0, span);
+    // Finalization refuses a candidate whose last ingested bucket is newer
+    // than the shared Feed cursor.  The long-span ResolutionWork fixture must
+    // advance that cursor along with the authenticated archive it just built.
+    let feed_address = plane.feed.address;
+    let mut feed = FeedAccount::decode(&account_mut(&mut plane, feed_address).data).unwrap();
+    feed.cursor = feed.cursor.max(START_BUCKET + span);
+    account_mut(&mut plane, feed_address).data = encode(account_len::FEED, |out| feed.encode(out));
     plane.hoard_atoms = SETS;
     plane
 }
@@ -576,6 +583,61 @@ pub async fn send_with_limit(
             .metadata
             .map(|metadata| metadata.compute_units_consumed)
             .unwrap_or_default(),
+    )
+}
+
+fn short_vec_len(mut value: usize) -> usize {
+    let mut bytes = 1;
+    while value >= 0x80 {
+        value >>= 7;
+        bytes += 1;
+    }
+    bytes
+}
+
+/// Send the exact keeper-shaped transaction and return its serialized packet
+/// length with the bank CU observation.
+///
+/// Unlike [`send_with_limit`], the program signer is also the transaction fee
+/// payer, so the message needs one signature rather than the test bank payer
+/// plus the program signer. This is the shape a keeper can actually submit.
+pub async fn send_as_payer_with_limit(
+    scenario: &mut Scenario,
+    instructions: &[Instruction],
+    payer: &Keypair,
+    additional_signers: &[&Keypair],
+    limit: u32,
+) -> (Result<(), TransactionError>, u64, usize) {
+    let blockhash = scenario
+        .bank
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .unwrap();
+    let mut signers = vec![payer];
+    signers.extend_from_slice(additional_signers);
+    let mut routed = Vec::with_capacity(instructions.len() + 2);
+    routed.push(budget(limit));
+    routed.push(policy_price());
+    routed.extend_from_slice(instructions);
+    let transaction =
+        Transaction::new_signed_with_payer(&routed, Some(&payer.pubkey()), &signers, blockhash);
+    let wire_bytes = short_vec_len(transaction.signatures.len())
+        + transaction.signatures.len() * 64
+        + transaction.message.serialize().len();
+    let outcome = scenario
+        .bank
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .unwrap();
+    (
+        outcome.result,
+        outcome
+            .metadata
+            .map(|metadata| metadata.compute_units_consumed)
+            .unwrap_or_default(),
+        wire_bytes,
     )
 }
 

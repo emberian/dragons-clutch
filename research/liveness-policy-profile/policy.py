@@ -23,12 +23,15 @@ from typing import Any
 from admission_math import (
     QuotePolicy,
     RouteQuote,
-    batched_resolution_path_quote,
+    RuntimeCostSchedule,
+    batched_external_resolution_budget_quote,
     exact_unique_labels,
+    external_resolution_budget_quote,
+    protocol_resolution_prefund,
     quote_route,
-    require_runtime_schedule_covers_batches,
-    require_runtime_schedule_covers_policy,
-    resolution_path_quote,
+    runtime_execution_plan,
+    runtime_schedule_batch_coverage,
+    runtime_schedule_policy_coverage,
 )
 from terminal_admission import validate_terminal_admission
 from terminal_profile import ACCOUNT_ROWS, EXPECTED_ACCOUNTS, build_terminal
@@ -750,6 +753,25 @@ FOLD_SENDABLE_BOUND_EVIDENCE = (
 FOLD_UNSENDABLE_ROW_DISPOSITION = (
     "MEASURED_ON_A_BANK_BUT_OVER_THE_1232_BYTE_PACKET_BUDGET_EXCLUDED_FROM_THE_PLAN"
 )
+CURRENT_TREE_FOLD4_SCHEMA = (
+    "dragons-clutch/current-tree-resolution-work-fold4-measurement/v1"
+)
+CURRENT_TREE_ADMISSION = "UNSEALED_CURRENT_TREE"
+CURRENT_TREE_SOURCE_SCOPE_DEFINITION = (
+    "programs/clutch-sbf/audit/audit_artifact.sh:conservative-build-input-closure"
+)
+CURRENT_TREE_SOURCE_PATHS = (
+    "programs/clutch-sbf/.cargo",
+    "programs/clutch-sbf/Cargo.toml",
+    "programs/clutch-sbf/Cargo.lock",
+    "programs/clutch-sbf/program",
+    "programs/clutch-sbf/harness/Cargo.toml",
+    "programs/clutch-sbf/vendor",
+    "programs/solana-layout",
+    "programs/solana-reference",
+    "crates",
+    "research/batch-policy-identity",
+)
 # The Direct V3 close campaign (rung V1 of the clearing-plane promotion
 # report).  These four families are the ones ``DIRECT.V3_CLOSE_EVIDENCE_
 # UNSEALED`` blocked, and the id's own text says what retires it: a sealed
@@ -914,6 +936,358 @@ def quote_dict(route: RouteQuote) -> dict[str, Any]:
 
 def route_dict(measured_cu: int, policy: QuotePolicy) -> dict[str, Any]:
     return quote_dict(quote_route(measured_cu, policy))
+
+
+def load_current_tree_fold4(path: Path) -> dict[str, Any]:
+    """Load the opt-in current-tree campaign without touching sealed evidence."""
+
+    with path.open("r", encoding="utf-8") as stream:
+        measurement = json.load(stream)
+    if measurement.get("schema") != CURRENT_TREE_FOLD4_SCHEMA:
+        raise CheckError("unexpected current-tree Fold4 measurement schema")
+    return measurement
+
+
+def _require_sha256(value: Any, label: str) -> str:
+    if not isinstance(value, str) or len(value) != 64:
+        raise CheckError(f"{label}: expected a 64-character SHA-256 digest")
+    try:
+        bytes.fromhex(value)
+    except ValueError as error:
+        raise CheckError(f"{label}: digest is not hexadecimal") from error
+    return value
+
+
+def _current_tree_source_scope() -> tuple[list[str], str]:
+    dirty = git_tracking(
+        ["status", "--porcelain", "--", *CURRENT_TREE_SOURCE_PATHS], repo=REPO
+    ).strip()
+    if dirty:
+        raise CheckError("current-tree ELF input closure is dirty: " + dirty)
+    files = sorted(
+        line
+        for line in git_tracking(
+            ["ls-files", "--", *CURRENT_TREE_SOURCE_PATHS], repo=REPO
+        ).splitlines()
+        if line
+    )
+    if not files:
+        raise CheckError("current-tree ELF input closure is empty")
+    digest = hashlib.sha256()
+    for relative in files:
+        data = (REPO / relative).read_bytes()
+        digest.update(relative.encode())
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(data).digest())
+        digest.update(b"\0")
+    return files, digest.hexdigest()
+
+
+def _current_tree_route(
+    measured_cu: int,
+    policy: QuotePolicy,
+    *,
+    elf_sha256: str,
+    source_scope_sha256: str,
+) -> dict[str, Any]:
+    return {
+        "admission": CURRENT_TREE_ADMISSION,
+        "elf_sha256": elf_sha256,
+        "source_scope_sha256": source_scope_sha256,
+        **quote_dict(quote_route(measured_cu, policy)),
+    }
+
+
+def derive_current_tree_fold4(
+    evidence: dict[str, Any],
+    measurement: dict[str, Any],
+    *,
+    verify_disk: bool = True,
+) -> dict[str, Any]:
+    """Derive an explicitly unsealed Fold(4) overlay.
+
+    This function cannot mutate or replace ``evidence["projection"]``.  Its
+    current-tree rows carry their own ELF/source identity, and all external
+    budgets come from whole measured transactions rather than sums of
+    singleton instruction CU.  Runtime payout and protocol prefund remain
+    separate ledgers.
+    """
+
+    require_equal(
+        measurement.get("schema"),
+        CURRENT_TREE_FOLD4_SCHEMA,
+        "current-tree Fold4 schema",
+    )
+    identity = measurement["identity"]
+    require_equal(
+        identity["admission"], CURRENT_TREE_ADMISSION, "current-tree admission"
+    )
+    require_equal(
+        identity["source_profile"],
+        "default-empty-registry",
+        "current-tree source profile",
+    )
+    require_equal(
+        identity["source_scope_definition"],
+        CURRENT_TREE_SOURCE_SCOPE_DEFINITION,
+        "current-tree source-scope definition",
+    )
+    elf_sha256 = _require_sha256(identity["elf_sha256"], "current-tree ELF")
+    source_scope_sha256 = _require_sha256(
+        identity["source_scope_sha256"], "current-tree source scope"
+    )
+    if identity["elf_bytes"] <= 0 or identity["source_scope_files"] <= 0:
+        raise CheckError("current-tree ELF bytes and source-file count must be positive")
+
+    if verify_disk:
+        elf_relative = Path(identity["elf_path"])
+        if elf_relative.is_absolute() or ".." in elf_relative.parts:
+            raise CheckError("current-tree ELF path must stay inside the repository")
+        elf_path = REPO / elf_relative
+        require_equal(sha256(elf_path), elf_sha256, "current-tree ELF sha256")
+        require_equal(elf_path.stat().st_size, identity["elf_bytes"], "current-tree ELF bytes")
+        profile_path = elf_path.with_suffix(".profile")
+        profile = dict(
+            line.split("=", 1)
+            for line in profile_path.read_text(encoding="utf-8").splitlines()
+            if "=" in line
+        )
+        require_equal(
+            profile.get("source_profile"),
+            identity["source_profile"],
+            "current-tree fixture profile",
+        )
+        require_equal(
+            profile.get("elf_sha256"), elf_sha256, "current-tree fixture-profile ELF"
+        )
+        require_equal(
+            int(profile.get("elf_bytes", "0")),
+            identity["elf_bytes"],
+            "current-tree fixture-profile bytes",
+        )
+        source_files, actual_source_scope = _current_tree_source_scope()
+        require_equal(
+            len(source_files),
+            identity["source_scope_files"],
+            "current-tree source-file count",
+        )
+        require_equal(
+            actual_source_scope,
+            source_scope_sha256,
+            "current-tree source-scope sha256",
+        )
+        for relative, expected in identity["test_source_sha256"].items():
+            _require_sha256(expected, f"current-tree test source {relative}")
+            require_equal(
+                sha256(REPO / relative), expected, f"current-tree test source {relative}"
+            )
+
+    campaign = measurement["campaign"]
+    require_equal(campaign["record_count"], 32, "current-tree record count")
+    require_equal(
+        campaign["fold_call_widths"], [4] * 8, "current-tree Fold-call widths"
+    )
+    require_equal(
+        campaign["transaction_fold_call_counts"],
+        [6, 2],
+        "current-tree Fold transaction plan",
+    )
+    require_equal(
+        campaign["transaction_cu_limit"],
+        quote_policy(evidence).transaction_ceiling_cu,
+        "current-tree transaction CU limit",
+    )
+    require_equal(
+        campaign["packet_budget_bytes"],
+        FOLD_PACKET_BUDGET_BYTES,
+        "current-tree packet budget",
+    )
+
+    measured = measurement["measurements"]
+    fold_transactions = measured["fold_transactions"]
+    require_equal(
+        [row["fold_calls"] for row in fold_transactions],
+        [6, 2],
+        "current-tree measured Fold transaction plan",
+    )
+    require_equal(
+        [row["fold_width"] for row in fold_transactions],
+        [4, 4],
+        "current-tree measured Fold widths",
+    )
+    measurement_rows = [
+        measured["begin"],
+        *fold_transactions,
+        measured["finalize"],
+        measured["reference_singleton_fold4"],
+        measured["invalid_middle_fold4"],
+    ]
+    for index, row in enumerate(measurement_rows):
+        require_equal(
+            row["admission"], CURRENT_TREE_ADMISSION, f"current-tree row {index} admission"
+        )
+        require_equal(
+            row["elf_sha256"], elf_sha256, f"current-tree row {index} ELF"
+        )
+        require_equal(
+            row["source_scope_sha256"],
+            source_scope_sha256,
+            f"current-tree row {index} source scope",
+        )
+    for index, row in enumerate(fold_transactions):
+        if row["packet_bytes"] > FOLD_PACKET_BUDGET_BYTES:
+            raise CheckError(f"current-tree Fold transaction {index} exceeds packet budget")
+        if row["compute_units"] > campaign["transaction_cu_limit"]:
+            raise CheckError(f"current-tree Fold transaction {index} exceeds measured CU limit")
+    require_equal(
+        len(measured["reference_singleton_fold4"]["compute_units"]),
+        8,
+        "current-tree singleton reference count",
+    )
+    require_equal(
+        measured["invalid_middle_fold4"]["invalid_call_index"],
+        3,
+        "current-tree invalid middle call index",
+    )
+    require_equal(
+        measured["invalid_middle_fold4"]["whole_transaction_reverted"],
+        True,
+        "current-tree invalid-middle rollback",
+    )
+    require_equal(
+        measurement["semantic_checks"],
+        {
+            "pre_finalize_work_reserve_resolution_bytes_equal_reference": True,
+            "post_finalize_work_closed": True,
+            "post_finalize_reserve_closed": True,
+            "post_finalize_resolution_bytes_equal_reference": True,
+            "invalid_middle_instruction_preserved_program_prestate": True,
+        },
+        "current-tree semantic checks",
+    )
+
+    economics = measurement["runtime_economics"]
+    runtime = evidence["resolution_work"]
+    rewards = runtime["runtime_reward_schedule"]
+    expected_fold_reward = (
+        rewards["fold_base_lamports"] + 4 * rewards["fold_per_record_lamports"]
+    )
+    require_equal(
+        economics["fold_reward_lamports_each"],
+        [expected_fold_reward] * 8,
+        "current-tree eight runtime Fold rewards",
+    )
+    require_equal(
+        economics["fold_rewards_lamports"],
+        8 * expected_fold_reward,
+        "current-tree runtime Fold rewards total",
+    )
+    require_equal(
+        economics["finalize_reward_lamports"],
+        rewards["finalize_lamports"],
+        "current-tree runtime Finalize reward",
+    )
+    sealed_derivation = derive(evidence)
+    runtime_plan = sealed_derivation["resolution_work"]["runtime_execution_plan"]
+    require_equal(
+        economics["payer_refund_lamports"],
+        runtime_plan["success_payer_refund_lamports"],
+        "current-tree payer refund",
+    )
+
+    current_policy = quote_policy(evidence)
+    begin = _current_tree_route(
+        measured["begin"]["compute_units"],
+        current_policy,
+        elf_sha256=elf_sha256,
+        source_scope_sha256=source_scope_sha256,
+    )
+    fold_routes = [
+        {
+            **_current_tree_route(
+                row["compute_units"],
+                current_policy,
+                elf_sha256=elf_sha256,
+                source_scope_sha256=source_scope_sha256,
+            ),
+            "fold_calls": row["fold_calls"],
+            "fold_width": row["fold_width"],
+            "packet_bytes": row["packet_bytes"],
+            "packet_status": "PASS",
+        }
+        for row in fold_transactions
+    ]
+    finalize = _current_tree_route(
+        measured["finalize"]["compute_units"],
+        current_policy,
+        elf_sha256=elf_sha256,
+        source_scope_sha256=source_scope_sha256,
+    )
+    quote_rows = [begin, *fold_routes, finalize]
+    quote_status = "PASS" if all(row["status"] == "PASS" for row in quote_rows) else "STOP"
+    fold_budget = (
+        sum(row["keeper_reward_lamports"] for row in fold_routes)
+        if all(row["keeper_reward_lamports"] is not None for row in fold_routes)
+        else None
+    )
+    success_budget = (
+        begin["keeper_reward_lamports"]
+        + fold_budget
+        + finalize["keeper_reward_lamports"]
+        if fold_budget is not None
+        and begin["keeper_reward_lamports"] is not None
+        and finalize["keeper_reward_lamports"] is not None
+        else None
+    )
+    row_identity = {
+        "admission": CURRENT_TREE_ADMISSION,
+        "elf_sha256": elf_sha256,
+        "source_scope_sha256": source_scope_sha256,
+    }
+    return {
+        **row_identity,
+        "status": "UNSEALED_CURRENT_TREE_EXTERNAL_BUDGET_ONLY",
+        "promotion": "STOP_CURRENT_TREE_MEASUREMENT_NOT_SEALED",
+        "sealed_projection_mutated": False,
+        "external_keeper_budget": {
+            **row_identity,
+            "status": quote_status,
+            "basis": "MEASURED_WHOLE_TRANSACTION_FEE_CAP_PLUS_KEEPER_TIP",
+            "routes": {
+                "begin": begin,
+                "fold4_six_calls": fold_routes[0],
+                "fold4_two_calls": fold_routes[1],
+                "finalize": finalize,
+            },
+            "fold_transactions_budget_lamports": fold_budget,
+            "success_lifecycle_budget_lamports": success_budget,
+            "runtime_payout_included": False,
+            "protocol_prefund_included": False,
+            "rent_principal_included": False,
+        },
+        "runtime_economics_cross_check": {
+            **row_identity,
+            "fold_rewards_lamports": economics["fold_rewards_lamports"],
+            "finalize_reward_lamports": economics["finalize_reward_lamports"],
+            "payer_refund_lamports": economics["payer_refund_lamports"],
+            "external_keeper_budget_included": False,
+        },
+        "protocol_prefund_cross_check": {
+            **row_identity,
+            "minimum_prefund_lamports": sealed_derivation["resolution_work"]
+            ["protocol_minimum_prefund"]["minimum_prefund_lamports"],
+            "disposition": "UNCHANGED_BY_TRANSACTION_GROUPING",
+            "external_keeper_budget_included": False,
+        },
+        "atomicity": {
+            **row_identity,
+            "invalid_middle_call_index": measured["invalid_middle_fold4"]
+            ["invalid_call_index"],
+            "whole_transaction_reverted": True,
+            "failure_compute_units": measured["invalid_middle_fold4"]
+            ["failure_compute_units"],
+        },
+    }
 
 
 def require_v3_close_evidence(
@@ -1637,27 +2011,52 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
     }
     finalize = quote_route(max(work["finalize_cu"]), policy)
     abort = quote_route(max(work["abort_cu"]), policy)
-    path = resolution_path_quote(
+    external_singletons = external_resolution_budget_quote(
         record_count=evidence["resolution_work"]["maximum_records"],
         begin=begin,
         fold_quotes=folds,
         finalize=finalize,
         abort=abort,
-        rent_principal_lamports=(
-            evidence["accounts"]["resolution.work.v1"]["rent_lamports"]
-            + evidence["accounts"]["resolution.reserve.v1"]["rent_lamports"]
-        ),
     )
 
-    runtime_schedule = evidence["resolution_work"]["runtime_reward_schedule"]
-    require_runtime_schedule_covers_policy(
+    runtime_rewards = evidence["resolution_work"]["runtime_reward_schedule"]
+    runtime_charges = evidence["resolution_work"]["runtime_charge_schedule"]
+    runtime_schedule = RuntimeCostSchedule(
+        maximum_records=evidence["resolution_work"]["maximum_records"],
+        maximum_fold_width=evidence["resolution_work"]["maximum_fold_width"],
+        begin_charge_lamports=runtime_charges["begin_lamports"],
+        fold_base_charge_lamports=runtime_charges["fold_base_lamports"],
+        fold_per_record_charge_lamports=runtime_charges["fold_per_record_lamports"],
+        fold_base_reward_lamports=runtime_rewards["fold_base_lamports"],
+        fold_per_record_reward_lamports=runtime_rewards["fold_per_record_lamports"],
+        finalize_charge_lamports=runtime_charges["finalize_lamports"],
+        finalize_reward_lamports=runtime_rewards["finalize_lamports"],
+        abort_charge_lamports=runtime_charges["abort_lamports"],
+        abort_reward_lamports=runtime_rewards["abort_lamports"],
+    )
+    route_coverage = runtime_schedule_policy_coverage(
         fold_quotes=folds,
-        fold_base_reward=runtime_schedule["fold_base_lamports"],
-        fold_per_record_reward=runtime_schedule["fold_per_record_lamports"],
+        schedule=runtime_schedule,
         finalize_quote=finalize,
-        finalize_reward=runtime_schedule["finalize_lamports"],
         abort_quote=abort,
-        abort_reward=runtime_schedule["abort_lamports"],
+    )
+    route_coverage.require()
+
+    rent_principal = (
+        evidence["accounts"]["resolution.work.v1"]["rent_lamports"]
+        + evidence["accounts"]["resolution.reserve.v1"]["rent_lamports"]
+    )
+    protocol_prefund = protocol_resolution_prefund(
+        record_count=evidence["resolution_work"]["maximum_records"],
+        rent_principal_lamports=rent_principal,
+        schedule=runtime_schedule,
+    )
+    record_dense_plan = runtime_execution_plan(
+        name="EIGHT_FOLD4_CALLS_IN_SIX_PLUS_TWO_TRANSACTIONS",
+        fold_call_widths=(4,) * 8,
+        transaction_fold_call_counts=(6, 2),
+        prefund=protocol_prefund,
+        schedule=runtime_schedule,
     )
 
     # A batch of one is the measured singleton Fold(1) transaction itself.
@@ -1679,22 +2078,18 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
             if size <= FOLD_MAX_SENDABLE_BATCH
         },
     }
-    batched = batched_resolution_path_quote(
+    batched_external = batched_external_resolution_budget_quote(
         record_count=evidence["resolution_work"]["maximum_records"],
         begin=begin,
         batch_quotes=plan_quotes,
         finalize=finalize,
         abort=abort,
-        rent_principal_lamports=(
-            evidence["accounts"]["resolution.work.v1"]["rent_lamports"]
-            + evidence["accounts"]["resolution.reserve.v1"]["rent_lamports"]
-        ),
     )
-    require_runtime_schedule_covers_batches(
+    batch_coverage = runtime_schedule_batch_coverage(
         batch_quotes=plan_quotes,
-        fold_base_reward=runtime_schedule["fold_base_lamports"],
-        fold_per_record_reward=runtime_schedule["fold_per_record_lamports"],
+        schedule=runtime_schedule,
     )
+    batch_coverage.require()
 
     direct = measurements["direct_v2"]
     native_point_routes = [
@@ -1785,26 +2180,77 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
             // policy.headroom_numerator
         ),
         "resolution_work": {
-            "status": path.status,
+            "status": external_singletons.status,
             "routes": {
                 "begin": quote_dict(begin),
                 **{f"fold_{width}": quote_dict(folds[width]) for width in range(1, 5)},
                 "finalize": quote_dict(finalize),
                 "abort": quote_dict(abort),
             },
-            "maximum_records": path.record_count,
-            "fold_path_lamports": path.fold_path_lamports,
-            "success_rewards_lamports": path.success_rewards_lamports,
-            "worst_abort_rewards_lamports": path.worst_abort_rewards_lamports,
-            "spendable_reserve_lamports": path.spendable_reserve_lamports,
-            "rent_principal_lamports": path.rent_principal_lamports,
-            "persistent_reserve_lamports": path.persistent_reserve_lamports,
-            "begin_external_lamports": path.begin_external_lamports,
-            "payer_cold_outlay_lamports": path.payer_cold_outlay_lamports,
-            "runtime_schedule_matches_policy": True,
+            "maximum_records": protocol_prefund.record_count,
+            "protocol_minimum_prefund": {
+                "basis": "ONCHAIN_WORST_CASE_EVERY_RECORD_IN_ITS_OWN_SUCCESSFUL_FOLD_CALL",
+                "worst_case_fold_calls": protocol_prefund.worst_case_fold_calls,
+                "singleton_fold_charge_lamports": protocol_prefund.singleton_fold_charge_lamports,
+                "singleton_fold_reward_lamports": protocol_prefund.singleton_fold_reward_lamports,
+                "worst_case_fold_outflow_lamports": protocol_prefund.worst_case_fold_outflow_lamports,
+                "finalize_outflow_lamports": protocol_prefund.finalize_outflow_lamports,
+                "abort_outflow_lamports": protocol_prefund.abort_outflow_lamports,
+                "terminal_outflow_lamports": protocol_prefund.terminal_outflow_lamports,
+                "spendable_reserve_lamports": protocol_prefund.spendable_reserve_lamports,
+                "rent_principal_lamports": protocol_prefund.rent_principal_lamports,
+                "minimum_prefund_lamports": protocol_prefund.minimum_prefund_lamports,
+                "external_transaction_budget_included": False,
+                "hoard_principal_included": False,
+                "future_fee_revenue_included": False,
+            },
+            "runtime_execution_plan": {
+                "name": record_dense_plan.name,
+                "fold_call_widths": list(record_dense_plan.fold_call_widths),
+                "transaction_fold_call_counts": list(
+                    record_dense_plan.transaction_fold_call_counts
+                ),
+                "fold_calls": record_dense_plan.fold_calls,
+                "fold_transactions": record_dense_plan.fold_transactions,
+                "fold_charges_lamports": record_dense_plan.fold_charges_lamports,
+                "fold_rewards_lamports": record_dense_plan.fold_rewards_lamports,
+                "success_charges_lamports": record_dense_plan.success_charges_lamports,
+                "success_payout_lamports": record_dense_plan.success_payout_lamports,
+                "success_unused_prepaid_lamports": record_dense_plan.success_unused_prepaid_lamports,
+                "success_rent_principal_refund_lamports": record_dense_plan.success_rent_principal_refund_lamports,
+                "success_payer_refund_lamports": record_dense_plan.success_payer_refund_lamports,
+                "abort_charges_lamports": record_dense_plan.abort_charges_lamports,
+                "abort_payout_lamports": record_dense_plan.abort_payout_lamports,
+                "abort_unused_prepaid_lamports": record_dense_plan.abort_unused_prepaid_lamports,
+                "abort_rent_principal_refund_lamports": record_dense_plan.abort_rent_principal_refund_lamports,
+                "abort_payer_refund_lamports": record_dense_plan.abort_payer_refund_lamports,
+                "runtime_pays_per_successful_fold_call": True,
+            },
+            "external_keeper_budget_singleton_transactions": {
+                "basis": "EXTERNAL_TRANSACTION_FEE_CAP_PLUS_KEEPER_TIP_NOT_PROTOCOL_RESERVE",
+                "fold_transactions_budget_lamports": external_singletons.fold_transactions_budget_lamports,
+                "success_post_begin_budget_lamports": external_singletons.success_post_begin_budget_lamports,
+                "worst_abort_post_begin_budget_lamports": external_singletons.worst_abort_post_begin_budget_lamports,
+                "begin_transaction_budget_lamports": external_singletons.begin_transaction_budget_lamports,
+                "success_total_budget_lamports": external_singletons.success_total_budget_lamports,
+                "worst_abort_total_budget_lamports": external_singletons.worst_abort_total_budget_lamports,
+            },
+            "runtime_schedule_policy_coverage": {
+                "matches_policy": route_coverage.matches_policy,
+                "rows": [
+                    {
+                        "route": row.route,
+                        "external_keeper_budget_lamports": row.external_keeper_budget_lamports,
+                        "runtime_reward_lamports": row.runtime_reward_lamports,
+                        "margin_lamports": row.margin_lamports,
+                        "covered": row.covered,
+                    }
+                    for row in route_coverage.rows
+                ],
+            },
         },
         "resolution_work_batched": {
-            "status": batched.status,
+            "status": batched_external.status,
             "routes": {
                 f"fold_batch_{size}": quote_dict(batch_quotes[size])
                 for size in work_batch["batch_sizes"]
@@ -1833,19 +2279,55 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
             "superseded_plan_reason": (
                 "CHOSEN_ON_COMPUTE_ALONE_AND_UNSENDABLE_A_TWELVE_FOLD_MESSAGE_IS_2002_BYTES"
             ),
-            "maximum_records": batched.record_count,
+            "maximum_records": batched_external.record_count,
             "fewest_transaction_plan": (
-                list(batched.batch_plan) if batched.batch_plan is not None else None
+                list(batched_external.transaction_plan)
+                if batched_external.transaction_plan is not None
+                else None
             ),
-            "fold_transactions": batched.fold_transactions,
-            "fold_path_lamports": batched.fold_path_lamports,
-            "success_rewards_lamports": batched.success_rewards_lamports,
-            "worst_abort_rewards_lamports": batched.worst_abort_rewards_lamports,
-            "spendable_reserve_lamports": batched.spendable_reserve_lamports,
-            "rent_principal_lamports": batched.rent_principal_lamports,
-            "persistent_reserve_lamports": batched.persistent_reserve_lamports,
-            "begin_external_lamports": batched.begin_external_lamports,
-            "payer_cold_outlay_lamports": batched.payer_cold_outlay_lamports,
+            "fold_transactions": batched_external.fold_transactions,
+            "external_keeper_budget": {
+                "basis": "MEASURED_FOLD1_BATCH_TRANSACTION_QUOTES_NOT_PROTOCOL_RESERVE",
+                "fold_transactions_budget_lamports": batched_external.fold_transactions_budget_lamports,
+                "success_post_begin_budget_lamports": batched_external.success_post_begin_budget_lamports,
+                "worst_abort_post_begin_budget_lamports": batched_external.worst_abort_post_begin_budget_lamports,
+                "begin_transaction_budget_lamports": batched_external.begin_transaction_budget_lamports,
+                "success_total_budget_lamports": batched_external.success_total_budget_lamports,
+                "worst_abort_total_budget_lamports": batched_external.worst_abort_total_budget_lamports,
+                "rent_principal_included": False,
+            },
+            "invalid_non_runtime_amount": {
+                "lamports": (
+                    rent_principal
+                    + batched_external.success_total_budget_lamports
+                    if batched_external.success_total_budget_lamports is not None
+                    else None
+                ),
+                "label": "INVALID_RENT_PLUS_EXTERNAL_KEEPER_BUDGET_NOT_RUNTIME_PREFUND",
+            },
+            "record_dense_fold4_external_budget": {
+                "plan_name": record_dense_plan.name,
+                "transaction_fold_call_counts": list(
+                    record_dense_plan.transaction_fold_call_counts
+                ),
+                "status": "STOP_UNMEASURED_COMPOSED_FOLD4_TRANSACTION_CU",
+                "single_fold4_route_measured": True,
+                "composed_transaction_budget_lamports": None,
+                "total_external_keeper_budget_lamports": None,
+            },
+            "runtime_schedule_batch_coverage": {
+                "matches_policy": batch_coverage.matches_policy,
+                "rows": [
+                    {
+                        "route": row.route,
+                        "external_keeper_budget_lamports": row.external_keeper_budget_lamports,
+                        "runtime_reward_lamports": row.runtime_reward_lamports,
+                        "margin_lamports": row.margin_lamports,
+                        "covered": row.covered,
+                    }
+                    for row in batch_coverage.rows
+                ],
+            },
         },
         "source_value_admission": {
             "status": "FAIL_CLOSED_STOP",
@@ -2335,6 +2817,19 @@ def check(evidence: dict[str, Any]) -> None:
     require_equal(derive(evidence), evidence["projection"], "policy projection")
 
 
+def write_projection(evidence: dict[str, Any]) -> None:
+    """Regenerate only the deterministic projection after validating inputs."""
+
+    check_source_identity(evidence)
+    check_files(evidence)
+    check_artifact_binding(evidence)
+    check_capture(evidence)
+    check_tracked_evidence(evidence)
+    check_rent_and_accounts(evidence)
+    evidence["projection"] = derive(evidence)
+    EVIDENCE_PATH.write_text(json.dumps(evidence, indent=1) + "\n")
+
+
 def check_current(evidence: dict[str, Any]) -> None:
     """Optional strict gate: runtime source closures must match the frozen ref."""
 
@@ -2355,16 +2850,39 @@ def check_current(evidence: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-current", action="store_true")
+    parser.add_argument("--write-projection", action="store_true")
+    parser.add_argument(
+        "--current-tree-fold4",
+        type=Path,
+        metavar="MEASUREMENT_JSON",
+        help=(
+            "derive the separate UNSEALED_CURRENT_TREE Fold(4) overlay; "
+            "never reads it into or writes it over the sealed projection"
+        ),
+    )
     args = parser.parse_args()
+    if args.current_tree_fold4 and (args.check_current or args.write_projection):
+        parser.error(
+            "--current-tree-fold4 is a separate unsealed mode and cannot be combined "
+            "with sealed projection options"
+        )
     try:
         evidence = load_evidence()
-        check(evidence)
+        if args.current_tree_fold4:
+            measurement = load_current_tree_fold4(args.current_tree_fold4)
+            print(json.dumps(derive_current_tree_fold4(evidence, measurement), indent=1))
+            return 0
+        if args.write_projection:
+            write_projection(evidence)
+        else:
+            check(evidence)
         if args.check_current:
             check_current(evidence)
     except (CheckError, OSError, ValueError, json.JSONDecodeError) as error:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1
-    print("PASS: exact R1 artifact, bank capture, account probe, rewards, and STOPs agree")
+    action = "projection regenerated" if args.write_projection else "projection checked"
+    print(f"PASS: {action}; exact R1 artifact, bank capture, account probe, rewards, and STOPs agree")
     return 0
 
 

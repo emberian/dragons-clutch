@@ -46,6 +46,11 @@ and terminal checks:
 cd research/liveness-policy-profile
 python3 policy.py
 python3 policy.py --check-current
+# Separate, opt-in current-tree overlay; never rewrites sealed evidence.json:
+python3 policy.py --current-tree-fold4 \
+  inflight/record-dense-fold4-current-tree.json
+# Only after changing deterministic policy arithmetic or its declared inputs:
+python3 policy.py --write-projection
 python3 -m unittest -v \
   test_policy.py \
   test_admission_math.py \
@@ -491,11 +496,15 @@ sealed plan priced three transactions no keeper can submit.
 
 Width **6** is therefore measured rather than interpolated between the 4 and 8
 that bracket it — `FoldBatch(6) = 486,413 CU`, selected limit 610,000 — and the
-plan is composed only of sendable widths: `[6, 6, 6, 6, 6, 2]`, six
-transactions, cutting the payer cold outlay from 18,711,920 to **15,291,920**
-lamports. That is a smaller saving than the unsendable plan claimed
-(14,861,920), and it is the real one. The measured rows at 8 and 12 are **kept**
-— they are real bank measurements of real transactions — and labelled
+measured Fold(1)-instruction plan is composed only of sendable widths:
+`[6, 6, 6, 6, 6, 2]`, six transactions. Its external success keeper budget is
+**4,490,000 lamports**, including the 230,000-lamport Begin quote. This number
+is transaction-fee caps plus keeper tips; it is not an onchain reserve and does
+not include rent. The formerly published 15,291,920-lamport figure merely added
+10,801,920 of rent principal to that external budget and is now mechanically
+labelled `INVALID_RENT_PLUS_EXTERNAL_KEEPER_BUDGET_NOT_RUNTIME_PREFUND`. The
+measured rows at 8 and 12 are **kept** — they are real bank measurements of real
+transactions — and labelled
 `MEASURED_ON_A_BANK_BUT_OVER_THE_1232_BYTE_PACKET_BUDGET_EXCLUDED_FROM_THE_PLAN`.
 
 The old caveat `cluster_packet_budget: UNMODELED_BANK_TRANSPORT_ONLY` is
@@ -503,10 +512,40 @@ The old caveat `cluster_packet_budget: UNMODELED_BANK_TRANSPORT_ONLY` is
 transport, and the projection publishes `cluster_packet_budget_bytes: 1232`,
 `maximum_sendable_batch: 6`, the superseded plan, and its reason.
 
-One thing is deliberately *not* claimed. The keeper's record-dense plan packs
-six `Fold(4)` instructions — 24 records — into one packet and would need two
-transactions for a 32-record item. Its ingredient is measured (`Fold(4) =
-96,031 CU`) but the composed transaction is not, and composing per-instruction
-CU into a transaction total is exactly what the batch rows exist to measure;
-they show batching runs slightly *cheaper* than the sum. So the record-dense
-packet is named as the shape the wire permits and **carries no quote**.
+The sealed `0d52c561…` projection deliberately makes no further claim. Its
+record-dense plan packs six `Fold(4)` instructions — 24 records — into one
+packet and needs two transactions for a 32-record item, but that sealed ELF has
+no composed Fold(4) measurement. Its ingredient is measured (`Fold(4) =
+96,031 CU`), yet composing per-instruction CU into a transaction total is
+exactly what the batch rows exist to measure. The sealed row therefore remains
+`STOP_UNMEASURED_COMPOSED_FOLD4_TRANSACTION_CU` and carries no quote.
+
+A separate **`UNSEALED_CURRENT_TREE`** campaign closes the measurement question
+without changing that sealed identity. Against default-empty-registry ELF
+`a6381fbe…` and source-closure digest `2012201b…`, the 32-record `[6,2]` plan
+measured 514,332 CU / 1,228 bytes and 171,765 CU / 704 bytes. Both packets fit
+the 1,232-byte budget; the first is only four bytes below it. The same campaign
+measured Begin at 76,064 CU and Finalize at 152,730 CU, proved Work/Reserve/
+Resolution byte equality against eight separate Fold(4) transactions, and
+proved an invalid fourth call rolls the entire six-call transaction back.
+
+The opt-in command above verifies the current fixture, test-source hashes, and
+the same conservative 129-file source closure used by the artifact audit before
+deriving any row. It quotes the two measured Fold transactions at **1,090,000
+lamports** total external keeper budget; the measured Begin + two Fold sends +
+Finalize lifecycle totals **1,610,000 lamports**. Every row repeats
+`UNSEALED_CURRENT_TREE`, the full ELF digest, and the full source-closure digest.
+It neither reads the current-tree row into `evidence.json` nor promotes it:
+resealing remains a separate STOP.
+
+That unmeasured external budget is independent of the runtime economics. The
+onchain minimum-deposit rule must cover the legal worst case in which every one
+of 32 records succeeds in its own Fold call: 32 × 1,160,000, plus the larger
+terminal reward (1,510,000), plus 10,801,920 of Work/Reserve rent principal =
+**49,431,920 lamports**. No external transaction budget is included. Under the
+named current-ABI execution plan — eight successful Fold(4) calls grouped as
+`6 + 2` transactions — runtime pays 9,280,000 for Fold calls and 1,510,000 for
+Finalize, then returns **38,641,920** to the payer (27,840,000 unused prepaid
+budget plus 10,801,920 released rent). Those runtime amounts are cross-checks,
+not ingredients of the external 1,090,000-lamport Fold-transaction budget.
+Hoard principal and future fee revenue remain excluded from every calculation.

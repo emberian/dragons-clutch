@@ -62,14 +62,34 @@ class PolicyTests(unittest.TestCase):
         # The Fold(1) route covers its widest observation, the 88,641-CU
         # singleton measured inside the two-fold batch scenario.
         self.assertEqual(row["routes"]["fold_1"]["measured_cu"], 88_641)
-        self.assertEqual(row["fold_path_lamports"], 7_360_000)
-        self.assertEqual(row["success_rewards_lamports"], 7_680_000)
-        self.assertEqual(row["worst_abort_rewards_lamports"], 7_530_000)
-        self.assertEqual(row["rent_principal_lamports"], 10_801_920)
-        self.assertEqual(row["persistent_reserve_lamports"], 18_481_920)
-        self.assertEqual(row["payer_cold_outlay_lamports"], 18_711_920)
+        prefund = row["protocol_minimum_prefund"]
+        self.assertEqual(prefund["worst_case_fold_calls"], 32)
+        self.assertEqual(prefund["worst_case_fold_outflow_lamports"], 37_120_000)
+        self.assertEqual(prefund["spendable_reserve_lamports"], 38_630_000)
+        self.assertEqual(prefund["rent_principal_lamports"], 10_801_920)
+        self.assertEqual(prefund["minimum_prefund_lamports"], 49_431_920)
+        self.assertFalse(prefund["external_transaction_budget_included"])
+        self.assertFalse(prefund["hoard_principal_included"])
+        self.assertFalse(prefund["future_fee_revenue_included"])
 
-    def test_batched_folds_are_admitted_and_collapse_the_cold_outlay(self) -> None:
+        plan = row["runtime_execution_plan"]
+        self.assertEqual(plan["fold_call_widths"], [4] * 8)
+        self.assertEqual(plan["transaction_fold_call_counts"], [6, 2])
+        self.assertEqual(plan["success_payout_lamports"], 10_790_000)
+        self.assertEqual(plan["success_payer_refund_lamports"], 38_641_920)
+        self.assertEqual(plan["abort_payout_lamports"], 10_140_000)
+        self.assertEqual(plan["abort_payer_refund_lamports"], 39_291_920)
+
+        external = row["external_keeper_budget_singleton_transactions"]
+        self.assertEqual(external["fold_transactions_budget_lamports"], 7_360_000)
+        self.assertEqual(external["success_post_begin_budget_lamports"], 7_680_000)
+        self.assertEqual(external["success_total_budget_lamports"], 7_910_000)
+        coverage = row["runtime_schedule_policy_coverage"]
+        self.assertTrue(coverage["matches_policy"])
+        self.assertTrue(all(item["covered"] for item in coverage["rows"]))
+        self.assertNotIn("runtime_schedule_matches_policy", row)
+
+    def test_batched_folds_quote_external_keeper_budget_only(self) -> None:
         """The plan may only use widths that fit in a packet.
 
         The sealed ``[12, 12, 8]`` plan was chosen on compute alone and cannot
@@ -109,15 +129,105 @@ class PolicyTests(unittest.TestCase):
             8, row["plan_batches"], "an unsendable width may not compose a plan"
         )
         self.assertNotIn(12, row["plan_batches"])
-        self.assertEqual(row["fold_path_lamports"], 3_940_000)
-        self.assertEqual(row["payer_cold_outlay_lamports"], 15_291_920)
-        # Batching still collapses the 32-transaction fixed overhead — by less
-        # than the unsendable plan claimed, which is the honest figure.
-        per_transaction = derived["resolution_work"]
-        self.assertLess(
-            row["payer_cold_outlay_lamports"],
-            per_transaction["payer_cold_outlay_lamports"],
+        external = row["external_keeper_budget"]
+        self.assertEqual(external["fold_transactions_budget_lamports"], 3_940_000)
+        self.assertEqual(external["success_post_begin_budget_lamports"], 4_260_000)
+        self.assertEqual(external["success_total_budget_lamports"], 4_490_000)
+        self.assertFalse(external["rent_principal_included"])
+        invalid = row["invalid_non_runtime_amount"]
+        self.assertEqual(invalid["lamports"], 15_291_920)
+        self.assertEqual(
+            invalid["label"],
+            "INVALID_RENT_PLUS_EXTERNAL_KEEPER_BUDGET_NOT_RUNTIME_PREFUND",
         )
+        self.assertNotEqual(
+            invalid["lamports"],
+            derived["resolution_work"]["protocol_minimum_prefund"][
+                "minimum_prefund_lamports"
+            ],
+        )
+        dense = row["record_dense_fold4_external_budget"]
+        self.assertEqual(dense["transaction_fold_call_counts"], [6, 2])
+        self.assertEqual(
+            dense["status"], "STOP_UNMEASURED_COMPOSED_FOLD4_TRANSACTION_CU"
+        )
+        self.assertIsNone(dense["total_external_keeper_budget_lamports"])
+        self.assertTrue(row["runtime_schedule_batch_coverage"]["matches_policy"])
+
+    def test_explicit_current_tree_fold4_overlay_is_identity_bound_and_separate(
+        self,
+    ) -> None:
+        path = (
+            Path(__file__).resolve().parent
+            / "inflight"
+            / "record-dense-fold4-current-tree.json"
+        )
+        measurement = policy.load_current_tree_fold4(path)
+        overlay = policy.derive_current_tree_fold4(
+            self.evidence, measurement, verify_disk=False
+        )
+        self.assertEqual(overlay["admission"], "UNSEALED_CURRENT_TREE")
+        self.assertEqual(
+            overlay["promotion"], "STOP_CURRENT_TREE_MEASUREMENT_NOT_SEALED"
+        )
+        self.assertFalse(overlay["sealed_projection_mutated"])
+
+        external = overlay["external_keeper_budget"]
+        self.assertEqual(external["status"], "PASS")
+        self.assertEqual(external["fold_transactions_budget_lamports"], 1_090_000)
+        self.assertEqual(external["success_lifecycle_budget_lamports"], 1_610_000)
+        self.assertFalse(external["runtime_payout_included"])
+        self.assertFalse(external["protocol_prefund_included"])
+        self.assertFalse(external["rent_principal_included"])
+        routes = external["routes"]
+        self.assertEqual(routes["fold4_six_calls"]["measured_cu"], 514_332)
+        self.assertEqual(routes["fold4_six_calls"]["packet_bytes"], 1_228)
+        self.assertEqual(routes["fold4_six_calls"]["selected_limit_cu"], 650_000)
+        self.assertEqual(routes["fold4_six_calls"]["keeper_reward_lamports"], 760_000)
+        self.assertEqual(routes["fold4_two_calls"]["measured_cu"], 171_765)
+        self.assertEqual(routes["fold4_two_calls"]["packet_bytes"], 704)
+        self.assertEqual(routes["fold4_two_calls"]["selected_limit_cu"], 220_000)
+        self.assertEqual(routes["fold4_two_calls"]["keeper_reward_lamports"], 330_000)
+        for route in routes.values():
+            self.assertEqual(route["admission"], "UNSEALED_CURRENT_TREE")
+            self.assertEqual(route["elf_sha256"], overlay["elf_sha256"])
+            self.assertEqual(
+                route["source_scope_sha256"], overlay["source_scope_sha256"]
+            )
+
+        runtime = overlay["runtime_economics_cross_check"]
+        self.assertEqual(runtime["fold_rewards_lamports"], 9_280_000)
+        self.assertEqual(runtime["finalize_reward_lamports"], 1_510_000)
+        self.assertEqual(runtime["payer_refund_lamports"], 38_641_920)
+        self.assertFalse(runtime["external_keeper_budget_included"])
+        self.assertEqual(
+            overlay["protocol_prefund_cross_check"]["minimum_prefund_lamports"],
+            49_431_920,
+        )
+        self.assertTrue(overlay["atomicity"]["whole_transaction_reverted"])
+
+        # The default sealed 0d52 projection remains the fail-closed STOP.  An
+        # explicit current-tree overlay cannot silently promote or overwrite it.
+        dense = policy.derive(self.evidence)["resolution_work_batched"]
+        dense = dense["record_dense_fold4_external_budget"]
+        self.assertEqual(
+            dense["status"], "STOP_UNMEASURED_COMPOSED_FOLD4_TRANSACTION_CU"
+        )
+        self.assertIsNone(dense["composed_transaction_budget_lamports"])
+
+        tampered = copy.deepcopy(measurement)
+        tampered["measurements"]["fold_transactions"][0]["admission"] = "SEALED"
+        with self.assertRaises(policy.CheckError):
+            policy.derive_current_tree_fold4(
+                self.evidence, tampered, verify_disk=False
+            )
+
+        tampered = copy.deepcopy(measurement)
+        tampered["measurements"]["fold_transactions"][0]["packet_bytes"] = 1_233
+        with self.assertRaises(policy.CheckError):
+            policy.derive_current_tree_fold4(
+                self.evidence, tampered, verify_disk=False
+            )
 
     def test_runtime_schedule_underfunding_is_rejected(self) -> None:
         finalize = policy.derive(self.evidence)["resolution_work"]["routes"]["finalize"]
@@ -127,6 +237,20 @@ class PolicyTests(unittest.TestCase):
         )
         with self.assertRaises(AdmissionError):
             policy.derive(tampered)
+
+    def test_runtime_charge_schedule_rederives_prefund_and_plan_refund(self) -> None:
+        tampered = copy.deepcopy(self.evidence)
+        tampered["resolution_work"]["runtime_charge_schedule"][
+            "fold_base_lamports"
+        ] = 1
+        row = policy.derive(tampered)["resolution_work"]
+        prefund = row["protocol_minimum_prefund"]
+        plan = row["runtime_execution_plan"]
+        # The protocol minimum covers 32 legal Fold(1) calls, while the named
+        # Fold(4) plan actually executes and charges only eight calls.
+        self.assertEqual(prefund["minimum_prefund_lamports"], 49_431_952)
+        self.assertEqual(plan["success_charges_lamports"], 8)
+        self.assertEqual(plan["success_payer_refund_lamports"], 38_641_944)
 
     def test_direct_select_completes_but_v2_is_not_promoted(self) -> None:
         """The select CU-exhaustion STOP dissolved with the syscall hasher.

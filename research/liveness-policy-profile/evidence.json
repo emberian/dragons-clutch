@@ -586,6 +586,13 @@
    "fold_per_record_lamports": 0,
    "finalize_lamports": 1510000,
    "abort_lamports": 860000
+  },
+  "runtime_charge_schedule": {
+   "begin_lamports": 0,
+   "fold_base_lamports": 0,
+   "fold_per_record_lamports": 0,
+   "finalize_lamports": 0,
+   "abort_lamports": 0
   }
  },
  "measurements": {
@@ -2196,15 +2203,110 @@
     }
    },
    "maximum_records": 32,
-   "fold_path_lamports": 7360000,
-   "success_rewards_lamports": 7680000,
-   "worst_abort_rewards_lamports": 7530000,
-   "spendable_reserve_lamports": 7680000,
-   "rent_principal_lamports": 10801920,
-   "persistent_reserve_lamports": 18481920,
-   "begin_external_lamports": 230000,
-   "payer_cold_outlay_lamports": 18711920,
-   "runtime_schedule_matches_policy": true
+   "protocol_minimum_prefund": {
+    "basis": "ONCHAIN_WORST_CASE_EVERY_RECORD_IN_ITS_OWN_SUCCESSFUL_FOLD_CALL",
+    "worst_case_fold_calls": 32,
+    "singleton_fold_charge_lamports": 0,
+    "singleton_fold_reward_lamports": 1160000,
+    "worst_case_fold_outflow_lamports": 37120000,
+    "finalize_outflow_lamports": 1510000,
+    "abort_outflow_lamports": 860000,
+    "terminal_outflow_lamports": 1510000,
+    "spendable_reserve_lamports": 38630000,
+    "rent_principal_lamports": 10801920,
+    "minimum_prefund_lamports": 49431920,
+    "external_transaction_budget_included": false,
+    "hoard_principal_included": false,
+    "future_fee_revenue_included": false
+   },
+   "runtime_execution_plan": {
+    "name": "EIGHT_FOLD4_CALLS_IN_SIX_PLUS_TWO_TRANSACTIONS",
+    "fold_call_widths": [
+     4,
+     4,
+     4,
+     4,
+     4,
+     4,
+     4,
+     4
+    ],
+    "transaction_fold_call_counts": [
+     6,
+     2
+    ],
+    "fold_calls": 8,
+    "fold_transactions": 2,
+    "fold_charges_lamports": 0,
+    "fold_rewards_lamports": 9280000,
+    "success_charges_lamports": 0,
+    "success_payout_lamports": 10790000,
+    "success_unused_prepaid_lamports": 27840000,
+    "success_rent_principal_refund_lamports": 10801920,
+    "success_payer_refund_lamports": 38641920,
+    "abort_charges_lamports": 0,
+    "abort_payout_lamports": 10140000,
+    "abort_unused_prepaid_lamports": 28490000,
+    "abort_rent_principal_refund_lamports": 10801920,
+    "abort_payer_refund_lamports": 39291920,
+    "runtime_pays_per_successful_fold_call": true
+   },
+   "external_keeper_budget_singleton_transactions": {
+    "basis": "EXTERNAL_TRANSACTION_FEE_CAP_PLUS_KEEPER_TIP_NOT_PROTOCOL_RESERVE",
+    "fold_transactions_budget_lamports": 7360000,
+    "success_post_begin_budget_lamports": 7680000,
+    "worst_abort_post_begin_budget_lamports": 7530000,
+    "begin_transaction_budget_lamports": 230000,
+    "success_total_budget_lamports": 7910000,
+    "worst_abort_total_budget_lamports": 7760000
+   },
+   "runtime_schedule_policy_coverage": {
+    "matches_policy": true,
+    "rows": [
+     {
+      "route": "Fold(1)",
+      "external_keeper_budget_lamports": 230000,
+      "runtime_reward_lamports": 1160000,
+      "margin_lamports": 930000,
+      "covered": true
+     },
+     {
+      "route": "Fold(2)",
+      "external_keeper_budget_lamports": 230000,
+      "runtime_reward_lamports": 1160000,
+      "margin_lamports": 930000,
+      "covered": true
+     },
+     {
+      "route": "Fold(3)",
+      "external_keeper_budget_lamports": 230000,
+      "runtime_reward_lamports": 1160000,
+      "margin_lamports": 930000,
+      "covered": true
+     },
+     {
+      "route": "Fold(4)",
+      "external_keeper_budget_lamports": 240000,
+      "runtime_reward_lamports": 1160000,
+      "margin_lamports": 920000,
+      "covered": true
+     },
+     {
+      "route": "Finalize",
+      "external_keeper_budget_lamports": 320000,
+      "runtime_reward_lamports": 1510000,
+      "margin_lamports": 1190000,
+      "covered": true
+     },
+     {
+      "route": "Abort",
+      "external_keeper_budget_lamports": 170000,
+      "runtime_reward_lamports": 860000,
+      "margin_lamports": 690000,
+      "covered": true
+     }
+    ]
+   }
   },
   "resolution_work_batched": {
    "status": "PASS",
@@ -2283,14 +2385,64 @@
     2
    ],
    "fold_transactions": 6,
-   "fold_path_lamports": 3940000,
-   "success_rewards_lamports": 4260000,
-   "worst_abort_rewards_lamports": 4110000,
-   "spendable_reserve_lamports": 4260000,
-   "rent_principal_lamports": 10801920,
-   "persistent_reserve_lamports": 15061920,
-   "begin_external_lamports": 230000,
-   "payer_cold_outlay_lamports": 15291920
+   "external_keeper_budget": {
+    "basis": "MEASURED_FOLD1_BATCH_TRANSACTION_QUOTES_NOT_PROTOCOL_RESERVE",
+    "fold_transactions_budget_lamports": 3940000,
+    "success_post_begin_budget_lamports": 4260000,
+    "worst_abort_post_begin_budget_lamports": 4110000,
+    "begin_transaction_budget_lamports": 230000,
+    "success_total_budget_lamports": 4490000,
+    "worst_abort_total_budget_lamports": 4340000,
+    "rent_principal_included": false
+   },
+   "invalid_non_runtime_amount": {
+    "lamports": 15291920,
+    "label": "INVALID_RENT_PLUS_EXTERNAL_KEEPER_BUDGET_NOT_RUNTIME_PREFUND"
+   },
+   "record_dense_fold4_external_budget": {
+    "plan_name": "EIGHT_FOLD4_CALLS_IN_SIX_PLUS_TWO_TRANSACTIONS",
+    "transaction_fold_call_counts": [
+     6,
+     2
+    ],
+    "status": "STOP_UNMEASURED_COMPOSED_FOLD4_TRANSACTION_CU",
+    "single_fold4_route_measured": true,
+    "composed_transaction_budget_lamports": null,
+    "total_external_keeper_budget_lamports": null
+   },
+   "runtime_schedule_batch_coverage": {
+    "matches_policy": true,
+    "rows": [
+     {
+      "route": "FoldBatch(1)",
+      "external_keeper_budget_lamports": 230000,
+      "runtime_reward_lamports": 1160000,
+      "margin_lamports": 930000,
+      "covered": true
+     },
+     {
+      "route": "FoldBatch(2)",
+      "external_keeper_budget_lamports": 340000,
+      "runtime_reward_lamports": 2320000,
+      "margin_lamports": 1980000,
+      "covered": true
+     },
+     {
+      "route": "FoldBatch(4)",
+      "external_keeper_budget_lamports": 530000,
+      "runtime_reward_lamports": 4640000,
+      "margin_lamports": 4110000,
+      "covered": true
+     },
+     {
+      "route": "FoldBatch(6)",
+      "external_keeper_budget_lamports": 720000,
+      "runtime_reward_lamports": 6960000,
+      "margin_lamports": 6240000,
+      "covered": true
+     }
+    ]
+   }
   },
   "source_value_admission": {
    "status": "FAIL_CLOSED_STOP",
