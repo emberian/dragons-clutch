@@ -12,15 +12,16 @@ This directory contains:
 - `src/main.rs`: exact account-width and pinned-default-rent probe;
 - `policy.py`, `evidence.json`, and the normalized capture: exact artifact,
   bank, source/test identity, rent, reward, and source-drift seal;
-- `artifacts/df0aece1e241951b`: the current canonical ELF, build and stack/ELF
+- `artifacts/0d52c561909cedef`: the current canonical ELF, build and stack/ELF
   audit evidence, and bank logs measured against that exact ELF;
-- `artifacts/4fded7a67a2d8994`, `artifacts/e8ba31d582be3939`,
-  `artifacts/d692954949d57db22`, `artifacts/fda59705ac1c1869`,
-  `artifacts/187d5ee16f72946a`, `artifacts/af6bb79cc3766bd0`,
-  `artifacts/bd20711b01828a74`, and `artifacts/a5725a3d8e149b2b`: the eight
-  preceding historical seals, retained in full for audit continuity but
-  excluded from the current projection. `policy.py` refuses a seal that
-  overwrites a superseded artifact root or drops any of its evidence files.
+- `artifacts/df0aece1e241951b`, `artifacts/4fded7a67a2d8994`,
+  `artifacts/e8ba31d582be3939`, `artifacts/d692954949d57db22`,
+  `artifacts/fda59705ac1c1869`, `artifacts/187d5ee16f72946a`,
+  `artifacts/af6bb79cc3766bd0`, `artifacts/bd20711b01828a74`, and
+  `artifacts/a5725a3d8e149b2b`: the nine preceding historical seals, retained
+  in full for audit continuity but excluded from the current projection.
+  `policy.py` refuses a seal that overwrites a superseded artifact root or
+  drops any of its evidence files.
 
 Every sealed path is checked for repository membership, not merely for
 presence on the running disk. The root `.gitignore` excludes `*.so` and
@@ -59,9 +60,18 @@ cargo clippy --offline --locked \
 ```
 
 The current artifact source and test/evidence ancestry is exact commit
-`04acf61` (the `56ec1ed` fee-plumbing merge plus exactly one in-closure
-housekeeping commit). `runtime_ref`, `evidence_ref`, and
-`artifact.source_ref` are that one commit **by construction** at this seal.
+`846afab`. `runtime_ref`, `evidence_ref`, and `artifact.source_ref` are that
+one commit **by construction** at this seal.
+
+Three commits carry the identity and only the first is inside the closure.
+`c55f471` landed an uncommitted `cargo fmt` result the wave had left in the
+working tree — format-only, but `research/batch-policy-identity` is inside the
+closure and reflow moves line numbers, which reach `.rodata` through
+`core::panic::Location`, so it forks the identity on its own (precedent
+`9c371fe`, and cycle F's own housekeeping commit). `42948f4` and `846afab`
+touch only `svm-tests`, which is not in the closure: the closure digest is
+byte-identical at all three, and the audit was re-run at `42948f4` to confirm
+the ELF rather than assume it.
 
 The seal covers **fee plumbing to the boundary and nothing past it**
 (`docs/decisions/ADOPTED_2026-08-20.md` items 6, 8, and 9): the
@@ -70,13 +80,16 @@ account (tag 27, 156 bytes / 1,976,640 lamports) written inside `InitRealm`
 with a **mandatory** funding-ledger sibling, `CloseRevenuePolicyRecord`
 (tag 68), the treasury-Position path, the carry fields, and the fee-bearing
 sibling policy const. **Both rates stay zero and no fee-bearing epoch admits.**
-It also carries the cycle-F housekeeping commit, which is *inside* the SBF
-source closure and therefore forks the identity on its own: thirteen rustdoc
-warnings repaired across nine in-closure files, four `PROPOSED` status comments
-moved to `FROZEN` per item 1, and six unresolved intra-doc links in
-`revenue_policy_v1.rs` crate-qualified. Not one executable statement changed in
-that commit; the ELF forked anyway, which is exactly why the roadmap held those
-debts for a reseal-bearing wave.
+
+This seal covers far more than that boundary, because it is the **batched
+cycle-G reseal** the wave deferred to. Eleven landings sit between `df0aece1…`
+and here — partial fills and reservation v3, the realized rounding pot, the
+virtual split and merge, the moment cone bound on chain, the composite fee
+arithmetic, the v2 source generation at tags 70–73, the keeper, and the
+operator bench — and the tree deliberately took no per-wave reseal for any of
+them. The `.spw` canon recorded that gap as an open `seal_lag` discrepancy
+rather than smoothing it, marked *open until cycle G*. This is cycle G, and it
+closes it.
 
 **The fee-bearing boundary, driven on a real bank** (`logs/bank/revenue_policy.log`,
 new UNPROMOTED family `revenue_boundary`): fee-bearing admission with no record
@@ -103,82 +116,129 @@ but the close is gated on the Realm account being *gone*, and `realm` is
 `PERMANENT_INFRA` with no close route. The record's principal is capitalized
 for the Realm's whole life. New id: **`REVENUE.REALM_PERMANENCE_HOLDS_RECORD`**.
 The terminal inventory stands at **49 rows and 16 blocking ids**.
-`SETTLEMENT_BLOCKERS` is unchanged at exactly `[PartialFillLedger, VirtualPot]`.
+**`SETTLEMENT_BLOCKERS` is empty**, and `RETIRED_SETTLEMENT_BLOCKERS` stands at
+ten. The wave retired the last four — `PartialFillLedger`,
+`RoundingPotRealization`, `VirtualPot`, `VirtualMergeCredit` — and two of those
+four were *born* in it, filed as new rows when a retiring row's residual turned
+out to be a missing settlement fact rather than a narrowing.
+
+**Empty is not "nothing refuses", and the difference is the ledger's grammar.**
+A missing settlement join is a row. An implemented join whose *admission* is
+narrower than the relation's is a **recorded residual** of the row that
+implemented it, written down where it was created, with the coincidence that
+would close it checked rather than assumed. What is *authority-gated* rather
+than unimplemented stays off the list too: the pinned
+`GENERAL_CLEARING_POLICY_V1` is fee-free, so every seam requires
+`max_fee_atoms == 0` and answers `AuthorizationUnavailable` otherwise — a fee
+plane needs a frozen fee base and a named recipient, which is a policy fact and
+not a settlement one. A new row belongs here only when a *settlement* fact is
+found missing again. Three residuals stand: the per-owner conversion
+coincidence (checked as `distinct_owners == filled_order_count`), the merge's
+ordering rule, and the two terminal rent residuals this profile already
+carries as `RENT.ACCOUNT_REFUND_UNOWNED` and
+`GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT`.
 
 Per the 2026-08-20 build-path protocol amendment
 (`docs/reviews/BUILD_PATH_IDENTITY_2026-08-20.md`) the canonical identity is
 the in-place double build at the canonical checkout path: pass 1/pass 2 are
-byte-identical `df0aece1…` (1,986,104 bytes, growing from 1,979,512). The
-cross-path worktree build produced `7cd3beb8…` — same length, **481 `.text`
+byte-identical `0d52c561…` (2,149,672 bytes, growing from 1,986,104), and the
+whole double build plus probe was executed twice, at `c55f471` and again at
+`42948f4`, with the same digest and the same dispositions both times. The
+cross-path worktree build produced `468b286a…` — same length, **483 `.text`
 bytes at 195 sites and 6 `.rel.dyn` bytes at 3 sites**, no other section
-touched: the tied-pair signature, wider than the last seal's four sites and
-close to the V3 campaign's. `cross_path_builds` stays an observed-digest list
+touched: the tied-pair signature again, at almost exactly the width the last
+seal saw (481 bytes, the same 195 sites) on a program 8% larger. `cross_path_builds` stays an observed-digest list
 and `policy.py` refuses both the retired scalar field and any entry equal to
 the canonical digest.
 
-**The relocated-Cargo-home probe diverged again — and this seal corrects its
-attribution.** The protocol probe reproduced the `4fded7a6…` mechanism to the
-byte: `dd20707f…` at 1,986,656 bytes, `.rodata` larger by exactly 552 bytes
-carrying exactly three absolute registry `panic::Location` paths
-(`solana-address`, `solana-program-entrypoint`, `solana-account-info`) that the
-canonical build renders relative. But two controls, same recipe and same fresh
-extraction, differing only in *where the relocated home sits*, both reproduced
-the canonical bytes exactly — including one inside the same temporary
-filesystem in resolved `/private/var` form. The protocol probe builds under
-`$TMPDIR`, which macOS reaches through the `/var` → `/private/var` symlink. So
-the divergence tracks **a `CARGO_HOME` path containing an unresolved symlink
-component**, not relocation as such. The seal records the protocol probe's
-digest and its `PATH_SENSITIVE` disposition — that is what the declared probe
-measured — and `check_artifact_binding` now **requires** a diverged probe to
-carry its controls and to name what the divergence tracks, refusing an
-attribution with no reproducing control behind it. Owed, and deliberately not
-done by this lane: `audit_artifact.sh` will report `PATH_SENSITIVE` on any
-macOS host by construction until its probe resolves its own work directory,
-which is a protocol amendment, not a reseal decision.
+**The relocated-Cargo-home probe reports `INDEPENDENT`, and that is the
+amendment landing.** Cycle F reproduced the divergence three seals had called
+`PATH_SENSITIVE` and then narrowed its attribution with two hand-run controls:
+same recipe, same fresh extraction, differing only in *where the relocated home
+sits*, both reproducing the canonical bytes — including one inside the same
+temporary filesystem in resolved `/private/var` form. The divergence tracked **a
+`CARGO_HOME` path containing an unresolved symlink component**, not relocation
+as such, and cycle F recorded amending the probe as owed rather than making a
+protocol change inside a reseal lane.
+
+The amendment has since landed, and this is the first seal to run it. The probe
+resolves its relocated home before using it, and the build comes back
+`0d52c561…` — **byte for byte the canonical artifact**, no `.rodata` growth, no
+absolute registry path anywhere in it, reproduced at both of this seal's audit
+runs. Cycle F's narrower attribution is now confirmed by the protocol probe
+itself rather than by controls beside it.
+
+The claim this supports stays small: the recipe is independent of *where the
+Cargo home sits*, on this host, when the path is given in resolved form. The
+`.rodata` mechanism is unchanged — an unresolved symlink component will still
+fork the bytes, which is exactly why the probe resolves it. The controls
+apparatus in `check_artifact_binding` is kept and is now exercised by the tests
+against a synthetic diverged probe, because a gate that stops running on live
+evidence is a gate that rots.
 
 The undefined-import surface is **unchanged**: the same ten symbols, with
-`.dynstr` byte-identical to the previous seal — the fee wave adds no syscall.
-CU drift against `4fded7a6…` is **at most ±0.034% on every promoted route**:
-every ResolutionWork and FoldBatch route drops 12 CU per fold
-(`FoldBatch(12)` 929,573 → 929,429), Direct V2 Select 226,444 → 226,522
-(+78, the largest promoted move either way), Direct V2 Freeze 357,876 →
-357,868, the monolithic V4 row 182,859 → 182,857, and every native/occupation
-row moves −2 or −5 CU. **No selected limit moves a quantum on any promoted
-route and no admission flips.** The one family outside that window is
-blank-bank `create_market`: v2 +7.8% (192,048 → 207,044), v3 and v4 −1.4%. It
-has been the drift-heavy family since the custom-heap wave, it reverses
-direction between seals, its byte-exactness and rollback assertions gate its
-semantics unchanged, and **no projection quote derives from it**. The 23
-`direct_v3` rows are excluded from the drift window on purpose: they are not
-reproducible between runs, so their seal-to-seal movement measures the fixture
-rather than the code, and it lands on the documented 1,500-CU bump quantum.
-Everything in that family that is not keypair-dependent — all nine close routes
-with every balance and delta, all four rollback observations, and all three
-strand figures — is byte-identical to the superseded seal, re-derived from
-three new logs.
+`.dynstr` byte-identical to the previous seal — this wave adds no syscall
+either. CU drift against `df0aece1…` is **at most +0.34% on every promoted
+route**, and it is one-directional: every ResolutionWork and FoldBatch route
+gains 0.2–0.34% (`FoldBatch(12)` 929,429 → 932,057, `Fold(4)` 95,710 → 96,031,
+`Begin` 91,345 → 91,542, `Finalize` 164,718 → 164,892, `Abort` +3 CU). **Exactly
+one promoted selected limit moves a quantum**: `Fold(4)` 120,000 → 130,000, on a
++321-CU measurement that crossed a rounding boundary. No admission flips.
 
-**No account width moved**: the offline probe re-run at `04acf61` reproduces
-the sealed probe **byte for byte**, all 38 rows and both rent metadata lines.
-The wave's one new persistent family, `revenue.policy_record.v1` (156 bytes /
-1,976,640), is post-probe pinned from `revenue.rs`. The declared source
-closure grows 109 → 111 files (exactly `programs/solana-layout/src/revenue.rs`
-and `research/batch-policy-identity/src/revenue_policy_v1.rs`). Native
-full-lifecycle tests are intentionally excluded from the default feature:
-running them requires the distinct non-production mock-source ELF, so they are
-not smuggled into this projection.
+The one family outside that window is blank-bank `create_market`, which has
+been the drift-heavy family since the custom-heap wave and reverses direction
+between seals: v2 **207,044 → 195,232 (−5.7%)**, v4 210,320 → 204,508 (−2.8%),
+v3 211,715 → 211,903 (+0.1%). It reverses the sign of the move the last seal
+recorded (v2 was +7.8% then). **No projection quote derives from the
+create_market rows**, and the byte-exactness and rollback assertions of the same
+suite gate its semantics unchanged.
 
-Current `04acf61` tests pass: **26 default-feature targets, 104 tests**, plus
-three further independent runs of the Direct V3 suite (9 more). The
-general-clearing CU evidence now spans six UNPROMOTED measurement families
-(`general_epoch`, `clear_walk`, `candidate_selection`, `entitled_clearing`,
-`disagreement_exhibit`, `terminal_closure`); with the two Direct V3 families
-and the revenue boundary that is **twenty same-ELF families in all, twenty-one
-bank logs**. Five of them are **quoted at rung W1** (below); no live flag moves
+**Three account widths moved, and no new persistent family entered the tree.**
+The offline probe re-run at this commit differs from the sealed one in exactly
+three rows: `order.reservation.v1` **570 → 618 bytes** (schema generation v3,
+**version byte 4** — the PartialFillLedger wave made the account the cumulative
+consumption ledger and the VirtualMergeCredit wave split quantity from cash),
+and both epoch accounts gain exactly one byte for `basis_degree`, the moment
+cone's on-chain binding: `legacy.epoch.v2` 328 → 329 and `direct.epoch.v3`
+344 → 345. Rent follows each width. The probe emits one new line,
+`artifact.maximum.stage`, which is a **derived maximum** over the artifact
+stage rows and equal to `artifact.terms.stage` exactly — `check_rent_and_accounts`
+verifies it as that alias rather than admitting it as a row. The terminal
+inventory therefore takes **no new row**.
+
+The declared source closure grows **111 → 129 files**: the v2 source generation
+(`source_v2.rs` and its four modules, `source_identity.rs`,
+`source_generation.rs`, `source_archive_v2.rs`, `instructions/source_ingest_v2.rs`,
+`instructions_sysvar.rs`, `loader_state.rs`, `pyth_receiver.rs`), the composite
+fee arithmetic, and the moment-cone tables. Native full-lifecycle tests are
+intentionally excluded from the default feature: running them requires the
+distinct non-production mock-source ELF, so they are not smuggled into this
+projection.
+
+Current `846afab` tests pass: **41 default-feature targets, 156 tests**, zero
+failures, in one locked pass under the suite spinlock, plus three further
+independent runs of the Direct V3 suite (9 more). The general-clearing CU
+evidence now spans seven UNPROMOTED measurement families (`general_epoch`,
+`clear_walk`, `candidate_selection`, `entitled_clearing`,
+`disagreement_exhibit`, **`scale_clearing`**, `terminal_closure`); with the two
+Direct V3 families and the revenue boundary that is **twenty-one same-ELF
+families in all**, and every suite's log — quoted or not — is sealed in the
+artifact root. **Six** of them are quoted at rung W1 (below); no live flag moves
 for any of them, the reference adapter refuses all of them, and full admission
 of the plane remains ember's decision, not this seal's. Direct SelectionV2
-Select completes at a measured 226,522 CU and commits (V2 stays unpromoted on
+Select completes at a measured 227,464 CU and commits (V2 stays unpromoted on
 its unimplemented empty-frozen lapse), every occupation-v4 monolithic profile
 clears the 25%-headroom gate, and Direct V3 is measured but unpromoted.
+
+**Sealed does not mean quoted.** Sixteen of the sealed logs are recorded
+evidence only — `cone_gate`, `r2_v2_wire`, `vpot_split`, `vpot_merge`,
+`pot_position_close`, `clear_work_creation`, `degree_terms_admission`,
+`joined_lifecycle`, the two `r2_pull_*` suites, `token_leg`, the two
+`coupled_*` suites, `source_ingest`, and both `native_*` preflight suites. They
+ran green against this exact ELF in the same pass, their logs are tracked so
+the run is reproducible from the tree, and **no CU row, quote, or reward is
+derived from any of them**. A log in the evidence set is a record that the
+suite ran, not a promotion.
 
 ## Walk plane, rung W1: quotes without live flags
 
@@ -189,48 +249,94 @@ a quote against a PROPOSED window pin would have been a quote against an
 unfrozen lifecycle schedule. Those two doc comments now *say* FROZEN, as of
 this wave.
 
-`derive()` computes, for **thirty-five** general-clearing routes across
-**five** measured families, the selected compute limit and keeper reward by
-exactly the arithmetic every promoted family uses: `ceil(measured x 5/4)`
+`derive()` computes, for **one hundred and seven** general-clearing routes
+across **six** measured families, the selected compute limit and keeper reward
+by exactly the arithmetic every promoted family uses: `ceil(measured x 5/4)`
 rounded up to the 10,000-CU quantum, priced at the 10,000-lamport base-fee cap
 plus 1 lamport/CU plus the 100,000-lamport keeper tip. Rows are re-derived from
-this seal's own tables on every run. Seven of the 25 routes carried over from
-`4fded7a6…` move a selected limit by one quantum here —
-`advance_clear_work_pass1_forty_order` up to 500,000, and six routes down.
-**All 35 clear the 25%-headroom rule**; the worst is `FreezeEpoch` at 3 pages /
-40 orders, **717,815 CU** (limit 900,000, reward 1,010,000 lamports), which is
-64% of the 1,120,000 raw-CU admission boundary. Compute is not this plane's
-problem.
+this seal's own tables on every run.
 
-**The rung's family list grew from four to five, and the rung's own honesty
-rule is why.** `disagreement_exhibit.rs` — the L2 two-model exhibit, landed
-after the last seal was cut — drives the *same* general-plane routes against
-the *same* ELF under the *same* frozen policy, at a third book composition (13
-orders, 7 slices, five entitled single crossings and one portfolio full pair),
-and it prints its labels. Several of its observations are **hotter** than the
-two-suite books': `AdvanceClearWork` pass 1 at **411,611 CU** against 393,207,
-`EntitleSlice (single)` at 224,645 against 203,097, `SettlePage (entitled
-portfolio full pair)` at 250,584 against 224,233. W1 already forbids a measured
-CU field in a quoted family from going unquoted — but a family *outside* the
-quoted list escapes that check entirely, which is precisely the loophole a
-hotter unpublished observation slips through. So the exhibit is quoted, as ten
-routes of its own. The four original families' rows are unchanged in kind,
-because each already bounds its own measured composition and no other; a new
-composition gets a new quote rather than silently widening someone else's.
+**The worst route is no longer `FreezeEpoch` at three pages.** It is
+`scale_freeze_epoch_4pages_64orders` — the maximum 64-order book across four
+dense pages — at **988,469 CU** (limit 1,240,000, reward 1,350,000 lamports),
+which is 88% of the 1,120,000 raw-CU admission boundary. All 107 clear the
+25%-headroom rule and the block is `PASS`, but the margin at the maximum book
+is 11% of the 1,400,000 ceiling rather than the 36% the three-page book left.
+Compute is no longer *comfortably* not this plane's problem; it is not this
+plane's problem *yet*.
+
+**The rung's family list grew from five to six, and the rung's own honesty
+rule is why — for the second seal running.** At `df0aece1…` the joiner was
+`disagreement_exhibit.rs`, whose third book composition measured several routes
+hotter than the two sealed books. Here it is the six **scale campaigns**, and
+the gap they exposed is much larger than a few percent.
+
+The campaigns drive the same general-plane routes against the same ELF under
+the same frozen policy, at shapes the sealed books never reached: the maximum
+64-order book across four dense pages, thirty partial fills across two, a
+twelve-completion rounding pot, three concurrent epochs, the complete 64-tick
+table, and a sixteen-deep tied candidate field against three retained. They
+print 399 labelled CU rows.
+
+**What they found is that a page count is not a nuisance parameter.** The
+sealed `entitle_slice_single` row is **207,315 CU** and its suite's epoch is
+*one page*. The same instruction measures **416,385** at two pages and
+**759,892** at four, because `EntitleSlice` is the page-set-wide route: it must
+be presented with the whole bound page set and re-derives the live orders by
+walking every page in it. A flat quote for that route was not a slightly stale
+number — it was a quote for a different transaction, understating the real one
+**3.7-fold** at the maximum book.
+
+So the shape coordinate now lives **in the route key**. The 399 rows collapse
+into 64 (route, shape) groups, each quoted as `scale_<route>_<coordinate>` with
+variability `SHAPE_LABELLED_BY_THE_ROUTE_KEY`; the group's maximum bounds every
+observation at that shape and no other. There is deliberately no combined
+`entitle_slice` row. These routes are *generated from the tables* rather than
+hand-listed — unlike the four original families, whose keys are prose and few —
+so a shape the campaigns start driving becomes a published quote automatically
+instead of waiting to be noticed, while an undeclared table, a duplicated
+shape, or a row missing its coordinate each refuse.
+
+**Every scale row is ledgered, and that is why they are the quotable ones.**
+Each created account carries its optional `GeneralFundingLedgerV1` sibling. An
+account created *without* one records no payer, so no close route will ever
+guess it — the keeper found that at the `init_epoch` row's own 60,000-CU limit
+the ledgered InitEpoch exhausted its meter at 59,850 on a real validator and
+died. The unledgered rows the four original families carry are **kept and
+labelled** as the non-closeable variant rather than dropped: they are what
+those suites measured, and the unledgered shape is real — it is simply one
+whose rent no close route can return, which is the standing
+`RENT.ACCOUNT_REFUND_UNOWNED` residual.
+
+`entitled_clearing` also gained eight routes, and not from the campaigns: the
+partial-fill wave added eight measured CU fields to that suite (inexact pot
+funding, mixed legs, a fragmented buy, the four strands), and the coverage rule
+refused the seal until every one of them was quoted. The original families'
+rows are unchanged in kind, because each already bounds its own measured
+composition and no other; a new composition gets a new quote rather than
+silently widening someone else's.
 
 W1 is *quotes and nothing else*, and each half of that is welded in
 `require_walk_plane_w1_quotes` rather than merely written down:
 
-- **live flags stay false.** The five families keep
+- **live flags stay false.** The six families keep
   `UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY`, `general_clearing_walk.status`
   stays `SBF_EXECUTED_EVIDENCE_UNPROMOTED_STOP`, and `live_flags` stays
   `UNTOUCHED`. A walk family that acquires any `live*` field refuses, naming
   the W2 ids and evidence gaps that are still outstanding.
-- **no keeper program consumes these quotes.** There is no runtime reward
-  schedule for the plane to cover, so a W1 row is a policy row, not an
-  operational promise; the block says so (`runtime_reward_schedule:
-  NONE_NO_KEEPER_PROGRAM_READS_THESE_QUOTES`), and it publishes **no** path or
-  lifecycle total (`path_quote: NOT_DESIGNED_NO_BOUNDED_TRANSACTION_PLAN`).
+- **no keeper program consumes these quotes — and a keeper now exists, so
+  read that precisely.** `programs/clutch-sbf/keeper` was built during this
+  wave and it *does* log the W1 route it spends against, its limit, and the CU
+  the bank actually charged. What it does not do is take a reward from a
+  runtime schedule: there is no on-chain reward schedule for this plane to
+  cover, so a W1 row remains a policy row and not an operational promise. The
+  block still says `runtime_reward_schedule:
+  NONE_NO_KEEPER_PROGRAM_READS_THESE_QUOTES` — no *program* reads them — and it
+  still publishes **no** path or lifecycle total (`path_quote:
+  NOT_DESIGNED_NO_BOUNDED_TRANSACTION_PLAN`). The keeper is a client that
+  quotes itself against this table and refuses to claim a row it cannot cover;
+  every shape it sends carrying an unmeasured ledger allowance is forced to
+  `UNQUOTED`.
 - **the rent side is NOT quoted.** All eight general-plane rows stay honest
   STOPs on the optional funding ledger and the owner-signed release edge. W1
   names those rows and prices none of them, and refuses if one stops being a
@@ -251,10 +357,34 @@ W1 is *quotes and nothing else*, and each half of that is welded in
   gaps. Every named id retiring refuses, so the rung is re-decided rather than
   silently upgraded.
 
+**What the scale evidence now covers, stated but not taken.** Two of the five
+evidence gaps are substantially answered by this seal's campaigns, and saying
+so is input to a promotion decision this lane does not make. No live flag moves
+and the gap list is unchanged.
+
+`WIDER_PAGE_ORDER_AND_CANDIDATE_GRIDS` is substantially covered: 4 pages /
+64 orders is the layout maximum (`MAX_ORDER_PAGES`, `MAX_EPOCH_ORDERS`), and
+2/30, 2/24, the complete 64-tick table, and three concurrent epochs are all
+measured. **What is not covered is the portfolio form** — no campaign places a
+portfolio slot, so `entitle_slice_portfolio_pair` and
+`settle_page_entitled_portfolio_full_pair` still have no wide-book counterpart,
+and they are among the hotter routes. `FULL_WIDTH_TIE_AND_DISPLACEMENT_CAMPAIGNS`
+is substantially covered: a sixteen-deep tied field against
+`MAX_RETAINED_CANDIDATES = 3`, thirteen refused tied-field positions, a
+displacement against a full component-tied registry, and a 3-retained /
+3-verified digest tie. The other three gaps are untouched — one needs another
+host, one needs a ratified decision, and the path quote is still
+`NOT_DESIGNED_NO_BOUNDED_TRANSACTION_PLAN`.
+
+**All three blocking ids stay live.** The campaigns passing a funding ledger
+everywhere shows the closeable shape exists; it does not show the unledgered
+one stopped being constructible, and the ledger is still optional at every
+general-plane creating instruction.
+
 Two honesty rules the block enforces on its own rows. **Variability is
-declared**: eight routes are `BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY` —
-`AdvanceClearWork` in both passes on all three books, and `AdvanceClearSlices`
-on two — because the driver chooses how many orders, reservations, or slices
+declared**: ten routes are `BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY` —
+`AdvanceClearWork` in both passes on all three books, `AdvanceClearSlices` on
+two, and the partial-fill wave's two strand routes — because the driver chooses how many orders, reservations, or slices
 ride in one transaction. Those quotes bound the measured compositions and no
 others. **Nothing measured goes unpublished**: every `_cu`/`_rows` field of a
 quoted family must be consumed by a W1 route or be the one declared non-route
@@ -265,7 +395,7 @@ An over-boundary route is never clamped into a price: it publishes
 `W1_STOP_HEADROOM_NO_QUOTE` with null limit, null fee cap, and null reward,
 and drops the whole block to `STOP_HEADROOM`. The profile already had this
 exact shape once — V2's Select is quoted PASS inside a family-level STOP — and
-W1 is that shape applied to thirty-five routes.
+W1 is that shape applied to one hundred and seven routes.
 
 ## TerminalClosure (tags 60–67), carried forward
 
@@ -295,15 +425,28 @@ the first residual and carries only its own.
 
 Two families, `direct_v3` (all 23 CU rows) and `direct_v3_close` (the
 close/rollback campaign), both `UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY`, both
-**re-measured from scratch at this seal** against the exact `df0aece1…` ELF —
+**re-measured from scratch at this seal** against the exact `0d52c561…` ELF —
 three fresh bank runs, every row re-derived from the new logs, nothing carried
 forward. **No admission/quote/reward row is derived for any V3 route and
 `live_v3` stays false.**
 
-Three bank logs, not one, because **the V3 CU rows are not reproducible**: the
+Four bank runs, not one, because **the V3 CU rows are not reproducible**: the
 suite's fixture keypairs are freshly random per run and each PDA bump probe
 costs 1,500 CU, so a row moves in 1,500-CU steps between runs. Each CU row is
-sealed as its three-run spread. The worst observation in the whole venue is
+sealed as its spread.
+
+**That quantum is now carried in the quote model rather than confined to this
+family's excuse.** `find_program_address` counts a bump down from 255 and pays
+one `create_program_address` per failed attempt at 1,500 CU, so any route
+deriving *m* addresses carries `sum(255 - bump_i) * 1500` CU of fixture noise —
+V3 is simply where it was loudest. Every W1 row now publishes whether it rests
+on a **single observation** and, when it does, that its measured maximum is
+known only to within `k * 1500` CU. This widens no quote: the selected limit is
+still `ceil(measured x 5/4)` rounded up. It states what the maximum is known
+to, which is what a reader needs in order to decide whether one send was
+enough. The disagreement exhibit's five `EntitleSlice` sends are the evidence
+the term is real and show its exact shape — their gaps sit on the 1,500-CU
+lattice with a 16-CU residual of genuine per-slice work on top. The worst observation in the whole venue is
 `FreezeDirectEpochV4` at **382,795 CU**, comfortably under the 1,120,000
 raw-CU admission boundary — a fact about the rows, not an admission of them.
 
@@ -328,16 +471,39 @@ cap, and keeper reward is re-derived from `admission_math.py` under the finer
 quantum, and the 5/4-headroom admission bound (measured CU at most 1,120,000
 raw under the 1,400,000-CU ceiling) is unchanged. Second, batched folds are
 measured and admitted: `tests/resolution_work_batch.rs` composes N singleton
-Fold instructions into one transaction for N in {2, 4, 8, 12}, proves the
+Fold instructions into one transaction for N in {2, 4, **6**, 8, 12}, proves the
 batched final account state byte-identical to the same folds driven one per
 transaction, and proves one invalid Fold mid-batch reverts the entire
-transaction to its prestate. Twelve is the largest measured batch and it admits
-at 929,429 CU at this seal (selected limit 1,170,000). The
-`resolution_work_batched` projection prices the fewest-transaction plan for a
-32-record work item — Begin, then FoldBatch(12)+FoldBatch(12)+FoldBatch(8),
-then Finalize — next to the per-transaction worst case; collapsing the
-per-transaction fixed overhead cuts the payer cold outlay from 18,711,920 to
-14,861,920 lamports. One honest caveat is sealed with the row: the bank harness
-transports transactions in-process, so the cluster wire packet budget (1,232
-bytes, which a 12-fold message exceeds) is not modeled by these measurements —
-`cluster_packet_budget: UNMODELED_BANK_TRANSPORT_ONLY`.
+transaction to its prestate.
+
+**The plan those rows compose is re-derived at this seal, because the sealed
+one could not be sent.** `[12, 12, 8]` was chosen on *compute* alone — twelve is
+the largest batch the 1,120,000-CU raw bound admits, and it does admit, at
+932,057 CU here. Compute is not what binds a fold batch on the wire. The
+keeper's `fold-wire-probe` measured the serialized message at every width and
+had a real validator's `sendTransaction` agree with the serializer: **six** Fold
+instructions frame at **1,216 bytes** and seven do not, at **1,347** against the
+1,232-byte legacy packet budget. A twelve-fold message is **2,002 bytes**. The
+sealed plan priced three transactions no keeper can submit.
+
+Width **6** is therefore measured rather than interpolated between the 4 and 8
+that bracket it — `FoldBatch(6) = 486,413 CU`, selected limit 610,000 — and the
+plan is composed only of sendable widths: `[6, 6, 6, 6, 6, 2]`, six
+transactions, cutting the payer cold outlay from 18,711,920 to **15,291,920**
+lamports. That is a smaller saving than the unsendable plan claimed
+(14,861,920), and it is the real one. The measured rows at 8 and 12 are **kept**
+— they are real bank measurements of real transactions — and labelled
+`MEASURED_ON_A_BANK_BUT_OVER_THE_1232_BYTE_PACKET_BUDGET_EXCLUDED_FROM_THE_PLAN`.
+
+The old caveat `cluster_packet_budget: UNMODELED_BANK_TRANSPORT_ONLY` is
+**discharged and removed**: the budget is measured now, by serialization and by
+transport, and the projection publishes `cluster_packet_budget_bytes: 1232`,
+`maximum_sendable_batch: 6`, the superseded plan, and its reason.
+
+One thing is deliberately *not* claimed. The keeper's record-dense plan packs
+six `Fold(4)` instructions — 24 records — into one packet and would need two
+transactions for a 32-record item. Its ingredient is measured (`Fold(4) =
+96,031 CU`) but the composed transaction is not, and composing per-instruction
+CU into a transaction total is exactly what the batch rows exist to measure;
+they show batching runs slightly *cheaper* than the sum. So the record-dense
+packet is named as the shape the wire permits and **carries no quote**.
