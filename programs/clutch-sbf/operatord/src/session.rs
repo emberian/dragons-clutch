@@ -698,12 +698,10 @@ impl Session {
         let Some(belief) = belief_on_ladder(weights, LADDER_STEP) else {
             return refused("a belief needs at least one nonzero knot");
         };
-        let proposals: Vec<Value> = self
-            .bot
-            .quoted
-            .iter()
-            .enumerate()
-            .filter_map(|(index, theirs)| {
+        /* One proposal slot per knot of the basis; the automaton's quoted
+         * vector is what defines how many knots there are. */
+        let proposals: Vec<Value> = (0..self.bot.quoted.len())
+            .filter_map(|index| {
                 let mine = *belief.get(index)?;
                 /* A second order of yours on a knot the automaton quotes once
                  * cannot clear: the relation fills every *strict* order in
@@ -723,9 +721,16 @@ impl Session {
                         && !order.retired
                         && usize::from(order.outcome) == index
                 })?;
-                // Invert the automaton's own book-former: I take the side its
-                // resting quote leaves open, at my own value, when my value
-                // crosses its limit.
+                /* Invert the automaton's own book-former: I take the side its
+                 * resting quote leaves open, at my own value, when my value
+                 * crosses its limit.
+                 *
+                 * The comparison is against the limit actually on the page,
+                 * not against what the automaton would quote today.  They are
+                 * the same number for an opening quote and this bench never
+                 * lets them diverge — but a preview of what crosses must read
+                 * the book, or it is a preview of something else. */
+                let theirs = &resting.limit;
                 let side = match (resting.side, mine.cmp(theirs)) {
                     (1, std::cmp::Ordering::Greater) => 0,
                     (0, std::cmp::Ordering::Less) => 1,
@@ -891,7 +896,11 @@ impl Session {
             "slices": witness.len,
             "virtual_split": candidate.virtual_split,
             "virtual_merge": candidate.virtual_merge,
-            "label": "MODEL-ONLY until the bank verifies it",
+            /* "Verified" is the program's own name for a candidate status and
+             * is not this bench's word for its own evidence.  Nothing here is
+             * verified; the bank either accepts the candidate carrying these
+             * coordinates or it does not. */
+            "label": "MODEL-ONLY until the bank accepts a candidate carrying it",
         }));
 
         let mut shell = CandidateFeedHeader {
