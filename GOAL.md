@@ -370,7 +370,7 @@ J. SMALL-FIX BATCH (stale blocker row, mock path-sensitivity, queued
   opt-z is RED again on the current tree (stale premise caught by
   measurement); the deploy script's four-seals-stale artifact pointer was
   caught and repointed to e8ba31d5; the R2 caps branch rebased CLEAN
-  across 153 commits (r2-caps-rebase-trial seeds Phase 0).
+  across 153 commits (r2-caps-rebase-trial seeded Phase 0; merged to main 5a94c1d, kept as the report's cited artifact).
 
 - CYCLE D ATTESTED: Persvati 44/44 PASS, 0 STOP over exact 788581c —
   identical gate roster to cycle C (contract found zero manifest changes),

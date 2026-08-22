@@ -105,6 +105,10 @@ The plan requires a dedicated runtime branch, never sealed main
 (`R2_PULL_PROMOTION_PLAN.md:41-45`). Seed it, do not re-derive it:
 
 ```sh
+# STATUS 2026-08-22: the trial branch was merged to main at 5a94c1d
+# (2026-08-21) and is now 0 commits ahead — this seeding step is a no-op
+# yielding a branch identical to main. The branch is retained only as the
+# report's cited artifact (tip 01a004b). Seed Phase 0 from main directly.
 git branch r2-phase0 r2-caps-rebase-trial
 git rebase main r2-phase0          # expected clean per §1.3
 ```
