@@ -1540,7 +1540,9 @@ async fn portfolio_order_actually_clears_with_conservation() {
     context
         .warp_to_slot(FREEZE_DEADLINE + CANDIDATE_WINDOW_SLOTS)
         .unwrap();
-    let retained = [alpha.id, beta.id];
+    // Seal no longer admits unverified claims. Only alpha completed its walk
+    // and therefore appears in the verified-only retained registry.
+    let retained = [alpha.id];
     let (result, _) = send(&mut context, &[fixture.finalize(&retained)], None, 340).await;
     result.unwrap();
     let record =

@@ -1,31 +1,34 @@
-//! Real-SBF evidence for `Intent::ClosePosition` (tag 69) — the owner-signed
-//! end of the position lifecycle, and the byte host of the revenue plane's
-//! B4b mid-epoch-close grief rider.
+//! Real-SBF evidence for the fail-closed `Intent::ClosePosition` (tag 69) and
+//! the byte host of the revenue plane's B4b mid-epoch-close grief rider.
 //!
 //! The gates:
+//! * **aggregate closure is unavailable** — even a locally economic-zero
+//!   Position refuses with byte-exact rollback because an all-in sell can
+//!   leave its Eggs in an ACTIVE reservation that this instruction cannot
+//!   enumerate;
 //! * **economic zero first** — a Position holding trading cash, encumbered
-//!   cash, or any claim refuses, with byte-exact rollback;
+//!   cash, or any local claim also refuses, with byte-exact rollback;
 //! * **the grief rider, executed** — a Position the Realm's revenue-policy
 //!   record names as its treasury refuses close with
 //!   `TreasuryServiceOutstanding`, decided by
 //!   `clutch_liveness::TreasuryServiceLedger`; a record naming somebody else
-//!   leaves the same Position closable, so the refusal is the rider and not a
-//!   blanket "a record exists" gate;
+//!   reaches the aggregate-closure refusal, so the treasury refusal remains
+//!   the rider and not a blanket "a record exists" gate;
 //! * **absence is the zero-take state** — with no record at the Realm's
-//!   canonical address the close proceeds, and a record presented at the
-//!   *wrong* address refuses at `WrongPda` rather than being trusted;
-//! * **the lamport disposition** — the Position family has no creation-side
-//!   funding ledger, so no principal is recorded and the whole live balance,
-//!   injected donation included, burns at the frozen neutral sink; the close
-//!   is measured to the lamport;
-//! * **authority** — a stranger's signature refuses, and the closed Position's
-//!   own disappearance is the replay guard.
+//!   canonical address the request reaches the aggregate-closure refusal, and
+//!   a record presented at the *wrong* address refuses at `WrongPda` rather
+//!   than being trusted;
+//! * **no lamport disposition yet** — rent and injected donations remain in
+//!   the Position because the missing reservation proof refuses before any
+//!   close mutation;
+//! * **authority** — a stranger's signature refuses before the aggregate
+//!   closure gate.
 //!
-//! The fixture is deliberately flat: a Market, some Positions, and optionally
-//! a revenue record, all written with the frozen codecs at their canonical
-//! addresses.  Nothing here needs an epoch, a book, or a candidate — a
-//! Position outlives every epoch, which is exactly why its close carries no
-//! epoch coordinate.
+//! The fixture is deliberately flat: a Market, some Positions, one canonical
+//! ACTIVE sell reservation invisible to the close account list, and optionally
+//! a revenue record, all written with the frozen codecs at canonical addresses.
+//! The hidden reservation is the exact reason a Position cannot safely close
+//! without an epoch coordinate or persisted owner-level counter.
 //!
 //! Claim plane: SBF-EXECUTED (bank), no promotion.  The reference adapter
 //! refuses the tag with `UnsupportedIntent`; the oracle is the layout codec
@@ -41,9 +44,13 @@ use {
         seeds,
     },
     clutch_solana_layout::{
-        account_len, canonical_outcome_id,
+        account_len, canonical_order_id, canonical_outcome_id,
+        reservation::{
+            canonical_reservation_id, ReservationAccount, ReservationPlan,
+            RESERVATION_ACCOUNT_BYTES,
+        },
         revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES},
-        Hash32, MarketAccount, PositionAccount, MAX_OUTCOMES,
+        Hash32, MarketAccount, OrderRecord, OrderSlot, PositionAccount, MAX_OUTCOMES,
     },
     clutch_svm_fixture::{compute_unit_limit_data, layout_request, COMPUTE_BUDGET, PROGRAM_ID},
     solana_account::Account,
@@ -123,6 +130,7 @@ struct Fixture {
     position: Address,
     stranger: Keypair,
     stranger_position: Address,
+    live_reservation: Address,
     record_account: Address,
 }
 
@@ -230,6 +238,42 @@ async fn start(record: Record) -> (ProgramTestContext, Fixture) {
         seeds::SEED_POSITION,
         &[&market.bytes(), &stranger_id.bytes()],
     );
+    // Exact all-in seller shape: the owner's local Egg balance is zero because
+    // all seven Eggs are held by this canonical ACTIVE reservation.  The
+    // ClosePosition wire carries no slot through which it could observe it.
+    let epoch = h(0x64);
+    let order_id = canonical_order_id(1);
+    let order = OrderSlot::Single(OrderRecord {
+        owner: owner_id,
+        order_id,
+        outcome: 0,
+        side: 1,
+        quantity: 7,
+        limit: 5_000,
+        minimum_fill: 0,
+        flags: 0,
+        generation: 1,
+        expiry_epoch: 1,
+    });
+    let plan = ReservationPlan::for_order(&order, OUTCOMES, 10_000, 0).unwrap();
+    let reservation_id = canonical_reservation_id(market, epoch, owner_id, 0, order_id);
+    let (live_reservation, reservation_bump) =
+        pda(seeds::SEED_RESERVATION, &[&reservation_id.bytes()]);
+    let reservation = ReservationAccount::active(
+        market,
+        epoch,
+        owner_id,
+        order_id,
+        h(0x65),
+        h(0x66),
+        h(0x67),
+        0,
+        1,
+        0,
+        reservation_bump,
+        plan,
+    )
+    .unwrap();
     let (record_account, record_bump) = pda(seeds::SEED_REVENUE_POLICY, &[&realm.bytes()]);
 
     let mut test = ProgramTest::default();
@@ -264,6 +308,13 @@ async fn start(record: Record) -> (ProgramTestContext, Fixture) {
     test.add_account(
         stranger_position,
         program_account(position_bytes(market, stranger_id, stranger_bump, 0, 0), 0),
+    );
+    test.add_account(
+        live_reservation,
+        program_account(
+            encode(RESERVATION_ACCOUNT_BYTES, |out| reservation.encode(out)),
+            0,
+        ),
     );
     if let Some(treasury) = match record {
         Record::Absent => None,
@@ -302,6 +353,7 @@ async fn start(record: Record) -> (ProgramTestContext, Fixture) {
             position,
             stranger,
             stranger_position,
+            live_reservation,
             record_account,
         },
     )
@@ -353,30 +405,41 @@ fn custom(result: Result<(), TransactionError>) -> u32 {
     }
 }
 
-/// The zero-take Realm: no record, an empty Position, and every lamport —
-/// rent minimum and injected donation alike — burned at the frozen sink.
+/// The adversarial all-in seller: its Position is locally economic-zero while
+/// a canonical ACTIVE reservation still owns all seven Eggs.  Because the
+/// close cannot enumerate that reservation, it must retain every Position and
+/// reservation byte and lamport exactly.
 #[tokio::test]
-async fn an_empty_position_closes_and_burns_its_whole_balance() {
+async fn an_all_in_seller_position_refuses_without_mutation() {
     let (mut context, fixture) = start(Record::Absent).await;
-    let before = lamports(&mut context, fixture.position).await;
-    assert_eq!(before, rent_exempt(account_len::POSITION) + DONATION);
-    let sink_before = lamports(&mut context, sink_address()).await;
-
-    send(&mut context, fixture.close_own(), &fixture.owner, 1)
+    let position_before = account(&mut context, fixture.position).await.unwrap();
+    let reservation_before = account(&mut context, fixture.live_reservation)
         .await
         .unwrap();
-
-    // The account is gone and no lamport was invented or lost: the Position
-    // family records no payer, so the whole balance is "every other live
-    // lamport" and it burns.
-    assert!(account(&mut context, fixture.position).await.is_none());
     assert_eq!(
-        lamports(&mut context, sink_address()).await,
-        sink_before + before
+        position_before.lamports,
+        rent_exempt(account_len::POSITION) + DONATION
     );
-    // Its own disappearance is the replay guard.
-    let replay = send(&mut context, fixture.close_own(), &fixture.owner, 2).await;
-    assert!(replay.is_err());
+    let reservation = ReservationAccount::decode(&reservation_before.data).unwrap();
+    assert_eq!(reservation.remaining_internal[0], 7);
+    let sink_before = lamports(&mut context, sink_address()).await;
+
+    let refused = send(&mut context, fixture.close_own(), &fixture.owner, 1).await;
+    assert_eq!(
+        custom(refused),
+        ClutchError::AggregateClosureMismatch as u32
+    );
+    assert_eq!(
+        account(&mut context, fixture.position).await.unwrap(),
+        position_before
+    );
+    assert_eq!(
+        account(&mut context, fixture.live_reservation)
+            .await
+            .unwrap(),
+        reservation_before
+    );
+    assert_eq!(lamports(&mut context, sink_address()).await, sink_before);
 }
 
 /// Economic zero first, in each of the three ways a Position can hold value.
@@ -456,16 +519,23 @@ async fn a_named_treasury_position_refuses_close_while_it_serves() {
 }
 
 /// ...and the rider is the rider, not a blanket "a record exists" gate: the
-/// same Position closes when the record names somebody else, and when it
-/// carries the structural UNSET sentinel every V1 Realm actually holds.
+/// same Position reaches the aggregate-closure refusal when the record names
+/// somebody else, and when it carries the structural UNSET sentinel every V1
+/// Realm actually holds.
 #[tokio::test]
-async fn a_record_naming_another_treasury_leaves_the_position_closable() {
+async fn a_record_naming_another_treasury_reaches_the_fail_closed_gate() {
     for record in [Record::NamesAnother, Record::Unset] {
         let (mut context, fixture) = start(record).await;
-        send(&mut context, fixture.close_own(), &fixture.owner, 5)
-            .await
-            .unwrap();
-        assert!(account(&mut context, fixture.position).await.is_none());
+        let before = account(&mut context, fixture.position).await.unwrap();
+        let refused = send(&mut context, fixture.close_own(), &fixture.owner, 5).await;
+        assert_eq!(
+            custom(refused),
+            ClutchError::AggregateClosureMismatch as u32
+        );
+        assert_eq!(
+            account(&mut context, fixture.position).await.unwrap(),
+            before
+        );
         // The record itself is untouched: this close reads it, never writes it.
         assert!(account(&mut context, fixture.record_account)
             .await

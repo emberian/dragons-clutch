@@ -1,8 +1,8 @@
 //! Real-SBF evidence for TerminalClosure (tags 60-67) — the general clearing
 //! plane's lifecycle end: the full T2-8 lifecycle driven to CLEARED, then
-//! **everything closeable closed**, in dependency order, down to the epoch
-//! root, with every lamport accounted; and the lapsed twin (freeze, no
-//! verified candidate, lapse) released and closed the same way.
+//! **every dependent that can close safely closed**, in dependency order,
+//! with every lamport accounted; and the lapsed twin (freeze, no verified
+//! candidate, lapse) released and cleaned up the same way.
 //!
 //! The gates:
 //! * the hostile terminal walk — for every close path: double-close refuses,
@@ -16,14 +16,13 @@
 //!   donations here) lands at the frozen incinerator and is measured, and
 //!   the machinery's whole pre-close rent inventory equals reclaimed plus
 //!   burned to the lamport;
-//! * the residual — after the root closes, the epoch's on-chain footprint is
-//!   exactly the declared-permanent set: the sealed 64-byte batch-policy
-//!   artifact (plus owner Positions and market infrastructure, which are not
-//!   epoch machinery); the reclaimed total is printed as the headline;
-//! * the recorded tolerance — a candidate submitted **without** its optional
-//!   funding ledger is unclosable by design (its close refuses, no payer is
-//!   guessed) and the epoch root closes past it, leaving its pair standing
-//!   as the recorded residual.
+//! * the root refusal — the epoch, window, and their funding ledger stay
+//!   byte-for-byte occupied until an exhaustive-count/versioned-tombstone
+//!   design can prevent replay around an untracked candidate; canonical
+//!   re-init therefore still refuses;
+//! * the recorded residual — a candidate submitted **without** its optional
+//!   funding ledger is unclosable by design (its close refuses and no payer is
+//!   guessed), while the occupied root prevents reuse of its epoch identity.
 //!
 //! Claim plane: SBF-EXECUTED (bank), no promotion.  The reference adapter
 //! refuses every tag of the family with `UnsupportedIntent`; the oracle is
@@ -1670,10 +1669,10 @@ async fn close_exact(
 }
 
 /// THE HEADLINE: the full general lifecycle to CLEARED, the hostile terminal
-/// walk, then everything closeable closed — and the residual is exactly the
-/// declared-permanent set, with the reclaimed lamports printed.
+/// walk, then every safe dependent close — while the replay-protecting root
+/// remains occupied and every lamport is accounted.
 #[tokio::test]
-async fn cleared_epoch_closes_to_the_declared_permanent_set() {
+async fn cleared_epoch_closes_dependents_but_keeps_the_replay_guard_root() {
     let (mut context, fixture) = start().await;
     let a = 0usize;
     let b = 1usize;
@@ -1737,7 +1736,8 @@ async fn cleared_epoch_closes_to_the_declared_permanent_set() {
     context
         .warp_to_slot(FREEZE_DEADLINE + CANDIDATE_WINDOW_SLOTS)
         .unwrap();
-    let retained = [alpha.id, beta.id];
+    // Beta is sealed but unverified, so it never entered the retained set.
+    let retained = [alpha.id];
     let (result, _) = send(&mut context, &[fixture.finalize(&retained)], None, 340).await;
     result.unwrap();
     let epoch_now =
@@ -1929,7 +1929,7 @@ async fn cleared_epoch_closes_to_the_declared_permanent_set() {
     .await;
     assert_eq!(custom(work_early.0), ClutchError::AccountCount as u32);
     let root_early = send(&mut context, &[fixture.close_epoch(&retained)], None, 355).await;
-    assert_eq!(custom(root_early.0), ClutchError::MismatchedState as u32);
+    assert_eq!(custom(root_early.0), ClutchError::NotYetImplemented as u32);
     // Reservation archives close only after their page.
     let archive_early = send(
         &mut context,
@@ -2108,8 +2108,9 @@ async fn cleared_epoch_closes_to_the_declared_permanent_set() {
     )
     .await;
 
-    // The checkpoint closes (its record is gone, so no tail is needed), then
-    // the root: epoch and window together, against the emptied registry.
+    // The checkpoint closes once its record is gone. The epoch/window root,
+    // however, refuses even against the emptied registry: the current window
+    // cannot prove that no untracked candidate remains.
     let owed = recorded_principal(&mut context, fixture.ledger(fixture.clear_work(alpha.id))).await;
     reclaimed += close_exact(
         &mut context,
@@ -2119,24 +2120,51 @@ async fn cleared_epoch_closes_to_the_declared_permanent_set() {
         375,
     )
     .await;
-    let owed = recorded_principal(&mut context, fixture.ledger(fixture.epoch_account)).await;
-    reclaimed += close_exact(
+    let root = [
+        fixture.epoch_account,
+        fixture.window_account,
+        fixture.ledger(fixture.epoch_account),
+    ];
+    let mut root_before = Vec::new();
+    for address in root {
+        let value = account(&mut context, address).await.unwrap();
+        root_before.push((address, value.lamports, value.data));
+    }
+    let keeper_before = lamports_of(&mut context, fixture.keeper.pubkey()).await;
+    let sink_root_before = lamports_of(&mut context, sink_address()).await;
+    let root_close = send(&mut context, &[fixture.close_epoch(&retained)], None, 376).await;
+    assert_eq!(custom(root_close.0), ClutchError::NotYetImplemented as u32);
+    for (address, lamports, data) in &root_before {
+        let after = account(&mut context, *address).await.unwrap();
+        assert_eq!(after.lamports, *lamports);
+        assert_eq!(after.data, *data);
+    }
+    assert_eq!(
+        lamports_of(&mut context, fixture.keeper.pubkey()).await,
+        keeper_before
+    );
+    assert_eq!(
+        lamports_of(&mut context, sink_address()).await,
+        sink_root_before
+    );
+
+    // Keeping the canonical root PDAs occupied is the immediate replay guard.
+    let replay = send(
         &mut context,
-        fixture.close_epoch(&retained),
-        fixture.keeper.pubkey(),
-        owed,
-        376,
+        &[fixture.init_epoch()],
+        Some(&fixture.keeper),
+        377,
     )
     .await;
+    assert_eq!(custom(replay.0), ClutchError::AlreadyInitialized as u32);
 
-    // Every close path refuses its double: the accounts no longer exist, so
-    // each attempt dies on the vanished target's role.
+    // Every completed dependent close refuses its double because the target
+    // vanished. The root consistently returns its explicit fail-closed code.
     for (instruction, nonce) in [
         (fixture.close_page(&live_order), 392u32),
         (fixture.close_pot(), 393),
         (fixture.close_candidate(beta.id, false), 394),
         (fixture.close_clear_work(alpha.id, false), 395),
-        (fixture.close_epoch(&retained), 396),
         (
             fixture.close_reservation(res_a, fixture.owners[a].key.pubkey()),
             397,
@@ -2145,14 +2173,18 @@ async fn cleared_epoch_closes_to_the_declared_permanent_set() {
         let twice = send(&mut context, &[instruction], None, nonce).await;
         assert_eq!(custom(twice.0), ClutchError::WrongProgramOwner as u32);
     }
+    let root_again = send(&mut context, &[fixture.close_epoch(&retained)], None, 396).await;
+    assert_eq!(custom(root_again.0), ClutchError::NotYetImplemented as u32);
 
     /* ------------------------------------------------------------------ */
-    /* The residual is exactly the declared-permanent set.                 */
+    /* The residual is the declared permanent set plus the guarded root.   */
     /* ------------------------------------------------------------------ */
     for address in &machinery {
-        assert!(
-            account(&mut context, *address).await.is_none(),
-            "{address} is closed"
+        let should_remain = root.contains(address);
+        assert_eq!(
+            account(&mut context, *address).await.is_some(),
+            should_remain,
+            "{address} has the expected residual status"
         );
     }
     // The declared-permanent residual: the sealed batch-policy artifact.
@@ -2166,25 +2198,25 @@ async fn cleared_epoch_closes_to_the_declared_permanent_set() {
         .await
         .is_some());
 
-    // Conservation to the lamport: everything the machinery held is either
-    // reclaimed principal or measured burn — and the burn is exactly the two
-    // injected donations.
+    // Conservation to the lamport: the inventory is reclaimed principal,
+    // measured burn, or the exact root balance retained for replay safety.
     let burned = lamports_of(&mut context, sink_address()).await - sink_before;
-    assert_eq!(inventory, reclaimed + burned);
+    let root_residual: u64 = root_before.iter().map(|(_, lamports, _)| *lamports).sum();
+    assert_eq!(inventory, reclaimed + burned + root_residual);
     assert_eq!(burned, RESERVATION_DONATION + RECEIPT_DONATION);
 
     eprintln!(
         "TerminalClosure headline (CLEARED epoch): machinery held {inventory} lamports; \
          reclaimed {reclaimed} to the exact recorded payers; burned {burned} at the incinerator; \
-         residual (declared-permanent policy artifact) {residual}"
+         guarded root retains {root_residual}; declared-permanent policy artifact {residual}"
     );
 }
 
 /// The lapsed twin: freeze, no verified candidate, lapse — then release every
-/// reservation, close all machinery, and tolerate exactly the unregistered
-/// candidate the design says is unclosable.
+/// reservation and close every safe dependent while the root guards against
+/// replay around the unregistered candidate that cannot close.
 #[tokio::test]
-async fn lapsed_epoch_releases_and_closes_with_the_unregistered_residual() {
+async fn lapsed_epoch_closes_dependents_but_keeps_root_and_unregistered_candidate() {
     let (mut context, fixture) = start().await;
     let a = 0usize;
     let b = 1usize;
@@ -2223,7 +2255,8 @@ async fn lapsed_epoch_releases_and_closes_with_the_unregistered_residual() {
     context
         .warp_to_slot(FREEZE_DEADLINE + CANDIDATE_WINDOW_SLOTS)
         .unwrap();
-    let (result, _) = send(&mut context, &[fixture.finalize(&[gamma.id])], None, 160).await;
+    // Gamma was sealed but never verified and therefore is not retained.
+    let (result, _) = send(&mut context, &[fixture.finalize(&[])], None, 160).await;
     result.unwrap();
     let epoch_now =
         EpochAccount::decode(&bytes_of(&mut context, fixture.epoch_account).await).unwrap();
@@ -2288,8 +2321,9 @@ async fn lapsed_epoch_releases_and_closes_with_the_unregistered_residual() {
         ClutchError::WrongProgramOwner as u32
     );
 
-    // Page, reservation archives, and the root close in dependency order —
-    // the root tolerating exactly the unregistered registry member.
+    // Page and reservation archives close in dependency order. The unverified
+    // candidate was never admitted to the verified registry, which is exactly
+    // why the non-exhaustive root close must now refuse.
     let owed = recorded_principal(&mut context, fixture.ledger(fixture.page)).await;
     reclaimed += close_exact(
         &mut context,
@@ -2312,30 +2346,61 @@ async fn lapsed_epoch_releases_and_closes_with_the_unregistered_residual() {
         )
         .await;
     }
-    let owed = recorded_principal(&mut context, fixture.ledger(fixture.epoch_account)).await;
-    reclaimed += close_exact(
+    let root = [
+        fixture.epoch_account,
+        fixture.window_account,
+        fixture.ledger(fixture.epoch_account),
+    ];
+    let mut root_before = Vec::new();
+    for address in root {
+        let value = account(&mut context, address).await.unwrap();
+        root_before.push((address, value.lamports, value.data));
+    }
+    let keeper_before = lamports_of(&mut context, fixture.keeper.pubkey()).await;
+    let sink_root_before = lamports_of(&mut context, sink_address()).await;
+    let root_close = send(&mut context, &[fixture.close_epoch(&[])], None, 184).await;
+    assert_eq!(custom(root_close.0), ClutchError::NotYetImplemented as u32);
+    for (address, lamports, data) in &root_before {
+        let after = account(&mut context, *address).await.unwrap();
+        assert_eq!(after.lamports, *lamports);
+        assert_eq!(after.data, *data);
+    }
+    assert_eq!(
+        lamports_of(&mut context, fixture.keeper.pubkey()).await,
+        keeper_before
+    );
+    assert_eq!(
+        lamports_of(&mut context, sink_address()).await,
+        sink_root_before
+    );
+
+    let replay = send(
         &mut context,
-        fixture.close_epoch(&[gamma.id]),
-        fixture.keeper.pubkey(),
-        owed,
-        184,
+        &[fixture.init_epoch()],
+        Some(&fixture.keeper),
+        185,
     )
     .await;
+    assert_eq!(custom(replay.0), ClutchError::AlreadyInitialized as u32);
 
-    // The residual: the declared-permanent policy artifact, plus exactly the
-    // unregistered candidate pair the design records as unclosable.
+    // The residual: the replay-guard root plus exactly the unregistered
+    // candidate pair the design records as unclosable.
     for address in &machinery {
-        assert!(account(&mut context, *address).await.is_none());
+        assert_eq!(
+            account(&mut context, *address).await.is_some(),
+            root.contains(address)
+        );
     }
     assert!(account(&mut context, gamma.record).await.is_some());
     assert!(account(&mut context, gamma.feed).await.is_some());
     let burned = lamports_of(&mut context, sink_address()).await - sink_before;
-    assert_eq!(inventory, reclaimed + burned);
+    let root_residual: u64 = root_before.iter().map(|(_, lamports, _)| *lamports).sum();
+    assert_eq!(inventory, reclaimed + burned + root_residual);
     assert_eq!(burned, 0);
 
     eprintln!(
         "TerminalClosure headline (LAPSED epoch): machinery held {inventory} lamports; \
-         reclaimed {reclaimed}; burned {burned}; unregistered candidate pair stands at \
-         {stranded} lamports by design"
+         reclaimed {reclaimed}; burned {burned}; guarded root retains {root_residual}; \
+         unregistered candidate pair stands at {stranded} lamports by design"
     );
 }

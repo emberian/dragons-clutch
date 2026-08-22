@@ -114,10 +114,10 @@ use crate::instructions::genesis::{
 };
 use crate::seeds;
 use clutch_solana_layout::clearing::{
-    self, canonical_general_book_id, CandidateFeedHeader, ClearWorkGrowStage, EpochWindowAccount,
-    GeneralFundingLedgerV1, EPOCH_WINDOW_ACCOUNT_BYTES, FUNDING_COVERS_CANDIDATE_PAIR,
-    FUNDING_COVERS_CLEAR_WORK, FUNDING_COVERS_EPOCH_PAIR, FUNDING_COVERS_FINAL_POT,
-    FUNDING_COVERS_PAGE, FUNDING_COVERS_RECEIPT, GENERAL_FUNDING_LEDGER_BYTES,
+    self, canonical_general_book_id, CandidateFeedHeader, ClearWorkGrowStage,
+    GeneralFundingLedgerV1, FUNDING_COVERS_CANDIDATE_PAIR, FUNDING_COVERS_CLEAR_WORK,
+    FUNDING_COVERS_FINAL_POT, FUNDING_COVERS_PAGE, FUNDING_COVERS_RECEIPT,
+    GENERAL_FUNDING_LEDGER_BYTES,
 };
 use clutch_solana_layout::reservation::{
     RESERVATION_ACCOUNT_BYTES, RESERVATION_STATE_ACTIVE, RESERVATION_STATE_CONSUMED,
@@ -884,19 +884,17 @@ fn require_no_treasury_service(
     Ok(())
 }
 
-/// Close one owner's Position: economic zero, the grief rider, then the
-/// ratified lamport disposition.
+/// Refuse closing one owner's Position until the account plane can prove that
+/// no reservation still owns assets on its behalf.
 ///
-/// The Position family has **no creation-side funding ledger** — a Position is
-/// created by `market_init` for a market's founder and by the first `Endow`
-/// for everyone else, and neither writes one — so no payer is recorded and no
-/// principal is owed to anyone.  The ratified convention then pays nothing and
-/// burns the whole live balance at the frozen neutral sink, which is also the
-/// only disposition a public prefund permits: `PREFUND_SAFE_CREATION.md`
-/// records excess lamports on a created account as an *unowned donation*, and
-/// inventing an owner for one here would be exactly the refund this family
-/// refuses to fabricate elsewhere.  A Position funding ledger is the recorded
-/// residual that would make the principal payable.
+/// A seller's admitted Eggs move out of its Position and into a separately
+/// addressed ACTIVE reservation.  An all-in seller therefore has a locally
+/// economic-zero Position while still owning live assets through that
+/// reservation.  `ClosePosition` receives neither a canonical reservation
+/// census nor a persisted outstanding-reservation counter, so local zero is
+/// not an aggregate closure proof.  Until one of those proofs is part of the
+/// state transition, every otherwise-valid close refuses after authentication
+/// and before any lamport or byte mutation.
 #[inline(never)]
 pub(super) fn close_position(
     program_id: &Pubkey,
@@ -906,7 +904,7 @@ pub(super) fn close_position(
     intent_owner: &Hash32,
 ) -> Outcome<()> {
     require_count(accounts, CLOSE_POSITION_ACCOUNT_COUNT)?;
-    /* The Position's own disappearance is the replay guard. */
+    /* The still-disabled transition has only its canonical initial sequence. */
     require(sequence == 0, ClutchError::Replay)?;
     require_distinct(accounts)?;
     require_signer(&accounts[0])?;
@@ -963,11 +961,11 @@ pub(super) fn close_position(
     require_no_treasury_service(program_id, &accounts[3], realm, owner)?;
     require_sink(&accounts[4])?;
 
-    let observed = accounts[2].lamports();
-    drain(&accounts[2])?;
-    release_bytes(&accounts[2])?;
-    credit(&accounts[4], observed)?;
-    Ok(())
+    // Fail closed: local Position zero does not enumerate assets held by live
+    // reservation PDAs.  Reusing AggregateClosureMismatch is deliberate: the
+    // absent fact is the aggregate ownership closure proof, not authority or
+    // local canonicality.  Nothing above mutates any account.
+    Err(ClutchError::AggregateClosureMismatch.into())
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1375,115 +1373,25 @@ pub(super) fn close_general_clear_work(
 /* Tag 67 — CloseGeneralEpoch                                                */
 /* ------------------------------------------------------------------------ */
 
-/// Close the terminal epoch and its schedule window together — the root of
-/// the close DAG.
+/// Refuse closure of the terminal epoch/window root until its replacement
+/// protocol persists an exhaustive candidate count and a versioned tombstone.
 ///
-/// Admitted only after the pot and every page are absent and every candidate
-/// the window's registry records is closed **or unclosable by design** (its
-/// record stands but no funding ledger exists, so no close route will ever
-/// pay it out — tolerating exactly that state is what keeps an unregistered
-/// registry member from holding the epoch payer's principal hostage while a
-/// *closable* member still refuses the root).
+/// `EpochWindowAccount::retained` enumerates only verified candidates. A
+/// sealed-but-unverified candidate can therefore survive outside that registry;
+/// deleting the epoch and window would erase the only durable occupation of
+/// their canonical PDAs and let `InitEpoch` replay the same epoch index around
+/// the residual candidate. Dependency closes remain available, but the root
+/// must stay occupied until a format/version migration can prove exhaustive
+/// closure and leave a replay-resistant tombstone.
 #[inline(never)]
 pub(super) fn close_general_epoch(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    sequence: u64,
-    intent_market: &Hash32,
-    intent_epoch: &Hash32,
+    _program_id: &Pubkey,
+    _accounts: &[AccountInfo],
+    _sequence: u64,
+    _intent_market: &Hash32,
+    _intent_epoch: &Hash32,
 ) -> Outcome<()> {
-    require(
-        accounts.len() >= CLOSE_EPOCH_FIXED_ACCOUNT_COUNT,
-        ClutchError::AccountCount,
-    )?;
-    require(sequence == 0, ClutchError::Replay)?;
-    require_distinct(accounts)?;
-    /* The epoch is decoded through the same terminal load every close uses,
-     * but under a writable role: this is the one instruction that ends it. */
-    accounts::validate_state_role_lengths(program_id, &accounts[0], true, &[account_len::EPOCH])?;
-    let epoch = super::decode_epoch_boxed(&accounts[0].data.borrow())?;
-    require(
-        epoch.market == *intent_market && epoch.epoch == *intent_epoch,
-        ClutchError::MismatchedState,
-    )?;
-    require(
-        epoch.phase == EPOCH_PHASE_CLEARED || epoch.phase == EPOCH_PHASE_LAPSED,
-        ClutchError::NotActive,
-    )?;
-    require(
-        epoch.book == canonical_general_book_id(epoch.epoch),
-        ClutchError::MismatchedState,
-    )?;
-    expect_pda(
-        accounts[0].key,
-        seeds::epoch_pda(program_id, &epoch.market.bytes(), epoch.epoch_index),
-        Some(epoch.stored_bump),
-    )?;
-
-    accounts::validate_state_role_lengths(
-        program_id,
-        &accounts[1],
-        true,
-        &[EPOCH_WINDOW_ACCOUNT_BYTES],
-    )?;
-    let window = EpochWindowAccount::decode(&accounts[1].data.borrow())?;
-    require(
-        window.epoch == epoch.epoch
-            && window.market == epoch.market
-            && window.epoch_index == epoch.epoch_index,
-        ClutchError::MismatchedState,
-    )?;
-    expect_pda(
-        accounts[1].key,
-        seeds::epoch_window_pda(program_id, &epoch.market.bytes(), epoch.epoch_index),
-        Some(window.stored_bump),
-    )?;
-
-    // The enumerable dependents: pot, every page, and the retained registry.
-    let (pot_address, _) = seeds::pot_pda(program_id, &epoch.epoch.bytes());
-    require(*accounts[5].key == pot_address, ClutchError::WrongPda)?;
-    require_absent(&accounts[5])?;
-    let page_count = usize::from(epoch.page_count);
-    let retained = usize::from(window.retained_count);
-    require_count(
-        accounts,
-        CLOSE_EPOCH_FIXED_ACCOUNT_COUNT + page_count + (2 * retained),
-    )?;
-    require_pages_absent(
-        program_id,
-        &epoch,
-        &accounts[CLOSE_EPOCH_FIXED_ACCOUNT_COUNT..CLOSE_EPOCH_FIXED_ACCOUNT_COUNT + page_count],
-    )?;
-    let registry = &accounts[CLOSE_EPOCH_FIXED_ACCOUNT_COUNT + page_count..];
-    let epoch_bytes = epoch.epoch.bytes();
-    for (index, pair) in registry.chunks(2).enumerate() {
-        let candidate = window.retained[index];
-        let (record_address, _) =
-            seeds::candidate_pda(program_id, &epoch_bytes, &candidate.bytes());
-        require(*pair[0].key == record_address, ClutchError::WrongPda)?;
-        let (ledger_address, _) = seeds::general_funding_pda(program_id, &record_address);
-        require(*pair[1].key == ledger_address, ClutchError::WrongPda)?;
-        if *pair[0].owner == *program_id {
-            /* The record still stands.  With a funding ledger it is closable
-             * and must close first (the DAG refusal); without one it is
-             * unclosable by design and tolerated, exactly as documented. */
-            require_absent(&pair[1])?;
-        }
-    }
-
-    let ledger = read_funding_ledger(
-        program_id,
-        &accounts[2],
-        accounts[0].key,
-        FUNDING_COVERS_EPOCH_PAIR,
-    )?;
-    close_ledgered_group(
-        &[&accounts[0], &accounts[1]],
-        &accounts[2],
-        &ledger,
-        &accounts[3],
-        &accounts[4],
-    )
+    Err(ClutchError::NotYetImplemented.into())
 }
 
 /// Borrow one account's data mutably, or refuse.
