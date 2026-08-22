@@ -43,9 +43,11 @@ use clutch_solana_layout::Hash32;
 
 use crate::source_archive::{
     ArchivedObservationV1, SealedArchiveReceiptV1, SourceArchiveError, VerifiedSealedArchiveViewV1,
+    SOURCE_SPEC_ACCOUNT_V1_BYTES,
 };
 use crate::source_archive_v2::{
     ArchiveV2Error, SealedArchiveReceiptV2, VerifiedSealedArchiveViewV2,
+    SOURCE_SPEC_ACCOUNT_V2_BYTES,
 };
 
 /// Which source generation produced a page or a spec.
@@ -221,6 +223,155 @@ pub enum ArchiveJoinError {
     V1(SourceArchiveError),
     /// The v2 page reader refused.
     V2(ArchiveV2Error),
+    /// The presented SourceSpec account is neither generation's exact length.
+    ///
+    /// The generation is read from the account, not chosen by a caller, so a
+    /// length that names no generation is a refusal rather than a default.
+    UnknownGeneration,
+    /// The spec named a release this ELF does not carry.
+    ReleaseUnavailable,
+    /// The verified spec does not bind the feed the market's Terms name.
+    SpecBindingMismatch,
+}
+
+/// One runtime account presented to the generation-agnostic verifier.
+///
+/// Deliberately raw parts rather than either generation's view type: this
+/// module sits above both codecs and must not privilege one of them at its own
+/// boundary. Each arm below rewraps into its own generation's view, which is
+/// what re-runs that generation's metadata checks rather than trusting these
+/// fields.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceAccountBytesV1<'a> {
+    /// Address the runtime presented.
+    pub key: [u8; 32],
+    /// Owning program the runtime presented.
+    pub owner: [u8; 32],
+    /// Executable flag the runtime presented.
+    pub executable: bool,
+    /// Account body.
+    pub data: &'a [u8],
+}
+
+/// What one authenticated SourceSpec account fixes, generation aside.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedSourceSpecBindingV1 {
+    /// Which generation the account belongs to.
+    pub generation: SourceGeneration,
+    /// Canonical feed identity — itself domain-separated per generation.
+    pub feed: Hash32,
+    /// Canonical PDA bump stored by construction.
+    pub stored_bump: u8,
+}
+
+/// Authenticate one SourceSpec account and the sealed page it governs, at
+/// whichever generation the spec account actually is.
+///
+/// The generation comes from the spec account's exact length and from nothing
+/// else — not from instruction data, not from a caller-supplied version byte,
+/// not from the archive. Then the matching generation's verifier runs, and it
+/// is that verifier which pins the archive's account tag and page-commitment
+/// domain. So a v1 page can never satisfy a v2 spec and a v2 page can never
+/// satisfy a v1 spec: the cross pairings are refused by the page verifier
+/// before any binding is compared, not by a comparison that could be relaxed.
+///
+/// `expected_feed` is the market's own frozen Terms feed. It is checked here so
+/// that a spec of the *right* generation but the wrong feed is refused in the
+/// same breath, rather than surviving to a later window comparison.
+pub fn verify_recorded_sealed_source<'a>(
+    clutch_program: [u8; 32],
+    expected_spec_key: [u8; 32],
+    expected_spec_bump: u8,
+    spec: SourceAccountBytesV1<'a>,
+    expected_archive_key: [u8; 32],
+    archive: SourceAccountBytesV1<'a>,
+    expected_feed: Hash32,
+    window: WindowDomain,
+) -> Result<(VerifiedSourceSpecBindingV1, VerifiedSealedArchive<'a>), ArchiveJoinError> {
+    match spec.data.len() {
+        SOURCE_SPEC_ACCOUNT_V1_BYTES => {
+            let verified = crate::source_archive::verify_source_spec_account(
+                clutch_program,
+                expected_spec_key,
+                crate::source_archive::SourceSpecAccountViewV1::new(
+                    spec.key,
+                    spec.owner,
+                    spec.executable,
+                    spec.data,
+                ),
+            )
+            .map_err(ArchiveJoinError::V1)?;
+            if verified.feed() != expected_feed || verified.stored_bump() != expected_spec_bump {
+                return Err(ArchiveJoinError::SpecBindingMismatch);
+            }
+            let view = crate::source_archive::verify_recorded_sealed_archive_view(
+                clutch_program,
+                expected_archive_key,
+                crate::source_archive::ArchiveAccountViewV1::new(
+                    archive.key,
+                    archive.owner,
+                    archive.executable,
+                    archive.data,
+                ),
+                verified,
+                window,
+            )
+            .map_err(ArchiveJoinError::V1)?;
+            Ok((
+                VerifiedSourceSpecBindingV1 {
+                    generation: SourceGeneration::V1,
+                    feed: verified.feed(),
+                    stored_bump: verified.stored_bump(),
+                },
+                VerifiedSealedArchive::V1(view),
+            ))
+        }
+        SOURCE_SPEC_ACCOUNT_V2_BYTES => {
+            let verified = crate::source_archive_v2::verify_source_spec_v2_account(
+                clutch_program,
+                expected_spec_key,
+                crate::source_archive_v2::AccountViewV2::new(
+                    spec.key,
+                    spec.owner,
+                    spec.executable,
+                    spec.data,
+                ),
+            )
+            .map_err(ArchiveJoinError::V2)?;
+            if verified.feed() != expected_feed || verified.stored_bump() != expected_spec_bump {
+                return Err(ArchiveJoinError::SpecBindingMismatch);
+            }
+            /* The same closed registry the collateral boundary and the ingest
+             * routes ask.  A market whose release this ELF has retired cannot
+             * resolve from its pages either, which is the property that makes
+             * a registry flip reversible. */
+            let release = crate::source_identity::select_release(verified.spec())
+                .ok_or(ArchiveJoinError::ReleaseUnavailable)?;
+            let view = crate::source_archive_v2::verify_recorded_sealed_archive_v2_view(
+                clutch_program,
+                expected_archive_key,
+                crate::source_archive_v2::AccountViewV2::new(
+                    archive.key,
+                    archive.owner,
+                    archive.executable,
+                    archive.data,
+                ),
+                verified,
+                release,
+                window,
+            )
+            .map_err(ArchiveJoinError::V2)?;
+            Ok((
+                VerifiedSourceSpecBindingV1 {
+                    generation: SourceGeneration::V2,
+                    feed: verified.feed(),
+                    stored_bump: verified.stored_bump(),
+                },
+                VerifiedSealedArchive::V2(view),
+            ))
+        }
+        _ => Err(ArchiveJoinError::UnknownGeneration),
+    }
 }
 
 #[cfg(test)]

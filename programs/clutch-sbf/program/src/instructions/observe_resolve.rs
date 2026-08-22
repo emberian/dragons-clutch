@@ -227,9 +227,11 @@ use crate::error::{ClutchError, Refusal};
 use crate::native_window::{self, NativeWindowPreflightV1};
 use crate::seeds;
 use crate::source_archive::{
-    self, ArchiveAccountViewV1, SealedArchiveReceiptV1, SourceSpecAccountViewV1,
-    VerifiedSealedArchiveViewV1, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES, SOURCE_SPEC_ACCOUNT_V1_BYTES,
+    self, ArchiveAccountViewV1, SealedArchiveReceiptV1, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES,
+    SOURCE_SPEC_ACCOUNT_V1_BYTES,
 };
+use crate::source_archive_v2::SOURCE_SPEC_ACCOUNT_V2_BYTES;
+use crate::source_generation::{self, SourceAccountBytesV1, VerifiedSealedArchive};
 use crate::token;
 use clutch_accumulator::{
     CoveragePolicy, FeedIdentity, Grid, Observation, Summary, WindowAccumulator, WindowDomain,
@@ -499,16 +501,28 @@ const REDEEM_STATE_ROLES: [StateRole; 6] = [
     StateRole::writable(IX_SUPPLY, account_len::SUPPLY_LEDGER),
 ];
 
-/// Program-owned market-global roles of `Resolve`.
-const RESOLVE_STATE_ROLES: [StateRole; 7] = [
+/// Program-owned market-global roles of `Resolve` whose length is one number.
+///
+/// The SourceSpec account is deliberately absent: its length is what *names*
+/// the source generation, so it is authenticated by
+/// [`accounts::validate_state_role_lengths`] against the two admitted lengths
+/// instead. The archive page stays here because both generations are the same
+/// 2,560 bytes by construction — the geometry is shared, the tag is not.
+const RESOLVE_STATE_ROLES: [StateRole; 6] = [
     StateRole::writable(IX_RESOLVE_MARKET, account_len::MARKET),
     StateRole::read_only(IX_RESOLVE_HOARD, account_len::HOARD),
     StateRole::writable(IX_RESOLVE_KERNEL, KERNEL_ACCOUNT_LEN),
     StateRole::writable(IX_RESOLVE_SUPPLY, account_len::SUPPLY_LEDGER),
     StateRole::read_only(IX_RESOLVE_FEED, account_len::FEED),
-    StateRole::read_only(IX_RESOLVE_SOURCE_SPEC, SOURCE_SPEC_ACCOUNT_V1_BYTES),
     StateRole::read_only(IX_RESOLVE_SOURCE_ARCHIVE, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES),
 ];
+
+/// The two exact SourceSpec account lengths this program admits.
+///
+/// Not a range and not a minimum: each entry is one generation's whole account,
+/// and a length that is neither is refused before any byte is read.
+const ADMITTED_SOURCE_SPEC_LENGTHS: [usize; 2] =
+    [SOURCE_SPEC_ACCOUNT_V1_BYTES, SOURCE_SPEC_ACCOUNT_V2_BYTES];
 
 /// Program-owned roles of `FeedAdvance`.
 const ADVANCE_STATE_ROLES: [StateRole; 1] =
@@ -2994,6 +3008,12 @@ fn resolve_global(
     )?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &RESOLVE_STATE_ROLES)?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[IX_RESOLVE_SOURCE_SPEC],
+        false,
+        &ADMITTED_SOURCE_SPEC_LENGTHS,
+    )?;
     validate_open_roles(
         program_id,
         accounts,
@@ -3087,44 +3107,41 @@ fn resolve_global(
         source_archive_pda,
         None,
     )?;
+    /* The source generation is read from the presented SourceSpec account's
+     * own length, and both the spec address and the archive address were
+     * derived above from digest-bound Terms.  The generation's own verifier
+     * then pins its account tag and page-commitment domain, so a v1 page under
+     * a v2 spec — or the reverse — is refused by the page codec rather than by
+     * a binding comparison that could be loosened. */
     let source_spec_data = accounts[IX_RESOLVE_SOURCE_SPEC].data.borrow();
-    let verified_spec = source_archive::verify_source_spec_account(
+    let source_archive_data = accounts[IX_RESOLVE_SOURCE_ARCHIVE].data.borrow();
+    let (_spec_binding, verified_archive) = source_generation::verify_recorded_sealed_source(
         program_id.to_bytes(),
         source_spec_pda.0.to_bytes(),
-        SourceSpecAccountViewV1::new(
-            accounts[IX_RESOLVE_SOURCE_SPEC].key.to_bytes(),
-            accounts[IX_RESOLVE_SOURCE_SPEC].owner.to_bytes(),
-            accounts[IX_RESOLVE_SOURCE_SPEC].executable,
-            &source_spec_data,
-        ),
+        source_spec_pda.1,
+        SourceAccountBytesV1 {
+            key: accounts[IX_RESOLVE_SOURCE_SPEC].key.to_bytes(),
+            owner: accounts[IX_RESOLVE_SOURCE_SPEC].owner.to_bytes(),
+            executable: accounts[IX_RESOLVE_SOURCE_SPEC].executable,
+            data: &source_spec_data,
+        },
+        source_archive_pda.0.to_bytes(),
+        SourceAccountBytesV1 {
+            key: accounts[IX_RESOLVE_SOURCE_ARCHIVE].key.to_bytes(),
+            owner: accounts[IX_RESOLVE_SOURCE_ARCHIVE].owner.to_bytes(),
+            executable: accounts[IX_RESOLVE_SOURCE_ARCHIVE].executable,
+            data: &source_archive_data,
+        },
+        market.feed,
+        expected_window,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::ResolutionEvidenceUnavailable))?;
+    let archive_binding = verified_archive.binding();
     require(
-        verified_spec.feed() == market.feed && verified_spec.stored_bump() == source_spec_pda.1,
-        ClutchError::MismatchedState,
-    )?;
-    let source_archive_data = accounts[IX_RESOLVE_SOURCE_ARCHIVE].data.borrow();
-    let source_archive_view = ArchiveAccountViewV1::new(
-        accounts[IX_RESOLVE_SOURCE_ARCHIVE].key.to_bytes(),
-        accounts[IX_RESOLVE_SOURCE_ARCHIVE].owner.to_bytes(),
-        accounts[IX_RESOLVE_SOURCE_ARCHIVE].executable,
-        &source_archive_data,
-    );
-    let verified_archive: VerifiedSealedArchiveViewV1<'_> =
-        source_archive::verify_recorded_sealed_archive_view(
-            program_id.to_bytes(),
-            source_archive_pda.0.to_bytes(),
-            source_archive_view,
-            verified_spec,
-            expected_window,
-        )
-        .map_err(|_| Refusal::Adapter(ClutchError::ResolutionEvidenceUnavailable))?;
-    let archive_receipt = verified_archive.receipt();
-    require(
-        archive_receipt.feed() == market.feed
-            && archive_receipt.window() == expected_window_id
-            && archive_receipt.stored_bump() == source_archive_pda.1
-            && feed.cursor >= archive_receipt.sealed_feed_cursor(),
+        archive_binding.feed == market.feed
+            && archive_binding.window == expected_window_id
+            && archive_binding.stored_bump == source_archive_pda.1
+            && feed.cursor >= archive_binding.sealed_feed_cursor,
         ClutchError::MismatchedState,
     )?;
 
@@ -3150,15 +3167,31 @@ fn resolve_global(
     };
     let evidence = if let Some(bytes) = &buffer {
         let evidence = read_evidence_buffer(bytes)?;
-        if evidence.window_id != archive_receipt.window() {
+        if evidence.window_id != archive_binding.window {
             return Err(ReferenceError::ResolutionBindingMismatch.into());
         }
-        require_archive_projection(
-            archive_receipt,
-            source_archive_view,
-            evidence.window,
-            expected_window,
-        )?;
+        /* The caller-supplied window blob is a **V1-only** transport
+         * compatibility shape: it predates the pull profile, has no v2
+         * projection, and inventing one would mean writing a second reader for
+         * evidence the archive already commits.  A v2 page therefore resolves
+         * only through the occupation fold, which reads the page itself.  This
+         * is a named absence, not a silent one. */
+        match verified_archive {
+            VerifiedSealedArchive::V1(view) => require_archive_projection(
+                view.receipt(),
+                ArchiveAccountViewV1::new(
+                    accounts[IX_RESOLVE_SOURCE_ARCHIVE].key.to_bytes(),
+                    accounts[IX_RESOLVE_SOURCE_ARCHIVE].owner.to_bytes(),
+                    accounts[IX_RESOLVE_SOURCE_ARCHIVE].executable,
+                    &source_archive_data,
+                ),
+                evidence.window,
+                expected_window,
+            )?,
+            VerifiedSealedArchive::V2(_) => {
+                return Err(ReferenceError::ResolutionEvidenceUnavailable.into())
+            }
+        }
         Some(evidence)
     } else {
         None
@@ -3168,8 +3201,8 @@ fn resolve_global(
         terms: &terms_data,
         resolution: &resolution_data,
         window: evidence.map_or(&[], |value| value.window),
-        window_id: archive_receipt.window(),
-        feed_cursor: archive_receipt.sealed_feed_cursor(),
+        window_id: archive_binding.window,
+        feed_cursor: archive_binding.sealed_feed_cursor,
         resolved_slot: 0,
         terms_writable: accounts[IX_RESOLVE_TERMS].is_writable,
         resolution_writable: accounts[IX_RESOLVE_RESOLUTION].is_writable,
@@ -3282,6 +3315,12 @@ pub(crate) fn apply_resumable_occupation_candidate(
     )?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &RESOLVE_STATE_ROLES)?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[IX_RESOLVE_SOURCE_SPEC],
+        false,
+        &ADMITTED_SOURCE_SPEC_LENGTHS,
+    )?;
     validate_open_roles(
         program_id,
         accounts,
@@ -3490,7 +3529,7 @@ fn redeem_addresses(
 #[inline(never)]
 fn derive_occupation_candidate(
     terms_data: &[u8],
-    verified_archive: VerifiedSealedArchiveViewV1<'_>,
+    verified_archive: VerifiedSealedArchive<'_>,
 ) -> Gate<Box<NativeWindowPreflightV1>> {
     let mut terms = ZERO_TERMS;
     load_terms(terms_data, &mut terms)?;

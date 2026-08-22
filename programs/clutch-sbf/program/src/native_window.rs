@@ -40,8 +40,9 @@ use clutch_solana_reference::{
 
 use crate::source_archive::{
     self, ArchiveAccountViewV1, SealedArchiveReceiptV1, SourceArchiveError,
-    VerifiedSealedArchiveViewV1, SOURCE_ARCHIVE_MAX_RECORDS_V1,
+    SOURCE_ARCHIVE_MAX_RECORDS_V1,
 };
+use crate::source_generation::{ArchiveJoinError, SealedArchiveBindingV1, VerifiedSealedArchive};
 
 /// Maximum canonical buckets consumed by this SourceArchive V1 preflight.
 pub const NATIVE_WINDOW_MAX_BUCKETS_V1: usize = SOURCE_ARCHIVE_MAX_RECORDS_V1;
@@ -108,6 +109,12 @@ pub enum NativeWindowError {
     Accumulator(AccumulatorError),
     /// The sealed archive receipt could not read the exact committed record.
     Archive(SourceArchiveError),
+    /// The generation-agnostic page reader refused.
+    ///
+    /// Carried beside [`Self::Archive`] rather than folded into it: the v2
+    /// page has its own decoder vocabulary, and a fold that refuses should be
+    /// able to say which generation refused it.
+    ArchiveJoin(ArchiveJoinError),
     /// Occupation resolution is defined only for native degrees one through three.
     WrongBasisDegree,
     /// The Terms statistic is not either registered occupation identity.
@@ -143,6 +150,12 @@ impl From<AccumulatorError> for NativeWindowError {
 impl From<SourceArchiveError> for NativeWindowError {
     fn from(error: SourceArchiveError) -> Self {
         Self::Archive(error)
+    }
+}
+
+impl From<ArchiveJoinError> for NativeWindowError {
+    fn from(error: ArchiveJoinError) -> Self {
+        Self::ArchiveJoin(error)
     }
 }
 
@@ -318,52 +331,58 @@ pub fn preflight_sealed_archive(
     receipt: SealedArchiveReceiptV1,
     archive: ArchiveAccountViewV1<'_>,
 ) -> Result<NativeWindowPreflightV1, NativeWindowError> {
-    let (domain, finalization, span) = validate_archive_binding(terms, receipt)?;
+    let binding = SealedArchiveBindingV1::from_v1(receipt);
+    let (domain, finalization, span) = validate_archive_binding(terms, binding)?;
     let summary = summarize_archive(domain, receipt, archive, span)?;
-    finalize_preflight(terms, receipt, finalization, summary)
+    finalize_preflight(terms, binding, finalization, summary)
 }
 
-/// Replay a lifetime-bound, once-verified sealed SourceArchive V1 into an
-/// occupation payout candidate.
+/// Replay a lifetime-bound, once-verified sealed source page into an
+/// occupation payout candidate — of **either** source generation.
 ///
 /// This is the production fold seam.  The archive capability's private
 /// constructor has already checked the complete account, release, lineage,
 /// seal, and page commitment, and its immutable borrow prevents page mutation
 /// during this fold.  Each indexed read therefore checks only its bounded
 /// record index; it does not rehash the 2,560-byte page for every bucket.
+///
+/// Both generations reach this one fold because the v2 page's geometry is the
+/// V1 page's, byte for byte.  What does *not* get averaged is the maturity
+/// rule: [`SealedArchiveBindingV1::window_has_matured`] answers it with the
+/// evidence the presented generation actually took.
 #[inline(never)]
 pub fn preflight_verified_archive(
     terms: &TermsAccount,
-    archive: VerifiedSealedArchiveViewV1<'_>,
+    archive: VerifiedSealedArchive<'_>,
 ) -> Result<NativeWindowPreflightV1, NativeWindowError> {
-    let receipt = archive.receipt();
-    let (domain, finalization, span) = validate_archive_binding(terms, receipt)?;
-    let summary = summarize_verified_archive(domain, receipt, archive, span)?;
-    finalize_preflight(terms, receipt, finalization, summary)
+    let binding = archive.binding();
+    let (domain, finalization, span) = validate_archive_binding(terms, binding)?;
+    let summary = summarize_verified_archive(domain, binding, archive, span)?;
+    finalize_preflight(terms, binding, finalization, summary)
 }
 
 #[inline(never)]
 fn validate_archive_binding(
     terms: &TermsAccount,
-    receipt: SealedArchiveReceiptV1,
+    binding: SealedArchiveBindingV1,
 ) -> Result<(BasisDomain, NativeWindowFinalizationV1, u64), NativeWindowError> {
     let domain = occupation_domain(terms)?;
     let finalization = NativeWindowFinalizationV1::from_statistic(terms.statistic_id)?;
     let expected_window = occupation_window(terms)?;
     let expected_window_id = source_archive::canonical_window_id(expected_window);
-    if receipt.feed() != terms.feed
-        || receipt.window() != expected_window_id
-        || receipt.start_bucket() != terms.expected_start_bucket
-        || receipt.end_bucket_exclusive() != terms.expected_end_bucket_exclusive
-        || receipt.sealed_feed_cursor() < expected_window.maturity_bucket_exclusive()
-        || receipt.page_commitment() == Hash32::ZERO
+    if binding.feed != terms.feed
+        || binding.window != expected_window_id
+        || binding.start_bucket != terms.expected_start_bucket
+        || binding.end_bucket_exclusive != terms.expected_end_bucket_exclusive
+        || !binding.window_has_matured(expected_window)
+        || binding.page_commitment == Hash32::ZERO
     {
         return Err(NativeWindowError::ArchiveBindingMismatch);
     }
 
-    let span = receipt
-        .end_bucket_exclusive()
-        .checked_sub(receipt.start_bucket())
+    let span = binding
+        .end_bucket_exclusive
+        .checked_sub(binding.start_bucket)
         .ok_or(NativeWindowError::ArchiveBindingMismatch)?;
     if span == 0 || span > NATIVE_WINDOW_MAX_BUCKETS_V1 as u64 {
         return Err(NativeWindowError::WindowTooLarge);
@@ -374,7 +393,7 @@ fn validate_archive_binding(
 #[inline(never)]
 fn finalize_preflight(
     terms: &TermsAccount,
-    receipt: SealedArchiveReceiptV1,
+    binding: SealedArchiveBindingV1,
     finalization: NativeWindowFinalizationV1,
     summary: Summary,
 ) -> Result<NativeWindowPreflightV1, NativeWindowError> {
@@ -383,13 +402,13 @@ fn finalize_preflight(
     Ok(NativeWindowPreflightV1 {
         terms: terms.terms,
         feed: terms.feed,
-        window: receipt.window(),
-        archive_commitment: receipt.page_commitment(),
+        window: binding.window,
+        archive_commitment: binding.page_commitment,
         statistic: terms.statistic_id,
         finalization,
         start_bucket: summary.start_bucket(),
         end_bucket_exclusive: summary.end_bucket_exclusive(),
-        sealed_feed_cursor: receipt.sealed_feed_cursor(),
+        sealed_feed_cursor: binding.sealed_feed_cursor,
         repair_generation: terms.repair_generation,
         sample_count: summary.sample_count(),
         coverage_count: summary.coverage_count(),
@@ -439,8 +458,8 @@ fn summarize_archive(
 #[inline(never)]
 fn summarize_verified_archive(
     domain: BasisDomain,
-    receipt: SealedArchiveReceiptV1,
-    archive: VerifiedSealedArchiveViewV1<'_>,
+    binding: SealedArchiveBindingV1,
+    archive: VerifiedSealedArchive<'_>,
     span: u64,
 ) -> Result<Summary, NativeWindowError> {
     let mut summary = SequentialSummaryBuilder::new(domain)?;
@@ -449,8 +468,8 @@ fn summarize_verified_archive(
         let archived = archive.archived_observation(
             usize::try_from(index).map_err(|_| NativeWindowError::WindowTooLarge)?,
         )?;
-        let expected_bucket = receipt
-            .start_bucket()
+        let expected_bucket = binding
+            .start_bucket
             .checked_add(index)
             .ok_or(NativeWindowError::NonCanonicalBucket)?;
         if archived.bucket != expected_bucket {

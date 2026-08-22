@@ -15,9 +15,12 @@ use crate::native_window::{
     STAT_QUANTIZED_BASIS_OCCUPATION_LARGEST_REMAINDER_07,
 };
 use crate::source_archive::{
-    ArchiveAccountViewV1, SourceArchiveError, SourceSpecAccountViewV1, VerifiedSealedArchiveViewV1,
-    WindowDomain, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES, SOURCE_ARCHIVE_MAX_RECORDS_V1,
-    SOURCE_SPEC_ACCOUNT_V1_BYTES,
+    SourceArchiveError, WindowDomain, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES,
+    SOURCE_ARCHIVE_MAX_RECORDS_V1, SOURCE_SPEC_ACCOUNT_V1_BYTES,
+};
+use crate::source_archive_v2::SOURCE_SPEC_ACCOUNT_V2_BYTES;
+use crate::source_generation::{
+    self, ArchiveJoinError, SourceAccountBytesV1, VerifiedSealedArchive,
 };
 use crate::{seeds, source_archive as archive};
 use clutch_bspline::{BasisSpec, EdgePolicy, MAX_KNOTS};
@@ -137,18 +140,26 @@ const IX_ABORT_CLOCK: usize = 7;
 // 10..10+n. Payer/Work/Reserve/Incinerator/Clock follow that dynamic prefix.
 const FINALIZE_MONOLITHIC_PREFIX: usize = 10;
 
-const BEGIN_STATE_ROLES: [StateRole; 5] = [
+/// The two exact SourceSpec account lengths this program admits.
+///
+/// The SourceSpec is the one role in these planes whose length is not a single
+/// number, because the length is what *names* the source generation. Both
+/// entries are one generation's whole account; anything else is refused before
+/// a byte is read. The archive page stays in the fixed-length arrays because
+/// both generations are 2,560 bytes by construction.
+const ADMITTED_SOURCE_SPEC_LENGTHS: [usize; 2] =
+    [SOURCE_SPEC_ACCOUNT_V1_BYTES, SOURCE_SPEC_ACCOUNT_V2_BYTES];
+
+const BEGIN_STATE_ROLES: [StateRole; 4] = [
     StateRole::read_only(IX_BEGIN_MARKET, account_len::MARKET),
     StateRole::read_only(IX_BEGIN_TERMS, account_len::TERMS),
     StateRole::read_only(IX_BEGIN_RESOLUTION, OCCUPATION_RESOLUTION_LEN),
-    StateRole::read_only(IX_BEGIN_SOURCE_SPEC, SOURCE_SPEC_ACCOUNT_V1_BYTES),
     StateRole::read_only(IX_BEGIN_SOURCE_ARCHIVE, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES),
 ];
 
-const FOLD_STATE_ROLES: [StateRole; 6] = [
+const FOLD_STATE_ROLES: [StateRole; 5] = [
     StateRole::read_only(IX_FOLD_MARKET, account_len::MARKET),
     StateRole::read_only(IX_FOLD_TERMS, account_len::TERMS),
-    StateRole::read_only(IX_FOLD_SOURCE_SPEC, SOURCE_SPEC_ACCOUNT_V1_BYTES),
     StateRole::read_only(IX_FOLD_SOURCE_ARCHIVE, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES),
     StateRole::writable(IX_FOLD_WORK, RESOLUTION_WORK_ACCOUNT_BYTES),
     StateRole::writable(IX_FOLD_RESERVE, 0),
@@ -177,6 +188,13 @@ pub enum ResolutionWorkError {
     Accumulator(AccumulatorError),
     /// The already-verified archive refused a bounded indexed read.
     Archive(SourceArchiveError),
+    /// The generation-agnostic source join refused the spec/page pairing.
+    ///
+    /// Distinct from [`Self::Archive`] because it also carries the v2 page's
+    /// vocabulary and the two refusals that belong to the join itself: a spec
+    /// account of neither generation's length, and a spec naming a release this
+    /// ELF does not carry.
+    ArchiveJoin(ArchiveJoinError),
     /// A market, Terms, basis, source, archive, grid, or version binding differs.
     BindingMismatch,
     /// Fold did not begin at the one exact next cursor.
@@ -224,6 +242,12 @@ impl From<AccumulatorError> for ResolutionWorkError {
 impl From<SourceArchiveError> for ResolutionWorkError {
     fn from(error: SourceArchiveError) -> Self {
         Self::Archive(error)
+    }
+}
+
+impl From<ArchiveJoinError> for ResolutionWorkError {
+    fn from(error: ArchiveJoinError) -> Self {
+        Self::ArchiveJoin(error)
     }
 }
 
@@ -457,6 +481,12 @@ fn begin(
     )?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &BEGIN_STATE_ROLES)?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[IX_BEGIN_SOURCE_SPEC],
+        false,
+        &ADMITTED_SOURCE_SPEC_LENGTHS,
+    )?;
     require_system_program(&accounts[IX_BEGIN_SYSTEM])?;
     let rent = read_rent(&accounts[IX_BEGIN_RENT])?;
     let slot = read_clock_slot(&accounts[IX_BEGIN_CLOCK])?;
@@ -581,32 +611,25 @@ fn initialize_begin_work(
         None,
     )?;
     let source_spec_data = accounts[IX_BEGIN_SOURCE_SPEC].data.borrow();
-    let verified_spec = archive::verify_source_spec_account(
+    let source_archive_data = accounts[IX_BEGIN_SOURCE_ARCHIVE].data.borrow();
+    let (_spec_binding, verified_archive) = source_generation::verify_recorded_sealed_source(
         program_id.to_bytes(),
         source_spec_pda.0.to_bytes(),
-        SourceSpecAccountViewV1::new(
-            accounts[IX_BEGIN_SOURCE_SPEC].key.to_bytes(),
-            accounts[IX_BEGIN_SOURCE_SPEC].owner.to_bytes(),
-            accounts[IX_BEGIN_SOURCE_SPEC].executable,
-            &source_spec_data,
-        ),
-    )
-    .map_err(ResolutionWorkError::from)?;
-    require(
-        verified_spec.stored_bump() == source_spec_pda.1,
-        ClutchError::WrongBump,
-    )?;
-    let source_archive_data = accounts[IX_BEGIN_SOURCE_ARCHIVE].data.borrow();
-    let verified_archive = archive::verify_recorded_sealed_archive_view(
-        program_id.to_bytes(),
+        source_spec_pda.1,
+        SourceAccountBytesV1 {
+            key: accounts[IX_BEGIN_SOURCE_SPEC].key.to_bytes(),
+            owner: accounts[IX_BEGIN_SOURCE_SPEC].owner.to_bytes(),
+            executable: accounts[IX_BEGIN_SOURCE_SPEC].executable,
+            data: &source_spec_data,
+        },
         source_archive_pda.0.to_bytes(),
-        ArchiveAccountViewV1::new(
-            accounts[IX_BEGIN_SOURCE_ARCHIVE].key.to_bytes(),
-            accounts[IX_BEGIN_SOURCE_ARCHIVE].owner.to_bytes(),
-            accounts[IX_BEGIN_SOURCE_ARCHIVE].executable,
-            &source_archive_data,
-        ),
-        verified_spec,
+        SourceAccountBytesV1 {
+            key: accounts[IX_BEGIN_SOURCE_ARCHIVE].key.to_bytes(),
+            owner: accounts[IX_BEGIN_SOURCE_ARCHIVE].owner.to_bytes(),
+            executable: accounts[IX_BEGIN_SOURCE_ARCHIVE].executable,
+            data: &source_archive_data,
+        },
+        Hash32::from_bytes(terms.feed),
         terms.window,
     )
     .map_err(ResolutionWorkError::from)?;
@@ -665,7 +688,7 @@ fn write_begin_work(
     account: &AccountInfo,
     bindings: BeginBindingsV1,
     terms: WorkTermsV1,
-    archive: VerifiedSealedArchiveViewV1<'_>,
+    archive: VerifiedSealedArchive<'_>,
 ) -> Outcome<()> {
     let work = begin_state_projected(bindings, terms, archive)?;
     work.encode(
@@ -882,6 +905,12 @@ fn fold(
     )?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &FOLD_STATE_ROLES)?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[IX_FOLD_SOURCE_SPEC],
+        false,
+        &ADMITTED_SOURCE_SPEC_LENGTHS,
+    )?;
     let slot = read_clock_slot(&accounts[IX_FOLD_CLOCK])?;
 
     let market = accounts::read_market(&accounts[IX_FOLD_MARKET].data.borrow())?;
@@ -906,32 +935,25 @@ fn fold(
         None,
     )?;
     let source_spec_data = accounts[IX_FOLD_SOURCE_SPEC].data.borrow();
-    let verified_spec = archive::verify_source_spec_account(
+    let source_archive_data = accounts[IX_FOLD_SOURCE_ARCHIVE].data.borrow();
+    let (_spec_binding, verified_archive) = source_generation::verify_recorded_sealed_source(
         program_id.to_bytes(),
         source_spec_pda.0.to_bytes(),
-        SourceSpecAccountViewV1::new(
-            accounts[IX_FOLD_SOURCE_SPEC].key.to_bytes(),
-            accounts[IX_FOLD_SOURCE_SPEC].owner.to_bytes(),
-            accounts[IX_FOLD_SOURCE_SPEC].executable,
-            &source_spec_data,
-        ),
-    )
-    .map_err(ResolutionWorkError::from)?;
-    require(
-        verified_spec.stored_bump() == source_spec_pda.1,
-        ClutchError::WrongBump,
-    )?;
-    let source_archive_data = accounts[IX_FOLD_SOURCE_ARCHIVE].data.borrow();
-    let verified_archive = archive::verify_recorded_sealed_archive_view(
-        program_id.to_bytes(),
+        source_spec_pda.1,
+        SourceAccountBytesV1 {
+            key: accounts[IX_FOLD_SOURCE_SPEC].key.to_bytes(),
+            owner: accounts[IX_FOLD_SOURCE_SPEC].owner.to_bytes(),
+            executable: accounts[IX_FOLD_SOURCE_SPEC].executable,
+            data: &source_spec_data,
+        },
         source_archive_pda.0.to_bytes(),
-        ArchiveAccountViewV1::new(
-            accounts[IX_FOLD_SOURCE_ARCHIVE].key.to_bytes(),
-            accounts[IX_FOLD_SOURCE_ARCHIVE].owner.to_bytes(),
-            accounts[IX_FOLD_SOURCE_ARCHIVE].executable,
-            &source_archive_data,
-        ),
-        verified_spec,
+        SourceAccountBytesV1 {
+            key: accounts[IX_FOLD_SOURCE_ARCHIVE].key.to_bytes(),
+            owner: accounts[IX_FOLD_SOURCE_ARCHIVE].owner.to_bytes(),
+            executable: accounts[IX_FOLD_SOURCE_ARCHIVE].executable,
+            data: &source_archive_data,
+        },
+        Hash32::from_bytes(terms.feed),
         terms.window,
     )
     .map_err(ResolutionWorkError::from)?;
@@ -956,7 +978,7 @@ fn commit_fold(
     intent: FoldResolutionWorkV1,
     market: [u8; 32],
     terms: WorkTermsV1,
-    archive: VerifiedSealedArchiveViewV1<'_>,
+    archive: VerifiedSealedArchive<'_>,
     slot: u64,
 ) -> Outcome<()> {
     let work_data = accounts[IX_FOLD_WORK].data.borrow();
@@ -1389,32 +1411,25 @@ fn prepare_finalize_evidence(
     expect_pda(accounts[8].key, source_spec_pda, None)?;
     expect_pda(accounts[9].key, source_archive_pda, None)?;
     let source_spec_data = accounts[8].data.borrow();
-    let verified_spec = archive::verify_source_spec_account(
+    let source_archive_data = accounts[9].data.borrow();
+    let (_spec_binding, verified_archive) = source_generation::verify_recorded_sealed_source(
         program_id.to_bytes(),
         source_spec_pda.0.to_bytes(),
-        SourceSpecAccountViewV1::new(
-            accounts[8].key.to_bytes(),
-            accounts[8].owner.to_bytes(),
-            accounts[8].executable,
-            &source_spec_data,
-        ),
-    )
-    .map_err(ResolutionWorkError::from)?;
-    require(
-        verified_spec.stored_bump() == source_spec_pda.1,
-        ClutchError::WrongBump,
-    )?;
-    let source_archive_data = accounts[9].data.borrow();
-    let verified_archive = archive::verify_recorded_sealed_archive_view(
-        program_id.to_bytes(),
+        source_spec_pda.1,
+        SourceAccountBytesV1 {
+            key: accounts[8].key.to_bytes(),
+            owner: accounts[8].owner.to_bytes(),
+            executable: accounts[8].executable,
+            data: &source_spec_data,
+        },
         source_archive_pda.0.to_bytes(),
-        ArchiveAccountViewV1::new(
-            accounts[9].key.to_bytes(),
-            accounts[9].owner.to_bytes(),
-            accounts[9].executable,
-            &source_archive_data,
-        ),
-        verified_spec,
+        SourceAccountBytesV1 {
+            key: accounts[9].key.to_bytes(),
+            owner: accounts[9].owner.to_bytes(),
+            executable: accounts[9].executable,
+            data: &source_archive_data,
+        },
+        Hash32::from_bytes(terms.feed),
         terms.window,
     )
     .map_err(ResolutionWorkError::from)?;
@@ -1440,7 +1455,7 @@ fn prepare_finalize_work(
     intent: FinalizeResolutionWorkV1,
     market: accounts::MarketFacts,
     terms: WorkTermsV1,
-    archive: VerifiedSealedArchiveViewV1<'_>,
+    archive: VerifiedSealedArchive<'_>,
     payer_index: usize,
     work_index: usize,
     reserve_index: usize,
@@ -1516,7 +1531,7 @@ fn prepare_finalize_work(
 pub fn begin_state(
     bindings: BeginBindingsV1,
     terms: &TermsAccount,
-    archive: VerifiedSealedArchiveViewV1<'_>,
+    archive: VerifiedSealedArchive<'_>,
 ) -> Result<ResolutionWorkAccountV1> {
     begin_state_projected(bindings, project_work_terms(terms)?, archive)
 }
@@ -1525,7 +1540,7 @@ pub fn begin_state(
 fn begin_state_projected(
     bindings: BeginBindingsV1,
     terms: WorkTermsV1,
-    archive: VerifiedSealedArchiveViewV1<'_>,
+    archive: VerifiedSealedArchive<'_>,
 ) -> Result<ResolutionWorkAccountV1> {
     let lifetime = bindings
         .expires_slot
@@ -1536,19 +1551,19 @@ fn begin_state_projected(
     {
         return Err(ResolutionWorkError::InvalidSlot);
     }
-    let receipt = archive.receipt();
+    let receipt = archive.binding();
     let span = receipt
-        .end_bucket_exclusive()
-        .checked_sub(receipt.start_bucket())
+        .end_bucket_exclusive
+        .checked_sub(receipt.start_bucket)
         .ok_or(ResolutionWorkError::BindingMismatch)?;
     let record_count = u8::try_from(span).map_err(|_| ResolutionWorkError::InvalidChunk)?;
     if record_count == 0 || usize::from(record_count) > SOURCE_ARCHIVE_MAX_RECORDS_V1 {
         return Err(ResolutionWorkError::InvalidChunk);
     }
-    if receipt.feed().bytes() != terms.feed
-        || receipt.start_bucket() != terms.window.start_bucket()
-        || receipt.end_bucket_exclusive() != terms.window.end_bucket_exclusive()
-        || receipt.repair_generation() != terms.window.generation()
+    if receipt.feed.bytes() != terms.feed
+        || receipt.start_bucket != terms.window.start_bucket()
+        || receipt.end_bucket_exclusive != terms.window.end_bucket_exclusive()
+        || receipt.repair_generation != terms.window.generation()
     {
         return Err(ResolutionWorkError::BindingMismatch);
     }
@@ -1565,12 +1580,12 @@ fn begin_state_projected(
         &bindings,
         terms.terms_digest,
         terms.feed,
-        receipt.archive_key(),
-        receipt.page_commitment().bytes(),
-        receipt.window().bytes(),
-        receipt.repair_generation(),
-        receipt.start_bucket(),
-        receipt.end_bucket_exclusive(),
+        receipt.archive_key,
+        receipt.page_commitment.bytes(),
+        receipt.window.bytes(),
+        receipt.repair_generation,
+        receipt.start_bucket,
+        receipt.end_bucket_exclusive,
     );
     let prepaid_remaining = bindings
         .deposited
@@ -1586,21 +1601,21 @@ fn begin_state_projected(
         terms_digest: terms.terms_digest,
         resolution_target: bindings.resolution_target,
         program_owner: bindings.program_owner,
-        archive_account: receipt.archive_key(),
+        archive_account: receipt.archive_key,
         basis_spec_digest: bindings.basis_spec_digest,
         source_spec_digest: terms.feed,
-        archive_commitment: receipt.page_commitment().bytes(),
-        archive_domain_digest: receipt.window().bytes(),
+        archive_commitment: receipt.page_commitment.bytes(),
+        archive_domain_digest: receipt.window.bytes(),
         grid_identity: terms.domain.grid_identity(),
         basis_spec_artifact,
-        archive_generation: receipt.repair_generation(),
+        archive_generation: receipt.repair_generation,
         bucket_duration: terms.domain.bucket_duration(),
-        start_bucket: receipt.start_bucket(),
-        end_bucket_exclusive: receipt.end_bucket_exclusive(),
+        start_bucket: receipt.start_bucket,
+        end_bucket_exclusive: receipt.end_bucket_exclusive,
         opened_slot: bindings.opened_slot,
         expires_slot: bindings.expires_slot,
         last_progress_slot: bindings.opened_slot,
-        next_bucket: receipt.start_bucket(),
+        next_bucket: receipt.start_bucket,
         fold_count: 0,
         completion_slot: 0,
         sample_count: 0,
@@ -1638,7 +1653,7 @@ pub fn fold_state(
     mut work: ResolutionWorkAccountV1,
     guards: FoldGuardsV1,
     terms: &TermsAccount,
-    archive: VerifiedSealedArchiveViewV1<'_>,
+    archive: VerifiedSealedArchive<'_>,
     current_slot: u64,
 ) -> Result<FoldTransitionV1> {
     let projected = project_work_terms(terms)?;
@@ -1658,7 +1673,7 @@ fn fold_state_in_place(
     work: &mut ResolutionWorkAccountV1,
     guards: FoldGuardsV1,
     terms: WorkTermsV1,
-    archive: VerifiedSealedArchiveViewV1<'_>,
+    archive: VerifiedSealedArchive<'_>,
     current_slot: u64,
 ) -> Result<(u64, u64)> {
     work.validate()?;
@@ -1706,7 +1721,7 @@ fn fold_state_in_place(
         work.masses,
     )?;
     let mut accumulator = SequentialSummaryBuilder::resume(restored)?;
-    let receipt = archive.receipt();
+    let receipt = archive.binding();
     let mut offset = 0_u64;
     while offset < u64::from(guards.record_count) {
         let bucket = work
@@ -1725,7 +1740,7 @@ fn fold_state_in_place(
         accumulator.append_accepted(bucket, observation.low)?;
         offset += 1;
     }
-    if receipt.page_commitment().bytes() != work.archive_commitment {
+    if receipt.page_commitment.bytes() != work.archive_commitment {
         return Err(ResolutionWorkError::BindingMismatch);
     }
     let summary = accumulator.finish();
@@ -1757,7 +1772,7 @@ fn fold_state_in_place(
 pub fn finalize_state(
     work: ResolutionWorkAccountV1,
     terms: &TermsAccount,
-    archive: VerifiedSealedArchiveViewV1<'_>,
+    archive: VerifiedSealedArchive<'_>,
     expected_cursor: u64,
     expected_archive_commitment: [u8; 32],
     current_slot: u64,
@@ -1778,7 +1793,7 @@ pub fn finalize_state(
 fn finalize_state_projected(
     work: &ResolutionWorkAccountV1,
     terms: WorkTermsV1,
-    archive: VerifiedSealedArchiveViewV1<'_>,
+    archive: VerifiedSealedArchive<'_>,
     expected_cursor: u64,
     expected_archive_commitment: [u8; 32],
     current_slot: u64,
@@ -1810,13 +1825,13 @@ fn finalize_state_projected(
         weights: finalized.weights(),
     };
     vector.validate_active(finalized.active_len(), finalized.denominator())?;
-    let receipt = archive.receipt();
+    let receipt = archive.binding();
     let resolution = OccupationResolutionAccount {
         market: Hash32::from_bytes(work.market),
         terms: Hash32::from_bytes(work.terms_digest),
         feed: Hash32::from_bytes(work.source_spec_digest),
         window: Hash32::from_bytes(work.archive_domain_digest),
-        feed_cursor: receipt.sealed_feed_cursor(),
+        feed_cursor: receipt.sealed_feed_cursor,
         sealed_end_bucket_exclusive: work.end_bucket_exclusive,
         repair_generation: work.archive_generation,
         // Monolithic v4 defines this logical evidence slot as zero. Work may
@@ -1942,9 +1957,9 @@ fn abort_state_projected(
 fn validate_static_bindings_projected(
     work: &ResolutionWorkAccountV1,
     terms: WorkTermsV1,
-    archive: VerifiedSealedArchiveViewV1<'_>,
+    archive: VerifiedSealedArchive<'_>,
 ) -> Result<()> {
-    let receipt = archive.receipt();
+    let receipt = archive.binding();
     validate_work_commitment_projected(work, terms)?;
     if work.terms_digest != terms.terms_digest
         || work.source_spec_digest != terms.feed
@@ -1956,12 +1971,12 @@ fn validate_static_bindings_projected(
         || work.outcome_count != terms.domain.spec().outcome_count
         || work.denominator != terms.domain.spec().denominator
         || work.finalization_mode != terms.finalization_mode
-        || work.archive_account != receipt.archive_key()
-        || work.archive_commitment != receipt.page_commitment().bytes()
-        || work.archive_domain_digest != receipt.window().bytes()
-        || work.archive_generation != receipt.repair_generation()
-        || work.start_bucket != receipt.start_bucket()
-        || work.end_bucket_exclusive != receipt.end_bucket_exclusive()
+        || work.archive_account != receipt.archive_key
+        || work.archive_commitment != receipt.page_commitment.bytes()
+        || work.archive_domain_digest != receipt.window.bytes()
+        || work.archive_generation != receipt.repair_generation
+        || work.start_bucket != receipt.start_bucket
+        || work.end_bucket_exclusive != receipt.end_bucket_exclusive
         || work.status != WORK_STATUS_ACTIVE
     {
         return Err(ResolutionWorkError::BindingMismatch);
@@ -2446,15 +2461,17 @@ mod tests {
         archive: &'a [u8; SOURCE_ARCHIVE_ACCOUNT_V1_BYTES],
         window: WindowDomain,
         key: [u8; 32],
-    ) -> VerifiedSealedArchiveViewV1<'a> {
-        verify_recorded_sealed_archive_view(
-            CLUTCH_PROGRAM,
-            key,
-            ArchiveAccountViewV1::new(key, CLUTCH_PROGRAM, false, archive),
-            verified_spec(spec_account),
-            window,
+    ) -> VerifiedSealedArchive<'a> {
+        VerifiedSealedArchive::V1(
+            verify_recorded_sealed_archive_view(
+                CLUTCH_PROGRAM,
+                key,
+                ArchiveAccountViewV1::new(key, CLUTCH_PROGRAM, false, archive),
+                verified_spec(spec_account),
+                window,
+            )
+            .unwrap(),
         )
-        .unwrap()
     }
 
     fn costs() -> ResolutionWorkCostScheduleV1 {

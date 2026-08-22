@@ -425,6 +425,12 @@ pub const fn resolution_work_code(error: ResolutionWorkError) -> u32 {
         ResolutionWorkError::Underfunded => 0x008b,
         ResolutionWorkError::AbortForbidden => 0x008c,
         ResolutionWorkError::ArithmeticOverflow => 0x008d,
+        /* The generation-agnostic source join is its own trust boundary: it
+         * decides which generation a spec account is, asks the closed registry,
+         * and pairs the page with it.  A refusal there is not the already
+         * verified archive refusing a read (0x0084), so it does not borrow that
+         * code. */
+        ResolutionWorkError::ArchiveJoin(_) => 0x008e,
     }
 }
 
