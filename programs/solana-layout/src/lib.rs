@@ -1571,6 +1571,20 @@ fn check_count(count: u8) -> Result<()> {
     }
 }
 
+fn check_create_market_fields(
+    realm: Hash32,
+    profile: Hash32,
+    outcome_count: u8,
+    terms: Hash32,
+    feed: Hash32,
+) -> Result<()> {
+    check_count(outcome_count)?;
+    check_hash(realm)?;
+    check_hash(profile)?;
+    check_hash(terms)?;
+    check_hash(feed)
+}
+
 fn check_header(input: &[u8], tag: u8, version: u8, len: usize) -> Result<()> {
     if input.len() < len {
         return Err(CodecError::Truncated);
@@ -5484,11 +5498,7 @@ impl Intent {
                 terms,
                 feed,
             } => {
-                check_count(*outcome_count)?;
-                check_hash(*realm)?;
-                check_hash(*profile)?;
-                check_hash(*terms)?;
-                check_hash(*feed)?;
+                check_create_market_fields(*realm, *profile, *outcome_count, *terms, *feed)?;
                 put_header(&mut w, CREATE_TAG, INTENT_VERSION)?;
                 w.hash(*realm)?;
                 w.hash(*profile)?;
@@ -6304,21 +6314,22 @@ impl Intent {
         let mut r = Reader::new(input, tag, INTENT_VERSION, input.len())?;
         match tag {
             CREATE_TAG => {
-                let v = Self::CreateMarket {
-                    realm: r.hash()?,
-                    profile: r.hash()?,
-                    market_nonce: r.u64()?,
-                    outcome_count: r.u8()?,
-                    terms: r.hash()?,
-                    feed: r.hash()?,
-                };
+                let realm = r.hash()?;
+                let profile = r.hash()?;
+                let market_nonce = r.u64()?;
+                let outcome_count = r.u8()?;
+                let terms = r.hash()?;
+                let feed = r.hash()?;
                 r.done()?;
-                let mut b = [0u8; MAX_INTENT_BYTES];
-                let n = v.encode(&mut b)?;
-                if n != input.len() {
-                    return Err(CodecError::TrailingBytes);
-                };
-                Ok(v)
+                check_create_market_fields(realm, profile, outcome_count, terms, feed)?;
+                Ok(Self::CreateMarket {
+                    realm,
+                    profile,
+                    market_nonce,
+                    outcome_count,
+                    terms,
+                    feed,
+                })
             }
             SPLIT_TAG | MERGE_TAG => {
                 let market = r.hash()?;
@@ -9821,6 +9832,108 @@ mod tests {
         assert_eq!(Intent::decode(&b[..n]), Ok(i));
         assert_eq!(Intent::decode(&b[..n - 1]), Err(CodecError::Truncated));
     }
+
+    #[test]
+    fn create_market_intent_wire_is_exact_and_hostile_complete() {
+        let intent = Intent::CreateMarket {
+            realm: h(1),
+            profile: h(2),
+            market_nonce: 0,
+            outcome_count: 2,
+            terms: h(3),
+            feed: h(4),
+        };
+        let mut bytes = [0u8; MAX_INTENT_BYTES];
+        let len = intent.encode(&mut bytes).unwrap();
+        assert_eq!(len, 139);
+        assert_eq!(len, intent.encoded_len());
+        assert_eq!(Intent::decode(&bytes[..len]), Ok(intent));
+        // A zero nonce is an admitted coordinate, not a zero identity.
+        assert!(matches!(
+            Intent::decode(&bytes[..len]),
+            Ok(Intent::CreateMarket {
+                market_nonce: 0,
+                ..
+            })
+        ));
+        assert_eq!(
+            Intent::decode(&bytes[..len - 1]),
+            Err(CodecError::Truncated)
+        );
+
+        let mut longer = [0u8; MAX_INTENT_BYTES + 1];
+        longer[..len].copy_from_slice(&bytes[..len]);
+        longer[len] = 0xa5;
+        assert_eq!(
+            Intent::decode(&longer[..len + 1]),
+            Err(CodecError::TrailingBytes)
+        );
+
+        for (label, start, end) in [
+            ("realm", 2usize, 34usize),
+            ("profile", 34, 66),
+            ("terms", 75, 107),
+            ("feed", 107, 139),
+        ] {
+            let mut hostile = bytes;
+            hostile[start..end].fill(0);
+            assert_eq!(
+                Intent::decode(&hostile[..len]),
+                Err(CodecError::ZeroIdentity),
+                "zero {label}"
+            );
+        }
+
+        for outcome_count in [0, 1, MAX_OUTCOMES as u8 + 1] {
+            let mut hostile = bytes;
+            hostile[74] = outcome_count;
+            assert_eq!(
+                Intent::decode(&hostile[..len]),
+                Err(CodecError::InvalidCount),
+                "outcome count {outcome_count}"
+            );
+        }
+        for outcome_count in [2, MAX_OUTCOMES as u8] {
+            let mut admitted = bytes;
+            admitted[74] = outcome_count;
+            assert!(matches!(
+                Intent::decode(&admitted[..len]),
+                Ok(Intent::CreateMarket {
+                    outcome_count: decoded,
+                    ..
+                }) if decoded == outcome_count
+            ));
+        }
+
+        // Semantic checks retain their encoder order after exact wire shape.
+        let mut two_semantic_errors = bytes;
+        two_semantic_errors[2..34].fill(0);
+        two_semantic_errors[74] = 1;
+        assert_eq!(
+            Intent::decode(&two_semantic_errors[..len]),
+            Err(CodecError::InvalidCount)
+        );
+        let hostile_value = Intent::CreateMarket {
+            realm: Hash32::ZERO,
+            profile: h(2),
+            market_nonce: 0,
+            outcome_count: 1,
+            terms: h(3),
+            feed: h(4),
+        };
+        assert_eq!(
+            hostile_value.encode(&mut bytes),
+            Err(CodecError::InvalidCount)
+        );
+
+        // Exact exhaustion remains ahead of semantic validation in the decoder.
+        longer[..len].copy_from_slice(&two_semantic_errors[..len]);
+        assert_eq!(
+            Intent::decode(&longer[..len + 1]),
+            Err(CodecError::TrailingBytes)
+        );
+    }
+
     #[test]
     fn terminal_closure_intents_round_trip_and_stay_tag_contiguous() {
         let market = h(1);
