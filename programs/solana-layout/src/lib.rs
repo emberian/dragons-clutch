@@ -4212,7 +4212,11 @@ impl SettlementReceiptAccount {
         if self.settled_quantity > self.quantity {
             return Err(CodecError::InvalidCount);
         }
-        if self.slice_index as usize >= MAX_EPOCH_ORDERS * 2 {
+        // Candidate feeds, the relation, receipt PDAs, and entitlement all use
+        // the same witness coordinate. Keep the receipt's admitted index set
+        // aligned with that one semantic owner rather than the older
+        // pre-portfolio `2 * orders` estimate.
+        if self.slice_index as usize >= MAX_SLICES {
             return Err(CodecError::InvalidCount);
         }
         // Two `u64` factors always fit a `u128` product, so exactness is the
@@ -7832,6 +7836,21 @@ mod tests {
         assert_eq!(ResolutionAccount::decode(&b), Ok(res));
         hostile_header(&b, ResolutionAccount::decode);
     }
+
+    #[test]
+    fn receipt_slice_index_uses_the_candidate_witness_bound() {
+        let mut last = receipt();
+        last.slice_index = (MAX_SLICES - 1) as u16;
+        let mut bytes = [0; account_len::SETTLEMENT_RECEIPT];
+        assert_eq!(last.encode(&mut bytes), Ok(account_len::SETTLEMENT_RECEIPT));
+        assert_eq!(SettlementReceiptAccount::decode(&bytes), Ok(last));
+
+        let mut outside = last;
+        outside.slice_index = MAX_SLICES as u16;
+        assert_eq!(outside.validate(), Err(CodecError::InvalidCount));
+        assert_eq!(outside.encode(&mut bytes), Err(CodecError::InvalidCount));
+    }
+
     #[test]
     fn hostile_lengths_and_padding_refuse() {
         let v = market();
