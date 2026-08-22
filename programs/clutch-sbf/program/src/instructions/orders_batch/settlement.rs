@@ -2328,6 +2328,53 @@ mod tests {
     }
 
     #[test]
+    fn the_closed_forms_mutants_are_killed_by_the_relations_own_dust_book() {
+        /* The book `relation_v1_tests.rs:439-457` verifies: two outcomes at
+         * scale 10 000, prices `[5000, 5000]`, two buys of two atoms filled
+         * one from a seller and one from the split, two sells of one atom
+         * each.  Its verified scalars are `sigma = 1`, `debit_atoms = 2`,
+         * `credit_atoms = 0`, `rounding_pot = 10 000`, and the V8 closure
+         * `(2 - 0) * 10 000 == sigma * 10 000 + 10 000` holds.
+         *
+         * Each row is `(debit, credit, residue)` for one consumed slice, in
+         * the order a keeper would run them: a direct crossing that completes
+         * its seller (round-down 5000), then that buyer's split slice, twice.
+         */
+        const SCALE: u128 = 10_000;
+        const SIGMA: u128 = 1;
+        let walk = [(1u64, 0u64, 5_000u128), (0, 0, 0), (1, 0, 5_000), (0, 0, 0)];
+
+        let mut truth = 0u128;
+        for (debit, credit, residue) in walk {
+            truth = pot_cash_after(truth, debit, credit, residue, SCALE).unwrap();
+        }
+        assert_eq!(truth, SIGMA * SCALE, "the closed form reaches sigma * S");
+
+        // Mutant 1: never subtract the realized residue.  The pot ends
+        // holding the rounding remainder as well as the split's backing, and
+        // would mint against atoms the payees were already denied.
+        let mut dropped = 0u128;
+        for (debit, _, _) in walk {
+            dropped += u128::from(debit) * SCALE;
+        }
+        assert_ne!(dropped, SIGMA * SCALE);
+
+        // Mutant 2: credit the residue instead of debiting it.
+        let mut flipped = 0u128;
+        for (debit, credit, residue) in walk {
+            flipped += u128::from(debit) * SCALE + residue - u128::from(credit) * SCALE;
+        }
+        assert_ne!(flipped, SIGMA * SCALE);
+
+        // Mutant 3: convert each slice's own consideration instead of the
+        // difference of cumulative conversions.  Every slice here is worth
+        // 5000 price units, half an atom, so the whole walk converts to zero
+        // and the pot never funds the mint at all.
+        let per_slice: u128 = walk.iter().map(|_| 5_000u128 / SCALE * SCALE).sum();
+        assert_ne!(per_slice, SIGMA * SCALE);
+    }
+
+    #[test]
     fn a_virtual_pay_moves_the_buy_end_alone_and_never_delivers() {
         let fixture = virtual_fixture();
         let plan = prepare_virtual_slice_consumption(&fixture.input()).unwrap();
