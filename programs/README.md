@@ -1,22 +1,25 @@
-# Planned Solana adapter
+# The Solana programs
 
-No Solana program exists yet. This directory is reserved for a minimal hostile-
-byte/account/CPI adapter over the exact Eggcrate semantics.
+(Rewritten 2026-08-22; the original 08-18 text predated the program and
+claimed none existed. `CURRENT_TRUTH.md` supersedes any status claim here.)
 
-It currently contains two offline prototypes, neither of which is an
-entrypoint, a deployable program, a CPI adapter, or a verified artifact:
+- `clutch-sbf/` — **the deployable SBF program**: the only `entrypoint!`,
+  the only workspace permitted Anza SDK dependencies. Its own tree holds
+  the real-bank test suites (`svm-tests/`, separate workspace and
+  toolchain pin), the fixture/transaction `harness/` (a library + thin
+  CLI; signs nothing), the loopback `operatord/` daemon behind
+  `apps/operator`, the permissionless `keeper/` cranker, the
+  committed-walk runner (`committed-harness/`), and the artifact audit
+  under `audit/`. Sealed identities live in
+  `research/liveness-policy-profile/artifacts/`.
+- `solana-layout/` — the dependency-free `no_std` byte codec the program
+  decodes through: every account format, the `Intent` wire (tags 1–73),
+  canonical padding, domain-separated identities. Live production
+  surface, not a prototype.
+- `solana-reference/` — the host-side differential oracle: a pure
+  adapter over the same codec used by host tests to predict exact
+  program behavior byte-for-byte. Never deployed; deliberately refuses
+  intents whose semantics only the SBF plane carries.
 
-- `solana-layout` — a standalone dependency-free `no_std` byte-codec
-  prototype (fixed record layouts, domain-separated identities, canonical
-  padding). It has no Solana SDK, `AccountInfo`, PDA derivation, or SBF
-  entrypoint.
-- `solana-reference` — a `no_std`, safe, allocator-free offline transition
-  adapter over the layout and kernel crates, exercised entirely in host tests.
-  `Resolve` and `RedeemInternal` refuse unconditionally; it has no Solana SDK,
-  `AccountInfo`, PDA derivation, SBF entrypoint, CPI, token program, RPC,
-  signing, or deployment behavior.
-
-The eventual adapter is not called verified. It must validate exact accounts, aliases,
-owners, signer/writable status, PDAs, generations, token profiles, clocks, source
-identity, and CPI construction. Local program-test work grants no devnet or
-mainnet deployment authority.
+Nothing here is a deployment, release, or audit claim; see the claim
+vocabulary in `CURRENT_TRUTH.md` §1.

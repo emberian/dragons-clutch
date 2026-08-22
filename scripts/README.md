@@ -39,7 +39,7 @@ signed committed-walk gate records 22 local signed transactions from an
 11-prerequisite genesis-assisted prestate; it is not blank-bank, deployment, or
 public-cluster evidence. The
 root Verus probe accepts only its intended exit 1; missing/off-pin/digest-drift
-setup exits are failures. `MANIFEST.baseline.json` is historical schema v1 and
+setup exits are failures. `MANIFEST.baseline.json` is schema v2 (101 executed gates) and
 cannot pass the v2 checker until a later clean v2 emission; this task must not
 edit it. A full `--run-gates` run is deliberately slow (potentially tens of
 cache-cold minutes, including bounded local SBF rebuilds), not a presubmit. See

@@ -1,7 +1,8 @@
 # Rust crates
 
-This directory contains four offline, dependency-free prototype crates, none
-of which is verified, deployed, or a released workspace:
+This directory contains six offline, dependency-free `no_std` crates
+(updated 2026-08-22; none is a deployment or release claim —
+`CURRENT_TRUTH.md` supersedes status language here):
 
 - `clutch-kernel` — pure `no_std` collateral-generic complete-claim transition
   kernel (split/merge, materialize/dematerialize, finite resolution, exact
@@ -13,9 +14,14 @@ of which is verified, deployed, or a released workspace:
 - `clutch-bspline` — pure `no_std` exact degree-zero through degree-three
   open-clamped payout-basis evaluator. It owns basis evaluation only; evidence
   authentication and account/runtime binding remain adapter obligations.
+- `clutch-bspline-accumulator` — joins the basis evaluator to the interval
+  accumulator for windowed smooth-claim evidence.
+- `clutch-liveness` — the host-side liveness/fee-carry kernels
+  (`IntentFeeCarry`, `TreasuryServiceLedger`) backing the liveness policy
+  profile and the revenue seams.
 
-Do not add another crate until its semantic owner, dependency direction, exact
-toolchain compatibility, and license/provenance are recorded.
+New crates record their semantic owner, dependency direction, toolchain
+compatibility, and license/provenance at introduction (each README does).
 
 Proposed boundaries are listed in [the engineering plan](../docs/ENGINEERING_PLAN.md).
 Eggcrate must remain `no_std`, `no_alloc`, safe Rust, fixed-layout, total, and free
