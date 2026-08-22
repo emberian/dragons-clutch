@@ -2,7 +2,7 @@
   "schema": "dragons-clutch/baseline-manifest/v2",
   "generator": {
     "path": "scripts/baseline_manifest.py",
-    "sha256": "e5bc1ec8607690d90bcba8715b610dcb6ff938d7209356763e0e8c08ad9696c0",
+    "sha256": "5cd00e7bf48392938fb63baf162b1b254b7563c2c56744bd27bfb60dafa40be5",
     "stdlib_only": true
   },
   "dirty": false,
@@ -10,15 +10,17 @@
     "paths": [
       "MANIFEST.baseline.json"
     ],
-    "observed": [],
+    "observed": [
+      " M MANIFEST.baseline.json"
+    ],
     "reason": "the manifest is this tool's own output; its git status cannot gate its regeneration. Nothing else is excluded from the dirtiness decision."
   },
   "baseline": {
     "content_identity": {
       "schema": "dragons-clutch/tracked-working-tree/v1",
       "algorithm": "sha256",
-      "sha256": "f88c31d1fbed0f17c1b84f61b103c57566a8eecd4ecaac6d65781a148f92bbfe",
-      "entry_count": 805,
+      "sha256": "6ab67c9fc1fa7a18cae346b71d596f64a3a95a682b2271db75500f18bc184be5",
+      "entry_count": 1011,
       "excluded_paths": [
         "MANIFEST.baseline.json"
       ],
@@ -28,9 +30,9 @@
       "rule": "enumerate stage-0 entries from `git ls-files --stage -z`, sort by raw path bytes, exclude only excluded_paths, and hash the schema tag followed by length-delimited (observed Git mode/type, kind, raw path, sha256(payload), payload length) records. Payload is working-tree bytes for regular files, link-target bytes for symlinks, and the index object id for gitlinks. Strict cleanliness makes this a complete identity of all checked-in gate/source bytes other than the generated manifest itself."
     },
     "provenance": {
-      "emitted_from_commit": "7e8b26c81aecae70d44e5ed6d7fa5a7f1aa69f24",
-      "emitted_from_tree_hash": "a713414be04e3b6715083bcf54bbca4dbc28de1d",
-      "commit_subject": "Track the workbench commit-review workflow",
+      "emitted_from_commit": "23d9059ae13ce2d715493a5ef5d97d0ae3d40d6f",
+      "emitted_from_tree_hash": "14fd9d17ec089c581016d5fd1cb2cf7c22c047e1",
+      "commit_subject": "Make the license gate record the evidence line it declares",
       "remotes": [
         {
           "name": "origin",
@@ -479,7 +481,7 @@
     {
       "id": "cargo_doc.solana_layout",
       "section": "current-baseline",
-      "command": "cargo doc --manifest-path programs/solana-layout/Cargo.toml --offline --locked --no-deps",
+      "command": "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path programs/solana-layout/Cargo.toml --offline --locked --no-deps",
       "cwd": ".",
       "shell": "/bin/sh -c",
       "expected": {
@@ -490,7 +492,7 @@
         "^error(\\[|:)",
         "^warning(\\[|:)"
       ],
-      "note": "documentation build; asserts nothing about content"
+      "note": "documentation build with rustdoc warnings denied; a broken or private intra-doc link fails the gate"
     },
     {
       "id": "cargo_doc.solana_reference",
@@ -511,7 +513,7 @@
     {
       "id": "cargo_doc.clutch_sbf",
       "section": "current-baseline",
-      "command": "cargo doc --manifest-path programs/clutch-sbf/Cargo.toml --offline --locked --no-deps",
+      "command": "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path programs/clutch-sbf/Cargo.toml --offline --locked --no-deps",
       "cwd": ".",
       "shell": "/bin/sh -c",
       "expected": {
@@ -522,7 +524,7 @@
         "^error(\\[|:)",
         "^warning(\\[|:)"
       ],
-      "note": "documentation build; asserts nothing about content"
+      "note": "documentation build with rustdoc warnings denied; a broken or private intra-doc link fails the gate"
     },
     {
       "id": "vertical_model.golden_basic_trace",
@@ -706,6 +708,22 @@
         "^warning(\\[|:)"
       ],
       "note": "strict lint for the bounded direct-selection host model"
+    },
+    {
+      "id": "cargo_doc.batch_policy_identity",
+      "section": "current-research",
+      "command": "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path research/batch-policy-identity/Cargo.toml --offline --locked --no-deps",
+      "cwd": ".",
+      "shell": "/bin/sh -c",
+      "expected": {
+        "mode": "zero",
+        "exit": 0
+      },
+      "key_patterns": [
+        "^error(\\[|:)",
+        "^warning(\\[|:)"
+      ],
+      "note": "documentation build with rustdoc warnings denied; a broken or private intra-doc link fails the gate. This crate had no doc gate at all, which is how six fresh warnings landed here unseen in the fee wave"
     },
     {
       "id": "cargo_test.bspline_shape_compiler",
@@ -940,7 +958,7 @@
         "^(OK|FAILED)\\b",
         "^(ERROR|FAIL): "
       ],
-      "note": "45 deterministic liveness-profile arithmetic, terminal, and sealed-evidence tracking tests; they do not promote a global liveness policy"
+      "note": "83 deterministic liveness-profile arithmetic, terminal, and sealed-evidence tracking tests; they do not promote a global liveness policy"
     },
     {
       "id": "python.liveness_policy_profile_current_seal",
@@ -955,7 +973,7 @@
       "key_patterns": [
         "^PASS: exact R1 artifact, bank capture, account probe, rewards, and STOPs agree$"
       ],
-      "note": "hashes the sealed 1,490,544-byte default ELF and 23 committed audit/build/bank files, rederives the profile, and refuses source drift; it does not rebuild SBF or establish global liveness"
+      "note": "hashes the sealed 2,149,672-byte default ELF and 62 committed audit/build/bank files, rederives the profile, and refuses source drift; it does not rebuild SBF or establish global liveness"
     },
     {
       "id": "python.dependency_license_unittest",
@@ -985,7 +1003,7 @@
         "exit": 0
       },
       "key_patterns": [
-        "^SUMMARY manifests=\\d+ unique_rows=\\d+ failures=0 status=PASS$"
+        "^SUMMARY\\tmanifests=\\d+\\tunique_rows=\\d+\\tfailures=0\\tstatus=PASS$"
       ],
       "note": "complete-scope offline dependency/license closure over every locked manifest in the repository plus byte-equality of the committed SBOM catalog; adding a crate without regenerating the catalog goes red. The attested 12-manifest default mode is a separate byte-stable surface and is deliberately not this gate"
     },
@@ -1659,8 +1677,10 @@
         ]
       },
       "key_patterns": [
+        "^== SVM profile: default-empty-registry ==$",
         "^source_profile=default-empty-registry$",
-        "^[0-9a-f]{64}\\s+.*clutch_sbf\\.so$",
+        "^elf_sha256=[0-9a-f]{64}$",
+        "^elf_bytes=[0-9]+$",
         "^running [0-9]+ tests?$",
         "^test default_elf_refuses_endow_without_a_registered_source_release \\.\\.\\. ok$",
         "^test result: "
@@ -1909,7 +1929,7 @@
     "benchmarks.golden_checksums": {
       "path": "benchmarks/golden/checksums.sha256",
       "kind": "file-sha256",
-      "sha256": "dccedf038b08c82a90d8fc095d408e0240459a2be008b7cd527e815b719d101b",
+      "sha256": "653f4b3b36171eb8481b44271469f1b5f4a6bc0be0f8fc81ba1cf66389f8a0d9",
       "bytes": 232,
       "status": "present",
       "handoff_reference": "benchmarks/golden/checksums.sha256"
@@ -1917,29 +1937,29 @@
     "benchmarks.golden_summary": {
       "path": "benchmarks/golden/SUMMARY.md",
       "kind": "file-sha256",
-      "sha256": "a423d863b53c07aed2ffea0a2e5e06c7dba6994a00261c1a8af8cbf03ff507cf",
+      "sha256": "ad60f4fae6d8fdf2f1b51325d43737b776c9275c06f0063647505649e9e50bd8",
       "bytes": 10422,
       "status": "present"
     },
     "benchmarks.golden_matrix_csv": {
       "path": "benchmarks/golden/matrix.csv",
       "kind": "file-sha256",
-      "sha256": "9f91c9e80113b5904cf796fc16f154c3ba1fb0f5abaee057eb16b753b82d3cf1",
+      "sha256": "d7adea8f51b97f5c808e060f069815880655acfc376b0c97c5ad490209aae72f",
       "bytes": 33451,
       "status": "present"
     },
     "benchmarks.golden_matrix_json": {
       "path": "benchmarks/golden/matrix.json",
       "kind": "file-sha256",
-      "sha256": "6b24d987048e7b041c5fa08a375a38e03f3c3f94c9d99818c89ea117df03c3e1",
-      "bytes": 418658,
+      "sha256": "06909c3adda81cb7a5b550f01478d3a6a04c6a310f8b0e62b97bc30a8307a2d4",
+      "bytes": 418678,
       "status": "present"
     },
     "benchmarks.constants": {
       "path": "benchmarks/constants.json",
       "kind": "file-sha256",
-      "sha256": "40258aa7d5e55d845eda797d108e9ea794f820015e09a698ec28f371a371f3e2",
-      "bytes": 17879,
+      "sha256": "69587616bb512b8aad54b6c2d5a15efa388f38e11a2652f43a3e9cadc5406c83",
+      "bytes": 18076,
       "status": "present"
     },
     "fixtures.economics_admission": {
@@ -2148,7 +2168,7 @@
     "proof_shadow.verus_batch_runner": {
       "path": "verus/batch/run_batch_proofs.sh",
       "kind": "file-sha256",
-      "sha256": "6264b2a234f1db916d5ad19aee423fda82632a9c655777aadcbfeb9bbc7fc76e",
+      "sha256": "4a261e1b3564be0d1d45d65855f3d538b6e93a7377793d3e9360b8c72cbfdb20",
       "bytes": 8991,
       "status": "present"
     },
@@ -2182,7 +2202,7 @@
       "produced_by_output_key": "default_sbf_elf_sha256",
       "note": "default empty-production-source-registry ELF built twice into fresh target directories on one machine; byte identity is not independent reproducible-build closure and says nothing about deployment",
       "status": "not-a-repository-file",
-      "observed_sha256": "4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb"
+      "observed_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7"
     },
     "clutch_sbf.non_production_mock_program_elf": {
       "kind": "declared-build-output",
@@ -2192,7 +2212,7 @@
       "produced_by_output_key": "non_production_mock_sbf_elf_sha256",
       "note": "explicit non-production mock-source ELF built twice into fresh target directories on one machine; it is local test evidence only and is not a production-provider, deployment, or release identity",
       "status": "not-a-repository-file",
-      "observed_sha256": "f04dea06f0b786c8d2bca9602536ca35c98dfa4ece3771aca3419be8d9a6a2a5"
+      "observed_sha256": "b6ae379e09fd3b5dcd76492608f9ab56136aeeb6f52dcda6f4d991528a54597a"
     }
   },
   "toolchain": {
@@ -2292,8 +2312,8 @@
     ]
   },
   "run": {
-    "started_at_utc": "2026-08-20T20:00:30Z",
-    "finished_at_utc": "2026-08-20T20:09:10Z",
+    "started_at_utc": "2026-08-22T04:31:43Z",
+    "finished_at_utc": "2026-08-22T04:44:07Z",
     "gate_timeout_seconds": 1800,
     "note": "timestamps here are the only nondeterministic fields in this manifest; `check` ignores them"
   },
@@ -2323,10 +2343,10 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 75 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 100 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "83a8d7e6c1cf2a04290be1349860e55c26e7979d4a70ee727a9ab2cb27240ec4"
+      "key_lines_sha256": "957ff704ead7710be96f6436e6b35590762049eb27312a45e2c3c4dfa744c50d"
     },
     "cargo_test.clutch_bspline": {
       "exit_code": 0,
@@ -2353,22 +2373,22 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "3d0904d91f7393e7d876e62226c48b19637ab31c16b231ae633c6ec15d874a46"
+      "key_lines_sha256": "bbb6111d56a0cdeb381e336537801285b341c3bc1783f4443514dea99dfc895f"
     },
     "cargo_test.solana_layout": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 213 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 222 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "2cfe25bfd76310af2ba6e309df107788d435fd92acecaac34ba596c6df9971da"
+      "key_lines_sha256": "fbad8225f784ab9efc118941559ac5491f2c4d546339f1e505e4a0651a223221"
     },
     "cargo_test.solana_reference": {
       "exit_code": 0,
@@ -2395,11 +2415,12 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 170 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 327 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "4c19f7555cb3724ccc33de500a1200c07e503d45a613e54d64a1011b5d58f33a"
+      "key_lines_sha256": "f7470340b571eb022e8fc493580881d45017619afa3894a5ba5a39ec6aec7610"
     },
     "cargo_clippy.clutch_kernel": {
       "exit_code": 0,
@@ -2517,12 +2538,8 @@
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
-      "key_lines": [
-        "warning: public documentation for `CANDIDATE_FEED_STAGE_TAG` links to private item `CANDIDATE_FEED_TAG`",
-        "warning: unresolved link to `ClearWorkAccount`",
-        "warning: `clutch-solana-layout` (lib doc) generated 2 warnings"
-      ],
-      "key_lines_sha256": "bd1bb826e68c6ba2c86fea9ce7fe804785870a5aa7268f794672533f8674ecda"
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "cargo_doc.solana_reference": {
       "exit_code": 0,
@@ -2535,23 +2552,8 @@
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
-      "key_lines": [
-        "warning: unresolved link to `bpf`",
-        "warning: public documentation for `direct_selection_v3` links to private item `freeze_abort`",
-        "warning: public documentation for `direct_selection_v3` links to private item `staged`",
-        "warning: public documentation for `direct_selection_v3` links to private item `terminal`",
-        "warning: public documentation for `observe_resolve` links to private item `apply_recorded_redemption`",
-        "warning: public documentation for `orders_batch` links to private item `settlement`",
-        "warning: unresolved link to `ReservationAccount`",
-        "warning: public documentation for `clear_work` links to private item `create_first_stage`",
-        "warning: public documentation for `clear_work` links to private item `create_candidate_feed_account`",
-        "warning: public documentation for `entitlement` links to private item `settle_portfolio_pair`",
-        "warning: public documentation for `selection` links to private item `super::clear_walk::recompute_tie_digest`",
-        "warning: public documentation for `SETTLE_PAGE_ACCOUNT_COUNT` links to private item `entitlement::settle_portfolio_pair`",
-        "warning: public documentation for `split` links to private item `require_internal_bound`",
-        "warning: `clutch-sbf` (lib doc) generated 13 warnings"
-      ],
-      "key_lines_sha256": "b02aa7fc8b98baf1600da2ca5d404f7cc11b700d1e4714aa588f0b4aee04018f"
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "vertical_model.golden_basic_trace": {
       "exit_code": 0,
@@ -2646,11 +2648,19 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+        "test result: ok. 67 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "4a46ebb5dcf2c7ebb0de8012a513dacafc7f7506a12e050d897406cb96fffc5c"
+      "key_lines_sha256": "ee565293a76105afbfae744344ece544d79f05c6e98f26d9444876c86b2810de"
     },
     "cargo_clippy.batch_policy_identity": {
+      "exit_code": 0,
+      "timed_out": false,
+      "matches_expectation": true,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cargo_doc.batch_policy_identity": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
@@ -2779,19 +2789,17 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "Ran 68 tests",
+        "Ran 83 tests",
         "OK"
       ],
-      "key_lines_sha256": "990811c86f3f144676be06d1eccee67b903ff78915ea6f513cd7b7da79cf4eef"
+      "key_lines_sha256": "40f30bd0b692a0e481a77ab5f0dec1c9f862e7e5954e1085b4ed52336e381db9"
     },
     "python.liveness_policy_profile_current_seal": {
-      "exit_code": 0,
+      "exit_code": 1,
       "timed_out": false,
-      "matches_expectation": true,
-      "key_lines": [
-        "PASS: exact R1 artifact, bank capture, account probe, rewards, and STOPs agree"
-      ],
-      "key_lines_sha256": "3a3ef42d1adf31ca49fc7381293634b8bdde4681a32af3f6ef3fa5512d517212"
+      "matches_expectation": false,
+      "key_lines": [],
+      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "python.dependency_license_unittest": {
       "exit_code": 0,
@@ -2807,8 +2815,10 @@
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
-      "key_lines": [],
-      "key_lines_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "key_lines": [
+        "SUMMARY\tmanifests=36\tunique_rows=2129\tfailures=0\tstatus=PASS"
+      ],
+      "key_lines_sha256": "18e5fb328fa841b39a0ad85bd6eb5e239e7cfbd4a36bdc241b73e8ca976caa88"
     },
     "cargo_test.liveness_policy_profile": {
       "exit_code": 0,
@@ -3016,11 +3026,11 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "taxonomy v1 — 152 codes, digest 1025002bef00f599a188f52bd68465cf5782f88ded63fbdc1bc8f470d0a20af4",
+        "taxonomy v1 — 153 codes, digest 93ffde3daecf75593db335c795eef90ba013b00842b0ed67a0ddf24a316616ad",
         "vectors 25   steps 93   asserted facts 439   failures 0",
         "Only `rust-reference` executed. Four executors are declared, counted, and did not"
       ],
-      "key_lines_sha256": "2ef6b70a95f14a0b5e5fd03bacd8584ad14070d76aa39e5fdc5743807a6069e4"
+      "key_lines_sha256": "d8427a936d5bba448f6ed983b6b41c689bfece014f1c6140f10435b281f83bb2"
     },
     "cargo_test.vector_check": {
       "exit_code": 0,
@@ -3055,9 +3065,9 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "Build completed successfully (10 jobs)."
+        "Build completed successfully (12 jobs)."
       ],
-      "key_lines_sha256": "da7479f46b3ee33a0b3ab0e65b4b34eca882c85b365f8372295188b4722c6e2e"
+      "key_lines_sha256": "fd9917fa3570aebab0ded1dceb01f70e2c404045f97c9ac00591a37e9b3056eb"
     },
     "proof.transfer_arithmetic_refinement": {
       "exit_code": 0,
@@ -3151,10 +3161,10 @@
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
-        "default pass 1  sha256=4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb  bytes=1979512",
-        "default pass 2  sha256=4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb  bytes=1979512",
-        "NON-PRODUCTION mock pass 1  sha256=f04dea06f0b786c8d2bca9602536ca35c98dfa4ece3771aca3419be8d9a6a2a5  bytes=2007984",
-        "NON-PRODUCTION mock pass 2  sha256=f04dea06f0b786c8d2bca9602536ca35c98dfa4ece3771aca3419be8d9a6a2a5  bytes=2007984",
+        "default pass 1  sha256=0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7  bytes=2149672",
+        "default pass 2  sha256=0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7  bytes=2149672",
+        "NON-PRODUCTION mock pass 1  sha256=b6ae379e09fd3b5dcd76492608f9ab56136aeeb6f52dcda6f4d991528a54597a  bytes=2177592",
+        "NON-PRODUCTION mock pass 2  sha256=b6ae379e09fd3b5dcd76492608f9ab56136aeeb6f52dcda6f4d991528a54597a  bytes=2177592",
         "default_reproducibility=PASS",
         "mock_reproducibility=PASS",
         "profile_separation=PASS",
@@ -3197,69 +3207,69 @@
         "source_campaign NON-PRODUCTION endow=EXPECTED_SUCCESS; lifecycle=EXPECTED_SUCCESS",
         "  accept endow                          1 instruction(s), 4 account(s) compared, oracle layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
         "  refuse endow-skipped-sequence         expect Custom(0x000d)  offline reference: n/a (the offline adapter has no Endow)",
-        "  accept split                        program_units=80371 tx_units=80521 limit=1400000 bytes=921 oracle=reference::apply",
-        "  refuse split-unsigned               Custom(0x0002) program_units=6150 tx_units=6300  offline reference: MissingSignature",
-        "  refuse split-stranger               Custom(0x0011) program_units=45301 tx_units=45451  offline reference: UnauthorizedActor",
-        "  refuse split-imposter               Custom(0x0009) program_units=44084 tx_units=44234  offline reference: WrongAccountKey",
-        "  refuse split-foreign-collateral     Custom(0x001b) program_units=63383 tx_units=63533  offline reference: n/a (the offline adapter has no collateral leg)",
-        "  accept roundtrip                    program_units=160776 per-instruction [80371, 80405] tx_units=160926 limit=1400000 bytes=1028 oracle=reference::apply",
-        "  accept merge                        program_units=87905 tx_units=88055 limit=1400000 bytes=921 oracle=reference::apply",
-        "  refuse merge-unsigned               Custom(0x0002) program_units=6184 tx_units=6334  offline reference: MissingSignature",
-        "  refuse merge-overdraw               Custom(0x2009) program_units=73523 tx_units=73673  offline reference: Kernel(InsufficientCollateral)",
-        "  accept materialize                  program_units=73398 tx_units=73548 limit=1400000 bytes=822 oracle=reference::apply",
-        "  refuse materialize-unsigned         Custom(0x0002) program_units=4910 tx_units=5060  offline reference: MissingSignature",
-        "  refuse materialize-wrong-destination Custom(0x000b) program_units=39148 tx_units=39298  offline reference: WrongAccountKey",
-        "  accept dematerialize                program_units=77882 tx_units=78032 limit=1400000 bytes=822 oracle=reference::apply",
+        "  accept split                        program_units=80367 tx_units=80517 limit=1400000 bytes=921 oracle=reference::apply",
+        "  refuse split-unsigned               Custom(0x0002) program_units=6143 tx_units=6293  offline reference: MissingSignature",
+        "  refuse split-stranger               Custom(0x0011) program_units=45294 tx_units=45444  offline reference: UnauthorizedActor",
+        "  refuse split-imposter               Custom(0x0009) program_units=44077 tx_units=44227  offline reference: WrongAccountKey",
+        "  refuse split-foreign-collateral     Custom(0x001b) program_units=63376 tx_units=63526  offline reference: n/a (the offline adapter has no collateral leg)",
+        "  accept roundtrip                    program_units=160747 per-instruction [80367, 80380] tx_units=160897 limit=1400000 bytes=1028 oracle=reference::apply",
+        "  accept merge                        program_units=87880 tx_units=88030 limit=1400000 bytes=921 oracle=reference::apply",
+        "  refuse merge-unsigned               Custom(0x0002) program_units=6181 tx_units=6331  offline reference: MissingSignature",
+        "  refuse merge-overdraw               Custom(0x2009) program_units=73497 tx_units=73647  offline reference: Kernel(InsufficientCollateral)",
+        "  accept materialize                  program_units=73386 tx_units=73536 limit=1400000 bytes=822 oracle=reference::apply",
+        "  refuse materialize-unsigned         Custom(0x0002) program_units=4909 tx_units=5059  offline reference: MissingSignature",
+        "  refuse materialize-wrong-destination Custom(0x000b) program_units=39125 tx_units=39275  offline reference: WrongAccountKey",
+        "  accept dematerialize                program_units=77869 tx_units=78019 limit=1400000 bytes=822 oracle=reference::apply",
         "  refuse dematerialize-unsigned       Custom(0x0002) program_units=4913 tx_units=5063  offline reference: MissingSignature",
-        "  refuse dematerialize-overdraw       Custom(0x0001) program_units=62365 tx_units=62515  offline reference: Token-2022 burn CPI: InsufficientFunds; offline internal-release oracle would refuse Kernel(InsufficientBalance)",
-        "  accept resolve                      program_units=139250 tx_units=139400 limit=1400000 bytes=714 oracle=reference::apply_market_resolution_with_evidence",
-        "  accept resolve-repeat-idempotent    program_units=264105 per-instruction [139250, 124855] tx_units=264255 limit=1400000 bytes=742 oracle=market-global resolution oracle",
-        "  refuse resolve-late-conflict-rolls-back Custom(0x0057) program_units=116735 tx_units=256135  offline reference: market-global oracle: conflicting payout does not equal the evidence-derived payout",
-        "  refuse resolve-unsigned             Custom(0x3009) program_units=87624 tx_units=87774  offline reference: MissingSignature",
-        "  refuse resolve-wrong-payout         Custom(0x0057) program_units=117088 tx_units=117238  offline reference: PayoutIndexMismatch",
-        "  accept redeem                       program_units=115160 tx_units=115310 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
-        "  refuse redeem-unsigned              Custom(0x3009) program_units=78644 tx_units=78794  offline reference: MissingSignature",
-        "  refuse redeem-stranger              Custom(0x300a) program_units=78646 tx_units=78796  offline reference: UnauthorizedActor",
-        "  refuse redeem-foreign-collateral    Custom(0x001b) program_units=62329 tx_units=62479  offline reference: n/a (the offline adapter has no collateral leg)",
-        "  refuse endow                        Custom(0x0079) program_units=35764 tx_units=35914  offline reference: source release unavailable in this exact ELF",
-        "  refuse endow-unsigned               Custom(0x0002) program_units=5475 tx_units=5625  offline reference: n/a (the offline adapter has no Endow)",
-        "  refuse endow-stranger               Custom(0x0011) program_units=6697 tx_units=6847  offline reference: n/a (the offline adapter has no Endow)",
-        "  refuse endow-skipped-sequence       Custom(0x0079) program_units=35764 tx_units=35914  offline reference: source release unavailable in this exact ELF",
-        "  accept feed-advance                 program_units=7759 tx_units=7759 bytes=419 oracle=accumulator fold + FeedAccount codec",
-        "  refuse feed-advance-unsigned        Custom(0x0002) program_units=1467 tx_units=1467  offline reference: n/a (the offline adapter has no FeedAdvance)",
-        "  refuse feed-advance-replay          Custom(0x3011) program_units=3646 tx_units=3646  offline reference: n/a (the offline adapter has no FeedAdvance)",
-        "  accept create-market                program_units=203809 tx_units=203959 limit=1400000 bytes=1086 oracle=layout re-encode + reference::validate_market_init",
-        "  refuse create-unsigned              Custom(0x0002) program_units=7375 tx_units=7525  offline reference: n/a (validate_market_init models no signer)",
-        "  refuse create-already-initialized   Custom(0x0040) program_units=82184 tx_units=82334  offline reference: runtime account-plane refusal before economic-state validation",
+        "  refuse dematerialize-overdraw       Custom(0x0001) program_units=62351 tx_units=62501  offline reference: Token-2022 burn CPI: InsufficientFunds; offline internal-release oracle would refuse Kernel(InsufficientBalance)",
+        "  accept resolve                      program_units=139504 tx_units=139654 limit=1400000 bytes=714 oracle=reference::apply_market_resolution_with_evidence",
+        "  accept resolve-repeat-idempotent    program_units=264615 per-instruction [139504, 125111] tx_units=264765 limit=1400000 bytes=742 oracle=market-global resolution oracle",
+        "  refuse resolve-late-conflict-rolls-back Custom(0x0057) program_units=116991 tx_units=256645  offline reference: market-global oracle: conflicting payout does not equal the evidence-derived payout",
+        "  refuse resolve-unsigned             Custom(0x3009) program_units=87880 tx_units=88030  offline reference: MissingSignature",
+        "  refuse resolve-wrong-payout         Custom(0x0057) program_units=117344 tx_units=117494  offline reference: PayoutIndexMismatch",
+        "  accept redeem                       program_units=115164 tx_units=115314 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
+        "  refuse redeem-unsigned              Custom(0x3009) program_units=78648 tx_units=78798  offline reference: MissingSignature",
+        "  refuse redeem-stranger              Custom(0x300a) program_units=78650 tx_units=78800  offline reference: UnauthorizedActor",
+        "  refuse redeem-foreign-collateral    Custom(0x001b) program_units=62333 tx_units=62483  offline reference: n/a (the offline adapter has no collateral leg)",
+        "  refuse endow                        Custom(0x0079) program_units=35775 tx_units=35925  offline reference: source release unavailable in this exact ELF",
+        "  refuse endow-unsigned               Custom(0x0002) program_units=5482 tx_units=5632  offline reference: n/a (the offline adapter has no Endow)",
+        "  refuse endow-stranger               Custom(0x0011) program_units=6690 tx_units=6840  offline reference: n/a (the offline adapter has no Endow)",
+        "  refuse endow-skipped-sequence       Custom(0x0079) program_units=35775 tx_units=35925  offline reference: source release unavailable in this exact ELF",
+        "  accept feed-advance                 program_units=7761 tx_units=7761 bytes=419 oracle=accumulator fold + FeedAccount codec",
+        "  refuse feed-advance-unsigned        Custom(0x0002) program_units=1469 tx_units=1469  offline reference: n/a (the offline adapter has no FeedAdvance)",
+        "  refuse feed-advance-replay          Custom(0x3011) program_units=3648 tx_units=3648  offline reference: n/a (the offline adapter has no FeedAdvance)",
+        "  accept create-market                program_units=203993 tx_units=204143 limit=1400000 bytes=1086 oracle=layout re-encode + reference::validate_market_init",
+        "  refuse create-unsigned              Custom(0x0002) program_units=7366 tx_units=7516  offline reference: n/a (validate_market_init models no signer)",
+        "  refuse create-already-initialized   Custom(0x0040) program_units=82364 tx_units=82514  offline reference: runtime account-plane refusal before economic-state validation",
         "PASS",
-        "  accept endow                        program_units=64400 tx_units=64550 limit=1400000 bytes=855 oracle=layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
-        "  refuse endow-skipped-sequence       Custom(0x000d) program_units=59870 tx_units=60020  offline reference: n/a (the offline adapter has no Endow)",
-        "  accept walk-01-create-market        program_units=196309 tx_units=196459 limit=1400000 bytes=1086 oracle=layout re-encode + reference::validate_market_init",
-        "  accept walk-02-endow                program_units=56900 tx_units=57050 bytes=855 oracle=layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
-        "  accept walk-03-split                program_units=69871 tx_units=70021 bytes=921 oracle=reference::apply",
-        "  accept walk-04-materialize          program_units=62898 tx_units=63048 bytes=822 oracle=reference::apply",
-        "  accept walk-05-dematerialize        program_units=74882 tx_units=75032 bytes=822 oracle=reference::apply",
-        "  accept walk-06-merge                program_units=77405 tx_units=77555 bytes=921 oracle=reference::apply",
-        "  accept walk-07-feed-advance         program_units=15882 per-instruction [6280, 4801, 4801] tx_units=15882 bytes=669 oracle=accumulator fold + FeedAccount codec",
-        "  accept walk-08-resolve              program_units=134750 tx_units=134900 limit=1400000 bytes=714 oracle=reference::apply_market_resolution_with_evidence",
-        "  refuse walk-09-merge-after-resolve  Custom(0x0016) program_units=40878 tx_units=41028  offline reference: MismatchedState",
-        "  accept walk-10-redeem-winning       program_units=137660 tx_units=137810 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
-        "  accept walk-11-redeem-losing        program_units=122660 tx_units=122810 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
-        "   1  walk-01-create-market            196309      1086        7  MATCH",
-        "   2  walk-02-endow                     56900       855        4  MATCH",
-        "   3  walk-03-split                     69871       921        5  MATCH",
-        "   4  walk-04-materialize               62898       822        5  MATCH",
-        "   5  walk-05-dematerialize             74882       822        5  MATCH",
-        "   6  walk-06-merge                     77405       921        5  MATCH",
-        "   7  walk-07-feed-advance         15882 [6280, 4801, 4801]       669        1  MATCH",
-        "   8  walk-08-resolve                  134750       714        3  MATCH",
-        "   9  walk-09-merge-after-resolve       40878       921        0  REFUSED Custom(0x0016)",
-        "  10  walk-10-redeem-winning           137660       887        5  MATCH",
-        "  11  walk-11-redeem-losing            122660       887        4  MATCH",
-        "default_sbf_elf_sha256=4fded7a67a2d8994f4dc2b82c533b978d14d6107f28de7cbbe7674ecdcedf6cb",
-        "non_production_mock_sbf_elf_sha256=f04dea06f0b786c8d2bca9602536ca35c98dfa4ece3771aca3419be8d9a6a2a5"
+        "  accept endow                        program_units=64403 tx_units=64553 limit=1400000 bytes=855 oracle=layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
+        "  refuse endow-skipped-sequence       Custom(0x000d) program_units=59877 tx_units=60027  offline reference: n/a (the offline adapter has no Endow)",
+        "  accept walk-01-create-market        program_units=196493 tx_units=196643 limit=1400000 bytes=1086 oracle=layout re-encode + reference::validate_market_init",
+        "  accept walk-02-endow                program_units=56903 tx_units=57053 bytes=855 oracle=layout re-encode (the offline reference refuses Endow: UnsupportedIntent)",
+        "  accept walk-03-split                program_units=69867 tx_units=70017 bytes=921 oracle=reference::apply",
+        "  accept walk-04-materialize          program_units=62886 tx_units=63036 bytes=822 oracle=reference::apply",
+        "  accept walk-05-dematerialize        program_units=74869 tx_units=75019 bytes=822 oracle=reference::apply",
+        "  accept walk-06-merge                program_units=77380 tx_units=77530 bytes=921 oracle=reference::apply",
+        "  accept walk-07-feed-advance         program_units=15888 per-instruction [6282, 4803, 4803] tx_units=15888 bytes=669 oracle=accumulator fold + FeedAccount codec",
+        "  accept walk-08-resolve              program_units=135004 tx_units=135154 limit=1400000 bytes=714 oracle=reference::apply_market_resolution_with_evidence",
+        "  refuse walk-09-merge-after-resolve  Custom(0x0016) program_units=40845 tx_units=40995  offline reference: MismatchedState",
+        "  accept walk-10-redeem-winning       program_units=137664 tx_units=137814 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
+        "  accept walk-11-redeem-losing        program_units=122664 tx_units=122814 limit=1400000 bytes=887 oracle=reference::apply_with_evidence",
+        "   1  walk-01-create-market            196493      1086        7  MATCH",
+        "   2  walk-02-endow                     56903       855        4  MATCH",
+        "   3  walk-03-split                     69867       921        5  MATCH",
+        "   4  walk-04-materialize               62886       822        5  MATCH",
+        "   5  walk-05-dematerialize             74869       822        5  MATCH",
+        "   6  walk-06-merge                     77380       921        5  MATCH",
+        "   7  walk-07-feed-advance         15888 [6282, 4803, 4803]       669        1  MATCH",
+        "   8  walk-08-resolve                  135004       714        3  MATCH",
+        "   9  walk-09-merge-after-resolve       40845       921        0  REFUSED Custom(0x0016)",
+        "  10  walk-10-redeem-winning           137664       887        5  MATCH",
+        "  11  walk-11-redeem-losing            122664       887        4  MATCH",
+        "default_sbf_elf_sha256=0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
+        "non_production_mock_sbf_elf_sha256=b6ae379e09fd3b5dcd76492608f9ab56136aeeb6f52dcda6f4d991528a54597a"
       ],
-      "key_lines_sha256": "8faf6e92cd4c0ffdd3979221c3eb5d839ea910523ec24f812dbd73626b3f9048"
+      "key_lines_sha256": "00a24aa045b81096e65b2aaa8cb45a259a1220c936cbedb7c8b45b34e6365f9d"
     },
     "sbf.committed_signed_walk": {
       "exit_code": 0,
@@ -3267,7 +3277,7 @@
       "matches_expectation": true,
       "key_lines": [
         "source_profile=NON-PRODUCTION-non-production-mock-source",
-        "sbf_elf_sha256=f04dea06f0b786c8d2bca9602536ca35c98dfa4ece3771aca3419be8d9a6a2a5",
+        "sbf_elf_sha256=b6ae379e09fd3b5dcd76492608f9ab56136aeeb6f52dcda6f4d991528a54597a",
         "== signed, confirmed, committed walk ==",
         "committed_signed_transactions=22",
         "committed_expected_refusals=2",
@@ -3278,14 +3288,17 @@
         "redeem_external=DRIVEN",
         "falsifiability=PASS"
       ],
-      "key_lines_sha256": "6abfd7abb92c02cccf2c6f8c0e08d1d11b4e1cdcb3da3132efd47ca6b77110bc"
+      "key_lines_sha256": "6cdb352065ad4d52cb71ed999cbe8717e4df1a340f0cc1167bcce7252fb775fc"
     },
     "sbf.token2022_program_test": {
       "exit_code": 0,
       "timed_out": false,
       "matches_expectation": true,
       "key_lines": [
+        "== SVM profile: default-empty-registry ==",
         "source_profile=default-empty-registry",
+        "elf_sha256=0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
+        "elf_bytes=2149672",
         "running 0 tests",
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 6 tests",
@@ -3300,13 +3313,19 @@
         "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 4 tests",
         "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 8 tests",
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 15 tests",
         "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test default_elf_refuses_endow_without_a_registered_source_release ... ok",
+        "running 1 test",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 9 tests",
-        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 7 tests",
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "cea7f6edc82f744fec711b4eca14eb46b893188868671197409928b0dc0c7268"
+      "key_lines_sha256": "3d6e64ec71ac9b40f176a2dbdc11730781e2f779f8de51d4852472e60abbae35"
     },
     "sbf.token2022_program_test_non_production_mock": {
       "exit_code": 0,
@@ -3315,8 +3334,8 @@
       "key_lines": [
         "== SVM profile: NON-PRODUCTION-non-production-mock-source ==",
         "source_profile=NON-PRODUCTION-non-production-mock-source",
-        "elf_sha256=f04dea06f0b786c8d2bca9602536ca35c98dfa4ece3771aca3419be8d9a6a2a5",
-        "elf_bytes=2007984",
+        "elf_sha256=b6ae379e09fd3b5dcd76492608f9ab56136aeeb6f52dcda6f4d991528a54597a",
+        "elf_bytes=2177592",
         "running 0 tests",
         "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 6 tests",
@@ -3331,15 +3350,19 @@
         "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 4 tests",
         "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 8 tests",
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 1 test",
         "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "running 15 tests",
         "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
         "test publicly_prefunded_second_owner_position_and_replay_are_created_by_first_endow ... ok",
         "running 9 tests",
-        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+        "running 7 tests",
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
       ],
-      "key_lines_sha256": "f2eefc7bd0c4afb83cfc071cca94406125448ff2aa5dd1507605e471c42945bf"
+      "key_lines_sha256": "c5c413bbc8f26bfb0eaa03949cbfd14993baaffb8ad868f9d52dba38066eb1df"
     },
     "static_client.npm": {
       "exit_code": 0,
@@ -3409,11 +3432,21 @@
     }
   },
   "gate_summary": {
-    "total": 100,
+    "total": 101,
     "matching_expectation": 100,
-    "contradicting_expectation": []
+    "contradicting_expectation": [
+      "python.liveness_policy_profile_current_seal"
+    ]
   },
   "unavailable_or_failing_gates": [
+    {
+      "gate": "python.liveness_policy_profile_current_seal",
+      "command": "python3 research/liveness-policy-profile/policy.py --check-current",
+      "disposition": "unexpected-failure",
+      "reason": "gate outcome contradicted its declaration; see gate_runs",
+      "observed_exit_code": 1,
+      "matches_expectation": false
+    },
     {
       "gate": "sbf.runtime_bringup",
       "command": "programs/clutch-sbf/scripts/run_bringup.sh",
