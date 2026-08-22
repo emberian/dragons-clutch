@@ -50,6 +50,31 @@ interpretations and one runtime/model consistency assumption do not.
    totals are measured; “250–300k codec + relation” and “cut the fixed floor by
    half” are not isolated measurements. Add codec-only SBF probes before
    selecting a representation change.
+6. **The old ELF contained two identical 48,328-byte idle checkpoints.** In exact
+   `a6381fbe…` unstripped symbols, `clear_walk::boxed_idle_checkpoint::IDLE`
+   and the static used by `ClearWorkV1::encode_idle_into` have identical bytes
+   and SHA-256. The current source gives `clutch-batch` one immutable accessor
+   and removes the adapter-local copy. The combined repair/optimization wave
+   passed three byte-identical artifact builds and reduced the stripped ELF by
+   54,344 bytes, from 2,160,072 to 2,105,728, saving 378,234,240 lamports of
+   persistent loader rent. That measured delta also includes the smaller
+   terminal-refusal handlers, so 48,328 bytes remains the attributable static
+   upper bound rather than a separately isolated result.
+7. **Ten SOL is an architecture target, not a micro-optimization target.** At
+   default rent the complete loader-v3 resident must be at most 1,436,444
+   bytes. From the current 2,105,728 bytes that is another 669,284-byte /
+   31.78% reduction. The original `a6381fbe…` gap was 723,628 bytes / 33.50%.
+   Static deduplication plus removing the CreateMarket intent round-trip can at
+   most project roughly 68 KiB before LTO measurement. Exact `opt-level=s`
+   produced 1,725,512 bytes / 12.01190904 SOL, but is RED: final
+   `artifact::validate_artifact` reaches `r10-5064`. Rehabilitating that profile
+   requires a named function split and the complete same-ELF stack/bank/CU gate.
+8. **Account overhead is often larger than payload.** One account costs a
+   128-byte rent overhead before its data. The largest current structural wins
+   are versioned receipt pages, active-width ClearWork/CandidateFeed codecs,
+   embedded mandatory funding tails, and specialized OrderPages. These change
+   account formats, contention, and close geometry; they are macro work with
+   explicit CU/rent/terminal tests, not packing tricks.
 
 The broader generality findings — collateral-program mismatch, owner-rounding
 admission restrictions, capacity profiles, and the payoff compiler — live in
@@ -173,6 +198,29 @@ account_len re-pin chain; batch with M1.
   short-circuits at the first pass boundary: one advance + close,
   ~430k total). Do not "optimize" refusal paths at the cost of the
   short-circuit structure.
+
+### M7. Product-driven capability profiles are required for deployment rent
+
+The exact `a6381fbe…` ELF is 91.25% `.text`, and 98.19% of that text is
+first-party `clutch_*` code. Dependency pruning is not the lever. Direct and
+general clearing, legacy generations, both source generations, artifact
+transport, ResolutionWork, and one monolithic 74-tag decoder all remain in one
+artifact.
+
+Measure at least two strict O3 siblings before considering CPI decomposition:
+
+1. general clearing + selected Pyth V2 source, with Direct V2/V3 compatibility
+   absent; and
+2. Direct V3 + selected Pyth V2 source, with general and Direct V2 absent.
+
+A real profile must gate intent variants and strict decoding, dispatch arms,
+account codecs, and source generations together. Gating handler modules alone
+leaves the 44,528-byte all-tags `Intent::decode` and much of the layout surface
+resident. These profiles select deployable products; they must not change the
+shared Eggcrate semantics or pretend that a nonresident capability was tested.
+Splitting into CPI programs comes only if measured selective monoliths cannot
+meet the target, because multiple deployed siblings may increase aggregate rent
+and change program IDs, PDA namespaces, atomicity, and upgrade coordination.
 
 ## The micro map (function-level)
 

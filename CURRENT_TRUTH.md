@@ -72,8 +72,30 @@ empty-registry ELF three ways with identical 2,160,072-byte SHA-256
 `a6381fbe211e400788615e1c588938266bed14bc8f0fc12babf76350bc24cbe2`,
 verified the 129-file source closure, dependency/syscall surface, and final-LTO
 stack bounds. This remains engineering evidence, not an accepted baseline: the
-current bytes still need the complete campaign/manifest, a second-host result,
-and an explicit seal before superseding Cycle G.
+`a6381fbe…` bytes still need the complete campaign/manifest, a second-host
+result, and an explicit seal before superseding Cycle G.
+
+A later second-pass repair wave beyond `a6381fbe…` now has a reproducible,
+audited-but-unsealed artifact. It corrects stale verified-only-retention fixtures, fails closed on
+`ClosePosition` because a local zero balance does not enumerate live sell
+reservations, fails closed on `CloseGeneralEpoch` because deletion both permits
+same-index replay and can strand non-retained candidate/work accounts, teaches
+the keeper to clean every authenticated terminal child before retaining the
+root, and deduplicates the idle ClearWork image. At runtime-input commit
+`b3b43ae`, the 129-file source closure rebuilt three ways to the byte-identical
+2,105,728-byte ELF
+`a56c7ce158dc0667fabbc6b9736699adf5e3495350cf8b56b7616bf56868e272`.
+The dependency/syscall, loader-shape, and final-LTO stack gates passed; the
+source-scope digest is
+`6d7a86626a46a06791953a3949ca83f2e36ded977727a39320154182cf746718`.
+This is reproducible artifact evidence, not a seal or release. The full exact-ELF
+bank and signed-validator campaign still owns promotion. The complete default
+empty-registry SVM profile has now passed 165 tests with zero failures against
+that exact ELF. The separately compiled `non-production-mock-source` profile
+passed 168 tests with zero failures against its distinct 2,133,648-byte ELF
+`8131e640af07fe1b064ef481db2bd5ba6755cead93070b1c9462afdec85f4d3f`.
+That second result is laboratory source/value evidence, never production source
+evidence. The current signed-validator/operator matrix remains in flight.
 
 Runtime evidence is artifact-specific:
 
@@ -423,7 +445,7 @@ public `derive_payout` to be degree-zero-only; smooth callers must use
 | Resolution/source | **current source SBF-EXECUTED locally; production STOP** | The adapter authenticates the exact Pyth post discriminator, seven-account shape/effective flags, writable update, and Clock owner. A writing lab receiver proves consume/rollback, and V2 nonzero-confidence degree-zero interval resolution uses the canonical accumulator/reference authority at 14 accounts. The real Pyth receiver/router/config can be cloned locally, but no upstream encoded-VAA update has completed the seam; production identities remain unset and the default registry fail-closed. |
 | ResolutionWork liveness | **current plan SBF-EXECUTED / UNSEALED** | Runtime minimum deposit for 32 records is 49,431,920 lamports. The profile separates protocol prefund, named-plan payouts/refunds, and external keeper budget; eight Fold(4) calls plus Finalize pay 10,790,000 and refund 38,641,920. Against `a6381fbe…`, `[6,2]` consumes 514,332 CU / 1,228 bytes and 171,765 CU / 704 bytes, with 1,090,000 lamports external Fold budget and singleton/rollback equivalence. The identity-bound overlay does not relabel Cycle-G sealed evidence. |
 | Fees/economics | **arithmetic/model only; runtime zero-fee** | Fee-bearing general clearing, treasury custody, owner carry, and keeper compensation are not live. Hoard principal and future fees are never liveness capital. |
-| Terminal closure | **general clearing machinery routes exist** | Tags 60–67 close/release the general machinery under their admitted states. Protocol-wide mint, bearer-forfeiture, fractional-credit, abandoned-owner, donation, and rent terminality remain open. |
+| Terminal closure | **leaf routes exist; root/Position deletion STOP** | Tags 60–66 can release and close authenticated general-clearing leaves. The audited current repair disables `ClosePosition` until an outstanding-reservation proof exists and disables `CloseGeneralEpoch` until a monotone epoch generation/tombstone plus exhaustive child counts exist. A ledgered root therefore retains 7,161,840 lamports deliberately. Protocol-wide mint, bearer-forfeiture, fractional-credit, abandoned-owner, donation, and Market/source terminality also remain open. |
 | Clients | **static docs + offline Glass + loopback test bench** | No live-chain static client, release-manifest binding, wallet path, official URL, or visual browser QA. Host/Origin/media-type checks, a process-local capability cookie, exact integer display, and mechanical DOM/accessibility regressions pass; exact `u64` JSON transport and real browser/visual coverage remain open. |
 | Evidence/release | **last accepted Cycle-G artifact; current source UNSEALED** | The 101-gate Cycle-G manifest had 100 expected dispositions and one documentation-window failure. Current `ba580c6` passes the complete offline artifact audit with three byte-identical builds, but has no current manifest, second-host result, or seal. No release, deployment, signed tag, audit, or mainnet evidence exists. |
 

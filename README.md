@@ -31,7 +31,8 @@ submit candidate → streamed relation check → verified-only candidate admissi
              select best valid submitted candidate fully verified by deadline
               │
               ▼
-freeze entitlements → settle exact receipts and pots → close machinery
+freeze entitlements → settle exact receipts and pots → close safe leaf machinery
+                                                   → retain the epoch root
 ```
 
 The last accepted Cycle-G default SBF artifact is 2,149,672 bytes with SHA-256
@@ -48,6 +49,26 @@ byte-identical default builds produced a 2,160,072-byte ELF with SHA-256
 with dependency/syscall and final-LTO stack checks green. These are local
 engineering results, not an accepted baseline, independent security audit,
 release, deployment, or formal verification of the whole program.
+
+The second-pass runtime input closure at `b3b43ae` is still **unsealed**, but it
+has now passed the complete offline artifact audit. Three independent builds,
+including a relocated Cargo home, produced the byte-identical 2,105,728-byte ELF
+`a56c7ce158dc0667fabbc6b9736699adf5e3495350cf8b56b7616bf56868e272`;
+the dependency/syscall, loader-shape, and final-LTO stack gates passed. The
+review found that Position deletion could strand an all-in seller's live
+reservation, while epoch-root deletion could both reopen the same epoch
+identity and strand candidate/work accounts outside the retained top three.
+Those two deletions now fail closed pending persisted reservation/child counts
+and a monotone epoch generation or tombstone. Artifact reproducibility is not a
+seal, release, deployment, or substitute for the complete bank and
+signed-validator promotion campaign. Against those frozen sources, the
+complete default empty-registry bank profile passed 165 tests with zero failures
+using that exact ELF. The separately compiled `non-production-mock-source`
+profile passed 168
+tests with zero failures using its distinct 2,133,648-byte ELF
+`8131e640af07fe1b064ef481db2bd5ba6755cead93070b1c9462afdec85f4d3f`.
+The mock result exercises laboratory source/value paths and is not production
+source evidence.
 
 `scripts/run_operator_trade.sh` was rerun at `e07c08a` on 2026-08-22. It
 confirmed 54/54 local transactions, decoded 1,177 observed account images, and
@@ -99,15 +120,32 @@ test-only signers.
   bytes and 171,765 CU / 704 bytes; its external Fold budget is 1,090,000
   lamports. This identity-bound overlay does not promote or relabel Cycle G.
 - The local pull-source path authenticates a receiver-written update and can
-  resolve nonzero-confidence V2 categorical intervals. The upstream receiver's
-  encoded-VAA path is not yet joined end to end, and production provider,
-  program, feed, stability, and trust-floor identities remain deliberately
-  unpinned.
+  resolve nonzero-confidence V2 categorical intervals. The actual deployed
+  Pyth receiver/router ELFs have separately verified a locally signed 13-of-19
+  guardian VAA and executed `PostUpdate`; this is real provider-program
+  execution with a synthetic observation, not devnet price evidence. That path
+  is not yet joined to Clutch, and production provider, program, feed,
+  stability, and trust-floor identities remain deliberately unpinned.
 - Fixed bounds are one measured capacity profile, not a claim that the concept
   is limited to those widths.
+- Frozen ScoreV1 rewards risk-free complete-set wash flow and pubkey
+  fragmentation; it is experimental economics, not a release-quality market
+  objective. A successor score must be complete-set-invariant and Sybil-neutral.
+- For multi-span degree 2/3, the finite moment-cone checks are necessary rather
+  than a complete no-arbitrage membership decision. The first public coupled
+  profile should remain degree 0/1 until a full witness or safe inner
+  representation exists.
+- The current 2,105,728-byte audited ELF costs 14.6582124 SOL in persistent
+  loader rent. Ten SOL is insufficient by 4.6582124 SOL before fees. The first
+  optimization/repair wave removed 54,344 bytes and 0.37823424 SOL from the
+  prior `a6381fbe…` artifact; reaching less than ten SOL still requires another
+  669,284 bytes, so it needs a product-driven capability profile rather than
+  only micro-optimization.
 
 See the current [architecture review](docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md)
-for the source-backed findings and successor designs, and the
+for the source-backed findings and successor designs, the
+[state/rent audit](docs/reviews/STATE_RENT_AUDIT_2026-08-22.md) for exact
+current-tree account costs and format candidates, and the
 [intent archaeology](docs/reviews/PROJECT_INTENT_ARCHAEOLOGY_2026-08-22.md)
 for the requirements recovered from the Codex and Claude session history.
 

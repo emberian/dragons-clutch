@@ -3,12 +3,13 @@
 ## Verdict
 
 Dragon's Clutch has a serious bounded Solana implementation, not a paper shell.
-The recent wave closed a local path through market creation, mock-source funding,
-general order placement, freeze, streamed candidate checking, selection,
-entitlement, exact settlement, and account closure. A fresh run of
-`scripts/run_operator_trade.sh` at `e07c08a` submitted and confirmed 54 of 54
-local transactions, reloaded 1,177 account images through the canonical codecs,
-and closed all six reported conservation identities.
+The recent wave exercised market creation, mock-source funding, general order
+placement, freeze, streamed candidate checking, selection, entitlement, and
+exact settlement. A prior run of `scripts/run_operator_trade.sh` at `e07c08a`
+submitted and confirmed 54 of 54 local transactions, reloaded 1,177 account
+images through the canonical codecs, and closed all six reported conservation
+identities. That run is historical evidence, not evidence for the current tree,
+and the second-pass review below invalidates its claim of complete root closure.
 
 The architecture is nevertheless not complete in the sense of the original
 product thesis. Its largest risks are boundary drift: model-level generality is
@@ -23,6 +24,144 @@ independent audit lanes, the static-client tests, and a fresh local operator
 Trade run. The review/docs and Operator progress changes made afterward are not
 attested by that artifact. This is an engineering review, not a formal
 verification claim. Regulatory work is excluded.
+
+## Second-pass findings — work resumed 2026-08-22
+
+The pushed review checkpoint was not completion. A fresh architecture,
+mechanism, rent, and local-validation pass found new release-blocking issues and
+also clarified what the product actually is. The current audited-but-unsealed
+repair wave therefore fails closed on two deletion routes while their versioned
+successors are designed. None of this section is evidence for a deployed
+artifact.
+
+### P0 — Position zero did not prove reservation zero
+
+Sell placement transfers reserved Eggs out of `PositionAccount` and into a
+separate ACTIVE `ReservationAccount`. An all-in seller with no cash can therefore
+have a locally economic-zero Position while a live order still owns all of its
+Eggs. The old `ClosePosition` checked only local cash and Egg balances. The owner
+could delete the Position, after which cancel, terminal release, and settlement
+could no longer restore or update it; the surviving Replay account prevents a
+simple Endow recreation.
+
+The current audited source disables the final Position deletion after all
+existing authentication and local-zero checks. A functional successor needs a
+persisted owner/market outstanding-reservation counter (incremented at placement
+and decremented exactly once at cancellation, terminal release, or consumption),
+or another exhaustive aggregate proof. Requiring a resolved Market is not
+sufficient because older epochs can still own reservations.
+
+### P0 — deleting the epoch root enabled replay and stranded unlisted children
+
+`CloseGeneralEpoch` deleted Epoch, Window, and their funding ledger. `InitEpoch`
+accepts a caller-supplied `epoch_index` whenever those canonical PDAs are absent;
+Market stores no monotone used-index authority. The same epoch identity and its
+child PDA namespace could therefore be recreated after a nominal close.
+
+The root close also checked only the Window's at-most-three retained candidates.
+That list intentionally excludes sealed-unverified, refused, superseded, and
+valid-but-noncompetitive candidates. A caller could delete the root while one
+of those records or its roughly 50 KiB ClearWork remained. Every child close
+authenticates the terminal Epoch, so the residual could then become permanently
+uncloseable.
+
+The current audited source disables root deletion. The keeper discovers and
+closes every authenticated candidate and every full or growing ClearWork
+independently, then stops with an explicit retained-root state rather than
+retrying the disabled instruction. A functional successor needs both:
+
+- a Market-owned monotone epoch cursor/generation or a durable versioned
+  tombstone; and
+- exhaustive persisted child counts, with candidate close requiring its
+  canonical ClearWork to be absent and root retirement requiring every count to
+  be zero.
+
+The safe interim lock is 7,161,840 lamports for a ledgered Epoch + Window +
+funding ledger (5,679,360 without the optional ledger). That is preferable to
+identity replay or permanently stranded child principal.
+
+### P0 — ScoreV1 rewards a risk-free complete-set wash
+
+The primary candidate score sums
+`p_i * (S - p_i) * direct_flow_i`. It is not invariant to adding a constant
+complete-set payoff, although that component carries no contingent risk. At the
+binary midpoint, two distinct keys crossing `q` lots of `(1,1)` earn
+`50,000,000q` primary-score units while the composite fee correctly charges the
+cash-equivalent basket zero. A genuine one-percent-tail Egg trade of the same
+size earns only `990,000q`. Same-owner overlap does not help against two keys,
+and the later `distinct_owners` component rewards key fragmentation again.
+
+This does not break conservation, but it makes candidate selection economically
+gameable. Keep the frozen ScoreV1 only as an experimental profile. A ScoreV2
+must be exactly invariant to constant complete-set shifts, must not use pubkey
+count as personhood, and needs adversarial quotient-invariance, Sybil, tail, and
+representation tests before it controls a public market.
+
+### P0 — degree-two/three price admission is not a no-arbitrage certificate
+
+For degree zero and one, simplex membership has a representing-measure result.
+For multi-span degree two and three, the implemented finite moment-cone family
+is necessary but not sufficient for membership in the true spline moment cone.
+The current code says so, but public descriptions were broader. Until a complete
+witness or deliberately sufficient inner representation exists, the first
+coupled product profile should admit degree zero/one only. Degree two/three
+evaluation and redemption can remain useful research capabilities without being
+marketed as a fully coherent public price surface.
+
+### What the instrument is, and whether it is good
+
+The compelling primitive is a fully collateralized call auction over a finite
+basis of bounded state-contingent claims. Degree-zero Eggs are categorical
+Arrow-like claims; degree-one Eggs are overlapping hats. Coefficient vectors
+express crash, range, tent, and capped-directional payoffs, and one portfolio
+order removes execution leg risk. Settlement nevertheless credits separate Egg
+balances: there is no transferable tent wrapper.
+
+That kernel is good for a narrow wedge: recurring four-to-eight-state terminal
+price or drawdown hedges for thin crypto assets, preferably in stable collateral.
+It is not yet a good live venue. The shipped interaction is one hard-coded local
+Friday terminal-price fixture; there is no product-path compiler, recurring
+Series, real solver incentive, funded liquidity mechanism, wallet transaction
+client, live source identity, or same-market source-to-redemption demonstration.
+The public site now calls the Friday statistic terminal rather than TWAP,
+describes basis prices rather than a unique continuous density, and distinguishes
+an atomic portfolio order from a single transferable asset.
+
+### Validation and rent conclusions
+
+The exact pushed checkpoint had no coherent full default/mock SVM run: three
+tests still encoded pre-repair candidate-retention semantics. Critical signed
+validator lanes (`run_general_committed`, keeper crash/resume, paces dry-run,
+Operator Trade/replay) were also absent from the baseline manifest. A cloned
+Pyth validator is useful substrate. Separately, the actual deployed receiver
+and router ELFs have now verified a locally signed 13-of-19 guardian VAA and
+executed `PostUpdate`; that is real provider-program execution over a synthetic
+local observation, not devnet price evidence. The receiver call is still not
+joined to the Clutch archive and same-market lifecycle.
+
+The current repair wave passed three byte-identical artifact builds, including
+a relocated Cargo home: ELF
+`a56c7ce158dc0667fabbc6b9736699adf5e3495350cf8b56b7616bf56868e272`,
+2,105,728 bytes, with dependency/syscall, loader-shape, and final-LTO frame
+checks green. It costs 14.6582124 SOL of persistent loader rent; ten SOL is
+insufficient by 4.6582124 SOL before fees. The combined static-deduplication and
+fail-closed wave removed 54,344 bytes / 0.37823424 SOL from `a6381fbe…`.
+Getting under ten SOL still requires an ELF no larger than 1,436,444 bytes,
+another 669,284-byte reduction. Larger wins require
+capability profiles and active-width account formats, not weakened exactness:
+binary ClearWork alone can shrink by 33,376 bytes per candidate, and receipt
+pages can remove most of the per-receipt account overhead. Historical rent
+evidence remains immutable; current-tree inventories must separately correct
+Direct Epoch V4 to 673 bytes and include the 404-byte SourceSpec V2.
+
+After freezing that source, the complete default empty-registry SVM profile
+passed 165 tests with zero failures against the audited `a56c7ce…` ELF. The
+separately compiled `non-production-mock-source` profile passed 168 tests with
+zero failures against its distinct 2,133,648-byte ELF `8131e640…`. The profile
+distinction is part of the claim: the latter exercises funded laboratory
+source/value paths and is not production-source evidence. Signed loopback
+validator and Operator gates still remain before this wave can be considered a
+replacement evidence baseline.
 
 ## Decisions to keep
 
