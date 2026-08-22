@@ -141,6 +141,52 @@ const RESERVATION_EPOCH_OFFSET: usize = 2 + 32 + 32;
 /// Byte offset of `CandidateRecord::epoch`: the two header bytes followed by
 /// the candidate identity.
 const CANDIDATE_EPOCH_OFFSET: usize = 2 + 32;
+/// Byte offset of `ClearWorkHeader::epoch`: tag/version, then market.
+const CLEAR_WORK_EPOCH_OFFSET: usize = 2 + 32;
+/// Byte offset of `ClearWorkGrowStage::epoch`: tag/version, grow marker,
+/// target length, then market.
+const CLEAR_WORK_GROW_EPOCH_OFFSET: usize = 2 + 1 + 4 + 32;
+
+/// Stable terminal stop while root deletion is deliberately disabled.
+const ROOT_RETAINED_REASON: &str = "root retained: CloseGeneralEpoch is disabled until durable \
+epoch replay prevention and exhaustive dependent accounting are deployed";
+
+/// The identity coordinates common to a finished and a growing checkpoint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ClearWorkIdentity {
+    market: Hash32,
+    epoch: Hash32,
+    candidate: Hash32,
+    stored_bump: u8,
+}
+
+/// Decode either honest checkpoint shape without treating a short growing
+/// account as a finished checkpoint (or vice versa).
+fn clear_work_identity(address: &str, bytes: &[u8]) -> Result<ClearWorkIdentity, String> {
+    if bytes.len() == account_len::CLEAR_WORK {
+        let header = ClearWorkHeader::decode(bytes).map_err(|error| {
+            format!("clear work {address} did not decode as finished: {error:?}")
+        })?;
+        return Ok(ClearWorkIdentity {
+            market: header.market,
+            epoch: header.epoch,
+            candidate: header.candidate,
+            stored_bump: header.stored_bump,
+        });
+    }
+    let stage = clearing::ClearWorkGrowStage::decode(bytes).map_err(|error| {
+        format!(
+            "clear work {address} did not decode as a {}-byte grow stage: {error:?}",
+            bytes.len()
+        )
+    })?;
+    Ok(ClearWorkIdentity {
+        market: stage.market,
+        epoch: stage.epoch,
+        candidate: stage.candidate,
+        stored_bump: stage.stored_bump,
+    })
+}
 
 /// One live order of the frozen set, at its walk rank.
 #[derive(Clone, Debug)]
@@ -451,13 +497,13 @@ impl Keeper {
         Ok(out)
     }
 
-    /// Every submitted candidate record of this epoch, discovered from the
-    /// program-owned account set rather than from the verified-only top three.
+    /// Every candidate record of this epoch, discovered from the program-owned
+    /// account set rather than from the verified-only top three.
     ///
     /// This RPC projection is a liveness hint only.  Every resulting identity
     /// is rebound to its canonical PDA here, and every instruction independently
     /// authenticates the record, feed, epoch, and PDA on chain.
-    fn candidate_submissions(&mut self) -> Result<Vec<Hash32>, String> {
+    fn candidates(&mut self) -> Result<Vec<(Hash32, u8)>, String> {
         let rows = self.rpc.program_accounts(
             &self.cfg.program_id_b58,
             account_len::CANDIDATE,
@@ -474,16 +520,80 @@ impl Keeper {
                 ));
             }
             let expected = self.deriver.candidate(self.epoch_id, record.candidate)?;
-            if expected.address != address {
+            if expected.address != address || expected.bump != record.stored_bump {
                 return Err(format!(
-                    "candidate {address} is not its canonical PDA {}",
-                    expected.address
+                    "candidate {address} is not its canonical PDA {} with bump {}",
+                    expected.address, expected.bump
                 ));
             }
-            if record.status == CANDIDATE_STATUS_SUBMITTED {
-                out.push(record.candidate);
-            }
+            out.push((record.candidate, record.status));
         }
+        out.sort_by_key(|left| left.0.bytes());
+        Ok(out)
+    }
+
+    /// The still-unverified subset the frozen-phase keeper can advance.
+    fn candidate_submissions(&mut self) -> Result<Vec<Hash32>, String> {
+        Ok(self
+            .candidates()?
+            .into_iter()
+            .filter_map(|(candidate, status)| {
+                (status == CANDIDATE_STATUS_SUBMITTED).then_some(candidate)
+            })
+            .collect())
+    }
+
+    /// Every finished or half-grown checkpoint of this epoch, independently
+    /// discovered from its own bytes rather than through a `CandidateRecord`.
+    ///
+    /// Candidate records and checkpoints have independent close routes: a
+    /// permissionless caller may close a candidate first, and a keeper may be
+    /// restarted after that point.  Scanning only records would then lose the
+    /// checkpoint's candidate coordinate and strand its recorded rent.  The
+    /// four growing lengths use a different epoch offset from the finished
+    /// header, so each exact account shape is queried and decoded separately.
+    fn clear_works(&mut self) -> Result<Vec<Hash32>, String> {
+        let mut rows = self.rpc.program_accounts(
+            &self.cfg.program_id_b58,
+            account_len::CLEAR_WORK,
+            CLEAR_WORK_EPOCH_OFFSET,
+            &self.epoch_id.bytes(),
+        )?;
+
+        let mut len = CLEAR_WORK_GROW_STEP;
+        while len < account_len::CLEAR_WORK {
+            rows.extend(self.rpc.program_accounts(
+                &self.cfg.program_id_b58,
+                len,
+                CLEAR_WORK_GROW_EPOCH_OFFSET,
+                &self.epoch_id.bytes(),
+            )?);
+            len = clearing::clear_work_grown_len(len);
+        }
+
+        let mut out = Vec::with_capacity(rows.len());
+        for (address, bytes) in rows {
+            let identity = clear_work_identity(&address, &bytes)?;
+            if identity.epoch != self.epoch_id || identity.market != self.cfg.market {
+                return Err(format!(
+                    "clear work {address} passed the epoch filter but binds another plane"
+                ));
+            }
+            let expected = self.deriver.clear_work(self.epoch_id, identity.candidate)?;
+            if expected.address != address || expected.bump != identity.stored_bump {
+                return Err(format!(
+                    "clear work {address} is not its canonical PDA {} with bump {}",
+                    expected.address, expected.bump
+                ));
+            }
+            out.push(identity.candidate);
+        }
+
+        // The RPC calls are individually committed but not one atomic bank
+        // snapshot. A checkpoint can grow between exact-length queries and
+        // appear twice; its canonical PDA makes deduplication unambiguous.
+        out.sort_by_key(|left| left.bytes());
+        out.dedup();
         Ok(out)
     }
 
@@ -705,7 +815,7 @@ impl Keeper {
         }
 
         // --- rent close, in dependency order -----------------------------
-        if let Some(step) = self.close_dag(view, epoch, window, selected, cleared)? {
+        if let Some(step) = self.close_dag(view, epoch, selected, cleared)? {
             return Ok(step);
         }
         Ok(Step::Done)
@@ -1662,12 +1772,10 @@ impl Keeper {
         &mut self,
         view: &View,
         epoch: &EpochAccount,
-        window: &EpochWindowAccount,
         selected: Hash32,
         cleared: bool,
     ) -> Result<Option<Step>, String> {
         let epoch_key = self.wiring()?.epoch.bytes;
-        let window_key = self.wiring()?.window.bytes;
 
         // 61: exhausted receipts.
         if cleared {
@@ -1713,26 +1821,40 @@ impl Keeper {
             return Ok(Some(step));
         }
 
-        // 66 then 65: checkpoints, then candidate pairs, non-selected first.
-        let mut order: Vec<Hash32> = Vec::new();
-        for index in 0..usize::from(window.retained_count) {
-            let candidate = window.retained[index];
-            if candidate != selected {
-                order.push(candidate);
-            }
-        }
-        if selected != Hash32::ZERO {
-            order.push(selected);
-        }
-        for candidate in order {
+        // 66: every checkpoint first, including one whose CandidateRecord was
+        // already closed by another permissionless actor. The checkpoint's own
+        // authenticated header/grow prefix is its restart-safe index.
+        let mut work_order = self.clear_works()?;
+        work_order.sort_by_key(|candidate| candidate == &selected);
+        for candidate in work_order {
             if let Some(act) = self.close_clear_work(candidate, epoch_key, selected, epoch)? {
                 return Ok(Some(Step::Act(act)));
             }
+        }
+
+        // 65: every candidate status, non-selected first. The retained
+        // registry is deliberately only the verified top three; terminal
+        // cleanup must include superseded, refused, late-submitted, and valid
+        // noncompetitive records too.
+        let mut candidate_order: Vec<Hash32> = self
+            .candidates()?
+            .into_iter()
+            .map(|(candidate, _status)| candidate)
+            .collect();
+        candidate_order.sort_by_key(|candidate| candidate == &selected);
+        for candidate in candidate_order {
             if let Some(act) = self.close_candidate(candidate, epoch_key, selected, epoch)? {
                 return Ok(Some(Step::Act(act)));
             }
         }
-        self.close_root(epoch, window, epoch_key, window_key)
+        Ok(Some(Step::Blocked {
+            // Keep the sealed route name visible while the action itself is
+            // deliberately unreachable; the versioned repair will reuse it.
+            reason: format!(
+                "{ROOT_RETAINED_REASON} (disabled route {})",
+                quotes::CLOSE_EPOCH.route
+            ),
+        }))
     }
 
     /// Tag 63: one frozen page whose live records are all past ACTIVE.
@@ -1907,69 +2029,6 @@ impl Keeper {
         Ok(None)
     }
 
-    /// Tag 67: the root of the DAG.
-    fn close_root(
-        &mut self,
-        epoch: &EpochAccount,
-        window: &EpochWindowAccount,
-        epoch_key: [u8; 32],
-        window_key: [u8; 32],
-    ) -> Result<Option<Step>, String> {
-        // 67: the root.
-        let ledger = self.deriver.funding_ledger(&epoch_key)?;
-        let pot = self.deriver.pot(self.epoch_id)?;
-        let mut keys = vec![
-            epoch_key,
-            window_key,
-            ledger.bytes,
-            self.payer,
-            self.sink,
-            pot.bytes,
-        ];
-        let mut readonly = vec![pot.bytes];
-        for index in 0..epoch.page_count.max(1) {
-            let page = self.deriver.page(self.epoch_id, index)?;
-            keys.push(page.bytes);
-            readonly.push(page.bytes);
-        }
-        for index in 0..usize::from(window.retained_count) {
-            let candidate = window.retained[index];
-            let record = self.deriver.candidate(self.epoch_id, candidate)?;
-            let record_ledger = self.deriver.funding_ledger(&record.bytes)?;
-            keys.push(record.bytes);
-            keys.push(record_ledger.bytes);
-            readonly.push(record.bytes);
-            readonly.push(record_ledger.bytes);
-        }
-        let spec = TxSpec {
-            writable_signers: vec![self.payer],
-            readonly_signers: Vec::new(),
-            writable: vec![epoch_key, window_key, ledger.bytes, self.sink],
-            readonly,
-            program: vec![(
-                keys,
-                wire::request(
-                    0,
-                    &Intent::CloseGeneralEpoch {
-                        market: self.cfg.market,
-                        epoch: self.epoch_id,
-                    },
-                ),
-            )],
-            heap: false,
-            limit: quotes::CLOSE_EPOCH.limit_cu,
-        };
-        self.act(
-            "CloseGeneralEpoch",
-            format!("retained={}", window.retained_count),
-            quotes::CLOSE_EPOCH,
-            vec![WRONG_PROGRAM_OWNER],
-            true,
-            &spec,
-        )
-        .map(|act| Some(Step::Act(act)))
-    }
-
     fn close_receipts(
         &mut self,
         selected: Hash32,
@@ -2047,6 +2106,12 @@ impl Keeper {
         }
         let record = self.deriver.candidate(self.epoch_id, candidate)?;
         let ledger = self.deriver.funding_ledger(&work.bytes)?;
+        // An optional-ledger checkpoint has no authenticated refund recipient
+        // and is unclosable by design. Do not emit the same guaranteed
+        // WrongProgramOwner refusal forever on every poll.
+        if self.rpc.account(&ledger.address)?.is_none() {
+            return Ok(None);
+        }
         let pot = self.deriver.pot(self.epoch_id)?;
         let record_standing = self.rpc.account(&record.address)?.is_some();
         let pot_present = self.rpc.account(&pot.address)?.is_some();
@@ -2143,13 +2208,14 @@ impl Keeper {
         ];
         let mut readonly = vec![epoch_key];
         if is_selected {
-            let page = self.deriver.page(self.epoch_id, 0)?;
             keys.push(pot.bytes);
-            keys.push(page.bytes);
             readonly.push(pot.bytes);
-            readonly.push(page.bytes);
+            for index in 0..epoch.page_count.max(1) {
+                let page = self.deriver.page(self.epoch_id, index)?;
+                keys.push(page.bytes);
+                readonly.push(page.bytes);
+            }
         }
-        let _ = epoch;
         let spec = TxSpec {
             writable_signers: vec![self.payer],
             readonly_signers: Vec::new(),
@@ -2348,6 +2414,10 @@ pub fn benign_reason(code: u64) -> &'static str {
 mod tests {
     use super::*;
 
+    fn hash(byte: u8) -> Hash32 {
+        Hash32::from_bytes([byte; 32])
+    }
+
     fn order(buy: u8, sell: u8) -> PairingSlice {
         PairingSlice {
             buy_ref: LegRef::Order(buy),
@@ -2355,6 +2425,64 @@ mod tests {
             outcome: 0,
             quantity: 1,
         }
+    }
+
+    #[test]
+    fn discovery_decodes_finished_and_every_growing_clear_work_shape() {
+        let expected = ClearWorkIdentity {
+            market: hash(1),
+            epoch: hash(2),
+            candidate: hash(3),
+            stored_bump: 4,
+        };
+
+        let mut finished = vec![0; account_len::CLEAR_WORK];
+        clearing::init_clear_work(
+            &mut finished,
+            expected.market,
+            expected.epoch,
+            expected.candidate,
+            expected.stored_bump,
+        )
+        .unwrap();
+        assert_eq!(
+            &finished[CLEAR_WORK_EPOCH_OFFSET..CLEAR_WORK_EPOCH_OFFSET + 32],
+            &expected.epoch.bytes()
+        );
+        assert_eq!(
+            clear_work_identity("finished", &finished).unwrap(),
+            expected
+        );
+
+        let mut growing = vec![0; CLEAR_WORK_GROW_STEP];
+        clearing::init_clear_work_grow_stage(
+            &mut growing,
+            expected.market,
+            expected.epoch,
+            expected.candidate,
+            expected.stored_bump,
+        )
+        .unwrap();
+        let mut len = CLEAR_WORK_GROW_STEP;
+        while len < account_len::CLEAR_WORK {
+            growing.resize(len, 0);
+            assert_eq!(
+                &growing[CLEAR_WORK_GROW_EPOCH_OFFSET..CLEAR_WORK_GROW_EPOCH_OFFSET + 32],
+                &expected.epoch.bytes()
+            );
+            assert_eq!(
+                clear_work_identity("growing", &growing).unwrap(),
+                expected,
+                "grow length {len}"
+            );
+            len = clearing::clear_work_grown_len(len);
+        }
+    }
+
+    #[test]
+    fn discovery_refuses_a_non_stage_short_checkpoint() {
+        let bytes = vec![0; CLEAR_WORK_GROW_STEP + 1];
+        assert!(clear_work_identity("bad", &bytes).is_err());
     }
 
     #[test]
