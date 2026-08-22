@@ -18,8 +18,9 @@
 }
 
 ^"canon"{
-  ~#subject: "The Dragon's Clutch conceptual canon — 40 concepts in six layers."
+  ~#subject: "The Dragon's Clutch conceptual canon — 51 concepts in six layers."
   ~#seed: ~"../docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
+  ~#refresh: "2026-08-21 against the capability wave — 11 added, 15 revised, 7 rewired."
   @algebra: ~"./canon/algebra.spw"
   @custody: ~"./canon/custody.spw"
   @clearing: ~"./canon/clearing.spw"

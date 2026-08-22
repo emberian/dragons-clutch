@@ -4,7 +4,11 @@
 # is made machine-visible, and what independent re-execution does and
 # does not buy.
 #
-# Definitions are transcribed from the inventory, not re-derived here.
+# Plus the three the 2026-08-21 wave added: the blocker ledger whose emptiness
+# is a claim with a grammar, the residual that grammar names, and the operator
+# bench — a projection the program is free to refuse.
+#
+# Seeded definitions are transcribed from the inventory, not re-derived here.
 # Relation entries follow the vocabulary declared in ~"./index.spw".
 
 #>spw_dragons_clutch_canon_evidence
@@ -18,11 +22,15 @@
   @truth: ~"../../CURRENT_TRUTH.md"
   @goal: ~"../../GOAL.md"
   @planned_vs_built: ~"../../docs/reviews/PLANNED_VS_BUILT_2026-08-19.md"
+  @settlement: ~"../../programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
+  @bench: ~"../../docs/design/OPERATOR_BENCH_DESIGN_2026-08-21.md"
+  @pull_endow: ~"../../programs/clutch-sbf/svm-tests/tests/r2_pull_endow.rs"
+  @profile: ~"../../research/liveness-policy-profile"
 }
 
 ^"intent"{
   ~#layer: "V. The evidence culture"
-  ~#span: "concepts 36-38"
+  ~#span: "concepts 36-38, plus the wave's blocker ledger, residual, and operator bench"
   ~#goal: "Hold the evidence vocabulary exactly: seal, the two-ELF discipline, attestation."
 }
 
@@ -38,19 +46,23 @@
     binds = #[
       "is consumed by the manifest and by -> attestation"
       "any closure-byte change forks the identity and forces a reseal"
+      "what a seal says about a retired blocker is what the *sealed* artifact carried -> blocker_ledger"
     ][reg=set]
     adjacent = #[
       "manifest (schema-v2, 100/100 executed gates)"
       "baseline"
       "runtime ancestry"
     ][reg=set]
+    status = "The accepted seal is the cycle-E chain over `4fded7a6…` (1,979,512 bytes). The 2026-08-21 wave deliberately took no per-wave reseal — one batched cycle-G reseal is owed for the settled tree — so every seal-side statement in this canon is about an artifact that predates the wave. See the index's `seal_lag`."
+    revised = "2026-08-21 — no seal moved. Recording that is the point: the tree advanced and the identity did not, which is exactly the condition the seal exists to make visible rather than a drift to be smoothed."
   }[reg=concept]
 
   two_elf_discipline: .{
     n = 37
     label = "two-ELF discipline (the mock boundary)"
-    define = "Success against mock infrastructure requires a distinct, explicitly non-production artifact; the default sealed program refuses value with `SourceReleaseUnavailable` (`0x79`) because its source registry is empty — incompleteness made machine-visible rather than papered over."
-    cite = "CURRENT_TRUTH.md §4 (pooled custody row), §6.3; docs/reviews/PLANNED_VS_BUILT_2026-08-19.md"
+    define = "Success against mock infrastructure requires a distinct, explicitly non-production artifact; the default program's `SourceReleaseUnavailable` (`0x79`) is what an empty or unmatched source registry earns — incompleteness made machine-visible rather than papered over."
+    seeded_define = "Success against mock infrastructure requires a distinct, explicitly non-production artifact; the default sealed program refuses value with `SourceReleaseUnavailable` (`0x79`) because its source registry is empty — incompleteness made machine-visible rather than papered over."
+    cite = "CURRENT_TRUTH.md §4 (pooled custody row), §6.3; docs/reviews/PLANNED_VS_BUILT_2026-08-19.md; programs/clutch-sbf/svm-tests/tests/r2_pull_endow.rs"
     source = ~"../../CURRENT_TRUTH.md"
     corroborant = ~"../../docs/reviews/PLANNED_VS_BUILT_2026-08-19.md"
     teaches = "P7"
@@ -58,7 +70,10 @@
     binds = #[
       "guards -> custody_boundary"
       "the named injections of every walk are inventoried in-tree"
+      "which registry a market's Terms point at is -> source_generation"
     ][reg=set]
+    revised = "2026-08-21 — the registry is no longer empty by construction. The default artifact takes custody for a **registered v2 pull release**, and the discipline holds by narrowing rather than by universality: a structurally perfect v2 spec naming a parser release the ELF does not carry still refuses `0x79` and moves no atom, and the stock V1 plane still refuses `0x79`. The mock ELF remains a distinct artifact and the bench's non-production banner still names it."
+    evidence = ~"../../programs/clutch-sbf/svm-tests/tests/r2_pull_endow.rs"
   }[reg=concept]
 
   attestation: .{
@@ -74,7 +89,68 @@
     plane = "feeds no promotion by itself -> claim_plane"
     binds = #[
       "distinct from rebuild (cross-OS divergence exhaustively classified)"
+      "a caveat a bank cannot discharge is discharged by transport instead -> keeper"
+      "a projection a person can watch is not attestation, and says so -> operator_bench"
     ][reg=set]
+  }[reg=concept]
+
+  blocker_ledger: .{
+    origin = "wave-2026-08-21"
+    label = "the blocker ledger"
+    define = "The executable in-source list of lifecycle facts the general clearing plane needs and does not have, ordered by dependency rather than severity and pinned by its own test alongside the retired rows that state how each was discharged — so \"what is missing\" is a constant a compiler checks, never prose."
+    cite = "programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs (`SettlementBlocker`, `SETTLEMENT_BLOCKERS`, `RETIRED_SETTLEMENT_BLOCKERS`)"
+    source = ~"../../programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
+    refines = #[ "into a machine-checked ledger -> two_elf_discipline" ][reg=set]
+    used_by = #[ claim_plane ][reg=set]
+    status = "`SETTLEMENT_BLOCKERS` is **empty**: ten rows retired, every one discharged by an executable seam with a real-bank campaign behind it. Four fell in this wave — `PartialFillLedger`, `RoundingPotRealization`, `VirtualPot`, `VirtualMergeCredit` — and two of those four were *born* in it, filed as new rows when a retiring row's residual turned out to be a missing settlement fact rather than a narrowing. A row that is opened and closed inside one wave is the grammar working, not churn."
+    grammar = "**Empty is not \"nothing refuses\", and the difference is the ledger's grammar.** A missing join is a row; an implemented join whose *admission* is narrower than the relation's is a recorded residual of the row that implemented it. What is *authority-gated* rather than unimplemented stays off the list too: the pinned `GENERAL_CLEARING_POLICY_V1` is fee-free, so every seam requires `max_fee_atoms == 0` and answers `AuthorizationUnavailable` otherwise — a fee plane needs a frozen fee base and a named recipient, which is a policy fact, not a settlement one. A new row belongs here only when a *settlement* fact is found missing again."
+    binds = #[
+      "the rows it retired this wave are -> per_order_completion"
+      "the rows it retired this wave are -> pot"
+      "the rows it retired this wave are -> virtual_mint_join"
+      "what emptiness does not mean is -> residual"
+    ][reg=set]
+    plane = "the tree's ledger and the sealed artifact's disagree, and the seal is the one behind -> seal"
+  }[reg=concept]
+
+  residual: .{
+    origin = "wave-2026-08-21"
+    label = "recorded residual"
+    define = "A named narrowing carried by an implemented join: the seam works, its admission is narrower than the relation's, and the gap is written down where it was created — with the coincidence that closes it *checked* rather than assumed — so the ledger can be empty without the tree pretending nothing refuses."
+    cite = "programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs (the `SETTLEMENT_BLOCKERS` doc comment, \"The residuals standing right now\")"
+    source = ~"../../programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
+    refines = #[ "into a ledger discipline -> refusal" ][reg=set]
+    used_by = #[ blocker_ledger ][reg=set]
+    standing = #[
+      "the per-owner conversion coincidence, checked as `distinct_owners == filled_order_count` -> pot"
+      "the merge's ordering rule -> virtual_mint_join"
+      "two terminal rent residuals — an account created without its optional funding ledger stands forever, and an abandoned ACTIVE reservation holds its page and so the epoch root at recorded rent -> funding_ledger"
+    ][reg=set]
+    binds = #[
+      "each residual is recorded where it is created rather than left to be rediscovered"
+      "a residual fires a typed refusal; it is never a silent narrowing -> refusal"
+    ][reg=set]
+  }[reg=concept]
+
+  operator_bench: .{
+    origin = "wave-2026-08-21"
+    label = "the operator bench (untrusted projection)"
+    define = "A window onto the exact signed walk rather than a reimplementation of it, made honest structurally rather than editorially: \"The browser never builds a transaction.\" It has no RPC client, no wallet, no serializer and no key material, it receives decoded state over one event stream and POSTs intents, and every byte that reaches the bank is produced by the same harness builders the sealed lane uses — so a divergence between page and wire is not caught, it is impossible."
+    cite = "docs/design/OPERATOR_BENCH_DESIGN_2026-08-21.md (the thesis; \"What this is evidence for, and what it is not\"; trade mode)"
+    source = ~"../../docs/design/OPERATOR_BENCH_DESIGN_2026-08-21.md"
+    refines = #[ "into something a person can watch -> attestation" ][reg=set]
+    refuses = #[ "a second implementation of the wire format -> refusal" ][reg=set]
+    honesty = "Structural rather than editorial: a permanent, non-dismissible header carrying `NON-PRODUCTION mock-source ELF`, the live-hashed ELF sha256, `LOCAL 127.0.0.1 ONLY`, `no value`, and the scope `SBF-EXECUTED (unpromoted)` — rendered before any data arrives and re-rendered from the daemon's own hash of the `.so` it actually loaded, not from a constant in the page. The UI's own prose never uses the word *verified*, and its claim vocabulary is reused verbatim rather than extended."
+    binds = #[
+      "the split gate is byte-identity: emit the plan before and after the harness library split and require every file to match"
+      "the replay falsifier byte-diffs the daemon's rebuilt transactions against the harness's own emitted files, with a corrupted byte required to go red"
+      "a refusal is reported with the bank's exact `Custom(0x….)` and is not a fault — the program is the authority and the page is the projection -> refusal"
+      "it inherits the general-clearing lane's scope exactly and widens it in no direction -> claim_plane"
+      "it found the wave's first cross-lane integration break, where harness expectations pre-dated the schema change -> reservation"
+      "its opponent is a **fixed-belief automaton** and is called that wherever it appears: model theater would make the demonstration worthless, because what is demonstrated is that a disagreement between two *stated* beliefs is what clears"
+    ][reg=set]
+    plane = "SBF-EXECUTED, unpromoted: signed, confirmed, committed sequential execution on a local validator from a genesis-assisted prestate against a non-production mock-source ELF — not a deployment, not devnet or mainnet evidence, not a wallet, not an operatorless venue, not a blank-bank lifecycle -> claim_plane"
+    adjacent = #[ "operatord", "watch mode", "trade mode", "the density painter", "the Friday clutch" ][reg=set]
   }[reg=concept]
 }
 

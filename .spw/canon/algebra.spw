@@ -3,7 +3,10 @@
 # Concepts 1-7 of the Dragon's Clutch conceptual canon: what a claim is,
 # what a complete set is, and the exact arithmetic that binds them.
 #
-# Definitions are transcribed from the inventory, not re-derived here.
+# Seeded definitions are transcribed from the inventory, not re-derived here.
+# Where the 2026-08-21 capability wave moved a concept, the seed sentence is
+# kept in `seeded_define` and the moving fact is stated in `revised`/`status`
+# against its own cite.
 # Relation entries follow the vocabulary declared in ~"./index.spw".
 
 #>spw_dragons_clutch_canon_algebra
@@ -19,6 +22,9 @@
   @risk: ~"../../docs/research/RISK_SUMMED_POSITIONS.md"
   @bspline: ~"../../lean/DragonsClutch/BSpline.lean"
   @tier2: ~"../../docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md"
+  @goal: ~"../../GOAL.md"
+  @degree_corpus: ~"../../verus/bspline/DEGREE_CORPUS.md"
+  @lifecycle: ~"../../programs/clutch-sbf/svm-tests/tests/joined_lifecycle.rs"
 }
 
 ^"intent"{
@@ -75,8 +81,12 @@
     refuses = #[ "as a definition -> compatibility_lowering" ][reg=set]
     binds = #[
       "sets where implied-measure-hood holds (≤1) and breaks (≥2) -> implied_measure"
+      "is the one byte a price-plane admission test needs -> moment_cone"
     ][reg=set]
     adjacent = #[ "knot grid", "open-clamped", "span" ][reg=set]
+    revised = "2026-08-21 — the smooth rungs stopped being design-ahead. Three surfaces still said degrees two and three refuse at Terms admission; none had been true since 2026-08-19, and correcting the claim upgraded a risk rather than retiring one (the §7.4 no-arbitrage warning went live, which is what the moment-cone gate answers)."
+    status = "Degrees two and three are admitted at Terms with every smooth side condition pinned against the Lean theorem whose hypothesis it is, driven end to end on a bank (`blank_bank_joined_lifecycle_degree_two` / `_degree_three`: create, split, resolve, redeem, CU measured), and checked by a 3,360-row Lean/Rust corpus that agrees byte for byte at degrees one through three with eight source mutants red."
+    evidence = ~"../../verus/bspline/DEGREE_CORPUS.md"
   }[reg=concept]
 
   partition_of_unity: .{
@@ -128,9 +138,10 @@
     source = ~"../../PROJECT.md"
     corroborant = ~"../../lean/DragonsClutch/BSpline.lean"
     teaches = "P4"
-    used_by = #[ hatch ][reg=set]
-    used_by_external = #[ "fee close" ][reg=set]
+    used_by = #[ hatch, composite_fee_base, pot ][reg=set]
     plane = "proved canonical in the Lean model"
+    revised = "2026-08-21 — the seed recorded `fee close` as a hole because no fee arithmetic existed. Two of its named boundaries are now executable: the composite base's terminal ceiling with its persisting carry, and the rounding pot's per-end conversion (ceiling for a payer, floor for a payee)."
+    evidence = ~"../../crates/clutch-batch/src/relation_v1.rs"
   }[reg=concept]
 }
 
@@ -138,7 +149,6 @@
   # Relation targets the inventory names that are not themselves canon concepts.
   # Recorded, not promoted to edges.
   degree_refines: "binary markets — named at entry 3, no canon entry"
-  largest_remainder_used_by: "fee close — named at entry 7, no canon entry"
 }
 
 ~<./index.spw>

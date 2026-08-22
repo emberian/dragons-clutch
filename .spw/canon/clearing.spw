@@ -4,7 +4,13 @@
 # clearing, the streaming execution of that predicate, and the price object
 # the whole apparatus publishes.
 #
-# Definitions are transcribed from the inventory, not re-derived here.
+# Plus the five the 2026-08-21 wave added: the moment cone that admits the
+# price plane above degree one, the per-order completion triple, the pot both
+# rounding and churn draw on, the composite fee base that ended the fork as a
+# shape, and the keeper that makes permissionless liveness an operating fact.
+#
+# Seeded definitions are transcribed from the inventory, not re-derived here.
+# Where the wave moved one, the seed sentence stays in `seeded_define`.
 # Relation entries follow the vocabulary declared in ~"./index.spw".
 
 #>spw_dragons_clutch_canon_clearing
@@ -26,11 +32,19 @@
   @relation_stream: ~"../../crates/clutch-batch/src/relation_v1_stream.rs"
   @layout: ~"../../docs/implementation/SOLANA_LAYOUT.md"
   @layout_program: ~"../../programs/solana-layout"
+  @reservation: ~"../../programs/solana-layout/src/reservation.rs"
+  @settlement: ~"../../programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
+  @clear_walk: ~"../../programs/clutch-sbf/program/src/instructions/orders_batch/clear_walk.rs"
+  @moment_cone_lean: ~"../../lean/DragonsClutch/MomentCone.lean"
+  @partial_fill: ~"../../docs/design/PARTIAL_FILL_LEDGER_DESIGN_2026-08-21.md"
+  @keeper: ~"../../programs/clutch-sbf/keeper"
+  @keeper_gate: ~"../../programs/clutch-sbf/scripts/run_keeper_gate.sh"
+  @policy_family: ~"../../research/batch-policy-identity/src/general_clearing_v1.rs"
 }
 
 ^"intent"{
   ~#layer: "III. The book and the clearing"
-  ~#span: "concepts 14-31"
+  ~#span: "concepts 14-31, plus the wave's cone, completion triple, pot, composite base, and keeper"
   ~#goal: "Hold the clearing vocabulary exactly, from the frozen book through the verdict to the two rival fee bases."
 }
 
@@ -89,17 +103,23 @@
   reservation: .{
     n = 18
     label = "reservation"
-    define = "The canonical pre-fund-safe per-order encumbrance of exact cash or internal Eggs, created at placement, re-verified order-by-order during pass 1, and released only per the verified summary."
-    cite = "CURRENT_TRUTH.md §4 (funded order admission); TIER2 plan T2-6b join 1"
-    source = ~"../../CURRENT_TRUTH.md"
-    corroborant = ~"../../docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md"
+    define = "The canonical pre-fund-safe per-order encumbrance of exact cash or internal Eggs — and, since schema v3, the per-order ledger itself: `entitled_units` stamped once from the digest-verified feed, monotone `consumed_units` for quantity, `paid_units` for cash, and a reserved-zero fee landing zone, so an order's whole life is a state its own account carries."
+    seeded_define = "The canonical pre-fund-safe per-order encumbrance of exact cash or internal Eggs, created at placement, re-verified order-by-order during pass 1, and released only per the verified summary."
+    cite = "CURRENT_TRUTH.md §4 (funded order admission); TIER2 plan T2-6b join 1; programs/solana-layout/src/reservation.rs (schema v2 §, schema v3 §)"
+    source = ~"../../programs/solana-layout/src/reservation.rs"
+    corroborant = ~"../../docs/design/PARTIAL_FILL_LEDGER_DESIGN_2026-08-21.md"
     teaches = "P3"
     recurs = "P4"
     uses = #[ custody_boundary ][reg=set]
     binds = #[
       "is swept by -> the_walk"
       "is consumed by -> entitlement"
+      "carries the counters the completion rule reads -> per_order_completion"
+      "`paid_units` exists for exactly one seam — the merge window -> virtual_mint_join"
     ][reg=set]
+    revised = "2026-08-21 — twice. The PartialFillLedger wave made the account the cumulative consumption ledger (v2, 570 → 610 bytes: `entitled_units`, `consumed_units`, plus the reserved fee zone); the VirtualMergeCredit wave split quantity from cash (v3, +`paid_units`, 618 bytes). It is not a new account family and not a policy fork: the frozen `GENERAL_CLEARING_POLICY_V1` digest is unchanged and already admitted partial fills, and the runtime seams were the only refusal sites."
+    status = "Version byte 4. The general body is now 618 bytes, the same as the direct plane's, so `(tag, version)` — not length — is the whole uniqueness key, and `reservation_v3_and_direct_v2_refuse_each_other` proves both decoders refuse the other plane's exact bytes."
+    evidence = ~"../../docs/design/PARTIAL_FILL_LEDGER_DESIGN_2026-08-21.md"
   }[reg=concept]
 
   candidate: .{
@@ -116,14 +136,16 @@
       "competes under -> selection"
       "its price vector is the dual -> zero_gap_certificate"
       "its price vector is the measure -> implied_measure"
+      "its price vector must first be admissible -> moment_cone"
     ][reg=set]
   }[reg=concept]
 
   relation: .{
     n = 20
     label = "relation"
-    define = "The frozen batch-clearing predicate (stages V0–V9): simplex gate, eligibility trichotomy, fill box, per-outcome conservation, pairing, surplus, cash closure, score — a disassembled optimality-certificate checker derived as refusal discipline."
-    cite = "crates/clutch-batch/src/relation_v1.rs; DUAL_IS_THE_MEASURE.md §4.4"
+    define = "The frozen batch-clearing predicate (stages V0–V9, with V1b between the simplex gate and the trichotomy): simplex gate, moment-cone admission, eligibility trichotomy, fill box, per-outcome conservation, pairing, surplus, cash closure, score — a disassembled optimality-certificate checker derived as refusal discipline."
+    seeded_define = "The frozen batch-clearing predicate (stages V0–V9): simplex gate, eligibility trichotomy, fill box, per-outcome conservation, pairing, surplus, cash closure, score — a disassembled optimality-certificate checker derived as refusal discipline."
+    cite = "crates/clutch-batch/src/relation_v1.rs; DUAL_IS_THE_MEASURE.md §4.4, §7.6"
     source = ~"../../crates/clutch-batch/src/relation_v1.rs"
     corroborant = ~"../../docs/research/DUAL_IS_THE_MEASURE.md"
     teaches = "P3"
@@ -132,7 +154,10 @@
       "consumes -> candidate"
       "emits -> verdict"
       "is streamed by -> the_walk"
+      "gained a price-plane stage -> moment_cone"
+      "gained fee arithmetic at V7/V8 -> composite_fee_base"
     ][reg=set]
+    revised = "2026-08-21 — V1b was added between V1 and V2, and the V7/V8 closes learned a policy-determined denominator and a quotient that may be collateral atoms rather than price units, so both fee bases share one join. `ClearWorkV1::ENCODED_BYTES` is unchanged at 47,846: the checkpoint gained no state."
   }[reg=concept]
 
   the_walk: .{
@@ -145,6 +170,11 @@
     teaches = "P3"
     uses = #[ checkpoint, live_rank, owner_tag ][reg=set]
     plane = "its on-chain verdict is byte-equal to the host relation's in bank evidence"
+    binds = #[
+      "begins by naming the epoch's own basis, and refuses rather than falling back to ungated -> moment_cone"
+      "is driven end to end from committed bytes by -> keeper"
+    ][reg=set]
+    revised = "2026-08-21 — `clear_walk::epoch_basis` reads `EpochAccount::basis_degree` and binds `BasisDescriptorV1::ClampedUniform`, refusing `UnsupportedBasisDegree` (`0x0096`) instead of `UNGATED`-on-doubt. Refused walks short-circuit cheap."
   }[reg=concept]
 
   verdict: .{
@@ -174,7 +204,10 @@
     binds = #[
       "is consumed by settlement under -> conservation"
       "each receipt consumed exactly once"
+      "its freeze also records the pot's verified expectation -> pot"
+      "a receipt closes an end only when both its ledgers reach the stamped total -> per_order_completion"
     ][reg=set]
+    revised = "2026-08-21 — `EntitleSlice` stopped refusing by shape and started routing by it: per-slice for a fragmented or partially filled single pair, a mixed single/portfolio pair, and a portfolio end with several counterparties; atomic and verbatim for an exclusive portfolio full pair. `SettlePage`'s seven-account shape is now the universal per-slice consumer."
   }[reg=concept]
 
   selection: .{
@@ -205,6 +238,7 @@
     binds = #[
       "is the dual on the accept set -> zero_gap_certificate"
       "is the measure at degree ≤ 1 -> implied_measure"
+      "is exactly no-static-arbitrage at degree ≤ 1 and strictly weaker above it -> moment_cone"
     ][reg=set]
   }[reg=concept]
 
@@ -219,7 +253,11 @@
     refines = #[ simplex_prices ][reg=set]
     measures = #[ ][reg=set]
     measures_external = #[ "the market's belief at grid resolution" ][reg=set]
-    binds = #[ "read natively by machines (P6)" ][reg=set]
+    binds = #[
+      "read natively by machines (P6)"
+      "the exact price test §7.4 left open is now derived -> moment_cone"
+    ][reg=set]
+    revised = "2026-08-21 — §7.6 closed the mathematics of the open question §7.4 left (\"the exact price test\"): membership in the moment body is exactly no-arbitrage in the admitted order language, the condition is stated in exact integers for every admitted grid, and no finite family of linear price inequalities can decide it. The refutation at degree ≥ 2 stands; what changed is that the venue now has a sound test rather than only a counterexample."
   }[reg=concept]
 
   zero_gap_certificate: .{
@@ -275,10 +313,16 @@
     teaches = "P5"
     measures = #[ ][reg=set]
     measures_external = #[ "risk transfer under the market's own measure" ][reg=set]
-    binds = #[ "vanishes on -> clutch" ][reg=set]
+    binds = #[
+      "vanishes on -> clutch"
+      "is the `kappa*G` arm of the base actually selected -> composite_fee_base"
+    ][reg=set]
     plane = "its zero-price kernel hole is a named falsifier"
-    status = "forced to zero everywhere in the current tree"
+    status = "No longer forced to zero *arithmetically*: `composite_fee_quote` computes `G_num(a,p) = sum_{i<j} p_i p_j |a_i − a_j|` in exact integers and nonzero rates verify rather than refuse. Every frozen production const still pins `(0, 0)`; the only nonzero rates that exist are the never-frozen, never-digested `TEST_COMPOSITE_*` laboratory pairs, and a production rate is a new frozen const with a new digest behind ember's own decision."
+    seeded_status = "forced to zero everywhere in the current tree"
+    revised = "2026-08-21 — the seed's status was true of the arithmetic as well as the rates; only the rates are still forced."
     adjacent = #[ "kappa", "fee carry", "terminal-ceil close" ][reg=set]
+    evidence = ~"../../crates/clutch-batch/src/relation_v1.rs"
   }[reg=concept]
 
   quotient_norm: .{
@@ -289,8 +333,128 @@
     source = ~"../../docs/research/RISK_SUMMED_POSITIONS.md"
     teaches = "P5"
     refines = #[ "into a fee base -> risk_quotient" ][reg=set]
-    status = "the fork against dispersion (30) is economics the mathematics cannot close"
-    binds = #[ "is the other arm of the fork against -> dispersion" ][reg=set]
+    status = "The fork was closed **as a shape, not as a number**: the selected base carries both arms at once (`kappa*G + kappa'*R`), so the choice the mathematics could not make was never made — it was dissolved into one functional with two rates. `R(a) = max_i a_i − min_i a_i` is what `composite_fee_quote` computes for the floor term, and it is the only arm that charges the zero-price channel."
+    seeded_status = "the fork against dispersion (30) is economics the mathematics cannot close"
+    binds = #[
+      "is the other arm of the fork against -> dispersion"
+      "is the `kappa'*R` floor arm of -> composite_fee_base"
+    ][reg=set]
+    revised = "2026-08-21 — ADOPTED item 9 selected the composite; the arithmetic landed in the relation and the shape const carries a rate pair. The rates themselves remain undecided and ember's alone."
+  }[reg=concept]
+
+  moment_cone: .{
+    origin = "wave-2026-08-21"
+    label = "the moment cone (price-plane admission)"
+    define = "The set of price vectors that are some probability measure's basis moments — equivalently, exactly the vectors against which no nonnegative-payoff portfolio in the admitted order language is priced negative — and the relation's V1b stage, a finite family of exact necessary conditions that admits every measure and refuses only with an executable arbitrage in hand."
+    cite = "DUAL_IS_THE_MEASURE.md §7.6 (Thms 7.6.3, 7.6.5, 7.6.8, 7.6.9); crates/clutch-batch/src/relation_v1.rs (`validate_price_moment_cone`); lean/DragonsClutch/MomentCone.lean"
+    source = ~"../../docs/research/DUAL_IS_THE_MEASURE.md"
+    corroborant = ~"../../crates/clutch-batch/src/relation_v1.rs"
+    hub = true
+    uses = #[ degree, partition_of_unity ][reg=set]
+    refines = #[ "strictly, above degree one -> simplex_prices" ][reg=set]
+    refuses = #[ "a price vector carrying an executable arbitrage -> candidate" ][reg=set]
+    measured_by = #[ implied_measure ][reg=set]
+    used_by = #[ relation, the_walk ][reg=set]
+    wiring = "The cone depends on `(degree, outcome count)` alone — \"not on the knot values, the spacing exponent, the payout denominator, or the edge policy\" (Lemma 7.6.1) — so binding a basis costs one byte and one enum, not a knot vector. That is what makes V1b implementable without widening the relation's domain."
+    families = #[
+      "ceiling (G1) — `a` complete sets short `b` units of claim `j`: a claim may not cost more than the most it can ever pay"
+      "butterfly (G2) — the neighbour spread `k*e_{j−1} − e_j + k*e_{j+1}`, \"the exact analogue of the classical butterfly no-arbitrage condition on option prices\""
+      "single-span Hankel quadrics (G3) — on `n = d + 1` grids, where the stage is *exactly* moment-cone membership"
+    ][reg=set]
+    binds = #[
+      "is the constant true at degree ≤ 1, where it is also exact -> degree"
+      "the clamped end claims attain 1 at every degree, so admission must leave them alone"
+      "the epoch's stored degree is what binds it on chain -> the_walk"
+      "sound refusal is chosen over completeness, which is the same discipline the tree enforces on rounding -> refusal"
+    ][reg=set]
+    plane = "the §7.6 theorems are [PROVED HERE] on paper over the repo's exact integer objects; MomentCone.lean is model-plane with decide-checked witnesses; neither makes the Rust stage verified in any proof-assistant sense -> claim_plane"
+    residual = "By Thm 7.6.8 no finite linear family can be complete, and the concrete gap is the certificates of wide support: at `d = 2`, `n ≥ 5` there are extreme rays given by nonnegative quadratic splines with interior double zeros that are not nonnegative combinations of the window-one and window-three families. A price may therefore be outside the cone, carry an executable arbitrage, and still pass V1b. [OPEN], falsifier named in §11 — \"nothing here bounds its size, and this document does not claim it is small.\""
+    adjacent = #[ "`PriceOutsideMomentCone`", "`UnsupportedBasisDegree` (0x0096)", "`BasisDescriptorV1::Ungated`", "Hausdorff moment cone", "Bernstein coordinates" ][reg=set]
+    evidence = ~"../../lean/DragonsClutch/MomentCone.lean"
+  }[reg=concept]
+
+  per_order_completion: .{
+    origin = "wave-2026-08-21"
+    label = "per-order completion (the entitled / consumed / paid triple)"
+    define = "The rule that closes one end of one order independently of every other: `paid_units <= consumed_units <= entitled_units` at every transaction boundary, `CONSUMED` exactly when the quantity and cash ledgers both reach the stamped total — so no end closes with a delivery it was never paid for, and the completing transition releases the exact remainder once."
+    cite = "programs/solana-layout/src/reservation.rs (schema v2/v3 §§); PARTIAL_FILL_LEDGER_DESIGN_2026-08-21.md (the conservation identity, generalized)"
+    source = ~"../../programs/solana-layout/src/reservation.rs"
+    corroborant = ~"../../docs/design/PARTIAL_FILL_LEDGER_DESIGN_2026-08-21.md"
+    uses = #[ reservation, entitlement ][reg=set]
+    refines = #[ "to the per-order grain -> conservation" ][reg=set]
+    invariant = "`initial = consumed-so-far + remaining + released`, held per cash and per outcome, with `released` zero until completion."
+    binds = #[
+      "the buy end releases the exact remaining cash — \"price-improvement + unfilled refund in one number\""
+      "the sell end returns the remaining internal vector"
+      "both counters are zero in ACTIVE and RELEASED, and equal in CONSUMED"
+      "the merge window is the only place the two counters differ -> virtual_mint_join"
+      "consumption is permissionless, so any keeper can drive a partial book to CONSUMED -> keeper"
+    ][reg=set]
+    exactness = "Per-slice divisibility is kept and named: `q*p = 0 mod S` before a receipt is minted. The theorem (host property test): under `TerminalOwnerFloor`, when every slice is exact the per-owner sums are multiples of `S`, both model conversions are identities, `rounding_pot == 0`, and per-slice atom sums equal the model's per-owner atoms."
+  }[reg=concept]
+
+  pot: .{
+    origin = "wave-2026-08-21"
+    label = "the pot (FinalPot)"
+    define = "The epoch's one settlement pot: it holds no value of its own but carries the verified rounding expectation that every completing order draws its share down, and during churn it is the pooled holder whose complete sets the mint join creates or destroys — with a closed-form cash identity that is zero at the freeze and zero again when the last receipt consumes."
+    cite = "programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs (`pot_cash_after`, the `RoundingPotRealization` / `VirtualPot` / `VirtualMergeCredit` retirement rows); relation_v1.rs:2482-2519, :2748-2757"
+    source = ~"../../programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
+    corroborant = ~"../../crates/clutch-batch/src/relation_v1.rs"
+    uses = #[ entitlement, largest_remainder ][reg=set]
+    used_by = #[ virtual_mint_join ][reg=set]
+    identity = "`pot_cash = (sum_buys V − sum_sells V) + pending gaps + (sets burned)*S − (sets minted)*S`, over both churn directions and the rounding pot at once. Terminally every gap is realized and the churn is discharged, so with the V8 closure `consideration + mu*S == seller_credit + sigma*S` the runtime's ceil/floor conversions and the residue it never credits cancel exactly and `pot_cash` is **zero**."
+    binds = #[
+      "under `TerminalOwnerFloor` the rounding pot is funded by nobody outside the book — it is the payers' round-up excess plus the payees' round-down shortfall"
+      "the runtime realizes it by converting each end's *cumulative* order value, up for a payer and down for a payee, and simply never crediting the gap"
+      "its reaching zero when the last receipt consumes is what `CloseGeneralPot` already requires -> conservation"
+      "at the freeze the cash term is identically zero, which is why the freeze cannot mint -> virtual_mint_join"
+    ][reg=set]
+    plane = "walked A/B with atom-exact numbers on a real bank; five mutants of the closed form red -> claim_plane"
+    residual = "The per-owner conversion coincidence. The frozen boundary converts per *owner* — it sums an owner's orders before rounding — while a reservation can only carry its own order. The two coincide exactly when every participating owner holds one filled order, so an epoch in which some owner holds two filled orders *and* any order value is inexact refuses at `EntitleSlice` on `NotYetImplemented` rather than minting receipts whose residues could not sum to the verified pot. The coincidence is *checked* (`distinct_owners == filled_order_count`), never assumed."
+  }[reg=concept]
+
+  composite_fee_base: .{
+    origin = "wave-2026-08-21"
+    label = "the composite fee base"
+    define = "The selected fee shape `kappa*G(a,p) + kappa'*R(a)` — atomic simplex dispersion plus a price-free quotient-norm floor — quoted owner-level over the whole filled payoff vector as one exact rational over the common denominator `kappa_den * S^2 * kappa'_den`, with one floor, one terminal ceiling, and one carry that persists so fragmentation cannot round a fee to nothing."
+    cite = "docs/decisions/ADOPTED_2026-08-20.md item 9; crates/clutch-batch/src/relation_v1.rs (`FeeBaseV1::CompositeDispersionFloor`, `composite_fee_quote`); research/batch-policy-identity/src/general_clearing_v1.rs (`GENERAL_CLEARING_FEE_SHAPE_V1`)"
+    source = ~"../../crates/clutch-batch/src/relation_v1.rs"
+    corroborant = ~"../../research/batch-policy-identity/src/general_clearing_v1.rs"
+    uses = #[ dispersion, quotient_norm, largest_remainder ][reg=set]
+    measures = #[ coefficient_vector ][reg=set]
+    refuses = #[ "an unfundable charge, rather than under-charging -> refusal" ][reg=set]
+    binds = #[
+      "`G` is subadditive, so the quote is owner-level and never per order: quoting per order would overcharge a netted portfolio and hand fragmentation a discount"
+      "the quotient is collateral atoms, not price units — `G_num` already carries the `S^2` the denominator divides out"
+      "vanishes on -> clutch"
+      "its carry and terminal ceiling land in the reserved fee zone of -> reservation"
+    ][reg=set]
+    boundary = "The rate boundary is not fundable on a single-Egg buy at all — a floor at 100% of the model-free range exceeds any bounded reservation — and refuses (`FeePayerUnfunded`) rather than under-charging. A payer is debited consideration plus fee; the fee never comes out of the counterparty's credit."
+    status = "The **shape** is frozen and the arithmetic is implemented and differentially falsified (38 quotable rows field-for-field against the economics laboratory, one `ArithmeticOverflow` row, one `InvalidPriceScale` row, and one row carried precisely because it cannot be represented at all). Every frozen production const still pins `(0, 0)`; at the zero pair every summary is bit-identical to `FeeBaseV1::None`'s. \"The production rates remain UNDECIDED and are ember's alone.\" — a production rate is a new frozen const with a new digest behind its own ember decision, and `FEE_GEOMETRY.md` §3's width bounds are still owed."
+    plane = "the legacy `FrozenPolicyV1::code` fold is not injective over composite rate pairs; the cryptographic policy identity carries both rates exactly and that fold does not -> claim_plane"
+    adjacent = #[ "`TEST_COMPOSITE_*`", "`MAX_COMPOSITE_PRICE_SCALE`", "`FeeQuoteV1`", "revenue policy split 60/0/40", "`REVENUE_TREASURY_UNSET_V1`" ][reg=set]
+  }[reg=concept]
+
+  keeper: .{
+    origin = "wave-2026-08-21"
+    label = "the keeper (permissionless liveness)"
+    define = "The cranker that decides each next due action from committed account bytes alone — no plan, no script, no memory across restarts — so a mid-walk kill and restart is indistinguishable from a slow poll, and every refusal it can earn by racing itself is read as a completion signal rather than an error."
+    cite = "programs/clutch-sbf/keeper/src/crank.rs (idempotence, `Act::benign`); programs/clutch-sbf/scripts/run_keeper_gate.sh (\"permissionless liveness as an operating fact\")"
+    source = ~"../../programs/clutch-sbf/keeper"
+    corroborant = ~"../../programs/clutch-sbf/scripts/run_keeper_gate.sh"
+    uses = #[ the_walk, entitlement, per_order_completion ][reg=set]
+    refuses = #[ "a wildcard benign set: an unexpected code stops the keeper -> refusal" ][reg=set]
+    authority = "Exactly one route in the family is owner-signed — `ReleaseTerminalReservation` (tag 60), because value returns to an owner — and the gate pins that count structurally; everything else, through the whole TerminalClosure DAG, is permissionless with the fee payer as the only signer."
+    not_a_crank = "Three things the keeper deliberately does not do, because they are not liveness: placements and endowments (participants' business), and computing a candidate (solver output — a keeper that fabricated one would be inventing the thing the relation exists to verify)."
+    binds = #[
+      "the benign codes are named per action: account already closed, state already past this transition, lifecycle phase already past it, creation target already exists"
+      "each action prints the slot, the action, the W1 route it spent against, and the compute units the bank actually charged next to the limit requested -> claim_plane"
+      "the fold-packet bound is what the sealed compute-only plan could not see -> attestation"
+    ][reg=set]
+    plane = "the gate drives a real loopback validator: the keeper alone takes the lifecycle to settled and closed, the terminal conservation identities are re-derived from the FINAL committed bytes, and the SIGKILL-mid-walk falsifier must finish from the chain alone -> claim_plane"
+    finding = "The sealed fewest-transaction fold plan `[12, 12, 8]` was chosen on compute alone and **cannot be sent**: twelve Fold instructions do not frame into a legacy packet. The wire probe measures the real bound by serialization and confirms it against a real validator's transport — the discharge of the sealed `cluster_packet_budget: UNMODELED_BANK_TRANSPORT_ONLY` caveat — and the corrected record-dense plan needs fewer transactions than the sealed one. The measured width is a probe result recorded in GOAL.md's 2026-08-21 done-log, not a pinned in-tree constant."
+    adjacent = #[ "`fold-wire-probe`", "`FoldPlan::from_packet_bound`", "livelock", "double-keeper" ][reg=set]
+    evidence = ~"../../programs/clutch-sbf/scripts/run_keeper_gate.sh"
   }[reg=concept]
 }
 
@@ -299,6 +463,16 @@
   implied_measure_measures: "the market's belief at grid resolution — no canon entry"
   dispersion_measures: "risk transfer under the market's own measure — no canon entry"
   checkpoint_refuses: "resumed tampering — a failure mode, not a canon entry"
+  composite_refuses: "an unfundable charge — a failure mode carried on the edge to refusal, not a canon entry of its own"
+}
+
+^"stubs"{
+  # Stated as unknown rather than improvised. The refresh could not fix these
+  # exactly from a cite, so they are named instead of guessed.
+
+  fee_width_bounds: "FEE_GEOMETRY.md §3's rate-width bounds are named as owed by `composite_fee_base` and by the relation's own doc comment, but no in-tree object states them, so the canon carries no number."
+  fold_packet_width: "The keeper's measured folds-per-packet is emitted by `run_keeper_gate.sh` and recorded in GOAL.md's done-log; no committed constant pins it, so the canon cites the measurement rather than asserting a width."
+  wide_support_size: "§7.6.7 is explicit that nothing bounds the wide-support residual's size and the document does not claim it is small. The canon records the residual and no magnitude."
 }
 
 ~<./index.spw>

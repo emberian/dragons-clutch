@@ -3,7 +3,10 @@
 # Concepts 32-35: the default at every boundary, the vocabulary that keeps
 # evidence honest, the venue-plane failure mode, and the one non-isometry.
 #
-# Definitions are transcribed from the inventory, not re-derived here.
+# Plus the one the 2026-08-21 wave added: the source generation a resolution
+# reads through, and the single rule the two generations do not share.
+#
+# Seeded definitions are transcribed from the inventory, not re-derived here.
 # Relation entries follow the vocabulary declared in ~"./index.spw".
 
 #>spw_dragons_clutch_canon_refusal
@@ -21,11 +24,13 @@
   @dual: ~"../../docs/research/DUAL_IS_THE_MEASURE.md"
   @risk: ~"../../docs/research/RISK_SUMMED_POSITIONS.md"
   @economics: ~"../../docs/ECONOMICS.md"
+  @source_generation: ~"../../programs/clutch-sbf/program/src/source_generation.rs"
+  @profile: ~"../../research/liveness-policy-profile"
 }
 
 ^"intent"{
   ~#layer: "IV. Resolution and refusal"
-  ~#span: "concepts 32-35"
+  ~#span: "concepts 32-35, plus the wave's source generations"
   ~#goal: "Hold the refusal vocabulary exactly: refusal itself, the claim plane, lapse, and Hatch."
 }
 
@@ -47,12 +52,17 @@
       "frames -> custody_boundary"
       "its project-plane form is STOP -> claim_plane"
       "its economic form is -> lapse"
+      "its price-plane form is sound-refusal-over-completeness -> moment_cone"
+      "its ledger form — an implemented join narrower than the relation's — is -> residual"
+      "a benign code read as a completion signal is the one place a refusal is *expected* -> keeper"
     ][reg=set]
     adjacent = #[
       "exact-or-refuse"
       "RemainderRequired"
       "dormancy (`EvidenceOnlyRecoveryV1`, ECONOMICS.md §7)"
+      "benign refusal code"
     ][reg=set]
+    revised = "2026-08-21 — three new forms, none of them a weakening: the price plane chose sound refusal over completeness, the settlement ledger's grammar names an implemented-but-narrower join a recorded residual, and the keeper reads four named refusal codes as evidence the work is already done."
   }[reg=concept]
 
   claim_plane: .{
@@ -67,7 +77,18 @@
       "governs every other entry's status"
       "STOP is its blocking-surface form -> refusal"
       "displayed on-site as evidence badges (site map §4)"
+      "the rungs below subdivide PROFILE-ADMITTED; they are a second ladder, not new labels"
+      "the machine-visible form of what has no plane yet is -> blocker_ledger"
     ][reg=set]
+    rungs = .{
+      # The liveness profile's walk-plane admission ladder. Orthogonal to the
+      # ten labels: a rung says how far a *measured route* has been admitted,
+      # not what kind of evidence exists.
+      W1 = "\"W1 is quotes and nothing else, welded in `require_walk_plane_w1_quotes`\": a selected compute limit and keeper reward derived by the same 25%-headroom / 10,000-CU-quantum arithmetic every promoted family uses. The families keep `UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY`, `live_flags` stays `UNTOUCHED` (any walk family acquiring a live flag refuses), no keeper program consumes the quotes, no path or lifecycle total is published, and the rent side is not quoted at all."
+      W2 = "Full admission. Blocked on `RENT.ACCOUNT_REFUND_UNOWNED`, `GENERAL.ABANDONED_RESERVATION_HOLDS_ROOT`, and `PROFILE.STORAGE_INVENTORY_INCOMPLETE`, plus five named evidence gaps."
+      cite = "CURRENT_TRUTH.md §7 (onchain clearing/settlement row); GOAL.md done-log W1 PROMOTION EXECUTED"
+    }[reg=facet]
+    revised = "2026-08-21 — the walk plane's rungs are recorded here rather than left to prose. W1 was executed at 396e11d as evidence-only with the sealed identity unmoved; the lane re-derived rather than transcribed and caught five stale limits in the promotion report."
     vocabulary = #[
       "PROVED-MODEL"
       "CHECKED-RUST-SUBSET"
@@ -102,20 +123,41 @@
     source = ~"../../README.md"
     corroborant = ~"../../PROJECT.md"
     teaches = "P4"
-    uses = #[ largest_remainder ][reg=set]
-    uses_external = #[ "Feed/Window evidence" ][reg=set]
+    uses = #[ largest_remainder, source_generation ][reg=set]
     binds = #[
       "requirement never rises through it (Prop 8)"
       "enables redemption under -> conservation"
       "collapses -> risk_quotient"
     ][reg=set]
     adjacent = #[ "Feed", "Window", "sealed SourceArchive", "point Resolve" ][reg=set]
+    revised = "2026-08-21 — the seed recorded `Feed/Window evidence` as a hole because the evidence side had no entry. It has one now: one resolution join reads a sealed page of either generation, and the generation travels with the page rather than being averaged away."
+  }[reg=concept]
+
+  source_generation: .{
+    origin = "wave-2026-08-21"
+    label = "source generation (V1 / v2)"
+    define = "Which plane sealed a page of evidence — the V1 provider-neutral immutable price data account or the v2 pull profile's ephemeral receiver-posted update — carried as a tag rather than erased, because the two prove window maturity with different evidence and every other difference between them is a disjointness the seam must not smooth over."
+    cite = "programs/clutch-sbf/program/src/source_generation.rs (module header; `SealedArchiveBindingV1::window_has_matured`)"
+    source = ~"../../programs/clutch-sbf/program/src/source_generation.rs"
+    used_by = #[ hatch, custody_boundary ][reg=set]
+    refuses = #[ "a page presented against the other generation's spec -> refusal" ][reg=set]
+    fail_closed = "The choice of generation is not a caller input. It is read from the authenticated SourceSpec account's exact length, and the spec's own address is derived from the market's frozen Terms rather than accepted. Neither arm of `VerifiedSealedArchive` can be constructed from bytes: each comes from its own generation's verifier, which pins its own account tag (`0x71`/`0x74`), its own page-commitment domain, and its own source-spec type."
+    the_one_difference = "Window maturity, and it is stated rather than smoothed. V1 proves it with a *record* — a reading that selects the bucket one past the window, advancing the sealed cursor to the maturity bucket. v2 proves it with the *boundary rule* — `CROSSING_V1` admits a record only once canonical Clock has passed the bucket's end plus the grace, so a complete sealed page carries the proof in the admission of its last record, with a sealed cursor of `end` rather than `end + 1`. Reading v2's cursor under V1's rule would refuse every honest v2 page; reading V1's under v2's would accept a V1 page whose maturity witness was never taken."
+    binds = #[
+      "the v2 page's geometry was fixed to the V1 page's byte for byte — \"the same 512-byte header, the same thirty-two 64-byte record slots, the same field offsets\" — a *record decoder* fact, and the whole reason the seam is a thin enum rather than a second fold"
+      "the two generations derive different feed identities, different Terms digests, and different spec addresses while keeping one market identity — a real generation change, not a relabelling"
+      "admitting one v2 release admitted nothing under V1 -> custody_boundary"
+    ][reg=set]
+    plane = "the v2 circle closes on the default ELF through real intents behind real receiver posts, with cross-generation equivalence in one assertion -> claim_plane"
+    adjacent = #[ "SourceSpec v2 (404-byte account)", "`CROSSING_V1`", "receiver post", "four-bucket ingestion" ][reg=set]
   }[reg=concept]
 }
 
 ^"holes"{
   # Relation targets the inventory names that are not themselves canon concepts.
-  hatch_uses: "Feed/Window evidence — listed as adjacent at entry 35, not a canon entry"
+  # Entry 35's `Feed/Window evidence` was the only one; it resolved on
+  # 2026-08-21 to `source_generation`, so none stands.
+  none: "no unresolved relation target in this layer"
 }
 
 ~<./index.spw>

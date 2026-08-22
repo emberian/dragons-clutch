@@ -3,7 +3,11 @@
 # Concepts 8-13: which moves preserve value, where collateral actually
 # crosses an edge, and the identity that must hold to the atom.
 #
-# Definitions are transcribed from the inventory, not re-derived here.
+# Plus the two the 2026-08-21 wave added: the pooled mint join that lets a
+# holder which is not a Position move complete sets, and the funding ledger
+# that gives an account's rent principal a recorded owner.
+#
+# Seeded definitions are transcribed from the inventory, not re-derived here.
 # Relation entries follow the vocabulary declared in ~"./index.spw".
 
 #>spw_dragons_clutch_canon_custody
@@ -20,11 +24,15 @@
   @risk: ~"../../docs/research/RISK_SUMMED_POSITIONS.md"
   @solvency: ~"../../lean/DragonsClutch/Solvency.lean"
   @transitions: ~"../../lean/DragonsClutch/Transitions.lean"
+  @split: ~"../../programs/clutch-sbf/program/src/instructions/split.rs"
+  @clearing_layout: ~"../../programs/solana-layout/src/clearing.rs"
+  @settlement: ~"../../programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
+  @pull_endow: ~"../../programs/clutch-sbf/svm-tests/tests/r2_pull_endow.rs"
 }
 
 ^"intent"{
   ~#layer: "II. Custody and conservation"
-  ~#span: "concepts 8-13"
+  ~#span: "concepts 8-13, plus the wave's pooled mint join and funding ledger"
   ~#goal: "Hold the custody vocabulary exactly: diagonal motion, materialize, the custody boundary, conservation, sup-norm collateral, the risk quotient."
 }
 
@@ -43,6 +51,7 @@
     binds = #[
       "is identity on -> risk_quotient"
       "free under every admissible fee base"
+      "runs for a holder that is not a Position through -> virtual_mint_join"
     ][reg=set]
   }[reg=concept]
 
@@ -68,8 +77,14 @@
     source = ~"../../CURRENT_TRUTH.md"
     teaches = "P4"
     uses = #[ realm_hoard ][reg=set]
-    status = "Endow currently refuses `0x79` on the default artifact"
-    binds = #[ "see -> two_elf_discipline" ][reg=set]
+    status = "The default artifact took custody for the first time on 2026-08-21: a market whose immutable Terms bind a SourceSpec v2 feed identity is endowed on a real bank against the real ELF and real Token-2022, 1,500 collateral atoms leaving the owner's token account and arriving in the Hoard. It is a narrowing, not an opening — a structurally perfect v2 spec naming a parser release this ELF does not carry still refuses `0x79` and moves no atom, and the stock V1 plane still refuses `0x79`."
+    binds = #[
+      "see -> two_elf_discipline"
+      "which registry answers is chosen by -> source_generation"
+    ][reg=set]
+    seeded_status = "Endow currently refuses `0x79` on the default artifact"
+    revised = "2026-08-21 — the seed's status was retired for a registered pull release. The seal has not moved with it; see the index's `seal_lag` discrepancy."
+    evidence = ~"../../programs/clutch-sbf/svm-tests/tests/r2_pull_endow.rs"
   }[reg=concept]
 
   conservation: .{
@@ -84,7 +99,11 @@
     measures = #[ ][reg=set]
     measures_external = #[ "every transition" ][reg=set]
     anchored_by = #[ clutch ][reg=set]
-    binds = #[ "is the settled end-state of the walk-to-zero (P4)" ][reg=set]
+    binds = #[
+      "is the settled end-state of the walk-to-zero (P4)"
+      "gains a closed-form cash term over the churn seam -> pot"
+      "is collateral, never lamports; rent principal is the separate ledger -> funding_ledger"
+    ][reg=set]
   }[reg=concept]
 
   sup_norm_collateral: .{
@@ -113,8 +132,46 @@
     binds = #[
       "is the domain any principled fee base must factor through -> dispersion"
       "is the domain any principled fee base must factor through -> quotient_norm"
+      "is the domain the selected composite factors through -> composite_fee_base"
       "collapsed to a point by -> hatch"
     ][reg=set]
+  }[reg=concept]
+
+  virtual_mint_join: .{
+    origin = "wave-2026-08-21"
+    label = "the pooled mint join (virtual split / merge)"
+    define = "Diagonal motion with its authorization half removed and nothing else: one pooled holder that is not an owner Position moves complete sets through the identical kernel step, the identical ledger delta and internal bound, the identical two-term closure, collateral cap and Hoard mirror — so a mint here reclassifies an atom already inside the Hoard's token account and attributed to nobody, and never creates one. \"Nothing is relaxed for the pooled caller.\""
+    cite = "programs/clutch-sbf/program/src/instructions/split.rs (`pooled_set_transition`); orders_batch/settlement.rs (`RETIRED_SETTLEMENT_BLOCKERS`, the VirtualPot and VirtualMergeCredit rows)"
+    source = ~"../../programs/clutch-sbf/program/src/instructions/split.rs"
+    corroborant = ~"../../programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
+    uses = #[ diagonal_motion, clutch ][reg=set]
+    refuses = #[ "an unbacked mint in either direction -> refusal" ][reg=set]
+    used_by = #[ pot ][reg=set]
+    order = "\"Non-negativity at every step is what forces the order, and nothing more: a split collects before it mints, a merge assembles before it burns.\" Written out: **pay, then mint, then deliver** for a split; **deliver every leg, burn `mu`, then pay** for a merge."
+    binds = #[
+      "the deferred merge credit is what `paid_units` exists for -> per_order_completion"
+      "the pot's cash closed form is what makes both directions provably terminal at zero -> pot"
+      "`min(sigma, mu) != 0` is `ErrorV1::ChurnNotCanonical` and `CodecError::InvalidEnum` — a mixed candidate is a shape the relation does not emit and the codec does not represent, not one this seam refuses"
+    ][reg=set]
+    adjacent = #[ "sigma", "mu", "churn canonicality", "`Intent::Split` mirror" ][reg=set]
+    plane = "driven on a real bank (`vpot_merge.rs`); the two rows it retired are `VirtualPot` and `VirtualMergeCredit` -> blocker_ledger"
+    residual = "An ordering rule, not an admission one: a sell end shared between an ordinary slice and a merge leg must settle the ordinary slice first, because the direct seam requires both of an end's ledgers level and a merge delivery is exactly what leaves them unlevel. The out-of-order attempt refuses `MismatchedState` and changes nothing; no state becomes unreachable."
+  }[reg=concept]
+
+  funding_ledger: .{
+    origin = "wave-2026-08-21"
+    label = "funding ledger (rent principal)"
+    define = "The sibling account written by the creating instruction in the same transition that debits the payer, recording the exact funding wallet and the exact principal after prefund normalization, so a close route pays recorded principal to recorded payer and routes every pre-existing lamport to the neutral sink instead of inflating a refund."
+    cite = "programs/solana-layout/src/clearing.rs (`GeneralFundingLedgerV1`); settlement.rs (`TerminalClosure` retirement row)"
+    source = ~"../../programs/solana-layout/src/clearing.rs"
+    corroborant = ~"../../programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
+    refines = #[ "for lamports rather than collateral -> conservation" ][reg=set]
+    refuses_external = #[ "a guessed payer", "a hostile prefund of a predictable PDA" ][reg=set]
+    binds = #[
+      "one ledger may cover a same-payer creation group; the group closes together and the single recorded principal returns to the single recorded payer"
+      "an account created *without* the optional ledger keeps the unowned-refund blocker and stands forever — a recorded residual of the TerminalClosure row -> residual"
+    ][reg=set]
+    adjacent = #[ "`RENT.ACCOUNT_REFUND_UNOWNED`", "donation floor", "frozen incinerator", "`FUNDING_COVERS_*`" ][reg=set]
   }[reg=concept]
 }
 

@@ -41,6 +41,8 @@
       "the custody boundary crosses the Hoard's edge -> custody_boundary"
       "conservation is stated over it -> conservation"
       "prepaid liveness is the separate second proposition (ECONOMICS.md §1)"
+      "prepaid liveness became an operating fact rather than a proposition -> keeper"
+      "its machinery accounts' rent principal is attributed by -> funding_ledger"
     ][reg=set]
     adjacent = #[
       "prepaid liveness"
@@ -63,6 +65,8 @@
       "owns the transition -> materialize"
       "owns the transition -> hatch"
       "everything runtime is adapter, not kernel"
+      "a pooled caller reaches the same kernel step without inventing an owner -> virtual_mint_join"
+      "the frontend is the furthest adapter, and is built so it cannot become a second implementation -> operator_bench"
     ][reg=set]
     plane = "shadowed by the Lean model and the Verus subset -> claim_plane"
   }[reg=concept]

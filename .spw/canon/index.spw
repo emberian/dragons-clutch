@@ -1,13 +1,18 @@
 # Dragon's Clutch — Conceptual Canon
 #
-# The forty concepts of the project, in six layers, each with the
+# The fifty-one concepts of the project, in six layers, each with the
 # definition it carries in the project's own vocabulary, its authoritative
 # in-tree source, and its typed relations to the other concepts.
 #
-# Seeded from docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md. Definitions
-# are transcribed, never re-derived. Where the inventory names a relation
-# whose target is not itself a canon concept, the edge is recorded in a
-# `holes` frame rather than improvised into an edge.
+# Seeded from docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md with forty
+# entries; refreshed 2026-08-21 against the capability wave that landed the
+# same day, which added eleven, revised fifteen, and rewired seven.
+#
+# Seeded definitions are transcribed, never re-derived. Where the inventory
+# names a relation whose target is not itself a canon concept, the edge is
+# recorded in a `holes` frame rather than improvised into an edge. Where the
+# refresh could not state a fact exactly from a cite, it is a `stubs` entry
+# rather than a guess.
 
 #>spw_dragons_clutch_canon_index
 #:canon #!index
@@ -29,8 +34,30 @@
 ^"intent"{
   ~#goal: "Give the project one canonical, machine-navigable statement of what its words mean and how they depend on each other."
   ~#seed: "docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md (40 concepts, six layers)"
-  ~#taste: "Precision over coverage. A relation that cannot be stated exactly from the inventory plus its cite is recorded as a hole, not guessed."
-  ~#granularity: "One file per inventory layer, not per concept — .spw/_workbench/.spw/conventions/naming.spw asks for folder composition, short stable names, and one #>spw_* anchor per canonical file."
+  ~#refresh: "2026-08-21 — the capability wave of that day (see ^\"wave\") moved concepts the seed had frozen the night before. Eleven entries added, fifteen revised, seven rewired, two holes resolved and one opened, one hub declared."
+  ~#taste: "Precision over coverage. A relation that cannot be stated exactly from a cite is recorded as a hole or a stub, not guessed."
+  ~#granularity: "One file per inventory layer, not per concept — .spw/_workbench/.spw/conventions/naming.spw asks for folder composition, short stable names, and one #>spw_* anchor per canonical file. A wave concept joins the layer it belongs to; it does not get a file."
+}
+
+# ── The wave the refresh reads ─────────────────────────────────
+
+^"wave"{
+  # The landing records of the 2026-08-21 capability wave, in the order the
+  # refresh read them. GOAL.md's done-log carries the wave's own summaries;
+  # everything else is the object those summaries point at.
+  @log: ~"../../GOAL.md"
+  @cone: ~"../../docs/research/DUAL_IS_THE_MEASURE.md"
+  @partial_fill: ~"../../docs/design/PARTIAL_FILL_LEDGER_DESIGN_2026-08-21.md"
+  @bench: ~"../../docs/design/OPERATOR_BENCH_DESIGN_2026-08-21.md"
+  @settlement: ~"../../programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
+  @reservation: ~"../../programs/solana-layout/src/reservation.rs"
+  @split: ~"../../programs/clutch-sbf/program/src/instructions/split.rs"
+  @relation: ~"../../crates/clutch-batch/src/relation_v1.rs"
+  @fee_shape: ~"../../research/batch-policy-identity/src/general_clearing_v1.rs"
+  @revenue_policy: ~"../../research/batch-policy-identity/src/revenue_policy_v1.rs"
+  @source_generation: ~"../../programs/clutch-sbf/program/src/source_generation.rs"
+  @keeper: ~"../../programs/clutch-sbf/keeper"
+  ~#headline: "SETTLEMENT_BLOCKERS: [] — the settlement ledger emptied, with its residuals named rather than dropped."
 }
 
 ^"dispatch"{
@@ -43,34 +70,42 @@
 }
 
 ^"layers"{
+  # `span` is the inventory's own numbering; `added` counts the entries the
+  # 2026-08-21 refresh joined to that layer, which carry no inventory number.
   I: .{
     title = "The claim algebra"
     span = "1-7"
+    added = 0
     file = ~"./algebra.spw"
   }[reg=facet]
   II: .{
     title = "Custody and conservation"
     span = "8-13"
+    added = 2
     file = ~"./custody.spw"
   }[reg=facet]
   III: .{
     title = "The book and the clearing"
     span = "14-31"
+    added = 5
     file = ~"./clearing.spw"
   }[reg=facet]
   IV: .{
     title = "Resolution and refusal"
     span = "32-35"
+    added = 1
     file = ~"./refusal.spw"
   }[reg=facet]
   V: .{
     title = "The evidence culture"
     span = "36-38"
+    added = 3
     file = ~"./evidence.spw"
   }[reg=facet]
   VI: .{
     title = "Frame concepts"
     span = "39-40"
+    added = 0
     file = ~"./frame.spw"
   }[reg=facet]
 }
@@ -95,17 +130,29 @@
 }
 
 ^"fields"{
-  n: "inventory entry number, 1-40"
-  label: "the inventory's own heading for the concept"
-  define: "the inventory's one-sentence definition, transcribed"
-  cite: "the inventory's source line, verbatim"
+  n: "inventory entry number, 1-40; absent on a concept the refresh added"
+  origin: "`wave-2026-08-21` on an added concept; absent on a seeded one, whose origin is the inventory"
+  label: "the concept's own heading — the inventory's for a seeded entry, its source's for an added one"
+  define: "one sentence, in the project's vocabulary. Transcribed from the inventory for a seeded entry unless the wave moved it; composed from the cite and answerable to it for an added entry."
+  seeded_define: "the inventory's sentence, kept verbatim where `define` has moved past it"
+  cite: "the source line, verbatim — the inventory's for a seeded entry, the in-tree object's for an added one"
   source: "path ref to the authoritative in-tree source"
   corroborant: "path ref to the second source the cite names, when there is one"
+  evidence: "path ref to the wave's in-tree evidence for an added or revised entry"
   teaches: "the microsite page that teaches the concept (first page listed in the inventory)"
   recurs: "further pages the inventory lists for the concept"
-  plane: "claim-plane statement, only where the inventory carries one"
-  status: "in-tree status note, only where the inventory carries one"
-  hub: "true for the four densest hubs the inventory names as the canon's roots"
+  plane: "claim-plane statement"
+  status: "in-tree status note"
+  seeded_status: "the inventory's status, kept verbatim where `status` has moved past it"
+  revised: "what the 2026-08-21 wave moved about this entry, and against which cite"
+  residual: "a named narrowing this concept's seam carries — the ledger grammar of `residual`"
+  hub: "true for a declared root; see ^\"hubs\""
+  ~#extra: "A concept may carry further named fields when a fact is neither a definition nor an edge; claim_plane's `vocabulary` is the seed's precedent. The set stays enumerable rather than open — the names in use are listed next."
+  extra_names: #[
+    vocabulary, rungs, order, wiring, families, invariant, exactness,
+    identity, boundary, authority, not_a_crank, finding, grammar,
+    standing, honesty, fail_closed, the_one_difference
+  ][reg=set]
 }
 
 # ── Hub roots ──────────────────────────────────────────────────
@@ -113,61 +160,141 @@
 ^"hubs"{
   # "the densest hubs — Clutch (2), conservation (11), refusal (32),
   #  claim plane (33) — are the canon's natural roots" (inventory, coverage map)
-  clutch: .{ n = 2, file = ~"./algebra.spw" }[reg=facet]
-  conservation: .{ n = 11, file = ~"./custody.spw" }[reg=facet]
-  refusal: .{ n = 32, file = ~"./refusal.spw" }[reg=facet]
-  claim_plane: .{ n = 33, file = ~"./refusal.spw" }[reg=facet]
+  #
+  # The first four are the seed's own quoted judgment. The fifth is the
+  # refresh's, declared here rather than smuggled in, with its criterion
+  # stated so the next refresh can apply or refuse it: a concept is a hub
+  # when it carries edges to concepts in three or more layers and is named
+  # from both directions by most of them.
+  clutch: .{ n = 2, file = ~"./algebra.spw", by = "inventory" }[reg=facet]
+  conservation: .{ n = 11, file = ~"./custody.spw", by = "inventory" }[reg=facet]
+  refusal: .{ n = 32, file = ~"./refusal.spw", by = "inventory" }[reg=facet]
+  claim_plane: .{ n = 33, file = ~"./refusal.spw", by = "inventory" }[reg=facet]
+  moment_cone: .{
+    file = ~"./clearing.spw"
+    by = "refresh-2026-08-21"
+    why = "Nine distinct neighbours across three layers — degree and partition of unity (I); simplex prices, implied measure, candidate, relation, the walk (III); refusal and claim plane (IV) — and every one of them names it back. It is the join where the basis ladder, the published price object, the measure claim and the refusal default meet, which is what the other four hubs each are for their own plane."
+  }[reg=facet]
+  ~#not_promoted: "`pot` and `composite_fee_base` are dense but local — the pot's neighbours are all settlement-side and the composite's are all fee-side, so neither is a root the canon can be entered from. They stay ordinary entries."
 }
 
 # ── Concept register ───────────────────────────────────────────
 
 ^"register"{
-  # Every inventory entry, by id, to the file that carries it.
+  # Every entry, by id, to the file that carries it. Inventory entries first
+  # in their seeded order, then the concepts the 2026-08-21 refresh added.
   algebra: #[
     egg, clutch, degree, partition_of_unity,
     coefficient_vector, compatibility_lowering, largest_remainder
   ][reg=set]
   custody: #[
     diagonal_motion, materialize, custody_boundary,
-    conservation, sup_norm_collateral, risk_quotient
+    conservation, sup_norm_collateral, risk_quotient,
+    virtual_mint_join, funding_ledger
   ][reg=set]
   clearing: #[
     book, tombstone, live_rank, owner_tag, reservation, candidate,
     relation, the_walk, verdict, entitlement, selection, simplex_prices,
     implied_measure, zero_gap_certificate, checkpoint, verify_not_find,
-    dispersion, quotient_norm
+    dispersion, quotient_norm,
+    moment_cone, per_order_completion, pot, composite_fee_base, keeper
   ][reg=set]
-  refusal: #[ refusal, claim_plane, lapse, hatch ][reg=set]
-  evidence: #[ seal, two_elf_discipline, attestation ][reg=set]
+  refusal: #[ refusal, claim_plane, lapse, hatch, source_generation ][reg=set]
+  evidence: #[
+    seal, two_elf_discipline, attestation,
+    blocker_ledger, residual, operator_bench
+  ][reg=set]
+  frame: #[ realm_hoard, eggcrate ][reg=set]
+}
+
+^"added"{
+  # The eleven the refresh added, with the wave fact each one exists to hold.
+  virtual_mint_join: "diagonal motion for a holder that is not a Position"
+  funding_ledger: "an account's rent principal gets a recorded owner"
+  moment_cone: "the price plane gets an admission test above degree one"
+  per_order_completion: "an order's two ledgers close its ends independently"
+  pot: "one pot carries the rounding expectation and the churn's sets"
+  composite_fee_base: "the fee fork closes as a shape, not as a number"
+  keeper: "permissionless liveness becomes an operating fact"
+  source_generation: "resolution reads either generation without averaging them"
+  blocker_ledger: "the settlement ledger empties, and emptiness gets a grammar"
+  residual: "the grammar's other half: an implemented but narrower join"
+  operator_bench: "a projection the program is free to refuse"
+}
+
+^"revised"{
+  # The fifteen whose content the wave moved. Each carries its own `revised`
+  # field naming the fact and its cite; this frame is the roll call. Six of
+  # them keep the seed's sentence in `seeded_define` (reservation, relation,
+  # two_elf_discipline) or `seeded_status` (custody_boundary, dispersion,
+  # quotient_norm); the other nine moved a status or a relation, not a
+  # definition, so the seed's sentence still stands as `define`.
+  algebra: #[ degree, largest_remainder ][reg=set]
+  custody: #[ custody_boundary ][reg=set]
+  clearing: #[
+    reservation, relation, the_walk, entitlement,
+    implied_measure, dispersion, quotient_norm
+  ][reg=set]
+  refusal: #[ refusal, claim_plane, hatch ][reg=set]
+  evidence: #[ seal, two_elf_discipline ][reg=set]
+}
+
+^"rewired"{
+  # Touched only in their edges: a seeded entry that gained a relation to a
+  # wave concept but whose own definition and status still stand as written.
+  custody: #[ diagonal_motion, conservation ][reg=set]
+  clearing: #[ candidate, simplex_prices ][reg=set]
+  evidence: #[ attestation ][reg=set]
   frame: #[ realm_hoard, eggcrate ][reg=set]
 }
 
 ^"coverage"{
-  authored: 40
+  seeded: 40
+  added: 11
+  revised: 15
+  rewired: 7
   stubbed: 0
-  total: 40
-  note: "Every inventory entry carries a full one-sentence definition, so no concept is a definition stub. Unresolvable relation targets are recorded per-file in `holes`, not as concept stubs."
+  total: 51
+  note: "Every entry carries a full one-sentence definition, so no concept is a definition stub. Facts the refresh could not state exactly from a cite are `stubs` entries in the layer file that wanted them (three, all in clearing.spw); unresolvable relation targets stay per-file `holes`."
 }
 
 # ── Seed discrepancies ─────────────────────────────────────────
 
 ^"discrepancies"{
-  # Noted, not repaired: the canon transcribes the seed rather than
-  # correcting it. Each is a question for the inventory's author.
+  # Noted, not repaired: the canon records what it finds rather than
+  # correcting it. The first four are questions for the inventory's author
+  # and all four still stand; the rest are what the 2026-08-21 refresh found.
 
-  hoard_number: "Entry 10 writes \"uses Hoard (22)\", but entry 22 is verdict and Realm & Hoard is entry 39. The canon binds custody_boundary to realm_hoard on the text, not the number."
+  hoard_number: "Entry 10 writes \"uses Hoard (22)\", but entry 22 is verdict and Realm & Hoard is entry 39. The canon binds custody_boundary to realm_hoard on the text, not the number. [seed, standing]"
 
-  solana_layout_path: "Entry 14 cites \"programs/solana-layout (SOLANA_LAYOUT.md)\". The directory programs/solana-layout exists; SOLANA_LAYOUT.md is at docs/implementation/SOLANA_LAYOUT.md. Both are carried."
+  solana_layout_path: "Entry 14 cites \"programs/solana-layout (SOLANA_LAYOUT.md)\". The directory programs/solana-layout exists; SOLANA_LAYOUT.md is at docs/implementation/SOLANA_LAYOUT.md. Both are carried. [seed, standing]"
 
-  coverage_map_transpose: "The coverage map is not a strict transpose of the per-entry page fields: 8 and 39 list P4 but are absent from the P4 row, 5 and 26 list P3 but are absent from the P3 row, and 32 lists P1-P7 but appears only in the P1 row."
+  coverage_map_transpose: "The coverage map is not a strict transpose of the per-entry page fields: 8 and 39 list P4 but are absent from the P4 row, 5 and 26 list P3 but are absent from the P3 row, and 32 lists P1-P7 but appears only in the P1 row. [seed, standing]"
 
-  teaching_page_uniqueness: "The map states every concept has exactly one teaching page, yet 34 appears in both the P3 and P5 rows and 18 in both P3 and P4. The canon takes the first page listed on the entry as `teaches` and the rest as `recurs`, per the map's stated rule."
+  teaching_page_uniqueness: "The map states every concept has exactly one teaching page, yet 34 appears in both the P3 and P5 rows and 18 in both P3 and P4. The canon takes the first page listed on the entry as `teaches` and the rest as `recurs`, per the map's stated rule. [seed, standing]"
+
+  seal_lag: "The tree and the seal disagree, deliberately. `SETTLEMENT_BLOCKERS` is empty in programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs; the sealed liveness profile (research/liveness-policy-profile/README.md) and CURRENT_TRUTH.md still read `[PartialFillLedger, VirtualPot]`, because the wave's standing directive took ONE batched cycle-G reseal instead of per-wave reseals. Every seal-side statement in this canon is therefore about `4fded7a6…`, an artifact that predates the wave. Not a drift to repair — the condition the seal exists to make visible. [refresh 2026-08-21, open until cycle G]"
+
+  current_truth_status_date: "CURRENT_TRUTH.md carries status date 2026-08-19 and is the declared authority over GOAL.md for status and next-work claims, yet its general-plane row still names three standing blockers and its snapshot boundary is the cycle-E chain. Where the two disagree the canon reads the executable object (the in-source ledger) and says so on the entry. [refresh 2026-08-21, open]"
+
+  microsite_predates_wave: "The microsite's seven pages were merged 2026-08-20 and teach none of the eleven concepts the wave added: no P-page names the moment cone, the keeper, the operator bench, the pot, the composite base, the source generations, the funding ledger, or the blocker ledger's grammar. Only P2 moved with the wave (site/shape.html now claims the executed degree-2/3 walk and carries its SBF-EXECUTED badge). So `teaches` and `recurs` are absent on every added entry — a coverage fact about the site, not a gap in the canon. [refresh 2026-08-21, open]"
+
+  fee_fork_half_closed: "The inventory frames dispersion (30) against quotient norm (31) as an undecided fork that \"the mathematics cannot close.\" The wave closed it as a *shape* — the selected base carries both arms at once — while leaving the numbers exactly as undecided as before. Both seed entries keep their sentences; the resolution lives on composite_fee_base, and calling the fork \"closed\" without that qualifier would be false. [refresh 2026-08-21, resolved as stated]"
+
+  hatch_evidence_hole: "The seed's one hole in refusal.spw — entry 35's `Feed/Window evidence`, with no canon entry to point at — resolved: source_generation is that entry. The layer's `holes` frame is kept with an explicit `none` rather than deleted. [refresh 2026-08-21, resolved]"
+
+  fee_close_hole: "The seed's `largest_remainder_used_by` hole — entry 7's `fee close`, held open because no fee arithmetic existed — resolved in both directions: the composite base's terminal ceiling and the rounding pot's per-end conversion are two of the named boundaries entry 7 describes. `degree_refines` (binary markets) is the only hole left in algebra.spw. [refresh 2026-08-21, resolved]"
+
+  composite_refuses_hole: "The refresh opened one hole of its own. composite_fee_base refuses an unfundable charge (`FeePayerUnfunded`), which is a failure mode rather than a canon concept, so the edge is carried to refusal and the target is recorded in clearing.spw's `holes` — the same treatment checkpoint's `resumed tampering` gets. [refresh 2026-08-21, open by construction]"
 }
 
 ^"invariant"{
-  "A definition here is the inventory's sentence, not a paraphrase.",
+  "A seeded definition is the inventory's sentence, not a paraphrase; where the tree moved past it, the sentence stays in `seeded_define` and `define` states what is true now.",
+  "An added definition is one sentence composed from its cite and answerable to it — never from memory, never from another canon entry.",
   "A typed edge names a canon concept; anything else is a hole, an external, or a bind.",
-  "Evidence status for a concept is whatever its source's claim plane says; `plane` appears only where the inventory states one.",
+  "Evidence status for a concept is whatever its source's claim plane says.",
+  "A fact that cannot be stated exactly from a cite is a `stubs` entry, not a guess — including a number no in-tree object pins.",
+  "A hub declared by the refresh rather than quoted from the seed says so, and says why.",
 }
 
 ~<./algebra.spw>

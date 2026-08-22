@@ -13,13 +13,20 @@ npm --prefix .spw/_workbench run spw -- select .spw/index.spw --selector navigab
 
 ## Canon
 
-`canon/` holds the project's conceptual canon: forty concepts in six layers,
-each with its definition in the project's own vocabulary, its authoritative
-in-tree source, and its typed relations (`uses` / `refines` / `refuses` /
-`measures`) to the other concepts. Start at `canon/index.spw` — it declares the
-relation vocabulary, the field set, the four hub roots (Clutch, conservation,
-refusal, claim plane), and the seed discrepancies the canon records rather than
-repairs. Seeded from `../docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md`.
+`canon/` holds the project's conceptual canon: fifty-one concepts in six
+layers, each with its definition in the project's own vocabulary, its
+authoritative in-tree source, and its typed relations (`uses` / `refines` /
+`refuses` / `measures`) to the other concepts. Start at `canon/index.spw` — it
+declares the relation vocabulary, the field set, the five hub roots (Clutch,
+conservation, refusal, claim plane, and the moment cone), and the
+discrepancies the canon records rather than repairs.
+
+Seeded with forty entries from
+`../docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md`, then refreshed
+2026-08-21 against the capability wave that landed the same day: eleven
+concepts added, fifteen revised, seven rewired. A seeded sentence the tree
+has moved past is kept verbatim in `seeded_define`; the index's `^"wave"`
+frame lists the landing records the refresh read.
 
 ```bash
 npm --prefix .spw/_workbench run spw -- select .spw/canon/index.spw --skim
