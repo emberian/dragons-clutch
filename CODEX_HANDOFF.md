@@ -22,15 +22,17 @@ not new capability.
 
 ## Where you work
 
-- **hbox, in your own clone** (`~/dev/dragons-clutch`). Run every build
-  under `swarm-build` (enforced MemoryMax; bare taskset does not cap
-  memory and hbox has been OOM-power-cycled before). You are co-tenant
-  with the datacake HOL build — spare its poly/Holmake processes.
-- Your clone's ELF hashes will NOT equal the sealed identity — the
-  identity is same-path-reproducible only, and the canonical path is the
-  laptop checkout. That is expected and fine: optimization measures
-  **deltas at your own path**; the reseal at wave end happens on the
-  laptop (not your job).
+- **This machine, in the main checkout** (`/Users/ember/dev/dragons-clutch`)
+  — which is the canonical build path, so your ELF hashes compare
+  directly against the sealed identity. Two consequences: (a) if another
+  agent session is active in the tree, use the shared-tree discipline —
+  commit only named files, retry on index lock, and serialize full-suite
+  or validator runs behind the spinlock
+  (`until mkdir /tmp/claude-501/suite.lock 2>/dev/null; do sleep 20; done`
+  … `rmdir /tmp/claude-501/suite.lock`); (b) long builds compete with
+  ember's foreground work — `nice` heavy cargo invocations, and hbox
+  remains available as overflow for bulk rebuilds if the laptop gets
+  loud (`swarm-build`, co-tenant rules apply there).
 - Toolchains, pinned: program workspace rustc 1.89.0 / cargo-build-sbf
   4.0.0 / platform-tools v1.53; the svm-tests workspace has its own
   1.93.1 pin (`programs/clutch-sbf/svm-tests/rust-toolchain.toml`).
