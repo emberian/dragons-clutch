@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Clearing — Dragon&#8217;s Clutch</title>
-<meta name="description" content="Verify-not-find: solvers search off-chain, the chain re-verifies every byte, and an accepted clearing is an optimality certificate and a published density.">
+<meta name="description" content="Verify-not-find: solvers search off-chain, the chain re-verifies every candidate, and a cleared basis-price vector supports an explicit knot-mass reconstruction.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -179,19 +179,18 @@ end in a local bank.
 &#183; UNPROMOTED — CURRENT_TRUTH.md &#167;4</a></figcaption>
 </figure>
 
-<h2>Acceptance is a certificate</h2>
+<h2>What acceptance checks — and what the paper theorem adds</h2>
 
-<p>Here is the theorem the corpus proved on paper this month. Under the
-certificate-demanding policy — strict orders filled fully or refused — an
-accepted candidate carries, inside its own witness, a zero-duality-gap proof
-that no feasible clearing of the same book achieves more surplus in the
-LP relaxation, and the witness price vector is the optimal dual. The
-<code>StrictUnderfill</code> refusal is exactly a positive-gap detector: the
-relation does not merely check a clearing, it demands the certificate and
-rejects anything that cannot produce one.
+<p>The executable relation rechecks feasibility, conservation, cash closure,
+the submitted score, and — under the strict policy — full fills or refusal.
+It does not check an optimality certificate. A paper theorem argues that,
+for the frozen policy tuple, any accepted candidate has zero duality gap in
+the LP relaxation and its witness price vector is an optimal dual. Under
+that theorem, <code>StrictUnderfill</code> acts as the positive-gap detector;
+that conclusion remains on the paper-proof plane.
 <a class="badge" href="evidence.html#paper-proof">paper proof —
 DUAL_IS_THE_MEASURE.md Thm 5.1; falsifiers named in its &#167;11</a>
-And when no admissible certified candidate exists — in the analyzed cases,
+And when no admissible candidate satisfying the relation exists — in the analyzed cases,
 exactly when the LP&#8217;s optimal dual face misses the admissible price
 box — the epoch <em>lapses</em>: it clears nothing rather than publish a
 false number (DUAL_IS_THE_MEASURE.md &#167;6).</p>
@@ -204,14 +203,16 @@ falsifier named (<code>every_accepted_candidate_has_zero_duality_gap</code>)
 before any language upgrade is permitted (DUAL_IS_THE_MEASURE.md &#167;5.1,
 &#167;11).</aside>
 
-<h2>Clearing the batch is publishing the density</h2>
+<h2>Clearing the batch publishes basis prices</h2>
 
 <p>The same accepted object wears a third hat. At degree &#8804; 1, every
 price vector the venue can publish is exactly a probability
-distribution&#8217;s moment vector over the basis — so verifying the
-clearing, certifying its optimality, and publishing the market&#8217;s
-implied density are one act, performed on one object, with no second
-artifact and no post-processing.
+distribution&#8217;s moment vector over the basis. The on-chain object is that
+basis-price vector, not a unique underlying density. On the degree-one
+cardinal grid, the named reconstruction
+<code>Q<sub>knot</sub> = &#931;(p&#7522;/S)&#183;&#948;<sub>t&#7522;</sub></code>
+represents it exactly; drawing each knot mass across one gap gives the
+derived histogram <code>p&#7522;/(S&#183;g)</code>.
 <a class="badge" href="evidence.html#paper-proof">paper proof —
 DUAL_IS_THE_MEASURE.md Thm 7.1</a>
 Within the no-arbitrage band the specific published point is chosen by a
@@ -220,10 +221,9 @@ plainly rather than calling it a market revelation
 (DUAL_IS_THE_MEASURE.md &#167;5.3, &#167;9.3).</p>
 
 <aside class="lane lane-degen"><span class="tag">&#10216;degen&#10217;</span>
-The venue can&#8217;t quote you a price that isn&#8217;t a coherent
-probability curve — the gate that accepts the batch is the same gate that
-makes the quote board a density. Read it straight off: cheap hat, low
-implied mass.</aside>
+At degree one, the quote board has a coherent knot-mass read. Cheap hat,
+low mass in that named reconstruction — useful, direct, and still not a
+claim that the market discovered one unique continuous curve.</aside>
 
 <aside class="lane lane-builder"><span class="tag">&#10216;builder&#10217;</span>
 The relation&#8217;s stages V0&#8211;V9 (simplex gate, eligibility
@@ -243,12 +243,13 @@ The published price vector is
 <code>p = (100, 400, 1500, 3300, 2700, 1300, 500, 200)</code>, summing
 exactly to <code>S = 10,000</code>. Maya&#8217;s tent fills: 1,600 lots at
 <code>dot(c,&#8202;p)/S = 10,800/10,000</code>, i.e. 1,728 collateral atoms,
-exactly. The same vector, divided by the $20 gap, is the market&#8217;s
-density; the linear portfolio quote says the implied forward is $170.</p>
+exactly. Under the named knot-mass reconstruction, dividing its normalized
+masses by the $20 gap draws the histogram below; the linear portfolio quote
+says the reconstructed forward is $170.</p>
 <figure>
 <div class="figwrap">
 <svg viewBox="0 0 640 220" width="640" height="220" role="img"
-     aria-label="Histogram of the cleared price vector as an implied density over the eight knots, peaking at 160 dollars, with the implied forward at 170 dollars marked.">
+     aria-label="Named histogram reconstruction of the cleared basis-price vector over eight knots, peaking at 160 dollars, with the reconstructed forward at 170 dollars marked.">
   <g fill="var(--accent)">
     <rect x="16"  y="166" width="48" height="4"   rx="2"/>
     <rect x="96"  y="154" width="48" height="16"  rx="3"/>
@@ -280,14 +281,16 @@ density; the linear portfolio quote says the implied forward is $170.</p>
     <text x="440" y="186">$200</text>
     <text x="520" y="186">$220</text>
     <text x="600" y="186">$240</text>
-    <text x="320" y="210">cleared prices p&#7522; re-read as density p&#7522;/(S&#183;g) &#8212; dashes: implied forward $170, one portfolio quote</text>
+    <text x="320" y="210">named histogram p&#7522;/(S&#183;g) &#8212; dashes: reconstructed forward $170</text>
   </g>
   <text x="328" y="44" font-family="system-ui, sans-serif" font-size="10" fill="var(--accent-2)">$170</text>
 </svg>
 </div>
-<figcaption>The cleared vector, worn as a density. At $160 the density is
-3,300/(10,000&#183;20) = 0.0165 per dollar; the eight bars integrate to one
-exactly. Illustration — the read itself is the theorem, not the numbers.
+<figcaption>The cleared vector under the named histogram reconstruction. At
+$160 its height is 3,300/(10,000&#183;20) = 0.0165 per dollar; the eight bars
+integrate to one exactly. This is one exact representing read, not a unique
+continuous density. Illustration — the representation theorem is the claim,
+not these numbers.
 <a class="badge" href="evidence.html#paper-proof">paper proof —
 DUAL_IS_THE_MEASURE.md &#167;7.3</a></figcaption>
 </figure>

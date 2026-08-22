@@ -48,8 +48,8 @@ constraint on what the market can <em>know</em>.</p>
 <p>In Dragon&#8217;s Clutch a belief is a coefficient vector over a frozen
 basis, and the basis has a degree — a precision order. Degree zero says
 &#8220;which cell.&#8221; Degree one says &#8220;this piecewise-linear
-shape.&#8221; An agent that upgrades its model from above/below to a full
-density upgrades its <em>order</em> — same substrate, same custody
+shape.&#8221; An agent that upgrades from an above/below payoff to a shaped
+payoff upgrades its <em>order</em> — same substrate, same custody
 identity, same conservation laws, no new venue and no new trust
 assumptions. The vector is not an approximation bolted onto a binary
 market; it is the native word (PROJECT.md &#167;1;
@@ -57,24 +57,26 @@ CURRENT_TRUTH.md &#167;3).</p>
 
 <h2>The read side is native too</h2>
 
-<p>What an agent gets back is as typed as what it says. The cleared price
-vector <em>is</em> the market&#8217;s implied density at grid resolution —
-<code>p&#7522;/(S&#183;g)</code>, read directly, because hat claims are
-butterflies and Breeden&#8211;Litzenberger arrives pre-inverted. The
-implied forward is one portfolio quote. There is no smile to fit, no
-inversion step, no indexer of record whose database you must trust: the
-authoritative market state is the on-chain vector itself, and any client —
-human or machine — recomputes every derived read from public bytes.
+<p>What an agent gets back is as typed as what it says: a cleared
+basis-price vector. At degree one on the cardinal grid, a client can apply
+the named knot-mass reconstruction
+<code>Q<sub>knot</sub> = &#931;(p&#7522;/S)&#183;&#948;<sub>t&#7522;</sub></code>, or draw its
+histogram as <code>p&#7522;/(S&#183;g)</code>. Those reads reproduce the quoted
+basis moments exactly, but do not identify one unique continuous density.
+There is no indexer of record whose database you must trust: the
+authoritative market state is the on-chain price vector itself, and any
+client — human or machine — recomputes a named derived read from public bytes.
 <a class="badge" href="evidence.html#paper-proof">paper proof —
 DUAL_IS_THE_MEASURE.md &#167;7.3, &#167;9.1</a></p>
 
 <aside class="lane lane-degen"><span class="tag">&#10216;degen&#10217;</span>
 Your bot doesn&#8217;t scrape a dashboard or reverse-engineer a smile. The
-chain state <em>is</em> the density. If its model disagrees with the curve,
-the disagreement is already denominated in tradable units.</aside>
+chain state carries basis prices. If its model disagrees with those quotes,
+the disagreement is already denominated in tradable units; any probability
+curve it draws is an explicit reconstruction.</aside>
 
 <p>This thesis has an executed exhibit: two named estimators stated
-densities over the same basis, and their disagreement &#8212; and nothing
+basis-moment vectors derived from distributions, and their disagreement &#8212; and nothing
 else &#8212; became a book that cleared between them in a laboratory bank,
 every number re-derived by a checked script.
 <a href="disagreement.html">The Disagreement</a> is that page.</p>
@@ -104,8 +106,8 @@ solver wins by scoring, never by access.</aside>
 happens at the edges. Here the edges refuse: exact integer arithmetic with
 no silent rounding, hostile-byte parsing at every boundary, fractional
 lots returned untouched with a typed error, and a clearing that
-<em>lapses</em> — clears nothing — rather than publish a number without a
-certificate. A system that fails by refusing is a system an agent can
+<em>lapses</em> — clears nothing — rather than publish a candidate that fails
+the relation. A system that fails by refusing is a system an agent can
 reason about; a system that fails by improvising is not. Even the
 project&#8217;s honesty is machine-consumable: the claim-plane vocabulary
 this site&#8217;s badges use is itself a typed, checkable structure — an
@@ -113,10 +115,10 @@ agent can read what plane a claim lives on the same way you are about to
 on <a href="evidence.html">the Evidence page</a>.</p>
 
 <aside class="lane lane-scholar"><span class="tag">&#10216;scholar&#10217;</span>
-The two failure modes of the clearing — refusal of an uncertified
-candidate and lapse of an uncertifiable book — jointly guarantee the venue
-never publishes a non-measure at degree &#8804; 1: what policy changes is
-only whether the published measure also certifies optimality
+At degree &#8804; 1, the simplex gate gives every published basis-price
+vector a representing measure. Refusal and lapse prevent the venue from
+substituting an invalid candidate; the paper theorem separately analyzes when
+those prices are also an optimal dual for its frozen policy tuple
 (DUAL_IS_THE_MEASURE.md &#167;7.5).</aside>
 
 <section class="friday">

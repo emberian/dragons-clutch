@@ -84,7 +84,7 @@ straddled holder, which is what the same nudge is worth on any bins venue
   <circle cx="293.6" cy="170.2" r="3" fill="var(--accent)"/>
   <g font-family="system-ui, sans-serif" font-size="10" fill="var(--ink-3)">
     <text x="240" y="154" text-anchor="middle">the $160 Egg</text>
-    <text x="302" y="180">TWAP $163.40 &#8594; weight 53/64</text>
+    <text x="302" y="180">terminal $163.40 &#8594; weight 53/64</text>
     <text x="200" y="234" text-anchor="middle">$140</text>
     <text x="280" y="234" text-anchor="middle">$160</text>
     <text x="360" y="234" text-anchor="middle">$180</text>
@@ -117,7 +117,7 @@ complete-set par value, and price normalization all descend from these two
 hypotheses (docs/research/RISK_SUMMED_POSITIONS.md &#167;1.1;
 lean/DragonsClutch/BSpline.lean).</aside>
 
-<h2>Buy the density</h2>
+<h2>Buy the shape</h2>
 
 <p>A prediction market asks you a yes/no question. A perp asks you a
 direction. Both throw away almost everything you actually believe. If you
@@ -131,8 +131,8 @@ belief?</em></p>
 
 <p>The Friday clutch has eight Eggs — eight hat-shaped claims, one per knot
 from $100 to $240. Each hat pays its full weight if the week&#8217;s
-time-weighted average price lands exactly on its knot, and fades linearly to
-zero at the neighbors. The hats overlap, none is ever negative, and at every
+terminal SOL/USD price lands exactly on its knot, and fades linearly to zero
+at the neighbors. The hats overlap, none is ever negative, and at every
 admissible price they sum to exactly one — which is why one of each, a
 complete set, is worth exactly one collateral unit no matter what happens.
 That &#8220;sums to exactly one&#8221; is one of 184 theorems the project
@@ -143,23 +143,24 @@ CURRENT_TRUTH.md &#167;3; lean/DragonsClutch/BSpline.lean</a></p>
 <p>Maya&#8217;s belief is a tent: nothing below $120, rising to a peak at
 $160, gone by $200. She writes it as a vector —
 <code>(0,&#8202;0,&#8202;1,&#8202;2,&#8202;1,&#8202;0,&#8202;0,&#8202;0)</code>
-— and that vector <em>is</em> her order. One asset, one atomic fill, one
-price. No legging into three strikes, no leg risk, no margin rule to trust:
+— and submits it as one atomic portfolio order: one all-or-nothing fill and
+one portfolio quote. It is not one transferable tent asset. Settlement
+credits separate balances in the three constituent Eggs, but the package is
+never exposed to sequential legging while it clears. There is no margin call:
 the collateral her tent requires is its worst-case payout, read directly off
-the vector, and settling one leg of anything can never spring a margin call
-on the rest, because there are no legs and there are no margin calls.</p>
+the vector and prepaid.</p>
 
 <p>Here is the part that should make the academics sit up. On an options
-venue, the market&#8217;s implied probability density is something you
-<em>reconstruct</em>: fit a smile, differentiate twice, pray. Here the
-reconstruction is pre-inverted. A hat claim&#8217;s payoff is algebraically
-identical to a butterfly spread, so the cleared price of the $160 Egg
-already <em>is</em> the second difference of call prices — the
-market&#8217;s probability mass near $160, quoted directly, tradable
-directly. When the batch clears at prices <code>p</code>, dividing by the
-knot gap hands you the density histogram. Nobody computes the market&#8217;s
-belief after the fact; the clearing <em>publishes</em> it, exactly, as a
-side effect of being verified.
+venue, a probability read is something you <em>reconstruct</em>: fit a
+smile, differentiate twice, pray. Here the useful coordinates are quoted
+directly. A hat claim&#8217;s payoff is algebraically identical to a butterfly
+spread, so the cleared price of the $160 Egg is the price of that basis
+payoff — and the corresponding discrete second difference of call prices.
+For this degree-one cardinal grid, one named read is the knot-mass
+reconstruction <code>Q<sub>knot</sub> = &#931;(p&#7522;/S)&#183;&#948;<sub>t&#7522;</sub></code>.
+Spreading each knot mass uniformly over the $20 gap draws the histogram
+<code>p&#7522;/(S&#183;g)</code>. It matches the quoted basis prices exactly; it
+does not uniquely recover an unseen continuous density.
 <a class="badge" href="evidence.html#paper-proof">paper proof —
 docs/research/DUAL_IS_THE_MEASURE.md &#167;7.3</a></p>
 
@@ -208,8 +209,9 @@ fail (crates/clutch-bspline; verus/bspline/DEGREE_CORPUS.md).</aside>
 Prices of a complete basis live on the scaled simplex; at degree &#8804; 1
 every simplex point is the moment vector of an explicit representing measure
 <code>Q* = &#931; (p&#7522;/S)&#183;&#948;<sub>t&#7522;</sub></code>, so
-&#8220;implied density at grid resolution&#8221; is exact language, not
-metaphor (DUAL_IS_THE_MEASURE.md &#167;7.2, Thm 7.1).</aside>
+the named knot-mass reconstruction is exact. It is <em>a</em> representing
+measure, not a unique continuous density
+(DUAL_IS_THE_MEASURE.md &#167;7.2, Thm 7.1).</aside>
 
 <h2>The truth about the top rungs</h2>
 
@@ -264,8 +266,8 @@ prices on the simplex, which above degree one is the weaker condition.</p>
 
 <p>One honest edge: eight knots is a coarse curve, the grid is frozen at
 creation, and payoffs are bounded at the edges — no unbounded upside exists
-here, by construction. What you get for that is a market that can tell you,
-to the atom, what it believes.</p>
+here, by construction. What you get for that is a market that can publish
+its basis-price curve to the atom.</p>
 
 <section class="friday">
 <h2>The Friday clutch &#183; stage 2 of 7 &#183; shaped</h2>
