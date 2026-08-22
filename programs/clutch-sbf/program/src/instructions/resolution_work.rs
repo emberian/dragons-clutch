@@ -20,7 +20,7 @@ use crate::source_archive::{
 };
 use crate::source_archive_v2::SOURCE_SPEC_ACCOUNT_V2_BYTES;
 use crate::source_generation::{
-    self, ArchiveJoinError, SourceAccountBytesV1, VerifiedSealedArchive,
+    self, ArchiveJoinError, PresentedSourcePlaneV1, SourceAccountBytesV1, VerifiedSealedArchive,
 };
 use crate::{seeds, source_archive as archive};
 use clutch_bspline::{BasisSpec, EdgePolicy, MAX_KNOTS};
@@ -612,27 +612,28 @@ fn initialize_begin_work(
     )?;
     let source_spec_data = accounts[IX_BEGIN_SOURCE_SPEC].data.borrow();
     let source_archive_data = accounts[IX_BEGIN_SOURCE_ARCHIVE].data.borrow();
-    let (_spec_binding, verified_archive) = source_generation::verify_recorded_sealed_source(
-        program_id.to_bytes(),
-        source_spec_pda.0.to_bytes(),
-        source_spec_pda.1,
-        SourceAccountBytesV1 {
-            key: accounts[IX_BEGIN_SOURCE_SPEC].key.to_bytes(),
-            owner: accounts[IX_BEGIN_SOURCE_SPEC].owner.to_bytes(),
-            executable: accounts[IX_BEGIN_SOURCE_SPEC].executable,
-            data: &source_spec_data,
-        },
-        source_archive_pda.0.to_bytes(),
-        SourceAccountBytesV1 {
-            key: accounts[IX_BEGIN_SOURCE_ARCHIVE].key.to_bytes(),
-            owner: accounts[IX_BEGIN_SOURCE_ARCHIVE].owner.to_bytes(),
-            executable: accounts[IX_BEGIN_SOURCE_ARCHIVE].executable,
-            data: &source_archive_data,
-        },
-        Hash32::from_bytes(terms.feed),
-        terms.window,
-    )
-    .map_err(ResolutionWorkError::from)?;
+    let (_spec_binding, verified_archive) =
+        source_generation::verify_recorded_sealed_source(PresentedSourcePlaneV1 {
+            clutch_program: program_id.to_bytes(),
+            expected_spec_key: source_spec_pda.0.to_bytes(),
+            expected_spec_bump: source_spec_pda.1,
+            spec: SourceAccountBytesV1 {
+                key: accounts[IX_BEGIN_SOURCE_SPEC].key.to_bytes(),
+                owner: accounts[IX_BEGIN_SOURCE_SPEC].owner.to_bytes(),
+                executable: accounts[IX_BEGIN_SOURCE_SPEC].executable,
+                data: &source_spec_data,
+            },
+            expected_archive_key: source_archive_pda.0.to_bytes(),
+            archive: SourceAccountBytesV1 {
+                key: accounts[IX_BEGIN_SOURCE_ARCHIVE].key.to_bytes(),
+                owner: accounts[IX_BEGIN_SOURCE_ARCHIVE].owner.to_bytes(),
+                executable: accounts[IX_BEGIN_SOURCE_ARCHIVE].executable,
+                data: &source_archive_data,
+            },
+            expected_feed: Hash32::from_bytes(terms.feed),
+            window: terms.window,
+        })
+        .map_err(ResolutionWorkError::from)?;
     write_begin_work(
         &accounts[IX_BEGIN_WORK],
         BeginBindingsV1 {
@@ -936,27 +937,28 @@ fn fold(
     )?;
     let source_spec_data = accounts[IX_FOLD_SOURCE_SPEC].data.borrow();
     let source_archive_data = accounts[IX_FOLD_SOURCE_ARCHIVE].data.borrow();
-    let (_spec_binding, verified_archive) = source_generation::verify_recorded_sealed_source(
-        program_id.to_bytes(),
-        source_spec_pda.0.to_bytes(),
-        source_spec_pda.1,
-        SourceAccountBytesV1 {
-            key: accounts[IX_FOLD_SOURCE_SPEC].key.to_bytes(),
-            owner: accounts[IX_FOLD_SOURCE_SPEC].owner.to_bytes(),
-            executable: accounts[IX_FOLD_SOURCE_SPEC].executable,
-            data: &source_spec_data,
-        },
-        source_archive_pda.0.to_bytes(),
-        SourceAccountBytesV1 {
-            key: accounts[IX_FOLD_SOURCE_ARCHIVE].key.to_bytes(),
-            owner: accounts[IX_FOLD_SOURCE_ARCHIVE].owner.to_bytes(),
-            executable: accounts[IX_FOLD_SOURCE_ARCHIVE].executable,
-            data: &source_archive_data,
-        },
-        Hash32::from_bytes(terms.feed),
-        terms.window,
-    )
-    .map_err(ResolutionWorkError::from)?;
+    let (_spec_binding, verified_archive) =
+        source_generation::verify_recorded_sealed_source(PresentedSourcePlaneV1 {
+            clutch_program: program_id.to_bytes(),
+            expected_spec_key: source_spec_pda.0.to_bytes(),
+            expected_spec_bump: source_spec_pda.1,
+            spec: SourceAccountBytesV1 {
+                key: accounts[IX_FOLD_SOURCE_SPEC].key.to_bytes(),
+                owner: accounts[IX_FOLD_SOURCE_SPEC].owner.to_bytes(),
+                executable: accounts[IX_FOLD_SOURCE_SPEC].executable,
+                data: &source_spec_data,
+            },
+            expected_archive_key: source_archive_pda.0.to_bytes(),
+            archive: SourceAccountBytesV1 {
+                key: accounts[IX_FOLD_SOURCE_ARCHIVE].key.to_bytes(),
+                owner: accounts[IX_FOLD_SOURCE_ARCHIVE].owner.to_bytes(),
+                executable: accounts[IX_FOLD_SOURCE_ARCHIVE].executable,
+                data: &source_archive_data,
+            },
+            expected_feed: Hash32::from_bytes(terms.feed),
+            window: terms.window,
+        })
+        .map_err(ResolutionWorkError::from)?;
     commit_fold(
         program_id,
         accounts,
@@ -1412,27 +1414,28 @@ fn prepare_finalize_evidence(
     expect_pda(accounts[9].key, source_archive_pda, None)?;
     let source_spec_data = accounts[8].data.borrow();
     let source_archive_data = accounts[9].data.borrow();
-    let (_spec_binding, verified_archive) = source_generation::verify_recorded_sealed_source(
-        program_id.to_bytes(),
-        source_spec_pda.0.to_bytes(),
-        source_spec_pda.1,
-        SourceAccountBytesV1 {
-            key: accounts[8].key.to_bytes(),
-            owner: accounts[8].owner.to_bytes(),
-            executable: accounts[8].executable,
-            data: &source_spec_data,
-        },
-        source_archive_pda.0.to_bytes(),
-        SourceAccountBytesV1 {
-            key: accounts[9].key.to_bytes(),
-            owner: accounts[9].owner.to_bytes(),
-            executable: accounts[9].executable,
-            data: &source_archive_data,
-        },
-        Hash32::from_bytes(terms.feed),
-        terms.window,
-    )
-    .map_err(ResolutionWorkError::from)?;
+    let (_spec_binding, verified_archive) =
+        source_generation::verify_recorded_sealed_source(PresentedSourcePlaneV1 {
+            clutch_program: program_id.to_bytes(),
+            expected_spec_key: source_spec_pda.0.to_bytes(),
+            expected_spec_bump: source_spec_pda.1,
+            spec: SourceAccountBytesV1 {
+                key: accounts[8].key.to_bytes(),
+                owner: accounts[8].owner.to_bytes(),
+                executable: accounts[8].executable,
+                data: &source_spec_data,
+            },
+            expected_archive_key: source_archive_pda.0.to_bytes(),
+            archive: SourceAccountBytesV1 {
+                key: accounts[9].key.to_bytes(),
+                owner: accounts[9].owner.to_bytes(),
+                executable: accounts[9].executable,
+                data: &source_archive_data,
+            },
+            expected_feed: Hash32::from_bytes(terms.feed),
+            window: terms.window,
+        })
+        .map_err(ResolutionWorkError::from)?;
     prepare_finalize_work(
         program_id,
         accounts,

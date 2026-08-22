@@ -264,6 +264,31 @@ pub struct VerifiedSourceSpecBindingV1 {
     pub stored_bump: u8,
 }
 
+/// One presented spec/archive pair, with the addresses they must occupy.
+///
+/// A struct rather than eight positional arguments, because two of those
+/// arguments are *expected* addresses and two are *presented* accounts, and a
+/// call site that transposed them would still typecheck.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PresentedSourcePlaneV1<'a> {
+    /// This program's own id.
+    pub clutch_program: [u8; 32],
+    /// The SourceSpec address derived from the market's frozen Terms.
+    pub expected_spec_key: [u8; 32],
+    /// The canonical bump of that derivation.
+    pub expected_spec_bump: u8,
+    /// The presented SourceSpec account.
+    pub spec: SourceAccountBytesV1<'a>,
+    /// The archive address derived from the same Terms and window.
+    pub expected_archive_key: [u8; 32],
+    /// The presented archive page.
+    pub archive: SourceAccountBytesV1<'a>,
+    /// The feed identity the market's Terms froze.
+    pub expected_feed: Hash32,
+    /// The observation window those Terms fix.
+    pub window: WindowDomain,
+}
+
 /// Authenticate one SourceSpec account and the sealed page it governs, at
 /// whichever generation the spec account actually is.
 ///
@@ -279,15 +304,18 @@ pub struct VerifiedSourceSpecBindingV1 {
 /// that a spec of the *right* generation but the wrong feed is refused in the
 /// same breath, rather than surviving to a later window comparison.
 pub fn verify_recorded_sealed_source<'a>(
-    clutch_program: [u8; 32],
-    expected_spec_key: [u8; 32],
-    expected_spec_bump: u8,
-    spec: SourceAccountBytesV1<'a>,
-    expected_archive_key: [u8; 32],
-    archive: SourceAccountBytesV1<'a>,
-    expected_feed: Hash32,
-    window: WindowDomain,
+    presented: PresentedSourcePlaneV1<'a>,
 ) -> Result<(VerifiedSourceSpecBindingV1, VerifiedSealedArchive<'a>), ArchiveJoinError> {
+    let PresentedSourcePlaneV1 {
+        clutch_program,
+        expected_spec_key,
+        expected_spec_bump,
+        spec,
+        expected_archive_key,
+        archive,
+        expected_feed,
+        window,
+    } = presented;
     match spec.data.len() {
         SOURCE_SPEC_ACCOUNT_V1_BYTES => {
             let verified = crate::source_archive::verify_source_spec_account(

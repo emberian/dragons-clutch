@@ -231,7 +231,9 @@ use crate::source_archive::{
     SOURCE_SPEC_ACCOUNT_V1_BYTES,
 };
 use crate::source_archive_v2::SOURCE_SPEC_ACCOUNT_V2_BYTES;
-use crate::source_generation::{self, SourceAccountBytesV1, VerifiedSealedArchive};
+use crate::source_generation::{
+    self, PresentedSourcePlaneV1, SourceAccountBytesV1, VerifiedSealedArchive,
+};
 use crate::token;
 use clutch_accumulator::{
     CoveragePolicy, FeedIdentity, Grid, Observation, Summary, WindowAccumulator, WindowDomain,
@@ -3115,27 +3117,28 @@ fn resolve_global(
      * a binding comparison that could be loosened. */
     let source_spec_data = accounts[IX_RESOLVE_SOURCE_SPEC].data.borrow();
     let source_archive_data = accounts[IX_RESOLVE_SOURCE_ARCHIVE].data.borrow();
-    let (_spec_binding, verified_archive) = source_generation::verify_recorded_sealed_source(
-        program_id.to_bytes(),
-        source_spec_pda.0.to_bytes(),
-        source_spec_pda.1,
-        SourceAccountBytesV1 {
-            key: accounts[IX_RESOLVE_SOURCE_SPEC].key.to_bytes(),
-            owner: accounts[IX_RESOLVE_SOURCE_SPEC].owner.to_bytes(),
-            executable: accounts[IX_RESOLVE_SOURCE_SPEC].executable,
-            data: &source_spec_data,
-        },
-        source_archive_pda.0.to_bytes(),
-        SourceAccountBytesV1 {
-            key: accounts[IX_RESOLVE_SOURCE_ARCHIVE].key.to_bytes(),
-            owner: accounts[IX_RESOLVE_SOURCE_ARCHIVE].owner.to_bytes(),
-            executable: accounts[IX_RESOLVE_SOURCE_ARCHIVE].executable,
-            data: &source_archive_data,
-        },
-        market.feed,
-        expected_window,
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::ResolutionEvidenceUnavailable))?;
+    let (_spec_binding, verified_archive) =
+        source_generation::verify_recorded_sealed_source(PresentedSourcePlaneV1 {
+            clutch_program: program_id.to_bytes(),
+            expected_spec_key: source_spec_pda.0.to_bytes(),
+            expected_spec_bump: source_spec_pda.1,
+            spec: SourceAccountBytesV1 {
+                key: accounts[IX_RESOLVE_SOURCE_SPEC].key.to_bytes(),
+                owner: accounts[IX_RESOLVE_SOURCE_SPEC].owner.to_bytes(),
+                executable: accounts[IX_RESOLVE_SOURCE_SPEC].executable,
+                data: &source_spec_data,
+            },
+            expected_archive_key: source_archive_pda.0.to_bytes(),
+            archive: SourceAccountBytesV1 {
+                key: accounts[IX_RESOLVE_SOURCE_ARCHIVE].key.to_bytes(),
+                owner: accounts[IX_RESOLVE_SOURCE_ARCHIVE].owner.to_bytes(),
+                executable: accounts[IX_RESOLVE_SOURCE_ARCHIVE].executable,
+                data: &source_archive_data,
+            },
+            expected_feed: market.feed,
+            window: expected_window,
+        })
+        .map_err(|_| Refusal::Adapter(ClutchError::ResolutionEvidenceUnavailable))?;
     let archive_binding = verified_archive.binding();
     require(
         archive_binding.feed == market.feed
