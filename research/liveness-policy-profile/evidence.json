@@ -2,14 +2,14 @@
  "schema": "dragons-clutch/liveness-policy-evidence/v2",
  "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
  "capture_date": "2026-08-21",
- "runtime_ref": "9cbc835532c1769132420e10e45a5e319457dfbf",
+ "runtime_ref": "916731b15bdb6c92fca9b0bb9b611bc882238947",
  "runtime_tree": "c50353b19b27c0a0f5611c3e6cae75291e8cd671",
- "evidence_ref": "9cbc835532c1769132420e10e45a5e319457dfbf",
+ "evidence_ref": "916731b15bdb6c92fca9b0bb9b611bc882238947",
  "artifact": {
   "path": "research/liveness-policy-profile/artifacts/0d52c561909cedef/clutch_sbf.so",
   "sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
   "bytes": 2149672,
-  "source_ref": "9cbc835532c1769132420e10e45a5e319457dfbf",
+  "source_ref": "916731b15bdb6c92fca9b0bb9b611bc882238947",
   "profile": "default-empty-registry"
  },
  "artifact_reproducibility": {
@@ -37,7 +37,7 @@
   ],
   "relocated_attribution": "AMENDED_PROBE_RESOLVES_THE_CARGO_HOME_SYMLINK_AND_THE_DIVERGENCE_IS_GONE_CONFIRMING_CYCLE_F_ATTRIBUTION_TO_THE_UNRESOLVED_PATH_COMPONENT",
   "first_party_final_lto_stack_survivors": 0,
-  "direct_r10_references": 60441,
+  "direct_r10_references": 66106,
   "deepest_direct_r10_offset": 4096
  },
  "historical_artifacts": {
@@ -98,7 +98,7 @@
  },
  "capture": {
   "path": "research/liveness-policy-profile/captured-output.txt",
-  "sha256": "221e8903845ec5d2a61c7b5f31c45ac6251642c844f7f07d8a592ca0b19aaead"
+  "sha256": "72403b171160f21bcf69e49a17b7b6982c003574d68f0bb2b9d5a584c474b8fe"
  },
  "source_blobs": {
   "research/liveness-policy-profile/Cargo.toml": "8574e7693c1a85cdb68bf608c5cf4dcde178123b",

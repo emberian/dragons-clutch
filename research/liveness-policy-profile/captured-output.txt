@@ -1,13 +1,13 @@
 {
  "schema": "dragons-clutch/liveness-bank-capture/v2",
  "capture_date": "2026-08-21",
- "runtime_ref": "9cbc835532c1769132420e10e45a5e319457dfbf",
- "evidence_ref": "9cbc835532c1769132420e10e45a5e319457dfbf",
+ "runtime_ref": "916731b15bdb6c92fca9b0bb9b611bc882238947",
+ "evidence_ref": "916731b15bdb6c92fca9b0bb9b611bc882238947",
  "artifact": {
   "path": "research/liveness-policy-profile/artifacts/0d52c561909cedef/clutch_sbf.so",
   "sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
   "bytes": 2149672,
-  "source_ref": "9cbc835532c1769132420e10e45a5e319457dfbf",
+  "source_ref": "916731b15bdb6c92fca9b0bb9b611bc882238947",
   "profile": "default-empty-registry"
  },
  "measurements": {

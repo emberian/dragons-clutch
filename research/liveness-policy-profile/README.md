@@ -60,8 +60,11 @@ cargo clippy --offline --locked \
 ```
 
 The current artifact source and test/evidence ancestry is exact commit
-`846afab`. `runtime_ref`, `evidence_ref`, and `artifact.source_ref` are that
-one commit **by construction** at this seal.
+`916731b` (the published, reachable commit; the seal originally recorded a
+pre-rewrite twin `9cbc835` reachable from no ref — the cycle-G attestation
+found the orphan and this pin was corrected to the twin whose tree carries
+the identical closure). `runtime_ref`, `evidence_ref`, and
+`artifact.source_ref` are that one commit at this seal.
 
 Three commits carry the identity and only the first is inside the closure.
 `c55f471` landed an uncommitted `cargo fmt` result the wave had left in the
