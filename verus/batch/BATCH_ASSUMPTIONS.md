@@ -52,24 +52,37 @@ into a machine-checked refinement:
 
 The reviewed series `c1a0a656 -> e6ce886 -> c9d1cd4` was independently rerun
 before this increment and reproduced `20 verified, 0 errors` plus its four
-required expected-red mutants. Against sealed main
-`6743b9d5b4bee313987770cc048983e26d8c70f3`, all three reviewed production
-files are byte-identical: scalar `lib.rs`
-`f25ce5524a71f9e8ad5200992bb69290444865243f26040906d7aa6798013249`,
-`relation_v1.rs`
-`9d4e3cc0fdfc03a4cd2d08f0257224f79fe4a8f0d1f861a09b75e92755bd30da`,
+required expected-red mutants. The one file this shadow actually reviews,
+scalar `lib.rs`, is still byte-identical to sealed main
+`6743b9d5b4bee313987770cc048983e26d8c70f3` at
+`f25ce5524a71f9e8ad5200992bb69290444865243f26040906d7aa6798013249`, and so are
+its four pinned sub-regions (`allocate_side` body, `PriceGrid` impl,
+`FixedBook` impl, `Candidate` definition). The two excluded files have moved
+since that seal and are re-recorded at their current bytes: `relation_v1.rs`
+`16d97272fd1e979303f7745e088304263cb8acbe1a20326ba5d9226e93067f74`
 and `relation_v1_stream.rs`
-`1b03f5a53e56e92f37a913abb2858e44b9b3711756ad954474ad33158c92a340`.
-This is source identity evidence, not a proof of correspondence. (Excluded-source
-digests re-recorded 2026-08-20 after semantics-preserving stack-hygiene and
-checkpoint-codec changes to the two excluded files — `relation_v1.rs` in-place
-zeroing/out-param normalization, `relation_v1_stream.rs` encode/decode codec.
-Both changes are gated by the relation's own 19,520-comparison equivalence
-suite; the exclusion scope is unchanged and nothing new is claimed proven.)
+`2d49f153fbe074526fe07e5f482d12616e0d52371e3bcb83c6e6bb674ae3ec4f`.
+This is source identity evidence, not a proof of correspondence.
+
+Excluded-source digests were re-recorded 2026-08-20 after semantics-preserving
+stack-hygiene and checkpoint-codec changes to the two excluded files
+(`relation_v1.rs` in-place zeroing/out-param normalization,
+`relation_v1_stream.rs` encode/decode codec, both gated by the relation's own
+19,520-comparison equivalence suite), and again 2026-08-22 — and that second
+delta is **not** semantics-preserving. Between those two re-pins the coupled
+relation gained the composite fee base and its zero-rate sibling constant, the
+basis moment-cone gate on the candidate price plane with its V1b stage-ladder
+entry, and the streaming file gained the `AdvanceClearWork` (tag 51) on-chain
+walk plus the composite-numerator frame split. Every byte of that is new
+*excluded* code: it lands inside the two files this shadow excludes wholesale,
+the scalar region the shadow does review did not move, and no theorem, premise,
+or claim here changes. Nothing new is claimed proven, and no previously checked
+obligation is narrowed to buy the re-pin.
 
 The `relation_v1` and `relation_v1_stream` digests are recorded as excluded
 sources. These theorems are not proofs of the coupled outcome-conservation,
-owner-pairing, AON-mask, portfolio, or streaming relations bearing those names.
+owner-pairing, AON-mask, portfolio, composite fee-base, moment-cone, or
+streaming relations bearing those names.
 
 ## Remaining STOPs
 

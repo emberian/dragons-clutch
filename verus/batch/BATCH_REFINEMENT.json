@@ -15,8 +15,8 @@
     "Candidate_struct_sha256": "7dcacb6d06f6702e282f18ab152c7989df635f1c182a5606a4913026e863ce00"
   },
   "excluded_pinned_sources": {
-    "crates/clutch-batch/src/relation_v1.rs": "f95b4931414386f109ef52b844616f86f11e21121d6f9ef8901f18b77eafc490",
-    "crates/clutch-batch/src/relation_v1_stream.rs": "c196c096c75adfb85397eda5e5d905dde89349ab06512e5ad02d345d75fbf358"
+    "crates/clutch-batch/src/relation_v1.rs": "16d97272fd1e979303f7745e088304263cb8acbe1a20326ba5d9226e93067f74",
+    "crates/clutch-batch/src/relation_v1_stream.rs": "2d49f153fbe074526fe07e5f482d12616e0d52371e3bcb83c6e6bb674ae3ec4f"
   },
   "theorems": [
     "dust_loop_has_positive_choice",
@@ -39,13 +39,13 @@
     "vstd_vir_digest_sha256": "3061321483841360c760fa3fb38b22be57533052cf2100eb51956aa31205fa7d"
   },
   "configuration": "verus/batch/run_batch_proofs.sh",
-  "configuration_digest_sha256": "cbf0ae4a13ceeb0fde4ca9a1c098aabdc8c23ffc463e49095c7ceb14aeb3d04f",
+  "configuration_digest_sha256": "4a261e1b3564be0d1d45d65855f3d538b6e93a7377793d3e9360b8c72cbfdb20",
   "result": "PASS: verification results:: 28 verified, 0 errors",
   "assumption_manifest": "verus/batch/BATCH_ASSUMPTIONS.md",
-  "assumption_manifest_digest_sha256": "e2b2997501cbd9b85727cbaf913c4eb38c6d803a6122475b37050a49418daaec",
+  "assumption_manifest_digest_sha256": "a6607bbdf224229cf0fb353d38128d9d7acd6ac204ed85383ce672861678c649",
   "proof_log": "verus/batch/evidence/batch_proofs.txt",
-  "proof_log_digest_sha256": "f7c38dfac4ceb51e8efe54ca131f2224844812e457cc14546ebe6a25d8f88f7e",
-  "checked_date": "2026-08-19",
+  "proof_log_digest_sha256": "2460dcb5910ea3caf24bee2ada872c3f1c3127728d9a66fa534bed0b55a1e592",
+  "checked_date": "2026-08-22",
   "reproduction_command": "sh verus/batch/run_batch_proofs.sh",
   "mutations": [
     {
