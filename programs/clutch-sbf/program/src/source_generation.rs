@@ -27,10 +27,10 @@
 //!   [`VerifiedSealedArchive::V1`] for the mirror reason.
 //!
 //! The *choice* of generation is not a caller input either. It is read from the
-//! authenticated SourceSpec account's exact length, exactly as
-//! [`crate::instructions::source_ingest::require_registered_source_for_market`]
-//! already reads it at the collateral boundary, and the spec's own address is
-//! derived from the market's frozen Terms rather than accepted.
+//! authenticated SourceSpec account's exact length, exactly as the collateral
+//! boundary in [`crate::instructions::source_ingest`] already reads it, and the
+//! spec's own address is derived from the market's frozen Terms rather than
+//! accepted.
 //!
 //! ## The one rule that is genuinely per-generation
 //!

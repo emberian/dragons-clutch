@@ -288,12 +288,12 @@ fn verify_spec(
 ///
 /// A V1 SourceSpec PDA can be constructed onchain only by [`init_source_spec`],
 /// which authenticates the compiled parser and deployment release before
-/// atomically creating both SourceSpec and Feed.  A v2 SourceSpec has no public
-/// construction route yet — its intent is the open half of P0.5 — so a v2
-/// account reaches this gate only by fixture injection today.  Either way this
-/// re-authenticates owner, address, body, digest, bump, Terms binding, and
-/// current registry membership, so neither an old market nor an injected one
-/// can bypass the registry at the collateral boundary.
+/// atomically creating both SourceSpec and Feed.  A v2 one is constructed by
+/// [`super::source_ingest_v2`]'s `InitSourceSpecV2`, which asks the same closed
+/// registry before it creates anything.  Either way this re-authenticates
+/// owner, address, body, digest, bump, Terms binding, and current registry
+/// membership, so neither an old market nor an injected one can bypass the
+/// registry at the collateral boundary.
 #[inline(never)]
 pub(crate) fn require_registered_source_for_market(
     program_id: &Pubkey,

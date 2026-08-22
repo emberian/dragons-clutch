@@ -24,12 +24,14 @@
 //! interchangeable — the tag and domain separation is exactly what stops that,
 //! and [`verify_recorded_sealed_archive_v2`] refuses a V1 page byte-for-byte.
 //!
-//! ## What is not wired yet
+//! ## What is wired
 //!
-//! Nothing in this module is reachable from [`crate::dispatch`]. The remaining
-//! step is the instruction family plus a spec-generation dispatch in the
-//! resolution plane; see `docs/implementation/R2_PULL_PROMOTION_PLAN.md` P0.5
-//! (account planes) and the note in [`crate::source_v2`].
+//! [`crate::instructions::source_ingest_v2`] is this module's instruction
+//! family — layout tags 70 through 73 — and
+//! [`crate::source_generation`] is the resolution plane's spec-generation
+//! dispatch, which reads a page of either generation through one fold while
+//! keeping the maturity rules and the commitment domains apart. Both were the
+//! open half of `docs/implementation/R2_PULL_PROMOTION_PLAN.md` P0.5.
 
 use clutch_accumulator::{WindowDomain, WINDOW_DOMAIN_BYTES, WINDOW_DOMAIN_TAG};
 use clutch_solana_layout::Hash32;

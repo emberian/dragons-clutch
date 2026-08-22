@@ -391,9 +391,10 @@ pub fn select_release(spec: crate::source_v2::spec::SourceSpecV2) -> Option<Pull
 /// Every release compiled into this ELF, in registry order.
 ///
 /// The registry is inert data matched by byte equality, never a negotiation:
-/// `instructions::source_ingest_v2::select_release` admits a spec only
-/// when one entry matches every identity field exactly. Adding a row is a new
-/// ELF identity and a full reseal cycle by construction
+/// [`select_release`] admits a spec only when one entry matches every identity
+/// field exactly, and it is asked at all four v2 source routes, at the
+/// collateral boundary, and again at resolution. Adding a row is a new ELF
+/// identity and a full reseal cycle by construction
 /// (`R2_PULL_PROMOTION_PLAN.md` §4 item 3).
 pub const REGISTERED_RELEASES: &[PullReleaseV2] = &[fixture::RELEASE];
 
