@@ -107,13 +107,13 @@
 //! ## One authority per phase
 //!
 //! Resolve authenticates the canonical SourceSpec and sealed SourceArchive.
-//! The v2/v3 point path still accepts a redundant projection buffer only when
-//! every projected domain/value fact equals that archive; v4 occupation reads
-//! the archive directly. The resulting record owns the canonical window and
-//! payout/vector. After that transition, internal and bearer redemption never
-//! re-fold a caller payload or trust a second window label. Immutable Terms,
-//! the version-selected persisted Resolution record, and kernel mode/supply
-//! are the sole settlement authority.
+//! The v1 point path still accepts a redundant projection buffer only when
+//! every projected domain/value fact equals that archive; v2 degree-zero
+//! categorical and v4 occupation read the archive directly. The resulting
+//! record owns the canonical window and payout/vector. After that transition,
+//! internal and bearer redemption never re-fold a caller payload or trust a
+//! second window label. Immutable Terms, the version-selected persisted
+//! Resolution record, and kernel mode/supply are the sole settlement authority.
 //!
 //! ## Refusal codes
 //!
@@ -190,9 +190,10 @@
 //!   *within* a page by the summary algebra and bound to nothing *across*
 //!   pages.  Two pages on different grids are each internally valid.  This is
 //!   an obligation on a `FeedAccount` revision.
-//! - The v2/v3 point projection buffer has no canonical address. Its bytes are
+//! - The v1 point projection buffer has no canonical address. Its bytes are
 //!   hostile and accepted only when they exactly project the authenticated
-//!   archive; v4 Resolve and every post-resolution redemption omit it.
+//!   archive; v2 degree-zero categorical Resolve, v4 Resolve, and every
+//!   post-resolution redemption omit it.
 //! - The terms artifact is still read in its own small frame at each gate
 //!   step — address derivation, market binding, payout-set binding, record
 //!   binding, payout derivation — but the
@@ -232,7 +233,7 @@ use crate::source_archive::{
 };
 use crate::source_archive_v2::SOURCE_SPEC_ACCOUNT_V2_BYTES;
 use crate::source_generation::{
-    self, PresentedSourcePlaneV1, SourceAccountBytesV1, VerifiedSealedArchive,
+    self, PresentedSourcePlaneV1, SourceAccountBytesV1, SourceGeneration, VerifiedSealedArchive,
 };
 use crate::token;
 use clutch_accumulator::{
@@ -373,14 +374,18 @@ pub const MAX_FEED_PAGE_LEN: usize =
 /// repeat of that fact is idempotent. The eleven roles are actor, Market,
 /// Hoard, kernel aggregate, SupplyLedger, immutable Terms, Resolution, Feed,
 /// immutable SourceSpec, sealed SourceArchive, and the hostile evidence
-/// projection.  The projection remains only because the existing derivation
-/// folds that wire shape; every domain and value record must equal the archive.
+/// projection. The projection is a V1 compatibility transport only; v2
+/// archive-direct resolution never accepts it.
 pub const RESOLVE_ACCOUNT_PREFIX: usize = 11;
-/// Fixed market-global occupation Resolve prefix before its canonical mints.
+/// Fixed market-global archive-direct Resolve prefix before its canonical
+/// mints.
 ///
-/// Unlike point resolution, occupation consumes the sealed archive directly
-/// and has no redundant caller-supplied projection account.
-pub const OCCUPATION_RESOLVE_ACCOUNT_PREFIX: usize = 10;
+/// Occupation and v2 degree-zero categorical resolution consume the
+/// authenticated sealed archive directly and have no redundant
+/// caller-supplied projection account.
+pub const ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX: usize = 10;
+/// Backwards-compatible alias for the archive-direct Resolve prefix.
+pub const OCCUPATION_RESOLVE_ACCOUNT_PREFIX: usize = ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX;
 /// Fixed owner/state prefix of `RedeemInternal`, before custody roles.
 ///
 /// Redemption remains a position transition and therefore retains the owner
@@ -467,8 +472,10 @@ pub const IX_HOARD_AUTHORITY: usize = 14;
 pub const IX_HOARD_TOKEN: usize = 15;
 /// First canonical outcome mint on a Resolve.
 pub const IX_RESOLVE_OUTCOME_MINTS: usize = RESOLVE_ACCOUNT_PREFIX;
-/// First canonical outcome mint on an occupation Resolve.
-pub const IX_OCCUPATION_RESOLVE_OUTCOME_MINTS: usize = OCCUPATION_RESOLVE_ACCOUNT_PREFIX;
+/// First canonical outcome mint on an archive-direct Resolve.
+pub const IX_ARCHIVE_DIRECT_RESOLVE_OUTCOME_MINTS: usize = ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX;
+/// Backwards-compatible alias for the archive-direct mint prefix.
+pub const IX_OCCUPATION_RESOLVE_OUTCOME_MINTS: usize = IX_ARCHIVE_DIRECT_RESOLVE_OUTCOME_MINTS;
 /// First canonical outcome mint on a RedeemInternal.
 pub const IX_REDEEM_OUTCOME_MINTS: usize = REDEEM_ACCOUNT_PREFIX;
 
@@ -1570,6 +1577,98 @@ fn derive_from_evidence(
     })
 }
 
+#[inline(never)]
+fn fold_v2_archive_window(
+    archive: VerifiedSealedArchive<'_>,
+    expected_window: WindowDomain,
+) -> Gate<WindowResult> {
+    if archive.generation() != SourceGeneration::V2 {
+        return Err(ReferenceError::ResolutionEvidenceUnavailable);
+    }
+    let binding = archive.binding();
+    if binding.window != source_archive::canonical_window_id(expected_window)
+        || binding.start_bucket != expected_window.start_bucket()
+        || binding.end_bucket_exclusive != expected_window.end_bucket_exclusive()
+        || binding.repair_generation != expected_window.generation()
+        || binding.page_commitment == Hash32::ZERO
+        || !binding.window_has_matured(expected_window)
+    {
+        return Err(ReferenceError::ResolutionBindingMismatch);
+    }
+    let span = binding
+        .end_bucket_exclusive
+        .checked_sub(binding.start_bucket)
+        .ok_or(ReferenceError::ResolutionEvidenceUnavailable)?;
+    if span == 0 || span > MAX_OBSERVATIONS as u64 {
+        return Err(ReferenceError::ResolutionEvidenceUnavailable);
+    }
+
+    let mut window = WindowAccumulator::open(expected_window);
+    let mut index = 0_u64;
+    while index < span {
+        let archived = archive
+            .archived_observation(
+                usize::try_from(index)
+                    .map_err(|_| ReferenceError::ResolutionEvidenceUnavailable)?,
+            )
+            .map_err(|_| ReferenceError::ResolutionEvidenceUnavailable)?;
+        let expected_bucket = binding
+            .start_bucket
+            .checked_add(index)
+            .ok_or(ReferenceError::ResolutionEvidenceUnavailable)?;
+        if archived.bucket != expected_bucket {
+            return Err(ReferenceError::ResolutionEvidenceUnavailable);
+        }
+        window.observe(Observation::accepted(
+            expected_bucket,
+            archived.low,
+            archived.high,
+        ))?;
+        index += 1;
+    }
+    window.witness_authenticated_closing_boundary(binding.sealed_feed_cursor)?;
+    window.seal()?;
+    Ok(window.result()?)
+}
+
+/// Derive a finite-preset resolution directly from one verified v2 archive.
+///
+/// The v2 page already authenticates the interval records and proves closure
+/// under its boundary rule, so this path does not accept the legacy
+/// caller-supplied projection buffer.  It still refuses unless the selected
+/// degree-zero statistic's whole conservative interval lies in one canonical
+/// cell of the immutable Terms partition.
+#[inline(never)]
+fn derive_categorical_from_archive(
+    market_bytes: &[u8],
+    terms_bytes: &[u8],
+    archive: VerifiedSealedArchive<'_>,
+    requested_payout: u8,
+) -> Gate<SealedFacts> {
+    if archive.generation() != SourceGeneration::V2 {
+        return Err(ReferenceError::ResolutionEvidenceUnavailable);
+    }
+    let mut terms = ZERO_TERMS;
+    load_terms(terms_bytes, &mut terms)?;
+    let derived = derived_terms(market_bytes, terms_bytes)?;
+    if derived.basis_degree != 0 {
+        return Err(ReferenceError::Resolution(
+            ResolutionRefusal::WrongResolutionMode,
+        ));
+    }
+    let window = fold_v2_archive_window(archive, derived.window)?;
+    let payout_index = derive_payout(&derived, &terms.payouts, &window)?;
+    if payout_index != requested_payout {
+        return Err(ReferenceError::PayoutIndexMismatch);
+    }
+    Ok(SealedFacts {
+        payout_index,
+        sealed_cursor: window.sealed_cursor(),
+        end_bucket_exclusive: window.domain().end_bucket_exclusive(),
+        repair_generation: window.domain().generation(),
+    })
+}
+
 /// Derive one smooth-basis payout from an exact integer statistic point.
 ///
 /// The persisted v3 record stores the raw point before edge handling.  All
@@ -1935,6 +2034,67 @@ mod basis_mode_tests {
     }
 }
 
+#[cfg(test)]
+mod archive_categorical_tests {
+    use super::*;
+    use crate::pyth_receiver::{normalize_interval, FullPriceUpdateV2, PythReceiverError};
+
+    #[test]
+    fn authenticated_source_generation_selects_the_resolve_account_shape() {
+        assert_eq!(
+            resolve_prefix_for_authenticated_source(false, 0, SourceGeneration::V2),
+            ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX,
+            "v2 degree-zero categorical resolves from the archive with 10+n accounts"
+        );
+        assert_eq!(
+            resolve_prefix_for_authenticated_source(false, 0, SourceGeneration::V1),
+            RESOLVE_ACCOUNT_PREFIX,
+            "v1 degree-zero categorical retains the legacy buffer shape"
+        );
+        assert_eq!(
+            resolve_prefix_for_authenticated_source(false, 1, SourceGeneration::V2),
+            RESOLVE_ACCOUNT_PREFIX,
+            "unsupported smooth non-occupation stats do not gain an archive-direct shape"
+        );
+        assert_eq!(
+            resolve_prefix_for_authenticated_source(true, 1, SourceGeneration::V1),
+            ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX,
+            "occupation is archive-direct under both authenticated generations"
+        );
+    }
+
+    fn pyth_update(price: i64, confidence: u64, exponent: i32) -> FullPriceUpdateV2 {
+        FullPriceUpdateV2 {
+            write_authority: [1; 32],
+            feed_id: [2; 32],
+            price,
+            confidence,
+            exponent,
+            publish_time: 2,
+            prev_publish_time: 1,
+            ema_price: price,
+            ema_confidence: confidence,
+            posted_slot: 3,
+        }
+    }
+
+    #[test]
+    fn negative_and_exponent_edges_are_refused_before_projection() {
+        assert_eq!(
+            normalize_interval(pyth_update(-1, 1, 0), 8, 1),
+            Err(PythReceiverError::InvalidPrice)
+        );
+        assert_eq!(
+            normalize_interval(pyth_update(10, 1, 39), 8, 1),
+            Err(PythReceiverError::UnsupportedExponent)
+        );
+        assert_eq!(
+            normalize_interval(pyth_update(i64::MAX, 1, 38), 18, 1),
+            Err(PythReceiverError::ArithmeticOverflow)
+        );
+    }
+}
+
 /// Write the market lifecycle back, in its own frame.
 #[inline(never)]
 fn write_market_lifecycle(market_bytes: &mut [u8], lifecycle: u8) -> Gate<()> {
@@ -2281,11 +2441,15 @@ fn apply_market_resolution(
     plane: &EvidencePlane<'_>,
     bumps: &ResolveBumps,
     occupation: Option<&NativeWindowPreflightV1>,
+    archive_categorical: Option<SealedFacts>,
     signer: bool,
     sequence: u64,
     requested_payout: u8,
 ) -> Gate<ResolveOutput> {
     if plane.resolution.len() == OCCUPATION_RESOLUTION_LEN {
+        if archive_categorical.is_some() {
+            return Err(ReferenceError::UnexpectedEvidence);
+        }
         let candidate = occupation.ok_or(ReferenceError::ResolutionEvidenceUnavailable)?;
         return apply_occupation_market_resolution(
             state,
@@ -2298,6 +2462,9 @@ fn apply_market_resolution(
         );
     }
     if plane.resolution.len() == NATIVE_RESOLUTION_LEN {
+        if archive_categorical.is_some() {
+            return Err(ReferenceError::UnexpectedEvidence);
+        }
         return apply_native_market_resolution(
             state,
             plane,
@@ -2307,15 +2474,28 @@ fn apply_market_resolution(
             requested_payout,
         );
     }
-    apply_legacy_market_resolution(state, plane, bumps, signer, sequence, requested_payout)
+    apply_legacy_market_resolution(
+        state,
+        plane,
+        bumps,
+        archive_categorical,
+        signer,
+        sequence,
+        requested_payout,
+    )
 }
 
-/// The unchanged version-two finite-preset transition.
+/// The finite-preset transition.
+///
+/// V1 folds the legacy projection buffer after checking it against the sealed
+/// archive. V2 may instead supply `archive_categorical`, derived directly from
+/// the once-verified archive records with no caller projection buffer.
 #[inline(never)]
 fn apply_legacy_market_resolution(
     state: &mut ResolveStateSlices<'_>,
     plane: &EvidencePlane<'_>,
     bumps: &ResolveBumps,
+    archive_categorical: Option<SealedFacts>,
     signer: bool,
     sequence: u64,
     requested_payout: u8,
@@ -2381,13 +2561,16 @@ fn apply_legacy_market_resolution(
     }
     record_binds_full_terms(&record, plane.terms)?;
 
-    let sealed = derive_from_evidence(
-        state.market,
-        plane.terms,
-        plane.window,
-        plane.feed_cursor,
-        requested_payout,
-    )?;
+    let sealed = match archive_categorical {
+        Some(sealed) => sealed,
+        None => derive_from_evidence(
+            state.market,
+            plane.terms,
+            plane.window,
+            plane.feed_cursor,
+            requested_payout,
+        )?,
+    };
     if sequence != terms.repair_generation || sequence != sealed.repair_generation {
         return Err(ReferenceError::Replay);
     }
@@ -2993,6 +3176,19 @@ fn feed_advance(
     Ok(())
 }
 
+#[inline(always)]
+fn resolve_prefix_for_authenticated_source(
+    occupation: bool,
+    basis_degree: u8,
+    generation: SourceGeneration,
+) -> usize {
+    if occupation || (basis_degree == 0 && generation == SourceGeneration::V2) {
+        ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX
+    } else {
+        RESOLVE_ACCOUNT_PREFIX
+    }
+}
+
 /// Authenticate and apply the market-global Resolve plane.
 ///
 /// No account address in this function is derived from an owner, and no
@@ -3005,7 +3201,7 @@ fn resolve_global(
     payout_index: u8,
 ) -> Outcome<()> {
     require(
-        accounts.len() >= OCCUPATION_RESOLVE_ACCOUNT_PREFIX,
+        accounts.len() >= ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX,
         ClutchError::AccountCount,
     )?;
     require_distinct(accounts)?;
@@ -3031,23 +3227,6 @@ fn resolve_global(
         !occupation || (1..=3).contains(&terms.basis_degree),
         ClutchError::NonCanonical,
     )?;
-    let resolve_prefix = if occupation {
-        OCCUPATION_RESOLVE_ACCOUNT_PREFIX
-    } else {
-        RESOLVE_ACCOUNT_PREFIX
-    };
-    require(
-        accounts.len() == resolve_prefix + usize::from(market.outcome_count),
-        ClutchError::AccountCount,
-    )?;
-    if !occupation {
-        validate_buffer_role(
-            program_id,
-            &accounts[IX_RESOLVE_BUFFER],
-            MAX_EVIDENCE_BUFFER_LEN,
-            EVIDENCE_BUFFER_HEADER_BYTES,
-        )?;
-    }
     let resolution_len = if terms.basis_degree == 0 {
         account_len::RESOLUTION
     } else if occupation {
@@ -3148,6 +3327,25 @@ fn resolve_global(
         ClutchError::MismatchedState,
     )?;
 
+    let source_generation = verified_archive.generation();
+    let resolve_prefix =
+        resolve_prefix_for_authenticated_source(occupation, terms.basis_degree, source_generation);
+    let archive_direct = resolve_prefix == ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX;
+    let archive_direct_categorical =
+        !occupation && terms.basis_degree == 0 && source_generation == SourceGeneration::V2;
+    require(
+        accounts.len() == resolve_prefix + usize::from(market.outcome_count),
+        ClutchError::AccountCount,
+    )?;
+    if !archive_direct {
+        validate_buffer_role(
+            program_id,
+            &accounts[IX_RESOLVE_BUFFER],
+            MAX_EVIDENCE_BUFFER_LEN,
+            EVIDENCE_BUFFER_HEADER_BYTES,
+        )?;
+    }
+
     let observed = claim_truth::observe_outcome_mints_boxed(
         program_id,
         accounts,
@@ -3163,7 +3361,18 @@ fn resolve_global(
     } else {
         None
     };
-    let buffer = if occupation {
+    let archive_categorical = if archive_direct_categorical {
+        let market_data = accounts[IX_RESOLVE_MARKET].data.borrow();
+        Some(derive_categorical_from_archive(
+            &market_data,
+            &terms_data,
+            verified_archive,
+            payout_index,
+        )?)
+    } else {
+        None
+    };
+    let buffer = if archive_direct {
         None
     } else {
         Some(accounts[IX_RESOLVE_BUFFER].data.borrow())
@@ -3176,9 +3385,9 @@ fn resolve_global(
         /* The caller-supplied window blob is a **V1-only** transport
          * compatibility shape: it predates the pull profile, has no v2
          * projection, and inventing one would mean writing a second reader for
-         * evidence the archive already commits.  A v2 page therefore resolves
-         * only through the occupation fold, which reads the page itself.  This
-         * is a named absence, not a silent one. */
+         * evidence the archive already commits.  A v2 finite-preset page must
+         * use the no-buffer archive projection above; v4 occupation also reads
+         * the page itself.  This is a named absence, not a silent one. */
         match verified_archive {
             VerifiedSealedArchive::V1(view) => require_archive_projection(
                 view.receipt(),
@@ -3234,6 +3443,7 @@ fn resolve_global(
                 resolution: resolution_pda.1,
             },
             occupation_candidate.as_deref(),
+            archive_categorical,
             accounts[IX_RESOLVE_ACTOR].is_signer,
             sequence,
             payout_index,
@@ -3313,7 +3523,7 @@ pub(crate) fn apply_resumable_occupation_candidate(
     resolution_bump: u8,
 ) -> Outcome<()> {
     require(
-        accounts.len() >= OCCUPATION_RESOLVE_ACCOUNT_PREFIX,
+        accounts.len() >= ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX,
         ClutchError::AccountCount,
     )?;
     require_distinct(accounts)?;
@@ -3341,7 +3551,7 @@ pub(crate) fn apply_resumable_occupation_candidate(
         }],
     )?;
     require(
-        accounts.len() == OCCUPATION_RESOLVE_ACCOUNT_PREFIX + usize::from(market.outcome_count),
+        accounts.len() == ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX + usize::from(market.outcome_count),
         ClutchError::AccountCount,
     )?;
     let feed = accounts::read_feed(&accounts[IX_RESOLVE_FEED].data.borrow())?;
@@ -3387,7 +3597,7 @@ pub(crate) fn apply_resumable_occupation_candidate(
     let observed = claim_truth::observe_outcome_mints(
         program_id,
         accounts,
-        OCCUPATION_RESOLVE_ACCOUNT_PREFIX,
+        ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX,
         *accounts[IX_RESOLVE_MARKET].key,
         market.market,
         market.outcome_count,
@@ -3456,7 +3666,7 @@ pub(crate) fn apply_resumable_occupation_candidate(
     let observed_after = claim_truth::observe_outcome_mints(
         program_id,
         accounts,
-        OCCUPATION_RESOLVE_ACCOUNT_PREFIX,
+        ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX,
         *accounts[IX_RESOLVE_MARKET].key,
         market.market,
         market.outcome_count,

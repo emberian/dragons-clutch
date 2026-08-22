@@ -11,7 +11,10 @@
 //! the write authority the update body itself records.  See
 //! `docs/implementation/PYTH_PULL_PROFILE_R2.md` §"Authentication seam" and
 //! `research/source-profile-v1/src/auth_v2.rs`, whose `ImmediatePostV1` this
-//! module reproduces field-for-field as [`ImmediatePostV1`].
+//! module originally reproduced field-for-field as [`ImmediatePostV1`].  The
+//! routed adapter now strengthens that projection with [`PostAbiV2`]: the
+//! reviewed discriminator, exact account count, and every account flag are
+//! authenticated before the three semantic account roles are projected.
 //!
 //! That research contract is explicit that the projection "must never be
 //! accepted from caller instruction data".  This module is what makes that
@@ -31,7 +34,7 @@
 //! This module also does not decide *which* account meta of the post
 //! instruction is the Config, the update, or the write authority.  That is the
 //! reviewed receiver-post ABI, and it belongs to the compiled release triple
-//! (R2 plan P0.9), so it arrives here as [`PostAbiPositionsV1`].
+//! (R2 plan P0.9), so it arrives here as [`PostAbiV2`].
 //!
 //! ## Primary source
 //!
@@ -115,6 +118,15 @@ pub const META_FLAG_IS_WRITABLE: u8 = 0b0000_0010;
 /// bit is a byte the runtime cannot have produced.
 pub const META_FLAG_MASK: u8 = META_FLAG_IS_SIGNER | META_FLAG_IS_WRITABLE;
 
+/// Account count of the reviewed Pyth `post_update` instruction.
+///
+/// Payer, encoded VAA, Config, treasury, price-update account, System
+/// Program, and write authority, in that order.
+pub const POST_UPDATE_V2_ACCOUNT_COUNT: usize = 7;
+
+/// Width of an Anchor instruction discriminator.
+pub const ANCHOR_DISCRIMINATOR_LEN: usize = 8;
+
 /// Shortest data a well-formed Instructions sysvar can carry: the count, one
 /// offset entry, and the trailer.
 pub const MIN_SYSVAR_DATA_LEN: usize =
@@ -166,6 +178,15 @@ pub enum InstructionsSysvarError {
     NonCanonicalAccountMetaFlags,
     /// Two roles of the reviewed post ABI named one account-meta position.
     AliasedPostAbiPositions,
+    /// The adjacent instruction did not carry exactly the reviewed account
+    /// count.
+    WrongPostAccountCount,
+    /// The adjacent instruction did not begin with the reviewed Anchor
+    /// discriminator.
+    WrongPostDiscriminator,
+    /// One adjacent-instruction account had different signer/writable flags
+    /// from the reviewed ABI.
+    WrongPostAccountFlags,
 }
 
 /// One decoded account meta of a serialized instruction.
@@ -218,6 +239,29 @@ pub struct PostAbiPositionsV1 {
     pub update_account: u16,
     /// Meta position of the update's write authority.
     pub write_authority: u16,
+}
+
+/// Exact reviewed identity of the Pyth `post_update` instruction.
+///
+/// This is compiled release data, never caller input.  The fixed flag array
+/// also makes the seven-account shape an encoded Rust type invariant; the
+/// runtime still compares the decoded account count explicitly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PostAbiV2 {
+    /// Anchor discriminator: `sha256("global:post_update")[..8]`.
+    pub discriminator: [u8; ANCHOR_DISCRIMINATOR_LEN],
+    /// Expected signer/writable flag byte for every account position.
+    pub account_flags: [u8; POST_UPDATE_V2_ACCOUNT_COUNT],
+    /// One reviewed transaction-global writable elevation caused by two ABI
+    /// positions naming the same address.
+    ///
+    /// The runtime serializes effective message privileges into the
+    /// Instructions sysvar. Pyth commonly uses one wallet as both writable
+    /// payer and readonly write authority, so the latter position is observed
+    /// writable too. No other flag difference is admitted.
+    pub writable_alias_elevation: Option<(u16, u16)>,
+    /// Positions of the three accounts joined to SourceSpec/update evidence.
+    pub positions: PostAbiPositionsV1,
 }
 
 /// The projection `research/source-profile-v1/src/auth_v2.rs` expects from a
@@ -390,6 +434,68 @@ impl<'a> InstructionsSysvarV1<'a> {
             write_authority: post.account_meta(abi.write_authority)?.address,
         })
     }
+
+    /// Authenticate and project the exact immediately preceding
+    /// `post_update` instruction described by `abi`.
+    ///
+    /// Besides structural adjacency and the three role addresses, this binds
+    /// the Anchor discriminator, exact seven-account count, and signer/writable
+    /// flags of every account. Instruction arguments after the discriminator
+    /// remain receiver-owned input: the pinned receiver program validates
+    /// their variable-length encoding before this consumer can execute.
+    pub fn immediate_post_v2(
+        self,
+        abi: PostAbiV2,
+    ) -> Result<ImmediatePostV1, InstructionsSysvarError> {
+        let positions = abi.positions;
+        if positions.config == positions.update_account
+            || positions.config == positions.write_authority
+            || positions.update_account == positions.write_authority
+        {
+            return Err(InstructionsSysvarError::AliasedPostAbiPositions);
+        }
+        let post = self.preceding_instruction()?;
+        if usize::from(post.account_count) != POST_UPDATE_V2_ACCOUNT_COUNT {
+            return Err(InstructionsSysvarError::WrongPostAccountCount);
+        }
+        let Some(discriminator) = post.data.get(..ANCHOR_DISCRIMINATOR_LEN) else {
+            return Err(InstructionsSysvarError::WrongPostDiscriminator);
+        };
+        if discriminator != abi.discriminator {
+            return Err(InstructionsSysvarError::WrongPostDiscriminator);
+        }
+        for (position, expected) in abi.account_flags.iter().copied().enumerate() {
+            if expected & !META_FLAG_MASK != 0 {
+                return Err(InstructionsSysvarError::WrongPostAccountFlags);
+            }
+            let meta = post.account_meta(position as u16)?;
+            let actual = u8::from(meta.is_signer) * META_FLAG_IS_SIGNER
+                | u8::from(meta.is_writable) * META_FLAG_IS_WRITABLE;
+            if actual != expected {
+                let alias_allowed = match abi.writable_alias_elevation {
+                    Some((writable_source, elevated_target))
+                        if usize::from(elevated_target) == position
+                            && actual == (expected | META_FLAG_IS_WRITABLE)
+                            && usize::from(writable_source) < POST_UPDATE_V2_ACCOUNT_COUNT =>
+                    {
+                        post.account_meta(writable_source)?.address == meta.address
+                    }
+                    _ => false,
+                };
+                if !alias_allowed {
+                    return Err(InstructionsSysvarError::WrongPostAccountFlags);
+                }
+            }
+        }
+        Ok(ImmediatePostV1 {
+            instruction_index: post.index,
+            consuming_instruction_index: self.current,
+            program: post.program_id,
+            config: post.account_meta(positions.config)?.address,
+            update_account: post.account_meta(positions.update_account)?.address,
+            write_authority: post.account_meta(positions.write_authority)?.address,
+        })
+    }
 }
 
 impl<'a> InstructionViewV1<'a> {
@@ -539,7 +645,12 @@ mod tests {
 
     /// A minimal two-instruction buffer built from the layout table, used where
     /// a hand-shaped malformation is clearer than editing the capture.
-    fn built(post_program: [u8; 32], post_metas: &[(u8, [u8; 32])], current: u16) -> Vec<u8> {
+    fn built_with_data(
+        post_program: [u8; 32],
+        post_metas: &[(u8, [u8; 32])],
+        post_data: &[u8],
+        current: u16,
+    ) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&2_u16.to_le_bytes());
         let table = out.len();
@@ -552,7 +663,8 @@ mod tests {
             out.extend_from_slice(address);
         }
         out.extend_from_slice(&post_program);
-        out.extend_from_slice(&0_u16.to_le_bytes());
+        out.extend_from_slice(&u16::try_from(post_data.len()).unwrap().to_le_bytes());
+        out.extend_from_slice(post_data);
         // Instruction 1: the consumer.
         let start1 = u16::try_from(out.len()).unwrap();
         out.extend_from_slice(&0_u16.to_le_bytes());
@@ -564,12 +676,49 @@ mod tests {
         out
     }
 
+    fn built(post_program: [u8; 32], post_metas: &[(u8, [u8; 32])], current: u16) -> Vec<u8> {
+        built_with_data(post_program, post_metas, &[], current)
+    }
+
     fn post_abi() -> PostAbiPositionsV1 {
         PostAbiPositionsV1 {
             config: 0,
             update_account: 1,
             write_authority: 2,
         }
+    }
+
+    fn exact_post_abi() -> PostAbiV2 {
+        PostAbiV2 {
+            discriminator: [0x85, 0x5f, 0xcf, 0xaf, 0x0b, 0x4f, 0x76, 0x2c],
+            account_flags: [
+                META_FLAG_IS_SIGNER | META_FLAG_IS_WRITABLE,
+                0,
+                0,
+                META_FLAG_IS_WRITABLE,
+                META_FLAG_IS_SIGNER | META_FLAG_IS_WRITABLE,
+                0,
+                META_FLAG_IS_SIGNER,
+            ],
+            writable_alias_elevation: Some((0, 6)),
+            positions: PostAbiPositionsV1 {
+                config: 2,
+                update_account: 4,
+                write_authority: 6,
+            },
+        }
+    }
+
+    fn exact_post_metas() -> [(u8, [u8; 32]); POST_UPDATE_V2_ACCOUNT_COUNT] {
+        [
+            (META_FLAG_IS_SIGNER | META_FLAG_IS_WRITABLE, [0x01; 32]),
+            (0, [0x02; 32]),
+            (0, CONFIG),
+            (META_FLAG_IS_WRITABLE, [0x04; 32]),
+            (META_FLAG_IS_SIGNER | META_FLAG_IS_WRITABLE, UPDATE),
+            (0, [0x06; 32]),
+            (META_FLAG_IS_SIGNER, WRITE_AUTHORITY),
+        ]
     }
 
     #[test]
@@ -680,6 +829,111 @@ mod tests {
                 write_authority: WRITE_AUTHORITY,
             }
         );
+    }
+
+    #[test]
+    fn exact_post_binds_discriminator_count_every_flag_and_role_position() {
+        let abi = exact_post_abi();
+        let mut data = abi.discriminator.to_vec();
+        data.extend_from_slice(&[0x44; 17]);
+        let metas = exact_post_metas();
+        let bytes = built_with_data(RECEIVER, &metas, &data, 1);
+        assert_eq!(
+            ok(&bytes).immediate_post_v2(abi).unwrap(),
+            ImmediatePostV1 {
+                instruction_index: 0,
+                consuming_instruction_index: 1,
+                program: RECEIVER,
+                config: CONFIG,
+                update_account: UPDATE,
+                write_authority: WRITE_AUTHORITY,
+            }
+        );
+
+        for count in [0_usize, 1, POST_UPDATE_V2_ACCOUNT_COUNT - 1] {
+            let short = built_with_data(RECEIVER, &metas[..count], &data, 1);
+            assert_eq!(
+                ok(&short).immediate_post_v2(abi),
+                Err(InstructionsSysvarError::WrongPostAccountCount),
+                "accepted {count} accounts"
+            );
+        }
+        let mut extra = metas.to_vec();
+        extra.push((0, [0x08; 32]));
+        let long = built_with_data(RECEIVER, &extra, &data, 1);
+        assert_eq!(
+            ok(&long).immediate_post_v2(abi),
+            Err(InstructionsSysvarError::WrongPostAccountCount)
+        );
+
+        for length in 0..ANCHOR_DISCRIMINATOR_LEN {
+            let short = built_with_data(RECEIVER, &metas, &data[..length], 1);
+            assert_eq!(
+                ok(&short).immediate_post_v2(abi),
+                Err(InstructionsSysvarError::WrongPostDiscriminator),
+                "accepted {length} discriminator bytes"
+            );
+        }
+        for at in 0..ANCHOR_DISCRIMINATOR_LEN {
+            let mut wrong = data.clone();
+            wrong[at] ^= 1;
+            let bytes = built_with_data(RECEIVER, &metas, &wrong, 1);
+            assert_eq!(
+                ok(&bytes).immediate_post_v2(abi),
+                Err(InstructionsSysvarError::WrongPostDiscriminator),
+                "accepted discriminator mutation at {at}"
+            );
+        }
+
+        for position in 0..POST_UPDATE_V2_ACCOUNT_COUNT {
+            for bit in [META_FLAG_IS_SIGNER, META_FLAG_IS_WRITABLE] {
+                let mut hostile = metas;
+                hostile[position].0 ^= bit;
+                let bytes = built_with_data(RECEIVER, &hostile, &data, 1);
+                assert_eq!(
+                    ok(&bytes).immediate_post_v2(abi),
+                    Err(InstructionsSysvarError::WrongPostAccountFlags),
+                    "accepted flag mutation {bit:#04x} at {position}"
+                );
+            }
+        }
+
+        let mut payer_is_authority = metas;
+        payer_is_authority[6].0 |= META_FLAG_IS_WRITABLE;
+        payer_is_authority[6].1 = payer_is_authority[0].1;
+        let aliased = built_with_data(RECEIVER, &payer_is_authority, &data, 1);
+        let projected = ok(&aliased)
+            .immediate_post_v2(abi)
+            .expect("payer/write-authority alias elevation is reviewed");
+        assert_eq!(projected.write_authority, payer_is_authority[0].1);
+
+        let mut unexplained_elevation = metas;
+        unexplained_elevation[6].0 |= META_FLAG_IS_WRITABLE;
+        let elevated = built_with_data(RECEIVER, &unexplained_elevation, &data, 1);
+        assert_eq!(
+            ok(&elevated).immediate_post_v2(abi),
+            Err(InstructionsSysvarError::WrongPostAccountFlags)
+        );
+
+        for (mut positions, label) in [
+            (abi.positions, "config"),
+            (abi.positions, "update"),
+            (abi.positions, "authority"),
+        ] {
+            match label {
+                "config" => positions.config = 1,
+                "update" => positions.update_account = 3,
+                _ => positions.write_authority = 5,
+            }
+            let mut wrong = abi;
+            wrong.positions = positions;
+            let projected = ok(&bytes).immediate_post_v2(wrong).unwrap();
+            match label {
+                "config" => assert_eq!(projected.config, [0x02; 32]),
+                "update" => assert_eq!(projected.update_account, [0x04; 32]),
+                _ => assert_eq!(projected.write_authority, [0x06; 32]),
+            }
+        }
     }
 
     #[test]

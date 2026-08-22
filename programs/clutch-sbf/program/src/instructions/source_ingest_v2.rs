@@ -407,7 +407,13 @@ fn append_source_archive_v2(
     require_readonly(&accounts[IX_APPEND_RECEIVER_PROGRAM])?;
     require_readonly(&accounts[IX_APPEND_RECEIVER_PROGRAMDATA])?;
     require_readonly(&accounts[IX_APPEND_RECEIVER_CONFIG])?;
-    require_readonly(&accounts[IX_APPEND_UPDATE])?;
+    /* A real Pyth `post_update` initializes/writes this same ephemeral account
+     * immediately before append. Solana privileges are transaction-global,
+     * so the consumer must expect the account to remain writable here. */
+    require(
+        accounts[IX_APPEND_UPDATE].is_writable,
+        ClutchError::NotWritable,
+    )?;
     require_readonly(&accounts[IX_APPEND_INSTRUCTIONS])?;
     require_readonly(&accounts[IX_APPEND_CLOCK])?;
     let prefix = mutate_prefix(program_id, accounts, intent_terms)?;

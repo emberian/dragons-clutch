@@ -23,9 +23,10 @@
 //!    its **complete** body digests to the pinned governance generation;
 //! 5. the Clock is the canonical sysvar and the release has activated;
 //! 6. the *immediately preceding* instruction in this transaction invoked the
-//!    receiver program, naming this exact update account, the pinned config,
-//!    and the update's own recorded write authority — adjacency read from the
-//!    sysvar, never asserted;
+//!    receiver program through the reviewed `post_update` discriminator,
+//!    seven-account shape and effective privileges, naming this exact update
+//!    account, the pinned config, and the update's own recorded write authority
+//!    — adjacency read from the sysvar, never asserted;
 //! 7. the update parses as a fully verified message for the pinned feed;
 //! 8. its receiver-write slot and publish time are inside both freshness
 //!    envelopes, measured against canonical Clock;
@@ -43,7 +44,7 @@
 //! canonical Clock and the boundary grace delay, which is a different and
 //! weaker guarantee, honestly labelled.
 
-use crate::instructions_sysvar::{InstructionsSysvarError, InstructionsSysvarV1};
+use crate::instructions_sysvar::{InstructionsSysvarError, InstructionsSysvarV1, SYSVAR_OWNER_ID};
 use crate::loader_state::{
     decode_loader_pair_v1, LoaderAccountViewV1, LoaderStateError, LoaderStateV1,
     UpgradeAuthorityV1, UPGRADEABLE_LOADER_ID,
@@ -157,6 +158,8 @@ pub enum AuthV2Error {
     ConfigDigestMismatch,
     /// The Clock projection did not come from the canonical sysvar.
     WrongClockSysvar,
+    /// The Clock account was not owned by the canonical Sysvar program.
+    WrongClockSysvarOwner,
     /// The Clock is before this release's activation instant.
     ReleaseNotActive,
     /// The preceding instruction did not invoke the receiver program.
@@ -228,6 +231,9 @@ pub struct PullAuthenticationV2<'a> {
 
 /// Project the canonical Clock sysvar account, keeping the signed timestamp.
 pub fn decode_clock_view(account: AccountViewV2<'_>) -> Result<ClockViewV1, AuthV2Error> {
+    if account.owner != SYSVAR_OWNER_ID {
+        return Err(AuthV2Error::WrongClockSysvarOwner);
+    }
     if account.executable {
         return Err(AuthV2Error::MalformedClock);
     }
@@ -323,7 +329,7 @@ pub fn authenticate_pull_update_v2(
     )
     .map_err(AuthV2Error::Sysvar)?;
     let post = sysvar
-        .immediate_post_v1(auth.release.post_abi)
+        .immediate_post_v2(auth.release.post_abi)
         .map_err(AuthV2Error::Sysvar)?;
     if post.program != fields.receiver_program {
         return Err(AuthV2Error::WrongPostProgram);
@@ -543,16 +549,39 @@ mod tests {
         current: u16,
         post_index_present: bool,
     ) -> Vec<u8> {
+        let flagged: Vec<(u8, [u8; 32])> = metas
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(position, address)| (fixture::POST_ABI.account_flags[position], address))
+            .collect();
+        sysvar_body_exact(
+            post_program,
+            &flagged,
+            &fixture::POST_UPDATE_DISCRIMINATOR,
+            current,
+            post_index_present,
+        )
+    }
+
+    fn sysvar_body_exact(
+        post_program: [u8; 32],
+        metas: &[(u8, [u8; 32])],
+        post_data: &[u8],
+        current: u16,
+        post_index_present: bool,
+    ) -> Vec<u8> {
         let mut instructions: Vec<(Vec<u8>, [u8; 32])> = Vec::new();
         if post_index_present {
             let mut body = Vec::new();
             body.extend_from_slice(&(metas.len() as u16).to_le_bytes());
-            for meta in metas {
-                body.push(0);
+            for (flags, meta) in metas {
+                body.push(*flags);
                 body.extend_from_slice(meta);
             }
             body.extend_from_slice(&post_program);
-            body.extend_from_slice(&0_u16.to_le_bytes());
+            body.extend_from_slice(&u16::try_from(post_data.len()).unwrap().to_le_bytes());
+            body.extend_from_slice(post_data);
             instructions.push((body, post_program));
         }
         // The consuming instruction: no accounts, no data.
@@ -901,7 +930,88 @@ mod tests {
         assert_eq!(
             authenticate_pull_update_v2(auth(&short)),
             Err(AuthV2Error::Sysvar(
-                InstructionsSysvarError::AccountIndexOutOfRange
+                InstructionsSysvarError::WrongPostAccountCount
+            ))
+        );
+    }
+
+    #[test]
+    fn the_post_discriminator_count_and_effective_flags_are_load_bearing() {
+        let b = bytes();
+        let addresses = post_metas(fixture::RECEIVER_CONFIG, UPDATE_KEY, WRITE_AUTHORITY);
+        let canonical: Vec<(u8, [u8; 32])> = addresses
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(position, address)| (fixture::POST_ABI.account_flags[position], address))
+            .collect();
+
+        let mut discriminator = fixture::POST_UPDATE_DISCRIMINATOR;
+        discriminator[0] ^= 1;
+        let wrong_discriminator = Bytes {
+            sysvar: sysvar_body_exact(
+                fixture::RECEIVER_PROGRAM,
+                &canonical,
+                &discriminator,
+                1,
+                true,
+            ),
+            program: b.program.clone(),
+            programdata: b.programdata.clone(),
+            config: b.config.clone(),
+            update: b.update.clone(),
+        };
+        assert_eq!(
+            authenticate_pull_update_v2(auth(&wrong_discriminator)),
+            Err(AuthV2Error::Sysvar(
+                InstructionsSysvarError::WrongPostDiscriminator
+            ))
+        );
+
+        let extra = canonical
+            .iter()
+            .copied()
+            .chain(core::iter::once((0, [0x88; 32])))
+            .collect::<Vec<_>>();
+        let wrong_count = Bytes {
+            sysvar: sysvar_body_exact(
+                fixture::RECEIVER_PROGRAM,
+                &extra,
+                &fixture::POST_UPDATE_DISCRIMINATOR,
+                1,
+                true,
+            ),
+            program: b.program.clone(),
+            programdata: b.programdata.clone(),
+            config: b.config.clone(),
+            update: b.update.clone(),
+        };
+        assert_eq!(
+            authenticate_pull_update_v2(auth(&wrong_count)),
+            Err(AuthV2Error::Sysvar(
+                InstructionsSysvarError::WrongPostAccountCount
+            ))
+        );
+
+        let mut wrong_flags = canonical;
+        wrong_flags[2].0 ^= crate::instructions_sysvar::META_FLAG_IS_WRITABLE;
+        let wrong_flags = Bytes {
+            sysvar: sysvar_body_exact(
+                fixture::RECEIVER_PROGRAM,
+                &wrong_flags,
+                &fixture::POST_UPDATE_DISCRIMINATOR,
+                1,
+                true,
+            ),
+            program: b.program.clone(),
+            programdata: b.programdata.clone(),
+            config: b.config.clone(),
+            update: b.update.clone(),
+        };
+        assert_eq!(
+            authenticate_pull_update_v2(auth(&wrong_flags)),
+            Err(AuthV2Error::Sysvar(
+                InstructionsSysvarError::WrongPostAccountFlags
             ))
         );
     }
@@ -910,7 +1020,7 @@ mod tests {
     fn an_aliased_post_abi_refuses_before_it_can_confuse_two_roles() {
         let b = bytes();
         let mut case = auth(&b);
-        case.release.post_abi = PostAbiPositionsV1 {
+        case.release.post_abi.positions = PostAbiPositionsV1 {
             config: 2,
             update_account: 2,
             write_authority: 6,
@@ -1097,21 +1207,46 @@ mod tests {
         let mut body = vec![0_u8; CLOCK_SYSVAR_LEN];
         body[..8].copy_from_slice(&99_u64.to_le_bytes());
         body[CLOCK_UNIX_TIMESTAMP_OFFSET..].copy_from_slice(&(-5_i64).to_le_bytes());
-        let view = decode_clock_view(AccountViewV2::new(CLOCK_SYSVAR_ID, [0; 32], false, &body))
-            .expect("well-formed clock");
+        let view = decode_clock_view(AccountViewV2::new(
+            CLOCK_SYSVAR_ID,
+            SYSVAR_OWNER_ID,
+            false,
+            &body,
+        ))
+        .expect("well-formed clock");
         assert_eq!(view.slot, 99);
         assert_eq!(view.unix_timestamp, -5);
 
         assert_eq!(
-            decode_clock_view(AccountViewV2::new(CLOCK_SYSVAR_ID, [0; 32], true, &body)),
+            decode_clock_view(AccountViewV2::new(CLOCK_SYSVAR_ID, [0; 32], false, &body)),
+            Err(AuthV2Error::WrongClockSysvarOwner)
+        );
+        assert_eq!(
+            decode_clock_view(AccountViewV2::new(
+                CLOCK_SYSVAR_ID,
+                SYSVAR_OWNER_ID,
+                true,
+                &body
+            )),
             Err(AuthV2Error::MalformedClock)
         );
         assert_eq!(
             decode_clock_view(AccountViewV2::new(
                 CLOCK_SYSVAR_ID,
-                [0; 32],
+                SYSVAR_OWNER_ID,
                 false,
                 &body[..CLOCK_SYSVAR_LEN - 1]
+            )),
+            Err(AuthV2Error::MalformedClock)
+        );
+        let mut long = body.clone();
+        long.push(0);
+        assert_eq!(
+            decode_clock_view(AccountViewV2::new(
+                CLOCK_SYSVAR_ID,
+                SYSVAR_OWNER_ID,
+                false,
+                &long
             )),
             Err(AuthV2Error::MalformedClock)
         );

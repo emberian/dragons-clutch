@@ -24,16 +24,13 @@
 //! transaction really does have to contain a real, successful instruction to a
 //! real, loadable program at the pinned receiver address.
 //!
-//! `clutch_lab_receiver.so` is that program: a no-op with no dependencies,
+//! `clutch_lab_receiver.so` is that program: a narrow account writer,
 //! installed at `source_identity::fixture::RECEIVER_PROGRAM` under a fabricated
 //! Upgradeable Loader program/ProgramData pair. It is **not** a model of Pyth's
-//! receiver and implements no part of `post_update`. It does not have to be:
-//! `source_v2::auth` never trusts the receiver's behaviour. It authenticates
-//! the receiver *deployment* (pinned key, loader ownership, the ProgramData
-//! link and its deployment slot, the governance `Config` digest) and separately
-//! authenticates *adjacency*, and it reads the price out of the update
-//! account's own 134 bytes. A no-op stand-in is therefore the honest fixture:
-//! nothing it does can accidentally supply evidence.
+//! proof verification: it only copies a canonical 134-byte body into the
+//! receiver-owned update account. That deliberately proves the transaction
+//! seam the former no-op fixture skipped: the adjacent instruction writes the
+//! evidence Dragon consumes, and a later refusal rolls both writes back.
 //!
 //! ## Two deliberate deviations from the fixture identity, both named
 //!
@@ -62,6 +59,7 @@
 use {
     clutch_kernel::{PayoutSet, PayoutVector},
     clutch_sbf::{
+        error::ClutchError,
         instructions::observe_resolve,
         loader_state::UPGRADEABLE_LOADER_ID,
         pyth_receiver::PRICE_UPDATE_V2_ACCOUNT_LEN,
@@ -90,10 +88,10 @@ use {
             RESOLUTION_MODE_DERIVED_QUANTIZED_OCCUPATION, STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06,
         },
         FeedAccount, Hash32, HoardAccount, Intent, MarketAccount, PayoutVectorBytes,
-        PositionAccount, SupplyLedgerAccount, TermsAccount, MAX_KNOTS, MAX_OUTCOMES, MAX_PAYOUTS,
-        PAYOUT_INDEX_UNRESOLVED, PAYOUT_MAP_UNUSED,
+        PositionAccount, ResolutionAccount, SupplyLedgerAccount, TermsAccount, MAX_KNOTS,
+        MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_INDEX_UNRESOLVED, PAYOUT_MAP_UNUSED,
     },
-    clutch_solana_reference::KernelAccount,
+    clutch_solana_reference::{KernelAccount, STAT_TERMINAL_01},
     clutch_svm_fixture::{
         build_plane, compute_unit_limit_data, fixture_terms, immutable_owner_account_bytes,
         layout_request, outcome_mint_bytes, token_account_bytes, GenesisAccount, Mode, Pda, Plane,
@@ -147,8 +145,6 @@ const ACTOR_TOKEN: Address = Address::new_from_array([0x8e; 32]);
 const ENDOW_OWNER_TOKEN: Address = Address::new_from_array([0x8f; 32]);
 /// Collateral atoms that owner deposits.
 const DEPOSIT: u64 = 500;
-const UPDATE_ACCOUNT: Address = Address::new_from_array([0xc1; 32]);
-const WRITE_AUTHORITY: Address = Address::new_from_array([0xc2; 32]);
 const COLLATERAL_MINT: Address = Address::new_from_array([0x6c; 32]);
 
 const CU_LIMIT: u32 = 1_400_000;
@@ -166,6 +162,22 @@ fn actor_keypair() -> Keypair {
         0x77, 0x19, 0x42, 0xa8, 0x51, 0x0e, 0xf3, 0x22, 0x63, 0x99, 0x14, 0xc0, 0x2d, 0x6b, 0x84,
         0x31, 0x7a, 0x55, 0xd8, 0x0b, 0xe2, 0x40, 0x6f, 0x91, 0x13, 0xcc, 0x75, 0x28, 0x9d, 0x04,
         0xb6, 0x5e,
+    ])
+}
+
+fn update_keypair() -> Keypair {
+    Keypair::new_from_array([
+        0x31, 0xa7, 0x04, 0xd8, 0x56, 0x12, 0x9e, 0x43, 0x85, 0x2c, 0x61, 0xba, 0xf0, 0x77, 0x19,
+        0x3d, 0xca, 0x28, 0x90, 0x5e, 0x44, 0x0b, 0xd1, 0x68, 0x27, 0xec, 0x95, 0x32, 0x7f, 0x11,
+        0xa6, 0x59,
+    ])
+}
+
+fn decoy_update_keypair() -> Keypair {
+    Keypair::new_from_array([
+        0x82, 0x16, 0xcb, 0x45, 0x03, 0x9f, 0xe7, 0x2a, 0xb4, 0x65, 0x10, 0x73, 0xd8, 0x29, 0x5c,
+        0xf1, 0x47, 0x90, 0x2d, 0xa3, 0x6e, 0x0c, 0x58, 0xbb, 0x24, 0x79, 0xd0, 0x13, 0x9a, 0x4f,
+        0xe5, 0x36,
     ])
 }
 
@@ -300,7 +312,7 @@ fn genesis_account(data: Vec<u8>, owner: Address, executable: bool) -> Account {
 /* The market plane, built around a live-Clock window                        */
 /* ------------------------------------------------------------------------ */
 
-/// Everything the campaign needs to address one v2-bound occupation market.
+/// Everything the campaign needs to address one v2-bound market.
 struct PullPlane {
     plane: Plane,
     spec: SourceSpecV2,
@@ -308,10 +320,21 @@ struct PullPlane {
     end_bucket_exclusive: u64,
 }
 
-/// Build a degree-one occupation market bound to one v2 pull spec and one
-/// window, with the source spec, feed head and archive **absent**: those are
-/// exactly what the new intents create.
-fn pull_occupation_plane(actor: Address, spec: SourceSpecV2, start_bucket: u64) -> PullPlane {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PullMarketKind {
+    Occupation,
+    Categorical,
+}
+
+/// Build a market bound to one v2 pull spec and one window, with the source
+/// spec, feed head and archive **absent**: those are exactly what the new
+/// intents create.
+fn pull_plane(
+    actor: Address,
+    spec: SourceSpecV2,
+    start_bucket: u64,
+    kind: PullMarketKind,
+) -> PullPlane {
     let end_bucket_exclusive = start_bucket + SPAN;
     let feed_id = Hash32::from_bytes(spec.feed_id());
     let mut plane = build_plane(actor, COLLATERAL_MINT, MARKET_NONCE, Mode::Funded);
@@ -333,19 +356,35 @@ fn pull_occupation_plane(actor: Address, spec: SourceSpecV2, start_bucket: u64) 
     terms.outcome_count = OUTCOMES;
     terms.payout_count = OUTCOMES;
     terms.payouts = payout_bytes;
-    terms.statistic_id = STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06;
-    terms.basis_degree = BASIS_DEGREE;
-    terms.knot_count = OUTCOMES + 1 - BASIS_DEGREE;
-    terms.uniform_log2_spacing = 3;
-    terms.payout_map = [PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
     terms.knots = [0; MAX_KNOTS];
-    for (index, knot) in terms
-        .knots
-        .iter_mut()
-        .take(usize::from(terms.knot_count))
-        .enumerate()
-    {
-        *knot = (index as u128) * 8;
+    terms.payout_map = [PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
+    match kind {
+        PullMarketKind::Occupation => {
+            terms.statistic_id = STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06;
+            terms.basis_degree = BASIS_DEGREE;
+            terms.knot_count = OUTCOMES + 1 - BASIS_DEGREE;
+            terms.uniform_log2_spacing = 3;
+            for (index, knot) in terms
+                .knots
+                .iter_mut()
+                .take(usize::from(terms.knot_count))
+                .enumerate()
+            {
+                *knot = (index as u128) * 8;
+            }
+        }
+        PullMarketKind::Categorical => {
+            terms.statistic_id = STAT_TERMINAL_01;
+            terms.basis_degree = 0;
+            terms.knot_count = OUTCOMES - 1;
+            terms.uniform_log2_spacing = clutch_solana_layout::UNIFORM_SPACING_NONE;
+            terms.knots[0] = 500;
+            terms.knots[1] = 1_000;
+            terms.knots[2] = 1_500;
+            for payout in 0..OUTCOMES {
+                terms.payout_map[usize::from(payout)] = payout;
+            }
+        }
     }
     terms.expected_start_bucket = start_bucket;
     terms.expected_end_bucket_exclusive = end_bucket_exclusive;
@@ -405,7 +444,10 @@ fn pull_occupation_plane(actor: Address, spec: SourceSpecV2, start_bucket: u64) 
     let kernel = KernelAccount {
         market: market_id,
         phase: 0,
-        basis_mode: clutch_kernel::BasisMode::DerivedBasis,
+        basis_mode: match kind {
+            PullMarketKind::Occupation => clutch_kernel::BasisMode::DerivedBasis,
+            PullMarketKind::Categorical => clutch_kernel::BasisMode::FinitePreset,
+        },
         resolved_payout: 0,
         payouts: payout_set,
         total_supply,
@@ -430,14 +472,35 @@ fn pull_occupation_plane(actor: Address, spec: SourceSpecV2, start_bucket: u64) 
         encode(account_len::HOARD, |out| hoard.encode(out));
     plane.hoard_atoms = SETS;
 
-    let unresolved = OccupationResolutionAccount::unresolved(
-        market_id,
-        terms_id,
-        feed_id,
-        plane.resolution.bump,
-    );
-    account_mut(&mut plane, resolution_address).data =
-        encode(OCCUPATION_RESOLUTION_LEN, |out| unresolved.encode(out));
+    match kind {
+        PullMarketKind::Occupation => {
+            let unresolved = OccupationResolutionAccount::unresolved(
+                market_id,
+                terms_id,
+                feed_id,
+                plane.resolution.bump,
+            );
+            account_mut(&mut plane, resolution_address).data =
+                encode(OCCUPATION_RESOLUTION_LEN, |out| unresolved.encode(out));
+        }
+        PullMarketKind::Categorical => {
+            let unresolved = ResolutionAccount {
+                market: market_id,
+                terms: terms_id,
+                feed: feed_id,
+                window: Hash32::ZERO,
+                feed_cursor: 0,
+                sealed_end_bucket_exclusive: 0,
+                repair_generation: 0,
+                resolved_slot: 0,
+                payout_index: PAYOUT_INDEX_UNRESOLVED,
+                stored_bump: plane.resolution.bump,
+                flags: 0,
+            };
+            account_mut(&mut plane, resolution_address).data =
+                encode(account_len::RESOLUTION, |out| unresolved.encode(out));
+        }
+    }
 
     /* The three accounts this campaign's own instructions create are removed
      * from the plane rather than rewritten: an installed image would make the
@@ -470,6 +533,14 @@ fn pull_occupation_plane(actor: Address, spec: SourceSpecV2, start_bucket: u64) 
         start_bucket,
         end_bucket_exclusive,
     }
+}
+
+fn pull_occupation_plane(actor: Address, spec: SourceSpecV2, start_bucket: u64) -> PullPlane {
+    pull_plane(actor, spec, start_bucket, PullMarketKind::Occupation)
+}
+
+fn pull_categorical_plane(actor: Address, spec: SourceSpecV2, start_bucket: u64) -> PullPlane {
+    pull_plane(actor, spec, start_bucket, PullMarketKind::Categorical)
 }
 
 /// Recompute the canonical window identity the archive PDA is derived from.
@@ -517,6 +588,8 @@ struct Campaign {
     nonce: u32,
     actor: Keypair,
     endow_owner: Keypair,
+    update: Keypair,
+    decoy_update: Keypair,
     plane: Plane,
     spec: SourceSpecV2,
     start_bucket: u64,
@@ -525,7 +598,17 @@ struct Campaign {
 
 impl Campaign {
     async fn start(spec: SourceSpecV2) -> Self {
+        Self::start_with(spec, PullMarketKind::Occupation).await
+    }
+
+    async fn start_categorical(spec: SourceSpecV2) -> Self {
+        Self::start_with(spec, PullMarketKind::Categorical).await
+    }
+
+    async fn start_with(spec: SourceSpecV2, kind: PullMarketKind) -> Self {
         let actor = actor_keypair();
+        let update = update_keypair();
+        let decoy_update = decoy_update_keypair();
         let mut test = ProgramTest::default();
         test.prefer_bpf(true);
         test.add_program("clutch_sbf", PROGRAM_ID, None);
@@ -558,6 +641,16 @@ impl Campaign {
                 false,
             ),
         );
+        for key in [update.pubkey(), decoy_update.pubkey()] {
+            test.add_account(
+                key,
+                genesis_account(
+                    vec![0_u8; PRICE_UPDATE_V2_ACCOUNT_LEN],
+                    Address::new_from_array(fixture::RECEIVER_PROGRAM),
+                    false,
+                ),
+            );
+        }
         let mut funded = genesis_account(Vec::new(), SYSTEM_PROGRAM, false);
         funded.lamports = 10_000_000_000;
         test.add_account(actor.pubkey(), funded.clone());
@@ -581,7 +674,12 @@ impl Campaign {
             "the bank clock must be past the epoch for a 60-second grid"
         );
 
-        let built = pull_occupation_plane(actor.pubkey(), spec, start_bucket);
+        let built = match kind {
+            PullMarketKind::Occupation => pull_occupation_plane(actor.pubkey(), spec, start_bucket),
+            PullMarketKind::Categorical => {
+                pull_categorical_plane(actor.pubkey(), spec, start_bucket)
+            }
+        };
         let plane = built.plane;
 
         for account in &plane.accounts {
@@ -640,6 +738,8 @@ impl Campaign {
             nonce: 0,
             actor,
             endow_owner: endow_owner_keypair(),
+            update,
+            decoy_update,
             plane,
             spec: built.spec,
             start_bucket: built.start_bucket,
@@ -735,22 +835,53 @@ impl Campaign {
         )
     }
 
-    /// The preceding instruction: a real call into the laboratory receiver,
-    /// laid out at the fixture ABI's meta positions (config 2, update 4, write
-    /// authority 6).
-    fn post(&self, update: Address) -> Instruction {
+    /// The preceding instruction: a real write by the laboratory receiver,
+    /// laid out as the reviewed seven-account Pyth `post_update` contract.
+    fn post(&self, update: Address, body: &[u8]) -> Instruction {
+        self.post_with(
+            update,
+            body,
+            fixture::POST_UPDATE_DISCRIMINATOR,
+            false,
+            false,
+        )
+    }
+
+    fn post_with(
+        &self,
+        update: Address,
+        body: &[u8],
+        discriminator: [u8; 8],
+        authority_writable: bool,
+        extra_account: bool,
+    ) -> Instruction {
+        assert_eq!(body.len(), PRICE_UPDATE_V2_ACCOUNT_LEN);
+        let mut data = discriminator.to_vec();
+        data.extend_from_slice(body);
+        let authority = if authority_writable {
+            AccountMeta::new(self.actor.pubkey(), true)
+        } else {
+            AccountMeta::new_readonly(self.actor.pubkey(), true)
+        };
+        let mut metas = vec![
+            AccountMeta::new(self.context.payer.pubkey(), true),
+            AccountMeta::new_readonly(Address::new_from_array([0x02; 32]), false),
+            AccountMeta::new_readonly(Address::new_from_array(fixture::RECEIVER_CONFIG), false),
+            AccountMeta::new(Address::new_from_array([0x04; 32]), false),
+            AccountMeta::new(update, true),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+            authority,
+        ];
+        if extra_account {
+            metas.push(AccountMeta::new_readonly(
+                Address::new_from_array([0x08; 32]),
+                false,
+            ));
+        }
         Instruction::new_with_bytes(
             Address::new_from_array(fixture::RECEIVER_PROGRAM),
-            &[0xaa, 0xbb, 0xcc],
-            vec![
-                AccountMeta::new_readonly(Address::new_from_array([0x01; 32]), false),
-                AccountMeta::new_readonly(Address::new_from_array([0x02; 32]), false),
-                AccountMeta::new_readonly(Address::new_from_array(fixture::RECEIVER_CONFIG), false),
-                AccountMeta::new_readonly(Address::new_from_array([0x04; 32]), false),
-                AccountMeta::new_readonly(update, false),
-                AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
-                AccountMeta::new_readonly(WRITE_AUTHORITY, false),
-            ],
+            &data,
+            metas,
         )
     }
 
@@ -761,10 +892,31 @@ impl Campaign {
                 terms: self.plane.terms_id,
             },
         );
-        self.append_with_archive(data, update, self.plane.source_archive.address)
+        self.append_with_archive(data, update, self.plane.source_archive.address, true)
     }
 
-    fn append_with_archive(&self, data: Vec<u8>, update: Address, archive: Address) -> Instruction {
+    fn append_readonly_update(&self, sequence: u64, update: Address) -> Instruction {
+        let data = layout_request(
+            sequence,
+            Intent::AppendSourceArchiveV2 {
+                terms: self.plane.terms_id,
+            },
+        );
+        self.append_with_archive(data, update, self.plane.source_archive.address, false)
+    }
+
+    fn append_with_archive(
+        &self,
+        data: Vec<u8>,
+        update: Address,
+        archive: Address,
+        update_writable: bool,
+    ) -> Instruction {
+        let update = if update_writable {
+            AccountMeta::new(update, false)
+        } else {
+            AccountMeta::new_readonly(update, false)
+        };
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &data,
@@ -782,7 +934,7 @@ impl Campaign {
                     false,
                 ),
                 AccountMeta::new_readonly(Address::new_from_array(fixture::RECEIVER_CONFIG), false),
-                AccountMeta::new_readonly(update, false),
+                update,
                 AccountMeta::new_readonly(INSTRUCTIONS_SYSVAR, false),
                 AccountMeta::new_readonly(CLOCK_SYSVAR, false),
             ],
@@ -809,14 +961,52 @@ impl Campaign {
     }
 
     fn resolve(&self) -> Instruction {
-        self.resolve_with_archive(self.plane.source_archive.address)
+        self.resolve_with_payout_and_archive(
+            PAYOUT_INDEX_UNRESOLVED,
+            self.plane.source_archive.address,
+        )
     }
 
-    fn resolve_with_archive(&self, archive: Address) -> Instruction {
+    fn resolve_with_payout(&self, payout_index: u8) -> Instruction {
+        self.resolve_with_payout_and_archive(payout_index, self.plane.source_archive.address)
+    }
+
+    fn resolve_with_payout_and_buffer(&self, payout_index: u8, buffer: Address) -> Instruction {
         let mut data = vec![0xd1, 1];
         data.extend_from_slice(&0_u64.to_le_bytes());
         data.push(1);
-        data.push(PAYOUT_INDEX_UNRESOLVED);
+        data.push(payout_index);
+        let mut metas = vec![
+            AccountMeta::new_readonly(self.actor.pubkey(), true),
+            AccountMeta::new(self.plane.market.address, false),
+            AccountMeta::new_readonly(self.plane.hoard.address, false),
+            AccountMeta::new(self.plane.kernel.address, false),
+            AccountMeta::new(self.plane.supply.address, false),
+            AccountMeta::new_readonly(self.plane.terms.address, false),
+            AccountMeta::new(self.plane.resolution.address, false),
+            AccountMeta::new_readonly(self.plane.feed.address, false),
+            AccountMeta::new_readonly(self.plane.source_spec.address, false),
+            AccountMeta::new_readonly(self.plane.source_archive.address, false),
+            AccountMeta::new_readonly(buffer, false),
+        ];
+        metas.extend(
+            self.plane
+                .outcome_mints
+                .iter()
+                .map(|mint| AccountMeta::new_readonly(mint.address, false)),
+        );
+        assert_eq!(
+            metas.len(),
+            observe_resolve::RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES)
+        );
+        Instruction::new_with_bytes(PROGRAM_ID, &data, metas)
+    }
+
+    fn resolve_with_payout_and_archive(&self, payout_index: u8, archive: Address) -> Instruction {
+        let mut data = vec![0xd1, 1];
+        data.extend_from_slice(&0_u64.to_le_bytes());
+        data.push(1);
+        data.push(payout_index);
         let mut metas = vec![
             AccountMeta::new_readonly(self.actor.pubkey(), true),
             AccountMeta::new(self.plane.market.address, false),
@@ -837,7 +1027,7 @@ impl Campaign {
         );
         assert_eq!(
             metas.len(),
-            observe_resolve::OCCUPATION_RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES)
+            observe_resolve::ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES)
         );
         Instruction::new_with_bytes(PROGRAM_ID, &data, metas)
     }
@@ -881,57 +1071,74 @@ impl Campaign {
 
     /* -- driving ---------------------------------------------------------- */
 
-    /// Install the ephemeral update account for one boundary, then drive the
-    /// receiver post and the append together.
+    /// Have the preceding receiver instruction write the ephemeral update,
+    /// then consume it in the adjacent append.
     async fn ingest(&mut self, index: u64) -> (Result<(), TransactionError>, u64) {
-        let bucket = self.start_bucket + index;
-        self.install_update(UPDATE_ACCOUNT, bucket, self.spec.fields().provider_feed_id)
-            .await;
-        self.ingest_now(index, UPDATE_ACCOUNT).await
+        self.ingest_price(index, PRICE_ATOMS, 0).await
     }
 
-    /// Drive the post/append pair against whatever update account is already
-    /// installed, so the hostile battery can install a bad one first.
+    async fn ingest_price(
+        &mut self,
+        index: u64,
+        price: i64,
+        confidence: u64,
+    ) -> (Result<(), TransactionError>, u64) {
+        let bucket = self.start_bucket + index;
+        let body = self
+            .price_update_body_with(
+                bucket,
+                self.spec.fields().provider_feed_id,
+                price,
+                confidence,
+            )
+            .await;
+        let update = self.update.pubkey();
+        self.ingest_now(index, update, &body).await
+    }
+
+    /// Drive one receiver-write/append pair with caller-selected update bytes.
     async fn ingest_now(
         &mut self,
         index: u64,
         update: Address,
+        body: &[u8],
     ) -> (Result<(), TransactionError>, u64) {
-        let post = self.post(update);
+        let post = self.post(update, body);
         let append = self.append(index, update);
         self.send_many(&[post, append]).await
     }
 
-    async fn install_update(&mut self, at: Address, bucket: u64, feed_id: [u8; 32]) {
+    async fn price_update_body(&mut self, bucket: u64, feed_id: [u8; 32]) -> Vec<u8> {
+        self.price_update_body_with(bucket, feed_id, PRICE_ATOMS, 0)
+            .await
+    }
+
+    async fn price_update_body_with(
+        &mut self,
+        bucket: u64,
+        feed_id: [u8; 32],
+        price: i64,
+        confidence: u64,
+    ) -> Vec<u8> {
         let (slot, _) = clock(&mut self.context).await;
         let boundary = (bucket + 1) as i64 * 60;
         let update = PriceUpdateFixture {
-            write_authority: WRITE_AUTHORITY.to_bytes(),
+            write_authority: self.actor.pubkey().to_bytes(),
             verification_level: 1,
             feed_id,
-            price: PRICE_ATOMS,
-            /* Zero confidence: the occupation fold admits only a point
-             * observation and refuses to invent a midpoint. */
-            confidence: 0,
+            price,
+            confidence,
             exponent: -8,
             publish_time: boundary,
             prev_publish_time: boundary - 1,
-            ema_price: PRICE_ATOMS,
-            ema_confidence: 0,
+            ema_price: price,
+            ema_confidence: confidence,
             posted_slot: slot,
             trailing_pad: 0,
         };
         let data = price_update_body(update);
         assert_eq!(data.len(), PRICE_UPDATE_V2_ACCOUNT_LEN);
-        self.context.set_account(
-            &at,
-            &genesis_account(
-                data,
-                Address::new_from_array(fixture::RECEIVER_PROGRAM),
-                false,
-            )
-            .into(),
-        );
+        data
     }
 
     async fn send(&mut self, instruction: Instruction) -> (Result<(), TransactionError>, u64) {
@@ -971,6 +1178,10 @@ impl Campaign {
                 signers.push(&self.actor);
             } else if *key == self.endow_owner.pubkey() {
                 signers.push(&self.endow_owner);
+            } else if *key == self.update.pubkey() {
+                signers.push(&self.update);
+            } else if *key == self.decoy_update.pubkey() {
+                signers.push(&self.decoy_update);
             } else {
                 panic!("no keypair for required signer {key}");
             }
@@ -1041,6 +1252,52 @@ fn collateral_mint_bytes(supply: u64) -> Vec<u8> {
 const CLOCK_SYSVAR: Address = Address::new_from_array(clutch_sbf::source_identity::CLOCK_SYSVAR_ID);
 const INSTRUCTIONS_SYSVAR: Address =
     Address::new_from_array(clutch_sbf::instructions_sysvar::INSTRUCTIONS_SYSVAR_ID);
+
+async fn found_ingested_sealed(
+    campaign: &mut Campaign,
+    price: i64,
+    confidence: u64,
+) -> (u64, u64, u64, u64) {
+    let init_spec = campaign.init_spec();
+    let (result, spec_cu) = campaign.send(init_spec).await;
+    assert_eq!(result, Ok(()), "InitSourceSpecV2 must be accepted");
+
+    let init_archive = campaign.init_archive();
+    let (result, archive_cu) = campaign.send(init_archive).await;
+    assert_eq!(result, Ok(()), "InitSourceArchiveV2 must be accepted");
+
+    let mut append_cu = 0;
+    for index in 0..SPAN {
+        let (result, units) = campaign.ingest_price(index, price, confidence).await;
+        assert_eq!(result, Ok(()), "append {index} must be accepted");
+        append_cu = units;
+    }
+
+    let seal = campaign.seal(SPAN);
+    let (result, seal_cu) = campaign.send(seal).await;
+    assert_eq!(result, Ok(()), "SealSourceArchiveV2 must be accepted");
+    (spec_cu, archive_cu, append_cu, seal_cu)
+}
+
+async fn resolve_plane_images(campaign: &mut Campaign) -> Vec<(Address, Vec<u8>)> {
+    let mut addresses = vec![
+        campaign.plane.market.address,
+        campaign.plane.hoard.address,
+        campaign.plane.kernel.address,
+        campaign.plane.supply.address,
+        campaign.plane.terms.address,
+        campaign.plane.resolution.address,
+        campaign.plane.feed.address,
+        campaign.plane.source_spec.address,
+        campaign.plane.source_archive.address,
+    ];
+    addresses.extend(campaign.plane.outcome_mints.iter().map(|mint| mint.address));
+    let mut images = Vec::with_capacity(addresses.len());
+    for address in addresses {
+        images.push((address, campaign.data(address).await));
+    }
+    images
+}
 
 /* ------------------------------------------------------------------------ */
 /* The circle                                                                */
@@ -1181,6 +1438,116 @@ async fn the_default_elf_founds_ingests_seals_and_resolves_a_v2_window() {
     );
 }
 
+#[tokio::test]
+async fn degree_zero_v2_nonzero_confidence_same_cell_resolves_without_buffer() {
+    let mut campaign = Campaign::start_categorical(registered_spec()).await;
+    let (spec_cu, archive_cu, append_cu, seal_cu) =
+        found_ingested_sealed(&mut campaign, 400, 1).await;
+
+    let resolve = campaign.resolve_with_payout(0);
+    assert_eq!(
+        resolve.accounts.len(),
+        observe_resolve::ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES),
+        "degree-zero v2 categorical Resolve uses the no-buffer account shape"
+    );
+    let (result, resolve_cu) = campaign.send(resolve).await;
+    assert_eq!(
+        result,
+        Ok(()),
+        "the authenticated [397,403] interval lies wholly in cell 0"
+    );
+
+    let resolution =
+        ResolutionAccount::decode(&campaign.data(campaign.plane.resolution.address).await)
+            .expect("categorical resolution decodes");
+    assert_eq!(resolution.payout_index, 0);
+    assert_eq!(
+        resolution.sealed_end_bucket_exclusive,
+        campaign.end_bucket_exclusive
+    );
+    assert_eq!(resolution.feed_cursor, campaign.end_bucket_exclusive);
+    assert_eq!(resolution.repair_generation, 0);
+
+    let market =
+        MarketAccount::decode(&campaign.data(campaign.plane.market.address).await).expect("market");
+    assert_eq!(market.lifecycle, 1, "the market is recorded resolved");
+
+    println!(
+        "r2 v2 categorical CU: init_spec={spec_cu} init_archive={archive_cu} \
+         append={append_cu} seal={seal_cu} resolve_same_cell={resolve_cu} \
+         resolve_accounts={}",
+        observe_resolve::ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES)
+    );
+}
+
+#[tokio::test]
+async fn degree_zero_v2_boundary_straddle_refuses_atomically_without_buffer() {
+    let mut campaign = Campaign::start_categorical(registered_spec()).await;
+    let (_spec_cu, _archive_cu, append_cu, seal_cu) =
+        found_ingested_sealed(&mut campaign, 500, 1).await;
+    let before = resolve_plane_images(&mut campaign).await;
+
+    let resolve = campaign.resolve_with_payout(0);
+    assert_eq!(
+        resolve.accounts.len(),
+        observe_resolve::ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES),
+        "the refusing categorical case also uses the no-buffer account shape"
+    );
+    let (result, refuse_cu) = campaign.send(resolve).await;
+    assert_eq!(
+        custom(&result),
+        RESOLUTION_REFUSAL,
+        "the authenticated [497,503] interval crosses the 500 boundary"
+    );
+    assert_eq!(
+        resolve_plane_images(&mut campaign).await,
+        before,
+        "the boundary-straddle refusal atomically preserves every Resolve-plane account image"
+    );
+    let resolution =
+        ResolutionAccount::decode(&campaign.data(campaign.plane.resolution.address).await)
+            .expect("categorical resolution decodes");
+    assert_eq!(resolution.payout_index, PAYOUT_INDEX_UNRESOLVED);
+
+    println!(
+        "r2 v2 categorical CU: append={append_cu} seal={seal_cu} \
+         resolve_boundary_refusal={refuse_cu} resolve_accounts={}",
+        observe_resolve::ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES)
+    );
+}
+
+#[tokio::test]
+async fn degree_zero_v2_rejects_legacy_buffer_shape_atomically() {
+    let mut campaign = Campaign::start_categorical(registered_spec()).await;
+    let (_spec_cu, _archive_cu, append_cu, seal_cu) =
+        found_ingested_sealed(&mut campaign, 400, 1).await;
+    let before = resolve_plane_images(&mut campaign).await;
+
+    let resolve = campaign.resolve_with_payout_and_buffer(0, RENT_SYSVAR);
+    assert_eq!(
+        resolve.accounts.len(),
+        observe_resolve::RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES),
+        "the legacy buffer account shape is 11+n"
+    );
+    let (result, refuse_cu) = campaign.send(resolve).await;
+    assert_eq!(
+        custom(&result),
+        ClutchError::AccountCount as u32,
+        "after authenticating the v2 archive generation, degree-zero categorical expects 10+n"
+    );
+    assert_eq!(
+        resolve_plane_images(&mut campaign).await,
+        before,
+        "the shape refusal preserves every Resolve-plane account image"
+    );
+
+    println!(
+        "r2 v2 categorical CU: append={append_cu} seal={seal_cu} \
+         resolve_legacy_buffer_shape_refusal={refuse_cu} resolve_accounts={}",
+        observe_resolve::RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES)
+    );
+}
+
 /* ------------------------------------------------------------------------ */
 /* The hostile battery                                                       */
 /* ------------------------------------------------------------------------ */
@@ -1188,10 +1555,12 @@ async fn the_default_elf_founds_ingests_seals_and_resolves_a_v2_window() {
 /// Refusal codes this battery pins, by name.
 const SOURCE_RELEASE_UNAVAILABLE: u32 = 0x0079;
 const SOURCE_ADMISSION_FAILED: u32 = 0x007a;
+const NOT_WRITABLE: u32 = 0x0005;
 const ALREADY_INITIALIZED: u32 = 0x0040;
 const REPLAY: u32 = 0x000d;
 const WRONG_PROGRAM_OWNER: u32 = 0x0004;
 const RESOLUTION_EVIDENCE_UNAVAILABLE: u32 = 0x0010;
+const RESOLUTION_REFUSAL: u32 = 0x0051;
 
 fn custom(result: &Result<(), TransactionError>) -> u32 {
     match result {
@@ -1253,12 +1622,21 @@ async fn an_append_refuses_without_the_exact_adjacent_receiver_post() {
     let genesis_page = campaign.data(campaign.plane.source_archive.address).await;
 
     let bucket = campaign.start_bucket;
-    campaign
-        .install_update(UPDATE_ACCOUNT, bucket, fixture::PROVIDER_FEED_ID)
+    let update = campaign.update.pubkey();
+    let decoy = campaign.decoy_update.pubkey();
+    let honest_body = campaign
+        .price_update_body(bucket, fixture::PROVIDER_FEED_ID)
         .await;
 
+    // The consumer contract names the real transaction-effective privilege:
+    // a standalone readonly update refuses before any source parsing.
+    let (result, _) = campaign
+        .send(campaign.append_readonly_update(0, update))
+        .await;
+    assert_eq!(custom(&result), NOT_WRITABLE);
+
     // No post at all: the preceding instruction is the compute-budget one.
-    let (result, _) = campaign.send(campaign.append(0, UPDATE_ACCOUNT)).await;
+    let (result, _) = campaign.send(campaign.append(0, update)).await;
     assert_eq!(custom(&result), SOURCE_ADMISSION_FAILED);
 
     // A post to some other program.
@@ -1271,27 +1649,80 @@ async fn an_append_refuses_without_the_exact_adjacent_receiver_post() {
         ],
     );
     let (result, _) = campaign
-        .send_many(&[wrong_program, campaign.append(0, UPDATE_ACCOUNT)])
+        .send_many(&[wrong_program, campaign.append(0, update)])
         .await;
     assert_eq!(custom(&result), SOURCE_ADMISSION_FAILED);
 
     // A post that names a *different* update account than the one presented.
-    let decoy = Address::new_from_array([0xd0; 32]);
-    campaign
-        .install_update(decoy, bucket, fixture::PROVIDER_FEED_ID)
-        .await;
     let (result, _) = campaign
-        .send_many(&[campaign.post(decoy), campaign.append(0, UPDATE_ACCOUNT)])
+        .send_many(&[
+            campaign.post(decoy, &honest_body),
+            campaign.append(0, update),
+        ])
         .await;
     assert_eq!(custom(&result), SOURCE_ADMISSION_FAILED);
 
-    // A post naming the presented account, but the update carries a different
-    // provider feed than the immutable spec pins.
-    campaign
-        .install_update(UPDATE_ACCOUNT, bucket, [0x5f; 32])
-        .await;
-    let (result, _) = campaign.ingest_now(0, UPDATE_ACCOUNT).await;
+    // The lab receiver really writes a wrong-feed update before Dragon
+    // refuses it. The transaction must roll both the receiver write and the
+    // archive mutation back, which a no-op receiver could never prove.
+    let update_before = campaign.data(update).await;
+    assert_eq!(update_before, vec![0_u8; PRICE_UPDATE_V2_ACCOUNT_LEN]);
+    let wrong_feed = campaign.price_update_body(bucket, [0x5f; 32]).await;
+    let (result, _) = campaign.ingest_now(0, update, &wrong_feed).await;
     assert_eq!(custom(&result), SOURCE_ADMISSION_FAILED);
+    assert_eq!(
+        campaign.data(update).await,
+        update_before,
+        "a later append refusal atomically rolls back the receiver write"
+    );
+
+    // The same non-vacuous rollback check reaches each newly authenticated
+    // post field: discriminator, exact account count, and a representative
+    // effective flag. The lab writer deliberately accepts these shapes so the
+    // refusal is Dragon's rather than the fixture's.
+    let mut wrong_discriminator = fixture::POST_UPDATE_DISCRIMINATOR;
+    wrong_discriminator[0] ^= 1;
+    for (label, post) in [
+        (
+            "discriminator",
+            campaign.post_with(update, &honest_body, wrong_discriminator, false, false),
+        ),
+        (
+            "account count",
+            campaign.post_with(
+                update,
+                &honest_body,
+                fixture::POST_UPDATE_DISCRIMINATOR,
+                false,
+                true,
+            ),
+        ),
+        (
+            "write-authority writable flag",
+            campaign.post_with(
+                update,
+                &honest_body,
+                fixture::POST_UPDATE_DISCRIMINATOR,
+                true,
+                false,
+            ),
+        ),
+    ] {
+        let (result, _) = campaign
+            .send_many(&[post, campaign.append(0, update)])
+            .await;
+        assert_eq!(custom(&result), SOURCE_ADMISSION_FAILED, "{label}");
+        assert_eq!(
+            campaign.data(update).await,
+            update_before,
+            "{label} rollback"
+        );
+        assert_eq!(
+            campaign.data(campaign.plane.source_archive.address).await,
+            genesis_page,
+            "{label} archive rollback"
+        );
+    }
 
     assert_eq!(
         campaign.data(campaign.plane.source_archive.address).await,
@@ -1302,6 +1733,11 @@ async fn an_append_refuses_without_the_exact_adjacent_receiver_post() {
     // The honest append lands, and does not land twice.
     let (result, _) = campaign.ingest(0).await;
     assert_eq!(result, Ok(()));
+    assert_eq!(
+        campaign.data(update).await,
+        honest_body,
+        "the accepted evidence was written by the preceding receiver call"
+    );
     let one_record = campaign.data(campaign.plane.source_archive.address).await;
     assert_ne!(one_record, genesis_page);
     let (result, _) = campaign.ingest(0).await;

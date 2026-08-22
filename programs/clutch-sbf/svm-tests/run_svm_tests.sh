@@ -36,14 +36,11 @@ mkdir -p "$here/tests/fixtures"
 CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="${SBF_TARGET_DIR:-$program/target/sbf-build}" \
   "$build_sbf" --manifest-path "$program/program/Cargo.toml" \
   "${build_features[@]}" --sbf-out-dir "$here/tests/fixtures"
-# The laboratory receiver: a dependency-free no-op standing in for the Pyth
-# pull receiver at the fixture's pinned address, so `r2_v2_wire.rs` can drive
-# the append's *adjacency* requirement — the Instructions sysvar is synthesized
-# by the runtime and cannot be fabricated, so the transaction has to contain a
-# real successful instruction to a real loadable program there. It is not a
-# model of the receiver and the v2 authentication join never trusts a
-# receiver's behaviour; see that test's module note.
-echo "== building the laboratory receiver stub =="
+# The laboratory receiver writes a canonical 134-byte update immediately
+# before append. It is not a provider-proof model; it exists so the bank proves
+# the real write/consume/rollback transaction seam rather than reading bytes
+# installed by the host harness. See `r2_v2_wire.rs`.
+echo "== building the laboratory receiver writer =="
 CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="${LAB_TARGET_DIR:-$program/target/lab-receiver-build}" \
   "$build_sbf" --manifest-path "$here/lab-receiver/Cargo.toml" \
   --sbf-out-dir "$here/tests/fixtures"

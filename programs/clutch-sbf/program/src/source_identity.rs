@@ -44,7 +44,9 @@
 //! ProgramData body must be decoded with [`crate::loader_state`] rather than
 //! by eye — its stale-authority finding is exactly why.
 
-use crate::instructions_sysvar::PostAbiPositionsV1;
+use crate::instructions_sysvar::{
+    PostAbiPositionsV1, PostAbiV2, META_FLAG_IS_SIGNER, META_FLAG_IS_WRITABLE,
+};
 use crate::loader_state::UPGRADEABLE_LOADER_ID;
 
 /// Canonical Clock sysvar address, `SysvarC1ock11111111111111111111111111111111`.
@@ -83,8 +85,9 @@ pub struct PullReleaseV2 {
     pub clock_sysvar: [u8; 32],
     /// Earliest Clock time at which this identity generation may be consumed.
     pub activation_unix_timestamp: i64,
-    /// Account-meta positions of the reviewed receiver-post ABI.
-    pub post_abi: PostAbiPositionsV1,
+    /// Exact reviewed receiver-post discriminator, shape, effective flags,
+    /// and semantic account positions.
+    pub post_abi: PostAbiV2,
 }
 
 /// The fabricated, provably unreachable Pyth-shaped laboratory identity.
@@ -129,7 +132,10 @@ pub struct PullReleaseV2 {
 /// modeled (`R2_PULL_PROMOTION_PLAN.md` §6, `PYTH_PULL_PROFILE_R2.md` §"Default
 /// release STOPs", all of which remain open).
 pub mod fixture {
-    use super::{PostAbiPositionsV1, PullReleaseV2, CLOCK_SYSVAR_ID, UPGRADEABLE_LOADER_ID};
+    use super::{
+        PostAbiPositionsV1, PostAbiV2, PullReleaseV2, CLOCK_SYSVAR_ID, META_FLAG_IS_SIGNER,
+        META_FLAG_IS_WRITABLE, UPGRADEABLE_LOADER_ID,
+    };
 
     /// `find_program_address(&[b"dc-r2-fixture-receiver"], &UPGRADEABLE_LOADER_ID)`
     /// = `47uaRq4bCPapeush5yXdyCupWdqmaeHWaw6Qm95Xn39E`.
@@ -173,7 +179,12 @@ pub mod fixture {
     ];
 
     /// Version of the reviewed adapter.
-    pub const SOURCE_ADAPTER_VERSION: u32 = 2;
+    ///
+    /// Version 3 binds the exact `post_update` discriminator, seven-account
+    /// count, and every signer/writable flag. Version 2 projected only the
+    /// Config, update, and write-authority keys and is intentionally absent
+    /// from the registry.
+    pub const SOURCE_ADAPTER_VERSION: u32 = 3;
 
     /// Closed parser-registry id of [`crate::pyth_receiver`].
     pub const PARSER_ID: u16 = 2;
@@ -220,7 +231,7 @@ pub mod fixture {
     /// drives it forward until the release has not yet activated.
     pub const ACTIVATION_UNIX_TIMESTAMP: i64 = 1_700_000_000;
 
-    /// Account-meta positions the fixture receiver's post instruction uses.
+    /// Exact post contract the fixture receiver instruction uses.
     ///
     /// The fixture receiver stub lays its `post_update` accounts out in this
     /// order deliberately, matching the shape of the reviewed Pyth
@@ -233,10 +244,26 @@ pub mod fixture {
     /// positions are [`super::mainnet::POST_ABI`] and are an open E2 pin:
     /// runbook §4.3 item 5 re-verifies the deployed ABI, and gate 4's
     /// receiver-post half is explicitly still open (`R2_PHASE0_RUNBOOK.md` §5).
-    pub const POST_ABI: PostAbiPositionsV1 = PostAbiPositionsV1 {
-        config: 2,
-        update_account: 4,
-        write_authority: 6,
+    pub const POST_UPDATE_DISCRIMINATOR: [u8; 8] = [0x85, 0x5f, 0xcf, 0xaf, 0x0b, 0x4f, 0x76, 0x2c];
+
+    /// Exact reviewed Pyth `PostUpdate` instruction contract.
+    pub const POST_ABI: PostAbiV2 = PostAbiV2 {
+        discriminator: POST_UPDATE_DISCRIMINATOR,
+        account_flags: [
+            META_FLAG_IS_SIGNER | META_FLAG_IS_WRITABLE, // payer
+            0,                                           // encoded VAA
+            0,                                           // Config
+            META_FLAG_IS_WRITABLE,                       // treasury
+            META_FLAG_IS_SIGNER | META_FLAG_IS_WRITABLE, // update
+            0,                                           // System Program
+            META_FLAG_IS_SIGNER,                         // write authority
+        ],
+        writable_alias_elevation: Some((0, 6)),
+        positions: PostAbiPositionsV1 {
+            config: 2,
+            update_account: 4,
+            write_authority: 6,
+        },
     };
 
     /// The compiled fixture release triple's identity.
@@ -265,7 +292,7 @@ pub mod fixture {
 /// [`REGISTERED_RELEASES`] therefore carries no production entry, and every
 /// production-shaped SourceSpec still refuses `0x79`.
 pub mod mainnet {
-    use super::PostAbiPositionsV1;
+    use super::PostAbiV2;
 
     /// Runbook §4.3 item 0 — devnet or mainnet-beta. A frozen SourceSpec v2 is
     /// cluster-specific by construction: it binds a ProgramData deployment
@@ -348,7 +375,7 @@ pub mod mainnet {
     ///
     /// TODO-ember(E2 item 5): re-verify against the deployed post-cutover
     /// program, not against the SDK source.
-    pub const POST_ABI: Option<PostAbiPositionsV1> = None;
+    pub const POST_ABI: Option<PostAbiV2> = None;
 }
 
 /// Select the compiled release a v2 spec names, if this ELF carries one.
@@ -542,8 +569,10 @@ mod tests {
     #[test]
     fn the_post_abi_positions_do_not_alias() {
         let abi = fixture::POST_ABI;
-        assert_ne!(abi.config, abi.update_account);
-        assert_ne!(abi.config, abi.write_authority);
-        assert_ne!(abi.update_account, abi.write_authority);
+        assert_ne!(abi.positions.config, abi.positions.update_account);
+        assert_ne!(abi.positions.config, abi.positions.write_authority);
+        assert_ne!(abi.positions.update_account, abi.positions.write_authority);
+        assert_eq!(abi.discriminator, fixture::POST_UPDATE_DISCRIMINATOR);
+        assert_eq!(abi.account_flags.len(), 7);
     }
 }

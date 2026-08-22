@@ -1,38 +1,56 @@
-//! A no-op SBF program, standing in for the Pyth pull receiver on a bank.
+//! A narrow laboratory writer for the Pyth pull transaction seam.
 //!
-//! This is not a model of the receiver and does not implement `post_update`.
-//! It writes nothing, reads nothing, and returns success for every input.
+//! This program is not a Pyth receiver model: it verifies no VAA, Merkle path,
+//! feed, time, or confidence. Its sole job is to copy one already-shaped
+//! 134-byte `PriceUpdateV2` body into account position 4. That makes the bank
+//! campaign non-vacuous: Dragon consumes bytes written by the immediately
+//! preceding instruction, and a later Dragon refusal must roll that write back
+//! atomically.
 //!
-//! That is the whole requirement. `crate::source_v2::auth` in the program
-//! under test authenticates the *receiver deployment* — the pinned program
-//! key, its Upgradeable Loader ownership, its ProgramData link and deployment
-//! slot, and its governance `Config` digest — and separately authenticates
-//! *adjacency*, that the immediately preceding instruction in this transaction
-//! invoked that program id naming this exact ephemeral update account. It then
-//! reads the price from the update account's own 134 bytes. At no point does
-//! it depend on what the receiver did. A laboratory receiver therefore only
-//! has to be a program that loads and succeeds, and being a no-op is what
-//! makes it honest: nothing here can accidentally supply evidence.
-//!
-//! The fabricated update account is installed by the test harness, exactly as
-//! the harness installs every other fabricated account in these planes.
+//! The first eight instruction bytes are intentionally treated as opaque. The
+//! test program accepts a hostile discriminator while still performing the
+//! write, so Dragon's own exact-post authentication is exercised. A deployed
+//! Pyth receiver would independently reject an unknown discriminator.
 #![no_std]
 
-/// Panic handler for a `no_std` cdylib. Unreachable: nothing below panics.
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    // `abort` is the syscall a Solana program's panic path ends in; spinning
-    // is unreachable and costs no compute because nothing here can panic.
-    loop {}
-}
+use solana_account_info::AccountInfo;
+use solana_program_entrypoint::{entrypoint, ProgramResult};
+use solana_program_error::ProgramError;
+use solana_pubkey::Pubkey;
 
-/// The SBF entrypoint. Returns `0`, the runtime's success code.
-///
-/// # Safety
-///
-/// The runtime passes a pointer to the serialized instruction context. This
-/// function never dereferences it.
-#[no_mangle]
-pub unsafe extern "C" fn entrypoint(_input: *mut u8) -> u64 {
-    0
+const POST_ACCOUNT_COUNT: usize = 7;
+const POST_DISCRIMINATOR_LEN: usize = 8;
+const PRICE_UPDATE_V2_ACCOUNT_LEN: usize = 134;
+const POST_DATA_LEN: usize = POST_DISCRIMINATOR_LEN + PRICE_UPDATE_V2_ACCOUNT_LEN;
+const UPDATE_POSITION: usize = 4;
+const WRITE_AUTHORITY_POSITION: usize = 6;
+
+entrypoint!(process_instruction);
+
+/// Copy the canonical update body carried after the eight-byte opcode into
+/// the receiver-owned, writable, signing update account.
+fn process_instruction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    if accounts.len() < POST_ACCOUNT_COUNT {
+        return Err(ProgramError::NotEnoughAccountKeys);
+    }
+    if instruction_data.len() != POST_DATA_LEN {
+        return Err(ProgramError::InvalidInstructionData);
+    }
+    let update = &accounts[UPDATE_POSITION];
+    if !update.is_signer || !accounts[WRITE_AUTHORITY_POSITION].is_signer {
+        return Err(ProgramError::MissingRequiredSignature);
+    }
+    if !update.is_writable || update.owner != program_id {
+        return Err(ProgramError::InvalidAccountData);
+    }
+    let mut body = update.try_borrow_mut_data()?;
+    if body.len() != PRICE_UPDATE_V2_ACCOUNT_LEN {
+        return Err(ProgramError::InvalidAccountData);
+    }
+    body.copy_from_slice(&instruction_data[POST_DISCRIMINATOR_LEN..]);
+    Ok(())
 }

@@ -449,9 +449,9 @@ const fn grid_eq(left: Grid, right: Grid) -> bool {
 /// cursor is an explicitly witnessed feed fact, and sealing is terminal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WindowPhase {
-    /// Expected buckets are still missing, or the maturity bound is not met.
+    /// Expected buckets are still missing, or no maturity witness is present.
     Open,
-    /// Every expected bucket is represented and the maturity bound is met.
+    /// Every expected bucket is represented and a maturity witness is present.
     Mature,
     /// The window is sealed. No further page is admitted, ever.
     Sealed,
@@ -461,6 +461,13 @@ pub enum WindowPhase {
 ///
 /// The state machine is `Open -> Mature -> Sealed`, and only a sealed
 /// accumulator yields a [`WindowResult`].
+///
+/// A normal feed cursor witness matures the window only at
+/// [`WindowDomain::maturity_bucket_exclusive`]. Some source generations instead
+/// authenticate the window's closing boundary directly; those adapters must
+/// call [`WindowAccumulator::witness_authenticated_closing_boundary`] after
+/// verifying that source-specific rule. Merely appending the final observation
+/// never creates that witness.
 ///
 /// ```
 /// use clutch_accumulator::{
@@ -506,6 +513,7 @@ pub struct WindowAccumulator {
     summary: Summary,
     cursor: u64,
     feed_cursor: u64,
+    closing_boundary_witnessed: bool,
     sealed: bool,
     sealed_cursor: u64,
 }
@@ -518,6 +526,7 @@ impl WindowAccumulator {
             summary: Summary::empty(domain.grid()),
             cursor: domain.start_bucket(),
             feed_cursor: domain.start_bucket(),
+            closing_boundary_witnessed: false,
             sealed: false,
             sealed_cursor: 0,
         }
@@ -543,7 +552,8 @@ impl WindowAccumulator {
         if self.sealed {
             WindowPhase::Sealed
         } else if self.cursor == self.domain.end_bucket_exclusive()
-            && self.feed_cursor >= self.domain.maturity_bucket_exclusive()
+            && (self.feed_cursor >= self.domain.maturity_bucket_exclusive()
+                || self.closing_boundary_witnessed)
         {
             WindowPhase::Mature
         } else {
@@ -604,6 +614,33 @@ impl WindowAccumulator {
         Ok(())
     }
 
+    /// Witness that an authenticated source generation proved the window's
+    /// closing boundary is final.
+    ///
+    /// This is a pure, source-neutral state transition; it does not verify any
+    /// signature, clock, proof, account, or archive. Callers may use it only
+    /// after their own adapter has proved that `next_bucket` is a valid
+    /// generation-specific maturity witness for this domain's exclusive end.
+    /// The witnessed cursor is retained verbatim and becomes the
+    /// [`WindowResult::sealed_cursor`] once the accumulator is sealed.
+    pub fn witness_authenticated_closing_boundary(
+        &mut self,
+        next_bucket: u64,
+    ) -> Result<(), WindowError> {
+        if self.sealed {
+            return Err(WindowError::ObservationAfterSeal);
+        }
+        if next_bucket < self.feed_cursor {
+            return Err(WindowError::NonMonotoneCursor);
+        }
+        if next_bucket < self.domain.end_bucket_exclusive() {
+            return Err(WindowError::NotMature);
+        }
+        self.feed_cursor = next_bucket;
+        self.closing_boundary_witnessed = true;
+        Ok(())
+    }
+
     /// Seal the window. Sealing is terminal and cannot be undone.
     pub fn seal(&mut self) -> Result<(), WindowError> {
         if self.sealed {
@@ -612,7 +649,9 @@ impl WindowAccumulator {
         if self.cursor != self.domain.end_bucket_exclusive() {
             return Err(WindowError::IncompleteDomain);
         }
-        if self.feed_cursor < self.domain.maturity_bucket_exclusive() {
+        if self.feed_cursor < self.domain.maturity_bucket_exclusive()
+            && !self.closing_boundary_witnessed
+        {
             return Err(WindowError::NotMature);
         }
         self.sealed = true;
@@ -854,6 +893,53 @@ mod tests {
         assert_eq!(window.seal(), Err(WindowError::NotMature));
         window.witness_feed_cursor(104).expect("advance");
         window.seal().expect("mature");
+    }
+
+    #[test]
+    fn authenticated_closing_boundary_witness_can_seal_with_the_closing_cursor() {
+        let mut window = WindowAccumulator::open(domain(CoveragePolicy::COMPLETE_REQUIRED));
+        for bucket in 100..103 {
+            window
+                .observe(Observation::accepted(bucket, 10, 11))
+                .expect("in domain");
+        }
+        assert_eq!(window.feed_cursor(), 103);
+        assert_eq!(window.phase(), WindowPhase::Open);
+        assert_eq!(window.seal(), Err(WindowError::NotMature));
+
+        window
+            .witness_authenticated_closing_boundary(103)
+            .expect("authenticated source generation proved the closing boundary");
+        assert_eq!(window.phase(), WindowPhase::Mature);
+        window.seal().expect("closing-boundary witness matures");
+        let result = window.result().expect("sealed");
+        assert_eq!(result.sealed_cursor(), 103);
+        assert_eq!(
+            result.check_domain(&domain(CoveragePolicy::COMPLETE_REQUIRED)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn closing_boundary_witness_is_not_a_prefix_or_backwards_escape() {
+        let mut prefix = WindowAccumulator::open(domain(CoveragePolicy::COMPLETE_REQUIRED));
+        prefix
+            .observe(Observation::accepted(100, 10, 11))
+            .expect("in domain");
+        assert_eq!(
+            prefix.witness_authenticated_closing_boundary(102),
+            Err(WindowError::NotMature)
+        );
+        assert_eq!(prefix.seal(), Err(WindowError::IncompleteDomain));
+
+        let mut advanced = complete_window();
+        advanced
+            .witness_feed_cursor(104)
+            .expect("ordinary maturity");
+        assert_eq!(
+            advanced.witness_authenticated_closing_boundary(103),
+            Err(WindowError::NonMonotoneCursor)
+        );
     }
 
     #[test]

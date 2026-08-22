@@ -307,7 +307,7 @@ pub fn post_instruction(
                 is_writable: false,
             },
         ],
-        data: vec![0xaa, 0xbb, 0xcc],
+        data: crate::source_identity::fixture::POST_UPDATE_DISCRIMINATOR.to_vec(),
     }
 }
 

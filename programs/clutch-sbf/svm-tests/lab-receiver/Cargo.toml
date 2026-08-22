@@ -1,19 +1,14 @@
 # A laboratory stand-in for the Pyth pull receiver.
 #
-# Its own workspace, and no dependencies at all — not even `solana-program`.
-# Both facts are deliberate: this artifact must not be able to touch the
-# program under test, and `cargo-build-sbf` must be able to resolve it offline
-# from an empty graph.
+# Its own workspace, with only the split Solana entrypoint/account crates. It
+# cannot touch the program under test, and every dependency resolves from the
+# same offline cache used by the real program build.
 #
 # What it stands in for is narrow and it is worth being exact about. The v2
-# pull authentication join never trusts the receiver's *behaviour*: it checks
-# the receiver's identity (pinned key, Upgradeable Loader owner, the pinned
-# ProgramData link and deployment slot), the governance `Config` digest, and
-# that the immediately preceding instruction in the transaction invoked that
-# program naming this exact update account. It reads the price out of the
-# update account's own bytes. So the only thing a laboratory receiver has to
-# do to make that join executable on a bank is *exist, load, and return
-# success* — which is exactly all this does.
+# pull authentication join never trusts the receiver's *behaviour*. This lab
+# program nevertheless writes the canonical 134-byte update in the preceding
+# instruction so the bank campaign proves the real transaction seam instead
+# of consuming host-preinstalled evidence.
 [workspace]
 
 [package]
@@ -22,11 +17,25 @@ version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 publish = false
-description = "Laboratory no-op receiver stub for the R2 pull adjacency plane"
+description = "Laboratory receiver writer for the R2 pull adjacency plane"
 
 [lib]
 crate-type = ["cdylib", "lib"]
 
+[dependencies]
+solana-account-info = "=3.1.1"
+solana-program-entrypoint = "=3.1.1"
+solana-program-error = "=3.0.1"
+solana-pubkey = { version = "=4.2.0", default-features = false }
+
 [profile.release]
 lto = "fat"
 codegen-units = 1
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+priority = 0
+check-cfg = [
+    'cfg(target_os, values("solana"))',
+    'cfg(feature, values("custom-heap", "custom-panic"))',
+]

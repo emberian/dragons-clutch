@@ -1142,7 +1142,7 @@ mod tests {
     fn authentication(p: &Presented) -> PullAuthenticationV2<'_> {
         let clock = decode_clock_view(AuthAccountView::new(
             CLOCK_SYSVAR_ID,
-            [0; 32],
+            crate::instructions_sysvar::SYSVAR_OWNER_ID,
             false,
             &p.clock,
         ))

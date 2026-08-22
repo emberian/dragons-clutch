@@ -65,10 +65,10 @@ balance authority.
 `programs/clutch-sbf/program/src/instructions/observe_resolve.rs::resolve_global`
 currently accepts:
 
-- categorical and native-point Resolve: fixed prefix `11`, then `n` canonical
-  outcome mints;
-- native-occupation Resolve: fixed prefix `10`, then `n` canonical outcome
-  mints.
+- legacy-buffer finite-preset and native-point Resolve: fixed prefix `11`,
+  then `n` canonical outcome mints;
+- archive-direct V2 degree-zero categorical and native-occupation Resolve:
+  fixed prefix `10`, then `n` canonical outcome mints.
 
 All mints are read-only. Before the semantic transition, the handler derives
 and admits every canonical mint and records the full supply vector. On the
@@ -319,11 +319,11 @@ For `n = market.outcome_count`:
 
 | Path | Current accounts | Cache-only accounts | Saved |
 | --- | ---: | ---: | ---: |
-| v2/v3 point | `11 + n` | `11` | `n` read-only mint roles |
-| v4 occupation | `10 + n` | `10` | `n` read-only mint roles |
+| legacy-buffer finite-preset / native point | `11 + n` | `11` | `n` read-only mint roles |
+| archive-direct V2 degree-zero / occupation | `10 + n` | `10` | `n` read-only mint roles |
 
 At the maximum `n = 16`, point resolution falls from 27 to 11 accounts and
-occupation resolution from 26 to 10. It also removes, from Resolve only:
+archive-direct resolution from 26 to 10. It also removes, from Resolve only:
 
 - two canonical mint-PDA derivations per outcome (pre and post);
 - two complete Token-2022 mint decodes/policy admissions per outcome;

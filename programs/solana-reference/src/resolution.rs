@@ -846,6 +846,57 @@ mod native_bspline_tests {
         }
     }
 
+    fn categorical_terms(statistic: u16, span: u64, bucket_seconds: u64) -> ResolutionTerms {
+        let feed = FeedIdentity::new([1; 32], [2; 32], 1, 1).unwrap();
+        let grid = Grid::new(7, 1, bucket_seconds).unwrap();
+        let domain = WindowDomain::new(
+            feed,
+            grid,
+            0,
+            span,
+            span,
+            0,
+            CoveragePolicy::COMPLETE_REQUIRED,
+        )
+        .unwrap();
+        let mut knots = [0_u128; MAX_KNOTS];
+        knots[..3].copy_from_slice(&[10, 20, 30]);
+        let mut payout_map = [PAYOUT_MAP_UNUSED; MAX_CELLS];
+        payout_map[..4].copy_from_slice(&[0, 1, 2, 3]);
+        ResolutionTerms {
+            market: Hash32::ZERO,
+            window: domain,
+            statistic,
+            cell_count: 4,
+            basis_degree: 0,
+            edge_policy: EDGE_CLAMP_01,
+            knot_count: 3,
+            uniform_log2_spacing: clutch_bspline::UNIFORM_SPACING_NONE,
+            knots,
+            denominator: 1,
+            payout_map,
+            ambiguity_policy: AMBIG_REFUSE_01,
+            failure_policy: FAIL_UNIFORM_REFUND_01,
+            generation_policy: GEN_EXACT_01,
+            payout_count: 4,
+        }
+    }
+
+    fn categorical_window(domain: WindowDomain, rows: &[(u64, u128, u128)]) -> WindowResult {
+        let mut accumulator = WindowAccumulator::open(domain);
+        for &(bucket, low, high) in rows {
+            accumulator
+                .observe(Observation::accepted(bucket, low, high))
+                .unwrap();
+        }
+        accumulator.seal().unwrap();
+        accumulator.result().unwrap()
+    }
+
+    fn payout_bytes() -> [PayoutVectorBytes; MAX_PAYOUTS] {
+        [PayoutVectorBytes::ZERO; MAX_PAYOUTS]
+    }
+
     #[test]
     fn categorical_point_evidence_remains_the_degree_zero_basis() {
         let mut terms = derived_terms(1);
@@ -866,6 +917,94 @@ mod native_bspline_tests {
         assert_eq!(derive_payout(&terms, &payouts, &below), Ok(0));
         let at_boundary = window(terms.window, 4, 4);
         assert_eq!(derive_payout(&terms, &payouts, &at_boundary), Ok(1));
+    }
+
+    #[test]
+    fn categorical_supported_statistics_project_from_window_result_only() {
+        for (statistic, rows, expected) in [
+            (STAT_TERMINAL_01, &[(0, 2, 9)][..], 0),
+            (
+                STAT_SAMPLED_MIN_02,
+                &[(0, 22, 22), (1, 12, 13), (2, 25, 25)][..],
+                1,
+            ),
+            (
+                STAT_SAMPLED_MAX_03,
+                &[(0, 11, 11), (1, 22, 23), (2, 12, 12)][..],
+                2,
+            ),
+            (STAT_TWAP_04, &[(0, 11, 12), (1, 12, 13)][..], 1),
+        ] {
+            let terms = categorical_terms(statistic, rows.len() as u64, 1);
+            let window = categorical_window(terms.window, rows);
+            assert_eq!(
+                derive_payout(&terms, &payout_bytes(), &window),
+                Ok(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn categorical_boundary_equality_selects_the_right_cell_and_straddles_refuse() {
+        let terms = categorical_terms(STAT_TERMINAL_01, 1, 1);
+        let left = categorical_window(terms.window, &[(0, 9, 9)]);
+        assert_eq!(derive_payout(&terms, &payout_bytes(), &left), Ok(0));
+
+        let boundary = categorical_window(terms.window, &[(0, 10, 10)]);
+        assert_eq!(derive_payout(&terms, &payout_bytes(), &boundary), Ok(1));
+
+        let straddle = categorical_window(terms.window, &[(0, 9, 10)]);
+        assert_eq!(
+            derive_payout(&terms, &payout_bytes(), &straddle),
+            Err(ResolutionRefusal::AmbiguousInterval)
+        );
+    }
+
+    #[test]
+    fn categorical_twap_uses_exact_scaled_integer_boundaries() {
+        let same_cell = categorical_terms(STAT_TWAP_04, 2, 3);
+        let same_cell_window = categorical_window(same_cell.window, &[(0, 8, 9), (1, 9, 10)]);
+        assert_eq!(
+            derive_payout(&same_cell, &payout_bytes(), &same_cell_window),
+            Ok(0)
+        );
+
+        let straddles = categorical_terms(STAT_TWAP_04, 1, 3);
+        let straddles_window = categorical_window(straddles.window, &[(0, 9, 11)]);
+        assert_eq!(
+            derive_payout(&straddles, &payout_bytes(), &straddles_window),
+            Err(ResolutionRefusal::AmbiguousInterval)
+        );
+    }
+
+    #[test]
+    fn categorical_ratio_projection_refuses_overflow_before_cell_claim() {
+        let mut terms = categorical_terms(STAT_TWAP_04, 1, 1);
+        terms.cell_count = 2;
+        terms.knot_count = 1;
+        terms.knots = [0; MAX_KNOTS];
+        terms.knots[0] = u128::MAX;
+
+        assert_eq!(
+            terms.cell_of_ratio(1, 2),
+            Err(ResolutionRefusal::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn unsupported_categorical_statistics_stay_explicit_refusals() {
+        let window = categorical_window(domain(), &[(0, 9, 9)]);
+        for statistic in [
+            STAT_RELATIVE_TERMINAL_TWAP_05,
+            STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06,
+        ] {
+            let mut terms = categorical_terms(statistic, 1, 1);
+            terms.window = domain();
+            assert_eq!(
+                derive_payout(&terms, &payout_bytes(), &window),
+                Err(ResolutionRefusal::StatisticUnsupported)
+            );
+        }
     }
 
     #[test]
