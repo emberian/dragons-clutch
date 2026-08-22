@@ -1,0 +1,104 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.51s
+     Running tests/scale_max_book.rs (target/debug/deps/scale_max_book-edf7230ec4eee916)
+
+running 1 test
+test the_maximum_sixty_four_order_book_clears_across_four_dense_pages ... scale.max_book/init_epoch_ledgered CU: 60484
+scale.max_book/init_order_page_ledgered CU: 221760
+scale.max_book/place_order_single CU: 198724
+scale.max_book/place_order_worst_rank26 CU: 203893
+scale.max_book/freeze_epoch_4pages_64orders CU: 988469
+scale.max_book WITNESS declared_slices=32 orders=64
+scale.max_book/submit_candidate_ledgered CU: 36868
+scale.max_book/write_feed_fills_x24 CU: 7129
+scale.max_book/write_feed_fills_x24 CU: 7129
+scale.max_book/write_feed_fills_x16 CU: 6941
+scale.max_book/write_feed_slices_x16 CU: 8168
+scale.max_book/write_feed_slices_x16 CU: 8168
+scale.max_book/seal_candidate_0retained CU: 39244
+scale.max_book/init_clear_work_plus_4_grows_ledgered CU: 86119
+scale.max_book/advance_pass1_page0_16orders CU: 434705
+scale.max_book/advance_pass1_page1_16orders CU: 433809
+scale.max_book/advance_pass1_page2_16orders CU: 430809
+scale.max_book/advance_pass1_page3_16orders CU: 418228
+scale.max_book/advance_slices_x8 CU: 162098
+scale.max_book/advance_slices_x8 CU: 162098
+scale.max_book/advance_slices_x8 CU: 162098
+scale.max_book/advance_slices_x8 CU: 162585
+scale.max_book/advance_pass2_page0 CU: 296392
+scale.max_book/advance_pass2_page1 CU: 300902
+scale.max_book/advance_pass2_page2 CU: 296402
+scale.max_book/advance_pass2_page3 CU: 309977
+scale.max_book/complete_clear_work CU: 117758
+scale.max_book/finalize_selection_1retained CU: 21301
+scale.max_book/freeze_entitlement_ledgered CU: 105394
+scale.max_book/entitle_slice_single_4pages_ledgered_slice0 CU: 752392
+scale.max_book/settle_page_direct_4pages_slice0 CU: 52991
+scale.max_book/entitle_slice_single_4pages_ledgered_slice1 CU: 749392
+scale.max_book/settle_page_direct_4pages_slice1 CU: 49991
+scale.max_book/entitle_slice_single_4pages_ledgered_slice2 CU: 740392
+scale.max_book/settle_page_direct_4pages_slice2 CU: 42491
+scale.max_book/entitle_slice_single_4pages_ledgered_slice3 CU: 743392
+scale.max_book/settle_page_direct_4pages_slice3 CU: 43991
+scale.max_book/entitle_slice_single_4pages_ledgered_slice4 CU: 744892
+scale.max_book/settle_page_direct_4pages_slice4 CU: 45491
+scale.max_book/entitle_slice_single_4pages_ledgered_slice5 CU: 744892
+scale.max_book/settle_page_direct_4pages_slice5 CU: 42491
+scale.max_book/entitle_slice_single_4pages_ledgered_slice6 CU: 752392
+scale.max_book/settle_page_direct_4pages_slice6 CU: 51491
+scale.max_book/entitle_slice_single_4pages_ledgered_slice7 CU: 744892
+scale.max_book/settle_page_direct_4pages_slice7 CU: 46991
+scale.max_book/entitle_slice_single_4pages_ledgered_slice8 CU: 744892
+scale.max_book/settle_page_direct_4pages_slice8 CU: 46992
+scale.max_book/entitle_slice_single_4pages_ledgered_slice9 CU: 746392
+scale.max_book/settle_page_direct_4pages_slice9 CU: 48492
+scale.max_book/entitle_slice_single_4pages_ledgered_slice10 CU: 743392
+scale.max_book/settle_page_direct_4pages_slice10 CU: 42492
+scale.max_book/entitle_slice_single_4pages_ledgered_slice11 CU: 747892
+scale.max_book/settle_page_direct_4pages_slice11 CU: 46992
+scale.max_book/entitle_slice_single_4pages_ledgered_slice12 CU: 753892
+scale.max_book/settle_page_direct_4pages_slice12 CU: 49992
+scale.max_book/entitle_slice_single_4pages_ledgered_slice13 CU: 746392
+scale.max_book/settle_page_direct_4pages_slice13 CU: 49992
+scale.max_book/entitle_slice_single_4pages_ledgered_slice14 CU: 753892
+scale.max_book/settle_page_direct_4pages_slice14 CU: 51492
+scale.max_book/entitle_slice_single_4pages_ledgered_slice15 CU: 744892
+scale.max_book/settle_page_direct_4pages_slice15 CU: 45492
+scale.max_book/entitle_slice_single_4pages_ledgered_slice16 CU: 747892
+scale.max_book/settle_page_direct_4pages_slice16 CU: 49991
+scale.max_book/entitle_slice_single_4pages_ledgered_slice17 CU: 749392
+scale.max_book/settle_page_direct_4pages_slice17 CU: 48491
+scale.max_book/entitle_slice_single_4pages_ledgered_slice18 CU: 741892
+scale.max_book/settle_page_direct_4pages_slice18 CU: 42491
+scale.max_book/entitle_slice_single_4pages_ledgered_slice19 CU: 746392
+scale.max_book/settle_page_direct_4pages_slice19 CU: 45491
+scale.max_book/entitle_slice_single_4pages_ledgered_slice20 CU: 743392
+scale.max_book/settle_page_direct_4pages_slice20 CU: 43991
+scale.max_book/entitle_slice_single_4pages_ledgered_slice21 CU: 750892
+scale.max_book/settle_page_direct_4pages_slice21 CU: 54491
+scale.max_book/entitle_slice_single_4pages_ledgered_slice22 CU: 759892
+scale.max_book/settle_page_direct_4pages_slice22 CU: 55991
+scale.max_book/entitle_slice_single_4pages_ledgered_slice23 CU: 749392
+scale.max_book/settle_page_direct_4pages_slice23 CU: 46991
+scale.max_book/entitle_slice_single_4pages_ledgered_slice24 CU: 746392
+scale.max_book/settle_page_direct_4pages_slice24 CU: 46992
+scale.max_book/entitle_slice_single_4pages_ledgered_slice25 CU: 743392
+scale.max_book/settle_page_direct_4pages_slice25 CU: 43992
+scale.max_book/entitle_slice_single_4pages_ledgered_slice26 CU: 741892
+scale.max_book/settle_page_direct_4pages_slice26 CU: 40992
+scale.max_book/entitle_slice_single_4pages_ledgered_slice27 CU: 743392
+scale.max_book/settle_page_direct_4pages_slice27 CU: 43992
+scale.max_book/entitle_slice_single_4pages_ledgered_slice28 CU: 753892
+scale.max_book/settle_page_direct_4pages_slice28 CU: 52992
+scale.max_book/entitle_slice_single_4pages_ledgered_slice29 CU: 744892
+scale.max_book/settle_page_direct_4pages_slice29 CU: 45492
+scale.max_book/entitle_slice_single_4pages_ledgered_slice30 CU: 743392
+scale.max_book/settle_page_direct_4pages_slice30 CU: 42492
+scale.max_book/entitle_slice_single_4pages_ledgered_slice31 CU: 746393
+scale.max_book/settle_page_direct_4pages_slice31 CU: 46992
+scale.max_book ROUTES: 92 observations
+scale.max_book WORST route=scale.max_book/freeze_epoch_4pages_64orders cu=988469 ceiling=1400000 headroom=411531
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.14s
+

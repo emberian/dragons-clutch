@@ -1,0 +1,12 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.47s
+     Running tests/coupled_authority.rs (target/debug/deps/coupled_authority-8660823a65ea3b2a)
+
+running 2 tests
+test prefunded_submission_is_exact_once_and_leaves_authority_frozen ... SubmitDirectPage prefunded CU: 199227
+SettlePage authority STOP CU: 32001
+ok
+test substitution_cross_outcome_and_late_cpi_failure_roll_back ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+

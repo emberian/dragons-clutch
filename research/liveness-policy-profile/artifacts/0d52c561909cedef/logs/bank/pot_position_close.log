@@ -1,0 +1,13 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.29s
+     Running tests/pot_position_close.rs (target/debug/deps/pot_position_close-8b5e570bc7d94a80)
+
+running 5 tests
+test a_named_treasury_position_refuses_close_while_it_serves ... ok
+test a_position_holding_any_value_refuses_with_full_rollback ... ok
+test a_record_naming_another_treasury_leaves_the_position_closable ... ok
+test a_substituted_record_and_a_stranger_signature_refuse ... ok
+test an_empty_position_closes_and_burns_its_whole_balance ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.91s
+

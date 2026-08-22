@@ -1,0 +1,12 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.62s
+     Running tests/r2_pull_identity.rs (target/debug/deps/r2_pull_identity-9bf849c30572cec4)
+
+running 4 tests
+test a_real_wallet_address_is_on_curve_and_is_none_of_the_fixture_addresses ... ok
+test fixture_addresses_are_program_derived_and_therefore_unreachable ... ok
+test no_production_identity_byte_is_pinned ... ok
+test the_default_elf_registers_exactly_one_laboratory_release ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

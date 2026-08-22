@@ -1,0 +1,15 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.32s
+     Running tests/vpot_merge.rs (target/debug/deps/vpot_merge-d3ec9b920a8fdc4f)
+
+running 7 tests
+test a_delivery_past_the_candidates_mu_never_reaches_the_pot ... ok
+test a_merge_epoch_realizes_its_whole_rounding_pot_through_the_same_burn ... ok
+test a_mixed_epoch_settles_ordinary_and_merge_slices_through_one_pot ... ok
+test a_shared_sell_end_settles_its_ordinary_slice_before_it_delivers ... ok
+test a_virtual_merge_candidate_clears_and_the_pot_ends_exactly_empty ... ok
+test the_direct_shape_and_a_replayed_payment_both_refuse ... ok
+test the_merge_seam_refuses_every_unfunded_route ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.14s
+

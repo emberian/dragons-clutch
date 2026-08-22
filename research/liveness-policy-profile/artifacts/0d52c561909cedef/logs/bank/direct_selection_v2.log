@@ -1,0 +1,16 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.38s
+     Running tests/direct_selection_v2.rs (target/debug/deps/direct_selection_v2-b5a74419f4bbf0ed)
+
+running 2 tests
+test cross_outcome_freeze_refuses_without_mutation ... ok
+test direct_selection_v2_is_a_measured_select_stop_with_rollback ... DirectSelectionV2 submit index=0 price=2500 cu=174135
+DirectSelectionV2 submit index=1 price=3000 cu=175237
+DirectSelectionV2 submit index=2 price=7000 cu=183029
+DirectSelectionV2 submit index=3 price=5000 cu=190666
+DirectSelectionV2 submit index=4 price=7500 cu=186273
+DirectSelectionV2 CU init=35573 freeze=358398 submit_max=190666 select=227464
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+

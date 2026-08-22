@@ -1,0 +1,16 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.42s
+     Running tests/r2_v2_wire.rs (target/debug/deps/r2_v2_wire-5d6e28746e563978)
+
+running 6 tests
+test a_release_this_elf_does_not_carry_cannot_found_its_source_at_all ... ok
+test a_v1_page_can_never_satisfy_a_v2_spec ... ok
+test an_append_refuses_without_the_exact_adjacent_receiver_post ... ok
+test custody_opens_against_the_spec_this_family_just_founded ... r2 v2 wire CU: endow=87480
+ok
+test founding_a_v2_spec_refuses_every_hostile_shape_without_writing ... ok
+test the_default_elf_founds_ingests_seals_and_resolves_a_v2_window ... r2 v2 wire CU: init_spec=32941 init_archive=33707 append=61083 seal=69226 resolve=172627 redeem=156259
+ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.97s
+

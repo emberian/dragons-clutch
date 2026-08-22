@@ -2,46 +2,40 @@
  "schema": "dragons-clutch/liveness-policy-evidence/v2",
  "status": "MEASURED_RUNTIME_ECONOMIC_ADMISSION_STOP",
  "capture_date": "2026-08-21",
- "runtime_ref": "04acf6165376d3abfb3bc16877e2a0ba2bb47931",
+ "runtime_ref": "846afabf0e87c2069d57e8800874115b71d72521",
  "runtime_tree": "c50353b19b27c0a0f5611c3e6cae75291e8cd671",
- "evidence_ref": "04acf6165376d3abfb3bc16877e2a0ba2bb47931",
+ "evidence_ref": "846afabf0e87c2069d57e8800874115b71d72521",
  "artifact": {
-  "path": "research/liveness-policy-profile/artifacts/df0aece1e241951b/clutch_sbf.so",
-  "sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
-  "bytes": 1986104,
-  "source_ref": "04acf6165376d3abfb3bc16877e2a0ba2bb47931",
+  "path": "research/liveness-policy-profile/artifacts/0d52c561909cedef/clutch_sbf.so",
+  "sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
+  "bytes": 2149672,
+  "source_ref": "846afabf0e87c2069d57e8800874115b71d72521",
   "profile": "default-empty-registry"
  },
  "artifact_reproducibility": {
-  "normal_build_1": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
-  "normal_build_2": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+  "normal_build_1": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
+  "normal_build_2": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
   "cross_path_builds": [
    {
-    "path": "/Users/ember/jobs/dragons-clutch-r1-04acf61-xpath-worktree",
-    "sha256": "7cd3beb84aa973f81822aa292eaefb66b7299e49f718218cd453be22d378adb5",
-    "bytes": 1986104
+    "path": "/Users/ember/jobs/dragons-clutch-r1-c55f471-xpath-worktree",
+    "sha256": "468b286a9941a495bab05e2e04f88e2e26ce9454648b330aff69fd76d9000400",
+    "bytes": 2149672
    }
   ],
   "cross_path_disposition": "PATH_TIED_SYMBOL_ORDER",
-  "cross_path_divergence": "481_TEXT_BYTES_AT_195_SITES_AND_6_REL_DYN_BYTES_AT_3_SITES_NO_OTHER_SECTION",
-  "relocated_cargo_home": "dd20707f5d61bbfe2e697d60506d08d55b385c859172694f2c4bd3e11c52a562",
-  "relocated_disposition": "PATH_SENSITIVE_REGISTRY_PANIC_LOCATION_STRINGS",
-  "relocated_divergence": "RODATA_GROWS_552_BYTES_THREE_ABSOLUTE_REGISTRY_PATHS",
+  "cross_path_divergence": "483_TEXT_BYTES_AT_195_SITES_AND_6_REL_DYN_BYTES_AT_3_SITES_NO_OTHER_SECTION",
+  "relocated_cargo_home": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
+  "relocated_disposition": "INDEPENDENT",
+  "relocated_divergence": "NONE_BYTE_IDENTICAL_TO_THE_CANONICAL_BUILD",
   "relocated_controls": [
    {
-    "path": "/Users/ember/jobs/dragons-clutch-r1-04acf61-reloc-probe-B",
-    "sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
-    "bytes": 1986104,
-    "disposition": "REPRODUCED_CANONICAL_BYTES"
-   },
-   {
-    "path": "/private/var/folders/r8/kfrtq04d5dq_f50zm3tx3phw0000gn/T/clutch-reloc-probe-C.7Io2J5/cargo-home",
-    "sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
-    "bytes": 1986104,
+    "path": "/private/var/folders/r8/kfrtq04d5dq_f50zm3tx3phw0000gn/T/clutch-sbf-artifact-audit.sKHkNY/cargo-home-relocated",
+    "sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
+    "bytes": 2149672,
     "disposition": "REPRODUCED_CANONICAL_BYTES"
    }
   ],
-  "relocated_attribution": "SYMLINKED_CARGO_HOME_PATH_COMPONENT_NOT_RELOCATION_ITSELF_PROTOCOL_PROBE_RUNS_UNDER_TMPDIR_VAR_TO_PRIVATE_VAR",
+  "relocated_attribution": "AMENDED_PROBE_RESOLVES_THE_CARGO_HOME_SYMLINK_AND_THE_DIVERGENCE_IS_GONE_CONFIRMING_CYCLE_F_ATTRIBUTION_TO_THE_UNRESOLVED_PATH_COMPONENT",
   "first_party_final_lto_stack_survivors": 0,
   "direct_r10_references": 60441,
   "deepest_direct_r10_offset": 4096
@@ -94,20 +88,26 @@
    "runtime_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
    "evidence_ref": "d77d670922930273b09f015ed0eb1f46ad066102",
    "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
+  },
+  "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b": {
+   "path": "research/liveness-policy-profile/artifacts/df0aece1e241951b/clutch_sbf.so",
+   "runtime_ref": "04acf6165376d3abfb3bc16877e2a0ba2bb47931",
+   "evidence_ref": "04acf6165376d3abfb3bc16877e2a0ba2bb47931",
+   "disposition": "HISTORICAL_ONLY_NOT_USED_IN_CURRENT_PROJECTION"
   }
  },
  "capture": {
   "path": "research/liveness-policy-profile/captured-output.txt",
-  "sha256": "8c46975c87414764afa0492ed2bc91a819de6326718a9f80c4253f1eae253da5"
+  "sha256": "cafd219c1f738ddae6240c6fb1785ebc3efb4bcec7cf49fc4557f3320d4158f7"
  },
  "source_blobs": {
   "research/liveness-policy-profile/Cargo.toml": "8574e7693c1a85cdb68bf608c5cf4dcde178123b",
   "research/liveness-policy-profile/Cargo.lock": "bec64120e485da3d41d80a034d6c5143545f86eb",
   "research/liveness-policy-profile/src/main.rs": "4abf18121973fb512b859e62071bd0f978a5c8fa",
-  "programs/clutch-sbf/Cargo.lock": "959aeb4d10ee9717d5de92f3ca5b597ebc1d7e0c",
-  "programs/clutch-sbf/program/Cargo.toml": "c9c3b9340ffe54adcd6bee916b3b445c7ababd63",
-  "programs/clutch-sbf/program/src/instructions/resolution_work.rs": "6c1e176199559a7ae2e47b45aa4695263f19fc1b",
-  "programs/clutch-sbf/program/src/error.rs": "a0a21f18ca67e79a91e90a4e91ee6f8dac3b0535",
+  "programs/clutch-sbf/Cargo.lock": "d83c8050fc3e66e0c0247db51d514a669c46747c",
+  "programs/clutch-sbf/program/Cargo.toml": "eddc6fcc3ed259d8eb3ca0b3112b4652493eebe6",
+  "programs/clutch-sbf/program/src/instructions/resolution_work.rs": "993f1fed9d49ae1103fbf7e11ee27d1d90ca98ea",
+  "programs/clutch-sbf/program/src/error.rs": "9e8df24409b9bb1cc769484b709c5ca6ead255af",
   "programs/solana-layout/Cargo.toml": "d71e72f38d550d7727ac7fbc5370e4e4baa4f1e5",
   "programs/solana-layout/Cargo.lock": "dd741afab8b7545564ccdbf128b40c02b7a807b3",
   "programs/solana-reference/Cargo.toml": "488acf29bbb84ae3ec6717a91b83587c665a7526",
@@ -117,185 +117,289 @@
   "research/batch-policy-identity/Cargo.toml": "ff1100e838f9d6ec7f290134e2ad9d9280b3d417"
  },
  "source_trees": {
-  "programs/clutch-sbf/program/src": "afadbb309681bff60f13c62d60cb42a790034ff8",
-  "programs/solana-layout/src": "81b4ac00306847ba01fd68f5987f412f124149ae",
-  "programs/solana-reference/src": "66be36bb10a2ad02fcb4f219fad03a539a28cee1",
+  "programs/clutch-sbf/program/src": "c76f0aa14d80888e1d5a7e39c5401d1ab029eddf",
+  "programs/solana-layout/src": "d02c098740036fb56466b9d45d440773b2afacc2",
+  "programs/solana-reference/src": "1d43424b16e4149a6a2b38625615c6930a47ff1e",
   "crates/clutch-liveness/src": "9cdad671b72b23caf00931f14b235a20a1e767af",
-  "crates/clutch-batch/src": "0984df200f93b103cadea3278487347c6757f278",
-  "research/batch-policy-identity/src": "41b41d77e2ed6d8c3d517dc90f2b70db8fada82b"
+  "crates/clutch-batch/src": "2b12e0aace9b25c01e9b6752dc03bd2372f3091b",
+  "research/batch-policy-identity/src": "d7821dfb06ea200753152a52350219103d360383"
  },
  "test_blobs": {
-  "programs/clutch-sbf/svm-tests/Cargo.lock": "2a8392b20ba0e1a23ba471737a0b2196b30fa26d",
-  "programs/clutch-sbf/svm-tests/Cargo.toml": "26e3c16e95890d5e79a67b682e9b6ac5f6556263",
+  "programs/clutch-sbf/svm-tests/Cargo.lock": "45888c40ba88b396c1fabe6cd6a7430d9cee90d3",
+  "programs/clutch-sbf/svm-tests/Cargo.toml": "77a51756abec7257696b643b0b0f75cf89b86de6",
   "programs/clutch-sbf/svm-tests/tests/artifact_transport.rs": "9c3436d0c3cd8dc28c72e69b393912faab9097e1",
   "programs/clutch-sbf/svm-tests/tests/blank_bank_lifecycle.rs": "6cb8b99cc1d9b1d542bcccd8372c8afd2808d16b",
-  "programs/clutch-sbf/svm-tests/tests/candidate_selection.rs": "41867ff0daf7365c6c612b3ed9c5ee823239d5a1",
-  "programs/clutch-sbf/svm-tests/tests/clear_lifecycle.rs": "3d1f015e5dbb3ebbf54082062623e69ed1ee5658",
-  "programs/clutch-sbf/svm-tests/tests/clear_walk.rs": "1f16bf0dd69eddf6941d521e05812c58ead98828",
+  "programs/clutch-sbf/svm-tests/tests/candidate_selection.rs": "765b2eff507b0eea16c5e185dab7fba92e7690cb",
+  "programs/clutch-sbf/svm-tests/tests/clear_lifecycle.rs": "58bbd10d010b4ad1459110af9350539cfd1d658e",
+  "programs/clutch-sbf/svm-tests/tests/clear_walk.rs": "3cbf9fda3ac24e16daf56173fcda3e8ba88a93b5",
   "programs/clutch-sbf/svm-tests/tests/collateral_leg.rs": "10cbc4891eb93cc71e97a931a8f8e6f6a7e99f47",
   "programs/clutch-sbf/svm-tests/tests/direct_selection_v2.rs": "aa7f85138f51beecf27c0f8a4417b77829cb0cc0",
-  "programs/clutch-sbf/svm-tests/tests/direct_selection_v3.rs": "69f064916d913a8b99612aca0ee68d40bd4e0ebc",
-  "programs/clutch-sbf/svm-tests/tests/disagreement_exhibit.rs": "e12300c48de6bad026c13d4e643b8bcc08244e84",
-  "programs/clutch-sbf/svm-tests/tests/entitled_clearing.rs": "5e107ae4481e5bd8c7e14ad93f9567d315978965",
-  "programs/clutch-sbf/svm-tests/tests/general_epoch.rs": "46709b2eea652931b50f39e665484740e2ef3cdc",
+  "programs/clutch-sbf/svm-tests/tests/direct_selection_v3.rs": "e8792824f14c69c0cb450f89ca39c125de48a3d6",
+  "programs/clutch-sbf/svm-tests/tests/disagreement_exhibit.rs": "94854ebd6da46668510ede5b68893f08d7ce685f",
+  "programs/clutch-sbf/svm-tests/tests/entitled_clearing.rs": "286cad7175d89fe23068177a49b9d114d792a68d",
+  "programs/clutch-sbf/svm-tests/tests/general_epoch.rs": "f58e21a076341266d2603d1184cddd236b4350de",
   "programs/clutch-sbf/svm-tests/tests/native_resolution.rs": "1c330494bf68dec713570a740b5dbf730e35d77d",
-  "programs/clutch-sbf/svm-tests/tests/order_reservation.rs": "77658748b3c7777eb181446052f1172024f1cc59",
-  "programs/clutch-sbf/svm-tests/tests/prefund_creation.rs": "528921e972396f37bde27bb5873db51c1f8e6180",
+  "programs/clutch-sbf/svm-tests/tests/order_reservation.rs": "c0bd16f0f94f998c379444de0776f30133395afd",
+  "programs/clutch-sbf/svm-tests/tests/prefund_creation.rs": "2d609a169c7bfa1c0d7ddfe6d9d241844c52b2ae",
   "programs/clutch-sbf/svm-tests/tests/resolution_work.rs": "dc7381db6bfa493b8a37ebfe9f77910ea6459eb7",
-  "programs/clutch-sbf/svm-tests/tests/resolution_work_batch.rs": "4a5e6570f0d664c65353c0586f585fed172ad662",
+  "programs/clutch-sbf/svm-tests/tests/resolution_work_batch.rs": "703175451fad76dc143c6aa0b5a6e81cf23ef2b9",
   "programs/clutch-sbf/svm-tests/tests/resolution_work_common/mod.rs": "e62c0c4ba88fe4a4b31c7b498dcad6850306ea7f",
-  "programs/clutch-sbf/svm-tests/tests/revenue_policy.rs": "fa54be42e68e97e35e4b42ea008f718cf513d622",
+  "programs/clutch-sbf/svm-tests/tests/revenue_policy.rs": "25c0577dbca6e016878b4330be9b0d64d3258d9a",
   "programs/clutch-sbf/svm-tests/tests/source_archive.rs": "7450f45216a63800478416a93b2738735a71eab5",
-  "programs/clutch-sbf/svm-tests/tests/terminal_closure.rs": "0ff62b32ee5d160c771173eadd6ff356164ad2f6"
+  "programs/clutch-sbf/svm-tests/tests/terminal_closure.rs": "ea26d9003b83e4664c078bfcf4ffec570cdca538"
  },
  "test_trees": {
   "programs/clutch-sbf/svm-tests/src": "22adee1330173ca734cdb22b433a6a8fd75993c8",
-  "programs/clutch-sbf/svm-tests/tests": "a53c3f7d46549a1c5b1863b79e2acbab22f2ec91"
+  "programs/clutch-sbf/svm-tests/tests": "15928a0bf5a682ea4996adbe21d1354c279c107f"
  },
  "evidence_files": {
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/RUNTIME_ARTIFACT_AUDIT.md": {
-   "bytes": 26537,
-   "sha256": "81aaf5203a89627fa5224d98347c27db0da500e73c673afcee09242dfe15398e"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/RUNTIME_ARTIFACT_AUDIT.md": {
+   "bytes": 25484,
+   "sha256": "79d4f6642df131c58513e6543210471efc8d688469a4049526a701d6c7b91e41"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/backend-stack-diagnostics.txt": {
-   "bytes": 12914,
-   "sha256": "4f7219918054d871bf75fe8faa9f29d5005da76a3aadf70e29fbbd4998290895"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/account-probe-c55f471.txt": {
+   "bytes": 1217,
+   "sha256": "e9e05821c413128904c4a895f7752246e8f6ac6146ababbdb0036cc6b0fda03e"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/dependencies.tsv": {
-   "bytes": 3953,
-   "sha256": "eed650fb0b93d8d97042c44123264c47e1dc0566a391a3a949a06a3102842b1b"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/backend-stack-diagnostics.txt": {
+   "bytes": 13173,
+   "sha256": "95667b9e7c97138fa608c6b5f04e82c2079a58bfab46af6ecc9d254d64fd9d22"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/elf-summary.txt": {
-   "bytes": 233,
-   "sha256": "822e27f41f0186699bb05d1a261107669be34f4662da90ce60bcbcb05c48a386"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/dependencies.tsv": {
+   "bytes": 10457,
+   "sha256": "1aecbde5d2eb3791f87f89a6883236af74e2747739ade62c753e9c94862d2930"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/frame-summary.txt": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/elf-summary.txt": {
+   "bytes": 234,
+   "sha256": "fa92e9c65560b0a9b69fc4bed0c83ca0d82f3e8d15a57a236566ad8ff7587206"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/first-party-frame-audit.txt": {
+   "bytes": 92642,
+   "sha256": "02dd7a2a69feb1fff689f67b043d0b620a717e70598a261cdde16b5f69388d72"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/frame-summary.txt": {
    "bytes": 287,
-   "sha256": "078677a37bc93f5bb560e483bb75ae114d77a1f8ce049da9dd2e6822bdcac75b"
+   "sha256": "22305bb735819f2cad5ab23c14e7079ea0489f15fb2fec9b02e805ffa1f111e5"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/metadata.json": {
-   "bytes": 128514,
-   "sha256": "e42dc7f788d8847c91e6b37950340619aea6cd586adc01153f5bf9afe67987a9"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/metadata.json": {
+   "bytes": 447230,
+   "sha256": "50a274d00b1dc3f06ea95f5faaf0141714c8fa64d0c8ea0d179bb1a34cf96325"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/registry-source-verification.tsv": {
-   "bytes": 5206,
-   "sha256": "c3a8c19b470713e828b08b56f3cedfe4089c0a704c457e15178c24ecd8cfad71"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/registry-source-verification.tsv": {
+   "bytes": 14824,
+   "sha256": "6999585c8b1d0bf868ee69c451f1dcd9518146137be33cfaf3199d8920931b0e"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/source-files.txt": {
-   "bytes": 5451,
-   "sha256": "11a276bcc41300d070479abb330871ae1feb00ec1fbc53f4ff1685de9da11b86"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/source-files.txt": {
+   "bytes": 6444,
+   "sha256": "1b48b2445dfb10196525bb1460461d1607fc668bf9282be44bc4d4f9c250b470"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/stack-summary.txt": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/stack-summary.txt": {
    "bytes": 107,
-   "sha256": "67e97abca540f499ecff2738cffc0f16988f5f7a3ee23c10afba3b7be91d143b"
+   "sha256": "5ffdbdcc75c2dd40b7b2096c5c79a112355ae96a083080fea9e0d6e6e6a54586"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/upstream-SHA256SUMS": {
-   "bytes": 22206,
-   "sha256": "0d64f61b99dc6843f5ec326205bf98b61cdbdcbc66ce198b396747c4ccc7d2f6"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/upstream-SHA256SUMS": {
+   "bytes": 3861,
+   "sha256": "3824ced27900f4a776a45de66f72332fec9f5edb5a4823e622d91ed966f201e3"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/audit/vendor.diff": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/vendor.diff": {
    "bytes": 0,
    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/artifact_transport.log": {
-   "bytes": 1440,
-   "sha256": "0d171d2002ca73b9a0d472b03e017d710d4ea6eadc2515372d1fc6e155c69b26"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/SUMMARY.txt": {
+   "bytes": 5455,
+   "sha256": "1a01d18a68cc3bf417c4b18cea16c50d09857b3450a3f5f2b29337ca03d35158"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/blank_bank_lifecycle.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/artifact_transport.log": {
+   "bytes": 943,
+   "sha256": "cc86d7370f06f31dfe8934e6b0033a1ce0e75c02f506aede848855e3a731189e"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/blank_bank_lifecycle.log": {
    "bytes": 869,
-   "sha256": "44de7dece396f7a8817a74c2ac5f2f140eda9125eac84c326424d1b814ed1018"
+   "sha256": "9576031786ce19b82f84e3919f874bcb8b5f5c2cc58ad53c6a6dc8bd925b3eef"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/candidate_selection.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/candidate_selection.log": {
    "bytes": 2758,
-   "sha256": "8a03f5f33a9d12dbeaa526eea6e22cb744c74fe6a318150a0d92adc57b51f187"
+   "sha256": "b1306f913b5fa1b32b1077940b2143ea7ecef5bb3595ff29572d8eba454647e5"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/clear_lifecycle.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/clear_lifecycle.log": {
    "bytes": 2900,
-   "sha256": "dff72abca6b1faf03b4ae43c2189efd9f75844ce4589847649966a867785db6c"
+   "sha256": "ddc6a99d993aac3247b888e1792206833ea728f8502b196af608f39ec527f151"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/clear_walk.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/clear_walk.log": {
    "bytes": 873,
-   "sha256": "3c238db3cfce3fc88c33774fb9cbe013c1e4d4c62551a693d8ebccaf141c1975"
+   "sha256": "850228546a3a703237a22b040f33a75a85599b060917f2aa8cacea38ba901194"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/collateral_leg.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/clear_work_creation.log": {
+   "bytes": 975,
+   "sha256": "b2f5b5e49b9a1e4a9aa6c97113ada41d35a1a88d18f9e678050ced81fe48a594"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/collateral_leg.log": {
    "bytes": 3355,
-   "sha256": "ceca6b98a56ca00d6b0a56f8d41ffd4548791222822c2f48ac95e8841bae1822"
+   "sha256": "bd105a60859a13ebf2e9bd4d25a1fe1fe5fb245cd6bad41b3e3f6f97b73a898e"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/direct_selection_v2.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/cone_gate.log": {
+   "bytes": 980,
+   "sha256": "b08eb6204f93fca39083f0176188d98a0ebac757cc2c5b8e3a9d474022d9a916"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/coupled_authority.log": {
+   "bytes": 605,
+   "sha256": "e35d617c71bb3ea7b18487361135fea951c0904b7c93e35f2496ffc5c5b48023"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/coupled_settlement.log": {
+   "bytes": 570,
+   "sha256": "093774f10adfacf5d57991387ed5400c6124283ade2d56af055ccdcad10e7d6d"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/degree_terms_admission.log": {
+   "bytes": 518,
+   "sha256": "6f07acef33e799b4c72ac31e0ee04b338d8c845dbd8d13bf12e59dfa0c4e0a9d"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/direct_selection_v2.log": {
    "bytes": 868,
-   "sha256": "2248021ad57178eb2a7b97b5eac0a676c177223c53adb16c4609811b009e211c"
+   "sha256": "afcabac843fb2bfaeeaa0e85cf8e1b8161dfa5d4d1d3ff2491d92d46334ab143"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/direct_selection_v3.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/direct_selection_v3.log": {
    "bytes": 22362,
-   "sha256": "0f75307f1756202a94f07d39afbf2f3300cd55dcd4616b528a54401169064504"
+   "sha256": "412d0fa8b631e6138a4db682667fb801b442e1c3e56e2316604a630ce24eaba3"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/direct_selection_v3_run2.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/direct_selection_v3_run2.log": {
    "bytes": 22257,
-   "sha256": "3c6950e5335c8fb324916cffba59d7d65d331ee7c1cb7c23bdee60c49cab48e6"
+   "sha256": "468f4990796d9eff039f13ea5db141d5f52000a9272c7eb2120d9924f9e14db8"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/direct_selection_v3_run3.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/direct_selection_v3_run3.log": {
    "bytes": 22257,
-   "sha256": "6cd4d6a0c78575b9d61ee3c566819c39d5bfdbde5e8cfd90025bb64768b5b534"
+   "sha256": "3e46943b3d4221e961a65ca51ede3ec67f956008a48b49830c3dcb2f1b27b62a"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/disagreement_exhibit.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/direct_selection_v3_run4.log": {
+   "bytes": 22309,
+   "sha256": "1afa96797132fcf78e758ef7f58dee4dc8b4d1430ad5d4193d8539466d539b0e"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/disagreement_exhibit.log": {
    "bytes": 1338,
-   "sha256": "877b97fee7e63aa0d5343029b04d77b414353678ad1f9058147150f1a7ec405c"
+   "sha256": "a1ae8328c60f38f2c0fee6cd706fbc637c873fff22f9a23ea03a570845621358"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/entitled_clearing.log": {
-   "bytes": 851,
-   "sha256": "6f04f8ba065d9e49014ff8b469235d714d43478eb26dd0a0f37a504e9aa4f880"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/entitled_clearing.log": {
+   "bytes": 1751,
+   "sha256": "ec698a82894ec6aa83f9dc7cc465b848d2120f632312c23d5a83a8999334ed73"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/general_epoch.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/general_epoch.log": {
    "bytes": 786,
-   "sha256": "d1ec8a93e2940310283511bb2565321361b5478de0aac69414327cd0246a2716"
+   "sha256": "eff96cf3dcb7609ec3a0e09739e57e84e3abbc46cab6da914d969355786244f1"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/native_resolution.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/joined_lifecycle.log": {
+   "bytes": 1205,
+   "sha256": "cd073e98ece664c516096aedeb5b3f4dc0d07d3cc179b840d81bb9fe54a3d76c"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/native_full_lifecycle.log": {
+   "bytes": 394,
+   "sha256": "01638fa3a2fa422ffed2c4db65e6fe224b9474a61f4640c1f3de7c3b017495a7"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/native_resolution.log": {
    "bytes": 2685,
-   "sha256": "0ebf504d65cf24ec07a6e19e6f4aa96765bc46bc71973964fffc6d1ad2d78c29"
+   "sha256": "417ded1645f95fef4106a56fc53ba18d8e4e07a96dc754adea3584c185ce63a1"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/order_reservation.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/native_window_preflight.log": {
+   "bytes": 663,
+   "sha256": "8b7e24f5633b45de416d0a3d814dcc79fc7a7c828e23d2c80967606e4bc6139e"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/order_reservation.log": {
    "bytes": 599,
-   "sha256": "b88ec5c9283930516896ef1bd79b865fbbd9365c5a6f874b70653517f492cb56"
+   "sha256": "3fe6b69ccf69c32dc09cb3a7ff3be57facefff444014fb91742a18ad6c9c2e79"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/prefund_creation.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/pot_position_close.log": {
+   "bytes": 728,
+   "sha256": "0f4c08be4b0966e6af145c848a5c169730db5f5c5e285967f294ac2b989a27f2"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/prefund_creation.log": {
    "bytes": 1473,
-   "sha256": "d32c210cb4468ef4b90bb5abe0ce8e2992585543938e2842afb49eeccdc8ff75"
+   "sha256": "4b0407174ded30372e014ba81c6fed918238138395f007d9ecca9d871d485c63"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/resolution_work.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/r2_pull_endow.log": {
+   "bytes": 671,
+   "sha256": "92dad03c67c60395f1833a7b39dc8aa377a0256c9ea3d821fc1c065a28dc18f1"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/r2_pull_identity.log": {
+   "bytes": 662,
+   "sha256": "eb18696ae87df5b0ad5b54550507ba62a4b3b7801a36518a0e38dc18734d0d5c"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/r2_v2_wire.log": {
+   "bytes": 917,
+   "sha256": "36411fa85a3543ed3893fb0edb449f2725cdb486d01be47ba15e253fa9e8e8c5"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/resolution_work.log": {
    "bytes": 1069,
-   "sha256": "c80d0b14992911b4e33df85fbc06d4a77ed99605b22d873cf8fbb7c6cf9e09e8"
+   "sha256": "d08fcbd65cc06e048ce5a3de05e8215485f7dadf6c574d8ad56b4933fc6acc53"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/resolution_work_batch.log": {
-   "bytes": 1081,
-   "sha256": "32ccfe6d793ad77004b8155c1067ddeffb7aa7f7e4be48d4790c3cc5e74a55e3"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/resolution_work_batch.log": {
+   "bytes": 1195,
+   "sha256": "70713b32c29c70e242b970f9904c681a07f248737445bc35b076fe422045bc85"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/revenue_policy.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/revenue_policy.log": {
    "bytes": 462,
-   "sha256": "b48ecba77d91e650de56b2be624d97c079e1b64916786fac31129e2ffeb81918"
+   "sha256": "a42b26b59ee48f5d903ae8a661b5ea1271827855177abad5133ba40f9078efa3"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/source_archive.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/scale_max_book.log": {
+   "bytes": 6172,
+   "sha256": "3b392277dd121ced0c384f4ec3722a0c41ec6104f1aacfffa342335927e05adc"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/scale_multi_epoch.log": {
+   "bytes": 4280,
+   "sha256": "0c9f79fcbd88d92e251ebffcedc8d64610052b09859a2e608b2ee5ab7423c3c5"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/scale_partial_fills.log": {
+   "bytes": 5316,
+   "sha256": "fb2fa616f2874a8cd2c854138bc8cd466b45cd0d027b01b971d27d9e5645ebf5"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/scale_pot.log": {
+   "bytes": 2837,
+   "sha256": "c23eccbed673c0f74a9afd42d678b5e8fc5a08b6f0d8bc3e763484a4488e6ad5"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/scale_tick_table.log": {
+   "bytes": 3112,
+   "sha256": "038dbe0123433d68c76d6b36be9cecf5d41037408c841e056265c5038bd12f9a"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/scale_ties.log": {
+   "bytes": 6057,
+   "sha256": "60ef862bfd56872025b34fbbe2268c6b88f3bcdf373376a3b46b87759934814a"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/source_archive.log": {
    "bytes": 1057,
-   "sha256": "55db2bec06338df4d6d2f97d182c99286b37098f2869bdf7dc171a9f5c285fb6"
+   "sha256": "d3c21583f8ec0c5e8bd8d2d6cd41d7069123552b873b296d93aaf6c88ba834a6"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/bank/terminal_closure.log": {
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/source_ingest.log": {
+   "bytes": 378,
+   "sha256": "9f580a1c109c929ef06e9834ef0a8845a92c83690f59114c7ba77c771ccf95b5"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/terminal_closure.log": {
    "bytes": 908,
-   "sha256": "3d0d83b768d51a4ea2556b6c8904dcedb89311e72c3aebe0357c2b10d6539eeb"
+   "sha256": "d985829b00f030ab38688398e0ae5d78c9a71c2fb0d84d1dd313c6b5e0b531d0"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/sbf-build-1.log": {
-   "bytes": 30677,
-   "sha256": "60f9e833b12c291ce741b9e8741426781aa80a9f4af42d8454aa0a703a06813a"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/token_leg.log": {
+   "bytes": 1357,
+   "sha256": "e349debd33b8d68de065f90df47ce468a40d1d6d81b15c316fcdae04f9d3cc29"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/sbf-build-2.log": {
-   "bytes": 30677,
-   "sha256": "de8e9e46e78c1c53cf63e201b49c21c2773ef02c2cc78c678f7494e150e5b05b"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/vpot_merge.log": {
+   "bytes": 868,
+   "sha256": "97a02a833a6849fd305044b78d485a9b8c327ea242a75aec25a004c48f9f556b"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/sbf-build-crosspath.log": {
-   "bytes": 30974,
-   "sha256": "de020888285bb3604cc0713cce9299d02fef50b7b2624361f8c3a4966574db8b"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/bank/vpot_split.log": {
+   "bytes": 776,
+   "sha256": "d0a0c4027e152b29b7b31ea80263c027d84984120c1a5e3c407fa2b2fe87c6e5"
   },
-  "research/liveness-policy-profile/artifacts/df0aece1e241951b/logs/sbf-build-relocated.log": {
-   "bytes": 30677,
-   "sha256": "e59e6570e01aa30dbcd18764bea4ccb60438ce577a74589494a372be4ead2d59"
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/sbf-build-1.log": {
+   "bytes": 33036,
+   "sha256": "3e7a3f49887ef64929add2bbfcf04104d0a83a438a45aec7ed7ac0ae1a7b1f86"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/sbf-build-2.log": {
+   "bytes": 33036,
+   "sha256": "933f96e57846c6462ea3c3c4e436967b62a43f7c8077e9a010184d813dc140f0"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/sbf-build-crosspath.log": {
+   "bytes": 33333,
+   "sha256": "8bf666410452b0bc41f21db0f04553dbecef3096732ddc883410049b8e7614b3"
+  },
+  "research/liveness-policy-profile/artifacts/0d52c561909cedef/logs/sbf-build-relocated.log": {
+   "bytes": 33036,
+   "sha256": "120530084ced6996d5456d5dd34c511e64f38f04a4396aaa2c21318579227d80"
   }
  },
  "rent": {
@@ -343,8 +447,8 @@
    "rent_lamports": 3953280
   },
   "direct.epoch.v3": {
-   "bytes": 344,
-   "rent_lamports": 3285120
+   "bytes": 345,
+   "rent_lamports": 3292080
   },
   "direct.final_pot": {
    "bytes": 262,
@@ -387,8 +491,8 @@
    "rent_lamports": 349266720
   },
   "legacy.epoch.v2": {
-   "bytes": 328,
-   "rent_lamports": 3173760
+   "bytes": 329,
+   "rent_lamports": 3180720
   },
   "market": {
    "bytes": 726,
@@ -399,8 +503,8 @@
    "rent_lamports": 28814400
   },
   "order.reservation.v1": {
-   "bytes": 570,
-   "rent_lamports": 4858080
+   "bytes": 618,
+   "rent_lamports": 5192160
   },
   "position": {
    "bytes": 220,
@@ -457,6 +561,10 @@
   "token.outcome_mint": {
    "bytes": 82,
    "rent_lamports": 1461600
+  },
+  "artifact.maximum.stage": {
+   "bytes": 1792,
+   "rent_lamports": 13363200
   }
  },
  "policy_inputs": {
@@ -486,7 +594,7 @@
  },
  "measurements": {
   "resolution_work": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "fold_widths": [
     1,
     2,
@@ -494,345 +602,351 @@
     4
    ],
    "begin_cu": [
-    88029,
-    85661,
-    91345,
-    88027,
-    86213
+    88226,
+    85858,
+    91542,
+    88224,
+    86410
    ],
    "fold_1_cu": [
-    84753,
-    82390
+    84972,
+    82609
    ],
    "fold_2_cu": [
-    89362,
-    92330
+    89615,
+    92583
    ],
    "fold_3_cu": [
-    93265
+    93552
    ],
    "fold_4_cu": [
-    95710
+    96031
    ],
    "finalize_cu": [
-    164718
+    164892
    ],
    "abort_cu": [
-    46888
+    46891
    ],
    "monolithic_v4_cu": [
-    182857
+    183201
    ],
    "test_result": "PASS_4_OF_4"
   },
   "resolution_work_batch": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "batch_sizes": [
     2,
     4,
+    6,
     8,
     12
    ],
    "begin_cu": [
-    91345,
-    86213,
-    86451,
-    80685
+    91542,
+    86410,
+    84280,
+    86648,
+    80882
    ],
    "fold_batch_2_cu": [
-    176191
+    176629
    ],
    "fold_batch_4_cu": [
-    331897
+    332773
    ],
    "fold_batch_8_cu": [
-    665757,
-    665757
+    667509,
+    667509
    ],
    "fold_batch_12_cu": [
-    929429
+    932057
    ],
    "singleton_fold_cu": [
-    88069,
-    88422,
-    82937,
-    83285,
-    83285,
-    83290,
-    83177,
-    83525,
-    83525,
-    83525,
-    83525,
-    83525,
-    83525,
-    83530,
-    77408,
-    77756,
-    77756,
-    77756,
-    77756,
-    77756,
-    77756,
-    77756,
-    77756,
-    77756,
-    77756,
-    77761
+    88288,
+    88641,
+    83156,
+    83504,
+    83504,
+    83509,
+    81028,
+    81376,
+    81376,
+    81376,
+    81376,
+    81381,
+    83396,
+    83744,
+    83744,
+    83744,
+    83744,
+    83744,
+    83744,
+    83749,
+    77627,
+    77975,
+    77975,
+    77975,
+    77975,
+    77975,
+    77975,
+    77975,
+    77975,
+    77975,
+    77975,
+    77980
    ],
    "outcome_equality": "BYTE_IDENTICAL_TO_SINGLETON_TRANSACTIONS",
    "mid_batch_invalid_fold": "WHOLE_TRANSACTION_REVERTED_BYTE_EXACT",
-   "test_result": "PASS_2_OF_2"
+   "test_result": "PASS_2_OF_2",
+   "fold_batch_6_cu": [
+    486413
+   ]
   },
   "native_point_v3": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "degree_rows": [
     {
      "degree": 1,
-     "resolve_cu": 182846,
-     "retry_cu": 169577,
-     "internal_redeem_cu": 153039
+     "resolve_cu": 183102,
+     "retry_cu": 169835,
+     "internal_redeem_cu": 153045
     },
     {
      "degree": 2,
-     "resolve_cu": 191219,
-     "retry_cu": 177950,
-     "internal_redeem_cu": 155082
+     "resolve_cu": 191475,
+     "retry_cu": 178208,
+     "internal_redeem_cu": 155088
     },
     {
      "degree": 3,
-     "resolve_cu": 198113,
-     "retry_cu": 184844,
-     "internal_redeem_cu": 153472
+     "resolve_cu": 198369,
+     "retry_cu": 185102,
+     "internal_redeem_cu": 153478
     }
    ],
    "test_result": "PASS"
   },
   "native_bearer_redeem": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "degree_rows": [
     {
      "degree": 1,
-     "external_redeem_cu": 137267
+     "external_redeem_cu": 137264
     },
     {
      "degree": 2,
-     "external_redeem_cu": 139067
+     "external_redeem_cu": 139064
     },
     {
      "degree": 3,
-     "external_redeem_cu": 136772
+     "external_redeem_cu": 136769
     }
    ],
    "test_result": "PASS"
   },
   "occupation_v4": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "degree_rows": [
     {
      "degree": 1,
-     "initial_cu": 173060,
-     "retry_cu": 159800,
-     "internal_redeem_cu": 151753,
-     "external_redeem_cu": 135905
+     "initial_cu": 173404,
+     "retry_cu": 160146,
+     "internal_redeem_cu": 151759,
+     "external_redeem_cu": 135902
     },
     {
      "degree": 2,
-     "initial_cu": 184230,
-     "retry_cu": 170970,
-     "internal_redeem_cu": 153796,
-     "external_redeem_cu": 137705
+     "initial_cu": 184574,
+     "retry_cu": 171316,
+     "internal_redeem_cu": 153802,
+     "external_redeem_cu": 137702
     },
     {
      "degree": 3,
-     "initial_cu": 198161,
-     "retry_cu": 184901,
-     "internal_redeem_cu": 156686,
-     "external_redeem_cu": 139910
+     "initial_cu": 198505,
+     "retry_cu": 185247,
+     "internal_redeem_cu": 156692,
+     "external_redeem_cu": 139907
     }
    ],
    "span_1_initial_cu": [
-    180048,
-    173366,
-    177547
+    180390,
+    173708,
+    177889
    ],
    "span_2_initial_cu": [
-    173554,
-    189298,
-    190854
+    173897,
+    189641,
+    191197
    ],
    "statistic_7_initial_cu": 182707,
    "test_result": "PASS"
   },
   "direct_v2": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "init_cu": [
-    35538
+    35573
    ],
    "freeze_cu": [
-    357868
+    358398
    ],
    "submit_cu": [
-    173613,
-    174715,
-    182507,
-    190144,
-    185751
+    190666
    ],
    "select_cu": [
-    226522
+    227464
    ],
    "select_result": "COMPLETED_SELECTION_COMMITTED",
    "empty_frozen_lapse": "UNIMPLEMENTED_STOP",
    "test_result": "PASS_2_OF_2"
   },
   "source_endow": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "default_refusal_code": "0x79",
    "default_release_available": false,
    "rollback": "BYTE_AND_LAMPORT_EXACT",
    "test_result": "PASS_EXPECTED_REFUSAL"
   },
   "blank_bank_market_creation": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "v2": {
-    "cu": 207044,
+    "cu": 195232,
     "bytes": 165,
     "rent_lamports": 2039280
    },
    "v3": {
-    "cu": 211715,
+    "cu": 211903,
     "bytes": 319,
     "rent_lamports": 3111120
    },
    "v4": {
-    "cu": 210320,
+    "cu": 204508,
     "bytes": 383,
     "rent_lamports": 3556560
    },
    "test_result": "PASS_2_OF_2"
   },
   "order_reservation": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "place_cu": [
-    186006,
-    184036
+    186114,
+    184144
    ],
    "cancel_cu": [
-    282987,
-    287660
+    283286,
+    287959
    ],
    "test_result": "PASS_2_OF_2"
   },
   "withdraw_cash": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "cu": [
-    52089
+    52086
    ],
    "test_result": "PASS"
   },
   "general_epoch": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "general_epoch.rs",
     "clear_lifecycle.rs"
    ],
    "init_epoch_cu": [
-    42743
+    42766
    ],
    "place_order_single_cu": [
-    192028
+    195136
    ],
    "place_order_portfolio_cu": [
-    194344
+    194452
    ],
    "freeze_epoch_rows": [
     {
      "pages": 1,
      "orders": 4,
      "cu": [
-      233554
+      233581
      ]
     },
     {
      "pages": 2,
      "orders": 17,
      "cu": [
-      477995
+      478022
      ]
     },
     {
      "pages": 3,
      "orders": 40,
      "cu": [
-      717815,
-      717815
+      717842
      ]
     }
    ],
    "test_result": "PASS_3_OF_3"
   },
   "clear_walk": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "clear_walk.rs",
     "clear_lifecycle.rs"
    ],
    "small_book_pass1_cu": [
-    279157,
-    287991,
-    288078
+    276313,
+    292742,
+    288218
    ],
    "small_book_pass2_cu": [
-    286935
+    287224
    ],
    "forty_order_pass1_cu": [
-    258220,
-    279275,
-    393207,
-    268695,
-    264422,
-    298520,
-    385825,
-    297955,
-    281508,
-    306116,
-    295798,
-    256727,
-    285275,
-    388707,
-    268695,
-    264422,
-    292520,
-    382825,
-    282955,
-    281508,
-    310616,
-    306285
+    256869,
+    278135,
+    382439,
+    268946,
+    264564,
+    292880,
+    371839,
+    283206,
+    281650,
+    307976,
+    295938,
+    256876,
+    282635,
+    385439,
+    282446,
+    266064,
+    292880,
+    376339,
+    283206,
+    287650,
+    306476,
+    297425
    ],
    "forty_order_pass2_cu": [
-    302045,
-    269468,
-    302975,
-    283202,
-    305527,
-    302034,
-    269468,
-    302975,
-    283202,
-    305511
+    302078,
+    269501,
+    303008,
+    283235,
+    306043,
+    302067,
+    269501,
+    303008,
+    283235,
+    306027
    ],
    "advance_slices_cu": [
-    173835,
-    173859,
-    173835,
-    173859
+    173866,
+    173890,
+    173866,
+    173890
    ],
    "complete_cu": [
-    121123,
-    125369
+    121149,
+    125397
    ],
    "request_heap_frame_262144_surcharge_cu": [
     150
@@ -841,7 +955,7 @@
    "test_result": "PASS_3_OF_3_AND_2_OF_2"
   },
   "candidate_selection": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "candidate_selection.rs"
@@ -861,106 +975,139 @@
     34231
    ],
    "write_feed_fills_cu": [
-    9641,
-    6641,
-    8141,
-    8141,
-    9641,
-    6641,
-    6641,
-    8141,
-    8141,
-    8141,
-    9641,
-    8141
+    9665,
+    6665,
+    8165,
+    8165,
+    9665,
+    6665,
+    6665,
+    8165,
+    8165,
+    8165,
+    9665,
+    8165
    ],
    "write_feed_slices_cu": [
-    9882,
-    6882,
-    8382,
-    8382,
-    9882,
-    6882,
-    6882,
-    8382,
-    8382,
-    8382,
-    9882,
-    8382
+    9906,
+    6906,
+    8406,
+    8406,
+    9906,
+    6906,
+    6906,
+    8406,
+    8406,
+    8406,
+    9906,
+    8406
    ],
    "seal_candidate_cu": [
-    44911,
-    45341,
-    43411,
-    48341,
-    53279,
-    64155,
-    43411,
-    43411,
-    48341,
-    53279,
-    43411
+    44930,
+    45360,
+    43430,
+    48360,
+    53298,
+    64174,
+    43430,
+    43430,
+    48360,
+    53298,
+    43430
    ],
    "seal_candidate_displacing_cu": [
-    64155
+    64174
    ],
    "finalize_selection_rows": [
     {
      "shape": "3_retained_2_verified_selects_winner",
      "cu": [
-      49280
+      49307
      ]
     },
     {
      "shape": "2_verified_beyond_128_bit_digest_tie",
      "cu": [
-      39512
+      39539
      ]
     },
     {
      "shape": "0_verified_honest_lapse",
      "cu": [
-      20685
+      20708
      ]
     }
    ],
    "complete_clear_work_cu": [
-    121713,
-    121713,
-    126213,
-    126213,
-    120213,
-    126213
+    121741,
+    121741,
+    126241,
+    126241,
+    120241,
+    126241
    ],
    "test_result": "PASS_5_OF_5"
   },
   "entitled_clearing": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "entitled_clearing.rs"
    ],
    "freeze_entitlement_cu": [
-    98411
+    92560,
+    98579
    ],
    "entitle_slice_single_cu": [
-    203097
+    207315
    ],
    "entitle_slice_portfolio_pair_cu": [
-    243508
+    245842
    ],
    "settle_page_entitled_direct_slice_cu": [
-    47328
+    51479
    ],
    "settle_page_entitled_portfolio_full_pair_cu": [
-    224233
+    226212
    ],
    "bank_conservation": "POSITIONS_BYTE_EQUAL_IMPLIED_ALLOCATION_TOTAL_CASH_AND_EGGS_EXACT",
    "reservation_archive": "ACTIVE_TO_ENTITLED_TO_CONSUMED_INITIAL_ENVELOPE_INTACT",
-   "test_result": "PASS_4_OF_4"
+   "test_result": "PASS_4_OF_4",
+   "entitle_slice_inexact_cu": [
+    192833
+   ],
+   "settle_page_potted_cu": [
+    46386
+   ],
+   "entitle_slice_mixed_leg_cu": [
+    191238,
+    188478
+   ],
+   "settle_page_mixed_leg_cu": [
+    47822,
+    50986
+   ],
+   "entitle_slice_fragmented_buy_cu": [
+    194906
+   ],
+   "settle_page_partial_slice_cu": [
+    46662
+   ],
+   "entitle_slice_strand_cu": [
+    201659,
+    197398,
+    195898,
+    193138
+   ],
+   "settle_page_strand_cu": [
+    47807,
+    48140,
+    51139,
+    52988
+   ]
   },
   "direct_v3": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "direct_selection_v3.rs"
@@ -1129,7 +1276,7 @@
    "test_result": "PASS_3_OF_3_IN_EACH_OF_3_BANK_RUNS"
   },
   "terminal_closure": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "terminal_closure.rs"
@@ -1169,49 +1316,49 @@
    "test_result": "PASS_2_OF_2"
   },
   "disagreement_exhibit": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "disagreement_exhibit.rs"
    ],
    "book_shape": "THIRTEEN_ORDER_TWO_MODEL_BOOK_SEVEN_SLICES_FIVE_SINGLE_CROSSINGS_ONE_PAIR",
    "init_clear_work_cu": [
-    70613
+    70635
    ],
    "exhibit_pass1_cu": [
-    411611
+    414566
    ],
    "exhibit_pass2_cu": [
-    301177
+    301278
    ],
    "advance_slices_cu": [
-    163296
+    163327
    ],
    "complete_cu": [
-    118706
+    118734
    ],
    "freeze_entitlement_cu": [
-    98407
+    98575
    ],
    "entitle_slice_single_cu": [
-    223145,
-    220145,
-    224645,
-    224645,
-    220153
+    225827,
+    224327,
+    225827,
+    227327,
+    227343
    ],
    "entitle_slice_portfolio_pair_cu": [
-    270660
+    270118
    ],
    "settle_page_entitled_direct_slice_cu": [
-    40874,
-    37873,
-    42374,
-    42372,
-    37882
+    46524,
+    45023,
+    46524,
+    48022,
+    48056
    ],
    "settle_page_entitled_portfolio_full_pair_cu": [
-    250584
+    252563
    ],
    "heap_frame_rider": "REQUEST_HEAP_FRAME_262144_ON_EVERY_WALK_TRANSACTION_SURCHARGE_FROM_CLEAR_WALK",
    "degree_1_terms_admission": "ADMITTED_BY_THE_GENERAL_PLANE_NO_DEGREE_0_SUBSTITUTION",
@@ -1220,7 +1367,7 @@
    "test_result": "PASS_2_OF_2"
   },
   "revenue_boundary": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "revenue_policy.rs"
@@ -1242,7 +1389,7 @@
    "source_archive_rent_lamports": 18708480
   },
   "direct_v3_close": {
-   "artifact_sha256": "df0aece1e241951b7b70521e20b15e35428c8b464ffa9ce02d9b9aed2141ae1b",
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
    "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
    "suites": [
     "direct_selection_v3.rs"
@@ -1464,6 +1611,528 @@
     "artifact.direct_batch_policy_v3.final": 1559040,
     "order.page": 28814401
    }
+  },
+  "scale_clearing": {
+   "artifact_sha256": "0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7",
+   "admission": "UNPROMOTED_SBF_EXECUTED_EVIDENCE_ONLY",
+   "suites": [
+    "scale_max_book.rs",
+    "scale_multi_epoch.rs",
+    "scale_partial_fills.rs",
+    "scale_pot.rs",
+    "scale_tick_table.rs",
+    "scale_ties.rs"
+   ],
+   "campaign_shapes": "MAX_64_ORDER_BOOK_ACROSS_4_DENSE_PAGES; 30_PARTIAL_FILLS_ACROSS_2_PAGES; 12_COMPLETION_ROUNDING_POT_ACROSS_2_PAGES; 3_CONCURRENT_EPOCHS_1_PAGE_EACH; COMPLETE_64_TICK_TABLE_1_PAGE; 16_DEEP_TIED_CANDIDATE_FIELD_AGAINST_3_RETAINED",
+   "labelled_rows_printed": 399,
+   "route_shape_groups": 64,
+   "funding_ledger": "EVERY_CREATED_ACCOUNT_CARRIES_ITS_GENERAL_FUNDING_LEDGER_V1_SIBLING_THE_ONLY_SHAPE_A_KEEPER_CAN_CLOSE",
+   "cu_ceiling_asserted_by_suite": 1400000,
+   "conservation": "CASH_AND_EGGS_EXACT_POT_DRAINED_EVERY_RESERVATION_CONSUMED",
+   "cross_epoch_isolation": "SIX_HOSTILE_CROSS_EPOCH_SENDS_ALL_REFUSE_MISMATCHED_STATE",
+   "advance_pass1_rows": [
+    {
+     "orders": 4,
+     "observations": 7,
+     "cu": [
+      340959
+     ]
+    },
+    {
+     "orders": 8,
+     "observations": 1,
+     "cu": [
+      346451
+     ]
+    },
+    {
+     "orders": 14,
+     "observations": 1,
+     "cu": [
+      414367
+     ]
+    },
+    {
+     "orders": 16,
+     "observations": 6,
+     "cu": [
+      434705
+     ]
+    }
+   ],
+   "advance_pass2_rows": [
+    {
+     "pages": 1,
+     "observations": 7,
+     "cu": [
+      298741
+     ]
+    },
+    {
+     "pages": 4,
+     "observations": 4,
+     "cu": [
+      309977
+     ]
+    },
+    {
+     "pages": 2,
+     "observations": 4,
+     "cu": [
+      355518
+     ]
+    }
+   ],
+   "advance_slices_rows": [
+    {
+     "batch": 1,
+     "observations": 3,
+     "cu": [
+      169983
+     ]
+    },
+    {
+     "batch": 12,
+     "observations": 1,
+     "cu": [
+      168703
+     ]
+    },
+    {
+     "batch": 2,
+     "observations": 4,
+     "cu": [
+      166983
+     ]
+    },
+    {
+     "batch": 8,
+     "observations": 7,
+     "cu": [
+      167062
+     ]
+    }
+   ],
+   "complete_clear_work_rows": [
+    {
+     "pages": 4,
+     "observations": 1,
+     "cu": [
+      117758
+     ]
+    },
+    {
+     "pages": 2,
+     "observations": 2,
+     "cu": [
+      124918
+     ]
+    },
+    {
+     "pages": 1,
+     "observations": 7,
+     "cu": [
+      127743
+     ]
+    }
+   ],
+   "entitle_slice_single_inexact_rows": [
+    {
+     "pages": 2,
+     "observations": 12,
+     "cu": [
+      394397
+     ]
+    }
+   ],
+   "entitle_slice_single_rows": [
+    {
+     "pages": 1,
+     "observations": 8,
+     "cu": [
+      217235
+     ]
+    },
+    {
+     "pages": 2,
+     "observations": 24,
+     "cu": [
+      416385
+     ]
+    },
+    {
+     "pages": 4,
+     "observations": 32,
+     "cu": [
+      759892
+     ]
+    }
+   ],
+   "finalize_selection_digest_tie_rows": [
+    {
+     "retained": 3,
+     "observations": 1,
+     "cu": [
+      53470
+     ]
+    }
+   ],
+   "finalize_selection_rows": [
+    {
+     "retained": 1,
+     "observations": 7,
+     "cu": [
+      31630
+     ]
+    }
+   ],
+   "freeze_entitlement_inexact_rows": [
+    {
+     "pages": 2,
+     "observations": 1,
+     "cu": [
+      114371
+     ]
+    }
+   ],
+   "freeze_entitlement_rows": [
+    {
+     "pages": 4,
+     "observations": 1,
+     "cu": [
+      105394
+     ]
+    },
+    {
+     "pages": 2,
+     "observations": 1,
+     "cu": [
+      108397
+     ]
+    },
+    {
+     "pages": 1,
+     "observations": 4,
+     "cu": [
+      112898
+     ]
+    }
+   ],
+   "freeze_epoch_rows": [
+    {
+     "orders": 4,
+     "pages": 1,
+     "observations": 6,
+     "cu": [
+      250407
+     ]
+    },
+    {
+     "orders": 24,
+     "pages": 2,
+     "observations": 1,
+     "cu": [
+      488317
+     ]
+    },
+    {
+     "orders": 30,
+     "pages": 2,
+     "observations": 1,
+     "cu": [
+      506611
+     ]
+    },
+    {
+     "orders": 64,
+     "pages": 4,
+     "observations": 1,
+     "cu": [
+      988469
+     ]
+    }
+   ],
+   "init_clear_work_plus_4_grows_rows": [
+    {
+     "pages": 2,
+     "observations": 2,
+     "cu": [
+      108619
+     ]
+    },
+    {
+     "pages": 1,
+     "observations": 7,
+     "cu": [
+      123619
+     ]
+    },
+    {
+     "pages": 4,
+     "observations": 1,
+     "cu": [
+      86119
+     ]
+    }
+   ],
+   "init_epoch_rows": [
+    {
+     "ticks": 11,
+     "observations": 1,
+     "cu": [
+      52878
+     ]
+    },
+    {
+     "ticks": 64,
+     "observations": 11,
+     "cu": [
+      66484
+     ]
+    }
+   ],
+   "init_order_page_rows": [
+    {
+     "pages": 4,
+     "observations": 1,
+     "cu": [
+      221760
+     ]
+    },
+    {
+     "pages": 2,
+     "observations": 2,
+     "cu": [
+      227760
+     ]
+    },
+    {
+     "pages": 1,
+     "observations": 6,
+     "cu": [
+      236760
+     ]
+    }
+   ],
+   "place_order_single_rows": [
+    {
+     "ticks": 64,
+     "observations": 9,
+     "cu": [
+      209302
+     ]
+    }
+   ],
+   "place_order_tick_probe_rows": [
+    {
+     "ticks": 11,
+     "observations": 1,
+     "cu": [
+      196666
+     ]
+    },
+    {
+     "ticks": 64,
+     "observations": 4,
+     "cu": [
+      209302
+     ]
+    }
+   ],
+   "place_order_worst_rank_rows": [
+    {
+     "rank": 1,
+     "observations": 2,
+     "cu": [
+      201724
+     ]
+    },
+    {
+     "rank": 6,
+     "observations": 1,
+     "cu": [
+      201786
+     ]
+    },
+    {
+     "rank": 26,
+     "observations": 1,
+     "cu": [
+      203893
+     ]
+    },
+    {
+     "rank": 3,
+     "observations": 2,
+     "cu": [
+      210726
+     ]
+    }
+   ],
+   "seal_candidate_displacing_rows": [
+    {
+     "retained": 3,
+     "observations": 1,
+     "cu": [
+      68738
+     ]
+    }
+   ],
+   "seal_candidate_refused_tied_rows": [
+    {
+     "retained": 3,
+     "observations": 13,
+     "cu": [
+      32988
+     ]
+    }
+   ],
+   "seal_candidate_rows": [
+    {
+     "retained": 0,
+     "observations": 9,
+     "cu": [
+      44930
+     ]
+    },
+    {
+     "retained": 1,
+     "observations": 2,
+     "cu": [
+      49860
+     ]
+    },
+    {
+     "retained": 2,
+     "observations": 2,
+     "cu": [
+      51798
+     ]
+    },
+    {
+     "retained": 3,
+     "observations": 1,
+     "cu": [
+      68738
+     ]
+    }
+   ],
+   "settle_page_direct_rows": [
+    {
+     "pages": 4,
+     "observations": 32,
+     "cu": [
+      55991
+     ]
+    },
+    {
+     "pages": 1,
+     "observations": 8,
+     "cu": [
+      57479
+     ]
+    },
+    {
+     "pages": 2,
+     "observations": 24,
+     "cu": [
+      61995
+     ]
+    }
+   ],
+   "settle_page_potted_rows": [
+    {
+     "pages": 2,
+     "observations": 12,
+     "cu": [
+      58386
+     ]
+    }
+   ],
+   "submit_candidate_rows": [
+    {
+     "pages": 4,
+     "observations": 1,
+     "cu": [
+      36868
+     ]
+    },
+    {
+     "pages": 2,
+     "observations": 2,
+     "cu": [
+      41380
+     ]
+    },
+    {
+     "pages": 1,
+     "observations": 25,
+     "cu": [
+      48883
+     ]
+    }
+   ],
+   "write_feed_fills_rows": [
+    {
+     "chunk": 16,
+     "observations": 1,
+     "cu": [
+      6941
+     ]
+    },
+    {
+     "chunk": 24,
+     "observations": 4,
+     "cu": [
+      7141
+     ]
+    },
+    {
+     "chunk": 4,
+     "observations": 25,
+     "cu": [
+      12665
+     ]
+    },
+    {
+     "chunk": 6,
+     "observations": 1,
+     "cu": [
+      6713
+     ]
+    }
+   ],
+   "write_feed_slices_rows": [
+    {
+     "chunk": 12,
+     "observations": 1,
+     "cu": [
+      7816
+     ]
+    },
+    {
+     "chunk": 16,
+     "observations": 3,
+     "cu": [
+      8180
+     ]
+    },
+    {
+     "chunk": 2,
+     "observations": 25,
+     "cu": [
+      12906
+     ]
+    },
+    {
+     "chunk": 8,
+     "observations": 1,
+     "cu": [
+      7452
+     ]
+    }
+   ],
+   "test_result": "PASS_8_OF_8"
   }
  },
  "projection": {
@@ -1474,56 +2143,56 @@
    "status": "PASS",
    "routes": {
     "begin": {
-     "measured_cu": 91345,
-     "required_headroom_cu": 114182,
+     "measured_cu": 91542,
+     "required_headroom_cu": 114428,
      "selected_limit_cu": 120000,
      "external_fee_cap_lamports": 130000,
      "keeper_reward_lamports": 230000,
      "status": "PASS"
     },
     "fold_1": {
-     "measured_cu": 88422,
-     "required_headroom_cu": 110528,
+     "measured_cu": 88641,
+     "required_headroom_cu": 110802,
      "selected_limit_cu": 120000,
      "external_fee_cap_lamports": 130000,
      "keeper_reward_lamports": 230000,
      "status": "PASS"
     },
     "fold_2": {
-     "measured_cu": 92330,
-     "required_headroom_cu": 115413,
+     "measured_cu": 92583,
+     "required_headroom_cu": 115729,
      "selected_limit_cu": 120000,
      "external_fee_cap_lamports": 130000,
      "keeper_reward_lamports": 230000,
      "status": "PASS"
     },
     "fold_3": {
-     "measured_cu": 93265,
-     "required_headroom_cu": 116582,
+     "measured_cu": 93552,
+     "required_headroom_cu": 116940,
      "selected_limit_cu": 120000,
      "external_fee_cap_lamports": 130000,
      "keeper_reward_lamports": 230000,
      "status": "PASS"
     },
     "fold_4": {
-     "measured_cu": 95710,
-     "required_headroom_cu": 119638,
-     "selected_limit_cu": 120000,
-     "external_fee_cap_lamports": 130000,
-     "keeper_reward_lamports": 230000,
+     "measured_cu": 96031,
+     "required_headroom_cu": 120039,
+     "selected_limit_cu": 130000,
+     "external_fee_cap_lamports": 140000,
+     "keeper_reward_lamports": 240000,
      "status": "PASS"
     },
     "finalize": {
-     "measured_cu": 164718,
-     "required_headroom_cu": 205898,
+     "measured_cu": 164892,
+     "required_headroom_cu": 206115,
      "selected_limit_cu": 210000,
      "external_fee_cap_lamports": 220000,
      "keeper_reward_lamports": 320000,
      "status": "PASS"
     },
     "abort": {
-     "measured_cu": 46888,
-     "required_headroom_cu": 58610,
+     "measured_cu": 46891,
+     "required_headroom_cu": 58614,
      "selected_limit_cu": 60000,
      "external_fee_cap_lamports": 70000,
      "keeper_reward_lamports": 170000,
@@ -1545,32 +2214,40 @@
    "status": "PASS",
    "routes": {
     "fold_batch_2": {
-     "measured_cu": 176191,
-     "required_headroom_cu": 220239,
+     "measured_cu": 176629,
+     "required_headroom_cu": 220787,
      "selected_limit_cu": 230000,
      "external_fee_cap_lamports": 240000,
      "keeper_reward_lamports": 340000,
      "status": "PASS"
     },
     "fold_batch_4": {
-     "measured_cu": 331897,
-     "required_headroom_cu": 414872,
+     "measured_cu": 332773,
+     "required_headroom_cu": 415967,
      "selected_limit_cu": 420000,
      "external_fee_cap_lamports": 430000,
      "keeper_reward_lamports": 530000,
      "status": "PASS"
     },
+    "fold_batch_6": {
+     "measured_cu": 486413,
+     "required_headroom_cu": 608017,
+     "selected_limit_cu": 610000,
+     "external_fee_cap_lamports": 620000,
+     "keeper_reward_lamports": 720000,
+     "status": "PASS"
+    },
     "fold_batch_8": {
-     "measured_cu": 665757,
-     "required_headroom_cu": 832197,
+     "measured_cu": 667509,
+     "required_headroom_cu": 834387,
      "selected_limit_cu": 840000,
      "external_fee_cap_lamports": 850000,
      "keeper_reward_lamports": 950000,
      "status": "PASS"
     },
     "fold_batch_12": {
-     "measured_cu": 929429,
-     "required_headroom_cu": 1161787,
+     "measured_cu": 932057,
+     "required_headroom_cu": 1165072,
      "selected_limit_cu": 1170000,
      "external_fee_cap_lamports": 1180000,
      "keeper_reward_lamports": 1280000,
@@ -1580,22 +2257,44 @@
    "maximum_admitted_batch": 12,
    "outcome_equality": "BYTE_IDENTICAL_TO_SINGLETON_TRANSACTIONS",
    "mid_batch_invalid_fold": "WHOLE_TRANSACTION_REVERTED_BYTE_EXACT",
-   "cluster_packet_budget": "UNMODELED_BANK_TRANSPORT_ONLY",
-   "maximum_records": 32,
-   "fewest_transaction_plan": [
+   "cluster_packet_budget_bytes": 1232,
+   "maximum_sendable_batch": 6,
+   "sendable_bound_evidence": "KEEPER_FOLD_WIRE_PROBE_SERIALIZER_AND_VALIDATOR_TRANSPORT_AGREE_SIX_FOLDS_1216_BYTES_SEVEN_1347_BYTES_TWELVE_2002_BYTES",
+   "measured_but_unsendable_batches": [
+    8,
+    12
+   ],
+   "unsendable_row_disposition": "MEASURED_ON_A_BANK_BUT_OVER_THE_1232_BYTE_PACKET_BUDGET_EXCLUDED_FROM_THE_PLAN",
+   "plan_batches": [
+    1,
+    2,
+    4,
+    6
+   ],
+   "superseded_plan": [
     12,
     12,
     8
    ],
-   "fold_transactions": 3,
-   "fold_path_lamports": 3510000,
-   "success_rewards_lamports": 3830000,
-   "worst_abort_rewards_lamports": 3680000,
-   "spendable_reserve_lamports": 3830000,
+   "superseded_plan_reason": "CHOSEN_ON_COMPUTE_ALONE_AND_UNSENDABLE_A_TWELVE_FOLD_MESSAGE_IS_2002_BYTES",
+   "maximum_records": 32,
+   "fewest_transaction_plan": [
+    6,
+    6,
+    6,
+    6,
+    6,
+    2
+   ],
+   "fold_transactions": 6,
+   "fold_path_lamports": 3940000,
+   "success_rewards_lamports": 4260000,
+   "worst_abort_rewards_lamports": 4110000,
+   "spendable_reserve_lamports": 4260000,
    "rent_principal_lamports": 10801920,
-   "persistent_reserve_lamports": 14631920,
+   "persistent_reserve_lamports": 15061920,
    "begin_external_lamports": 230000,
-   "payer_cold_outlay_lamports": 14861920
+   "payer_cold_outlay_lamports": 15291920
   },
   "source_value_admission": {
    "status": "FAIL_CLOSED_STOP",
@@ -1606,8 +2305,8 @@
   "direct_v2": {
    "status": "STOP",
    "select": {
-    "measured_cu": 226522,
-    "required_headroom_cu": 283153,
+    "measured_cu": 227464,
+    "required_headroom_cu": 284330,
     "selected_limit_cu": 290000,
     "external_fee_cap_lamports": 300000,
     "keeper_reward_lamports": 400000,
@@ -1623,8 +2322,8 @@
     {
      "degree": 1,
      "resolve": {
-      "measured_cu": 182846,
-      "required_headroom_cu": 228558,
+      "measured_cu": 183102,
+      "required_headroom_cu": 228878,
       "selected_limit_cu": 230000,
       "external_fee_cap_lamports": 240000,
       "keeper_reward_lamports": 340000,
@@ -1634,8 +2333,8 @@
     {
      "degree": 2,
      "resolve": {
-      "measured_cu": 191219,
-      "required_headroom_cu": 239024,
+      "measured_cu": 191475,
+      "required_headroom_cu": 239344,
       "selected_limit_cu": 240000,
       "external_fee_cap_lamports": 250000,
       "keeper_reward_lamports": 350000,
@@ -1645,8 +2344,8 @@
     {
      "degree": 3,
      "resolve": {
-      "measured_cu": 198113,
-      "required_headroom_cu": 247642,
+      "measured_cu": 198369,
+      "required_headroom_cu": 247962,
       "selected_limit_cu": 250000,
       "external_fee_cap_lamports": 260000,
       "keeper_reward_lamports": 360000,
@@ -1661,35 +2360,35 @@
     {
      "degree": 1,
      "initial": {
-      "measured_cu": 173060,
-      "required_headroom_cu": 216325,
+      "measured_cu": 173404,
+      "required_headroom_cu": 216755,
       "selected_limit_cu": 220000,
       "external_fee_cap_lamports": 230000,
       "keeper_reward_lamports": 330000,
       "status": "PASS"
      },
      "retry": {
-      "measured_cu": 159800,
-      "required_headroom_cu": 199750,
-      "selected_limit_cu": 200000,
-      "external_fee_cap_lamports": 210000,
-      "keeper_reward_lamports": 310000,
+      "measured_cu": 160146,
+      "required_headroom_cu": 200183,
+      "selected_limit_cu": 210000,
+      "external_fee_cap_lamports": 220000,
+      "keeper_reward_lamports": 320000,
       "status": "PASS"
      }
     },
     {
      "degree": 2,
      "initial": {
-      "measured_cu": 184230,
-      "required_headroom_cu": 230288,
+      "measured_cu": 184574,
+      "required_headroom_cu": 230718,
       "selected_limit_cu": 240000,
       "external_fee_cap_lamports": 250000,
       "keeper_reward_lamports": 350000,
       "status": "PASS"
      },
      "retry": {
-      "measured_cu": 170970,
-      "required_headroom_cu": 213713,
+      "measured_cu": 171316,
+      "required_headroom_cu": 214145,
       "selected_limit_cu": 220000,
       "external_fee_cap_lamports": 230000,
       "keeper_reward_lamports": 330000,
@@ -1699,16 +2398,16 @@
     {
      "degree": 3,
      "initial": {
-      "measured_cu": 198161,
-      "required_headroom_cu": 247702,
+      "measured_cu": 198505,
+      "required_headroom_cu": 248132,
       "selected_limit_cu": 250000,
       "external_fee_cap_lamports": 260000,
       "keeper_reward_lamports": 360000,
       "status": "PASS"
      },
      "retry": {
-      "measured_cu": 184901,
-      "required_headroom_cu": 231127,
+      "measured_cu": 185247,
+      "required_headroom_cu": 231559,
       "selected_limit_cu": 240000,
       "external_fee_cap_lamports": 250000,
       "keeper_reward_lamports": 350000,
@@ -1772,6 +2471,7 @@
     "candidate_selection",
     "entitled_clearing",
     "disagreement_exhibit",
+    "scale_clearing",
     "terminal_closure"
    ],
    "w1": {
@@ -1785,20 +2485,195 @@
      "clear_walk",
      "candidate_selection",
      "entitled_clearing",
-     "disagreement_exhibit"
+     "disagreement_exhibit",
+     "scale_clearing"
     ],
-    "quoted_route_count": 35,
+    "quoted_route_count": 107,
+    "pda_attempt_quantum_cu": 1500,
+    "single_observation_routes": [
+     "advance_clear_slices_exhibit_book",
+     "advance_clear_work_pass1_exhibit_book",
+     "advance_clear_work_pass2_exhibit_book",
+     "advance_clear_work_pass2_small_book",
+     "complete_clear_work_exhibit_book",
+     "entitle_slice_fragmented_buy",
+     "entitle_slice_inexact_pot_funding",
+     "entitle_slice_portfolio_pair",
+     "entitle_slice_portfolio_pair_exhibit_book",
+     "entitle_slice_single",
+     "finalize_selection_3_retained_winner",
+     "finalize_selection_digest_tie",
+     "finalize_selection_honest_lapse",
+     "freeze_entitlement_exhibit_book",
+     "freeze_epoch_1page_4orders",
+     "freeze_epoch_2pages_17orders",
+     "freeze_epoch_3pages_40orders",
+     "init_clear_work_exhibit_book",
+     "init_epoch",
+     "place_order_portfolio",
+     "place_order_single",
+     "scale_advance_pass1_14orders",
+     "scale_advance_pass1_16orders",
+     "scale_advance_pass1_4orders",
+     "scale_advance_pass1_8orders",
+     "scale_advance_pass2_1page",
+     "scale_advance_pass2_2pages",
+     "scale_advance_pass2_4pages",
+     "scale_advance_slices_batch1",
+     "scale_advance_slices_batch12",
+     "scale_advance_slices_batch2",
+     "scale_advance_slices_batch8",
+     "scale_complete_clear_work_1page",
+     "scale_complete_clear_work_2pages",
+     "scale_complete_clear_work_4pages",
+     "scale_entitle_slice_single_1page",
+     "scale_entitle_slice_single_2pages",
+     "scale_entitle_slice_single_4pages",
+     "scale_entitle_slice_single_inexact_2pages",
+     "scale_finalize_selection_1retained",
+     "scale_finalize_selection_digest_tie_3retained",
+     "scale_freeze_entitlement_1page",
+     "scale_freeze_entitlement_2pages",
+     "scale_freeze_entitlement_4pages",
+     "scale_freeze_entitlement_inexact_2pages",
+     "scale_freeze_epoch_1page_4orders",
+     "scale_freeze_epoch_2pages_24orders",
+     "scale_freeze_epoch_2pages_30orders",
+     "scale_freeze_epoch_4pages_64orders",
+     "scale_init_clear_work_plus_4_grows_1page",
+     "scale_init_clear_work_plus_4_grows_2pages",
+     "scale_init_clear_work_plus_4_grows_4pages",
+     "scale_init_epoch_11ticks",
+     "scale_init_epoch_64ticks",
+     "scale_init_order_page_1page",
+     "scale_init_order_page_2pages",
+     "scale_init_order_page_4pages",
+     "scale_place_order_single_64ticks",
+     "scale_place_order_tick_probe_11ticks",
+     "scale_place_order_tick_probe_64ticks",
+     "scale_place_order_worst_rank_rank1",
+     "scale_place_order_worst_rank_rank26",
+     "scale_place_order_worst_rank_rank3",
+     "scale_place_order_worst_rank_rank6",
+     "scale_seal_candidate_0retained",
+     "scale_seal_candidate_1retained",
+     "scale_seal_candidate_2retained",
+     "scale_seal_candidate_3retained",
+     "scale_seal_candidate_displacing_3retained",
+     "scale_seal_candidate_refused_tied_3retained",
+     "scale_settle_page_direct_1page",
+     "scale_settle_page_direct_2pages",
+     "scale_settle_page_direct_4pages",
+     "scale_settle_page_potted_2pages",
+     "scale_submit_candidate_1page",
+     "scale_submit_candidate_2pages",
+     "scale_submit_candidate_4pages",
+     "scale_write_feed_fills_x16",
+     "scale_write_feed_fills_x24",
+     "scale_write_feed_fills_x4",
+     "scale_write_feed_fills_x6",
+     "scale_write_feed_slices_x12",
+     "scale_write_feed_slices_x16",
+     "scale_write_feed_slices_x2",
+     "scale_write_feed_slices_x8",
+     "settle_page_entitled_direct_slice",
+     "settle_page_entitled_portfolio_full_pair",
+     "settle_page_entitled_portfolio_full_pair_exhibit_book",
+     "settle_page_partial_slice",
+     "settle_page_potted"
+    ],
+    "scale_shape_coordinates": {
+     "advance_pass1_rows": [
+      "orders"
+     ],
+     "advance_pass2_rows": [
+      "pages"
+     ],
+     "advance_slices_rows": [
+      "batch"
+     ],
+     "complete_clear_work_rows": [
+      "pages"
+     ],
+     "entitle_slice_single_inexact_rows": [
+      "pages"
+     ],
+     "entitle_slice_single_rows": [
+      "pages"
+     ],
+     "finalize_selection_digest_tie_rows": [
+      "retained"
+     ],
+     "finalize_selection_rows": [
+      "retained"
+     ],
+     "freeze_entitlement_inexact_rows": [
+      "pages"
+     ],
+     "freeze_entitlement_rows": [
+      "pages"
+     ],
+     "freeze_epoch_rows": [
+      "pages",
+      "orders"
+     ],
+     "init_clear_work_plus_4_grows_rows": [
+      "pages"
+     ],
+     "init_epoch_rows": [
+      "ticks"
+     ],
+     "init_order_page_rows": [
+      "pages"
+     ],
+     "place_order_single_rows": [
+      "ticks"
+     ],
+     "place_order_tick_probe_rows": [
+      "ticks"
+     ],
+     "place_order_worst_rank_rows": [
+      "rank"
+     ],
+     "seal_candidate_displacing_rows": [
+      "retained"
+     ],
+     "seal_candidate_refused_tied_rows": [
+      "retained"
+     ],
+     "seal_candidate_rows": [
+      "retained"
+     ],
+     "settle_page_direct_rows": [
+      "pages"
+     ],
+     "settle_page_potted_rows": [
+      "pages"
+     ],
+     "submit_candidate_rows": [
+      "pages"
+     ],
+     "write_feed_fills_rows": [
+      "chunk"
+     ],
+     "write_feed_slices_rows": [
+      "chunk"
+     ]
+    },
+    "scale_funding_ledger": "EVERY_CREATED_ACCOUNT_CARRIES_ITS_GENERAL_FUNDING_LEDGER_V1_SIBLING_THE_ONLY_SHAPE_A_KEEPER_CAN_CLOSE",
     "stopped_routes": [],
-    "worst_route": "freeze_epoch_3pages_40orders",
-    "worst_measured_cu": 717815,
+    "worst_route": "scale_freeze_epoch_4pages_64orders",
+    "worst_measured_cu": 988469,
     "routes": {
      "init_epoch": {
       "family": "general_epoch",
       "observations": 1,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 42743,
-      "required_headroom_cu": 53429,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 42766,
+      "required_headroom_cu": 53458,
       "selected_limit_cu": 60000,
       "external_fee_cap_lamports": 70000,
       "keeper_reward_lamports": 170000,
@@ -1809,8 +2684,10 @@
       "observations": 1,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 192028,
-      "required_headroom_cu": 240035,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 195136,
+      "required_headroom_cu": 243920,
       "selected_limit_cu": 250000,
       "external_fee_cap_lamports": 260000,
       "keeper_reward_lamports": 360000,
@@ -1821,8 +2698,10 @@
       "observations": 1,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 194344,
-      "required_headroom_cu": 242930,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 194452,
+      "required_headroom_cu": 243065,
       "selected_limit_cu": 250000,
       "external_fee_cap_lamports": 260000,
       "keeper_reward_lamports": 360000,
@@ -1833,8 +2712,10 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 233554,
-      "required_headroom_cu": 291943,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 233581,
+      "required_headroom_cu": 291977,
       "selected_limit_cu": 300000,
       "external_fee_cap_lamports": 310000,
       "keeper_reward_lamports": 410000,
@@ -1845,8 +2726,10 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 477995,
-      "required_headroom_cu": 597494,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 478022,
+      "required_headroom_cu": 597528,
       "selected_limit_cu": 600000,
       "external_fee_cap_lamports": 610000,
       "keeper_reward_lamports": 710000,
@@ -1854,11 +2737,13 @@
      },
      "freeze_epoch_3pages_40orders": {
       "family": "general_epoch",
-      "observations": 2,
+      "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 717815,
-      "required_headroom_cu": 897269,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 717842,
+      "required_headroom_cu": 897303,
       "selected_limit_cu": 900000,
       "external_fee_cap_lamports": 910000,
       "keeper_reward_lamports": 1010000,
@@ -1869,8 +2754,10 @@
       "observations": 3,
       "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 288078,
-      "required_headroom_cu": 360098,
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 292742,
+      "required_headroom_cu": 365928,
       "selected_limit_cu": 370000,
       "external_fee_cap_lamports": 380000,
       "keeper_reward_lamports": 480000,
@@ -1881,8 +2768,10 @@
       "observations": 1,
       "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 286935,
-      "required_headroom_cu": 358669,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 287224,
+      "required_headroom_cu": 359030,
       "selected_limit_cu": 360000,
       "external_fee_cap_lamports": 370000,
       "keeper_reward_lamports": 470000,
@@ -1893,11 +2782,13 @@
       "observations": 22,
       "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 393207,
-      "required_headroom_cu": 491509,
-      "selected_limit_cu": 500000,
-      "external_fee_cap_lamports": 510000,
-      "keeper_reward_lamports": 610000,
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 385439,
+      "required_headroom_cu": 481799,
+      "selected_limit_cu": 490000,
+      "external_fee_cap_lamports": 500000,
+      "keeper_reward_lamports": 600000,
       "status": "PASS"
      },
      "advance_clear_work_pass2_forty_order": {
@@ -1905,8 +2796,10 @@
       "observations": 10,
       "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 305527,
-      "required_headroom_cu": 381909,
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 306043,
+      "required_headroom_cu": 382554,
       "selected_limit_cu": 390000,
       "external_fee_cap_lamports": 400000,
       "keeper_reward_lamports": 500000,
@@ -1917,8 +2810,10 @@
       "observations": 4,
       "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 173859,
-      "required_headroom_cu": 217324,
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 173890,
+      "required_headroom_cu": 217363,
       "selected_limit_cu": 220000,
       "external_fee_cap_lamports": 230000,
       "keeper_reward_lamports": 330000,
@@ -1929,8 +2824,10 @@
       "observations": 2,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 125369,
-      "required_headroom_cu": 156712,
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 125397,
+      "required_headroom_cu": 156747,
       "selected_limit_cu": 160000,
       "external_fee_cap_lamports": 170000,
       "keeper_reward_lamports": 270000,
@@ -1941,6 +2838,8 @@
       "observations": 12,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
       "measured_cu": 35734,
       "required_headroom_cu": 44668,
       "selected_limit_cu": 50000,
@@ -1953,8 +2852,10 @@
       "observations": 12,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 9641,
-      "required_headroom_cu": 12052,
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 9665,
+      "required_headroom_cu": 12082,
       "selected_limit_cu": 20000,
       "external_fee_cap_lamports": 30000,
       "keeper_reward_lamports": 130000,
@@ -1965,8 +2866,10 @@
       "observations": 12,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 9882,
-      "required_headroom_cu": 12353,
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 9906,
+      "required_headroom_cu": 12383,
       "selected_limit_cu": 20000,
       "external_fee_cap_lamports": 30000,
       "keeper_reward_lamports": 130000,
@@ -1977,8 +2880,10 @@
       "observations": 12,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 64155,
-      "required_headroom_cu": 80194,
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 64174,
+      "required_headroom_cu": 80218,
       "selected_limit_cu": 90000,
       "external_fee_cap_lamports": 100000,
       "keeper_reward_lamports": 200000,
@@ -1989,8 +2894,10 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 49280,
-      "required_headroom_cu": 61600,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 49307,
+      "required_headroom_cu": 61634,
       "selected_limit_cu": 70000,
       "external_fee_cap_lamports": 80000,
       "keeper_reward_lamports": 180000,
@@ -2001,8 +2908,10 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 39512,
-      "required_headroom_cu": 49390,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 39539,
+      "required_headroom_cu": 49424,
       "selected_limit_cu": 50000,
       "external_fee_cap_lamports": 60000,
       "keeper_reward_lamports": 160000,
@@ -2013,8 +2922,10 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 20685,
-      "required_headroom_cu": 25857,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 20708,
+      "required_headroom_cu": 25885,
       "selected_limit_cu": 30000,
       "external_fee_cap_lamports": 40000,
       "keeper_reward_lamports": 140000,
@@ -2025,8 +2936,10 @@
       "observations": 6,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 126213,
-      "required_headroom_cu": 157767,
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 126241,
+      "required_headroom_cu": 157802,
       "selected_limit_cu": 160000,
       "external_fee_cap_lamports": 170000,
       "keeper_reward_lamports": 270000,
@@ -2034,11 +2947,13 @@
      },
      "freeze_entitlement": {
       "family": "entitled_clearing",
-      "observations": 1,
+      "observations": 2,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 98411,
-      "required_headroom_cu": 123014,
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 98579,
+      "required_headroom_cu": 123224,
       "selected_limit_cu": 130000,
       "external_fee_cap_lamports": 140000,
       "keeper_reward_lamports": 240000,
@@ -2049,8 +2964,10 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 203097,
-      "required_headroom_cu": 253872,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 207315,
+      "required_headroom_cu": 259144,
       "selected_limit_cu": 260000,
       "external_fee_cap_lamports": 270000,
       "keeper_reward_lamports": 370000,
@@ -2061,8 +2978,10 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 243508,
-      "required_headroom_cu": 304385,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 245842,
+      "required_headroom_cu": 307303,
       "selected_limit_cu": 310000,
       "external_fee_cap_lamports": 320000,
       "keeper_reward_lamports": 420000,
@@ -2073,11 +2992,13 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 47328,
-      "required_headroom_cu": 59160,
-      "selected_limit_cu": 60000,
-      "external_fee_cap_lamports": 70000,
-      "keeper_reward_lamports": 170000,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 51479,
+      "required_headroom_cu": 64349,
+      "selected_limit_cu": 70000,
+      "external_fee_cap_lamports": 80000,
+      "keeper_reward_lamports": 180000,
       "status": "PASS"
      },
      "settle_page_entitled_portfolio_full_pair": {
@@ -2085,11 +3006,125 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 224233,
-      "required_headroom_cu": 280292,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 226212,
+      "required_headroom_cu": 282765,
       "selected_limit_cu": 290000,
       "external_fee_cap_lamports": 300000,
       "keeper_reward_lamports": 400000,
+      "status": "PASS"
+     },
+     "entitle_slice_inexact_pot_funding": {
+      "family": "entitled_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 192833,
+      "required_headroom_cu": 241042,
+      "selected_limit_cu": 250000,
+      "external_fee_cap_lamports": 260000,
+      "keeper_reward_lamports": 360000,
+      "status": "PASS"
+     },
+     "settle_page_potted": {
+      "family": "entitled_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 46386,
+      "required_headroom_cu": 57983,
+      "selected_limit_cu": 60000,
+      "external_fee_cap_lamports": 70000,
+      "keeper_reward_lamports": 170000,
+      "status": "PASS"
+     },
+     "entitle_slice_mixed_leg": {
+      "family": "entitled_clearing",
+      "observations": 2,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 191238,
+      "required_headroom_cu": 239048,
+      "selected_limit_cu": 240000,
+      "external_fee_cap_lamports": 250000,
+      "keeper_reward_lamports": 350000,
+      "status": "PASS"
+     },
+     "settle_page_mixed_leg": {
+      "family": "entitled_clearing",
+      "observations": 2,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 50986,
+      "required_headroom_cu": 63733,
+      "selected_limit_cu": 70000,
+      "external_fee_cap_lamports": 80000,
+      "keeper_reward_lamports": 180000,
+      "status": "PASS"
+     },
+     "entitle_slice_fragmented_buy": {
+      "family": "entitled_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 194906,
+      "required_headroom_cu": 243633,
+      "selected_limit_cu": 250000,
+      "external_fee_cap_lamports": 260000,
+      "keeper_reward_lamports": 360000,
+      "status": "PASS"
+     },
+     "settle_page_partial_slice": {
+      "family": "entitled_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 46662,
+      "required_headroom_cu": 58328,
+      "selected_limit_cu": 60000,
+      "external_fee_cap_lamports": 70000,
+      "keeper_reward_lamports": 170000,
+      "status": "PASS"
+     },
+     "entitle_slice_strand": {
+      "family": "entitled_clearing",
+      "observations": 4,
+      "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 201659,
+      "required_headroom_cu": 252074,
+      "selected_limit_cu": 260000,
+      "external_fee_cap_lamports": 270000,
+      "keeper_reward_lamports": 370000,
+      "status": "PASS"
+     },
+     "settle_page_strand": {
+      "family": "entitled_clearing",
+      "observations": 4,
+      "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 52988,
+      "required_headroom_cu": 66235,
+      "selected_limit_cu": 70000,
+      "external_fee_cap_lamports": 80000,
+      "keeper_reward_lamports": 180000,
       "status": "PASS"
      },
      "init_clear_work_exhibit_book": {
@@ -2097,8 +3132,10 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 70613,
-      "required_headroom_cu": 88267,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 70635,
+      "required_headroom_cu": 88294,
       "selected_limit_cu": 90000,
       "external_fee_cap_lamports": 100000,
       "keeper_reward_lamports": 200000,
@@ -2109,8 +3146,10 @@
       "observations": 1,
       "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 411611,
-      "required_headroom_cu": 514514,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 414566,
+      "required_headroom_cu": 518208,
       "selected_limit_cu": 520000,
       "external_fee_cap_lamports": 530000,
       "keeper_reward_lamports": 630000,
@@ -2121,8 +3160,10 @@
       "observations": 1,
       "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 301177,
-      "required_headroom_cu": 376472,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 301278,
+      "required_headroom_cu": 376598,
       "selected_limit_cu": 380000,
       "external_fee_cap_lamports": 390000,
       "keeper_reward_lamports": 490000,
@@ -2133,8 +3174,10 @@
       "observations": 1,
       "shape_variability": "BATCH_SHAPE_VARIABLE_OBSERVED_MAXIMUM_ONLY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 163296,
-      "required_headroom_cu": 204120,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 163327,
+      "required_headroom_cu": 204159,
       "selected_limit_cu": 210000,
       "external_fee_cap_lamports": 220000,
       "keeper_reward_lamports": 320000,
@@ -2145,8 +3188,10 @@
       "observations": 1,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 118706,
-      "required_headroom_cu": 148383,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 118734,
+      "required_headroom_cu": 148418,
       "selected_limit_cu": 150000,
       "external_fee_cap_lamports": 160000,
       "keeper_reward_lamports": 260000,
@@ -2157,8 +3202,10 @@
       "observations": 1,
       "shape_variability": "FIXED_SHAPE",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 98407,
-      "required_headroom_cu": 123009,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 98575,
+      "required_headroom_cu": 123219,
       "selected_limit_cu": 130000,
       "external_fee_cap_lamports": 140000,
       "keeper_reward_lamports": 240000,
@@ -2169,8 +3216,10 @@
       "observations": 5,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 224645,
-      "required_headroom_cu": 280807,
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 227343,
+      "required_headroom_cu": 284179,
       "selected_limit_cu": 290000,
       "external_fee_cap_lamports": 300000,
       "keeper_reward_lamports": 400000,
@@ -2181,8 +3230,10 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 270660,
-      "required_headroom_cu": 338325,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 270118,
+      "required_headroom_cu": 337648,
       "selected_limit_cu": 340000,
       "external_fee_cap_lamports": 350000,
       "keeper_reward_lamports": 450000,
@@ -2193,11 +3244,13 @@
       "observations": 5,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 42374,
-      "required_headroom_cu": 52968,
-      "selected_limit_cu": 60000,
-      "external_fee_cap_lamports": 70000,
-      "keeper_reward_lamports": 170000,
+      "single_observation": false,
+      "measured_cu_known_to_within": "SPREAD_OVER_MULTIPLE_SENDS_SEALED",
+      "measured_cu": 48056,
+      "required_headroom_cu": 60070,
+      "selected_limit_cu": 70000,
+      "external_fee_cap_lamports": 80000,
+      "keeper_reward_lamports": 180000,
       "status": "PASS"
      },
      "settle_page_entitled_portfolio_full_pair_exhibit_book": {
@@ -2205,11 +3258,909 @@
       "observations": 1,
       "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
       "admission": "W1_QUOTED_NO_LIVE_FLAG",
-      "measured_cu": 250584,
-      "required_headroom_cu": 313230,
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 252563,
+      "required_headroom_cu": 315704,
       "selected_limit_cu": 320000,
       "external_fee_cap_lamports": 330000,
       "keeper_reward_lamports": 430000,
+      "status": "PASS"
+     },
+     "scale_advance_pass1_4orders": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 340959,
+      "required_headroom_cu": 426199,
+      "selected_limit_cu": 430000,
+      "external_fee_cap_lamports": 440000,
+      "keeper_reward_lamports": 540000,
+      "status": "PASS"
+     },
+     "scale_advance_pass1_8orders": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 346451,
+      "required_headroom_cu": 433064,
+      "selected_limit_cu": 440000,
+      "external_fee_cap_lamports": 450000,
+      "keeper_reward_lamports": 550000,
+      "status": "PASS"
+     },
+     "scale_advance_pass1_14orders": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 414367,
+      "required_headroom_cu": 517959,
+      "selected_limit_cu": 520000,
+      "external_fee_cap_lamports": 530000,
+      "keeper_reward_lamports": 630000,
+      "status": "PASS"
+     },
+     "scale_advance_pass1_16orders": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 434705,
+      "required_headroom_cu": 543382,
+      "selected_limit_cu": 550000,
+      "external_fee_cap_lamports": 560000,
+      "keeper_reward_lamports": 660000,
+      "status": "PASS"
+     },
+     "scale_advance_pass2_1page": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 298741,
+      "required_headroom_cu": 373427,
+      "selected_limit_cu": 380000,
+      "external_fee_cap_lamports": 390000,
+      "keeper_reward_lamports": 490000,
+      "status": "PASS"
+     },
+     "scale_advance_pass2_4pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 309977,
+      "required_headroom_cu": 387472,
+      "selected_limit_cu": 390000,
+      "external_fee_cap_lamports": 400000,
+      "keeper_reward_lamports": 500000,
+      "status": "PASS"
+     },
+     "scale_advance_pass2_2pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 355518,
+      "required_headroom_cu": 444398,
+      "selected_limit_cu": 450000,
+      "external_fee_cap_lamports": 460000,
+      "keeper_reward_lamports": 560000,
+      "status": "PASS"
+     },
+     "scale_advance_slices_batch1": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 169983,
+      "required_headroom_cu": 212479,
+      "selected_limit_cu": 220000,
+      "external_fee_cap_lamports": 230000,
+      "keeper_reward_lamports": 330000,
+      "status": "PASS"
+     },
+     "scale_advance_slices_batch12": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 168703,
+      "required_headroom_cu": 210879,
+      "selected_limit_cu": 220000,
+      "external_fee_cap_lamports": 230000,
+      "keeper_reward_lamports": 330000,
+      "status": "PASS"
+     },
+     "scale_advance_slices_batch2": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 166983,
+      "required_headroom_cu": 208729,
+      "selected_limit_cu": 210000,
+      "external_fee_cap_lamports": 220000,
+      "keeper_reward_lamports": 320000,
+      "status": "PASS"
+     },
+     "scale_advance_slices_batch8": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 167062,
+      "required_headroom_cu": 208828,
+      "selected_limit_cu": 210000,
+      "external_fee_cap_lamports": 220000,
+      "keeper_reward_lamports": 320000,
+      "status": "PASS"
+     },
+     "scale_complete_clear_work_4pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 117758,
+      "required_headroom_cu": 147198,
+      "selected_limit_cu": 150000,
+      "external_fee_cap_lamports": 160000,
+      "keeper_reward_lamports": 260000,
+      "status": "PASS"
+     },
+     "scale_complete_clear_work_2pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 124918,
+      "required_headroom_cu": 156148,
+      "selected_limit_cu": 160000,
+      "external_fee_cap_lamports": 170000,
+      "keeper_reward_lamports": 270000,
+      "status": "PASS"
+     },
+     "scale_complete_clear_work_1page": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 127743,
+      "required_headroom_cu": 159679,
+      "selected_limit_cu": 160000,
+      "external_fee_cap_lamports": 170000,
+      "keeper_reward_lamports": 270000,
+      "status": "PASS"
+     },
+     "scale_entitle_slice_single_inexact_2pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 394397,
+      "required_headroom_cu": 492997,
+      "selected_limit_cu": 500000,
+      "external_fee_cap_lamports": 510000,
+      "keeper_reward_lamports": 610000,
+      "status": "PASS"
+     },
+     "scale_entitle_slice_single_1page": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 217235,
+      "required_headroom_cu": 271544,
+      "selected_limit_cu": 280000,
+      "external_fee_cap_lamports": 290000,
+      "keeper_reward_lamports": 390000,
+      "status": "PASS"
+     },
+     "scale_entitle_slice_single_2pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 416385,
+      "required_headroom_cu": 520482,
+      "selected_limit_cu": 530000,
+      "external_fee_cap_lamports": 540000,
+      "keeper_reward_lamports": 640000,
+      "status": "PASS"
+     },
+     "scale_entitle_slice_single_4pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 759892,
+      "required_headroom_cu": 949865,
+      "selected_limit_cu": 950000,
+      "external_fee_cap_lamports": 960000,
+      "keeper_reward_lamports": 1060000,
+      "status": "PASS"
+     },
+     "scale_finalize_selection_digest_tie_3retained": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 53470,
+      "required_headroom_cu": 66838,
+      "selected_limit_cu": 70000,
+      "external_fee_cap_lamports": 80000,
+      "keeper_reward_lamports": 180000,
+      "status": "PASS"
+     },
+     "scale_finalize_selection_1retained": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 31630,
+      "required_headroom_cu": 39538,
+      "selected_limit_cu": 40000,
+      "external_fee_cap_lamports": 50000,
+      "keeper_reward_lamports": 150000,
+      "status": "PASS"
+     },
+     "scale_freeze_entitlement_inexact_2pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 114371,
+      "required_headroom_cu": 142964,
+      "selected_limit_cu": 150000,
+      "external_fee_cap_lamports": 160000,
+      "keeper_reward_lamports": 260000,
+      "status": "PASS"
+     },
+     "scale_freeze_entitlement_4pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 105394,
+      "required_headroom_cu": 131743,
+      "selected_limit_cu": 140000,
+      "external_fee_cap_lamports": 150000,
+      "keeper_reward_lamports": 250000,
+      "status": "PASS"
+     },
+     "scale_freeze_entitlement_2pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 108397,
+      "required_headroom_cu": 135497,
+      "selected_limit_cu": 140000,
+      "external_fee_cap_lamports": 150000,
+      "keeper_reward_lamports": 250000,
+      "status": "PASS"
+     },
+     "scale_freeze_entitlement_1page": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 112898,
+      "required_headroom_cu": 141123,
+      "selected_limit_cu": 150000,
+      "external_fee_cap_lamports": 160000,
+      "keeper_reward_lamports": 260000,
+      "status": "PASS"
+     },
+     "scale_freeze_epoch_1page_4orders": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 250407,
+      "required_headroom_cu": 313009,
+      "selected_limit_cu": 320000,
+      "external_fee_cap_lamports": 330000,
+      "keeper_reward_lamports": 430000,
+      "status": "PASS"
+     },
+     "scale_freeze_epoch_2pages_24orders": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 488317,
+      "required_headroom_cu": 610397,
+      "selected_limit_cu": 620000,
+      "external_fee_cap_lamports": 630000,
+      "keeper_reward_lamports": 730000,
+      "status": "PASS"
+     },
+     "scale_freeze_epoch_2pages_30orders": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 506611,
+      "required_headroom_cu": 633264,
+      "selected_limit_cu": 640000,
+      "external_fee_cap_lamports": 650000,
+      "keeper_reward_lamports": 750000,
+      "status": "PASS"
+     },
+     "scale_freeze_epoch_4pages_64orders": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 988469,
+      "required_headroom_cu": 1235587,
+      "selected_limit_cu": 1240000,
+      "external_fee_cap_lamports": 1250000,
+      "keeper_reward_lamports": 1350000,
+      "status": "PASS"
+     },
+     "scale_init_clear_work_plus_4_grows_2pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 108619,
+      "required_headroom_cu": 135774,
+      "selected_limit_cu": 140000,
+      "external_fee_cap_lamports": 150000,
+      "keeper_reward_lamports": 250000,
+      "status": "PASS"
+     },
+     "scale_init_clear_work_plus_4_grows_1page": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 123619,
+      "required_headroom_cu": 154524,
+      "selected_limit_cu": 160000,
+      "external_fee_cap_lamports": 170000,
+      "keeper_reward_lamports": 270000,
+      "status": "PASS"
+     },
+     "scale_init_clear_work_plus_4_grows_4pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 86119,
+      "required_headroom_cu": 107649,
+      "selected_limit_cu": 110000,
+      "external_fee_cap_lamports": 120000,
+      "keeper_reward_lamports": 220000,
+      "status": "PASS"
+     },
+     "scale_init_epoch_11ticks": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 52878,
+      "required_headroom_cu": 66098,
+      "selected_limit_cu": 70000,
+      "external_fee_cap_lamports": 80000,
+      "keeper_reward_lamports": 180000,
+      "status": "PASS"
+     },
+     "scale_init_epoch_64ticks": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 66484,
+      "required_headroom_cu": 83105,
+      "selected_limit_cu": 90000,
+      "external_fee_cap_lamports": 100000,
+      "keeper_reward_lamports": 200000,
+      "status": "PASS"
+     },
+     "scale_init_order_page_4pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 221760,
+      "required_headroom_cu": 277200,
+      "selected_limit_cu": 280000,
+      "external_fee_cap_lamports": 290000,
+      "keeper_reward_lamports": 390000,
+      "status": "PASS"
+     },
+     "scale_init_order_page_2pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 227760,
+      "required_headroom_cu": 284700,
+      "selected_limit_cu": 290000,
+      "external_fee_cap_lamports": 300000,
+      "keeper_reward_lamports": 400000,
+      "status": "PASS"
+     },
+     "scale_init_order_page_1page": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 236760,
+      "required_headroom_cu": 295950,
+      "selected_limit_cu": 300000,
+      "external_fee_cap_lamports": 310000,
+      "keeper_reward_lamports": 410000,
+      "status": "PASS"
+     },
+     "scale_place_order_single_64ticks": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 209302,
+      "required_headroom_cu": 261628,
+      "selected_limit_cu": 270000,
+      "external_fee_cap_lamports": 280000,
+      "keeper_reward_lamports": 380000,
+      "status": "PASS"
+     },
+     "scale_place_order_tick_probe_11ticks": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 196666,
+      "required_headroom_cu": 245833,
+      "selected_limit_cu": 250000,
+      "external_fee_cap_lamports": 260000,
+      "keeper_reward_lamports": 360000,
+      "status": "PASS"
+     },
+     "scale_place_order_tick_probe_64ticks": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 209302,
+      "required_headroom_cu": 261628,
+      "selected_limit_cu": 270000,
+      "external_fee_cap_lamports": 280000,
+      "keeper_reward_lamports": 380000,
+      "status": "PASS"
+     },
+     "scale_place_order_worst_rank_rank1": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 201724,
+      "required_headroom_cu": 252155,
+      "selected_limit_cu": 260000,
+      "external_fee_cap_lamports": 270000,
+      "keeper_reward_lamports": 370000,
+      "status": "PASS"
+     },
+     "scale_place_order_worst_rank_rank6": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 201786,
+      "required_headroom_cu": 252233,
+      "selected_limit_cu": 260000,
+      "external_fee_cap_lamports": 270000,
+      "keeper_reward_lamports": 370000,
+      "status": "PASS"
+     },
+     "scale_place_order_worst_rank_rank26": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 203893,
+      "required_headroom_cu": 254867,
+      "selected_limit_cu": 260000,
+      "external_fee_cap_lamports": 270000,
+      "keeper_reward_lamports": 370000,
+      "status": "PASS"
+     },
+     "scale_place_order_worst_rank_rank3": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 210726,
+      "required_headroom_cu": 263408,
+      "selected_limit_cu": 270000,
+      "external_fee_cap_lamports": 280000,
+      "keeper_reward_lamports": 380000,
+      "status": "PASS"
+     },
+     "scale_seal_candidate_displacing_3retained": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 68738,
+      "required_headroom_cu": 85923,
+      "selected_limit_cu": 90000,
+      "external_fee_cap_lamports": 100000,
+      "keeper_reward_lamports": 200000,
+      "status": "PASS"
+     },
+     "scale_seal_candidate_refused_tied_3retained": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 32988,
+      "required_headroom_cu": 41235,
+      "selected_limit_cu": 50000,
+      "external_fee_cap_lamports": 60000,
+      "keeper_reward_lamports": 160000,
+      "status": "PASS"
+     },
+     "scale_seal_candidate_0retained": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 44930,
+      "required_headroom_cu": 56163,
+      "selected_limit_cu": 60000,
+      "external_fee_cap_lamports": 70000,
+      "keeper_reward_lamports": 170000,
+      "status": "PASS"
+     },
+     "scale_seal_candidate_1retained": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 49860,
+      "required_headroom_cu": 62325,
+      "selected_limit_cu": 70000,
+      "external_fee_cap_lamports": 80000,
+      "keeper_reward_lamports": 180000,
+      "status": "PASS"
+     },
+     "scale_seal_candidate_2retained": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 51798,
+      "required_headroom_cu": 64748,
+      "selected_limit_cu": 70000,
+      "external_fee_cap_lamports": 80000,
+      "keeper_reward_lamports": 180000,
+      "status": "PASS"
+     },
+     "scale_seal_candidate_3retained": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 68738,
+      "required_headroom_cu": 85923,
+      "selected_limit_cu": 90000,
+      "external_fee_cap_lamports": 100000,
+      "keeper_reward_lamports": 200000,
+      "status": "PASS"
+     },
+     "scale_settle_page_direct_4pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 55991,
+      "required_headroom_cu": 69989,
+      "selected_limit_cu": 70000,
+      "external_fee_cap_lamports": 80000,
+      "keeper_reward_lamports": 180000,
+      "status": "PASS"
+     },
+     "scale_settle_page_direct_1page": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 57479,
+      "required_headroom_cu": 71849,
+      "selected_limit_cu": 80000,
+      "external_fee_cap_lamports": 90000,
+      "keeper_reward_lamports": 190000,
+      "status": "PASS"
+     },
+     "scale_settle_page_direct_2pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 61995,
+      "required_headroom_cu": 77494,
+      "selected_limit_cu": 80000,
+      "external_fee_cap_lamports": 90000,
+      "keeper_reward_lamports": 190000,
+      "status": "PASS"
+     },
+     "scale_settle_page_potted_2pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 58386,
+      "required_headroom_cu": 72983,
+      "selected_limit_cu": 80000,
+      "external_fee_cap_lamports": 90000,
+      "keeper_reward_lamports": 190000,
+      "status": "PASS"
+     },
+     "scale_submit_candidate_4pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 36868,
+      "required_headroom_cu": 46085,
+      "selected_limit_cu": 50000,
+      "external_fee_cap_lamports": 60000,
+      "keeper_reward_lamports": 160000,
+      "status": "PASS"
+     },
+     "scale_submit_candidate_2pages": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 41380,
+      "required_headroom_cu": 51725,
+      "selected_limit_cu": 60000,
+      "external_fee_cap_lamports": 70000,
+      "keeper_reward_lamports": 170000,
+      "status": "PASS"
+     },
+     "scale_submit_candidate_1page": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 48883,
+      "required_headroom_cu": 61104,
+      "selected_limit_cu": 70000,
+      "external_fee_cap_lamports": 80000,
+      "keeper_reward_lamports": 180000,
+      "status": "PASS"
+     },
+     "scale_write_feed_fills_x16": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 6941,
+      "required_headroom_cu": 8677,
+      "selected_limit_cu": 10000,
+      "external_fee_cap_lamports": 20000,
+      "keeper_reward_lamports": 120000,
+      "status": "PASS"
+     },
+     "scale_write_feed_fills_x24": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 7141,
+      "required_headroom_cu": 8927,
+      "selected_limit_cu": 10000,
+      "external_fee_cap_lamports": 20000,
+      "keeper_reward_lamports": 120000,
+      "status": "PASS"
+     },
+     "scale_write_feed_fills_x4": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 12665,
+      "required_headroom_cu": 15832,
+      "selected_limit_cu": 20000,
+      "external_fee_cap_lamports": 30000,
+      "keeper_reward_lamports": 130000,
+      "status": "PASS"
+     },
+     "scale_write_feed_fills_x6": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 6713,
+      "required_headroom_cu": 8392,
+      "selected_limit_cu": 10000,
+      "external_fee_cap_lamports": 20000,
+      "keeper_reward_lamports": 120000,
+      "status": "PASS"
+     },
+     "scale_write_feed_slices_x12": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 7816,
+      "required_headroom_cu": 9770,
+      "selected_limit_cu": 10000,
+      "external_fee_cap_lamports": 20000,
+      "keeper_reward_lamports": 120000,
+      "status": "PASS"
+     },
+     "scale_write_feed_slices_x16": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 8180,
+      "required_headroom_cu": 10225,
+      "selected_limit_cu": 20000,
+      "external_fee_cap_lamports": 30000,
+      "keeper_reward_lamports": 130000,
+      "status": "PASS"
+     },
+     "scale_write_feed_slices_x2": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 12906,
+      "required_headroom_cu": 16133,
+      "selected_limit_cu": 20000,
+      "external_fee_cap_lamports": 30000,
+      "keeper_reward_lamports": 130000,
+      "status": "PASS"
+     },
+     "scale_write_feed_slices_x8": {
+      "family": "scale_clearing",
+      "observations": 1,
+      "shape_variability": "SHAPE_LABELLED_BY_THE_ROUTE_KEY",
+      "admission": "W1_QUOTED_NO_LIVE_FLAG",
+      "single_observation": true,
+      "measured_cu_known_to_within": "PLUS_OR_MINUS_K_TIMES_1500_CU_PDA_ATTEMPT_QUANTUM",
+      "measured_cu": 7452,
+      "required_headroom_cu": 9315,
+      "selected_limit_cu": 10000,
+      "external_fee_cap_lamports": 20000,
+      "keeper_reward_lamports": 120000,
       "status": "PASS"
      }
     },

@@ -1,0 +1,55 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.41s
+     Running tests/scale_pot.rs (target/debug/deps/scale_pot-9099fd5483aab1f1)
+
+running 1 test
+test a_large_rounding_pot_drains_to_zero_across_many_completions ... scale.pot/init_epoch_ledgered CU: 52984
+scale.pot/init_order_page_ledgered CU: 224760
+scale.pot/place_order_single CU: 195724
+scale.pot/place_order_worst_rank6 CU: 201786
+scale.pot/freeze_epoch_2pages_24orders CU: 488317
+scale.pot/submit_candidate_ledgered CU: 41380
+scale.pot/write_feed_fills_x24 CU: 7139
+scale.pot/write_feed_slices_x12 CU: 7816
+scale.pot/seal_candidate_0retained CU: 39040
+scale.pot/init_clear_work_plus_4_grows_ledgered CU: 108619
+scale.pot/advance_pass1_page0_16orders CU: 433349
+scale.pot/advance_pass1_page1_8orders CU: 346451
+scale.pot/advance_slices_x12 CU: 168703
+scale.pot/advance_pass2_page0 CU: 302496
+scale.pot/advance_pass2_page1 CU: 318535
+scale.pot/complete_clear_work CU: 124918
+scale.pot/finalize_selection_1retained CU: 24195
+scale.pot/freeze_entitlement_inexact_ledgered CU: 114371
+scale.pot POT opened_price_units=120000 atoms=12
+scale.pot/entitle_slice_single_inexact_ledgered_slice0 CU: 385397
+scale.pot/settle_page_potted_slice0 CU: 49386
+scale.pot/entitle_slice_single_inexact_ledgered_slice1 CU: 391397
+scale.pot/settle_page_potted_slice1 CU: 58386
+scale.pot/entitle_slice_single_inexact_ledgered_slice2 CU: 394397
+scale.pot/settle_page_potted_slice2 CU: 56886
+scale.pot/entitle_slice_single_inexact_ledgered_slice3 CU: 392897
+scale.pot/settle_page_potted_slice3 CU: 50886
+scale.pot/entitle_slice_single_inexact_ledgered_slice4 CU: 386897
+scale.pot/settle_page_potted_slice4 CU: 49386
+scale.pot/entitle_slice_single_inexact_ledgered_slice5 CU: 391397
+scale.pot/settle_page_potted_slice5 CU: 53886
+scale.pot/entitle_slice_single_inexact_ledgered_slice6 CU: 392897
+scale.pot/settle_page_potted_slice6 CU: 58386
+scale.pot/entitle_slice_single_inexact_ledgered_slice7 CU: 388397
+scale.pot/settle_page_potted_slice7 CU: 50886
+scale.pot/entitle_slice_single_inexact_ledgered_slice8 CU: 389897
+scale.pot/settle_page_potted_slice8 CU: 50886
+scale.pot/entitle_slice_single_inexact_ledgered_slice9 CU: 389897
+scale.pot/settle_page_potted_slice9 CU: 53886
+scale.pot/entitle_slice_single_inexact_ledgered_slice10 CU: 389897
+scale.pot/settle_page_potted_slice10 CU: 56886
+scale.pot/entitle_slice_single_inexact_ledgered_slice11 CU: 388398
+scale.pot/settle_page_potted_slice11 CU: 52386
+scale.pot POT drained_to=0 completions=12
+scale.pot ROUTES: 42 observations
+scale.pot WORST route=scale.pot/freeze_epoch_2pages_24orders cu=488317 ceiling=1400000 headroom=911683
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.86s
+

@@ -1,0 +1,83 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.39s
+     Running tests/scale_partial_fills.rs (target/debug/deps/scale_partial_fills-c06a67d03a89d34f)
+
+running 1 test
+test many_orders_fill_partially_across_many_slices_with_exact_conservation ... scale.partial_fills/init_epoch_ledgered CU: 60484
+scale.partial_fills/init_order_page_ledgered CU: 227760
+scale.partial_fills/place_order_single CU: 194224
+scale.partial_fills/place_order_worst_rank3 CU: 209250
+scale.partial_fills/freeze_epoch_2pages_30orders CU: 506611
+scale.partial_fills WITNESS declared_slices=24 orders=30
+scale.partial_fills/submit_candidate_ledgered CU: 41380
+scale.partial_fills/write_feed_fills_x24 CU: 7141
+scale.partial_fills/write_feed_fills_x6 CU: 6713
+scale.partial_fills/write_feed_slices_x16 CU: 8180
+scale.partial_fills/write_feed_slices_x8 CU: 7452
+scale.partial_fills/seal_candidate_0retained CU: 43744
+scale.partial_fills/init_clear_work_plus_4_grows_ledgered CU: 102619
+scale.partial_fills/advance_pass1_page0_16orders CU: 429121
+scale.partial_fills/advance_pass1_page1_14orders CU: 414367
+scale.partial_fills/advance_slices_x8 CU: 166577
+scale.partial_fills/advance_slices_x8 CU: 166577
+scale.partial_fills/advance_slices_x8 CU: 167062
+scale.partial_fills/advance_pass2_page0 CU: 302519
+scale.partial_fills/advance_pass2_page1 CU: 355518
+scale.partial_fills/complete_clear_work CU: 122199
+scale.partial_fills/finalize_selection_1retained CU: 25773
+scale.partial_fills/freeze_entitlement_ledgered CU: 108397
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice23 CU: 408647
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice22 CU: 405646
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice21 CU: 411646
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice20 CU: 410146
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice19 CU: 414646
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice18 CU: 408646
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice17 CU: 401385
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice16 CU: 399885
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice15 CU: 402885
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice14 CU: 416385
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice13 CU: 411885
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice12 CU: 405885
+scale.partial_fills/settle_page_direct_2pages_slice12 CU: 47806
+scale.partial_fills/settle_page_direct_2pages_slice17 CU: 59806
+scale.partial_fills/settle_page_direct_2pages_slice22 CU: 47806
+scale.partial_fills/settle_page_direct_2pages_slice15 CU: 53806
+scale.partial_fills/settle_page_direct_2pages_slice20 CU: 52306
+scale.partial_fills/settle_page_direct_2pages_slice13 CU: 52306
+scale.partial_fills/settle_page_direct_2pages_slice18 CU: 43662
+scale.partial_fills/settle_page_direct_2pages_slice23 CU: 43662
+scale.partial_fills/settle_page_direct_2pages_slice16 CU: 48162
+scale.partial_fills/settle_page_direct_2pages_slice21 CU: 55662
+scale.partial_fills/settle_page_direct_2pages_slice14 CU: 51162
+scale.partial_fills/settle_page_direct_2pages_slice19 CU: 49662
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice0 CU: 404375
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice1 CU: 404375
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice2 CU: 404375
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice3 CU: 402875
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice4 CU: 407375
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice5 CU: 405875
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice6 CU: 402875
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice7 CU: 402875
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice8 CU: 402875
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice9 CU: 405875
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice10 CU: 402875
+scale.partial_fills/entitle_slice_single_2pages_ledgered_slice11 CU: 405875
+scale.partial_fills/settle_page_direct_2pages_slice0 CU: 45495
+scale.partial_fills/settle_page_direct_2pages_slice5 CU: 61995
+scale.partial_fills/settle_page_direct_2pages_slice10 CU: 40995
+scale.partial_fills/settle_page_direct_2pages_slice3 CU: 45495
+scale.partial_fills/settle_page_direct_2pages_slice8 CU: 43995
+scale.partial_fills/settle_page_direct_2pages_slice1 CU: 49995
+scale.partial_fills/settle_page_direct_2pages_slice6 CU: 43995
+scale.partial_fills/settle_page_direct_2pages_slice11 CU: 45495
+scale.partial_fills/settle_page_direct_2pages_slice4 CU: 45495
+scale.partial_fills/settle_page_direct_2pages_slice9 CU: 45495
+scale.partial_fills/settle_page_direct_2pages_slice2 CU: 40995
+scale.partial_fills/settle_page_direct_2pages_slice7 CU: 49995
+scale.partial_fills WORST_FAMILY entitle_slice_single_cu=416385 settle_page_direct_cu=61995
+scale.partial_fills ROUTES: 70 observations
+scale.partial_fills WORST route=scale.partial_fills/freeze_epoch_2pages_30orders cu=506611 ceiling=1400000 headroom=893389
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.06s
+

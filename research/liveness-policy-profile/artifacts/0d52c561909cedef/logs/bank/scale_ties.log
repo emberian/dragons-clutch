@@ -1,0 +1,124 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.33s
+     Running tests/scale_ties.rs (target/debug/deps/scale_ties-149aff05dd474288)
+
+running 2 tests
+test a_better_claim_displaces_the_largest_identity_among_component_equals ... scale.ties/init_epoch_ledgered CU: 58984
+scale.ties/init_order_page_ledgered CU: 230760
+scale.ties/place_order_single CU: 201724
+scale.ties/place_order_worst_rank1 CU: 201724
+scale.ties/freeze_epoch_1pages_4orders CU: 241407
+scale.ties/submit_candidate_ledgered CU: 45880
+scale.ties/write_feed_fills_x4 CU: 8165
+scale.ties/write_feed_slices_x2 CU: 8406
+scale.ties/seal_candidate_0retained CU: 43430
+scale.ties/submit_candidate_ledgered CU: 42870
+scale.ties/write_feed_fills_x4 CU: 9665
+scale.ties/write_feed_slices_x2 CU: 9906
+scale.ties/seal_candidate_1retained CU: 49860
+scale.ties/submit_candidate_ledgered CU: 41377
+scale.ties/write_feed_fills_x4 CU: 8165
+scale.ties/write_feed_slices_x2 CU: 8406
+scale.ties/seal_candidate_2retained CU: 51798
+scale.ties/submit_candidate_ledgered CU: 47383
+scale.ties/write_feed_fills_x4 CU: 11165
+scale.ties/write_feed_slices_x2 CU: 11406
+scale.ties/seal_candidate_3retained CU: 68738
+scale.ties/seal_candidate_displacing_3retained_tied CU: 68738
+scale.ties/submit_candidate_ledgered CU: 47383
+scale.ties/write_feed_fills_x4 CU: 8165
+scale.ties/write_feed_slices_x2 CU: 8406
+scale.ties ROUTES: 25 observations
+scale.ties WORST route=scale.ties/freeze_epoch_1pages_4orders cu=241407 ceiling=1400000 headroom=1158593
+ok
+test a_sixteen_deep_tied_field_holds_the_registry_and_the_digest_decides ... scale.ties/init_epoch_ledgered CU: 52984
+scale.ties/init_order_page_ledgered CU: 224760
+scale.ties/place_order_single CU: 200224
+scale.ties/place_order_worst_rank1 CU: 200224
+scale.ties/freeze_epoch_1pages_4orders CU: 235407
+scale.ties/submit_candidate_ledgered CU: 44380
+scale.ties/write_feed_fills_x4 CU: 9665
+scale.ties/write_feed_slices_x2 CU: 9906
+scale.ties/seal_candidate_0retained CU: 43430
+scale.ties/submit_candidate_ledgered CU: 39870
+scale.ties/write_feed_fills_x4 CU: 6665
+scale.ties/write_feed_slices_x2 CU: 6906
+scale.ties/seal_candidate_1retained CU: 46860
+scale.ties/submit_candidate_ledgered CU: 44377
+scale.ties/write_feed_fills_x4 CU: 8165
+scale.ties/write_feed_slices_x2 CU: 8406
+scale.ties/seal_candidate_2retained CU: 51798
+scale.ties/submit_candidate_ledgered CU: 41383
+scale.ties/write_feed_fills_x4 CU: 6665
+scale.ties/write_feed_slices_x2 CU: 6906
+scale.ties/seal_candidate_refused_tied_field_position3 CU: 26988
+scale.ties/submit_candidate_ledgered CU: 44383
+scale.ties/write_feed_fills_x4 CU: 6665
+scale.ties/write_feed_slices_x2 CU: 6906
+scale.ties/seal_candidate_refused_tied_field_position4 CU: 26988
+scale.ties/submit_candidate_ledgered CU: 39883
+scale.ties/write_feed_fills_x4 CU: 6665
+scale.ties/write_feed_slices_x2 CU: 6906
+scale.ties/seal_candidate_refused_tied_field_position5 CU: 26988
+scale.ties/submit_candidate_ledgered CU: 44383
+scale.ties/write_feed_fills_x4 CU: 9665
+scale.ties/write_feed_slices_x2 CU: 9906
+scale.ties/seal_candidate_refused_tied_field_position6 CU: 29988
+scale.ties/submit_candidate_ledgered CU: 47383
+scale.ties/write_feed_fills_x4 CU: 8165
+scale.ties/write_feed_slices_x2 CU: 8406
+scale.ties/seal_candidate_refused_tied_field_position7 CU: 28488
+scale.ties/submit_candidate_ledgered CU: 48883
+scale.ties/write_feed_fills_x4 CU: 6665
+scale.ties/write_feed_slices_x2 CU: 6906
+scale.ties/seal_candidate_refused_tied_field_position8 CU: 26988
+scale.ties/submit_candidate_ledgered CU: 42883
+scale.ties/write_feed_fills_x4 CU: 8165
+scale.ties/write_feed_slices_x2 CU: 8406
+scale.ties/seal_candidate_refused_tied_field_position9 CU: 28488
+scale.ties/submit_candidate_ledgered CU: 42883
+scale.ties/write_feed_fills_x4 CU: 9665
+scale.ties/write_feed_slices_x2 CU: 9906
+scale.ties/seal_candidate_refused_tied_field_position10 CU: 29988
+scale.ties/submit_candidate_ledgered CU: 39883
+scale.ties/write_feed_fills_x4 CU: 8165
+scale.ties/write_feed_slices_x2 CU: 8406
+scale.ties/seal_candidate_refused_tied_field_position11 CU: 28488
+scale.ties/submit_candidate_ledgered CU: 45883
+scale.ties/write_feed_fills_x4 CU: 6665
+scale.ties/write_feed_slices_x2 CU: 6906
+scale.ties/seal_candidate_refused_tied_field_position12 CU: 26988
+scale.ties/submit_candidate_ledgered CU: 41383
+scale.ties/write_feed_fills_x4 CU: 6665
+scale.ties/write_feed_slices_x2 CU: 6906
+scale.ties/seal_candidate_refused_tied_field_position13 CU: 26988
+scale.ties/submit_candidate_ledgered CU: 45883
+scale.ties/write_feed_fills_x4 CU: 12665
+scale.ties/write_feed_slices_x2 CU: 12906
+scale.ties/seal_candidate_refused_tied_field_position14 CU: 32988
+scale.ties/submit_candidate_ledgered CU: 38383
+scale.ties/write_feed_fills_x4 CU: 6665
+scale.ties/write_feed_slices_x2 CU: 6906
+scale.ties/seal_candidate_refused_tied_field_position15 CU: 26988
+scale.ties/cand0.init_clear_work_plus_4_grows_ledgered CU: 87619
+scale.ties/cand0.advance_pass1_page0_4orders CU: 325959
+scale.ties/cand0.advance_slices_x2 CU: 162483
+scale.ties/cand0.advance_pass2_page0 CU: 288255
+scale.ties/cand0.complete_clear_work CU: 123243
+scale.ties/cand1.init_clear_work_plus_4_grows_ledgered CU: 80119
+scale.ties/cand1.advance_pass1_page0_4orders CU: 321459
+scale.ties/cand1.advance_slices_x2 CU: 157983
+scale.ties/cand1.advance_pass2_page0 CU: 283755
+scale.ties/cand1.complete_clear_work CU: 115743
+scale.ties/cand2.init_clear_work_plus_4_grows_ledgered CU: 123619
+scale.ties/cand2.advance_pass1_page0_4orders CU: 330459
+scale.ties/cand2.advance_slices_x2 CU: 166983
+scale.ties/cand2.advance_pass2_page0 CU: 292755
+scale.ties/cand2.complete_clear_work CU: 126243
+scale.ties/finalize_selection_3retained_3verified_digest_tie CU: 53470
+scale.ties ROUTES: 85 observations
+scale.ties WORST route=scale.ties/cand2.advance_pass1_page0_4orders cu=330459 ceiling=1400000 headroom=1069541
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.26s
+

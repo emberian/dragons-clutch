@@ -1,0 +1,42 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.29s
+     Running tests/native_resolution.rs (target/debug/deps/native_resolution-4cec27392dd5dfdd)
+
+running 15 tests
+test a_late_external_supply_overflow_rolls_back_native_resolution ... ok
+test a_late_native_bearer_transfer_failure_rolls_back_the_prior_burn ... ok
+test degrees_one_through_three_persist_retry_and_redeem_the_native_vector ... native d1: resolve 183102 CU, retry 169835 CU, redeem 153045 CU
+native d2: resolve 191475 CU, retry 178208 CU, redeem 155088 CU
+native d3: resolve 198369 CU, retry 185102 CU, redeem 153478 CU
+ok
+test native_account_mutability_alias_and_full_mint_vector_are_fail_closed ... ok
+test native_bearer_exit_rejects_hostile_roles_modes_windows_and_mint_vectors ... ok
+test native_bearer_exit_uses_minimal_exact_lots_and_sub_lots_roll_back ... native d1 external exact lot 2: 137264 CU
+native d2 external exact lot 4: 139064 CU
+native d3 external exact lot 8: 136769 CU
+ok
+test non_point_evidence_and_conflicting_retry_refuse_without_writes ... ok
+test occupation_bearer_exit_uses_live_v4_and_exact_lots ... occupation-v4 d1 external exact lot 2: 135902 CU
+occupation-v4 d2 external exact lot 4: 137702 CU
+occupation-v4 d3 external exact lot 8: 139907 CU
+ok
+test occupation_degrees_one_through_three_persist_retry_and_redeem_v4 ... occupation-v4 d1: accounts=14 resolution_bytes=383 rent=3556560 resolve=173404 CU retry=160146 CU internal=151759 CU
+occupation-v4 d2: accounts=14 resolution_bytes=383 rent=3556560 resolve=184574 CU retry=171316 CU internal=153802 CU
+occupation-v4 d3: accounts=14 resolution_bytes=383 rent=3556560 resolve=198505 CU retry=185247 CU internal=156692 CU
+ok
+test occupation_late_resolve_and_bearer_failures_roll_back ... ok
+test occupation_midpoints_gaps_substitution_modes_and_conflicts_refuse_atomically ... ok
+test occupation_span_one_two_initial_resolve_cu_profile ... occupation-v4 span=1 d1: initial=180390 CU
+occupation-v4 span=1 d2: initial=173708 CU
+occupation-v4 span=1 d3: initial=177889 CU
+occupation-v4 span=2 d1: initial=173897 CU
+occupation-v4 span=2 d2: initial=189641 CU
+occupation-v4 span=2 d3: initial=191197 CU
+ok
+test occupation_statistic_seven_routes_only_its_named_finalizer ... occupation-v4 statistic-7 named finalizer: 183051 CU
+ok
+test recorded_internal_redemption_rejects_retired_evidence_aliases_and_late_replay_atomically ... ok
+test recorded_internal_redemption_rejects_wrong_mode_terms_and_window_without_writes ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.44s
+

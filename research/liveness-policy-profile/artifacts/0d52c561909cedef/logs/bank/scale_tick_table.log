@@ -1,0 +1,50 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.37s
+     Running tests/scale_tick_table.rs (target/debug/deps/scale_tick_table-b526e372a459487f)
+
+running 2 tests
+test the_complete_tick_table_places_freezes_walks_and_settles ... scale.tick_table/init_epoch_ledgered CU: 60484
+scale.tick_table/init_order_page_ledgered CU: 236760
+scale.tick_table/place_order_single CU: 209302
+scale.tick_table/place_order_worst_rank3 CU: 210726
+scale.tick_table/freeze_epoch_1pages_4orders CU: 250407
+scale.tick_table/place_order_buy_slot0_tick63_of64 CU: 209302
+scale.tick_table/place_order_sell_slot3_tick0_of64 CU: 207248
+scale.tick_table/submit_candidate_ledgered CU: 47380
+scale.tick_table/write_feed_fills_x4 CU: 8165
+scale.tick_table/write_feed_slices_x2 CU: 8406
+scale.tick_table/seal_candidate_0retained CU: 44930
+scale.tick_table/init_clear_work_plus_4_grows_ledgered CU: 83119
+scale.tick_table/advance_pass1_page0_4orders CU: 340959
+scale.tick_table/advance_slices_x2 CU: 160983
+scale.tick_table/advance_pass2_page0 CU: 298741
+scale.tick_table/complete_clear_work CU: 123243
+scale.tick_table/finalize_selection_1retained CU: 31630
+scale.tick_table/freeze_entitlement_ledgered CU: 109898
+scale.tick_table/entitle_slice_single_ledgered_slice0 CU: 217235
+scale.tick_table/settle_page_direct_slice0 CU: 57479
+scale.tick_table/entitle_slice_single_ledgered_slice1 CU: 215752
+scale.tick_table/settle_page_direct_slice1 CU: 56012
+scale.tick_table ROUTES: 22 observations
+scale.tick_table WORST route=scale.tick_table/advance_pass1_page0_4orders cu=340959 ceiling=1400000 headroom=1059041
+ok
+test the_tick_table_scan_cost_is_measured_against_a_held_placement ... scale.tick_table/init_epoch_ledgered_11ticks_epoch7 CU: 52878
+scale.tick_table PDA_ATTEMPTS init_epoch epoch7 extra_attempts=1 cu=52878
+scale.tick_table/place_order_single_slot0_tick10_of11 CU: 196666
+scale.tick_table PDA_ATTEMPTS place_order place_order_single_slot0_tick10_of11 extra_attempts=7 cu=196666
+scale.tick_table/init_epoch_ledgered_64ticks_epoch7 CU: 60484
+scale.tick_table PDA_ATTEMPTS init_epoch epoch7 extra_attempts=0 cu=60484
+scale.tick_table/place_order_single_slot0_tick10_of64 CU: 190984
+scale.tick_table PDA_ATTEMPTS place_order place_order_single_slot0_tick10_of64 extra_attempts=1 cu=190984
+scale.tick_table/init_epoch_ledgered_64ticks_epoch8 CU: 66484
+scale.tick_table PDA_ATTEMPTS init_epoch epoch8 extra_attempts=5 cu=66484
+scale.tick_table/place_order_single_slot0_tick63_of64 CU: 189802
+scale.tick_table PDA_ATTEMPTS place_order place_order_single_slot0_tick63_of64 extra_attempts=0 cu=189802
+scale.tick_table WIDER_TABLE_AT_EQUAL_DEPTH tick10_of64_minus_tick10_of11_cu: -5682
+scale.tick_table SCAN_DEPTH tick63_of64_minus_tick10_of64_cu: -1182
+scale.tick_table ROUTES: 6 observations
+scale.tick_table WORST route=scale.tick_table/place_order_single_slot0_tick10_of11 cu=196666 ceiling=1400000 headroom=1203334
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+

@@ -1,0 +1,5 @@
+entrypoint=0x11B6C0
+text_bytes=1960936
+load_segments=3
+undefined_dynamic_symbols=abort,sol_invoke_signed_rust,sol_log_,sol_memcmp_,sol_memcpy_,sol_memmove_,sol_memset_,sol_panic_,sol_sha256,sol_try_find_program_address
+elf_shape=PASS

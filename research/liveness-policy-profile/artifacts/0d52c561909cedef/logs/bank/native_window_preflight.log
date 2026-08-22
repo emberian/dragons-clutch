@@ -1,0 +1,12 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.65s
+     Running tests/native_window_preflight.rs (target/debug/deps/native_window_preflight-3f75eb5242eb9715)
+
+running 4 tests
+test canonical_archive_drives_the_exact_v4_candidate ... ok
+test canonical_archive_selects_only_the_terms_named_finalizer ... ok
+test canonical_positive_width_archive_is_not_midpoint_selected ... ok
+test receipt_cannot_be_replayed_over_mutated_archive_bytes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

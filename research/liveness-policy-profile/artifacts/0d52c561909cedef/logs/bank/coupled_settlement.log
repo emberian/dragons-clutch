@@ -1,0 +1,11 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.30s
+     Running tests/coupled_settlement.rs (target/debug/deps/coupled_settlement-b6d37ba3f67d3530)
+
+running 2 tests
+test direct_full_slice_settles_once_and_substitution_rolls_back ... SettlePage direct full-slice CU: 41207
+ok
+test stale_candidate_and_cross_outcome_refuse_with_full_rollback ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+

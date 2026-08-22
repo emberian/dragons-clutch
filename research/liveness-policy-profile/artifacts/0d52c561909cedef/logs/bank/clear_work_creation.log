@@ -1,0 +1,19 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.29s
+     Running tests/clear_work_creation.rs (target/debug/deps/clear_work_creation-f5cf377f8786d85f)
+
+running 5 tests
+test a_prefunded_pda_is_tolerated_and_never_discounts_the_principal ... ok
+test duplicate_wrong_pda_wrong_bump_and_finished_grows_refuse ... ok
+test five_instructions_in_one_transaction_create_the_exact_checkpoint ... ClearWork five-in-one-transaction total CU: 85485
+ok
+test five_transactions_create_the_checkpoint_with_exact_rent_at_every_stage ... InitClearWork CU: 9391
+GrowClearWork stage 1 CU: 2799
+GrowClearWork stage 2 CU: 2799
+GrowClearWork stage 3 CU: 2799
+GrowClearWork stage 4 CU: 52697
+ok
+test partial_creation_resumes_and_a_mid_sequence_failure_rolls_back_cleanly ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+

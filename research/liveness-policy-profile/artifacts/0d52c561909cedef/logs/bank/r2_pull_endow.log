@@ -1,0 +1,12 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.26s
+     Running tests/r2_pull_endow.rs (target/debug/deps/r2_pull_endow-d6643a7f9a5510f6)
+
+running 4 tests
+test an_unregistered_pull_release_still_refuses_and_writes_nothing ... ok
+test the_default_elf_takes_custody_against_a_registered_pull_release ... ok
+test the_two_generations_derive_different_feeds_terms_and_spec_addresses ... ok
+test the_v1_registry_is_still_empty_on_the_same_harness ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+

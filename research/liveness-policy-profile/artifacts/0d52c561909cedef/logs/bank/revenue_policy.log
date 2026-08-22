@@ -1,0 +1,9 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.32s
+     Running tests/revenue_policy.rs (target/debug/deps/revenue_policy-87c5613189090835)
+
+running 1 test
+test the_revenue_boundary_pins_the_record_and_refuses_fee_bearing_admission ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+

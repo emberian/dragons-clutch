@@ -1,0 +1,42 @@
+schema	dragons-clutch/liveness-account-inventory/v2
+lamports_per_byte	6960
+account_storage_overhead	128
+artifact.policy.final	266	2742240
+artifact.policy.stage	402	3688800
+artifact.grid.final	589	4990320
+artifact.grid.stage	725	5936880
+artifact.terms.final	1656	12416640
+artifact.terms.stage	1792	13363200
+artifact.maximum.stage	1792	13363200
+artifact.batch_policy.final	64	1336320
+artifact.batch_policy.stage	200	2282880
+realm	70	1378080
+profile	100	1586880
+market	726	5943840
+hoard	108	1642560
+position	220	2422080
+feed	124	1753920
+kernel	1255	9625680
+replay	84	1475520
+supply_ledger	333	3208560
+resolution.v2	165	2039280
+resolution.v3	319	3111120
+resolution.v4	383	3556560
+token.outcome_mint	82	1461600
+token.hoard_immutable_owner	170	2074080
+order.page	4012	28814400
+order.reservation.v1	618	5192160
+epoch.window	231	2498640
+legacy.epoch.v2	329	3180720
+legacy.candidate	337	3236400
+legacy.candidate_feed	6266	44502240
+legacy.clear_work	50054	349266720
+direct.epoch.v3	345	3292080
+direct.candidate.v2	440	3953280
+direct.window.v1	456	4064640
+direct.receipt	217	2401200
+direct.final_pot	262	2714400
+source.spec	292	2923200
+source.archive	2560	18708480
+resolution.work.v1	1296	9911040
+resolution.reserve.v1	0	890880

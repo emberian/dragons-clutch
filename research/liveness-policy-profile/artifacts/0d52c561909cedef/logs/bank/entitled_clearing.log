@@ -1,0 +1,38 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.60s
+     Running tests/entitled_clearing.rs (target/debug/deps/entitled_clearing-fe2533658b41d2ce)
+
+running 8 tests
+test an_inexact_book_funds_the_pot_and_drains_it_to_empty ... FreezeEntitlement (inexact) CU: 92560
+EntitleSlice (inexact) CU: 192833
+SettlePage (potted) CU: 46386
+ok
+test lapsed_epoch_reservations_stand_under_the_expiry_blocker ... ok
+test mixed_portfolio_and_single_book_clears_leg_by_leg ... EntitleSlice (mixed leg 0) CU: 191238
+SettlePage (mixed leg 0) CU: 47822
+EntitleSlice (mixed leg 1) CU: 188478
+SettlePage (mixed leg 1) CU: 50986
+ok
+test partial_fill_candidate_clears_slice_by_slice_and_returns_every_remainder ... EntitleSlice (fragmented buy) CU: 194906
+SettlePage (partial slice) CU: 46662
+ok
+test portfolio_order_actually_clears_with_conservation ... FreezeEntitlement CU: 98579
+EntitleSlice (single) CU: 207315
+EntitleSlice (portfolio pair, 2 receipts) CU: 245842
+SettlePage (entitled direct slice) CU: 51479
+SettlePage (entitled portfolio full pair) CU: 226212
+ok
+test slices_that_do_not_convert_settle_through_the_cumulative_conversion ... EntitleSlice (strand 0) CU: 201659
+SettlePage (strand 0) CU: 47807
+EntitleSlice (strand 1) CU: 197398
+SettlePage (strand 1) CU: 48140
+EntitleSlice (strand 2) CU: 195898
+SettlePage (strand 2) CU: 51139
+EntitleSlice (strand 3) CU: 193138
+SettlePage (strand 3) CU: 52988
+ok
+test two_filled_orders_for_one_owner_refuse_the_inexact_conversion ... ok
+test virtual_split_candidate_freezes_and_opens_the_pot ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.00s
+

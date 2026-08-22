@@ -1,0 +1,21 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.29s
+     Running tests/token_leg.rs (target/debug/deps/token_leg-bbb3153fba24da00)
+
+running 6 tests
+test a_direct_burn_is_synchronized_and_the_market_stays_live ... SVM direct burn: synchronized donation and continued at 56885 CU
+ok
+test an_extension_on_the_outcome_mint_is_refused_at_instruction_time ... SVM extension refusal: TransferFeeConfig refused with Custom(26) (0x001a)
+SVM extension refusal: MintCloseAuthority refused with Custom(26) (0x001a)
+ok
+test e1_dematerialize_burns_exactly_and_the_aggregate_reconciles ... SVM e1_dematerialize: materialize=56885 CU  dematerialize=56868 CU
+ok
+test e1_materialize_mints_exactly_q_and_the_aggregate_reconciles ... SVM e1_materialize: quantity=7 compute_units=56885
+ok
+test the_derived_hoard_authority_cannot_be_signed_for_by_a_wallet ... SVM hoard outflow: wallet-signed withdrawal from the derived hoard authority refused with Custom(4)
+ok
+test the_incomplete_mint_vector_is_refused_and_moves_nothing ... SVM mandatory leg: the ten-account materialize refused with Custom(1) (0x0001); the thirteen-account one accepted at 56885 CU
+ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.94s
+

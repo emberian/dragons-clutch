@@ -1,0 +1,14 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.33s
+     Running tests/vpot_split.rs (target/debug/deps/vpot_split-0453806d72519d6c)
+
+running 6 tests
+test a_mint_past_the_immutable_collateral_cap_refuses ... ok
+test a_mixed_epoch_settles_ordinary_and_virtual_slices_through_one_pot ... ok
+test a_tampered_churn_coordinate_never_reaches_the_mint ... ok
+test a_virtual_merge_candidate_now_freezes_and_opens_its_pot ... ok
+test a_virtual_split_candidate_clears_and_the_pot_ends_exactly_empty ... ok
+test the_virtual_seam_refuses_every_unbacked_route ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.32s
+

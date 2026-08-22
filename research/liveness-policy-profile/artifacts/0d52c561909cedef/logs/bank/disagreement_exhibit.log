@@ -1,0 +1,29 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.33s
+     Running tests/disagreement_exhibit.rs (target/debug/deps/disagreement_exhibit-a6ee84b9c7bb5a24)
+
+running 2 tests
+test degree1_terms_admission_through_the_general_plane ... T0: degree-1 terms admitted; 13-order book frozen on the general plane
+ok
+test disagreement_book_clears_between_the_beliefs_with_conservation ... InitClearWork + 4 grows CU: 70635
+AdvanceClearWork (pass 1, 13 orders) CU: 414566
+AdvanceClearSlices (7 slices) CU: 163327
+AdvanceClearWork (pass 2) CU: 301278
+CompleteClearWork CU: 118734
+FreezeEntitlement CU: 98575
+EntitleSlice (single 0) CU: 225827
+EntitleSlice (single 1) CU: 224327
+EntitleSlice (single 2) CU: 225827
+EntitleSlice (single 3) CU: 227327
+EntitleSlice (single 4) CU: 227343
+EntitleSlice (portfolio pair, 2 receipts) CU: 270118
+SettlePage (entitled single, slice 0) CU: 46524
+SettlePage (entitled single, slice 1) CU: 45023
+SettlePage (entitled single, slice 2) CU: 46524
+SettlePage (entitled single, slice 3) CU: 48022
+SettlePage (entitled single, slice 4) CU: 48056
+SettlePage (entitled portfolio full pair) CU: 252563
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.45s
+

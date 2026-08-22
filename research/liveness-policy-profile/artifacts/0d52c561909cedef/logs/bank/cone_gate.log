@@ -1,0 +1,22 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.39s
+     Running tests/cone_gate.rs (target/debug/deps/cone_gate-9a5e5fdb1e61a2bb)
+
+running 4 tests
+test a_downgraded_epoch_degree_byte_ungates_the_same_out_of_cone_price ... downgraded step 0 CU: 326386
+downgraded step 1 CU: 160987
+downgraded step 2 CU: 285004
+downgraded CompleteClearWork CU: 118767
+ok
+test an_out_of_range_epoch_degree_byte_refuses_at_the_epoch_codec ... ok
+test init_epoch_copies_the_terms_basis_degree_onto_the_epoch ... ok
+test the_degree_two_walk_refuses_outside_the_cone_and_clears_inside_it ... out-of-cone step 0 CU: 314379
+out-of-cone CompleteClearWork CU: 114702
+in-cone step 0 CU: 314652
+in-cone step 1 CU: 160988
+in-cone step 2 CU: 284567
+in-cone CompleteClearWork CU: 118768
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.61s
+

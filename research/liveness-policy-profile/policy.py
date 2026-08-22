@@ -114,10 +114,44 @@ CURRENT_EVIDENCE_SUFFIXES = REQUIRED_EVIDENCE_SUFFIXES | {
     "logs/bank/direct_selection_v3.log",
     "logs/bank/direct_selection_v3_run2.log",
     "logs/bank/direct_selection_v3_run3.log",
+    "logs/bank/direct_selection_v3_run4.log",
     "logs/bank/terminal_closure.log",
     "logs/bank/disagreement_exhibit.log",
     "logs/bank/revenue_policy.log",
     "logs/sbf-build-crosspath.log",
+    # The six scale campaigns.  These are the ``scale_clearing`` family's own
+    # logs: every one of its 64 quoted (route, shape) rows is read out of them.
+    "logs/bank/scale_max_book.log",
+    "logs/bank/scale_multi_epoch.log",
+    "logs/bank/scale_partial_fills.log",
+    "logs/bank/scale_pot.log",
+    "logs/bank/scale_tick_table.log",
+    "logs/bank/scale_ties.log",
+    # Retained per-run audit tables.
+    "audit/account-probe-c55f471.txt",
+    "audit/first-party-frame-audit.txt",
+    # RECORDED, NOT QUOTED.  These suites ran green against this exact ELF in
+    # the same locked pass as everything above, and their logs are sealed so
+    # the run is reproducible from the tree — but no measurement family reads
+    # them and NO CU ROW, QUOTE, OR REWARD IS DERIVED FROM ANY OF THEM.  A log
+    # in the evidence set is a record that the suite ran, not a promotion.
+    "logs/bank/SUMMARY.txt",
+    "logs/bank/clear_work_creation.log",
+    "logs/bank/cone_gate.log",
+    "logs/bank/coupled_authority.log",
+    "logs/bank/coupled_settlement.log",
+    "logs/bank/degree_terms_admission.log",
+    "logs/bank/joined_lifecycle.log",
+    "logs/bank/native_full_lifecycle.log",
+    "logs/bank/native_window_preflight.log",
+    "logs/bank/pot_position_close.log",
+    "logs/bank/r2_pull_endow.log",
+    "logs/bank/r2_pull_identity.log",
+    "logs/bank/r2_v2_wire.log",
+    "logs/bank/source_ingest.log",
+    "logs/bank/token_leg.log",
+    "logs/bank/vpot_merge.log",
+    "logs/bank/vpot_split.log",
 }
 # The Direct V3 account families classified after the sealed v2 probe.  The
 # probe source archived at ``runtime_ref`` enumerates none of them, so these
@@ -257,6 +291,15 @@ WALK_PLANE_W1_FAMILIES = (
     # unchanged, because each row already bounds its own measured composition
     # and no other.
     "disagreement_exhibit",
+    # The six scale campaigns, joining at the 0d52c561… seal for the same
+    # reason the exhibit joined at df0aece1…: they drive the SAME general-plane
+    # routes against the SAME ELF under the SAME frozen policy, at shapes the
+    # sealed books never reached, and several of those observations are far
+    # hotter than the quoted rows.  A family outside this tuple escapes the
+    # "nothing measured goes unpublished" rule entirely, which is exactly the
+    # loophole a 759,892-CU EntitleSlice would have slipped through while the
+    # profile published 207,315 for the same instruction.
+    "scale_clearing",
 )
 WALK_PLANE_FAMILIES = (*WALK_PLANE_W1_FAMILIES, "terminal_closure")
 # How a route's measured maximum relates to the shapes the suite drove.  The
@@ -415,6 +458,61 @@ WALK_PLANE_W1_ROUTES: tuple[tuple[str, str, tuple[Any, ...], str], ...] = (
         ("settle_page_entitled_portfolio_full_pair_cu",),
         W1_SHAPE_LABELLED,
     ),
+    # The partial-fill wave's routes, measured by the same suite on the same
+    # one-page book.  Each is its own shape — an inexact book that funds the
+    # rounding pot, a mixed portfolio/single book cleared leg by leg, a
+    # fragmented buy, and the four non-converting strands — so each gets its own
+    # quote rather than widening the five rows above.  They are all UNLEDGERED,
+    # like the rest of this family: see the scale_clearing rows for the ledgered
+    # shape a keeper can actually close.
+    (
+        "entitle_slice_inexact_pot_funding",
+        "entitled_clearing",
+        ("entitle_slice_inexact_cu",),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "settle_page_potted",
+        "entitled_clearing",
+        ("settle_page_potted_cu",),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "entitle_slice_mixed_leg",
+        "entitled_clearing",
+        ("entitle_slice_mixed_leg_cu",),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "settle_page_mixed_leg",
+        "entitled_clearing",
+        ("settle_page_mixed_leg_cu",),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "entitle_slice_fragmented_buy",
+        "entitled_clearing",
+        ("entitle_slice_fragmented_buy_cu",),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "settle_page_partial_slice",
+        "entitled_clearing",
+        ("settle_page_partial_slice_cu",),
+        W1_SHAPE_LABELLED,
+    ),
+    (
+        "entitle_slice_strand",
+        "entitled_clearing",
+        ("entitle_slice_strand_cu",),
+        W1_BATCH_VARIABLE,
+    ),
+    (
+        "settle_page_strand",
+        "entitled_clearing",
+        ("settle_page_strand_cu",),
+        W1_BATCH_VARIABLE,
+    ),
     # The disagreement exhibit's third book composition.  Each route is its own
     # quote over its own observations; the exhibit measures several of these
     # routes HOTTER than the two-suite books do, which is precisely why it is
@@ -508,6 +606,77 @@ WALK_PLANE_W1_ROW_TABLES = {
     "freeze_epoch_rows": "general_epoch",
     "finalize_selection_rows": "candidate_selection",
 }
+# ---------------------------------------------------------------------------
+# The scale campaigns, and the coordinate correction they forced.
+#
+# Six campaigns drove the general plane at shapes the two sealed books never
+# reached — the maximum 64-order book across four dense pages, thirty partial
+# fills across two, a twelve-completion rounding pot, three concurrent epochs,
+# the complete 64-tick table, and a sixteen-deep tied candidate field.  They
+# print 399 labelled CU rows.
+#
+# **What they found is that a page count is not a nuisance parameter.**  The
+# sealed ``entitle_slice_single`` row is 207,315 CU and its suite's epoch is
+# ONE page.  The same instruction on a two-page book measures 416,385 and on
+# the four-page maximum 759,892 — 3.7x its own sealed row.  ``EntitleSlice`` is
+# the page-set-wide route: it must be presented with the whole bound page set
+# and re-derives the live orders by walking every page in it.  A flat quote for
+# that route is not a slightly stale number, it is a quote for a different
+# transaction, and it understates the real one by a factor.
+#
+# So the shape coordinate goes INTO THE ROUTE KEY.  The campaigns' rows collapse
+# into (route, shape) groups; each group is quoted as its own W1 route named
+# ``<route>_<coordinate>`` with variability SHAPE_LABELLED_BY_THE_ROUTE_KEY, and
+# the group's maximum bounds every observation taken at that shape and no other.
+# There is deliberately no combined ``entitle_slice`` row: the routes that
+# differ by a page count are different routes, and the profile now says so in
+# the key rather than in a footnote.
+#
+# The routes are DERIVED from the tables rather than hand-listed, which the four
+# original families are not.  That is the point: their keys are prose and few,
+# these are mechanical coordinates and many, and generating them means a shape
+# the campaigns start driving becomes a published quote automatically instead of
+# waiting for someone to notice.  A table not declared here still refuses.
+#
+# Every scale row is LEDGERED.  Each created account carries its optional
+# ``GeneralFundingLedgerV1`` sibling, because an account created without one
+# records no payer and no close route will ever guess it — so the ledgered shape
+# is the only one a keeper can actually drive to a close.  The unledgered rows
+# the four original families carry are kept and labelled as the non-closeable
+# variant rather than dropped, because they are what the older suites measured.
+SCALE_CLEARING_FAMILY = "scale_clearing"
+# table -> the ordered coordinate names that form its shape key.
+SCALE_CLEARING_ROW_TABLES: dict[str, tuple[str, ...]] = {
+    "init_epoch_rows": ("ticks",),
+    "init_order_page_rows": ("pages",),
+    "place_order_single_rows": ("ticks",),
+    "place_order_worst_rank_rows": ("rank",),
+    "place_order_tick_probe_rows": ("ticks",),
+    "freeze_epoch_rows": ("pages", "orders"),
+    "submit_candidate_rows": ("pages",),
+    "write_feed_fills_rows": ("chunk",),
+    "write_feed_slices_rows": ("chunk",),
+    "seal_candidate_rows": ("retained",),
+    "seal_candidate_displacing_rows": ("retained",),
+    "seal_candidate_refused_tied_rows": ("retained",),
+    "init_clear_work_plus_4_grows_rows": ("pages",),
+    "advance_pass1_rows": ("orders",),
+    "advance_pass2_rows": ("pages",),
+    "advance_slices_rows": ("batch",),
+    "complete_clear_work_rows": ("pages",),
+    "finalize_selection_rows": ("retained",),
+    "finalize_selection_digest_tie_rows": ("retained",),
+    "freeze_entitlement_rows": ("pages",),
+    "freeze_entitlement_inexact_rows": ("pages",),
+    "entitle_slice_single_rows": ("pages",),
+    "entitle_slice_single_inexact_rows": ("pages",),
+    "settle_page_direct_rows": ("pages",),
+    "settle_page_potted_rows": ("pages",),
+}
+SCALE_CLEARING_LEDGER_DECLARATION = (
+    "EVERY_CREATED_ACCOUNT_CARRIES_ITS_GENERAL_FUNDING_LEDGER_V1_SIBLING_"
+    "THE_ONLY_SHAPE_A_KEEPER_CAN_CLOSE"
+)
 # What full admission (W2) is still blocked on.  The three ids are the ones the
 # walk plane's own terminal rows carry; the gaps are section 3 of the promotion
 # report.  W1 publishes the intersection that is still live and refuses to keep
@@ -523,6 +692,62 @@ WALK_PLANE_W2_EVIDENCE_GAPS = (
     "SECOND_INDEPENDENT_BANK_PROFILE",
     "RENT_AND_CLOSE_ROWS_UNDER_A_RATIFIED_R4_CARVE_OUT",
     "FREEZE_TO_SETTLE_PATH_QUOTE_MODEL",
+)
+# The PDA-attempt quantum, carried in the model instead of averaged into a
+# shape it does not belong to.
+#
+# The program resolves addresses with ``find_program_address``, which counts a
+# bump down from 255 and pays one ``create_program_address`` per failed
+# attempt.  The scale campaigns measured that attempt at 1,500 CU: across two
+# runs whose random genesis keys give every plane different canonical bumps,
+# the placement rows agree only at that value, and the shape terms then
+# reproduce exactly (+318 CU for fifty-three extra ticks of scan, +3,318 CU for
+# the wider table at equal depth).  A route deriving *m* addresses therefore
+# carries ``sum(255 - bump_i) * 1500`` CU of pure fixture noise.
+#
+# The consequence for a quote is stated rather than hidden: a route sealed from
+# a SINGLE observation cannot separate its shape term from its bump term, so
+# its measured CU is only known to within an integer number of these quanta.
+# Every W1 row therefore publishes ``single_observation`` and, when true, the
+# quantum that bounds the unresolved term.  A row with several observations
+# does not get the caveat, because the spread itself shows the term — the
+# exhibit's five ``EntitleSlice`` sends differ by exactly 3,000 and 4,500 CU,
+# two and three quanta.
+#
+# This is a statement about the MEASUREMENT, not a widening of the quote: the
+# selected limit still derives from the observed maximum by the ordinary 5/4
+# rule.  It says what the maximum is known to, which is what a reader needs in
+# order to decide whether one send was enough.
+PDA_ATTEMPT_QUANTUM_CU = 1500
+# ---------------------------------------------------------------------------
+# The fold batch's real bound, and the plan it supersedes.
+#
+# Until this seal the fold-batch widths were chosen on COMPUTE alone: twelve is
+# the largest batch that stays under the 1,120,000-CU raw admission bound, so
+# twelve was the largest measured width and the sealed fewest-transaction plan
+# for a 32-record work item was ``[12, 12, 8]`` — three transactions.
+#
+# Compute is not what binds a fold batch on the wire.  The keeper's
+# ``fold-wire-probe`` measured the serialized message at every width and had a
+# real validator's ``sendTransaction`` agree with the serializer: **six** Fold
+# instructions frame at 1,216 bytes and seven do not, at 1,347 against the
+# 1,232-byte legacy packet budget.  A twelve-fold message is 2,002 bytes.
+#
+# So ``[12, 12, 8]`` prices three transactions that cannot be submitted, and
+# this seal supersedes it.  The measured rows for widths 8 and 12 are KEPT —
+# they are real bank measurements of real transactions, and the compute figure
+# is what it is — but they are excluded from the PLAN and labelled with the
+# reason.  The plan is now composed only of widths that fit a packet, which is
+# what ``cluster_packet_budget: UNMODELED_BANK_TRANSPORT_ONLY`` was standing in
+# for; that caveat is discharged by the probe and replaced by this bound.
+FOLD_PACKET_BUDGET_BYTES = 1232
+FOLD_MAX_SENDABLE_BATCH = 6
+FOLD_SENDABLE_BOUND_EVIDENCE = (
+    "KEEPER_FOLD_WIRE_PROBE_SERIALIZER_AND_VALIDATOR_TRANSPORT_AGREE_"
+    "SIX_FOLDS_1216_BYTES_SEVEN_1347_BYTES_TWELVE_2002_BYTES"
+)
+FOLD_UNSENDABLE_ROW_DISPOSITION = (
+    "MEASURED_ON_A_BANK_BUT_OVER_THE_1232_BYTE_PACKET_BUDGET_EXCLUDED_FROM_THE_PLAN"
 )
 # The Direct V3 close campaign (rung V1 of the clearing-plane promotion
 # report).  These four families are the ones ``DIRECT.V3_CLOSE_EVIDENCE_
@@ -980,14 +1205,107 @@ def require_revenue_boundary_evidence(
     }
 
 
-def walk_plane_row_label(field: str, row: dict[str, Any]) -> Any:
+def walk_plane_row_label(field: str, row: dict[str, Any], family: str = "") -> Any:
     """Return the shape label of one measured row-table entry."""
 
+    if family == SCALE_CLEARING_FAMILY:
+        coordinates = SCALE_CLEARING_ROW_TABLES.get(field)
+        if coordinates is None:
+            raise CheckError(f"undeclared scale-clearing row table: {field}")
+        missing = [name for name in coordinates if name not in row]
+        if missing:
+            raise CheckError(
+                f"scale-clearing row in {field} is missing its shape "
+                f"coordinate(s) {', '.join(missing)}; a row whose shape is not "
+                "stated cannot be quoted shape by shape"
+            )
+        return tuple(row[name] for name in coordinates)
     if field == "freeze_epoch_rows":
         return (row["pages"], row["orders"])
     if field == "finalize_selection_rows":
         return row["shape"]
     raise CheckError(f"unknown walk-plane row table: {field}")
+
+
+def scale_clearing_route_key(field: str, label: tuple[Any, ...]) -> str:
+    """The route key one scale (table, shape) group publishes.
+
+    The coordinate is IN the key.  ``entitle_slice_single_4pages`` and
+    ``entitle_slice_single_1page`` are different routes with different quotes,
+    which is the whole correction: they were one row at 207,315 CU while the
+    four-page send actually costs 759,892.
+    """
+
+    # Namespaced, because a coordinate key can otherwise collide with a
+    # hand-listed one measured on a different book: ``general_epoch`` already
+    # quotes ``freeze_epoch_1page_4orders`` from its own suite, and the
+    # campaigns measure that same shape on a 64-tick grid with three epochs
+    # live.  Two measurements of one shape on two books are two routes.
+    stem = "scale_" + field[: -len("_rows")]
+    coordinates = SCALE_CLEARING_ROW_TABLES[field]
+    parts = []
+    for name, value in zip(coordinates, label):
+        if name == "pages":
+            parts.append(f"{value}page" + ("s" if value != 1 else ""))
+        elif name == "orders":
+            parts.append(f"{value}orders")
+        elif name == "ticks":
+            parts.append(f"{value}ticks")
+        elif name == "retained":
+            parts.append(f"{value}retained")
+        elif name == "chunk":
+            parts.append(f"x{value}")
+        elif name == "batch":
+            parts.append(f"batch{value}")
+        elif name == "rank":
+            parts.append(f"rank{value}")
+        else:
+            raise CheckError(f"unknown scale shape coordinate: {name}")
+    return "_".join([stem, *parts])
+
+
+def scale_clearing_routes(
+    measurements: dict[str, Any]
+) -> tuple[tuple[str, str, tuple[Any, ...], str], ...]:
+    """Derive one W1 route per measured (table, shape) group.
+
+    Generated rather than hand-listed, so a shape the campaigns start driving
+    becomes a published quote instead of waiting to be noticed.  An undeclared
+    table, a duplicated shape, or a row with no shape coordinate refuses.
+    """
+
+    family = measurements[SCALE_CLEARING_FAMILY]
+    tables = sorted(
+        name
+        for name in family
+        if name.endswith("_rows") or name.endswith("_cu")
+    )
+    undeclared = [name for name in tables if name not in SCALE_CLEARING_ROW_TABLES]
+    if undeclared:
+        raise CheckError(
+            "scale-clearing measures "
+            + ", ".join(undeclared)
+            + ", which no declared row table covers; a measured shape may not "
+            "reach the projection without a coordinate"
+        )
+    routes: list[tuple[str, str, tuple[Any, ...], str]] = []
+    for field in tables:
+        labels = [
+            walk_plane_row_label(field, entry, SCALE_CLEARING_FAMILY)
+            for entry in family[field]
+        ]
+        if len(set(labels)) != len(labels):
+            raise CheckError(f"scale-clearing table {field} labels a shape twice")
+        for label in labels:
+            routes.append(
+                (
+                    scale_clearing_route_key(field, label),
+                    SCALE_CLEARING_FAMILY,
+                    ((field, label),),
+                    W1_SHAPE_LABELLED,
+                )
+            )
+    return tuple(routes)
 
 
 def walk_plane_route_observations(
@@ -1006,7 +1324,7 @@ def walk_plane_route_observations(
             matches = [
                 entry["cu"]
                 for entry in table
-                if walk_plane_row_label(field, entry) == label
+                if walk_plane_row_label(field, entry, family) == label
             ]
             if len(matches) != 1:
                 raise CheckError(
@@ -1093,11 +1411,31 @@ def require_walk_plane_w1_quotes(
         "TerminalClosure per-route CU declaration",
     )
 
+    # 2b. The scale campaigns' ledger declaration.  Their rows are the ledgered
+    #     shapes, and that is the whole reason they are the quotable ones.
+    require_equal(
+        measurements[SCALE_CLEARING_FAMILY].get("funding_ledger"),
+        SCALE_CLEARING_LEDGER_DECLARATION,
+        "scale-clearing funding-ledger declaration",
+    )
+
     # 3. Every measured CU field of a quoted family is either a W1 route source
     #    or a declared non-route surcharge.  Nothing measured goes unpublished.
+    #
+    #    Row tables are keyed by (family, field): ``freeze_epoch_rows`` exists in
+    #    both ``general_epoch`` and ``scale_clearing`` at different shapes, and
+    #    collapsing them under a bare field name would let one family's coverage
+    #    vouch for the other's.
+    all_routes = (*WALK_PLANE_W1_ROUTES, *scale_clearing_routes(measurements))
+    row_tables: dict[tuple[str, str], str] = {
+        (family, field): field for field, family in WALK_PLANE_W1_ROW_TABLES.items()
+    }
+    for field in SCALE_CLEARING_ROW_TABLES:
+        if field in measurements[SCALE_CLEARING_FAMILY]:
+            row_tables[(SCALE_CLEARING_FAMILY, field)] = field
     consumed: dict[str, set[str]] = {family: set() for family in WALK_PLANE_W1_FAMILIES}
-    labels: dict[str, set[Any]] = {field: set() for field in WALK_PLANE_W1_ROW_TABLES}
-    for _, family, sources, variability in WALK_PLANE_W1_ROUTES:
+    labels: dict[tuple[str, str], set[Any]] = {key: set() for key in row_tables}
+    for _, family, sources, variability in all_routes:
         if family not in consumed:
             raise CheckError(f"W1 route names a family it may not quote: {family}")
         if variability not in WALK_PLANE_W1_VARIABILITY:
@@ -1108,22 +1446,25 @@ def require_walk_plane_w1_quotes(
                 continue
             field, label = source
             consumed[family].add(field)
-            if field not in labels:
-                raise CheckError(f"W1 route reads an undeclared row table: {field}")
-            labels[field].add(label)
+            if (family, field) not in labels:
+                raise CheckError(f"W1 route reads an undeclared row table: {family}.{field}")
+            labels[(family, field)].add(label)
     # A row table is quoted shape by shape, so a shape the suite starts
     # measuring must be quoted too rather than disappearing under a field name
     # that is already covered.
-    for field, family in WALK_PLANE_W1_ROW_TABLES.items():
+    for (family, field) in row_tables:
         if field not in consumed[family]:
             raise CheckError(f"W1 quotes no row of the {family}.{field} table")
         measured_labels = [
-            walk_plane_row_label(field, entry) for entry in measurements[family][field]
+            walk_plane_row_label(field, entry, family)
+            for entry in measurements[family][field]
         ]
         if len(set(measured_labels)) != len(measured_labels):
             raise CheckError(f"{family}.{field} labels a shape twice")
         require_equal(
-            set(measured_labels), labels[field], f"W1 shape coverage of {family}.{field}"
+            set(measured_labels),
+            labels[(family, field)],
+            f"W1 shape coverage of {family}.{field}",
         )
     for family in WALK_PLANE_W1_FAMILIES:
         measured = {
@@ -1136,10 +1477,18 @@ def require_walk_plane_w1_quotes(
         require_equal(measured, expected, f"W1 route coverage of family {family}")
 
     # 4. The rows themselves, re-derived from the sealed maxima every run.
+    #
+    #    Each row also says what its measured maximum is KNOWN TO.  A route
+    #    sealed from one send cannot separate its shape term from the PDA-bump
+    #    term the fixture's random keys give it, so it publishes the quantum
+    #    that bounds the unresolved part instead of presenting one observation
+    #    as an exact figure.  A route with several sends does not carry the
+    #    caveat: the spread is the evidence.
     routes: dict[str, Any] = {}
-    for key, family, sources, variability in WALK_PLANE_W1_ROUTES:
+    for key, family, sources, variability in all_routes:
         observations = walk_plane_route_observations(measurements, family, sources)
         quote = quote_route(max(observations), policy)
+        single = len(observations) == 1
         routes[key] = {
             "family": family,
             "observations": len(observations),
@@ -1149,9 +1498,15 @@ def require_walk_plane_w1_quotes(
                 if quote.admitted
                 else WALK_PLANE_W1_STOPPED_ADMISSION
             ),
+            "single_observation": single,
+            "measured_cu_known_to_within": (
+                f"PLUS_OR_MINUS_K_TIMES_{PDA_ATTEMPT_QUANTUM_CU}_CU_PDA_ATTEMPT_QUANTUM"
+                if single
+                else "SPREAD_OVER_MULTIPLE_SENDS_SEALED"
+            ),
             **quote_dict(quote),
         }
-    if len(routes) != len(WALK_PLANE_W1_ROUTES):
+    if len(routes) != len(all_routes):
         raise CheckError("W1 route keys are not unique")
 
     # 5. The heap-frame request is a measured 150-CU rider on the same
@@ -1209,6 +1564,16 @@ def require_walk_plane_w1_quotes(
         "status": "PASS" if not stopped else "STOP_HEADROOM",
         "quoted_families": list(WALK_PLANE_W1_FAMILIES),
         "quoted_route_count": len(routes),
+        "pda_attempt_quantum_cu": PDA_ATTEMPT_QUANTUM_CU,
+        "single_observation_routes": sorted(
+            key for key, row in routes.items() if row["single_observation"]
+        ),
+        "scale_shape_coordinates": {
+            field: list(coordinates)
+            for field, coordinates in sorted(SCALE_CLEARING_ROW_TABLES.items())
+            if field in measurements[SCALE_CLEARING_FAMILY]
+        },
+        "scale_funding_ledger": SCALE_CLEARING_LEDGER_DECLARATION,
         "stopped_routes": stopped,
         "worst_route": worst[0],
         "worst_measured_cu": worst[1]["measured_cu"],
@@ -1239,7 +1604,7 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
     work_batch = measurements["resolution_work_batch"]
     exact_unique_labels(work["fold_widths"], [1, 2, 3, 4], "ResolutionWork Fold")
     exact_unique_labels(
-        work_batch["batch_sizes"], [2, 4, 8, 12], "ResolutionWork FoldBatch"
+        work_batch["batch_sizes"], [2, 4, 6, 8, 12], "ResolutionWork FoldBatch"
     )
     exact_unique_labels(
         [row["degree"] for row in measurements["occupation_v4"]["degree_rows"]],
@@ -1299,7 +1664,20 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
         size: quote_route(max(work_batch[f"fold_batch_{size}_cu"]), policy)
         for size in work_batch["batch_sizes"]
     }
-    plan_quotes = {1: folds[1], **batch_quotes}
+    # Every measured width keeps its row.  Only the widths that fit a packet
+    # may compose the plan: a plan is a claim that a keeper can send these
+    # transactions, and at widths 8 and 12 that claim is false.
+    unsendable = sorted(
+        size for size in batch_quotes if size > FOLD_MAX_SENDABLE_BATCH
+    )
+    plan_quotes = {
+        1: folds[1],
+        **{
+            size: quote
+            for size, quote in batch_quotes.items()
+            if size <= FOLD_MAX_SENDABLE_BATCH
+        },
+    }
     batched = batched_resolution_path_quote(
         record_count=evidence["resolution_work"]["maximum_records"],
         begin=begin,
@@ -1440,7 +1818,20 @@ def derive(evidence: dict[str, Any]) -> dict[str, Any]:
             ),
             "outcome_equality": work_batch["outcome_equality"],
             "mid_batch_invalid_fold": work_batch["mid_batch_invalid_fold"],
-            "cluster_packet_budget": "UNMODELED_BANK_TRANSPORT_ONLY",
+            # Measured, not modelled, and no longer a caveat.  The keeper's
+            # wire probe discharged UNMODELED_BANK_TRANSPORT_ONLY by measuring
+            # the serialized message at every width and confirming it against a
+            # real validator's transport.
+            "cluster_packet_budget_bytes": FOLD_PACKET_BUDGET_BYTES,
+            "maximum_sendable_batch": FOLD_MAX_SENDABLE_BATCH,
+            "sendable_bound_evidence": FOLD_SENDABLE_BOUND_EVIDENCE,
+            "measured_but_unsendable_batches": unsendable,
+            "unsendable_row_disposition": FOLD_UNSENDABLE_ROW_DISPOSITION,
+            "plan_batches": sorted(plan_quotes),
+            "superseded_plan": [12, 12, 8],
+            "superseded_plan_reason": (
+                "CHOSEN_ON_COMPUTE_ALONE_AND_UNSENDABLE_A_TWELVE_FOLD_MESSAGE_IS_2002_BYTES"
+            ),
             "maximum_records": batched.record_count,
             "fewest_transaction_plan": (
                 list(batched.batch_plan) if batched.batch_plan is not None else None

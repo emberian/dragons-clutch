@@ -1,0 +1,14 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.51s
+     Running tests/joined_lifecycle.rs (target/debug/deps/joined_lifecycle-32bda271e073d67a)
+
+running 3 tests
+test blank_bank_joined_lifecycle_degree_one ... default-empty-registry joined d1: CreateMarket 253424 CU; public InitSourceSpec REFUSE Custom(0x0079); Endow(no spec) REFUSE WrongProgramOwner; Endow(injected canonical spec) REFUSE Custom(0x0079), watched bytes identical
+ok
+test blank_bank_joined_lifecycle_degree_three ... default-empty-registry joined d3: CreateMarket 259614 CU; public InitSourceSpec REFUSE Custom(0x0079); Endow(no spec) REFUSE WrongProgramOwner; Endow(injected canonical spec) REFUSE Custom(0x0079), watched bytes identical
+ok
+test blank_bank_joined_lifecycle_degree_two ... default-empty-registry joined d2: CreateMarket 254824 CU; public InitSourceSpec REFUSE Custom(0x0079); Endow(no spec) REFUSE WrongProgramOwner; Endow(injected canonical spec) REFUSE Custom(0x0079), watched bytes identical
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+

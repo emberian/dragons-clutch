@@ -1,0 +1,74 @@
+   Compiling clutch-sbf-svm-tests v0.1.0 (/Users/ember/dev/dragons-clutch/programs/clutch-sbf/svm-tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.38s
+     Running tests/scale_multi_epoch.rs (target/debug/deps/scale_multi_epoch-38280fac820c5356)
+
+running 1 test
+test three_concurrent_epochs_clear_without_cross_epoch_bleed ... scale.multi_epoch/a7.init_epoch_ledgered CU: 55984
+scale.multi_epoch/a7.init_order_page_ledgered CU: 221760
+scale.multi_epoch/a8.init_epoch_ledgered CU: 58984
+scale.multi_epoch/a8.init_order_page_ledgered CU: 224760
+scale.multi_epoch/b7.init_epoch_ledgered CU: 66484
+scale.multi_epoch/b7.init_order_page_ledgered CU: 232260
+scale.multi_epoch/a7.place_order_single CU: 194224
+scale.multi_epoch/a8.place_order_single CU: 197224
+scale.multi_epoch/b7.place_order_single CU: 194224
+scale.multi_epoch CROSS_EPOCH freeze_a7_with_a8_page refusal=0xb
+scale.multi_epoch/a7.freeze_epoch_1page_4orders CU: 235407
+scale.multi_epoch/a8.freeze_epoch_1page_4orders CU: 236907
+scale.multi_epoch/b7.freeze_epoch_1page_4orders CU: 236907
+scale.multi_epoch/a7.submit_candidate_ledgered CU: 38380
+scale.multi_epoch/a7.write_feed_fills_x4 CU: 6665
+scale.multi_epoch/a7.write_feed_slices_x2 CU: 6906
+scale.multi_epoch/a7.seal_candidate_0retained CU: 40430
+scale.multi_epoch/a8.submit_candidate_ledgered CU: 42880
+scale.multi_epoch/a8.write_feed_fills_x4 CU: 6665
+scale.multi_epoch/a8.write_feed_slices_x2 CU: 6906
+scale.multi_epoch/a8.seal_candidate_0retained CU: 41930
+scale.multi_epoch/b7.submit_candidate_ledgered CU: 47380
+scale.multi_epoch/b7.write_feed_fills_x4 CU: 6665
+scale.multi_epoch/b7.write_feed_slices_x2 CU: 6906
+scale.multi_epoch/b7.seal_candidate_0retained CU: 41930
+scale.multi_epoch/a7.init_clear_work_plus_4_grows_ledgered CU: 81619
+scale.multi_epoch/a8.init_clear_work_plus_4_grows_ledgered CU: 123619
+scale.multi_epoch/b7.init_clear_work_plus_4_grows_ledgered CU: 80119
+scale.multi_epoch CROSS_EPOCH advance_a7_with_b7_page refusal=0xb
+scale.multi_epoch CROSS_EPOCH advance_a8_with_a7_feed refusal=0xb
+scale.multi_epoch/a7.advance_pass1_page0_4orders CU: 310959
+scale.multi_epoch/a8.advance_pass1_page0_4orders CU: 328959
+scale.multi_epoch/b7.advance_pass1_page0_4orders CU: 313959
+scale.multi_epoch/a7.advance_slices CU: 157983
+scale.multi_epoch/a8.advance_slices CU: 169983
+scale.multi_epoch/b7.advance_slices CU: 159483
+scale.multi_epoch/a7.advance_pass2_page0 CU: 283755
+scale.multi_epoch/a8.advance_pass2_page0 CU: 295755
+scale.multi_epoch/b7.advance_pass2_page0 CU: 285255
+scale.multi_epoch/a7.complete_clear_work CU: 115743
+scale.multi_epoch/a8.complete_clear_work CU: 127743
+scale.multi_epoch/b7.complete_clear_work CU: 123243
+scale.multi_epoch CROSS_EPOCH finalize_a8_with_a7_record refusal=0xb
+scale.multi_epoch/a7.finalize_selection_1retained CU: 22630
+scale.multi_epoch/a8.finalize_selection_1retained CU: 24130
+scale.multi_epoch/b7.finalize_selection_1retained CU: 30130
+scale.multi_epoch/a7.freeze_entitlement_ledgered CU: 102398
+scale.multi_epoch/a8.freeze_entitlement_ledgered CU: 112898
+scale.multi_epoch/b7.freeze_entitlement_ledgered CU: 108398
+scale.multi_epoch CROSS_EPOCH entitle_a8_with_a7_reservation refusal=0xb
+scale.multi_epoch/a7.entitle_slice_single_ledgered_slice0 CU: 202251
+scale.multi_epoch/a8.entitle_slice_single_ledgered_slice0 CU: 206751
+scale.multi_epoch/b7.entitle_slice_single_ledgered_slice0 CU: 212751
+scale.multi_epoch/a7.settle_page_direct_slice0 CU: 45511
+scale.multi_epoch/a8.settle_page_direct_slice0 CU: 48511
+scale.multi_epoch/b7.settle_page_direct_slice0 CU: 47011
+scale.multi_epoch CROSS_EPOCH settle_b7_with_a7_receipt refusal=0x100e
+scale.multi_epoch/a7.entitle_slice_single_ledgered_slice1 CU: 203752
+scale.multi_epoch/a8.entitle_slice_single_ledgered_slice1 CU: 209752
+scale.multi_epoch/b7.entitle_slice_single_ledgered_slice1 CU: 212752
+scale.multi_epoch/a7.settle_page_direct_slice1 CU: 42511
+scale.multi_epoch/a8.settle_page_direct_slice1 CU: 50011
+scale.multi_epoch/b7.settle_page_direct_slice1 CU: 53011
+scale.multi_epoch ROUTES: 57 observations
+scale.multi_epoch WORST route=scale.multi_epoch/a8.advance_pass1_page0_4orders cu=328959 ceiling=1400000 headroom=1071041
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.36s
+
