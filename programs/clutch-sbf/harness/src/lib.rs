@@ -822,7 +822,7 @@ pub fn compact_u16(value: usize, out: &mut Vec<u8>) {
 ///
 /// The four groups are the message's own ordering rule -- writable signers,
 /// read-only signers, writable non-signers, read-only non-signers -- and
-/// [`Message::index`] is what turns a role's *key* into the index an
+/// the private `Message::index` is what turns a role's *key* into the index an
 /// instruction account list needs.  Computing those indices by hand is how an
 /// account list silently points at the wrong account, so it is not done here.
 #[derive(Clone, Debug)]
@@ -2939,8 +2939,8 @@ fn seam_compares(
 /// `TokenAccountPolicy::collateral_holder` requires the presented collateral
 /// account's *owner authority* to be the authenticated actor, so "who signs"
 /// and "whose collateral moves" is one decision, not two.  Separating them is
-/// exactly what a hostile caller would try, and
-/// [`Signer::presenting`] is how this plan drives that attempt.
+/// exactly what a hostile caller would try, and the private
+/// `Signer::presenting` is how this plan drives that attempt.
 #[derive(Clone, Copy, Debug)]
 pub struct Signer<'a> {
     /// The address at the actor role.
@@ -2979,8 +2979,8 @@ impl<'a> Signer<'a> {
 /// collateral plane, `Materialize` and `Dematerialize` take the thirteen-account
 /// outcome plane -- and presenting any other count is
 /// `ClutchError::AccountCount`.  This enum exists so the emitter says out loud
-/// which plane it is building, and the assertion in [`Leg::account_count`] pins
-/// it to the program's own constants.
+/// which plane it is building, and the assertion in the private
+/// `Leg::account_count` pins it to the program's own constants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Leg {
     /// `Split` and `Merge`: collateral moves between the actor and the Hoard.
@@ -6880,8 +6880,9 @@ fn withdraw_cash_compares(
 
 /// Build the signed lane over one actual market address.
 ///
-/// Unlike [`build_lifecycle`], this mutates `plane` after every accepted
-/// offline transition and emits the next transaction against the same keys.
+/// Unlike the private `build_lifecycle`, this mutates `plane` after every
+/// accepted offline transition and emits the next transaction against the same
+/// keys.
 /// The local runner supplies a fresh blockhash and real signatures, commits
 /// each transaction, and reloads these expectations in order.
 pub fn build_committed_cases(f: &Fixture, plane: &mut Plane) -> Vec<Case> {

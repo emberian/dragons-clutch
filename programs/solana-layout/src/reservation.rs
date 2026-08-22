@@ -74,8 +74,8 @@ use super::{
 /// body was 610 bytes and the direct plane's was 618, and the pair was
 /// separated by version *and* length.  One `u64` of payment ledger takes the
 /// general body to 618 as well, so the `(tag, version)` pair is now the whole
-/// uniqueness key — which is exactly the key [`Reader`] enforces, before a
-/// single field is read.  Padding the body to keep the lengths apart would buy
+/// uniqueness key — which is exactly the key the private `Reader` enforces,
+/// before a single field is read.  Padding the body to keep the lengths apart would buy
 /// a second discriminator with dead bytes; instead
 /// `direct_selection_v3::reservation_v3_and_direct_v2_refuse_each_other`
 /// proves both decoders refuse the other plane's exact bytes.

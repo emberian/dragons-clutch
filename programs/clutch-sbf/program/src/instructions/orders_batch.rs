@@ -543,10 +543,10 @@ pub const CANCEL_ORDER_ACCOUNT_COUNT: usize = 5;
 pub const SETTLE_PAGE_ACCOUNT_COUNT: usize = 7;
 
 /// Accounts in the direct-slice `SettlePage` shape that also presents the
-/// epoch's [`FinalPotAccount`] — required exactly when a slice completes an
-/// end whose whole-order value does not convert to whole collateral atoms,
-/// because the pot's verified residue expectation is what that completion
-/// draws down.
+/// epoch's [`clutch_solana_layout::FinalPotAccount`] — required exactly when a
+/// slice completes an end whose whole-order value does not convert to whole
+/// collateral atoms, because the pot's verified residue expectation is what
+/// that completion draws down.
 pub const SETTLE_PAGE_POTTED_ACCOUNT_COUNT: usize = SETTLE_PAGE_ACCOUNT_COUNT + 1;
 
 /// Accounts in the **virtual-leg** `SettlePage` shape, exactly.
