@@ -86,6 +86,25 @@ J. SMALL-FIX BATCH (stale blocker row, mock path-sensitivity, queued
 
 ## Done log (2026-08-19 session)
 
+- CYCLE G ATTESTED AND CORRECTED: Persvati 49 PASS across 54 derived
+  gates, 3,036 file comparisons zero mismatches, the ELF in six
+  contexts, the probe reproducing its sealed audit file byte-for-byte
+  cross-architecture — and TWO FINDINGS THE SEAL DID NOT DECLARE, both
+  now fixed and pushed: (1) runtime_ref pinned an ORPHAN pre-rewrite
+  twin reachable from no published ref (the seal's verifier died with
+  git 128 in any fresh clone; corrected to the reachable twin 916731b
+  the attestation verified content-identical); (2) direct_r10_references
+  carried cycle F's 60,441 where the root's own audit says 66,106.
+  Manifest re-emitted at 902e8d2 (101 gates, 100/101, only the
+  documented doc-window). QUEUED FOR CYCLE H (next program wave): the
+  window's two doc files, lib.rs:4653's stale MAX_INTENT_BYTES prose,
+  the dependency_packages two-graphs audit fix, the upstream-ledger
+  coverage regression (18 rows over 63 files) the attestation
+  re-derived around. THE WAVE IS FULLY CLOSED: capability holes none,
+  settlement blockers none, seal-manifest-attestation chained, a human
+  trading in a browser. Standing on ember: rates, treasury key, mainnet
+  pins, registry flip, filing submissions (pair due Mon 8/24).
+
 - CYCLE G SEALED AND MANIFESTED (identity 0d52c561/2,149,672 at 846afab;
   manifest 5ae3a32, 101 gates, 100/101 with the ONE documented drift
   window per cycle-F precedent): closure 111->129, W1 35->107 routes with
