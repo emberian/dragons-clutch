@@ -86,6 +86,25 @@ J. SMALL-FIX BATCH (stale blocker row, mock path-sensitivity, queued
 
 ## Done log (2026-08-19 session)
 
+- THE WAVE IS FULLY LANDED — SETTLEMENT_BLOCKERS: []. Cone gate BOUND ON
+  CHAIN (epoch carries its degree; refused walks short-circuit cheap;
+  discriminating triple green on the bank). V2 WIRE COMPLETE (tags 70-73,
+  full circle on the DEFAULT ELF through real intents behind real
+  receiver posts; cross-generation equivalence in one assertion;
+  validator walk declined with the honest clock-anchoring argument).
+  CAMPAIGNS: ZERO DEFECTS at scale (64 ticks, 4-page/64-order books,
+  16-way ties proved deterministic as a checked property, 24-receipt
+  partial books conserved after every consumption, interleaved epochs
+  with no bleed, the pot to zero across 12 completions); two quote-model
+  findings for cycle G (entitle_slice needs a page coordinate — measured
+  3.7x its row at 4 pages; the 1,500-CU PDA quantum belongs in the
+  model). VIRTUALMERGECREDIT RETIRED (reservation v3 paid_units,
+  deliver->burn->pay derived with the burn-placement asymmetry argued,
+  mixed churn shown non-canonical, atoms exact everywhere) — the empty
+  list documents its residuals by name (per-owner conversion kept a
+  residual per the ledger grammar). Suites 157/160 across 43 targets.
+  NEXT: frontend trade mode, then cycle G reseals the settled tree.
+
 - B POT REALIZATION LANDED: the rounding pot funds from the payers'
   round-up excess + payees' round-down shortfall (relation :2482-2519
   cited), drains to exactly zero at the completing slice, walks A/B with
