@@ -22,6 +22,10 @@ custom-heap = []
 # parser/deployment pair. Never use for a production deployment or attribute
 # its SVM evidence to the default artifact.
 non-production-mock-source = []
+# Registers the byte-pinned Pyth receiver deployment used only by the local
+# real-program campaign. The observation carried by that campaign is locally
+# signed synthetic data, never devnet or production price evidence.
+non-production-real-pyth-lab = []
 # Exposes `source_v2::fixtures`, the byte-accurate builders for the fabricated
 # provider accounts (receiver program, ProgramData, `Config`, `PriceUpdateV2`,
 # Instructions sysvar). Host-only by construction and never enabled for a

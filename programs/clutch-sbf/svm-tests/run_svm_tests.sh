@@ -13,6 +13,8 @@
 # source/value scenarios require the explicit, differently compiled laboratory
 # profile:
 #   ./run_svm_tests.sh --non-production-mock-source [test filters ...]
+# The deployed-Pyth local campaign is a separate, explicit test-only ELF:
+#   ./run_svm_tests.sh --non-production-real-pyth-lab real_pyth_router_verifies_then_post_update
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 program="$(cd "$here/.." && pwd)"
@@ -25,6 +27,11 @@ if [ "${1:-}" = "--non-production-mock-source" ]; then
   profile="NON-PRODUCTION-non-production-mock-source"
   build_features=(--features non-production-mock-source)
   test_features=(--features non-production-mock-source)
+elif [ "${1:-}" = "--non-production-real-pyth-lab" ]; then
+  shift
+  profile="NON-PRODUCTION-non-production-real-pyth-lab"
+  build_features=(--features non-production-real-pyth-lab)
+  test_features=(--features non-production-real-pyth-lab)
 fi
 
 solana_home="${SOLANA_HOME:-$HOME/.local/share/solana/install/active_release/bin}"

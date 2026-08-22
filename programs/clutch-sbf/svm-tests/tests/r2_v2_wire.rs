@@ -108,6 +108,13 @@ use {
     solana_transaction_error::TransactionError,
 };
 
+#[cfg(feature = "non-production-real-pyth-lab")]
+use clutch_sbf::source_identity::real_pyth_lab;
+#[cfg(feature = "non-production-real-pyth-lab")]
+use solana_clock::Clock;
+#[cfg(feature = "non-production-real-pyth-lab")]
+use solana_system_interface::instruction as system_instruction;
+
 /* ------------------------------------------------------------------------ */
 /* Shape of the market this campaign resolves                                */
 /* ------------------------------------------------------------------------ */
@@ -139,6 +146,13 @@ const DEPLOYMENT_SLOT: u64 = 1;
 /// deployment slot is at or below the root, and a deployment slot naming a
 /// pruned, never-rooted slot makes every invocation re-load the program.
 const WARP_SLOT: u64 = DEPLOYMENT_SLOT + 1;
+
+#[cfg(feature = "non-production-real-pyth-lab")]
+const REAL_PYTH_WARP_SLOT: u64 = real_pyth_lab::RECEIVER_DEPLOYMENT_SLOT + 1;
+#[cfg(feature = "non-production-real-pyth-lab")]
+const REAL_PYTH_ROUTER_WARP_SLOT: u64 = real_pyth_lab::ROUTER_DEPLOYMENT_SLOT + 1;
+#[cfg(feature = "non-production-real-pyth-lab")]
+const REAL_PYTH_PUBLISH_TIME: i64 = 1_787_431_680;
 
 const ACTOR_TOKEN: Address = Address::new_from_array([0x8e; 32]);
 /// A second owner, with no position, who takes custody after the founding.
@@ -179,6 +193,25 @@ fn decoy_update_keypair() -> Keypair {
         0xf1, 0x47, 0x90, 0x2d, 0xa3, 0x6e, 0x0c, 0x58, 0xbb, 0x24, 0x79, 0xd0, 0x13, 0x9a, 0x4f,
         0xe5, 0x36,
     ])
+}
+
+#[cfg(feature = "non-production-real-pyth-lab")]
+fn encoded_vaa_keypair() -> Keypair {
+    Keypair::new_from_array([
+        0x93, 0x11, 0xa4, 0x70, 0x2b, 0x59, 0xc8, 0x05, 0x61, 0xdd, 0x7e, 0x14, 0xb2, 0x37, 0x98,
+        0x4a, 0xe5, 0x20, 0x6c, 0xf1, 0x89, 0x42, 0x0d, 0xba, 0x73, 0x18, 0xce, 0x54, 0x07, 0x9f,
+        0x2d, 0x66,
+    ])
+}
+
+#[cfg(feature = "non-production-real-pyth-lab")]
+fn is_real_pyth_spec(spec: SourceSpecV2) -> bool {
+    spec.fields().receiver_program == real_pyth_lab::RECEIVER_PROGRAM
+}
+
+#[cfg(not(feature = "non-production-real-pyth-lab"))]
+fn is_real_pyth_spec(_spec: SourceSpecV2) -> bool {
+    false
 }
 
 fn pda(seeds: &[&[u8]]) -> Pda {
@@ -283,6 +316,101 @@ fn receiver_config_bytes() -> Vec<u8> {
 
 fn config_digest() -> [u8; 32] {
     clutch_sbf::pyth_receiver::config_byte_digest(&receiver_config_bytes())
+}
+
+#[cfg(feature = "non-production-real-pyth-lab")]
+fn real_pyth_fixture(name: &str) -> Vec<u8> {
+    let bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/real-pyth-local")
+            .join(name),
+    )
+    .unwrap_or_else(|error| panic!("real-Pyth fixture {name} must exist: {error}"));
+    let expected = match name {
+        "receiver.so" => "c5079559864fc34dbd5fe87b4aa9fba3a1ed22690363ec490449e8660e73af64",
+        "router.so" => "f9061f03a81b89db29f4603677e3b3d89b3bbf08d67827b2832f18a4e2b61acb",
+        "router-initialize.data" => {
+            "3667940a4428a8f2411a0ff11157ecc4ba1076c3c61273a108da6405c51e0b0b"
+        }
+        "receiver-initialize.data" => {
+            "d9c80906af92f99a0c8441f4463186056b1c12cb990999acfa198a46ec62729f"
+        }
+        "receiver-config.account" => {
+            "05038cf707afceac3df1aae735b096344ad639506b00f1db0ac1c084d6b645aa"
+        }
+        "signed.vaa" => "ed8b973f36a932b9ec88659953859c8096f14e5aebd085bbe32b22c41a142c0d",
+        "receiver-post-update.data" => {
+            "3bf9188bd6183155ea30738c3ab9da706ea7013bf5a7887a531e90b9bea85e1d"
+        }
+        "price-update.account" => {
+            "e5435e5b2e54d6083a9d1230e33f0635f6c74eb9db62899cfbb559f99c798a2b"
+        }
+        other => panic!("fixture {other} has no executable SHA-256 pin"),
+    };
+    let actual: String = clutch_sbf::pyth_receiver::config_byte_digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(actual, expected, "real-Pyth fixture digest: {name}");
+    bytes
+}
+
+#[cfg(feature = "non-production-real-pyth-lab")]
+fn real_pyth_spec(feed_id: [u8; 32]) -> SourceSpecV2 {
+    let mut fields = pull_spec_fields();
+    fields.receiver_program = real_pyth_lab::RECEIVER_PROGRAM;
+    fields.receiver_programdata = real_pyth_lab::RECEIVER_PROGRAMDATA;
+    fields.receiver_config = real_pyth_lab::RECEIVER_CONFIG;
+    fields.config_digest = clutch_sbf::pyth_receiver::config_byte_digest(&real_pyth_fixture(
+        "receiver-config.account",
+    ));
+    fields.provider_feed_id = feed_id;
+    fields.programdata_deployment_slot = real_pyth_lab::RECEIVER_DEPLOYMENT_SLOT;
+    fields.base_asset_id = real_pyth_lab::BASE_ASSET_ID;
+    fields.quote_asset_id = real_pyth_lab::QUOTE_ASSET_ID;
+    SourceSpecV2::new(fields).expect("local-real Pyth spec is structurally valid")
+}
+
+#[cfg(feature = "non-production-real-pyth-lab")]
+fn assert_real_pyth_deployment_bytes(
+    receiver_program: &[u8],
+    receiver_programdata: &[u8],
+    router_program: &[u8],
+    router_programdata: &[u8],
+) {
+    use clutch_sbf::pyth_receiver::config_byte_digest as sha256;
+    assert_eq!(
+        sha256(receiver_program),
+        [
+            0xef, 0x37, 0xdd, 0x1c, 0xee, 0x22, 0xd7, 0x31, 0x90, 0x2a, 0x8c, 0x04, 0xed, 0x2e,
+            0x13, 0x13, 0x6a, 0x2b, 0x8a, 0xa7, 0x06, 0x8d, 0x9d, 0xb3, 0xaf, 0xf2, 0xed, 0x1e,
+            0xc7, 0xb6, 0x34, 0xe5,
+        ]
+    );
+    assert_eq!(
+        sha256(receiver_programdata),
+        [
+            0x71, 0x22, 0xab, 0xc6, 0xb5, 0xe7, 0x8d, 0x30, 0xbf, 0x88, 0xc8, 0x69, 0xcb, 0x5d,
+            0x87, 0x83, 0xad, 0xaf, 0x89, 0x73, 0x69, 0xd0, 0x4e, 0xca, 0x82, 0x7d, 0x3a, 0xf8,
+            0xff, 0xe1, 0x8e, 0x5d,
+        ]
+    );
+    assert_eq!(
+        sha256(router_program),
+        [
+            0x1e, 0xe5, 0x90, 0xae, 0x23, 0xd5, 0xec, 0xbf, 0x77, 0x5a, 0xba, 0x91, 0x0f, 0x06,
+            0xa9, 0x93, 0xde, 0xe8, 0xf7, 0x7b, 0xfd, 0x70, 0x28, 0x79, 0x0d, 0xbd, 0x34, 0x96,
+            0x51, 0xc8, 0x03, 0x4b,
+        ]
+    );
+    assert_eq!(
+        sha256(router_programdata),
+        [
+            0xf2, 0x6f, 0x4b, 0x53, 0xb0, 0xf9, 0x80, 0x45, 0x58, 0x86, 0x11, 0x6f, 0x50, 0x0f,
+            0xa7, 0x4b, 0xa4, 0x75, 0xe5, 0x1b, 0x1a, 0xcb, 0x7f, 0x48, 0x6b, 0x18, 0xaf, 0xa9,
+            0xd7, 0x3d, 0x94, 0x8f,
+        ]
+    );
 }
 
 fn lab_receiver_elf() -> Vec<u8> {
@@ -590,6 +718,8 @@ struct Campaign {
     endow_owner: Keypair,
     update: Keypair,
     decoy_update: Keypair,
+    #[cfg(feature = "non-production-real-pyth-lab")]
+    encoded_vaa: Keypair,
     plane: Plane,
     spec: SourceSpecV2,
     start_bucket: u64,
@@ -609,6 +739,7 @@ impl Campaign {
         let actor = actor_keypair();
         let update = update_keypair();
         let decoy_update = decoy_update_keypair();
+        let real_pyth = is_real_pyth_spec(spec);
         let mut test = ProgramTest::default();
         test.prefer_bpf(true);
         test.add_program("clutch_sbf", PROGRAM_ID, None);
@@ -616,40 +747,93 @@ impl Campaign {
         /* The fabricated receiver deployment goes in at genesis, not through
          * `set_account`, so the program account's last modification slot is
          * zero and the loader sees a settled deployment. */
-        let elf = lab_receiver_elf();
-        test.add_account(
-            Address::new_from_array(fixture::RECEIVER_PROGRAM),
-            genesis_account(
-                receiver_program_body(fixture::RECEIVER_PROGRAMDATA),
-                Address::new_from_array(UPGRADEABLE_LOADER_ID),
-                true,
-            ),
-        );
-        test.add_account(
-            Address::new_from_array(fixture::RECEIVER_PROGRAMDATA),
-            genesis_account(
-                programdata_body(DEPLOYMENT_SLOT, Some([0x61; 32]), [0; 32], &elf),
-                Address::new_from_array(UPGRADEABLE_LOADER_ID),
-                false,
-            ),
-        );
-        test.add_account(
-            Address::new_from_array(fixture::RECEIVER_CONFIG),
-            genesis_account(
-                receiver_config_bytes(),
-                Address::new_from_array(fixture::RECEIVER_PROGRAM),
-                false,
-            ),
-        );
-        for key in [update.pubkey(), decoy_update.pubkey()] {
+        if !real_pyth {
+            let elf = lab_receiver_elf();
             test.add_account(
-                key,
+                Address::new_from_array(fixture::RECEIVER_PROGRAM),
                 genesis_account(
-                    vec![0_u8; PRICE_UPDATE_V2_ACCOUNT_LEN],
+                    receiver_program_body(fixture::RECEIVER_PROGRAMDATA),
+                    Address::new_from_array(UPGRADEABLE_LOADER_ID),
+                    true,
+                ),
+            );
+            test.add_account(
+                Address::new_from_array(fixture::RECEIVER_PROGRAMDATA),
+                genesis_account(
+                    programdata_body(DEPLOYMENT_SLOT, Some([0x61; 32]), [0; 32], &elf),
+                    Address::new_from_array(UPGRADEABLE_LOADER_ID),
+                    false,
+                ),
+            );
+            test.add_account(
+                Address::new_from_array(fixture::RECEIVER_CONFIG),
+                genesis_account(
+                    receiver_config_bytes(),
                     Address::new_from_array(fixture::RECEIVER_PROGRAM),
                     false,
                 ),
             );
+            for key in [update.pubkey(), decoy_update.pubkey()] {
+                test.add_account(
+                    key,
+                    genesis_account(
+                        vec![0_u8; PRICE_UPDATE_V2_ACCOUNT_LEN],
+                        Address::new_from_array(fixture::RECEIVER_PROGRAM),
+                        false,
+                    ),
+                );
+            }
+        }
+        #[cfg(feature = "non-production-real-pyth-lab")]
+        if real_pyth {
+            let loader = Address::new_from_array(UPGRADEABLE_LOADER_ID);
+            let receiver_address = Address::new_from_array(real_pyth_lab::RECEIVER_PROGRAM);
+            let router_address = Address::new_from_array(real_pyth_lab::ROUTER_PROGRAM);
+            assert_eq!(
+                Address::find_program_address(&[receiver_address.as_ref()], &loader).0,
+                Address::new_from_array(real_pyth_lab::RECEIVER_PROGRAMDATA),
+                "receiver ProgramData must be the loader's canonical PDA"
+            );
+            assert_eq!(
+                Address::find_program_address(&[router_address.as_ref()], &loader).0,
+                Address::new_from_array(real_pyth_lab::ROUTER_PROGRAMDATA),
+                "router ProgramData must be the loader's canonical PDA"
+            );
+            let receiver_program = receiver_program_body(real_pyth_lab::RECEIVER_PROGRAMDATA);
+            let receiver_programdata = programdata_body(
+                real_pyth_lab::RECEIVER_DEPLOYMENT_SLOT,
+                Some(real_pyth_lab::UPGRADE_AUTHORITY),
+                [0; 32],
+                &real_pyth_fixture("receiver.so"),
+            );
+            let router_program = receiver_program_body(real_pyth_lab::ROUTER_PROGRAMDATA);
+            let router_programdata = programdata_body(
+                real_pyth_lab::ROUTER_DEPLOYMENT_SLOT,
+                Some(real_pyth_lab::UPGRADE_AUTHORITY),
+                [0; 32],
+                &real_pyth_fixture("router.so"),
+            );
+            assert_real_pyth_deployment_bytes(
+                &receiver_program,
+                &receiver_programdata,
+                &router_program,
+                &router_programdata,
+            );
+            for (key, data, executable) in [
+                (real_pyth_lab::RECEIVER_PROGRAM, receiver_program, true),
+                (
+                    real_pyth_lab::RECEIVER_PROGRAMDATA,
+                    receiver_programdata,
+                    false,
+                ),
+                (real_pyth_lab::ROUTER_PROGRAM, router_program, true),
+                (real_pyth_lab::ROUTER_PROGRAMDATA, router_programdata, false),
+            ] {
+                test.add_genesis_account(
+                    Address::new_from_array(key),
+                    genesis_account(data, loader, executable),
+                );
+            }
         }
         let mut funded = genesis_account(Vec::new(), SYSTEM_PROGRAM, false);
         funded.lamports = 10_000_000_000;
@@ -660,7 +844,33 @@ impl Campaign {
         /* One small warp: a program is invisible until one slot past its
          * recorded deployment, and the campaign's freshness bounds want a slot
          * comfortably above zero. */
-        context.warp_to_slot(WARP_SLOT).expect("warp");
+        let warp_slot = if real_pyth {
+            #[cfg(feature = "non-production-real-pyth-lab")]
+            {
+                /* Agave 4.2.1's ProgramTest warp does not advance the program
+                 * cache's latest-root marker. Root the router deployment
+                 * exactly first; `initialize_real_pyth` persists a Verified
+                 * VAA and only then advances to the receiver deployment. */
+                REAL_PYTH_ROUTER_WARP_SLOT
+            }
+            #[cfg(not(feature = "non-production-real-pyth-lab"))]
+            {
+                unreachable!()
+            }
+        } else {
+            WARP_SLOT
+        };
+        context.warp_to_slot(warp_slot).expect("warp");
+        #[cfg(feature = "non-production-real-pyth-lab")]
+        if real_pyth {
+            context.set_sysvar(&Clock {
+                slot: REAL_PYTH_ROUTER_WARP_SLOT,
+                epoch_start_timestamp: REAL_PYTH_PUBLISH_TIME,
+                epoch: 0,
+                leader_schedule_epoch: 0,
+                unix_timestamp: REAL_PYTH_PUBLISH_TIME + 240,
+            });
+        }
 
         let (slot, unix) = clock(&mut context).await;
         /* Place the whole window in the settled past: the last bucket's closing
@@ -740,6 +950,8 @@ impl Campaign {
             endow_owner: endow_owner_keypair(),
             update,
             decoy_update,
+            #[cfg(feature = "non-production-real-pyth-lab")]
+            encoded_vaa: encoded_vaa_keypair(),
             plane,
             spec: built.spec,
             start_bucket: built.start_bucket,
@@ -912,6 +1124,23 @@ impl Campaign {
         archive: Address,
         update_writable: bool,
     ) -> Instruction {
+        self.append_with_provider_config(
+            data,
+            update,
+            archive,
+            update_writable,
+            Address::new_from_array(self.spec.fields().receiver_config),
+        )
+    }
+
+    fn append_with_provider_config(
+        &self,
+        data: Vec<u8>,
+        update: Address,
+        archive: Address,
+        update_writable: bool,
+        receiver_config: Address,
+    ) -> Instruction {
         let update = if update_writable {
             AccountMeta::new(update, false)
         } else {
@@ -926,18 +1155,183 @@ impl Campaign {
                 AccountMeta::new_readonly(self.plane.terms.address, false),
                 AccountMeta::new(archive, false),
                 AccountMeta::new_readonly(
-                    Address::new_from_array(fixture::RECEIVER_PROGRAM),
+                    Address::new_from_array(self.spec.fields().receiver_program),
                     false,
                 ),
                 AccountMeta::new_readonly(
-                    Address::new_from_array(fixture::RECEIVER_PROGRAMDATA),
+                    Address::new_from_array(self.spec.fields().receiver_programdata),
                     false,
                 ),
-                AccountMeta::new_readonly(Address::new_from_array(fixture::RECEIVER_CONFIG), false),
+                AccountMeta::new_readonly(receiver_config, false),
                 update,
                 AccountMeta::new_readonly(INSTRUCTIONS_SYSVAR, false),
                 AccountMeta::new_readonly(CLOCK_SYSVAR, false),
             ],
+        )
+    }
+
+    #[cfg(feature = "non-production-real-pyth-lab")]
+    async fn initialize_real_pyth(&mut self) {
+        assert!(is_real_pyth_spec(self.spec));
+        let router = Address::new_from_array(real_pyth_lab::ROUTER_PROGRAM);
+        let payer = self.context.payer.pubkey();
+        let router_config = Address::find_program_address(&[b"Bridge"], &router).0;
+        let guardian_set =
+            Address::find_program_address(&[b"GuardianSet", &0_u32.to_be_bytes()], &router).0;
+        let fee_collector = Address::find_program_address(&[b"fee_collector"], &router).0;
+        let router_initialize = Instruction::new_with_bytes(
+            router,
+            &real_pyth_fixture("router-initialize.data"),
+            vec![
+                AccountMeta::new(router_config, false),
+                AccountMeta::new(guardian_set, false),
+                AccountMeta::new(fee_collector, false),
+                AccountMeta::new(payer, true),
+                AccountMeta::new_readonly(CLOCK_SYSVAR, false),
+                AccountMeta::new_readonly(RENT_SYSVAR, false),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+            ],
+        );
+        assert_eq!(self.send(router_initialize).await.0, Ok(()));
+
+        const VAA_START: usize = 46;
+        const WRITE_SPLIT: usize = 755;
+        const INIT_ENCODED_VAA: [u8; 8] = [209, 193, 173, 25, 91, 202, 181, 218];
+        const WRITE_ENCODED_VAA: [u8; 8] = [199, 208, 110, 177, 150, 76, 118, 42];
+        const VERIFY_ENCODED_VAA_V1: [u8; 8] = [103, 56, 177, 229, 240, 103, 68, 73];
+        let vaa = real_pyth_fixture("signed.vaa");
+        let encoded = self.encoded_vaa.pubkey();
+        let create = system_instruction::create_account(
+            &payer,
+            &encoded,
+            Rent::default().minimum_balance(VAA_START + vaa.len()),
+            (VAA_START + vaa.len()) as u64,
+            &router,
+        );
+        let init = Instruction::new_with_bytes(
+            router,
+            &INIT_ENCODED_VAA,
+            vec![
+                AccountMeta::new_readonly(payer, true),
+                AccountMeta::new(encoded, false),
+            ],
+        );
+        let write_instruction = |index: usize, bytes: &[u8]| {
+            let mut data = WRITE_ENCODED_VAA.to_vec();
+            data.extend_from_slice(&(index as u32).to_le_bytes());
+            data.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            data.extend_from_slice(bytes);
+            Instruction::new_with_bytes(
+                router,
+                &data,
+                vec![
+                    AccountMeta::new_readonly(payer, true),
+                    AccountMeta::new(encoded, false),
+                ],
+            )
+        };
+        let split = vaa.len().min(WRITE_SPLIT);
+        assert_eq!(
+            self.send_many(&[create, init, write_instruction(0, &vaa[..split])])
+                .await
+                .0,
+            Ok(())
+        );
+        let verify = Instruction::new_with_bytes(
+            router,
+            &VERIFY_ENCODED_VAA_V1,
+            vec![
+                AccountMeta::new_readonly(payer, true),
+                AccountMeta::new(encoded, false),
+                AccountMeta::new_readonly(guardian_set, false),
+            ],
+        );
+        let mut final_verify = Vec::new();
+        if split < vaa.len() {
+            final_verify.push(write_instruction(split, &vaa[split..]));
+        }
+        final_verify.push(verify);
+        assert_eq!(self.send_many(&final_verify).await.0, Ok(()));
+        assert_eq!(
+            self.data(encoded).await[8],
+            2,
+            "real router must mark the quorum-signed VAA Verified"
+        );
+
+        /* ProgramTest 4.2.1 does not update ProgramCache.latest_root_slot in
+         * `warp_to_slot`. Keeping the router's exact deployment slot visible
+         * therefore requires verifying and persisting the VAA at its own
+         * D+1 root before advancing to the receiver's D+1 root. No router
+         * instruction occurs after this second warp. */
+        self.context
+            .warp_to_slot(REAL_PYTH_WARP_SLOT)
+            .expect("warp from router generation to receiver generation");
+        self.context.set_sysvar(&Clock {
+            slot: REAL_PYTH_WARP_SLOT,
+            epoch_start_timestamp: REAL_PYTH_PUBLISH_TIME,
+            epoch: 0,
+            leader_schedule_epoch: 0,
+            unix_timestamp: REAL_PYTH_PUBLISH_TIME + 240,
+        });
+
+        let receiver = Address::new_from_array(real_pyth_lab::RECEIVER_PROGRAM);
+        let receiver_initialize = Instruction::new_with_bytes(
+            receiver,
+            &real_pyth_fixture("receiver-initialize.data"),
+            vec![
+                AccountMeta::new(payer, true),
+                AccountMeta::new(
+                    Address::new_from_array(real_pyth_lab::RECEIVER_CONFIG),
+                    false,
+                ),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+            ],
+        );
+        assert_eq!(self.send(receiver_initialize).await.0, Ok(()));
+        assert_eq!(
+            self.data(Address::new_from_array(real_pyth_lab::RECEIVER_CONFIG))
+                .await,
+            real_pyth_fixture("receiver-config.account"),
+            "real receiver must write the exact locally pinned Config body"
+        );
+    }
+
+    #[cfg(feature = "non-production-real-pyth-lab")]
+    fn real_pyth_post(&self, update: Address) -> Instruction {
+        let receiver = Address::new_from_array(real_pyth_lab::RECEIVER_PROGRAM);
+        let treasury = Address::find_program_address(&[b"treasury", &[0]], &receiver).0;
+        let payer = self.context.payer.pubkey();
+        Instruction::new_with_bytes(
+            receiver,
+            &real_pyth_fixture("receiver-post-update.data"),
+            vec![
+                AccountMeta::new(payer, true),
+                AccountMeta::new_readonly(self.encoded_vaa.pubkey(), false),
+                AccountMeta::new_readonly(
+                    Address::new_from_array(real_pyth_lab::RECEIVER_CONFIG),
+                    false,
+                ),
+                AccountMeta::new(treasury, false),
+                AccountMeta::new(update, true),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+                AccountMeta::new_readonly(payer, true),
+            ],
+        )
+    }
+
+    #[cfg(feature = "non-production-real-pyth-lab")]
+    fn append_with_config(&self, sequence: u64, update: Address, config: Address) -> Instruction {
+        self.append_with_provider_config(
+            layout_request(
+                sequence,
+                Intent::AppendSourceArchiveV2 {
+                    terms: self.plane.terms_id,
+                },
+            ),
+            update,
+            self.plane.source_archive.address,
+            true,
+            config,
         )
     }
 
@@ -1183,6 +1577,11 @@ impl Campaign {
             } else if *key == self.decoy_update.pubkey() {
                 signers.push(&self.decoy_update);
             } else {
+                #[cfg(feature = "non-production-real-pyth-lab")]
+                if *key == self.encoded_vaa.pubkey() {
+                    signers.push(&self.encoded_vaa);
+                    continue;
+                }
                 panic!("no keypair for required signer {key}");
             }
         }
@@ -1887,4 +2286,140 @@ async fn custody_opens_against_the_spec_this_family_just_founded() {
         .expect("Endow created the depositor's position");
     assert_eq!(position.cash_atoms, DEPOSIT);
     println!("r2 v2 wire CU: endow={endow_cu}");
+}
+
+/// Real deployed provider/ABI/crypto execution over a synthetic local
+/// observation. Router verification first persists a Verified VAA; only the
+/// subsequent receiver `PostUpdate` and Clutch append are atomic and adjacent.
+/// This is intentionally not devnet price evidence.
+#[cfg(feature = "non-production-real-pyth-lab")]
+#[tokio::test]
+async fn real_pyth_router_verifies_then_post_update_and_clutch_append_are_atomic() {
+    use clutch_sbf::pyth_receiver::{parse_full_price_update_v2, PriceUpdateAccountViewV1};
+
+    let mut campaign = Campaign::start(real_pyth_spec(real_pyth_lab::PROVIDER_FEED_ID)).await;
+    campaign.initialize_real_pyth().await;
+    assert_eq!(campaign.send(campaign.init_spec()).await.0, Ok(()));
+    assert_eq!(campaign.send(campaign.init_archive()).await.0, Ok(()));
+    let genesis_page = campaign.data(campaign.plane.source_archive.address).await;
+    let update = campaign.update.pubkey();
+    assert!(campaign.maybe_account(update).await.is_none());
+
+    // No adjacent receiver call: the archive refuses before source parsing.
+    let (result, _) = campaign.send(campaign.append(0, update)).await;
+    assert_eq!(custom(&result), SOURCE_ADMISSION_FAILED);
+    assert_eq!(
+        campaign.data(campaign.plane.source_archive.address).await,
+        genesis_page
+    );
+
+    // The real receiver successfully creates and writes the update, then the
+    // Clutch half sees a mismatched Config. The failed transaction must roll
+    // back both the provider write and the archive mutation.
+    let wrong_config = Address::new_from_array([0xcf; 32]);
+    let receiver = Address::new_from_array(real_pyth_lab::RECEIVER_PROGRAM);
+    let treasury = Address::find_program_address(&[b"treasury", &[0]], &receiver).0;
+    let payer = campaign.context.payer.pubkey();
+    let payer_before = campaign.maybe_account(payer).await;
+    let treasury_before = campaign.maybe_account(treasury).await;
+    let (result, _) = campaign
+        .send_many(&[
+            campaign.real_pyth_post(update),
+            campaign.append_with_config(0, update, wrong_config),
+        ])
+        .await;
+    assert_eq!(custom(&result), SOURCE_ADMISSION_FAILED);
+    assert!(
+        campaign.maybe_account(update).await.is_none(),
+        "Clutch refusal must roll back the receiver-created account"
+    );
+    assert_eq!(
+        campaign.data(campaign.plane.source_archive.address).await,
+        genesis_page,
+        "Clutch refusal must leave the archive byte-identical"
+    );
+    assert_eq!(campaign.maybe_account(treasury).await, treasury_before);
+    let payer_after = campaign.maybe_account(payer).await.unwrap();
+    let payer_before = payer_before.unwrap();
+    assert_eq!(payer_after.data, payer_before.data);
+    assert_eq!(payer_after.owner, payer_before.owner);
+    assert_eq!(
+        payer_before.lamports - payer_after.lamports,
+        10_000,
+        "only the failed two-signature transaction fee survives rollback"
+    );
+
+    // The exact real PostUpdate and Clutch append are adjacent in this one
+    // transaction. No mock writer or preinstalled update account participates.
+    let (result, joined_cu) = campaign
+        .send_many(&[campaign.real_pyth_post(update), campaign.append(0, update)])
+        .await;
+    assert_eq!(result, Ok(()));
+    let update_account = campaign.maybe_account(update).await.unwrap();
+    let parsed = parse_full_price_update_v2(
+        PriceUpdateAccountViewV1::new(
+            update.to_bytes(),
+            update_account.owner.to_bytes(),
+            update_account.executable,
+            &update_account.data,
+        ),
+        real_pyth_lab::RECEIVER_PROGRAM,
+        real_pyth_lab::PROVIDER_FEED_ID,
+    )
+    .expect("the real receiver wrote a canonical Full update");
+    assert_eq!(parsed.price, 100_000_000);
+    assert_eq!(parsed.confidence, 6_357);
+    assert_eq!(parsed.exponent, -8);
+    assert_eq!(parsed.publish_time, REAL_PYTH_PUBLISH_TIME);
+    let captured_update = real_pyth_fixture("price-update.account");
+    assert_eq!(&update_account.data[..8], &captured_update[..8]);
+    assert_eq!(
+        &update_account.data[40..125],
+        &captured_update[40..125],
+        "verification level and every VAA-owned price field match the captured receiver result"
+    );
+    assert_eq!(update_account.data[133], captured_update[133]);
+    // Bytes 8..40 (write authority) and 125..133 (receiver-write slot) are
+    // transaction-local facts, so exact equality there would be false evidence.
+
+    let page = campaign.data(campaign.plane.source_archive.address).await;
+    assert_ne!(page, genesis_page);
+    assert_eq!(page[3], 1, "exactly one authenticated record was appended");
+    let record = &page[512..576];
+    let u64_at = |at: usize| u64::from_le_bytes(record[at..at + 8].try_into().unwrap());
+    let u128_at = |at: usize| u128::from_le_bytes(record[at..at + 16].try_into().unwrap());
+    assert_eq!(u64_at(0), campaign.start_bucket);
+    assert_eq!(u128_at(8), 99_980_929);
+    assert_eq!(u128_at(24), 100_019_071);
+    assert_eq!(u64_at(40), REAL_PYTH_PUBLISH_TIME as u64);
+    assert_eq!(u64_at(48), parsed.posted_slot);
+    assert_eq!(u64_at(56), REAL_PYTH_PUBLISH_TIME as u64);
+
+    // A spec pinning another feed still selects the same reviewed release, but
+    // the real proof writes 0x2a... and the account-level feed join refuses.
+    let mut wrong_feed = Campaign::start(real_pyth_spec([0x2b; 32])).await;
+    wrong_feed.initialize_real_pyth().await;
+    assert_eq!(wrong_feed.send(wrong_feed.init_spec()).await.0, Ok(()));
+    assert_eq!(wrong_feed.send(wrong_feed.init_archive()).await.0, Ok(()));
+    let wrong_page = wrong_feed
+        .data(wrong_feed.plane.source_archive.address)
+        .await;
+    let wrong_update = wrong_feed.update.pubkey();
+    let (result, _) = wrong_feed
+        .send_many(&[
+            wrong_feed.real_pyth_post(wrong_update),
+            wrong_feed.append(0, wrong_update),
+        ])
+        .await;
+    assert_eq!(custom(&result), SOURCE_ADMISSION_FAILED);
+    assert!(wrong_feed.maybe_account(wrong_update).await.is_none());
+    assert_eq!(
+        wrong_feed
+            .data(wrong_feed.plane.source_archive.address)
+            .await,
+        wrong_page,
+        "wrong-feed refusal rolls back provider and Clutch writes"
+    );
+
+    println!("local-real Pyth CU: joined_post_update_plus_clutch_append={joined_cu}");
 }

@@ -49,6 +49,14 @@ use crate::instructions_sysvar::{
 };
 use crate::loader_state::UPGRADEABLE_LOADER_ID;
 
+#[cfg(all(
+    feature = "non-production-mock-source",
+    feature = "non-production-real-pyth-lab"
+))]
+compile_error!(
+    "non-production-mock-source and non-production-real-pyth-lab are distinct ELF identities"
+);
+
 /// Canonical Clock sysvar address, `SysvarC1ock11111111111111111111111111111111`.
 ///
 /// Cross-checked against the runtime's own pin by
@@ -280,6 +288,119 @@ pub mod fixture {
     };
 }
 
+/// Byte pins for the **non-production local-real Pyth campaign**.
+///
+/// This module is absent unless `non-production-real-pyth-lab` is selected.
+/// Its receiver and router bytes were captured from the named devnet
+/// deployment, then executed entirely inside a disposable local bank. The
+/// signed observation used by that campaign is deterministic synthetic test
+/// data from local test guardians. A green campaign therefore establishes
+/// real deployed program/ABI/cryptographic execution across the provider-to-
+/// Clutch transaction seam; it is not evidence of a devnet price, provider
+/// availability, production governance, or suitability for deployment.
+#[cfg(feature = "non-production-real-pyth-lab")]
+pub mod real_pyth_lab {
+    use super::{
+        PostAbiPositionsV1, PostAbiV2, PullReleaseV2, CLOCK_SYSVAR_ID, META_FLAG_IS_SIGNER,
+        META_FLAG_IS_WRITABLE, UPGRADEABLE_LOADER_ID,
+    };
+
+    /// Pyth Solana Receiver program `rec2HH...` from the captured devnet deployment.
+    pub const RECEIVER_PROGRAM: [u8; 32] = [
+        12, 183, 250, 122, 93, 166, 40, 251, 172, 169, 154, 234, 153, 247, 191, 59, 220, 54, 137,
+        104, 96, 42, 191, 65, 77, 78, 139, 165, 103, 187, 176, 191,
+    ];
+
+    /// Upgradeable-loader ProgramData account decoded from [`RECEIVER_PROGRAM`].
+    pub const RECEIVER_PROGRAMDATA: [u8; 32] = [
+        36, 193, 217, 188, 83, 14, 128, 168, 96, 32, 44, 16, 172, 175, 215, 77, 119, 182, 74, 169,
+        54, 67, 73, 241, 216, 23, 185, 252, 58, 36, 131, 42,
+    ];
+
+    /// Receiver `Config` PDA `H3R4M45...` initialized afresh by the local campaign.
+    pub const RECEIVER_CONFIG: [u8; 32] = [
+        238, 89, 90, 195, 222, 6, 29, 79, 129, 224, 111, 41, 182, 154, 130, 148, 218, 115, 206, 1,
+        195, 236, 196, 54, 206, 145, 180, 165, 98, 100, 91, 13,
+    ];
+
+    /// Wormhole Core Bridge router `HDw2E7...` used by the captured receiver.
+    pub const ROUTER_PROGRAM: [u8; 32] = [
+        241, 11, 10, 220, 120, 104, 244, 85, 102, 87, 169, 5, 247, 20, 69, 206, 236, 66, 7, 172,
+        119, 215, 197, 194, 183, 98, 223, 19, 148, 102, 75, 135,
+    ];
+
+    /// Upgradeable-loader ProgramData account decoded from [`ROUTER_PROGRAM`].
+    pub const ROUTER_PROGRAMDATA: [u8; 32] = [
+        129, 50, 201, 239, 143, 229, 66, 230, 102, 107, 79, 207, 240, 58, 197, 139, 124, 134, 144,
+        55, 34, 39, 166, 84, 85, 21, 198, 154, 109, 140, 219, 31,
+    ];
+
+    /// Upgrade authority decoded from both captured ProgramData accounts.
+    pub const UPGRADE_AUTHORITY: [u8; 32] = [
+        13, 136, 27, 159, 103, 200, 203, 61, 82, 253, 46, 178, 125, 19, 194, 9, 81, 209, 153, 33,
+        43, 117, 2, 29, 85, 236, 191, 94, 24, 59, 140, 219,
+    ];
+
+    /// Deployment slots decoded from the original devnet ProgramData bodies.
+    pub const RECEIVER_DEPLOYMENT_SLOT: u64 = 460_336_311;
+    /// Router deployment slot decoded from the original devnet ProgramData body.
+    pub const ROUTER_DEPLOYMENT_SLOT: u64 = 460_336_290;
+
+    /// Synthetic-local feed id embedded in the deterministic signed test VAA.
+    pub const PROVIDER_FEED_ID: [u8; 32] = [0x2a; 32];
+    /// SHA-256 domain identities used only by the laboratory market.
+    pub const BASE_ASSET_ID: [u8; 32] = [
+        0x36, 0x71, 0x7b, 0x91, 0xb8, 0xeb, 0x44, 0xd1, 0x84, 0x82, 0x56, 0x6c, 0x89, 0x6f, 0x47,
+        0x05, 0xa1, 0xb6, 0x33, 0x71, 0xf9, 0xa6, 0x96, 0xb5, 0x8f, 0x22, 0x88, 0xee, 0x6e, 0xc3,
+        0x4a, 0x28,
+    ];
+    /// SHA-256 domain identity for the laboratory quote asset.
+    pub const QUOTE_ASSET_ID: [u8; 32] = [
+        0x8c, 0xc8, 0xa5, 0x2c, 0x68, 0x42, 0xe3, 0xd7, 0x45, 0x23, 0xce, 0xa7, 0xd9, 0x03, 0x9f,
+        0x9b, 0x41, 0x50, 0x16, 0x09, 0x87, 0x8f, 0x20, 0x78, 0x69, 0x7e, 0xff, 0x05, 0x67, 0x6d,
+        0xaf, 0xe4,
+    ];
+
+    /// `post_update` discriminator executed against the pinned receiver ELF.
+    pub const POST_UPDATE_DISCRIMINATOR: [u8; 8] = [0x85, 0x5f, 0xcf, 0xaf, 0x0b, 0x4f, 0x76, 0x2c];
+
+    /// Exact seven-account ABI executed against the pinned receiver ELF.
+    ///
+    /// Equal bytes do not make the fabricated writer's declaration evidence
+    /// for a deployed provider program, so this release owns its ABI constant.
+    pub const POST_ABI: PostAbiV2 = PostAbiV2 {
+        discriminator: POST_UPDATE_DISCRIMINATOR,
+        account_flags: [
+            META_FLAG_IS_SIGNER | META_FLAG_IS_WRITABLE,
+            0,
+            0,
+            META_FLAG_IS_WRITABLE,
+            META_FLAG_IS_SIGNER | META_FLAG_IS_WRITABLE,
+            0,
+            META_FLAG_IS_SIGNER,
+        ],
+        writable_alias_elevation: Some((0, 6)),
+        positions: PostAbiPositionsV1 {
+            config: 2,
+            update_account: 4,
+            write_authority: 6,
+        },
+    };
+
+    /// The adapter/parser release compiled only into the local-real test ELF.
+    pub const RELEASE: PullReleaseV2 = PullReleaseV2 {
+        source_adapter_id: super::fixture::SOURCE_ADAPTER_ID,
+        source_adapter_version: super::fixture::SOURCE_ADAPTER_VERSION,
+        parser_id: super::fixture::PARSER_ID,
+        parser_version: super::fixture::PARSER_VERSION,
+        receiver_program: RECEIVER_PROGRAM,
+        upgradeable_loader: UPGRADEABLE_LOADER_ID,
+        clock_sysvar: CLOCK_SYSVAR_ID,
+        activation_unix_timestamp: 1_787_000_000,
+        post_abi: POST_ABI,
+    };
+}
+
 /// The production pins. **Empty, by design, until the E2 freeze act.**
 ///
 /// Every constant below is deliberately absent rather than provisional. A
@@ -423,7 +544,12 @@ pub fn select_release(spec: crate::source_v2::spec::SourceSpecV2) -> Option<Pull
 /// collateral boundary, and again at resolution. Adding a row is a new ELF
 /// identity and a full reseal cycle by construction
 /// (`R2_PULL_PROMOTION_PLAN.md` §4 item 3).
+#[cfg(not(feature = "non-production-real-pyth-lab"))]
 pub const REGISTERED_RELEASES: &[PullReleaseV2] = &[fixture::RELEASE];
+
+/// The extra row exists only in an unmistakably non-production laboratory ELF.
+#[cfg(feature = "non-production-real-pyth-lab")]
+pub const REGISTERED_RELEASES: &[PullReleaseV2] = &[fixture::RELEASE, real_pyth_lab::RELEASE];
 
 #[cfg(test)]
 mod tests {
@@ -454,7 +580,10 @@ mod tests {
         assert!(mainnet::PARSER_VERSION.is_none());
         assert!(mainnet::ACTIVATION_UNIX_TIMESTAMP.is_none());
         assert!(mainnet::POST_ABI.is_none());
+        #[cfg(not(feature = "non-production-real-pyth-lab"))]
         assert_eq!(REGISTERED_RELEASES.len(), 1);
+        #[cfg(feature = "non-production-real-pyth-lab")]
+        assert_eq!(REGISTERED_RELEASES.len(), 2);
         assert_eq!(REGISTERED_RELEASES[0], fixture::RELEASE);
     }
 

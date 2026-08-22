@@ -6,5 +6,10 @@
 # material, it is generated, and it is never used here — these tests deploy at
 # the fixed `clutch_svm_fixture::PROGRAM_ID` instead — so it is ignored rather
 # than committed.
-tests/fixtures/
+tests/fixtures/*
+# Public, provenance-pinned provider binaries and signed synthetic proof bytes
+# are source fixtures, not locally built Clutch artifacts. A clean clone needs
+# them to run the explicit non-production local-real campaign.
+!tests/fixtures/real-pyth-local/
+!tests/fixtures/real-pyth-local/**
 target/

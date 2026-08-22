@@ -1283,6 +1283,7 @@ dependencies = [
  "clutch-solana-reference",
  "solana-account 4.3.2",
  "solana-address 2.6.1",
+ "solana-clock",
  "solana-instruction",
  "solana-keypair",
  "solana-program-option",
