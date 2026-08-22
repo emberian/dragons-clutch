@@ -287,13 +287,20 @@ ratification — the same "ratify what's built" shape as A7.
 
 ## 5. What deploys where, under the current authorization state
 
+> **Historical authorization snapshot.** This section does not describe current
+> authority. `AGENTS.md` and `CURRENT_TRUTH.md` require a fresh authorization
+> naming every public RPC or mutation. The prepared job payer was later
+> recovered exactly as
+> `4zrxtw5c4oPLpuTQbLYjRCXFUudvFCNNjzR9LqVQvEwP`; the similar `4zrxtw5cQbGX…`
+> address is not bound to that signer.
+
 - **Authorized now (Track C):** devnet/testnet with fresh throwaway keys and
   bounded public-RPC use (ember 2026-08-19, CURRENT_TRUTH.md:136-148); no
   real value, exact build identity, measured operation, no legal claim.
   Mainnet, real value, the registry flip, and official-claim language remain
   human-gated (F6/E3).
 - **Blocked in fact:** the faucet. "No devnet SOL coming" (GOAL.md:32-35);
-  the collector polls; the deploy job (fresh deployer `4zrxtw5c…`, program
+  the collector polls; the deploy job (fresh deployer `4zrxtw5c4oPL…`, program
   ids `3SLhMAFm…` default / `EbWhsDm4…` mock) is "ready to fire the moment
   the deployer is funded" (GOAL.md:686, :711-714). No testnet job exists;
   the same authorization and the same analysis apply if one is created.

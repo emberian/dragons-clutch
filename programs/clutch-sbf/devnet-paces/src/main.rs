@@ -245,6 +245,22 @@ fn require(condition: bool, detail: &str) -> Result<()> {
     }
 }
 
+fn classify_network(url: &str, genesis: &str) -> Result<&'static str> {
+    if url == rpc::PUBLIC_DEVNET_RPC {
+        require(
+            genesis == rpc::DEVNET_GENESIS,
+            "the canonical devnet RPC endpoint does not report the pinned DEVNET genesis hash; refusing to continue",
+        )?;
+        Ok("devnet")
+    } else {
+        require(
+            genesis != rpc::MAINNET_GENESIS,
+            "the loopback RPC endpoint reports the MAINNET genesis hash; refusing to continue",
+        )?;
+        Ok("loopback-or-other")
+    }
+}
+
 fn check_token(
     rpc: &mut Rpc,
     role: &str,
@@ -583,16 +599,9 @@ fn run(args: &Args, transcript: &mut Transcript) -> Result<()> {
     /* Preflight: never mainnet, program deployed and executable, payer able
      * to carry the walk. */
     let genesis = rpc.genesis_hash()?;
-    require(
-        genesis != rpc::MAINNET_GENESIS,
-        "the RPC endpoint reports the MAINNET genesis hash; refusing to continue",
-    )?;
+    let network = classify_network(&args.url, &genesis)?;
     transcript.genesis_hash.clone_from(&genesis);
-    transcript.network = if genesis == rpc::DEVNET_GENESIS {
-        "devnet".to_string()
-    } else {
-        "loopback-or-other".to_string()
-    };
+    transcript.network = network.to_string();
     transcript.claim = transcript::claim_line(args.profile.name(), &transcript.network);
 
     let program_id = Address::from_str(&args.program_id)
@@ -1083,6 +1092,20 @@ mod tests {
         assert!(parse(&["--program-id", "x", "--payer", "p", "--profile", "prod", "--out", "o"])
             .is_err());
         assert!(parse(&["--unknown"]).is_err());
+    }
+
+    #[test]
+    fn public_devnet_and_loopback_genesis_are_classified_fail_closed() {
+        assert_eq!(
+            classify_network(rpc::PUBLIC_DEVNET_RPC, rpc::DEVNET_GENESIS).unwrap(),
+            "devnet"
+        );
+        assert!(classify_network(rpc::PUBLIC_DEVNET_RPC, "wrong-genesis").is_err());
+        assert_eq!(
+            classify_network("http://127.0.0.1:8899", "local-genesis").unwrap(),
+            "loopback-or-other"
+        );
+        assert!(classify_network("http://127.0.0.1:8899", rpc::MAINNET_GENESIS).is_err());
     }
 
     #[test]

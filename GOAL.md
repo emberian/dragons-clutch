@@ -985,7 +985,9 @@ J. SMALL-FIX BATCH (stale blocker row, mock path-sensitivity, queued
   record) + exact refusal boundaries (0x79/0x7a/0x4) with byte-identical
   rollback; the funded lifecycle remains local evidence until the real
   Pyth-pull build. Mainnet double-refused by URL allowlist + genesis hash.
-  Ready to fire the moment the deployer is funded.
+  Historical status only: the current source, artifact, source profile, rent,
+  and authorization have superseded this “ready to fire” claim. See
+  `CURRENT_TRUTH.md` and `programs/clutch-sbf/devnet-paces/README.md`.
 
 - DRAFT 11 x2 (degg-research 0dd6601, 4ce0ce6): both Aug-24 documents
   rewritten in the named-system register — definitions (9pp) with the
@@ -1011,12 +1013,15 @@ J. SMALL-FIX BATCH (stale blocker row, mock path-sensitivity, queued
 - AMBITION UPGRADE executed: R2 promotion plan committed (c364630 — three
   phases, 36-delta bridge, gates incl. ember's explicit registry-flip go);
   devnet job created (~/jobs/dragons-clutch-devnet-20260819: fresh deployer
-  4zrxtw5c..., program ids 3SLhMAFm... default / EbWhsDm4... mock; sealed
+  `4zrxtw5c4oPLpuTQbLYjRCXFUudvFCNNjzR9LqVQvEwP`, program ids 3SLhMAFm...
+  default / EbWhsDm4... mock; sealed
   bd20711b ELF verified for deploy); faucet rate-limited so a patient SOL
   collector runs in background; V3 ATOMIC PROMOTION lane launched on the
   successor branch (merge settle port -> full lifecycle handlers -> one
   all-or-nothing route family -> hostile + real-bank campaign, with the
   predecessor's legacy-intent failure mode as a mandatory regression).
+  The later `4zrxtw5cQbGXnEMWJUJcCJvTuP6GTHM76KTsRRcVW4jn` spelling is not
+  bound to that job's signer and must not be funded as its payer.
 
 - HANDOFF PRIORITY 1 COMPLETE: dependency/license closure cataloged as two
   declared gates (d2e1cd5; complete-scope + SBOM byte-equality, catalog

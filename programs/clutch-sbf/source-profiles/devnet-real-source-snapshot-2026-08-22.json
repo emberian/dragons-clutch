@@ -1,0 +1,150 @@
+{
+  "schema": "dragons-clutch/provisional-source-snapshot/v1",
+  "status": "PROVISIONAL_READ_ONLY",
+  "classification": {
+    "compiled_registry_row": false,
+    "release_identity": false,
+    "deployment_manifest": false,
+    "authorization_to_sign_or_submit": false,
+    "promotion_eligibility": "REFUSE"
+  },
+  "evidence_inputs": {
+    "source_document": "docs/reviews/DEVNET_REAL_SOURCE_SNAPSHOT_2026-08-22.md",
+    "clone_script": "programs/clutch-sbf/scripts/run_pyth_devnet_clone.sh"
+  },
+  "retrieval": {
+    "rpc_endpoint": "https://api.devnet.solana.com",
+    "commitment": "finalized",
+    "window_start_utc": "2026-08-22T20:43:00Z",
+    "window_end_utc": "2026-08-22T20:46:00Z",
+    "read_only": true
+  },
+  "cluster": {
+    "name": "devnet",
+    "genesis_hash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
+  },
+  "reviewed_upstream": {
+    "repository": "https://github.com/pyth-network/pyth-crosschain",
+    "commit": "f50a3faf9fc5a223a22889799b2f778900f186b3"
+  },
+  "accounts": {
+    "receiver_program": {
+      "address": "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+      "executable": true,
+      "owner_kind": "Upgradeable Loader",
+      "data_len": 36,
+      "account_body_sha256": "ef37dd1cee22d731902a8c04ed2e13136a2b8aa7068d9db3aff2ed1ec7b634e5",
+      "programdata": {
+        "address": "3UV7w2yTaqVcUAbWm1KUXdcE1Ziw8CfyyCpZvhKFkPfX",
+        "deployment_slot": 460336311,
+        "upgrade_authority": "upg8KLALUN7ByDHiBu4wEbMDTC6UnSVFSYfTyGfXuzr",
+        "data_len": 416909,
+        "account_body_sha256": "7122abc6b5e78d30bf88c869cb5d8783adaf897369d04eca827d3af8ffe18e5d"
+      }
+    },
+    "router_program": {
+      "address": "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+      "executable": true,
+      "owner_kind": "Upgradeable Loader",
+      "data_len": 36,
+      "account_body_sha256": "1ee590ae23d5ecbf775aba910f06a993dee8f77bfd7028790dbd349651c8034b",
+      "programdata": {
+        "address": "9hLWdeVhSG9ufuQFA5d6zUoZ6qXoMRWrS8i4HGFHnR1x",
+        "deployment_slot": 460336290,
+        "upgrade_authority": "upg8KLALUN7ByDHiBu4wEbMDTC6UnSVFSYfTyGfXuzr",
+        "data_len": 656005,
+        "account_body_sha256": "f26f4b53b0f980455886116f500fa74ba475e51b1acb7f486b18afa9d73d948f"
+      }
+    },
+    "push_oracle_program": {
+      "address": "pyt2F414BA6dPttK6RddPZUdHfapoBN24GL5wbrPCou",
+      "executable": true,
+      "classification": "cloned-dependency-not-admitted-source-identity"
+    },
+    "receiver_config": {
+      "address": "H3R4M45f2gyqp6geVUruapzZdyxpgGZ96UnWkDM3ndye",
+      "owner_kind": "receiver-owned",
+      "executable": false,
+      "data_len": 370,
+      "account_body_sha256": "23a7a19cf60c1fda8f070323fb8f1013a32851b0921fb7b2ac085990cbfaa37a"
+    }
+  },
+  "observed_post_update": {
+    "instruction": "PostUpdate",
+    "anchor_global_name": "global:post_update",
+    "discriminator_hex": "855fcfaf0b4f762c",
+    "account_order": [
+      {
+        "index": 0,
+        "role": "payer",
+        "writable": true,
+        "signer": "transaction-boundary"
+      },
+      {
+        "index": 1,
+        "role": "encoded_vaa",
+        "writable": null,
+        "signer": null
+      },
+      {
+        "index": 2,
+        "role": "receiver_config",
+        "writable": false,
+        "signer": null
+      },
+      {
+        "index": 3,
+        "role": "treasury",
+        "writable": true,
+        "signer": null
+      },
+      {
+        "index": 4,
+        "role": "price_update_v2",
+        "writable": true,
+        "signer": null
+      },
+      {
+        "index": 5,
+        "role": "system_program",
+        "writable": false,
+        "signer": null
+      },
+      {
+        "index": 6,
+        "role": "write_authority",
+        "writable": null,
+        "signer": "direct-call-or-invoke-signed-pda"
+      }
+    ],
+    "push_oracle_cpi_satisfies_top_level_adjacency": false
+  },
+  "observed_update_accounts": [
+    {
+      "address": "6HAuqASbHEh4w4REJEUUUCginTLfj1kwCh215ZLtMkrT",
+      "data_len": 134,
+      "feed_id_hex": "eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a",
+      "price": 99995000,
+      "confidence": 6357,
+      "exponent": -8,
+      "publish_time": 1787431676,
+      "posted_slot": 486727682,
+      "verification_level": "Full",
+      "canonical_zero_padding": true,
+      "account_body_sha256": "fe665d8884fca3428c17a1a1ab5a8dbd4f35717900ebc1af182e8a5e93f69d16"
+    },
+    {
+      "address": "9qYStiZz65fSGkpTsk1niVYifjK34d79hMbpNNcwDxTd",
+      "data_len": 134,
+      "feed_id_hex": "add6499a420f809bbebc0b22fbf68acb8c119023897f6ea801688e0d6e391af4",
+      "price": 116779625,
+      "confidence": 1,
+      "exponent": -8,
+      "publish_time": 1787431676,
+      "posted_slot": 486727664,
+      "verification_level": "Full",
+      "canonical_zero_padding": true,
+      "account_body_sha256": "25978e31019ba5e784ebb923cebd955d6fc97917c7e4f836b88242bb77bbc02e"
+    }
+  ]
+}

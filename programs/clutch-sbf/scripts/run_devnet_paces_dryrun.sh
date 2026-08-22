@@ -52,6 +52,15 @@ cleanup() {
   perl -e 'unlink for @ARGV' \
     "$keys/payer.json" "$keys/default-program.json" "$keys/mock-program.json" \
     2>/dev/null || true
+  for output in out-default out-mock out-negative; do
+    perl -e 'unlink for @ARGV' \
+      "$work/$output/keys/actor.json" \
+      "$work/$output/keys/bearer.json" \
+      "$work/$output/keys/collateral-mint.json" \
+      "$work/$output/keys/actor-collateral-token.json" \
+      "$work/$output/keys/bearer-collateral-token.json" \
+      2>/dev/null || true
+  done
 }
 trap cleanup EXIT
 

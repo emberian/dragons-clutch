@@ -47,6 +47,9 @@ A refusal reads no account, writes no byte, and reports no success.
   the reference post-state.
 - `vendor/` — one verbatim third-party crate, present only because this host has
   its source but not its `.crate` archive. See `vendor/PROVENANCE.md`.
+- `source-profiles/` — provisional, machine-readable source observations and an
+  offline consistency gate. These records are not compiled registry entries or
+  release identities; see `source-profiles/README.md`.
 
 Full write-up, including the ladder of harnesses tried, the deferred-check list,
 and honest claim language: [`docs/implementation/SBF_BRINGUP.md`](../../docs/implementation/SBF_BRINGUP.md).

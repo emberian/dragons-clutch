@@ -21,11 +21,13 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub const MAINNET_GENESIS: &str = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
 /// The public devnet genesis hash, used only to label the transcript.
 pub const DEVNET_GENESIS: &str = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
+pub const PUBLIC_DEVNET_RPC: &str = "https://api.devnet.solana.com";
 
-/// Admit only loopback HTTP or an HTTPS devnet endpoint.
+/// Admit only loopback HTTP or the canonical public devnet endpoint.
 ///
 /// Fail-closed on purpose: anything mentioning mainnet is refused outright,
-/// non-loopback URLs must be HTTPS and name devnet in their host, and the
+/// The public form is exact rather than substring-based, so a hostile host,
+/// credential-bearing URL, path, or query cannot masquerade as devnet. The
 /// loopback form must match the committed harness's exact shape.
 pub fn admit_url(url: &str) -> Result<()> {
     if url.to_ascii_lowercase().contains("mainnet") {
@@ -40,17 +42,10 @@ pub fn admit_url(url: &str) -> Result<()> {
         }
         return Ok(());
     }
-    let Some(rest) = url.strip_prefix("https://") else {
-        return Err(format!(
-            "refusing non-loopback non-HTTPS RPC URL: {url}"
-        )
-        .into());
-    };
-    let host = rest.split(['/', ':']).next().unwrap_or_default();
-    if host.contains("devnet") {
+    if url == PUBLIC_DEVNET_RPC {
         Ok(())
     } else {
-        Err(format!("refusing RPC host that does not name devnet: {host}").into())
+        Err(format!("refusing non-canonical devnet RPC URL: {url}").into())
     }
 }
 
@@ -154,15 +149,12 @@ impl Rpc {
     }
 
     pub fn latest_blockhash(&mut self) -> Result<String> {
-        self.call(
-            "getLatestBlockhash",
-            &json!([{"commitment": "confirmed"}]),
-        )?
-        .get("value")
-        .and_then(|value| value.get("blockhash"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| "getLatestBlockhash returned no blockhash".into())
+        self.call("getLatestBlockhash", &json!([{"commitment": "confirmed"}]))?
+            .get("value")
+            .and_then(|value| value.get("blockhash"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| "getLatestBlockhash returned no blockhash".into())
     }
 
     pub fn is_blockhash_valid(&mut self, blockhash: &str) -> Result<bool> {
@@ -182,13 +174,10 @@ impl Rpc {
     }
 
     pub fn balance(&mut self, address: &str) -> Result<u64> {
-        self.call(
-            "getBalance",
-            &json!([address, {"commitment": "confirmed"}]),
-        )?
-        .get("value")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| "getBalance returned no value".into())
+        self.call("getBalance", &json!([address, {"commitment": "confirmed"}]))?
+            .get("value")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "getBalance returned no value".into())
     }
 
     /// Reload one account at confirmed commitment; `None` when absent.
@@ -312,8 +301,7 @@ mod tests {
 
     #[test]
     fn devnet_and_loopback_urls_are_admitted() {
-        assert!(admit_url("https://api.devnet.solana.com").is_ok());
-        assert!(admit_url("https://devnet.helius-rpc.com/?api-key=x").is_ok());
+        assert!(admit_url(PUBLIC_DEVNET_RPC).is_ok());
         assert!(admit_url("http://127.0.0.1:18939").is_ok());
         assert!(admit_url("http://localhost:8899").is_ok());
     }
@@ -324,7 +312,9 @@ mod tests {
         assert!(admit_url("https://api.MAINNET-beta.solana.com").is_err());
         assert!(admit_url("https://api.testnet.solana.com").is_err());
         assert!(admit_url("http://api.devnet.solana.com").is_err());
+        assert!(admit_url("https://devnet.helius-rpc.com/?api-key=x").is_err());
         assert!(admit_url("https://example.com/devnet").is_err());
+        assert!(admit_url("https://api.devnet.solana.com/?credential=x").is_err());
         assert!(admit_url("http://127.0.0.1:").is_err());
         assert!(admit_url("http://127.0.0.1:80x").is_err());
     }
