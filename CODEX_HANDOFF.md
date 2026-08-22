@@ -1,263 +1,80 @@
-# Dragon's Clutch engineering handoff
+# Codex handoff — optimization session
 
-Status date: 2026-08-19. The repository is an advanced local research and SBF
-bring-up, not a release, deployment, or complete venue.
+Rewritten 2026-08-22 (the prior version pinned an identity five seals old).
+Read order: this file → `MACRO_AND_MICRO_OPTIMIZATION.md` (your work list)
+→ `CURRENT_TRUTH.md` §§1-3 (the claim vocabulary and live state).
 
-## Read order
+## State in one paragraph
 
-1. [`AGENTS.md`](AGENTS.md) — authority, provenance, and correctness language.
-2. [`PROJECT.md`](PROJECT.md) — canonical product semantics.
-3. [`CURRENT_TRUTH.md`](CURRENT_TRUTH.md) — live evidence and STOP ledger.
-4. [`docs/V1_BACKLOG.md`](docs/V1_BACKLOG.md) — dependency-ordered execution.
-5. The owning design/implementation note for the lane you select.
+The protocol is capability-complete: the general clearing plane runs
+place → freeze → walk → verify → select → entitle → settle with partial
+fills, realized rounding/virtual pots, and an on-chain no-arbitrage gate
+for degree-2/3 claims; every account has a close path returning exact
+recorded principal; fees are computable (rates deliberately zero); two
+source generations exist and the default ELF takes custody against a
+registered pull release; a keeper cranks the whole lifecycle
+permissionlessly; a browser bench trades it human-vs-automaton.
+`SETTLEMENT_BLOCKERS` is empty. Current sealed identity:
+**`0d52c561909cedef…`, 2,149,672 bytes**, manifest `902e8d2`
+(101 gates, 100/101 with one documented drift window), Persvati-attested.
+Your job is CU/size optimization per `MACRO_AND_MICRO_OPTIMIZATION.md`,
+not new capability.
 
-This file is a compact transition aid. If it disagrees with
-`CURRENT_TRUTH.md`, the latter controls. Historical detail remains available in
-Git; do not revive an old test count or status sentence as current evidence.
+## Where you work
 
-## The semantic correction to preserve
+- **hbox, in your own clone** (`~/dev/dragons-clutch`). Run every build
+  under `swarm-build` (enforced MemoryMax; bare taskset does not cap
+  memory and hbox has been OOM-power-cycled before). You are co-tenant
+  with the datacake HOL build — spare its poly/Holmake processes.
+- Your clone's ELF hashes will NOT equal the sealed identity — the
+  identity is same-path-reproducible only, and the canonical path is the
+  laptop checkout. That is expected and fine: optimization measures
+  **deltas at your own path**; the reseal at wave end happens on the
+  laptop (not your job).
+- Toolchains, pinned: program workspace rustc 1.89.0 / cargo-build-sbf
+  4.0.0 / platform-tools v1.53; the svm-tests workspace has its own
+  1.93.1 pin (`programs/clutch-sbf/svm-tests/rust-toolchain.toml`).
+  Verify both build green before changing anything: one filtered test
+  per workspace, never a bare `-p` suite (house rule; measured 9.5 GB /
+  2 h of waste the time it was broken).
 
-Dragon's Clutch does not top out at one-hot outcome tokens.
+## Working agreement
 
-- Degree zero is the native categorical basis over an exhaustive, disjoint,
-  ordered state partition.
-- Degrees one through three are native open-clamped B-spline Eggs. Their local
-  supports overlap; exact nonnegative settlement weights sum to the frozen
-  denominator.
-- Exact coefficients over the selected native basis are the native payoff
-  algebra. They are not “portfolio sugar.”
-- Sampling or integrating a shaped payoff into degree-zero Eggs is a
-  compatibility lowering. It must remain labeled and certified as such when
-  approximate.
+1. **Branches, not main**: `codex/opt-<topic>`, pushed, merged from the
+   laptop side after review. (We just deleted 27 dead branches after a
+   full patch-id triage — keep the tree that clean: one branch per
+   topic, delete on merge.)
+2. **Every optimization commit carries its measurements in the body**:
+   route, CU before → after at your path, the campaign that produced
+   them, and the gates run. A number without its context is a rumor.
+3. **The gates that must stay green** for any change:
+   the touched plane's conservation + hostile batteries; the frame
+   probe (zero `clutch_sbf` diagnostics is a sealed invariant); clippy
+   `-D warnings`; the equivalence corpora where the relation is touched
+   (the 2,592-book batch/stream corpus, the 322-point resume corpus).
+4. **Never touch**: the frozen policy consts' bytes/digests
+   (`GENERAL_CLEARING_POLICY_V1` and siblings), the exact-integer
+   settlement discipline, refusal semantics, account formats without a
+   version bump, `research/liveness-policy-profile/artifacts/` (sealed
+   evidence), `MANIFEST.baseline.json`.
+5. **rustfmt named files only** — the tree is not fmt-clean and a wide
+   fmt tramples concurrent work.
+6. Commit messages: lowercase-imperative subject that tells the story,
+   body with the finding; end with your own attribution trailer.
 
-The control document is
-[`docs/design/NATIVE_AND_LOWERED_SEMANTICS.md`](docs/design/NATIVE_AND_LOWERED_SEMANTICS.md).
-Do not make a green categorical implementation the product's semantic ceiling.
+## Pointers
 
-## Accepted evidence, by plane
+- `MACRO_AND_MICRO_OPTIMIZATION.md` — the ranked work list with sealed
+  baselines. Start at M1 (ClearWork partial-decode) or M2 (the
+  EntitleSlice locator); M2 is the cleaner first win.
+- `research/liveness-policy-profile/evidence.json` — the sealed CU rows
+  (the W1 block: 107 shape-keyed routes) your deltas compare against.
+- `programs/clutch-sbf/svm-tests/tests/scale_*.rs` — the campaign
+  harness and `Meter` idiom; clone these shapes for new measurements.
+- `docs/research/DUAL_IS_THE_MEASURE.md`, the partial-fill and
+  operator-bench design docs in `docs/design/` — the semantics you must
+  not bend for cycles.
+- `BRANCH_TRIAGE_2026-08-22.md` (untracked) — why the branch namespace
+  is empty; the recovery hashes if you ever need history.
 
-### Mathematical model
-
-`lean/DragonsClutch/BSpline.lean` at commit `8c929a9` contains 159 counted
-declarations, including 116 theorems, with no `sorry`, `admit`, axiom, `unsafe`,
-`native_decide`, or `implemented_by`. It checks the rational clamped basis,
-uniform stored-knot/pane/BasisFuns linkage, canonical largest-remainder
-existence and uniqueness, integer admissibility, support, solvency, and
-complete-set results. This is **PROVED-MODEL** only. Rust parser/control-flow/
-Fraction/selection-loop equivalence, arbitrary nonuniform degree-one linkage,
-accounts, source, and runtime remain outside it.
-
-At `be8eba3`, eight Lean-computed fixtures match digest-pinned production
-`BasisSpec::evaluate` outputs and five actual-source mutants compile, execute,
-and go red. Call this **CHECKED-FINITE**, not a Verus result or universal Rust/
-SBF refinement.
-
-The older semantic-plane Lean inventory and narrow Verus
-`prepare_internal_transfer` result retain their own documented boundaries.
-Rocq definitions/typechecking are not a theorem inventory.
-
-### Host and research
-
-- `crates/clutch-bspline`: exact degree-zero through degree-three evaluator,
-  safe `no_std`, no allocation/floats, largest-remainder quantization, and an
-  independent Python `Fraction`/Cox-de-Boor differential.
-- `programs/solana-reference`: conservative native-vector derivation seam;
-  degree two/three non-point evidence and derived TWAP refuse.
-- `research/bspline-shape-compiler`: exact-rational exact-in-span versus
-  certified-approximation compiler for ranges/tails/tents/capped spreads and
-  Gaussian proximity.
-- `research/bspline-window-semantics`: point/interval/TWAP/occupation comparison
-  and counterexamples to endpoint or midpoint shortcuts.
-- `crates/clutch-bspline-accumulator`: fixed-width occupation monoid with
-  explicit gaps and two separately named finalizers.
-- `programs/solana-layout/src/native_resolution.rs`: 319-byte version-three
-  native Resolution codec, selected for degree-one through degree-three Terms;
-  degree zero retains the explicit 165-byte v2 preset ABI.
-- `crates/clutch-liveness`: safe fixed-memory pure admission accounting for
-  component market/order reserves, zero-fee work, source/archive sharing,
-  replay-safe terminal ownership, anti-spam bounds, and persistent fee carry.
-  Its generic maxima and rates are model inputs. The separate routed
-  ResolutionWork adapter has an exact measured profile; do not generalize that
-  profile to the rest of the system.
-- `research/fractional-redemption`: safe fixed-width exact-lot and persistent-
-  numerator-credit policy models. A resolved common lot is
-  `lcm_i D/gcd(D,w_i)`; credits preserve the market aggregate liability but
-  expose an irreducible terminal remainder absent subsidy, forfeiture, or a
-  finer unit. No policy is selected or live.
-- `research/source-profile-v1` additionally contains the selected R2 Pyth pull
-  profile model: a distinct-domain 368-byte SourceSpec-v2 with closing
-  `CROSSING_V1` id 2 and a receiver/loader/Instructions/Clock authentication
-  contract. It has no frozen post-cutover identity, registry entry, runtime
-  parser, or SBF route.
-- `research/failure-payout-v1` records the new-research
-  `EvidenceOnlyRecoveryV1` policy: no numeric fallback, finite independently
-  prepaid repair, and recoverable dormancy. `research/terminal-economics-r4`
-  is a separate `I`/`E`/`A` supply-plane and claimant-credit-vault model that
-  rules out general tombstone-only closure for arbitrary raw bearer units.
-  Neither supplies a live ABI, Token-2022 adapter, migration, or terminal walk.
-
-These are **HOST-TESTED**, **MODEL-ONLY**, or **PROVED-MODEL** as named in
-`CURRENT_TRUTH.md`. None is a live native-resolution SBF claim.
-
-### Local SBF runtime
-
-The current frozen runtime source and test ancestry is `83e124d`; the current
-liveness/artifact seal is `b5700a9`. Two ordinary builds produced the same
-1,490,544-byte ELF with SHA-256
-`af6bb79cc3766bd0d889b46dc1becfebe140c7df2746971943e9edf4efc2014b` (sealed at `7931e23`); the
-1,228,192-byte `bd20711b01828a745ce89de3aacb4b908cbcde32307b61be2c7d612bb8516b60` is historical.
-The sealed audit finds zero first-party final-LTO diagnostic survivors and no
-direct `r10` reference beyond 4,096 bytes. The preceding
-`7e8f6b1`/`b5da74f`/`a572...` seal remains historical evidence only. The two
-ELFs have identical executable sections and normalized instructions; seven
-line-location bytes changed after a required rustdoc-link repair, so every
-current CU row was still remeasured against `bd207...`. This is exact local
-artifact/stack/bank evidence, not a release or deployment.
-
-Focused real-bank paths now exist for:
-
-- pooled Token-2022 custody and exact unreserved `WithdrawCash`;
-- actual-mint supply truth, ordinary burn-as-forfeiture, and positionless
-  transferred-holder `RedeemExternal`;
-- typed resumable transport for policy, grid, and Terms artifacts;
-- exact cash/internal-Egg order reservation plus one-shot cancellation;
-- one narrow `SettlePage` consumption seam for a pre-frozen same-page,
-  full-fill, direct single-Egg, zero-fee receipt. It joins selected candidate,
-  canonical CandidateFeed, and two ACTIVE reservations; the focused success
-  consumed 862,107 transaction CU in the latest joined rerun;
-- one pre-fund-safe `SubmitDirectPage` constructor for a frozen two-order,
-  two-outcome, equal-limit, zero-fee direct page. It creates an exact feed and
-  SUBMITTED Candidate in 1,249,403 transaction CU, but leaves Epoch FROZEN and
-  the score/digest zero and unverified; and
-- degree-one through degree-three source-joined point Resolve, sole-vector v3
-  persistence, exact retry/conflict, and exact-lot internal and positionless
-  bearer redemption. Seven focused real-SBF scenarios pass; nondivisible
-  quantities refuse without rounding. The corrected fixture passes 15/15
-  against the sealed ELF; and
-- routed ResolutionWork Begin/Fold/Finalize/Abort over sealed archive bytes.
-  Only its exact measured rows clear the selected 25%-headroom liveness
-  profile; this is not a global policy or an extrapolation.
-
-The default source-release registry is empty. Since `cfea8e8`, Endow refuses
-`SourceReleaseUnavailable` (`0x79`) before owner allocation or Token-2022 CPI.
-A successful mock-source Endow uses a distinct `non-production-mock-source`
-ELF. Live Direct V2 at `e874db1` can submit candidates, but full top-three
-Select reaches exactly 1,400,000 CU and rolls back. Direct V3 at `ef32495` is
-MODEL/DESIGN only. There is no live end-to-end settlement or no-stranding claim.
-
-The joined signed walk at source HEAD `c05fe84` used ELF
-`70c33c1cd44b475745b0562a79d9107f1d2101cbf698ebd6c233ca167ebab2e6`.
-It committed 22 signed confirmed transactions, including two expected
-refusals, reloaded 18 watched accounts, separated market resolution replay from
-owner replay, redeemed internal and bearer claims, withdrew both owners' free
-cash, and ended both Position cash balances and the Hoard token balance at
-zero. A corrupted terminal Hoard-token expectation failed specifically on
-committed bytes.
-
-That is **SBF-EXECUTED local evidence**. The walk injects 11 Clutch-owned
-prerequisites and never clears or settles an order epoch. It is neither a
-blank-bank lifecycle nor end-to-end venue evidence.
-
-## Accounting model
-
-For one market:
-
-```text
-H = actual Hoard collateral tokens
-L = retained claim backing
-P = aggregate Position cash
-R = reserved cash, a subset of P
-S = unsolicited unowned surplus
-
-H = L + P + S        and        0 <= R <= P
-```
-
-Split, Merge, and internal redemption are token-neutral pooled-accounting
-reclassifications. Endow and Withdraw are the owner/Hoard Token-2022 boundary.
-External redemption burns a bearer Egg and transfers its exact payout.
-Reserved Eggs remain in the claim-supply identity, not the collateral equation.
-Hoard donations and direct Egg burns create no fee, sweep right, or treasury
-asset. Hoard principal is never rent, liveness, bounty, or revenue.
-
-## Live STOPs
-
-1. Degree-one through degree-three source-joined point Resolve, v3 vector
-   persistence/replay, and exact-lot internal and positionless bearer
-   redemption are live. Other post-resolution consumer audit, production
-   source ingestion, monolithic occupation-v4 initial liveness, and a total
-   fragment/credit policy remain open. The exact sealed ELF's stack gate passes;
-   the staged ResolutionWork route is admitted only for its measured shapes.
-2. Repaired at `3a81b38` (an ancestor of current runtime `83e124d`):
-   KernelAccount v2 persists the Terms-checked immutable basis mode, the
-   reference adapter and SBF Split family reconstruct the stored mode after
-   requiring Active, and hostile flip/wrong-mode/solvency/phase tests landed.
-   Remaining: per-degree blank-bank joined lifecycle evidence and the
-   Terms-to-payout refinement boundary.
-3. Resolve now derives and authenticates canonical SourceSpec/archive PDAs and
-   requires the caller's compatibility projection to equal the sealed archive.
-   No production provider/parser, onchain create/append/seal path, immediate
-   receiver-post/CPI/config provenance, live Clock/feed admission, or multi-page
-   proof exists. The focused bank still injects deterministic mock source state
-   at genesis. Typed artifact transport does not solve ingestion. Default Endow
-   must keep failing closed until a production release is registered. The R2
-   Pyth SourceSpec-v2/CROSSING_V1 cut is model-only; absent post-cutover
-   identity, official loader/Instructions/Clock decoders, registry, and SBF
-   evidence leave the default `0x79` refusal unchanged.
-4. A bank with no injected Clutch account can now seal policy/grid/Terms,
-   create Realm/Profile, and create the complete initial degree-selected market
-   plane. It cannot create the full source/archive/Epoch/candidate/pot/receipt
-   lifecycle. Terms also does not consensus-check referenced Grid existence.
-   Existing Market, Reservation, and later-owner families now have real-bank
-   pre-fund/rollback coverage; every future constructor must inherit the same
-   allocate/assign rule and regression gate.
-5. `SubmitDirectPage` now constructs one narrow SUBMITTED Candidate/feed and
-   `SettlePage` executes one separately preauthorized direct receipt. Direct V2
-   Select is a measured compute STOP, and Direct V3 is model-only. Candidate
-   completion/scoring/window closure/selection, receipt/pot/entitlement
-   construction, frozen global reservation-set closure, partial/portfolio/
-   virtual/fee paths, permissionless lapse/refund, and terminal sweep remain
-   open; the seams are not reachable end to end.
-6. ResolutionWork is measured and prepaid for its exact route, but mandatory
-   system work is not. No complete global `LivenessPolicy`, terminal closure,
-   or no-stranding result exists; fee/failure policy is not frozen.
-7. Empty frozen Direct V2 epochs can strand Reservations; most accounts lack
-   authenticated rent ownership and a close route; outcome mints have no
-   `MintCloseAuthority`; and Hoard donations, claim-burn forfeiture, and
-   fractional fragments lack selected terminal disposition. The R4 model says
-   arbitrary raw bearer quantities instead require a persistent claimant-credit
-   vault/root or another explicit immutable policy; it is not a live
-   Token-2022, migration, or SBF closure.
-8. The clean schema-v2 local evidence baseline now passes 94/94 and its
-   post-commit full check. Hbox has independently rebuilt the same source with
-   its cross-OS divergence classified; byte-level seal reproduction still needs
-   a second macOS host. The repository still lacks complete release SBOM/license
-   record, external security review, signed tag, and release bundle.
-9. Gate L0 remains open. No engineering artifact authorizes public-network use,
-   filing, regulator contact, or real funds.
-
-## Recommended execution order
-
-Follow the first dependency-unblocked item in `docs/V1_BACKLOG.md`:
-
-1. preserve the sealed R1 artifact/stack/bank evidence and checked schema-v2
-   local baseline while obtaining a fresh portable attestation;
-2. audit every native post-resolution consumer without weakening exact-lot or
-   source STOPs;
-3. implement the full blank-bank production source/archive lifecycle;
-4. join funded reservations to epoch freeze, candidate selection, immutable
-   entitlements, and `SettlePage`;
-5. measure/prepay liveness and freeze economics only from final instruction
-   shapes; and
-6. run adversarial, proof, SBF, artifact, independent-build, and release gates.
-
-Each lane must name its falsifier before editing. Run the narrowest test capable
-of making the claim red. Never edit a vector or relax a refusal merely to get a
-green gate.
-
-## Operational boundary
-
-Run `git status --short` before choosing files: parallel lanes may share this
-worktree. Add and commit only explicitly owned paths; ordinary local commits
-need no extra permission. Do not push, tag, publish, deploy, contact a public
-RPC, sign with a real wallet, fund anything, create a public market, or contact
-a regulator without explicit current authorization naming that act.
+The meters are honest; leave them that way.
