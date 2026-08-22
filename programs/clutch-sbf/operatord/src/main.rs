@@ -56,7 +56,8 @@ fn usage() -> ! {
     eprintln!(
         "usage:\n  \
          operatord serve [--mode watch|trade] [--port N] [--rpc-port N] [--faucet-port N] \
-         [--work DIR] [--static DIR] [--freeze-window SLOTS] [--exit-when-done]\n  \
+         [--gossip-port N] [--dynamic-port-range START-END] [--work DIR] [--static DIR] \
+         [--freeze-window SLOTS] [--exit-when-done]\n  \
          operatord emit <plan-dir>\n  \
          operatord replay <plan-dir>"
     );
@@ -68,6 +69,8 @@ struct Options {
     port: u16,
     rpc_port: u16,
     faucet_port: u16,
+    gossip_port: u16,
+    dynamic_port_range: String,
     work: Option<PathBuf>,
     statics: PathBuf,
     freeze_window: u64,
@@ -81,6 +84,9 @@ impl Default for Options {
             port: 9130,
             rpc_port: 9137,
             faucet_port: 9138,
+            // The active local Pyth clone owns gossip 9150 and 9151-9199.
+            gossip_port: 9200,
+            dynamic_port_range: "9201-9250".to_string(),
             work: None,
             statics: repo_path("apps/operator"),
             freeze_window: session::FREEZE_WINDOW_SLOTS_DEFAULT,
@@ -98,6 +104,8 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options> {
             "--port" => options.port = value()?.parse()?,
             "--rpc-port" => options.rpc_port = value()?.parse()?,
             "--faucet-port" => options.faucet_port = value()?.parse()?,
+            "--gossip-port" => options.gossip_port = value()?.parse()?,
+            "--dynamic-port-range" => options.dynamic_port_range = value()?,
             "--work" => options.work = Some(PathBuf::from(value()?)),
             "--static" => options.statics = PathBuf::from(value()?),
             "--freeze-window" => options.freeze_window = value()?.parse()?,
@@ -111,12 +119,21 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options> {
 /// Dispatch on the session mode: watch the sealed lane's plan, or trade the
 /// Friday clutch.  The two share the prologue and nothing else.
 fn dispatch(options: Options) -> Result<()> {
+    toolchain::validate_validator_network(
+        Some(options.port),
+        options.rpc_port,
+        options.faucet_port,
+        options.gossip_port,
+        &options.dynamic_port_range,
+    )?;
     match options.mode.as_str() {
         "watch" => serve(options),
         "trade" => trade::serve(trade::Options {
             port: options.port,
             rpc_port: options.rpc_port,
             faucet_port: options.faucet_port,
+            gossip_port: options.gossip_port,
+            dynamic_port_range: options.dynamic_port_range,
             work: scratch_dir(options.work)?,
             statics: options.statics,
             freeze_window: options.freeze_window,
@@ -257,14 +274,22 @@ fn serve(options: Options) -> Result<()> {
     stage(&bus, "keys", "eight ephemeral test-only signers minted");
     bus.publish(&json!({"type": "roster", "actors": keys.roster()}));
 
-    stage(&bus, "elf", "building the NON-PRODUCTION mock-source SBF ELF");
+    stage(
+        &bus,
+        "elf",
+        "building the NON-PRODUCTION mock-source SBF ELF",
+    );
     let artifact = toolchain::build_artifact(
         &repo_path("programs/clutch-sbf/program/Cargo.toml"),
         &out_dir,
         &work.join("build.log"),
     )?;
 
-    stage(&bus, "plan", "emitting the general-clearing plan in process");
+    stage(
+        &bus,
+        "plan",
+        "emitting the general-clearing plan in process",
+    );
     replay::emit(&plan_dir)?;
     let parsed = plan::Plan::load(&plan_dir)?;
     bus.publish(&plan_event(&parsed));
@@ -276,12 +301,20 @@ fn serve(options: Options) -> Result<()> {
         &artifact,
         &parsed.program_id,
         keys.public_key("payer").ok_or("no payer public key")?,
-        options.rpc_port,
-        options.faucet_port,
+        toolchain::ValidatorNetwork {
+            rpc_port: options.rpc_port,
+            faucet_port: options.faucet_port,
+            gossip_port: options.gossip_port,
+            dynamic_port_range: &options.dynamic_port_range,
+        },
     )?;
     validator.await_ready(&parsed.program_id)?;
     bus.publish(&banner(&artifact, &validator, &parsed));
-    stage(&bus, "walk", "driving the signed, confirmed, committed walk");
+    stage(
+        &bus,
+        "walk",
+        "driving the signed, confirmed, committed walk",
+    );
 
     let keypairs = walk::load_keypairs(&parsed, &keys.paths())?;
     let walker = walk::Walker {
@@ -310,7 +343,11 @@ fn serve(options: Options) -> Result<()> {
         "work_dir": work.display().to_string(),
         "elf_sha256": artifact.sha256,
     }));
-    println!("verdict={} work_dir={}", if green { "PASS" } else { "FAIL" }, work.display());
+    println!(
+        "verdict={} work_dir={}",
+        if green { "PASS" } else { "FAIL" },
+        work.display()
+    );
 
     if options.exit_when_done {
         // A moment for an attached watcher to drain the stream.
@@ -338,10 +375,7 @@ fn run_replay(plan_dir: &Path) -> Result<()> {
     for name in verdict.missing.iter().take(20) {
         println!("  MISSING {name}");
     }
-    println!(
-        "replay_corruption_detected={}",
-        verdict.corruption_detected
-    );
+    println!("replay_corruption_detected={}", verdict.corruption_detected);
     if verdict.green() {
         println!("replay=PASS every plan file rebuilds byte-identically through the builders");
         Ok(())
@@ -368,5 +402,41 @@ fn main() {
     if let Err(error) = outcome {
         eprintln!("operatord: {error}");
         process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod option_tests {
+    use super::{parse, toolchain};
+
+    #[test]
+    fn parses_an_explicit_disjoint_validator_network() {
+        let options = parse(
+            [
+                "--port",
+                "9560",
+                "--rpc-port",
+                "9567",
+                "--faucet-port",
+                "9568",
+                "--gossip-port",
+                "9569",
+                "--dynamic-port-range",
+                "9570-9619",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+        assert_eq!(options.gossip_port, 9569);
+        assert_eq!(options.dynamic_port_range, "9570-9619");
+        toolchain::validate_validator_network(
+            Some(options.port),
+            options.rpc_port,
+            options.faucet_port,
+            options.gossip_port,
+            &options.dynamic_port_range,
+        )
+        .unwrap();
     }
 }

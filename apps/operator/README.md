@@ -38,8 +38,13 @@ CARGO_NET_OFFLINE=true cargo run --offline \
 Runtime prerequisites are Rust/Cargo, `cargo-build-sbf`, `solana-keygen`, and
 `solana-test-validator`; the scripted gate also uses `curl` and Python. Node
 and npm are required only for the source/mechanical browser checks. Override
-the scripted ports with `CLUTCH_OPERATOR_TRADE_PORT`,
-`CLUTCH_OPERATOR_TRADE_RPC_PORT`, and `CLUTCH_OPERATOR_TRADE_FAUCET_PORT`.
+the Trade wrapper's listeners with `CLUTCH_OPERATOR_TRADE_PORT`,
+`CLUTCH_OPERATOR_TRADE_RPC_PORT`, `CLUTCH_OPERATOR_TRADE_FAUCET_PORT`,
+`CLUTCH_OPERATOR_TRADE_GOSSIP_PORT`, and
+`CLUTCH_OPERATOR_TRADE_DYNAMIC_PORT_RANGE`. Watch mode uses the corresponding
+`CLUTCH_OPERATOR_*` names. Both wrappers pass explicit, disjoint gossip and
+dynamic port ranges so the validator never falls back to Solana's broad
+implicit local range.
 The wrapper stops its daemon/validator and the daemon removes orderly-run
 ephemeral signer files; a force-killed standalone daemon may leave its printed
 temporary work directory for manual inspection and cleanup.

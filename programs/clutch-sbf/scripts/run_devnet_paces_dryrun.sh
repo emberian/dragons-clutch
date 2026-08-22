@@ -39,8 +39,10 @@ solana_home="${SOLANA_HOME:-$HOME/.local/share/solana/install/active_release/bin
 keygen="${SOLANA_KEYGEN:-$solana_home/solana-keygen}"
 build_sbf="${CARGO_BUILD_SBF:-$solana_home/cargo-build-sbf}"
 test_validator="${SOLANA_TEST_VALIDATOR:-$solana_home/solana-test-validator}"
-rpc_port="${CLUTCH_PACES_RPC_PORT:-18949}"
-faucet_port="${CLUTCH_PACES_FAUCET_PORT:-19950}"
+rpc_port="${CLUTCH_PACES_RPC_PORT:-18939}"
+faucet_port="${CLUTCH_PACES_FAUCET_PORT:-19940}"
+gossip_port="${CLUTCH_PACES_GOSSIP_PORT:-18200}"
+dynamic_port_range="${CLUTCH_PACES_DYNAMIC_PORT_RANGE:-18201-18299}"
 url="http://127.0.0.1:${rpc_port}"
 validator_pid=""
 
@@ -113,6 +115,7 @@ echo "== blank local validator carrying both deployed ELFs =="
 "$test_validator" \
   --ledger "$work/ledger" --reset --quiet \
   --rpc-port "$rpc_port" --faucet-port "$faucet_port" --mint "$payer" \
+  --gossip-port "$gossip_port" --dynamic-port-range "$dynamic_port_range" \
   --bpf-program "$default_id" "$elves/default/clutch_sbf.so" \
   --bpf-program "$mock_id" "$elves/mock/clutch_sbf.so" \
   >"$log/validator.log" 2>&1 &

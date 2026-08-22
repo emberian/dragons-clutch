@@ -183,11 +183,7 @@ pub fn build_artifact(program_manifest: &Path, out_dir: &Path, log: &Path) -> Re
         .output()?;
     fs::write(log, [output.stdout.clone(), output.stderr.clone()].concat())?;
     if !output.status.success() {
-        return Err(format!(
-            "cargo-build-sbf failed; see {}",
-            log.display()
-        )
-        .into());
+        return Err(format!("cargo-build-sbf failed; see {}", log.display()).into());
     }
     let path = out_dir.join("clutch_sbf.so");
     let image = fs::read(&path)?;
@@ -208,6 +204,15 @@ pub struct Validator {
     pub ledger: PathBuf,
 }
 
+/// Every listener assigned to one loopback validator instance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ValidatorNetwork<'a> {
+    pub rpc_port: u16,
+    pub faucet_port: u16,
+    pub gossip_port: u16,
+    pub dynamic_port_range: &'a str,
+}
+
 impl Validator {
     /// Start a fresh ledger with the ELF loaded and every genesis row installed.
     pub fn start(
@@ -216,18 +221,22 @@ impl Validator {
         artifact: &Artifact,
         program_id: &str,
         payer: &str,
-        rpc_port: u16,
-        faucet_port: u16,
+        network: ValidatorNetwork<'_>,
     ) -> Result<Self> {
         let ledger = work.join("ledger");
         let mut command = Command::new(test_validator());
         command
             .arg("--ledger")
             .arg(&ledger)
-            .args(["--reset", "--quiet", "--rpc-port"])
-            .arg(rpc_port.to_string())
-            .arg("--faucet-port")
-            .arg(faucet_port.to_string())
+            .args(["--reset", "--quiet"]);
+        append_validator_network_args(
+            &mut command,
+            network.rpc_port,
+            network.faucet_port,
+            network.gossip_port,
+            network.dynamic_port_range,
+        )?;
+        command
             .arg("--mint")
             .arg(payer)
             .arg("--bpf-program")
@@ -240,7 +249,10 @@ impl Validator {
             else {
                 continue;
             };
-            command.arg("--account").arg(address).arg(plan_dir.join(file));
+            command
+                .arg("--account")
+                .arg(address)
+                .arg(plan_dir.join(file));
         }
         let log = fs::File::create(work.join("validator.log"))?;
         let child = command
@@ -249,7 +261,7 @@ impl Validator {
             .spawn()?;
         Ok(Self {
             child,
-            url: format!("http://127.0.0.1:{rpc_port}"),
+            url: format!("http://127.0.0.1:{}", network.rpc_port),
             ledger,
         })
     }
@@ -304,10 +316,133 @@ impl Drop for Validator {
     }
 }
 
+/// Validate the complete loopback listener plan before starting a validator.
+///
+/// `solana-test-validator` otherwise chooses a broad implicit dynamic range,
+/// which makes independently configured local lanes steal one another's ports.
+pub fn validate_validator_network(
+    http_port: Option<u16>,
+    rpc_port: u16,
+    faucet_port: u16,
+    gossip_port: u16,
+    dynamic_port_range: &str,
+) -> Result<()> {
+    let (dynamic_start, dynamic_end) = dynamic_port_range.split_once('-').ok_or_else(|| {
+        format!("invalid dynamic port range {dynamic_port_range:?}; expected START-END")
+    })?;
+    let dynamic_start: u16 = dynamic_start.parse()?;
+    let dynamic_end: u16 = dynamic_end.parse()?;
+    if dynamic_start == 0 || dynamic_start > dynamic_end {
+        return Err(format!(
+            "invalid dynamic port range {dynamic_port_range:?}; expected nonzero START <= END"
+        )
+        .into());
+    }
+
+    let mut fixed = vec![
+        ("rpc", rpc_port),
+        ("faucet", faucet_port),
+        ("gossip", gossip_port),
+    ];
+    if let Some(port) = http_port {
+        fixed.push(("http", port));
+    }
+    for (name, port) in &fixed {
+        if *port == 0 {
+            return Err(format!("{name} port must be nonzero").into());
+        }
+        if (dynamic_start..=dynamic_end).contains(port) {
+            return Err(format!(
+                "{name} port {port} overlaps dynamic port range {dynamic_port_range}"
+            )
+            .into());
+        }
+    }
+    for left in 0..fixed.len() {
+        for right in left + 1..fixed.len() {
+            if fixed[left].1 == fixed[right].1 {
+                return Err(format!(
+                    "{} and {} ports both use {}",
+                    fixed[left].0, fixed[right].0, fixed[left].1
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn append_validator_network_args(
+    command: &mut Command,
+    rpc_port: u16,
+    faucet_port: u16,
+    gossip_port: u16,
+    dynamic_port_range: &str,
+) -> Result<()> {
+    validate_validator_network(None, rpc_port, faucet_port, gossip_port, dynamic_port_range)?;
+    command
+        .arg("--rpc-port")
+        .arg(rpc_port.to_string())
+        .arg("--faucet-port")
+        .arg(faucet_port.to_string())
+        .arg("--gossip-port")
+        .arg(gossip_port.to_string())
+        .arg("--dynamic-port-range")
+        .arg(dynamic_port_range);
+    Ok(())
+}
+
 /// Refuse to run if something is already serving the chosen RPC port.
 pub fn refuse_occupied_port(url: &str) -> Result<()> {
     if crate::rpc::current_slot(url).is_ok() {
         return Err(format!("{url} was already serving before the bench started").into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod network_tests {
+    use super::{append_validator_network_args, validate_validator_network};
+    use std::process::Command;
+
+    #[test]
+    fn accepts_disjoint_explicit_loopback_ports() {
+        validate_validator_network(Some(9130), 9137, 9138, 9200, "9201-9250").unwrap();
+    }
+
+    #[test]
+    fn refuses_malformed_reversed_and_overlapping_ranges() {
+        assert!(validate_validator_network(None, 9137, 9138, 9200, "9201").is_err());
+        assert!(validate_validator_network(None, 9137, 9138, 9200, "9250-9201").is_err());
+        assert!(validate_validator_network(None, 9137, 9138, 9200, "9199-9201").is_err());
+        assert!(validate_validator_network(Some(9201), 9137, 9138, 9200, "9201-9250").is_err());
+    }
+
+    #[test]
+    fn refuses_duplicate_fixed_ports() {
+        assert!(validate_validator_network(Some(9130), 9137, 9137, 9200, "9201-9250").is_err());
+    }
+
+    #[test]
+    fn emits_every_validator_network_flag_explicitly() {
+        let mut command = Command::new("solana-test-validator");
+        append_validator_network_args(&mut command, 9137, 9138, 9200, "9201-9250").unwrap();
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "--rpc-port",
+                "9137",
+                "--faucet-port",
+                "9138",
+                "--gossip-port",
+                "9200",
+                "--dynamic-port-range",
+                "9201-9250",
+            ]
+        );
+    }
 }

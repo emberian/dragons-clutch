@@ -24,6 +24,7 @@ test_validator="${SOLANA_TEST_VALIDATOR:-$solana_home/solana-test-validator}"
 rpc_port="${CLUTCH_RPC_PORT:-18899}"
 faucet_port="${CLUTCH_FAUCET_PORT:-19900}"
 gossip_port="${CLUTCH_GOSSIP_PORT:-18000}"
+dynamic_port_range="${CLUTCH_DYNAMIC_PORT_RANGE:-18001-18099}"
 url="http://127.0.0.1:${rpc_port}"
 
 rm -rf "$work"
@@ -218,7 +219,7 @@ run_profile() {
   validator_args=(
     --ledger "$work/ledger-$profile" --reset --quiet
     --rpc-port "$rpc_port" --faucet-port "$faucet_port"
-    --gossip-port "$gossip_port"
+    --gossip-port "$gossip_port" --dynamic-port-range "$dynamic_port_range"
     --mint "$payer"
     --bpf-program "$program_id" "$elf"
   )

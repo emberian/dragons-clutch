@@ -22,6 +22,8 @@ root="$(cd "$here/.." && pwd)"
 http_port="${CLUTCH_OPERATOR_TRADE_PORT:-9560}"
 rpc_port="${CLUTCH_OPERATOR_TRADE_RPC_PORT:-9567}"
 faucet_port="${CLUTCH_OPERATOR_TRADE_FAUCET_PORT:-9568}"
+gossip_port="${CLUTCH_OPERATOR_TRADE_GOSSIP_PORT:-9569}"
+dynamic_port_range="${CLUTCH_OPERATOR_TRADE_DYNAMIC_PORT_RANGE:-9570-9619}"
 # Slots between the epoch opening and its freeze deadline.  Long enough for the
 # scripted flow below to place its book on a real clock, short enough that the
 # gate is not dominated by waiting for a deadline nobody is using.
@@ -62,6 +64,9 @@ echo "== source =="
 (cd "$root" && git rev-parse HEAD)
 echo "operator_http_port=$http_port"
 echo "operator_rpc_port=$rpc_port"
+echo "operator_faucet_port=$faucet_port"
+echo "operator_gossip_port=$gossip_port"
+echo "operator_dynamic_port_range=$dynamic_port_range"
 echo "freeze_window_slots=$freeze_window"
 
 echo
@@ -90,6 +95,7 @@ echo
 echo "== operatord serve --mode trade =="
 "$daemon" serve --mode trade \
   --port "$http_port" --rpc-port "$rpc_port" --faucet-port "$faucet_port" \
+  --gossip-port "$gossip_port" --dynamic-port-range "$dynamic_port_range" \
   --work "$work/bench" --freeze-window "$freeze_window" --exit-when-done \
   >"$work/daemon.log" 2>&1 &
 daemon_pid=$!

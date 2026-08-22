@@ -51,6 +51,8 @@ build_sbf="${CARGO_BUILD_SBF:-$solana_home/cargo-build-sbf}"
 test_validator="${SOLANA_TEST_VALIDATOR:-$solana_home/solana-test-validator}"
 rpc_port="${CLUTCH_COMMITTED_RPC_PORT:-18929}"
 faucet_port="${CLUTCH_COMMITTED_FAUCET_PORT:-19930}"
+gossip_port="${CLUTCH_COMMITTED_GOSSIP_PORT:-18100}"
+dynamic_port_range="${CLUTCH_COMMITTED_DYNAMIC_PORT_RANGE:-18101-18199}"
 url="http://127.0.0.1:${rpc_port}"
 validator_pid=""
 victim=""
@@ -161,6 +163,7 @@ EOF
 validator_args=(
   --ledger "$work/ledger" --reset --quiet
   --rpc-port "$rpc_port" --faucet-port "$faucet_port" --mint "$payer"
+  --gossip-port "$gossip_port" --dynamic-port-range "$dynamic_port_range"
   --bpf-program "$program_id" "$elf"
 )
 while read -r role address file; do

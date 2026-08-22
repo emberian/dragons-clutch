@@ -89,6 +89,8 @@ pub struct Options {
     pub port: u16,
     pub rpc_port: u16,
     pub faucet_port: u16,
+    pub gossip_port: u16,
+    pub dynamic_port_range: String,
     pub work: PathBuf,
     pub statics: PathBuf,
     pub freeze_window: u64,
@@ -97,6 +99,13 @@ pub struct Options {
 
 #[allow(clippy::too_many_lines)] // boot is one sequence, and it reads as one
 pub fn serve(options: Options) -> Result<()> {
+    toolchain::validate_validator_network(
+        Some(options.port),
+        options.rpc_port,
+        options.faucet_port,
+        options.gossip_port,
+        &options.dynamic_port_range,
+    )?;
     let url = format!("http://127.0.0.1:{}", options.rpc_port);
     rpc::require_loopback(&url)?;
     toolchain::refuse_occupied_port(&url)?;
@@ -143,8 +152,12 @@ pub fn serve(options: Options) -> Result<()> {
         &artifact,
         &program_id,
         keys.public_key("payer").ok_or("no payer public key")?,
-        options.rpc_port,
-        options.faucet_port,
+        toolchain::ValidatorNetwork {
+            rpc_port: options.rpc_port,
+            faucet_port: options.faucet_port,
+            gossip_port: options.gossip_port,
+            dynamic_port_range: &options.dynamic_port_range,
+        },
     )?;
     validator.await_ready(&program_id)?;
     bus.publish(&banner(&artifact, &validator, &program_id, &precreated));
