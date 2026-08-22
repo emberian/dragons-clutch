@@ -116,7 +116,12 @@ const ARCHIVE_PREVIOUS_SEQUENCE_OFFSET: usize = 410;
 const ARCHIVE_PREVIOUS_PUBLISH_SLOT_OFFSET: usize = 418;
 const ARCHIVE_PREVIOUS_PUBLISH_TIME_OFFSET: usize = 426;
 const ARCHIVE_PREVIOUS_COMMITMENT_OFFSET: usize = 434;
-const ARCHIVE_COMMITMENT_OFFSET: usize = 466;
+/// Header offset of the stored page commitment.
+///
+/// Public because a hostile campaign has to be able to name the exact byte it
+/// corrupts; a test that hardcoded `466` would be a second, silently drifting
+/// copy of this layout.
+pub const ARCHIVE_COMMITMENT_OFFSET: usize = 466;
 const ARCHIVE_BUMP_OFFSET: usize = 498;
 const ARCHIVE_RESERVED_OFFSET: usize = 499;
 

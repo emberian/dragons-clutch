@@ -66,7 +66,10 @@ use {
         loader_state::UPGRADEABLE_LOADER_ID,
         pyth_receiver::PRICE_UPDATE_V2_ACCOUNT_LEN,
         seeds,
-        source_archive_v2::{SOURCE_ARCHIVE_ACCOUNT_V2_BYTES, SOURCE_SPEC_ACCOUNT_V2_BYTES},
+        source_archive_v2::{
+            ARCHIVE_COMMITMENT_OFFSET, SOURCE_ARCHIVE_ACCOUNT_V2_BYTES,
+            SOURCE_SPEC_ACCOUNT_V2_BYTES,
+        },
         source_identity::fixture,
         source_v2::{
             crossing::SELECTION_CROSSING_V1,
@@ -1360,7 +1363,7 @@ async fn a_v1_page_can_never_satisfy_a_v2_spec() {
      * corrupting the stored commitment, which is what a page carried over from
      * a V1 seal would present. */
     let mut wrong_commitment = sealed.clone();
-    wrong_commitment[466] ^= 0xff;
+    wrong_commitment[ARCHIVE_COMMITMENT_OFFSET] ^= 0xff;
     campaign.context.set_account(
         &campaign.plane.source_archive.address,
         &genesis_account(wrong_commitment, PROGRAM_ID, false).into(),
