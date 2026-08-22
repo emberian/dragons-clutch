@@ -165,6 +165,7 @@ async fn a_large_rounding_pot_drains_to_zero_across_many_completions() {
         &submission,
         &frozen,
         slices,
+        &[],
         &mut meter,
         "",
         900,

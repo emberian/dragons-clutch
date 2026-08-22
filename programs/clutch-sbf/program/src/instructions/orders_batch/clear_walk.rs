@@ -722,10 +722,18 @@ fn borrow_account_mut<'a, 'info>(
 
 /// Accounts in an `AdvanceClearSlices` instruction, exactly.
 pub const ADVANCE_CLEAR_SLICES_ACCOUNT_COUNT: usize = 3;
-/// Accounts in a `CompleteClearWork` instruction, exactly.
-pub const COMPLETE_CLEAR_WORK_ACCOUNT_COUNT: usize = 4;
+/// Fixed accounts in a `CompleteClearWork` instruction, before the current
+/// verified retained registry.
+pub const COMPLETE_CLEAR_WORK_ACCOUNT_COUNT: usize = 6;
 /// The candidate record the close persists the verdict onto (writable).
 pub const IX_COMPLETE_CANDIDATE: usize = 3;
+/// The epoch's verified-only candidate window (writable).
+pub const IX_COMPLETE_WINDOW: usize = 4;
+/// Clock sysvar, which closes verification/admission at the selection deadline.
+pub const IX_COMPLETE_CLOCK: usize = 5;
+/// First current retained candidate record, in registry order; every one is
+/// writable because any one may be the displaced worst score.
+pub const IX_COMPLETE_RETAINED: usize = COMPLETE_CLEAR_WORK_ACCOUNT_COUNT;
 
 /// One layout pairing slice as the relation's slice type.
 fn relation_slice(slice: &clearing::PairingSlice) -> clutch_batch::relation_v1::PairingSliceV1 {
@@ -829,7 +837,10 @@ pub(super) fn complete_clear_work(
     intent_epoch: &Hash32,
     intent_candidate: &Hash32,
 ) -> Outcome<()> {
-    accounts::require_count(accounts, COMPLETE_CLEAR_WORK_ACCOUNT_COUNT)?;
+    require(
+        accounts.len() >= COMPLETE_CLEAR_WORK_ACCOUNT_COUNT,
+        ClutchError::AccountCount,
+    )?;
     require(sequence == 0, ClutchError::Replay)?;
     require_distinct(accounts)?;
     accounts::validate_state_role_lengths(
@@ -846,6 +857,16 @@ pub(super) fn complete_clear_work(
         intent_market,
         intent_epoch,
         intent_candidate,
+    )?;
+    let window = super::selection::load_open_admission_window(
+        program_id,
+        &accounts[IX_COMPLETE_WINDOW],
+        &accounts[IX_COMPLETE_CLOCK],
+        &frame.epoch,
+    )?;
+    accounts::require_count(
+        accounts,
+        COMPLETE_CLEAR_WORK_ACCOUNT_COUNT + usize::from(window.retained_count),
     )?;
     // Only a bound checkpoint closes: an early V0-complete refusal was bound
     // by the advance that latched it, so an OPEN checkpoint here is a
@@ -882,7 +903,7 @@ pub(super) fn complete_clear_work(
         body.status() == FeedStatusV1::Complete,
         ClutchError::FeedProtocolFault,
     )?;
-    match body.verdict() {
+    let admission = match body.verdict() {
         Some(Ok(summary)) => {
             /* Acceptance: the verified score is the streamed summary's
              * recomputed components plus the full-width relation-candidate
@@ -900,6 +921,13 @@ pub(super) fn complete_clear_work(
             record.distinct_owners = summary.score.distinct_owners;
             record.churn = summary.score.churn;
             record.score_digest = tie_digest;
+            super::selection::prepare_verified_admission(
+                program_id,
+                &accounts[IX_COMPLETE_RETAINED..],
+                &frame.epoch,
+                &record,
+                window,
+            )?
         }
         Some(Err(_relation_refusal)) => {
             /* A relation refusal is the verdict, not a fault: the candidate
@@ -908,12 +936,23 @@ pub(super) fn complete_clear_work(
              * candidate competes for nothing) and the checkpoint completes
              * so no pass may relitigate it. */
             record.status = clutch_solana_layout::CANDIDATE_STATUS_REFUSED;
+            None
         }
         // A complete feed always holds a verdict; stated, not assumed.
         None => return Err(Refusal::Adapter(ClutchError::FeedProtocolFault)),
-    }
+    };
 
     record.encode(&mut borrow_account_mut(&accounts[IX_COMPLETE_CANDIDATE])?)?;
+    if let Some(admission) = admission {
+        if let Some((index, displaced)) = admission.displaced {
+            displaced.encode(&mut borrow_account_mut(
+                &accounts[IX_COMPLETE_RETAINED + index],
+            )?)?;
+        }
+        admission
+            .window
+            .encode(&mut borrow_account_mut(&accounts[IX_COMPLETE_WINDOW])?)?;
+    }
     clearing::complete_clear_work(&mut borrow_account_mut(&accounts[IX_ADVANCE_WORK])?)?;
     Ok(())
 }

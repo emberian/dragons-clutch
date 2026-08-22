@@ -438,6 +438,8 @@ impl Fixture {
             AccountMeta::new_readonly(self.candidate_feed(candidate).0, false),
             AccountMeta::new(self.clear_work(candidate).0, false),
             AccountMeta::new(self.candidate_record(candidate).0, false),
+            AccountMeta::new(self.window_account, false),
+            AccountMeta::new_readonly(clock_address(), false),
         ];
         assert_eq!(metas.len(), COMPLETE_CLEAR_WORK_ACCOUNT_COUNT);
         Instruction::new_with_bytes(

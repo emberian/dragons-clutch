@@ -68,8 +68,8 @@ use {
         SettlementReceiptAccount, CANDIDATE_STATUS_SELECTED, EPOCH_PHASE_CLEARED,
         EPOCH_PHASE_FROZEN, EPOCH_PHASE_LAPSED, FEED_FILLS_PER_CHUNK, FEED_SLICES_PER_CHUNK,
         MAX_GRID_TICKS, MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_MAP_UNUSED, POT_PHASE_CLOSED,
-        POT_PHASE_OPEN,
-        RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED, RECEIPT_FLAG_SLICE_EXHAUSTED,
+        POT_PHASE_OPEN, RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED,
+        RECEIPT_FLAG_SLICE_EXHAUSTED,
     },
     clutch_svm_fixture::{
         compute_unit_limit_data, fixture_terms, layout_request, request_heap_frame_data,
@@ -432,17 +432,14 @@ impl Fixture {
         )
     }
 
-    fn seal(&self, submission: &Submission, retained: &[Hash32]) -> Instruction {
-        let mut metas = vec![
+    fn seal(&self, submission: &Submission, _retained: &[Hash32]) -> Instruction {
+        let metas = vec![
             AccountMeta::new_readonly(self.epoch_account, false),
-            AccountMeta::new(self.window_account, false),
+            AccountMeta::new_readonly(self.window_account, false),
             AccountMeta::new(submission.feed, false),
             AccountMeta::new_readonly(clock_address(), false),
         ];
         assert_eq!(metas.len(), SEAL_CANDIDATE_FIXED_ACCOUNT_COUNT);
-        for candidate in retained {
-            metas.push(AccountMeta::new(self.candidate_record(*candidate), false));
-        }
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -566,14 +563,22 @@ impl Fixture {
         )
     }
 
-    fn complete(&self, candidate: Hash32) -> Instruction {
-        let metas = vec![
+    fn complete(&self, candidate: Hash32, retained: &[Hash32]) -> Instruction {
+        let mut metas = vec![
             AccountMeta::new_readonly(self.epoch_account, false),
             AccountMeta::new_readonly(self.candidate_feed(candidate), false),
             AccountMeta::new(self.clear_work(candidate), false),
             AccountMeta::new(self.candidate_record(candidate), false),
+            AccountMeta::new(self.window_account, false),
+            AccountMeta::new_readonly(clock_address(), false),
         ];
         assert_eq!(metas.len(), COMPLETE_CLEAR_WORK_ACCOUNT_COUNT);
+        for retained_candidate in retained {
+            metas.push(AccountMeta::new(
+                self.candidate_record(*retained_candidate),
+                false,
+            ));
+        }
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -1397,7 +1402,7 @@ async fn walk_to_verdict(
     result.unwrap();
     let (result, _) = send_walk(context, fixture.advance(submission.id, 16, &[]), nonce + 3).await;
     result.unwrap();
-    let (result, _) = send_walk(context, fixture.complete(submission.id), nonce + 4).await;
+    let (result, _) = send_walk(context, fixture.complete(submission.id, &[]), nonce + 4).await;
     result.unwrap();
 }
 

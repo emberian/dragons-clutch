@@ -36,10 +36,10 @@ use clutch_solana_layout::reservation::{
     RESERVATION_STATE_CONSUMED, RESERVATION_STATE_ENTITLED, RESERVATION_STATE_RELEASED,
 };
 use clutch_solana_layout::{
-    account_len, canonical_epoch_id, CandidateRecord, EpochAccount, FinalPotAccount, Hash32, Intent,
-    MarketAccount, OrderPageAccount, OrderRecord, OrderSlot, SettlementReceiptAccount,
-    TermsAccount, CANDIDATE_STATUS_SELECTED, CANDIDATE_STATUS_VERIFIED, EPOCH_PHASE_CLEARED,
-    EPOCH_PHASE_FROZEN, EPOCH_PHASE_LAPSED, EPOCH_PHASE_OPEN, MAX_ORDER_PAGES,
+    account_len, canonical_epoch_id, CandidateRecord, EpochAccount, FinalPotAccount, Hash32,
+    Intent, MarketAccount, OrderPageAccount, OrderRecord, OrderSlot, SettlementReceiptAccount,
+    TermsAccount, CANDIDATE_STATUS_SELECTED, CANDIDATE_STATUS_SUBMITTED, CANDIDATE_STATUS_VERIFIED,
+    EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN, EPOCH_PHASE_LAPSED, EPOCH_PHASE_OPEN, MAX_ORDER_PAGES,
     RECEIPT_FLAG_SLICE_EXHAUSTED,
 };
 use solana_keypair::{Keypair, Signer};
@@ -138,6 +138,9 @@ struct TxSpec {
 /// Byte offset of `ReservationAccount::epoch` on the wire: the two header
 /// bytes, then `reservation` and `market`.
 const RESERVATION_EPOCH_OFFSET: usize = 2 + 32 + 32;
+/// Byte offset of `CandidateRecord::epoch`: the two header bytes followed by
+/// the candidate identity.
+const CANDIDATE_EPOCH_OFFSET: usize = 2 + 32;
 
 /// One live order of the frozen set, at its walk rank.
 #[derive(Clone, Debug)]
@@ -236,9 +239,11 @@ impl Keeper {
 
     fn wiring(&mut self) -> Result<&Wiring, String> {
         if self.wiring.is_none() {
-            let market_account = self
-                .deriver
-                .find(&[clutch_sbf::seeds::SEED_MARKET, &self.cfg.realm.bytes(), &self.cfg.market.bytes()])?;
+            let market_account = self.deriver.find(&[
+                clutch_sbf::seeds::SEED_MARKET,
+                &self.cfg.realm.bytes(),
+                &self.cfg.market.bytes(),
+            ])?;
             let market_bytes = self
                 .rpc
                 .account(&market_account.address)?
@@ -396,7 +401,10 @@ impl Keeper {
                 );
                 let pda = self.deriver.reservation(reservation_id)?;
                 let state = match self.rpc.account(&pda.address)? {
-                    Some(bytes) if bytes.len() == clutch_solana_layout::reservation::RESERVATION_ACCOUNT_BYTES => {
+                    Some(bytes)
+                        if bytes.len()
+                            == clutch_solana_layout::reservation::RESERVATION_ACCOUNT_BYTES =>
+                    {
                         Some(
                             ReservationAccount::decode(&bytes)
                                 .map_err(|error| {
@@ -439,6 +447,42 @@ impl Keeper {
             let decoded = ReservationAccount::decode(&bytes)
                 .map_err(|error| format!("reservation {address} did not decode: {error:?}"))?;
             out.push((address, decoded));
+        }
+        Ok(out)
+    }
+
+    /// Every submitted candidate record of this epoch, discovered from the
+    /// program-owned account set rather than from the verified-only top three.
+    ///
+    /// This RPC projection is a liveness hint only.  Every resulting identity
+    /// is rebound to its canonical PDA here, and every instruction independently
+    /// authenticates the record, feed, epoch, and PDA on chain.
+    fn candidate_submissions(&mut self) -> Result<Vec<Hash32>, String> {
+        let rows = self.rpc.program_accounts(
+            &self.cfg.program_id_b58,
+            account_len::CANDIDATE,
+            CANDIDATE_EPOCH_OFFSET,
+            &self.epoch_id.bytes(),
+        )?;
+        let mut out = Vec::new();
+        for (address, bytes) in rows {
+            let record = CandidateRecord::decode(&bytes)
+                .map_err(|error| format!("candidate {address} did not decode: {error:?}"))?;
+            if record.epoch != self.epoch_id || record.market != self.cfg.market {
+                return Err(format!(
+                    "candidate {address} passed the epoch filter but binds another plane"
+                ));
+            }
+            let expected = self.deriver.candidate(self.epoch_id, record.candidate)?;
+            if expected.address != address {
+                return Err(format!(
+                    "candidate {address} is not its canonical PDA {}",
+                    expected.address
+                ));
+            }
+            if record.status == CANDIDATE_STATUS_SUBMITTED {
+                out.push(record.candidate);
+            }
         }
         Ok(out)
     }
@@ -510,32 +554,32 @@ impl Keeper {
         epoch: &EpochAccount,
         window: &EpochWindowAccount,
     ) -> Result<Step, String> {
-        // Verification first: a retained candidate with a sealed feed and an
-        // unfinished checkpoint is work that must land before the deadline,
-        // because selection compares only VERIFIED records.
-        for index in 0..usize::from(window.retained_count) {
-            let candidate = window.retained[index];
-            if let Some(act) = self.verify_candidate(view, epoch, candidate)? {
+        if view.slot >= window.selection_deadline_slot {
+            return self.finalize_selection(window).map(Step::Act);
+        }
+        // Sealed submissions are intentionally absent from the verified-only
+        // window. Discover their program-owned records as an untrusted RPC
+        // projection, then let each on-chain route authenticate the candidate.
+        for candidate in self.candidate_submissions()? {
+            if let Some(act) = self.verify_candidate(view, epoch, window, candidate)? {
                 return Ok(Step::Act(act));
             }
         }
-        if view.slot < window.selection_deadline_slot {
-            return Ok(Step::Idle {
-                reason: format!(
-                    "epoch FROZEN, {} candidate(s) retained; the selection deadline is slot {}",
-                    window.retained_count, window.selection_deadline_slot
-                ),
-                wait_until: Some(window.selection_deadline_slot),
-            });
-        }
-        self.finalize_selection(window).map(Step::Act)
+        Ok(Step::Idle {
+            reason: format!(
+                "epoch FROZEN, {} verified candidate(s) retained; the selection deadline is slot {}",
+                window.retained_count, window.selection_deadline_slot
+            ),
+            wait_until: Some(window.selection_deadline_slot),
+        })
     }
 
-    /// Drive one retained candidate's clearing checkpoint to COMPLETE.
+    /// Drive one sealed submitted candidate's clearing checkpoint to COMPLETE.
     fn verify_candidate(
         &mut self,
         view: &View,
         epoch: &EpochAccount,
+        window: &EpochWindowAccount,
         candidate: Hash32,
     ) -> Result<Option<Box<Act>>, String> {
         let record_pda = self.deriver.candidate(self.epoch_id, candidate)?;
@@ -601,8 +645,10 @@ impl Keeper {
                 } else {
                     body.orders_consumed()
                 };
-                self.advance_clear_work(view, epoch, candidate, &feed_pda, &work_pda, pass, consumed)
-                    .map(Some)
+                self.advance_clear_work(
+                    view, epoch, candidate, &feed_pda, &work_pda, pass, consumed,
+                )
+                .map(Some)
             }
             FeedStatusV1::NeedSlices => {
                 let declared = feed.declared_slices().unwrap_or(0);
@@ -611,7 +657,7 @@ impl Keeper {
                     .map(Some)
             }
             FeedStatusV1::Complete => self
-                .complete_clear_work(candidate, &feed_pda, &work_pda, &record_pda)
+                .complete_clear_work(candidate, &feed_pda, &work_pda, &record_pda, window)
                 .map(Some),
         }
     }
@@ -722,7 +768,10 @@ impl Keeper {
         };
         self.act(
             "InitEpoch",
-            format!("epoch_index={} freeze_deadline={deadline}", self.cfg.epoch_index),
+            format!(
+                "epoch_index={} freeze_deadline={deadline}",
+                self.cfg.epoch_index
+            ),
             quotes::ledgered(quotes::INIT_EPOCH, 1),
             vec![ALREADY_INITIALIZED],
             true,
@@ -747,12 +796,7 @@ impl Keeper {
             writable_signers: vec![self.payer],
             readonly_signers: Vec::new(),
             writable: vec![page.bytes, ledger],
-            readonly: vec![
-                market_account,
-                epoch,
-                self.system_program,
-                self.rent_sysvar,
-            ],
+            readonly: vec![market_account, epoch, self.system_program, self.rent_sysvar],
             program: vec![(
                 vec![
                     self.payer,
@@ -1020,8 +1064,9 @@ impl Keeper {
     ) -> Result<Box<Act>, String> {
         let remaining = declared.saturating_sub(consumed);
         if remaining == 0 {
-            return Err("the slice pass has no declared slices left but still asks for them"
-                .to_string());
+            return Err(
+                "the slice pass has no declared slices left but still asks for them".to_string(),
+            );
         }
         let epoch_key = self.wiring()?.epoch.bytes;
         let spec = TxSpec {
@@ -1063,15 +1108,35 @@ impl Keeper {
         feed: &Pda,
         work: &Pda,
         record: &Pda,
+        window: &EpochWindowAccount,
     ) -> Result<Box<Act>, String> {
-        let epoch_key = self.wiring()?.epoch.bytes;
+        let (epoch_key, window_key) = {
+            let wiring = self.wiring()?;
+            (wiring.epoch.bytes, wiring.window.bytes)
+        };
+        let mut keys = vec![
+            epoch_key,
+            feed.bytes,
+            work.bytes,
+            record.bytes,
+            window_key,
+            self.clock_sysvar,
+        ];
+        let mut writable = vec![work.bytes, record.bytes, window_key];
+        for index in 0..usize::from(window.retained_count) {
+            let retained = self
+                .deriver
+                .candidate(self.epoch_id, window.retained[index])?;
+            keys.push(retained.bytes);
+            writable.push(retained.bytes);
+        }
         let spec = TxSpec {
             writable_signers: vec![self.payer],
             readonly_signers: Vec::new(),
-            writable: vec![work.bytes, record.bytes],
-            readonly: vec![epoch_key, feed.bytes],
+            writable,
+            readonly: vec![epoch_key, feed.bytes, self.clock_sysvar],
             program: vec![(
-                vec![epoch_key, feed.bytes, work.bytes, record.bytes],
+                keys,
                 wire::request(
                     0,
                     &Intent::CompleteClearWork {
@@ -1088,7 +1153,7 @@ impl Keeper {
             "CompleteClearWork",
             format!("candidate={}", short(candidate)),
             quotes::COMPLETE_CLEAR_WORK,
-            vec![MISMATCHED_STATE],
+            vec![MISMATCHED_STATE, NOT_ACTIVE],
             true,
             &spec,
         )
@@ -1112,9 +1177,9 @@ impl Keeper {
             writable.push(record.bytes);
             readonly.push(feed.bytes);
             if let Some(bytes) = self.rpc.account(&record.address)? {
-                if CandidateRecord::decode(&bytes).is_ok_and(|value| {
-                    value.status == CANDIDATE_STATUS_VERIFIED
-                }) {
+                if CandidateRecord::decode(&bytes)
+                    .is_ok_and(|value| value.status == CANDIDATE_STATUS_VERIFIED)
+                {
                     verified += 1;
                 }
             }
@@ -1264,14 +1329,20 @@ impl Keeper {
                         continue;
                     }
                     return self
-                        .entitle_slice(view, epoch, selected, &feed_pda, &record_pda, &coverage,
-                                       &slices)
+                        .entitle_slice(
+                            view,
+                            epoch,
+                            selected,
+                            &feed_pda,
+                            &record_pda,
+                            &coverage,
+                            &slices,
+                        )
                         .map(Some);
                 }
                 Some(bytes) => {
-                    let decoded = SettlementReceiptAccount::decode(&bytes).map_err(|error| {
-                        format!("receipt {index} did not decode: {error:?}")
-                    })?;
+                    let decoded = SettlementReceiptAccount::decode(&bytes)
+                        .map_err(|error| format!("receipt {index} did not decode: {error:?}"))?;
                     if decoded.consumed_flags & RECEIPT_FLAG_SLICE_EXHAUSTED == 0 {
                         return self
                             .settle_page(view, selected, &record_pda, &coverage, &slices, &decoded)
@@ -1384,7 +1455,11 @@ impl Keeper {
             format!(
                 "slice={entry} group={} shape={}",
                 coverage.len(),
-                if portfolio { "portfolio-pair" } else { "single" }
+                if portfolio {
+                    "portfolio-pair"
+                } else {
+                    "single"
+                }
             ),
             quote,
             vec![ALREADY_INITIALIZED, MISMATCHED_STATE],
@@ -1407,8 +1482,12 @@ impl Keeper {
         let portfolio = buy_end.is_portfolio && sell_end.is_portfolio;
         let epoch_key = self.wiring()?.epoch.bytes;
         let terms_key = self.wiring()?.terms_account.bytes;
-        let buy_position = self.deriver.position(self.cfg.market, buy_end.record.owner)?;
-        let sell_position = self.deriver.position(self.cfg.market, sell_end.record.owner)?;
+        let buy_position = self
+            .deriver
+            .position(self.cfg.market, buy_end.record.owner)?;
+        let sell_position = self
+            .deriver
+            .position(self.cfg.market, sell_end.record.owner)?;
         let mut receipts = Vec::new();
         for index in coverage {
             receipts.push(self.deriver.receipt(self.epoch_id, selected, *index)?.bytes);
@@ -1483,7 +1562,11 @@ impl Keeper {
             format!(
                 "slice={entry} group={} shape={} sequence={}",
                 coverage.len(),
-                if portfolio { "portfolio-pair" } else { "single" },
+                if portfolio {
+                    "portfolio-pair"
+                } else {
+                    "single"
+                },
                 receipt.sequence
             ),
             quote,
@@ -1665,13 +1748,7 @@ impl Keeper {
                 .filter(|live| live.page_index == *index)
                 .map(|live| live.reservation.bytes)
                 .collect();
-            let mut keys = vec![
-                epoch_key,
-                pda.bytes,
-                ledger.bytes,
-                self.payer,
-                self.sink,
-            ];
+            let mut keys = vec![epoch_key, pda.bytes, ledger.bytes, self.payer, self.sink];
             keys.extend_from_slice(&live_keys);
             let mut readonly = vec![epoch_key];
             readonly.extend_from_slice(&live_keys);
@@ -2204,7 +2281,8 @@ fn pair_ends(view: &View, slices: &[PairingSlice], index: u16) -> Result<(Live, 
     let slice = slices
         .get(usize::from(index))
         .ok_or("slice index past the declared witness")?;
-    let (LegRef::Order(buy_rank), LegRef::Order(sell_rank)) = (slice.buy_ref, slice.sell_ref) else {
+    let (LegRef::Order(buy_rank), LegRef::Order(sell_rank)) = (slice.buy_ref, slice.sell_ref)
+    else {
         return Err(format!(
             "slice {index} carries a virtual leg; the `VirtualPot` blocker stands and the keeper \
              will not fabricate a shape for it"

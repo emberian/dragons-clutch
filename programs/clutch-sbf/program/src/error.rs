@@ -286,13 +286,13 @@ pub enum ClutchError {
     /// clearing above degree one is exactly the outcome the moment-cone gate
     /// exists to prevent (`DUAL_IS_THE_MEASURE.md` §7.4, §7.6).
     UnsupportedBasisDegree = 0x0096,
-    /// A sealing candidate cannot beat the worst retained candidate's stored
-    /// score, so the full registry admits no displacement for it.
+    /// A fully verified candidate cannot beat the worst retained candidate's
+    /// authenticated full score, so the registry remains unchanged.
     ///
     /// Deliberately its own code rather than a `MismatchedState`: nothing is
-    /// inconsistent — the registry is simply better on its components — and
-    /// the staged pair survives, so the same seal may legitimately succeed
-    /// later if verification lowers a retained claim below this one.
+    /// inconsistent — the registry is simply better on its components. The
+    /// candidate record remains `VERIFIED` outside the top three and its feed
+    /// survives for terminal closure.
     CandidateNotCompetitive = 0x00a0,
     /// A verified candidate's stored tie digest does not equal the digest
     /// re-derived from the full-width domain and its feed's stored regions.

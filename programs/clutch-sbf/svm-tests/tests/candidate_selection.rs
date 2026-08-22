@@ -18,9 +18,11 @@
 //!   components whose full-width digests decide, exactly as the research
 //!   crate's `full_digest_binds_explicit_witness_and_score_order_uses_all_256_bits`
 //!   fixture pins (lower digest wins, decided past the first 16 bytes);
-//! * displacement — a fourth candidate displacing the worst retained one
-//!   closes the displaced feed in the admitting transaction and supersedes
-//!   its record with a zeroed `score_digest`, per the documented rule;
+//! * verified admission — claims cannot prefill the registry; a better fourth
+//!   verified score supersedes the worst retained record without closing its
+//!   feed, while a valid noncompetitive fifth finishes outside the registry;
+//! * deadline atomicity — a proof walk completed at the shared deadline is
+//!   too late to stamp or enter the verified registry;
 //! * tamper — a forged `score_digest` refuses, a tampered stored fill
 //!   refuses (the re-derivation catches both), double-finalize refuses;
 //! * the honest lapse — zero verified candidates at the deadline lapse the
@@ -35,8 +37,9 @@ use {
         canonical_candidate, canonical_pairing, LegRefV1, PairingWitnessV1, RelationDomainV1,
     },
     clutch_batch_policy_identity::{
-        batch_policy_digest, canonical_batch_policy_bytes,
-        general_clearing_v1::GENERAL_CLEARING_POLICY_V1, FullScoreV1, Identity32V1,
+        batch_policy_digest, canonical_batch_policy_bytes, complete_submitted_candidate,
+        general_clearing_v1::GENERAL_CLEARING_POLICY_V1, FullRelationDomainV1, FullScoreV1,
+        FullSubmittedCandidateV1, Identity32V1,
     },
     clutch_sbf::{
         error::ClutchError,
@@ -56,8 +59,7 @@ use {
     clutch_solana_layout::{
         account_len, canonical_epoch_id, canonical_order_id, canonical_outcome_id,
         clearing::{
-            CandidateFeedHeader, EpochWindowAccount, LegRef, PairingSlice,
-            CANDIDATE_FEED_STAGE_TAG, CANDIDATE_WINDOW_SLOTS,
+            CandidateFeedHeader, EpochWindowAccount, LegRef, PairingSlice, CANDIDATE_WINDOW_SLOTS,
         },
         projection::{project_slot, OwnerInterner},
         reservation::canonical_reservation_id,
@@ -184,6 +186,7 @@ struct Submission {
     honored_aon_mask: u64,
     fills: Vec<u64>,
     witness: PairingWitnessV1,
+    score: FullScoreV1,
     record: Address,
     feed: Address,
 }
@@ -405,22 +408,16 @@ impl Fixture {
     fn seal(
         &self,
         submission: &Submission,
-        retained: &[Hash32],
-        displaced_feed: Option<Address>,
+        _retained: &[Hash32],
+        _displaced_feed: Option<Address>,
     ) -> Instruction {
-        let mut metas = vec![
+        let metas = vec![
             AccountMeta::new_readonly(self.epoch_account, false),
-            AccountMeta::new(self.window_account, false),
+            AccountMeta::new_readonly(self.window_account, false),
             AccountMeta::new(submission.feed, false),
             AccountMeta::new_readonly(clock_address(), false),
         ];
         assert_eq!(metas.len(), SEAL_CANDIDATE_FIXED_ACCOUNT_COUNT);
-        for candidate in retained {
-            metas.push(AccountMeta::new(self.candidate_record(*candidate), false));
-        }
-        if let Some(feed) = displaced_feed {
-            metas.push(AccountMeta::new(feed, false));
-        }
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -545,14 +542,22 @@ impl Fixture {
         )
     }
 
-    fn complete(&self, candidate: Hash32) -> Instruction {
-        let metas = vec![
+    fn complete(&self, candidate: Hash32, retained: &[Hash32]) -> Instruction {
+        let mut metas = vec![
             AccountMeta::new_readonly(self.epoch_account, false),
             AccountMeta::new_readonly(self.candidate_feed(candidate), false),
             AccountMeta::new(self.clear_work(candidate), false),
             AccountMeta::new(self.candidate_record(candidate), false),
+            AccountMeta::new(self.window_account, false),
+            AccountMeta::new_readonly(clock_address(), false),
         ];
         assert_eq!(metas.len(), COMPLETE_CLEAR_WORK_ACCOUNT_COUNT);
+        for retained_candidate in retained {
+            metas.push(AccountMeta::new(
+                self.candidate_record(*retained_candidate),
+                false,
+            ));
+        }
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -941,6 +946,24 @@ fn plan_submission(
     let domain = zero_sentinel_domain(epoch);
     let candidate = canonical_candidate(&domain, book, &prices, 0, 0).unwrap();
     let witness = canonical_pairing(&domain, book, &candidate).unwrap();
+    let full_domain = FullRelationDomainV1 {
+        relation_version: epoch.relation_version,
+        market_id: Identity32V1(epoch.market.bytes()),
+        book_id: Identity32V1(epoch.book.bytes()),
+        epoch_id: Identity32V1(epoch.epoch.bytes()),
+        policy_id: Identity32V1(epoch.policy.bytes()),
+        order_set_id: Identity32V1(epoch.order_set.bytes()),
+        epoch_index: epoch.epoch_index,
+        outcome_count: epoch.outcome_count,
+        owner_count: epoch.owner_count,
+        price_scale: epoch.price_scale,
+        remainder_seed: epoch.remainder_seed,
+        policy: GENERAL_CLEARING_POLICY_V1,
+    };
+    let unclaimed =
+        FullSubmittedCandidateV1::from_relation_candidate(&full_domain, &candidate).unwrap();
+    let (completed, _) =
+        complete_submitted_candidate(&full_domain, book, &unclaimed, Some(&witness)).unwrap();
     // The identity the program will recompute, restated through the layout
     // codec's own preimage so the test's addresses are the program's.
     let mut shell = CandidateFeedHeader {
@@ -971,6 +994,7 @@ fn plan_submission(
         honored_aon_mask: candidate.honored_aon_mask,
         fills: candidate.fills[..book.len as usize].to_vec(),
         witness,
+        score: completed.claimed_score,
         record: fixture.candidate_record(id),
         feed: fixture.candidate_feed(id),
     }
@@ -1086,8 +1110,9 @@ async fn submit_seal(
     (result, units)
 }
 
-/// Walk one sealed candidate to its verdict through the real tags 51-53.
-async fn walk_to_verdict(
+/// Walk one sealed candidate through all bounded passes, stopping immediately
+/// before the atomic verdict/admission boundary.
+async fn walk_to_completion_boundary(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
     submission: &Submission,
@@ -1121,7 +1146,24 @@ async fn walk_to_verdict(
     result.unwrap();
     let (result, _) = send_walk(context, fixture.advance(submission.id, 16, &[]), nonce + 3).await;
     result.unwrap();
-    let (result, units) = send_walk(context, fixture.complete(submission.id), nonce + 4).await;
+}
+
+/// Walk one sealed candidate to its verdict through the real tags 51-53.
+async fn walk_to_verdict(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    submission: &Submission,
+    reservations: &[Address],
+    retained: &[Hash32],
+    nonce: u32,
+) {
+    walk_to_completion_boundary(context, fixture, submission, reservations, nonce).await;
+    let (result, units) = send_walk(
+        context,
+        fixture.complete(submission.id, retained),
+        nonce + 4,
+    )
+    .await;
     result.unwrap();
     eprintln!("CompleteClearWork CU: {units}");
 }
@@ -1165,6 +1207,50 @@ fn prices_of(head: [u64; 4]) -> [u64; MAX_OUTCOMES] {
     let mut prices = [0u64; MAX_OUTCOMES];
     prices[..4].copy_from_slice(&head);
     prices
+}
+
+/// Seal is deliberately feed-only: the registry window is read-only and the
+/// account list has no retained/displaced suffix.
+#[tokio::test]
+async fn seal_rejects_writable_window_and_excess_registry_metas() {
+    let (mut context, fixture) = start().await;
+    build_frozen_book(&mut context, &fixture).await;
+    let (epoch, book, _) = frozen_state(&mut context, &fixture).await;
+    let solo = plan_submission(&fixture, &epoch, &book, even_prices());
+    let (result, _) = submit_seal(
+        &mut context,
+        &fixture,
+        &solo,
+        (i128::MAX / 2, u128::MAX / 2, 4),
+        &[],
+        None,
+        100,
+    )
+    .await;
+    result.unwrap();
+    let window_before = account(&mut context, fixture.window_account)
+        .await
+        .unwrap()
+        .data;
+
+    let mut writable_window = fixture.seal(&solo, &[], None);
+    writable_window.accounts[1].is_writable = true;
+    let (result, _) = send(&mut context, &[writable_window], None, 200).await;
+    assert_eq!(custom(result), ClutchError::UnexpectedWritable as u32);
+
+    let mut excess = fixture.seal(&solo, &[], None);
+    excess
+        .accounts
+        .push(AccountMeta::new_readonly(SYSTEM_PROGRAM, false));
+    let (result, _) = send(&mut context, &[excess], None, 201).await;
+    assert_eq!(custom(result), ClutchError::AccountCount as u32);
+    assert_eq!(
+        account(&mut context, fixture.window_account)
+            .await
+            .unwrap()
+            .data,
+        window_before
+    );
 }
 
 /// Gate (i): the total-order winner among VERIFIED candidates is selected,
@@ -1218,8 +1304,25 @@ async fn selection_picks_the_total_order_winner_and_excludes_the_unverified() {
     .await;
     result.unwrap();
 
-    walk_to_verdict(&mut context, &fixture, &alpha, &reservations, 300).await;
-    walk_to_verdict(&mut context, &fixture, &beta, &reservations, 320).await;
+    // Seal authenticates immutable bytes but cannot reserve a registry slot.
+    let sealed_window = EpochWindowAccount::decode(
+        &account(&mut context, fixture.window_account)
+            .await
+            .unwrap()
+            .data,
+    )
+    .unwrap();
+    assert_eq!(sealed_window.retained_count, 0);
+
+    walk_to_verdict(&mut context, &fixture, &alpha, &reservations, &[], 300).await;
+    walk_to_completion_boundary(&mut context, &fixture, &beta, &reservations, 320).await;
+    // The suffix is an authenticated snapshot of the current registry, not a
+    // caller-selected comparison set.  Substituting another canonical record
+    // refuses atomically; the correct suffix can still complete afterwards.
+    let (result, _) = send_walk(&mut context, fixture.complete(beta.id, &[gamma.id]), 324).await;
+    assert_eq!(custom(result), ClutchError::MismatchedState as u32);
+    let (result, _) = send_walk(&mut context, fixture.complete(beta.id, &[alpha.id]), 325).await;
+    result.unwrap();
 
     let alpha_record = read_record(&mut context, &fixture, alpha.id).await;
     let beta_record = read_record(&mut context, &fixture, beta.id).await;
@@ -1249,7 +1352,7 @@ async fn selection_picks_the_total_order_winner_and_excludes_the_unverified() {
         alpha.id
     };
 
-    let retained = [alpha.id, beta.id, gamma.id];
+    let retained = [alpha.id, beta.id];
     // Before the deadline the whole world refuses selection.
     let (result, _) = send(&mut context, &[fixture.finalize(&retained)], None, 400).await;
     assert_eq!(custom(result), ClutchError::NotActive as u32);
@@ -1259,7 +1362,7 @@ async fn selection_picks_the_total_order_winner_and_excludes_the_unverified() {
         .unwrap();
     let (result, units) = send(&mut context, &[fixture.finalize(&retained)], None, 401).await;
     result.unwrap();
-    eprintln!("FinalizeSelection (3 retained, 2 verified) CU: {units}");
+    eprintln!("FinalizeSelection (2 retained, 2 verified) CU: {units}");
 
     // The winner is the total-order best VERIFIED candidate; the unverified
     // claim competed for nothing.
@@ -1354,8 +1457,8 @@ async fn a_beyond_128_bit_score_tie_resolves_by_the_full_width_digest() {
     )
     .await;
     result.unwrap();
-    walk_to_verdict(&mut context, &fixture, &one, &reservations, 300).await;
-    walk_to_verdict(&mut context, &fixture, &two, &reservations, 320).await;
+    walk_to_verdict(&mut context, &fixture, &one, &reservations, &[], 300).await;
+    walk_to_verdict(&mut context, &fixture, &two, &reservations, &[one.id], 320).await;
 
     let one_record = read_record(&mut context, &fixture, one.id).await;
     let two_record = read_record(&mut context, &fixture, two.id).await;
@@ -1419,12 +1522,12 @@ async fn a_beyond_128_bit_score_tie_resolves_by_the_full_width_digest() {
     assert_eq!(window.selected_candidate, expected_winner);
 }
 
-/// Gate (ii): a fourth candidate displacing per the bounded-registry rule
-/// closes the displaced feed in the admitting transaction and supersedes the
-/// displaced record with a zeroed `score_digest`; a non-competitive fifth
-/// refuses without touching the registry.
+/// Gate (ii): claims cannot prefill or perturb the registry.  Admission is
+/// atomic with verification, uses the complete full-width score, leaves a
+/// displaced feed available for terminal closure, and lets a valid but
+/// noncompetitive candidate finish VERIFIED outside the bounded registry.
 #[tokio::test]
-async fn a_fourth_candidate_displaces_the_worst_and_supersedes_it() {
+async fn verified_admission_displaces_only_by_full_score_and_preserves_feeds() {
     let (mut context, fixture) = start().await;
     build_frozen_book(&mut context, &fixture).await;
     let (epoch, book, reservations) = frozen_state(&mut context, &fixture).await;
@@ -1455,73 +1558,92 @@ async fn a_fourth_candidate_displaces_the_worst_and_supersedes_it() {
         prices_of([3_500, 2_500, 2_000, 2_000]),
     );
 
-    // Fill the registry: alpha (verified below — the worst by components),
-    // beta and gamma retained on large claims.
-    let (result, _) = submit_seal(&mut context, &fixture, &alpha, (0, 0, 0), &[], None, 100).await;
-    result.unwrap();
-    let (result, _) = submit_seal(
+    let mut ordered = vec![&alpha, &beta, &gamma, &delta, &echo];
+    ordered.sort_by(|left, right| {
+        if left.score.is_better_than(&right.score) {
+            core::cmp::Ordering::Less
+        } else if right.score.is_better_than(&left.score) {
+            core::cmp::Ordering::Greater
+        } else {
+            core::cmp::Ordering::Equal
+        }
+    });
+    let initial = [ordered[1], ordered[2], ordered[3]];
+    let challenger = ordered[0];
+    let noncompetitive = ordered[4];
+
+    // Absurd and contradictory claims are inert at Seal.  All five feeds
+    // seal, but none can reserve a verified-registry slot.
+    for (index, submission) in ordered.iter().enumerate() {
+        let claim = if index % 2 == 0 {
+            (i128::MAX / 2, u128::MAX / 2, 4)
+        } else {
+            (-1, 0, 0)
+        };
+        let (result, _) = submit_seal(
+            &mut context,
+            &fixture,
+            submission,
+            claim,
+            &[],
+            None,
+            100 + 60 * index as u32,
+        )
+        .await;
+        result.unwrap();
+    }
+    let sealed_window = EpochWindowAccount::decode(
+        &account(&mut context, fixture.window_account)
+            .await
+            .unwrap()
+            .data,
+    )
+    .unwrap();
+    assert_eq!(sealed_window.retained_count, 0);
+
+    walk_to_verdict(&mut context, &fixture, initial[0], &reservations, &[], 500).await;
+    walk_to_verdict(
         &mut context,
         &fixture,
-        &beta,
-        (1i128 << 100, 0, 4),
-        &[alpha.id],
-        None,
-        160,
+        initial[1],
+        &reservations,
+        &[initial[0].id],
+        520,
     )
     .await;
-    result.unwrap();
-    let (result, _) = submit_seal(
+    walk_to_verdict(
         &mut context,
         &fixture,
-        &gamma,
-        (1i128 << 101, 0, 4),
-        &[alpha.id, beta.id],
-        None,
-        220,
+        initial[2],
+        &reservations,
+        &[initial[0].id, initial[1].id],
+        540,
     )
     .await;
-    result.unwrap();
-    walk_to_verdict(&mut context, &fixture, &alpha, &reservations, 300).await;
-    let alpha_verified = read_record(&mut context, &fixture, alpha.id).await;
-    assert_eq!(alpha_verified.status, CANDIDATE_STATUS_VERIFIED);
-    assert_ne!(alpha_verified.score_digest, Hash32::ZERO);
-    // The verified score is honest and small; the claims are absurd, so the
-    // verified candidate is the worst retained by components.
-    assert!(alpha_verified.weighted_direct_volume < 1i128 << 100);
 
-    let alpha_record_lamports_before = account(&mut context, alpha.record).await.unwrap().lamports;
-    let alpha_feed_lamports = account(&mut context, fixture.candidate_feed(alpha.id))
-        .await
-        .unwrap()
-        .lamports;
+    let victim = initial[2];
+    let victim_record_lamports = account(&mut context, victim.record).await.unwrap().lamports;
+    let victim_feed_lamports = account(&mut context, victim.feed).await.unwrap().lamports;
 
-    // The fourth candidate displaces the worst: its claim beats alpha's
-    // verified components.
-    let (result, units) = submit_seal(
+    // Only the challenger's recomputed score can displace the verified worst.
+    walk_to_verdict(
         &mut context,
         &fixture,
-        &delta,
-        (1i128 << 102, 0, 4),
-        &[alpha.id, beta.id, gamma.id],
-        Some(fixture.candidate_feed(alpha.id)),
-        340,
+        challenger,
+        &reservations,
+        &[initial[0].id, initial[1].id, initial[2].id],
+        560,
     )
     .await;
-    result.unwrap();
-    eprintln!("SealCandidate (displacing) CU: {units}");
 
-    // The displaced record: SUPERSEDED, verified digest zeroed — the
-    // documented rule — and carrying its closed feed's lamports.
-    let superseded = read_record(&mut context, &fixture, alpha.id).await;
+    let superseded = read_record(&mut context, &fixture, victim.id).await;
     assert_eq!(superseded.status, CANDIDATE_STATUS_SUPERSEDED);
     assert_eq!(superseded.score_digest, Hash32::ZERO);
-    assert!(account(&mut context, fixture.candidate_feed(alpha.id))
-        .await
-        .is_none());
-    let alpha_record_lamports_after = account(&mut context, alpha.record).await.unwrap().lamports;
+    let surviving_feed = account(&mut context, victim.feed).await.unwrap();
+    assert_eq!(surviving_feed.lamports, victim_feed_lamports);
     assert_eq!(
-        alpha_record_lamports_after,
-        alpha_record_lamports_before + alpha_feed_lamports
+        account(&mut context, victim.record).await.unwrap().lamports,
+        victim_record_lamports
     );
     let window = EpochWindowAccount::decode(
         &account(&mut context, fixture.window_account)
@@ -1531,24 +1653,26 @@ async fn a_fourth_candidate_displaces_the_worst_and_supersedes_it() {
     )
     .unwrap();
     assert_eq!(window.retained_count, 3);
-    assert!(window.retained.contains(&delta.id));
-    assert!(!window.retained.contains(&alpha.id));
+    assert!(window.retained.contains(&challenger.id));
+    assert!(!window.retained.contains(&victim.id));
 
-    // A non-competitive fifth refuses with its own code; the registry and
-    // the would-be displaced feed stand untouched.
-    let worst_feed = fixture.candidate_feed(beta.id);
-    let (result, _) = submit_seal(
+    // A valid but worse candidate still gets a durable verdict.  It does not
+    // mutate the top-three registry and CompleteClearWork does not refuse.
+    walk_to_verdict(
         &mut context,
         &fixture,
-        &echo,
-        (-1, 0, 0),
+        noncompetitive,
+        &reservations,
         &[window.retained[0], window.retained[1], window.retained[2]],
-        Some(worst_feed),
-        420,
+        600,
     )
     .await;
-    assert_eq!(custom(result), ClutchError::CandidateNotCompetitive as u32);
-    assert!(account(&mut context, worst_feed).await.is_some());
+    assert_eq!(
+        read_record(&mut context, &fixture, noncompetitive.id)
+            .await
+            .status,
+        CANDIDATE_STATUS_VERIFIED
+    );
     let after = EpochWindowAccount::decode(
         &account(&mut context, fixture.window_account)
             .await
@@ -1557,11 +1681,47 @@ async fn a_fourth_candidate_displaces_the_worst_and_supersedes_it() {
     )
     .unwrap();
     assert_eq!(after.retained, window.retained);
-    // The refused pair still exists, staged: the seal may retry later.
-    let echo_feed = account(&mut context, fixture.candidate_feed(echo.id))
-        .await
+}
+
+/// The shared candidate deadline gates the atomic verdict/admission step.
+/// A candidate whose proof walk finishes late cannot enter the registry, even
+/// though its immutable feed sealed before the deadline.
+#[tokio::test]
+async fn completion_at_the_deadline_cannot_admit_a_late_candidate() {
+    let (mut context, fixture) = start().await;
+    build_frozen_book(&mut context, &fixture).await;
+    let (epoch, book, reservations) = frozen_state(&mut context, &fixture).await;
+    let late = plan_submission(&fixture, &epoch, &book, even_prices());
+    let (result, _) = submit_seal(
+        &mut context,
+        &fixture,
+        &late,
+        (i128::MAX / 2, u128::MAX / 2, 4),
+        &[],
+        None,
+        100,
+    )
+    .await;
+    result.unwrap();
+    walk_to_completion_boundary(&mut context, &fixture, &late, &reservations, 300).await;
+
+    context
+        .warp_to_slot(FREEZE_DEADLINE + CANDIDATE_WINDOW_SLOTS)
         .unwrap();
-    assert_eq!(echo_feed.data[0], CANDIDATE_FEED_STAGE_TAG);
+    let (result, _) = send_walk(&mut context, fixture.complete(late.id, &[]), 400).await;
+    assert_eq!(custom(result), ClutchError::NotActive as u32);
+    assert_eq!(
+        read_record(&mut context, &fixture, late.id).await.status,
+        CANDIDATE_STATUS_SUBMITTED
+    );
+    let window = EpochWindowAccount::decode(
+        &account(&mut context, fixture.window_account)
+            .await
+            .unwrap()
+            .data,
+    )
+    .unwrap();
+    assert_eq!(window.retained_count, 0);
 }
 
 /// Gate (iii), the tamper half: a forged stored digest refuses, a tampered
@@ -1576,7 +1736,7 @@ async fn tampered_digests_and_stored_regions_refuse_selection() {
     let solo = plan_submission(&fixture, &epoch, &book, even_prices());
     let (result, _) = submit_seal(&mut context, &fixture, &solo, (0, 0, 0), &[], None, 100).await;
     result.unwrap();
-    walk_to_verdict(&mut context, &fixture, &solo, &reservations, 300).await;
+    walk_to_verdict(&mut context, &fixture, &solo, &reservations, &[], 300).await;
     assert_eq!(
         read_record(&mut context, &fixture, solo.id).await.status,
         CANDIDATE_STATUS_VERIFIED
@@ -1641,7 +1801,7 @@ async fn an_empty_verified_set_lapses_honestly() {
     context
         .warp_to_slot(FREEZE_DEADLINE + CANDIDATE_WINDOW_SLOTS)
         .unwrap();
-    let retained = [idle.id];
+    let retained = [];
     let (result, units) = send(&mut context, &[fixture.finalize(&retained)], None, 400).await;
     result.unwrap();
     eprintln!("FinalizeSelection (lapse, 0 verified) CU: {units}");

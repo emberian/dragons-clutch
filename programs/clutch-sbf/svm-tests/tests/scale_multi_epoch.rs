@@ -400,7 +400,7 @@ async fn three_concurrent_epochs_clear_without_cross_epoch_bleed() {
     for entry in &live {
         let (result, units) = send_walk(
             &mut context,
-            entry.plane.complete(entry.submission().id),
+            entry.plane.complete(entry.submission().id, &[]),
             &[],
             nonce,
         )

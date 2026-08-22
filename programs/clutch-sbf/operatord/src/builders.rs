@@ -504,8 +504,8 @@ pub fn seal_candidate(f: &Friday, s: &Submission) -> Vec<u8> {
         GeneralTx {
             writable_signers: &[],
             readonly_signers: &[],
-            writable: &[f.window.bytes, s.feed],
-            readonly: &[f.epoch.bytes, clock()],
+            writable: &[s.feed],
+            readonly: &[f.epoch.bytes, f.window.bytes, clock()],
             keys: &keys,
             data: layout_request(
                 0,
@@ -634,19 +634,25 @@ pub fn advance_clear_slices(f: &Friday, candidate: Hash32, max_slices: u16) -> V
     )
 }
 
-pub fn complete_clear_work(f: &Friday, candidate: Hash32) -> Vec<u8> {
+pub fn complete_clear_work(f: &Friday, candidate: Hash32, retained: &[Hash32]) -> Vec<u8> {
     let work = f.clear_work(candidate).bytes;
     let feed = f.candidate_feed(candidate).bytes;
     let record = f.candidate_record(candidate).bytes;
-    let keys = [f.epoch.bytes, feed, work, record];
+    let mut keys = vec![f.epoch.bytes, feed, work, record, f.window.bytes, clock()];
     assert_eq!(keys.len(), COMPLETE_CLEAR_WORK_ACCOUNT_COUNT);
+    let mut writable = vec![work, record, f.window.bytes];
+    for retained_candidate in retained {
+        let retained_record = f.candidate_record(*retained_candidate).bytes;
+        keys.push(retained_record);
+        writable.push(retained_record);
+    }
     general_transaction(
         &f.shared,
         GeneralTx {
             writable_signers: &[],
             readonly_signers: &[],
-            writable: &[work, record],
-            readonly: &[f.epoch.bytes, feed],
+            writable: &writable,
+            readonly: &[f.epoch.bytes, feed, clock()],
             keys: &keys,
             data: layout_request(
                 0,

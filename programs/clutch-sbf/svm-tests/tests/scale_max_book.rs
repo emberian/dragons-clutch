@@ -99,15 +99,7 @@ async fn the_maximum_sixty_four_order_book_clears_across_four_dense_pages() {
                 rank += 1;
                 orders.push((
                     buyer,
-                    single(
-                        owner.id,
-                        rank,
-                        outcome,
-                        0,
-                        QUANTITY,
-                        buy_limit,
-                        EPOCH_INDEX,
-                    ),
+                    single(owner.id, rank, outcome, 0, QUANTITY, buy_limit, EPOCH_INDEX),
                 ));
             }
             for (seller, owner) in owners.iter().enumerate().skip(BUYERS) {
@@ -193,6 +185,7 @@ async fn the_maximum_sixty_four_order_book_clears_across_four_dense_pages() {
         &submission,
         &frozen,
         SLICE_BATCH,
+        &[],
         &mut meter,
         "",
         900,

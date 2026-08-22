@@ -1135,11 +1135,13 @@ pub(super) fn close_general_pot(
 /// Close one candidate record and its feed together: one recorded payer
 /// funded both in one `SubmitCandidate`, so one ledger pays one payout.
 ///
-/// A displaced candidate's feed already closed at displacement with its
-/// lamports parked on the surviving record — this close collects them.  The
-/// SELECTED candidate's pair closes only after the pot and every page are
-/// absent: its feed carries the fill proofs post-clear releases consume, and
-/// its record is the consumption seam's selection authority.
+/// Current displacement preserves the displaced feed, so current candidate
+/// pairs normally close together here. The absent-feed form remains accepted
+/// for historical account shapes whose displacement moved the feed principal
+/// onto the record. The SELECTED candidate's pair closes only after the pot
+/// and every page are absent: its feed carries the fill proofs post-clear
+/// releases consume, and its record is the consumption seam's selection
+/// authority.
 #[inline(never)]
 pub(super) fn close_general_candidate(
     program_id: &Pubkey,
@@ -1179,9 +1181,10 @@ pub(super) fn close_general_candidate(
         record.status
     };
 
-    /* The feed slot: the canonical feed PDA, either still program-owned at
-     * the feed length (sealed or staged — both close here) or already absent
-     * (closed at displacement, lamports parked on the record). */
+    /* The feed slot: the canonical feed PDA, normally still program-owned at
+     * the feed length (sealed, verified, displaced, and selected all close
+     * here). The absent legacy form covers the historical displacement shape
+     * whose lamports were parked on the surviving record. */
     let (feed_address, _) =
         seeds::candidate_feed_pda(program_id, &epoch.epoch.bytes(), &intent_candidate.bytes());
     require(*accounts[2].key == feed_address, ClutchError::WrongPda)?;

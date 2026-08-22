@@ -1090,10 +1090,13 @@ impl Session {
             &mut live,
             "friday-complete-clear-work",
             "ClearWalk",
-            &builders::complete_clear_work(f, id),
+            &builders::complete_clear_work(f, id, &[]),
         )?;
 
         let target = live.freeze_slot + CANDIDATE_WINDOW_SLOTS;
+        self.stage(&format!(
+            "candidate verified; waiting for the selection window to close at slot {target}"
+        ));
         let mut tick = |now: u64, target: u64, reason: &str| {
             self.publish(&json!({
                 "type": "clock", "slot": now, "target": target, "reason": reason,
@@ -1101,6 +1104,9 @@ impl Session {
             }));
         };
         rpc::wait_for_slot(&self.url, target, "candidate window", &mut tick)?;
+        self.stage(
+            "selection window closed; finalizing the best candidate verified by the deadline",
+        );
         self.expect(
             &mut live,
             "friday-finalize-selection",

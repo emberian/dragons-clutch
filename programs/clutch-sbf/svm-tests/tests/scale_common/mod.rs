@@ -309,6 +309,32 @@ impl Lab {
         }
     }
 
+    /// A reproducible twin of [`Self::new`] for CU comparisons whose PDA
+    /// derivation quanta must not move between independently started banks.
+    pub fn deterministic(owner_count: usize) -> Self {
+        assert!(
+            owner_count <= 16,
+            "the deterministic fixture has sixteen owner seeds"
+        );
+        let mut test = ProgramTest::default();
+        test.prefer_bpf(true);
+        test.add_program("clutch_sbf", PROGRAM_ID, None);
+        let keeper = Keypair::new_from_array([0xa0; 32]);
+        test.add_account(keeper.pubkey(), system_slot(WALLET));
+        let mut owners = Vec::with_capacity(owner_count);
+        for index in 0..owner_count {
+            let key = Keypair::new_from_array([0xb0 + index as u8; 32]);
+            let id = Hash32::from_bytes(key.pubkey().to_bytes());
+            test.add_account(key.pubkey(), system_slot(WALLET));
+            owners.push(Owner { key, id });
+        }
+        Self {
+            test,
+            keeper,
+            owners,
+        }
+    }
+
     fn add_state(&mut self, address: Address, data: Vec<u8>) {
         self.test.add_account(address, program_account(data));
     }
@@ -874,21 +900,15 @@ impl Plane {
     pub fn seal(
         &self,
         submission: &Submission,
-        retained: &[Hash32],
-        displaced_feed: Option<Address>,
+        _retained: &[Hash32],
+        _displaced_feed: Option<Address>,
     ) -> Instruction {
-        let mut metas = vec![
+        let metas = vec![
             AccountMeta::new_readonly(self.epoch_account, false),
-            AccountMeta::new(self.window_account, false),
+            AccountMeta::new_readonly(self.window_account, false),
             AccountMeta::new(submission.feed, false),
             AccountMeta::new_readonly(clock_address(), false),
         ];
-        for candidate in retained {
-            metas.push(AccountMeta::new(self.candidate_record(*candidate), false));
-        }
-        if let Some(feed) = displaced_feed {
-            metas.push(AccountMeta::new(feed, false));
-        }
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -1019,7 +1039,21 @@ impl Plane {
         )
     }
 
-    pub fn complete(&self, candidate: Hash32) -> Instruction {
+    pub fn complete(&self, candidate: Hash32, retained: &[Hash32]) -> Instruction {
+        let mut metas = vec![
+            AccountMeta::new_readonly(self.epoch_account, false),
+            AccountMeta::new_readonly(self.candidate_feed(candidate), false),
+            AccountMeta::new(self.clear_work(candidate), false),
+            AccountMeta::new(self.candidate_record(candidate), false),
+            AccountMeta::new(self.window_account, false),
+            AccountMeta::new_readonly(clock_address(), false),
+        ];
+        for retained_candidate in retained {
+            metas.push(AccountMeta::new(
+                self.candidate_record(*retained_candidate),
+                false,
+            ));
+        }
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -1030,12 +1064,7 @@ impl Plane {
                     candidate,
                 },
             ),
-            vec![
-                AccountMeta::new_readonly(self.epoch_account, false),
-                AccountMeta::new_readonly(self.candidate_feed(candidate), false),
-                AccountMeta::new(self.clear_work(candidate), false),
-                AccountMeta::new(self.candidate_record(candidate), false),
-            ],
+            metas,
         )
     }
 
@@ -1911,6 +1940,7 @@ pub async fn walk_to_verdict(
     submission: &Submission,
     frozen: &Frozen,
     slice_batch: u16,
+    retained: &[Hash32],
     meter: &mut Meter,
     label: &str,
     nonce: u32,
@@ -1981,7 +2011,8 @@ pub async fn walk_to_verdict(
         step += 1;
     }
 
-    let (result, units) = send_walk(context, plane.complete(submission.id), &[], step).await;
+    let (result, units) =
+        send_walk(context, plane.complete(submission.id, retained), &[], step).await;
     result.unwrap();
     meter.record(&route(label, "complete_clear_work"), units);
 }

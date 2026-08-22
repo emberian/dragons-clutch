@@ -3381,7 +3381,12 @@ pub fn paired_resolve_transaction(
 /// into pooled custody. Canonical Terms and SourceSpec are trailing read-only
 /// release evidence; every historical role keeps its index. The owner is a
 /// writable signer because it funds that owner plane when absent.
-pub fn endow_transaction(shared: &Shared, plane: &Plane, signer: Signer<'_>, data: Vec<u8>) -> Vec<u8> {
+pub fn endow_transaction(
+    shared: &Shared,
+    plane: &Plane,
+    signer: Signer<'_>,
+    data: Vec<u8>,
+) -> Vec<u8> {
     endow_transaction_at(shared, plane, &plane.position, &plane.replay, signer, data)
 }
 
@@ -7608,7 +7613,12 @@ pub fn general_transaction(shared: &Shared, tx: GeneralTx<'_>) -> Vec<u8> {
     let mut readonly = tx.readonly.to_vec();
     readonly.push(shared.program.bytes);
     readonly.push(shared.compute_budget);
-    let message = Message::new(&writable_signers, tx.readonly_signers, tx.writable, &readonly);
+    let message = Message::new(
+        &writable_signers,
+        tx.readonly_signers,
+        tx.writable,
+        &readonly,
+    );
     let mut instructions = Vec::new();
     if tx.heap {
         instructions.push(heap_frame_instruction(
@@ -7685,7 +7695,13 @@ pub struct GeneralOwner {
 }
 
 impl GeneralOwner {
-    fn new(shared: &Shared, plane: &Plane, label: &'static str, key: [u8; 32], token: &Pda) -> Self {
+    fn new(
+        shared: &Shared,
+        plane: &Plane,
+        label: &'static str,
+        key: [u8; 32],
+        token: &Pda,
+    ) -> Self {
         let (position, replay) = owner_plane(shared, plane, key);
         Self {
             label,
@@ -8086,7 +8102,9 @@ fn epoch_bytes_of(value: &EpochAccount) -> Vec<u8> {
 
 fn record_bytes_of(value: &CandidateRecord) -> Vec<u8> {
     let mut out = vec![0_u8; account_len::CANDIDATE];
-    value.encode(&mut out).expect("the candidate record encodes");
+    value
+        .encode(&mut out)
+        .expect("the candidate record encodes");
     out
 }
 
@@ -8224,21 +8242,12 @@ fn general_place_case(
     name: &str,
     note: &str,
 ) -> (Case, ReservationSlot) {
-    let plan = ReservationPlan::for_order(
-        &slot,
-        epoch_value.outcome_count,
-        epoch_value.price_scale,
-        0,
-    )
-    .expect("the placement's reservation plan derives");
+    let plan =
+        ReservationPlan::for_order(&slot, epoch_value.outcome_count, epoch_value.price_scale, 0)
+            .expect("the placement's reservation plan derives");
     let order_id = slot.order_id();
-    let reservation_id = canonical_reservation_id(
-        epoch_value.market,
-        epoch_value.epoch,
-        owner.id,
-        0,
-        order_id,
-    );
+    let reservation_id =
+        canonical_reservation_id(epoch_value.market, epoch_value.epoch, owner.id, 0, order_id);
     let pda = derive(
         &shared.program.address,
         &[
@@ -8422,7 +8431,8 @@ pub fn build_general_committed_cases(
 
     /* Owner carriers.  A is the founding owner; B, C, D arrive by first
      * endow.  Their wallets are runner-supplied fresh test keys. */
-    let mut owner_a = GeneralOwner::new(shared, plane, "general-market", actor, &shared.actor_token);
+    let mut owner_a =
+        GeneralOwner::new(shared, plane, "general-market", actor, &shared.actor_token);
     owner_a.position_bytes = plane.state.position.to_vec();
     owner_a.replay_bytes = plane.state.replay.to_vec();
     let mut owner_b = GeneralOwner::new(
@@ -9379,8 +9389,8 @@ fn general_second_half(
     prices[0] = GENERAL_PRICE_0;
     prices[1] = GENERAL_PRICE_1;
     let domain = general_domain(&epoch_value);
-    let candidate_v1 =
-        canonical_candidate(&domain, &book, &prices, 0, 0).expect("the canonical candidate derives");
+    let candidate_v1 = canonical_candidate(&domain, &book, &prices, 0, 0)
+        .expect("the canonical candidate derives");
     assert_eq!(
         &candidate_v1.fills[..5],
         &[8, 8, 3, 1, 0],
@@ -9391,7 +9401,10 @@ fn general_second_half(
     let witness =
         canonical_pairing(&domain, &book, &candidate_v1).expect("the canonical pairing derives");
     let declared = witness.len;
-    assert_eq!(declared, 3, "one single crossing and the portfolio pair's two legs");
+    assert_eq!(
+        declared, 3,
+        "one single crossing and the portfolio pair's two legs"
+    );
     let mut single_slice: Option<u16> = None;
     let mut pair_slices: Vec<u16> = Vec::new();
     for index in 0..declared {
@@ -9411,7 +9424,11 @@ fn general_second_half(
         }
     }
     let single_slice = single_slice.expect("the single crossing has a witness slice");
-    assert_eq!(pair_slices.len(), 2, "the portfolio pair covers both outcomes");
+    assert_eq!(
+        pair_slices.len(),
+        2,
+        "the portfolio pair covers both outcomes"
+    );
     pair_slices.sort_unstable();
 
     /* The SUBMITTED record and the staged feed. */
@@ -9642,24 +9659,21 @@ fn general_second_half(
         }],
     ));
 
-    /* 32. Seal the feed and admit the candidate into the retained registry. */
+    /* 32. Seal the feed; unverified claims do not enter the registry. */
     let feed_pre = feed_bytes.clone();
     let feed_header = clearing::seal_candidate_feed(&mut feed_bytes).expect("the feed seals");
-    window_value.retained[0] = candidate;
-    window_value.retained_count = 1;
-    let (selection_deadline_offset, _) = window_slot_offsets(&window_value);
-    let mut case = Case::accept(
+    let case = Case::accept(
         "general-32-seal-candidate",
         "GeneralClearing",
-        "layout codec byte-for-byte (sealed feed + retained registry)",
-        "seal the complete staged feed into the verified-feed format and retain the candidate in the window",
+        "layout codec byte-for-byte (sealed feed)",
+        "seal the complete staged feed into the immutable verifier-input format without admitting its score claims",
         general_transaction(
             shared,
             GeneralTx {
                 writable_signers: &[],
                 readonly_signers: &[],
-                writable: &[window_pda.bytes, feed_pda.bytes],
-                readonly: &[epoch_pda.bytes, clock],
+                writable: &[feed_pda.bytes],
+                readonly: &[epoch_pda.bytes, window_pda.bytes, clock],
                 keys: &[
                     epoch_pda.bytes,
                     window_pda.bytes,
@@ -9678,37 +9692,27 @@ fn general_second_half(
             },
         ),
         1,
-        vec![
-            Compare {
-                role: "general.feed".to_string(),
-                address: feed_pda.address.clone(),
-                expected: feed_bytes.clone(),
-                pre: feed_pre,
-            },
-            Compare {
-                role: "general.window".to_string(),
-                address: window_pda.address.clone(),
-                expected: window_bytes(&window_value),
-                pre: Vec::new(),
-            },
-        ],
+        vec![Compare {
+            role: "general.feed".to_string(),
+            address: feed_pda.address.clone(),
+            expected: feed_bytes.clone(),
+            pre: feed_pre,
+        }],
     );
-    case.slot_patches.push((
-        "general.window".to_string(),
-        SlotPatch {
-            offset: selection_deadline_offset,
-            base: "general-28-freeze-epoch".to_string(),
-            delta: CANDIDATE_WINDOW_SLOTS,
-        },
-    ));
     cases.push(case);
 
     /* 33. Staged creation of the 50,054-byte checkpoint: one transaction,
      * five instructions (create + four grows; the last grow writes the real
      * header and the idle body). */
     let mut work_bytes = vec![0_u8; account_len::CLEAR_WORK];
-    clearing::init_clear_work(&mut work_bytes, market_id, epoch_id, candidate, work_pda.bump)
-        .expect("the checkpoint account initializes");
+    clearing::init_clear_work(
+        &mut work_bytes,
+        market_id,
+        epoch_id,
+        candidate,
+        work_pda.bump,
+    )
+    .expect("the checkpoint account initializes");
     ClearWorkV1::encode_idle_into(
         clearing::clear_work_body_mut(&mut work_bytes).expect("the checkpoint body borrows"),
     )
@@ -9828,17 +9832,28 @@ fn general_second_half(
             .expect("only live records are fed");
         let fill = clearing::fill_at(&feed_bytes, &feed_header, live as u8)
             .expect("every live rank has a fill");
-        let status = body.push_order(&order, fill).expect("pass 1 accepts the order");
+        let status = body
+            .push_order(&order, fill)
+            .expect("pass 1 accepts the order");
         assert_ne!(status, FeedStatusV1::Complete, "no early verdict");
     }
     let status = body.end_pass().expect("pass 1 ends");
     assert_eq!(status, FeedStatusV1::NeedSlices);
-    assert_eq!(interner.count(), epoch_value.owner_count, "the owner-count gate");
+    assert_eq!(
+        interner.count(),
+        epoch_value.owner_count,
+        "the owner-count gate"
+    );
     body.encode_into(clearing::clear_work_body_mut(&mut work_bytes).expect("body borrows"))
         .expect("the pass-1 body encodes");
     clearing::write_owner_interner(&mut work_bytes, &interner).expect("the interner persists");
-    clearing::advance_walk(&mut work_bytes, epoch_value.page_count, 0, u16::from(book.len))
-        .expect("the walk position advances");
+    clearing::advance_walk(
+        &mut work_bytes,
+        epoch_value.page_count,
+        0,
+        u16::from(book.len),
+    )
+    .expect("the walk position advances");
     clearing::bind_order_set(&mut work_bytes, epoch_value.order_set, body.consumed_fold())
         .expect("pass 1 binds the frozen set");
     let sweep: Vec<[u8; 32]> = (1..=5).map(|rank| reservations[rank].pda.bytes).collect();
@@ -9912,14 +9927,20 @@ fn general_second_half(
             .expect("only live records are fed");
         let fill = clearing::fill_at(&feed_bytes, &feed_header, live as u8)
             .expect("every live rank has a fill");
-        body.push_order(&order, fill).expect("pass 2 accepts the order");
+        body.push_order(&order, fill)
+            .expect("pass 2 accepts the order");
     }
     let status = body.end_pass().expect("pass 2 ends");
     assert_eq!(status, FeedStatusV1::Complete);
     body.encode_into(clearing::clear_work_body_mut(&mut work_bytes).expect("body borrows"))
         .expect("the pass-2 body encodes");
-    clearing::advance_walk(&mut work_bytes, epoch_value.page_count, 0, u16::from(book.len))
-        .expect("the walk position closes the set");
+    clearing::advance_walk(
+        &mut work_bytes,
+        epoch_value.page_count,
+        0,
+        u16::from(book.len),
+    )
+    .expect("the walk position closes the set");
     let mut case = Case::accept(
         "general-36-advance-pass-two",
         "GeneralClearing",
@@ -9950,6 +9971,9 @@ fn general_second_half(
         record.churn = summary.score.churn;
     }
     record.score_digest = general_tie_digest(&epoch_value, &feed_header, &feed_bytes);
+    window_value.retained[0] = candidate;
+    window_value.retained_count = 1;
+    let (selection_deadline_offset, _) = window_slot_offsets(&window_value);
     clearing::complete_clear_work(&mut work_bytes).expect("the checkpoint completes");
     let mut case = Case::accept(
         "general-37-complete-clear-work",
@@ -9961,13 +9985,15 @@ fn general_second_half(
             GeneralTx {
                 writable_signers: &[],
                 readonly_signers: &[],
-                writable: &[work_pda.bytes, record_pda.bytes],
-                readonly: &[epoch_pda.bytes, feed_pda.bytes],
+                writable: &[work_pda.bytes, record_pda.bytes, window_pda.bytes],
+                readonly: &[epoch_pda.bytes, feed_pda.bytes, clock],
                 keys: &[
                     epoch_pda.bytes,
                     feed_pda.bytes,
                     work_pda.bytes,
                     record_pda.bytes,
+                    window_pda.bytes,
+                    clock,
                 ],
                 data: layout_request(
                     0,
@@ -9994,6 +10020,12 @@ fn general_second_half(
                 expected: work_bytes.clone(),
                 pre: Vec::new(),
             },
+            Compare {
+                role: "general.window".to_string(),
+                address: window_pda.address.clone(),
+                expected: window_bytes(&window_value),
+                pre: Vec::new(),
+            },
         ],
     );
     case.compute_limit = Some(COMPUTE_UNIT_CEILING);
@@ -10003,6 +10035,14 @@ fn general_second_half(
             offset: submitted_slot_offset,
             base: "general-29-submit-candidate".to_string(),
             delta: 0,
+        },
+    ));
+    case.slot_patches.push((
+        "general.window".to_string(),
+        SlotPatch {
+            offset: selection_deadline_offset,
+            base: "general-28-freeze-epoch".to_string(),
+            delta: CANDIDATE_WINDOW_SLOTS,
         },
     ));
     cases.push(case);
@@ -10065,7 +10105,10 @@ fn general_second_half(
             },
         ],
     );
-    case.wait_after = Some(("general-28-freeze-epoch".to_string(), CANDIDATE_WINDOW_SLOTS));
+    case.wait_after = Some((
+        "general-28-freeze-epoch".to_string(),
+        CANDIDATE_WINDOW_SLOTS,
+    ));
     case.slot_patches.push((
         "general.window".to_string(),
         SlotPatch {
@@ -10107,7 +10150,9 @@ fn general_second_half(
         flags: 0,
     };
     let mut pot_bytes = vec![0_u8; account_len::FINAL_POT];
-    pot_value.encode(&mut pot_bytes).expect("the final pot encodes");
+    pot_value
+        .encode(&mut pot_bytes)
+        .expect("the final pot encodes");
     let mut case = Case::accept(
         "general-39-freeze-entitlement",
         "GeneralClearing",
@@ -10426,7 +10471,10 @@ fn general_second_half(
         .expect("the single consideration fits");
         let release = reservations[1].value.remaining_cash_atoms;
         let remainder = reservations[2].value.remaining_internal[0] - single_receipt.quantity;
-        assert_eq!(remainder, 0, "a full one-to-one fill leaves no seller remainder");
+        assert_eq!(
+            remainder, 0,
+            "a full one-to-one fill leaves no seller remainder"
+        );
         let a_pre = owner_a.position_bytes.clone();
         let b_pre = owner_b.position_bytes.clone();
         let mut a_position = owner_a.position_value();
@@ -10448,8 +10496,7 @@ fn general_second_half(
             reservations[rank].value.consumed_units += single_receipt.quantity;
             reservations[rank].value.paid_units += single_receipt.quantity;
             assert_eq!(
-                reservations[rank].value.consumed_units,
-                reservations[rank].value.entitled_units,
+                reservations[rank].value.consumed_units, reservations[rank].value.entitled_units,
                 "this one slice completes both ends of a full one-to-one fill"
             );
             reservations[rank].value.remaining_cash_atoms = 0;
@@ -10570,7 +10617,9 @@ fn general_second_half(
             entitlement.primitive_units,
             entitlement.consideration_price_units,
         );
-        entitlement.validate().expect("the rebuilt entitlement validates");
+        entitlement
+            .validate()
+            .expect("the rebuilt entitlement validates");
 
         let c_pre = owner_c.position_bytes.clone();
         let d_pre = owner_d.position_bytes.clone();
@@ -10639,7 +10688,9 @@ fn general_second_half(
                 | RECEIPT_FLAG_SELL_CONSUMED
                 | RECEIPT_FLAG_SLICE_EXHAUSTED;
             let mut bytes = vec![0_u8; account_len::SETTLEMENT_RECEIPT];
-            consumed.encode(&mut bytes).expect("a consumed pair receipt encodes");
+            consumed
+                .encode(&mut bytes)
+                .expect("a consumed pair receipt encodes");
             compares.push(Compare {
                 role: format!("general.receipt-{index}"),
                 address: pda.address.clone(),
@@ -10720,8 +10771,7 @@ fn general_second_half(
         eggs[0] += value.internal[0];
         eggs[1] += value.internal[1];
     }
-    let hoard_value =
-        HoardAccount::decode(&plane.state.hoard).expect("the terminal Hoard decodes");
+    let hoard_value = HoardAccount::decode(&plane.state.hoard).expect("the terminal Hoard decodes");
     let endowed_total = GENERAL_ENDOW_A + GENERAL_ENDOW_B + GENERAL_ENDOW_C + GENERAL_ENDOW_D;
     let split_total = GENERAL_SPLIT_B + GENERAL_SPLIT_D;
     assert_eq!(custody, endowed_total);
@@ -10732,8 +10782,12 @@ fn general_second_half(
         reservations[5].value.remaining_cash_atoms, 3,
         "the ineligible order's encumbrance stands"
     );
-    let (position_cash_offset, position_reserved_offset, position_internal0_offset, position_internal1_offset) =
-        position_field_offsets(market_id, owner_a.id);
+    let (
+        position_cash_offset,
+        position_reserved_offset,
+        position_internal0_offset,
+        position_internal1_offset,
+    ) = position_field_offsets(market_id, owner_a.id);
     GeneralConservation {
         endowed_total,
         split_total,
@@ -11279,7 +11333,10 @@ pub fn emit_general_committed_plan(out_dir: &Path, f: &Fixture) {
     );
     write(&out_dir.join("committed.json"), &committed);
 
-    println!("general-clearing committed plan written to {}", out_dir.display());
+    println!(
+        "general-clearing committed plan written to {}",
+        out_dir.display()
+    );
     println!("program_id   {}", shared.program.address);
     println!("payer        {}", shared.payer.address);
     println!("actor        {}", shared.actor.address);

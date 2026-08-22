@@ -437,16 +437,13 @@ impl Fixture {
         )
     }
 
-    fn seal(&self, submission: &Submission, retained: &[Hash32]) -> Instruction {
-        let mut metas = vec![
+    fn seal(&self, submission: &Submission, _retained: &[Hash32]) -> Instruction {
+        let metas = vec![
             AccountMeta::new_readonly(self.epoch_account, false),
-            AccountMeta::new(self.window_account, false),
+            AccountMeta::new_readonly(self.window_account, false),
             AccountMeta::new(submission.feed, false),
             AccountMeta::new_readonly(clock_address(), false),
         ];
-        for candidate in retained {
-            metas.push(AccountMeta::new(self.candidate_record(*candidate), false));
-        }
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -569,7 +566,21 @@ impl Fixture {
         )
     }
 
-    fn complete(&self, candidate: Hash32) -> Instruction {
+    fn complete(&self, candidate: Hash32, retained: &[Hash32]) -> Instruction {
+        let mut metas = vec![
+            AccountMeta::new_readonly(self.epoch_account, false),
+            AccountMeta::new_readonly(self.candidate_feed(candidate), false),
+            AccountMeta::new(self.clear_work(candidate), false),
+            AccountMeta::new(self.candidate_record(candidate), false),
+            AccountMeta::new(self.window_account, false),
+            AccountMeta::new_readonly(clock_address(), false),
+        ];
+        for retained_candidate in retained {
+            metas.push(AccountMeta::new(
+                self.candidate_record(*retained_candidate),
+                false,
+            ));
+        }
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -580,12 +591,7 @@ impl Fixture {
                     candidate,
                 },
             ),
-            vec![
-                AccountMeta::new_readonly(self.epoch_account, false),
-                AccountMeta::new_readonly(self.candidate_feed(candidate), false),
-                AccountMeta::new(self.clear_work(candidate), false),
-                AccountMeta::new(self.candidate_record(candidate), false),
-            ],
+            metas,
         )
     }
 
@@ -1598,7 +1604,13 @@ async fn walk_to_verdict(
     )
     .await;
     result.unwrap();
-    let (result, _) = send_walk(context, fixture.complete(submission.id), None, nonce + 4).await;
+    let (result, _) = send_walk(
+        context,
+        fixture.complete(submission.id, &[]),
+        None,
+        nonce + 4,
+    )
+    .await;
     result.unwrap();
 }
 

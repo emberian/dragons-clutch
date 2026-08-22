@@ -19,11 +19,12 @@
 //! `WriteCandidateFeed` appends content chunks at the stage's one sequential
 //! cursor (fills, then slices; replay held by state: the envelope sequence is
 //! the elements-written count).  `SealCandidate` is the one-way door: the
-//! stage prefix becomes the real [`clearing::CandidateFeedHeader`], the whole
-//! account re-verifies, and — in the same instruction — the candidate is
-//! admitted into the window's bounded retained registry.  After the seal no
-//! stage write can land, which is what keeps the bytes the walk streams and
-//! the bytes the tie digest folds one region.
+//! stage prefix becomes the real [`clearing::CandidateFeedHeader`] and the whole
+//! account re-verifies.  After the seal no stage write can land, which is what
+//! keeps the bytes the walk streams and the bytes the tie digest folds one
+//! region.  Sealing does **not** admit a score claim into the retained registry:
+//! [`super::clear_walk::complete_clear_work`] inserts only after the streaming
+//! verifier has produced the full verified score.
 //!
 //! The candidate identity never travels: the program recomputes it from the
 //! submitted free coordinates exactly as both account codecs do, and
@@ -31,34 +32,22 @@
 //! live-cardinality binding, via [`CandidateRecord::binds_epoch`]), never a
 //! claim.
 //!
-//! ## The bounded registry and displacement
+//! ## The verified-only bounded registry
 //!
-//! The window retains at most [`MAX_RETAINED_CANDIDATES`] candidates
-//! (the V3 window's bound).  A seal against a full registry must displace
-//! the **worst** retained candidate: worst by the score *components*
-//! (`FullScoreV1::total_order` minus its digest coordinate — an admission
-//! claim carries no verified digest, so the digest never serves admission;
-//! among component-equal candidates the lexicographically larger identity is
-//! worse, the direction consistent with "smaller digest wins"), and the
-//! incoming claim must be **strictly better on components** than that worst
-//! or the seal refuses with [`ClutchError::CandidateNotCompetitive`] — the
-//! V3 no-state rule, surfaced as a refusal because the staged pair survives
-//! and may legitimately seal later if verification lowers a retained claim.
-//! Displacement, per the V3 `staged.rs` precedent of closing the displaced
-//! worst in the admitting transaction: the displaced candidate's **feed**
-//! closes (its lamports park on its own surviving record; the candidate's
-//! optional `GeneralFundingLedgerV1` — written at submission — covers the
-//! pair, so `CloseGeneralCandidate` (tag 65) later collects the parked feed
-//! rent and the record's own into one exact-principal payout), and its
-//! **record** takes `CANDIDATE_STATUS_SUPERSEDED` with `score_digest` zeroed
-//! — exactly the documented rule on [`CandidateRecord`]: a superseded record
-//! competes for nothing, so its verified identity is erased.
+//! The window retains at most [`MAX_RETAINED_CANDIDATES`] candidates (the V3
+//! window's bound), and every retained record is `VERIFIED`.  A successful
+//! `CompleteClearWork` appends while capacity remains.  Against a full registry
+//! it compares the complete [`FullScoreV1`] — including the verified full-width
+//! digest — and replaces the worst only when the incoming score is strictly
+//! better.  The displaced record becomes `SUPERSEDED` with a zero digest.  Its
+//! feed deliberately remains present for the terminal close family; verified
+//! admission never needs a writable feed whose bytes it has already checked.
 //!
 //! ## Selection (57)
 //!
 //! Permissionless at or after the window's `selection_deadline_slot`
-//! (stamped by the freeze; before it, everyone refuses).  Only `VERIFIED`
-//! retained candidates compete, by `FullScoreV1::total_order` over their
+//! (stamped by the freeze; before it, everyone refuses).  The `VERIFIED`
+//! retained candidates compete by `FullScoreV1::total_order` over their
 //! **persisted verified components** and the full-width tie digest — never a
 //! claimed score, and never trusting the stored digest either: for every
 //! verified candidate the tie digest is **re-derived** from the full-width
@@ -76,8 +65,9 @@
 //! rent closes down to the epoch root).  The second finalize refuses on the
 //! phase either way.
 //!
-//! "Best valid **submitted** candidate" only: `propose_best_valid` stays
-//! host-side, per the frame plan's "Never" tier.
+//! This is the best valid submitted candidate verified and admitted before the
+//! shared deadline.  A sealed candidate whose verification does not finish
+//! before the deadline does not compete.
 //!
 //! ## Claim plane
 //!
@@ -91,7 +81,7 @@ use crate::accounts::{
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::artifact::read_clock_slot;
 use crate::instructions::genesis::{
-    create_pda_account, read_rent, require_creatable, require_system_program, SYSTEM_PROGRAM_ID,
+    create_pda_account, read_rent, require_creatable, require_system_program,
 };
 use crate::seeds;
 use clutch_batch_policy_identity::{FullScoreV1, Identity32V1};
@@ -101,11 +91,10 @@ use clutch_solana_layout::clearing::{
 };
 use clutch_solana_layout::{
     account_len, CandidateFeedChunk, CandidateRecord, EpochAccount, Hash32,
-    CANDIDATE_STATUS_REFUSED, CANDIDATE_STATUS_SELECTED, CANDIDATE_STATUS_SUBMITTED,
-    CANDIDATE_STATUS_SUPERSEDED, CANDIDATE_STATUS_VERIFIED, EPOCH_PHASE_CLEARED,
-    EPOCH_PHASE_FROZEN, EPOCH_PHASE_LAPSED, MAX_EPOCH_ORDERS, MAX_OUTCOMES,
+    CANDIDATE_STATUS_SELECTED, CANDIDATE_STATUS_SUBMITTED, CANDIDATE_STATUS_SUPERSEDED,
+    CANDIDATE_STATUS_VERIFIED, EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN, EPOCH_PHASE_LAPSED,
+    MAX_EPOCH_ORDERS, MAX_OUTCOMES,
 };
-use core::cmp::Ordering;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -145,21 +134,16 @@ pub const WRITE_CANDIDATE_FEED_ACCOUNT_COUNT: usize = 1;
 /// The staging feed PDA.
 pub const IX_WRITE_FEED_FEED: usize = 0;
 
-/// Fixed accounts in a `SealCandidate` instruction, before the retained
-/// registry.
+/// Accounts in a `SealCandidate` instruction, exactly.
 pub const SEAL_CANDIDATE_FIXED_ACCOUNT_COUNT: usize = 4;
 /// The frozen general epoch (read-only, program-owned).
 pub const IX_SEAL_EPOCH: usize = 0;
-/// The epoch's schedule window (writable, program-owned).
+/// The epoch's schedule window (read-only, program-owned).
 pub const IX_SEAL_WINDOW: usize = 1;
 /// The complete staging feed being sealed (writable, program-owned).
 pub const IX_SEAL_FEED: usize = 2;
 /// Clock sysvar.
 pub const IX_SEAL_CLOCK: usize = 3;
-/// First retained candidate record; `retained_count` of them follow in
-/// registry order, then — exactly when the registry is full — the displaced
-/// candidate's feed.
-pub const IX_SEAL_RETAINED: usize = SEAL_CANDIDATE_FIXED_ACCOUNT_COUNT;
 
 /// Fixed accounts in a `FinalizeSelection` instruction, before the
 /// per-candidate pairs.
@@ -388,8 +372,11 @@ pub(super) fn write_candidate_feed(
     Ok(())
 }
 
-/// Seal one complete staging feed and admit the candidate into the bounded
-/// retained registry, displacing the worst retained candidate when full.
+/// Seal one complete staging feed.
+///
+/// The feed becomes immutable and walkable here.  Its unverified score claims
+/// never enter the retained registry; successful `CompleteClearWork` owns that
+/// later transition after it has recomputed the complete score.
 #[inline(never)]
 pub(super) fn seal_candidate(
     program_id: &Pubkey,
@@ -400,14 +387,12 @@ pub(super) fn seal_candidate(
     intent_candidate: &Hash32,
 ) -> Outcome<()> {
     require(sequence == 0, ClutchError::Replay)?;
-    require(
-        accounts.len() >= SEAL_CANDIDATE_FIXED_ACCOUNT_COUNT,
-        ClutchError::AccountCount,
-    )?;
+    require_count(accounts, SEAL_CANDIDATE_FIXED_ACCOUNT_COUNT)?;
+    require_distinct(accounts)?;
     accounts::validate_state_role_lengths(
         program_id,
         &accounts[IX_SEAL_WINDOW],
-        true,
+        false,
         &[EPOCH_WINDOW_ACCOUNT_BYTES],
     )?;
     accounts::validate_state_role_lengths(
@@ -429,24 +414,7 @@ pub(super) fn seal_candidate(
         intent_market,
         intent_epoch,
     )?;
-    let mut window = load_bound_window(program_id, &accounts[IX_SEAL_WINDOW], &epoch)?;
-    let retained_count = window.retained_count as usize;
-    let displacing = retained_count == MAX_RETAINED_CANDIDATES;
-    require_count(
-        accounts,
-        SEAL_CANDIDATE_FIXED_ACCOUNT_COUNT + retained_count + usize::from(displacing),
-    )?;
-    require_distinct(accounts)?;
-    let mut index = 0usize;
-    while index < retained_count {
-        accounts::validate_state_role_lengths(
-            program_id,
-            &accounts[IX_SEAL_RETAINED + index],
-            true,
-            &[account_len::CANDIDATE],
-        )?;
-        index += 1;
-    }
+    let window = load_bound_window(program_id, &accounts[IX_SEAL_WINDOW], &epoch)?;
     let now = read_clock_slot(&accounts[IX_SEAL_CLOCK])?;
     // Admission closes with the candidate window, exactly like submission.
     require(
@@ -470,81 +438,12 @@ pub(super) fn seal_candidate(
         seeds::candidate_feed_pda(program_id, &epoch.epoch.bytes(), &intent_candidate.bytes()),
         Some(stage.stored_bump),
     )?;
-    let incoming = FullScoreV1 {
-        weighted_direct_volume: stage.weighted_direct_volume,
-        limit_surplus_price_units: stage.limit_surplus_price_units,
-        distinct_owners: stage.distinct_owners,
-        churn: stage
-            .virtual_split
-            .checked_add(stage.virtual_merge)
-            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
-        digest: Identity32V1::ZERO,
-    };
-
-    // The retained registry, each record authenticated against its entry.
-    let mut scores = [FullScoreV1::ZERO; MAX_RETAINED_CANDIDATES];
-    index = 0;
-    while index < retained_count {
-        scores[index] = retained_score(
-            program_id,
-            &accounts[IX_SEAL_RETAINED + index],
-            &epoch,
-            window.retained[index],
-        )?;
-        index += 1;
-    }
-
-    if displacing {
-        // The worst retained candidate: minimal on components; among
-        // component-equal candidates the lexicographically larger identity
-        // is worse (the direction consistent with "smaller digest wins").
-        let mut worst = 0usize;
-        index = 1;
-        while index < retained_count {
-            let against = match component_order(&scores[index], &scores[worst]) {
-                Ordering::Equal => {
-                    if window.retained[index].bytes() > window.retained[worst].bytes() {
-                        Ordering::Less
-                    } else {
-                        Ordering::Greater
-                    }
-                }
-                unequal => unequal,
-            };
-            if against == Ordering::Less {
-                worst = index;
-            }
-            index += 1;
-        }
-        // Strictly better on components, or the registry stands: an
-        // admission claim carries no verified digest, so the digest never
-        // breaks an admission tie — equal-component claims cannot displace.
-        require(
-            component_order(&incoming, &scores[worst]) == Ordering::Greater,
-            ClutchError::CandidateNotCompetitive,
-        )?;
-        let displaced_id = window.retained[worst];
-        supersede_displaced(
-            program_id,
-            &accounts[IX_SEAL_RETAINED + worst],
-            &accounts[IX_SEAL_RETAINED + retained_count],
-            &epoch,
-            displaced_id,
-        )?;
-        window.retained[worst] = *intent_candidate;
-    } else {
-        window.retained[retained_count] = *intent_candidate;
-        window.retained_count += 1;
-    }
-
-    // The one-way door, after the registry admitted: stage prefix becomes
-    // the real header and the whole feed re-verifies.
+    // The one-way door: stage prefix becomes the real header and the whole feed
+    // re-verifies.  No score claim or registry state is touched.
     {
         let mut data = borrow_account_mut(&accounts[IX_SEAL_FEED])?;
         clearing::seal_candidate_feed(&mut data)?;
     }
-    window.validate()?;
-    window.encode(&mut borrow_account_mut(&accounts[IX_SEAL_WINDOW])?)?;
     Ok(())
 }
 
@@ -665,23 +564,6 @@ pub(super) fn finalize_selection(
 /* Shared loads and frames                                                   */
 /* ------------------------------------------------------------------------ */
 
-/// The score-component ordering admission uses: `FullScoreV1::total_order`
-/// minus its digest coordinate.
-///
-/// An admission claim has no verified digest, so the digest never serves
-/// admission; it exists for selection, where every compared value is a
-/// verified recomputation.
-fn component_order(a: &FullScoreV1, b: &FullScoreV1) -> Ordering {
-    a.weighted_direct_volume
-        .cmp(&b.weighted_direct_volume)
-        .then(
-            a.limit_surplus_price_units
-                .cmp(&b.limit_surplus_price_units),
-        )
-        .then(a.distinct_owners.cmp(&b.distinct_owners))
-        .then(b.churn.cmp(&a.churn))
-}
-
 /// Decode and authenticate the frozen general epoch.
 #[inline(never)]
 fn load_frozen_epoch(
@@ -731,6 +613,122 @@ fn load_bound_window(
         Some(window.stored_bump),
     )?;
     Ok(window)
+}
+
+/// A prepared verified-only registry mutation.
+///
+/// All authentication and score comparisons finish before the close writes any
+/// account.  When `displaced` is present, its index names the writable retained
+/// record that must receive the returned `SUPERSEDED` body.
+pub(super) struct VerifiedAdmission {
+    pub(super) window: EpochWindowAccount,
+    pub(super) displaced: Option<(usize, Box<CandidateRecord>)>,
+}
+
+/// Load the writable window and enforce the shared verification/admission
+/// deadline.
+///
+/// Clearing may stream for several transactions, but a verdict only enters the
+/// selection set before the same deadline at which finalization opens.  This
+/// removes the old post-deadline `CompleteClearWork`/`FinalizeSelection` race.
+#[inline(never)]
+pub(super) fn load_open_admission_window(
+    program_id: &Pubkey,
+    window_account: &AccountInfo,
+    clock_account: &AccountInfo,
+    epoch: &EpochAccount,
+) -> Outcome<EpochWindowAccount> {
+    accounts::validate_state_role_lengths(
+        program_id,
+        window_account,
+        true,
+        &[EPOCH_WINDOW_ACCOUNT_BYTES],
+    )?;
+    let window = load_bound_window(program_id, window_account, epoch)?;
+    let now = read_clock_slot(clock_account)?;
+    require(
+        window.selection_deadline_slot != 0 && now < window.selection_deadline_slot,
+        ClutchError::NotActive,
+    )?;
+    Ok(window)
+}
+
+/// Authenticate the verified registry and prepare insertion of one newly
+/// verified candidate by the complete five-coordinate score order.
+#[inline(never)]
+pub(super) fn prepare_verified_admission(
+    program_id: &Pubkey,
+    retained_accounts: &[AccountInfo],
+    epoch: &EpochAccount,
+    incoming_record: &CandidateRecord,
+    mut window: EpochWindowAccount,
+) -> Outcome<Option<VerifiedAdmission>> {
+    let retained_count = usize::from(window.retained_count);
+    require(
+        retained_accounts.len() == retained_count,
+        ClutchError::AccountCount,
+    )?;
+    require(
+        incoming_record.status == CANDIDATE_STATUS_VERIFIED
+            && incoming_record.epoch == epoch.epoch
+            && incoming_record.market == epoch.market,
+        ClutchError::MismatchedState,
+    )?;
+    incoming_record.binds_epoch(epoch, window.live_order_count)?;
+    let incoming = score_of(incoming_record);
+
+    let mut scores = [FullScoreV1::ZERO; MAX_RETAINED_CANDIDATES];
+    let mut index = 0usize;
+    while index < retained_count {
+        accounts::validate_state_role_lengths(
+            program_id,
+            &retained_accounts[index],
+            true,
+            &[account_len::CANDIDATE],
+        )?;
+        let retained = load_retained_record(
+            program_id,
+            &retained_accounts[index],
+            epoch,
+            window.retained[index],
+        )?;
+        scores[index] = score_of(&retained);
+        index += 1;
+    }
+
+    let displaced = if retained_count == MAX_RETAINED_CANDIDATES {
+        let mut worst = 0usize;
+        index = 1;
+        while index < retained_count {
+            if scores[worst].is_better_than(&scores[index]) {
+                worst = index;
+            }
+            index += 1;
+        }
+        if !incoming.is_better_than(&scores[worst]) {
+            // Verification is still a durable fact even when this candidate is
+            // outside the bounded top three.  CompleteClearWork stamps VERIFIED
+            // and closes its checkpoint, but the registry remains byte-stable.
+            return Ok(None);
+        }
+        let mut record = load_retained_record(
+            program_id,
+            &retained_accounts[worst],
+            epoch,
+            window.retained[worst],
+        )?;
+        record.status = CANDIDATE_STATUS_SUPERSEDED;
+        record.score_digest = Hash32::ZERO;
+        window.retained[worst] = incoming_record.candidate;
+        Some((worst, record))
+    } else {
+        window.retained[retained_count] = incoming_record.candidate;
+        window.retained_count += 1;
+        None
+    };
+
+    window.validate()?;
+    Ok(Some(VerifiedAdmission { window, displaced }))
 }
 
 /// Build the `SUBMITTED` record for one submission's coordinates and claims.
@@ -828,23 +826,15 @@ fn read_stage(account: &AccountInfo) -> Outcome<CandidateFeedStage> {
     Ok(CandidateFeedStage::decode(&data)?)
 }
 
-/// One retained record, authenticated against its registry entry; returns
-/// its stored score (verified values for VERIFIED, claims otherwise).
-#[inline(never)]
-fn retained_score(
-    program_id: &Pubkey,
-    account: &AccountInfo,
-    epoch: &EpochAccount,
-    expected: Hash32,
-) -> Outcome<FullScoreV1> {
-    let record = load_retained_record(program_id, account, epoch, expected)?;
-    Ok(FullScoreV1 {
+/// The complete verified score persisted on one candidate record.
+fn score_of(record: &CandidateRecord) -> FullScoreV1 {
+    FullScoreV1 {
         weighted_direct_volume: record.weighted_direct_volume,
         limit_surplus_price_units: record.limit_surplus_price_units,
         distinct_owners: record.distinct_owners,
         churn: record.churn,
         digest: Identity32V1(record.score_digest.bytes()),
-    })
+    }
 }
 
 /// Decode one retained candidate record and bind it to its registry slot.
@@ -862,14 +852,11 @@ fn load_retained_record(
             && record.market == epoch.market,
         ClutchError::MismatchedState,
     )?;
-    // A registry member is SUBMITTED, VERIFIED, or REFUSED: SUPERSEDED left
-    // the registry when it was displaced, and SELECTED exists only after the
-    // one finalize, which the epoch phase already forbids repeating.
+    // Verified admission is the registry's only writer.  SUPERSEDED left the
+    // registry when displaced, and SELECTED exists only after the one finalize,
+    // which the epoch phase already forbids repeating.
     require(
-        matches!(
-            record.status,
-            CANDIDATE_STATUS_SUBMITTED | CANDIDATE_STATUS_VERIFIED | CANDIDATE_STATUS_REFUSED
-        ),
+        record.status == CANDIDATE_STATUS_VERIFIED,
         ClutchError::MismatchedState,
     )?;
     expect_pda(
@@ -880,76 +867,7 @@ fn load_retained_record(
     Ok(record)
 }
 
-/// Supersede the displaced candidate's record and close its feed.
-///
-/// The record takes `SUPERSEDED` with a zeroed verified digest — the
-/// documented rule: a superseded record competes for nothing — and the feed's
-/// lamports move onto that surviving record before the feed's bytes and
-/// ownership are released, so no lamport leaves the candidate's own accounts.
-#[inline(never)]
-fn supersede_displaced(
-    program_id: &Pubkey,
-    record_account: &AccountInfo,
-    feed_account: &AccountInfo,
-    epoch: &EpochAccount,
-    displaced: Hash32,
-) -> Outcome<()> {
-    accounts::validate_state_role_lengths(
-        program_id,
-        feed_account,
-        true,
-        &[account_len::CANDIDATE_FEED],
-    )?;
-    {
-        // A displaced candidate's feed is sealed by construction (sealing is
-        // what admitted it); authenticate it as exactly this candidate's.
-        let data = feed_account
-            .try_borrow_data()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        let header = CandidateFeedHeader::decode(&data)?;
-        require(
-            header.candidate == displaced
-                && header.epoch == epoch.epoch
-                && header.market == epoch.market,
-            ClutchError::MismatchedState,
-        )?;
-        expect_pda(
-            feed_account.key,
-            seeds::candidate_feed_pda(program_id, &epoch.epoch.bytes(), &displaced.bytes()),
-            Some(header.stored_bump),
-        )?;
-    }
-
-    let mut record = load_retained_record(program_id, record_account, epoch, displaced)?;
-    record.status = CANDIDATE_STATUS_SUPERSEDED;
-    record.score_digest = Hash32::ZERO;
-    record.encode(&mut borrow_account_mut(record_account)?)?;
-
-    // Close the feed: lamports onto the surviving record, bytes released.
-    let moved = feed_account.lamports();
-    {
-        let mut lamports = feed_account
-            .try_borrow_mut_lamports()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        **lamports = 0;
-    }
-    {
-        let mut lamports = record_account
-            .try_borrow_mut_lamports()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        **lamports = lamports
-            .checked_add(moved)
-            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    }
-    feed_account
-        .resize(0)
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
-    feed_account.assign(&SYSTEM_PROGRAM_ID);
-    Ok(())
-}
-
-/// One retained candidate's selection score, or `None` when it does not
-/// compete.
+/// One retained candidate's verified selection score.
 ///
 /// Every retained candidate is authenticated — record against registry entry,
 /// feed against candidate and frozen set — whether or not it competes.  A
@@ -984,23 +902,12 @@ fn candidate_selection_score(
         seeds::candidate_feed_pda(program_id, &epoch.epoch.bytes(), &expected.bytes()),
         Some(feed.stored_bump),
     )?;
-    if record.status != CANDIDATE_STATUS_VERIFIED {
-        // SUBMITTED and REFUSED are excluded, never scored: their stored
-        // components are claims and selection reads no claim.
-        return Ok(None);
-    }
     let recomputed = super::clear_walk::recompute_tie_digest(epoch, &feed, &data)?;
     require(
         recomputed == record.score_digest,
         ClutchError::ScoreDigestMismatch,
     )?;
-    Ok(Some(FullScoreV1 {
-        weighted_direct_volume: record.weighted_direct_volume,
-        limit_surplus_price_units: record.limit_surplus_price_units,
-        distinct_owners: record.distinct_owners,
-        churn: record.churn,
-        digest: Identity32V1(record.score_digest.bytes()),
-    }))
+    Ok(Some(score_of(&record)))
 }
 
 /// Stamp the winner `SELECTED` and return its identity.

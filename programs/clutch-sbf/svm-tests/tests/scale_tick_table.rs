@@ -175,6 +175,7 @@ async fn the_complete_tick_table_places_freezes_walks_and_settles() {
         &submission,
         &frozen,
         slices,
+        &[],
         &mut meter,
         "",
         800,
