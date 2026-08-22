@@ -310,7 +310,6 @@ pub(super) fn decode_body_boxed(work_account: &AccountInfo) -> Outcome<Box<Clear
 /// mapping boundary.
 #[inline(never)]
 fn boxed_idle_checkpoint() -> Outcome<Box<ClearWorkV1>> {
-    static IDLE: ClearWorkV1 = ClearWorkV1::NEW;
     let layout = core::alloc::Layout::new::<ClearWorkV1>();
     // SAFETY: `ClearWorkV1` is plain data — integers, fixed arrays, and
     // field-less enums; no heap pointers, no `Drop` — so a byte copy of the
@@ -323,7 +322,7 @@ fn boxed_idle_checkpoint() -> Outcome<Box<ClearWorkV1>> {
         if pointer.is_null() {
             return Err(Refusal::Adapter(ClutchError::AccountCreationFailed));
         }
-        core::ptr::copy_nonoverlapping(&IDLE as *const ClearWorkV1, pointer, 1);
+        core::ptr::copy_nonoverlapping(ClearWorkV1::idle_checkpoint(), pointer, 1);
         Ok(Box::from_raw(pointer))
     }
 }

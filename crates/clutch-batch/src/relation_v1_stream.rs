@@ -2884,12 +2884,21 @@ impl ClearWorkV1 {
         }
     }
 
+    /// The one immutable idle checkpoint used by every adapter consumer.
+    ///
+    /// Keeping this object here, beside the codec, avoids emitting one ~48 KiB
+    /// all-zero-heavy constant in each downstream call site that needs to copy
+    /// an idle checkpoint without placing it on the stack.
+    pub fn idle_checkpoint() -> &'static Self {
+        static IDLE: ClearWorkV1 = ClearWorkV1::NEW;
+        &IDLE
+    }
+
     /// Serialize the idle checkpoint — [`Self::NEW`] — without ever holding a
     /// checkpoint value on a call frame: the source is static storage.  This
     /// is the body writer the staged account creation uses at its final grow.
     pub fn encode_idle_into(out: &mut [u8]) -> Result<(), CodecFaultV1> {
-        static IDLE: ClearWorkV1 = ClearWorkV1::NEW;
-        IDLE.encode_into(out)
+        Self::idle_checkpoint().encode_into(out)
     }
 
     /// The field walk of [`Self::decode_into`]; on `Err` the caller resets.
