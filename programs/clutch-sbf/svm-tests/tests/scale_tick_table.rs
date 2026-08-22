@@ -21,10 +21,10 @@
 //! **the tick table is not a CU risk at `PlaceOrder`, and the term that does
 //! move these rows is PDA derivation.**  The program derives addresses with
 //! `find_program_address`, which pays one `create_program_address` per failed
-//! attempt — measured here at roughly 1,200 CU — so a route's cost carries a
-//! term proportional to `255 - bump` for every address it derives.  Between
-//! two otherwise identical `InitEpoch` transactions on the same market differ
-//! by exactly 6,000 CU — four times the quantum.  Every row here prints an
+//! attempt — 1,500 CU — so a route's cost carries a term proportional to
+//! `255 - bump` for every address it derives.  Two otherwise identical
+//! `InitEpoch` transactions on the same market differ by exactly 6,000 CU,
+//! which is four attempts at that quantum.  Every row here prints an
 //! attempt count beside its CU so a quote model can carry the quantum instead
 //! of averaging it into a shape it does not belong to.  (The printed counts
 //! are lower bounds: they enumerate the addresses this harness can name, and
@@ -452,7 +452,7 @@ async fn the_tick_table_scan_cost_is_measured_against_a_held_placement() {
     }
 
     /* Both deltas are reported with the caveat they need: each transaction
-     * pays a PDA-derivation term of roughly 1,200 CU per extra
+     * pays a PDA-derivation term of 1,500 CU per extra
      * `create_program_address` attempt, and the three planes derive addresses
      * with different canonical bumps.  A shape effect smaller than that term
      * is not resolvable from single observations — which is the finding, not
