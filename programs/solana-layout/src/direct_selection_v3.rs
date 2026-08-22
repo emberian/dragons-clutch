@@ -43,7 +43,7 @@ use super::direct_selection::{
 /// Direct Epoch schema carrying the complete V3 lifecycle schedule and receipt.
 pub const DIRECT_EPOCH_V4_VERSION: u8 = 4;
 /// Exact Direct Epoch V4 byte length.
-pub const DIRECT_EPOCH_V4_BYTES: usize = 672;
+pub const DIRECT_EPOCH_V4_BYTES: usize = 673;
 /// Direct Candidate schema with exact rent/donation ownership.
 pub const DIRECT_CANDIDATE_V3_VERSION: u8 = 2;
 /// Exact Direct Candidate V3 byte length.
@@ -606,6 +606,7 @@ impl DirectEpochV4Account {
         writer.u16(e.page_count)?;
         writer.u16(e.order_count)?;
         writer.u8(e.outcome_count)?;
+        writer.u8(e.basis_degree)?;
         writer.u8(e.phase)?;
         writer.u64(self.direct.submission_opens_slot)?;
         writer.u64(self.direct.submission_closes_slot)?;
@@ -659,6 +660,7 @@ impl DirectEpochV4Account {
             page_count: reader.u16()?,
             order_count: reader.u16()?,
             outcome_count: reader.u8()?,
+            basis_degree: reader.u8()?,
             phase: reader.u8()?,
             stored_bump: 0,
             flags: 0,
@@ -1909,6 +1911,7 @@ mod tests {
             page_count: if phase == EPOCH_PHASE_OPEN { 0 } else { 1 },
             order_count: if phase == EPOCH_PHASE_OPEN { 0 } else { 2 },
             outcome_count: 2,
+            basis_degree: 1,
             phase,
             stored_bump: 9,
             flags: 0,
@@ -2073,7 +2076,7 @@ mod tests {
 
     #[test]
     fn exact_widths_derive_from_live_constants_and_tags_do_not_collide() {
-        assert_eq!(DIRECT_EPOCH_V4_BYTES, 672);
+        assert_eq!(DIRECT_EPOCH_V4_BYTES, 673);
         assert_eq!(DIRECT_CANDIDATE_V3_BYTES, 488);
         assert_eq!(DIRECT_WINDOW_V3_BYTES, 632);
         assert_eq!(DIRECT_WORK_BUDGET_BYTES, 248);
@@ -2102,27 +2105,27 @@ mod tests {
             let mut bytes = [0u8; DIRECT_EPOCH_V4_BYTES];
             assert_eq!(value.encode(&mut bytes), Ok(DIRECT_EPOCH_V4_BYTES));
             assert_eq!(DirectEpochV4Account::decode(&bytes), Ok(value));
-            assert_eq!(&bytes[508..540], &value.verifier_release_id.bytes());
-            assert_eq!(&bytes[540..572], &value.direct_policy_v3_id.bytes());
-            assert_eq!(&bytes[572..604], &value.epoch_funding.payer.bytes());
+            assert_eq!(&bytes[509..541], &value.verifier_release_id.bytes());
+            assert_eq!(&bytes[541..573], &value.direct_policy_v3_id.bytes());
+            assert_eq!(&bytes[573..605], &value.epoch_funding.payer.bytes());
             assert_eq!(
-                &bytes[604..612],
+                &bytes[605..613],
                 &value.epoch_funding.payer_principal_lamports.to_le_bytes()
             );
             assert_eq!(
-                &bytes[612..620],
+                &bytes[613..621],
                 &value.epoch_funding.prior_donation_lamports.to_le_bytes()
             );
-            assert_eq!(&bytes[620..652], &value.page_funding.payer.bytes());
+            assert_eq!(&bytes[621..653], &value.page_funding.payer.bytes());
             assert_eq!(
-                &bytes[652..660],
+                &bytes[653..661],
                 &value.page_funding.payer_principal_lamports.to_le_bytes()
             );
             assert_eq!(
-                &bytes[660..668],
+                &bytes[661..669],
                 &value.page_funding.prior_donation_lamports.to_le_bytes()
             );
-            assert_eq!(&bytes[668..672], &[0; 4]);
+            assert_eq!(&bytes[669..673], &[0; 4]);
             assert_eq!(
                 DirectEpochV3Account::decode(&bytes),
                 Err(CodecError::TrailingBytes)

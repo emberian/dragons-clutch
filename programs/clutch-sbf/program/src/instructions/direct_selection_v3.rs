@@ -268,6 +268,7 @@ fn init_epoch(
     let epoch = build_open_epoch(
         intent,
         terms.terms,
+        terms.basis_degree,
         grid.grid,
         grid.price_scale,
         epoch_bump,
@@ -308,6 +309,7 @@ fn require_exact_direct_policy(
 fn build_open_epoch(
     intent: InitEpochV4,
     terms: Hash32,
+    basis_degree: u8,
     grid: Hash32,
     price_scale: u64,
     epoch_bump: u8,
@@ -326,6 +328,7 @@ fn build_open_epoch(
         Hash32::from_bytes(relation_policy.0),
         intent.epoch_index,
         price_scale,
+        basis_degree,
         intent.submission_opens_slot,
         intent.submission_closes_slot,
         epoch_bump,
@@ -544,7 +547,7 @@ mod tests {
     #[test]
     fn open_epoch_uses_relation_policy_and_canonical_neutral_sink() {
         let request = intent();
-        let value = build_open_epoch(request, h(3), h(4), 10_000, 9, funding()).unwrap();
+        let value = build_open_epoch(request, h(3), 1, h(4), 10_000, 9, funding()).unwrap();
         assert_eq!(
             value.direct.common.policy.bytes(),
             batch_policy_digest(&DIRECT_POLICY_V1).unwrap().0
@@ -584,11 +587,11 @@ mod tests {
     fn open_epoch_refuses_creator_selected_sink_and_bad_schedule() {
         let mut hostile = intent();
         hostile.neutral_lamport_sink = h(99);
-        assert!(build_open_epoch(hostile, h(3), h(4), 10_000, 9, funding()).is_err());
+        assert!(build_open_epoch(hostile, h(3), 1, h(4), 10_000, 9, funding()).is_err());
 
         let mut hostile = intent();
         hostile.selection_deadline_slot = hostile.submission_closes_slot;
-        assert!(build_open_epoch(hostile, h(3), h(4), 10_000, 9, funding()).is_err());
+        assert!(build_open_epoch(hostile, h(3), 1, h(4), 10_000, 9, funding()).is_err());
     }
 
     #[test]

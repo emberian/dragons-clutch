@@ -910,7 +910,7 @@ pub mod account_len {
     /// Frozen price-grid account bytes.
     pub const PRICE_GRID: usize = 2 + 32 + 32 + 8 + 1 + (MAX_GRID_TICKS * 8) + 1 + 1;
     /// Epoch/book-domain account bytes.
-    pub const EPOCH: usize = 2 + (9 * 32) + 8 + 4 + 8 + 8 + 2 + 2 + 2 + 1 + 1 + 1 + 1;
+    pub const EPOCH: usize = 2 + (9 * 32) + 8 + 4 + 8 + 8 + 2 + 2 + 2 + 1 + 1 + 1 + 1 + 1;
     /// Candidate record account bytes.
     pub const CANDIDATE: usize = 2
         + (3 * 32)
@@ -3556,6 +3556,19 @@ pub struct EpochAccount {
     pub order_count: u16,
     /// Active outcome count, in `2..=MAX_OUTCOMES`.
     pub outcome_count: u8,
+    /// Frozen payout-basis degree, copied from [`TermsAccount::basis_degree`]
+    /// at epoch open, in `0..=MAX_BASIS_DEGREE`.
+    ///
+    /// The price plane's moment-cone gate (`clutch_batch::relation_v1`'s V1b,
+    /// `DUAL_IS_THE_MEASURE.md` §7.6) needs the basis geometry, and by Lemma
+    /// 7.6.1 the cone depends only on `(degree, outcome_count)` — the knot
+    /// positions of an admitted grid are an affine reparameterization, and
+    /// measures push forward along one.  So the epoch binds one byte, not a
+    /// knot vector, and the pair sits adjacent here for exactly that reason.
+    ///
+    /// Degrees zero and one make V1b the constant true (Corollary 7.6.7), so
+    /// every verdict a degree-≤1 market ever reached is unchanged.
+    pub basis_degree: u8,
     /// Lifecycle phase; see the `EPOCH_PHASE_*` constants.
     pub phase: u8,
     /// Stored PDA bump.
@@ -3579,7 +3592,10 @@ impl EpochAccount {
             return Err(CodecError::WrongVersion);
         }
         check_count(self.outcome_count)?;
-        if self.phase > EPOCH_PHASE_LAPSED || self.flags != 0 {
+        if self.phase > EPOCH_PHASE_LAPSED
+            || self.basis_degree > MAX_BASIS_DEGREE
+            || self.flags != 0
+        {
             return Err(CodecError::InvalidEnum);
         }
         if self.owner_count == 0 {
@@ -3682,6 +3698,7 @@ impl EpochAccount {
         if self.terms != terms.terms
             || self.price_grid != terms.price_grid
             || self.outcome_count != terms.outcome_count
+            || self.basis_degree != terms.basis_degree
             || self.price_scale != grid.price_scale
         {
             return Err(CodecError::MismatchedBinding);
@@ -3713,6 +3730,7 @@ impl EpochAccount {
         w.u16(self.page_count)?;
         w.u16(self.order_count)?;
         w.u8(self.outcome_count)?;
+        w.u8(self.basis_degree)?;
         w.u8(self.phase)?;
         w.u8(self.stored_bump)?;
         w.u8(self.flags)?;
@@ -3739,6 +3757,7 @@ impl EpochAccount {
             page_count: r.u16()?,
             order_count: r.u16()?,
             outcome_count: r.u8()?,
+            basis_degree: r.u8()?,
             phase: r.u8()?,
             stored_bump: r.u8()?,
             flags: r.u8()?,
@@ -7389,6 +7408,7 @@ mod tests {
             page_count: 0,
             order_count: 0,
             outcome_count: MAX_OUTCOMES as u8,
+            basis_degree: 0,
             phase: EPOCH_PHASE_OPEN,
             stored_bump: 6,
             flags: 0,

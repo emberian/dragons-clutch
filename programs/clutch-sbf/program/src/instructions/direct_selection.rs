@@ -366,6 +366,7 @@ fn init_epoch(
         policy_digest,
         epoch_index,
         grid.price_scale,
+        terms.basis_degree,
         opens_slot,
         closes_slot,
         epoch_bump,
@@ -956,6 +957,9 @@ fn execute_settlement(
             // The V2 sell envelope holds exactly the transferred quantity,
             // so the seller-remainder leg is structurally zero here.
             seller_remainder: 0,
+            // The V2 direct plane carries no candidate churn, so no pot cash
+            // ledger exists for it to move.
+            pot_cash_after: None,
         },
     );
     buyer.validate()?;

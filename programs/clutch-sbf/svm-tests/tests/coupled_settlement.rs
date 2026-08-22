@@ -205,6 +205,7 @@ async fn start(mutation: Mutation) -> (BanksClient, Keypair, Fixture) {
         page_count: 1,
         order_count: 2,
         outcome_count: 2,
+        basis_degree: 0,
         phase: EPOCH_PHASE_CLEARED,
         stored_bump: epoch_bump,
         flags: 0,

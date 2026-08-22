@@ -612,6 +612,9 @@ async fn the_general_lifecycle_initializes_places_cancels_and_freezes() {
         EPOCH_INDEX,
         PRICE_SCALE,
         OUTCOMES,
+        // `general_terms` is the degree-zero boundary-table shape, and the
+        // epoch must carry exactly the degree its terms froze.
+        0,
         epoch_bump,
     )
     .unwrap();

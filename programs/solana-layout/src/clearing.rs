@@ -786,9 +786,10 @@ pub const fn canonical_general_remainder_seed(epoch: Hash32) -> u64 {
 /// Construct the canonical open general [`EpochAccount`].
 ///
 /// The general sibling of `DirectEpochV3Account::open`, minus the `== 2`
-/// gates: outcome width and price scale arrive from the terms and grid the
-/// caller has already bound, the book identity and the remainder seed are
-/// derived from the epoch identity, and every frozen-set field starts at its
+/// gates: outcome width, basis degree, and price scale arrive from the terms
+/// and grid the caller has already bound, the book identity and the remainder
+/// seed are derived from the epoch identity, and every frozen-set field starts
+/// at its
 /// canonical open zero.  `owner_count` opens at [`MAX_EPOCH_ORDERS`] — the
 /// widest owner space a 64-slot book can carry — and the freeze rewrites it
 /// with the exact distinct-owner count interned over the frozen set, which is
@@ -802,6 +803,7 @@ pub fn open_general_epoch(
     epoch_index: u64,
     price_scale: u64,
     outcome_count: u8,
+    basis_degree: u8,
     stored_bump: u8,
 ) -> Result<EpochAccount> {
     let epoch = canonical_epoch_id(market, epoch_index);
@@ -823,6 +825,7 @@ pub fn open_general_epoch(
         page_count: 0,
         order_count: 0,
         outcome_count,
+        basis_degree,
         phase: EPOCH_PHASE_OPEN,
         stored_bump,
         flags: 0,
@@ -3395,7 +3398,7 @@ mod tests {
     #[test]
     fn the_open_general_epoch_is_canonical_and_wide() {
         let market = h(0x53);
-        let epoch = open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 10_000, 16, 253)
+        let epoch = open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 10_000, 16, 2, 253)
             .unwrap();
         assert_eq!(epoch.epoch, canonical_epoch_id(market, 7));
         assert_eq!(epoch.book, canonical_general_book_id(epoch.epoch));
@@ -3417,8 +3420,8 @@ mod tests {
         // The full 16-outcome width the direct plane's `== 2` gates refuse is
         // exactly what this constructor admits; outside the codec bound stays
         // refused.
-        assert!(open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 10_000, 17, 253).is_err());
-        assert!(open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 0, 4, 253).is_err());
+        assert!(open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 10_000, 17, 2, 253).is_err());
+        assert!(open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 0, 4, 2, 253).is_err());
     }
 
     #[test]

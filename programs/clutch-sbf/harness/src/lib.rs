@@ -2460,6 +2460,7 @@ fn build_batch(shared: &Shared, plane: &Plane) -> Batch {
         page_count: 1,
         order_count: 2,
         outcome_count: OUTCOME_COUNT,
+        basis_degree: shared.terms_account.basis_degree,
         phase: EPOCH_PHASE_CLEARED,
         stored_bump: epoch.bump,
         flags: 0,
@@ -8822,6 +8823,7 @@ pub fn build_general_committed_cases(
         GENERAL_EPOCH_INDEX,
         PRICE_SCALE,
         OUTCOME_COUNT,
+        shared.terms_account.basis_degree,
         epoch_pda.bump,
     )
     .expect("the general epoch opens");

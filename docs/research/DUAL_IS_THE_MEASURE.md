@@ -1355,7 +1355,11 @@ Open questions:
    7.6.5: a per-span Hausdorff system in exact integers, `(d+1)(K−1) ≤ 60`
    unknowns), no to a quantifier-free *linear* form (Theorem 7.6.8: the cone
    has a strictly convex boundary arc). Landed as the V1b certified-refusal
-   family (§7.6.5). Three successors remain open:
+   family (§7.6.5), and **bound on chain 2026-08-21**: the Epoch account
+   carries the degree its immutable terms froze, and the clearing walk turns
+   that byte into the descriptor `begin_with_basis` consumes, so a degree-2
+   market's out-of-cone candidate is refused by the real program (bank
+   evidence: `svm-tests/tests/cone_gate.rs`). Three successors remain open:
    **(4a)** the wide-support residual (§7.6.7) — construct a price vector that
    passes V1b, fails `M_d`, and carries an executable arbitrage, or prove the
    window families are complete on the admitted grids;

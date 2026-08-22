@@ -274,6 +274,18 @@ pub enum ClutchError {
     /// named treasury's count can never come back down, and the refusal is
     /// the boundary rather than a stand-in for it.
     TreasuryServiceOutstanding = 0x0095,
+    /// The clearing walk cannot name the market's payout basis: the epoch's
+    /// stored `basis_degree` is above the largest degree the relation's price
+    /// plane implements (`clutch_batch::relation_v1::BasisDegreeV1`).
+    ///
+    /// Unreachable through the codec — `EpochAccount::validate` refuses any
+    /// degree above `MAX_BASIS_DEGREE`, and `InitEpoch` copies the byte from
+    /// immutable terms that carry the same bound — so this is the seam's
+    /// fail-closed edge, stated rather than assumed. It refuses instead of
+    /// falling back to `BasisDescriptorV1::UNGATED` on purpose: an ungated
+    /// clearing above degree one is exactly the outcome the moment-cone gate
+    /// exists to prevent (`DUAL_IS_THE_MEASURE.md` §7.4, §7.6).
+    UnsupportedBasisDegree = 0x0096,
     /// A sealing candidate cannot beat the worst retained candidate's stored
     /// score, so the full registry admits no displacement for it.
     ///

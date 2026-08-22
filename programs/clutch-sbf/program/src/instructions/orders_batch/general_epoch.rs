@@ -285,6 +285,14 @@ pub(super) fn init_epoch(
         epoch_index,
         grid.price_scale,
         terms.outcome_count,
+        /* The price plane's V1b coordinate.  The immutable terms are the one
+         * authority on the market's payout basis, and this is the epoch's
+         * only chance to copy the degree: nothing downstream of the freeze
+         * holds a `TermsAccount`, and the clearing walk cannot ask for one
+         * without widening its account set.  Copied here, re-checkable
+         * against the terms it came from by `EpochAccount::binds_terms`, and
+         * read by `clear_walk`'s `begin_with_basis`. */
+        terms.basis_degree,
         epoch_bump,
     )?;
     // The candidate-window fields open at their unstamped zeros: the freeze

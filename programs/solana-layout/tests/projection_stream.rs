@@ -175,6 +175,7 @@ fn frozen_epoch(pages: &[Vec<u8>], owner_count: u16, outcome_count: u8) -> Epoch
         page_count: head.page_count,
         order_count: head.set_order_count,
         outcome_count,
+        basis_degree: 1,
         phase: EPOCH_PHASE_FROZEN,
         stored_bump: 5,
         flags: 0,

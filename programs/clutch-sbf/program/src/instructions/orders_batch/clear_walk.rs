@@ -76,7 +76,7 @@
 use crate::accounts::{self, expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
-use clutch_batch::relation_v1::{RelationDomainV1, ScoreV1};
+use clutch_batch::relation_v1::{BasisDegreeV1, BasisDescriptorV1, RelationDomainV1, ScoreV1};
 use clutch_batch::relation_v1_stream::{
     ClearWorkV1, CodecFaultV1, FeedErrorV1, FeedStatusV1, StreamCandidateV1,
 };
@@ -120,6 +120,28 @@ fn feed_fault(error: FeedErrorV1) -> Refusal {
         FeedErrorV1::ResumeFoldMismatch => ClutchError::ResumeFoldMismatch,
         _ => ClutchError::FeedProtocolFault,
     })
+}
+
+/// The market's payout basis, as the relation's price plane needs it.
+///
+/// The epoch stores the degree its immutable terms froze (copied at
+/// `InitEpoch`, re-checkable by `EpochAccount::binds_terms`), and by
+/// `DUAL_IS_THE_MEASURE.md` Lemma 7.6.1 the moment cone depends on nothing
+/// else about the basis: the knot positions of an admitted open-clamped grid
+/// are an affine reparameterization of `0..K-1`, and measures push forward
+/// along one.  So the whole geometry the V1b stage needs is this one byte
+/// plus the outcome count already in the domain.
+///
+/// This is deliberately **not** `BasisDescriptorV1::UNGATED`-on-doubt: an
+/// unreadable degree is a refusal, not a silently ungated clearing, because
+/// the ungated verdict is exactly the one V1b exists to stop above degree
+/// one.  A stored byte above [`clutch_solana_layout::MAX_BASIS_DEGREE`]
+/// cannot reach a decoded `EpochAccount` — `validate` refuses it — so this
+/// refusal is the codec's own bound restated where it is consumed.
+fn epoch_basis(epoch: &EpochAccount) -> Outcome<BasisDescriptorV1> {
+    let degree = BasisDegreeV1::from_u8(epoch.basis_degree)
+        .ok_or(Refusal::Adapter(ClutchError::UnsupportedBasisDegree))?;
+    Ok(BasisDescriptorV1::ClampedUniform(degree))
 }
 
 /// The T2-5 domain construction, verbatim: four u64 identity tags as zero
@@ -473,10 +495,11 @@ pub(super) fn advance_clear_work(
             epoch.policy.bytes() == policy_digest.0,
             ClutchError::AuthorizationUnavailable,
         )?;
-        body.begin(
+        body.begin_with_basis(
             &zero_sentinel_domain(epoch),
             &stream_candidate_of(&frame.feed),
             false,
+            epoch_basis(epoch)?,
         )
         .map_err(feed_fault)?
     } else {

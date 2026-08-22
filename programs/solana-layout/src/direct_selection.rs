@@ -93,6 +93,7 @@ impl DirectEpochV3Account {
         w.u16(e.page_count)?;
         w.u16(e.order_count)?;
         w.u8(e.outcome_count)?;
+        w.u8(e.basis_degree)?;
         w.u8(e.phase)?;
         w.u64(self.submission_opens_slot)?;
         w.u64(self.submission_closes_slot)?;
@@ -123,6 +124,7 @@ impl DirectEpochV3Account {
             page_count: r.u16()?,
             order_count: r.u16()?,
             outcome_count: r.u8()?,
+            basis_degree: r.u8()?,
             phase: r.u8()?,
             stored_bump: 0,
             flags: 0,
@@ -149,6 +151,7 @@ impl DirectEpochV3Account {
         policy: Hash32,
         epoch_index: u64,
         price_scale: u64,
+        basis_degree: u8,
         opens_slot: u64,
         closes_slot: u64,
         stored_bump: u8,
@@ -173,6 +176,7 @@ impl DirectEpochV3Account {
                 page_count: 0,
                 order_count: 0,
                 outcome_count: 2,
+                basis_degree,
                 phase: EPOCH_PHASE_OPEN,
                 stored_bump,
                 flags: 0,
@@ -286,7 +290,7 @@ mod tests {
     #[test]
     fn direct_epoch_v3_roundtrips_and_v2_refuses() {
         let value =
-            DirectEpochV3Account::open(h(1), h(2), h(3), h(4), 7, 10_000, 100, 120, 9).unwrap();
+            DirectEpochV3Account::open(h(1), h(2), h(3), h(4), 7, 10_000, 1, 100, 120, 9).unwrap();
         let mut bytes = [0u8; DIRECT_EPOCH_BYTES];
         assert_eq!(value.encode(&mut bytes), Ok(DIRECT_EPOCH_BYTES));
         assert_eq!(DirectEpochV3Account::decode(&bytes), Ok(value));
@@ -301,7 +305,7 @@ mod tests {
     #[test]
     fn schedule_and_direct_identity_are_not_caller_slack() {
         let mut value =
-            DirectEpochV3Account::open(h(1), h(2), h(3), h(4), 7, 10_000, 100, 120, 9).unwrap();
+            DirectEpochV3Account::open(h(1), h(2), h(3), h(4), 7, 10_000, 1, 100, 120, 9).unwrap();
         value.submission_opens_slot = 120;
         assert_eq!(value.validate(), Err(CodecError::MismatchedBinding));
         value.submission_opens_slot = 100;

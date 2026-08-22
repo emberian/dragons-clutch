@@ -440,6 +440,7 @@ impl OrderWorld {
             page_count: 0,
             order_count: 0,
             outcome_count: OUTCOME_COUNT,
+            basis_degree: 0,
             phase: EPOCH_PHASE_OPEN,
             stored_bump: epoch_bump,
             flags: 0,

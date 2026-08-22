@@ -1257,6 +1257,7 @@ mod tests {
             page_count: 0,
             order_count: 0,
             outcome_count: 2,
+            basis_degree: 0,
             phase: clutch_solana_layout::EPOCH_PHASE_OPEN,
             stored_bump: 6,
             flags: 0,

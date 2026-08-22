@@ -292,7 +292,7 @@ degree-≥2 restriction elsewhere is on evidence rather than price:
 `ResolutionRefusal::NonPointEvidence` refuses a conservative interval that is
 not a point.
 
-That hole is now **gated in the relation, and open at the program seam**
+That hole is now **gated in the relation and bound on chain**
 (2026-08-21). `DUAL_IS_THE_MEASURE.md` §7.6 derives the exact membership
 condition for the moment cone of the admitted open-clamped uniform basis — a
 per-span Hausdorff system in exact integers (Theorem 7.6.5), which reduces
@@ -312,15 +312,23 @@ points — `verify` and `begin` pass `BasisDescriptorV1::UNGATED`. Lemma 7.6.1
 is why one byte suffices: on admitted grids the cone depends only on
 `(degree, outcome_count)`.
 
-Two things are **not** closed. (1) The **program seam**: nothing on chain binds
-a degree yet. `clear_walk.rs:476` still calls `body.begin(..)`, and
-`EpochAccount` carries `terms: Hash32` but not `basis_degree` —
-`general_epoch.rs` reads `TermsAccount::basis_degree` at InitEpoch and drops
-it. Until that seam passes a real descriptor, a degree-2 or degree-3 market
-clears with V1b off, exactly as before. (2) The **wide-support residual**
-(§7.6.7): the landed family is a sound outer approximation, not a decision
-procedure, so a price vector can be outside the cone and still pass. Both are
-named in `DUAL_IS_THE_MEASURE.md` §11.4. The model plane states the same
+The **program seam is closed** (2026-08-21): `EpochAccount` gained
+`basis_degree: u8` (the account grew 328 → 329 bytes), `general_epoch.rs`
+copies `TermsAccount::basis_degree` into it at InitEpoch instead of dropping
+it, `EpochAccount::binds_terms` re-checks the copy against the terms it came
+from, and `clear_walk.rs` turns the byte into
+`BasisDescriptorV1::ClampedUniform` for `begin_with_basis` — refusing
+`UnsupportedBasisDegree` rather than falling back to ungated. The bank
+evidence is `svm-tests/tests/cone_gate.rs`: a three-outcome degree-2 market
+whose walk refuses `PriceOutsideMomentCone { outcome: 1 }` at `[2000, 6000,
+2000]` and clears to `VERIFIED` at `[2500, 5000, 2500]` on the same book.
+
+What is **not** closed is the **wide-support residual** (§7.6.7): the landed
+family is a sound outer approximation, not a decision procedure, so a price
+vector can be outside the cone and still pass — and with it the exact
+window-three tightening (Theorem 7.6.10), which is implementable and
+unimplemented. Both are named in `DUAL_IS_THE_MEASURE.md` §11.4. The model
+plane states the same
 condition in `lean/DragonsClutch/MomentCone.lean` with `decide`-checked
 witnesses against the exact model basis — the certificates never pay negative
 at any integer resolved value of a witnessed grid, the refused price buys them
