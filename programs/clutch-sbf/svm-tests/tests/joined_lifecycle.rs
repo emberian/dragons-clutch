@@ -678,7 +678,12 @@ impl Founding {
         );
         Instruction::new_with_bytes(
             PROGRAM_ID,
-            &layout_request(0, Intent::InitSourceArchive { terms: self.terms_id }),
+            &layout_request(
+                0,
+                Intent::InitSourceArchive {
+                    terms: self.terms_id,
+                },
+            ),
             metas,
         )
     }
@@ -707,9 +712,13 @@ impl Founding {
             &layout_request(
                 sequence,
                 if seal {
-                    Intent::SealSourceArchive { terms: self.terms_id }
+                    Intent::SealSourceArchive {
+                        terms: self.terms_id,
+                    }
                 } else {
-                    Intent::AppendSourceArchive { terms: self.terms_id }
+                    Intent::AppendSourceArchive {
+                        terms: self.terms_id,
+                    }
                 },
             ),
             metas,
@@ -1549,8 +1558,8 @@ async fn public_source_route(scenario: &mut Scenario) -> (u64, u64, [u64; 2], u6
     assert_eq!(feed.cursor, start);
     assert_eq!(feed.archive_pages, 0);
 
-    let init_archive_cu = succeed(&mut scenario.bank, &[budget(), f.init_archive(payer)], &[])
-        .await;
+    let init_archive_cu =
+        succeed(&mut scenario.bank, &[budget(), f.init_archive(payer)], &[]).await;
 
     let append0_cu = succeed(
         &mut scenario.bank,
@@ -1583,7 +1592,12 @@ async fn public_source_route(scenario: &mut Scenario) -> (u64, u64, [u64; 2], u6
     assert_eq!(feed.cursor, end + 1);
     assert_eq!(feed.archive_pages, 1);
 
-    (init_spec_cu, init_archive_cu, [append0_cu, append1_cu], seal_cu)
+    (
+        init_spec_cu,
+        init_archive_cu,
+        [append0_cu, append1_cu],
+        seal_cu,
+    )
 }
 
 /// The funded value segment on the NON-PRODUCTION mock-source ELF.
@@ -1625,13 +1639,7 @@ async fn funded_segment(scenario: &mut Scenario, degree: u8) {
     /* Injected prerequisite 4: the program-owned redundant evidence buffer.
      * Its every byte is checked against the publicly sealed archive inside
      * Resolve; a projection that disagrees with the archive refuses. */
-    let buffer = evidence_buffer_bytes(
-        f.window_id,
-        f.feed_id,
-        f.start_bucket,
-        f.end_bucket,
-        point,
-    );
+    let buffer = evidence_buffer_bytes(f.window_id, f.feed_id, f.start_bucket, f.end_bucket, point);
     scenario
         .bank
         .set_account(&BUFFER_ACCOUNT, &injected(PROGRAM_ID, buffer, false));
@@ -1664,8 +1672,7 @@ async fn funded_segment(scenario: &mut Scenario, degree: u8) {
         PositionAccount::decode(&existing(&mut scenario.bank, f.position).await.data).unwrap();
     assert_eq!(position.cash_atoms, 0);
     assert_eq!(position.internal[..4], [SETS; 4]);
-    let kernel =
-        KernelAccount::decode(&existing(&mut scenario.bank, f.kernel).await.data).unwrap();
+    let kernel = KernelAccount::decode(&existing(&mut scenario.bank, f.kernel).await.data).unwrap();
     assert_eq!(kernel.basis_mode, BasisMode::DerivedBasis);
     assert_eq!(kernel.total_supply[..4], [SETS; 4]);
     let supply =
@@ -1802,8 +1809,7 @@ async fn funded_segment(scenario: &mut Scenario, degree: u8) {
         SupplyLedgerAccount::decode(&existing(&mut scenario.bank, f.supply).await.data).unwrap();
     assert_eq!(supply.internal_supply[..4], [0; 4]);
     assert_eq!(supply.external_supply[..4], [0; 4]);
-    let kernel =
-        KernelAccount::decode(&existing(&mut scenario.bank, f.kernel).await.data).unwrap();
+    let kernel = KernelAccount::decode(&existing(&mut scenario.bank, f.kernel).await.data).unwrap();
     assert_eq!(kernel.total_supply[..4], [0; 4]);
     assert_eq!(
         HoardAccount::decode(&existing(&mut scenario.bank, f.hoard).await.data)
@@ -1831,8 +1837,7 @@ async fn funded_segment(scenario: &mut Scenario, degree: u8) {
         PositionAccount::decode(&existing(&mut scenario.bank, f.position).await.data).unwrap();
     assert_eq!(position.cash_atoms, 0);
     assert_eq!(position.reserved_cash_atoms, 0);
-    let replay =
-        ReplayAccount::decode(&existing(&mut scenario.bank, f.replay).await.data).unwrap();
+    let replay = ReplayAccount::decode(&existing(&mut scenario.bank, f.replay).await.data).unwrap();
     assert_eq!(replay.sequence, sequence + 1);
     assert_eq!(scenario.token_amount(f.hoard_token).await, 0);
     assert_eq!(

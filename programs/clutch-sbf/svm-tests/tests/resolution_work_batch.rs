@@ -66,8 +66,7 @@ async fn batched_folds_match_singleton_transactions_byte_exactly() {
                 .await
                 .unwrap()
                 .lamports,
-            worker_before
-                + u64::from(batch) * resolution_work::RESOLUTION_WORK_FOLD_BASE_REWARD_V1
+            worker_before + u64::from(batch) * resolution_work::RESOLUTION_WORK_FOLD_BASE_REWARD_V1
         );
 
         let mut singleton = Scenario::start(2, span, false).await;
@@ -134,11 +133,7 @@ async fn one_invalid_fold_mid_batch_reverts_every_prior_fold() {
     let mut torn = singleton_folds(&scenario, &work, BATCH);
     // The fifth instruction expects a cursor one bucket past the position the
     // four preceding folds actually reach, so it must refuse mid-transaction.
-    torn[INVALID_INDEX] = scenario.fold(
-        &work,
-        work.next_bucket + INVALID_INDEX as u64 + 1,
-        1,
-    );
+    torn[INVALID_INDEX] = scenario.fold(&work, work.next_bucket + INVALID_INDEX as u64 + 1, 1);
     assert!(send(&mut scenario, &torn, &[&worker]).await.0.is_err());
     assert_eq!(snapshot(&mut scenario, &watch).await, prestate);
     assert_eq!(scenario.work_state().await.fold_count, 0);

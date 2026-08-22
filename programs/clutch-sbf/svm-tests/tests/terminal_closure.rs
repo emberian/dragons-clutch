@@ -469,7 +469,10 @@ impl Fixture {
         ];
         for candidate in retained {
             metas.push(AccountMeta::new(self.candidate_record(*candidate), false));
-            metas.push(AccountMeta::new_readonly(self.candidate_feed(*candidate), false));
+            metas.push(AccountMeta::new_readonly(
+                self.candidate_feed(*candidate),
+                false,
+            ));
         }
         Instruction::new_with_bytes(
             PROGRAM_ID,
@@ -521,12 +524,7 @@ impl Fixture {
         )
     }
 
-    fn advance(
-        &self,
-        candidate: Hash32,
-        max_orders: u16,
-        reservations: &[Address],
-    ) -> Instruction {
+    fn advance(&self, candidate: Hash32, max_orders: u16, reservations: &[Address]) -> Instruction {
         let mut metas = vec![
             AccountMeta::new_readonly(self.epoch_account, false),
             AccountMeta::new_readonly(self.candidate_feed(candidate), false),
@@ -1400,7 +1398,11 @@ async fn build_frozen_book(
 async fn frozen_state(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
-) -> (EpochAccount, clutch_batch::relation_v1::BookV1, Vec<Address>) {
+) -> (
+    EpochAccount,
+    clutch_batch::relation_v1::BookV1,
+    Vec<Address>,
+) {
     let epoch = EpochAccount::decode(&bytes_of(context, fixture.epoch_account).await).unwrap();
     assert_eq!(epoch.phase, EPOCH_PHASE_FROZEN);
     let page = bytes_of(context, fixture.page).await;
@@ -1546,7 +1548,13 @@ async fn submit_seal(
         written += chunk_slices.len() as u64;
     }
 
-    let (result, _) = send(context, &[fixture.seal(submission, retained)], None, nonce + 40).await;
+    let (result, _) = send(
+        context,
+        &[fixture.seal(submission, retained)],
+        None,
+        nonce + 40,
+    )
+    .await;
     result.unwrap();
 }
 
@@ -1582,8 +1590,13 @@ async fn walk_to_verdict(
     )
     .await;
     result.unwrap();
-    let (result, _) =
-        send_walk(context, fixture.advance(submission.id, 16, &[]), None, nonce + 3).await;
+    let (result, _) = send_walk(
+        context,
+        fixture.advance(submission.id, 16, &[]),
+        None,
+        nonce + 3,
+    )
+    .await;
     result.unwrap();
     let (result, _) = send_walk(context, fixture.complete(submission.id), None, nonce + 4).await;
     result.unwrap();
@@ -1864,7 +1877,12 @@ async fn cleared_epoch_closes_to_the_declared_permanent_set() {
     // Wrong sink refuses: only the frozen incinerator receives surplus.
     let wrong_sink = send(
         &mut context,
-        &[fixture.close_receipt(alpha.id, 0, fixture.keeper.pubkey(), fixture.owners[a].key.pubkey())],
+        &[fixture.close_receipt(
+            alpha.id,
+            0,
+            fixture.keeper.pubkey(),
+            fixture.owners[a].key.pubkey(),
+        )],
         None,
         350,
     )
@@ -1886,7 +1904,10 @@ async fn cleared_epoch_closes_to_the_declared_permanent_set() {
         353,
     )
     .await;
-    assert_eq!(custom(selected_early.0), ClutchError::MismatchedState as u32);
+    assert_eq!(
+        custom(selected_early.0),
+        ClutchError::MismatchedState as u32
+    );
     let work_early = send(
         &mut context,
         &[fixture.close_clear_work(alpha.id, false)],
@@ -1929,7 +1950,10 @@ async fn cleared_epoch_closes_to_the_declared_permanent_set() {
         391,
     )
     .await;
-    assert_eq!(custom(page_wrong_payer.0), ClutchError::MismatchedState as u32);
+    assert_eq!(
+        custom(page_wrong_payer.0),
+        ClutchError::MismatchedState as u32
+    );
 
     // A non-owner cannot release someone else's reservation.
     let not_owner = send(
@@ -1986,7 +2010,12 @@ async fn cleared_epoch_closes_to_the_declared_permanent_set() {
         let owed = recorded_principal(&mut context, fixture.ledger(receipt)).await;
         reclaimed += close_exact(
             &mut context,
-            fixture.close_receipt(alpha.id, slice_index, fixture.keeper.pubkey(), sink_address()),
+            fixture.close_receipt(
+                alpha.id,
+                slice_index,
+                fixture.keeper.pubkey(),
+                sink_address(),
+            ),
             fixture.keeper.pubkey(),
             owed,
             nonce,
@@ -2069,8 +2098,7 @@ async fn cleared_epoch_closes_to_the_declared_permanent_set() {
 
     // The checkpoint closes (its record is gone, so no tail is needed), then
     // the root: epoch and window together, against the emptied registry.
-    let owed =
-        recorded_principal(&mut context, fixture.ledger(fixture.clear_work(alpha.id))).await;
+    let owed = recorded_principal(&mut context, fixture.ledger(fixture.clear_work(alpha.id))).await;
     reclaimed += close_exact(
         &mut context,
         fixture.close_clear_work(alpha.id, false),
@@ -2122,7 +2150,9 @@ async fn cleared_epoch_closes_to_the_declared_permanent_set() {
     for owner in &fixture.owners {
         assert!(account(&mut context, owner.position).await.is_some());
     }
-    assert!(account(&mut context, fixture.market_account).await.is_some());
+    assert!(account(&mut context, fixture.market_account)
+        .await
+        .is_some());
 
     // Conservation to the lamport: everything the machinery held is either
     // reclaimed principal or measured burn — and the burn is exactly the two
@@ -2200,8 +2230,8 @@ async fn lapsed_epoch_releases_and_closes_with_the_unregistered_residual() {
     for address in &machinery {
         inventory += lamports_of(&mut context, *address).await;
     }
-    let stranded = lamports_of(&mut context, gamma.record).await
-        + lamports_of(&mut context, gamma.feed).await;
+    let stranded =
+        lamports_of(&mut context, gamma.record).await + lamports_of(&mut context, gamma.feed).await;
     let sink_before = lamports_of(&mut context, sink_address()).await;
     let mut reclaimed = 0u64;
 
@@ -2241,7 +2271,10 @@ async fn lapsed_epoch_releases_and_closes_with_the_unregistered_residual() {
         180,
     )
     .await;
-    assert_eq!(custom(unregistered.0), ClutchError::WrongProgramOwner as u32);
+    assert_eq!(
+        custom(unregistered.0),
+        ClutchError::WrongProgramOwner as u32
+    );
 
     // Page, reservation archives, and the root close in dependency order —
     // the root tolerating exactly the unregistered registry member.

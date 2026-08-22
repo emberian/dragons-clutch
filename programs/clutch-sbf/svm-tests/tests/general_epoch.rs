@@ -414,7 +414,8 @@ async fn start(page_count: usize) -> (ProgramTestContext, Fixture) {
     };
 
     let epoch_id = canonical_epoch_id(market, EPOCH_INDEX);
-    let policy_digest = Hash32::from_bytes(batch_policy_digest(&GENERAL_CLEARING_POLICY_V1).unwrap().0);
+    let policy_digest =
+        Hash32::from_bytes(batch_policy_digest(&GENERAL_CLEARING_POLICY_V1).unwrap().0);
     let (policy_address, _) = pda(
         seeds::SEED_BATCH_POLICY,
         &[&epoch_id.bytes(), &policy_digest.bytes()],
@@ -476,7 +477,9 @@ async fn start(page_count: usize) -> (ProgramTestContext, Fixture) {
     add_state(
         &mut test,
         direct_policy_address,
-        canonical_batch_policy_bytes(&DIRECT_POLICY_V1).unwrap().to_vec(),
+        canonical_batch_policy_bytes(&DIRECT_POLICY_V1)
+            .unwrap()
+            .to_vec(),
     );
 
     let mut owners = Vec::new();
@@ -645,7 +648,8 @@ async fn the_general_lifecycle_initializes_places_cancels_and_freezes() {
     };
     assert_eq!(
         window_account.data,
-        encode(EPOCH_WINDOW_ACCOUNT_BYTES, |out| expected_window.encode(out))
+        encode(EPOCH_WINDOW_ACCOUNT_BYTES, |out| expected_window
+            .encode(out))
     );
 
     // Duplicate init refuses on the existing target.
@@ -715,13 +719,7 @@ async fn the_general_lifecycle_initializes_places_cancels_and_freezes() {
     result.unwrap();
 
     // Early freeze refuses: the deadline is the whole authority.
-    let (result, _) = send(
-        &mut context,
-        &[fixture.freeze(&fixture.pages)],
-        None,
-        8,
-    )
-    .await;
+    let (result, _) = send(&mut context, &[fixture.freeze(&fixture.pages)], None, 8).await;
     assert_eq!(custom(result), ClutchError::NotActive as u32);
 
     // The host-side oracle: the same commitment and seal the program must
@@ -733,21 +731,20 @@ async fn the_general_lifecycle_initializes_places_cancels_and_freezes() {
     stream::seal_page(&mut expected_page, expected_order_set, expected_count).unwrap();
 
     context.warp_to_slot(FREEZE_DEADLINE).unwrap();
-    let (result, units) = send(
-        &mut context,
-        &[fixture.freeze(&fixture.pages)],
-        None,
-        9,
-    )
-    .await;
+    let (result, units) = send(&mut context, &[fixture.freeze(&fixture.pages)], None, 9).await;
     result.unwrap();
     eprintln!("FreezeEpoch (1 page, 4 orders) CU: {units}");
 
     let frozen_page = account(&mut context, fixture.pages[0]).await.unwrap().data;
     assert_eq!(frozen_page, expected_page);
 
-    let frozen = EpochAccount::decode(&account(&mut context, fixture.epoch_account).await.unwrap().data)
-        .unwrap();
+    let frozen = EpochAccount::decode(
+        &account(&mut context, fixture.epoch_account)
+            .await
+            .unwrap()
+            .data,
+    )
+    .unwrap();
     assert_eq!(frozen.phase, EPOCH_PHASE_FROZEN);
     assert_eq!(frozen.order_set, expected_order_set);
     assert_eq!(frozen.order_count, expected_count);
@@ -766,7 +763,10 @@ async fn the_general_lifecycle_initializes_places_cancels_and_freezes() {
     // span from the freeze slot, and the stamped live cardinality is the
     // slot count minus the one retirement.
     let stamped = EpochWindowAccount::decode(
-        &account(&mut context, fixture.window_account).await.unwrap().data,
+        &account(&mut context, fixture.window_account)
+            .await
+            .unwrap()
+            .data,
     )
     .unwrap();
     assert_eq!(
@@ -779,13 +779,7 @@ async fn the_general_lifecycle_initializes_places_cancels_and_freezes() {
 
     // Double freeze refuses; the frozen book takes no placement and releases
     // no ACTIVE reservation (cancellation requires OPEN).
-    let (result, _) = send(
-        &mut context,
-        &[fixture.freeze(&fixture.pages)],
-        None,
-        10,
-    )
-    .await;
+    let (result, _) = send(&mut context, &[fixture.freeze(&fixture.pages)], None, 10).await;
     assert_eq!(custom(result), ClutchError::NotActive as u32);
     let late = fixture.single(&fixture.alice, 5, 0, 0, 10, 2_000);
     let (result, _) = send(
@@ -845,7 +839,9 @@ async fn init_refuses_wrong_policy_stale_deadline_and_wrong_window() {
 
     // Nothing was created by any refusal above.
     assert!(account(&mut context, fixture.epoch_account).await.is_none());
-    assert!(account(&mut context, fixture.window_account).await.is_none());
+    assert!(account(&mut context, fixture.window_account)
+        .await
+        .is_none());
 }
 
 #[tokio::test]
@@ -867,7 +863,10 @@ async fn freeze_refuses_a_missing_page_and_an_expired_record() {
     result.unwrap();
     let (result, _) = send(
         &mut context,
-        &[fixture.init_page(payer, 0, 2), fixture.init_page(payer, 1, 2)],
+        &[
+            fixture.init_page(payer, 0, 2),
+            fixture.init_page(payer, 1, 2),
+        ],
         None,
         30,
     )
@@ -887,7 +886,14 @@ async fn freeze_refuses_a_missing_page_and_an_expired_record() {
         .await;
         result.unwrap();
     }
-    let bob_order = fixture.single(&fixture.bob, MAX_ORDERS_PER_PAGE as u64 + 1, 0, 1, 10, 2_000);
+    let bob_order = fixture.single(
+        &fixture.bob,
+        MAX_ORDERS_PER_PAGE as u64 + 1,
+        0,
+        1,
+        10,
+        2_000,
+    );
     let (result, _) = send(
         &mut context,
         &[fixture.place(&fixture.bob, 1, 0, bob_order)],
@@ -927,9 +933,17 @@ async fn freeze_refuses_a_missing_page_and_an_expired_record() {
     assert_eq!(custom(result), 0x1000 + 14, "codec MismatchedBinding");
     // The refusal rolled the whole freeze back: nothing was sealed.
     let page_zero = account(&mut context, fixture.pages[0]).await.unwrap().data;
-    assert_eq!(stream::OrderPageHeader::decode(&page_zero).unwrap().frozen, 0);
-    let epoch = EpochAccount::decode(&account(&mut context, fixture.epoch_account).await.unwrap().data)
-        .unwrap();
+    assert_eq!(
+        stream::OrderPageHeader::decode(&page_zero).unwrap().frozen,
+        0
+    );
+    let epoch = EpochAccount::decode(
+        &account(&mut context, fixture.epoch_account)
+            .await
+            .unwrap()
+            .data,
+    )
+    .unwrap();
     assert_eq!(epoch.phase, EPOCH_PHASE_OPEN);
 
     // With the honest page restored, the same freeze succeeds and stamps the
@@ -941,8 +955,13 @@ async fn freeze_refuses_a_missing_page_and_an_expired_record() {
     let (result, units) = send(&mut context, &[fixture.freeze(&fixture.pages)], None, 23).await;
     result.unwrap();
     eprintln!("FreezeEpoch (2 pages, 17 orders) CU: {units}");
-    let frozen = EpochAccount::decode(&account(&mut context, fixture.epoch_account).await.unwrap().data)
-        .unwrap();
+    let frozen = EpochAccount::decode(
+        &account(&mut context, fixture.epoch_account)
+            .await
+            .unwrap()
+            .data,
+    )
+    .unwrap();
     assert_eq!(frozen.phase, EPOCH_PHASE_FROZEN);
     assert_eq!(frozen.order_set, expected_order_set);
     assert_eq!(frozen.order_count, expected_count);

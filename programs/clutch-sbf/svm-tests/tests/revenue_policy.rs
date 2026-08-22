@@ -52,8 +52,9 @@ use {
     },
     clutch_solana_layout::{
         account_len, canonical_epoch_id, canonical_outcome_id, canonical_realm_id,
-        clearing::{GeneralFundingLedgerV1, FUNDING_COVERS_REVENUE_RECORD,
-            GENERAL_FUNDING_LEDGER_BYTES},
+        clearing::{
+            GeneralFundingLedgerV1, FUNDING_COVERS_REVENUE_RECORD, GENERAL_FUNDING_LEDGER_BYTES,
+        },
         collateral::ParentProfile,
         revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES},
         Hash32, Intent, MarketAccount, PriceGridAccount, TermsAccount, MAX_GRID_TICKS,
@@ -260,7 +261,12 @@ impl Fixture {
         assert_eq!(metas.len(), CLOSE_REVENUE_RECORD_ACCOUNT_COUNT);
         Instruction::new_with_bytes(
             PROGRAM_ID,
-            &layout_request(0, Intent::CloseRevenuePolicyRecord { realm: self.realm_id }),
+            &layout_request(
+                0,
+                Intent::CloseRevenuePolicyRecord {
+                    realm: self.realm_id,
+                },
+            ),
             metas,
         )
     }
@@ -303,15 +309,16 @@ async fn start() -> (ProgramTestContext, Fixture) {
         flags: 0,
     };
     grid.grid = grid.recomputed_grid_id().unwrap();
-    let (grid_address, grid_bump) =
-        pda(seeds::SEED_GRID, &[&realm_id.bytes(), &grid.grid.bytes()]);
+    let (grid_address, grid_bump) = pda(seeds::SEED_GRID, &[&realm_id.bytes(), &grid.grid.bytes()]);
     grid.stored_bump = grid_bump;
 
     let mut terms = general_terms(realm_id, profile_id, feed);
     terms.price_grid = grid.grid;
     terms.terms = terms.recomputed_terms_digest().unwrap();
-    let (terms_address, terms_bump) =
-        pda(seeds::SEED_TERMS, &[&realm_id.bytes(), &terms.terms.bytes()]);
+    let (terms_address, terms_bump) = pda(
+        seeds::SEED_TERMS,
+        &[&realm_id.bytes(), &terms.terms.bytes()],
+    );
     terms.stored_bump = terms_bump;
 
     let (market_address, market_bump) =
@@ -341,8 +348,11 @@ async fn start() -> (ProgramTestContext, Fixture) {
     let epoch_id = canonical_epoch_id(market, EPOCH_INDEX);
     let zero_digest =
         Hash32::from_bytes(batch_policy_digest(&GENERAL_CLEARING_POLICY_V1).unwrap().0);
-    let fee_digest =
-        Hash32::from_bytes(batch_policy_digest(&GENERAL_CLEARING_FEE_SHAPE_V1).unwrap().0);
+    let fee_digest = Hash32::from_bytes(
+        batch_policy_digest(&GENERAL_CLEARING_FEE_SHAPE_V1)
+            .unwrap()
+            .0,
+    );
     let (zero_policy_address, _) = pda(
         seeds::SEED_BATCH_POLICY,
         &[&epoch_id.bytes(), &zero_digest.bytes()],
@@ -569,9 +579,15 @@ async fn the_revenue_boundary_pins_the_record_and_refuses_fee_bearing_admission(
         "a standing Realm must hold its record's close"
     );
     let record_after = account(&mut context, fixture.record_account).await.unwrap();
-    assert_eq!(record_after.data, record_bytes, "the refused close moved a byte");
     assert_eq!(
-        account(&mut context, fixture.ledger_account).await.unwrap().data,
+        record_after.data, record_bytes,
+        "the refused close moved a byte"
+    );
+    assert_eq!(
+        account(&mut context, fixture.ledger_account)
+            .await
+            .unwrap()
+            .data,
         ledger_bytes
     );
     let payer_after = account(&mut context, payer).await.unwrap().lamports;
@@ -583,7 +599,10 @@ async fn the_revenue_boundary_pins_the_record_and_refuses_fee_bearing_admission(
     let result = send(&mut context, &[fixture.init_realm(payer, true)], 6).await;
     assert_eq!(custom(result), ClutchError::AlreadyInitialized as u32);
     assert_eq!(
-        account(&mut context, fixture.record_account).await.unwrap().data,
+        account(&mut context, fixture.record_account)
+            .await
+            .unwrap()
+            .data,
         record_bytes,
         "a hostile re-creation attempt touched the record"
     );

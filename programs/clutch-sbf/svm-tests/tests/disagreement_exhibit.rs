@@ -65,12 +65,11 @@ use {
             RESERVATION_STATE_CONSUMED,
         },
         stream, CandidateFeedChunk, CandidateRecord, EpochAccount, FinalPotAccount, Hash32,
-        MarketAccount, OrderRecord, OrderSlot, PayoutVectorBytes, PortfolioRecord,
-        PositionAccount, PriceGridAccount, SettlementReceiptAccount, CANDIDATE_STATUS_SELECTED,
-        EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN, FEED_FILLS_PER_CHUNK, FEED_SLICES_PER_CHUNK,
-        MAX_GRID_TICKS, MAX_KNOTS, MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_MAP_UNUSED,
-        POT_PHASE_CLOSED, RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED,
-        RECEIPT_FLAG_SLICE_EXHAUSTED, UNIFORM_SPACING_NONE,
+        MarketAccount, OrderRecord, OrderSlot, PayoutVectorBytes, PortfolioRecord, PositionAccount,
+        PriceGridAccount, SettlementReceiptAccount, CANDIDATE_STATUS_SELECTED, EPOCH_PHASE_CLEARED,
+        EPOCH_PHASE_FROZEN, FEED_FILLS_PER_CHUNK, FEED_SLICES_PER_CHUNK, MAX_GRID_TICKS, MAX_KNOTS,
+        MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_MAP_UNUSED, POT_PHASE_CLOSED, RECEIPT_FLAG_BUY_CONSUMED,
+        RECEIPT_FLAG_SELL_CONSUMED, RECEIPT_FLAG_SLICE_EXHAUSTED, UNIFORM_SPACING_NONE,
     },
     clutch_svm_fixture::{
         compute_unit_limit_data, fixture_terms, layout_request, request_heap_frame_data,
@@ -471,7 +470,10 @@ impl Fixture {
         ];
         for candidate in retained {
             metas.push(AccountMeta::new(self.candidate_record(*candidate), false));
-            metas.push(AccountMeta::new_readonly(self.candidate_feed(*candidate), false));
+            metas.push(AccountMeta::new_readonly(
+                self.candidate_feed(*candidate),
+                false,
+            ));
         }
         Instruction::new_with_bytes(
             PROGRAM_ID,
@@ -643,7 +645,10 @@ impl Fixture {
         metas.push(AccountMeta::new_readonly(self.page, false));
         metas.push(AccountMeta::new(buy_reservation, false));
         metas.push(AccountMeta::new(sell_reservation, false));
-        metas.push(AccountMeta::new(self.receipt(candidate, slice_index), false));
+        metas.push(AccountMeta::new(
+            self.receipt(candidate, slice_index),
+            false,
+        ));
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &layout_request(
@@ -817,7 +822,11 @@ impl Fixture {
 /// (the $20 gap is not a power of two; admitted at degree 1),
 /// STAT-TERMINAL-01, EDGE-CLAMP-01, payout_map entirely unused, and one
 /// uniform failure-refund preset 8/64 per outcome.
-fn degree1_terms(realm: Hash32, profile: Hash32, feed: Hash32) -> clutch_solana_layout::TermsAccount {
+fn degree1_terms(
+    realm: Hash32,
+    profile: Hash32,
+    feed: Hash32,
+) -> clutch_solana_layout::TermsAccount {
     let mut terms = fixture_terms(realm, profile, feed);
     let mut payouts = [PayoutVectorBytes::ZERO; MAX_PAYOUTS];
     let mut weights = [0u64; MAX_OUTCOMES];
@@ -872,7 +881,9 @@ async fn start() -> (ProgramTestContext, Fixture) {
     let mut terms = degree1_terms(realm, profile, feed);
     terms.price_grid = grid.grid;
     terms.terms = terms.recomputed_terms_digest().unwrap();
-    terms.validate().expect("the degree-1 terms artifact validates");
+    terms
+        .validate()
+        .expect("the degree-1 terms artifact validates");
     let (terms_address, terms_bump) =
         pda(seeds::SEED_TERMS, &[&realm.bytes(), &terms.terms.bytes()]);
     terms.stored_bump = terms_bump;
@@ -1087,19 +1098,19 @@ fn book_plan(fixture: &Fixture) -> Vec<(usize, OrderSlot)> {
     let g = &fixture.owners[0];
     let e = &fixture.owners[1];
     vec![
-        (0, fixture.single(g, 1, 1, 1, Z, 98)),      // G sells @120-knot at 98
-        (1, fixture.single(e, 2, 1, 0, Z, 127)),     // E buys @120-knot at 127
-        (0, fixture.single(g, 3, 2, 0, Z, 2_961)),   // G buys @140-knot at 2961
-        (1, fixture.single(e, 4, 2, 1, Z, 2_662)),   // E sells @140-knot at 2662
-        (1, fixture.single(e, 5, 3, 0, Z, 5_945)),   // E buys @160-knot at 5945
-        (0, fixture.single(g, 6, 3, 1, Z, 5_696)),   // G sells @160-knot at 5696
-        (1, fixture.single(e, 7, 4, 0, Z, 1_266)),   // E buys @180-knot at 1266
-        (0, fixture.single(g, 8, 4, 1, Z, 1_213)),   // G sells @180-knot at 1213
-        (0, fixture.single(g, 9, 5, 0, Z, 32)),      // G buys @200-knot at 32
-        (1, fixture.single(e, 10, 5, 1, Z, 0)),      // E sells @200-knot at 0
-        (0, fixture.package(g, 11, 0, 88)),          // G package buy, 88 atoms/lot
-        (1, fixture.package(e, 12, 1, 80)),          // E package sell, 80 atoms/lot
-        (1, fixture.single(e, 13, 1, 0, Z, 98)),     // E low-ball buy: ineligible
+        (0, fixture.single(g, 1, 1, 1, Z, 98)), // G sells @120-knot at 98
+        (1, fixture.single(e, 2, 1, 0, Z, 127)), // E buys @120-knot at 127
+        (0, fixture.single(g, 3, 2, 0, Z, 2_961)), // G buys @140-knot at 2961
+        (1, fixture.single(e, 4, 2, 1, Z, 2_662)), // E sells @140-knot at 2662
+        (1, fixture.single(e, 5, 3, 0, Z, 5_945)), // E buys @160-knot at 5945
+        (0, fixture.single(g, 6, 3, 1, Z, 5_696)), // G sells @160-knot at 5696
+        (1, fixture.single(e, 7, 4, 0, Z, 1_266)), // E buys @180-knot at 1266
+        (0, fixture.single(g, 8, 4, 1, Z, 1_213)), // G sells @180-knot at 1213
+        (0, fixture.single(g, 9, 5, 0, Z, 32)), // G buys @200-knot at 32
+        (1, fixture.single(e, 10, 5, 1, Z, 0)), // E sells @200-knot at 0
+        (0, fixture.package(g, 11, 0, 88)),     // G package buy, 88 atoms/lot
+        (1, fixture.package(e, 12, 1, 80)),     // E package sell, 80 atoms/lot
+        (1, fixture.single(e, 13, 1, 0, Z, 98)), // E low-ball buy: ineligible
     ]
 }
 
@@ -1119,9 +1130,8 @@ async fn build_frozen_book(context: &mut ProgramTestContext, fixture: &Fixture) 
             10 + sequence as u32,
         )
         .await;
-        result.unwrap_or_else(|error| {
-            panic!("PlaceOrder rank {} refused: {error:?}", sequence + 1)
-        });
+        result
+            .unwrap_or_else(|error| panic!("PlaceOrder rank {} refused: {error:?}", sequence + 1));
     }
     context.warp_to_slot(FREEZE_DEADLINE).unwrap();
     let (result, _) = send(context, &[fixture.freeze()], None, 40).await;
@@ -1133,7 +1143,11 @@ async fn build_frozen_book(context: &mut ProgramTestContext, fixture: &Fixture) 
 async fn frozen_state(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
-) -> (EpochAccount, clutch_batch::relation_v1::BookV1, Vec<Address>) {
+) -> (
+    EpochAccount,
+    clutch_batch::relation_v1::BookV1,
+    Vec<Address>,
+) {
     let epoch = EpochAccount::decode(&bytes_of(context, fixture.epoch_account).await).unwrap();
     assert_eq!(epoch.phase, EPOCH_PHASE_FROZEN);
     let page = bytes_of(context, fixture.page).await;
@@ -1343,11 +1357,11 @@ fn slice(buy: u8, sell: u8, outcome: u8, quantity: u64) -> PairingSliceV1 {
 /// pair's two per-outcome legs (14,950 Eggs @140-knot, 1,600 @200-knot).
 fn exhibit_witness() -> PairingWitnessV1 {
     let slices = [
-        slice(1, 0, 1, Z),                 // E buys / G sells the 120-knot
-        slice(2, 3, 2, Z),                 // G buys / E sells the 140-knot
-        slice(4, 5, 3, Z),                 // E buys / G sells the 160-knot
-        slice(6, 7, 4, Z),                 // E buys / G sells the 180-knot
-        slice(8, 9, 5, Z),                 // G buys / E sells the 200-knot
+        slice(1, 0, 1, Z),                  // E buys / G sells the 120-knot
+        slice(2, 3, 2, Z),                  // G buys / E sells the 140-knot
+        slice(4, 5, 3, Z),                  // E buys / G sells the 160-knot
+        slice(6, 7, 4, Z),                  // E buys / G sells the 180-knot
+        slice(8, 9, 5, Z),                  // G buys / E sells the 200-knot
         slice(10, 11, 2, LOTS * C_PLUS[2]), // package leg: 14,950 @140-knot
         slice(10, 11, 5, LOTS * C_PLUS[5]), // package leg: 1,600 @200-knot
     ];
@@ -1357,7 +1371,10 @@ fn exhibit_witness() -> PairingWitnessV1 {
     witness
 }
 
-async fn read_reservation(context: &mut ProgramTestContext, address: Address) -> ReservationAccount {
+async fn read_reservation(
+    context: &mut ProgramTestContext,
+    address: Address,
+) -> ReservationAccount {
     ReservationAccount::decode(&bytes_of(context, address).await).unwrap()
 }
 
@@ -1426,8 +1443,12 @@ async fn disagreement_book_clears_between_the_beliefs_with_conservation() {
     assert_eq!(epoch_now.phase, EPOCH_PHASE_CLEARED);
 
     // The entitlement freeze: pot from the verified summary, provably empty.
-    let (result, units) = send_walk(&mut context, fixture.freeze_entitlement(payer, alpha.id), 342)
-        .await;
+    let (result, units) = send_walk(
+        &mut context,
+        fixture.freeze_entitlement(payer, alpha.id),
+        342,
+    )
+    .await;
     result.unwrap();
     eprintln!("FreezeEntitlement CU: {units}");
     let pot = FinalPotAccount::decode(&bytes_of(&mut context, fixture.pot()).await).unwrap();
@@ -1540,8 +1561,18 @@ async fn disagreement_book_clears_between_the_beliefs_with_conservation() {
     // -4,035.  E is the exact mirror, with the low-ball's 5 atoms standing.
     // Every number here re-derives in docs/site-plan/disagreement_check.py.
     let expected: [(usize, u64, u64, [i64; 8]); 2] = [
-        (g, START_CASH - 4_035, 0, [0, -500, 15_450, -500, -500, 2_100, 0, 0]),
-        (e, START_CASH + 4_035, 5, [0, 500, -15_450, 500, 500, -2_100, 0, 0]),
+        (
+            g,
+            START_CASH - 4_035,
+            0,
+            [0, -500, 15_450, -500, -500, 2_100, 0, 0],
+        ),
+        (
+            e,
+            START_CASH + 4_035,
+            5,
+            [0, 500, -15_450, 500, 500, -2_100, 0, 0],
+        ),
     ];
     for (index, cash, reserved, deltas) in expected {
         let owner = &fixture.owners[index];
@@ -1601,8 +1632,14 @@ async fn disagreement_book_clears_between_the_beliefs_with_conservation() {
     let expected_cash: [u64; 12] = [0, 7, 149, 0, 298, 0, 64, 0, 2, 0, 4_400, 0];
     for index in 0..12 {
         let reservation = read_reservation(&mut context, reservations[index]).await;
-        assert_eq!(reservation.state, RESERVATION_STATE_CONSUMED, "reservation {index}");
-        assert!(reservation.remaining_is_zero(), "reservation {index} drained");
+        assert_eq!(
+            reservation.state, RESERVATION_STATE_CONSUMED,
+            "reservation {index}"
+        );
+        assert!(
+            reservation.remaining_is_zero(),
+            "reservation {index} drained"
+        );
         assert_eq!(
             reservation.initial_cash_atoms, expected_cash[index],
             "reservation {index} cash envelope"
@@ -1617,13 +1654,22 @@ async fn disagreement_book_clears_between_the_beliefs_with_conservation() {
     // Release identity across the whole book: released buy envelopes
     // (4,551 + 369 = 4,920) = considerations (4,392 + 357 = 4,749) +
     // price-improvement refunds (159 + 12 = 171) + pot (0).
-    assert_eq!(4_551 + 369, (4_392 + 357) + (159 + 12) + pot.pot_cash_price_units as u64);
+    assert_eq!(
+        4_551 + 369,
+        (4_392 + 357) + (159 + 12) + pot.pot_cash_price_units as u64
+    );
 
     // The receipts are exhausted, exactly once each: five single crossings
     // of 500 Eggs and the package's two legs.
-    for (slice_index, quantity) in
-        [(0u16, Z), (1, Z), (2, Z), (3, Z), (4, Z), (5, LOTS * C_PLUS[2]), (6, LOTS * C_PLUS[5])]
-    {
+    for (slice_index, quantity) in [
+        (0u16, Z),
+        (1, Z),
+        (2, Z),
+        (3, Z),
+        (4, Z),
+        (5, LOTS * C_PLUS[2]),
+        (6, LOTS * C_PLUS[5]),
+    ] {
         let receipt = SettlementReceiptAccount::decode(
             &bytes_of(&mut context, fixture.receipt(alpha.id, slice_index)).await,
         )

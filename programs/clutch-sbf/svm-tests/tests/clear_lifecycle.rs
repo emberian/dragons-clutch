@@ -40,10 +40,9 @@ use {
     clutch_solana_layout::{
         account_len, canonical_epoch_id, canonical_order_id, canonical_outcome_id,
         clearing::{
-            clear_work_body, init_candidate_feed, verify_clear_work, write_fill,
-            write_slice_at, CandidateFeedHeader, LegRef, PairingSlice,
-            CANDIDATE_FEED_FLAG_SLICES_DECLARED, CLEAR_WORK_STATUS_BOUND,
-            CLEAR_WORK_STATUS_COMPLETE,
+            clear_work_body, init_candidate_feed, verify_clear_work, write_fill, write_slice_at,
+            CandidateFeedHeader, LegRef, PairingSlice, CANDIDATE_FEED_FLAG_SLICES_DECLARED,
+            CLEAR_WORK_STATUS_BOUND, CLEAR_WORK_STATUS_COMPLETE,
         },
         projection::{project_slot, OwnerInterner},
         reservation::canonical_reservation_id,
@@ -301,7 +300,13 @@ impl Fixture {
         )
     }
 
-    fn cancel(&self, owner: &Owner, page_index: u16, order_id: Hash32, generation: u64) -> Instruction {
+    fn cancel(
+        &self,
+        owner: &Owner,
+        page_index: u16,
+        order_id: Hash32,
+        generation: u64,
+    ) -> Instruction {
         let reservation = self.reservation(owner.id, order_id);
         Instruction::new_with_bytes(
             PROGRAM_ID,
@@ -460,7 +465,11 @@ impl Fixture {
 }
 
 /// A four-outcome terms artifact (see `general_epoch.rs` for the shape).
-fn general_terms(realm: Hash32, profile: Hash32, feed: Hash32) -> clutch_solana_layout::TermsAccount {
+fn general_terms(
+    realm: Hash32,
+    profile: Hash32,
+    feed: Hash32,
+) -> clutch_solana_layout::TermsAccount {
     let mut terms = fixture_terms(realm, profile, feed);
     let mut payouts = [clutch_solana_layout::PayoutVectorBytes::ZERO; MAX_PAYOUTS];
     let mut payout_map = [PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
@@ -832,7 +841,9 @@ async fn build_frozen_book(context: &mut ProgramTestContext, fixture: &Fixture) 
     let payer = context.payer.pubkey();
     let (result, _) = send(context, &[fixture.init_epoch(payer)], None, 0).await;
     result.unwrap();
-    let pages: Vec<Instruction> = (0..PAGES).map(|index| fixture.init_page(payer, index)).collect();
+    let pages: Vec<Instruction> = (0..PAGES)
+        .map(|index| fixture.init_page(payer, index))
+        .collect();
     let (result, _) = send(context, &pages, None, 1).await;
     result.unwrap();
 
@@ -1062,7 +1073,17 @@ async fn drive_lifecycle(
     result.unwrap();
 
     // Pass 1 at deliberately ragged boundaries.
-    drive_order_pass(context, fixture, candidate, pages, &[1, 3, 16, 2], true, 310, "pass-1").await;
+    drive_order_pass(
+        context,
+        fixture,
+        candidate,
+        pages,
+        &[1, 3, 16, 2],
+        true,
+        310,
+        "pass-1",
+    )
+    .await;
 
     // The slice pass, split across two transactions.
     let first = declared_slices / 2 + 1;
@@ -1075,7 +1096,17 @@ async fn drive_lifecycle(
     eprintln!("AdvanceClearSlices (rest of {declared_slices} + end_pass) CU: {units}");
 
     // Pass 2 at different boundaries.
-    drive_order_pass(context, fixture, candidate, pages, &[16, 5], false, 340, "pass-2").await;
+    drive_order_pass(
+        context,
+        fixture,
+        candidate,
+        pages,
+        &[16, 5],
+        false,
+        340,
+        "pass-2",
+    )
+    .await;
 
     // The close.
     let (result, units) = send_walk(context, fixture.complete(candidate), 350).await;
@@ -1089,8 +1120,13 @@ async fn the_forty_order_book_walks_to_the_host_relations_verdict() {
     let (mut context, fixture) = start().await;
     build_frozen_book(&mut context, &fixture).await;
 
-    let epoch = EpochAccount::decode(&account(&mut context, fixture.epoch_account).await.unwrap().data)
-        .unwrap();
+    let epoch = EpochAccount::decode(
+        &account(&mut context, fixture.epoch_account)
+            .await
+            .unwrap()
+            .data,
+    )
+    .unwrap();
     assert_eq!(epoch.order_count, SLOTS as u16);
     assert_eq!(epoch.page_count, PAGES);
     assert_eq!(epoch.owner_count, 6);
@@ -1171,7 +1207,10 @@ async fn the_forty_order_book_walks_to_the_host_relations_verdict() {
     )
     .unwrap();
     assert_eq!(record.status, CANDIDATE_STATUS_VERIFIED);
-    assert_eq!(record.weighted_direct_volume, verified.score.weighted_direct_volume);
+    assert_eq!(
+        record.weighted_direct_volume,
+        verified.score.weighted_direct_volume
+    );
     assert_eq!(
         record.limit_surplus_price_units,
         verified.score.limit_surplus_price_units
@@ -1190,12 +1229,7 @@ async fn the_forty_order_book_walks_to_the_host_relations_verdict() {
     let (result, _) = send_walk(&mut context, fixture.complete(candidate_id), 400).await;
     assert_eq!(custom(result), ClutchError::MismatchedState as u32);
     // So does a further advance of either pass.
-    let (result, _) = send_walk(
-        &mut context,
-        fixture.advance(candidate_id, 0, 1, &[]),
-        401,
-    )
-    .await;
+    let (result, _) = send_walk(&mut context, fixture.advance(candidate_id, 0, 1, &[]), 401).await;
     assert_eq!(custom(result), ClutchError::MismatchedState as u32);
     let (result, _) = send_walk(&mut context, fixture.advance_slices(candidate_id, 1), 402).await;
     assert_eq!(custom(result), ClutchError::MismatchedState as u32);
@@ -1206,8 +1240,13 @@ async fn a_forged_fill_is_refused_by_bank_and_host_with_one_error() {
     let (mut context, fixture) = start().await;
     build_frozen_book(&mut context, &fixture).await;
 
-    let epoch = EpochAccount::decode(&account(&mut context, fixture.epoch_account).await.unwrap().data)
-        .unwrap();
+    let epoch = EpochAccount::decode(
+        &account(&mut context, fixture.epoch_account)
+            .await
+            .unwrap()
+            .data,
+    )
+    .unwrap();
     let mut pages = Vec::new();
     for page in &fixture.pages {
         pages.push(account(&mut context, *page).await.unwrap().data);

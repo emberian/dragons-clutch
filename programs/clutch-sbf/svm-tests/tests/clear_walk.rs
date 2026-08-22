@@ -364,12 +364,7 @@ impl Fixture {
         )
     }
 
-    fn advance(
-        &self,
-        candidate: Hash32,
-        max_orders: u16,
-        reservations: &[Address],
-    ) -> Instruction {
+    fn advance(&self, candidate: Hash32, max_orders: u16, reservations: &[Address]) -> Instruction {
         let mut metas = vec![
             AccountMeta::new_readonly(self.epoch_account, false),
             AccountMeta::new_readonly(self.candidate_feed(candidate).0, false),
@@ -440,7 +435,11 @@ impl Fixture {
 }
 
 /// A four-outcome terms artifact (see `general_epoch.rs` for the shape).
-fn general_terms(realm: Hash32, profile: Hash32, feed: Hash32) -> clutch_solana_layout::TermsAccount {
+fn general_terms(
+    realm: Hash32,
+    profile: Hash32,
+    feed: Hash32,
+) -> clutch_solana_layout::TermsAccount {
     let mut terms = fixture_terms(realm, profile, feed);
     let mut payouts = [clutch_solana_layout::PayoutVectorBytes::ZERO; MAX_PAYOUTS];
     let mut payout_map = [PAYOUT_MAP_UNUSED; MAX_OUTCOMES];
@@ -733,10 +732,7 @@ async fn build_frozen_book(context: &mut ProgramTestContext, fixture: &Fixture) 
             &fixture.alice,
             fixture.single(&fixture.alice, 4, 1, 0, 10, 2_000),
         ),
-        (
-            &fixture.bob,
-            fixture.single(&fixture.bob, 5, 1, 1, 10, 0),
-        ),
+        (&fixture.bob, fixture.single(&fixture.bob, 5, 1, 1, 10, 0)),
     ];
     for (sequence, (owner, slot)) in orders.into_iter().enumerate() {
         let (result, _) = send(
@@ -775,8 +771,8 @@ async fn install_feed(
     fixture: &Fixture,
     fills: [u64; 4],
 ) -> CandidateFeedHeader {
-    let epoch = EpochAccount::decode(&account(context, fixture.epoch_account).await.unwrap().data)
-        .unwrap();
+    let epoch =
+        EpochAccount::decode(&account(context, fixture.epoch_account).await.unwrap().data).unwrap();
     let mut prices = [0u64; MAX_OUTCOMES];
     let mut i = 0usize;
     while i < OUTCOMES as usize {
@@ -841,8 +837,12 @@ fn drive_host_pass(
     begin: bool,
 ) -> FeedStatusV1 {
     if begin {
-        body.begin(&zero_sentinel_domain(epoch), &stream_candidate_of(feed), false)
-            .unwrap();
+        body.begin(
+            &zero_sentinel_domain(epoch),
+            &stream_candidate_of(feed),
+            false,
+        )
+        .unwrap();
     }
     let header = stream::OrderPageHeader::decode(page_bytes).unwrap();
     let mut cursor = stream::OrderSlotCursor::new(page_bytes).unwrap();
@@ -869,8 +869,13 @@ async fn the_walk_binds_pass_one_and_matches_the_host_twin_byte_for_byte() {
     let candidate = feed.candidate;
     create_checkpoint(&mut context, &fixture, candidate).await;
 
-    let epoch = EpochAccount::decode(&account(&mut context, fixture.epoch_account).await.unwrap().data)
-        .unwrap();
+    let epoch = EpochAccount::decode(
+        &account(&mut context, fixture.epoch_account)
+            .await
+            .unwrap()
+            .data,
+    )
+    .unwrap();
     assert_eq!(epoch.owner_count, 3);
     assert_eq!(epoch.order_count, 5);
     let page_bytes = account(&mut context, fixture.page).await.unwrap().data;
@@ -913,9 +918,12 @@ async fn the_walk_binds_pass_one_and_matches_the_host_twin_byte_for_byte() {
     assert_eq!(header_three.live_rank, 3);
     assert_eq!(read_owner_interner(&after_three).unwrap().count(), 3);
 
-    let (result, units) = send_walk(&mut context, fixture.advance(candidate, 16, &[res_5]), 2).await;
+    let (result, units) =
+        send_walk(&mut context, fixture.advance(candidate, 16, &[res_5]), 2).await;
     result.unwrap();
-    eprintln!("AdvanceClearWork final pass-1 batch (tombstone + 1 order + end_pass + bind) CU: {units}");
+    eprintln!(
+        "AdvanceClearWork final pass-1 batch (tombstone + 1 order + end_pass + bind) CU: {units}"
+    );
 
     // Pass-1 end: bound to the frozen set, cursor rewound for pass 2 (no
     // witness declared, so the feed proceeds straight to the second order
@@ -1031,11 +1039,17 @@ async fn the_reservation_sweep_refuses_missing_released_and_wrong_plan() {
         .released(2)
         .unwrap();
     let mut forged = honest.clone();
-    forged.data = encode(clutch_solana_layout::reservation::RESERVATION_ACCOUNT_BYTES, |out| {
-        released.encode(out)
-    });
+    forged.data = encode(
+        clutch_solana_layout::reservation::RESERVATION_ACCOUNT_BYTES,
+        |out| released.encode(out),
+    );
     context.set_account(&res_1_address, &forged.into());
-    let (result, _) = send_walk(&mut context, fixture.advance(candidate, 1, &[res_1_address]), 1).await;
+    let (result, _) = send_walk(
+        &mut context,
+        fixture.advance(candidate, 1, &[res_1_address]),
+        1,
+    )
+    .await;
     assert_eq!(custom(result), ClutchError::MismatchedState as u32);
 
     // Wrong plan: an envelope that does not re-derive from the projected
@@ -1044,16 +1058,27 @@ async fn the_reservation_sweep_refuses_missing_released_and_wrong_plan() {
     wrong_plan.initial_cash_atoms += 1;
     wrong_plan.remaining_cash_atoms += 1;
     let mut forged = honest.clone();
-    forged.data = encode(clutch_solana_layout::reservation::RESERVATION_ACCOUNT_BYTES, |out| {
-        wrong_plan.encode(out)
-    });
+    forged.data = encode(
+        clutch_solana_layout::reservation::RESERVATION_ACCOUNT_BYTES,
+        |out| wrong_plan.encode(out),
+    );
     context.set_account(&res_1_address, &forged.into());
-    let (result, _) = send_walk(&mut context, fixture.advance(candidate, 1, &[res_1_address]), 2).await;
+    let (result, _) = send_walk(
+        &mut context,
+        fixture.advance(candidate, 1, &[res_1_address]),
+        2,
+    )
+    .await;
     assert_eq!(custom(result), ClutchError::MismatchedState as u32);
 
     // The honest reservation restored, the same batch lands.
     context.set_account(&res_1_address, &honest.into());
-    let (result, _) = send_walk(&mut context, fixture.advance(candidate, 1, &[res_1_address]), 3).await;
+    let (result, _) = send_walk(
+        &mut context,
+        fixture.advance(candidate, 1, &[res_1_address]),
+        3,
+    )
+    .await;
     result.unwrap();
 }
 

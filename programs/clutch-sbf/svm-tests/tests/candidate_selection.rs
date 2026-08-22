@@ -42,7 +42,10 @@ use {
         error::ClutchError,
         instructions::artifact::CLOCK_SYSVAR_ID,
         instructions::orders_batch::{
-            clear_walk::{ADVANCE_CLEAR_SLICES_ACCOUNT_COUNT, ADVANCE_CLEAR_WORK_FIXED_ACCOUNT_COUNT, COMPLETE_CLEAR_WORK_ACCOUNT_COUNT},
+            clear_walk::{
+                ADVANCE_CLEAR_SLICES_ACCOUNT_COUNT, ADVANCE_CLEAR_WORK_FIXED_ACCOUNT_COUNT,
+                COMPLETE_CLEAR_WORK_ACCOUNT_COUNT,
+            },
             selection::{
                 FINALIZE_SELECTION_FIXED_ACCOUNT_COUNT, SEAL_CANDIDATE_FIXED_ACCOUNT_COUNT,
                 SUBMIT_CANDIDATE_ACCOUNT_COUNT, WRITE_CANDIDATE_FEED_ACCOUNT_COUNT,
@@ -441,7 +444,10 @@ impl Fixture {
         assert_eq!(metas.len(), FINALIZE_SELECTION_FIXED_ACCOUNT_COUNT);
         for candidate in retained {
             metas.push(AccountMeta::new(self.candidate_record(*candidate), false));
-            metas.push(AccountMeta::new_readonly(self.candidate_feed(*candidate), false));
+            metas.push(AccountMeta::new_readonly(
+                self.candidate_feed(*candidate),
+                false,
+            ));
         }
         Instruction::new_with_bytes(
             PROGRAM_ID,
@@ -491,12 +497,7 @@ impl Fixture {
         )
     }
 
-    fn advance(
-        &self,
-        candidate: Hash32,
-        max_orders: u16,
-        reservations: &[Address],
-    ) -> Instruction {
+    fn advance(&self, candidate: Hash32, max_orders: u16, reservations: &[Address]) -> Instruction {
         let mut metas = vec![
             AccountMeta::new_readonly(self.epoch_account, false),
             AccountMeta::new_readonly(self.candidate_feed(candidate), false),
@@ -900,10 +901,13 @@ async fn build_frozen_book(context: &mut ProgramTestContext, fixture: &Fixture) 
 async fn frozen_state(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
-) -> (EpochAccount, clutch_batch::relation_v1::BookV1, Vec<Address>) {
+) -> (
+    EpochAccount,
+    clutch_batch::relation_v1::BookV1,
+    Vec<Address>,
+) {
     let epoch =
-        EpochAccount::decode(&account(context, fixture.epoch_account).await.unwrap().data)
-            .unwrap();
+        EpochAccount::decode(&account(context, fixture.epoch_account).await.unwrap().data).unwrap();
     assert_eq!(epoch.phase, EPOCH_PHASE_FROZEN);
     let page = account(context, fixture.page).await.unwrap().data;
     let mut book = clutch_batch::relation_v1::BookV1::empty();
@@ -1022,7 +1026,10 @@ async fn submit_seal(
         )
         .await;
         result.unwrap();
-        eprintln!("WriteCandidateFeed (fills x{}) CU: {units}", chunk_fills.len());
+        eprintln!(
+            "WriteCandidateFeed (fills x{}) CU: {units}",
+            chunk_fills.len()
+        );
         written += chunk_fills.len() as u64;
     }
     let leg = |leg: LegRefV1| match leg {
@@ -1171,11 +1178,20 @@ async fn selection_picks_the_total_order_winner_and_excludes_the_unverified() {
 
     // Two economically distinct verified candidates and one absurd claim.
     let alpha = plan_submission(&fixture, &epoch, &book, even_prices());
-    let beta = plan_submission(&fixture, &epoch, &book, prices_of([5_000, 2_500, 1_500, 1_000]));
-    let gamma = plan_submission(&fixture, &epoch, &book, prices_of([2_500, 5_000, 1_500, 1_000]));
+    let beta = plan_submission(
+        &fixture,
+        &epoch,
+        &book,
+        prices_of([5_000, 2_500, 1_500, 1_000]),
+    );
+    let gamma = plan_submission(
+        &fixture,
+        &epoch,
+        &book,
+        prices_of([2_500, 5_000, 1_500, 1_000]),
+    );
 
-    let (result, _) =
-        submit_seal(&mut context, &fixture, &alpha, (0, 0, 0), &[], None, 100).await;
+    let (result, _) = submit_seal(&mut context, &fixture, &alpha, (0, 0, 0), &[], None, 100).await;
     result.unwrap();
     let (result, _) = submit_seal(
         &mut context,
@@ -1255,12 +1271,19 @@ async fn selection_picks_the_total_order_winner_and_excludes_the_unverified() {
     let gamma_record = read_record(&mut context, &fixture, gamma.id).await;
     assert_eq!(gamma_record.status, CANDIDATE_STATUS_SUBMITTED);
 
-    let cleared =
-        EpochAccount::decode(&account(&mut context, fixture.epoch_account).await.unwrap().data)
-            .unwrap();
+    let cleared = EpochAccount::decode(
+        &account(&mut context, fixture.epoch_account)
+            .await
+            .unwrap()
+            .data,
+    )
+    .unwrap();
     assert_eq!(cleared.phase, EPOCH_PHASE_CLEARED);
     let window = EpochWindowAccount::decode(
-        &account(&mut context, fixture.window_account).await.unwrap().data,
+        &account(&mut context, fixture.window_account)
+            .await
+            .unwrap()
+            .data,
     )
     .unwrap();
     assert_eq!(window.selected_candidate, expected_winner);
@@ -1273,7 +1296,12 @@ async fn selection_picks_the_total_order_winner_and_excludes_the_unverified() {
     let (result, _) = send(&mut context, &[fixture.finalize(&retained)], None, 402).await;
     assert_eq!(custom(result), ClutchError::NotActive as u32);
     // And the closed window takes no further submission.
-    let late = plan_submission(&fixture, &epoch, &book, prices_of([2_500, 3_500, 2_000, 2_000]));
+    let late = plan_submission(
+        &fixture,
+        &epoch,
+        &book,
+        prices_of([2_500, 3_500, 2_000, 2_000]),
+    );
     let payer = context.payer.pubkey();
     let (result, _) = send(
         &mut context,
@@ -1299,14 +1327,32 @@ async fn a_beyond_128_bit_score_tie_resolves_by_the_full_width_digest() {
     // entirely on the orderless outcomes 2 and 3, so fills — and every score
     // component — are identical while the candidate identities (and with
     // them the full-width tie digests) differ.
-    let one = plan_submission(&fixture, &epoch, &book, prices_of([2_500, 2_500, 3_000, 2_000]));
-    let two = plan_submission(&fixture, &epoch, &book, prices_of([2_500, 2_500, 2_000, 3_000]));
+    let one = plan_submission(
+        &fixture,
+        &epoch,
+        &book,
+        prices_of([2_500, 2_500, 3_000, 2_000]),
+    );
+    let two = plan_submission(
+        &fixture,
+        &epoch,
+        &book,
+        prices_of([2_500, 2_500, 2_000, 3_000]),
+    );
     assert_eq!(one.fills, two.fills);
 
     let (result, _) = submit_seal(&mut context, &fixture, &one, (0, 0, 0), &[], None, 100).await;
     result.unwrap();
-    let (result, _) =
-        submit_seal(&mut context, &fixture, &two, (0, 0, 0), &[one.id], None, 160).await;
+    let (result, _) = submit_seal(
+        &mut context,
+        &fixture,
+        &two,
+        (0, 0, 0),
+        &[one.id],
+        None,
+        160,
+    )
+    .await;
     result.unwrap();
     walk_to_verdict(&mut context, &fixture, &one, &reservations, 300).await;
     walk_to_verdict(&mut context, &fixture, &two, &reservations, 320).await;
@@ -1318,7 +1364,10 @@ async fn a_beyond_128_bit_score_tie_resolves_by_the_full_width_digest() {
     let one_score = stored_score(&one_record);
     let two_score = stored_score(&two_record);
     // The tie is real: all four components equal, only the digests differ.
-    assert_eq!(one_score.weighted_direct_volume, two_score.weighted_direct_volume);
+    assert_eq!(
+        one_score.weighted_direct_volume,
+        two_score.weighted_direct_volume
+    );
     assert_eq!(
         one_score.limit_surplus_price_units,
         two_score.limit_surplus_price_units
@@ -1361,7 +1410,10 @@ async fn a_beyond_128_bit_score_tie_resolves_by_the_full_width_digest() {
     let winner_record = read_record(&mut context, &fixture, expected_winner).await;
     assert_eq!(winner_record.status, CANDIDATE_STATUS_SELECTED);
     let window = EpochWindowAccount::decode(
-        &account(&mut context, fixture.window_account).await.unwrap().data,
+        &account(&mut context, fixture.window_account)
+            .await
+            .unwrap()
+            .data,
     )
     .unwrap();
     assert_eq!(window.selected_candidate, expected_winner);
@@ -1378,15 +1430,34 @@ async fn a_fourth_candidate_displaces_the_worst_and_supersedes_it() {
     let (epoch, book, reservations) = frozen_state(&mut context, &fixture).await;
 
     let alpha = plan_submission(&fixture, &epoch, &book, even_prices());
-    let beta = plan_submission(&fixture, &epoch, &book, prices_of([5_000, 2_500, 1_500, 1_000]));
-    let gamma = plan_submission(&fixture, &epoch, &book, prices_of([2_500, 5_000, 1_500, 1_000]));
-    let delta = plan_submission(&fixture, &epoch, &book, prices_of([3_000, 3_000, 2_000, 2_000]));
-    let echo = plan_submission(&fixture, &epoch, &book, prices_of([3_500, 2_500, 2_000, 2_000]));
+    let beta = plan_submission(
+        &fixture,
+        &epoch,
+        &book,
+        prices_of([5_000, 2_500, 1_500, 1_000]),
+    );
+    let gamma = plan_submission(
+        &fixture,
+        &epoch,
+        &book,
+        prices_of([2_500, 5_000, 1_500, 1_000]),
+    );
+    let delta = plan_submission(
+        &fixture,
+        &epoch,
+        &book,
+        prices_of([3_000, 3_000, 2_000, 2_000]),
+    );
+    let echo = plan_submission(
+        &fixture,
+        &epoch,
+        &book,
+        prices_of([3_500, 2_500, 2_000, 2_000]),
+    );
 
     // Fill the registry: alpha (verified below — the worst by components),
     // beta and gamma retained on large claims.
-    let (result, _) =
-        submit_seal(&mut context, &fixture, &alpha, (0, 0, 0), &[], None, 100).await;
+    let (result, _) = submit_seal(&mut context, &fixture, &alpha, (0, 0, 0), &[], None, 100).await;
     result.unwrap();
     let (result, _) = submit_seal(
         &mut context,
@@ -1453,7 +1524,10 @@ async fn a_fourth_candidate_displaces_the_worst_and_supersedes_it() {
         alpha_record_lamports_before + alpha_feed_lamports
     );
     let window = EpochWindowAccount::decode(
-        &account(&mut context, fixture.window_account).await.unwrap().data,
+        &account(&mut context, fixture.window_account)
+            .await
+            .unwrap()
+            .data,
     )
     .unwrap();
     assert_eq!(window.retained_count, 3);
@@ -1476,7 +1550,10 @@ async fn a_fourth_candidate_displaces_the_worst_and_supersedes_it() {
     assert_eq!(custom(result), ClutchError::CandidateNotCompetitive as u32);
     assert!(account(&mut context, worst_feed).await.is_some());
     let after = EpochWindowAccount::decode(
-        &account(&mut context, fixture.window_account).await.unwrap().data,
+        &account(&mut context, fixture.window_account)
+            .await
+            .unwrap()
+            .data,
     )
     .unwrap();
     assert_eq!(after.retained, window.retained);
@@ -1569,12 +1646,19 @@ async fn an_empty_verified_set_lapses_honestly() {
     result.unwrap();
     eprintln!("FinalizeSelection (lapse, 0 verified) CU: {units}");
 
-    let lapsed =
-        EpochAccount::decode(&account(&mut context, fixture.epoch_account).await.unwrap().data)
-            .unwrap();
+    let lapsed = EpochAccount::decode(
+        &account(&mut context, fixture.epoch_account)
+            .await
+            .unwrap()
+            .data,
+    )
+    .unwrap();
     assert_eq!(lapsed.phase, EPOCH_PHASE_LAPSED);
     let window = EpochWindowAccount::decode(
-        &account(&mut context, fixture.window_account).await.unwrap().data,
+        &account(&mut context, fixture.window_account)
+            .await
+            .unwrap()
+            .data,
     )
     .unwrap();
     assert_eq!(window.selected_candidate, Hash32::ZERO);
@@ -1589,7 +1673,12 @@ async fn an_empty_verified_set_lapses_honestly() {
     let (result, _) = send(&mut context, &[fixture.finalize(&retained)], None, 401).await;
     assert_eq!(custom(result), ClutchError::NotActive as u32);
     let payer = context.payer.pubkey();
-    let late = plan_submission(&fixture, &epoch, &book, prices_of([2_500, 3_500, 2_000, 2_000]));
+    let late = plan_submission(
+        &fixture,
+        &epoch,
+        &book,
+        prices_of([2_500, 3_500, 2_000, 2_000]),
+    );
     let (result, _) = send(
         &mut context,
         &[fixture.submit(payer, &late, None, 0, 0, 0)],

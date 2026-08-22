@@ -55,7 +55,11 @@ fn h(byte: u8) -> Hash32 {
 /// The identity triple every test binds: market, epoch, candidate.
 fn ids(candidate_byte: u8) -> (Hash32, Hash32, Hash32) {
     let market = h(0x71);
-    (market, canonical_epoch_id(market, EPOCH_INDEX), h(candidate_byte))
+    (
+        market,
+        canonical_epoch_id(market, EPOCH_INDEX),
+        h(candidate_byte),
+    )
 }
 
 fn work_address(epoch: &Hash32, candidate: &Hash32) -> (Address, u8) {
@@ -149,8 +153,12 @@ async fn send(
     instructions: &[Instruction],
 ) -> (Result<(), TransactionError>, u64) {
     let blockhash = banks.get_latest_blockhash().await.unwrap();
-    let transaction =
-        Transaction::new_signed_with_payer(instructions, Some(&payer.pubkey()), &[payer], blockhash);
+    let transaction = Transaction::new_signed_with_payer(
+        instructions,
+        Some(&payer.pubkey()),
+        &[payer],
+        blockhash,
+    );
     let outcome = banks
         .process_transaction_with_metadata(transaction)
         .await
@@ -258,7 +266,13 @@ async fn five_transactions_create_the_checkpoint_with_exact_rent_at_every_stage(
     let (result, units) = send(
         &mut banks,
         &payer,
-        &[init_instruction(payer.pubkey(), work, market, epoch, candidate)],
+        &[init_instruction(
+            payer.pubkey(),
+            work,
+            market,
+            epoch,
+            candidate,
+        )],
     )
     .await;
     result.unwrap();
@@ -356,7 +370,13 @@ async fn duplicate_wrong_pda_wrong_bump_and_finished_grows_refuse() {
     let (result, _) = send(
         &mut banks,
         &payer,
-        &[init_instruction(payer.pubkey(), work, market, epoch, candidate)],
+        &[init_instruction(
+            payer.pubkey(),
+            work,
+            market,
+            epoch,
+            candidate,
+        )],
     )
     .await;
     assert_eq!(custom(result), ClutchError::AlreadyInitialized as u32);
@@ -366,7 +386,13 @@ async fn duplicate_wrong_pda_wrong_bump_and_finished_grows_refuse() {
     let (result, _) = send(
         &mut banks,
         &payer,
-        &[init_instruction(payer.pubkey(), other, market, epoch, candidate)],
+        &[init_instruction(
+            payer.pubkey(),
+            other,
+            market,
+            epoch,
+            candidate,
+        )],
     )
     .await;
     assert_eq!(custom(result), ClutchError::WrongPda as u32);
@@ -424,7 +450,11 @@ async fn a_prefunded_pda_is_tolerated_and_never_discounts_the_principal() {
     let (result, _) = send(
         &mut banks,
         &payer,
-        &[system_instruction::transfer(&payer.pubkey(), &work, PREFUND)],
+        &[system_instruction::transfer(
+            &payer.pubkey(),
+            &work,
+            PREFUND,
+        )],
     )
     .await;
     result.unwrap();
@@ -493,7 +523,13 @@ async fn partial_creation_resumes_and_a_mid_sequence_failure_rolls_back_cleanly(
     let (result, _) = send(
         &mut banks,
         &payer,
-        &[init_instruction(payer.pubkey(), work, market, epoch, candidate)],
+        &[init_instruction(
+            payer.pubkey(),
+            work,
+            market,
+            epoch,
+            candidate,
+        )],
     )
     .await;
     assert_eq!(custom(result), ClutchError::AlreadyInitialized as u32);

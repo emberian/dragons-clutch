@@ -46,9 +46,9 @@ use {
             DIRECT_TERMINAL_REASON_SETTLED, DIRECT_WORK_BUDGET_BYTES,
         },
         reservation::{RESERVATION_STATE_ACTIVE, RESERVATION_STATE_ENTITLED},
-        Hash32, Intent, MarketAccount, OrderRecord, OrderSlot, PositionAccount,
-        PriceGridAccount, EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN, EPOCH_PHASE_LAPSED,
-        EPOCH_PHASE_OPEN, EPOCH_PHASE_SETTLED, MAX_GRID_TICKS, MAX_INTENT_BYTES, MAX_OUTCOMES,
+        Hash32, Intent, MarketAccount, OrderRecord, OrderSlot, PositionAccount, PriceGridAccount,
+        EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN, EPOCH_PHASE_LAPSED, EPOCH_PHASE_OPEN,
+        EPOCH_PHASE_SETTLED, MAX_GRID_TICKS, MAX_INTENT_BYTES, MAX_OUTCOMES,
     },
     clutch_solana_reference::DirectV3Request,
     clutch_svm_fixture::{
@@ -316,10 +316,8 @@ impl Fixture {
         instruction.accounts.truncate(8);
         // Restore the legacy account list: [actor, epoch, grid, page,
         // position, reservation, system, rent].
-        instruction.accounts[5] = AccountMeta::new(
-            pda(seeds::SEED_RESERVATION, &[&[0x77; 32]]).0,
-            false,
-        );
+        instruction.accounts[5] =
+            AccountMeta::new(pda(seeds::SEED_RESERVATION, &[&[0x77; 32]]).0, false);
         instruction
     }
 
@@ -582,7 +580,11 @@ impl Fixture {
                 .iter()
                 .map(|address| AccountMeta::new(*address, false)),
         );
-        metas.extend(payers.iter().map(|address| AccountMeta::new(*address, false)));
+        metas.extend(
+            payers
+                .iter()
+                .map(|address| AccountMeta::new(*address, false)),
+        );
         Instruction::new_with_bytes(
             PROGRAM_ID,
             &direct_v3(
@@ -863,10 +865,7 @@ async fn start(epoch_indexes: &[u64]) -> (ProgramTestContext, Fixture) {
             seeds::SEED_EPOCH,
             &[&market.bytes(), &epoch_index.to_le_bytes()],
         );
-        let (page_address, _) = pda(
-            seeds::SEED_PAGE,
-            &[&epoch_id.bytes(), &0u16.to_le_bytes()],
-        );
+        let (page_address, _) = pda(seeds::SEED_PAGE, &[&epoch_id.bytes(), &0u16.to_le_bytes()]);
         let (window_address, _) = pda(seeds::SEED_DIRECT_WINDOW_V3, &[&epoch_id.bytes()]);
         let (work_address, _) = pda(seeds::SEED_DIRECT_WORK_V3, &[&epoch_id.bytes()]);
         let buy_reservation_id = clutch_solana_layout::reservation::canonical_reservation_id(
@@ -883,10 +882,8 @@ async fn start(epoch_indexes: &[u64]) -> (ProgramTestContext, Fixture) {
             0,
             canonical_order_id(2),
         );
-        let (buy_reservation, _) =
-            pda(seeds::SEED_RESERVATION, &[&buy_reservation_id.bytes()]);
-        let (sell_reservation, _) =
-            pda(seeds::SEED_RESERVATION, &[&sell_reservation_id.bytes()]);
+        let (buy_reservation, _) = pda(seeds::SEED_RESERVATION, &[&buy_reservation_id.bytes()]);
+        let (sell_reservation, _) = pda(seeds::SEED_RESERVATION, &[&sell_reservation_id.bytes()]);
         // One-lamport prefund on every predictable PDA the lifecycle creates,
         // including every on-grid candidate target.
         for address in [
@@ -1304,9 +1301,13 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
     )
     .await;
     assert!(refused.0.is_err());
-    let buyer = PositionAccount::decode(&bytes(&mut context, fixture.buyer_position).await).unwrap();
+    let buyer =
+        PositionAccount::decode(&bytes(&mut context, fixture.buyer_position).await).unwrap();
     assert_eq!(buyer.cash_atoms, BUYER_CASH);
-    assert_eq!(buyer.reserved_cash_atoms, QUANTITY * BUY_LIMIT / PRICE_SCALE);
+    assert_eq!(
+        buyer.reserved_cash_atoms,
+        QUANTITY * BUY_LIMIT / PRICE_SCALE
+    );
     let seller =
         PositionAccount::decode(&bytes(&mut context, fixture.seller_position).await).unwrap();
     assert_eq!(seller.internal[0], 0);
@@ -1332,7 +1333,12 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
         fixture.plane(plane).work,
     ];
     let before = snapshot(&mut context, &watched).await;
-    let refused = send(&mut context, fixture.freeze(fixture.low_funder.pubkey(), plane), Some(&fixture.low_funder)).await;
+    let refused = send(
+        &mut context,
+        fixture.freeze(fixture.low_funder.pubkey(), plane),
+        Some(&fixture.low_funder),
+    )
+    .await;
     assert!(refused.0.is_err());
     assert_eq!(snapshot(&mut context, &watched).await, before);
     note_rollback("FreezeDirectEpochV4 underfunded", watched.len());
@@ -1479,12 +1485,9 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
             tick,
             candidate.entry(),
         );
-        let created = account(
-            &mut context,
-            fixture.candidate_address(plane, candidate_id),
-        )
-        .await
-        .unwrap();
+        let created = account(&mut context, fixture.candidate_address(plane, candidate_id))
+            .await
+            .unwrap();
         assert_eq!(created.owner, PROGRAM_ID);
         assert_eq!(created.lamports, rent_exempt(DIRECT_CANDIDATE_V3_BYTES) + 1);
         assert_eq!(created.data[425], DIRECT_CANDIDATE_STATUS_VERIFIED);
@@ -1680,11 +1683,8 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
     // Donation observation: an unsolicited transfer to the Window makes the
     // no-state rejection refuse, because nothing could persist the higher
     // monotone bound; Begin later persists it.
-    let donation_ix = solana_system_interface::instruction::transfer(
-        &payer,
-        &fixture.plane(plane).window,
-        7,
-    );
+    let donation_ix =
+        solana_system_interface::instruction::transfer(&payer, &fixture.plane(plane).window, 7);
     let (result, _) = send(&mut context, donation_ix, None).await;
     result.unwrap();
     assert!(!score_for(7_000).score().is_better_than(&expected_top[2].1));
@@ -1770,7 +1770,10 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
     );
     let (pot_address, _) = pda(
         seeds::SEED_DIRECT_POT_V3,
-        &[&fixture.plane(plane).epoch_id.bytes(), &expected_top[0].0 .0],
+        &[
+            &fixture.plane(plane).epoch_id.bytes(),
+            &expected_top[0].0 .0,
+        ],
     );
     context.set_account(&receipt_address, &system_slot(1).into());
     context.set_account(&pot_address, &system_slot(1).into());
@@ -1936,11 +1939,9 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
         fixture.plane(plane).buy_reservation,
         fixture.plane(plane).sell_reservation,
     ] {
-        let value = DirectReservationV2Account::decode(
-            &bytes(&mut context, reservation).await,
-            sink_hash,
-        )
-        .unwrap();
+        let value =
+            DirectReservationV2Account::decode(&bytes(&mut context, reservation).await, sink_hash)
+                .unwrap();
         assert_eq!(value.reservation.state, RESERVATION_STATE_ENTITLED);
     }
 
@@ -2014,10 +2015,16 @@ async fn direct_v3_full_lifecycle_settles_exactly() {
     assert_conserved(
         "SettleDirectV3",
         settle_closed_total,
-        refund_total("SettleDirectV3", &settle_labels, &settle_before, &settle_after),
+        refund_total(
+            "SettleDirectV3",
+            &settle_labels,
+            &settle_before,
+            &settle_after,
+        ),
     );
 
-    let buyer = PositionAccount::decode(&bytes(&mut context, fixture.buyer_position).await).unwrap();
+    let buyer =
+        PositionAccount::decode(&bytes(&mut context, fixture.buyer_position).await).unwrap();
     assert_eq!(buyer.cash_atoms, BUYER_CASH - consideration);
     assert_eq!(buyer.reserved_cash_atoms, 0);
     assert_eq!(buyer.internal[0], QUANTITY);
@@ -2264,7 +2271,8 @@ async fn direct_v3_prefreeze_abort_releases_every_prefix() {
     let abort0_watch = abort_watch(0);
     let abort0_before = wallets(&mut context, &abort0_watch).await;
     note_close("AbortUnfrozenDirectV4 empty", "reservation_prefix", 0);
-    let (result, abort0_cu) = send(&mut context, fixture.abort(0, false, &[], &[], &[]), None).await;
+    let (result, abort0_cu) =
+        send(&mut context, fixture.abort(0, false, &[], &[], &[]), None).await;
     result.unwrap();
     assert_cu("AbortUnfrozenDirectV4 empty", abort0_cu);
     let abort0_after = wallets(&mut context, &abort0_watch).await;
@@ -2380,7 +2388,10 @@ async fn direct_v3_prefreeze_abort_releases_every_prefix() {
     let abort2_before = wallets(&mut context, &abort2_watch).await;
     let mut abort2_closed = 0u64;
     for (label, address) in [
-        ("direct.reservation.v2.buy", fixture.plane(2).buy_reservation),
+        (
+            "direct.reservation.v2.buy",
+            fixture.plane(2).buy_reservation,
+        ),
         (
             "direct.reservation.v2.sell",
             fixture.plane(2).sell_reservation,
@@ -2436,7 +2447,8 @@ async fn direct_v3_prefreeze_abort_releases_every_prefix() {
         DirectEpochV4Account::decode(&bytes(&mut context, fixture.plane(2).epoch).await).unwrap();
     assert_eq!(epoch_state.terminal.terminal_reservation_count, 2);
     // Every reservation envelope returned to its Position exactly.
-    let buyer = PositionAccount::decode(&bytes(&mut context, fixture.buyer_position).await).unwrap();
+    let buyer =
+        PositionAccount::decode(&bytes(&mut context, fixture.buyer_position).await).unwrap();
     assert_eq!(buyer.cash_atoms, BUYER_CASH);
     assert_eq!(buyer.reserved_cash_atoms, 0);
     let seller =
@@ -2791,7 +2803,8 @@ async fn direct_v3_lapse_covers_every_frozen_phase() {
 
     // Every trade was lapsed, never settled: both Positions return exactly to
     // their frozen prestates and all transient authority closed.
-    let buyer = PositionAccount::decode(&bytes(&mut context, fixture.buyer_position).await).unwrap();
+    let buyer =
+        PositionAccount::decode(&bytes(&mut context, fixture.buyer_position).await).unwrap();
     let seller =
         PositionAccount::decode(&bytes(&mut context, fixture.seller_position).await).unwrap();
     assert_eq!(buyer.cash_atoms, buyer_frozen.cash_atoms);
